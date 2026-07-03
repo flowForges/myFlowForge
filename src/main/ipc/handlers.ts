@@ -46,6 +46,7 @@ import { writePetImageFromDataUrl } from '../pet/petImageStore'
 import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
 import { pickInstaller } from '../update/installer'
+import { makeProxyFetch } from '../update/proxyFetch'
 import { writeFile } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
@@ -98,7 +99,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const updateChecker = createUpdateChecker({
     repo: UPDATE_REPO,
     currentVersion: () => app.getVersion(),
-    fetchLatest: (r) => fetchLatestRelease(r, { fetch: fetch as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }> }),
+    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeProxyFetch(readSettings().termProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, arch: process.arch }),
     emit: broadcast,
     setTimeout: (fn, ms) => { setTimeout(fn, ms) },
     setInterval: (fn, ms) => { setInterval(fn, ms) },
@@ -111,7 +112,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const info = updateChecker.current()
     if (!info) return
     const installer = pickInstaller({
-      fetch: (url) => fetch(url) as any,
+      fetch: (url) => makeProxyFetch(readSettings().termProxy)(url) as any,
       writeFile: (p, data) => writeFile(p, data),
       openPath: shell.openPath,
       showItemInFolder: shell.showItemInFolder,
