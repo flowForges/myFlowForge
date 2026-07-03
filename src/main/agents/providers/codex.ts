@@ -84,7 +84,12 @@ function codexKind(a: CodexActionLoggable): { level: 'info' | 'ok' | 'accent'; k
 export function codexErrorMessage(obj: any): string | null {
   if (!obj || typeof obj !== 'object') return null
   if (obj.type === 'turn.failed') return String(obj.error?.message ?? obj.error ?? 'codex turn failed')
-  if (obj.type === 'error') return String(obj.message ?? 'codex error')
+  // API errors (e.g. 400 model-not-supported) carry the real reason under `error.message`; some
+  // shapes put it at the top level. Prefer the nested message so users see the actual cause.
+  if (obj.type === 'error') {
+    const nested = obj.error && typeof obj.error === 'object' ? obj.error.message : obj.error
+    return String(obj.message ?? nested ?? 'codex error')
+  }
   // Item-level error (e.g. config deprecation / model-not-supported arrives this way).
   if (obj.type === 'item.completed' && obj.item?.type === 'error') return String(obj.item.message ?? 'codex error')
   return null

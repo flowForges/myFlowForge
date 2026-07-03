@@ -49,6 +49,16 @@ describe('parseCodexEvent (current thread/item format)', () => {
     expect(codexErrorMessage({ type: 'turn.failed', error: { message: 'rate limited' } })).toBe('rate limited')
     expect(codexErrorMessage({ type: 'thread.started', thread_id: 't' })).toBeNull()
   })
+  it('surfaces the nested message from a real API 400 error (not a generic string)', () => {
+    // Captured verbatim: a model-not-supported 400 arrives with the real reason under error.message,
+    // NOT at the top level — the old code read obj.message and lost it to a generic 'codex error'.
+    const real = {
+      type: 'error',
+      status: 400,
+      error: { type: 'invalid_request_error', message: "The 'haiku-4.5' model is not supported when using Codex with a ChatGPT account." },
+    }
+    expect(codexErrorMessage(real)).toBe("The 'haiku-4.5' model is not supported when using Codex with a ChatGPT account.")
+  })
   it('parses the EXACT real-world agent_message item shape', () => {
     // Captured from a live `codex exec --json` run:
     expect(parseCodexEvent({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'OK' } }))
