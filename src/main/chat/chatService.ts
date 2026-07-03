@@ -6,6 +6,7 @@ import { createRunFenceScanner } from '../agents/runFence'
 import { buildMemoryPreamble } from './memory/preamble'
 import { buildContinuationPreamble } from './continuation'
 import { distillSession, promoteToWorkspace, type DistillDeps } from './memory/distiller'
+import { distillModelFor } from './memory/distillModel'
 import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD } from './memory/tokenEstimate'
 import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext } from '../agents/contextMeta'
 import { getSession } from './sessionStore'
@@ -64,10 +65,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
   let text = ''
   let think = ''
   let lastUsage: { used: number; window: number } | undefined
-  const oneShot: DistillDeps['oneShot'] = (prompt, model) => new Promise<string>((resolve, reject) => {
+  // Distillation runs on THIS session's provider. Pick a model valid for it: claude gets the cheap
+  // 'haiku-4.5' alias; every other provider falls back to the session's own model (its account
+  // default) — feeding a claude-only alias to codex/cursor 400s (model-not-supported).
+  const distillModel = distillModelFor(payload.agent) ?? payload.model
+  const oneShot: DistillDeps['oneShot'] = (prompt) => new Promise<string>((resolve, reject) => {
     if (!provider.chat) { resolve(''); return }
     let acc = ''
-    provider.chat({ id: mkId('distill'), prompt, model: model ?? payload.model, cwd: ws }, {
+    provider.chat({ id: mkId('distill'), prompt, model: distillModel, cwd: ws }, {
       onSession: () => {},
       onAssistantDelta: (t) => { acc += t },
       onThinkDelta: () => {},
