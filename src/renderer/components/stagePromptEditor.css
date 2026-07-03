@@ -1,0 +1,18 @@
+/* 阶段提示词编辑器 —— 复用 .plug-editor 壳,补只读默认块 + 角标默认态 + 清空按钮 */
+.stage-prompt-editor .pe-readonly {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: var(--fg-3);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+.stage-prompt-editor .pe-h .pos.def { color: var(--fg-3); background: var(--surface-2); }
+.stage-prompt-editor .spe-reset {
+  height: 32px; padding: 0 12px; border-radius: 8px; background: transparent;
+  border: 1px solid var(--border); color: var(--fg-3); font-size: 11.5px; font-weight: 500;
+}
+.stage-prompt-editor .spe-reset:hover { color: var(--fg-2); border-color: var(--fg-3); }
+.stage-prompt-editor .spe-reset:disabled { opacity: .35; cursor: default; }

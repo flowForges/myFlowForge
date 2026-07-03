@@ -1,0 +1,69 @@
+/* ============================================================
+   实时日志控制台 — ported 1:1 from prototype
+   ============================================================ */
+
+/* ── Status-bar log button ── */
+.sb-log { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 6px; color: var(--faint); font-family: var(--mono); font-size: 10.5px; transition: .14s; }
+.sb-log:hover { background: var(--surface); color: var(--fg-2); }
+.sb-log svg { width: 12px; height: 12px; }
+.sb-log .lg-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.sb-log.live { color: var(--accent); }
+.sb-log.live .lg-dot { background: var(--accent); animation: pulse 1.4s infinite; }
+.sb-log.has .lg-dot { background: var(--ok); }
+.sb-log.on { background: var(--accent-dim); color: var(--accent); }
+
+/* ── Console panel shell/positioning lives in dock.css ── */
+
+/* ── Header ── */
+.logcon-head { flex: 0 0 41px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--border); }
+.logcon-head .tt { font-size: 12.5px; font-weight: 650; display: inline-flex; align-items: center; gap: 7px; }
+.logcon-head .tt .lg-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: 0 0 7px; }
+.logcon-head .tt .lg-dot.run { background: var(--accent); animation: pulse 1.4s infinite; }
+
+/* ── Filters ── */
+.logcon-filters { display: flex; gap: 3px; margin-left: 8px; }
+.lgf { padding: 3px 9px; border-radius: 6px; font-size: 11px; font-weight: 500; color: var(--muted); font-family: var(--mono); transition: .12s; }
+.lgf:hover { background: var(--surface); }
+.lgf.on { background: var(--accent-dim); color: var(--accent); }
+/* Per-agent filter chip (set when opened from an agent card's 日志台 button) */
+.lgf-agent { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed color-mix(in oklch, var(--accent) 50%, transparent); }
+.lgf-agent svg { width: 11px; height: 11px; }
+.lgf-agent:hover { background: var(--accent-dim); filter: brightness(1.08); }
+
+/* ── Actions ── */
+.logcon-act { margin-left: auto; display: flex; align-items: center; gap: 3px; }
+.lg-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 6px; font-size: 11px; color: var(--muted); transition: .12s; }
+.lg-btn:hover { background: var(--surface); color: var(--fg); }
+.lg-btn svg { width: 13px; height: 13px; }
+.lg-btn.on { color: var(--accent); }
+
+/* ── Body / lines ── */
+.logcon-body { flex: 1; overflow-y: auto; padding: 7px 0 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.62; }
+.lg-line { display: flex; gap: 11px; padding: 1.5px 14px; align-items: baseline; }
+.lg-line:hover { background: oklch(60% .03 262 / .06); }
+.lg-time { flex: 0 0 60px; color: var(--faint); font-size: 10.5px; }
+.lg-lvl { flex: 0 0 38px; font-size: 9.5px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; }
+.lg-src { flex: 0 0 auto; color: var(--fg-2); font-weight: 600; white-space: nowrap; }
+.lg-src .pd { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
+.lg-msg { flex: 1; min-width: 0; color: var(--fg-2); white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+
+/* ── Per-level colors ── */
+.lg-line.l-think .lg-lvl { color: var(--faint); } .lg-line.l-think .lg-msg { color: var(--muted); }
+.lg-line.l-exec  .lg-lvl { color: var(--accent); }
+.lg-line.l-file  .lg-lvl { color: var(--warn); }
+.lg-line.l-out   .lg-lvl { color: var(--ok); } .lg-line.l-out .lg-msg { color: var(--fg); }
+.lg-line.l-user  .lg-lvl { color: var(--accent); } .lg-line.l-user .lg-src { color: var(--accent); }
+
+/* ── Streaming cursor ── */
+.lg-line.streaming .lg-msg::after { content: "▋"; color: var(--accent); animation: blink 1s steps(1) infinite; margin-left: 1px; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ── Empty state ── */
+.lg-empty { padding: 44px; text-align: center; color: var(--faint); font-size: 12px; }
+
+/* ── Filter hide ── */
+.lg-line.hide { display: none; }
+
+/* ── Glassmorphism overrides ── */
+[data-glass="on"] .logcon { background: oklch(36% .04 262 / .5); }
+[data-theme="light"][data-glass="on"] .logcon { background: oklch(100% 0 0 / .55); }

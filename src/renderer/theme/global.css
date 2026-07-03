@@ -1,0 +1,48 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+button:disabled { cursor: default; }
+body { font-family: var(--font); color: var(--fg); background: transparent; -webkit-font-smoothing: antialiased; }
+.window {
+  /* Fill the OS window — no floating 18px margin / shadow halo (that read as an
+     ugly "outer shell"). Rounded corners stay for a clean frameless look. */
+  position: fixed; inset: 0; border-radius: 12px; overflow: hidden;
+  background: var(--bg);
+  display: flex; flex-direction: column;
+  transition: background .25s;
+}
+/* Frosted glass: when the macOS `under-window` vibrancy material is on (and the full-window
+   `data-glass` wallpaper system is NOT), make ALL chrome translucent so the material shows through.
+   The `:not([data-glass="on"])` guard is critical — otherwise these higher-specificity rules
+   override glass.css's `.window` background/blur and the prototype frosted-glass look breaks. */
+html[data-vibrancy="on"]:not([data-glass="on"]),
+html[data-vibrancy="on"]:not([data-glass="on"]) body,
+html[data-vibrancy="on"]:not([data-glass="on"]) #root { background: transparent; }
+html[data-vibrancy="on"]:not([data-glass="on"]) .window { background: var(--glass-window); }
+html[data-vibrancy="on"]:not([data-glass="on"]) .titlebar,
+html[data-vibrancy="on"]:not([data-glass="on"]) .statusbar { background: var(--glass-panel); }
+html[data-vibrancy="on"]:not([data-glass="on"]) .sidebar { background: var(--glass-sidebar); }
+html[data-vibrancy="on"]:not([data-glass="on"]) .inspector { background: var(--glass-panel); }
+.body { flex: 1; display: flex; min-height: 0; }
+.titlebar { flex: 0 0 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+  border-bottom: 1px solid var(--border); background: var(--bg-2);
+  -webkit-user-select: none; -webkit-app-region: drag; }
+.titlebar button, .titlebar .tb-seg { -webkit-app-region: no-drag; }
+/* The notification popover PANEL rendered inside the titlebar subtree is a div, not a button, so it
+   doesn't get the no-drag above and inherits the titlebar's drag region — which makes the OS swallow
+   clicks on the panel body for window-dragging ("bell has a badge but won't open"). Opt the whole
+   panel subtree back out so every row/item inside is interactive. */
+.notif-pop { -webkit-app-region: no-drag; }
+.statusbar { flex: 0 0 30px; display: flex; align-items: center; padding: 0 12px;
+  border-top: 1px solid var(--border); background: var(--bg-2); font-size: 11px; color: var(--muted); }
+.sidebar { flex: 0 0 248px; background: var(--sidebar); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden;
+  transition: width .22s cubic-bezier(.4,0,.2,1), flex-basis .22s cubic-bezier(.4,0,.2,1); }
+.window.collapsed .sidebar { width: 60px; flex-basis: 60px; }
+/* Home = launchpad: the sidebar slides fully away (the home view has no workspace list). */
+.window.home-mode .sidebar { width: 0; flex-basis: 0; border-right-width: 0; }
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.view { display: none; flex: 1; min-height: 0; }
+.view.on { display: flex; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--faint); background-clip: content-box; }

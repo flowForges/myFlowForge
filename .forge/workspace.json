@@ -1,0 +1,36 @@
+{
+  "name": "",
+  "path": "",
+  "workflowId": "standard",
+  "stages": [
+    {
+      "key": "requirement",
+      "provider": "claude",
+      "model": "opus-4.8"
+    },
+    {
+      "key": "design",
+      "provider": "claude",
+      "model": "opus-4.8"
+    },
+    {
+      "key": "develop",
+      "provider": "claude",
+      "model": "opus-4.8"
+    },
+    {
+      "key": "test",
+      "provider": "claude",
+      "model": "opus-4.8"
+    },
+    {
+      "key": "review",
+      "provider": "claude",
+      "model": "opus-4.8"
+    }
+  ],
+  "projects": [],
+  "status": "idle",
+  "plugins": [],
+  "stepPlugins": []
+}

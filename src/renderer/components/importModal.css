@@ -1,0 +1,52 @@
+/* ===== 通用导入弹层(项目 / 插件 / 宠物 共用) — 1:1 ported from prototype ===== */
+.imp-overlay {
+  position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center;
+  background: oklch(8% .01 250 / .55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); padding: 40px;
+  animation: fade .18s;
+}
+.imp-sheet { width: 560px; max-width: 100%; max-height: 86vh; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--border-2); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+.imp-head { padding: 18px 20px 14px; border-bottom: 1px solid var(--border); display: flex; gap: 13px; align-items: flex-start; }
+.imp-mark { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 11px; display: grid; place-items: center; color: var(--accent); background: var(--accent-dim); }
+.imp-mark svg { width: 20px; height: 20px; }
+.imp-head h2 { font-size: 15px; font-weight: 680; letter-spacing: -.01em; }
+.imp-head .d { font-size: 12px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+.imp-head .x { margin-left: auto; width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; color: var(--faint); flex: 0 0 28px; }
+.imp-head .x:hover { background: var(--surface); color: var(--fg-2); }
+.imp-head .x svg { width: 16px; height: 16px; }
+.imp-body { padding: 15px 20px; overflow-y: auto; }
+.imp-sub { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.imp-sub h5 { font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
+.imp-tools { display: flex; gap: 7px; }
+.imp-tool { height: 27px; padding: 0 11px; border-radius: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); font-size: 11.5px; font-weight: 550; display: inline-flex; align-items: center; gap: 6px; }
+.imp-tool:hover { background: var(--surface-2); border-color: var(--border-2); }
+.imp-tool svg { width: 13px; height: 13px; }
+.imp-tool.done { color: var(--ok); border-color: color-mix(in oklch, var(--ok) 40%, transparent); }
+.imp-ta { width: 100%; min-height: 188px; resize: vertical; background: oklch(13% .012 250); border: 1px solid var(--border); border-radius: 9px; padding: 12px 13px; color: var(--fg); font: 11.5px/1.65 var(--mono); outline: none; tab-size: 2; white-space: pre; overflow-wrap: normal; }
+[data-theme="light"] .imp-ta { background: oklch(97% .004 255); }
+.imp-ta:focus { border-color: var(--accent); }
+.imp-ta::placeholder { color: var(--faint); }
+.imp-note { font-size: 11.5px; color: var(--muted); margin-top: 9px; line-height: 1.5; min-height: 16px; }
+.imp-note.err { color: oklch(64% .2 25); }
+.imp-note.ok { color: var(--ok); }
+.imp-note b { color: var(--fg-2); font-family: var(--mono); }
+.imp-foot { padding: 13px 20px 17px; border-top: 1px solid var(--border); display: flex; gap: 10px; align-items: center; }
+.imp-drop { font-size: 11px; color: var(--faint); flex: 1; }
+.imp-foot .gh { height: 36px; padding: 0 15px; border-radius: 9px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); font-size: 12.5px; font-weight: 500; }
+.imp-foot .gh:hover { background: var(--surface-2); }
+.imp-foot .go { height: 36px; padding: 0 18px; border-radius: 9px; background: var(--accent); color: var(--on-accent); font-size: 12.5px; font-weight: 650; display: inline-flex; align-items: center; gap: 8px; }
+.imp-foot .go:hover { filter: brightness(1.08); }
+.imp-foot .go:disabled { opacity: .4; cursor: default; filter: none; }
+.imp-foot .go svg { width: 15px; height: 15px; }
+[data-glass="on"] .imp-sheet { background: oklch(27% .03 262 / .5); backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.9); -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.9); border-color: oklch(100% 0 0 / .14); }
+[data-theme="light"][data-glass="on"] .imp-sheet { background: oklch(100% 0 0 / .58); backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.7); -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.7); border-color: oklch(0% 0 0 / .06); }
+
+/* 触发按钮(浅色次级,与「添加」并排) */
+.imp-btn { height: 32px; padding: 0 13px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); font-size: 12.5px; font-weight: 550; display: inline-flex; align-items: center; gap: 7px; }
+.imp-btn:hover { background: var(--surface-2); border-color: var(--border-2); }
+.imp-btn svg { width: 15px; height: 15px; }
+
+/* 居中浮层 toast(导入摘要) */
+.imp-flash { position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 300;
+  background: var(--accent); color: var(--on-accent); font: 600 12.5px/1 var(--font); padding: 11px 18px;
+  border-radius: 99px; box-shadow: 0 8px 28px rgba(0,0,0,.32); animation: impFlash 2.6s ease forwards; }
+@keyframes impFlash { 0% { opacity: 0; transform: translateX(-50%) translateY(8px); } 8%,88% { opacity: 1; transform: translateX(-50%) translateY(0); } 100% { opacity: 0; transform: translateX(-50%) translateY(8px); } }

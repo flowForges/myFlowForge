@@ -1,0 +1,173 @@
+{
+  "states": [
+    "idle",
+    "working",
+    "confirm",
+    "input",
+    "done"
+  ],
+  "size": "256x256",
+  "transparent": true,
+  "pets": [
+    {
+      "id": "china-dragon",
+      "name": "中国龙",
+      "description": "idle 盘卧微动；working 绕 8 字飞；confirm/input 朝屏幕扑近；done 从飞行收回盘卧。",
+      "files": {
+        "idle": {
+          "gif": "idle.gif",
+          "png": "png/idle.png",
+          "webp": "webp/idle.webp"
+        },
+        "working": {
+          "gif": "working.gif",
+          "png": "png/working.png",
+          "webp": "webp/working.webp"
+        },
+        "confirm": {
+          "gif": "confirm.gif",
+          "png": "png/confirm.png",
+          "webp": "webp/confirm.webp"
+        },
+        "input": {
+          "gif": "input.gif",
+          "png": "png/input.png",
+          "webp": "webp/input.webp"
+        },
+        "done": {
+          "gif": "done.gif",
+          "png": "png/done.png",
+          "webp": "webp/done.webp"
+        }
+      }
+    },
+    {
+      "id": "white-catgirl",
+      "name": "成年白系猫娘",
+      "description": "成年、白系、非色情半 Q 版；idle 来回走；working 坐在电脑前工作；confirm/input 面向屏幕跳起招手；done 侧躺睡觉。",
+      "files": {
+        "idle": {
+          "gif": "idle.gif",
+          "png": "png/idle.png",
+          "webp": "webp/idle.webp"
+        },
+        "working": {
+          "gif": "working.gif",
+          "png": "png/working.png",
+          "webp": "webp/working.webp"
+        },
+        "confirm": {
+          "gif": "confirm.gif",
+          "png": "png/confirm.png",
+          "webp": "webp/confirm.webp"
+        },
+        "input": {
+          "gif": "input.gif",
+          "png": "png/input.png",
+          "webp": "webp/input.webp"
+        },
+        "done": {
+          "gif": "done.gif",
+          "png": "png/done.png",
+          "webp": "webp/done.webp"
+        }
+      }
+    },
+    {
+      "id": "rocket-fox",
+      "name": "火箭狐",
+      "description": "idle 大步游走；working 火箭背包喷射巡航；confirm/input 扑向屏幕挥爪；done 蜷起休息。",
+      "files": {
+        "idle": {
+          "gif": "idle.gif",
+          "png": "png/idle.png",
+          "webp": "webp/idle.webp"
+        },
+        "working": {
+          "gif": "working.gif",
+          "png": "png/working.png",
+          "webp": "webp/working.webp"
+        },
+        "confirm": {
+          "gif": "confirm.gif",
+          "png": "png/confirm.png",
+          "webp": "webp/confirm.webp"
+        },
+        "input": {
+          "gif": "input.gif",
+          "png": "png/input.png",
+          "webp": "webp/input.webp"
+        },
+        "done": {
+          "gif": "done.gif",
+          "png": "png/done.png",
+          "webp": "webp/done.webp"
+        }
+      }
+    },
+    {
+      "id": "phoenix",
+      "name": "凤凰",
+      "description": "idle 振翼悬停；working 火焰弧线飞行；confirm/input 俯冲贴近；done 收翼停落。",
+      "files": {
+        "idle": {
+          "gif": "idle.gif",
+          "png": "png/idle.png",
+          "webp": "webp/idle.webp"
+        },
+        "working": {
+          "gif": "working.gif",
+          "png": "png/working.png",
+          "webp": "webp/working.webp"
+        },
+        "confirm": {
+          "gif": "confirm.gif",
+          "png": "png/confirm.png",
+          "webp": "webp/confirm.webp"
+        },
+        "input": {
+          "gif": "input.gif",
+          "png": "png/input.png",
+          "webp": "webp/input.webp"
+        },
+        "done": {
+          "gif": "done.gif",
+          "png": "png/done.png",
+          "webp": "webp/done.webp"
+        }
+      }
+    },
+    {
+      "id": "cyber-jellyfish",
+      "name": "赛博水母",
+      "description": "idle 大幅漂浮；working 触手摆动操作终端；confirm/input 弹跳贴近；done 下沉睡眠。",
+      "files": {
+        "idle": {
+          "gif": "idle.gif",
+          "png": "png/idle.png",
+          "webp": "webp/idle.webp"
+        },
+        "working": {
+          "gif": "working.gif",
+          "png": "png/working.png",
+          "webp": "webp/working.webp"
+        },
+        "confirm": {
+          "gif": "confirm.gif",
+          "png": "png/confirm.png",
+          "webp": "webp/confirm.webp"
+        },
+        "input": {
+          "gif": "input.gif",
+          "png": "png/input.png",
+          "webp": "webp/input.webp"
+        },
+        "done": {
+          "gif": "done.gif",
+          "png": "png/done.png",
+          "webp": "webp/done.webp"
+        }
+      }
+    }
+  ]
+}

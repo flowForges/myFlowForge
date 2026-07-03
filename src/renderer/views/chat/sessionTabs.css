@@ -1,0 +1,82 @@
+/* ---- 会话标签栏（每个 workspace 支持多个会话） ---- */
+.sess-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 8px 16px 0; }
+.sess-tabs { display: flex; gap: 4px; overflow-x: auto; flex: 1; scrollbar-width: none; }
+.sess-tabs::-webkit-scrollbar { display: none; }
+.sess-tab { display: inline-flex; align-items: center; gap: 7px; flex: 0 0 auto; max-width: 200px;
+  height: 30px; padding: 0 7px 0 11px; border-radius: 8px 8px 0 0; color: var(--muted);
+  font-size: 12.5px; font-weight: 500; border: 1px solid transparent; border-bottom: none; transition: .14s; }
+.sess-tab:hover { background: var(--surface); color: var(--fg-2); }
+.sess-tab.on { background: var(--surface); color: var(--fg); border-color: var(--border); }
+.sess-tab .sd { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; background: var(--faint); }
+.sess-tab .sd.workflow { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.sess-tab .st-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess-tab .st-edit {
+  width: 128px; min-width: 0; border: none; outline: none; background: transparent; color: var(--fg);
+  font: inherit; font-weight: 600; padding: 0; margin: 0;
+}
+.sess-tab .sx { width: 17px; height: 17px; border-radius: 5px; display: grid; place-items: center; color: var(--faint); opacity: 0; flex: 0 0 17px; transition: .12s; }
+.sess-tab:hover .sx, .sess-tab.on .sx { opacity: 1; }
+.sess-tab .sx:hover { background: var(--surface-2); color: var(--err); }
+.sess-tab .sx svg { width: 11px; height: 11px; }
+.sess-new { width: 28px; height: 28px; flex: 0 0 28px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); transition: .14s; }
+.sess-new:hover { background: var(--surface); color: var(--fg); }
+.sess-new svg { width: 16px; height: 16px; }
+.sess-bar::after { content: ""; position: absolute; }
+
+/* 毛玻璃下：会话栏/代码块透出壁纸 */
+[data-glass="on"] .sess-tab.on { background: rgba(255,255,255,.08); }
+[data-theme="light"][data-glass="on"] .sess-tab.on { background: rgba(255,255,255,.5); }
+
+/* ---- 只读导入会话 tab 修饰 ---- */
+/* si-ro: 只读 tab 整体略微弱化 — 边框虚线 + 轻微降低亮度 */
+.sess-tab.si-ro { opacity: .82; border-style: dashed; }
+.sess-tab.si-ro.on { opacity: 1; border-style: solid; border-color: var(--border); }
+/* si-src-badge: 来源徽标 (CL/CO/CU/QO 等) — 药丸形小徽章 */
+.si-src-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; min-width: 20px; height: 16px; padding: 0 5px;
+  border-radius: 99px; background: var(--surface-2); border: 1px solid var(--border);
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700; letter-spacing: .03em;
+  color: var(--faint); line-height: 1;
+}
+/* si-ro-tag: 「只读」小标签 — 弱化色 */
+.si-ro-tag {
+  flex: 0 0 auto; font-size: 9.5px; font-weight: 600; letter-spacing: .03em;
+  color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 5px; padding: 1px 5px; white-space: nowrap; line-height: 1.4;
+}
+
+/* ---- IDs 按钮 + Session ID 面板 ---- */
+.sess-ids-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--fg-2); font-size: 12px; cursor: pointer; }
+.sess-ids-btn.on { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 40%, var(--border)); }
+.sess-ids-btn svg { width: 14px; height: 14px; }
+/* 锚定在 IDs 按钮下方的紧凑弹出层（贴原型），不再占满整个对话区 */
+.session-id-panel {
+  position: absolute; top: 46px; right: clamp(16px, 4%, 72px); z-index: 45;
+  width: min(420px, calc(100% - 48px)); max-height: min(520px, calc(100% - 174px)); overflow: auto;
+  display: none; padding: 0;
+  border: 1px solid var(--border-2); border-radius: 13px;
+  background: color-mix(in oklab, var(--bg-2) 94%, transparent);
+  box-shadow: 0 22px 56px rgba(0,0,0,.17);
+  backdrop-filter: blur(22px) saturate(1.35); -webkit-backdrop-filter: blur(22px) saturate(1.35);
+}
+.session-id-panel.on { display: block; animation: sid-fade .14s; }
+@keyframes sid-fade { from { opacity: 0; transform: translateY(-4px); } }
+.sid-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 14px 15px 11px; border-bottom: 1px solid var(--border); }
+.sid-title { font-weight: 720; font-size: 13.5px; }
+.sid-sub { color: var(--faint); font-size: 11.5px; margin-top: 3px; line-height: 1.45; }
+.sid-list { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.sid-empty { color: var(--fg-2); font-size: 12px; padding: 14px 15px; }
+.sid-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+.sid-top { display: flex; align-items: center; gap: 8px; }
+.sid-provider { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: 0 0 8px; }
+.sid-main { flex: 1; }
+.sid-agent { font-size: 12.5px; font-weight: 600; }
+.sid-meta { color: var(--fg-2); font-size: 11px; margin-top: 1px; }
+.sid-state { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--surface); }
+.sid-state.run { color: var(--accent); }
+.sid-state.archived { color: var(--warn); background: oklch(80% .13 80 / .13); }
+.sid-code { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.sid-code code { flex: 1; padding: 6px 9px; border-radius: 7px; background: var(--surface); font-size: 12px; overflow-wrap: anywhere; }
+.sid-copy { flex: 0 0 auto; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; cursor: pointer; }
+.sid-copy.done { color: var(--ok); border-color: var(--ok); }

@@ -1,0 +1,42 @@
+:root, [data-theme="dark"] {
+  --bg: oklch(20% 0.012 250); --bg-2: oklch(23% 0.013 250); --sidebar: oklch(17% 0.014 255);
+  --surface: oklch(26% 0.013 250); --surface-2: oklch(30% 0.014 250);
+  --fg: oklch(95% 0.005 250); --fg-2: oklch(82% 0.008 250); --muted: oklch(64% 0.012 250); --faint: oklch(50% 0.012 250);
+  --border: oklch(28% 0.011 250); --border-2: oklch(34% 0.013 250);
+  --accent: oklch(72% 0.15 235); --accent-dim: oklch(72% 0.15 235 / 0.16); --on-accent: oklch(15% 0.02 250);
+  --run: oklch(74% 0.14 235); --ok: oklch(74% 0.15 150); --warn: oklch(80% 0.13 80); --err: oklch(68% 0.18 25);
+  --add: oklch(74% 0.15 150); --del: oklch(68% 0.18 25);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  /* dark 弹层投影:0.45 在 20% 亮度背景上压出明显黑边,降到 0.28 保留层次但不显黑线 */
+  /* Radius scale — --r-md was referenced but never defined, so those elements collapsed to sharp
+     0-radius corners. Full scale now, nudged a touch rounder to avoid hard right angles anywhere. */
+  --r-sm: 7px; --r: 9px; --r-md: 11px; --r-lg: 14px; --shadow: 0 12px 40px rgba(0,0,0,0.28);
+  /* Translucent panel fills used only when vibrancy (frosted glass) is on. */
+  --glass-window: oklch(20% 0.012 250 / 0.5); --glass-panel: oklch(23% 0.013 250 / 0.45); --glass-sidebar: oklch(17% 0.014 255 / 0.45);
+}
+[data-theme="light"] {
+  --bg: oklch(98% 0.003 250); --bg-2: oklch(96% 0.004 250); --sidebar: oklch(95% 0.005 250);
+  --surface: oklch(99% 0.003 250); --surface-2: oklch(96.5% 0.006 250);
+  --fg: oklch(24% 0.012 250); --fg-2: oklch(34% 0.012 250); --muted: oklch(50% 0.012 250); --faint: oklch(62% 0.01 250);
+  --border: oklch(89% 0.006 250); --border-2: oklch(84% 0.008 250);
+  --accent: oklch(56% 0.16 250); --accent-dim: oklch(56% 0.16 250 / 0.12); --on-accent: oklch(99% 0 0);
+  --run: oklch(56% 0.15 250); --ok: oklch(56% 0.15 150); --warn: oklch(64% 0.14 70); --err: oklch(56% 0.2 25);
+  --add: oklch(52% 0.15 150); --del: oklch(56% 0.2 25);
+  --shadow: 0 12px 40px rgba(15,23,42,0.14);
+  --glass-window: oklch(98% 0.003 250 / 0.55); --glass-panel: oklch(96% 0.004 250 / 0.5); --glass-sidebar: oklch(95% 0.005 250 / 0.5);
+}
+
+/* ---- 强调色方案(深色为默认基准,浅色单独压暗以保证对比) ---- */
+:root[data-accent="violet"]  { --accent: oklch(72% .16 300); --accent-dim: oklch(72% .16 300/.16); --run: oklch(73% .14 300); }
+:root[data-accent="emerald"] { --accent: oklch(74% .15 160); --accent-dim: oklch(74% .15 160/.16); --run: oklch(74% .14 160); }
+:root[data-accent="amber"]   { --accent: oklch(80% .14 75);  --accent-dim: oklch(80% .14 75/.16);  --run: oklch(80% .13 75);  --on-accent: oklch(22% .04 75); }
+:root[data-accent="rose"]    { --accent: oklch(70% .17 12);  --accent-dim: oklch(70% .17 12/.16);  --run: oklch(71% .15 12); }
+:root[data-accent="cyan"]    { --accent: oklch(76% .12 205); --accent-dim: oklch(76% .12 205/.16); --run: oklch(76% .12 205); }
+:root[data-accent="graphite"]{ --accent: oklch(78% .02 250); --accent-dim: oklch(78% .02 250/.18); --run: oklch(78% .02 250); }
+[data-theme="light"][data-accent="violet"]  { --accent: oklch(54% .2 300);  --accent-dim: oklch(54% .2 300/.12);  --run: oklch(54% .19 300); }
+[data-theme="light"][data-accent="emerald"] { --accent: oklch(52% .15 160); --accent-dim: oklch(52% .15 160/.12); --run: oklch(52% .15 160); }
+[data-theme="light"][data-accent="amber"]   { --accent: oklch(60% .15 70);  --accent-dim: oklch(60% .15 70/.12);  --run: oklch(60% .15 70); --on-accent: oklch(99% 0 0); }
+[data-theme="light"][data-accent="rose"]    { --accent: oklch(56% .2 14);   --accent-dim: oklch(56% .2 14/.12);   --run: oklch(56% .19 14); }
+[data-theme="light"][data-accent="cyan"]    { --accent: oklch(54% .12 215); --accent-dim: oklch(54% .12 215/.12); --run: oklch(54% .12 215); }
+[data-theme="light"][data-accent="graphite"]{ --accent: oklch(42% .02 250); --accent-dim: oklch(42% .02 250/.1);  --run: oklch(42% .02 250); }

@@ -1,0 +1,162 @@
+/* ============================================================
+   新建工作区弹层
+   ============================================================ */
+.create-overlay {
+  position: absolute; inset: 0; z-index: 110; display: none;
+  background: oklch(8% 0.01 250 / 0.55); backdrop-filter: blur(3px);
+  align-items: center; justify-content: center; padding: 36px;
+}
+.create-overlay.on { display: flex; animation: fade .18s; }
+.create {
+  width: 100%; max-width: 720px; height: 100%; max-height: 640px;
+  background: var(--bg); border: 1px solid var(--border-2); border-radius: 14px;
+  box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden;
+  animation: pop .2s cubic-bezier(.2,.8,.3,1.1);
+}
+.cr-head { flex: 0 0 auto; height: 56px; display: flex; align-items: center; gap: 12px; padding: 0 20px; border-bottom: 1px solid var(--border); }
+.cr-head .ic { width: 30px; height: 30px; border-radius: 8px; background: var(--accent-dim); display: grid; place-items: center; flex: 0 0 30px; }
+.cr-head .ic svg { width: 17px; height: 17px; color: var(--accent); }
+.cr-head h3 { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+.cr-head .sub { font-size: 12px; color: var(--faint); margin-top: 1px; }
+.cr-x { margin-left: auto; width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); }
+.cr-x:hover { background: var(--surface); color: var(--fg); }
+.cr-x svg { width: 16px; height: 16px; }
+.cr-body { flex: 1; overflow-y: auto; padding: 4px 24px 8px; }
+.cr-sec { padding: 20px 0; border-bottom: 1px solid var(--border); }
+.cr-sec:last-child { border-bottom: none; }
+.cr-sec-h { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
+.cr-sec-h .n { width: 19px; height: 19px; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: 11px; font-weight: 700; font-family: var(--mono); display: grid; place-items: center; flex: 0 0 19px; }
+.cr-sec-h h4 { font-size: 13px; font-weight: 620; }
+.cr-sec-h .hint { margin-left: auto; font-size: 11.5px; color: var(--faint); }
+.cr-row { display: flex; gap: 12px; align-items: flex-end; }
+.cr-field { flex: 1; }
+.cr-field label { display: block; font-size: 12px; font-weight: 500; color: var(--fg-2); margin-bottom: 6px; }
+.cr-field .inp { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 11px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); transition: border-color .14s; }
+.cr-field .inp:focus-within { border-color: var(--accent); }
+.cr-field .inp svg { width: 15px; height: 15px; color: var(--faint); flex: 0 0 15px; }
+.cr-field input { flex: 1; min-width: 0; height: 100%; background: none; border: none; outline: none; color: var(--fg); font-size: 13px; }
+.cr-field input.mono { font-family: var(--mono); font-size: 12.5px; }
+.cr-field .pick { height: 26px; padding: 0 10px; border-radius: 6px; background: var(--surface-2); color: var(--fg-2); font-size: 12px; font-weight: 500; flex: 0 0 auto; }
+.cr-field .pick:hover { background: var(--border); }
+.cr-name-tip { font-size: 11px; color: var(--faint); margin-top: 6px; }
+
+/* 工作流模板卡 */
+.wf-templates { display: flex; gap: 8px; flex-wrap: wrap; }
+.wf-card { flex: 1; min-width: 150px; text-align: left; border: 1.5px solid var(--border); border-radius: 9px; padding: 11px 13px; transition: .14s; background: var(--surface); }
+.wf-card:hover { border-color: var(--border-2); }
+.wf-card.on { border-color: var(--accent); background: var(--accent-dim); }
+.wf-card .tt { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+.wf-card .tt .ck { width: 14px; height: 14px; color: var(--accent); margin-left: auto; opacity: 0; }
+.wf-card.on .tt .ck { opacity: 1; }
+.wf-card .ds { font-size: 11px; color: var(--faint); margin-top: 5px; line-height: 1.4; }
+.wf-card.add { border-style: dashed; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: 12.5px; font-weight: 500; min-width: 120px; flex: 0 0 auto; }
+.wf-card.add:hover { color: var(--fg); border-color: var(--faint); }
+.wf-card.add svg { width: 15px; height: 15px; }
+
+/* 阶段编辑列表 */
+.stage-edit { margin-top: 14px; display: flex; flex-direction: column; gap: 7px; }
+.stage-line { display: flex; align-items: center; gap: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; transition: .14s; flex-wrap: wrap; }
+.stage-line.off { opacity: .5; }
+.stage-line.off .st-right { pointer-events: none; }
+.st-chk { width: 19px; height: 19px; border-radius: 6px; border: 1.5px solid var(--border-2); display: grid; place-items: center; flex: 0 0 19px; transition: .12s; }
+.st-chk svg { width: 13px; height: 13px; color: var(--on-accent); opacity: 0; }
+.stage-line:not(.off) .st-chk { background: var(--accent); border-color: var(--accent); }
+.stage-line:not(.off) .st-chk svg { opacity: 1; }
+.st-num { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--faint); width: 16px; flex: 0 0 16px; text-align: center; }
+.stage-line.off .st-num { color: var(--faint); }
+.st-main { flex: 1; min-width: 0; }
+.st-name { font-size: 13px; font-weight: 550; }
+.st-desc { font-size: 11px; color: var(--faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-right { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.seg-mode { display: inline-flex; background: var(--surface-2); border-radius: 7px; padding: 2px; gap: 2px; }
+.seg-mode button { height: 24px; padding: 0 9px; border-radius: 5px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.seg-mode button.on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.mini-sel { height: 28px; border-radius: 7px; background: var(--surface-2); border: 1px solid var(--border); color: var(--fg-2); font-size: 11.5px; font-family: var(--mono); padding: 0 8px; outline: none; max-width: 168px; }
+.mini-sel:focus { border-color: var(--accent); }
+.mini-sel:disabled { opacity: .4; }
+.st-badge { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--accent); background: var(--accent-dim); padding: 4px 10px; border-radius: 99px; white-space: nowrap; }
+.stage-projs { margin: -3px 0 1px 33px; padding: 9px 11px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 9px; display: flex; flex-direction: column; gap: 7px; width: 100%; box-sizing: border-box; }
+.stage-projs .sp-h { font-size: 11px; font-weight: 600; letter-spacing: .03em; color: var(--faint); display: flex; align-items: center; gap: 6px; }
+.stage-projs .sp-empty { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.stage-proj-row { display: flex; align-items: center; gap: 9px; }
+.stage-proj-row .pj-ic { width: 20px; height: 20px; flex: 0 0 20px; color: var(--muted); }
+.stage-proj-row .pj-ic svg { width: 16px; height: 16px; }
+.stage-proj-row .nm { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-proj-row .br { font-family: var(--mono); font-size: 10.5px; color: var(--faint); flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; }
+.stage-proj-row .br svg { width: 11px; height: 11px; }
+.stage-projs .sp-h svg { width: 13px; height: 13px; }
+
+/* 涉及项目选择 */
+.cr-branch-all { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; margin-bottom: 10px; }
+.cr-branch-all .lab { font-size: 12px; color: var(--fg-2); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.cr-branch-all .lab svg { width: 14px; height: 14px; color: var(--muted); }
+.cr-branch-all input { flex: 1; min-width: 0; height: 30px; padding: 0 10px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); color: var(--fg); font-family: var(--mono); font-size: 12px; outline: none; }
+.cr-branch-all input:focus { border-color: var(--accent); }
+.cr-branch-all .apply { height: 30px; padding: 0 12px; border-radius: 7px; background: var(--surface-2); color: var(--fg-2); font-size: 12px; font-weight: 600; flex: 0 0 auto; }
+.cr-branch-all .apply:hover { background: var(--border); }
+.cr-projs { display: flex; flex-direction: column; gap: 7px; }
+.cr-proj { display: flex; align-items: center; gap: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; transition: .14s; }
+.cr-proj.on { border-color: var(--border-2); }
+.cr-proj.off { opacity: .55; }
+.cr-proj .st-chk { cursor: pointer; }
+.cr-proj.on .st-chk { background: var(--accent); border-color: var(--accent); }
+.cr-proj.on .st-chk svg { opacity: 1; }
+.cr-proj.off .st-chk { background: none; border-color: var(--border-2); }
+.cr-proj.off .st-chk svg { opacity: 0; }
+.cr-proj .pj-ic { width: 30px; height: 30px; border-radius: 7px; background: var(--surface-2); display: grid; place-items: center; flex: 0 0 30px; }
+.cr-proj .pj-ic svg { width: 15px; height: 15px; color: var(--accent); }
+.cr-proj .pj-main { flex: 1; min-width: 0; cursor: pointer; }
+.cr-proj .pj-name { font-size: 13px; font-weight: 600; }
+.cr-proj .pj-repo { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cr-proj .pj-branch { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 4px 0 9px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); flex: 0 0 auto; }
+.cr-proj .pj-branch svg { width: 12px; height: 12px; color: var(--muted); flex: 0 0 12px; }
+.cr-proj .pj-branch input { width: 132px; height: 100%; background: none; border: none; outline: none; color: var(--accent); font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+.cr-proj.off .pj-branch { opacity: .5; pointer-events: none; }
+/* 「已包含」徽标:小号绿色胶囊(原型 1686-1687,之前漏移植 → 锁 svg 无尺寸约束被撑成巨大) */
+.cr-proj .pj-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; font-family: var(--mono); color: var(--ok); background: oklch(74% .15 150 / .14); border-radius: 99px; padding: 2px 8px; flex: 0 0 auto; }
+.cr-proj .pj-lock svg { width: 10px; height: 10px; }
+.cr-proj-empty { text-align: center; padding: 18px; color: var(--faint); font-size: 12px; border: 1px dashed var(--border-2); border-radius: 9px; }
+.cr-proj-empty a { color: var(--accent); font-weight: 600; cursor: pointer; }
+
+.cr-foot { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 14px 22px; border-top: 1px solid var(--border); background: var(--bg-2); }
+.cr-foot .summary { font-size: 12px; color: var(--muted); }
+.cr-foot .summary b { color: var(--fg-2); font-weight: 600; }
+.cr-foot .sp { flex: 1; }
+.cr-foot .btn-cancel { height: 36px; padding: 0 16px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); font-size: 13px; font-weight: 500; }
+.cr-foot .btn-cancel:hover { background: var(--surface-2); }
+.cr-foot .btn-create { height: 36px; padding: 0 18px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 13px; font-weight: 650; display: inline-flex; align-items: center; gap: 7px; }
+.cr-foot .btn-create:hover { filter: brightness(1.08); }
+.cr-foot .btn-create:disabled { opacity: .45; cursor: default; filter: none; }
+.cr-foot .btn-create svg { width: 16px; height: 16px; }
+
+/* ===== Plugin (hook) editing in the wizard — two scopes (1:1 prototype) ===== */
+/* wf-scope flow strip inside section 3 工作流程 */
+.wf-flow, .cr-flow-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 11px; }
+.cr-flow-preview { margin: 0 0 13px; padding: 10px 11px; background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; }
+.cr-flow-preview .fp-h { width: 100%; font-size: 11px; font-weight: 600; color: var(--faint); margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }
+.cr-flow-preview .fp-h svg { width: 12px; height: 12px; flex: 0 0 12px; color: var(--accent); }
+.cr-flow-preview .fp-h .lk { margin-left: auto; font-weight: 500; }
+.wf-ins { width: 18px; height: 24px; flex: 0 0 18px; border-radius: 6px; display: grid; place-items: center; color: var(--faint); opacity: .45; transition: .12s; }
+.wf-ins:hover { opacity: 1; color: var(--accent); background: var(--accent-dim); }
+.wf-ins svg { width: 13px; height: 13px; }
+.wf-stage-chip { font-size: 11.5px; font-weight: 560; color: var(--fg-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 5px 10px; display: inline-flex; align-items: center; gap: 6px; }
+.wf-stage-chip .n { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--faint); }
+.wf-plug-chip { font-size: 11.5px; font-weight: 560; color: var(--accent); background: var(--accent-dim); border: 1px dashed color-mix(in oklch, var(--accent) 50%, transparent); border-radius: 7px; padding: 4px 5px 4px 9px; display: inline-flex; align-items: center; gap: 6px; transition: .12s; cursor: grab; }
+.wf-plug-chip.click { cursor: grab; }
+.wf-plug-chip.click:active { cursor: grabbing; }
+.wf-plug-chip.click:hover { filter: brightness(1.1); }
+.wf-plug-chip .pz { width: 12px; height: 12px; flex: 0 0 12px; }
+.wf-plug-chip .x { width: 16px; height: 16px; border-radius: 5px; display: grid; place-items: center; color: var(--accent); opacity: .55; flex: 0 0 16px; }
+.wf-plug-chip .x:hover { opacity: 1; background: oklch(68% .18 25 / .2); color: var(--del); }
+.wf-plug-chip .x svg { width: 10px; height: 10px; }
+.cr-flow-preview .plug-editor { width: 100%; margin-top: 9px; }
+/* step-scope hook bars at setup-step boundaries */
+.cr-step-hook { margin: 2px 0 10px; }
+.cr-step-hook .sh-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 7px; }
+.cr-step-hook .hr { flex: 1; min-width: 12px; height: 1px; background: linear-gradient(90deg, transparent, var(--border) 30%, var(--border) 70%, transparent); }
+.cr-step-hook .sh-tag { font: 600 10px/1 var(--mono); letter-spacing: .03em; color: var(--faint); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.cr-step-hook .sh-tag svg { width: 11px; height: 11px; flex: 0 0 11px; }
+.cr-step-hook .plug-editor { width: 100%; margin-top: 9px; }
+.sh-add { display: inline-flex; align-items: center; gap: 5px; height: 25px; padding: 0 11px; border-radius: 999px; border: 1px dashed var(--border); background: transparent; color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; transition: .14s; white-space: nowrap; }
+.sh-add svg { width: 12px; height: 12px; flex: 0 0 12px; }
+.sh-add:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }

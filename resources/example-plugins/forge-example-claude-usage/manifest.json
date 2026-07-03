@@ -1,0 +1,9 @@
+{
+  "id": "forge-example-claude-usage",
+  "name": "Claude 额度（示例）",
+  "type": "statusbar-usage",
+  "provider": "claude",
+  "entry": "usage.js",
+  "refreshSec": 300,
+  "version": "1.0.0"
+}
