@@ -5,11 +5,10 @@ import { DISTILL_OLDEST_N } from './tokenEstimate'
 import type { ChatMessage } from '@shared/types'
 
 // A one-shot LLM call: send a single prompt with no resume/history, return the full reply text.
-// Injected by chatService (implemented via provider.chat + haiku). Kept abstract so the distiller
-// has no provider dependency and is trivially testable.
-export interface DistillDeps { oneShot: (prompt: string, model?: string) => Promise<string> }
-
-const DISTILL_MODEL = 'haiku-4.5'
+// Injected by chatService, which picks a distill model VALID FOR THE SESSION'S PROVIDER (see
+// distillModelFor) — the distiller stays provider-agnostic and must NOT hardcode a model id, or a
+// claude-only alias like 'haiku-4.5' would 400 on codex/cursor sessions.
+export interface DistillDeps { oneShot: (prompt: string) => Promise<string> }
 
 function renderTranscript(messages: ChatMessage[]): string {
   return messages.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${m.text}`).join('\n')
@@ -35,7 +34,7 @@ export async function distillSession(wsPath: string, sessionId: string, deps: Di
       renderTranscript(oldest),
       '\n只输出摘要正文,不要解释。',
     ].filter(Boolean).join('\n')
-    const summary = (await deps.oneShot(prompt, DISTILL_MODEL)).trim()
+    const summary = (await deps.oneShot(prompt)).trim()
     if (summary) setSessionSummary(wsPath, sessionId, summary)
   })
 }
@@ -55,7 +54,7 @@ export async function promoteToWorkspace(wsPath: string, sessionId: string, deps
       '对话:',
       renderTranscript(messages),
     ].filter(Boolean).join('\n')
-    const distilled = (await deps.oneShot(prompt, DISTILL_MODEL)).trim()
+    const distilled = (await deps.oneShot(prompt)).trim()
     if (distilled) writeWorkspaceMemory(wsPath, mergeMemory(existing, distilled))
   })
 }
@@ -75,7 +74,7 @@ export async function promoteToSystem(wsPath: string, deps: DistillDeps): Promis
       'workspace 记忆:',
       wsMem,
     ].filter(Boolean).join('\n')
-    const distilled = (await deps.oneShot(prompt, DISTILL_MODEL)).trim()
+    const distilled = (await deps.oneShot(prompt)).trim()
     if (distilled) writeSystemMemory(mergeMemory(existing, distilled))
   })
 }
