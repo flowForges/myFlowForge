@@ -1,0 +1,48 @@
+/* 插件 / hook 的执行形态 —— 区别于 LLM 代理卡:轻量、确定性步骤,展示注入的 prompt 与产出 */
+/* Mirrored from prototype index.html lines 975-1014 and 1784-1794 */
+
+.hook-node {
+  position: relative;
+  border: 1px dashed var(--border-2);
+  border-radius: var(--r);
+  background: color-mix(in oklch, var(--accent-dim), transparent 35%);
+  padding: 10px 12px;
+}
+.hook-node.run { border-style: solid; border-color: var(--run); box-shadow: 0 0 0 1px var(--run); }
+.hook-node.wait { opacity: .72; }
+.hook-head { display: flex; align-items: center; gap: 9px; }
+.hook-ic { width: 26px; height: 26px; flex: 0 0 26px; border-radius: 7px; display: grid; place-items: center;
+  background: var(--accent-dim); border: 1px solid var(--border); }
+.hook-ic svg { width: 15px; height: 15px; color: var(--accent); }
+.hook-node.run .hook-ic { background: var(--accent); border-color: var(--accent); }
+.hook-node.run .hook-ic svg { color: var(--on-accent); }
+.hook-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.hook-name { font-size: 12.5px; font-weight: 640; color: var(--fg); display: flex; align-items: center; gap: 7px; }
+.hook-kind { font: 600 9px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--accent);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 3px 5px; }
+.hook-when { font: 500 10.5px/1 var(--mono); color: var(--faint); }
+.hook-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; font-family: var(--mono); flex: 0 0 auto; }
+.hook-state .d { width: 7px; height: 7px; border-radius: 50%; }
+.hook-out { margin-top: 9px; border-top: 1px dashed var(--border); padding-top: 8px; max-height: 240px; overflow: auto; }
+.hook-out-h { display: flex; align-items: center; gap: 6px; font: 600 9.5px/1 var(--mono); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--faint); margin-bottom: 7px; }
+.hook-out-h .od { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); }
+.hook-node.run .hook-out-h .od { background: var(--run); animation: pulse 1.4s infinite; }
+.hook-node.ok .hook-out-h .od { background: var(--ok); }
+.hook-oline { font-family: var(--mono); font-size: 11.5px; line-height: 1.6; color: var(--muted); display: flex; gap: 8px; padding: 1px 0; }
+.hook-oline .ot { color: var(--faint); flex: 0 0 auto; }
+.hook-oline.ok .ox { color: var(--ok); }
+.hook-oline .ox { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.hook-wait-note { font: 500 11px/1.5 var(--mono); color: var(--faint); }
+.hook-inject { margin-top: 8px; display: inline-flex; align-items: center; gap: 6px; font: 500 10.5px/1 var(--mono); color: var(--accent); }
+.hook-inject code { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 2px 5px; color: var(--fg-2); }
+
+/* Capability badges (技能 / 工具) - from prototype lines 1784-1794 */
+.hook-caps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 9px 0 2px; }
+.hook-caps .hk-cap-lab { font-size: 10px; font-weight: 600; color: var(--fg-3); letter-spacing: .04em; margin-right: 1px; }
+.hook-caps .hk-cap-lab:not(:first-child) { margin-left: 6px; }
+.hk-cap { font-size: 10.5px; font-weight: 540; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 2px 8px 2px 4px; display: inline-flex; align-items: center; gap: 5px; }
+.hk-cap .hk-b { width: 13px; height: 13px; border-radius: 4px; font-size: 8px; flex: 0 0 13px; }
+.hk-b { width: 15px; height: 15px; border-radius: 5px; display: inline-grid; place-items: center; font: 700 9px/1 var(--mono); color: #fff; flex: 0 0 15px; }
+.hk-b.s { background: oklch(58% 0.17 255); }
+.hk-b.t { background: oklch(60% 0.13 175); }

@@ -1,0 +1,53 @@
+import type { ChatMessage, PendingAction, ChatConfirm } from '@shared/types'
+
+// tsconfig.node.json 未设 --jsx,即使是 `import type` 也会因模块解析到 .tsx 而触发 TS6142。
+// 因此无法直接 import PlanCard.PlanReq,改用结构等价的本地定义;TypeScript 鸭子类型保证运行时兼容。
+export interface PlanReq { id: string; approach: string; stages: { name: string; agents: number }[]; task?: string; ts?: string }
+
+export type TimelineEntry =
+  | { kind: 'message'; ts: number; msg: ChatMessage; index: number }
+  | { kind: 'pending'; ts: number; action: PendingAction }
+  | { kind: 'confirm'; ts: number; confirm: ChatConfirm }
+  | { kind: 'plan'; ts: number; plan: PlanReq }
+
+// 卡片(pending/confirm/plan)排序键:缺失/不可解析 → +Infinity 排末尾;否则用毫秒时间戳。
+function key(ts?: string): number {
+  if (!ts) return Infinity
+  const n = Date.parse(ts)
+  return Number.isNaN(n) ? Infinity : n
+}
+
+// 消息排序键 —— 与卡片不同,消息在数组里已按追加顺序=时序排列,必须保持其相对次序:
+//  · 空 ts('') = 尚未定时的在途流式助手消息,天然"最新",置底(+Infinity)。
+//  · 非空但不可解析(旧会话的时钟制 "09:58:01",Date.parse=NaN)= 真实历史消息,不能顶到末尾;
+//    沿用前一条消息的有效时间(carry-forward),从而留在原位。开头连续的此类消息落 -Infinity(顶部)。
+//  · 可解析 ISO → 毫秒值。
+// 若统一按 key() 把不可解析 ts 当 +Infinity,旧会话历史会被顶到底部,而本轮带真实 ts 的回复反排到其上方、
+// 滚动到底看不见("有思考没结果")。carry-forward 修复该回归。
+function messageKeys(messages: ChatMessage[]): number[] {
+  let last = -Infinity
+  return messages.map(m => {
+    if (m.ts === '') return Infinity               // 在途流式消息:永远置底(不推进 last)
+    const n = Date.parse(m.ts)
+    if (!Number.isNaN(n)) { last = n; return n }   // 真实 ISO
+    return last                                    // 遗留不可解析:沿用前值,保持原位
+  })
+}
+
+// 把消息与三类卡片按时间戳归并成单一时间线。Array.prototype.sort 稳定(ES2019+):相同 ts 保持
+// 传入顺序(消息 → pending → confirm → plan),使同刻卡片有确定次序。
+export function buildTimeline(
+  messages: ChatMessage[],
+  pending: PendingAction[],
+  confirms: ChatConfirm[],
+  plans: PlanReq[],
+): TimelineEntry[] {
+  const mk = messageKeys(messages)
+  const entries: TimelineEntry[] = [
+    ...messages.map((msg, index): TimelineEntry => ({ kind: 'message', ts: mk[index], msg, index })),
+    ...pending.map((action): TimelineEntry => ({ kind: 'pending', ts: key(action.ts), action })),
+    ...confirms.map((confirm): TimelineEntry => ({ kind: 'confirm', ts: key(confirm.ts), confirm })),
+    ...plans.map((plan): TimelineEntry => ({ kind: 'plan', ts: key(plan.ts), plan })),
+  ]
+  return entries.sort((a, b) => a.ts - b.ts)
+}

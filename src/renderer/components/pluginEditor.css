@@ -1,0 +1,31 @@
+/* 插件编辑器 — 1:1 from prototype index.html lines 1770-1806 */
+.plug-editor { margin-top: 12px; border: 1px solid var(--accent); border-radius: 11px; background: var(--bg-2); padding: 14px; animation: fade .15s; }
+.plug-editor .pe-h { font-size: 12px; font-weight: 660; display: flex; align-items: center; gap: 7px; margin-bottom: 11px; }
+.plug-editor .pe-h svg { width: 14px; height: 14px; color: var(--accent); flex: 0 0 14px; }
+.plug-editor .pe-h .pos { margin-left: auto; font-size: 11px; font-weight: 500; color: var(--accent); background: var(--accent-dim); padding: 2px 9px; border-radius: 99px; font-family: var(--mono); }
+.plug-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.plug-preset { font-size: 11px; font-weight: 550; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 5px; transition: .12s; }
+.plug-preset:hover { border-color: var(--accent); color: var(--accent); }
+.plug-preset svg { width: 11px; height: 11px; }
+/* 插件可挂载的技能 / 工具:编辑器多选 chip */
+.pe-field .pe-hint { font-weight: 480; color: var(--fg-3); font-size: 10px; margin-left: 6px; letter-spacing: 0; }
+.hk-picks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
+.hk-pick { font-size: 11px; font-weight: 540; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 4px 10px 4px 6px; display: inline-flex; align-items: center; gap: 6px; transition: .12s; }
+.hk-pick:hover { border-color: var(--accent); color: var(--fg); }
+.hk-pick.on { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.hk-b { width: 15px; height: 15px; border-radius: 5px; display: inline-grid; place-items: center; font: 700 9px/1 var(--mono); color: #fff; flex: 0 0 15px; }
+.hk-b.s { background: oklch(58% 0.17 255); }
+.hk-b.t { background: oklch(60% 0.13 175); }
+.hk-pick .hk-b { opacity: .85; }
+.hk-pick.on .hk-b { opacity: 1; }
+.pe-field { margin-bottom: 11px; }
+.pe-field label { display: block; font-size: 11.5px; font-weight: 560; color: var(--fg-2); margin-bottom: 5px; }
+.pe-field input, .pe-field textarea { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; color: var(--fg); outline: none; font-size: 12.5px; font-family: inherit; }
+.pe-field textarea { min-height: 76px; line-height: 1.55; resize: vertical; }
+.pe-field input:focus, .pe-field textarea:focus { border-color: var(--accent); }
+.pe-foot { display: flex; align-items: center; gap: 9px; }
+.pe-foot .sp { flex: 1; }
+.pe-foot .cancel { height: 32px; padding: 0 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); font-size: 12px; font-weight: 500; }
+.pe-foot .cancel:hover { background: var(--surface-2); }
+.pe-foot .save { height: 32px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 660; }
+.pe-foot .save:disabled { opacity: .4; cursor: default; }

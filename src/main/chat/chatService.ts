@@ -1,0 +1,165 @@
+import { existsSync } from 'node:fs'
+import { appendMessage, readMessages, readSession, writeSession } from './chatStore'
+import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
+import type { ChatSendPayload, ChatMessage, ChatEvent } from '@shared/types'
+import { createRunFenceScanner } from '../agents/runFence'
+import { buildMemoryPreamble } from './memory/preamble'
+import { buildContinuationPreamble } from './continuation'
+import { distillSession, promoteToWorkspace, type DistillDeps } from './memory/distiller'
+import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD } from './memory/tokenEstimate'
+import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext } from '../agents/contextMeta'
+import { getSession } from './sessionStore'
+import { providerSupportsResume } from '../agents/resumeSupport'
+
+export interface SendTurnDeps {
+  provider: AgentProvider
+  env: NodeJS.ProcessEnv
+  emit: (e: ChatEvent) => void
+  confirm?: (req: ConfirmReq) => Promise<'allow' | 'deny'>
+  onRunTrigger?: (workspacePath: string, task: string) => void
+  onSessionStart?: (session: AgentSession) => void
+}
+
+let seq = 0
+function mkId(prefix: string) { return `${prefix}-${Date.now()}-${++seq}` }
+// Full ISO timestamp (UTC instant) — the renderer formats it to LOCAL time + date. (Older builds stored a
+// UTC clock-only "HH:MM:SS", which showed the wrong timezone and carried no date; this fixes both.)
+function now() { return new Date().toISOString() }
+
+export function history(wsPath: string, sessionId: string): ChatMessage[] { return readMessages(wsPath, sessionId) }
+
+export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<ChatMessage> {
+  const { provider, env, emit } = deps
+  const ws = payload.workspacePath
+  const sid = payload.sessionId
+  const label = `${payload.agentLabel} · ${payload.model}`
+  let context = mergeAgentContext(discoverAgentContext(ws, ws), forgeMcpContext(env))
+
+  // 原生续聊：续自导入会话、同源同代理、该 provider 真的传 --resume、还没拿到新 resumeId、原 cwd 仍在
+  // → 用原会话 id 让 CLI 原生 resume（完整上下文），跳过文本摘要 preamble。
+  const meta = getSession(ws, sid)
+  const cont = meta?.continuedFrom
+  const nativeResumeId = (cont
+    && payload.agent === cont.source
+    && providerSupportsResume(payload.agent)
+    && readSession(ws, sid, payload.agent) === undefined
+    && existsSync(ws))
+    ? cont.externalId
+    : undefined
+
+  const gapped = nativeResumeId ? false : (provider.chat ? readSession(ws, sid, payload.agent) === undefined : true)
+  const preamble = buildMemoryPreamble(ws, sid, { resumeGapped: gapped })
+  const contPre = gapped ? buildContinuationPreamble(ws, sid) : ''
+  const promptText = [contPre, preamble, payload.text].filter(Boolean).join('\n')
+
+  const userMsg: ChatMessage = {
+    id: mkId('u'), who: 'user', text: payload.text,
+    files: payload.attachments.length ? payload.attachments : undefined, ts: now()
+  }
+  appendMessage(ws, sid, userMsg)
+  emit({ workspacePath: ws, sessionId: sid, type: 'user', message: userMsg })
+
+  const aid = mkId('a')
+  emit({ workspacePath: ws, sessionId: sid, type: 'assistant-start', id: aid, model: label, context })
+  let text = ''
+  let think = ''
+  let lastUsage: { used: number; window: number } | undefined
+  const oneShot: DistillDeps['oneShot'] = (prompt, model) => new Promise<string>((resolve, reject) => {
+    if (!provider.chat) { resolve(''); return }
+    let acc = ''
+    provider.chat({ id: mkId('distill'), prompt, model: model ?? payload.model, cwd: ws }, {
+      onSession: () => {},
+      onAssistantDelta: (t) => { acc += t },
+      onThinkDelta: () => {},
+      onDone: () => resolve(acc),
+      onError: (err) => reject(err),
+    }, env)
+  })
+  const scheduleDistill = () => {
+    const deps: DistillDeps = { oneShot }
+    if (estimateMessagesTokens(readMessages(ws, sid)) > SESSION_DISTILL_THRESHOLD) void distillSession(ws, sid, deps)
+    void promoteToWorkspace(ws, sid, deps)
+  }
+  const finishOk = (elapsed?: number): ChatMessage => {
+    // Scan the full assistant text for a forge:run fence: strip it from the displayed text and,
+    // if a valid task was found, trigger the workspace's configured workflow run.
+    const trigger: { task: string | null } = { task: null }
+    const scanner = createRunFenceScanner((t) => { trigger.task = t })
+    const cleanedLines: string[] = []
+    for (const line of text.split('\n')) cleanedLines.push(...scanner.feedLine(line))
+    cleanedLines.push(...scanner.flush())
+    const cleaned = cleanedLines.join('\n')
+
+    const steps = think.split('\n').map(s => s.trim()).filter(Boolean)
+    const msg: ChatMessage = {
+      id: aid, who: 'ai', text: cleaned, model: label, ts: now(),
+      think: steps.length ? { label: '已思考', elapsed, steps } : undefined,
+      context,
+      usage: lastUsage,
+    }
+    appendMessage(ws, sid, msg)
+    emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
+    if (trigger.task) deps.onRunTrigger?.(ws, trigger.task)
+    scheduleDistill()
+    return msg
+  }
+  const finishErr = (err: Error): ChatMessage => {
+    emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
+    const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, ts: now() }
+    appendMessage(ws, sid, msg)
+    scheduleDistill()
+    return msg
+  }
+  const finishAborted = (): ChatMessage => {
+    const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, ts: now() }
+    appendMessage(ws, sid, msg)
+    emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
+    scheduleDistill()
+    return msg
+  }
+
+  let aborted = false
+  const wrapSession = (session: AgentSession): AgentSession => ({
+    id: session.id,
+    done: session.done,
+    cancel: () => { aborted = true; session.cancel() },
+  })
+
+  if (provider.chat) {
+    const sessionId = nativeResumeId ?? readSession(ws, sid, payload.agent)
+    return new Promise<ChatMessage>((resolve) => {
+      const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments }, {
+        onSession: (id) => writeSession(ws, sid, payload.agent, id),
+        onAssistantDelta: (t) => { text += t; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
+        onThinkDelta: (t) => {
+          think += (think ? '\n' : '') + t
+          const before = context.skills.length + context.rules.length + (context.mcps?.length ?? 0)
+          context = mergeAgentContext(context, extractRuntimeContext(t, ws))
+          const after = context.skills.length + context.rules.length + (context.mcps?.length ?? 0)
+          emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t, context: after !== before ? context : undefined })
+        },
+        onConfirm: deps.confirm,
+        onUsage: (u) => { lastUsage = u },
+        onDone: (r) => resolve(finishOk(r.elapsed)),
+        onError: (err) => resolve(aborted ? finishAborted() : finishErr(err))
+      }, env)
+      deps.onSessionStart?.(wrapSession(session))
+    })
+  }
+
+  return new Promise<ChatMessage>((resolve) => {
+    const session = provider.run(
+      { stageKey: 'chat', agentId: aid, name: 'chat', prompt: promptText, cwd: ws, model: payload.model },
+      {
+        onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { text += (text ? '\n' : '') + l.text; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
+        onState: () => {},
+        onConfirm: deps.confirm ?? (async () => 'deny'),
+        onInput: async () => '',
+        onDone: () => {},
+        onError: (err) => resolve(aborted ? finishAborted() : finishErr(err))
+      }, env
+    )
+    deps.onSessionStart?.(wrapSession(session))
+    session.done.then(() => resolve(finishOk(undefined))).catch((err) => resolve(aborted ? finishAborted() : finishErr(err as Error)))
+  })
+}

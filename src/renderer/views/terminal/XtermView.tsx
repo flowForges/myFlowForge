@@ -1,0 +1,55 @@
+import { useEffect, useRef } from 'react'
+import { Terminal } from '@xterm/xterm'
+import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
+import '@xterm/xterm/css/xterm.css'
+
+export function XtermView({ termId, active, font }: {
+  termId: string; active: boolean; font: { fontFamily: string; fontSize: number }
+}) {
+  const elRef = useRef<HTMLDivElement>(null)
+  const termRef = useRef<Terminal | null>(null)
+  const fitRef = useRef<FitAddon | null>(null)
+
+  useEffect(() => {
+    const el = elRef.current!
+    const term = new Terminal({ allowProposedApi: true, fontFamily: font.fontFamily, fontSize: font.fontSize,
+      cursorBlink: true, theme: readXtermTheme() })
+    const fit = new FitAddon(); term.loadAddon(fit); term.loadAddon(new WebLinksAddon())
+    term.open(el); fit.fit()
+    termRef.current = term; fitRef.current = fit
+    void window.forge.termResize(termId, term.cols, term.rows)
+    const offData = window.forge.onTermData(({ termId: id, data }) => { if (id === termId) term.write(data) })
+    term.onData(d => window.forge.termWrite(termId, d))
+    // Debounce: a live drag fires the observer every frame; refitting + SIGWINCH on each tick makes the
+    // shell redraw its prompt repeatedly (the "staircase"). Refit once the size settles instead.
+    let refitTimer: ReturnType<typeof setTimeout> | undefined
+    const ro = new ResizeObserver(() => {
+      clearTimeout(refitTimer)
+      refitTimer = setTimeout(() => {
+        try { fit.fit(); window.forge.termResize(termId, term.cols, term.rows) } catch { /* not visible */ }
+      }, 90)
+    })
+    ro.observe(el)
+    return () => { offData(); clearTimeout(refitTimer); ro.disconnect(); term.dispose() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [termId])
+
+  // Re-fit + focus when this tab becomes active.
+  useEffect(() => { if (active) { try { fitRef.current?.fit(); termRef.current?.focus() } catch { /* */ } } }, [active])
+  // Live-apply font changes.
+  useEffect(() => {
+    const t = termRef.current; if (!t) return
+    t.options.fontFamily = font.fontFamily; t.options.fontSize = font.fontSize
+    try { fitRef.current?.fit(); window.forge.termResize(termId, t.cols, t.rows) } catch { /* */ }
+  }, [font.fontFamily, font.fontSize, termId])
+
+  return <div className="xterm-host" ref={elRef} style={{ display: active ? 'block' : 'none' }} />
+}
+
+// Map the app theme (CSS vars) into an xterm theme object.
+function readXtermTheme() {
+  const cs = getComputedStyle(document.documentElement)
+  const v = (n: string, fb: string) => (cs.getPropertyValue(n).trim() || fb)
+  return { background: v('--bg', '#0b1020'), foreground: v('--fg-2', '#d6dbe6'), cursor: v('--accent', '#7aa2f7') }
+}

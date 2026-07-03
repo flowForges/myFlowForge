@@ -1,0 +1,477 @@
+/* ============================================================
+   workspace 详情 — 对话主列 + 组合输入区
+   Ported 1:1 from the prototype (forge 3/index.html).
+   ============================================================ */
+
+/* 对话主列 */
+.chat { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* overflow-x must be set explicitly: with only overflow-y:auto, CSS computes overflow-x to `auto`
+   too, so any child wider than .chat-inner makes the column scroll sideways (and the hidden
+   scrollbar makes it look like a mysterious left/right drift). Clip x; inner <pre>/tables scroll
+   on their own. */
+.chat-scroll { flex: 1; min-width: 0; overflow-y: auto; overflow-x: hidden; padding: 24px 0 12px; scrollbar-width: none; }
+.chat-scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* Responsive width: grows from 720px up to 1180px on wide/fullscreen windows (prototype clamp),
+   instead of staying pinned at a narrow fixed width. Composer/task-queue track the same clamp. */
+.chat-inner { width: 100%; max-width: clamp(720px, 90%, 1180px); min-width: 0; margin: 0 auto; padding: 0 clamp(32px, 4%, 72px); }
+
+.msg { margin-bottom: 26px; }
+.msg-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+.msg-ava { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; font-size: 11px; font-weight: 700; flex: 0 0 24px; }
+.msg-ava.user { background: var(--surface-2); color: var(--fg-2); }
+.msg-ava.ai { background: var(--accent); color: var(--on-accent); }
+.msg-who { font-size: 12.5px; font-weight: 600; }
+.msg-model { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-left: auto; }
+.msg-body { font-size: 14px; line-height: 1.62; color: var(--fg-2); }
+.msg-body p { margin-bottom: 10px; }
+.msg-body p:last-child { margin-bottom: 0; }
+.msg-body code { font-family: var(--mono); font-size: 12.5px; background: var(--surface); padding: 1px 6px; border-radius: 5px; color: var(--fg); }
+/* ---- Markdown rendering ---- */
+.msg-body h1, .msg-body h2, .msg-body h3, .msg-body h4 { font-weight: 680; letter-spacing: -.01em; line-height: 1.3; margin: 16px 0 8px; }
+.msg-body h1:first-child, .msg-body h2:first-child, .msg-body h3:first-child { margin-top: 0; }
+.msg-body h1 { font-size: 19px; } .msg-body h2 { font-size: 16.5px; } .msg-body h3 { font-size: 14.5px; } .msg-body h4 { font-size: 13.5px; color: var(--fg); }
+.msg-body ul, .msg-body ol { margin: 6px 0 12px; padding-left: 22px; }
+.msg-body li { margin-bottom: 4px; }
+.msg-body li::marker { color: var(--faint); }
+.msg-body strong { color: var(--fg); font-weight: 650; }
+.msg-body em { font-style: italic; }
+.msg-body a { color: var(--accent); text-decoration: none; }
+.msg-body a:hover { text-decoration: underline; }
+.msg-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+.msg-body blockquote { border-left: 2px solid var(--border-2); padding-left: 12px; margin: 8px 0; color: var(--muted); }
+.msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }
+.msg-body pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-2); white-space: pre; }
+/* GFM tables — shared by chat messages (.msg-body) and the plan card (.req-title) */
+.msg-body table, .req-title table { border-collapse: collapse; margin: 8px 0 12px; font-size: 13px; width: 100%; }
+.msg-body th, .msg-body td, .req-title th, .req-title td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.msg-body th, .req-title th { background: var(--surface); color: var(--fg); font-weight: 650; }
+.msg-body td, .req-title td { color: var(--fg-2); }
+.msg-files { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.msg-changes { margin-top: 10px; }
+.msg-changes .txt-btn { font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 5px 9px; border-radius: 6px; transition: .14s; }
+.msg-changes .txt-btn:hover { background: var(--accent-dim); }
+
+/* Hover-reveal meta row: copy button + output time. Hidden until the message is hovered. (No 33px avatar
+   indent — this app dropped the per-message avatar, so the body sits flush left.) */
+.msg-meta {
+  display: flex; align-items: center; gap: 8px; margin-top: 5px; height: 22px;
+  opacity: 0; transform: translateY(-2px); pointer-events: none;
+  transition: opacity .14s ease, transform .14s ease;
+}
+.msg:hover .msg-meta, .msg:focus-within .msg-meta { opacity: 1; transform: none; pointer-events: auto; }
+.msg.user .msg-meta { padding-right: 2px; justify-content: flex-end; }
+.mm-time { font-family: var(--mono); font-size: 10.5px; color: var(--faint); letter-spacing: .03em; }
+.mm-copy {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--muted); border-radius: 6px; padding: 3px 8px;
+  font-size: 11px; cursor: pointer; transition: color .12s, border-color .12s, background .12s;
+}
+.mm-copy svg { width: 12px; height: 12px; }
+.mm-copy:hover { color: var(--fg); border-color: color-mix(in oklab, var(--accent) 45%, var(--border)); background: var(--accent-dim); }
+.mm-copy.done { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 55%, transparent); }
+
+/* User's own messages sit on the right, but the text inside the bubble stays readable. */
+.msg.user { display: flex; flex-direction: column; align-items: flex-end; }
+.msg.user .msg-head { flex-direction: row-reverse; align-self: flex-end; }
+.msg.user .msg-body { padding-left: 0; padding-right: 0; width: min(620px, calc(100% - 33px)); display: flex; justify-content: flex-end; }
+.user-bubble {
+  max-width: 100%; padding: 11px 14px; border-radius: 14px 14px 4px 14px;
+  background: var(--accent); color: var(--on-accent); text-align: left;
+  white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: 0 1px 0 oklch(0% 0 0 / .04);
+}
+.msg.user .msg-files { padding-left: 0; padding-right: 0; justify-content: flex-end; width: min(620px, calc(100% - 33px)); }
+.attach-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; font-size: 12px; }
+.attach-chip svg { width: 14px; height: 14px; color: var(--muted); }
+.attach-chip .sz { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
+
+/* 思考过程块 — 内部推理,视觉上"收起/次要",与最终回答明确区分 */
+.think {
+  margin: 0 0 12px 0; border: 1px dashed var(--border-2);
+  border-left: 2px solid var(--faint); border-radius: var(--r);
+  background: color-mix(in oklch, var(--surface) 58%, transparent);
+  overflow: hidden; transition: border-color .2s, background .2s;
+}
+.think.live {
+  border-style: solid; border-left-color: var(--run);
+  background: color-mix(in oklch, var(--accent-dim) 16%, var(--surface));
+}
+.think-h {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; width: 100%;
+  font: 600 10.5px/1 var(--mono); letter-spacing: .06em; color: var(--faint);
+}
+.think-h .glyph { width: 13px; height: 13px; color: var(--muted); flex: 0 0 auto; }
+.think.live .think-h .glyph { color: var(--run); }
+.think-h .spin { width: 13px; height: 13px; flex: 0 0 auto; }
+.think-h .label { font-weight: 600; }
+.think.live .think-h .label {
+  background: linear-gradient(90deg, var(--muted) 32%, var(--fg) 50%, var(--muted) 68%);
+  background-size: 220% 100%; -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; animation: think-shimmer 1.5s linear infinite;
+}
+@keyframes think-shimmer { to { background-position: -220% 0; } }
+.think-h .t { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--faint); text-transform: none; letter-spacing: 0; }
+.think-h .chev { width: 12px; height: 12px; transition: transform .18s; color: var(--faint); flex: 0 0 auto; }
+.think.open .chev { transform: rotate(90deg); }
+.think-body { display: none; padding: 3px 12px 11px 14px; }
+.think.open .think-body { display: block; }
+.think-steps { position: relative; padding-left: 16px; }
+.think-steps::before {
+  content: ""; position: absolute; left: 3px; top: 8px; bottom: 8px;
+  width: 1px; background: linear-gradient(var(--border-2) 60%, transparent);
+}
+.think-step {
+  position: relative; font-size: 11.5px; color: var(--muted);
+  padding: 4px 0; font-family: var(--mono); line-height: 1.55;
+}
+.think-step::before {
+  content: ""; position: absolute; left: -16px; top: 8px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--bg-2); border: 1.5px solid var(--faint); box-sizing: border-box;
+}
+.think-step:last-child::before { border-color: var(--ok); background: color-mix(in oklch, var(--ok) 35%, var(--bg-2)); }
+
+/* 最终回答 — 独立结果区域,与上方思考过程分开 */
+.answer-block { margin-left: 0; }
+.answer-block:not(.show) { margin-top: -2px; }
+.ans-eyebrow {
+  display: inline-flex; align-items: center; gap: 6px; margin: 0 0 7px;
+  font: 700 10px/1 var(--mono); letter-spacing: .08em; color: var(--accent);
+  background: var(--accent-dim); border: 1px solid color-mix(in oklch, var(--accent), transparent 70%);
+  border-radius: 99px; padding: 4px 8px;
+}
+.ans-eyebrow svg { width: 12px; height: 12px; }
+.msg-body.ans { color: var(--fg); }
+/* 回答生成中:末尾打字光标 */
+.msg-body .pending::after {
+  content: ""; display: inline-block; width: 7px; height: 14px; margin-left: 3px;
+  vertical-align: text-bottom; background: var(--run); border-radius: 1px;
+  animation: caret-blink 1s steps(2) infinite;
+}
+@keyframes caret-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; color: var(--run); }
+
+/* 组合输入区 */
+/* No overflow clipping here: the model dropdown opens UPWARD past this element's top, and
+   overflow-x:hidden would promote overflow-y to auto (CSS spec) and clip it. The composer's
+   max-width clamp + margin:auto already keep it from overflowing horizontally. */
+.composer-wrap { flex: 0 0 auto; min-width: 0; padding: 12px clamp(32px, 4%, 72px) 18px; }
+.composer { width: 100%; max-width: clamp(720px, 90%, 1180px); min-width: 0; margin: 0 auto; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-lg); transition: border-color .15s, box-shadow .15s; }
+.composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.composer-attach { display: flex; gap: 8px; padding: 10px 12px 0; flex-wrap: wrap; }
+.composer-attach:empty { display: none; }
+.composer-attach .attach-chip { padding: 5px 9px; font-size: 11.5px; }
+.composer-attach .attach-chip button { color: var(--faint); display: grid; place-items: center; }
+.composer-attach .attach-chip button:hover { color: var(--err); }
+.composer textarea {
+  width: 100%; border: none; background: none; resize: none; outline: none;
+  color: var(--fg); font-family: var(--font); font-size: 14px; line-height: 1.55;
+  padding: 14px 14px 6px; min-height: 26px; max-height: 180px;
+}
+.composer textarea::placeholder { color: var(--faint); }
+.composer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; }
+.cb-btn { height: 30px; padding: 0 10px; border-radius: var(--r); font-size: 12.5px; font-weight: 500; color: var(--fg-2); display: inline-flex; align-items: center; gap: 6px; transition: .14s; border: 1px solid transparent; }
+.cb-btn:hover { background: var(--surface-2); }
+.cb-btn svg { width: 15px; height: 15px; }
+.cb-btn .dd-chev { width: 12px; height: 12px; color: var(--faint); margin-left: 1px; }
+.cb-btn .mc-logo-sm { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 10px; }
+.composer-bar .spacer { flex: 1; }
+.send { width: 34px; height: 34px; border-radius: 8px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; transition: .14s; }
+.send:hover { filter: brightness(1.08); }
+.send.queueing { background: var(--warn); color: oklch(20% .04 80); }
+.send:disabled { opacity: .4; cursor: default; }
+.send svg { width: 17px; height: 17px; }
+
+/* 归档工作区:输入区只读封存的明确禁写态(避免被误当成 bug) */
+.composer.archived { border-color: color-mix(in oklab, var(--warn) 26%, var(--border)); }
+.composer.archived:focus-within { border-color: color-mix(in oklab, var(--warn) 26%, var(--border)); box-shadow: none; }
+.composer.archived textarea { opacity: .72; cursor: not-allowed; }
+.composer.archived .composer-bar .cb-btn,
+.composer.archived .composer-bar .send { opacity: .38; pointer-events: none; }
+/* 会话栏「新建会话」在归档态置灰禁用 */
+.sess-new.disabled { opacity: .38; pointer-events: none; cursor: not-allowed; }
+
+/* —— 指令队列(上一轮未结束时排队) —— */
+.task-queue { width: 100%; max-width: clamp(720px, 90%, 1180px); margin: 0 auto 8px; display: none; flex-direction: column; gap: 6px; }
+.task-queue.show { display: flex; animation: tqIn .2s ease; }
+@keyframes tqIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.tq-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; color: var(--muted); padding: 1px 2px; }
+.tq-head .tq-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px oklch(80% .13 80 / .18); animation: pulse 1.6s infinite; }
+.tq-clear { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--faint); padding: 3px 7px; border-radius: 6px; transition: .13s; }
+.tq-clear:hover { background: var(--surface); color: var(--err); }
+.tq-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; background: var(--surface); border: 1px solid var(--border); }
+.tq-ord { width: 18px; height: 18px; flex: 0 0 18px; border-radius: 5px; background: var(--surface-2); color: var(--muted); font: 600 11px/1 var(--mono); display: grid; place-items: center; }
+.tq-txt { flex: 1; min-width: 0; font-size: 12.5px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tq-src { font: 600 10px/1 var(--mono); color: var(--accent); background: var(--accent-dim); padding: 3px 6px; border-radius: 5px; flex: 0 0 auto; }
+.tq-wait { font: 600 9.5px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; color: oklch(78% .12 80); background: oklch(80% .13 80 / .16); padding: 3px 7px; border-radius: 99px; flex: 0 0 auto; }
+.tq-x { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 6px; color: var(--faint); display: grid; place-items: center; transition: .13s; }
+.tq-x:hover { background: oklch(68% .18 25 / .14); color: var(--err); }
+.tq-x svg { width: 13px; height: 13px; }
+/* 主窗口终止执行按钮 — 1:1 prototype .stop-btn (line 796-802) */
+.tq-stop { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 11px; border-radius: 8px;
+  background: oklch(63% .2 25 / .14); color: var(--err); border: 1px solid oklch(63% .2 25 / .32);
+  font-size: 12px; font-weight: 600; transition: .14s; cursor: pointer; margin-bottom: 8px;
+  width: 100%; max-width: clamp(720px, 90%, 1180px); animation: tqIn .18s ease; }
+.tq-stop:hover { background: oklch(63% .2 25 / .22); }
+
+/* 下拉菜单 */
+.menu { position: relative; }
+.menu-pop {
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
+  background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 6px; min-width: 230px; display: none;
+}
+.menu.open .menu-pop { display: block; }
+.menu-label { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); padding: 6px 8px 4px; }
+.menu-item { width: 100%; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; font-size: 13px; text-align: left; color: var(--fg-2); }
+.menu-item:hover { background: var(--surface); }
+.menu-item.on { color: var(--fg); }
+.menu-item .check { width: 14px; height: 14px; margin-left: auto; color: var(--accent); opacity: 0; }
+.menu-item.on .check { opacity: 1; }
+.menu-item .mc-logo-sm { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font-size: 11px; }
+.menu-item .sub { font-family: var(--mono); font-size: 10.5px; color: var(--faint); display: block; margin-top: 1px; }
+
+/* ===== 子代理交互请求(确认 / 输入 / 选择) — ported 1:1 (proto 481-519) ===== */
+.msg-req { margin-left: 33px; margin-top: 4px; border: 1px solid var(--border-2); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.msg-req.k-confirm { border-color: oklch(80% .13 80 / .5); }
+.msg-req.k-input   { border-color: var(--accent-dim); }
+.msg-req.k-select  { border-color: oklch(72% .14 300 / .45); }
+.req-head { display: flex; align-items: center; gap: 9px; padding: 10px 13px; border-bottom: 1px solid var(--border); background: var(--bg-2); }
+.req-from { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--fg-2); }
+.req-from .pdot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; }
+.req-from .pdot.p-claude { background: var(--accent); } .req-from .pdot.p-codex { background: var(--ok); } .req-from .pdot.p-gemini { background: oklch(70% .15 300); }
+.req-from .who { font-weight: 700; }
+.req-from .role { color: var(--faint); font-weight: 500; }
+.req-kind { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font: 700 9.5px/1 var(--mono); letter-spacing: .05em; text-transform: uppercase; padding: 4px 8px; border-radius: 99px; }
+.req-kind svg { width: 11px; height: 11px; }
+.k-confirm .req-kind { color: var(--warn); background: oklch(80% .13 80 / .16); }
+.k-input   .req-kind { color: var(--accent); background: var(--accent-dim); }
+.k-select  .req-kind { color: oklch(72% .14 300); background: oklch(72% .14 300 / .16); }
+.req-body { padding: 12px 13px; }
+.req-title { font-size: 13.5px; font-weight: 600; color: var(--fg); line-height: 1.45; }
+.req-sub { font-size: 12.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+/* Gate review body — the design stage's technical plan, rendered markdown. Capped + scrollable so a
+   long plan never pushes the approve/reject buttons off-screen. */
+.req-plan { margin-top: 9px; padding: 13px 15px; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; font-size: 13px; color: var(--fg-2); line-height: 1.62; max-height: min(56vh, 560px); overflow-y: auto; }
+.req-plan > :first-child { margin-top: 0; }
+.req-plan > :last-child { margin-bottom: 0; }
+.req-plan h1, .req-plan h2, .req-plan h3 { font-size: 13px; font-weight: 650; color: var(--fg); margin: 12px 0 5px; }
+.req-plan p { margin: 6px 0; }
+.req-plan ul, .req-plan ol { margin: 6px 0; padding-left: 19px; }
+.req-plan li { margin: 2px 0; }
+.req-plan code { font-family: var(--mono); font-size: 11.5px; background: var(--surface); padding: 1px 5px; border-radius: 5px; }
+.req-plan pre { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 9px 11px; overflow-x: auto; margin: 8px 0; }
+.req-plan pre code { background: none; padding: 0; }
+.req-plan table { border-collapse: collapse; margin: 8px 0; font-size: 12px; width: 100%; }
+.req-plan th, .req-plan td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.req-plan th { background: var(--surface); color: var(--fg); font-weight: 650; }
+/* Design-doc open buttons — the technical plan lands in a real file; these open it in the
+   full-screen in-app viewer (formatted markdown, enlargeable). One chip per project doc. */
+.req-docs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.req-doc { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; padding: 8px 11px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border-2); color: var(--fg); font-size: 12px; font-weight: 550; transition: .13s; }
+.req-doc:hover { background: var(--border); border-color: var(--accent); }
+.req-doc svg { width: 14px; height: 14px; flex: none; color: var(--accent); margin-top: 2px; }
+.req-doc-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.req-doc-name { color: var(--fg); }
+.req-doc-path { font: 11px var(--mono); color: var(--muted); overflow-wrap: anywhere; white-space: normal; }
+.req-doc-copy { flex: 0 0 auto; align-self: center; font: 600 10.5px/1 var(--mono); color: var(--accent);
+  padding: 4px 8px; border-radius: 6px; background: var(--accent-dim); cursor: pointer; }
+.req-doc-copy:hover { filter: brightness(1.1); }
+.req-sub code, .req-file { font-family: var(--mono); font-size: 11.5px; background: var(--bg); padding: 1px 6px; border-radius: 5px; color: var(--fg-2); }
+.req-note { font-size: 12px; line-height: 1.5; color: var(--accent); background: var(--accent-dim); border-radius: 6px; padding: 5px 8px; margin-bottom: 7px; }
+.req-actions { display: flex; gap: 8px; margin-top: 13px; }
+.req-actions button { height: 32px; padding: 0 15px; border-radius: 8px; font-size: 12.5px; font-weight: 600; transition: .13s; }
+.req-ok { background: var(--accent); color: var(--on-accent); } .req-ok:hover { filter: brightness(1.08); }
+.req-no { background: var(--surface-2); color: var(--fg-2); border: 1px solid var(--border-2); } .req-no:hover { background: var(--border); }
+.req-inrow { display: flex; gap: 8px; margin-top: 13px; }
+.req-inrow input { flex: 1; height: 34px; border-radius: 8px; border: 1px solid var(--border-2); background: var(--bg); color: var(--fg); padding: 0 12px; font: 12.5px var(--mono); }
+.req-inrow input:focus { outline: none; border-color: var(--accent); }
+.req-inrow button { flex: 0 0 auto; height: 34px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 12.5px; font-weight: 600; }
+.req-opts { display: flex; flex-direction: column; gap: 8px; margin-top: 13px; }
+.req-opt { width: 100%; text-align: left; display: flex; gap: 11px; align-items: flex-start; padding: 11px 12px; border-radius: 9px; border: 1px solid var(--border); background: var(--bg); transition: .13s; }
+.req-opt:hover { border-color: var(--accent); background: var(--accent-dim); }
+.req-opt .ot { font-size: 13px; font-weight: 600; color: var(--fg); }
+.req-opt .od { font-size: 11.5px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
+.req-opt .ok-pick { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--border-2); margin-top: 1px; display: grid; place-items: center; }
+.req-opt:hover .ok-pick { border-color: var(--accent); }
+.req-resolved { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12.5px; font-weight: 600; color: var(--ok); }
+.req-resolved svg { width: 15px; height: 15px; }
+.req-resolved.deny { color: var(--err); }
+.msg-req.done .req-actions, .msg-req.done .req-inrow, .msg-req.done .req-opts { display: none; }
+
+.plan-card { border-color: color-mix(in oklch, var(--warn), transparent 45%); box-shadow: inset 2px 0 0 var(--warn); }
+.plan-card .req-head { padding: 9px 12px; background: color-mix(in oklch, var(--warn), transparent 92%); }
+.plan-card .req-body { padding: 14px; }
+.plan-task {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start;
+  margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); font-size: 12.5px; color: var(--fg-2); overflow-wrap: anywhere;
+}
+.plan-task span {
+  font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--warn);
+  background: color-mix(in oklch, var(--warn), transparent 86%); border-radius: 5px; padding: 2px 6px;
+}
+.plan-approach {
+  max-height: min(48vh, 520px); overflow: auto; padding: 2px 4px 2px 0;
+  font-size: 13.5px; font-weight: 450; line-height: 1.65; color: var(--fg-2);
+  scrollbar-width: thin;
+}
+.plan-approach :where(p, ul, ol, pre, table) { margin: 0 0 10px; }
+.plan-approach :where(h1, h2, h3) { margin: 8px 0 7px; font-size: 14px; line-height: 1.45; color: var(--fg); }
+.plan-approach :where(strong, b) { color: var(--fg); font-weight: 700; }
+.plan-approach :where(ul, ol) { padding-left: 20px; }
+.plan-approach li { margin: 3px 0; }
+.plan-approach code { font-size: 12px; }
+.plan-stages { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--border); }
+.plan-stages-label {
+  display: block; margin-bottom: 8px; font-family: var(--mono); font-size: 10px; font-weight: 700;
+  color: var(--faint); text-transform: uppercase; letter-spacing: .05em;
+}
+.plan-stages .ic-stages { margin-bottom: 0; }
+.plan-card .req-actions { padding-top: 2px; }
+
+/* ── 用户输入导航条 (chat jump rail) ──────────────────────────────
+   左侧几乎隐形的细轨，每条用户输入一个极小的点；悬停弹紧凑预览，
+   点击平滑跳转。尺寸较原型收小：静止 2×6px/.18，悬停 3×9px。 */
+.chat-jump-rail {
+  position: absolute;
+  left: max(8px, calc((100% - clamp(720px, 90%, 1180px)) / 2 + clamp(32px, 4%, 72px) - 18px));
+  top: 66px;
+  bottom: 138px;
+  width: 12px;
+  z-index: 8;
+  display: none;
+  pointer-events: none;
+  opacity: .18;
+  transition: opacity .14s ease;
+}
+.chat-jump-rail.on { display: block; }
+.chat-jump-rail:hover,
+.chat-jump-rail:focus-within { opacity: 1; }
+.chat-jump-rail::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 12px;
+  bottom: 12px;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, var(--border-2) 14%, var(--border-2) 86%, transparent);
+  opacity: .34;
+}
+/* button 是 14px 宽的透明热区，视觉点由 ::before 画得很小 */
+.chat-jump-dot {
+  position: absolute;
+  left: -1px;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  color: var(--faint);
+}
+.chat-jump-dot::before {
+  content: "";
+  width: 2px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: .55;
+  transition: width .14s, height .14s, color .14s, box-shadow .14s, opacity .14s;
+}
+.chat-jump-dot:hover,
+.chat-jump-dot.active { color: var(--accent); }
+.chat-jump-dot:hover::before,
+.chat-jump-dot.active::before {
+  width: 3px;
+  height: 9px;
+  opacity: 1;
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.chat-jump-preview {
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%) translateX(-3px);
+  width: min(240px, calc(100vw - 240px));
+  max-width: 240px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border-2);
+  background: color-mix(in oklab, var(--surface) 88%, transparent);
+  box-shadow: 0 10px 24px rgba(0,0,0,.09);
+  color: var(--fg-2);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s, transform .12s;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.chat-jump-dot:hover .chat-jump-preview,
+.chat-jump-dot:focus-visible .chat-jump-preview {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+.chat-jump-preview .jp-k {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: var(--faint);
+  font: 700 9.5px/1 var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.chat-jump-preview .jp-k::before {
+  content: "";
+  width: 3px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.chat-jump-preview .jp-t {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+[data-glass="on"] .chat-jump-preview { background: oklch(28% .025 260 / .78); }
+[data-theme="light"][data-glass="on"] .chat-jump-preview { background: oklch(100% 0 0 / .84); }
+
+/* 跳转后目标用户消息短暂高亮 */
+.msg.jump-flash { animation: jump-flash .9s ease; border-radius: 12px; }
+@keyframes jump-flash {
+  0%   { background: var(--accent-dim); box-shadow: 0 0 0 6px var(--accent-dim); }
+  100% { background: transparent;       box-shadow: 0 0 0 6px transparent; }
+}
+
+/* ---- 只读导入会话 — 继续 bar + 提示 ---- */
+/* si-continue-bar: 消息区上方的横向操作条，与内容区视觉分隔 */
+.si-continue-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px clamp(32px, 4%, 72px); flex: 0 0 auto;
+  border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 50%, transparent);
+}
+/* si-ro-hint: 只读提示文案 — 小字，--faint 弱化色 */
+.si-ro-hint {
+  font-size: 11.5px; color: var(--faint); line-height: 1.4;
+}
+
+/* imported-sep: 分隔「导入的历史对话」与「当前真实对话」 */
+.imported-sep { display: flex; align-items: center; gap: 12px; margin: 22px 0 18px; }
+.imported-sep .line { flex: 1 1 auto; height: 1px; background: linear-gradient(to right, transparent, var(--border), transparent); }
+.imported-sep .lbl { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: .02em; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+.imported-sep .lbl svg { width: 12px; height: 12px; }
+
+/* ws-archive-note: 归档工作区只读提示条 */
+.ws-archive-note { display: flex; gap: 8px; align-items: flex-start; margin: 12px 16px; padding: 10px 12px; border: 1px solid color-mix(in oklab, var(--warn) 26%, var(--border)); border-radius: 10px; background: color-mix(in oklab, var(--warn) 7%, transparent); color: var(--fg-2); font-size: 12.5px; }
+.ws-archive-note svg { width: 15px; height: 15px; flex: 0 0 15px; color: var(--warn); margin-top: 1px; }

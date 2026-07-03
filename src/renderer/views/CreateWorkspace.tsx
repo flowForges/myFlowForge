@@ -1,0 +1,614 @@
+import { useEffect, useMemo, useState } from 'react'
+import type { CreateWorkspaceOpts, ProviderInfo, ReviewConfig, ReviewLens } from '@shared/types'
+import type { Plugin } from '@shared/plugin'
+import type { CfgProject, CfgWorkflow } from '../state/useConfig'
+import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, type WizardState, type WizardStage, type WizardProject } from './wizardModel'
+import { PluginEditor } from '../components/PluginEditor'
+import { movePluginBefore } from '../../shared/pluginReorder'
+import { StagePromptEditor } from '../components/StagePromptEditor'
+
+// Mirror of src/main/config/schema.ts STAGE_PROMPTS (renderer cannot import main's zod module)
+const STAGE_DEFAULT_PROMPT: Record<string, string> = {
+  requirement: '拆解本次需求,明确目标、范围边界与验收标准;识别关键风险与待澄清的问题,并把结论整理成要点交给后续阶段。',
+  design: '基于需求产出技术方案:模块划分、接口/数据结构设计、关键技术决策与替代方案,并评估技术风险与影响面。',
+  develop: '按技术方案实现代码变更,遵循项目既有规范与目录约定;保持改动聚焦、可回滚,并在必要处补充说明性注释。',
+  test: '为本次改动补充单元 / 回归测试,覆盖核心路径与边界条件;确保测试可独立运行且能稳定复现回归。',
+  review: '审查改动 diff:正确性、安全性、规范与可维护性;区分「必须修复」与「建议项」,并明确是否可以合并。',
+}
+
+// Canonical stage order + labels/descriptions (1:1 with the prototype STAGE_LIB, adapted to this repo's stage keys).
+const STAGE_KEYS = ['requirement', 'design', 'develop', 'test', 'review'] as const
+type StageKey = (typeof STAGE_KEYS)[number]
+const DEV_KEY: StageKey = 'develop'
+const REVIEW_KEY: StageKey = 'review'
+const STAGE_DEF: Record<StageKey, { name: string; desc: string }> = {
+  requirement: { name: '需求评估', desc: '拆解需求 · 明确范围与验收标准' },
+  design: { name: '技术方案设计', desc: '架构 / 接口设计 · 风险评估' },
+  develop: { name: '代码开发', desc: '实现变更' },
+  test: { name: '写单测', desc: '补充单元 / 回归测试' },
+  review: { name: '代码 CR', desc: '审查 diff · 把关合并' }
+}
+
+const CK = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>
+)
+const CK_CARD = (
+  <svg className="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>
+)
+const BRANCH = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+)
+const GIT = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><circle cx="12" cy="6" r="2.4" /><circle cx="6" cy="18" r="2.4" /><circle cx="18" cy="18" r="2.4" /><path d="M12 8.4v2.1a3.5 3.5 0 0 1-3.5 3.5H8M12 10.5a3.5 3.5 0 0 0 3.5 3.5H16" /></svg>
+)
+const LOCK = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+)
+const DEFAULT_REVIEW: ReviewConfig = { mode: 'parallel', scope: 'per-project' }
+const LENS_LABELS: Record<ReviewLens, string> = {
+  correctness: '正确性',
+  security: '安全',
+  performance: '性能',
+  style: '风格',
+}
+const DEFAULT_LENSES: ReviewLens[] = ['correctness', 'security']
+
+// --- Plugin (hook) editing: two scopes inside the wizard ---
+// wf scope: after = stage key or '__start' (flow strip in section 3).
+// step scope: after = '__basic' | '__proj' | '__wf' (hook bars at setup-step boundaries).
+const PLUGIN_PRESETS = [
+  { name: '当前时间',     glyph: 'clock',  prompt: '输出当前系统日期与时间(ISO 8601),作为后续阶段的时间上下文。' },
+  { name: '读取我的记忆', glyph: 'memory', prompt: '读取项目记忆与我的历史偏好,整理成要点后注入后续阶段的上下文。' },
+  { name: '拉取最新主干', glyph: 'git',    prompt: '在开始前执行 git fetch,并基于最新 origin/main 创建工作分支。' },
+  { name: '运行 Lint',    glyph: 'check',  prompt: '对改动文件运行项目 lint / 格式化,把问题列表交给下一阶段。' },
+  { name: '空白插件',     glyph: 'puzzle', prompt: '' },
+]
+// Step boundary labels (prototype STEP_LABEL + sh-tag boundary captions).
+const STEP_LABEL: Record<string, string> = { __basic: '基本信息 之后', __proj: '涉及项目 之后', __wf: '工作流 之后' }
+const STEP_BARS: { after: string; caption: string }[] = [
+  { after: '__basic', caption: '基本信息 → 涉及项目' },
+  { after: '__proj', caption: '涉及项目 → 工作流' },
+  { after: '__wf', caption: '工作流完成后' },
+]
+// wf-scope afterLabel: stage key → '<name> 之后', '__start' → '流程开始前'.
+const wfAfterLabel = (after: string): string => after === '__start' ? '流程开始前' : ((STAGE_DEF as Record<string, { name: string }>)[after]?.name ?? after) + ' 之后'
+
+const INS_SVG = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+)
+const PUZZLE_PZ = (
+  <svg className="pz" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.6 2.6 0 0 1 0 5.2H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.6 2.6 0 0 1 5.2 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z" /></svg>
+)
+const XSM_SVG = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+)
+
+// Single open-editor state shared by both scopes.
+interface PlugEdit { scope: 'wf' | 'step'; after: string; editId: string | null }
+
+interface Props {
+  open: boolean
+  onCancel: () => void
+  onCreate: (opts: CreateWorkspaceOpts) => void
+  projects: CfgProject[]
+  workflows: CfgWorkflow[]
+  providers: ProviderInfo[]
+  onOpenProjectSettings: () => void
+  onNewWorkflow: () => void
+  onPickPath?: () => Promise<string | null>
+  error?: string | null
+  creating?: boolean   // workspace creation is in flight (git worktree/fetch) — block re-submit
+  editing?: import('@shared/types').Workspace | null
+}
+
+export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, providers, onOpenProjectSettings, onNewWorkflow, onPickPath, error, creating = false, editing }: Props) {
+  // installed providers drive the model menus; fall back to all providers if none report installed.
+  const pickProviders = useMemo(() => {
+    const inst = providers.filter(p => p.installed)
+    return inst.length ? inst : providers
+  }, [providers])
+
+  const modelOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = []
+    for (const p of pickProviders) for (const m of p.models) opts.push({ value: packModel(p.id, m.id), label: p.displayName + ' · ' + m.label })
+    return opts
+  }, [pickProviders])
+
+  // Resolve a stage's default provider/model: first installed provider, default model if offered else first model.
+  const seedStage = (defaultModel: string): { provider: string; model: string } => {
+    const prov = pickProviders[0]
+    if (!prov) return { provider: '', model: defaultModel }
+    const has = prov.models.some(m => m.id === defaultModel)
+    return { provider: prov.id, model: has ? defaultModel : (prov.models[0]?.id ?? defaultModel) }
+  }
+
+  const buildStages = (wf: CfgWorkflow | undefined): Record<string, WizardStage> => {
+    const onKeys = new Set((wf?.stages ?? []).map(s => s.key))
+    const dmByKey: Record<string, string> = {}
+    for (const s of wf?.stages ?? []) dmByKey[s.key] = s.defaultModel
+    const out: Record<string, WizardStage> = {}
+    for (const k of STAGE_KEYS) {
+      const seeded = seedStage(dmByKey[k] ?? pickProviders[0]?.models[0]?.id ?? '')
+      const seedPrompt = wf?.stagePrompts?.[k]
+      out[k] = { on: onKeys.has(k), provider: seeded.provider, model: seeded.model, ...(seedPrompt ? { prompt: seedPrompt } : {}) }
+    }
+    return out
+  }
+
+  const seedProjects = (): WizardProject[] => projects.map(p => {
+    const dev = seedStage(workflows[0]?.stages.find(s => s.key === DEV_KEY)?.defaultModel ?? '')
+    return { repoId: p.id, name: p.name, sel: false, branch: '', model: packModel(dev.provider, dev.model) }
+  })
+
+  const freshState = (): WizardState => ({
+    path: '', name: '', nameEdited: false,
+    workflowId: workflows[0]?.id ?? '__custom',
+    stages: buildStages(workflows[0]),
+    projects: seedProjects(),
+    // Seed the workflow's own plugin hooks (configured in Settings) so they show in the flow strip
+    // and get persisted to the workspace — otherwise selecting a workflow silently drops its hooks.
+    plugins: (workflows[0]?.plugins ?? []).map(p => ({ ...p })),
+    stepPlugins: []
+  })
+
+  const [state, setState] = useState<WizardState>(freshState)
+  const [branchAll, setBranchAll] = useState('')
+  const [plugEdit, setPlugEdit] = useState<PlugEdit | null>(null)
+  const [draggedPlugId, setDraggedPlugId] = useState<string | null>(null)
+  const [stageEdit, setStageEdit] = useState<string | null>(null)   // currently editing stage append key
+  // custom model input state: key = stage key or 'proj::repoId', value = typed text
+  const [customModelInputs, setCustomModelInputs] = useState<Record<string, string>>({})
+  // which selects are in custom-model mode: set of keys
+  const [customModelKeys, setCustomModelKeys] = useState<Set<string>>(new Set())
+
+  // Re-seed whenever the modal (re)opens or config changes.
+  useEffect(() => {
+    if (!open) return
+    if (editing) {
+      const devDefault = workflows[0]?.stages.find(s => s.key === DEV_KEY)?.defaultModel ?? ''
+      const seed = seedStage(devDefault)
+      setState(buildEditState(editing, projects, buildStages(undefined), packModel(seed.provider, seed.model)))
+    } else {
+      setState(freshState())
+    }
+    setBranchAll('')
+    setPlugEdit(null)
+    setStageEdit(null)
+    setCustomModelKeys(new Set())
+    setCustomModelInputs({})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, editing, workflows, projects, providers])
+
+  if (!open) return null
+
+  const wsName = deriveWsName(state.path, state.nameEdited, state.name)
+  const branchFor = (p: WizardProject) => p.branch || (wsName ? 'forge/' + wsName : '')
+
+  const enabledCount = STAGE_KEYS.filter(k => state.stages[k]?.on).length
+  const selectedCount = state.projects.filter(p => p.sel).length
+  const chosen = state.projects.filter(p => p.sel)
+  const canCreate = enabledCount > 0
+
+  const update = (fn: (s: WizardState) => WizardState) => setState(fn)
+
+  // --- interactions ---
+  const setPath = (v: string) => update(s => ({ ...s, path: v }))
+  const setName = (v: string) => update(s => ({ ...s, name: v, nameEdited: v.length > 0 }))
+
+  const selectWorkflow = (id: string) => update(s => ({
+    ...s, workflowId: id,
+    stages: id === '__custom' ? buildStages({ id: '__custom', name: '', stages: STAGE_KEYS.map(k => ({ key: k, defaultAgent: '', defaultModel: '' })), plugins: [] }) : buildStages(workflows.find(w => w.id === id)),
+    // Re-seed wf-scope hooks from the chosen workflow (mirrors the stage rebuild). __custom has none.
+    plugins: id === '__custom' ? [] : (workflows.find(w => w.id === id)?.plugins ?? []).map(p => ({ ...p }))
+  }))
+
+  const toggleStage = (k: string) => update(s => ({ ...s, workflowId: '__custom', stages: { ...s.stages, [k]: { ...s.stages[k], on: !s.stages[k].on } } }))
+  const setStageModel = (k: string, v: string) => {
+    if (v === '__custom__') {
+      setCustomModelKeys(prev => new Set([...prev, k]))
+      setCustomModelInputs(prev => ({ ...prev, [k]: '' }))
+      return
+    }
+    const { provider, model } = unpackModel(v)
+    update(s => ({ ...s, stages: { ...s.stages, [k]: { ...s.stages[k], provider, model } } }))
+  }
+  const confirmStageCustomModel = (k: string) => {
+    const v = (customModelInputs[k] ?? '').trim()
+    if (v) {
+      const cur = state.stages[k]
+      const provider = cur?.provider || (pickProviders[0]?.id ?? '')
+      update(s => ({ ...s, stages: { ...s.stages, [k]: { ...s.stages[k], model: v, provider } } }))
+    }
+    setCustomModelKeys(prev => { const n = new Set(prev); n.delete(k); return n })
+  }
+  const setStageAppend = (k: string, v: string) => update(s => ({ ...s, workflowId: '__custom', stages: { ...s.stages, [k]: { ...s.stages[k], prompt: v ? v : undefined } } }))
+  const setReviewConfig = (review: ReviewConfig) => update(s => ({ ...s, workflowId: '__custom', stages: { ...s.stages, [REVIEW_KEY]: { ...s.stages[REVIEW_KEY], review } } }))
+  const setReviewMode = (mode: 'single' | 'per-project' | 'lens') => {
+    if (mode === 'single') setReviewConfig({ mode: 'single' })
+    else if (mode === 'lens') setReviewConfig({ mode: 'parallel', scope: 'workspace', reviewers: DEFAULT_LENSES })
+    else setReviewConfig(DEFAULT_REVIEW)
+  }
+  const toggleReviewLens = (lens: ReviewLens) => update(s => {
+    const cur = s.stages[REVIEW_KEY]?.review
+    const reviewers = Array.isArray(cur?.reviewers) ? cur.reviewers : DEFAULT_LENSES
+    const next = reviewers.includes(lens) ? reviewers.filter(x => x !== lens) : [...reviewers, lens]
+    return {
+      ...s,
+      workflowId: '__custom',
+      stages: {
+        ...s.stages,
+        [REVIEW_KEY]: {
+          ...s.stages[REVIEW_KEY],
+          review: { mode: 'parallel', scope: 'workspace', reviewers: next.length ? next : [lens] },
+        },
+      },
+    }
+  })
+
+  const toggleProject = (repoId: string) => update(s => ({ ...s, projects: s.projects.map(p => p.repoId === repoId && !p.locked ? { ...p, sel: !p.sel } : p) }))
+  const setProjectBranch = (repoId: string, v: string) => update(s => ({ ...s, projects: s.projects.map(p => p.repoId === repoId ? { ...p, branch: v } : p) }))
+  const setProjectModel = (repoId: string, v: string) => {
+    const pk = 'proj::' + repoId
+    if (v === '__custom__') {
+      setCustomModelKeys(prev => new Set([...prev, pk]))
+      setCustomModelInputs(prev => ({ ...prev, [pk]: '' }))
+      return
+    }
+    update(s => ({ ...s, projects: s.projects.map(p => p.repoId === repoId ? { ...p, model: v } : p) }))
+  }
+  const confirmProjCustomModel = (repoId: string) => {
+    const pk = 'proj::' + repoId
+    const v = (customModelInputs[pk] ?? '').trim()
+    if (v) {
+      const proj = state.projects.find(p => p.repoId === repoId)
+      const { provider } = unpackModel(proj?.model ?? '')
+      const providerResolved = provider || (pickProviders[0]?.id ?? '')
+      update(s => ({ ...s, projects: s.projects.map(p => p.repoId === repoId ? { ...p, model: packModel(providerResolved, v) } : p) }))
+    }
+    setCustomModelKeys(prev => { const n = new Set(prev); n.delete(pk); return n })
+  }
+  const applyBranchAll = () => { const v = branchAll.trim(); if (!v) return; update(s => ({ ...s, projects: s.projects.map(p => p.sel ? { ...p, branch: v } : p) })) }
+
+  // --- plugin (hook) editing — both scopes share one open-editor state ---
+  const plugKey = (scope: 'wf' | 'step'): 'plugins' | 'stepPlugins' => (scope === 'step' ? 'stepPlugins' : 'plugins')
+  const plugsOf = (scope: 'wf' | 'step', after: string): Plugin[] => state[plugKey(scope)].filter(p => p.after === after)
+  const openInsert = (scope: 'wf' | 'step', after: string) => { setStageEdit(null); setPlugEdit({ scope, after, editId: null }) }
+  const openEdit = (scope: 'wf' | 'step', id: string) => {
+    const pl = state[plugKey(scope)].find(p => p.id === id)
+    if (pl) { setStageEdit(null); setPlugEdit({ scope, after: pl.after, editId: id }) }
+  }
+  const plugLabel = (scope: 'wf' | 'step', after: string) => scope === 'step' ? (STEP_LABEL[after] ?? after) : wfAfterLabel(after)
+  const deletePlug = (scope: 'wf' | 'step', id: string) => {
+    const key = plugKey(scope)
+    update(s => ({ ...s, [key]: s[key].filter(p => p.id !== id) }))
+    setPlugEdit(e => (e?.editId === id ? null : e))
+  }
+  const savePlug = (result: { name: string; prompt: string; skills: string[]; tools: string[] }) => {
+    if (!plugEdit) return
+    const key = plugKey(plugEdit.scope)
+    update(s => {
+      const arr = s[key]
+      const next = plugEdit.editId
+        ? arr.map(p => p.id === plugEdit.editId ? { ...p, name: result.name, prompt: result.prompt, skills: result.skills, tools: result.tools } : p)
+        : [...arr, { id: `pl-${crypto.randomUUID()}`, name: result.name, prompt: result.prompt, after: plugEdit.after, skills: result.skills, tools: result.tools }]
+      return { ...s, [key]: next }
+    })
+    setPlugEdit(null)
+  }
+
+  // wf-scope flow strip: insert button + chips for one `after` position.
+  const plugChips = (scope: 'wf' | 'step', after: string) => plugsOf(scope, after).map(p => (
+    <span
+      key={p.id}
+      className="wf-plug-chip click"
+      data-ovedit={p.id}
+      data-ovscope={scope}
+      title="编辑 hook prompt"
+      draggable
+      onDragStart={() => setDraggedPlugId(p.id)}
+      onDragEnd={() => setDraggedPlugId(null)}
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => {
+        e.preventDefault()
+        if (draggedPlugId && draggedPlugId !== p.id) {
+          const key = plugKey(scope)
+          const current = state[key]
+          const next = movePluginBefore(current, draggedPlugId, p.id)
+          if (next !== current) update(s => ({ ...s, [key]: next }))
+        }
+        setDraggedPlugId(null)
+      }}
+      onClick={() => openEdit(scope, p.id)}
+    >
+      {PUZZLE_PZ}{p.name}
+      <button className="x" data-ovdel={p.id} data-ovscope={scope} title="移除 hook" onClick={e => { e.stopPropagation(); deletePlug(scope, p.id) }}>{XSM_SVG}</button>
+    </span>
+  ))
+  const insBtn = (scope: 'wf' | 'step', after: string) => (
+    <button className="wf-ins" data-ovadd={after} data-ovscope={scope} aria-label={`在「${plugLabel(scope, after)}」插入 hook`} title={`在「${plugLabel(scope, after)}」插入 hook`} onClick={() => openInsert(scope, after)}>{INS_SVG}</button>
+  )
+  const editorFor = (scope: 'wf' | 'step', after: string) => (plugEdit && plugEdit.scope === scope && plugEdit.after === after) ? (
+    <PluginEditor
+      afterLabel={plugLabel(scope, after)}
+      presets={plugEdit.editId ? undefined : PLUGIN_PRESETS}
+      initial={plugEdit.editId ? state[plugKey(scope)].find(p => p.id === plugEdit.editId) : undefined}
+      onSave={savePlug}
+      onCancel={() => setPlugEdit(null)}
+    />
+  ) : null
+
+  // step-scope hook bar for one boundary.
+  const renderStepHook = (after: string, caption: string) => {
+    const chips = plugsOf('step', after)
+    return (
+      <div className="cr-step-hook" id={'crHook_' + after.slice(2)} data-boundary={after} key={after}>
+        <div className="sh-bar">
+          <span className="hr" />
+          <span className="sh-tag">{PUZZLE_PZ}{caption}</span>
+          {plugChips('step', after)}
+          <button className="sh-add" data-ovadd={after} data-ovscope="step" title={`在「${STEP_LABEL[after] ?? after}」插入插件 / hook`} onClick={() => openInsert('step', after)}>
+            {INS_SVG}{chips.length ? '再加一个' : '插入插件 / hook'}
+          </button>
+          <span className="hr" />
+        </div>
+        {editorFor('step', after)}
+      </div>
+    )
+  }
+
+  const doCreate = () => {
+    if (!canCreate || creating) return
+    // commit derived name + per-project branches/develop-model so the DTO reflects the live UI.
+    const committed: WizardState = {
+      ...state,
+      name: wsName,
+      nameEdited: true,
+      // unpack develop per-project model (packed provider::model) into separate provider + model fields for the DTO.
+      projects: state.projects.map(p => { const { provider, model } = unpackModel(p.model); return { ...p, branch: branchFor(p), provider, model } })
+    }
+    onCreate(buildCreateOpts(committed, [...STAGE_KEYS]))
+  }
+
+  return (
+    <div className="create-overlay on" id="createOverlay" onClick={e => { if (e.target === e.currentTarget && !creating) onCancel() }}>
+      <div className="create">
+        <div className="cr-head">
+          <span className="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="3" /><line x1="12" y1="8" x2="12" y2="16" /><line x1="8" y1="12" x2="16" y2="12" /></svg></span>
+          <div><h3>{editing ? '编辑工作区' : '新建工作区'}</h3><div className="sub">{editing ? '路径已锁定 · 可重命名、增加项目、调整工作流' : '配置路径、工作流与涉及的项目'}</div></div>
+          <button className="cr-x" id="crClose" onClick={onCancel} disabled={creating}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button>
+        </div>
+
+        <div className="cr-body">
+          {/* 1 基本信息 */}
+          <div className="cr-sec">
+            <div className="cr-sec-h"><span className="n">1</span><h4>基本信息</h4></div>
+            <div className="cr-row">
+              <div className="cr-field">
+                <label>工作区路径</label>
+                <div className="inp">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
+                  <input className="mono" id="crPath" placeholder="~/code/" spellCheck={false} autoCapitalize="off" autoComplete="off" value={state.path} readOnly={!!editing} onChange={e => setPath(e.target.value)} />
+                  {!editing && <button className="pick" id="crPick" onClick={async () => { const d = await onPickPath?.(); if (d) setPath(d) }}>选择…</button>}
+                </div>
+              </div>
+            </div>
+            <div className="cr-row" style={{ marginTop: 14 }}>
+              <div className="cr-field">
+                <label>工作区名称</label>
+                <div className="inp">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" /><line x1="9" y1="20" x2="15" y2="20" /><line x1="12" y1="4" x2="12" y2="20" /></svg>
+                  <input id="crName" placeholder={state.nameEdited ? '支持中文,例如:设计系统迁移' : (deriveWsName(state.path, false, '') || '支持中文,例如:设计系统迁移')} autoComplete="off" value={state.name} onChange={e => setName(e.target.value)} />
+                </div>
+                <div className="cr-name-tip" id="crNameTip">{editing ? '可在此重命名工作区(支持中文)。' : '留空将自动取自路径末段,创建后也可随时重命名。'}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* step hook: 基本信息 → 涉及项目 */}
+          {renderStepHook('__basic', STEP_BARS[0].caption)}
+
+          {/* 2 涉及项目 */}
+          <div className="cr-sec">
+            <div className="cr-sec-h"><span className="n">2</span><h4>涉及项目</h4><span className="hint" id="crProjHint">{state.projects.length ? '已选 ' + selectedCount + ' / ' + state.projects.length : '先圈定本次需求动哪些项目 · 各设代码分支'}</span></div>
+            <div className="cr-branch-all" id="crBranchAll">
+              <span className="lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>统一分支</span>
+              <input id="crBranchAllInput" placeholder="feat/my-task" spellCheck={false} autoCapitalize="off" autoComplete="off" value={branchAll} onChange={e => setBranchAll(e.target.value)} />
+              <button className="apply" id="crBranchApply" onClick={applyBranchAll}>应用到选中项目</button>
+            </div>
+            <div className="cr-projs" id="crProjs">
+              {state.projects.length === 0 ? (
+                <div className="cr-proj-empty">尚未配置 Git 项目。请到 <a id="crGoProj" onClick={onOpenProjectSettings}>设置 · 项目设置</a> 添加。</div>
+              ) : (
+                state.projects.map((p, i) => (
+                  <div className={'cr-proj' + (p.sel ? ' on' : ' off') + (p.locked ? ' locked' : '')} data-pi={i} key={p.repoId}>
+                    <button className="st-chk" data-prtoggle={i} disabled={p.locked} aria-disabled={p.locked} title={p.locked ? '已包含的项目不可移除' : undefined} onClick={() => toggleProject(p.repoId)}>{p.locked ? LOCK : CK}</button>
+                    <span className="pj-ic">{GIT}</span>
+                    <div className="pj-main" onClick={p.locked ? undefined : () => toggleProject(p.repoId)}>
+                      <div className="pj-name">{p.name}</div>
+                      <div className="pj-repo">{projects[i]?.repoUrl ?? ''}</div>
+                    </div>
+                    {p.locked && <span className="pj-lock">{LOCK}已包含</span>}
+                    <span className="pj-branch">{BRANCH}<input data-prbranch={i} value={branchFor(p)} spellCheck={false} onChange={e => setProjectBranch(p.repoId, e.target.value)} /></span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* step hook: 涉及项目 → 工作流 */}
+          {renderStepHook('__proj', STEP_BARS[1].caption)}
+
+          {/* 3 工作流程 */}
+          <div className="cr-sec">
+            <div className="cr-sec-h"><span className="n">3</span><h4>工作流程</h4><span className="hint">阶段可勾选增删 · 开发阶段按上方项目自动派代理</span></div>
+            <div className="wf-templates" id="crWfTemplates">
+              {workflows.map(w => (
+                <button className={'wf-card' + (state.workflowId === w.id ? ' on' : '')} data-crtpl={w.id} key={w.id} onClick={() => selectWorkflow(w.id)}>
+                  <div className="tt">{w.name}{CK_CARD}</div>
+                  <div className="ds">{w.stages.length} 个阶段</div>
+                </button>
+              ))}
+              <button className={'wf-card' + (state.workflowId === '__custom' ? ' on' : '')} data-crtpl="__custom" onClick={() => selectWorkflow('__custom')}>
+                <div className="tt">自定义{CK_CARD}</div>
+                <div className="ds">从全部阶段自由勾选</div>
+              </button>
+              <button className="wf-card add" data-crnewwf onClick={onNewWorkflow}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>新建流程</button>
+            </div>
+            <div className="stage-edit" id="crStageEdit">
+              {/* wf-scope flow strip: insert plugin hooks between stages */}
+              <div className="cr-flow-preview">
+                <div className="fp-h">{PUZZLE_PZ}流程 · 插件 hook<span className="lk">点 + 在阶段间插入</span></div>
+                <div className="wf-flow">
+                  {insBtn('wf', '__start')}
+                  {plugChips('wf', '__start')}
+                  {STAGE_KEYS.filter(k => state.stages[k]?.on).map((k, i) => (
+                    <span key={k} style={{ display: 'contents' }}>
+                      <span
+                        className={'wf-stage-chip click' + (state.stages[k].prompt ? ' edited' : '')}
+                        title={`点击编辑「${STAGE_DEF[k as StageKey].name}」提示词`}
+                        onClick={() => { setPlugEdit(null); setStageEdit(k) }}
+                      >
+                        <span className="n">{i + 1}</span>{STAGE_DEF[k as StageKey].name}
+                        {state.stages[k].prompt && <span className="dot" />}
+                        <svg className="pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+                      </span>
+                      {insBtn('wf', k)}
+                      {plugChips('wf', k)}
+                    </span>
+                  ))}
+                </div>
+                {plugEdit?.scope === 'wf' && editorFor('wf', plugEdit.after)}
+                {stageEdit && (
+                  <StagePromptEditor
+                    key={stageEdit}
+                    stageName={STAGE_DEF[stageEdit as StageKey].name}
+                    defaultPrompt={STAGE_DEFAULT_PROMPT[stageEdit] ?? ''}
+                    initial={state.stages[stageEdit]?.prompt}
+                    onSave={(append) => { setStageAppend(stageEdit, append); setStageEdit(null) }}
+                    onCancel={() => setStageEdit(null)}
+                  />
+                )}
+              </div>
+              {STAGE_KEYS.map(k => {
+                const ss = state.stages[k]
+                const on = ss.on
+                const def = STAGE_DEF[k]
+                const review = ss.review ?? DEFAULT_REVIEW
+                const reviewMode = review.mode === 'single' ? 'single' : (review.scope === 'workspace' && Array.isArray(review.reviewers) ? 'lens' : 'per-project')
+                const num = on ? STAGE_KEYS.filter(x => state.stages[x].on).indexOf(k) + 1 : '·'
+                const devOn = k === DEV_KEY && on
+                const reviewOn = k === REVIEW_KEY && on
+                return (
+                  <div className={'stage-line' + (on ? '' : ' off')} data-stage={k} key={k}>
+                    <button className="st-chk" data-sttoggle={k} onClick={() => toggleStage(k)}>{CK}</button>
+                    <span className="st-num">{num}</span>
+                    <div className="st-main"><div className="st-name">{def.name}</div><div className="st-desc">{def.desc}</div></div>
+                    <div className="st-right">
+                      {devOn && chosen.length ? (
+                        <span className="st-badge">{chosen.length > 1 ? ('多项目并行 · ' + chosen.length + ' 代理') : '单项目 · 1 代理'}</span>
+                      ) : customModelKeys.has(k) ? (
+                        <input
+                          autoFocus
+                          data-stmodel-custom={k}
+                          placeholder="输入模型 id"
+                          value={customModelInputs[k] ?? ''}
+                          style={{ height: 28, padding: '0 8px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--accent)', color: 'var(--fg)', fontSize: 12, outline: 'none' }}
+                          onChange={e => setCustomModelInputs(prev => ({ ...prev, [k]: e.target.value }))}
+                          onKeyDown={e => { if (e.key === 'Enter') confirmStageCustomModel(k) }}
+                          onBlur={() => confirmStageCustomModel(k)}
+                        />
+                      ) : (
+                        <select className="mini-sel" data-stmodel={k} disabled={!on} value={packModel(ss.provider, ss.model)} onChange={e => setStageModel(k, e.target.value)}>
+                          {modelOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                          <option value="__custom__">自定义…</option>
+                        </select>
+                      )}
+                    </div>
+                    {devOn && (
+                      <div className="stage-projs">
+                        <div className="sp-h">{GIT}{chosen.length ? '每个项目一个开发代理 · 模型独立' : '按项目派发开发代理'}</div>
+                        {chosen.length === 0 ? (
+                          <div className="sp-empty">未选择项目 — 开发阶段将由单个开发代理处理(使用右侧默认模型)。在上方「涉及项目」勾选后,每个项目会各派一个开发代理并可分别指定模型与版本。</div>
+                        ) : (
+                          chosen.map(p => (
+                            <div className="stage-proj-row" key={p.repoId}>
+                              <span className="pj-ic">{GIT}</span>
+                              <span className="nm">{p.name}</span>
+                              <span className="br">{BRANCH}{branchFor(p) || 'main'}</span>
+                              {customModelKeys.has('proj::' + p.repoId) ? (
+                                <input
+                                  autoFocus
+                                  data-stpm-custom={p.repoId}
+                                  placeholder="输入模型 id"
+                                  value={customModelInputs['proj::' + p.repoId] ?? ''}
+                                  style={{ height: 28, padding: '0 8px', borderRadius: 6, background: 'var(--surface)', border: '1px solid var(--accent)', color: 'var(--fg)', fontSize: 12, outline: 'none' }}
+                                  onChange={e => setCustomModelInputs(prev => ({ ...prev, ['proj::' + p.repoId]: e.target.value }))}
+                                  onKeyDown={e => { if (e.key === 'Enter') confirmProjCustomModel(p.repoId) }}
+                                  onBlur={() => confirmProjCustomModel(p.repoId)}
+                                />
+                              ) : (
+                                <select className="mini-sel" data-stpm={p.repoId} value={p.model} onChange={e => setProjectModel(p.repoId, e.target.value)}>
+                                  {modelOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                  <option value="__custom__">自定义…</option>
+                                </select>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                    {reviewOn && (
+                      <div className="stage-projs">
+                        <div className="sp-h">{GIT}代码 CR 模式</div>
+                        <div className="wf-templates">
+                          <button className={'wf-card' + (reviewMode === 'single' ? ' on' : '')} onClick={() => setReviewMode('single')}>
+                            <div className="tt">单 agent 全量{CK_CARD}</div>
+                            <div className="ds">一个 reviewer 审全工作区</div>
+                          </button>
+                          <button className={'wf-card' + (reviewMode === 'per-project' ? ' on' : '')} onClick={() => setReviewMode('per-project')}>
+                            <div className="tt">并行 · 按项目{CK_CARD}</div>
+                            <div className="ds">每个项目一个 reviewer</div>
+                          </button>
+                          <button className={'wf-card' + (reviewMode === 'lens' ? ' on' : '')} onClick={() => setReviewMode('lens')}>
+                            <div className="tt">并行 · 按视角{CK_CARD}</div>
+                            <div className="ds">正确性 / 安全 / 性能 / 风格</div>
+                          </button>
+                        </div>
+                        {reviewMode === 'lens' && (
+                          <div className="wf-templates">
+                            {(Object.keys(LENS_LABELS) as ReviewLens[]).map(lens => {
+                              const selected = Array.isArray(review.reviewers) ? review.reviewers.includes(lens) : DEFAULT_LENSES.includes(lens)
+                              return (
+                                <button key={lens} className={'wf-card' + (selected ? ' on' : '')} onClick={() => toggleReviewLens(lens)}>
+                                  <div className="tt">{LENS_LABELS[lens]}{CK_CARD}</div>
+                                  <div className="ds">审查视角</div>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* step hook: 工作流完成后 */}
+          {renderStepHook('__wf', STEP_BARS[2].caption)}
+        </div>
+
+        {error && <div className="cr-err" id="crError" style={{ padding: '2px 22px 8px', color: 'var(--err)', fontSize: 12.5 }}>{editing ? '保存失败：' : '创建失败：'}{error}</div>}
+        <div className="cr-foot">
+          <span className="summary" id="crSummary">工作流 <b>{enabledCount}</b> 阶段 · 涉及 <b>{selectedCount}</b> 个项目</span>
+          <span className="sp" />
+          <button className="btn-cancel" id="crCancel" onClick={onCancel} disabled={creating}>取消</button>
+          <button className="btn-create" id="crCreate" disabled={!canCreate || creating} onClick={doCreate}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="20 6 9 17 4 12" /></svg>{editing ? (creating ? '保存中…' : '保存修改') : (creating ? '创建中…' : '创建工作区')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

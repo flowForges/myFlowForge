@@ -1,0 +1,9 @@
+{
+  "id": "forge-example-gemini-usage",
+  "name": "Gemini 额度（示例）",
+  "type": "statusbar-usage",
+  "provider": "gemini",
+  "entry": "usage.js",
+  "refreshSec": 300,
+  "version": "1.0.0"
+}

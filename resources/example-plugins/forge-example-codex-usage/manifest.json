@@ -1,0 +1,9 @@
+{
+  "id": "forge-example-codex-usage",
+  "name": "Codex 额度（示例）",
+  "type": "statusbar-usage",
+  "provider": "codex",
+  "entry": "usage.js",
+  "refreshSec": 300,
+  "version": "1.0.0"
+}

@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+.DS_Store
+# stale e2e artifacts written to a literal "~" dir in repo root
+~/
+docs
+release/
+# superpowers brainstorm/plan artifacts — kept local, never published
+.superpowers/

@@ -1,0 +1,101 @@
+import { useState, memo } from 'react'
+import type { ChatMessage } from '@shared/types'
+import { fmtMsgTime, fmtMsgTimeFull } from '@shared/relTime'
+import { ThinkBlock } from './ThinkBlock'
+import { Markdown } from './markdown'
+
+// ---- module-level SVG consts (1:1 with the prototype markup) ----
+const FILE_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /></svg>
+)
+const COPY_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>
+)
+
+function fmtSize(bytes: number): string {
+  if (!bytes && bytes !== 0) return ''
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' KB'
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+}
+
+interface Props {
+  msg: ChatMessage
+  streaming: boolean
+  index?: number
+  onViewChanges?: () => void
+}
+
+function MessageImpl({ msg, streaming, index, onViewChanges }: Props) {
+  const isUser = msg.who === 'user'
+  const showAnswer = !isUser && (!!msg.text || !streaming)
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard?.writeText(msg.text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1600)
+    }).catch(() => { /* clipboard unavailable */ })
+  }
+  return (
+    <div className={`msg ${msg.who}`} {...(isUser ? { 'data-user-msg': index } : {})}>
+      {/* Only two roles (you vs the agent) and the layout already distinguishes them — drop the
+         「你」/「主代理」avatar + label. Keep just the model tag on AI replies. The real-time log
+         still attributes each line to its agent. */}
+      {!isUser && msg.model && (
+        <div className="msg-head">
+          <span className="msg-model">{msg.model}</span>
+        </div>
+      )}
+      {msg.think && <ThinkBlock think={msg.think} streaming={streaming} />}
+      {isUser ? (
+        <div className="msg-body user-body">
+          <div className="user-bubble">{msg.text}</div>
+        </div>
+      ) : (
+        <div className={`answer-block${showAnswer ? ' show' : ''}`}>
+          {showAnswer && (
+            <div className="ans-eyebrow">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3"><path d="M12 3l2.2 5.6L20 9.8l-4.4 3.6L17 19l-5-3.2L7 19l1.4-5.6L4 9.8l5.8-1.2z" /></svg>
+              {streaming ? '回答中' : '回答'}
+            </div>
+          )}
+          {/* AI replies are Markdown (headings/lists/code/bold); user input stays literal. */}
+          <div className="msg-body ans">
+            <Markdown text={msg.text} />
+            {streaming && <span className="pending" />}
+          </div>
+        </div>
+      )}
+      {!isUser && msg.changes && msg.changes.total > 0 && (
+        <div className="msg-changes">
+          <button className="txt-btn" onClick={onViewChanges}>
+            查看变更({msg.changes.total} 文件 +{msg.changes.add} −{msg.changes.del})
+          </button>
+        </div>
+      )}
+      {msg.files?.length ? (
+        <div className="msg-files">
+          {msg.files.map((f, i) => (
+            <span className="attach-chip" key={f.path + '::' + i}>
+              {FILE_ICON}
+              {f.name} <span className="sz">{fmtSize(f.size)}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {/* Hover-reveal meta: a copy button + the output time. Hidden until the message is hovered; not
+          shown while the AI reply is still streaming (matches the prototype's `!m.pending`). */}
+      {!streaming && (
+        <div className="msg-meta">
+          <button className={`mm-copy${copied ? ' done' : ''}`} title="复制内容" onClick={copy}>
+            {COPY_ICON}
+            <span className="mm-lab">{copied ? '已复制' : '复制'}</span>
+          </button>
+          {msg.ts && <span className="mm-time" title={fmtMsgTimeFull(msg.ts)}>{fmtMsgTime(msg.ts, Date.now())}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export const Message = memo(MessageImpl)

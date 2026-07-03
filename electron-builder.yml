@@ -1,0 +1,65 @@
+appId: com.zghua.myflowforge
+productName: myFlowForge
+directories:
+  output: release
+  buildResources: build
+# asar disabled: the app spawns a separate forgeMcp.js as a child node process; keeping files
+# plain on disk avoids any asar-read edge cases for a local trial build.
+asar: false
+# Use the already-installed, working Electron from node_modules instead of letting
+# electron-builder re-download the framework (the GitHub-release download corrupts behind a
+# proxy — "extra bytes at beginning of zipfile"). This dist matches the devDep version (42.4.0).
+electronDist: node_modules/electron/dist
+# Skip @electron/rebuild entirely. Our ONLY native dep is node-pty, an N-API (node-addon-api) addon
+# that ships prebuilt binaries in prebuilds/<platform>-<arch>/. N-API is ABI-stable across
+# Node/Electron, so those prebuilds load in Electron as-is — no recompile needed. Rebuilding would
+# make node-gyp download Electron headers from electronjs.org, which hangs on networks behind the
+# GFW (symptom: build stuck at "preparing node-pty"). Disabling it makes `npm run dist` work on any
+# machine with zero headers-download / Python / build-toolchain dependency. node-pty's runtime
+# loader (lib/utils.js loadNativeModule) falls back to prebuilds/ when build/Release is absent, and
+# our postinstall chmod's the prebuilt spawn-helper, so the terminal still works in the package.
+npmRebuild: false
+files:
+  - from: .
+    filter:
+      - out/**/*
+      - package.json
+      - node_modules/**/*
+extraResources:
+  - from: resources/example-plugins
+    to: example-plugins
+    filter:
+      - "**/*"
+  - from: build/app-icons
+    to: app-icons
+    filter:
+      - "**/*"
+  - from: assets/pet-packs
+    to: builtin-pet-packs
+    filter:
+      - "**/*"
+mac:
+  target:
+    - dmg
+    - dir
+  # Local/unsigned trial build: skip code signing. The .app will be unsigned — open via
+  # right-click → Open (or `xattr -dr com.apple.quarantine` on the .app).
+  identity: null
+  category: public.app-category.developer-tools
+dmg:
+  title: myFlowForge ${version}
+  # Dark installer background so the app icon's transparent rounded corners blend (same as it looks in
+  # the Dock) instead of showing white on the default light DMG window. background@2x.png is auto-picked.
+  background: build/dmg-background.png
+  window:
+    width: 600
+    height: 400
+  iconSize: 128
+  contents:
+    - x: 165
+      y: 210
+      type: file
+    - x: 435
+      y: 210
+      type: link
+      path: /Applications

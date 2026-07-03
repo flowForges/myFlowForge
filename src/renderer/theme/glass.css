@@ -1,0 +1,199 @@
+/* ---- 毛玻璃 · 窗口透明(真 vibrancy):透出并模糊真实桌面 ----
+   窗口本身以 transparent + macOS `under-window` vibrancy 材质构建(mainWindow.ts),模糊由系统
+   WindowServer 在合成层完成——比 CSS backdrop-filter 逐帧算更省 GPU。因此这里不再画假渐变壁纸、
+   也不再对整窗叠 blur(48px)(会二次模糊已模糊的材质,又糊又费),只留一层极淡染色做对比与可读性,
+   其余各面板的轻染保持不变。 */
+/* 窗框只留极淡染色 + 描边,让真实桌面材质透出来 */
+[data-glass="on"] .window {
+  background: oklch(26% .028 260 / .42);
+  box-shadow: var(--shadow), 0 0 0 1px oklch(100% 0 0 / .16), inset 0 1px 0 oklch(100% 0 0 / .1);
+}
+[data-theme="light"][data-glass="on"] .window {
+  background: oklch(99% .006 250 / .34);
+  box-shadow: var(--shadow), 0 0 0 1px oklch(0% 0 0 / .1), inset 0 1px 0 oklch(100% 0 0 / .6);
+}
+/* glass owns the chrome transparency when on (the data-vibrancy CSS system is :not-gated out in
+   global.css) so the real desktop vibrancy material shows through the whole window. */
+[data-glass="on"], [data-glass="on"] body, [data-glass="on"] #root { background: transparent; }
+/* soften the structural panel seams to faint hairlines so they don't read as hard white lines
+   cutting between the sidebar / chat / inspector on glass. */
+[data-glass="on"] .sidebar { border-right-color: oklch(100% 0 0 / .08); }
+[data-glass="on"] .inspector { border-left-color: oklch(100% 0 0 / .08); }
+[data-theme="light"][data-glass="on"] .sidebar { border-right-color: oklch(0% 0 0 / .11); }
+[data-theme="light"][data-glass="on"] .inspector { border-left-color: oklch(0% 0 0 / .1); }
+/* 内层一并半透明 —— 标题栏 / 侧栏 / 底栏 / 右侧检查器 / 内容区,毛玻璃覆盖整窗而非某一块 */
+[data-glass="on"] .titlebar,
+[data-glass="on"] .statusbar { background: oklch(55% .03 262 / .08); }
+[data-glass="on"] .sidebar   { background: oklch(40% .04 262 / .14); }
+[data-glass="on"] .inspector { background: oklch(40% .04 262 / .12); }
+[data-glass="on"] #view-home,
+[data-glass="on"] .chat       { background: transparent; }
+[data-theme="light"][data-glass="on"] .titlebar,
+[data-theme="light"][data-glass="on"] .statusbar { background: oklch(100% 0 0 / .3); }
+[data-theme="light"][data-glass="on"] .sidebar   { background: oklch(100% 0 0 / .4); }
+[data-theme="light"][data-glass="on"] .inspector { background: oklch(100% 0 0 / .38); }
+/* 内部各面板(检查器 tab 条、编排卡、变更统计、文件树、输入框)只做轻染,不再各自 backdrop-filter
+   —— 整窗只有 .window 一层模糊,内层加自己的 blur 会被窗体的 isolation 隔断,反而再糊一遍变实色 */
+[data-glass="on"] .insp-tabs,
+[data-glass="on"] .insp-tab .badge,
+[data-glass="on"] .surface,
+[data-glass="on"] .ws-card,
+[data-glass="on"] .agent-node,
+[data-glass="on"] .agent-card,
+[data-glass="on"] .chg-stat,
+[data-glass="on"] .composer { background: oklch(74% .03 262 / .10); }
+[data-theme="light"][data-glass="on"] .insp-tabs,
+[data-theme="light"][data-glass="on"] .insp-tab .badge,
+[data-theme="light"][data-glass="on"] .surface,
+[data-theme="light"][data-glass="on"] .ws-card,
+[data-theme="light"][data-glass="on"] .agent-node,
+[data-theme="light"][data-glass="on"] .agent-card,
+[data-theme="light"][data-glass="on"] .chg-stat,
+[data-theme="light"][data-glass="on"] .composer { background: oklch(100% 0 0 / .16); }
+
+/* 标题栏「首页/工作区」分段控件:外壳与选中态都轻染,去掉选中按钮的深色投影,
+   否则在毛玻璃上格外突兀、跟主题不搭 */
+[data-glass="on"] .tb-seg { background: oklch(74% .03 262 / .08); }
+[data-glass="on"] .tb-seg button.on { background: oklch(74% .03 262 / .16); box-shadow: none; }
+[data-theme="light"][data-glass="on"] .tb-seg { background: oklch(100% 0 0 / .10); }
+[data-theme="light"][data-glass="on"] .tb-seg button.on { background: oklch(100% 0 0 / .30); box-shadow: none; }
+
+/* 中间对话区:思考块 / 交互卡 / 输入·选择控件 — 同样只轻染 */
+[data-glass="on"] .think,
+[data-glass="on"] .msg-req,
+[data-glass="on"] .menu { background: oklch(74% .03 262 / .10); }
+[data-glass="on"] .req-head { background: oklch(78% .035 262 / .12); }
+[data-glass="on"] .req-opt,
+[data-glass="on"] .req-inrow input,
+[data-glass="on"] .req-sub code,
+[data-glass="on"] .req-file,
+[data-glass="on"] .msg-body code,
+[data-glass="on"] .attach-chip { background: oklch(50% .04 262 / .16); }
+[data-glass="on"] .req-opt:hover { background: oklch(58% .05 262 / .22); }
+[data-theme="light"][data-glass="on"] .think,
+[data-theme="light"][data-glass="on"] .msg-req,
+[data-theme="light"][data-glass="on"] .menu { background: oklch(100% 0 0 / .34); }
+[data-theme="light"][data-glass="on"] .req-head { background: oklch(100% 0 0 / .24); }
+[data-theme="light"][data-glass="on"] .req-opt,
+[data-theme="light"][data-glass="on"] .req-inrow input,
+[data-theme="light"][data-glass="on"] .req-sub code,
+[data-theme="light"][data-glass="on"] .req-file,
+[data-theme="light"][data-glass="on"] .msg-body code,
+[data-theme="light"][data-glass="on"] .attach-chip { background: oklch(100% 0 0 / .42); }
+[data-theme="light"][data-glass="on"] .req-opt:hover { background: oklch(100% 0 0 / .7); }
+
+/* ---- glass sweep: remaining solid panels (dark) ---- */
+/* big solid blocks: file preview overlay + agent execution log */
+[data-glass="on"] .preview,
+[data-glass="on"] .agent-log { background: oklch(40% .04 262 / .12); }
+/* floating popovers */
+[data-glass="on"] .notif-pop,
+[data-glass="on"] .pet-pop { background: oklch(30% .035 262 / .5); backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.7); -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.7); }
+/* modal sheets — real frosted glass: lower fill, stronger blur so the
+   colourful wallpaper genuinely reads through while text stays legible */
+[data-glass="on"] .settings,
+[data-glass="on"] .cr-modal,
+[data-glass="on"] .upd-sheet { background: oklch(27% .03 262 / .44); backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.9); -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.9); border-color: oklch(100% 0 0 / .14); }
+[data-glass="on"] .set-nav,
+[data-glass="on"] .cr-foot { background: oklch(50% .04 262 / .1); }
+/* on glass, soften the settings dividers to faint light hairlines so they
+   read as a glass edge, not a dark slab cutting across the panel */
+[data-glass="on"] .set-head { border-bottom-color: oklch(100% 0 0 / .08); }
+[data-glass="on"] .set-nav  { border-right-color: oklch(100% 0 0 / .07); background: oklch(50% .04 262 / .08); }
+[data-glass="on"] .set-row  { border-bottom-color: oklch(100% 0 0 / .07); }
+[data-theme="light"][data-glass="on"] .set-head { border-bottom-color: oklch(0% 0 0 / .06); }
+[data-theme="light"][data-glass="on"] .set-nav  { border-right-color: oklch(0% 0 0 / .05); }
+[data-theme="light"][data-glass="on"] .set-row  { border-bottom-color: oklch(0% 0 0 / .05); }
+/* lighten modal scrims so the wallpaper reads through the sheet */
+[data-glass="on"] .settings-overlay,
+[data-glass="on"] .create-overlay,
+[data-glass="on"] .upd-overlay { background: oklch(18% .03 262 / .32); }
+/* medium panels / cards */
+[data-glass="on"] .model-card,
+[data-glass="on"] .tree-search,
+[data-glass="on"] .stage-line,
+[data-glass="on"] .stage-projs,
+[data-glass="on"] .proj-add,
+[data-glass="on"] .proj-row,
+[data-glass="on"] .cr-proj,
+[data-glass="on"] .cr-proj-add,
+[data-glass="on"] .cr-branch-all,
+[data-glass="on"] .wf-card,
+[data-glass="on"] .wf-mgr-row,
+[data-glass="on"] .agent-ic,
+[data-glass="on"] .agent-model { background: oklch(50% .04 262 / .14); }
+/* inputs / segmented controls / leaf chips */
+[data-glass="on"] .sel,
+[data-glass="on"] .proj-field input,
+[data-glass="on"] .cr-field .inp,
+[data-glass="on"] .cr-branch-all input,
+[data-glass="on"] .cr-proj-add input,
+[data-glass="on"] .mini-sel,
+[data-glass="on"] .rev-focus,
+[data-glass="on"] .seg-mode,
+[data-glass="on"] .pv-toggle,
+[data-glass="on"] .stage-mode,
+[data-glass="on"] .skill-ic,
+[data-glass="on"] .proj-ic,
+[data-glass="on"] .pj-ic,
+[data-glass="on"] .cr-proj .pj-branch { background: oklch(46% .04 262 / .18); }
+
+/* ---- glass sweep (light) ---- */
+[data-theme="light"][data-glass="on"] .preview,
+[data-theme="light"][data-glass="on"] .agent-log { background: oklch(100% 0 0 / .48); }
+[data-theme="light"][data-glass="on"] .notif-pop,
+[data-theme="light"][data-glass="on"] .pet-pop { background: oklch(100% 0 0 / .6); backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.5); -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.5); }
+[data-theme="light"][data-glass="on"] .settings,
+[data-theme="light"][data-glass="on"] .cr-modal,
+[data-theme="light"][data-glass="on"] .upd-sheet { background: oklch(100% 0 0 / .52); backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.7); -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.7); border-color: oklch(0% 0 0 / .06); }
+[data-theme="light"][data-glass="on"] .set-nav,
+[data-theme="light"][data-glass="on"] .cr-foot { background: oklch(100% 0 0 / .3); }
+[data-theme="light"][data-glass="on"] .settings-overlay,
+[data-theme="light"][data-glass="on"] .create-overlay,
+[data-theme="light"][data-glass="on"] .upd-overlay { background: oklch(70% .03 262 / .28); }
+[data-theme="light"][data-glass="on"] .model-card,
+[data-theme="light"][data-glass="on"] .tree-search,
+[data-theme="light"][data-glass="on"] .stage-line,
+[data-theme="light"][data-glass="on"] .stage-projs,
+[data-theme="light"][data-glass="on"] .proj-add,
+[data-theme="light"][data-glass="on"] .proj-row,
+[data-theme="light"][data-glass="on"] .cr-proj,
+[data-theme="light"][data-glass="on"] .cr-proj-add,
+[data-theme="light"][data-glass="on"] .cr-branch-all,
+[data-theme="light"][data-glass="on"] .wf-card,
+[data-theme="light"][data-glass="on"] .wf-mgr-row,
+[data-theme="light"][data-glass="on"] .agent-ic,
+[data-theme="light"][data-glass="on"] .agent-model { background: oklch(100% 0 0 / .45); }
+[data-theme="light"][data-glass="on"] .sel,
+[data-theme="light"][data-glass="on"] .proj-field input,
+[data-theme="light"][data-glass="on"] .cr-field .inp,
+[data-theme="light"][data-glass="on"] .cr-branch-all input,
+[data-theme="light"][data-glass="on"] .cr-proj-add input,
+[data-theme="light"][data-glass="on"] .mini-sel,
+[data-theme="light"][data-glass="on"] .rev-focus,
+[data-theme="light"][data-glass="on"] .seg-mode,
+[data-theme="light"][data-glass="on"] .pv-toggle,
+[data-theme="light"][data-glass="on"] .stage-mode,
+[data-theme="light"][data-glass="on"] .skill-ic,
+[data-theme="light"][data-glass="on"] .proj-ic,
+[data-theme="light"][data-glass="on"] .pj-ic,
+[data-theme="light"][data-glass="on"] .cr-proj .pj-branch { background: oklch(100% 0 0 / .55); }
+
+[data-glass="on"] .tb-edit-ws { background: oklch(74% .03 262 / .1); }
+
+/* ---- 首页卡片:默认用不透明的 --surface,毛玻璃下必须一并轻染,否则渲染成刺眼的纯白实心块 ---- */
+[data-glass="on"] .home-stats,
+[data-glass="on"] .home-empty,
+[data-glass="on"] .home-list { background: oklch(50% .04 262 / .14); }
+[data-glass="on"] .he-card { background: oklch(50% .04 262 / .1); }
+/* 焦点卡保留右上角强调色渐变,只把不透明的 --surface 兜底换成半透明 */
+[data-glass="on"] .focus-card {
+  background: radial-gradient(120% 140% at 100% 0%, var(--accent-dim), transparent 55%), oklch(50% .04 262 / .14);
+}
+[data-theme="light"][data-glass="on"] .home-stats,
+[data-theme="light"][data-glass="on"] .home-empty,
+[data-theme="light"][data-glass="on"] .home-list { background: oklch(100% 0 0 / .34); }
+[data-theme="light"][data-glass="on"] .he-card { background: oklch(100% 0 0 / .28); }
+[data-theme="light"][data-glass="on"] .focus-card {
+  background: radial-gradient(120% 140% at 100% 0%, var(--accent-dim), transparent 55%), oklch(100% 0 0 / .34);
+}

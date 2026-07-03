@@ -1,0 +1,32 @@
+.debug-log-pane { display: flex; flex-direction: column; min-height: 0; position: relative; }
+.dl-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.dl-head h4 { margin: 0 0 4px; }
+.dl-head p { margin: 0; color: var(--muted); font-size: 12px; max-width: 460px; }
+.dl-actions { display: flex; gap: 8px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
+.dl-actions .set-btn.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+
+.dl-bar { display: flex; align-items: center; gap: 12px; margin: 14px 0 8px; flex-wrap: wrap; }
+.dl-filters { display: flex; gap: 6px; }
+.dl-fch { height: 26px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
+.dl-fch.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dl-stat { color: var(--muted); font-size: 12px; }
+.dl-auto { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
+
+.dl-body {
+  flex: 1 1 auto; min-height: 220px; max-height: 52vh; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-1, var(--surface));
+  padding: 8px 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.55;
+}
+.dl-line { display: grid; grid-template-columns: 56px 48px auto 1fr; gap: 8px; align-items: baseline; padding: 2px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent); }
+.dl-ts { color: var(--muted); }
+.dl-lv { text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: .3px; }
+.dl-lv.lv-error { color: var(--err); }
+.dl-lv.lv-warn { color: var(--warn, #d9a017); }
+.dl-lv.lv-info { color: var(--accent); }
+.dl-lv.lv-debug { color: var(--muted); }
+.dl-scope { color: var(--fg-2); font-weight: 600; }
+.dl-msg { color: var(--fg); word-break: break-word; }
+.dl-line.lv-error .dl-msg { color: var(--err); }
+.dl-detail { grid-column: 1 / -1; margin: 4px 0 2px; padding: 6px 8px; background: var(--surface); border-radius: 6px; color: var(--muted); white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+
+.dl-toast { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); background: var(--accent); color: #fff; padding: 7px 14px; border-radius: 8px; font-size: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.3); }
