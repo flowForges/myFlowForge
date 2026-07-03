@@ -37,4 +37,33 @@ describe('fetchLatestRelease', () => {
     const info = await fetchLatestRelease('o/r', { fetch: async () => { throw new Error('offline') } })
     expect(info).toBeNull()
   })
+
+  // With multiple per-arch dmgs attached (x64 listed FIRST), selection must follow the
+  // running CPU arch, not just grab the first .dmg.
+  const MULTI = {
+    tag_name: 'v1.0.1',
+    body: 'notes',
+    assets: [
+      { name: 'myFlowForge-1.0.1.dmg', browser_download_url: 'https://x/x64', size: 165 },
+      { name: 'myFlowForge-1.0.1-arm64.dmg', browser_download_url: 'https://x/arm', size: 163 },
+    ],
+  }
+  it('picks the arm64 dmg for an arm64 machine', async () => {
+    const info = await fetchLatestRelease('o/r', { fetch: fakeFetch(true, MULTI), arch: 'arm64' })
+    expect(info?.dmgUrl).toBe('https://x/arm')
+    expect(info?.dmgName).toBe('myFlowForge-1.0.1-arm64.dmg')
+  })
+  it('picks the x64 dmg for an x64 machine (not the first asset)', async () => {
+    const info = await fetchLatestRelease('o/r', { fetch: fakeFetch(true, MULTI), arch: 'x64' })
+    expect(info?.dmgUrl).toBe('https://x/x64')
+    expect(info?.dmgName).toBe('myFlowForge-1.0.1.dmg')
+  })
+  it('falls back to a universal dmg when no arch-specific build exists', async () => {
+    const uni = {
+      tag_name: 'v1.0.1',
+      assets: [{ name: 'myFlowForge-1.0.1-universal.dmg', browser_download_url: 'https://x/uni', size: 300 }],
+    }
+    const info = await fetchLatestRelease('o/r', { fetch: fakeFetch(true, uni), arch: 'arm64' })
+    expect(info?.dmgUrl).toBe('https://x/uni')
+  })
 })
