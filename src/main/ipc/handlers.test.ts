@@ -69,6 +69,8 @@ vi.mock('../chat/proposeRun', () => {
   const fn: any = vi.fn(() => Promise.resolve({ approved: true }))
   fn.has = vi.fn(() => false)
   fn.resolve = vi.fn()
+  fn.pendingIds = vi.fn(() => [])
+  fn.cancelForWorkspace = vi.fn(() => [])
   return { makeProposeRun: vi.fn(() => fn) }
 })
 vi.mock('../narrator/narratorService', () => ({

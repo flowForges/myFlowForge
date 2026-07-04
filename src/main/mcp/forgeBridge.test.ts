@@ -243,6 +243,38 @@ describe('ForgeBridge', () => {
     expect(msg.artifacts).toEqual([{ path: '/tmp/a.md', kind: 'md' }])
   })
 
+  // 回归(P1):mcpTools provider(codex/qoder)经真 forge_handoff 工具上报设计文档时,除写 handoff:<id>
+  // 摘要外,还须把 .md 文档 artifact 记为 handoff-doc:<id>,否则设计评审门控的 buildDesignDocs 读不到,
+  // 只能退化成短摘要、拿不到可打开的方案全文(纯文本围栏路径的 onHandoff 已经这样做了,MCP 路径此前漏了)。
+  it('4c. handoff with a .md artifact also writes handoff-doc:<agentId> for the design gate', async () => {
+    const ctx = makeCtx()
+    bridge = await startBridge(tmpDir, ctx)
+    const s = await connectTo(bridge.socketPath)
+    sockets.push(s)
+    await sendRecv(s, {
+      id: 'hoff-doc',
+      tool: 'handoff',
+      agentId: 'agent1',
+      args: { summary: 'plan', artifacts: [{ path: 'design/PLAN.md', kind: 'doc' }] },
+    })
+    expect(ctx.setContext).toHaveBeenCalledWith('handoff-doc:agent1', 'design/PLAN.md')
+  })
+
+  it('4d. handoff with no doc artifact does NOT write handoff-doc', async () => {
+    const ctx = makeCtx()
+    bridge = await startBridge(tmpDir, ctx)
+    const s = await connectTo(bridge.socketPath)
+    sockets.push(s)
+    await sendRecv(s, {
+      id: 'hoff-nodoc',
+      tool: 'handoff',
+      agentId: 'agent1',
+      args: { summary: 'plan', artifacts: [{ path: 'src/main.ts', kind: 'code' }] },
+    })
+    const keys = (ctx.setContext as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0])
+    expect(keys).not.toContain('handoff-doc:agent1')
+  })
+
   // ─── Test 4b: ask forwards options through to ctx.ask ──────────────────────
 
   it('4b. ask forwards args.options to ctx.ask and returns the answer', async () => {

@@ -201,6 +201,13 @@ export class Orchestrator {
       if (stage.state === 'run' || stage.state === 'wait') stage.state = 'err'
     }
     this.run.status = 'err'
+    // Unblock any orchestrator-level await that has no backing process to kill — chiefly the
+    // inter-stage review gate's `await this.raise(...)`. Without this, cancelling while paused at the
+    // gate leaves that resolver dangling: the stage loop never resumes, `finally`/drainPending never
+    // run, and the coroutine + bridge socket leak forever. Draining auto-denies it so the loop reaches
+    // its terminal path. (Agent onConfirm resolvers are also denied here — harmless, since their
+    // sessions are killed just below and any late resolve is a no-op once cleared.)
+    this.drainPending()
     this.update(); this.flush()
     for (const s of this.activeSessions) { try { s.cancel() } catch { /* ignore */ } }
     this.activeSessions.clear()
@@ -522,7 +529,9 @@ export class Orchestrator {
       // Resolve the bridge before building any agent env so FORGE_SOCKET is available.
       this.bridge = await bridgePromise
 
-      for (const step of weavePlugins(opts.stages, opts.plugins ?? [])) {
+      const woven = weavePlugins(opts.stages, opts.plugins ?? [])
+      for (let stepIdx = 0; stepIdx < woven.length; stepIdx++) {
+        const step = woven[stepIdx]
         if (this.cancelled) break
         if (step.kind === 'hook') { await this.runHook(step.plugin, opts, store); continue }
         const spec = step.stage
@@ -617,7 +626,9 @@ export class Orchestrator {
         // IS a next stage and the run hasn't been cancelled. Reuses the raise/pending/resolve
         // mechanism (same path as agent onConfirm) — no new UI/IPC. The design output is already
         // surfaced to chat by the per-stage narrator回流; this only adds the pause + approve/reject.
-        const isLast = opts.stages.indexOf(spec) === opts.stages.length - 1
+        // Last step in the WOVEN sequence (stages + hooks), not just the last stage — otherwise a hook
+        // woven after a gated stage would let it run without the review gate pausing first.
+        const isLast = stepIdx === woven.length - 1
         if (REVIEW_GATED_STAGES.has(spec.key) && !isLast && !this.cancelled) {
           const id = `review-${spec.key}-${++this.pendingSeq}`
           // Collect the design docs agents wrote to disk (openable in the in-app viewer). The gate

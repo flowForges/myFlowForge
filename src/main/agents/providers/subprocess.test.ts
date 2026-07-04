@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { makeSubprocessProvider } from './subprocess'
-import type { LogLine, AgentState } from '../types'
+import type { LogLine, AgentState, HandoffPayload } from '../types'
 
 let dir: string, cliPath: string
 const FAKE = `#!/usr/bin/env node
@@ -35,6 +35,39 @@ describe('subprocess provider', () => {
     expect(result.ok).toBe(true)
     expect(states[0]).toBe('run'); expect(states.at(-1)).toBe('ok')
     expect(logs.map(l => l.text)).toContain('starting work')
+  })
+
+  // 回归(P2):自定义 subprocess agent 分配到工作流阶段时,须像其他文本兜底 provider 一样扫描
+  // forge:handoff 围栏并回调 onHandoff,否则上游交接上下文/设计文档丢失,下游阶段拿不到。
+  it('scans forge:handoff fence on stdout, calls onHandoff, and consumes the fence lines', async () => {
+    const hoffCli = join(dir, 'hoffcli.js')
+    writeFileSync(hoffCli, `#!/usr/bin/env node
+console.log('working')
+console.log('\\u0060\\u0060\\u0060forge:handoff')
+console.log(JSON.stringify({ summary: 'plan done', artifacts: [{ path: 'PLAN.md', kind: 'md' }] }))
+console.log('\\u0060\\u0060\\u0060')
+console.log('after')
+process.exit(0)
+`)
+    chmodSync(hoffCli, 0o755)
+    const provider = makeSubprocessProvider({
+      id: 'fake', displayName: 'Fake', bin: 'node', buildArgs: () => [hoffCli], models: []
+    })
+    const logs: LogLine[] = []; const handoffs: HandoffPayload[] = []
+    const session = provider.run(
+      { stageKey: 'design', agentId: 'a1', name: 'Dev', prompt: 'x', cwd: dir, model: 'm1' },
+      { onLog: l => logs.push(l), onState: () => {}, onConfirm: async () => 'allow',
+        onInput: async () => '', onDone: () => {}, onError: () => {}, onHandoff: p => handoffs.push(p) },
+      process.env
+    )
+    await session.done
+    expect(handoffs).toHaveLength(1)
+    expect(handoffs[0].summary).toBe('plan done')
+    expect(handoffs[0].artifacts).toEqual([{ path: 'PLAN.md', kind: 'md' }])
+    const texts = logs.map(l => l.text)
+    expect(texts).toContain('working')
+    expect(texts).toContain('after')
+    expect(texts.some(t => t.includes('forge:handoff'))).toBe(false)  // fence consumed, not logged
   })
 
   it('reports run→err with exit-code summary and surfaces stderr on non-zero exit', async () => {

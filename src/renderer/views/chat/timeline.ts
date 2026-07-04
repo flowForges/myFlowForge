@@ -18,7 +18,10 @@ function key(ts?: string): number {
 }
 
 // 消息排序键 —— 与卡片不同,消息在数组里已按追加顺序=时序排列,必须保持其相对次序:
-//  · 空 ts('') = 尚未定时的在途流式助手消息,天然"最新",置底(+Infinity)。
+//  · 空 ts('') = 尚未定时的在途流式助手消息。沿用前一条真实消息的时间键(carry-forward),使其紧随触发它的
+//    用户消息之后。关键:不能用 +Infinity——否则本轮流式中途产生的卡片(plan/confirm,ts=now 为有限值)会
+//    排到这条流式消息*上方*,被顶出视口(方案审批「批准/拒绝」按钮看不见的根因)。承接前值后,now 时间戳的
+//    卡片自然落在流式消息之后(下方),用户在底部即可看到。
 //  · 非空但不可解析(旧会话的时钟制 "09:58:01",Date.parse=NaN)= 真实历史消息,不能顶到末尾;
 //    沿用前一条消息的有效时间(carry-forward),从而留在原位。开头连续的此类消息落 -Infinity(顶部)。
 //  · 可解析 ISO → 毫秒值。
@@ -27,7 +30,7 @@ function key(ts?: string): number {
 function messageKeys(messages: ChatMessage[]): number[] {
   let last = -Infinity
   return messages.map(m => {
-    if (m.ts === '') return Infinity               // 在途流式消息:永远置底(不推进 last)
+    if (m.ts === '') return last                   // 在途流式消息:承接前值,紧随用户消息(不推进 last)
     const n = Date.parse(m.ts)
     if (!Number.isNaN(n)) { last = n; return n }   // 真实 ISO
     return last                                    // 遗留不可解析:沿用前值,保持原位

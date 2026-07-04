@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import type { RunStore } from '../orchestrator/runStore'
 import type { AgentMessage } from '../orchestrator/types'
+import { pickDocArtifact } from '../orchestrator/gateBody'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 
@@ -174,6 +175,12 @@ async function dispatch(
       const summary = args.summary as string
       const artifacts = (args.artifacts as Array<{ path: string; kind: string }> | undefined) ?? []
       ctx.setContext(`handoff:${agentId}`, summary)
+      // Capture a reported design .md so the inter-stage review gate can surface it as an openable
+      // full-content doc. The text-fence onHandoff path already does this; MCP-native providers
+      // (codex/qoder) call the real forge_handoff tool and route here, so mirror it — else their
+      // design docs never reach the gate as `handoff-doc:` and it degrades to the short summary.
+      const doc = pickDocArtifact(artifacts)
+      if (doc) ctx.setContext(`handoff-doc:${agentId}`, doc)
       appendAudit(ctx, agentId, 'handoff', args, artifacts)
       return { ok: true }
     }

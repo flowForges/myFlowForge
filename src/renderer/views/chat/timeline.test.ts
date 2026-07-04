@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { buildTimeline } from './timeline'
+import type { PlanReq } from './timeline'
 import type { ChatMessage, PendingAction, ChatConfirm } from '@shared/types'
 
 const msg = (id: string, ts: string): ChatMessage => ({ id, who: 'ai', text: id, ts })
 const pend = (id: string, ts?: string): PendingAction =>
   ({ id, kind: 'input', agentId: 'a', agentName: 'A', wsName: 'w', title: 'q', ts } as PendingAction)
+const plan = (id: string, ts: string): PlanReq => ({ id, approach: 'a', stages: [], task: 't', ts })
 
 describe('buildTimeline', () => {
   it('按 ts 把卡片插进消息之间', () => {
@@ -16,11 +18,11 @@ describe('buildTimeline', () => {
     if (first.kind === 'message') expect(first.index).toBe(0)
   })
 
-  it('空 ts 的流式消息排到末尾,有 ts 的卡片排它前面', () => {
+  it('流式中途产生的卡片排在流式助手消息之后', () => {
     const messages = [msg('s', '')] // 流式助手消息,ts 未定
     const pending = [pend('p1', '2026-07-01T00:00:01.000Z')]
     const tl = buildTimeline(messages, pending, [], [])
-    expect(tl.map(e => e.kind)).toEqual(['pending', 'message'])
+    expect(tl.map(e => e.kind)).toEqual(['message', 'pending'])
   })
 
   it('保留消息原始 index 供 <Message> 使用', () => {
@@ -45,12 +47,26 @@ describe('buildTimeline', () => {
     expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind)).toEqual(['old1', 'old2', 'u', 'ai'])
   })
 
-  // 空 ts('')= 尚未定时的在途流式消息,应始终在最底部;非空但不可解析的时钟制 ts 不同,须留在原位。
-  it('区分空 ts(流式,置底)与遗留时钟制 ts(原位)', () => {
+  // 空 ts('')= 尚未定时的在途流式消息。它排在触发它的用户消息之后(沿用前一条真实消息的时间键),
+  // 而不是被顶到 +Infinity。遗留时钟制 ts 同样沿用前值留在原位。
+  it('区分空 ts(流式,承接前值)与遗留时钟制 ts(原位)', () => {
     const messages = [msg('old', '09:58:01'), msg('u', '2026-07-01T12:00:00.000Z'), msg('stream', '')]
     const pending = [pend('p1', '2026-07-01T12:00:03.000Z')]
     const tl = buildTimeline(messages, pending, [], [])
-    // old 原位在最前;pending 卡按真实 ts 落在 u 之后;流式 stream 永远最后
-    expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind)).toEqual(['old', 'u', 'pending', 'stream'])
+    // old 原位在最前;流式 stream 承接 u 的时间键紧随其后;pending 卡按真实 ts(12:00:03)落在最后
+    expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind)).toEqual(['old', 'u', 'stream', 'pending'])
+  })
+
+  // 回归(方案审批看不到按钮):forge_propose_plan 由主代理在流式中途调用,turn 阻塞在审批、done 未触发,
+  // 故该助手消息 ts 一直是 ''。带「批准/拒绝」按钮的方案卡片必须排在这条流式消息*之后*(下方),否则会被
+  // 顶到长方案消息上方、随自动滚动落到视口之外,用户只看到右侧无按钮的只读摘要而误以为交互卡片丢失。
+  it('流式中途提交的方案卡片排在流式助手消息之后', () => {
+    const messages = [
+      msg('u', '2026-07-01T12:00:00.000Z'), // 用户指令
+      msg('ai', ''),                        // 主代理流式回复(仍在输出,阻塞在审批)
+    ]
+    const plans = [plan('pl', '2026-07-01T12:00:10.000Z')] // 稍后产生的方案卡片
+    const tl = buildTimeline(messages, [], [], plans)
+    expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind)).toEqual(['u', 'ai', 'plan'])
   })
 })

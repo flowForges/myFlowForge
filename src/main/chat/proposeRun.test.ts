@@ -78,6 +78,48 @@ describe('proposeRun mode flip', () => {
     expect(setSessionMode).not.toHaveBeenCalled()
   })
 
+  // 回归:主代理 turn 中断/出错时,仍阻塞在审批的 propose 会孤立泄漏,卡片诡异"自己消失"。
+  // turn 结束时须能把本工作区所有待审批 propose 判为 deny 并回收,交由 handlers 广播 plan-resolved 清卡。
+  it('cancelForWorkspace denies pending proposes, returns their ids, and clears them', async () => {
+    const captured: string[] = []
+    const deps = mkDeps({ emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    const p = propose('/w', 'x', 'x')
+    expect(propose.has(captured[0])).toBe(true)
+    const cancelled = propose.cancelForWorkspace('/w')
+    expect(cancelled).toEqual([captured[0]])
+    const r = await p
+    expect(r).toEqual({ approved: false })
+    expect(propose.has(captured[0])).toBe(false)
+  })
+
+  it('cancelForWorkspace only touches the given workspace, leaving others pending', async () => {
+    const captured: { w: string; id: string }[] = []
+    const deps = mkDeps({ emitPlanRequest: (w, req) => captured.push({ w, id: req.id }) })
+    const propose = makeProposeRun(deps)
+    void propose('/w', 'x', 'x')
+    void propose('/other', 'y', 'y')
+    const idW = captured.find(c => c.w === '/w')!.id
+    const idOther = captured.find(c => c.w === '/other')!.id
+    const cancelled = propose.cancelForWorkspace('/w')
+    expect(cancelled).toEqual([idW])
+    expect(propose.has(idW)).toBe(false)
+    expect(propose.has(idOther)).toBe(true)
+  })
+
+  it('cancelForWorkspace skips excluded ids (prior turns\' still-pending proposes survive)', async () => {
+    const captured: string[] = []
+    const deps = mkDeps({ emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    void propose('/w', 'prior', 'prior')            // 上一轮遗留的待审批卡片
+    const priorIds = new Set(propose.pendingIds('/w'))
+    void propose('/w', 'this-turn', 'this-turn')    // 本轮产生、随后被中断的方案
+    const cancelled = propose.cancelForWorkspace('/w', priorIds)
+    expect(cancelled).toEqual([captured[1]])         // 只回收本轮的
+    expect(propose.has(captured[0])).toBe(true)      // 上一轮的卡片保留
+    expect(propose.has(captured[1])).toBe(false)
+  })
+
   it('does not flip mode when a run is already live (allow rejected)', async () => {
     const startRun = vi.fn()
     const setSessionMode = vi.fn()

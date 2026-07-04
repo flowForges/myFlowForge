@@ -387,6 +387,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       },
     }).catch(() => null)
     const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan' } : undefined })
+    // Snapshot proposes already pending for this workspace before the turn — those belong to earlier
+    // turns (fire-and-forget auto-triggers the user hasn't acted on yet) and must survive this turn.
+    const preProposes = new Set(proposeRun.pendingIds(payload.workspacePath))
     try {
       const msg = await sendTurn(payload, {
         provider,
@@ -396,6 +399,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         onRunTrigger: (wsPath, task) => { proposedWorkflow = true; onRunTrigger(wsPath, task) },
         onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, () => session.cancel()),
       })
+      // A forge_propose_plan blocks the turn awaiting the user's decision. If the turn ended (API error /
+      // codex 180s tool timeout / cancel) while one was still pending, it's now orphaned — the agent that
+      // asked is gone. Deny+clear it (excluding prior turns' proposes) and broadcast plan-resolved so the
+      // card is cleanly removed instead of lingering/vanishing, and tell the user why nothing ran.
+      const orphaned = proposeRun.cancelForWorkspace(payload.workspacePath, preProposes)
+      for (const id of orphaned) {
+        broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: readSessions(payload.workspacePath).activeSessionId, type: 'plan-resolved', id })
+      }
+      if (orphaned.length) emitNote(payload.workspacePath, payload.sessionId, '⚠️ 主代理未完成方案提交(已中断或超时),待审批方案已取消,请重试。')
       const live = orch.getRun()
       if (!proposedWorkflow && isWorkflowIntent(payload.text) && !(live && live.status === 'run')) {
         emitNote(payload.workspacePath, payload.sessionId, '已识别到明确的工作流执行指令；主代理未调用工作流工具，已自动发起工作流确认。')

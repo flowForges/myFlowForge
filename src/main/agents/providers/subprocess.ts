@@ -1,5 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
+import { createFenceScanner } from '../handoffFence'
 
 export interface SubprocessSpec {
   id: string
@@ -40,14 +41,19 @@ export function makeSubprocessProvider(spec: SubprocessSpec): AgentProvider {
     // should use one or the other (onDone for reactive UI, done for orchestrator sequencing).
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
+      // Scan stdout for forge:handoff fences like every other text-fallback provider — otherwise a
+      // custom agent assigned to a workflow stage silently drops its handoff (upstream context/design
+      // docs never reach downstream stages or the review gate).
+      const scanner = createFenceScanner(p => cb.onHandoff?.(p))
       const child: ResultPromise = execa(spec.bin, spec.buildArgs(task), { cwd: task.cwd, env, reject: false })
       const log = (text: string) => cb.onLog({ ts: now(), text, level: 'info' })
-      const outEmitter = lineEmitter(log)
+      const outEmitter = lineEmitter(line => { for (const out of scanner.feedLine(line)) log(out) })
       const errEmitter = lineEmitter(log)
       child.stdout?.on('data', (b: Buffer) => outEmitter.feed(b))
       child.stderr?.on('data', (b: Buffer) => errEmitter.feed(b))
       const done = child.then((res) => {
         outEmitter.flush(); errEmitter.flush()
+        for (const out of scanner.flush()) log(out)   // release any unclosed-fence lines verbatim
         const ok = res.exitCode === 0
         const cancelled = res.isTerminated === true || res.signal != null
         cb.onState(ok ? 'ok' : 'err')
