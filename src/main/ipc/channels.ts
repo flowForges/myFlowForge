@@ -126,6 +126,8 @@ export const CH = {
   revealPath: 'shell:reveal-path',
   openersDetect: 'openers:detect',
   openersOpen: 'openers:open',
+  shortcutsGetStatus: 'shortcuts:get-status',
+  shortcutsStatus: 'shortcuts:status',
   appLogGet: 'app-log:get',
   appLogClear: 'app-log:clear',
   appLogExport: 'app-log:export',

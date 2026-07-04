@@ -192,6 +192,12 @@ const api = {
     ipcRenderer.on(CH.workspacesChanged, h)
     return () => ipcRenderer.removeListener(CH.workspacesChanged, h)
   },
+  getShortcutStatus: (): Promise<{ failed: string[] }> => ipcRenderer.invoke(CH.shortcutsGetStatus),
+  onShortcutStatus: (cb: (s: { failed: string[] }) => void) => {
+    const listener = (_: unknown, s: { failed: string[] }) => cb(s)
+    ipcRenderer.on(CH.shortcutsStatus, listener)
+    return () => ipcRenderer.removeListener(CH.shortcutsStatus, listener)
+  },
   appLogGet: (): Promise<import('@shared/types').AppLogEntry[]> => ipcRenderer.invoke(CH.appLogGet),
   appLogClear: (): Promise<import('@shared/types').AppLogEntry[]> => ipcRenderer.invoke(CH.appLogClear),
   appLogExport: (): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> => ipcRenderer.invoke(CH.appLogExport),

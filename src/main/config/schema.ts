@@ -157,6 +157,15 @@ export const NotificationsSchema = z.object({
 export type Notifications = z.infer<typeof NotificationsSchema>
 const defaultNotifications = (): Notifications => ({ enabled: true, confirm: true, input: true, done: true })
 
+// Keyboard shortcuts. We store ONLY user overrides keyed by action id (the default binding for each
+// action lives in shared/keybindings.ts KEYBINDING_ACTIONS — the single source of truth). An override
+// value of '' means the action was explicitly unbound. Absent id → fall back to its registry default,
+// so adding a new action ships its default to every existing user with no migration.
+export const KeybindingsSchema = z.object({
+  overrides: z.record(z.string(), z.string()).default(() => ({})),
+}).default(() => ({ overrides: {} }))
+export type Keybindings = z.infer<typeof KeybindingsSchema>
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
   notifications: NotificationsSchema.default(defaultNotifications),
@@ -180,6 +189,7 @@ export const SettingsSchema = z.object({
   terminal: TerminalSchema,
   // Id of the external app chosen in the "打开位置" dropdown (see shared/openers catalog). '' = none yet.
   defaultOpenerId: z.string().catch('').default(''),
+  keybindings: KeybindingsSchema,
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -197,6 +207,7 @@ export const defaultSettings = (): Settings => ({
   pluginCreds: {},
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
   defaultOpenerId: '',
+  keybindings: { overrides: {} },
 })
 
 export const ProjectSchema = z.object({

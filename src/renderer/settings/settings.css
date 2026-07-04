@@ -393,3 +393,25 @@
 /* 宠物形象预览:点击缩略图放大时轻微漂浮,预览宠物在桌面上的浮动感 */
 .pet-preview-play { animation: pet-preview-float 3s ease-in-out infinite; }
 @keyframes pet-preview-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+
+/* ── 快捷键设置 (KeybindingsPane) ───────────────────────────────────────────── */
+.kb-pane .set-group-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.kb-pane .set-hint { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0; max-width: 560px; }
+.kb-pane .set-hint b { color: var(--fg); font-weight: 600; }
+.kb-reset-all { flex: none; font-size: 12px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); cursor: pointer; }
+.kb-reset-all:hover { border-color: var(--accent); color: var(--accent); }
+.kb-scope { font-size: 10.5px; font-weight: 600; margin-left: 8px; padding: 1px 7px; border-radius: 999px; background: var(--accent-dim); color: var(--accent); vertical-align: middle; }
+.kb-row { align-items: center; }
+.kb-controls { display: flex; align-items: center; gap: 8px; flex: none; }
+.kb-key {
+  min-width: 96px; text-align: center; font-family: var(--mono); font-size: 12.5px;
+  padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--fg); cursor: pointer; transition: border-color .12s, box-shadow .12s;
+}
+.kb-key:hover { border-color: var(--accent); }
+.kb-key.rec { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); color: var(--accent); }
+.kb-key.bad { border-color: var(--err); color: var(--err); }
+.kb-mini { font-size: 11.5px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: transparent; color: var(--muted); cursor: pointer; }
+.kb-mini:hover { color: var(--fg); border-color: var(--fg); }
+.kb-warn { font-size: 11.5px; margin-top: 4px; color: var(--warn); }
+.kb-warn.err { color: var(--err); }
