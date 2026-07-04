@@ -1,18 +1,21 @@
 import type { Pet, PendingAction, ResolvePayload } from '@shared/types'
-import type { PopupActiveAgent } from './derivePopupData'
 import type { SimpleKind } from './deriveSimpleKind'
 import { PendingActionCard } from './PendingActionCard'
 
+export interface RunningWorkspace { name: string; path: string }
+
 interface PetSimplePanelProps {
   kind: SimpleKind
-  agents: PopupActiveAgent[]
+  // Which workspaces are currently executing — simpler + clearer than per-agent counts (a session
+  // can have several agents). One row per running workspace; click a row to jump to it.
+  runningWorkspaces: RunningWorkspace[]
   pending: PendingAction[]
   corner: Pet['corner']
   collapsed: boolean
   onToggleCollapse: () => void
   onResolve: (p: ResolvePayload) => void
-  // Jump to the app: an agent row / 「去 app 处理」 focuses the running workspace's main window.
-  onJump: () => void
+  // Jump to the app, optionally to a specific workspace (a row) or the running one (「去 app 处理」).
+  onJump: (path?: string) => void
 }
 
 const CHEVRON = (up: boolean) => (
@@ -28,10 +31,10 @@ const CHECK = (
 
 // The light, collapsible codex-style bubble for the SIMPLE interaction mode. Shows running agents /
 // a confirm-input request / a done ✓ — no dark popover, no workspace browser, no command box.
-export function PetSimplePanel({ kind, agents, pending, corner, collapsed, onToggleCollapse, onResolve, onJump }: PetSimplePanelProps) {
+export function PetSimplePanel({ kind, runningWorkspaces, pending, corner, collapsed, onToggleCollapse, onResolve, onJump }: PetSimplePanelProps) {
   if (kind === 'idle') return null
 
-  const title = kind === 'running' ? `${agents.length} 个代理在执行`
+  const title = kind === 'running' ? (runningWorkspaces.length > 0 ? `${runningWorkspaces.length} 个工作区在执行` : '执行中…')
     : kind === 'confirm' ? '需要确认'
       : kind === 'input' ? '需要输入'
         : '完成'
@@ -39,23 +42,27 @@ export function PetSimplePanel({ kind, agents, pending, corner, collapsed, onTog
   return (
     <div className="pet-bubble-wrap" data-corner={corner}>
       <div className={`pet-simple${collapsed ? ' collapsed' : ''}`} data-kind={kind}>
-        <div className="ps-head">
+        <div className="ps-head" onClick={collapsed ? onToggleCollapse : undefined}>
           {kind === 'done' && <span className="ps-check" aria-hidden="true">{CHECK}</span>}
           <span className="ps-title">{title}</span>
-          <button className="ps-collapse" aria-label={collapsed ? '展开' : '折叠'} title={collapsed ? '展开' : '折叠'} onClick={onToggleCollapse}>
+          <button
+            className="ps-collapse"
+            aria-label={collapsed ? '展开' : '折叠'}
+            title={collapsed ? '展开' : '折叠'}
+            onClick={e => { e.stopPropagation(); onToggleCollapse() }}
+          >
             {CHEVRON(!collapsed)}
           </button>
         </div>
 
         {!collapsed && kind === 'running' && (
           <div className="ps-body">
-            {agents.length === 0
+            {runningWorkspaces.length === 0
               ? <div className="ps-empty">正在准备…</div>
-              : agents.map((a, i) => (
-                <button key={`${a.name}-${i}`} className="ps-agent" onClick={onJump} title={`跳到 ${a.name}`}>
+              : runningWorkspaces.map((w, i) => (
+                <button key={`${w.path}-${i}`} className="ps-agent" onClick={() => onJump(w.path)} title={`跳到 ${w.name}`}>
                   <span className="ps-dot" aria-hidden="true" />
-                  <span className="ps-name">{a.name}</span>
-                  <span className="ps-stage">{a.stage || a.role}</span>
+                  <span className="ps-name">{w.name}</span>
                 </button>
               ))}
           </div>
@@ -64,7 +71,7 @@ export function PetSimplePanel({ kind, agents, pending, corner, collapsed, onTog
         {!collapsed && (kind === 'confirm' || kind === 'input') && (
           <div className="ps-body">
             {pending.map(p => <PendingActionCard key={p.id} action={p} onResolve={onResolve} />)}
-            <button className="ps-jump" onClick={onJump}>去 app 处理 →</button>
+            <button className="ps-jump" onClick={() => onJump()}>去 app 处理 →</button>
           </div>
         )}
 

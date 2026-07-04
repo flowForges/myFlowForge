@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { BUILTIN_PROVIDERS, BUILTIN_IDS, getBuiltinProvider } from './providerCatalog'
 
 describe('BUILTIN_PROVIDERS catalog', () => {
-  it('has exactly the 5 expected ids in order', () => {
-    expect(BUILTIN_IDS).toEqual(['claude', 'codex', 'gemini', 'qoder', 'cursor'])
+  it('has exactly the 6 expected ids in order', () => {
+    expect(BUILTIN_IDS).toEqual(['claude', 'codex', 'gemini', 'qoder', 'cursor', 'opencode'])
   })
 
   it('every entry has non-empty metadata fields', () => {
@@ -14,7 +14,8 @@ describe('BUILTIN_PROVIDERS catalog', () => {
       expect(p.glyph, `${p.id}.glyph`).toBeTruthy()
       expect(p.brandBg, `${p.id}.brandBg`).toBeTruthy()
       expect(p.brandColor, `${p.id}.brandColor`).toBeTruthy()
-      expect(p.defaultModels.length, `${p.id}.defaultModels`).toBeGreaterThan(0)
+      // opencode is a multi-provider gateway — models are dynamic (opencode models), no static defaults.
+      if (p.id !== 'opencode') expect(p.defaultModels.length, `${p.id}.defaultModels`).toBeGreaterThan(0)
     }
   })
 

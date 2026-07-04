@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Settings, Appearance, Pet, Terminal, CloseAction, AppIcon } from '@shared/types'
+import type { Settings, Appearance, Pet, Terminal, CloseAction, AppIcon, Notifications } from '@shared/types'
 import { DEFAULT_BUILTIN_PET_ID, builtinPets } from '@shared/builtinPets'
 
 const DEFAULTS: Settings = {
   appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium' },
+  notifications: { enabled: true, confirm: true, input: true, done: true },
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
   termProxy: '',
@@ -15,10 +16,12 @@ const DEFAULTS: Settings = {
   lastActiveWorkspace: '',
   pluginCreds: {},
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
+  defaultOpenerId: '',
 }
 
 export interface SettingsUpdate {
   appearance?: Partial<Appearance>
+  notifications?: Partial<Notifications>
   closeAction?: CloseAction
   appIcon?: Partial<AppIcon>
   termProxy?: string
@@ -27,11 +30,13 @@ export interface SettingsUpdate {
   heartbeat?: Settings['heartbeat']
   terminal?: Partial<Terminal>
   lastActiveWorkspace?: string
+  defaultOpenerId?: string
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
   return {
     appearance: { ...base.appearance, ...(partial.appearance ?? {}) },
+    notifications: { ...base.notifications, ...(partial.notifications ?? {}) },
     closeAction: partial.closeAction ?? base.closeAction,
     appIcon: { ...base.appIcon, ...(partial.appIcon ?? {}) },
     termProxy: partial.termProxy ?? base.termProxy,
@@ -47,6 +52,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     pluginCreds: (partial as Partial<Settings>).pluginCreds ?? base.pluginCreds,
     terminal: { ...base.terminal, ...(partial.terminal ?? {}) },
     lastActiveWorkspace: partial.lastActiveWorkspace ?? base.lastActiveWorkspace,
+    defaultOpenerId: partial.defaultOpenerId ?? base.defaultOpenerId,
   }
 }
 

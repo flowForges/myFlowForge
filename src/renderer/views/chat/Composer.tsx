@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
+import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -68,9 +69,11 @@ interface Props {
   /** 受控选中态：提供时 Composer 以它为准并通过 onSelectionChange 上报变化（概览跟随）。 */
   selection?: { agentId: string; modelId: string }
   onSelectionChange?: (s: { agentId: string; modelId: string }) => void
+  /** 本机扫描到的该 provider 的自定义命令/prompt + skills(经 IPC),与 Forge 内置命令一起进 "/" 菜单。 */
+  dynamicCommands?: MenuCommand[]
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, onSend, onPaste, seedText, selection, onSelectionChange }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands }: Props) {
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [localAgentId, setLocalAgentId] = useState<string>('')
@@ -81,10 +84,15 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const setAgentId = (id: string) => { if (controlled) onSelectionChange?.({ agentId: id, modelId }); else setLocalAgentId(id) }
   const setModelId = (id: string) => { if (controlled) onSelectionChange?.({ agentId, modelId: id }); else setLocalModelId(id) }
   const [openMenu, setOpenMenu] = useState<'agent' | 'ver' | null>(null)
+  // Slash-command menu: shown while typing a "/token" (before any space). slashSel = highlighted row;
+  // slashDismissed lets Esc close it until the query changes.
+  const [slashSel, setSlashSel] = useState(0)
+  const [slashDismissed, setSlashDismissed] = useState(false)
   const [customModelMode, setCustomModelMode] = useState(false)
   const [customModelInput, setCustomModelInput] = useState('')
   const [expanded, setExpanded] = useState(false)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const slashPopRef = useRef<HTMLDivElement>(null)
 
   // Only installed providers are selectable (an uninstalled CLI can't run).
   const installedProviders = useMemo(() => providers.filter(p => p.installed), [providers])
@@ -178,6 +186,24 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     if (ta) { if (expanded) autosize(); else ta.style.height = 'auto' }
   }
 
+  // Slash-command dropdown (derived each render). Only while typing a "/token" and not dismissed.
+  const slashCmds = (!disabled && !readOnly && !archived && isSlashQuery(text) && !slashDismissed)
+    ? mergeCommands(agentId, text, dynamicCommands ?? [])
+    : []
+  const showSlash = slashCmds.length > 0
+  const slashActive = showSlash ? Math.min(slashSel, slashCmds.length - 1) : 0
+  function chooseSlash(c: MenuCommand) {
+    setText(c.template)
+    setSlashDismissed(true)
+    const ta = taRef.current
+    if (ta) { ta.focus(); requestAnimationFrame(autosize) }
+  }
+  // Keep the highlighted slash row in view as ↑/↓ moves past the visible window.
+  useEffect(() => {
+    if (!showSlash) return
+    try { slashPopRef.current?.querySelector('.slash-item.on')?.scrollIntoView({ block: 'nearest' }) } catch { /* jsdom / unsupported */ }
+  }, [slashActive, showSlash])
+
   async function pickFiles() {
     const a = await window.forge.openFiles()
     if (a && a.length) setAttachments(prev => [...prev, ...a])
@@ -221,6 +247,29 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             </span>
           ))}
         </div>
+        {showSlash && (
+          <div className="slash-pop" role="listbox" aria-label="斜杠命令" ref={slashPopRef}>
+            <div className="slash-hd">命令 · {agent?.displayName ?? agentId}</div>
+            {slashCmds.map((c, i) => (
+              <button
+                key={c.cmd}
+                type="button"
+                role="option"
+                aria-selected={i === slashActive}
+                className={'slash-item' + (i === slashActive ? ' on' : '')}
+                onMouseEnter={() => setSlashSel(i)}
+                onMouseDown={e => { e.preventDefault(); chooseSlash(c) }}
+              >
+                <span className="slash-cmd">{c.cmd}</span>
+                <span className="slash-title">
+                  {c.title}
+                  {c.kind !== 'forge' && <span className="slash-tag">{c.kind === 'skill' ? '技能' : '本机'}</span>}
+                </span>
+                <span className="slash-desc">{c.desc || '本机自定义命令'}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
           ref={taRef}
           id="composerInput"
@@ -228,9 +277,23 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           placeholder={archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴文件 / 截图'}
           value={text}
           disabled={disabled || readOnly}
-          onChange={e => { setText(e.target.value); autosize() }}
+          onChange={e => {
+            const v = e.target.value
+            setText(v); setSlashSel(0)
+            if (!isSlashQuery(v)) setSlashDismissed(false)   // reset so a fresh "/" re-opens the menu
+            autosize()
+          }}
           onPaste={handlePaste}
           onKeyDown={e => {
+            // Slash menu owns navigation keys while open.
+            if (showSlash) {
+              if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSel(s => Math.min(s + 1, slashCmds.length - 1)); return }
+              if (e.key === 'ArrowUp') { e.preventDefault(); setSlashSel(s => Math.max(s - 1, 0)); return }
+              if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); return }
+              if ((e.key === 'Enter' || e.key === 'Tab') && !e.nativeEvent.isComposing && !e.shiftKey) {
+                e.preventDefault(); chooseSlash(slashCmds[slashActive]); return
+              }
+            }
             if (e.key === 'Escape' && running) { e.preventDefault(); onStop?.(); return }
             if (e.key !== 'Enter') return
             // Never send mid-IME-composition (Chinese/Japanese/etc.) — that Enter just

@@ -8,7 +8,8 @@ import { buildContinuationPreamble } from './continuation'
 import { distillSession, promoteToWorkspace, type DistillDeps } from './memory/distiller'
 import { distillModelFor } from './memory/distillModel'
 import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD } from './memory/tokenEstimate'
-import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext } from '../agents/contextMeta'
+import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext, mentionedSkills } from '../agents/contextMeta'
+import { readInstalledSkills } from '../skills/installedSkills'
 import { getSession } from './sessionStore'
 import { providerSupportsResume } from '../agents/resumeSupport'
 
@@ -28,6 +29,14 @@ function mkId(prefix: string) { return `${prefix}-${Date.now()}-${++seq}` }
 function now() { return new Date().toISOString() }
 
 export function history(wsPath: string, sessionId: string): ChatMessage[] { return readMessages(wsPath, sessionId) }
+
+// Installed skills (incl. home/plugin, e.g. superpowers) cached for the session — used to flag skills
+// the agent names in its reply. Skills change rarely, so a one-time scan is fine.
+let _skillsCache: { name: string; path: string }[] | null = null
+function cachedInstalledSkills(): { name: string; path: string }[] {
+  if (!_skillsCache) _skillsCache = readInstalledSkills(undefined, true).map(s => ({ name: s.name, path: s.path }))
+  return _skillsCache
+}
 
 export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<ChatMessage> {
   const { provider, env, emit } = deps
@@ -86,6 +95,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     void promoteToWorkspace(ws, sid, deps)
   }
   const finishOk = (elapsed?: number): ChatMessage => {
+    // Fold in skills the agent explicitly NAMED in its reply (home/plugin skills the workspace scan +
+    // path-regex miss, e.g. superpowers/brainstorming) so the context panel reflects what it used.
+    context = mergeAgentContext(context, { skills: mentionedSkills(text + '\n' + think, cachedInstalledSkills()), rules: [], mcps: [] })
     // Scan the full assistant text for a forge:run fence: strip it from the displayed text and,
     // if a valid task was found, trigger the workspace's configured workflow run.
     const trigger: { task: string | null } = { task: null }
@@ -133,6 +145,10 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
   if (provider.chat) {
     const sessionId = nativeResumeId ?? readSession(ws, sid, payload.agent)
     return new Promise<ChatMessage>((resolve) => {
+      // Guard: a provider may fire BOTH onError and onDone at end-of-turn (e.g. an API error with no
+      // assistant text). Only the first settles — otherwise finishOk (empty text) overwrites
+      // finishErr's error bubble, leaving a blank reply.
+      let settled = false
       const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments }, {
         onSession: (id) => writeSession(ws, sid, payload.agent, id),
         onAssistantDelta: (t) => { text += t; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
@@ -145,8 +161,8 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         },
         onConfirm: deps.confirm,
         onUsage: (u) => { lastUsage = u },
-        onDone: (r) => resolve(finishOk(r.elapsed)),
-        onError: (err) => resolve(aborted ? finishAborted() : finishErr(err))
+        onDone: (r) => { if (settled) return; settled = true; resolve(finishOk(r.elapsed)) },
+        onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
       }, env)
       deps.onSessionStart?.(wrapSession(session))
     })

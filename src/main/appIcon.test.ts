@@ -108,7 +108,13 @@ describe('appIcon assets', () => {
       expect(roundedShoulderAlphas(join(process.cwd(), 'build', 'app-icons', opt.filename))).toEqual([0, 0, 0])
     }
     expect(cornerAlphas(join(process.cwd(), 'build', 'icon.png'))).toEqual([0, 0, 0, 0])
-    expect(roundedShoulderAlphas(join(process.cwd(), 'build', 'icon.png'))).toEqual([0, 0, 0])
+  })
+
+  it('ships a full-tile system app icon for Finder and DMG windows', () => {
+    const png = pngAlphaReader(join(process.cwd(), 'build', 'icon.png'))
+    expect(png.alphaAt(Math.round(png.width / 2), 5)).toBe(255)
+    expect(png.alphaAt(5, Math.round(png.height / 2))).toBe(255)
+    expect(png.alphaAt(Math.round(png.width / 2), Math.round(png.height / 2))).toBe(255)
   })
 
   it('ships a compact macOS menu bar template icon', () => {

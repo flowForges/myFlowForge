@@ -10,8 +10,13 @@
 }
 [data-theme="light"][data-glass="on"] .window {
   background: oklch(99% .006 250 / .34);
-  box-shadow: var(--shadow), 0 0 0 1px oklch(0% 0 0 / .1), inset 0 1px 0 oklch(100% 0 0 / .6);
+  box-shadow: var(--shadow), 0 0 0 1px oklch(0% 0 0 / .1), inset 0 1px 0 oklch(100% 0 0 / .28);
 }
+/* Retune hairline tokens per glass theme so every 1px seam (titlebar/statusbar edges, cards,
+   dividers, buttons) is a subtle low-contrast line instead of a bright-white (light) or hard-dark
+   (dark) slash. Light → faint dark hairline; dark → faint white hairline (the frosted-edge look). */
+[data-theme="light"][data-glass="on"] { --border: oklch(32% .02 260 / .11); --border-2: oklch(32% .02 260 / .17); }
+[data-theme="dark"][data-glass="on"]  { --border: oklch(100% 0 0 / .08);   --border-2: oklch(100% 0 0 / .13); }
 /* glass owns the chrome transparency when on (the data-vibrancy CSS system is :not-gated out in
    global.css) so the real desktop vibrancy material shows through the whole window. */
 [data-glass="on"], [data-glass="on"] body, [data-glass="on"] #root { background: transparent; }
@@ -19,19 +24,30 @@
    cutting between the sidebar / chat / inspector on glass. */
 [data-glass="on"] .sidebar { border-right-color: oklch(100% 0 0 / .08); }
 [data-glass="on"] .inspector { border-left-color: oklch(100% 0 0 / .08); }
-[data-theme="light"][data-glass="on"] .sidebar { border-right-color: oklch(0% 0 0 / .11); }
-[data-theme="light"][data-glass="on"] .inspector { border-left-color: oklch(0% 0 0 / .1); }
+[data-theme="light"][data-glass="on"] .sidebar { border-right-color: oklch(0% 0 0 / .06); }
+[data-theme="light"][data-glass="on"] .inspector { border-left-color: oklch(0% 0 0 / .055); }
+/* The 5px drag-to-resize handle sits transparent between the frosted panels, so on glass it
+   showed the dark base through as a thick grey band on both sides of the chat. Tint it to match
+   the panels so it blends — the actual seam is just the faint sidebar/inspector hairline. */
+[data-glass="on"] .resize-handle { background: oklch(52% .028 262 / .3); }
+[data-theme="light"][data-glass="on"] .resize-handle { background: oklch(100% 0 0 / .38); }
 /* 内层一并半透明 —— 标题栏 / 侧栏 / 底栏 / 右侧检查器 / 内容区,毛玻璃覆盖整窗而非某一块 */
 [data-glass="on"] .titlebar,
 [data-glass="on"] .statusbar { background: oklch(55% .03 262 / .08); }
-[data-glass="on"] .sidebar   { background: oklch(40% .04 262 / .14); }
-[data-glass="on"] .inspector { background: oklch(40% .04 262 / .12); }
+/* dark sidebar/inspector: raised from 40%/.14 — that read as a near-black slab next to the
+   wallpaper-lit chat. Lighter + slightly higher alpha keeps the frost but not a black hole. */
+[data-glass="on"] .sidebar   { background: oklch(54% .022 262 / .38); }
+[data-glass="on"] .inspector { background: oklch(54% .022 262 / .32); }
 [data-glass="on"] #view-home,
 [data-glass="on"] .chat       { background: transparent; }
 [data-theme="light"][data-glass="on"] .titlebar,
 [data-theme="light"][data-glass="on"] .statusbar { background: oklch(100% 0 0 / .3); }
 [data-theme="light"][data-glass="on"] .sidebar   { background: oklch(100% 0 0 / .4); }
 [data-theme="light"][data-glass="on"] .inspector { background: oklch(100% 0 0 / .38); }
+/* The chat column had no light-glass tint, so it stayed fully transparent and read as a dark
+   hole. Tint it to nearly match the sidebar/inspector (.4/.38) so the three columns are tonally
+   even — otherwise the tonal step at each seam reads as a thick dark divider. */
+[data-theme="light"][data-glass="on"] .chat { background: oklch(100% 0 0 / .37); }
 /* 内部各面板(检查器 tab 条、编排卡、变更统计、文件树、输入框)只做轻染,不再各自 backdrop-filter
    —— 整窗只有 .window 一层模糊,内层加自己的 blur 会被窗体的 isolation 隔断,反而再糊一遍变实色 */
 [data-glass="on"] .insp-tabs,
@@ -41,6 +57,7 @@
 [data-glass="on"] .agent-node,
 [data-glass="on"] .agent-card,
 [data-glass="on"] .chg-stat,
+[data-glass="on"] .ctx-item,
 [data-glass="on"] .composer { background: oklch(74% .03 262 / .10); }
 [data-theme="light"][data-glass="on"] .insp-tabs,
 [data-theme="light"][data-glass="on"] .insp-tab .badge,
@@ -49,6 +66,7 @@
 [data-theme="light"][data-glass="on"] .agent-node,
 [data-theme="light"][data-glass="on"] .agent-card,
 [data-theme="light"][data-glass="on"] .chg-stat,
+[data-theme="light"][data-glass="on"] .ctx-item,
 [data-theme="light"][data-glass="on"] .composer { background: oklch(100% 0 0 / .16); }
 
 /* 标题栏「首页/工作区」分段控件:外壳与选中态都轻染,去掉选中按钮的深色投影,
@@ -180,6 +198,17 @@
 [data-theme="light"][data-glass="on"] .cr-proj .pj-branch { background: oklch(100% 0 0 / .55); }
 
 [data-glass="on"] .tb-edit-ws { background: oklch(74% .03 262 / .1); }
+
+/* small opaque-surface controls (home 打开本地目录 / IDs / message copy / file-tree name·content
+   toggle) rendered as solid white (light) or black (dark) blocks on glass — make them translucent. */
+[data-glass="on"] .home-cta.ghost,
+[data-glass="on"] .sess-ids-btn,
+[data-glass="on"] .mm-copy,
+[data-glass="on"] .search-mode { background: oklch(62% .03 262 / .14); }
+[data-theme="light"][data-glass="on"] .home-cta.ghost,
+[data-theme="light"][data-glass="on"] .sess-ids-btn,
+[data-theme="light"][data-glass="on"] .mm-copy,
+[data-theme="light"][data-glass="on"] .search-mode { background: oklch(100% 0 0 / .38); }
 
 /* ---- 首页卡片:默认用不透明的 --surface,毛玻璃下必须一并轻染,否则渲染成刺眼的纯白实心块 ---- */
 [data-glass="on"] .home-stats,

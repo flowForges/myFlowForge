@@ -49,4 +49,24 @@ describe('native resume in sendTurn', () => {
     )
     expect(captured.sessionId).toBeUndefined()
   })
+
+  it('provider firing onError THEN onDone (error, no text) → error wins, not a blank reply', async () => {
+    const f = continueFrom(dir, { source: 'claude', externalId: 'x', title: 't', filePaths: [] })
+    const sid = f.activeSessionId
+    // opencode 401-style: an error event with no assistant text, and the run's done callback also fires.
+    const provider = {
+      chat: (_task: any, cb: any) => {
+        cb.onError(new Error('The API key status is not active'))
+        cb.onDone({ elapsed: 1 })
+        return { done: Promise.resolve(), cancel: () => {} }
+      },
+      run: () => ({ done: Promise.resolve(), cancel: () => {} }),
+    } as any
+    const msg = await sendTurn(
+      { workspacePath: dir, sessionId: sid, agent: 'opencode', agentLabel: 'opencode', model: 'p/m', text: 'hi', attachments: [] },
+      { provider, env: process.env, emit: () => {} } as any,
+    )
+    expect(msg.text).toContain('The API key status is not active')
+    expect(msg.text).not.toBe('')
+  })
 })

@@ -38,4 +38,10 @@ describe('derivePetState', () => {
   it('defaults chat activity to idle when omitted (back-compat)', () => {
     expect(derivePetState(null, [])).toBe('idle')
   })
+  it('shows done briefly after a chat turn finishes (justDone), even without a run', () => {
+    expect(derivePetState(null, [], { busy: false, confirmPending: false, justDone: true })).toBe('done')
+  })
+  it('keeps working (not done) while still streaming even if justDone lingers', () => {
+    expect(derivePetState(null, [], { busy: true, confirmPending: false, justDone: true })).toBe('working')
+  })
 })

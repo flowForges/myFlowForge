@@ -22,12 +22,18 @@ import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage } from '../chat/chatStore'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, continueFrom } from '../chat/sessionStore'
 import { agentSessionsForId } from '../chat/agentSessions'
-import type { CreateWorkspaceOpts, ResolvePayload, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage } from '@shared/types'
+import type { CreateWorkspaceOpts, ResolvePayload, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, EngineEvent } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
 import type { StartRunOpts } from '../orchestrator/orchestrator'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti } from '../git/changes'
+import { execFile } from 'node:child_process'
+import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile } from '../openers/detect'
+import { buildOpenCommand } from '../openers/buildOpenCommand'
+import { writeJsonAtomic } from '../util/atomicWrite'
+import { providerCommands } from '../commands/providerCommands'
+import type { DetectedOpener } from '../../shared/openers'
 import { readDiff, readFile } from '../git/diff'
 import { readTree } from '../fs/fileTree'
 import { searchContent } from '../fs/contentSearch'
@@ -67,9 +73,11 @@ import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
 import type { DiscoveredSession } from '@shared/types'
 
-export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void) {
+export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void, onEngineEvent?: (e: EngineEvent) => void) {
   const bus = new EventBus()
   bus.subscribe(e => broadcast(CH.engineEvent, e))
+  // External sink (main process wires OS notifications here — it owns the window for focus/routing).
+  if (onEngineEvent) bus.subscribe(onEngineEvent)
   const narrator = new NarratorService({
     providers,
     env: () => buildAgentEnv({ proxy: readSettings().termProxy }),
@@ -212,6 +220,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }
   })
   ipcMain.handle(CH.skillsList, () => readInstalledSkills())
+  ipcMain.handle(CH.commandsList, (_e, providerId: string, wsPath?: string) => providerCommands(providerId, wsPath))
   ipcMain.handle(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
     const knownProjects = readProjects().projects
     const proxy = readSettings().termProxy
@@ -646,6 +655,37 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.revealPath, async (_e, path: string) => {
     const err = await shell.openPath(path)   // '' on success; non-empty error string otherwise
     return err ? { ok: false as const, error: err } : { ok: true as const }
+  })
+
+  // ── 用外部软件打开(「打开位置」下拉) ─────────────────────────────────────────
+  // Extract an app's real icon → dataURL for the dropdown (best-effort; falls back to a glyph).
+  const openerIcon = async (appPath: string): Promise<string | undefined> => {
+    try { const img = await app.getFileIcon(appPath, { size: 'normal' }); return img.isEmpty() ? undefined : img.toDataURL() }
+    catch { return undefined }
+  }
+  const runOpen = (args: string[]) => new Promise<void>((res, rej) => {
+    execFile('open', args, (err) => (err ? rej(err) : res()))
+  })
+  let openersCache: DetectedOpener[] = []
+  ipcMain.handle(CH.openersDetect, async (_e, refresh?: boolean) => {
+    openersCache = await detectOpeners(openerIcon, !!refresh)
+    return openersCache
+  })
+  ipcMain.handle(CH.openersOpen, async (_e, arg: { openerId: string; folder: string; file?: string }) => {
+    let op = resolveOpener(arg.openerId, openersCache)
+    // Cold cache (renderer never called detect this session) — populate once, then retry.
+    if (!op) { openersCache = await detectOpeners(openerIcon, false); op = resolveOpener(arg.openerId, openersCache) }
+    if (!op) return { ok: false as const, error: '未找到该软件' }
+    // Lazy refresh: the app was deleted since detection — drop it from the cache + persist, and tell
+    // the renderer to remove it too (removedId), instead of forcing a full rescan.
+    if (!existsSync(op.appPath)) {
+      openersCache = withoutOpener(openersCache, op.id)
+      try { writeJsonAtomic(openersCacheFile(), { apps: openersCache }) } catch { /* best-effort */ }
+      return { ok: false as const, error: `${op.name} 已不存在,已从列表移除`, removedId: op.id }
+    }
+    const argvs = buildOpenCommand(op.openMode, op.appPath, { folder: arg.folder, file: arg.file })
+    try { for (const args of argvs) await runOpen(args); return { ok: true as const } }
+    catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
   ipcMain.handle(CH.workspacesOpenDir, async () => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })

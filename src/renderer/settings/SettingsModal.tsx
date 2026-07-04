@@ -16,7 +16,7 @@ interface NavEntry {
 const NAV: NavEntry[] = [
   {
     key: 'appearance',
-    label: '外观',
+    label: '外观和通知',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <circle cx="12" cy="12" r="5" />

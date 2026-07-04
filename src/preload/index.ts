@@ -184,6 +184,9 @@ const api = {
   deleteWorkspace: (path: string) => ipcRenderer.invoke(CH.workspaceDelete, path),
   removeWorkspaceFromList: (path: string) => ipcRenderer.invoke(CH.workspaceRemove, path),
   revealPath: (path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(CH.revealPath, path),
+  detectOpeners: (refresh?: boolean): Promise<import('@shared/openers').DetectedOpener[]> => ipcRenderer.invoke(CH.openersDetect, refresh),
+  openWith: (arg: { openerId: string; folder: string; file?: string }): Promise<{ ok: boolean; error?: string; removedId?: string }> => ipcRenderer.invoke(CH.openersOpen, arg),
+  commandsList: (providerId: string, wsPath?: string): Promise<{ cmd: string; title: string; desc: string; template: string; kind: 'command' | 'skill' }[]> => ipcRenderer.invoke(CH.commandsList, providerId, wsPath),
   onWorkspacesChanged: (cb: () => void) => {
     const h = () => cb()
     ipcRenderer.on(CH.workspacesChanged, h)

@@ -3,7 +3,9 @@
    ============================================================ */
 .settings-overlay {
   position: absolute; inset: 0; z-index: 100; display: none;
-  background: oklch(8% 0.01 250 / 0.55); backdrop-filter: blur(3px);
+  /* 遮罩更实(0.55→0.82):窗口透明时,浅遮罩会透出半透的 app 内容,让设置区看着比主体更「透/雾」。
+     加深遮罩把背后 app 挡住,设置弹层聚焦、显得更实。 */
+  background: oklch(8% 0.01 250 / 0.82); backdrop-filter: blur(6px);
   align-items: center; justify-content: center; padding: 40px;
 }
 .settings-overlay.on { display: flex; animation: fade .18s; }
@@ -149,7 +151,9 @@
 .menu-glyph svg { width: 26px; height: 26px; }
 
 /* 2D-1 appearance effects (theme handled by tokens.css [data-theme]) */
-[data-vibrancy="off"] .sidebar { background: var(--bg); backdrop-filter: none; }
+/* Flat-mode solid sidebar — must exclude glass, else it overrides glass.css's translucent
+   sidebar (same specificity, later source) and forces an opaque dark slab when glass is on. */
+[data-vibrancy="off"]:not([data-glass="on"]) .sidebar { background: var(--bg); backdrop-filter: none; }
 [data-density="compact"] .set-row { padding-top: 8px; padding-bottom: 8px; }
 [data-density="compact"] .ws-item { padding-top: 6px; padding-bottom: 6px; }
 [data-font="small"] { font-size: 13px; }

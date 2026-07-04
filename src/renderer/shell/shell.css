@@ -168,6 +168,11 @@
 /* 本机导入工作区：名字旁的小图标（替代突兀的「导入」徽章） */
 .ws-imp-ico { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--faint); }
 .ws-imp-ico svg { width: 12px; height: 12px; }
+/* Unread dot — a session finished while unviewed. Accent-coloured (never red) + a soft halo;
+   clears on view. Sits after the workspace name (list collapsed) or the session name (expanded). */
+.ws-unread { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim); }
+.ws-sess .ws-unread { width: 6px; height: 6px; }
 .ws-sub {
   display: block; max-width: 100%; font-size: 11px; line-height: 1.35; color: var(--faint);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -271,6 +276,42 @@
 .ws-menu-item.danger { color: var(--del); }
 .ws-menu-item.danger .wm-ico { color: var(--del); }
 .ws-menu-item.danger:hover { background: oklch(68% .18 25 / .14); color: var(--del); }
+
+/* ---- 「打开位置」: split button(主按钮=用默认软件打开 · caret=选择软件) + 下拉 ---- */
+/* 全部走主题变量,自适应浅/深色与透明/磨砂,风格对齐 .tb-edit-ws / .ws-menu-pop。 */
+/* 与旁边的「首页/工作区」分段控件(.tb-seg)同款:柔和 surface 底 + 内部段圆角,无边框实线;
+   hover/展开时段提亮到 --bg + 浅阴影(如 .tb-seg .on)。浅/深色都自然融入。 */
+.open-loc {
+  position: relative; display: inline-flex; align-items: center;
+  background: var(--surface); border-radius: 8px; padding: 2px; gap: 1px;
+}
+.open-loc-main, .open-loc-caret {
+  height: 24px; display: inline-flex; align-items: center; gap: 6px;
+  border: none; background: transparent; color: var(--fg-2);
+  font-size: 12px; font-weight: 500; padding: 0 9px; border-radius: 6px; transition: .14s;
+}
+.open-loc-main { max-width: 180px; padding-right: 6px; }
+.open-loc-caret { width: 20px; padding: 0; justify-content: center; color: var(--muted); }
+.open-loc-caret svg { width: 12px; height: 12px; }
+.open-loc-main:hover, .open-loc-caret:hover,
+.open-loc.open .open-loc-caret { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.1); }
+.open-loc-main:disabled { opacity: .5; cursor: default; }
+.open-loc-main:disabled:hover { background: transparent; color: var(--fg-2); box-shadow: none; }
+.open-loc .ol-ico { flex: 0 0 15px; width: 15px; height: 15px; border-radius: 4px; object-fit: contain; }
+.open-loc-main .ol-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.open-loc-pop {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 80; min-width: 190px; max-height: 60vh; overflow-y: auto;
+  padding: 5px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border-2);
+  box-shadow: var(--shadow, 0 10px 30px rgba(0,0,0,.11)); display: flex; flex-direction: column; gap: 1px;
+  animation: popIn .13s ease;
+}
+.ol-item {
+  display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border-radius: 7px;
+  font-size: 12px; color: var(--fg-2); text-align: left; cursor: pointer; transition: background .12s, color .12s;
+}
+.ol-item:hover { background: var(--surface-2); color: var(--fg); }
+.ol-item.on { color: var(--accent); background: var(--accent-dim); }
+.ol-empty { padding: 10px 12px; font-size: 12px; color: var(--faint); text-align: center; }
 
 /* ---- 归档工作区折叠坞(底部,默认收起,悬停/点击展开)---- */
 .ws-archive-dock {

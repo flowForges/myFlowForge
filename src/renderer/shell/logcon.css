@@ -65,5 +65,9 @@
 .lg-line.hide { display: none; }
 
 /* ── Glassmorphism overrides ── */
-[data-glass="on"] .logcon { background: oklch(36% .04 262 / .5); }
-[data-theme="light"][data-glass="on"] .logcon { background: oklch(100% 0 0 / .55); }
+/* The console overlays app content (chat), which the macOS window vibrancy does NOT blur — so a
+   plain tint reads as "see-through, not frosted". Give it its own backdrop blur like .notif-pop. */
+[data-glass="on"] .logcon { background: oklch(36% .04 262 / .5);
+  backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.6);
+  -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.6); }
+[data-theme="light"][data-glass="on"] .logcon { background: oklch(100% 0 0 / .6); }

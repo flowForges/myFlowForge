@@ -54,7 +54,7 @@ export function PetApp() {
   const [open, setOpen] = useState(false)
   const [interactionMode, setInteractionMode] = useState<Pet['interactionMode']>('simple')
   // Simple-mode bubble collapse (chevron). Reset to expanded when a confirm/input request needs attention.
-  const [simpleCollapsed, setSimpleCollapsed] = useState(false)
+  const [simpleCollapsed, setSimpleCollapsed] = useState(true)
   const [vdir, setVdir] = useState<'up' | 'down'>('up')
   // Sprite scale (user-resizable via the hover handle). scaleRef mirrors the state for the long-lived
   // pointer handlers; `resizing` keeps the handle visible + ignore-mouse off while dragging it.
@@ -259,7 +259,8 @@ export function PetApp() {
   useEffect(() => {
     if (simpleKind === 'confirm' || simpleKind === 'input') setSimpleCollapsed(false)
   }, [simpleKind])
-  const onSimpleJump = () => window.forge.petFocusWorkspace(run?.workspacePath ?? currentWs ?? '')
+  const onSimpleJump = (path?: string) => window.forge.petFocusWorkspace(path ?? run?.workspacePath ?? currentWs ?? '')
+  const runningWorkspaces = data.workspaces.filter(w => w.status === 'run').map(w => ({ name: w.name, path: w.path }))
 
   // The drag hook needs the live popup direction at drop time (the sprite sits at the window top in
   // 'down' mode), kept in a ref so the long-lived pointer handlers never read a stale value.
@@ -370,7 +371,7 @@ export function PetApp() {
       {simple ? (
         <PetSimplePanel
           kind={simpleKind}
-          agents={data.activeAgents}
+          runningWorkspaces={runningWorkspaces}
           pending={data.pending}
           corner={corner}
           collapsed={simpleCollapsed}

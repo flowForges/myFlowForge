@@ -1,6 +1,8 @@
 import './shell.css'
 import { NotificationPopover } from './NotificationPopover'
+import { OpenLocationMenu } from './OpenLocationMenu'
 import type { Notif } from './notifications'
+import type { OpenTarget } from '@shared/openers'
 
 export interface TitlebarProps {
   collapsed: boolean
@@ -19,6 +21,9 @@ export interface TitlebarProps {
   canEditWorkspace?: boolean
   onEditWorkspace?: () => void
   updateInfo?: import('@shared/types').UpdateInfo | null
+  openTarget?: OpenTarget | null
+  defaultOpenerId?: string
+  onSetDefaultOpener?: (id: string) => void
 }
 
 export function Titlebar({
@@ -37,6 +42,9 @@ export function Titlebar({
   canEditWorkspace,
   onEditWorkspace,
   updateInfo,
+  openTarget,
+  defaultOpenerId,
+  onSetDefaultOpener,
 }: TitlebarProps) {
   return (
     <div className="titlebar">
@@ -100,6 +108,15 @@ export function Titlebar({
           工作区
         </button>
       </div>
+
+      {/* 「打开位置」— 用外部软件打开当前工作区/文件(仅工作区视图) */}
+      {view === 'ws' && (
+        <OpenLocationMenu
+          target={openTarget ?? null}
+          defaultOpenerId={defaultOpenerId ?? ''}
+          onSetDefault={onSetDefaultOpener ?? (() => {})}
+        />
+      )}
 
       {/* Inspector toggle — hidden on home (no inspector there) */}
       {view !== 'home' && (

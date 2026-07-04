@@ -37,7 +37,7 @@ describe('AgentsPane BUILTINS from catalog', () => {
     for (const p of BUILTIN_PROVIDERS) {
       expect(await screen.findByText(p.displayName)).toBeInTheDocument()
     }
-    expect(BUILTIN_PROVIDERS).toHaveLength(5)
+    expect(BUILTIN_PROVIDERS).toHaveLength(6)
   })
 
   it('builtin rows display the catalog displayNames', async () => {

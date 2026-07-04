@@ -3,6 +3,7 @@ import type { AgentState, ChatSession } from '@shared/types'
 import { sessionBadge } from './sessionBadge'
 import { reorder } from './reorder'
 import { WsMenu, type WsMenuItem } from './WsMenu'
+import { workspaceHasUnread, isSessionUnread } from '../state/unread'
 import './shell.css'
 
 export interface WorkspaceItem {
@@ -51,7 +52,12 @@ export interface SidebarProps {
   expandedIds?: Set<string>
   sessionsByWs?: Record<string, ChatSession[]>
   onToggleExpand?: (id: string) => void
+  // Sessions that finished while unviewed — drives the unread dot (workspace-level when the session
+  // list is collapsed, per-session when expanded).
+  unread?: ReadonlySet<string>
 }
+
+const EMPTY_UNREAD: ReadonlySet<string> = new Set()
 
 const GRIP_ICON = (
   <svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="6" r="1.6" /><circle cx="15" cy="6" r="1.6" /><circle cx="9" cy="12" r="1.6" /><circle cx="15" cy="12" r="1.6" /><circle cx="9" cy="18" r="1.6" /><circle cx="15" cy="18" r="1.6" /></svg>
@@ -125,9 +131,10 @@ interface GroupSectionProps {
   expandedIds?: Set<string>
   sessionsByWs?: Record<string, ChatSession[]>
   onToggleExpand?: (id: string) => void
+  unread?: ReadonlySet<string>
 }
 
-function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSelect, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, sessions = [], activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand }: GroupSectionProps) {
+function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSelect, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, sessions = [], activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand, unread = EMPTY_UNREAD }: GroupSectionProps) {
   const [open, setOpen] = useState(true)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -194,6 +201,8 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                     <span className="ws-name-txt">{item.name}</span>
                     {item.imported && <span className="ws-imp-ico" title="本机导入的工作区">{IMPORT_ICON}</span>}
                     {running && <span className="ws-run-pill">运行中</span>}
+                    {/* unread dot at the workspace level, only while its session list is collapsed */}
+                    {!expandedIds?.has(item.id) && workspaceHasUnread(unread, item.id) && <span className="ws-unread" title="有已完成待查看的会话" aria-label="未读" />}
                   </span>
                   <span className="ws-sub">{item.sub}</span>
                 </span>
@@ -258,6 +267,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                           ) : (
                             <span className="ws-sess-name">{s.title}</span>
                           )}
+                          {isSessionUnread(unread, item.id, s.id) && <span className="ws-unread" title="有已完成待查看" aria-label="未读" />}
                           {(() => { const b = sessionBadge(s); return b.kind !== 'new'
                             ? <span className={`ws-sess-badge ${b.kind}`}>{b.label}</span> : null })()}
                           {multi && (
@@ -344,7 +354,7 @@ function ArchiveDock({ items, activeId, onSelect, onRestore, onDelete }: Archive
   )
 }
 
-export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand }: SidebarProps) {
+export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand, unread }: SidebarProps) {
   const sidebarStyle = (!collapsed && width !== undefined)
     ? { flex: `0 0 ${width}px`, width }
     : undefined
@@ -389,6 +399,7 @@ export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew,
             expandedIds={expandedIds}
             sessionsByWs={sessionsByWs}
             onToggleExpand={onToggleExpand}
+            unread={unread}
           />
         ))}
       </div>

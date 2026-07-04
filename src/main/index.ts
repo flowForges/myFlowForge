@@ -9,6 +9,9 @@ import { relocatePetToRegion, PET_EXPANDED, PET_BUBBLE, petCollapsedSize, petPop
 import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
 import { registerIpc } from './ipc/handlers'
+import { createNotifyBridge } from './notify/notifyBridge'
+import { showOsNotification } from './notify/osNotify'
+import { shouldNotify, buildNotification } from './notify/notifier'
 import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
 import { readSettings, writeSettings, readWorkspaceRegistry } from './config/store'
@@ -185,12 +188,12 @@ app.whenReady().then(() => {
   }
   wireMainClose(mainWin)
 
-  // Whole-window transparency via setOpacity — reliable + live. Only in the non-frosted mode: when 磨砂度
-  // (blurAmount) is on the window is transparent+vibrancy and setOpacity would dim the frosted material.
+  // Whole-window transparency via setOpacity — reliable + live, ALWAYS applied so the 窗口透明度 slider
+  // is honoured independently of 磨砂度. The two compose: opacity = whole-window see-through, vibrancy =
+  // frosted blur. windowOpacity=1 is a no-op, so a pure-frosted window (no transparency) is unaffected.
+  // (Previously frosted mode skipped setOpacity entirely, so any 磨砂度>0 silently killed 窗口透明度.)
   const applyWindowOpacity = (v: number | undefined) => {
     if (mainWin.isDestroyed()) return
-    const frosted = (() => { try { return (readSettings().appearance.blurAmount ?? 0) > 0 } catch { return false } })()
-    if (frosted) return
     try { mainWin.setOpacity(Math.min(1, Math.max(0.3, v ?? 1))) } catch { /* unsupported platform */ }
   }
   applyWindowOpacity(readSettings().appearance.windowOpacity)
@@ -375,7 +378,29 @@ app.whenReady().then(() => {
     relocatePetToFocus(BrowserWindow.getFocusedWindow())
   }
 
-  registerIpc(registry.broadcast, buildProviderRegistry(), onSettings)
+  // OS notifications: fire only when the main window is unfocused; clicking focuses the app and
+  // routes to the workspace (reuses the pet's navigateWorkspace path).
+  const isMainFocused = () => !!mainWinRef && !mainWinRef.isDestroyed() && mainWinRef.isFocused()
+  const routeAndFire = (n: ReturnType<typeof buildNotification>) => showOsNotification(n, () => {
+    if (!mainWinRef || mainWinRef.isDestroyed()) return
+    mainWinRef.show(); mainWinRef.focus()
+    if (n.route.workspacePath) mainWinRef.webContents.send(CH.navigateWorkspace, { path: n.route.workspacePath })
+  })
+  // confirm/input come off the engine bus (pending:add).
+  const notifyBridge = createNotifyBridge({ getCfg: () => readSettings().notifications, isFocused: isMainFocused, notify: routeAndFire })
+  // 'done' comes off the chat stream — a chat reply OR a workflow's done narration both emit a chat
+  // 'done', so one signal covers both without double-notifying. Sniff it as broadcasts pass through.
+  const notifyChatDone = (payload: any) => {
+    if (!payload || payload.type !== 'done' || !payload.workspacePath) return
+    if (!shouldNotify('done', readSettings().notifications, isMainFocused())) return
+    const wsName = readWorkspaceRegistry().find(w => w.path === payload.workspacePath)?.name ?? ''
+    routeAndFire(buildNotification({ type: 'done', workspaceName: wsName, workspacePath: payload.workspacePath, sessionId: payload.sessionId, text: '会话已回复,点击查看' }))
+  }
+  const broadcastWithNotify = (channel: string, payload: unknown) => {
+    registry.broadcast(channel, payload)
+    if (channel === CH.chatEvent) notifyChatDone(payload)
+  }
+  registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings, notifyBridge)
 
   // ── Plugin Scheduler ────────────────────────────────────────────────────────
   const scheduler = new PluginScheduler({

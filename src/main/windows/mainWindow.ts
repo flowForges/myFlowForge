@@ -33,9 +33,10 @@ export function createMainWindow(): BrowserWindow {
       : { backgroundColor: theme === 'dark' ? '#0b0b0d' : '#f4f5f7' }),
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: false }
   })
-  // Flat transparency via setOpacity only in the non-frosted mode — stacking it on a vibrancy window
-  // would dim the frosted material. Clamp defensively.
-  if (!vibrancy) { try { win.setOpacity(Math.min(1, Math.max(0.3, opacity))) } catch { /* platform without opacity support */ } }
+  // Apply 窗口透明度 always so it composes with 磨砂度 (opacity = whole-window see-through; vibrancy =
+  // frosted blur) rather than being cancelled by any 磨砂度>0. opacity=1 is a no-op, so pure-frosted
+  // windows are unaffected. Clamp defensively.
+  try { win.setOpacity(Math.min(1, Math.max(0.3, opacity))) } catch { /* platform without opacity support */ }
   win.once('ready-to-show', () => win.show())
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   else win.loadFile(join(__dirname, '../renderer/index.html'))

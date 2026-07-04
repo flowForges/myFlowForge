@@ -9,14 +9,15 @@ vi.mock('../config/store', () => ({ readAgentsConfig: () => agentsConfig }))
 beforeEach(() => { agentsConfig = { providers: [], custom: [] } })
 
 describe('provider registry', () => {
-  it('registers claude, codex, gemini, qoder and cursor built-ins keyed by their ids', () => {
+  it('registers claude, codex, gemini, qoder, cursor and opencode built-ins keyed by their ids', () => {
     const reg = buildProviderRegistry()
     expect(reg['claude'].displayName).toBe('Claude Code')
     expect(reg['codex'].displayName).toBe('Codex')
     expect(reg['gemini'].displayName).toBe('Gemini CLI')
     expect(reg['qoder'].displayName).toBe('Qoder')
     expect(reg['cursor'].displayName).toBe('Cursor Agent')
-    expect(Object.keys(reg)).toHaveLength(5)
+    expect(reg['opencode'].displayName).toBe('opencode')
+    expect(Object.keys(reg)).toHaveLength(6)
   })
 
   it('includes user-added custom agents alongside the built-ins', () => {
@@ -24,12 +25,14 @@ describe('provider registry', () => {
     const reg = buildProviderRegistry()
     expect(reg['mycli']).toBeDefined()
     expect(reg['mycli'].displayName).toBe('My CLI')
-    expect(Object.keys(reg)).toHaveLength(6)
+    expect(Object.keys(reg)).toHaveLength(7)
   })
 
   it('each builtin listModels() returns the catalog defaultModels (except dynamic codex)', async () => {
     const reg = buildProviderRegistry()
     for (const meta of BUILTIN_PROVIDERS) {
+      // opencode.listModels shells out to `opencode models` (CLI/network) — skip in unit tests.
+      if (meta.id === 'opencode') continue
       const models = await reg[meta.id].listModels(process.env)
       // codex reads the user's REAL local models from ~/.codex/models_cache.json, so its list is
       // machine-dependent — it only falls back to the catalog defaults when no cache exists.

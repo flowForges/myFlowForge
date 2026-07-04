@@ -33,6 +33,8 @@ import { FileIc } from './inspector/fileIcon'
 import type { Attachment, MultiChanges } from '@shared/types'
 import { canContinue } from './chat/canContinue'
 import { providerSupportsResume } from '@shared/nativeResumeProviders'
+import { deriveOpenTarget } from '../shell/deriveOpenTarget'
+import type { OpenTarget } from '@shared/openers'
 
 function importedToChat(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
@@ -86,6 +88,8 @@ interface WorkspaceViewProps {
   archivedAt?: number | null
   /** Open the bottom 实时日志 drawer scoped to one agent (its full output, larger view). */
   onViewAgentLog?: (agentId: string, agentName: string) => void
+  // Report what the 顶栏「打开位置」button should open (current workspace / previewed file), or null.
+  onOpenTargetChange?: (t: OpenTarget | null) => void
 }
 
 // A truncated overview value: an INSTANT (CSS) tooltip shows the full text on hover, and clicking
@@ -107,12 +111,14 @@ function Copyable({ text, className }: { text: string; className?: string }) {
   )
 }
 
-export function WorkspaceView({ engine, providers, workspacePath, pendingStartOpts, onStartRun, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog }: WorkspaceViewProps) {
+export function WorkspaceView({ engine, providers, workspacePath, pendingStartOpts, onStartRun, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
   const [quickSeed, setQuickSeed] = useState<{ text: string; nonce: number }>()
   const [selection, setSelection] = useState<{ agentId: string; modelId: string }>()
+  // 本机扫描到的当前 provider 的自定义命令/prompt + skills(进 "/" 菜单)。随 provider/workspace 变化拉取。
+  const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
   const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const wsPath = workspacePath ?? engine.run?.workspacePath
   const run = useLastRun(wsPath, engine.run)
@@ -161,6 +167,15 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
       : installed[0] ? { agentId: installed[0].id, modelId: installed[0].models[0]?.id ?? '' } : undefined
     if (seed) setSelection(seed)
   }, [wsInfo, providers, selection])
+
+  // Fetch the provider's on-disk commands/prompts + skills for the "/" menu (changes with provider/ws).
+  useEffect(() => {
+    const agentId = selection?.agentId
+    if (!agentId) { setDynamicCommands([]); return }
+    let live = true
+    void window.forge.commandsList?.(agentId, wsPath).then(cs => { if (live) setDynamicCommands(cs) })
+    return () => { live = false }
+  }, [selection?.agentId, wsPath])
 
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
@@ -287,6 +302,14 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   // File preview overlay state. In aggregate mode each file carries its own (group) cwd;
   // otherwise it falls back to the selected single-project cwd.
   const [preview, setPreview] = useState<{ file: string; type: ChangeType; cwd: string; mode?: 'diff' | 'full' } | null>(null)
+  // Report the 「打开位置」target upward: a previewed file (open its worktree + reveal it) wins;
+  // else the selected project folder (or workspace root in aggregate mode). Cleared on unmount.
+  const openBaseFolder = aggregate ? (wsPath ?? '') : (selected ?? wsPath ?? '')
+  useEffect(() => {
+    onOpenTargetChange?.(deriveOpenTarget(preview ? { file: preview.file, cwd: preview.cwd } : null, openBaseFolder))
+  }, [preview, openBaseFolder, onOpenTargetChange])
+  useEffect(() => () => { onOpenTargetChange?.(null) }, [onOpenTargetChange])
+
   const openPreview = (file: string, type: ChangeType, groupCwd?: string) => {
     // Aggregate mode has no single cwd; the file-tree pane passes none either, so fall back to the
     // workspace root (its tree nodes are paths relative to it, read via fs). Without this the
@@ -535,6 +558,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           archived={!!archived}
           seedText={quickSeed}
           selection={selection}
+          dynamicCommands={dynamicCommands}
           onSelectionChange={(s) => {
             setSelection(s)
             if (wsPath) {
