@@ -82,6 +82,20 @@ function extractSkillPaths(text: string): AgentContextRef[] {
   return uniqueByPath(items)
 }
 
+// Skills the agent EXPLICITLY referenced by NAME (next to 技能/skill, or quoted) that are actually
+// installed. Catches home/plugin skills (e.g. superpowers/brainstorming) that the workspace scan +
+// path-regex miss — the CLI loads them at runtime and usually names them without printing a path.
+// Requiring the 技能/skill keyword or quotes keeps common words from false-matching.
+export function mentionedSkills(text: string, installed: { name: string; path: string }[]): AgentContextRef[] {
+  const items: AgentContextRef[] = []
+  for (const s of installed) {
+    const n = s.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp(`[「『"'\`]${n}[」』"'\`]|\\b${n}\\b\\s*(?:技能|skill)|(?:技能|skill)\\s*[:：]?\\s*\\b${n}\\b`, 'i')
+    if (re.test(text)) items.push({ name: s.name, path: s.path, state: 'ok' })
+  }
+  return uniqueByPath(items)
+}
+
 function extractRuleRefs(text: string, root: string): AgentContextRef[] {
   const items: AgentContextRef[] = []
   const ruleRe = /(?:^|[\s"'`])((?:~|\/|[A-Za-z]:\/)?[^\s"'`]*)?(AGENTS\.md|CLAUDE\.md|GEMINI\.md|QODER\.md|copilot-instructions\.md|\.cursorrules|\.windsurfrules)\b/g

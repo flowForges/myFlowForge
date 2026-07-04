@@ -31,7 +31,8 @@ function parseFrontmatter(file: string): { name?: string; description?: string }
 }
 
 function findSkillFiles(root: string, out: string[], depth = 0): void {
-  if (depth > 5 || out.length >= 300) return
+  // depth 9 covers plugin layouts (.claude/plugins/cache/<marketplace>/<plugin>/<version>/skills/<name>/SKILL.md).
+  if (depth > 9 || out.length >= 300) return
   let entries: Dirent[]
   try { entries = readdirSync(root, { withFileTypes: true }) } catch { return }
   for (const e of entries) {
@@ -45,17 +46,22 @@ function findSkillFiles(root: string, out: string[], depth = 0): void {
 // List the real skills installed under the user's home agent dirs (read-only — Forge doesn't
 // enable/disable skills; agents auto-discover them). Frontmatter `name`/`description` when present,
 // else the skill's directory name.
-export function readInstalledSkills(home = homedir()): InstalledSkill[] {
+export function readInstalledSkills(home = homedir(), includePlugins = false): InstalledSkill[] {
   const seen = new Set<string>()
   const out: InstalledSkill[] = []
-  for (const { source, dir } of SKILL_ROOTS) {
+  // Plugin skills (superpowers etc.) live under .claude/plugins, not .claude/skills. Opt-in
+  // (includePlugins) so the overview's skill list isn't flooded; the "/" command menu passes true.
+  const roots = includePlugins ? [...SKILL_ROOTS, { source: 'Claude', dir: join('.claude', 'plugins') }] : SKILL_ROOTS
+  for (const { source, dir } of roots) {
     const files: string[] = []
     findSkillFiles(join(home, dir), files)
     for (const file of files) {
-      if (seen.has(file)) continue
-      seen.add(file)
       const fm = parseFrontmatter(file)
       const name = fm.name || file.split(/[/\\]/).slice(-2)[0] || 'skill'
+      // Dedupe by source+name: plugins ship multiple versions (superpowers 6.0.2/6.1.1/…) of the same skill.
+      const key = source + ':' + name
+      if (seen.has(key)) continue
+      seen.add(key)
       out.push({ name, description: fm.description || '', source, path: file })
     }
   }

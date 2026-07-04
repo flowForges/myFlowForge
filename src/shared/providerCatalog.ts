@@ -99,6 +99,20 @@ export const BUILTIN_PROVIDERS: BuiltinProviderMeta[] = [
     authCmd: 'cursor-agent login',
     installHelp: '如果团队使用 Cursor Agent，把可执行路径填入设置后重新检测。',
   },
+  {
+    id: 'opencode',
+    displayName: 'opencode',
+    defaultBin: 'opencode',
+    glyph: '◉',
+    brandBg: 'oklch(62% .03 60 / .18)',
+    brandColor: 'oklch(68% .04 60)',
+    // opencode is a multi-provider gateway — its real model list comes from `opencode models`
+    // (liveModels), so no static defaults are hardcoded (they'd differ per configured provider).
+    defaultModels: [],
+    installCmd: 'curl -fsSL https://opencode.ai/install | bash',
+    authCmd: 'opencode auth login',
+    installHelp: '安装后运行 opencode auth login 配置模型 provider（一次接入多家模型）。模型列表由 opencode models 动态获取。',
+  },
 ]
 
 // Lookup helpers
@@ -114,4 +128,5 @@ export const PROVIDER_DEFAULT_WINDOW: Record<string, number> = {
   cursor: 200_000,
   gemini: 1_048_576,
   qoder: 200_000,
+  opencode: 200_000,
 }

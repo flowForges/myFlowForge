@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Titlebar } from './shell/Titlebar'
 import { Sidebar } from './shell/Sidebar'
+import { useUnread } from './state/useUnread'
 import { ResizeHandle } from './shell/ResizeHandle'
 import { StatusBar } from './shell/StatusBar'
 import { LogConsole } from './shell/LogConsole'
@@ -10,6 +11,7 @@ import './shell/dock.css'
 import { useEngine } from './state/useEngine'
 import { useConfig } from './state/useConfig'
 import { useSettings } from './state/useSettings'
+import type { OpenTarget } from '@shared/openers'
 import { useLogs } from './state/useLogs'
 import { useResizable } from './state/useResizable'
 import { usePanelDock } from './state/panelDock'
@@ -57,6 +59,8 @@ export function App() {
   const [inspCollapsed, setInspCollapsed] = useState(false)
   // 启动默认落在首页(HomeView):新用户没有工作区时不再看到一个空的 WorkspaceView。
   const [view, setView] = useState<'home' | 'ws'>('home')
+  // 「打开位置」目标:WorkspaceView 上报当前工作区/预览文件,供顶栏按钮消费。
+  const [openTarget, setOpenTarget] = useState<OpenTarget | null>(null)
   const [activeId, setActiveId] = useState('')
   const [wizardOpen, setWizardOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -168,6 +172,9 @@ export function App() {
   // last-viewed workspace or a still-active run.
   const crumb = view === 'home' ? '' : (home.workspaces.find(w => w.path === activeWsId)?.name ?? engine.run?.workspaceName ?? '')
   const sessions = useSessions(activeWsId || undefined)
+  // Sidebar unread dots: a session that finishes while you're elsewhere gets marked; the one you're
+  // viewing is always read. On the home view nothing is "viewed", so pass empty ids.
+  const unread = useUnread({ wsPath: view === 'ws' ? activeWsId : '', sessionId: sessions.activeSessionId ?? '' })
 
   // expandedWs: tracks which workspaces are expanded in the sidebar (persisted to localStorage).
   // Expansion is purely user-toggled — clicking a workspace (even the active one) freely
@@ -393,6 +400,9 @@ export function App() {
         onMarkAllRead={() => setNotifs(markAllRead(notifs))}
         canEditWorkspace={!!activeWsId}
         onEditWorkspace={openEdit}
+        openTarget={view === 'ws' ? openTarget : null}
+        defaultOpenerId={settings?.defaultOpenerId ?? ''}
+        onSetDefaultOpener={(id) => update({ defaultOpenerId: id })}
       />
       <div className="body">
         <Sidebar
@@ -425,6 +435,7 @@ export function App() {
           expandedIds={new Set(expandedPaths)}
           sessionsByWs={sessionsMap}
           onToggleExpand={onToggleExpand}
+          unread={unread}
         />
         {!collapsed && view !== 'home' && <ResizeHandle onPointerDown={sidebar.onHandleDown} />}
         <div className="content">
@@ -455,6 +466,7 @@ export function App() {
                 createdAt={activeWsMeta?.createdAt ?? 0}
                 archivedAt={activeWsMeta?.archivedAt ?? null}
                 onViewAgentLog={(id, name) => { setAgentLogFilter({ id, name }); setLogOpen(true); dock.setFocus('log') }}
+                onOpenTargetChange={setOpenTarget}
               />}
         </div>
       </div>
@@ -566,7 +578,7 @@ export function App() {
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} renderPane={(key) => {
         switch (key) {
-          case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} /> : null
+          case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} />
           case 'providers': return <AgentsPane onChanged={redetect} />

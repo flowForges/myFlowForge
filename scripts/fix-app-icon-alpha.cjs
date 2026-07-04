@@ -3,7 +3,11 @@ const fs = require('node:fs')
 const path = require('node:path')
 const zlib = require('node:zlib')
 
-const files = process.argv.slice(2)
+const args = process.argv.slice(2)
+const fillRoundedTile = args.includes('--fill-rounded-tile')
+const radiusArg = args.find(arg => arg.startsWith('--radius='))
+const radiusRatio = radiusArg ? Number(radiusArg.slice('--radius='.length)) : 0.305
+const files = args.filter(arg => arg !== '--fill-rounded-tile' && !arg.startsWith('--radius='))
 if (files.length === 0) {
   console.error('usage: node scripts/fix-app-icon-alpha.cjs <png> [...]')
   process.exit(1)
@@ -170,7 +174,7 @@ function resampleCropToRgba(img, crop, outSize) {
 function roundedRectAlpha(x, y, size) {
   // Generated icon tiles have a large macOS-style squircle corner. A small radius leaves the
   // source image's dark rectangular backdrop visible around the glass tile.
-  const radius = Math.round(size * 0.305)
+  const radius = Math.round(size * radiusRatio)
   const feather = Math.max(1.5, size * 0.002)
   const px = x + 0.5
   const py = y + 0.5
@@ -187,10 +191,20 @@ function fixFile(file) {
   const img = decodePng(file)
   const crop = findBrightBounds(img)
   const out = resampleCropToRgba(img, crop, img.width)
+  const tileBg = [8, 10, 29]
   for (let y = 0; y < img.width; y++) {
     for (let x = 0; x < img.width; x++) {
       const i = (y * img.width + x) * 4
-      out[i + 3] = Math.round(out[i + 3] * roundedRectAlpha(x, y, img.width))
+      const maskAlpha = roundedRectAlpha(x, y, img.width)
+      if (fillRoundedTile) {
+        const sourceAlpha = out[i + 3] / 255
+        out[i] = Math.round(out[i] * sourceAlpha + tileBg[0] * (1 - sourceAlpha))
+        out[i + 1] = Math.round(out[i + 1] * sourceAlpha + tileBg[1] * (1 - sourceAlpha))
+        out[i + 2] = Math.round(out[i + 2] * sourceAlpha + tileBg[2] * (1 - sourceAlpha))
+        out[i + 3] = Math.round(255 * maskAlpha)
+      } else {
+        out[i + 3] = Math.round(out[i + 3] * maskAlpha)
+      }
     }
   }
   fs.writeFileSync(file, encodeRgbaPng(img.width, img.width, out))

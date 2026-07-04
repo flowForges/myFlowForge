@@ -6,7 +6,7 @@
 
 **锻造你的 AI 编码工作流。**
 
-一个桌面「驾驶舱」，把 **Claude Code、Codex、Cursor、Gemini 和 qoder** 编排成一条受控的多阶段编码流水线——带方案审批门控、原生会话导入、实时额度监控、MCP 集成，还有一只陪你写代码的桌面宠物。
+一个桌面「驾驶舱」，把 **Claude Code、Codex、Cursor、Gemini、qoder 和 opencode** 编排成一条受控的多阶段编码流水线——带方案审批门控、原生会话导入、实时额度监控、MCP 集成，还有一只陪你写代码的桌面宠物。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
@@ -30,7 +30,9 @@
 
 ## ✨ 亮点
 
-- **🎛️ 多代理编排** —— 把工作流的每个阶段分派给不同的编码 CLI（Claude Code、Codex、Cursor、Gemini、qoder）和不同的模型。
+- **🎛️ 多代理编排** —— 把工作流的每个阶段分派给不同的编码 CLI（Claude Code、Codex、Cursor、Gemini、qoder、opencode）和不同的模型。其中 **opencode** 本身就是多 provider 网关——接入它一次即可用上很多家的模型。
+- **📂 用外部软件打开** —— 标题栏「打开位置」按钮识别本机已装的编辑器（VS Code、Cursor、JetBrains、Zed、Finder、终端……），用你选的软件打开当前工作区——或你正在预览的文件——并记住默认选择。
+- **⌨️ 会话斜杠命令** —— 在对话里输入 `/` 弹出命令菜单：工作流触发 + 你**本机真实的自定义命令/prompt 和已装 skill**，按当前代理过滤。
 - **🔄 受控的多阶段流水线** —— 需求 → 设计 → 开发 → 测试 → 评审，并带**方案审批硬门控**：执行开始前，先审查并批准（或打回）技术设计。
 - **🧩 多项目并行工作区** —— 多个工作区并发运行，各自使用隔离的 git worktree；在并行泳道里同时观察多个代理干活。
 - **📥 原生会话导入** —— 只读扫描并导入你本机已有的 Claude / Codex / Cursor / qoder 会话到中央索引，再作为工作区续聊。
@@ -49,6 +51,7 @@
 | **Cursor** | ✅ | ✅ | ✅ | 动态发现 | — |
 | **Gemini** | ✅ | ✅ | — | 动态发现 | — |
 | **qoder** | ✅ | ✅ | ✅ | 动态发现 | ✅ |
+| **opencode** | ✅ | ✅ | ✅ | 动态发现（多家） | — |
 
 > 模型均从各 CLI 的**真实本地配置**中动态读取——不硬编码，且每家的模型列表都可编辑。
 
@@ -145,7 +148,7 @@ npm run dist:universal  # 通用二进制
 ```
 src/
 ├── main/          # Electron 主进程
-│   ├── agents/    # CLI 适配器（claude、codex、cursor、gemini、qoder）+ providers
+│   ├── agents/    # CLI 适配器（claude、codex、cursor、gemini、qoder、opencode）+ providers
 │   ├── orchestrator/  # 工作流引擎与阶段门控
 │   ├── chat/      # 各工作区对话、队列、记忆
 │   ├── mcp/       # Forge MCP 服务（代理 → 应用 的桥）

@@ -6,7 +6,7 @@
 
 **Forge your AI coding workflow.**
 
-A desktop cockpit that orchestrates **Claude Code, Codex, Cursor, Gemini & qoder** into one governed, multi‑stage coding pipeline — with plan‑approval gates, native session import, live usage tracking, MCP integration, and a desktop pet to keep you company.
+A desktop cockpit that orchestrates **Claude Code, Codex, Cursor, Gemini, qoder & opencode** into one governed, multi‑stage coding pipeline — with plan‑approval gates, native session import, live usage tracking, MCP integration, and a desktop pet to keep you company.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
@@ -30,7 +30,9 @@ You describe what you want. Forge drives your chosen agents through a staged pip
 
 ## ✨ Highlights
 
-- **🎛️ Multi‑agent orchestration** — Route each workflow stage to a different coding CLI (Claude Code, Codex, Cursor, Gemini, qoder) and a different model.
+- **🎛️ Multi‑agent orchestration** — Route each workflow stage to a different coding CLI (Claude Code, Codex, Cursor, Gemini, qoder, opencode) and a different model. **opencode** is itself a multi‑provider gateway — connect it once to reach many model vendors.
+- **📂 Open in your editor** — A titlebar "Open location" button detects installed editors (VS Code, Cursor, JetBrains, Zed, Finder, terminals…) and opens the current workspace — or the file you're previewing — in your pick, remembered as the default.
+- **⌨️ Chat slash commands** — Type `/` in chat for a menu of workflow triggers plus your **real on‑disk commands/prompts and installed skills**, filtered per agent.
 - **🔄 Governed multi‑stage pipeline** — Requirement → Design → Develop → Test → Review, with a **hard plan‑approval gate**: review and approve (or reject) the technical design before execution begins.
 - **🧩 Parallel projects & workspaces** — Run multiple workspaces concurrently, each with isolated git worktrees; watch several agents work side‑by‑side in parallel lanes.
 - **📥 Native session import** — Read‑only scan and import your existing local Claude / Codex / Cursor / qoder sessions into a central index, then resume them as workspaces.
@@ -49,8 +51,9 @@ You describe what you want. Forge drives your chosen agents through a staged pip
 | **Cursor** | ✅ | ✅ | ✅ | dynamic | — |
 | **Gemini** | ✅ | ✅ | — | dynamic | — |
 | **qoder** | ✅ | ✅ | ✅ | dynamic | ✅ |
+| **opencode** | ✅ | ✅ | ✅ | dynamic (multi‑vendor) | — |
 
-> Models are discovered from each CLI's real local configuration — nothing is hard‑coded, and you can edit the model list per provider.
+> Models are discovered from each CLI's real local configuration — nothing is hard‑coded, and you can edit the model list per provider. **opencode** discovers its models from `opencode models`, so a single integration brings in every provider you've configured in it.
 
 ## 🔧 How it works
 
@@ -145,7 +148,7 @@ Artifacts are written to `release/`.
 ```
 src/
 ├── main/          # Electron main process
-│   ├── agents/    # CLI adapters (claude, codex, cursor, gemini, qoder) + providers
+│   ├── agents/    # CLI adapters (claude, codex, cursor, gemini, qoder, opencode) + providers
 │   ├── orchestrator/  # Workflow engine & stage gating
 │   ├── chat/      # Per-workspace chat, queue, memory
 │   ├── mcp/       # Forge MCP server (agent → app bridge)

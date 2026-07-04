@@ -12,7 +12,7 @@ beforeEach(() => {
 describe('useChatActivity', () => {
   it('is busy between assistant-start and done, and tracks pending confirms', () => {
     const { result } = renderHook(() => useChatActivity())
-    expect(result.current).toEqual({ busy: false, confirmPending: false })
+    expect(result.current).toEqual({ busy: false, confirmPending: false, justDone: false })
     act(() => handler!({ workspacePath: '/a', sessionId: 's1', type: 'assistant-start', id: 'm1', model: 'x' }))
     expect(result.current.busy).toBe(true)
     act(() => handler!({ workspacePath: '/a', sessionId: 's1', type: 'confirm-request', id: 'c1', title: 't' }))
@@ -21,5 +21,6 @@ describe('useChatActivity', () => {
     expect(result.current.confirmPending).toBe(false)
     act(() => handler!({ workspacePath: '/a', sessionId: 's1', type: 'done', message: { id: 'm1', who: 'ai', text: 'x', ts: '0' } }))
     expect(result.current.busy).toBe(false)
+    expect(result.current.justDone).toBe(true) // pet flashes a done reaction on chat completion
   })
 })

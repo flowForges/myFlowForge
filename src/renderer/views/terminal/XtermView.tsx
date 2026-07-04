@@ -44,6 +44,17 @@ export function XtermView({ termId, active, font }: {
     try { fitRef.current?.fit(); window.forge.termResize(termId, t.cols, t.rows) } catch { /* */ }
   }, [font.fontFamily, font.fontSize, termId])
 
+  // Live-apply theme changes. The palette lives in CSS vars keyed off <html data-theme>; a NEW
+  // terminal reads it on mount, but an already-open one keeps its original theme — so a terminal
+  // opened in light mode stayed white after switching to dark. Re-read the palette when data-theme
+  // flips so existing terminals recolor too.
+  useEffect(() => {
+    const t = termRef.current; if (!t) return
+    const mo = new MutationObserver(() => { t.options.theme = readXtermTheme() })
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => mo.disconnect()
+  }, [termId])
+
   return <div className="xterm-host" ref={elRef} style={{ display: active ? 'block' : 'none' }} />
 }
 

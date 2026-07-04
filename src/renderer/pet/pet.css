@@ -261,8 +261,20 @@ button:disabled { cursor: default; }
   transform: rotate(45deg); }
 .pet-stage[data-corner="right"] .pet-simple::after { right: 22px; }
 .pet-stage[data-corner="left"]  .pet-simple::after { left: 22px; }
+/* When the popup is below the pet (data-vdir=down, sprite hugs the window top), the tail must
+   sit on the TOP edge pointing UP at the pet — otherwise it points away into empty space. */
+.pet-stage[data-vdir="down"] .pet-simple::after,
+.pet-stage[data-vdir="down"] .pet-bubble::after {
+  bottom: auto; top: -7px;
+  border-right: none; border-bottom: none;
+  border-left: 1px solid var(--border-2); border-top: 1px solid var(--border-2);
+}
 .pet-simple .ps-head { display: flex; align-items: center; gap: 7px; padding: 10px 10px 10px 13px; }
-.pet-simple.collapsed .ps-head { padding: 9px 10px 9px 13px; }
+/* 折叠态收缩成紧凑 pill(不再固定 260px 大白块),整条可点击展开。 */
+.pet-simple.collapsed { width: auto; }
+.pet-simple.collapsed .ps-head { padding: 6px 9px 6px 12px; gap: 6px; cursor: pointer; }
+.pet-simple.collapsed .ps-title { flex: 0 1 auto; font-size: 12px; }
+.pet-simple.collapsed .ps-collapse { width: 20px; height: 20px; flex: 0 0 20px; }
 .pet-simple .ps-title { font-size: 12.5px; font-weight: 650; color: var(--fg); flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pet-simple .ps-check { width: 18px; height: 18px; flex: 0 0 18px; display: grid; place-items: center; color: var(--ok); }
@@ -270,7 +282,7 @@ button:disabled { cursor: default; }
 .pet-simple .ps-collapse { width: 24px; height: 24px; flex: 0 0 24px; border-radius: 7px; display: grid; place-items: center;
   color: var(--muted); background: var(--surface); border: 1px solid var(--border-2); cursor: pointer; transition: .12s; }
 .pet-simple .ps-collapse:hover { color: var(--fg); background: var(--surface-2); }
-.pet-simple .ps-collapse svg { width: 15px; height: 15px; }
+.pet-simple .ps-collapse svg { width: 15px; height: 15px; display: block; }
 .pet-simple .ps-body { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 5px;
   max-height: calc(100vh - var(--pet-size, 88px) - 60px); overflow-y: auto; }
 .pet-simple .ps-agent { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;

@@ -146,8 +146,20 @@ export const AppIconSchema = z.object({
 }).default(() => ({ dockIcon: 'ember-violet' as const, showMenuBar: false }))
 export type AppIcon = z.infer<typeof AppIconSchema>
 
+// Native OS notifications — master switch + per-type (mirrors pet.notify). Fired only when the
+// app window is unfocused. `done` off by default (completion is lower-urgency than confirm/input).
+export const NotificationsSchema = z.object({
+  enabled: z.boolean(),
+  confirm: z.boolean(),
+  input: z.boolean(),
+  done: z.boolean(),
+})
+export type Notifications = z.infer<typeof NotificationsSchema>
+const defaultNotifications = (): Notifications => ({ enabled: true, confirm: true, input: true, done: true })
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
+  notifications: NotificationsSchema.default(defaultNotifications),
   closeAction: CloseActionSchema,
   appIcon: AppIconSchema,
   termProxy: z.string(),
@@ -166,10 +178,13 @@ export const SettingsSchema = z.object({
   // Overrides the adapter's auto-read source. Stored locally only.
   pluginCreds: z.record(z.string(), z.string()).default(() => ({})),
   terminal: TerminalSchema,
+  // Id of the external app chosen in the "打开位置" dropdown (see shared/openers catalog). '' = none yet.
+  defaultOpenerId: z.string().catch('').default(''),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
   appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium' },
+  notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
   termProxy: '',
@@ -181,6 +196,7 @@ export const defaultSettings = (): Settings => ({
   lastActiveWorkspace: '',
   pluginCreds: {},
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
+  defaultOpenerId: '',
 })
 
 export const ProjectSchema = z.object({
