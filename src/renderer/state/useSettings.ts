@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Settings, Appearance, Pet, Terminal, CloseAction, AppIcon, Notifications } from '@shared/types'
+import type { Settings, Appearance, Pet, Terminal, CloseAction, AppIcon, Notifications, Keybindings } from '@shared/types'
 import { DEFAULT_BUILTIN_PET_ID, builtinPets } from '@shared/builtinPets'
 
 const DEFAULTS: Settings = {
@@ -17,6 +17,7 @@ const DEFAULTS: Settings = {
   pluginCreds: {},
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
   defaultOpenerId: '',
+  keybindings: { overrides: {} },
 }
 
 export interface SettingsUpdate {
@@ -31,6 +32,7 @@ export interface SettingsUpdate {
   terminal?: Partial<Terminal>
   lastActiveWorkspace?: string
   defaultOpenerId?: string
+  keybindings?: Keybindings
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -53,6 +55,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     terminal: { ...base.terminal, ...(partial.terminal ?? {}) },
     lastActiveWorkspace: partial.lastActiveWorkspace ?? base.lastActiveWorkspace,
     defaultOpenerId: partial.defaultOpenerId ?? base.defaultOpenerId,
+    keybindings: partial.keybindings ?? base.keybindings ?? { overrides: {} },
   }
 }
 

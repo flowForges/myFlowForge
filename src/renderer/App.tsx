@@ -39,6 +39,8 @@ import { LoadPane } from './settings/LoadPane'
 import { PluginPane } from './settings/PluginPane'
 import { SessionImportPane } from './settings/SessionImportPane'
 import { DebugLogPane } from './settings/DebugLogPane'
+import { KeybindingsPane } from './settings/KeybindingsPane'
+import { useKeybindings } from './state/useKeybindings'
 import { UpgradeModal } from './shell/UpgradeModal'
 import { DeleteConfirm } from './shell/DeleteConfirm'
 import { ActionConfirm } from './shell/ActionConfirm'
@@ -225,13 +227,14 @@ export function App() {
     return () => { off() }
   }, [])
 
-  // ⌃` global shortcut to toggle the terminal panel
+  // Global-shortcut registration status from main (which OS-level accelerators the OS refused) — fed to
+  // the keybindings settings pane so it can flag "already taken" conflicts. Terminal toggle and every
+  // other in-app shortcut are now driven by the keybindings dispatcher below (see handlers/useKeybindings).
+  const [globalFailed, setGlobalFailed] = useState<string[]>([])
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && (e.key === '`' || e.code === 'Backquote')) { e.preventDefault(); setTermOpen(o => !o) }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    void window.forge.getShortcutStatus?.().then(s => setGlobalFailed(s?.failed ?? []))
+    const off = window.forge.onShortcutStatus?.((s) => setGlobalFailed(s?.failed ?? []))
+    return () => { off?.() }
   }, [])
 
   // Subscribe to workspace setup events (streamed during creation when __basic/__proj hooks exist).
@@ -380,6 +383,31 @@ export function App() {
     }
     setView(v)
   }
+
+  // ── Keyboard shortcuts (in-app dispatcher) ──────────────────────────────────
+  // Map each scope==='app' action id to its handler. Global (OS-level) actions live in main. wsOrder
+  // mirrors the sidebar order (pinned first) so prev/next-workspace cycle the way the list reads.
+  const wsOrder = useMemo(() => sidebarGroups.flatMap(g => g.items.map(i => i.id)), [sidebarGroups])
+  const cycle = (list: string[], current: string, dir: 1 | -1): string | undefined => {
+    if (!list.length) return undefined
+    const i = list.indexOf(current)
+    return i === -1 ? list[0] : list[(i + dir + list.length) % list.length]
+  }
+  const kbHandlers: Record<string, () => void> = {
+    'new-workspace': openWizard,
+    'new-session': () => { void sessions.newSession() },
+    'prev-session': () => { const id = cycle(sessions.sessions.map(s => s.id), sessions.activeSessionId ?? '', -1); if (id) void sessions.switchSession(id) },
+    'next-session': () => { const id = cycle(sessions.sessions.map(s => s.id), sessions.activeSessionId ?? '', 1); if (id) void sessions.switchSession(id) },
+    'prev-workspace': () => { const id = cycle(wsOrder, activeWsId, -1); if (id) { setActiveId(id); setView('ws') } },
+    'next-workspace': () => { const id = cycle(wsOrder, activeWsId, 1); if (id) { setActiveId(id); setView('ws') } },
+    'toggle-terminal': () => setTermOpen(o => !o),
+    'toggle-log': () => setLogOpen(o => !o),
+    'toggle-sidebar': () => setCollapsed(c => !c),
+    'toggle-inspector': () => setInspCollapsed(c => !c),
+    'toggle-settings': () => { if (settingsOpen) setSettingsOpen(false); else { setSettingsPane('appearance'); setSettingsOpen(true) } },
+    'open-plugins': () => { setSettingsPane('plugins'); setSettingsOpen(true) },
+  }
+  useKeybindings(settings?.keybindings?.overrides ?? {}, kbHandlers)
 
   return (
     <div className={`window${collapsed ? ' collapsed' : ''}${inspCollapsed ? ' insp-collapsed' : ''}${view === 'home' ? ' home-mode' : ''}`}>
@@ -588,6 +616,7 @@ export function App() {
           case 'loads': return <LoadPane workspacePath={activeWsId || undefined} />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
           case 'plugins': return <PluginPane plugins={pluginsApi.plugins} results={pluginsApi.results} catalog={pluginsApi.catalog} install={pluginsApi.install} uninstall={pluginsApi.uninstall} setEnabled={pluginsApi.setEnabled} refresh={pluginsApi.refresh} installExample={pluginsApi.installExample} installError={pluginsApi.installError} creds={pluginsApi.creds} setCred={pluginsApi.setCred} />
+          case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'sessions': return <SessionImportPane />
           case 'debug': return <DebugLogPane />
           default: return null

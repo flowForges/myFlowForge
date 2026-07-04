@@ -37,6 +37,22 @@ describe('pet free position (free-drag)', () => {
   })
 })
 
+describe('keybindings', () => {
+  it('defaults to an empty overrides map', () => {
+    expect(defaultSettings().keybindings).toEqual({ overrides: {} })
+  })
+  it('parses legacy configs with no keybindings block', () => {
+    const { keybindings, ...rest } = defaultSettings()
+    void keybindings
+    const s = SettingsSchema.parse(rest)
+    expect(s.keybindings).toEqual({ overrides: {} })
+  })
+  it('keeps user overrides including an empty-string (unbound) value', () => {
+    const s = SettingsSchema.parse({ ...defaultSettings(), keybindings: { overrides: { 'toggle-terminal': '', 'new-session': 'Control+Alt+T' } } })
+    expect(s.keybindings.overrides).toEqual({ 'toggle-terminal': '', 'new-session': 'Control+Alt+T' })
+  })
+})
+
 describe('config schema', () => {
   it('provides valid default settings', () => {
     expect(() => SettingsSchema.parse(defaultSettings())).not.toThrow()
