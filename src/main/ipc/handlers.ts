@@ -103,7 +103,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const mcpEntry = join(__dirname, 'forgeMcp.js')
   const orch = new Orchestrator({ bus, providers, proxy: () => readSettings().termProxy, mcpEntry })
 
-  const UPDATE_REPO = 'xzghua/myFLowForge'
+  const UPDATE_REPO = 'xzghua/myFlowForge'
   const updateChecker = createUpdateChecker({
     repo: UPDATE_REPO,
     currentVersion: () => app.getVersion(),

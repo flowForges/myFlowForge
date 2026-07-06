@@ -77,7 +77,7 @@ Three ways to trigger a workflow, all converging on the same single gate:
 
 ## 📥 Download & install
 
-Grab the latest `.dmg` from the [**Releases**](https://github.com/xzghua/myFLowForge/releases) page:
+Grab the latest `.dmg` from the [**Releases**](https://github.com/xzghua/myFlowForge/releases) page:
 
 | Your Mac | Recommended download |
 |----------|----------------------|
@@ -103,8 +103,8 @@ Grab the latest `.dmg` from the [**Releases**](https://github.com/xzghua/myFLowF
 
 ```bash
 # 1. Clone
-git clone https://github.com/xzghua/myFLowForge.git
-cd myFLowForge
+git clone https://github.com/xzghua/myFlowForge.git
+cd myFlowForge
 
 # 2. Install dependencies
 npm install

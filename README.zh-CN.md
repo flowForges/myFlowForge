@@ -77,7 +77,7 @@
 
 ## 📥 下载安装
 
-从 [**Releases**](https://github.com/xzghua/myFLowForge/releases) 页面下载最新的 `.dmg`：
+从 [**Releases**](https://github.com/xzghua/myFlowForge/releases) 页面下载最新的 `.dmg`：
 
 | 你的 Mac | 推荐下载 |
 |----------|----------|
@@ -103,8 +103,8 @@
 
 ```bash
 # 1. 克隆
-git clone https://github.com/xzghua/myFLowForge.git
-cd myFLowForge
+git clone https://github.com/xzghua/myFlowForge.git
+cd myFlowForge
 
 # 2. 安装依赖
 npm install
