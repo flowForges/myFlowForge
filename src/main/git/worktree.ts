@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { git } from './gitRunner'
 
@@ -50,6 +50,11 @@ export async function ensureMirror(opts: { mirror: string; repoUrl: string; prox
 export async function addWorktree(opts: { mirror: string; worktreePath: string; branch: string; baseBranch: string }) {
   return withMirrorLock(opts.mirror, async () => {
     mkdirSync(dirname(opts.worktreePath), { recursive: true })
+    // Idempotent re-provision: a prior attempt may have left stale worktree admin (its working dir
+    // was removed on a failed pull) or a partial dir. Prune dead entries and clear any leftover dir
+    // so `worktree add` can't fail with "already registered / missing working tree / path exists".
+    await git(['worktree', 'prune'], { cwd: opts.mirror }).catch(() => {})
+    if (existsSync(opts.worktreePath)) rmSync(opts.worktreePath, { recursive: true, force: true })
     await git(['worktree', 'add', '-B', opts.branch, opts.worktreePath, opts.baseBranch], { cwd: opts.mirror })
   })
 }

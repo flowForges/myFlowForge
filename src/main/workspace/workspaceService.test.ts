@@ -230,6 +230,23 @@ describe('editWorkspace', () => {
     ])
   })
 
+  it('re-provisions a project whose worktree is missing on disk (retry after a failed pull)', async () => {
+    const src = join(root, 'srcRetry'); await makeSourceRepo(src)
+    const { createWorkspace, editWorkspace } = await import('./workspaceService')
+    const known = [{ id: 'proj', name: 'proj', repoUrl: src, defaultBranch: 'main' }]
+    const wsPath = join(root, 'ws-retry')
+    const baseOpts = { name: 'w', path: wsPath, workflowId: 'standard',
+      stages: [{ key: 'develop' as const, provider: 'claude', model: 'sonnet-4.6' }],
+      projects: [{ repoId: 'proj', branch: 'forge/ws-retry' }] }
+    await createWorkspace({ opts: baseOpts, knownProjects: known, proxy: '' })
+    // simulate a failed pull: the record still has the project but its worktree is gone from disk
+    rmSync(join(wsPath, 'proj'), { recursive: true, force: true })
+    expect(existsSync(join(wsPath, 'proj', 'README.md'))).toBe(false)
+    // editing must retry provisioning the missing worktree (not skip it as "already existing")
+    await editWorkspace({ path: wsPath, opts: baseOpts, knownProjects: known, proxy: '' })
+    expect(existsSync(join(wsPath, 'proj', 'README.md'))).toBe(true)
+  })
+
   it('provisions a worktree only for newly added projects', async () => {
     const srcA = join(root, 'srcB1'); await makeSourceRepo(srcA)
     const srcB = join(root, 'srcB2'); await makeSourceRepo(srcB)

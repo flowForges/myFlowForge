@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { mirrorPath, expandTilde } from '../config/paths'
 import { ensureMirror, addWorktree, resolveBaseBranch } from '../git/worktree'
@@ -107,12 +108,14 @@ export async function editWorkspace(args: {
   if (!existing) throw new Error(`工作区不存在: ${path}`)
 
   const byId = new Map(knownProjects.map(p => [p.id, p]))
-  const existingRepoIds = new Set(existing.projects.map(p => p.repoId))
 
   for (const sel of opts.projects) {
-    if (existingRepoIds.has(sel.repoId)) continue          // worktree already on disk
     const proj = byId.get(sel.repoId)
     if (!proj) throw new Error(`未知项目: ${sel.repoId}`)
+    // Provision when the worktree is genuinely missing on disk — not merely absent from the record.
+    // A failed pull writes the project into workspace.json but leaves no worktree; keying the skip on
+    // "already in the record" would strand it forever. A worktree's `.git` is a file (gitdir pointer).
+    if (existsSync(join(path, proj.name, '.git'))) continue
     await provisionWorktree(proj, sel.branch, path, proxy)
   }
 
