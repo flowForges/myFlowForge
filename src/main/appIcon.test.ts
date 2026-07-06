@@ -110,14 +110,23 @@ describe('appIcon assets', () => {
     expect(cornerAlphas(join(process.cwd(), 'build', 'icon.png'))).toEqual([0, 0, 0, 0])
   })
 
-  it('ships a safe-area-padded system app icon (macOS Big Sur grid) so it is not oversized', () => {
-    // Apple's icon grid wants the artwork ~80% of the tile with a transparent margin, so the app
-    // icon reads the same size as convention-following apps in the Dock/Finder — NOT edge-to-edge.
+  it('gives the DOCK icons a transparent safe-area margin so they are not oversized in the Dock', () => {
+    // The running app sets its Dock icon from these (app.dock.setIcon). They must follow the macOS
+    // Big Sur grid — artwork ~80% with a transparent margin — NOT edge-to-edge, or the Dock icon
+    // reads larger than convention-following apps. The bundle icon.png stays full-tile (see below).
+    for (const opt of APP_ICON_OPTIONS) {
+      const png = pngAlphaReader(join(process.cwd(), 'build', 'app-icons', opt.filename))
+      expect(png.alphaAt(Math.round(png.width / 2), 3)).toBe(0)       // transparent top margin
+      expect(png.alphaAt(3, Math.round(png.height / 2))).toBe(0)      // transparent left margin
+      expect(png.alphaAt(Math.round(png.width / 2), Math.round(png.height / 2))).toBe(255)  // opaque body
+    }
+  })
+
+  it('ships a full-tile system app icon for Finder and DMG windows', () => {
     const png = pngAlphaReader(join(process.cwd(), 'build', 'icon.png'))
-    expect(png.alphaAt(Math.round(png.width / 2), 5)).toBe(0)            // top edge is transparent margin
-    expect(png.alphaAt(5, Math.round(png.height / 2))).toBe(0)          // left edge is transparent margin
-    expect(png.alphaAt(Math.round(png.width * 0.13), Math.round(png.height / 2))).toBe(255)  // body inside the margin
-    expect(png.alphaAt(Math.round(png.width / 2), Math.round(png.height / 2))).toBe(255)     // center is opaque
+    expect(png.alphaAt(Math.round(png.width / 2), 5)).toBe(255)
+    expect(png.alphaAt(5, Math.round(png.height / 2))).toBe(255)
+    expect(png.alphaAt(Math.round(png.width / 2), Math.round(png.height / 2))).toBe(255)
   })
 
   it('ships a compact macOS menu bar template icon', () => {
