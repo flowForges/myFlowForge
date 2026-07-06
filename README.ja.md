@@ -77,7 +77,7 @@
 
 ## 📥 ダウンロードとインストール
 
-最新の `.dmg` は [**Releases**](https://github.com/xzghua/myFLowForge/releases) ページから入手できます：
+最新の `.dmg` は [**Releases**](https://github.com/xzghua/myFlowForge/releases) ページから入手できます：
 
 | お使いの Mac | 推奨ダウンロード |
 |--------------|------------------|
@@ -103,8 +103,8 @@
 
 ```bash
 # 1. クローン
-git clone https://github.com/xzghua/myFLowForge.git
-cd myFLowForge
+git clone https://github.com/xzghua/myFlowForge.git
+cd myFlowForge
 
 # 2. 依存関係のインストール
 npm install
