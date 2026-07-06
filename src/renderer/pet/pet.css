@@ -272,9 +272,11 @@ button:disabled { cursor: default; }
 .pet-simple .ps-head { display: flex; align-items: center; gap: 7px; padding: 10px 10px 10px 13px; }
 /* 折叠态收缩成紧凑 pill(不再固定 260px 大白块),整条可点击展开。 */
 .pet-simple.collapsed { width: auto; }
-.pet-simple.collapsed .ps-head { padding: 6px 9px 6px 12px; gap: 6px; cursor: pointer; }
+/* Extra right padding so the chevron clears the 14px rounded corner instead of poking past it. */
+.pet-simple.collapsed .ps-head { padding: 5px 12px 5px 13px; gap: 5px; cursor: pointer; }
 .pet-simple.collapsed .ps-title { flex: 0 1 auto; font-size: 12px; }
-.pet-simple.collapsed .ps-collapse { width: 20px; height: 20px; flex: 0 0 20px; }
+.pet-simple.collapsed .ps-collapse { width: 18px; height: 18px; flex: 0 0 18px; }
+.pet-simple.collapsed .ps-collapse svg { width: 13px; height: 13px; }
 .pet-simple .ps-title { font-size: 12.5px; font-weight: 650; color: var(--fg); flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pet-simple .ps-check { width: 18px; height: 18px; flex: 0 0 18px; display: grid; place-items: center; color: var(--ok); }
