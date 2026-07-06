@@ -46,7 +46,7 @@ beforeEach(() => {
 })
 
 describe('App 新建流程 add-card flow', () => {
-  it('clicking [data-crnewwf] closes the wizard and opens settings at workflow pane', async () => {
+  it('clicking [data-crnewwf] opens the inline workflow designer without leaving the wizard', async () => {
     render(<App />)
 
     // Open the create wizard
@@ -56,18 +56,11 @@ describe('App 新建流程 add-card flow', () => {
     // Wizard is open: wait for the add-card button
     await waitFor(() => expect(document.querySelector('[data-crnewwf]')).toBeTruthy())
 
-    // Click the 新建流程 add-card button
-    const addBtn = document.querySelector('[data-crnewwf]') as HTMLElement
-    fireEvent.click(addBtn)
+    // Click the 新建流程 add-card button → inline designer opens in-place (App provides onAddWorkflow)
+    fireEvent.click(document.querySelector('[data-crnewwf]') as HTMLElement)
 
-    // Wizard should be closed (no path input visible)
-    await waitFor(() => expect(document.querySelector('#createOverlay')).toBeNull())
-
-    // Settings modal should be open showing workflow pane
-    await waitFor(() => {
-      const wfNav = document.querySelector('[data-set="workflow"]') as HTMLElement
-      expect(wfNav).toBeTruthy()
-      expect(wfNav.className).toContain('on')
-    })
+    // The inline designer appears and the wizard stays open (path input still present)
+    await waitFor(() => expect(document.querySelector('[data-crwf-name]')).toBeTruthy())
+    expect(document.querySelector('#crPath')).toBeTruthy()
   })
 })

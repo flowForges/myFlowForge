@@ -566,6 +566,8 @@ export function App() {
         providers={providers}
         onOpenProjectSettings={() => { setWizardOpen(false); setSettingsPane('project'); setSettingsOpen(true) }}
         onNewWorkflow={() => { setWizardOpen(false); setSettingsPane('workflow'); setSettingsOpen(true) }}
+        onAddProject={addProject}
+        onAddWorkflow={addWorkflow}
         onPickPath={() => window.forge.pickDirectory()}
         error={createErr}
         creating={creating}

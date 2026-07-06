@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { useState } from 'react'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { CreateWorkspace } from './CreateWorkspace'
 import type { Workspace } from '@shared/types'
@@ -55,6 +56,60 @@ describe('CreateWorkspace', () => {
     expect(addBtn).toBeTruthy()
     fireEvent.click(addBtn)
     expect(onNewWorkflow).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders only the enabled stages and can add a disabled one', () => {
+    // standard workflow enables design+develop → exactly 2 stage rows, not all 5 greyed
+    render(<CreateWorkspace {...defaultProps} />)
+    expect(document.querySelectorAll('[data-stage]').length).toBe(2)
+    // the other stages are offered via an add-stage control
+    const addReq = document.querySelector('[data-addstage="requirement"]') as HTMLElement
+    expect(addReq).toBeTruthy()
+    fireEvent.click(addReq)
+    expect(document.querySelectorAll('[data-stage]').length).toBe(3)
+    // adding a stage no longer offers it in the add control
+    expect(document.querySelector('[data-addstage="requirement"]')).toBeNull()
+  })
+
+  it('adds a project inline and auto-selects it (P1)', async () => {
+    function Harness() {
+      const [projs, setProjs] = useState(projects)
+      return <CreateWorkspace {...defaultProps} projects={projs}
+        onAddProject={async (repoUrl, branch) => {
+          const list = [...projs, { id: 'proj2', name: 'proj2', repoUrl, defaultBranch: branch }]
+          setProjs(list); return list
+        }} />
+    }
+    render(<Harness />)
+    fireEvent.change(document.querySelector('[data-crnewproj-repo]') as HTMLElement, { target: { value: 'git@x:y/proj2.git' } })
+    fireEvent.click(document.querySelector('[data-crnewproj-add]') as HTMLElement)
+    // the new project appears as a second project row...
+    await waitFor(() => expect(document.querySelector('[data-pi="1"]')).toBeTruthy())
+    const row = document.querySelector('[data-pi="1"]') as HTMLElement
+    expect(row.querySelector('.pj-name')?.textContent).toBe('proj2')
+    expect(row.className).toContain('on')   // ...and is auto-selected
+  })
+
+  it('creates a workflow inline and selects it (P2b)', async () => {
+    function Harness() {
+      const [wfs, setWfs] = useState(workflows)
+      return <CreateWorkspace {...defaultProps} workflows={wfs}
+        onAddWorkflow={async (name, keys) => {
+          const nw = { id: 'wf-new', name, stages: keys.map(k => ({ key: k, defaultAgent: 'claude', defaultModel: 'opus-4.8' })), plugins: [] }
+          const list = [...wfs, nw]; setWfs(list); return list
+        }} />
+    }
+    render(<Harness />)
+    fireEvent.click(document.querySelector('[data-crnewwf]') as HTMLElement)   // open the inline designer
+    fireEvent.click(document.querySelector('[data-crwf-stage="requirement"]') as HTMLElement)
+    fireEvent.click(document.querySelector('[data-crwf-stage="review"]') as HTMLElement)
+    fireEvent.change(document.querySelector('[data-crwf-name]') as HTMLElement, { target: { value: '快速修复' } })
+    fireEvent.click(document.querySelector('[data-crwf-create]') as HTMLElement)
+    // the new workflow is selected → stage rows now reflect ITS stages (requirement + review), not the default
+    await waitFor(() => expect(document.querySelectorAll('[data-stage]').length).toBe(2))
+    expect(document.querySelector('[data-stage="requirement"]')).toBeTruthy()
+    expect(document.querySelector('[data-stage="review"]')).toBeTruthy()
+    expect(document.querySelector('[data-stage="develop"]')).toBeNull()
   })
 
   it('disables the create button and shows a pending label while creating', () => {

@@ -36,6 +36,6 @@ describe('App create flow', () => {
     render(<App />)
     await waitFor(() => expect(screen.getByLabelText('新建工作区')).toBeInTheDocument())
     fireEvent.click(screen.getByLabelText('新建工作区'))
-    expect(await screen.findByPlaceholderText(/~\/code|路径/i)).toBeInTheDocument()
+    expect(await screen.findByPlaceholderText('~/code/')).toBeInTheDocument()
   })
 })
