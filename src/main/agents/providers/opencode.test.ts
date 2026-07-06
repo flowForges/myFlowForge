@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest'
-import { parseOpencodeEvent, opencodeErrorMessage, opencodeUsage, parseOpencodeModels } from './opencode'
+import { parseOpencodeEvent, opencodeErrorMessage, opencodeUsage, parseOpencodeModels, opencodeDelta } from './opencode'
+
+describe('opencodeDelta (cumulative part.text → incremental delta)', () => {
+  it('emits only the growth for cumulative snapshots (the real opencode --format json shape)', () => {
+    // opencode streams the FULL text of a part on every update; feeding those as deltas must yield
+    // the original text once, not a quadratic pile-up.
+    const snaps = ['分', '分析', '分析仓', '分析仓库']
+    let prev = ''
+    let assembled = ''
+    for (const s of snaps) { assembled += opencodeDelta(prev, s); prev = s }
+    expect(assembled).toBe('分析仓库')   // NOT '分分析分析仓分析仓库'
+  })
+  it('passes genuine incremental deltas through unchanged (prefix check auto-detects)', () => {
+    const deltas = ['Hello', ' world', ' foo']
+    let prev = ''
+    let assembled = ''
+    for (const d of deltas) { assembled += opencodeDelta(prev, d); prev = d }
+    expect(assembled).toBe('Hello world foo')
+  })
+  it('resets cleanly when a new part starts (text no longer extends the previous)', () => {
+    expect(opencodeDelta('Hello world', 'OK')).toBe('OK')
+  })
+})
 
 describe('parseOpencodeEvent', () => {
   it('reasoning → think', () => {

@@ -36,6 +36,14 @@ export function parseOpencodeEvent(obj: any): OpencodeAction[] {
   return out
 }
 
+// opencode's `--format json` streams the CUMULATIVE text of each part on every update (part.text is
+// the full text so far, not a token delta), but onAssistantDelta/onLog expect an incremental delta.
+// Return just the growth. The prefix check makes it safe either way: if a stream ever sends genuine
+// deltas instead, `next` won't extend `prev` and we pass it through whole. Callers set prev = next.
+export function opencodeDelta(prev: string, next: string): string {
+  return next.startsWith(prev) ? next.slice(prev.length) : next
+}
+
 // Surface opencode API errors (401 key-inactive etc.) with their real nested message.
 export function opencodeErrorMessage(obj: any): string | null {
   if (!obj || typeof obj !== 'object' || obj.type !== 'error') return null
@@ -84,6 +92,10 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       const child = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
       let buf = ''
       let ctxMax = 0
+      // part.text is cumulative (see opencodeDelta) — track per stream and feed only the growth to the
+      // fence scanner, else every line re-appears with each snapshot and the log balloons.
+      let prevAsst = ''
+      let prevThink = ''
       const processLine = (raw: string) => {
         const line = raw.trim(); if (!line) return
         let obj: unknown
@@ -93,8 +105,12 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
         const u = opencodeUsage(obj); if (u != null && u > ctxMax) { ctxMax = u; cb.onUsage?.({ used: ctxMax, window: contextWindowFor(task.model) }) }
         for (const a of parseOpencodeEvent(obj)) {
           if (a.kind === 'session') { cb.onSession?.(a.id); continue }
-          const kept = a.text.split('\n').flatMap(l => scanner.feedLine(l))
-          if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info', kind: a.kind === 'think' ? 'think' : 'output' })
+          const isThink = a.kind === 'think'
+          const d = isThink ? opencodeDelta(prevThink, a.text) : opencodeDelta(prevAsst, a.text)
+          if (isThink) prevThink = a.text; else prevAsst = a.text
+          if (!d) continue
+          const kept = d.split('\n').flatMap(l => scanner.feedLine(l))
+          if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info', kind: isThink ? 'think' : 'output' })
         }
       }
       child.stdout?.on('data', (b: Buffer) => { buf += b.toString(); let nl: number; while ((nl = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(l) } })
@@ -126,14 +142,18 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       let lastErr: string | null = null
       let rawErr = ''
       let ctxMax = 0
+      // part.text is cumulative — track the last snapshot per stream and emit only the growth so the
+      // renderer (which appends deltas) shows the reply once, not a pile-up of growing prefixes.
+      let prevAsst = ''
+      let prevThink = ''
       const cap = (s: string, add: string) => (s + add).slice(-2000)
       const handle = (obj: unknown) => {
         const err = opencodeErrorMessage(obj); if (err) lastErr = err
         const u = opencodeUsage(obj); if (u != null && u > ctxMax) { ctxMax = u; cb.onUsage?.({ used: ctxMax, window: contextWindowFor(task.model) }) }
         for (const a of parseOpencodeEvent(obj)) {
           if (a.kind === 'session') cb.onSession(a.id)
-          else if (a.kind === 'assistant') { sawDelta = true; cb.onAssistantDelta(a.text) }
-          else if (a.kind === 'think') cb.onThinkDelta(a.text)
+          else if (a.kind === 'assistant') { sawDelta = true; const d = opencodeDelta(prevAsst, a.text); prevAsst = a.text; if (d) cb.onAssistantDelta(d) }
+          else if (a.kind === 'think') { const d = opencodeDelta(prevThink, a.text); prevThink = a.text; if (d) cb.onThinkDelta(d) }
         }
       }
       const processLine = (raw: string) => { const line = raw.trim(); if (!line) return; try { handle(JSON.parse(line)) } catch { /* non-JSON banner */ } }
