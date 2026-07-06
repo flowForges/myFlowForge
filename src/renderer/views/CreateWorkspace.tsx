@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CreateWorkspaceOpts, ProviderInfo, ReviewConfig, ReviewLens } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 import type { CfgProject, CfgWorkflow } from '../state/useConfig'
@@ -95,13 +95,15 @@ interface Props {
   providers: ProviderInfo[]
   onOpenProjectSettings: () => void
   onNewWorkflow: () => void
+  onAddProject?: (repoUrl: string, branch: string) => Promise<CfgProject[]>
+  onAddWorkflow?: (name: string, stageKeys: string[]) => Promise<CfgWorkflow[]>
   onPickPath?: () => Promise<string | null>
   error?: string | null
   creating?: boolean   // workspace creation is in flight (git worktree/fetch) — block re-submit
   editing?: import('@shared/types').Workspace | null
 }
 
-export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, providers, onOpenProjectSettings, onNewWorkflow, onPickPath, error, creating = false, editing }: Props) {
+export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, providers, onOpenProjectSettings, onNewWorkflow, onAddProject, onAddWorkflow, onPickPath, error, creating = false, editing }: Props) {
   // installed providers drive the model menus; fall back to all providers if none report installed.
   const pickProviders = useMemo(() => {
     const inst = providers.filter(p => p.installed)
@@ -160,8 +162,16 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const [customModelInputs, setCustomModelInputs] = useState<Record<string, string>>({})
   // which selects are in custom-model mode: set of keys
   const [customModelKeys, setCustomModelKeys] = useState<Set<string>>(new Set())
+  // new-project inline add (P1) inputs + names pending auto-select once the config list updates.
+  const [newRepo, setNewRepo] = useState('')
+  const [newBranch, setNewBranch] = useState('')
+  const pendingSelect = useRef<Set<string>>(new Set())
+  // inline new-workflow designer (P2b): open flag + draft name/stage set.
+  const [wfDraft, setWfDraft] = useState<{ name: string; keys: Set<string> } | null>(null)
 
-  // Re-seed whenever the modal (re)opens or config changes.
+  // Full (re)seed ONLY when the modal opens or the edit target changes — NOT on every projects/
+  // workflows change, so adding a project/workflow from inside the wizard can't wipe the user's
+  // path/name/stage edits. Live config changes are merged non-destructively below.
   useEffect(() => {
     if (!open) return
     if (editing) {
@@ -174,10 +184,31 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     setBranchAll('')
     setPlugEdit(null)
     setStageEdit(null)
+    setWfDraft(null)
+    setNewRepo('')
+    setNewBranch('')
     setCustomModelKeys(new Set())
     setCustomModelInputs({})
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, editing, workflows, projects, providers])
+  }, [open, editing])
+
+  // Merge the live project list into state.projects while open, preserving each row's sel/branch/model
+  // and auto-selecting any project just added inline (matched by derived name via pendingSelect).
+  useEffect(() => {
+    if (!open || editing) return
+    setState(s => {
+      const prevById = new Map(s.projects.map(p => [p.repoId, p]))
+      const next: WizardProject[] = projects.map(p => {
+        const prev = prevById.get(p.id)
+        if (prev) return { ...prev, name: p.name }
+        const dev = seedStage(workflows[0]?.stages.find(st => st.key === DEV_KEY)?.defaultModel ?? '')
+        return { repoId: p.id, name: p.name, sel: pendingSelect.current.has(p.name), branch: '', model: packModel(dev.provider, dev.model) }
+      })
+      return { ...s, projects: next }
+    })
+    pendingSelect.current.clear()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, open, editing])
 
   if (!open) return null
 
@@ -195,9 +226,48 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const setPath = (v: string) => update(s => ({ ...s, path: v }))
   const setName = (v: string) => update(s => ({ ...s, name: v, nameEdited: v.length > 0 }))
 
+  // Derive the display name from a repo url/path the same way the store does (last path segment).
+  const deriveRepoName = (url: string): string => {
+    const s = url.trim().replace(/\/+$/, '').replace(/\.git$/i, '')
+    return (s.split(/[/:]/).pop() || '').trim()
+  }
+  // P1: add a project inline. Persist via onAddProject; the merge effect re-syncs state.projects and
+  // auto-selects it (pendingSelect matched by derived name). Direct-select as a fallback if the prop
+  // list already reflects it synchronously.
+  const doAddProject = async () => {
+    const repoUrl = newRepo.trim()
+    const nm = deriveRepoName(repoUrl)
+    if (!nm || !onAddProject) return
+    pendingSelect.current.add(nm)   // covers the merge-effect path if the prop updates first
+    setNewRepo(''); setNewBranch('')
+    const list = await onAddProject(repoUrl, newBranch.trim() || 'main')
+    const added = list?.find(p => p.name === nm)
+    if (!added) return
+    const dev = seedStage(workflows[0]?.stages.find(st => st.key === DEV_KEY)?.defaultModel ?? '')
+    setState(s => s.projects.some(p => p.repoId === added.id)
+      ? { ...s, projects: s.projects.map(p => p.repoId === added.id ? { ...p, sel: true } : p) }
+      : { ...s, projects: [...s.projects, { repoId: added.id, name: added.name, sel: true, branch: '', model: packModel(dev.provider, dev.model) }] })
+  }
+
+  // P2b: create a workflow inline. Persist via onAddWorkflow, then select it immediately using the
+  // returned definition (build stages from it directly — the `workflows` prop may lag one render).
+  const doCreateWorkflow = async () => {
+    if (!wfDraft || !onAddWorkflow) return
+    const name = wfDraft.name.trim() || '自定义流程'
+    const keys = STAGE_KEYS.filter(k => wfDraft.keys.has(k))   // canonical order
+    if (!keys.length) return
+    const before = new Set(workflows.map(w => w.id))
+    const list = await onAddWorkflow(name, keys)
+    const added = list?.find(w => !before.has(w.id)) ?? list?.find(w => w.name === name)
+    setWfDraft(null)
+    if (added) update(s => ({ ...s, workflowId: added.id, stages: buildStages(added), plugins: (added.plugins ?? []).map(p => ({ ...p })) }))
+  }
+
   const selectWorkflow = (id: string) => update(s => ({
     ...s, workflowId: id,
-    stages: id === '__custom' ? buildStages({ id: '__custom', name: '', stages: STAGE_KEYS.map(k => ({ key: k, defaultAgent: '', defaultModel: '' })), plugins: [] }) : buildStages(workflows.find(w => w.id === id)),
+    // '__custom' keeps the current enabled set (edit from here via add/remove) instead of force-
+    // enabling all 5 — so switching between templates produces a visible change in the stage list.
+    stages: id === '__custom' ? s.stages : buildStages(workflows.find(w => w.id === id)),
     // Re-seed wf-scope hooks from the chosen workflow (mirrors the stage rebuild). __custom has none.
     plugins: id === '__custom' ? [] : (workflows.find(w => w.id === id)?.plugins ?? []).map(p => ({ ...p }))
   }))
@@ -417,7 +487,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
             </div>
             <div className="cr-projs" id="crProjs">
               {state.projects.length === 0 ? (
-                <div className="cr-proj-empty">尚未配置 Git 项目。请到 <a id="crGoProj" onClick={onOpenProjectSettings}>设置 · 项目设置</a> 添加。</div>
+                <div className="cr-proj-empty">尚未配置 Git 项目。在下方新增,或到 <a id="crGoProj" onClick={onOpenProjectSettings}>设置 · 项目设置</a> 添加。</div>
               ) : (
                 state.projects.map((p, i) => (
                   <div className={'cr-proj' + (p.sel ? ' on' : ' off') + (p.locked ? ' locked' : '')} data-pi={i} key={p.repoId}>
@@ -425,7 +495,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                     <span className="pj-ic">{GIT}</span>
                     <div className="pj-main" onClick={p.locked ? undefined : () => toggleProject(p.repoId)}>
                       <div className="pj-name">{p.name}</div>
-                      <div className="pj-repo">{projects[i]?.repoUrl ?? ''}</div>
+                      <div className="pj-repo">{projects.find(pp => pp.id === p.repoId)?.repoUrl ?? ''}</div>
                     </div>
                     {p.locked && <span className="pj-lock">{LOCK}已包含</span>}
                     <span className="pj-branch">{BRANCH}<input data-prbranch={i} value={branchFor(p)} spellCheck={false} onChange={e => setProjectBranch(p.repoId, e.target.value)} /></span>
@@ -433,6 +503,14 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 ))
               )}
             </div>
+            {onAddProject && (
+              <div className="cr-newproj" id="crNewProj">
+                <span className="pj-ic">{GIT}</span>
+                <input data-crnewproj-repo placeholder="新增项目:git@github.com:acme/repo.git 或本地路径" spellCheck={false} autoCapitalize="off" autoComplete="off" value={newRepo} onChange={e => setNewRepo(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void doAddProject() } }} />
+                <span className="pj-branch">{BRANCH}<input data-crnewproj-branch placeholder="main" spellCheck={false} value={newBranch} onChange={e => setNewBranch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void doAddProject() } }} /></span>
+                <button className="np-add" data-crnewproj-add disabled={!deriveRepoName(newRepo)} onClick={() => void doAddProject()}>{INS_SVG}添加</button>
+              </div>
+            )}
           </div>
 
           {/* step hook: 涉及项目 → 工作流 */}
@@ -452,8 +530,26 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 <div className="tt">自定义{CK_CARD}</div>
                 <div className="ds">从全部阶段自由勾选</div>
               </button>
-              <button className="wf-card add" data-crnewwf onClick={onNewWorkflow}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>新建流程</button>
+              <button className="wf-card add" data-crnewwf onClick={() => onAddWorkflow ? setWfDraft({ name: '', keys: new Set() }) : onNewWorkflow()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>新建流程</button>
             </div>
+            {wfDraft && (
+              <div className="wf-designer" id="crWfDesigner">
+                <div className="wfd-h">{PUZZLE_PZ}新建工作流 · 勾选阶段</div>
+                <input data-crwf-name className="wfd-name" placeholder="工作流名称,例如:快速修复流" value={wfDraft.name} onChange={e => setWfDraft(d => d ? { ...d, name: e.target.value } : d)} />
+                <div className="wfd-stages">
+                  {STAGE_KEYS.map(k => (
+                    <button key={k} className={'stage-add-chip' + (wfDraft.keys.has(k) ? ' on' : '')} data-crwf-stage={k}
+                      onClick={() => setWfDraft(d => { if (!d) return d; const keys = new Set(d.keys); if (keys.has(k)) keys.delete(k); else keys.add(k); return { ...d, keys } })}>
+                      {wfDraft.keys.has(k) ? CK : INS_SVG}{STAGE_DEF[k].name}
+                    </button>
+                  ))}
+                </div>
+                <div className="wfd-foot">
+                  <button className="btn-cancel" data-crwf-cancel onClick={() => setWfDraft(null)}>取消</button>
+                  <button className="np-add" data-crwf-create disabled={wfDraft.keys.size === 0} onClick={() => void doCreateWorkflow()}>{CK}创建流程</button>
+                </div>
+              </div>
+            )}
             <div className="stage-edit" id="crStageEdit">
               {/* wf-scope flow strip: insert plugin hooks between stages */}
               <div className="cr-flow-preview">
@@ -489,7 +585,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                   />
                 )}
               </div>
-              {STAGE_KEYS.map(k => {
+              {STAGE_KEYS.filter(k => state.stages[k].on).map(k => {
                 const ss = state.stages[k]
                 const on = ss.on
                 const def = STAGE_DEF[k]
@@ -499,8 +595,8 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 const devOn = k === DEV_KEY && on
                 const reviewOn = k === REVIEW_KEY && on
                 return (
-                  <div className={'stage-line' + (on ? '' : ' off')} data-stage={k} key={k}>
-                    <button className="st-chk" data-sttoggle={k} onClick={() => toggleStage(k)}>{CK}</button>
+                  <div className="stage-line" data-stage={k} key={k}>
+                    <button className="st-chk on" data-sttoggle={k} title="移除该阶段" onClick={() => toggleStage(k)}>{CK}</button>
                     <span className="st-num">{num}</span>
                     <div className="st-main"><div className="st-name">{def.name}</div><div className="st-desc">{def.desc}</div></div>
                     <div className="st-right">
@@ -592,6 +688,16 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                   </div>
                 )
               })}
+              {STAGE_KEYS.some(k => !state.stages[k].on) && (
+                <div className="stage-add" id="crStageAdd">
+                  <span className="lab">添加阶段</span>
+                  {STAGE_KEYS.filter(k => !state.stages[k].on).map(k => (
+                    <button key={k} className="stage-add-chip" data-addstage={k} title={STAGE_DEF[k].desc} onClick={() => toggleStage(k)}>
+                      {INS_SVG}{STAGE_DEF[k].name}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
