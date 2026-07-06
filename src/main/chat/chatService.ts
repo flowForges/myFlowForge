@@ -12,6 +12,7 @@ import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgen
 import { readInstalledSkills } from '../skills/installedSkills'
 import { getSession } from './sessionStore'
 import { providerSupportsResume } from '../agents/resumeSupport'
+import { logDebug } from '../log/appLog'
 
 export interface SendTurnDeps {
   provider: AgentProvider
@@ -106,6 +107,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     for (const line of text.split('\n')) cleanedLines.push(...scanner.feedLine(line))
     cleanedLines.push(...scanner.flush())
     const cleaned = cleanedLines.join('\n')
+    dbgFinal(cleaned)
 
     const steps = think.split('\n').map(s => s.trim()).filter(Boolean)
     const msg: ChatMessage = {
@@ -136,6 +138,12 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
   }
 
   let aborted = false
+  // Diagnostic: capture the raw shape of the assistant deltas (revealing whitespace/newlines) so a
+  // "one char/word per line" garble can be traced to the exact stream chunks. Bounded per turn; open
+  // 设置 → 调试日志 to read. `via` shows which path emitted it (chat=native stream, run=log fallback).
+  let dbgN = 0
+  const dbgDelta = (via: string, t: string) => { if (dbgN < 40) { logDebug('chat', `Δ#${dbgN} ${payload.agent}/${via}`, JSON.stringify(t)); dbgN++ } }
+  const dbgFinal = (t: string) => logDebug('chat', `final ${payload.agent} len=${t.length}`, JSON.stringify(t.slice(0, 400)))
   const wrapSession = (session: AgentSession): AgentSession => ({
     id: session.id,
     done: session.done,
@@ -151,7 +159,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       let settled = false
       const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments }, {
         onSession: (id) => writeSession(ws, sid, payload.agent, id),
-        onAssistantDelta: (t) => { text += t; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
+        onAssistantDelta: (t) => { dbgDelta('chat', t); text += t; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
         onThinkDelta: (t) => {
           think += (think ? '\n' : '') + t
           const before = context.skills.length + context.rules.length + (context.mcps?.length ?? 0)
@@ -172,7 +180,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const session = provider.run(
       { stageKey: 'chat', agentId: aid, name: 'chat', prompt: promptText, cwd: ws, model: payload.model },
       {
-        onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { text += (text ? '\n' : '') + l.text; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
+        onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { dbgDelta('run', l.text); text += (text ? '\n' : '') + l.text; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
         onState: () => {},
         onConfirm: deps.confirm ?? (async () => 'deny'),
         onInput: async () => '',
