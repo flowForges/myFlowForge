@@ -279,9 +279,11 @@ button:disabled { cursor: default; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pet-simple .ps-check { width: 18px; height: 18px; flex: 0 0 18px; display: grid; place-items: center; color: var(--ok); }
 .pet-simple .ps-check svg { width: 16px; height: 16px; }
-.pet-simple .ps-collapse { width: 24px; height: 24px; flex: 0 0 24px; border-radius: 7px; display: grid; place-items: center;
-  color: var(--muted); background: var(--surface); border: 1px solid var(--border-2); cursor: pointer; transition: .12s; }
-.pet-simple .ps-collapse:hover { color: var(--fg); background: var(--surface-2); }
+/* Plain, borderless chevron so it reads as part of the header row (the old always-on boxed button
+   looked like a stray square floating off-position). The box appears only on hover. */
+.pet-simple .ps-collapse { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 7px; display: grid; place-items: center;
+  color: var(--muted); background: transparent; border: 1px solid transparent; cursor: pointer; transition: .12s; margin-left: 2px; }
+.pet-simple .ps-collapse:hover { color: var(--fg); background: var(--surface-2); border-color: var(--border-2); }
 .pet-simple .ps-collapse svg { width: 15px; height: 15px; display: block; }
 .pet-simple .ps-body { padding: 0 8px 8px; display: flex; flex-direction: column; gap: 5px;
   max-height: calc(100vh - var(--pet-size, 88px) - 60px); overflow-y: auto; }
