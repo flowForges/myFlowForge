@@ -47,10 +47,12 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
 
   useEffect(() => {
     if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !running) onClose() }
+    // Esc always closes: during a download it just minimizes to background (the download runs in the
+    // main process and keeps going); the modal reopens automatically when it finishes.
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, running, onClose])
+  }, [open, onClose])
 
   const pct = progress?.pct ?? 0
   const stage = progress?.stage ?? '准备中…'
@@ -58,7 +60,7 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
   return (
     <div
       className={'upd-overlay' + (open ? ' on' : '')}
-      onMouseDown={e => { if (e.target === e.currentTarget && !running) onClose() }}
+      onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="upd-sheet">
         <div className="upd-hero">
@@ -92,12 +94,13 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
               ))}
             </div>
           </div>
+          {running && <p className="upd-hint">下载在后台进行,可点「后台下载」继续使用 app,完成后会自动提示你安装。</p>}
           <div className={'upd-done' + (done ? ' on' : '')}>
             <span className="dk">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="20 6 9 17 4 12" /></svg>
               已下载 v{info?.version ?? ''}
             </span>
-            <p>已为你打开安装器,请把 myFlowForge 拖到「应用程序」完成安装。</p>
+            <p>下载的是一个 <b>.dmg 安装器</b>,已自动为你打开。请在弹出的窗口里把 <b>myFlowForge</b> 拖到「应用程序」,然后重新打开即可用上新版本。</p>
           </div>
           {phase === 'error' && <div className="upd-done on"><p>更新失败,请稍后重试或手动到 GitHub 下载。</p></div>}
         </div>
@@ -105,14 +108,16 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
           <div className="upd-actions">
             {done ? (
               <button className="go" onClick={onClose}>完成</button>
-            ) : !running ? (
+            ) : running ? (
+              <button className="gh" onClick={onClose}>后台下载(继续使用)</button>
+            ) : (
               <>
                 <button className="gh" onClick={onClose}>稍后</button>
                 <button className="go" onClick={onStart} disabled={!info}>
                   <span dangerouslySetInnerHTML={{ __html: ICN.up }} />立即升级
                 </button>
               </>
-            ) : null}
+            )}
           </div>
         </div>
       </div>

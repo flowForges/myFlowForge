@@ -481,6 +481,7 @@ html[data-vibrancy="on"]:not([data-glass="on"]) .open-loc { background: transpar
 .upd-hero .vers b { color: var(--accent); }
 .upd-body { padding: 16px 22px; }
 .upd-body h5 { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin-bottom: 11px; }
+.upd-hint { margin: 10px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .upd-notes { display: flex; flex-direction: column; gap: 9px; }
 .upd-notes li { display: flex; gap: 9px; font-size: 12.5px; color: var(--fg-2); line-height: 1.45; list-style: none; }
 .upd-notes .tag { font: 600 9px/16px var(--mono); height: 16px; padding: 0 6px; border-radius: 5px; flex: 0 0 auto; margin-top: 1px; }

@@ -765,7 +765,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                   <div className="ic-row"><span>编码代理</span><b>{agentLabel}</b></div>
                   <div className="ic-row"><span>工作目录</span><Copyable text={displayPath} className="mono" /></div>
                   {(wsInfo?.projects ?? []).map(p => (
-                    <div className="ic-row" key={p.repoId || p.name}>
+                    <div className="ic-row ic-proj" key={p.repoId || p.name}>
                       <span title={p.name || p.repoId}>{p.name || p.repoId}</span><Copyable text={p.branch || ''} className="mono" />
                     </div>
                   ))}
