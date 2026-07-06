@@ -433,8 +433,12 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     setForceChat(true)
   }
 
-  const inspectorStyle = (!inspectorCollapsed && inspectorWidth !== undefined)
-    ? { flex: `0 0 ${inspectorWidth}px`, width: inspectorWidth }
+  // Drive the width INLINE for both states. Collapse used to rely on removing the inline width so the
+  // `.insp-collapsed { width:0 }` CSS could win — but inline style always beats CSS, so any lingering
+  // inline width silently defeated the collapse (first click "did nothing"). Setting 0 explicitly makes
+  // collapse deterministic regardless of CSS ordering/transition timing.
+  const inspectorStyle = inspectorWidth !== undefined
+    ? { flex: inspectorCollapsed ? '0 0 0px' : `0 0 ${inspectorWidth}px`, width: inspectorCollapsed ? 0 : inspectorWidth, minWidth: 0 }
     : undefined
 
   return (
