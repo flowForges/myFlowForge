@@ -364,9 +364,14 @@
 .confirm-ok:hover { filter: brightness(1.08); }
 
 /* ---- ResizeHandle ---- */
-.resize-handle { flex: 0 0 5px; align-self: stretch; cursor: col-resize; position: relative; z-index: 5; }
-.resize-handle::after { content: ""; position: absolute; inset: 0 2px; border-radius: 2px; transition: background .14s; }
-.resize-handle:hover::after, [data-resizing] .resize-handle:hover::after { background: var(--accent-dim); }
+.resize-handle { flex: 0 0 6px; align-self: stretch; cursor: col-resize; position: relative; z-index: 6; }
+/* Wider invisible grab zone so the thin strip is easy to hit even without pixel-precise aim. */
+.resize-handle::before { content: ""; position: absolute; inset: 0 -4px; }
+/* A faint always-visible divider (so users can SEE the handle), brighter on hover / while resizing. */
+.resize-handle::after { content: ""; position: absolute; inset: 0 2px; border-radius: 2px; background: var(--border); transition: background .14s; }
+.resize-handle:hover::after, [data-resizing] .resize-handle::after { background: var(--accent); }
+/* Inspector handle is always mounted; hide it only when the inspector is collapsed. */
+.window.insp-collapsed .insp-resize { display: none; }
 [data-resizing] { cursor: col-resize; user-select: none; }
 [data-resizing] .sidebar, [data-resizing] .inspector { transition: none !important; }
 
