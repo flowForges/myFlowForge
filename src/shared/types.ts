@@ -162,7 +162,7 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'error'; id: string; error: string }
 )
 
-export type { Settings, Appearance, Pet, PetState, Anim, Accent, PetStateConfig, AgentsConfig, CustomAgent, CustomPetCfg, Terminal, CloseAction, AppIcon, DockIcon, Notifications } from '../main/config/schema'
+export type { Settings, Appearance, Pet, PetState, Anim, Accent, PetStateConfig, AgentsConfig, CustomAgent, CustomPetCfg, Terminal, CloseAction, AppIcon, DockIcon, Notifications, Keybindings } from '../main/config/schema'
 export type { AppLogEntry, LogLevel } from '../main/log/appLog'
 
 export interface SessionImportCoverage {

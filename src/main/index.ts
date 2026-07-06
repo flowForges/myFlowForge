@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen, Tray } from 'electron'
+import { registerGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts/globalShortcuts'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -298,6 +299,31 @@ app.whenReady().then(() => {
   // On startup, join whatever window is already focused (if the toggle is on).
   relocatePetToFocus(BrowserWindow.getFocusedWindow())
 
+  // ── Global (OS-level) keyboard shortcuts ────────────────────────────────────
+  // Only the two scope==='global' actions register here (via Electron globalShortcut); every other
+  // action is dispatched in the renderer while the app is focused. Re-registered whenever keybindings
+  // change (onSettings). Accelerators the OS refuses are broadcast so the settings pane can flag them.
+  let globalShortcutFailed: string[] = []
+  const toggleMainWindow = () => {
+    if (!mainWinRef || mainWinRef.isDestroyed()) return
+    if (mainWinRef.isVisible() && mainWinRef.isFocused() && !mainWinRef.isMinimized()) { mainWinRef.hide(); return }
+    showMainWindow()
+  }
+  const togglePet = () => {
+    if (!petWin || petWin.isDestroyed()) return
+    if (petWin.isVisible()) petWin.hide(); else petWin.showInactive()
+  }
+  const applyGlobalShortcuts = () => {
+    const { failed } = registerGlobalShortcuts(readSettings().keybindings.overrides, {
+      'toggle-main-window': toggleMainWindow,
+      'toggle-pet': togglePet,
+    })
+    globalShortcutFailed = failed
+    registry.broadcast(CH.shortcutsStatus, { failed })
+  }
+  applyGlobalShortcuts()
+  ipcMain.handle(CH.shortcutsGetStatus, () => ({ failed: globalShortcutFailed }))
+
   ipcMain.handle(CH.petSetExpanded, (_e, mode: PetSizeMode) => { petMode = mode; return dockPet(mode) })
   ipcMain.handle(CH.petGetBounds, () => {
     if (!petWin || petWin.isDestroyed()) return null
@@ -376,6 +402,8 @@ app.whenReady().then(() => {
     else if (petWin && !petWin.isDestroyed()) dockPet(petMode) // re-dock at current expand state
     // Turning the follow toggle on should take effect immediately: join the currently-focused screen.
     relocatePetToFocus(BrowserWindow.getFocusedWindow())
+    // Re-register OS-level shortcuts in case the user changed a global keybinding.
+    applyGlobalShortcuts()
   }
 
   // OS notifications: fire only when the main window is unfocused; clicking focuses the app and
@@ -501,7 +529,7 @@ app.whenReady().then(() => {
     termManager.kill(p.termId)
   })
 
-  app.on('before-quit', () => { quitting = true; termManager.killAll(); scheduler.stop() })
+  app.on('before-quit', () => { quitting = true; termManager.killAll(); scheduler.stop(); unregisterGlobalShortcuts() })
   mainWin.on('closed', () => termManager.killAll())
   // ── End terminal PTY bridge ─────────────────────────────────────────────────
 
