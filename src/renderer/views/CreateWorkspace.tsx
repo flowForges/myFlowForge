@@ -116,9 +116,10 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     return opts
   }, [pickProviders])
 
-  // Resolve a stage's default provider/model: first installed provider, default model if offered else first model.
-  const seedStage = (defaultModel: string): { provider: string; model: string } => {
-    const prov = pickProviders[0]
+  // Resolve a stage's default provider/model: prefer the stage's configured agent (if installed),
+  // else the first installed provider; the default model if that provider offers it, else its first.
+  const seedStage = (defaultModel: string, preferredProvider?: string): { provider: string; model: string } => {
+    const prov = (preferredProvider && pickProviders.find(p => p.id === preferredProvider)) || pickProviders[0]
     if (!prov) return { provider: '', model: defaultModel }
     const has = prov.models.some(m => m.id === defaultModel)
     return { provider: prov.id, model: has ? defaultModel : (prov.models[0]?.id ?? defaultModel) }
@@ -127,10 +128,11 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const buildStages = (wf: CfgWorkflow | undefined): Record<string, WizardStage> => {
     const onKeys = new Set((wf?.stages ?? []).map(s => s.key))
     const dmByKey: Record<string, string> = {}
-    for (const s of wf?.stages ?? []) dmByKey[s.key] = s.defaultModel
+    const daByKey: Record<string, string> = {}
+    for (const s of wf?.stages ?? []) { dmByKey[s.key] = s.defaultModel; daByKey[s.key] = s.defaultAgent }
     const out: Record<string, WizardStage> = {}
     for (const k of STAGE_KEYS) {
-      const seeded = seedStage(dmByKey[k] ?? pickProviders[0]?.models[0]?.id ?? '')
+      const seeded = seedStage(dmByKey[k] ?? pickProviders[0]?.models[0]?.id ?? '', daByKey[k])
       const seedPrompt = wf?.stagePrompts?.[k]
       out[k] = { on: onKeys.has(k), provider: seeded.provider, model: seeded.model, ...(seedPrompt ? { prompt: seedPrompt } : {}) }
     }

@@ -142,6 +142,34 @@ describe('CreateWorkspace', () => {
     expect(document.querySelector('[data-crwf-name]')).toBeNull()                // designer dismissed
   })
 
+  it('switching workflows updates the per-stage model (same stages, different models)', () => {
+    const twoWf = [
+      { id: 'standard', name: '标准', stages: [{ key: 'develop', defaultAgent: 'claude', defaultModel: 'opus-4.8' }], plugins: [] },
+      { id: 'marketing', name: '商家营销', stages: [{ key: 'develop', defaultAgent: 'claude', defaultModel: 'sonnet-4.6' }], plugins: [] },
+    ]
+    render(<CreateWorkspace {...defaultProps} workflows={twoWf} />)
+    const sel = () => (document.querySelector('[data-stmodel="develop"]') as HTMLSelectElement).value
+    expect(sel()).toBe('claude::opus-4.8')                                  // standard's model
+    fireEvent.click(document.querySelector('[data-crtpl="marketing"]') as HTMLElement)
+    expect(sel()).toBe('claude::sonnet-4.6')                                // marketing's model
+  })
+
+  it('switching to a workflow whose stage uses a different provider reflects that provider+model', () => {
+    const providersWithCodex = [
+      ...providers,
+      { id: 'codex', displayName: 'Codex', installed: true, models: [{ id: 'gpt-5-codex', label: 'GPT-5 Codex' }] },
+    ]
+    const twoWf = [
+      { id: 'standard', name: '标准', stages: [{ key: 'develop', defaultAgent: 'claude', defaultModel: 'opus-4.8' }], plugins: [] },
+      { id: 'marketing', name: '商家营销', stages: [{ key: 'develop', defaultAgent: 'codex', defaultModel: 'gpt-5-codex' }], plugins: [] },
+    ]
+    render(<CreateWorkspace {...defaultProps} providers={providersWithCodex} workflows={twoWf} />)
+    const sel = () => (document.querySelector('[data-stmodel="develop"]') as HTMLSelectElement).value
+    expect(sel()).toBe('claude::opus-4.8')
+    fireEvent.click(document.querySelector('[data-crtpl="marketing"]') as HTMLElement)
+    expect(sel()).toBe('codex::gpt-5-codex')   // respects the stage's own provider, not just provider[0]
+  })
+
   it('disables the create button and shows a pending label while creating', () => {
     const onCreate = vi.fn()
     render(<CreateWorkspace {...defaultProps} onCreate={onCreate} creating />)
