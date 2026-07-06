@@ -12,6 +12,14 @@
   background: oklch(99% .006 250 / .34);
   box-shadow: var(--shadow), 0 0 0 1px oklch(0% 0 0 / .1), inset 0 1px 0 oklch(100% 0 0 / .28);
 }
+/* When 磨砂 (glass) is on WITHOUT native window vibrancy, the window MUST blur the desktop itself —
+   otherwise the faint tint sits over a sharp bright wallpaper and reads as a grey haze (the reported
+   regression: the refactor dropped this blur, assuming vibrancy provides it). With vibrancy on, the
+   native material already blurs, so we skip the CSS blur to avoid double-blurring. */
+html[data-glass="on"]:not([data-vibrancy="on"]) .window {
+  backdrop-filter: blur(calc(42px * var(--glass-blur-strength, 1))) saturate(1.5);
+  -webkit-backdrop-filter: blur(calc(42px * var(--glass-blur-strength, 1))) saturate(1.5);
+}
 /* Retune hairline tokens per glass theme so every 1px seam (titlebar/statusbar edges, cards,
    dividers, buttons) is a subtle low-contrast line instead of a bright-white (light) or hard-dark
    (dark) slash. Light → faint dark hairline; dark → faint white hairline (the frosted-edge look). */
