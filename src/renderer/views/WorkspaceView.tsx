@@ -116,7 +116,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
   const [quickSeed, setQuickSeed] = useState<{ text: string; nonce: number }>()
-  const [selection, setSelection] = useState<{ agentId: string; modelId: string }>()
+  const [selection, setSelection] = useState<{ agentId: string; modelId: string; permissionMode?: import('@shared/permissions').PermissionMode }>()
   // 本机扫描到的当前 provider 的自定义命令/prompt + skills(进 "/" 菜单)。随 provider/workspace 变化拉取。
   const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
   const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)

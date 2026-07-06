@@ -146,6 +146,7 @@ export interface ChatSendPayload {
   text: string
   attachments: Attachment[]
   source?: string      // who sent it, default '你'
+  permissionMode?: import('./permissions').PermissionMode   // agent sandbox scope (readonly/auto/full)
 }
 export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string }[]; running: { id: string; text: string } | null }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (

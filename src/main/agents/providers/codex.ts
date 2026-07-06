@@ -4,6 +4,7 @@ import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, extractContextTokens, contextWindowFor } from '../chatStream'
 import { forgeCodexConfigArgs } from '../mcpConfig'
 import { forgeChatDirective } from '../forgeChatDirective'
+import { permissionArgs } from '../permissionArgs'
 import { readCodexModelsCache } from './codexModels'
 import { logError } from '../../log/appLog'
 
@@ -230,7 +231,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // still works (it lives outside config.toml), and the account's default model is used.
         // sandbox via `-c sandbox_mode` (NOT `-s`): `codex exec resume` rejects the `-s`/`--sandbox`
         // flag ("unexpected argument '-s'"), but accepts the config override — and so does plain `exec`.
-        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="workspace-write"', '-c', 'approval_policy="never"', ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), prompt]
+        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), prompt]
       // stdin: 'ignore' so codex doesn't block reading stdin; timeout so a wedged turn (e.g.
       // a hanging experimental feature) surfaces a message instead of an endless 思考中 spinner.
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore', timeout: 180_000 })

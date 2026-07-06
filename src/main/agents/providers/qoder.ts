@@ -3,6 +3,7 @@ import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, Cha
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor } from '../chatStream'
 import { createFenceScanner } from '../handoffFence'
 import { forgeMcpArgs } from '../mcpConfig'
+import { permissionArgs } from '../permissionArgs'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { parseModelsList } from '../parseModelsList'
 import { logError, logWarn } from '../../log/appLog'
@@ -162,8 +163,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
             // qodercli rejects claude's `--verbose` (prints usage + exits with no stdout); only
             // --include-partial-messages is needed for the streamed deltas.
             '--include-partial-messages',
-            '--permission-mode', 'accept_edits',
-            '--dangerously-skip-permissions',
+            ...permissionArgs('qoder', task.permissionMode ?? 'auto'),
             '--cwd', task.cwd,
             ...(task.model && task.model !== 'default' ? ['-m', task.model] : []),
             ...forgeMcpArgs(env),

@@ -43,7 +43,7 @@ describe('Composer controlled mode', () => {
     const claudeItem = container.querySelector('[data-agent="Claude Code"]') as HTMLElement
     fireEvent.click(claudeItem)
     expect(onSel).toHaveBeenCalledTimes(1)
-    expect(onSel.mock.calls[0][0]).toEqual({ agentId: 'claude', modelId: 'opus' })
+    expect(onSel.mock.calls[0][0]).toMatchObject({ agentId: 'claude', modelId: 'opus' })
   })
 
   it('uncontrolled mode (no selection prop) seeds from providers and works as before', () => {

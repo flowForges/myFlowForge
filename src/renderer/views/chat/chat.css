@@ -176,6 +176,16 @@
 .cb-btn svg { width: 15px; height: 15px; }
 .cb-btn .dd-chev { width: 12px; height: 12px; color: var(--faint); margin-left: 1px; }
 .cb-btn .mc-logo-sm { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 10px; }
+/* permission-mode chip: colour the shield by how permissive the mode is (readonly=calm, auto=ok, full=warn) */
+.cb-perm .cb-ic { color: var(--muted); }
+.cb-perm.perm-readonly .cb-ic { color: oklch(72% .12 235); }
+.cb-perm.perm-auto .cb-ic { color: oklch(70% .15 150); }
+.cb-perm.perm-full .cb-ic { color: oklch(72% .17 45); }
+.perm-pop { min-width: 240px; }
+.perm-pop .menu-item { align-items: flex-start; }
+.perm-pop .pm-main { display: flex; flex-direction: column; gap: 1px; text-align: left; flex: 1; min-width: 0; }
+.perm-pop .pm-t { font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.perm-pop .pm-d { font-size: 11px; color: var(--muted); line-height: 1.35; white-space: normal; }
 .composer-bar .spacer { flex: 1; }
 .send { width: 34px; height: 34px; border-radius: 8px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; transition: .14s; }
 .send:hover { filter: brightness(1.08); }

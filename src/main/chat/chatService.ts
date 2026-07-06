@@ -157,7 +157,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       // assistant text). Only the first settles — otherwise finishOk (empty text) overwrites
       // finishErr's error bubble, leaving a blank reply.
       let settled = false
-      const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments }, {
+      const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode }, {
         onSession: (id) => writeSession(ws, sid, payload.agent, id),
         onAssistantDelta: (t) => { dbgDelta('chat', t); text += t; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
         onThinkDelta: (t) => {

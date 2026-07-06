@@ -25,6 +25,26 @@ describe('Composer', () => {
     expect(arg.agentLabel).toBe('Claude Code')
     expect(arg.model).toBe('opus-4.8')
   })
+  it('defaults the permission mode to auto and includes it in the send payload', () => {
+    const onSend = vi.fn()
+    render(<Composer providers={providers} disabled={false} onSend={onSend} />)
+    const ta = screen.getByPlaceholderText(/给主代理下达任务/)
+    fireEvent.change(ta, { target: { value: 'hi' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(onSend.mock.calls[0][0].permissionMode).toBe('auto')
+  })
+
+  it('picking a permission mode carries it into the send payload', () => {
+    const onSend = vi.fn()
+    render(<Composer providers={providers} disabled={false} onSend={onSend} />)
+    fireEvent.click(document.querySelector('[data-menu="permMenu"]') as HTMLElement)   // open the picker
+    fireEvent.click(document.querySelector('[data-perm="full"]') as HTMLElement)       // choose 完全访问
+    const ta = screen.getByPlaceholderText(/给主代理下达任务/)
+    fireEvent.change(ta, { target: { value: 'go' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(onSend.mock.calls[0][0].permissionMode).toBe('full')
+  })
+
   it('sends on plain Enter', () => {
     const onSend = vi.fn()
     render(<Composer providers={providers} disabled={false} onSend={onSend} />)

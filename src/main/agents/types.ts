@@ -49,6 +49,7 @@ export interface ChatTask {
   cwd: string
   sessionId?: string
   attachments?: Attachment[]
+  permissionMode?: import('@shared/permissions').PermissionMode
 }
 export interface ChatCallbacks {
   onSession(id: string): void

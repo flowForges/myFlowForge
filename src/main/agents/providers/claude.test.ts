@@ -260,16 +260,24 @@ process.exit(0)
     expect(args[args.indexOf('--permission-mode') + 1]).toBe('acceptEdits')
   })
 
-  it('chat() does NOT use acceptEdits (interactive keeps per-edit confirms)', async () => {
+  const chatArgs = async (permissionMode?: 'readonly' | 'auto' | 'full') => {
     const provider = makeClaudeProvider({ bin: dumpCli, defaultModels: [] })
     const s = provider.chat!(
-      { id: 'c1', prompt: 'hi', model: 'sonnet-4.6', cwd: dir },
+      { id: 'c1', prompt: 'hi', model: 'sonnet-4.6', cwd: dir, permissionMode },
       { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => {}, onError: () => {} },
       { ...process.env, ARGV_OUT: argvOut }
     )
     await s.done
-    const args = JSON.parse(readFileSync(argvOut, 'utf8')) as string[]
-    expect(args).not.toContain('acceptEdits')
+    return JSON.parse(readFileSync(argvOut, 'utf8')) as string[]
+  }
+
+  it('chat() maps the permission mode to --permission-mode (default auto → acceptEdits)', async () => {
+    const def = await chatArgs()
+    expect(def[def.indexOf('--permission-mode') + 1]).toBe('acceptEdits')
+    const ro = await chatArgs('readonly')
+    expect(ro[ro.indexOf('--permission-mode') + 1]).toBe('plan')
+    const full = await chatArgs('full')
+    expect(full[full.indexOf('--permission-mode') + 1]).toBe('bypassPermissions')
   })
 })
 

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
+import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
@@ -12,6 +13,9 @@ const CHECK = (
 )
 const PAPERCLIP = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+)
+const SHIELD = (
+  <svg className="cb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" /></svg>
 )
 const SEND_ARROW = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></svg>
@@ -62,13 +66,13 @@ interface Props {
   running?: boolean
   /** Called when the user clicks the stop button or presses Escape while running. */
   onStop?: () => void
-  onSend: (m: { agent: string; agentLabel: string; model: string; text: string; attachments: Attachment[] }) => void
+  onSend: (m: { agent: string; agentLabel: string; model: string; text: string; attachments: Attachment[]; permissionMode: PermissionMode }) => void
   onPaste?: (f: { name: string; dataBase64: string }) => Promise<Attachment | null>
   // When set (with a fresh nonce), fills the textarea with a starter prompt (快捷指令 chips).
   seedText?: { text: string; nonce: number }
   /** 受控选中态：提供时 Composer 以它为准并通过 onSelectionChange 上报变化（概览跟随）。 */
-  selection?: { agentId: string; modelId: string }
-  onSelectionChange?: (s: { agentId: string; modelId: string }) => void
+  selection?: { agentId: string; modelId: string; permissionMode?: PermissionMode }
+  onSelectionChange?: (s: { agentId: string; modelId: string; permissionMode: PermissionMode }) => void
   /** 本机扫描到的该 provider 的自定义命令/prompt + skills(经 IPC),与 Forge 内置命令一起进 "/" 菜单。 */
   dynamicCommands?: MenuCommand[]
 }
@@ -78,12 +82,15 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [localAgentId, setLocalAgentId] = useState<string>('')
   const [localModelId, setLocalModelId] = useState<string>('')
+  const [localPerm, setLocalPerm] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE)
   const controlled = selection !== undefined
   const agentId = controlled ? selection!.agentId : localAgentId
   const modelId = controlled ? selection!.modelId : localModelId
-  const setAgentId = (id: string) => { if (controlled) onSelectionChange?.({ agentId: id, modelId }); else setLocalAgentId(id) }
-  const setModelId = (id: string) => { if (controlled) onSelectionChange?.({ agentId, modelId: id }); else setLocalModelId(id) }
-  const [openMenu, setOpenMenu] = useState<'agent' | 'ver' | null>(null)
+  const permissionMode = (controlled ? selection!.permissionMode : localPerm) ?? DEFAULT_PERMISSION_MODE
+  const setAgentId = (id: string) => { if (controlled) onSelectionChange?.({ agentId: id, modelId, permissionMode }); else setLocalAgentId(id) }
+  const setModelId = (id: string) => { if (controlled) onSelectionChange?.({ agentId, modelId: id, permissionMode }); else setLocalModelId(id) }
+  const setPermissionMode = (m: PermissionMode) => { if (controlled) onSelectionChange?.({ agentId, modelId, permissionMode: m }); else setLocalPerm(m) }
+  const [openMenu, setOpenMenu] = useState<'agent' | 'ver' | 'perm' | null>(null)
   // Slash-command menu: shown while typing a "/token" (before any space). slashSel = highlighted row;
   // slashDismissed lets Esc close it until the query changes.
   const [slashSel, setSlashSel] = useState(0)
@@ -126,7 +133,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
 
   function chooseAgent(p: ProviderInfo) {
     const m = p.models[0]?.id ?? ''
-    if (controlled) onSelectionChange?.({ agentId: p.id, modelId: m })
+    if (controlled) onSelectionChange?.({ agentId: p.id, modelId: m, permissionMode })
     else { setLocalAgentId(p.id); setLocalModelId(m) }
     setOpenMenu(null)
   }
@@ -176,7 +183,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   function send() {
     const t = text.trim()
     if (!t || disabled || !agent) return
-    onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments })
+    onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode })
     setText('')
     setAttachments([])
     // Reset to natural single-row height (matches the prototype's `autosize()` after
@@ -372,6 +379,36 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
                   自定义模型…
                 </button>
               )}
+            </div>
+          </div>
+          {/* 权限模式选择 — agent 能自主动多少(只读/自动/完全) */}
+          <div className={'menu' + (openMenu === 'perm' ? ' open' : '')} id="permMenu">
+            <button
+              className={'cb-btn cb-perm perm-' + permissionMode}
+              data-menu="permMenu"
+              title={providerSupportsPermissions(agentId) ? '权限模式:agent 能自主执行到什么程度' : '当前编码代理不支持权限档,按其默认行为运行'}
+              onClick={() => setOpenMenu(openMenu === 'perm' ? null : 'perm')}
+            >
+              {SHIELD}
+              <span>{permissionModeLabel(permissionMode)}</span>
+              {CHEV_DD}
+            </button>
+            <div className="menu-pop perm-pop">
+              <div className="menu-label">权限模式{providerSupportsPermissions(agentId) ? '' : ' · 当前代理不支持'}</div>
+              {PERMISSION_MODES.map(pm => (
+                <button
+                  className={'menu-item' + (pm.id === permissionMode ? ' on' : '')}
+                  data-perm={pm.id}
+                  key={pm.id}
+                  onClick={() => { setPermissionMode(pm.id); setOpenMenu(null) }}
+                >
+                  <div className="pm-main">
+                    <div className="pm-t">{pm.label}</div>
+                    <div className="pm-d">{pm.desc}</div>
+                  </div>
+                  {CHECK}
+                </button>
+              ))}
             </div>
           </div>
           <button className="cb-btn" id="attachBtn" title="附加文件" onClick={pickFiles}>

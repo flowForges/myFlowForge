@@ -2,6 +2,7 @@ import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor } from '../chatStream'
 import { forgeMcpArgs } from '../mcpConfig'
+import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
@@ -123,7 +124,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       // usage error and emits nothing → the reply renders blank ("only 思考中, no text").
       const args = spec.preArgs
         ? [...spec.preArgs]
-        : ['-p', buildChatPrompt(task), '--output-format', 'stream-json', '--include-partial-messages', '--verbose', '--model', cliModel(task.model), ...forgeMcpArgs(env)]
+        : ['-p', buildChatPrompt(task), '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...permissionArgs('claude', task.permissionMode ?? 'auto'), '--model', cliModel(task.model), ...forgeMcpArgs(env)]
       if (!spec.preArgs && task.sessionId) args.push('--resume', task.sessionId)
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
       const start = Date.now()
