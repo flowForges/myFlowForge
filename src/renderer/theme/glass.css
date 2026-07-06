@@ -12,13 +12,13 @@
   background: oklch(99% .006 250 / .34);
   box-shadow: var(--shadow), 0 0 0 1px oklch(0% 0 0 / .1), inset 0 1px 0 oklch(100% 0 0 / .28);
 }
-/* 磨砂 WITHOUT native vibrancy has no blurred backdrop (Electron's CSS backdrop-filter can't blur the
-   OS desktop behind a transparent window — only the native material can). The frosted tints, meant to
-   sit over a dark blurred desktop, then read as grey haze over the sharp bright wallpaper. So make the
-   root window near-opaque: every panel sits on it instead of the desktop, and dark mode looks dark, not
-   washed out. When vibrancy IS on, the translucent frosted look above is kept (the material blurs). */
-[data-glass="on"]:not([data-vibrancy="on"]) .window { background: oklch(21% .022 262 / .975); }
-[data-theme="light"][data-glass="on"]:not([data-vibrancy="on"]) .window { background: oklch(98% .006 250 / .965); }
+/* The main window's "frosted" look can only come from letting the (natively blurred) desktop show
+   through — the side panels have nothing behind them to blur. So scale the window's OPACITY by the
+   磨砂度 slider (--glass-blur-strength = blurAmount, 0..1): low = near-opaque (clean, no wallpaper
+   colour), high = more see-through (stronger frost, a hint of desktop). Even at max we stay fairly
+   opaque so a bright wallpaper is muted, not the old grey/yellow haze. */
+[data-glass="on"] .window { background: oklch(21% .022 262 / calc(0.96 - 0.3 * var(--glass-blur-strength, 0.5))); }
+[data-theme="light"][data-glass="on"] .window { background: oklch(98% .006 250 / calc(0.955 - 0.28 * var(--glass-blur-strength, 0.5))); }
 /* Retune hairline tokens per glass theme so every 1px seam (titlebar/statusbar edges, cards,
    dividers, buttons) is a subtle low-contrast line instead of a bright-white (light) or hard-dark
    (dark) slash. Light → faint dark hairline; dark → faint white hairline (the frosted-edge look). */
