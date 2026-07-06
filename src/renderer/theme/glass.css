@@ -113,12 +113,12 @@
 [data-glass="on"] .agent-log { background: oklch(40% .04 262 / .12); }
 /* floating popovers */
 [data-glass="on"] .notif-pop,
-[data-glass="on"] .pet-pop { background: oklch(30% .035 262 / .5); backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.7); -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.7); }
+[data-glass="on"] .pet-pop { background: oklch(24% .03 262 / .95); backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.7); -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.7); }
 /* modal sheets — real frosted glass: lower fill, stronger blur so the
    colourful wallpaper genuinely reads through while text stays legible */
 [data-glass="on"] .settings,
 [data-glass="on"] .cr-modal,
-[data-glass="on"] .upd-sheet { background: oklch(27% .03 262 / .44); backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.9); -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.9); border-color: oklch(100% 0 0 / .14); }
+[data-glass="on"] .upd-sheet { background: oklch(25% .03 262 / .95); backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.9); -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.9); border-color: oklch(100% 0 0 / .14); }
 [data-glass="on"] .set-nav,
 [data-glass="on"] .cr-foot { background: oklch(50% .04 262 / .1); }
 /* on glass, soften the settings dividers to faint light hairlines so they
@@ -167,10 +167,10 @@
 [data-theme="light"][data-glass="on"] .preview,
 [data-theme="light"][data-glass="on"] .agent-log { background: oklch(100% 0 0 / .48); }
 [data-theme="light"][data-glass="on"] .notif-pop,
-[data-theme="light"][data-glass="on"] .pet-pop { background: oklch(100% 0 0 / .6); backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.5); -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.5); }
+[data-theme="light"][data-glass="on"] .pet-pop { background: oklch(99% .004 250 / .96); backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.5); -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur-strength, 1))) saturate(1.5); }
 [data-theme="light"][data-glass="on"] .settings,
 [data-theme="light"][data-glass="on"] .cr-modal,
-[data-theme="light"][data-glass="on"] .upd-sheet { background: oklch(100% 0 0 / .52); backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.7); -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.7); border-color: oklch(0% 0 0 / .06); }
+[data-theme="light"][data-glass="on"] .upd-sheet { background: oklch(99% .004 250 / .96); backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.7); -webkit-backdrop-filter: blur(calc(44px * var(--glass-blur-strength, 1))) saturate(1.7); border-color: oklch(0% 0 0 / .06); }
 [data-theme="light"][data-glass="on"] .set-nav,
 [data-theme="light"][data-glass="on"] .cr-foot { background: oklch(100% 0 0 / .3); }
 [data-theme="light"][data-glass="on"] .settings-overlay,
