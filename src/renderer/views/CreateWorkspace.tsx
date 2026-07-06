@@ -263,14 +263,17 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     if (added) update(s => ({ ...s, workflowId: added.id, stages: buildStages(added), plugins: (added.plugins ?? []).map(p => ({ ...p })) }))
   }
 
-  const selectWorkflow = (id: string) => update(s => ({
+  const selectWorkflow = (id: string) => {
+    setWfDraft(null)   // picking a template dismisses the inline new-workflow designer
+    update(s => ({
     ...s, workflowId: id,
     // '__custom' keeps the current enabled set (edit from here via add/remove) instead of force-
     // enabling all 5 — so switching between templates produces a visible change in the stage list.
     stages: id === '__custom' ? s.stages : buildStages(workflows.find(w => w.id === id)),
     // Re-seed wf-scope hooks from the chosen workflow (mirrors the stage rebuild). __custom has none.
     plugins: id === '__custom' ? [] : (workflows.find(w => w.id === id)?.plugins ?? []).map(p => ({ ...p }))
-  }))
+    }))
+  }
 
   const toggleStage = (k: string) => update(s => ({ ...s, workflowId: '__custom', stages: { ...s.stages, [k]: { ...s.stages[k], on: !s.stages[k].on } } }))
   const setStageModel = (k: string, v: string) => {

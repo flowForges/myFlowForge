@@ -112,6 +112,36 @@ describe('CreateWorkspace', () => {
     expect(document.querySelector('[data-stage="develop"]')).toBeNull()
   })
 
+  it('switching to a different-staged workflow changes the rendered stage rows', () => {
+    const twoWorkflows = [
+      { id: 'standard', name: '标准工作流', stages: [
+        { key: 'design', defaultAgent: 'claude', defaultModel: 'opus-4.8' },
+        { key: 'develop', defaultAgent: 'claude', defaultModel: 'sonnet-4.6' }], plugins: [] },
+      { id: 'marketing', name: '商家营销开发工作流', stages: [
+        { key: 'requirement', defaultAgent: 'claude', defaultModel: 'opus-4.8' },
+        { key: 'develop', defaultAgent: 'claude', defaultModel: 'sonnet-4.6' },
+        { key: 'test', defaultAgent: 'claude', defaultModel: 'sonnet-4.6' }], plugins: [] },
+    ]
+    render(<CreateWorkspace {...defaultProps} workflows={twoWorkflows} />)
+    // default = standard → design + develop
+    expect(document.querySelectorAll('[data-stage]').length).toBe(2)
+    expect(document.querySelector('[data-stage="requirement"]')).toBeNull()
+    // switch to marketing → requirement + develop + test
+    fireEvent.click(document.querySelector('[data-crtpl="marketing"]') as HTMLElement)
+    expect(document.querySelectorAll('[data-stage]').length).toBe(3)
+    expect(document.querySelector('[data-stage="requirement"]')).toBeTruthy()
+    expect(document.querySelector('[data-stage="test"]')).toBeTruthy()
+    expect(document.querySelector('[data-stage="design"]')).toBeNull()
+  })
+
+  it('closes the inline workflow designer when a workflow card is clicked (issue 3)', () => {
+    render(<CreateWorkspace {...defaultProps} onAddWorkflow={vi.fn(async () => workflows)} />)
+    fireEvent.click(document.querySelector('[data-crnewwf]') as HTMLElement)     // open designer
+    expect(document.querySelector('[data-crwf-name]')).toBeTruthy()
+    fireEvent.click(document.querySelector('[data-crtpl="standard"]') as HTMLElement)  // pick a workflow
+    expect(document.querySelector('[data-crwf-name]')).toBeNull()                // designer dismissed
+  })
+
   it('disables the create button and shows a pending label while creating', () => {
     const onCreate = vi.fn()
     render(<CreateWorkspace {...defaultProps} onCreate={onCreate} creating />)
