@@ -12,8 +12,10 @@
   /* Radius scale — --r-md was referenced but never defined, so those elements collapsed to sharp
      0-radius corners. Full scale now, nudged a touch rounder to avoid hard right angles anywhere. */
   --r-sm: 7px; --r: 9px; --r-md: 11px; --r-lg: 14px; --shadow: 0 12px 40px rgba(0,0,0,0.28);
-  /* Translucent panel fills used only when vibrancy (frosted glass) is on. */
-  --glass-window: oklch(20% 0.012 250 / 0.5); --glass-panel: oklch(23% 0.013 250 / 0.45); --glass-sidebar: oklch(17% 0.014 255 / 0.45);
+  /* Translucent panel fills used only when vibrancy (frosted glass) is on. Kept fairly OPAQUE in dark
+     mode (was 0.45-0.5) so a bright wallpaper doesn't bleed through and wash the UI out to grey-yellow,
+     while still letting a hint of the frosted material read through — especially when inactive. */
+  --glass-window: oklch(20% 0.012 250 / 0.85); --glass-panel: oklch(23% 0.013 250 / 0.82); --glass-sidebar: oklch(17% 0.014 255 / 0.82);
 }
 [data-theme="light"] {
   --bg: oklch(98% 0.003 250); --bg-2: oklch(96% 0.004 250); --sidebar: oklch(95% 0.005 250);
