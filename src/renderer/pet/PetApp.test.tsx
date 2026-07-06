@@ -15,6 +15,8 @@ const emit = (e: EngineEvent) => listeners.forEach(l => l(e))
 // These tests exercise the FULL-mode popup (workspace list, command queue, session picker), so pin the
 // pet to 'full'. Simple mode has its own tests (PetSimplePanel / deriveSimpleKind).
 const SETTINGS = (over: any = {}) => ({ pet: { skin: 'bot', corner: 'right', enabled: true, interactionMode: 'full', pos: { bottom: 24 }, notify: { confirm: true, input: true, done: false }, states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' }, ...over } } })
+// Same as SETTINGS but the simple (codex-style) interaction mode.
+const SETTINGS_SIMPLE = () => { const s = SETTINGS(); s.pet.interactionMode = 'simple'; return s }
 
 beforeEach(() => {
   listeners = []; queueListeners = []; settingsCb = null
@@ -147,6 +149,19 @@ describe('PetApp P3-4', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(sendChat).toHaveBeenCalled())
     expect(sendChat.mock.calls[0][0]).toMatchObject({ workspacePath: '/ws/idle', agent: 'codex', model: 'gpt-5' })
+  })
+
+  it('simple mode: clicking the pet body while an agent runs focuses the workspace (not collapse)', async () => {
+    ;(window as any).forge.getSettings = async () => SETTINGS_SIMPLE()
+    const petFocusWorkspace = (window as any).forge.petFocusWorkspace as ReturnType<typeof vi.fn>
+    const { container } = render(<PetApp />)
+    await waitFor(() => expect(container.querySelector('.pet')).not.toBeNull())
+    // an agent starts running → the simple status panel shows "执行中"
+    act(() => emit({ type: 'run:update', run: { id: 'r', workspaceName: 'w', workspacePath: '/w', status: 'run', projects: [], stages: [], pending: [] } }))
+    await waitFor(() => expect(container.querySelector('.pet-simple')).not.toBeNull())
+    // clicking the pet body jumps to the running workspace instead of toggling the panel
+    await act(async () => { fireEvent.click(container.querySelector('.pet-hit') as HTMLElement) })
+    expect(petFocusWorkspace).toHaveBeenCalledWith('/w')
   })
 
   it('home: enables input after click-selecting a workspace row (no main active workspace)', async () => {

@@ -312,10 +312,11 @@ export function PetApp() {
   const resize = usePetResize(() => scaleRef.current, applyScale, beginResize)
   const toggle = () => {
     if (drag.isDragging() || resize.isResizing()) return
-    // Simple mode: idle → focus the app; while a bubble is up → collapse/expand it.
+    // Simple mode: clicking the pet BODY always brings the app forward and jumps to the running
+    // workspace/session — it's the natural "take me there" gesture. Collapsing/expanding the status
+    // panel is the dedicated chevron's job (.ps-collapse), not the whole sprite's.
     if (simple) {
-      if (simplePanelShown) setSimpleCollapsed(c => !c)
-      else window.forge.petFocusWorkspace(run?.workspacePath ?? currentWs ?? '')
+      window.forge.petFocusWorkspace(run?.workspacePath ?? currentWs ?? '')
       return
     }
     open ? closePop() : openPop()
