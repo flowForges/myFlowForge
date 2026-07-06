@@ -33,7 +33,7 @@
 /* ---- 右侧检查器 ---- */
 .inspector {
   width: 380px; flex: 0 0 380px; border-left: 1px solid var(--border);
-  background: var(--bg-2); display: flex; flex-direction: column; min-height: 0;
+  background: var(--bg-2); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden;
   transition: width .22s cubic-bezier(.4,0,.2,1), flex-basis .22s;
 }
 .window.insp-collapsed .inspector { width: 0; flex-basis: 0; border-left-color: transparent; }
