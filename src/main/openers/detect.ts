@@ -17,6 +17,8 @@ export type BundleFinder = (bundleId: string) => Promise<string | null>
 export type IconFn = (appPath: string) => Promise<string | undefined>
 
 export const openersCacheFile = () => sysFile('openers-cache.json')
+// Bump when the cache shape/contents change so old caches self-heal. v2 = entries carry app icons.
+export const OPENERS_CACHE_VERSION = 2
 const noIcon: IconFn = async () => undefined
 
 async function mdfindBundle(bundleId: string): Promise<string | null> {
@@ -54,11 +56,15 @@ export async function detectOpeners(icon: IconFn = noIcon, refresh = false): Pro
   if (!refresh && existsSync(file)) {
     try {
       const parsed = JSON.parse(readFileSync(file, 'utf8'))
-      if (Array.isArray(parsed?.apps)) return parsed.apps as DetectedOpener[]
+      const apps = Array.isArray(parsed?.apps) ? parsed.apps as DetectedOpener[] : null
+      // Only trust a cache written by an icon-capable build (version tag). A pre-icon cache lacks it,
+      // so it re-scans ONCE to extract icons (placeholder glyphs self-heal) — not on every call, even
+      // if getFileIcon legitimately fails for some app (the re-written v-tagged cache is then trusted).
+      if (apps && parsed?.v === OPENERS_CACHE_VERSION) return apps
     } catch { /* corrupt cache — fall through to rescan */ }
   }
   const apps = await scanOpeners(icon)
-  try { writeJsonAtomic(file, { apps }) } catch { /* cache write is best-effort */ }
+  try { writeJsonAtomic(file, { v: OPENERS_CACHE_VERSION, apps }) } catch { /* cache write is best-effort */ }
   return apps
 }
 
