@@ -110,11 +110,14 @@ describe('appIcon assets', () => {
     expect(cornerAlphas(join(process.cwd(), 'build', 'icon.png'))).toEqual([0, 0, 0, 0])
   })
 
-  it('ships a full-tile system app icon for Finder and DMG windows', () => {
+  it('ships a safe-area-padded system app icon (macOS Big Sur grid) so it is not oversized', () => {
+    // Apple's icon grid wants the artwork ~80% of the tile with a transparent margin, so the app
+    // icon reads the same size as convention-following apps in the Dock/Finder — NOT edge-to-edge.
     const png = pngAlphaReader(join(process.cwd(), 'build', 'icon.png'))
-    expect(png.alphaAt(Math.round(png.width / 2), 5)).toBe(255)
-    expect(png.alphaAt(5, Math.round(png.height / 2))).toBe(255)
-    expect(png.alphaAt(Math.round(png.width / 2), Math.round(png.height / 2))).toBe(255)
+    expect(png.alphaAt(Math.round(png.width / 2), 5)).toBe(0)            // top edge is transparent margin
+    expect(png.alphaAt(5, Math.round(png.height / 2))).toBe(0)          // left edge is transparent margin
+    expect(png.alphaAt(Math.round(png.width * 0.13), Math.round(png.height / 2))).toBe(255)  // body inside the margin
+    expect(png.alphaAt(Math.round(png.width / 2), Math.round(png.height / 2))).toBe(255)     // center is opaque
   })
 
   it('ships a compact macOS menu bar template icon', () => {
