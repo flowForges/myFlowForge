@@ -69,8 +69,11 @@
 .wf-designer .wfd-name:focus { border-color: var(--accent); }
 .wf-designer .wfd-stages { display: flex; flex-wrap: wrap; gap: 7px; }
 .wf-designer .stage-add-chip.on { background: var(--accent); color: var(--on-accent); border-style: solid; }
-.wf-designer .wfd-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.wf-designer .wfd-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .wf-designer .btn-cancel { height: 30px; padding: 0 14px; border-radius: 7px; background: var(--surface-2); color: var(--fg-2); font-size: 12px; font-weight: 600; }
+.wf-designer .np-add { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 14px; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 600; cursor: pointer; flex: 0 0 auto; }
+.wf-designer .np-add:disabled { opacity: .45; cursor: default; }
+.wf-designer .np-add svg { width: 13px; height: 13px; flex: 0 0 13px; }
 .stage-add { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 2px 2px 0; }
 .stage-add .lab { font-size: 12px; color: var(--faint); margin-right: 2px; }
 .stage-add-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--accent); background: var(--accent-dim); border: 1px dashed var(--accent); border-radius: 99px; padding: 4px 10px 4px 7px; cursor: pointer; transition: .12s; }
