@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git } from './gitRunner'
-import { deriveBranch, ensureMirror, addWorktree, removeWorktree } from './worktree'
+import { deriveBranch, ensureMirror, addWorktree, removeWorktree, resolveBaseBranch } from './worktree'
 
 let root: string, source: string
 async function makeSourceRepo(dir: string) {
@@ -59,6 +59,23 @@ describe('worktree manager', () => {
     const logB = await git(['log', '--oneline'], { cwd: b })
     expect(logA).toContain('A-only change')
     expect(logB).not.toContain('A-only change')
+  })
+  it('resolveBaseBranch keeps a branch that exists in the mirror', async () => {
+    const mirror = join(root, 'mirror', 'proj.git')
+    await ensureMirror({ mirror, repoUrl: source })
+    expect(await resolveBaseBranch(mirror, 'main')).toBe('main')
+  })
+  it('resolveBaseBranch falls back to the real default HEAD when the wanted branch is missing', async () => {
+    const mirror = join(root, 'mirror', 'proj.git')
+    await ensureMirror({ mirror, repoUrl: source })   // source default is main
+    // user typo'd "master" — repo has only main; must self-heal to the real default
+    expect(await resolveBaseBranch(mirror, 'master')).toBe('main')
+  })
+  it('resolveBaseBranch throws a readable error when neither wanted nor HEAD resolves', async () => {
+    // an empty bare repo has no commits and an unborn HEAD → nothing to base on
+    const empty = join(root, 'empty.git')
+    await git(['init', '--bare', '-b', 'main', empty], { cwd: root })
+    await expect(resolveBaseBranch(empty, 'master')).rejects.toThrow(/基线分支|base branch/i)
   })
   it('removes a worktree and frees its working files', async () => {
     const mirror = join(root, 'mirror', 'proj.git')

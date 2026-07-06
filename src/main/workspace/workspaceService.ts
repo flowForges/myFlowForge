@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { mirrorPath, expandTilde } from '../config/paths'
-import { ensureMirror, addWorktree } from '../git/worktree'
-import { writeWorkspace, registerWorkspace, readWorkspace } from '../config/store'
+import { ensureMirror, addWorktree, resolveBaseBranch } from '../git/worktree'
+import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBranch } from '../config/store'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
 import { STAGE_NAMES, type StageKey, type Project, type Workspace } from '../config/schema'
 import type { StartRunOpts, StageSpec, DevelopProject } from '../orchestrator/orchestrator'
@@ -16,7 +16,12 @@ export async function provisionWorktree(proj: Project, branch: string, wsPath: s
   const mirror = mirrorPath(proj.id)
   const worktreePath = join(wsPath, proj.name)
   await ensureMirror({ mirror, repoUrl: proj.repoUrl, proxy })
-  await addWorktree({ mirror, worktreePath, branch, baseBranch: proj.defaultBranch })
+  // The project's stored default branch may be wrong (mistyped at import). Resolve against the real
+  // mirror so a bad base can't fail workspace creation; if it was corrected, persist it back so
+  // future workspaces + the project list show the real branch.
+  const base = await resolveBaseBranch(mirror, proj.defaultBranch)
+  if (base !== proj.defaultBranch) setProjectDefaultBranch(proj.id, base)
+  await addWorktree({ mirror, worktreePath, branch, baseBranch: base })
   return worktreePath
 }
 

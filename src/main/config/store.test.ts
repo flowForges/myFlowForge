@@ -43,18 +43,35 @@ describe('config store', () => {
     expect(readProjects().projects).toHaveLength(1)
   })
 
-  it('upsertProject does not duplicate a project with the same derived id', async () => {
+  it('upsertProject updates branch+repoUrl on re-add without duplicating (same derived id)', async () => {
     const { upsertProject } = await import('./store')
-    upsertProject({ repoUrl: 'git@github.com:acme/widget.git', branch: 'main' })
-    const list = upsertProject({ repoUrl: 'https://other.host/acme/widget.git', branch: 'feature' })  // same name → same id
-    expect(list).toHaveLength(1)
-    expect(list[0].defaultBranch).toBe('main')  // original kept, no overwrite
+    upsertProject({ repoUrl: 'git@github.com:acme/widget.git', branch: 'master' })  // typo'd branch
+    const list = upsertProject({ repoUrl: 'https://other.host/acme/widget.git', branch: 'main' })  // same name → same id, corrected
+    expect(list).toHaveLength(1)                    // no duplicate row
+    expect(list[0].id).toBe('widget')               // stable id
+    expect(list[0].defaultBranch).toBe('main')      // re-add corrects the branch
+    expect(list[0].repoUrl).toBe('https://other.host/acme/widget.git')  // and the url
   })
 
   it('upsertProject defaults a blank branch to main', async () => {
     const { upsertProject } = await import('./store')
     const list = upsertProject({ repoUrl: 'git@x:y/zeta.git', branch: '' })
     expect(list[0].defaultBranch).toBe('main')
+  })
+
+  it('setProjectDefaultBranch changes an existing project branch and persists', async () => {
+    const { upsertProject, setProjectDefaultBranch, readProjects } = await import('./store')
+    upsertProject({ repoUrl: 'git@github.com:acme/widget.git', branch: 'master' })
+    const list = setProjectDefaultBranch('widget', 'main')
+    expect(list[0].defaultBranch).toBe('main')
+    expect(readProjects().projects[0].defaultBranch).toBe('main')  // persisted
+  })
+
+  it('setProjectDefaultBranch is a no-op for an unknown id and blank branch', async () => {
+    const { upsertProject, setProjectDefaultBranch } = await import('./store')
+    upsertProject({ repoUrl: 'git@github.com:acme/widget.git', branch: 'main' })
+    expect(setProjectDefaultBranch('nope', 'x')[0].defaultBranch).toBe('main')      // unknown id untouched
+    expect(setProjectDefaultBranch('widget', '  ')[0].defaultBranch).toBe('main')   // blank ignored
   })
 
   it('writes settings atomically and leaves no .tmp behind', async () => {

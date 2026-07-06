@@ -53,6 +53,30 @@ describe('createWorkspace', () => {
     expect(result.startRunOpts.developProjects[0].cwd).toBe(join(wsPath, 'proj'))
   })
 
+  it('self-heals a wrong project default branch: worktree still created + corrected branch written back', async () => {
+    const src = join(root, 'srcHeal'); await makeSourceRepo(src)   // repo default is main, no master
+    const { createWorkspace } = await import('./workspaceService')
+    const { upsertProject, readProjects } = await import('../config/store')
+    // seed projects.json with the MISTYPED branch, mirroring a real import gone wrong
+    const seeded = upsertProject({ repoUrl: src, branch: 'master' })
+    const proj = seeded[0]
+    expect(proj.defaultBranch).toBe('master')
+    const wsPath = join(root, 'ws-heal')
+    const result = await createWorkspace({
+      opts: {
+        name: 'heal', path: wsPath, workflowId: 'standard',
+        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+        projects: [{ repoId: proj.id, branch: 'forge/ws-heal' }]
+      },
+      knownProjects: [proj], proxy: ''
+    })
+    // worktree provisioned despite the bogus base branch
+    expect(existsSync(join(wsPath, proj.name, 'README.md'))).toBe(true)
+    expect(result.startRunOpts.developProjects[0].cwd).toBe(join(wsPath, proj.name))
+    // and the correction is persisted so future workspaces + the UI show the real branch
+    expect(readProjects().projects[0].defaultBranch).toBe('main')
+  })
+
   it('creates a folder-only workspace (no projects, no stages) for chat-only use', async () => {
     const { createWorkspace } = await import('./workspaceService')
     const wsPath = join(root, 'ws-chat-only')

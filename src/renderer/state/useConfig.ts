@@ -19,11 +19,12 @@ export function useConfig() {
 
   const addProject = useCallback(async (repoUrl: string, branch: string) => { setProjects(await window.forge.addProject({ repoUrl, branch })) }, [])
   const deleteProject = useCallback(async (id: string) => { setProjects(await window.forge.deleteProject(id)) }, [])
+  const updateProjectBranch = useCallback(async (id: string, branch: string) => { setProjects(await window.forge.updateProjectBranch({ id, branch })) }, [])
 
   const addWorkflow = useCallback(async (name: string, stageKeys: string[]) => { setWorkflows(await window.forge.addWorkflow({ name, stages: stageKeys })) }, [])
   const deleteWorkflow = useCallback(async (id: string) => { setWorkflows(await window.forge.deleteWorkflow(id)) }, [])
   const updateWorkflow = useCallback(async (id: string, plugins: Plugin[]) => { setWorkflows(await window.forge.updateWorkflow(id, plugins)) }, [])
   const updateStagePrompts = useCallback(async (id: string, stagePrompts: Record<string, string>) => { setWorkflows(await window.forge.updateStagePrompts(id, stagePrompts)) }, [])
 
-  return { projects, workflows, providers, addProject, deleteProject, reloadProjects, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect }
+  return { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, reloadProjects, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect }
 }

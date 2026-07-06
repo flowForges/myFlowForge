@@ -4,6 +4,7 @@ export const CH = {
   configListProjects: 'config:list-projects',
   configAddProject: 'config:add-project',
   configDeleteProject: 'config:delete-project',
+  configUpdateProjectBranch: 'config:update-project-branch',
   configListWorkflows: 'config:list-workflows',
   configAddWorkflow: 'config:add-workflow',
   configDeleteWorkflow: 'config:delete-workflow',

@@ -127,7 +127,7 @@ export function App() {
   const { usageByProvider } = pluginsApi
   const notifAgentPrev = useRef<Map<string, AgentState>>(new Map())
   const home = useHome()
-  const { projects, workflows, providers, addProject, deleteProject, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect } = useConfig()
+  const { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect } = useConfig()
   const { settings, update } = useSettings()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
@@ -608,7 +608,7 @@ export function App() {
         switch (key) {
           case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
-          case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} />
+          case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} />
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
           case 'workflow': return <WorkflowPane workflows={workflows} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} />

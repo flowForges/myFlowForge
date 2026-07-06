@@ -9,6 +9,7 @@ const api = {
   listProjects: () => ipcRenderer.invoke(CH.configListProjects),
   addProject: (input: { repoUrl: string; branch: string }) => ipcRenderer.invoke(CH.configAddProject, input),
   deleteProject: (id: string) => ipcRenderer.invoke(CH.configDeleteProject, id),
+  updateProjectBranch: (input: { id: string; branch: string }) => ipcRenderer.invoke(CH.configUpdateProjectBranch, input),
   listWorkflows: () => ipcRenderer.invoke(CH.configListWorkflows),
   addWorkflow: (input: { name: string; stages: string[] }) => ipcRenderer.invoke(CH.configAddWorkflow, input),
   deleteWorkflow: (id: string) => ipcRenderer.invoke(CH.configDeleteWorkflow, id),

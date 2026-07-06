@@ -11,6 +11,7 @@ interface ProjectPaneProps {
   projects: CfgProject[]
   onAdd: (repoUrl: string, branch: string) => void
   onDelete: (id: string) => void
+  onEditBranch?: (id: string, branch: string) => void
 }
 
 function deriveName(url: string): string {
@@ -44,10 +45,18 @@ const TRASH = (
   </svg>
 )
 
-export function ProjectPane({ projects, onAdd, onDelete }: ProjectPaneProps) {
+export function ProjectPane({ projects, onAdd, onDelete, onEditBranch }: ProjectPaneProps) {
   const [repo, setRepo] = useState('')
   const [branch, setBranch] = useState('')
   const [importCfg, setImportCfg] = useState<ImportConfig | null>(null)
+  // Inline branch edit: which project id is being edited + its draft value.
+  const [editBr, setEditBr] = useState<{ id: string; value: string } | null>(null)
+
+  const commitBranch = (id: string, original: string) => {
+    const next = (editBr?.value ?? '').trim()
+    setEditBr(null)
+    if (next && next !== original) onEditBranch?.(id, next)
+  }
 
   const derived = deriveName(repo)
   const canAdd = !!derived
@@ -131,7 +140,27 @@ export function ProjectPane({ projects, onAdd, onDelete }: ProjectPaneProps) {
               <div className="proj-info">
                 <div className="t">
                   {p.name}
-                  <span className="branch">{BRANCH}{p.defaultBranch}</span>
+                  {editBr?.id === p.id ? (
+                    <input
+                      className="branch-edit"
+                      autoFocus
+                      value={editBr.value}
+                      title="回车保存,Esc 取消"
+                      onChange={e => setEditBr({ id: p.id, value: e.target.value })}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') { e.preventDefault(); commitBranch(p.id, p.defaultBranch) }
+                        else if (e.key === 'Escape') { e.preventDefault(); setEditBr(null) }
+                      }}
+                      onBlur={() => commitBranch(p.id, p.defaultBranch)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className="branch"
+                      title={onEditBranch ? '点击修改主分支' : undefined}
+                      onClick={() => onEditBranch && setEditBr({ id: p.id, value: p.defaultBranch })}
+                    >{BRANCH}{p.defaultBranch}</button>
+                  )}
                 </div>
                 <div className="repo">{p.repoUrl}</div>
               </div>

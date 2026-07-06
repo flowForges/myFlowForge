@@ -4,6 +4,25 @@ import { git } from './gitRunner'
 
 export const deriveBranch = (workspaceId: string) => `forge/${workspaceId}`
 
+async function refExists(mirror: string, name: string): Promise<boolean> {
+  try { await git(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], { cwd: mirror }); return true }
+  catch { return false }
+}
+
+// Pick the branch a new worktree should fork from. The project's configured default branch may be
+// wrong (e.g. user typed "master" but the repo only has "main"), which would make `git worktree add`
+// fail. So: use `wanted` if it exists in the mirror; otherwise fall back to the repo's REAL default —
+// `clone --bare` points the bare repo's HEAD at origin's default branch, so `symbolic-ref HEAD`
+// gives it. Only throw (readable error) when neither resolves — e.g. a truly empty repo.
+export async function resolveBaseBranch(mirror: string, wanted: string): Promise<string> {
+  const w = (wanted ?? '').trim()
+  if (w && await refExists(mirror, w)) return w
+  let head = ''
+  try { head = (await git(['symbolic-ref', '--short', 'HEAD'], { cwd: mirror })).trim() } catch { head = '' }
+  if (head && await refExists(mirror, head)) return head
+  throw new Error(`无法确定基线分支:仓库中既无 "${w || wanted}" 也无可用的默认 HEAD 分支`)
+}
+
 // Per-mirror serialization so fetch/gc/worktree mutations never race.
 const locks = new Map<string, Promise<unknown>>()
 function withMirrorLock<T>(mirror: string, fn: () => Promise<T>): Promise<T> {

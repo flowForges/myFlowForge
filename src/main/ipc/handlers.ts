@@ -2,7 +2,7 @@ import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
 import { EventBus } from '../orchestrator/eventBus'
 import { Orchestrator, gateApprovedKey } from '../orchestrator/orchestrator'
-import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, upsertProject, registerWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
+import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, upsertProject, setProjectDefaultBranch, registerWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
 import { rebuildProviderRegistry } from '../agents/registry'
@@ -154,6 +154,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     writeProjects({ projects: readProjects().projects.filter(p => p.id !== id) })
     return readProjects().projects
   })
+  ipcMain.handle(CH.configUpdateProjectBranch, (_e, input: { id: string; branch: string }) => setProjectDefaultBranch(input.id, input.branch))
   ipcMain.handle(CH.configListWorkflows, () => readWorkflows().workflows)
   ipcMain.handle(CH.configAddWorkflow, (_e, input: { name: string; stages: string[] }) => {
     const list = readWorkflows().workflows

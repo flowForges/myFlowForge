@@ -33,8 +33,25 @@ export function upsertProject(input: { repoUrl: string; branch: string }): impor
   const list = readProjects().projects
   const name = deriveProjectName(input.repoUrl)
   const id = deriveProjectId(name)
-  if (!list.some(p => p.id === id)) {
-    writeProjects({ projects: [...list, { id, name, repoUrl: input.repoUrl.trim(), defaultBranch: input.branch.trim() || 'main' }] })
+  const repoUrl = input.repoUrl.trim()
+  const defaultBranch = input.branch.trim() || 'main'
+  const existing = list.find(p => p.id === id)
+  if (existing) {
+    // Re-adding the same repo is a correction, not a no-op: update branch+url so a mistyped
+    // default branch (e.g. master → main) can be fixed by just adding it again. id/name stay stable.
+    writeProjects({ projects: list.map(p => p.id === id ? { ...p, repoUrl, defaultBranch } : p) })
+  } else {
+    writeProjects({ projects: [...list, { id, name, repoUrl, defaultBranch }] })
+  }
+  return readProjects().projects
+}
+// Change only a project's default branch (inline edit in ProjectPane / auto-heal write-back).
+// No-op for an unknown id or a blank branch so callers can call it unconditionally.
+export function setProjectDefaultBranch(id: string, branch: string): import('./schema').Project[] {
+  const b = branch.trim()
+  const list = readProjects().projects
+  if (b && list.some(p => p.id === id)) {
+    writeProjects({ projects: list.map(p => p.id === id ? { ...p, defaultBranch: b } : p) })
   }
   return readProjects().projects
 }
