@@ -579,9 +579,11 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
         />
       </div>
 
-      {/* 右侧检查器 resize handle */}
-      {!inspectorCollapsed && onInspectorHandleDown && (
-        <ResizeHandle onPointerDown={onInspectorHandleDown} />
+      {/* 右侧检查器 resize handle — ALWAYS mounted (hidden via CSS when collapsed) so toggling the
+          panel never unmounts/remounts it; a remount used to leave the strip unhittable on alternate
+          collapse→expand cycles. */}
+      {onInspectorHandleDown && (
+        <ResizeHandle className="insp-resize" onPointerDown={onInspectorHandleDown} />
       )}
 
       {/* 右侧检查器 */}
