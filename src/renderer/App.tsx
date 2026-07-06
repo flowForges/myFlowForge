@@ -82,6 +82,13 @@ export function App() {
   const [notifOpen, setNotifOpen] = useState(false)
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const updateCtx = useUpdate()
+  // Auto-surface the upgrade modal when a (possibly backgrounded) download finishes, so the user is
+  // prompted to install even if they minimized it and kept working.
+  const prevUpdPhase = useRef(updateCtx.phase)
+  useEffect(() => {
+    if (updateCtx.phase === 'done' && prevUpdPhase.current !== 'done') setUpgradeOpen(true)
+    prevUpdPhase.current = updateCtx.phase
+  }, [updateCtx.phase])
   const [logOpen, setLogOpen] = useState(false)
   // When set, the bottom log drawer is scoped to a single agent (opened from its card's 日志台 button).
   const [agentLogFilter, setAgentLogFilter] = useState<{ id: string; name: string } | null>(null)
