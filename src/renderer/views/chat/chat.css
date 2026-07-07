@@ -510,3 +510,14 @@
 .slash-title { font-size: 12.5px; font-weight: 550; color: var(--fg); display: inline-flex; align-items: center; gap: 6px; }
 .slash-tag { font-size: 10px; font-weight: 600; color: var(--muted); background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
 .slash-desc { font-size: 11px; color: var(--muted); }
+
+/* Fenced code block with a persistent copy button (chat messages + plan card). The wrapper owns the
+   border/background so the inner <pre> is reset to sit flush under the header bar. */
+.code-block { margin: 8px 0 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.code-block .cb-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 6px 3px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.code-block .cb-lang { font: 11px var(--mono); color: var(--muted); }
+.code-block .cb-copy { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 550; color: var(--muted); padding: 3px 8px; border-radius: 6px; transition: .13s; }
+.code-block .cb-copy:hover { background: var(--border); color: var(--fg); }
+.code-block .cb-copy.done { color: var(--ok); }
+.code-block .cb-copy svg { width: 13px; height: 13px; }
+.code-block pre { margin: 0; border: 0; border-radius: 0; background: none; }

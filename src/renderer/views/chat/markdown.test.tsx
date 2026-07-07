@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, fireEvent, waitFor } from '@testing-library/react'
 import { Markdown, renderMarkdown } from './markdown'
 
 function html(text: string): string {
@@ -22,8 +22,19 @@ describe('Markdown', () => {
     expect(html('1. x\n2. y')).toContain('<ol><li>x</li><li>y</li></ol>')
   })
   it('renders fenced code blocks verbatim (no inline parsing inside)', () => {
-    const out = html('```go\nfunc main() {}\n```')
-    expect(out).toContain('<pre><code>func main() {}</code></pre>')
+    const { container } = render(<Markdown text={'```go\nfunc main() {}\n```'} />)
+    expect(container.querySelector('.code-block pre > code')?.textContent).toBe('func main() {}')
+    expect(container.querySelector('.cb-lang')?.textContent).toBe('go')   // info-string shown as label
+  })
+  it('gives each code block a copy button that copies the exact source', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.assign(navigator, { clipboard: { writeText } })
+    const { container } = render(<Markdown text={'```sh\nnpm run build\n```'} />)
+    const btn = container.querySelector('.cb-copy') as HTMLElement
+    expect(btn).toBeTruthy()
+    fireEvent.click(btn)
+    expect(writeText).toHaveBeenCalledWith('npm run build')
+    await waitFor(() => expect(container.querySelector('.cb-copy.done')).toBeTruthy())
   })
   it('renders a horizontal rule and links', () => {
     expect(html('---')).toContain('<hr>')

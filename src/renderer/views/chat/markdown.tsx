@@ -1,5 +1,34 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+
+// A fenced code block with a hover-reveal copy button. Copying the exact source (not the rendered
+// text) is what users want for commands/snippets, so the button lives on each block, not just the
+// whole message. `lang` (the info string after ```) is shown as a small label when present.
+function CodeBlock({ code, lang }: { code: string; lang?: string }): ReactNode {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard?.writeText(code).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1600)
+    }).catch(() => { /* clipboard unavailable */ })
+  }
+  return (
+    <div className="code-block">
+      <div className="cb-bar">
+        {lang ? <span className="cb-lang">{lang}</span> : <span />}
+        <button className={`cb-copy${copied ? ' done' : ''}`} onClick={copy} title="复制代码" type="button">
+          {copied ? (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="20 6 9 17 4 12" /></svg>
+          ) : (
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>
+          )}
+          <span>{copied ? '已复制' : '复制'}</span>
+        </button>
+      </div>
+      <pre><code>{code}</code></pre>
+    </div>
+  )
+}
 
 // Minimal, dependency-free Markdown → React renderer for chat messages.
 // Renders to React elements (never dangerouslySetInnerHTML) so CLI output can't inject HTML.
@@ -62,7 +91,7 @@ export function renderMarkdown(text: string): ReactNode {
       i++
       while (i < lines.length && !/^```\s*$/.test(lines[i])) { body.push(lines[i]); i++ }
       i++ // skip closing fence
-      blocks.push(<pre key={`pre${key++}`}><code>{body.join('\n')}</code></pre>)
+      blocks.push(<CodeBlock key={`pre${key++}`} code={body.join('\n')} lang={fence[1] || undefined} />)
       continue
     }
     // GFM table: a header row with a pipe, immediately followed by a separator
