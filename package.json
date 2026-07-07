@@ -12,6 +12,7 @@
     "dist:x64": "electron-vite build && electron-builder --mac --x64",
     "dist:arm64": "electron-vite build && electron-builder --mac --arm64",
     "dist:universal": "electron-vite build && electron-builder --mac --universal",
+    "dist:mac-all": "bash scripts/build-mac-all.sh",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
