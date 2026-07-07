@@ -15,6 +15,9 @@ interface UpgradeModalProps {
 
 interface LogLine { tk: string; text: string }
 
+// GitHub 发布页(与主进程 updateChecker 的 UPDATE_REPO 一致)。更新失败时给用户一个可手动下载的去处。
+const RELEASES_URL = 'https://github.com/xzghua/myFlowForge/releases/latest'
+
 export function UpgradeModal({ open, onClose, info, currentVersion, phase, progress, onStart }: UpgradeModalProps) {
   const [log, setLog] = useState<LogLine[]>([])
   const stampRef = useRef(0)
@@ -102,7 +105,17 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
             </span>
             <p>下载的是一个 <b>.dmg 安装器</b>,已自动为你打开。请在弹出的窗口里把 <b>myFlowForge</b> 拖到「应用程序」,然后重新打开即可用上新版本。</p>
           </div>
-          {phase === 'error' && <div className="upd-done on"><p>更新失败,请稍后重试或手动到 GitHub 下载。</p></div>}
+          {phase === 'error' && (
+            <div className="upd-done on">
+              <p>更新失败,请稍后重试,或手动到 GitHub 下载最新版本:</p>
+              <button
+                type="button"
+                className="upd-ghlink"
+                onClick={() => { void window.forge.openExternal(RELEASES_URL) }}
+                title="在浏览器中打开 GitHub 发布页"
+              >{RELEASES_URL}</button>
+            </div>
+          )}
         </div>
         <div className="upd-foot">
           <div className="upd-actions">
