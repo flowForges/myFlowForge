@@ -35,7 +35,9 @@ export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
   const items = useMemo(() => buildItems(messages), [messages])
   const on = items.length > 1
   const railRef = useRef<HTMLDivElement>(null)
-  const [tops, setTops] = useState<number[]>([])
+  // Positions are now even (CSS flex cluster), so we only consume the layout's activeIndex — the
+  // per-dot `tops` are computed for parity but not applied to style.
+  const [, setTops] = useState<number[]>([])
   const [active, setActive] = useState(-1)
 
   const sync = useCallback(() => {
@@ -105,7 +107,6 @@ export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
           key={it.index}
           type="button"
           className={`chat-jump-dot${n === active ? ' active' : ''}`}
-          style={{ top: `${tops[n] ?? 0}px` }}
           data-jump-msg={it.index}
           aria-label={`跳到第 ${n + 1} 条用户输入`}
           onClick={() => jump(it.index)}

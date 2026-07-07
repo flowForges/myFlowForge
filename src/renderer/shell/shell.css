@@ -283,11 +283,10 @@
    hover/展开时段提亮到 --bg + 浅阴影(如 .tb-seg .on)。浅/深色都自然融入。 */
 .open-loc {
   position: relative; display: inline-flex; align-items: center;
-  background: var(--surface); border-radius: 8px; padding: 2px; gap: 1px;
+  /* No solid fill — the old --surface read as a dark box beside the transparent toolbar buttons.
+     Group the split button with a subtle border instead; inner buttons fill on hover/open. */
+  background: transparent; border: 1px solid var(--border); border-radius: 8px; padding: 2px; gap: 1px;
 }
-/* Under vibrancy the opaque --surface fill read as a stray dark box on the frosted titlebar; let it
-   blend into the glass and rely on the inner buttons' hover/open highlight instead. */
-html[data-vibrancy="on"]:not([data-glass="on"]) .open-loc { background: transparent; }
 .open-loc-main, .open-loc-caret {
   height: 24px; display: inline-flex; align-items: center; gap: 6px;
   border: none; background: transparent; color: var(--fg-2);

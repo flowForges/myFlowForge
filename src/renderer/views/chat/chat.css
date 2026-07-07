@@ -351,63 +351,57 @@
 /* ── 用户输入导航条 (chat jump rail) ──────────────────────────────
    左侧几乎隐形的细轨，每条用户输入一个极小的点；悬停弹紧凑预览，
    点击平滑跳转。尺寸较原型收小：静止 2×6px/.18，悬停 3×9px。 */
+/* Codex-style: a COMPACT, vertically-centered cluster of short horizontal dashes — one per user
+   input — instead of a full-height minimap with a long guide line. Even spacing (flex gap), higher
+   contrast so it reads clearly in dark mode. */
 .chat-jump-rail {
   position: absolute;
-  left: max(8px, calc((100% - clamp(720px, 90%, 1180px)) / 2 + clamp(32px, 4%, 72px) - 18px));
-  top: 66px;
-  bottom: 138px;
-  width: 12px;
+  left: max(6px, calc((100% - clamp(720px, 90%, 1180px)) / 2 + clamp(32px, 4%, 72px) - 20px));
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 8;
   display: none;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  max-height: calc(100% - 210px);
+  overflow: hidden;
   pointer-events: none;
-  opacity: .18;
+  opacity: .55;
   transition: opacity .14s ease;
 }
-.chat-jump-rail.on { display: block; }
+.chat-jump-rail.on { display: flex; }
 .chat-jump-rail:hover,
 .chat-jump-rail:focus-within { opacity: 1; }
-.chat-jump-rail::before {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 12px;
-  bottom: 12px;
-  width: 1px;
-  background: linear-gradient(180deg, transparent, var(--border-2) 14%, var(--border-2) 86%, transparent);
-  opacity: .34;
-}
-/* button 是 14px 宽的透明热区，视觉点由 ::before 画得很小 */
+/* button = transparent hit area; the visible mark is a short horizontal dash drawn by ::before */
 .chat-jump-dot {
-  position: absolute;
-  left: -1px;
-  width: 14px;
-  height: 14px;
+  position: relative;
+  width: 20px;
+  height: 10px;
   margin: 0;
   padding: 0;
   border: 0;
   background: none;
   cursor: pointer;
-  transform: translateY(-50%);
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
   pointer-events: auto;
-  color: var(--faint);
+  color: var(--muted);
 }
 .chat-jump-dot::before {
   content: "";
-  width: 2px;
-  height: 6px;
+  width: 14px;
+  height: 2px;
   border-radius: 999px;
   background: currentColor;
-  opacity: .55;
-  transition: width .14s, height .14s, color .14s, box-shadow .14s, opacity .14s;
+  opacity: .8;
+  transition: width .14s, background .14s, color .14s, box-shadow .14s, opacity .14s;
 }
 .chat-jump-dot:hover,
 .chat-jump-dot.active { color: var(--accent); }
-.chat-jump-dot:hover::before,
-.chat-jump-dot.active::before {
-  width: 3px;
-  height: 9px;
+.chat-jump-dot.active::before { width: 20px; opacity: 1; }
+.chat-jump-dot:hover::before {
+  width: 20px;
   opacity: 1;
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 12%, transparent);
 }
