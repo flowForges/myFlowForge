@@ -113,6 +113,49 @@ process.exit(0)
     expect(done).toBe(true)
   })
 
+  it('chat(): a turn with zero assistant text surfaces an error diagnostic instead of a silent blank', async () => {
+    const emptyCli = join(dir, 'claudeempty.js')
+    writeFileSync(emptyCli, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ type: 'system', subtype: 'init', session_id: 'sess-1' })
+out({ type: 'result', subtype: 'success', session_id: 'sess-1' })
+process.exit(0)
+`)
+    chmodSync(emptyCli, 0o755)
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [emptyCli], defaultModels: [] })
+    let err: Error | null = null, done = false
+    const s = provider.chat!(
+      { id: 'a1', prompt: 'hi', model: 'opus-4.8', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => { done = true }, onError: (e) => { err = e } },
+      process.env,
+    )
+    await s.done
+    expect(err).toBeInstanceOf(Error)
+    expect(done).toBe(false)          // NOT a silent onDone with empty text
+  })
+
+  it('chat(): a tool-only turn (e.g. forge_propose_plan) is NOT treated as an empty reply', async () => {
+    const toolCli = join(dir, 'claudetool.js')
+    writeFileSync(toolCli, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ type: 'system', subtype: 'init', session_id: 'sess-1' })
+out({ type: 'assistant', session_id: 'sess-1', message: { role: 'assistant', content: [ { type: 'tool_use', name: 'forge_propose_plan', input: { approach: 'x' } } ] } })
+out({ type: 'result', subtype: 'success', session_id: 'sess-1' })
+process.exit(0)
+`)
+    chmodSync(toolCli, 0o755)
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [toolCli], defaultModels: [] })
+    let err: Error | null = null, done = false
+    const s = provider.chat!(
+      { id: 'a1', prompt: '开启工作流', model: 'opus-4.8', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => { done = true }, onError: (e) => { err = e } },
+      process.env,
+    )
+    await s.done
+    expect(err).toBeNull()
+    expect(done).toBe(true)
+  })
+
   it('chat(): reports running-max per-turn context usage, ignoring output + the cumulative result event', async () => {
     const chatCli = join(dir, 'claudeusage.js')
     writeFileSync(chatCli, `#!/usr/bin/env node
