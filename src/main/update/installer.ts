@@ -23,11 +23,18 @@ export class ManualDmgInstaller implements UpdateInstaller {
     const chunks: Uint8Array[] = []
     let received = 0
     onProgress({ stage: '正在下载更新包…', pct: 0, log: `拉取 ${info.dmgName}` })
+    // A 170MB dmg yields thousands of chunks; emitting progress per-chunk floods IPC + React
+    // re-renders and pins the CPU (fan spins up). Only emit when the integer percent changes,
+    // capping the stream at ≤91 updates for the whole download.
+    let lastPct = -1
     for await (const chunk of res.body) {
       chunks.push(chunk)
       received += chunk.length
       const pct = total > 0 ? Math.min(90, Math.floor((received / total) * 90)) : 0
-      onProgress({ stage: '正在下载更新包…', pct })
+      if (pct !== lastPct) {
+        lastPct = pct
+        onProgress({ stage: '正在下载更新包…', pct })
+      }
     }
     const data = new Uint8Array(received)
     let offset = 0

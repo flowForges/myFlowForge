@@ -33,6 +33,16 @@ describe('ManualDmgInstaller', () => {
     expect(seen.at(-1)).toEqual({ stage: '正在打开安装器…', pct: 100 })
     expect(seen.some(p => p.stage === '正在下载更新包…')).toBe(true)
   })
+  it('throttles progress to integer-percent changes (no per-chunk flood)', async () => {
+    // 500 tiny 1-byte chunks over a 500-byte download → percent changes at most ~91 times,
+    // NOT 500. This guards the CPU/fan fix from regressing back to per-chunk emission.
+    const big: UpdateInfo = { ...INFO, dmgSize: 500 }
+    const many = (async function* () { for (let i = 0; i < 500; i++) yield new Uint8Array([1]) })()
+    const d = deps({ fetch: async () => ({ ok: true, headers: { get: () => '500' }, body: many }) })
+    const downloadEmits: InstallProgress[] = []
+    await new ManualDmgInstaller(d).run(big, p => { if (p.pct < 95) downloadEmits.push(p) })
+    expect(downloadEmits.length).toBeLessThanOrEqual(92)
+  })
   it('throws when the downloaded size does not match', async () => {
     const d = deps({ fetch: async () => ({ ok: true, headers: { get: () => '6' }, body: (async function* () { yield new Uint8Array([1]) })() }) })
     await expect(new ManualDmgInstaller(d).run(INFO, () => {})).rejects.toThrow(/校验/)
