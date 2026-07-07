@@ -113,6 +113,39 @@ export const BUILTIN_PROVIDERS: BuiltinProviderMeta[] = [
     authCmd: 'opencode auth login',
     installHelp: '安装后运行 opencode auth login 配置模型 provider（一次接入多家模型）。模型列表由 opencode models 动态获取。',
   },
+  {
+    id: 'qwen',
+    displayName: 'Qwen Code',
+    defaultBin: 'qwen',
+    glyph: '◎',
+    brandBg: 'oklch(58% .2 300 / .2)',
+    brandColor: 'oklch(66% .18 300)',
+    // Qwen Code 是 gemini-cli 的 fork（阿里，面向 Qwen3-Coder）。无头调用与 gemini 同款：qwen -m <model> -p <prompt>。
+    defaultModels: [
+      { id: 'qwen3-coder-plus', label: 'qwen3-coder-plus', description: '编码主力' },
+      { id: 'qwen3-coder-flash', label: 'qwen3-coder-flash', description: '高速' },
+    ],
+    installCmd: 'npm install -g @qwen-code/qwen-code',
+    authCmd: 'qwen',
+    installHelp: '安装后运行 qwen 按提示用 Qwen OAuth 登录，或设置 DASHSCOPE_API_KEY / OPENAI_API_KEY 后启动。',
+  },
+  {
+    id: 'copilot',
+    displayName: 'GitHub Copilot CLI',
+    defaultBin: 'copilot',
+    glyph: '❉',
+    brandBg: 'oklch(55% .02 250 / .28)',
+    brandColor: 'oklch(80% .02 250)',
+    // 指新的 agentic「copilot」命令（不是 gh copilot suggest/explain）。无头:copilot -p <prompt> --allow-all-tools。
+    defaultModels: [
+      { id: 'default', label: '账号默认', description: '用 copilot 配置的默认模型' },
+      { id: 'claude-sonnet-4.5', label: 'claude-sonnet-4.5' },
+      { id: 'gpt-5', label: 'gpt-5' },
+    ],
+    installCmd: 'npm install -g @github/copilot',
+    authCmd: 'copilot',
+    installHelp: '需 GitHub Copilot 订阅。安装后运行 copilot，在其中用 /login 登录 GitHub 账号。',
+  },
 ]
 
 // Lookup helpers
@@ -129,4 +162,6 @@ export const PROVIDER_DEFAULT_WINDOW: Record<string, number> = {
   gemini: 1_048_576,
   qoder: 200_000,
   opencode: 200_000,
+  qwen: 256_000,
+  copilot: 128_000,
 }
