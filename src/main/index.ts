@@ -35,6 +35,9 @@ import { migratePetImagesInPet } from './pet/petImageStore'
 import { join } from 'node:path'
 import { resolveDockIconPath, resolveMenuBarIconPath } from './appIcon'
 import { DEFAULT_BUILTIN_PET_ID, hasAllBuiltinPets, mergeBuiltinPets } from '@shared/builtinPets'
+import { perfSpan } from './perf/perfSpans'
+import { EventLoopMonitor } from './perf/eventLoopMonitor'
+import { StallReporter } from './perf/stallReporter'
 
 // Start the centralized debug log as early as possible so even startup failures are persisted to
 // ~/.myFlowForge/logs/app.log and exportable from Settings · 调试日志.
@@ -460,6 +463,14 @@ app.whenReady().then(() => {
     if (mainWinRef && !mainWinRef.isDestroyed()) mainWinRef.webContents.send(channel, payload)
   }
 
+  // Perf monitor: detect main event-loop stalls, attribute to the running span, log + toast big ones.
+  const stallReporter = new StallReporter({
+    toast: (msg) => sendMain(CH.perfStall, { msg }),
+    now: () => performance.now(),
+  })
+  const perfMonitor = new EventLoopMonitor()
+  perfMonitor.start((ms, active) => stallReporter.report(ms, active))
+
   // Assigned just below (after scheduleCwd is defined). The pty onData closure references it, but that
   // only fires asynchronously once a terminal is spawned, long after this synchronous setup completes.
   let termBatcher: TermBatcher
@@ -502,7 +513,7 @@ app.whenReady().then(() => {
   // cwd OSC once per coalesced blob. A full OSC7 sequence is more likely intact in a coalesced blob
   // than split across raw chunks, so cwd tracking gets slightly more reliable too.
   termBatcher = new TermBatcher({
-    flush: (termId, data) => {
+    flush: (termId, data) => perfSpan('term', 'flush', () => {
       sendMain(CH.termData, { termId, data })
       const osc = parseOsc7(data)
       if (osc) {
@@ -511,7 +522,7 @@ app.whenReady().then(() => {
       } else {
         scheduleCwd(termId)
       }
-    },
+    }),
   })
 
   ipcMain.handle(CH.termCreate, (_e, opts: { termId: string; cwd?: string; cols: number; rows: number }) => {
