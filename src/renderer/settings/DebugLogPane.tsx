@@ -13,9 +13,14 @@ const LEVELS: { key: LogLevel | 'all'; label: string }[] = [
 const RANK: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 }
 const MAX = 3000
 
+export function filterByScope(entries: AppLogEntry[], scope: string | null): AppLogEntry[] {
+  return scope ? entries.filter(e => e.scope === scope) : entries
+}
+
 export function DebugLogPane() {
   const [entries, setEntries] = useState<AppLogEntry[]>([])
   const [level, setLevel] = useState<LogLevel | 'all'>('all')
+  const [scopeFilter, setScopeFilter] = useState<string | null>(null)
   const [autoScroll, setAutoScroll] = useState(true)
   const [toast, setToast] = useState<string | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -49,7 +54,8 @@ export function DebugLogPane() {
     flash('已复制 ' + shown.length + ' 行')
   }
 
-  const shown = level === 'all' ? entries : entries.filter(e => RANK[e.level] >= RANK[level as LogLevel])
+  const scoped = filterByScope(entries, scopeFilter)
+  const shown = level === 'all' ? scoped : scoped.filter(e => RANK[e.level] >= RANK[level as LogLevel])
   const errs = entries.filter(e => e.level === 'error').length
 
   return (
@@ -72,6 +78,7 @@ export function DebugLogPane() {
           {LEVELS.map(l => (
             <button key={l.key} className={'dl-fch' + (level === l.key ? ' on' : '')} onClick={() => setLevel(l.key)}>{l.label}</button>
           ))}
+          <button className={'dl-fch' + (scopeFilter === 'perf' ? ' on' : '')} onClick={() => setScopeFilter(scopeFilter === 'perf' ? null : 'perf')}>性能</button>
         </div>
         <span className="dl-stat">{shown.length} 条{errs ? ` · ${errs} 错误` : ''}</span>
         <label className="dl-auto"><input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />自动滚动</label>
