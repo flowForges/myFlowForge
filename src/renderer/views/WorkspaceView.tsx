@@ -512,6 +512,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                     index={entry.index}
                     streaming={chat.streamingIds.has(entry.msg.id)}
                     onViewChanges={onViewChanges}
+                    onOpenDoc={openDoc}
                   />
                 )
               }

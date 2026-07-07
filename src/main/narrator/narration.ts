@@ -31,7 +31,7 @@ export function buildStageNote(stage: StageRuntime): string {
     }
   }
   const docNote = docs.length
-    ? `\n\n📄 设计文档:${docs.join(';')} —— 点上方门控卡「打开文档」查看全文`
+    ? `\n\n📄 设计文档:${docs.join(';')} —— 点下方「打开文档」查看全文`
     : ''
 
   if (stage.state === 'err') {

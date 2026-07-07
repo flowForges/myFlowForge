@@ -121,7 +121,7 @@ describe('buildStageNote 设计文档路径', () => {
     }
     const note = buildStageNote(s)
     expect(note).toContain('📄 设计文档:docs/plan/方案.md')
-    expect(note).toContain('点上方门控卡「打开文档」查看全文')
+    expect(note).toContain('点下方「打开文档」查看全文')
   })
   it('无 文档 → 行时不含 📄', () => {
     const s: any = { key: 'design', name: '技术方案设计', state: 'ok',

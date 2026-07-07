@@ -19,7 +19,7 @@ export interface AgentRuntime {
   hookSkills?: string[]
   hookTools?: string[]
 }
-export interface StageRuntime { key: string; name: string; state: AgentState; agents: AgentRuntime[] }
+export interface StageRuntime { key: string; name: string; state: AgentState; agents: AgentRuntime[]; docs?: DesignDocRef[] }
 
 // A technical-design markdown file a design agent wrote, surfaced on the gate card so the user can
 // open it in the in-app viewer. `path` is relative to `cwd` (the agent's worktree / workspace root).
@@ -123,6 +123,9 @@ export interface ChatMessage {
   // Chat-session context-window usage at the time this assistant message finished: used =
   // total context tokens consumed, window = model's context window. Set on the done message.
   usage?: { used: number; window: number }
+  // Design docs a stage produced, carried onto the persisted stage-note message so they stay
+  // openable in the timeline AFTER the (ephemeral) design-gate card is resolved and unmounts.
+  docs?: DesignDocRef[]
 }
 export interface ChatSession {
   id: string

@@ -55,7 +55,10 @@ export class NarratorService {
       const text = buildStageNote(stage)
       const msg: ChatMessage = {
         id: mkId(), who: 'ai', text, model: '系统', ts: now(),
-        think: { label: '阶段进展', steps: [text] }
+        think: { label: '阶段进展', steps: [text] },
+        // Carry the stage's design docs onto this durable message so the timeline keeps an openable
+        // link after the design-gate card is resolved and unmounts (fixes: doc becomes plain text).
+        ...(stage.docs?.length ? { docs: stage.docs } : {})
       }
       const sid = activeSessionId(run.workspacePath)
       appendMessage(run.workspacePath, sid, msg)

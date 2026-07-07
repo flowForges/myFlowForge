@@ -82,6 +82,20 @@ describe('NarratorService', () => {
     rmSync(proj, { recursive: true, force: true })
   })
 
+  it('carries a stage.docs design doc onto the durable stage-note message', async () => {
+    const run: RunState = {
+      ...mkRun('ok'),
+      stages: [{ key: 'design', name: '技术方案设计', state: 'ok',
+        docs: [{ path: 'docs/plan.md', cwd: ws, name: '设计' }],
+        agents: [{ id: 'd1', name: '设计', role: 'r', provider: 'claude', model: 'opus-4.8', state: 'ok', logs: [] }] }]
+    }
+    const svc = new NarratorService({ providers: { claude: chatProvider() }, env: () => process.env, emit: () => {}, proxy: () => '' })
+    svc.onEngineEvent({ type: 'run:update', run })
+    await vi.waitFor(() => expect(msgs().some(m => m.model === '系统')).toBe(true))
+    const note = msgs().find(m => m.model === '系统')!
+    expect(note.docs).toEqual([{ path: 'docs/plan.md', cwd: ws, name: '设计' }])
+  })
+
   it('skips narration when the provider has no chat()', async () => {
     const noChat: AgentProvider = { ...chatProvider(), chat: undefined }
     const svc = new NarratorService({ providers: { claude: noChat }, env: () => process.env, emit: () => {}, proxy: () => '' })

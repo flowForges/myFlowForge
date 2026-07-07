@@ -50,6 +50,11 @@
 .msg-changes { margin-top: 10px; }
 .msg-changes .txt-btn { font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 5px 9px; border-radius: 6px; transition: .14s; }
 .msg-changes .txt-btn:hover { background: var(--accent-dim); }
+.msg-docs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.msg-doc { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border-2); color: var(--fg); font-size: 11.5px; font-weight: 600; transition: .13s; max-width: 100%; }
+.msg-doc:hover { background: var(--border); border-color: var(--accent); }
+.msg-doc svg { width: 14px; height: 14px; flex: none; color: var(--accent); }
+.msg-doc .md-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Hover-reveal meta row: copy button + output time. Hidden until the message is hovered. (No 33px avatar
    indent — this app dropped the per-message avatar, so the body sits flush left.) */

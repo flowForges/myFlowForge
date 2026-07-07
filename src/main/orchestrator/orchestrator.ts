@@ -310,6 +310,15 @@ export class Orchestrator {
         const docPath = pickDocArtifact(p.artifacts)
         if (docPath) {
           store.setContext('handoff-doc:' + agent.id, docPath)
+          // Also record it on the stage so the narrator can carry a clickable DesignDocRef onto the
+          // persisted stage-note message — the doc stays openable after the design-gate card unmounts.
+          const cwd = this.agentCwd.get(agent.id)
+          if (cwd) {
+            if (!stage.docs) stage.docs = []
+            if (!stage.docs.some(d => d.path === docPath && d.cwd === cwd)) {
+              stage.docs.push({ path: docPath, cwd, name: agent.name })
+            }
+          }
           const dl = { ts: timeStr(), text: `文档 → ${docPath}`, level: 'accent' as const }
           this.pushLog(agent, dl); this.bus.emit({ type: 'agent:log', agentId: agent.id, line: dl }); this.update()
         }
