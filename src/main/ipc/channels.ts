@@ -125,6 +125,7 @@ export const CH = {
   workspaceSetStageModel: 'workspaces:setStageModel',
   workspaceRemove: 'workspace:remove',
   revealPath: 'shell:reveal-path',
+  openExternal: 'shell:open-external',
   openersDetect: 'openers:detect',
   openersOpen: 'openers:open',
   shortcutsGetStatus: 'shortcuts:get-status',

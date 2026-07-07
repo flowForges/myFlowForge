@@ -669,6 +669,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const err = await shell.openPath(path)   // '' on success; non-empty error string otherwise
     return err ? { ok: false as const, error: err } : { ok: true as const }
   })
+  // 用系统默认浏览器打开一个 http(s) 链接(仅放行 http/https,拒绝其它协议以免被当作命令/文件执行)。
+  ipcMain.handle(CH.openExternal, async (_e, url: string) => {
+    try {
+      const u = new URL(String(url))
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false as const, error: 'unsupported protocol' }
+      await shell.openExternal(u.toString())
+      return { ok: true as const }
+    } catch (e) {
+      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
+    }
+  })
 
   // ── 用外部软件打开(「打开位置」下拉) ─────────────────────────────────────────
   // Extract an app's real icon → dataURL for the dropdown (best-effort; falls back to a glyph).

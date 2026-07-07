@@ -28,4 +28,13 @@ describe('UpgradeModal', () => {
     expect(screen.getByText(/应用程序/)).toBeTruthy()
     expect(screen.queryByText(/下次启动/)).toBeNull()
   })
+  it('on error, shows a clickable GitHub releases link that opens externally', () => {
+    const openExternal = vi.fn(async () => ({ ok: true }))
+    ;(window as any).forge = { openExternal }
+    render(<UpgradeModal {...base} phase="error" />)
+    const link = screen.getByText(/github\.com\/xzghua\/myFlowForge\/releases/)
+    expect(link).toBeTruthy()
+    fireEvent.click(link)
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/xzghua/myFlowForge/releases/latest')
+  })
 })
