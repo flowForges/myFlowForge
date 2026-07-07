@@ -360,7 +360,10 @@
    contrast so it reads clearly in dark mode. */
 .chat-jump-rail {
   position: absolute;
-  left: max(6px, calc((100% - clamp(720px, 90%, 1180px)) / 2 + clamp(32px, 4%, 72px) - 20px));
+  /* Sit at the LEFT EDGE of the centered content column (in the outer margin), not inside its
+     padding next to the text — the column's own padding (clamp 32–72px) then buffers the dashes
+     from the AI text so the rail doesn't hug the reply. */
+  left: max(8px, calc((100% - clamp(720px, 90%, 1180px)) / 2 - 6px));
   top: 50%;
   transform: translateY(-50%);
   z-index: 8;
@@ -411,15 +414,15 @@
 }
 .chat-jump-preview {
   position: absolute;
-  /* Open the preview LEFT into the outer margin (right edge pinned just left of the dash) instead
-     of rightward over the message column — the rail sits in the left gutter, so a rightward popup
-     covered the text you're reading. Width caps to the space available so it stays off the text. */
-  right: calc(100% + 8px);
-  left: auto;
+  /* Open the preview RIGHT of the dash. The rail now lives at the content column's left edge, so
+     opening left would push the card off the left of the viewport (invisible on narrower windows).
+     Opening right keeps it on-screen; it reads as a transient hover tooltip over the reply. */
+  left: calc(100% + 8px);
+  right: auto;
   top: 50%;
-  transform: translateY(-50%) translateX(4px);
+  transform: translateY(-50%) translateX(-4px);
   width: max-content;
-  max-width: min(220px, 30vw);
+  max-width: min(240px, 34vw);
   padding: 7px 9px;
   border-radius: 8px;
   border: 1px solid var(--border-2);
