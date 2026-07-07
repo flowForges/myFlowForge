@@ -135,4 +135,5 @@ export const CH = {
   appLogClear: 'app-log:clear',
   appLogExport: 'app-log:export',
   appLogEvent: 'app-log:event',
+  perfStall: 'perf:stall',
 } as const

@@ -28,6 +28,7 @@ import type { StartRunOpts } from '../orchestrator/orchestrator'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti } from '../git/changes'
+import { perfSpan } from '../perf/perfSpans'
 import { execFile } from 'node:child_process'
 import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile } from '../openers/detect'
 import { readMacAppIcon } from '../openers/appIcon'
@@ -491,15 +492,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const proxy = () => readSettings().termProxy
   const changesEmit = (e: ChangesEvent) => broadcast(CH.changesEvent, e)
 
-  ipcMain.handle(CH.gitChanges, (_e, cwd: string) => readChanges(cwd, proxy()))
-  ipcMain.handle(CH.changesMulti, (_e, cwds: string[]) => readChangesMulti(cwds, proxy()))
+  ipcMain.handle(CH.gitChanges, (_e, cwd: string) => perfSpan('git', 'readChanges', () => readChanges(cwd, proxy())))
+  ipcMain.handle(CH.changesMulti, (_e, cwds: string[]) => perfSpan('git', 'changesMulti', () => readChangesMulti(cwds, proxy())))
   ipcMain.handle(CH.gitDiff, (_e, a: { cwd: string; file: string }) => readDiff(a.cwd, a.file, proxy()))
   ipcMain.handle(CH.gitFile, (_e, a: { cwd: string; file: string }) => readFile(a.cwd, a.file, proxy()))
-  ipcMain.handle(CH.fsTree, async (_e, cwd: string) => readTree(cwd, await readChanges(cwd, proxy()), proxy()))
+  ipcMain.handle(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
   ipcMain.handle(CH.fileSearchContent, (_e, a: { root: string; query: string; files?: string[] }) =>
     searchContent({ root: a.root, query: a.query, files: a.files }))
   ipcMain.handle(CH.watchChanges, (_e, cwd: string) => {
-    watcher.start(cwd, () => { void readChanges(cwd, proxy()).then(changes => changesEmit({ cwd, changes })) })
+    watcher.start(cwd, () => { void perfSpan('watcher', 'onChange', () => readChanges(cwd, proxy()).then(changes => changesEmit({ cwd, changes }))) })
     return readChanges(cwd, proxy())
   })
   ipcMain.handle(CH.watchStop, () => { watcher.stop() })

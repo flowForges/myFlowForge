@@ -209,6 +209,11 @@ const api = {
     ipcRenderer.on(CH.appLogEvent, listener)
     return () => ipcRenderer.removeListener(CH.appLogEvent, listener)
   },
+  onPerfStall: (cb: (p: { msg: string }) => void): (() => void) => {
+    const h = (_e: unknown, p: { msg: string }) => cb(p)
+    ipcRenderer.on(CH.perfStall, h)
+    return () => ipcRenderer.removeListener(CH.perfStall, h)
+  },
 }
 contextBridge.exposeInMainWorld('forge', api)
 export type ForgeApi = typeof api

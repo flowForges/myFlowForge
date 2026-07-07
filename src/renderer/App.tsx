@@ -44,7 +44,7 @@ import { useKeybindings } from './state/useKeybindings'
 import { UpgradeModal } from './shell/UpgradeModal'
 import { DeleteConfirm } from './shell/DeleteConfirm'
 import { ActionConfirm } from './shell/ActionConfirm'
-import { markAllRead, notifFromLifecycle, type Notif } from './shell/notifications'
+import { markAllRead, notifFromLifecycle, sanitize, type Notif } from './shell/notifications'
 import { SetupProgress, INITIAL_SETUP_STATE, applySetupEvent } from './views/SetupProgress'
 import type { SetupProgressState } from './views/SetupProgress'
 import type { AgentState, ChatQueueEvent, CreateWorkspaceOpts, EngineEvent, SetupEvent, Workspace } from '@shared/types'
@@ -287,6 +287,14 @@ export function App() {
       }
     })
     return () => { off() }
+  }, [])
+
+  // Main-process event-loop stalls (perf monitor) surface as a bell notification.
+  useEffect(() => {
+    const off = window.forge.onPerfStall?.(({ msg }) => {
+      setNotifs(ns => [{ ic: 'warn', cls: 'ni-warn', t: `<b>性能</b> ${sanitize(msg)}`, m: '主进程 · 刚刚', unread: true }, ...ns])
+    })
+    return () => off?.()
   }, [])
 
   const openWizard = () => { setCreateErr(null); setEditing(null); setWizardOpen(true) }
