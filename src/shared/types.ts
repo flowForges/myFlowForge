@@ -137,6 +137,8 @@ export interface ChatSession {
   readonly?: true
   external?: { source: SourceId; externalId: string; filePaths: string[] }
   continuedFrom?: { source: SourceId; externalId: string }
+  // Per-session agent permission (sandbox) scope, remembered across switches. Absent = default 'auto'.
+  permissionMode?: import('./permissions').PermissionMode
 }
 export interface SessionsFile { sessions: ChatSession[]; activeSessionId: string; dismissedImported?: string[] }
 export interface ChatConfirm { id: string; title: string; where?: string; ts?: string }

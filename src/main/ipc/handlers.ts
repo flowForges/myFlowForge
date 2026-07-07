@@ -20,7 +20,7 @@ import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage } from '../chat/chatStore'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, continueFrom } from '../chat/sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, continueFrom } from '../chat/sessionStore'
 import { agentSessionsForId } from '../chat/agentSessions'
 import type { CreateWorkspaceOpts, ResolvePayload, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, EngineEvent } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
@@ -445,6 +445,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   ipcMain.handle(CH.sessionRename, (_e, a: { workspacePath: string; sessionId: string; title: string }) => {
     const file = renameSession(a.workspacePath, a.sessionId, a.title)
+    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
+    return file
+  })
+  ipcMain.handle(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
+    const file = setSessionPermission(a.workspacePath, a.sessionId, a.mode)
     broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
     return file
   })

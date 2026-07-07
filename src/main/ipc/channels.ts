@@ -43,6 +43,7 @@ export const CH = {
   sessionSwitch: 'session:switch',
   sessionClose: 'session:close',
   sessionRename: 'session:rename',
+  sessionSetPermission: 'session:set-permission',
   sessionAgentIds: 'session:agent-ids',
   dialogOpenFiles: 'dialog:open-files',
   dialogPickDirectory: 'dialog:pick-directory',

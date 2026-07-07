@@ -115,6 +115,14 @@ export function setSessionMode(wsPath: string, sessionId: string, mode: 'chat' |
   return write(wsPath, data)
 }
 
+// Persist a session's agent permission (sandbox) scope so it's restored when the user returns to it.
+export function setSessionPermission(wsPath: string, sessionId: string, mode: import('@shared/types').ChatSession['permissionMode']): SessionsFile {
+  const data = readSessions(wsPath)
+  const s = data.sessions.find(x => x.id === sessionId)
+  if (s) { s.permissionMode = mode; write(wsPath, data) }
+  return data
+}
+
 // Auto-name a still-default session from its first user instruction (called by chatService).
 export function autoNameIfDefault(wsPath: string, sessionId: string, text: string): void {
   const data = readSessions(wsPath)

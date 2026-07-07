@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode } from './sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission } from './sessionStore'
 import { readMessages } from './chatStore'
 
 let ws: string
@@ -64,5 +64,14 @@ describe('sessionStore', () => {
     const f = setSessionMode(ws, sid, 'workflow', 'run-7')
     expect(f.sessions[0].mode).toBe('workflow')
     expect(f.sessions[0].runId).toBe('run-7')
+  })
+  it('setSessionPermission persists per session and survives a reload', () => {
+    const a = readSessions(ws).sessions[0].id
+    const b = newSession(ws).sessions.at(-1)!.id
+    setSessionPermission(ws, a, 'readonly')
+    setSessionPermission(ws, b, 'full')
+    const s = readSessions(ws).sessions
+    expect(s.find(x => x.id === a)!.permissionMode).toBe('readonly')
+    expect(s.find(x => x.id === b)!.permissionMode).toBe('full')
   })
 })

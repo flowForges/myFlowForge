@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { EngineApi } from '../state/useEngine'
 import type { StartRunOpts } from '../App'
 import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef } from '@shared/types'
+import { DEFAULT_PERMISSION_MODE, type PermissionMode } from '@shared/permissions'
 import { AgentNode } from '../components/AgentNode'
 import { HookNode } from '../components/HookNode'
 import { WorkflowStrip } from '../components/WorkflowStrip'
@@ -185,6 +186,13 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     () => sessions.sessions.find(s => s.id === sessions.activeSessionId),
     [sessions.sessions, sessions.activeSessionId],
   )
+  // Permission mode is remembered PER SESSION. When the active session changes (switch/create),
+  // restore its saved mode into the composer selection; absent = default 'auto'. Only touches the
+  // permission facet — agent/model stay as seeded.
+  const activePerm = activeSession?.permissionMode ?? DEFAULT_PERMISSION_MODE
+  useEffect(() => {
+    setSelection(prev => (prev && prev.permissionMode !== activePerm ? { ...prev, permissionMode: activePerm } : prev))
+  }, [sessions.activeSessionId, activePerm])
   // Imported history: loaded for BOTH a pure read-only imported session AND a session that was
   // "基于此历史继续" (writable but still carries `external`), so the continued chat can show the
   // imported history above a divider — the user keeps the original context inline.
@@ -571,6 +579,11 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
               writeTimer.current = setTimeout(() => {
                 window.forge.setStageModel?.({ path: wsPath, stageKey: 'develop', provider: s.agentId, model: s.modelId })
               }, 500)
+              // Permission mode is per-session — persist it onto the active session when it changed.
+              const sid = sessions.activeSessionId
+              if (sid && s.permissionMode && s.permissionMode !== activePerm) {
+                window.forge.sessionSetPermission?.({ workspacePath: wsPath, sessionId: sid, mode: s.permissionMode })
+              }
             }
           }}
           onSend={(m) => {
