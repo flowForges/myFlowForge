@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { DebugLogPane } from './DebugLogPane'
+import { DebugLogPane, filterByScope } from './DebugLogPane'
 import type { AppLogEntry } from '@shared/types'
 
 const get = vi.fn(); const clear = vi.fn(); const exportLog = vi.fn(); let emit: (e: AppLogEntry) => void
@@ -63,5 +63,31 @@ describe('DebugLogPane', () => {
     await screen.findByText('启动 myFlowForge')
     fireEvent.click(screen.getByRole('button', { name: '导出日志' }))
     expect(exportLog).toHaveBeenCalled()
+  })
+
+  it('性能 toggle shows only perf-scope entries', async () => {
+    get.mockResolvedValue([E('info', 'app', '启动 myFlowForge'), E('warn', 'perf', 'stall 620ms')])
+    render(<DebugLogPane />)
+    await screen.findByText('启动 myFlowForge')
+    fireEvent.click(screen.getByRole('button', { name: '性能' }))
+    expect(screen.queryByText('启动 myFlowForge')).not.toBeInTheDocument()
+    expect(screen.getByText('stall 620ms')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '性能' }))
+    expect(await screen.findByText('启动 myFlowForge')).toBeInTheDocument()
+  })
+})
+
+const eScope = (scope: string, msg: string) => ({ ts: '', level: 'info' as const, scope, msg })
+
+describe('filterByScope', () => {
+  it('returns all entries when filter is null', () => {
+    const all = [eScope('perf', 'stall 620ms'), eScope('chat', 'turn')]
+    expect(filterByScope(all, null)).toHaveLength(2)
+  })
+  it('keeps only perf entries when filtered to perf', () => {
+    const all = [eScope('perf', 'stall 620ms'), eScope('chat', 'turn'), eScope('perf', 'git.readChanges 540ms')]
+    const out = filterByScope(all, 'perf')
+    expect(out).toHaveLength(2)
+    expect(out.every(x => x.scope === 'perf')).toBe(true)
   })
 })
