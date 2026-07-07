@@ -147,6 +147,10 @@
 }
 .ans-eyebrow svg { width: 12px; height: 12px; }
 .msg-body.ans { color: var(--fg); }
+/* Raw-text placeholder shown for one frame while a large reply's Markdown parse is deferred off the
+   session-switch commit. pre-wrap preserves newlines so its height stays close to the parsed output,
+   keeping the swap from visibly shifting scroll position. */
+.ans-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* 回答生成中:末尾打字光标 */
 .msg-body .pending::after {
   content: ""; display: inline-block; width: 7px; height: 14px; margin-left: 3px;
@@ -367,7 +371,7 @@
   max-height: calc(100% - 210px);
   overflow: hidden;
   pointer-events: none;
-  opacity: .55;
+  opacity: .28;
   transition: opacity .14s ease;
 }
 .chat-jump-rail.on { display: flex; }
@@ -390,28 +394,32 @@
 }
 .chat-jump-dot::before {
   content: "";
-  width: 14px;
+  width: 8px;
   height: 2px;
   border-radius: 999px;
   background: currentColor;
-  opacity: .8;
+  opacity: .7;
   transition: width .14s, background .14s, color .14s, box-shadow .14s, opacity .14s;
 }
 .chat-jump-dot:hover,
 .chat-jump-dot.active { color: var(--accent); }
-.chat-jump-dot.active::before { width: 20px; opacity: 1; }
+.chat-jump-dot.active::before { width: 14px; opacity: 1; }
 .chat-jump-dot:hover::before {
-  width: 20px;
+  width: 14px;
   opacity: 1;
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 12%, transparent);
 }
 .chat-jump-preview {
   position: absolute;
-  left: 14px;
+  /* Open the preview LEFT into the outer margin (right edge pinned just left of the dash) instead
+     of rightward over the message column — the rail sits in the left gutter, so a rightward popup
+     covered the text you're reading. Width caps to the space available so it stays off the text. */
+  right: calc(100% + 8px);
+  left: auto;
   top: 50%;
-  transform: translateY(-50%) translateX(-3px);
-  width: min(240px, calc(100vw - 240px));
-  max-width: 240px;
+  transform: translateY(-50%) translateX(4px);
+  width: max-content;
+  max-width: min(220px, 30vw);
   padding: 7px 9px;
   border-radius: 8px;
   border: 1px solid var(--border-2);
