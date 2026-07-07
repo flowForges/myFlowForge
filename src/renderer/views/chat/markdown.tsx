@@ -184,6 +184,26 @@ export function renderMarkdown(text: string): ReactNode {
   return <>{blocks}</>
 }
 
+// Cross-mount parse cache. `renderMarkdown` is pure (text → React elements, which are plain reusable
+// objects), but each Message unmounts/remounts on session switch, throwing away its useMemo. A small
+// module-level LRU means re-entering a session — or any re-render of an unchanged message — reuses the
+// parsed tree instead of re-parsing large bodies (a big part of the switch-into-a-heavy-session jank).
+const PARSE_CACHE = new Map<string, ReactNode>()
+const PARSE_CACHE_MAX = 240
+export function renderMarkdownCached(text: string): ReactNode {
+  const hit = PARSE_CACHE.get(text)
+  if (hit !== undefined) {
+    // Refresh LRU recency.
+    PARSE_CACHE.delete(text)
+    PARSE_CACHE.set(text, hit)
+    return hit
+  }
+  const node = renderMarkdown(text)
+  PARSE_CACHE.set(text, node)
+  if (PARSE_CACHE.size > PARSE_CACHE_MAX) PARSE_CACHE.delete(PARSE_CACHE.keys().next().value as string)
+  return node
+}
+
 export function Markdown({ text }: { text: string }): ReactNode {
-  return useMemo(() => renderMarkdown(text), [text])
+  return useMemo(() => renderMarkdownCached(text), [text])
 }

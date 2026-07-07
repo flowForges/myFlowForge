@@ -30,6 +30,7 @@ import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti } from '../git/changes'
 import { execFile } from 'node:child_process'
 import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile } from '../openers/detect'
+import { readMacAppIcon } from '../openers/appIcon'
 import { buildOpenCommand } from '../openers/buildOpenCommand'
 import { writeJsonAtomic } from '../util/atomicWrite'
 import { providerCommands } from '../commands/providerCommands'
@@ -688,7 +689,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // ── 用外部软件打开(「打开位置」下拉) ─────────────────────────────────────────
   // Extract an app's real icon → dataURL for the dropdown (best-effort; falls back to a glyph).
+  // On macOS we read the bundle's own .icns first: app.getFileIcon returns a generic placeholder
+  // (an identical blank icon for every app) on some macOS builds. getFileIcon stays as the fallback
+  // for apps without a standalone .icns (Assets.car system apps) and for non-macOS platforms.
   const openerIcon = async (appPath: string): Promise<string | undefined> => {
+    if (process.platform === 'darwin') {
+      const real = await readMacAppIcon(appPath)
+      if (real) return real
+    }
     try { const img = await app.getFileIcon(appPath, { size: 'normal' }); return img.isEmpty() ? undefined : img.toDataURL() }
     catch { return undefined }
   }

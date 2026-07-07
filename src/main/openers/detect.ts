@@ -18,7 +18,10 @@ export type IconFn = (appPath: string) => Promise<string | undefined>
 
 export const openersCacheFile = () => sysFile('openers-cache.json')
 // Bump when the cache shape/contents change so old caches self-heal. v2 = entries carry app icons.
-export const OPENERS_CACHE_VERSION = 2
+// v3 = icons are read from the app bundle's real .icns (v2 icons were generic getFileIcon
+// placeholders on some macOS builds — an identical blank square for every app), so bumping here
+// auto-invalidates those bad caches on next launch (no manual config deletion needed).
+export const OPENERS_CACHE_VERSION = 3
 const noIcon: IconFn = async () => undefined
 
 async function mdfindBundle(bundleId: string): Promise<string | null> {

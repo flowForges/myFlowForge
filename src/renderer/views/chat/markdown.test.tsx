@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, fireEvent, waitFor } from '@testing-library/react'
-import { Markdown, renderMarkdown } from './markdown'
+import { Markdown, renderMarkdown, renderMarkdownCached } from './markdown'
 
 function html(text: string): string {
   const { container } = render(<Markdown text={text} />)
@@ -102,6 +102,22 @@ describe('Markdown', () => {
     expect(out).not.toContain('<table>')
     expect(out).toContain('<p>')
     expect(out).toContain('| a | b | c |')
+  })
+})
+
+describe('renderMarkdownCached', () => {
+  it('returns the identical parsed node for repeated text (no re-parse across mounts)', () => {
+    const text = '# Cache me\n\nsome **bold** body ' + 'x'.repeat(200)
+    const a = renderMarkdownCached(text)
+    const b = renderMarkdownCached(text)
+    expect(a).toBe(b)  // same object reference → served from cache, not re-parsed
+  })
+  it('still renders correctly for a cache hit', () => {
+    const text = '## Heading\n- one\n- two'
+    renderMarkdownCached(text)
+    const { container } = render(<>{renderMarkdownCached(text)}</>)
+    expect(container.querySelector('h2')?.textContent).toBe('Heading')
+    expect(container.querySelectorAll('li')).toHaveLength(2)
   })
 })
 

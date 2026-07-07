@@ -424,7 +424,10 @@
 }
 .tb-bell.has .nb-badge { display: block; }
 .notif-pop {
-  position: absolute; top: 50px; right: 14px; width: 364px; max-height: 72%;
+  /* max-height must be viewport-relative: this panel is absolutely positioned inside a ~28px
+     button wrapper, so a percentage (was 72%) resolves against that tiny containing block and
+     clipped the whole popover to a ~20px invisible sliver ("bell has a badge but opens blank"). */
+  position: absolute; top: 50px; right: 14px; width: 364px; max-height: min(600px, calc(100vh - 96px));
   background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-lg);
   box-shadow: var(--shadow); z-index: 90; display: none; flex-direction: column; overflow: hidden;
 }

@@ -1,4 +1,4 @@
-import { useState, memo } from 'react'
+import { useState, useEffect, startTransition, memo } from 'react'
 import type { ChatMessage, DesignDocRef } from '@shared/types'
 import { fmtMsgTime, fmtMsgTimeFull } from '@shared/relTime'
 import { ThinkBlock } from './ThinkBlock'
@@ -31,6 +31,17 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
   const isUser = msg.who === 'user'
   const showAnswer = !isUser && (!!msg.text || !streaming)
   const [copied, setCopied] = useState(false)
+
+  // Switching into a session whose messages are large parses every body's Markdown synchronously in
+  // one commit → the app freezes (beachball). For a big, settled (non-streaming) reply, show the raw
+  // text first (cheap) and upgrade to parsed Markdown in a low-priority transition, so the switch
+  // stays responsive. Small replies (the common case) parse immediately — no flash. Streaming replies
+  // always render live so tokens appear as they arrive.
+  const heavy = !isUser && !streaming && msg.text.length > 4000
+  const [rich, setRich] = useState(!heavy)
+  useEffect(() => {
+    if (heavy && !rich) startTransition(() => setRich(true))
+  }, [heavy, rich])
   const copy = () => {
     navigator.clipboard?.writeText(msg.text).then(() => {
       setCopied(true)
@@ -60,9 +71,11 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
               {streaming ? '回答中' : '回答'}
             </div>
           )}
-          {/* AI replies are Markdown (headings/lists/code/bold); user input stays literal. */}
+          {/* AI replies are Markdown (headings/lists/code/bold); user input stays literal. A large,
+             settled reply renders as raw text for one frame (pre-wrap keeps its height close to the
+             parsed version, so the swap barely shifts scroll) then upgrades to Markdown. */}
           <div className="msg-body ans">
-            <Markdown text={msg.text} />
+            {rich ? <Markdown text={msg.text} /> : <div className="ans-plain">{msg.text}</div>}
             {streaming && <span className="pending" />}
           </div>
         </div>

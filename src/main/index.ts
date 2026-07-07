@@ -20,6 +20,7 @@ import { reconcileDeadRuns } from './orchestrator/reconcile'
 import { fixExecPath } from './agents/pathFix'
 import type { Settings } from './config/schema'
 import { TerminalManager } from './terminal/terminalManager'
+import { TermBatcher } from './terminal/termBatch'
 import { makeCwdProbe } from './terminal/cwdProbe'
 import { parseOsc7, abbreviateHome } from './terminal/cwdTrack'
 import { PluginScheduler } from './plugins/pluginScheduler'
@@ -459,6 +460,9 @@ app.whenReady().then(() => {
     if (mainWinRef && !mainWinRef.isDestroyed()) mainWinRef.webContents.send(channel, payload)
   }
 
+  // Assigned just below (after scheduleCwd is defined). The pty onData closure references it, but that
+  // only fires asynchronously once a terminal is spawned, long after this synchronous setup completes.
+  let termBatcher: TermBatcher
   const termManager = new TerminalManager({
     spawn: (shell, args, o) =>
       nodePty.spawn(shell, args, {
@@ -469,20 +473,14 @@ app.whenReady().then(() => {
         rows: o.rows,
       }),
     onData: (termId, data) => {
-      // Terminal data is high-frequency (every keystroke echo + prompt redraw). Only the MAIN window
-      // hosts terminals — broadcasting each chunk to the pet window (and any other webContents) too
-      // doubled the per-chunk IPC/serialization on the main thread and made typing feel laggy. Send
-      // to the main window only.
-      sendMain(CH.termData, { termId, data })
-      const osc = parseOsc7(data)
-      if (osc) {
-        const abbr = abbreviateHome(osc, termHome)
-        if (abbr !== lastOscCwd.get(termId)) { lastOscCwd.set(termId, abbr); sendMain(CH.termCwd, { termId, cwd: abbr }) }
-      } else {
-        scheduleCwd(termId)
-      }
+      // Terminal data is high-frequency (keystroke echo + prompt redraw, and thousands of chunks/sec
+      // under a build/log flood). Coalesce chunks in a short window before crossing IPC — one send
+      // per chunk saturated the main event loop, janking heavy output AND delaying keystroke echo
+      // (it waited behind the flood). Batching also lets us parse OSC7/cwd once per blob, not per chunk.
+      termBatcher.push(termId, data)
     },
     onExit: (termId, e) => {
+      termBatcher.flush(termId)   // emit any buffered trailing output before the exit event
       cwdProbes.delete(termId)
       const t = cwdTimers.get(termId)
       if (t !== undefined) { clearTimeout(t); cwdTimers.delete(termId) }
@@ -499,6 +497,22 @@ app.whenReady().then(() => {
     clearTimeout(cwdTimers.get(termId))
     cwdTimers.set(termId, setTimeout(() => void probe(pid), 150))
   }
+
+  // Coalesce PTY output → one IPC send per short window (instead of one per chunk), and parse the
+  // cwd OSC once per coalesced blob. A full OSC7 sequence is more likely intact in a coalesced blob
+  // than split across raw chunks, so cwd tracking gets slightly more reliable too.
+  termBatcher = new TermBatcher({
+    flush: (termId, data) => {
+      sendMain(CH.termData, { termId, data })
+      const osc = parseOsc7(data)
+      if (osc) {
+        const abbr = abbreviateHome(osc, termHome)
+        if (abbr !== lastOscCwd.get(termId)) { lastOscCwd.set(termId, abbr); sendMain(CH.termCwd, { termId, cwd: abbr }) }
+      } else {
+        scheduleCwd(termId)
+      }
+    },
+  })
 
   ipcMain.handle(CH.termCreate, (_e, opts: { termId: string; cwd?: string; cols: number; rows: number }) => {
     try {
