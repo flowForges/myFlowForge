@@ -50,6 +50,18 @@ describe('Message', () => {
     expect(screen.getByText('已复制')).toBeInTheDocument()
   })
 
+  it('renders an openable 打开文档 chip when the message carries design docs', () => {
+    const onOpenDoc = vi.fn()
+    const doc = { path: 'docs/plan.md', cwd: '/ws/proj', name: '设计' }
+    const { container } = render(
+      <Message msg={{ id: 'a', who: 'ai', text: '✓ 设计完成', docs: [doc] } as any} streaming={false} onOpenDoc={onOpenDoc} />,
+    )
+    const btn = container.querySelector('.msg-doc') as HTMLElement
+    expect(btn).toBeTruthy()
+    fireEvent.click(btn)
+    expect(onOpenDoc).toHaveBeenCalledWith(doc)
+  })
+
   it('does not render loaded skills/rules inline in the message body', () => {
     render(<Message msg={{ id: 'a', who: 'ai', text: 'hi', context: { skills: [{ name: 'forge-workflow', path: 'x' }], rules: [{ name: 'AGENTS.md', path: 'y' }] } } as any} streaming={false} />)
     expect(screen.queryByText('Skill')).toBeNull()

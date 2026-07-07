@@ -1,5 +1,5 @@
 import { useState, memo } from 'react'
-import type { ChatMessage } from '@shared/types'
+import type { ChatMessage, DesignDocRef } from '@shared/types'
 import { fmtMsgTime, fmtMsgTimeFull } from '@shared/relTime'
 import { ThinkBlock } from './ThinkBlock'
 import { Markdown } from './markdown'
@@ -24,9 +24,10 @@ interface Props {
   streaming: boolean
   index?: number
   onViewChanges?: () => void
+  onOpenDoc?: (doc: DesignDocRef) => void
 }
 
-function MessageImpl({ msg, streaming, index, onViewChanges }: Props) {
+function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props) {
   const isUser = msg.who === 'user'
   const showAnswer = !isUser && (!!msg.text || !streaming)
   const [copied, setCopied] = useState(false)
@@ -66,6 +67,16 @@ function MessageImpl({ msg, streaming, index, onViewChanges }: Props) {
           </div>
         </div>
       )}
+      {!isUser && msg.docs?.length ? (
+        <div className="msg-docs">
+          {msg.docs.map((d, i) => (
+            <button className="msg-doc" key={d.cwd + '::' + d.path + '::' + i} onClick={() => onOpenDoc?.(d)} title={d.path}>
+              {FILE_ICON}
+              <span className="md-name">打开文档{msg.docs!.length > 1 ? ` · ${d.name}` : ''}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
       {!isUser && msg.changes && msg.changes.total > 0 && (
         <div className="msg-changes">
           <button className="txt-btn" onClick={onViewChanges}>
