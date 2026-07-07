@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
+import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
 
 export function XtermView({ termId, active, font }: {
@@ -16,7 +17,17 @@ export function XtermView({ termId, active, font }: {
     const term = new Terminal({ allowProposedApi: true, fontFamily: font.fontFamily, fontSize: font.fontSize,
       cursorBlink: true, theme: readXtermTheme() })
     const fit = new FitAddon(); term.loadAddon(fit); term.loadAddon(new WebLinksAddon())
-    term.open(el); fit.fit()
+    term.open(el)
+    // GPU renderer: the default DOM renderer repaints rows as DOM nodes and is slow — with a
+    // redraw-heavy shell prompt (powerlevel10k/gitstatus) typing feels laggy. The WebGL addon
+    // renders on the GPU (far faster). Load AFTER open(); on WebGL context loss, dispose it so
+    // xterm transparently falls back to the DOM renderer instead of freezing.
+    try {
+      const webgl = new WebglAddon()
+      webgl.onContextLoss(() => { try { webgl.dispose() } catch { /* already gone */ } })
+      term.loadAddon(webgl)
+    } catch { /* no WebGL (rare) → stay on the DOM renderer */ }
+    fit.fit()
     termRef.current = term; fitRef.current = fit
     void window.forge.termResize(termId, term.cols, term.rows)
     const offData = window.forge.onTermData(({ termId: id, data }) => { if (id === termId) term.write(data) })

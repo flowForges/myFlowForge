@@ -453,6 +453,12 @@ app.whenReady().then(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const nodePty = require('node-pty') as typeof import('node-pty')
 
+  // Send only to the current main window (original or rebuilt-after-close). Used for high-frequency
+  // terminal events so they don't get needlessly serialized to the pet / other windows.
+  const sendMain = (channel: string, payload: unknown) => {
+    if (mainWinRef && !mainWinRef.isDestroyed()) mainWinRef.webContents.send(channel, payload)
+  }
+
   const termManager = new TerminalManager({
     spawn: (shell, args, o) =>
       nodePty.spawn(shell, args, {
@@ -463,11 +469,15 @@ app.whenReady().then(() => {
         rows: o.rows,
       }),
     onData: (termId, data) => {
-      registry.broadcast(CH.termData, { termId, data })
+      // Terminal data is high-frequency (every keystroke echo + prompt redraw). Only the MAIN window
+      // hosts terminals — broadcasting each chunk to the pet window (and any other webContents) too
+      // doubled the per-chunk IPC/serialization on the main thread and made typing feel laggy. Send
+      // to the main window only.
+      sendMain(CH.termData, { termId, data })
       const osc = parseOsc7(data)
       if (osc) {
         const abbr = abbreviateHome(osc, termHome)
-        if (abbr !== lastOscCwd.get(termId)) { lastOscCwd.set(termId, abbr); registry.broadcast(CH.termCwd, { termId, cwd: abbr }) }
+        if (abbr !== lastOscCwd.get(termId)) { lastOscCwd.set(termId, abbr); sendMain(CH.termCwd, { termId, cwd: abbr }) }
       } else {
         scheduleCwd(termId)
       }
@@ -477,7 +487,7 @@ app.whenReady().then(() => {
       const t = cwdTimers.get(termId)
       if (t !== undefined) { clearTimeout(t); cwdTimers.delete(termId) }
       lastOscCwd.delete(termId)
-      registry.broadcast(CH.termExit, { termId, ...e })
+      sendMain(CH.termExit, { termId, ...e })
     },
     exists: existsSync,
   })
@@ -503,7 +513,7 @@ app.whenReady().then(() => {
         makeCwdProbe({
           exec: lsofExec,
           home: homedir(),
-          onCwd: c => registry.broadcast(CH.termCwd, { termId: opts.termId, cwd: c }),
+          onCwd: c => sendMain(CH.termCwd, { termId: opts.termId, cwd: c }),
         }),
       )
       scheduleCwd(opts.termId)
