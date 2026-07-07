@@ -4,6 +4,8 @@ import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextW
 import { forgeMcpArgs } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
+import { logError } from '../../log/appLog'
+import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
 // full name ('claude-opus-4-8'). Our friendly ids ('opus-4.8') are display labels and are
@@ -127,10 +129,17 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         : ['-p', buildChatPrompt(task), '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...permissionArgs('claude', task.permissionMode ?? 'auto'), '--model', cliModel(task.model), ...forgeMcpArgs(env)]
       if (!spec.preArgs && task.sessionId) args.push('--resume', task.sessionId)
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      // Inactivity watchdog: reclaim a genuinely wedged turn (240s of total silence) instead of an
+      // endless 思考中 spinner — but never kill a long, still-streaming turn.
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
       const start = Date.now()
       let buf = ''
       let streamed = false
+      let sawAssistant = false   // any assistant text produced this turn
+      let sawTool = false        // any tool/file action (e.g. forge_propose_plan → a plan card, NOT an empty reply)
+      let rawErr = ''            // captured stderr for the no-reply diagnostic
       let ctxMaxSeen = 0
+      const cap = (s: string, add: string) => (s + add).slice(-2000)
       const reply = (allow: boolean) => {
         try { child.stdin?.write(JSON.stringify({ type: 'permission_response', allow }) + '\n') } catch { /* stdin gone */ }
       }
@@ -145,29 +154,43 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         if (obj?.type === 'assistant' && streamed) return   // deltas already streamed this; skip to avoid duplicate text
         for (const action of parseChatStreamActions(obj)) {
           if (action.kind === 'session') cb.onSession(action.id)
-          else if (action.kind === 'assistant') cb.onAssistantDelta(action.text)
-          else if (action.kind === 'think' || action.kind === 'tool' || action.kind === 'file') cb.onThinkDelta(action.text)
+          else if (action.kind === 'assistant') { sawAssistant = true; cb.onAssistantDelta(action.text) }
+          else if (action.kind === 'think' || action.kind === 'tool' || action.kind === 'file') { if (action.kind !== 'think') sawTool = true; cb.onThinkDelta(action.text) }
         }
       }
       const processLine = (raw: string) => {
         const line = raw.trim()
         if (!line) return
         let obj: unknown
-        try { obj = JSON.parse(line) } catch { cb.onAssistantDelta(line); return }
+        try { obj = JSON.parse(line) } catch { sawAssistant = true; cb.onAssistantDelta(line); return }
         handle(obj).catch((err) => { reply(false); cb.onError(err instanceof Error ? err : new Error(String(err))) })
       }
       child.stdout?.on('data', (b: Buffer) => {
+        wd.beat()
         buf += b.toString()
         let nl: number
         while ((nl = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(line) }
       })
+      child.stderr?.on('data', (b: Buffer) => { wd.beat(); rawErr = cap(rawErr, b.toString()) })
       const done = child.then((res) => {
+        wd.clear()
         processLine(buf); buf = ''
         const elapsed = Math.round((Date.now() - start) / 1000)
+        // No assistant text at all → surface a diagnostic instead of a silent blank bubble (and leave
+        // a trail in the debug log, mirroring codex/opencode). Killed-for-silence gets the clearest note.
+        if (!sawAssistant && !sawTool) {
+          const clip = args.map(a => { const s = String(a); return s.length > 160 ? s.slice(0, 160) + `…(+${s.length - 160})` : s }).join(' ')
+          let diag = wd.firedFlag
+            ? 'claude 长时间无响应（240s 无任何输出）已终止 —— 可尝试拆分过长的输入或检查网络'
+            : rawErr.trim() ? `claude stderr:\n${rawErr.trim()}` : `claude 无输出 (退出码 ${res.exitCode})`
+          logError('claude', 'chat 无回复', `cmd: ${bin} ${clip}\ncwd: ${task.cwd}\n${diag}`)
+          cb.onError(new Error(diag))
+          return { ok: false, summary: diag }
+        }
         cb.onDone({ elapsed })
         return { ok: res.exitCode === 0, summary: res.exitCode === 0 ? '完成' : `退出码 ${res.exitCode}` }
-      }).catch((err) => { cb.onError(err as Error); return { ok: false } })
-      return { id: task.id, cancel: () => child.kill('SIGTERM'), done }
+      }).catch((err) => { wd.clear(); cb.onError(err as Error); return { ok: false } })
+      return { id: task.id, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
     }
   }
 }
