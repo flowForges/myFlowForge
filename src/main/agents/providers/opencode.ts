@@ -4,6 +4,7 @@ import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, contextWindowFor } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { logError } from '../../log/appLog'
+import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
 
 function now() { return new Date().toISOString().slice(11, 19) }
 function clipArgs(bin: string, args: string[]): string {
@@ -135,7 +136,11 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
       const args = ['run', '--format', 'json', '--thinking', ...sessionArgs, ...modelArgs(task.model), '--dir', task.cwd, prompt]
-      const child = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore', timeout: 180_000 })
+      // Inactivity watchdog (not a hard wall-clock timeout): a long input that's actively streaming
+      // must not be killed just for taking >180s. Fires only after real silence → no more spurious
+      // "chat 无回复" on big prompts.
+      const child = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
       const start = Date.now()
       let buf = ''
       let sawDelta = false
@@ -157,13 +162,14 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
         }
       }
       const processLine = (raw: string) => { const line = raw.trim(); if (!line) return; try { handle(JSON.parse(line)) } catch { /* non-JSON banner */ } }
-      child.stdout?.on('data', (b: Buffer) => { buf += b.toString(); let nl: number; while ((nl = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(l) } })
-      child.stderr?.on('data', (b: Buffer) => { rawErr = cap(rawErr, b.toString()) })
+      child.stdout?.on('data', (b: Buffer) => { wd.beat(); buf += b.toString(); let nl: number; while ((nl = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(l) } })
+      child.stderr?.on('data', (b: Buffer) => { wd.beat(); rawErr = cap(rawErr, b.toString()) })
       const done = child.then((res) => {
+        wd.clear()
         processLine(buf); buf = ''
         if (!sawDelta) {
           let diag = lastErr ?? ''
-          if (!diag && res.timedOut) diag = 'opencode 超时（180s 无回复）'
+          if (!diag && (wd.firedFlag || res.timedOut)) diag = 'opencode 长时间无响应（240s 无任何输出）已终止 —— 可尝试拆分过长的输入或检查网络'
           if (!diag && rawErr.trim()) diag = `opencode stderr:\n${rawErr.trim()}`
           if (!diag) diag = `opencode 无输出 (退出码 ${res.exitCode})`
           cb.onError(new Error(diag))
@@ -175,10 +181,11 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
         cb.onDone({ elapsed })
         return { ok: res.exitCode === 0, summary: res.exitCode === 0 ? '完成' : `退出码 ${res.exitCode}` }
       }).catch((err) => {
+        wd.clear()
         logError('opencode', 'chat 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}`)
         cb.onError(err as Error); return { ok: false }
       })
-      return { id: task.id, cancel: () => child.kill('SIGTERM'), done }
+      return { id: task.id, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
     },
   }
 }
