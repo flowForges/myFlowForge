@@ -551,6 +551,11 @@ describe('forgeChatDirective', () => {
     expect(forgeChatDirective({} as NodeJS.ProcessEnv)).toBe('')
     expect(forgeChatDirective({ FORGE_TOOLS: 'other' } as NodeJS.ProcessEnv)).toBe('')
   })
+  it('tells the chat agent to ask inline (never point the user at a nonexistent forge UI)', () => {
+    const d = forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan' } as NodeJS.ProcessEnv)
+    expect(d).toContain('不存在这样的界面')
+    expect(d).toMatch(/直接在你这条回复的正文里/)
+  })
 })
 
 describe('codex run() cancel', () => {
