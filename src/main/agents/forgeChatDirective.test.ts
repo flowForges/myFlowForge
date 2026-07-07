@@ -1,0 +1,26 @@
+import { describe, it, expect } from 'vitest'
+import { forgeChatDirective } from './forgeChatDirective'
+
+describe('forgeChatDirective', () => {
+  it('is empty (fail-open) when the propose tool is not exposed', () => {
+    expect(forgeChatDirective({})).toBe('')
+    expect(forgeChatDirective({ FORGE_TOOLS: 'forge_read_context,forge_handoff' })).toBe('')
+  })
+
+  it('inlines the propose guidance when forge_propose_plan is exposed', () => {
+    const d = forgeChatDirective({ FORGE_TOOLS: 'forge_read_context,forge_propose_plan' })
+    expect(d).not.toBe('')
+    expect(d).toContain('forge_propose_plan')
+  })
+
+  it('is conservative: reading/understanding code + questions must NOT propose', () => {
+    const d = forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan' })
+    // Default DON'T-propose case, explicit and prominent.
+    expect(d).toContain('阅读、理解、解释、分析现有代码')
+    expect(d).toContain('绝不调用')
+    // Only an explicit build/change request triggers a proposal.
+    expect(d).toContain('明确要求')
+    // Ambiguous → ask first, never auto-propose.
+    expect(d).toContain('拿不准')
+  })
+})
