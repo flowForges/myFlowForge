@@ -17,7 +17,10 @@ MIRROR="https://npmmirror.com/mirrors/electron/${VER}"
 CACHE="${HOME}/.cache/myflowforge-electron/${VER}"
 
 fetch_dist() {   # $1 = arch (arm64|x64)
-  local arch="$1" dir="${CACHE}/${arch}"
+  # NOTE: separate `local` statements — `local a=$1 b=${CACHE}/$a` expands $a before it's assigned,
+  # which trips `set -u` ("arch: unbound variable").
+  local arch="$1"
+  local dir="${CACHE}/${arch}"
   if [ -x "${dir}/Electron.app/Contents/MacOS/Electron" ]; then echo "${dir}"; return; fi
   mkdir -p "${dir}"
   local zip="${CACHE}/electron-v${VER}-darwin-${arch}.zip"
