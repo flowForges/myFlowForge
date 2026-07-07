@@ -7,6 +7,7 @@ import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
 import { readCodexModelsCache } from './codexModels'
 import { logError } from '../../log/appLog'
+import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
 
 // Render the spawned command for the debug log: clip each arg (the prompt can be huge) and the total.
 function clipArgs(bin: string, args: string[]): string {
@@ -232,9 +233,11 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // sandbox via `-c sandbox_mode` (NOT `-s`): `codex exec resume` rejects the `-s`/`--sandbox`
         // flag ("unexpected argument '-s'"), but accepts the config override — and so does plain `exec`.
         : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), prompt]
-      // stdin: 'ignore' so codex doesn't block reading stdin; timeout so a wedged turn (e.g.
-      // a hanging experimental feature) surfaces a message instead of an endless 思考中 spinner.
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore', timeout: 180_000 })
+      // stdin: 'ignore' so codex doesn't block reading stdin. A wedged turn is reclaimed by an
+      // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
+      // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
+      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
       const start = Date.now()
       let buf = ''
       let sawDelta = false
@@ -265,18 +268,20 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         try { handle(JSON.parse(line)) } catch { /* non-JSON banner line — kept in rawOut for diagnostics */ }
       }
       child.stdout?.on('data', (b: Buffer) => {
+        wd.beat()
         buf += b.toString()
         let nl: number
         while ((nl = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(line) }
       })
-      child.stderr?.on('data', (b: Buffer) => { rawErr = cap(rawErr, b.toString()) })
+      child.stderr?.on('data', (b: Buffer) => { wd.beat(); rawErr = cap(rawErr, b.toString()) })
       const done = child.then((res) => {
+        wd.clear()
         processLine(buf); buf = ''
         // No reply produced → surface the best diagnostic we have so it's never a silent empty bubble:
         // a parsed error event, else the raw stderr/stdout codex emitted, else a bare exit-code note.
         if (!sawDelta) {
           let diag = lastErr ?? ''
-          if (!diag && res.timedOut) diag = 'codex 超时（180s 无回复）——检查 ~/.codex/config.toml 的实验功能或网络'
+          if (!diag && (wd.firedFlag || res.timedOut)) diag = 'codex 长时间无响应（240s 无任何输出）已终止 —— 可尝试拆分过长的输入，或检查网络/实验功能配置'
           if (!diag && rawErr.trim()) diag = `codex stderr:\n${rawErr.trim()}`
           if (!diag && rawOut.trim()) diag = `codex 输出(未解析):\n${rawOut.trim()}`
           if (!diag) diag = `codex 无输出 (退出码 ${res.exitCode})`
@@ -289,10 +294,11 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         cb.onDone({ elapsed })
         return { ok: res.exitCode === 0, summary: res.exitCode === 0 ? '完成' : `退出码 ${res.exitCode}` }
       }).catch((err) => {
+        wd.clear()
         logError('codex', 'chat 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}`)
         cb.onError(err as Error); return { ok: false }
       })
-      return { id: task.id, cancel: () => child.kill('SIGTERM'), done }
+      return { id: task.id, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
     }
   }
 }
