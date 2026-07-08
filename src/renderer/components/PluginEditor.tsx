@@ -7,7 +7,10 @@ interface PluginEditorProps {
   initial?: Partial<Plugin>
   afterLabel: string
   presets?: { name: string; prompt: string; glyph?: string }[]
-  onSave: (p: { name: string; prompt: string; skills: string[]; tools: string[] }) => void
+  // When true (create-workspace wizard, add mode only), show a「保存到 Hook 库」checkbox whose value is
+  // returned as `saveToLibrary` so the caller can also persist the new hook to the reusable library.
+  showSaveToLibrary?: boolean
+  onSave: (p: { name: string; prompt: string; skills: string[]; tools: string[]; saveToLibrary?: boolean }) => void
   onCancel: () => void
 }
 
@@ -33,15 +36,17 @@ function toggle(arr: string[], id: string): string[] {
   return arr.includes(id) ? arr.filter(x => x !== id) : [...arr, id]
 }
 
-export function PluginEditor({ initial, afterLabel, presets, onSave, onCancel }: PluginEditorProps) {
+export function PluginEditor({ initial, afterLabel, presets, showSaveToLibrary, onSave, onCancel }: PluginEditorProps) {
   const isEditing = Boolean(initial?.name)
   const [name, setName] = useState(initial?.name ?? '')
   const [prompt, setPrompt] = useState(initial?.prompt ?? '')
   const [skills, setSkills] = useState<string[]>(initial?.skills ?? [])
   const [tools, setTools] = useState<string[]>(initial?.tools ?? [])
+  const [saveToLib, setSaveToLib] = useState(false)
+  const canSaveToLib = Boolean(showSaveToLibrary) && !isEditing
 
   function handleSave() {
-    onSave({ name: name.trim(), prompt, skills, tools })
+    onSave({ name: name.trim(), prompt, skills, tools, ...(canSaveToLib ? { saveToLibrary: saveToLib } : {}) })
   }
 
   function applyPreset(preset: { name: string; prompt: string }) {
@@ -140,6 +145,12 @@ export function PluginEditor({ initial, afterLabel, presets, onSave, onCancel }:
 
       {/* Footer */}
       <div className="pe-foot">
+        {canSaveToLib && (
+          <label className="pe-savelib" title="勾选后,这个 hook 也会存进设置 → Hook 库,以后建区可直接复用">
+            <input type="checkbox" checked={saveToLib} onChange={e => setSaveToLib(e.target.checked)} />
+            保存到 Hook 库
+          </label>
+        )}
         <span className="sp" />
         <button type="button" className="cancel" onClick={onCancel}>
           取消

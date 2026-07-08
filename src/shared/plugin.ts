@@ -12,3 +12,7 @@ export const HOOK_TOOLS: PluginCatalogItem[] = [
   { id: 'grep', name: '代码搜索' }, { id: 'git', name: 'Git 操作' }, { id: 'web', name: '联网搜索' }, { id: 'mcp', name: 'MCP 调用' },
 ]
 export interface Plugin { id: string; name: string; prompt: string; after: string; skills: string[]; tools: string[] }
+// Reusable, slot-agnostic hook stored in the global library (设置 → Hook 库). = Plugin without `after`;
+// the slot is assigned when a copy is inserted into a workspace at create time. Renderer-side mirror of
+// LibraryHookSchema in src/main/config/schema.ts (kept structurally identical via a parity guard there).
+export interface LibraryHook { id: string; name: string; prompt: string; skills: string[]; tools: string[] }

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { Plugin as SharedPlugin } from '../../shared/plugin'
+import type { Plugin as SharedPlugin, LibraryHook as SharedLibraryHook } from '../../shared/plugin'
 import { PET_SCALE_MIN, PET_SCALE_MAX } from '../../shared/petGeometry'
 import { DEFAULT_BUILTIN_PET_ID, builtinPets } from '../../shared/builtinPets'
 import { PET_CUSTOM_MAX } from '../../shared/petCustom'
@@ -19,11 +19,27 @@ export const PluginSchema = z.object({
   tools: z.array(z.string()).default(() => []),
 })
 export type Plugin = z.infer<typeof PluginSchema>
+
+// A reusable, slot-agnostic hook stored in the global library (设置 → Hook 库). Same shape as Plugin
+// MINUS `after` — the slot is assigned only when the hook is copied into a workspace at create time,
+// so one library entry can be reused at any boundary/stage.
+export const LibraryHookSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  prompt: z.string(),
+  skills: z.array(z.string()).default(() => []),
+  tools: z.array(z.string()).default(() => []),
+})
+export type LibraryHook = z.infer<typeof LibraryHookSchema>
+export const HookLibrarySchema = z.object({ hooks: z.array(LibraryHookSchema) })
+export const defaultHookLibrary = () => ({ hooks: [] as LibraryHook[] })
+
 // Compile-time guard: the zod-inferred Plugin (main) and the hand-written shared/plugin.ts interface
 // (used by the renderer, which can't import this main-only module) must stay structurally identical.
 // If either side drifts, one of these conditional types resolves to `never` and tsc fails here.
 type _AssertExtends<A extends B, B> = true
 type _PluginParity = _AssertExtends<Plugin, SharedPlugin> & _AssertExtends<SharedPlugin, Plugin>
+type _LibraryHookParity = _AssertExtends<LibraryHook, SharedLibraryHook> & _AssertExtends<SharedLibraryHook, LibraryHook>
 export const STAGE_NAMES: Record<StageKey, string> = {
   requirement: '需求评估', design: '技术方案设计', develop: '代码开发', test: '写单测', review: '代码 CR'
 }

@@ -19,7 +19,7 @@ export interface ActionDef {
 // so adding an action here gives every existing user its default binding with no migration.
 export const KEYBINDING_ACTIONS: ActionDef[] = [
   // ── 系统级(全局,后台也生效) ──────────────────────────────────────────────
-  { id: 'toggle-main-window', scope: 'global', group: '全局', label: '显示 / 隐藏主窗口', desc: '一键从后台唤起主窗口,或再次按下收起', defaultAccel: 'CommandOrControl+Shift+F' },
+  { id: 'toggle-main-window', scope: 'global', group: '全局', label: '显示 / 隐藏主窗口', desc: '一键从后台唤起主窗口,或再次按下收起', defaultAccel: 'CommandOrControl+Alt+F' },
   { id: 'toggle-pet', scope: 'global', group: '全局', label: '显示 / 隐藏宠物', desc: '切换桌面宠物窗口的可见性', defaultAccel: 'CommandOrControl+Shift+P' },
   // ── 应用内(仅主窗口聚焦时生效) ──────────────────────────────────────────
   { id: 'new-workspace', scope: 'app', group: '工作区与会话', label: '新建工作区', desc: '打开新建工作区向导', defaultAccel: 'CommandOrControl+N' },

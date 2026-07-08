@@ -169,7 +169,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     <div className="agents-pane">
       <div className="set-row">
         <div className="info"><div className="t">编码代理</div><div className="d">检测本机安装的代理；可覆盖各自的 bin 路径</div></div>
-        <button className="set-btn" disabled={busy} onClick={() => apply(() => window.forge.detectProviders({ force: true }))}>重新检测</button>
+        <button className="set-btn" disabled={busy || detecting} onClick={() => apply(() => window.forge.detectProviders({ force: true }))}>{detecting ? '检测中…' : '重新检测'}</button>
       </div>
 
       {BUILTINS.map(b => (

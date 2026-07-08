@@ -25,6 +25,9 @@
 .pe-field input:focus, .pe-field textarea:focus { border-color: var(--accent); }
 .pe-foot { display: flex; align-items: center; gap: 9px; }
 .pe-foot .sp { flex: 1; }
+.pe-savelib { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 500; color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap; }
+.pe-savelib input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.pe-savelib:hover { color: var(--fg-2); }
 .pe-foot .cancel { height: 32px; padding: 0 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); font-size: 12px; font-weight: 500; }
 .pe-foot .cancel:hover { background: var(--surface-2); }
 .pe-foot .save { height: 32px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 660; }

@@ -21,8 +21,10 @@ const defaultProps = {
   onNewWorkflow: vi.fn(),
 }
 
-// Helper: fill the plugin editor's name field + click its add/save button.
+// Helper: the insert "+" now opens a picker (从库选择 / 新建). Click 新建 Hook to reach the blank
+// editor, then fill its name field + click add/save.
 function fillEditorAndSave(name: string) {
+  fireEvent.click(screen.getByRole('button', { name: /新建 Hook/ }))
   const nameInput = screen.getByPlaceholderText(/当前时间 \/ 读取我的记忆/) as HTMLInputElement
   fireEvent.change(nameInput, { target: { value: name } })
   fireEvent.click(screen.getByRole('button', { name: /添加插件/ }))
@@ -54,6 +56,41 @@ describe('CreateWorkspace – two-scope plugin editing', () => {
     expect(opts.plugins[0]).toMatchObject({ name: 'wf-plug', after: 'design' })
     expect(opts.stepPlugins).toHaveLength(1)
     expect(opts.stepPlugins[0]).toMatchObject({ name: 'step-plug', after: '__proj' })
+  })
+
+  it('picks a hook from the library — inserts a snapshot copy at the slot with a fresh id', () => {
+    const onCreate = vi.fn()
+    const hookLibrary = [{ id: 'hk1', name: '库钩子', prompt: 'p', skills: [], tools: [] }]
+    render(<CreateWorkspace {...defaultProps} hookLibrary={hookLibrary} onCreate={onCreate} />)
+    fireEvent.change(screen.getByPlaceholderText(/~\/code|路径/i), { target: { value: '~/code/ws-lib' } })
+
+    // Insert at __proj → picker → click the library chip (no 新建 needed).
+    fireEvent.click(document.querySelector('[data-ovadd="__proj"][data-ovscope="step"]') as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: /库钩子/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: /创建/ }))
+    const opts = onCreate.mock.calls[0][0]
+    expect(opts.stepPlugins).toHaveLength(1)
+    expect(opts.stepPlugins[0]).toMatchObject({ name: '库钩子', prompt: 'p', after: '__proj' })
+    // Snapshot copy: a fresh workspace-plugin id, NOT the library id.
+    expect(opts.stepPlugins[0].id).not.toBe('hk1')
+  })
+
+  it('new inline hook with 保存到 Hook 库 checked calls onSaveHookToLibrary (without an after)', () => {
+    const onSaveHookToLibrary = vi.fn()
+    render(<CreateWorkspace {...defaultProps} onSaveHookToLibrary={onSaveHookToLibrary} onCreate={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText(/~\/code|路径/i), { target: { value: '~/code/ws-save' } })
+
+    fireEvent.click(document.querySelector('[data-ovadd="design"][data-ovscope="wf"]') as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: /新建 Hook/ }))
+    fireEvent.change(screen.getByPlaceholderText(/当前时间 \/ 读取我的记忆/), { target: { value: '可复用钩子' } })
+    fireEvent.click(screen.getByRole('checkbox'))   // 保存到 Hook 库
+    fireEvent.click(screen.getByRole('button', { name: /添加插件/ }))
+
+    expect(onSaveHookToLibrary).toHaveBeenCalledTimes(1)
+    const saved = onSaveHookToLibrary.mock.calls[0][0]
+    expect(saved).toMatchObject({ name: '可复用钩子' })
+    expect(saved).not.toHaveProperty('after')
   })
 
   it('seeds wf-scope plugins from the selected workflow definition (Bug #1)', () => {
