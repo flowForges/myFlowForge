@@ -43,6 +43,7 @@ export interface StatusBarProps {
     updateVersion?: string
     checking: boolean
     uptodate: boolean
+    checkFailed: boolean
     onCheck: () => void
     onOpenUpgrade: () => void
   }
@@ -123,11 +124,14 @@ export function StatusBar({ branch, providers, sbLog, sbTerm, usageByProvider, u
         )}
         {update && (
           <span
-            className="it sb-ver"
-            title="点击检查更新"
+            className={'it sb-ver' + (update.checkFailed ? ' failed' : '')}
+            title={update.checkFailed ? '检查更新失败:无法连接 GitHub(可在设置里配置代理),点击重试' : '点击检查更新'}
             onClick={update.onCheck}
           >
-            {update.checking ? '检查中…' : update.uptodate ? '已是最新' : `Forge v${update.currentVersion}`}
+            {update.checking ? '检查中…'
+              : update.checkFailed ? '检查失败'
+              : update.uptodate ? '已是最新'
+              : `Forge v${update.currentVersion}`}
           </span>
         )}
         {update?.hasUpdate && (

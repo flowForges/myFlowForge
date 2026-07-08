@@ -272,6 +272,23 @@ describe('registerIpc broadcast wiring', () => {
     expect(writeWorkspaceMock).not.toHaveBeenCalled()             // 去重:只写一次
   })
 
+  it('returns the triggering workflow session to chat mode when its run finishes (no stuck 运行中 dot)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { readSessions, setSessionMode } = await import('../chat/sessionStore') as any
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    setSessionMode.mockClear()
+    // The session that triggered run r9 is in workflow mode; on terminal ok it must flip back to chat.
+    readSessions.mockReturnValueOnce({ sessions: [{ id: 'sWf', title: 'wf', mode: 'workflow', createdAt: 0, runId: 'r9' }], activeSessionId: 'sWf' })
+    readWorkspaceMock.mockReturnValue({ name: 'x', path: '/ws/a', projects: [], workflowId: 'wf', status: 'run' })
+    const run = { id: 'r9', workspaceName: 'x', workspacePath: '/ws/a', status: 'ok', projects: [], stages: [], pending: [] }
+    subscribers.forEach(fn => fn({ type: 'run:update', run }))
+    expect(setSessionMode).toHaveBeenCalledWith('/ws/a', 'sWf', 'chat')
+    const modeEvt = sent.find(([c, p]) => c === CH.chatEvent && (p as any).type === 'mode-changed')
+    expect(modeEvt).toBeTruthy()
+    expect((modeEvt![1] as any).mode).toBe('chat')
+  })
+
   it('engineStartRun surfaces a non-empty task as a chat user message (persist + broadcast)', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any

@@ -44,6 +44,8 @@ vi.mock('../config/store', () => ({
   writeProjects: vi.fn(), readWorkflows: () => ({ workflows: [] }), writeWorkflows: vi.fn(),
   registerWorkspace: vi.fn(), readWorkspace: vi.fn(), writeWorkspace: vi.fn(),
   readAgentsConfig: vi.fn(() => ({ providers: [], custom: [] })), writeAgentsConfig: vi.fn(),
+  readWorkspaceRegistry: () => [],   // consumed by the startup session-mode heal loop in registerIpc
+  readHookLibrary: () => ({ hooks: [] }), writeHookLibrary: vi.fn(),
 }))
 vi.mock('../workspace/workspaceService', () => ({
   createWorkspace: createWorkspaceMock,

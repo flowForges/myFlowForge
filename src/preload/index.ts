@@ -134,6 +134,7 @@ const api = {
     const map: Array<[string, (p: any) => UpdateEvent]> = [
       [CH.updateAvailable, (p) => ({ type: 'available', info: p.info })],
       [CH.updateNone, () => ({ type: 'none' })],
+      [CH.updateCheckFailed, (p) => ({ type: 'checkfailed', message: p?.message ?? '' })],
       [CH.updateProgress, (p) => ({ type: 'progress', stage: p.stage, pct: p.pct, log: p.log })],
       [CH.updateDone, () => ({ type: 'done' })],
       [CH.updateError, (p) => ({ type: 'error', message: p.message })],

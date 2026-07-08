@@ -45,6 +45,23 @@ describe('createUpdateChecker', () => {
     expect(await c.check()).toBeNull()
     expect(d.emit).not.toHaveBeenCalled()
   })
+  it('emits update:check-failed on a MANUAL check when the source throws (not "up to date")', async () => {
+    const d = deps({ fetchLatest: async () => { throw new Error('offline') } })
+    const c = createUpdateChecker(d)
+    await c.check(true)
+    expect(d.emit).toHaveBeenCalledWith('update:check-failed', expect.objectContaining({ message: 'offline' }))
+    expect(d.emit).not.toHaveBeenCalledWith('update:none', {})
+  })
+  it('stays silent on an AUTO check failure and keeps prior known info', async () => {
+    // First a successful check stores a pending update; then a failing check must NOT wipe it.
+    let call = 0
+    const d = deps({ fetchLatest: async () => { call++; if (call === 1) return INFO; throw new Error('offline') } })
+    const c = createUpdateChecker(d)
+    await c.check()
+    expect(c.current()).toEqual(INFO)
+    await c.check()   // auto check fails
+    expect(c.current()).toEqual(INFO)   // still there
+  })
   it('start() schedules the 10s first check and the 10min interval', () => {
     const d = deps()
     createUpdateChecker(d).start()

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { UpdateInfo, InstallProgress, UpdateEvent } from '@shared/types'
 
-export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'done' | 'error' | 'uptodate'
+export type UpdatePhase = 'idle' | 'checking' | 'available' | 'downloading' | 'done' | 'error' | 'uptodate' | 'checkfailed'
 
 export interface UpdateApi {
   currentVersion: string
@@ -35,6 +35,12 @@ export function useUpdate(): UpdateApi {
         case 'none':
           setPhase('uptodate')
           setTimeout(() => setPhase(p => (p === 'uptodate' ? 'idle' : p)), 2500)
+          break
+        case 'checkfailed':
+          // A failed check must NOT read as "up to date". Show 检查失败 briefly, then fall back to idle
+          // (keeping any previously-known pending update badge intact — info is untouched here).
+          setPhase('checkfailed')
+          setTimeout(() => setPhase(p => (p === 'checkfailed' ? 'idle' : p)), 3000)
           break
         case 'progress': setProgress({ stage: e.stage, pct: e.pct, log: e.log }); setPhase('downloading'); break
         case 'done': setPhase('done'); break

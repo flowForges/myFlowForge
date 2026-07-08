@@ -210,6 +210,7 @@ export interface InstallProgress { stage: string; pct: number; log?: string }
 export type UpdateEvent =
   | { type: 'available'; info: UpdateInfo }
   | { type: 'none' }
+  | { type: 'checkfailed'; message: string }
   | { type: 'progress'; stage: string; pct: number; log?: string }
   | { type: 'done' }
   | { type: 'error'; message: string }

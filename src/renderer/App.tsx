@@ -607,6 +607,7 @@ export function App() {
           updateVersion: updateCtx.info?.version,
           checking: updateCtx.phase === 'checking',
           uptodate: updateCtx.phase === 'uptodate',
+          checkFailed: updateCtx.phase === 'checkfailed',
           onCheck: updateCtx.check,
           onOpenUpgrade: () => setUpgradeOpen(true),
         }}

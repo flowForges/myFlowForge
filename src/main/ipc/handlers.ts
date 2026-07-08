@@ -101,7 +101,25 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     statusWritten.add(r.id)
     const ws = readWorkspace(r.workspacePath)
     if (ws && ws.status !== r.status) writeWorkspace({ ...ws, status: r.status })
+    // Return the triggering session to chat mode now the run is over (mirrors engineCancel). Without
+    // this, a session that ran a workflow to completion stays mode:'workflow' forever — showing a
+    // persistent "running-like" dot in the sidebar long after the run finished. Match by runId so the
+    // right session is reset even if the user has since switched the active session.
+    const owner = readSessions(r.workspacePath).sessions.find(s => s.runId === r.id && s.mode === 'workflow')
+    if (owner) {
+      setSessionMode(r.workspacePath, owner.id, 'chat')
+      broadcast(CH.chatEvent, { workspacePath: r.workspacePath, sessionId: owner.id, type: 'mode-changed', mode: 'chat' })
+    }
   })
+
+  // Startup heal: runs live only in the (in-memory) orchestrator, so on a fresh launch nothing is
+  // running — any session still stuck in mode:'workflow' (from a completed run before the reset fix, or
+  // an app crash mid-run) is stale. Reset them to chat so their sidebar dot doesn't imply a live agent.
+  for (const w of readWorkspaceRegistry()) {
+    for (const s of readSessions(w.path).sessions) {
+      if (s.mode === 'workflow') setSessionMode(w.path, s.id, 'chat')
+    }
+  }
 
   const mcpEntry = join(__dirname, 'forgeMcp.js')
   const orch = new Orchestrator({ bus, providers, proxy: () => readSettings().termProxy, mcpEntry })

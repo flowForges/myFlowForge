@@ -92,6 +92,7 @@ export const CH = {
   updateStart: 'update:start',
   updateAvailable: 'update:available',
   updateNone: 'update:none',
+  updateCheckFailed: 'update:check-failed',
   updateProgress: 'update:progress',
   updateDone: 'update:done',
   updateError: 'update:error',

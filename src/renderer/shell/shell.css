@@ -404,6 +404,7 @@
 .sb-right .it svg { width: 12px; height: 12px; }
 
 .sb-ver { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.sb-ver.failed { color: var(--err); }
 .sb-update {
   display: none; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 99px; font-family: var(--mono);
   background: var(--accent-dim); color: var(--accent); font-weight: 600; cursor: pointer;

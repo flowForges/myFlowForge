@@ -1,4 +1,5 @@
 import type { UpdateInfo } from '@shared/types'
+import { compareVersions } from './version'
 
 export interface GithubDeps {
   fetch: (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>
@@ -25,26 +26,38 @@ function pickDmg(assets: any[], arch?: string): any | null {
   return dmgs[0]
 }
 
+// Fetch the newest release. We list ALL releases and pick the highest SEMVER ourselves rather than
+// trusting GitHub's `/releases/latest` — that endpoint returns whichever release carries the "Latest"
+// flag (assigned by created_at / make_latest), which can lag or point at a non-newest tag right after
+// a publish. Computing max-semver makes "is there a newer version than mine" deterministic.
+//
+// Failure semantics (important): this THROWS on a network error or non-2xx (GitHub unreachable — very
+// common behind a firewall/without a proxy). It returns null only when GitHub answered fine but there
+// is no usable release/dmg. Callers must distinguish these: a throw is "check failed", null is "no
+// update" — otherwise an unreachable GitHub gets silently reported to the user as "已是最新".
 export async function fetchLatestRelease(repo: string, deps: GithubDeps): Promise<UpdateInfo | null> {
-  try {
-    const res = await deps.fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'myFlowForge' },
-    })
-    if (!res.ok) return null
-    const j = await res.json()
-    const version = String(j?.tag_name ?? '').replace(/^v/i, '')
-    if (!version) return null
-    const assets: any[] = Array.isArray(j?.assets) ? j.assets : []
-    const dmg = pickDmg(assets, deps.arch)
-    if (!dmg) return null
-    return {
-      version,
-      notes: String(j?.body ?? ''),
-      dmgUrl: String(dmg.browser_download_url ?? ''),
-      dmgSize: Number(dmg.size ?? 0),
-      dmgName: String(dmg.name ?? ''),
-    }
-  } catch {
-    return null
+  const res = await deps.fetch(`https://api.github.com/repos/${repo}/releases?per_page=20`, {
+    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'myFlowForge' },
+  })
+  if (!res.ok) throw new Error(`github releases HTTP ${(res as any).status ?? 'error'}`)
+  const list = await res.json()
+  const releases: any[] = Array.isArray(list) ? list : []
+  // Only stable, published releases are update candidates.
+  const stable = releases.filter(r => r && !r.draft && !r.prerelease && String(r.tag_name ?? '').trim())
+  if (stable.length === 0) return null
+  // Highest semver wins (not first-in-list / not GitHub's "latest" flag).
+  const newest = stable.reduce((best, r) =>
+    compareVersions(String(r.tag_name), String(best.tag_name)) === 1 ? r : best)
+  const version = String(newest.tag_name ?? '').replace(/^v/i, '')
+  if (!version) return null
+  const assets: any[] = Array.isArray(newest.assets) ? newest.assets : []
+  const dmg = pickDmg(assets, deps.arch)
+  if (!dmg) return null
+  return {
+    version,
+    notes: String(newest.body ?? ''),
+    dmgUrl: String(dmg.browser_download_url ?? ''),
+    dmgSize: Number(dmg.size ?? 0),
+    dmgName: String(dmg.name ?? ''),
   }
 }
