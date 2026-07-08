@@ -27,6 +27,9 @@ export interface SetupProgressState {
   basicHooks: HookEntry[]
   projHooks: HookEntry[]
   provisionedProjects: ProvisionedProject[]
+  total: number
+  pulling: { project: string; index: number } | null
+  failed: { project: string; index: number; message: string } | null
 }
 
 interface SetupProgressProps {
@@ -52,7 +55,7 @@ function hookToRuntime(hook: HookEntry): AgentRuntime {
 export function SetupProgress({ state, onClose }: SetupProgressProps) {
   if (!state.started) return null
 
-  const total = state.provisionedProjects[0]?.total ?? 0
+  const total = state.total || state.provisionedProjects[0]?.total || 0
 
   return (
     <div className="setup-overlay on">
@@ -105,21 +108,32 @@ export function SetupProgress({ state, onClose }: SetupProgressProps) {
               )}
             </div>
             <div className="setup-provision-list">
-              {total === 0 && state.provisionedProjects.length === 0 ? (
+              {total === 0 && state.provisionedProjects.length === 0 && !state.pulling ? (
                 <div className="setup-provision-empty">等待拉取…</div>
               ) : (
                 Array.from({ length: total }, (_, i) => {
-                  const proj = state.provisionedProjects.find(p => p.index === i)
+                  const done = state.provisionedProjects.find(p => p.index === i)
+                  const pulling = state.pulling?.index === i
+                  const failed = state.failed?.index === i
+                  const name = done?.name ?? (pulling ? state.pulling!.project : failed ? state.failed!.project : `项目 ${i + 1}`)
+                  const cls = done ? ' done' : failed ? ' failed' : pulling ? ' pulling' : ' pending'
                   return (
-                    <div key={i} className={`setup-provision-row${proj ? ' done' : ' pending'}`}>
+                    <div key={i} className={`setup-provision-row${cls}`}>
                       <span className="setup-prov-dot" />
-                      <span className="setup-prov-name">{proj ? proj.name : `项目 ${i + 1}`}</span>
-                      {proj && <span className="setup-prov-ok">✓</span>}
+                      <span className="setup-prov-name">
+                        {pulling ? `正在拉取项目 ${name} (${i + 1}/${total})` : name}
+                      </span>
+                      {done && <span className="setup-prov-ok">✓</span>}
+                      {pulling && <span className="setup-prov-spin" aria-label="拉取中" />}
+                      {failed && <span className="setup-prov-err" title={state.failed!.message}>✕</span>}
                     </div>
                   )
                 })
               )}
             </div>
+            {state.failed && (
+              <div className="setup-provision-errmsg">拉取「{state.failed.project}」失败:{state.failed.message}</div>
+            )}
           </section>
 
           {/* __proj hooks section */}
@@ -160,6 +174,9 @@ export const INITIAL_SETUP_STATE: SetupProgressState = {
   basicHooks: [],
   projHooks: [],
   provisionedProjects: [],
+  total: 0,
+  pulling: null,
+  failed: null,
 }
 
 export function applySetupEvent(state: SetupProgressState, event: SetupEvent): SetupProgressState {
@@ -203,13 +220,26 @@ export function applySetupEvent(state: SetupProgressState, event: SetupEvent): S
       }
     }
 
+    case 'provision:start':
+      return { ...state, total: event.total, pulling: { project: event.project, index: event.index } }
+
     case 'provision':
       return {
         ...state,
+        total: event.total,
+        pulling: state.pulling && state.pulling.index === event.index ? null : state.pulling,
         provisionedProjects: [
           ...state.provisionedProjects,
           { name: event.project, index: event.index, total: event.total },
         ],
+      }
+
+    case 'provision:error':
+      return {
+        ...state,
+        total: event.total,
+        pulling: state.pulling && state.pulling.index === event.index ? null : state.pulling,
+        failed: { project: event.project, index: event.index, message: event.message },
       }
 
     case 'setup:done':
