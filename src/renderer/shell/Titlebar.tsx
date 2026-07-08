@@ -18,6 +18,7 @@ export interface TitlebarProps {
   onToggleNotif: () => void
   onOpenUpgrade: () => void
   onMarkAllRead: () => void
+  onSelectNotif?: (n: Notif, index: number) => void
   canEditWorkspace?: boolean
   onEditWorkspace?: () => void
   updateInfo?: import('@shared/types').UpdateInfo | null
@@ -39,6 +40,7 @@ export function Titlebar({
   onToggleNotif,
   onOpenUpgrade,
   onMarkAllRead,
+  onSelectNotif,
   canEditWorkspace,
   onEditWorkspace,
   updateInfo,
@@ -141,6 +143,7 @@ export function Titlebar({
         onToggle={onToggleNotif}
         onOpenUpgrade={onOpenUpgrade}
         onMarkAllRead={onMarkAllRead}
+        onSelect={onSelectNotif}
       />
 
       {/* Settings gear */}

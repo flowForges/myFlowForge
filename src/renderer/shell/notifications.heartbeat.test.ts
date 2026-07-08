@@ -18,9 +18,15 @@ describe('notifFromLifecycle', () => {
     expect(n.t).toContain('dev')
   })
 
-  it('done -> ok notif; failed -> warn; awaiting -> warn', () => {
-    expect(notifFromLifecycle({ kind: 'done', agentName: 'x', wsName: 'ws' }).ic).toBe('ok')
+  it('run-done -> ok notif; failed -> warn; awaiting -> warn', () => {
+    expect(notifFromLifecycle({ kind: 'run-done', agentName: 'x', wsName: 'ws' }).ic).toBe('ok')
     expect(notifFromLifecycle({ kind: 'failed', agentName: 'x', wsName: 'ws' }).ic).toBe('warn')
     expect(notifFromLifecycle({ kind: 'awaiting', agentName: 'x', wsName: 'ws' }).ic).toBe('warn')
+  })
+
+  it('carries jump-to-source route (wsPath/wsName) onto the notif', () => {
+    const n = notifFromLifecycle({ kind: 'run-done', agentName: 'x', wsName: 'blog', wsPath: '/w/blog' })
+    expect(n.wsPath).toBe('/w/blog')
+    expect(n.wsName).toBe('blog')
   })
 })

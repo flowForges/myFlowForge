@@ -1,19 +1,29 @@
-import { readdirSync } from 'node:fs'
+import { readdir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { git } from '../git/gitRunner'
 import type { TreeNode, ChangeItem } from '@shared/types'
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.forge', 'dist', 'out', '.next', 'target', '.venv', '__pycache__'])
+// Cap the file list from EITHER source (git ls-files or the fs walk) so the synchronous buildTree
+// pass can't block the main process on a giant repo/tree. A partial tree beats a frozen UI.
+const MAX_TREE_FILES = 4000
 
-// Plain filesystem walk for directories that are NOT a git repo (e.g. a workspace root
-// holding several project worktrees). Bounded so a huge tree can't wedge the UI.
-function walkDir(root: string, maxFiles = 4000): string[] {
+// Plain filesystem walk for directories that are NOT a git repo (e.g. a workspace root holding
+// several project worktrees). ASYNC (awaits readdir, yielding to the event loop between every
+// directory) so a large/slow tree can't synchronously wedge the main process — the old readdirSync
+// version blocked it for ~29s on a big cloud-synced folder. Triple-bounded (files, dirs, wall-clock
+// deadline) so even a pathological tree returns promptly with a partial view.
+async function walkDir(root: string, maxFiles = MAX_TREE_FILES, maxDirs = 15000, deadlineMs = 4000): Promise<string[]> {
   const files: string[] = []
   const stack = [root]
-  while (stack.length && files.length < maxFiles) {
+  let dirs = 0
+  const start = Date.now()
+  while (stack.length && files.length < maxFiles && dirs < maxDirs) {
+    if (Date.now() - start > deadlineMs) break
     const dir = stack.pop()!
+    dirs++
     let entries: import('node:fs').Dirent[]
-    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { continue }
+    try { entries = await readdir(dir, { withFileTypes: true }) } catch { continue }
     for (const e of entries) {
       if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) stack.push(join(dir, e.name)) }
       else { files.push(relative(root, join(dir, e.name)).split(sep).join('/')); if (files.length >= maxFiles) break }
@@ -55,11 +65,12 @@ export async function readTree(cwd: string, changes: ChangeItem[] = [], proxy = 
   try {
     const out = await git(['ls-files', '--cached', '--others', '--exclude-standard'], { cwd, proxy })
     files = [...new Set(out.split('\n').filter(Boolean))]
+    if (files.length > MAX_TREE_FILES) files = files.slice(0, MAX_TREE_FILES)
     // A non-git dir (e.g. the workspace root over several project worktrees) returns nothing
     // from ls-files — fall back to a plain filesystem walk so its tree still shows.
-    if (files.length === 0) files = walkDir(cwd)
+    if (files.length === 0) files = await walkDir(cwd)
   } catch {
-    files = walkDir(cwd)
+    files = await walkDir(cwd)
   }
   return buildTree(files, changes)
 }

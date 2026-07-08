@@ -299,6 +299,19 @@ app.whenReady().then(() => {
   // A Forge window gained focus → the user is now on that monitor; join it.
   app.on('browser-window-focus', (_e, win) => relocatePetToFocus(win))
 
+  // Cross-app follow: `browser-window-focus` only fires for our OWN windows, so when the user works
+  // in another app (browser/editor/terminal) on another monitor, focus never reaches Forge and the
+  // pet would stay put — the reported "跟随屏幕失效". Poll the cursor's SCREEN (not its pixel
+  // position) at a gentle cadence and hop only when it crosses to a different display.
+  // relocatePetToDisplay no-ops while on the same screen, so there's no within-screen jitter (the
+  // reason the old pixel-chasing poll was dropped). Gated by pet.enabled + pet.followCursor.
+  setInterval(() => {
+    const p = readSettings().pet
+    if (!p.enabled || !p.followCursor) return
+    if (!petWin || petWin.isDestroyed() || petMode !== 'collapsed') return
+    relocatePetToDisplay(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()))
+  }, 900)
+
   if (readSettings().pet.enabled) createPet()
   // On startup, join whatever window is already focused (if the toggle is on).
   relocatePetToFocus(BrowserWindow.getFocusedWindow())
@@ -465,7 +478,9 @@ app.whenReady().then(() => {
 
   // Perf monitor: detect main event-loop stalls, attribute to the running span, log + toast big ones.
   const stallReporter = new StallReporter({
-    toast: (msg) => sendMain(CH.perfStall, { msg }),
+    // Opt-in: only pop the stall as a bell notification when the user enabled it in the 调试 pane.
+    // Stalls are always logged (StallReporter.report → logWarn) so the debug log stays complete.
+    toast: (msg) => { if (readSettings().perfStallToast) sendMain(CH.perfStall, { msg }) },
     now: () => performance.now(),
   })
   const perfMonitor = new EventLoopMonitor()

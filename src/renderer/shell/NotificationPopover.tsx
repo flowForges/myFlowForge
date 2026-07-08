@@ -10,6 +10,7 @@ export interface NotificationPopoverProps {
   onToggle: () => void
   onOpenUpgrade: () => void
   onMarkAllRead: () => void
+  onSelect?: (n: Notif, index: number) => void
 }
 
 export function NotificationPopover({
@@ -20,6 +21,7 @@ export function NotificationPopover({
   onToggle,
   onOpenUpgrade,
   onMarkAllRead,
+  onSelect,
 }: NotificationPopoverProps) {
   const ref = useRef<HTMLDivElement>(null)
   const unread = unreadCount(notifs)
@@ -77,15 +79,24 @@ export function NotificationPopover({
         </div>
         <div className="notif-list">
           {notifs.length ? (
-            notifs.map((n, i) => (
-              <div key={i} className={'notif-item' + (n.unread ? ' unread' : '')}>
-                <div className={'ni-ic ' + n.cls} dangerouslySetInnerHTML={{ __html: ICN[n.ic] }} />
-                <div className="ni-b">
-                  <div className="ni-t" dangerouslySetInnerHTML={{ __html: n.t }} />
-                  <div className="ni-m">{n.m}</div>
+            notifs.map((n, i) => {
+              const clickable = !!(n.wsPath || n.wsName) && !!onSelect
+              return (
+                <div
+                  key={i}
+                  className={'notif-item' + (n.unread ? ' unread' : '') + (clickable ? ' clickable' : '')}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onClick={clickable ? () => onSelect?.(n, i) : undefined}
+                >
+                  <div className={'ni-ic ' + n.cls} dangerouslySetInnerHTML={{ __html: ICN[n.ic] }} />
+                  <div className="ni-b">
+                    <div className="ni-t" dangerouslySetInnerHTML={{ __html: n.t }} />
+                    <div className="ni-m">{n.m}</div>
+                  </div>
                 </div>
-              </div>
-            ))
+              )
+            })
           ) : (
             <div className="notif-empty">暂无通知</div>
           )}

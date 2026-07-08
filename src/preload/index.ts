@@ -23,6 +23,7 @@ const api = {
   refreshModels: (providerId: string) => ipcRenderer.invoke(CH.agentsRefreshModels, providerId),
   setModels: (id: string, models: { id: string; label: string; description?: string }[]) => ipcRenderer.invoke(CH.agentsSetModels, { id, models }),
   scanContext: (workspacePath?: string) => ipcRenderer.invoke(CH.contextScan, workspacePath),
+  scanGlobalContext: (): Promise<import('@shared/types').AgentContextMeta> => ipcRenderer.invoke(CH.contextScanGlobal),
   listSkills: (): Promise<import('@shared/types').InstalledSkill[]> => ipcRenderer.invoke(CH.skillsList),
   createWorkspace: (opts: unknown) => ipcRenderer.invoke(CH.workspaceCreate, opts),
   getWorkspace: (path: string) => ipcRenderer.invoke(CH.workspaceGet, path),
