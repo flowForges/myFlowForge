@@ -2,7 +2,7 @@ import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
 import { EventBus } from '../orchestrator/eventBus'
 import { Orchestrator, gateApprovedKey } from '../orchestrator/orchestrator'
-import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, upsertProject, setProjectDefaultBranch, registerWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
+import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, upsertProject, setProjectDefaultBranch, registerWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
 import { rebuildProviderRegistry } from '../agents/registry'
@@ -177,6 +177,22 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       ...(input.stagePrompts !== undefined ? { stagePrompts: input.stagePrompts } : {}),
     } : w) })
     return readWorkflows().workflows
+  })
+  // --- Reusable hook library (slot-agnostic; snapshot-copied into workspaces at create time) ---
+  ipcMain.handle(CH.hookLibraryList, () => readHookLibrary().hooks)
+  ipcMain.handle(CH.hookLibrarySave, (_e, hook: import('../config/schema').LibraryHook) => {
+    const list = readHookLibrary().hooks
+    const next = list.some(h => h.id === hook.id) ? list.map(h => h.id === hook.id ? hook : h) : [...list, hook]
+    writeHookLibrary({ hooks: next })
+    return readHookLibrary().hooks
+  })
+  ipcMain.handle(CH.hookLibraryDelete, (_e, id: string) => {
+    writeHookLibrary({ hooks: readHookLibrary().hooks.filter(h => h.id !== id) })
+    return readHookLibrary().hooks
+  })
+  ipcMain.handle(CH.hookLibrarySetAll, (_e, hooks: import('../config/schema').LibraryHook[]) => {
+    writeHookLibrary({ hooks })
+    return readHookLibrary().hooks
   })
   // Cached: concurrent callers share one probe, results live 60s. `force` (重新检测) re-probes.
   ipcMain.handle(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>

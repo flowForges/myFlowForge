@@ -186,3 +186,22 @@
 .sh-add { display: inline-flex; align-items: center; gap: 5px; height: 25px; padding: 0 11px; border-radius: 999px; border: 1px dashed var(--border); background: transparent; color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; transition: .14s; white-space: nowrap; }
 .sh-add svg { width: 12px; height: 12px; flex: 0 0 12px; }
 .sh-add:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+
+/* Insert picker: choose an existing library hook or start a new one. */
+.hk-picker { width: 100%; margin-top: 9px; padding: 12px 13px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
+.hk-picker .hkp-h { display: inline-flex; align-items: center; gap: 6px; font: 600 12px/1 var(--sans); color: var(--fg-2); }
+.hk-picker .hkp-h svg { width: 13px; height: 13px; flex: 0 0 13px; color: var(--accent); }
+.hkp-lib { display: flex; flex-direction: column; gap: 7px; }
+.hkp-lbl { font-size: 10.5px; font-weight: 600; letter-spacing: .03em; color: var(--faint); text-transform: uppercase; }
+.hkp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.hkp-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; height: 27px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg-2); font-size: 11.5px; font-weight: 550; cursor: pointer; transition: .14s; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hkp-chip svg { width: 12px; height: 12px; flex: 0 0 12px; color: var(--muted); }
+.hkp-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.hkp-chip:hover svg { color: var(--accent); }
+.hkp-empty { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.hkp-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.hkp-foot .cancel { height: 30px; padding: 0 13px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); color: var(--fg-2); font-size: 12px; font-weight: 500; cursor: pointer; }
+.hkp-foot .cancel:hover { background: var(--surface); }
+.hkp-new { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 14px; border-radius: 8px; background: var(--accent); border: none; color: var(--on-accent); font-size: 12px; font-weight: 640; cursor: pointer; }
+.hkp-new svg { width: 13px; height: 13px; flex: 0 0 13px; }
+.hkp-new:hover { filter: brightness(1.06); }

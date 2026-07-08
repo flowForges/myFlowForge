@@ -10,6 +10,7 @@ import { LayoutToggle } from './shell/LayoutToggle'
 import './shell/dock.css'
 import { useEngine } from './state/useEngine'
 import { useConfig } from './state/useConfig'
+import { useHookLibrary } from './state/useHookLibrary'
 import { useSettings } from './state/useSettings'
 import type { OpenTarget } from '@shared/openers'
 import { useLogs } from './state/useLogs'
@@ -33,6 +34,7 @@ import { AppIconPane } from './settings/AppIconPane'
 import { TermProxyPane } from './settings/TermProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
 import { WorkflowPane } from './settings/WorkflowPane'
+import { HookLibraryPane } from './settings/HookLibraryPane'
 import { SkillPane } from './settings/SkillPane'
 import { PetPane } from './settings/PetPane'
 import { LoadPane } from './settings/LoadPane'
@@ -136,6 +138,7 @@ export function App() {
   const notifRunPrev = useRef<Map<string, AgentState>>(new Map())
   const home = useHome()
   const { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect } = useConfig()
+  const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
@@ -618,6 +621,8 @@ export function App() {
         onAddProject={addProject}
         onAddWorkflow={addWorkflow}
         onPickPath={() => window.forge.pickDirectory()}
+        hookLibrary={hookLib.hooks}
+        onSaveHookToLibrary={hookLib.save}
         error={createErr}
         creating={creating}
       />
@@ -663,6 +668,7 @@ export function App() {
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
           case 'workflow': return <WorkflowPane workflows={workflows} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} />
+          case 'hookLibrary': return <HookLibraryPane hooks={hookLib.hooks} onSave={hookLib.save} onDelete={hookLib.remove} onSetAll={hookLib.setAll} />
           case 'skills': return <SkillPane />
           case 'loads': return <LoadPane />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null

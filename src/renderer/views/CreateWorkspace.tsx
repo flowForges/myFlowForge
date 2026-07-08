@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CreateWorkspaceOpts, ProviderInfo, ReviewConfig, ReviewLens } from '@shared/types'
-import type { Plugin } from '@shared/plugin'
+import type { Plugin, LibraryHook } from '@shared/plugin'
 import type { CfgProject, CfgWorkflow } from '../state/useConfig'
 import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, type WizardState, type WizardStage, type WizardProject } from './wizardModel'
 import { PluginEditor } from '../components/PluginEditor'
@@ -98,12 +98,16 @@ interface Props {
   onAddProject?: (repoUrl: string, branch: string) => Promise<CfgProject[]>
   onAddWorkflow?: (name: string, stageKeys: string[]) => Promise<CfgWorkflow[]>
   onPickPath?: () => Promise<string | null>
+  // Global reusable hook library: picked-from at each insert point; onSaveHookToLibrary persists a new
+  // inline-created hook back to the library when the「保存到 Hook 库」box is checked.
+  hookLibrary?: LibraryHook[]
+  onSaveHookToLibrary?: (hook: LibraryHook) => void
   error?: string | null
   creating?: boolean   // workspace creation is in flight (git worktree/fetch) — block re-submit
   editing?: import('@shared/types').Workspace | null
 }
 
-export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, providers, onOpenProjectSettings, onNewWorkflow, onAddProject, onAddWorkflow, onPickPath, error, creating = false, editing }: Props) {
+export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, providers, onOpenProjectSettings, onNewWorkflow, onAddProject, onAddWorkflow, onPickPath, hookLibrary = [], onSaveHookToLibrary, error, creating = false, editing }: Props) {
   // installed providers drive the model menus; fall back to all providers if none report installed.
   const pickProviders = useMemo(() => {
     const inst = providers.filter(p => p.installed)
@@ -158,6 +162,8 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const [state, setState] = useState<WizardState>(freshState)
   const [branchAll, setBranchAll] = useState('')
   const [plugEdit, setPlugEdit] = useState<PlugEdit | null>(null)
+  // Insert flow: clicking "+" opens a picker (choose-from-library / create-new) rather than the editor.
+  const [plugPick, setPlugPick] = useState<{ scope: 'wf' | 'step'; after: string } | null>(null)
   const [draggedPlugId, setDraggedPlugId] = useState<string | null>(null)
   const [stageEdit, setStageEdit] = useState<string | null>(null)   // currently editing stage append key
   // custom model input state: key = stage key or 'proj::repoId', value = typed text
@@ -347,10 +353,19 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   // --- plugin (hook) editing — both scopes share one open-editor state ---
   const plugKey = (scope: 'wf' | 'step'): 'plugins' | 'stepPlugins' => (scope === 'step' ? 'stepPlugins' : 'plugins')
   const plugsOf = (scope: 'wf' | 'step', after: string): Plugin[] => state[plugKey(scope)].filter(p => p.after === after)
-  const openInsert = (scope: 'wf' | 'step', after: string) => { setStageEdit(null); setPlugEdit({ scope, after, editId: null }) }
+  // Insert "+" now opens the picker (from-library / new); the editor opens only on「新建」or when editing.
+  const openInsert = (scope: 'wf' | 'step', after: string) => { setStageEdit(null); setPlugEdit(null); setPlugPick({ scope, after }) }
   const openEdit = (scope: 'wf' | 'step', id: string) => {
     const pl = state[plugKey(scope)].find(p => p.id === id)
-    if (pl) { setStageEdit(null); setPlugEdit({ scope, after: pl.after, editId: id }) }
+    if (pl) { setStageEdit(null); setPlugPick(null); setPlugEdit({ scope, after: pl.after, editId: id }) }
+  }
+  // Picker → 新建: close the picker and open a blank editor at the same slot.
+  const startNewHook = (scope: 'wf' | 'step', after: string) => { setPlugPick(null); setPlugEdit({ scope, after, editId: null }) }
+  // Picker → pick a library hook: snapshot-copy it into this slot (fresh id + this slot's `after`).
+  const pickLibraryHook = (scope: 'wf' | 'step', after: string, lib: LibraryHook) => {
+    const key = plugKey(scope)
+    update(s => ({ ...s, [key]: [...s[key], { id: `pl-${crypto.randomUUID()}`, name: lib.name, prompt: lib.prompt, after, skills: [...lib.skills], tools: [...lib.tools] }] }))
+    setPlugPick(null)
   }
   const plugLabel = (scope: 'wf' | 'step', after: string) => scope === 'step' ? (STEP_LABEL[after] ?? after) : wfAfterLabel(after)
   const deletePlug = (scope: 'wf' | 'step', id: string) => {
@@ -358,7 +373,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     update(s => ({ ...s, [key]: s[key].filter(p => p.id !== id) }))
     setPlugEdit(e => (e?.editId === id ? null : e))
   }
-  const savePlug = (result: { name: string; prompt: string; skills: string[]; tools: string[] }) => {
+  const savePlug = (result: { name: string; prompt: string; skills: string[]; tools: string[]; saveToLibrary?: boolean }) => {
     if (!plugEdit) return
     const key = plugKey(plugEdit.scope)
     update(s => {
@@ -368,6 +383,10 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
         : [...arr, { id: `pl-${crypto.randomUUID()}`, name: result.name, prompt: result.prompt, after: plugEdit.after, skills: result.skills, tools: result.tools }]
       return { ...s, [key]: next }
     })
+    // Opt-in: also persist this new hook to the reusable library (slot-agnostic → drop `after`).
+    if (!plugEdit.editId && result.saveToLibrary && onSaveHookToLibrary) {
+      onSaveHookToLibrary({ id: `hk-${crypto.randomUUID()}`, name: result.name, prompt: result.prompt, skills: result.skills, tools: result.tools })
+    }
     setPlugEdit(null)
   }
 
@@ -406,10 +425,36 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     <PluginEditor
       afterLabel={plugLabel(scope, after)}
       presets={plugEdit.editId ? undefined : PLUGIN_PRESETS}
+      showSaveToLibrary={Boolean(onSaveHookToLibrary)}
       initial={plugEdit.editId ? state[plugKey(scope)].find(p => p.id === plugEdit.editId) : undefined}
       onSave={savePlug}
       onCancel={() => setPlugEdit(null)}
     />
+  ) : null
+
+  // Insert picker: choose an existing library hook (snapshot-copied) or start a new one.
+  const pickerFor = (scope: 'wf' | 'step', after: string) => (plugPick && plugPick.scope === scope && plugPick.after === after) ? (
+    <div className="hk-picker" data-hkpick={after}>
+      <div className="hkp-h">{PUZZLE_PZ}在「{plugLabel(scope, after)}」插入 hook</div>
+      {hookLibrary.length > 0 ? (
+        <div className="hkp-lib">
+          <span className="hkp-lbl">从 Hook 库选择</span>
+          <div className="hkp-chips">
+            {hookLibrary.map(lib => (
+              <button key={lib.id} type="button" className="hkp-chip" title={lib.prompt || lib.name} onClick={() => pickLibraryHook(scope, after, lib)}>
+                {PUZZLE_PZ}{lib.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className="hkp-empty">Hook 库还是空的 —— 你可以新建一个,并在新建时勾选「保存到 Hook 库」以便复用。</div>
+      )}
+      <div className="hkp-foot">
+        <button type="button" className="cancel" onClick={() => setPlugPick(null)}>取消</button>
+        <button type="button" className="hkp-new" onClick={() => startNewHook(scope, after)}>{INS_SVG}新建 Hook</button>
+      </div>
+    </div>
   ) : null
 
   // step-scope hook bar for one boundary.
@@ -426,6 +471,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
           </button>
           <span className="hr" />
         </div>
+        {pickerFor('step', after)}
         {editorFor('step', after)}
       </div>
     )
@@ -578,6 +624,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                     </span>
                   ))}
                 </div>
+                {plugPick?.scope === 'wf' && pickerFor('wf', plugPick.after)}
                 {plugEdit?.scope === 'wf' && editorFor('wf', plugEdit.after)}
                 {stageEdit && (
                   <StagePromptEditor
