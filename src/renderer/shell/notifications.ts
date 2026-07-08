@@ -4,6 +4,11 @@ export interface Notif {
   t: string
   m: string
   unread: boolean
+  // Jump-to-source: where clicking this notification should navigate. `wsPath` is authoritative
+  // when known (from a run's workspacePath); `wsName` is a fallback the click handler resolves to a
+  // path via the workspace registry (for events that only carry a name). Absent → not clickable.
+  wsPath?: string
+  wsName?: string
 }
 
 export const ICN: Record<'ok' | 'warn' | 'file' | 'up', string> = {
@@ -58,25 +63,28 @@ export function sanitize(s: string): string {
 }
 
 export interface LifecycleNote {
-  kind: 'done' | 'stalled' | 'awaiting' | 'failed'
+  // 'run-done' = the whole workflow finished (one aggregate notif, replacing per-agent 完成 spam).
+  kind: 'run-done' | 'stalled' | 'awaiting' | 'failed'
   agentName: string
   wsName: string
+  wsPath?: string
   silentMs?: number
 }
 
 export function notifFromLifecycle(e: LifecycleNote): Notif {
   const name = sanitize(e.agentName)
   const ws = sanitize(e.wsName)
+  const route = { wsPath: e.wsPath, wsName: e.wsName }
   switch (e.kind) {
-    case 'done':
-      return { ic: 'ok', cls: 'ni-ok', t: `<b>${name}</b> 已完成`, m: `${ws} · 刚刚`, unread: true }
+    case 'run-done':
+      return { ic: 'ok', cls: 'ni-ok', t: `<b>${ws}</b> 工作流已全部完成`, m: `${ws} · 刚刚`, unread: true, ...route }
     case 'stalled': {
       const secs = e.silentMs ? Math.round(e.silentMs / 1000) : 90
-      return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 疑似卡住(${secs}s 无响应)`, m: `${ws} · 刚刚`, unread: true }
+      return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 疑似卡住(${secs}s 无响应)`, m: `${ws} · 刚刚`, unread: true, ...route }
     }
     case 'awaiting':
-      return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 需要你确认/输入`, m: `${ws} · 刚刚`, unread: true }
+      return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 需要你确认/输入`, m: `${ws} · 刚刚`, unread: true, ...route }
     case 'failed':
-      return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 失败/被终止`, m: `${ws} · 刚刚`, unread: true }
+      return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 失败/被终止`, m: `${ws} · 刚刚`, unread: true, ...route }
   }
 }

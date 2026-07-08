@@ -2,17 +2,16 @@ import { useEffect, useState } from 'react'
 import type { AgentContextMeta } from '@shared/types'
 import { AgentContextMeta as AgentContextList } from '../components/AgentContextMeta'
 
-interface LoadPaneProps {
-  workspacePath?: string
-}
-
 const EMPTY: AgentContextMeta = { skills: [], rules: [], mcps: [] }
 
 function count(context: AgentContextMeta): number {
   return context.skills.length + context.rules.length + (context.mcps?.length ?? 0)
 }
 
-export function LoadPane({ workspacePath }: LoadPaneProps) {
+// System-level (user-scoped) add-ons — the global skills/rules/MCP shared by every workspace,
+// across all supported CLIs (Claude / Codex / Gemini / Cursor / Qoder). Project-level add-ons
+// live in the workspace's own right-side panel, not here.
+export function LoadPane() {
   const [context, setContext] = useState<AgentContextMeta>(EMPTY)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -20,20 +19,20 @@ export function LoadPane({ workspacePath }: LoadPaneProps) {
   const scan = () => {
     setLoading(true)
     setError(null)
-    window.forge.scanContext(workspacePath)
+    window.forge.scanGlobalContext()
       .then((res: AgentContextMeta) => setContext({ ...EMPTY, ...res, mcps: res.mcps ?? [] }))
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false))
   }
 
-  useEffect(() => { scan() }, [workspacePath])
+  useEffect(() => { scan() }, [])
 
   return (
     <div className="set-group load-pane">
       <div className="load-head">
         <div>
-          <h4>加载项扫描</h4>
-          <p>{workspacePath ? '仅扫描当前工作区目录下的项目级加载项。' : '未选中工作区,展示可用运行加载项。'}</p>
+          <h4>系统级加载项</h4>
+          <p>扫描所有支持的编码 CLI（Claude / Codex / Gemini / Cursor / Qoder）的全局 skill、rule、MCP。项目级加载项在对应工作区右侧查看。</p>
         </div>
         <button className="set-btn" onClick={scan} disabled={loading}>{loading ? '扫描中' : '重新扫描'}</button>
       </div>
@@ -43,7 +42,7 @@ export function LoadPane({ workspacePath }: LoadPaneProps) {
         <span><b>{context.mcps?.length ?? 0}</b> MCP</span>
       </div>
       {error ? <div className="load-error">{error}</div> : null}
-      {count(context) > 0 ? <AgentContextList context={context} /> : <div className="proj-empty">未发现 workspace 级加载项</div>}
+      {count(context) > 0 ? <AgentContextList context={context} /> : <div className="proj-empty">未发现系统级加载项</div>}
     </div>
   )
 }
