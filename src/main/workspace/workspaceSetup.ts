@@ -15,7 +15,7 @@ import { provisionWorktree, buildWorkspaceRecord, buildStartRunOpts, type Create
 // Re-export SetupEvent from @shared/types for any code that imports it from here.
 export type { SetupEvent }
 
-type ProvisionFn = (proj: Project, branch: string, wsPath: string, proxy: string) => Promise<string>
+type ProvisionFn = (proj: Project, branch: string, wsPath: string, proxy: string, signal?: AbortSignal) => Promise<string>
 
 export interface RunWorkspaceSetupArgs {
   opts: CreateWorkspaceOpts
@@ -25,6 +25,8 @@ export interface RunWorkspaceSetupArgs {
   emit: (e: SetupEvent) => void
   // Injectable for testing; defaults to the real git provisioner shared with createWorkspace.
   provision?: ProvisionFn
+  // Aborts an in-flight creation (user hit 取消): kills the running git clone/fetch and stops the flow.
+  signal?: AbortSignal
 }
 
 // Create a workspace as an asynchronous, observable process: write the workspace record EARLY (so it
@@ -33,9 +35,16 @@ export interface RunWorkspaceSetupArgs {
 // erroring (or throwing) hook is marked `err` and the flow continues; provisioned projects are never
 // rolled back and setup always ends with setup:done. Returns the same CreateWorkspaceResult shape as
 // createWorkspace so callers can treat both paths uniformly.
+// Thrown when the user cancels creation mid-flight; the IPC layer treats this as "cancelled" (keep the
+// partial on disk, drop the sidebar record) rather than a real error.
+export class SetupCancelledError extends Error {
+  constructor() { super('创建已取消'); this.name = 'SetupCancelledError' }
+}
+
 export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<CreateWorkspaceResult> {
-  const { knownProjects, proxy, providers, emit } = args
+  const { knownProjects, proxy, providers, emit, signal } = args
   const provision = args.provision ?? provisionWorktree
+  const throwIfCancelled = () => { if (signal?.aborted) throw new SetupCancelledError() }
   // Expand `~` once, up front — same as createWorkspace, so the workspace lives at a real abs path.
   const opts = { ...args.opts, path: expandTilde(args.opts.path) }
   const byId = new Map(knownProjects.map(p => [p.id, p]))
@@ -90,6 +99,7 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   }
 
   // 2. __basic hooks (after basic info, before any project is pulled).
+  throwIfCancelled()
   for (const plugin of basicHooks) await runHook('__basic', plugin)
 
   // 3. Provision worktrees (git). A git failure throws (= workspace creation fails), unchanged by hooks.
@@ -97,14 +107,17 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   const total = opts.projects.length
   let index = 0
   for (const sel of opts.projects) {
+    throwIfCancelled()
     const proj = byId.get(sel.repoId)
     if (!proj) throw new Error(`未知项目: ${sel.repoId}`)
     const name = proj.name || sel.repoId
     emit({ type: 'provision:start', project: name, index, total })
     let worktreePath: string
     try {
-      worktreePath = await provision(proj, sel.branch, opts.path, proxy)
+      worktreePath = await provision(proj, sel.branch, opts.path, proxy, signal)
     } catch (e) {
+      // A user cancel surfaces as an execa AbortError → normalize to SetupCancelledError (not a 拉取失败).
+      if (signal?.aborted) throw new SetupCancelledError()
       emit({ type: 'provision:error', project: name, index, total, message: e instanceof Error ? e.message : String(e) })
       throw e
     }
@@ -114,6 +127,7 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   }
 
   // 4. __proj hooks (after projects are pulled + branched).
+  throwIfCancelled()
   for (const plugin of projHooks) await runHook('__proj', plugin)
 
   emit({ type: 'setup:done', workspacePath: opts.path })

@@ -13,16 +13,16 @@ export interface CreateWorkspaceResult { workspace: Workspace; startRunOpts: Sta
 // Provision one project's git worktree under the workspace: ensure the bare mirror, then add the
 // worktree at <wsPath>/<project name>. Shared by createWorkspace (all projects), editWorkspace
 // (new projects only) and runWorkspaceSetup (the setup-hook path). Returns the worktree path.
-export async function provisionWorktree(proj: Project, branch: string, wsPath: string, proxy: string): Promise<string> {
+export async function provisionWorktree(proj: Project, branch: string, wsPath: string, proxy: string, signal?: AbortSignal): Promise<string> {
   const mirror = mirrorPath(proj.id)
   const worktreePath = join(wsPath, proj.name)
-  await ensureMirror({ mirror, repoUrl: proj.repoUrl, proxy })
+  await ensureMirror({ mirror, repoUrl: proj.repoUrl, proxy, signal })
   // The project's stored default branch may be wrong (mistyped at import). Resolve against the real
   // mirror so a bad base can't fail workspace creation; if it was corrected, persist it back so
   // future workspaces + the project list show the real branch.
   const base = await resolveBaseBranch(mirror, proj.defaultBranch)
   if (base !== proj.defaultBranch) setProjectDefaultBranch(proj.id, base)
-  await addWorktree({ mirror, worktreePath, branch, baseBranch: base })
+  await addWorktree({ mirror, worktreePath, branch, baseBranch: base, signal })
   return worktreePath
 }
 

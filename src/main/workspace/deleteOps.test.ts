@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -34,6 +34,27 @@ describe('deleteWorkspace', () => {
     const res = await deleteWorkspace(wsPath)
     expect(res.purged).toBe(true)
     expect(existsSync(wsPath)).toBe(false)
+  })
+})
+
+describe('discardPartialCreation (wipe a partial creation, keep the parent folder)', () => {
+  it('removes worktree dirs + .forge + registry entry but leaves the parent folder and the user\'s own files', async () => {
+    const { registerWorkspace, writeWorkspace, readWorkspaceRegistry } = await import('../config/store')
+    const { discardPartialCreation } = await import('./deleteOps')
+    const wsPath = join(home, 'ws-partial')
+    mkdirSync(join(wsPath, 'proj'), { recursive: true })       // a "pulled" project dir
+    writeFileSync(join(wsPath, 'keep-me.txt'), 'user file')     // a file the user had in the chosen folder
+    registerWorkspace('ws-partial', wsPath)
+    writeWorkspace({ name: 'ws-partial', path: wsPath, workflowId: 'wf', stages: [], projects: [{ repoId: 'proj', name: 'proj', branch: 'b', provider: '', model: '' }], status: 'idle', plugins: [], stepPlugins: [] })
+    expect(existsSync(join(wsPath, '.forge'))).toBe(true)       // writeWorkspace created it
+
+    await discardPartialCreation(wsPath)
+
+    expect(readWorkspaceRegistry().find(w => w.path === wsPath)).toBeUndefined()  // off the list
+    expect(existsSync(wsPath)).toBe(true)                     // parent folder kept
+    expect(existsSync(join(wsPath, 'proj'))).toBe(false)      // worktree dir removed
+    expect(existsSync(join(wsPath, '.forge'))).toBe(false)    // .forge state removed
+    expect(existsSync(join(wsPath, 'keep-me.txt'))).toBe(true) // user's own file untouched
   })
 })
 

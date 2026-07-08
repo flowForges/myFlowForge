@@ -32,14 +32,14 @@ function withMirrorLock<T>(mirror: string, fn: () => Promise<T>): Promise<T> {
   return next
 }
 
-export async function ensureMirror(opts: { mirror: string; repoUrl: string; proxy?: string }) {
+export async function ensureMirror(opts: { mirror: string; repoUrl: string; proxy?: string; signal?: AbortSignal }) {
   return withMirrorLock(opts.mirror, async () => {
     if (existsSync(opts.mirror)) {
-      await git(['fetch', '--prune', 'origin', '+refs/heads/*:refs/heads/*'], { cwd: opts.mirror, proxy: opts.proxy })
+      await git(['fetch', '--prune', 'origin', '+refs/heads/*:refs/heads/*'], { cwd: opts.mirror, proxy: opts.proxy, signal: opts.signal })
       return
     }
     mkdirSync(dirname(opts.mirror), { recursive: true })
-    await git(['clone', '--bare', opts.repoUrl, opts.mirror], { cwd: dirname(opts.mirror), proxy: opts.proxy })
+    await git(['clone', '--bare', opts.repoUrl, opts.mirror], { cwd: dirname(opts.mirror), proxy: opts.proxy, signal: opts.signal })
   })
 }
 
@@ -47,7 +47,7 @@ export async function ensureMirror(opts: { mirror: string; repoUrl: string; prox
 // `-B` force-creates the branch from baseBranch: on workspace re-open the old branch ref may linger
 // (removeWorktree drops the working tree but not the ref), so we reset it to base for a fresh workspace.
 // `-B` still refuses if the branch is checked out in another LIVE worktree, preserving that safety guard.
-export async function addWorktree(opts: { mirror: string; worktreePath: string; branch: string; baseBranch: string }) {
+export async function addWorktree(opts: { mirror: string; worktreePath: string; branch: string; baseBranch: string; signal?: AbortSignal }) {
   return withMirrorLock(opts.mirror, async () => {
     mkdirSync(dirname(opts.worktreePath), { recursive: true })
     // Idempotent re-provision: a prior attempt may have left stale worktree admin (a failed pull, or a
@@ -60,7 +60,7 @@ export async function addWorktree(opts: { mirror: string; worktreePath: string; 
     // gc.worktreePruneExpire grace period.
     if (existsSync(opts.worktreePath)) rmSync(opts.worktreePath, { recursive: true, force: true })
     await git(['worktree', 'prune', '--expire=now'], { cwd: opts.mirror }).catch(() => {})
-    await git(['worktree', 'add', '-B', opts.branch, opts.worktreePath, opts.baseBranch], { cwd: opts.mirror })
+    await git(['worktree', 'add', '-B', opts.branch, opts.worktreePath, opts.baseBranch], { cwd: opts.mirror, signal: opts.signal })
   })
 }
 

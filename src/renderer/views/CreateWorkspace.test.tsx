@@ -44,6 +44,31 @@ describe('CreateWorkspace', () => {
     await waitFor(() => expect((screen.getByPlaceholderText('~/code/') as HTMLInputElement).value).toBe('/Users/me/code/picked'))
   })
 
+  it('detects an unfinished creation on the picked folder: restores config, shows the banner, and 清除重来 discards + resets', async () => {
+    const partialWs: Workspace = {
+      name: 'ws-p', path: '/abs/ws-p', workflowId: 'standard',
+      stages: [{ key: 'develop', provider: 'claude', model: 'opus-4.8' }],
+      projects: [{ repoId: 'proj1', name: 'proj1', branch: 'feat/x', provider: 'claude', model: 'opus-4.8' }],
+      status: 'idle', plugins: [], stepPlugins: [],
+    }
+    const onProbeWorkspace = vi.fn(async () => partialWs)
+    const onDiscardPartial = vi.fn(async () => {})
+    render(<CreateWorkspace {...defaultProps}
+      onPickPath={async () => '/abs/ws-p'}
+      onProbeWorkspace={onProbeWorkspace}
+      onDiscardPartial={onDiscardPartial} />)
+    fireEvent.click(screen.getByText('选择…'))
+    // banner appears once the async probe resolves, and the path is restored
+    expect(await screen.findByText('检测到未完成的创建')).toBeInTheDocument()
+    expect(onProbeWorkspace).toHaveBeenCalledWith('/abs/ws-p')
+    expect((screen.getByPlaceholderText('~/code/') as HTMLInputElement).value).toBe('/abs/ws-p')
+    // 清除重来 → discards the partial and resets the wizard (banner gone, path cleared)
+    fireEvent.click(screen.getByRole('button', { name: /清除重来/ }))
+    await waitFor(() => expect(onDiscardPartial).toHaveBeenCalledWith('/abs/ws-p'))
+    await waitFor(() => expect(screen.queryByText('检测到未完成的创建')).toBeNull())
+    expect((screen.getByPlaceholderText('~/code/') as HTMLInputElement).value).toBe('')
+  })
+
   it('shows an error banner when the error prop is set', () => {
     render(<CreateWorkspace open onCancel={() => {}} onCreate={() => {}} projects={projects} workflows={workflows} providers={providers} onOpenProjectSettings={() => {}} onNewWorkflow={() => {}} error="git clone 失败" />)
     expect(screen.getByText(/创建失败：git clone 失败/)).toBeInTheDocument()

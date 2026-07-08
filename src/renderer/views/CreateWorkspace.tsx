@@ -102,12 +102,16 @@ interface Props {
   // inline-created hook back to the library when the「保存到 Hook 库」box is checked.
   hookLibrary?: LibraryHook[]
   onSaveHookToLibrary?: (hook: LibraryHook) => void
+  // Restore an unfinished creation: probe a chosen folder for a leftover .forge/workspace.json, and
+  // discard (清除重来) the partial on-disk state. Both keyed by the chosen path.
+  onProbeWorkspace?: (path: string) => Promise<import('@shared/types').Workspace | null>
+  onDiscardPartial?: (path: string) => Promise<void>
   error?: string | null
   creating?: boolean   // workspace creation is in flight (git worktree/fetch) — block re-submit
   editing?: import('@shared/types').Workspace | null
 }
 
-export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, providers, onOpenProjectSettings, onNewWorkflow, onAddProject, onAddWorkflow, onPickPath, hookLibrary = [], onSaveHookToLibrary, error, creating = false, editing }: Props) {
+export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, providers, onOpenProjectSettings, onNewWorkflow, onAddProject, onAddWorkflow, onPickPath, hookLibrary = [], onSaveHookToLibrary, onProbeWorkspace, onDiscardPartial, error, creating = false, editing }: Props) {
   // installed providers drive the model menus; fall back to all providers if none report installed.
   const pickProviders = useMemo(() => {
     const inst = providers.filter(p => p.installed)
@@ -176,6 +180,10 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const pendingSelect = useRef<Set<string>>(new Set())
   // inline new-workflow designer (P2b): open flag + draft name/stage set.
   const [wfDraft, setWfDraft] = useState<{ name: string; keys: Set<string> } | null>(null)
+  // Restore-an-unfinished-creation state (used far below, but declared here — before the `if (!open)`
+  // early return — so hook order stays stable across open/closed renders).
+  const [partial, setPartial] = useState<import('@shared/types').Workspace | null>(null)
+  const [discarding, setDiscarding] = useState(false)
 
   // Full (re)seed ONLY when the modal opens or the edit target changes — NOT on every projects/
   // workflows change, so adding a project/workflow from inside the wizard can't wipe the user's
@@ -233,6 +241,39 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   // --- interactions ---
   const setPath = (v: string) => update(s => ({ ...s, path: v }))
   const setName = (v: string) => update(s => ({ ...s, name: v, nameEdited: v.length > 0 }))
+
+  // --- restore an unfinished creation ---
+  // A folder that holds a leftover .forge/workspace.json is a previously-interrupted/failed creation.
+  // Probing it (on pick / blur) restores that config into the wizard so the user can 继续创建, or 清除
+  // 重来 to wipe the partial on-disk state and start fresh. (State declared with the other hooks above
+  // the `if (!open) return null` guard — these functions just close over it.)
+  const defaultProjModel = () => {
+    const wf = workflows.find(w => w.id === state.workflowId) ?? workflows[0]
+    const dev = seedStage(wf?.stages.find(s => s.key === DEV_KEY)?.defaultModel ?? '')
+    return packModel(dev.provider, dev.model)
+  }
+  const probePartial = async (rawPath: string) => {
+    if (editing || !onProbeWorkspace) return
+    const p = rawPath.trim()
+    if (!p) { setPartial(null); return }
+    let ws: import('@shared/types').Workspace | null = null
+    try { ws = await onProbeWorkspace(p) } catch { ws = null }
+    if (ws && Array.isArray(ws.projects)) {
+      setPartial(ws)
+      // Restore config; unlock the projects so the user can still tweak before 继续创建.
+      const restored = buildEditState(ws, projects, buildStages(workflows.find(w => w.id === state.workflowId) ?? workflows[0]), defaultProjModel())
+      setState({ ...restored, path: ws.path, projects: restored.projects.map(pr => ({ ...pr, locked: false })) })
+    } else {
+      setPartial(null)
+    }
+  }
+  const discardPartial = async () => {
+    if (!partial || !onDiscardPartial || discarding) return
+    setDiscarding(true)
+    try { await onDiscardPartial(partial.path) } finally { setDiscarding(false) }
+    setPartial(null)
+    setState(freshState())   // 清除选择 — back to a blank wizard
+  }
 
   // Derive the display name from a repo url/path the same way the store does (last path segment).
   const deriveRepoName = (url: string): string => {
@@ -500,6 +541,18 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
         </div>
 
         <div className="cr-body">
+          {/* Restore banner: this folder has an unfinished creation — config restored; continue or clear. */}
+          {!editing && partial && (
+            <div className="cr-restore">
+              <svg className="ri" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
+              <div className="cr-restore-txt">
+                <b>检测到未完成的创建</b>
+                <span>该文件夹此前建到一半（{partial.projects?.length ?? 0} 个项目、{partial.stages?.length ?? 0} 个阶段）。已为你恢复配置，可直接「创建」继续（只补拉未完成的项目），或清除后重来。</span>
+              </div>
+              <button className="cr-restore-clear" onClick={() => void discardPartial()} disabled={discarding}>{discarding ? '清除中…' : '清除重来'}</button>
+            </div>
+          )}
+
           {/* 1 基本信息 */}
           <div className="cr-sec">
             <div className="cr-sec-h"><span className="n">1</span><h4>基本信息</h4></div>
@@ -508,8 +561,8 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 <label>工作区路径</label>
                 <div className="inp">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
-                  <input className="mono" id="crPath" placeholder="~/code/" spellCheck={false} autoCapitalize="off" autoComplete="off" value={state.path} readOnly={!!editing} onChange={e => setPath(e.target.value)} />
-                  {!editing && <button className="pick" id="crPick" onClick={async () => { const d = await onPickPath?.(); if (d) setPath(d) }}>选择…</button>}
+                  <input className="mono" id="crPath" placeholder="~/code/" spellCheck={false} autoCapitalize="off" autoComplete="off" value={state.path} readOnly={!!editing} onChange={e => setPath(e.target.value)} onBlur={e => void probePartial(e.target.value)} />
+                  {!editing && <button className="pick" id="crPick" onClick={async () => { const d = await onPickPath?.(); if (d) { setPath(d); void probePartial(d) } }}>选择…</button>}
                 </div>
               </div>
             </div>

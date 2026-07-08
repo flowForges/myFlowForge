@@ -187,6 +187,16 @@
 .sh-add svg { width: 12px; height: 12px; flex: 0 0 12px; }
 .sh-add:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 
+/* Restore banner: a picked folder holds an unfinished creation. */
+.cr-restore { display: flex; align-items: flex-start; gap: 11px; margin: 0 0 16px; padding: 12px 13px; border-radius: 12px; border: 1px solid color-mix(in oklch, var(--accent), transparent 60%); background: var(--accent-dim); }
+.cr-restore .ri { width: 17px; height: 17px; flex: 0 0 17px; color: var(--accent); margin-top: 1px; }
+.cr-restore-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.cr-restore-txt b { font-size: 12.5px; font-weight: 650; color: var(--fg); }
+.cr-restore-txt span { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+.cr-restore-clear { flex: 0 0 auto; align-self: center; height: 30px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg-2); font-size: 12px; font-weight: 550; cursor: pointer; white-space: nowrap; transition: .14s; }
+.cr-restore-clear:hover:not(:disabled) { color: var(--err); border-color: color-mix(in oklch, var(--err), transparent 55%); background: color-mix(in oklch, var(--err), transparent 90%); }
+.cr-restore-clear:disabled { opacity: .5; cursor: default; }
+
 /* Insert picker: choose an existing library hook or start a new one. */
 .hk-picker { width: 100%; margin-top: 9px; padding: 12px 13px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); display: flex; flex-direction: column; gap: 10px; }
 .hk-picker .hkp-h { display: inline-flex; align-items: center; gap: 6px; font: 600 12px/1 var(--sans); color: var(--fg-2); }
