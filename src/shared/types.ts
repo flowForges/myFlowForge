@@ -184,6 +184,8 @@ export type SetupEvent =
   | { type: 'hook:log'; pluginId: string; line: LogLine }
   | { type: 'hook:state'; pluginId: string; state: 'ok' | 'err' }
   | { type: 'provision'; project: string; index: number; total: number }
+  | { type: 'provision:start'; project: string; index: number; total: number }
+  | { type: 'provision:error'; project: string; index: number; total: number; message: string }
   | { type: 'setup:done'; workspacePath: string }
 
 export interface WorkspaceMeta { name: string; path: string; projectCount: number; workflowId: string; status: 'idle' | 'run' | 'ok' | 'err'; pinned: boolean; imported?: boolean; archived: boolean; archivedAt: number | null; createdAt: number; description: string }

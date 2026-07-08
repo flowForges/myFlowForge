@@ -160,4 +160,58 @@ describe('runWorkspaceSetup', () => {
     const ws = readWorkspace(wsPath)!
     expect(ws.stepPlugins).toEqual(stepPlugins)
   })
+
+  it('emits provision:start before each project and provision after, in order', async () => {
+    const { runWorkspaceSetup } = await import('./workspaceSetup')
+    const events: SetupEvent[] = []
+    const wsPath = join(root, 'ws-prov-order')
+    const provision = vi.fn(async (proj: { name: string }) => join(wsPath, proj.name))
+
+    await runWorkspaceSetup({
+      opts: {
+        name: 'prov-order', path: wsPath, workflowId: 'standard',
+        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        projects: [
+          { repoId: 'r1', branch: 'main' },
+          { repoId: 'r2', branch: 'main' },
+        ],
+      },
+      knownProjects: [
+        { id: 'r1', name: 'alpha', repoUrl: 'u1', defaultBranch: 'main' } as any,
+        { id: 'r2', name: 'beta', repoUrl: 'u2', defaultBranch: 'main' } as any,
+      ],
+      proxy: '', providers: {}, provision,
+      emit: (e) => events.push(e),
+    })
+
+    const prov = events.filter(e => e.type.startsWith('provision'))
+    expect(prov).toEqual([
+      { type: 'provision:start', project: 'alpha', index: 0, total: 2 },
+      { type: 'provision', project: 'alpha', index: 0, total: 2 },
+      { type: 'provision:start', project: 'beta', index: 1, total: 2 },
+      { type: 'provision', project: 'beta', index: 1, total: 2 },
+    ])
+  })
+
+  it('emits provision:error and rethrows when a project fails to provision', async () => {
+    const { runWorkspaceSetup } = await import('./workspaceSetup')
+    const events: SetupEvent[] = []
+    const wsPath = join(root, 'ws-prov-err')
+    const provision = vi.fn(async () => { throw new Error('clone failed') })
+
+    await expect(runWorkspaceSetup({
+      opts: {
+        name: 'prov-err', path: wsPath, workflowId: 'standard',
+        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        projects: [{ repoId: 'r1', branch: 'main' }],
+      },
+      knownProjects: [{ id: 'r1', name: 'alpha', repoUrl: 'u1', defaultBranch: 'main' } as any],
+      proxy: '', providers: {}, provision,
+      emit: (e) => events.push(e),
+    })).rejects.toThrow('clone failed')
+
+    expect(events).toContainEqual({ type: 'provision:start', project: 'alpha', index: 0, total: 1 })
+    expect(events).toContainEqual({ type: 'provision:error', project: 'alpha', index: 0, total: 1, message: 'clone failed' })
+    expect(events.some(e => e.type === 'provision')).toBe(false)
+  })
 })

@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { EventBus } from '../orchestrator/eventBus'
 import { CH } from './channels'
 
-// Focused routing test for CH.workspaceCreate: hasSetup → runWorkspaceSetup; else → createWorkspace.
-// We mock BOTH workspace modules so we can spy which path the handler took without touching git.
+// Focused routing test for CH.workspaceCreate: always routes through runWorkspaceSetup (observable
+// progress path), regardless of step plugins. createWorkspace is mocked only to prove it's never called.
 
 const { createWorkspaceMock, runWorkspaceSetupMock, subscribers } = vi.hoisted(() => ({
   createWorkspaceMock: vi.fn(async () => ({ workspace: { name: 'fast' }, startRunOpts: {} })),
@@ -71,17 +71,17 @@ async function invoke(channel: string, broadcast: (ch: string, p: unknown) => vo
 beforeEach(() => { createWorkspaceMock.mockClear(); runWorkspaceSetupMock.mockClear(); subscribers.length = 0 })
 
 describe('CH.workspaceCreate routing', () => {
-  it('no __basic/__proj step plugins → fast createWorkspace path', async () => {
+  it('no step plugins → still routes through runWorkspaceSetup (observable path)', async () => {
     const res = await invoke(CH.workspaceCreate, () => {}, {}, BASE_OPTS)
-    expect(createWorkspaceMock).toHaveBeenCalledTimes(1)
-    expect(runWorkspaceSetupMock).not.toHaveBeenCalled()
-    expect(res.workspace.name).toBe('fast')
+    expect(runWorkspaceSetupMock).toHaveBeenCalledTimes(1)
+    expect(createWorkspaceMock).not.toHaveBeenCalled()
+    expect(res.workspace.name).toBe('setup')
   })
 
-  it('__wf-only step plugins still take the fast path (no setup hooks)', async () => {
+  it('__wf-only step plugins also route through runWorkspaceSetup', async () => {
     await invoke(CH.workspaceCreate, () => {}, {}, { ...BASE_OPTS, stepPlugins: [{ id: 'w', name: 'W', prompt: '', after: '__wf', skills: [], tools: [] }] })
-    expect(createWorkspaceMock).toHaveBeenCalledTimes(1)
-    expect(runWorkspaceSetupMock).not.toHaveBeenCalled()
+    expect(runWorkspaceSetupMock).toHaveBeenCalledTimes(1)
+    expect(createWorkspaceMock).not.toHaveBeenCalled()
   })
 
   it('a __basic step plugin → runWorkspaceSetup, wired to broadcast workspace:setup events', async () => {

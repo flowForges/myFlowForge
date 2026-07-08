@@ -370,10 +370,14 @@ export function App() {
       })
       const wsPath = (startRunOpts as StartRunOpts).workspacePath
       setCreateErr(null)
+      setSetupVisible(false)                     // dismiss setup progress panel (no run to watch)
+      setSetupState(INITIAL_SETUP_STATE)         // reset for next creation
       setActiveId(wsPath)
       setView('ws')
       home.reload()
     } catch (e) {
+      setSetupVisible(false)                     // also dismiss on error
+      setSetupState(INITIAL_SETUP_STATE)
       setCreateErr(e instanceof Error ? e.message : String(e))
     } finally {
       setCreating(false)
