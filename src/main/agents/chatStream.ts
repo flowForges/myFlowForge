@@ -30,6 +30,18 @@ function toolStep(name: string, input: any): string {
   return `调用 ${name}`
 }
 
+// Providers that stream reasoning via `--include-partial-messages` (qoder) emit `thinking_delta`
+// at word/token granularity — one `think` action per word. Downstream, every think delta becomes a
+// separate line (chatService joins them with '\n'; the chat panel renders one step per line), so raw
+// word-deltas show up as one-word-per-line. Coalesce them: buffer the running text and only surface
+// COMPLETE lines (split on real newlines), carrying the trailing partial forward until the next
+// chunk or an explicit flush. `rest` is the still-incomplete tail.
+export function splitThinkLines(buffer: string): { lines: string[]; rest: string } {
+  const parts = buffer.split('\n')
+  const rest = parts.pop() ?? ''
+  return { lines: parts.filter(l => l.trim()), rest }
+}
+
 const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch'])
 function toolAction(name: string, input: any): ChatStreamAction {
   return { kind: FILE_TOOLS.has(name) ? 'file' : 'tool', text: toolStep(name, input) }

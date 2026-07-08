@@ -87,19 +87,36 @@ describe('App lifecycle notifications', () => {
     expect(screen.getByText('已全部读完')).toBeInTheDocument()
   })
 
-  it('routes awaiting, done, and failed lifecycle transitions into notifications', async () => {
+  it('routes awaiting + per-agent failed, but NO per-agent 完成 spam', async () => {
     const { container } = render(<App />)
     await waitFor(() => expect(listeners.length).toBeGreaterThan(0))
 
     act(() => {
       emit({ type: 'pending:add', action: { id: 'p1', kind: 'confirm', agentId: 'a1', agentName: 'dev', wsName: 'ws', title: '确认' } })
+      // First sighting (ok) seeds the agent without firing; the ok→err transition then fires 'failed'.
       emit({ type: 'run:update', run: runWithAgent('ok') })
       emit({ type: 'run:update', run: runWithAgent('err') })
     })
     fireEvent.click(screen.getByTitle('通知'))
 
     await waitFor(() => expect(notificationTexts(container).some(text => text.includes('dev 需要你确认/输入'))).toBe(true))
-    expect(notificationTexts(container).some(text => text.includes('dev 已完成'))).toBe(true)
     expect(notificationTexts(container).some(text => text.includes('dev 失败/被终止'))).toBe(true)
+    // Per-agent 完成 notifications were removed — an agent reaching 'ok' must NOT add a bell row.
+    expect(notificationTexts(container).some(text => text.includes('已完成'))).toBe(false)
+  })
+
+  it('fires ONE aggregate notification when the whole workflow completes', async () => {
+    const { container } = render(<App />)
+    await waitFor(() => expect(listeners.length).toBeGreaterThan(0))
+
+    const running: RunState = { ...runWithAgent('run'), status: 'run' }
+    const finished: RunState = { ...runWithAgent('ok'), status: 'ok' }
+    act(() => {
+      emit({ type: 'run:update', run: running })   // seed run status
+      emit({ type: 'run:update', run: finished })  // run → ok transition
+    })
+    fireEvent.click(screen.getByTitle('通知'))
+
+    await waitFor(() => expect(notificationTexts(container).filter(t => t.includes('工作流已全部完成'))).toHaveLength(1))
   })
 })

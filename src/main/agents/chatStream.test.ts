@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseChatStreamObj, parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor } from './chatStream'
+import { parseChatStreamObj, parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor, splitThinkLines } from './chatStream'
 
 describe('parseChatStreamObj', () => {
   it('extracts session id from a system/init event', () => {
@@ -131,5 +131,27 @@ describe('buildChatPrompt', () => {
     const out = buildChatPrompt({ id: 'a', prompt: 'do x', model: 'm', cwd: '/w',
       attachments: [{ name: 'spec.pdf', path: '/w/spec.pdf', size: 1 }, { name: 't.css', path: '/w/t.css', size: 2 }] })
     expect(out).toBe('do x\n\n附件:\n- /w/spec.pdf\n- /w/t.css')
+  })
+})
+
+describe('splitThinkLines (coalesce word-level reasoning)', () => {
+  it('accumulates word fragments until a newline, carrying the partial forward', () => {
+    let buf = ''
+    const emitted: string[] = []
+    for (const frag of ['I ', 'think ', 'the ', 'code', ' is fine.\n', 'Next ', 'step.']) {
+      const { lines, rest } = splitThinkLines(buf + frag)
+      emitted.push(...lines)
+      buf = rest
+    }
+    expect(emitted).toEqual(['I think the code is fine.'])   // one line flushed at the newline
+    expect(buf).toBe('Next step.')                            // trailing partial still buffered
+  })
+
+  it('splits multi-line buffers and drops blank lines', () => {
+    expect(splitThinkLines('a\n\nb\nc')).toEqual({ lines: ['a', 'b'], rest: 'c' })
+  })
+
+  it('holds a fragment with no newline entirely in rest', () => {
+    expect(splitThinkLines('partial')).toEqual({ lines: [], rest: 'partial' })
   })
 })

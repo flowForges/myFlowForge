@@ -59,6 +59,7 @@ import { writeFile } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
+import { scanGlobalContext } from '../agents/globalContext'
 import { readInstalledSkills } from '../skills/installedSkills'
 import { getAppLog, clearAppLog, formatAppLog } from '../log/appLog'
 import { resolveAppIconOptions } from '../appIcon'
@@ -222,6 +223,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (live?.workspacePath && existsSync(live.workspacePath)) return scanWorkspaceContext(live.workspacePath, true)
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }
   })
+  ipcMain.handle(CH.contextScanGlobal, () => scanGlobalContext())
   ipcMain.handle(CH.skillsList, () => readInstalledSkills())
   ipcMain.handle(CH.commandsList, (_e, providerId: string, wsPath?: string) => providerCommands(providerId, wsPath))
   ipcMain.handle(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {

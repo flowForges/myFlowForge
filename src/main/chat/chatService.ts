@@ -4,7 +4,7 @@ import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent } from '@shared/types'
 import { createRunFenceScanner } from '../agents/runFence'
 import { buildMemoryPreamble } from './memory/preamble'
-import { buildContinuationPreamble } from './continuation'
+import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
 import { distillSession, promoteToWorkspace, type DistillDeps } from './memory/distiller'
 import { distillModelFor } from './memory/distillModel'
 import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD } from './memory/tokenEstimate'
@@ -62,7 +62,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
 
     const gapped = nativeResumeId ? false : (provider.chat ? readSession(ws, sid, payload.agent) === undefined : true)
     const preamble = buildMemoryPreamble(ws, sid, { resumeGapped: gapped })
-    const contPre = gapped ? buildContinuationPreamble(ws, sid) : ''
+    // Imported sessions re-feed the external transcript; in-app sessions (provider switch, e.g.
+    // qoder→codex) fall back to Forge's own stored messages so the new CLI keeps prior context.
+    const contPre = gapped ? (buildContinuationPreamble(ws, sid) || buildLocalHistoryPreamble(ws, sid)) : ''
     const promptText = [contPre, preamble, payload.text].filter(Boolean).join('\n')
 
     const userMsg: ChatMessage = {

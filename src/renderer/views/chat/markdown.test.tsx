@@ -36,6 +36,17 @@ describe('Markdown', () => {
     expect(writeText).toHaveBeenCalledWith('npm run build')
     await waitFor(() => expect(container.querySelector('.cb-copy.done')).toBeTruthy())
   })
+  it('folds a code block: the fold toggle hides the source, click again restores it', () => {
+    const { container } = render(<Markdown text={'```go\nfunc main() {}\n```'} />)
+    expect(container.querySelector('.code-block pre')).toBeTruthy()          // expanded by default
+    expect(container.querySelector('.cb-lines')?.textContent).toBe('1 行')   // line count shown
+    const fold = container.querySelector('.cb-fold') as HTMLElement
+    fireEvent.click(fold)
+    expect(container.querySelector('.code-block.collapsed')).toBeTruthy()
+    expect(container.querySelector('.code-block pre')).toBeNull()            // source hidden
+    fireEvent.click(fold)
+    expect(container.querySelector('.code-block pre')).toBeTruthy()          // restored
+  })
   it('renders a horizontal rule and links', () => {
     expect(html('---')).toContain('<hr>')
     expect(html('[站点](https://www.iphpt.com)')).toContain('<a href="https://www.iphpt.com"')

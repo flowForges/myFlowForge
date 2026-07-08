@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
-// A fenced code block with a hover-reveal copy button. Copying the exact source (not the rendered
-// text) is what users want for commands/snippets, so the button lives on each block, not just the
-// whole message. `lang` (the info string after ```) is shown as a small label when present.
+// A fenced code block with a hover-reveal copy button plus a fold toggle. Copying the exact source
+// (not the rendered text) is what users want for commands/snippets, so the button lives on each
+// block. The left-side toggle (chevron + lang + line count) collapses long blocks so a big snippet
+// doesn't dominate the transcript. `lang` (the info string after ```) shows as a small label.
 function CodeBlock({ code, lang }: { code: string; lang?: string }): ReactNode {
   const [copied, setCopied] = useState(false)
+  const [collapsed, setCollapsed] = useState(false)
+  const lineCount = code.split('\n').length
   const copy = () => {
     navigator.clipboard?.writeText(code).then(() => {
       setCopied(true)
@@ -13,9 +16,19 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }): ReactNode {
     }).catch(() => { /* clipboard unavailable */ })
   }
   return (
-    <div className="code-block">
+    <div className={`code-block${collapsed ? ' collapsed' : ''}`}>
       <div className="cb-bar">
-        {lang ? <span className="cb-lang">{lang}</span> : <span />}
+        <button
+          className="cb-fold"
+          onClick={() => setCollapsed(c => !c)}
+          title={collapsed ? '展开代码' : '折叠代码'}
+          aria-expanded={!collapsed}
+          type="button"
+        >
+          <svg className="cb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
+          {lang ? <span className="cb-lang">{lang}</span> : null}
+          <span className="cb-lines">{lineCount} 行</span>
+        </button>
         <button className={`cb-copy${copied ? ' done' : ''}`} onClick={copy} title="复制代码" type="button">
           {copied ? (
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="20 6 9 17 4 12" /></svg>
@@ -25,7 +38,7 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }): ReactNode {
           <span>{copied ? '已复制' : '复制'}</span>
         </button>
       </div>
-      <pre><code>{code}</code></pre>
+      {collapsed ? null : <pre><code>{code}</code></pre>}
     </div>
   )
 }

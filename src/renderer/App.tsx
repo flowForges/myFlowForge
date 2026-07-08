@@ -133,6 +133,7 @@ export function App() {
   const pluginsApi = usePlugins()
   const { usageByProvider } = pluginsApi
   const notifAgentPrev = useRef<Map<string, AgentState>>(new Map())
+  const notifRunPrev = useRef<Map<string, AgentState>>(new Map())
   const home = useHome()
   const { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect } = useConfig()
   const { settings, update } = useSettings()
@@ -200,6 +201,16 @@ export function App() {
   useEffect(() => {
     window.forge.setActiveWorkspace?.(view === 'ws' ? (activeWsId || null) : null)
   }, [view, activeWsId])
+
+  // If the open workspace is removed/deleted while you're viewing it, fall back to home. Covers every
+  // removal path (hard delete, 从列表移除 an imported workspace, or a removal broadcast from another
+  // window): once it's gone from the list (and isn't the live run), keep showing its session area would
+  // render a workspace that no longer exists. archive keeps it in the list (read-only) so it stays open.
+  useEffect(() => {
+    if (view !== 'ws' || !activeId) return
+    const exists = home.workspaces.some(w => w.path === activeId)
+    if (!exists && engine.run?.workspacePath !== activeId) { setActiveId(''); setView('home') }
+  }, [home.workspaces, activeId, view, engine.run?.workspacePath])
 
   // Remember the last workspace the user was in (persisted) so the titlebar's 工作区 tab can restore
   // it next launch — the per-workspace activeSessionId then restores the last session for free.
@@ -273,16 +284,28 @@ export function App() {
       }
 
       if (e.type !== 'run:update') return
-      for (const stage of e.run.stages) {
+      const run = e.run
+      // Whole-workflow completion → one aggregate notif (replaces the old per-agent "已完成" spam).
+      // Seed on first sighting so a run already finished when observed on mount/reload can't fire a
+      // stale toast — we only notify on a witnessed non-ok → ok transition.
+      const runSeen = notifRunPrev.current.has(run.id)
+      const runPrev = notifRunPrev.current.get(run.id)
+      notifRunPrev.current.set(run.id, run.status)
+      if (runSeen && runPrev !== 'ok' && run.status === 'ok') {
+        setNotifs(ns => [notifFromLifecycle({ kind: 'run-done', agentName: run.workspaceName, wsName: run.workspaceName, wsPath: run.workspacePath }), ...ns])
+      }
+      // Per-agent: surface failures only (完成 is covered by the aggregate above). Same seed guard.
+      for (const stage of run.stages) {
         for (const agent of stage.agents) {
+          const seen = notifAgentPrev.current.has(agent.id)
           const was = notifAgentPrev.current.get(agent.id)
-          if (was !== agent.state && (agent.state === 'ok' || agent.state === 'err')) {
+          notifAgentPrev.current.set(agent.id, agent.state)
+          if (seen && was !== agent.state && agent.state === 'err') {
             setNotifs(ns => [
-              notifFromLifecycle({ kind: agent.state === 'ok' ? 'done' : 'failed', agentName: agent.name, wsName: e.run.workspaceName }),
+              notifFromLifecycle({ kind: 'failed', agentName: agent.name, wsName: run.workspaceName, wsPath: run.workspacePath }),
               ...ns,
             ])
           }
-          notifAgentPrev.current.set(agent.id, agent.state)
         }
       }
     })
@@ -445,6 +468,13 @@ export function App() {
         onToggleNotif={() => setNotifOpen(o => !o)}
         onOpenUpgrade={() => { setNotifOpen(false); setUpgradeOpen(true) }}
         onMarkAllRead={() => setNotifs(markAllRead(notifs))}
+        onSelectNotif={(n, i) => {
+          // Mark just this row read, then jump to its workspace (its chat/session area). Resolve a
+          // name-only route (stalled/awaiting events) to a path via the workspace registry.
+          setNotifs(ns => ns.map((x, j) => (j === i ? { ...x, unread: false } : x)))
+          const path = n.wsPath || home.workspaces.find(w => w.name === n.wsName)?.path
+          if (path) { setActiveId(path); setView('ws'); setNotifOpen(false) }
+        }}
         canEditWorkspace={!!activeWsId}
         onEditWorkspace={openEdit}
         openTarget={view === 'ws' ? openTarget : null}
@@ -634,12 +664,12 @@ export function App() {
           case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
           case 'workflow': return <WorkflowPane workflows={workflows} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} />
           case 'skills': return <SkillPane />
-          case 'loads': return <LoadPane workspacePath={activeWsId || undefined} />
+          case 'loads': return <LoadPane />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
           case 'plugins': return <PluginPane plugins={pluginsApi.plugins} results={pluginsApi.results} catalog={pluginsApi.catalog} install={pluginsApi.install} uninstall={pluginsApi.uninstall} setEnabled={pluginsApi.setEnabled} refresh={pluginsApi.refresh} installExample={pluginsApi.installExample} installError={pluginsApi.installError} creds={pluginsApi.creds} setCred={pluginsApi.setCred} />
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'sessions': return <SessionImportPane />
-          case 'debug': return <DebugLogPane />
+          case 'debug': return <DebugLogPane perfStallToast={settings?.perfStallToast ?? false} onTogglePerfToast={(v) => update({ perfStallToast: v })} />
           default: return null
         }
       }} />
