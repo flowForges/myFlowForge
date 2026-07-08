@@ -99,9 +99,17 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   for (const sel of opts.projects) {
     const proj = byId.get(sel.repoId)
     if (!proj) throw new Error(`未知项目: ${sel.repoId}`)
-    const worktreePath = await provision(proj, sel.branch, opts.path, proxy)
-    emit({ type: 'provision', project: proj.name || sel.repoId, index, total })
-    developProjects.push({ name: proj.name || sel.repoId, cwd: worktreePath, provider: sel.provider, model: sel.model })
+    const name = proj.name || sel.repoId
+    emit({ type: 'provision:start', project: name, index, total })
+    let worktreePath: string
+    try {
+      worktreePath = await provision(proj, sel.branch, opts.path, proxy)
+    } catch (e) {
+      emit({ type: 'provision:error', project: name, index, total, message: e instanceof Error ? e.message : String(e) })
+      throw e
+    }
+    emit({ type: 'provision', project: name, index, total })
+    developProjects.push({ name, cwd: worktreePath, provider: sel.provider, model: sel.model })
     index++
   }
 

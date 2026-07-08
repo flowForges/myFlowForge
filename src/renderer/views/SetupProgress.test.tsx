@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import { SetupProgress } from './SetupProgress'
+import { SetupProgress, applySetupEvent, INITIAL_SETUP_STATE } from './SetupProgress'
 import type { SetupProgressState } from './SetupProgress'
+import type { SetupEvent } from '@shared/types'
 
 describe('SetupProgress', () => {
   it('renders basic hooks, provisioned projects, proj hooks, and done indicator from accumulated state', () => {
@@ -31,6 +32,9 @@ describe('SetupProgress', () => {
         },
       ],
       provisionedProjects: [{ name: 'proj-x', index: 0, total: 1 }],
+      total: 1,
+      pulling: null,
+      failed: null,
     }
 
     render(<SetupProgress state={state} />)
@@ -63,11 +67,62 @@ describe('SetupProgress', () => {
       ],
       projHooks: [],
       provisionedProjects: [],
+      total: 0,
+      pulling: null,
+      failed: null,
     }
 
     render(<SetupProgress state={state} />)
 
     expect(screen.getByText('Plugin A')).toBeInTheDocument()
     expect(screen.queryByText(/全部完成/)).not.toBeInTheDocument()
+  })
+})
+
+const apply = (events: SetupEvent[]) => events.reduce(applySetupEvent, INITIAL_SETUP_STATE)
+
+describe('applySetupEvent — provision progress', () => {
+  it('provision:start marks the project as pulling with total', () => {
+    const s = apply([
+      { type: 'setup:start', workspacePath: '/ws', hooks: { basic: 0, proj: 0 } },
+      { type: 'provision:start', project: 'alpha', index: 0, total: 2 },
+    ])
+    expect(s.pulling).toEqual({ project: 'alpha', index: 0 })
+    expect(s.total).toBe(2)
+    expect(s.provisionedProjects).toHaveLength(0)
+  })
+
+  it('provision moves the pulling project to completed and clears pulling', () => {
+    const s = apply([
+      { type: 'setup:start', workspacePath: '/ws', hooks: { basic: 0, proj: 0 } },
+      { type: 'provision:start', project: 'alpha', index: 0, total: 2 },
+      { type: 'provision', project: 'alpha', index: 0, total: 2 },
+    ])
+    expect(s.pulling).toBeNull()
+    expect(s.provisionedProjects).toEqual([{ name: 'alpha', index: 0, total: 2 }])
+  })
+
+  it('provision:error records the failed project and clears pulling', () => {
+    const s = apply([
+      { type: 'setup:start', workspacePath: '/ws', hooks: { basic: 0, proj: 0 } },
+      { type: 'provision:start', project: 'alpha', index: 0, total: 1 },
+      { type: 'provision:error', project: 'alpha', index: 0, total: 1, message: 'clone failed' },
+    ])
+    expect(s.pulling).toBeNull()
+    expect(s.failed).toEqual({ project: 'alpha', index: 0, message: 'clone failed' })
+  })
+
+  it('a two-project sequence ends with both completed and nothing pulling', () => {
+    const s = apply([
+      { type: 'setup:start', workspacePath: '/ws', hooks: { basic: 0, proj: 0 } },
+      { type: 'provision:start', project: 'alpha', index: 0, total: 2 },
+      { type: 'provision', project: 'alpha', index: 0, total: 2 },
+      { type: 'provision:start', project: 'beta', index: 1, total: 2 },
+      { type: 'provision', project: 'beta', index: 1, total: 2 },
+      { type: 'setup:done', workspacePath: '/ws' },
+    ])
+    expect(s.pulling).toBeNull()
+    expect(s.provisionedProjects).toHaveLength(2)
+    expect(s.done).toBe(true)
   })
 })

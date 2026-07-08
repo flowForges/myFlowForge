@@ -91,3 +91,11 @@
   font-size: 13px; font-weight: 600; color: var(--accent);
 }
 .setup-done-ic { font-size: 16px; font-weight: 700; }
+
+/* Pulling / failed row states */
+.setup-provision-row.pulling .setup-prov-dot { background: var(--accent); }
+.setup-provision-row.failed .setup-prov-dot { background: var(--danger, #e5484d); }
+.setup-prov-spin { width: 12px; height: 12px; margin-left: auto; border: 2px solid var(--border-2); border-top-color: var(--accent); border-radius: 50%; animation: setup-spin .7s linear infinite; }
+.setup-prov-err { margin-left: auto; color: var(--danger, #e5484d); font-weight: 700; }
+.setup-provision-errmsg { margin-top: 6px; font-size: 12px; color: var(--danger, #e5484d); }
+@keyframes setup-spin { to { transform: rotate(360deg); } }
