@@ -10,7 +10,7 @@ import { refreshProviderModels, setProviderModels } from '../agents/refreshModel
 import { buildAgentEnv } from '../agents/env'
 import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { createWorkspace, editWorkspace } from '../workspace/workspaceService'
+import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup } from '../workspace/workspaceSetup'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { resolveStages } from '../workspace/resolveStages'
@@ -227,16 +227,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
     const knownProjects = readProjects().projects
     const proxy = readSettings().termProxy
-    // If any step plugin targets __basic/__proj, creation becomes an observable micro-agent process
-    // (runWorkspaceSetup, emitting workspace:setup progress). Otherwise keep the fast synchronous path.
-    const hasSetup = (opts.stepPlugins ?? []).some(p => p.after === '__basic' || p.after === '__proj')
-    if (hasSetup) {
-      return runWorkspaceSetup({
-        opts, knownProjects, proxy, providers,
-        emit: (e) => broadcast(CH.workspaceSetup, e),
-      })
-    }
-    return createWorkspace({ opts, knownProjects, proxy })
+    // Always route through the observable setup path so the create shows live pull progress. With no
+    // step plugins runWorkspaceSetup just provisions + emits provision events — same result as the old
+    // synchronous createWorkspace, but the UI is no longer silent during the (slow) git pulls.
+    return runWorkspaceSetup({
+      opts, knownProjects, proxy, providers,
+      emit: (e) => broadcast(CH.workspaceSetup, e),
+    })
   })
   ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
   ipcMain.handle(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
