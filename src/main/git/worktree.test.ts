@@ -96,4 +96,28 @@ describe('worktree manager', () => {
     const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: wt })
     expect(branch.trim()).toBe('forge/wsA')
   })
+  // Retry-after-failed-pull: an interrupted/failed provision leaves the working dir GONE but git still
+  // holds the worktree admin entry. Re-adding must recover (prune the stale entry) instead of throwing
+  // "is a missing but already registered worktree" / "'forge/wsA' is already used by worktree".
+  it('recovers from a stale registration whose working dir vanished (failed pull)', async () => {
+    const mirror = join(root, 'mirror', 'proj.git')
+    await ensureMirror({ mirror, repoUrl: source })
+    const wt = join(root, 'wsA', 'proj')
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/wsA', baseBranch: 'main' })
+    rmSync(wt, { recursive: true, force: true })   // dir gone, admin entry lingers
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/wsA', baseBranch: 'main' })
+    expect(existsSync(join(wt, 'README.md'))).toBe(true)
+  })
+  // The trickier variant that the old prune-then-rm order mishandled: a PARTIAL dir is still on disk, so
+  // an up-front `prune` sees a "live" dir and no-ops; only removing the dir FIRST makes the entry prunable.
+  it('re-provisions idempotently when a partial worktree dir is still on disk', async () => {
+    const mirror = join(root, 'mirror', 'proj.git')
+    await ensureMirror({ mirror, repoUrl: source })
+    const wt = join(root, 'wsA', 'proj')
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/wsA', baseBranch: 'main' })
+    writeFileSync(join(wt, 'partial.txt'), 'leftover from a failed attempt')
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/wsA', baseBranch: 'main' })
+    expect(existsSync(join(wt, 'README.md'))).toBe(true)
+    expect(existsSync(join(wt, 'partial.txt'))).toBe(false)   // fresh checkout, leftover cleared
+  })
 })

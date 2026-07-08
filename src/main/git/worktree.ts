@@ -50,11 +50,16 @@ export async function ensureMirror(opts: { mirror: string; repoUrl: string; prox
 export async function addWorktree(opts: { mirror: string; worktreePath: string; branch: string; baseBranch: string }) {
   return withMirrorLock(opts.mirror, async () => {
     mkdirSync(dirname(opts.worktreePath), { recursive: true })
-    // Idempotent re-provision: a prior attempt may have left stale worktree admin (its working dir
-    // was removed on a failed pull) or a partial dir. Prune dead entries and clear any leftover dir
-    // so `worktree add` can't fail with "already registered / missing working tree / path exists".
-    await git(['worktree', 'prune'], { cwd: opts.mirror }).catch(() => {})
+    // Idempotent re-provision: a prior attempt may have left stale worktree admin (a failed pull, or a
+    // partial/leftover dir). ORDER MATTERS — remove the dir FIRST, THEN prune. `git worktree prune` only
+    // drops an admin entry whose working dir is MISSING; if we prune while the dir still exists it's a
+    // no-op, and the later `rm` then leaves a "missing but already registered" entry that makes
+    // `worktree add` fail with `is a missing but already registered worktree` / `'<branch>' is already
+    // used by worktree at '<path>'` (exactly the retry-after-failed-pull error). Removing the dir before
+    // pruning makes the stale entry prunable. `--expire=now` forces immediate pruning regardless of any
+    // gc.worktreePruneExpire grace period.
     if (existsSync(opts.worktreePath)) rmSync(opts.worktreePath, { recursive: true, force: true })
+    await git(['worktree', 'prune', '--expire=now'], { cwd: opts.mirror }).catch(() => {})
     await git(['worktree', 'add', '-B', opts.branch, opts.worktreePath, opts.baseBranch], { cwd: opts.mirror })
   })
 }
