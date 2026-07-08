@@ -2,7 +2,8 @@ import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
 import { EventBus } from '../orchestrator/eventBus'
 import { Orchestrator, gateApprovedKey } from '../orchestrator/orchestrator'
-import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, upsertProject, setProjectDefaultBranch, registerWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
+import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, upsertProject, setProjectDefaultBranch, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
+import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
 import { rebuildProviderRegistry } from '../agents/registry'
@@ -11,7 +12,7 @@ import { buildAgentEnv } from '../agents/env'
 import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
-import { runWorkspaceSetup } from '../workspace/workspaceSetup'
+import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { resolveStages } from '../workspace/resolveStages'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
@@ -44,7 +45,7 @@ import { NarratorService } from '../narrator/narratorService'
 import { readLastRun, RunStore } from '../orchestrator/runStore'
 import { planResume } from '../orchestrator/resumeRun'
 import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspace/archiveOps'
-import { deleteWorkspace, removeWorkspaceFromList } from '../workspace/deleteOps'
+import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
 import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
 import { makeProposeRun } from '../chat/proposeRun'
 import { isWorkflowIntent, isResumeIntent } from '../chat/workflowIntent'
@@ -123,6 +124,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   const mcpEntry = join(__dirname, 'forgeMcp.js')
   const orch = new Orchestrator({ bus, providers, proxy: () => readSettings().termProxy, mcpEntry })
+  // AbortController for the in-flight workspace creation (one at a time), so 取消 can kill its git pulls.
+  let setupAbort: AbortController | null = null
 
   const UPDATE_REPO = 'xzghua/myFlowForge'
   const updateChecker = createUpdateChecker({
@@ -263,14 +266,30 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
     const knownProjects = readProjects().projects
     const proxy = readSettings().termProxy
+    // One creation at a time — hold its AbortController so CH.workspaceCancelSetup can kill the in-flight
+    // git clone/fetch. Cleared in finally so a later create isn't cancelled by a stale controller.
+    setupAbort = new AbortController()
     // Always route through the observable setup path so the create shows live pull progress. With no
     // step plugins runWorkspaceSetup just provisions + emits provision events — same result as the old
     // synchronous createWorkspace, but the UI is no longer silent during the (slow) git pulls.
-    return runWorkspaceSetup({
-      opts, knownProjects, proxy, providers,
-      emit: (e) => broadcast(CH.workspaceSetup, e),
-    })
+    try {
+      return await runWorkspaceSetup({
+        opts, knownProjects, proxy, providers, signal: setupAbort.signal,
+        emit: (e) => broadcast(CH.workspaceSetup, e),
+      })
+    } catch (e) {
+      // On cancel OR failure, drop the sidebar record (registered early in runWorkspaceSetup) but KEEP
+      // the on-disk .forge/workspace.json + partial worktrees, so re-picking the folder can restore the
+      // config and continue. Re-throw so the renderer surfaces cancelled vs. error.
+      unregisterWorkspace(expandTilde(opts.path))
+      if (e instanceof SetupCancelledError) { const err = new Error('SETUP_CANCELLED'); err.name = 'SetupCancelledError'; throw err }
+      throw e
+    } finally {
+      setupAbort = null
+    }
   })
+  ipcMain.handle(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
+  ipcMain.handle(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
   ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
   ipcMain.handle(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
     setStageModel(a.path, a.stageKey, a.provider, a.model)

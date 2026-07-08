@@ -22,11 +22,13 @@ export function buildGitEnv(proxy: string): NodeJS.ProcessEnv {
   return env
 }
 
-export interface GitOpts { cwd: string; proxy?: string }
+// `signal` lets a long clone/fetch be aborted (user cancels workspace creation): execa kills the git
+// child when the signal fires, and the awaited call rejects with an AbortError.
+export interface GitOpts { cwd: string; proxy?: string; signal?: AbortSignal }
 
 export async function git(args: string[], opts: GitOpts): Promise<string> {
   // core.quotePath=false → git outputs real UTF-8 paths instead of octal-escaped, quoted
   // strings for non-ASCII filenames (e.g. Chinese), so the file tree/changes show正常文件名.
-  const { stdout } = await execa('git', ['-c', 'core.quotePath=false', ...args], { cwd: opts.cwd, env: buildGitEnv(opts.proxy ?? '') })
+  const { stdout } = await execa('git', ['-c', 'core.quotePath=false', ...args], { cwd: opts.cwd, env: buildGitEnv(opts.proxy ?? ''), signal: opts.signal })
   return stdout
 }

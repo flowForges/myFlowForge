@@ -25,6 +25,8 @@ export const CH = {
   skillsList: 'skills:list',
   commandsList: 'commands:list',
   workspaceCreate: 'workspace:create',
+  workspaceCancelSetup: 'workspace:cancel-setup',
+  workspaceDiscardPartial: 'workspace:discard-partial',
   workspaceGet: 'workspaces:get',
   workspaceEdit: 'workspaces:edit',
   workspaceRun: 'workspaces:run',

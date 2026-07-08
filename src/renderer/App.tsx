@@ -377,7 +377,10 @@ export function App() {
     } catch (e) {
       setSetupVisible(false)                     // also dismiss on error
       setSetupState(INITIAL_SETUP_STATE)
-      setCreateErr(e instanceof Error ? e.message : String(e))  // keep wizard open, surface the error
+      // User-cancelled creation is not an error: the partial stays on disk (record dropped from the
+      // sidebar) so re-picking the folder restores + continues. Show a gentle hint instead of a red error.
+      const cancelled = e instanceof Error && e.name === 'SetupCancelledError'
+      setCreateErr(cancelled ? '已取消创建。已拉取的部分已保留 —— 重新选择该文件夹可继续创建，或在向导里清除重来。' : (e instanceof Error ? e.message : String(e)))
     } finally {
       setCreating(false)
     }
@@ -628,6 +631,8 @@ export function App() {
         onPickPath={() => window.forge.pickDirectory()}
         hookLibrary={hookLib.hooks}
         onSaveHookToLibrary={hookLib.save}
+        onProbeWorkspace={(p) => window.forge.getWorkspace(p)}
+        onDiscardPartial={(p) => window.forge.discardPartialWorkspace(p)}
         error={createErr}
         creating={creating}
       />
@@ -700,6 +705,7 @@ export function App() {
         <SetupProgress
           state={setupState}
           onClose={() => { setSetupVisible(false); setSetupState(INITIAL_SETUP_STATE) }}
+          onCancel={() => { void window.forge.cancelSetup() }}
         />
       )}
     </div>

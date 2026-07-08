@@ -37,6 +37,12 @@
 }
 .setup-x:hover { background: var(--surface); color: var(--fg); }
 .setup-x svg { width: 16px; height: 16px; }
+.setup-cancel {
+  margin-left: auto; height: 30px; padding: 0 14px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--fg-2);
+  font-size: 12px; font-weight: 550; cursor: pointer; transition: .14s;
+}
+.setup-cancel:hover { color: var(--err); border-color: color-mix(in oklch, var(--err), transparent 55%); background: color-mix(in oklch, var(--err), transparent 90%); }
 
 .setup-body {
   flex: 1; overflow-y: auto; padding: 4px 20px 16px;

@@ -35,6 +35,8 @@ export interface SetupProgressState {
 interface SetupProgressProps {
   state: SetupProgressState
   onClose?: () => void
+  // Abort an in-flight creation (kills the running git clone/fetch). Shown while setup is active.
+  onCancel?: () => void
 }
 
 function hookToRuntime(hook: HookEntry): AgentRuntime {
@@ -52,8 +54,10 @@ function hookToRuntime(hook: HookEntry): AgentRuntime {
   }
 }
 
-export function SetupProgress({ state, onClose }: SetupProgressProps) {
+export function SetupProgress({ state, onClose, onCancel }: SetupProgressProps) {
   if (!state.started) return null
+  // Active = setup running and not yet done/failed → offer 取消 to abort the git pulls.
+  const active = !state.done && !state.failed
 
   const total = state.total || state.provisionedProjects[0]?.total || 0
 
@@ -72,6 +76,9 @@ export function SetupProgress({ state, onClose }: SetupProgressProps) {
             <h3>正在配置工作区</h3>
             <span className="setup-head-sub">执行建区 Hook · 拉取项目</span>
           </div>
+          {active && onCancel && (
+            <button className="setup-cancel" onClick={onCancel} aria-label="取消创建">取消</button>
+          )}
           {state.done && onClose && (
             <button className="setup-x" onClick={onClose} aria-label="关闭">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
