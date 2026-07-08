@@ -214,4 +214,23 @@ describe('runWorkspaceSetup', () => {
     expect(events).toContainEqual({ type: 'provision:error', project: 'alpha', index: 0, total: 1, message: 'clone failed' })
     expect(events.some(e => e.type === 'provision')).toBe(false)
   })
+
+  it('an aborted signal stops the flow with SetupCancelledError and never provisions', async () => {
+    const { runWorkspaceSetup, SetupCancelledError } = await import('./workspaceSetup')
+    const { provider } = fakeProvider()
+    const provisioned: string[] = []
+    const ctrl = new AbortController()
+    ctrl.abort()   // user hit 取消 before/while creating
+    await expect(runWorkspaceSetup({
+      opts: {
+        name: 'cancel', path: join(root, 'ws-cancel'), workflowId: 'standard',
+        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        projects: [{ repoId: 'proj', branch: 'forge/x' }],
+      },
+      knownProjects: SRC_PROJECTS(), proxy: '', providers: { claude: provider },
+      emit: () => {}, provision: async (p) => { provisioned.push(p.name); return join(root, p.name) },
+      signal: ctrl.signal,
+    })).rejects.toBeInstanceOf(SetupCancelledError)
+    expect(provisioned).toEqual([])   // never reached the git pull
+  })
 })
