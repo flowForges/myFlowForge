@@ -10,6 +10,7 @@ import { LayoutToggle } from './shell/LayoutToggle'
 import './shell/dock.css'
 import { useEngine } from './state/useEngine'
 import { useConfig } from './state/useConfig'
+import { useHookLibrary } from './state/useHookLibrary'
 import { useSettings } from './state/useSettings'
 import type { OpenTarget } from '@shared/openers'
 import { useLogs } from './state/useLogs'
@@ -33,6 +34,7 @@ import { AppIconPane } from './settings/AppIconPane'
 import { TermProxyPane } from './settings/TermProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
 import { WorkflowPane } from './settings/WorkflowPane'
+import { HookLibraryPane } from './settings/HookLibraryPane'
 import { SkillPane } from './settings/SkillPane'
 import { PetPane } from './settings/PetPane'
 import { LoadPane } from './settings/LoadPane'
@@ -136,6 +138,7 @@ export function App() {
   const notifRunPrev = useRef<Map<string, AgentState>>(new Map())
   const home = useHome()
   const { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect } = useConfig()
+  const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
@@ -315,7 +318,9 @@ export function App() {
   // Main-process event-loop stalls (perf monitor) surface as a bell notification.
   useEffect(() => {
     const off = window.forge.onPerfStall?.(({ msg }) => {
-      setNotifs(ns => [{ ic: 'warn', cls: 'ni-warn', t: `<b>性能</b> ${sanitize(msg)}`, m: '主进程 · 刚刚', unread: true }, ...ns])
+      // App-global (whole-app main process), NOT a session — clarify the subtitle so it isn't mistaken
+      // for a workspace's agent, and route the click to the debug-log pane where stalls are recorded.
+      setNotifs(ns => [{ ic: 'warn', cls: 'ni-warn', t: `<b>性能</b> ${sanitize(msg)}`, m: '应用主进程(非会话) · 刚刚', unread: true, settingsPane: 'debug' }, ...ns])
     })
     return () => off?.()
   }, [])
@@ -469,11 +474,13 @@ export function App() {
         onOpenUpgrade={() => { setNotifOpen(false); setUpgradeOpen(true) }}
         onMarkAllRead={() => setNotifs(markAllRead(notifs))}
         onSelectNotif={(n, i) => {
-          // Mark just this row read, then jump to its workspace (its chat/session area). Resolve a
-          // name-only route (stalled/awaiting events) to a path via the workspace registry.
+          // Every notif is clickable to mark it read. Then navigate to its source: a workspace (its
+          // chat/session area) when known — resolving a name-only route via the registry — or a settings
+          // pane for app-global notifs (e.g. a perf stall → 调试日志). Read-only notifs just mark read.
           setNotifs(ns => ns.map((x, j) => (j === i ? { ...x, unread: false } : x)))
           const path = n.wsPath || home.workspaces.find(w => w.name === n.wsName)?.path
           if (path) { setActiveId(path); setView('ws'); setNotifOpen(false) }
+          else if (n.settingsPane) { setSettingsPane(n.settingsPane); setSettingsOpen(true); setNotifOpen(false) }
         }}
         canEditWorkspace={!!activeWsId}
         onEditWorkspace={openEdit}
@@ -618,6 +625,8 @@ export function App() {
         onAddProject={addProject}
         onAddWorkflow={addWorkflow}
         onPickPath={() => window.forge.pickDirectory()}
+        hookLibrary={hookLib.hooks}
+        onSaveHookToLibrary={hookLib.save}
         error={createErr}
         creating={creating}
       />
@@ -663,6 +672,7 @@ export function App() {
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
           case 'workflow': return <WorkflowPane workflows={workflows} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} />
+          case 'hookLibrary': return <HookLibraryPane hooks={hookLib.hooks} onSave={hookLib.save} onDelete={hookLib.remove} onSetAll={hookLib.setAll} />
           case 'skills': return <SkillPane />
           case 'loads': return <LoadPane />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null

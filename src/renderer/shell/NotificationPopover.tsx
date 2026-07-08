@@ -80,14 +80,17 @@ export function NotificationPopover({
         <div className="notif-list">
           {notifs.length ? (
             notifs.map((n, i) => {
-              const clickable = !!(n.wsPath || n.wsName) && !!onSelect
+              // Every notif is clickable to mark it read; the `clickable` affordance (pointer/hover) is
+              // reserved for those that actually navigate somewhere (a workspace or a settings pane).
+              const interactive = !!onSelect
+              const navigates = !!(n.wsPath || n.wsName || n.settingsPane)
               return (
                 <div
                   key={i}
-                  className={'notif-item' + (n.unread ? ' unread' : '') + (clickable ? ' clickable' : '')}
-                  role={clickable ? 'button' : undefined}
-                  tabIndex={clickable ? 0 : undefined}
-                  onClick={clickable ? () => onSelect?.(n, i) : undefined}
+                  className={'notif-item' + (n.unread ? ' unread' : '') + (navigates ? ' clickable' : '')}
+                  role={interactive ? 'button' : undefined}
+                  tabIndex={interactive ? 0 : undefined}
+                  onClick={interactive ? () => onSelect?.(n, i) : undefined}
                 >
                   <div className={'ni-ic ' + n.cls} dangerouslySetInnerHTML={{ __html: ICN[n.ic] }} />
                   <div className="ni-b">

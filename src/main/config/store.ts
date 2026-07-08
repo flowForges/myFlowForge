@@ -7,6 +7,7 @@ import { writeJsonAtomic } from '../util/atomicWrite'
 import {
   SettingsSchema, defaultSettings, ProjectsSchema, defaultProjects,
   WorkflowsSchema, defaultWorkflows, AgentsConfigSchema, defaultAgentsConfig,
+  HookLibrarySchema, defaultHookLibrary,
   WorkspaceSchema, WorkspaceRegistrySchema, defaultWorkspaceRegistry,
   type Settings, type Workspace, type WorkspaceRegistryEntry
 } from './schema'
@@ -57,6 +58,9 @@ export function setProjectDefaultBranch(id: string, branch: string): import('./s
 }
 export const readWorkflows = () => readJson(sysFile('workflows.json'), WorkflowsSchema, defaultWorkflows)
 export const writeWorkflows = (data: { workflows: import('./schema').Workflow[] }) => writeJson(sysFile('workflows.json'), WorkflowsSchema.parse(data))
+// Global reusable hook library (slot-agnostic). Copied-from at workspace-create time; never referenced live.
+export const readHookLibrary = () => readJson(sysFile('hookLibrary.json'), HookLibrarySchema, defaultHookLibrary)
+export const writeHookLibrary = (data: { hooks: import('./schema').LibraryHook[] }) => writeJson(sysFile('hookLibrary.json'), HookLibrarySchema.parse(data))
 export const readAgentsConfig = () => readJson(sysFile('agents.json'), AgentsConfigSchema, defaultAgentsConfig)
 export const writeAgentsConfig = (data: import('./schema').AgentsConfig) => writeJson(sysFile('agents.json'), AgentsConfigSchema.parse(data))
 

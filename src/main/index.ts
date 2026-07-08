@@ -299,18 +299,23 @@ app.whenReady().then(() => {
   // A Forge window gained focus → the user is now on that monitor; join it.
   app.on('browser-window-focus', (_e, win) => relocatePetToFocus(win))
 
-  // Cross-app follow: `browser-window-focus` only fires for our OWN windows, so when the user works
-  // in another app (browser/editor/terminal) on another monitor, focus never reaches Forge and the
-  // pet would stay put — the reported "跟随屏幕失效". Poll the cursor's SCREEN (not its pixel
-  // position) at a gentle cadence and hop only when it crosses to a different display.
-  // relocatePetToDisplay no-ops while on the same screen, so there's no within-screen jitter (the
-  // reason the old pixel-chasing poll was dropped). Gated by pet.enabled + pet.followCursor.
-  setInterval(() => {
-    const p = readSettings().pet
-    if (!p.enabled || !p.followCursor) return
-    if (!petWin || petWin.isDestroyed() || petMode !== 'collapsed') return
-    relocatePetToDisplay(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()))
-  }, 900)
+  // Cross-app follow, CLICK-driven (not hover): `browser-window-focus` only fires for our OWN windows,
+  // so when the user clicks another app (browser/editor/terminal) on another monitor, focus leaves Forge
+  // and the pet would stay put. We key off `browser-window-blur` — which fires only on a real focus
+  // change (a click elsewhere), never on mere mouse movement — and sample the cursor's SCREEN once at
+  // that moment. This fixes the reported hover-chasing (the pet no longer jumps just because the mouse
+  // crossed a monitor); it only follows an actual click that took focus off Forge. Deferred a tick so
+  // intra-Forge window switches settle first: if focus landed on another Forge window, its own focus
+  // handler owns the move and we bail. relocatePetToDisplay no-ops while on the same screen.
+  app.on('browser-window-blur', () => {
+    setTimeout(() => {
+      const p = readSettings().pet
+      if (!p.enabled || !p.followCursor) return
+      if (!petWin || petWin.isDestroyed() || petMode !== 'collapsed') return
+      if (BrowserWindow.getFocusedWindow()) return   // focus moved to another Forge window → its focus handler handles it
+      relocatePetToDisplay(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()))
+    }, 60)
+  })
 
   if (readSettings().pet.enabled) createPet()
   // On startup, join whatever window is already focused (if the toggle is on).

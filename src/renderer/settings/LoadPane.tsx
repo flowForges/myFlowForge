@@ -34,7 +34,10 @@ export function LoadPane() {
           <h4>系统级加载项</h4>
           <p>扫描所有支持的编码 CLI（Claude / Codex / Gemini / Cursor / Qoder）的全局 skill、rule、MCP。项目级加载项在对应工作区右侧查看。</p>
         </div>
-        <button className="set-btn" onClick={scan} disabled={loading}>{loading ? '扫描中' : '重新扫描'}</button>
+        <button className={'set-btn load-rescan' + (loading ? ' busy' : '')} onClick={scan} disabled={loading}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><polyline points="21 3 21 9 15 9" /></svg>
+          {loading ? '扫描中…' : '重新扫描'}
+        </button>
       </div>
       <div className="load-summary">
         <span><b>{context.skills.length}</b> Skill</span>

@@ -244,6 +244,13 @@
   background: color-mix(in oklch, var(--err), transparent 90%); color: var(--err);
   padding: 9px 10px; margin-bottom: 12px; font-size: 12px;
 }
+/* 重新扫描 button — icon + label, spins while scanning, accent-tinted hover. */
+.load-rescan { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; white-space: nowrap; }
+.load-rescan svg { width: 14px; height: 14px; flex: 0 0 14px; }
+.load-rescan:hover:not(:disabled) { color: var(--accent); border-color: color-mix(in oklch, var(--accent), transparent 55%); background: var(--accent-dim); }
+.load-rescan.busy { opacity: 1; }
+.load-rescan.busy svg { animation: load-rescan-spin .9s linear infinite; }
+@keyframes load-rescan-spin { to { transform: rotate(360deg); } }
 
 /* ---- 编码代理 (AgentsPane) ---- */
 .set-btn { height: 30px; padding: 0 13px; border-radius: 7px; font-size: 12.5px; font-weight: 500; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); transition: .14s; }

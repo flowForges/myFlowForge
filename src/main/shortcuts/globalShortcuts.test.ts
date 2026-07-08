@@ -19,7 +19,7 @@ describe('registerGlobalShortcuts', () => {
     const { failed } = registerGlobalShortcuts({}, handlers, gs)
     expect(gs.unregisterCalls).toBe(1)
     expect(failed).toEqual([])
-    expect(gs.registered.has('CommandOrControl+Shift+F')).toBe(true)
+    expect(gs.registered.has('CommandOrControl+Alt+F')).toBe(true)
     expect(gs.registered.has('CommandOrControl+Shift+P')).toBe(true)
   })
 

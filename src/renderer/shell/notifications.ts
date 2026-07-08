@@ -6,9 +6,12 @@ export interface Notif {
   unread: boolean
   // Jump-to-source: where clicking this notification should navigate. `wsPath` is authoritative
   // when known (from a run's workspacePath); `wsName` is a fallback the click handler resolves to a
-  // path via the workspace registry (for events that only carry a name). Absent → not clickable.
+  // path via the workspace registry (for events that only carry a name).
   wsPath?: string
   wsName?: string
+  // App-global notifications that aren't tied to any workspace (e.g. a main-process perf stall) route
+  // to a settings pane instead of a workspace. Every notif is still clickable to mark it read.
+  settingsPane?: string
 }
 
 export const ICN: Record<'ok' | 'warn' | 'file' | 'up', string> = {
