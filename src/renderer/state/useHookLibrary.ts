@@ -6,11 +6,13 @@ import type { LibraryHook } from '@shared/plugin'
 export function useHookLibrary() {
   const [hooks, setHooks] = useState<LibraryHook[]>([])
 
-  useEffect(() => { void window.forge.listHookLibrary().then(setHooks) }, [])
+  // Guarded against a partial window.forge (e.g. test harnesses that mock only a subset of the API):
+  // absent methods degrade to a no-op empty library rather than crashing App on mount.
+  useEffect(() => { void window.forge.listHookLibrary?.().then(setHooks) }, [])
 
-  const save = useCallback(async (hook: LibraryHook) => { setHooks(await window.forge.saveHookLibrary(hook)) }, [])
-  const remove = useCallback(async (id: string) => { setHooks(await window.forge.deleteHookLibrary(id)) }, [])
-  const setAll = useCallback(async (list: LibraryHook[]) => { setHooks(await window.forge.setHookLibrary(list)) }, [])
+  const save = useCallback(async (hook: LibraryHook) => { const r = await window.forge.saveHookLibrary?.(hook); if (r) setHooks(r) }, [])
+  const remove = useCallback(async (id: string) => { const r = await window.forge.deleteHookLibrary?.(id); if (r) setHooks(r) }, [])
+  const setAll = useCallback(async (list: LibraryHook[]) => { const r = await window.forge.setHookLibrary?.(list); if (r) setHooks(r) }, [])
 
   return { hooks, save, remove, setAll }
 }
