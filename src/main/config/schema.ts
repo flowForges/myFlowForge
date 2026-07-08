@@ -190,6 +190,10 @@ export const SettingsSchema = z.object({
   // Id of the external app chosen in the "打开位置" dropdown (see shared/openers catalog). '' = none yet.
   defaultOpenerId: z.string().catch('').default(''),
   keybindings: KeybindingsSchema,
+  // Developer diagnostic: surface main event-loop stall (卡顿) toasts in the notification bell.
+  // Off by default — real stalls are still written to the debug log regardless; this only controls
+  // whether they pop as user-facing notifications (opt-in from the 调试 pane).
+  perfStallToast: z.boolean().catch(false).default(false),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -208,6 +212,7 @@ export const defaultSettings = (): Settings => ({
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
   defaultOpenerId: '',
   keybindings: { overrides: {} },
+  perfStallToast: false,
 })
 
 export const ProjectSchema = z.object({

@@ -17,7 +17,12 @@ export function filterByScope(entries: AppLogEntry[], scope: string | null): App
   return scope ? entries.filter(e => e.scope === scope) : entries
 }
 
-export function DebugLogPane() {
+interface DebugLogPaneProps {
+  perfStallToast?: boolean
+  onTogglePerfToast?: (v: boolean) => void
+}
+
+export function DebugLogPane({ perfStallToast = false, onTogglePerfToast }: DebugLogPaneProps = {}) {
   const [entries, setEntries] = useState<AppLogEntry[]>([])
   const [level, setLevel] = useState<LogLevel | 'all'>('all')
   const [scopeFilter, setScopeFilter] = useState<string | null>(null)
@@ -64,6 +69,14 @@ export function DebugLogPane() {
         <div>
           <h4>调试日志</h4>
           <p>记录 app 运行与编码代理(codex/claude…)失败详情。出问题时可导出日志排查。</p>
+          <label className="dl-auto" style={{ marginTop: 6 }}>
+            <input
+              type="checkbox"
+              checked={perfStallToast}
+              onChange={e => onTogglePerfToast?.(e.target.checked)}
+            />
+            在通知里提示主进程卡顿(开发者诊断，默认关闭；卡顿始终记录到上方日志)
+          </label>
         </div>
         <div className="dl-actions">
           <button className="set-btn" onClick={reload}>刷新</button>

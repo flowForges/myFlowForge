@@ -17,6 +17,7 @@ export const CH = {
   agentsRefreshModels: 'agents:refresh-models',
   agentsSetModels: 'agents:set-models',
   contextScan: 'context:scan',
+  contextScanGlobal: 'context:scan-global',
   skillsList: 'skills:list',
   commandsList: 'commands:list',
   workspaceCreate: 'workspace:create',

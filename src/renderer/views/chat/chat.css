@@ -519,7 +519,13 @@
 /* Fenced code block with a persistent copy button (chat messages + plan card). The wrapper owns the
    border/background so the inner <pre> is reset to sit flush under the header bar. */
 .code-block { margin: 8px 0 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
-.code-block .cb-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 6px 3px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.code-block .cb-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 6px 3px 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.code-block.collapsed .cb-bar { border-bottom: 0; }
+.code-block .cb-fold { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px; color: var(--muted); transition: .13s; }
+.code-block .cb-fold:hover { background: var(--border); color: var(--fg); }
+.code-block .cb-chev { width: 13px; height: 13px; transition: transform .15s; }
+.code-block.collapsed .cb-chev { transform: rotate(-90deg); }
+.code-block .cb-lines { font: 11px var(--mono); color: var(--faint); }
 .code-block .cb-lang { font: 11px var(--mono); color: var(--muted); }
 .code-block .cb-copy { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 550; color: var(--muted); padding: 3px 8px; border-radius: 6px; transition: .13s; }
 .code-block .cb-copy:hover { background: var(--border); color: var(--fg); }

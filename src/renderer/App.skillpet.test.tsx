@@ -12,7 +12,8 @@ beforeEach(() => {
     listProjects: async () => [], listWorkflows: async () => [], detectProviders: async () => [],
     addProject: async () => [], deleteProject: async () => [], addWorkflow: async () => [], deleteWorkflow: async () => [],
     getSettings: async () => ({}), setSettings: async (s: any) => s, onSettingsChanged: () => () => {},
-    scanContext: vi.fn(async () => ({ skills: [{ name: 'forge-workflow', path: '.claude/skills/forge-workflow/SKILL.md' }], rules: [{ name: 'AGENTS.md', path: 'AGENTS.md' }], mcps: [{ name: 'forge', path: 'mcp://forge' }] })),
+    scanContext: vi.fn(async () => ({ skills: [], rules: [], mcps: [] })),
+    scanGlobalContext: vi.fn(async () => ({ skills: [{ name: 'forge-workflow', path: '.claude/skills/forge-workflow/SKILL.md' }], rules: [{ name: 'AGENTS.md', path: 'AGENTS.md' }], mcps: [{ name: 'forge', path: 'mcp://forge' }] })),
     createWorkspace: vi.fn(), startRun: vi.fn(), resolve: () => {},
     chatHistory: async () => [], sendChat: async () => ({}), openFiles: async () => [], savePaste: vi.fn(), onChatEvent: () => () => {}, onChatQueueEvent: () => () => {},
     watchChanges: async () => [], watchStop: async () => {}, fsTree: async () => [], gitDiff: async () => ({ text: '', lang: 'text' }), onChangesEvent: () => () => {},
@@ -37,11 +38,11 @@ describe('App skill + pet settings', () => {
     expect(await screen.findByText('桌面宠物')).toBeInTheDocument()
   })
 
-  it('renders LoadPane and scans workspace load items', async () => {
+  it('renders LoadPane and scans system-level load items', async () => {
     render(<App />)
     fireEvent.click(screen.getByLabelText('设置'))
     fireEvent.click(document.querySelector('[data-set="loads"]') as HTMLElement)
-    expect(await screen.findByText('加载项扫描')).toBeInTheDocument()
+    expect(await screen.findByText('系统级加载项')).toBeInTheDocument()
     expect(await screen.findByText('forge-workflow')).toBeInTheDocument()
     expect(await screen.findByText('AGENTS.md')).toBeInTheDocument()
     expect(await screen.findByText('forge')).toBeInTheDocument()

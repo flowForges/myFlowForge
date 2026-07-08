@@ -105,7 +105,12 @@
 .tag-idle { color: var(--faint); background: var(--surface-2); }
 .tag-err { color: var(--err); background: oklch(68% 0.18 25 / 0.14); }
 
-/* ws-dot base + run/ok/idle variants live in shell.css; add the missing err variant */
+/* Running-status dot shown on the focus card header + each workspace row. The base + run variant
+   used to be assumed present in shell.css but weren't defined anywhere, so the dot rendered as a
+   zero-size invisible span — home showed no "running" animation. Defined here now. */
+.ws-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; display: inline-block; background: var(--faint); }
+.ws-dot.run { background: var(--run); box-shadow: 0 0 0 3px var(--accent-dim); animation: pulse 1.4s infinite; }
+.ws-dot.ok { background: var(--ok); }
 .ws-dot.err { background: var(--err); }
 
 /* install-banner: shown when zero built-in agents are detected */

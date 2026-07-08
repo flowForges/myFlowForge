@@ -1,6 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
-import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor } from '../chatStream'
+import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor, splitThinkLines } from '../chatStream'
 import { createFenceScanner } from '../handoffFence'
 import { forgeMcpArgs } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
@@ -72,6 +72,16 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
       let ctxMaxSeen = 0
       const cap = (s: string, add: string) => (s + add).slice(-2000)
 
+      // Same word-fragment reasoning as chat() — coalesce think deltas into whole log lines so the
+      // workflow console doesn't show one word per line. See splitThinkLines.
+      let thinkBuf = ''
+      const pushThink = (t: string) => {
+        const { lines, rest } = splitThinkLines(thinkBuf + t)
+        for (const l of lines) cb.onLog({ ts: now(), text: l, level: KIND_LEVEL['think'], kind: 'think' })
+        thinkBuf = rest
+      }
+      const flushThink = () => { const t = thinkBuf.trim(); thinkBuf = ''; if (t) cb.onLog({ ts: now(), text: t, level: KIND_LEVEL['think'], kind: 'think' }) }
+
       const processLine = (raw: string) => {
         const line = raw.trim()
         if (!line) return
@@ -95,6 +105,8 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         for (const a of actions) {
           if (a.kind === 'session') { cb.onSession?.(a.id); continue }
           if (a.kind === 'ignore') continue
+          if (a.kind === 'think') { pushThink(a.text ?? ''); continue }
+          flushThink()   // any non-think action closes the current buffered reasoning line
           if (a.kind === 'result') {
             if (a.text) {
               // Feed result text through scanner too (handoff could appear there)
@@ -131,6 +143,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
 
       const done = child.then((res) => {
         processLine(buf); buf = '' // flush any final line with no trailing newline
+        flushThink()   // surface any trailing reasoning line with no closing newline
         for (const out of scanner.flush()) {
           cb.onLog({ ts: now(), text: out, level: 'info' })
         }
@@ -181,6 +194,16 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         let rawErr = ''
         let ctxMaxSeen = 0
         child.stderr?.on('data', (b: Buffer) => { rawErr = (rawErr + b.toString()).slice(-2000) })
+        // Reasoning arrives as word-level `thinking_delta` fragments (--include-partial-messages), so
+        // buffer them and only emit whole lines — otherwise the think panel shows one word per line.
+        // Discrete steps (tool/file labels) flush the buffer first so they stay on their own line.
+        let thinkBuf = ''
+        const pushThink = (t: string) => {
+          const { lines, rest } = splitThinkLines(thinkBuf + t)
+          for (const l of lines) cb.onThinkDelta(l)
+          thinkBuf = rest
+        }
+        const flushThink = () => { if (thinkBuf.trim()) cb.onThinkDelta(thinkBuf.trim()); thinkBuf = '' }
         const handle = (obj: any) => {
           const used = extractContextTokens(obj)
           if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
@@ -188,8 +211,9 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
           if (obj?.type === 'assistant' && streamed) return   // deltas already streamed; skip to avoid duplicates
           for (const action of parseChatStreamActions(obj)) {
             if (action.kind === 'session') cb.onSession(action.id)
-            else if (action.kind === 'assistant') { gotText = true; cb.onAssistantDelta(action.text) }
-            else if (action.kind === 'think' || action.kind === 'tool' || action.kind === 'file') cb.onThinkDelta(action.text)
+            else if (action.kind === 'assistant') { flushThink(); gotText = true; cb.onAssistantDelta(action.text) }
+            else if (action.kind === 'think') pushThink(action.text)
+            else if (action.kind === 'tool' || action.kind === 'file') { flushThink(); cb.onThinkDelta(action.text) }
           }
         }
         const processLine = (raw: string) => {
@@ -207,6 +231,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         })
         return child.then((res) => {
           processLine(buf); buf = ''
+          flushThink()   // surface any trailing reasoning line that never got a closing newline
           // Self-heal: a --resume rejected because the stored id is stale/expired/foreign (e.g. the
           // user ran codex/claude on this session before switching to qoder — session ids are NOT
           // interchangeable across CLIs). Retry once WITHOUT --resume; the fresh turn mints a new

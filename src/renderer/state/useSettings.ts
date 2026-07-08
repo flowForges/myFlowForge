@@ -18,6 +18,7 @@ const DEFAULTS: Settings = {
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
   defaultOpenerId: '',
   keybindings: { overrides: {} },
+  perfStallToast: false,
 }
 
 export interface SettingsUpdate {
@@ -33,6 +34,7 @@ export interface SettingsUpdate {
   lastActiveWorkspace?: string
   defaultOpenerId?: string
   keybindings?: Keybindings
+  perfStallToast?: boolean
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -56,6 +58,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     lastActiveWorkspace: partial.lastActiveWorkspace ?? base.lastActiveWorkspace,
     defaultOpenerId: partial.defaultOpenerId ?? base.defaultOpenerId,
     keybindings: partial.keybindings ?? base.keybindings ?? { overrides: {} },
+    perfStallToast: partial.perfStallToast ?? base.perfStallToast,
   }
 }
 
