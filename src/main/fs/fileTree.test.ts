@@ -41,6 +41,35 @@ describe('readTree fs fallback (non-git dir, e.g. workspace root)', () => {
   })
 })
 
+describe('readTree shows every project folder (walkDir BFS + dir markers)', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'ftree-multi-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('shows all sibling project folders, including an empty one and a build-only one', async () => {
+    // 5 project folders under a workspace root. Previously a DFS + file cap could drain one big
+    // project and never list the others; and folders with no plain files vanished entirely.
+    for (const p of ['projA', 'projB', 'projC', 'projD', 'projE']) mkdirSync(join(dir, p), { recursive: true })
+    writeFileSync(join(dir, 'projA', 'a.ts'), 'export {}')
+    writeFileSync(join(dir, 'projB', 'b.ts'), 'export {}')
+    // projC is EMPTY (freshly cloned, nothing checked out yet)
+    // projD holds only a skipped build dir → contributes no plain files
+    mkdirSync(join(dir, 'projD', 'node_modules', 'x'), { recursive: true })
+    writeFileSync(join(dir, 'projD', 'node_modules', 'x', 'i.js'), '')
+    // projE has a nested source file
+    mkdirSync(join(dir, 'projE', 'src'), { recursive: true })
+    writeFileSync(join(dir, 'projE', 'src', 'main.go'), 'package main')
+
+    const tree = await readTree(dir)
+    const names = tree.map(n => n.name)
+    expect(names).toEqual(expect.arrayContaining(['projA', 'projB', 'projC', 'projD', 'projE']))
+    // build-only project shows as a folder but its skipped dir is not walked
+    const projD = tree.find(n => n.name === 'projD')!
+    expect(projD.type).toBe('dir')
+    expect((projD.children ?? []).some(n => n.name === 'node_modules')).toBe(false)
+  })
+})
+
 describe('readTree shows dot-dirs (walkDir dot-dir fix)', () => {
   let dir: string
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'ftree-dotdir-')) })

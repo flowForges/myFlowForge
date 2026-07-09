@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { TreeNode, ChangeType } from '@shared/types'
 import { FileIc } from './fileIcon'
 import { SearchModeToggle, ContentHits, useContentSearch } from './contentSearch'
@@ -27,6 +27,14 @@ const ChevIcon = ({ hidden }: { hidden?: boolean }) =>
       <polyline points="6 9 12 15 18 9" />
     </svg>
   )
+
+// Collect the path of every directory node in the tree (for collapse-all / default-collapsed).
+function allDirPaths(nodes: TreeNode[], acc: string[] = []): string[] {
+  for (const n of nodes) {
+    if (n.type === 'dir') { acc.push(n.path); if (n.children) allDirPaths(n.children, acc) }
+  }
+  return acc
+}
 
 // Prune the tree to nodes matching the query, preserving folder structure.
 // - file: kept iff its NAME (case-insensitive) includes the query
@@ -61,8 +69,20 @@ export function FileTreePane({
   const [mode, setMode] = useState<'name' | 'content'>('name')
   const contentMode = mode === 'content' && !!searchRoot
   const search = useContentSearch(searchRoot ? [{ cwd: searchRoot }] : [], query, contentMode)
-  // local set of CLOSED folder paths (default = open)
+  // local set of CLOSED folder paths (empty set = everything open)
   const [closed, setClosed] = useState<Set<string>>(new Set())
+
+  // Start collapsed instead of dumping a fully-expanded tree on the user. Seed ONCE, the first time
+  // the tree has content — not on every `tree` change, or a background refetch (git status polling
+  // re-fetches the tree) would wipe folders the user just opened. A remount (switching project) resets
+  // the ref, so each newly-opened tree starts collapsed again.
+  const seeded = useRef(false)
+  useEffect(() => {
+    if (!seeded.current && tree.length) {
+      seeded.current = true
+      setClosed(new Set(allDirPaths(tree)))
+    }
+  }, [tree])
 
   const toggleFolder = (path: string) => {
     setClosed((prev) => {
@@ -72,6 +92,8 @@ export function FileTreePane({
       return next
     })
   }
+  const expandAll = () => setClosed(new Set())
+  const collapseAll = () => setClosed(new Set(allDirPaths(tree)))
 
   const FileRow = ({ node }: { node: TreeNode }) => (
     <button
@@ -131,6 +153,20 @@ export function FileTreePane({
           />
         </div>
         {searchRoot ? <SearchModeToggle mode={mode} onChange={setMode} /> : null}
+        <div className="tree-expand-tools">
+          <button className="tree-tool-btn" title="全部展开" aria-label="全部展开" onClick={expandAll}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="7 13 12 18 17 13" />
+              <polyline points="7 6 12 11 17 6" />
+            </svg>
+          </button>
+          <button className="tree-tool-btn" title="全部收起" aria-label="全部收起" onClick={collapseAll}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="7 11 12 6 17 11" />
+              <polyline points="7 18 12 13 17 18" />
+            </svg>
+          </button>
+        </div>
       </div>
       {contentMode ? (
         <ContentHits state={search} onOpen={(file, cwd) => onOpen(file, 'M', cwd)} />

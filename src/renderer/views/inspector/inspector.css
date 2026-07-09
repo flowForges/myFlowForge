@@ -32,6 +32,10 @@
 
 /* Files 文件树视图 */
 .tree-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.tree-expand-tools { display: flex; flex: 0 0 auto; gap: 2px; background: var(--surface); border-radius: 7px; padding: 2px; }
+.tree-tool-btn { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 5px; color: var(--muted); }
+.tree-tool-btn:hover { background: var(--bg); color: var(--fg); }
+.tree-tool-btn svg { width: 15px; height: 15px; }
 .tree-search { flex: 1; height: 30px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; display: flex; align-items: center; gap: 7px; padding: 0 10px; }
 .tree-search svg { width: 14px; height: 14px; color: var(--faint); }
 .tree-search input { flex: 1; background: none; border: none; outline: none; color: var(--fg); font-size: 12.5px; font-family: var(--font); }

@@ -13,35 +13,55 @@ const MAX_TREE_FILES = 4000
 // directory) so a large/slow tree can't synchronously wedge the main process — the old readdirSync
 // version blocked it for ~29s on a big cloud-synced folder. Triple-bounded (files, dirs, wall-clock
 // deadline) so even a pathological tree returns promptly with a partial view.
-async function walkDir(root: string, maxFiles = MAX_TREE_FILES, maxDirs = 15000, deadlineMs = 4000): Promise<string[]> {
-  const files: string[] = []
-  const stack = [root]
+//
+// BREADTH-FIRST (queue.shift, not stack.pop): a workspace root holds several sibling project folders,
+// and a depth-first walk drains the first project's entire subtree before touching the next — so when
+// the file cap hit inside one big project, the remaining projects were never visited and vanished
+// from the tree ("only 2 of 5 projects show"). BFS lists every folder's immediate entries first, so
+// the budget is spread fairly across siblings and every project surfaces.
+//
+// Emits a trailing-'/' marker for each directory entered, so a folder still becomes a node even when
+// it holds no files within budget (a build-only or freshly-cloned project) — buildTree would
+// otherwise only ever create a dir node when a FILE lives under it, silently dropping empty projects.
+async function walkDir(root: string, maxFiles = MAX_TREE_FILES, maxDirs = 15000, deadlineMs = 6000): Promise<string[]> {
+  const paths: string[] = []
+  const queue = [root]
   let dirs = 0
   const start = Date.now()
-  while (stack.length && files.length < maxFiles && dirs < maxDirs) {
+  const rel = (p: string) => relative(root, p).split(sep).join('/')
+  while (queue.length && paths.length < maxFiles && dirs < maxDirs) {
     if (Date.now() - start > deadlineMs) break
-    const dir = stack.pop()!
+    const dir = queue.shift()!
     dirs++
     let entries: import('node:fs').Dirent[]
     try { entries = await readdir(dir, { withFileTypes: true }) } catch { continue }
     for (const e of entries) {
-      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) stack.push(join(dir, e.name)) }
-      else { files.push(relative(root, join(dir, e.name)).split(sep).join('/')); if (files.length >= maxFiles) break }
+      const full = join(dir, e.name)
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name)) continue
+        paths.push(rel(full) + '/')   // dir marker → folder shows even if empty/truncated
+        queue.push(full)
+      } else {
+        paths.push(rel(full)); if (paths.length >= maxFiles) break
+      }
     }
   }
-  return files
+  return paths
 }
 
 export function buildTree(files: string[], changes: ChangeItem[] = []): TreeNode[] {
   const chg = new Map(changes.map(c => [c.path, c.type]))
   const root: TreeNode[] = []
-  for (const file of files) {
-    const parts = file.split('/').filter(Boolean)
+  for (const raw of files) {
+    // A trailing '/' marks a directory path (emitted by walkDir so empty folders still show); plain
+    // paths (git ls-files output, or files) have no trailing slash and their last segment is a file.
+    const isDirPath = raw.endsWith('/')
+    const parts = raw.split('/').filter(Boolean)
     let level = root
     let prefix = ''
     parts.forEach((part, i) => {
       prefix = prefix ? `${prefix}/${part}` : part
-      const isFile = i === parts.length - 1
+      const isFile = i === parts.length - 1 && !isDirPath
       let node = level.find(n => n.name === part && (isFile ? n.type === 'file' : n.type === 'dir'))
       if (!node) {
         node = isFile
