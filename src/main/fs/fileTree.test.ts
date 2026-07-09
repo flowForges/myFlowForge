@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildTree, readTree } from './fileTree'
+import { git } from '../git/gitRunner'
 import type { ChangeItem } from '@shared/types'
 
 describe('buildTree', () => {
@@ -67,6 +68,26 @@ describe('readTree shows every project folder (walkDir BFS + dir markers)', () =
     const projD = tree.find(n => n.name === 'projD')!
     expect(projD.type).toBe('dir')
     expect((projD.children ?? []).some(n => n.name === 'node_modules')).toBe(false)
+  })
+})
+
+describe('readTree tags git-repo folders with their branch', () => {
+  let dir: string
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'ftree-branch-')) })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('a subfolder that is a git repo gets node.branch; a plain folder does not', async () => {
+    // workspace root (not a repo) with a project subfolder that IS a git repo on branch feat/x
+    const proj = join(dir, 'myproj')
+    await git(['init', '-b', 'feat/x', proj], { cwd: dir })
+    writeFileSync(join(proj, 'a.ts'), 'export {}')
+    // a plain (non-git) sibling folder
+    mkdirSync(join(dir, 'notes'), { recursive: true })
+    writeFileSync(join(dir, 'notes', 'x.md'), '# x')
+
+    const tree = await readTree(dir)
+    expect(tree.find(n => n.name === 'myproj')?.branch).toBe('feat/x')
+    expect(tree.find(n => n.name === 'notes')?.branch).toBeUndefined()
   })
 })
 

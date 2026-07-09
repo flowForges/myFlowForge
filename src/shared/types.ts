@@ -40,7 +40,7 @@ export type ChangeType = 'A' | 'M' | 'D'
 export interface ChangeItem { path: string; type: ChangeType; add: number; del: number }
 export interface DiffLine { kind: 'add' | 'del' | 'ctx'; ln: number; text: string }
 export interface FilePreview { text: string; lang: string }
-export interface TreeNode { type: 'dir' | 'file'; name: string; path: string; children?: TreeNode[]; chg?: ChangeType }
+export interface TreeNode { type: 'dir' | 'file'; name: string; path: string; children?: TreeNode[]; chg?: ChangeType; branch?: string }
 export interface ChangesEvent { cwd: string; changes: ChangeItem[] }
 // Full-text (content) search: one hit per matched line, path relative to the search root.
 export interface ContentHit { file: string; line: number; preview: string }

@@ -315,16 +315,6 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     }
   }, [aggregate, wsPath, projectCwds, wt])
 
-  // Current project's git branch (baseline, e.g. "main") — shown as a chip in the single-project file
-  // tree. Aggregate mode spans multiple repos, so no single branch.
-  const [treeBranch, setTreeBranch] = useState('')
-  useEffect(() => {
-    if (aggregate || !selected) { setTreeBranch(''); return }
-    let live = true
-    void window.forge.gitBranch?.(selected).then((b: string) => { if (live) setTreeBranch(b || '') })
-    return () => { live = false }
-  }, [aggregate, selected])
-
   const treeForPane = aggregate ? aggTree : wt.tree
   // Root cwd for file-tree content (full-text) search: the workspace root in aggregate mode
   // (its tree paths are relative to it), else the selected single project.
@@ -857,7 +847,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             <div className={`insp-pane${activeTab === 'files' ? ' on' : ''}`} id="pane-files">
               {activeTab === 'files' && <>
                 <ProjectPicker projects={projects} activeCwd={selected} onSelect={setActiveCwd} />
-                <FileTreePane tree={treeForPane} onOpen={openBrowse} selected={browse ? preview?.file : undefined} searchRoot={treeSearchRoot} onRefresh={refreshInspector} branch={aggregate ? "" : treeBranch} />
+                <FileTreePane tree={treeForPane} onOpen={openBrowse} selected={browse ? preview?.file : undefined} searchRoot={treeSearchRoot} onRefresh={refreshInspector} />
               </>}
             </div>
           </div>
@@ -893,7 +883,6 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           searchRoot={treeSearchRoot}
           onOpenChange={openChangeBrowse}
           onRefresh={refreshInspector}
-          branch={aggregate ? '' : treeBranch}
         />
       )}
     </div>
