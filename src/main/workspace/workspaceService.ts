@@ -38,10 +38,12 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
     workflowId: opts.workflowId,
     stages: opts.stages.map(s => ({ key: s.key as StageKey, provider: s.provider, model: s.model, ...(s.prompt ? { prompt: s.prompt } : {}) })),
     projects: opts.projects.map(sel => {
-      const proj = byId.get(sel.repoId)!
-      // Default name to repoId when the known project has no display name — keeps persisted records
-      // from ever storing name:'' (which would later break per-project cwd + agent labels).
-      return { repoId: sel.repoId, name: proj.name || sel.repoId, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '' }
+      // buildWorkspaceRecord runs BEFORE the provision loop's "未知项目" guard, so a selected project
+      // that isn't in the known map (e.g. projects.json missing, or restoring a partial whose project
+      // is no longer registered) must NOT crash here with `undefined.name` — fall back to the repoId.
+      // The provision loop then throws the clear 未知项目 error.
+      const proj = byId.get(sel.repoId)
+      return { repoId: sel.repoId, name: proj?.name || sel.repoId, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '' }
     }),
     status: 'idle',
     plugins: opts.plugins ?? [],

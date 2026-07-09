@@ -75,7 +75,7 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   for (const sel of opts.projects) {
     throwIfCancelled()
     const proj = byId.get(sel.repoId)
-    if (!proj) throw new Error(`未知项目: ${sel.repoId}`)
+    if (!proj) throw new Error(`项目「${sel.repoId}」未注册,无法拉取 —— 请在向导的「项目」步骤重新添加该项目(填写仓库地址)后再创建。`)
     const name = proj.name || sel.repoId
     emit({ type: 'provision:start', project: name, index, total })
     let worktreePath: string

@@ -194,6 +194,22 @@ describe('createWorkspace', () => {
   })
 })
 
+describe('buildWorkspaceRecord', () => {
+  it('does not throw when a selected project is not in the known map (falls back to repoId as name)', async () => {
+    const { buildWorkspaceRecord } = await import('./workspaceService')
+    // byId is EMPTY (e.g. projects.json missing / restoring a partial whose project is unregistered) —
+    // buildWorkspaceRecord ran before the provision loop's guard, so an unguarded byId.get(...)!.name
+    // crashed the whole create with a raw TypeError.
+    const rec = buildWorkspaceRecord(
+      { name: 'w', path: '/ws', workflowId: 'standard',
+        stages: [{ key: 'develop', provider: 'claude', model: 'm' }],
+        projects: [{ repoId: 'ghost', branch: 'main' }] },
+      new Map(),
+    )
+    expect(rec.projects).toEqual([{ repoId: 'ghost', name: 'ghost', branch: 'main', provider: '', model: '' }])
+  })
+})
+
 describe('editWorkspace', () => {
   it('rewrites stages/projects/name in place without re-adding existing worktrees', async () => {
     const src = join(root, 'srcA'); await makeSourceRepo(src)
