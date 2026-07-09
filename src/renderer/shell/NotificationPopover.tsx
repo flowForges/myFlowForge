@@ -10,6 +10,7 @@ export interface NotificationPopoverProps {
   onToggle: () => void
   onOpenUpgrade: () => void
   onMarkAllRead: () => void
+  onClearAll: () => void
   onSelect?: (n: Notif, index: number) => void
 }
 
@@ -21,6 +22,7 @@ export function NotificationPopover({
   onToggle,
   onOpenUpgrade,
   onMarkAllRead,
+  onClearAll,
   onSelect,
 }: NotificationPopoverProps) {
   const ref = useRef<HTMLDivElement>(null)
@@ -56,6 +58,7 @@ export function NotificationPopover({
           <h3>通知</h3>
           <span className="nh-count">{unread ? unread + ' 条未读' : '已全部读完'}</span>
           <button className="nh-act" onClick={onMarkAllRead}>全部已读</button>
+          {notifs.length > 0 && <button className="nh-act" onClick={onClearAll}>清空</button>}
         </div>
         <div>
           {updateAvailable && (

@@ -476,6 +476,7 @@ export function App() {
         onToggleNotif={() => setNotifOpen(o => !o)}
         onOpenUpgrade={() => { setNotifOpen(false); setUpgradeOpen(true) }}
         onMarkAllRead={() => setNotifs(markAllRead(notifs))}
+        onClearAllNotif={() => setNotifs([])}
         onSelectNotif={(n, i) => {
           // Every notif is clickable to mark it read. Then navigate to its source: a workspace (its
           // chat/session area) when known — resolving a name-only route via the registry — or a settings
