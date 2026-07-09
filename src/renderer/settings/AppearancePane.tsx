@@ -29,12 +29,18 @@ const THEMES: { key: Appearance['theme']; label: string }[] = [
   { key: 'auto', label: '跟随系统' }
 ]
 
+// Ordered roughly around the hue wheel so the swatch row reads as a spectrum.
 const ACCENTS: { key: Appearance['accent']; label: string; color: string }[] = [
   { key: 'blue', label: '电光蓝', color: 'oklch(72% .15 235)' },
+  { key: 'indigo', label: '靛蓝', color: 'oklch(68% .16 278)' },
   { key: 'violet', label: '紫罗兰', color: 'oklch(72% .16 300)' },
-  { key: 'emerald', label: '翡翠绿', color: 'oklch(74% .15 160)' },
-  { key: 'amber', label: '琥珀', color: 'oklch(80% .14 75)' },
+  { key: 'magenta', label: '品红', color: 'oklch(72% .19 340)' },
   { key: 'rose', label: '玫红', color: 'oklch(70% .17 12)' },
+  { key: 'orange', label: '橙', color: 'oklch(74% .16 55)' },
+  { key: 'amber', label: '琥珀', color: 'oklch(80% .14 75)' },
+  { key: 'lime', label: '青柠', color: 'oklch(82% .17 128)' },
+  { key: 'emerald', label: '翡翠绿', color: 'oklch(74% .15 160)' },
+  { key: 'teal', label: '蓝绿', color: 'oklch(76% .12 190)' },
   { key: 'cyan', label: '青蓝', color: 'oklch(76% .12 205)' },
   { key: 'graphite', label: '石墨灰', color: 'oklch(78% .02 250)' },
 ]

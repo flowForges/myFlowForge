@@ -56,7 +56,7 @@ export const STAGE_PROMPTS: Record<StageKey, string> = {
 
 export const AppearanceSchema = z.object({
   theme: z.enum(['dark', 'light', 'auto']),
-  accent: z.enum(['blue', 'violet', 'emerald', 'amber', 'rose', 'cyan', 'graphite']).default('blue'),
+  accent: z.enum(['blue', 'violet', 'indigo', 'cyan', 'teal', 'emerald', 'lime', 'amber', 'orange', 'rose', 'magenta', 'graphite']).default('blue'),
   vibrancy: z.boolean(),
   glass: z.boolean().default(false),
   // Whole-window transparency via BrowserWindow.setOpacity — reliable + live (no restart), unlike the

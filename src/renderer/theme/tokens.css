@@ -36,7 +36,17 @@
 :root[data-accent="rose"]    { --accent: oklch(70% .17 12);  --accent-dim: oklch(70% .17 12/.16);  --run: oklch(71% .15 12); }
 :root[data-accent="cyan"]    { --accent: oklch(76% .12 205); --accent-dim: oklch(76% .12 205/.16); --run: oklch(76% .12 205); }
 :root[data-accent="graphite"]{ --accent: oklch(78% .02 250); --accent-dim: oklch(78% .02 250/.18); --run: oklch(78% .02 250); }
+:root[data-accent="indigo"]  { --accent: oklch(68% .16 278); --accent-dim: oklch(68% .16 278/.16); --run: oklch(69% .15 278); }
+:root[data-accent="teal"]    { --accent: oklch(76% .12 190); --accent-dim: oklch(76% .12 190/.16); --run: oklch(76% .12 190); }
+:root[data-accent="lime"]    { --accent: oklch(82% .17 128); --accent-dim: oklch(82% .17 128/.16); --run: oklch(82% .16 128); --on-accent: oklch(25% .05 128); }
+:root[data-accent="orange"]  { --accent: oklch(74% .16 55);  --accent-dim: oklch(74% .16 55/.16);  --run: oklch(74% .15 55);  --on-accent: oklch(22% .04 55); }
+:root[data-accent="magenta"] { --accent: oklch(72% .19 340); --accent-dim: oklch(72% .19 340/.16); --run: oklch(72% .17 340); }
 [data-theme="light"][data-accent="violet"]  { --accent: oklch(54% .2 300);  --accent-dim: oklch(54% .2 300/.12);  --run: oklch(54% .19 300); }
+[data-theme="light"][data-accent="indigo"]  { --accent: oklch(48% .2 278);  --accent-dim: oklch(48% .2 278/.12);  --run: oklch(48% .19 278); }
+[data-theme="light"][data-accent="teal"]    { --accent: oklch(52% .12 190); --accent-dim: oklch(52% .12 190/.12); --run: oklch(52% .12 190); }
+[data-theme="light"][data-accent="lime"]    { --accent: oklch(58% .16 128); --accent-dim: oklch(58% .16 128/.12); --run: oklch(58% .16 128); --on-accent: oklch(99% 0 0); }
+[data-theme="light"][data-accent="orange"]  { --accent: oklch(60% .17 55);  --accent-dim: oklch(60% .17 55/.12);  --run: oklch(60% .16 55);  --on-accent: oklch(99% 0 0); }
+[data-theme="light"][data-accent="magenta"] { --accent: oklch(56% .23 340); --accent-dim: oklch(56% .23 340/.12); --run: oklch(56% .21 340); }
 [data-theme="light"][data-accent="emerald"] { --accent: oklch(52% .15 160); --accent-dim: oklch(52% .15 160/.12); --run: oklch(52% .15 160); }
 [data-theme="light"][data-accent="amber"]   { --accent: oklch(60% .15 70);  --accent-dim: oklch(60% .15 70/.12);  --run: oklch(60% .15 70); --on-accent: oklch(99% 0 0); }
 [data-theme="light"][data-accent="rose"]    { --accent: oklch(56% .2 14);   --accent-dim: oklch(56% .2 14/.12);   --run: oklch(56% .19 14); }
