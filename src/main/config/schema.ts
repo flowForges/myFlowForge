@@ -262,6 +262,12 @@ export const ProviderConfigSchema = z.object({
   env: z.record(z.string(), z.string()).default({}),
   modelsCache: z.array(ModelSchema).default([]),
   modelsFetchedAt: z.number().default(0),
+  // Last-good DETECTION snapshot, persisted so agents survive an app upgrade/relaunch and a flaky/slow
+  // cold-start probe doesn't make them vanish. Only an explicit 重新检测 (force) clears a stale one.
+  detectedInstalled: z.boolean().optional(),
+  detectedBinPath: z.string().optional(),
+  detectedVersion: z.string().optional(),
+  detectedAt: z.number().optional(),
 })
 // A user-added agent: an arbitrary CLI invoked per a simple args template.
 export const CustomAgentSchema = z.object({

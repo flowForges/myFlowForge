@@ -215,11 +215,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     writeHookLibrary({ hooks })
     return readHookLibrary().hooks
   })
-  // Cached: concurrent callers share one probe, results live 60s. `force` (重新检测) re-probes.
+  // Cached: concurrent callers share one probe, results live 60s. `force` (重新检测) re-probes AND
+  // honors the result (trustPersisted:false) so it can clear a genuinely-gone CLI; a normal detect keeps
+  // last-known-good agents sticky so a slow cold-start probe never makes them vanish.
   ipcMain.handle(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>
-    cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: opts?.force === true }))
-  // Registry just changed (bin override / custom agent add-remove) — must bypass the cache.
-  const redetect = () => cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: true })
+    cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true }))
+  // Registry just changed (bin override / custom agent add-remove) — bypass the cache but stay sticky
+  // (trustPersisted) so a transient probe failure during the rebuild doesn't wipe known-good agents.
+  const redetect = () => cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: true, trustPersisted: true })
   ipcMain.handle(CH.agentsGetConfig, () => readAgentsConfig())
   ipcMain.handle(CH.agentsSetBin, (_e, a: { id: string; bin: string }) => {
     const cfg = readAgentsConfig()

@@ -328,3 +328,35 @@ describe('detectProviders — background refresh scheduling', () => {
     expect(slowRefresh).toHaveBeenCalledOnce()
   })
 })
+
+describe('sticky detection (persist last-good, survive flaky/cold probe)', () => {
+  const persistedCfg = (over: Record<string, unknown>) => ({
+    providers: [{ id: 'claude', binOverride: '', env: {}, modelsCache: [], modelsFetchedAt: 0, ...over }],
+    custom: [],
+  })
+
+  it('keeps a previously-detected agent installed when the probe now fails (non-force)', async () => {
+    mockedReadAgentsConfig.mockReturnValue(persistedCfg({ detectedInstalled: true, detectedBinPath: '/x/claude', detectedVersion: '2.1.0' }) as any)
+    const persisted: any[] = []
+    const res = await detectProviders({ claude: fake('claude', 'Claude', false) }, {}, { persist: (u) => persisted.push(...u) })
+    const claude = res.find(r => r.id === 'claude')!
+    expect(claude.installed).toBe(true)     // stayed installed despite the failed probe
+    expect(claude.version).toBe('2.1.0')    // reused persisted version
+    expect(persisted).toEqual([])           // nothing changed → no write
+  })
+
+  it('force detect clears a sticky agent the probe confirms is gone', async () => {
+    mockedReadAgentsConfig.mockReturnValue(persistedCfg({ detectedInstalled: true, detectedVersion: '2.1.0' }) as any)
+    const persisted: any[] = []
+    const res = await detectProviders({ claude: fake('claude', 'Claude', false) }, {}, { trustPersisted: false, persist: (u) => persisted.push(...u) })
+    expect(res.find(r => r.id === 'claude')!.installed).toBe(false)
+    expect(persisted).toEqual([{ id: 'claude', installed: false, binPath: '', version: '', at: expect.any(Number) }])
+  })
+
+  it('persists a freshly-detected agent as installed', async () => {
+    mockedReadAgentsConfig.mockReturnValue({ providers: [], custom: [] } as any)
+    const persisted: any[] = []
+    await detectProviders({ claude: fake('claude', 'Claude', true) }, {}, { persist: (u) => persisted.push(...u) })
+    expect(persisted[0]).toMatchObject({ id: 'claude', installed: true })
+  })
+})

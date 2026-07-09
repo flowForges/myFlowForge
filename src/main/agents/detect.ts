@@ -3,11 +3,14 @@ import { isAbsolute } from 'node:path'
 import type { AgentProvider } from './types'
 import type { ProviderInfo } from '@shared/types'
 import { BUILTIN_IDS as CATALOG_BUILTIN_IDS, getBuiltinProvider } from '@shared/providerCatalog'
-import { readAgentsConfig } from '../config/store'
+import { readAgentsConfig, writeAgentsConfig } from '../config/store'
 import { refreshProviderModels } from './refreshModels'
 import { probeCli, type CliProbe } from './cliVersion'
 
-const DEFAULT_DETECT_TIMEOUT_MS = 5000
+// Agent CLIs (claude/codex) are Node wrappers whose FIRST `--version` after a cold boot can take
+// several seconds (Gatekeeper check + node startup). 5s used to time out → a working CLI got marked
+// "not installed" and vanished from the UI. Give the probe room.
+const DEFAULT_DETECT_TIMEOUT_MS = 15000
 const STALE_TTL_MS = 7 * 24 * 3600 * 1000   // 7 days
 const BUILTIN_IDS = new Set(CATALOG_BUILTIN_IDS)
 
@@ -36,6 +39,12 @@ export interface DetectOptions {
   /** Injectable for tests: called when a background refresh should be scheduled instead of the real refresh. */
   scheduleRefresh?: (providerId: string, providers: Record<string, AgentProvider>, env: NodeJS.ProcessEnv) => void
   broadcast?: () => void
+  // When true (the default, i.e. NOT an explicit 重新检测), a provider that was previously detected as
+  // installed stays installed even if this probe fails — so a slow/flaky cold-start probe can't wipe a
+  // known-good agent. A force detect passes false to honor the probe and clear genuinely-gone CLIs.
+  trustPersisted?: boolean
+  // Injectable for tests: persist the detection snapshot. Defaults to writing agents.json.
+  persist?: (updates: { id: string; installed: boolean; binPath: string; version: string; at: number }[]) => void
 }
 
 export async function detectProviders(
@@ -49,8 +58,10 @@ export async function detectProviders(
     : timeoutMsOrOptions
   const timeoutMs = opts.timeoutMs ?? DEFAULT_DETECT_TIMEOUT_MS
   const nowMs = opts.nowMs ?? Date.now()
+  const trustPersisted = opts.trustPersisted ?? true
 
   const agentsCfg = readAgentsConfig()
+  const persist = opts.persist ?? defaultPersist
 
   const defaultSchedule = (providerId: string, providers: Record<string, AgentProvider>, provEnv: NodeJS.ProcessEnv) => {
     void refreshProviderModels(providerId, providers, provEnv).then(() => opts.broadcast?.())
@@ -58,40 +69,42 @@ export async function detectProviders(
   const scheduleRefresh = opts.scheduleRefresh ?? defaultSchedule
 
   const NOT_INSTALLED: CliProbe = { installed: false, version: '' }
-  return Promise.all(Object.values(registry).map(async (p) => {
+  const persistUpdates: { id: string; installed: boolean; binPath: string; version: string; at: number }[] = []
+  const infos = await Promise.all(Object.values(registry).map(async (p) => {
+    const provCfg = agentsCfg.providers.find(c => c.id === p.id)
     // Single `--version` spawn per bin gives both installed + version (all current providers'
     // detect() is exactly `execa(bin, ['--version'])`, and getCliVersion used to re-spawn it).
     // If the probe says "not installed", still fall back to p.detect() so providers with
     // custom detection logic (or bin-less test fakes) keep working.
     const probe = p.bin ? await withTimeout(probeCli(p.bin, env), timeoutMs, NOT_INSTALLED) : NOT_INSTALLED
-    const installed = probe.installed || await withTimeout(p.detect(), timeoutMs, false)
+    const probeInstalled = probe.installed || await withTimeout(p.detect(), timeoutMs, false)
+
+    // Sticky detection: keep a previously-detected agent when this probe fails and we're not force-
+    // detecting, so a cold-start timeout / transient failure can't make it disappear.
+    const wasInstalled = provCfg?.detectedInstalled ?? false
+    const installed = probeInstalled || (trustPersisted && wasInstalled)
+
+    if (probeInstalled) {
+      const binPath = await resolveBinPath(p.bin, env)
+      persistUpdates.push({ id: p.id, installed: true, binPath, version: probe.version, at: nowMs })
+    } else if (!trustPersisted && wasInstalled) {
+      // Explicit 重新检测 confirmed it's gone → clear the sticky flag.
+      persistUpdates.push({ id: p.id, installed: false, binPath: '', version: '', at: nowMs })
+    }
 
     let models: { id: string; label: string; description?: string }[] = []
-
     if (installed) {
-      // Check for a non-empty cache in agents.json
-      const provCfg = agentsCfg.providers.find(c => c.id === p.id)
       const cachedModels = provCfg?.modelsCache ?? []
       const fetchedAt = provCfg?.modelsFetchedAt ?? 0
-
-      if (cachedModels.length > 0) {
-        // Use cache
-        models = cachedModels
-      } else {
-        // Fall back to static catalog default
-        models = await p.listModels(env).catch(() => [])
-      }
-
-      // If provider supports liveModels AND (cache is empty OR cache is stale) → schedule background refresh
+      models = cachedModels.length > 0 ? cachedModels : await p.listModels(env).catch(() => [])
       if (p.capabilities.liveModels && (cachedModels.length === 0 || nowMs - fetchedAt > STALE_TTL_MS)) {
         scheduleRefresh(p.id, registry, env)
       }
     }
 
-    const binPath = installed ? await resolveBinPath(p.bin, env) : (p.bin ?? '')
-    // Detected CLI version (e.g. claude 2.1.x / codex-cli 0.139.0) — shown per agent in settings.
-    // Reuses the probe's output instead of spawning `--version` a second time.
-    const version = installed ? probe.version : ''
+    // Prefer the fresh probe; fall back to the persisted snapshot when we kept it sticky.
+    const binPath = probeInstalled ? await resolveBinPath(p.bin, env) : (installed ? (provCfg?.detectedBinPath || p.bin || '') : (p.bin ?? ''))
+    const version = probeInstalled ? probe.version : (installed ? (provCfg?.detectedVersion ?? '') : '')
     const meta = getBuiltinProvider(p.id)
     return {
       id: p.id, displayName: p.displayName, installed, models, bin: p.bin ?? '', binPath,
@@ -100,4 +113,24 @@ export async function detectProviders(
       ...(version ? { version } : {}),
     }
   }))
+  if (persistUpdates.length) persist(persistUpdates)
+  return infos
+}
+
+// Merge detection snapshots into agents.json (creating provider entries as needed). Only writes when
+// something actually changed, to avoid churning the file on every detect.
+function defaultPersist(updates: { id: string; installed: boolean; binPath: string; version: string; at: number }[]): void {
+  try {
+    const cfg = readAgentsConfig()
+    let changed = false
+    for (const u of updates) {
+      let pc = cfg.providers.find(c => c.id === u.id)
+      if (!pc) { pc = { id: u.id, binOverride: '', env: {}, modelsCache: [], modelsFetchedAt: 0 }; cfg.providers.push(pc) }
+      if (pc.detectedInstalled !== u.installed || pc.detectedVersion !== u.version || pc.detectedBinPath !== u.binPath) {
+        pc.detectedInstalled = u.installed; pc.detectedBinPath = u.binPath; pc.detectedVersion = u.version; pc.detectedAt = u.at
+        changed = true
+      }
+    }
+    if (changed) writeAgentsConfig(cfg)
+  } catch { /* persistence is best-effort */ }
 }
