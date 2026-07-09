@@ -66,6 +66,9 @@ interface Props {
   running?: boolean
   /** Called when the user clicks the stop button or presses Escape while running. */
   onStop?: () => void
+  /** True once the running turn has produced assistant output. Stopping BEFORE any output restores the
+      sent message to the box (edit/resend); stopping AFTER output does not (changes may be irreversible). */
+  turnHasOutput?: boolean
   onSend: (m: { agent: string; agentLabel: string; model: string; text: string; attachments: Attachment[]; permissionMode: PermissionMode }) => void
   onPaste?: (f: { name: string; dataBase64: string }) => Promise<Attachment | null>
   // When set (with a fresh nonce), fills the textarea with a starter prompt (快捷指令 chips).
@@ -77,8 +80,16 @@ interface Props {
   dynamicCommands?: MenuCommand[]
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands }: Props) {
   const [text, setText] = useState('')
+  // The last message we sent, so stopping the turn BEFORE the AI produced any output restores it to the
+  // box for editing/resending (the user would otherwise retype/copy it back). Once the AI has output —
+  // and possibly executed irreversible changes — we don't restore. Also skip if the box isn't empty.
+  const lastSentRef = useRef('')
+  const handleStop = () => {
+    onStop?.()
+    if (!turnHasOutput && !text.trim() && lastSentRef.current) setText(lastSentRef.current)
+  }
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [localAgentId, setLocalAgentId] = useState<string>('')
   const [localModelId, setLocalModelId] = useState<string>('')
@@ -184,6 +195,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     const t = text.trim()
     if (!t || disabled || !agent) return
     onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode })
+    lastSentRef.current = t
     setText('')
     setAttachments([])
     // Reset to natural single-row height (matches the prototype's `autosize()` after
@@ -301,7 +313,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
                 e.preventDefault(); chooseSlash(slashCmds[slashActive]); return
               }
             }
-            if (e.key === 'Escape' && running) { e.preventDefault(); onStop?.(); return }
+            if (e.key === 'Escape' && running) { e.preventDefault(); handleStop(); return }
             if (e.key !== 'Enter') return
             // Never send mid-IME-composition (Chinese/Japanese/etc.) — that Enter just
             // commits the candidate. Sending here would fire half-typed pinyin.
@@ -419,7 +431,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           </button>
           <div className="spacer" />
           {running && !text.trim() ? (
-            <button className="send stop" id="stopBtn" title="停止 (Esc)" onClick={() => onStop?.()}>{STOP_ICON}</button>
+            <button className="send stop" id="stopBtn" title="停止 (Esc)" onClick={handleStop}>{STOP_ICON}</button>
           ) : (
             <button className={`send${busy ? ' queueing' : ''}`} id="sendBtn" title={busy ? '执行中 · 发送将进入队列' : '发送 (回车)'} disabled={disabled || readOnly} onClick={send}>{SEND_ARROW}</button>
           )}
