@@ -14,8 +14,15 @@ const DOTS_ICON = (
 
 // 工作区行「更多操作」下拉 —— 把原来一排容易误点的图标按钮收进一个 ⋯ 菜单(图标+文字)。
 // 复用 UsagePopover 的「点击外部关闭」惯用法。菜单项点击后先关闭再执行,确认弹层由上层负责。
-export function WsMenu({ items }: { items: WsMenuItem[] }) {
-  const [open, setOpen] = useState(false)
+// `open`/`onOpenChange` optionally control the menu from the parent (e.g. a right-click on the row
+// opens it). Uncontrolled (own state) when omitted.
+export function WsMenu({ items, open: openProp, onOpenChange }: { items: WsMenuItem[]; open?: boolean; onOpenChange?: (o: boolean) => void }) {
+  const [openLocal, setOpenLocal] = useState(false)
+  const open = openProp ?? openLocal
+  const setOpen = (o: boolean | ((p: boolean) => boolean)) => {
+    const next = typeof o === 'function' ? o(open) : o
+    if (onOpenChange) onOpenChange(next); else setOpenLocal(next)
+  }
   const ref = useRef<HTMLSpanElement>(null)
 
   useEffect(() => {

@@ -153,6 +153,8 @@
   display: flex; align-items: center; gap: 5px; max-width: 100%; font-size: 13px; font-weight: 500; color: var(--fg-2);
 }
 .ws-name-txt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-name-edit { min-width: 0; flex: 1 1 auto; border: none; outline: none; background: transparent;
+  color: var(--fg); font: inherit; padding: 0; margin: 0; }
 /* 运行中小药丸(名字右侧) */
 .ws-run-pill {
   flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;

@@ -35,6 +35,8 @@ export interface SidebarProps {
   onNew: () => void
   onPin?: (id: string, pinned: boolean) => void
   onArchive?: (id: string) => void
+  onEdit?: (id: string) => void
+  onRename?: (id: string, name: string) => void
   onRestore?: (id: string) => void
   onDelete?: (id: string) => void
   onReveal?: (id: string) => void
@@ -96,6 +98,12 @@ const RESTORE_ICON = (
 const TRASH_ICON = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6M14 11v6M9 6V4h6v2" /></svg>
 )
+const RENAME_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 20h4l10.5-10.5a1.5 1.5 0 0 0-4-4L4 16v4z" /><path d="M13.5 6.5l4 4" /></svg>
+)
+const EDIT_ICON = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></svg>
+)
 
 function avaStClass(status: AgentState): string {
   if (status === 'run') return 'st run'
@@ -118,6 +126,8 @@ interface GroupSectionProps {
   onSelect: (id: string) => void
   onPin?: (id: string, pinned: boolean) => void
   onArchive?: (id: string) => void
+  onEdit?: (id: string) => void
+  onRename?: (id: string, name: string) => void
   onRestore?: (id: string) => void
   onDelete?: (id: string) => void
   onReveal?: (id: string) => void
@@ -134,10 +144,20 @@ interface GroupSectionProps {
   unread?: ReadonlySet<string>
 }
 
-function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSelect, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, sessions = [], activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand, unread = EMPTY_UNREAD }: GroupSectionProps) {
+function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSelect, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, onEdit, onRename, sessions = [], activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand, unread = EMPTY_UNREAD }: GroupSectionProps) {
   const [open, setOpen] = useState(true)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
+  // Workspace alias rename (inline) + which workspace's ⋯ menu is open (also opened via right-click).
+  const [editingWsId, setEditingWsId] = useState<string | null>(null)
+  const [draftWsName, setDraftWsName] = useState('')
+  const [menuForId, setMenuForId] = useState<string | null>(null)
+  const beginWsRename = (id: string, name: string) => { setMenuForId(null); setEditingWsId(id); setDraftWsName(name) }
+  const commitWsRename = (id: string, prev: string) => {
+    const next = draftWsName.replace(/\s+/g, ' ').trim()
+    setEditingWsId(null)
+    if (next && next !== prev) onRename?.(id, next)
+  }
   // Drag-reorder state (only used when `draggable`): the row being dragged and the one hovered over.
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
@@ -183,6 +203,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
               <button
                 className={`ws-item${isOn ? ' on' : ''}${item.archived ? ' archived' : ''}${running ? ' is-running' : ''}${expandedIds?.has(item.id) ? ' expanded' : ''}${draggable && dragId === item.id ? ' dragging' : ''}${draggable && overId === item.id && dragId !== item.id ? ' drag-over' : ''}`}
                 onClick={() => { onSelect(item.id); onToggleExpand?.(item.id) }}
+                onContextMenu={e => { e.preventDefault(); setMenuForId(item.id) }}
                 draggable={draggable || undefined}
                 onDragStart={draggable ? e => { setDragId(item.id); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.id) } : undefined}
                 onDragOver={draggable ? e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overId !== item.id) setOverId(item.id) } : undefined}
@@ -198,7 +219,22 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                 {/* meta */}
                 <span className="ws-meta">
                   <span className="ws-name">
-                    <span className="ws-name-txt">{item.name}</span>
+                    {editingWsId === item.id ? (
+                      <input
+                        className="ws-name-edit"
+                        value={draftWsName}
+                        autoFocus
+                        onClick={e => e.stopPropagation()}
+                        onChange={e => setDraftWsName(e.target.value)}
+                        onBlur={() => commitWsRename(item.id, item.name)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') { e.preventDefault(); commitWsRename(item.id, item.name) }
+                          if (e.key === 'Escape') { e.preventDefault(); setEditingWsId(null) }
+                        }}
+                      />
+                    ) : (
+                      <span className="ws-name-txt" onDoubleClick={e => { e.stopPropagation(); if (!item.archived && onRename) beginWsRename(item.id, item.name) }}>{item.name}</span>
+                    )}
                     {item.imported && <span className="ws-imp-ico" title="本机导入的工作区">{IMPORT_ICON}</span>}
                     {running && <span className="ws-run-pill">运行中</span>}
                     {/* unread dot at the workspace level, only while its session list is collapsed */}
@@ -214,13 +250,16 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                 <span className="ws-actions">
                   {(() => {
                     // 收进「更多操作」下拉,替代原来一排容易误点的图标(图标+文字);归档/移除的确认弹层由上层负责。
+                    // 也可对工作区行右键呼出本菜单。
                     const menu: WsMenuItem[] = []
+                    if (!item.archived && onRename) menu.push({ key: 'rename', label: '重命名', icon: RENAME_ICON, onClick: () => beginWsRename(item.id, item.name) })
+                    if (!item.archived && onEdit) menu.push({ key: 'edit', label: '编辑工作区', icon: EDIT_ICON, onClick: () => onEdit(item.id) })
                     if (onReveal) menu.push({ key: 'reveal', label: REVEAL_LABEL, icon: FOLDER_ICON, onClick: () => onReveal(item.id) })
                     if (!item.archived && onArchive) menu.push({ key: 'archive', label: '归档工作区', icon: ARCHIVE_ICON, onClick: () => onArchive(item.id) })
                     if (item.archived && onRestore) menu.push({ key: 'restore', label: '恢复工作区', icon: RESTORE_ICON, onClick: () => onRestore(item.id) })
                     if (!item.archived && onRemove) menu.push({ key: 'remove', label: '从列表移除(保留文件)', icon: REMOVE_ICON, onClick: () => onRemove(item.id) })
                     if (onDelete) menu.push({ key: 'delete', label: '永久删除(连同文件)', icon: TRASH_ICON, danger: true, onClick: () => onDelete(item.id) })
-                    return menu.length ? <WsMenu items={menu} /> : null
+                    return menu.length ? <WsMenu items={menu} open={menuForId === item.id} onOpenChange={o => setMenuForId(o ? item.id : null)} /> : null
                   })()}
                 </span>
                 {!item.archived && onNewSession && (
@@ -364,7 +403,7 @@ function ArchiveDock({ items, activeId, onSelect, onRestore, onDelete }: Archive
   )
 }
 
-export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand, unread }: SidebarProps) {
+export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onEdit, onRename, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand, unread }: SidebarProps) {
   const sidebarStyle = (!collapsed && width !== undefined)
     ? { flex: `0 0 ${width}px`, width }
     : undefined
@@ -396,6 +435,8 @@ export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew,
             onSelect={onSelect}
             onPin={onPin}
             onArchive={onArchive}
+            onEdit={onEdit}
+            onRename={onRename}
             onRestore={onRestore}
             onDelete={onDelete}
             onReveal={onReveal}

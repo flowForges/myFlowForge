@@ -348,6 +348,14 @@ export function App() {
     if (!ws) return
     setCreateErr(null); setEditing(ws); setWizardOpen(true)
   }
+  // Edit a specific workspace by path (from the sidebar ⋯ / right-click menu), not just the active one.
+  const openEditFor = async (path: string) => {
+    const ws = await window.forge.getWorkspace(path)
+    if (!ws) return
+    setActiveId(path); setCreateErr(null); setEditing(ws); setWizardOpen(true)
+  }
+  // Quick alias rename (no wizard) from the sidebar.
+  const renameWs = (path: string, name: string) => { void window.forge.renameWorkspace?.({ path, name }).then(() => home.reload()) }
 
   // Start the stashed run for a workspace, seeding it with the user's first chat message as the task,
   // then drop the stash so subsequent composer sends fall through to normal chat.
@@ -523,6 +531,8 @@ export function App() {
           onSelect={(id) => { setActiveId(id); setView('ws') }}
           onNew={openWizard}
           onPin={(id, pinned) => { home.setPinned(id, pinned).catch(e => alert(e instanceof Error ? e.message : String(e))) }}
+          onEdit={(id) => void openEditFor(id)}
+          onRename={renameWs}
           onArchive={(id) => setPendingConfirm({ kind: 'archive', id })}
           onRestore={home.restore}
           onDelete={(id) => setPendingDelete(id)}

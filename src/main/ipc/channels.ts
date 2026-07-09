@@ -29,6 +29,7 @@ export const CH = {
   workspaceDiscardPartial: 'workspace:discard-partial',
   workspaceGet: 'workspaces:get',
   workspaceEdit: 'workspaces:edit',
+  workspaceRename: 'workspaces:rename',
   workspaceRun: 'workspaces:run',
   workspaceSetup: 'workspace:setup',
   engineStartRun: 'engine:start-run',

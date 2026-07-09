@@ -102,3 +102,33 @@ describe('Sidebar imported marker', () => {
     expect(container.querySelector('.ws-imp-ico')).toBeTruthy()
   })
 })
+
+describe('Sidebar workspace context menu + rename', () => {
+  const oneWs = () => [{ key: 'g', label: '最近', items: [{ id: '/ws', name: '旧名', sub: '', status: 'wait' as const }] }]
+
+  it('right-click opens the menu with 重命名 / 编辑工作区; edit + rename route out', () => {
+    const onRename = vi.fn(), onEdit = vi.fn()
+    render(<Sidebar groups={oneWs()} activeId="/ws" onSelect={() => {}} onNew={() => {}} collapsed={false} onEdit={onEdit} onRename={onRename} />)
+    fireEvent.contextMenu(screen.getByText('旧名'))
+    expect(screen.getByText('重命名')).toBeTruthy()
+    fireEvent.click(screen.getByText('编辑工作区'))
+    expect(onEdit).toHaveBeenCalledWith('/ws')
+
+    fireEvent.contextMenu(screen.getByText('旧名'))
+    fireEvent.click(screen.getByText('重命名'))
+    const input = screen.getByDisplayValue('旧名')
+    fireEvent.change(input, { target: { value: '新名' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRename).toHaveBeenCalledWith('/ws', '新名')
+  })
+
+  it('double-clicking the name starts an inline alias rename', () => {
+    const onRename = vi.fn()
+    render(<Sidebar groups={oneWs()} activeId="/ws" onSelect={() => {}} onNew={() => {}} collapsed={false} onRename={onRename} />)
+    fireEvent.doubleClick(screen.getByText('旧名'))
+    const input = screen.getByDisplayValue('旧名')
+    fireEvent.change(input, { target: { value: '别名' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRename).toHaveBeenCalledWith('/ws', '别名')
+  })
+})
