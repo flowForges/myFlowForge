@@ -96,8 +96,8 @@ function findDirNode(nodes: TreeNode[], path: string): TreeNode | undefined {
   return node
 }
 
-// Tag each git-repo folder node with its branch (readBranch = baseline/upstream, else current) so the
-// tree can show "folder  main" per repo. Bounded (repos capped in walkDir) and run in parallel.
+// Tag each git-repo folder node with its branch (readBranch = the checked-out branch) so the
+// tree can show "folder  forge/x" per repo. Bounded (repos capped in walkDir) and run in parallel.
 async function attachBranches(tree: TreeNode[], cwd: string, repos: string[], proxy: string): Promise<void> {
   await Promise.all(repos.map(async rel => {
     const node = findDirNode(tree, rel)

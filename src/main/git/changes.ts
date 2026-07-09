@@ -4,19 +4,23 @@ import { git } from './gitRunner'
 import type { ChangeItem, ChangeType, MultiChanges } from '@shared/types'
 export type { MultiChanges }
 
-// The branch to show for a project worktree: the pull baseline (its upstream / origin's default,
-// e.g. "main"), falling back to the checked-out branch. '' when the dir isn't a git repo.
+// The branch to show for a project worktree: the branch you're ACTUALLY on (the checked-out branch,
+// e.g. the "forge/x" set at workspace creation), NOT its upstream. A provisioned worktree has its
+// upstream deliberately pointed at origin/<base> (so 变更 can diff against the pull baseline —
+// readChanges), so reading @{upstream} here would mislabel every workspace folder as "main". '' when
+// the dir isn't a git repo.
 export async function readBranch(cwd: string, proxy = ''): Promise<string> {
+  // `branch --show-current` returns the checked-out branch even on an UNBORN branch (fresh repo, no
+  // commit yet), where `rev-parse --abbrev-ref HEAD` just says "HEAD".
+  try { const r = (await git(['branch', '--show-current'], { cwd, proxy })).trim(); if (r) return r } catch { /* not a repo */ }
+  // Detached HEAD (no current branch): fall back to whatever HEAD points at, then to the remote
+  // default — so the label still shows something meaningful instead of blank.
   for (const args of [
-    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
     ['rev-parse', '--abbrev-ref', 'origin/HEAD'],
   ]) {
-    try { const r = (await git(args, { cwd, proxy })).trim().replace(/^origin\//, ''); if (r) return r } catch { /* try next */ }
+    try { const r = (await git(args, { cwd, proxy })).trim().replace(/^origin\//, ''); if (r && r !== 'HEAD') return r } catch { /* try next */ }
   }
-  // `branch --show-current` returns the branch even on an UNBORN branch (fresh repo, no commit yet),
-  // where `rev-parse --abbrev-ref HEAD` just says "HEAD".
-  try { const r = (await git(['branch', '--show-current'], { cwd, proxy })).trim(); if (r) return r } catch { /* not a repo */ }
-  try { const r = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, proxy })).trim(); if (r && r !== 'HEAD') return r } catch { /* not a repo */ }
   return ''
 }
 

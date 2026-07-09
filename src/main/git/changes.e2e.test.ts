@@ -67,11 +67,13 @@ describe('readChanges vs pull baseline (worktree upstream)', () => {
     expect(byPath).toEqual({ 'app.ts': 'M', 'NOTES.md': 'A', 'README.md': 'D' })
   })
 
-  it('readBranch returns the baseline branch (main) for a provisioned worktree', async () => {
+  it('readBranch returns the CHECKED-OUT branch (not its upstream baseline)', async () => {
     const mirror = join(root, 'mirror', 'p.git'), wt = join(root, 'ws', 'p')
     await ensureMirror({ mirror, repoUrl: origin })
+    // provisioned worktree is on forge/x with upstream set to origin/main — the label must show
+    // forge/x (the branch you're actually on), NOT main (the pull baseline used for diffing).
     await addWorktree({ mirror, worktreePath: wt, branch: 'forge/x', baseBranch: 'main' })
-    expect(await readBranch(wt)).toBe('main')
+    expect(await readBranch(wt)).toBe('forge/x')
     expect(await readBranch(join(root, 'nope'))).toBe('')   // non-git → ''
   })
 
