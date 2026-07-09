@@ -311,6 +311,36 @@ describe('editWorkspace', () => {
     expect(none).toEqual([])
   })
 
+  it('removes a de-selected project: deletes its worktree and drops it from the record', async () => {
+    const srcA = join(root, 'srcF1'); await makeSourceRepo(srcA)
+    const srcB = join(root, 'srcF2'); await makeSourceRepo(srcB)
+    const { createWorkspace, editWorkspace } = await import('./workspaceService')
+    const { readWorkspace } = await import('../config/store')
+    const known = [
+      { id: 'a', name: 'a', repoUrl: srcA, defaultBranch: 'main' },
+      { id: 'b', name: 'b', repoUrl: srcB, defaultBranch: 'main' },
+    ]
+    const wsPath = join(root, 'ws-remove')
+    await createWorkspace({
+      opts: { name: 'w', path: wsPath, workflowId: 'standard',
+        stages: [{ key: 'develop', provider: 'claude', model: 'm' }],
+        projects: [{ repoId: 'a', branch: 'forge/x' }, { repoId: 'b', branch: 'forge/x' }] },
+      knownProjects: known, proxy: ''
+    })
+    expect(existsSync(join(wsPath, 'a', 'README.md'))).toBe(true)
+    expect(existsSync(join(wsPath, 'b', 'README.md'))).toBe(true)
+    // edit down to just project a → b's worktree is deleted and it's dropped from the record
+    await editWorkspace({
+      path: wsPath, knownProjects: known, proxy: '',
+      opts: { name: 'w', path: wsPath, workflowId: 'standard',
+        stages: [{ key: 'develop', provider: 'claude', model: 'm' }],
+        projects: [{ repoId: 'a', branch: 'forge/x' }] },
+    })
+    expect(existsSync(join(wsPath, 'a', 'README.md'))).toBe(true)
+    expect(existsSync(join(wsPath, 'b'))).toBe(false)
+    expect(readWorkspace(wsPath)!.projects.map(p => p.repoId)).toEqual(['a'])
+  })
+
   it('updates the registry name (keyed by path)', async () => {
     const src = join(root, 'srcC'); await makeSourceRepo(src)
     const { createWorkspace, editWorkspace } = await import('./workspaceService')

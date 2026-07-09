@@ -1,7 +1,7 @@
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { mirrorPath, expandTilde } from '../config/paths'
-import { ensureMirror, addWorktree, resolveBaseBranch } from '../git/worktree'
+import { ensureMirror, addWorktree, resolveBaseBranch, removeWorktree } from '../git/worktree'
 import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBranch } from '../config/store'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
 import { STAGE_NAMES, type StageKey, type Project, type Workspace } from '../config/schema'
@@ -93,9 +93,9 @@ export async function createWorkspace(args: {
   return { workspace, startRunOpts }
 }
 
-// Edit an existing workspace's persisted config in place: rename, adjust stages/models, and ADD
-// projects (existing ones are locked in the UI and never removed here). Path is the identity and is
-// not changed. Only newly-added projects get a worktree; existing ones already have theirs on disk.
+// Edit an existing workspace's persisted config in place: rename, adjust stages/models, ADD projects
+// (newly-added ones get a worktree) and REMOVE de-selected projects (their worktree is deleted). Path
+// is the identity and is not changed.
 export async function editWorkspace(args: {
   path: string
   opts: CreateWorkspaceOpts
@@ -112,6 +112,16 @@ export async function editWorkspace(args: {
   if (!existing) throw new Error(`工作区不存在: ${path}`)
 
   const byId = new Map(knownProjects.map(p => [p.id, p]))
+
+  // Remove worktrees for projects the user DE-selected (in the old record, absent from opts). This
+  // deletes the pulled code on disk — the UI gates it behind a confirmation. The bare mirror and other
+  // workspaces' worktrees are untouched. Best-effort: a git failure still falls through to rm the dir.
+  const keepIds = new Set(opts.projects.map(p => p.repoId))
+  for (const gone of existing.projects.filter(p => !keepIds.has(p.repoId))) {
+    const worktreePath = join(path, gone.name)
+    await removeWorktree({ mirror: mirrorPath(gone.repoId), worktreePath }).catch(() => {})
+    if (existsSync(worktreePath)) { try { rmSync(worktreePath, { recursive: true, force: true }) } catch { /* leave it */ } }
+  }
 
   // Provision only projects whose worktree is genuinely missing on disk — not merely absent from the
   // record. A failed pull writes the project into workspace.json but leaves no worktree; keying the

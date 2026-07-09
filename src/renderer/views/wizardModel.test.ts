@@ -76,20 +76,21 @@ describe('buildEditState', () => {
     expect(st.workflowId).toBe('__custom')
   })
 
-  it('marks included projects sel+locked (branch/model backfilled), others selectable', () => {
+  it('marks included projects sel+existing (branch/model backfilled), others selectable', () => {
     const st = buildEditState(ws, knownProjects, baseStages(), 'claude::opus-4.8')
     const p1 = st.projects.find(p => p.repoId === 'p1')!
-    expect(p1).toMatchObject({ sel: true, locked: true, branch: 'feat/x', model: 'codex::gpt-5-codex' })
+    expect(p1).toMatchObject({ sel: true, existing: true, branch: 'feat/x', model: 'codex::gpt-5-codex' })
+    expect(p1.locked).toBeFalsy()   // no longer locked — can be unchecked to remove
     const p2 = st.projects.find(p => p.repoId === 'p2')!
     expect(p2).toMatchObject({ sel: false, branch: '', model: 'claude::opus-4.8' })
-    expect(p2.locked).toBeFalsy()
+    expect(p2.existing).toBeFalsy()
   })
 
-  it('appends ws-only projects (no longer in known list) as locked', () => {
+  it('appends ws-only projects (no longer in known list) as existing', () => {
     const wsX: Workspace = { ...ws, projects: [...ws.projects, { repoId: 'gone', name: 'gone', branch: 'main', provider: 'claude', model: 'opus-4.8' }] }
     const st = buildEditState(wsX, knownProjects, baseStages(), 'claude::opus-4.8')
     const g = st.projects.find(p => p.repoId === 'gone')!
-    expect(g).toMatchObject({ sel: true, locked: true, name: 'gone' })
+    expect(g).toMatchObject({ sel: true, existing: true, name: 'gone' })
   })
 
   it('round-trips through buildCreateOpts back to the persisted config', () => {

@@ -132,6 +132,13 @@
 /* 「已包含」徽标:小号绿色胶囊(原型 1686-1687,之前漏移植 → 锁 svg 无尺寸约束被撑成巨大) */
 .cr-proj .pj-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; font-family: var(--mono); color: var(--ok); background: oklch(74% .15 150 / .14); border-radius: 99px; padding: 2px 8px; flex: 0 0 auto; }
 .cr-proj .pj-lock svg { width: 10px; height: 10px; }
+.cr-proj .pj-remove { display: inline-flex; align-items: center; font-size: 10px; font-weight: 700; font-family: var(--mono); color: var(--err); background: color-mix(in oklch, var(--err), transparent 86%); border-radius: 99px; padding: 2px 8px; flex: 0 0 auto; }
+.cr-proj.removing { opacity: .72; }
+.cr-proj.removing .pj-name { text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--err), transparent 40%); }
+.cr-removal-warn { margin: 0 22px 8px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5;
+  color: var(--fg-2); background: color-mix(in oklch, var(--err), transparent 90%); border: 1px solid color-mix(in oklch, var(--err), transparent 60%); }
+.cr-removal-warn b { color: var(--err); }
+.cr-foot .btn-create.danger { background: var(--err); }
 .cr-proj-empty { text-align: center; padding: 18px; color: var(--faint); font-size: 12px; border: 1px dashed var(--border-2); border-radius: 9px; }
 .cr-proj-empty a { color: var(--accent); font-weight: 600; cursor: pointer; }
 .cr-newproj { display: flex; align-items: center; gap: 9px; margin-top: 8px; padding: 8px 10px; border: 1px dashed var(--border-2); border-radius: 9px; }
