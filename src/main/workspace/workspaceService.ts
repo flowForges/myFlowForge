@@ -6,7 +6,7 @@ import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBran
 import { ensureWorkspaceSkill } from '../skills/installSkill'
 import { STAGE_NAMES, type StageKey, type Project, type Workspace } from '../config/schema'
 import type { StartRunOpts, StageSpec, DevelopProject } from '../orchestrator/orchestrator'
-import type { CreateWorkspaceOpts } from '@shared/types'
+import type { CreateWorkspaceOpts, SetupEvent } from '@shared/types'
 
 export interface CreateWorkspaceResult { workspace: Workspace; startRunOpts: StartRunOpts }
 
@@ -101,22 +101,40 @@ export async function editWorkspace(args: {
   opts: CreateWorkspaceOpts
   knownProjects: Project[]
   proxy: string
+  // Same observable-setup event stream as createWorkspace, so adding a project shows live pull
+  // progress (git clone/fetch is slow) instead of a silently-hung 保存中 button.
+  emit?: (e: SetupEvent) => void
 }): Promise<Workspace> {
   const path = expandTilde(args.path)
   const { opts, knownProjects, proxy } = args
+  const emit = args.emit ?? (() => {})
   const existing = readWorkspace(path)
   if (!existing) throw new Error(`工作区不存在: ${path}`)
 
   const byId = new Map(knownProjects.map(p => [p.id, p]))
 
-  for (const sel of opts.projects) {
+  // Provision only projects whose worktree is genuinely missing on disk — not merely absent from the
+  // record. A failed pull writes the project into workspace.json but leaves no worktree; keying the
+  // skip on "already in the record" would strand it forever. A worktree's `.git` is a file.
+  const toProvision = opts.projects.filter(sel => {
     const proj = byId.get(sel.repoId)
     if (!proj) throw new Error(`未知项目: ${sel.repoId}`)
-    // Provision when the worktree is genuinely missing on disk — not merely absent from the record.
-    // A failed pull writes the project into workspace.json but leaves no worktree; keying the skip on
-    // "already in the record" would strand it forever. A worktree's `.git` is a file (gitdir pointer).
-    if (existsSync(join(path, proj.name, '.git'))) continue
-    await provisionWorktree(proj, sel.branch, path, proxy)
+    return !existsSync(join(path, proj.name, '.git'))
+  })
+  if (toProvision.length) emit({ type: 'setup:start', workspacePath: path, hooks: { basic: 0, proj: 0 } })
+  let index = 0
+  for (const sel of toProvision) {
+    const proj = byId.get(sel.repoId)!
+    const name = proj.name || sel.repoId
+    emit({ type: 'provision:start', project: name, index, total: toProvision.length })
+    try {
+      await provisionWorktree(proj, sel.branch, path, proxy)
+    } catch (e) {
+      emit({ type: 'provision:error', project: name, index, total: toProvision.length, message: e instanceof Error ? e.message : String(e) })
+      throw e
+    }
+    emit({ type: 'provision', project: name, index, total: toProvision.length })
+    index++
   }
 
   const workspace: Workspace = {
@@ -136,5 +154,6 @@ export async function editWorkspace(args: {
   writeWorkspace(workspace)
   registerWorkspace(opts.name, path)
   ensureWorkspaceSkill(path)
+  if (toProvision.length) emit({ type: 'setup:done', workspacePath: path })
   return workspace
 }
