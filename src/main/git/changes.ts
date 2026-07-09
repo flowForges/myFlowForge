@@ -83,11 +83,15 @@ async function readChangesVsHead(cwd: string, proxy: string): Promise<ChangeItem
 }
 
 export async function readChanges(cwd: string, proxy = ''): Promise<ChangeItem[]> {
-  // Prefer the pull baseline (the branch's upstream, set at worktree creation) so original files are
-  // never shown; degrade to working-tree-vs-HEAD status when there's no upstream.
+  // Diff against the pull baseline so ORIGINAL pulled files never show. Base preference:
+  //  1. the branch's own upstream (set at worktree creation on new workspaces), else
+  //  2. the repo's default remote branch origin/HEAD — so EXISTING worktrees (created before
+  //     upstream-tracking) still get the baseline treatment instead of listing every original file
+  //     as 新建.
+  // Only when neither resolves (a plain non-remote repo) do we degrade to working-tree-vs-HEAD status.
   let base = ''
-  try { base = (await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { cwd, proxy })).trim() }
-  catch { base = '' }
+  try { base = (await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { cwd, proxy })).trim() } catch { base = '' }
+  if (!base) { try { base = (await git(['rev-parse', '--abbrev-ref', 'origin/HEAD'], { cwd, proxy })).trim() } catch { base = '' } }
   return base ? readChangesVsBase(cwd, base, proxy) : readChangesVsHead(cwd, proxy)
 }
 

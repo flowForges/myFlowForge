@@ -66,4 +66,15 @@ describe('readChanges vs pull baseline (worktree upstream)', () => {
     const byPath = Object.fromEntries((await readChanges(wt)).map(c => [c.path, c.type]))
     expect(byPath).toEqual({ 'app.ts': 'M', 'NOTES.md': 'A', 'README.md': 'D' })
   })
+
+  it('an existing worktree with NO upstream still baselines against origin/HEAD (not all-new)', async () => {
+    const mirror = join(root, 'mirror', 'p.git'), wt = join(root, 'ws', 'p')
+    await ensureMirror({ mirror, repoUrl: origin })
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/x', baseBranch: 'main' })
+    // Simulate a legacy worktree that never had its upstream set.
+    await git(['branch', '--unset-upstream'], { cwd: wt }).catch(() => {})
+    expect(await readChanges(wt)).toEqual([])   // origin/HEAD fallback → original files not shown
+    writeFileSync(join(wt, 'app.ts'), 'export const a = 9\n')
+    expect((await readChanges(wt)).map(c => `${c.type}:${c.path}`)).toEqual(['M:app.ts'])
+  })
 })
