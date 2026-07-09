@@ -170,6 +170,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const [plugPick, setPlugPick] = useState<{ scope: 'wf' | 'step'; after: string } | null>(null)
   const [draggedPlugId, setDraggedPlugId] = useState<string | null>(null)
   const [stageEdit, setStageEdit] = useState<string | null>(null)   // currently editing stage append key
+  const [removalConfirm, setRemovalConfirm] = useState(false)       // gate a destructive project removal on save
   // custom model input state: key = stage key or 'proj::repoId', value = typed text
   const [customModelInputs, setCustomModelInputs] = useState<Record<string, string>>({})
   // which selects are in custom-model mode: set of keys
@@ -225,6 +226,13 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     pendingSelect.current.clear()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projects, open, editing])
+
+  // Re-checking a project clears a pending removal confirmation. MUST sit before the `if (!open)`
+  // early return so the hook order never changes between open/closed renders.
+  useEffect(() => {
+    const hasRemoval = !!editing && state.projects.some(p => p.existing && !p.sel)
+    if (removalConfirm && !hasRemoval) setRemovalConfirm(false)
+  }, [removalConfirm, editing, state.projects])
 
   if (!open) return null
 
@@ -518,8 +526,13 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     )
   }
 
+  // Existing projects the user unchecked in edit mode → they'll be removed (worktree deleted) on save.
+  const removedProjects = editing ? state.projects.filter(p => p.existing && !p.sel) : []
+
   const doCreate = () => {
     if (!canCreate || creating) return
+    // Removing a project deletes its pulled code on disk — confirm once before proceeding.
+    if (removedProjects.length && !removalConfirm) { setRemovalConfirm(true); return }
     // commit derived name + per-project branches/develop-model so the DTO reflects the live UI.
     const committed: WizardState = {
       ...state,
@@ -594,14 +607,14 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 <div className="cr-proj-empty">尚未配置 Git 项目。在下方新增,或到 <a id="crGoProj" onClick={onOpenProjectSettings}>设置 · 项目设置</a> 添加。</div>
               ) : (
                 state.projects.map((p, i) => (
-                  <div className={'cr-proj' + (p.sel ? ' on' : ' off') + (p.locked ? ' locked' : '')} data-pi={i} key={p.repoId}>
-                    <button className="st-chk" data-prtoggle={i} disabled={p.locked} aria-disabled={p.locked} title={p.locked ? '已包含的项目不可移除' : undefined} onClick={() => toggleProject(p.repoId)}>{p.locked ? LOCK : CK}</button>
+                  <div className={'cr-proj' + (p.sel ? ' on' : ' off') + (p.existing && !p.sel ? ' removing' : '')} data-pi={i} key={p.repoId}>
+                    <button className="st-chk" data-prtoggle={i} title={p.existing && p.sel ? '取消勾选将移除该项目(删除本地代码)' : undefined} onClick={() => toggleProject(p.repoId)}>{CK}</button>
                     <span className="pj-ic">{GIT}</span>
-                    <div className="pj-main" onClick={p.locked ? undefined : () => toggleProject(p.repoId)}>
+                    <div className="pj-main" onClick={() => toggleProject(p.repoId)}>
                       <div className="pj-name">{p.name}</div>
                       <div className="pj-repo">{projects.find(pp => pp.id === p.repoId)?.repoUrl ?? ''}</div>
                     </div>
-                    {p.locked && <span className="pj-lock">{LOCK}已包含</span>}
+                    {p.existing && (p.sel ? <span className="pj-lock">已包含</span> : <span className="pj-remove">将移除</span>)}
                     <span className="pj-branch">{BRANCH}<input data-prbranch={i} value={branchFor(p)} spellCheck={false} onChange={e => setProjectBranch(p.repoId, e.target.value)} /></span>
                   </div>
                 ))
@@ -811,12 +824,17 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
         </div>
 
         {error && <div className="cr-err" id="crError" style={{ padding: '2px 22px 8px', color: 'var(--err)', fontSize: 12.5 }}>{editing ? '保存失败：' : '创建失败：'}{error}</div>}
+        {removalConfirm && removedProjects.length > 0 && (
+          <div className="cr-removal-warn">
+            <b>将移除并删除本地代码:</b>{removedProjects.map(p => p.name).join('、')}。此操作不可恢复(仓库镜像与其它工作区不受影响)。再次点击「删除并保存」确认。
+          </div>
+        )}
         <div className="cr-foot">
           <span className="summary" id="crSummary">工作流 <b>{enabledCount}</b> 阶段 · 涉及 <b>{selectedCount}</b> 个项目</span>
           <span className="sp" />
           <button className="btn-cancel" id="crCancel" onClick={onCancel} disabled={creating}>取消</button>
-          <button className="btn-create" id="crCreate" disabled={!canCreate || creating} onClick={doCreate}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="20 6 9 17 4 12" /></svg>{editing ? (creating ? '保存中…' : '保存修改') : (creating ? '创建中…' : '创建工作区')}
+          <button className={'btn-create' + (removalConfirm && removedProjects.length ? ' danger' : '')} id="crCreate" disabled={!canCreate || creating} onClick={doCreate}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="20 6 9 17 4 12" /></svg>{editing ? (creating ? '保存中…' : (removalConfirm && removedProjects.length ? '删除并保存' : '保存修改')) : (creating ? '创建中…' : '创建工作区')}
           </button>
         </div>
       </div>

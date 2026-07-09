@@ -306,15 +306,20 @@ describe('CreateWorkspace – edit mode', () => {
     expect(screen.getByDisplayValue('设计迁移')).toBeInTheDocument()
   })
 
-  it('locks already-included projects (cannot be deselected) and submits them', () => {
+  it('unchecking an included project requires a removal confirmation, then drops it', () => {
     const onCreate = vi.fn()
     render(<CreateWorkspace {...defaultProps} editing={editingWs} onCreate={onCreate} />)
-    fireEvent.click(within(document.querySelector('#crProjs') as HTMLElement).getByText('proj1'))   // included → click must NOT remove it
+    // uncheck the included proj1 → it's marked for removal
+    fireEvent.click(within(document.querySelector('#crProjs') as HTMLElement).getByText('proj1'))
+    expect(screen.getByText('将移除')).toBeInTheDocument()
+    // first save shows the confirmation, does NOT submit yet
     fireEvent.click(screen.getByRole('button', { name: /保存修改/ }))
+    expect(onCreate).not.toHaveBeenCalled()
+    expect(screen.getByText(/将移除并删除本地代码/)).toBeInTheDocument()
+    // second save (now labelled 删除并保存) submits without proj1
+    fireEvent.click(screen.getByRole('button', { name: /删除并保存/ }))
     expect(onCreate).toHaveBeenCalledTimes(1)
-    const opts = onCreate.mock.calls[0][0]
-    expect(opts.projects.map((p: any) => p.repoId)).toContain('proj1')
-    expect(opts.name).toBe('设计迁移')
+    expect(onCreate.mock.calls[0][0].projects.map((p: any) => p.repoId)).not.toContain('proj1')
   })
 
   it('shows a save-failed banner (not create-failed) in edit mode', () => {

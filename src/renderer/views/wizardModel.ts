@@ -9,7 +9,7 @@ export const unpackModel = (v: string): { provider: string; model: string } => {
 }
 
 export interface WizardStage { on: boolean; provider: string; model: string; review?: ReviewConfig; prompt?: string }
-export interface WizardProject { repoId: string; name: string; sel: boolean; branch: string; model: string; provider?: string; locked?: boolean }
+export interface WizardProject { repoId: string; name: string; sel: boolean; branch: string; model: string; provider?: string; locked?: boolean; existing?: boolean }
 export interface WizardState {
   path: string
   name: string
@@ -56,7 +56,8 @@ export function buildCreateOpts(state: WizardState, stageOrder: string[] = Objec
 interface KnownProject { id: string; name: string; repoUrl: string; defaultBranch: string }
 
 // Build the wizard state for EDITING a persisted workspace: light up its stages, mark its projects
-// selected+locked (cannot be removed), and leave other known projects available to add. `baseStages`
+// selected+existing (unchecking one removes it — the wizard confirms, backend deletes its worktree),
+// and leave other known projects available to add. `baseStages`
 // is the all-off seeded stage map from the caller (so off-stages still have a usable provider/model
 // when toggled on). `defaultProjectModel` is the packed provider::model seed for not-yet-selected projects.
 export function buildEditState(
@@ -73,12 +74,12 @@ export function buildEditState(
   const projects: WizardProject[] = knownProjects.map(kp => {
     const w = wsById.get(kp.id)
     return w
-      ? { repoId: kp.id, name: kp.name, sel: true, locked: true, branch: w.branch, model: packModel(w.provider, w.model), provider: w.provider }
+      ? { repoId: kp.id, name: kp.name, sel: true, existing: true, branch: w.branch, model: packModel(w.provider, w.model), provider: w.provider }
       : { repoId: kp.id, name: kp.name, sel: false, branch: '', model: defaultProjectModel }
   })
   for (const w of ws.projects) {
     if (!knownProjects.some(kp => kp.id === w.repoId)) {
-      projects.push({ repoId: w.repoId, name: w.name, sel: true, locked: true, branch: w.branch, model: packModel(w.provider, w.model), provider: w.provider })
+      projects.push({ repoId: w.repoId, name: w.name, sel: true, existing: true, branch: w.branch, model: packModel(w.provider, w.model), provider: w.provider })
     }
   }
 
