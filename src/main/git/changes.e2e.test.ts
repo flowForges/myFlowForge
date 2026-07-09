@@ -6,6 +6,7 @@ import { git } from './gitRunner'
 import { readChanges } from './changes'
 import { readDiff } from './diff'
 import { readTree } from '../fs/fileTree'
+import { ensureMirror, addWorktree } from './worktree'
 
 let repo: string
 async function commitAll(msg: string) {
@@ -29,5 +30,40 @@ describe('2c read pipeline e2e', () => {
     expect(diff.some(l => l.kind === 'add' && l.text.includes('y = 3'))).toBe(true)
     const tree = await readTree(repo, changes)
     expect(tree.some(n => n.name === 'a.ts' && n.chg === 'M')).toBe(true)
+  })
+})
+
+// 「本次会话变更」 must be relative to the pull baseline: a freshly-pulled worktree shows NOTHING
+// (original files are not "新建"); only session add/edit/delete show. Exercises the real mirror +
+// worktree provisioning (which sets the branch upstream to origin/<base>).
+describe('readChanges vs pull baseline (worktree upstream)', () => {
+  let root: string, origin: string
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), 'chg-base-'))
+    origin = join(root, 'origin')
+    await git(['init', '-b', 'main', origin], { cwd: root })
+    writeFileSync(join(origin, 'README.md'), '# proj\n')
+    writeFileSync(join(origin, 'app.ts'), 'export const a = 1\n')
+    await git(['add', '-A'], { cwd: origin })
+    await git(['-c', 'user.email=a@b.c', '-c', 'user.name=t', 'commit', '-m', 'init'], { cwd: origin })
+  })
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  it('a freshly-pulled worktree reports NO changes (original files are not shown as 新建)', async () => {
+    const mirror = join(root, 'mirror', 'p.git'), wt = join(root, 'ws', 'p')
+    await ensureMirror({ mirror, repoUrl: origin })
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/x', baseBranch: 'main' })
+    expect(await readChanges(wt)).toEqual([])
+  })
+
+  it('shows only session changes (add/edit/delete), not the pulled originals', async () => {
+    const mirror = join(root, 'mirror', 'p.git'), wt = join(root, 'ws', 'p')
+    await ensureMirror({ mirror, repoUrl: origin })
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/x', baseBranch: 'main' })
+    writeFileSync(join(wt, 'app.ts'), 'export const a = 2\n')   // edit → M
+    writeFileSync(join(wt, 'NOTES.md'), 'hi\n')                 // new → A
+    rmSync(join(wt, 'README.md'))                               // delete → D
+    const byPath = Object.fromEntries((await readChanges(wt)).map(c => [c.path, c.type]))
+    expect(byPath).toEqual({ 'app.ts': 'M', 'NOTES.md': 'A', 'README.md': 'D' })
   })
 })
