@@ -77,6 +77,20 @@ describe('worktree manager', () => {
     await git(['init', '--bare', '-b', 'main', empty], { cwd: root })
     await expect(resolveBaseBranch(empty, 'master')).rejects.toThrow(/基线分支|base branch/i)
   })
+  // Regression: re-provisioning a repo whose ORIGIN also has a forge/* branch (e.g. one pushed upstream
+  // earlier) used to fail exit 128 — "refusing to fetch into branch 'refs/heads/forge/wsA' checked out
+  // at …" — because the old mirror refspec (+refs/heads/*:refs/heads/*) tried to update that checked-out
+  // local head. Upstream now lives in refs/remotes/origin/*, so re-fetch must succeed.
+  it('re-fetches without error when origin has a forge/* branch checked out in a live worktree', async () => {
+    await git(['branch', 'forge/wsA', 'main'], { cwd: source })   // origin gains a colliding forge/* branch
+    const mirror = join(root, 'mirror', 'proj.git')
+    await ensureMirror({ mirror, repoUrl: source })
+    const wt = join(root, 'wsA', 'proj')
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/wsA', baseBranch: 'main' })
+    // continue-a-partial / add-2nd-workspace re-runs ensureMirror while forge/wsA is checked out
+    await expect(ensureMirror({ mirror, repoUrl: source })).resolves.not.toThrow()
+    expect(existsSync(join(wt, 'README.md'))).toBe(true)
+  })
   it('removes a worktree and frees its working files', async () => {
     const mirror = join(root, 'mirror', 'proj.git')
     await ensureMirror({ mirror, repoUrl: source })
