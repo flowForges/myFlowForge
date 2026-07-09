@@ -207,6 +207,11 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     setNewBranch('')
     setCustomModelKeys(new Set())
     setCustomModelInputs({})
+    // Clear any restore banner from a PRIOR open — freshState() blanks the path, so a stale `partial`
+    // (probed last time) would otherwise show "检测到未完成的创建" on a wizard the user hasn't touched.
+    // The banner reappears only after a real probe (pick / blur) resolves a partial.
+    setPartial(null)
+    setDiscarding(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing])
 

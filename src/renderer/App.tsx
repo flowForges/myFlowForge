@@ -411,6 +411,8 @@ export function App() {
       // sidebar) so re-picking the folder restores + continues. Show a gentle hint instead of a red error.
       const cancelled = e instanceof Error && e.name === 'SetupCancelledError'
       setCreateErr(cancelled ? '已取消创建。已拉取的部分已保留 —— 重新选择该文件夹可继续创建，或在向导里清除重来。' : (e instanceof Error ? e.message : String(e)))
+      setWizardOpen(true)                        // re-open the wizard so the error is visible even if the
+                                                 // user had 后台运行'd it closed (onBackground clears wizardOpen).
     } finally {
       setCreating(false)
       setBackgrounded(false)
@@ -747,7 +749,11 @@ export function App() {
           onCancel={() => { void window.forge.cancelSetup() }}
           // 后台运行: hide the overlay (keep state) so the user can use the app while hooks run. Setup
           // keeps going; a floating pill shows it's alive and setup:done fires a bell notif on finish.
-          onBackground={() => { setBackgrounded(true); setSetupVisible(false) }}
+          // ALSO close the create wizard: it stays open during 创建 (only auto-closes on success) with
+          // its X/取消/backdrop all disabled while creating — so without this, backgrounding would hide
+          // the overlay and reveal the locked, undismissable wizard underneath. Now 后台运行 collapses
+          // both to just the pill. handleCreate still navigates on success / re-opens on error.
+          onBackground={() => { setBackgrounded(true); setSetupVisible(false); setWizardOpen(false) }}
         />
       )}
 
