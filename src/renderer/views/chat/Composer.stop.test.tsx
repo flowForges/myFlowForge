@@ -41,6 +41,32 @@ describe('Composer stop button', () => {
     expect(onStop).not.toHaveBeenCalled()
   })
 
+  it('stopping BEFORE any output restores the sent message to the box', () => {
+    const onSend = vi.fn()
+    const { rerender } = render(<Composer providers={providers} disabled={false} onStop={vi.fn()} onSend={onSend} />)
+    const ta = () => screen.getByPlaceholderText(/给主代理下达任务/) as HTMLTextAreaElement
+    fireEvent.change(ta(), { target: { value: '帮我读一下代码' } })
+    fireEvent.keyDown(ta(), { key: 'Enter' })            // send → clears the box
+    expect(onSend).toHaveBeenCalledTimes(1)
+    expect(ta().value).toBe('')
+    // turn is now running with NO output yet → Esc restores the message for editing
+    rerender(<Composer providers={providers} disabled={false} running turnHasOutput={false} onStop={vi.fn()} onSend={onSend} />)
+    fireEvent.keyDown(ta(), { key: 'Escape' })
+    expect(ta().value).toBe('帮我读一下代码')
+  })
+
+  it('stopping AFTER the AI has output does NOT restore', () => {
+    const onSend = vi.fn()
+    const { rerender } = render(<Composer providers={providers} disabled={false} onStop={vi.fn()} onSend={onSend} />)
+    const ta = () => screen.getByPlaceholderText(/给主代理下达任务/) as HTMLTextAreaElement
+    fireEvent.change(ta(), { target: { value: '改个东西' } })
+    fireEvent.keyDown(ta(), { key: 'Enter' })
+    expect(ta().value).toBe('')
+    rerender(<Composer providers={providers} disabled={false} running turnHasOutput onStop={vi.fn()} onSend={onSend} />)
+    fireEvent.keyDown(ta(), { key: 'Escape' })
+    expect(ta().value).toBe('')   // AI already produced output → not restored
+  })
+
   it('focus textarea, press Escape while running → calls onStop', () => {
     const onStop = vi.fn()
     render(<Composer providers={providers} disabled={false} running onStop={onStop} onSend={vi.fn()} />)
