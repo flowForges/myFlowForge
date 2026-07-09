@@ -375,7 +375,11 @@
   align-items: flex-start;
   gap: 7px;
   max-height: calc(100% - 210px);
-  overflow: hidden;
+  /* NOT overflow:hidden — the hover preview opens to the RIGHT of a dash (left: calc(100% + 8px)),
+     far outside the rail's ~20px-wide box, so clipping here swallowed the whole preview card (the
+     reported "预览没有"). Visible lets the preview escape; dashes for very long threads may extend
+     past max-height, an acceptable trade for a faint, pointer-events:none rail. */
+  overflow: visible;
   pointer-events: none;
   opacity: .28;
   transition: opacity .14s ease;
