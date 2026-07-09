@@ -12,6 +12,7 @@ function setup(over: Partial<Parameters<typeof NotificationPopover>[0]> = {}) {
     onToggle: vi.fn(),
     onOpenUpgrade: vi.fn(),
     onMarkAllRead: vi.fn(),
+    onClearAll: vi.fn(),
     ...over,
   }
   render(<NotificationPopover {...props} />)
@@ -28,7 +29,7 @@ describe('formatBytes / releaseSummary', () => {
 })
 
 describe('NotificationPopover update block', () => {
-  const props = { notifs: [], updateAvailable: true, info: INFO, open: true, onToggle: () => {}, onOpenUpgrade: () => {}, onMarkAllRead: () => {} }
+  const props = { notifs: [], updateAvailable: true, info: INFO, open: true, onToggle: () => {}, onOpenUpgrade: () => {}, onMarkAllRead: () => {}, onClearAll: () => {} }
   it('renders the real version and size from info', () => {
     render(<NotificationPopover {...props} />)
     expect(screen.getByText(/Forge v2\.4\.0/)).toBeTruthy()
@@ -43,7 +44,7 @@ describe('NotificationPopover update block', () => {
   // card must render even when info is missing (no more phantom badge over an empty popover).
   it('renders a graceful update card when updateAvailable but info is missing', () => {
     const { container } = render(
-      <NotificationPopover notifs={[]} updateAvailable info={null} open onToggle={() => {}} onOpenUpgrade={() => {}} onMarkAllRead={() => {}} />,
+      <NotificationPopover notifs={[]} updateAvailable info={null} open onToggle={() => {}} onOpenUpgrade={() => {}} onMarkAllRead={() => {}} onClearAll={() => {}} />,
     )
     expect(container.querySelector('.notif-up')).not.toBeNull()
     expect(screen.getByText('有可用更新')).toBeTruthy()
@@ -55,7 +56,7 @@ describe('NotificationPopover update block', () => {
   it('any badge means the popover is never empty (badge/content invariant)', () => {
     // updateAvailable + no info + no notifs = the exact fresh-install failure mode.
     const { container } = render(
-      <NotificationPopover notifs={[]} updateAvailable info={null} open onToggle={() => {}} onOpenUpgrade={() => {}} onMarkAllRead={() => {}} />,
+      <NotificationPopover notifs={[]} updateAvailable info={null} open onToggle={() => {}} onOpenUpgrade={() => {}} onMarkAllRead={() => {}} onClearAll={() => {}} />,
     )
     const badge = container.querySelector('.nb-badge')?.textContent
     expect(badge).not.toBe('0')
@@ -80,6 +81,17 @@ describe('NotificationPopover', () => {
     const props = setup()
     fireEvent.click(screen.getByText('全部已读'))
     expect(props.onMarkAllRead).toHaveBeenCalledTimes(1)
+  })
+
+  it('clicking 清空 calls onClearAll (empties the list)', () => {
+    const props = setup()
+    fireEvent.click(screen.getByText('清空'))
+    expect(props.onClearAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('hides 清空 when there are no notifs to clear', () => {
+    setup({ notifs: [] })
+    expect(screen.queryByText('清空')).not.toBeInTheDocument()
   })
 
   it('clicking 查看并升级 calls onOpenUpgrade', () => {

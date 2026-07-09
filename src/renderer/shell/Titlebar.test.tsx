@@ -5,7 +5,7 @@ import { Titlebar } from './Titlebar'
 const base = {
   collapsed: false, onToggleSidebar: () => {}, onView: () => {}, crumb: 'ws-a',
   notifs: [], updateAvailable: false, notifOpen: false, onToggleNotif: () => {},
-  onOpenUpgrade: () => {}, onMarkAllRead: () => {},
+  onOpenUpgrade: () => {}, onMarkAllRead: () => {}, onClearAllNotif: () => {},
 }
 
 describe('Titlebar – edit workspace button', () => {

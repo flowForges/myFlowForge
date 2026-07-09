@@ -18,6 +18,7 @@ export interface TitlebarProps {
   onToggleNotif: () => void
   onOpenUpgrade: () => void
   onMarkAllRead: () => void
+  onClearAllNotif: () => void
   onSelectNotif?: (n: Notif, index: number) => void
   canEditWorkspace?: boolean
   onEditWorkspace?: () => void
@@ -40,6 +41,7 @@ export function Titlebar({
   onToggleNotif,
   onOpenUpgrade,
   onMarkAllRead,
+  onClearAllNotif,
   onSelectNotif,
   canEditWorkspace,
   onEditWorkspace,
@@ -143,6 +145,7 @@ export function Titlebar({
         onToggle={onToggleNotif}
         onOpenUpgrade={onOpenUpgrade}
         onMarkAllRead={onMarkAllRead}
+        onClearAll={onClearAllNotif}
         onSelect={onSelectNotif}
       />
 

@@ -20,6 +20,7 @@ describe('Titlebar', () => {
     onToggleNotif: vi.fn(),
     onOpenUpgrade: vi.fn(),
     onMarkAllRead: vi.fn(),
+    onClearAllNotif: vi.fn(),
   }
 
   it('renders 首页 and 工作区 segment buttons', () => {
