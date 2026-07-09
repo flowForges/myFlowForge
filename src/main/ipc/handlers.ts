@@ -309,6 +309,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (ws.stages.length === 0) writeWorkspace(filled)   // backfill pre-SP-A workspaces permanently
     return orch.startRun(workspaceToStartRunOpts(filled))
   })
+  // Quick alias rename — just the display name (registry + workspace.json), no re-provisioning.
+  ipcMain.handle(CH.workspaceRename, (_e, a: { path: string; name: string }) => {
+    const name = a.name.trim()
+    if (!name) return
+    const path = expandTilde(a.path)
+    registerWorkspace(name, path)
+    const ws = readWorkspace(path)
+    if (ws) writeWorkspace({ ...ws, name })
+    broadcast(CH.workspacesChanged, {})
+  })
   ipcMain.handle(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts; runProjHooks?: boolean }) => {
     if (isArchivedWorkspace(a.path)) throw new Error('工作区已归档，恢复后才能继续。')
     const result = await editWorkspace({
