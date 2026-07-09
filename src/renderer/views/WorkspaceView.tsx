@@ -98,15 +98,25 @@ interface WorkspaceViewProps {
 // Empty/'—' renders a plain dash (nothing to copy).
 function Copyable({ text, className }: { text: string; className?: string }) {
   const [done, setDone] = useState(false)
+  const textRef = useRef<HTMLSpanElement>(null)
   const real = !!text && text !== '—'
+  // On hover, if the value is truncated, marquee it leftward (via animated text-indent) so the full
+  // value scrolls into view without leaving the ellipsized state — measured here, animated in CSS.
+  const onEnter = () => {
+    const el = textRef.current
+    if (!el) return
+    const over = el.scrollWidth - el.clientWidth
+    el.style.setProperty('--mq', over > 4 ? `-${over}px` : '0px')
+  }
   if (!real) return <b className={className}>—</b>
   return (
     <b
       className={(className ? className + ' ' : '') + 'ic-copyable' + (done ? ' copied' : '')}
       data-full={text}
+      onMouseEnter={onEnter}
       onClick={() => { void navigator.clipboard?.writeText(text); setDone(true); setTimeout(() => setDone(false), 1100) }}
     >
-      <span className="ic-cp-text">{text}</span>
+      <span className="ic-cp-text" ref={textRef}>{text}</span>
       <span className="ic-cp-pill">{done ? '已复制 ✓' : '点击复制'}</span>
     </b>
   )
@@ -790,7 +800,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                   </div>
                 )}
 
-                <div className="ic-card">
+                <div className="ic-card ic-card-kv">
                   <div className="ic-card-h">会话</div>
                   <div className="ic-row"><span>编码代理</span><b>{agentLabel}</b></div>
                   <div className="ic-row"><span>工作目录</span><Copyable text={displayPath} className="mono" /></div>
