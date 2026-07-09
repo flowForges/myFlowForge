@@ -54,10 +54,22 @@ describe('fetchLatestRelease', () => {
   // Failure semantics (Bug #1): a non-ok response or a thrown fetch must THROW, not resolve null —
   // so the checker can distinguish "GitHub unreachable" from "up to date".
   it('THROWS on a non-ok response (404 / rate limit)', async () => {
-    await expect(fetchLatestRelease('o/r', { fetch: fakeFetch(false, {}) })).rejects.toThrow()
+    await expect(fetchLatestRelease('o/r', { fetch: fakeFetch(false, {}), attempts: 1 })).rejects.toThrow()
   })
   it('THROWS when fetch throws (offline)', async () => {
-    await expect(fetchLatestRelease('o/r', { fetch: async () => { throw new Error('offline') } })).rejects.toThrow('offline')
+    await expect(fetchLatestRelease('o/r', { fetch: async () => { throw new Error('offline') }, attempts: 1 })).rejects.toThrow('offline')
+  })
+  it('RETRIES a transient failure and succeeds (does not falsely report 检查失败)', async () => {
+    let calls = 0
+    const rel = { tag_name: 'v2.4.0', body: 'n', assets: [{ name: 'myFlowForge-2.4.0.dmg', browser_download_url: 'u', size: 1 }] }
+    const flaky = async () => {
+      calls++
+      if (calls < 3) throw new Error('transient')
+      return { ok: true, json: async () => [rel] }
+    }
+    const info = await fetchLatestRelease('o/r', { fetch: flaky as any, retryDelayMs: 0 })
+    expect(calls).toBe(3)
+    expect(info?.version).toBe('2.4.0')
   })
 
   // With multiple per-arch dmgs attached (x64 listed FIRST), selection must follow the running CPU arch.
