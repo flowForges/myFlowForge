@@ -24,6 +24,17 @@ describe('FileTreePane', () => {
     expect(screen.queryByText('a.ts')).not.toBeInTheDocument()
   })
 
+  it('starts collapsed, and 全部展开 / 全部收起 toggle every folder', () => {
+    const { container } = render(<FileTreePane tree={tree} onOpen={vi.fn()} />)
+    const folder = () => container.querySelector('.tree-folder[data-folder="src"]')!
+    // default: seeded collapsed
+    expect(folder().classList.contains('closed')).toBe(true)
+    fireEvent.click(screen.getByLabelText('全部展开'))
+    expect(folder().classList.contains('closed')).toBe(false)
+    fireEvent.click(screen.getByLabelText('全部收起'))
+    expect(folder().classList.contains('closed')).toBe(true)
+  })
+
   it('preserves folder structure under filter (matching file keeps its parent folder)', () => {
     const onOpen = vi.fn()
     render(<FileTreePane tree={tree} onOpen={onOpen} />)
