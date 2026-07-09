@@ -31,14 +31,18 @@
 .pv-fic { width: 18px; height: 18px; border-radius: 5px; font-size: 8px; }
 
 /* Files 文件树视图 */
-.tree-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+/* flex-wrap + the search box's min-width:0 keep the expand/collapse buttons from being pushed off the
+   right edge of the narrow tree column (~272px in the full-screen browser). Without min-width:0 a
+   flex:1 item can't shrink below its content width, so the search box hogged the row and clipped the
+   rightmost button (全部收起) — the user saw only 全部展开. */
+.tree-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .tree-expand-tools { display: flex; flex: 0 0 auto; gap: 2px; background: var(--surface); border-radius: 7px; padding: 2px; }
 .tree-tool-btn { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 5px; color: var(--muted); }
 .tree-tool-btn:hover { background: var(--bg); color: var(--fg); }
 .tree-tool-btn svg { width: 15px; height: 15px; }
-.tree-search { flex: 1; height: 30px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; display: flex; align-items: center; gap: 7px; padding: 0 10px; }
+.tree-search { flex: 1 1 140px; min-width: 0; height: 30px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; display: flex; align-items: center; gap: 7px; padding: 0 10px; }
 .tree-search svg { width: 14px; height: 14px; color: var(--faint); }
-.tree-search input { flex: 1; background: none; border: none; outline: none; color: var(--fg); font-size: 12.5px; font-family: var(--font); }
+.tree-search input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--fg); font-size: 12.5px; font-family: var(--font); }
 .tree-search input::placeholder { color: var(--faint); }
 /* 文件名 / 内容 搜索切换 (reuses the .pv-toggle look) */
 .search-mode { display: flex; flex: 0 0 auto; background: var(--surface); border-radius: 7px; padding: 2px; }
