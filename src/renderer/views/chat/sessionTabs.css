@@ -1,5 +1,9 @@
 /* ---- 会话标签栏（每个 workspace 支持多个会话） ---- */
-.sess-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 8px 16px 0; }
+/* Align the tab bar to the SAME centered column as .chat-inner / .composer (max-width clamp +
+   margin:auto + matching side padding), so the tabs share a left edge with the messages and the
+   composer instead of hugging the far-left at a flat 16px (read as misaligned / "整体偏右"). */
+.sess-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; width: 100%;
+  max-width: clamp(720px, 90%, 1180px); margin: 0 auto; padding: 8px clamp(32px, 4%, 72px) 0; }
 .sess-tabs { display: flex; gap: 4px; overflow-x: auto; flex: 1; scrollbar-width: none; }
 .sess-tabs::-webkit-scrollbar { display: none; }
 /* Inactive tabs carry a faint fill + border so multiple sessions read as distinct chips instead
@@ -85,3 +89,11 @@
 .sid-code code { flex: 1; padding: 6px 9px; border-radius: 7px; background: var(--surface); font-size: 12px; overflow-wrap: anywhere; }
 .sid-copy { flex: 0 0 auto; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; cursor: pointer; }
 .sid-copy.done { color: var(--ok); border-color: var(--ok); }
+/* 刷新按钮:面板只在打开/切会话时拉数据,这个按钮让用户按需重拉最新 session id / 状态。 */
+.sid-head-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.sid-refresh { flex: 0 0 auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; transition: color .13s, background .13s; }
+.sid-refresh:hover:not(:disabled) { color: var(--fg); background: var(--bg); }
+.sid-refresh:disabled { cursor: default; opacity: .55; }
+.sid-refresh svg { width: 14px; height: 14px; }
+.sid-refresh svg.spin { animation: sid-refresh-spin .7s linear infinite; }
+@keyframes sid-refresh-spin { to { transform: rotate(360deg); } }
