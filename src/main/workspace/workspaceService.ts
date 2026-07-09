@@ -6,7 +6,9 @@ import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBran
 import { ensureWorkspaceSkill } from '../skills/installSkill'
 import { STAGE_NAMES, type StageKey, type Project, type Workspace } from '../config/schema'
 import type { StartRunOpts, StageSpec, DevelopProject } from '../orchestrator/orchestrator'
+import type { AgentProvider } from '../agents/types'
 import type { CreateWorkspaceOpts, SetupEvent } from '@shared/types'
+import { runStepHook } from './stepHooks'
 
 export interface CreateWorkspaceResult { workspace: Workspace; startRunOpts: StartRunOpts }
 
@@ -104,14 +106,20 @@ export async function editWorkspace(args: {
   // Same observable-setup event stream as createWorkspace, so adding a project shows live pull
   // progress (git clone/fetch is slow) instead of a silently-hung 保存中 button.
   emit?: (e: SetupEvent) => void
+  // When a project is ADDED, optionally re-run the workspace's `__proj` (项目拉取后) hooks against it —
+  // the user opts in via a wizard toggle. Requires `providers`; no-op without it.
+  runProjHooks?: boolean
+  providers?: Record<string, AgentProvider>
+  signal?: AbortSignal
 }): Promise<Workspace> {
   const path = expandTilde(args.path)
-  const { opts, knownProjects, proxy } = args
+  const { opts, knownProjects, proxy, providers, signal } = args
   const emit = args.emit ?? (() => {})
   const existing = readWorkspace(path)
   if (!existing) throw new Error(`工作区不存在: ${path}`)
 
   const byId = new Map(knownProjects.map(p => [p.id, p]))
+  const projHooks = (opts.stepPlugins ?? []).filter(p => p.after === '__proj')
 
   // Remove worktrees for projects the user DE-selected (in the old record, absent from opts). This
   // deletes the pulled code on disk — the UI gates it behind a confirmation. The bare mirror and other
@@ -131,7 +139,8 @@ export async function editWorkspace(args: {
     if (!proj) throw new Error(`未知项目: ${sel.repoId}`)
     return !existsSync(join(path, proj.name, '.git'))
   })
-  if (toProvision.length) emit({ type: 'setup:start', workspacePath: path, hooks: { basic: 0, proj: 0 } })
+  const willRunHooks = !!args.runProjHooks && !!providers && toProvision.length > 0 && projHooks.length > 0
+  if (toProvision.length) emit({ type: 'setup:start', workspacePath: path, hooks: { basic: 0, proj: willRunHooks ? projHooks.length : 0 } })
   let index = 0
   for (const sel of toProvision) {
     const proj = byId.get(sel.repoId)!
@@ -164,6 +173,17 @@ export async function editWorkspace(args: {
   writeWorkspace(workspace)
   registerWorkspace(opts.name, path)
   ensureWorkspaceSkill(path)
+
+  // Re-run the `__proj` hooks now that the new project(s) are on disk (user opted in).
+  if (willRunHooks) {
+    for (const plugin of projHooks) {
+      if (signal?.aborted) break
+      await runStepHook('__proj', plugin, {
+        providers: providers!, stageProvider: opts.stages[0]?.provider, stageModel: opts.stages[0]?.model,
+        proxy, cwd: path, emit, signal,
+      })
+    }
+  }
   if (toProvision.length) emit({ type: 'setup:done', workspacePath: path })
   return workspace
 }

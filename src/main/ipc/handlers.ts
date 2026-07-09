@@ -306,11 +306,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (ws.stages.length === 0) writeWorkspace(filled)   // backfill pre-SP-A workspaces permanently
     return orch.startRun(workspaceToStartRunOpts(filled))
   })
-  ipcMain.handle(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts }) => {
+  ipcMain.handle(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts; runProjHooks?: boolean }) => {
     if (isArchivedWorkspace(a.path)) throw new Error('工作区已归档，恢复后才能继续。')
     const result = await editWorkspace({
       path: a.path, opts: a.opts, knownProjects: readProjects().projects, proxy: readSettings().termProxy,
       emit: (ev) => broadcast(CH.workspaceSetup, ev),
+      runProjHooks: a.runProjHooks, providers,
     })
     broadcast(CH.workspacesChanged, {})
     return result

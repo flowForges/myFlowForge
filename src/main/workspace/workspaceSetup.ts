@@ -3,13 +3,10 @@ import { writeWorkspace, registerWorkspace } from '../config/store'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
 import type { Project } from '../config/schema'
 import type { Plugin } from '../../shared/plugin'
-import type { LogLine, AgentProvider, AgentCallbacks } from '../agents/types'
+import type { AgentProvider } from '../agents/types'
 import type { DevelopProject } from '../orchestrator/orchestrator'
 import type { CreateWorkspaceOpts, SetupEvent } from '@shared/types'
-import { executeHook } from '../orchestrator/executeHook'
-import { buildPluginPrompt } from '../orchestrator/brief'
-import { claudeAllowedTools } from '../agents/pluginTools'
-import { buildAgentEnv } from '../agents/env'
+import { runStepHook } from './stepHooks'
 import { provisionWorktree, buildWorkspaceRecord, buildStartRunOpts, type CreateWorkspaceResult } from './workspaceService'
 
 // Re-export SetupEvent from @shared/types for any code that imports it from here.
@@ -61,53 +58,10 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
 
   emit({ type: 'setup:start', workspacePath: opts.path, hooks: { basic: basicHooks.length, proj: projHooks.length } })
 
-  // Default provider/model from the first stage (mirrors orchestrator.runHook), proxy-only env (no
-  // forge bridge during creation → mcpTools:false text fallback).
-  const provider = providers[opts.stages[0]?.provider ?? ''] ?? providers['claude']
-  const model = opts.stages[0]?.model ?? ''
-  // No forge bridge during creation → buildAgentEnv (proxy only) gives mcpTools:false text fallback,
-  // same as __wf hooks run without a bridge.
-  const env = buildAgentEnv({ proxy })
-
-  const runHook = async (phase: '__basic' | '__proj', plugin: Plugin) => {
-    emit({ type: 'hook:start', phase, plugin: { id: plugin.id, name: plugin.name, skills: plugin.skills, tools: plugin.tools } })
-    if (!provider) { emit({ type: 'hook:state', pluginId: plugin.id, state: 'err' }); return }
-    const cb: AgentCallbacks = {
-      onLog: (line) => emit({ type: 'hook:log', pluginId: plugin.id, line }),
-      onState: () => {},
-      onConfirm: async () => 'deny',
-      onInput: async () => '',
-      onDone: () => {},
-      onError: () => {},
-    }
-    // Wire 取消 through to the hook subprocess. The abort signal previously only reached git provision,
-    // so a hook — which can run a long, silent command (install/build) — kept running after the user
-    // cancelled, leaving the app stuck. Capture the session via onSession and cancel() it on abort.
-    let session: import('../agents/types').AgentSession | undefined
-    const onAbort = () => { try { session?.cancel() } catch { /* already gone */ } }
-    signal?.addEventListener('abort', onAbort)
-    try {
-      const result = await executeHook(
-        provider,
-        {
-          stageKey: 'setup:' + plugin.id,
-          agentId: 'setup:' + plugin.id,
-          name: plugin.name,
-          prompt: buildPluginPrompt(plugin, [], undefined),
-          cwd: opts.path,
-          model,
-          allowedTools: claudeAllowedTools(plugin.tools),
-          skills: plugin.skills,
-        },
-        cb,
-        env,
-        { onSession: (s) => { session = s; if (signal?.aborted) s.cancel() } },
-      )
-      emit({ type: 'hook:state', pluginId: plugin.id, state: result.ok ? 'ok' : 'err' })
-    } finally {
-      signal?.removeEventListener('abort', onAbort)
-    }
-  }
+  const runHook = (phase: '__basic' | '__proj', plugin: Plugin) => runStepHook(phase, plugin, {
+    providers, stageProvider: opts.stages[0]?.provider, stageModel: opts.stages[0]?.model,
+    proxy, cwd: opts.path, emit, signal,
+  })
 
   // 2. __basic hooks (after basic info, before any project is pulled). Re-check cancel BEFORE each
   //    hook so a cancel between hooks stops the flow promptly (a cancelled hook returns fast, then the

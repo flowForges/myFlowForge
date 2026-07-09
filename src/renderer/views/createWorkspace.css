@@ -138,6 +138,9 @@
 .cr-removal-warn { margin: 0 22px 8px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5;
   color: var(--fg-2); background: color-mix(in oklch, var(--err), transparent 90%); border: 1px solid color-mix(in oklch, var(--err), transparent 60%); }
 .cr-removal-warn b { color: var(--err); }
+.cr-hook-toggle { display: flex; align-items: center; gap: 8px; margin: 0 22px 8px; padding: 8px 12px; border-radius: 8px;
+  font-size: 12.5px; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); cursor: pointer; }
+.cr-hook-toggle input { width: 15px; height: 15px; accent-color: var(--accent); flex: 0 0 auto; }
 .cr-foot .btn-create.danger { background: var(--err); }
 .cr-proj-empty { text-align: center; padding: 18px; color: var(--faint); font-size: 12px; border: 1px dashed var(--border-2); border-radius: 9px; }
 .cr-proj-empty a { color: var(--accent); font-weight: 600; cursor: pointer; }
