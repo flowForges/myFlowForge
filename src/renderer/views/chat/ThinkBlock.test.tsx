@@ -12,6 +12,14 @@ describe('ThinkBlock', () => {
     expect(el.className).toContain('open')
     expect(screen.getByText('读取入口文件')).toBeInTheDocument()
   })
+  it('while streaming shows a live elapsed badge even before any think.elapsed is set', () => {
+    // The silent startup gap has no steps and no think.elapsed; the live ticker still renders (Ns)
+    // so the spinner never looks frozen.
+    const { container } = render(<ThinkBlock think={{ label: '主代理思考中…', steps: [] }} streaming />)
+    const badge = container.querySelector('.think-h .t')
+    expect(badge).toBeTruthy()
+    expect(badge!.textContent).toMatch(/^\d+s$/)
+  })
   it('when done: not live, collapsed by default, renders steps in the timeline', () => {
     const { container } = render(<ThinkBlock think={think} streaming={false} />)
     const el = container.querySelector('.think')!

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ChatThink } from '@shared/types'
 
 const CHEV = (
@@ -21,13 +21,24 @@ interface Props {
 export function ThinkBlock({ think, streaming }: Props) {
   const [override, setOverride] = useState<boolean | null>(null)
   const open = override ?? streaming
+  // Live elapsed while streaming. The agent's first token can lag many seconds behind the spinner
+  // (CLI spawn + forge-MCP handshake + model load / session resume), a window in which NOTHING streams
+  // — a ticking counter shows it's alive instead of looking frozen. Falls back to think.elapsed once done.
+  const [startedAt] = useState(() => Date.now())
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!streaming) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [streaming])
+  const elapsed = streaming ? Math.max(0, Math.floor((now - startedAt) / 1000)) : think.elapsed
   return (
     <div className={`think${streaming ? ' live' : ''}${open ? ' open' : ''}`}>
       <button className="think-h" onClick={() => setOverride(o => !(o ?? streaming))}>
         {!streaming && CHEV}
         {streaming ? SPIN : GLYPH}
         <span className="label">{think.label}</span>
-        {think.elapsed != null && <span className="t">{think.elapsed}s</span>}
+        {elapsed != null && <span className="t">{elapsed}s</span>}
       </button>
       <div className="think-body">
         <div className="think-steps">
