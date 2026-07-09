@@ -12,6 +12,16 @@ describe('gitRunner', () => {
     expect(out.trim()).toBe('true')
     rmSync(dir, { recursive: true, force: true })
   })
+  it('accepts an AbortSignal without hitting execa\'s signal→cancelSignal rename TypeError', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'git-'))
+    await git(['init'], { cwd: dir })
+    const ctrl = new AbortController()
+    // A live (non-aborted) signal reaches execa. On execa v9 the old `signal` option throws
+    // "the signal option has been renamed to cancelSignal instead"; the mapped option must not.
+    const out = await git(['rev-parse', '--is-inside-work-tree'], { cwd: dir, signal: ctrl.signal })
+    expect(out.trim()).toBe('true')
+    rmSync(dir, { recursive: true, force: true })
+  })
   it('injects proxy env vars when proxy provided', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'git-'))
     await git(['init'], { cwd: dir })
