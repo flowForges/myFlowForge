@@ -244,6 +244,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       let lastErr: string | null = null
       let rawOut = ''   // raw stdout we couldn't turn into assistant/think output
       let rawErr = ''   // raw stderr (codex logs/errors)
+      let errBuf = ''   // stderr line-splitter for live onStatus forwarding
       let ctxMaxSeen = 0
       const cap = (s: string, add: string) => (s + add).slice(-2000)   // keep a bounded tail
       const handle = (obj: unknown) => {
@@ -273,10 +274,18 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         let nl: number
         while ((nl = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(line) }
       })
-      child.stderr?.on('data', (b: Buffer) => { wd.beat(); rawErr = cap(rawErr, b.toString()) })
+      child.stderr?.on('data', (b: Buffer) => {
+        wd.beat()
+        const s = b.toString()
+        rawErr = cap(rawErr, s)
+        errBuf += s
+        let nl: number
+        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line) cb.onStatus?.(line) }
+      })
       const done = child.then((res) => {
         wd.clear()
         processLine(buf); buf = ''
+        if (errBuf.trim()) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
         // No reply produced → surface the best diagnostic we have so it's never a silent empty bubble:
         // a parsed error event, else the raw stderr/stdout codex emitted, else a bare exit-code note.
         if (!sawDelta) {

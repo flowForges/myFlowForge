@@ -171,6 +171,10 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
             const after = context.skills.length + context.rules.length + (context.mcps?.length ?? 0)
             emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t, context: after !== before ? context : undefined })
           },
+          // Raw startup/runtime logs → live think steps, but NOT accumulated into `think`: they're
+          // ephemeral liveness (visible while the turn runs, replaced by the final message on done), so
+          // the persisted reasoning stays clean while the spawn/handshake gap no longer looks frozen.
+          onStatus: (t) => emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t }),
           onConfirm: deps.confirm,
           onUsage: (u) => { lastUsage = u },
           onDone: (r) => { if (settled) return; settled = true; resolve(finishOk(r.elapsed)) },

@@ -138,6 +138,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let sawAssistant = false   // any assistant text produced this turn
       let sawTool = false        // any tool/file action (e.g. forge_propose_plan → a plan card, NOT an empty reply)
       let rawErr = ''            // captured stderr for the no-reply diagnostic
+      let errBuf = ''            // stderr line-splitter for live onStatus forwarding
       let ctxMaxSeen = 0
       const cap = (s: string, add: string) => (s + add).slice(-2000)
       const reply = (allow: boolean) => {
@@ -171,10 +172,19 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         let nl: number
         while ((nl = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, nl); buf = buf.slice(nl + 1); processLine(line) }
       })
-      child.stderr?.on('data', (b: Buffer) => { wd.beat(); rawErr = cap(rawErr, b.toString()) })
+      child.stderr?.on('data', (b: Buffer) => {
+        wd.beat()
+        const s = b.toString()
+        rawErr = cap(rawErr, s)
+        // Stream stderr live, line by line, into the think block so startup/handshake activity shows.
+        errBuf += s
+        let nl: number
+        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line) cb.onStatus?.(line) }
+      })
       const done = child.then((res) => {
         wd.clear()
         processLine(buf); buf = ''
+        if (errBuf.trim()) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
         const elapsed = Math.round((Date.now() - start) / 1000)
         // No assistant text at all → surface a diagnostic instead of a silent blank bubble (and leave
         // a trail in the debug log, mirroring codex/opencode). Killed-for-silence gets the clearest note.
