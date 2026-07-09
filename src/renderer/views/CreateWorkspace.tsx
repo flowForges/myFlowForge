@@ -171,6 +171,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const [draggedPlugId, setDraggedPlugId] = useState<string | null>(null)
   const [stageEdit, setStageEdit] = useState<string | null>(null)   // currently editing stage append key
   const [removalConfirm, setRemovalConfirm] = useState(false)       // gate a destructive project removal on save
+  const [runHooksOnAdd, setRunHooksOnAdd] = useState(true)          // re-run __proj hooks against newly added projects
   // custom model input state: key = stage key or 'proj::repoId', value = typed text
   const [customModelInputs, setCustomModelInputs] = useState<Record<string, string>>({})
   // which selects are in custom-model mode: set of keys
@@ -528,6 +529,10 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
 
   // Existing projects the user unchecked in edit mode → they'll be removed (worktree deleted) on save.
   const removedProjects = editing ? state.projects.filter(p => p.existing && !p.sel) : []
+  // Newly-added projects in edit mode + a configured __proj hook → offer to (re)run it against them.
+  const addedProjects = editing ? state.projects.filter(p => p.sel && !p.existing) : []
+  const hasProjHook = (state.stepPlugins ?? []).some(p => p.after === '__proj')
+  const showHookToggle = !!editing && addedProjects.length > 0 && hasProjHook
 
   const doCreate = () => {
     if (!canCreate || creating) return
@@ -541,7 +546,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
       // unpack develop per-project model (packed provider::model) into separate provider + model fields for the DTO.
       projects: state.projects.map(p => { const { provider, model } = unpackModel(p.model); return { ...p, branch: branchFor(p), provider, model } })
     }
-    onCreate(buildCreateOpts(committed, [...STAGE_KEYS]))
+    onCreate({ ...buildCreateOpts(committed, [...STAGE_KEYS]), runProjHooks: showHookToggle && runHooksOnAdd })
   }
 
   return (
@@ -824,6 +829,12 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
         </div>
 
         {error && <div className="cr-err" id="crError" style={{ padding: '2px 22px 8px', color: 'var(--err)', fontSize: 12.5 }}>{editing ? '保存失败：' : '创建失败：'}{error}</div>}
+        {showHookToggle && (
+          <label className="cr-hook-toggle">
+            <input type="checkbox" checked={runHooksOnAdd} onChange={e => setRunHooksOnAdd(e.target.checked)} />
+            <span>新增项目拉取后,执行「项目 Hook」(__proj) 对其配置</span>
+          </label>
+        )}
         {removalConfirm && removedProjects.length > 0 && (
           <div className="cr-removal-warn">
             <b>将移除并删除本地代码:</b>{removedProjects.map(p => p.name).join('、')}。此操作不可恢复(仓库镜像与其它工作区不受影响)。再次点击「删除并保存」确认。

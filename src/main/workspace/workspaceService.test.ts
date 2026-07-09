@@ -311,6 +311,44 @@ describe('editWorkspace', () => {
     expect(none).toEqual([])
   })
 
+  it('re-runs __proj hooks against a newly added project only when runProjHooks is set', async () => {
+    const srcA = join(root, 'srcH1'); await makeSourceRepo(srcA)
+    const srcB = join(root, 'srcH2'); await makeSourceRepo(srcB)
+    const { createWorkspace, editWorkspace } = await import('./workspaceService')
+    const known = [
+      { id: 'a', name: 'a', repoUrl: srcA, defaultBranch: 'main' },
+      { id: 'b', name: 'b', repoUrl: srcB, defaultBranch: 'main' },
+    ]
+    // a fake provider whose run() resolves immediately (executeHook drives it)
+    const ran: string[] = []
+    const provider = {
+      id: 'claude', displayName: 'Claude', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(task: any, cb: any) { ran.push(task.agentId); const done = Promise.resolve().then(() => { cb.onDone({ ok: true }); return { ok: true } }); return { id: task.agentId, cancel() {}, done } },
+    } as any
+    const projHook = { id: 'h', name: 'ProjHook', prompt: 'configure', after: '__proj' as const, skills: [], tools: ['read'] }
+    const wsPath = join(root, 'ws-hook')
+    const base = { name: 'w', path: wsPath, workflowId: 'standard',
+      stages: [{ key: 'develop' as const, provider: 'claude', model: 'm' }],
+      projects: [{ repoId: 'a', branch: 'forge/x' }], stepPlugins: [projHook] }
+    await createWorkspace({ opts: base, knownProjects: known, proxy: '' })
+
+    // add project b WITHOUT the flag → hook does NOT run
+    await editWorkspace({ path: wsPath, knownProjects: known, proxy: '', providers: { claude: provider },
+      opts: { ...base, projects: [{ repoId: 'a', branch: 'forge/x' }, { repoId: 'b', branch: 'forge/x' }] } })
+    expect(ran).toEqual([])
+
+    // remove b, then re-add it WITH the flag → hook runs
+    await editWorkspace({ path: wsPath, knownProjects: known, proxy: '',
+      opts: { ...base, projects: [{ repoId: 'a', branch: 'forge/x' }] } })
+    const events: import('@shared/types').SetupEvent[] = []
+    await editWorkspace({ path: wsPath, knownProjects: known, proxy: '', providers: { claude: provider }, runProjHooks: true, emit: e => events.push(e),
+      opts: { ...base, projects: [{ repoId: 'a', branch: 'forge/x' }, { repoId: 'b', branch: 'forge/x' }] } })
+    expect(ran).toEqual(['setup:h'])
+    expect(events.some(e => e.type === 'hook:start' && e.plugin.id === 'h')).toBe(true)
+    expect(events.some(e => e.type === 'hook:state' && e.pluginId === 'h' && e.state === 'ok')).toBe(true)
+  })
+
   it('removes a de-selected project: deletes its worktree and drops it from the record', async () => {
     const srcA = join(root, 'srcF1'); await makeSourceRepo(srcA)
     const srcB = join(root, 'srcF2'); await makeSourceRepo(srcB)

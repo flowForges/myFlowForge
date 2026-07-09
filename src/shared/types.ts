@@ -94,6 +94,7 @@ export interface CreateWorkspaceOpts {
   projects: CreateWorkspaceProject[]  // selected git projects (repoId + branch + optional per-project develop model)
   plugins?: Plugin[]                  // workspace-level plugins
   stepPlugins?: Plugin[]              // stage-scoped plugins
+  runProjHooks?: boolean              // edit-only: re-run __proj hooks against a newly added project
 }
 
 export interface Attachment { name: string; path: string; size: number }
