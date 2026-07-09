@@ -707,6 +707,9 @@ export function App() {
           state={setupState}
           onClose={() => { setSetupVisible(false); setSetupState(INITIAL_SETUP_STATE) }}
           onCancel={() => { void window.forge.cancelSetup() }}
+          // 后台运行: just hide the overlay (keep state) so the user can use the app while hooks run.
+          // Setup keeps going; handleCreate flips visibility/navigates when createWorkspace resolves.
+          onBackground={() => setSetupVisible(false)}
         />
       )}
     </div>

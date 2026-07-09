@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { SetupProgress, applySetupEvent, INITIAL_SETUP_STATE } from './SetupProgress'
 import type { SetupProgressState } from './SetupProgress'
 import type { SetupEvent } from '@shared/types'
@@ -76,6 +76,22 @@ describe('SetupProgress', () => {
 
     expect(screen.getByText('Plugin A')).toBeInTheDocument()
     expect(screen.queryByText(/全部完成/)).not.toBeInTheDocument()
+  })
+
+  it('while active shows 后台运行 + 取消; a running hook shows a live elapsed badge', () => {
+    const onBackground = vi.fn(), onCancel = vi.fn()
+    const state: SetupProgressState = {
+      started: true, done: false,
+      basicHooks: [{ id: 'h', name: 'Hook', phase: '__basic', state: 'run', logs: [], skills: [], tools: [], startedAt: Date.now() - 5000 }],
+      projHooks: [], provisionedProjects: [], total: 0, pulling: null, failed: null,
+    }
+    render(<SetupProgress state={state} onBackground={onBackground} onCancel={onCancel} />)
+    // elapsed badge for the running hook (started 5s ago)
+    expect(screen.getByText(/运行中 ·/)).toBeInTheDocument()
+    // background button hides without cancelling
+    fireEvent.click(screen.getByLabelText('后台运行'))
+    expect(onBackground).toHaveBeenCalledTimes(1)
+    expect(onCancel).not.toHaveBeenCalled()
   })
 })
 

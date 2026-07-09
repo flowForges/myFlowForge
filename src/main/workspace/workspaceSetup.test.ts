@@ -233,4 +233,38 @@ describe('runWorkspaceSetup', () => {
     })).rejects.toBeInstanceOf(SetupCancelledError)
     expect(provisioned).toEqual([])   // never reached the git pull
   })
+
+  it('cancelling mid-hook cancels the running hook session and aborts with SetupCancelledError', async () => {
+    const { runWorkspaceSetup, SetupCancelledError } = await import('./workspaceSetup')
+    const ctrl = new AbortController()
+    let cancelled = false
+    // A hook whose session stays pending until cancel() is called — models a long-running command.
+    const provider: AgentProvider = {
+      id: 'claude', displayName: 'Claude', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(_task: AgentTask, _cb: AgentCallbacks): AgentSession {
+        let resolveDone!: (r: { ok: boolean }) => void
+        const done = new Promise<{ ok: boolean }>(res => { resolveDone = res })
+        return { id: 'sess', cancel() { cancelled = true; resolveDone({ ok: false }) }, done }
+      },
+    }
+    const provisioned: string[] = []
+    const p = runWorkspaceSetup({
+      opts: {
+        name: 'cancel-hook', path: join(root, 'ws-cancel-hook'), workflowId: 'standard',
+        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        projects: [{ repoId: 'proj', branch: 'forge/x' }],
+        stepPlugins: [{ id: 'b1', name: 'Basic1', prompt: 'p', after: '__basic', skills: [], tools: ['read'] }],
+      },
+      knownProjects: SRC_PROJECTS(), proxy: '', providers: { claude: provider },
+      emit: () => {}, provision: async (proj) => { provisioned.push(proj.name); return join(root, proj.name) },
+      signal: ctrl.signal,
+    })
+    // The __basic hook is now parked at `await session.done`; cancel mid-flight.
+    await new Promise(r => setTimeout(r, 0))
+    ctrl.abort()
+    await expect(p).rejects.toBeInstanceOf(SetupCancelledError)
+    expect(cancelled).toBe(true)       // the hook subprocess was actually cancelled
+    expect(provisioned).toEqual([])    // aborted before provisioning
+  })
 })

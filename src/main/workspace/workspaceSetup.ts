@@ -80,27 +80,39 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
       onDone: () => {},
       onError: () => {},
     }
-    const result = await executeHook(
-      provider,
-      {
-        stageKey: 'setup:' + plugin.id,
-        agentId: 'setup:' + plugin.id,
-        name: plugin.name,
-        prompt: buildPluginPrompt(plugin, [], undefined),
-        cwd: opts.path,
-        model,
-        allowedTools: claudeAllowedTools(plugin.tools),
-        skills: plugin.skills,
-      },
-      cb,
-      env,
-    )
-    emit({ type: 'hook:state', pluginId: plugin.id, state: result.ok ? 'ok' : 'err' })
+    // Wire 取消 through to the hook subprocess. The abort signal previously only reached git provision,
+    // so a hook — which can run a long, silent command (install/build) — kept running after the user
+    // cancelled, leaving the app stuck. Capture the session via onSession and cancel() it on abort.
+    let session: import('../agents/types').AgentSession | undefined
+    const onAbort = () => { try { session?.cancel() } catch { /* already gone */ } }
+    signal?.addEventListener('abort', onAbort)
+    try {
+      const result = await executeHook(
+        provider,
+        {
+          stageKey: 'setup:' + plugin.id,
+          agentId: 'setup:' + plugin.id,
+          name: plugin.name,
+          prompt: buildPluginPrompt(plugin, [], undefined),
+          cwd: opts.path,
+          model,
+          allowedTools: claudeAllowedTools(plugin.tools),
+          skills: plugin.skills,
+        },
+        cb,
+        env,
+        { onSession: (s) => { session = s; if (signal?.aborted) s.cancel() } },
+      )
+      emit({ type: 'hook:state', pluginId: plugin.id, state: result.ok ? 'ok' : 'err' })
+    } finally {
+      signal?.removeEventListener('abort', onAbort)
+    }
   }
 
-  // 2. __basic hooks (after basic info, before any project is pulled).
-  throwIfCancelled()
-  for (const plugin of basicHooks) await runHook('__basic', plugin)
+  // 2. __basic hooks (after basic info, before any project is pulled). Re-check cancel BEFORE each
+  //    hook so a cancel between hooks stops the flow promptly (a cancelled hook returns fast, then the
+  //    next throwIfCancelled aborts creation with SetupCancelledError).
+  for (const plugin of basicHooks) { throwIfCancelled(); await runHook('__basic', plugin) }
 
   // 3. Provision worktrees (git). A git failure throws (= workspace creation fails), unchanged by hooks.
   const developProjects: DevelopProject[] = []
@@ -127,8 +139,7 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   }
 
   // 4. __proj hooks (after projects are pulled + branched).
-  throwIfCancelled()
-  for (const plugin of projHooks) await runHook('__proj', plugin)
+  for (const plugin of projHooks) { throwIfCancelled(); await runHook('__proj', plugin) }
 
   emit({ type: 'setup:done', workspacePath: opts.path })
 

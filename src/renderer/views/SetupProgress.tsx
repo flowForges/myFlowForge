@@ -1,7 +1,21 @@
+import { useEffect, useState } from 'react'
 import type { AgentState, LogLine } from '@shared/types'
 import { HookNode } from '../components/HookNode'
 import type { AgentRuntime } from '@shared/types'
 import './setupProgress.css'
+
+// Live elapsed-time badge for a running hook. A setup hook can run a long, silent command (install /
+// build) that streams no log lines, so without this the card looks frozen. Ticks once a second.
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  const secs = Math.max(0, Math.floor((now - since) / 1000))
+  const label = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m ${secs % 60}s`
+  return <span className="setup-hook-elapsed" title="已运行时间">运行中 · {label}</span>
+}
 
 // Per-hook aggregated state maintained by the parent (App) as events arrive.
 export interface HookEntry {
@@ -12,6 +26,7 @@ export interface HookEntry {
   logs: LogLine[]
   skills: string[]
   tools: string[]
+  startedAt?: number
 }
 
 export interface ProvisionedProject {
@@ -35,8 +50,11 @@ export interface SetupProgressState {
 interface SetupProgressProps {
   state: SetupProgressState
   onClose?: () => void
-  // Abort an in-flight creation (kills the running git clone/fetch). Shown while setup is active.
+  // Abort an in-flight creation (kills the running git clone/fetch AND the current hook). Shown while active.
   onCancel?: () => void
+  // Hide the overlay WITHOUT cancelling, so the user can keep using the app while hooks run in the
+  // background (setup keeps going; events keep flowing). Shown while active.
+  onBackground?: () => void
 }
 
 function hookToRuntime(hook: HookEntry): AgentRuntime {
@@ -54,9 +72,9 @@ function hookToRuntime(hook: HookEntry): AgentRuntime {
   }
 }
 
-export function SetupProgress({ state, onClose, onCancel }: SetupProgressProps) {
+export function SetupProgress({ state, onClose, onCancel, onBackground }: SetupProgressProps) {
   if (!state.started) return null
-  // Active = setup running and not yet done/failed → offer 取消 to abort the git pulls.
+  // Active = setup running and not yet done/failed → offer 后台运行 / 取消.
   const active = !state.done && !state.failed
 
   const total = state.total || state.provisionedProjects[0]?.total || 0
@@ -76,6 +94,9 @@ export function SetupProgress({ state, onClose, onCancel }: SetupProgressProps) 
             <h3>正在配置工作区</h3>
             <span className="setup-head-sub">执行建区 Hook · 拉取项目</span>
           </div>
+          {active && onBackground && (
+            <button className="setup-bg" onClick={onBackground} aria-label="后台运行" title="收起面板，继续在后台运行">后台运行</button>
+          )}
           {active && onCancel && (
             <button className="setup-cancel" onClick={onCancel} aria-label="取消创建">取消</button>
           )}
@@ -98,7 +119,10 @@ export function SetupProgress({ state, onClose, onCancel }: SetupProgressProps) 
               </div>
               <div className="setup-hooks">
                 {state.basicHooks.map(hook => (
-                  <HookNode key={hook.id} agent={hookToRuntime(hook)} open={true} onToggle={() => {}} />
+                  <div key={hook.id} className="setup-hook-wrap">
+                    {hook.state === 'run' && hook.startedAt && <Elapsed since={hook.startedAt} />}
+                    <HookNode agent={hookToRuntime(hook)} open={true} onToggle={() => {}} />
+                  </div>
                 ))}
               </div>
             </section>
@@ -152,7 +176,10 @@ export function SetupProgress({ state, onClose, onCancel }: SetupProgressProps) 
               </div>
               <div className="setup-hooks">
                 {state.projHooks.map(hook => (
-                  <HookNode key={hook.id} agent={hookToRuntime(hook)} open={true} onToggle={() => {}} />
+                  <div key={hook.id} className="setup-hook-wrap">
+                    {hook.state === 'run' && hook.startedAt && <Elapsed since={hook.startedAt} />}
+                    <HookNode agent={hookToRuntime(hook)} open={true} onToggle={() => {}} />
+                  </div>
                 ))}
               </div>
             </section>
@@ -200,6 +227,7 @@ export function applySetupEvent(state: SetupProgressState, event: SetupEvent): S
         logs: [],
         skills: event.plugin.skills,
         tools: event.plugin.tools,
+        startedAt: Date.now(),
       }
       if (event.phase === '__basic') {
         return { ...state, basicHooks: [...state.basicHooks, newHook] }
