@@ -53,6 +53,22 @@
 /* When 后台运行 is present it owns the margin-left:auto; 取消 sits right next to it. */
 .setup-bg + .setup-cancel { margin-left: 8px; }
 
+/* Floating pill shown when setup is backgrounded (overlay hidden, hooks still running). */
+.setup-bg-pill {
+  position: fixed; right: 20px; bottom: 20px; z-index: 60;
+  display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 15px;
+  border-radius: 18px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--fg-2); cursor: pointer;
+  font-size: 12.5px; font-weight: 550; box-shadow: 0 6px 20px rgba(0,0,0,.22); transition: .14s;
+}
+.setup-bg-pill:hover { color: var(--fg); border-color: var(--accent); }
+.setup-bg-pill-spin {
+  width: 13px; height: 13px; border-radius: 50%;
+  border: 2px solid var(--accent-dim); border-top-color: var(--accent);
+  animation: setup-bg-spin .7s linear infinite;
+}
+@keyframes setup-bg-spin { to { transform: rotate(360deg); } }
+
 .setup-hook-wrap { display: flex; flex-direction: column; gap: 4px; }
 .setup-hook-elapsed {
   align-self: flex-start; font: 600 10.5px/1 var(--mono); color: var(--accent);

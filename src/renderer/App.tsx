@@ -101,6 +101,14 @@ export function App() {
   // Setup progress: accumulated events from onSetupEvent during workspace creation with __basic/__proj hooks.
   const [setupState, setSetupState] = useState<SetupProgressState>(INITIAL_SETUP_STATE)
   const [setupVisible, setSetupVisible] = useState(false)
+  // 后台运行: the overlay is hidden but setup is still running. Mirrored into a ref because the
+  // onSetupEvent subscription below closes over initial state (empty-deps effect) and must read the
+  // live value to decide whether to fire a completion notification. creatingNameRef names the
+  // in-flight workspace for that notif (the event only carries a path).
+  const [setupBackgrounded, setSetupBackgrounded] = useState(false)
+  const backgroundedRef = useRef(false)
+  const creatingNameRef = useRef('')
+  const setBackgrounded = (v: boolean) => { backgroundedRef.current = v; setSetupBackgrounded(v) }
   const sidebar = useResizable('sidebarW', 248, 180, 440, 'right')
   const inspector = useResizable('inspectorW', 380, 280, 720, 'left')
   const engine = useEngine()
@@ -264,11 +272,18 @@ export function App() {
       if (e.type === 'setup:start') {
         setSetupState(INITIAL_SETUP_STATE)
         setSetupVisible(true)
+        setBackgrounded(false)
       }
       setSetupState(prev => applySetupEvent(prev, e))
       if (e.type === 'setup:done') {
-        // Panel stays visible with done state until createWorkspace resolves and we navigate away.
-        // App.tsx handleCreate will flip setupVisible off once the promise resolves.
+        // If the user backgrounded the panel, they can't see it finish — surface completion via the
+        // bell so they know the workspace is ready. (When the panel is visible it shows 全部完成 and
+        // handleCreate navigates on resolve, so no notif is needed there.)
+        if (backgroundedRef.current) {
+          const name = creatingNameRef.current || '工作区'
+          setNotifs(ns => [{ ic: 'ok', cls: 'ni-ok', t: `<b>${sanitize(name)}</b> 工作区创建完成`, m: `建区 Hook 执行完毕 · 点击进入 · 刚刚`, unread: true, wsPath: e.workspacePath }, ...ns])
+        }
+        setBackgrounded(false)
       }
     })
     return () => { off() }
@@ -357,6 +372,7 @@ export function App() {
 
   async function handleCreate(opts: CreateWorkspaceOpts) {
     if (creating) return                         // guard against double-submit
+    creatingNameRef.current = opts.name          // name the in-flight workspace for a backgrounded-done notif
     setCreating(true)                            // disable the create button + show 创建中… (git worktree/fetch is slow)
     try {
       const { startRunOpts } = await window.forge.createWorkspace(opts)
@@ -383,6 +399,7 @@ export function App() {
       setCreateErr(cancelled ? '已取消创建。已拉取的部分已保留 —— 重新选择该文件夹可继续创建，或在向导里清除重来。' : (e instanceof Error ? e.message : String(e)))
     } finally {
       setCreating(false)
+      setBackgrounded(false)
     }
   }
 
@@ -707,10 +724,22 @@ export function App() {
           state={setupState}
           onClose={() => { setSetupVisible(false); setSetupState(INITIAL_SETUP_STATE) }}
           onCancel={() => { void window.forge.cancelSetup() }}
-          // 后台运行: just hide the overlay (keep state) so the user can use the app while hooks run.
-          // Setup keeps going; handleCreate flips visibility/navigates when createWorkspace resolves.
-          onBackground={() => setSetupVisible(false)}
+          // 后台运行: hide the overlay (keep state) so the user can use the app while hooks run. Setup
+          // keeps going; a floating pill shows it's alive and setup:done fires a bell notif on finish.
+          onBackground={() => { setBackgrounded(true); setSetupVisible(false) }}
         />
+      )}
+
+      {/* Backgrounded-setup pill: setup is still running with the panel hidden. Click to re-open it. */}
+      {setupBackgrounded && !setupVisible && (
+        <button
+          className="setup-bg-pill"
+          onClick={() => { setBackgrounded(false); setSetupVisible(true) }}
+          title="点击查看建区进度"
+        >
+          <span className="setup-bg-pill-spin" />
+          正在后台配置工作区…
+        </button>
       )}
     </div>
   )

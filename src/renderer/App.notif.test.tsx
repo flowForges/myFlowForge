@@ -4,15 +4,18 @@ import { App } from './App'
 import type { EngineEvent, RunState } from '@shared/types'
 
 let listeners: Array<(e: EngineEvent) => void>
+let setupListeners: Array<(e: any) => void>
 
 beforeEach(() => {
   listeners = []
+  setupListeners = []
   ;(window as any).forge = {
     listWorkspaces: async () => [], openWorkspaceDir: async () => [],
     homeStats: async () => ({}),
     onEngineEvent: (cb: (e: EngineEvent) => void) => { listeners.push(cb); return () => {} },
     onNavigateWorkspace: () => () => {},
-    onSetupEvent: () => () => {},
+    onSetupEvent: (cb: (e: any) => void) => { setupListeners.push(cb); return () => {} },
+    cancelSetup: async () => {},
     listProjects: async () => [{ id: 'proj1', name: 'proj1', repoUrl: 'u', defaultBranch: 'main' }],
     listWorkflows: async () => [{ id: 'standard', name: '标准工作流', stages: [{ key: 'design', defaultAgent: 'claude', defaultModel: 'opus-4.8' }] }],
     detectProviders: async () => [{ id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus-4.8', label: 'opus-4.8' }] }],
@@ -37,6 +40,10 @@ beforeEach(() => {
 
 function emit(e: EngineEvent) {
   for (const listener of listeners) listener(e)
+}
+
+function emitSetup(e: any) {
+  for (const listener of setupListeners) listener(e)
 }
 
 function notificationTexts(container: HTMLElement): string[] {
@@ -74,6 +81,23 @@ describe('App lifecycle notifications', () => {
     expect(notifHtml).not.toContain('onerror')
     // The center starts empty (no mock seed), so a single stalled event = exactly 1 unread.
     expect(screen.getByText('1 条未读')).toBeInTheDocument()
+  })
+
+  it('backgrounded setup fires a completion notification the user can click into', async () => {
+    const { container } = render(<App />)
+    await waitFor(() => expect(setupListeners.length).toBeGreaterThan(0))
+
+    // Setup starts → overlay shows → user clicks 后台运行 to keep working.
+    act(() => emitSetup({ type: 'setup:start', workspacePath: '/tmp/ws-bg', hooks: { basic: 1, proj: 0 } }))
+    fireEvent.click(screen.getByLabelText('后台运行'))
+    // A pill signals it's still running in the background.
+    expect(screen.getByText(/正在后台配置工作区/)).toBeInTheDocument()
+
+    // Setup finishes while backgrounded → a completion notification appears.
+    act(() => emitSetup({ type: 'setup:done', workspacePath: '/tmp/ws-bg' }))
+    await waitFor(() => expect(notificationTexts(container).some(t => t.includes('工作区创建完成'))).toBe(true))
+    // ...and the pill is gone.
+    expect(screen.queryByText(/正在后台配置工作区/)).not.toBeInTheDocument()
   })
 
   it('starts with an empty notification center — no persistent fake badge', async () => {
