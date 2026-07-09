@@ -69,7 +69,12 @@ export const AppearanceSchema = z.object({
   // that shelved this path); the in-app panel blur updates live via a CSS var.
   blurAmount: z.number().min(0).max(1).default(0),
   density: z.enum(['comfortable', 'compact']),
-  fontSize: z.enum(['small', 'medium', 'large'])
+  fontSize: z.enum(['small', 'medium', 'large']),
+  // 背景图:用户上传的图片(存为 data URL,自包含无需管理文件)。bgScope 决定铺在整个应用还是仅会话区;
+  // 'off' 或空图 = 关闭。bgOpacity 是图片层的可见度(其上有一层底色蒙版保证正文可读)。
+  bgImage: z.string().default(''),
+  bgScope: z.enum(['off', 'app', 'chat']).default('off'),
+  bgOpacity: z.number().min(0.05).max(1).default(0.35)
 })
 export type Appearance = z.infer<typeof AppearanceSchema>
 export const SkillsSchema = z.record(z.string(), z.boolean())
@@ -213,7 +218,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium' },
+  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35 },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },

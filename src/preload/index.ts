@@ -103,6 +103,7 @@ const api = {
   petSetIgnoreMouse: (ignore: boolean) => ipcRenderer.invoke(CH.petSetIgnoreMouse, ignore),
   pickPetPack: (petId: string): Promise<Record<string, string>> => ipcRenderer.invoke(CH.petPickPack, petId),
   pickPetImage: (petId: string, state?: string): Promise<{ path?: string; error?: string } | null> => ipcRenderer.invoke(CH.petPickImage, petId, state),
+  pickBgImage: (): Promise<{ dataUrl?: string; error?: string } | null> => ipcRenderer.invoke(CH.appearancePickBgImage),
   onSettingsChanged: (cb: (s: unknown) => void) => {
     const listener = (_: unknown, s: unknown) => cb(s)
     ipcRenderer.on(CH.settingsChanged, listener)

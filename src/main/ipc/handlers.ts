@@ -690,6 +690,26 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return { path: rel }
   })
 
+  // Background image: open a picker, return the chosen image as a data URL (stored inline in settings —
+  // one image, self-contained, no file bookkeeping). Cap ~6MB so settings.json stays sane.
+  ipcMain.handle(CH.appearancePickBgImage, async () => {
+    const r = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
+    })
+    if (r.canceled || !r.filePaths[0]) return null
+    const fp = r.filePaths[0]
+    const ext = fp.slice(fp.lastIndexOf('.') + 1).toLowerCase()
+    const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
+    const mime = MIME[ext]
+    if (!mime) return { error: '不支持的图片格式,仅支持 png/jpg/webp/gif' }
+    try {
+      if (statSync(fp).size > 6_000_000) return { error: '图片过大,请选择 6MB 以内的图片' }
+      const bytes = readFileSync(fp)
+      return { dataUrl: `data:${mime};base64,${bytes.toString('base64')}` }
+    } catch { return { error: '图片读取失败' } }
+  })
+
   const MAX_PINNED = 5
   ipcMain.handle(CH.workspacesList, () => {
     const s = readSettings()

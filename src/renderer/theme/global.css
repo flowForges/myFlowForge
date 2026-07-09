@@ -22,6 +22,14 @@ html[data-vibrancy="on"]:not([data-glass="on"]) .titlebar,
 html[data-vibrancy="on"]:not([data-glass="on"]) .statusbar { background: var(--glass-panel); }
 html[data-vibrancy="on"]:not([data-glass="on"]) .sidebar { background: var(--glass-sidebar); }
 html[data-vibrancy="on"]:not([data-glass="on"]) .inspector { background: var(--glass-panel); }
+/* 背景图 —— 「整个应用」范围:一层铺在 .window 不透明底色之上、内容之下(z-index:-1)。主内容视图
+   (.chat / #view-home)本身透明,图片便透过它们显示;侧栏/标题栏等不透明面板自然成为边框。opacity
+   变量把图片压淡,保证正文可读。'chat' 范围由 chat.css 的 .chat::before 单独绘制。 */
+.app-bg-layer { position: absolute; inset: 0; z-index: -1; display: none; pointer-events: none;
+  background-image: var(--app-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
+  opacity: var(--app-bg-opacity, .35); border-radius: 12px; }
+[data-bg-scope="app"] .app-bg-layer { display: block; }
+
 .body { flex: 1; display: flex; min-height: 0; }
 .titlebar { flex: 0 0 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
   border-bottom: 1px solid var(--border); background: var(--bg-2);

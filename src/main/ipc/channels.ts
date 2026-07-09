@@ -84,6 +84,7 @@ export const CH = {
   petSetIgnoreMouse: 'pet:set-ignore-mouse',
   petPickPack: 'pet:pick-pack',
   petPickImage: 'pet:pick-image',
+  appearancePickBgImage: 'appearance:pick-bg-image',
   // Main renderer → main process: the workspace currently open in the main window ('ws' view), or null on
   // the home view. Relayed to the pet so its command input can target "the workspace you're in".
   setPetActiveWorkspace: 'pet:set-active-workspace',

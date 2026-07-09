@@ -5,6 +5,16 @@
 
 /* 对话主列 */
 .chat { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+/* 背景图 —— 「仅会话区」范围:图片只画在对话区背后(.chat 已 position:relative)。内容抬到 z-index:1
+   之上;opacity 变量压淡图片以保证消息可读。'app' 范围由 global.css 的 .app-bg-layer 处理。 */
+[data-bg-scope="chat"] .chat::before {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background-image: var(--app-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
+  opacity: var(--app-bg-opacity, .35);
+}
+[data-bg-scope="chat"] .chat-scroll,
+[data-bg-scope="chat"] .sess-bar,
+[data-bg-scope="chat"] .composer { position: relative; z-index: 1; }
 /* overflow-x must be set explicitly: with only overflow-y:auto, CSS computes overflow-x to `auto`
    too, so any child wider than .chat-inner makes the column scroll sideways (and the hidden
    scrollbar makes it look like a mysterious left/right drift). Clip x; inner <pre>/tables scroll

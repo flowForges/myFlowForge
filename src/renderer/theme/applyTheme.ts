@@ -18,4 +18,10 @@ export function applyTheme(a: Appearance): void {
   root.style.setProperty('--glass-blur-strength', String(blur > 0 ? blur : 1))
   root.setAttribute('data-density', a.density)
   root.setAttribute('data-font', a.fontSize)
+  // Background image: expose the image + its opacity as CSS vars and a scope attribute; the CSS
+  // (.app-bg-layer for 'app', .chat::before for 'chat') keys off data-bg-scope. Off when no image.
+  const bgOn = !!a.bgImage && a.bgScope && a.bgScope !== 'off'
+  root.setAttribute('data-bg-scope', bgOn ? a.bgScope : 'off')
+  root.style.setProperty('--app-bg-image', a.bgImage ? `url("${a.bgImage}")` : 'none')
+  root.style.setProperty('--app-bg-opacity', String(a.bgOpacity ?? 0.35))
 }

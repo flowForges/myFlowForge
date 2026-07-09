@@ -1,4 +1,10 @@
+import { useState } from 'react'
 import type { Appearance, Terminal, CloseAction, Notifications } from '@shared/types'
+
+const BG_SCOPES: { key: NonNullable<Appearance['bgScope']>; label: string }[] = [
+  { key: 'app', label: '整个应用' },
+  { key: 'chat', label: '仅会话区' },
+]
 
 interface AppearancePaneProps {
   appearance: Appearance
@@ -57,6 +63,18 @@ const CLOSE_ACTIONS: { key: CloseAction; label: string }[] = [
 export function AppearancePane({ appearance, onChange, notifications, onNotificationsChange, terminal, onTerminalChange, closeAction, onCloseActionChange }: AppearancePaneProps) {
   const opacity = appearance.windowOpacity ?? 1
   const blur = appearance.blurAmount ?? 0
+  const bgImage = appearance.bgImage ?? ''
+  const bgScope = appearance.bgScope ?? 'off'
+  const bgOpacity = appearance.bgOpacity ?? 0.35
+  const [bgErr, setBgErr] = useState('')
+  const pickBg = async () => {
+    setBgErr('')
+    const r = await window.forge.pickBgImage?.()
+    if (!r) return
+    if (r.error) { setBgErr(r.error); return }
+    // First upload turns the feature on (default to whole-app); later uploads keep the current scope.
+    if (r.dataUrl) onChange({ bgImage: r.dataUrl, bgScope: bgScope === 'off' ? 'app' : bgScope })
+  }
   return (
     <>
       <div className="set-group">
@@ -184,6 +202,55 @@ export function AppearancePane({ appearance, onChange, notifications, onNotifica
             </div>
             <button className="wf-pick" onClick={() => window.forge.appRelaunch()}>立即重启生效</button>
           </div>
+        )}
+        <div className="set-row">
+          <div className="info">
+            <div className="t">背景图</div>
+            <div className="d">
+              上传一张图片作为背景 · 可铺满整个应用或仅会话区 · 拖动调节可见度。空 = 关闭
+              {bgErr && <span style={{ color: 'var(--del)', marginLeft: 6 }}>{bgErr}</span>}
+            </div>
+          </div>
+          <div className="seg">
+            <button className="wf-pick" onClick={() => void pickBg()}>{bgImage ? '更换图片' : '上传图片'}</button>
+            {bgImage && <button className="wf-pick" onClick={() => onChange({ bgImage: '', bgScope: 'off' })}>清除</button>}
+          </div>
+        </div>
+        {bgImage && (
+          <>
+            <div className="set-row">
+              <div className="info">
+                <div className="t">背景范围</div>
+                <div className="d">整个应用:侧栏 / 首页 / 会话区都透出图片;仅会话区:只在对话区透出</div>
+              </div>
+              <div className="seg">
+                {BG_SCOPES.map(({ key, label }) => (
+                  <button key={key} className={`wf-pick${bgScope === key ? ' on' : ''}`} onClick={() => onChange({ bgScope: key })}>{label}</button>
+                ))}
+              </div>
+            </div>
+            <div className="set-row">
+              <div className="info">
+                <div className="t">背景可见度</div>
+                <div className="d">图片越明显,正文对比越低 · 建议保持较低值以便阅读</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '180px', justifyContent: 'flex-end' }}>
+                <input
+                  type="range"
+                  aria-label="背景可见度"
+                  min={0.05}
+                  max={1}
+                  step={0.05}
+                  value={bgOpacity}
+                  onChange={e => onChange({ bgOpacity: Number(e.target.value) })}
+                  style={{ flex: '1 1 auto', maxWidth: '160px' }}
+                />
+                <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: '12px', color: 'var(--muted)', width: '38px', textAlign: 'right' }}>
+                  {Math.round(bgOpacity * 100)}%
+                </span>
+              </div>
+            </div>
+          </>
         )}
         <div className="set-row">
           <div className="info">

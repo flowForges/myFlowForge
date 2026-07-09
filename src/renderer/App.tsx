@@ -494,6 +494,9 @@ export function App() {
 
   return (
     <div className={`window${collapsed ? ' collapsed' : ''}${inspCollapsed ? ' insp-collapsed' : ''}${view === 'home' ? ' home-mode' : ''}`}>
+      {/* App-wide background image layer (shown only when appearance.bgScope === 'app'; the chat-only
+          scope is drawn by .chat::before instead). Fixed, behind all chrome, image + opacity from CSS vars. */}
+      <div className="app-bg-layer" aria-hidden="true" />
       <Titlebar
         collapsed={collapsed}
         onToggleSidebar={() => setCollapsed(c => !c)}
