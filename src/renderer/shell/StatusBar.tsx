@@ -32,7 +32,6 @@ export interface SbTermProps {
 }
 
 export interface StatusBarProps {
-  branch: string
   providers: ProviderInfo[]
   sbLog?: SbLogProps
   sbTerm?: SbTermProps
@@ -49,7 +48,7 @@ export interface StatusBarProps {
   }
 }
 
-export function StatusBar({ branch, providers, sbLog, sbTerm, usageByProvider, update }: StatusBarProps) {
+export function StatusBar({ providers, sbLog, sbTerm, usageByProvider, update }: StatusBarProps) {
   return (
     <div className="statusbar">
       {/* Model indicators — only providers actually detected on this machine */}
@@ -108,20 +107,6 @@ export function StatusBar({ branch, providers, sbLog, sbTerm, usageByProvider, u
           </button>
         )}
 
-        {/* Only show the git-branch chip when there actually is a branch — non-git workspaces left it
-            showing an empty/dash slot. */}
-        {branch && branch.trim() && (
-          <span className="it">
-            {/* git-branch icon */}
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="6" y1="3" x2="6" y2="15" />
-              <circle cx="18" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 9a9 9 0 0 1-9 9" />
-            </svg>
-            {branch}
-          </span>
-        )}
         {update && (
           <span
             className={'it sb-ver' + (update.checkFailed ? ' failed' : '')}

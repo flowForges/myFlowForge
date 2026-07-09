@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { StatusBar } from './StatusBar'
 
-const base = { branch: 'main', providers: [] as any[] }
+const base = { providers: [] as any[] }
 
 describe('StatusBar terminal toggle', () => {
   it('renders the 终端 toggle and calls onToggleTerminal on click', () => {

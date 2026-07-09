@@ -624,7 +624,6 @@ export function App() {
         <LayoutToggle layout={dock.layout} onToggle={dock.toggleLayout} />
       </div>
       <StatusBar
-        branch={engine.run?.workspaceName ?? '—'}
         providers={providers}
         usageByProvider={usageByProvider}
         sbLog={{

@@ -186,14 +186,8 @@ describe('Sidebar', () => {
 // ── StatusBar ─────────────────────────────────────────────────────────────────
 
 describe('StatusBar', () => {
-  it('renders the branch text', () => {
-    render(<StatusBar branch="feat/agent-orchestration" providers={[]} />)
-    expect(screen.getByText(/feat\/agent-orchestration/)).toBeInTheDocument()
-    expect(screen.queryByText('Claude Code')).not.toBeInTheDocument()
-  })
-
   it('shows only providers actually installed on this machine (hides the rest)', () => {
-    render(<StatusBar branch="b" providers={[
+    render(<StatusBar providers={[
       { id: 'claude', displayName: 'Claude Code', installed: true, models: [] },
       { id: 'gemini', displayName: 'Gemini CLI', installed: false, models: [] },
     ]} />)
@@ -202,7 +196,7 @@ describe('StatusBar', () => {
   })
 
   it('renders SVG icon for a known provider (claude) — from SVG_OVERRIDE', () => {
-    const { container } = render(<StatusBar branch="b" providers={[
+    const { container } = render(<StatusBar providers={[
       { id: 'claude', displayName: 'Claude Code', installed: true, models: [] },
     ]} />)
     // The claude pill should have an svg element inside .mc-logo-sm
@@ -213,7 +207,7 @@ describe('StatusBar', () => {
 
   it('renders glyph/first-letter fallback for unknown provider id — no crash', () => {
     // 'foo' is not in SVG_OVERRIDE or catalog, should fall back to 'F' (displayName[0])
-    const { container } = render(<StatusBar branch="b" providers={[
+    const { container } = render(<StatusBar providers={[
       { id: 'foo', displayName: 'FooAgent', installed: true, models: [] },
     ]} />)
     const logo = container.querySelector('.mc-logo-sm')
@@ -237,7 +231,7 @@ describe('StatusBar', () => {
   for (const [providerId, expectedDs] of Object.entries(EXPECTED_PATHS)) {
     it(`locks SVG path d for provider "${providerId}" against refactor corruption`, () => {
       const displayName = providerId.charAt(0).toUpperCase() + providerId.slice(1)
-      const { container } = render(<StatusBar branch="b" providers={[
+      const { container } = render(<StatusBar providers={[
         { id: providerId, displayName, installed: true, models: [] },
       ]} />)
       const logo = container.querySelector('.mc-logo-sm')

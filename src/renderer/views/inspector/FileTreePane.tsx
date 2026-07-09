@@ -107,6 +107,9 @@ export function FileTreePane({
   }
   const expandAll = () => setClosed(new Set())
   const collapseAll = () => setClosed(new Set(allDirPaths(tree)))
+  // One toggle instead of two buttons: collapse when anything is open, expand when all is collapsed.
+  const treeDirs = allDirPaths(tree)
+  const allCollapsed = treeDirs.length > 0 && treeDirs.every(p => closed.has(p))
 
   const FileRow = ({ node }: { node: TreeNode }) => (
     <button
@@ -192,16 +195,18 @@ export function FileTreePane({
               )}
             </svg>
           </button>
-          <button className="tree-tool-btn" title="全部展开" aria-label="全部展开" onClick={expandAll}>
+          <button
+            className="tree-tool-btn"
+            title={allCollapsed ? '全部展开' : '全部收起'}
+            aria-label={allCollapsed ? '全部展开' : '全部收起'}
+            onClick={allCollapsed ? expandAll : collapseAll}
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="7 13 12 18 17 13" />
-              <polyline points="7 6 12 11 17 6" />
-            </svg>
-          </button>
-          <button className="tree-tool-btn" title="全部收起" aria-label="全部收起" onClick={collapseAll}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="7 11 12 6 17 11" />
-              <polyline points="7 18 12 13 17 18" />
+              {allCollapsed ? (
+                <><polyline points="7 13 12 18 17 13" /><polyline points="7 6 12 11 17 6" /></>
+              ) : (
+                <><polyline points="7 11 12 6 17 11" /><polyline points="7 18 12 13 17 18" /></>
+              )}
             </svg>
           </button>
         </div>
