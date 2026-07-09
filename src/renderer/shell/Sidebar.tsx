@@ -47,7 +47,7 @@ export interface SidebarProps {
   onSwitchSession?: (workspaceId: string, sessionId: string) => void
   onCloseSession?: (id: string) => void
   onRenameSession?: (id: string, title: string) => void
-  onNewSession?: () => void
+  onNewSession?: (workspaceId: string) => void
   // C2: expand state for multi-workspace session lists (C3 will render/toggle)
   expandedIds?: Set<string>
   sessionsByWs?: Record<string, ChatSession[]>
@@ -127,7 +127,7 @@ interface GroupSectionProps {
   onSwitchSession?: (workspaceId: string, sessionId: string) => void
   onCloseSession?: (id: string) => void
   onRenameSession?: (id: string, title: string) => void
-  onNewSession?: () => void
+  onNewSession?: (workspaceId: string) => void
   expandedIds?: Set<string>
   sessionsByWs?: Record<string, ChatSession[]>
   onToggleExpand?: (id: string) => void
@@ -223,6 +223,17 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                     return menu.length ? <WsMenu items={menu} /> : null
                   })()}
                 </span>
+                {!item.archived && onNewSession && (
+                  <span
+                    className="ws-newsess"
+                    role="button"
+                    title="新建会话"
+                    aria-label="新建会话"
+                    onClick={e => { e.stopPropagation(); onNewSession(item.id) }}
+                  >
+                    {PLUS_ICON}
+                  </span>
+                )}
                 {!item.archived && onPin && (
                   <span
                     className={`ws-pin${item.pinned ? ' on' : ''}`}
@@ -283,7 +294,6 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                       )
                     })
                   })()}
-                  <button className="ws-sess-new" onClick={() => onNewSession?.()}>{PLUS_ICON}新建会话</button>
                 </div>
               )}
             </div>

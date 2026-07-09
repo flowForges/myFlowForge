@@ -536,7 +536,13 @@ export function App() {
           }}
           onCloseSession={sessions.closeSession}
           onRenameSession={sessions.renameSession}
-          onNewSession={sessions.newSession}
+          onNewSession={(wsId) => {
+            // Active workspace: use the bound sessions hook. A non-active (but visible) workspace's
+            // "+" must create the session against ITS path — sessions.newSession is scoped to the
+            // active ws — so create it directly, then navigate so useSessions(wsId) loads it active.
+            if (!wsId || wsId === activeWsId) { void sessions.newSession(); return }
+            void (async () => { await window.forge.sessionNew?.(wsId); setActiveId(wsId); setView('ws') })()
+          }}
           expandedIds={new Set(expandedPaths)}
           sessionsByWs={sessionsMap}
           onToggleExpand={onToggleExpand}

@@ -36,14 +36,15 @@ describe('Sidebar session list', () => {
     expect(screen.getByText('OKLch 迁移')).toBeTruthy()
     expect(screen.getByText('新会话')).toBeTruthy()
     expect(document.querySelectorAll('.ws-sess')).toHaveLength(2)
-    expect(screen.getByText('新建会话')).toBeTruthy()
+    // 新建会话 moved from a bottom row to a workspace-header icon (title), and carries the ws id.
+    expect(screen.getByTitle('新建会话')).toBeTruthy()
 
     fireEvent.click(screen.getByText('新会话'))
     expect(onSwitchSession).toHaveBeenCalledWith(wsId, 's2')
     fireEvent.click(screen.getAllByTitle('关闭会话')[1])
     expect(onCloseSession).toHaveBeenCalledWith('s2')
-    fireEvent.click(screen.getByText('新建会话'))
-    expect(onNewSession).toHaveBeenCalled()
+    fireEvent.click(screen.getByTitle('新建会话'))
+    expect(onNewSession).toHaveBeenCalledWith(wsId)
 
     fireEvent.doubleClick(screen.getByText('新会话'))
     const input = screen.getByDisplayValue('新会话')

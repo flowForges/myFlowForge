@@ -199,6 +199,18 @@
 .ws-pin svg { width: 12px; height: 12px; }
 .window.collapsed .ws-pin { display: none; }
 
+/* New-session control on the workspace header — revealed on hover (was a full-width row per expanded
+   workspace, which stacked up and felt cluttered). */
+.ws-newsess {
+  flex: 0 0 auto; width: 20px; height: 20px; border-radius: 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--faint); opacity: 0; transition: opacity .12s, background .12s, color .12s;
+}
+.ws-item:hover .ws-newsess { opacity: 1; }
+.ws-newsess:hover { background: var(--surface-2); color: var(--accent); }
+.ws-newsess svg { width: 13px; height: 13px; }
+.window.collapsed .ws-newsess { display: none; }
+
 /* 非当前工作区:多会话计数小角标 */
 .ws-scount { flex: 0 0 auto; align-self: center; display: inline-flex; align-items: center; gap: 3px;
   font-size: 10px; font-weight: 600; font-family: var(--mono); color: var(--faint);
@@ -235,11 +247,6 @@
   border-radius: 5px; padding: 1px 4px; white-space: nowrap; line-height: 1.4;
 }
 .ws-sess-badge.cont { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 40%, var(--border)); }
-.ws-sess-new { width: 100%; display: flex; align-items: center; gap: 7px; padding: 4px 7px; border-radius: 6px;
-  font-size: 11.5px; color: var(--faint); transition: .12s; position: relative; }
-.ws-sess-new::before { content: ""; position: absolute; left: -9px; top: 50%; width: 6px; height: 1px; background: var(--border); }
-.ws-sess-new:hover { background: var(--surface); color: var(--fg-2); }
-.ws-sess-new svg { width: 12px; height: 12px; }
 /* 折叠成图标轨道时,会话子列表与计数角标都隐藏 */
 .window.collapsed .ws-sess-list, .window.collapsed .ws-scount { display: none; }
 
