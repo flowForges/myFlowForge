@@ -28,7 +28,7 @@ import type { AgentProvider } from '../agents/types'
 import type { StartRunOpts } from '../orchestrator/orchestrator'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
-import { readChanges, readChangesMulti } from '../git/changes'
+import { readChanges, readChangesMulti, readBranch } from '../git/changes'
 import { perfSpan } from '../perf/perfSpans'
 import { execFile } from 'node:child_process'
 import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile } from '../openers/detect'
@@ -566,6 +566,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.gitDiff, (_e, a: { cwd: string; file: string }) => readDiff(a.cwd, a.file, proxy()))
   ipcMain.handle(CH.gitFile, (_e, a: { cwd: string; file: string }) => readFile(a.cwd, a.file, proxy()))
   ipcMain.handle(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
+  ipcMain.handle(CH.gitBranch, (_e, cwd: string) => readBranch(cwd, proxy()))
   ipcMain.handle(CH.fileSearchContent, (_e, a: { root: string; query: string; files?: string[] }) =>
     searchContent({ root: a.root, query: a.query, files: a.files }))
   ipcMain.handle(CH.watchChanges, (_e, cwd: string) => {

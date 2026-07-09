@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git } from './gitRunner'
-import { readChanges } from './changes'
+import { readChanges, readBranch } from './changes'
 import { readDiff } from './diff'
 import { readTree } from '../fs/fileTree'
 import { ensureMirror, addWorktree } from './worktree'
@@ -65,6 +65,14 @@ describe('readChanges vs pull baseline (worktree upstream)', () => {
     rmSync(join(wt, 'README.md'))                               // delete → D
     const byPath = Object.fromEntries((await readChanges(wt)).map(c => [c.path, c.type]))
     expect(byPath).toEqual({ 'app.ts': 'M', 'NOTES.md': 'A', 'README.md': 'D' })
+  })
+
+  it('readBranch returns the baseline branch (main) for a provisioned worktree', async () => {
+    const mirror = join(root, 'mirror', 'p.git'), wt = join(root, 'ws', 'p')
+    await ensureMirror({ mirror, repoUrl: origin })
+    await addWorktree({ mirror, worktreePath: wt, branch: 'forge/x', baseBranch: 'main' })
+    expect(await readBranch(wt)).toBe('main')
+    expect(await readBranch(join(root, 'nope'))).toBe('')   // non-git → ''
   })
 
   it('an existing worktree with NO upstream still baselines against origin/HEAD (not all-new)', async () => {

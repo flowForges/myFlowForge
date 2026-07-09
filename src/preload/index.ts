@@ -85,6 +85,7 @@ const api = {
   gitDiff: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitDiff, { cwd, file }),
   gitFile: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitFile, { cwd, file }),
   fsTree: (cwd: string) => ipcRenderer.invoke(CH.fsTree, cwd),
+  gitBranch: (cwd: string) => ipcRenderer.invoke(CH.gitBranch, cwd),
   searchContent: (a: { root: string; query: string; files?: string[] }): Promise<import('@shared/types').ContentSearchResult> => ipcRenderer.invoke(CH.fileSearchContent, a),
   watchChanges: (cwd: string) => ipcRenderer.invoke(CH.watchChanges, cwd),
   watchStop: () => ipcRenderer.invoke(CH.watchStop),

@@ -4,6 +4,19 @@ import { git } from './gitRunner'
 import type { ChangeItem, ChangeType, MultiChanges } from '@shared/types'
 export type { MultiChanges }
 
+// The branch to show for a project worktree: the pull baseline (its upstream / origin's default,
+// e.g. "main"), falling back to the checked-out branch. '' when the dir isn't a git repo.
+export async function readBranch(cwd: string, proxy = ''): Promise<string> {
+  for (const args of [
+    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+    ['rev-parse', '--abbrev-ref', 'origin/HEAD'],
+  ]) {
+    try { const r = (await git(args, { cwd, proxy })).trim().replace(/^origin\//, ''); if (r) return r } catch { /* try next */ }
+  }
+  try { const r = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, proxy })).trim(); if (r && r !== 'HEAD') return r } catch { /* not a repo */ }
+  return ''
+}
+
 function parseNumstat(numstat: string): Map<string, { add: number; del: number }> {
   const stat = new Map<string, { add: number; del: number }>()
   for (const l of numstat.split('\n').filter(Boolean)) {

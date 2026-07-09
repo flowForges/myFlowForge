@@ -62,6 +62,7 @@ export const CH = {
   gitDiff: 'git:diff',
   gitFile: 'git:file',
   fsTree: 'fs:tree',
+  gitBranch: 'git:branch',
   fileSearchContent: 'file:search-content',
   watchChanges: 'watch:changes',
   watchStop: 'watch:stop',
