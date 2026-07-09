@@ -1,7 +1,40 @@
-import { Fragment, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type ReactNode } from 'react'
 import type { WorkspaceMeta, RunState, AgentState, HomeStats, HomeWsStat } from '@shared/types'
 import { InstallBanner } from './InstallBanner'
 import { QuickStart } from './QuickStart'
+
+// Live local-time greeting: time-of-day salutation + a ticking clock (weekday · date · 时段) in the
+// user's own timezone (new Date() is local). The seconds tick supplies the motion; the block also
+// fades/slides in on mount (see .home-hi / .home-clock in home.css).
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+function periodOf(h: number): { hi: string; tod: string } {
+  if (h < 5) return { hi: '夜深了', tod: '凌晨' }
+  if (h < 9) return { hi: '早上好', tod: '清晨' }
+  if (h < 11) return { hi: '上午好', tod: '上午' }
+  if (h < 13) return { hi: '中午好', tod: '中午' }
+  if (h < 18) return { hi: '下午好', tod: '下午' }
+  if (h < 23) return { hi: '晚上好', tod: '晚上' }
+  return { hi: '夜深了', tod: '深夜' }
+}
+function HomeGreeting() {
+  const [now, setNow] = useState(() => new Date())
+  useEffect(() => { const id = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(id) }, [])
+  const p = periodOf(now.getHours())
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  const time = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`
+  return (
+    <div className="home-hi">
+      <span className="home-hi-wave" aria-hidden="true">~</span> {p.hi}
+      <span className="home-clock">
+        <span className="hc-dot" aria-hidden="true" />
+        <span className="hc-time">{time}</span>
+        <span className="hc-sep">·</span>{WEEKDAYS[now.getDay()]}
+        <span className="hc-sep">·</span>{now.getMonth() + 1}月{now.getDate()}日
+        <span className="hc-sep">·</span>{p.tod}
+      </span>
+    </div>
+  )
+}
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const PLUS_SVG = (
@@ -119,7 +152,7 @@ export function HomeView({ workspaces, stats, activeRunPath, run, onNew, onOpenD
         <InstallBanner onGoSettings={onOpenSettings} />
         <header className="home-head">
           <div className="home-head-l">
-            <div className="home-hi">~ 欢迎回来</div>
+            <HomeGreeting />
             <h1 className="home-h1">继续构建</h1>
           </div>
           <div className="home-actions">

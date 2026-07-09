@@ -2,12 +2,37 @@
    首页 (home) — 1:1 ported from the prototype (index.html #view-home)
    ============================================================ */
 #view-home { flex-direction: column; overflow-y: auto; }
-.home-wrap { max-width: 920px; margin: 0 auto; width: 100%; padding: 40px 40px 56px; }
+.home-wrap { position: relative; max-width: 920px; margin: 0 auto; width: 100%; padding: 40px 40px 56px; }
 
 /* 头部:问候 + 行内操作,同一行平衡布局 */
-.home-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
-.home-hi { font-size: 12.5px; font-weight: 600; color: var(--accent); font-family: var(--mono); letter-spacing: .04em; }
-.home-h1 { font-size: 25px; font-weight: 680; letter-spacing: -.02em; margin-top: 6px; }
+.home-head { position: relative; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
+/* 沉浸渐变 Hero:标题区背后一团缓慢漂移的 accent 光晕,随强调色变化,营造质感。内容在其上层。 */
+.home-head::before {
+  content: ""; position: absolute; left: -70px; top: -90px; width: 460px; height: 280px; z-index: 0; pointer-events: none;
+  background: radial-gradient(58% 58% at 32% 42%, color-mix(in oklab, var(--accent) 32%, transparent), transparent 72%);
+  filter: blur(34px); opacity: .5; animation: home-glow 13s ease-in-out infinite alternate;
+}
+@keyframes home-glow { from { transform: translate(0,0) scale(1); opacity: .4; } to { transform: translate(46px,14px) scale(1.18); opacity: .62; } }
+.home-head > * { position: relative; z-index: 1; }
+@media (prefers-reduced-motion: reduce) { .home-head::before { animation: none; } }
+.home-hi { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; font-size: 12.5px; font-weight: 600; color: var(--accent); font-family: var(--mono); letter-spacing: .04em; animation: home-hi-in .5s cubic-bezier(.2,.7,.2,1) both; }
+@keyframes home-hi-in { from { opacity: 0; transform: translateY(-5px); } }
+/* the ~ gently waves so the greeting feels alive */
+.home-hi-wave { display: inline-block; animation: home-wave 2.6s ease-in-out infinite; transform-origin: 70% 70%; }
+@keyframes home-wave { 0%, 60%, 100% { transform: rotate(0); } 70% { transform: rotate(14deg); } 85% { transform: rotate(-8deg); } }
+/* live clock pill: mono time + weekday · date · 时段, muted so it sits under the accent greeting */
+.home-clock { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 9%, transparent); color: var(--muted); font-weight: 500; }
+.home-clock .hc-time { color: var(--fg-2); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.home-clock .hc-sep { color: var(--faint); margin: 0 1px; }
+.home-clock .hc-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: home-clock-pulse 1.6s ease-in-out infinite; }
+@keyframes home-clock-pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent); } 50% { opacity: .55; box-shadow: 0 0 0 4px transparent; } }
+/* 标题:fg→accent 的渐变文字,压出层次;渐变裁到文字上,浅深两色都保持可读。 */
+.home-h1 { font-size: 27px; font-weight: 720; letter-spacing: -.02em; margin-top: 8px;
+  background: linear-gradient(96deg, var(--fg) 42%, color-mix(in oklab, var(--accent) 78%, var(--fg)));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: home-hi-in .5s cubic-bezier(.2,.7,.2,1) .06s both; }
+@media (prefers-reduced-motion: reduce) { .home-hi, .home-h1, .home-hi-wave, .home-clock .hc-dot { animation: none; } }
 .home-actions { display: flex; gap: 10px; flex: 0 0 auto; }
 .home-cta {
   height: 36px; padding: 0 15px; border-radius: 9px; font-size: 13px; font-weight: 600;
@@ -21,8 +46,9 @@
 
 /* 概览统计条:一行安静的数字,信息密度高、视觉轻 */
 .home-stats { display: flex; align-items: center; gap: 0; margin-top: 24px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
-.hs-cell { flex: 1; padding: 13px 18px; display: flex; flex-direction: column; gap: 4px; border-left: 1px solid var(--border); }
+.hs-cell { flex: 1; padding: 13px 18px; display: flex; flex-direction: column; gap: 4px; border-left: 1px solid var(--border); transition: background .15s; }
 .hs-cell:first-child { border-left: 0; }
+.hs-cell:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); }
 .hs-k { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
 .hs-v { font-family: var(--mono); font-size: 17px; font-weight: 600; color: var(--fg); letter-spacing: -.01em; }
 .hs-v small { font-size: 12px; font-weight: 500; }
@@ -52,7 +78,8 @@
     var(--surface);
   border: 1px solid var(--border-2); border-radius: 16px; padding: 20px 22px; transition: .16s;
 }
-.focus-card:hover { border-color: var(--accent); }
+.focus-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 12px 34px color-mix(in oklab, var(--accent) 13%, transparent); }
+@media (prefers-reduced-motion: reduce) { .focus-card:hover { transform: none; } }
 .fc-top { display: flex; align-items: center; gap: 10px; }
 .fc-name { font-size: 16px; font-weight: 660; letter-spacing: -.01em; }
 .fc-path { font-family: var(--mono); font-size: 11px; color: var(--faint); }
