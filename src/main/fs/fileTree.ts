@@ -1,6 +1,7 @@
 import { readdir } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { git } from '../git/gitRunner'
+import { readBranch } from '../git/changes'
 import type { TreeNode, ChangeItem } from '@shared/types'
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.forge', 'dist', 'out', '.next', 'target', '.venv', '__pycache__'])
@@ -23,8 +24,9 @@ const MAX_TREE_FILES = 4000
 // Emits a trailing-'/' marker for each directory entered, so a folder still becomes a node even when
 // it holds no files within budget (a build-only or freshly-cloned project) — buildTree would
 // otherwise only ever create a dir node when a FILE lives under it, silently dropping empty projects.
-async function walkDir(root: string, maxFiles = MAX_TREE_FILES, maxDirs = 15000, deadlineMs = 6000): Promise<string[]> {
+async function walkDir(root: string, maxFiles = MAX_TREE_FILES, maxDirs = 15000, deadlineMs = 6000): Promise<{ paths: string[]; repos: string[] }> {
   const paths: string[] = []
+  const repos: string[] = []   // relative paths of directories that are a git repo root (contain .git)
   const queue = [root]
   let dirs = 0
   const start = Date.now()
@@ -35,6 +37,8 @@ async function walkDir(root: string, maxFiles = MAX_TREE_FILES, maxDirs = 15000,
     dirs++
     let entries: import('node:fs').Dirent[]
     try { entries = await readdir(dir, { withFileTypes: true }) } catch { continue }
+    // A `.git` entry (dir for a normal repo, FILE for a linked worktree) marks this dir as a repo root.
+    if (dir !== root && repos.length < 60 && entries.some(e => e.name === '.git')) repos.push(rel(dir))
     for (const e of entries) {
       const full = join(dir, e.name)
       if (e.isDirectory()) {
@@ -46,7 +50,7 @@ async function walkDir(root: string, maxFiles = MAX_TREE_FILES, maxDirs = 15000,
       }
     }
   }
-  return paths
+  return { paths, repos }
 }
 
 export function buildTree(files: string[], changes: ChangeItem[] = []): TreeNode[] {
@@ -80,17 +84,43 @@ export function buildTree(files: string[], changes: ChangeItem[] = []): TreeNode
   return root
 }
 
+// Find a directory node by its '/'-joined path.
+function findDirNode(nodes: TreeNode[], path: string): TreeNode | undefined {
+  let level: TreeNode[] | undefined = nodes
+  let node: TreeNode | undefined
+  for (const part of path.split('/').filter(Boolean)) {
+    node = level?.find(n => n.type === 'dir' && n.name === part)
+    if (!node) return undefined
+    level = node.children
+  }
+  return node
+}
+
+// Tag each git-repo folder node with its branch (readBranch = baseline/upstream, else current) so the
+// tree can show "folder  main" per repo. Bounded (repos capped in walkDir) and run in parallel.
+async function attachBranches(tree: TreeNode[], cwd: string, repos: string[], proxy: string): Promise<void> {
+  await Promise.all(repos.map(async rel => {
+    const node = findDirNode(tree, rel)
+    if (!node) return
+    const b = await readBranch(join(cwd, rel), proxy).catch(() => '')
+    if (b) node.branch = b
+  }))
+}
+
 export async function readTree(cwd: string, changes: ChangeItem[] = [], proxy = ''): Promise<TreeNode[]> {
   let files: string[]
+  let repos: string[] = []
   try {
     const out = await git(['ls-files', '--cached', '--others', '--exclude-standard'], { cwd, proxy })
     files = [...new Set(out.split('\n').filter(Boolean))]
     if (files.length > MAX_TREE_FILES) files = files.slice(0, MAX_TREE_FILES)
     // A non-git dir (e.g. the workspace root over several project worktrees) returns nothing
     // from ls-files — fall back to a plain filesystem walk so its tree still shows.
-    if (files.length === 0) files = await walkDir(cwd)
+    if (files.length === 0) { const w = await walkDir(cwd); files = w.paths; repos = w.repos }
   } catch {
-    files = await walkDir(cwd)
+    const w = await walkDir(cwd); files = w.paths; repos = w.repos
   }
-  return buildTree(files, changes)
+  const tree = buildTree(files, changes)
+  if (repos.length) await attachBranches(tree, cwd, repos, proxy)
+  return tree
 }

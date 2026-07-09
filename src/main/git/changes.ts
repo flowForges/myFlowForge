@@ -13,6 +13,9 @@ export async function readBranch(cwd: string, proxy = ''): Promise<string> {
   ]) {
     try { const r = (await git(args, { cwd, proxy })).trim().replace(/^origin\//, ''); if (r) return r } catch { /* try next */ }
   }
+  // `branch --show-current` returns the branch even on an UNBORN branch (fresh repo, no commit yet),
+  // where `rev-parse --abbrev-ref HEAD` just says "HEAD".
+  try { const r = (await git(['branch', '--show-current'], { cwd, proxy })).trim(); if (r) return r } catch { /* not a repo */ }
   try { const r = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd, proxy })).trim(); if (r && r !== 'HEAD') return r } catch { /* not a repo */ }
   return ''
 }

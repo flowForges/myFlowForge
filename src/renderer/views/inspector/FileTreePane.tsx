@@ -66,8 +66,7 @@ export function FileTreePane({
   onOpen,
   selected,
   searchRoot,
-  onRefresh,
-  branch
+  onRefresh
 }: {
   tree: TreeNode[]
   onOpen: (file: string, type: ChangeType, cwd?: string) => void
@@ -77,8 +76,6 @@ export function FileTreePane({
   searchRoot?: string
   /** Manual 刷新: re-read the tree now (aggregate mode has no git watcher, so new files need it). */
   onRefresh?: () => void
-  /** Current project's git branch (baseline), shown as a chip. Empty = no chip (aggregate / non-git). */
-  branch?: string
 }) {
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<'name' | 'content'>('name')
@@ -142,6 +139,12 @@ export function FileTreePane({
               <ChevIcon />
               <FolderIcon />
               <span>{n.name}</span>
+              {n.branch && (
+                <span className="tree-branch-tag" title={`git 分支:${n.branch}`}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+                  {n.branch}
+                </span>
+              )}
             </button>
             <div className="tree-children">{renderNodes(n.children ?? [], forceOpen)}</div>
           </div>
@@ -158,14 +161,6 @@ export function FileTreePane({
 
   return (
     <>
-      {branch && (
-        <div className="tree-branch" title={`当前分支:${branch}`}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" />
-          </svg>
-          <span>{branch}</span>
-        </div>
-      )}
       <div className="tree-tools">
         <div className="tree-search">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
