@@ -277,6 +277,40 @@ describe('editWorkspace', () => {
     expect(existsSync(join(wsPath, 'b', 'README.md'))).toBe(true)
   })
 
+  it('emits setup/provision events for a newly added project (live progress, no silent hang)', async () => {
+    const srcA = join(root, 'srcE1'); await makeSourceRepo(srcA)
+    const srcB = join(root, 'srcE2'); await makeSourceRepo(srcB)
+    const { createWorkspace, editWorkspace } = await import('./workspaceService')
+    const known = [
+      { id: 'a', name: 'a', repoUrl: srcA, defaultBranch: 'main' },
+      { id: 'b', name: 'b', repoUrl: srcB, defaultBranch: 'main' },
+    ]
+    const wsPath = join(root, 'ws-emit')
+    const baseA = { name: 'w', path: wsPath, workflowId: 'standard',
+      stages: [{ key: 'develop' as const, provider: 'claude', model: 'm' }],
+      projects: [{ repoId: 'a', branch: 'forge/x' }] }
+    await createWorkspace({ opts: baseA, knownProjects: known, proxy: '' })
+
+    // Editing to ADD project b provisions it → emits progress.
+    const added: import('@shared/types').SetupEvent[] = []
+    await editWorkspace({
+      path: wsPath, knownProjects: known, proxy: '', emit: (e) => added.push(e),
+      opts: { ...baseA, projects: [{ repoId: 'a', branch: 'forge/x' }, { repoId: 'b', branch: 'forge/x' }] },
+    })
+    const types = added.map(e => e.type)
+    expect(types).toContain('setup:start')
+    expect(types).toContain('setup:done')
+    expect(added).toContainEqual({ type: 'provision:start', project: 'b', index: 0, total: 1 })
+    expect(added).toContainEqual({ type: 'provision', project: 'b', index: 0, total: 1 })
+    // Nothing to provision (no new project) → no setup events at all.
+    const none: import('@shared/types').SetupEvent[] = []
+    await editWorkspace({
+      path: wsPath, knownProjects: known, proxy: '', emit: (e) => none.push(e),
+      opts: { ...baseA, name: 'w2', projects: [{ repoId: 'a', branch: 'forge/x' }, { repoId: 'b', branch: 'forge/x' }] },
+    })
+    expect(none).toEqual([])
+  })
+
   it('updates the registry name (keyed by path)', async () => {
     const src = join(root, 'srcC'); await makeSourceRepo(src)
     const { createWorkspace, editWorkspace } = await import('./workspaceService')

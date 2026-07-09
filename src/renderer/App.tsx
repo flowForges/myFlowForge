@@ -358,15 +358,21 @@ export function App() {
 
   async function handleEdit(opts: CreateWorkspaceOpts) {
     if (creating || !editing) return
+    creatingNameRef.current = opts.name          // name a backgrounded edit-done notif
     setCreating(true)
     try {
+      // Adding a project provisions a worktree (slow git clone); editWorkspace now emits the same setup
+      // events as create, so the SetupProgress overlay shows live pull progress instead of a hung 保存中.
       await window.forge.editWorkspace({ path: editing.path, opts })
       setCreateErr(null); setWizardOpen(false); setEditing(null)
+      setSetupVisible(false); setSetupState(INITIAL_SETUP_STATE)
       home.reload()
     } catch (e) {
+      setSetupVisible(false); setSetupState(INITIAL_SETUP_STATE)
       setCreateErr(e instanceof Error ? e.message : String(e))
     } finally {
       setCreating(false)
+      setBackgrounded(false)
     }
   }
 
