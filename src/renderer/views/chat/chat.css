@@ -242,6 +242,9 @@
   position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
   background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 10px;
   box-shadow: var(--shadow); padding: 6px; min-width: 230px; display: none;
+  /* Cap the height so a long model list scrolls inside the popover instead of overflowing off the top
+     of the screen (unreachable rows). overscroll-behavior stops the scroll chaining to the page. */
+  max-height: min(56vh, 440px); overflow-y: auto; overscroll-behavior: contain;
 }
 .menu.open .menu-pop { display: block; }
 .menu-label { font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); padding: 6px 8px 4px; }
