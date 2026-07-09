@@ -9,7 +9,7 @@ import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCa
 import { rebuildProviderRegistry } from '../agents/registry'
 import { refreshProviderModels, setProviderModels } from '../agents/refreshModels'
 import { buildAgentEnv } from '../agents/env'
-import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from 'node:fs'
 import { basename, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
@@ -56,7 +56,7 @@ import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
 import { pickInstaller } from '../update/installer'
 import { makeProxyFetch } from '../update/proxyFetch'
-import { writeFile } from 'node:fs/promises'
+import { writeFile, stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
@@ -144,12 +144,22 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const info = updateChecker.current()
     if (!info) return
     const installer = pickInstaller({
-      fetch: (url) => makeProxyFetch(readSettings().termProxy)(url) as any,
-      writeFile: (p, data) => writeFile(p, data),
+      fetch: (url, init) => makeProxyFetch(readSettings().termProxy)(url, init as any) as any,
       openPath: shell.openPath,
       showItemInFolder: shell.showItemInFolder,
       join,
       tmpDir: app.getPath('temp'),
+      // Stream to a .part file (no 340MB in-memory buffer) + resume from a partial download.
+      partSize: async (p) => { try { return (await fsStat(p)).size } catch { return 0 } },
+      openWriter: (p, append) => {
+        const s = createWriteStream(p, { flags: append ? 'a' : 'w' })
+        return {
+          write: (chunk) => new Promise<void>((res, rej) => s.write(chunk, (err) => err ? rej(err) : res())),
+          close: () => new Promise<void>((res) => s.end(() => res())),
+        }
+      },
+      finalize: (from, to) => fsRename(from, to),
+      discard: (p) => fsUnlink(p).catch(() => {}),
     })
     try {
       await installer.run(info, (p) => broadcast(CH.updateProgress, p))
