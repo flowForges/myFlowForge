@@ -36,25 +36,39 @@
    flex:1 item can't shrink below its content width, so the search box hogged the row and clipped the
    rightmost button (全部收起) — the user saw only 全部展开. */
 /* Per-folder git branch tag, shown after a repo folder's name. */
-.tree-branch-tag { display: inline-flex; align-items: center; gap: 3px; margin-left: 7px; flex: 0 1 auto;
-  min-width: 0; padding: 1px 6px; border-radius: 99px; font: 600 10px/1.4 var(--mono);
-  color: var(--accent); background: var(--accent-dim); }
-.tree-branch-tag svg { width: 10px; height: 10px; flex: 0 0 auto; }
-.tree-branch-tag { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tree-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
-.tree-expand-tools { display: flex; flex: 0 0 auto; gap: 2px; background: var(--surface); border-radius: 7px; padding: 2px; }
+.tree-branch-tag { display: inline-flex; align-items: center; gap: 3px; margin-left: 8px; flex: 0 1 auto;
+  min-width: 0; padding: 0 6px; height: 16px; border-radius: 5px; font: 500 10.5px/1 var(--mono);
+  color: var(--muted); background: color-mix(in oklch, var(--accent) 8%, transparent);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-branch-tag svg { width: 9px; height: 9px; flex: 0 0 auto; opacity: .75; color: var(--accent); }
+/* Single row, NO wrap: the search box (with the 文件名/内容 toggle nested inside) flex-shrinks to make
+   room for the fixed tool buttons, so筛选框 + 三个按钮 always sit on one line and adapt to the pane
+   width. 全部项目 is its own row above; total = 2 clean rows. */
+.tree-tools { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+/* Match the search box exactly: same 30px height (border-box), same border + fill + radius, so the two
+   controls read as one consistent size instead of the borderless tool cluster looking taller/heavier. */
+.tree-expand-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; height: 30px; box-sizing: border-box; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 0 3px; }
 .tree-tool-btn { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 5px; color: var(--muted); flex: 0 0 auto; }
 .tree-tool-btn:hover { background: var(--bg); color: var(--fg); }
 .tree-tool-btn.on { background: var(--bg); color: var(--accent); }
 .tree-tool-btn svg { width: 15px; height: 15px; }
-.tree-search { flex: 1 1 140px; min-width: 0; height: 30px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; display: flex; align-items: center; gap: 7px; padding: 0 10px; }
-.tree-search svg { width: 14px; height: 14px; color: var(--faint); }
+.tree-tool-btn svg.spin { animation: tree-refresh-spin .6s ease; }
+@keyframes tree-refresh-spin { to { transform: rotate(360deg); } }
+/* Grows to fill the row and shrinks freely (min-width:0) so the fixed tool buttons always fit beside
+   it. Right padding is small because the 文件名/内容 toggle now sits INSIDE, at the box's right end. */
+.tree-search { flex: 1 1 auto; min-width: 0; height: 30px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; display: flex; align-items: center; gap: 7px; padding: 0 3px 0 10px; }
+.tree-search svg { width: 14px; height: 14px; color: var(--faint); flex: 0 0 auto; }
 .tree-search input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--fg); font-size: 12.5px; font-family: var(--font); }
 .tree-search input::placeholder { color: var(--faint); }
 /* 文件名 / 内容 搜索切换 (reuses the .pv-toggle look) */
 .search-mode { display: flex; flex: 0 0 auto; background: var(--surface); border-radius: 7px; padding: 2px; }
 .search-mode button { height: 26px; padding: 0 9px; border-radius: 5px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .search-mode button.on { background: var(--bg); color: var(--fg); }
+/* Nested inside the search box: transparent so it reads as one control; the active side uses --bg to
+   stand out against the box's --surface fill. Compact so the actual input keeps as much room as possible. */
+.tree-search .search-mode { background: transparent; padding: 0; gap: 2px; margin-left: 2px; }
+.tree-search .search-mode button { height: 24px; padding: 0 8px; }
+.tree-search .search-mode button.on { background: var(--bg); }
 
 /* 内容搜索结果 (content / full-text hits) */
 .content-hits { display: flex; flex-direction: column; gap: 2px; }

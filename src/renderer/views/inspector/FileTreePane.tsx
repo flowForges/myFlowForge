@@ -80,6 +80,10 @@ export function FileTreePane({
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<'name' | 'content'>('name')
   const [showHidden, setShowHidden] = useState(false)
+  // Spin the 刷新 icon on click so the refresh is visibly acknowledged. onRefresh is fire-and-forget
+  // (the tree re-fetches via parent state), so spin for a fixed short beat rather than awaiting it.
+  const [refreshSpin, setRefreshSpin] = useState(false)
+  const doRefresh = () => { if (!onRefresh) return; setRefreshSpin(true); onRefresh(); window.setTimeout(() => setRefreshSpin(false), 600) }
   const contentMode = mode === 'content' && !!searchRoot
   const search = useContentSearch(searchRoot ? [{ cwd: searchRoot }] : [], query, contentMode)
   // local set of CLOSED folder paths (empty set = everything open)
@@ -174,12 +178,13 @@ export function FileTreePane({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          {/* 文件名/内容 切换嵌进搜索框内,与筛选合成一个 input。后面紧跟工具按钮,同一行自适应、不换行。 */}
+          {searchRoot ? <SearchModeToggle mode={mode} onChange={setMode} /> : null}
         </div>
-        {searchRoot ? <SearchModeToggle mode={mode} onChange={setMode} /> : null}
         <div className="tree-expand-tools">
           {onRefresh && (
-            <button className="tree-tool-btn" title="刷新" aria-label="刷新" onClick={onRefresh}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <button className="tree-tool-btn" title="刷新" aria-label="刷新" onClick={doRefresh}>
+              <svg className={refreshSpin ? 'spin' : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <polyline points="23 4 23 10 17 10" />
                 <polyline points="1 20 1 14 7 14" />
                 <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
@@ -217,7 +222,10 @@ export function FileTreePane({
           </button>
         </div>
       </div>
-      {contentMode ? (
+      {contentMode && query.trim() ? (
+        // Only swap the tree for content-hits once the user has actually typed a keyword. Switching to
+        // 内容 mode with an EMPTY box used to blank the tree immediately (just the "输入关键词" hint),
+        // which read as "my files vanished". Keep the tree visible until there's something to search.
         <ContentHits state={search} onOpen={(file, cwd) => onOpen(file, 'M', cwd)} />
       ) : (
         <div className="tree" id="fileTree">
