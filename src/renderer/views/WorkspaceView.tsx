@@ -302,6 +302,19 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     return () => { live = false }
   }, [aggregate, wsPath])
 
+  // Manual 刷新: re-read the file tree + changes now. Aggregate mode is fetched once on entry (no
+  // git watcher), so a file the AI just wrote — especially one at the workspace ROOT, outside any
+  // project's git repo — won't appear until refreshed. Single-project mode has a watcher but we still
+  // expose refresh for parity / an immediate re-read.
+  const refreshInspector = useCallback(() => {
+    if (aggregate) {
+      if (wsPath) void window.forge.fsTree(wsPath).then(setAggTree)
+      if (projectCwds.length) void window.forge.changesMulti(projectCwds).then(setMultiChanges)
+    } else {
+      wt.refresh()
+    }
+  }, [aggregate, wsPath, projectCwds, wt])
+
   const treeForPane = aggregate ? aggTree : wt.tree
   // Root cwd for file-tree content (full-text) search: the workspace root in aggregate mode
   // (its tree paths are relative to it), else the selected single project.
@@ -823,7 +836,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             <div className={`insp-pane${activeTab === 'changes' ? ' on' : ''}`} id="pane-changes">
               {activeTab === 'changes' && <>
                 <ProjectPicker projects={projects} activeCwd={selected} onSelect={setActiveCwd} />
-                <ChangesPane changes={wt.changes} groups={aggregate ? changeGroups : undefined} cwd={cwd} onOpen={openChangeBrowse} />
+                <ChangesPane changes={wt.changes} groups={aggregate ? changeGroups : undefined} cwd={cwd} onOpen={openChangeBrowse} onRefresh={refreshInspector} />
               </>}
             </div>
 
@@ -831,7 +844,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             <div className={`insp-pane${activeTab === 'files' ? ' on' : ''}`} id="pane-files">
               {activeTab === 'files' && <>
                 <ProjectPicker projects={projects} activeCwd={selected} onSelect={setActiveCwd} />
-                <FileTreePane tree={treeForPane} onOpen={openBrowse} selected={browse ? preview?.file : undefined} searchRoot={treeSearchRoot} />
+                <FileTreePane tree={treeForPane} onOpen={openBrowse} selected={browse ? preview?.file : undefined} searchRoot={treeSearchRoot} onRefresh={refreshInspector} />
               </>}
             </div>
           </div>
@@ -866,6 +879,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           changesCwd={cwd}
           searchRoot={treeSearchRoot}
           onOpenChange={openChangeBrowse}
+          onRefresh={refreshInspector}
         />
       )}
     </div>

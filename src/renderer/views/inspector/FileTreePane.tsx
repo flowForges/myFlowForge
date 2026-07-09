@@ -36,6 +36,15 @@ function allDirPaths(nodes: TreeNode[], acc: string[] = []): string[] {
   return acc
 }
 
+// Drop dot-files / dot-dirs (.env, .github, …) unless the user opts to show hidden files. Heavy dirs
+// like .git/node_modules are already excluded by the backend walk (SKIP_DIRS); this is the softer,
+// user-toggleable layer for ordinary hidden entries.
+function stripHidden(nodes: TreeNode[]): TreeNode[] {
+  return nodes
+    .filter(n => !n.name.startsWith('.'))
+    .map(n => (n.children ? { ...n, children: stripHidden(n.children) } : n))
+}
+
 // Prune the tree to nodes matching the query, preserving folder structure.
 // - file: kept iff its NAME (case-insensitive) includes the query
 // - dir: kept iff it has ≥1 matching descendant file (with filtered children)
@@ -56,7 +65,8 @@ export function FileTreePane({
   tree,
   onOpen,
   selected,
-  searchRoot
+  searchRoot,
+  onRefresh
 }: {
   tree: TreeNode[]
   onOpen: (file: string, type: ChangeType, cwd?: string) => void
@@ -64,9 +74,12 @@ export function FileTreePane({
   selected?: string
   /** Root cwd for content (full-text) search. When absent, only 文件名 filtering is available. */
   searchRoot?: string
+  /** Manual 刷新: re-read the tree now (aggregate mode has no git watcher, so new files need it). */
+  onRefresh?: () => void
 }) {
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<'name' | 'content'>('name')
+  const [showHidden, setShowHidden] = useState(false)
   const contentMode = mode === 'content' && !!searchRoot
   const search = useContentSearch(searchRoot ? [{ cwd: searchRoot }] : [], query, contentMode)
   // local set of CLOSED folder paths (empty set = everything open)
@@ -132,9 +145,10 @@ export function FileTreePane({
     })
 
   const q = query.trim().toLowerCase()
+  const baseTree = showHidden ? tree : stripHidden(tree)
   // When a query is active, render the SAME nested structure but pruned to
   // matching files, with all folders force-expanded (ignore the closed Set).
-  const nodesToRender = q ? filterTree(tree, q) : tree
+  const nodesToRender = q ? filterTree(baseTree, q) : baseTree
 
   return (
     <>
@@ -154,6 +168,30 @@ export function FileTreePane({
         </div>
         {searchRoot ? <SearchModeToggle mode={mode} onChange={setMode} /> : null}
         <div className="tree-expand-tools">
+          {onRefresh && (
+            <button className="tree-tool-btn" title="刷新" aria-label="刷新" onClick={onRefresh}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="23 4 23 10 17 10" />
+                <polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+          )}
+          <button
+            className={'tree-tool-btn' + (showHidden ? ' on' : '')}
+            title={showHidden ? '隐藏 . 开头的文件' : '显示隐藏文件'}
+            aria-label="显示隐藏文件"
+            aria-pressed={showHidden}
+            onClick={() => setShowHidden(v => !v)}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              {showHidden ? (
+                <><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></>
+              ) : (
+                <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></>
+              )}
+            </svg>
+          </button>
           <button className="tree-tool-btn" title="全部展开" aria-label="全部展开" onClick={expandAll}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <polyline points="7 13 12 18 17 13" />

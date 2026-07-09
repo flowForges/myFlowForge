@@ -14,7 +14,13 @@ const engine: EngineApi = {
   pending: [], resolve: () => {}, cancel: () => {}
 }
 
-const fsTree = vi.fn(async () => [{ type: 'dir', name: '.github', path: '.github', children: [] }])
+// A folder plus a file that lives at the WORKSPACE ROOT (outside any project) — aggregate mode walks
+// the workspace root, so a root-level file the AI wrote must show here. (Dot-entries are hidden by
+// default now, so the sample uses non-hidden names.)
+const fsTree = vi.fn(async () => [
+  { type: 'dir', name: 'services', path: 'services', children: [] },
+  { type: 'file', name: 'root-note.md', path: 'root-note.md' },
+])
 
 beforeEach(() => {
   fsTree.mockClear()
@@ -32,7 +38,8 @@ describe('WorkspaceView 全部项目 文件树 aggregate mode', () => {
   it('clicks 文件树 tab and renders workspace-root tree via fsTree', async () => {
     render(<WorkspaceView engine={engine} providers={providers} />)
     fireEvent.click(screen.getByText('文件树'))
-    await waitFor(() => expect(screen.getByText('.github')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('services')).toBeInTheDocument())
+    expect(screen.getByText('root-note.md')).toBeInTheDocument()   // workspace-root file is visible
     expect(fsTree).toHaveBeenCalledWith('/ws')
   })
 })

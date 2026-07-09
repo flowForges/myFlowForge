@@ -35,6 +35,28 @@ describe('FileTreePane', () => {
     expect(folder().classList.contains('closed')).toBe(true)
   })
 
+  it('hides dot-files by default and reveals them via the 显示隐藏文件 toggle', () => {
+    const withHidden: TreeNode[] = [
+      { type: 'file', name: '.env', path: '.env' },
+      { type: 'file', name: 'README.md', path: 'README.md' },
+    ]
+    render(<FileTreePane tree={withHidden} onOpen={vi.fn()} />)
+    expect(screen.getByText('README.md')).toBeInTheDocument()
+    expect(screen.queryByText('.env')).not.toBeInTheDocument()   // hidden by default
+    fireEvent.click(screen.getByLabelText('显示隐藏文件'))
+    expect(screen.getByText('.env')).toBeInTheDocument()          // revealed
+  })
+
+  it('renders a 刷新 button only when onRefresh is provided, and calls it', () => {
+    const onRefresh = vi.fn()
+    const { unmount } = render(<FileTreePane tree={tree} onOpen={vi.fn()} />)
+    expect(screen.queryByLabelText('刷新')).not.toBeInTheDocument()
+    unmount()
+    render(<FileTreePane tree={tree} onOpen={vi.fn()} onRefresh={onRefresh} />)
+    fireEvent.click(screen.getByLabelText('刷新'))
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+  })
+
   it('preserves folder structure under filter (matching file keeps its parent folder)', () => {
     const onOpen = vi.fn()
     render(<FileTreePane tree={tree} onOpen={onOpen} />)

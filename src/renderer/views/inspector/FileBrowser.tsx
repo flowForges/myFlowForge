@@ -24,6 +24,7 @@ export function FileBrowser({
   changesCwd,
   searchRoot,
   onOpenChange,
+  onRefresh,
 }: {
   tree: TreeNode[]
   projects: { name: string; cwd: string }[]
@@ -41,6 +42,8 @@ export function FileBrowser({
   /** Root cwd for file-tree content (full-text) search. */
   searchRoot?: string
   onOpenChange?: (file: string, type: ChangeType, cwd?: string) => void
+  /** Manual 刷新 for the tree / changes list. */
+  onRefresh?: () => void
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -64,9 +67,9 @@ export function FileBrowser({
         <div className="fb-tree">
           <ProjectPicker projects={projects} activeCwd={activeCwd} onSelect={onSelectProject} />
           {source === 'changes' ? (
-            <ChangesPane changes={changes} groups={groups} cwd={changesCwd} onOpen={onOpenChange ?? (() => {})} activePath={preview?.file} />
+            <ChangesPane changes={changes} groups={groups} cwd={changesCwd} onOpen={onOpenChange ?? (() => {})} activePath={preview?.file} onRefresh={onRefresh} />
           ) : (
-            <FileTreePane tree={tree} onOpen={onOpen} selected={preview?.file} searchRoot={searchRoot} />
+            <FileTreePane tree={tree} onOpen={onOpen} selected={preview?.file} searchRoot={searchRoot} onRefresh={onRefresh} />
           )}
         </div>
         <div className="fb-main">

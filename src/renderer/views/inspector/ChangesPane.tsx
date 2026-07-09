@@ -21,7 +21,8 @@ export function ChangesPane({
   groups,
   cwd,
   onOpen,
-  activePath
+  activePath,
+  onRefresh
 }: {
   changes: ChangeItem[]
   groups?: ChangeGroup[]
@@ -31,6 +32,8 @@ export function ChangesPane({
   /** Path of the file currently being previewed — its row gets the selected state.
       Used when the pane doubles as the full-screen browser's sidebar (continuous picking). */
   activePath?: string
+  /** Manual 刷新: re-read git changes now. */
+  onRefresh?: () => void
 }) {
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<'name' | 'content'>('name')
@@ -113,6 +116,17 @@ export function ChangesPane({
           />
         </div>
         {targets.length > 0 ? <SearchModeToggle mode={mode} onChange={setMode} /> : null}
+        {onRefresh && (
+          <div className="tree-expand-tools">
+            <button className="tree-tool-btn" title="刷新" aria-label="刷新变更" onClick={onRefresh}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polyline points="23 4 23 10 17 10" />
+                <polyline points="1 20 1 14 7 14" />
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+              </svg>
+            </button>
+          </div>
+        )}
       </div>
       {contentMode ? (
         <ContentHits
