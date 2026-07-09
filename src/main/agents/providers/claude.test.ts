@@ -113,6 +113,35 @@ process.exit(0)
     expect(done).toBe(true)
   })
 
+  it('chat(): forwards CLI stderr lines to onStatus (live startup/log visibility)', async () => {
+    const noisyCli = join(dir, 'claudenoisy.js')
+    writeFileSync(noisyCli, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+process.stderr.write('connecting to MCP server forge\\n')
+process.stderr.write('mcp: forge ready\\n')
+out({ type: 'assistant', session_id: 's', message: { role: 'assistant', content: [ { type: 'text', text: 'hi' } ] } })
+out({ type: 'result', subtype: 'success', result: 'hi', session_id: 's' })
+process.exit(0)
+`)
+    chmodSync(noisyCli, 0o755)
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [noisyCli], defaultModels: [] })
+    const status: string[] = []
+    let text = ''
+    const s = provider.chat!(
+      { id: 'a1', prompt: 'x', model: 'opus-4.8', cwd: dir },
+      {
+        onSession: () => {}, onAssistantDelta: (t) => { text += t }, onThinkDelta: () => {},
+        onStatus: (t) => status.push(t),
+        onDone: () => {}, onError: () => {},
+      },
+      process.env
+    )
+    await s.done
+    expect(text).toBe('hi')
+    expect(status).toContain('connecting to MCP server forge')
+    expect(status).toContain('mcp: forge ready')
+  })
+
   it('chat(): a turn with zero assistant text surfaces an error diagnostic instead of a silent blank', async () => {
     const emptyCli = join(dir, 'claudeempty.js')
     writeFileSync(emptyCli, `#!/usr/bin/env node

@@ -56,6 +56,10 @@ export interface ChatCallbacks {
   onAssistantDelta(text: string): void
   onThinkDelta(text: string): void
   onActivity?(): void
+  // Raw startup/runtime log lines (CLI stderr, MCP-connect chatter, non-JSON stdout). Surfaced live in
+  // the think block so a slow spawn / MCP handshake / model-load shows real activity — the long silent
+  // gap before the first token was the "感觉像卡住" complaint.
+  onStatus?(text: string): void
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired when the running max usage increases.
   onUsage?(u: { used: number; window: number }): void
