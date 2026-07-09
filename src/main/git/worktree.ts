@@ -85,8 +85,15 @@ export async function addWorktree(opts: { mirror: string; worktreePath: string; 
     // ensureMirror), so the local head refs/heads/<base> is stale/absent. Fall back to the bare name for
     // legacy mirrors that still keep upstream in local heads. `-B` still names the new branch under
     // refs/heads/forge/* and force-resets it to this start point.
-    const startPoint = (await refExists(opts.mirror, `refs/remotes/origin/${opts.baseBranch}`)) ? `origin/${opts.baseBranch}` : opts.baseBranch
+    const remoteBase = `refs/remotes/origin/${opts.baseBranch}`
+    const hasRemoteBase = await refExists(opts.mirror, remoteBase)
+    const startPoint = hasRemoteBase ? `origin/${opts.baseBranch}` : opts.baseBranch
     await git(['worktree', 'add', '-B', opts.branch, opts.worktreePath, startPoint], { cwd: opts.mirror, signal: opts.signal })
+    // Record the pull baseline as the branch's upstream so 「变更」 can diff against origin/<base> and
+    // never show the ORIGINAL pulled files as changes (readChanges → readChangesVsBase). Best-effort.
+    if (hasRemoteBase) {
+      await git(['branch', `--set-upstream-to=origin/${opts.baseBranch}`, opts.branch], { cwd: opts.worktreePath }).catch(() => {})
+    }
   })
 }
 
