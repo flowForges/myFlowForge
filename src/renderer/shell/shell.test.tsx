@@ -147,12 +147,20 @@ describe('Sidebar', () => {
     expect(container.querySelectorAll('.ws-run-pill').length).toBe(1)
   })
 
-  it('shows the last-activity time when provided', () => {
+  it('moves the date off the workspace row onto each session row', () => {
     const groups2 = [{ key: 'recent', label: '最近', items: [
       { id: 'a', name: 'WS', sub: 's', status: 'idle' as AgentState, lastActivity: '5 分钟前' },
     ] }]
-    render(<Sidebar {...baseProps} groups={groups2} activeId="" />)
-    expect(screen.getByText('5 分钟前')).toBeInTheDocument()
+    const { container } = render(
+      <Sidebar {...baseProps} groups={groups2} activeId=""
+        expandedIds={new Set(['a'])}
+        sessionsByWs={{ a: [{ id: 's1', title: '会话', mode: 'chat', createdAt: 1704067200000 }] }}
+      />
+    )
+    // The workspace row no longer carries the last-activity time…
+    expect(screen.queryByText('5 分钟前')).not.toBeInTheDocument()
+    // …the time now lives on the (expanded) session row.
+    expect(container.querySelector('.ws-sess-time')?.textContent?.trim()).toBeTruthy()
   })
 
   it('clicking a workspace item calls onSelect(id)', () => {

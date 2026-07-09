@@ -11,7 +11,9 @@ function ensureDir(d: string) { if (!existsSync(d)) mkdirSync(d, { recursive: tr
 let seq = 0
 function mkId() { return `s-${Date.now()}-${++seq}` }
 function mkSession(title = '新会话'): ChatSession { return { id: mkId(), title, mode: 'chat', createdAt: Date.now() } }
-function titleFrom(text: string) { const t = text.replace(/\s+/g, ' ').trim(); return t.length > 16 ? t.slice(0, 16) + '…' : (t || '历史会话') }
+// A session's title = its first user message, capped at 30 chars (was 16). Shown in the chat-top tab
+// (.sess-tab, already max-width:200px + ellipsis, so the tab never overflows the header even at 30).
+function titleFrom(text: string) { const t = text.replace(/\s+/g, ' ').trim(); return t.length > 30 ? t.slice(0, 30) + '…' : (t || '历史会话') }
 
 function write(wsPath: string, data: SessionsFile): SessionsFile {
   ensureDir(wsForgeDir(wsPath))

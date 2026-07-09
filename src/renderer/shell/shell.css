@@ -237,6 +237,10 @@
   color: var(--fg); font: inherit; font-size: 12px; padding: 0; margin: 0;
 }
 .ws-sess-msgs { flex: 0 0 auto; font-size: 9.5px; font-family: var(--mono); color: var(--faint); }
+/* Per-session timestamp (date moved down from the workspace row to here). flex-none so the name
+   ellipsizes first; the flex:1 name pushes this into the right-hand cluster. */
+.ws-sess-time { flex: 0 0 auto; font-size: 9.5px; font-family: var(--mono); color: var(--faint); white-space: nowrap; letter-spacing: .02em; }
+.ws-sess.on .ws-sess-time { color: var(--muted); }
 .ws-sess-x { flex: 0 0 auto; width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center;
   color: var(--faint); opacity: 0; transition: .12s; }
 .ws-sess-x svg { width: 11px; height: 11px; }
@@ -339,8 +343,10 @@
 }
 .ws-archive-tray { min-height: 34px; display: flex; flex-direction: column; align-items: stretch; }
 .ws-archive-toggle {
-  position: relative; align-self: flex-start; display: inline-flex; align-items: center; gap: 7px;
-  height: 28px; padding: 0 9px 0 7px; border-radius: 8px; color: var(--faint);
+  /* Just a centered archive icon — no label, no count (per request). Full-width so the click target
+     spans the dock and the icon sits in the middle. */
+  position: relative; align-self: stretch; width: 100%; display: flex; align-items: center; justify-content: center;
+  height: 30px; border-radius: 7px; color: var(--faint);
   opacity: .42; transition: opacity .14s, background .12s, color .12s;
 }
 .ws-archive-toggle .archive-icon { width: 15px; height: 15px; display: grid; place-items: center; }

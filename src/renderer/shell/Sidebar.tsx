@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AgentState, ChatSession } from '@shared/types'
+import { fmtRelTime } from '@shared/relTime'
 import { sessionBadge } from './sessionBadge'
 import { reorder } from './reorder'
 import { WsMenu, type WsMenuItem } from './WsMenu'
@@ -243,7 +244,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                   <span className="ws-sub">{item.sub}</span>
                 </span>
                 <span className="ws-aside">
-                  {item.lastActivity && <span className="ws-time" title="最后活动时间">{item.lastActivity}</span>}
+                  {/* 日期已下放到会话维度(见下方 ws-sess-time),工作区行不再显示时间,列表更干净。 */}
                   {isOn && item.badge && <span className="ws-badge">{item.badge}</span>}
                   {!isOn && (sessionsByWs?.[item.id]?.length ?? 0) > 1 && <span className="ws-scount" title={`${sessionsByWs![item.id].length} 个会话`}>{CHAT_ICON}{sessionsByWs![item.id].length}</span>}
                 </span>
@@ -252,6 +253,8 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                     // 收进「更多操作」下拉,替代原来一排容易误点的图标(图标+文字);归档/移除的确认弹层由上层负责。
                     // 也可对工作区行右键呼出本菜单。
                     const menu: WsMenuItem[] = []
+                    // 置顶收进菜单(行内只保留 ⋯ 与 + 两个按钮,减少误点)。
+                    if (!item.archived && onPin) menu.push({ key: 'pin', label: item.pinned ? '取消置顶' : '置顶', icon: PIN_ICON, onClick: () => onPin(item.id, !item.pinned) })
                     if (!item.archived && onRename) menu.push({ key: 'rename', label: '重命名', icon: RENAME_ICON, onClick: () => beginWsRename(item.id, item.name) })
                     if (!item.archived && onEdit) menu.push({ key: 'edit', label: '编辑工作区', icon: EDIT_ICON, onClick: () => onEdit(item.id) })
                     if (onReveal) menu.push({ key: 'reveal', label: REVEAL_LABEL, icon: FOLDER_ICON, onClick: () => onReveal(item.id) })
@@ -271,17 +274,6 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                     onClick={e => { e.stopPropagation(); onNewSession(item.id) }}
                   >
                     {PLUS_ICON}
-                  </span>
-                )}
-                {!item.archived && onPin && (
-                  <span
-                    className={`ws-pin${item.pinned ? ' on' : ''}`}
-                    role="button"
-                    title={item.pinned ? '取消置顶' : '置顶'}
-                    aria-label={item.pinned ? '取消置顶' : '置顶'}
-                    onClick={e => { e.stopPropagation(); onPin(item.id, !item.pinned) }}
-                  >
-                    {PIN_ICON}
                   </span>
                 )}
               </button>
@@ -317,6 +309,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                           ) : (
                             <span className="ws-sess-name">{s.title}</span>
                           )}
+                          {!editing && <span className="ws-sess-time" title="会话时间">{fmtRelTime(s.createdAt, Date.now())}</span>}
                           {isSessionUnread(unread, item.id, s.id) && <span className="ws-unread" title="有已完成待查看" aria-label="未读" />}
                           {(() => { const b = sessionBadge(s); return b.kind !== 'new'
                             ? <span className={`ws-sess-badge ${b.kind}`}>{b.label}</span> : null })()}
@@ -361,13 +354,13 @@ function ArchiveDock({ items, activeId, onSelect, onRestore, onDelete }: Archive
       <div className="ws-archive-tray">
         <button
           className="ws-archive-toggle"
-          aria-label="查看归档工作区"
+          aria-label={`查看归档工作区（${items.length}）`}
+          title={`归档工作区 · ${items.length}`}
           aria-expanded={open}
           onClick={() => setOpen(o => !o)}
         >
+          {/* 仅一个居中的归档图标 —— 文字与数量按需求隐去,数量仍在 title 里可 hover 查看。 */}
           <span className="archive-icon">{ARCHIVE_ICON}</span>
-          <span className="archive-label">归档工作区</span>
-          <span className="count">{items.length}</span>
         </button>
         <div className="ws-archive-list">
           {open && items.map(item => (
