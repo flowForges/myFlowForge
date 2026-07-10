@@ -34,13 +34,15 @@ You describe what you want. Forge drives your chosen agents through a staged pip
 - **📂 Open in your editor** — A titlebar "Open location" button detects installed editors (VS Code, Cursor, JetBrains, Zed, Finder, terminals…) and opens the current workspace — or the file you're previewing — in your pick, remembered as the default.
 - **⌨️ Chat slash commands** — Type `/` in chat for a menu of workflow triggers plus your **real on‑disk commands/prompts and installed skills**, filtered per agent.
 - **🔄 Governed multi‑stage pipeline** — Requirement → Design → Develop → Test → Review, with a **hard plan‑approval gate**: review and approve (or reject) the technical design before execution begins.
+- **✂️ Selective, token‑efficient execution** — A configured workflow no longer forces every task through all stages across all projects. Describe a small task in plain language and the orchestrating agent proposes a **trimmed plan** — run only the stages you need (e.g. skip Test/Review) and scope each stage to a subset of projects (e.g. analyze all five, write code in only two). The approval card shows exactly what will run before you confirm.
+- **🧭 Orchestrator, not executor** — The main chat agent never writes code or spawns its own internal sub‑agents; it only decomposes tasks and delegates every hands‑on step to Forge's real, orchestrated sub‑agents.
 - **🧩 Parallel projects & workspaces** — Run multiple workspaces concurrently, each with isolated git worktrees; watch several agents work side‑by‑side in parallel lanes.
 - **📥 Native session import** — Read‑only scan and import your existing local Claude / Codex / Cursor / qoder sessions into a central index, then resume them as workspaces.
 - **📊 Live usage & quota tracking** — Real usage adapters surface each provider's remaining quota and reset times.
 - **🔌 MCP integration** — A built‑in Forge MCP server bridges agents back into the app (ask questions, propose plans, hand off artifacts) for reliable, tool‑driven control.
 - **🖥️ Real‑time observability** — Streaming thinking / execution / file‑change / output logs, a filterable log console, and cross‑project change evidence.
 - **🐾 Desktop pet** — A draggable, resizable companion that follows your focus, previews agent activity, and pops up confirmation cards — with configurable effects and multiple pet packs.
-- **🎨 Polished UI** — Glassmorphism, light/dark themes, 7 accent colors, resizable panes, and a notification center.
+- **🎨 Polished, personalizable UI** — Glassmorphism, **6 themes** (light / dark / auto + midnight / sepia / forest), **12 accent colors**, a **custom background image** (whole‑app or chat‑area, with adjustable opacity), a redesigned home dashboard with a live local‑time greeting, resizable panes, and a notification center.
 
 ## 🤖 Supported coding agents
 
