@@ -190,7 +190,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   ipcMain.handle(CH.configUpdateProjectBranch, (_e, input: { id: string; branch: string }) => setProjectDefaultBranch(input.id, input.branch))
   ipcMain.handle(CH.configListWorkflows, () => readWorkflows().workflows)
-  ipcMain.handle(CH.configAddWorkflow, (_e, input: { name: string; stages: string[] }) => {
+  ipcMain.handle(CH.configAddWorkflow, (_e, input: { name: string; stages: import('../config/buildWorkflow').StageSeed[] }) => {
     const list = readWorkflows().workflows
     const wf = buildWorkflow(input.name, input.stages, list.map(w => w.id))
     writeWorkflows({ workflows: [...list, wf] })

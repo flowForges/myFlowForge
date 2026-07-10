@@ -26,7 +26,7 @@
 .set-x:hover { background: var(--surface); color: var(--fg); }
 .set-x svg { width: 16px; height: 16px; }
 .set-body { flex: 1; display: flex; min-height: 0; }
-.set-nav { width: 188px; flex: 0 0 188px; border-right: 1px solid var(--border); padding: 10px; background: var(--bg-2); }
+.set-nav { width: 188px; flex: 0 0 188px; border-right: 1px solid var(--border); padding: 10px; background: var(--bg-2); overflow-y: auto; min-height: 0; }
 .set-nav button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; font-size: 13px; font-weight: 500; color: var(--fg-2); text-align: left; margin-bottom: 2px; transition: .12s; }
 .set-nav button:hover { background: var(--surface); }
 .set-nav button.on { background: var(--accent-dim); color: var(--fg); }
@@ -191,6 +191,24 @@
 .seg-wrap .wf-pick { white-space: nowrap; flex: 0 0 auto; }
 .wf-new .mk { height: 34px; padding: 0 15px; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-size: 12.5px; font-weight: 600; flex: 0 0 auto; }
 .wf-new .mk:disabled { opacity: .4; cursor: default; }
+/* 新建流程草稿:有序可拖动阶段列表 + 加阶段行 */
+.wf-draft-flow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.wf-draft-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 560; color: var(--fg-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 4px 5px 4px 9px; cursor: grab; transition: .12s; }
+.wf-draft-chip:active { cursor: grabbing; }
+.wf-draft-chip.custom { border-color: color-mix(in oklch, var(--accent) 45%, var(--border)); }
+.wf-draft-chip.dragging { opacity: .5; }
+.wf-draft-chip .n { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--faint); }
+.wf-draft-chip .wf-draft-name { width: 78px; height: 20px; border: none; border-bottom: 1px solid var(--border-2); background: transparent; color: var(--fg); font-size: 11.5px; outline: none; padding: 0 2px; }
+.wf-draft-chip .wf-draft-name:focus { border-color: var(--accent); }
+.wf-draft-chip .x { width: 16px; height: 16px; border-radius: 5px; display: grid; place-items: center; color: var(--faint); opacity: .6; flex: 0 0 16px; }
+.wf-draft-chip .x:hover { opacity: 1; background: oklch(68% .18 25 / .2); color: var(--del); }
+.wf-draft-chip .x svg { width: 10px; height: 10px; }
+.wf-draft-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 9px; }
+.wf-draft-add .lab { font-size: 11.5px; color: var(--faint); }
+.wf-draft-hint { font-size: 11px; color: var(--muted); margin-top: 9px; }
+/* 保存工作流里阶段 chip 的拖动态 + 自定义标记 */
+.wf-stage-chip.custom { border-left: 2px solid color-mix(in oklch, var(--accent) 50%, var(--border)); }
+.wf-stage-chip.dragging { opacity: .5; }
 
 /* 设置 · 工作流插件 hook */
 .wf-mgr-top .pc { font-size: 11px; font-family: var(--mono); color: var(--accent); background: var(--accent-dim); border-radius: 99px; padding: 1px 8px; }

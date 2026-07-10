@@ -279,6 +279,7 @@ export const StageConfigSchema = z.object({
   projectAgent: z.boolean().optional(),               // 用各项目自己的 provider/model
   producesDoc: z.boolean().optional(),                // 强制写 markdown 方案文件
 })
+export type StageConfig = z.infer<typeof StageConfigSchema>
 export const WorkflowSchema = z.object({
   id: z.string(), name: z.string(), stages: z.array(StageConfigSchema).min(1),
   plugins: z.array(PluginSchema).default(() => []),

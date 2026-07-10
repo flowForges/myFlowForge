@@ -78,7 +78,8 @@ const X_SVG = (
 interface WorkflowPaneProps {
   workflows: CfgWorkflow[]
   providers?: ProviderInfo[]
-  onCreate: (name: string, stageKeys: string[]) => void
+  // stages: ordered list of bare built-in keys or full custom stage configs.
+  onCreate: (name: string, stages: (string | CfgStage)[]) => void
   onDelete: (id: string) => void
   onUpdateWorkflow: (id: string, plugins: Plugin[]) => void
   onUpdateStagePrompts: (id: string, stagePrompts: Record<string, string>) => void
@@ -96,14 +97,31 @@ function newCustomStage(existing: CfgStage[]): CfgStage {
   return { key, name: '新阶段', defaultAgent: 'claude', defaultModel: '', prompt: '' }
 }
 
+const mkBuiltinStage = (key: string): CfgStage => ({ key, defaultAgent: 'claude', defaultModel: 'opus-4.8' })
+
 export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, onUpdateWorkflow, onUpdateStages }: WorkflowPaneProps) {
   const [name, setName] = useState('')
-  const [picked, setPicked] = useState<Set<string>>(() => new Set(['develop']))
+  // 新建流程:一个有序的草稿阶段列表(内置 + 自定义),可增删、可拖动排序。
+  const [draft, setDraft] = useState<CfgStage[]>(() => [mkBuiltinStage('develop')])
+  const [draftDragKey, setDraftDragKey] = useState<string | null>(null)
   const [editing, setEditing] = useState<EditState | null>(null)
   const [stageEdit, setStageEdit] = useState<{ wfId: string; key: string } | null>(null)
   const [addingStageWf, setAddingStageWf] = useState<string | null>(null)
   const [draggedId, setDraggedId] = useState<string | null>(null)
+  const [stageDragKey, setStageDragKey] = useState<string | null>(null)   // dragging a stage chip in a saved workflow
   const [importCfg, setImportCfg] = useState<ImportConfig | null>(null)
+
+  // Reorder a saved workflow's stages by drag: move `dragKey` to before `beforeKey`.
+  function reorderStages(wf: CfgWorkflow, dragKey: string, beforeKey: string) {
+    if (!dragKey || dragKey === beforeKey) return
+    const arr = wf.stages.slice()
+    const from = arr.findIndex(s => s.key === dragKey)
+    if (from < 0) return
+    const [moved] = arr.splice(from, 1)
+    const to = arr.findIndex(s => s.key === beforeKey)
+    arr.splice(to < 0 ? arr.length : to, 0, moved)
+    putStages(wf, arr)
+  }
 
   // —— 阶段编辑(#3):增删改排 + 每阶段 prompt/agent/flags,经 onUpdateStages 持久化整个 stages 列表 ——
   const putStages = (wf: CfgWorkflow, stages: CfgStage[]) => onUpdateStages?.(wf.id, stages)
@@ -155,21 +173,30 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
     })
   }
 
-  function toggle(key: string) {
-    setPicked((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
+  // —— 新建流程草稿:增删、改名(自定义)、拖动排序 ——
+  const addDraftBuiltin = (key: string) => setDraft(d => d.some(s => s.key === key) ? d : [...d, mkBuiltinStage(key)])
+  const addDraftCustom = () => setDraft(d => [...d, newCustomStage(d)])
+  const removeDraft = (key: string) => setDraft(d => d.length > 1 ? d.filter(s => s.key !== key) : d)
+  const renameDraft = (key: string, name: string) => setDraft(d => d.map(s => s.key === key ? { ...s, name } : s))
+  function reorderDraft(dragKey: string, beforeKey: string) {
+    if (!dragKey || dragKey === beforeKey) return
+    setDraft(d => {
+      const arr = d.slice()
+      const from = arr.findIndex(s => s.key === dragKey)
+      if (from < 0) return d
+      const [moved] = arr.splice(from, 1)
+      const to = arr.findIndex(s => s.key === beforeKey)
+      arr.splice(to < 0 ? arr.length : to, 0, moved)
+      return arr
     })
   }
 
   function create() {
     const nm = name.trim()
-    if (!nm || picked.size === 0) return
-    onCreate(nm, STAGE_KEYS.filter((k) => picked.has(k)))
+    if (!nm || draft.length === 0) return
+    onCreate(nm, draft)
     setName('')
-    setPicked(new Set(['develop']))
+    setDraft([mkBuiltinStage('develop')])
   }
 
   function openInsert(wfId: string, after: string) {
@@ -222,7 +249,7 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
     onUpdateWorkflow(wfId, wf.plugins.filter(p => p.id !== pluginId))
   }
 
-  const canCreate = name.trim().length > 0 && picked.size > 0
+  const canCreate = name.trim().length > 0 && draft.length > 0
 
   return (
     <>
@@ -296,12 +323,17 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
                       </span>
                     ))}
 
-                    {/* Stages with insert buttons after each */}
+                    {/* Stages: drag to reorder (when onUpdateStages), click to edit; insert buttons after each */}
                     {w.stages.map((s, i) => (
                       <span key={s.key} style={{ display: 'contents' }}>
                         <span
-                          className={'wf-stage-chip click' + ((s.prompt || w.stagePrompts?.[s.key]) ? ' edited' : '')}
-                          title={`点击编辑「${s.name || STAGE_NAMES[s.key] || s.key}」阶段`}
+                          className={'wf-stage-chip click' + ((s.prompt || w.stagePrompts?.[s.key]) ? ' edited' : '') + (STAGE_KEYS.includes(s.key as typeof STAGE_KEYS[number]) ? '' : ' custom') + (stageDragKey === s.key ? ' dragging' : '')}
+                          title={onUpdateStages ? '拖动排序 · 点击编辑' : `点击编辑「${s.name || STAGE_NAMES[s.key] || s.key}」阶段`}
+                          draggable={!!onUpdateStages}
+                          onDragStart={() => setStageDragKey(s.key)}
+                          onDragEnd={() => setStageDragKey(null)}
+                          onDragOver={e => { if (stageDragKey) e.preventDefault() }}
+                          onDrop={e => { e.preventDefault(); if (stageDragKey) reorderStages(w, stageDragKey, s.key); setStageDragKey(null) }}
                           onClick={() => { setEditing(null); setAddingStageWf(null); setStageEdit({ wfId: w.id, key: s.key }) }}
                         >
                           <span className="n">{i + 1}</span>
@@ -432,18 +464,39 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
               创建
             </button>
           </div>
-          <div className="pick-stages">
-            {STAGE_KEYS.map((key) => (
-              <button
-                key={key}
-                className={`wf-pick${picked.has(key) ? ' on' : ''}`}
-                data-wfpick={key}
-                onClick={() => toggle(key)}
-              >
-                {STAGE_NAMES[key]}
-              </button>
-            ))}
+          {/* 有序草稿阶段:拖动排序、改名(自定义)、移除 */}
+          <div className="wf-draft-flow">
+            {draft.map((s, i) => {
+              const label = STAGE_NAMES[s.key] ?? s.name ?? s.key
+              const isCustom = !STAGE_KEYS.includes(s.key as typeof STAGE_KEYS[number])
+              return (
+                <span
+                  key={s.key}
+                  className={`wf-draft-chip${isCustom ? ' custom' : ''}${draftDragKey === s.key ? ' dragging' : ''}`}
+                  draggable
+                  onDragStart={() => setDraftDragKey(s.key)}
+                  onDragEnd={() => setDraftDragKey(null)}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => { e.preventDefault(); if (draftDragKey) reorderDraft(draftDragKey, s.key); setDraftDragKey(null) }}
+                  title="拖动排序"
+                >
+                  <span className="n">{i + 1}</span>
+                  {isCustom ? (
+                    <input className="wf-draft-name" value={s.name ?? ''} placeholder="阶段名" onChange={e => renameDraft(s.key, e.target.value)} onClick={e => e.stopPropagation()} />
+                  ) : label}
+                  <button className="x" title="移除" onClick={() => removeDraft(s.key)}>{X_SVG}</button>
+                </span>
+              )
+            })}
           </div>
+          <div className="wf-draft-add">
+            <span className="lab">加阶段:</span>
+            {STAGE_KEYS.filter(k => !draft.some(s => s.key === k)).map(key => (
+              <button key={key} className="wf-pick" onClick={() => addDraftBuiltin(key)}>+ {STAGE_NAMES[key]}</button>
+            ))}
+            <button className="wf-pick custom" onClick={addDraftCustom}>+ 自定义阶段</button>
+          </div>
+          <div className="wf-draft-hint">创建后可在上方模板里进一步配置每个阶段的提示词、代理与行为开关。</div>
         </div>
       </div>
       <ImportModal config={importCfg} onClose={() => setImportCfg(null)} />

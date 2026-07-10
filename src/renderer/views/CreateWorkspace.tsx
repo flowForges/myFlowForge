@@ -168,6 +168,9 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   // already in the wizard state (so a '__custom'/edited flow keeps its custom stages), then built-ins.
   const stageOrderFrom = (wfId: string, stages: Record<string, WizardStage>): string[] =>
     [...new Set([...(workflows.find(w => w.id === wfId)?.stages ?? []).map(s => s.key), ...Object.keys(stages), ...STAGE_KEYS])]
+  // Display name/desc for a stage key: built-in from STAGE_DEF, else the custom stage's own name.
+  const stageLabelOf = (k: string) => STAGE_DEF[k as StageKey]?.name ?? state.stages[k]?.name ?? k
+  const stageDescOf = (k: string) => STAGE_DEF[k as StageKey]?.desc ?? (state.stages[k]?.custom ? '自定义阶段' : '')
 
   const seedProjects = (): WizardProject[] => projects.map(p => {
     const dev = seedStage(workflows[0]?.stages.find(s => s.key === DEV_KEY)?.defaultModel ?? '')
@@ -267,7 +270,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const wsName = deriveWsName(state.path, state.nameEdited, state.name)
   const branchFor = (p: WizardProject) => p.branch || (wsName ? 'forge/' + wsName : '')
 
-  const enabledCount = STAGE_KEYS.filter(k => state.stages[k]?.on).length
+  const enabledCount = Object.keys(state.stages).filter(k => state.stages[k]?.on).length
   const selectedCount = state.projects.filter(p => p.sel).length
   const chosen = state.projects.filter(p => p.sel)
   const canCreate = enabledCount > 0
@@ -739,20 +742,19 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                   />
                 )}
               </div>
-              {STAGE_KEYS.filter(k => state.stages[k].on).map(k => {
+              {stageOrderFrom(state.workflowId, state.stages).filter(k => state.stages[k]?.on).map(k => {
                 const ss = state.stages[k]
                 const on = ss.on
-                const def = STAGE_DEF[k]
                 const review = ss.review ?? DEFAULT_REVIEW
                 const reviewMode = review.mode === 'single' ? 'single' : (review.scope === 'workspace' && Array.isArray(review.reviewers) ? 'lens' : 'per-project')
-                const num = on ? STAGE_KEYS.filter(x => state.stages[x].on).indexOf(k) + 1 : '·'
+                const num = on ? stageOrderFrom(state.workflowId, state.stages).filter(x => state.stages[x]?.on).indexOf(k) + 1 : '·'
                 const devOn = k === DEV_KEY && on
                 const reviewOn = k === REVIEW_KEY && on
                 return (
-                  <div className="stage-line" data-stage={k} key={k}>
+                  <div className={'stage-line' + (ss.custom ? ' custom' : '')} data-stage={k} key={k}>
                     <button className="st-chk on" data-sttoggle={k} title="移除该阶段" onClick={() => toggleStage(k)}>{CK}</button>
                     <span className="st-num">{num}</span>
-                    <div className="st-main"><div className="st-name">{def.name}</div><div className="st-desc">{def.desc}</div></div>
+                    <div className="st-main"><div className="st-name">{stageLabelOf(k)}{ss.custom ? <span className="st-custom-tag">自定义</span> : null}</div><div className="st-desc">{stageDescOf(k)}</div></div>
                     <div className="st-right">
                       {devOn && chosen.length ? (
                         <span className="st-badge">{chosen.length > 1 ? ('多项目并行 · ' + chosen.length + ' 代理') : '单项目 · 1 代理'}</span>
@@ -842,12 +844,12 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                   </div>
                 )
               })}
-              {STAGE_KEYS.some(k => !state.stages[k].on) && (
+              {stageOrderFrom(state.workflowId, state.stages).some(k => !state.stages[k]?.on) && (
                 <div className="stage-add" id="crStageAdd">
                   <span className="lab">添加阶段</span>
-                  {STAGE_KEYS.filter(k => !state.stages[k].on).map(k => (
-                    <button key={k} className="stage-add-chip" data-addstage={k} title={STAGE_DEF[k].desc} onClick={() => toggleStage(k)}>
-                      {INS_SVG}{STAGE_DEF[k].name}
+                  {stageOrderFrom(state.workflowId, state.stages).filter(k => !state.stages[k]?.on).map(k => (
+                    <button key={k} className="stage-add-chip" data-addstage={k} title={stageDescOf(k)} onClick={() => toggleStage(k)}>
+                      {INS_SVG}{stageLabelOf(k)}
                     </button>
                   ))}
                 </div>

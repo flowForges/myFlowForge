@@ -11,7 +11,8 @@ const api = {
   deleteProject: (id: string) => ipcRenderer.invoke(CH.configDeleteProject, id),
   updateProjectBranch: (input: { id: string; branch: string }) => ipcRenderer.invoke(CH.configUpdateProjectBranch, input),
   listWorkflows: () => ipcRenderer.invoke(CH.configListWorkflows),
-  addWorkflow: (input: { name: string; stages: string[] }) => ipcRenderer.invoke(CH.configAddWorkflow, input),
+  // stages: bare keys (built-in defaults) or full stage configs (custom stages), in order.
+  addWorkflow: (input: { name: string; stages: unknown[] }) => ipcRenderer.invoke(CH.configAddWorkflow, input),
   deleteWorkflow: (id: string) => ipcRenderer.invoke(CH.configDeleteWorkflow, id),
   updateWorkflow: (id: string, plugins: unknown[]) => ipcRenderer.invoke(CH.configUpdateWorkflow, { id, plugins }),
   updateStagePrompts: (id: string, stagePrompts: Record<string, string>) => ipcRenderer.invoke(CH.configUpdateWorkflow, { id, stagePrompts }),

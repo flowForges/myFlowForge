@@ -23,7 +23,8 @@ export function useConfig() {
   const deleteProject = useCallback(async (id: string) => { setProjects(await window.forge.deleteProject(id)) }, [])
   const updateProjectBranch = useCallback(async (id: string, branch: string) => { setProjects(await window.forge.updateProjectBranch({ id, branch })) }, [])
 
-  const addWorkflow = useCallback(async (name: string, stageKeys: string[]) => { const list = await window.forge.addWorkflow({ name, stages: stageKeys }); setWorkflows(list); return list }, [])
+  // stages: bare built-in keys OR full CfgStage configs (custom stages), order preserved.
+  const addWorkflow = useCallback(async (name: string, stages: (string | CfgStage)[]) => { const list = await window.forge.addWorkflow({ name, stages }); setWorkflows(list); return list }, [])
   const deleteWorkflow = useCallback(async (id: string) => { setWorkflows(await window.forge.deleteWorkflow(id)) }, [])
   const updateWorkflow = useCallback(async (id: string, plugins: Plugin[]) => { setWorkflows(await window.forge.updateWorkflow(id, plugins)) }, [])
   const updateStagePrompts = useCallback(async (id: string, stagePrompts: Record<string, string>) => { setWorkflows(await window.forge.updateStagePrompts(id, stagePrompts)) }, [])

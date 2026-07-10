@@ -22,24 +22,28 @@ describe('WorkflowPane', () => {
     const mk = screen.getByText('创建')
     expect(mk).not.toBeDisabled()
     fireEvent.click(mk)
-    expect(onCreate).toHaveBeenCalledWith('重构流程', ['develop'])
+    // draft starts with develop → create passes the ordered full stage config
+    expect(onCreate).toHaveBeenCalledWith('重构流程', [{ key: 'develop', defaultAgent: 'claude', defaultModel: 'opus-4.8' }])
   })
-  it('resets stage picks to develop-only after a successful create', () => {
+  it('new-workflow draft: add a built-in stage, then create with both in order', () => {
     const onCreate = vi.fn()
     render(<WorkflowPane workflows={workflows} onCreate={onCreate} onDelete={() => {}} onUpdateWorkflow={() => {}} onUpdateStagePrompts={() => {}} />)
-    const pickByText = (t: string) =>
-      screen.getAllByRole('button').find((b) => b.classList.contains('wf-pick') && b.textContent === t)!
-    const testPick = pickByText('写单测')
-    const developPick = pickByText('代码开发')
-    // pick the extra "写单测/test" stage
-    fireEvent.click(testPick)
-    expect(testPick.classList.contains('on')).toBe(true)
+    // the "加阶段" row offers built-ins not yet in the draft; add 写单测/test
+    fireEvent.click(screen.getByText('+ 写单测'))
     fireEvent.change(screen.getByPlaceholderText(/流程名称/), { target: { value: '重构流程' } })
     fireEvent.click(screen.getByText('创建'))
-    expect(onCreate).toHaveBeenCalledWith('重构流程', ['develop', 'test'])
-    // after creation, picks revert to develop-only
-    expect(pickByText('写单测').classList.contains('on')).toBe(false)
-    expect(developPick.classList.contains('on')).toBe(true)
+    const [name, stages] = onCreate.mock.calls[0]
+    expect(name).toBe('重构流程')
+    expect(stages.map((s: any) => s.key)).toEqual(['develop', 'test'])   // draft order preserved
+  })
+  it('new-workflow draft: add a custom stage → create includes a custom-* key', () => {
+    const onCreate = vi.fn()
+    render(<WorkflowPane workflows={workflows} onCreate={onCreate} onDelete={() => {}} onUpdateWorkflow={() => {}} onUpdateStagePrompts={() => {}} />)
+    fireEvent.click(screen.getByText('+ 自定义阶段'))
+    fireEvent.change(screen.getByPlaceholderText(/流程名称/), { target: { value: 'X' } })
+    fireEvent.click(screen.getByText('创建'))
+    const [, stages] = onCreate.mock.calls[0]
+    expect(stages.some((s: any) => /^custom-/.test(s.key))).toBe(true)
   })
   it('shows the empty state when there are no templates', () => {
     render(<WorkflowPane workflows={[]} onCreate={() => {}} onDelete={() => {}} onUpdateWorkflow={() => {}} onUpdateStagePrompts={() => {}} />)
