@@ -14,7 +14,7 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS-000000?logo=apple&logoColor=white)
 
-[English](README.md) · **简体中文** · [日本語](README.ja.md)
+[English](README.md) · **简体中文** · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
 </div>
 

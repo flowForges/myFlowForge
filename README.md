@@ -14,7 +14,7 @@ A desktop cockpit that orchestrates **Claude Code, Codex, Cursor, Gemini, qoder 
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS-000000?logo=apple&logoColor=white)
 
-**English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+**English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
 </div>
 
