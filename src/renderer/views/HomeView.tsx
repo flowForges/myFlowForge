@@ -149,6 +149,8 @@ export function HomeView({ workspaces, stats, activeRunPath, run, onNew, onOpenD
   return (
     <section className="view on" id="view-home">
       <div className="home-wrap">
+        {/* Aurora backdrop — a few color blobs drift independently behind the hero for motion + depth. */}
+        <div className="home-aurora" aria-hidden="true"><span /><span /><span /></div>
         <InstallBanner onGoSettings={onOpenSettings} />
         <header className="home-head">
           <div className="home-head-l">

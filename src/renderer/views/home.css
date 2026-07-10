@@ -2,19 +2,34 @@
    首页 (home) — 1:1 ported from the prototype (index.html #view-home)
    ============================================================ */
 #view-home { flex-direction: column; overflow-y: auto; }
-.home-wrap { position: relative; max-width: 920px; margin: 0 auto; width: 100%; padding: 40px 40px 56px; }
+.home-wrap { position: relative; isolation: isolate; max-width: 920px; margin: 0 auto; width: 100%; padding: 40px 40px 56px; }
+
+/* 极光背景:三个不同色相的模糊色团各自缓慢漂移,给首页顶部一层有深度的动态氛围。z-index:-1 配合
+   home-wrap 的 isolation,稳稳待在所有内容之下,不需要给每个内容块单独抬 z-index。 */
+.home-aurora { position: absolute; left: -20px; right: -20px; top: -40px; height: 400px; z-index: -1; overflow: hidden; pointer-events: none; }
+.home-aurora span { position: absolute; border-radius: 50%; filter: blur(62px); will-change: transform; }
+.home-aurora span:nth-child(1) { width: 470px; height: 300px; left: 1%; top: -70px; opacity: .5;
+  background: radial-gradient(circle, color-mix(in oklab, var(--accent) 52%, transparent), transparent 66%);
+  animation: aurora-1 17s ease-in-out infinite alternate; }
+.home-aurora span:nth-child(2) { width: 380px; height: 280px; left: 36%; top: -46px; opacity: .38;
+  background: radial-gradient(circle, color-mix(in oklab, var(--warn) 46%, transparent), transparent 66%);
+  animation: aurora-2 21s ease-in-out infinite alternate; }
+.home-aurora span:nth-child(3) { width: 360px; height: 270px; right: 1%; top: -60px; opacity: .36;
+  background: radial-gradient(circle, color-mix(in oklab, var(--ok) 44%, transparent), transparent 66%);
+  animation: aurora-3 24s ease-in-out infinite alternate; }
+@keyframes aurora-1 { to { transform: translate(72px, 42px) scale(1.2); } }
+@keyframes aurora-2 { to { transform: translate(-64px, 30px) scale(1.26); } }
+@keyframes aurora-3 { to { transform: translate(44px, 48px) scale(1.16); } }
 
 /* 头部:问候 + 行内操作,同一行平衡布局 */
 .home-head { position: relative; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
-/* 沉浸渐变 Hero:标题区背后一团缓慢漂移的 accent 光晕,随强调色变化,营造质感。内容在其上层。 */
-.home-head::before {
-  content: ""; position: absolute; left: -70px; top: -90px; width: 460px; height: 280px; z-index: 0; pointer-events: none;
-  background: radial-gradient(58% 58% at 32% 42%, color-mix(in oklab, var(--accent) 32%, transparent), transparent 72%);
-  filter: blur(34px); opacity: .5; animation: home-glow 13s ease-in-out infinite alternate;
+/* 内容块错落入场,让首页"活"起来 */
+.home-stats { animation: home-hi-in .55s cubic-bezier(.2,.7,.2,1) .14s both; }
+.home-focus, .home-empty { animation: home-hi-in .55s cubic-bezier(.2,.7,.2,1) .2s both; }
+@media (prefers-reduced-motion: reduce) {
+  .home-aurora span { animation: none; }
+  .home-stats, .home-focus, .home-empty { animation: none; }
 }
-@keyframes home-glow { from { transform: translate(0,0) scale(1); opacity: .4; } to { transform: translate(46px,14px) scale(1.18); opacity: .62; } }
-.home-head > * { position: relative; z-index: 1; }
-@media (prefers-reduced-motion: reduce) { .home-head::before { animation: none; } }
 .home-hi { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; font-size: 12.5px; font-weight: 600; color: var(--accent); font-family: var(--mono); letter-spacing: .04em; animation: home-hi-in .5s cubic-bezier(.2,.7,.2,1) both; }
 @keyframes home-hi-in { from { opacity: 0; transform: translateY(-5px); } }
 /* the ~ gently waves so the greeting feels alive */
@@ -27,11 +42,13 @@
 .home-clock .hc-sep { color: var(--faint); margin: 0 1px; }
 .home-clock .hc-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: home-clock-pulse 1.6s ease-in-out infinite; }
 @keyframes home-clock-pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 45%, transparent); } 50% { opacity: .55; box-shadow: 0 0 0 4px transparent; } }
-/* 标题:fg→accent 的渐变文字,压出层次;渐变裁到文字上,浅深两色都保持可读。 */
-.home-h1 { font-size: 27px; font-weight: 720; letter-spacing: -.02em; margin-top: 8px;
-  background: linear-gradient(96deg, var(--fg) 42%, color-mix(in oklab, var(--accent) 78%, var(--fg)));
+/* 标题:fg→accent 的渐变文字 + 缓慢流光(背景位移),压出层次又不喧宾夺主。浅深两色都保持可读。 */
+.home-h1 { font-size: 30px; font-weight: 730; letter-spacing: -.022em; margin-top: 8px;
+  background: linear-gradient(100deg, var(--fg) 38%, color-mix(in oklab, var(--accent) 82%, var(--fg)) 62%, var(--fg) 88%);
+  background-size: 220% auto;
   -webkit-background-clip: text; background-clip: text; color: transparent;
-  animation: home-hi-in .5s cubic-bezier(.2,.7,.2,1) .06s both; }
+  animation: home-hi-in .5s cubic-bezier(.2,.7,.2,1) .06s both, home-shine 7s ease-in-out 1.2s infinite; }
+@keyframes home-shine { 0%, 100% { background-position: 0% center; } 50% { background-position: 120% center; } }
 @media (prefers-reduced-motion: reduce) { .home-hi, .home-h1, .home-hi-wave, .home-clock .hc-dot { animation: none; } }
 .home-actions { display: flex; gap: 10px; flex: 0 0 auto; }
 .home-cta {
