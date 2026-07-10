@@ -7,6 +7,8 @@ beforeEach(() => {
     listProjects: async () => [{ id: 'p1', name: 'P1', repoUrl: 'u', defaultBranch: 'main' }],
     listWorkflows: async () => [{ id: 'standard', name: '标准工作流', stages: [{ key: 'design', defaultAgent: 'claude', defaultModel: 'opus-4.8' }] }],
     detectProviders: async () => [{ id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus-4.8', label: 'opus-4.8' }] }],
+    getSettings: async () => ({ disabledProviders: [] }),
+    onSettingsChanged: () => () => {},
     addProject: async () => [], deleteProject: async () => []
   }
 })

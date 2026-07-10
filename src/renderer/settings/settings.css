@@ -329,6 +329,12 @@
 .agent-badge.off { background: var(--surface-2); color: var(--faint); }
 .agent-del { margin-left: auto; font-size: 11.5px; color: var(--err); padding: 3px 8px; border-radius: 6px; }
 .agent-del:hover:not(:disabled) { background: oklch(60% .2 25 / .12); }
+/* 启用/禁用 provider toggle — off = provider hidden from every 选择编码代理 list (CLI untouched). */
+.agent-enable-toggle { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 3px; border-radius: 99px; background: oklch(74% 0.15 150 / 0.15); font-size: 10.5px; font-weight: 600; color: var(--ok); white-space: nowrap; }
+.agent-enable-toggle .agent-enable-knob { width: 12px; height: 12px; border-radius: 99px; background: var(--ok); transition: background .15s; }
+.agent-enable-toggle.off { background: var(--surface-2); color: var(--faint); }
+.agent-enable-toggle.off .agent-enable-knob { background: var(--faint); }
+.agent-enable-toggle:hover { filter: brightness(1.06); }
 .agent-row-bin { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
 .agent-row-bin input { flex: 1; height: 32px; padding: 0 11px; border-radius: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--fg); font-size: 12.5px; font-family: var(--mono); outline: none; }
 .agent-row-bin input:focus { border-color: var(--accent); }

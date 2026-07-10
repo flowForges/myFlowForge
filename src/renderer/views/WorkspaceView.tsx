@@ -806,7 +806,13 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                   <div className="ic-row"><span>工作目录</span><Copyable text={displayPath} className="mono" /></div>
                   {(wsInfo?.projects ?? []).map(p => (
                     <div className="ic-row ic-proj" key={p.repoId || p.name}>
-                      <span title={p.name || p.repoId}>{p.name || p.repoId}</span><Copyable text={p.branch || ''} className="mono" />
+                      <span className="ic-proj-name" title={p.name || p.repoId}>{p.name || p.repoId}</span>
+                      {p.branch && (
+                        <span className="tree-branch-tag" title={`git 分支:${p.branch}`}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>
+                          {p.branch}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>

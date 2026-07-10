@@ -1,6 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
-import { parseCursorEvent } from '../cursorStream'
+import { parseCursorEvent, cursorSessionId } from '../cursorStream'
 import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt } from '../chatStream'
 import { parseModelsList } from '../parseModelsList'
@@ -52,6 +52,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       let rawErr = ''
+      let sessionSent: string | undefined
       const cap = (s: string, add: string) => (s + add).slice(-2000)
 
       const processLine = (raw: string) => {
@@ -64,6 +65,8 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
           if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
           return
         }
+        const sid = cursorSessionId(obj)
+        if (sid && sid !== sessionSent) { sessionSent = sid; cb.onSession?.(sid) }
         const events = parseCursorEvent(obj)
         if (events.length === 0) {
           // Unrecognised JSON line: run through scanner so fence is detected
@@ -141,17 +144,34 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
       const start = Date.now()
       let buf = ''
       let gotText = false
+      let sessionSent: string | undefined
       let rawErr = ''
       child.stderr?.on('data', (b: Buffer) => { rawErr = (rawErr + b.toString()).slice(-2000) })
       const processLine = (raw: string) => {
         const line = raw.trim()
         if (!line) return
         let obj: unknown
-        try { obj = JSON.parse(line) } catch { gotText = true; cb.onAssistantDelta(line); return }
-        const events = parseCursorEvent(obj as any)
+        try { obj = JSON.parse(line) } catch {
+          // Non-JSON line: likely plain assistant text if the CLI degrades out of stream-json.
+          gotText = true; cb.onAssistantDelta(line); return
+        }
+        const o = obj as any
+        // Record the cursor session id (any envelope may carry it) so the IDs panel can show it —
+        // previously never wired, so a cursor turn left no session row after switching providers.
+        const sid = cursorSessionId(o)
+        if (sid && sid !== sessionSent) { sessionSent = sid; cb.onSession(sid) }
+        if (o.type === 'result') {
+          // Final event. Only surface its text if nothing streamed, so partial deltas + the final
+          // result don't render the whole answer twice.
+          if (!gotText) for (const ev of parseCursorEvent(o)) if (ev.kind === 'output' && ev.text) { gotText = true; cb.onAssistantDelta(ev.text) }
+          return
+        }
+        const events = parseCursorEvent(o)
         if (events.length === 0) {
-          // Unrecognised JSON — best-effort: emit raw as assistant text
-          gotText = true; cb.onAssistantDelta(line)
+          // Recognised-but-textless envelope (system/init · user echo · empty assistant): drop it. Any
+          // other unknown JSON goes to the thinking trace — NEVER dumped into the answer body as raw
+          // source (that was the "markdown 没渲染 / 能看到源码" symptom).
+          if (o.type !== 'system' && o.type !== 'user' && o.type !== 'assistant') cb.onThinkDelta(line)
           return
         }
         for (const ev of events) {

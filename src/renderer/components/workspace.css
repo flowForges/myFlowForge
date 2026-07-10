@@ -102,18 +102,19 @@
 }
 .wf-pending-step b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--fg-2); }
 .wf-pending-step i { font-family: var(--mono); font-size: 10px; font-style: normal; color: var(--faint); }
-/* Two-column grid so every value lines up in one column — labels left, values start at a shared x.
-   (Was flex+space-between, which parked short values at the far right and long ones mid-row → misaligned.) */
-.ic-row { display: grid; grid-template-columns: minmax(56px, max-content) minmax(0, 1fr); align-items: baseline; column-gap: 14px; padding: 5px 0; font-size: 12px; }
-/* 会话卡:所有行共享同一对列(标签/项目名 · 值/分支),值全部 LEFT-aligned 成一条线. Each .ic-row is
-   normally its own grid, so column widths differ row-to-row and the values never line up; SUBGRID makes
-   every row inherit the card's two tracks, giving one shared label column + one shared value column. */
-.ic-card-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 14px; }
-.ic-card-kv .ic-card-h { grid-column: 1 / -1; }
-.ic-card-kv .ic-row, .ic-card-kv .ic-row.ic-proj { grid-column: 1 / -1; grid-template-columns: subgrid; column-gap: 14px; }
+/* 会话卡. 标签行:固定的短标签列 + 紧挨其后的值列,值始终可见且左对齐、离标签很近 —— 不再被推到一条远端
+   共享列(旧版用 subgrid+max-content,一个较长的项目名会把标签列撑宽,把 agent/路径 的值挤出可视区). */
+.ic-card-kv { display: block; }
+.ic-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: baseline; column-gap: 10px; padding: 5px 0; font-size: 12px; }
 .ic-row > span { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ic-row b { justify-self: start; font-weight: 600; color: var(--fg-2); text-align: left; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ic-row b.mono { font-family: var(--mono); font-weight: 500; font-size: 11.5px; }
+
+/* 项目行:文件夹名与标签一样左对齐,git 分支紧跟在文件夹名后面(与文件树里同款 .tree-branch-tag),
+   取代原来那条会被长名字截掉的远端值列. */
+.ic-row.ic-proj { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+.ic-row.ic-proj > .ic-proj-name { color: var(--fg-2); font-weight: 500; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ic-row.ic-proj .tree-branch-tag { margin-left: 0; }
 
 /* Copyable value: outer is overflow-visible so its tooltip/pill can escape; inner span clips with ellipsis. */
 .ic-row b.ic-copyable { overflow: visible; position: relative; cursor: pointer; display: inline-flex; align-items: baseline; justify-self: start; min-width: 0; max-width: 100%; gap: 6px; }

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { ProviderInfo, ReviewConfig, StageCustomFields } from '@shared/types'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ProviderInfo, ReviewConfig, StageCustomFields, Settings } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 
 export interface CfgProject { id: string; name: string; repoUrl: string; defaultBranch: string }
@@ -10,14 +10,32 @@ export interface CfgWorkflow { id: string; name: string; stages: CfgStage[]; plu
 export function useConfig() {
   const [projects, setProjects] = useState<CfgProject[]>([])
   const [workflows, setWorkflows] = useState<CfgWorkflow[]>([])
-  const [providers, setProviders] = useState<ProviderInfo[]>([])
+  // Raw detection result (every installed provider). The public `providers` below strips out the
+  // ones the user disabled in 设置, so all "选择编码代理" lists hide them — the CLIs stay installed.
+  const [rawProviders, setRawProviders] = useState<ProviderInfo[]>([])
+  const [disabled, setDisabled] = useState<string[]>([])
 
   const reloadProjects = useCallback(async () => setProjects(await window.forge.listProjects()), [])
   useEffect(() => { void reloadProjects() }, [reloadProjects])
   useEffect(() => { void window.forge.listWorkflows().then(setWorkflows) }, [])
-  useEffect(() => { void window.forge.detectProviders().then(setProviders) }, [])
+  useEffect(() => { void window.forge.detectProviders().then(setRawProviders) }, [])
 
-  const redetect = useCallback(async () => { setProviders(await window.forge.detectProviders()) }, [])
+  // Track the disabled-provider list and keep it live across windows so toggling a provider off in
+  // 设置 immediately drops it from every selection list without a restart.
+  useEffect(() => {
+    void window.forge.getSettings().then((s: Partial<Settings>) => setDisabled(s?.disabledProviders ?? []))
+    const off = window.forge.onSettingsChanged((s) => {
+      setDisabled(((s ?? {}) as Partial<Settings>).disabledProviders ?? [])
+    })
+    return () => { off() }
+  }, [])
+
+  const providers = useMemo(
+    () => rawProviders.filter(p => !disabled.includes(p.id)),
+    [rawProviders, disabled],
+  )
+
+  const redetect = useCallback(async () => { setRawProviders(await window.forge.detectProviders()) }, [])
 
   const addProject = useCallback(async (repoUrl: string, branch: string) => { const list = await window.forge.addProject({ repoUrl, branch }); setProjects(list); return list }, [])
   const deleteProject = useCallback(async (id: string) => { setProjects(await window.forge.deleteProject(id)) }, [])

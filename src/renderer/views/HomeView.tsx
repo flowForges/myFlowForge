@@ -102,6 +102,7 @@ interface Props {
   workspaces: WorkspaceMeta[]
   stats: HomeStats           // per-workspace branch / change counts / last-activity (keyed by path)
   activeRunPath?: string
+  busyPaths?: Set<string>    // workspaces with a chat turn in flight — lit as 运行中 even without an orchestrator run
   run?: RunState             // the live engine run, used to fill the focus card with real stages/agents
   onNew: () => void
   onOpenDir: () => void
@@ -110,8 +111,11 @@ interface Props {
   onOpenSettings: () => void
 }
 
-export function HomeView({ workspaces, stats, activeRunPath, run, onNew, onOpenDir, onQuickFolder, onOpenWorkspace, onOpenSettings }: Props) {
-  const eff = (w: WorkspaceMeta): Status => (activeRunPath === w.path ? 'run' : w.status)
+export function HomeView({ workspaces, stats, activeRunPath, busyPaths, run, onNew, onOpenDir, onQuickFolder, onOpenWorkspace, onOpenSettings }: Props) {
+  // A workspace is "运行中" on home if the live orchestrator run targets it OR a chat agent turn is in
+  // flight there (busyPaths) — the latter never populates w.status, so without it chat activity showed
+  // nothing on home even while the sidebar dot was lit.
+  const eff = (w: WorkspaceMeta): Status => (activeRunPath === w.path || busyPaths?.has(w.path) ? 'run' : w.status)
 
   // Archived workspaces live only in the sidebar's archive dock — never on the home page.
   // Pinned workspaces sort to the top (stable), so a pinned one becomes the focus card when

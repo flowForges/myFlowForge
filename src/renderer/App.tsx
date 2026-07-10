@@ -577,6 +577,7 @@ export function App() {
                 workspaces={home.workspaces}
                 stats={home.stats}
                 activeRunPath={engine.run?.workspacePath}
+                busyPaths={busyWs}
                 run={engine.run ?? undefined}
                 onNew={openWizard}
                 onOpenDir={() => { void home.openDir() }}

@@ -10,6 +10,8 @@ beforeEach(() => {
     listProjects: async () => [],
     listWorkflows: async () => [wfA],
     detectProviders: async () => [],
+    getSettings: async () => ({ disabledProviders: [] }),
+    onSettingsChanged: () => () => {},
     addProject: async () => [], deleteProject: async () => [],
     addWorkflow: vi.fn(async () => [wfA, wfB]),
     deleteWorkflow: vi.fn(async () => [])
