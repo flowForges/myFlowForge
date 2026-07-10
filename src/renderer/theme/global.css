@@ -29,6 +29,13 @@ html[data-vibrancy="on"]:not([data-glass="on"]) .inspector { background: var(--g
   background-image: var(--app-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
   opacity: var(--app-bg-opacity, .35); border-radius: 12px; }
 [data-bg-scope="app"] .app-bg-layer { display: block; }
+/* With a bright wallpaper behind everything, the opaque dark 1px panel borders (sidebar / inspector
+   edges, titlebar / statusbar rules, button outlines) read as harsh BLACK LINES. Swap every border to a
+   translucent fg-tinted one so it blends into the image instead of drawing a line. */
+html[data-bg-scope="app"] {
+  --border: color-mix(in oklab, var(--fg) 14%, transparent);
+  --border-2: color-mix(in oklab, var(--fg) 24%, transparent);
+}
 
 .body { flex: 1; display: flex; min-height: 0; }
 .titlebar { flex: 0 0 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
