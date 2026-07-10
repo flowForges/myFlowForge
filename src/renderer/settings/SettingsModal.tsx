@@ -152,6 +152,13 @@ const NAV: NavEntry[] = [
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M9 3h6M12 3v4M6.5 9a5.5 5.5 0 0 1 11 0v4a5.5 5.5 0 0 1-11 0z" /><path d="M3 13h3.5M17.5 13H21M4 7l2.5 1.5M20 7l-2.5 1.5M4 19l2.6-1.6M20 19l-2.6-1.6" /></svg>
     ),
   },
+  {
+    key: 'about',
+    label: '关于',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
+    ),
+  },
 ]
 
 export function SettingsModal({ open, onClose, renderPane, initialPane }: SettingsModalProps) {

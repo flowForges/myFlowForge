@@ -41,6 +41,7 @@ import { LoadPane } from './settings/LoadPane'
 import { PluginPane } from './settings/PluginPane'
 import { SessionImportPane } from './settings/SessionImportPane'
 import { DebugLogPane } from './settings/DebugLogPane'
+import { AboutPane } from './settings/AboutPane'
 import { KeybindingsPane } from './settings/KeybindingsPane'
 import { useKeybindings } from './state/useKeybindings'
 import { UpgradeModal } from './shell/UpgradeModal'
@@ -730,6 +731,7 @@ export function App() {
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'sessions': return <SessionImportPane />
           case 'debug': return <DebugLogPane perfStallToast={settings?.perfStallToast ?? false} onTogglePerfToast={(v) => update({ perfStallToast: v })} />
+          case 'about': return <AboutPane version={updateCtx.currentVersion} />
           default: return null
         }
       }} />
