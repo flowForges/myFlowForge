@@ -120,6 +120,44 @@ describe('proposeRun mode flip', () => {
     expect(propose.has(captured[1])).toBe(false)
   })
 
+  // Selective execution: the agent may narrow the run to a subset of stages/projects (token-saving).
+  const wsMulti = {
+    name: 'w', path: '/w', workflowId: 'standard', status: 'idle',
+    stages: [
+      { key: 'requirement', provider: 'claude', model: 'opus-4.8' },
+      { key: 'develop', provider: 'claude', model: 'opus-4.8' },
+      { key: 'test', provider: 'claude', model: 'opus-4.8' },
+      { key: 'review', provider: 'claude', model: 'opus-4.8' },
+    ],
+    projects: [{ name: 'a', repoId: 'a', branch: 'main' }, { name: 'b', repoId: 'b', branch: 'main' }],
+  } as any
+
+  it('select narrows the run to the chosen stages + projects', async () => {
+    const startRun = vi.fn()
+    const captured: string[] = []
+    const deps = mkDeps({ startRun, readWorkspace: () => wsMulti, emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    const p = propose('/w', 'small task', 'small task', { stages: ['requirement', 'develop'], projects: ['a'] })
+    propose.resolve(captured[0], { decision: 'allow' })
+    await p
+    const opts = startRun.mock.calls[0][0]
+    expect(opts.stages.map((s: any) => s.key)).toEqual(['requirement', 'develop'])
+    expect(opts.developProjects.map((d: any) => d.name)).toEqual(['a'])
+  })
+
+  it('select falls back to the full set when the picks match nothing (never a no-op run)', async () => {
+    const startRun = vi.fn()
+    const captured: string[] = []
+    const deps = mkDeps({ startRun, readWorkspace: () => wsMulti, emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    const p = propose('/w', 't', 't', { stages: ['nope'], projects: ['nope'] })
+    propose.resolve(captured[0], { decision: 'allow' })
+    await p
+    const opts = startRun.mock.calls[0][0]
+    expect(opts.stages.map((s: any) => s.key)).toEqual(['requirement', 'develop', 'test', 'review'])
+    expect(opts.developProjects.map((d: any) => d.name)).toEqual(['a', 'b'])
+  })
+
   it('does not flip mode when a run is already live (allow rejected)', async () => {
     const startRun = vi.fn()
     const setSessionMode = vi.fn()

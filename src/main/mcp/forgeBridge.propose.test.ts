@@ -30,7 +30,7 @@ describe('forgeBridge propose_plan', () => {
     const dir = mkdtempSync(join(tmpdir(), 'fb-'))
     bridge = await startBridge(dir, { ...ctxBase, proposePlan })
     const r = await call(bridge.socketPath, { id: '1', tool: 'propose_plan', agentId: 'chat', args: { approach: '先建模型' } })
-    expect(proposePlan).toHaveBeenCalledWith('先建模型', undefined)
+    expect(proposePlan).toHaveBeenCalledWith('先建模型', undefined, { stages: undefined, projects: undefined })
     expect(r.result).toEqual({ approved: true })
   })
   it('未配置 proposePlan 时报错', async () => {

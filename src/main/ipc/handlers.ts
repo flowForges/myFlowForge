@@ -462,10 +462,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       store, runId: 'chat', workspaceName: payload.workspacePath,
       agentName: () => 'chat', agentStage: () => 'chat',
       ask: async () => null, setContext: () => {},
-      proposePlan: (approach: string, task?: string) => {
+      proposePlan: (approach: string, task?: string, select?: { stages?: string[]; projects?: string[] }) => {
         proposedWorkflow = true
         if (guardBlocked()) { emitNote(payload.workspacePath, payload.sessionId, '已达最大修改次数,请直接批准或取消。'); return Promise.resolve({ approved: false }) }
-        return proposeRun(payload.workspacePath, approach, task)
+        return proposeRun(payload.workspacePath, approach, task, select)
       },
     }).catch(() => null)
     const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan' } : undefined })

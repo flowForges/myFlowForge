@@ -160,11 +160,11 @@ export function createForgeServer(send: SendFn, allowed?: Set<string>): McpServe
   if (reg.has('forge_propose_plan')) server.registerTool(
     'forge_propose_plan',
     {
-      description: '提交技术方案,等待用户批准后才执行工作流(批准前不要自行执行阶段)',
-      inputSchema: { approach: z.string(), task: z.string().optional() },
+      description: '提交技术方案,等待用户批准后才执行工作流(批准前不要自行执行阶段)。默认跑工作区配置的全部阶段与全部项目;当任务较小时,应只选必要的部分以节省 token:用 stages 传要跑的阶段 key(如 ["requirement","develop"] 表示只做需求分析+开发,跳过测试与 CR),用 projects 传相关的项目名(只改动这些项目,不动其他)。省略则全量执行。',
+      inputSchema: { approach: z.string(), task: z.string().optional(), stages: z.array(z.string()).optional(), projects: z.array(z.string()).optional() },
     },
-    async ({ approach, task }) => {
-      const r = await send('propose_plan', { approach, task }) as { approved: boolean; feedback?: string }
+    async ({ approach, task, stages, projects }) => {
+      const r = await send('propose_plan', { approach, task, stages, projects }) as { approved: boolean; feedback?: string }
       let text: string
       if (r.approved) {
         text = '已批准,工作流已启动'

@@ -17,7 +17,7 @@ export interface BridgeRunCtx {
   ask(agentId: string, question: string, options?: { t: string; d: string }[]): Promise<string | null>
   setContext(key: string, value: unknown): void
   onBeat?(agentId: string): void
-  proposePlan?(approach: string, task?: string): Promise<{ approved: boolean; feedback?: string }>
+  proposePlan?(approach: string, task?: string, select?: { stages?: string[]; projects?: string[] }): Promise<{ approved: boolean; feedback?: string }>
 }
 
 export interface ForgeBridge {
@@ -187,7 +187,10 @@ async function dispatch(
 
     case 'propose_plan': {
       if (!ctx.proposePlan) throw new Error('propose_plan not supported')
-      const r = await ctx.proposePlan(args.approach as string, args.task as string | undefined)
+      const r = await ctx.proposePlan(args.approach as string, args.task as string | undefined, {
+        stages: args.stages as string[] | undefined,
+        projects: args.projects as string[] | undefined,
+      })
       appendAudit(ctx, agentId, 'status', { approach: args.approach, approved: r.approved }, [])
       return r
     }
