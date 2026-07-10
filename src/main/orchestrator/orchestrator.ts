@@ -29,9 +29,18 @@ export const STAGE_FORGE_TOOLS = 'forge_read_context,forge_write_artifact,forge_
 // next stage runs (inter-stage hard gate). v1: only 'design' (技术方案设计) — the user must
 // approve the technical design before development proceeds. Reject stops the whole run.
 // Defined as a set so it's trivial to extend to other stages later.
-// Stages that pause on a hard review gate after completing. Exported so resume logic can tell a
-// gated stage that finished-but-was-never-approved apart from one that's genuinely done.
+// Stages that, by DEFAULT (no explicit spec.gate), pause on a hard review gate after completing.
+// Exported so resume logic can tell a gated stage that finished-but-was-never-approved apart from one
+// that's genuinely done. The fallback stays design-only for back-compat; every-stage gating is opt-in
+// per stage via spec.gate === true (the workspace→run mapping sets it so the user reviews every stage,
+// and #3's per-stage config will drive it). A stage may also opt OUT via spec.gate === false.
 export const REVIEW_GATED_STAGES = new Set(['design'])
+// Whether a stage pauses on a review gate after completing: explicit spec.gate wins; otherwise the
+// built-in default set above. Used by resume logic; the run loop additionally folds in an isLast rule
+// for the FALLBACK case (see the gate site) so a bare design-last stage still doesn't self-gate.
+export function stageGated(spec: StageSpec): boolean {
+  return spec.gate ?? REVIEW_GATED_STAGES.has(spec.key)
+}
 // Context key marking that a gated stage's review gate was APPROVED (not cancelled/denied). Resume
 // reads this to avoid skipping past an un-approved design straight into code.
 export const gateApprovedKey = (stageKey: string) => 'gate-approved:' + stageKey
@@ -39,7 +48,9 @@ export const gateApprovedKey = (stageKey: string) => 'gate-approved:' + stageKey
 export type StageScope = 'root' | 'per-project'
 // `projects` (by name) optionally scopes a PER-PROJECT stage to a subset of the run's projects — e.g.
 // analyze all 5 projects but develop only 2. Absent/empty = every project. Ignored for root stages.
-export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[] }
+// gate: override the default review-gate behavior for this stage (see stageGated). reworkNote:
+// set by the rework loop when the user 打回重做 — carries their revision direction into the re-run.
+export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[]; gate?: boolean; reworkNote?: string }
 
 // Where a stage's agent(s) are spawned:
 //  - 'root'        → one agent in the workspace root
@@ -88,7 +99,7 @@ export class Orchestrator {
   // Per-agent cwd (its project worktree, or the workspace root for root/summary agents). Recorded at
   // task start so the design gate can build openable doc refs {path, cwd} for the file viewer.
   private agentCwd = new Map<string, string>()
-  private resolvers = new Map<string, (value: { decision: 'allow' | 'deny'; value?: string; choice?: number }) => void>()
+  private resolvers = new Map<string, (value: { decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }) => void>()
   private store: RunStore | null = null
   private persistTimer: ReturnType<typeof setTimeout> | null = null
   private updateTimer: ReturnType<typeof setTimeout> | null = null
@@ -117,7 +128,7 @@ export class Orchestrator {
     this.hbCfg = opts.heartbeat ?? { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 }
   }
 
-  resolve(payload: { id: string; decision: 'allow' | 'deny'; value?: string; choice?: number }) {
+  resolve(payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }) {
     const r = this.resolvers.get(payload.id)
     if (r) {
       this.resolvers.delete(payload.id)
@@ -127,7 +138,7 @@ export class Orchestrator {
     }
   }
 
-  private raise(action: PendingAction): Promise<{ decision: 'allow' | 'deny'; value?: string; choice?: number }> {
+  private raise(action: PendingAction): Promise<{ decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }> {
     // 打 ISO 时间戳(用可注入的 this.now()),让卡片能与聊天消息按时间在对话流里归并排序。
     const stamped: PendingAction = action.ts ? action : { ...action, ts: new Date(this.now()).toISOString() }
     this.run.pending.push(stamped)
@@ -287,7 +298,9 @@ export class Orchestrator {
         this.setAgentAwaiting(agent, true)
         const r = await this.raise({ id, kind: 'confirm', agentId: agent.id, agentName: agent.name, wsName: this.run.workspaceName, title: req.title, where: req.where, provider: agent.provider, model: agent.model, role: agent.role })
         this.setAgentAwaiting(agent, false)
-        return r.decision
+        // forge_ask confirm cards are not reworkable (no 'modify' UI); coerce defensively so an
+        // unexpected 'modify' never reads as approval.
+        return r.decision === 'allow' ? 'allow' : 'deny'
       },
       onInput: async (req) => {
         const id = `p${++this.pendingSeq}`
@@ -368,7 +381,7 @@ export class Orchestrator {
     try {
       // this.briefs is read at task start; parallel develop-stage agents all get the same
       // pre-stage snapshot (briefs pushed mid-stage by a sibling don't retroactively appear — by design)
-      const prompt = buildStagePrompt(spec.name, this.briefs, { textFallback: !provider.capabilities.mcpTools, task: this.task, lens, stageKey: spec.key as StageKey, stageAppend: spec.prompt })
+      const prompt = buildStagePrompt(spec.name, this.briefs, { textFallback: !provider.capabilities.mcpTools, task: this.task, lens, stageKey: spec.key as StageKey, stageAppend: spec.prompt, reworkNote: spec.reworkNote })
       const session = provider.run(
         { stageKey: stage.key, agentId: agent.id, name: agent.name, prompt, cwd, model: spec.model },
         this.callbacksFor(stage, agent, store), env
@@ -551,105 +564,128 @@ export class Orchestrator {
         this.run.stages.push(stage)
         this.update()
 
-        const baseEnv = buildAgentEnv({ proxy: this.proxy() })
-        // Inject bridge socket into base env; FORGE_AGENT_ID is added per-task below.
-        if (this.bridge) {
-          (baseEnv as Record<string, string>).FORGE_SOCKET = this.bridge.socketPath
-          if (this.mcpEntry) (baseEnv as Record<string, string>).FORGE_MCP_ENTRY = this.mcpEntry;
-          // Limit stage sub-agents to the execution toolset (no forge_propose_plan) so they
-          // can't be lured into proposing instead of doing their assigned stage work.
-          (baseEnv as Record<string, string>).FORGE_TOOLS = STAGE_FORGE_TOOLS
-        }
+        // 每阶段返工循环:跑该阶段 → 弹评审门控。用户「打回重做」(decision:'modify')时,带着修改方向
+        // 重跑本阶段产出新版本,再弹门控;直到「允许并继续」(进下一步)或「终止」(deny,停整个 run)。
+        // briefsBase:本阶段开始时的上游 briefs 快照长度 —— 每次重跑回退到它,好让新版只看到真正的
+        // 上游交接 + 用户修改方向,而不是把自己上一版的产出当成上游。
+        const briefsBase = this.briefs.length
+        let reworkNote: string | undefined
+        let round = 0
+        while (true) {
+          if (this.cancelled) break
+          if (round > 0) {
+            // 重跑前重置本阶段:清掉上一版的 agents/docs、状态回到 run、briefs 回退到快照。
+            stage.agents = []
+            stage.docs = undefined
+            stage.state = 'run'
+            this.briefs.length = briefsBase
+            this.update()
+          }
+          // 修改方向经 spec.reworkNote → runTask → buildStagePrompt 注入;round 0 时为 undefined(无影响)。
+          spec.reworkNote = reworkNote
 
-        const tasks: { agent: AgentRuntime; cwd: string; provider: AgentProvider | undefined; model: string; lens?: ReviewLens }[] = []
-        if (spec.key === 'review' && spec.review) {
-          const reviewers: ReviewerTask[] = buildReviewTasks(
-            spec.review,
-            opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })),
-            { name: spec.name, cwd: opts.workspacePath },
-          )
-          for (const r of reviewers) {
-            const agent = this.mkAgentRuntime(
-              r.id, r.lens ? `${spec.name} · ${lensLabel(r.lens)}` : r.name, spec.name, spec.provider, spec.model,
+          const baseEnv = buildAgentEnv({ proxy: this.proxy() })
+          // Inject bridge socket into base env; FORGE_AGENT_ID is added per-task below.
+          if (this.bridge) {
+            (baseEnv as Record<string, string>).FORGE_SOCKET = this.bridge.socketPath
+            if (this.mcpEntry) (baseEnv as Record<string, string>).FORGE_MCP_ENTRY = this.mcpEntry;
+            // Limit stage sub-agents to the execution toolset (no forge_propose_plan) so they
+            // can't be lured into proposing instead of doing their assigned stage work.
+            (baseEnv as Record<string, string>).FORGE_TOOLS = STAGE_FORGE_TOOLS
+          }
+
+          const tasks: { agent: AgentRuntime; cwd: string; provider: AgentProvider | undefined; model: string; lens?: ReviewLens }[] = []
+          if (spec.key === 'review' && spec.review) {
+            const reviewers: ReviewerTask[] = buildReviewTasks(
+              spec.review,
+              opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })),
+              { name: spec.name, cwd: opts.workspacePath },
             )
-            stage.agents.push(agent); tasks.push({ agent, cwd: r.cwd, provider, model: spec.model, lens: r.lens })
-          }
-        } else if (stageScope(spec) === 'per-project' && opts.developProjects.length > 0) {
-          // Per-stage project scoping: a stage may run on only a subset of projects (spec.projects, by
-          // name). Falls back to ALL projects when unset or when the filter matches nothing (never a
-          // no-op stage). Lets e.g. 需求分析 cover all 5 projects while 开发 touches only 2.
-          const scoped = spec.projects?.length ? opts.developProjects.filter(p => spec.projects!.includes(p.name)) : opts.developProjects
-          const stageProjs = scoped.length ? scoped : opts.developProjects
-          for (const proj of stageProjs) {
-            // develop runs with each project's chosen provider/model; other per-project
-            // stages (e.g. design) keep the stage's provider/model but run in the project cwd.
-            const provId = spec.key === 'develop' ? (proj.provider ?? spec.provider) : spec.provider
-            const mdl = spec.key === 'develop' ? (proj.model ?? spec.model) : spec.model
-            // name = the project (prominent card title), role = the stage (subtitle) — so the UI
-            // clearly shows which project each agent works on and at which stage. proj.name is now
-            // non-empty (workspaceToStartRunOpts falls back to repoId), so no "在  中X" label.
-            const agent = this.mkAgentRuntime(`${stage.key}:${proj.name}`, proj.name, spec.name, provId, mdl)
-            stage.agents.push(agent); tasks.push({ agent, cwd: proj.cwd, provider: this.providers[provId], model: mdl })
-          }
-        } else {
-          const agent = this.mkAgentRuntime(stage.key, spec.name, spec.name, spec.provider, spec.model)
-          stage.agents.push(agent); tasks.push({ agent, cwd: opts.workspacePath, provider, model: spec.model })
-        }
-
-        const missingProvider = tasks.find(t => !t.provider)
-        if (missingProvider) {
-          for (const { agent } of tasks) {
-            if (!agent.state || agent.state === 'wait') {
-              agent.state = 'err'
-              this.pushLog(agent, { ts: timeStr(), text: `未找到代理 provider: ${agent.provider}`, level: 'info' })
+            for (const r of reviewers) {
+              const agent = this.mkAgentRuntime(
+                r.id, r.lens ? `${spec.name} · ${lensLabel(r.lens)}` : r.name, spec.name, spec.provider, spec.model,
+              )
+              stage.agents.push(agent); tasks.push({ agent, cwd: r.cwd, provider, model: spec.model, lens: r.lens })
             }
+          } else if (stageScope(spec) === 'per-project' && opts.developProjects.length > 0) {
+            // Per-stage project scoping: a stage may run on only a subset of projects (spec.projects, by
+            // name). Falls back to ALL projects when unset or when the filter matches nothing (never a
+            // no-op stage). Lets e.g. 需求分析 cover all 5 projects while 开发 touches only 2.
+            const scoped = spec.projects?.length ? opts.developProjects.filter(p => spec.projects!.includes(p.name)) : opts.developProjects
+            const stageProjs = scoped.length ? scoped : opts.developProjects
+            for (const proj of stageProjs) {
+              // develop runs with each project's chosen provider/model; other per-project
+              // stages (e.g. design) keep the stage's provider/model but run in the project cwd.
+              const provId = spec.key === 'develop' ? (proj.provider ?? spec.provider) : spec.provider
+              const mdl = spec.key === 'develop' ? (proj.model ?? spec.model) : spec.model
+              // name = the project (prominent card title), role = the stage (subtitle) — so the UI
+              // clearly shows which project each agent works on and at which stage. proj.name is now
+              // non-empty (workspaceToStartRunOpts falls back to repoId), so no "在  中X" label.
+              const agent = this.mkAgentRuntime(`${stage.key}:${proj.name}`, proj.name, spec.name, provId, mdl)
+              stage.agents.push(agent); tasks.push({ agent, cwd: proj.cwd, provider: this.providers[provId], model: mdl })
+            }
+          } else {
+            const agent = this.mkAgentRuntime(stage.key, spec.name, spec.name, spec.provider, spec.model)
+            stage.agents.push(agent); tasks.push({ agent, cwd: opts.workspacePath, provider, model: spec.model })
           }
-          stage.state = 'err'; this.update(); break
-        }
 
-        await Promise.all(tasks.map(({ agent, cwd, provider: taskProvider, model: taskModel, lens }) => {
-          // Build per-agent env: spread base env, override FORGE_AGENT_ID for this specific agent.
-          const agentEnv: NodeJS.ProcessEnv = this.bridge
-            ? { ...baseEnv, FORGE_AGENT_ID: agent.id }
-            : baseEnv
-          agent.context = mergeAgentContext(discoverAgentContext(cwd, opts.workspacePath), forgeMcpContext(agentEnv))
-          this.update(true)
-          return this.runTask(taskProvider!, stage, { ...spec, model: taskModel }, agent, cwd, store, agentEnv, lens)
-        }))
+          const missingProvider = tasks.find(t => !t.provider)
+          if (missingProvider) {
+            for (const { agent } of tasks) {
+              if (!agent.state || agent.state === 'wait') {
+                agent.state = 'err'
+                this.pushLog(agent, { ts: timeStr(), text: `未找到代理 provider: ${agent.provider}`, level: 'info' })
+              }
+            }
+            stage.state = 'err'; this.update(); break
+          }
 
-        if (
-          spec.key === 'design' &&
-          stageScope(spec) === 'per-project' &&
-          opts.developProjects.length > 0 &&
-          stage.agents.every(a => a.state === 'ok')
-        ) {
-          const summary = this.mkAgentRuntime('design:summary', '主代理', `${spec.name} · 汇总设计`, spec.provider, spec.model)
-          stage.agents.push(summary)
-          const summaryEnv: NodeJS.ProcessEnv = this.bridge
-            ? { ...baseEnv, FORGE_AGENT_ID: summary.id }
-            : baseEnv
-          summary.context = mergeAgentContext(discoverAgentContext(opts.workspacePath, opts.workspacePath), forgeMcpContext(summaryEnv))
-          this.update(true)
-          await this.runTask(provider, stage, { ...spec, name: `${spec.name}汇总`, scope: 'root' }, summary, opts.workspacePath, store, summaryEnv)
-        }
+          await Promise.all(tasks.map(({ agent, cwd, provider: taskProvider, model: taskModel, lens }) => {
+            // Build per-agent env: spread base env, override FORGE_AGENT_ID for this specific agent.
+            const agentEnv: NodeJS.ProcessEnv = this.bridge
+              ? { ...baseEnv, FORGE_AGENT_ID: agent.id }
+              : baseEnv
+            agent.context = mergeAgentContext(discoverAgentContext(cwd, opts.workspacePath), forgeMcpContext(agentEnv))
+            this.update(true)
+            return this.runTask(taskProvider!, stage, { ...spec, model: taskModel }, agent, cwd, store, agentEnv, lens)
+          }))
 
-        stage.state = stage.agents.length > 0 && stage.agents.every(a => a.state === 'ok') ? 'ok' : 'err'
-        this.update()
-        if (stage.state === 'err') break
+          if (
+            spec.key === 'design' &&
+            stageScope(spec) === 'per-project' &&
+            opts.developProjects.length > 0 &&
+            stage.agents.every(a => a.state === 'ok')
+          ) {
+            const summary = this.mkAgentRuntime('design:summary', '主代理', `${spec.name} · 汇总设计`, spec.provider, spec.model)
+            stage.agents.push(summary)
+            const summaryEnv: NodeJS.ProcessEnv = this.bridge
+              ? { ...baseEnv, FORGE_AGENT_ID: summary.id }
+              : baseEnv
+            summary.context = mergeAgentContext(discoverAgentContext(opts.workspacePath, opts.workspacePath), forgeMcpContext(summaryEnv))
+            this.update(true)
+            await this.runTask(provider, stage, { ...spec, name: `${spec.name}汇总`, scope: 'root' }, summary, opts.workspacePath, store, summaryEnv)
+          }
 
-        // Inter-stage hard gate: after a gated stage (v1: design) completes OK, pause and ask the
-        // user to review the output and approve before the next stage runs. Only fires when there
-        // IS a next stage and the run hasn't been cancelled. Reuses the raise/pending/resolve
-        // mechanism (same path as agent onConfirm) — no new UI/IPC. The design output is already
-        // surfaced to chat by the per-stage narrator回流; this only adds the pause + approve/reject.
-        // Last step in the WOVEN sequence (stages + hooks), not just the last stage — otherwise a hook
-        // woven after a gated stage would let it run without the review gate pausing first.
-        const isLast = stepIdx === woven.length - 1
-        if (REVIEW_GATED_STAGES.has(spec.key) && !isLast && !this.cancelled) {
+          stage.state = stage.agents.length > 0 && stage.agents.every(a => a.state === 'ok') ? 'ok' : 'err'
+          this.update()
+          if (stage.state === 'err') break
+
+          // Inter-stage review gate: after a gated stage completes OK, pause and ask the user to review
+          // the output. Reuses the raise/pending/resolve mechanism (no new IPC). The stage output is
+          // already surfaced to chat by the per-stage narrator 回流; this adds the pause + 三选一:
+          //   allow  → approve, proceed to the next stage
+          //   modify → 打回重做: re-run THIS stage with the user's revision direction (loop), then re-gate
+          //   deny   → 终止: stop the whole run
+          // Gate resolution: explicit spec.gate wins (production sets true on every stage incl. the last).
+          // The design-only FALLBACK additionally skips the last WOVEN step, preserving the old behavior
+          // where a bare design-last stage doesn't self-gate.
+          const isLast = stepIdx === woven.length - 1
+          const gated = spec.gate ?? (REVIEW_GATED_STAGES.has(spec.key) && !isLast)
+          if (!gated || this.cancelled) break
           const id = `review-${spec.key}-${++this.pendingSeq}`
-          // Collect the design docs agents wrote to disk (openable in the in-app viewer). The gate
-          // body prefers the consolidated doc's full content (summary agent is appended last, so
-          // it's the last doc); it falls back to the assembled handoff summaries when no doc exists.
+          // Collect the docs agents wrote to disk (openable in the in-app viewer). The gate body prefers
+          // the consolidated doc's full content (summary agent is appended last, so it's the last doc);
+          // it falls back to the assembled handoff summaries when no doc exists.
           const docs = buildDesignDocs(
             stage.agents,
             aid => store.getContext('handoff-doc:' + aid) as string | undefined,
@@ -668,23 +704,33 @@ export class Orchestrator {
             id, kind: 'confirm',
             agentId: `stage:${spec.key}`, agentName: spec.name,
             wsName: this.run.workspaceName,
-            title: '技术方案设计完成 — 审阅后批准继续开发,或打回停止本次运行',
+            title: `「${spec.name}」阶段完成 — 审阅后可继续、打回重做、或终止本次运行`,
             role: '阶段评审',
             body,
             docs: docs.length ? docs : undefined,
+            reworkable: true,
           })
           if (decision.decision === 'deny') {
-            // Reject → stop the whole run. cancel() marks the run err, drains pending, and stops
-            // sessions; we're mid-run (status==='run') so it applies cleanly. break leaves the
+            // 终止 → stop the whole run. cancel() marks the run err, drains pending, and stops sessions;
+            // we're mid-run (status==='run') so it applies cleanly. The post-loop break leaves the
             // remaining stages unexecuted; the finally block finalizes status (already 'err').
-            this.cancel('技术方案被打回,已停止本次运行')
+            this.cancel(`「${spec.name}」被终止,已停止本次运行`)
             break
           }
+          if (decision.decision === 'modify') {
+            // 打回重做 → loop: re-run this same stage carrying the user's revision direction. Empty
+            // direction still triggers a redo (self-improve the weakest part of the last version).
+            reworkNote = (decision.value ?? '').trim() || '(用户要求返工,但未填写具体方向——请自查上一版最薄弱处并改进,重新给出一版。)'
+            round++
+            continue
+          }
           // Approved. Persist it so a later resume treats this gated stage as truly done. Without this,
-          // a design stage that reached 'ok' but was cancelled AT the gate would be skipped on resume,
-          // letting the next stage (code) run with an un-approved plan.
+          // a gated stage that reached 'ok' but was cancelled AT the gate would be skipped on resume.
           store.setContext(gateApprovedKey(spec.key), true)
+          break
         }
+        // 本阶段(含多轮返工)收尾:出错、或被取消/终止 → 不再往后跑。
+        if (stage.state === 'err' || this.cancelled) break
       }
 
       // 工作流完成后 hooks: after the stage loop completes and the run finished normally (NOT

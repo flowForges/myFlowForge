@@ -339,7 +339,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.workspacesChanged, {})
     return result
   })
-  ipcMain.handle(CH.engineStartRun, (_e, opts: StartRunOpts) => {
+  ipcMain.handle(CH.engineStartRun, (_e, rawOpts: StartRunOpts) => {
+    // Every stage pauses on a review gate (approve / 打回重做 / 终止) in production runs — default
+    // gate:true on any stage that doesn't set it explicitly (an explicit false still opts out). This
+    // is the choke point for the direct run-IPC; proposeRun/resume/create paths set gate in their
+    // own mappings. Orchestrator unit tests call orch.startRun directly and keep the design-only default.
+    const opts: StartRunOpts = { ...rawOpts, stages: rawOpts.stages.map(s => ({ gate: true, ...s })) }
     if (isArchivedWorkspace(opts.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
     // The seeding task (the user's first chat message in the workspace) is surfaced as a chat
     // user message so it appears in the chat stream alongside the agents' replies.

@@ -49,15 +49,19 @@ export function PlanCard({ req, onResolve }: PlanCardProps) {
             <button className="req-no" onClick={() => onResolve({ decision: 'deny' })}>取消</button>
           </div>
         ) : (
-          <div className="req-inrow">
-            <input
-              type="text"
-              placeholder="说明要改的方向"
+          <div className="req-inrow req-inrow-multi">
+            <textarea
+              className="req-modify-ta"
+              placeholder="说明要改的方向(可多行,Shift+Enter 换行,Enter 提交)"
               value={fb}
+              rows={3}
               onChange={e => setFb(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onResolve({ decision: 'modify', value: fb }) } }}
             />
-            <button onClick={() => onResolve({ decision: 'modify', value: fb })}>提交修改</button>
-            <button className="req-no" onClick={() => { setFb(''); setEditing(false) }}>返回</button>
+            <div className="req-modify-actions">
+              <button onClick={() => onResolve({ decision: 'modify', value: fb })}>提交修改</button>
+              <button className="req-no" onClick={() => { setFb(''); setEditing(false) }}>返回</button>
+            </div>
           </div>
         )}
       </div>

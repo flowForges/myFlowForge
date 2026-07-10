@@ -26,7 +26,9 @@ export interface StageRuntime { key: string; name: string; state: AgentState; ag
 export interface DesignDocRef { path: string; cwd: string; name: string }
 
 export type PendingAction =
-  | { id: string; kind: 'confirm'; agentId: string; agentName: string; wsName: string; title: string; where?: string; provider?: string; model?: string; role?: string; sub?: string; body?: string; docs?: DesignDocRef[]; ts?: string; note?: string }
+  // reworkable: 仅阶段评审门控为 true —— 允许「打回重做」(decision:'modify' 带修改方向)。forge_ask 的
+  // confirm 卡不设此位,因它走另一条 resolve 通道、不认 'modify',避免误发。
+  | { id: string; kind: 'confirm'; agentId: string; agentName: string; wsName: string; title: string; where?: string; provider?: string; model?: string; role?: string; sub?: string; body?: string; docs?: DesignDocRef[]; reworkable?: boolean; ts?: string; note?: string }
   | { id: string; kind: 'input'; agentId: string; agentName: string; wsName: string; title: string; placeholder?: string; provider?: string; model?: string; role?: string; sub?: string; ts?: string; note?: string }
   | { id: string; kind: 'select'; agentId: string; agentName: string; wsName: string; title: string; options: { t: string; d: string }[]; provider?: string; model?: string; role?: string; sub?: string; ts?: string; note?: string }
 
@@ -73,7 +75,8 @@ export type EngineEvent =
   | { type: 'pending:annotate'; id: string; note: string }
 
 // renderer -> main
-export interface ResolvePayload { id: string; decision: 'allow' | 'deny'; value?: string; choice?: number }
+// 'modify' = 阶段评审门控上的「打回重做」:value 带用户填写的修改方向,编排器据此重跑当前阶段。
+export interface ResolvePayload { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }
 
 export interface ModelInfo { id: string; label: string; description?: string; contextWindow?: number }
 export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; authCmd?: string; installHelp?: string }

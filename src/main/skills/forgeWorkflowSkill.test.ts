@@ -29,7 +29,7 @@ describe('FORGE_WORKFLOW_SKILL', () => {
     // Ambiguous intent → ask one line first, never auto-propose.
     expect(c).toContain('拿不准')
     // The "don't propose" guidance must appear before the propose flow so it gates first.
-    expect(c.indexOf('绝不调用')).toBeLessThan(c.indexOf('forge_propose_plan({approach})'))
+    expect(c.indexOf('绝不调用')).toBeLessThan(c.indexOf('forge_propose_plan({approach,'))
   })
 
   it('self-excludes for orchestrated stage sub-agents (scope note near the top)', () => {

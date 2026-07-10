@@ -15,6 +15,8 @@ export function workspaceToStartRunOpts(ws: Workspace, task?: string): StartRunO
     stepPlugins: ws.stepPlugins ?? [],
     stages: ws.stages.map(s => ({
       key: s.key, name: STAGE_NAMES[s.key as StageKey] ?? s.key, provider: s.provider, model: s.model,
+      // Every stage pauses on a review gate (approve / 打回重做 / 终止). #3 will make this per-stage.
+      gate: true,
       review: s.review, ...(s.prompt ? { prompt: s.prompt } : {}),
     })),
     developProjects: ws.projects.map(p => {

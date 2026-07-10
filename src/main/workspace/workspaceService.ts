@@ -56,6 +56,9 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
 export function buildStartRunOpts(opts: CreateWorkspaceOpts, developProjects: DevelopProject[]): StartRunOpts {
   const stages: StageSpec[] = opts.stages.map(s => ({
     key: s.key, name: STAGE_NAMES[s.key as StageKey] ?? s.key, provider: s.provider, model: s.model,
+    // Every stage pauses on a review gate (approve / 打回重做 / 终止) — the user reviews & can rework
+    // each step. #3's per-stage config will make this a toggle; for now it's on for all stages.
+    gate: true,
     ...(s.prompt ? { prompt: s.prompt } : {})
   }))
   return {
