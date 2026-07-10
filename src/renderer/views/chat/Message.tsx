@@ -2,6 +2,7 @@ import { useState, useEffect, startTransition, memo } from 'react'
 import type { ChatMessage, DesignDocRef } from '@shared/types'
 import { fmtMsgTime, fmtMsgTimeFull } from '@shared/relTime'
 import { ThinkBlock } from './ThinkBlock'
+import { SubagentCards } from './SubagentCards'
 import { Markdown } from './markdown'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
@@ -59,6 +60,7 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
         </div>
       )}
       {msg.think && <ThinkBlock think={msg.think} streaming={streaming} />}
+      {!isUser && msg.subagents?.length ? <SubagentCards subagents={msg.subagents} /> : null}
       {isUser ? (
         <div className="msg-body user-body">
           <div className="user-bubble">{msg.text}</div>

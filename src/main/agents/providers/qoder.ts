@@ -107,6 +107,8 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
           if (a.kind === 'ignore') continue
           if (a.kind === 'think') { pushThink(a.text ?? ''); continue }
           flushThink()   // any non-think action closes the current buffered reasoning line
+          if (a.kind === 'subagent-start') { cb.onLog({ ts: now(), text: `调用子代理 ${a.subagentType ?? ''}${a.description ? ' · ' + a.description : ''}`.trim(), level: 'accent', kind: 'tool' }); continue }
+          if (a.kind === 'subagent-result') continue
           if (a.kind === 'result') {
             if (a.text) {
               // Feed result text through scanner too (handoff could appear there)

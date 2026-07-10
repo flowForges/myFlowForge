@@ -7,7 +7,20 @@ export type ChatStreamAction =
   | { kind: 'tool'; text: string }
   | { kind: 'file'; text: string }
   | { kind: 'result'; text?: string }
+  // A built-in Task sub-agent: the tool_use starts it, the matching tool_result finishes it.
+  | { kind: 'subagent-start'; id: string; subagentType?: string; description?: string; prompt?: string }
+  | { kind: 'subagent-result'; id: string; result?: string; isError?: boolean }
   | { kind: 'ignore' }
+
+// The built-in sub-agent-spawning tool. Its tool_use carries { subagent_type, description, prompt }.
+const SUBAGENT_TOOL = 'Task'
+
+// Flatten a tool_result block's `content` (string, or an array of {type:'text',text} parts) to text.
+function toolResultText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) return content.map(c => (typeof c === 'string' ? c : (c?.type === 'text' && typeof c.text === 'string' ? c.text : ''))).filter(Boolean).join('\n')
+  return ''
+}
 
 // Map one parsed stream-json object to a chat action. Mirrors the shape claude.ts run() already
 // assumes (assistant/result carry a flat `text`), plus thinking + session_id.
@@ -62,7 +75,25 @@ export function parseChatStreamActions(obj: any): ChatStreamAction[] {
       if (ev.delta.type === 'text_delta' && typeof ev.delta.text === 'string' && ev.delta.text) out.push({ kind: 'assistant', text: ev.delta.text })
       else if (ev.delta.type === 'thinking_delta' && typeof ev.delta.thinking === 'string' && ev.delta.thinking) out.push({ kind: 'think', text: ev.delta.thinking })
     } else if (ev.type === 'content_block_start' && ev.content_block?.type === 'tool_use' && typeof ev.content_block.name === 'string') {
-      out.push(toolAction(ev.content_block.name, ev.content_block.input))
+      const cb = ev.content_block
+      // Task sub-agent: emit a subagent-start (input is usually empty at content_block_start — it
+      // streams later; the full assistant message enriches it via 'update').
+      if (cb.name === SUBAGENT_TOOL && typeof cb.id === 'string') {
+        out.push({ kind: 'subagent-start', id: cb.id, subagentType: cb.input?.subagent_type, description: cb.input?.description, prompt: cb.input?.prompt })
+      } else {
+        out.push(toolAction(cb.name, cb.input))
+      }
+    }
+    return out
+  }
+
+  // Tool results come back as a `user` message; correlate a Task's result by tool_use_id. (Downstream
+  // filters to ids it saw as subagent-start, so non-Task results are harmless no-ops.)
+  if (obj.type === 'user' && Array.isArray(obj.message?.content)) {
+    for (const b of obj.message.content) {
+      if (b?.type === 'tool_result' && typeof b.tool_use_id === 'string') {
+        out.push({ kind: 'subagent-result', id: b.tool_use_id, result: toolResultText(b.content), isError: b.is_error === true })
+      }
     }
     return out
   }
@@ -76,7 +107,9 @@ export function parseChatStreamActions(obj: any): ChatStreamAction[] {
     for (const b of content) {
       if (b?.type === 'text' && typeof b.text === 'string' && b.text) out.push({ kind: working ? 'think' : 'assistant', text: b.text })
       else if (b?.type === 'thinking' && typeof b.thinking === 'string' && b.thinking) out.push({ kind: 'think', text: b.thinking })
-      // Surface tool calls as visible process steps (so the user sees activity, not just a spinner).
+      // A Task sub-agent gets its own card (this full message carries the complete input); every other
+      // tool call is surfaced as a visible process step (so the user sees activity, not just a spinner).
+      else if (b?.type === 'tool_use' && b.name === SUBAGENT_TOOL && typeof b.id === 'string') out.push({ kind: 'subagent-start', id: b.id, subagentType: b.input?.subagent_type, description: b.input?.description, prompt: b.input?.prompt })
       else if (b?.type === 'tool_use' && typeof b.name === 'string') out.push(toolAction(b.name, b.input))
     }
     return out

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { appendMessage, readMessages, readSession, writeSession } from './chatStore'
 import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
-import type { ChatSendPayload, ChatMessage, ChatEvent } from '@shared/types'
+import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard } from '@shared/types'
 import { createRunFenceScanner } from '../agents/runFence'
 import { buildMemoryPreamble } from './memory/preamble'
 import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
@@ -79,6 +79,23 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     let text = ''
     let think = ''
     let lastUsage: { used: number; window: number } | undefined
+    // Built-in Task sub-agents spawned this turn, keyed by tool_use id — accumulated live and persisted
+    // on the finished message so their cards survive reload.
+    const subagents = new Map<string, SubagentCard>()
+    const subagentList = () => (subagents.size ? [...subagents.values()] : undefined)
+    const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean }) => {
+      const prev = subagents.get(ev.id) ?? { id: ev.id, state: 'running' as const }
+      const next: SubagentCard = {
+        ...prev,
+        subagentType: ev.subagentType ?? prev.subagentType,
+        description: ev.description ?? prev.description,
+        prompt: ev.prompt ?? prev.prompt,
+        result: ev.result ?? prev.result,
+        state: ev.phase === 'done' ? (ev.isError ? 'error' : 'done') : prev.state,
+      }
+      subagents.set(ev.id, next)
+      emit({ workspacePath: ws, sessionId: sid, type: 'subagent', id: aid, sub: next })
+    }
     // Distillation runs on THIS session's provider. Pick a model valid for it: claude gets the cheap
     // 'haiku-4.5' alias; every other provider falls back to the session's own model (its account
     // default) — feeding a claude-only alias to codex/cursor 400s (model-not-supported).
@@ -119,6 +136,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         think: steps.length ? { label: '已思考', elapsed, steps } : undefined,
         context,
         usage: lastUsage,
+        subagents: subagentList(),
       }
       appendMessage(ws, sid, msg)
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
@@ -128,13 +146,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     }
     const finishErr = (err: Error): ChatMessage => {
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
-      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, ts: now() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
       scheduleDistill()
       return msg
     }
     const finishAborted = (): ChatMessage => {
-      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, ts: now() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
       scheduleDistill()
@@ -177,6 +195,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onStatus: (t) => emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t }),
           onConfirm: deps.confirm,
           onUsage: (u) => { lastUsage = u },
+          onSubagent,
           onDone: (r) => { if (settled) return; settled = true; resolve(finishOk(r.elapsed)) },
           onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
         }, env)

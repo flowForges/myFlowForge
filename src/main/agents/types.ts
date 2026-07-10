@@ -63,6 +63,9 @@ export interface ChatCallbacks {
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired when the running max usage increases.
   onUsage?(u: { used: number; window: number }): void
+  // A built-in Task sub-agent the main agent spawned. phase 'start' when the Task tool_use appears
+  // (fields may be partial), 'update' to enrich once the full input is seen, 'done' on the tool_result.
+  onSubagent?(ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean }): void
   onDone(r: { elapsed: number }): void
   onError(err: Error): void
   onConfirm?(req: ConfirmReq): Promise<'allow' | 'deny'>

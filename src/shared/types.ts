@@ -113,12 +113,26 @@ export interface AgentSessionInfo {
   status: 'ok' | 'run' | 'idle'
   lastActiveAt: string
 }
+// A built-in Task sub-agent the main chat agent spawned this turn, surfaced as a card in the chat
+// stream so the user can see it exist / run / finish (the sub-agent runs in a child process, so we
+// only get its start + final result from the parent stream — not its live internal steps).
+export interface SubagentCard {
+  id: string                 // the Task tool_use id (correlates start ↔ result)
+  state: 'running' | 'done' | 'error'
+  subagentType?: string      // e.g. 'Explore', 'general-purpose'
+  description?: string       // short label the model gave the task
+  prompt?: string            // the full task prompt handed to the sub-agent
+  result?: string            // the sub-agent's returned text (on done)
+}
+
 export interface ChatMessage {
   id: string
   who: 'user' | 'ai'
   text: string
   model?: string
   think?: ChatThink
+  // Built-in Task sub-agents this assistant turn spawned (persisted so cards survive reload).
+  subagents?: SubagentCard[]
   context?: AgentContextMeta
   files?: Attachment[]
   ts: string
@@ -166,6 +180,7 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'confirm-request'; id: string; title: string; where?: string }
   | { type: 'confirm-resolved'; id: string }
   | { type: 'done'; message: ChatMessage }
+  | { type: 'subagent'; id: string; sub: SubagentCard }
   | { type: 'plan-request'; id: string; approach: string; stages: { name: string; agents: number }[]; task?: string }
   | { type: 'plan-resolved'; id: string }
   | { type: 'mode-changed'; mode: 'chat' | 'workflow'; runId?: string }

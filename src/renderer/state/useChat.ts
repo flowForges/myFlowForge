@@ -99,6 +99,15 @@ export function useChat(
         })
         setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? apply(x) : x) : [...m, apply(blankAi(e.id))])
       }
+      else if (e.type === 'subagent') {
+        setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
+        const upsert = (x: ChatMessage): ChatMessage => {
+          const list = x.subagents ?? []
+          const i = list.findIndex(s => s.id === e.sub.id)
+          return { ...x, subagents: i >= 0 ? list.map(s => s.id === e.sub.id ? e.sub : s) : [...list, e.sub] }
+        }
+        setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? upsert(x) : x) : [...m, upsert(blankAi(e.id))])
+      }
       else if (e.type === 'done') {
         setMessages(m => m.some(x => x.id === e.message.id) ? m.map(x => x.id === e.message.id ? e.message : x) : [...m, e.message])
         setStreamingIds(s => { const n = new Set(s); n.delete(e.message.id); return n })

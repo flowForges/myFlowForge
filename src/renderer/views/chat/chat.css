@@ -345,6 +345,30 @@
 .req-resolved.deny { color: var(--err); }
 .msg-req.done .req-actions, .msg-req.done .req-inrow, .msg-req.done .req-opts { display: none; }
 
+/* 子代理卡片 —— 主代理调用的内置 Task 子代理,在会话区显示存在/运行/结果。折叠式,与 HookNode 同风格。 */
+.subagent-cards { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
+.subagent-card { border: 1px solid var(--border); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
+.subagent-card.s-running { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
+.subagent-card.s-error { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }
+.sac-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 11px; text-align: left; font-size: 12.5px; color: var(--fg-2); }
+.sac-head:hover { background: var(--surface-2); }
+.sac-ico { flex: 0 0 auto; display: grid; place-items: center; color: var(--accent); }
+.sac-ico svg { width: 14px; height: 14px; }
+.subagent-card.s-running .sac-ico { animation: sac-spin 1.4s linear infinite; }
+@keyframes sac-spin { to { transform: rotate(360deg); } }
+.sac-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); }
+.sac-type { color: var(--faint); font-weight: 500; }
+.sac-state { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; font-family: var(--mono); letter-spacing: .04em; padding: 2px 8px; border-radius: 99px; }
+.sac-state.st-running { color: var(--run); background: var(--accent-dim); }
+.sac-state.st-done { color: var(--ok); background: oklch(74% 0.15 150 / 0.14); }
+.sac-state.st-error { color: var(--err); background: oklch(68% 0.18 25 / 0.14); }
+.sac-caret { flex: 0 0 auto; color: var(--faint); transition: transform .14s; font-size: 11px; }
+.sac-caret.open { transform: rotate(90deg); }
+.sac-body { padding: 2px 12px 11px; display: flex; flex-direction: column; gap: 9px; border-top: 1px solid var(--border); }
+.sac-sec-h { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
+.sac-sec-t { font-size: 12px; line-height: 1.55; color: var(--fg-2); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; }
+.sac-sec-t.sac-muted { color: var(--muted); font-style: italic; }
+
 .plan-card { border-color: color-mix(in oklch, var(--warn), transparent 45%); box-shadow: inset 2px 0 0 var(--warn); }
 .plan-card .req-head { padding: 9px 12px; background: color-mix(in oklch, var(--warn), transparent 92%); }
 .plan-card .req-body { padding: 14px; }

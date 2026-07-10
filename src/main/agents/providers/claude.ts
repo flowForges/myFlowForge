@@ -88,6 +88,10 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           if (a.kind === 'session') { cb.onSession?.(a.id); continue }
           if (a.kind === 'ignore') continue
           if (a.kind === 'result') { if (a.text) cb.onLog({ ts: now(), text: a.text, level: 'ok', kind: 'output' }); continue }
+          // A stage agent's own built-in Task sub-agents: surface as log lines (the run path has no
+          // sub-agent card UI; the workflow's own real sub-agents are the visible ones here).
+          if (a.kind === 'subagent-start') { cb.onLog({ ts: now(), text: `调用子代理 ${a.subagentType ?? ''}${a.description ? ' · ' + a.description : ''}`.trim(), level: 'accent', kind: 'tool' }); continue }
+          if (a.kind === 'subagent-result') continue
           const kind = a.kind === 'assistant' ? 'output' : a.kind
           cb.onLog({ ts: now(), text: a.text, level: KIND_LEVEL[kind], kind })
         }
@@ -144,6 +148,16 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const reply = (allow: boolean) => {
         try { child.stdin?.write(JSON.stringify({ type: 'permission_response', allow }) + '\n') } catch { /* stdin gone */ }
       }
+      // Track which tool_use ids are Task sub-agents so their tool_result can be correlated; dedupe the
+      // two start sources (empty-input content_block_start, then the full assistant message) — first
+      // is 'start', later enrichment is 'update'. A running sub-agent counts as activity (not "no reply").
+      const subagentIds = new Set<string>()
+      const onSubagent = (a: { id: string; subagentType?: string; description?: string; prompt?: string }) => {
+        sawTool = true
+        const phase = subagentIds.has(a.id) ? 'update' as const : 'start' as const
+        subagentIds.add(a.id)
+        cb.onSubagent?.({ id: a.id, phase, subagentType: a.subagentType, description: a.description, prompt: a.prompt })
+      }
       const handle = async (obj: any) => {
         if (obj?.type === 'permission_request') {
           const decision = cb.onConfirm ? await cb.onConfirm({ title: `${obj.tool} 请求执行`, where: obj.path }) : 'deny'
@@ -152,11 +166,21 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
         if (obj?.type === 'stream_event') streamed = true
-        if (obj?.type === 'assistant' && streamed) return   // deltas already streamed this; skip to avoid duplicate text
+        // deltas already streamed the assistant text; skip its text to avoid duplication — but STILL
+        // extract Task sub-agent blocks, which only appear (with full input) in this message, not the
+        // partial stream events.
+        if (obj?.type === 'assistant' && streamed) {
+          for (const action of parseChatStreamActions(obj)) {
+            if (action.kind === 'subagent-start') onSubagent(action)
+          }
+          return
+        }
         for (const action of parseChatStreamActions(obj)) {
           if (action.kind === 'session') cb.onSession(action.id)
           else if (action.kind === 'assistant') { sawAssistant = true; cb.onAssistantDelta(action.text) }
           else if (action.kind === 'think' || action.kind === 'tool' || action.kind === 'file') { if (action.kind !== 'think') sawTool = true; cb.onThinkDelta(action.text) }
+          else if (action.kind === 'subagent-start') onSubagent(action)
+          else if (action.kind === 'subagent-result') { if (subagentIds.has(action.id)) cb.onSubagent?.({ id: action.id, phase: 'done', result: action.result, isError: action.isError }) }
         }
       }
       const processLine = (raw: string) => {

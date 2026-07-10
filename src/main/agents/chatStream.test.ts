@@ -86,6 +86,37 @@ describe('parseChatStreamActions (partial stream_event deltas)', () => {
   })
 })
 
+describe('parseChatStreamActions (built-in Task sub-agents)', () => {
+  it('maps a Task tool_use in a full assistant message to subagent-start with its input', () => {
+    const obj = { type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'toolu_1', name: 'Task', input: { subagent_type: 'Explore', description: '探查鉴权', prompt: '摸清鉴权模块' } },
+    ] } }
+    expect(parseChatStreamActions(obj)).toEqual([
+      { kind: 'subagent-start', id: 'toolu_1', subagentType: 'Explore', description: '探查鉴权', prompt: '摸清鉴权模块' },
+    ])
+  })
+  it('maps a Task content_block_start to subagent-start (empty input is fine)', () => {
+    expect(parseChatStreamActions({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', id: 'toolu_2', name: 'Task', input: {} } } }))
+      .toEqual([{ kind: 'subagent-start', id: 'toolu_2', subagentType: undefined, description: undefined, prompt: undefined }])
+  })
+  it('does NOT turn a Task into a plain tool step (no 调用 Task line)', () => {
+    const acts = parseChatStreamActions({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Task', input: {} }] } })
+    expect(acts.some(a => a.kind === 'tool')).toBe(false)
+  })
+  it('maps a user tool_result to subagent-result, flattening array content', () => {
+    const obj = { type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: '鉴权走 src/auth/*' }], is_error: false },
+    ] } }
+    expect(parseChatStreamActions(obj)).toEqual([
+      { kind: 'subagent-result', id: 'toolu_1', result: '鉴权走 src/auth/*', isError: false },
+    ])
+  })
+  it('carries is_error through on a failed tool_result', () => {
+    const obj = { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'boom', is_error: true }] } }
+    expect(parseChatStreamActions(obj)).toEqual([{ kind: 'subagent-result', id: 'x', result: 'boom', isError: true }])
+  })
+})
+
 describe('extractContextTokens', () => {
   it('sums the prompt tiers of a per-turn assistant message.usage (input + both cache tiers)', () => {
     const obj = { type: 'assistant', message: { usage: { input_tokens: 1000, cache_read_input_tokens: 500, cache_creation_input_tokens: 200 } } }
