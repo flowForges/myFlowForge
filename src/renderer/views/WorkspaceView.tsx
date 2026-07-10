@@ -556,7 +556,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                   <ReqCard
                     key={c.id}
                     action={{ id: c.id, kind: 'confirm', agentId: 'chat', agentName: '主代理', wsName, provider: 'claude', title: c.title, where: c.where }}
-                    onResolve={(p) => chat.resolveConfirm({ id: p.id, decision: p.decision, value: p.value })}
+                    onResolve={(p) => chat.resolveConfirm({ id: p.id, decision: p.decision === 'allow' ? 'allow' : 'deny', value: p.value })}
                   />
                 )
               }

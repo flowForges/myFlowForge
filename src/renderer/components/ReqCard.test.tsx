@@ -23,6 +23,28 @@ describe('ReqCard', () => {
     expect(onResolve).toHaveBeenCalledWith({ id: 'p1', decision: 'deny' })
   })
 
+  it('a NON-reworkable confirm has no 打回重做 button (forge_ask confirm)', () => {
+    const onResolve = vi.fn<(p: ResolvePayload) => void>()
+    const action: PendingAction = { ...base, id: 'p1b', kind: 'confirm', title: '覆盖文件?' }
+    render(<ReqCard action={action} onResolve={onResolve} />)
+    expect(screen.queryByText('打回重做…')).toBeNull()
+    expect(screen.getByText('拒绝')).toBeInTheDocument()
+  })
+
+  it('a reworkable stage gate shows 打回重做 → textarea → submits a modify decision with the direction', () => {
+    const onResolve = vi.fn<(p: ResolvePayload) => void>()
+    const action: PendingAction = { ...base, id: 'pg', kind: 'confirm', title: '技术方案设计完成', role: '阶段评审', reworkable: true }
+    render(<ReqCard action={action} onResolve={onResolve} />)
+
+    // 终止 wording (not 拒绝) + a 打回重做 button
+    expect(screen.getByText('终止')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('打回重做…'))
+    const ta = screen.getByPlaceholderText(/修改方向/) as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: '鉴权边界要再探一遍' } })
+    fireEvent.click(screen.getByText('提交并重做'))
+    expect(onResolve).toHaveBeenCalledWith({ id: 'pg', decision: 'modify', value: '鉴权边界要再探一遍' })
+  })
+
   it('renders an input card and submits the typed value', () => {
     const onResolve = vi.fn<(p: ResolvePayload) => void>()
     const action: PendingAction = { ...base, id: 'p2', kind: 'input', title: '快照目录', placeholder: 'tests/visual' }

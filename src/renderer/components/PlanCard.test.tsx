@@ -41,9 +41,9 @@ describe('PlanCard', () => {
   it('修改方向… reveals an input and submits a modify decision with the typed value', () => {
     const onResolve = vi.fn()
     render(<PlanCard req={base} onResolve={onResolve} />)
-    expect(screen.queryByPlaceholderText('说明要改的方向')).toBeNull()
+    expect(screen.queryByPlaceholderText(/说明要改的方向/)).toBeNull()
     fireEvent.click(screen.getByText('修改方向…'))
-    const input = screen.getByPlaceholderText('说明要改的方向') as HTMLInputElement
+    const input = screen.getByPlaceholderText(/说明要改的方向/) as HTMLInputElement
     fireEvent.change(input, { target: { value: '改成全量替换' } })
     fireEvent.click(screen.getByText('提交修改'))
     expect(onResolve).toHaveBeenCalledWith({ decision: 'modify', value: '改成全量替换' })
@@ -53,10 +53,10 @@ describe('PlanCard', () => {
     const onResolve = vi.fn()
     render(<PlanCard req={base} onResolve={onResolve} />)
     fireEvent.click(screen.getByText('修改方向…'))
-    expect(screen.getByPlaceholderText('说明要改的方向')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/说明要改的方向/)).toBeInTheDocument()
     fireEvent.click(screen.getByText('返回'))
     // back to the three-button row
-    expect(screen.queryByPlaceholderText('说明要改的方向')).toBeNull()
+    expect(screen.queryByPlaceholderText(/说明要改的方向/)).toBeNull()
     expect(screen.getByText('批准并执行')).toBeInTheDocument()
     expect(screen.getByText('修改方向…')).toBeInTheDocument()
     expect(screen.getByText('取消')).toBeInTheDocument()

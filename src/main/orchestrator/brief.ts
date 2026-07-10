@@ -61,9 +61,17 @@ function executeNowDirective(stageName: string): string {
 export function buildStagePrompt(
   stageName: string,
   briefs: HandoffBrief[],
-  opts: { textFallback: boolean; task?: string; lens?: ReviewLens; stageKey?: StageKey; stageAppend?: string },
+  opts: { textFallback: boolean; task?: string; lens?: ReviewLens; stageKey?: StageKey; stageAppend?: string; reworkNote?: string },
 ): string {
   let result = opts.task ? `任务: ${opts.task}\n\n当前阶段: ${stageName}` : stageName
+
+  // 返工:用户审阅上一版后「打回重做」并给出的修改方向。以最高优先级明确要求重做整改,而不是复述。
+  const rework = (opts.reworkNote ?? '').trim()
+  if (rework) {
+    result += '\n\n【返工要求 — 最高优先级】用户审阅了你上一版的产出后要求返工。请严格针对下面的修改方向,' +
+      '重新完成本阶段(该重新探查的重新探查、该重整方案的重整方案、该改代码的改代码),给出一版新的成果,' +
+      '不要简单复述上一版:\n' + rework
+  }
 
   // 内置默认正文恒在(用户改不了);追加段(若有)拼在其后,以从属语气框定,绝不替换默认。
   const body = opts.stageKey ? STAGE_PROMPTS[opts.stageKey] : ''

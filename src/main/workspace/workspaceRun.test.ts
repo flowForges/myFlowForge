@@ -26,8 +26,8 @@ describe('workspaceToStartRunOpts', () => {
     expect(opts.workspacePath).toBe('/tmp/demo')
     expect(opts.task).toBeUndefined()
     expect(opts.stages).toEqual([
-      { key: 'design', name: STAGE_NAMES.design, provider: 'claude', model: 'opus-4.8' },
-      { key: 'develop', name: STAGE_NAMES.develop, provider: 'claude', model: 'sonnet-4.6' }
+      { key: 'design', name: STAGE_NAMES.design, provider: 'claude', model: 'opus-4.8', gate: true },
+      { key: 'develop', name: STAGE_NAMES.develop, provider: 'claude', model: 'sonnet-4.6', gate: true }
     ])
     expect(opts.developProjects).toEqual([
       { name: 'alpha', cwd: join('/tmp/demo', 'alpha'), provider: 'codex', model: 'gpt-5-codex' },
