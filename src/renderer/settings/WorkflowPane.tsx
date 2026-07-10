@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { PluginEditor } from '../components/PluginEditor'
-import { StagePromptEditor } from '../components/StagePromptEditor'
+import { StageConfigEditor } from '../components/StageConfigEditor'
+import type { CfgWorkflow, CfgStage } from '../state/useConfig'
+import type { ProviderInfo } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 import { movePluginBefore } from '../../shared/pluginReorder'
 import { ImportModal, type ImportConfig } from '../components/ImportModal'
@@ -74,23 +76,60 @@ const X_SVG = (
 )
 
 interface WorkflowPaneProps {
-  workflows: { id: string; name: string; stages: { key: string }[]; plugins: Plugin[]; stagePrompts?: Record<string, string> }[]
+  workflows: CfgWorkflow[]
+  providers?: ProviderInfo[]
   onCreate: (name: string, stageKeys: string[]) => void
   onDelete: (id: string) => void
   onUpdateWorkflow: (id: string, plugins: Plugin[]) => void
   onUpdateStagePrompts: (id: string, stagePrompts: Record<string, string>) => void
+  // Full stage-list edit (#3): add/rename/delete/reorder stages + per-stage prompt/agent/flags.
+  onUpdateStages?: (id: string, stages: CfgStage[]) => void
 }
 
 // Editor state: which workflow + which position + which plugin (null = new)
 interface EditState { wfId: string; after: string; editId: string | null }
+// A new custom stage gets a generated key; keep it URL/id-safe and unique within the workflow.
+function newCustomStage(existing: CfgStage[]): CfgStage {
+  let n = existing.filter(s => s.key.startsWith('custom-')).length + 1
+  let key = `custom-${n}`
+  while (existing.some(s => s.key === key)) key = `custom-${++n}`
+  return { key, name: '新阶段', defaultAgent: 'claude', defaultModel: '', prompt: '' }
+}
 
-export function WorkflowPane({ workflows, onCreate, onDelete, onUpdateWorkflow, onUpdateStagePrompts }: WorkflowPaneProps) {
+export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, onUpdateWorkflow, onUpdateStages }: WorkflowPaneProps) {
   const [name, setName] = useState('')
   const [picked, setPicked] = useState<Set<string>>(() => new Set(['develop']))
   const [editing, setEditing] = useState<EditState | null>(null)
   const [stageEdit, setStageEdit] = useState<{ wfId: string; key: string } | null>(null)
+  const [addingStageWf, setAddingStageWf] = useState<string | null>(null)
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [importCfg, setImportCfg] = useState<ImportConfig | null>(null)
+
+  // —— 阶段编辑(#3):增删改排 + 每阶段 prompt/agent/flags,经 onUpdateStages 持久化整个 stages 列表 ——
+  const putStages = (wf: CfgWorkflow, stages: CfgStage[]) => onUpdateStages?.(wf.id, stages)
+  function saveStageConfig(wf: CfgWorkflow, key: string, patch: Partial<CfgStage>) {
+    putStages(wf, wf.stages.map(s => s.key === key ? { ...s, ...patch } : s))
+    setStageEdit(null)
+  }
+  function deleteStage(wf: CfgWorkflow, key: string) {
+    if (wf.stages.length <= 1) return   // a workflow must keep at least one stage
+    putStages(wf, wf.stages.filter(s => s.key !== key))
+    setStageEdit(null)
+  }
+  function moveStage(wf: CfgWorkflow, key: string, dir: -1 | 1) {
+    const i = wf.stages.findIndex(s => s.key === key)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= wf.stages.length) return
+    const next = wf.stages.slice()
+    ;[next[i], next[j]] = [next[j], next[i]]
+    putStages(wf, next)
+  }
+  function addStage(wf: CfgWorkflow, stage: CfgStage) {
+    if (wf.stages.some(s => s.key === stage.key)) return
+    putStages(wf, [...wf.stages, stage])
+    setAddingStageWf(null)
+    setStageEdit({ wfId: wf.id, key: stage.key })   // open the new stage's editor immediately
+  }
 
   function openImport(wf: { id: string; name: string; stages: { key: string }[]; plugins: Plugin[] }) {
     // Stages this workflow actually has — an imported plugin's `after` is clamped to one of these
@@ -145,16 +184,6 @@ export function WorkflowPane({ workflows, onCreate, onDelete, onUpdateWorkflow, 
     if (!pl) return
     setStageEdit(null)
     setEditing({ wfId, after: pl.after, editId: pluginId })
-  }
-
-  function saveStageAppend(wfId: string, key: string, append: string) {
-    const wf = workflows.find(w => w.id === wfId)
-    if (!wf) return
-    const next = { ...(wf.stagePrompts ?? {}) }
-    if (append) next[key] = append
-    else delete next[key]
-    onUpdateStagePrompts(wfId, next)
-    setStageEdit(null)
   }
 
   function handleSave(wfId: string, result: { name: string; prompt: string; skills: string[]; tools: string[] }) {
@@ -271,13 +300,13 @@ export function WorkflowPane({ workflows, onCreate, onDelete, onUpdateWorkflow, 
                     {w.stages.map((s, i) => (
                       <span key={s.key} style={{ display: 'contents' }}>
                         <span
-                          className={'wf-stage-chip click' + (w.stagePrompts?.[s.key] ? ' edited' : '')}
-                          title={`点击编辑「${STAGE_NAMES[s.key] ?? s.key}」提示词`}
-                          onClick={() => { setEditing(null); setStageEdit({ wfId: w.id, key: s.key }) }}
+                          className={'wf-stage-chip click' + ((s.prompt || w.stagePrompts?.[s.key]) ? ' edited' : '')}
+                          title={`点击编辑「${s.name || STAGE_NAMES[s.key] || s.key}」阶段`}
+                          onClick={() => { setEditing(null); setAddingStageWf(null); setStageEdit({ wfId: w.id, key: s.key }) }}
                         >
                           <span className="n">{i + 1}</span>
-                          {STAGE_NAMES[s.key] ?? s.key}
-                          {w.stagePrompts?.[s.key] && <span className="dot" />}
+                          {s.name || STAGE_NAMES[s.key] || s.key}
+                          {(s.prompt || w.stagePrompts?.[s.key]) && <span className="dot" />}
                           <svg className="pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
                         </span>
                         <button
@@ -322,7 +351,28 @@ export function WorkflowPane({ workflows, onCreate, onDelete, onUpdateWorkflow, 
                         ))}
                       </span>
                     ))}
+                    {/* 新增阶段(#3):内置预置 或 空白自定义阶段 */}
+                    {onUpdateStages && (
+                      <button
+                        className="wf-add-stage"
+                        title="新增阶段"
+                        onClick={() => { setEditing(null); setStageEdit(null); setAddingStageWf(addingStageWf === w.id ? null : w.id) }}
+                      >
+                        {PLUS_SVG}阶段
+                      </button>
+                    )}
                   </div>
+
+                  {/* 新增阶段选择器 */}
+                  {addingStageWf === w.id && onUpdateStages && (
+                    <div className="wf-add-picker">
+                      <span className="wf-add-hint">加内置阶段:</span>
+                      {STAGE_KEYS.filter(k => !w.stages.some(s => s.key === k)).map(k => (
+                        <button key={k} className="wf-pick" onClick={() => addStage(w, { key: k, defaultAgent: 'claude', defaultModel: 'opus-4.8' })}>{STAGE_NAMES[k]}</button>
+                      ))}
+                      <button className="wf-pick custom" onClick={() => addStage(w, newCustomStage(w.stages))}>+ 自定义阶段</button>
+                    </div>
+                  )}
 
                   {/* PluginEditor shown inline under this workflow when editing */}
                   {isThisEditing && editing && (
@@ -337,15 +387,31 @@ export function WorkflowPane({ workflows, onCreate, onDelete, onUpdateWorkflow, 
                       onCancel={() => setEditing(null)}
                     />
                   )}
-                  {stageEdit?.wfId === w.id && (
-                    <StagePromptEditor
-                      stageName={STAGE_NAMES[stageEdit.key] ?? stageEdit.key}
-                      defaultPrompt={STAGE_DEFAULT_PROMPT[stageEdit.key] ?? ''}
-                      initial={w.stagePrompts?.[stageEdit.key]}
-                      onSave={(append) => saveStageAppend(w.id, stageEdit.key, append)}
-                      onCancel={() => setStageEdit(null)}
-                    />
-                  )}
+                  {stageEdit?.wfId === w.id && onUpdateStages && (() => {
+                    const s = w.stages.find(x => x.key === stageEdit.key)
+                    if (!s) return null
+                    const isBuiltin = STAGE_KEYS.includes(stageEdit.key as typeof STAGE_KEYS[number])
+                    const idx = w.stages.findIndex(x => x.key === s.key)
+                    return (
+                      <div className="stage-cfg-wrap">
+                        <div className="stage-cfg-tools">
+                          <button className="scw-btn" disabled={idx <= 0} title="上移" onClick={() => moveStage(w, s.key, -1)}>↑</button>
+                          <button className="scw-btn" disabled={idx >= w.stages.length - 1} title="下移" onClick={() => moveStage(w, s.key, 1)}>↓</button>
+                          <button className="scw-btn del" disabled={w.stages.length <= 1} title="删除阶段" onClick={() => deleteStage(w, s.key)}>{TRASH}</button>
+                        </div>
+                        <StageConfigEditor
+                          key={s.key}
+                          stage={s}
+                          isBuiltin={isBuiltin}
+                          builtinName={STAGE_NAMES[s.key]}
+                          builtinBasePrompt={STAGE_DEFAULT_PROMPT[s.key]}
+                          providers={providers}
+                          onSave={(patch) => saveStageConfig(w, s.key, patch)}
+                          onCancel={() => setStageEdit(null)}
+                        />
+                      </div>
+                    )
+                  })()}
                 </div>
               )
             })

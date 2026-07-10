@@ -15,6 +15,7 @@ const api = {
   deleteWorkflow: (id: string) => ipcRenderer.invoke(CH.configDeleteWorkflow, id),
   updateWorkflow: (id: string, plugins: unknown[]) => ipcRenderer.invoke(CH.configUpdateWorkflow, { id, plugins }),
   updateStagePrompts: (id: string, stagePrompts: Record<string, string>) => ipcRenderer.invoke(CH.configUpdateWorkflow, { id, stagePrompts }),
+  updateWorkflowStages: (id: string, stages: unknown[]) => ipcRenderer.invoke(CH.configUpdateWorkflow, { id, stages }),
   listHookLibrary: (): Promise<import('@shared/plugin').LibraryHook[]> => ipcRenderer.invoke(CH.hookLibraryList),
   saveHookLibrary: (hook: import('@shared/plugin').LibraryHook): Promise<import('@shared/plugin').LibraryHook[]> => ipcRenderer.invoke(CH.hookLibrarySave, hook),
   deleteHookLibrary: (id: string): Promise<import('@shared/plugin').LibraryHook[]> => ipcRenderer.invoke(CH.hookLibraryDelete, id),

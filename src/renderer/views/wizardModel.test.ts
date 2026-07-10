@@ -118,6 +118,21 @@ describe('buildEditState', () => {
     expect(opts.stages.find(s => s.key === 'develop')?.prompt).toBeUndefined()
   })
 
+  it('carries a custom (#3) stage + its behavior flags through buildCreateOpts, in template order', () => {
+    const state: any = { path: '/w', name: 'w', nameEdited: true, workflowId: 'standard',
+      stages: {
+        design: { on: true, provider: 'claude', model: 'opus-4.8' },
+        'security-audit': { on: true, custom: true, name: '安全审计', provider: 'claude', model: 'm', prompt: '核对 OWASP', scope: 'per-project', gate: true, summary: true },
+        develop: { on: true, provider: 'claude', model: 'opus-4.8' },
+      },
+      projects: [], plugins: [], stepPlugins: [] }
+    // template order places the custom stage between design and develop
+    const opts = buildCreateOpts(state, ['design', 'security-audit', 'develop'])
+    expect(opts.stages.map(s => s.key)).toEqual(['design', 'security-audit', 'develop'])
+    const audit = opts.stages.find(s => s.key === 'security-audit')!
+    expect(audit).toMatchObject({ name: '安全审计', prompt: '核对 OWASP', scope: 'per-project', gate: true, summary: true })
+  })
+
   it('buildEditState 回填已有追加段', () => {
     const ws: any = { name: 'w', path: '/w', workflowId: 'standard',
       stages: [{ key: 'design', provider: 'claude', model: 'opus-4.8', prompt: '画时序图' }],

@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { ProviderInfo } from '@shared/types'
+import type { ProviderInfo, ReviewConfig, StageCustomFields } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 
 export interface CfgProject { id: string; name: string; repoUrl: string; defaultBranch: string }
-export interface CfgWorkflow { id: string; name: string; stages: { key: string; defaultAgent: string; defaultModel: string }[]; plugins: Plugin[]; stagePrompts?: Record<string, string> }
+// A workflow-template stage: identity + default agent/model + optional custom fields (#3).
+export interface CfgStage extends StageCustomFields { key: string; defaultAgent: string; defaultModel: string; prompt?: string; review?: ReviewConfig }
+export interface CfgWorkflow { id: string; name: string; stages: CfgStage[]; plugins: Plugin[]; stagePrompts?: Record<string, string> }
 
 export function useConfig() {
   const [projects, setProjects] = useState<CfgProject[]>([])
@@ -25,6 +27,7 @@ export function useConfig() {
   const deleteWorkflow = useCallback(async (id: string) => { setWorkflows(await window.forge.deleteWorkflow(id)) }, [])
   const updateWorkflow = useCallback(async (id: string, plugins: Plugin[]) => { setWorkflows(await window.forge.updateWorkflow(id, plugins)) }, [])
   const updateStagePrompts = useCallback(async (id: string, stagePrompts: Record<string, string>) => { setWorkflows(await window.forge.updateStagePrompts(id, stagePrompts)) }, [])
+  const updateStages = useCallback(async (id: string, stages: CfgStage[]) => { setWorkflows(await window.forge.updateWorkflowStages(id, stages)) }, [])
 
-  return { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, reloadProjects, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect }
+  return { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, reloadProjects, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, redetect }
 }

@@ -1,4 +1,4 @@
-import type { CreateWorkspaceOpts, ReviewConfig, Workspace } from '@shared/types'
+import type { CreateWorkspaceOpts, ReviewConfig, StageCustomFields, Workspace } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 
 // provider+model packed into one <select> value so a model picker maps back to both.
@@ -8,7 +8,9 @@ export const unpackModel = (v: string): { provider: string; model: string } => {
   return i < 0 ? { provider: '', model: v } : { provider: v.slice(0, i), model: v.slice(i + 2) }
 }
 
-export interface WizardStage { on: boolean; provider: string; model: string; review?: ReviewConfig; prompt?: string }
+// custom?: this is a user-defined (non-builtin) stage; carries its template name + behavior flags so it
+// runs correctly and its chip renders with the right label. Built-in stages leave these undefined.
+export interface WizardStage extends StageCustomFields { on: boolean; provider: string; model: string; review?: ReviewConfig; prompt?: string; custom?: boolean }
 export interface WizardProject { repoId: string; name: string; sel: boolean; branch: string; model: string; provider?: string; locked?: boolean; existing?: boolean }
 export interface WizardState {
   path: string
@@ -31,13 +33,23 @@ export function deriveWsName(path: string, nameEdited: boolean, name: string): s
 export function buildCreateOpts(state: WizardState, stageOrder: string[] = Object.keys(state.stages)): CreateWorkspaceOpts {
   const stages = stageOrder
     .filter(k => state.stages[k]?.on)
-    .map(k => ({
-      key: k,
-      provider: state.stages[k].provider,
-      model: state.stages[k].model,
-      ...(k === 'review' ? { review: state.stages[k].review ?? { mode: 'parallel' as const, scope: 'per-project' as const } } : {}),
-      ...(state.stages[k].prompt && state.stages[k].prompt!.trim() ? { prompt: state.stages[k].prompt!.trim() } : {}),
-    }))
+    .map(k => {
+      const s = state.stages[k]
+      return {
+        key: k,
+        provider: s.provider,
+        model: s.model,
+        ...(k === 'review' ? { review: s.review ?? { mode: 'parallel' as const, scope: 'per-project' as const } } : (s.review ? { review: s.review } : {})),
+        ...(s.prompt && s.prompt.trim() ? { prompt: s.prompt.trim() } : {}),
+        // Carry a custom stage's identity + behavior flags through to the run (built-ins leave these unset).
+        ...(s.name ? { name: s.name } : {}),
+        ...(s.scope ? { scope: s.scope } : {}),
+        ...(s.gate !== undefined ? { gate: s.gate } : {}),
+        ...(s.summary !== undefined ? { summary: s.summary } : {}),
+        ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
+        ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+      }
+    })
   const projects = state.projects
     .filter(p => p.sel)
     .map(p => ({ repoId: p.repoId, branch: p.branch, provider: p.provider, model: p.model }))
@@ -66,9 +78,21 @@ export function buildEditState(
   baseStages: Record<string, WizardStage>,
   defaultProjectModel: string
 ): WizardState {
+  const BUILTIN = new Set(Object.keys(baseStages))
   const stages: Record<string, WizardStage> = {}
   for (const k of Object.keys(baseStages)) stages[k] = { ...baseStages[k], on: false }
-  for (const s of ws.stages) stages[s.key] = { on: true, provider: s.provider, model: s.model, review: s.review, ...(s.prompt ? { prompt: s.prompt } : {}) }
+  for (const s of ws.stages) stages[s.key] = {
+    on: true, provider: s.provider, model: s.model, review: s.review,
+    ...(s.prompt ? { prompt: s.prompt } : {}),
+    // Preserve a custom stage's identity + behavior flags across an edit (built-ins leave these unset).
+    ...(BUILTIN.has(s.key) ? {} : { custom: true }),
+    ...(s.name ? { name: s.name } : {}),
+    ...(s.scope ? { scope: s.scope } : {}),
+    ...(s.gate !== undefined ? { gate: s.gate } : {}),
+    ...(s.summary !== undefined ? { summary: s.summary } : {}),
+    ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
+    ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+  }
 
   const wsById = new Map(ws.projects.map(p => [p.repoId, p]))
   const projects: WizardProject[] = knownProjects.map(kp => {

@@ -144,8 +144,30 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
       const seedPrompt = wf?.stagePrompts?.[k]
       out[k] = { on: onKeys.has(k), provider: seeded.provider, model: seeded.model, ...(seedPrompt ? { prompt: seedPrompt } : {}) }
     }
+    // Custom (non-builtin) stages from the workflow template: seed them ON with their template config
+    // + behavior flags so they run. They inherit the template's provider/model/prompt/flags.
+    for (const s of wf?.stages ?? []) {
+      if (STAGE_KEYS.includes(s.key as StageKey)) continue
+      const seeded = seedStage(s.defaultModel || (pickProviders[0]?.models[0]?.id ?? ''), s.defaultAgent)
+      out[s.key] = {
+        on: true, custom: true,
+        provider: s.defaultAgent || seeded.provider, model: s.defaultModel || seeded.model,
+        ...(s.name ? { name: s.name } : {}),
+        ...(s.prompt ? { prompt: s.prompt } : {}),
+        ...(s.review ? { review: s.review } : {}),
+        ...(s.scope ? { scope: s.scope } : {}),
+        ...(s.gate !== undefined ? { gate: s.gate } : {}),
+        ...(s.summary !== undefined ? { summary: s.summary } : {}),
+        ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
+        ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+      }
+    }
     return out
   }
+  // Stage order: the selected workflow's stage order (custom stages keep position), plus any stages
+  // already in the wizard state (so a '__custom'/edited flow keeps its custom stages), then built-ins.
+  const stageOrderFrom = (wfId: string, stages: Record<string, WizardStage>): string[] =>
+    [...new Set([...(workflows.find(w => w.id === wfId)?.stages ?? []).map(s => s.key), ...Object.keys(stages), ...STAGE_KEYS])]
 
   const seedProjects = (): WizardProject[] => projects.map(p => {
     const dev = seedStage(workflows[0]?.stages.find(s => s.key === DEV_KEY)?.defaultModel ?? '')
@@ -551,7 +573,8 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
       // unpack develop per-project model (packed provider::model) into separate provider + model fields for the DTO.
       projects: state.projects.map(p => { const { provider, model } = unpackModel(p.model); return { ...p, branch: branchFor(p), provider, model } })
     }
-    onCreate({ ...buildCreateOpts(committed, [...STAGE_KEYS]), runProjHooks: showHookToggle && runHooksOnAdd })
+    const order = stageOrderFrom(committed.workflowId, committed.stages)
+    onCreate({ ...buildCreateOpts(committed, order), runProjHooks: showHookToggle && runHooksOnAdd })
   }
 
   return (
@@ -684,28 +707,31 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 <div className="wf-flow">
                   {insBtn('wf', '__start')}
                   {plugChips('wf', '__start')}
-                  {STAGE_KEYS.filter(k => state.stages[k]?.on).map((k, i) => (
+                  {stageOrderFrom(state.workflowId, state.stages).filter(k => state.stages[k]?.on).map((k, i) => {
+                    const label = STAGE_DEF[k as StageKey]?.name ?? state.stages[k].name ?? k
+                    return (
                     <span key={k} style={{ display: 'contents' }}>
                       <span
-                        className={'wf-stage-chip click' + (state.stages[k].prompt ? ' edited' : '')}
-                        title={`点击编辑「${STAGE_DEF[k as StageKey].name}」提示词`}
+                        className={'wf-stage-chip click' + (state.stages[k].prompt ? ' edited' : '') + (state.stages[k].custom ? ' custom' : '')}
+                        title={`点击编辑「${label}」提示词`}
                         onClick={() => { setPlugEdit(null); setStageEdit(k) }}
                       >
-                        <span className="n">{i + 1}</span>{STAGE_DEF[k as StageKey].name}
+                        <span className="n">{i + 1}</span>{label}
                         {state.stages[k].prompt && <span className="dot" />}
                         <svg className="pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
                       </span>
                       {insBtn('wf', k)}
                       {plugChips('wf', k)}
                     </span>
-                  ))}
+                    )
+                  })}
                 </div>
                 {plugPick?.scope === 'wf' && pickerFor('wf', plugPick.after)}
                 {plugEdit?.scope === 'wf' && editorFor('wf', plugEdit.after)}
                 {stageEdit && (
                   <StagePromptEditor
                     key={stageEdit}
-                    stageName={STAGE_DEF[stageEdit as StageKey].name}
+                    stageName={STAGE_DEF[stageEdit as StageKey]?.name ?? state.stages[stageEdit]?.name ?? stageEdit}
                     defaultPrompt={STAGE_DEFAULT_PROMPT[stageEdit] ?? ''}
                     initial={state.stages[stageEdit]?.prompt}
                     onSave={(append) => { setStageAppend(stageEdit, append); setStageEdit(null) }}

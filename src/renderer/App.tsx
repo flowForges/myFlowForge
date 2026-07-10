@@ -146,7 +146,7 @@ export function App() {
   const notifAgentPrev = useRef<Map<string, AgentState>>(new Map())
   const notifRunPrev = useRef<Map<string, AgentState>>(new Map())
   const home = useHome()
-  const { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, redetect } = useConfig()
+  const { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, redetect } = useConfig()
   const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
   const sidebarGroups = useMemo(() => {
@@ -722,7 +722,7 @@ export function App() {
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} />
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
-          case 'workflow': return <WorkflowPane workflows={workflows} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} />
+          case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} />
           case 'hookLibrary': return <HookLibraryPane hooks={hookLib.hooks} onSave={hookLib.save} onDelete={hookLib.remove} onSetAll={hookLib.setAll} />
           case 'skills': return <SkillPane />
           case 'loads': return <LoadPane />

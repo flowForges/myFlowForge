@@ -200,12 +200,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     writeWorkflows({ workflows: readWorkflows().workflows.filter(w => w.id !== id) })
     return readWorkflows().workflows
   })
-  ipcMain.handle(CH.configUpdateWorkflow, (_e, input: { id: string; plugins?: import('../config/schema').Plugin[]; stagePrompts?: Record<string, string> }) => {
+  ipcMain.handle(CH.configUpdateWorkflow, (_e, input: { id: string; plugins?: import('../config/schema').Plugin[]; stagePrompts?: Record<string, string>; stages?: import('../config/schema').Workflow['stages'] }) => {
     const list = readWorkflows().workflows
     writeWorkflows({ workflows: list.map(w => w.id === input.id ? {
       ...w,
       ...(input.plugins !== undefined ? { plugins: input.plugins } : {}),
       ...(input.stagePrompts !== undefined ? { stagePrompts: input.stagePrompts } : {}),
+      // Full stage-list edit (#3): add/rename/delete/reorder stages + per-stage flags. writeWorkflows
+      // runs it through WorkflowSchema, so at least one stage is enforced and shapes are validated.
+      ...(input.stages !== undefined ? { stages: input.stages } : {}),
     } : w) })
     return readWorkflows().workflows
   })
