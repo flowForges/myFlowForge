@@ -52,26 +52,34 @@
 @media (prefers-reduced-motion: reduce) { .home-hi, .home-h1, .home-hi-wave, .home-clock .hc-dot { animation: none; } }
 .home-actions { display: flex; gap: 10px; flex: 0 0 auto; }
 .home-cta {
-  height: 36px; padding: 0 15px; border-radius: 9px; font-size: 13px; font-weight: 600;
+  height: 38px; padding: 0 17px; border-radius: 10px; font-size: 13px; font-weight: 600;
   display: inline-flex; align-items: center; gap: 8px;
-  background: var(--accent); color: var(--on-accent); transition: .14s;
+  background: var(--accent); color: var(--on-accent); transition: transform .14s, filter .14s, box-shadow .14s;
+  box-shadow: 0 6px 18px color-mix(in oklab, var(--accent) 24%, transparent);
 }
-.home-cta:hover { filter: brightness(1.08); }
+.home-cta:hover { filter: brightness(1.07); transform: translateY(-1px); box-shadow: 0 9px 24px color-mix(in oklab, var(--accent) 30%, transparent); }
+.home-cta.ghost { box-shadow: none; }
 .home-cta.ghost { background: var(--surface); color: var(--fg-2); border: 1px solid var(--border); }
 .home-cta.ghost:hover { background: var(--surface-2); }
 .home-cta svg { width: 16px; height: 16px; }
 
-/* 概览统计条:一行安静的数字,信息密度高、视觉轻 */
-.home-stats { display: flex; align-items: center; gap: 0; margin-top: 24px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); overflow: hidden; }
-.hs-cell { flex: 1; padding: 13px 18px; display: flex; flex-direction: column; gap: 4px; border-left: 1px solid var(--border); transition: background .15s; }
-.hs-cell:first-child { border-left: 0; }
-.hs-cell:hover { background: color-mix(in oklab, var(--accent) 6%, transparent); }
+/* 概览统计:独立 bento 卡片,每张带一枚 accent 微光角标 + hover 上浮,信息一目了然又有质感。 */
+.home-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 26px; }
+.hs-cell { position: relative; overflow: hidden; padding: 15px 17px; display: flex; flex-direction: column; gap: 7px;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: color-mix(in oklab, var(--surface) 72%, transparent);
+  transition: transform .16s ease, border-color .16s, box-shadow .16s; }
+.hs-cell::after { content: ""; position: absolute; top: -26px; right: -22px; width: 74px; height: 74px; border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-dim), transparent 68%); opacity: .55; pointer-events: none; }
+.hs-cell:hover { transform: translateY(-3px); border-color: color-mix(in oklab, var(--accent) 42%, var(--border));
+  box-shadow: 0 12px 30px color-mix(in oklab, var(--accent) 12%, transparent); }
 .hs-k { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
-.hs-v { font-family: var(--mono); font-size: 17px; font-weight: 600; color: var(--fg); letter-spacing: -.01em; }
-.hs-v small { font-size: 12px; font-weight: 500; }
+.hs-v { font-family: var(--mono); font-size: 23px; font-weight: 680; color: var(--fg); letter-spacing: -.015em; line-height: 1.1; }
+.hs-v small { font-size: 13px; font-weight: 500; }
+@media (prefers-reduced-motion: reduce) { .hs-cell:hover { transform: none; } }
 .hs-v .a { color: var(--add); } .hs-v .e { color: var(--warn); } .hs-v .d { color: var(--del); }
 
-.section-h { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin: 32px 0 12px; }
+.section-h { display: flex; align-items: center; gap: 8px; font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin: 32px 0 12px; }
+.section-h::before { content: ""; width: 3px; height: 12px; border-radius: 2px; background: var(--accent); flex: 0 0 auto; }
 
 /* 空态引导:首次没有任何工作区时出现,给出两条上手路径 */
 .home-empty { margin-top: 28px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface); padding: 22px; }
@@ -135,10 +143,14 @@
 
 /* 其他工作区:紧凑列表,次级权重,与焦点卡形成层级 */
 .home-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); }
-.wl-row { text-align: left; width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-top: 1px solid var(--border); transition: background .14s; }
+.wl-row { position: relative; text-align: left; width: 100%; display: flex; align-items: center; gap: 12px; padding: 13px 16px 13px 18px; border-top: 1px solid var(--border); transition: background .14s; }
 .wl-row:first-child { border-top: 0; }
 .wl-row:hover { background: var(--surface-2); }
-.wl-name { font-size: 13.5px; font-weight: 580; flex: 0 0 auto; }
+/* accent left-edge marker slides in on hover — a small "designed" cue tying rows to the accent system */
+.wl-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2.5px; background: var(--accent); transform: scaleY(0); transition: transform .16s ease; }
+.wl-row:hover::before { transform: scaleY(1); }
+.wl-name { font-size: 13.5px; font-weight: 580; flex: 0 0 auto; transition: color .14s; }
+.wl-row:hover .wl-name { color: var(--accent); }
 .wl-path { font-family: var(--mono); font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
 .wl-changes { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: 0 0 auto; }
 .wl-changes .a { color: var(--add); } .wl-changes .e { color: var(--warn); } .wl-changes .d { color: var(--del); }
