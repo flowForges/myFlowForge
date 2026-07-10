@@ -50,7 +50,7 @@ describe('addCustomPet', () => {
     expect(full.some(p => p.id === 'overflow')).toBe(false)
   })
 
-  it('cap allows bundled pets plus user additions', () => { expect(PET_CUSTOM_MAX).toBe(15) })
+  it('cap allows six bundled pets plus ten user additions', () => { expect(PET_CUSTOM_MAX).toBe(16) })
 })
 
 describe('removeCustomPet', () => {
