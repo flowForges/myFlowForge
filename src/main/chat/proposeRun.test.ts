@@ -120,19 +120,21 @@ describe('proposeRun mode flip', () => {
     expect(propose.has(captured[1])).toBe(false)
   })
 
-  // Selective execution: the agent may narrow the run to a subset of stages/projects (token-saving).
+  // Selective execution: the agent may narrow the run to a subset of stages, and scope per-project
+  // stages to a subset of projects — globally or per-stage (analyze all, develop some).
   const wsMulti = {
     name: 'w', path: '/w', workflowId: 'standard', status: 'idle',
     stages: [
       { key: 'requirement', provider: 'claude', model: 'opus-4.8' },
-      { key: 'develop', provider: 'claude', model: 'opus-4.8' },
+      { key: 'design', provider: 'claude', model: 'opus-4.8' },   // per-project by default
+      { key: 'develop', provider: 'claude', model: 'opus-4.8' },  // per-project by default
       { key: 'test', provider: 'claude', model: 'opus-4.8' },
       { key: 'review', provider: 'claude', model: 'opus-4.8' },
     ],
     projects: [{ name: 'a', repoId: 'a', branch: 'main' }, { name: 'b', repoId: 'b', branch: 'main' }],
   } as any
 
-  it('select narrows the run to the chosen stages + projects', async () => {
+  it('narrows to chosen stages + a global project subset (developProjects stays full)', async () => {
     const startRun = vi.fn()
     const captured: string[] = []
     const deps = mkDeps({ startRun, readWorkspace: () => wsMulti, emitPlanRequest: (_w, req) => captured.push(req.id) })
@@ -142,20 +144,22 @@ describe('proposeRun mode flip', () => {
     await p
     const opts = startRun.mock.calls[0][0]
     expect(opts.stages.map((s: any) => s.key)).toEqual(['requirement', 'develop'])
-    expect(opts.developProjects.map((d: any) => d.name)).toEqual(['a'])
+    expect(opts.developProjects.map((d: any) => d.name)).toEqual(['a', 'b'])   // full set of worktrees
+    expect(opts.stages.find((s: any) => s.key === 'develop').projects).toEqual(['a'])  // stage scoped
   })
 
-  it('select falls back to the full set when the picks match nothing (never a no-op run)', async () => {
+  it('stageProjects scopes per stage — analyze all, develop only some', async () => {
     const startRun = vi.fn()
     const captured: string[] = []
     const deps = mkDeps({ startRun, readWorkspace: () => wsMulti, emitPlanRequest: (_w, req) => captured.push(req.id) })
     const propose = makeProposeRun(deps)
-    const p = propose('/w', 't', 't', { stages: ['nope'], projects: ['nope'] })
+    const p = propose('/w', 't', 't', { stageProjects: { design: ['a', 'b'], develop: ['a'] } })
     propose.resolve(captured[0], { decision: 'allow' })
     await p
     const opts = startRun.mock.calls[0][0]
-    expect(opts.stages.map((s: any) => s.key)).toEqual(['requirement', 'develop', 'test', 'review'])
-    expect(opts.developProjects.map((d: any) => d.name)).toEqual(['a', 'b'])
+    expect(opts.stages.find((s: any) => s.key === 'design').projects).toEqual(['a', 'b'])
+    expect(opts.stages.find((s: any) => s.key === 'develop').projects).toEqual(['a'])
+    expect(opts.stages.find((s: any) => s.key === 'requirement').projects).toBeUndefined()
   })
 
   it('does not flip mode when a run is already live (allow rejected)', async () => {

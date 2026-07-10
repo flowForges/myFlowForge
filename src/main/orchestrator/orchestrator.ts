@@ -37,7 +37,9 @@ export const REVIEW_GATED_STAGES = new Set(['design'])
 export const gateApprovedKey = (stageKey: string) => 'gate-approved:' + stageKey
 
 export type StageScope = 'root' | 'per-project'
-export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string }
+// `projects` (by name) optionally scopes a PER-PROJECT stage to a subset of the run's projects — e.g.
+// analyze all 5 projects but develop only 2. Absent/empty = every project. Ignored for root stages.
+export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[] }
 
 // Where a stage's agent(s) are spawned:
 //  - 'root'        → one agent in the workspace root
@@ -573,7 +575,12 @@ export class Orchestrator {
             stage.agents.push(agent); tasks.push({ agent, cwd: r.cwd, provider, model: spec.model, lens: r.lens })
           }
         } else if (stageScope(spec) === 'per-project' && opts.developProjects.length > 0) {
-          for (const proj of opts.developProjects) {
+          // Per-stage project scoping: a stage may run on only a subset of projects (spec.projects, by
+          // name). Falls back to ALL projects when unset or when the filter matches nothing (never a
+          // no-op stage). Lets e.g. 需求分析 cover all 5 projects while 开发 touches only 2.
+          const scoped = spec.projects?.length ? opts.developProjects.filter(p => spec.projects!.includes(p.name)) : opts.developProjects
+          const stageProjs = scoped.length ? scoped : opts.developProjects
+          for (const proj of stageProjs) {
             // develop runs with each project's chosen provider/model; other per-project
             // stages (e.g. design) keep the stage's provider/model but run in the project cwd.
             const provId = spec.key === 'develop' ? (proj.provider ?? spec.provider) : spec.provider
