@@ -218,7 +218,9 @@
 [data-theme="light"][data-glass="on"] .search-mode { background: oklch(100% 0 0 / .38); }
 
 /* ---- 首页卡片:默认用不透明的 --surface,毛玻璃下必须一并轻染,否则渲染成刺眼的纯白实心块 ---- */
-[data-glass="on"] .home-stats,
+/* .home-stats is no longer a single panel — it's a bare grid whose .hs-cell cards carry their own
+   translucent fill — so it must NOT get a container background here (that painted the stray strip
+   frame behind the cards under glass). */
 [data-glass="on"] .home-empty,
 [data-glass="on"] .home-list { background: oklch(50% .04 262 / .14); }
 [data-glass="on"] .he-card { background: oklch(50% .04 262 / .1); }
@@ -226,7 +228,6 @@
 [data-glass="on"] .focus-card {
   background: radial-gradient(120% 140% at 100% 0%, var(--accent-dim), transparent 55%), oklch(50% .04 262 / .14);
 }
-[data-theme="light"][data-glass="on"] .home-stats,
 [data-theme="light"][data-glass="on"] .home-empty,
 [data-theme="light"][data-glass="on"] .home-list { background: oklch(100% 0 0 / .34); }
 [data-theme="light"][data-glass="on"] .he-card { background: oklch(100% 0 0 / .28); }
