@@ -31,26 +31,28 @@
 
 /* ---- 深色系主题变体:只重定义中性色(背景/表面/文字/边框/毛玻璃),状态色 + 强调色 + 圆角 + 字体
    从 :root(深色)继承,所以自动兼容全部 12 个强调色。放在 light 之后,与 :root 同特异性,靠顺序取胜。 */
+/* 明度沿用 dark(经过验证的对比层次),只把色相换掉 + 加克制的 tint;边框保持近中性、低 chroma(与
+   dark 一致),避免有色边框变成显眼的分界线。 */
 [data-theme="midnight"] {
-  --bg: oklch(16% .035 262); --bg-2: oklch(19% .038 262); --sidebar: oklch(13% .04 265);
-  --surface: oklch(22% .038 262); --surface-2: oklch(26% .04 262);
-  --fg: oklch(94% .012 262); --fg-2: oklch(80% .018 262); --muted: oklch(62% .024 262); --faint: oklch(48% .024 262);
-  --border: oklch(25% .034 262); --border-2: oklch(31% .036 262);
-  --glass-window: oklch(16% .035 262 / .85); --glass-panel: oklch(19% .038 262 / .82); --glass-sidebar: oklch(13% .04 265 / .82);
+  --bg: oklch(20% .022 264); --bg-2: oklch(23% .024 264); --sidebar: oklch(17% .026 266);
+  --surface: oklch(26% .024 264); --surface-2: oklch(30% .026 264);
+  --fg: oklch(95% .008 264); --fg-2: oklch(82% .012 264); --muted: oklch(64% .018 264); --faint: oklch(50% .018 264);
+  --border: oklch(28% .012 264); --border-2: oklch(34% .014 264);
+  --glass-window: oklch(20% .022 264 / .85); --glass-panel: oklch(23% .024 264 / .82); --glass-sidebar: oklch(17% .026 266 / .82);
 }
 [data-theme="sepia"] {
-  --bg: oklch(19% .02 65); --bg-2: oklch(22% .022 65); --sidebar: oklch(16% .022 60);
-  --surface: oklch(25% .022 65); --surface-2: oklch(29% .024 60);
-  --fg: oklch(93% .015 70); --fg-2: oklch(80% .02 68); --muted: oklch(63% .025 65); --faint: oklch(49% .025 62);
-  --border: oklch(28% .022 62); --border-2: oklch(34% .024 60);
-  --glass-window: oklch(19% .02 65 / .85); --glass-panel: oklch(22% .022 65 / .82); --glass-sidebar: oklch(16% .022 60 / .82);
+  --bg: oklch(20% .016 68); --bg-2: oklch(23% .018 68); --sidebar: oklch(17% .018 64);
+  --surface: oklch(26% .018 68); --surface-2: oklch(30% .02 66);
+  --fg: oklch(95% .01 72); --fg-2: oklch(82% .014 70); --muted: oklch(64% .02 68); --faint: oklch(50% .02 66);
+  --border: oklch(28% .012 66); --border-2: oklch(34% .014 64);
+  --glass-window: oklch(20% .016 68 / .85); --glass-panel: oklch(23% .018 68 / .82); --glass-sidebar: oklch(17% .018 64 / .82);
 }
 [data-theme="forest"] {
-  --bg: oklch(18% .025 158); --bg-2: oklch(21% .027 158); --sidebar: oklch(15% .028 160);
-  --surface: oklch(24% .027 158); --surface-2: oklch(28% .029 156);
-  --fg: oklch(94% .012 155); --fg-2: oklch(81% .016 155); --muted: oklch(63% .022 156); --faint: oklch(49% .022 158);
-  --border: oklch(27% .024 157); --border-2: oklch(33% .026 156);
-  --glass-window: oklch(18% .025 158 / .85); --glass-panel: oklch(21% .027 158 / .82); --glass-sidebar: oklch(15% .028 160 / .82);
+  --bg: oklch(20% .018 158); --bg-2: oklch(23% .02 158); --sidebar: oklch(17% .022 160);
+  --surface: oklch(26% .02 158); --surface-2: oklch(30% .022 156);
+  --fg: oklch(95% .008 156); --fg-2: oklch(82% .012 156); --muted: oklch(64% .018 157); --faint: oklch(50% .018 158);
+  --border: oklch(28% .012 157); --border-2: oklch(34% .014 156);
+  --glass-window: oklch(20% .018 158 / .85); --glass-panel: oklch(23% .02 158 / .82); --glass-sidebar: oklch(17% .022 160 / .82);
 }
 
 /* ---- 强调色方案(深色为默认基准,浅色单独压暗以保证对比) ---- */
