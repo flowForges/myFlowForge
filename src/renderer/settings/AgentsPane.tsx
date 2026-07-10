@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type MouseEvent } from 'react'
 import type { ProviderInfo, AgentsConfig, CustomAgent, ModelInfo } from '@shared/types'
 import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
+import { useSettings } from '../state/useSettings'
 
 // Built-in providers whose bin path can be overridden — derived from the shared catalog.
 const BUILTINS = BUILTIN_PROVIDERS.map(p => ({ id: p.id, name: p.displayName, defaultBin: p.defaultBin }))
@@ -40,7 +41,34 @@ const EMPTY_CUSTOM = { id: '', displayName: '', bin: '', argsTemplate: '{prompt}
 // A model row in the editable list — mirrors ModelInfo but mutable
 interface ModelRow { id: string; label: string; description?: string }
 
+// A compact 启用/已禁用 toggle. Disabling hides the provider from every "选择编码代理" list
+// (its CLI is untouched); this settings pane keeps listing it so it can be re-enabled.
+function EnableToggle({ id, disabled, onToggle }: { id: string; disabled: boolean; onToggle: (id: string, next: boolean) => void }) {
+  return (
+    <button
+      className={`agent-enable-toggle${disabled ? ' off' : ''}`}
+      role="switch"
+      aria-checked={!disabled}
+      title={disabled ? '已禁用 — 点击启用' : '已启用 — 点击禁用'}
+      onClick={() => onToggle(id, disabled)}
+    >
+      <span className="agent-enable-knob" />
+      <span className="agent-enable-label">{disabled ? '已禁用' : '已启用'}</span>
+    </button>
+  )
+}
+
 export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
+  const { settings, update } = useSettings()
+  const disabledProviders = settings?.disabledProviders ?? []
+  const isDisabled = (id: string) => disabledProviders.includes(id)
+  const toggleDisabled = useCallback((id: string, currentlyDisabled: boolean) => {
+    const next = currentlyDisabled
+      ? disabledProviders.filter(p => p !== id)
+      : [...disabledProviders, id]
+    update({ disabledProviders: next })
+  }, [disabledProviders, update])
+
   const [config, setConfig] = useState<AgentsConfig | null>(null)
   const [detected, setDetected] = useState<ProviderInfo[]>([])
   // True until the first detectProviders() round-trip lands — rows show 检测中… meanwhile.
@@ -178,6 +206,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
             <div className="agent-row-title">
               {badge(b.id)}
               <span className="agent-row-name">{b.name}</span>
+              <EnableToggle id={b.id} disabled={isDisabled(b.id)} onToggle={toggleDisabled} />
             </div>
             <div className="agent-row-meta">
               {info(b.id)?.version && <span className="agent-ver" title="检测到的 CLI 版本">v{info(b.id)!.version}</span>}
@@ -260,7 +289,10 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
           <div className="agent-row-h">
             {badge(c.id)}
             <span className="agent-row-name">{c.displayName}</span>
-            <button className="agent-del" disabled={busy} onClick={() => apply(() => window.forge.removeCustomAgent(c.id))}>删除</button>
+            <div className="agent-row-actions">
+              <EnableToggle id={c.id} disabled={isDisabled(c.id)} onToggle={toggleDisabled} />
+              <button className="agent-del" disabled={busy} onClick={() => apply(() => window.forge.removeCustomAgent(c.id))}>删除</button>
+            </div>
           </div>
           <div className="agent-row-bin"><code>{c.bin} {c.argsTemplate}</code></div>
         </div>

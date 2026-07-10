@@ -231,6 +231,10 @@ export const SettingsSchema = z.object({
   // User-pasted usage-plugin credentials, keyed by provider id (e.g. qoder/cursor cookie/token).
   // Overrides the adapter's auto-read source. Stored locally only.
   pluginCreds: z.record(z.string(), z.string()).default(() => ({})),
+  // Provider ids the user has disabled in 设置 → 编码代理. Disabled providers are hidden from every
+  // "选择编码代理" list (their CLIs stay installed), but the settings pane still lists them so the
+  // user can re-enable. Matches built-in and custom agents by id.
+  disabledProviders: z.array(z.string()).catch([]).default(() => []),
   terminal: TerminalSchema,
   // Id of the external app chosen in the "打开位置" dropdown (see shared/openers catalog). '' = none yet.
   defaultOpenerId: z.string().catch('').default(''),
@@ -254,6 +258,7 @@ export const defaultSettings = (): Settings => ({
   workspaceOrder: [],
   lastActiveWorkspace: '',
   pluginCreds: {},
+  disabledProviders: [],
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
   defaultOpenerId: '',
   keybindings: { overrides: {} },

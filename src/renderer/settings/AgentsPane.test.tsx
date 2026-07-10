@@ -28,6 +28,9 @@ beforeEach(() => {
     addCustomAgent: vi.fn(async () => makeDetected()),
     refreshModels: vi.fn(async (_id: string) => ({ models: [] })),
     setModels: vi.fn(async () => []),
+    getSettings: vi.fn(async () => ({ disabledProviders: [] })),
+    setSettings: vi.fn(async () => {}),
+    onSettingsChanged: vi.fn(() => () => {}),
   }
 })
 

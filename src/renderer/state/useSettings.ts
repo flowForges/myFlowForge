@@ -15,6 +15,7 @@ const DEFAULTS: Settings = {
   workspaceOrder: [],
   lastActiveWorkspace: '',
   pluginCreds: {},
+  disabledProviders: [],
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
   defaultOpenerId: '',
   keybindings: { overrides: {} },
@@ -35,6 +36,7 @@ export interface SettingsUpdate {
   defaultOpenerId?: string
   keybindings?: Keybindings
   perfStallToast?: boolean
+  disabledProviders?: string[]
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -54,6 +56,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // Preserve pluginCreds across saves — it's managed via the plugin IPC, not this update path.
     // Reading from the loaded settings on load (cast) and from base on regular updates.
     pluginCreds: (partial as Partial<Settings>).pluginCreds ?? base.pluginCreds,
+    disabledProviders: partial.disabledProviders ?? base.disabledProviders,
     terminal: { ...base.terminal, ...(partial.terminal ?? {}) },
     lastActiveWorkspace: partial.lastActiveWorkspace ?? base.lastActiveWorkspace,
     defaultOpenerId: partial.defaultOpenerId ?? base.defaultOpenerId,

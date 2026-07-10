@@ -48,22 +48,44 @@ function handleContentBlock(b: any, out: CursorEvent[]): void {
   }
 }
 
+// Pull a session/thread id out of any cursor envelope. cursor-agent's stream-json (Claude-Code-
+// compatible; `--resume <chatId>` confirmed in `--help`) stamps most events with the id under one
+// of these keys. Tolerant of nesting so the id is captured regardless of which event carries it.
+export function cursorSessionId(obj: any): string | undefined {
+  if (!obj || typeof obj !== 'object') return undefined
+  const id = obj.session_id ?? obj.sessionId ?? obj.chatId ?? obj.chat_id
+    ?? obj.threadId ?? obj.thread_id ?? obj.message?.session_id ?? obj.message?.sessionId
+  return typeof id === 'string' && id ? id : undefined
+}
+
+// Handle a content payload that may be an array of blocks OR a plain string (cursor has been observed
+// to emit both shapes for message.content depending on partial-output mode).
+function handleContent(content: unknown, out: CursorEvent[]): boolean {
+  if (Array.isArray(content)) {
+    const before = out.length
+    for (const b of content) handleContentBlock(b, out)
+    return out.length > before
+  }
+  if (typeof content === 'string' && content) {
+    out.push({ kind: 'output', text: content })
+    return true
+  }
+  return false
+}
+
 export function parseCursorEvent(obj: any): CursorEvent[] {
   if (!obj || typeof obj !== 'object') return []
   const out: CursorEvent[] = []
 
-  // Shape: { type:'assistant', message:{ content:[] } } — full message with content blocks
-  if (obj.type === 'assistant' && obj.message && Array.isArray(obj.message.content)) {
-    for (const b of obj.message.content) {
-      handleContentBlock(b, out)
+  // Shape: { type:'assistant', message:{ content:[]|'...' } } — full message with content blocks or
+  // a bare string. Also accept top-level `content` when there's no `message` wrapper.
+  if (obj.type === 'assistant') {
+    if (obj.message && handleContent(obj.message.content, out)) return out
+    if (handleContent(obj.content, out)) return out
+    // Streaming delta: { type:'assistant', delta:{ text:'...' } }
+    if (obj.delta && typeof obj.delta.text === 'string' && obj.delta.text) {
+      out.push({ kind: 'output', text: obj.delta.text }); return out
     }
-    return out
-  }
-
-  // Shape: { type:'assistant', delta:{ text:'...' } } — streaming delta
-  if (obj.type === 'assistant' && obj.delta && typeof obj.delta.text === 'string' && obj.delta.text) {
-    out.push({ kind: 'output', text: obj.delta.text })
-    return out
   }
 
   // Shape: { type:'text', text:'...' } — flat text event
@@ -72,7 +94,8 @@ export function parseCursorEvent(obj: any): CursorEvent[] {
     return out
   }
 
-  // Shape: { type:'result', result:'...' } — final result
+  // Shape: { type:'result', result:'...' } — final result (only surfaced when nothing streamed; the
+  // provider dedups so a partial-output stream + final result don't double-render).
   if (obj.type === 'result') {
     const text = typeof obj.result === 'string' ? obj.result
       : (typeof obj.text === 'string' ? obj.text : undefined)
@@ -80,6 +103,7 @@ export function parseCursorEvent(obj: any): CursorEvent[] {
     return out
   }
 
-  // Unknown shape: return [] (fail-open — provider's scanner handles it)
+  // Envelopes that carry no user-visible text (system/init, user echo, tool_result…): recognised but
+  // silent. Returning [] here is DIFFERENT from an unparsed line — the provider must not dump these raw.
   return out
 }
