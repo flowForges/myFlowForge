@@ -2,7 +2,8 @@ import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
 import { EventBus } from '../orchestrator/eventBus'
 import { Orchestrator, gateApprovedKey } from '../orchestrator/orchestrator'
-import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, upsertProject, setProjectDefaultBranch, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
+import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
+import { indexCustomStages } from '../../shared/customStages'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -228,6 +229,18 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     writeHookLibrary({ hooks })
     return readHookLibrary().hooks
   })
+  // --- Global custom-stage library (定义一次,被多个工作流模版按 libId 引用,编辑一次处处生效) ---
+  ipcMain.handle(CH.customStagesList, () => readCustomStages().stages)
+  ipcMain.handle(CH.customStagesUpsert, (_e, def: Partial<import('../config/schema').CustomStage> & { name: string }) => {
+    const list = upsertCustomStage(def)
+    broadcast(CH.customStagesChanged, list)
+    return list
+  })
+  ipcMain.handle(CH.customStagesDelete, (_e, id: string) => {
+    const list = deleteCustomStage(id)
+    broadcast(CH.customStagesChanged, list)
+    return list
+  })
   // Cached: concurrent callers share one probe, results live 60s. `force` (重新检测) re-probes AND
   // honors the result (trustPersisted:false) so it can clear a genuinely-gone CLI; a normal detect keeps
   // last-known-good agents sticky so a slow cold-start probe never makes them vanish.
@@ -316,7 +329,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!ws) return
     const live = orch.getRun()
     if (live && live.status === 'run') return
-    const stages = resolveStages(ws, readWorkflows().workflows)
+    const stages = resolveStages(ws, readWorkflows().workflows, indexCustomStages(readCustomStages().stages))
     if (stages.length === 0) return
     const filled = { ...ws, stages }
     if (ws.stages.length === 0) writeWorkspace(filled)   // backfill pre-SP-A workspaces permanently
@@ -431,6 +444,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     getRun: () => orch.getRun(),
     readWorkspace,
     readWorkflows: () => readWorkflows().workflows,
+    readCustomStages: () => readCustomStages().stages,
     writeWorkspace,
     startRun: (o) => { orch.startRun(o).catch(e => console.error('[propose] startRun failed', e)) },
     emitPlanRequest: (wp, req) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'plan-request', ...req }),
@@ -845,6 +859,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const live = orch.getRun()
     const livePath = live && live.status === 'run' ? live.workspacePath : undefined
     return listWorkspaces(livePath, readSettings().pinnedWorkspaces)
+  })
+
+  ipcMain.handle(CH.configExportProjects, async () => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const r = await dialog.showSaveDialog({ title: '导出项目配置', defaultPath: `myFlowForge-projects-${stamp}.json` })
+    if (r.canceled || !r.filePath) return { ok: false as const, canceled: true }
+    try { await writeFile(r.filePath, JSON.stringify(readProjects(), null, 2), 'utf8'); return { ok: true as const, path: r.filePath } }
+    catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
 
   // ── App debug log ───────────────────────────────────────────────────────────

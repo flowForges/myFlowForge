@@ -36,14 +36,18 @@ describe('WorkflowPane', () => {
     expect(name).toBe('重构流程')
     expect(stages.map((s: any) => s.key)).toEqual(['develop', 'test'])   // draft order preserved
   })
-  it('new-workflow draft: add a custom stage → create includes a custom-* key', () => {
+  it('new-workflow draft: reference a library custom stage → create includes a libId stage', () => {
+    // The draft no longer adds an empty placeholder; custom stages come from the shared library
+    // (从库选择 / 新建共享). Referencing a lib def inserts a stage carrying its libId.
     const onCreate = vi.fn()
-    render(<WorkflowPane workflows={workflows} onCreate={onCreate} onDelete={() => {}} onUpdateWorkflow={() => {}} onUpdateStagePrompts={() => {}} />)
-    fireEvent.click(screen.getByText('+ 自定义阶段'))
+    const def = { id: 'lib-9', key: 'lib-9', name: '安全审计', defaultAgent: 'claude', defaultModel: '' }
+    const onUpsertCustomStage = vi.fn(async () => def)
+    render(<WorkflowPane workflows={workflows} customStages={[def] as any} onUpsertCustomStage={onUpsertCustomStage as any} onCreate={onCreate} onDelete={() => {}} onUpdateWorkflow={() => {}} onUpdateStagePrompts={() => {}} />)
+    fireEvent.click(screen.getByText('安全审计'))   // 从库选择: reference the library def in the draft
     fireEvent.change(screen.getByPlaceholderText(/流程名称/), { target: { value: 'X' } })
     fireEvent.click(screen.getByText('创建'))
     const [, stages] = onCreate.mock.calls[0]
-    expect(stages.some((s: any) => /^custom-/.test(s.key))).toBe(true)
+    expect(stages.some((s: any) => s.libId === 'lib-9')).toBe(true)
   })
   it('shows the empty state when there are no templates', () => {
     render(<WorkflowPane workflows={[]} onCreate={() => {}} onDelete={() => {}} onUpdateWorkflow={() => {}} onUpdateStagePrompts={() => {}} />)

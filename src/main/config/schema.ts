@@ -89,6 +89,11 @@ export const AppearanceSchema = z.object({
   blurAmount: z.number().min(0).max(1).default(0),
   density: z.enum(['comfortable', 'compact']),
   fontSize: z.enum(['small', 'medium', 'large']),
+  // 应用整体字体族(逗号分隔备选)。'' = 跟随系统栈。作用于 --font,不影响终端字体。
+  fontFamily: z.string().catch('').default(''),
+  // 文本字重:'medium' 把正文基础字重略加实 + 关闭 antialiased 使渲染更清晰(治"字太瘦"),
+  // 但不动已显式加重的标题/强调文本;'normal' = 原始系统外观。
+  textWeight: z.enum(['normal', 'medium']).catch('medium').default('medium'),
   // 背景图:用户上传的图片(存为 data URL,自包含无需管理文件)。bgScope 决定铺在整个应用还是仅会话区;
   // 'off' 或空图 = 关闭。bgOpacity 是图片层的可见度(其上有一层底色蒙版保证正文可读)。
   bgImage: z.string().default(''),
@@ -246,7 +251,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
+  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
@@ -283,8 +288,24 @@ export const StageConfigSchema = z.object({
   summary: z.boolean().optional(),                    // per-project 后追加汇总代理
   projectAgent: z.boolean().optional(),               // 用各项目自己的 provider/model
   producesDoc: z.boolean().optional(),                // 强制写 markdown 方案文件
+  // —— 全局自定义阶段库引用 ——
+  // 若本阶段项带 libId,即为对全局库(customStages.json)某条定义的引用:name/agent/model/prompt/flags
+  // 在物化 / 显示时由库定义解析提供(shared/customStages.ts resolveStages)。key/name 仍冗余保留作缓存
+  // 兜底,库项被删后引用不至于崩溃。见 #「自定义工作流阶段全局库」。
+  libId: z.string().optional(),
 })
 export type StageConfig = z.infer<typeof StageConfigSchema>
+
+// —— 全局自定义阶段库条目 ——
+// StageConfigSchema 全字段 + 必填 id(稳定引用键)+ 必填 name(库里每条都得有名字)。存于
+// customStages.json;模版的阶段项通过 libId 引用它,编辑一次处处生效(resolver 在物化 / 显示时解析)。
+export const CustomStageSchema = StageConfigSchema.extend({
+  id: z.string(),
+  name: z.string(),
+})
+export type CustomStage = z.infer<typeof CustomStageSchema>
+export const CustomStagesFileSchema = z.object({ stages: z.array(CustomStageSchema).default([]) })
+export const defaultCustomStages = () => ({ stages: [] as CustomStage[] })
 export const WorkflowSchema = z.object({
   id: z.string(), name: z.string(), stages: z.array(StageConfigSchema).min(1),
   plugins: z.array(PluginSchema).default(() => []),

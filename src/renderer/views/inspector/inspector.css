@@ -93,6 +93,14 @@
 .tree-row .chg-mini { margin-left: auto; width: 6px; height: 6px; border-radius: 50%; }
 .tree-row .chg-mini.A { background: var(--add); } .tree-row .chg-mini.M { background: var(--warn); } .tree-row .chg-mini.D { background: var(--del); }
 
+/* ---- 变更清单的文件夹折叠视图 (changes rendered as a collapsible folder tree) ---- */
+/* File leaves reuse .chg-item but sit inside .tree-children; tighten spacing + prepend a hidden chev so
+   the A/M/D tag lines up under its folder's chevron. The leading chev in a folder row is styled by the
+   shared `.tree-row .chev` rule; this covers the leaf's own hidden spacer. */
+.chg-tree .chg-item.chg-leaf { padding: 4px 6px; gap: 6px; }
+.chg-tree .chg-item .chev { width: 12px; height: 12px; flex: 0 0 12px; color: var(--faint); }
+.chg-tree .chg-item .chev.hidden { visibility: hidden; }
+
 /* ---- 文件预览(检查器下半的分屏面板;上方列表保持可见,可继续点选其它文件) ---- */
 .preview {
   position: relative; flex: 1 1 58%; min-height: 0; background: var(--bg);

@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { PluginEditor } from '../components/PluginEditor'
 import { StageConfigEditor } from '../components/StageConfigEditor'
-import type { CfgWorkflow, CfgStage } from '../state/useConfig'
+import type { CfgWorkflow, CfgStage, CfgCustomStage } from '../state/useConfig'
 import type { ProviderInfo } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 import { movePluginBefore } from '../../shared/pluginReorder'
+import { indexCustomStages, resolveStageDef, resolveStages, type CustomStageDef } from '../../shared/customStages'
 import { ImportModal, type ImportConfig } from '../components/ImportModal'
 import { PLUGIN_SAMPLE, parsePlugins, type ParsedPlugin } from '../components/importParsers'
 
@@ -78,6 +79,8 @@ const X_SVG = (
 interface WorkflowPaneProps {
   workflows: CfgWorkflow[]
   providers?: ProviderInfo[]
+  // Global custom-stage library — templates reference entries by libId (定义一次,处处引用).
+  customStages?: CfgCustomStage[]
   // stages: ordered list of bare built-in keys or full custom stage configs.
   onCreate: (name: string, stages: (string | CfgStage)[]) => void
   onDelete: (id: string) => void
@@ -85,6 +88,16 @@ interface WorkflowPaneProps {
   onUpdateStagePrompts: (id: string, stagePrompts: Record<string, string>) => void
   // Full stage-list edit (#3): add/rename/delete/reorder stages + per-stage prompt/agent/flags.
   onUpdateStages?: (id: string, stages: CfgStage[]) => void
+  // Edit / create a global custom-stage-library definition (returns the resolved def with its libId).
+  onUpsertCustomStage?: (id: string, patch: Partial<CfgCustomStage>) => Promise<CfgCustomStage>
+}
+
+// A template-unique custom-stage key (custom-N), used when inserting a library reference into a workflow.
+function uniqueCustomKey(existing: { key: string }[]): string {
+  let n = existing.filter(s => s.key.startsWith('custom-')).length + 1
+  let key = `custom-${n}`
+  while (existing.some(s => s.key === key)) key = `custom-${++n}`
+  return key
 }
 
 // Editor state: which workflow + which position + which plugin (null = new)
@@ -99,7 +112,8 @@ function newCustomStage(existing: CfgStage[]): CfgStage {
 
 const mkBuiltinStage = (key: string): CfgStage => ({ key, defaultAgent: 'claude', defaultModel: 'opus-4.8' })
 
-export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, onUpdateWorkflow, onUpdateStages }: WorkflowPaneProps) {
+export function WorkflowPane({ workflows, providers = [], customStages = [], onCreate, onDelete, onUpdateWorkflow, onUpdateStages, onUpsertCustomStage }: WorkflowPaneProps) {
+  const byId = indexCustomStages(customStages as unknown as CustomStageDef[])
   const [name, setName] = useState('')
   // 新建流程:一个有序的草稿阶段列表(内置 + 自定义),可增删、可拖动排序。
   const [draft, setDraft] = useState<CfgStage[]>(() => [mkBuiltinStage('develop')])
@@ -148,6 +162,44 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
     setAddingStageWf(null)
     setStageEdit({ wfId: wf.id, key: stage.key })   // open the new stage's editor immediately
   }
+  // Insert a reference to an EXISTING library def (从库选择): a template-unique key + libId + cached
+  // name/agent/model (fallback if the lib is later deleted). Doesn't open the editor — editing a
+  // reference edits the shared library, which the user opts into explicitly by clicking the chip.
+  function addLibReference(wf: CfgWorkflow, def: CfgCustomStage) {
+    const key = uniqueCustomKey(wf.stages)
+    putStages(wf, [...wf.stages, { key, libId: def.id, name: def.name, defaultAgent: def.defaultAgent, defaultModel: def.defaultModel }])
+    setAddingStageWf(null)
+  }
+  // 新建自定义阶段(共享): create a fresh library def, then insert a reference to it + open the editor.
+  async function newLibStage(wf: CfgWorkflow) {
+    if (!onUpsertCustomStage) return
+    const id = crypto.randomUUID()
+    const key = uniqueCustomKey(wf.stages)
+    await onUpsertCustomStage(id, { key: id, name: '新阶段', defaultAgent: 'claude', defaultModel: '' })
+    putStages(wf, [...wf.stages, { key, libId: id, name: '新阶段', defaultAgent: 'claude', defaultModel: '' }])
+    setAddingStageWf(null)
+    setStageEdit({ wfId: wf.id, key })
+  }
+  // Extract an INLINE custom stage (no libId) into the shared library, then turn the template stage into
+  // a reference — so the same config becomes reusable + editable-once across templates.
+  async function extractToLibrary(wf: CfgWorkflow, stage: CfgStage) {
+    if (!onUpsertCustomStage) return
+    const id = crypto.randomUUID()
+    await onUpsertCustomStage(id, {
+      key: id, name: stage.name || stage.key, defaultAgent: stage.defaultAgent, defaultModel: stage.defaultModel,
+      ...(stage.prompt ? { prompt: stage.prompt } : {}),
+      ...(stage.scope ? { scope: stage.scope } : {}),
+      ...(stage.gate !== undefined ? { gate: stage.gate } : {}),
+      ...(stage.review ? { review: stage.review } : {}),
+      ...(stage.summary !== undefined ? { summary: stage.summary } : {}),
+      ...(stage.projectAgent !== undefined ? { projectAgent: stage.projectAgent } : {}),
+      ...(stage.producesDoc !== undefined ? { producesDoc: stage.producesDoc } : {}),
+    })
+    putStages(wf, wf.stages.map(s => s.key === stage.key
+      ? { key: s.key, libId: id, name: stage.name || stage.key, defaultAgent: stage.defaultAgent, defaultModel: stage.defaultModel }
+      : s))
+    setStageEdit(null)
+  }
 
   function openImport(wf: { id: string; name: string; stages: { key: string }[]; plugins: Plugin[] }) {
     // Stages this workflow actually has — an imported plugin's `after` is clamped to one of these
@@ -175,9 +227,19 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
 
   // —— 新建流程草稿:增删、改名(自定义)、拖动排序 ——
   const addDraftBuiltin = (key: string) => setDraft(d => d.some(s => s.key === key) ? d : [...d, mkBuiltinStage(key)])
-  const addDraftCustom = () => setDraft(d => [...d, newCustomStage(d)])
+  // 新建流程里加自定义阶段 = 引用共享库(去掉了旧的"加空占位":自定义阶段统一在库里定义,模板只引用)。
+  // 从库选择:插入对已有库定义的引用(缓存 name/agent/model 作库项被删时的兜底)。
+  const addDraftLibRef = (def: CfgCustomStage) => setDraft(d =>
+    d.some(s => s.libId === def.id) ? d
+      : [...d, { key: uniqueCustomKey(d), libId: def.id, name: def.name, defaultAgent: def.defaultAgent, defaultModel: def.defaultModel }])
+  // 新建(共享):在全局库建一条新定义,再往草稿插入对它的引用。名称/提示词等到「自定义阶段」页里配。
+  const newDraftLibStage = async () => {
+    if (!onUpsertCustomStage) return
+    const id = crypto.randomUUID()
+    await onUpsertCustomStage(id, { key: id, name: '新阶段', defaultAgent: 'claude', defaultModel: '' })
+    setDraft(d => [...d, { key: uniqueCustomKey(d), libId: id, name: '新阶段', defaultAgent: 'claude', defaultModel: '' }])
+  }
   const removeDraft = (key: string) => setDraft(d => d.length > 1 ? d.filter(s => s.key !== key) : d)
-  const renameDraft = (key: string, name: string) => setDraft(d => d.map(s => s.key === key ? { ...s, name } : s))
   function reorderDraft(dragKey: string, beforeKey: string) {
     if (!dragKey || dragKey === beforeKey) return
     setDraft(d => {
@@ -323,12 +385,14 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
                       </span>
                     ))}
 
-                    {/* Stages: drag to reorder (when onUpdateStages), click to edit; insert buttons after each */}
-                    {w.stages.map((s, i) => (
+                    {/* Stages: drag to reorder (when onUpdateStages), click to edit; insert buttons after each.
+                        Resolve library references (libId) against the shared library so the chip shows the
+                        CURRENT shared name — key/order are preserved by the resolver. */}
+                    {resolveStages(w.stages, byId).map((s, i) => (
                       <span key={s.key} style={{ display: 'contents' }}>
                         <span
-                          className={'wf-stage-chip click' + ((s.prompt || w.stagePrompts?.[s.key]) ? ' edited' : '') + (STAGE_KEYS.includes(s.key as typeof STAGE_KEYS[number]) ? '' : ' custom') + (stageDragKey === s.key ? ' dragging' : '')}
-                          title={onUpdateStages ? '拖动排序 · 点击编辑' : `点击编辑「${s.name || STAGE_NAMES[s.key] || s.key}」阶段`}
+                          className={'wf-stage-chip click' + ((s.prompt || w.stagePrompts?.[s.key]) ? ' edited' : '') + (STAGE_KEYS.includes(s.key as typeof STAGE_KEYS[number]) ? '' : ' custom') + (s.libId ? ' shared' : '') + (stageDragKey === s.key ? ' dragging' : '')}
+                          title={s.libId ? '共享阶段(来自自定义阶段库)· 编辑会影响所有引用它的模板' : (onUpdateStages ? '拖动排序 · 点击编辑' : `点击编辑「${s.name || STAGE_NAMES[s.key] || s.key}」阶段`)}
                           draggable={!!onUpdateStages}
                           onDragStart={() => setStageDragKey(s.key)}
                           onDragEnd={() => setStageDragKey(null)}
@@ -338,6 +402,7 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
                         >
                           <span className="n">{i + 1}</span>
                           {s.name || STAGE_NAMES[s.key] || s.key}
+                          {s.libId && <span className="st-custom-tag" title="共享阶段">共享</span>}
                           {(s.prompt || w.stagePrompts?.[s.key]) && <span className="dot" />}
                           <svg className="pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
                         </span>
@@ -402,7 +467,17 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
                       {STAGE_KEYS.filter(k => !w.stages.some(s => s.key === k)).map(k => (
                         <button key={k} className="wf-pick" onClick={() => addStage(w, { key: k, defaultAgent: 'claude', defaultModel: 'opus-4.8' })}>{STAGE_NAMES[k]}</button>
                       ))}
-                      <button className="wf-pick custom" onClick={() => addStage(w, newCustomStage(w.stages))}>+ 自定义阶段</button>
+                      {onUpsertCustomStage ? (
+                        <>
+                          <span className="wf-add-hint">自定义阶段:</span>
+                          <button className="wf-pick custom" data-newlibstage onClick={() => void newLibStage(w)}>+ 新建(共享)</button>
+                          {customStages.filter(cs => !w.stages.some(s => s.libId === cs.id)).map(cs => (
+                            <button key={cs.id} className="wf-pick" data-libpick={cs.id} title="从自定义阶段库引用" onClick={() => addLibReference(w, cs)}>{cs.name || cs.key}</button>
+                          ))}
+                        </>
+                      ) : (
+                        <button className="wf-pick custom" onClick={() => addStage(w, newCustomStage(w.stages))}>+ 自定义阶段</button>
+                      )}
                     </div>
                   )}
 
@@ -420,25 +495,38 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
                     />
                   )}
                   {stageEdit?.wfId === w.id && onUpdateStages && (() => {
-                    const s = w.stages.find(x => x.key === stageEdit.key)
-                    if (!s) return null
+                    const orig = w.stages.find(x => x.key === stageEdit.key)
+                    if (!orig) return null
+                    // Resolve so the editor shows the CURRENT shared definition for a library reference.
+                    const s = resolveStageDef(orig, byId)
                     const isBuiltin = STAGE_KEYS.includes(stageEdit.key as typeof STAGE_KEYS[number])
-                    const idx = w.stages.findIndex(x => x.key === s.key)
+                    const idx = w.stages.findIndex(x => x.key === orig.key)
+                    const isRef = !!orig.libId
+                    // A live library reference (its def still exists) → edits sync to the shared library;
+                    // a dangling reference (def deleted) or inline custom stage → edits stay on the template.
+                    const editsLibrary = isRef && onUpsertCustomStage && byId[orig.libId!]
                     return (
                       <div className="stage-cfg-wrap">
                         <div className="stage-cfg-tools">
-                          <button className="scw-btn" disabled={idx <= 0} title="上移" onClick={() => moveStage(w, s.key, -1)}>↑</button>
-                          <button className="scw-btn" disabled={idx >= w.stages.length - 1} title="下移" onClick={() => moveStage(w, s.key, 1)}>↓</button>
-                          <button className="scw-btn del" disabled={w.stages.length <= 1} title="删除阶段" onClick={() => deleteStage(w, s.key)}>{TRASH}</button>
+                          <button className="scw-btn" disabled={idx <= 0} title="上移" onClick={() => moveStage(w, orig.key, -1)}>↑</button>
+                          <button className="scw-btn" disabled={idx >= w.stages.length - 1} title="下移" onClick={() => moveStage(w, orig.key, 1)}>↓</button>
+                          {!isBuiltin && !isRef && onUpsertCustomStage && (
+                            <button className="scw-btn" title="提取到共享库(供其它模板复用)" onClick={() => void extractToLibrary(w, orig)}>提取到共享库</button>
+                          )}
+                          <button className="scw-btn del" disabled={w.stages.length <= 1} title={isRef ? '从本模板移除引用(不影响库定义)' : '删除阶段'} onClick={() => deleteStage(w, orig.key)}>{TRASH}</button>
                         </div>
+                        {editsLibrary && <div className="sce-shared-note" style={{ padding: '6px 10px', fontSize: 12, opacity: 0.75 }}>共享阶段 · 保存会同步到所有引用它的模板</div>}
                         <StageConfigEditor
-                          key={s.key}
+                          key={orig.key}
                           stage={s}
                           isBuiltin={isBuiltin}
-                          builtinName={STAGE_NAMES[s.key]}
-                          builtinBasePrompt={STAGE_DEFAULT_PROMPT[s.key]}
+                          builtinName={STAGE_NAMES[orig.key]}
+                          builtinBasePrompt={STAGE_DEFAULT_PROMPT[orig.key]}
                           providers={providers}
-                          onSave={(patch) => saveStageConfig(w, s.key, patch)}
+                          onSave={(patch) => {
+                            if (editsLibrary) { void onUpsertCustomStage!(orig.libId!, patch); setStageEdit(null) }
+                            else saveStageConfig(w, orig.key, patch)
+                          }}
                           onCancel={() => setStageEdit(null)}
                         />
                       </div>
@@ -467,23 +555,22 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
           {/* 有序草稿阶段:拖动排序、改名(自定义)、移除 */}
           <div className="wf-draft-flow">
             {draft.map((s, i) => {
-              const label = STAGE_NAMES[s.key] ?? s.name ?? s.key
-              const isCustom = !STAGE_KEYS.includes(s.key as typeof STAGE_KEYS[number])
+              const isRef = !!s.libId
+              const label = isRef ? (byId[s.libId!]?.name ?? s.name ?? s.key) : (STAGE_NAMES[s.key] ?? s.name ?? s.key)
               return (
                 <span
                   key={s.key}
-                  className={`wf-draft-chip${isCustom ? ' custom' : ''}${draftDragKey === s.key ? ' dragging' : ''}`}
+                  className={`wf-draft-chip${isRef ? ' custom shared' : ''}${draftDragKey === s.key ? ' dragging' : ''}`}
                   draggable
                   onDragStart={() => setDraftDragKey(s.key)}
                   onDragEnd={() => setDraftDragKey(null)}
                   onDragOver={e => e.preventDefault()}
                   onDrop={e => { e.preventDefault(); if (draftDragKey) reorderDraft(draftDragKey, s.key); setDraftDragKey(null) }}
-                  title="拖动排序"
+                  title={isRef ? '共享阶段(来自自定义阶段库)· 在「自定义阶段」页里配置' : '拖动排序'}
                 >
                   <span className="n">{i + 1}</span>
-                  {isCustom ? (
-                    <input className="wf-draft-name" value={s.name ?? ''} placeholder="阶段名" onChange={e => renameDraft(s.key, e.target.value)} onClick={e => e.stopPropagation()} />
-                  ) : label}
+                  {label}
+                  {isRef && <span className="st-custom-tag" title="共享阶段">共享</span>}
                   <button className="x" title="移除" onClick={() => removeDraft(s.key)}>{X_SVG}</button>
                 </span>
               )
@@ -494,9 +581,17 @@ export function WorkflowPane({ workflows, providers = [], onCreate, onDelete, on
             {STAGE_KEYS.filter(k => !draft.some(s => s.key === k)).map(key => (
               <button key={key} className="wf-pick" onClick={() => addDraftBuiltin(key)}>+ {STAGE_NAMES[key]}</button>
             ))}
-            <button className="wf-pick custom" onClick={addDraftCustom}>+ 自定义阶段</button>
+            {onUpsertCustomStage && (
+              <>
+                <span className="lab">自定义阶段:</span>
+                <button className="wf-pick custom" data-newdraftlibstage onClick={() => void newDraftLibStage()}>+ 新建(共享)</button>
+                {customStages.filter(cs => !draft.some(s => s.libId === cs.id)).map(cs => (
+                  <button key={cs.id} className="wf-pick" data-draftlibpick={cs.id} title="从自定义阶段库引用" onClick={() => addDraftLibRef(cs)}>{cs.name || cs.key}</button>
+                ))}
+              </>
+            )}
           </div>
-          <div className="wf-draft-hint">创建后可在上方模板里进一步配置每个阶段的提示词、代理与行为开关。</div>
+          <div className="wf-draft-hint">自定义阶段在「自定义阶段」页里定义与配置,这里只引用;创建后可在上方模板里继续调整每个阶段的提示词、代理与行为。</div>
         </div>
       </div>
       <ImportModal config={importCfg} onClose={() => setImportCfg(null)} />

@@ -4,11 +4,15 @@ import type { RunState } from '@shared/types'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { resolveStages } from '../workspace/resolveStages'
 import { planStages } from '../workspace/planSummary'
+import { indexCustomStages, type CustomStageDef } from '../../shared/customStages'
 
 export interface ProposeDeps {
   getRun: () => RunState | null
   readWorkspace: (p: string) => Workspace | null
   readWorkflows: () => Workflow[]
+  // Global custom-stage library defs, so a template's libId references materialize the current shared
+  // definition. Optional — absent → no library refs to resolve (built-in / inline stages unaffected).
+  readCustomStages?: () => CustomStageDef[]
   writeWorkspace: (ws: Workspace) => void
   startRun: (o: StartRunOpts) => void
   emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: { name: string; agents: number }[]; task?: string }) => void
@@ -27,7 +31,7 @@ export function makeProposeRun(deps: ProposeDeps) {
   const fn = (wsPath: string, approach: string, task?: string, select?: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }): Promise<ProposeResult> => {
     const ws = deps.readWorkspace(wsPath)
     if (!ws) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
-    const stages = resolveStages(ws, deps.readWorkflows())
+    const stages = resolveStages(ws, deps.readWorkflows(), indexCustomStages(deps.readCustomStages?.() ?? []))
     if (stages.length === 0) { deps.emitNote(wsPath, '该工作区无可执行的工作流配置。'); return Promise.resolve({ approved: false }) }
     const filled = { ...ws, stages }
     let opts = workspaceToStartRunOpts(filled, task)

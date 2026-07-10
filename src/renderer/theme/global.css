@@ -1,7 +1,11 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
 button:disabled { cursor: default; }
-body { font-family: var(--font); color: var(--fg); background: transparent; -webkit-font-smoothing: antialiased; }
+body { font-family: var(--font); color: var(--fg); background: transparent; font-weight: var(--app-fw, 400); -webkit-font-smoothing: var(--app-smoothing, antialiased); }
+/* 文本字重「适中」:把继承 400 的正文基础字重略提到 450 + 关掉 antialiased,让字看起来更"实"更清晰,
+   而不动标题/强调等已显式加重(500/600/700)的文本 —— 避免全局一刀切加粗读起来乱。默认即适中。 */
+[data-text-weight="medium"] { --app-fw: 450; --app-smoothing: auto; }
+[data-text-weight="normal"] { --app-fw: 400; --app-smoothing: antialiased; }
 .window {
   /* Fill the OS window — no floating 18px margin / shadow halo (that read as an
      ugly "outer shell"). Rounded corners stay for a clean frameless look. */

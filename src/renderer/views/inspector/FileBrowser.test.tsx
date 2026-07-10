@@ -46,9 +46,12 @@ describe('FileBrowser', () => {
     render(<FileBrowser tree={tree} projects={[]} activeCwd={undefined} onSelectProject={() => {}}
       source="changes" changes={changes} onOpenChange={() => {}}
       preview={null} onOpen={() => {}} onClose={() => {}} />)
-    // changes rows present, tree rows absent
+    // changes rows present; the file itself renders as a change row (.chg-item), NOT a file-tree file
+    // row. (Folders in the changes view now reuse .tree-row for folder folding, so the old blanket
+    // ".tree-row absent" check no longer distinguishes the two panes — assert on the file leaf instead.)
     expect(document.querySelector('.chg-item')).not.toBeNull()
-    expect(document.querySelector('.tree-row')).toBeNull()
+    expect(screen.getByText('a.ts').closest('.chg-item')).not.toBeNull()
+    expect(screen.getByText('a.ts').closest('.tree-row')).toBeNull()
     expect(screen.getByText('本次会话变更 · 1 个文件')).toBeInTheDocument()
   })
 

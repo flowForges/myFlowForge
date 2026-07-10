@@ -1,9 +1,9 @@
 /* ---- 会话标签栏（每个 workspace 支持多个会话） ---- */
-/* Align the tab bar to the SAME centered column as .chat-inner / .composer (max-width clamp +
-   margin:auto + matching side padding), so the tabs share a left edge with the messages and the
-   composer instead of hugging the far-left at a flat 16px (read as misaligned / "整体偏右"). */
+/* Session tabs are navigation, so they hug the LEFT edge of the chat pane (flat left padding, no
+   centered max-width column) instead of sitting in the centered message column — on a wide window
+   the centered version read as "整体偏右 / 离内容太近". Left-align keeps the nav at the far left. */
 .sess-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; width: 100%;
-  max-width: clamp(720px, 90%, 1180px); margin: 0 auto; padding: 8px clamp(32px, 4%, 72px) 0; }
+  max-width: none; margin: 0; padding: 8px 20px 0 16px; }
 .sess-tabs { display: flex; gap: 4px; overflow-x: auto; flex: 1; scrollbar-width: none; }
 .sess-tabs::-webkit-scrollbar { display: none; }
 /* Inactive tabs carry a faint fill + border so multiple sessions read as distinct chips instead

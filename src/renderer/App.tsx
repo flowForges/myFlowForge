@@ -30,10 +30,12 @@ import { CreateWorkspace } from './views/CreateWorkspace'
 import { SettingsModal } from './settings/SettingsModal'
 import { ProjectPane } from './settings/ProjectPane'
 import { AppearancePane } from './settings/AppearancePane'
+import { NotificationsPane } from './settings/NotificationsPane'
 import { AppIconPane } from './settings/AppIconPane'
 import { TermProxyPane } from './settings/TermProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
 import { WorkflowPane } from './settings/WorkflowPane'
+import { CustomStagesPane } from './settings/CustomStagesPane'
 import { HookLibraryPane } from './settings/HookLibraryPane'
 import { SkillPane } from './settings/SkillPane'
 import { PetPane } from './settings/PetPane'
@@ -146,7 +148,7 @@ export function App() {
   const notifAgentPrev = useRef<Map<string, AgentState>>(new Map())
   const notifRunPrev = useRef<Map<string, AgentState>>(new Map())
   const home = useHome()
-  const { projects, workflows, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, redetect } = useConfig()
+  const { projects, workflows, customStages, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, upsertCustomStage, deleteCustomStage, redetect } = useConfig()
   const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
   const sidebarGroups = useMemo(() => {
@@ -669,6 +671,7 @@ export function App() {
         editing={editing}
         projects={projects}
         workflows={workflows}
+        customStages={customStages}
         providers={providers}
         onOpenProjectSettings={() => { setWizardOpen(false); setSettingsPane('project'); setSettingsOpen(true) }}
         onNewWorkflow={() => { setWizardOpen(false); setSettingsPane('workflow'); setSettingsOpen(true) }}
@@ -718,12 +721,14 @@ export function App() {
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} renderPane={(key) => {
         switch (key) {
-          case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} /> : null
+          case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} /> : null
+          case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} />
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
-          case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} />
+          case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} customStages={customStages} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} onUpsertCustomStage={upsertCustomStage} />
+          case 'customStages': return <CustomStagesPane customStages={customStages} workflows={workflows} providers={providers} onUpsert={upsertCustomStage} onDelete={deleteCustomStage} />
           case 'hookLibrary': return <HookLibraryPane hooks={hookLib.hooks} onSave={hookLib.save} onDelete={hookLib.remove} onSetAll={hookLib.setAll} />
           case 'skills': return <SkillPane />
           case 'loads': return <LoadPane />

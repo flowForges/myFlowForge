@@ -8,9 +8,11 @@ import {
   SettingsSchema, defaultSettings, ProjectsSchema, defaultProjects,
   WorkflowsSchema, defaultWorkflows, AgentsConfigSchema, defaultAgentsConfig,
   HookLibrarySchema, defaultHookLibrary,
+  CustomStagesFileSchema, defaultCustomStages,
   WorkspaceSchema, WorkspaceRegistrySchema, defaultWorkspaceRegistry,
-  type Settings, type Workspace, type WorkspaceRegistryEntry
+  type Settings, type Workspace, type WorkspaceRegistryEntry, type CustomStage
 } from './schema'
+import { randomUUID } from 'node:crypto'
 
 export function readJson<T>(file: string, schema: z.ZodType<T>, fallback: () => T): T {
   try {
@@ -61,6 +63,38 @@ export const writeWorkflows = (data: { workflows: import('./schema').Workflow[] 
 // Global reusable hook library (slot-agnostic). Copied-from at workspace-create time; never referenced live.
 export const readHookLibrary = () => readJson(sysFile('hookLibrary.json'), HookLibrarySchema, defaultHookLibrary)
 export const writeHookLibrary = (data: { hooks: import('./schema').LibraryHook[] }) => writeJson(sysFile('hookLibrary.json'), HookLibrarySchema.parse(data))
+// Global custom-stage library (设置 → 自定义阶段). Workflow templates reference entries by libId; a
+// resolver (shared/customStages.ts) resolves the reference at materialization / display time so editing
+// one definition updates every template that uses it. Same atomic safeParse+write pattern as projects.
+export const readCustomStages = () => readJson(sysFile('customStages.json'), CustomStagesFileSchema, defaultCustomStages)
+export const writeCustomStages = (data: { stages: CustomStage[] }) => writeJson(sysFile('customStages.json'), CustomStagesFileSchema.parse(data))
+// Insert a new library definition or replace an existing one (matched by id). A def with no id gets a
+// fresh crypto.randomUUID() — the id is the stable reference key templates point at via libId.
+export function upsertCustomStage(input: Partial<CustomStage> & { name: string }): CustomStage[] {
+  const list = readCustomStages().stages
+  const id = (input.id && input.id.trim()) || randomUUID()
+  const def: CustomStage = {
+    id,
+    key: input.key || id,
+    name: input.name,
+    defaultAgent: input.defaultAgent || 'claude',
+    defaultModel: input.defaultModel ?? '',
+    ...(input.prompt !== undefined ? { prompt: input.prompt } : {}),
+    ...(input.scope !== undefined ? { scope: input.scope } : {}),
+    ...(input.gate !== undefined ? { gate: input.gate } : {}),
+    ...(input.review !== undefined ? { review: input.review } : {}),
+    ...(input.summary !== undefined ? { summary: input.summary } : {}),
+    ...(input.projectAgent !== undefined ? { projectAgent: input.projectAgent } : {}),
+    ...(input.producesDoc !== undefined ? { producesDoc: input.producesDoc } : {}),
+  }
+  const next = list.some(s => s.id === id) ? list.map(s => s.id === id ? def : s) : [...list, def]
+  writeCustomStages({ stages: next })
+  return readCustomStages().stages
+}
+export function deleteCustomStage(id: string): CustomStage[] {
+  writeCustomStages({ stages: readCustomStages().stages.filter(s => s.id !== id) })
+  return readCustomStages().stages
+}
 export const readAgentsConfig = () => readJson(sysFile('agents.json'), AgentsConfigSchema, defaultAgentsConfig)
 export const writeAgentsConfig = (data: import('./schema').AgentsConfig) => writeJson(sysFile('agents.json'), AgentsConfigSchema.parse(data))
 

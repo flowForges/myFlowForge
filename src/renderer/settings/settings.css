@@ -240,6 +240,9 @@
 .wf-add-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-2); }
 .wf-add-hint { font-size: 11.5px; color: var(--muted); }
 .wf-pick.custom { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 50%, var(--border)); border-style: dashed; }
+/* 「新建自定义阶段」:走 .imp-btn 的紧凑规格(svg 已被限成 15px),accent 描边表示这是"新增"动作。 */
+.imp-btn.cs-add { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 45%, var(--border)); }
+.imp-btn.cs-add:hover { background: var(--accent-dim); border-color: var(--accent); }
 
 .stage-cfg-wrap { margin-top: 11px; border: 1px solid color-mix(in oklch, var(--accent) 40%, var(--border)); border-radius: 11px; background: var(--surface); overflow: hidden; }
 .stage-cfg-tools { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }

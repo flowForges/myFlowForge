@@ -7,6 +7,10 @@ const UPLOAD_SVG = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
 )
 
+const DOWNLOAD_SVG = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+)
+
 interface ProjectPaneProps {
   projects: CfgProject[]
   onAdd: (repoUrl: string, branch: string) => void
@@ -51,6 +55,16 @@ export function ProjectPane({ projects, onAdd, onDelete, onEditBranch }: Project
   const [importCfg, setImportCfg] = useState<ImportConfig | null>(null)
   // Inline branch edit: which project id is being edited + its draft value.
   const [editBr, setEditBr] = useState<{ id: string; value: string } | null>(null)
+  // Transient export feedback (success / cancel / failure).
+  const [exportMsg, setExportMsg] = useState<string | null>(null)
+
+  const doExport = async () => {
+    const r = await window.forge.exportProjects()
+    if (r.ok) setExportMsg('已导出到 ' + r.path)
+    else if (r.canceled) setExportMsg(null)
+    else setExportMsg('导出失败：' + (r.error ?? '未知错误'))
+    if (!r.canceled) setTimeout(() => setExportMsg(null), 2400)
+  }
 
   const commitBranch = (id: string, original: string) => {
     const next = (editBr?.value ?? '').trim()
@@ -92,7 +106,11 @@ export function ProjectPane({ projects, onAdd, onDelete, onEditBranch }: Project
     <div className="set-group">
       <div className="set-group-h">
         <h4>Git 项目</h4>
-        <button className="imp-btn" onClick={openImport}>{UPLOAD_SVG}批量导入</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {exportMsg ? <span style={{ fontSize: 12, opacity: 0.75 }}>{exportMsg}</span> : null}
+          <button className="imp-btn" onClick={doExport} title="把当前所有项目配置导出为 JSON 文件">{DOWNLOAD_SVG}导出</button>
+          <button className="imp-btn" onClick={openImport}>{UPLOAD_SVG}批量导入</button>
+        </div>
       </div>
       <div className="proj-add">
         <div className="row">

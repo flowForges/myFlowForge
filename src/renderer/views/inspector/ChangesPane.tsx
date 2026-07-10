@@ -1,6 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeItem, ChangeType } from '@shared/types'
-import { FileIc, splitPath } from './fileIcon'
+import { FileIc } from './fileIcon'
 import { SearchModeToggle, ContentHits, useContentSearch, type SearchTarget } from './contentSearch'
 
 // 变更 (file changes) tab content — ports the prototype's #pane-changes
@@ -11,10 +11,93 @@ import { SearchModeToggle, ContentHits, useContentSearch, type SearchTarget } fr
 // its own cwd so clicking a file opens the preview against the RIGHT repo. The summary
 // counts then span every group. When `groups` is set it takes precedence over `changes`.
 //
-// Search: 文件名 filters the change rows by path; 内容 greps the CHANGED files' contents
-// (restricted to this session's changes, per project cwd).
+// The flat ChangeItem[] is aggregated into a collapsible FOLDER TREE (like the 文件树 tab) so a large
+// change set no longer sprawls open with no way to fold it. Folders collapse/expand individually; a
+// header toggle does 全部展开/全部折叠. Default = all folders collapsed (seeded once). File leaves keep
+// the original .chg-item row (A/M/D tag + type + add/del counts + click-to-open/diff).
+//
+// Search: 文件名 prunes the tree to matching paths (folders force-expanded); 内容 greps the CHANGED
+// files' contents (restricted to this session's changes, per project cwd).
 
 export interface ChangeGroup { name: string; cwd: string; changes: ChangeItem[] }
+
+// ---- Folder-tree aggregation (renderer-side; must NOT import main's fileTree.ts) --------------
+interface ChgNode {
+  type: 'dir' | 'file'
+  name: string
+  path: string // dir: the folder prefix (e.g. "src/views"); file: the full ChangeItem path
+  children?: ChgNode[]
+  item?: ChangeItem
+}
+
+// Fold a flat list of change paths into a nested dir/file tree, preserving input order.
+function buildChgTree(items: ChangeItem[]): ChgNode[] {
+  const root: ChgNode[] = []
+  const dirs = new Map<string, ChgNode>()
+  for (const item of items) {
+    const parts = item.path.split('/')
+    const fileName = parts.pop() ?? item.path
+    let level = root
+    let prefix = ''
+    for (const part of parts) {
+      prefix = prefix ? prefix + '/' + part : part
+      let node = dirs.get(prefix)
+      if (!node) {
+        node = { type: 'dir', name: part, path: prefix, children: [] }
+        dirs.set(prefix, node)
+        level.push(node)
+      }
+      level = node.children!
+    }
+    level.push({ type: 'file', name: fileName, path: item.path, item })
+  }
+  return root
+}
+
+// Collect every folder's collapse KEY (namespaced by the owning cwd so identical folder names across
+// projects don't collide in the shared `closed` set).
+function collectDirKeys(nodes: ChgNode[], prefix: string, acc: string[] = []): string[] {
+  for (const n of nodes) {
+    if (n.type === 'dir') { acc.push(prefix + '\0' + n.path); if (n.children) collectDirKeys(n.children, prefix, acc) }
+  }
+  return acc
+}
+
+// Prune the tree to files whose PATH includes the query (preserving matchName's path-based semantics),
+// keeping folder structure. Empty folders drop out.
+function filterChgTree(nodes: ChgNode[], q: string): ChgNode[] {
+  const out: ChgNode[] = []
+  for (const n of nodes) {
+    if (n.type === 'dir') {
+      const children = filterChgTree(n.children ?? [], q)
+      if (children.length) out.push({ ...n, children })
+    } else if (n.item!.path.toLowerCase().includes(q)) {
+      out.push(n)
+    }
+  }
+  return out
+}
+
+function countFiles(nodes: ChgNode[]): number {
+  let n = 0
+  for (const x of nodes) n += x.type === 'file' ? 1 : countFiles(x.children ?? [])
+  return n
+}
+
+const FolderIcon = () => (
+  <svg className="fi" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" style={{ color: 'var(--accent)' }}>
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+  </svg>
+)
+
+const ChevIcon = ({ hidden }: { hidden?: boolean }) =>
+  hidden ? (
+    <span className="chev hidden" />
+  ) : (
+    <svg className="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+      <polyline points="6 9 12 15 18 9" />
+    </svg>
+  )
 
 export function ChangesPane({
   changes,
@@ -46,6 +129,46 @@ export function ChangesPane({
   const edits = all.filter((c) => c.type === 'M').length
   const dels = all.filter((c) => c.type === 'D').length
 
+  // Build the folder tree(s). Single mode → one tree keyed by `cwd`; aggregate → one per group keyed
+  // by that group's cwd. Keyed so the shared `closed` set never conflates same-named folders.
+  const singleTree = useMemo(() => (groups ? null : buildChgTree(changes)), [groups, changes])
+  const groupTrees = useMemo(
+    () => (groups ? groups.map((g) => ({ ...g, tree: buildChgTree(g.changes) })) : null),
+    [groups]
+  )
+  const allDirKeys = useMemo(() => {
+    const acc: string[] = []
+    if (groupTrees) for (const g of groupTrees) collectDirKeys(g.tree, g.cwd, acc)
+    else if (singleTree) collectDirKeys(singleTree, cwd ?? '', acc)
+    return acc
+  }, [groupTrees, singleTree, cwd])
+
+  // local set of CLOSED folder keys (empty set = everything open)
+  const [closed, setClosed] = useState<Set<string>>(new Set())
+  // Start collapsed instead of dumping every changed file open (the reported complaint: "铺开且收不
+  // 起来"). Seed ONCE, the first time there ARE folders — not on every changes update, or the git-status
+  // poll would wipe folders the user just opened. A remount (switching project) resets the ref.
+  const seeded = useRef(false)
+  useEffect(() => {
+    if (!seeded.current && allDirKeys.length) {
+      seeded.current = true
+      setClosed(new Set(allDirKeys))
+    }
+  }, [allDirKeys])
+
+  const toggleFolder = (key: string) => {
+    setClosed((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+  const expandAll = () => setClosed(new Set())
+  const collapseAll = () => setClosed(new Set(allDirKeys))
+  // One toggle: collapse when anything is open, expand when all is collapsed.
+  const allCollapsed = allDirKeys.length > 0 && allDirKeys.every((k) => closed.has(k))
+
   // Content search restricted to the changed files (per project cwd).
   const targets: SearchTarget[] = useMemo(() => {
     if (groups) return groups.filter((g) => g.changes.length).map((g) => ({ cwd: g.cwd, files: g.changes.map((c) => c.path) }))
@@ -62,31 +185,47 @@ export function ChangesPane({
   const contentMode = mode === 'content' && targets.length > 0
   const search = useContentSearch(targets, query, contentMode)
 
-  const matchName = (c: ChangeItem) => !q || c.path.toLowerCase().includes(q)
+  // File leaf — keeps the original .chg-item row so click-to-open, the A/M/D tag, add/del deltas and the
+  // `activePath` selected state all behave exactly as before. The dir prefix is dropped because the
+  // folder hierarchy now shows it; the basename stays a direct text node so getByText(basename) works.
+  const Leaf = ({ item, name, openCwd }: { item: ChangeItem; name: string; openCwd?: string }) => (
+    <button
+      className={'chg-item chg-leaf' + (activePath === item.path ? ' on' : '')}
+      data-file={item.path}
+      data-type={item.type}
+      onClick={() => onOpen(item.path, item.type, openCwd)}
+    >
+      <ChevIcon hidden />
+      <span className={`chg-tag ${item.type}`}>{item.type}</span>
+      <FileIc name={name} />
+      <span className="chg-path">{name}</span>
+      <span className="chg-delta">
+        {item.add ? <span className="p">+{item.add}</span> : null}
+        {item.del ? <span className="m">−{item.del}</span> : null}
+      </span>
+    </button>
+  )
 
-  const Row = (c: ChangeItem, cwdOfRow?: string) => {
-    const { dir, file } = splitPath(c.path)
-    return (
-      <button
-        key={(cwdOfRow ?? '') + c.path}
-        className={'chg-item' + (activePath === c.path ? ' on' : '')}
-        data-file={c.path}
-        data-type={c.type}
-        onClick={() => onOpen(c.path, c.type, cwdOfRow)}
-      >
-        <span className={`chg-tag ${c.type}`}>{c.type}</span>
-        <FileIc name={file} />
-        <span className="chg-path">
-          {dir ? <span className="dir">{dir}</span> : null}
-          {file}
-        </span>
-        <span className="chg-delta">
-          {c.add ? <span className="p">+{c.add}</span> : null}
-          {c.del ? <span className="m">−{c.del}</span> : null}
-        </span>
-      </button>
-    )
-  }
+  // Render a folder tree. `keyPrefix` namespaces collapse keys; `openCwd` is the real cwd passed to
+  // onOpen (may be undefined in single mode). `forceOpen` (search) ignores the collapsed set.
+  const renderNodes = (nodes: ChgNode[], keyPrefix: string, openCwd: string | undefined, forceOpen: boolean): React.ReactNode =>
+    nodes.map((n) => {
+      if (n.type === 'dir') {
+        const key = keyPrefix + '\0' + n.path
+        const isClosed = !forceOpen && closed.has(key)
+        return (
+          <div key={key} className={`tree-folder${isClosed ? ' closed' : ''}`} data-folder={n.name}>
+            <button className="tree-row" data-foldertoggle onClick={() => toggleFolder(key)}>
+              <ChevIcon />
+              <FolderIcon />
+              <span>{n.name}</span>
+            </button>
+            <div className="tree-children">{renderNodes(n.children ?? [], keyPrefix, openCwd, forceOpen)}</div>
+          </div>
+        )
+      }
+      return <Leaf key={keyPrefix + '\0' + n.path} item={n.item!} name={n.name} openCwd={openCwd} />
+    })
 
   return (
     <>
@@ -116,17 +255,35 @@ export function ChangesPane({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
+          {targets.length > 0 ? <SearchModeToggle mode={mode} onChange={setMode} /> : null}
         </div>
-        {targets.length > 0 ? <SearchModeToggle mode={mode} onChange={setMode} /> : null}
-        {onRefresh && (
+        {(onRefresh || (!contentMode && allDirKeys.length > 0)) && (
           <div className="tree-expand-tools">
-            <button className="tree-tool-btn" title="刷新" aria-label="刷新变更" onClick={doRefresh}>
-              <svg className={refreshSpin ? 'spin' : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="23 4 23 10 17 10" />
-                <polyline points="1 20 1 14 7 14" />
-                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-              </svg>
-            </button>
+            {onRefresh && (
+              <button className="tree-tool-btn" title="刷新" aria-label="刷新变更" onClick={doRefresh}>
+                <svg className={refreshSpin ? 'spin' : ''} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="23 4 23 10 17 10" />
+                  <polyline points="1 20 1 14 7 14" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+              </button>
+            )}
+            {!contentMode && allDirKeys.length > 0 && (
+              <button
+                className="tree-tool-btn"
+                title={allCollapsed ? '全部展开' : '全部收起'}
+                aria-label={allCollapsed ? '全部展开' : '全部收起'}
+                onClick={allCollapsed ? expandAll : collapseAll}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  {allCollapsed ? (
+                    <><polyline points="7 13 12 18 17 13" /><polyline points="7 6 12 11 17 6" /></>
+                  ) : (
+                    <><polyline points="7 11 12 6 17 11" /><polyline points="7 18 12 13 17 18" /></>
+                  )}
+                </svg>
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -138,19 +295,21 @@ export function ChangesPane({
       ) : (
         <>
           <div className="chg-list-h">本次会话变更 · {all.length} 个文件</div>
-          {groups ? (
-            groups.map((g) => {
-              const rows = g.changes.filter(matchName)
-              if (q && !rows.length) return null
+          {groupTrees ? (
+            groupTrees.map((g) => {
+              const tree = q ? filterChgTree(g.tree, q) : g.tree
+              if (q && !countFiles(tree)) return null
               return (
                 <div key={g.cwd}>
-                  <div className="chg-group-h"><span>{g.name}</span><span className="n">{rows.length}</span></div>
-                  <div>{rows.map((c) => Row(c, g.cwd))}</div>
+                  <div className="chg-group-h"><span>{g.name}</span><span className="n">{countFiles(tree)}</span></div>
+                  <div className="tree chg-tree">{renderNodes(tree, g.cwd, g.cwd, !!q)}</div>
                 </div>
               )
             })
           ) : (
-            <div>{changes.filter(matchName).map((c) => Row(c, cwd))}</div>
+            <div className="tree chg-tree">
+              {renderNodes(q ? filterChgTree(singleTree ?? [], q) : singleTree ?? [], cwd ?? '', cwd, !!q)}
+            </div>
           )}
         </>
       )}

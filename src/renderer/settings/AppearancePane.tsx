@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Appearance, Terminal, CloseAction, Notifications } from '@shared/types'
+import type { Appearance, Terminal } from '@shared/types'
 
 const BG_SCOPES: { key: NonNullable<Appearance['bgScope']>; label: string }[] = [
   { key: 'app', label: '整个应用' },
@@ -9,19 +9,9 @@ const BG_SCOPES: { key: NonNullable<Appearance['bgScope']>; label: string }[] = 
 interface AppearancePaneProps {
   appearance: Appearance
   onChange: (partial: Partial<Appearance>) => void
-  notifications: Notifications
-  onNotificationsChange: (partial: Partial<Notifications>) => void
   terminal: Terminal
   onTerminalChange: (partial: Partial<Terminal>) => void
-  closeAction: CloseAction
-  onCloseActionChange: (v: CloseAction) => void
 }
-
-const NOTIFY_TYPES: { key: 'confirm' | 'input' | 'done'; t: string; d: string }[] = [
-  { key: 'confirm', t: '需要确认时', d: '子代理请求确认操作(如写文件、门控方案)' },
-  { key: 'input', t: '需要输入时', d: '子代理请求补充输入' },
-  { key: 'done', t: '执行完成时', d: '工作流整体执行完成' },
-]
 
 const CHECK = (
   <svg className="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -57,15 +47,16 @@ const ACK = (
   <svg className="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>
 )
 
-const CLOSE_ACTIONS: { key: CloseAction; label: string }[] = [
-  { key: 'ask', label: '询问' },
-  { key: 'hide', label: '缩小到 Dock' },
-  { key: 'quit', label: '退出应用' },
+const TEXT_WEIGHTS: { key: NonNullable<Appearance['textWeight']>; label: string }[] = [
+  { key: 'normal', label: '标准' },
+  { key: 'medium', label: '适中(更清晰)' },
 ]
 
-export function AppearancePane({ appearance, onChange, notifications, onNotificationsChange, terminal, onTerminalChange, closeAction, onCloseActionChange }: AppearancePaneProps) {
+export function AppearancePane({ appearance, onChange, terminal, onTerminalChange }: AppearancePaneProps) {
   const opacity = appearance.windowOpacity ?? 1
   const blur = appearance.blurAmount ?? 0
+  const appFont = appearance.fontFamily ?? ''
+  const textWeight = appearance.textWeight ?? 'medium'
   const bgImage = appearance.bgImage ?? ''
   const bgScope = appearance.bgScope ?? 'off'
   const bgOpacity = appearance.bgOpacity ?? 0.35
@@ -93,54 +84,6 @@ export function AppearancePane({ appearance, onChange, notifications, onNotifica
   }
   return (
     <>
-      <div className="set-group">
-        <h4>通知</h4>
-        <div className="set-row">
-          <div className="info">
-            <div className="t">系统通知</div>
-            <div className="d">需要确认/输入或执行完成时,若 App 不在前台则发送系统通知,点击可跳回对应会话</div>
-          </div>
-          <button
-            className={`toggle${notifications.enabled ? ' on' : ''}`}
-            aria-label="系统通知"
-            onClick={() => onNotificationsChange({ enabled: !notifications.enabled })}
-          />
-        </div>
-        {NOTIFY_TYPES.map(({ key, t, d }) => (
-          <div className="set-row" key={key} style={{ opacity: notifications.enabled ? 1 : 0.45 }}>
-            <div className="info">
-              <div className="t">{t}</div>
-              <div className="d">{d}</div>
-            </div>
-            <button
-              className={`toggle${notifications[key] ? ' on' : ''}`}
-              aria-label={t}
-              disabled={!notifications.enabled}
-              onClick={() => onNotificationsChange({ [key]: !notifications[key] })}
-            />
-          </div>
-        ))}
-      </div>
-      <div className="set-group">
-        <h4>窗口</h4>
-        <div className="set-row">
-          <div className="info">
-            <div className="t">关闭窗口时</div>
-            <div className="d">缩小到 Dock 后应用继续在后台运行,可随时从 Dock 图标回来</div>
-          </div>
-          <div className="seg" id="closeAction">
-            {CLOSE_ACTIONS.map(({ key, label }) => (
-              <button
-                key={key}
-                className={`wf-pick${closeAction === key ? ' on' : ''}`}
-                onClick={() => onCloseActionChange(key)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
       <div className="set-group">
         <h4>主题</h4>
         <div className="theme-cards" id="themeCards">
@@ -221,7 +164,63 @@ export function AppearancePane({ appearance, onChange, notifications, onNotifica
         )}
         <div className="set-row">
           <div className="info">
-            <div className="t">背景图</div>
+            <div className="t">紧凑密度</div>
+            <div className="d">减小列表与卡片间距,单屏显示更多信息</div>
+          </div>
+          <button
+            className={`toggle${appearance.density === 'compact' ? ' on' : ''}`}
+            aria-label="紧凑密度"
+            onClick={() => onChange({ density: appearance.density === 'compact' ? 'comfortable' : 'compact' })}
+          />
+        </div>
+      </div>
+      <div className="set-group">
+        <h4>字体</h4>
+        <div className="set-row">
+          <div className="info">
+            <div className="t">应用字体</div>
+            <div className="d">整个应用界面的字体族,支持逗号分隔的备选字体。留空 = 跟随系统字体</div>
+          </div>
+          <input
+            className="sel"
+            type="text"
+            placeholder="跟随系统"
+            value={appFont}
+            onChange={e => onChange({ fontFamily: e.target.value })}
+          />
+        </div>
+        <div className="set-row">
+          <div className="info">
+            <div className="t">文本字重</div>
+            <div className="d">「适中」把正文基础字重略微加实、渲染更清晰,不会加粗标题等本就较重的文本</div>
+          </div>
+          <div className="seg">
+            {TEXT_WEIGHTS.map(({ key, label }) => (
+              <button key={key} className={`wf-pick${textWeight === key ? ' on' : ''}`} onClick={() => onChange({ textWeight: key })}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="info">
+            <div className="t">字号</div>
+            <div className="d">界面与代码字体大小</div>
+          </div>
+          <select
+            className="sel"
+            value={appearance.fontSize}
+            onChange={e => onChange({ fontSize: e.target.value as Appearance['fontSize'] })}
+          >
+            <option value="small">小</option>
+            <option value="medium">中(默认)</option>
+            <option value="large">大</option>
+          </select>
+        </div>
+      </div>
+      <div className="set-group">
+        <h4>背景图</h4>
+        <div className="set-row">
+          <div className="info">
+            <div className="t">应用 / 会话区背景</div>
             <div className="d">
               上传一张图片作为背景 · 可铺满整个应用或仅会话区 · 拖动调节可见度。空 = 关闭
               {bgErr && <span style={{ color: 'var(--del)', marginLeft: 6 }}>{bgErr}</span>}
@@ -311,32 +310,6 @@ export function AppearancePane({ appearance, onChange, notifications, onNotifica
             </div>
           </div>
         )}
-        <div className="set-row">
-          <div className="info">
-            <div className="t">紧凑密度</div>
-            <div className="d">减小列表与卡片间距,单屏显示更多信息</div>
-          </div>
-          <button
-            className={`toggle${appearance.density === 'compact' ? ' on' : ''}`}
-            aria-label="紧凑密度"
-            onClick={() => onChange({ density: appearance.density === 'compact' ? 'comfortable' : 'compact' })}
-          />
-        </div>
-        <div className="set-row">
-          <div className="info">
-            <div className="t">字号</div>
-            <div className="d">界面与代码字体大小</div>
-          </div>
-          <select
-            className="sel"
-            value={appearance.fontSize}
-            onChange={e => onChange({ fontSize: e.target.value as Appearance['fontSize'] })}
-          >
-            <option value="small">小</option>
-            <option value="medium">中(默认)</option>
-            <option value="large">大</option>
-          </select>
-        </div>
       </div>
       <div className="set-group">
         <h4>终端字体</h4>

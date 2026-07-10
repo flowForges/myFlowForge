@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CreateWorkspaceOpts, ProviderInfo, ReviewConfig, ReviewLens } from '@shared/types'
 import type { Plugin, LibraryHook } from '@shared/plugin'
-import type { CfgProject, CfgWorkflow } from '../state/useConfig'
+import type { CfgProject, CfgWorkflow, CfgCustomStage } from '../state/useConfig'
+import { indexCustomStages, resolveStages as resolveLibRefs, type CustomStageDef } from '../../shared/customStages'
 import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, type WizardState, type WizardStage, type WizardProject } from './wizardModel'
 import { PluginEditor } from '../components/PluginEditor'
 import { movePluginBefore } from '../../shared/pluginReorder'
@@ -92,6 +93,8 @@ interface Props {
   onCreate: (opts: CreateWorkspaceOpts) => void
   projects: CfgProject[]
   workflows: CfgWorkflow[]
+  // Global custom-stage library — a template's libId references resolve to the current shared definition.
+  customStages?: CfgCustomStage[]
   providers: ProviderInfo[]
   onOpenProjectSettings: () => void
   onNewWorkflow: () => void
@@ -111,7 +114,8 @@ interface Props {
   editing?: import('@shared/types').Workspace | null
 }
 
-export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, providers, onOpenProjectSettings, onNewWorkflow, onAddProject, onAddWorkflow, onPickPath, hookLibrary = [], onSaveHookToLibrary, onProbeWorkspace, onDiscardPartial, error, creating = false, editing }: Props) {
+export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows, customStages = [], providers, onOpenProjectSettings, onNewWorkflow, onAddProject, onAddWorkflow, onPickPath, hookLibrary = [], onSaveHookToLibrary, onProbeWorkspace, onDiscardPartial, error, creating = false, editing }: Props) {
+  const stageLibById = indexCustomStages(customStages as unknown as CustomStageDef[])
   // installed providers drive the model menus; fall back to all providers if none report installed.
   const pickProviders = useMemo(() => {
     const inst = providers.filter(p => p.installed)
@@ -134,10 +138,12 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   }
 
   const buildStages = (wf: CfgWorkflow | undefined): Record<string, WizardStage> => {
-    const onKeys = new Set((wf?.stages ?? []).map(s => s.key))
+    // Resolve library references (libId) so a shared custom stage seeds from its CURRENT definition.
+    const wfStages = resolveLibRefs(wf?.stages ?? [], stageLibById)
+    const onKeys = new Set(wfStages.map(s => s.key))
     const dmByKey: Record<string, string> = {}
     const daByKey: Record<string, string> = {}
-    for (const s of wf?.stages ?? []) { dmByKey[s.key] = s.defaultModel; daByKey[s.key] = s.defaultAgent }
+    for (const s of wfStages) { dmByKey[s.key] = s.defaultModel; daByKey[s.key] = s.defaultAgent }
     const out: Record<string, WizardStage> = {}
     for (const k of STAGE_KEYS) {
       const seeded = seedStage(dmByKey[k] ?? pickProviders[0]?.models[0]?.id ?? '', daByKey[k])
@@ -146,7 +152,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     }
     // Custom (non-builtin) stages from the workflow template: seed them ON with their template config
     // + behavior flags so they run. They inherit the template's provider/model/prompt/flags.
-    for (const s of wf?.stages ?? []) {
+    for (const s of wfStages) {
       if (STAGE_KEYS.includes(s.key as StageKey)) continue
       const seeded = seedStage(s.defaultModel || (pickProviders[0]?.models[0]?.id ?? ''), s.defaultAgent)
       out[s.key] = {

@@ -21,6 +21,14 @@ const api = {
   saveHookLibrary: (hook: import('@shared/plugin').LibraryHook): Promise<import('@shared/plugin').LibraryHook[]> => ipcRenderer.invoke(CH.hookLibrarySave, hook),
   deleteHookLibrary: (id: string): Promise<import('@shared/plugin').LibraryHook[]> => ipcRenderer.invoke(CH.hookLibraryDelete, id),
   setHookLibrary: (hooks: import('@shared/plugin').LibraryHook[]): Promise<import('@shared/plugin').LibraryHook[]> => ipcRenderer.invoke(CH.hookLibrarySetAll, hooks),
+  listCustomStages: (): Promise<import('@shared/customStages').CustomStageDef[]> => ipcRenderer.invoke(CH.customStagesList),
+  upsertCustomStage: (def: unknown): Promise<import('@shared/customStages').CustomStageDef[]> => ipcRenderer.invoke(CH.customStagesUpsert, def),
+  deleteCustomStage: (id: string): Promise<import('@shared/customStages').CustomStageDef[]> => ipcRenderer.invoke(CH.customStagesDelete, id),
+  onCustomStagesChanged: (cb: (list: import('@shared/customStages').CustomStageDef[]) => void) => {
+    const listener = (_: unknown, list: import('@shared/customStages').CustomStageDef[]) => cb(list)
+    ipcRenderer.on(CH.customStagesChanged, listener)
+    return () => ipcRenderer.removeListener(CH.customStagesChanged, listener)
+  },
   detectProviders: (opts?: { force?: boolean }) => ipcRenderer.invoke(CH.agentsDetect, opts),
   getAgentsConfig: () => ipcRenderer.invoke(CH.agentsGetConfig),
   setAgentBin: (id: string, bin: string) => ipcRenderer.invoke(CH.agentsSetBin, { id, bin }),
@@ -214,6 +222,7 @@ const api = {
     ipcRenderer.on(CH.shortcutsStatus, listener)
     return () => ipcRenderer.removeListener(CH.shortcutsStatus, listener)
   },
+  exportProjects: (): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> => ipcRenderer.invoke(CH.configExportProjects),
   appLogGet: (): Promise<import('@shared/types').AppLogEntry[]> => ipcRenderer.invoke(CH.appLogGet),
   appLogClear: (): Promise<import('@shared/types').AppLogEntry[]> => ipcRenderer.invoke(CH.appLogClear),
   appLogExport: (): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> => ipcRenderer.invoke(CH.appLogExport),
