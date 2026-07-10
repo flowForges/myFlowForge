@@ -32,7 +32,10 @@ const CHECK = (
 const THEMES: { key: Appearance['theme']; label: string }[] = [
   { key: 'dark', label: '深色' },
   { key: 'light', label: '浅色' },
-  { key: 'auto', label: '跟随系统' }
+  { key: 'auto', label: '跟随系统' },
+  { key: 'midnight', label: '午夜蓝' },
+  { key: 'sepia', label: '暖褐' },
+  { key: 'forest', label: '森林绿' }
 ]
 
 // Ordered roughly around the hue wheel so the swatch row reads as a spectrum.

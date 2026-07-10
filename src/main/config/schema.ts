@@ -55,7 +55,7 @@ export const STAGE_PROMPTS: Record<StageKey, string> = {
 }
 
 export const AppearanceSchema = z.object({
-  theme: z.enum(['dark', 'light', 'auto']),
+  theme: z.enum(['dark', 'light', 'auto', 'midnight', 'sepia', 'forest']),
   accent: z.enum(['blue', 'violet', 'indigo', 'cyan', 'teal', 'emerald', 'lime', 'amber', 'orange', 'rose', 'magenta', 'graphite']).default('blue'),
   vibrancy: z.boolean(),
   glass: z.boolean().default(false),
