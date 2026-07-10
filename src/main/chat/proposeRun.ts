@@ -24,26 +24,34 @@ export type ProposeResult = { approved: boolean; feedback?: string }
 let seq = 0
 export function makeProposeRun(deps: ProposeDeps) {
   const pending = new Map<string, { resolve: (d: PlanDecision) => void; wsPath: string }>()
-  const fn = (wsPath: string, approach: string, task?: string, select?: { stages?: string[]; projects?: string[] }): Promise<ProposeResult> => {
+  const fn = (wsPath: string, approach: string, task?: string, select?: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }): Promise<ProposeResult> => {
     const ws = deps.readWorkspace(wsPath)
     if (!ws) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
     const stages = resolveStages(ws, deps.readWorkflows())
     if (stages.length === 0) { deps.emitNote(wsPath, '该工作区无可执行的工作流配置。'); return Promise.resolve({ approved: false }) }
     const filled = { ...ws, stages }
     let opts = workspaceToStartRunOpts(filled, task)
-    // Selective execution (token-saving for small tasks): the proposing agent may pick a SUBSET of
-    // stages (by key) and/or projects (by name). The workspace's full workflow config is untouched
-    // (filled is still persisted below) — only THIS run is narrowed. Unknown keys/names are ignored;
-    // an empty result falls back to the full set so a bad pick can never yield a no-op run.
+    // Selective execution (token-saving): the proposing agent may narrow THIS run. The workspace's full
+    // workflow config is untouched (filled is still persisted below); an empty/unknown pick falls back
+    // to the full set so a bad selection can never produce a no-op run.
+    //  - `stages`        → run only these stages (by key).
+    //  - `projects`      → default project subset applied to EVERY per-project stage (by name).
+    //  - `stageProjects` → per-stage override, e.g. { design: [all 5], develop: [2] } — lets 分析 cover
+    //                      all projects while 开发 touches only some. Overrides `projects` for that stage.
+    // developProjects stays the FULL set of provisioned worktrees; the orchestrator restricts each
+    // per-project stage to its spec.projects.
     if (select?.stages?.length) {
       const want = new Set(select.stages)
       const picked = opts.stages.filter(s => want.has(s.key))
       if (picked.length) opts = { ...opts, stages: picked }
     }
-    if (select?.projects?.length) {
-      const want = new Set(select.projects)
-      const picked = opts.developProjects.filter(p => want.has(p.name))
-      if (picked.length) opts = { ...opts, developProjects: picked }
+    const byStage = select?.stageProjects ?? {}
+    const globalP = select?.projects?.length ? select.projects : undefined
+    if (globalP || Object.keys(byStage).length) {
+      opts = { ...opts, stages: opts.stages.map(s => {
+        const p = byStage[s.key] ?? globalP
+        return p && p.length ? { ...s, projects: p } : s
+      }) }
     }
     const id = `pl-${Date.now()}-${++seq}`
     deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), task })
