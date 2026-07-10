@@ -1,8 +1,16 @@
 /* ============================================================
    首页 (home) — 1:1 ported from the prototype (index.html #view-home)
    ============================================================ */
-#view-home { flex-direction: column; overflow-y: auto; }
+#view-home { flex-direction: column; overflow-y: auto; position: relative; }
 .home-wrap { position: relative; isolation: isolate; max-width: 920px; margin: 0 auto; width: 100%; padding: 40px 40px 56px; }
+
+/* 首页背景图 —— 独立于应用/会话区背景(见 applyTheme 的 data-home-bg)。铺满 #view-home 内容区、
+   home-wrap 之下;opacity 压淡保证正文可读。开启后隐去极光,让照片干净呈现。 */
+.home-bg-layer { position: absolute; inset: 0; display: none; pointer-events: none;
+  background-image: var(--home-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
+  opacity: var(--home-bg-opacity, .35); }
+[data-home-bg="on"] .home-bg-layer { display: block; }
+[data-home-bg="on"] .home-aurora { display: none; }
 
 /* 极光背景:三个不同色相的模糊色团各自缓慢漂移,给首页顶部一层有深度的动态氛围。z-index:-1 配合
    home-wrap 的 isolation,稳稳待在所有内容之下,不需要给每个内容块单独抬 z-index。 */

@@ -23,7 +23,7 @@ import type { Appearance } from '@shared/types'
 // pet.html hard-codes a data-theme. Without syncing the app's real appearance, the pet popup could
 // diverge from the main window's theme. Mirror the main window's theme onto the pet document.
 // Defaults cover a settings object that predates the appearance block (light = new-user default).
-const DEFAULT_APPEARANCE: Appearance = { theme: 'light', accent: 'blue', vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35 }
+const DEFAULT_APPEARANCE: Appearance = { theme: 'light', accent: 'blue', vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 }
 
 const DEFAULT_NOTIFY: Pet['notify'] = { confirm: true, input: true, done: false }
 const DEFAULT_STATES: Pet['states'] = {

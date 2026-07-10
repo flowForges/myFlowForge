@@ -78,6 +78,19 @@ export function AppearancePane({ appearance, onChange, notifications, onNotifica
     // First upload turns the feature on (default to whole-app); later uploads keep the current scope.
     if (r.dataUrl) onChange({ bgImage: r.dataUrl, bgScope: bgScope === 'off' ? 'app' : bgScope })
   }
+  // 首页背景(独立于上面的应用/会话区背景)
+  const homeBgImage = appearance.homeBgImage ?? ''
+  const homeBgOn = appearance.homeBgOn ?? false
+  const homeBgOpacity = appearance.homeBgOpacity ?? 0.35
+  const [homeBgErr, setHomeBgErr] = useState('')
+  const pickHomeBg = async () => {
+    setHomeBgErr('')
+    const r = await window.forge.pickBgImage?.()
+    if (!r) return
+    if (r.error) { setHomeBgErr(r.error); return }
+    // First upload turns the home background on.
+    if (r.dataUrl) onChange({ homeBgImage: r.dataUrl, homeBgOn: true })
+  }
   return (
     <>
       <div className="set-group">
@@ -254,6 +267,49 @@ export function AppearancePane({ appearance, onChange, notifications, onNotifica
               </div>
             </div>
           </>
+        )}
+        <div className="set-row">
+          <div className="info">
+            <div className="t">首页背景图</div>
+            <div className="d">
+              为首页单独设置一张背景图 · 与上面的应用/会话区背景各自独立,可同可不同 · 在首页盖过「整个应用」背景
+              {homeBgErr && <span style={{ color: 'var(--del)', marginLeft: 6 }}>{homeBgErr}</span>}
+            </div>
+          </div>
+          <div className="seg">
+            {homeBgImage && (
+              <button
+                className={`toggle${homeBgOn ? ' on' : ''}`}
+                aria-label="启用首页背景"
+                onClick={() => onChange({ homeBgOn: !homeBgOn })}
+              />
+            )}
+            <button className="wf-pick" onClick={() => void pickHomeBg()}>{homeBgImage ? '更换图片' : '上传图片'}</button>
+            {homeBgImage && <button className="wf-pick" onClick={() => onChange({ homeBgImage: '', homeBgOn: false })}>清除</button>}
+          </div>
+        </div>
+        {homeBgImage && homeBgOn && (
+          <div className="set-row">
+            <div className="info">
+              <div className="t">首页背景可见度</div>
+              <div className="d">图片越明显,首页正文对比越低 · 建议保持较低值以便阅读</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '180px', justifyContent: 'flex-end' }}>
+              <input
+                type="range"
+                aria-label="首页背景可见度"
+                min={0.05}
+                max={1}
+                step={0.05}
+                value={homeBgOpacity}
+                onChange={e => onChange({ homeBgOpacity: Number(e.target.value) })}
+                style={{ flex: '1 1 auto', maxWidth: '160px' }}
+              />
+              <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: '12px', color: 'var(--muted)', width: '38px', textAlign: 'right' }}>
+                {Math.round(homeBgOpacity * 100)}%
+              </span>
+            </div>
+          </div>
         )}
         <div className="set-row">
           <div className="info">

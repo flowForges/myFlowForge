@@ -148,6 +148,8 @@ export function HomeView({ workspaces, stats, activeRunPath, run, onNew, onOpenD
 
   return (
     <section className="view on" id="view-home">
+      {/* 首页背景图层 — 仅当 data-home-bg="on" 时显示,铺满内容区、在 home-wrap 之下 */}
+      <div className="home-bg-layer" aria-hidden="true" />
       <div className="home-wrap">
         {/* Aurora backdrop — a few color blobs drift independently behind the hero for motion + depth. */}
         <div className="home-aurora" aria-hidden="true"><span /><span /><span /></div>

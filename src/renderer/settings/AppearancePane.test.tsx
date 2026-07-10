@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { AppearancePane } from './AppearancePane'
 import type { Appearance, Terminal, Notifications } from '@shared/types'
 
-const appearance: Appearance = { theme: 'dark', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35 }
+const appearance: Appearance = { theme: 'dark', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 }
 const notifications: Notifications = { enabled: true, confirm: true, input: true, done: false }
 const terminal: Terminal = { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 }
 

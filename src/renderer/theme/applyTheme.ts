@@ -24,4 +24,10 @@ export function applyTheme(a: Appearance): void {
   root.setAttribute('data-bg-scope', bgOn ? a.bgScope : 'off')
   root.style.setProperty('--app-bg-image', a.bgImage ? `url("${a.bgImage}")` : 'none')
   root.style.setProperty('--app-bg-opacity', String(a.bgOpacity ?? 0.35))
+  // 首页背景:独立开关 + 独立图/不透明度。仅 HomeView 的 .home-bg-layer 消费,故只在首页生效,
+  // 且盖过 'app' 范围背景(它在 #view-home 内、天然在最底层 .app-bg-layer 之上)。
+  const homeBgOn = !!a.homeBgImage && !!a.homeBgOn
+  root.setAttribute('data-home-bg', homeBgOn ? 'on' : 'off')
+  root.style.setProperty('--home-bg-image', a.homeBgImage ? `url("${a.homeBgImage}")` : 'none')
+  root.style.setProperty('--home-bg-opacity', String(a.homeBgOpacity ?? 0.35))
 }

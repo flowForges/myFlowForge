@@ -74,7 +74,12 @@ export const AppearanceSchema = z.object({
   // 'off' 或空图 = 关闭。bgOpacity 是图片层的可见度(其上有一层底色蒙版保证正文可读)。
   bgImage: z.string().default(''),
   bgScope: z.enum(['off', 'app', 'chat']).default('off'),
-  bgOpacity: z.number().min(0.05).max(1).default(0.35)
+  bgOpacity: z.number().min(0.05).max(1).default(0.35),
+  // 首页 (home) 背景图:独立于上面的应用/会话区背景,可同可不同。homeBgOn 是首页背景的独立开关,
+  // homeBgImage 存图片 data URL,homeBgOpacity 是首页图片层的可见度。首页上此背景盖过 'app' 范围背景。
+  homeBgImage: z.string().default(''),
+  homeBgOn: z.boolean().default(false),
+  homeBgOpacity: z.number().min(0.05).max(1).default(0.35)
 })
 export type Appearance = z.infer<typeof AppearanceSchema>
 export const SkillsSchema = z.record(z.string(), z.boolean())
@@ -218,7 +223,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35 },
+  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
