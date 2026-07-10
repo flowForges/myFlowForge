@@ -18,6 +18,14 @@ describe('petSrc', () => {
     }
   })
 
+  it('bundles the pink catgirl animated webp states', () => {
+    for (const state of ['idle', 'working', 'confirm', 'input', 'done']) {
+      const stored = `builtin/pink-catgirl/webp/${state}.webp`
+      expect(builtinAssetUrl(stored), state).toBeTruthy()
+      expect(petSrc(stored), state).not.toContain('forge-pet://')
+    }
+  })
+
   it('routes user-uploaded relative paths through the forge-pet protocol', () => {
     expect(petSrc('pet-123/idle.png')).toBe('forge-pet://img/pet-123/idle.png')
   })

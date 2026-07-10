@@ -1,7 +1,7 @@
 import type { PetState } from './types'
 
-// Maximum gallery entries: 5 bundled pets + up to 10 user-added pets.
-export const PET_CUSTOM_MAX = 15
+// Maximum gallery entries: 6 bundled pets + up to 10 user-added pets.
+export const PET_CUSTOM_MAX = 16
 
 // One custom pet: emoji-based (emoji+color), image-pack-based (per-state images), or both.
 export interface CustomPet {

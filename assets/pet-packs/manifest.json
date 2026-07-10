@@ -74,6 +74,38 @@
       }
     },
     {
+      "id": "pink-catgirl",
+      "name": "粉色猫娘",
+      "description": "成年粉色猫娘；idle 面向屏幕猫步；working 踏跳舞蹈；confirm 招手后指向确认；input 招手后示意填写；done 跳起庆祝。",
+      "files": {
+        "idle": {
+          "gif": "idle.gif",
+          "png": "png/idle.png",
+          "webp": "webp/idle.webp"
+        },
+        "working": {
+          "gif": "working.gif",
+          "png": "png/working.png",
+          "webp": "webp/working.webp"
+        },
+        "confirm": {
+          "gif": "confirm.gif",
+          "png": "png/confirm.png",
+          "webp": "webp/confirm.webp"
+        },
+        "input": {
+          "gif": "input.gif",
+          "png": "png/input.png",
+          "webp": "webp/input.webp"
+        },
+        "done": {
+          "gif": "done.gif",
+          "png": "png/done.png",
+          "webp": "webp/done.webp"
+        }
+      }
+    },
+    {
       "id": "rocket-fox",
       "name": "火箭狐",
       "description": "idle 大步游走；working 火箭背包喷射巡航；confirm/input 扑向屏幕挥爪；done 蜷起休息。",
