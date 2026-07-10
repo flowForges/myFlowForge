@@ -54,6 +54,25 @@ export const STAGE_PROMPTS: Record<StageKey, string> = {
   review: '审查改动 diff:正确性、安全性、规范与可维护性;区分「必须修复」与「建议项」,并明确是否可以合并。',
 }
 
+// —— 自定义阶段支持(#3)——
+// 阶段词汇表不再是闭合枚举:阶段 key 是任意字符串,name/prompt/行为开关挂在阶段对象上。上面三个
+// 常量降级为「内置默认回退表」——内置 key 的 name/prompt/行为缺省时回退到它们,自定义 key 走对象自带数据。
+export const BUILTIN_STAGE_KEYS: readonly string[] = STAGE_KEYS
+export function isBuiltinStage(key: string): key is StageKey { return (BUILTIN_STAGE_KEYS as string[]).includes(key) }
+// 显示名:阶段自带 name 优先,内置 key 回退 STAGE_NAMES,最后回退 key 本身。
+export function stageName(key: string, name?: string): string {
+  return (name && name.trim()) || (isBuiltinStage(key) ? STAGE_NAMES[key] : '') || key
+}
+// 基础提示词正文:内置 key 有恒定基座(STAGE_PROMPTS),此时阶段自带 prompt 是「追加段」;自定义 key
+// 无基座,其 prompt 即完整正文。返回内置基座(若有),追加逻辑在 buildStagePrompt 里按此区分。
+export function stageBasePrompt(key: string): string | undefined {
+  return isBuiltinStage(key) ? STAGE_PROMPTS[key] : undefined
+}
+// 阶段行为默认(按内置 key)。自定义 key 落到最保守项。显式 flag 永远优先(在各消费点用 `spec.flag ?? 默认`)。
+export const DEFAULT_STAGE_PER_PROJECT_AGENT: Record<string, boolean> = { develop: true }   // 用各项目自己的 provider/model
+export const DEFAULT_STAGE_PRODUCES_DOC: Record<string, boolean> = { design: true }          // 强制写 markdown 方案文件
+export const DEFAULT_STAGE_SUMMARY: Record<string, boolean> = { design: true }               // per-project 后追加汇总代理
+
 export const AppearanceSchema = z.object({
   theme: z.enum(['dark', 'light', 'auto', 'midnight', 'sepia', 'forest']),
   accent: z.enum(['blue', 'violet', 'indigo', 'cyan', 'teal', 'emerald', 'lime', 'amber', 'orange', 'rose', 'magenta', 'graphite']).default('blue'),
@@ -249,7 +268,16 @@ export const ProjectsSchema = z.object({ projects: z.array(ProjectSchema) })
 export const defaultProjects = () => ({ projects: [] as Project[] })
 
 export const StageConfigSchema = z.object({
-  key: z.enum(STAGE_KEYS), defaultAgent: z.string(), defaultModel: z.string()
+  // key 是任意字符串(自定义阶段);内置 key 仍作默认回退。name/prompt/行为开关可选,缺省走内置默认。
+  key: z.string(), defaultAgent: z.string(), defaultModel: z.string(),
+  name: z.string().optional(),                        // 自定义显示名(内置回退 STAGE_NAMES)
+  prompt: z.string().optional(),                      // 内置=追加段;自定义=完整正文
+  scope: z.enum(['root', 'per-project']).optional(),
+  gate: z.boolean().optional(),
+  review: z.lazy(() => ReviewConfigSchema).optional(),
+  summary: z.boolean().optional(),                    // per-project 后追加汇总代理
+  projectAgent: z.boolean().optional(),               // 用各项目自己的 provider/model
+  producesDoc: z.boolean().optional(),                // 强制写 markdown 方案文件
 })
 export const WorkflowSchema = z.object({
   id: z.string(), name: z.string(), stages: z.array(StageConfigSchema).min(1),
@@ -314,9 +342,16 @@ export type ReviewConfig = z.infer<typeof ReviewConfigSchema>
 // A resolved (post-wizard) enabled stage: provider/model chosen for this workspace.
 // The stage's display name is derived from STAGE_NAMES[key] (not stored, to avoid drift).
 export const WsStageSchema = z.object({
-  key: z.enum(STAGE_KEYS), provider: z.string(), model: z.string(),
+  // key 任意字符串(自定义阶段);内置 key 走默认回退。缺省字段回退内置默认 → 老 workspace.json 零迁移。
+  key: z.string(), provider: z.string(), model: z.string(),
   review: ReviewConfigSchema.optional(),
-  prompt: z.string().optional(),   // 工作区级追加段(append,非覆盖)
+  prompt: z.string().optional(),   // 内置=追加段(append,非覆盖);自定义=完整正文
+  name: z.string().optional(),                        // 自定义显示名(内置回退 STAGE_NAMES)
+  scope: z.enum(['root', 'per-project']).optional(),
+  gate: z.boolean().optional(),
+  summary: z.boolean().optional(),
+  projectAgent: z.boolean().optional(),
+  producesDoc: z.boolean().optional(),
 })
 export type WsStage = z.infer<typeof WsStageSchema>
 // A selected project enriched with its name (= develop worktree subdir) + per-project develop provider/model.

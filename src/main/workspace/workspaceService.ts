@@ -4,11 +4,27 @@ import { mirrorPath, expandTilde } from '../config/paths'
 import { ensureMirror, addWorktree, resolveBaseBranch, removeWorktree } from '../git/worktree'
 import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBranch } from '../config/store'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
-import { STAGE_NAMES, type StageKey, type Project, type Workspace } from '../config/schema'
+import { stageName, type Project, type Workspace } from '../config/schema'
 import type { StartRunOpts, StageSpec, DevelopProject } from '../orchestrator/orchestrator'
 import type { AgentProvider } from '../agents/types'
-import type { CreateWorkspaceOpts, SetupEvent } from '@shared/types'
+import type { CreateWorkspaceOpts, CreateWorkspaceStage, SetupEvent, WsStage } from '@shared/types'
 import { runStepHook } from './stepHooks'
+
+// Persist a create-time stage as a resolved WsStage, carrying its custom identity + behavior flags
+// (name/scope/gate/review/summary/projectAgent/producesDoc) so custom stages survive to workspace.json.
+function toWsStage(s: CreateWorkspaceStage): WsStage {
+  return {
+    key: s.key, provider: s.provider, model: s.model,
+    ...(s.prompt ? { prompt: s.prompt } : {}),
+    ...(s.name ? { name: s.name } : {}),
+    ...(s.scope ? { scope: s.scope } : {}),
+    ...(s.gate !== undefined ? { gate: s.gate } : {}),
+    ...(s.review ? { review: s.review } : {}),
+    ...(s.summary !== undefined ? { summary: s.summary } : {}),
+    ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
+    ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+  }
+}
 
 export interface CreateWorkspaceResult { workspace: Workspace; startRunOpts: StartRunOpts }
 
@@ -36,7 +52,7 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
     name: opts.name,
     path: opts.path,
     workflowId: opts.workflowId,
-    stages: opts.stages.map(s => ({ key: s.key as StageKey, provider: s.provider, model: s.model, ...(s.prompt ? { prompt: s.prompt } : {}) })),
+    stages: opts.stages.map(toWsStage),
     projects: opts.projects.map(sel => {
       // buildWorkspaceRecord runs BEFORE the provision loop's "未知项目" guard, so a selected project
       // that isn't in the known map (e.g. projects.json missing, or restoring a partial whose project
@@ -55,11 +71,16 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
 // paths so a run can be (re)built identically regardless of whether setup hooks ran.
 export function buildStartRunOpts(opts: CreateWorkspaceOpts, developProjects: DevelopProject[]): StartRunOpts {
   const stages: StageSpec[] = opts.stages.map(s => ({
-    key: s.key, name: STAGE_NAMES[s.key as StageKey] ?? s.key, provider: s.provider, model: s.model,
-    // Every stage pauses on a review gate (approve / 打回重做 / 终止) — the user reviews & can rework
-    // each step. #3's per-stage config will make this a toggle; for now it's on for all stages.
-    gate: true,
-    ...(s.prompt ? { prompt: s.prompt } : {})
+    key: s.key, name: stageName(s.key, s.name), provider: s.provider, model: s.model,
+    // Every stage pauses on a review gate by default (approve / 打回重做 / 终止); an explicit per-stage
+    // gate flag wins. Custom-stage behavior flags flow straight through to the orchestrator.
+    gate: s.gate ?? true,
+    review: s.review,
+    ...(s.prompt ? { prompt: s.prompt } : {}),
+    ...(s.scope ? { scope: s.scope } : {}),
+    ...(s.summary !== undefined ? { summary: s.summary } : {}),
+    ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
+    ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
   }))
   return {
     runId: `run-${opts.name}`,
@@ -165,7 +186,7 @@ export async function editWorkspace(args: {
     name: opts.name,
     path,
     workflowId: opts.workflowId,
-    stages: opts.stages.map(s => ({ key: s.key as StageKey, provider: s.provider, model: s.model, ...(s.prompt ? { prompt: s.prompt } : {}) })),
+    stages: opts.stages.map(toWsStage),
     projects: opts.projects.map(sel => {
       const proj = byId.get(sel.repoId)
       const name = proj?.name || existing.projects.find(p => p.repoId === sel.repoId)?.name || sel.repoId

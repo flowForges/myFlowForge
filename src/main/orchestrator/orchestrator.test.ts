@@ -154,7 +154,7 @@ describe('Orchestrator', () => {
     expect(develop.agents.every(a => a.name.length > 0)).toBe(true)
     // design now also fans out per project by default (so each agent loads that project's skills/rules)
     expect(run.stages.find(s => s.key === 'design')!.agents.map(a => a.name)).toEqual(['proj1', 'proj2', '主代理'])
-    expect(run.stages.find(s => s.key === 'design')!.agents.map(a => a.role)).toEqual(['技术方案设计', '技术方案设计', '技术方案设计 · 汇总设计'])
+    expect(run.stages.find(s => s.key === 'design')!.agents.map(a => a.role)).toEqual(['技术方案设计', '技术方案设计', '技术方案设计 · 汇总'])
     expect(events.some(e => e.type === 'pending:add')).toBe(true)
     expect(events.some(e => e.type === 'pending:resolve')).toBe(true)
   })
@@ -649,7 +649,9 @@ describe('Orchestrator handoff briefs', () => {
       workspaceName: 'ws',
       workspacePath: ws,
       stages: [
-        { key: 'design', name: '技术方案', provider: 'with-mcp', model: 'm' },
+        // producesDoc:false isolates the mcpTools/textFallback assertion from the design-doc directive
+        // (which itself mentions forge:handoff). This test is about textFallback, not the doc directive.
+        { key: 'design', name: '技术方案', provider: 'with-mcp', model: 'm', producesDoc: false },
         { key: 'develop', name: '代码开发', provider: 'no-mcp', model: 'm' },
       ],
       developProjects: []

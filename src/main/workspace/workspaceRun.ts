@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { STAGE_NAMES, type StageKey, type Workspace } from '../config/schema'
+import { stageName, type Workspace } from '../config/schema'
 import type { StartRunOpts } from '../orchestrator/orchestrator'
 
 // Pure reconstructor: rebuild a StartRunOpts from a persisted Workspace so a run can be
@@ -14,10 +14,15 @@ export function workspaceToStartRunOpts(ws: Workspace, task?: string): StartRunO
     plugins: ws.plugins ?? [],
     stepPlugins: ws.stepPlugins ?? [],
     stages: ws.stages.map(s => ({
-      key: s.key, name: STAGE_NAMES[s.key as StageKey] ?? s.key, provider: s.provider, model: s.model,
-      // Every stage pauses on a review gate (approve / 打回重做 / 终止). #3 will make this per-stage.
-      gate: true,
+      key: s.key, name: stageName(s.key, s.name), provider: s.provider, model: s.model,
+      // Every stage pauses on a review gate by default (approve / 打回重做 / 终止); an explicit
+      // per-stage gate flag wins. Custom-stage behavior flags flow straight through.
+      gate: s.gate ?? true,
       review: s.review, ...(s.prompt ? { prompt: s.prompt } : {}),
+      ...(s.scope ? { scope: s.scope } : {}),
+      ...(s.summary !== undefined ? { summary: s.summary } : {}),
+      ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
+      ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
     })),
     developProjects: ws.projects.map(p => {
       // Old/pre-SP-A workspace.json stored only {repoId,branch}; name parses as ''. The worktree

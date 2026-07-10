@@ -18,6 +18,15 @@ export function resolveStages(ws: Pick<Workspace, 'stages' | 'workflowId'>, work
   if (!wf) return []
   return withReviewDefaults(wf.stages.map(s => ({
     key: s.key, provider: s.defaultAgent, model: s.defaultModel,
-    ...(wf.stagePrompts?.[s.key] ? { prompt: wf.stagePrompts[s.key] } : {}),
+    // Carry a custom stage's identity + behavior flags from the template onto the resolved WsStage.
+    ...(s.name ? { name: s.name } : {}),
+    ...(s.scope ? { scope: s.scope } : {}),
+    ...(s.gate !== undefined ? { gate: s.gate } : {}),
+    ...(s.review ? { review: s.review } : {}),
+    ...(s.summary !== undefined ? { summary: s.summary } : {}),
+    ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
+    ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+    // prompt: the template's per-stage append (stagePrompts) OR the stage's own prompt (custom body).
+    ...((s.prompt ?? wf.stagePrompts?.[s.key]) ? { prompt: s.prompt ?? wf.stagePrompts[s.key] } : {}),
   })))
 }

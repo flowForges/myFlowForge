@@ -97,12 +97,13 @@ describe('WorkspaceSchema (SP-A: resolved config)', () => {
     expect(ws.projects[0]).toEqual({ repoId: 'p', name: '', branch: 'main', provider: '', model: '' })
   })
 
-  it('rejects an unknown stage key', () => {
-    expect(() => WorkspaceSchema.parse({
+  it('accepts a custom (non-builtin) stage key — stage vocabulary is open (#3)', () => {
+    const ws = WorkspaceSchema.parse({
       name: 'x', path: '/tmp/x', workflowId: 'standard',
-      stages: [{ key: 'bogus', provider: 'claude', model: 'm' }],
+      stages: [{ key: 'security-audit', name: '安全审计', provider: 'claude', model: 'm', gate: true, scope: 'per-project' }],
       projects: [], status: 'idle'
-    })).toThrow()
+    })
+    expect(ws.stages[0]).toMatchObject({ key: 'security-audit', name: '安全审计', gate: true, scope: 'per-project' })
   })
 })
 

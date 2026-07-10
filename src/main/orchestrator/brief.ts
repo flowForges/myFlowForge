@@ -1,4 +1,4 @@
-import { STAGE_PROMPTS, type ReviewLens, type StageKey } from '../config/schema'
+import { stageBasePrompt, type ReviewLens } from '../config/schema'
 import type { Plugin } from '../../shared/plugin'
 import { skillDirective } from '../agents/pluginTools'
 
@@ -38,8 +38,8 @@ const LENS_DIRECTIVE: Record<ReviewLens, string> = {
  * implementing. This directive overrides the skill: the workflow is already approved and running,
  * so the stage agent must execute its real work NOW.
  */
-function executeNowDirective(stageName: string): string {
-  const designDirective = stageName.includes('技术方案设计')
+function executeNowDirective(stageName: string, producesDoc: boolean): string {
+  const designDirective = producesDoc
     ? [
       '- 你【必须】把完整技术方案写成一个 Markdown 文件落到磁盘，不能只在回复里给方案：',
       '  · 路径不写死——若仓库已有文档/规范目录（如 docs/、doc/、spec/、specs/、.spec 等）就写进该目录，否则直接放工作区/项目根目录；文件名形如 `技术方案-<项目名>.md`；',
@@ -61,7 +61,7 @@ function executeNowDirective(stageName: string): string {
 export function buildStagePrompt(
   stageName: string,
   briefs: HandoffBrief[],
-  opts: { textFallback: boolean; task?: string; lens?: ReviewLens; stageKey?: StageKey; stageAppend?: string; reworkNote?: string },
+  opts: { textFallback: boolean; task?: string; lens?: ReviewLens; stageKey?: string; stageAppend?: string; reworkNote?: string; producesDoc?: boolean },
 ): string {
   let result = opts.task ? `任务: ${opts.task}\n\n当前阶段: ${stageName}` : stageName
 
@@ -73,12 +73,15 @@ export function buildStagePrompt(
       '不要简单复述上一版:\n' + rework
   }
 
-  // 内置默认正文恒在(用户改不了);追加段(若有)拼在其后,以从属语气框定,绝不替换默认。
-  const body = opts.stageKey ? STAGE_PROMPTS[opts.stageKey] : ''
-  if (body) result += '\n' + body
+  // 内置阶段有恒定基座正文(用户改不了),此时 stageAppend 是追加段;自定义阶段无基座,stageAppend 即完整正文。
+  const base = opts.stageKey ? stageBasePrompt(opts.stageKey) : undefined
   const append = (opts.stageAppend ?? '').trim()
-  if (append) {
-    result += '\n\n【附加要求】以下是用户对本阶段的额外要求,在不违反上述执行纪律的前提下一并满足:\n' + append
+  if (base) {
+    result += '\n' + base
+    if (append) result += '\n\n【附加要求】以下是用户对本阶段的额外要求,在不违反上述执行纪律的前提下一并满足:\n' + append
+  } else if (append) {
+    // 自定义阶段:用户写的 prompt 就是本阶段的完整正文。
+    result += '\n\n' + append
   }
 
   if (opts.lens) result += '\n\n' + LENS_DIRECTIVE[opts.lens]
@@ -98,7 +101,7 @@ export function buildStagePrompt(
     result += '\n\n如需向编排器交接成果，请在输出中包含如下围栏块（把 ... 替换为真实值，summary 为一句话成果摘要、artifacts 为产物相对路径）：\n```forge:handoff\n{ "summary": ..., "artifacts": [ { "path": ..., "kind": "md" } ] }\n```'
   }
 
-  return executeNowDirective(stageName) + '\n\n' + INTERACTION_DIRECTIVE + '\n\n' + result
+  return executeNowDirective(stageName, opts.producesDoc ?? false) + '\n\n' + INTERACTION_DIRECTIVE + '\n\n' + result
 }
 
 /**

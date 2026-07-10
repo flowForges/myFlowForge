@@ -50,7 +50,10 @@ export type StageScope = 'root' | 'per-project'
 // analyze all 5 projects but develop only 2. Absent/empty = every project. Ignored for root stages.
 // gate: override the default review-gate behavior for this stage (see stageGated). reworkNote:
 // set by the rework loop when the user 打回重做 — carries their revision direction into the re-run.
-export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[]; gate?: boolean; reworkNote?: string }
+// summary: after per-project runs, append a 汇总 agent (design's cross-project consolidation). projectAgent:
+// use each project's own provider/model (develop). producesDoc: force a markdown deliverable (design). All
+// default (per built-in key) via the config helpers; custom stages set them explicitly.
+export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[]; gate?: boolean; reworkNote?: string; summary?: boolean; projectAgent?: boolean; producesDoc?: boolean }
 
 // Where a stage's agent(s) are spawned:
 //  - 'root'        → one agent in the workspace root
@@ -381,7 +384,7 @@ export class Orchestrator {
     try {
       // this.briefs is read at task start; parallel develop-stage agents all get the same
       // pre-stage snapshot (briefs pushed mid-stage by a sibling don't retroactively appear — by design)
-      const prompt = buildStagePrompt(spec.name, this.briefs, { textFallback: !provider.capabilities.mcpTools, task: this.task, lens, stageKey: spec.key as StageKey, stageAppend: spec.prompt, reworkNote: spec.reworkNote })
+      const prompt = buildStagePrompt(spec.name, this.briefs, { textFallback: !provider.capabilities.mcpTools, task: this.task, lens, stageKey: spec.key, stageAppend: spec.prompt, reworkNote: spec.reworkNote, producesDoc: spec.producesDoc ?? spec.key === 'design' })
       const session = provider.run(
         { stageKey: stage.key, agentId: agent.id, name: agent.name, prompt, cwd, model: spec.model },
         this.callbacksFor(stage, agent, store), env
@@ -595,7 +598,9 @@ export class Orchestrator {
           }
 
           const tasks: { agent: AgentRuntime; cwd: string; provider: AgentProvider | undefined; model: string; lens?: ReviewLens }[] = []
-          if (spec.key === 'review' && spec.review) {
+          // Any stage carrying a review config fans out parallel reviewers (built-in 'review' gets one by
+          // default via resolveStages; custom stages opt in explicitly).
+          if (spec.review) {
             const reviewers: ReviewerTask[] = buildReviewTasks(
               spec.review,
               opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })),
@@ -613,11 +618,12 @@ export class Orchestrator {
             // no-op stage). Lets e.g. 需求分析 cover all 5 projects while 开发 touches only 2.
             const scoped = spec.projects?.length ? opts.developProjects.filter(p => spec.projects!.includes(p.name)) : opts.developProjects
             const stageProjs = scoped.length ? scoped : opts.developProjects
+            // projectAgent: run with each project's own provider/model (develop's default); other
+            // per-project stages (e.g. design) keep the stage's provider/model but run in the project cwd.
+            const projectAgent = spec.projectAgent ?? spec.key === 'develop'
             for (const proj of stageProjs) {
-              // develop runs with each project's chosen provider/model; other per-project
-              // stages (e.g. design) keep the stage's provider/model but run in the project cwd.
-              const provId = spec.key === 'develop' ? (proj.provider ?? spec.provider) : spec.provider
-              const mdl = spec.key === 'develop' ? (proj.model ?? spec.model) : spec.model
+              const provId = projectAgent ? (proj.provider ?? spec.provider) : spec.provider
+              const mdl = projectAgent ? (proj.model ?? spec.model) : spec.model
               // name = the project (prominent card title), role = the stage (subtitle) — so the UI
               // clearly shows which project each agent works on and at which stage. proj.name is now
               // non-empty (workspaceToStartRunOpts falls back to repoId), so no "在  中X" label.
@@ -650,13 +656,15 @@ export class Orchestrator {
             return this.runTask(taskProvider!, stage, { ...spec, model: taskModel }, agent, cwd, store, agentEnv, lens)
           }))
 
+          // summary: after the per-project agents finish, append one 汇总 agent that consolidates their
+          // outputs (design's default). Custom stages opt in via spec.summary.
           if (
-            spec.key === 'design' &&
+            (spec.summary ?? spec.key === 'design') &&
             stageScope(spec) === 'per-project' &&
             opts.developProjects.length > 0 &&
             stage.agents.every(a => a.state === 'ok')
           ) {
-            const summary = this.mkAgentRuntime('design:summary', '主代理', `${spec.name} · 汇总设计`, spec.provider, spec.model)
+            const summary = this.mkAgentRuntime(`${spec.key}:summary`, '主代理', `${spec.name} · 汇总`, spec.provider, spec.model)
             stage.agents.push(summary)
             const summaryEnv: NodeJS.ProcessEnv = this.bridge
               ? { ...baseEnv, FORGE_AGENT_ID: summary.id }

@@ -88,7 +88,17 @@ export interface ReviewConfig {
   reviewers?: number | ReviewLens[]
 }
 export interface CreateWorkspaceProject { repoId: string; branch: string; provider?: string; model?: string }
-export interface CreateWorkspaceStage { key: string; provider: string; model: string; review?: ReviewConfig; prompt?: string }
+// Custom-stage fields (#3) — mirror WsStageSchema. name/prompt/behavior flags default (per built-in
+// key) when absent, so a plain built-in stage needs none of them.
+export interface StageCustomFields {
+  name?: string
+  scope?: 'root' | 'per-project'
+  gate?: boolean
+  summary?: boolean
+  projectAgent?: boolean
+  producesDoc?: boolean
+}
+export interface CreateWorkspaceStage extends StageCustomFields { key: string; provider: string; model: string; review?: ReviewConfig; prompt?: string }
 export interface CreateWorkspaceOpts {
   name: string
   path: string                       // the workspace folder
@@ -211,7 +221,7 @@ export interface WorkspaceMeta { name: string; path: string; projectCount: numbe
 
 // Full persisted workspace config (mirrors src/main/config/schema.ts WorkspaceSchema). Renderer-facing
 // contract for editing (SP-B); the main schema's zod-inferred type is structurally assignable to this.
-export interface WsStage { key: string; provider: string; model: string; review?: ReviewConfig; prompt?: string }
+export interface WsStage extends StageCustomFields { key: string; provider: string; model: string; review?: ReviewConfig; prompt?: string }
 export interface WsProject { repoId: string; name: string; branch: string; provider: string; model: string }
 export interface Workspace {
   name: string
