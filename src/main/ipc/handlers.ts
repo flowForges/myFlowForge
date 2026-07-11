@@ -460,6 +460,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   // The forge:run fence routes through proposeRun too (approach = the fence task text).
   const onRunTrigger = (wsPath: string, task: string) => { void proposeRun(wsPath, task, task) }
+  // Task 12: the approval card's workflow-switch dropdown re-proposes the SAME task/approach under a
+  // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
+  // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
+  ipcMain.handle(CH.chatReproposeWorkflow, (_e, a: { workspacePath: string; approach: string; task?: string; workflowId?: string }) => {
+    void proposeRun(a.workspacePath, a.approach, a.task, a.workflowId ? { workflowId: a.workflowId } : undefined)
+  })
   const runTurn = async (payload: ChatSendPayload) => {
     // Deterministic conversational resume: if the user asks to continue and a cancelled/failed run
     // exists, resume via the engine directly — bypassing the LLM propose path (which blocks on
