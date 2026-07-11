@@ -111,7 +111,7 @@ const api = {
   petResizeBegin: (): Promise<void> => ipcRenderer.invoke(CH.petResizeBegin),
   petGetBounds: () => ipcRenderer.invoke(CH.petGetBounds),
   petSetIgnoreMouse: (ignore: boolean) => ipcRenderer.invoke(CH.petSetIgnoreMouse, ignore),
-  pickPetPack: (petId: string): Promise<Record<string, string>> => ipcRenderer.invoke(CH.petPickPack, petId),
+  pickPetPack: (petId: string): Promise<{ name: string; images: Record<string, string> } | null> => ipcRenderer.invoke(CH.petPickPack, petId),
   pickPetImage: (petId: string, state?: string): Promise<{ path?: string; error?: string } | null> => ipcRenderer.invoke(CH.petPickImage, petId, state),
   pickBgImage: (): Promise<{ url?: string; error?: string } | null> => ipcRenderer.invoke(CH.appearancePickBgImage),
   // Downloadable fonts. A DownloadedFont carries { id, family, css } — css is the rewritten @font-face
