@@ -120,7 +120,7 @@ export function useChat(
       }
       else if (e.type === 'confirm-request') setConfirms(c => [...c, { id: e.id, title: e.title, where: e.where, ts: new Date().toISOString() }])
       else if (e.type === 'confirm-resolved') setConfirms(c => c.filter(x => x.id !== e.id))
-      else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, task: e.task, ts: new Date().toISOString() }])
+      else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, ts: new Date().toISOString() }])
       else if (e.type === 'plan-resolved') setPlans(p => p.filter(x => x.id !== e.id))
       else if (e.type === 'mode-changed') onModeChangedRef.current?.(e.mode, e.runId)
     })

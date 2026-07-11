@@ -77,4 +77,32 @@ describe('PlanCard', () => {
     expect(heading).toBeTruthy()
     expect(heading?.textContent).toBe('目标')
   })
+
+  it('shows the detected workflow name, falling back to 临时/自定义流程 when ad-hoc', () => {
+    const { rerender } = render(<PlanCard req={base} onResolve={() => {}} />)
+    expect(screen.getByText('本次识别为【临时/自定义流程】')).toBeInTheDocument()
+    const named: PlanReq = { ...base, workflowId: 'full', workflowName: '完整流程' }
+    rerender(<PlanCard req={named} onResolve={() => {}} />)
+    expect(screen.getByText('本次识别为【完整流程】')).toBeInTheDocument()
+  })
+
+  it('switch dropdown lists workflowOptions + ad-hoc, and calls onSwitchWorkflow with the picked id (undefined for ad-hoc)', () => {
+    const onSwitchWorkflow = vi.fn()
+    const req: PlanReq = {
+      ...base,
+      workflowId: 'full',
+      workflowName: '完整流程',
+      workflowOptions: [{ id: 'quick', name: '快速修复' }, { id: 'full', name: '完整流程' }],
+    }
+    const { container } = render(<PlanCard req={req} onResolve={() => {}} onSwitchWorkflow={onSwitchWorkflow} />)
+    const select = container.querySelector('.plan-workflow-switch') as HTMLSelectElement
+    expect(select).toBeTruthy()
+    expect(select.value).toBe('full')
+    const optionLabels = Array.from(select.options).map(o => o.textContent)
+    expect(optionLabels).toEqual(['临时/自定义(ad-hoc)', '快速修复', '完整流程'])
+    fireEvent.change(select, { target: { value: 'quick' } })
+    expect(onSwitchWorkflow).toHaveBeenCalledWith('quick')
+    fireEvent.change(select, { target: { value: '' } })
+    expect(onSwitchWorkflow).toHaveBeenCalledWith(undefined)
+  })
 })
