@@ -105,23 +105,31 @@ async function handleImportPetPack(pet: Pet, onChange: (partial: Partial<Pet>) =
   // The id must exist BEFORE picking so the main process can write the pack's images into this pet's
   // folder and return { state: relPath } (no inline data URLs).
   const id = genPetId()
-  let imgs: Record<string, string>
+  let r: { name: string; images: Record<string, string> } | null
   try {
-    imgs = await window.forge.pickPetPack(id)
+    r = await window.forge.pickPetPack(id)
   } catch (err) {
     console.error('[PetPane] pickPetPack failed', err)
     return
   }
-  if (!Object.keys(imgs).length) return
-  const next = addCustomPet(list, { id, name: `宠物包 ${list.length + 1}`, images: imgs })
+  if (!r || !r.images || !Object.keys(r.images).length) return
+  // Name the pet after the folder when it has a usable name; else a generic sequential label.
+  const name = r.name?.trim() || `宠物包 ${list.length + 1}`
+  const next = addCustomPet(list, { id, name, images: r.images })
   onChange({ skin: 'custom', customPets: next, activeCustomPetId: id })
 }
 
 export function PetPane({ pet, onChange }: PetPaneProps) {
   const [importCfg, setImportCfg] = useState<ImportConfig | null>(null)
-  // Which state row is currently playing its animated gif (click a preview thumbnail to preview motion —
-  // the rows show the static png by default; see builtinPetImagePath).
+  // Which state row is currently playing its animation (click a preview thumbnail to enlarge). The
+  // preview shows the state's actual image (animated formats play on their own) so you can verify a
+  // pet's look here without running the app to that state.
   const [previewState, setPreviewState] = useState<PetState | null>(null)
+  // States whose image failed to load — surface a "换一只?" guide instead of a silently broken preview.
+  const [brokenPreview, setBrokenPreview] = useState<Set<PetState>>(new Set())
+  // Inline rename of a user (non-builtin) pet: which chip is being renamed + its draft name.
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameVal, setRenameVal] = useState('')
 
   const openPetImport = () => setImportCfg({
     mark: 'pet', title: '自定义桌面宠物', goLabel: '应用形象',
@@ -192,11 +200,19 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
   const atMax = customList.length >= PET_CUSTOM_MAX
   // Picking a pet chip also switches skin to 'custom' — in the unified gallery a pet and an SVG skin are
   // alternatives, so choosing a pet must take over from any active sprite/bot/ghost skin.
-  const selectPet = (id: string) => onChange({ skin: 'custom', activeCustomPetId: id })
+  const selectPet = (id: string) => { setBrokenPreview(new Set()); setPreviewState(null); onChange({ skin: 'custom', activeCustomPetId: id }) }
   const removePet = (id: string) => {
     const next = removeCustomPet(customList, id)
     const active = pet.activeCustomPetId === id ? next[0]?.id : pet.activeCustomPetId
     onChange({ customPets: next, activeCustomPetId: active })
+  }
+  const startRename = (p: CustomPet) => { setRenamingId(p.id); setRenameVal(p.name) }
+  const commitRename = () => {
+    if (renamingId) {
+      const name = renameVal.trim()
+      if (name) onChange({ customPets: customList.map(p => (p.id === renamingId ? { ...p, name } : p)) })
+    }
+    setRenamingId(null)
   }
 
   // The 5 bundled pets are seeded into customPets with `builtin-` ids. Split them out into their own
@@ -254,7 +270,34 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
         {thumb
           ? <img src={petSrc(thumb)} alt="" style={{ width: '24px', height: '24px', objectFit: 'contain', borderRadius: '4px' }} />
           : <span style={{ fontSize: '20px', color: p.color || undefined }} role="img" aria-label={p.name}>{p.emoji || '🐾'}</span>}
-        <span style={{ fontSize: '12px', maxWidth: '96px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+        {renamingId === p.id ? (
+          <input
+            className="pet-chip-rename"
+            aria-label={`重命名 ${p.name}`}
+            autoFocus
+            value={renameVal}
+            onClick={e => e.stopPropagation()}
+            onChange={e => setRenameVal(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => {
+              e.stopPropagation()
+              if (e.key === 'Enter') { e.preventDefault(); commitRename() }
+              else if (e.key === 'Escape') { e.preventDefault(); setRenamingId(null) }
+            }}
+            style={{ fontSize: '12px', width: '96px', padding: '2px 6px', borderRadius: '6px', border: '1px solid var(--accent)', background: 'var(--bg)', color: 'var(--fg)', outline: 'none' }}
+          />
+        ) : (
+          <span style={{ fontSize: '12px', maxWidth: '96px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
+        )}
+        {!builtin && renamingId !== p.id && (
+          <button
+            className="pet-chip-rename-btn"
+            aria-label={`重命名 ${p.name}`}
+            title="重命名"
+            onClick={e => { e.stopPropagation(); startRename(p) }}
+            style={{ marginLeft: 'auto', border: 'none', background: 'transparent', color: 'var(--faint)', cursor: 'pointer', fontSize: '12px', lineHeight: 1 }}
+          >✎</button>
+        )}
         {!builtin && (
           <button
             className="pet-chip-x"
@@ -357,7 +400,9 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
                       <div className="t" style={{ fontSize: '11px' }}>{CUSTOM_STATE_LABEL[s]}</div>
                     </div>
                     {src
-                      ? (() => {
+                      ? brokenPreview.has(s)
+                        ? <span style={{ fontSize: '11px', color: 'var(--warn)' }}>图未加载 · 换一只宠物?</span>
+                        : (() => {
                           const playing = previewState === s
                           return (
                             <img
@@ -368,6 +413,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
                               tabIndex={0}
                               title={playing ? '点击收起' : '点击放大预览'}
                               onClick={() => setPreviewState(playing ? null : s)}
+                              onError={() => setBrokenPreview(prev => new Set(prev).add(s))}
                               onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setPreviewState(playing ? null : s) } }}
                               style={{
                                 width: playing ? '72px' : '28px', height: playing ? '72px' : '28px',

@@ -19,7 +19,7 @@ beforeEach(() => {
   // Images are now persisted to disk by the main process; the pickers return stored RELATIVE PATHS.
   ;(window as any).forge = {
     ...(window as any).forge,
-    pickPetPack: vi.fn().mockResolvedValue({ idle: 'pk/idle.png' }),
+    pickPetPack: vi.fn().mockResolvedValue({ name: 'kitty', images: { idle: 'pk/idle.png' } }),
     pickPetImage: vi.fn().mockResolvedValue({ path: 'up/idle.png' })
   }
 })
@@ -48,6 +48,21 @@ describe('PetPane custom skin', () => {
     expect(onChange).toHaveBeenCalledWith({ skin: 'custom', activeCustomPetId: 'a' })
   })
 
+  it('renames a user custom pet inline (click ✎, edit, Enter)', () => {
+    const onChange = vi.fn()
+    const pet: Pet = {
+      ...BASE_PET, skin: 'custom',
+      customPets: [{ id: 'a', name: '豆豆', emoji: '🐱' }],
+      activeCustomPetId: 'a',
+    }
+    render(<PetPane pet={pet} onChange={onChange} />)
+    fireEvent.click(screen.getByLabelText('重命名 豆豆'))
+    const input = screen.getByLabelText('重命名 豆豆') as HTMLInputElement // input reuses the aria-label
+    fireEvent.change(input, { target: { value: '旺财' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith({ customPets: [{ id: 'a', name: '旺财', emoji: '🐱' }] })
+  })
+
   it('clicking 添加宠物包 calls pickPetPack and appends a customPets entry (skin:custom + active id)', async () => {
     const onChange = vi.fn()
     const customPet: Pet = { ...BASE_PET, skin: 'custom' }
@@ -64,11 +79,12 @@ describe('PetPane custom skin', () => {
     expect(arg.skin).toBe('custom')
     expect(arg.customPets).toHaveLength(1)
     expect(arg.customPets[0].images).toMatchObject({ idle: 'pk/idle.png' })
+    expect(arg.customPets[0].name).toBe('kitty')  // named after the picked folder
     expect(arg.activeCustomPetId).toBe(arg.customPets[0].id)
   })
 
   it('does not call onChange when pickPetPack returns empty object', async () => {
-    ;(window as any).forge.pickPetPack = vi.fn().mockResolvedValue({})
+    ;(window as any).forge.pickPetPack = vi.fn().mockResolvedValue({ name: '', images: {} })
     const onChange = vi.fn()
     const customPet: Pet = { ...BASE_PET, skin: 'custom' }
     render(<PetPane pet={customPet} onChange={onChange} />)

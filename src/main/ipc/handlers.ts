@@ -689,16 +689,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   ipcMain.handle(CH.petPickPack, async (_e, petId: string) => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return {}
-    // Persist each state image to disk under the pet's folder; return { state: relPath } (no data URLs).
-    const packed = readPetPack(r.filePaths[0])
-    const out: Record<string, string> = {}
+    if (r.canceled || !r.filePaths[0]) return null
+    // Persist each state image to disk under the pet's folder; return { images: { state: relPath } }
+    // (no data URLs) plus the folder name so the pet gets a sensible default name (authoring nicety —
+    // drop a folder of state-named images and it's ready). Only idle is required; missing states fall
+    // back to idle at render time.
+    const dir = r.filePaths[0]
+    const packed = readPetPack(dir)
+    const images: Record<string, string> = {}
     for (const [state, dataUrl] of Object.entries(packed)) {
       if (!dataUrl) continue
       const rel = writePetImageFromDataUrl(petId, state, dataUrl)
-      if (rel) out[state] = rel
+      if (rel) images[state] = rel
     }
-    return out
+    return { name: basename(dir), images }
   })
 
   ipcMain.handle(CH.petPickImage, async (_e, petId: string, state: string = 'idle') => {
