@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, type WizardState, type WizardStage } from './wizardModel'
+import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, emptyWorkflow, type WizardState, type WizardStage } from './wizardModel'
 import type { Workspace } from '@shared/types'
 
 describe('wizard model', () => {
@@ -7,15 +7,23 @@ describe('wizard model', () => {
     expect(deriveWsName('~/code/design-system-v3', false, '')).toBe('design-system-v3')
     expect(deriveWsName('~/code/design-system-v3', true, 'My Name')).toBe('My Name')
   })
-  it('builds CreateWorkspaceOpts from enabled stages + selected projects', () => {
+
+  it('buildCreateOpts 产出多条 workflows,各带有序 enabled 阶段', () => {
     const state: WizardState = {
       path: '~/code/ws-a', name: '', nameEdited: false,
-      workflowId: 'standard',
-      stages: {
-        design: { on: true, provider: 'claude', model: 'opus-4.8' },
-        develop: { on: true, provider: 'claude', model: 'sonnet-4.6' },
-        test: { on: false, provider: 'claude', model: 'haiku-4.5' }
-      },
+      workflows: [
+        emptyWorkflow('light', 'Light', {
+          requirement: { on: true, provider: 'claude', model: 'opus-4.8' },
+          design: { on: true, provider: 'claude', model: 'opus-4.8' },
+          develop: { on: false, provider: 'claude', model: 'opus-4.8' },
+        }, ['requirement', 'design', 'develop']),
+        emptyWorkflow('full', 'Full', {
+          requirement: { on: true, provider: 'claude', model: 'opus-4.8' },
+          design: { on: true, provider: 'claude', model: 'opus-4.8' },
+          develop: { on: true, provider: 'claude', model: 'opus-4.8' },
+        }, ['requirement', 'design', 'develop']),
+      ],
+      activeWorkflowId: 'light',
       projects: [
         { repoId: 'proj1', name: 'proj1', sel: true, branch: 'forge/ws-a', model: 'sonnet-4.6' },
         { repoId: 'proj2', name: 'proj2', sel: false, branch: 'forge/ws-a', model: 'sonnet-4.6' }
@@ -24,10 +32,11 @@ describe('wizard model', () => {
       stepPlugins: []
     }
     const opts = buildCreateOpts(state)
-    expect(opts.name).toBe('ws-a')                      // derived from path
-    expect(opts.stages.map(s => s.key)).toEqual(['design', 'develop'])  // only enabled, order preserved
-    expect(opts.projects.map(p => p.repoId)).toEqual(['proj1'])         // only selected
-    expect(opts.workflowId).toBe('standard')
+    expect(opts.name).toBe('ws-a')                                          // derived from path
+    expect(opts.workflows.map(w => w.id)).toEqual(['light', 'full'])
+    expect(opts.workflows[0].stages.map(s => s.key)).toEqual(['requirement', 'design'])           // only enabled, order preserved
+    expect(opts.workflows[1].stages.map(s => s.key)).toEqual(['requirement', 'design', 'develop'])
+    expect(opts.projects.map(p => p.repoId)).toEqual(['proj1'])             // only selected
   })
 })
 
@@ -53,10 +62,20 @@ const knownProjects = [
   { id: 'p2', name: 'lib', repoUrl: 'git@x:lib.git', defaultBranch: 'main' },
 ]
 const ws: Workspace = {
-  name: '设计迁移', path: '/abs/ws-a', workflowId: 'standard',
-  stages: [
-    { key: 'design', provider: 'claude', model: 'opus-4.8' },
-    { key: 'develop', provider: 'codex', model: 'gpt-5-codex' },
+  name: '设计迁移', path: '/abs/ws-a',
+  workflowId: 'standard', stages: [],   // legacy migration seed — buildEditState no longer reads these
+  workflows: [
+    {
+      id: 'wf1', name: '标准', stages: [
+        { key: 'design', provider: 'claude', model: 'opus-4.8' },
+        { key: 'develop', provider: 'codex', model: 'gpt-5-codex' },
+      ]
+    },
+    {
+      id: 'wf2', name: '轻量', stages: [
+        { key: 'design', provider: 'claude', model: 'opus-4.8' },
+      ]
+    },
   ],
   projects: [{ repoId: 'p1', name: 'app', branch: 'feat/x', provider: 'codex', model: 'gpt-5-codex' }],
   status: 'ok',
@@ -65,15 +84,33 @@ const ws: Workspace = {
 }
 
 describe('buildEditState', () => {
-  it('lights up persisted stages with their provider/model, others off', () => {
+  it('buildEditState 从 ws.workflows round-trip 回来', () => {
     const st = buildEditState(ws, knownProjects, baseStages(), 'claude::opus-4.8')
-    expect(st.stages.design).toEqual({ on: true, provider: 'claude', model: 'opus-4.8' })
-    expect(st.stages.develop).toEqual({ on: true, provider: 'codex', model: 'gpt-5-codex' })
-    expect(st.stages.requirement.on).toBe(false)
+    expect(st.workflows).toHaveLength(2)
+    expect(st.workflows.map(w => w.id)).toEqual(['wf1', 'wf2'])
+    expect(st.activeWorkflowId).toBe(st.workflows[0].id)
+  })
+
+  it('lights up persisted stages per workflow with their provider/model, others off', () => {
+    const st = buildEditState(ws, knownProjects, baseStages(), 'claude::opus-4.8')
+    const wf1 = st.workflows.find(w => w.id === 'wf1')!
+    expect(wf1.stages.design).toEqual({ on: true, provider: 'claude', model: 'opus-4.8' })
+    expect(wf1.stages.develop).toEqual({ on: true, provider: 'codex', model: 'gpt-5-codex' })
+    expect(wf1.stages.requirement.on).toBe(false)
+    const wf2 = st.workflows.find(w => w.id === 'wf2')!
+    expect(wf2.stages.design.on).toBe(true)
+    expect(wf2.stages.develop.on).toBe(false)
     expect(st.name).toBe('设计迁移')
     expect(st.path).toBe('/abs/ws-a')
     expect(st.nameEdited).toBe(true)
-    expect(st.workflowId).toBe('__custom')
+  })
+
+  it('stageOrder = that workflow\'s own stage order ∪ all base stage keys', () => {
+    const st = buildEditState(ws, knownProjects, baseStages(), 'claude::opus-4.8')
+    const wf1 = st.workflows.find(w => w.id === 'wf1')!
+    expect(wf1.stageOrder).toEqual(['design', 'develop', 'requirement', 'test', 'review'])
+    const wf2 = st.workflows.find(w => w.id === 'wf2')!
+    expect(wf2.stageOrder).toEqual(['design', 'requirement', 'develop', 'test', 'review'])
   })
 
   it('marks included projects sel+existing (branch/model backfilled), others selectable', () => {
@@ -93,15 +130,19 @@ describe('buildEditState', () => {
     expect(g).toMatchObject({ sel: true, existing: true, name: 'gone' })
   })
 
-  it('round-trips through buildCreateOpts back to the persisted config', () => {
+  it('round-trips through buildCreateOpts back to the persisted per-workflow config', () => {
     const st = buildEditState(ws, knownProjects, baseStages(), 'claude::opus-4.8')
     // mirror the component's doCreate: unpack each selected project's packed model before building opts
     const committed = { ...st, projects: st.projects.map(p => { const { provider, model } = unpackModel(p.model); return { ...p, provider, model } }) }
-    const opts = buildCreateOpts(committed, ['requirement', 'design', 'develop', 'test', 'review'])
+    const opts = buildCreateOpts(committed)
     expect(opts.name).toBe('设计迁移')
-    expect(opts.stages).toEqual([
+    expect(opts.workflows.map(w => w.id)).toEqual(['wf1', 'wf2'])
+    expect(opts.workflows.find(w => w.id === 'wf1')?.stages).toEqual([
       { key: 'design', provider: 'claude', model: 'opus-4.8' },
       { key: 'develop', provider: 'codex', model: 'gpt-5-codex' },
+    ])
+    expect(opts.workflows.find(w => w.id === 'wf2')?.stages).toEqual([
+      { key: 'design', provider: 'claude', model: 'opus-4.8' },
     ])
     expect(opts.projects).toEqual([
       { repoId: 'p1', branch: 'feat/x', provider: 'codex', model: 'gpt-5-codex' },
@@ -109,36 +150,47 @@ describe('buildEditState', () => {
   })
 
   it('buildCreateOpts 写入非空追加段、忽略空段', () => {
-    const state: any = { path: '/w', name: 'w', nameEdited: true, workflowId: '__custom',
-      stages: { design: { on: true, provider: 'claude', model: 'opus-4.8', prompt: '画时序图' },
-                develop: { on: true, provider: 'claude', model: 'opus-4.8', prompt: '  ' } },
-      projects: [], plugins: [], stepPlugins: [] }
-    const opts = buildCreateOpts(state, ['design', 'develop'])
-    expect(opts.stages.find(s => s.key === 'design')?.prompt).toBe('画时序图')
-    expect(opts.stages.find(s => s.key === 'develop')?.prompt).toBeUndefined()
+    const state: WizardState = {
+      path: '/w', name: 'w', nameEdited: true,
+      workflows: [emptyWorkflow('__custom', '__custom', {
+        design: { on: true, provider: 'claude', model: 'opus-4.8', prompt: '画时序图' },
+        develop: { on: true, provider: 'claude', model: 'opus-4.8', prompt: '  ' },
+      }, ['design', 'develop'])],
+      activeWorkflowId: '__custom',
+      projects: [], plugins: [], stepPlugins: []
+    }
+    const opts = buildCreateOpts(state)
+    const stages = opts.workflows[0].stages
+    expect(stages.find(s => s.key === 'design')?.prompt).toBe('画时序图')
+    expect(stages.find(s => s.key === 'develop')?.prompt).toBeUndefined()
   })
 
   it('carries a custom (#3) stage + its behavior flags through buildCreateOpts, in template order', () => {
-    const state: any = { path: '/w', name: 'w', nameEdited: true, workflowId: 'standard',
-      stages: {
+    const state: WizardState = {
+      path: '/w', name: 'w', nameEdited: true,
+      workflows: [emptyWorkflow('standard', 'standard', {
         design: { on: true, provider: 'claude', model: 'opus-4.8' },
         'security-audit': { on: true, custom: true, name: '安全审计', provider: 'claude', model: 'm', prompt: '核对 OWASP', scope: 'per-project', gate: true, summary: true },
         develop: { on: true, provider: 'claude', model: 'opus-4.8' },
-      },
-      projects: [], plugins: [], stepPlugins: [] }
-    // template order places the custom stage between design and develop
-    const opts = buildCreateOpts(state, ['design', 'security-audit', 'develop'])
-    expect(opts.stages.map(s => s.key)).toEqual(['design', 'security-audit', 'develop'])
-    const audit = opts.stages.find(s => s.key === 'security-audit')!
+      }, ['design', 'security-audit', 'develop'])],   // template order places the custom stage between design and develop
+      activeWorkflowId: 'standard',
+      projects: [], plugins: [], stepPlugins: []
+    }
+    const opts = buildCreateOpts(state)
+    const stages = opts.workflows[0].stages
+    expect(stages.map(s => s.key)).toEqual(['design', 'security-audit', 'develop'])
+    const audit = stages.find(s => s.key === 'security-audit')!
     expect(audit).toMatchObject({ name: '安全审计', prompt: '核对 OWASP', scope: 'per-project', gate: true, summary: true })
   })
 
   it('buildEditState 回填已有追加段', () => {
-    const ws: any = { name: 'w', path: '/w', workflowId: 'standard',
-      stages: [{ key: 'design', provider: 'claude', model: 'opus-4.8', prompt: '画时序图' }],
-      projects: [], status: 'idle', plugins: [], stepPlugins: [] }
-    const base: any = { design: { on: false, provider: '', model: '' } }
-    const st = buildEditState(ws, [], base, 'claude::opus-4.8')
-    expect(st.stages.design.prompt).toBe('画时序图')
+    const wsY: Workspace = {
+      name: 'w', path: '/w', workflowId: 'standard', stages: [],
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'design', provider: 'claude', model: 'opus-4.8', prompt: '画时序图' }] }],
+      projects: [], status: 'idle', plugins: [], stepPlugins: []
+    }
+    const base: Record<string, WizardStage> = { design: { on: false, provider: '', model: '' } }
+    const st = buildEditState(wsY, [], base, 'claude::opus-4.8')
+    expect(st.workflows[0].stages.design.prompt).toBe('画时序图')
   })
 })
