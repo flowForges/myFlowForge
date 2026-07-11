@@ -72,11 +72,14 @@ describe('create -> run e2e', () => {
     const wsPath = join(root, 'ws')
     const { startRunOpts } = await createWorkspace({
       opts: {
-        name: 'ws', path: wsPath, workflowId: 'standard',
-        stages: [
-          { key: 'design', provider: 'claude', model: 'opus-4.8' },
-          { key: 'develop', provider: 'claude', model: 'opus-4.8' }
-        ],
+        name: 'ws', path: wsPath,
+        workflows: [{
+          id: 'standard', name: 'standard',
+          stages: [
+            { key: 'design', provider: 'claude', model: 'opus-4.8' },
+            { key: 'develop', provider: 'claude', model: 'opus-4.8' }
+          ],
+        }],
         projects: [{ repoId: 'proj', branch: 'forge/ws', model: 'opus-4.8' }]
       },
       knownProjects: [{ id: 'proj', name: 'proj', repoUrl: src, defaultBranch: 'main' }],

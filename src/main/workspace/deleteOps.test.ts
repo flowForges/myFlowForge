@@ -30,7 +30,7 @@ describe('deleteWorkspace', () => {
     const wsPath = join(home, 'ws1')
     mkdirSync(wsPath, { recursive: true })
     registerWorkspace('ws1', wsPath)
-    writeWorkspace({ name: 'ws1', path: wsPath, workflowId: 'wf', stages: [], projects: [], status: 'idle', plugins: [], stepPlugins: [] })
+    writeWorkspace({ name: 'ws1', path: wsPath, workflowId: 'wf', stages: [], workflows: [], projects: [], status: 'idle', plugins: [], stepPlugins: [] })
     const res = await deleteWorkspace(wsPath)
     expect(res.purged).toBe(true)
     expect(existsSync(wsPath)).toBe(false)
@@ -45,7 +45,7 @@ describe('discardPartialCreation (wipe a partial creation, keep the parent folde
     mkdirSync(join(wsPath, 'proj'), { recursive: true })       // a "pulled" project dir
     writeFileSync(join(wsPath, 'keep-me.txt'), 'user file')     // a file the user had in the chosen folder
     registerWorkspace('ws-partial', wsPath)
-    writeWorkspace({ name: 'ws-partial', path: wsPath, workflowId: 'wf', stages: [], projects: [{ repoId: 'proj', name: 'proj', branch: 'b', provider: '', model: '' }], status: 'idle', plugins: [], stepPlugins: [] })
+    writeWorkspace({ name: 'ws-partial', path: wsPath, workflowId: 'wf', stages: [], workflows: [], projects: [{ repoId: 'proj', name: 'proj', branch: 'b', provider: '', model: '' }], status: 'idle', plugins: [], stepPlugins: [] })
     expect(existsSync(join(wsPath, '.forge'))).toBe(true)       // writeWorkspace created it
 
     await discardPartialCreation(wsPath)
@@ -65,7 +65,7 @@ describe('removeWorkspaceFromList (list-only, keeps files)', () => {
     const wsPath = join(home, 'ws-keep')
     mkdirSync(join(wsPath, '.forge'), { recursive: true })
     registerWorkspace('ws-keep', wsPath)
-    writeWorkspace({ name: 'ws-keep', path: wsPath, workflowId: 'wf', stages: [], projects: [], status: 'idle', plugins: [], stepPlugins: [] })
+    writeWorkspace({ name: 'ws-keep', path: wsPath, workflowId: 'wf', stages: [], workflows: [], projects: [], status: 'idle', plugins: [], stepPlugins: [] })
     writeSettings({ ...readSettings(), pinnedWorkspaces: [wsPath] })
 
     removeWorkspaceFromList(wsPath)

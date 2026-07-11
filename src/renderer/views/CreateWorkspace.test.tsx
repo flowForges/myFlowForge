@@ -48,6 +48,9 @@ describe('CreateWorkspace', () => {
     const partialWs: Workspace = {
       name: 'ws-p', path: '/abs/ws-p', workflowId: 'standard',
       stages: [{ key: 'develop', provider: 'claude', model: 'opus-4.8' }],
+      // As on disk, readWorkspace() migrates legacy workflowId+stages into `workflows` (ensureWorkspaceWorkflows)
+      // before the renderer ever sees it — mirror that here so buildEditState gets a real workflow tab.
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'opus-4.8' }] }],
       projects: [{ repoId: 'proj1', name: 'proj1', branch: 'feat/x', provider: 'claude', model: 'opus-4.8' }],
       status: 'idle', plugins: [], stepPlugins: [],
     }
@@ -275,7 +278,7 @@ describe('CreateWorkspace – custom model', () => {
     fireEvent.click(screen.getByRole('button', { name: /创建/ }))
     expect(onCreate).toHaveBeenCalledTimes(1)
     const opts = onCreate.mock.calls[0][0]
-    const stage = opts.stages.find((s: any) => s.key === 'design')
+    const stage = opts.workflows[0].stages.find((s: any) => s.key === 'design')
     expect(stage).toBeDefined()
     expect(stage.model).toBe('my-custom-123')
     expect(stage.provider).toBe('claude')
@@ -288,6 +291,14 @@ const editingWs: Workspace = {
     { key: 'design', provider: 'claude', model: 'opus-4.8' },
     { key: 'develop', provider: 'claude', model: 'sonnet-4.6' },
   ],
+  // Mirror readWorkspace()'s ensureWorkspaceWorkflows migration (see partialWs above).
+  workflows: [{
+    id: 'standard', name: 'standard',
+    stages: [
+      { key: 'design', provider: 'claude', model: 'opus-4.8' },
+      { key: 'develop', provider: 'claude', model: 'sonnet-4.6' },
+    ],
+  }],
   projects: [{ repoId: 'proj1', name: 'proj1', branch: 'feat/x', provider: 'claude', model: 'sonnet-4.6' }],
   status: 'ok',
   plugins: [],

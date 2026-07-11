@@ -3,7 +3,7 @@ import type { CreateWorkspaceOpts, ProviderInfo, ReviewConfig, ReviewLens } from
 import type { Plugin, LibraryHook } from '@shared/plugin'
 import type { CfgProject, CfgWorkflow, CfgCustomStage } from '../state/useConfig'
 import { indexCustomStages, resolveStages as resolveLibRefs, type CustomStageDef } from '../../shared/customStages'
-import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, type WizardState, type WizardStage, type WizardProject } from './wizardModel'
+import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, emptyWorkflow, type WizardState, type WizardStage, type WizardProject, type WizardWorkflow } from './wizardModel'
 import { PluginEditor } from '../components/PluginEditor'
 import { movePluginBefore } from '../../shared/pluginReorder'
 import { StagePromptEditor } from '../components/StagePromptEditor'
@@ -170,29 +170,37 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     }
     return out
   }
-  // Stage order: the selected workflow's stage order (custom stages keep position), plus any stages
-  // already in the wizard state (so a '__custom'/edited flow keeps its custom stages), then built-ins.
-  const stageOrderFrom = (wfId: string, stages: Record<string, WizardStage>): string[] =>
-    [...new Set([...(workflows.find(w => w.id === wfId)?.stages ?? []).map(s => s.key), ...Object.keys(stages), ...STAGE_KEYS])]
+  // Stage order seeded at construction time (freshState / toggleWorkflow / doCreateWorkflow) for a
+  // NEW workflow tab: the global template's own stage-key order, plus built-ins as a fallback fill.
+  const templateStageOrder = (gw: CfgWorkflow | undefined): string[] =>
+    [...new Set([...(gw?.stages ?? []).map(s => s.key), ...STAGE_KEYS])]
+  // Render-time order for one (already-seeded) workflow tab: its own stageOrder, plus any stage key
+  // present in its stages map (defensive — mirrors the old single-workflow contract's safety merge).
+  const stageOrderFrom = (wf: WizardWorkflow): string[] =>
+    [...new Set([...wf.stageOrder, ...Object.keys(wf.stages)])]
   // Display name/desc for a stage key: built-in from STAGE_DEF, else the custom stage's own name.
-  const stageLabelOf = (k: string) => STAGE_DEF[k as StageKey]?.name ?? state.stages[k]?.name ?? k
-  const stageDescOf = (k: string) => STAGE_DEF[k as StageKey]?.desc ?? (state.stages[k]?.custom ? '自定义阶段' : '')
+  const stageLabelOf = (k: string) => STAGE_DEF[k as StageKey]?.name ?? active.stages[k]?.name ?? k
+  const stageDescOf = (k: string) => STAGE_DEF[k as StageKey]?.desc ?? (active.stages[k]?.custom ? '自定义阶段' : '')
 
   const seedProjects = (): WizardProject[] => projects.map(p => {
     const dev = seedStage(workflows[0]?.stages.find(s => s.key === DEV_KEY)?.defaultModel ?? '')
     return { repoId: p.id, name: p.name, sel: false, branch: '', model: packModel(dev.provider, dev.model) }
   })
 
-  const freshState = (): WizardState => ({
-    path: '', name: '', nameEdited: false,
-    workflowId: workflows[0]?.id ?? '__custom',
-    stages: buildStages(workflows[0]),
-    projects: seedProjects(),
-    // Seed the workflow's own plugin hooks (configured in Settings) so they show in the flow strip
-    // and get persisted to the workspace — otherwise selecting a workflow silently drops its hooks.
-    plugins: (workflows[0]?.plugins ?? []).map(p => ({ ...p })),
-    stepPlugins: []
-  })
+  const freshState = (): WizardState => {
+    const wf0 = workflows[0]
+    const id0 = wf0?.id ?? '__custom'
+    return {
+      path: '', name: '', nameEdited: false,
+      workflows: [emptyWorkflow(id0, wf0?.name ?? '自定义', buildStages(wf0), templateStageOrder(wf0))],
+      activeWorkflowId: id0,
+      projects: seedProjects(),
+      // Seed the workflow's own plugin hooks (configured in Settings) so they show in the flow strip
+      // and get persisted to the workspace — otherwise selecting a workflow silently drops its hooks.
+      plugins: (wf0?.plugins ?? []).map(p => ({ ...p })),
+      stepPlugins: []
+    }
+  }
 
   const [state, setState] = useState<WizardState>(freshState)
   const [branchAll, setBranchAll] = useState('')
@@ -273,15 +281,26 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
 
   if (!open) return null
 
+  // The workflow tab currently focused in the UI — stage rows/flow-strip/hook edits all act on this
+  // one. Invariant (kept by freshState/buildEditState/toggleWorkflow): state.workflows always has
+  // >=1 entry and state.activeWorkflowId always matches one of them.
+  const active = state.workflows.find(w => w.id === state.activeWorkflowId) ?? state.workflows[0]
+
   const wsName = deriveWsName(state.path, state.nameEdited, state.name)
   const branchFor = (p: WizardProject) => p.branch || (wsName ? 'forge/' + wsName : '')
 
-  const enabledCount = Object.keys(state.stages).filter(k => state.stages[k]?.on).length
+  // Total enabled stages across ALL selected workflow tabs (not just the active one) — drives the
+  // footer summary + the create-gate (at least one stage enabled somewhere).
+  const enabledCount = state.workflows.reduce((n, wf) => n + Object.keys(wf.stages).filter(k => wf.stages[k]?.on).length, 0)
   const selectedCount = state.projects.filter(p => p.sel).length
   const chosen = state.projects.filter(p => p.sel)
   const canCreate = enabledCount > 0
 
   const update = (fn: (s: WizardState) => WizardState) => setState(fn)
+  // Converge every stage/review mutation onto the ACTIVE workflow tab — switching tabs re-targets
+  // these without touching the other (unfocused) workflows' configs.
+  const updateActiveWorkflow = (fn: (wf: WizardWorkflow) => WizardWorkflow) =>
+    update(s => ({ ...s, workflows: s.workflows.map(w => w.id === s.activeWorkflowId ? fn(w) : w) }))
 
   // --- interactions ---
   const setPath = (v: string) => update(s => ({ ...s, path: v }))
@@ -293,7 +312,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   // 重来 to wipe the partial on-disk state and start fresh. (State declared with the other hooks above
   // the `if (!open) return null` guard — these functions just close over it.)
   const defaultProjModel = () => {
-    const wf = workflows.find(w => w.id === state.workflowId) ?? workflows[0]
+    const wf = workflows.find(w => w.id === state.activeWorkflowId) ?? workflows[0]
     const dev = seedStage(wf?.stages.find(s => s.key === DEV_KEY)?.defaultModel ?? '')
     return packModel(dev.provider, dev.model)
   }
@@ -306,7 +325,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     if (ws && Array.isArray(ws.projects)) {
       setPartial(ws)
       // Restore config; unlock the projects so the user can still tweak before 继续创建.
-      const restored = buildEditState(ws, projects, buildStages(workflows.find(w => w.id === state.workflowId) ?? workflows[0]), defaultProjModel())
+      const restored = buildEditState(ws, projects, buildStages(workflows.find(w => w.id === state.activeWorkflowId) ?? workflows[0]), defaultProjModel())
       setState({ ...restored, path: ws.path, projects: restored.projects.map(pr => ({ ...pr, locked: false })) })
     } else {
       setPartial(null)
@@ -354,22 +373,51 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     const list = await onAddWorkflow(name, keys)
     const added = list?.find(w => !before.has(w.id)) ?? list?.find(w => w.name === name)
     setWfDraft(null)
-    if (added) update(s => ({ ...s, workflowId: added.id, stages: buildStages(added), plugins: (added.plugins ?? []).map(p => ({ ...p })) }))
-  }
-
-  const selectWorkflow = (id: string) => {
-    setWfDraft(null)   // picking a template dismisses the inline new-workflow designer
-    update(s => ({
-    ...s, workflowId: id,
-    // '__custom' keeps the current enabled set (edit from here via add/remove) instead of force-
-    // enabling all 5 — so switching between templates produces a visible change in the stage list.
-    stages: id === '__custom' ? s.stages : buildStages(workflows.find(w => w.id === id)),
-    // Re-seed wf-scope hooks from the chosen workflow (mirrors the stage rebuild). __custom has none.
-    plugins: id === '__custom' ? [] : (workflows.find(w => w.id === id)?.plugins ?? []).map(p => ({ ...p }))
+    if (added) update(s => ({
+      ...s,
+      workflows: [...s.workflows, emptyWorkflow(added.id, added.name, buildStages(added), templateStageOrder(added))],
+      activeWorkflowId: added.id,
+      plugins: (added.plugins ?? []).map(p => ({ ...p })),
     }))
   }
 
-  const toggleStage = (k: string) => update(s => ({ ...s, workflowId: '__custom', stages: { ...s.stages, [k]: { ...s.stages[k], on: !s.stages[k].on } } }))
+  // Multi-select: toggle one global workflow (or '__custom') in/out of state.workflows. Adding seeds a
+  // fresh WizardWorkflow tab and focuses it; removing drops its tab (at least 1 must stay selected —
+  // the click is a no-op on the last remaining one) and re-focuses another tab if the active one went.
+  // '__custom' (freeform, no backing template) seeds from the CURRENTLY ACTIVE tab's stages/order —
+  // mirrors the old single-select behavior of "detach from the template, keep editing" — falling back
+  // to an all-off stage set when there's no active tab to copy from yet.
+  const toggleWorkflow = (id: string) => {
+    setWfDraft(null)   // picking a template dismisses the inline new-workflow designer
+    update(s => {
+      const already = s.workflows.find(w => w.id === id)
+      if (already) {
+        if (s.workflows.length <= 1) return s   // keep at least 1 selected
+        const nextWorkflows = s.workflows.filter(w => w.id !== id)
+        const nextActive = s.activeWorkflowId === id ? nextWorkflows[0].id : s.activeWorkflowId
+        return { ...s, workflows: nextWorkflows, activeWorkflowId: nextActive }
+      }
+      let wf: WizardWorkflow
+      // wf-scope hooks (state.plugins) are keyed by stage key, not by workflow id — a single shared
+      // list across every tab (Task 9's WizardState still has one `plugins` array, not per-workflow).
+      // Reseed it from whichever workflow was just added, mirroring the old single-select "picking a
+      // template reseeds its hooks" behavior; '__custom' has none, so it clears them.
+      let plugins = s.plugins
+      if (id === '__custom') {
+        const base = s.workflows.find(w => w.id === s.activeWorkflowId)
+        wf = emptyWorkflow('__custom', '自定义', base ? { ...base.stages } : buildStages(undefined), base ? [...base.stageOrder] : templateStageOrder(undefined))
+        plugins = []
+      } else {
+        const gw = workflows.find(w => w.id === id)
+        wf = emptyWorkflow(id, gw?.name ?? id, buildStages(gw), templateStageOrder(gw))
+        plugins = (gw?.plugins ?? []).map(p => ({ ...p }))
+      }
+      return { ...s, workflows: [...s.workflows, wf], activeWorkflowId: wf.id, plugins }
+    })
+  }
+  const setActiveWorkflow = (id: string) => update(s => s.workflows.some(w => w.id === id) ? { ...s, activeWorkflowId: id } : s)
+
+  const toggleStage = (k: string) => updateActiveWorkflow(wf => ({ ...wf, stages: { ...wf.stages, [k]: { ...wf.stages[k], on: !wf.stages[k].on } } }))
   const setStageModel = (k: string, v: string) => {
     if (v === '__custom__') {
       setCustomModelKeys(prev => new Set([...prev, k]))
@@ -377,35 +425,34 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
       return
     }
     const { provider, model } = unpackModel(v)
-    update(s => ({ ...s, stages: { ...s.stages, [k]: { ...s.stages[k], provider, model } } }))
+    updateActiveWorkflow(wf => ({ ...wf, stages: { ...wf.stages, [k]: { ...wf.stages[k], provider, model } } }))
   }
   const confirmStageCustomModel = (k: string) => {
     const v = (customModelInputs[k] ?? '').trim()
     if (v) {
-      const cur = state.stages[k]
+      const cur = active.stages[k]
       const provider = cur?.provider || (pickProviders[0]?.id ?? '')
-      update(s => ({ ...s, stages: { ...s.stages, [k]: { ...s.stages[k], model: v, provider } } }))
+      updateActiveWorkflow(wf => ({ ...wf, stages: { ...wf.stages, [k]: { ...wf.stages[k], model: v, provider } } }))
     }
     setCustomModelKeys(prev => { const n = new Set(prev); n.delete(k); return n })
   }
-  const setStageAppend = (k: string, v: string) => update(s => ({ ...s, workflowId: '__custom', stages: { ...s.stages, [k]: { ...s.stages[k], prompt: v ? v : undefined } } }))
-  const setReviewConfig = (review: ReviewConfig) => update(s => ({ ...s, workflowId: '__custom', stages: { ...s.stages, [REVIEW_KEY]: { ...s.stages[REVIEW_KEY], review } } }))
+  const setStageAppend = (k: string, v: string) => updateActiveWorkflow(wf => ({ ...wf, stages: { ...wf.stages, [k]: { ...wf.stages[k], prompt: v ? v : undefined } } }))
+  const setReviewConfig = (review: ReviewConfig) => updateActiveWorkflow(wf => ({ ...wf, stages: { ...wf.stages, [REVIEW_KEY]: { ...wf.stages[REVIEW_KEY], review } } }))
   const setReviewMode = (mode: 'single' | 'per-project' | 'lens') => {
     if (mode === 'single') setReviewConfig({ mode: 'single' })
     else if (mode === 'lens') setReviewConfig({ mode: 'parallel', scope: 'workspace', reviewers: DEFAULT_LENSES })
     else setReviewConfig(DEFAULT_REVIEW)
   }
-  const toggleReviewLens = (lens: ReviewLens) => update(s => {
-    const cur = s.stages[REVIEW_KEY]?.review
+  const toggleReviewLens = (lens: ReviewLens) => updateActiveWorkflow(wf => {
+    const cur = wf.stages[REVIEW_KEY]?.review
     const reviewers = Array.isArray(cur?.reviewers) ? cur.reviewers : DEFAULT_LENSES
     const next = reviewers.includes(lens) ? reviewers.filter(x => x !== lens) : [...reviewers, lens]
     return {
-      ...s,
-      workflowId: '__custom',
+      ...wf,
       stages: {
-        ...s.stages,
+        ...wf.stages,
         [REVIEW_KEY]: {
-          ...s.stages[REVIEW_KEY],
+          ...wf.stages[REVIEW_KEY],
           review: { mode: 'parallel', scope: 'workspace', reviewers: next.length ? next : [lens] },
         },
       },
@@ -582,8 +629,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
       // unpack develop per-project model (packed provider::model) into separate provider + model fields for the DTO.
       projects: state.projects.map(p => { const { provider, model } = unpackModel(p.model); return { ...p, branch: branchFor(p), provider, model } })
     }
-    const order = stageOrderFrom(committed.workflowId, committed.stages)
-    onCreate({ ...buildCreateOpts(committed, order), runProjHooks: showHookToggle && runHooksOnAdd })
+    onCreate({ ...buildCreateOpts(committed), runProjHooks: showHookToggle && runHooksOnAdd })
   }
 
   return (
@@ -677,20 +723,36 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
 
           {/* 3 工作流程 */}
           <div className="cr-sec">
-            <div className="cr-sec-h"><span className="n">3</span><h4>工作流程</h4><span className="hint">阶段可勾选增删 · 开发阶段按上方项目自动派代理</span></div>
+            <div className="cr-sec-h"><span className="n">3</span><h4>工作流程</h4><span className="hint">可多选工作流,各自配置阶段 · 开发阶段按上方项目自动派代理</span></div>
             <div className="wf-templates" id="crWfTemplates">
               {workflows.map(w => (
-                <button className={'wf-card' + (state.workflowId === w.id ? ' on' : '')} data-crtpl={w.id} key={w.id} onClick={() => selectWorkflow(w.id)}>
+                <button className={'wf-card' + (state.workflows.some(sw => sw.id === w.id) ? ' on' : '')} data-crtpl={w.id} key={w.id} onClick={() => toggleWorkflow(w.id)}>
                   <div className="tt">{w.name}{CK_CARD}</div>
                   <div className="ds">{w.stages.length} 个阶段</div>
                 </button>
               ))}
-              <button className={'wf-card' + (state.workflowId === '__custom' ? ' on' : '')} data-crtpl="__custom" onClick={() => selectWorkflow('__custom')}>
+              <button className={'wf-card' + (state.workflows.some(sw => sw.id === '__custom') ? ' on' : '')} data-crtpl="__custom" onClick={() => toggleWorkflow('__custom')}>
                 <div className="tt">自定义{CK_CARD}</div>
                 <div className="ds">从全部阶段自由勾选</div>
               </button>
               <button className="wf-card add" data-crnewwf onClick={() => onAddWorkflow ? setWfDraft({ name: '', keys: new Set() }) : onNewWorkflow()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>新建流程</button>
             </div>
+            {state.workflows.length > 1 && (
+              <div className="wf-tabs" id="crWfTabs">
+                {state.workflows.map(wf => (
+                  <button
+                    key={wf.id}
+                    type="button"
+                    className={'stage-add-chip wf-tab' + (state.activeWorkflowId === wf.id ? ' on' : '')}
+                    data-crwftab={wf.id}
+                    title={`切换到「${wf.name}」配置阶段`}
+                    onClick={() => setActiveWorkflow(wf.id)}
+                  >
+                    {wf.name}
+                  </button>
+                ))}
+              </div>
+            )}
             {wfDraft && (
               <div className="wf-designer" id="crWfDesigner">
                 <div className="wfd-h">{PUZZLE_PZ}新建工作流 · 勾选阶段</div>
@@ -716,17 +778,17 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 <div className="wf-flow">
                   {insBtn('wf', '__start')}
                   {plugChips('wf', '__start')}
-                  {stageOrderFrom(state.workflowId, state.stages).filter(k => state.stages[k]?.on).map((k, i) => {
-                    const label = STAGE_DEF[k as StageKey]?.name ?? state.stages[k].name ?? k
+                  {stageOrderFrom(active).filter(k => active.stages[k]?.on).map((k, i) => {
+                    const label = STAGE_DEF[k as StageKey]?.name ?? active.stages[k].name ?? k
                     return (
                     <span key={k} style={{ display: 'contents' }}>
                       <span
-                        className={'wf-stage-chip click' + (state.stages[k].prompt ? ' edited' : '') + (state.stages[k].custom ? ' custom' : '')}
+                        className={'wf-stage-chip click' + (active.stages[k].prompt ? ' edited' : '') + (active.stages[k].custom ? ' custom' : '')}
                         title={`点击编辑「${label}」提示词`}
                         onClick={() => { setPlugEdit(null); setStageEdit(k) }}
                       >
                         <span className="n">{i + 1}</span>{label}
-                        {state.stages[k].prompt && <span className="dot" />}
+                        {active.stages[k].prompt && <span className="dot" />}
                         <svg className="pen" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
                       </span>
                       {insBtn('wf', k)}
@@ -740,20 +802,20 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 {stageEdit && (
                   <StagePromptEditor
                     key={stageEdit}
-                    stageName={STAGE_DEF[stageEdit as StageKey]?.name ?? state.stages[stageEdit]?.name ?? stageEdit}
+                    stageName={STAGE_DEF[stageEdit as StageKey]?.name ?? active.stages[stageEdit]?.name ?? stageEdit}
                     defaultPrompt={STAGE_DEFAULT_PROMPT[stageEdit] ?? ''}
-                    initial={state.stages[stageEdit]?.prompt}
+                    initial={active.stages[stageEdit]?.prompt}
                     onSave={(append) => { setStageAppend(stageEdit, append); setStageEdit(null) }}
                     onCancel={() => setStageEdit(null)}
                   />
                 )}
               </div>
-              {stageOrderFrom(state.workflowId, state.stages).filter(k => state.stages[k]?.on).map(k => {
-                const ss = state.stages[k]
+              {stageOrderFrom(active).filter(k => active.stages[k]?.on).map(k => {
+                const ss = active.stages[k]
                 const on = ss.on
                 const review = ss.review ?? DEFAULT_REVIEW
                 const reviewMode = review.mode === 'single' ? 'single' : (review.scope === 'workspace' && Array.isArray(review.reviewers) ? 'lens' : 'per-project')
-                const num = on ? stageOrderFrom(state.workflowId, state.stages).filter(x => state.stages[x]?.on).indexOf(k) + 1 : '·'
+                const num = on ? stageOrderFrom(active).filter(x => active.stages[x]?.on).indexOf(k) + 1 : '·'
                 const devOn = k === DEV_KEY && on
                 const reviewOn = k === REVIEW_KEY && on
                 return (
@@ -850,10 +912,10 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                   </div>
                 )
               })}
-              {stageOrderFrom(state.workflowId, state.stages).some(k => !state.stages[k]?.on) && (
+              {stageOrderFrom(active).some(k => !active.stages[k]?.on) && (
                 <div className="stage-add" id="crStageAdd">
                   <span className="lab">添加阶段</span>
-                  {stageOrderFrom(state.workflowId, state.stages).filter(k => !state.stages[k]?.on).map(k => (
+                  {stageOrderFrom(active).filter(k => !active.stages[k]?.on).map(k => (
                     <button key={k} className="stage-add-chip" data-addstage={k} title={stageDescOf(k)} onClick={() => toggleStage(k)}>
                       {INS_SVG}{stageLabelOf(k)}
                     </button>

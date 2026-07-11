@@ -120,7 +120,7 @@ describe('listWorkspaces', () => {
     const { registerWorkspace, setWorkspaceLifecycle, writeWorkspace } = await import('../config/store')
     const { listWorkspaces } = await import('./workspaceList')
     const wsPath = join(tmp, 'lifecycle-ws')
-    writeWorkspace({ name: 'lifecycle-ws', path: wsPath, workflowId: 'wf', stages: [], projects: [], status: 'idle', plugins: [], stepPlugins: [] })
+    writeWorkspace({ name: 'lifecycle-ws', path: wsPath, workflowId: 'wf', stages: [], workflows: [], projects: [], status: 'idle', plugins: [], stepPlugins: [] })
     registerWorkspace('lifecycle-ws', wsPath)
     setWorkspaceLifecycle(wsPath, { archived: true, archivedAt: 42, description: '核心目标' })
     const metas = listWorkspaces()

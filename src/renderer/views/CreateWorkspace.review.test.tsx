@@ -34,7 +34,7 @@ describe('CreateWorkspace review CR mode', () => {
     expect(screen.getByText('并行 · 按视角')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /创建/ }))
-    const review = onCreate.mock.calls[0][0].stages.find((s: any) => s.key === 'review')
+    const review = onCreate.mock.calls[0][0].workflows[0].stages.find((s: any) => s.key === 'review')
     expect(review.review).toEqual({ mode: 'parallel', scope: 'per-project' })
   })
 
@@ -43,7 +43,7 @@ describe('CreateWorkspace review CR mode', () => {
     fireEvent.click(screen.getByText('单 agent 全量'))
     fireEvent.click(screen.getByRole('button', { name: /创建/ }))
 
-    const review = onCreate.mock.calls[0][0].stages.find((s: any) => s.key === 'review')
+    const review = onCreate.mock.calls[0][0].workflows[0].stages.find((s: any) => s.key === 'review')
     expect(review.review).toEqual({ mode: 'single' })
   })
 })

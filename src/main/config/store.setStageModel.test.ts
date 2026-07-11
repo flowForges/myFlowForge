@@ -5,12 +5,14 @@ import { join } from 'node:path'
 import { writeWorkspace, readWorkspace, setStageModel } from './store'
 
 function makeWs(dir: string) {
+  const stages = [
+    { key: 'design', provider: 'claude', model: 'opus' },
+    { key: 'develop', provider: 'claude', model: 'sonnet' },
+  ]
   writeWorkspace({
     name: 'w', path: dir, workflowId: 'wf', status: 'idle', plugins: [], stepPlugins: [],
-    stages: [
-      { key: 'design', provider: 'claude', model: 'opus' },
-      { key: 'develop', provider: 'claude', model: 'sonnet' },
-    ],
+    stages,
+    workflows: [{ id: 'wf', name: 'wf', stages }],
     projects: [],
   })
 }

@@ -3,6 +3,7 @@ import { makeProposeRun } from '../chat/proposeRun'
 
 const ws = { name: 'w', path: '/w', workflowId: 'std', status: 'idle' as const,
   stages: [{ key: 'requirement' as const, provider: 'claude', model: 'opus-4.8' }], projects: [],
+  workflows: [{ id: 'std', name: 'std', stages: [{ key: 'requirement' as const, provider: 'claude', model: 'opus-4.8' }] }],
   plugins: [], stepPlugins: [] }
 
 function deps(over: Partial<any> = {}) {

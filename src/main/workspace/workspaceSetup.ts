@@ -59,7 +59,7 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   emit({ type: 'setup:start', workspacePath: opts.path, hooks: { basic: basicHooks.length, proj: projHooks.length } })
 
   const runHook = (phase: '__basic' | '__proj', plugin: Plugin) => runStepHook(phase, plugin, {
-    providers, stageProvider: opts.stages[0]?.provider, stageModel: opts.stages[0]?.model,
+    providers, stageProvider: opts.workflows[0]?.stages[0]?.provider, stageModel: opts.workflows[0]?.stages[0]?.model,
     proxy, cwd: opts.path, emit, signal,
   })
 

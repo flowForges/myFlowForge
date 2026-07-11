@@ -54,7 +54,7 @@ describe('CreateWorkspace — stage prompt editing', () => {
     // onCreate 应被调用,且 stages 中 design stage 的 prompt === '画时序图'
     expect(onCreate).toHaveBeenCalledOnce()
     const opts = onCreate.mock.calls[0][0]
-    const designStage = (opts.stages as Array<{ key: string; prompt?: string }>).find(s => s.key === 'design')
+    const designStage = (opts.workflows[0].stages as Array<{ key: string; prompt?: string }>).find(s => s.key === 'design')
     expect(designStage?.prompt).toBe('画时序图')
   })
 })
