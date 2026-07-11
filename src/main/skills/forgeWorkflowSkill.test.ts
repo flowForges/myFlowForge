@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest'
-import { FORGE_WORKFLOW_SKILL } from './forgeWorkflowSkill'
+import { FORGE_WORKFLOW_SKILL, workflowListSection } from './forgeWorkflowSkill'
+import type { Workspace } from '../config/schema'
+
+const wsWith2Workflows: Workspace = {
+  name: 'demo', path: '/tmp/demo', workflowId: '', stages: [],
+  workflows: [
+    { id: 'light', name: '轻量', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] },
+    { id: 'full', name: '完整', stages: [
+      { key: 'requirement', provider: 'claude', model: 'sonnet' },
+      { key: 'develop', provider: 'claude', model: 'sonnet' },
+    ] },
+  ],
+  projects: [], status: 'idle', plugins: [], stepPlugins: [],
+}
 
 describe('FORGE_WORKFLOW_SKILL', () => {
   it('installs under .claude/skills and is named forge-workflow', () => {
@@ -41,5 +54,22 @@ describe('FORGE_WORKFLOW_SKILL', () => {
     expect(c).toContain('执行指令')
     // The scope note must appear before the "标准流程" body so it gates early.
     expect(c.indexOf('适用范围')).toBeLessThan(c.indexOf('标准流程'))
+  })
+})
+
+describe('workflowListSection', () => {
+  it('列出工作流名+阶段序列', () => {
+    const md = workflowListSection(wsWith2Workflows)
+    expect(md).toContain('轻量')
+    expect(md).toContain('完整')
+    expect(md).toContain('workflowId')   // 指导里提到把 id 传给 workflowId
+  })
+
+  it('包含每条工作流的 id 与阶段显示名序列', () => {
+    const md = workflowListSection(wsWith2Workflows)
+    expect(md).toContain('`light`')
+    expect(md).toContain('`full`')
+    expect(md).toContain('需求')   // requirement 阶段的内置显示名
+    expect(md).toContain('开发')   // develop 阶段的内置显示名
   })
 })
