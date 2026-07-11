@@ -35,7 +35,8 @@
 .msg-ava.ai { background: var(--accent); color: var(--on-accent); }
 .msg-who { font-size: 12.5px; font-weight: 600; }
 .msg-model { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-left: auto; }
-.msg-body { font-size: 14px; line-height: 1.62; color: var(--fg-2); }
+/* 会话区正文字号 = 14px × 会话区缩放(设置·外观·会话区字号,独立于应用界面字号)。 */
+.msg-body { font-size: calc(14px * var(--chat-font-scale, 1)); line-height: 1.62; color: var(--fg-2); }
 .msg-body p { margin-bottom: 10px; }
 .msg-body p:last-child { margin-bottom: 0; }
 .msg-body code { font-family: var(--mono); font-size: 12.5px; background: var(--surface); padding: 1px 6px; border-radius: 5px; color: var(--fg); }
@@ -188,7 +189,7 @@
 .composer-attach .attach-chip button:hover { color: var(--err); }
 .composer textarea {
   width: 100%; border: none; background: none; resize: none; outline: none;
-  color: var(--fg); font-family: var(--font); font-size: 14px; line-height: 1.55;
+  color: var(--fg); font-family: var(--font); font-size: calc(14px * var(--chat-font-scale, 1)); line-height: 1.55;
   padding: 14px 14px 6px; min-height: 26px; max-height: 180px;
 }
 .composer textarea::placeholder { color: var(--faint); }
@@ -401,8 +402,9 @@
 .plan-card .req-actions { padding-top: 2px; }
 
 /* ── 用户输入导航条 (chat jump rail) ──────────────────────────────
-   左侧几乎隐形的细轨，每条用户输入一个极小的点；悬停弹紧凑预览，
-   点击平滑跳转。尺寸较原型收小：静止 2×6px/.18，悬停 3×9px。 */
+   左侧几乎隐形的细轨，每条用户输入一个极小的短划；悬停弹紧凑预览，
+   点击平滑跳转。参考 Codex 收得更小更密：静止划 6×1.5px、间隔 4px，
+   激活/悬停 10px。 */
 /* Codex-style: a COMPACT, vertically-centered cluster of short horizontal dashes — one per user
    input — instead of a full-height minimap with a long guide line. Even spacing (flex gap), higher
    contrast so it reads clearly in dark mode. */
@@ -418,7 +420,7 @@
   display: none;
   flex-direction: column;
   align-items: flex-start;
-  gap: 7px;
+  gap: 4px;
   max-height: calc(100% - 210px);
   /* NOT overflow:hidden — the hover preview opens to the RIGHT of a dash (left: calc(100% + 8px)),
      far outside the rail's ~20px-wide box, so clipping here swallowed the whole preview card (the
@@ -435,8 +437,8 @@
 /* button = transparent hit area; the visible mark is a short horizontal dash drawn by ::before */
 .chat-jump-dot {
   position: relative;
-  width: 20px;
-  height: 10px;
+  width: 16px;
+  height: 6px;
   margin: 0;
   padding: 0;
   border: 0;
@@ -449,8 +451,8 @@
 }
 .chat-jump-dot::before {
   content: "";
-  width: 8px;
-  height: 2px;
+  width: 6px;
+  height: 1.5px;
   border-radius: 999px;
   background: currentColor;
   opacity: .7;
@@ -458,9 +460,9 @@
 }
 .chat-jump-dot:hover,
 .chat-jump-dot.active { color: var(--accent); }
-.chat-jump-dot.active::before { width: 14px; opacity: 1; }
+.chat-jump-dot.active::before { width: 10px; opacity: 1; }
 .chat-jump-dot:hover::before {
-  width: 14px;
+  width: 10px;
   opacity: 1;
   box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 12%, transparent);
 }

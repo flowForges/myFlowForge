@@ -1,5 +1,12 @@
 import { useState } from 'react'
 import type { Appearance, Terminal } from '@shared/types'
+import { FontPicker } from './FontPicker'
+
+const FONT_SIZES: { key: Appearance['fontSize']; label: string }[] = [
+  { key: 'small', label: '小' },
+  { key: 'medium', label: '中' },
+  { key: 'large', label: '大' },
+]
 
 const BG_SCOPES: { key: NonNullable<Appearance['bgScope']>; label: string }[] = [
   { key: 'app', label: '整个应用' },
@@ -67,7 +74,7 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
     if (!r) return
     if (r.error) { setBgErr(r.error); return }
     // First upload turns the feature on (default to whole-app); later uploads keep the current scope.
-    if (r.dataUrl) onChange({ bgImage: r.dataUrl, bgScope: bgScope === 'off' ? 'app' : bgScope })
+    if (r.url) onChange({ bgImage: r.url, bgScope: bgScope === 'off' ? 'app' : bgScope })
   }
   // 首页背景(独立于上面的应用/会话区背景)
   const homeBgImage = appearance.homeBgImage ?? ''
@@ -80,7 +87,7 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
     if (!r) return
     if (r.error) { setHomeBgErr(r.error); return }
     // First upload turns the home background on.
-    if (r.dataUrl) onChange({ homeBgImage: r.dataUrl, homeBgOn: true })
+    if (r.url) onChange({ homeBgImage: r.url, homeBgOn: true })
   }
   return (
     <>
@@ -179,15 +186,9 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
         <div className="set-row">
           <div className="info">
             <div className="t">应用字体</div>
-            <div className="d">整个应用界面的字体族,支持逗号分隔的备选字体。留空 = 跟随系统字体</div>
+            <div className="d">从本机已装字体中选择,或按需下载免费字体(不占安装包)。留空 = 跟随系统字体</div>
           </div>
-          <input
-            className="sel"
-            type="text"
-            placeholder="跟随系统"
-            value={appFont}
-            onChange={e => onChange({ fontFamily: e.target.value })}
-          />
+          <FontPicker value={appFont} onChange={family => onChange({ fontFamily: family })} />
         </div>
         <div className="set-row">
           <div className="info">
@@ -202,18 +203,25 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
         </div>
         <div className="set-row">
           <div className="info">
-            <div className="t">字号</div>
-            <div className="d">界面与代码字体大小</div>
+            <div className="t">应用字号</div>
+            <div className="d">整个应用界面的字体大小(不含会话区与终端)</div>
           </div>
-          <select
-            className="sel"
-            value={appearance.fontSize}
-            onChange={e => onChange({ fontSize: e.target.value as Appearance['fontSize'] })}
-          >
-            <option value="small">小</option>
-            <option value="medium">中(默认)</option>
-            <option value="large">大</option>
-          </select>
+          <div className="seg">
+            {FONT_SIZES.map(({ key, label }) => (
+              <button key={key} className={`wf-pick${appearance.fontSize === key ? ' on' : ''}`} onClick={() => onChange({ fontSize: key })}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div className="set-row">
+          <div className="info">
+            <div className="t">会话区字号</div>
+            <div className="d">会话消息(输入与输出)的字体大小,独立于应用字号</div>
+          </div>
+          <div className="seg">
+            {FONT_SIZES.map(({ key, label }) => (
+              <button key={key} className={`wf-pick${(appearance.chatFontSize ?? 'medium') === key ? ' on' : ''}`} onClick={() => onChange({ chatFontSize: key })}>{label}</button>
+            ))}
+          </div>
         </div>
       </div>
       <div className="set-group">
@@ -316,14 +324,9 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
         <div className="set-row">
           <div className="info">
             <div className="t">字体族</div>
-            <div className="d">终端字体系列,支持逗号分隔的备选字体</div>
+            <div className="d">终端专用,须等宽字体;可选本机字体或下载免费等宽字体。独立于应用字体</div>
           </div>
-          <input
-            className="sel"
-            type="text"
-            value={terminal.fontFamily}
-            onChange={e => onTerminalChange({ fontFamily: e.target.value })}
-          />
+          <FontPicker mono value={terminal.fontFamily} onChange={family => onTerminalChange({ fontFamily: family })} />
         </div>
         <div className="set-row">
           <div className="info">

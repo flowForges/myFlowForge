@@ -18,6 +18,10 @@ export function applyTheme(a: Appearance): void {
   root.style.setProperty('--glass-blur-strength', String(blur > 0 ? blur : 1))
   root.setAttribute('data-density', a.density)
   root.setAttribute('data-font', a.fontSize)
+  // 会话区(消息输入/输出)字号独立于应用界面字号:.msg-body 与 .composer textarea 用固定 14px,不随
+  // data-font 变化,故这里用一个缩放系数单独驱动它们(chat.css 消费 --chat-font-scale)。
+  const CHAT_FONT_SCALE = { small: 0.9, medium: 1, large: 1.14 } as const
+  root.style.setProperty('--chat-font-scale', String(CHAT_FONT_SCALE[a.chatFontSize ?? 'medium']))
   // 应用字体族:非空则覆盖 --font(带系统栈兜底);空则清除,回落到 tokens.css 里的系统字体栈。
   if (a.fontFamily && a.fontFamily.trim()) {
     root.style.setProperty('--font', `${a.fontFamily.trim()}, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif`)

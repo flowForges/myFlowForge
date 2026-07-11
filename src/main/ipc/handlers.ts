@@ -53,6 +53,9 @@ import { isWorkflowIntent, isResumeIntent } from '../chat/workflowIntent'
 import { makeProposeGuard } from '../chat/proposeGuard'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
+import { storeBackgroundFromPath, backgroundImageUrl, bgRelFromUrl, gcBackgrounds } from '../appearance/backgroundStore'
+import { listDownloadedFonts, downloadCatalogFont, deleteDownloadedFont } from '../appearance/fontStore'
+import { catalogEntry } from '../../shared/fontCatalog'
 import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
 import { pickInstaller } from '../update/installer'
@@ -712,25 +715,46 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return { path: rel }
   })
 
-  // Background image: open a picker, return the chosen image as a data URL (stored inline in settings —
-  // one image, self-contained, no file bookkeeping). Cap ~6MB so settings.json stays sane.
+  // Background image: open a picker, store the chosen image on disk under ~/.myFlowForge/backgrounds
+  // and return its forge-bg:// URL (settings.json keeps only the small URL, not multi-MB base64). No
+  // tiny cap needed anymore — storeBackgroundFromPath guards against pathological files. After a
+  // successful pick, GC any background file no longer referenced by settings (old image on replace).
   ipcMain.handle(CH.appearancePickBgImage, async () => {
     const r = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
     })
     if (r.canceled || !r.filePaths[0]) return null
-    const fp = r.filePaths[0]
-    const ext = fp.slice(fp.lastIndexOf('.') + 1).toLowerCase()
-    const MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif' }
-    const mime = MIME[ext]
-    if (!mime) return { error: '不支持的图片格式,仅支持 png/jpg/webp/gif' }
+    const stored = storeBackgroundFromPath(r.filePaths[0])
+    if ('error' in stored) return { error: stored.error }
     try {
-      if (statSync(fp).size > 6_000_000) return { error: '图片过大,请选择 6MB 以内的图片' }
-      const bytes = readFileSync(fp)
-      return { dataUrl: `data:${mime};base64,${bytes.toString('base64')}` }
-    } catch { return { error: '图片读取失败' } }
+      const a = readSettings().appearance
+      const keep = new Set([stored.rel, bgRelFromUrl(a.bgImage), bgRelFromUrl(a.homeBgImage)].filter((x): x is string => !!x))
+      gcBackgrounds(keep)
+    } catch { /* GC is best-effort; a leftover file is harmless */ }
+    return { url: backgroundImageUrl(stored.rel) }
   })
+
+  // Downloadable fonts: list what's on disk (each entry carries its rewritten @font-face CSS so the
+  // renderer can inject it), download a catalog font (streaming per-file progress to the caller), and
+  // delete one. Downloads honour the user's configured proxy via makeProxyFetch.
+  ipcMain.handle(CH.fontsListDownloaded, () => listDownloadedFonts())
+  ipcMain.handle(CH.fontsDownload, async (e, id: string) => {
+    const entry = catalogEntry(id)
+    if (!entry) return { error: '未知字体' }
+    const pf = makeProxyFetch(readSettings().termProxy)
+    try {
+      const font = await downloadCatalogFont(
+        entry,
+        (url) => pf(url),
+        (done, total) => { try { e.sender.send(CH.fontsDownloadProgress, { id, done, total }) } catch { /* window may have closed */ } },
+      )
+      return { font }
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : '字体下载失败' }
+    }
+  })
+  ipcMain.handle(CH.fontsDelete, (_e, id: string) => ({ ok: deleteDownloadedFont(id) }))
 
   const MAX_PINNED = 5
   ipcMain.handle(CH.workspacesList, () => {

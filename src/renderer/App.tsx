@@ -22,6 +22,7 @@ import { toggleExpanded, loadExpanded, saveExpanded } from './state/expandedWs'
 import { useUpdate } from './state/useUpdate'
 import { usePlugins } from './state/usePlugins'
 import { applyTheme } from './theme/applyTheme'
+import { injectDownloadedFontFaces } from './theme/fontFaces'
 import { fmtRelTime } from '@shared/relTime'
 import { WorkspaceView } from './views/WorkspaceView'
 import { HomeView } from './views/HomeView'
@@ -259,6 +260,10 @@ export function App() {
     return () => { off() }
   }, [])
 
+  // Make any downloaded fonts (settings · 外观 · 应用字体) usable app-wide by injecting their @font-face
+  // rules once at startup. The picker re-injects after a new download; this covers the launch path.
+  useEffect(() => { void injectDownloadedFontFaces() }, [])
+
   // Global-shortcut registration status from main (which OS-level accelerators the OS refused) — fed to
   // the keybindings settings pane so it can flag "already taken" conflicts. Terminal toggle and every
   // other in-app shortcut are now driven by the keybindings dispatcher below (see handlers/useKeybindings).
@@ -494,6 +499,15 @@ export function App() {
     'open-plugins': () => { setSettingsPane('plugins'); setSettingsOpen(true) },
   }
   useKeybindings(settings?.keybindings?.overrides ?? {}, kbHandlers)
+
+  // Tray / Dock context-menu items dispatch through the same handler map as keybindings. Keep the
+  // latest map in a ref so the one-time subscription always calls current closures.
+  const kbRef = useRef(kbHandlers)
+  kbRef.current = kbHandlers
+  useEffect(() => {
+    const off = window.forge.onMenuAction?.(action => kbRef.current[action]?.())
+    return () => { off?.() }
+  }, [])
 
   return (
     <div className={`window${collapsed ? ' collapsed' : ''}${inspCollapsed ? ' insp-collapsed' : ''}${view === 'home' ? ' home-mode' : ''}`}>
