@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { SettingsSchema, WorkflowSchema, WorkspaceSchema, defaultSettings, STAGE_KEYS } from './schema'
-import { STAGE_PROMPTS, WsStageSchema } from './schema'
+import { STAGE_PROMPTS, WsStageSchema, ensureWorkspaceWorkflows } from './schema'
 
 describe('pet states + pos (P3-4)', () => {
   it('defaults pos.bottom and all five states when absent (back-compat)', () => {
@@ -126,5 +126,32 @@ describe('schema 追加段字段', () => {
     const s = WsStageSchema.parse({ key: 'design', provider: 'claude', model: 'opus-4.8', prompt: '附加' })
     expect(s.prompt).toBe('附加')
     expect(WsStageSchema.parse({ key: 'design', provider: 'claude', model: 'opus-4.8' }).prompt).toBeUndefined()
+  })
+})
+
+describe('ensureWorkspaceWorkflows 迁移', () => {
+  it('老 workspace.json(只有 workflowId+stages) → 包成单条 workflows', () => {
+    const raw = WorkspaceSchema.parse({
+      name: 'w', path: '/w', workflowId: 'standard',
+      stages: [{ key: 'requirement', provider: 'claude', model: 'opus-4.8' }],
+      projects: [],
+    })
+    const migrated = ensureWorkspaceWorkflows(raw)
+    expect(migrated.workflows).toHaveLength(1)
+    expect(migrated.workflows[0].id).toBe('standard')
+    expect(migrated.workflows[0].stages[0].key).toBe('requirement')
+  })
+
+  it('已有 workflows 时不动它', () => {
+    const raw = WorkspaceSchema.parse({
+      name: 'w', path: '/w', workflowId: '', stages: [], projects: [],
+      workflows: [
+        { id: 'a', name: '轻量', stages: [{ key: 'requirement', provider: 'claude', model: 'opus-4.8' }] },
+        { id: 'b', name: '完整', stages: [{ key: 'develop', provider: 'codex', model: 'gpt-5' }] },
+      ],
+    })
+    const migrated = ensureWorkspaceWorkflows(raw)
+    expect(migrated.workflows).toHaveLength(2)
+    expect(migrated.workflows.map(w => w.id)).toEqual(['a', 'b'])
   })
 })

@@ -222,12 +222,14 @@ export interface WorkspaceMeta { name: string; path: string; projectCount: numbe
 // Full persisted workspace config (mirrors src/main/config/schema.ts WorkspaceSchema). Renderer-facing
 // contract for editing (SP-B); the main schema's zod-inferred type is structurally assignable to this.
 export interface WsStage extends StageCustomFields { key: string; provider: string; model: string; review?: ReviewConfig; prompt?: string }
+export interface WsWorkflow { id: string; name: string; stages: WsStage[] }
 export interface WsProject { repoId: string; name: string; branch: string; provider: string; model: string }
 export interface Workspace {
   name: string
   path: string
-  workflowId: string
-  stages: WsStage[]
+  workflowId: string          // legacy 迁移种子
+  stages: WsStage[]           // legacy 迁移种子
+  workflows: WsWorkflow[]     // 一组命名工作流
   projects: WsProject[]
   status: 'idle' | 'run' | 'ok' | 'err'
   plugins: Plugin[]
