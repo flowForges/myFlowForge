@@ -1,3 +1,30 @@
+import { stageName } from '../config/schema'
+
+// Same workflow list markdown as forgeWorkflowSkill.ts's workflowListSection, but built from the
+// JSON in env.FORGE_WORKFLOWS ([{id,name,stages:string[]}], stages already stage KEYS — see
+// handlers.ts where the chat agent env is assembled) since non-claude CLIs never read
+// workspace.json directly. Fails open (returns '') on missing/invalid JSON.
+function workflowListSectionFromJson(raw: string | undefined): string {
+  if (!raw) return ''
+  let parsed: Array<{ id: string; name: string; stages: string[] }>
+  try { parsed = JSON.parse(raw) } catch { return '' }
+  if (!Array.isArray(parsed) || parsed.length === 0) return ''
+  const lines = parsed.map(wf => {
+    const seq = wf.stages.map(k => stageName(k)).join(' → ')
+    return `- **${wf.name}** (id: \`${wf.id}\`): ${seq}`
+  })
+  return [
+    '',
+    '## 本工作区可选工作流',
+    '用户用自然语言描述需求时,判断它最匹配下面哪条工作流:',
+    ...lines,
+    '',
+    '匹配到某条 → 调 `forge_propose_plan` 时把该条 id 传给 `workflowId`。',
+    '和任何一条都对不上(比如用户明确只要其中几个阶段) → 不传 workflowId,用 `stages` 列出要跑的阶段(ad-hoc)。',
+    '拿不准是哪条 → 先在对话里反问用户确认,别瞎猜。',
+  ].join('\n')
+}
+
 // Non-claude CLIs (codex reads .codex/skills, qoder reads .qoder/skills) never auto-load the
 // workspace's .claude/skills/forge-workflow skill the way the claude main agent does, so they
 // never learn they should propose a plan via the forge_propose_plan MCP tool — they just keep
@@ -22,5 +49,5 @@ export function forgeChatDirective(env: NodeJS.ProcessEnv): string {
     '· 当你需要用户确认、选择、或补充信息时，直接在你这条回复的正文里用文字把问题问清楚（必要时列编号选项），然后停下等待用户的下一条消息回答即可。',
     '· 绝对不要让用户"到 Forge UI / 界面 / 弹窗上确认"，也不要声称已弹出某个确认框——聊天中不存在这样的界面，那样会让用户卡住、无从操作。',
     '· 工作流执行失败后用户在此继续对话时同样遵守本规则：把下一步、疑问或需要的决策用文字讲清楚，让用户直接回复。',
-  ].join('\n')
+  ].join('\n') + workflowListSectionFromJson(env?.FORGE_WORKFLOWS)
 }

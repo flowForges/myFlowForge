@@ -23,4 +23,21 @@ describe('forgeChatDirective', () => {
     // Ambiguous → ask first, never auto-propose.
     expect(d).toContain('拿不准')
   })
+
+  it('FORGE_WORKFLOWS 存在时把工作流清单拼进 directive', () => {
+    const d = forgeChatDirective({
+      FORGE_TOOLS: 'forge_propose_plan',
+      FORGE_WORKFLOWS: JSON.stringify([{ id: 'full', name: '完整', stages: ['requirement', 'develop'] }]),
+    })
+    expect(d).toContain('完整')
+    expect(d).toContain('`full`')
+    expect(d).toContain('workflowId')
+  })
+
+  it('FORGE_WORKFLOWS 缺失或非法 JSON 时不追加清单、也不报错', () => {
+    const noEnv = forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan' })
+    expect(noEnv).not.toContain('本工作区可选工作流')
+    const badJson = forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan', FORGE_WORKFLOWS: '{not json' })
+    expect(badJson).not.toContain('本工作区可选工作流')
+  })
 })

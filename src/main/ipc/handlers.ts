@@ -495,7 +495,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         return proposeRun(payload.workspacePath, approach, task, select)
       },
     }).catch(() => null)
-    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan' } : undefined })
+    // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
+    // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude
+    // path instead gets this via ensureWorkspaceSkill's appended SKILL.md section.
+    const chatWs = readWorkspace(payload.workspacePath)
+    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan', FORGE_WORKFLOWS: JSON.stringify((chatWs?.workflows ?? []).map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(s => s.key) }))) } : undefined })
     // Snapshot proposes already pending for this workspace before the turn — those belong to earlier
     // turns (fire-and-forget auto-triggers the user hasn't acted on yet) and must survive this turn.
     const preProposes = new Set(proposeRun.pendingIds(payload.workspacePath))
