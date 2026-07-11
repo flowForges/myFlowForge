@@ -66,6 +66,10 @@ const api = {
   chatCancelQueued: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.chatCancelQueued, a),
   chatClearQueue: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.chatClearQueue, a),
   chatStop: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.chatStop, a),
+  // Re-initiate an approval proposal for the same task under a different workflow (undefined = ad-hoc).
+  // Backing the PlanCard workflow-switch dropdown (Task 12): a fresh plan-request card is emitted with
+  // the chosen workflow's stage set.
+  reproposeWorkflow: (a: { workspacePath: string; approach: string; task?: string; workflowId?: string }) => ipcRenderer.invoke(CH.chatReproposeWorkflow, a),
   onChatQueueEvent: (cb: (e: ChatQueueEvent) => void) => {
     const listener = (_: unknown, e: ChatQueueEvent) => cb(e)
     ipcRenderer.on(CH.chatQueueEvent, listener)

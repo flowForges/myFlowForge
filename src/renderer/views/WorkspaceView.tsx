@@ -570,6 +570,13 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                   key={entry.plan.id}
                   req={entry.plan}
                   onResolve={(d) => chat.resolvePlan({ id: entry.plan.id, decision: d.decision, value: d.value })}
+                  onSwitchWorkflow={(workflowId) => {
+                    if (!wsPath) return
+                    // Dismiss the current card, then re-propose the same task/approach under the chosen
+                    // workflow (undefined = ad-hoc). Backend emits a fresh plan-request with new stages.
+                    chat.resolvePlan({ id: entry.plan.id, decision: 'deny' })
+                    void window.forge.reproposeWorkflow({ workspacePath: wsPath, approach: entry.plan.approach, task: entry.plan.task, workflowId })
+                  }}
                 />
               )
             })}

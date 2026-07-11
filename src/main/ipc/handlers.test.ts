@@ -573,6 +573,26 @@ describe('registerIpc broadcast wiring', () => {
     // No assertion on broadcast — stop on idle queue is a silent no-op per ChatQueue.stop impl
   })
 
+  it('chat:repropose-workflow re-invokes proposeRun with the chosen workflowId (undefined for ad-hoc)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { makeProposeRun } = await import('../chat/proposeRun') as any
+    registerIpc(() => {}, {})
+    const proposeFn = makeProposeRun.mock.results.at(-1).value as any
+    proposeFn.mockClear()
+    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+    expect(handler(CH.chatReproposeWorkflow)).toBeTruthy()
+
+    // Named workflow → proposeRun called with select.workflowId
+    await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: '方案文本', task: '任务文本', workflowId: 'wf-2' })
+    expect(proposeFn).toHaveBeenCalledWith('/ws/a', '方案文本', '任务文本', { workflowId: 'wf-2' })
+
+    // No workflowId → ad-hoc (select undefined)
+    proposeFn.mockClear()
+    await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: 'x', task: 'y' })
+    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'x', 'y', undefined)
+  })
+
   it('configUpdateWorkflow 写入 stagePrompts(不动 plugins)', async () => {
     readWorkflowsMock.mockReturnValue({ workflows: [{ id: 'standard', name: 'S', stages: [] as any[], plugins: [] as any[], stagePrompts: {} }] })
     const { registerIpc } = await import('./handlers')
