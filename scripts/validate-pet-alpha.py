@@ -27,8 +27,29 @@ def validate(path: Path) -> list[str]:
 
 
 def main() -> None:
-    root = Path(sys.argv[1])
-    files = sorted(root.glob("*.gif")) + sorted((root / "webp").glob("*.webp")) + sorted((root / "apng").glob("*.png"))
+    roots = [Path(value) for value in sys.argv[1:]]
+    if not roots:
+        raise SystemExit("usage: validate-pet-alpha.py <pack-directory> [<pack-directory> ...]")
+    states = ("idle", "working", "confirm", "input", "done")
+    expected = {
+        root / relative
+        for root in roots
+        for state in states
+        for relative in (f"{state}.gif", f"webp/{state}.webp", f"apng/{state}.png")
+    }
+    missing = sorted(path for path in expected if not path.is_file())
+    if missing:
+        print("missing animation assets:\n" + "\n".join(map(str, missing)), file=sys.stderr)
+        raise SystemExit(1)
+    files = [
+        path
+        for root in roots
+        for path in (
+            sorted(root.glob("*.gif"))
+            + sorted((root / "webp").glob("*.webp"))
+            + sorted((root / "apng").glob("*.png"))
+        )
+    ]
     failures = [failure for path in files for failure in validate(path)]
     if failures:
         print("\n".join(failures), file=sys.stderr)
