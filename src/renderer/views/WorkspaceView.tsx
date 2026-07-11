@@ -133,6 +133,15 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
   const [quickSeed, setQuickSeed] = useState<{ text: string; nonce: number }>()
+  // Task 15/16 shared mechanism: clicking "修改方向…" on a plan card (Task 15) or a stage-gate card
+  // (Task 16, not yet wired) seeds a quote marker into the MAIN composer instead of opening a cramped
+  // inline textarea; the next send routes back to that item's resolver as a 'modify' decision rather
+  // than a normal chat message.
+  const [pendingSupplement, setPendingSupplement] = useState<{ kind: 'plan' | 'gate'; id: string; label: string } | null>(null)
+  const startSupplement = useCallback((kind: 'plan' | 'gate', id: string, label: string) => {
+    setPendingSupplement({ kind, id, label })
+    setQuickSeed({ text: `> 针对【技术方案·${label}】补充：\n`, nonce: Date.now() })
+  }, [])
   const [selection, setSelection] = useState<{ agentId: string; modelId: string; permissionMode?: import('@shared/permissions').PermissionMode }>()
   // 本机扫描到的当前 provider 的自定义命令/prompt + skills(进 "/" 菜单)。随 provider/workspace 变化拉取。
   const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
@@ -585,14 +594,20 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                 <PlanCard
                   key={entry.plan.id}
                   req={entry.plan}
-                  onResolve={(d) => chat.resolvePlan({ id: entry.plan.id, decision: d.decision, value: d.value })}
+                  onResolve={(d) => {
+                    // Allow/deny on the plan this supplement targets abandons the pending supplement too.
+                    if (pendingSupplement?.kind === 'plan' && pendingSupplement.id === entry.plan.id) setPendingSupplement(null)
+                    chat.resolvePlan({ id: entry.plan.id, decision: d.decision, value: d.value })
+                  }}
                   onSwitchWorkflow={(workflowId) => {
                     if (!wsPath) return
                     // Dismiss the current card, then re-propose the same task/approach under the chosen
                     // workflow (undefined = ad-hoc). Backend emits a fresh plan-request with new stages.
+                    if (pendingSupplement?.kind === 'plan' && pendingSupplement.id === entry.plan.id) setPendingSupplement(null)
                     chat.resolvePlan({ id: entry.plan.id, decision: 'deny' })
                     void window.forge.reproposeWorkflow({ workspacePath: wsPath, approach: entry.plan.approach, task: entry.plan.task, workflowId })
                   }}
+                  onSupplement={() => startSupplement('plan', entry.plan.id, '方案')}
                 />
               )
             })}
@@ -610,6 +625,12 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                 <button className="tq-x" title="取消(AI 尚未读取)" onClick={() => { setQuickSeed({ text: q.text, nonce: Date.now() }); chat.cancelQueued(q.id) }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button>
               </div>
             ))}
+          </div>
+        )}
+        {pendingSupplement && (
+          <div className="supplement-banner">
+            <span>补充中：针对【{pendingSupplement.label}】—— 发送后作为修改方向</span>
+            <button className="supplement-cancel" onClick={() => setPendingSupplement(null)}>取消</button>
           </div>
         )}
         <Composer
@@ -642,6 +663,17 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             }
           }}
           onSend={(m) => {
+            // A pending supplement (Task 15 plan / Task 16 gate) hijacks the next send: it routes back
+            // to that item's resolver as a 'modify' decision instead of a normal chat message.
+            if (pendingSupplement) {
+              if (pendingSupplement.kind === 'plan') {
+                chat.resolvePlan({ id: pendingSupplement.id, decision: 'modify', value: m.text })
+              }
+              // TODO(Task 16): kind === 'gate' → route to the stage-gate resolver, e.g.
+              // resolve({ id: pendingSupplement.id, decision: 'modify', value: m.text })
+              setPendingSupplement(null)
+              return
+            }
             const runLive = engine.run?.workspacePath === wsPath
             // First message in a freshly-created workspace starts the run (seeded with the text);
             // once started (App clears pendingStartOpts) or if a run is already live, send as chat.
