@@ -4,7 +4,7 @@ import { CH } from './channels'
 
 let capturedBus: EventBus | null = null
 
-const { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock } = vi.hoisted(() => {
+const { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls } = vi.hoisted(() => {
   const lastOrchOpts = { current: null as any }
   const liveRun = { current: null as unknown }
   const subscribers: Array<(e: any) => void> = []
@@ -13,7 +13,8 @@ const { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMoc
   const listWorkspacesMock = vi.fn(() => [])
   const readWorkflowsMock = vi.fn((): { workflows: any[] } => ({ workflows: [] }))
   const writeWorkflowsMock = vi.fn()
-  return { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock }
+  const startRunCalls: any[] = []
+  return { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls }
 })
 
 const SETTINGS = {
@@ -45,11 +46,14 @@ vi.mock('../orchestrator/orchestrator', () => ({
       capturedBus = opts.bus
       lastOrchOpts.current = opts
     }
-    startRun() {}
+    startRun(o: any) { startRunCalls.push(o); return Promise.resolve() }
     resolve() {}
     cancel() {}
     getRun() { return liveRun.current }
-  }
+  },
+  // resumeRun.ts (real, unmocked) imports these from the orchestrator module.
+  REVIEW_GATED_STAGES: new Set(['design']),
+  gateApprovedKey: (stageKey: string) => 'gate-approved:' + stageKey,
 }))
 vi.mock('../orchestrator/runStore', () => ({
   readLastRun: vi.fn(() => ({ id: 'from-disk' })),
@@ -97,7 +101,14 @@ vi.mock('../workspace/workspaceList', () => ({
 }))
 
 vi.mock('../workspace/workspaceRun', () => ({
-  workspaceToStartRunOpts: vi.fn((ws: any) => ({ runId: `run-${ws.name}`, workspaceName: ws.name, workspacePath: ws.path, stages: [], developProjects: [] }))
+  // Pass ws.stages/ws.projects through (rather than hard-coding []) so tests can assert on the
+  // resolved StartRunOpts a caller (e.g. resumeWorkspace) built from a `filled` workspace.
+  workspaceToStartRunOpts: vi.fn((ws: any, task?: string, wf?: { id: string; name: string }) => ({
+    runId: `run-${ws.name}`, workspaceName: ws.name, workspacePath: ws.path, task,
+    workflowId: wf?.id, workflowName: wf?.name,
+    stages: ws.stages ?? [],
+    developProjects: ws.projects ?? [],
+  }))
 }))
 
 vi.mock('../chat/chatService', () => ({
@@ -191,6 +202,7 @@ beforeEach(async () => {
   listWorkspacesMock.mockReset().mockReturnValue([])
   appendMessageMock.mockReset()
   readWorkflowsMock.mockReset().mockReturnValue({ workflows: [] })
+  startRunCalls.length = 0
   writeWorkflowsMock.mockReset()
   refreshProviderModelsMock.mockReset()
   installPluginMock.mockReset()
@@ -510,6 +522,49 @@ describe('registerIpc broadcast wiring', () => {
     expect(result).toBeUndefined()
   })
 
+  // FIX 1 regression: readWorkspace/ensureWorkspaceWorkflows leaves ws.stages permanently [] for
+  // any workspace under the multi-workflow model (stages live in ws.workflows[].stages). Before the
+  // fix, resumeWorkspace built `base` from raw `ws` (empty stages) → planResume's allSpecs was empty
+  // → findIndex returned -1 → resume bailed with "工作流已全部完成,无需继续。" even though the prior
+  // run's workflow (wf1) still has an unfinished 'develop' stage.
+  it('engine:resume resolves stages from the failed run\'s workflow (workflows[].stages), not empty ws.stages', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { readLastRun } = await import('../orchestrator/runStore') as any
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const invokeHandler = async (channel: string, ...args: unknown[]) => {
+      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
+      return call[1]({}, ...args)
+    }
+    liveRun.current = null
+    // The prior failed run: 'requirement' finished ok, 'develop' never ran. References workflow wf1.
+    readLastRun.mockReturnValueOnce({
+      id: 'run-1', workspacePath: '/ws/a', status: 'err', workflowId: 'wf1',
+      stages: [{ key: 'requirement', state: 'ok', agents: [] }],
+    })
+    // Post-multi-workflow shape: ws.stages is the empty legacy seed; the real stages live under
+    // ws.workflows[0].stages.
+    readWorkspaceMock.mockReturnValue({
+      name: 'ws', path: '/ws/a', workflowId: 'wf1', status: 'err', projects: [],
+      stages: [],
+      workflows: [{ id: 'wf1', name: 'WF1', stages: [
+        { key: 'requirement', provider: 'claude', model: 'opus' },
+        { key: 'develop', provider: 'claude', model: 'sonnet' },
+      ] }],
+    })
+    await invokeHandler(CH.engineResume, { workspacePath: '/ws/a' })
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && (p as any).type === 'done')
+      .map(([, p]) => (p as any).message?.text as string | undefined)
+    // Must NOT bail with the "nothing left to resume" note.
+    expect(notes.some(t => t?.includes('已全部完成'))).toBe(false)
+    // Must actually start a run — with the remaining ('develop') stage, proving stages were resolved
+    // from ws.workflows[wf1].stages rather than the empty legacy ws.stages.
+    expect(startRunCalls.length).toBe(1)
+    expect(startRunCalls[0].stages.map((s: any) => s.key)).toEqual(['develop'])
+  })
+
   it('broadcasts sessionsChanged after sessionNew/Switch/Close/Rename', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any
@@ -592,6 +647,29 @@ describe('registerIpc broadcast wiring', () => {
     proposeFn.mockClear()
     await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: 'x', task: 'y' })
     expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'x', 'y', { standalone: true })
+  })
+
+  // FIX 5: the forge:run fence propose (fired fire-and-forget at chat-turn end, via chatService's
+  // onRunTrigger) must be marked standalone. Without it, it's neither excluded (preProposes snapshot
+  // predates it) nor standalone, so the SAME turn's `proposeRun.cancelForWorkspace(preProposes)` right
+  // after sendTurn resolves denies it in a race before the user ever sees the card.
+  it('the forge:run fence trigger marks its propose standalone (fence-vs-turn-end race fix)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { sendTurn } = await import('../chat/chatService') as any
+    const { makeProposeRun } = await import('../chat/proposeRun') as any
+    sendTurn.mockReset().mockResolvedValue({ text: 'ok' })
+    registerIpc(() => {}, {})
+    const proposeFn = makeProposeRun.mock.results.at(-1).value as any
+    proposeFn.mockClear()
+    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const payload = { workspacePath: '/ws/a', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] }
+    send({}, payload)
+    await new Promise(r => setTimeout(r, 0))
+    expect(sendTurn).toHaveBeenCalled()
+    const deps = sendTurn.mock.calls.at(-1)![1]
+    deps.onRunTrigger('/ws/a', 'do the thing')
+    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'do the thing', 'do the thing', { standalone: true })
   })
 
   it('configUpdateWorkflow 写入 stagePrompts(不动 plugins)', async () => {

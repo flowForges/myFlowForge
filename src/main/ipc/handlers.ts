@@ -15,7 +15,7 @@ import { basename, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
-import { resolveStages } from '../workspace/resolveStages'
+import { resolveStages, pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from '../workspace/resolveStages'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
 import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
@@ -417,7 +417,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!prior || prior.status === 'run') { emitNote(wsPath, sid, '没有可继续的运行。'); return null }
     const ws = readWorkspace(wsPath)
     if (!ws) { emitNote(wsPath, sid, '该工作区不存在,无法继续。'); return null }
-    const base = workspaceToStartRunOpts(ws)
+    // ws.stages is the legacy migration seed and is permanently [] for any workspace created/edited
+    // under the multi-workflow model (stages live in ws.workflows[].stages now). Resolve the stages
+    // from the FAILED RUN's own workflow (prior.workflowId) — same pattern proposeRun.ts uses —
+    // so base.stages is actually populated and planResume doesn't bail with "已全部完成".
+    const custom = indexCustomStages(readCustomStages().stages)
+    const wf = pickWorkspaceWorkflow(ws, prior.workflowId)
+    const stages = wf
+      ? resolveWorkflowStages(wf, readWorkflows().workflows, custom)
+      : unionWorkflowStages(ws, readWorkflows().workflows, custom)
+    const filled = { ...ws, stages }
+    const base = workspaceToStartRunOpts(filled, undefined, wf ? { id: wf.id, name: wf.name } : undefined)
     const store = new RunStore(wsPath, prior.id)
     const modelOverride = override && (override.provider || override.model) ? override : undefined
     const plan = planResume(
@@ -459,7 +469,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     emitModeChanged: (wp, mode, runId) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'mode-changed', mode, runId }),
   })
   // The forge:run fence routes through proposeRun too (approach = the fence task text).
-  const onRunTrigger = (wsPath: string, task: string) => { void proposeRun(wsPath, task, task) }
+  // standalone: fired at chat-turn end (fire-and-forget); without this it's neither excluded nor
+  // standalone, so the ending turn's cancelForWorkspace(preProposes) kills it in a race — see
+  // proposeRun.ts's `standalone` doc.
+  const onRunTrigger = (wsPath: string, task: string) => { void proposeRun(wsPath, task, task, { standalone: true }) }
   // Task 12: the approval card's workflow-switch dropdown re-proposes the SAME task/approach under a
   // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
   // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
@@ -507,7 +520,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude
     // path instead gets this via ensureWorkspaceSkill's appended SKILL.md section.
     const chatWs = readWorkspace(payload.workspacePath)
-    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan', FORGE_WORKFLOWS: JSON.stringify((chatWs?.workflows ?? []).map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(s => s.key) }))) } : undefined })
+    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan', FORGE_WORKFLOWS: JSON.stringify((chatWs?.workflows ?? []).map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(s => ({ key: s.key, name: s.name })) }))) } : undefined })
     // Snapshot proposes already pending for this workspace before the turn — those belong to earlier
     // turns (fire-and-forget auto-triggers the user hasn't acted on yet) and must survive this turn.
     const preProposes = new Set(proposeRun.pendingIds(payload.workspacePath))

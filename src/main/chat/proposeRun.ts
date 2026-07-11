@@ -51,8 +51,8 @@ export function makeProposeRun(deps: ProposeDeps) {
     const filled = { ...ws, stages }
     let opts = workspaceToStartRunOpts(filled, task, wf ? { id: wf.id, name: wf.name } : undefined)
     // Selective execution (token-saving): the proposing agent may narrow THIS run. The workspace's full
-    // workflow config is untouched (filled is still persisted below); an empty/unknown pick falls back
-    // to the full set so a bad selection can never produce a no-op run.
+    // workflow config is untouched; an empty/unknown pick falls back to the full set so a bad selection
+    // can never produce a no-op run.
     //  - `stages`        → run only these stages (by key).
     //  - `projects`      → default project subset applied to EVERY per-project stage (by name).
     //  - `stageProjects` → per-stage override, e.g. { design: [all 5], develop: [2] } — lets 分析 cover

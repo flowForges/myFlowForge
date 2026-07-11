@@ -27,11 +27,23 @@ describe('forgeChatDirective', () => {
   it('FORGE_WORKFLOWS 存在时把工作流清单拼进 directive', () => {
     const d = forgeChatDirective({
       FORGE_TOOLS: 'forge_propose_plan',
-      FORGE_WORKFLOWS: JSON.stringify([{ id: 'full', name: '完整', stages: ['requirement', 'develop'] }]),
+      FORGE_WORKFLOWS: JSON.stringify([{ id: 'full', name: '完整', stages: [{ key: 'requirement' }, { key: 'develop' }] }]),
     })
     expect(d).toContain('完整')
     expect(d).toContain('`full`')
     expect(d).toContain('workflowId')
+  })
+
+  // FIX 6c: non-claude agents (via FORGE_WORKFLOWS JSON) must see the SAME stage label as claude
+  // (via forgeWorkflowSkill.ts's workflowListSection, which calls stageName(key, s.name)) — a
+  // custom stage's display name must flow through, not just its key.
+  it('a custom stage name in FORGE_WORKFLOWS is rendered, not the raw key', () => {
+    const d = forgeChatDirective({
+      FORGE_TOOLS: 'forge_propose_plan',
+      FORGE_WORKFLOWS: JSON.stringify([{ id: 'full', name: '完整', stages: [{ key: 'custom-1', name: '自定义验收' } ] }]),
+    })
+    expect(d).toContain('自定义验收')
+    expect(d).not.toContain('custom-1 →')
   })
 
   it('FORGE_WORKFLOWS 缺失或非法 JSON 时不追加清单、也不报错', () => {
