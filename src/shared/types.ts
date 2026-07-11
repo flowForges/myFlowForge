@@ -34,6 +34,7 @@ export type PendingAction =
 
 export interface RunState {
   id: string; workspaceName: string; workspacePath: string; status: AgentState
+  workflowId?: string; workflowName?: string   // 本次运行选中的命名工作流;ad-hoc 时缺省
   projects: { name: string; cwd: string }[]
   stages: StageRuntime[]; pending: PendingAction[]
 }
