@@ -41,4 +41,14 @@ describe('renderHistoryPreamble', () => {
     expect(s).toContain('更早历史已省略 3 条')
     expect(s).toContain('用户：你好')
   })
+  it('全量场景引导句要求先通读理解再继续并自行总结要点', () => {
+    const s = renderHistoryPreamble([{ who: 'user', text: '你好', ts: '' }], 0)
+    expect(s).toContain('通读理解')
+    expect(s).toContain('自行总结要点')
+  })
+  it('增量场景（incremental）头部换成"离开期间"文案', () => {
+    const s = renderHistoryPreamble([{ who: 'user', text: '你好', ts: '' }], 0, { incremental: true })
+    expect(s).toContain('离开期间本会话继续了以下对话')
+    expect(s).toContain('通读理解')
+  })
 })
