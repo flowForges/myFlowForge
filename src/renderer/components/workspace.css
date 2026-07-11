@@ -155,6 +155,23 @@
 .ic-chip { font-size: 11.5px; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; transition: .14s; }
 .ic-chip:hover { border-color: var(--accent); color: var(--fg); }
 
+/* 工作流速览卡 — 只读列出该工作区所有已命名工作流,逐条展开看每阶段 provider/model. */
+.wf-glance-item + .wf-glance-item { margin-top: 4px; }
+.wf-glance-head {
+  display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 4px; border-radius: 7px;
+  font-size: 12.5px; text-align: left; transition: background .12s;
+}
+.wf-glance-head:hover { background: var(--surface); }
+.wf-glance-caret { flex: 0 0 auto; display: inline-flex; color: var(--faint); transition: transform .14s; }
+.wf-glance-caret svg { width: 11px; height: 11px; }
+.wf-glance-caret.open { transform: rotate(90deg); }
+.wf-glance-name { min-width: 0; flex: 1 1 auto; font-weight: 600; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-glance-count { flex: 0 0 auto; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.wf-glance-stages { display: flex; flex-direction: column; gap: 2px; padding: 2px 0 4px 22px; }
+.wf-glance-stages li { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 3px 0; }
+.wf-stage-name { min-width: 0; font-size: 11.5px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-stage-agent { flex: 0 0 auto; font-family: var(--mono); font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+
 [data-glass="on"] .ic-card, [data-glass="on"] .ic-stage, [data-glass="on"] .ic-chip,
 [data-glass="on"] .ic-ctx, [data-glass="on"] .ic-ref:hover {
   background: oklch(70% .02 255 / .10); backdrop-filter: none;
