@@ -18,6 +18,9 @@ export type TimelineEntry =
   | { kind: 'pending'; ts: number; action: PendingAction }
   | { kind: 'confirm'; ts: number; confirm: ChatConfirm }
   | { kind: 'plan'; ts: number; plan: PlanReq }
+  // 相邻两条 ai 消息 provider 不同时插入的分割线,携带 provider id(而非显示名——显示名映射复用
+  // 现有 agent label 机制,在渲染处按 providers 列表解析,保持 timeline.ts 纯粹/易测)。
+  | { kind: 'provider-switch'; ts: number; from: string; to: string }
 
 // 卡片(pending/confirm/plan)排序键:缺失/不可解析 → +Infinity 排末尾;否则用毫秒时间戳。
 function key(ts?: string): number {
@@ -48,6 +51,30 @@ function messageKeys(messages: ChatMessage[]): number[] {
 
 // 把消息与三类卡片按时间戳归并成单一时间线。Array.prototype.sort 稳定(ES2019+):相同 ts 保持
 // 传入顺序(消息 → pending → confirm → plan),使同刻卡片有确定次序。
+// 遍历消息,记录"上一条 ai 消息的 provider"(不限于连续,跨用户消息也保留)。当某条 ai 消息与
+// 上一条 ai 消息都携带 provider 且二者不同 → 在这条消息前插入 provider-switch 分割线。
+//   · 旧消息(Task 17 之前,无 provider 字段)或 user 消息不参与判定,只是被跳过——不会误触发,
+//     但会覆盖 prevAiProvider(即便是 undefined),故一条无 provider 的 ai 消息之后,下一条即便
+//     provider 不同也不会补插分割线(因为"上一条"已知不携带 provider,无法判定是否真的切换了)。
+//   · 第一条 ai 消息(prevAiProvider 尚为 undefined)必然不插。
+// 分割线与其触发消息共享同一 ts key,且在展开为 message 条目之前紧邻插入(而非整体作为独立前置
+// 数组块)——若整体前置,一旦分割线 ts 恰好与*更早*的一条消息(如流式承接前值的 carry-forward ts)
+// 相等,稳定排序会把它误排到那条无关消息前面。紧邻插入保证同 ts 平局时只影响它自己触发的那条消息。
+function messageEntries(messages: ChatMessage[], mk: number[]): TimelineEntry[] {
+  const out: TimelineEntry[] = []
+  let prevAiProvider: string | undefined
+  messages.forEach((msg, index) => {
+    if (msg.who === 'ai') {
+      if (msg.provider && prevAiProvider && msg.provider !== prevAiProvider) {
+        out.push({ kind: 'provider-switch', ts: mk[index], from: prevAiProvider, to: msg.provider })
+      }
+      prevAiProvider = msg.provider
+    }
+    out.push({ kind: 'message', ts: mk[index], msg, index })
+  })
+  return out
+}
+
 export function buildTimeline(
   messages: ChatMessage[],
   pending: PendingAction[],
@@ -56,7 +83,7 @@ export function buildTimeline(
 ): TimelineEntry[] {
   const mk = messageKeys(messages)
   const entries: TimelineEntry[] = [
-    ...messages.map((msg, index): TimelineEntry => ({ kind: 'message', ts: mk[index], msg, index })),
+    ...messageEntries(messages, mk),
     ...pending.map((action): TimelineEntry => ({ kind: 'pending', ts: key(action.ts), action })),
     ...confirms.map((confirm): TimelineEntry => ({ kind: 'confirm', ts: key(confirm.ts), confirm })),
     ...plans.map((plan): TimelineEntry => ({ kind: 'plan', ts: key(plan.ts), plan })),
