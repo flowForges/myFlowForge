@@ -36,12 +36,10 @@ extraResources:
       - "**/*"
   - from: assets/pet-packs
     to: builtin-pet-packs
-    # Ship ONLY the assets loaded at runtime: the per-state png/ and webp/ images (the primary display
-    # path is the Vite-bundled copy; these back the forge-pet:// fallback). The source sheets, frames,
-    # intermediate base.png, unused root .gif / apng, READMEs and .DS_Store are authoring-only — excluding
-    # them cuts the shipped pet assets from ~31M to ~3.5M.
+    # Ship ONLY the assets loaded at runtime: the animated webp/ images (the primary display path is the
+    # Vite-bundled copy; these back the forge-pet:// fallback). Everything else in a pack — source sheets,
+    # frames, base.png, and the unused png/gif/apng exports — is authoring-only and excluded.
     filter:
-      - "*/png/**"
       - "*/webp/**"
       - "manifest.json"
 mac:
