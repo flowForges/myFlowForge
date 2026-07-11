@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { appendMessage, readMessages, readSession, writeSession } from './chatStore'
+import { appendMessage, readMessages, readSession, readWatermark, writeSession, writeWatermark } from './chatStore'
 import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard } from '@shared/types'
 import { createRunFenceScanner } from '../agents/runFence'
@@ -60,11 +60,31 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       ? cont.externalId
       : undefined
 
-    const gapped = nativeResumeId ? false : (provider.chat ? readSession(ws, sid, payload.agent) === undefined : true)
+    // Three-branch context-continuity selection for the ACTIVE provider (payload.agent) in this session:
+    //   1. No native session yet for this provider (first turn with it, or a non-chat `run()` provider,
+    //      which never gets a native session) → full local history preamble.
+    //   2. Has a native session, but its watermark is behind the session's latest message count (the
+    //      user switched away and back while another provider ran turns in between) → INCREMENTAL
+    //      preamble covering only what it missed; it still resumes its own native session for its own
+    //      continuity, this just bridges the gap left by other providers.
+    //   3. Has a native session and is caught up → no preamble (fast path, unchanged).
+    // `latest` must be read BEFORE this turn's user message is appended below, so it reflects prior
+    // conversation history only (not double-counting the message we're about to add).
+    const hasSession = provider.chat ? readSession(ws, sid, payload.agent) !== undefined : false
+    const watermark = readWatermark(ws, sid, payload.agent)
+    const latest = readMessages(ws, sid).length
+    const gapped = nativeResumeId ? false : !hasSession
     const preamble = buildMemoryPreamble(ws, sid, { resumeGapped: gapped })
     // Imported sessions re-feed the external transcript; in-app sessions (provider switch, e.g.
     // qoder→codex) fall back to Forge's own stored messages so the new CLI keeps prior context.
-    const contPre = gapped ? (buildContinuationPreamble(ws, sid) || buildLocalHistoryPreamble(ws, sid)) : ''
+    let contPre = ''
+    if (nativeResumeId) {
+      contPre = buildContinuationPreamble(ws, sid)
+    } else if (!hasSession) {
+      contPre = buildLocalHistoryPreamble(ws, sid)
+    } else if (watermark < latest) {
+      contPre = buildLocalHistoryPreamble(ws, sid, {}, { fromIndex: watermark })
+    }
     const promptText = [contPre, preamble, payload.text].filter(Boolean).join('\n')
 
     const userMsg: ChatMessage = {
@@ -116,6 +136,12 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       if (estimateMessagesTokens(readMessages(ws, sid)) > SESSION_DISTILL_THRESHOLD) void distillSession(ws, sid, deps)
       void promoteToWorkspace(ws, sid, deps)
     }
+    // After the turn's messages are persisted, advance this provider's watermark to the session's new
+    // message count — its native session (if any) now covers everything through this exchange, so a
+    // future switch-back only needs to bridge from here. Written alongside the messages, near where the
+    // resumeId itself is written back (onSession, above) — only meaningful for chat() providers, which
+    // are the only ones that get a native session at all.
+    const bumpWatermark = () => { if (provider.chat) writeWatermark(ws, sid, payload.agent, readMessages(ws, sid).length) }
     const finishOk = (elapsed?: number): ChatMessage => {
       // Fold in skills the agent explicitly NAMED in its reply (home/plugin skills the workspace scan +
       // path-regex miss, e.g. superpowers/brainstorming) so the context panel reflects what it used.
@@ -139,6 +165,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         subagents: subagentList(),
       }
       appendMessage(ws, sid, msg)
+      bumpWatermark()
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
       if (trigger.task) deps.onRunTrigger?.(ws, trigger.task)
       scheduleDistill()
@@ -148,12 +175,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
       const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
+      bumpWatermark()
       scheduleDistill()
       return msg
     }
     const finishAborted = (): ChatMessage => {
       const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
+      bumpWatermark()
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
       scheduleDistill()
       return msg

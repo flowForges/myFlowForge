@@ -38,9 +38,17 @@ export function clampHistory(
   return { kept, omitted: msgs.length - kept.length }
 }
 
-export function renderHistoryPreamble(msgs: ImportedMessage[], omitted: number): string {
+export function renderHistoryPreamble(
+  msgs: ImportedMessage[],
+  omitted: number,
+  opts: { incremental?: boolean } = {},
+): string {
   if (!msgs.length) return ''
   const head = omitted > 0 ? `（更早历史已省略 ${omitted} 条）\n` : ''
   const body = msgs.map(m => `${m.who === 'user' ? '用户' : '助手'}：${m.text}`).join('\n')
-  return `【历史对话(续)】\n${head}${body}\n【以上为历史，请在此基础上继续】`
+  const title = opts.incremental ? '【你离开期间本会话继续了以下对话】' : '【历史对话(续)】'
+  const footer = opts.incremental
+    ? '【以上为你离开期间的对话，请先通读理解，在此基础上继续，并自行总结要点】'
+    : '【以上为历史，请先通读理解，在此基础上继续，并自行总结要点】'
+  return `${title}\n${head}${body}\n${footer}`
 }
