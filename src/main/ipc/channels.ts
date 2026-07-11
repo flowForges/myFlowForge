@@ -99,6 +99,14 @@ export const CH = {
   fontsDownload: 'fonts:download',
   fontsDelete: 'fonts:delete',
   fontsDownloadProgress: 'fonts:download-progress',
+  // License-gated extra content (see shared/nsfw.ts + cloudflare/nsfw-worker.js): validate an activation
+  // code against the Worker, list the gated catalog, and download+install a pet pack / background.
+  nsfwValidate: 'nsfw:validate',
+  nsfwCatalog: 'nsfw:catalog',
+  nsfwPreview: 'nsfw:preview',
+  nsfwInstallPet: 'nsfw:install-pet',
+  nsfwInstallBg: 'nsfw:install-bg',
+  nsfwBgExists: 'nsfw:bg-exists',
   // Main renderer → main process: the workspace currently open in the main window ('ws' view), or null on
   // the home view. Relayed to the pet so its command input can target "the workspace you're in".
   setPetActiveWorkspace: 'pet:set-active-workspace',

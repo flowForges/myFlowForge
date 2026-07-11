@@ -20,6 +20,9 @@ const DEFAULTS: Settings = {
   defaultOpenerId: '',
   keybindings: { overrides: {} },
   perfStallToast: false,
+  nsfwUnlocked: false,
+  nsfwCode: '',
+  nsfwInstalled: {},
 }
 
 export interface SettingsUpdate {
@@ -37,6 +40,9 @@ export interface SettingsUpdate {
   keybindings?: Keybindings
   perfStallToast?: boolean
   disabledProviders?: string[]
+  nsfwUnlocked?: boolean
+  nsfwCode?: string
+  nsfwInstalled?: Record<string, string>
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -62,6 +68,9 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     defaultOpenerId: partial.defaultOpenerId ?? base.defaultOpenerId,
     keybindings: partial.keybindings ?? base.keybindings ?? { overrides: {} },
     perfStallToast: partial.perfStallToast ?? base.perfStallToast,
+    nsfwUnlocked: partial.nsfwUnlocked ?? base.nsfwUnlocked,
+    nsfwCode: partial.nsfwCode ?? base.nsfwCode,
+    nsfwInstalled: partial.nsfwInstalled ?? base.nsfwInstalled,
   }
 }
 

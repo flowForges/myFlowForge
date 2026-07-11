@@ -124,6 +124,13 @@ const api = {
     ipcRenderer.on(CH.fontsDownloadProgress, listener)
     return () => ipcRenderer.removeListener(CH.fontsDownloadProgress, listener)
   },
+  // License-gated extra content (NSFW). validate a code, list the gated catalog, install a pet/background.
+  nsfwValidate: (code: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(CH.nsfwValidate, code),
+  nsfwCatalog: (): Promise<import('@shared/nsfw').NsfwCatalog | { error: string }> => ipcRenderer.invoke(CH.nsfwCatalog),
+  nsfwPreview: (kind: 'pet' | 'bg', id: string): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.nsfwPreview, kind, id),
+  nsfwInstallPet: (petId: string, pet: import('@shared/nsfw').NsfwPet): Promise<{ name: string; images: Record<string, string> } | { error: string }> => ipcRenderer.invoke(CH.nsfwInstallPet, petId, pet),
+  nsfwInstallBg: (bg: import('@shared/nsfw').NsfwBg): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.nsfwInstallBg, bg),
+  nsfwBgExists: (url: string): Promise<{ exists: boolean }> => ipcRenderer.invoke(CH.nsfwBgExists, url),
   onSettingsChanged: (cb: (s: unknown) => void) => {
     const listener = (_: unknown, s: unknown) => cb(s)
     ipcRenderer.on(CH.settingsChanged, listener)
