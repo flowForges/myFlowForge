@@ -72,6 +72,29 @@ describe('chatService provider-switch 3-branch preamble selection', () => {
     expect(readWatermark(ws, 's1', 'claude')).toBe(6)
   })
 
+  it('error path: watermark is NOT advanced on a failed turn (so a later switch-back still catches up)', async () => {
+    appendMessage(ws, 's1', { id: 'u0', who: 'user', text: '早前问题', ts: '' })
+    appendMessage(ws, 's1', { id: 'a0', who: 'ai', text: '早前回答', ts: '', provider: 'claude' })
+    writeSession(ws, 's1', 'claude', 'claude-sess-1')
+    writeWatermark(ws, 's1', 'claude', 2)
+
+    const provider: AgentProvider = {
+      id: 'claude', displayName: 'claude',
+      capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [] },
+      run() { return { id: 'x', cancel() {}, done: Promise.resolve({ ok: true }) } },
+      chat(task: ChatTask, cb: ChatCallbacks) {
+        cb.onError(new Error('boom'))
+        return { id: task.id, cancel() {}, done: Promise.resolve({ ok: false }) }
+      },
+    }
+    await sendTurn(basePayload('claude', '再问一次'), { provider, env: process.env, emit: () => {} })
+
+    // Turn failed before the provider could absorb context -> watermark must stay at its pre-turn value,
+    // NOT jump to the new message count (which would silently skip the missed context on a switch-back).
+    expect(readWatermark(ws, 's1', 'claude')).toBe(2)
+  })
+
   it('branch 3: has native session and watermark caught up -> no preamble injected (fast path)', async () => {
     appendMessage(ws, 's1', { id: 'u0', who: 'user', text: '第一问CAUGHTUP', ts: '' })
     appendMessage(ws, 's1', { id: 'a0', who: 'ai', text: '第一答CAUGHTUP', ts: '', provider: 'claude' })
