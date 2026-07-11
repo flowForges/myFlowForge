@@ -141,6 +141,9 @@ export interface ChatMessage {
   who: 'user' | 'ai'
   text: string
   model?: string
+  // Agent id (claude/codex/cursor/...) that produced this ai message. Used to detect provider
+  // switches (timeline divider) and to attribute per-provider watermark progress.
+  provider?: string
   think?: ChatThink
   // Built-in Task sub-agents this assistant turn spawned (persisted so cards survive reload).
   subagents?: SubagentCard[]
