@@ -107,6 +107,24 @@ describe('proposeRun mode flip', () => {
     expect(propose.has(idOther)).toBe(true)
   })
 
+  // 竞态回归:UI 发起的 propose(审批卡下拉换流 → chat:repropose-workflow,select.standalone=true)不归属任何
+  // 主代理 turn。触发它的那一 turn 结束时会 cancelForWorkspace(排除自己的 preProposes 快照),但 standalone 卡是
+  // 快照之后才建、且不在快照里 → 会被误 deny,换流后的新卡在用户批准前就消失。cancelForWorkspace 必须跳过 standalone。
+  it('cancelForWorkspace skips standalone (UI-initiated) proposes even with an empty exclude set', async () => {
+    const captured: string[] = []
+    const deps = mkDeps({ emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    void propose('/w', 'agent-owned', 'agent-owned')                       // turn 拥有的普通 propose
+    void propose('/w', 'ui-switch', 'ui-switch', { standalone: true })     // UI 发起、turn 无关
+    const agentId = captured[0]
+    const standaloneId = captured[1]
+    // 模拟一个不知道 standalone 卡存在的 turn 结束(exclude 为空)
+    const cancelled = propose.cancelForWorkspace('/w', new Set())
+    expect(cancelled).toEqual([agentId])          // 只回收 turn 拥有的
+    expect(propose.has(agentId)).toBe(false)
+    expect(propose.has(standaloneId)).toBe(true)  // standalone 卡仍在,等待用户决策
+  })
+
   it('cancelForWorkspace skips excluded ids (prior turns\' still-pending proposes survive)', async () => {
     const captured: string[] = []
     const deps = mkDeps({ emitPlanRequest: (_w, req) => captured.push(req.id) })

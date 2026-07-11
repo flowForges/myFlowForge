@@ -464,7 +464,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
   // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
   ipcMain.handle(CH.chatReproposeWorkflow, (_e, a: { workspacePath: string; approach: string; task?: string; workflowId?: string }) => {
-    void proposeRun(a.workspacePath, a.approach, a.task, a.workflowId ? { workflowId: a.workflowId } : undefined)
+    // standalone: this propose is UI-initiated (not owned by an agent turn), so turn cleanup
+    // (cancelForWorkspace) must not dismiss it before the user decides — see proposeRun.ts.
+    void proposeRun(a.workspacePath, a.approach, a.task, { ...(a.workflowId ? { workflowId: a.workflowId } : {}), standalone: true })
   })
   const runTurn = async (payload: ChatSendPayload) => {
     // Deterministic conversational resume: if the user asks to continue and a cancelled/failed run

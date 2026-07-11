@@ -28,8 +28,12 @@ export type ProposeResult = { approved: boolean; feedback?: string }
 
 let seq = 0
 export function makeProposeRun(deps: ProposeDeps) {
-  const pending = new Map<string, { resolve: (d: PlanDecision) => void; wsPath: string }>()
-  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }): Promise<ProposeResult> => {
+  const pending = new Map<string, { resolve: (d: PlanDecision) => void; wsPath: string; standalone: boolean }>()
+  // `standalone`: this propose is UI-initiated (e.g. the approval card's workflow-switch dropdown re-proposes
+  // via chat:repropose-workflow), NOT owned by an agent chat turn. Turn cleanup (cancelForWorkspace) must
+  // NOT dismiss it — it lives until the user decides (allow/deny). Without this, a switch's fresh card would
+  // be created after the triggering turn's preProposes snapshot and get denied when that turn ends (race).
+  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean }): Promise<ProposeResult> => {
     const raw = deps.readWorkspace(wsPath)
     if (!raw) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
     // Defensive: production readWorkspace (config/store.ts) already normalizes workflows on every
@@ -74,7 +78,7 @@ export function makeProposeRun(deps: ProposeDeps) {
     const workflowOptions = ws.workflows.map(w => ({ id: w.id, name: w.name }))
     deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), task, workflowId: wf?.id, workflowName: wf?.name, workflowOptions })
     return new Promise<ProposeResult>(resolve => {
-      pending.set(id, { wsPath, resolve: (d) => {
+      pending.set(id, { wsPath, standalone: select?.standalone === true, resolve: (d) => {
         if (d.decision === 'modify') return resolve({ approved: false, feedback: d.value })
         if (d.decision === 'deny') return resolve({ approved: false })
         const live = deps.getRun()
@@ -101,7 +105,9 @@ export function makeProposeRun(deps: ProposeDeps) {
   fn.pendingIds = (wsPath: string): string[] =>
     [...pending.entries()].filter(([, e]) => e.wsPath === wsPath).map(([id]) => id)
   fn.cancelForWorkspace = (wsPath: string, exclude?: ReadonlySet<string>): string[] => {
-    const ids = fn.pendingIds(wsPath).filter(id => !exclude?.has(id))
+    // Skip excluded (prior turns') AND standalone (UI-initiated, turn-independent) proposes — the latter
+    // must survive an unrelated turn ending, or the workflow-switch card would vanish before the user acts.
+    const ids = fn.pendingIds(wsPath).filter(id => !exclude?.has(id) && !pending.get(id)?.standalone)
     for (const id of ids) { const e = pending.get(id); if (e) { pending.delete(id); e.resolve({ decision: 'deny' }) } }
     return ids
   }
