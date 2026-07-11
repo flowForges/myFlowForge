@@ -14,15 +14,29 @@ const pending: PendingAction[] = [
   },
 ]
 
+const gatePending: PendingAction[] = [
+  {
+    id: 'pg', kind: 'confirm', agentId: 'a3', agentName: 'Designer', wsName: 'ws', provider: 'claude',
+    role: '技术方案设计', title: '技术方案设计完成', reworkable: true,
+  },
+]
+
 const resolve = vi.fn()
 const engine: EngineApi = {
   run: { id: 'r', workspaceName: 'ws', workspacePath: '/ws', status: 'run', projects: [], stages: [], pending },
   pending, resolve, cancel: () => {},
 }
 
+const gateResolve = vi.fn()
+const gateEngine: EngineApi = {
+  run: { id: 'r2', workspaceName: 'ws', workspacePath: '/ws', status: 'run', projects: [], stages: [], pending: gatePending },
+  pending: gatePending, resolve: gateResolve, cancel: () => {},
+}
+
 let chatHandler: ((e: ChatEvent) => void) | null = null
 beforeEach(() => {
   resolve.mockClear()
+  gateResolve.mockClear()
   chatHandler = null
   ;(window as any).forge = {
     chatHistory: async () => [],
@@ -137,6 +151,41 @@ describe('WorkspaceView ReqCard wiring', () => {
     expect(container.querySelector('.pp-act')).toBeNull()
     // the request cards live in the chat stream, never in the inspector pane
     expect(container.querySelector('#pane-agents .msg-req')).toBeNull()
+  })
+
+  it('stage-gate 打回重做… seeds the composer with a quote marker + banner, and the next send routes to the orchestrator resolve (modify), not chat.send (Task 16)', async () => {
+    const { container } = render(<WorkspaceView engine={gateEngine} providers={providers} />)
+    await waitFor(() => expect(container.querySelector('.chat-inner .msg-req.k-confirm')).toBeTruthy())
+
+    expect(container.querySelector('.supplement-banner')).toBeNull()
+    fireEvent.click(screen.getByText('打回重做…'))
+
+    await waitFor(() => expect(container.querySelector('.supplement-banner')).toBeTruthy())
+    expect(container.querySelector('.supplement-banner')?.textContent).toContain('补充中：针对【技术方案设计】')
+    const ta = container.querySelector('#composerInput') as HTMLTextAreaElement
+    await waitFor(() => expect(ta.value).toContain('针对【技术方案·技术方案设计】补充'))
+
+    fireEvent.change(ta, { target: { value: ta.value + '鉴权边界要再探一遍' } })
+    fireEvent.click(container.querySelector('#sendBtn') as HTMLButtonElement)
+    await waitFor(() => expect(gateResolve).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'pg', decision: 'modify', value: expect.stringContaining('鉴权边界要再探一遍') }),
+    ))
+    expect((window as any).forge.sendChat).not.toHaveBeenCalled()
+    expect((window as any).forge.chatResolve).not.toHaveBeenCalled()
+
+    // Banner clears after send
+    await waitFor(() => expect(container.querySelector('.supplement-banner')).toBeNull())
+  })
+
+  it('允许 on the stage-gate this supplement targets clears the banner too', async () => {
+    const { container } = render(<WorkspaceView engine={gateEngine} providers={providers} />)
+    await waitFor(() => expect(container.querySelector('.chat-inner .msg-req.k-confirm')).toBeTruthy())
+    fireEvent.click(screen.getByText('打回重做…'))
+    await waitFor(() => expect(container.querySelector('.supplement-banner')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('允许并继续'))
+    expect(gateResolve).toHaveBeenCalledWith({ id: 'pg', decision: 'allow' })
+    expect(container.querySelector('.supplement-banner')).toBeNull()
   })
 
   it('renders chat confirm-request as a ReqCard attributed to 主代理', async () => {

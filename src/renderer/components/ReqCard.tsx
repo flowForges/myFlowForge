@@ -7,16 +7,16 @@ interface ReqCardProps {
   action: PendingAction
   onResolve: (p: ResolvePayload) => void
   onOpenDoc?: (doc: DesignDocRef) => void
+  // 阶段评审门控(reworkable)的「打回重做…」改为回流主输入框(见 WorkspaceView 的 pendingSupplement 机制),
+  // 而非展开内嵌 textarea。仅 reworkable 分支使用。
+  onSupplement?: () => void
 }
 
 // Document icon for the "打开文档" buttons on a design gate.
 const DOC_ICON = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/>'
 // .msg-req card — ported 1:1 from the prototype renderReq (confirm / input / select).
-export function ReqCard({ action, onResolve, onOpenDoc }: ReqCardProps) {
+export function ReqCard({ action, onResolve, onOpenDoc, onSupplement }: ReqCardProps) {
   const [value, setValue] = useState('')
-  // 阶段评审门控:「打回重做」展开一个多行修改方向输入,提交后编排器带着方向重跑本阶段。
-  const [reworking, setReworking] = useState(false)
-  const [dir, setDir] = useState('')
   const provClass = action.provider ? `p-${action.provider}` : 'p-claude'
 
   return (
@@ -65,29 +65,13 @@ export function ReqCard({ action, onResolve, onOpenDoc }: ReqCardProps) {
           <div className="req-sub"><span className="req-file">{action.where}</span></div>
         ) : null}
 
-        {action.kind === 'confirm' && !reworking && (
+        {action.kind === 'confirm' && (
           <div className="req-actions">
             <button className="req-ok" onClick={() => onResolve({ id: action.id, decision: 'allow' })}>允许并继续</button>
             {action.reworkable ? (
-              <button className="req-rework" onClick={() => setReworking(true)}>打回重做…</button>
+              <button className="req-rework" onClick={() => onSupplement?.()}>打回重做…</button>
             ) : null}
             <button className="req-no" onClick={() => onResolve({ id: action.id, decision: 'deny' })}>{action.reworkable ? '终止' : '拒绝'}</button>
-          </div>
-        )}
-        {action.kind === 'confirm' && reworking && (
-          <div className="req-inrow req-inrow-multi">
-            <textarea
-              className="req-modify-ta"
-              placeholder="补充你的修改方向,让子代理重新探查/整理再出一版(可多行,Shift+Enter 换行,Enter 提交)"
-              value={dir}
-              rows={3}
-              onChange={e => setDir(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onResolve({ id: action.id, decision: 'modify', value: dir }) } }}
-            />
-            <div className="req-modify-actions">
-              <button className="req-ok" onClick={() => onResolve({ id: action.id, decision: 'modify', value: dir })}>提交并重做</button>
-              <button className="req-no" onClick={() => { setDir(''); setReworking(false) }}>返回</button>
-            </div>
           </div>
         )}
 
