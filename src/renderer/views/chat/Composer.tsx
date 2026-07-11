@@ -78,9 +78,12 @@ interface Props {
   onSelectionChange?: (s: { agentId: string; modelId: string; permissionMode: PermissionMode }) => void
   /** 本机扫描到的该 provider 的自定义命令/prompt + skills(经 IPC),与 Forge 内置命令一起进 "/" 菜单。 */
   dynamicCommands?: MenuCommand[]
+  /** Picking a workflow entry from the "/" menu (MenuCommand.workflowId set) calls this instead of
+      just filling the textarea with a template — see chooseSlash. */
+  onPickWorkflow?: (workflowId: string) => void
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands, onPickWorkflow }: Props) {
   const [text, setText] = useState('')
   // The last message we sent, so stopping the turn BEFORE the AI produced any output restores it to the
   // box for editing/resending (the user would otherwise retype/copy it back). Once the AI has output —
@@ -212,7 +215,11 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const showSlash = slashCmds.length > 0
   const slashActive = showSlash ? Math.min(slashSel, slashCmds.length - 1) : 0
   function chooseSlash(c: MenuCommand) {
-    setText(c.template)
+    // A workspace-workflow entry (Task 13): hand off to the parent instead of filling the (empty)
+    // template verbatim — the parent seeds a workflow-scoped trigger phrase via its own seedText
+    // plumbing (same mechanism as the 快捷指令 chips), so the user types the task and sends normally.
+    if (c.workflowId) { setText(''); onPickWorkflow?.(c.workflowId) }
+    else setText(c.template)
     setSlashDismissed(true)
     const ta = taRef.current
     if (ta) { ta.focus(); requestAnimationFrame(autosize) }

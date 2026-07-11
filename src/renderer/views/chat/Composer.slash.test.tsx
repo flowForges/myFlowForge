@@ -81,4 +81,26 @@ describe('Composer slash commands', () => {
     fireEvent.change(ta, { target: { value: '/工作流 做个登录页' } })
     expect(screen.queryByText('发起工作流')).toBeNull()
   })
+
+  it('picking a workspace-workflow entry calls onPickWorkflow (not the empty template) and closes the menu', () => {
+    const onSend = vi.fn()
+    const onPickWorkflow = vi.fn()
+    render(
+      <Composer
+        providers={providers}
+        disabled={false}
+        onSend={onSend}
+        selection={{ agentId: 'claude', modelId: 'opus' }}
+        onSelectionChange={() => {}}
+        dynamicCommands={[{ cmd: '/快速修复', title: '快速修复', desc: '按此工作流发起', template: '', kind: 'forge', workflowId: 'wf-1' }]}
+        onPickWorkflow={onPickWorkflow}
+      />,
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: '/快速' } })
+    fireEvent.mouseDown(screen.getByText('快速修复'))
+    expect(onPickWorkflow).toHaveBeenCalledWith('wf-1')
+    expect(ta.value).toBe('')
+    expect(screen.queryByText('快速修复')).toBeNull()   // menu closed after pick
+  })
 })

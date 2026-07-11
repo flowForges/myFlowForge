@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandsForProvider, isSlashQuery, mergeCommands, SLASH_COMMANDS, type MenuCommand } from './slashCommands'
+import { commandsForProvider, isSlashQuery, mergeCommands, SLASH_COMMANDS, workflowMenuCommands, type MenuCommand } from './slashCommands'
 
 describe('commandsForProvider', () => {
   it('always includes the universal 工作流 command for any provider', () => {
@@ -53,6 +53,24 @@ describe('mergeCommands', () => {
     const merged = mergeCommands('claude', '/工作流', clash)
     expect(merged.filter(c => c.cmd === '/工作流')).toHaveLength(1)
     expect(merged.find(c => c.cmd === '/工作流')?.kind).toBe('forge')
+  })
+})
+
+describe('workflowMenuCommands', () => {
+  it('one entry per workflow, carrying its id and an empty template', () => {
+    const cmds = workflowMenuCommands([{ id: 'wf-1', name: '快速修复' }, { id: 'wf-2', name: '完整流程' }])
+    expect(cmds).toEqual([
+      { cmd: '/快速修复', title: '快速修复', desc: '按此工作流发起', template: '', kind: 'forge', workflowId: 'wf-1' },
+      { cmd: '/完整流程', title: '完整流程', desc: '按此工作流发起', template: '', kind: 'forge', workflowId: 'wf-2' },
+    ])
+  })
+  it('empty workflow list → no entries', () => {
+    expect(workflowMenuCommands([])).toEqual([])
+  })
+  it('feeds mergeCommands and survives a query filter untouched (kind forge → no source tag)', () => {
+    const cmds = workflowMenuCommands([{ id: 'wf-1', name: '快速修复' }])
+    const merged = mergeCommands('claude', '/快速', cmds)
+    expect(merged).toEqual([{ cmd: '/快速修复', title: '快速修复', desc: '按此工作流发起', template: '', kind: 'forge', workflowId: 'wf-1' }])
   })
 })
 
