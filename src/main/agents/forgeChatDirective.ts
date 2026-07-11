@@ -1,16 +1,18 @@
 import { stageName } from '../config/schema'
 
 // Same workflow list markdown as forgeWorkflowSkill.ts's workflowListSection, but built from the
-// JSON in env.FORGE_WORKFLOWS ([{id,name,stages:string[]}], stages already stage KEYS — see
-// handlers.ts where the chat agent env is assembled) since non-claude CLIs never read
-// workspace.json directly. Fails open (returns '') on missing/invalid JSON.
+// JSON in env.FORGE_WORKFLOWS ([{id,name,stages:{key,name?}[]}] — see handlers.ts where the chat
+// agent env is assembled) since non-claude CLIs never read workspace.json directly. Each stage
+// carries its optional custom display name alongside the key so stageName(key,name) here matches
+// forgeWorkflowSkill.ts's workflowListSection exactly (claude and non-claude agents see the same
+// labels). Fails open (returns '') on missing/invalid JSON.
 function workflowListSectionFromJson(raw: string | undefined): string {
   if (!raw) return ''
-  let parsed: Array<{ id: string; name: string; stages: string[] }>
+  let parsed: Array<{ id: string; name: string; stages: Array<{ key: string; name?: string }> }>
   try { parsed = JSON.parse(raw) } catch { return '' }
   if (!Array.isArray(parsed) || parsed.length === 0) return ''
   const lines = parsed.map(wf => {
-    const seq = wf.stages.map(k => stageName(k)).join(' → ')
+    const seq = wf.stages.map(s => stageName(s.key, s.name)).join(' → ')
     return `- **${wf.name}** (id: \`${wf.id}\`): ${seq}`
   })
   return [

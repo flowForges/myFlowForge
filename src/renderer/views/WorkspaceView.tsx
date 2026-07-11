@@ -187,7 +187,9 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   // Seed selection from develop stage once wsInfo is loaded (only if not yet set)
   useEffect(() => {
     if (selection || !wsInfo) return
-    const dev = wsInfo.stages.find(s => s.key === 'develop') ?? wsInfo.stages[0]
+    // ws.stages is the legacy migration seed and is [] for any workspace under the multi-workflow
+    // model (stages live in wsInfo.workflows[].stages now) — search across all named workflows.
+    const dev = (wsInfo.workflows ?? []).flatMap(w => w.stages).find(s => s.key === 'develop')
     const installed = providers.filter(p => p.installed)
     const seed = (dev && installed.some(p => p.id === dev.provider))
       ? { agentId: dev.provider, modelId: dev.model }
@@ -869,7 +871,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                   </div>
                   <p>这是当前工作区已配置的执行流程。识别到任务型指令时将按此链路编排为多代理执行。</p>
                   <WorkflowStrip
-                    stages={(wsInfo?.stages ?? []).map(s => ({ key: s.key, name: STAGE_NAMES[s.key] ?? s.key }))}
+                    stages={(wsInfo?.workflows?.[0]?.stages ?? wsInfo?.stages ?? []).map(s => ({ key: s.key, name: STAGE_NAMES[s.key] ?? s.key }))}
                     plugins={[...(wsInfo?.plugins ?? []), ...(wsInfo?.stepPlugins ?? [])]}
                   />
                   <button className="ic-edit-flow" disabled={!!archived} onClick={() => onEditWorkspace?.()}>
