@@ -5,12 +5,14 @@ import type { StartRunOpts } from '../orchestrator/orchestrator'
 // Pure reconstructor: rebuild a StartRunOpts from a persisted Workspace so a run can be
 // re-run later (SP-C) without knownProjects or the workflow def. Equivalent in shape to the
 // startRunOpts createWorkspace returned at creation time (worktrees already exist on disk).
-export function workspaceToStartRunOpts(ws: Workspace, task?: string): StartRunOpts {
+export function workspaceToStartRunOpts(ws: Workspace, task?: string, wf?: { id: string; name: string }): StartRunOpts {
   return {
     runId: `run-${ws.name}`,
     workspaceName: ws.name,
     workspacePath: ws.path,
     task,
+    workflowId: wf?.id,
+    workflowName: wf?.name,
     plugins: ws.plugins ?? [],
     stepPlugins: ws.stepPlugins ?? [],
     stages: ws.stages.map(s => ({
