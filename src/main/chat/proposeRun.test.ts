@@ -162,6 +162,50 @@ describe('proposeRun mode flip', () => {
     expect(opts.stages.find((s: any) => s.key === 'requirement').projects).toBeUndefined()
   })
 
+  // Multi-workflow-per-workspace: select.workflowId picks a named workflow's own固化 stages;
+  // no workflowId falls back to the ad-hoc union of every workspace workflow's stages so
+  // select.stages can narrow across all of them.
+  const wsDouble = {
+    name: 'w', path: '/w', workflowId: 'standard', status: 'idle', stages: [], projects: [],
+    workflows: [
+      { id: 'quick', name: '快速修复', stages: [
+        { key: 'requirement', provider: 'claude', model: 'opus-4.8' },
+        { key: 'design', provider: 'claude', model: 'opus-4.8' },
+      ] },
+      { id: 'full', name: '完整流程', stages: [
+        { key: 'requirement', provider: 'claude', model: 'opus-4.8' },
+        { key: 'design', provider: 'claude', model: 'opus-4.8' },
+        { key: 'develop', provider: 'claude', model: 'opus-4.8' },
+        { key: 'test', provider: 'claude', model: 'opus-4.8' },
+        { key: 'review', provider: 'claude', model: 'opus-4.8' },
+      ] },
+    ],
+  } as any
+
+  it('select.workflowId=full → 用 full 的 stages,plan-request 带 workflowName', async () => {
+    const emitted: any[] = []
+    const deps = mkDeps({ readWorkspace: () => wsDouble, emitPlanRequest: (_p, r) => emitted.push(r) })
+    const propose = makeProposeRun(deps)
+    const p = propose('/w', '方案', 'task', { workflowId: 'full' })
+    const req = emitted[0]
+    expect(req.workflowName).toBe('完整流程')
+    expect(req.stages.map((s: any) => s.name)).toContain('代码开发')  // full 含 develop
+    propose.resolve(req.id, { decision: 'deny' })
+    await p
+  })
+
+  it('无 workflowId + stages 裁剪 → ad-hoc union,workflowName 缺省', async () => {
+    const emitted: any[] = []
+    const deps = mkDeps({ readWorkspace: () => wsDouble, emitPlanRequest: (_p, r) => emitted.push(r) })
+    const propose = makeProposeRun(deps)
+    const p = propose('/w', '临时', 'task', { stages: ['requirement', 'design'] })
+    const req = emitted[0]
+    expect(req.workflowName).toBeUndefined()
+    expect(req.stages.map((s: any) => s.name)).toEqual(['需求评估', '技术方案设计'])
+    propose.resolve(req.id, { decision: 'deny' })
+    await p
+  })
+
   it('does not flip mode when a run is already live (allow rejected)', async () => {
     const startRun = vi.fn()
     const setSessionMode = vi.fn()

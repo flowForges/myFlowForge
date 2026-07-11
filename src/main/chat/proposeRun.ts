@@ -1,8 +1,9 @@
 import type { Workspace, Workflow } from '../config/schema'
+import { ensureWorkspaceWorkflows } from '../config/schema'
 import type { StartRunOpts } from '../orchestrator/orchestrator'
 import type { RunState } from '@shared/types'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
-import { resolveStages } from '../workspace/resolveStages'
+import { pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from '../workspace/resolveStages'
 import { planStages } from '../workspace/planSummary'
 import { indexCustomStages, type CustomStageDef } from '../../shared/customStages'
 
@@ -15,7 +16,7 @@ export interface ProposeDeps {
   readCustomStages?: () => CustomStageDef[]
   writeWorkspace: (ws: Workspace) => void
   startRun: (o: StartRunOpts) => void
-  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: { name: string; agents: number }[]; task?: string }) => void
+  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: { name: string; agents: number }[]; task?: string; workflowId?: string; workflowName?: string }) => void
   emitNote: (wsPath: string, text: string) => void
   // #1: after an approved chat-triggered run starts, flip the triggering session to workflow mode
   // (setSessionMode bridges to the active session via the 2A sessionStore) and tell the renderer.
@@ -28,13 +29,23 @@ export type ProposeResult = { approved: boolean; feedback?: string }
 let seq = 0
 export function makeProposeRun(deps: ProposeDeps) {
   const pending = new Map<string, { resolve: (d: PlanDecision) => void; wsPath: string }>()
-  const fn = (wsPath: string, approach: string, task?: string, select?: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }): Promise<ProposeResult> => {
-    const ws = deps.readWorkspace(wsPath)
-    if (!ws) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
-    const stages = resolveStages(ws, deps.readWorkflows(), indexCustomStages(deps.readCustomStages?.() ?? []))
+  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }): Promise<ProposeResult> => {
+    const raw = deps.readWorkspace(wsPath)
+    if (!raw) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
+    // Defensive: production readWorkspace (config/store.ts) already normalizes workflows on every
+    // read, but callers (tests, older fixtures pre-dating the `workflows` field) may hand us a legacy
+    // ws with an absent (not just empty) `workflows` array. ensureWorkspaceWorkflows is pure +
+    // idempotent, so re-applying it here — after coercing a missing array to [] — is free.
+    const ws = ensureWorkspaceWorkflows({ ...raw, workflows: raw.workflows ?? [] })
+    const custom = indexCustomStages(deps.readCustomStages?.() ?? [])
+    // 命中命名工作流 → 只跑该条 stages;否则(ad-hoc,主代理自选)→ 所有工作流阶段 union,让 select.stages 裁剪。
+    const wf = select?.workflowId ? pickWorkspaceWorkflow(ws, select.workflowId) : null
+    const stages = wf
+      ? resolveWorkflowStages(wf, deps.readWorkflows(), custom)
+      : unionWorkflowStages(ws, deps.readWorkflows(), custom)
     if (stages.length === 0) { deps.emitNote(wsPath, '该工作区无可执行的工作流配置。'); return Promise.resolve({ approved: false }) }
     const filled = { ...ws, stages }
-    let opts = workspaceToStartRunOpts(filled, task)
+    let opts = workspaceToStartRunOpts(filled, task, wf ? { id: wf.id, name: wf.name } : undefined)
     // Selective execution (token-saving): the proposing agent may narrow THIS run. The workspace's full
     // workflow config is untouched (filled is still persisted below); an empty/unknown pick falls back
     // to the full set so a bad selection can never produce a no-op run.
@@ -58,14 +69,13 @@ export function makeProposeRun(deps: ProposeDeps) {
       }) }
     }
     const id = `pl-${Date.now()}-${++seq}`
-    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), task })
+    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), task, workflowId: wf?.id, workflowName: wf?.name })
     return new Promise<ProposeResult>(resolve => {
       pending.set(id, { wsPath, resolve: (d) => {
         if (d.decision === 'modify') return resolve({ approved: false, feedback: d.value })
         if (d.decision === 'deny') return resolve({ approved: false })
         const live = deps.getRun()
         if (live && live.status === 'run') { deps.emitNote(wsPath, '已有运行进行中,稍后再试。'); return resolve({ approved: false }) }
-        if (ws.stages.length === 0) deps.writeWorkspace(filled)
         deps.startRun(opts)
         // #1: this chat turn was task-shaped (the LLM self-activated forge_propose_plan and the
         // user approved). Promote the triggering session to workflow mode + surface the auto-orchestration.
