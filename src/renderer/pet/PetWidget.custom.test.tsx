@@ -11,6 +11,8 @@ describe('PetWidget custom skin', () => {
     const img = container.querySelector('img')
     expect(img).not.toBeNull()
     expect(img!.getAttribute('src')).toBe(src)
+    expect(container.querySelector('.pet-image-stack')).not.toBeNull()
+    expect(img!.classList.contains('pet-image-front')).toBe(true)
   })
 
   it('falls back to the sprite SVG when customImages is missing the current state', () => {
