@@ -252,6 +252,13 @@ export const SettingsSchema = z.object({
   // Off by default — real stalls are still written to the debug log regardless; this only controls
   // whether they pop as user-facing notifications (opt-in from the 调试 pane).
   perfStallToast: z.boolean().catch(false).default(false),
+  // License-gated extra content (see shared/nsfw.ts). nsfwUnlocked flips true after a valid activation
+  // code; nsfwCode keeps the validated code locally to authenticate catalog + image-byte fetches.
+  nsfwUnlocked: z.boolean().catch(false).default(false),
+  nsfwCode: z.string().catch('').default(''),
+  // Which gated items have been installed → their local ref (bg: forge-bg:// URL; pet: local customPets
+  // id). Drives the 安装/设置 button state; a missing/deleted local file just re-downloads on 设置.
+  nsfwInstalled: z.record(z.string(), z.string()).catch({}).default({}),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -272,6 +279,9 @@ export const defaultSettings = (): Settings => ({
   defaultOpenerId: '',
   keybindings: { overrides: {} },
   perfStallToast: false,
+  nsfwUnlocked: false,
+  nsfwCode: '',
+  nsfwInstalled: {},
 })
 
 export const ProjectSchema = z.object({
