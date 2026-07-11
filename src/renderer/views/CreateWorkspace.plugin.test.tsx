@@ -129,6 +129,14 @@ describe('CreateWorkspace – two-scope plugin editing', () => {
         { key: 'design', provider: 'claude', model: 'opus-4.8' },
         { key: 'develop', provider: 'claude', model: 'sonnet-4.6' },
       ],
+      // Mirror readWorkspace()'s ensureWorkspaceWorkflows migration.
+      workflows: [{
+        id: 'standard', name: 'standard',
+        stages: [
+          { key: 'design', provider: 'claude', model: 'opus-4.8' },
+          { key: 'develop', provider: 'claude', model: 'sonnet-4.6' },
+        ],
+      }],
       projects: [{ repoId: 'proj1', name: 'proj1', branch: 'feat/x', provider: 'claude', model: 'sonnet-4.6' }],
       status: 'ok',
       plugins: [{ id: 'pl-1', name: '我的wf插件', prompt: 'do', after: 'design', skills: [], tools: [] }],

@@ -52,6 +52,9 @@
 .wf-card.add { border-style: dashed; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--muted); font-size: 12.5px; font-weight: 500; min-width: 120px; flex: 0 0 auto; }
 .wf-card.add:hover { color: var(--fg); border-color: var(--faint); }
 .wf-card.add svg { width: 15px; height: 15px; }
+/* 多选工作流后的页签行:切换当前正在配置阶段的那一条 */
+.wf-tabs { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 9px; }
+.wf-tab.on { background: var(--accent); color: var(--on-accent); border-style: solid; }
 
 /* 阶段编辑列表 */
 .stage-edit { margin-top: 14px; display: flex; flex-direction: column; gap: 7px; }

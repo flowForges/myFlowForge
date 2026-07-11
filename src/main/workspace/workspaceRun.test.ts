@@ -10,6 +10,7 @@ const ws: Workspace = {
     { key: 'design', provider: 'claude', model: 'opus-4.8' },
     { key: 'develop', provider: 'claude', model: 'sonnet-4.6' }
   ],
+  workflows: [],
   projects: [
     { repoId: 'p1', name: 'alpha', branch: 'forge/demo', provider: 'codex', model: 'gpt-5-codex' },
     { repoId: 'p2', name: 'beta', branch: 'forge/demo', provider: '', model: '' }
@@ -72,6 +73,7 @@ describe('workspaceToStartRunOpts', () => {
       name: 'w', path: '/ws', workflowId: 'standard', status: 'idle' as const,
       projects: [{ repoId: 'web', name: 'web', branch: 'main', provider: '', model: '' }],
       stages: [{ key: 'review' as const, provider: 'claude', model: 'm', review: { mode: 'parallel' as const, scope: 'per-project' as const } }],
+      workflows: [],
       plugins: [], stepPlugins: [],
     }
     const opts = workspaceToStartRunOpts(ws)
@@ -82,6 +84,7 @@ describe('workspaceToStartRunOpts', () => {
     const ws = {
       name: 'w', path: '/ws', workflowId: 'standard', status: 'idle' as const,
       projects: [], stages: [{ key: 'develop' as const, provider: 'claude', model: 'm' }],
+      workflows: [],
       plugins: [], stepPlugins: [],
     }
     expect(workspaceToStartRunOpts(ws).stages[0].review).toBeUndefined()

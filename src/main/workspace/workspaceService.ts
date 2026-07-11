@@ -51,8 +51,9 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
   return {
     name: opts.name,
     path: opts.path,
-    workflowId: opts.workflowId,
-    stages: opts.stages.map(toWsStage),
+    workflowId: '',   // legacy 迁移种子 — 新文件走下面的 workflows
+    stages: [],        // legacy 迁移种子
+    workflows: opts.workflows.map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(toWsStage) })),
     projects: opts.projects.map(sel => {
       // buildWorkspaceRecord runs BEFORE the provision loop's "未知项目" guard, so a selected project
       // that isn't in the known map (e.g. projects.json missing, or restoring a partial whose project
@@ -68,9 +69,12 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
 }
 
 // Assemble StartRunOpts from create opts + the provisioned developProjects. Shared by both create
-// paths so a run can be (re)built identically regardless of whether setup hooks ran.
+// paths so a run can be (re)built identically regardless of whether setup hooks ran. A workspace may
+// carry several workflows now — the stashed pending-start run defaults to the FIRST one; the chat/
+// forge_propose_plan flow picks a different workflowId explicitly for later runs.
 export function buildStartRunOpts(opts: CreateWorkspaceOpts, developProjects: DevelopProject[]): StartRunOpts {
-  const stages: StageSpec[] = opts.stages.map(s => ({
+  const wf = opts.workflows[0]
+  const stages: StageSpec[] = (wf?.stages ?? []).map(s => ({
     key: s.key, name: stageName(s.key, s.name), provider: s.provider, model: s.model,
     // Every stage pauses on a review gate by default (approve / 打回重做 / 终止); an explicit per-stage
     // gate flag wins. Custom-stage behavior flags flow straight through to the orchestrator.
@@ -86,6 +90,8 @@ export function buildStartRunOpts(opts: CreateWorkspaceOpts, developProjects: De
     runId: `run-${opts.name}`,
     workspaceName: opts.name,
     workspacePath: opts.path,
+    workflowId: wf?.id,
+    workflowName: wf?.name,
     stages,
     developProjects
   }
@@ -185,8 +191,9 @@ export async function editWorkspace(args: {
   const workspace: Workspace = {
     name: opts.name,
     path,
-    workflowId: opts.workflowId,
-    stages: opts.stages.map(toWsStage),
+    workflowId: '',   // legacy 迁移种子 — 新文件走下面的 workflows
+    stages: [],        // legacy 迁移种子
+    workflows: opts.workflows.map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(toWsStage) })),
     projects: opts.projects.map(sel => {
       const proj = byId.get(sel.repoId)
       const name = proj?.name || existing.projects.find(p => p.repoId === sel.repoId)?.name || sel.repoId
@@ -205,7 +212,7 @@ export async function editWorkspace(args: {
     for (const plugin of projHooks) {
       if (signal?.aborted) break
       await runStepHook('__proj', plugin, {
-        providers: providers!, stageProvider: opts.stages[0]?.provider, stageModel: opts.stages[0]?.model,
+        providers: providers!, stageProvider: opts.workflows[0]?.stages[0]?.provider, stageModel: opts.workflows[0]?.stages[0]?.model,
         proxy, cwd: path, emit, signal,
       })
     }
