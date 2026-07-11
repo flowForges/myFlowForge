@@ -21,22 +21,55 @@ export function readMessages(wsPath: string, sessionId: string): ChatMessage[] {
   })
 }
 
-// Resume map is nested by session: { [sessionId]: { [agent]: resumeId } }
-type ResumeMap = Record<string, Record<string, string>>
+// Resume map is nested by session: { [sessionId]: { [agent]: entry } }.
+// `entry` is normally { resumeId, watermark }, but legacy on-disk data (pre-watermark) stored a bare
+// resumeId string — readResume() below upgrades both shapes to ResumeEntry so callers never see raw JSON.
+interface ResumeEntry { resumeId?: string; watermark?: number }
+type RawResumeEntry = string | ResumeEntry
+type RawResumeMap = Record<string, Record<string, RawResumeEntry>>
+type ResumeMap = Record<string, Record<string, ResumeEntry>>
+
+function normalizeEntry(v: RawResumeEntry): ResumeEntry {
+  return typeof v === 'string' ? { resumeId: v } : v
+}
 function readResume(wsPath: string): ResumeMap {
   const f = resumeFile(wsPath)
   if (!existsSync(f)) return {}
-  try { return JSON.parse(readFileSync(f, 'utf8')) as ResumeMap } catch { return {} }
+  try {
+    const raw = JSON.parse(readFileSync(f, 'utf8')) as RawResumeMap
+    const out: ResumeMap = {}
+    for (const [sessionId, agents] of Object.entries(raw)) {
+      out[sessionId] = {}
+      for (const [agent, v] of Object.entries(agents)) out[sessionId][agent] = normalizeEntry(v)
+    }
+    return out
+  } catch { return {} }
 }
-export function readSession(wsPath: string, sessionId: string, agent: string): string | undefined {
-  return readResume(wsPath)[sessionId]?.[agent]
-}
-export function writeSession(wsPath: string, sessionId: string, agent: string, resumeId: string): void {
+function writeResume(wsPath: string, map: ResumeMap): void {
   ensureDir(wsForgeDir(wsPath))
-  const map = readResume(wsPath)
-  ;(map[sessionId] ??= {})[agent] = resumeId
   writeFileSync(resumeFile(wsPath), JSON.stringify(map, null, 2))
 }
+export function readSession(wsPath: string, sessionId: string, agent: string): string | undefined {
+  return readResume(wsPath)[sessionId]?.[agent]?.resumeId
+}
+export function writeSession(wsPath: string, sessionId: string, agent: string, resumeId: string): void {
+  const map = readResume(wsPath)
+  const entry = (map[sessionId] ??= {})[agent] ?? {}
+  ;(map[sessionId])[agent] = { ...entry, resumeId }
+  writeResume(wsPath, map)
+}
 export function readSessionAgents(wsPath: string, sessionId: string): Record<string, string> {
-  return readResume(wsPath)[sessionId] ?? {}
+  const agents = readResume(wsPath)[sessionId] ?? {}
+  const out: Record<string, string> = {}
+  for (const [agent, entry] of Object.entries(agents)) if (entry.resumeId !== undefined) out[agent] = entry.resumeId
+  return out
+}
+export function readWatermark(wsPath: string, sessionId: string, agent: string): number {
+  return readResume(wsPath)[sessionId]?.[agent]?.watermark ?? 0
+}
+export function writeWatermark(wsPath: string, sessionId: string, agent: string, watermark: number): void {
+  const map = readResume(wsPath)
+  const entry = (map[sessionId] ??= {})[agent] ?? {}
+  ;(map[sessionId])[agent] = { ...entry, watermark }
+  writeResume(wsPath, map)
 }
