@@ -425,7 +425,8 @@ export const WorkspaceSchema = z.object({
   workflows: z.array(WsWorkflowSchema).default(() => []),  // 新:一组命名工作流,各自固化阶段
   projects: z.array(WsProjectSchema),                 // selected projects + per-project develop provider/model
   // 建区目的:用户创建向导里可填的一句「想做什么」。作为工作区记忆 `## 建区目的` 的种子(见 seedPurposeMemory)。
-  purpose: z.string().default(''),
+  // optional(非 default):保持输出类型可选,老工作区文件与各处 Workspace 字面量无需补该字段。
+  purpose: z.string().optional(),
   status: z.enum(['idle', 'run', 'ok', 'err']).default('idle'),
   plugins: z.array(PluginSchema).default(() => []),   // workspace-level plugins (run after every stage)
   stepPlugins: z.array(PluginSchema).default(() => []), // stage-scoped plugins (keyed by plugin.after)

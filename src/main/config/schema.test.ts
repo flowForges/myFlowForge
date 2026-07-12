@@ -97,9 +97,9 @@ describe('WorkspaceSchema (SP-A: resolved config)', () => {
     expect(ws.projects[0]).toEqual({ repoId: 'p', name: '', branch: 'main', provider: '', model: '' })
   })
 
-  it('purpose defaults to empty and passes through', () => {
+  it('purpose is optional and passes through when provided', () => {
     const ws = WorkspaceSchema.parse({ name: 'x', path: '/x', projects: [] })
-    expect(ws.purpose).toBe('')
+    expect(ws.purpose).toBeUndefined()
     const seeded = WorkspaceSchema.parse({ name: 'x', path: '/x', projects: [], purpose: '做记忆功能' })
     expect(seeded.purpose).toBe('做记忆功能')
   })
