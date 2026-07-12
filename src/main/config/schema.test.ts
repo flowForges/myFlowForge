@@ -97,6 +97,13 @@ describe('WorkspaceSchema (SP-A: resolved config)', () => {
     expect(ws.projects[0]).toEqual({ repoId: 'p', name: '', branch: 'main', provider: '', model: '' })
   })
 
+  it('purpose defaults to empty and passes through', () => {
+    const ws = WorkspaceSchema.parse({ name: 'x', path: '/x', projects: [] })
+    expect(ws.purpose).toBe('')
+    const seeded = WorkspaceSchema.parse({ name: 'x', path: '/x', projects: [], purpose: '做记忆功能' })
+    expect(seeded.purpose).toBe('做记忆功能')
+  })
+
   it('accepts a custom (non-builtin) stage key — stage vocabulary is open (#3)', () => {
     const ws = WorkspaceSchema.parse({
       name: 'x', path: '/tmp/x', workflowId: 'standard',

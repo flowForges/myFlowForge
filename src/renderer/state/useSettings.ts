@@ -23,6 +23,7 @@ const DEFAULTS: Settings = {
   nsfwUnlocked: false,
   nsfwCode: '',
   nsfwInstalled: {},
+  memory: { enabled: true },
 }
 
 export interface SettingsUpdate {
@@ -43,6 +44,7 @@ export interface SettingsUpdate {
   nsfwUnlocked?: boolean
   nsfwCode?: string
   nsfwInstalled?: Record<string, string>
+  memory?: { enabled: boolean }
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -71,6 +73,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     nsfwUnlocked: partial.nsfwUnlocked ?? base.nsfwUnlocked,
     nsfwCode: partial.nsfwCode ?? base.nsfwCode,
     nsfwInstalled: partial.nsfwInstalled ?? base.nsfwInstalled,
+    memory: { ...base.memory, ...(partial.memory ?? {}) },
   }
 }
 
