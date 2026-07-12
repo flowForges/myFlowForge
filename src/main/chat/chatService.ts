@@ -5,9 +5,10 @@ import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard } from '@sha
 import { createRunFenceScanner } from '../agents/runFence'
 import { buildMemoryPreamble } from './memory/preamble'
 import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
-import { distillSession, promoteToWorkspace, type DistillDeps } from './memory/distiller'
+import { distillSession, promoteToWorkspace, promoteToSystem, type DistillDeps } from './memory/distiller'
 import { distillModelFor } from './memory/distillModel'
-import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD } from './memory/tokenEstimate'
+import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD, SYSTEM_PROMOTE_EVERY_K } from './memory/tokenEstimate'
+import { readSettings } from '../config/store'
 import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext, mentionedSkills } from '../agents/contextMeta'
 import { readInstalledSkills } from '../skills/installedSkills'
 import { getSession } from './sessionStore'
@@ -45,6 +46,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const { provider, env, emit } = deps
     const ws = payload.workspacePath
     const sid = payload.sessionId
+    // Memory master switch. Off = non-destructive pause: no preamble injection (read) and no distillation
+    // (write); the on-disk memory files are untouched. Default true (see MemorySchema).
+    const memoryOn = readSettings().memory.enabled
     const label = `${payload.agentLabel} · ${payload.model}`
     let context = mergeAgentContext(discoverAgentContext(ws, ws), forgeMcpContext(env))
 
@@ -74,7 +78,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const watermark = readWatermark(ws, sid, payload.agent)
     const latest = readMessages(ws, sid).length
     const gapped = nativeResumeId ? false : !hasSession
-    const preamble = buildMemoryPreamble(ws, sid, { resumeGapped: gapped })
+    const preamble = memoryOn ? buildMemoryPreamble(ws, sid, { resumeGapped: gapped }) : ''
     // Imported sessions re-feed the external transcript; in-app sessions (provider switch, e.g.
     // qoder→codex) fall back to Forge's own stored messages so the new CLI keeps prior context.
     let contPre = ''
@@ -132,9 +136,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       }, env)
     })
     const scheduleDistill = () => {
+      if (!memoryOn) return
       const deps: DistillDeps = { oneShot }
+      const msgCount = readMessages(ws, sid).length
       if (estimateMessagesTokens(readMessages(ws, sid)) > SESSION_DISTILL_THRESHOLD) void distillSession(ws, sid, deps)
       void promoteToWorkspace(ws, sid, deps)
+      // App/system level is expensive → run only at a low cadence (every K messages). This is the lowest-
+      // frequency point that still has a live provider `oneShot`; closeSession has none to run it on.
+      if (msgCount > 0 && msgCount % SYSTEM_PROMOTE_EVERY_K === 0) void promoteToSystem(ws, deps)
     }
     // On a SUCCESSFUL turn, advance this provider's watermark to the session's new message count — its
     // native session (if any) now covers everything through this exchange, so a future switch-back only
