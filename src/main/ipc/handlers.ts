@@ -422,7 +422,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // from the FAILED RUN's own workflow (prior.workflowId) — same pattern proposeRun.ts uses —
     // so base.stages is actually populated and planResume doesn't bail with "已全部完成".
     const custom = indexCustomStages(readCustomStages().stages)
-    const wf = pickWorkspaceWorkflow(ws, prior.workflowId)
+    // Ad-hoc runs (no named workflow) carry prior.workflowId === undefined; they must resolve the
+    // UNION of all workflow stages (mirror proposeRun.ts), not silently collapse to workflows[0].
+    // pickWorkspaceWorkflow(ws, undefined) returns workflows[0], so short-circuit to null first.
+    const wf = prior.workflowId ? pickWorkspaceWorkflow(ws, prior.workflowId) : null
     const stages = wf
       ? resolveWorkflowStages(wf, readWorkflows().workflows, custom)
       : unionWorkflowStages(ws, readWorkflows().workflows, custom)
