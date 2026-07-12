@@ -34,7 +34,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xzghua/myFlowForge.git"
+    "url": "git+https://github.com/flowForges/myFlowForge.git"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

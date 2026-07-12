@@ -1,4 +1,4 @@
-const GITHUB_URL = 'https://github.com/xzghua/myFlowForge'
+const GITHUB_URL = 'https://github.com/flowForges/myFlowForge'
 
 // 「关于」面板:应用名 / 版本 / 简介 + 跳转 GitHub 项目首页(经主进程用系统浏览器打开)。
 export function AboutPane({ version }: { version?: string }) {

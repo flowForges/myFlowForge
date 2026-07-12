@@ -79,7 +79,7 @@
 
 ## 📥 ダウンロードとインストール
 
-最新の `.dmg` を [**Releases**](https://github.com/xzghua/myFlowForge/releases) ページから入手してください。
+最新の `.dmg` を [**Releases**](https://github.com/flowForges/myFlowForge/releases) ページから入手してください。
 
 | あなたのMac | 推奨ダウンロード |
 |----------|----------------------|
@@ -105,7 +105,7 @@
 
 ```bash
 # 1. Clone
-git clone https://github.com/xzghua/myFlowForge.git
+git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
 
 # 2. Install dependencies

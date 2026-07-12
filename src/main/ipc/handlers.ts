@@ -135,7 +135,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // AbortController for the in-flight workspace creation (one at a time), so 取消 can kill its git pulls.
   let setupAbort: AbortController | null = null
 
-  const UPDATE_REPO = 'xzghua/myFlowForge'
+  const UPDATE_REPO = 'flowForges/myFlowForge'
   const updateChecker = createUpdateChecker({
     repo: UPDATE_REPO,
     currentVersion: () => app.getVersion(),

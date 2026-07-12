@@ -79,7 +79,7 @@ Tres formas de disparar un flujo de trabajo, todas convergiendo en la misma puer
 
 ## 📥 Descarga e instalación
 
-Consigue el `.dmg` más reciente en la página de [**Releases**](https://github.com/xzghua/myFlowForge/releases):
+Consigue el `.dmg` más reciente en la página de [**Releases**](https://github.com/flowForges/myFlowForge/releases):
 
 | Tu Mac | Descarga recomendada |
 |----------|----------------------|
@@ -105,7 +105,7 @@ Consigue el `.dmg` más reciente en la página de [**Releases**](https://github.
 
 ```bash
 # 1. Clone
-git clone https://github.com/xzghua/myFlowForge.git
+git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
 
 # 2. Install dependencies

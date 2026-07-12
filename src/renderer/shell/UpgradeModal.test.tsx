@@ -32,9 +32,9 @@ describe('UpgradeModal', () => {
     const openExternal = vi.fn(async () => ({ ok: true }))
     ;(window as any).forge = { openExternal }
     render(<UpgradeModal {...base} phase="error" />)
-    const link = screen.getByText(/github\.com\/xzghua\/myFlowForge\/releases/)
+    const link = screen.getByText(/github\.com\/flowForges\/myFlowForge\/releases/)
     expect(link).toBeTruthy()
     fireEvent.click(link)
-    expect(openExternal).toHaveBeenCalledWith('https://github.com/xzghua/myFlowForge/releases/latest')
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/flowForges/myFlowForge/releases/latest')
   })
 })
