@@ -83,6 +83,7 @@
 .wf-designer .wfd-name:focus { border-color: var(--accent); }
 .wf-designer .wfd-stages { display: flex; flex-wrap: wrap; gap: 7px; }
 .wf-designer .stage-add-chip.on { background: var(--accent); color: var(--on-accent); border-style: solid; }
+.wf-designer .wfd-err { font-size: 11.5px; color: var(--err); }
 .wf-designer .wfd-foot { display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
 .wf-designer .btn-cancel { height: 30px; padding: 0 14px; border-radius: 7px; background: var(--surface-2); color: var(--fg-2); font-size: 12px; font-weight: 600; }
 .wf-designer .np-add { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 14px; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 600; cursor: pointer; flex: 0 0 auto; }

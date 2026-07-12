@@ -18,6 +18,7 @@ import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { resolveStages, pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from '../workspace/resolveStages'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
 import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
+import { workflowNameTaken } from '../../shared/workflowName'
 import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
@@ -199,6 +200,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.configListWorkflows, () => readWorkflows().workflows)
   ipcMain.handle(CH.configAddWorkflow, (_e, input: { name: string; stages: import('../config/buildWorkflow').StageSeed[] }) => {
     const list = readWorkflows().workflows
+    // Enforce unique display names (the UI blocks this too; this is the safety net). Duplicate =
+    // no-op returning the current list, so a bypassed UI can't silently create a confusing twin.
+    if (workflowNameTaken(input.name, list.map(w => w.name))) return list
     const wf = buildWorkflow(input.name, input.stages, list.map(w => w.id))
     writeWorkflows({ workflows: [...list, wf] })
     return readWorkflows().workflows

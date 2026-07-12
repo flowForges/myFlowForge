@@ -25,6 +25,15 @@ describe('WorkflowPane', () => {
     // draft starts with develop → create passes the ordered full stage config
     expect(onCreate).toHaveBeenCalledWith('重构流程', [{ key: 'develop', defaultAgent: 'claude', defaultModel: 'opus-4.8' }])
   })
+  it('blocks a duplicate workflow name: create disabled + hint shown, onCreate not called', () => {
+    const onCreate = vi.fn()
+    render(<WorkflowPane workflows={workflows} onCreate={onCreate} onDelete={() => {}} onUpdateWorkflow={() => {}} onUpdateStagePrompts={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText(/流程名称/), { target: { value: ' 标准工作流 ' } })   // same name, padded
+    expect(screen.getByText('创建')).toBeDisabled()
+    expect(screen.getByText(/已有同名工作流/)).toBeInTheDocument()
+    fireEvent.click(screen.getByText('创建'))
+    expect(onCreate).not.toHaveBeenCalled()
+  })
   it('new-workflow draft: add a built-in stage, then create with both in order', () => {
     const onCreate = vi.fn()
     render(<WorkflowPane workflows={workflows} onCreate={onCreate} onDelete={() => {}} onUpdateWorkflow={() => {}} onUpdateStagePrompts={() => {}} />)

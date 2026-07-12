@@ -268,6 +268,7 @@
 .seg-wrap .wf-pick { white-space: nowrap; flex: 0 0 auto; }
 .wf-new .mk { height: 34px; padding: 0 15px; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-size: 12.5px; font-weight: 600; flex: 0 0 auto; }
 .wf-new .mk:disabled { opacity: .4; cursor: default; }
+.wf-new-err { margin-top: 8px; font-size: 11.5px; color: var(--err); }
 /* 新建流程草稿:有序可拖动阶段列表 + 加阶段行 */
 .wf-draft-flow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .wf-draft-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 560; color: var(--fg-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 4px 5px 4px 9px; cursor: grab; transition: .12s; }

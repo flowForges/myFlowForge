@@ -5,6 +5,7 @@ import type { CfgWorkflow, CfgStage, CfgCustomStage } from '../state/useConfig'
 import type { ProviderInfo } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 import { movePluginBefore } from '../../shared/pluginReorder'
+import { workflowNameTaken } from '../../shared/workflowName'
 import { indexCustomStages, resolveStageDef, resolveStages, type CustomStageDef } from '../../shared/customStages'
 import { ImportModal, type ImportConfig } from '../components/ImportModal'
 import { PLUGIN_SAMPLE, parsePlugins, type ParsedPlugin } from '../components/importParsers'
@@ -255,7 +256,7 @@ export function WorkflowPane({ workflows, providers = [], customStages = [], onC
 
   function create() {
     const nm = name.trim()
-    if (!nm || draft.length === 0) return
+    if (!nm || draft.length === 0 || workflowNameTaken(nm, workflows.map(w => w.name))) return
     onCreate(nm, draft)
     setName('')
     setDraft([mkBuiltinStage('develop')])
@@ -311,7 +312,8 @@ export function WorkflowPane({ workflows, providers = [], customStages = [], onC
     onUpdateWorkflow(wfId, wf.plugins.filter(p => p.id !== pluginId))
   }
 
-  const canCreate = name.trim().length > 0 && draft.length > 0
+  const nameClash = workflowNameTaken(name, workflows.map(w => w.name))
+  const canCreate = name.trim().length > 0 && draft.length > 0 && !nameClash
 
   return (
     <>
@@ -552,6 +554,7 @@ export function WorkflowPane({ workflows, providers = [], customStages = [], onC
               创建
             </button>
           </div>
+          {nameClash && <div className="wf-new-err">已有同名工作流,换个名字。</div>}
           {/* 有序草稿阶段:拖动排序、改名(自定义)、移除 */}
           <div className="wf-draft-flow">
             {draft.map((s, i) => {
