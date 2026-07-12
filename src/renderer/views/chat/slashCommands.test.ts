@@ -43,6 +43,16 @@ describe('mergeCommands', () => {
     expect(merged.some(c => c.cmd === '/analyst' && c.kind === 'command')).toBe(true)
     expect(merged.some(c => c.cmd === '/awesome' && c.kind === 'skill')).toBe(true)
   })
+  it('workspace-workflow entries come FIRST, before built-in Forge commands and on-disk commands', () => {
+    const withWf: MenuCommand[] = [
+      ...dyn,
+      { cmd: '/标准工作流', title: '标准工作流', desc: '按此工作流发起', template: '', kind: 'forge', workflowId: 'wf-1' },
+    ]
+    const merged = mergeCommands('codex', '/', withWf)
+    expect(merged[0].workflowId).toBe('wf-1')          // workflow on top
+    expect(merged[1].kind).toBe('forge')               // then built-in Forge commands
+    expect(merged.some(c => c.cmd === '/analyst')).toBe(true) // on-disk still present (below)
+  })
   it('filters dynamic by query too', () => {
     const merged = mergeCommands('codex', '/analy', dyn)
     expect(merged.map(c => c.cmd)).toContain('/analyst')
