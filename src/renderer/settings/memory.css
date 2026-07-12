@@ -1,0 +1,20 @@
+.mem-pane { display: flex; flex-direction: column; }
+
+.mem-switch { display: inline-flex; align-items: center; gap: 9px; font-size: 13.5px; font-weight: 600; color: var(--fg); cursor: pointer; }
+.mem-switch input { width: 15px; height: 15px; accent-color: var(--accent); }
+.mem-switch-hint { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.55; max-width: 520px; }
+
+.mem-sec { margin-bottom: 22px; }
+.mem-sec-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.mem-sec-head h4 { font-size: 13px; font-weight: 600; color: var(--fg); margin-bottom: 3px; text-transform: none; letter-spacing: 0; }
+.mem-sec-head p { font-size: 11.5px; color: var(--muted); line-height: 1.45; max-width: 460px; }
+.mem-sec-actions { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.mem-sec-actions .set-btn.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
+.mem-flash { font-size: 11.5px; color: var(--muted); }
+
+.mem-ta {
+  width: 100%; min-height: 140px; resize: vertical; padding: 11px 13px;
+  border-radius: 9px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--fg-2); font-family: var(--mono); font-size: 12.5px; line-height: 1.6;
+}
+.mem-ta:focus { border-color: var(--accent); outline: none; }
