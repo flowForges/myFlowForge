@@ -62,7 +62,11 @@ export function mergeCommands(providerId: string, query: string, dynamic: MenuCo
   const forge: MenuCommand[] = commandsForProvider(providerId, query)
     .map(c => ({ cmd: c.cmd, title: c.title, desc: c.desc, template: c.template, kind: 'forge' as const }))
   const seen = new Set(forge.map(c => c.cmd))
-  const dyn = dynamic.filter(c => match(c.cmd, c.title) && !seen.has(c.cmd))
+  // Workspace-workflow entries (identified by workflowId) are NEVER swallowed by a built-in name
+  // clash — a workflow literally named e.g. "工作流" (the ensureWorkspaceWorkflows default, or a
+  // user-chosen name colliding with a built-in slash cmd) would otherwise be deduped out and vanish
+  // from the menu. On-disk command entries still dedupe against built-ins as before.
+  const dyn = dynamic.filter(c => match(c.cmd, c.title) && (c.workflowId != null || !seen.has(c.cmd)))
   return [...forge, ...dyn]
 }
 

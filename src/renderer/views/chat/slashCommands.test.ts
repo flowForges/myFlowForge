@@ -54,6 +54,16 @@ describe('mergeCommands', () => {
     expect(merged.filter(c => c.cmd === '/工作流')).toHaveLength(1)
     expect(merged.find(c => c.cmd === '/工作流')?.kind).toBe('forge')
   })
+  it('a WORKSPACE-WORKFLOW entry survives a built-in name clash (not deduped out)', () => {
+    // A workflow literally named "工作流" (e.g. the ensureWorkspaceWorkflows default) collides with
+    // the built-in /工作流 command. It must still appear so the user can pick it — regression for the
+    // "workspace workflows missing from the / menu" bug.
+    const wf: MenuCommand[] = [{ cmd: '/工作流', title: '工作流', desc: '按此工作流发起', template: '', kind: 'forge', workflowId: 'wf-1' }]
+    const merged = mergeCommands('claude', '/工作流', wf)
+    const workflowEntry = merged.find(c => c.workflowId === 'wf-1')
+    expect(workflowEntry).toBeTruthy()
+    expect(merged.filter(c => c.cmd === '/工作流')).toHaveLength(2) // built-in + the workspace workflow
+  })
 })
 
 describe('workflowMenuCommands', () => {
