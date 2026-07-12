@@ -262,6 +262,9 @@ const api = {
     ipcRenderer.on(CH.perfStall, h)
     return () => ipcRenderer.removeListener(CH.perfStall, h)
   },
+  memoryRead: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string }): Promise<string> => ipcRenderer.invoke(CH.memoryRead, a),
+  memoryWrite: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string; content: string }): Promise<void> => ipcRenderer.invoke(CH.memoryWrite, a),
+  memoryClear: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string }): Promise<void> => ipcRenderer.invoke(CH.memoryClear, a),
 }
 contextBridge.exposeInMainWorld('forge', api)
 export type ForgeApi = typeof api

@@ -170,4 +170,7 @@ export const CH = {
   appLogExport: 'app-log:export',
   appLogEvent: 'app-log:event',
   perfStall: 'perf:stall',
+  memoryRead: 'memory:read',
+  memoryWrite: 'memory:write',
+  memoryClear: 'memory:clear',
 } as const

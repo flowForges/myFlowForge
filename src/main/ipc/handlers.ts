@@ -17,6 +17,7 @@ import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSe
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { resolveStages, pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from '../workspace/resolveStages'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
+import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
 import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
@@ -953,4 +954,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     try { await writeFile(r.filePath, formatAppLog(), 'utf8'); return { ok: true as const, path: r.filePath } }
     catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
+
+  // Memory management (记忆面板): read/write/clear the three tiers directly. Decoupled from the
+  // memory.enabled toggle — the user can always view/edit/clear stored memory regardless of the switch.
+  ipcMain.handle(CH.memoryRead, (_e, a: MemoryArg) => memoryRead(a))
+  ipcMain.handle(CH.memoryWrite, (_e, a: MemoryArg) => memoryWrite(a))
+  ipcMain.handle(CH.memoryClear, (_e, a: MemoryArg) => memoryClear(a))
 }
