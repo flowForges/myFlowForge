@@ -47,9 +47,10 @@ export async function promoteToWorkspace(wsPath: string, sessionId: string, deps
     if (messages.length === 0) return
     const existing = readWorkspaceMemory(wsPath)
     const prompt = [
-      '你是 workspace 记忆蒸馏器。从下面对话中提炼**耐久事实**:架构决策、团队约定、技术选型、关键路径。',
-      '用 markdown 输出,每条耐久事实归到一个 `## 主题` 小节下(如 `## 架构` / `## 约定` / `## 选型`)。',
-      '只输出会长期有效的事实,忽略一次性的临时问答。若无可沉淀的耐久事实,输出空字符串。',
+      '你是 workspace 记忆蒸馏器。从下面对话中提炼**耐久事实**:项目做什么、项目之间关系、建区目的、架构决策、团队约定、技术选型、关键路径。',
+      '用 markdown 输出,每条耐久事实归到一个 `## 主题` 小节下。有内容时优先覆盖这些主题:',
+      '`## 项目`(每个项目一行「做什么」)、`## 项目关系`(项目间依赖/协作)、`## 建区目的`(用户为何建此工作区、想达成什么)、`## 架构`、`## 约定`、`## 选型`。',
+      '只输出会长期有效的事实,忽略一次性的临时问答。某主题没内容就不写该小节。若无可沉淀的耐久事实,输出空字符串。',
       existing ? `当前已有的 workspace 记忆(用于参考,避免重复;同主题请给出更新后的完整小节):\n${existing}\n` : '',
       '对话:',
       renderTranscript(messages),
@@ -67,9 +68,10 @@ export async function promoteToSystem(wsPath: string, deps: DistillDeps): Promis
     if (!wsMem.trim()) return
     const existing = readSystemMemory()
     const prompt = [
-      '你是系统级记忆蒸馏器。从下面单个 workspace 的记忆中,提炼**跨项目都适用的用户级偏好/复发模式**',
-      '(如沟通风格、通用工具链偏好、反复出现的工作方式)。项目专属的细节不要提升。',
-      '用 markdown `## 主题` 小节输出;若无跨项目价值,输出空字符串。',
+      '你是系统级记忆蒸馏器。从下面单个 workspace 的记忆中,提炼**跨项目都适用的用户级偏好/复发模式**。项目专属的细节不要提升。',
+      '用 markdown `## 主题` 小节输出,有内容时覆盖:',
+      '`## 用户习惯`(沟通风格、工作方式、通用工具链偏好)、`## 常用能力`(反复出现的项目核心功能/需求模式)。',
+      '某主题没内容就不写该小节;若无跨项目价值,输出空字符串。',
       existing ? `当前系统记忆(避免重复;同主题给更新后的完整小节):\n${existing}\n` : '',
       'workspace 记忆:',
       wsMem,
