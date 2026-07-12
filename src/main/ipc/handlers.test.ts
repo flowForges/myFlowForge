@@ -565,6 +565,59 @@ describe('registerIpc broadcast wiring', () => {
     expect(startRunCalls[0].stages.map((s: any) => s.key)).toEqual(['develop'])
   })
 
+  // FIX 1 follow-up: an AD-HOC prior run has workflowId === undefined. It must resolve the UNION of
+  // all workflows' stages (mirror proposeRun's ad-hoc path), NOT silently collapse to workflows[0].
+  // Before the short-circuit fix, pickWorkspaceWorkflow(ws, undefined) returned workflows[0] ('light'),
+  // whose stages were both already done → resume bailed with "已全部完成" and dropped the never-run
+  // 'develop'/'review' stages that the ad-hoc union run actually included.
+  it('engine:resume for an ad-hoc prior run (no workflowId) resolves the union of all workflows\' stages', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { readLastRun } = await import('../orchestrator/runStore') as any
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const invokeHandler = async (channel: string, ...args: unknown[]) => {
+      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
+      return call[1]({}, ...args)
+    }
+    liveRun.current = null
+    // Ad-hoc prior run: workflowId undefined; 'requirement'+'design' done, 'develop'/'review' never ran.
+    readLastRun.mockReturnValueOnce({
+      id: 'run-2', workspacePath: '/ws/a', status: 'err', workflowId: undefined,
+      stages: [{ key: 'requirement', state: 'ok', agents: [] }, { key: 'design', state: 'ok', agents: [] }],
+    })
+    // Two workflows: the union (first-wins dedup) is [requirement, design, develop, review]. 'develop'
+    // and 'review' live ONLY in the 2nd workflow, so collapsing to workflows[0] would drop them.
+    readWorkspaceMock.mockReturnValue({
+      name: 'ws', path: '/ws/a', workflowId: '', status: 'err', projects: [],
+      stages: [],
+      workflows: [
+        { id: 'light', name: 'Light', stages: [
+          { key: 'requirement', provider: 'claude', model: 'opus' },
+          { key: 'design', provider: 'claude', model: 'opus' },
+        ] },
+        { id: 'full', name: 'Full', stages: [
+          { key: 'requirement', provider: 'claude', model: 'opus' },
+          { key: 'develop', provider: 'claude', model: 'sonnet' },
+          { key: 'review', provider: 'claude', model: 'opus' },
+        ] },
+      ],
+    })
+    await invokeHandler(CH.engineResume, { workspacePath: '/ws/a' })
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && (p as any).type === 'done')
+      .map(([, p]) => (p as any).message?.text as string | undefined)
+    expect(notes.some(t => t?.includes('已全部完成'))).toBe(false)
+    expect(startRunCalls.length).toBe(1)
+    // The remaining stages MUST include 'develop' and 'review', which live only in the 2nd workflow —
+    // proving the union was resolved. The buggy collapse-to-workflows[0] path (Light = [requirement,
+    // design]) could never surface them. ('design' also re-runs here because it is a review-gated
+    // stage whose gate approval wasn't persisted in this test — orthogonal to the union fix.)
+    const remainingKeys = startRunCalls[0].stages.map((s: any) => s.key)
+    expect(remainingKeys).toContain('develop')
+    expect(remainingKeys).toContain('review')
+  })
+
   it('broadcasts sessionsChanged after sessionNew/Switch/Close/Rename', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any
