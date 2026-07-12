@@ -109,6 +109,7 @@ export interface CreateWorkspaceOpts {
   plugins?: Plugin[]                  // workspace-level plugins
   stepPlugins?: Plugin[]              // stage-scoped plugins
   runProjHooks?: boolean              // edit-only: re-run __proj hooks against a newly added project
+  purpose?: string                    // optional 建区目的 — seeds the workspace memory `## 建区目的` section
 }
 
 export interface Attachment { name: string; path: string; size: number }
@@ -238,6 +239,7 @@ export interface Workspace {
   status: 'idle' | 'run' | 'ok' | 'err'
   plugins: Plugin[]
   stepPlugins: Plugin[]
+  purpose?: string            // 建区目的(可选) — seeds the workspace memory `## 建区目的` section
 }
 
 export interface UpdateInfo { version: string; notes: string; dmgUrl: string; dmgSize: number; dmgName: string }

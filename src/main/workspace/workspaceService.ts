@@ -4,6 +4,7 @@ import { mirrorPath, expandTilde } from '../config/paths'
 import { ensureMirror, addWorktree, resolveBaseBranch, removeWorktree } from '../git/worktree'
 import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBranch } from '../config/store'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
+import { readWorkspaceMemory, writeWorkspaceMemory, mergeMemory } from '../chat/memory/memoryStore'
 import { stageName, type Project, type Workspace } from '../config/schema'
 import type { StartRunOpts, StageSpec, DevelopProject } from '../orchestrator/orchestrator'
 import type { AgentProvider } from '../agents/types'
@@ -64,8 +65,18 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
     }),
     status: 'idle',
     plugins: opts.plugins ?? [],
-    stepPlugins: opts.stepPlugins ?? []
+    stepPlugins: opts.stepPlugins ?? [],
+    ...(opts.purpose ? { purpose: opts.purpose } : {}),
   }
+}
+
+// Seed the workspace memory's `## 建区目的` section from the create-wizard purpose input. Runs once at
+// create time; later distillation updates the same section in place (mergeMemory dedups by heading).
+// Blank purpose is a no-op. Best-effort — never let a memory-seed failure block workspace creation.
+export function seedPurposeMemory(wsPath: string, purpose: string | undefined): void {
+  const p = (purpose ?? '').trim()
+  if (!p) return
+  try { writeWorkspaceMemory(wsPath, mergeMemory(readWorkspaceMemory(wsPath), `## 建区目的\n${p}`)) } catch { /* seeding is best-effort */ }
 }
 
 // Assemble StartRunOpts from create opts + the provisioned developProjects. Shared by both create
@@ -121,6 +132,7 @@ export async function createWorkspace(args: {
   const workspace = buildWorkspaceRecord(opts, byId)
   writeWorkspace(workspace)
   ensureWorkspaceSkill(opts.path)        // install the workflow-trigger skill into the workspace
+  seedPurposeMemory(opts.path, opts.purpose)  // seed 建区目的 into workspace memory
   registerWorkspace(opts.name, opts.path)
 
   const startRunOpts = buildStartRunOpts(opts, developProjects)

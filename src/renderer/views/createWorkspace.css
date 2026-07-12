@@ -39,6 +39,13 @@
 .cr-field .pick { height: 26px; padding: 0 10px; border-radius: 6px; background: var(--surface-2); color: var(--fg-2); font-size: 12px; font-weight: 500; flex: 0 0 auto; }
 .cr-field .pick:hover { background: var(--border); }
 .cr-name-tip { font-size: 11px; color: var(--faint); margin-top: 6px; }
+.cr-opt { color: var(--faint); font-weight: 400; }
+.cr-purpose {
+  width: 100%; min-height: 62px; resize: vertical; padding: 9px 11px;
+  border-radius: 8px; background: var(--surface); border: 1px solid var(--border);
+  outline: none; color: var(--fg); font-size: 13px; line-height: 1.5; transition: border-color .14s;
+}
+.cr-purpose:focus { border-color: var(--accent); }
 
 /* 工作流模板卡 */
 .wf-templates { display: flex; gap: 8px; flex-wrap: wrap; }

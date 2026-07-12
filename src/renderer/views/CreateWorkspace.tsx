@@ -191,7 +191,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     const wf0 = workflows[0]
     const id0 = wf0?.id ?? '__custom'
     return {
-      path: '', name: '', nameEdited: false,
+      path: '', name: '', nameEdited: false, purpose: '',
       workflows: [emptyWorkflow(id0, wf0?.name ?? '自定义', buildStages(wf0), templateStageOrder(wf0))],
       activeWorkflowId: id0,
       projects: seedProjects(),
@@ -675,6 +675,18 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                   <input id="crName" placeholder={state.nameEdited ? '支持中文,例如:设计系统迁移' : (deriveWsName(state.path, false, '') || '支持中文,例如:设计系统迁移')} autoComplete="off" value={state.name} onChange={e => setName(e.target.value)} />
                 </div>
                 <div className="cr-name-tip" id="crNameTip">{editing ? '可在此重命名工作区(支持中文)。' : '留空将自动取自路径末段,创建后也可随时重命名。'}</div>
+              </div>
+            </div>
+            <div className="cr-row" style={{ marginTop: 14 }}>
+              <div className="cr-field">
+                <label>建区目的 <span className="cr-opt">(可选)</span></label>
+                <textarea
+                  id="crPurpose"
+                  className="cr-purpose"
+                  placeholder="这个工作区想做什么?例如:把三层记忆做成可开关的功能。会作为工作区记忆的种子,助手后续会参考。"
+                  value={state.purpose}
+                  onChange={e => update(s => ({ ...s, purpose: e.target.value }))}
+                />
               </div>
             </div>
           </div>

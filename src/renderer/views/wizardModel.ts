@@ -19,6 +19,7 @@ export interface WizardState {
   path: string
   name: string
   nameEdited: boolean
+  purpose: string               // 建区目的(可选):seeds the workspace memory `## 建区目的` section
   workflows: WizardWorkflow[]   // one or more workflow tabs being configured
   activeWorkflowId: string      // which workflow tab is currently focused in the wizard UI
   projects: WizardProject[]
@@ -68,7 +69,8 @@ export function buildCreateOpts(state: WizardState): CreateWorkspaceOpts {
     workflows: state.workflows.map(wf => ({ id: wf.id, name: wf.name, stages: stagesOf(wf) })),
     projects,
     plugins: state.plugins,
-    stepPlugins: state.stepPlugins
+    stepPlugins: state.stepPlugins,
+    ...(state.purpose.trim() ? { purpose: state.purpose.trim() } : {})
   }
 }
 
@@ -137,6 +139,7 @@ export function buildEditState(
 
   return {
     path: ws.path, name: ws.name, nameEdited: true,
+    purpose: ws.purpose ?? '',
     workflows, activeWorkflowId: ws.workflows[0]?.id ?? '',
     projects,
     plugins: (ws.plugins ?? []).map(p => ({ ...p })),
