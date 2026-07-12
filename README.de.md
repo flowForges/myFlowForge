@@ -79,7 +79,7 @@ Drei Wege, einen Workflow auszulösen, die alle auf demselben einzigen Gate zusa
 
 ## 📥 Herunterladen & installieren
 
-Hol dir die neueste `.dmg` von der Seite [**Releases**](https://github.com/xzghua/myFlowForge/releases):
+Hol dir die neueste `.dmg` von der Seite [**Releases**](https://github.com/flowForges/myFlowForge/releases):
 
 | Dein Mac | Empfohlener Download |
 |----------|----------------------|
@@ -105,7 +105,7 @@ Hol dir die neueste `.dmg` von der Seite [**Releases**](https://github.com/xzghu
 
 ```bash
 # 1. Clone
-git clone https://github.com/xzghua/myFlowForge.git
+git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
 
 # 2. Install dependencies

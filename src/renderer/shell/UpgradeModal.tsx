@@ -16,7 +16,7 @@ interface UpgradeModalProps {
 interface LogLine { tk: string; text: string }
 
 // GitHub 发布页(与主进程 updateChecker 的 UPDATE_REPO 一致)。更新失败时给用户一个可手动下载的去处。
-const RELEASES_URL = 'https://github.com/xzghua/myFlowForge/releases/latest'
+const RELEASES_URL = 'https://github.com/flowForges/myFlowForge/releases/latest'
 
 export function UpgradeModal({ open, onClose, info, currentVersion, phase, progress, onStart }: UpgradeModalProps) {
   const [log, setLog] = useState<LogLine[]>([])
