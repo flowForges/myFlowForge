@@ -433,10 +433,18 @@ export const WorkspaceSchema = z.object({
 })
 export type Workspace = z.infer<typeof WorkspaceSchema>
 
-// 保证 workflows 非空:老文件只有 workflowId+stages 时,包成单条。纯函数,幂等。
+// '__custom' 是「自定义流」的内部 sentinel id,不是给人看的名字。老工作区迁移时若拿它当显示名,界面
+// (工作流列表 / 编辑向导 tab)就会露出 `__custom`,困扰用户 → 统一映射为「自定义」。
+export function workflowDisplayName(idOrName: string): string {
+  return idOrName === '__custom' ? '自定义' : idOrName
+}
+
+// 保证 workflows 非空:老文件只有 workflowId+stages 时,包成单条。顺带把任何露出的 '__custom' 内部 id
+// 规范成「自定义」显示名(readWorkspace 每次读都跑本函数,是唯一的规范化 choke point)。纯函数,幂等。
 export function ensureWorkspaceWorkflows(ws: Workspace): Workspace {
-  if (ws.workflows.length > 0) return ws
-  const legacy: WsWorkflow = { id: ws.workflowId || 'default', name: ws.workflowId || '工作流', stages: ws.stages }
+  const fixName = (wf: WsWorkflow): WsWorkflow => wf.name === '__custom' ? { ...wf, name: '自定义' } : wf
+  if (ws.workflows.length > 0) return { ...ws, workflows: ws.workflows.map(fixName) }
+  const legacy: WsWorkflow = { id: ws.workflowId || 'default', name: workflowDisplayName(ws.workflowId || '工作流'), stages: ws.stages }
   return { ...ws, workflows: [legacy] }
 }
 
