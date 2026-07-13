@@ -16,6 +16,10 @@
 //                 "base":"https://cdn.jsdelivr.net/gh/you/private-content@main/kitsune"}],
 //        "backgrounds":[{"id":"bg1","name":"背景1","url":"https://cdn.jsdelivr.net/gh/you/.../bg1.webp"}]}
 //     Per-state pet image URL is `${pet.base}/${state}.webp` (adjust the ext in fetchPetImage if needed).
+//     For a LARGE background pack, drop the per-entry "url" and instead set a shared top-level
+//     "bgBase" (+ "bgExt", e.g. "jpg") once — each bg image URL is then `${bgBase}/${id}.${ext}`.
+//     This keeps the CATALOG value under Cloudflare's 5 KB per-variable limit. Optional "desc" on
+//     each pet/background is passed through to the app and shown under the item name.
 // 3b. Private (Cloudflare R2): create an R2 bucket, bind it to this Worker as `BUCKET`, upload objects
 //     at keys `pets/<id>/<state>.webp` and `bg/<id>.webp`, and set CATALOG to the same JSON minus the
 //     URLs (the Worker reads from R2 by key). Toggle USE_R2 below.
@@ -74,8 +78,8 @@ export default {
       const c = catalog(env)
       // Strip upstream URLs from the response — the app only needs ids/names/states, not locations.
       return json({
-        pets: (c.pets || []).map(p => ({ id: p.id, name: p.name, states: p.states || ['idle'] })),
-        backgrounds: (c.backgrounds || []).map(b => ({ id: b.id, name: b.name })),
+        pets: (c.pets || []).map(p => ({ id: p.id, name: p.name, states: p.states || ['idle'], desc: p.desc })),
+        backgrounds: (c.backgrounds || []).map(b => ({ id: b.id, name: b.name, desc: b.desc })),
       })
     }
 
@@ -90,10 +94,14 @@ export default {
     m = path.match(/^\/content\/bg\/([^/]+)$/)
     if (m) {
       const [, id] = m
-      const bg = catalog(env).backgrounds.find(b => b.id === id)
+      const c = catalog(env)
+      const bg = (c.backgrounds || []).find(b => b.id === id)
       if (!bg) return new Response('not found', { status: 404 })
-      const ext = bg.ext || (bg.url ? (bg.url.split('.').pop() || 'webp').toLowerCase() : 'webp')
-      return fetchImage(env, bg.url, `bg/${id}.${ext}`, ext) // for jsDelivr, bg.url is the full image URL
+      const ext = bg.ext || c.bgExt || (bg.url ? (bg.url.split('.').pop() || 'webp').toLowerCase() : 'webp')
+      // Per-entry bg.url wins; otherwise build from the catalog's shared bgBase → `${bgBase}/${id}.${ext}`.
+      // bgBase lets a large catalog omit the long repeated URL per entry (keeps the CATALOG var under 5 KB).
+      const url = bg.url || (c.bgBase ? `${c.bgBase}/${id}.${ext}` : undefined)
+      return fetchImage(env, url, `bg/${id}.${ext}`, ext)
     }
 
     return new Response('not found', { status: 404 })
