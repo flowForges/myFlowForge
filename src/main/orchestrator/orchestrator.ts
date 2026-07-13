@@ -1,6 +1,6 @@
 import { EventBus } from './eventBus'
 import { RunStore } from './runStore'
-import type { AgentProvider, AgentCallbacks } from '../agents/types'
+import type { AgentProvider, AgentCallbacks, AgentSession } from '../agents/types'
 import { buildAgentEnv } from '../agents/env'
 import type { RunState, StageRuntime, AgentRuntime, PendingAction } from '@shared/types'
 import { startBridge, type ForgeBridge } from '../mcp/forgeBridge'
@@ -150,6 +150,45 @@ export class Orchestrator {
       this.bus.emit({ type: 'pending:resolve', id: payload.id })
       r({ decision: payload.decision, value: payload.value, choice: payload.choice })
     }
+  }
+
+  // #6: run the user's rework feedback THROUGH the main agent (the run's provider) before it reaches the
+  // execution sub-agent. The user interacts with the MAIN agent, which analyzes the feedback against the
+  // task + this stage's output, keeps it on-theme, and produces a focused rework directive — instead of
+  // the raw user words going straight to the sub-agent ("一切先过主代理"). Falls back to the raw feedback
+  // if the run's provider has no chat() or the analysis fails, so a rework never gets blocked.
+  private async analyzeRework(spec: StageSpec, stageOutput: string, feedback: string): Promise<string> {
+    const fallback = feedback || '(用户要求返工,但未填写具体方向——请自查上一版最薄弱处并改进,重新给出一版。)'
+    const provider = this.providers[spec.provider]
+    if (!provider?.chat || this.cancelled) return fallback
+    const prompt = [
+      '你是本次工作流的【主代理】,负责在用户与执行子代理之间做分析与分派。用户对某个阶段的产出提出了反馈/打回,',
+      '请先分析用户的真实意图,再把它转化为给子代理的清晰返工指令——绝不能脱离总任务主旨。只输出指令本身。',
+      '',
+      `# 总任务\n${this.task ?? '(未提供)'}`,
+      `# 刚完成的阶段\n「${spec.name}」`,
+      `# 该阶段本版产出(摘要)\n${(stageOutput || '(无摘要)').slice(0, 4000)}`,
+      `# 用户的反馈/打回意见\n${feedback || '(用户未填写具体方向)'}`,
+      '',
+      '# 你要输出的返工指令(交给子代理执行,不要复述用户原话、不要寒暄)',
+      '包含: 1) 用户真正想解决的核心问题(你的判断) 2) 具体要改的点 3) 必须保持不变、守住主旨的部分。',
+    ].join('\n')
+    let session: AgentSession | undefined
+    try {
+      const out = await new Promise<string>((resolve, reject) => {
+        let acc = ''
+        session = provider.chat!(
+          { id: `rework-analyze-${spec.key}-${this.now()}`, prompt, model: spec.model, cwd: this.run.workspacePath },
+          { onSession: () => {}, onAssistantDelta: (t) => { acc += t }, onThinkDelta: () => {}, onDone: () => resolve(acc), onError: reject },
+          buildAgentEnv({ proxy: this.proxy() }),
+        )
+        if (session) this.activeSessions.add(session)
+      })
+      const directive = out.trim()
+      if (!directive) return fallback
+      return `【主代理已分析用户反馈,以下是返工指令】\n${directive}\n\n【用户原始反馈(供参考)】\n${feedback || '(未填写)'}`
+    } catch { return fallback }
+    finally { if (session) this.activeSessions.delete(session) }
   }
 
   private raise(action: PendingAction): Promise<{ decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }> {
@@ -765,9 +804,11 @@ export class Orchestrator {
             break
           }
           if (decision.decision === 'modify') {
-            // 打回重做 → loop: re-run this same stage carrying the user's revision direction. Empty
-            // direction still triggers a redo (self-improve the weakest part of the last version).
-            reworkNote = (decision.value ?? '').trim() || '(用户要求返工,但未填写具体方向——请自查上一版最薄弱处并改进,重新给出一版。)'
+            // 打回重做 → loop: re-run this same stage carrying the user's revision direction. #6: the
+            // feedback first goes through the main agent (analyzeRework), which analyzes it against the
+            // task + this stage's output and produces a focused, on-theme directive for the sub-agent,
+            // rather than piping the raw user words straight in. Empty direction still triggers a redo.
+            reworkNote = await this.analyzeRework(spec, body ?? '', (decision.value ?? '').trim())
             round++
             continue
           }

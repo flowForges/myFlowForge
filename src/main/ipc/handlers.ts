@@ -51,7 +51,7 @@ import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspa
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
 import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
 import { makeProposeRun } from '../chat/proposeRun'
-import { isWorkflowIntent, isResumeIntent } from '../chat/workflowIntent'
+import { isResumeIntent } from '../chat/workflowIntent'
 import { makeProposeGuard } from '../chat/proposeGuard'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
@@ -555,11 +555,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: readSessions(payload.workspacePath).activeSessionId, type: 'plan-resolved', id })
       }
       if (orphaned.length) emitNote(payload.workspacePath, payload.sessionId, '⚠️ 主代理未完成方案提交(已中断或超时),待审批方案已取消,请重试。')
-      const live = orch.getRun()
-      if (!proposedWorkflow && isWorkflowIntent(payload.text) && !(live && live.status === 'run')) {
-        emitNote(payload.workspacePath, payload.sessionId, '已识别到明确的工作流执行指令；主代理未调用工作流工具，已自动发起工作流确认。')
-        void proposeRun(payload.workspacePath, msg.text || payload.text, payload.text)
-      }
+      // #6/#9: the MAIN AGENT is the sole decider of whether a turn becomes a workflow. We used to
+      // auto-fire proposeRun here whenever a regex (isWorkflowIntent) matched the user's text but the
+      // agent hadn't called forge_propose_plan — that overrode the main agent's judgment (e.g. the user
+      // clicking 补充 to refine a plan in chat got a spurious, half-broken workflow confirmation) and
+      // violated "一切先过主代理". Removed: if the main agent chose to answer in chat instead of
+      // proposing, we respect that. The user can still trigger a workflow explicitly (发起工作流 button)
+      // or by asking clearly enough that the main agent proposes.
       return msg
     }
     finally { await bridge?.close().catch(() => {}) }
