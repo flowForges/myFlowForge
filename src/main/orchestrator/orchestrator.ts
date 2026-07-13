@@ -92,6 +92,8 @@ export interface OrchestratorOpts {
   heartbeat?: HeartbeatConfig
   now?: () => number
   makeInterval?: (fn: () => void, ms: number) => { clear(): void }
+  // How many times to re-run ONLY the failed projects of a per-project stage before failing it. Default 1.
+  projectRetries?: number
 }
 
 export class Orchestrator {
@@ -116,6 +118,7 @@ export class Orchestrator {
   private now: () => number
   private makeInterval: (fn: () => void, ms: number) => { clear(): void }
   private hbCfg: HeartbeatConfig
+  private projectRetries!: number
   private heartbeater: Heartbeater | null = null
   private hbTimer: { clear(): void } | null = null
 
@@ -136,6 +139,7 @@ export class Orchestrator {
     // partial plan (worse than waiting). So warn at 2min but only kill after 6min of total silence, which
     // still catches a genuinely hung process (silent forever) without false-killing slow-but-live turns.
     this.hbCfg = opts.heartbeat ?? { stallMs: 120_000, killGraceMs: 240_000, pingMs: 15_000 }
+    this.projectRetries = opts.projectRetries ?? 1
   }
 
   resolve(payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }) {
@@ -656,7 +660,7 @@ export class Orchestrator {
             stage.state = 'err'; this.update(); break
           }
 
-          await Promise.all(tasks.map(({ agent, cwd, provider: taskProvider, model: taskModel, lens }) => {
+          const runOne = ({ agent, cwd, provider: taskProvider, model: taskModel, lens }: typeof tasks[number]) => {
             // Build per-agent env: spread base env, override FORGE_AGENT_ID for this specific agent.
             const agentEnv: NodeJS.ProcessEnv = this.bridge
               ? { ...baseEnv, FORGE_AGENT_ID: agent.id }
@@ -664,7 +668,20 @@ export class Orchestrator {
             agent.context = mergeAgentContext(discoverAgentContext(cwd, opts.workspacePath), forgeMcpContext(agentEnv))
             this.update(true)
             return this.runTask(taskProvider!, stage, { ...spec, model: taskModel }, agent, cwd, store, agentEnv, lens)
-          }))
+          }
+          await Promise.all(tasks.map(runOne))
+
+          // Per-project retry: if some projects failed (transient hang/kill/rate-limit), re-run ONLY those —
+          // the projects that already succeeded are kept, so we don't waste tokens re-scanning them. Only
+          // after the retry still fails does the stage fail + halt (below).
+          for (let attempt = 1; attempt <= this.projectRetries && !this.cancelled; attempt++) {
+            const failedTasks = tasks.filter(t => t.agent.state !== 'ok')
+            if (!failedTasks.length) break
+            this.pushLog(failedTasks[0].agent, { ts: timeStr(), text: `${failedTasks.length} 个项目未完成,只重试它们(第 ${attempt} 次)…`, level: 'info' })
+            for (const t of failedTasks) { t.agent.state = 'run'; this.bus.emit({ type: 'agent:state', agentId: t.agent.id, state: 'run' }) } // reset so the terminal-err guard allows the retry
+            this.update(true)
+            await Promise.all(failedTasks.map(runOne))
+          }
 
           // summary: after the per-project agents finish, append one 汇总 agent that consolidates their
           // outputs (design's default). Custom stages opt in via spec.summary.
