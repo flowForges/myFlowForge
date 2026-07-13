@@ -111,4 +111,22 @@ describe('chatService provider-switch 3-branch preamble selection', () => {
     // watermark advances past this turn too (2 prior + user + assistant = 4)
     expect(readWatermark(ws, 's1', 'claude')).toBe(4)
   })
+
+  it('branch 3 safety net: an UNRELIABLE-resume provider (codex) that is caught up STILL gets local history re-fed', async () => {
+    // codex resumes via `exec resume <id>`, whose thread can be silently GC'd/rotated → the CLI
+    // starts a fresh session and the main agent would see only this turn's text (the "主代理只按
+    // 标题作答/丢历史" bug). Even when watermark==latest, Forge must re-feed the clamped history.
+    appendMessage(ws, 's1', { id: 'u0', who: 'user', text: '早前问题CODEX', ts: '' })
+    appendMessage(ws, 's1', { id: 'a0', who: 'ai', text: '早前回答CODEX', ts: '', provider: 'codex' })
+    writeSession(ws, 's1', 'codex', 'codex-thread-1')
+    writeWatermark(ws, 's1', 'codex', 2) // == latest → would be the fast path for a reliable provider
+
+    const { provider, captured } = recordingProvider('codex')
+    await sendTurn(basePayload('codex', '继续输出技术方案'), { provider, env: process.env, emit: () => {} })
+
+    expect(captured.prompt).toContain('早前问题CODEX')
+    expect(captured.prompt).toContain('早前回答CODEX')
+    // still passes its native thread id too (resume is redundant when it works, harmless when it doesn't)
+    expect(captured.sessionId).toBe('codex-thread-1')
+  })
 })

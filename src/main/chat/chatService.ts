@@ -12,7 +12,7 @@ import { readSettings } from '../config/store'
 import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext, mentionedSkills } from '../agents/contextMeta'
 import { readInstalledSkills } from '../skills/installedSkills'
 import { getSession } from './sessionStore'
-import { providerSupportsResume } from '../agents/resumeSupport'
+import { providerSupportsResume, providerResumeReliable } from '../agents/resumeSupport'
 import { logDebug } from '../log/appLog'
 import { perfSpan } from '../perf/perfSpans'
 
@@ -77,7 +77,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const hasSession = provider.chat ? readSession(ws, sid, payload.agent) !== undefined : false
     const watermark = readWatermark(ws, sid, payload.agent)
     const latest = readMessages(ws, sid).length
-    const gapped = nativeResumeId ? false : !hasSession
+    // Can we TRUST this provider's native resume to redeliver the prior transcript this turn? Only when
+    // it has a native session AND that provider's resume is reliable (claude). codex/cursor/qoder/
+    // opencode can silently start a fresh thread, so their resume is never trusted — we re-feed history.
+    const resumeTrusted = hasSession && providerResumeReliable(payload.agent)
+    // "gapped" (→ inject the rolling session summary) whenever native resume can't be trusted to carry
+    // history: a gapped resume id, no native session yet, OR an unreliable-resume provider.
+    const gapped = nativeResumeId ? false : !resumeTrusted
     const preamble = memoryOn ? buildMemoryPreamble(ws, sid, { resumeGapped: gapped }) : ''
     // Imported sessions re-feed the external transcript; in-app sessions (provider switch, e.g.
     // qoder→codex) fall back to Forge's own stored messages so the new CLI keeps prior context.
@@ -88,6 +94,11 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       contPre = buildLocalHistoryPreamble(ws, sid)
     } else if (watermark < latest) {
       contPre = buildLocalHistoryPreamble(ws, sid, {}, { fromIndex: watermark })
+    } else if (!resumeTrusted) {
+      // Fast path (native session caught up) would inject nothing — but an unreliable-resume provider
+      // may silently redeliver NONE of it, leaving the agent with only this turn's text (the "主代理只
+      // 按标题作答/丢历史" bug). Re-feed the clamped local history as a safety net.
+      contPre = buildLocalHistoryPreamble(ws, sid)
     }
     const promptText = [contPre, preamble, payload.text].filter(Boolean).join('\n')
 
