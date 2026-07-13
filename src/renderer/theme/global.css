@@ -29,9 +29,16 @@ html[data-vibrancy="on"]:not([data-glass="on"]) .inspector { background: var(--g
 /* 背景图 —— 「整个应用」范围:一层铺在 .window 不透明底色之上、内容之下(z-index:-1)。主内容视图
    (.chat / #view-home)本身透明,图片便透过它们显示;侧栏/标题栏等不透明面板自然成为边框。opacity
    变量把图片压淡,保证正文可读。'chat' 范围由 chat.css 的 .chat::before 单独绘制。 */
+/* 背景图可读性蓙的颜色(随主题的 --bg 变色):强度 = 1 − 可见度,封顶 55%,以透明度体现在 color-mix 里。
+   图始终 100% 铺底,只叠这层蓙 —— 浅色近白底也不会把明亮壁纸冲成一片白而「消失」。 */
+:root {
+  --app-bg-scrim: color-mix(in srgb, var(--bg) calc(min(55%, (1 - var(--app-bg-opacity, .35)) * 100%)), transparent);
+  --home-bg-scrim: color-mix(in srgb, var(--bg) calc(min(55%, (1 - var(--home-bg-opacity, .35)) * 100%)), transparent);
+}
 .app-bg-layer { position: absolute; inset: 0; z-index: -1; display: none; pointer-events: none;
   background-image: var(--app-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
-  opacity: var(--app-bg-opacity, .35); border-radius: 12px; }
+  border-radius: 12px; }
+.app-bg-layer::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--app-bg-scrim); }
 [data-bg-scope="app"] .app-bg-layer { display: block; }
 /* With a bright wallpaper behind everything, the opaque dark 1px panel borders (sidebar / inspector
    edges, titlebar / statusbar rules, button outlines) read as harsh BLACK LINES. Swap every border to a

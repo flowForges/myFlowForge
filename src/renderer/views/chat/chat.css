@@ -15,8 +15,12 @@
 [data-bg-scope="chat"] div.chat { isolation: isolate; }
 [data-bg-scope="chat"] div.chat::before {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background-image: var(--app-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
-  opacity: var(--app-bg-opacity, .35);
+  /* 图铺满(全不透明),再叠一层随主题变色的可读性蓙(蓙强度 = 1 − 可见度,封顶 55%),
+     避免浅色近白底把明亮壁纸冲成一片白。伪元素不能再套 ::after,故用渐变蓙层叠在图上。 */
+  background-image:
+    linear-gradient(var(--app-bg-scrim), var(--app-bg-scrim)),
+    var(--app-bg-image);
+  background-size: cover; background-position: center; background-repeat: no-repeat;
 }
 /* overflow-x must be set explicitly: with only overflow-y:auto, CSS computes overflow-x to `auto`
    too, so any child wider than .chat-inner makes the column scroll sideways (and the hidden
