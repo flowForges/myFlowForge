@@ -80,6 +80,9 @@ export function PetGallery({ pet, onChange }: PetGalleryProps) {
         更多桌面宠物,点一个即下载并启用(不占安装包,按需从网络下载)。已下载的再点即切换使用。
         {err && <span style={{ color: 'var(--del)', marginLeft: 6 }}>{err}</span>}
       </p>
+      <p className="set-desc" style={{ color: 'var(--faint)', fontSize: 11 }}>
+        免责声明:以上宠物形象均来源于网络,版权归原作者所有,仅供个人学习交流使用,请勿用于商业用途;如涉及侵权请联系删除。
+      </p>
       {!catalog && <p className="set-desc">加载中…</p>}
       {catalog && catalog.pets.length === 0 && !err && <p className="set-desc">暂无可下载宠物。</p>}
       {catalog && catalog.pets.length > 0 && <div className="wp-grid">{catalog.pets.map(card)}</div>}
