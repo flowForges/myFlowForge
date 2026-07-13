@@ -347,7 +347,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (stages.length === 0) return
     const filled = { ...ws, stages }
     if (ws.stages.length === 0) writeWorkspace(filled)   // backfill pre-SP-A workspaces permanently
-    return orch.startRun(workspaceToStartRunOpts(filled))
+    return orch.startRun({ ...workspaceToStartRunOpts(filled), sessionId: readSessions(path).activeSessionId })
   })
   // Quick alias rename — just the display name (registry + workspace.json), no re-provisioning.
   ipcMain.handle(CH.workspaceRename, (_e, a: { path: string; name: string }) => {
@@ -374,7 +374,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // gate:true on any stage that doesn't set it explicitly (an explicit false still opts out). This
     // is the choke point for the direct run-IPC; proposeRun/resume/create paths set gate in their
     // own mappings. Orchestrator unit tests call orch.startRun directly and keep the design-only default.
-    const opts: StartRunOpts = { ...rawOpts, stages: rawOpts.stages.map(s => ({ gate: true, ...s })) }
+    // #3: attribute the run to the session that triggered it (falls back to the active session) so its
+    // gate cards only surface in that tab.
+    const opts: StartRunOpts = { ...rawOpts, sessionId: rawOpts.sessionId ?? readSessions(rawOpts.workspacePath).activeSessionId, stages: rawOpts.stages.map(s => ({ gate: true, ...s })) }
     if (isArchivedWorkspace(opts.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
     // The seeding task (the user's first chat message in the workspace) is surfaced as a chat
     // user message so it appears in the chat stream alongside the agents' replies.
@@ -452,7 +454,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const developProjects = modelOverride
       ? base.developProjects.map(p => ({ ...p, ...(modelOverride.provider ? { provider: modelOverride.provider } : {}), ...(modelOverride.model ? { model: modelOverride.model } : {}) }))
       : base.developProjects
-    orch.startRun({ ...base, stages: plan.remainingSpecs, developProjects, resume: { completedStages: plan.completedStages, priorBriefs: plan.priorBriefs } })
+    orch.startRun({ ...base, sessionId: sid, stages: plan.remainingSpecs, developProjects, resume: { completedStages: plan.completedStages, priorBriefs: plan.priorBriefs } })
       .catch(e => console.error('[resume] startRun failed', e))
     setSessionMode(wsPath, sid, 'workflow', base.runId)
     broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId: sid, type: 'mode-changed', mode: 'workflow', runId: base.runId })
@@ -484,14 +486,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // standalone: fired at chat-turn end (fire-and-forget); without this it's neither excluded nor
   // standalone, so the ending turn's cancelForWorkspace(preProposes) kills it in a race — see
   // proposeRun.ts's `standalone` doc.
-  const onRunTrigger = (wsPath: string, task: string, providerOverride?: { provider: string; model?: string }) => { void proposeRun(wsPath, task, task, { standalone: true, ...(providerOverride ? { providerOverride } : {}) }) }
+  const onRunTrigger = (wsPath: string, task: string, providerOverride?: { provider: string; model?: string }, sessionId?: string) => { void proposeRun(wsPath, task, task, { standalone: true, ...(providerOverride ? { providerOverride } : {}), sessionId: sessionId ?? readSessions(wsPath).activeSessionId }) }
   // Task 12: the approval card's workflow-switch dropdown re-proposes the SAME task/approach under a
   // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
   // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
   ipcMain.handle(CH.chatReproposeWorkflow, (_e, a: { workspacePath: string; approach: string; task?: string; workflowId?: string }) => {
     // standalone: this propose is UI-initiated (not owned by an agent turn), so turn cleanup
     // (cancelForWorkspace) must not dismiss it before the user decides — see proposeRun.ts.
-    void proposeRun(a.workspacePath, a.approach, a.task, { ...(a.workflowId ? { workflowId: a.workflowId } : {}), standalone: true })
+    void proposeRun(a.workspacePath, a.approach, a.task, { ...(a.workflowId ? { workflowId: a.workflowId } : {}), standalone: true, sessionId: readSessions(a.workspacePath).activeSessionId })
   })
   const runTurn = async (payload: ChatSendPayload) => {
     // Deterministic conversational resume: if the user asks to continue and a cancelled/failed run
@@ -526,7 +528,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         proposedWorkflow = true
         if (guardBlocked()) { emitNote(payload.workspacePath, payload.sessionId, '已达最大修改次数,请直接批准或取消。'); return Promise.resolve({ approved: false }) }
         // #1: carry the chat's currently-selected main agent as this run's provider override.
-        return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model } })
+        return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
       },
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
@@ -543,7 +545,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         env,
         emit: chatEmit,
         confirm,
-        onRunTrigger: (wsPath, task) => { proposedWorkflow = true; onRunTrigger(wsPath, task, { provider: payload.agent, model: payload.model }) },
+        onRunTrigger: (wsPath, task) => { proposedWorkflow = true; onRunTrigger(wsPath, task, { provider: payload.agent, model: payload.model }, payload.sessionId) },
         onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, () => session.cancel()),
       })
       // A forge_propose_plan blocks the turn awaiting the user's decision. If the turn ended (API error /

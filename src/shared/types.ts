@@ -34,6 +34,10 @@ export type PendingAction =
 
 export interface RunState {
   id: string; workspaceName: string; workspacePath: string; status: AgentState
+  // The chat session that OWNS this run (proposed/started it). The renderer shows the run + its gate
+  // cards only in this session's tab; other tabs of the same workspace get an unread badge instead of
+  // having their content stolen. Undefined for runs started outside a session (e.g. unit tests, legacy).
+  sessionId?: string
   workflowId?: string; workflowName?: string   // 本次运行选中的命名工作流;ad-hoc 时缺省
   projects: { name: string; cwd: string }[]
   stages: StageRuntime[]; pending: PendingAction[]

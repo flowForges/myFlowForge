@@ -97,3 +97,8 @@
 .sid-refresh svg { width: 14px; height: 14px; }
 .sid-refresh svg.spin { animation: sid-refresh-spin .7s linear infinite; }
 @keyframes sid-refresh-spin { to { transform: rotate(360deg); } }
+
+/* #3: a session tab whose off-screen workflow is waiting on a permission gate — a warm pulsing dot so
+   the user knows to switch to that tab (the gate no longer steals the tab in front). */
+.sess-attn { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 0 var(--warn); animation: sess-attn-pulse 1.6s ease-out infinite; }
+@keyframes sess-attn-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent); } 70% { box-shadow: 0 0 0 5px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }

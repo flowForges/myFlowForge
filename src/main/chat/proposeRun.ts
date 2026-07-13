@@ -39,7 +39,7 @@ export function makeProposeRun(deps: ProposeDeps) {
   // via chat:repropose-workflow), NOT owned by an agent chat turn. Turn cleanup (cancelForWorkspace) must
   // NOT dismiss it — it lives until the user decides (allow/deny). Without this, a switch's fresh card would
   // be created after the triggering turn's preProposes snapshot and get denied when that turn ends (race).
-  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string } }): Promise<ProposeResult> => {
+  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string }; sessionId?: string }): Promise<ProposeResult> => {
     const raw = deps.readWorkspace(wsPath)
     if (!raw) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
     // Defensive: production readWorkspace (config/store.ts) already normalizes workflows on every
@@ -56,6 +56,9 @@ export function makeProposeRun(deps: ProposeDeps) {
     if (stages.length === 0) { deps.emitNote(wsPath, '该工作区无可执行的工作流配置。'); return Promise.resolve({ approved: false }) }
     const filled = { ...ws, stages }
     let opts = workspaceToStartRunOpts(filled, task, wf ? { id: wf.id, name: wf.name } : undefined)
+    // #3: remember which chat session owns this run so the renderer scopes the run + its gate cards to
+    // that session's tab (and only badges other tabs) instead of stealing whatever tab is in front.
+    if (select?.sessionId) opts = { ...opts, sessionId: select.sessionId }
     // #1 run-level provider override: the chat turn that proposed this run carries the main agent the
     // user currently has selected. Apply it to EVERY stage (and every per-project develop agent, which
     // resolves provider from developProjects[].provider) so switching the chat agent — e.g. claude→codex
