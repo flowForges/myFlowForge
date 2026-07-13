@@ -50,6 +50,13 @@ export function SubagentCards({ subagents }: { subagents: SubagentCard[] }) {
   if (!subagents.length) return null
   return (
     <div className="subagent-cards">
+      <div
+        className="sac-lead"
+        title="这是主代理(所选 CLI,如 Claude Code)在这轮里用自己的 Task 工具开的原生子代理去探查 —— 不是 Forge 工作流的阶段代理。工作流阶段代理只在你批准方案、工作流真正运行时才出现,显示在工作流泳道里。没有卡片时 = 主代理自己直接看的代码。"
+      >
+        <span className="sac-lead-dot" aria-hidden="true" />
+        主代理派出的原生子代理(它自己去探查,非工作流阶段代理)
+      </div>
       {subagents.map(s => <Card key={s.id} sub={s} />)}
     </div>
   )
