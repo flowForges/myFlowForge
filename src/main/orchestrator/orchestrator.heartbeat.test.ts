@@ -71,6 +71,38 @@ describe('orchestrator heartbeat wiring', () => {
     rmSync(ws, { recursive: true, force: true })
   })
 
+  it('a killed agent stays err even if the provider later reports ok → stage halts (no partial-plan gate)', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'orch-hb-'))
+    let t = 0
+    let tick: () => void = () => {}
+    const bus = new EventBus()
+    const hp = hangingProvider()
+    const orch = new Orchestrator({
+      bus,
+      providers: { claude: hp.provider },
+      proxy: () => '',
+      heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
+      now: () => t,
+      makeInterval: (fn) => { tick = fn; return { clear() {} } },
+    })
+
+    const runP = orch.startRun(optsFor(ws))
+    await vi.waitFor(() => expect(hp.cbs.length).toBe(1))
+    const agent = () => orch.getRun()!.stages[0].agents[0]
+
+    t += 90_001; tick()          // stall
+    t += 60_000; tick()          // kill → state 'err' + cancel
+    expect(agent().state).toBe('err')
+    // The provider's process-exit handler fires a late onState('ok') — must be IGNORED, or the killed
+    // scan would count as success and the stage would gate an incomplete plan instead of halting.
+    hp.cbs[0].onState('ok')
+    expect(agent().state).toBe('err')
+
+    await runP
+    expect(orch.getRun()!.stages[0].state).toBe('err') // stage halted, not gated as ok
+    rmSync(ws, { recursive: true, force: true })
+  })
+
   it('onActivity refreshes the heartbeat so a long silent-but-alive stream never stalls', async () => {
     // Reproduces the killed-mid-Write bug: the agent produces no onLog (a long tool-input stream),
     // but run() reports onActivity on raw stream traffic. That must reset lastBeat like a real beat.
