@@ -20,6 +20,24 @@ Ein Desktop-Cockpit, das **Claude Code, Codex, Cursor, Gemini, qoder & opencode*
 
 ---
 
+## 📸 Screenshots
+
+<div align="center">
+
+<img src="assets/screenshots/home.jpg" alt="Start‑Dashboard — Arbeitsbereiche, heutige Änderungen und Begrüßung nach lokaler Zeit" width="90%" />
+
+<sub><b>Start</b> — machen Sie dort weiter, wo Sie aufgehört haben: Arbeitsbereiche, laufende Agenten und die heutigen Änderungen auf einen Blick.</sub>
+
+<br /><br />
+
+<img src="assets/screenshots/workspace.jpg" alt="Arbeitsbereich — mehrstufiges Workflow‑Panel, Chat und Änderungs-/Datei‑Inspektor" width="90%" />
+
+<sub><b>Arbeitsbereich</b> — das mehrstufige Workflow‑Panel, Chat pro Agent und der Live‑Änderungs-/Datei‑Inspektor — mit Ihrem Desktop‑Pet.</sub>
+
+</div>
+
+---
+
 ## Was ist myFlowForge?
 
 Moderne KI-Coding-Tools leben jeweils in ihrem eigenen Terminal, mit ihrem eigenen Session-Zustand, ihrem eigenen Kontingent und ohne gemeinsamen Plan. **myFlowForge** bringt sie alle unter ein Dach und verwandelt „mit einer KI chatten“ in einen **wiederholbaren, überprüfbaren Engineering-Workflow**.

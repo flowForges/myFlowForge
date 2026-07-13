@@ -20,6 +20,24 @@ Una cabina de mando de escritorio que orquesta **Claude Code, Codex, Cursor, Gem
 
 ---
 
+## 📸 Capturas de pantalla
+
+<div align="center">
+
+<img src="assets/screenshots/home.jpg" alt="Panel de inicio — espacios de trabajo, cambios de hoy y saludo con hora local" width="90%" />
+
+<sub><b>Inicio</b> — retoma donde lo dejaste: espacios de trabajo, agentes en ejecución y los cambios de hoy de un vistazo.</sub>
+
+<br /><br />
+
+<img src="assets/screenshots/workspace.jpg" alt="Espacio de trabajo — panel de flujo multietapa, chat e inspector de cambios/archivos" width="90%" />
+
+<sub><b>Espacio de trabajo</b> — el panel de flujo de trabajo multietapa, chat por agente e inspector de cambios/archivos en vivo — con tu mascota de escritorio.</sub>
+
+</div>
+
+---
+
 ## ¿Qué es myFlowForge?
 
 Las herramientas modernas de programación con IA viven cada una en su propia terminal, con su propio estado de sesión, su propia cuota y sin un plan compartido. **myFlowForge** las reúne todas bajo un mismo techo y convierte el "conversar con una IA" en un **flujo de trabajo de ingeniería repetible y revisable**.
