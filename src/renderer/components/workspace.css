@@ -73,6 +73,17 @@
 .ic-msub { font-size: 11px; color: var(--faint); margin-top: 2px; }
 
 .ic-stages { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 13px; }
+/* Editable plan: tick stages / projects to trim the run (skip a stage, deselect irrelevant projects). */
+.plan-stage-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 13px; }
+.plan-stage-row { border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; background: var(--surface-2); }
+.plan-stage-row.off { opacity: .5; }
+.plan-stage-head { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; }
+.plan-stage-head input { cursor: pointer; }
+.plan-stage-name { font-weight: 600; color: var(--fg); }
+.plan-stage-meta { margin-left: auto; font-size: 11px; color: var(--muted); }
+.plan-proj-chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 8px 0 2px; padding-left: 24px; }
+.plan-proj-chip { font-size: 11px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border-2); color: var(--muted); background: transparent; cursor: pointer; }
+.plan-proj-chip.on { border-color: var(--accent); color: var(--fg); background: color-mix(in oklch, var(--accent) 12%, transparent); }
 .ic-stage { font-size: 10.5px; font-weight: 600; font-family: var(--mono); color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 3px 9px; white-space: nowrap; }
 .ic-stage .ar { color: var(--faint); margin: 0 6px 0 0; }
 /* Read-only plugin-hook chip interleaved between stages — dashed accent so it reads as a hook, not a stage. */

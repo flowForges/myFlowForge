@@ -8,7 +8,7 @@ const aiMsg = (id: string, ts: string, provider?: string): ChatMessage => ({ id,
 const userMsg = (id: string, ts: string): ChatMessage => ({ id, who: 'user', text: id, ts })
 const pend = (id: string, ts?: string): PendingAction =>
   ({ id, kind: 'input', agentId: 'a', agentName: 'A', wsName: 'w', title: 'q', ts } as PendingAction)
-const plan = (id: string, ts: string): PlanReq => ({ id, approach: 'a', stages: [], task: 't', ts })
+const plan = (id: string, ts: string): PlanReq => ({ id, approach: 'a', stages: [], allProjects: [], task: 't', ts })
 
 describe('buildTimeline', () => {
   it('按 ts 把卡片插进消息之间', () => {

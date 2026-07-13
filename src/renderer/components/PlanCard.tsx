@@ -1,21 +1,24 @@
+import { useState } from 'react'
 import { Markdown } from '../views/chat/markdown'
 
 export interface PlanReq {
   id: string
   approach: string
-  stages: { name: string; agents: number }[]
+  stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]
+  allProjects: string[]
   task?: string
   ts?: string
   workflowId?: string
   workflowName?: string
   workflowOptions?: { id: string; name: string }[]
 }
+export type PlanSelection = { stages: string[]; stageProjects: Record<string, string[]> }
 
 const AD_HOC = ''   // <select> value for "临时/自定义(ad-hoc)" — undefined can't be an <option value>
 
 interface PlanCardProps {
   req: PlanReq
-  onResolve: (d: { decision: 'allow' | 'deny' | 'modify'; value?: string }) => void
+  onResolve: (d: { decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: PlanSelection }) => void
   // Undefined workflowId = switch to ad-hoc (no named workflow). Optional: cards from callers that
   // haven't wired re-propose yet (Task 12 step 3) simply render the dropdown without a live handler.
   onSwitchWorkflow?: (workflowId?: string) => void
@@ -30,6 +33,25 @@ interface PlanCardProps {
 // ic-stages stage-chip pipeline. approach/task are UNTRUSTED (LLM output) and are
 // rendered as plain JSX (auto-escaped), mirroring ReqCard.
 export function PlanCard({ req, onResolve, onSwitchWorkflow, onSupplement }: PlanCardProps) {
+  // Editable selection: which stages to run, and which projects each per-project stage scans. Seeded from
+  // the agent's proposal; unticking a stage or a project trims THIS run (saves tokens) without changing
+  // the saved workflow config.
+  const [onStages, setOnStages] = useState<Record<string, boolean>>(() => Object.fromEntries(req.stages.map(s => [s.key, true])))
+  const [stageProj, setStageProj] = useState<Record<string, string[]>>(() => Object.fromEntries(req.stages.map(s => [s.key, s.projects])))
+  const toggleStage = (k: string) => setOnStages(m => ({ ...m, [k]: !m[k] }))
+  const toggleProj = (k: string, p: string) => setStageProj(m => {
+    const cur = m[k] ?? []
+    return { ...m, [k]: cur.includes(p) ? cur.filter(x => x !== p) : [...cur, p] }
+  })
+  const approve = () => {
+    const stages = req.stages.filter(s => onStages[s.key]).map(s => s.key)
+    const stageProjects: Record<string, string[]> = {}
+    for (const s of req.stages) {
+      if (onStages[s.key] && s.perProject) stageProjects[s.key] = stageProj[s.key] ?? s.projects
+    }
+    onResolve({ decision: 'allow', selection: { stages, stageProjects } })
+  }
+  const anyStage = req.stages.some(s => onStages[s.key])
   return (
     <div className="msg-req k-confirm plan-card" data-req={req.id}>
       <div className="req-head">
@@ -53,19 +75,43 @@ export function PlanCard({ req, onResolve, onSwitchWorkflow, onSupplement }: Pla
         <div className="req-title plan-approach"><Markdown text={req.approach} /></div>
         {req.stages.length ? (
           <div className="plan-stages">
-            <span className="plan-stages-label">执行阶段</span>
-            <div className="ic-stages">
-              {req.stages.map((s, i) => (
-                <span key={i} className="ic-stage">
-                  {i > 0 && <span className="ar">→</span>}
-                  {s.name} · {s.agents > 1 ? `并行${s.agents}代理` : '单代理'}
-                </span>
-              ))}
+            <span className="plan-stages-label">执行阶段(可勾选:去掉不需要的阶段/项目以省 token)</span>
+            <div className="plan-stage-list">
+              {req.stages.map((s) => {
+                const on = !!onStages[s.key]
+                return (
+                  <div key={s.key} className={`plan-stage-row${on ? '' : ' off'}`}>
+                    <label className="plan-stage-head">
+                      <input type="checkbox" checked={on} onChange={() => toggleStage(s.key)} />
+                      <span className="plan-stage-name">{s.name}</span>
+                      {s.perProject
+                        ? <span className="plan-stage-meta">{(stageProj[s.key] ?? s.projects).length}/{req.allProjects.length} 个项目</span>
+                        : <span className="plan-stage-meta">单代理</span>}
+                    </label>
+                    {on && s.perProject && req.allProjects.length > 0 && (
+                      <div className="plan-proj-chips">
+                        {req.allProjects.map(p => {
+                          const picked = (stageProj[s.key] ?? []).includes(p)
+                          return (
+                            <button
+                              key={p}
+                              type="button"
+                              className={`plan-proj-chip${picked ? ' on' : ''}`}
+                              onClick={() => toggleProj(s.key, p)}
+                              title={picked ? `不扫 ${p}` : `扫 ${p}`}
+                            >{p}</button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         ) : null}
         <div className="req-actions">
-          <button className="req-ok" onClick={() => onResolve({ decision: 'allow' })}>批准并执行</button>
+          <button className="req-ok" disabled={!anyStage} onClick={approve}>批准并执行</button>
           <button onClick={() => onSupplement?.()}>修改方向…</button>
           <button className="req-no" onClick={() => onResolve({ decision: 'deny' })}>取消</button>
         </div>

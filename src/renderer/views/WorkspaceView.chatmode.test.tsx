@@ -181,7 +181,7 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
       emitChat({
         workspacePath: '/ws',
         sessionId: 's-1',
-        type: 'plan-request',
+        type: 'plan-request', allProjects: [],
         id: 'pl-1',
         approach: '先评估需求,再开发',
         stages: [{ name: '需求评估', agents: 1 }, { name: '代码开发', agents: 2 }],
@@ -208,7 +208,7 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
       emitChat({
         workspacePath: '/ws',
         sessionId: 's-1',
-        type: 'plan-request',
+        type: 'plan-request', allProjects: [],
         id: 'pl-scroll',
         approach: '执行方案',
         stages: [{ name: '设计', agents: 1 }],

@@ -71,21 +71,21 @@ describe('WorkspaceView gate observability chain (e2e)', () => {
 
     // ── Step 1: plan-request → PlanCard appears (approach + stage chips) ──────
     chatHandler!({
-      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', id: 'pl-1',
+      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], id: 'pl-1',
       approach: '先建模型再写测试', task: '加评论',
-      stages: [{ name: '设计', agents: 2 }, { name: '开发', agents: 3 }],
+      stages: [{ key: '设计', name: '设计', agents: 2, perProject: false, projects: [] }, { key: '开发', name: '开发', agents: 3, perProject: false, projects: [] }],
     } as ChatEvent)
 
     await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())
     expect(screen.getByText('先建模型再写测试')).toBeInTheDocument()
     expect(container.querySelector('.chat-inner .msg-req[data-req="pl-1"]')).toBeTruthy()
-    // stage chips reflect the two stages with parallel-agent counts
-    expect(screen.getByText(/设计 · 并行2代理/)).toBeInTheDocument()
-    expect(screen.getByText(/开发 · 并行3代理/)).toBeInTheDocument()
+    // the editable stage list reflects the two stages
+    const stageNames = Array.from(container.querySelectorAll('.plan-stage-name')).map(e => e.textContent)
+    expect(stageNames).toEqual(['设计', '开发'])
 
-    // ── Step 2: 批准并执行 → chatResolve(allow) with the workspace path ───────
+    // ── Step 2: 批准并执行 → chatResolve(allow) with the workspace path + stage selection ───────
     fireEvent.click(screen.getByText('批准并执行'))
-    expect(chatResolve).toHaveBeenCalledWith({ id: 'pl-1', decision: 'allow', value: undefined, workspacePath: '/ws' })
+    expect(chatResolve).toHaveBeenCalledWith(expect.objectContaining({ id: 'pl-1', decision: 'allow', workspacePath: '/ws' }))
 
     // ── Step 3: plan-resolved → PlanCard disappears ──────────────────────────
     chatHandler!({ workspacePath: '/ws', sessionId: 'default', type: 'plan-resolved', id: 'pl-1' } as ChatEvent)

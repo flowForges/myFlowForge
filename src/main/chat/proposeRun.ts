@@ -4,7 +4,7 @@ import type { StartRunOpts } from '../orchestrator/orchestrator'
 import type { RunState } from '@shared/types'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from '../workspace/resolveStages'
-import { planStages } from '../workspace/planSummary'
+import { planStages, type PlanStageInfo } from '../workspace/planSummary'
 import { indexCustomStages, type CustomStageDef } from '../../shared/customStages'
 
 export interface ProposeDeps {
@@ -16,14 +16,20 @@ export interface ProposeDeps {
   readCustomStages?: () => CustomStageDef[]
   writeWorkspace: (ws: Workspace) => void
   startRun: (o: StartRunOpts) => void
-  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: { name: string; agents: number }[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }) => void
+  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: PlanStageInfo[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }) => void
   emitNote: (wsPath: string, text: string) => void
   // #1: after an approved chat-triggered run starts, flip the triggering session to workflow mode
   // (setSessionMode bridges to the active session via the 2A sessionStore) and tell the renderer.
   setSessionMode: (wsPath: string, mode: 'chat' | 'workflow', runId?: string) => void
   emitModeChanged: (wsPath: string, mode: 'chat' | 'workflow', runId?: string) => void
 }
-export type PlanDecision = { decision: 'allow' | 'deny' | 'modify'; value?: string }
+export type PlanDecision = {
+  decision: 'allow' | 'deny' | 'modify'
+  value?: string
+  // On 'allow': the user's edits from the approval card — run only these stages, and scope each
+  // per-project stage to these projects. Absent → run exactly what the agent proposed.
+  selection?: { stages: string[]; stageProjects: Record<string, string[]> }
+}
 export type ProposeResult = { approved: boolean; feedback?: string }
 
 let seq = 0
@@ -76,14 +82,32 @@ export function makeProposeRun(deps: ProposeDeps) {
     // Full set of workflows this workspace has configured, so the approval card can offer a switch
     // dropdown (Task 12) — independent of which one (if any) was actually matched for this proposal.
     const workflowOptions = ws.workflows.map(w => ({ id: w.id, name: w.name }))
-    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), task, workflowId: wf?.id, workflowName: wf?.name, workflowOptions })
+    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), allProjects: opts.developProjects.map(p => p.name), task, workflowId: wf?.id, workflowName: wf?.name, workflowOptions })
     return new Promise<ProposeResult>(resolve => {
       pending.set(id, { wsPath, standalone: select?.standalone === true, resolve: (d) => {
         if (d.decision === 'modify') return resolve({ approved: false, feedback: d.value })
         if (d.decision === 'deny') return resolve({ approved: false })
         const live = deps.getRun()
         if (live && live.status === 'run') { deps.emitNote(wsPath, '已有运行进行中,稍后再试。'); return resolve({ approved: false }) }
-        deps.startRun(opts)
+        // Apply the user's approval-card edits: run only the chosen stages, and scope each per-project
+        // stage to the chosen projects (skipping a stage / deselecting irrelevant projects saves tokens).
+        let runOpts = opts
+        const sel = d.selection
+        if (sel) {
+          if (sel.stages?.length) {
+            const want = new Set(sel.stages)
+            const picked = runOpts.stages.filter(s => want.has(s.key))
+            if (picked.length) runOpts = { ...runOpts, stages: picked }
+          }
+          const byStage = sel.stageProjects ?? {}
+          if (Object.keys(byStage).length) {
+            runOpts = { ...runOpts, stages: runOpts.stages.map(s => {
+              const p = byStage[s.key]
+              return p && p.length ? { ...s, projects: p } : s
+            }) }
+          }
+        }
+        deps.startRun(runOpts)
         // #1: this chat turn was task-shaped (the LLM self-activated forge_propose_plan and the
         // user approved). Promote the triggering session to workflow mode + surface the auto-orchestration.
         const runId = deps.getRun()?.id

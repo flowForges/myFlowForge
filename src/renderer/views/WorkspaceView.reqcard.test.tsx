@@ -68,17 +68,17 @@ describe('WorkspaceView ReqCard wiring', () => {
     const { container } = render(<WorkspaceView engine={engine} providers={providers} />)
     await waitFor(() => expect(chatHandler).not.toBeNull())
     chatHandler!({
-      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', id: 'pl1',
+      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], id: 'pl1',
       approach: '逐文件迁移 tokens', task: '重构主题',
-      stages: [{ name: '开发', agents: 3 }],
+      stages: [{ key: '开发', name: '开发', agents: 3, perProject: false, projects: [] }],
     } as ChatEvent)
     await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())
     expect(screen.getByText('逐文件迁移 tokens')).toBeInTheDocument()
     expect(container.querySelector(`.chat-inner .msg-req[data-req="pl1"]`)).toBeTruthy()
-    expect(screen.getByText(/并行3代理/)).toBeInTheDocument()
+    expect(screen.getByText('开发', { selector: '.plan-stage-name' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByText('批准并执行'))
-    expect((window as any).forge.chatResolve).toHaveBeenCalledWith({ id: 'pl1', decision: 'allow', value: undefined, workspacePath: '/ws' })
+    expect((window as any).forge.chatResolve).toHaveBeenCalledWith(expect.objectContaining({ id: 'pl1', decision: 'allow', workspacePath: '/ws' }))
 
     // plan-resolved removes the card
     chatHandler!({ workspacePath: '/ws', sessionId: 'default', type: 'plan-resolved', id: 'pl1' } as ChatEvent)
@@ -89,9 +89,9 @@ describe('WorkspaceView ReqCard wiring', () => {
     const { container } = render(<WorkspaceView engine={engine} providers={providers} />)
     await waitFor(() => expect(chatHandler).not.toBeNull())
     chatHandler!({
-      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', id: 'pl1',
+      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], id: 'pl1',
       approach: '逐文件迁移 tokens', task: '重构主题',
-      stages: [{ name: '开发', agents: 3 }],
+      stages: [{ key: '开发', name: '开发', agents: 3, perProject: false, projects: [] }],
     } as ChatEvent)
     await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())
 
@@ -124,9 +124,9 @@ describe('WorkspaceView ReqCard wiring', () => {
     const { container } = render(<WorkspaceView engine={engine} providers={providers} />)
     await waitFor(() => expect(chatHandler).not.toBeNull())
     chatHandler!({
-      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', id: 'pl1',
+      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], id: 'pl1',
       approach: '逐文件迁移 tokens', task: '重构主题',
-      stages: [{ name: '开发', agents: 3 }],
+      stages: [{ key: '开发', name: '开发', agents: 3, perProject: false, projects: [] }],
     } as ChatEvent)
     await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())
     fireEvent.click(screen.getByText('修改方向…'))

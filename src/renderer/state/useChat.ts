@@ -14,7 +14,7 @@ export interface ChatApi {
   running: { id: string; text: string } | null
   send: (payload: Omit<ChatSendPayload, 'workspacePath' | 'sessionId'>) => void
   resolveConfirm: (payload: { id: string; decision: 'allow' | 'deny'; value?: string }) => void
-  resolvePlan: (payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string }) => void
+  resolvePlan: (payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> } }) => void
   cancelQueued: (id: string) => void
   clearQueue: () => void
   stop: () => void
@@ -120,7 +120,7 @@ export function useChat(
       }
       else if (e.type === 'confirm-request') setConfirms(c => [...c, { id: e.id, title: e.title, where: e.where, ts: new Date().toISOString() }])
       else if (e.type === 'confirm-resolved') setConfirms(c => c.filter(x => x.id !== e.id))
-      else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, ts: new Date().toISOString() }])
+      else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, allProjects: e.allProjects, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, ts: new Date().toISOString() }])
       else if (e.type === 'plan-resolved') setPlans(p => p.filter(x => x.id !== e.id))
       else if (e.type === 'mode-changed') onModeChangedRef.current?.(e.mode, e.runId)
     })
@@ -140,7 +140,7 @@ export function useChat(
     void api.current.chatResolve({ ...payload, value: payload.value, workspacePath })
   }, [workspacePath])
 
-  const resolvePlan = useCallback((payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string }) => {
+  const resolvePlan = useCallback((payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> } }) => {
     if (!workspacePath) return
     setPlans(p => p.filter(x => x.id !== payload.id))
     void api.current.chatResolve({ ...payload, workspacePath })
