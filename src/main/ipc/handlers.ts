@@ -961,6 +961,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       try { writeJsonAtomic(openersCacheFile(), { apps: openersCache }) } catch { /* best-effort */ }
       return { ok: false as const, error: `${op.name} 已不存在,已从列表移除`, removedId: op.id }
     }
+    // Guard the TARGET path: on a fresh install a workspace is navigable before its per-project repos
+    // finish cloning (or if a clone failed), so `${wsPath}/${project}` may not exist yet. Without this,
+    // macOS `open` either errors with a raw English string or silently opens a near-empty folder — the
+    // "新用户打不开文件" report. Give a clear localized hint instead.
+    if (arg.file && !existsSync(arg.file)) {
+      return { ok: false as const, error: '文件尚未就绪 —— 仓库可能还在拉取,请稍候再试' }
+    }
+    if (!existsSync(arg.folder)) {
+      return { ok: false as const, error: '该位置尚不存在 —— 项目仓库还未拉取完成或克隆失败,请稍候或检查工作区状态' }
+    }
     const argvs = buildOpenCommand(op.openMode, op.appPath, { folder: arg.folder, file: arg.file })
     try { for (const args of argvs) await runOpen(args); return { ok: true as const } }
     catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }

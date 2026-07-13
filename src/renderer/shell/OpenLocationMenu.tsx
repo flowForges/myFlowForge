@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { DetectedOpener, OpenTarget } from '@shared/openers'
 
 const FOLDER_GLYPH = (
@@ -31,12 +32,24 @@ export function OpenLocationMenu({ target, defaultOpenerId, onSetDefault }: Prop
   const [open, setOpen] = useState(false)
   const [apps, setApps] = useState<DetectedOpener[] | null>(cachedOpeners)
   const ref = useRef<HTMLSpanElement>(null)
+  // The popover is portaled to <body> so a wallpaper-mode backdrop-filter on the titlebar can't trap it
+  // behind the right-side inspector (both create stacking contexts; the later-painted inspector won).
+  // Since it's no longer positioned relative to .open-loc, anchor it to the button's viewport rect.
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const openPop = () => {
+    const r = ref.current?.getBoundingClientRect()
+    if (r) setPos({ top: r.bottom + 4, left: r.left })
+    setOpen(true)
+  }
 
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
+    // The toolbar is fixed, but a window resize would strand the portaled pop — just close it.
+    const onResize = () => setOpen(false)
     document.addEventListener('click', onDoc)
-    return () => document.removeEventListener('click', onDoc)
+    window.addEventListener('resize', onResize)
+    return () => { document.removeEventListener('click', onDoc); window.removeEventListener('resize', onResize) }
   }, [open])
 
   const ensureApps = async (): Promise<DetectedOpener[]> => {
@@ -71,9 +84,9 @@ export function OpenLocationMenu({ target, defaultOpenerId, onSetDefault }: Prop
   const onMain = async () => {
     const list = await ensureApps()
     if (defaultOpenerId && list.some(a => a.id === defaultOpenerId)) void doOpen(defaultOpenerId)
-    else setOpen(true)   // no valid default yet — let the user pick
+    else openPop()   // no valid default yet — let the user pick
   }
-  const onCaret = async (e: React.MouseEvent) => { e.stopPropagation(); await ensureApps(); setOpen(o => !o) }
+  const onCaret = async (e: React.MouseEvent) => { e.stopPropagation(); await ensureApps(); if (open) setOpen(false); else openPop() }
   const onPick = (id: string) => { onSetDefault(id); setOpen(false); void doOpen(id) }
 
   const current = apps?.find(a => a.id === defaultOpenerId) ?? null
@@ -87,8 +100,8 @@ export function OpenLocationMenu({ target, defaultOpenerId, onSetDefault }: Prop
       <button className="tb-btn open-loc-caret" title="选择打开软件" aria-label="选择软件" aria-haspopup="menu" aria-expanded={open} onClick={onCaret}>
         {CHEVRON}
       </button>
-      {open && (
-        <div className="open-loc-pop" role="menu" onClick={e => e.stopPropagation()}>
+      {open && pos && createPortal(
+        <div className="open-loc-pop portaled" style={{ top: pos.top, left: pos.left }} role="menu" onClick={e => e.stopPropagation()}>
           {(apps ?? []).length === 0 && <div className="ol-empty">未检测到可用软件</div>}
           {(apps ?? []).map(a => (
             <span
@@ -103,7 +116,8 @@ export function OpenLocationMenu({ target, defaultOpenerId, onSetDefault }: Prop
               {a.name}
             </span>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </span>
   )
