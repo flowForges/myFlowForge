@@ -1,20 +1,18 @@
 import type { CustomPetCfg, PetState } from './types'
 
-export const BUILTIN_PET_IDS = ['china-dragon', 'white-catgirl', 'pink-catgirl', 'rocket-fox', 'phoenix', 'cyber-jellyfish'] as const
+// Only white-catgirl ships bundled now; the other packs (dragon / jellyfish / phoenix / rocket-fox /
+// pink-catgirl) moved to on-demand download (Settings → Pet → pet gallery) to keep the installer small —
+// their animated webp were ~32MB × 2 (Vite + extraResources). See src/main/petPack/petPackService.ts.
+export const BUILTIN_PET_IDS = ['white-catgirl'] as const
 export type BuiltinPetId = typeof BUILTIN_PET_IDS[number]
 
 const PET_STATES: PetState[] = ['idle', 'working', 'confirm', 'input', 'done']
 
 const NAME: Record<BuiltinPetId, string> = {
-  'china-dragon': '中国龙',
   'white-catgirl': '成年白系猫娘',
-  'pink-catgirl': '粉色猫娘',
-  'rocket-fox': '火箭狐',
-  phoenix: '凤凰',
-  'cyber-jellyfish': '赛博水母',
 }
 
-export const DEFAULT_BUILTIN_PET_ID: BuiltinPetId = 'china-dragon'
+export const DEFAULT_BUILTIN_PET_ID: BuiltinPetId = 'white-catgirl'
 
 // All built-ins are authored as real frame animation. Animated WebP preserves alpha and color while
 // remaining small enough to bundle directly through Vite; GIF and APNG stay available as fallbacks.

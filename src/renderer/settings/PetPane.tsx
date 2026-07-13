@@ -3,6 +3,7 @@ import type { Pet, PetState, Anim, Accent } from '@shared/types'
 import { ImportModal, type ImportConfig } from '../components/ImportModal'
 import { PET_SAMPLE, parsePet, type ParsedPet } from '../components/importParsers'
 import { addCustomPet, removeCustomPet, resolveActiveCustomPet, PET_CUSTOM_MAX, type CustomPet } from '@shared/petCustom'
+import { PetGallery } from './PetGallery'
 import { petSrc } from '../pet/petSrc'
 
 let petIdSeq = 0
@@ -215,8 +216,9 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
     setRenamingId(null)
   }
 
-  // The 5 bundled pets are seeded into customPets with `builtin-` ids. Split them out into their own
-  // 「默认宠物」group so they read as defaults, not user-added 「自定义」pets. User pets keep the × delete.
+  // The bundled built-in (white-catgirl) is seeded into customPets with a `builtin-` id; downloaded packs
+  // get `pack-` ids and read as user pets. Split builtins out into a 「默认宠物」group; user/downloaded
+  // pets keep the × delete. More pets are downloadable below via <PetGallery>.
   const builtinList = customList.filter(p => p.id.startsWith('builtin-'))
   const userList = customList.filter(p => !p.id.startsWith('builtin-'))
   const chipStyle = (active: boolean) => ({
@@ -351,7 +353,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
           都在同一画廊里,点选任意一个即为当前形象——不再把「形象」与「宠物」拆成两处。 */}
       <div className="set-group">
         <h4>形象</h4>
-        <p className="set-desc">桌面宠物的形象。内置简约形象与 5 只默认宠物都在这里,点选任意一个即为当前显示;也可上传自定义。</p>
+        <p className="set-desc">桌面宠物的形象。内置简约形象与默认宠物都在这里,点选任意一个即为当前显示;也可上传自定义,或在下方「宠物库」下载更多。</p>
         <div className="pet-custom-gallery" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
           {SKIN_CHIPS.map(renderSkinChip)}
           {builtinList.map(renderChip)}
@@ -445,6 +447,8 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             </div>
           )}
         </div>
+
+      <PetGallery pet={pet} onChange={onChange} />
 
       <div className="set-group">
         <h4>逐状态动画</h4>

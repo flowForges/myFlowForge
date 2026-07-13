@@ -139,6 +139,10 @@ const api = {
   wallpaperCatalog: (): Promise<import('@shared/wallpaper').WallpaperCatalog | { error: string }> => ipcRenderer.invoke(CH.wallpaperCatalog),
   wallpaperPreview: (item: import('@shared/wallpaper').WallpaperItem): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.wallpaperPreview, item),
   wallpaperInstall: (item: import('@shared/wallpaper').WallpaperItem): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.wallpaperInstall, item),
+  // Downloadable pet packs (no activation code). List the public catalog, preview a pack, install its frames.
+  petPackCatalog: (): Promise<import('@shared/petPack').PetPackCatalog | { error: string }> => ipcRenderer.invoke(CH.petPackCatalog),
+  petPackPreview: (item: import('@shared/petPack').PetPackItem): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.petPackPreview, item),
+  petPackInstall: (petId: string, item: import('@shared/petPack').PetPackItem): Promise<{ name: string; images: Record<string, string> } | { error: string }> => ipcRenderer.invoke(CH.petPackInstall, petId, item),
   onSettingsChanged: (cb: (s: unknown) => void) => {
     const listener = (_: unknown, s: unknown) => cb(s)
     ipcRenderer.on(CH.settingsChanged, listener)

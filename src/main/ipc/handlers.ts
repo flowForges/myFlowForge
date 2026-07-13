@@ -61,6 +61,8 @@ import { catalogEntry } from '../../shared/fontCatalog'
 import { nsfwValidate, nsfwCatalog, nsfwPreview, nsfwInstallPet, nsfwInstallBg } from '../nsfw/nsfwService'
 import { wallpaperCatalog, wallpaperPreview, wallpaperInstall } from '../wallpaper/wallpaperService'
 import type { WallpaperItem } from '../../shared/wallpaper'
+import { petPackCatalog, petPackPreview, petPackInstall } from '../petPack/petPackService'
+import type { PetPackItem } from '../../shared/petPack'
 import type { NsfwPet, NsfwBg } from '../../shared/nsfw'
 import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
@@ -819,6 +821,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
   ipcMain.handle(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch()))
   ipcMain.handle(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
+
+  // Downloadable pet packs — same public jsDelivr pipeline as wallpapers, no activation code.
+  ipcMain.handle(CH.petPackCatalog, () => petPackCatalog(wallpaperFetch()))
+  ipcMain.handle(CH.petPackPreview, (_e, item: PetPackItem) => petPackPreview(item, wallpaperFetch()))
+  ipcMain.handle(CH.petPackInstall, (_e, petId: string, item: PetPackItem) => petPackInstall(petId, item, wallpaperFetch()))
 
   const MAX_PINNED = 5
   ipcMain.handle(CH.workspacesList, () => {

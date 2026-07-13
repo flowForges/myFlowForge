@@ -107,17 +107,24 @@ app.whenReady().then(() => {
     const builtinsRefreshed = hadBuiltinPets &&
       JSON.stringify(pet.customPets.filter(p => p.id.startsWith('builtin-'))) !==
       JSON.stringify(mergedCustomPets.filter(p => p.id.startsWith('builtin-')))
+    // Pets slimmed to one bundled built-in (white-catgirl); the rest are downloadable. An existing user
+    // whose active pet was a now-removed built-in (e.g. builtin-china-dragon) would point at a pet no
+    // longer in the list → fall back to white-catgirl. They can re-download the old one from the gallery.
+    const wantActive = hadBuiltinPets ? pet.activeCustomPetId : `builtin-${DEFAULT_BUILTIN_PET_ID}`
+    const activeMissing = !mergedCustomPets.some(p => p.id === wantActive)
+    const activeCustomPetId = activeMissing ? `builtin-${DEFAULT_BUILTIN_PET_ID}` : wantActive
     const nextPet = {
       ...pet,
       skin: hadBuiltinPets ? pet.skin : 'custom',
       customPets: mergedCustomPets,
-      activeCustomPetId: hadBuiltinPets ? pet.activeCustomPetId : `builtin-${DEFAULT_BUILTIN_PET_ID}`,
+      activeCustomPetId,
     }
-    if (migrated > 0 || !hadBuiltinPets || builtinsRefreshed) {
+    if (migrated > 0 || !hadBuiltinPets || builtinsRefreshed || activeMissing) {
       writeSettings({ ...s, pet: nextPet })
       if (migrated > 0) logInfo('pet', `已将 ${migrated} 张内联宠物图片迁移到磁盘,精简 settings.json`)
-      if (!hadBuiltinPets) logInfo('pet', '已内置桌宠包并默认启用中国龙')
-      if (builtinsRefreshed) logInfo('pet', '已更新内置桌宠形象(改用静态首帧,修复空白)')
+      if (!hadBuiltinPets) logInfo('pet', '已内置桌宠包并默认启用')
+      if (builtinsRefreshed) logInfo('pet', '已更新内置桌宠形象')
+      if (activeMissing) logInfo('pet', '原桌宠已转为可下载,已暂时回退到内置白猫娘(可在设置→宠物库重新下载)')
     }
   } catch (e) { logError('pet', `宠物图片迁移失败: ${String(e)}`) }
 

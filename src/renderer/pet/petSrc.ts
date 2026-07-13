@@ -11,8 +11,11 @@ import { petImageUrl } from '@shared/petImageUrl'
 // Built-in packs are animated WebP only (the old png/gif/apng exports were dropped to slim the app).
 // `import.meta as any`: this module is pulled into the node tsconfig too (via its own .test.ts, which
 // that config globs in), and the node config lacks vite/client types — so reference glob dynamically.
+// Only the bundled built-in (white-catgirl) is globbed here — the other packs are downloaded on demand and
+// served from disk via forge-pet://, so they must NOT be pulled into the Vite bundle (that was ~28MB of
+// webp for packs the user may never use). Keep this glob narrowed to the shipped built-in(s).
 const builtinAssets = (import.meta as unknown as { glob: (p: string, o: object) => Record<string, string> }).glob(
-  '../../../assets/pet-packs/*/webp/*.webp',
+  '../../../assets/pet-packs/white-catgirl/webp/*.webp',
   { eager: true, query: '?url', import: 'default' },
 ) as Record<string, string>
 
