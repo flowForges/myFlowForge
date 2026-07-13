@@ -67,7 +67,7 @@ import type { NsfwPet, NsfwBg } from '../../shared/nsfw'
 import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
 import { pickInstaller } from '../update/installer'
-import { makeProxyFetch } from '../update/proxyFetch'
+import { makeProxyFetch, makeContentFetch } from '../update/proxyFetch'
 import { writeFile, stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
 import { ensureWorkspaceSkill } from '../skills/installSkill'
@@ -806,7 +806,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // License-gated extra content. All requests go through the user's configured proxy and carry the
   // locally-stored activation code (settings.nsfwCode); the Worker holds the real keys + image bytes.
-  const nsfwFetch = () => makeProxyFetch(readSettings().termProxy)
+  const nsfwFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback
   ipcMain.handle(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
   ipcMain.handle(CH.nsfwCatalog, () => nsfwCatalog(readSettings().nsfwCode, nsfwFetch()))
   ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, readSettings().nsfwCode, nsfwFetch()))
@@ -822,7 +822,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // Built-in wallpapers: public jsDelivr catalog + images, downloaded on demand through the user's proxy
   // and stored on disk like any uploaded background. No activation code, no Worker (so no Worker quota).
-  const wallpaperFetch = () => makeProxyFetch(readSettings().termProxy)
+  const wallpaperFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback (also used by pet packs)
   ipcMain.handle(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
   ipcMain.handle(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch()))
   ipcMain.handle(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
