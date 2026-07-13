@@ -29,16 +29,14 @@ html[data-vibrancy="on"]:not([data-glass="on"]) .inspector { background: var(--g
 /* 背景图 —— 「整个应用」范围:一层铺在 .window 不透明底色之上、内容之下(z-index:-1)。主内容视图
    (.chat / #view-home)本身透明,图片便透过它们显示;侧栏/标题栏等不透明面板自然成为边框。opacity
    变量把图片压淡,保证正文可读。'chat' 范围由 chat.css 的 .chat::before 单独绘制。 */
-/* 背景图可读性蓙的颜色(随主题的 --bg 变色):图始终 100% 铺底,只叠这层蓙。蓙强度随「背景可见度」线性
-   下降 —— 可见度 100% = 无蓙(纯图),可见度越低蓙越重(但整体系数 .5,避免蓙太抢、显成一片白)。 */
-:root {
-  --app-bg-scrim: color-mix(in srgb, var(--bg) calc((1 - var(--app-bg-opacity, .35)) * 50%), transparent);
-  --home-bg-scrim: color-mix(in srgb, var(--bg) calc((1 - var(--home-bg-opacity, .35)) * 50%), transparent);
-}
+/* 背景图「可见度」= 图片自身的不透明度(随「背景可见度」滑块)。图淡下去后,透出的是下面纯色的窗口底
+   (--bg):浅色主题淡成近白、深色主题淡成近黑 —— 两侧行为一致,可见度越低正文对比越清晰。
+   (旧版靠一层随 --bg 变色的「蓙」压淡图,深色的黑蓙在同等 alpha 下感知远弱于浅色的白蓙,且封顶 50%,
+   所以深色系下滑块几乎无效。改成直接调图片 opacity 后不再有明暗不对称。) */
 .app-bg-layer { position: absolute; inset: 0; z-index: -1; display: none; pointer-events: none;
   background-image: var(--app-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
+  opacity: var(--app-bg-opacity, .35);
   border-radius: 12px; }
-.app-bg-layer::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--app-bg-scrim); }
 [data-bg-scope="app"] .app-bg-layer { display: block; }
 /* With a bright wallpaper behind everything, the opaque dark 1px panel borders (sidebar / inspector
    edges, titlebar / statusbar rules, button outlines) read as harsh BLACK LINES. Swap every border to a
