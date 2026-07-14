@@ -3,11 +3,11 @@ import { petSrc, builtinAssetUrl } from './petSrc'
 
 describe('petSrc', () => {
   it('resolves built-in pack paths to a bundled asset url (not the forge-pet protocol)', () => {
-    const url = petSrc('builtin/china-dragon/png/idle.png')
+    const url = petSrc('builtin/china-dragon/webp/idle.webp')
     expect(url).toBeTruthy()
     expect(url).not.toContain('forge-pet://')
-    // bundled asset (Vite emits into /assets/…png) — the exact hash varies, so match the shape
-    expect(url).toMatch(/idle.*\.png/)
+    // bundled asset (Vite emits into /assets/…webp) — the exact hash varies, so match the shape
+    expect(url).toMatch(/idle.*\.webp/)
   })
 
   it('maps every built-in pet/state animated webp to a bundled asset', () => {

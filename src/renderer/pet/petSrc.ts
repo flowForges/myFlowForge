@@ -7,22 +7,14 @@ import { petImageUrl } from '@shared/petImageUrl'
 // was never runtime-verified, and the default pets were showing blank (the <img> request never resolving,
 // so not even the SVG fallback fired). Bundling sidesteps it entirely for the built-ins.
 //
-// Glob keys look like '/…/assets/pet-packs/china-dragon/png/idle.png'; match by the stored path tail.
-// Built-in packs use animated WebP at runtime; PNG remains available as a static fallback/export.
+// Glob keys look like '/…/assets/pet-packs/china-dragon/webp/idle.webp'; match by the stored path tail.
+// Built-in packs are animated WebP only (the old png/gif/apng exports were dropped to slim the app).
 // `import.meta as any`: this module is pulled into the node tsconfig too (via its own .test.ts, which
 // that config globs in), and the node config lacks vite/client types — so reference glob dynamically.
-const builtinPngAssets = (import.meta as unknown as { glob: (p: string, o: object) => Record<string, string> }).glob(
-  '../../../assets/pet-packs/*/png/*.png',
-  { eager: true, query: '?url', import: 'default' },
-) as Record<string, string>
-const builtinWebpAssets = (import.meta as unknown as { glob: (p: string, o: object) => Record<string, string> }).glob(
+const builtinAssets = (import.meta as unknown as { glob: (p: string, o: object) => Record<string, string> }).glob(
   '../../../assets/pet-packs/*/webp/*.webp',
   { eager: true, query: '?url', import: 'default' },
 ) as Record<string, string>
-const builtinAssets = {
-  ...builtinPngAssets,
-  ...builtinWebpAssets,
-}
 
 export function builtinAssetUrl(stored: string): string | undefined {
   const sub = stored.replace(/^builtin\//, '') // '<id>/<format>/<state>.<ext>'
