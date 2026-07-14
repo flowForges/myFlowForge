@@ -62,6 +62,16 @@ describe('promoteToWorkspace', () => {
     await promoteToWorkspace(ws, sid, { oneShot })
     expect(readWorkspaceMemory(ws)).toBe('## 架构\n- 既有\n')
   })
+  it('prompt asks for project / relationship / purpose sections', async () => {
+    const sid = readSessions(ws).sessions[0].id
+    appendMessage(ws, sid, msg('1', 'user', 'x'))
+    let captured = ''
+    const oneShot = vi.fn().mockImplementation(async (p: string) => { captured = p; return '' })
+    await promoteToWorkspace(ws, sid, { oneShot })
+    expect(captured).toContain('## 项目')
+    expect(captured).toContain('## 项目关系')
+    expect(captured).toContain('## 建区目的')
+  })
 })
 
 describe('promoteToSystem', () => {
@@ -79,6 +89,16 @@ describe('promoteToSystem', () => {
     const oneShot = vi.fn().mockRejectedValue(new Error('boom'))
     await promoteToSystem(ws, { oneShot })
     expect(readSystemMemory()).toBe('## 偏好\n- 既有\n')
+    writeSystemMemory('')
+  })
+  it('prompt asks for user-habit + capability sections', async () => {
+    writeSystemMemory('')
+    writeWorkspaceMemory(ws, '## 约定\n- 统一用 vitest\n')
+    let captured = ''
+    const oneShot = vi.fn().mockImplementation(async (p: string) => { captured = p; return '' })
+    await promoteToSystem(ws, { oneShot })
+    expect(captured).toContain('## 用户习惯')
+    expect(captured).toContain('## 常用能力')
     writeSystemMemory('')
   })
 })
