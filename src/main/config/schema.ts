@@ -88,19 +88,23 @@ export const AppearanceSchema = z.object({
   // that shelved this path); the in-app panel blur updates live via a CSS var.
   blurAmount: z.number().min(0).max(1).default(0),
   density: z.enum(['comfortable', 'compact']),
+  // fontSize:应用整体(界面)字号。会话区(消息输入/输出)字号由 chatFontSize 单独控制、互不影响;
+  // 终端字号仍在 terminal.fontSize。
   fontSize: z.enum(['small', 'medium', 'large']),
+  chatFontSize: z.enum(['small', 'medium', 'large']).catch('medium').default('medium'),
   // 应用整体字体族(逗号分隔备选)。'' = 跟随系统栈。作用于 --font,不影响终端字体。
   fontFamily: z.string().catch('').default(''),
   // 文本字重:'medium' 把正文基础字重略加实 + 关闭 antialiased 使渲染更清晰(治"字太瘦"),
   // 但不动已显式加重的标题/强调文本;'normal' = 原始系统外观。
   textWeight: z.enum(['normal', 'medium']).catch('medium').default('medium'),
-  // 背景图:用户上传的图片(存为 data URL,自包含无需管理文件)。bgScope 决定铺在整个应用还是仅会话区;
-  // 'off' 或空图 = 关闭。bgOpacity 是图片层的可见度(其上有一层底色蒙版保证正文可读)。
+  // 背景图:用户上传的图片落盘到 ~/.myFlowForge/backgrounds/,此处只存 forge-bg:// URL(不再内联 base64,
+  // 故无 6MB 上限)。bgScope 决定铺在整个应用还是仅会话区;'off' 或空图 = 关闭。bgOpacity 是图片层的可见度
+  // (其上有一层底色蒙版保证正文可读)。
   bgImage: z.string().default(''),
   bgScope: z.enum(['off', 'app', 'chat']).default('off'),
   bgOpacity: z.number().min(0.05).max(1).default(0.35),
   // 首页 (home) 背景图:独立于上面的应用/会话区背景,可同可不同。homeBgOn 是首页背景的独立开关,
-  // homeBgImage 存图片 data URL,homeBgOpacity 是首页图片层的可见度。首页上此背景盖过 'app' 范围背景。
+  // homeBgImage 同样存 forge-bg:// URL,homeBgOpacity 是首页图片层的可见度。首页上此背景盖过 'app' 范围背景。
   homeBgImage: z.string().default(''),
   homeBgOn: z.boolean().default(false),
   homeBgOpacity: z.number().min(0.05).max(1).default(0.35)
@@ -251,7 +255,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
+  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', chatFontSize: 'medium', fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },

@@ -90,6 +90,15 @@ export const CH = {
   petPickPack: 'pet:pick-pack',
   petPickImage: 'pet:pick-image',
   appearancePickBgImage: 'appearance:pick-bg-image',
+  // Main → renderer: a tray/dock context-menu item was chosen; the payload is a keybinding-action name
+  // (e.g. 'new-workspace') the renderer dispatches through its existing kbHandlers.
+  menuAction: 'menu:action',
+  // Downloadable-font management (see appearance/fontStore.ts): list what's on disk, download a catalog
+  // font (streams progress on fontsDownloadProgress), delete a downloaded font.
+  fontsListDownloaded: 'fonts:list-downloaded',
+  fontsDownload: 'fonts:download',
+  fontsDelete: 'fonts:delete',
+  fontsDownloadProgress: 'fonts:download-progress',
   // Main renderer → main process: the workspace currently open in the main window ('ws' view), or null on
   // the home view. Relayed to the pet so its command input can target "the workspace you're in".
   setPetActiveWorkspace: 'pet:set-active-workspace',

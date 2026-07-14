@@ -113,7 +113,17 @@ const api = {
   petSetIgnoreMouse: (ignore: boolean) => ipcRenderer.invoke(CH.petSetIgnoreMouse, ignore),
   pickPetPack: (petId: string): Promise<Record<string, string>> => ipcRenderer.invoke(CH.petPickPack, petId),
   pickPetImage: (petId: string, state?: string): Promise<{ path?: string; error?: string } | null> => ipcRenderer.invoke(CH.petPickImage, petId, state),
-  pickBgImage: (): Promise<{ dataUrl?: string; error?: string } | null> => ipcRenderer.invoke(CH.appearancePickBgImage),
+  pickBgImage: (): Promise<{ url?: string; error?: string } | null> => ipcRenderer.invoke(CH.appearancePickBgImage),
+  // Downloadable fonts. A DownloadedFont carries { id, family, css } — css is the rewritten @font-face
+  // block the renderer injects to make the font usable.
+  fontsListDownloaded: (): Promise<{ id: string; family: string; css: string }[]> => ipcRenderer.invoke(CH.fontsListDownloaded),
+  fontsDownload: (id: string): Promise<{ font?: { id: string; family: string; css: string }; error?: string }> => ipcRenderer.invoke(CH.fontsDownload, id),
+  fontsDelete: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke(CH.fontsDelete, id),
+  onFontDownloadProgress: (cb: (p: { id: string; done: number; total: number }) => void) => {
+    const listener = (_: unknown, p: { id: string; done: number; total: number }) => cb(p)
+    ipcRenderer.on(CH.fontsDownloadProgress, listener)
+    return () => ipcRenderer.removeListener(CH.fontsDownloadProgress, listener)
+  },
   onSettingsChanged: (cb: (s: unknown) => void) => {
     const listener = (_: unknown, s: unknown) => cb(s)
     ipcRenderer.on(CH.settingsChanged, listener)
@@ -123,6 +133,11 @@ const api = {
     const listener = (_: unknown, p: unknown) => cb(p)
     ipcRenderer.on(CH.sessionsChanged, listener)
     return () => ipcRenderer.removeListener(CH.sessionsChanged, listener)
+  },
+  onMenuAction: (cb: (action: string) => void) => {
+    const listener = (_: unknown, action: string) => cb(action)
+    ipcRenderer.on(CH.menuAction, listener)
+    return () => ipcRenderer.removeListener(CH.menuAction, listener)
   },
   onNavigateWorkspace: (cb: (p: { path: string }) => void) => {
     const listener = (_: unknown, p: { path: string }) => cb(p)

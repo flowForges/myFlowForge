@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, screen, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, Tray } from 'electron'
 import { registerGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts/globalShortcuts'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -32,6 +32,9 @@ import { initAppLogFile, setAppLogEventSink, logInfo, logError } from './log/app
 import { SYS_DIR } from './config/paths'
 import { registerPetScheme, handlePetProtocol } from './pet/petProtocol'
 import { migratePetImagesInPet } from './pet/petImageStore'
+import { registerBackgroundScheme, handleBackgroundProtocol } from './appearance/backgroundProtocol'
+import { bgRelFromUrl, gcBackgrounds } from './appearance/backgroundStore'
+import { registerFontScheme, handleFontProtocol } from './appearance/fontProtocol'
 import { join } from 'node:path'
 import { resolveDockIconPath, resolveMenuBarIconPath } from './appIcon'
 import { DEFAULT_BUILTIN_PET_ID, hasAllBuiltinPets, mergeBuiltinPets } from '@shared/builtinPets'
@@ -61,8 +64,11 @@ let menuBarTray: Tray | null = null
 let quitting = false
 const gotInstanceLock = app.requestSingleInstanceLock()
 if (!gotInstanceLock) app.quit()
-// Privileged custom scheme for serving on-disk pet images — MUST be declared before app 'ready'.
+// Privileged custom schemes for serving on-disk pet images / background images / downloaded fonts —
+// MUST be declared before app 'ready'.
 registerPetScheme()
+registerBackgroundScheme()
+registerFontScheme()
 app.on('second-instance', () => {
   if (mainWinRef && !mainWinRef.isDestroyed()) { mainWinRef.show(); mainWinRef.focus() }
 })
@@ -115,6 +121,27 @@ app.whenReady().then(() => {
     }
   } catch (e) { logError('pet', `宠物图片迁移失败: ${String(e)}`) }
 
+  // Serve on-disk background images via forge-bg://, and reclaim any background files no longer
+  // referenced by settings (e.g. images that were cleared or replaced in a previous session).
+  handleBackgroundProtocol()
+  try {
+    const a = readSettings().appearance
+    const keep = new Set([bgRelFromUrl(a.bgImage), bgRelFromUrl(a.homeBgImage)].filter((r): r is string => !!r))
+    const removed = gcBackgrounds(keep)
+    if (removed > 0) logInfo('appearance', `已清理 ${removed} 张无引用的背景图`)
+  } catch (e) { logError('appearance', `背景图清理失败: ${String(e)}`) }
+
+  // Serve downloaded font files via forge-font://. Also grant the Local Font Access API permission so
+  // the renderer's font picker can enumerate installed system fonts via queryLocalFonts(). No handler
+  // existed before (Electron's default already approves), so preserve that permissive default and just
+  // ensure 'local-fonts' is granted.
+  handleFontProtocol()
+  try {
+    const ses = session.defaultSession
+    ses.setPermissionRequestHandler((_wc, _permission, cb) => cb(true))
+    ses.setPermissionCheckHandler(() => true)
+  } catch (e) { logError('appearance', `本机字体权限授予失败: ${String(e)}`) }
+
   const registry = new WindowRegistry()
   // Live-stream debug log entries to any open renderer (the Settings · 调试日志 pane).
   setAppLogEventSink((e) => registry.broadcast(CH.appLogEvent, e))
@@ -143,7 +170,9 @@ app.whenReady().then(() => {
     trayImage.setTemplateImage(true)
     menuBarTray = new Tray(trayImage)
     menuBarTray.setToolTip('FlowForge')
+    // Left-click opens the app; right-click drops the context menu (新建工作区 / 开关宠物 / 退出).
     menuBarTray.on('click', showMainWindow)
+    menuBarTray.on('right-click', () => menuBarTray?.popUpContextMenu(buildAppMenu()))
   }
   const applyAppIconSettings = (settings: Settings) => {
     applyDockIcon(settings.appIcon.dockIcon)
@@ -426,7 +455,35 @@ app.whenReady().then(() => {
     relocatePetToFocus(BrowserWindow.getFocusedWindow())
     // Re-register OS-level shortcuts in case the user changed a global keybinding.
     applyGlobalShortcuts()
+    // Keep the Dock menu's 开关宠物 label in sync with pet.enabled (also when toggled from the UI).
+    refreshDockMenu()
   }
+
+  // Tray (right-click) + Dock context menu: 新建工作区 / 打开·关闭桌面宠物 / 退出. Rebuilt on each open so the
+  // pet label reflects the current state. Menu actions the renderer owns (new-workspace) are relayed via
+  // CH.menuAction and dispatched through its kbHandlers; pet + quit are handled here in the main process.
+  // Fully open/close the desktop pet by flipping pet.enabled (creates or destroys the window + persists),
+  // distinct from the lighter togglePet() above that only hides/shows an already-created pet.
+  function togglePetEnabled(): void {
+    const s = readSettings()
+    const next = { ...s, pet: { ...s.pet, enabled: !s.pet.enabled } }
+    writeSettings(next)
+    onSettings(next)                                 // create/close the pet window per the new flag
+    registry.broadcast(CH.settingsChanged, next)     // reflect the change in the open settings UI
+  }
+  function buildAppMenu(): Menu {
+    const petEnabled = (() => { try { return readSettings().pet.enabled } catch { return true } })()
+    return Menu.buildFromTemplate([
+      { label: '新建工作区', click: () => { showMainWindow(); registry.broadcast(CH.menuAction, 'new-workspace') } },
+      { label: petEnabled ? '关闭桌面宠物' : '打开桌面宠物', click: () => togglePetEnabled() },
+      { type: 'separator' },
+      { label: '退出 myFlowForge', click: () => { quitting = true; app.quit() } },
+    ])
+  }
+  function refreshDockMenu(): void {
+    if (process.platform === 'darwin') { try { app.dock?.setMenu(buildAppMenu()) } catch { /* dock unavailable */ } }
+  }
+  refreshDockMenu()  // initial Dock menu
 
   // OS notifications: fire only when the main window is unfocused; clicking focuses the app and
   // routes to the workspace (reuses the pet's navigateWorkspace path).
