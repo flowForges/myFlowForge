@@ -18,3 +18,8 @@ export const DISTILL_OLDEST_N = 12
 
 // Promote durable facts into workspace.md every K user turns (in addition to on session close).
 export const WORKSPACE_PROMOTE_EVERY_K = 6
+
+// Promote cross-project user habits into system.md every K messages. App/system distillation is
+// expensive, so it runs at this low cadence off the chat provider — closeSession has no provider to
+// run the LLM oneShot on, so the message-count cadence inside scheduleDistill is the wiring point.
+export const SYSTEM_PROMOTE_EVERY_K = 20
