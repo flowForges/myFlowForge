@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
@@ -81,9 +81,13 @@ interface Props {
   /** Picking a workflow entry from the "/" menu (MenuCommand.workflowId set) calls this instead of
       just filling the textarea with a template — see chooseSlash. */
   onPickWorkflow?: (workflowId: string) => void
+  /** Identifies the current chat (e.g. `${wsPath}::${sessionId}`). The unsent draft (text + attachments)
+      is kept PER key, so switching session/workspace hides this draft there and restores it on return —
+      instead of one shared draft leaking across every session. */
+  draftKey?: string
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands, onPickWorkflow }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands, onPickWorkflow, draftKey }: Props) {
   const [text, setText] = useState('')
   // The last message we sent, so stopping the turn BEFORE the AI produced any output restores it to the
   // box for editing/resending (the user would otherwise retype/copy it back). Once the AI has output —
@@ -94,6 +98,22 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     if (!turnHasOutput && !text.trim() && lastSentRef.current) setText(lastSentRef.current)
   }
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  // Per-chat unsent draft. Keep the live draft internal (typing only re-renders the Composer, not the
+  // whole workspace), but stash it by draftKey so switching session/workspace saves the outgoing draft
+  // and loads the incoming one — no more one draft bleeding into every session.
+  const draftsRef = useRef<Record<string, { text: string; attachments: Attachment[] }>>({})
+  const draftKeyRef = useRef(draftKey ?? '')
+  const draftStateRef = useRef({ text, attachments })
+  draftStateRef.current = { text, attachments }
+  useLayoutEffect(() => {
+    const k = draftKey ?? ''
+    if (draftKeyRef.current === k) return
+    draftsRef.current[draftKeyRef.current] = draftStateRef.current // save the session we're leaving
+    const d = draftsRef.current[k] ?? { text: '', attachments: [] } // load the one we're entering
+    draftKeyRef.current = k
+    setText(d.text)
+    setAttachments(d.attachments)
+  }, [draftKey])
   const [localAgentId, setLocalAgentId] = useState<string>('')
   const [localModelId, setLocalModelId] = useState<string>('')
   const [localPerm, setLocalPerm] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE)

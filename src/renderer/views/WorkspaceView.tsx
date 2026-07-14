@@ -678,6 +678,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           readOnly={isReadOnlySession}
           archived={!!archived}
           seedText={quickSeed}
+          draftKey={`${wsPath ?? ''} ${sessions.activeSessionId ?? ''}`}
           selection={selection}
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
