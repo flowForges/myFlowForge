@@ -395,6 +395,15 @@ export const WsStageSchema = z.object({
   producesDoc: z.boolean().optional(),
 })
 export type WsStage = z.infer<typeof WsStageSchema>
+
+// 一条工作区级工作流:名字 + 该工作流已固化的阶段(含每阶段 provider/model)。
+export const WsWorkflowSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  stages: z.array(WsStageSchema).default(() => []),   // 空 → resolveWorkflowStages 按 id 回退全局 workflow
+})
+export type WsWorkflow = z.infer<typeof WsWorkflowSchema>
+
 // A selected project enriched with its name (= develop worktree subdir) + per-project develop provider/model.
 // name/provider/model default to '' so OLD workspace.json files (which stored only {repoId,branch}) still parse.
 export const WsProjectSchema = z.object({
@@ -404,14 +413,22 @@ export const WsProjectSchema = z.object({
 export type WsProject = z.infer<typeof WsProjectSchema>
 export const WorkspaceSchema = z.object({
   name: z.string(), path: z.string(),
-  workflowId: z.string(),
-  stages: z.array(WsStageSchema).default(() => []),   // resolved, ordered enabled stages (back-compat: absent → [])
+  workflowId: z.string().default(''),                 // legacy:老文件的单工作流 id(迁移种子);新文件可留空
+  stages: z.array(WsStageSchema).default(() => []),    // legacy:老文件的单工作流已解析阶段(迁移种子)
+  workflows: z.array(WsWorkflowSchema).default(() => []),  // 新:一组命名工作流,各自固化阶段
   projects: z.array(WsProjectSchema),                 // selected projects + per-project develop provider/model
   status: z.enum(['idle', 'run', 'ok', 'err']).default('idle'),
   plugins: z.array(PluginSchema).default(() => []),   // workspace-level plugins (run after every stage)
   stepPlugins: z.array(PluginSchema).default(() => []), // stage-scoped plugins (keyed by plugin.after)
 })
 export type Workspace = z.infer<typeof WorkspaceSchema>
+
+// 保证 workflows 非空:老文件只有 workflowId+stages 时,包成单条。纯函数,幂等。
+export function ensureWorkspaceWorkflows(ws: Workspace): Workspace {
+  if (ws.workflows.length > 0) return ws
+  const legacy: WsWorkflow = { id: ws.workflowId || 'default', name: ws.workflowId || '工作流', stages: ws.stages }
+  return { ...ws, workflows: [legacy] }
+}
 
 export const WorkspaceRegistryEntrySchema = z.object({
   name: z.string(),
