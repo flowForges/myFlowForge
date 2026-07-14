@@ -131,6 +131,7 @@ export interface AgentSessionInfo {
   sessionId: string
   status: 'ok' | 'run' | 'idle'
   lastActiveAt: string
+  depth?: number   // 0/undefined = 顶层(主 Agent / 工作流 stage);1 = 委派子代理(面板缩进表达父子层级)
 }
 // A built-in Task sub-agent the main chat agent spawned this turn, surfaced as a card in the chat
 // stream so the user can see it exist / run / finish (the sub-agent runs in a child process, so we

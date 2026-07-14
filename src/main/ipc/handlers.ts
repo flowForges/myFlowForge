@@ -556,7 +556,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
       },
       delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) =>
-        runDelegate({ workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief, provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode }),
+        runDelegate({ workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief, provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId }),
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
     // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude

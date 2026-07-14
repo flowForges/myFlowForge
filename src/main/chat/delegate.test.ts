@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { makeRunDelegate } from './delegate'
+import { listDelegateAgents } from './delegateRegistry'
 import type { AgentProvider, AgentResult, AgentTask, AgentCallbacks } from '../agents/types'
 import type { Workspace } from '../config/schema'
 
@@ -70,5 +71,12 @@ describe('runDelegate', () => {
     expect(seen['a']).toBe('readonly')
     await makeRunDelegate(deps(provider, ws(['b'])))({ workspacePath: '/ws', task: 't', write: true, permissionMode: 'full', provider: 'fake', model: 'm' })
     expect(seen['b']).toBe('full')
+  })
+
+  it('传 sessionId 时把子代理登记进 delegateRegistry(供 IDs 面板),完成后置 ok', async () => {
+    await makeRunDelegate(deps(fakeProvider({ handoff: () => 'x' }), ws(['a', 'b'])))({ workspacePath: '/wsreg', task: 't', provider: 'fake', model: 'm', sessionId: 's1' })
+    const rows = listDelegateAgents('/wsreg', 's1')
+    expect(rows.map(r => r.name).sort()).toEqual(['a', 'b'])
+    expect(rows.every(r => r.status === 'ok')).toBe(true)
   })
 })

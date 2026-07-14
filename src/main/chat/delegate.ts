@@ -7,6 +7,7 @@ import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { buildAgentEnv } from '../agents/env'
 import { startBridge, type BridgeRunCtx } from '../mcp/forgeBridge'
 import { STAGE_FORGE_TOOLS } from '../orchestrator/orchestrator'
+import { startDelegateBatch, updateDelegateSession, updateDelegateState } from './delegateRegistry'
 
 // Lightweight delegation (path A of the dual-path design): the main chat agent dispatches sub-agents
 // straight into project directories to read/write code and hands their results back — WITHOUT the
@@ -31,6 +32,7 @@ export interface DelegateOpts {
   model: string
   permissionMode?: import('@shared/permissions').PermissionMode   // 发起会话的权限盾牌(下沉到子代理)
   brief?: string   // 主代理整理的需求简报,注入子代理 prompt(修"委派不带上下文")
+  sessionId?: string   // 发起会话 id,用于把委派子代理登记进 IDs 面板(delegateRegistry)
   // Called with each spawned sub-agent session — lets the caller register it for cancellation and
   // (P5) surface it in the IDs panel. Optional.
   onSession?: (s: AgentSession) => void
@@ -82,6 +84,9 @@ export function makeRunDelegate(deps: DelegateDeps) {
       ? picked.map(p => ({ id: `delegate:${p.name}`, name: p.name, cwd: p.cwd, provider: opts.provider, model: opts.model }))
       : [{ id: 'delegate:workspace', name: 'workspace', cwd: opts.workspacePath, provider: opts.provider, model: opts.model }]
 
+    // Register this batch's sub-agents so the IDs panel surfaces them (delegate has no runId/RunStore).
+    if (opts.sessionId) startDelegateBatch(opts.workspacePath, opts.sessionId, targets.map(t => ({ agentId: t.id, name: t.name, provider: t.provider, sessionId: t.id, status: 'run' as const })))
+
     // agentId → captured handoff summary (MCP-native via ctx.setContext, or text-fence via onHandoff).
     const summaries = new Map<string, string>()
     // agentId → accumulated log output, used as a fallback summary when no handoff arrives.
@@ -119,11 +124,12 @@ export function makeRunDelegate(deps: DelegateDeps) {
         {
           onLog: (l) => { if (l.level === 'ok' || l.kind === 'output') outputs.set(t.id, (outputs.get(t.id) ? outputs.get(t.id) + '\n' : '') + l.text) },
           onState: () => {},
+          onSession: (id: string) => { if (opts.sessionId) updateDelegateSession(opts.workspacePath, opts.sessionId, t.id, id) },
           onConfirm: async () => 'deny',
           onInput: async () => '',
           onHandoff: (p: HandoffPayload) => { summaries.set(t.id, p.summary) },
-          onDone: () => {},
-          onError: () => {},
+          onDone: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'ok') },
+          onError: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'idle') },
         },
         env,
       )
