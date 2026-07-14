@@ -49,6 +49,7 @@ describe('orchestrator heartbeat wiring', () => {
       providers: { claude: hp.provider },
       proxy: () => '',
       heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
+      projectRetries: 0, // these tests exercise the watchdog/halt path, not project retries
       now: () => t,
       makeInterval: (fn) => { tick = fn; return { clear() {} } },
     })
@@ -82,6 +83,7 @@ describe('orchestrator heartbeat wiring', () => {
       providers: { claude: hp.provider },
       proxy: () => '',
       heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
+      projectRetries: 0, // these tests exercise the watchdog/halt path, not project retries
       now: () => t,
       makeInterval: (fn) => { tick = fn; return { clear() {} } },
     })
@@ -103,6 +105,31 @@ describe('orchestrator heartbeat wiring', () => {
     rmSync(ws, { recursive: true, force: true })
   })
 
+  it('retries only the failed agent and succeeds on the second attempt → stage ends ok', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'orch-hb-'))
+    let attempt = 0
+    const cbs: AgentCallbacks[] = []
+    const provider: AgentProvider = {
+      id: 'claude', displayName: 'Claude',
+      capabilities: { structuredOutput: false, permissionHook: false, pty: false, mcpTools: true },
+      detect: async () => true, listModels: async () => [],
+      run: (_task, cb) => {
+        cbs.push(cb); cb.onState('run'); attempt++
+        const ok = attempt >= 2 // first attempt fails, the retry succeeds
+        return { id: _task.agentId, cancel: vi.fn(), done: Promise.resolve().then(() => { cb.onState(ok ? 'ok' : 'err'); return { ok } }) } as AgentSession
+      },
+    }
+    const bus = new EventBus()
+    const orch = new Orchestrator({
+      bus, providers: { claude: provider }, proxy: () => '',
+      projectRetries: 1, now: () => 0, makeInterval: () => ({ clear() {} }),
+    })
+    await orch.startRun(optsFor(ws))
+    expect(attempt).toBe(2) // ran once (failed), retried the SAME agent once (succeeded)
+    expect(orch.getRun()!.stages[0].state).toBe('ok')
+    rmSync(ws, { recursive: true, force: true })
+  })
+
   it('onActivity refreshes the heartbeat so a long silent-but-alive stream never stalls', async () => {
     // Reproduces the killed-mid-Write bug: the agent produces no onLog (a long tool-input stream),
     // but run() reports onActivity on raw stream traffic. That must reset lastBeat like a real beat.
@@ -118,6 +145,7 @@ describe('orchestrator heartbeat wiring', () => {
       providers: { claude: hp.provider },
       proxy: () => '',
       heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
+      projectRetries: 0, // these tests exercise the watchdog/halt path, not project retries
       now: () => t,
       makeInterval: (fn) => { tick = fn; return { clear() {} } },
     })
@@ -156,6 +184,7 @@ describe('orchestrator heartbeat wiring', () => {
       providers: { claude: hp.provider },
       proxy: () => '',
       heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
+      projectRetries: 0, // these tests exercise the watchdog/halt path, not project retries
       now: () => t,
       makeInterval: (fn) => { tick = fn; return { clear() {} } },
     })
