@@ -15,11 +15,11 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 PACK = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else None
 STATES = {
-    "idle": (24, 2000),
-    "working": (24, 1500),
-    "confirm": (24, 1200),
-    "input": (24, 1600),
-    "done": (24, 1800),
+    "idle": (24, 3200),
+    "working": (24, 2400),
+    "confirm": (24, 2400),
+    "input": (24, 2400),
+    "done": (24, 2600),
 }
 CHROMA_HELPER = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / (
     "skills/.system/imagegen/scripts/remove_chroma_key.py"

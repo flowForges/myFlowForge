@@ -15,11 +15,11 @@ from PIL import Image, ImageDraw
 SCRIPT = Path(__file__).with_name("validate-pet-motion.py")
 STATES = ("idle", "working", "confirm", "input", "done")
 STATE_DURATIONS = {
-    "idle": 2000,
-    "working": 1500,
-    "confirm": 1200,
-    "input": 1600,
-    "done": 1800,
+    "idle": 3200,
+    "working": 2400,
+    "confirm": 2400,
+    "input": 2400,
+    "done": 2600,
 }
 
 
@@ -228,7 +228,7 @@ class ValidatePetMotionTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1)
             self.assertIn(
-                "input.webp: expected total duration 1600ms, found 1200ms",
+                "input.webp: expected total duration 2400ms, found 1200ms",
                 result.stderr,
             )
 

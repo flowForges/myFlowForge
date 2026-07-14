@@ -12,11 +12,11 @@ from PIL import Image
 
 STATES = ("idle", "working", "confirm", "input", "done")
 STATE_DURATIONS = {
-    "idle": 2000,
-    "working": 1500,
-    "confirm": 1200,
-    "input": 1600,
-    "done": 1800,
+    "idle": 3200,
+    "working": 2400,
+    "confirm": 2400,
+    "input": 2400,
+    "done": 2600,
 }
 EXPECTED_FRAMES = 24
 SAFETY_MARGIN = 8

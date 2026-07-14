@@ -18,6 +18,18 @@ SPEC.loader.exec_module(BUILDER)
 
 
 class BuildAnimatedPetPackTest(unittest.TestCase):
+    def test_state_loops_use_a_calm_readable_cadence(self) -> None:
+        self.assertEqual(
+            BUILDER.STATES,
+            {
+                "idle": (24, 3200),
+                "working": (24, 2400),
+                "confirm": (24, 2400),
+                "input": (24, 2400),
+                "done": (24, 2600),
+            },
+        )
+
     def test_every_state_encodes_exactly_24_frames(self) -> None:
         self.assertEqual(
             {state: frame_count for state, (frame_count, _) in BUILDER.STATES.items()},
