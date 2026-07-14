@@ -206,9 +206,12 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta }
   | { type: 'confirm-request'; id: string; title: string; where?: string }
   | { type: 'confirm-resolved'; id: string }
+  // A delegate sub-agent's forge_ask, surfaced as a select (options) / input (no options) card.
+  | { type: 'ask-request'; id: string; title: string; options?: { t: string; d: string }[]; agentName?: string }
+  | { type: 'ask-resolved'; id: string }
   | { type: 'done'; message: ChatMessage }
   | { type: 'subagent'; id: string; sub: SubagentCard }
-  | { type: 'plan-request'; id: string; approach: string; stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]; hooks: { id: string; name: string; after: string }[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }
+  | { type: 'plan-request'; id: string; approach: string; stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]; hooks: { id: string; name: string; after: string }[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[]; recommendReason?: string }
   | { type: 'plan-resolved'; id: string }
   | { type: 'mode-changed'; mode: 'chat' | 'workflow'; runId?: string }
   | { type: 'error'; id: string; error: string }

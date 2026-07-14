@@ -79,6 +79,8 @@
 .sid-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
 /* Delegate sub-agents render indented with a connector, under their parent (the main agent). */
 .sid-card-child { margin-left: 18px; border-left: 2px solid var(--accent, var(--border)); }
+/* Grand-agents (a delegate sub-agent's own Task) nest one level deeper under their sub-agent. */
+.sid-card-grand { margin-left: 34px; opacity: .85; }
 .sid-top { display: flex; align-items: center; gap: 8px; }
 .sid-provider { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: 0 0 8px; }
 .sid-main { flex: 1; }

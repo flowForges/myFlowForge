@@ -682,6 +682,15 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                 />
               )
             })}
+            {chat.asks.map(a => (
+              <ReqCard
+                key={a.id}
+                action={a.options && a.options.length
+                  ? { id: a.id, kind: 'select', agentId: 'delegate', agentName: a.agentName ?? '委派子代理', wsName, provider: 'claude', title: a.title, options: a.options }
+                  : { id: a.id, kind: 'input', agentId: 'delegate', agentName: a.agentName ?? '委派子代理', wsName, provider: 'claude', title: a.title }}
+                onResolve={(p) => chat.resolveAsk({ id: p.id, decision: p.decision === 'deny' ? 'deny' : 'allow', value: p.value, choice: p.choice })}
+              />
+            ))}
           </div>
         </div>
         {chat.queue.length > 0 && (

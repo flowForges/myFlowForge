@@ -429,6 +429,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const chatEmit = (e: ChatEvent) => broadcast(CH.chatEvent, e)
   const chatConfirms = new Map<string, (decision: 'allow' | 'deny') => void>()
   let chatConfirmSeq = 0
+  // Chat-side ASK (question + optional options, returns a string) — the delegate bridge routes a
+  // sub-agent's forge_ask here so it surfaces as a select/input ReqCard and the answer flows back.
+  const chatAsks = new Map<string, (r: { decision: 'allow' | 'deny'; value?: string; choice?: number }) => void>()
+  let chatAskSeq = 0
+  const chatAsk = (wsPath: string, sessionId: string, question: string, options?: { t: string; d: string }[], agentName?: string): Promise<string | null> =>
+    new Promise((resolve) => {
+      const id = `ca-${++chatAskSeq}`
+      chatAsks.set(id, (r) => {
+        if (options && options.length) resolve(r.decision === 'deny' ? null : (options[r.choice ?? 0]?.t ?? null))
+        else resolve(r.decision === 'allow' ? (r.value ?? '') : null)
+      })
+      broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'ask-request', id, title: question, options, agentName })
+    })
 
   const emitNote = (wsPath: string, sessionId: string, noteText: string) => {
     const id = `sys-${Date.now()}`
@@ -549,14 +562,24 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       store, runId: 'chat', workspaceName: payload.workspacePath,
       agentName: () => 'chat', agentStage: () => 'chat',
       ask: async () => null, setContext: () => {},
-      proposePlan: (approach: string, task?: string, select?: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; brief?: string }) => {
+      proposePlan: (approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; brief?: string; recommendReason?: string }) => {
         proposedWorkflow = true
         if (guardBlocked()) { emitNote(payload.workspacePath, payload.sessionId, '已达最大修改次数,请直接批准或取消。'); return Promise.resolve({ approved: false }) }
         // #1: carry the chat's currently-selected main agent as this run's provider override.
         return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
       },
       delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) =>
-        runDelegate({ workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief, provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId }),
+        runDelegate({
+          workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief,
+          provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId,
+          // Register each delegate sub-agent's session for cancellation, so the chat 停止 button kills it.
+          onSession: (s) => chatQueue.registerActive(payload.workspacePath, () => s.cancel()),
+          // Bubble a delegate sub-agent's forge_ask to the user as a chat select/input card (same ReqCard
+          // the workflow gate uses); the answer resolves the sub-agent's blocked forge_ask.
+          ask: (question, options, agentName) => chatAsk(payload.workspacePath, payload.sessionId, question, options, agentName),
+          // Coarse live progress: surface each sub-agent's key log lines as chat notes during the run.
+          onProgress: (name, text) => emitNote(payload.workspacePath, payload.sessionId, `委派·${name}: ${text}`),
+        }),
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
     // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude
@@ -641,10 +664,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return file
   })
   ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId))
-  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
+  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
     if (proposeRun.has(a.id)) {
       proposeRun.resolve(a.id, { decision: a.decision, value: a.value, selection: a.selection })
       broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'plan-resolved', id: a.id })
+      return
+    }
+    const askResolve = chatAsks.get(a.id)
+    if (askResolve) {
+      chatAsks.delete(a.id)
+      askResolve({ decision: a.decision === 'modify' ? 'deny' : a.decision, value: a.value, choice: a.choice })
+      broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'ask-resolved', id: a.id })
       return
     }
     const resolve = chatConfirms.get(a.id)

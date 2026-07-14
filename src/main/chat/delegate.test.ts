@@ -79,4 +79,16 @@ describe('runDelegate', () => {
     expect(rows.map(r => r.name).sort()).toEqual(['a', 'b'])
     expect(rows.every(r => r.status === 'ok')).toBe(true)
   })
+
+  it('孙 agent(子代理内置 Task)登记为 depth:2,挂在对应子代理下', async () => {
+    const provider: AgentProvider = {
+      id: 'fake', displayName: 'F', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(task, cb) { cb.onSubagent?.({ id: 'g1', phase: 'start', description: '读子模块' }); cb.onHandoff?.({ summary: 'x' }); cb.onDone({ ok: true }); return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true } as AgentResult) } },
+    }
+    await makeRunDelegate(deps(provider, ws(['a'])))({ workspacePath: '/wsg', task: 't', provider: 'fake', model: 'm', sessionId: 's1' })
+    const grand = listDelegateAgents('/wsg', 's1').find(r => r.depth === 2)
+    expect(grand?.name).toBe('读子模块')
+    expect(grand?.parentId).toBe('delegate:a')
+  })
 })
