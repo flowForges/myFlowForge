@@ -1,5 +1,32 @@
-import { useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+
+// Base directory for resolving RELATIVE markdown image paths (e.g. a design doc's `![](./diagram.png)`).
+// Provided by whoever renders a doc that lives on disk (FilePreview); absent in chat bubbles → relative
+// images just show a placeholder rather than a broken <img>.
+export const MdImageBaseCtx = createContext<string | undefined>(undefined)
+const ABS_SRC = /^(https?:|data:|forge-)/i
+
+// Markdown image. Absolute/data/protocol srcs load directly; a relative src is read from disk (relative
+// to the doc's dir) via the file:image IPC → data URL, so on-disk doc images actually render.
+function MdImage({ src, alt }: { src: string; alt: string }): ReactNode {
+  const base = useContext(MdImageBaseCtx)
+  const [url, setUrl] = useState<string | null>(() => (ABS_SRC.test(src) ? src : null))
+  const [err, setErr] = useState(false)
+  useEffect(() => {
+    if (ABS_SRC.test(src)) { setUrl(src); setErr(false); return }
+    if (!base) { setErr(true); return }
+    let alive = true
+    setUrl(null); setErr(false)
+    void window.forge.imageFile?.(base, src)
+      .then(r => { if (alive) { if (r && 'dataUrl' in r) setUrl(r.dataUrl); else setErr(true) } })
+      .catch(() => { if (alive) setErr(true) })
+    return () => { alive = false }
+  }, [src, base])
+  if (err) return <span className="md-img-err" title={src}>🖼 {alt || src}</span>
+  if (!url) return <span className="md-img-loading">加载图片…</span>
+  return <img className="md-img" src={url} alt={alt} />
+}
 
 // A fenced code block with a hover-reveal copy button plus a fold toggle. Copying the exact source
 // (not the rendered text) is what users want for commands/snippets, so the button lives on each
@@ -59,6 +86,9 @@ export function renderInline(text: string, keyBase = 'i'): ReactNode[] {
   // Regexes are anchored at the first match of any inline construct.
   const PATTERNS: { re: RegExp; make: (m: RegExpExecArray) => ReactNode }[] = [
     { re: /`([^`]+)`/, make: m => <code key={`${keyBase}-${k++}`}>{m[1]}</code> },
+    // Image BEFORE link: `![alt](src)` starts one char before the `[…](…)` a link would match, and the
+    // earliest-index winner picks it — so it renders as an <img>, not a stray '!' + link.
+    { re: /!\[([^\]]*)\]\(([^)\s]+)\)/, make: m => <MdImage key={`${keyBase}-${k++}`} alt={m[1]} src={m[2]} /> },
     { re: /\[([^\]]+)\]\(([^)\s]+)\)/, make: m => <a key={`${keyBase}-${k++}`} href={m[2]} target="_blank" rel="noreferrer">{m[1]}</a> },
     { re: /\*\*([^*]+)\*\*/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`)}</strong> },
     { re: /__([^_]+)__/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`)}</strong> },
@@ -217,6 +247,8 @@ export function renderMarkdownCached(text: string): ReactNode {
   return node
 }
 
-export function Markdown({ text }: { text: string }): ReactNode {
-  return useMemo(() => renderMarkdownCached(text), [text])
+export function Markdown({ text, imageBaseCwd }: { text: string; imageBaseCwd?: string }): ReactNode {
+  const body = useMemo(() => renderMarkdownCached(text), [text])
+  // Only wrap in a provider when a base is given (on-disk doc); chat bubbles render unchanged.
+  return imageBaseCwd ? <MdImageBaseCtx.Provider value={imageBaseCwd}>{body}</MdImageBaseCtx.Provider> : body
 }

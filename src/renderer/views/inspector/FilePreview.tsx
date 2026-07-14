@@ -109,7 +109,8 @@ export function FilePreview({
         </div>
       ) : mode === 'full' && full !== null && isMarkdown(file, full.lang) ? (
         <div className="pv-md">
-          <Markdown text={full.text} />
+          {/* relative images in the doc resolve against the doc's own directory */}
+          <Markdown text={full.text} imageBaseCwd={file.includes('/') ? `${cwd}/${file.slice(0, file.lastIndexOf('/'))}` : cwd} />
         </div>
       ) : (
       <div className="pv-code">

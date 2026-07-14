@@ -8,6 +8,15 @@ function html(text: string): string {
 }
 
 describe('Markdown', () => {
+  it('renders an absolute-src image as <img> (not a link)', () => {
+    const { container } = render(<Markdown text={'见图 ![流程图](https://x/diagram.png) 完'} />)
+    const im = container.querySelector('img')
+    expect(im).toBeTruthy()
+    expect(im?.getAttribute('src')).toBe('https://x/diagram.png')
+    expect(im?.getAttribute('alt')).toBe('流程图')
+    expect(container.querySelector('a')).toBeNull() // ![..](..) is an image, not a link
+  })
+
   it('renders headings', () => {
     expect(html('## 工作区项目总结')).toContain('<h2>工作区项目总结</h2>')
     expect(html('### 1. go-blog')).toContain('<h3>1. go-blog</h3>')
