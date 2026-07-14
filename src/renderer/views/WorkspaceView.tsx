@@ -578,7 +578,22 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                 )
               }
               if (entry.kind === 'pending') {
-                return <ReqCard key={entry.action.id} action={entry.action} onResolve={resolve} onOpenDoc={openDoc} />
+                const a = entry.action
+                return (
+                  <ReqCard
+                    key={a.id}
+                    action={a}
+                    onResolve={(p) => {
+                      // Allow/deny on the stage-gate this supplement targets abandons the pending supplement too.
+                      if (pendingSupplement?.kind === 'gate' && pendingSupplement.id === a.id) setPendingSupplement(null)
+                      resolve(p)
+                    }}
+                    onOpenDoc={openDoc}
+                    onSupplement={a.kind === 'confirm' && a.reworkable
+                      ? () => startSupplement('gate', a.id, a.role ?? a.title)
+                      : undefined}
+                  />
+                )
               }
               if (entry.kind === 'confirm') {
                 const c = entry.confirm
@@ -668,9 +683,11 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             if (pendingSupplement) {
               if (pendingSupplement.kind === 'plan') {
                 chat.resolvePlan({ id: pendingSupplement.id, decision: 'modify', value: m.text })
+              } else {
+                // kind === 'gate' → the orchestrator stage-gate resolver (same one the removed inline
+                // textarea used): injects reworkNote and reruns the stage, then re-gates.
+                resolve({ id: pendingSupplement.id, decision: 'modify', value: m.text })
               }
-              // TODO(Task 16): kind === 'gate' → route to the stage-gate resolver, e.g.
-              // resolve({ id: pendingSupplement.id, decision: 'modify', value: m.text })
               setPendingSupplement(null)
               return
             }

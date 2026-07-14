@@ -31,18 +31,23 @@ describe('ReqCard', () => {
     expect(screen.getByText('拒绝')).toBeInTheDocument()
   })
 
-  it('a reworkable stage gate shows 打回重做 → textarea → submits a modify decision with the direction', () => {
+  it('a reworkable stage gate shows 终止 wording + a 打回重做 button that calls onSupplement (no inline textarea)', () => {
     const onResolve = vi.fn<(p: ResolvePayload) => void>()
+    const onSupplement = vi.fn()
     const action: PendingAction = { ...base, id: 'pg', kind: 'confirm', title: '技术方案设计完成', role: '阶段评审', reworkable: true }
-    render(<ReqCard action={action} onResolve={onResolve} />)
+    render(<ReqCard action={action} onResolve={onResolve} onSupplement={onSupplement} />)
 
     // 终止 wording (not 拒绝) + a 打回重做 button
     expect(screen.getByText('终止')).toBeInTheDocument()
     fireEvent.click(screen.getByText('打回重做…'))
-    const ta = screen.getByPlaceholderText(/修改方向/) as HTMLTextAreaElement
-    fireEvent.change(ta, { target: { value: '鉴权边界要再探一遍' } })
-    fireEvent.click(screen.getByText('提交并重做'))
-    expect(onResolve).toHaveBeenCalledWith({ id: 'pg', decision: 'modify', value: '鉴权边界要再探一遍' })
+    expect(onSupplement).toHaveBeenCalledTimes(1)
+    // No inline modify textarea remains — the supplement reflows to the main composer instead (Task 16).
+    expect(screen.queryByPlaceholderText(/修改方向/)).toBeNull()
+    expect(onResolve).not.toHaveBeenCalled()
+
+    // allow/deny (终止) still resolve directly, unaffected.
+    fireEvent.click(screen.getByText('终止'))
+    expect(onResolve).toHaveBeenCalledWith({ id: 'pg', decision: 'deny' })
   })
 
   it('renders an input card and submits the typed value', () => {
