@@ -3,6 +3,7 @@ import type { CreateWorkspaceOpts, ProviderInfo, ReviewConfig, ReviewLens } from
 import type { Plugin, LibraryHook } from '@shared/plugin'
 import type { CfgProject, CfgWorkflow, CfgCustomStage } from '../state/useConfig'
 import { indexCustomStages, resolveStages as resolveLibRefs, type CustomStageDef } from '../../shared/customStages'
+import { deriveWorkBranch } from '@shared/branchName'
 import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, emptyWorkflow, type WizardState, type WizardStage, type WizardProject, type WizardWorkflow } from './wizardModel'
 import { PluginEditor } from '../components/PluginEditor'
 import { movePluginBefore } from '../../shared/pluginReorder'
@@ -288,7 +289,9 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const active = state.workflows.find(w => w.id === state.activeWorkflowId) ?? state.workflows[0]
 
   const wsName = deriveWsName(state.path, state.nameEdited, state.name)
-  const branchFor = (p: WizardProject) => p.branch || (wsName ? 'forge/' + wsName : '')
+  // Default work branch = feat/<ascii-slug-of-alias>; a Chinese/emoji alias yields feat/ws-<hash>, never
+  // a CJK branch name. A branch the user typed explicitly (p.branch) always wins.
+  const branchFor = (p: WizardProject) => p.branch || (wsName ? deriveWorkBranch(wsName) : '')
 
   // Total enabled stages across ALL selected workflow tabs (not just the active one) — drives the
   // footer summary + the create-gate (at least one stage enabled somewhere).
