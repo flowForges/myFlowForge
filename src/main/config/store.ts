@@ -9,7 +9,7 @@ import {
   WorkflowsSchema, defaultWorkflows, AgentsConfigSchema, defaultAgentsConfig,
   HookLibrarySchema, defaultHookLibrary,
   CustomStagesFileSchema, defaultCustomStages,
-  WorkspaceSchema, WorkspaceRegistrySchema, defaultWorkspaceRegistry,
+  WorkspaceSchema, WorkspaceRegistrySchema, defaultWorkspaceRegistry, ensureWorkspaceWorkflows,
   type Settings, type Workspace, type WorkspaceRegistryEntry, type CustomStage
 } from './schema'
 import { randomUUID } from 'node:crypto'
@@ -124,7 +124,7 @@ export function unregisterWorkspace(path: string) {
 export function readWorkspace(wsPath: string): Workspace | null {
   const file = wsConfigFile(wsPath)
   if (!existsSync(file)) return null
-  try { return WorkspaceSchema.parse(JSON.parse(readFileSync(file, 'utf8'))) } catch { return null }
+  try { return ensureWorkspaceWorkflows(WorkspaceSchema.parse(JSON.parse(readFileSync(file, 'utf8')))) } catch { return null }
 }
 export function writeWorkspace(ws: Workspace) {
   mkdirSync(wsForgeDir(ws.path), { recursive: true })

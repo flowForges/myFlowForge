@@ -83,4 +83,19 @@ describe('config store', () => {
     expect(existsSync(file + '.tmp')).toBe(false)
     expect(readSettings()).toEqual(defaultSettings())
   })
+
+  it('readWorkspace normalizes a legacy workspace.json (workflowId+stages, no workflows) into workflows[]', async () => {
+    const { writeFileSync, mkdirSync } = await import('node:fs')
+    const wsDir = join(tmp, 'legacy-ws')
+    mkdirSync(join(wsDir, '.forge'), { recursive: true })
+    writeFileSync(join(wsDir, '.forge', 'workspace.json'), JSON.stringify({
+      name: 'legacy', path: wsDir, workflowId: 'standard',
+      stages: [{ key: 'design', provider: 'claude', model: 'opus' }],
+      projects: [],
+    }))
+    const { readWorkspace } = await import('./store')
+    const ws = readWorkspace(wsDir)
+    expect(ws?.workflows.length).toBeGreaterThan(0)
+    expect(ws?.workflows[0].stages).toEqual([{ key: 'design', provider: 'claude', model: 'opus' }])
+  })
 })
