@@ -403,6 +403,32 @@ describe('ForgeBridge', () => {
 
   // ─── Test 9: close() removes leftover mcp.*.json files next to the socket ───
 
+  // ─── Test 10: propose_plan forwards workflowId through to ctx.proposePlan.select ───
+
+  it('10. propose_plan forwards args.workflowId into ctx.proposePlan select', async () => {
+    let got: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; workflowId?: string } | undefined
+    const ctx = makeCtx({
+      proposePlan: vi.fn().mockImplementation(async (_approach, _task, select) => {
+        got = select
+        return { approved: false }
+      }),
+    })
+
+    bridge = await startBridge(tmpDir, ctx)
+    const s = await connectTo(bridge.socketPath)
+    sockets.push(s)
+
+    const res = await sendRecv(s, {
+      id: 'plan-1',
+      tool: 'propose_plan',
+      agentId: 'agent1',
+      args: { approach: 'x', workflowId: 'full' },
+    }) as any
+
+    expect(res.id).toBe('plan-1')
+    expect(got?.workflowId).toBe('full')
+  })
+
   it('9. removes leftover mcp.*.json next to the socket on close', async () => {
     const ctx = makeCtx()
     bridge = await startBridge(tmpDir, ctx)
