@@ -6,6 +6,7 @@ import { indexCustomStages, resolveStages as resolveLibRefs, type CustomStageDef
 import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, emptyWorkflow, type WizardState, type WizardStage, type WizardProject, type WizardWorkflow } from './wizardModel'
 import { PluginEditor } from '../components/PluginEditor'
 import { movePluginBefore } from '../../shared/pluginReorder'
+import { workflowNameTaken } from '../../shared/workflowName'
 import { StagePromptEditor } from '../components/StagePromptEditor'
 
 // Mirror of src/main/config/schema.ts STAGE_PROMPTS (renderer cannot import main's zod module)
@@ -369,6 +370,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     const name = wfDraft.name.trim() || '自定义流程'
     const keys = STAGE_KEYS.filter(k => wfDraft.keys.has(k))   // canonical order
     if (!keys.length) return
+    if (workflowNameTaken(name, workflows.map(w => w.name))) return   // block duplicate display names
     const before = new Set(workflows.map(w => w.id))
     const list = await onAddWorkflow(name, keys)
     const added = list?.find(w => !before.has(w.id)) ?? list?.find(w => w.name === name)
@@ -777,9 +779,10 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                     </button>
                   ))}
                 </div>
+                {workflowNameTaken(wfDraft.name, workflows.map(w => w.name)) && <div className="wfd-err">已有同名工作流,换个名字。</div>}
                 <div className="wfd-foot">
                   <button className="btn-cancel" data-crwf-cancel onClick={() => setWfDraft(null)}>取消</button>
-                  <button className="np-add" data-crwf-create disabled={wfDraft.keys.size === 0} onClick={() => void doCreateWorkflow()}>{CK}创建流程</button>
+                  <button className="np-add" data-crwf-create disabled={wfDraft.keys.size === 0 || workflowNameTaken(wfDraft.name, workflows.map(w => w.name))} onClick={() => void doCreateWorkflow()}>{CK}创建流程</button>
                 </div>
               </div>
             )}
