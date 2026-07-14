@@ -94,4 +94,16 @@ describe('workspaceToStartRunOpts', () => {
     const opts = workspaceToStartRunOpts(ws)
     expect(opts.stages[0].prompt).toBe('画时序图')
   })
+
+  it('把 wf 身份写进 StartRunOpts', () => {
+    const opts = workspaceToStartRunOpts(ws, 'do it', { id: 'full', name: '完整流程' })
+    expect(opts.workflowId).toBe('full')
+    expect(opts.workflowName).toBe('完整流程')
+  })
+
+  it('leaves workflowId/workflowName undefined when wf is omitted', () => {
+    const opts = workspaceToStartRunOpts(ws)
+    expect(opts.workflowId).toBeUndefined()
+    expect(opts.workflowName).toBeUndefined()
+  })
 })
