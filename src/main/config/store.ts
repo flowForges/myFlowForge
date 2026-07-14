@@ -132,12 +132,19 @@ export function writeWorkspace(ws: Workspace) {
 }
 
 // 仅改某个阶段的 provider+model 并原子写回（概览编码代理切换的轻量回写，避免走重的 editWorkspace）。
+// Multi-workflow: stages now live in ws.workflows[].stages (ws.stages is a legacy migration seed
+// that's permanently [] for any workspace created/edited under the multi-workflow model — see
+// readWorkspace/ensureWorkspaceWorkflows). The caller (chat composer's develop-agent picker) has no
+// per-workflow context — it's one global selection — so the least-surprising behavior matching the
+// old single-stages-array semantics is to update the matching stage in EVERY workflow that has one.
 export function setStageModel(path: string, stageKey: string, provider: string, model: string): void {
   const ws = readWorkspace(path)
   if (!ws) return
-  const stage = ws.stages.find(s => s.key === stageKey)
-  if (!stage) return
-  stage.provider = provider
-  stage.model = model
+  let touched = false
+  for (const wf of ws.workflows) {
+    const stage = wf.stages.find(s => s.key === stageKey)
+    if (stage) { stage.provider = provider; stage.model = model; touched = true }
+  }
+  if (!touched) return
   writeWorkspace(ws)
 }
