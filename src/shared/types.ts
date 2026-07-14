@@ -172,6 +172,10 @@ export interface ChatSession {
   continuedFrom?: { source: SourceId; externalId: string }
   // Per-session agent permission (sandbox) scope, remembered across switches. Absent = default 'auto'.
   permissionMode?: import('./permissions').PermissionMode
+  // The coding agent + model this session last used. Remembered PER SESSION so each session keeps its
+  // own choice (and switching sessions restores it) instead of one workspace-wide selection leaking.
+  agentId?: string
+  modelId?: string
 }
 export interface SessionsFile { sessions: ChatSession[]; activeSessionId: string; dismissedImported?: string[] }
 export interface ChatConfirm { id: string; title: string; where?: string; ts?: string }

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
@@ -54,6 +54,10 @@ function fmtSize(bytes: number): string {
 
 const MAX_H = 180
 
+// Per-chat unsent drafts, keyed by draftKey (`${wsPath} ${sessionId}`). Module-level so it survives the
+// Composer being remounted on session switch (see the draft note in the component).
+const draftStore: Record<string, { text: string; attachments: Attachment[] }> = {}
+
 interface Props {
   providers: ProviderInfo[]
   disabled: boolean
@@ -88,7 +92,14 @@ interface Props {
 }
 
 export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands, onPickWorkflow, draftKey }: Props) {
-  const [text, setText] = useState('')
+  // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
+  // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
+  // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
+  // change; a remount restores the leaving session's draft and loads the entering one. Isolated + stable.
+  const dk = draftKey ?? ''
+  const [text, setText] = useState(() => (dk ? draftStore[dk]?.text : '') ?? '')
+  const [attachments, setAttachments] = useState<Attachment[]>(() => (dk ? draftStore[dk]?.attachments : undefined) ?? [])
+  useEffect(() => { if (dk) draftStore[dk] = { text, attachments } }, [dk, text, attachments])
   // The last message we sent, so stopping the turn BEFORE the AI produced any output restores it to the
   // box for editing/resending (the user would otherwise retype/copy it back). Once the AI has output —
   // and possibly executed irreversible changes — we don't restore. Also skip if the box isn't empty.
@@ -97,23 +108,6 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     onStop?.()
     if (!turnHasOutput && !text.trim() && lastSentRef.current) setText(lastSentRef.current)
   }
-  const [attachments, setAttachments] = useState<Attachment[]>([])
-  // Per-chat unsent draft. Keep the live draft internal (typing only re-renders the Composer, not the
-  // whole workspace), but stash it by draftKey so switching session/workspace saves the outgoing draft
-  // and loads the incoming one — no more one draft bleeding into every session.
-  const draftsRef = useRef<Record<string, { text: string; attachments: Attachment[] }>>({})
-  const draftKeyRef = useRef(draftKey ?? '')
-  const draftStateRef = useRef({ text, attachments })
-  draftStateRef.current = { text, attachments }
-  useLayoutEffect(() => {
-    const k = draftKey ?? ''
-    if (draftKeyRef.current === k) return
-    draftsRef.current[draftKeyRef.current] = draftStateRef.current // save the session we're leaving
-    const d = draftsRef.current[k] ?? { text: '', attachments: [] } // load the one we're entering
-    draftKeyRef.current = k
-    setText(d.text)
-    setAttachments(d.attachments)
-  }, [draftKey])
   const [localAgentId, setLocalAgentId] = useState<string>('')
   const [localModelId, setLocalModelId] = useState<string>('')
   const [localPerm, setLocalPerm] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE)

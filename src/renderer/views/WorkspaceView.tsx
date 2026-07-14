@@ -147,6 +147,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   // 本机扫描到的当前 provider 的自定义命令/prompt + skills(进 "/" 菜单)。随 provider/workspace 变化拉取。
   const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
   const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const selForRef = useRef<{ ws?: string; sid?: string }>({}) // which (ws,session) the current `selection` belongs to
   const wsPath = workspacePath ?? engine.run?.workspacePath
   const run = useLastRun(wsPath, engine.run)
   // pending actions belong to the live run; never show them while viewing another workspace
@@ -181,21 +182,40 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     return () => { off?.() }
   }, [reloadWsInfo])
 
-  // Reset selection when the workspace changes so the seed effect re-seeds from the new workspace.
-  useEffect(() => { setSelection(undefined) }, [wsPath])
-
-  // Seed selection from develop stage once wsInfo is loaded (only if not yet set)
+  // Provider/model + permission are remembered PER SESSION. On switching session/workspace, restore that
+  // session's own saved choice; on a session's first use, seed from the develop stage → first installed
+  // provider. Crucially, when only session DATA changes (not a switch) and we already have a selection —
+  // e.g. right after the user picked one — we DON'T re-derive, so the user's choice is never overwritten
+  // and each session stays independent + stable.
   useEffect(() => {
-    if (selection || !wsInfo) return
-    // ws.stages is the legacy migration seed and is [] for any workspace under the multi-workflow
-    // model (stages live in wsInfo.workflows[].stages now) — search across all named workflows.
-    const dev = (wsInfo.workflows ?? []).flatMap(w => w.stages).find(s => s.key === 'develop')
-    const installed = providers.filter(p => p.installed)
+    if (!wsPath) return
+    const sid = sessions.activeSessionId
+    // Already resolved a selection for this (ws, session)? Leave it — the user's choice is stable and
+    // never overwritten by later provider/session-data churn. (selForRef is also set on user pick.)
+    if (selForRef.current.ws === wsPath && selForRef.current.sid === sid) return
+    const s = (sessions.sessions ?? []).find(x => x.id === sid)
+    const installed = (providers ?? []).filter(p => p.installed)
+    const perm = s?.permissionMode ?? DEFAULT_PERMISSION_MODE
+    // Value-equal short-circuit: never trigger a re-render (or a render loop) when the derived selection
+    // matches what's already there — even if this effect re-runs on churn or a flickering activeSessionId.
+    const apply = (next: { agentId: string; modelId: string; permissionMode: typeof perm }) => {
+      selForRef.current = { ws: wsPath, sid }
+      setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode ? prev : next))
+    }
+    // 1) Session remembers its own agent/model → restore it.
+    if (s?.agentId && installed.some(p => p.id === s.agentId)) {
+      apply({ agentId: s.agentId, modelId: s.modelId ?? '', permissionMode: perm })
+      return
+    }
+    // 2) First use of this session → seed from develop stage, else the first installed provider. Only
+    //    commit once we actually have something to seed (so we retry when providers arrive).
+    if (!wsInfo) return
+    const dev = (wsInfo.workflows ?? []).flatMap(w => w.stages).find(st => st.key === 'develop')
     const seed = (dev && installed.some(p => p.id === dev.provider))
       ? { agentId: dev.provider, modelId: dev.model }
       : installed[0] ? { agentId: installed[0].id, modelId: installed[0].models[0]?.id ?? '' } : undefined
-    if (seed) setSelection(seed)
-  }, [wsInfo, providers, selection])
+    if (seed) apply({ ...seed, permissionMode: perm })
+  }, [sessions.activeSessionId, sessions.sessions, wsInfo, providers, wsPath])
 
   // Fetch the provider's on-disk commands/prompts + skills for the "/" menu (changes with provider/ws).
   useEffect(() => {
@@ -232,10 +252,8 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   // Permission mode is remembered PER SESSION. When the active session changes (switch/create),
   // restore its saved mode into the composer selection; absent = default 'auto'. Only touches the
   // permission facet — agent/model stay as seeded.
+  // Per-session permission is restored by the unified selection effect above (on session switch).
   const activePerm = activeSession?.permissionMode ?? DEFAULT_PERMISSION_MODE
-  useEffect(() => {
-    setSelection(prev => (prev && prev.permissionMode !== activePerm ? { ...prev, permissionMode: activePerm } : prev))
-  }, [sessions.activeSessionId, activePerm])
   // Imported history: loaded for BOTH a pure read-only imported session AND a session that was
   // "基于此历史继续" (writable but still carries `external`), so the continued chat can show the
   // imported history above a divider — the user keeps the original context inline.
@@ -678,20 +696,24 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           readOnly={isReadOnlySession}
           archived={!!archived}
           seedText={quickSeed}
-          draftKey={`${wsPath ?? ''} ${sessions.activeSessionId ?? ''}`}
+          // Remount the composer per chat so its unsent draft is isolated per session (persisted in a
+          // module store keyed by the same value) — no draft leaking across sessions, no re-render storm.
+          key={`composer ${wsPath ?? ''} ${sessions.activeSessionId ?? ''}`}
+          draftKey={`${wsPath ?? ''} ${sessions.activeSessionId ?? ''}`}
           selection={selection}
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
           onSelectionChange={(s) => {
             setSelection(s)
-            if (wsPath) {
-              if (writeTimer.current) clearTimeout(writeTimer.current)
-              writeTimer.current = setTimeout(() => {
-                window.forge.setStageModel?.({ path: wsPath, stageKey: 'develop', provider: s.agentId, model: s.modelId })
-              }, 500)
+            const sid = sessions.activeSessionId
+            if (wsPath && sid) {
+              selForRef.current = { ws: wsPath, sid } // this selection now belongs to the active session
+              // Agent/model are remembered PER SESSION (not the workflow's develop stage anymore, which
+              // used to leak the input-box choice across sessions + workflow config). Persist immediately
+              // so the restore effect reads the fresh value.
+              window.forge.sessionSetModel?.({ workspacePath: wsPath, sessionId: sid, agentId: s.agentId, modelId: s.modelId })
               // Permission mode is per-session — persist it onto the active session when it changed.
-              const sid = sessions.activeSessionId
-              if (sid && s.permissionMode && s.permissionMode !== activePerm) {
+              if (s.permissionMode && s.permissionMode !== activePerm) {
                 window.forge.sessionSetPermission?.({ workspacePath: wsPath, sessionId: sid, mode: s.permissionMode })
               }
             }

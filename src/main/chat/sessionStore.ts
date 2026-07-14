@@ -125,6 +125,14 @@ export function setSessionPermission(wsPath: string, sessionId: string, mode: im
   return data
 }
 
+// Remember a session's coding agent + model (per-session, mirrors setSessionPermission).
+export function setSessionModel(wsPath: string, sessionId: string, agentId: string, modelId: string): SessionsFile {
+  const data = readSessions(wsPath)
+  const s = data.sessions.find(x => x.id === sessionId)
+  if (s) { s.agentId = agentId; s.modelId = modelId; write(wsPath, data) }
+  return data
+}
+
 // Auto-name a still-default session from its first user instruction (called by chatService).
 export function autoNameIfDefault(wsPath: string, sessionId: string, text: string): void {
   const data = readSessions(wsPath)

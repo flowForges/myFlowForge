@@ -58,6 +58,7 @@ export const CH = {
   sessionClose: 'session:close',
   sessionRename: 'session:rename',
   sessionSetPermission: 'session:set-permission',
+  sessionSetModel: 'session:set-model',
   sessionAgentIds: 'session:agent-ids',
   dialogOpenFiles: 'dialog:open-files',
   dialogPickDirectory: 'dialog:pick-directory',
