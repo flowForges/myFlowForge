@@ -35,6 +35,20 @@ def sequence(keyframes: list[Image.Image], frame_count: int) -> list[Image.Image
     return [keyframes[(i * len(keyframes)) // frame_count].copy() for i in range(frame_count)]
 
 
+def gif_frame(image: Image.Image) -> Image.Image:
+    """Quantize RGBA while reserving palette index 255 for transparency."""
+    rgba = image.convert("RGBA")
+    alpha = rgba.getchannel("A")
+    paletted = rgba.convert("RGB").quantize(colors=255, method=Image.Quantize.MEDIANCUT)
+    palette = (paletted.getpalette() or [])[: 255 * 3]
+    palette.extend([0] * (768 - len(palette)))
+    paletted.putpalette(palette)
+    transparent = alpha.point(lambda value: 255 if value <= 24 else 0)
+    paletted.paste(255, mask=transparent)
+    paletted.info["transparency"] = 255
+    return paletted
+
+
 def keep_largest_component(image: Image.Image) -> Image.Image:
     alpha = image.getchannel("A")
     active = set()
@@ -135,13 +149,18 @@ def encode_state(state: str, keys: list[Image.Image], frame_count: int, total_ms
     }
     output[0].save(PACK / "webp" / f"{state}.webp", format="WEBP", lossless=True, method=6, **save_common)
     output[0].save(PACK / "apng" / f"{state}.png", format="PNG", disposal=2, blend=0, **save_common)
-    output[0].save(
+    gif_output = [gif_frame(frame) for frame in output]
+    gif_output[0].save(
         PACK / f"{state}.gif",
         format="GIF",
+        save_all=True,
+        append_images=gif_output[1:],
+        duration=frame_durations,
+        loop=0,
         disposal=2,
-        transparency=0,
-        optimize=True,
-        **save_common,
+        transparency=255,
+        background=255,
+        optimize=False,
     )
     keys[0].save(PACK / "png" / f"{state}.png", optimize=True)
 
