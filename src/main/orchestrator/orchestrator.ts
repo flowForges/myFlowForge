@@ -69,6 +69,9 @@ export interface StartRunOpts {
   runId: string
   workspaceName: string
   workspacePath: string
+  // The chat session that owns this run — surfaced on RunState so the renderer scopes the run + its
+  // gate cards to that session's tab (see RunState.sessionId). Optional: direct/legacy runs omit it.
+  sessionId?: string
   stages: StageSpec[]
   developProjects: DevelopProject[]
   task?: string   // seeds the first (requirement) stage's prompt; from the user's first chat message
@@ -544,7 +547,7 @@ export class Orchestrator {
     this.briefs = opts.resume ? [...opts.resume.priorBriefs] : []
     this.task = opts.task
     this.cancelled = false
-    this.run = { id: opts.runId, workspaceName: opts.workspaceName, workspacePath: opts.workspacePath, workflowId: opts.workflowId, workflowName: opts.workflowName, projects: opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })), status: 'run', stages: opts.resume ? [...opts.resume.completedStages] : [], pending: [] }
+    this.run = { id: opts.runId, workspaceName: opts.workspaceName, workspacePath: opts.workspacePath, sessionId: opts.sessionId, workflowId: opts.workflowId, workflowName: opts.workflowName, projects: opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })), status: 'run', stages: opts.resume ? [...opts.resume.completedStages] : [], pending: [] }
     this.heartbeater = new Heartbeater(this.hbCfg, this.now)
     this.hbTimer = this.makeInterval(() => this.applyHeartbeatEffects(this.heartbeater?.tick() ?? []), this.hbCfg.pingMs)
     this.update()

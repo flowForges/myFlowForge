@@ -16,9 +16,12 @@ export interface SessionTabsProps {
   onNew: () => void
   workspacePath?: string
   archived?: boolean
+  // #3: sessions whose (off-screen) workflow run is waiting on a permission gate — badge their tab so
+  // the user knows to switch there, instead of the gate stealing the current tab.
+  attentionIds?: ReadonlySet<string>
 }
 
-export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived }: SessionTabsProps) {
+export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds }: SessionTabsProps) {
   const multi = sessions.length > 1
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -59,6 +62,9 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
                 <span className="si-src-badge" title={s.external.source}>{s.external.source.slice(0, 2).toUpperCase()}</span>
               )}
               <span className={'sd ' + s.mode} />
+              {attentionIds?.has(s.id) && s.id !== activeSessionId && (
+                <span className="sess-attn" title="该会话的工作流在等待你确认" />
+              )}
               {editing ? (
                 <input
                   className="st-edit"

@@ -149,11 +149,26 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const selForRef = useRef<{ ws?: string; sid?: string }>({}) // which (ws,session) the current `selection` belongs to
   const wsPath = workspacePath ?? engine.run?.workspacePath
-  const run = useLastRun(wsPath, engine.run)
-  // pending actions belong to the live run; never show them while viewing another workspace
-  const pending = engine.run && engine.run.workspacePath === wsPath ? engine.pending : []
   const localSessions = useSessions(wsPath)
   const sessions = sessionsApi ?? localSessions
+  // #3: a run belongs to the session that started it. Show the live run + its gate/pending cards ONLY
+  // in that session's tab — a run raising a permission gate must NOT steal whatever tab is in front
+  // (the "画着图呢，A 的权限门跳到 C" bug). Runs with no sessionId (legacy/direct) show anywhere in the ws.
+  const liveRunForTab = engine.run && engine.run.workspacePath === wsPath
+    && (!engine.run.sessionId || engine.run.sessionId === sessions.activeSessionId)
+    ? engine.run : null
+  const run = useLastRun(wsPath, liveRunForTab)
+  const pending = liveRunForTab ? engine.pending : []
+  // #3: if a run in THIS workspace but a DIFFERENT session is waiting on a gate, badge that session's
+  // tab (single-run engine → at most one such session today; a Set keeps it concurrency-ready).
+  const attentionIds = useMemo(() => {
+    const s = new Set<string>()
+    if (engine.run && engine.run.workspacePath === wsPath && engine.run.sessionId
+      && engine.run.sessionId !== sessions.activeSessionId && engine.pending.length > 0) {
+      s.add(engine.run.sessionId)
+    }
+    return s
+  }, [engine.run, engine.pending, wsPath, sessions.activeSessionId])
   const chat = useChat(wsPath, sessions.activeSessionId, (mode) => {
     if (mode === 'workflow') setForceChat(false)
   })
@@ -542,6 +557,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           onNew={archived ? () => {} : sessions.newSession}
           workspacePath={wsPath}
           archived={archived}
+          attentionIds={attentionIds}
         />
         {/* 只读会话: 基于此历史继续 */}
         {isReadOnlySession && canContinue(activeSession!, roMessages.length) && !archived && (

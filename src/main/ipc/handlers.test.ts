@@ -694,12 +694,13 @@ describe('registerIpc broadcast wiring', () => {
     // Named workflow → proposeRun called with select.workflowId + standalone (UI-initiated, exempt
     // from turn cleanup — see proposeRun.ts / the standalone race regression test).
     await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: '方案文本', task: '任务文本', workflowId: 'wf-2' })
-    expect(proposeFn).toHaveBeenCalledWith('/ws/a', '方案文本', '任务文本', { workflowId: 'wf-2', standalone: true })
+    // #3: the propose is attributed to the workspace's active session (mock activeSessionId === 's1').
+    expect(proposeFn).toHaveBeenCalledWith('/ws/a', '方案文本', '任务文本', { workflowId: 'wf-2', standalone: true, sessionId: 's1' })
 
     // No workflowId → ad-hoc, but still standalone
     proposeFn.mockClear()
     await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: 'x', task: 'y' })
-    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'x', 'y', { standalone: true })
+    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'x', 'y', { standalone: true, sessionId: 's1' })
   })
 
   // FIX 5: the forge:run fence propose (fired fire-and-forget at chat-turn end, via chatService's
@@ -722,7 +723,8 @@ describe('registerIpc broadcast wiring', () => {
     expect(sendTurn).toHaveBeenCalled()
     const deps = sendTurn.mock.calls.at(-1)![1]
     deps.onRunTrigger('/ws/a', 'do the thing')
-    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'do the thing', 'do the thing', { standalone: true })
+    // #1 carries the chat provider override; #3 attributes the run to the active session (mock → 's1').
+    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'do the thing', 'do the thing', { standalone: true, providerOverride: { provider: 'claude', model: 'm' }, sessionId: 's1' })
   })
 
   it('configUpdateWorkflow 写入 stagePrompts(不动 plugins)', async () => {
