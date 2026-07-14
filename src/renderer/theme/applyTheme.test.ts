@@ -2,17 +2,21 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { applyTheme } from './applyTheme'
 import type { Appearance } from '@shared/types'
 
-const base: Appearance = { theme: 'dark', accent: 'blue', vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', chatFontSize: 'medium', fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 }
-afterEach(() => { document.documentElement.removeAttribute('data-theme'); document.documentElement.removeAttribute('data-vibrancy'); document.documentElement.removeAttribute('data-glass'); document.documentElement.removeAttribute('data-density'); document.documentElement.removeAttribute('data-font') })
+const base: Appearance = { theme: 'dark', accent: 'blue', vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 }
+afterEach(() => { document.documentElement.removeAttribute('data-theme'); document.documentElement.removeAttribute('data-vibrancy'); document.documentElement.removeAttribute('data-glass'); document.documentElement.removeAttribute('data-density') })
 
 describe('applyTheme', () => {
   it('sets root data attributes from appearance', () => {
-    applyTheme({ ...base, theme: 'light', vibrancy: false, density: 'compact', fontSize: 'large' })
+    // 应用字号(fontSize)走主进程 setZoomFactor,不在 applyTheme 里设 DOM,这里只验其余属性。
+    applyTheme({ ...base, theme: 'light', vibrancy: false, density: 'compact', fontSize: 15.5 })
     const r = document.documentElement
     expect(r.getAttribute('data-theme')).toBe('light')
     expect(r.getAttribute('data-vibrancy')).toBe('off')
     expect(r.getAttribute('data-density')).toBe('compact')
-    expect(r.getAttribute('data-font')).toBe('large')
+  })
+  it('drives --chat-font-scale from chatFontSize px (÷14 base)', () => {
+    applyTheme({ ...base, chatFontSize: 17.5 })
+    expect(document.documentElement.style.getPropertyValue('--chat-font-scale')).toBe('1.25')
   })
   it('sets data-glass from appearance.glass', () => {
     applyTheme({ ...base, glass: true })

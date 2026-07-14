@@ -10,6 +10,6 @@ describe('shared settings types', () => {
     expect(a.vibrancy).toBe(false)
     expect(a.windowOpacity).toBe(1)
     expect(a.density).toBe('comfortable')
-    expect(a.fontSize).toBe('medium')
+    expect(a.fontSize).toBe(14)
   })
 })

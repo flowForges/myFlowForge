@@ -108,6 +108,11 @@ export const CH = {
   nsfwInstallPet: 'nsfw:install-pet',
   nsfwInstallBg: 'nsfw:install-bg',
   nsfwBgExists: 'nsfw:bg-exists',
+  // Built-in wallpapers (no activation code / Worker) — list the public jsDelivr catalog, preview a
+  // thumbnail, and download+store a full image as an app background.
+  wallpaperCatalog: 'wallpaper:catalog',
+  wallpaperPreview: 'wallpaper:preview',
+  wallpaperInstall: 'wallpaper:install',
   // Main renderer → main process: the workspace currently open in the main window ('ws' view), or null on
   // the home view. Relayed to the pet so its command input can target "the workspace you're in".
   setPetActiveWorkspace: 'pet:set-active-workspace',

@@ -3,13 +3,13 @@ import type { Settings, Appearance, Pet, Terminal, CloseAction, AppIcon, Notific
 import { DEFAULT_BUILTIN_PET_ID, builtinPets } from '@shared/builtinPets'
 
 const DEFAULTS: Settings = {
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', chatFontSize: 'medium', fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
+  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
   notifications: { enabled: true, confirm: true, input: true, done: true },
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
   termProxy: '',
   skills: { 'code-review': true, 'test-driven': true, 'deep-research': false, 'systematic-debugging': true },
-  pet: { enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: false, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } } },
+  pet: { enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } } },
   heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
   pinnedWorkspaces: [],
   workspaceOrder: [],

@@ -257,7 +257,7 @@ export function ChangesPane({
           />
           {targets.length > 0 ? <SearchModeToggle mode={mode} onChange={setMode} /> : null}
         </div>
-        {(onRefresh || (!contentMode && allDirKeys.length > 0)) && (
+        {(onRefresh || (!(contentMode && q) && allDirKeys.length > 0)) && (
           <div className="tree-expand-tools">
             {onRefresh && (
               <button className="tree-tool-btn" title="刷新" aria-label="刷新变更" onClick={doRefresh}>
@@ -268,7 +268,7 @@ export function ChangesPane({
                 </svg>
               </button>
             )}
-            {!contentMode && allDirKeys.length > 0 && (
+            {!(contentMode && q) && allDirKeys.length > 0 && (
               <button
                 className="tree-tool-btn"
                 title={allCollapsed ? '全部展开' : '全部收起'}
@@ -287,7 +287,9 @@ export function ChangesPane({
           </div>
         )}
       </div>
-      {contentMode ? (
+      {/* 与 FileTreePane 对齐:切到「内容」但搜索框为空时不要清空文件列表,
+          等真正有关键词再换成 content-hits(否则读作「文件列表消失了」)。 */}
+      {contentMode && q ? (
         <ContentHits
           state={search}
           onOpen={(file, hitCwd) => onOpen(file, typeByKey.get(hitCwd + '\0' + file) ?? 'M', hitCwd)}

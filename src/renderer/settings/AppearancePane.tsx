@@ -1,12 +1,7 @@
 import { useState } from 'react'
 import type { Appearance, Terminal } from '@shared/types'
 import { FontPicker } from './FontPicker'
-
-const FONT_SIZES: { key: Appearance['fontSize']; label: string }[] = [
-  { key: 'small', label: '小' },
-  { key: 'medium', label: '中' },
-  { key: 'large', label: '大' },
-]
+import { WallpaperGallery } from './WallpaperGallery'
 
 const BG_SCOPES: { key: NonNullable<Appearance['bgScope']>; label: string }[] = [
   { key: 'app', label: '整个应用' },
@@ -74,8 +69,11 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
     if (!r) return
     if (r.error) { setBgErr(r.error); return }
     // First upload turns the feature on (default to whole-app); later uploads keep the current scope.
-    if (r.url) onChange({ bgImage: r.url, bgScope: bgScope === 'off' ? 'app' : bgScope })
+    // Uploading your own image de-selects any built-in wallpaper.
+    if (r.url) onChange({ bgImage: r.url, bgScope: bgScope === 'off' ? 'app' : bgScope, bgWallpaperId: '' })
   }
+  const applyWallpaper = (url: string, id: string) =>
+    onChange({ bgImage: url, bgScope: bgScope === 'off' ? 'app' : bgScope, bgWallpaperId: id })
   // 首页背景(独立于上面的应用/会话区背景)
   const homeBgImage = appearance.homeBgImage ?? ''
   const homeBgOn = appearance.homeBgOn ?? false
@@ -204,26 +202,37 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
         <div className="set-row">
           <div className="info">
             <div className="t">应用字号</div>
-            <div className="d">整个应用界面的字体大小(不含会话区与终端)</div>
+            <div className="d">整个应用界面的字体大小(px),不含会话区与终端 · 可精确到 0.5,如 11、11.5、12</div>
           </div>
-          <div className="seg">
-            {FONT_SIZES.map(({ key, label }) => (
-              <button key={key} className={`wf-pick${appearance.fontSize === key ? ' on' : ''}`} onClick={() => onChange({ fontSize: key })}>{label}</button>
-            ))}
-          </div>
+          <input
+            className="sel"
+            type="number"
+            aria-label="应用字号"
+            value={appearance.fontSize ?? 14}
+            step={0.5}
+            min={9}
+            max={24}
+            onChange={e => onChange({ fontSize: Number(e.target.value) })}
+          />
         </div>
         <div className="set-row">
           <div className="info">
             <div className="t">会话区字号</div>
-            <div className="d">会话消息(输入与输出)的字体大小,独立于应用字号</div>
+            <div className="d">会话消息(输入与输出)的字体大小(px),独立于应用字号</div>
           </div>
-          <div className="seg">
-            {FONT_SIZES.map(({ key, label }) => (
-              <button key={key} className={`wf-pick${(appearance.chatFontSize ?? 'medium') === key ? ' on' : ''}`} onClick={() => onChange({ chatFontSize: key })}>{label}</button>
-            ))}
-          </div>
+          <input
+            className="sel"
+            type="number"
+            aria-label="会话区字号"
+            value={appearance.chatFontSize ?? 14}
+            step={0.5}
+            min={9}
+            max={24}
+            onChange={e => onChange({ chatFontSize: Number(e.target.value) })}
+          />
         </div>
       </div>
+      <WallpaperGallery current={appearance.bgWallpaperId ?? ''} onApply={applyWallpaper} />
       <div className="set-group">
         <h4>背景图</h4>
         <div className="set-row">
@@ -236,7 +245,7 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
           </div>
           <div className="seg">
             <button className="wf-pick" onClick={() => void pickBg()}>{bgImage ? '更换图片' : '上传图片'}</button>
-            {bgImage && <button className="wf-pick" onClick={() => onChange({ bgImage: '', bgScope: 'off' })}>清除</button>}
+            {bgImage && <button className="wf-pick" onClick={() => onChange({ bgImage: '', bgScope: 'off', bgWallpaperId: '' })}>清除</button>}
           </div>
         </div>
         {bgImage && (

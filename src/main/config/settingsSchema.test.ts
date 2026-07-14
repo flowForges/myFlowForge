@@ -13,7 +13,7 @@ describe('SettingsSchema skills + pet', () => {
       activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`,
       corner: 'right',
       pos: { bottom: 24 },
-      followCursor: false,
+      followCursor: true,
       scale: 1,
       notify: { confirm: true, input: true, done: false },
       states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } },

@@ -73,6 +73,12 @@ export const DEFAULT_STAGE_PER_PROJECT_AGENT: Record<string, boolean> = { develo
 export const DEFAULT_STAGE_PRODUCES_DOC: Record<string, boolean> = { design: true }          // 强制写 markdown 方案文件
 export const DEFAULT_STAGE_SUMMARY: Record<string, boolean> = { design: true }               // per-project 后追加汇总代理
 
+// 字号从旧的枚举(小/中/大)升级为具体 px 数值。旧配置里的字符串按下表兼容映射,新值直接存数字。
+export const LEGACY_APP_FONT_PX: Record<string, number> = { small: 13, medium: 14, large: 15.5 }
+export const LEGACY_CHAT_FONT_PX: Record<string, number> = { small: 12.5, medium: 14, large: 16 }
+const fontSizePx = (legacy: Record<string, number>, def: number) =>
+  z.preprocess(v => (typeof v === 'string' ? (legacy[v] ?? def) : v), z.number().min(9).max(28).catch(def)).default(def)
+
 export const AppearanceSchema = z.object({
   theme: z.enum(['dark', 'light', 'auto', 'midnight', 'sepia', 'forest']),
   accent: z.enum(['blue', 'violet', 'indigo', 'cyan', 'teal', 'emerald', 'lime', 'amber', 'orange', 'rose', 'magenta', 'graphite']).default('blue'),
@@ -88,10 +94,10 @@ export const AppearanceSchema = z.object({
   // that shelved this path); the in-app panel blur updates live via a CSS var.
   blurAmount: z.number().min(0).max(1).default(0),
   density: z.enum(['comfortable', 'compact']),
-  // fontSize:应用整体(界面)字号。会话区(消息输入/输出)字号由 chatFontSize 单独控制、互不影响;
-  // 终端字号仍在 terminal.fontSize。
-  fontSize: z.enum(['small', 'medium', 'large']),
-  chatFontSize: z.enum(['small', 'medium', 'large']).catch('medium').default('medium'),
+  // fontSize:应用整体(界面)字号,px 数值(如 11 / 11.5 / 14)。会话区(消息输入/输出)字号由
+  // chatFontSize 单独控制、互不影响;终端字号仍在 terminal.fontSize。旧枚举值自动兼容为 px。
+  fontSize: fontSizePx(LEGACY_APP_FONT_PX, 14),
+  chatFontSize: fontSizePx(LEGACY_CHAT_FONT_PX, 14),
   // 应用整体字体族(逗号分隔备选)。'' = 跟随系统栈。作用于 --font,不影响终端字体。
   fontFamily: z.string().catch('').default(''),
   // 文本字重:'medium' 把正文基础字重略加实 + 关闭 antialiased 使渲染更清晰(治"字太瘦"),
@@ -103,6 +109,8 @@ export const AppearanceSchema = z.object({
   bgImage: z.string().default(''),
   bgScope: z.enum(['off', 'app', 'chat']).default('off'),
   bgOpacity: z.number().min(0.05).max(1).default(0.35),
+  // 当前应用的「内置壁纸」id(仅用于在壁纸库里高亮当前项);用户上传自己的图或清除背景时置空。
+  bgWallpaperId: z.string().default(''),
   // 首页 (home) 背景图:独立于上面的应用/会话区背景,可同可不同。homeBgOn 是首页背景的独立开关,
   // homeBgImage 同样存 forge-bg:// URL,homeBgOpacity 是首页图片层的可见度。首页上此背景盖过 'app' 范围背景。
   homeBgImage: z.string().default(''),
@@ -158,7 +166,7 @@ export const PetSchema = z.object({
   free: z.object({ x: z.number(), y: z.number() }).optional(),
   // Follow-cursor: when on, the pet hops to whichever display the cursor is on, at the same relative
   // position — handy across multiple monitors/desktops. .default keeps old on-disk configs parsing.
-  followCursor: z.boolean().default(false),
+  followCursor: z.boolean().default(true),
   // Sprite size multiplier (drag the hover resize handle). Out-of-range/junk values fall back to 1
   // via .catch so a hand-edited settings.json never fails the WHOLE settings parse.
   scale: z.number().min(PET_SCALE_MIN).max(PET_SCALE_MAX).catch(1).default(1),
@@ -174,7 +182,7 @@ export const PetSchema = z.object({
 })
 export type Pet = z.infer<typeof PetSchema>
 const defaultSkills = (): Record<string, boolean> => ({ 'code-review': true, 'test-driven': true, 'deep-research': false, 'systematic-debugging': true })
-const defaultPet = (): Pet => ({ enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: false, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: defaultStates() })
+const defaultPet = (): Pet => ({ enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: defaultStates() })
 export const HeartbeatSchema = z.object({
   stallMs: z.number().int().positive().default(90_000),
   killGraceMs: z.number().int().positive().default(60_000),
@@ -268,7 +276,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 'medium', chatFontSize: 'medium', fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
+  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },

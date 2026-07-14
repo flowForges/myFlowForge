@@ -31,6 +31,5 @@ describe('App settings + theme', () => {
     render(<App />)
     await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe('light'))
     expect(document.documentElement.getAttribute('data-density')).toBe('compact')
-    expect(document.documentElement.getAttribute('data-font')).toBe('large')
   })
 })

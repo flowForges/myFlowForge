@@ -59,6 +59,8 @@ import { storeBackgroundFromPath, backgroundImageUrl, bgRelFromUrl, gcBackground
 import { listDownloadedFonts, downloadCatalogFont, deleteDownloadedFont } from '../appearance/fontStore'
 import { catalogEntry } from '../../shared/fontCatalog'
 import { nsfwValidate, nsfwCatalog, nsfwPreview, nsfwInstallPet, nsfwInstallBg } from '../nsfw/nsfwService'
+import { wallpaperCatalog, wallpaperPreview, wallpaperInstall } from '../wallpaper/wallpaperService'
+import type { WallpaperItem } from '../../shared/wallpaper'
 import type { NsfwPet, NsfwBg } from '../../shared/nsfw'
 import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
@@ -810,6 +812,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const abs = rel ? resolveBackgroundAbs(rel) : null
     return { exists: !!abs && existsSync(abs) }
   })
+
+  // Built-in wallpapers: public jsDelivr catalog + images, downloaded on demand through the user's proxy
+  // and stored on disk like any uploaded background. No activation code, no Worker (so no Worker quota).
+  const wallpaperFetch = () => makeProxyFetch(readSettings().termProxy)
+  ipcMain.handle(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
+  ipcMain.handle(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch()))
+  ipcMain.handle(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
 
   const MAX_PINNED = 5
   ipcMain.handle(CH.workspacesList, () => {

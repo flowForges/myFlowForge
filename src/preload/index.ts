@@ -135,6 +135,10 @@ const api = {
   nsfwInstallPet: (petId: string, pet: import('@shared/nsfw').NsfwPet): Promise<{ name: string; images: Record<string, string> } | { error: string }> => ipcRenderer.invoke(CH.nsfwInstallPet, petId, pet),
   nsfwInstallBg: (bg: import('@shared/nsfw').NsfwBg): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.nsfwInstallBg, bg),
   nsfwBgExists: (url: string): Promise<{ exists: boolean }> => ipcRenderer.invoke(CH.nsfwBgExists, url),
+  // Built-in wallpapers (no activation code). List the public catalog, preview a thumbnail, install a full image.
+  wallpaperCatalog: (): Promise<import('@shared/wallpaper').WallpaperCatalog | { error: string }> => ipcRenderer.invoke(CH.wallpaperCatalog),
+  wallpaperPreview: (item: import('@shared/wallpaper').WallpaperItem): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.wallpaperPreview, item),
+  wallpaperInstall: (item: import('@shared/wallpaper').WallpaperItem): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.wallpaperInstall, item),
   onSettingsChanged: (cb: (s: unknown) => void) => {
     const listener = (_: unknown, s: unknown) => cb(s)
     ipcRenderer.on(CH.settingsChanged, listener)

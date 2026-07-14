@@ -234,9 +234,13 @@ app.whenReady().then(() => {
 
   // Font-size setting: the UI is px-based, so a CSS root font-size has no effect. Scale the whole
   // renderer via the zoom factor instead, which actually resizes the chrome + text.
-  const fontZoom = (size: string) => (size === 'small' ? 0.9 : size === 'large' ? 1.1 : 1)
-  const applyFontZoom = (size: string) => {
-    if (!mainWin.isDestroyed()) mainWin.webContents.setZoomFactor(fontZoom(size))
+  // 应用字号(px)→ 整窗缩放系数,基准 14px = 1.0,夹到合理范围。旧枚举字符串仍容错映射。
+  const fontZoom = (px: number) => {
+    const n = typeof px === 'number' ? px : ({ small: 13, medium: 14, large: 15.5 } as Record<string, number>)[px as unknown as string] ?? 14
+    return Math.max(0.6, Math.min(1.6, n / 14))
+  }
+  const applyFontZoom = (px: number) => {
+    if (!mainWin.isDestroyed()) mainWin.webContents.setZoomFactor(fontZoom(px))
   }
   mainWin.webContents.once('did-finish-load', () => applyFontZoom(readSettings().appearance.fontSize))
 
