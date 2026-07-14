@@ -583,14 +583,15 @@ describe('registerIpc broadcast wiring', () => {
     const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
     expect(handler(CH.chatReproposeWorkflow)).toBeTruthy()
 
-    // Named workflow → proposeRun called with select.workflowId
+    // Named workflow → proposeRun called with select.workflowId + standalone (UI-initiated, exempt
+    // from turn cleanup — see proposeRun.ts / the standalone race regression test).
     await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: '方案文本', task: '任务文本', workflowId: 'wf-2' })
-    expect(proposeFn).toHaveBeenCalledWith('/ws/a', '方案文本', '任务文本', { workflowId: 'wf-2' })
+    expect(proposeFn).toHaveBeenCalledWith('/ws/a', '方案文本', '任务文本', { workflowId: 'wf-2', standalone: true })
 
-    // No workflowId → ad-hoc (select undefined)
+    // No workflowId → ad-hoc, but still standalone
     proposeFn.mockClear()
     await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: 'x', task: 'y' })
-    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'x', 'y', undefined)
+    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'x', 'y', { standalone: true })
   })
 
   it('configUpdateWorkflow 写入 stagePrompts(不动 plugins)', async () => {
