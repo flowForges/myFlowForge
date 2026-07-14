@@ -38,28 +38,25 @@ describe('PlanCard', () => {
     expect(onResolve).toHaveBeenCalledWith({ decision: 'deny' })
   })
 
-  it('修改方向… reveals an input and submits a modify decision with the typed value', () => {
+  it('修改方向… calls onSupplement instead of opening an inline textarea (Task 15: reflows into the main composer)', () => {
     const onResolve = vi.fn()
-    render(<PlanCard req={base} onResolve={onResolve} />)
+    const onSupplement = vi.fn()
+    render(<PlanCard req={base} onResolve={onResolve} onSupplement={onSupplement} />)
     expect(screen.queryByPlaceholderText(/说明要改的方向/)).toBeNull()
     fireEvent.click(screen.getByText('修改方向…'))
-    const input = screen.getByPlaceholderText(/说明要改的方向/) as HTMLInputElement
-    fireEvent.change(input, { target: { value: '改成全量替换' } })
-    fireEvent.click(screen.getByText('提交修改'))
-    expect(onResolve).toHaveBeenCalledWith({ decision: 'modify', value: '改成全量替换' })
+    expect(onSupplement).toHaveBeenCalledTimes(1)
+    // no inline textarea ever appears, and no decision was resolved directly by the card
+    expect(screen.queryByPlaceholderText(/说明要改的方向/)).toBeNull()
+    expect(onResolve).not.toHaveBeenCalled()
+    // the three-button row stays put (card doesn't switch to any other view)
+    expect(screen.getByText('批准并执行')).toBeInTheDocument()
+    expect(screen.getByText('取消')).toBeInTheDocument()
   })
 
-  it('修改方向… can be cancelled via 返回 — restores the three primary buttons without resolving', () => {
+  it('修改方向… is a no-op when onSupplement is not wired (optional prop)', () => {
     const onResolve = vi.fn()
     render(<PlanCard req={base} onResolve={onResolve} />)
-    fireEvent.click(screen.getByText('修改方向…'))
-    expect(screen.getByPlaceholderText(/说明要改的方向/)).toBeInTheDocument()
-    fireEvent.click(screen.getByText('返回'))
-    // back to the three-button row
-    expect(screen.queryByPlaceholderText(/说明要改的方向/)).toBeNull()
-    expect(screen.getByText('批准并执行')).toBeInTheDocument()
-    expect(screen.getByText('修改方向…')).toBeInTheDocument()
-    expect(screen.getByText('取消')).toBeInTheDocument()
+    expect(() => fireEvent.click(screen.getByText('修改方向…'))).not.toThrow()
     expect(onResolve).not.toHaveBeenCalled()
   })
 

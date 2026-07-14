@@ -248,6 +248,18 @@
   width: 100%; max-width: clamp(720px, 90%, 1180px); animation: tqIn .18s ease; }
 .tq-stop:hover { background: oklch(63% .2 25 / .22); }
 
+/* —— 补充中 banner(方案卡/阶段门卡"修改方向…"回流主输入框,Task 15/16) —— */
+.supplement-banner {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; max-width: clamp(720px, 90%, 1180px); margin: 0 auto 8px;
+  padding: 8px 12px; border-radius: 9px;
+  background: var(--accent-dim); border: 1px solid var(--accent);
+  color: var(--fg-2); font-size: 12.5px; animation: tqIn .18s ease;
+}
+.supplement-banner span { flex: 1; min-width: 0; }
+.supplement-cancel { flex: 0 0 auto; height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600; color: var(--faint); transition: .13s; }
+.supplement-cancel:hover { background: var(--surface); color: var(--err); }
+
 /* 下拉菜单 */
 /* radius matches the inner .cb-btn so the frosted-glass fill applied to .menu (glass.css) is
    rounded too — otherwise the model/version pickers show a sharp-cornered box behind the button. */

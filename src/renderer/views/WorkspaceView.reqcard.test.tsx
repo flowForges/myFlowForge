@@ -26,7 +26,7 @@ beforeEach(() => {
   chatHandler = null
   ;(window as any).forge = {
     chatHistory: async () => [],
-    sendChat: async () => ({}), openFiles: async () => [], savePaste: vi.fn(),
+    sendChat: vi.fn(async () => ({})), openFiles: async () => [], savePaste: vi.fn(),
     onChatEvent: (cb: (e: ChatEvent) => void) => { chatHandler = cb; return () => {} },
     onChatQueueEvent: () => () => {},
     watchChanges: async () => [], watchStop: async () => {}, fsTree: async () => [],
@@ -69,6 +69,66 @@ describe('WorkspaceView ReqCard wiring', () => {
     // plan-resolved removes the card
     chatHandler!({ workspacePath: '/ws', sessionId: 'default', type: 'plan-resolved', id: 'pl1' } as ChatEvent)
     await waitFor(() => expect(screen.queryByText('方案待批准')).toBeNull())
+  })
+
+  it('修改方向… seeds the main composer with a quote marker + banner, and the next send routes to chatResolve as modify (Task 15)', async () => {
+    const { container } = render(<WorkspaceView engine={engine} providers={providers} />)
+    await waitFor(() => expect(chatHandler).not.toBeNull())
+    chatHandler!({
+      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', id: 'pl1',
+      approach: '逐文件迁移 tokens', task: '重构主题',
+      stages: [{ name: '开发', agents: 3 }],
+    } as ChatEvent)
+    await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())
+
+    // No banner yet, no inline textarea
+    expect(container.querySelector('.supplement-banner')).toBeNull()
+    fireEvent.click(screen.getByText('修改方向…'))
+
+    // Banner appears + composer is seeded with the quote marker
+    await waitFor(() => expect(container.querySelector('.supplement-banner')).toBeTruthy())
+    expect(container.querySelector('.supplement-banner')?.textContent).toContain('补充中：针对【方案】')
+    const ta = container.querySelector('#composerInput') as HTMLTextAreaElement
+    await waitFor(() => expect(ta.value).toContain('针对【技术方案·方案】补充'))
+
+    // Card is unaffected — allow/deny still work, and the plan card is still visible
+    expect(screen.getByText('方案待批准')).toBeInTheDocument()
+
+    // Typing a supplement and sending routes to chatResolve as 'modify', NOT a normal chat message.
+    fireEvent.change(ta, { target: { value: ta.value + '改成全量替换' } })
+    fireEvent.click(container.querySelector('#sendBtn') as HTMLButtonElement)
+    await waitFor(() => expect((window as any).forge.chatResolve).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'pl1', decision: 'modify', value: expect.stringContaining('改成全量替换') }),
+    ))
+    expect((window as any).forge.sendChat).not.toHaveBeenCalled()
+
+    // Banner clears after send
+    await waitFor(() => expect(container.querySelector('.supplement-banner')).toBeNull())
+  })
+
+  it('修改方向… banner can be cancelled — 取消 clears pendingSupplement and the next send goes to normal chat', async () => {
+    const { container } = render(<WorkspaceView engine={engine} providers={providers} />)
+    await waitFor(() => expect(chatHandler).not.toBeNull())
+    chatHandler!({
+      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', id: 'pl1',
+      approach: '逐文件迁移 tokens', task: '重构主题',
+      stages: [{ name: '开发', agents: 3 }],
+    } as ChatEvent)
+    await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('修改方向…'))
+    await waitFor(() => expect(container.querySelector('.supplement-banner')).toBeTruthy())
+
+    // '取消' also appears as the plan card's deny button — target the banner's cancel button specifically.
+    fireEvent.click(container.querySelector('.supplement-cancel') as HTMLButtonElement)
+    expect(container.querySelector('.supplement-banner')).toBeNull()
+
+    const ta = container.querySelector('#composerInput') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: '普通聊天消息' } })
+    fireEvent.click(container.querySelector('#sendBtn') as HTMLButtonElement)
+    await waitFor(() => expect((window as any).forge.sendChat).toHaveBeenCalled())
+    expect((window as any).forge.chatResolve).not.toHaveBeenCalledWith(
+      expect.objectContaining({ decision: 'modify' }),
+    )
   })
 
   it('does not render an inspector 待你处理 / .pp-act section', () => {
