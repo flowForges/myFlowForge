@@ -13,11 +13,14 @@ describe('forgeChatDirective', () => {
     expect(d).toContain('forge_propose_plan')
   })
 
-  it('is conservative: reading/understanding code + questions must NOT propose', () => {
+  it('pure conversation answers directly, but reading real repo code delegates to a real sub-agent', () => {
     const d = forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan' })
-    // Default DON'T-propose case, explicit and prominent.
-    expect(d).toContain('阅读、理解、解释、分析现有代码')
-    expect(d).toContain('绝不调用')
+    // Only pure conversation is answered directly.
+    expect(d).toContain('纯对话')
+    // Reading the repo's real code must go through a real Forge sub-agent (read-only stage), never a
+    // built-in Task/subagent.
+    expect(d).toContain('只读阶段')
+    expect(d).toContain('绝不用内置 Task')
     // Only an explicit build/change request triggers a proposal.
     expect(d).toContain('明确要求')
     // Ambiguous → ask first, never auto-propose.

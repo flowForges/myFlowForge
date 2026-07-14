@@ -32,17 +32,20 @@ describe('FORGE_WORKFLOW_SKILL', () => {
     expect(c).toContain('批准前不要执行')
   })
 
-  it('is conservative: reading/understanding existing code and questions must NOT propose', () => {
+  it('pure conversation answers directly, but reading real repo code delegates to a real sub-agent', () => {
     const c = FORGE_WORKFLOW_SKILL.content
-    // Default is DON'T propose: reading/understanding/explaining existing code + any question just gets answered.
-    expect(c).toContain('阅读、理解、解释、分析现有代码')
-    expect(c).toContain('绝不调用')
-    // Only an explicit build/change request triggers a proposal.
+    // Only pure conversation (concepts / discussion / refining a text plan) is answered directly.
+    expect(c).toContain('纯对话')
+    // Actually reading the repo's real code goes through a real Forge sub-agent (read-only stage),
+    // never the main agent itself and never a built-in Task/subagent.
+    expect(c).toContain('只读阶段')
+    expect(c).toContain('绝不用内置 Task')
+    // The pure-conversation gate must appear before the propose flow so it reads first.
+    expect(c.indexOf('纯对话')).toBeLessThan(c.indexOf('forge_propose_plan({approach,'))
+    // Only an explicit build/change request triggers a full proposal.
     expect(c).toContain('明确要求')
     // Ambiguous intent → ask one line first, never auto-propose.
     expect(c).toContain('拿不准')
-    // The "don't propose" guidance must appear before the propose flow so it gates first.
-    expect(c.indexOf('绝不调用')).toBeLessThan(c.indexOf('forge_propose_plan({approach,'))
   })
 
   it('self-excludes for orchestrated stage sub-agents (scope note near the top)', () => {
