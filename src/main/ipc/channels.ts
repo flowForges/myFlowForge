@@ -51,6 +51,7 @@ export const CH = {
   chatCancelQueued: 'chat:cancel-queued',
   chatClearQueue: 'chat:clear-queue',
   chatStop: 'chat:stop',
+  chatReproposeWorkflow: 'chat:repropose-workflow',
   sessionList: 'session:list',
   sessionNew: 'session:new',
   sessionSwitch: 'session:switch',
