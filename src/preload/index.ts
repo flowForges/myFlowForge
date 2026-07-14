@@ -99,6 +99,7 @@ const api = {
   changesMulti: (cwds: string[]) => ipcRenderer.invoke(CH.changesMulti, cwds),
   gitDiff: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitDiff, { cwd, file }),
   gitFile: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitFile, { cwd, file }),
+  imageFile: (cwd: string, file: string): Promise<{ dataUrl: string } | { error: string }> => ipcRenderer.invoke(CH.imageFile, { cwd, file }),
   fsTree: (cwd: string) => ipcRenderer.invoke(CH.fsTree, cwd),
   gitBranch: (cwd: string) => ipcRenderer.invoke(CH.gitBranch, cwd),
   searchContent: (a: { root: string; query: string; files?: string[] }): Promise<import('@shared/types').ContentSearchResult> => ipcRenderer.invoke(CH.fileSearchContent, a),

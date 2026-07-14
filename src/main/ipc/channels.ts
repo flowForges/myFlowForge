@@ -68,6 +68,7 @@ export const CH = {
   changesMulti: 'changes:multi',
   gitDiff: 'git:diff',
   gitFile: 'git:file',
+  imageFile: 'file:image', // read an image file's bytes → data URL (for the inspector image preview)
   fsTree: 'fs:tree',
   gitBranch: 'git:branch',
   fileSearchContent: 'file:search-content',

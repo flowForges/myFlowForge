@@ -122,6 +122,10 @@
 .pv-toggle button { height: 24px; padding: 0 10px; border-radius: 5px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .pv-toggle button.on { background: var(--bg); color: var(--fg); }
 .pv-code { flex: 1; overflow: auto; padding: 14px 0; }
+/* Image file preview: fit the image, checkerboard-ish neutral backdrop so transparency reads. */
+.pv-img-wrap { flex: 1; overflow: auto; display: grid; place-items: center; padding: 18px; background: var(--surface); }
+.pv-img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,.18); }
+.pv-img-msg { font-size: 12.5px; color: var(--muted); }
 .code-line { display: flex; font-family: var(--mono); font-size: 12.5px; line-height: 1.75; }
 .code-line .ln { width: 52px; flex: 0 0 52px; text-align: right; padding-right: 16px; color: var(--faint); -webkit-user-select: none; user-select: none; }
 .code-line .ct { white-space: pre; padding-right: 24px; }

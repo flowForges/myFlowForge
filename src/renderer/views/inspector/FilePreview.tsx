@@ -9,6 +9,9 @@ import { Markdown } from '../chat/markdown'
 function isMarkdown(file: string, lang: string): boolean {
   return /\.(md|markdown)$/i.test(file) || lang === 'md' || lang === 'markdown'
 }
+function isImage(file: string): boolean {
+  return /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i.test(file)
+}
 
 // 文件预览覆盖层 (file preview overlay) — ports the prototype's #preview.
 // Diff mode renders gitDiff lines (add/del/ctx + line numbers); 全文 mode renders
@@ -37,11 +40,23 @@ export function FilePreview({
   const [mode, setMode] = useState<'diff' | 'full'>(initialMode ?? 'diff')
   const [diff, setDiff] = useState<DiffLine[]>([])
   const [full, setFull] = useState<FilePreviewData | null>(null)
+  const img = isImage(file)
+  const [imgUrl, setImgUrl] = useState<string | null>(null)
+  const [imgErr, setImgErr] = useState('')
 
   useEffect(() => {
     if (!open || !file) return
     setMode(initialMode ?? 'diff')
     setFull(null)
+    // Image files: gitDiff/gitFile return text (binary garbage); read the bytes as a data URL instead.
+    if (isImage(file)) {
+      setImgUrl(null); setImgErr('')
+      void window.forge.imageFile?.(cwd, file).then(r => {
+        if (r && 'dataUrl' in r) setImgUrl(r.dataUrl)
+        else setImgErr((r && 'error' in r ? r.error : '') || '图片加载失败')
+      }).catch(() => setImgErr('图片加载失败'))
+      return
+    }
     void window.forge.gitDiff(cwd, file).then(setDiff)
   }, [open, cwd, file, initialMode])
 
@@ -65,26 +80,34 @@ export function FilePreview({
         <span className={`pv-tag ${type}`}>{type}</span>
         <FileIc name={file} big />
         <span className="pv-path">{file}</span>
-        <div className="pv-actions">
-          <div className="pv-toggle">
-            <button
-              className={mode === 'diff' ? 'on' : undefined}
-              data-pv="diff"
-              onClick={() => setMode('diff')}
-            >
-              Diff
-            </button>
-            <button
-              className={mode === 'full' ? 'on' : undefined}
-              data-pv="full"
-              onClick={() => setMode('full')}
-            >
-              全文
-            </button>
+        {!img && (
+          <div className="pv-actions">
+            <div className="pv-toggle">
+              <button
+                className={mode === 'diff' ? 'on' : undefined}
+                data-pv="diff"
+                onClick={() => setMode('diff')}
+              >
+                Diff
+              </button>
+              <button
+                className={mode === 'full' ? 'on' : undefined}
+                data-pv="full"
+                onClick={() => setMode('full')}
+              >
+                全文
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
-      {mode === 'full' && full !== null && isMarkdown(file, full.lang) ? (
+      {img ? (
+        <div className="pv-img-wrap">
+          {imgUrl ? <img className="pv-img" src={imgUrl} alt={file} />
+            : imgErr ? <div className="pv-img-msg">{imgErr}</div>
+            : <div className="pv-img-msg">加载中…</div>}
+        </div>
+      ) : mode === 'full' && full !== null && isMarkdown(file, full.lang) ? (
         <div className="pv-md">
           <Markdown text={full.text} />
         </div>

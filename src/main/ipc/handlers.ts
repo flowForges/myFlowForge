@@ -644,6 +644,21 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.changesMulti, (_e, cwds: string[]) => perfSpan('git', 'changesMulti', () => readChangesMulti(cwds, proxy())))
   ipcMain.handle(CH.gitDiff, (_e, a: { cwd: string; file: string }) => readDiff(a.cwd, a.file, proxy()))
   ipcMain.handle(CH.gitFile, (_e, a: { cwd: string; file: string }) => readFile(a.cwd, a.file, proxy()))
+  // Read an image file's bytes → data URL for the inspector's image preview (gitFile returns text, which
+  // renders binary images as garbage). Guards: known image ext, stays within cwd, size cap.
+  ipcMain.handle(CH.imageFile, (_e, a: { cwd: string; file: string }): { dataUrl: string } | { error: string } => {
+    try {
+      const IMG_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' }
+      const mime = IMG_MIME[(a.file.split('.').pop() || '').toLowerCase()]
+      if (!mime) return { error: '不是支持的图片格式' }
+      const abs = join(a.cwd, a.file)
+      if (!abs.startsWith(a.cwd)) return { error: '路径越界' }
+      if (!existsSync(abs)) return { error: '文件不存在' }
+      const buf = readFileSync(abs)
+      if (buf.length > 25_000_000) return { error: '图片过大(>25MB)' }
+      return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` }
+    } catch { return { error: '读取失败' } }
+  })
   ipcMain.handle(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
   ipcMain.handle(CH.gitBranch, (_e, cwd: string) => readBranch(cwd, proxy()))
   ipcMain.handle(CH.fileSearchContent, (_e, a: { root: string; query: string; files?: string[] }) =>
