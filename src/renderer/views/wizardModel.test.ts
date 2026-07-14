@@ -10,7 +10,7 @@ describe('wizard model', () => {
 
   it('buildCreateOpts 产出多条 workflows,各带有序 enabled 阶段', () => {
     const state: WizardState = {
-      path: '~/code/ws-a', name: '', nameEdited: false,
+      path: '~/code/ws-a', name: '', nameEdited: false, purpose: '把三层记忆做成可开关的功能',
       workflows: [
         emptyWorkflow('light', 'Light', {
           requirement: { on: true, provider: 'claude', model: 'opus-4.8' },
@@ -37,6 +37,7 @@ describe('wizard model', () => {
     expect(opts.workflows[0].stages.map(s => s.key)).toEqual(['requirement', 'design'])           // only enabled, order preserved
     expect(opts.workflows[1].stages.map(s => s.key)).toEqual(['requirement', 'design', 'develop'])
     expect(opts.projects.map(p => p.repoId)).toEqual(['proj1'])             // only selected
+    expect(opts.purpose).toBe('把三层记忆做成可开关的功能')                    // 建区目的 passthrough (trimmed non-empty)
   })
 })
 
@@ -151,7 +152,7 @@ describe('buildEditState', () => {
 
   it('buildCreateOpts 写入非空追加段、忽略空段', () => {
     const state: WizardState = {
-      path: '/w', name: 'w', nameEdited: true,
+      path: '/w', name: 'w', nameEdited: true, purpose: '',
       workflows: [emptyWorkflow('__custom', '__custom', {
         design: { on: true, provider: 'claude', model: 'opus-4.8', prompt: '画时序图' },
         develop: { on: true, provider: 'claude', model: 'opus-4.8', prompt: '  ' },
@@ -167,7 +168,7 @@ describe('buildEditState', () => {
 
   it('carries a custom (#3) stage + its behavior flags through buildCreateOpts, in template order', () => {
     const state: WizardState = {
-      path: '/w', name: 'w', nameEdited: true,
+      path: '/w', name: 'w', nameEdited: true, purpose: '',
       workflows: [emptyWorkflow('standard', 'standard', {
         design: { on: true, provider: 'claude', model: 'opus-4.8' },
         'security-audit': { on: true, custom: true, name: '安全审计', provider: 'claude', model: 'm', prompt: '核对 OWASP', scope: 'per-project', gate: true, summary: true },

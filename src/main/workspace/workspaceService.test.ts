@@ -444,3 +444,21 @@ describe('buildStartRunOpts', () => {
     expect(sr.stages[0].prompt).toBe('画时序图')
   })
 })
+
+describe('purpose', () => {
+  it('buildWorkspaceRecord carries purpose through', async () => {
+    const { buildWorkspaceRecord } = await import('./workspaceService')
+    const rec = buildWorkspaceRecord({ name: 'w', path: '/w', workflows: [], projects: [], purpose: '做记忆功能' } as any, new Map())
+    expect(rec.purpose).toBe('做记忆功能')
+  })
+  it('seedPurposeMemory writes 建区目的 section; empty purpose is a no-op', async () => {
+    const { seedPurposeMemory } = await import('./workspaceService')
+    const { readWorkspaceMemory } = await import('../chat/memory/memoryStore')
+    const wsPath = join(root, 'ws-purpose')
+    seedPurposeMemory(wsPath, '  ')                        // blank → no write
+    expect(readWorkspaceMemory(wsPath)).toBe('')
+    seedPurposeMemory(wsPath, '把三层记忆做成可开关的功能')
+    expect(readWorkspaceMemory(wsPath)).toContain('## 建区目的')
+    expect(readWorkspaceMemory(wsPath)).toContain('把三层记忆做成可开关的功能')
+  })
+})

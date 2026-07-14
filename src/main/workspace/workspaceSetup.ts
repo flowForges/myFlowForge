@@ -7,7 +7,7 @@ import type { AgentProvider } from '../agents/types'
 import type { DevelopProject } from '../orchestrator/orchestrator'
 import type { CreateWorkspaceOpts, SetupEvent } from '@shared/types'
 import { runStepHook } from './stepHooks'
-import { provisionWorktree, buildWorkspaceRecord, buildStartRunOpts, type CreateWorkspaceResult } from './workspaceService'
+import { provisionWorktree, buildWorkspaceRecord, buildStartRunOpts, seedPurposeMemory, type CreateWorkspaceResult } from './workspaceService'
 
 // Re-export SetupEvent from @shared/types for any code that imports it from here.
 export type { SetupEvent }
@@ -54,6 +54,7 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   const workspace = buildWorkspaceRecord(opts, byId)
   writeWorkspace(workspace)
   ensureWorkspaceSkill(opts.path)
+  seedPurposeMemory(opts.path, opts.purpose)  // seed 建区目的 into workspace memory
   registerWorkspace(opts.name, opts.path)
 
   emit({ type: 'setup:start', workspacePath: opts.path, hooks: { basic: basicHooks.length, proj: projHooks.length } })
