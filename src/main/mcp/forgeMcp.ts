@@ -21,7 +21,7 @@ export type SendFn = (tool: string, args: Record<string, unknown>) => Promise<un
 
 // ─── toolsToRegister / listForgeTools ────────────────────────────────────────
 
-const ALL_TOOLS = ['forge_read_context', 'forge_write_artifact', 'forge_ask', 'forge_handoff', 'forge_heartbeat', 'forge_propose_plan'] as const
+const ALL_TOOLS = ['forge_read_context', 'forge_write_artifact', 'forge_ask', 'forge_handoff', 'forge_heartbeat', 'forge_propose_plan', 'forge_delegate'] as const
 
 export function toolsToRegister(allowed?: Set<string>): string[] {
   return ALL_TOOLS.filter(t => !allowed || allowed.has(t))
@@ -174,6 +174,23 @@ export function createForgeServer(send: SendFn, allowed?: Set<string>): McpServe
         text = '用户已取消'
       }
       return { content: [{ type: 'text' as const, text }] }
+    },
+  )
+
+  // forge_delegate — 轻量委派:主 agent 派子 agent 到各项目直接读/写并同步返回(不走工作流门)
+  if (reg.has('forge_delegate')) server.registerTool(
+    'forge_delegate',
+    {
+      description: '把一个"单一动作"任务(读/检索/分析某处代码,或小改动/写测试)直接派给子代理执行:子代理会 cd 进每个目标项目目录(加载该项目 skills/rules)干活并汇报结论。用于不跨阶段的即时操作,不弹工作流门。参数:task=要子代理做的具体事(尽量含背景与目标);projects=只在这些项目名里执行(省略=全部关联项目);write=是否允许改文件(省略/false=只读探查,true=可改)。返回各子代理的产出汇总,你需自己整合后回复用户。',
+      inputSchema: { task: z.string(), projects: z.array(z.string()).optional(), write: z.boolean().optional() },
+    },
+    async ({ task, projects, write }) => {
+      try {
+        const r = await send('delegate', { task, projects, write }) as { text: string }
+        return { content: [{ type: 'text' as const, text: r.text }] }
+      } catch (err: unknown) {
+        return { isError: true, content: [{ type: 'text' as const, text: errorMessage(err) }] }
+      }
     },
   )
 
