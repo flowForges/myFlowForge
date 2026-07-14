@@ -97,6 +97,18 @@ export function makeProposeRun(deps: ProposeDeps) {
         return p && p.length ? { ...s, projects: p } : s
       }) }
     }
+    // 「允许 LLM 自行决策」开:跳过工作流选择门,直接用主代理提议(已按 select 裁剪)的 opts 启动。
+    // 只免"要不要弹门选工作流/阶段/hook/项目"这一层;子代理改代码仍受权限盾牌约束(下沉)。
+    if (ws.autoDecide) {
+      const live = deps.getRun()
+      if (live && live.status === 'run') { deps.emitNote(wsPath, '已有运行进行中,稍后再试。'); return Promise.resolve({ approved: false }) }
+      deps.startRun(opts)
+      const runId = deps.getRun()?.id
+      deps.setSessionMode(wsPath, 'workflow', runId)
+      deps.emitNote(wsPath, '已开启 LLM 自动决策 · 直接编排为多代理工作流')
+      deps.emitModeChanged(wsPath, 'workflow', runId)
+      return Promise.resolve({ approved: true })
+    }
     const id = `pl-${Date.now()}-${++seq}`
     // Full set of workflows this workspace has configured, so the approval card can offer a switch
     // dropdown (Task 12) — independent of which one (if any) was actually matched for this proposal.

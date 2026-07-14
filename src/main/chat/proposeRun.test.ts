@@ -48,6 +48,21 @@ describe('proposeRun mode flip', () => {
     expect(emitNote).toHaveBeenCalledWith('/w', '识别到任务型指令 · 已自动编排为多代理工作流')
   })
 
+  it('autoDecide=true → 跳过门直接 startRun(不 emitPlanRequest),置 workflow 模式', async () => {
+    const startRun = vi.fn()
+    const emitPlanRequest = vi.fn()
+    const setSessionMode = vi.fn()
+    const emitModeChanged = vi.fn()
+    const deps = mkDeps({ startRun, emitPlanRequest, setSessionMode, emitModeChanged, readWorkspace: () => ({ ...ws, autoDecide: true }) })
+    const propose = makeProposeRun(deps)
+    const r = await propose('/w', '直接干', '直接干')
+    expect(r.approved).toBe(true)
+    expect(emitPlanRequest).not.toHaveBeenCalled()
+    expect(startRun).toHaveBeenCalledTimes(1)
+    expect(setSessionMode).toHaveBeenCalledWith('/w', 'workflow', 'run-42')
+    expect(emitModeChanged).toHaveBeenCalledWith('/w', 'workflow', 'run-42')
+  })
+
   it('selection.hooks 过滤 opts.plugins 与 __wf stepPlugins(只跑勾选的 hook)', async () => {
     const startRun = vi.fn()
     const captured: string[] = []
