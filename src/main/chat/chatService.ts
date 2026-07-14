@@ -132,7 +132,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
 
       const steps = think.split('\n').map(s => s.trim()).filter(Boolean)
       const msg: ChatMessage = {
-        id: aid, who: 'ai', text: cleaned, model: label, ts: now(),
+        id: aid, who: 'ai', text: cleaned, model: label, provider: payload.agent, ts: now(),
         think: steps.length ? { label: '已思考', elapsed, steps } : undefined,
         context,
         usage: lastUsage,
@@ -146,13 +146,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     }
     const finishErr = (err: Error): ChatMessage => {
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
-      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, ts: now(), subagents: subagentList() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
       scheduleDistill()
       return msg
     }
     const finishAborted = (): ChatMessage => {
-      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, ts: now(), subagents: subagentList() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
       scheduleDistill()
