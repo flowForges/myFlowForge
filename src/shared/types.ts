@@ -100,11 +100,11 @@ export interface StageCustomFields {
   producesDoc?: boolean
 }
 export interface CreateWorkspaceStage extends StageCustomFields { key: string; provider: string; model: string; review?: ReviewConfig; prompt?: string }
+export interface CreateWorkspaceWorkflow { id: string; name: string; stages: CreateWorkspaceStage[] }
 export interface CreateWorkspaceOpts {
   name: string
   path: string                       // the workspace folder
-  workflowId: string
-  stages: CreateWorkspaceStage[]      // ordered enabled stages with chosen provider+model
+  workflows: CreateWorkspaceWorkflow[]  // one or more named workflows, each with its own ordered enabled stages
   projects: CreateWorkspaceProject[]  // selected git projects (repoId + branch + optional per-project develop model)
   plugins?: Plugin[]                  // workspace-level plugins
   stepPlugins?: Plugin[]              // stage-scoped plugins
