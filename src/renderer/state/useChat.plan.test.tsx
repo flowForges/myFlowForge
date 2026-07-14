@@ -20,7 +20,7 @@ describe('useChat plans (hard gate)', () => {
     const { result } = renderHook(() => useChat('/ws', 's1'))
     act(() => {
       handler!({
-        workspacePath: '/ws', sessionId: 's1', type: 'plan-request', allProjects: [], id: 'pl1',
+        workspacePath: '/ws', sessionId: 's1', type: 'plan-request', allProjects: [], hooks: [], id: 'pl1',
         approach: '逐文件迁移', task: '重构 tokens',
         stages: [{ key: '开发', name: '开发', agents: 2, perProject: false, projects: [] }],
       })
@@ -34,7 +34,7 @@ describe('useChat plans (hard gate)', () => {
     expect(result.current.plans).toHaveLength(0)
 
     // re-add then clear via broadcast plan-resolved
-    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'plan-request', allProjects: [], id: 'pl2', approach: 'x', stages: [] }) })
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'plan-request', allProjects: [], hooks: [], id: 'pl2', approach: 'x', stages: [] }) })
     expect(result.current.plans).toHaveLength(1)
     act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'plan-resolved', id: 'pl2' }) })
     expect(result.current.plans).toHaveLength(0)
@@ -42,7 +42,7 @@ describe('useChat plans (hard gate)', () => {
 
   it('ignores plan events for a different workspace', () => {
     const { result } = renderHook(() => useChat('/ws', 's1'))
-    act(() => { handler!({ workspacePath: '/other', sessionId: 's1', type: 'plan-request', allProjects: [], id: 'x', approach: 'a', stages: [] }) })
+    act(() => { handler!({ workspacePath: '/other', sessionId: 's1', type: 'plan-request', allProjects: [], hooks: [], id: 'x', approach: 'a', stages: [] }) })
     expect(result.current.plans).toHaveLength(0)
   })
 
@@ -52,7 +52,7 @@ describe('useChat plans (hard gate)', () => {
     const { result } = renderHook(() => useChat('/ws', 's1'))
     act(() => {
       handler!({
-        workspacePath: '/ws', sessionId: 's1', type: 'plan-request', allProjects: [], id: 'pl1',
+        workspacePath: '/ws', sessionId: 's1', type: 'plan-request', allProjects: [], hooks: [], id: 'pl1',
         approach: '逐文件迁移', stages: [],
         workflowId: 'full', workflowName: '完整流程',
         workflowOptions: [{ id: 'quick', name: '快速修复' }, { id: 'full', name: '完整流程' }],

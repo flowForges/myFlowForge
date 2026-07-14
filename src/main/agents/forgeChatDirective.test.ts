@@ -13,17 +13,18 @@ describe('forgeChatDirective', () => {
     expect(d).toContain('forge_propose_plan')
   })
 
-  it('pure conversation answers directly, but reading real repo code delegates to a real sub-agent', () => {
-    const d = forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan' })
-    // Only pure conversation is answered directly.
+  it('routes single actions to forge_delegate and multi-stage requests to forge_propose_plan', () => {
+    const d = forgeChatDirective({ FORGE_TOOLS: 'forge_propose_plan,forge_delegate' })
+    // Pure conversation is answered directly.
     expect(d).toContain('纯对话')
-    // Reading the repo's real code must go through a real Forge sub-agent (read-only stage), never a
-    // built-in Task/subagent.
-    expect(d).toContain('只读阶段')
-    expect(d).toContain('绝不用内置 Task')
-    // Only an explicit build/change request triggers a proposal.
-    expect(d).toContain('明确要求')
-    // Ambiguous → ask first, never auto-propose.
+    // Single action → lightweight delegation.
+    expect(d).toContain('forge_delegate')
+    expect(d).toContain('单一动作')
+    // Multi-stage → propose (opens the workflow gate).
+    expect(d).toContain('forge_propose_plan')
+    // Main agent never reads/writes itself, never uses the CLI's built-in Task/subagent.
+    expect(d).toContain('Task/subagent')
+    // Conservative routing: ambiguous → ask first.
     expect(d).toContain('拿不准')
   })
 

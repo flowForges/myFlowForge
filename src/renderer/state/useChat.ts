@@ -4,16 +4,19 @@ import type { PlanReq } from '../components/PlanCard'
 
 export interface ChatQueueItem { id: string; text: string; source: string }
 
+export interface AskReq { id: string; title: string; options?: { t: string; d: string }[]; agentName?: string; ts: string }
 export interface ChatApi {
   messages: ChatMessage[]
   streamingIds: Set<string>
   confirms: ChatConfirm[]
+  asks: AskReq[]
   plans: PlanReq[]
   busy: boolean
   queue: ChatQueueItem[]
   running: { id: string; text: string } | null
   send: (payload: Omit<ChatSendPayload, 'workspacePath' | 'sessionId'>) => void
   resolveConfirm: (payload: { id: string; decision: 'allow' | 'deny'; value?: string }) => void
+  resolveAsk: (payload: { id: string; decision: 'allow' | 'deny'; value?: string; choice?: number }) => void
   resolvePlan: (payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> } }) => void
   cancelQueued: (id: string) => void
   clearQueue: () => void
@@ -45,6 +48,7 @@ export function useChat(
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set())
   const [confirms, setConfirms] = useState<ChatConfirm[]>([])
+  const [asks, setAsks] = useState<AskReq[]>([])
   const [plans, setPlans] = useState<PlanReq[]>([])
   const [busy, setBusy] = useState(false)
   const [queue, setQueue] = useState<ChatQueueItem[]>([])
@@ -120,7 +124,9 @@ export function useChat(
       }
       else if (e.type === 'confirm-request') setConfirms(c => [...c, { id: e.id, title: e.title, where: e.where, ts: new Date().toISOString() }])
       else if (e.type === 'confirm-resolved') setConfirms(c => c.filter(x => x.id !== e.id))
-      else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, allProjects: e.allProjects, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, ts: new Date().toISOString() }])
+      else if (e.type === 'ask-request') setAsks(a => [...a, { id: e.id, title: e.title, options: e.options, agentName: e.agentName, ts: new Date().toISOString() }])
+      else if (e.type === 'ask-resolved') setAsks(a => a.filter(x => x.id !== e.id))
+      else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, hooks: e.hooks, allProjects: e.allProjects, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, recommendReason: e.recommendReason, ts: new Date().toISOString() }])
       else if (e.type === 'plan-resolved') setPlans(p => p.filter(x => x.id !== e.id))
       else if (e.type === 'mode-changed') onModeChangedRef.current?.(e.mode, e.runId)
     })
@@ -138,6 +144,12 @@ export function useChat(
     if (!workspacePath) return
     setConfirms(c => c.filter(x => x.id !== payload.id))
     void api.current.chatResolve({ ...payload, value: payload.value, workspacePath })
+  }, [workspacePath])
+
+  const resolveAsk = useCallback((payload: { id: string; decision: 'allow' | 'deny'; value?: string; choice?: number }) => {
+    if (!workspacePath) return
+    setAsks(a => a.filter(x => x.id !== payload.id))
+    void api.current.chatResolve({ ...payload, workspacePath })
   }, [workspacePath])
 
   const resolvePlan = useCallback((payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> } }) => {
@@ -161,5 +173,5 @@ export function useChat(
     void api.current.chatStop({ workspacePath })
   }, [workspacePath])
 
-  return { messages, streamingIds, confirms, plans, busy, queue, running, send, resolveConfirm, resolvePlan, cancelQueued, clearQueue, stop }
+  return { messages, streamingIds, confirms, asks, plans, busy, queue, running, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
 }

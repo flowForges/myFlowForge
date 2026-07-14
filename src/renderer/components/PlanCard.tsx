@@ -5,14 +5,16 @@ export interface PlanReq {
   id: string
   approach: string
   stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]
+  hooks?: { id: string; name: string; after: string }[]
   allProjects: string[]
   task?: string
   ts?: string
   workflowId?: string
   workflowName?: string
   workflowOptions?: { id: string; name: string }[]
+  recommendReason?: string
 }
-export type PlanSelection = { stages: string[]; stageProjects: Record<string, string[]> }
+export type PlanSelection = { stages: string[]; stageProjects: Record<string, string[]>; hooks: string[] }
 
 const AD_HOC = ''   // <select> value for "临时/自定义(ad-hoc)" — undefined can't be an <option value>
 
@@ -43,13 +45,30 @@ export function PlanCard({ req, onResolve, onSwitchWorkflow, onSupplement }: Pla
     const cur = m[k] ?? []
     return { ...m, [k]: cur.includes(p) ? cur.filter(x => x !== p) : [...cur, p] }
   })
+  // Hook (plugin) selection: ticked by default; unticking skips that hook this run (saves tokens).
+  const [onHooks, setOnHooks] = useState<Record<string, boolean>>(() => Object.fromEntries((req.hooks ?? []).map(h => [h.id, true])))
+  const toggleHook = (id: string) => setOnHooks(m => ({ ...m, [id]: !m[id] }))
+  const hooksAfter = (key: string) => (req.hooks ?? []).filter(h => h.after === key)
+  const renderHook = (h: { id: string; name: string; after: string }) => {
+    const on = !!onHooks[h.id]
+    return (
+      <div key={`hook-${h.id}`} className={`plan-stage-row plan-hook-row${on ? '' : ' off'}`}>
+        <label className="plan-stage-head">
+          <input type="checkbox" checked={on} onChange={() => toggleHook(h.id)} />
+          <span className="plan-stage-name">{h.name}</span>
+          <span className="plan-stage-meta">HOOK</span>
+        </label>
+      </div>
+    )
+  }
   const approve = () => {
     const stages = req.stages.filter(s => onStages[s.key]).map(s => s.key)
     const stageProjects: Record<string, string[]> = {}
     for (const s of req.stages) {
       if (onStages[s.key] && s.perProject) stageProjects[s.key] = stageProj[s.key] ?? s.projects
     }
-    onResolve({ decision: 'allow', selection: { stages, stageProjects } })
+    const hooks = (req.hooks ?? []).filter(h => onHooks[h.id]).map(h => h.id)
+    onResolve({ decision: 'allow', selection: { stages, stageProjects, hooks } })
   }
   const anyStage = req.stages.some(s => onStages[s.key])
   return (
@@ -67,19 +86,21 @@ export function PlanCard({ req, onResolve, onSwitchWorkflow, onSupplement }: Pla
           >
             <option value={AD_HOC}>临时/自定义(ad-hoc)</option>
             {(req.workflowOptions ?? []).map(w => (
-              <option key={w.id} value={w.id}>{w.name}</option>
+              <option key={w.id} value={w.id}>{w.name}{w.id === req.workflowId ? ' (推荐)' : ''}</option>
             ))}
           </select>
         </div>
+        {req.recommendReason ? <div className="req-sub plan-reason">推荐理由：{req.recommendReason}</div> : null}
         {req.task ? <div className="req-sub plan-task"><span>任务</span>{req.task}</div> : null}
         <div className="req-title plan-approach"><Markdown text={req.approach} /></div>
         {req.stages.length ? (
           <div className="plan-stages">
-            <span className="plan-stages-label">执行阶段(可勾选:去掉不需要的阶段/项目以省 token)</span>
+            <span className="plan-stages-label">执行步骤(可勾选:去掉不需要的阶段/hook/项目以省 token)</span>
             <div className="plan-stage-list">
-              {req.stages.map((s) => {
+              {hooksAfter('__start').map(renderHook)}
+              {req.stages.flatMap((s) => {
                 const on = !!onStages[s.key]
-                return (
+                return [
                   <div key={s.key} className={`plan-stage-row${on ? '' : ' off'}`}>
                     <label className="plan-stage-head">
                       <input type="checkbox" checked={on} onChange={() => toggleStage(s.key)} />
@@ -104,9 +125,11 @@ export function PlanCard({ req, onResolve, onSwitchWorkflow, onSupplement }: Pla
                         })}
                       </div>
                     )}
-                  </div>
-                )
+                  </div>,
+                  ...hooksAfter(s.key).map(renderHook),
+                ]
               })}
+              {hooksAfter('__wf').map(renderHook)}
             </div>
           </div>
         ) : null}

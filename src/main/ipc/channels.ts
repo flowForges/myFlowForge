@@ -60,6 +60,8 @@ export const CH = {
   sessionClose: 'session:close',
   sessionRename: 'session:rename',
   sessionSetPermission: 'session:set-permission',
+  wsSetAutoDecide: 'workspace:set-auto-decide',
+  chatSwitchSummary: 'chat:switch-summary',
   sessionSetModel: 'session:set-model',
   sessionAgentIds: 'session:agent-ids',
   dialogOpenFiles: 'dialog:open-files',

@@ -76,6 +76,7 @@ interface WorkspaceInfo {
   // already returns this (ensureWorkspaceWorkflows guarantees it); optional here only for callers that
   // predate multi-workflow support.
   workflows?: WsWorkflow[];
+  autoDecide?: boolean;
 }
 
 interface WorkspaceViewProps {
@@ -148,9 +149,37 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
   const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const selForRef = useRef<{ ws?: string; sid?: string }>({}) // which (ws,session) the current `selection` belongs to
+  // Pending provider switch awaiting user confirmation (old provider already ran in this session).
+  const [pendingSwitch, setPendingSwitch] = useState<{ from: string; to: string; toModel: string; permissionMode?: import('@shared/permissions').PermissionMode } | null>(null)
   const wsPath = workspacePath ?? engine.run?.workspacePath
   const localSessions = useSessions(wsPath)
   const sessions = sessionsApi ?? localSessions
+  // Confirm a pending provider switch: apply the selection, persist it, and have the new provider
+  // summarize the prior conversation as a visible message (a provider-switch divider auto-inserts).
+  const confirmSwitch = useCallback(() => {
+    const prev = pendingSwitch
+    if (!prev) return
+    const s = { agentId: prev.to, modelId: prev.toModel, permissionMode: prev.permissionMode }
+    setSelection(s)
+    const sid = sessions.activeSessionId
+    if (wsPath && sid) {
+      selForRef.current = { ws: wsPath, sid }
+      window.forge.sessionSetModel?.({ workspacePath: wsPath, sessionId: sid, agentId: s.agentId, modelId: s.modelId })
+      if (s.permissionMode) window.forge.sessionSetPermission?.({ workspacePath: wsPath, sessionId: sid, mode: s.permissionMode })
+      void window.forge.chatSwitchSummary?.({ workspacePath: wsPath, sessionId: sid, toAgent: prev.to, model: prev.toModel })
+    }
+    setPendingSwitch(null)
+  }, [pendingSwitch, wsPath, sessions.activeSessionId])
+  // Session switch → clear any seeded composer text (workflow-trigger phrase or supplement quote) so a
+  // fresh session opens EMPTY instead of inheriting the previous session's seed. Guard with a ref so
+  // the initial mount / first-settle does NOT clear (that would wipe a just-set same-session chip
+  // seed); only a genuine change from one session id to another clears. (User draft lives in draftStore.)
+  const prevSidRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const sid = sessions.activeSessionId
+    if (prevSidRef.current !== undefined && prevSidRef.current !== sid) setQuickSeed(undefined)
+    prevSidRef.current = sid
+  }, [sessions.activeSessionId])
   // #3: a run belongs to the session that started it. Show the live run + its gate/pending cards ONLY
   // in that session's tab — a run raising a permission gate must NOT steal whatever tab is in front
   // (the "画着图呢，A 的权限门跳到 C" bug). Runs with no sessionId (legacy/direct) show anywhere in the ws.
@@ -187,11 +216,14 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
 
   // Load workspace data for the chat panel
   const [wsInfo, setWsInfo] = useState<WorkspaceInfo | null>(null)
+  // 「允许 LLM 自行决策」(per-workspace):开=工作流不弹选择门,主代理自填门决策。初值随 wsInfo 载入。
+  const [autoDecide, setAutoDecide] = useState(false)
   const reloadWsInfo = useCallback(() => {
     if (!wsPath) { setWsInfo(null); return }
     void window.forge.getWorkspace(wsPath).then((ws: WorkspaceInfo | null) => setWsInfo(ws))
   }, [wsPath])
   useEffect(() => { reloadWsInfo() }, [reloadWsInfo])
+  useEffect(() => { setAutoDecide(!!wsInfo?.autoDecide) }, [wsInfo])
   useEffect(() => {
     const off = window.forge.onWorkspacesChanged?.(() => reloadWsInfo())
     return () => { off?.() }
@@ -678,6 +710,15 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                 />
               )
             })}
+            {chat.asks.map(a => (
+              <ReqCard
+                key={a.id}
+                action={a.options && a.options.length
+                  ? { id: a.id, kind: 'select', agentId: 'delegate', agentName: a.agentName ?? '委派子代理', wsName, provider: 'claude', title: a.title, options: a.options }
+                  : { id: a.id, kind: 'input', agentId: 'delegate', agentName: a.agentName ?? '委派子代理', wsName, provider: 'claude', title: a.title }}
+                onResolve={(p) => chat.resolveAsk({ id: p.id, decision: p.decision === 'deny' ? 'deny' : 'allow', value: p.value, choice: p.choice })}
+              />
+            ))}
           </div>
         </div>
         {chat.queue.length > 0 && (
@@ -700,6 +741,13 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             <button className="supplement-cancel" onClick={() => setPendingSupplement(null)}>取消</button>
           </div>
         )}
+        {pendingSwitch && (
+          <div className="supplement-banner switch-banner">
+            <span>当前对话由 <b>{providerLabel(pendingSwitch.from)}</b> 执行。切换到 <b>{providerLabel(pendingSwitch.to)}</b> 会丢失原生上下文；确认后将由 {providerLabel(pendingSwitch.to)} 读取并总结已有对话（会花一些 token）再继续。</span>
+            <button className="supplement-ok" onClick={confirmSwitch}>确认切换</button>
+            <button className="supplement-cancel" onClick={() => setPendingSwitch(null)}>取消</button>
+          </div>
+        )}
         <Composer
           providers={providers}
           disabled={!wsPath || !!archived}
@@ -719,7 +767,21 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           selection={selection}
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
+          autoDecide={autoDecide}
+          onToggleAutoDecide={() => {
+            const next = !autoDecide
+            setAutoDecide(next)
+            if (wsPath) window.forge.wsSetAutoDecide?.({ workspacePath: wsPath, value: next })
+          }}
           onSelectionChange={(s) => {
+            // Provider switch guard: agent changed AND the old provider already ran this session → don't
+            // switch yet; raise a confirm banner (switch loses native context; the new provider will
+            // summarize prior conversation, spending some tokens). Model-only changes pass through.
+            const cur = selection?.agentId
+            if (cur && s.agentId !== cur && chat.messages.some(m => m.who === 'ai' && m.provider === cur)) {
+              setPendingSwitch({ from: cur, to: s.agentId, toModel: s.modelId, permissionMode: s.permissionMode })
+              return
+            }
             setSelection(s)
             const sid = sessions.activeSessionId
             if (wsPath && sid) {
