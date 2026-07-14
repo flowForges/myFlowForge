@@ -170,6 +170,13 @@ const NAV: NavEntry[] = [
     ),
   },
   {
+    key: 'memory',
+    label: '记忆',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M9.5 4a3 3 0 0 0-3 3 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 3 3 2.5 2.5 0 0 0 2.5-2.5V6.5A2.5 2.5 0 0 0 9.5 4z" /><path d="M12 6.5A2.5 2.5 0 0 1 14.5 4a3 3 0 0 1 3 3 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-3 3 2.5 2.5 0 0 1-2.5-2.5" /></svg>
+    ),
+  },
+  {
     key: 'debug',
     label: '调试日志',
     icon: (
