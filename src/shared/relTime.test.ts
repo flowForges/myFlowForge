@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fmtRelTime, fmtMsgTime, fmtMsgTimeFull } from './relTime'
+import { fmtRelTime, fmtMsgTime, fmtMsgTimeFull, fmtLogClock } from './relTime'
 
 // Fixed "now": 2026-06-15 14:30:00 local time.
 const NOW = new Date(2026, 5, 15, 14, 30, 0).getTime()
@@ -56,6 +56,24 @@ describe('fmtMsgTime', () => {
   })
   it('empty timestamp → empty string', () => {
     expect(fmtMsgTime('', NOW)).toBe('')
+  })
+})
+
+describe('fmtLogClock', () => {
+  const p = (n: number) => String(n).padStart(2, '0')
+  // 工作流面板里每条执行日志的 ts 是 provider 存的 UTC 时钟(toISOString().slice(11,19)),
+  // 直接渲染会差一个时区偏移(用户报"右侧工作流阶段时间不对")。按 UTC 解释再转本地 HH:MM:SS。
+  it('UTC clock-only "HH:MM:SS" → local HH:MM:SS', () => {
+    const u = new Date(Date.UTC(1970, 0, 1, 7, 22, 9))
+    expect(fmtLogClock('07:22:09')).toBe(`${p(u.getHours())}:${p(u.getMinutes())}:${p(u.getSeconds())}`)
+  })
+  it('full ISO instant → local HH:MM:SS', () => {
+    const d = new Date(2026, 5, 15, 9, 5, 7)
+    expect(fmtLogClock(d.toISOString())).toBe(`${p(9)}:${p(5)}:${p(7)}`)
+  })
+  it('empty / unrecognized pass through', () => {
+    expect(fmtLogClock('')).toBe('')
+    expect(fmtLogClock('warming up')).toBe('warming up')
   })
 })
 

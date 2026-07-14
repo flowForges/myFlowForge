@@ -20,11 +20,13 @@
   background-size: cover; background-position: center; background-repeat: no-repeat;
   opacity: var(--app-bg-opacity, .35);
 }
-/* 壁纸开着时(app / chat 范围),会话区正文都叠在图上;给正文与元信息加一层与主题底色同色的极淡描边,
-   即使把可见度调高、图较亮时,深色系(浅字)/浅色系(深字)都能和背景拉开对比。 */
+/* 壁纸开着时(app / chat 范围),会话区正文都叠在图上;给正文与元信息加一层极淡的同色投影,拉开与背景的
+   对比。原来用的是不透明底色 + 一圈全向 0 0 1px 光晕(text-shadow: … , 0 0 1px var(--bg)),在浅色壁纸上
+   看起来像字周围裹了一层"白色阴影"、发虚。改为单条半透明、有方向的柔投影:高可见度壁纸下仍保证可读,平时
+   几乎不可见,不再有白边光晕。 */
 html[data-bg-scope="app"] .msg-body, html[data-bg-scope="chat"] .msg-body,
 html[data-bg-scope="app"] .msg-who,  html[data-bg-scope="chat"] .msg-who {
-  text-shadow: 0 1px 2px var(--bg), 0 0 1px var(--bg);
+  text-shadow: 0 1px 3px color-mix(in oklab, var(--bg) 45%, transparent);
 }
 /* overflow-x must be set explicitly: with only overflow-y:auto, CSS computes overflow-x to `auto`
    too, so any child wider than .chat-inner makes the column scroll sideways (and the hidden
@@ -42,7 +44,10 @@ html[data-bg-scope="app"] .msg-who,  html[data-bg-scope="chat"] .msg-who {
 .msg-ava.user { background: var(--surface-2); color: var(--fg-2); }
 .msg-ava.ai { background: var(--accent); color: var(--on-accent); }
 .msg-who { font-size: 12.5px; font-weight: 600; }
-.msg-model { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-left: auto; }
+/* Role/attribution label (e.g. 「系统」「Claude Code · 转述」) sits at the TOP-LEFT of the message it
+   describes, so it visibly belongs to the reply below it (was right-pushed via margin-left:auto, which
+   detached it from its message). */
+.msg-model { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-left: 0; margin-right: auto; }
 /* 会话区正文字号 = 14px × 会话区缩放(设置·外观·会话区字号,独立于应用界面字号)。 */
 .msg-body { font-size: calc(14px * var(--chat-font-scale, 1)); line-height: 1.62; color: var(--fg-2); }
 .msg-body p { margin-bottom: 10px; }

@@ -15,6 +15,19 @@ function legacyClockLocal(ts: string): { h: number; m: number; s: number } | nul
   return { h: u.getHours(), m: u.getMinutes(), s: u.getSeconds() }
 }
 
+// Agent/provider execution-log clock. Providers mint each log line's `ts` as new Date().toISOString()
+// .slice(11,19) — a bare UTC "HH:MM:SS" with no date — so rendering it raw shows UTC wall-clock, off by
+// the viewer's UTC offset (the right-side workflow phase log looked "wrong timezone"). Correct it to
+// LOCAL HH:MM:SS. Full ISO values are also accepted; anything unrecognized passes through unchanged.
+export function fmtLogClock(ts: string): string {
+  if (!ts) return ''
+  const lc = legacyClockLocal(ts)
+  if (lc) return `${pad2(lc.h)}:${pad2(lc.m)}:${pad2(lc.s)}`
+  const d = new Date(ts)
+  if (!isNaN(d.getTime())) return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+  return ts
+}
+
 // Chat message timestamp label. `ts` is an ISO timestamp — rendered in LOCAL time, with a date prefix for
 // older days: today → just HH:MM; 昨天/前天 → prefix + HH:MM; older → date + HH:MM (M月D日, or YYYY/M/D
 // across years). Legacy UTC clock-only values (no date) are timezone-corrected to local HH:MM via

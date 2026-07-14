@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AgentRuntime } from '@shared/types'
+import { fmtLogClock } from '@shared/relTime'
 import { AgentContextMeta } from './AgentContextMeta'
 import { useStickToBottom } from './useStickToBottom'
 
@@ -165,7 +166,7 @@ export function AgentNode({ agent, open: openProp, onToggle, onViewLog }: AgentN
                 const isLast = i === agent.logs.length - 1
                 return (
                   <div key={i} className={`log-line${lvlCls ? ' ' + lvlCls : ''}${kindCls ? ' ' + kindCls : ''}`}>
-                    <span className="tk">{line.ts}</span>
+                    <span className="tk">{fmtLogClock(line.ts)}</span>
                     <span className={`tx${lvlCls ? ' ' + lvlCls : ''}`}>
                       {kindIcon && <span className="k-ic">{kindIcon} </span>}
                       {line.text}
