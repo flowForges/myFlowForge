@@ -77,6 +77,9 @@
 .plan-stage-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 13px; }
 .plan-stage-row { border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; background: var(--surface-2); }
 .plan-stage-row.off { opacity: .5; }
+/* Hooks are woven between stages — indent + dashed border so they read as attached, not top-level. */
+.plan-hook-row { margin-left: 20px; border-style: dashed; background: transparent; }
+.plan-hook-row .plan-stage-meta { color: var(--accent, var(--muted)); font-weight: 600; letter-spacing: .04em; }
 .plan-stage-head { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; }
 .plan-stage-head input { cursor: pointer; }
 .plan-stage-name { font-weight: 600; color: var(--fg); }

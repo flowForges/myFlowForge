@@ -107,10 +107,34 @@ describe('PlanCard', () => {
     expect(select).toBeTruthy()
     expect(select.value).toBe('full')
     const optionLabels = Array.from(select.options).map(o => o.textContent)
-    expect(optionLabels).toEqual(['临时/自定义(ad-hoc)', '快速修复', '完整流程'])
+    expect(optionLabels).toEqual(['临时/自定义(ad-hoc)', '快速修复', '完整流程 (推荐)'])
     fireEvent.change(select, { target: { value: 'quick' } })
     expect(onSwitchWorkflow).toHaveBeenCalledWith('quick')
     fireEvent.change(select, { target: { value: '' } })
     expect(onSwitchWorkflow).toHaveBeenCalledWith(undefined)
+  })
+
+  it('renders hooks woven into the step list and drops an unticked hook from the approved selection', () => {
+    const onResolve = vi.fn()
+    const req: PlanReq = {
+      ...base,
+      stages: [{ key: 'develop', name: '开发', agents: 1, perProject: false, projects: [] }],
+      hooks: [{ id: 'h1', name: '规范检查', after: 'develop' }, { id: 'w1', name: '收尾', after: '__wf' }],
+    }
+    const { container } = render(<PlanCard req={req} onResolve={onResolve} />)
+    expect(container.querySelectorAll('.plan-hook-row')).toHaveLength(2)
+    expect(screen.getByText('规范检查')).toBeInTheDocument()
+    const h1Box = screen.getByText('规范检查').closest('label')!.querySelector('input[type=checkbox]') as HTMLInputElement
+    fireEvent.click(h1Box)   // untick 规范检查
+    fireEvent.click(screen.getByText('批准并执行'))
+    expect(onResolve.mock.calls[0][0].selection.hooks).toEqual(['w1'])
+  })
+
+  it('marks the agent-detected workflow with (推荐) in the switch dropdown', () => {
+    const req: PlanReq = { ...base, workflowId: 'full', workflowName: '完整流程', workflowOptions: [{ id: 'full', name: '完整流程' }, { id: 'quick', name: '快速' }] }
+    const { container } = render(<PlanCard req={req} onResolve={() => {}} />)
+    const labels = Array.from((container.querySelector('.plan-workflow-switch') as HTMLSelectElement).options).map(o => o.textContent)
+    expect(labels).toContain('完整流程 (推荐)')
+    expect(labels).toContain('快速')
   })
 })
