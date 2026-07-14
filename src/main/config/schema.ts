@@ -220,6 +220,11 @@ export const KeybindingsSchema = z.object({
 }).default(() => ({ overrides: {} }))
 export type Keybindings = z.infer<typeof KeybindingsSchema>
 
+// 记忆功能总开关。默认开(保持现有三层记忆行为);关闭是非破坏性的——只暂停读(注入前言)与写
+// (蒸馏),磁盘上的 system.md/workspace.md/session summary 原样保留。用对象包裹便于将来加子标志。
+export const MemorySchema = z.object({ enabled: z.boolean().catch(true).default(true) })
+export const defaultMemory = (): z.infer<typeof MemorySchema> => ({ enabled: true })
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
   notifications: NotificationsSchema.default(defaultNotifications),
@@ -259,6 +264,7 @@ export const SettingsSchema = z.object({
   // Which gated items have been installed → their local ref (bg: forge-bg:// URL; pet: local customPets
   // id). Drives the 安装/设置 button state; a missing/deleted local file just re-downloads on 设置.
   nsfwInstalled: z.record(z.string(), z.string()).catch({}).default({}),
+  memory: MemorySchema.default(defaultMemory),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -282,6 +288,7 @@ export const defaultSettings = (): Settings => ({
   nsfwUnlocked: false,
   nsfwCode: '',
   nsfwInstalled: {},
+  memory: { enabled: true },
 })
 
 export const ProjectSchema = z.object({
@@ -417,6 +424,8 @@ export const WorkspaceSchema = z.object({
   stages: z.array(WsStageSchema).default(() => []),    // legacy:老文件的单工作流已解析阶段(迁移种子)
   workflows: z.array(WsWorkflowSchema).default(() => []),  // 新:一组命名工作流,各自固化阶段
   projects: z.array(WsProjectSchema),                 // selected projects + per-project develop provider/model
+  // 建区目的:用户创建向导里可填的一句「想做什么」。作为工作区记忆 `## 建区目的` 的种子(见 seedPurposeMemory)。
+  purpose: z.string().default(''),
   status: z.enum(['idle', 'run', 'ok', 'err']).default('idle'),
   plugins: z.array(PluginSchema).default(() => []),   // workspace-level plugins (run after every stage)
   stepPlugins: z.array(PluginSchema).default(() => []), // stage-scoped plugins (keyed by plugin.after)

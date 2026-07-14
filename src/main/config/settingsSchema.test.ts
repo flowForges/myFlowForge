@@ -54,6 +54,14 @@ describe('SettingsSchema skills + pet', () => {
     const parsed = SettingsSchema.parse({ appearance: { theme:'dark', accent:'blue', vibrancy:true, glass:false, density:'comfortable', fontSize:'medium' }, termProxy:'' })
     expect(parsed.terminal.fontSize).toBe(12.5)
   })
+  it('memory defaults to enabled; parses off; old files without memory default on', () => {
+    const base = defaultSettings()
+    expect(base.memory).toEqual({ enabled: true })
+    expect(SettingsSchema.parse({ ...base }).memory.enabled).toBe(true)
+    expect(SettingsSchema.parse({ ...base, memory: { enabled: false } }).memory.enabled).toBe(false)
+    const old = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, termProxy: '' })
+    expect(old.memory.enabled).toBe(true)
+  })
   it('defaults app icon to the fourth colorway and menu bar off', () => {
     const s = defaultSettings()
     expect(s.appIcon.dockIcon).toBe('ember-violet')
