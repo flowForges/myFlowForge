@@ -102,6 +102,9 @@ export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, 
           <button className="wf-pick" style={{ fontSize: 11, padding: '2px 8px' }} onClick={load}>刷新</button>
         </div>
         <p className="set-desc">已激活的额外宠物与背景图。「安装」= 首次下载并应用;「设置」= 已下载过,直接应用(本地图不在了会自动重下)。</p>
+        <p className="set-desc" style={{ color: 'var(--faint)', fontSize: 11 }}>
+          免责声明:以上图片均来源于网络,版权归原作者所有,仅供个人私下学习交流使用,请勿传播或用于商业用途;如涉及侵权请联系删除。使用者须自行确保符合当地法律法规。
+        </p>
         {err && <p className="set-desc" style={{ color: 'var(--del, var(--err))' }}>{err}</p>}
         {!catalog && <p className="set-desc">加载中…</p>}
       </div>
