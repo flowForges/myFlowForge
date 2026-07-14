@@ -58,4 +58,17 @@ describe('runDelegate', () => {
     expect(r.per[0].project).toBe('workspace')
     expect(r.text).toContain('root done')
   })
+
+  it('权限盾牌下沉:write=false→子代理 readonly;write=true→用会话盾牌', async () => {
+    const seen: Record<string, string | undefined> = {}
+    const provider: AgentProvider = {
+      id: 'fake', displayName: 'F', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(task, cb) { seen[task.name] = task.permissionMode; cb.onHandoff?.({ summary: 'ok' }); cb.onDone({ ok: true }); return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true } as AgentResult) } },
+    }
+    await makeRunDelegate(deps(provider, ws(['a'])))({ workspacePath: '/ws', task: 't', write: false, provider: 'fake', model: 'm' })
+    expect(seen['a']).toBe('readonly')
+    await makeRunDelegate(deps(provider, ws(['b'])))({ workspacePath: '/ws', task: 't', write: true, permissionMode: 'full', provider: 'fake', model: 'm' })
+    expect(seen['b']).toBe('full')
+  })
 })

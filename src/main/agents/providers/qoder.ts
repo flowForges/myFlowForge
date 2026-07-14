@@ -58,7 +58,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
           // `--verbose` — passing it makes qodercli print usage and exit with NO stdout
           // (→ "nothing returned"). So we must omit --verbose here.
           '--include-partial-messages',
-          '--permission-mode', 'accept_edits',
+          ...permissionArgs('qoder', task.permissionMode ?? 'auto'),
           '--dangerously-skip-permissions',
           '--cwd', task.cwd,
           ...(task.model && task.model !== 'default' ? ['-m', task.model] : []),

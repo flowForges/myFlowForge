@@ -125,7 +125,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
       const args = spec.preArgs
         ? [...spec.preArgs]
-        : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', '-c', 'sandbox_mode="workspace-write"', '-c', 'approval_policy="never"', ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
+        : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
       // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
       let buf = ''

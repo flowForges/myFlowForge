@@ -20,6 +20,9 @@ export interface AgentTask {
   model: string
   allowedTools?: string[]
   skills?: string[]
+  // Permission shield inherited from the initiating chat session (dual-path design). Absent →
+  // provider default (treated as 'auto' = workspace-write/acceptEdits, the historical run behavior).
+  permissionMode?: import('@shared/permissions').PermissionMode
 }
 export interface AgentCallbacks {
   onLog(line: LogLine): void
