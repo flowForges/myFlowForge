@@ -18,6 +18,8 @@ export interface BridgeRunCtx {
   setContext(key: string, value: unknown): void
   onBeat?(agentId: string): void
   proposePlan?(approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }): Promise<{ approved: boolean; feedback?: string }>
+  // Lightweight delegation (chat-only): run sub-agents against target projects and return a summary.
+  delegate?(args: { task: string; projects?: string[]; write?: boolean }): Promise<{ text: string }>
 }
 
 export interface ForgeBridge {
@@ -194,6 +196,13 @@ async function dispatch(
         stageProjects: args.stageProjects as Record<string, string[]> | undefined,
       })
       appendAudit(ctx, agentId, 'status', { approach: args.approach, approved: r.approved }, [])
+      return r
+    }
+
+    case 'delegate': {
+      if (!ctx.delegate) throw new Error('delegate not supported')
+      const r = await ctx.delegate({ task: args.task as string, projects: args.projects as string[] | undefined, write: args.write as boolean | undefined })
+      appendAudit(ctx, agentId, 'status', { task: args.task }, [])
       return r
     }
 
