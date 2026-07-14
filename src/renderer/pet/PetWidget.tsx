@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react'
 import type { Pet, PetState, Anim, Accent } from '@shared/types'
 import { petSrc } from './petSrc'
+import { usePetImageTransition } from './usePetImageTransition'
 
 const SPRITE_SVG: ReactElement = (
   <svg viewBox="0 0 64 64">
@@ -43,8 +44,11 @@ interface PetWidgetProps {
 export function PetWidget({ skin, anim, accent, state, customImages, customEmoji }: PetWidgetProps) {
   const cls = `pet pet-anim-${anim} pet-accent-${accent}`
   const customSrc = customImages?.[state ?? 'idle'] ?? customImages?.idle
+  const requestedSrc = petSrc(customSrc)
+  const candidates = [...new Set(Object.values(customImages ?? {}).map(value => petSrc(value)).filter((value): value is string => Boolean(value)))]
+  const imageLayers = usePetImageTransition(requestedSrc, candidates)
   const [brokenSrc, setBrokenSrc] = useState<string | null>(null)
-  useEffect(() => { setBrokenSrc(null) }, [customSrc])
+  useEffect(() => { setBrokenSrc(null) }, [requestedSrc])
   // Real orbiting stars for the sparkle anim (a box-shadow ::after just clones the 88px box → big rings)
   const stars = anim === 'sparkle'
     ? (
@@ -57,14 +61,18 @@ export function PetWidget({ skin, anim, accent, state, customImages, customEmoji
     : null
   if (skin === 'custom') {
     // A single-image pet stores only images.idle — every other state falls back to it.
-    const src = customSrc
-    if (src && brokenSrc !== src) {
+    if (requestedSrc && brokenSrc !== requestedSrc && !imageLayers.failed.has(requestedSrc) && imageLayers.front) {
       return (
         <div className={cls} data-skin="custom">
           {/* draggable=false + onDragStart preventer: an <img> is natively drag-and-droppable, so
               press-dragging the pet would otherwise start an OS image drag (ghost image, drops a file
               on the desktop) instead of our own window drag. */}
-          <img src={petSrc(src)} alt="" draggable={false} onDragStart={e => e.preventDefault()} onError={() => setBrokenSrc(src)} />
+          <span className="pet-image-stack">
+            {imageLayers.fading && imageLayers.fading !== brokenSrc && (
+              <img className="pet-image-fading" src={imageLayers.fading} alt="" draggable={false} onDragStart={e => e.preventDefault()} onError={() => setBrokenSrc(imageLayers.fading!)} />
+            )}
+            <img className="pet-image-front" src={imageLayers.front} alt="" draggable={false} onDragStart={e => e.preventDefault()} onError={() => setBrokenSrc(imageLayers.front!)} />
+          </span>
           {stars}
         </div>
       )
