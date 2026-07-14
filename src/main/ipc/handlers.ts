@@ -52,6 +52,7 @@ import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspa
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
 import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
 import { makeProposeRun } from '../chat/proposeRun'
+import { makeRunDelegate } from '../chat/delegate'
 import { isResumeIntent } from '../chat/workflowIntent'
 import { makeProposeGuard } from '../chat/proposeGuard'
 import { readPetPack, readPetImage } from '../pet/petPack'
@@ -497,6 +498,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     setSessionMode: (wp, mode, runId) => { setSessionMode(wp, readSessions(wp).activeSessionId, mode, runId) },
     emitModeChanged: (wp, mode, runId) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'mode-changed', mode, runId }),
   })
+  // Lightweight delegation (path A): the chat agent dispatches sub-agents into projects without the
+  // workflow gate. Shares providers/mcpEntry with the orchestrator; runs are ephemeral (no run slot).
+  const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().termProxy, mcpEntry, readWorkspace })
   // Task 12: the approval card's workflow-switch dropdown re-proposes the SAME task/approach under a
   // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
   // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
@@ -540,12 +544,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         // #1: carry the chat's currently-selected main agent as this run's provider override.
         return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
       },
+      delegate: (a: { task: string; projects?: string[]; write?: boolean }) =>
+        runDelegate({ workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, provider: payload.agent, model: payload.model }),
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
     // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude
     // path instead gets this via ensureWorkspaceSkill's appended SKILL.md section.
     const chatWs = readWorkspace(payload.workspacePath)
-    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan', FORGE_WORKFLOWS: JSON.stringify((chatWs?.workflows ?? []).map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(s => ({ key: s.key, name: s.name })) }))) } : undefined })
+    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan,forge_delegate', FORGE_WORKFLOWS: JSON.stringify((chatWs?.workflows ?? []).map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(s => ({ key: s.key, name: s.name })) }))) } : undefined })
     // Snapshot proposes already pending for this workspace before the turn — those belong to earlier
     // turns (fire-and-forget auto-triggers the user hasn't acted on yet) and must survive this turn.
     const preProposes = new Set(proposeRun.pendingIds(payload.workspacePath))
