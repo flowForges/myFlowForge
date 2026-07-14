@@ -10,19 +10,13 @@ describe('petSrc', () => {
     expect(url).toMatch(/idle.*\.png/)
   })
 
-  it('maps every built-in pet/state to a bundled asset', () => {
-    for (const id of ['china-dragon', 'white-catgirl', 'rocket-fox', 'phoenix', 'cyber-jellyfish']) {
+  it('maps every built-in pet/state animated webp to a bundled asset', () => {
+    for (const id of ['china-dragon', 'white-catgirl', 'pink-catgirl', 'rocket-fox', 'phoenix', 'cyber-jellyfish']) {
       for (const state of ['idle', 'working', 'confirm', 'input', 'done']) {
-        expect(builtinAssetUrl(`builtin/${id}/png/${state}.png`), `${id}/${state}`).toBeTruthy()
+        const stored = `builtin/${id}/webp/${state}.webp`
+        expect(builtinAssetUrl(stored), `${id}/${state}`).toBeTruthy()
+        expect(petSrc(stored), `${id}/${state}`).not.toContain('forge-pet://')
       }
-    }
-  })
-
-  it('bundles the pink catgirl animated webp states', () => {
-    for (const state of ['idle', 'working', 'confirm', 'input', 'done']) {
-      const stored = `builtin/pink-catgirl/webp/${state}.webp`
-      expect(builtinAssetUrl(stored), state).toBeTruthy()
-      expect(petSrc(stored), state).not.toContain('forge-pet://')
     }
   })
 

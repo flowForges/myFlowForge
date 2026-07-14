@@ -16,15 +16,10 @@ const NAME: Record<BuiltinPetId, string> = {
 
 export const DEFAULT_BUILTIN_PET_ID: BuiltinPetId = 'china-dragon'
 
-// Legacy packs use the per-state static PNGs (png/<state>.png), not their generated GIF animations: those
-// subject through a large 256px canvas ("大幅漂浮"/"8字飞"), so most frames — including the first, which
-// is what a thumbnail and a paused <img> show — have the pet tiny or off-frame and read as blank. The
-// PNGs are full, centered, per-state poses; the pet's own CSS animations supply motion. Packs authored as
-// real frame animation (currently pink-catgirl) opt into their animated WebP assets instead.
+// All built-ins are authored as real frame animation. Animated WebP preserves alpha and color while
+// remaining small enough to bundle directly through Vite; GIF and APNG stay available as fallbacks.
 export function builtinPetImagePath(id: BuiltinPetId, state: PetState): string {
-  return id === 'pink-catgirl'
-    ? `builtin/${id}/webp/${state}.webp`
-    : `builtin/${id}/png/${state}.png`
+  return `builtin/${id}/webp/${state}.webp`
 }
 
 export function builtinPets(): CustomPetCfg[] {
