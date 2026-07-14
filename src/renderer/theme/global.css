@@ -47,6 +47,15 @@ html[data-bg-scope="app"] {
   --border: color-mix(in oklab, var(--fg) 14%, transparent);
   --border-2: color-mix(in oklab, var(--fg) 24%, transparent);
 }
+/* 「整个应用」范围:把侧栏 / 检视区 / 标题栏 / 状态栏这些原本不透明的 chrome 面板改成半透明磨砂,让底层
+   壁纸真正透出整个窗口(而不是只在中间会话区显示,四周面板挡住)。玻璃(磨砂)模式有自己的一套,排除。 */
+html[data-bg-scope="app"]:not([data-glass="on"]) .sidebar,
+html[data-bg-scope="app"]:not([data-glass="on"]) .inspector,
+html[data-bg-scope="app"]:not([data-glass="on"]) .titlebar,
+html[data-bg-scope="app"]:not([data-glass="on"]) .statusbar {
+  background: color-mix(in srgb, var(--bg-2) 62%, transparent);
+  backdrop-filter: blur(7px) saturate(1.08);
+}
 
 .body { flex: 1; display: flex; min-height: 0; }
 .titlebar { flex: 0 0 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
