@@ -131,6 +131,7 @@ export interface AgentSessionInfo {
   sessionId: string
   status: 'ok' | 'run' | 'idle'
   lastActiveAt: string
+  depth?: number   // 0/undefined = 顶层(主 Agent / 工作流 stage);1 = 委派子代理(面板缩进表达父子层级)
 }
 // A built-in Task sub-agent the main chat agent spawned this turn, surfaced as a card in the chat
 // stream so the user can see it exist / run / finish (the sub-agent runs in a child process, so we
@@ -205,9 +206,12 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta }
   | { type: 'confirm-request'; id: string; title: string; where?: string }
   | { type: 'confirm-resolved'; id: string }
+  // A delegate sub-agent's forge_ask, surfaced as a select (options) / input (no options) card.
+  | { type: 'ask-request'; id: string; title: string; options?: { t: string; d: string }[]; agentName?: string }
+  | { type: 'ask-resolved'; id: string }
   | { type: 'done'; message: ChatMessage }
   | { type: 'subagent'; id: string; sub: SubagentCard }
-  | { type: 'plan-request'; id: string; approach: string; stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }
+  | { type: 'plan-request'; id: string; approach: string; stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]; hooks: { id: string; name: string; after: string }[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[]; recommendReason?: string }
   | { type: 'plan-resolved'; id: string }
   | { type: 'mode-changed'; mode: 'chat' | 'workflow'; runId?: string }
   | { type: 'error'; id: string; error: string }

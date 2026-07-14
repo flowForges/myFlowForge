@@ -2,7 +2,6 @@ import { existsSync } from 'node:fs'
 import { appendMessage, readMessages, readSession, readWatermark, writeSession, writeWatermark } from './chatStore'
 import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard } from '@shared/types'
-import { createRunFenceScanner } from '../agents/runFence'
 import { buildMemoryPreamble } from './memory/preamble'
 import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
 import { distillSession, promoteToWorkspace, promoteToSystem, type DistillDeps } from './memory/distiller'
@@ -21,7 +20,6 @@ export interface SendTurnDeps {
   env: NodeJS.ProcessEnv
   emit: (e: ChatEvent) => void
   confirm?: (req: ConfirmReq) => Promise<'allow' | 'deny'>
-  onRunTrigger?: (workspacePath: string, task: string) => void
   onSessionStart?: (session: AgentSession) => void
 }
 
@@ -168,19 +166,11 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       // Fold in skills the agent explicitly NAMED in its reply (home/plugin skills the workspace scan +
       // path-regex miss, e.g. superpowers/brainstorming) so the context panel reflects what it used.
       context = mergeAgentContext(context, { skills: mentionedSkills(text + '\n' + think, cachedInstalledSkills()), rules: [], mcps: [] })
-      // Scan the full assistant text for a forge:run fence: strip it from the displayed text and,
-      // if a valid task was found, trigger the workspace's configured workflow run.
-      const trigger: { task: string | null } = { task: null }
-      const scanner = createRunFenceScanner((t) => { trigger.task = t })
-      const cleanedLines: string[] = []
-      for (const line of text.split('\n')) cleanedLines.push(...scanner.feedLine(line))
-      cleanedLines.push(...scanner.flush())
-      const cleaned = cleanedLines.join('\n')
-      dbgFinal(cleaned)
+      dbgFinal(text)
 
       const steps = think.split('\n').map(s => s.trim()).filter(Boolean)
       const msg: ChatMessage = {
-        id: aid, who: 'ai', text: cleaned, model: label, provider: payload.agent, ts: now(),
+        id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(),
         think: steps.length ? { label: '已思考', elapsed, steps } : undefined,
         context,
         usage: lastUsage,
@@ -189,7 +179,6 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       appendMessage(ws, sid, msg)
       bumpWatermark()
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
-      if (trigger.task) deps.onRunTrigger?.(ws, trigger.task)
       scheduleDistill()
       return msg
     }

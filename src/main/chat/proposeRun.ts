@@ -4,7 +4,7 @@ import type { StartRunOpts } from '../orchestrator/orchestrator'
 import type { RunState } from '@shared/types'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from '../workspace/resolveStages'
-import { planStages, type PlanStageInfo } from '../workspace/planSummary'
+import { planStages, planHooks, type PlanStageInfo, type PlanHookInfo } from '../workspace/planSummary'
 import { indexCustomStages, type CustomStageDef } from '../../shared/customStages'
 
 export interface ProposeDeps {
@@ -16,7 +16,7 @@ export interface ProposeDeps {
   readCustomStages?: () => CustomStageDef[]
   writeWorkspace: (ws: Workspace) => void
   startRun: (o: StartRunOpts) => void
-  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: PlanStageInfo[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }) => void
+  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: PlanStageInfo[]; hooks: PlanHookInfo[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[]; recommendReason?: string }) => void
   emitNote: (wsPath: string, text: string) => void
   // #1: after an approved chat-triggered run starts, flip the triggering session to workflow mode
   // (setSessionMode bridges to the active session via the 2A sessionStore) and tell the renderer.
@@ -26,9 +26,10 @@ export interface ProposeDeps {
 export type PlanDecision = {
   decision: 'allow' | 'deny' | 'modify'
   value?: string
-  // On 'allow': the user's edits from the approval card — run only these stages, and scope each
-  // per-project stage to these projects. Absent → run exactly what the agent proposed.
-  selection?: { stages: string[]; stageProjects: Record<string, string[]> }
+  // On 'allow': the user's edits from the approval card — run only these stages, scope each
+  // per-project stage to these projects, and run only these hooks (by id). Absent → run exactly
+  // what the agent proposed. `hooks` absent (old client) → keep all hooks; [] → drop all hooks.
+  selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }
 }
 export type ProposeResult = { approved: boolean; feedback?: string }
 
@@ -39,7 +40,7 @@ export function makeProposeRun(deps: ProposeDeps) {
   // via chat:repropose-workflow), NOT owned by an agent chat turn. Turn cleanup (cancelForWorkspace) must
   // NOT dismiss it — it lives until the user decides (allow/deny). Without this, a switch's fresh card would
   // be created after the triggering turn's preProposes snapshot and get denied when that turn ends (race).
-  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string }; sessionId?: string }): Promise<ProposeResult> => {
+  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string }; sessionId?: string; brief?: string; recommendReason?: string }): Promise<ProposeResult> => {
     const raw = deps.readWorkspace(wsPath)
     if (!raw) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
     // Defensive: production readWorkspace (config/store.ts) already normalizes workflows on every
@@ -59,6 +60,8 @@ export function makeProposeRun(deps: ProposeDeps) {
     // #3: remember which chat session owns this run so the renderer scopes the run + its gate cards to
     // that session's tab (and only badges other tabs) instead of stealing whatever tab is in front.
     if (select?.sessionId) opts = { ...opts, sessionId: select.sessionId }
+    // P4: 主代理整理的需求简报,随 run 注入每个 stage 子代理 prompt(一份共享)。
+    if (select?.brief) opts = { ...opts, brief: select.brief }
     // #1 run-level provider override: the chat turn that proposed this run carries the main agent the
     // user currently has selected. Apply it to EVERY stage (and every per-project develop agent, which
     // resolves provider from developProjects[].provider) so switching the chat agent — e.g. claude→codex
@@ -96,11 +99,23 @@ export function makeProposeRun(deps: ProposeDeps) {
         return p && p.length ? { ...s, projects: p } : s
       }) }
     }
+    // 「允许 LLM 自行决策」开:跳过工作流选择门,直接用主代理提议(已按 select 裁剪)的 opts 启动。
+    // 只免"要不要弹门选工作流/阶段/hook/项目"这一层;子代理改代码仍受权限盾牌约束(下沉)。
+    if (ws.autoDecide) {
+      const live = deps.getRun()
+      if (live && live.status === 'run') { deps.emitNote(wsPath, '已有运行进行中,稍后再试。'); return Promise.resolve({ approved: false }) }
+      deps.startRun(opts)
+      const runId = deps.getRun()?.id
+      deps.setSessionMode(wsPath, 'workflow', runId)
+      deps.emitNote(wsPath, '已开启 LLM 自动决策 · 直接编排为多代理工作流')
+      deps.emitModeChanged(wsPath, 'workflow', runId)
+      return Promise.resolve({ approved: true })
+    }
     const id = `pl-${Date.now()}-${++seq}`
     // Full set of workflows this workspace has configured, so the approval card can offer a switch
     // dropdown (Task 12) — independent of which one (if any) was actually matched for this proposal.
     const workflowOptions = ws.workflows.map(w => ({ id: w.id, name: w.name }))
-    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), allProjects: opts.developProjects.map(p => p.name), task, workflowId: wf?.id, workflowName: wf?.name, workflowOptions })
+    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), hooks: planHooks(opts), allProjects: opts.developProjects.map(p => p.name), task, workflowId: wf?.id, workflowName: wf?.name, workflowOptions, recommendReason: select?.recommendReason })
     return new Promise<ProposeResult>(resolve => {
       pending.set(id, { wsPath, standalone: select?.standalone === true, resolve: (d) => {
         if (d.decision === 'modify') return resolve({ approved: false, feedback: d.value })
@@ -123,6 +138,12 @@ export function makeProposeRun(deps: ProposeDeps) {
               const p = byStage[s.key]
               return p && p.length ? { ...s, projects: p } : s
             }) }
+          }
+          // Hook selection: run only the hooks the user kept ticked. Absent → keep all (old client);
+          // empty array → drop every hook this run. Filters both woven plugins and __wf stepPlugins.
+          if (sel.hooks) {
+            const wantH = new Set(sel.hooks)
+            runOpts = { ...runOpts, plugins: (runOpts.plugins ?? []).filter(p => wantH.has(p.id)), stepPlugins: (runOpts.stepPlugins ?? []).filter(p => wantH.has(p.id)) }
           }
         }
         deps.startRun(runOpts)

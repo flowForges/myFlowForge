@@ -48,6 +48,42 @@ describe('proposeRun mode flip', () => {
     expect(emitNote).toHaveBeenCalledWith('/w', '识别到任务型指令 · 已自动编排为多代理工作流')
   })
 
+  it('autoDecide=true → 跳过门直接 startRun(不 emitPlanRequest),置 workflow 模式', async () => {
+    const startRun = vi.fn()
+    const emitPlanRequest = vi.fn()
+    const setSessionMode = vi.fn()
+    const emitModeChanged = vi.fn()
+    const deps = mkDeps({ startRun, emitPlanRequest, setSessionMode, emitModeChanged, readWorkspace: () => ({ ...ws, autoDecide: true }) })
+    const propose = makeProposeRun(deps)
+    const r = await propose('/w', '直接干', '直接干')
+    expect(r.approved).toBe(true)
+    expect(emitPlanRequest).not.toHaveBeenCalled()
+    expect(startRun).toHaveBeenCalledTimes(1)
+    expect(setSessionMode).toHaveBeenCalledWith('/w', 'workflow', 'run-42')
+    expect(emitModeChanged).toHaveBeenCalledWith('/w', 'workflow', 'run-42')
+  })
+
+  it('selection.hooks 过滤 opts.plugins 与 __wf stepPlugins(只跑勾选的 hook)', async () => {
+    const startRun = vi.fn()
+    const captured: string[] = []
+    const wsWithHooks = {
+      ...ws,
+      plugins: [
+        { id: 'h1', name: 'A', after: 'develop', prompt: '', skills: [], tools: [] },
+        { id: 'h2', name: 'B', after: 'develop', prompt: '', skills: [], tools: [] },
+      ],
+      stepPlugins: [{ id: 'w1', name: 'W', after: '__wf', prompt: '', skills: [], tools: [] }],
+    }
+    const deps = mkDeps({ startRun, readWorkspace: () => wsWithHooks, emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    const p = propose('/w', 'x', 'x')
+    propose.resolve(captured[0], { decision: 'allow', selection: { stages: ['develop'], stageProjects: {}, hooks: ['h1'] } })
+    await p
+    const opts = startRun.mock.calls[0][0]
+    expect(opts.plugins.map((x: { id: string }) => x.id)).toEqual(['h1'])
+    expect(opts.stepPlugins.map((x: { id: string }) => x.id)).toEqual([])
+  })
+
   it('deny → no startRun, no mode flip, no mode-changed', async () => {
     const startRun = vi.fn()
     const setSessionMode = vi.fn()

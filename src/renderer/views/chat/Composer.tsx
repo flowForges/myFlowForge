@@ -88,10 +88,13 @@ interface Props {
   /** Identifies the current chat (e.g. `${wsPath}::${sessionId}`). The unsent draft (text + attachments)
       is kept PER key, so switching session/workspace hides this draft there and restores it on return —
       instead of one shared draft leaking across every session. */
+  /** 「允许 LLM 自行决策」(per-workspace):开=工作流不弹选择门,主代理自填门决策直接启动。 */
+  autoDecide?: boolean
+  onToggleAutoDecide?: () => void
   draftKey?: string
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands, onPickWorkflow, draftKey }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands, onPickWorkflow, autoDecide, onToggleAutoDecide, draftKey }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -444,6 +447,14 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
               ))}
             </div>
           </div>
+          {/* 「允许 LLM 自行决策」:开=工作流不弹选择门,主代理自填决策直接启动(per-workspace) */}
+          <button
+            className={'cb-btn cb-auto' + (autoDecide ? ' on' : '')}
+            title={autoDecide ? 'LLM 自动决策:开 — 工作流不弹选择门,主代理自填决策直接启动' : 'LLM 自动决策:关 — 工作流会弹门等你确认'}
+            onClick={() => onToggleAutoDecide?.()}
+          >
+            <span>{autoDecide ? '⚡ 自动' : '⚙ 手动'}</span>
+          </button>
           <button className="cb-btn" id="attachBtn" title="附加文件" onClick={pickFiles}>
             {PAPERCLIP}
           </button>

@@ -61,9 +61,12 @@ function executeNowDirective(stageName: string, producesDoc: boolean): string {
 export function buildStagePrompt(
   stageName: string,
   briefs: HandoffBrief[],
-  opts: { textFallback: boolean; task?: string; lens?: ReviewLens; stageKey?: string; stageAppend?: string; reworkNote?: string; producesDoc?: boolean },
+  opts: { textFallback: boolean; task?: string; lens?: ReviewLens; stageKey?: string; stageAppend?: string; reworkNote?: string; producesDoc?: boolean; brief?: string },
 ): string {
   let result = opts.task ? `任务: ${opts.task}\n\n当前阶段: ${stageName}` : stageName
+  // 主代理整理的需求级简报(背景/目标/约束/指定插件),置于最前作为执行上下文——修"工作流不带上下文"。
+  const brief = (opts.brief ?? '').trim()
+  if (brief) result = `【需求简报 — 主代理整理的背景与要求】\n${brief}\n\n` + result
 
   // 返工:用户审阅上一版后「打回重做」并给出的修改方向。以最高优先级明确要求重做整改,而不是复述。
   const rework = (opts.reworkNote ?? '').trim()

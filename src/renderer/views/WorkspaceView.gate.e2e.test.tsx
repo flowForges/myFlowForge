@@ -71,7 +71,7 @@ describe('WorkspaceView gate observability chain (e2e)', () => {
 
     // ── Step 1: plan-request → PlanCard appears (approach + stage chips) ──────
     chatHandler!({
-      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], id: 'pl-1',
+      workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], hooks: [], id: 'pl-1',
       approach: '先建模型再写测试', task: '加评论',
       stages: [{ key: '设计', name: '设计', agents: 2, perProject: false, projects: [] }, { key: '开发', name: '开发', agents: 3, perProject: false, projects: [] }],
     } as ChatEvent)

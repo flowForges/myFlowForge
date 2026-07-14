@@ -25,8 +25,9 @@ import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage } from '../chat/chatStore'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom } from '../chat/sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession } from '../chat/sessionStore'
 import { agentSessionsForId } from '../chat/agentSessions'
+import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ResolvePayload, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, EngineEvent } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
 import type { StartRunOpts } from '../orchestrator/orchestrator'
@@ -52,6 +53,7 @@ import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspa
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
 import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
 import { makeProposeRun } from '../chat/proposeRun'
+import { makeRunDelegate } from '../chat/delegate'
 import { isResumeIntent } from '../chat/workflowIntent'
 import { makeProposeGuard } from '../chat/proposeGuard'
 import { readPetPack, readPetImage } from '../pet/petPack'
@@ -339,6 +341,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
   ipcMain.handle(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
   ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
+  // 「允许 LLM 自行决策」per-workspace 开关:写入 workspace.json,供 proposeRun 读取以决定是否弹门。
+  ipcMain.handle(CH.wsSetAutoDecide, (_e, a: { workspacePath: string; value: boolean }) => {
+    const ws = readWorkspace(a.workspacePath)
+    if (ws) writeWorkspace({ ...ws, autoDecide: a.value })
+  })
   ipcMain.handle(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
     setStageModel(a.path, a.stageKey, a.provider, a.model)
   })
@@ -423,6 +430,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const chatEmit = (e: ChatEvent) => broadcast(CH.chatEvent, e)
   const chatConfirms = new Map<string, (decision: 'allow' | 'deny') => void>()
   let chatConfirmSeq = 0
+  // Chat-side ASK (question + optional options, returns a string) — the delegate bridge routes a
+  // sub-agent's forge_ask here so it surfaces as a select/input ReqCard and the answer flows back.
+  const chatAsks = new Map<string, (r: { decision: 'allow' | 'deny'; value?: string; choice?: number }) => void>()
+  let chatAskSeq = 0
+  const chatAsk = (wsPath: string, sessionId: string, question: string, options?: { t: string; d: string }[], agentName?: string): Promise<string | null> =>
+    new Promise((resolve) => {
+      const id = `ca-${++chatAskSeq}`
+      chatAsks.set(id, (r) => {
+        if (options && options.length) resolve(r.decision === 'deny' ? null : (options[r.choice ?? 0]?.t ?? null))
+        else resolve(r.decision === 'allow' ? (r.value ?? '') : null)
+      })
+      broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'ask-request', id, title: question, options, agentName })
+    })
 
   const emitNote = (wsPath: string, sessionId: string, noteText: string) => {
     const id = `sys-${Date.now()}`
@@ -490,18 +510,22 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     readWorkflows: () => readWorkflows().workflows,
     readCustomStages: () => readCustomStages().stages,
     writeWorkspace,
-    startRun: (o) => { orch.startRun(o).catch(e => console.error('[propose] startRun failed', e)) },
+    startRun: (o) => {
+      // Sink the initiating session's permission shield into the run so stage sub-agents inherit it
+      // (not just the main chat agent). Absent → provider default ('auto'), the historical behavior.
+      const sid = o.sessionId ?? readSessions(o.workspacePath).activeSessionId
+      const permissionMode = o.permissionMode ?? (sid ? getSession(o.workspacePath, sid)?.permissionMode : undefined)
+      orch.startRun({ ...o, permissionMode }).catch(e => console.error('[propose] startRun failed', e))
+    },
     emitPlanRequest: (wp, req) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'plan-request', ...req }),
     emitNote: (wp, text) => emitNote(wp, readSessions(wp).activeSessionId, text),
     // #1: flip the active session's mode + tell the renderer which session switched and to what run.
     setSessionMode: (wp, mode, runId) => { setSessionMode(wp, readSessions(wp).activeSessionId, mode, runId) },
     emitModeChanged: (wp, mode, runId) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'mode-changed', mode, runId }),
   })
-  // The forge:run fence routes through proposeRun too (approach = the fence task text).
-  // standalone: fired at chat-turn end (fire-and-forget); without this it's neither excluded nor
-  // standalone, so the ending turn's cancelForWorkspace(preProposes) kills it in a race — see
-  // proposeRun.ts's `standalone` doc.
-  const onRunTrigger = (wsPath: string, task: string, providerOverride?: { provider: string; model?: string }, sessionId?: string) => { void proposeRun(wsPath, task, task, { standalone: true, ...(providerOverride ? { providerOverride } : {}), sessionId: sessionId ?? readSessions(wsPath).activeSessionId }) }
+  // Lightweight delegation (path A): the chat agent dispatches sub-agents into projects without the
+  // workflow gate. Shares providers/mcpEntry with the orchestrator; runs are ephemeral (no run slot).
+  const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().termProxy, mcpEntry, readWorkspace })
   // Task 12: the approval card's workflow-switch dropdown re-proposes the SAME task/approach under a
   // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
   // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
@@ -539,18 +563,30 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       store, runId: 'chat', workspaceName: payload.workspacePath,
       agentName: () => 'chat', agentStage: () => 'chat',
       ask: async () => null, setContext: () => {},
-      proposePlan: (approach: string, task?: string, select?: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }) => {
+      proposePlan: (approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; brief?: string; recommendReason?: string }) => {
         proposedWorkflow = true
         if (guardBlocked()) { emitNote(payload.workspacePath, payload.sessionId, '已达最大修改次数,请直接批准或取消。'); return Promise.resolve({ approved: false }) }
         // #1: carry the chat's currently-selected main agent as this run's provider override.
         return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
       },
+      delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) =>
+        runDelegate({
+          workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief,
+          provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId,
+          // Register each delegate sub-agent's session for cancellation, so the chat 停止 button kills it.
+          onSession: (s) => chatQueue.registerActive(payload.workspacePath, () => s.cancel()),
+          // Bubble a delegate sub-agent's forge_ask to the user as a chat select/input card (same ReqCard
+          // the workflow gate uses); the answer resolves the sub-agent's blocked forge_ask.
+          ask: (question, options, agentName) => chatAsk(payload.workspacePath, payload.sessionId, question, options, agentName),
+          // Coarse live progress: surface each sub-agent's key log lines as chat notes during the run.
+          onProgress: (name, text) => emitNote(payload.workspacePath, payload.sessionId, `委派·${name}: ${text}`),
+        }),
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
     // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude
     // path instead gets this via ensureWorkspaceSkill's appended SKILL.md section.
     const chatWs = readWorkspace(payload.workspacePath)
-    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan', FORGE_WORKFLOWS: JSON.stringify((chatWs?.workflows ?? []).map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(s => ({ key: s.key, name: s.name })) }))) } : undefined })
+    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan,forge_delegate', FORGE_WORKFLOWS: JSON.stringify((chatWs?.workflows ?? []).map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(s => ({ key: s.key, name: s.name })) }))) } : undefined })
     // Snapshot proposes already pending for this workspace before the turn — those belong to earlier
     // turns (fire-and-forget auto-triggers the user hasn't acted on yet) and must survive this turn.
     const preProposes = new Set(proposeRun.pendingIds(payload.workspacePath))
@@ -560,7 +596,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         env,
         emit: chatEmit,
         confirm,
-        onRunTrigger: (wsPath, task) => { proposedWorkflow = true; onRunTrigger(wsPath, task, { provider: payload.agent, model: payload.model }, payload.sessionId) },
         onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, () => session.cancel()),
       })
       // A forge_propose_plan blocks the turn awaiting the user's decision. If the turn ended (API error /
@@ -630,10 +665,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return file
   })
   ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId))
-  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> }; workspacePath: string }) => {
+  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
     if (proposeRun.has(a.id)) {
       proposeRun.resolve(a.id, { decision: a.decision, value: a.value, selection: a.selection })
       broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'plan-resolved', id: a.id })
+      return
+    }
+    const askResolve = chatAsks.get(a.id)
+    if (askResolve) {
+      chatAsks.delete(a.id)
+      askResolve({ decision: a.decision === 'modify' ? 'deny' : a.decision, value: a.value, choice: a.choice })
+      broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'ask-resolved', id: a.id })
       return
     }
     const resolve = chatConfirms.get(a.id)
@@ -641,6 +683,38 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     chatConfirms.delete(a.id)
     resolve(a.decision === 'modify' ? 'deny' : a.decision)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
+  })
+  // Provider-switch context summary: after the user confirms switching agent mid-session, the NEW
+  // provider reads the prior conversation and produces a visible summary message (provider = toAgent,
+  // so the timeline auto-inserts a provider-switch divider above it: old agent's msgs → summary).
+  ipcMain.handle(CH.chatSwitchSummary, async (_e, a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => {
+    const provider = providers[a.toAgent] ?? providers['claude']
+    if (!provider?.chat) return
+    const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
+    if (!msgs.length) return
+    const env = buildAgentEnv({ proxy: readSettings().termProxy })
+    const model = distillModelFor(a.toAgent) ?? a.model
+    const id = `switch-sum-${Date.now()}`
+    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-start', id, model: '上下文总结' })
+    const transcript = msgs.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${m.text}`).join('\n')
+    const prompt = [
+      '你即将接手这段对话。先把下面的历史对话读一遍,用中文简要总结:用户目标、已确定的决策/方案、关键事实与当前进展,以便你带着上下文继续下去。',
+      '历史对话:', transcript, '\n只输出总结正文,不要解释,不要提"以下是总结"之类的话。',
+    ].join('\n')
+    let acc = ''
+    await new Promise<void>((resolve) => {
+      provider.chat!({ id, prompt, model, cwd: a.workspacePath }, {
+        onSession: () => {},
+        onAssistantDelta: (t) => { acc += t; broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-delta', id, text: t }) },
+        onThinkDelta: () => {},
+        onDone: () => resolve(),
+        onError: () => resolve(),
+      }, env)
+    })
+    const body = acc.trim()
+    const note: ChatMessage = { id, who: 'ai', text: body ? `【上下文总结 · 由 ${provider.displayName} 生成】\n${body}` : '(未能生成上下文总结,可直接继续对话)', model: '上下文总结', provider: a.toAgent, ts: new Date().toISOString() }
+    appendMessage(a.workspacePath, a.sessionId, note)
+    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
   })
   ipcMain.handle(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => history(a.workspacePath, a.sessionId))
   ipcMain.handle(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {

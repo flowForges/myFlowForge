@@ -250,24 +250,12 @@ function fenceProvider(): AgentProvider {
   }
 }
 
-describe('chatService.sendTurn – forge:run trigger', () => {
-  it('strips the fence from the persisted message and fires onRunTrigger with the task', async () => {
-    const triggers: { ws: string; task: string }[] = []
-    const deps = {
-      provider: fenceProvider(), env: process.env, emit: () => {},
-      onRunTrigger: (wsp: string, task: string) => triggers.push({ ws: wsp, task }),
-    }
+describe('chatService.sendTurn – forge:run fence is inert', () => {
+  it('keeps the fence text verbatim in the message and triggers no run', async () => {
+    const deps = { provider: fenceProvider(), env: process.env, emit: () => {} }
     const msg = await sendTurn(payload('帮我做登录'), deps)
-    expect(msg.text).toBe('开始开发。')
-    expect(msg.text).not.toContain('forge:run')
-    expect(triggers).toEqual([{ ws, task: '做登录' }])
-  })
-
-  it('does not fire when there is no fence', async () => {
-    const triggers: unknown[] = []
-    const deps = { provider: fakeChatProvider(), env: process.env, emit: () => {},
-      onRunTrigger: () => triggers.push(1) }
-    await sendTurn(payload('这个项目结构是怎样的'), deps)
-    expect(triggers).toEqual([])
+    // The forge:run fence was removed as a trigger path — it must survive verbatim, not be stripped.
+    expect(msg.text).toContain('```forge:run')
+    expect(msg.text).toContain('做登录')
   })
 })

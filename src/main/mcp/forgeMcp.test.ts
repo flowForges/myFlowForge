@@ -39,7 +39,8 @@ describe('T: toolsToRegister', () => {
   it('includes forge_propose_plan by default and respects an allowlist', () => {
     expect(toolsToRegister()).toContain('forge_propose_plan')
     expect(toolsToRegister()).toContain('forge_heartbeat')
-    expect(toolsToRegister()).toHaveLength(6)
+    expect(toolsToRegister()).toContain('forge_delegate')
+    expect(toolsToRegister()).toHaveLength(7)
     expect(toolsToRegister(new Set(['forge_propose_plan']))).toEqual(['forge_propose_plan'])
     expect(toolsToRegister(new Set(['forge_ask']))).toEqual(['forge_ask'])
   })
@@ -48,7 +49,7 @@ describe('T: toolsToRegister', () => {
 // ─── Section A: createForgeServer ─────────────────────────────────────────────
 
 describe('A: createForgeServer', () => {
-  it('A1. lists exactly 6 tools with correct names', async () => {
+  it('A1. lists exactly 7 tools with correct names', async () => {
     const send = vi.fn().mockResolvedValue({})
     const client = await wireClient(send)
 
@@ -56,6 +57,7 @@ describe('A: createForgeServer', () => {
     const names = tools.map((t) => t.name).sort()
     expect(names).toEqual([
       'forge_ask',
+      'forge_delegate',
       'forge_handoff',
       'forge_heartbeat',
       'forge_propose_plan',

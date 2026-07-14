@@ -86,6 +86,11 @@ export interface StartRunOpts {
   resume?: { completedStages: StageRuntime[]; priorBriefs: HandoffBrief[] }
   workflowId?: string
   workflowName?: string
+  // Permission shield from the initiating chat session; passed to every stage sub-agent's run() so the
+  // shield governs stage agents too (not just the main chat agent). Absent → provider default ('auto').
+  permissionMode?: import('@shared/permissions').PermissionMode
+  // 主代理整理的需求级简报(背景/目标/约束/指定插件),注入每个 stage 子代理 prompt(一份共享)。
+  brief?: string
 }
 export interface OrchestratorOpts {
   bus: EventBus
@@ -116,6 +121,8 @@ export class Orchestrator {
   private bridge: ForgeBridge | null = null
   private briefs: HandoffBrief[] = []
   private task?: string
+  private permissionMode?: import('@shared/permissions').PermissionMode
+  private brief?: string
   private activeSessions = new Set<import('../agents/types').AgentSession>()
   private cancelled = false
   private now: () => number
@@ -453,9 +460,9 @@ export class Orchestrator {
     try {
       // this.briefs is read at task start; parallel develop-stage agents all get the same
       // pre-stage snapshot (briefs pushed mid-stage by a sibling don't retroactively appear — by design)
-      const prompt = buildStagePrompt(spec.name, this.briefs, { textFallback: !provider.capabilities.mcpTools, task: this.task, lens, stageKey: spec.key, stageAppend: spec.prompt, reworkNote: spec.reworkNote, producesDoc: spec.producesDoc ?? spec.key === 'design' })
+      const prompt = buildStagePrompt(spec.name, this.briefs, { textFallback: !provider.capabilities.mcpTools, task: this.task, lens, stageKey: spec.key, stageAppend: spec.prompt, reworkNote: spec.reworkNote, producesDoc: spec.producesDoc ?? spec.key === 'design', brief: this.brief })
       const session = provider.run(
-        { stageKey: stage.key, agentId: agent.id, name: agent.name, prompt, cwd, model: spec.model },
+        { stageKey: stage.key, agentId: agent.id, name: agent.name, prompt, cwd, model: spec.model, permissionMode: this.permissionMode },
         this.callbacksFor(stage, agent, store), env
       )
       this.activeSessions.add(session)
@@ -559,6 +566,8 @@ export class Orchestrator {
     // Resume seeds the completed stages' handoff summaries so the remaining stages inherit context.
     this.briefs = opts.resume ? [...opts.resume.priorBriefs] : []
     this.task = opts.task
+    this.permissionMode = opts.permissionMode
+    this.brief = opts.brief
     this.cancelled = false
     this.run = { id: opts.runId, workspaceName: opts.workspaceName, workspacePath: opts.workspacePath, sessionId: opts.sessionId, workflowId: opts.workflowId, workflowName: opts.workflowName, projects: opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })), status: 'run', stages: opts.resume ? [...opts.resume.completedStages] : [], pending: [] }
     this.heartbeater = new Heartbeater(this.hbCfg, this.now)
