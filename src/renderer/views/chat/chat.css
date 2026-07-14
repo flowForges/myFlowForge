@@ -277,6 +277,9 @@ html[data-bg-scope="app"] .msg-who,  html[data-bg-scope="chat"] .msg-who {
 .supplement-banner span { flex: 1; min-width: 0; }
 .supplement-cancel { flex: 0 0 auto; height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600; color: var(--faint); transition: .13s; }
 .supplement-cancel:hover { background: var(--surface); color: var(--err); }
+/* Provider-switch confirm banner: same shell, with a primary 确认切换 button. */
+.supplement-ok { flex: 0 0 auto; height: 24px; padding: 0 12px; border-radius: 6px; font-size: 11.5px; font-weight: 600; color: #fff; background: var(--accent); transition: .13s; }
+.supplement-ok:hover { filter: brightness(1.08); }
 
 /* 下拉菜单 */
 /* radius matches the inner .cb-btn so the frosted-glass fill applied to .menu (glass.css) is
