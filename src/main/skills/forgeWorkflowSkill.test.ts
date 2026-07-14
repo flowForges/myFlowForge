@@ -20,31 +20,26 @@ describe('FORGE_WORKFLOW_SKILL', () => {
     expect(FORGE_WORKFLOW_SKILL.relPath).toBe('.claude/skills/forge-workflow/SKILL.md')
   })
 
-  it('gates activation to dev intents, calls forge_propose_plan (primary), keeps forge:run fence (fallback)', () => {
+  it('gates workflow via forge_propose_plan (path two) and routes single actions to forge_delegate (path one)', () => {
     const c = FORGE_WORKFLOW_SKILL.content
     expect(c.startsWith('---\n')).toBe(true)
     expect(c).toContain('name: forge-workflow')
     expect(c).toContain('description:')
-    expect(c).toContain('forge_propose_plan')    // primary: propose for approval
-    expect(c).toContain('```forge:run')          // fallback: text fence
-    expect(c).toContain('"task"')
+    expect(c).toContain('forge_propose_plan')    // path two: opens the workflow gate
+    expect(c).toContain('forge_delegate')        // path one: lightweight delegation
     // Must instruct not to execute before approval
     expect(c).toContain('批准前不要执行')
   })
 
-  it('pure conversation answers directly, but reading real repo code delegates to a real sub-agent', () => {
+  it('pure conversation answers directly; single actions delegate, multi-stage proposes', () => {
     const c = FORGE_WORKFLOW_SKILL.content
-    // Only pure conversation (concepts / discussion / refining a text plan) is answered directly.
+    // Pure conversation (concepts / discussion / refining a text plan) is answered directly.
     expect(c).toContain('纯对话')
-    // Actually reading the repo's real code goes through a real Forge sub-agent (read-only stage),
-    // never the main agent itself and never a built-in Task/subagent.
-    expect(c).toContain('只读阶段')
-    expect(c).toContain('绝不用内置 Task')
-    // The pure-conversation gate must appear before the propose flow so it reads first.
-    expect(c.indexOf('纯对话')).toBeLessThan(c.indexOf('forge_propose_plan({approach,'))
-    // Only an explicit build/change request triggers a full proposal.
-    expect(c).toContain('明确要求')
-    // Ambiguous intent → ask one line first, never auto-propose.
+    // A single action goes through forge_delegate — never the main agent itself, never a built-in Task.
+    expect(c).toContain('forge_delegate')
+    expect(c).toContain('Task/subagent')
+    // Routing is by whether the request spans stages, and is conservative when unsure.
+    expect(c).toContain('是否跨阶段')
     expect(c).toContain('拿不准')
   })
 
@@ -55,8 +50,8 @@ describe('FORGE_WORKFLOW_SKILL', () => {
     // References the stage-task markers a stage sub-agent would see.
     expect(c).toContain('当前阶段')
     expect(c).toContain('执行指令')
-    // The scope note must appear before the "标准流程" body so it gates early.
-    expect(c.indexOf('适用范围')).toBeLessThan(c.indexOf('标准流程'))
+    // The scope note must appear before the path-one body so it gates early.
+    expect(c.indexOf('适用范围')).toBeLessThan(c.indexOf('路径一'))
   })
 })
 
