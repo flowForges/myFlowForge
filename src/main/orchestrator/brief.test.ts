@@ -88,6 +88,14 @@ describe('buildStagePrompt', () => {
     expect(result).toContain('【执行指令】')
   })
 
+  it('opts.brief 注入需求简报段,置于任务之前', () => {
+    const result = buildStagePrompt('技术方案设计', [], { textFallback: false, task: '做招商主题描述功能', brief: '需求背景:招商主题;指定用 superpower 做方案' })
+    expect(result).toContain('需求简报')
+    expect(result).toContain('招商主题')
+    expect(result).toContain('superpower')
+    expect(result.indexOf('需求简报')).toBeLessThan(result.indexOf('任务: 做招商主题描述功能'))
+  })
+
   it('task header coexists with briefs and textFallback', () => {
     const briefs: HandoffBrief[] = [{ agentName: 'A', summary: '已完成', artifacts: [] }]
     const result = buildStagePrompt('代码开发', briefs, { textFallback: true, task: '加搜索' })

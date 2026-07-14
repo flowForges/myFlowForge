@@ -30,6 +30,7 @@ export interface DelegateOpts {
   provider: string
   model: string
   permissionMode?: import('@shared/permissions').PermissionMode   // 发起会话的权限盾牌(下沉到子代理)
+  brief?: string   // 主代理整理的需求简报,注入子代理 prompt(修"委派不带上下文")
   // Called with each spawned sub-agent session — lets the caller register it for cancellation and
   // (P5) surface it in the IDs panel. Optional.
   onSession?: (s: AgentSession) => void
@@ -42,8 +43,10 @@ export interface DelegateResult {
 
 interface Target { id: string; name: string; cwd: string; provider: string; model: string }
 
-function buildDelegatePrompt(task: string, write: boolean, project: string): string {
+function buildDelegatePrompt(task: string, write: boolean, project: string, brief?: string): string {
+  const head = (brief ?? '').trim() ? [`【需求简报 — 主代理整理的背景与要求】\n${(brief ?? '').trim()}`] : []
   return [
+    ...head,
     `你是 Forge 委派的子代理,当前工作目录就是项目「${project}」的根目录。请在这里完成下面这件事:`,
     task,
     write
@@ -112,7 +115,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
       const session = provider.run(
         // write=false 时强制 readonly(sandbox 硬约束,替代仅靠 prompt 的软约束);write=true 时用会话盾牌
         // (盾牌为 readonly 则仍只读,盾牌是上限)。缺省盾牌 → 'auto'(工作区可写),即历史行为。
-        { stageKey: 'delegate', agentId: t.id, name: t.name, prompt: buildDelegatePrompt(opts.task, write, t.name), cwd: t.cwd, model: t.model, permissionMode: write ? (opts.permissionMode ?? 'auto') : 'readonly' },
+        { stageKey: 'delegate', agentId: t.id, name: t.name, prompt: buildDelegatePrompt(opts.task, write, t.name, opts.brief), cwd: t.cwd, model: t.model, permissionMode: write ? (opts.permissionMode ?? 'auto') : 'readonly' },
         {
           onLog: (l) => { if (l.level === 'ok' || l.kind === 'output') outputs.set(t.id, (outputs.get(t.id) ? outputs.get(t.id) + '\n' : '') + l.text) },
           onState: () => {},
