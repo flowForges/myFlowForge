@@ -42,6 +42,9 @@ import { SkillPane } from './settings/SkillPane'
 import { PetPane } from './settings/PetPane'
 import { LoadPane } from './settings/LoadPane'
 import { PluginPane } from './settings/PluginPane'
+import { NsfwPane } from './settings/NsfwPane'
+import { UnlockModal } from './settings/UnlockModal'
+import { nsfwConfigured } from '@shared/nsfw'
 import { SessionImportPane } from './settings/SessionImportPane'
 import { DebugLogPane } from './settings/DebugLogPane'
 import { AboutPane } from './settings/AboutPane'
@@ -73,6 +76,7 @@ export function App() {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPane, setSettingsPane] = useState('appearance')
+  const [unlockOpen, setUnlockOpen] = useState(false)
   const [pendingDelete, setPendingDelete] = useState<string | null>(null)
   // Archive / remove-from-list ask for confirmation before firing (they used to run on a single click).
   const [pendingConfirm, setPendingConfirm] = useState<{ kind: 'archive' | 'remove'; id: string } | null>(null)
@@ -263,6 +267,20 @@ export function App() {
   // Make any downloaded fonts (settings · 外观 · 应用字体) usable app-wide by injecting their @font-face
   // rules once at startup. The picker re-injects after a new download; this covers the launch path.
   useEffect(() => { void injectDownloadedFontFaces() }, [])
+
+  // Hidden entry for gated extra content: a secret shortcut (Cmd/Ctrl+Shift+Alt+U) opens the activation
+  // dialog. Nothing surfaces this in the UI. Dead (does nothing) when no content Worker is configured.
+  useEffect(() => {
+    if (!nsfwConfigured()) return
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.altKey && e.code === 'KeyU') {
+        e.preventDefault()
+        setUnlockOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   // Global-shortcut registration status from main (which OS-level accelerators the OS refused) — fed to
   // the keybindings settings pane so it can flag "already taken" conflicts. Terminal toggle and every
@@ -733,7 +751,8 @@ export function App() {
         )
       })()}
 
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} renderPane={(key) => {
+      {unlockOpen && <UnlockModal onClose={() => setUnlockOpen(false)} onUnlock={(code) => { update({ nsfwUnlocked: true, nsfwCode: code }); setSettingsPane('nsfw'); setSettingsOpen(true) }} />}
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} showNsfw={!!settings?.nsfwUnlocked} renderPane={(key) => {
         switch (key) {
           case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} /> : null
           case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} /> : null
@@ -748,6 +767,7 @@ export function App() {
           case 'loads': return <LoadPane />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
           case 'plugins': return <PluginPane plugins={pluginsApi.plugins} results={pluginsApi.results} catalog={pluginsApi.catalog} install={pluginsApi.install} uninstall={pluginsApi.uninstall} setEnabled={pluginsApi.setEnabled} refresh={pluginsApi.refresh} installExample={pluginsApi.installExample} installError={pluginsApi.installError} creds={pluginsApi.creds} setCred={pluginsApi.setCred} />
+          case 'nsfw': return settings ? <NsfwPane pet={settings.pet} nsfwInstalled={settings.nsfwInstalled ?? {}} onChangePet={(p) => update({ pet: { ...settings.pet, ...p } })} onChangeAppearance={(p) => update({ appearance: p })} onSetInstalled={(k, ref) => update({ nsfwInstalled: { ...(settings.nsfwInstalled ?? {}), [k]: ref } })} /> : null
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'sessions': return <SessionImportPane />
           case 'debug': return <DebugLogPane perfStallToast={settings?.perfStallToast ?? false} onTogglePerfToast={(v) => update({ perfStallToast: v })} />

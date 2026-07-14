@@ -41,8 +41,16 @@ export function storeBackgroundFromPath(srcPath: string, baseDir: string = backg
   if (size > MAX_BG_BYTES) return { error: `图片过大,请选择 ${Math.floor(MAX_BG_BYTES / 1_000_000)}MB 以内的图片` }
   let bytes: Buffer
   try { bytes = readFileSync(srcPath) } catch { return { error: '图片读取失败' } }
+  return storeBackgroundFromBytes(bytes, ext, baseDir)
+}
+
+// Same as storeBackgroundFromPath but from in-memory bytes (used by downloaded content — no temp file).
+export function storeBackgroundFromBytes(bytes: Buffer, ext: string, baseDir: string = backgroundsDir()): StoreBgResult {
+  const e = ext.toLowerCase()
+  if (!BG_MIME_BY_EXT[e]) return { error: '不支持的图片格式,仅支持 png/jpg/webp/gif' }
+  if (bytes.length > MAX_BG_BYTES) return { error: `图片过大,请选择 ${Math.floor(MAX_BG_BYTES / 1_000_000)}MB 以内的图片` }
   const hash = createHash('sha1').update(bytes).digest('hex').slice(0, 16)
-  const rel = `${hash}.${normalizeExt(ext)}`
+  const rel = `${hash}.${normalizeExt(e)}`
   mkdirSync(baseDir, { recursive: true })
   const abs = join(baseDir, rel)
   if (!existsSync(abs)) writeFileSync(abs, bytes)

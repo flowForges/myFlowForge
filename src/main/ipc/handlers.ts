@@ -53,9 +53,11 @@ import { isWorkflowIntent, isResumeIntent } from '../chat/workflowIntent'
 import { makeProposeGuard } from '../chat/proposeGuard'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
-import { storeBackgroundFromPath, backgroundImageUrl, bgRelFromUrl, gcBackgrounds } from '../appearance/backgroundStore'
+import { storeBackgroundFromPath, backgroundImageUrl, bgRelFromUrl, gcBackgrounds, resolveBackgroundAbs } from '../appearance/backgroundStore'
 import { listDownloadedFonts, downloadCatalogFont, deleteDownloadedFont } from '../appearance/fontStore'
 import { catalogEntry } from '../../shared/fontCatalog'
+import { nsfwValidate, nsfwCatalog, nsfwPreview, nsfwInstallPet, nsfwInstallBg } from '../nsfw/nsfwService'
+import type { NsfwPet, NsfwBg } from '../../shared/nsfw'
 import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
 import { pickInstaller } from '../update/installer'
@@ -759,6 +761,22 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
   })
   ipcMain.handle(CH.fontsDelete, (_e, id: string) => ({ ok: deleteDownloadedFont(id) }))
+
+  // License-gated extra content. All requests go through the user's configured proxy and carry the
+  // locally-stored activation code (settings.nsfwCode); the Worker holds the real keys + image bytes.
+  const nsfwFetch = () => makeProxyFetch(readSettings().termProxy)
+  ipcMain.handle(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
+  ipcMain.handle(CH.nsfwCatalog, () => nsfwCatalog(readSettings().nsfwCode, nsfwFetch()))
+  ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, readSettings().nsfwCode, nsfwFetch()))
+  ipcMain.handle(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, readSettings().nsfwCode, nsfwFetch()))
+  ipcMain.handle(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, readSettings().nsfwCode, nsfwFetch()))
+  // Does the local file behind a forge-bg:// URL still exist? (An installed extra bg may have been
+  // GC'd; if gone, the renderer re-downloads instead of pointing at a missing file.)
+  ipcMain.handle(CH.nsfwBgExists, (_e, url: string) => {
+    const rel = bgRelFromUrl(url)
+    const abs = rel ? resolveBackgroundAbs(rel) : null
+    return { exists: !!abs && existsSync(abs) }
+  })
 
   const MAX_PINNED = 5
   ipcMain.handle(CH.workspacesList, () => {

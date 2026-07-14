@@ -5,6 +5,8 @@ interface SettingsModalProps {
   onClose: () => void
   renderPane: (key: string) => ReactNode
   initialPane?: string
+  // The gated NSFW pane's nav entry only shows once unlocked (hidden by default).
+  showNsfw?: boolean
 }
 
 interface NavEntry {
@@ -181,9 +183,17 @@ const NAV: NavEntry[] = [
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
     ),
   },
+  {
+    key: 'nsfw',
+    label: '扩展内容',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="11" width="18" height="10" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
+    ),
+  },
 ]
 
-export function SettingsModal({ open, onClose, renderPane, initialPane }: SettingsModalProps) {
+export function SettingsModal({ open, onClose, renderPane, initialPane, showNsfw }: SettingsModalProps) {
+  const nav = NAV.filter(n => n.key !== 'nsfw' || showNsfw)
   const [active, setActive] = useState(initialPane ?? 'appearance')
   const prevOpenRef = useRef(open)
   useEffect(() => {
@@ -224,7 +234,7 @@ export function SettingsModal({ open, onClose, renderPane, initialPane }: Settin
         </div>
         <div className="set-body">
           <nav className="set-nav">
-            {NAV.map(n => (
+            {nav.map(n => (
               <button key={n.key} className={n.key === active ? 'on' : undefined} data-set={n.key} onClick={() => setActive(n.key)}>
                 {n.icon}
                 {n.label}
