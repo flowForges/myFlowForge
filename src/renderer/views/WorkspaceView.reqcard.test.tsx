@@ -69,7 +69,7 @@ describe('WorkspaceView ReqCard wiring', () => {
     await waitFor(() => expect(chatHandler).not.toBeNull())
     chatHandler!({
       workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], id: 'pl1',
-      approach: '逐文件迁移 tokens', task: '重构主题',
+      approach: '逐文件迁移 tokens', task: '重构主题', hooks: [],
       stages: [{ key: '开发', name: '开发', agents: 3, perProject: false, projects: [] }],
     } as ChatEvent)
     await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())
@@ -90,7 +90,7 @@ describe('WorkspaceView ReqCard wiring', () => {
     await waitFor(() => expect(chatHandler).not.toBeNull())
     chatHandler!({
       workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], id: 'pl1',
-      approach: '逐文件迁移 tokens', task: '重构主题',
+      approach: '逐文件迁移 tokens', task: '重构主题', hooks: [],
       stages: [{ key: '开发', name: '开发', agents: 3, perProject: false, projects: [] }],
     } as ChatEvent)
     await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())
@@ -125,7 +125,7 @@ describe('WorkspaceView ReqCard wiring', () => {
     await waitFor(() => expect(chatHandler).not.toBeNull())
     chatHandler!({
       workspacePath: '/ws', sessionId: 'default', type: 'plan-request', allProjects: [], id: 'pl1',
-      approach: '逐文件迁移 tokens', task: '重构主题',
+      approach: '逐文件迁移 tokens', task: '重构主题', hooks: [],
       stages: [{ key: '开发', name: '开发', agents: 3, perProject: false, projects: [] }],
     } as ChatEvent)
     await waitFor(() => expect(screen.getByText('方案待批准')).toBeInTheDocument())

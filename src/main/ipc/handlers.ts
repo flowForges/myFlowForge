@@ -630,7 +630,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return file
   })
   ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId))
-  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> }; workspacePath: string }) => {
+  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
     if (proposeRun.has(a.id)) {
       proposeRun.resolve(a.id, { decision: a.decision, value: a.value, selection: a.selection })
       broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'plan-resolved', id: a.id })

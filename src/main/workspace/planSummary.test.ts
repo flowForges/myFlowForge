@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planStages } from './planSummary'
+import { planStages, planHooks } from './planSummary'
 import type { StartRunOpts } from '../orchestrator/orchestrator'
 
 const base: StartRunOpts = {
@@ -25,5 +25,24 @@ describe('planStages', () => {
       { key: 'requirement', name: '需求评估', agents: 1, perProject: false, projects: [] },
       { key: 'develop', name: '代码开发', agents: 1, perProject: true, projects: [] },
     ])
+  })
+})
+
+describe('planHooks', () => {
+  it('列出 woven plugins + __wf stepPlugins,忽略非 __wf 的 stepPlugins', () => {
+    const opts = { ...base,
+      plugins: [{ id: 'h1', name: '规范', after: 'develop', prompt: '', skills: [], tools: [] }],
+      stepPlugins: [
+        { id: 'w1', name: '收尾', after: '__wf', prompt: '', skills: [], tools: [] },
+        { id: 'b1', name: '建区', after: '__basic', prompt: '', skills: [], tools: [] },
+      ],
+    } as unknown as StartRunOpts
+    expect(planHooks(opts)).toEqual([
+      { id: 'h1', name: '规范', after: 'develop' },
+      { id: 'w1', name: '收尾', after: '__wf' },
+    ])
+  })
+  it('无 plugins/stepPlugins 时返回空', () => {
+    expect(planHooks(base)).toEqual([])
   })
 })
