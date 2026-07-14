@@ -2,11 +2,12 @@ import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { EngineApi } from '../state/useEngine'
 import type { StartRunOpts } from '../App'
-import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef } from '@shared/types'
+import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef, WsWorkflow } from '@shared/types'
 import { DEFAULT_PERMISSION_MODE, type PermissionMode } from '@shared/permissions'
 import { AgentNode } from '../components/AgentNode'
 import { HookNode } from '../components/HookNode'
 import { WorkflowStrip } from '../components/WorkflowStrip'
+import { WorkflowGlance } from '../components/WorkflowGlance'
 import type { Plugin } from '@shared/plugin'
 import { ReqCard } from '../components/ReqCard'
 import { PlanCard } from '../components/PlanCard'
@@ -69,6 +70,10 @@ interface WorkspaceInfo {
   // returns these; the view surfaces them so a custom workflow's plugins are visibly accounted for.
   plugins?: Plugin[];
   stepPlugins?: Plugin[];
+  // The workspace's full named-workflow list (Task 11: right-side "at a glance" panel). readWorkspace
+  // already returns this (ensureWorkspaceWorkflows guarantees it); optional here only for callers that
+  // predate multi-workflow support.
+  workflows?: WsWorkflow[];
 }
 
 interface WorkspaceViewProps {
@@ -783,6 +788,9 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                     编辑工作流
                   </button>
                 </div>
+
+                {/* 工作流速览 — 该工作区所有已命名工作流,逐条展开看每阶段 provider/model,不必进运行/编辑态。 */}
+                <WorkflowGlance workflows={wsInfo?.workflows ?? []} />
 
                 {chat.plans.length > 0 && (
                   <div className="ic-card workflow-pending-card">
