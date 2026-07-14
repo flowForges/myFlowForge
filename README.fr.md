@@ -20,6 +20,24 @@ Un cockpit de bureau qui orchestre **Claude Code, Codex, Cursor, Gemini, qoder e
 
 ---
 
+## 📸 Captures d’écran
+
+<div align="center">
+
+<img src="assets/screenshots/home.jpg" alt="Tableau de bord d’accueil — espaces de travail, modifications du jour et salutation à l’heure locale" width="90%" />
+
+<sub><b>Accueil</b> — reprenez où vous en étiez : espaces de travail, agents en cours et les modifications du jour en un coup d’œil.</sub>
+
+<br /><br />
+
+<img src="assets/screenshots/workspace.jpg" alt="Espace de travail — panneau de workflow multi‑étapes, chat et inspecteur de modifications/fichiers" width="90%" />
+
+<sub><b>Espace de travail</b> — le panneau de workflow multi‑étapes, le chat par agent et l’inspecteur de modifications/fichiers en direct — avec votre mascotte de bureau.</sub>
+
+</div>
+
+---
+
 ## Qu'est‑ce que myFlowForge ?
 
 Les outils de développement assistés par IA modernes vivent chacun dans leur propre terminal, avec leur propre état de session, leur propre quota, et aucun plan partagé. **myFlowForge** les réunit tous sous un même toit et transforme le fait de « discuter avec une IA » en un **workflow d'ingénierie reproductible et révisable**.

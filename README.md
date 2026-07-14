@@ -20,6 +20,24 @@ A desktop cockpit that orchestrates **Claude Code, Codex, Cursor, Gemini, qoder 
 
 ---
 
+## 📸 Screenshots
+
+<div align="center">
+
+<img src="assets/screenshots/home.jpg" alt="Home dashboard — workspaces, today's changes, and a live local‑time greeting over a built‑in wallpaper" width="90%" />
+
+<sub><b>Home</b> — pick up where you left off: workspaces, running agents, and today's changes at a glance.</sub>
+
+<br /><br />
+
+<img src="assets/screenshots/workspace.jpg" alt="Workspace — multi‑stage workflow panel, chat, and the change / file inspector" width="90%" />
+
+<sub><b>Workspace</b> — the multi‑stage workflow panel, per‑agent chat, and a live change / file inspector — with your desktop pet along for the ride.</sub>
+
+</div>
+
+---
+
 ## What is myFlowForge?
 
 Modern AI coding tools each live in their own terminal, with their own session state, their own quota, and no shared plan. **myFlowForge** puts them all under one roof and turns "chatting with an AI" into a **repeatable, reviewable engineering workflow**.
@@ -42,7 +60,7 @@ You describe what you want. Forge drives your chosen agents through a staged pip
 - **🔌 MCP integration** — A built‑in Forge MCP server bridges agents back into the app (ask questions, propose plans, hand off artifacts) for reliable, tool‑driven control.
 - **🖥️ Real‑time observability** — Streaming thinking / execution / file‑change / output logs, a filterable log console, and cross‑project change evidence.
 - **🐾 Desktop pet** — A draggable, resizable companion that follows your focus, previews agent activity, and pops up confirmation cards — with configurable effects and multiple pet packs.
-- **🎨 Polished, personalizable UI** — Glassmorphism, **6 themes** (light / dark / auto + midnight / sepia / forest), **12 accent colors**, a **custom background image** (whole‑app or chat‑area, with adjustable opacity), a redesigned home dashboard with a live local‑time greeting, resizable panes, and a notification center.
+- **🎨 Polished, personalizable UI** — Glassmorphism, **6 themes** (light / dark / auto + midnight / sepia / forest), **12 accent colors**, a **built‑in wallpaper gallery** plus your own **custom background image** (whole‑app or chat‑area, with adjustable opacity), **precise px font sizes** for the app and chat area, on‑demand font downloads, a redesigned home dashboard with a live local‑time greeting, resizable panes, and a notification center.
 
 ## 🤖 Supported coding agents
 
