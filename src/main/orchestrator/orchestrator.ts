@@ -301,7 +301,10 @@ export class Orchestrator {
         agent.ctxMax = Math.round(u.window / 1000)
         this.update()
       },
-      onState: (s) => { if (s === 'run') this.beat(agent.id); agent.state = s; this.bus.emit({ type: 'agent:state', agentId: agent.id, state: s }); this.update(true) },
+      // 'err' is terminal: once the watchdog killed the agent (or it errored), a late onState('ok') from
+      // the provider's process-exit handler must NOT resurrect it to 'ok' — otherwise a killed scan would
+      // count as success and the stage would gate an INCOMPLETE plan instead of halting.
+      onState: (s) => { if (agent.state === 'err') return; if (s === 'run') this.beat(agent.id); agent.state = s; this.bus.emit({ type: 'agent:state', agentId: agent.id, state: s }); this.update(true) },
       onConfirm: async (req) => {
         const id = `p${++this.pendingSeq}`
         store.appendMessage({ id, runId: this.run.id, from: { runId: this.run.id, stageKey: stage.key, agentId: agent.id, name: agent.name }, to: 'orchestrator', type: 'confirm', payload: req, artifacts: [], ts: timeStr() })
@@ -683,7 +686,19 @@ export class Orchestrator {
 
           stage.state = stage.agents.length > 0 && stage.agents.every(a => a.state === 'ok') ? 'ok' : 'err'
           this.update()
-          if (stage.state === 'err') break
+          // A stage where any agent failed/was-killed is INCOMPLETE — halt the whole run here instead of
+          // gating/continuing on a partial plan (an incomplete plan isn't worth proceeding with). Surface
+          // it clearly so the user knows to re-run rather than think the plan is done.
+          if (stage.state === 'err') {
+            const failedAgents = stage.agents.filter(a => a.state !== 'ok')
+            const marker = failedAgents[0] ?? stage.agents[0]
+            if (marker) this.pushLog(marker, {
+              ts: timeStr(),
+              text: `「${spec.name}」有 ${failedAgents.length} 个代理未完成(失败/被终止),本阶段不完整,已中止工作流 —— 请重新运行(慢代理超时已放宽)。`,
+              level: 'info',
+            })
+            break
+          }
 
           // Inter-stage review gate: after a gated stage completes OK, pause and ask the user to review
           // the output. Reuses the raise/pending/resolve mechanism (no new IPC). The stage output is
