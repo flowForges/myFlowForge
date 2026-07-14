@@ -29,6 +29,7 @@ export interface DelegateOpts {
   write?: boolean
   provider: string
   model: string
+  permissionMode?: import('@shared/permissions').PermissionMode   // 发起会话的权限盾牌(下沉到子代理)
   // Called with each spawned sub-agent session — lets the caller register it for cancellation and
   // (P5) surface it in the IDs panel. Optional.
   onSession?: (s: AgentSession) => void
@@ -109,7 +110,9 @@ export function makeRunDelegate(deps: DelegateDeps) {
         } : undefined,
       })
       const session = provider.run(
-        { stageKey: 'delegate', agentId: t.id, name: t.name, prompt: buildDelegatePrompt(opts.task, write, t.name), cwd: t.cwd, model: t.model },
+        // write=false 时强制 readonly(sandbox 硬约束,替代仅靠 prompt 的软约束);write=true 时用会话盾牌
+        // (盾牌为 readonly 则仍只读,盾牌是上限)。缺省盾牌 → 'auto'(工作区可写),即历史行为。
+        { stageKey: 'delegate', agentId: t.id, name: t.name, prompt: buildDelegatePrompt(opts.task, write, t.name), cwd: t.cwd, model: t.model, permissionMode: write ? (opts.permissionMode ?? 'auto') : 'readonly' },
         {
           onLog: (l) => { if (l.level === 'ok' || l.kind === 'output') outputs.set(t.id, (outputs.get(t.id) ? outputs.get(t.id) + '\n' : '') + l.text) },
           onState: () => {},

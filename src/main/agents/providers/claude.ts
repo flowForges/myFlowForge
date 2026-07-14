@@ -32,7 +32,7 @@ export function buildClaudeArgs(task: AgentTask, env: NodeJS.ProcessEnv): string
     '--output-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
-    '--permission-mode', 'acceptEdits',
+    ...permissionArgs('claude', task.permissionMode ?? 'auto'),
     ...allowedToolsArgs,
     '--model', cliModel(task.model),
     ...forgeMcpArgs(env),

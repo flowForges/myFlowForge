@@ -25,7 +25,7 @@ import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage } from '../chat/chatStore'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom } from '../chat/sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession } from '../chat/sessionStore'
 import { agentSessionsForId } from '../chat/agentSessions'
 import type { CreateWorkspaceOpts, ResolvePayload, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, EngineEvent } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
@@ -496,7 +496,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     readWorkflows: () => readWorkflows().workflows,
     readCustomStages: () => readCustomStages().stages,
     writeWorkspace,
-    startRun: (o) => { orch.startRun(o).catch(e => console.error('[propose] startRun failed', e)) },
+    startRun: (o) => {
+      // Sink the initiating session's permission shield into the run so stage sub-agents inherit it
+      // (not just the main chat agent). Absent → provider default ('auto'), the historical behavior.
+      const sid = o.sessionId ?? readSessions(o.workspacePath).activeSessionId
+      const permissionMode = o.permissionMode ?? (sid ? getSession(o.workspacePath, sid)?.permissionMode : undefined)
+      orch.startRun({ ...o, permissionMode }).catch(e => console.error('[propose] startRun failed', e))
+    },
     emitPlanRequest: (wp, req) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'plan-request', ...req }),
     emitNote: (wp, text) => emitNote(wp, readSessions(wp).activeSessionId, text),
     // #1: flip the active session's mode + tell the renderer which session switched and to what run.
@@ -550,7 +556,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
       },
       delegate: (a: { task: string; projects?: string[]; write?: boolean }) =>
-        runDelegate({ workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, provider: payload.agent, model: payload.model }),
+        runDelegate({ workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode }),
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
     // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude
