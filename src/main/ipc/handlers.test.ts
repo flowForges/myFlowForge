@@ -703,30 +703,6 @@ describe('registerIpc broadcast wiring', () => {
     expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'x', 'y', { standalone: true, sessionId: 's1' })
   })
 
-  // FIX 5: the forge:run fence propose (fired fire-and-forget at chat-turn end, via chatService's
-  // onRunTrigger) must be marked standalone. Without it, it's neither excluded (preProposes snapshot
-  // predates it) nor standalone, so the SAME turn's `proposeRun.cancelForWorkspace(preProposes)` right
-  // after sendTurn resolves denies it in a race before the user ever sees the card.
-  it('the forge:run fence trigger marks its propose standalone (fence-vs-turn-end race fix)', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    const { sendTurn } = await import('../chat/chatService') as any
-    const { makeProposeRun } = await import('../chat/proposeRun') as any
-    sendTurn.mockReset().mockResolvedValue({ text: 'ok' })
-    registerIpc(() => {}, {})
-    const proposeFn = makeProposeRun.mock.results.at(-1).value as any
-    proposeFn.mockClear()
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
-    const payload = { workspacePath: '/ws/a', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] }
-    send({}, payload)
-    await new Promise(r => setTimeout(r, 0))
-    expect(sendTurn).toHaveBeenCalled()
-    const deps = sendTurn.mock.calls.at(-1)![1]
-    deps.onRunTrigger('/ws/a', 'do the thing')
-    // #1 carries the chat provider override; #3 attributes the run to the active session (mock → 's1').
-    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'do the thing', 'do the thing', { standalone: true, providerOverride: { provider: 'claude', model: 'm' }, sessionId: 's1' })
-  })
-
   it('configUpdateWorkflow 写入 stagePrompts(不动 plugins)', async () => {
     readWorkflowsMock.mockReturnValue({ workflows: [{ id: 'standard', name: 'S', stages: [] as any[], plugins: [] as any[], stagePrompts: {} }] })
     const { registerIpc } = await import('./handlers')

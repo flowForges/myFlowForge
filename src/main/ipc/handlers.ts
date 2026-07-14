@@ -497,11 +497,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     setSessionMode: (wp, mode, runId) => { setSessionMode(wp, readSessions(wp).activeSessionId, mode, runId) },
     emitModeChanged: (wp, mode, runId) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'mode-changed', mode, runId }),
   })
-  // The forge:run fence routes through proposeRun too (approach = the fence task text).
-  // standalone: fired at chat-turn end (fire-and-forget); without this it's neither excluded nor
-  // standalone, so the ending turn's cancelForWorkspace(preProposes) kills it in a race — see
-  // proposeRun.ts's `standalone` doc.
-  const onRunTrigger = (wsPath: string, task: string, providerOverride?: { provider: string; model?: string }, sessionId?: string) => { void proposeRun(wsPath, task, task, { standalone: true, ...(providerOverride ? { providerOverride } : {}), sessionId: sessionId ?? readSessions(wsPath).activeSessionId }) }
   // Task 12: the approval card's workflow-switch dropdown re-proposes the SAME task/approach under a
   // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
   // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
@@ -560,7 +555,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         env,
         emit: chatEmit,
         confirm,
-        onRunTrigger: (wsPath, task) => { proposedWorkflow = true; onRunTrigger(wsPath, task, { provider: payload.agent, model: payload.model }, payload.sessionId) },
         onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, () => session.cancel()),
       })
       // A forge_propose_plan blocks the turn awaiting the user's decision. If the turn ended (API error /
