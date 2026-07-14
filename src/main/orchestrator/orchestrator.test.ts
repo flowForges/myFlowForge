@@ -273,6 +273,31 @@ describe('Orchestrator', () => {
     expect(run.stages[0].agents[0].logs.some(l => l.text.includes('未找到代理'))).toBe(true)
   })
 
+  it('startRun 把 workflowId/workflowName 盖进 RunState', async () => {
+    const bus = new EventBus()
+    const orch = new Orchestrator({ bus, providers: {}, proxy: () => '' }) // empty registry -> fast fail, no need to resolve pending
+    const run = await orch.startRun({
+      runId: 'r-wf', workspaceName: 'ws', workspacePath: ws,
+      stages: [{ key: 'design', name: '技术方案设计', provider: 'nope', model: 'm' }],
+      developProjects: [],
+      workflowId: 'full', workflowName: '完整流程',
+    })
+    expect(run.workflowId).toBe('full')
+    expect(run.workflowName).toBe('完整流程')
+  })
+
+  it('startRun 不传 workflowId/workflowName 时 RunState 上两者缺省', async () => {
+    const bus = new EventBus()
+    const orch = new Orchestrator({ bus, providers: {}, proxy: () => '' })
+    const run = await orch.startRun({
+      runId: 'r-wf-adhoc', workspaceName: 'ws', workspacePath: ws,
+      stages: [{ key: 'design', name: '技术方案设计', provider: 'nope', model: 'm' }],
+      developProjects: [],
+    })
+    expect(run.workflowId).toBeUndefined()
+    expect(run.workflowName).toBeUndefined()
+  })
+
   it('persists state.json on terminal status and exposes getRun()', async () => {
     const bus = new EventBus()
     const orch = new Orchestrator({ bus, providers: { fake: fakeProvider() }, proxy: () => '' })

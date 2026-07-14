@@ -81,6 +81,8 @@ export interface StartRunOpts {
   // is replayed into the run (so the UI shows them done) and `priorBriefs` seeds this.briefs so the
   // remaining stages inherit prior context — provider-agnostic, which is what enables cross-model resume.
   resume?: { completedStages: StageRuntime[]; priorBriefs: HandoffBrief[] }
+  workflowId?: string
+  workflowName?: string
 }
 export interface OrchestratorOpts {
   bus: EventBus
@@ -491,7 +493,7 @@ export class Orchestrator {
     this.briefs = opts.resume ? [...opts.resume.priorBriefs] : []
     this.task = opts.task
     this.cancelled = false
-    this.run = { id: opts.runId, workspaceName: opts.workspaceName, workspacePath: opts.workspacePath, projects: opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })), status: 'run', stages: opts.resume ? [...opts.resume.completedStages] : [], pending: [] }
+    this.run = { id: opts.runId, workspaceName: opts.workspaceName, workspacePath: opts.workspacePath, workflowId: opts.workflowId, workflowName: opts.workflowName, projects: opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })), status: 'run', stages: opts.resume ? [...opts.resume.completedStages] : [], pending: [] }
     this.heartbeater = new Heartbeater(this.hbCfg, this.now)
     this.hbTimer = this.makeInterval(() => this.applyHeartbeatEffects(this.heartbeater?.tick() ?? []), this.hbCfg.pingMs)
     this.update()
