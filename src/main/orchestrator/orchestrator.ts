@@ -130,7 +130,12 @@ export class Orchestrator {
       id.unref?.()
       return { clear: () => clearInterval(id) }
     })
-    this.hbCfg = opts.heartbeat ?? { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 }
+    // Silence = NO stdout byte at all (onActivity beats on any byte). A single big LLM turn — e.g. the
+    // Design stage scanning several projects with a large context on a slow/thinking model — legitimately
+    // produces no output for minutes while it waits for the model, and killing it there yields a WRONG,
+    // partial plan (worse than waiting). So warn at 2min but only kill after 6min of total silence, which
+    // still catches a genuinely hung process (silent forever) without false-killing slow-but-live turns.
+    this.hbCfg = opts.heartbeat ?? { stallMs: 120_000, killGraceMs: 240_000, pingMs: 15_000 }
   }
 
   resolve(payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }) {

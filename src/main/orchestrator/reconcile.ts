@@ -7,7 +7,9 @@ import { writeJsonAtomic } from '../util/atomicWrite'
 import type { RunState } from '@shared/types'
 
 const isTerminal = (s: string) => s === 'ok' || s === 'err'
-const DEFAULT_HEARTBEAT_RECONCILE = { stallMs: 90_000, killGraceMs: 60_000 }
+// Match orchestrator.ts's live thresholds: warn at 2min silence, kill only after 6min — a big single LLM
+// turn (e.g. Design scanning many projects) can be output-silent for minutes while still alive.
+const DEFAULT_HEARTBEAT_RECONCILE = { stallMs: 120_000, killGraceMs: 240_000 }
 
 export interface RecoverableInput {
   socketAlive: boolean
