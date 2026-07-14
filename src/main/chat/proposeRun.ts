@@ -16,7 +16,7 @@ export interface ProposeDeps {
   readCustomStages?: () => CustomStageDef[]
   writeWorkspace: (ws: Workspace) => void
   startRun: (o: StartRunOpts) => void
-  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: { name: string; agents: number }[]; task?: string; workflowId?: string; workflowName?: string }) => void
+  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: { name: string; agents: number }[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }) => void
   emitNote: (wsPath: string, text: string) => void
   // #1: after an approved chat-triggered run starts, flip the triggering session to workflow mode
   // (setSessionMode bridges to the active session via the 2A sessionStore) and tell the renderer.
@@ -69,7 +69,10 @@ export function makeProposeRun(deps: ProposeDeps) {
       }) }
     }
     const id = `pl-${Date.now()}-${++seq}`
-    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), task, workflowId: wf?.id, workflowName: wf?.name })
+    // Full set of workflows this workspace has configured, so the approval card can offer a switch
+    // dropdown (Task 12) — independent of which one (if any) was actually matched for this proposal.
+    const workflowOptions = ws.workflows.map(w => ({ id: w.id, name: w.name }))
+    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), task, workflowId: wf?.id, workflowName: wf?.name, workflowOptions })
     return new Promise<ProposeResult>(resolve => {
       pending.set(id, { wsPath, resolve: (d) => {
         if (d.decision === 'modify') return resolve({ approved: false, feedback: d.value })

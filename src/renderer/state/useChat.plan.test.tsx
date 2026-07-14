@@ -45,4 +45,23 @@ describe('useChat plans (hard gate)', () => {
     act(() => { handler!({ workspacePath: '/other', sessionId: 's1', type: 'plan-request', id: 'x', approach: 'a', stages: [] }) })
     expect(result.current.plans).toHaveLength(0)
   })
+
+  // Task 12: the approval card needs to know which workflow was detected (or none, for ad-hoc) and
+  // what else the workspace offers, so it can render a switch dropdown.
+  it('carries workflowId/workflowName/workflowOptions from the event into plans state', () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    act(() => {
+      handler!({
+        workspacePath: '/ws', sessionId: 's1', type: 'plan-request', id: 'pl1',
+        approach: '逐文件迁移', stages: [],
+        workflowId: 'full', workflowName: '完整流程',
+        workflowOptions: [{ id: 'quick', name: '快速修复' }, { id: 'full', name: '完整流程' }],
+      })
+    })
+    expect(result.current.plans[0]).toMatchObject({
+      workflowId: 'full',
+      workflowName: '完整流程',
+      workflowOptions: [{ id: 'quick', name: '快速修复' }, { id: 'full', name: '完整流程' }],
+    })
+  })
 })

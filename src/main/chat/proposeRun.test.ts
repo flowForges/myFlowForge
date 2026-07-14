@@ -190,6 +190,9 @@ describe('proposeRun mode flip', () => {
     const req = emitted[0]
     expect(req.workflowName).toBe('完整流程')
     expect(req.stages.map((s: any) => s.name)).toContain('代码开发')  // full 含 develop
+    // Task 12: workflowOptions carries every workspace workflow (not just the matched one) so the
+    // approval card can offer a switch dropdown.
+    expect(req.workflowOptions).toEqual([{ id: 'quick', name: '快速修复' }, { id: 'full', name: '完整流程' }])
     propose.resolve(req.id, { decision: 'deny' })
     await p
   })

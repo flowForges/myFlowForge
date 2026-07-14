@@ -2,7 +2,16 @@ import type { ChatMessage, PendingAction, ChatConfirm } from '@shared/types'
 
 // tsconfig.node.json 未设 --jsx,即使是 `import type` 也会因模块解析到 .tsx 而触发 TS6142。
 // 因此无法直接 import PlanCard.PlanReq,改用结构等价的本地定义;TypeScript 鸭子类型保证运行时兼容。
-export interface PlanReq { id: string; approach: string; stages: { name: string; agents: number }[]; task?: string; ts?: string }
+export interface PlanReq {
+  id: string
+  approach: string
+  stages: { name: string; agents: number }[]
+  task?: string
+  ts?: string
+  workflowId?: string
+  workflowName?: string
+  workflowOptions?: { id: string; name: string }[]
+}
 
 export type TimelineEntry =
   | { kind: 'message'; ts: number; msg: ChatMessage; index: number }

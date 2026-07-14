@@ -7,17 +7,25 @@ export interface PlanReq {
   stages: { name: string; agents: number }[]
   task?: string
   ts?: string
+  workflowId?: string
+  workflowName?: string
+  workflowOptions?: { id: string; name: string }[]
 }
+
+const AD_HOC = ''   // <select> value for "临时/自定义(ad-hoc)" — undefined can't be an <option value>
 
 interface PlanCardProps {
   req: PlanReq
   onResolve: (d: { decision: 'allow' | 'deny' | 'modify'; value?: string }) => void
+  // Undefined workflowId = switch to ad-hoc (no named workflow). Optional: cards from callers that
+  // haven't wired re-propose yet (Task 12 step 3) simply render the dropdown without a live handler.
+  onSwitchWorkflow?: (workflowId?: string) => void
 }
 
 // .msg-req card for the hard gate — reuses ReqCard's confirm/input markup + the
 // ic-stages stage-chip pipeline. approach/task are UNTRUSTED (LLM output) and are
 // rendered as plain JSX (auto-escaped), mirroring ReqCard.
-export function PlanCard({ req, onResolve }: PlanCardProps) {
+export function PlanCard({ req, onResolve, onSwitchWorkflow }: PlanCardProps) {
   const [editing, setEditing] = useState(false)
   const [fb, setFb] = useState('')
 
@@ -27,6 +35,19 @@ export function PlanCard({ req, onResolve }: PlanCardProps) {
         <span className="req-kind">方案待批准</span>
       </div>
       <div className="req-body">
+        <div className="req-sub plan-workflow">
+          <span>本次识别为【{req.workflowName ?? '临时/自定义流程'}】</span>
+          <select
+            className="plan-workflow-switch"
+            value={req.workflowId ?? AD_HOC}
+            onChange={e => onSwitchWorkflow?.(e.target.value === AD_HOC ? undefined : e.target.value)}
+          >
+            <option value={AD_HOC}>临时/自定义(ad-hoc)</option>
+            {(req.workflowOptions ?? []).map(w => (
+              <option key={w.id} value={w.id}>{w.name}</option>
+            ))}
+          </select>
+        </div>
         {req.task ? <div className="req-sub plan-task"><span>任务</span>{req.task}</div> : null}
         <div className="req-title plan-approach"><Markdown text={req.approach} /></div>
         {req.stages.length ? (
