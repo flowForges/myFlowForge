@@ -12,6 +12,7 @@ export interface PlanReq {
   workflowId?: string
   workflowName?: string
   workflowOptions?: { id: string; name: string }[]
+  recommendReason?: string
 }
 export type PlanSelection = { stages: string[]; stageProjects: Record<string, string[]>; hooks: string[] }
 
@@ -89,6 +90,7 @@ export function PlanCard({ req, onResolve, onSwitchWorkflow, onSupplement }: Pla
             ))}
           </select>
         </div>
+        {req.recommendReason ? <div className="req-sub plan-reason">推荐理由：{req.recommendReason}</div> : null}
         {req.task ? <div className="req-sub plan-task"><span>任务</span>{req.task}</div> : null}
         <div className="req-title plan-approach"><Markdown text={req.approach} /></div>
         {req.stages.length ? (

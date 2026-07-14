@@ -17,7 +17,7 @@ export interface BridgeRunCtx {
   ask(agentId: string, question: string, options?: { t: string; d: string }[]): Promise<string | null>
   setContext(key: string, value: unknown): void
   onBeat?(agentId: string): void
-  proposePlan?(approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; brief?: string }): Promise<{ approved: boolean; feedback?: string }>
+  proposePlan?(approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; brief?: string; recommendReason?: string }): Promise<{ approved: boolean; feedback?: string }>
   // Lightweight delegation (chat-only): run sub-agents against target projects and return a summary.
   delegate?(args: { task: string; projects?: string[]; write?: boolean; brief?: string }): Promise<{ text: string }>
 }
@@ -195,6 +195,7 @@ async function dispatch(
         projects: args.projects as string[] | undefined,
         stageProjects: args.stageProjects as Record<string, string[]> | undefined,
         brief: args.brief as string | undefined,
+        recommendReason: args.recommendReason as string | undefined,
       })
       appendAudit(ctx, agentId, 'status', { approach: args.approach, approved: r.approved }, [])
       return r

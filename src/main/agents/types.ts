@@ -42,6 +42,9 @@ export interface AgentCallbacks {
   onDone(result: AgentResult): void
   onError(err: Error): void
   onHandoff?(p: HandoffPayload): void
+  // A grand-agent: this sub-agent spawned its OWN built-in Task. Surfaced (best-effort) so the IDs
+  // panel can show it at depth 2. No resumable session id — `id` is the tool_use id.
+  onSubagent?(ev: { id: string; phase: 'start' | 'done'; subagentType?: string; description?: string; result?: string; isError?: boolean }): void
 }
 export interface AgentSession { id: string; cancel(): void; done: Promise<AgentResult> }
 

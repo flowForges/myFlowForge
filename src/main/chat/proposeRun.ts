@@ -16,7 +16,7 @@ export interface ProposeDeps {
   readCustomStages?: () => CustomStageDef[]
   writeWorkspace: (ws: Workspace) => void
   startRun: (o: StartRunOpts) => void
-  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: PlanStageInfo[]; hooks: PlanHookInfo[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }) => void
+  emitPlanRequest: (wsPath: string, req: { id: string; approach: string; stages: PlanStageInfo[]; hooks: PlanHookInfo[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[]; recommendReason?: string }) => void
   emitNote: (wsPath: string, text: string) => void
   // #1: after an approved chat-triggered run starts, flip the triggering session to workflow mode
   // (setSessionMode bridges to the active session via the 2A sessionStore) and tell the renderer.
@@ -40,7 +40,7 @@ export function makeProposeRun(deps: ProposeDeps) {
   // via chat:repropose-workflow), NOT owned by an agent chat turn. Turn cleanup (cancelForWorkspace) must
   // NOT dismiss it — it lives until the user decides (allow/deny). Without this, a switch's fresh card would
   // be created after the triggering turn's preProposes snapshot and get denied when that turn ends (race).
-  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string }; sessionId?: string; brief?: string }): Promise<ProposeResult> => {
+  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string }; sessionId?: string; brief?: string; recommendReason?: string }): Promise<ProposeResult> => {
     const raw = deps.readWorkspace(wsPath)
     if (!raw) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
     // Defensive: production readWorkspace (config/store.ts) already normalizes workflows on every
@@ -115,7 +115,7 @@ export function makeProposeRun(deps: ProposeDeps) {
     // Full set of workflows this workspace has configured, so the approval card can offer a switch
     // dropdown (Task 12) — independent of which one (if any) was actually matched for this proposal.
     const workflowOptions = ws.workflows.map(w => ({ id: w.id, name: w.name }))
-    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), hooks: planHooks(opts), allProjects: opts.developProjects.map(p => p.name), task, workflowId: wf?.id, workflowName: wf?.name, workflowOptions })
+    deps.emitPlanRequest(wsPath, { id, approach, stages: planStages(opts), hooks: planHooks(opts), allProjects: opts.developProjects.map(p => p.name), task, workflowId: wf?.id, workflowName: wf?.name, workflowOptions, recommendReason: select?.recommendReason })
     return new Promise<ProposeResult>(resolve => {
       pending.set(id, { wsPath, standalone: select?.standalone === true, resolve: (d) => {
         if (d.decision === 'modify') return resolve({ approved: false, feedback: d.value })

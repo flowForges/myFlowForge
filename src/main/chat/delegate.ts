@@ -7,7 +7,7 @@ import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { buildAgentEnv } from '../agents/env'
 import { startBridge, type BridgeRunCtx } from '../mcp/forgeBridge'
 import { STAGE_FORGE_TOOLS } from '../orchestrator/orchestrator'
-import { startDelegateBatch, updateDelegateSession, updateDelegateState } from './delegateRegistry'
+import { startDelegateBatch, updateDelegateSession, updateDelegateState, addDelegateAgent } from './delegateRegistry'
 
 // Lightweight delegation (path A of the dual-path design): the main chat agent dispatches sub-agents
 // straight into project directories to read/write code and hands their results back — WITHOUT the
@@ -33,6 +33,10 @@ export interface DelegateOpts {
   permissionMode?: import('@shared/permissions').PermissionMode   // 发起会话的权限盾牌(下沉到子代理)
   brief?: string   // 主代理整理的需求简报,注入子代理 prompt(修"委派不带上下文")
   sessionId?: string   // 发起会话 id,用于把委派子代理登记进 IDs 面板(delegateRegistry)
+  // A sub-agent's forge_ask → surfaced to the user (chat select/input card); returns the answer.
+  ask?: (question: string, options?: { t: string; d: string }[], agentName?: string) => Promise<string | null>
+  // Coarse live progress: called with (project name, log text) for tool/file/accent lines during the run.
+  onProgress?: (name: string, text: string) => void
   // Called with each spawned sub-agent session — lets the caller register it for cancellation and
   // (P5) surface it in the IDs panel. Optional.
   onSession?: (s: AgentSession) => void
@@ -99,7 +103,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
       workspaceName: opts.workspacePath,
       agentName: (id) => targets.find(t => t.id === id)?.name ?? id,
       agentStage: () => 'delegate',
-      ask: async () => null,   // P1: no ask UI wired for delegate; sub-agent forge_ask resolves to null
+      ask: async (agentId, question, options) => opts.ask ? opts.ask(question, options, targets.find(t => t.id === agentId)?.name) : null,
       setContext: (key, value) => {
         if (key.startsWith('handoff:') && typeof value === 'string') summaries.set(key.slice('handoff:'.length), value)
       },
@@ -122,7 +126,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
         // (盾牌为 readonly 则仍只读,盾牌是上限)。缺省盾牌 → 'auto'(工作区可写),即历史行为。
         { stageKey: 'delegate', agentId: t.id, name: t.name, prompt: buildDelegatePrompt(opts.task, write, t.name, opts.brief), cwd: t.cwd, model: t.model, permissionMode: write ? (opts.permissionMode ?? 'auto') : 'readonly' },
         {
-          onLog: (l) => { if (l.level === 'ok' || l.kind === 'output') outputs.set(t.id, (outputs.get(t.id) ? outputs.get(t.id) + '\n' : '') + l.text) },
+          onLog: (l) => { if (l.level === 'ok' || l.kind === 'output') outputs.set(t.id, (outputs.get(t.id) ? outputs.get(t.id) + '\n' : '') + l.text); if (opts.onProgress && (l.kind === 'tool' || l.kind === 'file')) opts.onProgress(t.name, l.text) },
           onState: () => {},
           onSession: (id: string) => { if (opts.sessionId) updateDelegateSession(opts.workspacePath, opts.sessionId, t.id, id) },
           onConfirm: async () => 'deny',
@@ -130,6 +134,13 @@ export function makeRunDelegate(deps: DelegateDeps) {
           onHandoff: (p: HandoffPayload) => { summaries.set(t.id, p.summary) },
           onDone: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'ok') },
           onError: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'idle') },
+          // Grand-agent (best-effort): a sub-agent's own built-in Task → depth-2 row under this sub-agent.
+          onSubagent: (ev) => {
+            if (!opts.sessionId) return
+            const gid = `${t.id}/${ev.id}`
+            if (ev.phase === 'start') addDelegateAgent(opts.workspacePath, opts.sessionId, { agentId: gid, name: ev.description || ev.subagentType || '内部子任务', provider: t.provider, sessionId: ev.id, status: 'run', depth: 2, parentId: t.id })
+            else updateDelegateState(opts.workspacePath, opts.sessionId, gid, 'ok')
+          },
         },
         env,
       )

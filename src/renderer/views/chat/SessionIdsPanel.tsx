@@ -94,7 +94,7 @@ export function SessionIdsPanel({
       ) : (
         <div className="sid-list">
           {rows.map((r, i) => (
-            <div className={`sid-card${r.depth ? ' sid-card-child' : ''}`} key={i}>
+            <div className={`sid-card${r.depth ? ' sid-card-child' : ''}${r.depth === 2 ? ' sid-card-grand' : ''}`} key={i}>
               <div className="sid-top">
                 <span className={`sid-provider ${r.provider}`} />
                 <div className="sid-main">

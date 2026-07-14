@@ -90,8 +90,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           if (a.kind === 'result') { if (a.text) cb.onLog({ ts: now(), text: a.text, level: 'ok', kind: 'output' }); continue }
           // A stage agent's own built-in Task sub-agents: surface as log lines (the run path has no
           // sub-agent card UI; the workflow's own real sub-agents are the visible ones here).
-          if (a.kind === 'subagent-start') { cb.onLog({ ts: now(), text: `调用子代理 ${a.subagentType ?? ''}${a.description ? ' · ' + a.description : ''}`.trim(), level: 'accent', kind: 'tool' }); continue }
-          if (a.kind === 'subagent-result') continue
+          if (a.kind === 'subagent-start') { cb.onSubagent?.({ id: a.id, phase: 'start', subagentType: a.subagentType, description: a.description }); cb.onLog({ ts: now(), text: `调用子代理 ${a.subagentType ?? ''}${a.description ? ' · ' + a.description : ''}`.trim(), level: 'accent', kind: 'tool' }); continue }
+          if (a.kind === 'subagent-result') { cb.onSubagent?.({ id: a.id, phase: 'done', result: a.result, isError: a.isError }); continue }
           const kind = a.kind === 'assistant' ? 'output' : a.kind
           cb.onLog({ ts: now(), text: a.text, level: KIND_LEVEL[kind], kind })
         }
