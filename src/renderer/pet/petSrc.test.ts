@@ -2,22 +2,25 @@ import { describe, it, expect } from 'vitest'
 import { petSrc, builtinAssetUrl } from './petSrc'
 
 describe('petSrc', () => {
-  it('resolves built-in pack paths to a bundled asset url (not the forge-pet protocol)', () => {
-    const url = petSrc('builtin/china-dragon/webp/idle.webp')
+  it('resolves the bundled built-in (white-catgirl) to a bundled asset url (not the forge-pet protocol)', () => {
+    const url = petSrc('builtin/white-catgirl/webp/idle.webp')
     expect(url).toBeTruthy()
     expect(url).not.toContain('forge-pet://')
     // bundled asset (Vite emits into /assets/…webp) — the exact hash varies, so match the shape
     expect(url).toMatch(/idle.*\.webp/)
   })
 
-  it('maps every built-in pet/state animated webp to a bundled asset', () => {
-    for (const id of ['china-dragon', 'white-catgirl', 'pink-catgirl', 'rocket-fox', 'phoenix', 'cyber-jellyfish']) {
-      for (const state of ['idle', 'working', 'confirm', 'input', 'done']) {
-        const stored = `builtin/${id}/webp/${state}.webp`
-        expect(builtinAssetUrl(stored), `${id}/${state}`).toBeTruthy()
-        expect(petSrc(stored), `${id}/${state}`).not.toContain('forge-pet://')
-      }
+  it('maps every white-catgirl state webp to a bundled asset', () => {
+    for (const state of ['idle', 'working', 'confirm', 'input', 'done']) {
+      const stored = `builtin/white-catgirl/webp/${state}.webp`
+      expect(builtinAssetUrl(stored), state).toBeTruthy()
+      expect(petSrc(stored), state).not.toContain('forge-pet://')
     }
+  })
+
+  it('non-bundled (downloadable) packs are not in the Vite glob → fall back to forge-pet://', () => {
+    // china-dragon etc. moved to on-demand download; they are served from disk, not bundled.
+    expect(builtinAssetUrl('builtin/china-dragon/webp/idle.webp')).toBeUndefined()
   })
 
   it('routes user-uploaded relative paths through the forge-pet protocol', () => {

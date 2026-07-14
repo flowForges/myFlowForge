@@ -113,6 +113,11 @@ export const CH = {
   wallpaperCatalog: 'wallpaper:catalog',
   wallpaperPreview: 'wallpaper:preview',
   wallpaperInstall: 'wallpaper:install',
+  // Downloadable pet packs (no activation code) — list the public jsDelivr catalog, preview a pack's
+  // thumbnail, and download+store a pack's animated frames as a usable custom pet.
+  petPackCatalog: 'petpack:catalog',
+  petPackPreview: 'petpack:preview',
+  petPackInstall: 'petpack:install',
   // Main renderer → main process: the workspace currently open in the main window ('ws' view), or null on
   // the home view. Relayed to the pet so its command input can target "the workspace you're in".
   setPetActiveWorkspace: 'pet:set-active-workspace',

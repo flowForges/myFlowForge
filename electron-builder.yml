@@ -36,12 +36,13 @@ extraResources:
       - "**/*"
   - from: assets/pet-packs
     to: builtin-pet-packs
-    # Ship ONLY the assets loaded at runtime: the animated webp/ images (the primary display path is the
-    # Vite-bundled copy; these back the forge-pet:// fallback). Everything else in a pack — source sheets,
-    # frames, base.png, and the unused png/gif/apng exports — is authoring-only and excluded.
+    # Ship ONLY the bundled built-in pet (white-catgirl) — the other packs moved to on-demand download
+    # (jsDelivr → disk via forge-pet://), so bundling them here would defeat the ~60MB installer slim.
+    # Within white-catgirl, ship only the runtime webp/ (the primary path is the Vite-bundled copy; these
+    # back the forge-pet:// fallback). Source sheets / unused exports stay authoring-only and excluded.
     filter:
-      - "*/webp/**"
-      - "manifest.json"
+      - "white-catgirl/webp/**"
+      - "white-catgirl/manifest.json"
 mac:
   target:
     - dmg
