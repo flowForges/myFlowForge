@@ -206,7 +206,7 @@
 .wp-tile:hover { border-color: var(--border-2); }
 .wp-tile:disabled { cursor: default; opacity: .6; }
 .wp-tile.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-.wp-thumb { width: 100%; aspect-ratio: 16 / 10; background: var(--bg); display: grid; place-items: center; }
+.wp-thumb { position: relative; width: 100%; aspect-ratio: 16 / 10; background: var(--bg); display: grid; place-items: center; }
 .wp-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .wp-thumb-ph { font-size: 10px; color: var(--faint); }
 .wp-name { font-size: 11.5px; color: var(--fg); padding: 0 8px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -215,6 +215,17 @@
   background: var(--accent); color: #fff; display: grid; place-items: center;
 }
 .wp-check svg { width: 13px; height: 13px; }
+/* 点击某张壁纸后,在其缩略图上盖一层「下载中…」遮罩 + 转圈,给出即时反馈。 */
+.wp-loading {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; background: color-mix(in srgb, var(--bg) 62%, transparent); color: var(--fg);
+  font-size: 11px; font-weight: 600; backdrop-filter: blur(1px);
+}
+.wp-spin {
+  width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border-2);
+  border-top-color: var(--accent); animation: wp-spin 0.7s linear infinite;
+}
+@keyframes wp-spin { to { transform: rotate(360deg); } }
 
 /* ========== 应用字体选择器 (FontPicker) ========== */
 .font-picker { position: relative; min-width: 240px; }

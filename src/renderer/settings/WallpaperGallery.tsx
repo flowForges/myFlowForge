@@ -64,10 +64,13 @@ export function WallpaperGallery({ current, onApply }: WallpaperGalleryProps) {
         onClick={() => void apply(w)}
       >
         <div className="wp-thumb">
-          {thumb ? <img src={thumb} alt="" /> : <span className="wp-thumb-ph">{busyThis ? '应用中…' : '加载中…'}</span>}
+          {thumb ? <img src={thumb} alt="" /> : <span className="wp-thumb-ph">加载中…</span>}
+          {busyThis && (
+            <div className="wp-loading"><span className="wp-spin" />下载中…</div>
+          )}
         </div>
         <div className="wp-name">{w.name}</div>
-        {on && <span className="wp-check">{CHECK}</span>}
+        {on && !busyThis && <span className="wp-check">{CHECK}</span>}
       </button>
     )
   }
