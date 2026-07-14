@@ -863,6 +863,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       pinned = [...pinned, a.path]
     }
     writeSettings({ ...s, pinnedWorkspaces: pinned })
+    // Keep every window's settings snapshot fresh so a later config:set-settings (which writes the
+    // whole settings object) doesn't clobber the pins with a stale value. Mirrors workspacesSetOrder.
+    broadcast(CH.settingsChanged, readSettings())
     const live = orch.getRun()
     const livePath = live && live.status === 'run' ? live.workspacePath : undefined
     return listWorkspaces(livePath, pinned, s.workspaceOrder)

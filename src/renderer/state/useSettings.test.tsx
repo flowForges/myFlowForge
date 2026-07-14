@@ -74,6 +74,31 @@ describe('useSettings', () => {
     expect(saved.closeAction).toBe('hide')
   })
 
+  it('pinnedWorkspaces: 从磁盘加载,且不被无关更新清空', async () => {
+    ;(window as any).forge.getSettings = vi.fn(async () => ({ pinnedWorkspaces: ['/ws/a', '/ws/b'] }))
+    const { result } = renderHook(() => useSettings())
+    await waitFor(() => expect(result.current.settings).not.toBeNull())
+    // 加载时必须从磁盘拿到置顶列表(而不是被 DEFAULTS 的 [] 顶掉)
+    expect(result.current.settings!.pinnedWorkspaces).toEqual(['/ws/a', '/ws/b'])
+
+    // 改任意无关设置 → 写回时必须带上置顶,不能冲成 []
+    act(() => { result.current.update({ appearance: { theme: 'light' } }) })
+    await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
+    expect(saved.pinnedWorkspaces).toEqual(['/ws/a', '/ws/b'])
+  })
+
+  it('pinnedWorkspaces: onSettingsChanged 广播(置顶后)刷新快照,不被后续保存覆盖', async () => {
+    const { result } = renderHook(() => useSettings())
+    await waitFor(() => expect(result.current.settings).not.toBeNull())
+    // set-pinned handler 写盘后广播的整份 settings(含新置顶)
+    act(() => { settingsCb!({ pinnedWorkspaces: ['/ws/x'] }) })
+    expect(result.current.settings!.pinnedWorkspaces).toEqual(['/ws/x'])
+
+    act(() => { result.current.update({ termProxy: 'http://x' }) })
+    await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
+    expect(saved.pinnedWorkspaces).toEqual(['/ws/x'])
+  })
+
   it('onSettingsChanged 用 DEFAULTS 补齐缺失字段', async () => {
     const { result } = renderHook(() => useSettings())
     await waitFor(() => expect(result.current.settings).not.toBeNull())

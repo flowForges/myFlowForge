@@ -57,9 +57,11 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     skills: { ...base.skills, ...(partial.skills ?? {}) },
     pet: { ...base.pet, ...(partial.pet ?? {}) },
     heartbeat: partial.heartbeat ?? base.heartbeat,
-    pinnedWorkspaces: base.pinnedWorkspaces,
-    // Managed via the workspaces:set-order IPC (broadcasts settingsChanged to keep base fresh), not
-    // this update path — so just carry it through.
+    // Both pinnedWorkspaces and workspaceOrder are managed via dedicated workspaces:* IPC (each
+    // broadcasts settingsChanged to keep base fresh), never this update path. Read from `partial`
+    // first so a fresh load / broadcast picks up the on-disk value; otherwise DEFAULTS ([]) would
+    // shadow it on load and every later config:set-settings would clobber the pins back to [].
+    pinnedWorkspaces: (partial as Partial<Settings>).pinnedWorkspaces ?? base.pinnedWorkspaces,
     workspaceOrder: (partial as Partial<Settings>).workspaceOrder ?? base.workspaceOrder,
     // Preserve pluginCreds across saves — it's managed via the plugin IPC, not this update path.
     // Reading from the loaded settings on load (cast) and from base on regular updates.
