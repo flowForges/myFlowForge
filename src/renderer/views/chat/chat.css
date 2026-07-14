@@ -359,6 +359,10 @@
 
 /* 子代理卡片 —— 主代理调用的内置 Task 子代理,在会话区显示存在/运行/结果。折叠式,与 HookNode 同风格。 */
 .subagent-cards { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
+/* Clarifies these are the main agent's OWN native sub-agents (its Task tool), not Forge workflow-stage
+   agents. Hover for the full explanation. */
+.sac-lead { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--faint); cursor: help; }
+.sac-lead-dot { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in oklab, var(--accent) 60%, var(--muted)); flex: 0 0 auto; }
 .subagent-card { border: 1px solid var(--border); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
 .subagent-card.s-running { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
 .subagent-card.s-error { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }
