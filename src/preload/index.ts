@@ -85,6 +85,7 @@ const api = {
   sessionClose: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.sessionClose, a),
   sessionRename: (a: { workspacePath: string; sessionId: string; title: string }) => ipcRenderer.invoke(CH.sessionRename, a),
   sessionSetPermission: (a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => ipcRenderer.invoke(CH.sessionSetPermission, a),
+  wsSetAutoDecide: (a: { workspacePath: string; value: boolean }) => ipcRenderer.invoke(CH.wsSetAutoDecide, a),
   sessionSetModel: (a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => ipcRenderer.invoke(CH.sessionSetModel, a),
   sessionContinueFrom: (a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => ipcRenderer.invoke(CH.sessionContinueFrom, a),
   agentSessionIds: (workspacePath: string, sessionId: string) => ipcRenderer.invoke(CH.sessionAgentIds, { workspacePath, sessionId }),

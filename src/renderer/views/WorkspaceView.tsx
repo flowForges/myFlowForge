@@ -76,6 +76,7 @@ interface WorkspaceInfo {
   // already returns this (ensureWorkspaceWorkflows guarantees it); optional here only for callers that
   // predate multi-workflow support.
   workflows?: WsWorkflow[];
+  autoDecide?: boolean;
 }
 
 interface WorkspaceViewProps {
@@ -187,11 +188,14 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
 
   // Load workspace data for the chat panel
   const [wsInfo, setWsInfo] = useState<WorkspaceInfo | null>(null)
+  // 「允许 LLM 自行决策」(per-workspace):开=工作流不弹选择门,主代理自填门决策。初值随 wsInfo 载入。
+  const [autoDecide, setAutoDecide] = useState(false)
   const reloadWsInfo = useCallback(() => {
     if (!wsPath) { setWsInfo(null); return }
     void window.forge.getWorkspace(wsPath).then((ws: WorkspaceInfo | null) => setWsInfo(ws))
   }, [wsPath])
   useEffect(() => { reloadWsInfo() }, [reloadWsInfo])
+  useEffect(() => { setAutoDecide(!!wsInfo?.autoDecide) }, [wsInfo])
   useEffect(() => {
     const off = window.forge.onWorkspacesChanged?.(() => reloadWsInfo())
     return () => { off?.() }
@@ -719,6 +723,12 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           selection={selection}
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
+          autoDecide={autoDecide}
+          onToggleAutoDecide={() => {
+            const next = !autoDecide
+            setAutoDecide(next)
+            if (wsPath) window.forge.wsSetAutoDecide?.({ workspacePath: wsPath, value: next })
+          }}
           onSelectionChange={(s) => {
             setSelection(s)
             const sid = sessions.activeSessionId

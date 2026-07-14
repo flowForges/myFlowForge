@@ -340,6 +340,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
   ipcMain.handle(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
   ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
+  // 「允许 LLM 自行决策」per-workspace 开关:写入 workspace.json,供 proposeRun 读取以决定是否弹门。
+  ipcMain.handle(CH.wsSetAutoDecide, (_e, a: { workspacePath: string; value: boolean }) => {
+    const ws = readWorkspace(a.workspacePath)
+    if (ws) writeWorkspace({ ...ws, autoDecide: a.value })
+  })
   ipcMain.handle(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
     setStageModel(a.path, a.stageKey, a.provider, a.model)
   })
