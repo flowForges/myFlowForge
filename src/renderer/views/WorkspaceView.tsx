@@ -170,6 +170,16 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     }
     setPendingSwitch(null)
   }, [pendingSwitch, wsPath, sessions.activeSessionId])
+  // Session switch → clear any seeded composer text (workflow-trigger phrase or supplement quote) so a
+  // fresh session opens EMPTY instead of inheriting the previous session's seed. Guard with a ref so
+  // the initial mount / first-settle does NOT clear (that would wipe a just-set same-session chip
+  // seed); only a genuine change from one session id to another clears. (User draft lives in draftStore.)
+  const prevSidRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const sid = sessions.activeSessionId
+    if (prevSidRef.current !== undefined && prevSidRef.current !== sid) setQuickSeed(undefined)
+    prevSidRef.current = sid
+  }, [sessions.activeSessionId])
   // #3: a run belongs to the session that started it. Show the live run + its gate/pending cards ONLY
   // in that session's tab — a run raising a permission gate must NOT steal whatever tab is in front
   // (the "画着图呢，A 的权限门跳到 C" bug). Runs with no sessionId (legacy/direct) show anywhere in the ws.
