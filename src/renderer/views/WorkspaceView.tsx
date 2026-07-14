@@ -11,6 +11,7 @@ import { WorkflowGlance } from '../components/WorkflowGlance'
 import type { Plugin } from '@shared/plugin'
 import { ReqCard } from '../components/ReqCard'
 import { PlanCard } from '../components/PlanCard'
+import { ProviderSwitchDivider } from '../components/ProviderSwitchDivider'
 import { AgentContextMeta } from '../components/AgentContextMeta'
 import { ResizeHandle } from '../shell/ResizeHandle'
 import { useChat } from '../state/useChat'
@@ -462,6 +463,12 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   const agentLabel = selProvider
     ? `${selProvider.displayName} · ${selection!.modelId}`
     : '—'
+  // provider id → 显示名,复用已检测的 providers 目录(与上面 selProvider 同一份数据源);未检测到
+  // (已卸载/未知 provider)时退回裸 id,而不是新造一张标签表。
+  const providerLabel = useCallback(
+    (id: string) => providers.find(p => p.id === id)?.displayName ?? id,
+    [providers],
+  )
   const displayPath = wsPath ?? '—'
   const loadedContext = useMemo(() => {
     for (let i = chat.messages.length - 1; i >= 0; i--) {
@@ -565,6 +572,15 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             )}
             {/* 当前对话:消息与子代理/主代理的交互卡片按时间线归并内联渲染 */}
             {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans).map(entry => {
+              if (entry.kind === 'provider-switch') {
+                return (
+                  <ProviderSwitchDivider
+                    key={`ps-${entry.ts}-${entry.from}-${entry.to}`}
+                    from={providerLabel(entry.from)}
+                    to={providerLabel(entry.to)}
+                  />
+                )
+              }
               if (entry.kind === 'message') {
                 return (
                   <Message

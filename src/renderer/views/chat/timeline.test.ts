@@ -4,6 +4,8 @@ import type { PlanReq } from './timeline'
 import type { ChatMessage, PendingAction, ChatConfirm } from '@shared/types'
 
 const msg = (id: string, ts: string): ChatMessage => ({ id, who: 'ai', text: id, ts })
+const aiMsg = (id: string, ts: string, provider?: string): ChatMessage => ({ id, who: 'ai', text: id, ts, provider })
+const userMsg = (id: string, ts: string): ChatMessage => ({ id, who: 'user', text: id, ts })
 const pend = (id: string, ts?: string): PendingAction =>
   ({ id, kind: 'input', agentId: 'a', agentName: 'A', wsName: 'w', title: 'q', ts } as PendingAction)
 const plan = (id: string, ts: string): PlanReq => ({ id, approach: 'a', stages: [], task: 't', ts })
@@ -68,5 +70,51 @@ describe('buildTimeline', () => {
     const plans = [plan('pl', '2026-07-01T12:00:10.000Z')] // 稍后产生的方案卡片
     const tl = buildTimeline(messages, [], [], plans)
     expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind)).toEqual(['u', 'ai', 'plan'])
+  })
+
+  // Task 19: 会话内切换 provider 时插入分割线。A→A→B→B 只在第一条 B 之前插一条,两条 A 之间不插,
+  // 第二条 B 之前也不插(同 provider 连续)。
+  describe('provider-switch 分割线', () => {
+    it('A→A→B→B 只在第一条 B 前插一条分割线', () => {
+      const messages = [
+        aiMsg('a1', '2026-07-01T12:00:00.000Z', 'claude'),
+        aiMsg('a2', '2026-07-01T12:00:01.000Z', 'claude'),
+        aiMsg('b1', '2026-07-01T12:00:02.000Z', 'codex'),
+        aiMsg('b2', '2026-07-01T12:00:03.000Z', 'codex'),
+      ]
+      const tl = buildTimeline(messages, [], [], [])
+      expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind))
+        .toEqual(['a1', 'a2', 'provider-switch', 'b1', 'b2'])
+      const div = tl.find(e => e.kind === 'provider-switch')
+      expect(div && div.kind === 'provider-switch' && { from: div.from, to: div.to })
+        .toEqual({ from: 'claude', to: 'codex' })
+    })
+
+    it('第一条 ai 消息(无「上一条」)不插分割线', () => {
+      const messages = [aiMsg('a1', '2026-07-01T12:00:00.000Z', 'claude')]
+      const tl = buildTimeline(messages, [], [], [])
+      expect(tl.map(e => e.kind)).toEqual(['message'])
+    })
+
+    it('user 消息穿插不影响 ai→ai 切换判定', () => {
+      const messages = [
+        aiMsg('a1', '2026-07-01T12:00:00.000Z', 'claude'),
+        userMsg('u1', '2026-07-01T12:00:01.000Z'),
+        aiMsg('b1', '2026-07-01T12:00:02.000Z', 'codex'),
+      ]
+      const tl = buildTimeline(messages, [], [], [])
+      expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind))
+        .toEqual(['a1', 'u1', 'provider-switch', 'b1'])
+    })
+
+    it('无 provider 的旧消息(user 或缺字段的 ai)不触发误插,也不残留旧 provider 状态', () => {
+      const messages = [
+        aiMsg('old', '2026-07-01T12:00:00.000Z'),          // 旧会话:无 provider 字段
+        aiMsg('a1', '2026-07-01T12:00:01.000Z', 'claude'),  // 与「上一条」比较,上一条无 provider → 不插
+        aiMsg('a2', '2026-07-01T12:00:02.000Z', 'claude'),  // 与 a1 同 provider → 不插
+      ]
+      const tl = buildTimeline(messages, [], [], [])
+      expect(tl.map(e => e.kind)).toEqual(['message', 'message', 'message'])
+    })
   })
 })
