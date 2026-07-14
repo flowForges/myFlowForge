@@ -28,4 +28,23 @@ describe('buildLocalHistoryPreamble (provider switch continuity)', () => {
   it('empty when the session has no prior messages (fresh session first turn)', () => {
     expect(buildLocalHistoryPreamble('/ws', 's-new', { read: () => [] })).toBe('')
   })
+
+  it('fromIndex slices to only messages from that index onward (incremental catch-up)', () => {
+    const long: ImportedMessage[] = [
+      { who: 'user', text: '第一个问题', ts: '' },
+      { who: 'ai', text: '第一个回答', ts: '' },
+      { who: 'user', text: '第二个问题', ts: '' },
+      { who: 'ai', text: '第二个回答', ts: '' },
+    ]
+    const p = buildLocalHistoryPreamble('/ws', 's-2', { read: () => long }, { fromIndex: 2 })
+    expect(p).not.toContain('第一个问题')
+    expect(p).not.toContain('第一个回答')
+    expect(p).toContain('第二个问题')
+    expect(p).toContain('第二个回答')
+  })
+
+  it('fromIndex omitted behaves like the full-history default', () => {
+    const p = buildLocalHistoryPreamble('/ws', 's-2', { read: () => hist })
+    expect(p).toContain('用户：原问题')
+  })
 })

@@ -41,9 +41,13 @@ export function buildLocalHistoryPreamble(
   wsPath: string,
   sessionId: string,
   deps: { read?: (ws: string, sid: string) => ImportedMessage[] } = {},
+  opts: { fromIndex?: number } = {},
 ): string {
   const read = deps.read ?? ((ws, sid) => readMessages(ws, sid).map(m => ({ who: m.who, text: m.text, ts: m.ts })))
-  const msgs = read(wsPath, sessionId)
+  const all = read(wsPath, sessionId)
+  // fromIndex slices to only the messages a provider hasn't natively seen yet (incremental catch-up
+  // on a provider switch-back). fromIndex omitted/0 renders the full history (unchanged behavior).
+  const msgs = opts.fromIndex ? all.slice(opts.fromIndex) : all
   const { kept, omitted } = clampHistory(msgs)
-  return renderHistoryPreamble(kept, omitted)
+  return renderHistoryPreamble(kept, omitted, { incremental: !!opts.fromIndex })
 }
