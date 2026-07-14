@@ -27,6 +27,7 @@ import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage } from '../chat/chatStore'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession } from '../chat/sessionStore'
 import { agentSessionsForId } from '../chat/agentSessions'
+import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ResolvePayload, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, EngineEvent } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
 import type { StartRunOpts } from '../orchestrator/orchestrator'
@@ -682,6 +683,38 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     chatConfirms.delete(a.id)
     resolve(a.decision === 'modify' ? 'deny' : a.decision)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
+  })
+  // Provider-switch context summary: after the user confirms switching agent mid-session, the NEW
+  // provider reads the prior conversation and produces a visible summary message (provider = toAgent,
+  // so the timeline auto-inserts a provider-switch divider above it: old agent's msgs → summary).
+  ipcMain.handle(CH.chatSwitchSummary, async (_e, a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => {
+    const provider = providers[a.toAgent] ?? providers['claude']
+    if (!provider?.chat) return
+    const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
+    if (!msgs.length) return
+    const env = buildAgentEnv({ proxy: readSettings().termProxy })
+    const model = distillModelFor(a.toAgent) ?? a.model
+    const id = `switch-sum-${Date.now()}`
+    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-start', id, model: '上下文总结' })
+    const transcript = msgs.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${m.text}`).join('\n')
+    const prompt = [
+      '你即将接手这段对话。先把下面的历史对话读一遍,用中文简要总结:用户目标、已确定的决策/方案、关键事实与当前进展,以便你带着上下文继续下去。',
+      '历史对话:', transcript, '\n只输出总结正文,不要解释,不要提"以下是总结"之类的话。',
+    ].join('\n')
+    let acc = ''
+    await new Promise<void>((resolve) => {
+      provider.chat!({ id, prompt, model, cwd: a.workspacePath }, {
+        onSession: () => {},
+        onAssistantDelta: (t) => { acc += t; broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-delta', id, text: t }) },
+        onThinkDelta: () => {},
+        onDone: () => resolve(),
+        onError: () => resolve(),
+      }, env)
+    })
+    const body = acc.trim()
+    const note: ChatMessage = { id, who: 'ai', text: body ? `【上下文总结 · 由 ${provider.displayName} 生成】\n${body}` : '(未能生成上下文总结,可直接继续对话)', model: '上下文总结', provider: a.toAgent, ts: new Date().toISOString() }
+    appendMessage(a.workspacePath, a.sessionId, note)
+    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
   })
   ipcMain.handle(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => history(a.workspacePath, a.sessionId))
   ipcMain.handle(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
