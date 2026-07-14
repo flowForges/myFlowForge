@@ -52,8 +52,8 @@ describe('runWorkspaceSetup', () => {
 
     const res = await runWorkspaceSetup({
       opts: {
-        name: 'order', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        name: 'order', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/x' }],
         stepPlugins: [
           { id: 'b1', name: 'Basic1', prompt: 'p', after: '__basic', skills: [], tools: ['read'] },
@@ -97,8 +97,8 @@ describe('runWorkspaceSetup', () => {
     const wsPath = join(root, 'ws-cwd')
     await runWorkspaceSetup({
       opts: {
-        name: 'cwd', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        name: 'cwd', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/x' }],
         stepPlugins: [{ id: 'b1', name: 'Basic1', prompt: 'p', after: '__basic', skills: [], tools: ['read'] }],
       },
@@ -118,8 +118,8 @@ describe('runWorkspaceSetup', () => {
     const wsPath = join(root, 'ws-err')
     await runWorkspaceSetup({
       opts: {
-        name: 'err', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        name: 'err', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/x' }],
         stepPlugins: [
           { id: 'b1', name: 'Basic1', prompt: 'p', after: '__basic', skills: [], tools: ['read'] },
@@ -148,8 +148,8 @@ describe('runWorkspaceSetup', () => {
     ]
     const res = await runWorkspaceSetup({
       opts: {
-        name: 'persist', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        name: 'persist', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/x' }],
         stepPlugins,
       },
@@ -169,8 +169,8 @@ describe('runWorkspaceSetup', () => {
 
     await runWorkspaceSetup({
       opts: {
-        name: 'prov-order', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        name: 'prov-order', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
         projects: [
           { repoId: 'r1', branch: 'main' },
           { repoId: 'r2', branch: 'main' },
@@ -201,8 +201,8 @@ describe('runWorkspaceSetup', () => {
 
     await expect(runWorkspaceSetup({
       opts: {
-        name: 'prov-err', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        name: 'prov-err', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
         projects: [{ repoId: 'r1', branch: 'main' }],
       },
       knownProjects: [{ id: 'r1', name: 'alpha', repoUrl: 'u1', defaultBranch: 'main' } as any],
@@ -223,8 +223,8 @@ describe('runWorkspaceSetup', () => {
     ctrl.abort()   // user hit 取消 before/while creating
     await expect(runWorkspaceSetup({
       opts: {
-        name: 'cancel', path: join(root, 'ws-cancel'), workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        name: 'cancel', path: join(root, 'ws-cancel'),
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/x' }],
       },
       knownProjects: SRC_PROJECTS(), proxy: '', providers: { claude: provider },
@@ -251,8 +251,8 @@ describe('runWorkspaceSetup', () => {
     const provisioned: string[] = []
     const p = runWorkspaceSetup({
       opts: {
-        name: 'cancel-hook', path: join(root, 'ws-cancel-hook'), workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }],
+        name: 'cancel-hook', path: join(root, 'ws-cancel-hook'),
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/x' }],
         stepPlugins: [{ id: 'b1', name: 'Basic1', prompt: 'p', after: '__basic', skills: [], tools: ['read'] }],
       },

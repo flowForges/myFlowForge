@@ -456,7 +456,7 @@ export function App() {
     try {
       const name = dir.split('/').filter(Boolean).pop() || '工作区'
       const { startRunOpts } = await window.forge.createWorkspace({
-        name, path: dir, workflowId: workflows[0]?.id ?? 'standard', stages: [], projects: [],
+        name, path: dir, workflows: [], projects: [],
       })
       const wsPath = (startRunOpts as StartRunOpts).workspacePath
       setCreateErr(null)

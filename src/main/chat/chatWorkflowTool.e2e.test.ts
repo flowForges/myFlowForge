@@ -37,6 +37,7 @@ function connectTo(socketPath: string): Promise<net.Socket> {
 const ws: Workspace = {
   name: 'feat-x', path: '/abs/feat-x', workflowId: 'wf',
   stages: [{ key: 'develop', provider: 'claude', model: 'opus-4.8' }],
+  workflows: [{ id: 'wf', name: 'wf', stages: [{ key: 'develop', provider: 'claude', model: 'opus-4.8' }] }],
   projects: [{ repoId: 'r', name: 'app', branch: 'main', provider: 'claude', model: 'opus-4.8' }],
   status: 'idle',
   plugins: [], stepPlugins: [],

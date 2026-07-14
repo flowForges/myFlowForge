@@ -34,11 +34,14 @@ describe('createWorkspace', () => {
     const wsPath = join(root, 'ws-a')
     const result = await createWorkspace({
       opts: {
-        name: 'design-migration', path: wsPath, workflowId: 'standard',
-        stages: [
-          { key: 'design', provider: 'claude', model: 'opus-4.8' },
-          { key: 'develop', provider: 'claude', model: 'sonnet-4.6' }
-        ],
+        name: 'design-migration', path: wsPath,
+        workflows: [{
+          id: 'standard', name: 'standard',
+          stages: [
+            { key: 'design', provider: 'claude', model: 'opus-4.8' },
+            { key: 'develop', provider: 'claude', model: 'sonnet-4.6' }
+          ],
+        }],
         projects: [{ repoId: 'proj', branch: 'forge/ws-a', model: 'sonnet-4.6' }]
       },
       knownProjects: projects, proxy: ''
@@ -64,8 +67,8 @@ describe('createWorkspace', () => {
     const wsPath = join(root, 'ws-heal')
     const result = await createWorkspace({
       opts: {
-        name: 'heal', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+        name: 'heal', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }],
         projects: [{ repoId: proj.id, branch: 'forge/ws-heal' }]
       },
       knownProjects: [proj], proxy: ''
@@ -81,7 +84,7 @@ describe('createWorkspace', () => {
     const { createWorkspace } = await import('./workspaceService')
     const wsPath = join(root, 'ws-chat-only')
     const result = await createWorkspace({
-      opts: { name: 'just-chat', path: wsPath, workflowId: 'standard', stages: [], projects: [] },
+      opts: { name: 'just-chat', path: wsPath, workflows: [], projects: [] },
       knownProjects: [], proxy: ''
     })
     // The workspace folder + .forge metadata are created even without any project/worktree.
@@ -99,8 +102,8 @@ describe('createWorkspace', () => {
     const wsPath = join(root, 'ws-b')
     const result = await createWorkspace({
       opts: {
-        name: 'per-provider-test', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+        name: 'per-provider-test', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/ws-b', provider: 'codex', model: 'gpt-5-codex' }]
       },
       knownProjects: projects, proxy: ''
@@ -119,22 +122,30 @@ describe('createWorkspace', () => {
     const wsPath = join(root, 'ws-c')
     await createWorkspace({
       opts: {
-        name: 'persist-test', path: wsPath, workflowId: 'standard',
-        stages: [
-          { key: 'design', provider: 'claude', model: 'opus-4.8' },
-          { key: 'develop', provider: 'claude', model: 'sonnet-4.6' }
-        ],
+        name: 'persist-test', path: wsPath,
+        workflows: [{
+          id: 'standard', name: 'standard',
+          stages: [
+            { key: 'design', provider: 'claude', model: 'opus-4.8' },
+            { key: 'develop', provider: 'claude', model: 'sonnet-4.6' }
+          ],
+        }],
         projects: [{ repoId: 'proj', branch: 'forge/ws-c', provider: 'codex', model: 'gpt-5-codex' }]
       },
       knownProjects: projects, proxy: ''
     })
     const ws = readWorkspace(wsPath)!
     expect(ws).not.toBeNull()
-    expect(ws.workflowId).toBe('standard')
-    expect(ws.stages).toEqual([
-      { key: 'design', provider: 'claude', model: 'opus-4.8' },
-      { key: 'develop', provider: 'claude', model: 'sonnet-4.6' }
-    ])
+    // legacy workflowId/stages are left blank now — the resolved config lives in ws.workflows.
+    expect(ws.workflowId).toBe('')
+    expect(ws.stages).toEqual([])
+    expect(ws.workflows).toEqual([{
+      id: 'standard', name: 'standard',
+      stages: [
+        { key: 'design', provider: 'claude', model: 'opus-4.8' },
+        { key: 'develop', provider: 'claude', model: 'sonnet-4.6' }
+      ],
+    }])
     expect(ws.projects).toEqual([
       { repoId: 'proj', name: 'proj', branch: 'forge/ws-c', provider: 'codex', model: 'gpt-5-codex' }
     ])
@@ -148,8 +159,8 @@ describe('createWorkspace', () => {
     const wsPath = join(root, 'ws-d')
     await createWorkspace({
       opts: {
-        name: 'defaults-test', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+        name: 'defaults-test', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/ws-d' }]
       },
       knownProjects: projects, proxy: ''
@@ -167,8 +178,8 @@ describe('createWorkspace', () => {
     const wsPath = join(root, 'ws-d2')
     await createWorkspace({
       opts: {
-        name: 'noname-test', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+        name: 'noname-test', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }],
         projects: [{ repoId: 'go-blog', branch: 'forge/ws-d2' }]
       },
       knownProjects: projects, proxy: ''
@@ -184,8 +195,8 @@ describe('createWorkspace', () => {
     const wsPath = join(root, 'ws-e')
     await createWorkspace({
       opts: {
-        name: 'skill-test', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+        name: 'skill-test', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/ws-e' }]
       },
       knownProjects: projects, proxy: ''
@@ -201,8 +212,8 @@ describe('buildWorkspaceRecord', () => {
     // buildWorkspaceRecord ran before the provision loop's guard, so an unguarded byId.get(...)!.name
     // crashed the whole create with a raw TypeError.
     const rec = buildWorkspaceRecord(
-      { name: 'w', path: '/ws', workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'm' }],
+      { name: 'w', path: '/ws',
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
         projects: [{ repoId: 'ghost', branch: 'main' }] },
       new Map(),
     )
@@ -218,18 +229,21 @@ describe('editWorkspace', () => {
     const known = [{ id: 'proj', name: 'proj', repoUrl: src, defaultBranch: 'main' }]
     const wsPath = join(root, 'ws-edit')
     await createWorkspace({
-      opts: { name: 'orig', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+      opts: { name: 'orig', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }],
         projects: [{ repoId: 'proj', branch: 'forge/ws-edit' }] },
       knownProjects: known, proxy: ''
     })
     const result = await editWorkspace({
       path: wsPath,
-      opts: { name: 'renamed', path: wsPath, workflowId: '__custom',
-        stages: [
-          { key: 'design', provider: 'claude', model: 'opus-4.8' },
-          { key: 'develop', provider: 'codex', model: 'gpt-5-codex' },
-        ],
+      opts: { name: 'renamed', path: wsPath,
+        workflows: [{
+          id: '__custom', name: '自定义',
+          stages: [
+            { key: 'design', provider: 'claude', model: 'opus-4.8' },
+            { key: 'develop', provider: 'codex', model: 'gpt-5-codex' },
+          ],
+        }],
         projects: [{ repoId: 'proj', branch: 'forge/ws-edit', provider: 'codex', model: 'gpt-5-codex' }] },
       knownProjects: known, proxy: ''
     })
@@ -237,10 +251,13 @@ describe('editWorkspace', () => {
     const ws = readWorkspace(wsPath)!
     expect(ws.name).toBe('renamed')
     expect(ws.status).toBe('idle')
-    expect(ws.stages).toEqual([
-      { key: 'design', provider: 'claude', model: 'opus-4.8' },
-      { key: 'develop', provider: 'codex', model: 'gpt-5-codex' },
-    ])
+    expect(ws.workflows).toEqual([{
+      id: '__custom', name: '自定义',
+      stages: [
+        { key: 'design', provider: 'claude', model: 'opus-4.8' },
+        { key: 'develop', provider: 'codex', model: 'gpt-5-codex' },
+      ],
+    }])
     expect(ws.projects).toEqual([
       { repoId: 'proj', name: 'proj', branch: 'forge/ws-edit', provider: 'codex', model: 'gpt-5-codex' },
     ])
@@ -251,8 +268,8 @@ describe('editWorkspace', () => {
     const { createWorkspace, editWorkspace } = await import('./workspaceService')
     const known = [{ id: 'proj', name: 'proj', repoUrl: src, defaultBranch: 'main' }]
     const wsPath = join(root, 'ws-retry')
-    const baseOpts = { name: 'w', path: wsPath, workflowId: 'standard',
-      stages: [{ key: 'develop' as const, provider: 'claude', model: 'sonnet-4.6' }],
+    const baseOpts = { name: 'w', path: wsPath,
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop' as const, provider: 'claude', model: 'sonnet-4.6' }] }],
       projects: [{ repoId: 'proj', branch: 'forge/ws-retry' }] }
     await createWorkspace({ opts: baseOpts, knownProjects: known, proxy: '' })
     // simulate a failed pull: the record still has the project but its worktree is gone from disk
@@ -273,8 +290,8 @@ describe('editWorkspace', () => {
     ]
     const wsPath = join(root, 'ws-add')
     await createWorkspace({
-      opts: { name: 'w', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+      opts: { name: 'w', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }],
         projects: [{ repoId: 'a', branch: 'forge/ws-add' }] },
       knownProjects: known, proxy: ''
     })
@@ -282,8 +299,8 @@ describe('editWorkspace', () => {
     expect(existsSync(join(wsPath, 'b'))).toBe(false)
     await editWorkspace({
       path: wsPath,
-      opts: { name: 'w', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }],
+      opts: { name: 'w', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }],
         projects: [
           { repoId: 'a', branch: 'forge/ws-add' },
           { repoId: 'b', branch: 'forge/ws-add' },
@@ -302,8 +319,8 @@ describe('editWorkspace', () => {
       { id: 'b', name: 'b', repoUrl: srcB, defaultBranch: 'main' },
     ]
     const wsPath = join(root, 'ws-emit')
-    const baseA = { name: 'w', path: wsPath, workflowId: 'standard',
-      stages: [{ key: 'develop' as const, provider: 'claude', model: 'm' }],
+    const baseA = { name: 'w', path: wsPath,
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop' as const, provider: 'claude', model: 'm' }] }],
       projects: [{ repoId: 'a', branch: 'forge/x' }] }
     await createWorkspace({ opts: baseA, knownProjects: known, proxy: '' })
 
@@ -344,8 +361,8 @@ describe('editWorkspace', () => {
     } as any
     const projHook = { id: 'h', name: 'ProjHook', prompt: 'configure', after: '__proj' as const, skills: [], tools: ['read'] }
     const wsPath = join(root, 'ws-hook')
-    const base = { name: 'w', path: wsPath, workflowId: 'standard',
-      stages: [{ key: 'develop' as const, provider: 'claude', model: 'm' }],
+    const base = { name: 'w', path: wsPath,
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop' as const, provider: 'claude', model: 'm' }] }],
       projects: [{ repoId: 'a', branch: 'forge/x' }], stepPlugins: [projHook] }
     await createWorkspace({ opts: base, knownProjects: known, proxy: '' })
 
@@ -376,8 +393,8 @@ describe('editWorkspace', () => {
     ]
     const wsPath = join(root, 'ws-remove')
     await createWorkspace({
-      opts: { name: 'w', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'm' }],
+      opts: { name: 'w', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
         projects: [{ repoId: 'a', branch: 'forge/x' }, { repoId: 'b', branch: 'forge/x' }] },
       knownProjects: known, proxy: ''
     })
@@ -386,8 +403,8 @@ describe('editWorkspace', () => {
     // edit down to just project a → b's worktree is deleted and it's dropped from the record
     await editWorkspace({
       path: wsPath, knownProjects: known, proxy: '',
-      opts: { name: 'w', path: wsPath, workflowId: 'standard',
-        stages: [{ key: 'develop', provider: 'claude', model: 'm' }],
+      opts: { name: 'w', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
         projects: [{ repoId: 'a', branch: 'forge/x' }] },
     })
     expect(existsSync(join(wsPath, 'a', 'README.md'))).toBe(true)
@@ -401,11 +418,11 @@ describe('editWorkspace', () => {
     const { readWorkspaceRegistry } = await import('../config/store')
     const known = [{ id: 'proj', name: 'proj', repoUrl: src, defaultBranch: 'main' }]
     const wsPath = join(root, 'ws-reg')
-    await createWorkspace({ opts: { name: 'before', path: wsPath, workflowId: 'standard',
-      stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }], projects: [{ repoId: 'proj', branch: 'b' }] },
+    await createWorkspace({ opts: { name: 'before', path: wsPath,
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }], projects: [{ repoId: 'proj', branch: 'b' }] },
       knownProjects: known, proxy: '' })
-    await editWorkspace({ path: wsPath, opts: { name: 'after', path: wsPath, workflowId: 'standard',
-      stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }], projects: [{ repoId: 'proj', branch: 'b' }] },
+    await editWorkspace({ path: wsPath, opts: { name: 'after', path: wsPath,
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet-4.6' }] }], projects: [{ repoId: 'proj', branch: 'b' }] },
       knownProjects: known, proxy: '' })
     const reg = readWorkspaceRegistry().filter(w => w.path === wsPath)
     expect(reg).toHaveLength(1)
@@ -414,15 +431,15 @@ describe('editWorkspace', () => {
 
   it('throws when the workspace does not exist', async () => {
     const { editWorkspace } = await import('./workspaceService')
-    await expect(editWorkspace({ path: join(root, 'nope'), opts: { name: 'x', path: join(root, 'nope'), workflowId: 'standard', stages: [], projects: [] }, knownProjects: [], proxy: '' })).rejects.toThrow()
+    await expect(editWorkspace({ path: join(root, 'nope'), opts: { name: 'x', path: join(root, 'nope'), workflows: [], projects: [] }, knownProjects: [], proxy: '' })).rejects.toThrow()
   })
 })
 
 describe('buildStartRunOpts', () => {
   it('buildStartRunOpts 透传 stage 追加段', async () => {
     const { buildStartRunOpts } = await import('./workspaceService')
-    const opts: any = { name: 'w', path: '/w', workflowId: 'standard',
-      stages: [{ key: 'design', provider: 'claude', model: 'opus-4.8', prompt: '画时序图' }], projects: [] }
+    const opts: any = { name: 'w', path: '/w',
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'design', provider: 'claude', model: 'opus-4.8', prompt: '画时序图' }] }], projects: [] }
     const sr = buildStartRunOpts(opts, [])
     expect(sr.stages[0].prompt).toBe('画时序图')
   })
