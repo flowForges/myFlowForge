@@ -67,7 +67,11 @@ export function mergeCommands(providerId: string, query: string, dynamic: MenuCo
   // user-chosen name colliding with a built-in slash cmd) would otherwise be deduped out and vanish
   // from the menu. On-disk command entries still dedupe against built-ins as before.
   const dyn = dynamic.filter(c => match(c.cmd, c.title) && (c.workflowId != null || !seen.has(c.cmd)))
-  return [...forge, ...dyn]
+  // Order: this workspace's own named workflows first (they're the most specific, user-facing choice),
+  // then Forge's built-in commands, then on-disk commands/skills.
+  const workflows = dyn.filter(c => c.workflowId != null)
+  const rest = dyn.filter(c => c.workflowId == null)
+  return [...workflows, ...forge, ...rest]
 }
 
 // Commands available for a provider, filtered by the current '/query' typed. Query matches the
