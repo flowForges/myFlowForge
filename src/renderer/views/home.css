@@ -7,8 +7,9 @@
 /* 首页背景图 —— 独立于应用/会话区背景(见 applyTheme 的 data-home-bg)。铺满 #view-home 内容区、
    home-wrap 之下;opacity 压淡保证正文可读。开启后隐去极光,让照片干净呈现。 */
 .home-bg-layer { position: absolute; inset: 0; display: none; pointer-events: none;
-  background-image: var(--home-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
-  opacity: var(--home-bg-opacity, .35); }
+  background-image: var(--home-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat; }
+/* 图铺满,叠随主题变色的可读性蓙(封顶 55%),浅色下也不会把图冲没。 */
+.home-bg-layer::after { content: ''; position: absolute; inset: 0; background: var(--home-bg-scrim); }
 [data-home-bg="on"] .home-bg-layer { display: block; }
 [data-home-bg="on"] .home-aurora { display: none; }
 
