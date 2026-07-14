@@ -38,6 +38,20 @@ export interface MenuCommand {
   desc: string
   template: string
   kind: 'forge' | 'command' | 'skill'
+  // Set only for a workspace-workflow entry (Task 13): picking it names this workflow instead of
+  // filling `template` verbatim — Composer.chooseSlash special-cases this field.
+  workflowId?: string
+}
+
+// One "/" entry per workspace workflow (Task 11's WsWorkflow list), so the user can name a workflow
+// explicitly instead of relying on the agent's auto-detection. `template` is intentionally empty —
+// picking one doesn't fill boilerplate text, it hands the pick off to Composer's onPickWorkflow
+// (which seeds a workflow-scoped trigger phrase; see Composer.chooseSlash). Pure — drives the
+// Composer dropdown alongside mergeCommands.
+export function workflowMenuCommands(workflows: { id: string; name: string }[]): MenuCommand[] {
+  return workflows.map(wf => ({
+    cmd: `/${wf.name}`, title: wf.name, desc: '按此工作流发起', template: '', kind: 'forge', workflowId: wf.id,
+  }))
 }
 
 // Merge Forge's built-in commands with the provider's dynamic (on-disk) commands, filtered by query.

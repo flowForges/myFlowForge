@@ -22,6 +22,7 @@ import { MessageStream } from './chat/MessageStream'
 import { Message } from './chat/Message'
 import { buildTimeline } from './chat/timeline'
 import { Composer } from './chat/Composer'
+import { workflowMenuCommands } from './chat/slashCommands'
 import { SessionTabs } from './chat/SessionTabs'
 import { ChatJumpRail } from './chat/ChatJumpRail'
 import { ArchiveNote } from './ArchiveNote'
@@ -192,6 +193,21 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     void window.forge.commandsList?.(agentId, wsPath).then(cs => { if (live) setDynamicCommands(cs) })
     return () => { live = false }
   }, [selection?.agentId, wsPath])
+
+  // "/" menu = on-disk commands/skills + one entry per this workspace's named workflow (Task 13),
+  // so the user can name a workflow explicitly instead of relying on the agent's auto-detection.
+  const composerCommands = useMemo(
+    () => [...dynamicCommands, ...workflowMenuCommands(wsInfo?.workflows ?? [])],
+    [dynamicCommands, wsInfo?.workflows],
+  )
+  // Picking a workflow from "/" has no approach/task yet (the composer was just the "/token"), so —
+  // consistent with the built-in /工作流 command — seed a workflow-scoped trigger phrase and let the
+  // user type the actual task, then send normally (deterministic reproposeWorkflow needs real
+  // approach/task text, which doesn't exist at pick time).
+  const onPickWorkflow = useCallback((workflowId: string) => {
+    const wf = wsInfo?.workflows?.find(w => w.id === workflowId)
+    setQuickSeed({ text: `开启「${wf?.name ?? ''}」工作流,按以下需求分阶段执行,先给出技术方案等我批准:\n`, nonce: Date.now() })
+  }, [wsInfo?.workflows])
 
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
@@ -609,7 +625,8 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           archived={!!archived}
           seedText={quickSeed}
           selection={selection}
-          dynamicCommands={dynamicCommands}
+          dynamicCommands={composerCommands}
+          onPickWorkflow={onPickWorkflow}
           onSelectionChange={(s) => {
             setSelection(s)
             if (wsPath) {
