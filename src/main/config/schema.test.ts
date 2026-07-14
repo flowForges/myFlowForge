@@ -149,6 +149,26 @@ describe('ensureWorkspaceWorkflows 迁移', () => {
     expect(migrated.workflows[0].stages[0].key).toBe('requirement')
   })
 
+  it('老 workspace 的自定义流(workflowId=__custom)迁移后显示名为「自定义」,不泄露内部 id', () => {
+    const raw = WorkspaceSchema.parse({
+      name: 'w', path: '/w', workflowId: '__custom',
+      stages: [{ key: 'requirement', provider: 'claude', model: 'opus-4.8' }],
+      projects: [],
+    })
+    const migrated = ensureWorkspaceWorkflows(raw)
+    expect(migrated.workflows[0].id).toBe('__custom')
+    expect(migrated.workflows[0].name).toBe('自定义')
+  })
+
+  it('已持久化的 workflows 里若有 name=__custom 也规范化为「自定义」', () => {
+    const raw = WorkspaceSchema.parse({
+      name: 'w', path: '/w', workflowId: '', stages: [], projects: [],
+      workflows: [{ id: '__custom', name: '__custom', stages: [{ key: 'develop', provider: 'claude', model: 'opus-4.8' }] }],
+    })
+    const migrated = ensureWorkspaceWorkflows(raw)
+    expect(migrated.workflows[0].name).toBe('自定义')
+  })
+
   it('已有 workflows 时不动它', () => {
     const raw = WorkspaceSchema.parse({
       name: 'w', path: '/w', workflowId: '', stages: [], projects: [],
