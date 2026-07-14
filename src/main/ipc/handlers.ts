@@ -549,14 +549,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       store, runId: 'chat', workspaceName: payload.workspacePath,
       agentName: () => 'chat', agentStage: () => 'chat',
       ask: async () => null, setContext: () => {},
-      proposePlan: (approach: string, task?: string, select?: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }) => {
+      proposePlan: (approach: string, task?: string, select?: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; brief?: string }) => {
         proposedWorkflow = true
         if (guardBlocked()) { emitNote(payload.workspacePath, payload.sessionId, '已达最大修改次数,请直接批准或取消。'); return Promise.resolve({ approved: false }) }
         // #1: carry the chat's currently-selected main agent as this run's provider override.
         return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
       },
-      delegate: (a: { task: string; projects?: string[]; write?: boolean }) =>
-        runDelegate({ workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode }),
+      delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) =>
+        runDelegate({ workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief, provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode }),
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
     // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude

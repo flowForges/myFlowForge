@@ -161,10 +161,10 @@ export function createForgeServer(send: SendFn, allowed?: Set<string>): McpServe
     'forge_propose_plan',
     {
       description: '提交技术方案,等待用户批准后才执行工作流(批准前不要自行执行阶段)。默认跑工作区配置的全部阶段与全部项目;当任务较小或只涉及部分项目时,应按需裁剪以省 token。若能对上工作区某条命名工作流,传其 id 到 workflowId;对不上就用 stages 列出要跑的阶段(ad-hoc)。参数:stages=只跑这些阶段的 key(如 ["requirement","develop"] 只做需求分析+开发,跳过测试与 CR);projects=每个"逐项目阶段"默认只作用于这些项目名;stageProjects=按阶段分别指定项目子集的映射,如 {"design":["a","b","c","d","e"],"develop":["a","b"]} 表示"分析全部 5 个项目、但只在 a/b 里写代码"(优先级高于 projects)。全部省略则全量执行。',
-      inputSchema: { approach: z.string(), task: z.string().optional(), workflowId: z.string().optional(), stages: z.array(z.string()).optional(), projects: z.array(z.string()).optional(), stageProjects: z.record(z.string(), z.array(z.string())).optional() },
+      inputSchema: { approach: z.string(), task: z.string().optional(), brief: z.string().optional(), workflowId: z.string().optional(), stages: z.array(z.string()).optional(), projects: z.array(z.string()).optional(), stageProjects: z.record(z.string(), z.array(z.string())).optional() },
     },
-    async ({ approach, task, workflowId, stages, projects, stageProjects }) => {
-      const r = await send('propose_plan', { approach, task, workflowId, stages, projects, stageProjects }) as { approved: boolean; feedback?: string }
+    async ({ approach, task, brief, workflowId, stages, projects, stageProjects }) => {
+      const r = await send('propose_plan', { approach, task, brief, workflowId, stages, projects, stageProjects }) as { approved: boolean; feedback?: string }
       let text: string
       if (r.approved) {
         text = '已批准,工作流已启动'
@@ -182,11 +182,11 @@ export function createForgeServer(send: SendFn, allowed?: Set<string>): McpServe
     'forge_delegate',
     {
       description: '把一个"单一动作"任务(读/检索/分析某处代码,或小改动/写测试)直接派给子代理执行:子代理会 cd 进每个目标项目目录(加载该项目 skills/rules)干活并汇报结论。用于不跨阶段的即时操作,不弹工作流门。参数:task=要子代理做的具体事(尽量含背景与目标);projects=只在这些项目名里执行(省略=全部关联项目);write=是否允许改文件(省略/false=只读探查,true=可改)。返回各子代理的产出汇总,你需自己整合后回复用户。',
-      inputSchema: { task: z.string(), projects: z.array(z.string()).optional(), write: z.boolean().optional() },
+      inputSchema: { task: z.string(), projects: z.array(z.string()).optional(), write: z.boolean().optional(), brief: z.string().optional() },
     },
-    async ({ task, projects, write }) => {
+    async ({ task, projects, write, brief }) => {
       try {
-        const r = await send('delegate', { task, projects, write }) as { text: string }
+        const r = await send('delegate', { task, projects, write, brief }) as { text: string }
         return { content: [{ type: 'text' as const, text: r.text }] }
       } catch (err: unknown) {
         return { isError: true, content: [{ type: 'text' as const, text: errorMessage(err) }] }
