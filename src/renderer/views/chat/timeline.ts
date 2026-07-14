@@ -5,7 +5,8 @@ import type { ChatMessage, PendingAction, ChatConfirm } from '@shared/types'
 export interface PlanReq {
   id: string
   approach: string
-  stages: { name: string; agents: number }[]
+  stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]
+  allProjects: string[]
   task?: string
   ts?: string
   workflowId?: string

@@ -648,7 +648,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                   onResolve={(d) => {
                     // Allow/deny on the plan this supplement targets abandons the pending supplement too.
                     if (pendingSupplement?.kind === 'plan' && pendingSupplement.id === entry.plan.id) setPendingSupplement(null)
-                    chat.resolvePlan({ id: entry.plan.id, decision: d.decision, value: d.value })
+                    chat.resolvePlan({ id: entry.plan.id, decision: d.decision, value: d.value, selection: d.selection })
                   }}
                   onSwitchWorkflow={(workflowId) => {
                     if (!wsPath) return

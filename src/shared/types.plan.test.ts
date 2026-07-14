@@ -5,7 +5,7 @@ describe('plan + kind types', () => {
   it('ChatEvent 支持 plan-request / plan-resolved', () => {
     const req: ChatEvent = {
       workspacePath: '/w', sessionId: 's1', type: 'plan-request', id: 'pl-1',
-      approach: '先建模型再写测试', stages: [{ name: '设计', agents: 2 }], task: '加评论'
+      approach: '先建模型再写测试', stages: [{ key: 'design', name: '设计', agents: 2, perProject: true, projects: ['a', 'b'] }], allProjects: ['a', 'b'], task: '加评论'
     }
     const res: ChatEvent = { workspacePath: '/w', sessionId: 's1', type: 'plan-resolved', id: 'pl-1' }
     expect(req.type).toBe('plan-request')

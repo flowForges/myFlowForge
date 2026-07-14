@@ -7,35 +7,46 @@ const base: PlanReq = {
   approach: '逐文件迁移 tokens.css,先抽变量再替换引用',
   task: '重构主题 tokens',
   stages: [
-    { name: '规划', agents: 1 },
-    { name: '开发', agents: 3 },
-    { name: '审查', agents: 1 },
+    { key: '规划', name: '规划', agents: 1, perProject: false, projects: [] },
+    { key: '开发', name: '开发', agents: 3, perProject: false, projects: [] },
+    { key: '审查', name: '审查', agents: 1, perProject: false, projects: [] },
   ],
+  allProjects: [],
 }
 
 describe('PlanCard', () => {
-  it('renders approach, task and stage chips (单代理 / 并行N代理)', () => {
+  it('renders approach, task and an editable stage list', () => {
     const { container } = render(<PlanCard req={base} onResolve={() => {}} />)
     expect(container.querySelector('.msg-req.k-confirm')).toBeTruthy()
     expect(screen.getByText('方案待批准')).toBeInTheDocument()
     expect(screen.getByText('任务')).toBeInTheDocument()
     expect(screen.getByText('重构主题 tokens')).toBeInTheDocument()
     expect(container.querySelector('.req-title')?.textContent).toBe(base.approach)
-    const chips = container.querySelectorAll('.ic-stages .ic-stage')
-    expect(chips).toHaveLength(3)
-    expect(chips[0].textContent).toContain('规划')
-    expect(chips[0].textContent).toContain('单代理')
-    expect(chips[1].textContent).toContain('开发')
-    expect(chips[1].textContent).toContain('并行3代理')
+    const rows = container.querySelectorAll('.plan-stage-list .plan-stage-row')
+    expect(rows).toHaveLength(3)
+    expect(rows[0].textContent).toContain('规划')
+    expect(rows[1].textContent).toContain('开发')
+    // every stage starts ticked
+    expect(container.querySelectorAll('.plan-stage-head input:checked')).toHaveLength(3)
   })
 
-  it('fires allow on 批准并执行 and deny on 取消', () => {
+  it('fires allow (with the stage selection) on 批准并执行 and deny on 取消', () => {
     const onResolve = vi.fn()
     render(<PlanCard req={base} onResolve={onResolve} />)
     fireEvent.click(screen.getByText('批准并执行'))
-    expect(onResolve).toHaveBeenCalledWith({ decision: 'allow' })
+    expect(onResolve).toHaveBeenCalledWith(expect.objectContaining({ decision: 'allow' }))
+    expect(onResolve.mock.calls[0][0].selection.stages).toEqual(['规划', '开发', '审查'])
     fireEvent.click(screen.getByText('取消'))
     expect(onResolve).toHaveBeenCalledWith({ decision: 'deny' })
+  })
+
+  it('unticking a stage drops it from the approved selection', () => {
+    const onResolve = vi.fn()
+    const { container } = render(<PlanCard req={base} onResolve={onResolve} />)
+    const devCheckbox = container.querySelectorAll('.plan-stage-head input')[1] as HTMLInputElement
+    fireEvent.click(devCheckbox) // untick 开发
+    fireEvent.click(screen.getByText('批准并执行'))
+    expect(onResolve.mock.calls[0][0].selection.stages).toEqual(['规划', '审查'])
   })
 
   it('修改方向… calls onSupplement instead of opening an inline textarea (Task 15: reflows into the main composer)', () => {

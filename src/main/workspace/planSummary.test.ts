@@ -14,16 +14,16 @@ const base: StartRunOpts = {
 }
 
 describe('planStages', () => {
-  it('root 阶段 1 代理,per-project 阶段 = 项目数', () => {
+  it('root 阶段 1 代理,per-project 阶段 = 项目数 + 项目名', () => {
     expect(planStages(base)).toEqual([
-      { name: '需求评估', agents: 1 },
-      { name: '代码开发', agents: 3 },
+      { key: 'requirement', name: '需求评估', agents: 1, perProject: false, projects: [] },
+      { key: 'develop', name: '代码开发', agents: 3, perProject: true, projects: ['a', 'b', 'c'] },
     ])
   })
   it('无项目时 per-project 也至少 1 代理', () => {
     expect(planStages({ ...base, developProjects: [] })).toEqual([
-      { name: '需求评估', agents: 1 },
-      { name: '代码开发', agents: 1 },
+      { key: 'requirement', name: '需求评估', agents: 1, perProject: false, projects: [] },
+      { key: 'develop', name: '代码开发', agents: 1, perProject: true, projects: [] },
     ])
   })
 })

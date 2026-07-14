@@ -200,7 +200,7 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'confirm-resolved'; id: string }
   | { type: 'done'; message: ChatMessage }
   | { type: 'subagent'; id: string; sub: SubagentCard }
-  | { type: 'plan-request'; id: string; approach: string; stages: { name: string; agents: number }[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }
+  | { type: 'plan-request'; id: string; approach: string; stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[] }
   | { type: 'plan-resolved'; id: string }
   | { type: 'mode-changed'; mode: 'chat' | 'workflow'; runId?: string }
   | { type: 'error'; id: string; error: string }
