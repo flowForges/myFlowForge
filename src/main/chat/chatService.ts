@@ -136,11 +136,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       if (estimateMessagesTokens(readMessages(ws, sid)) > SESSION_DISTILL_THRESHOLD) void distillSession(ws, sid, deps)
       void promoteToWorkspace(ws, sid, deps)
     }
-    // After the turn's messages are persisted, advance this provider's watermark to the session's new
-    // message count — its native session (if any) now covers everything through this exchange, so a
-    // future switch-back only needs to bridge from here. Written alongside the messages, near where the
-    // resumeId itself is written back (onSession, above) — only meaningful for chat() providers, which
-    // are the only ones that get a native session at all.
+    // On a SUCCESSFUL turn, advance this provider's watermark to the session's new message count — its
+    // native session (if any) now covers everything through this exchange, so a future switch-back only
+    // needs to bridge from here. Only meaningful for chat() providers (the only ones that get a native
+    // session). Deliberately NOT called on error/abort: the turn may have failed before the provider
+    // absorbed the injected context, so advancing the watermark would let a later switch-back see
+    // wm >= latest → skip the preamble → silently lose that context with no recovery. Leaving it at the
+    // last successful value re-triggers the incremental catch-up next time (a little overlap is fine).
     const bumpWatermark = () => { if (provider.chat) writeWatermark(ws, sid, payload.agent, readMessages(ws, sid).length) }
     const finishOk = (elapsed?: number): ChatMessage => {
       // Fold in skills the agent explicitly NAMED in its reply (home/plugin skills the workspace scan +
@@ -175,14 +177,12 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
       const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
-      bumpWatermark()
       scheduleDistill()
       return msg
     }
     const finishAborted = (): ChatMessage => {
       const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
-      bumpWatermark()
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
       scheduleDistill()
       return msg
