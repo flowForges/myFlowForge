@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { wsRunDir, wsRunsDir } from '../config/paths'
 import { writeJsonAtomic } from '../util/atomicWrite'
@@ -73,6 +73,14 @@ export function readLastRun(wsPath: string): RunState | null {
   try {
     return normalizeLoadedRun(JSON.parse(readFileSync(best.file, 'utf8')) as RunState)
   } catch { return null }
+}
+
+// '终止退出': delete every persisted run for a workspace so readLastRun returns null — no resume is
+// offered and the next workflow starts clean. Best-effort; a missing dir is a no-op.
+export function discardRuns(wsPath: string): void {
+  const dir = wsRunsDir(wsPath)
+  if (!existsSync(dir)) return
+  try { rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ }
 }
 
 export function normalizeLoadedRun(run: RunState): RunState {

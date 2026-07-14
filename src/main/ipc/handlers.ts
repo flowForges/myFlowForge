@@ -45,7 +45,7 @@ import { readTree } from '../fs/fileTree'
 import { searchContent } from '../fs/contentSearch'
 import { WorktreeWatcher } from '../watcher/worktreeWatcher'
 import { NarratorService } from '../narrator/narratorService'
-import { readLastRun, RunStore } from '../orchestrator/runStore'
+import { readLastRun, discardRuns, RunStore } from '../orchestrator/runStore'
 import { planResume } from '../orchestrator/resumeRun'
 import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspace/archiveOps'
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
@@ -399,6 +399,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       setSessionMode(live.workspacePath, sid, 'chat')
       broadcast(CH.chatEvent, { workspacePath: live.workspacePath, sessionId: sid, type: 'mode-changed', mode: 'chat' })
     }
+  })
+  // '终止退出': abandon a failed/interrupted run entirely — clear the in-memory terminal run, delete
+  // its persisted state (so nothing offers to resume it), and return the owning session to chat mode.
+  ipcMain.handle(CH.engineDiscard, (_e, wsPath: string) => {
+    const live = orch.getRun()
+    const sid = (live && live.workspacePath === wsPath && live.sessionId) || readSessions(wsPath).activeSessionId
+    orch.clearRun(wsPath)
+    discardRuns(wsPath)
+    setSessionMode(wsPath, sid, 'chat')
+    broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId: sid, type: 'mode-changed', mode: 'chat' })
   })
   ipcMain.handle(CH.engineLastRun, (_e, wsPath: string) => {
     const live = orch.getRun()

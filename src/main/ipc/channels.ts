@@ -41,6 +41,7 @@ export const CH = {
   engineResolve: 'engine:resolve',
   engineLastRun: 'engine:last-run',
   engineCancel: 'engine:cancel',
+  engineDiscard: 'engine:discard',
   engineResume: 'engine:resume',
   engineEvent: 'engine:event',
   chatSend: 'chat:send',

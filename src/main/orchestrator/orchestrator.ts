@@ -254,6 +254,19 @@ export class Orchestrator {
 
   getRun(): RunState | null { return this.run ?? null }
 
+  // '终止退出': drop a terminal (err/ok) run so nothing offers to resume it. Refuses to touch a run
+  // that's still executing (use cancel() for that first). Emits run:cleared so the renderer wipes its
+  // run/pending state. Returns whether the in-memory run was cleared.
+  clearRun(wsPath: string): boolean {
+    const r = this.run
+    if (r && r.workspacePath === wsPath && r.status !== 'run') {
+      this.run = undefined as unknown as RunState
+      this.bus.emit({ type: 'run:cleared', workspacePath: wsPath })
+      return true
+    }
+    return false
+  }
+
   cancel(reason = '已取消'): void {
     if (!this.run || this.run.status !== 'run') return
     this.cancelled = true

@@ -15,6 +15,7 @@ export function useEngine(): EngineApi {
   useEffect(() => {
     const off = apiRef.current.onEngineEvent((e: EngineEvent) => {
       if (e.type === 'run:update') { setRun(e.run); setPending(e.run.pending) }
+      else if (e.type === 'run:cleared') { setRun(r => (r && r.workspacePath === e.workspacePath ? null : r)); setPending([]) }
       else if (e.type === 'agent:heartbeat') {
         setRun(r => {
           if (!r) return r

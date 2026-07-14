@@ -71,6 +71,9 @@ export interface InstalledSkill { name: string; description: string; source: str
 // main -> renderer
 export type EngineEvent =
   | { type: 'run:update'; run: RunState }
+  // A run was discarded ('终止退出'): the renderer drops its run/pending state entirely so a later
+  // workflow starts fresh instead of offering to resume the abandoned one.
+  | { type: 'run:cleared'; workspacePath: string }
   | { type: 'agent:log'; agentId: string; line: LogLine }
   | { type: 'agent:state'; agentId: string; state: AgentState }
   | { type: 'agent:stalled'; agentId: string; agentName: string; wsName: string; silentMs: number }

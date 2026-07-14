@@ -841,6 +841,21 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
                         继续执行
                       </button>
                     )}
+                    {run?.status === 'err' && !(engine.run?.workspacePath === wsPath && engine.run?.status === 'run') && (
+                      <button
+                        className="txt-btn"
+                        id="discardRun"
+                        title="放弃这次工作流,不再从中断处继续;之后需要时重新单独发起一次全新的工作流"
+                        onClick={() => {
+                          if (!wsPath) return
+                          if (!window.confirm('终止并退出这次工作流?将放弃中断处的进度,之后需要时请重新单独发起。')) return
+                          void window.forge.discardRun(wsPath)
+                          setForceChat(true)
+                        }}
+                      >
+                        终止退出
+                      </button>
+                    )}
                     <button
                       className="txt-btn"
                       id="toChatMode"

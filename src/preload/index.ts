@@ -50,6 +50,7 @@ const api = {
   startRun: (opts: unknown) => ipcRenderer.invoke(CH.engineStartRun, opts),
   resolve: (p: ResolvePayload) => ipcRenderer.invoke(CH.engineResolve, p),
   cancelRun: () => ipcRenderer.invoke(CH.engineCancel),
+  discardRun: (wsPath: string) => ipcRenderer.invoke(CH.engineDiscard, wsPath),
   resumeRun: (workspacePath: string, opts?: { provider?: string; model?: string }) => ipcRenderer.invoke(CH.engineResume, { workspacePath, ...(opts ?? {}) }),
   lastRun: (wsPath: string) => ipcRenderer.invoke(CH.engineLastRun, wsPath),
   onEngineEvent: (cb: (e: EngineEvent) => void) => {
