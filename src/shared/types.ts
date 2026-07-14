@@ -227,6 +227,11 @@ export type SetupEvent =
   | { type: 'setup:start'; workspacePath: string; hooks: { basic: number; proj: number } }
   | { type: 'hook:start'; phase: '__basic' | '__proj'; plugin: { id: string; name: string; skills: string[]; tools: string[] } }
   | { type: 'hook:log'; pluginId: string; line: LogLine }
+  // A setup hook (__basic/__proj) is asking the user to confirm a permission or supply input. The UI
+  // renders an interaction card in SetupProgress and posts the answer back via workspace:setup-resolve,
+  // which resolves the hook's blocked onConfirm/onInput (see setupInteractions.ts). Without this the
+  // request was silently denied and the user saw no prompt at all.
+  | { type: 'hook:interact'; id: string; pluginId: string; kind: 'confirm' | 'input'; title: string; where?: string; placeholder?: string }
   | { type: 'hook:state'; pluginId: string; state: 'ok' | 'err' }
   | { type: 'provision'; project: string; index: number; total: number }
   | { type: 'provision:start'; project: string; index: number; total: number }

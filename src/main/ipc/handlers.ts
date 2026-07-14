@@ -14,6 +14,7 @@ import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWri
 import { basename, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
+import { resolveSetupInteraction } from '../workspace/setupInteractions'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { resolveStages, pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from '../workspace/resolveStages'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
@@ -181,6 +182,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
   })
 
+  // #13: the user answered a setup hook's confirm/input card (SetupProgress) — unblock the hook.
+  ipcMain.handle(CH.workspaceSetupResolve, (_e, a: { id: string; answer: { decision?: 'allow' | 'deny'; value?: string } }) => {
+    resolveSetupInteraction(a.id, a.answer)
+  })
   ipcMain.handle(CH.configGetSettings, () => readSettings())
   ipcMain.handle(CH.configSetSettings, (_e, settings) => {
     writeSettings(settings)

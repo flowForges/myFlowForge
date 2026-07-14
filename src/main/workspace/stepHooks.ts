@@ -5,6 +5,7 @@ import { executeHook } from '../orchestrator/executeHook'
 import { buildPluginPrompt } from '../orchestrator/brief'
 import { claudeAllowedTools } from '../agents/pluginTools'
 import { buildAgentEnv } from '../agents/env'
+import { nextSetupInteractionId, awaitSetupInteraction, cancelSetupInteraction } from './setupInteractions'
 
 export interface StepHookCtx {
   providers: Record<string, AgentProvider>
@@ -30,11 +31,22 @@ export async function runStepHook(phase: '__basic' | '__proj', plugin: Plugin, c
   emit({ type: 'hook:start', phase, plugin: { id: plugin.id, name: plugin.name, skills: plugin.skills, tools: plugin.tools } })
   if (!provider) { emit({ type: 'hook:state', pluginId: plugin.id, state: 'err' }); return }
 
+  // Bubble a hook's permission-confirm / input request to the UI (SetupProgress) and await the user's
+  // answer, instead of silently denying it. Emits `hook:interact`, blocks on the resolver map, and
+  // auto-resolves to deny/'' if the setup is cancelled so a hook never hangs on abort.
+  const raise = (kind: 'confirm' | 'input', title: string, where?: string, placeholder?: string): Promise<{ decision?: 'allow' | 'deny'; value?: string }> => {
+    const id = nextSetupInteractionId(plugin.id)
+    const answer = awaitSetupInteraction(id)
+    emit({ type: 'hook:interact', id, pluginId: plugin.id, kind, title, where, placeholder })
+    const onAbortRaise = () => cancelSetupInteraction(id, kind === 'confirm' ? { decision: 'deny' } : { value: '' })
+    signal?.addEventListener('abort', onAbortRaise, { once: true })
+    return answer.finally(() => signal?.removeEventListener('abort', onAbortRaise))
+  }
   const cb: AgentCallbacks = {
     onLog: (line) => emit({ type: 'hook:log', pluginId: plugin.id, line }),
     onState: () => {},
-    onConfirm: async () => 'deny',
-    onInput: async () => '',
+    onConfirm: async (req) => (await raise('confirm', req.title, req.where)).decision ?? 'deny',
+    onInput: async (req) => (await raise('input', req.title, undefined, req.placeholder)).value ?? '',
     onDone: () => {},
     onError: () => {},
   }

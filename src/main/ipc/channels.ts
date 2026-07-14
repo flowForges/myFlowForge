@@ -37,6 +37,7 @@ export const CH = {
   workspaceRename: 'workspaces:rename',
   workspaceRun: 'workspaces:run',
   workspaceSetup: 'workspace:setup',
+  workspaceSetupResolve: 'workspace:setup-resolve',
   engineStartRun: 'engine:start-run',
   engineResolve: 'engine:resolve',
   engineLastRun: 'engine:last-run',

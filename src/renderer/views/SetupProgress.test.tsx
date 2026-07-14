@@ -35,6 +35,7 @@ describe('SetupProgress', () => {
       total: 1,
       pulling: null,
       failed: null,
+      pendingInteraction: null,
     }
 
     render(<SetupProgress state={state} />)
@@ -70,6 +71,7 @@ describe('SetupProgress', () => {
       total: 0,
       pulling: null,
       failed: null,
+      pendingInteraction: null,
     }
 
     render(<SetupProgress state={state} />)
@@ -83,7 +85,7 @@ describe('SetupProgress', () => {
     const state: SetupProgressState = {
       started: true, done: false,
       basicHooks: [{ id: 'h', name: 'Hook', phase: '__basic', state: 'run', logs: [], skills: [], tools: [], startedAt: Date.now() - 5000 }],
-      projHooks: [], provisionedProjects: [], total: 0, pulling: null, failed: null,
+      projHooks: [], provisionedProjects: [], total: 0, pulling: null, failed: null, pendingInteraction: null,
     }
     render(<SetupProgress state={state} onBackground={onBackground} onCancel={onCancel} />)
     // elapsed badge for the running hook (started 5s ago)
@@ -126,6 +128,30 @@ describe('applySetupEvent — provision progress', () => {
     ])
     expect(s.pulling).toBeNull()
     expect(s.failed).toEqual({ project: 'alpha', index: 0, message: 'clone failed' })
+  })
+
+  it('hook:interact sets a pending interaction; hook:state for that plugin clears it', () => {
+    const s = apply([
+      { type: 'setup:start', workspacePath: '/ws', hooks: { basic: 1, proj: 0 } },
+      { type: 'hook:start', phase: '__basic', plugin: { id: 'p1', name: 'P1', skills: [], tools: [] } },
+      { type: 'hook:interact', id: 'sh-1', pluginId: 'p1', kind: 'confirm', title: '允许运行安装脚本?' },
+    ])
+    expect(s.pendingInteraction).toEqual({ id: 'sh-1', pluginId: 'p1', kind: 'confirm', title: '允许运行安装脚本?', where: undefined, placeholder: undefined })
+    const s2 = applySetupEvent(s, { type: 'hook:state', pluginId: 'p1', state: 'ok' })
+    expect(s2.pendingInteraction).toBeNull()
+  })
+
+  it('renders the interaction card and reports the user decision', () => {
+    const onResolveInteraction = vi.fn()
+    const state: SetupProgressState = {
+      started: true, done: false, basicHooks: [], projHooks: [], provisionedProjects: [],
+      total: 0, pulling: null, failed: null,
+      pendingInteraction: { id: 'sh-9', pluginId: 'p1', kind: 'confirm', title: '允许安装依赖?' },
+    }
+    render(<SetupProgress state={state} onResolveInteraction={onResolveInteraction} />)
+    expect(screen.getByText('允许安装依赖?')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('允许'))
+    expect(onResolveInteraction).toHaveBeenCalledWith('sh-9', { decision: 'allow' })
   })
 
   it('a two-project sequence ends with both completed and nothing pulling', () => {

@@ -35,6 +35,16 @@ export interface ProvisionedProject {
   total: number
 }
 
+// #13: a setup hook is waiting on a user confirm/input. Rendered as an interaction card in SetupProgress.
+export interface HookInteraction {
+  id: string
+  pluginId: string
+  kind: 'confirm' | 'input'
+  title: string
+  where?: string
+  placeholder?: string
+}
+
 // Full aggregated state fed from App.tsx as SetupEvents arrive. Controlled component for testability.
 export interface SetupProgressState {
   started: boolean
@@ -45,6 +55,7 @@ export interface SetupProgressState {
   total: number
   pulling: { project: string; index: number } | null
   failed: { project: string; index: number; message: string } | null
+  pendingInteraction: HookInteraction | null
 }
 
 interface SetupProgressProps {
@@ -55,6 +66,31 @@ interface SetupProgressProps {
   // Hide the overlay WITHOUT cancelling, so the user can keep using the app while hooks run in the
   // background (setup keeps going; events keep flowing). Shown while active.
   onBackground?: () => void
+  // #13: answer a setup hook's confirm/input request. The host clears state.pendingInteraction.
+  onResolveInteraction?: (id: string, answer: { decision?: 'allow' | 'deny'; value?: string }) => void
+}
+
+// #13: the confirm/input card shown when a setup hook blocks on a permission/input request. Without
+// this the request was silently denied and nothing surfaced.
+function HookInteractionCard({ it, onResolve }: { it: HookInteraction; onResolve: (id: string, answer: { decision?: 'allow' | 'deny'; value?: string }) => void }) {
+  const [val, setVal] = useState('')
+  return (
+    <div className={`setup-interact k-${it.kind}`}>
+      <div className="setup-interact-title">建区 Hook 需要你{it.kind === 'confirm' ? '确认' : '输入'}</div>
+      <div className="setup-interact-body">{it.title}{it.where ? ` · ${it.where}` : ''}</div>
+      {it.kind === 'confirm' ? (
+        <div className="setup-interact-actions">
+          <button className="si-deny" onClick={() => onResolve(it.id, { decision: 'deny' })}>拒绝</button>
+          <button className="si-allow" onClick={() => onResolve(it.id, { decision: 'allow' })}>允许</button>
+        </div>
+      ) : (
+        <form className="setup-interact-actions" onSubmit={e => { e.preventDefault(); onResolve(it.id, { value: val }) }}>
+          <input autoFocus value={val} placeholder={it.placeholder || '输入内容…'} onChange={e => setVal(e.target.value)} />
+          <button className="si-allow" type="submit">提交</button>
+        </form>
+      )}
+    </div>
+  )
 }
 
 function hookToRuntime(hook: HookEntry): AgentRuntime {
@@ -72,7 +108,7 @@ function hookToRuntime(hook: HookEntry): AgentRuntime {
   }
 }
 
-export function SetupProgress({ state, onClose, onCancel, onBackground }: SetupProgressProps) {
+export function SetupProgress({ state, onClose, onCancel, onBackground, onResolveInteraction }: SetupProgressProps) {
   if (!state.started) return null
   // Active = setup running and not yet done/failed → offer 后台运行 / 取消.
   const active = !state.done && !state.failed
@@ -110,6 +146,10 @@ export function SetupProgress({ state, onClose, onCancel, onBackground }: SetupP
         </div>
 
         <div className="setup-body">
+          {/* #13: a hook is blocked waiting on the user — show the confirm/input card up top. */}
+          {state.pendingInteraction && onResolveInteraction && (
+            <HookInteractionCard it={state.pendingInteraction} onResolve={onResolveInteraction} />
+          )}
           {/* __basic hooks section */}
           {state.basicHooks.length > 0 && (
             <section className="setup-sec">
@@ -211,6 +251,7 @@ export const INITIAL_SETUP_STATE: SetupProgressState = {
   total: 0,
   pulling: null,
   failed: null,
+  pendingInteraction: null,
 }
 
 export function applySetupEvent(state: SetupProgressState, event: SetupEvent): SetupProgressState {
@@ -245,6 +286,9 @@ export function applySetupEvent(state: SetupProgressState, event: SetupEvent): S
       }
     }
 
+    case 'hook:interact':
+      return { ...state, pendingInteraction: { id: event.id, pluginId: event.pluginId, kind: event.kind, title: event.title, where: event.where, placeholder: event.placeholder } }
+
     case 'hook:state': {
       const updateHooks = (hooks: HookEntry[]) =>
         hooks.map(h => h.id === event.pluginId ? { ...h, state: event.state as AgentState } : h)
@@ -252,6 +296,8 @@ export function applySetupEvent(state: SetupProgressState, event: SetupEvent): S
         ...state,
         basicHooks: updateHooks(state.basicHooks),
         projHooks: updateHooks(state.projHooks),
+        // The hook finished (or errored) — drop any interaction card still tied to it.
+        pendingInteraction: state.pendingInteraction?.pluginId === event.pluginId ? null : state.pendingInteraction,
       }
     }
 

@@ -801,6 +801,8 @@ export function App() {
           // the overlay and reveal the locked, undismissable wizard underneath. Now 后台运行 collapses
           // both to just the pill. handleCreate still navigates on success / re-opens on error.
           onBackground={() => { setBackgrounded(true); setSetupVisible(false); setWizardOpen(false) }}
+          // #13: answer a setup hook's confirm/input request → unblock the hook in main, clear the card.
+          onResolveInteraction={(id, answer) => { void window.forge.resolveSetupInteraction(id, answer); setSetupState(s => ({ ...s, pendingInteraction: null })) }}
         />
       )}
 

@@ -63,6 +63,8 @@ const api = {
     ipcRenderer.on(CH.workspaceSetup, listener)
     return () => ipcRenderer.removeListener(CH.workspaceSetup, listener)
   },
+  // #13: answer a setup hook's confirm/input card.
+  resolveSetupInteraction: (id: string, answer: { decision?: 'allow' | 'deny'; value?: string }) => ipcRenderer.invoke(CH.workspaceSetupResolve, { id, answer }),
   sendChat: (payload: unknown, source?: string) => ipcRenderer.invoke(CH.chatSend, payload, source),
   chatCancelQueued: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.chatCancelQueued, a),
   chatClearQueue: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.chatClearQueue, a),
