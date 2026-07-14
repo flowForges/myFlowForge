@@ -484,7 +484,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // standalone: fired at chat-turn end (fire-and-forget); without this it's neither excluded nor
   // standalone, so the ending turn's cancelForWorkspace(preProposes) kills it in a race — see
   // proposeRun.ts's `standalone` doc.
-  const onRunTrigger = (wsPath: string, task: string) => { void proposeRun(wsPath, task, task, { standalone: true }) }
+  const onRunTrigger = (wsPath: string, task: string, providerOverride?: { provider: string; model?: string }) => { void proposeRun(wsPath, task, task, { standalone: true, ...(providerOverride ? { providerOverride } : {}) }) }
   // Task 12: the approval card's workflow-switch dropdown re-proposes the SAME task/approach under a
   // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
   // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
@@ -525,7 +525,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       proposePlan: (approach: string, task?: string, select?: { stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]> }) => {
         proposedWorkflow = true
         if (guardBlocked()) { emitNote(payload.workspacePath, payload.sessionId, '已达最大修改次数,请直接批准或取消。'); return Promise.resolve({ approved: false }) }
-        return proposeRun(payload.workspacePath, approach, task, select)
+        // #1: carry the chat's currently-selected main agent as this run's provider override.
+        return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model } })
       },
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
@@ -542,7 +543,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         env,
         emit: chatEmit,
         confirm,
-        onRunTrigger: (wsPath, task) => { proposedWorkflow = true; onRunTrigger(wsPath, task) },
+        onRunTrigger: (wsPath, task) => { proposedWorkflow = true; onRunTrigger(wsPath, task, { provider: payload.agent, model: payload.model }) },
         onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, () => session.cancel()),
       })
       // A forge_propose_plan blocks the turn awaiting the user's decision. If the turn ended (API error /

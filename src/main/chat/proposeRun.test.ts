@@ -227,6 +227,33 @@ describe('proposeRun mode flip', () => {
     await p
   })
 
+  // #1 run-level provider override: the chat's selected main agent (e.g. claude→codex after quota) must
+  // drive EVERY stage and every per-project develop agent for this run, without touching workspace.json.
+  it('providerOverride forces provider+model on all stages AND developProjects (this run only)', async () => {
+    const startRun = vi.fn()
+    const captured: string[] = []
+    const deps = mkDeps({ startRun, readWorkspace: () => wsMulti, emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    const p = propose('/w', '换 codex 跑', '换 codex 跑', { providerOverride: { provider: 'codex', model: 'gpt-5' } })
+    propose.resolve(captured[0], { decision: 'allow' })
+    await p
+    const opts = startRun.mock.calls[0][0]
+    expect(opts.stages.every((s: any) => s.provider === 'codex' && s.model === 'gpt-5')).toBe(true)
+    expect(opts.developProjects.every((d: any) => d.provider === 'codex' && d.model === 'gpt-5')).toBe(true)
+  })
+
+  it('no providerOverride → stages keep their workspace-configured provider (claude)', async () => {
+    const startRun = vi.fn()
+    const captured: string[] = []
+    const deps = mkDeps({ startRun, readWorkspace: () => wsMulti, emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    const p = propose('/w', 'x', 'x')
+    propose.resolve(captured[0], { decision: 'allow' })
+    await p
+    const opts = startRun.mock.calls[0][0]
+    expect(opts.stages.every((s: any) => s.provider === 'claude')).toBe(true)
+  })
+
   it('does not flip mode when a run is already live (allow rejected)', async () => {
     const startRun = vi.fn()
     const setSessionMode = vi.fn()

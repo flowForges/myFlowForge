@@ -39,7 +39,7 @@ export function makeProposeRun(deps: ProposeDeps) {
   // via chat:repropose-workflow), NOT owned by an agent chat turn. Turn cleanup (cancelForWorkspace) must
   // NOT dismiss it — it lives until the user decides (allow/deny). Without this, a switch's fresh card would
   // be created after the triggering turn's preProposes snapshot and get denied when that turn ends (race).
-  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean }): Promise<ProposeResult> => {
+  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string } }): Promise<ProposeResult> => {
     const raw = deps.readWorkspace(wsPath)
     if (!raw) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
     // Defensive: production readWorkspace (config/store.ts) already normalizes workflows on every
@@ -56,6 +56,21 @@ export function makeProposeRun(deps: ProposeDeps) {
     if (stages.length === 0) { deps.emitNote(wsPath, '该工作区无可执行的工作流配置。'); return Promise.resolve({ approved: false }) }
     const filled = { ...ws, stages }
     let opts = workspaceToStartRunOpts(filled, task, wf ? { id: wf.id, name: wf.name } : undefined)
+    // #1 run-level provider override: the chat turn that proposed this run carries the main agent the
+    // user currently has selected. Apply it to EVERY stage (and every per-project develop agent, which
+    // resolves provider from developProjects[].provider) so switching the chat agent — e.g. claude→codex
+    // when claude runs out of quota — actually runs the workflow on that agent. This never touches
+    // workspace.json; it's scoped to this single run. Model is forced alongside provider so a stale
+    // claude model can't ride on codex and 400.
+    if (select?.providerOverride?.provider) {
+      const provider = select.providerOverride.provider
+      const model = select.providerOverride.model ?? ''
+      opts = {
+        ...opts,
+        stages: opts.stages.map(s => ({ ...s, provider, model })),
+        developProjects: opts.developProjects.map(p => ({ ...p, provider, model })),
+      }
+    }
     // Selective execution (token-saving): the proposing agent may narrow THIS run. The workspace's full
     // workflow config is untouched; an empty/unknown pick falls back to the full set so a bad selection
     // can never produce a no-op run.
