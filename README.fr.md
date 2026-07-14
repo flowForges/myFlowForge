@@ -79,7 +79,7 @@ Trois façons de déclencher un workflow, convergeant toutes vers le même point
 
 ## 📥 Téléchargement et installation
 
-Récupérez le dernier `.dmg` depuis la page [**Releases**](https://github.com/xzghua/myFlowForge/releases) :
+Récupérez le dernier `.dmg` depuis la page [**Releases**](https://github.com/flowForges/myFlowForge/releases) :
 
 | Votre Mac | Téléchargement recommandé |
 |----------|----------------------|
@@ -105,7 +105,7 @@ Récupérez le dernier `.dmg` depuis la page [**Releases**](https://github.com/x
 
 ```bash
 # 1. Clone
-git clone https://github.com/xzghua/myFlowForge.git
+git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
 
 # 2. Install dependencies
