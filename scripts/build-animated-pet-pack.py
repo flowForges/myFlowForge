@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an animated pet pack from 4x2 sprite sheets."""
+"""Build a 24-frame pet pack from 8 keys and two 8-frame inbetween sheets."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ PACK = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else None
 STATES = {
     "idle": (24, 2000),
     "working": (24, 1500),
-    "confirm": (18, 1200),
+    "confirm": (24, 1200),
     "input": (24, 1600),
     "done": (24, 1800),
 }
@@ -31,19 +31,42 @@ def durations(frame_count: int, total_ms: int) -> list[int]:
     return [base + (1 if i < remainder else 0) for i in range(frame_count)]
 
 
-def sequence(keyframes: list[Image.Image], frame_count: int) -> list[Image.Image]:
-    return [keyframes[(i * len(keyframes)) // frame_count].copy() for i in range(frame_count)]
+def input_sheet_paths(pack: Path, state: str) -> tuple[Path, Path, Path]:
+    return (
+        pack / "source" / f"{state}-sheet.png",
+        pack / "inbetweens" / f"{state}-one-third-sheet.png",
+        pack / "inbetweens" / f"{state}-two-thirds-sheet.png",
+    )
 
 
-def sway_lower_body(image: Image.Image, amplitude: int) -> Image.Image:
-    """Bend lower tentacles while keeping the bell fixed and the seam smooth."""
-    result = Image.new("RGBA", image.size, (0, 0, 0, 0))
-    pivot = 104
-    for y in range(image.height):
-        progress = max(0.0, (y - pivot) / (image.height - pivot))
-        offset = round(amplitude * progress * progress)
-        result.alpha_composite(image.crop((0, y, image.width, y + 1)), (offset, y))
-    return result
+def crop_sheet_cells(sheet: Image.Image) -> list[Image.Image]:
+    """Return all cells from a row-major 4x2 sheet, without dropping pixels."""
+    cells = []
+    for index in range(8):
+        col, row = index % 4, index // 4
+        left = round(sheet.width * col / 4)
+        right = round(sheet.width * (col + 1) / 4)
+        top = round(sheet.height * row / 2)
+        bottom = round(sheet.height * (row + 1) / 2)
+        cells.append(sheet.crop((left, top, right, bottom)))
+    return cells
+
+
+def interleave_frames(
+    keys: list[Image.Image],
+    one_thirds: list[Image.Image],
+    two_thirds: list[Image.Image],
+) -> list[Image.Image]:
+    """Place two authored inbetweens after each original keyframe."""
+    groups = (keys, one_thirds, two_thirds)
+    if any(len(group) != 8 for group in groups):
+        counts = ", ".join(str(len(group)) for group in groups)
+        raise ValueError(f"expected exactly 8 frames from each input sheet, found {counts}")
+    return [
+        frame.copy()
+        for index in range(8)
+        for frame in (keys[index], one_thirds[index], two_thirds[index])
+    ]
 
 
 def gif_frame(image: Image.Image) -> Image.Image:
@@ -96,8 +119,23 @@ def keep_subject_components(image: Image.Image) -> Image.Image:
     return cleaned
 
 
-def split_sheet(state: str) -> list[Image.Image]:
-    sheet_path = PACK / "source" / f"{state}-sheet.png"
+def fit_subject(image: Image.Image) -> Image.Image:
+    cleaned = keep_subject_components(image)
+    bbox = cleaned.getchannel("A").getbbox()
+    if bbox is None:
+        raise ValueError("chroma removal left no visible subject")
+    subject = cleaned.crop(bbox)
+    scale = min(232 / subject.width, 232 / subject.height)
+    resized = subject.resize(
+        (max(1, round(subject.width * scale)), max(1, round(subject.height * scale))),
+        Image.Resampling.LANCZOS,
+    )
+    canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    canvas.alpha_composite(resized, ((256 - resized.width) // 2, (256 - resized.height) // 2))
+    return canvas
+
+
+def split_sheet(sheet_path: Path, state: str, offset: int) -> list[Image.Image]:
     sheet = Image.open(sheet_path).convert("RGB")
     frames_dir = PACK / "frames" / state
     frames_dir.mkdir(parents=True, exist_ok=True)
@@ -105,15 +143,10 @@ def split_sheet(state: str) -> list[Image.Image]:
     frames: list[Image.Image] = []
     with tempfile.TemporaryDirectory(prefix=f"animated-pet-{state}-") as raw_name:
         raw_dir = Path(raw_name)
-        for index in range(8):
-            col, row = index % 4, index // 4
-            left = round(sheet.width * col / 4)
-            right = round(sheet.width * (col + 1) / 4)
-            top = round(sheet.height * row / 2)
-            bottom = round(sheet.height * (row + 1) / 2)
+        for index, cell in enumerate(crop_sheet_cells(sheet)):
             raw_path = raw_dir / f"{index:02d}.png"
             keyed_path = raw_dir / f"{index:02d}-alpha.png"
-            sheet.crop((left, top, right, bottom)).save(raw_path)
+            cell.save(raw_path)
             subprocess.run(
                 [
                     sys.executable,
@@ -134,29 +167,20 @@ def split_sheet(state: str) -> list[Image.Image]:
                 check=True,
             )
             keyed = Image.open(keyed_path).convert("RGBA")
-            scale = min(232 / keyed.width, 232 / keyed.height)
-            resized = keyed.resize(
-                (round(keyed.width * scale), round(keyed.height * scale)),
-                Image.Resampling.LANCZOS,
-            )
-            canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-            canvas.alpha_composite(resized, ((256 - resized.width) // 2, (256 - resized.height) // 2))
-            canvas = keep_subject_components(canvas)
-            frame_path = frames_dir / f"{index:02d}.png"
+            canvas = fit_subject(keyed)
+            frame_path = frames_dir / f"{offset + index * 3:02d}.png"
             canvas.save(frame_path, optimize=True)
             frames.append(canvas)
 
-    # Two generated jellyfish cells cross the sprite-sheet boundary. Derive
-    # clean, distinct lower-tentacle bends from adjacent poses in the same arc.
-    if PACK.name == "cyber-jellyfish" and state == "input":
-        for target, source, amplitude in ((5, 3, 8), (6, 2, -8)):
-            frames[target] = sway_lower_body(frames[source], amplitude)
-            frames[target].save(frames_dir / f"{target:02d}.png", optimize=True)
     return frames
 
 
 def encode_state(state: str, keys: list[Image.Image], frame_count: int, total_ms: int) -> None:
-    output = sequence(keys, frame_count)
+    if frame_count != 24:
+        raise ValueError(f"{state}: output contract requires 24 frames, got {frame_count}")
+    output = keys
+    if len(output) != 24:
+        raise ValueError(f"{state}: expected exactly 24 interleaved frames, found {len(output)}")
     frame_durations = durations(frame_count, total_ms)
     (PACK / "webp").mkdir(parents=True, exist_ok=True)
     (PACK / "apng").mkdir(parents=True, exist_ok=True)
@@ -183,19 +207,23 @@ def encode_state(state: str, keys: list[Image.Image], frame_count: int, total_ms
         background=255,
         optimize=False,
     )
-    keys[0].save(PACK / "png" / f"{state}.png", optimize=True)
+    output[0].save(PACK / "png" / f"{state}.png", optimize=True)
 
 
 def main() -> None:
     if PACK is None:
         raise SystemExit("usage: build-animated-pet-pack.py <pet-pack-directory>")
-    missing = [state for state in STATES if not (PACK / "source" / f"{state}-sheet.png").exists()]
+    missing = [path for state in STATES for path in input_sheet_paths(PACK, state) if not path.exists()]
     if missing:
-        raise SystemExit(f"missing sprite sheets in {PACK}: {', '.join(missing)}")
+        raise SystemExit("missing sprite sheets: " + ", ".join(str(path) for path in missing))
     if not CHROMA_HELPER.exists():
         raise SystemExit(f"missing chroma helper: {CHROMA_HELPER}")
     for state, (frame_count, total_ms) in STATES.items():
-        encode_state(state, split_sheet(state), frame_count, total_ms)
+        key_path, one_third_path, two_thirds_path = input_sheet_paths(PACK, state)
+        keys = split_sheet(key_path, state, 0)
+        one_thirds = split_sheet(one_third_path, state, 1)
+        two_thirds = split_sheet(two_thirds_path, state, 2)
+        encode_state(state, interleave_frames(keys, one_thirds, two_thirds), frame_count, total_ms)
         print(f"built {state}: {frame_count} frames / {total_ms} ms")
 
 
