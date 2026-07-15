@@ -752,7 +752,10 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           providers={providers}
           disabled={!wsPath || !!archived}
           busy={chat.busy}
-          running={chat.busy && chat.running != null}
+          // Show the running/stop state while a turn runs OR while fire-and-forget delegate sub-agents
+          // are still working in the background (the chat turn itself already ended). Stopping cancels
+          // the background delegates too (chatStop → cancelWorkspaceDelegates).
+          running={(chat.busy && chat.running != null) || chat.delegateActive}
           onStop={() => chat.stop()}
           // Has the running turn produced assistant text yet? Stopping before any output restores the
           // sent message to the box; stopping after output (possible changes) does not.
