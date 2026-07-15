@@ -62,7 +62,13 @@ function qwen(spec: ForgeServerSpec, cwd: string): ForgeProvision {
   return { extraArgs: [], gitignoreHint: rel }
 }
 
-/** Tier 2: opencode —— opencode.json mcp.forge（command 为数组）。审批键在 Task 6 按实测定，先给默认。 */
+/**
+ * Tier 2: opencode —— opencode.json mcp.forge（command 为数组）。
+ * 实测（opencode 1.3.13）：MCP 工具名不在 permission 白名单枚举（read/edit/bash/…/doom_loop/
+ * external_directory）里，按文档 "Most permissions default to allow" 走默认放行；`opencode mcp
+ * list` 确认 forge 已连接，`opencode run` headless 调用 forge_delegate 直接 completed（无 ask 卡
+ * 住、无需交互）。故 enabled:true 已足够，不需要额外 permission 键。
+ */
 function opencode(spec: ForgeServerSpec, cwd: string): ForgeProvision {
   const rel = 'opencode.json'
   const path = join(cwd, rel)
