@@ -1,6 +1,8 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { createFenceScanner } from '../handoffFence'
+import { provisionForgeMcp } from '../forgeMcpProvision'
+import { forgeChatDirective } from '../forgeChatDirective'
 
 function now() { return new Date().toISOString().slice(11, 19) }
 
@@ -19,13 +21,22 @@ export function makeCopilotProvider(spec: CopilotSpec): AgentProvider {
     id: 'copilot',
     displayName: 'GitHub Copilot CLI',
     bin,
-    capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+    capabilities: { structuredOutput: false, permissionHook: false, pty: false, mcpTools: true },
     async detect() { try { await execa(bin, ['--version']); return true } catch { return false } },
     async listModels() { return defaultModels },
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      const args = ['-p', task.prompt, '--allow-all-tools']
+      // No chat()/resume yet → the chat downgrade (chatService.ts) drives a real turn through run()
+      // with an AgentTask built from the live prompt. forgeChatDirective fails open (returns '' when
+      // env.FORGE_TOOLS lacks forge_propose_plan, i.e. workflow-stage/delegate sub-agent runs), so
+      // prepending it here unconditionally only adds the dual-path instructions for chat turns.
+      const directive = forgeChatDirective(env)
+      const prompt = directive ? `${directive}\n\n${task.prompt}` : task.prompt
+      const prov = provisionForgeMcp('copilot', env, task.cwd)
+      // prov already includes --allow-all-tools when forge is injected; avoid a duplicate flag by
+      // falling back to it only when nothing was injected.
+      const args = ['-p', prompt, ...(prov.extraArgs.length ? prov.extraArgs : ['--allow-all-tools'])]
       if (task.model && task.model !== 'default') args.push('--model', task.model)
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
