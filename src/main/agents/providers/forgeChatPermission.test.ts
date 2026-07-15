@@ -6,6 +6,7 @@ import { makeClaudeProvider } from './claude'
 import { makeCodexProvider } from './codex'
 import { makeQoderProvider } from './qoder'
 import { makeCopilotProvider } from './copilot'
+import { makeCursorProvider } from './cursor'
 import type { ChatTask, ChatCallbacks, AgentTask, AgentCallbacks } from '../types'
 
 // Regression for the chat-delegation bug: forge_delegate / forge_propose_plan silently failed
@@ -45,9 +46,9 @@ const noop: ChatCallbacks = {
   onDone: () => {}, onError: () => {},
 }
 
-async function capture(provider: ReturnType<typeof makeClaudeProvider>, env: NodeJS.ProcessEnv): Promise<string[]> {
+async function capture(provider: ReturnType<typeof makeClaudeProvider>, env: NodeJS.ProcessEnv, cwd?: string): Promise<string[]> {
   if (!provider.chat) throw new Error('provider has no chat()')
-  const session = provider.chat(task, noop, env)
+  const session = provider.chat({ ...task, cwd: cwd ?? task.cwd }, noop, env)
   await session.done
   const out = env.ARGV_OUT as string
   return existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : []
@@ -127,5 +128,14 @@ describe('forge MCP tool authorization in chat()', () => {
     expect(args.filter(a => a === '--allow-all-tools').length).toBe(1)
     const promptIdx = args.indexOf('-p')
     expect(args[promptIdx + 1]).toBe('hi')
+  })
+
+  it('cursor 注入 --approve-mcps 且写 .cursor/mcp.json', async () => {
+    const args = await capture(makeCursorProvider({ bin: argvBin(), defaultModels: [] }), forgeEnv(), dir)
+    expect(args).toContain('--approve-mcps')
+    const cfgPath = join(dir, '.cursor', 'mcp.json')
+    expect(existsSync(cfgPath)).toBe(true)
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'))
+    expect(cfg.mcpServers.forge).toBeTruthy()
   })
 })

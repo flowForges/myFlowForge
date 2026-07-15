@@ -4,6 +4,8 @@ import { parseCursorEvent, cursorSessionId } from '../cursorStream'
 import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt } from '../chatStream'
 import { parseModelsList } from '../parseModelsList'
+import { provisionForgeMcp } from '../forgeMcpProvision'
+import { forgeChatDirective } from '../forgeChatDirective'
 
 function now() { return new Date().toISOString().slice(11, 19) }
 
@@ -20,7 +22,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
     id: 'cursor',
     displayName: 'Cursor Agent',
     bin,
-    capabilities: { structuredOutput: false, permissionHook: false, pty: false, liveModels: true },
+    capabilities: { structuredOutput: false, permissionHook: false, pty: false, liveModels: true, mcpTools: true },
     async detect() { try { await execa(bin, ['--version']); return true } catch { return false } },
     async listModels() { return defaultModels },
     async listModelsLive(env: NodeJS.ProcessEnv): Promise<Model[]> {
@@ -40,6 +42,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
       if (spec.preArgs) {
         args = [...spec.preArgs]
       } else {
+        const prov = provisionForgeMcp('cursor', env, task.cwd)
         args = [
           '-p', task.prompt,
           '--output-format', 'stream-json',
@@ -47,6 +50,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
           '--force',
           '--workspace', task.cwd,
           ...(task.model ? ['--model', task.model] : []),
+          ...prov.extraArgs,
         ]
       }
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
@@ -118,28 +122,32 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
 
     // (B) cursor chat() — mirrors qoder.chat() structure but uses parseCursorEvent.
     //
-    // (D) Forge MCP for cursor: DEFERRED.
-    //   cursor-agent has no per-invocation --mcp-config flag (unlike claude/qoder).
-    //   MCP servers are configured via ~/.cursor/mcp.json or the `mcp` subcommand,
-    //   which is a global side-effect not suitable for per-run injection.
-    //   Additionally, cursor is not logged in so MCP can't be verified at all.
-    //   Keeping capabilities.mcpTools: false (text-fence fallback unchanged).
+    // (D) Forge MCP for cursor: Tier 2 template.
+    //   cursor-agent has no per-invocation --mcp-config flag (unlike claude/qoder), so
+    //   provisionForgeMcp('cursor', ...) writes a project-local .cursor/mcp.json (merging any
+    //   existing servers) and returns --approve-mcps to skip the per-tool approval prompt.
     //
     // Session ID: parseCursorEvent has no 'session' kind — cursor's session/thread ID
     //   shape is unverified (not logged in). onSession is a best-effort no-op for now;
     //   wire it when the real shape is confirmed with a logged-in cursor instance.
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
+      const prov = provisionForgeMcp('cursor', env, task.cwd)
+      const directive = forgeChatDirective(env)
+      const body = buildChatPrompt(task)
+      const prompt = directive ? `${directive}\n\n${body}` : body
       const args = spec.preArgs
         ? [...spec.preArgs]
         : [
-            '-p', buildChatPrompt(task),
+            '-p', prompt,
             '--output-format', 'stream-json',
             '--stream-partial-output',
             '--force',
             '--workspace', task.cwd,
             ...(task.model ? ['--model', task.model] : []),
             ...(task.sessionId ? ['--resume', task.sessionId] : []),
+            ...prov.extraArgs,
           ]
+      if (prov.gitignoreHint) cb.onStatus?.(`已为 cursor 写入 ${prov.gitignoreHint}，建议加入 .gitignore`)
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
       const start = Date.now()
       let buf = ''
