@@ -55,9 +55,12 @@ it('gemini → .gemini/settings.json forge.trust=true + yolo 参数', () => {
   expect(cfg.mcpServers.forge.trust).toBe(true)
 })
 
-it('qwen → .qwen/settings.json（与 gemini 同结构）', () => {
-  provisionForgeMcp('qwen', env(), cwd)
+it('qwen → .qwen/settings.json（trust=true，无 yolo 参数——0.19 fork 无 --approval-mode）', () => {
+  const r = provisionForgeMcp('qwen', env(), cwd)
+  expect(r.extraArgs).toEqual([])
   expect(existsSync(join(cwd, '.qwen/settings.json'))).toBe(true)
+  const cfg = JSON.parse(readFileSync(join(cwd, '.qwen/settings.json'), 'utf8'))
+  expect(cfg.mcpServers.forge.trust).toBe(true)
 })
 
 it('opencode → opencode.json mcp.forge type=local enabled', () => {

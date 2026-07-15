@@ -36,14 +36,30 @@ function cursor(spec: ForgeServerSpec, cwd: string): ForgeProvision {
   return { extraArgs: ['--approve-mcps'], gitignoreHint: rel }
 }
 
-/** Tier 2: gemini/qwen —— <dir>/settings.json，forge.trust=true 绕单条审批 + 运行时 yolo。 */
-function geminiFamily(spec: ForgeServerSpec, cwd: string, dir: '.gemini' | '.qwen'): ForgeProvision {
+/** Tier 2: gemini —— .gemini/settings.json，forge.trust=true 绕单条审批 + 运行时 yolo。 */
+function geminiFamily(spec: ForgeServerSpec, cwd: string, dir: '.gemini'): ForgeProvision {
   const rel = `${dir}/settings.json`
   const path = join(cwd, rel)
   const cfg = readJson(path)
   cfg.mcpServers = { ...(cfg.mcpServers ?? {}), forge: { command: spec.command, args: spec.args, env: spec.env, trust: true } }
   writeJson(path, cfg)
   return { extraArgs: ['--approval-mode', 'yolo', '--allowed-mcp-server-names', 'forge'], gitignoreHint: rel }
+}
+
+/**
+ * Tier 2: qwen —— .qwen/settings.json，forge.trust=true 绕单条审批。
+ * qwen (installed: v0.19.10) is an OLD gemini-cli fork WITHOUT `--approval-mode`/`--yolo`/
+ * `--allowed-mcp-server-names` flags (verified via `qwen --help`; passing them errors "unknown
+ * option"). So unlike gemini, qwen has no runtime flag to bypass tool-confirmation — it relies
+ * solely on the config-level `trust: true` in the server entry. extraArgs stays empty.
+ */
+function qwen(spec: ForgeServerSpec, cwd: string): ForgeProvision {
+  const rel = '.qwen/settings.json'
+  const path = join(cwd, rel)
+  const cfg = readJson(path)
+  cfg.mcpServers = { ...(cfg.mcpServers ?? {}), forge: { command: spec.command, args: spec.args, env: spec.env, trust: true } }
+  writeJson(path, cfg)
+  return { extraArgs: [], gitignoreHint: rel }
 }
 
 /** Tier 2: opencode —— opencode.json mcp.forge（command 为数组）。审批键在 Task 6 按实测定，先给默认。 */
@@ -63,7 +79,7 @@ export function provisionForgeMcp(providerId: string, env: NodeJS.ProcessEnv, cw
     case 'copilot': return copilot(spec)
     case 'cursor': return cursor(spec, cwd)
     case 'gemini': return geminiFamily(spec, cwd, '.gemini')
-    case 'qwen': return geminiFamily(spec, cwd, '.qwen')
+    case 'qwen': return qwen(spec, cwd)
     case 'opencode': return opencode(spec, cwd)
     default: return { extraArgs: [] }
   }

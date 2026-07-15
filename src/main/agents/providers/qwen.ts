@@ -1,6 +1,8 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { createFenceScanner } from '../handoffFence'
+import { provisionForgeMcp } from '../forgeMcpProvision'
+import { forgeChatDirective } from '../forgeChatDirective'
 
 function now() { return new Date().toISOString().slice(11, 19) }
 
@@ -17,13 +19,23 @@ export function makeQwenProvider(spec: QwenSpec): AgentProvider {
     id: 'qwen',
     displayName: 'Qwen Code',
     bin,
-    capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+    capabilities: { structuredOutput: false, permissionHook: false, pty: false, mcpTools: true },
     async detect() { try { await execa(bin, ['--version']); return true } catch { return false } },
     async listModels() { return defaultModels },
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      const args = ['-m', task.model, '-p', task.prompt]
+      // No chat()/resume yet → the chat downgrade (chatService.ts) drives a real turn through run()
+      // with an AgentTask built from the live prompt. forgeChatDirective fails open (returns '' when
+      // env.FORGE_TOOLS lacks forge_propose_plan), so prepending it here unconditionally only adds
+      // the dual-path instructions for chat turns.
+      const directive = forgeChatDirective(env)
+      const prompt = directive ? `${directive}\n\n${task.prompt}` : task.prompt
+      const prov = provisionForgeMcp('qwen', env, task.cwd)
+      if (prov.gitignoreHint) {
+        cb.onLog({ ts: now(), text: `已为 qwen 写入 ${prov.gitignoreHint}，建议加入 .gitignore`, level: 'info' })
+      }
+      const args = ['-m', task.model, '-p', prompt, ...prov.extraArgs]
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       const processLine = (raw: string) => {

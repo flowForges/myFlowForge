@@ -8,6 +8,7 @@ import { makeQoderProvider } from './qoder'
 import { makeCopilotProvider } from './copilot'
 import { makeCursorProvider } from './cursor'
 import { makeGeminiProvider } from './gemini'
+import { makeQwenProvider } from './qwen'
 import type { ChatTask, ChatCallbacks, AgentTask, AgentCallbacks, AgentProvider } from '../types'
 
 // Regression for the chat-delegation bug: forge_delegate / forge_propose_plan silently failed
@@ -151,6 +152,19 @@ describe('forge MCP tool authorization in chat()', () => {
     expect(existsSync(join(dir, '.gemini', 'settings.json'))).toBe(false)
     const promptIdx = args.indexOf('-p')
     expect(args[promptIdx + 1]).toBe('hi')
+  })
+
+  it('qwen 写 .qwen/settings.json（trust=true）且不注入 --approval-mode（0.19 fork 无此参数）', async () => {
+    const args = await captureRun(makeQwenProvider({ bin: argvBin(), defaultModels: [] }), forgeEnv(), dir)
+    expect(args).not.toContain('--approval-mode')
+    const cfgPath = join(dir, '.qwen', 'settings.json')
+    expect(existsSync(cfgPath)).toBe(true)
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'))
+    expect(cfg.mcpServers.forge.trust).toBe(true)
+    // chat directive prepended to the prompt so a qwen-driven chat turn learns to delegate
+    const promptIdx = args.indexOf('-p')
+    expect(args[promptIdx + 1]).toContain('Forge 双路径规则')
+    expect(args[promptIdx + 1]).toContain('hi')
   })
 
   it('cursor 注入 --approve-mcps 且写 .cursor/mcp.json', async () => {
