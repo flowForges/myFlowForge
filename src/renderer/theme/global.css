@@ -6,6 +6,17 @@ body { font-family: var(--font); color: var(--fg); background: transparent; font
    而不动标题/强调等已显式加重(500/600/700)的文本 —— 避免全局一刀切加粗读起来乱。默认即适中。 */
 [data-text-weight="medium"] { --app-fw: 450; --app-smoothing: auto; }
 [data-text-weight="normal"] { --app-fw: 400; --app-smoothing: antialiased; }
+/* 壁纸开着时(app / chat 范围)一律用灰度抗锯齿:-webkit-font-smoothing:auto(次像素/LCD)假设背景不
+   透明,叠在半透明壁纸上会出彩边、发虚——正是"字发糊/带灰底"的病根之一。强制 antialiased 后字在图上才干净
+   (对齐 Codex 的清爽感)。无壁纸时仍按上面的字重档走 auto/antialiased。 */
+html[data-bg-scope="app"], html[data-bg-scope="chat"] {
+  --app-smoothing: antialiased;
+  /* 壁纸开启时把辅助灰字(muted/faint:检视区说明、发送者模型名、时间、路径等)往前景方向加深一档,增强在
+     壁纸上的可读性 —— 只改【颜色】、不加任何背景。用 fg↔bg 混色:深色主题 fg 亮 → 往更亮走,浅色主题 fg
+     暗 → 往更暗走,两个方向都朝各自 fg 靠拢,深浅自适应、无需分主题写。不自引用 --muted/--faint 故无循环。 */
+  --muted: color-mix(in oklab, var(--fg) 72%, var(--bg));
+  --faint: color-mix(in oklab, var(--fg) 58%, var(--bg));
+}
 .window {
   /* Fill the OS window — no floating 18px margin / shadow halo (that read as an
      ugly "outer shell"). Rounded corners stay for a clean frameless look. */
@@ -53,6 +64,16 @@ html[data-bg-scope="app"]:not([data-glass="on"]) .titlebar,
 html[data-bg-scope="app"]:not([data-glass="on"]) .statusbar {
   background: color-mix(in srgb, var(--bg-2) 62%, transparent);
   backdrop-filter: blur(7px) saturate(1.08);
+}
+/* 「整个应用」范围壁纸 + 深色系主题:侧栏 / 检视区 / 标题栏 / 状态栏这些半透明面板会透出壁纸,亮壁纸的高
+   光区会把面板顶亮,浅色的 muted/faint 文字(会话名、日期、路径、SKILL 说明等)直接读不出。靠 text-shadow
+   继承给这些面板里的所有文字统一加一层【固定深色】投影兜底(不碰面板透明度,保留磨砂/透出观感)。浅色主题
+   是深色字,加深投影会发糊,故 :not([data-theme="light"]) 排除,它靠面板浅底本身可读。 */
+html[data-bg-scope="app"]:not([data-theme="light"]) .sidebar,
+html[data-bg-scope="app"]:not([data-theme="light"]) .inspector,
+html[data-bg-scope="app"]:not([data-theme="light"]) .titlebar,
+html[data-bg-scope="app"]:not([data-theme="light"]) .statusbar {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .5);
 }
 
 .body { flex: 1; display: flex; min-height: 0; }

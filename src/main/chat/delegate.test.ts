@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { makeRunDelegate } from './delegate'
+import { makeRunDelegate, cancelWorkspaceDelegates, type DelegateResult } from './delegate'
+
+// runDelegate 现在【立即返回「已派发」确认】,真实聚合产出经 onComplete 异步回调。测试用它拿最终结果。
+function awaitDelegate(run: ReturnType<typeof makeRunDelegate>, opts: Parameters<ReturnType<typeof makeRunDelegate>>[0]): Promise<DelegateResult> {
+  return new Promise<DelegateResult>((resolve) => { void run({ ...opts, onComplete: resolve }) })
+}
 import { listDelegateAgents } from './delegateRegistry'
 import type { AgentProvider, AgentResult, AgentTask, AgentCallbacks } from '../agents/types'
 import type { Workspace } from '../config/schema'
@@ -33,7 +38,7 @@ const deps = (provider: AgentProvider, workspace: Workspace) => ({
 describe('runDelegate', () => {
   it('派每个目标项目一个子代理并按项目汇总各自 handoff', async () => {
     const runDelegate = makeRunDelegate(deps(fakeProvider({ handoff: (n) => `${n} 的结论` }), ws(['a', 'b'])))
-    const r = await runDelegate({ workspacePath: '/ws', task: '看看登录逻辑', provider: 'fake', model: 'm' })
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: '看看登录逻辑', provider: 'fake', model: 'm' })
     expect(r.per.map(p => p.project).sort()).toEqual(['a', 'b'])
     expect(r.per.every(p => p.ok)).toBe(true)
     expect(r.text).toContain('a 的结论')
@@ -42,19 +47,19 @@ describe('runDelegate', () => {
 
   it('projects 过滤只在指定项目执行', async () => {
     const runDelegate = makeRunDelegate(deps(fakeProvider({ handoff: (n) => `${n}!` }), ws(['a', 'b', 'c'])))
-    const r = await runDelegate({ workspacePath: '/ws', task: 't', projects: ['b'], provider: 'fake', model: 'm' })
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: 't', projects: ['b'], provider: 'fake', model: 'm' })
     expect(r.per.map(p => p.project)).toEqual(['b'])
   })
 
   it('无 handoff 时退回用日志输出作为 summary', async () => {
     const runDelegate = makeRunDelegate(deps(fakeProvider({ output: (n) => `${n} 输出内容` }), ws(['a'])))
-    const r = await runDelegate({ workspacePath: '/ws', task: 't', provider: 'fake', model: 'm' })
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: 't', provider: 'fake', model: 'm' })
     expect(r.per[0].summary).toContain('a 输出内容')
   })
 
   it('工作区无项目时在工作区根跑单个子代理', async () => {
     const runDelegate = makeRunDelegate(deps(fakeProvider({ handoff: () => 'root done' }), ws([])))
-    const r = await runDelegate({ workspacePath: '/ws', task: 't', provider: 'fake', model: 'm' })
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: 't', provider: 'fake', model: 'm' })
     expect(r.per).toHaveLength(1)
     expect(r.per[0].project).toBe('workspace')
     expect(r.text).toContain('root done')
@@ -90,5 +95,51 @@ describe('runDelegate', () => {
     const grand = listDelegateAgents('/wsg', 's1').find(r => r.depth === 2)
     expect(grand?.name).toBe('读子模块')
     expect(grand?.parentId).toBe('delegate:a')
+  })
+
+  it('cancelWorkspaceDelegates 取消后台在跑的子代理(fire-and-forget 后「停止」仍杀得掉,修孤儿缺口)', async () => {
+    let cancelled = false
+    let rej: ((e: unknown) => void) | undefined
+    const provider: AgentProvider = {
+      id: 'fake', displayName: 'F', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(task) {
+        const done = new Promise<AgentResult>((_res, reject) => { rej = reject })
+        return { id: task.agentId, cancel() { cancelled = true; rej?.(new Error('cancelled')) }, done }
+      },
+    }
+    const ack = await makeRunDelegate(deps(provider, ws(['a'])))({ workspacePath: '/wscancel', task: 't', provider: 'fake', model: 'm' })
+    expect(ack.text).toContain('已在后台派发')          // 立即返回,子代理仍在后台跑(done 未 resolve)
+    expect(cancelWorkspaceDelegates('/wscancel')).toBe(1) // 跨轮取消表里能找到并杀掉它
+    expect(cancelled).toBe(true)
+    await new Promise((r) => setTimeout(r, 0))            // 让后台 finally(untrack)跑完
+    expect(cancelWorkspaceDelegates('/wscancel')).toBe(0) // 已 untrack,不会重复取消
+  })
+
+  it('子代理异常时 onComplete 仍触发、text 标注失败(fire-and-forget 下失败不会石沉大海)', async () => {
+    const provider: AgentProvider = {
+      id: 'fake', displayName: 'F', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(task) { return { id: task.agentId, cancel() {}, done: Promise.reject(new Error('boom')) } },
+    }
+    const r = await awaitDelegate(makeRunDelegate(deps(provider, ws(['a']))), { workspacePath: '/ws', task: 't', provider: 'fake', model: 'm' })
+    expect(r.per).toHaveLength(1)
+    expect(r.per[0].ok).toBe(false)
+    expect(r.text).toContain('失败')
+    expect(r.text).toContain('boom')
+  })
+
+  it('fire-and-forget:立即返回「已派发」确认(per 空),真实产出经 onComplete 异步回呈', async () => {
+    const runDelegate = makeRunDelegate(deps(fakeProvider({ handoff: () => '结论X' }), ws(['a'])))
+    let completed: DelegateResult | null = null
+    const ack = await runDelegate({ workspacePath: '/ws', task: 't', provider: 'fake', model: 'm', onComplete: (r) => { completed = r } })
+    // 立即返回的是「已派发」确认:不含真实产出(per 空),不阻塞主代理 → 不会撞 codex 180s tool 超时。
+    expect(ack.per).toEqual([])
+    expect(ack.text).toContain('已在后台派发')
+    // 真实聚合产出在后台完成后经 onComplete 到达。
+    await new Promise((r) => setTimeout(r, 0))
+    expect(completed).not.toBeNull()
+    expect((completed as unknown as DelegateResult).per).toHaveLength(1)
+    expect((completed as unknown as DelegateResult).text).toContain('结论X')
   })
 })

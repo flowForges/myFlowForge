@@ -40,6 +40,10 @@ export interface DelegateOpts {
   // Called with each spawned sub-agent session — lets the caller register it for cancellation and
   // (P5) surface it in the IDs panel. Optional.
   onSession?: (s: AgentSession) => void
+  // Fire-and-forget 完成回调:所有子代理跑完后调用一次,带聚合结果。runDelegate 会【立即】返回一个「已派发」
+  // 确认(这样主代理的 forge_delegate MCP 调用不会挂到 codex 的 ~180s tool 超时被取消);真实聚合产出经此回调
+  // 交回给调用方,由调用方呈现回会话(append 一条新消息)。
+  onComplete?: (r: DelegateResult) => void
 }
 
 export interface DelegateResult {
@@ -70,6 +74,31 @@ const stubStore = {
   writeArtifact: (name: string) => ({ path: name }),
   appendMessage: () => {},
 } as unknown as BridgeRunCtx['store']
+
+// workspace → 该工作区当前在【后台】跑的 delegate 子代理 session 集合。fire-and-forget 后子代理脱离了 chat
+// 轮次(轮末 chatQueue.activeCancel 被置 null),没有这张跨轮存活的表,用户点「停止」或关闭工作区时就杀不掉后台
+// 子代理,会留成孤儿进程。启动时 track,后台完成/失败时 untrack;取消时遍历 cancel。
+const activeDelegates = new Map<string, Set<AgentSession>>()
+function trackDelegate(wsPath: string, s: AgentSession) {
+  let set = activeDelegates.get(wsPath)
+  if (!set) { set = new Set(); activeDelegates.set(wsPath, set) }
+  set.add(s)
+}
+function untrackDelegate(wsPath: string, s: AgentSession) {
+  const set = activeDelegates.get(wsPath)
+  if (!set) return
+  set.delete(s)
+  if (!set.size) activeDelegates.delete(wsPath)
+}
+/** 取消某工作区所有在后台跑的 delegate 子代理(用户点「停止」/关闭工作区时调)。返回被取消的数量。 */
+export function cancelWorkspaceDelegates(wsPath: string): number {
+  const set = activeDelegates.get(wsPath)
+  if (!set) return 0
+  let n = 0
+  for (const s of set) { try { s.cancel(); n++ } catch { /* already gone */ } }
+  activeDelegates.delete(wsPath)
+  return n
+}
 
 export function makeRunDelegate(deps: DelegateDeps) {
   let seq = 0
@@ -148,21 +177,56 @@ export function makeRunDelegate(deps: DelegateDeps) {
       return session
     }
 
-    const per = await Promise.all(targets.map(async (t) => {
+    // 先【同步启动】所有子代理(provider.run 立即返回一个正在跑的 session),但【不阻塞等它们跑完】—— 阻塞会
+    // 让主代理的 forge_delegate MCP 调用一直挂着,撞上 codex 对单次 MCP tool call 的 ~180s 上限被取消(核心
+    // bug 根因)。用循环+收集:某个 target 同步启动就抛错时,把已启动的收尾(cancel+清理),经 onComplete 报失败,
+    // 不留孤儿、也不让 runDelegate 直接 throw 导致「已派发」不返回、产出静默(盲区2)。
+    const running: { t: Target; session: AgentSession }[] = []
+    try {
+      for (const t of targets) running.push({ t, session: runOneTarget(t) })
+    } catch (err) {
+      for (const r of running) { try { r.session.cancel() } catch { /* already gone */ } }
+      try { await bridge?.close() } catch { /* ignore */ }
+      try { rmSync(runDir, { recursive: true, force: true }) } catch { /* best-effort */ }
+      const msg = `委派启动失败: ${err instanceof Error ? err.message : String(err)}`
+      opts.onComplete?.({ text: msg, per: [{ project: 'workspace', summary: msg, ok: false }] })
+      return { text: msg, per: [] }
+    }
+
+    // 登记到跨轮存活的取消表(fire-and-forget 后靠它才能在「停止」/关闭工作区时杀掉后台子代理)。
+    for (const { session } of running) trackDelegate(opts.workspacePath, session)
+
+    // 后台等全部完成 → 汇总 → 清理 → onComplete 回呈。子代理跑在本函数自建的独立 bridge(不是主代理轮次的主
+    // bridge),所以主代理这一轮结束、finally 里 close 主 bridge,并不会打断这些子代理。onComplete 放在 finally,
+    // 保证【无论 Promise.all 还是 bridge.close 抛错,产出都必达】,不会静默(盲区1)。
+    void (async () => {
+      let per: DelegateResult['per'] = []
       try {
-        const session = runOneTarget(t)
-        const r: AgentResult = await session.done
-        const summary = summaries.get(t.id) ?? outputs.get(t.id)?.trim() ?? r.summary ?? ''
-        return { project: t.name, summary: summary || '(子代理无产出)', ok: r.ok !== false }
-      } catch (err) {
-        return { project: t.name, summary: `子代理异常: ${err instanceof Error ? err.message : String(err)}`, ok: false }
+        per = await Promise.all(running.map(async ({ t, session }) => {
+          try {
+            const r: AgentResult = await session.done
+            const summary = summaries.get(t.id) ?? outputs.get(t.id)?.trim() ?? r.summary ?? ''
+            return { project: t.name, summary: summary || '(子代理无产出)', ok: r.ok !== false }
+          } catch (err) {
+            return { project: t.name, summary: `子代理异常: ${err instanceof Error ? err.message : String(err)}`, ok: false }
+          }
+        }))
+      } finally {
+        for (const { session } of running) untrackDelegate(opts.workspacePath, session)
+        try { await bridge?.close() } catch { /* ignore */ }
+        try { rmSync(runDir, { recursive: true, force: true }) } catch { /* best-effort cleanup */ }
+        const text = per.length
+          ? per.map(p => `### ${p.project}${p.ok ? '' : ' (失败)'}\n${p.summary}`).join('\n\n')
+          : '(委派未产生结果)'
+        opts.onComplete?.({ text, per })
       }
-    }))
+    })()
 
-    await bridge?.close()
-    try { rmSync(runDir, { recursive: true, force: true }) } catch { /* best-effort cleanup */ }
-
-    const text = per.map(p => `### ${p.project}${p.ok ? '' : ' (失败)'}\n${p.summary}`).join('\n\n')
-    return { text, per }
+    // 立即把「已派发」确认返回给主代理(不等真实产出——产出稍后经 onComplete 呈现)。
+    const names = targets.map(t => t.name).join('、')
+    return {
+      text: `已在后台派发 ${targets.length} 个 Forge 子代理(${names})执行本次委派,它们各自 cd 进项目独立跑,进度见右侧检查器 / IDs 面板。全部完成后,汇总结果会自动作为一条新消息出现在本会话。请你现在只简短告诉用户「已派发子代理在后台执行,完成后会把汇总自动带回来」,不要臆造产出、也不要干等。`,
+      per: [],
+    }
   }
 }

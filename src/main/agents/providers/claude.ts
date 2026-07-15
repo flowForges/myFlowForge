@@ -1,6 +1,7 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor } from '../chatStream'
+import { forgeChatDirective } from '../forgeChatDirective'
 import { forgeMcpArgs } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
@@ -126,11 +127,17 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       return { id: task.agentId, cancel: () => { child.kill('SIGTERM') }, done }
     },
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
+      // claude 主代理靠自动发现的 .claude/skills/forge-workflow 学工作流规则,但那依赖它自行按 frontmatter
+      // 决定是否加载,不保证每轮生效(codex/qoder 是每轮强制内联 directive,claude 之前是缺口)。这里与它们
+      // 对齐:强制内联 forgeChatDirective 作为「必须真调 forge_propose_plan/forge_delegate、禁止叙述式假执行」
+      // 的兜底保证(fail-open:未暴露 forge 工具时 directive 返回 '',行为不变)。
+      const directive = forgeChatDirective(env)
+      const chatPrompt = directive ? `${directive}\n\n${buildChatPrompt(task)}` : buildChatPrompt(task)
       // `-p --output-format stream-json` REQUIRES --verbose, otherwise claude exits with a
       // usage error and emits nothing → the reply renders blank ("only 思考中, no text").
       const args = spec.preArgs
         ? [...spec.preArgs]
-        : ['-p', buildChatPrompt(task), '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...permissionArgs('claude', task.permissionMode ?? 'auto'), '--model', cliModel(task.model), ...forgeMcpArgs(env)]
+        : ['-p', chatPrompt, '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...permissionArgs('claude', task.permissionMode ?? 'auto'), '--model', cliModel(task.model), ...forgeMcpArgs(env)]
       if (!spec.preArgs && task.sessionId) args.push('--resume', task.sessionId)
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
       // Inactivity watchdog: reclaim a genuinely wedged turn (240s of total silence) instead of an

@@ -12,13 +12,14 @@ interface NsfwPaneProps {
   onChangePet: (p: Partial<Pet>) => void
   onChangeAppearance: (p: Partial<Appearance>) => void
   onSetInstalled: (key: string, ref: string) => void
+  onDisable: () => void                          // 关闭扩展:重新锁定(隐藏本 pane 入口),需重新兑换才能再开
 }
 
 // The gated extra-content pane (reachable only after activation). Two-state per item:
 //   安装 — never downloaded → download, store on disk, apply, remember it.
 //   设置 — downloaded before → if the local file is still there just apply it; if it was deleted/GC'd,
 //          re-download then apply. Nothing is held in memory: images live on disk, served via protocol.
-export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, onSetInstalled }: NsfwPaneProps) {
+export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, onSetInstalled, onDisable }: NsfwPaneProps) {
   const [catalog, setCatalog] = useState<NsfwCatalog | null>(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -130,6 +131,19 @@ export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, 
       {catalog && catalog.pets.length === 0 && catalog.backgrounds.length === 0 && !err && (
         <div className="set-group"><p className="set-desc">暂无可用内容。</p></div>
       )}
+
+      <hr className="nsfw-divider" />
+      <div className="set-group">
+        <h4>关闭扩展</h4>
+        <p className="set-desc">关闭后将隐藏此扩展入口,需要重新兑换才能再次开启。已应用的宠物 / 背景不受影响,可在对应设置里自行更换。</p>
+        <button
+          className="wf-pick"
+          style={{ color: 'var(--del, var(--err))', borderColor: 'color-mix(in oklab, var(--del, var(--err)) 45%, var(--border))' }}
+          onClick={() => { if (window.confirm('确定关闭此扩展吗?关闭后入口会隐藏,需要重新兑换才能再次开启。')) onDisable() }}
+        >
+          关闭此扩展
+        </button>
+      </div>
     </>
   )
 }

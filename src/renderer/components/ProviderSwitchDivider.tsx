@@ -6,13 +6,16 @@ export function ProviderSwitchDivider({ from, to }: { from: string; to: string }
     <div className="provider-switch-sep" role="separator">
       <span className="line" />
       <span className="lbl">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg className="psw-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <polyline points="17 1 21 5 17 9" />
           <path d="M3 11V9a4 4 0 0 1 4-4h14" />
           <polyline points="7 23 3 19 7 15" />
           <path d="M21 13v2a4 4 0 0 1-4 4H3" />
         </svg>
-        已从【{from}】切换到【{to}】— 新模型将基于之前对话继续（历史重建，可能有损）
+        <span className="psw-body">
+          <span className="psw-title">切换编码代理　<b>{from}</b> <span className="psw-arrow">→</span> <b>{to}</b></span>
+          <span className="psw-note">新代理将基于历史重建上下文继续，可能有损</span>
+        </span>
       </span>
       <span className="line" />
     </div>

@@ -20,13 +20,24 @@
   background-size: cover; background-position: center; background-repeat: no-repeat;
   opacity: var(--app-bg-opacity, .35);
 }
-/* 壁纸开着时(app / chat 范围),会话区正文都叠在图上;给正文与元信息加一层极淡的同色投影,拉开与背景的
-   对比。原来用的是不透明底色 + 一圈全向 0 0 1px 光晕(text-shadow: … , 0 0 1px var(--bg)),在浅色壁纸上
-   看起来像字周围裹了一层"白色阴影"、发虚。改为单条半透明、有方向的柔投影:高可见度壁纸下仍保证可读,平时
-   几乎不可见,不再有白边光晕。 */
-html[data-bg-scope="app"] .msg-body, html[data-bg-scope="chat"] .msg-body,
-html[data-bg-scope="app"] .msg-who,  html[data-bg-scope="chat"] .msg-who {
-  text-shadow: 0 1px 3px color-mix(in oklab, var(--bg) 45%, transparent);
+/* 壁纸开着时(app / chat 范围)的正文可读性——关键前提:投影颜色必须固定,不能跟 var(--bg) 走。
+   老做法 text-shadow:… var(--bg) 有两个方向都错:浅色主题 --bg 近白 → 逐字白晕"发虚/灰底"(Codex 干净字
+   所没有的脏感);而深色主题 --bg 近黑本来是对的(深色投影托浅色字),被一刀切删掉后,深色系的浅色字叠在
+   壁纸亮部(人脸/衣服高光)就直接看不见了。
+   所以按主题分开处理:
+   (1) 深色系主题(dark/midnight/sepia/forest,--fg 近白):浅色字必须有【固定深色】投影兜底,才能压住壁纸
+       亮部。深色投影在深色场景不会有白晕问题。
+   (2) 浅色主题(--fg 近黑):深色字不需要投影,靠 global.css 那层压淡底(65% 纯色 + 35% 图)即可,保持干净、
+       杜绝白晕 → 下面显式关掉。
+   平滑:(b) 壁纸下强制 antialiased 放在 global.css(与字重/平滑系统同处),避免次像素渲染在半透明壁纸上出
+   彩边发虚,同时覆盖会话区之外的侧栏等 chrome。 */
+/* 加在会话主列容器上,靠 text-shadow 继承一次性覆盖会话区所有文字(正文/发送者/时间/思考行/输入框占位),
+   不必逐元素点名。青底白字气泡、带底色的 inline code 拿到这层深投影也无害。 */
+html[data-bg-scope="app"] div.chat, html[data-bg-scope="chat"] div.chat {
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .55);
+}
+html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"][data-bg-scope="chat"] div.chat {
+  text-shadow: none;
 }
 /* overflow-x must be set explicitly: with only overflow-y:auto, CSS computes overflow-x to `auto`
    too, so any child wider than .chat-inner makes the column scroll sideways (and the hidden
@@ -113,6 +124,8 @@ html[data-bg-scope="app"] .msg-who,  html[data-bg-scope="chat"] .msg-who {
   max-width: 100%; padding: 11px 14px; border-radius: 14px 14px 4px 14px;
   background: var(--accent); color: var(--on-accent); text-align: left;
   white-space: pre-wrap; overflow-wrap: anywhere; box-shadow: 0 1px 0 oklch(0% 0 0 / .04);
+  /* 用户气泡自带青色实底,对比足够,不需要壁纸下会话区容器那层深投影 —— 继承过来会让青底白字重影。关掉。 */
+  text-shadow: none;
 }
 .msg.user .msg-files { padding-left: 0; padding-right: 0; justify-content: flex-end; width: min(620px, calc(100% - 33px)); }
 .attach-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; font-size: 12px; }
@@ -594,8 +607,17 @@ html[data-bg-scope="app"] .msg-who,  html[data-bg-scope="chat"] .msg-who {
 /* provider-switch-sep: 会话内切换 provider 处的分割线 + 友情提示,视觉跟随 .imported-sep */
 .provider-switch-sep { display: flex; align-items: center; gap: 12px; margin: 18px 0 14px; }
 .provider-switch-sep .line { flex: 1 1 auto; height: 1px; background: linear-gradient(to right, transparent, var(--border), transparent); }
-.provider-switch-sep .lbl { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: .02em; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); max-width: 70%; text-align: center; }
-.provider-switch-sep .lbl svg { width: 12px; height: 12px; flex: 0 0 12px; }
+/* 长文案不再塞进 999px 圆角胶囊(换行后很丑),改成:图标 + 两行(主行 provider 切换加粗、副行小字说明),
+   适中矩形圆角、左对齐,更精致。底色比正文卡片略淡,避免在壁纸上显得笨重。 */
+/* 整体刻意弱化(用户反馈原来颜色太突兀):底/边更淡、provider 名不用最深的 --fg 且字重压低、箭头去掉青色强调
+   改中性色 —— 这是一条辅助提示,应低调、融入,不与正文/气泡抢注意力。 */
+.provider-switch-sep .lbl { flex: 0 1 auto; display: inline-flex; align-items: flex-start; gap: 9px; padding: 6px 12px; border: 1px solid color-mix(in oklab, var(--border) 70%, transparent); border-radius: 10px; background: color-mix(in oklab, var(--surface) 60%, transparent); max-width: 82%; text-align: left; }
+.provider-switch-sep .lbl .psw-ic { width: 12px; height: 12px; flex: 0 0 12px; margin-top: 2px; color: var(--faint); opacity: .8; }
+.provider-switch-sep .psw-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.provider-switch-sep .psw-title { font-size: 11.5px; font-weight: 500; color: var(--muted); letter-spacing: .01em; }
+.provider-switch-sep .psw-title b { color: var(--fg-2); font-weight: 600; }
+.provider-switch-sep .psw-arrow { color: var(--faint); font-weight: 500; margin: 0 2px; }
+.provider-switch-sep .psw-note { font-size: 10.5px; color: var(--faint); line-height: 1.4; }
 
 /* ws-archive-note: 归档工作区只读提示条 */
 .ws-archive-note { display: flex; gap: 8px; align-items: flex-start; margin: 12px 16px; padding: 10px 12px; border: 1px solid color-mix(in oklab, var(--warn) 26%, var(--border)); border-radius: 10px; background: color-mix(in oklab, var(--warn) 7%, transparent); color: var(--fg-2); font-size: 12.5px; }
