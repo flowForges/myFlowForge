@@ -214,6 +214,10 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'plan-request'; id: string; approach: string; stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]; hooks: { id: string; name: string; after: string }[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[]; recommendReason?: string }
   | { type: 'plan-resolved'; id: string }
   | { type: 'mode-changed'; mode: 'chat' | 'workflow'; runId?: string }
+  // Fire-and-forget delegate batches keep running after the chat turn ends. This signals whether any
+  // background delegate sub-agent is still in flight for this session, so the composer can show the
+  // running/stop state (stopping cancels them) instead of looking idle while work continues.
+  | { type: 'delegate-busy'; active: boolean }
   | { type: 'error'; id: string; error: string }
 )
 

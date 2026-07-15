@@ -14,6 +14,7 @@ export interface ChatApi {
   busy: boolean
   queue: ChatQueueItem[]
   running: { id: string; text: string } | null
+  delegateActive: boolean
   send: (payload: Omit<ChatSendPayload, 'workspacePath' | 'sessionId'>) => void
   resolveConfirm: (payload: { id: string; decision: 'allow' | 'deny'; value?: string }) => void
   resolveAsk: (payload: { id: string; decision: 'allow' | 'deny'; value?: string; choice?: number }) => void
@@ -53,13 +54,16 @@ export function useChat(
   const [busy, setBusy] = useState(false)
   const [queue, setQueue] = useState<ChatQueueItem[]>([])
   const [running, setRunning] = useState<{ id: string; text: string } | null>(null)
+  // True while any fire-and-forget delegate sub-agent is still running for this session (the chat turn
+  // already ended). Lets the composer show a running/stop state across the fire-and-forget boundary.
+  const [delegateActive, setDelegateActive] = useState(false)
   const api = useRef(window.forge)
   const onModeChangedRef = useRef(onModeChanged)
   onModeChangedRef.current = onModeChanged
 
   useEffect(() => {
-    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); return }
-    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null)
+    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setDelegateActive(false); return }
+    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setDelegateActive(false)
     let live = true
     void api.current.chatHistory(workspacePath, sessionId).then((h: ChatMessage[]) => { if (live) setMessages(h) })
     return () => { live = false }
@@ -128,6 +132,7 @@ export function useChat(
       else if (e.type === 'ask-resolved') setAsks(a => a.filter(x => x.id !== e.id))
       else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, hooks: e.hooks, allProjects: e.allProjects, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, recommendReason: e.recommendReason, ts: new Date().toISOString() }])
       else if (e.type === 'plan-resolved') setPlans(p => p.filter(x => x.id !== e.id))
+      else if (e.type === 'delegate-busy') setDelegateActive(e.active)
       else if (e.type === 'mode-changed') onModeChangedRef.current?.(e.mode, e.runId)
     })
     return () => { off() }
@@ -173,5 +178,5 @@ export function useChat(
     void api.current.chatStop({ workspacePath })
   }, [workspacePath])
 
-  return { messages, streamingIds, confirms, asks, plans, busy, queue, running, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
+  return { messages, streamingIds, confirms, asks, plans, busy, queue, running, delegateActive, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
 }

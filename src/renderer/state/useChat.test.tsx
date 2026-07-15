@@ -42,6 +42,16 @@ describe('useChat', () => {
     expect(result.current.messages.map(m => m.id)).toEqual(['h1', 'u1', 'a1'])
   })
 
+  it('delegate-busy event drives delegateActive (running state survives the fire-and-forget turn end)', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    expect(result.current.delegateActive).toBe(false)
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'delegate-busy', active: true }) })
+    expect(result.current.delegateActive).toBe(true)
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'delegate-busy', active: false }) })
+    expect(result.current.delegateActive).toBe(false)
+  })
+
   it('joins a turn mid-flight: assembles delta/done even when assistant-start was missed', async () => {
     // The chat view mounted AFTER the turn began (e.g. a pet command sent while on the home view), so it
     // never saw assistant-start. delta/think/done must still create + fill the reply, not silently drop it.

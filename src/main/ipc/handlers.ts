@@ -453,6 +453,18 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'done', message: note })
   }
 
+  // Per-(workspace, session) count of in-flight fire-and-forget delegate batches. The chat turn ends
+  // the moment forge_delegate returns 「已派发」, but the sub-agents keep running — this lets the
+  // composer show a running/stop state across that boundary instead of looking idle. Broadcast on every
+  // change so the renderer (useChat) can OR it into its running indicator.
+  const delegateBusy = new Map<string, number>()
+  const bumpDelegateBusy = (wsPath: string, sessionId: string, delta: number) => {
+    const k = `${wsPath}::${sessionId}`
+    const n = Math.max(0, (delegateBusy.get(k) ?? 0) + delta)
+    if (n) delegateBusy.set(k, n); else delegateBusy.delete(k)
+    broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'delegate-busy', active: n > 0 })
+  }
+
   // 继续执行: deterministically resume a cancelled/failed run — replay the stages that finished ok
   // and re-run from the first incomplete one, WITHOUT going through the LLM propose (which is fragile:
   // forge_propose_plan blocks on approval and codex kills the turn at 180s). Prior stages' handoff
@@ -575,6 +587,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       },
       delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) => {
         delegatedAny = true
+        // Mark this session as having in-flight background delegates (cleared in onComplete) so the
+        // composer shows a running/stop state while the fire-and-forget sub-agents keep working.
+        bumpDelegateBusy(payload.workspacePath, payload.sessionId, +1)
         return runDelegate({
           workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief,
           provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId,
@@ -606,6 +621,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
             const dmsg: ChatMessage = { id: did, who: 'ai', text: r.text || '(子代理无产出)', model: '委派子代理汇总', provider: payload.agent, ts: new Date().toISOString().slice(11, 19) }
             appendMessage(payload.workspacePath, payload.sessionId, dmsg)
             broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'done', message: dmsg })
+            // Background delegates for this batch are done → clear the composer's running/stop state.
+            bumpDelegateBusy(payload.workspacePath, payload.sessionId, -1)
           },
         })
       },
