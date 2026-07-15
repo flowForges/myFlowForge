@@ -155,7 +155,16 @@ export function makeRunDelegate(deps: DelegateDeps) {
         // (盾牌为 readonly 则仍只读,盾牌是上限)。缺省盾牌 → 'auto'(工作区可写),即历史行为。
         { stageKey: 'delegate', agentId: t.id, name: t.name, prompt: buildDelegatePrompt(opts.task, write, t.name, opts.brief), cwd: t.cwd, model: t.model, permissionMode: write ? (opts.permissionMode ?? 'auto') : 'readonly' },
         {
-          onLog: (l) => { if (l.level === 'ok' || l.kind === 'output') outputs.set(t.id, (outputs.get(t.id) ? outputs.get(t.id) + '\n' : '') + l.text); if (opts.onProgress && (l.kind === 'tool' || l.kind === 'file')) opts.onProgress(t.name, l.text) },
+          // Capture the sub-agent's answer for the summary fallback. Assistant output STREAMS as many
+          // small delta chunks (kind 'output'); they reconstruct the text by CONCATENATION. Joining them
+          // with '\n' (the old bug) inserted a hard line break at every delta boundary — mid-word and
+          // mid-`**bold**` — which shattered the markdown when rendered (literal `**`, `Vue`→`V\nue`).
+          // So: concat deltas faithfully; a complete `level:'ok'` result message supersedes them.
+          onLog: (l) => {
+            if (l.level === 'ok') outputs.set(t.id, l.text.trim())
+            else if (l.kind === 'output') outputs.set(t.id, (outputs.get(t.id) ?? '') + l.text)
+            if (opts.onProgress && (l.kind === 'tool' || l.kind === 'file')) opts.onProgress(t.name, l.text)
+          },
           onState: () => {},
           onSession: (id: string) => { if (opts.sessionId) updateDelegateSession(opts.workspacePath, opts.sessionId, t.id, id) },
           onConfirm: async () => 'deny',

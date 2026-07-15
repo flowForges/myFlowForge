@@ -10,11 +10,13 @@ import type { AgentProvider, AgentResult, AgentTask, AgentCallbacks } from '../a
 import type { Workspace } from '../config/schema'
 
 // A fake provider whose run() reports a handoff (or, optionally, only log output) then completes.
-function fakeProvider(opts: { handoff?: (name: string) => string; output?: (name: string) => string } = {}): AgentProvider {
+function fakeProvider(opts: { handoff?: (name: string) => string; output?: (name: string) => string; outputDeltas?: (name: string) => string[] } = {}): AgentProvider {
   return {
     id: 'fake', displayName: 'Fake', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
     detect: async () => true, listModels: async () => [],
     run(task: AgentTask, cb: AgentCallbacks) {
+      // Assistant answer streamed as delta chunks (kind 'output'), as real CLIs emit it.
+      if (opts.outputDeltas) for (const d of opts.outputDeltas(task.name)) cb.onLog({ ts: '', text: d, level: 'accent', kind: 'output' })
       if (opts.output) cb.onLog({ ts: '', text: opts.output(task.name), level: 'ok' })
       if (opts.handoff) cb.onHandoff?.({ summary: opts.handoff(task.name) })
       cb.onDone({ ok: true })
@@ -43,6 +45,21 @@ describe('runDelegate', () => {
     expect(r.per.every(p => p.ok)).toBe(true)
     expect(r.text).toContain('a 的结论')
     expect(r.text).toContain('b 的结论')
+  })
+
+  it('无 handoff 时把流式输出 delta 原样拼接(不插 \\n),不破坏 markdown', async () => {
+    // Regression: deltas used to be '\n'-joined, inserting a hard break at every chunk boundary —
+    // shattering **bold**/lists mid-token when rendered. They must concatenate faithfully.
+    const runDelegate = makeRunDelegate(deps(fakeProvider({ outputDeltas: () => ['语言：**Go 1.', '12** + **Gin**', '，数据库 MySQL。'] }), ws(['a'])))
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: 't', provider: 'fake', model: 'm' })
+    expect(r.per[0].summary).toBe('语言：**Go 1.12** + **Gin**，数据库 MySQL。')
+    expect(r.per[0].summary).not.toContain('\n')
+  })
+
+  it('level:ok 完整结果覆盖流式 delta(优先用干净的完整消息)', async () => {
+    const runDelegate = makeRunDelegate(deps(fakeProvider({ outputDeltas: () => ['部分', '片段'], output: () => '完整的干净结果' }), ws(['a'])))
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: 't', provider: 'fake', model: 'm' })
+    expect(r.per[0].summary).toBe('完整的干净结果')
   })
 
   it('projects 过滤只在指定项目执行', async () => {
