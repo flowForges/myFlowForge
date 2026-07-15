@@ -77,6 +77,23 @@ export function forgeMcpArgs(env: NodeJS.ProcessEnv): string[] {
 }
 
 /**
+ * The forge MCP tools as CLI-facing permission names (`mcp__forge__<tool>`), derived from
+ * FORGE_TOOLS. Non-interactive CLIs (claude/qoder) BLOCK an MCP tool call unless its name is
+ * pre-granted via --allowedTools / --allowed-tools — otherwise the call fails with "requested
+ * permissions to use mcp__forge__… but you haven't granted it yet" and the tool never runs (this
+ * is why chat-initiated forge_delegate / forge_propose_plan silently failed). Returns [] when
+ * forge isn't injected (missing socket/agentId/entry) or FORGE_TOOLS is empty.
+ */
+export function forgeAllowedToolNames(env: NodeJS.ProcessEnv): string[] {
+  if (!forgeServerSpec(env)) return []
+  return (env.FORGE_TOOLS ?? '')
+    .split(',')
+    .map(t => t.trim())
+    .filter(Boolean)
+    .map(t => `mcp__forge__${t}`)
+}
+
+/**
  * codex has no `--mcp-config` equivalent; an MCP server can only be registered in-place via
  * `-c mcp_servers.<name>.*` overrides (value parsed as TOML). Returns the three -c overrides
  * registering the forge server, or [] when env is incomplete (no injection).

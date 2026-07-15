@@ -2,7 +2,7 @@ import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
-import { forgeMcpArgs } from '../mcpConfig'
+import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
 import { logError } from '../../log/appLog'
@@ -135,9 +135,14 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const chatPrompt = directive ? `${directive}\n\n${buildChatPrompt(task)}` : buildChatPrompt(task)
       // `-p --output-format stream-json` REQUIRES --verbose, otherwise claude exits with a
       // usage error and emits nothing → the reply renders blank ("only 思考中, no text").
+      // Pre-grant the forge MCP tools; without --allowedTools, claude blocks the call in headless
+      // mode ("requested permissions … but you haven't granted it yet") and forge_delegate /
+      // forge_propose_plan never run — the chat-delegation "子代理没执行/被取消" bug.
+      const forgeAllow = forgeAllowedToolNames(env)
+      const allowArgs = forgeAllow.length ? ['--allowedTools', ...forgeAllow] : []
       const args = spec.preArgs
         ? [...spec.preArgs]
-        : ['-p', chatPrompt, '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...permissionArgs('claude', task.permissionMode ?? 'auto'), '--model', cliModel(task.model), ...forgeMcpArgs(env)]
+        : ['-p', chatPrompt, '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...permissionArgs('claude', task.permissionMode ?? 'auto'), ...allowArgs, '--model', cliModel(task.model), ...forgeMcpArgs(env)]
       if (!spec.preArgs && task.sessionId) args.push('--resume', task.sessionId)
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
       // Inactivity watchdog: reclaim a genuinely wedged turn (240s of total silence) instead of an
