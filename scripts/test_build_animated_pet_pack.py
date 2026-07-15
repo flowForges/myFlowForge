@@ -18,6 +18,33 @@ SPEC.loader.exec_module(BUILDER)
 
 
 class BuildAnimatedPetPackTest(unittest.TestCase):
+    def test_sequence_fitting_preserves_pose_height_and_shared_ground(self) -> None:
+        standing = Image.new("RGBA", (100, 100), (0, 0, 0, 0))
+        # Real generated sheets are not always divisible by four, so adjacent
+        # cells can differ by one pixel in width.
+        crouching = Image.new("RGBA", (99, 100), (0, 0, 0, 0))
+        for y in range(10, 91):
+            for x in range(40, 61):
+                standing.putpixel((x, y), (255, 120, 180, 255))
+        for y in range(50, 91):
+            for x in range(25, 76):
+                crouching.putpixel((x, y), (255, 120, 180, 255))
+
+        fitted_standing, fitted_crouching = BUILDER.fit_subjects_consistently(
+            [standing, crouching]
+        )
+        standing_box = fitted_standing.getchannel("A").getbbox()
+        crouching_box = fitted_crouching.getchannel("A").getbbox()
+
+        self.assertIsNotNone(standing_box)
+        self.assertIsNotNone(crouching_box)
+        assert standing_box and crouching_box
+        self.assertEqual(standing_box[3], crouching_box[3])
+        self.assertLess(
+            crouching_box[3] - crouching_box[1],
+            (standing_box[3] - standing_box[1]) * 0.7,
+        )
+
     def test_state_loops_use_a_calm_readable_cadence(self) -> None:
         self.assertEqual(
             BUILDER.STATES,
