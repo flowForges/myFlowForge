@@ -12,6 +12,21 @@
   opacity: var(--home-bg-opacity, .35); }
 [data-home-bg="on"] .home-bg-layer { display: block; }
 [data-home-bg="on"] .home-aurora { display: none; }
+/* 首页透出壁纸时——【整个应用】背景(data-bg-scope=app,壁纸铺满全窗)或【首页】背景(data-home-bg=on)——把
+   统计卡 / 焦点卡 / 列表 / 空态卡的底做成半透 + 磨砂,融入壁纸,不再是壁纸上突兀的深色黑块(深色主题尤甚)。
+   之前只 gate 了 data-home-bg,漏掉了更常用的「整个应用」壁纸,所以黑块没消 —— 这里用 :is() 同时覆盖两种。 */
+html:is([data-bg-scope="app"], [data-home-bg="on"]) .hs-cell,
+html:is([data-bg-scope="app"], [data-home-bg="on"]) .home-list,
+html:is([data-bg-scope="app"], [data-home-bg="on"]) .home-empty {
+  background: color-mix(in oklab, var(--surface) 24%, transparent);
+  backdrop-filter: blur(16px) saturate(1.1); -webkit-backdrop-filter: blur(16px) saturate(1.1);
+}
+html:is([data-bg-scope="app"], [data-home-bg="on"]) .focus-card {
+  background: radial-gradient(120% 140% at 100% 0%, var(--accent-dim), transparent 55%), color-mix(in oklab, var(--surface) 24%, transparent);
+  backdrop-filter: blur(16px) saturate(1.1); -webkit-backdrop-filter: blur(16px) saturate(1.1);
+}
+html:is([data-bg-scope="app"], [data-home-bg="on"]) .wl-row { border-top-color: color-mix(in oklab, var(--border) 50%, transparent); }
+html:is([data-bg-scope="app"], [data-home-bg="on"]) .wl-row:hover { background: color-mix(in oklab, var(--surface-2) 38%, transparent); }
 
 /* 极光背景:三个不同色相的模糊色团各自缓慢漂移,给首页顶部一层有深度的动态氛围。z-index:-1 配合
    home-wrap 的 isolation,稳稳待在所有内容之下,不需要给每个内容块单独抬 z-index。 */
@@ -79,8 +94,31 @@
   transition: transform .16s ease, border-color .16s, box-shadow .16s; }
 .hs-cell::after { content: ""; position: absolute; top: -26px; right: -22px; width: 74px; height: 74px; border-radius: 50%;
   background: radial-gradient(circle, var(--accent-dim), transparent 68%); opacity: .55; pointer-events: none; }
-.hs-cell:hover { transform: translateY(-3px); border-color: color-mix(in oklab, var(--accent) 42%, var(--border));
-  box-shadow: 0 12px 30px color-mix(in oklab, var(--accent) 12%, transparent); }
+.hs-cell:hover { transform: translateY(-3px); border-color: color-mix(in oklab, var(--accent) 55%, var(--border));
+  box-shadow: 0 14px 40px color-mix(in oklab, var(--accent) 22%, transparent), 0 0 0 1px color-mix(in oklab, var(--accent) 30%, transparent); }
+/* 悬停光晕:右上角的强调色光斑放大、提亮,配合下面的剑光与呼吸,让模块「亮起来」。 */
+.hs-cell::after { transition: opacity .18s ease, transform .18s ease; }
+.hs-cell:hover::after { opacity: .95; transform: scale(1.25); }
+
+/* ── hover 动效:聚光跟随 + 呼吸光晕(统计卡 + 焦点卡)──────────────────────────
+   内容抬到装饰层之上;聚光是一团柔光,跟着鼠标在卡面移动(位置由 JS 写入 --mx/--my,见 HomeView 的
+   onCardSpotlight),像手电隔着毛玻璃照过去;在背景与文字之间,不遮字;hover 期间辉光循环呼吸。 */
+.hs-cell > *, .focus-card > * { position: relative; z-index: 2; }
+.hs-cell::before, .focus-card::before {
+  content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: inherit;
+  background: radial-gradient(200px circle at var(--mx, 50%) var(--my, 50%), color-mix(in oklab, var(--accent) 26%, transparent), transparent 62%);
+  opacity: 0; transition: opacity .28s ease;
+}
+.hs-cell:hover::before, .focus-card:hover::before { opacity: 1; }
+.hs-cell:hover, .focus-card:hover { animation: home-breathe 2.2s ease-in-out infinite; }
+@keyframes home-breathe {
+  0%, 100% { box-shadow: 0 12px 32px color-mix(in oklab, var(--accent) 16%, transparent), 0 0 0 1px color-mix(in oklab, var(--accent) 24%, transparent); }
+  50% { box-shadow: 0 18px 50px color-mix(in oklab, var(--accent) 34%, transparent), 0 0 0 1px color-mix(in oklab, var(--accent) 46%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hs-cell:hover::before, .focus-card:hover::before,
+  .hs-cell:hover, .focus-card:hover { animation: none; }
+}
 .hs-k { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
 .hs-v { font-family: var(--mono); font-size: 23px; font-weight: 680; color: var(--fg); letter-spacing: -.015em; line-height: 1.1; }
 .hs-v small { font-size: 13px; font-weight: 500; }
@@ -112,7 +150,7 @@
     var(--surface);
   border: 1px solid var(--border-2); border-radius: 16px; padding: 20px 22px; transition: .16s;
 }
-.focus-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 12px 34px color-mix(in oklab, var(--accent) 13%, transparent); }
+.focus-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 16px 46px color-mix(in oklab, var(--accent) 22%, transparent), 0 0 0 1px color-mix(in oklab, var(--accent) 26%, transparent); }
 @media (prefers-reduced-motion: reduce) { .focus-card:hover { transform: none; } }
 .fc-top { display: flex; align-items: center; gap: 10px; }
 .fc-name { font-size: 16px; font-weight: 660; letter-spacing: -.01em; }

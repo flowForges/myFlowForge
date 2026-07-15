@@ -53,8 +53,9 @@ import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspa
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
 import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
 import { makeProposeRun } from '../chat/proposeRun'
-import { makeRunDelegate } from '../chat/delegate'
+import { makeRunDelegate, cancelWorkspaceDelegates } from '../chat/delegate'
 import { isResumeIntent } from '../chat/workflowIntent'
+import { looksLikeNarratedWorkflow } from '../chat/narratedWorkflow'
 import { makeProposeGuard } from '../chat/proposeGuard'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
@@ -559,6 +560,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const store = new RunStore(payload.workspacePath, 'chat-bridge')
     const guardBlocked = makeProposeGuard(3)
     let proposedWorkflow = false
+    // Track whether the main agent took EITHER real forge action this turn (propose_plan OR delegate).
+    // The narrated-execution backstop below only fires when it took NEITHER but still narrated a workflow.
+    let delegatedAny = false
     const bridge = await startBridge(store.runDir, {
       store, runId: 'chat', workspaceName: payload.workspacePath,
       agentName: () => 'chat', agentStage: () => 'chat',
@@ -569,18 +573,39 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         // #1: carry the chat's currently-selected main agent as this run's provider override.
         return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
       },
-      delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) =>
-        runDelegate({
+      delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) => {
+        delegatedAny = true
+        return runDelegate({
           workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief,
           provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId,
           // Register each delegate sub-agent's session for cancellation, so the chat 停止 button kills it.
           onSession: (s) => chatQueue.registerActive(payload.workspacePath, () => s.cancel()),
           // Bubble a delegate sub-agent's forge_ask to the user as a chat select/input card (same ReqCard
           // the workflow gate uses); the answer resolves the sub-agent's blocked forge_ask.
-          ask: (question, options, agentName) => chatAsk(payload.workspacePath, payload.sessionId, question, options, agentName),
+          // 交互中转(方案A · 连贯呈现 + 确定回传):委派子代理的 forge_ask 在主代理对话流里以交互卡片呈现
+          // (ReqCard 已标注来源「【项目】子代理」),用户答后【确定性】回传子代理继续。额外在对话流前后各留一条
+          // 锚点:提问时一条「需要你确认(见卡片)」、答后一条「已把回复转回子代理」——让这次委派交互连贯留痕、记入
+          // 会话历史,主代理后续任何一轮都能在上下文看到(不再脱离主代理、静默发生)。
+          ask: async (question, options, agentName) => {
+            const who = agentName ?? '子代理'
+            emitNote(payload.workspacePath, payload.sessionId, `🔗 委派子代理【${who}】需要你确认（见下方卡片）`)
+            const answer = await chatAsk(payload.workspacePath, payload.sessionId, question, options, agentName)
+            emitNote(payload.workspacePath, payload.sessionId, `↳ 已把你的回复（${answer ?? '已取消'}）转回委派子代理【${who}】继续`)
+            return answer
+          },
           // Coarse live progress: surface each sub-agent's key log lines as chat notes during the run.
           onProgress: (name, text) => emitNote(payload.workspacePath, payload.sessionId, `委派·${name}: ${text}`),
-        }),
+          // fire-and-forget 的产出回流点:后台委派全部完成后,把子代理汇总作为一条新 AI 消息呈现回会话。主代理
+          // 这一轮通常早已结束(它拿到「已派发」确认就回复了),这里独立于轮次直接 append+广播(同 emitNote 机制)。
+          onComplete: (r) => {
+            const did = `dg-done-${Date.now()}`
+            broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'assistant-start', id: did, model: '委派子代理汇总' })
+            const dmsg: ChatMessage = { id: did, who: 'ai', text: r.text || '(子代理无产出)', model: '委派子代理汇总', provider: payload.agent, ts: new Date().toISOString().slice(11, 19) }
+            appendMessage(payload.workspacePath, payload.sessionId, dmsg)
+            broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'done', message: dmsg })
+          },
+        })
+      },
     }).catch(() => null)
     // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
     // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude
@@ -608,12 +633,30 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       }
       if (orphaned.length) emitNote(payload.workspacePath, payload.sessionId, '⚠️ 主代理未完成方案提交(已中断或超时),待审批方案已取消,请重试。')
       // #6/#9: the MAIN AGENT is the sole decider of whether a turn becomes a workflow. We used to
-      // auto-fire proposeRun here whenever a regex (isWorkflowIntent) matched the user's text but the
+      // auto-fire proposeRun here whenever a regex (isWorkflowIntent) matched the user's TEXT but the
       // agent hadn't called forge_propose_plan — that overrode the main agent's judgment (e.g. the user
       // clicking 补充 to refine a plan in chat got a spurious, half-broken workflow confirmation) and
-      // violated "一切先过主代理". Removed: if the main agent chose to answer in chat instead of
-      // proposing, we respect that. The user can still trigger a workflow explicitly (发起工作流 button)
-      // or by asking clearly enough that the main agent proposes.
+      // violated "一切先过主代理". That intent-guessing auto-fire stays removed.
+      //
+      // Narrated-execution backstop (different trigger, not intent-guessing): the dual-path redesign lets
+      // the LLM decide whether to propose, and the LLM sometimes FAILS by narrating a workflow in prose —
+      // "已提交方案给 Forge / 需要你在 UI 批准 / 已按工作流执行" — WITHOUT ever calling forge_propose_plan or
+      // forge_delegate. That bypasses the gate, starts no real run, registers no agent sessions (IDs panel
+      // empty), and renders the narration as a plain (mis-styled) message. 108f9ea only hardened the prompt.
+      // Here we detect that self-contradiction — the agent took NEITHER real forge action this turn yet its
+      // OWN OUTPUT claims it submitted/ran a workflow — and convert the narration into a REAL gate: fire a
+      // proposeRun (fire-and-forget, standalone so this turn's cleanup can't dismiss it) so the user gets an
+      // actual approval card; on approval a real orchestrator run starts. The trigger is the agent's own
+      // narrated intent, not a guess about the user's text, so it can't spuriously fire on a genuine chat
+      // answer (which neither narrates a submit nor claims to run stages).
+      if (!proposedWorkflow && !delegatedAny && looksLikeNarratedWorkflow(msg.text)) {
+        emitNote(payload.workspacePath, payload.sessionId, '⚠️ 检测到主代理只是「口头」提交/执行了工作流,并未真正发起(无真实 run、IDs 无 session)。已为你打开确认门,批准后才会真正编排为多代理工作流。')
+        void proposeRun(payload.workspacePath, payload.text, payload.text, {
+          providerOverride: { provider: payload.agent, model: payload.model },
+          sessionId: payload.sessionId,
+          standalone: true,
+        }).catch(() => {})
+      }
       return msg
     }
     finally { await bridge?.close().catch(() => {}) }
@@ -625,7 +668,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   ipcMain.handle(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
   ipcMain.handle(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
-  ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string }) => chatQueue.stop(a.workspacePath))
+  // 「停止」既停 chat 轮次,也取消该工作区所有在【后台】跑的 delegate 子代理(fire-and-forget 后它们已脱离
+  // chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮取消表才杀得掉,否则会留成孤儿)。
+  ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string }) => { chatQueue.stop(a.workspacePath); cancelWorkspaceDelegates(a.workspacePath) })
   ipcMain.handle(CH.sessionList, (_e, wsPath: string) => readSessions(wsPath))
   ipcMain.handle(CH.sessionNew, (_e, wsPath: string) => {
     if (isArchivedWorkspace(wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
@@ -981,6 +1026,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return listWorkspaces(livePath, s.pinnedWorkspaces, s.workspaceOrder)
   }
   ipcMain.handle(CH.workspaceArchive, (_e, path: string) => {
+    cancelWorkspaceDelegates(path)   // 归档=只读封存,先停掉该工作区后台还在跑的 delegate 子代理
     archiveWorkspaceLifecycle(path)
     void summarizeWorkspace(path, providers, buildAgentEnv({ proxy: readSettings().termProxy })).then(desc => {
       setWorkspaceLifecycle(path, { description: desc })
@@ -995,6 +1041,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return wsList()
   })
   ipcMain.handle(CH.workspaceDelete, async (_e, path: string) => {
+    cancelWorkspaceDelegates(path)   // 删除前先停掉后台 delegate 子代理,避免孤儿进程仍在读/写将被删的目录
     const r = await deleteWorkspace(path)
     broadcast(CH.workspacesChanged, {})
     return { ...r, list: wsList() }

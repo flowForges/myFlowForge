@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 import { readSettings } from '../config/store'
 
@@ -22,8 +22,15 @@ export function createMainWindow(): BrowserWindow {
   const theme = (() => { try { return readSettings().appearance.theme } catch { return 'light' } })()
   const opacity = (() => { try { return readSettings().appearance.windowOpacity ?? 1 } catch { return 1 } })()
   const vibrancy = (() => { try { return vibrancyMaterial(readSettings().appearance.blurAmount) } catch { return undefined } })()
+  // 让窗口在【光标所在屏(= 启动时用户操作/聚焦的那块屏)】居中,而不是默认居中主屏 —— 多屏下(如外接显示器上
+  // 启动)之前无 x/y 会跑到非当前屏。取光标屏的 workArea 居中;取不到(无头/测试环境)则回落 Electron 默认。
+  const W = 1280, H = 820
+  const pos = (() => {
+    try { const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea; return { x: Math.round(wa.x + (wa.width - W) / 2), y: Math.round(wa.y + (wa.height - H) / 2) } }
+    catch { return {} }
+  })()
   const win = new BrowserWindow({
-    width: 1280, height: 820, show: false,
+    width: W, height: H, ...pos, show: false,
     frame: false,
     roundedCorners: true,
     // Frosted: transparent + vibrancy (no opaque fill so the material shows). Flat: neutral bg to avoid

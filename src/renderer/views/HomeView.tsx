@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useState, type ReactNode, type MouseEvent as ReactMouseEvent } from 'react'
 import type { WorkspaceMeta, RunState, AgentState, HomeStats, HomeWsStat } from '@shared/types'
 import { InstallBanner } from './InstallBanner'
 import { QuickStart } from './QuickStart'
@@ -111,6 +111,14 @@ interface Props {
   onOpenSettings: () => void
 }
 
+// 聚光跟随:把鼠标相对卡片的位置写进 --mx/--my,CSS ::before 的 radial spotlight 据此跟着鼠标走。
+function onCardSpotlight(e: ReactMouseEvent<HTMLElement>) {
+  const el = e.currentTarget
+  const r = el.getBoundingClientRect()
+  el.style.setProperty('--mx', `${e.clientX - r.left}px`)
+  el.style.setProperty('--my', `${e.clientY - r.top}px`)
+}
+
 export function HomeView({ workspaces, stats, activeRunPath, busyPaths, run, onNew, onOpenDir, onQuickFolder, onOpenWorkspace, onOpenSettings }: Props) {
   // A workspace is "运行中" on home if the live orchestrator run targets it OR a chat agent turn is in
   // flight there (busyPaths) — the latter never populates w.status, so without it chat activity showed
@@ -118,10 +126,11 @@ export function HomeView({ workspaces, stats, activeRunPath, busyPaths, run, onN
   const eff = (w: WorkspaceMeta): Status => (activeRunPath === w.path || busyPaths?.has(w.path) ? 'run' : w.status)
 
   // Archived workspaces live only in the sidebar's archive dock — never on the home page.
-  // Pinned workspaces sort to the top (stable), so a pinned one becomes the focus card when
-  // nothing is running.
+  // 排序:置顶优先;置顶组内与非置顶都按【最近会话时间】降序 —— 最近聊过的工作区排在最上面(也决定焦点卡)。
+  // recency 以 lastMessageAt(最近会话消息)为主,没有会话则回落 updatedAt(最近活动),都没有则置后。
   const visible = workspaces.filter(w => !w.archived)
-  const ordered = [...visible].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned))
+  const recency = (w: WorkspaceMeta) => { const s = stats[w.path]; return s ? (s.lastMessageAt || s.updatedAt || 0) : 0 }
+  const ordered = [...visible].sort((a, b) => (Number(!!b.pinned) - Number(!!a.pinned)) || (recency(b) - recency(a)))
 
   // The focus workspace = the running one, else the first (pinned-first) workspace. Its live
   // stages/agents come from the engine run (only available for the workspace actually running).
@@ -171,7 +180,7 @@ export function HomeView({ workspaces, stats, activeRunPath, busyPaths, run, onN
 
         <div className="home-stats">
           {statCells.map(([k, v]) => (
-            <div className="hs-cell" key={k}><span className="hs-k">{k}</span><span className="hs-v">{v}</span></div>
+            <div className="hs-cell" key={k} onMouseMove={onCardSpotlight}><span className="hs-k">{k}</span><span className="hs-v">{v}</span></div>
           ))}
         </div>
 
@@ -199,7 +208,7 @@ export function HomeView({ workspaces, stats, activeRunPath, busyPaths, run, onN
 
         {focus && (
           <div className="home-focus">
-            <button className="focus-card" data-ws={focus.path} onClick={() => onOpenWorkspace(focus)}>
+            <button className="focus-card" data-ws={focus.path} onMouseMove={onCardSpotlight} onClick={() => onOpenWorkspace(focus)}>
               <div className="fc-top">
                 {/* Only a live run gets a status indicator; idle/ok/err show nothing (per user). */}
                 {eff(focus) === 'run' && <span className="ws-dot run" />}

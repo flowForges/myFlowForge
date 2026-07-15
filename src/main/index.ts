@@ -336,26 +336,43 @@ app.whenReady().then(() => {
       : screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     relocatePetToDisplay(target)
   }
-  // A Forge window gained focus → the user is now on that monitor; join it.
-  app.on('browser-window-focus', (_e, win) => relocatePetToFocus(win))
-
-  // Cross-app follow, CLICK-driven (not hover): `browser-window-focus` only fires for our OWN windows,
-  // so when the user clicks another app (browser/editor/terminal) on another monitor, focus leaves Forge
-  // and the pet would stay put. We key off `browser-window-blur` — which fires only on a real focus
-  // change (a click elsewhere), never on mere mouse movement — and sample the cursor's SCREEN once at
-  // that moment. This fixes the reported hover-chasing (the pet no longer jumps just because the mouse
-  // crossed a monitor); it only follows an actual click that took focus off Forge. Deferred a tick so
-  // intra-Forge window switches settle first: if focus landed on another Forge window, its own focus
-  // handler owns the move and we bail. relocatePetToDisplay no-ops while on the same screen.
-  app.on('browser-window-blur', () => {
-    setTimeout(() => {
-      const p = readSettings().pet
-      if (!p.enabled || !p.followCursor) return
-      if (!petWin || petWin.isDestroyed() || petMode !== 'collapsed') return
-      if (BrowserWindow.getFocusedWindow()) return   // focus moved to another Forge window → its focus handler handles it
-      relocatePetToDisplay(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()))
-    }, 60)
+  // Whether the MAIN window is currently focused (app in foreground). Tracked via focus/blur so the Dock-
+  // activate handler can read the PRE-click state: macOS fires `activate` BEFORE the window's focus event,
+  // so at activate time this flag still reflects「点击前是否在焦点」(isFocused() there is uselessly always
+  // true because macOS already focused the window by then).
+  let appFocused = false
+  app.on('browser-window-focus', (_e, win) => {
+    if (win === mainWinRef) appFocused = true
+    relocatePetToFocus(win)
   })
+  app.on('browser-window-blur', (_e, win) => { if (win === mainWinRef) appFocused = false })
+
+  // Cross-app follow via a low-frequency, DEBOUNCED cursor-SCREEN poll. This replaces the old
+  // `browser-window-blur` + one-shot cursor sample, which was the source of「该跟没跟 / 跟错屏」:
+  //  · blur does NOT fire on cmd+tab (focus leaves Forge with no mouse move) → 该跟没跟;
+  //  · a single cursor read at the blur instant is frequently the wrong screen → 跟错屏.
+  // Electron can't observe focus on non-Forge windows, so the cursor's screen is our only cross-app
+  // signal. We sample every 600ms and only hop AFTER the cursor has settled on a DIFFERENT display for
+  // ~2 consecutive samples (≈1.2s). Crucially this is a CROSS-SCREEN check (the pet never moves within a
+  // screen and never tracks the cursor position), so it doesn't reintroduce the old hover-jitter that
+  // made us drop continuous chasing. `browser-window-focus` still gives an instant, exact hop when a
+  // Forge window is clicked. cmd+tab without moving the mouse stays unsolvable (no cursor signal), but
+  // the next mouse move re-homes the pet within ~1.2s.
+  let petCursorDispId: number | null = null
+  let petCursorStreak = 0
+  const petFollowPoll = setInterval(() => {
+    const p = readSettings().pet
+    if (!p.enabled || !p.followCursor || !petWin || petWin.isDestroyed() || petMode !== 'collapsed') { petCursorStreak = 0; return }
+    const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+    const b = petWin.getBounds()
+    const petDisp = screen.getDisplayNearestPoint({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
+    if (disp.id === petDisp.id) { petCursorStreak = 0; petCursorDispId = disp.id; return }  // already on cursor's screen
+    // cursor is on a DIFFERENT screen → debounce: require it to stay there for 2 consecutive samples
+    if (disp.id === petCursorDispId) petCursorStreak++
+    else { petCursorDispId = disp.id; petCursorStreak = 1 }
+    if (petCursorStreak >= 2) { petCursorStreak = 0; relocatePetToDisplay(disp) }
+  }, 600)
+  app.on('before-quit', () => clearInterval(petFollowPoll))
 
   if (readSettings().pet.enabled) createPet()
   // On startup, join whatever window is already focused (if the toggle is on).
@@ -669,13 +686,16 @@ app.whenReady().then(() => {
       app.setActivationPolicy('regular')
       app.dock?.show().catch(() => {})
     }
+    // 「点击前是否在焦点」:macOS 在触发 activate 之前就已把窗口聚焦,isFocused() 恒 true 不可用;而 activate
+    // 又在窗口 focus 事件【之前】触发,所以此刻 appFocused 标志仍是【点击前】的真实状态(切走别的 app 时主窗口
+    // blur 已把它设 false)。点击前不在焦点(false)→ 显示并获焦、不收起;点击前在焦点(true)→ visible 时 toggle 收起。
     const action = resolveDockActivationAction({
       platform: process.platform,
       hasWindow: !!mainWinRef,
       destroyed: !!mainWinRef?.isDestroyed(),
       minimized: !!mainWinRef?.isMinimized(),
       visible: !!mainWinRef?.isVisible(),
-      focused: !!mainWinRef?.isFocused(),
+      focused: appFocused,
     })
     if (action === 'minimize' && mainWinRef && !mainWinRef.isDestroyed()) {
       parkWindowInDock(mainWinRef)
