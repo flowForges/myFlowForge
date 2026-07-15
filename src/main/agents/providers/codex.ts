@@ -225,6 +225,15 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
+      // codex only executes an MCP tool call when sandbox_mode is danger-full-access; with
+      // read-only/workspace-write it treats the call as a sandbox escape and — since approval_policy
+      // is "never" — cancels it ("user cancelled MCP tool call"), so chat-initiated forge_delegate /
+      // forge_propose_plan never reach the bridge. When forge is injected, force full access for the
+      // chat orchestrator (its real read/write work is delegated to separately-sandboxed sub-agents).
+      const forgeCodexArgs = forgeCodexConfigArgs(env)
+      const codexPermArgs = forgeCodexArgs.length
+        ? ['-c', 'sandbox_mode="danger-full-access"', '-c', 'approval_policy="never"']
+        : permissionArgs('codex', task.permissionMode ?? 'auto')
       const args = spec.preArgs
         ? [...spec.preArgs]
         // --ignore-user-config: bypass the user's ~/.codex/config.toml — its oh-my-codex hooks
@@ -232,7 +241,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // still works (it lives outside config.toml), and the account's default model is used.
         // sandbox via `-c sandbox_mode` (NOT `-s`): `codex exec resume` rejects the `-s`/`--sandbox`
         // flag ("unexpected argument '-s'"), but accepts the config override — and so does plain `exec`.
-        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), prompt]
+        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...forgeCodexArgs, prompt]
       // stdin: 'ignore' so codex doesn't block reading stdin. A wedged turn is reclaimed by an
       // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").

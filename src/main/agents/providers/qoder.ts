@@ -2,7 +2,7 @@ import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor, splitThinkLines } from '../chatStream'
 import { createFenceScanner } from '../handoffFence'
-import { forgeMcpArgs } from '../mcpConfig'
+import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { parseModelsList } from '../parseModelsList'
@@ -179,6 +179,9 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
             // --include-partial-messages is needed for the streamed deltas.
             '--include-partial-messages',
             ...permissionArgs('qoder', task.permissionMode ?? 'auto'),
+            // Pre-grant the forge MCP tools (same as claude): without --allowed-tools qoder blocks
+            // the call in headless mode and forge_delegate / forge_propose_plan never run.
+            ...forgeAllowedToolNames(env).flatMap(t => ['--allowed-tools', t]),
             '--cwd', task.cwd,
             ...(task.model && task.model !== 'default' ? ['-m', task.model] : []),
             ...forgeMcpArgs(env),

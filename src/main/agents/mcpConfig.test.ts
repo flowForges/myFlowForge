@@ -2,11 +2,35 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { forgeMcpArgs, tomlString, tomlArray, tomlInlineTable, forgeServerSpec, forgeCodexConfigArgs } from './mcpConfig'
+import { forgeMcpArgs, tomlString, tomlArray, tomlInlineTable, forgeServerSpec, forgeCodexConfigArgs, forgeAllowedToolNames } from './mcpConfig'
 
 let tmpDir: string
 beforeEach(() => { tmpDir = mkdtempSync(join(tmpdir(), 'mcp-cfg-')) })
 afterEach(() => rmSync(tmpDir, { recursive: true, force: true }))
+
+describe('forgeAllowedToolNames', () => {
+  const full = (tools: string) => ({ FORGE_SOCKET: join(tmpDir, 'forge.sock'), FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: '/app/out/main/forgeMcp.js', FORGE_TOOLS: tools })
+
+  it('maps FORGE_TOOLS to mcp__forge__<tool> names when forge is injected', () => {
+    expect(forgeAllowedToolNames(full('forge_propose_plan,forge_delegate')))
+      .toEqual(['mcp__forge__forge_propose_plan', 'mcp__forge__forge_delegate'])
+  })
+
+  it('trims whitespace and drops empties', () => {
+    expect(forgeAllowedToolNames(full(' forge_delegate , , forge_ask ')))
+      .toEqual(['mcp__forge__forge_delegate', 'mcp__forge__forge_ask'])
+  })
+
+  it('returns [] when forge is not injected (missing socket)', () => {
+    expect(forgeAllowedToolNames({ FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: '/x/forgeMcp.js', FORGE_TOOLS: 'forge_delegate' })).toEqual([])
+  })
+
+  it('returns [] when FORGE_TOOLS is empty/absent even if injected', () => {
+    expect(forgeAllowedToolNames(full(''))).toEqual([])
+    const { FORGE_TOOLS: _omit, ...noTools } = full('x')
+    expect(forgeAllowedToolNames(noTools)).toEqual([])
+  })
+})
 
 describe('forgeMcpArgs', () => {
   it('returns [] when FORGE_SOCKET is missing', () => {
