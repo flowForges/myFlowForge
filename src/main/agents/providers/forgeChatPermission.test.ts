@@ -45,6 +45,7 @@ const noop: ChatCallbacks = {
 }
 
 async function capture(provider: ReturnType<typeof makeClaudeProvider>, env: NodeJS.ProcessEnv): Promise<string[]> {
+  if (!provider.chat) throw new Error('provider has no chat()')
   const session = provider.chat(task, noop, env)
   await session.done
   const out = env.ARGV_OUT as string
