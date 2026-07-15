@@ -119,29 +119,61 @@ def keep_subject_components(image: Image.Image) -> Image.Image:
     return cleaned
 
 
-def fit_subject(image: Image.Image) -> Image.Image:
-    cleaned = keep_subject_components(image)
-    bbox = cleaned.getchannel("A").getbbox()
-    if bbox is None:
-        raise ValueError("chroma removal left no visible subject")
-    subject = cleaned.crop(bbox)
-    scale = min(232 / subject.width, 232 / subject.height)
-    resized = subject.resize(
-        (max(1, round(subject.width * scale)), max(1, round(subject.height * scale))),
-        Image.Resampling.LANCZOS,
+def fit_subjects_consistently(images: list[Image.Image]) -> list[Image.Image]:
+    """Fit a whole motion sequence through one shared virtual camera."""
+    if not images:
+        raise ValueError("cannot fit an empty motion sequence")
+
+    widths = [image.width for image in images]
+    heights = [image.height for image in images]
+    if max(widths) - min(widths) > 1 or max(heights) - min(heights) > 1:
+        raise ValueError("motion sequence cell sizes differ by more than one pixel")
+    normalized = []
+    for image in images:
+        canvas = Image.new("RGBA", (max(widths), max(heights)), (0, 0, 0, 0))
+        canvas.alpha_composite(image, (0, 0))
+        normalized.append(canvas)
+
+    boxes = [image.getchannel("A").getbbox() for image in normalized]
+    if any(box is None for box in boxes):
+        raise ValueError("chroma removal left a frame with no visible subject")
+    visible = [box for box in boxes if box is not None]
+    left = min(box[0] for box in visible)
+    top = min(box[1] for box in visible)
+    right = max(box[2] for box in visible)
+    bottom = max(box[3] for box in visible)
+    pad = max(2, round(max(right - left, bottom - top) * 0.04))
+    shared_crop = (
+        max(0, left - pad),
+        max(0, top - pad),
+        min(normalized[0].width, right + pad),
+        min(normalized[0].height, bottom + pad),
     )
-    canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
-    canvas.alpha_composite(resized, ((256 - resized.width) // 2, (256 - resized.height) // 2))
-    return canvas
+    crop_width = shared_crop[2] - shared_crop[0]
+    crop_height = shared_crop[3] - shared_crop[1]
+    scale = min(232 / crop_width, 232 / crop_height)
+    resized_size = (
+        max(1, round(crop_width * scale)),
+        max(1, round(crop_height * scale)),
+    )
+
+    fitted = []
+    for image in normalized:
+        resized = image.crop(shared_crop).resize(resized_size, Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+        canvas.alpha_composite(
+            resized,
+            ((256 - resized.width) // 2, (256 - resized.height) // 2),
+        )
+        fitted.append(canvas)
+    return fitted
 
 
-def split_sheet(sheet_path: Path, state: str, offset: int) -> list[Image.Image]:
+def split_sheet(sheet_path: Path) -> list[Image.Image]:
     sheet = Image.open(sheet_path).convert("RGB")
-    frames_dir = PACK / "frames" / state
-    frames_dir.mkdir(parents=True, exist_ok=True)
 
     frames: list[Image.Image] = []
-    with tempfile.TemporaryDirectory(prefix=f"animated-pet-{state}-") as raw_name:
+    with tempfile.TemporaryDirectory(prefix="animated-pet-sheet-") as raw_name:
         raw_dir = Path(raw_name)
         for index, cell in enumerate(crop_sheet_cells(sheet)):
             raw_path = raw_dir / f"{index:02d}.png"
@@ -167,12 +199,16 @@ def split_sheet(sheet_path: Path, state: str, offset: int) -> list[Image.Image]:
                 check=True,
             )
             keyed = Image.open(keyed_path).convert("RGBA")
-            canvas = fit_subject(keyed)
-            frame_path = frames_dir / f"{offset + index * 3:02d}.png"
-            canvas.save(frame_path, optimize=True)
-            frames.append(canvas)
+            frames.append(keep_subject_components(keyed))
 
     return frames
+
+
+def save_source_frames(state: str, frames: list[Image.Image]) -> None:
+    frames_dir = PACK / "frames" / state
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    for index, frame in enumerate(frames):
+        frame.save(frames_dir / f"{index:02d}.png", optimize=True)
 
 
 def encode_state(state: str, keys: list[Image.Image], frame_count: int, total_ms: int) -> None:
@@ -220,10 +256,14 @@ def main() -> None:
         raise SystemExit(f"missing chroma helper: {CHROMA_HELPER}")
     for state, (frame_count, total_ms) in STATES.items():
         key_path, one_third_path, two_thirds_path = input_sheet_paths(PACK, state)
-        keys = split_sheet(key_path, state, 0)
-        one_thirds = split_sheet(one_third_path, state, 1)
-        two_thirds = split_sheet(two_thirds_path, state, 2)
-        encode_state(state, interleave_frames(keys, one_thirds, two_thirds), frame_count, total_ms)
+        keys = split_sheet(key_path)
+        one_thirds = split_sheet(one_third_path)
+        two_thirds = split_sheet(two_thirds_path)
+        frames = fit_subjects_consistently(
+            interleave_frames(keys, one_thirds, two_thirds)
+        )
+        save_source_frames(state, frames)
+        encode_state(state, frames, frame_count, total_ms)
         print(f"built {state}: {frame_count} frames / {total_ms} ms")
 
 

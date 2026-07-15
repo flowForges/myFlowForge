@@ -8,3 +8,5 @@ docs
 release/
 # superpowers brainstorm/plan artifacts — kept local, never published
 .superpowers/
+# codex pet-build run artifacts (intermediate frames / 3d-import scratch) — never publish
+.codex-pet-runs/
