@@ -15,6 +15,7 @@ import { Heartbeater, type HeartbeatConfig, type HeartbeatEffect } from './heart
 import { buildReviewTasks, type ReviewerTask } from './reviewTasks'
 import type { ReviewConfig, ReviewLens, StageKey } from '../config/schema'
 import { discoverAgentContext, forgeMcpContext, mergeAgentContext } from '../agents/contextMeta'
+import { usesSharedForgeConfig, withCwdMcpLock } from '../agents/forgeMcpProvision'
 import { executeHook } from './executeHook'
 import { runExplain } from './explain'
 
@@ -731,7 +732,14 @@ export class Orchestrator {
               : baseEnv
             agent.context = mergeAgentContext(discoverAgentContext(cwd, opts.workspacePath), forgeMcpContext(agentEnv))
             this.update(true)
-            return this.runTask(taskProvider!, stage, { ...spec, model: taskModel }, agent, cwd, store, agentEnv, lens)
+            const exec = () => this.runTask(taskProvider!, stage, { ...spec, model: taskModel }, agent, cwd, store, agentEnv, lens)
+            // Same-cwd Tier-2 agents (e.g. multi-lens review, all at the workspace root) share ONE forge
+            // MCP config file that carries FORGE_AGENT_ID; running them in parallel clobbers it
+            // (last-writer-wins → mis-attributed forge_* calls). Serialize per cwd for those providers
+            // only — distinct-cwd fan-out (per-project) and Tier-1 providers stay fully parallel.
+            return this.bridge && usesSharedForgeConfig(taskProvider!.id)
+              ? withCwdMcpLock(cwd, exec)
+              : exec()
           }
           await Promise.all(tasks.map(runOne))
 
