@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { makeClaudeProvider } from './claude'
 import { makeCodexProvider } from './codex'
 import { makeQoderProvider } from './qoder'
-import type { ChatTask, ChatCallbacks } from '../types'
+import { makeCopilotProvider } from './copilot'
+import type { ChatTask, ChatCallbacks, AgentTask, AgentCallbacks } from '../types'
 
 // Regression for the chat-delegation bug: forge_delegate / forge_propose_plan silently failed
 // because the non-interactive CLI blocked the MCP tool call. Each provider's chat() must now
@@ -52,6 +53,21 @@ async function capture(provider: ReturnType<typeof makeClaudeProvider>, env: Nod
   return existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : []
 }
 
+// copilot (and other chat()-less providers) get their chat turn driven through run() instead — see
+// chatService.ts's run-downgrade. Mirror that shape here: build an AgentTask (stageKey:'chat') and
+// drive provider.run(), then dump the recorded argv the same way capture() does.
+const runTask: AgentTask = { stageKey: 'chat', agentId: 'chat', name: 'chat', prompt: 'hi', cwd: '/tmp', model: 'default', permissionMode: 'readonly' }
+const runNoop: AgentCallbacks = {
+  onLog: () => {}, onState: () => {}, onConfirm: async () => 'deny', onInput: async () => '',
+  onDone: () => {}, onError: () => {},
+}
+async function captureRun(provider: ReturnType<typeof makeCopilotProvider>, env: NodeJS.ProcessEnv): Promise<string[]> {
+  const session = provider.run(runTask, runNoop, env)
+  await session.done
+  const out = env.ARGV_OUT as string
+  return existsSync(out) ? JSON.parse(readFileSync(out, 'utf8')) : []
+}
+
 describe('forge MCP tool authorization in chat()', () => {
   it('claude pre-grants the forge tools via --allowedTools', async () => {
     const args = await capture(makeClaudeProvider({ bin: argvBin(), defaultModels: [] }), forgeEnv())
@@ -88,5 +104,28 @@ describe('forge MCP tool authorization in chat()', () => {
     const env = { ARGV_OUT: join(dir, 'argv.json') }
     const args = await capture(makeClaudeProvider({ bin: argvBin(), defaultModels: [] }), env)
     expect(args).not.toContain('--allowedTools')
+  })
+
+  it('copilot 注入 --additional-mcp-config + --allow-all-tools', async () => {
+    const args = await captureRun(makeCopilotProvider({ bin: argvBin(), defaultModels: [] }), forgeEnv())
+    expect(args).toContain('--additional-mcp-config')
+    expect(args).toContain('--allow-all-tools')
+    const idx = args.indexOf('--additional-mcp-config')
+    expect(JSON.parse(args[idx + 1]).mcpServers.forge).toBeTruthy()
+    // no duplicate --allow-all-tools even though provisionForgeMcp already includes it
+    expect(args.filter(a => a === '--allow-all-tools').length).toBe(1)
+    // chat directive prepended to the prompt so a copilot-driven chat turn learns to delegate
+    const promptIdx = args.indexOf('-p')
+    expect(args[promptIdx + 1]).toContain('Forge 双路径规则')
+    expect(args[promptIdx + 1]).toContain('hi')
+  })
+
+  it('copilot keeps a single --allow-all-tools and no forge directive when forge is NOT injected', async () => {
+    const env = { ARGV_OUT: join(dir, 'argv.json') }
+    const args = await captureRun(makeCopilotProvider({ bin: argvBin(), defaultModels: [] }), env)
+    expect(args).not.toContain('--additional-mcp-config')
+    expect(args.filter(a => a === '--allow-all-tools').length).toBe(1)
+    const promptIdx = args.indexOf('-p')
+    expect(args[promptIdx + 1]).toBe('hi')
   })
 })
