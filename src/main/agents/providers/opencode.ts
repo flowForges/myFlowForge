@@ -3,6 +3,7 @@ import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, Cha
 import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, contextWindowFor } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
+import { provisionForgeMcp } from '../forgeMcpProvision'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
 
@@ -81,7 +82,7 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
     id: 'opencode',
     displayName: 'opencode',
     bin,
-    capabilities: { structuredOutput: true, permissionHook: false, pty: false, mcpTools: false, liveModels: true },
+    capabilities: { structuredOutput: true, permissionHook: false, pty: false, mcpTools: true, liveModels: true },
     async detect() { try { await execa(bin, ['--version']); return true } catch { return false } },
     async listModels() { const m = await modelsFromCli(); return m.length ? m : defaultModels },
     async listModelsLive() { return modelsFromCli() },
@@ -89,7 +90,8 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      const args = [...baseArgs(task.model, task.cwd), task.prompt]
+      const prov = provisionForgeMcp('opencode', env, task.cwd)
+      const args = [...baseArgs(task.model, task.cwd), ...prov.extraArgs, task.prompt]
       const child = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
       let buf = ''
       let ctxMax = 0
@@ -135,7 +137,9 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
-      const args = ['run', '--format', 'json', '--thinking', ...sessionArgs, ...modelArgs(task.model), '--dir', task.cwd, prompt]
+      const prov = provisionForgeMcp('opencode', env, task.cwd)
+      if (prov.gitignoreHint) cb.onStatus?.(`已为 opencode 写入 ${prov.gitignoreHint}，建议加入 .gitignore`)
+      const args = ['run', '--format', 'json', '--thinking', ...sessionArgs, ...modelArgs(task.model), '--dir', task.cwd, ...prov.extraArgs, prompt]
       // Inactivity watchdog (not a hard wall-clock timeout): a long input that's actively streaming
       // must not be killed just for taking >180s. Fires only after real silence → no more spurious
       // "chat 无回复" on big prompts.

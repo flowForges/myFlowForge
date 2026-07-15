@@ -9,6 +9,7 @@ import { makeCopilotProvider } from './copilot'
 import { makeCursorProvider } from './cursor'
 import { makeGeminiProvider } from './gemini'
 import { makeQwenProvider } from './qwen'
+import { makeOpencodeProvider } from './opencode'
 import type { ChatTask, ChatCallbacks, AgentTask, AgentCallbacks, AgentProvider } from '../types'
 
 // Regression for the chat-delegation bug: forge_delegate / forge_propose_plan silently failed
@@ -174,5 +175,18 @@ describe('forge MCP tool authorization in chat()', () => {
     expect(existsSync(cfgPath)).toBe(true)
     const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'))
     expect(cfg.mcpServers.forge).toBeTruthy()
+  })
+
+  it('opencode 写 opencode.json mcp.forge（enabled=true 足够，无需 permission 键 —— 实测确认）', async () => {
+    const args = await capture(makeOpencodeProvider({ bin: argvBin(), defaultModels: [] }), forgeEnv(), dir)
+    const cfgPath = join(dir, 'opencode.json')
+    expect(existsSync(cfgPath)).toBe(true)
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'))
+    expect(cfg.mcp.forge.enabled).toBe(true)
+    expect(cfg.mcp.forge.type).toBe('local')
+    // chat directive prepended to the prompt (already inlined by opencode chat()); prompt is the
+    // last positional arg since opencode has no -p/--prompt flag for `run`.
+    expect(args[args.length - 1]).toContain('Forge 双路径规则')
+    expect(args[args.length - 1]).toContain('hi')
   })
 })
