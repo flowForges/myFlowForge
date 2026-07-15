@@ -593,8 +593,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
             emitNote(payload.workspacePath, payload.sessionId, `↳ 已把你的回复（${answer ?? '已取消'}）转回委派子代理【${who}】继续`)
             return answer
           },
-          // Coarse live progress: surface each sub-agent's key log lines as chat notes during the run.
-          onProgress: (name, text) => emitNote(payload.workspacePath, payload.sessionId, `委派·${name}: ${text}`),
+          // NOTE: per-tool-call progress is deliberately NOT surfaced into the chat. Emitting a note
+          // per sub-agent Read/Bash (× N sub-agents) floods and permanently pollutes the conversation
+          // history. Live sub-agent progress belongs in the inspector / IDs panel (which already shows
+          // each delegate sub-agent as 运行中). The chat keeps only: the main agent's 「已派发」reply,
+          // any forge_ask confirmation card, and the final onComplete summary. (onProgress left unset.)
           // fire-and-forget 的产出回流点:后台委派全部完成后,把子代理汇总作为一条新 AI 消息呈现回会话。主代理
           // 这一轮通常早已结束(它拿到「已派发」确认就回复了),这里独立于轮次直接 append+广播(同 emitNote 机制)。
           onComplete: (r) => {
