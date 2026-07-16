@@ -183,6 +183,12 @@ const api = {
     ipcRenderer.on(CH.petActiveWorkspace, listener)
     return () => ipcRenderer.removeListener(CH.petActiveWorkspace, listener)
   },
+  // Pet window: heading from the pet to the cursor (null in the deadzone) for look-at-cursor.
+  onPetLookAngle: (cb: (deg: number | null) => void) => {
+    const listener = (_: unknown, deg: number | null) => cb(deg)
+    ipcRenderer.on(CH.petLookAngle, listener)
+    return () => ipcRenderer.removeListener(CH.petLookAngle, listener)
+  },
   onChangesEvent: (cb: (e: ChangesEvent) => void) => {
     const listener = (_: unknown, e: ChangesEvent) => cb(e)
     ipcRenderer.on(CH.changesEvent, listener)
