@@ -60,6 +60,7 @@ import { looksLikeNarratedWorkflow } from '../chat/narratedWorkflow'
 import { makeProposeGuard } from '../chat/proposeGuard'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
+import { importCodexPetPack, discoverCodexPets } from '../pet/codexPetImport'
 import { storeBackgroundFromPath, backgroundImageUrl, bgRelFromUrl, gcBackgrounds, resolveBackgroundAbs } from '../appearance/backgroundStore'
 import { listDownloadedFonts, downloadCatalogFont, deleteDownloadedFont } from '../appearance/fontStore'
 import { catalogEntry } from '../../shared/fontCatalog'
@@ -939,6 +940,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const rel = writePetImageFromDataUrl(petId, state, read.dataUrl)
     if (!rel) return { error: '图片写入失败' }
     return { path: rel }
+  })
+
+  // Codex v2 pet packs: validate + copy a pack directory into the pet store (returns a CustomPet the
+  // renderer adds to customPets, mirroring petPickImage), list auto-discovered packs under ~/.codex/pets,
+  // and pick-a-folder → import. Directory input only (no zip dependency).
+  ipcMain.handle(CH.codexPetImport, (_e, dir: string) => importCodexPetPack(dir))
+  ipcMain.handle(CH.codexPetList, () => discoverCodexPets())
+  ipcMain.handle(CH.codexPetPick, async () => {
+    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    if (r.canceled || !r.filePaths[0]) return null
+    return importCodexPetPack(r.filePaths[0])
   })
 
   // Background image: open a picker, store the chosen image on disk under ~/.myFlowForge/backgrounds

@@ -98,6 +98,9 @@ export const CH = {
   petContextMenu: 'pet:context-menu',
   petPickPack: 'pet:pick-pack',
   petPickImage: 'pet:pick-image',
+  codexPetImport: 'codex-pet:import',
+  codexPetList: 'codex-pet:list',
+  codexPetPick: 'codex-pet:pick',
   appearancePickBgImage: 'appearance:pick-bg-image',
   // Main → renderer: a tray/dock context-menu item was chosen; the payload is a keybinding-action name
   // (e.g. 'new-workspace') the renderer dispatches through its existing kbHandlers.

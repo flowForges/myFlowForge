@@ -126,6 +126,9 @@ const api = {
   petContextMenu: (): Promise<void> => ipcRenderer.invoke(CH.petContextMenu),
   pickPetPack: (petId: string): Promise<{ name: string; images: Record<string, string> } | null> => ipcRenderer.invoke(CH.petPickPack, petId),
   pickPetImage: (petId: string, state?: string): Promise<{ path?: string; error?: string } | null> => ipcRenderer.invoke(CH.petPickImage, petId, state),
+  codexPetImport: (dir: string): Promise<{ ok: true; pet: import('@shared/petCustom').CustomPet } | { ok: false; error: string }> => ipcRenderer.invoke(CH.codexPetImport, dir),
+  codexPetList: (): Promise<{ id: string; displayName: string; dir: string }[]> => ipcRenderer.invoke(CH.codexPetList),
+  codexPetPick: (): Promise<{ ok: true; pet: import('@shared/petCustom').CustomPet } | { ok: false; error: string } | null> => ipcRenderer.invoke(CH.codexPetPick),
   pickBgImage: (): Promise<{ url?: string; error?: string } | null> => ipcRenderer.invoke(CH.appearancePickBgImage),
   // Downloadable fonts. A DownloadedFont carries { id, family, css } — css is the rewritten @font-face
   // block the renderer injects to make the font usable.
