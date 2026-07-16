@@ -69,6 +69,8 @@ export interface StartRunOpts { workspacePath: string; task?: string; [k: string
 export function App() {
   const [collapsed, setCollapsed] = useState(false)
   const [inspCollapsed, setInspCollapsed] = useState(false)
+  // 全局搜索(Cmd+Shift+F)信号:每次触发 +1,WorkspaceView 据此展开检查器→切到文件树→聚焦搜索框。
+  const [searchSignal, setSearchSignal] = useState(0)
   // 启动默认落在首页(HomeView):新用户没有工作区时不再看到一个空的 WorkspaceView。
   const [view, setView] = useState<'home' | 'ws'>('home')
   // 「打开位置」目标:WorkspaceView 上报当前工作区/预览文件,供顶栏按钮消费。
@@ -514,6 +516,7 @@ export function App() {
     'toggle-log': () => setLogOpen(o => !o),
     'toggle-sidebar': () => setCollapsed(c => !c),
     'toggle-inspector': () => setInspCollapsed(c => !c),
+    'search-global': () => { if (view === 'ws') { setInspCollapsed(false); setSearchSignal(n => n + 1) } },
     'toggle-settings': () => { if (settingsOpen) setSettingsOpen(false); else { setSettingsPane('appearance'); setSettingsOpen(true) } },
     'open-plugins': () => { setSettingsPane('plugins'); setSettingsOpen(true) },
   }
@@ -629,6 +632,7 @@ export function App() {
                 inspectorWidth={inspector.width}
                 onInspectorHandleDown={inspector.onHandleDown}
                 inspectorCollapsed={inspCollapsed}
+                searchSignal={searchSignal}
                 sessionsApi={sessions}
                 onEditWorkspace={openEdit}
                 archived={!!activeWsMeta?.archived}
@@ -692,6 +696,7 @@ export function App() {
           checking: updateCtx.phase === 'checking',
           uptodate: updateCtx.phase === 'uptodate',
           checkFailed: updateCtx.phase === 'checkfailed',
+          checkError: updateCtx.error,
           onCheck: updateCtx.check,
           onOpenUpgrade: () => setUpgradeOpen(true),
         }}

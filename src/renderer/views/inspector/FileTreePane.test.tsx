@@ -57,6 +57,14 @@ describe('FileTreePane', () => {
     expect(onRefresh).toHaveBeenCalledTimes(1)
   })
 
+  it('focuses the search input when focusSignal changes (全局搜索 Cmd+Shift+F)', () => {
+    const { rerender } = render(<FileTreePane tree={tree} onOpen={vi.fn()} focusSignal={0} />)
+    const input = screen.getByPlaceholderText('筛选文件…')
+    expect(document.activeElement).not.toBe(input)   // 起动/初始信号 0:不抢焦点
+    rerender(<FileTreePane tree={tree} onOpen={vi.fn()} focusSignal={1} />)
+    expect(document.activeElement).toBe(input)        // 触发后聚焦搜索框
+  })
+
   it('preserves folder structure under filter (matching file keeps its parent folder)', () => {
     const onOpen = vi.fn()
     render(<FileTreePane tree={tree} onOpen={onOpen} />)

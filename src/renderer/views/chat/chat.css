@@ -444,9 +444,14 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .db-row.r-ok .db-dot { background: var(--ok); }
 .db-row.r-idle .db-dot { background: var(--err); }
 @keyframes db-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
-.db-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 500; }
+.db-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 500; }
 .db-prov { flex: 0 0 auto; font-size: 10.5px; font-family: var(--mono); color: var(--faint); }
+/* 「正在做什么」实时动作行:占据名字与状态之间的中段,单行省略,等宽字体带一点弱化色。 */
+.db-activity { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; font-family: var(--mono); color: var(--muted); opacity: .85; }
 .db-rowstate { flex: 0 0 auto; font-size: 10.5px; color: var(--muted); }
+/* 实时输出后的闪烁光标,提示还在流入。 */
+.db-cursor { display: inline-block; margin-left: 1px; color: var(--run); animation: db-blink 1s steps(2, start) infinite; }
+@keyframes db-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 .db-row.r-run .db-rowstate { color: var(--run); }
 .db-row.r-idle .db-rowstate { color: var(--err); }
 .db-rowcaret { flex: 0 0 auto; color: var(--faint); transition: transform .14s; font-size: 10px; }

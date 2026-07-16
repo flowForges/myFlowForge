@@ -153,7 +153,8 @@ export interface DelegateBatchAgent {
   name: string          // project / workspace-root name the sub-agent runs in
   provider: string
   status: 'run' | 'ok' | 'idle'
-  output?: string       // the sub-agent's captured result, set when it finishes (expand the row to read)
+  output?: string       // the sub-agent's captured result — streams live while running, final on finish
+  activity?: string     // 最近一步动作(读某文件 / 跑某命令 / 最新一句),运行中实时刷新,让用户看得见「执行过程」
 }
 // A fire-and-forget delegation batch. The main turn ends immediately after dispatch, so this collapsible
 // block (below the main agent's reply) is how the user watches the N sub-agents run. Live-only — it is
@@ -246,7 +247,7 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   // creates the collapsible block (all sub-agents 'run'); `delegate-progress` flips one sub-agent's
   // status; `delegate-done` marks the whole batch finished. Live-only (the block is not persisted).
   | { type: 'delegate-start'; id: string; batch: DelegateBatch }
-  | { type: 'delegate-progress'; id: string; agentId: string; status: DelegateBatchAgent['status']; output?: string }
+  | { type: 'delegate-progress'; id: string; agentId: string; status: DelegateBatchAgent['status']; output?: string; activity?: string }
   | { type: 'delegate-done'; id: string }
   | { type: 'error'; id: string; error: string }
 )

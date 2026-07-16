@@ -413,6 +413,50 @@ describe('registerIpc broadcast wiring', () => {
     expect(evt.queue.find((x: any) => x.text === 'petmsg').source).toBe('宠物')
   })
 
+  it('drains an orphaned chat confirm gate when the turn ends unanswered (unsticks pet 需确认)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { sendTurn } = await import('../chat/chatService') as any
+    // The CLI raises a permission gate (confirm-request), but the turn completes/dies before the user
+    // answers it — the gate is now orphaned. Without draining, no confirm-resolved ever fires and the
+    // pet's 需确认 indicator stays stuck forever.
+    sendTurn.mockReset().mockImplementation((_p: any, opts: any) => {
+      opts.confirm({ title: 'run rm -rf?', where: 'shell' })
+      return Promise.resolve({ id: 'm1', who: 'ai', text: '', ts: '0' })
+    })
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    const evts = sent.filter(([c]) => c === CH.chatEvent).map(([, p]) => p as any)
+    const req = evts.find(e => e.type === 'confirm-request')
+    expect(req).toBeTruthy()
+    const resolved = evts.find(e => e.type === 'confirm-resolved' && e.id === req.id)
+    expect(resolved).toBeTruthy()
+  })
+
+  it('chatStop drains outstanding chat gates so no pet indicator is left stranded', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { sendTurn } = await import('../chat/chatService') as any
+    // Turn stays alive with an open gate (never resolves) until the user hits 停止.
+    sendTurn.mockReset().mockImplementation((_p: any, opts: any) => {
+      opts.confirm({ title: 'run rm -rf?', where: 'shell' })
+      return new Promise<void>(() => {})
+    })
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)[1]
+    handler(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    const req = sent.filter(([c]) => c === CH.chatEvent).map(([, p]) => p as any).find(e => e.type === 'confirm-request')
+    expect(req).toBeTruthy()
+    handler(CH.chatStop)({}, { workspacePath: '/ws/a' })
+    const resolved = sent.filter(([c]) => c === CH.chatEvent).map(([, p]) => p as any).find(e => e.type === 'confirm-resolved' && e.id === req.id)
+    expect(resolved).toBeTruthy()
+  })
+
   it('workspacesList passes live workspace path to listWorkspaces when run is active', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any

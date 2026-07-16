@@ -20,6 +20,8 @@ function Row({ agent, task, brief }: { agent: DelegateBatchAgent; task: string; 
         <span className="db-dot" aria-hidden="true" />
         <span className="db-name">{agent.name}</span>
         <span className="db-prov">{agent.provider}</span>
+        {/* 运行中显示「正在做什么」一行(最近一步动作),让用户不展开也看得见执行过程。 */}
+        {agent.status === 'run' && agent.activity && <span className="db-activity">{agent.activity}</span>}
         <span className="db-rowstate">{statusLabel(agent.status)}</span>
         <span className={`db-rowcaret${open ? ' open' : ''}`} aria-hidden="true">▸</span>
       </button>
@@ -30,10 +32,10 @@ function Row({ agent, task, brief }: { agent: DelegateBatchAgent; task: string; 
             <div className="db-sec-t">{brief ? `${brief}\n\n${task}` : task}</div>
           </div>
           <div className="db-sec">
-            <div className="db-sec-h">输出</div>
+            <div className="db-sec-h">输出{agent.status === 'run' && agent.output ? ' · 实时' : ''}</div>
             {agent.output
-              ? <div className="db-sec-t">{agent.output}</div>
-              : <div className="db-sec-t db-muted">{agent.status === 'run' ? '运行中,子代理跑在独立进程里,完成后回传结论…' : '(无产出)'}</div>}
+              ? <div className="db-sec-t">{agent.output}{agent.status === 'run' && <span className="db-cursor" aria-hidden="true">▌</span>}</div>
+              : <div className="db-sec-t db-muted">{agent.status === 'run' ? '运行中,子代理跑在独立进程里,实时回传执行过程…' : '(无产出)'}</div>}
           </div>
         </div>
       )}

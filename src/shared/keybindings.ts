@@ -32,6 +32,7 @@ export const KEYBINDING_ACTIONS: ActionDef[] = [
   { id: 'toggle-log', scope: 'app', group: '面板', label: '开关实时日志', desc: '展开 / 收起底部实时日志台', defaultAccel: 'CommandOrControl+Shift+J' },
   { id: 'toggle-sidebar', scope: 'app', group: '面板', label: '折叠 / 展开侧栏', desc: '收起或展开左侧工作区侧栏', defaultAccel: 'CommandOrControl+B' },
   { id: 'toggle-inspector', scope: 'app', group: '面板', label: '折叠 / 展开检查器', desc: '收起或展开右侧检查器', defaultAccel: 'CommandOrControl+Alt+B' },
+  { id: 'search-global', scope: 'app', group: '面板', label: '全局搜索文件', desc: '展开检查器、切到文件树并聚焦搜索框(按文件名或内容搜索整个工作区)', defaultAccel: 'CommandOrControl+Shift+F' },
   { id: 'toggle-settings', scope: 'app', group: '导航', label: '打开 / 关闭设置', desc: '打开或关闭设置面板', defaultAccel: 'CommandOrControl+,' },
   { id: 'open-plugins', scope: 'app', group: '导航', label: '打开插件设置', desc: '直接跳到设置的插件页', defaultAccel: 'CommandOrControl+Shift+I' },
 ]

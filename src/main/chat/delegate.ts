@@ -48,8 +48,9 @@ export interface DelegateOpts {
   // 这轮结束后仍看得见后台子代理在跑(不必打开 IDs 面板)。runId 用作该进度块的稳定 id。
   onBatchStart?: (runId: string, agents: { agentId: string; name: string; provider: string }[]) => void
   // 单个子代理状态变化时触发('ok'=完成 / 'idle'=失败或超时),更新进度块里对应那一行。完成时带上它的产出
-  // (同聚合兜底链:handoff summary → 流式输出 → 最后一条 agent_message),供进度块展开查看「输出」。
-  onAgentState?: (runId: string, agentId: string, status: 'run' | 'ok' | 'idle', output?: string) => void
+  // (同聚合兜底链:handoff summary → 流式输出 → 最后一条 agent_message),供进度块展开查看「输出」。运行中也会
+  // 以 'run' 节流回调(≤2 次/秒),带上正在增长的产出 + 最近一步动作(activity),让用户实时看得见执行过程。
+  onAgentState?: (runId: string, agentId: string, status: 'run' | 'ok' | 'idle', output?: string, activity?: string) => void
   // Fire-and-forget 完成回调:所有子代理跑完后调用一次,带聚合结果。runDelegate 会【立即】返回一个「已派发」
   // 确认(这样主代理的 forge_delegate MCP 调用不会挂到 codex 的 ~180s tool 超时被取消);真实聚合产出经此回调
   // 交回给调用方,由调用方呈现回会话(append 一条新消息)。
@@ -176,6 +177,17 @@ export function makeRunDelegate(deps: DelegateDeps) {
     const beat = (id: string) => lastBeat.set(id, Date.now())
     // 子代理产出(同聚合的兜底优先级):handoff summary → 流式输出 → 最后一条 agent_message。用于进度块展开的「输出」。
     const capturedOutput = (id: string): string => (summaries.get(id) ?? outputs.get(id)?.trim() ?? lastMsg.get(id) ?? '').trim()
+    // 实时进度回传:onLog 触发很密(每个 delta 一次),按 agentId 节流到 ≤2 次/秒,把「正在增长的产出 + 最近一步
+    // 动作」以 status:'run' 推给进度块。activityOf 记录最近一条 tool/file/整段消息,当作「正在做什么」的一行提示。
+    const activityOf = new Map<string, string>()
+    const lastLiveAt = new Map<string, number>()
+    const LIVE_MS = 500
+    const emitLive = (id: string, force = false) => {
+      const now = Date.now()
+      if (!force && now - (lastLiveAt.get(id) ?? 0) < LIVE_MS) return
+      lastLiveAt.set(id, now)
+      opts.onAgentState?.(runId, id, 'run', capturedOutput(id) || undefined, activityOf.get(id))
+    }
     const runOneTarget = (t: Target, permMode: PermissionMode): AgentSession => {
       const provider = deps.providers[t.provider] ?? deps.providers['claude'] ?? Object.values(deps.providers)[0]
       // codex 把「能否调 MCP 工具」与 sandbox_mode 绑死:只有 danger-full-access(permMode 'full')放行,read-only/
@@ -205,7 +217,13 @@ export function makeRunDelegate(deps: DelegateDeps) {
             else if (l.kind === 'output') outputs.set(t.id, (outputs.get(t.id) ?? '') + l.text)
             // 非 delta 的 'accent' 整段消息(codex 的 agent_message):作为「无 handoff/无 output」时的兜底回传。
             else if (l.level === 'accent' && l.text.trim()) lastMsg.set(t.id, l.text.trim())
+            // 「正在做什么」一行提示:最近一条工具/文件动作,或整段(非 delta)消息的首行(≤100 字)。排除 output
+            // delta(kind:'output',它是产出正文、已单独流式回传),否则动作行会被答案文本刷屏。
+            if ((l.kind === 'tool' || l.kind === 'file' || (l.level === 'accent' && l.kind !== 'output')) && l.text.trim()) {
+              activityOf.set(t.id, l.text.trim().split('\n')[0].slice(0, 100))
+            }
             if (opts.onProgress && (l.kind === 'tool' || l.kind === 'file')) opts.onProgress(t.name, l.text)
+            emitLive(t.id)   // 节流(≤2次/秒)实时回传:产出增长 + 最近一步动作 → 进度块
           },
           // Liveness only:任何 stdout 字节(含无日志行的 lifecycle 事件)都刷新看门狗,避免误杀健康但静默生成的子代理。
           onActivity: () => beat(t.id),
