@@ -263,9 +263,10 @@ describe('proposeRun mode flip', () => {
     await p
   })
 
-  // #1 run-level provider override: the chat's selected main agent (e.g. claude→codex after quota) must
-  // drive EVERY stage and every per-project develop agent for this run, without touching workspace.json.
-  it('providerOverride forces provider+model on all stages AND developProjects (this run only)', async () => {
+  // #1 run-level provider override: for an AD-HOC run (no named workflow matched) the chat's selected
+  // main agent (e.g. claude→codex after quota) must drive EVERY stage and every per-project develop
+  // agent for this run, without touching workspace.json.
+  it('providerOverride forces provider+model on all stages AND developProjects (ad-hoc run only)', async () => {
     const startRun = vi.fn()
     const captured: string[] = []
     const deps = mkDeps({ startRun, readWorkspace: () => wsMulti, emitPlanRequest: (_w, req) => captured.push(req.id) })
@@ -276,6 +277,35 @@ describe('proposeRun mode flip', () => {
     const opts = startRun.mock.calls[0][0]
     expect(opts.stages.every((s: any) => s.provider === 'codex' && s.model === 'gpt-5')).toBe(true)
     expect(opts.developProjects.every((d: any) => d.provider === 'codex' && d.model === 'gpt-5')).toBe(true)
+  })
+
+  // 命名工作流优先(会话区 provider 覆盖 bug 回归):当请求命中某个 NAMED 工作流(select.workflowId),
+  // 该工作流每阶段在工作流设置里配置的 provider/model 必须生效,会话区下拉选择(providerOverride)不得覆盖。
+  // 覆盖只用于无命名工作流的 ad-hoc 拼接运行(见上一条)。
+  it('named workflow honors per-stage provider/model, ignoring providerOverride', async () => {
+    const startRun = vi.fn()
+    const captured: string[] = []
+    const wsNamed = {
+      name: 'w', path: '/w', workflowId: '', status: 'idle', stages: [], projects: [],
+      workflows: [
+        { id: 'design-flow', name: '技术方案设计', stages: [
+          { key: 'requirement', provider: 'codex', model: 'gpt-5' },
+          { key: 'design', provider: 'claude', model: 'opus-4.8' },
+        ] },
+      ],
+    } as any
+    const deps = mkDeps({ startRun, readWorkspace: () => wsNamed, emitPlanRequest: (_w, req) => captured.push(req.id) })
+    const propose = makeProposeRun(deps)
+    // Composer would push claude/opus, but the named workflow's per-stage config must win.
+    const p = propose('/w', '按工作流探查', 'task', { workflowId: 'design-flow', providerOverride: { provider: 'claude', model: 'opus-4.8' } })
+    propose.resolve(captured[0], { decision: 'allow' })
+    await p
+    const opts = startRun.mock.calls[0][0]
+    const byKey = Object.fromEntries(opts.stages.map((s: any) => [s.key, s]))
+    expect(byKey.requirement.provider).toBe('codex')
+    expect(byKey.requirement.model).toBe('gpt-5')
+    expect(byKey.design.provider).toBe('claude')
+    expect(byKey.design.model).toBe('opus-4.8')
   })
 
   it('no providerOverride → stages keep their workspace-configured provider (claude)', async () => {

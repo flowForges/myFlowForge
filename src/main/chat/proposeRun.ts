@@ -62,13 +62,15 @@ export function makeProposeRun(deps: ProposeDeps) {
     if (select?.sessionId) opts = { ...opts, sessionId: select.sessionId }
     // P4: 主代理整理的需求简报,随 run 注入每个 stage 子代理 prompt(一份共享)。
     if (select?.brief) opts = { ...opts, brief: select.brief }
-    // #1 run-level provider override: the chat turn that proposed this run carries the main agent the
-    // user currently has selected. Apply it to EVERY stage (and every per-project develop agent, which
-    // resolves provider from developProjects[].provider) so switching the chat agent — e.g. claude→codex
-    // when claude runs out of quota — actually runs the workflow on that agent. This never touches
-    // workspace.json; it's scoped to this single run. Model is forced alongside provider so a stale
-    // claude model can't ride on codex and 400.
-    if (select?.providerOverride?.provider) {
+    // #1 run-level provider override — applies ONLY to ad-hoc runs (no named workflow matched). When the
+    // main agent maps the request onto a NAMED workflow (`wf`), that workflow carries the per-stage
+    // provider/model the user configured in workflow settings, and those MUST win — otherwise that
+    // configuration is silently ignored whenever the workflow is launched from chat (the 会话区
+    // provider/model bug). For an ad-hoc union run the stages have no user-chosen agent, so we fall back
+    // to the chat's currently-selected main agent — which also preserves the claude→codex quota-switch
+    // shortcut for that (unconfigured) case. Never touches workspace.json; scoped to this single run.
+    // Model is forced alongside provider so a stale claude model can't ride on codex and 400.
+    if (!wf && select?.providerOverride?.provider) {
       const provider = select.providerOverride.provider
       const model = select.providerOverride.model ?? ''
       opts = {
