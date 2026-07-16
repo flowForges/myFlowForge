@@ -3,6 +3,7 @@ import type { ChatMessage, DesignDocRef } from '@shared/types'
 import { fmtMsgTime, fmtMsgTimeFull } from '@shared/relTime'
 import { ThinkBlock } from './ThinkBlock'
 import { SubagentCards } from './SubagentCards'
+import { DelegateBatchCard } from './DelegateBatchCard'
 import { Markdown } from './markdown'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
@@ -48,6 +49,15 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     }).catch(() => { /* clipboard unavailable */ })
+  }
+  // A delegate-batch message is a standalone live progress block (no model head / answer body) — the
+  // fire-and-forget sub-agents' aggregated result arrives later as its own summary message.
+  if (!isUser && msg.delegate) {
+    return (
+      <div className="msg ai msg-delegate">
+        <DelegateBatchCard batch={msg.delegate} />
+      </div>
+    )
   }
   return (
     <div className={`msg ${msg.who}`} {...(isUser ? { 'data-user-msg': index } : {})}>

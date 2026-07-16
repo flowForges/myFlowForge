@@ -141,6 +141,21 @@ export function useChat(
       else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, hooks: e.hooks, allProjects: e.allProjects, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, recommendReason: e.recommendReason, ts: new Date().toISOString() }])
       else if (e.type === 'plan-resolved') setPlans(p => p.filter(x => x.id !== e.id))
       else if (e.type === 'delegate-busy') setDelegateActive(e.active)
+      // Live delegate-batch progress block (below the main reply). Not persisted — lives in renderer
+      // state only; on session reload it's gone and the persisted summary message carries the result.
+      else if (e.type === 'delegate-start') {
+        setMessages(m => m.some(x => x.id === e.id) ? m : [...m, { ...blankAi(e.id), think: undefined, delegate: e.batch }])
+      }
+      else if (e.type === 'delegate-progress') {
+        setMessages(m => m.map(x => x.id === e.id && x.delegate
+          ? { ...x, delegate: { ...x.delegate, agents: x.delegate.agents.map(a => a.agentId === e.agentId ? { ...a, status: e.status, output: e.output ?? a.output } : a) } }
+          : x))
+      }
+      else if (e.type === 'delegate-done') {
+        setMessages(m => m.map(x => x.id === e.id && x.delegate
+          ? { ...x, delegate: { ...x.delegate, done: true, agents: x.delegate.agents.map(a => a.status === 'run' ? { ...a, status: 'ok' as const } : a) } }
+          : x))
+      }
       else if (e.type === 'mode-changed') onModeChangedRef.current?.(e.mode, e.runId)
     })
     return () => { off() }

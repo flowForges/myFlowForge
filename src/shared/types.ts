@@ -145,6 +145,27 @@ export interface SubagentCard {
   result?: string            // the sub-agent's returned text (on done)
 }
 
+// One background sub-agent in a lightweight-delegation batch, surfaced live in the chat stream so the
+// user sees progress without opening the IDs panel. status: 'run' = still working, 'ok' = finished,
+// 'idle' = failed / timed-out (mirrors the delegateRegistry states).
+export interface DelegateBatchAgent {
+  agentId: string
+  name: string          // project / workspace-root name the sub-agent runs in
+  provider: string
+  status: 'run' | 'ok' | 'idle'
+  output?: string       // the sub-agent's captured result, set when it finishes (expand the row to read)
+}
+// A fire-and-forget delegation batch. The main turn ends immediately after dispatch, so this collapsible
+// block (below the main agent's reply) is how the user watches the N sub-agents run. Live-only — it is
+// NOT persisted to history; the aggregated result arrives afterwards as its own summary message.
+export interface DelegateBatch {
+  runId: string
+  agents: DelegateBatchAgent[]
+  done: boolean         // whole batch finished (onComplete fired)
+  task: string          // the task delegated to the sub-agents (their 输入; shown when a row is expanded)
+  brief?: string        // optional context brief the main agent prepared, prepended to each sub-agent's prompt
+}
+
 export interface ChatMessage {
   id: string
   who: 'user' | 'ai'
@@ -167,6 +188,9 @@ export interface ChatMessage {
   // Design docs a stage produced, carried onto the persisted stage-note message so they stay
   // openable in the timeline AFTER the (ephemeral) design-gate card is resolved and unmounts.
   docs?: DesignDocRef[]
+  // A lightweight-delegation batch this (transient) message represents: a live, collapsible progress
+  // block listing the background sub-agents. Present only on the delegate batch message.
+  delegate?: DelegateBatch
 }
 export interface ChatSession {
   id: string
@@ -218,6 +242,12 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   // background delegate sub-agent is still in flight for this session, so the composer can show the
   // running/stop state (stopping cancels them) instead of looking idle while work continues.
   | { type: 'delegate-busy'; active: boolean }
+  // Live delegate-batch progress surfaced in the chat stream (below the main reply). `delegate-start`
+  // creates the collapsible block (all sub-agents 'run'); `delegate-progress` flips one sub-agent's
+  // status; `delegate-done` marks the whole batch finished. Live-only (the block is not persisted).
+  | { type: 'delegate-start'; id: string; batch: DelegateBatch }
+  | { type: 'delegate-progress'; id: string; agentId: string; status: DelegateBatchAgent['status']; output?: string }
+  | { type: 'delegate-done'; id: string }
   | { type: 'error'; id: string; error: string }
 )
 

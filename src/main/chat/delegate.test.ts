@@ -192,6 +192,71 @@ describe('runDelegate', () => {
     expect(seen['a']).toBe('full')
   })
 
+  // handoff 被沙箱取消修复:codex 只有 danger-full-access(permMode 'full')才能调 MCP;read-only/workspace-write 下
+  // forge_handoff 会被取消。所以非完全权限的 codex 子代理 prompt 不再教它调 forge,改让它直接把结论写成最后一条回答。
+  function promptCapProvider(id: string, seen: Record<string, string>): AgentProvider {
+    return {
+      id, displayName: id, capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(task, cb) { seen[task.name] = task.prompt; cb.onLog({ ts: '', text: '结论', level: 'accent' }); cb.onDone({ ok: true }); return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true } as AgentResult) } },
+    }
+  }
+
+  it('codex 只读子代理:prompt 不教它调 forge_handoff(沙箱会取消),改让它直接写成最后一条回答', async () => {
+    const seen: Record<string, string> = {}
+    await new Promise<void>((resolve) => void makeRunDelegate(depsFor('codex', promptCapProvider('codex', seen), ws(['a'])))({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: false, provider: 'codex', model: 'm', onComplete: () => resolve(),
+    }))
+    expect(seen['a']).not.toContain('必须调用 forge_handoff')
+    expect(seen['a']).toContain('不要尝试调用')
+    expect(seen['a']).toContain('最后一条完整')
+  })
+
+  it('codex 写 + 授权本次 full → prompt 恢复教它调 forge_handoff(full-access 下 MCP 可用)', async () => {
+    const seen: Record<string, string> = {}
+    await new Promise<void>((resolve) => void makeRunDelegate(depsFor('codex', promptCapProvider('codex', seen), ws(['a'])))({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: true, provider: 'codex', model: 'm', permissionMode: 'auto',
+      askPermission: async () => 'full', onComplete: () => resolve(),
+    }))
+    expect(seen['a']).toContain('必须调用 forge_handoff')
+  })
+
+  it('codex 写 + 仅当前权限(auto)→ 仍不教它调 forge_handoff(workspace-write 下 MCP 照样被取消)', async () => {
+    const seen: Record<string, string> = {}
+    await new Promise<void>((resolve) => void makeRunDelegate(depsFor('codex', promptCapProvider('codex', seen), ws(['a'])))({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: true, provider: 'codex', model: 'm', permissionMode: 'auto',
+      askPermission: async () => 'default', onComplete: () => resolve(),
+    }))
+    expect(seen['a']).not.toContain('必须调用 forge_handoff')
+  })
+
+  it('非 codex 子代理(claude)即使只读也照常教它调 forge_handoff(其 MCP 不绑沙箱)', async () => {
+    const seen: Record<string, string> = {}
+    await new Promise<void>((resolve) => void makeRunDelegate(depsFor('claude', promptCapProvider('claude', seen), ws(['a'])))({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: false, provider: 'claude', model: 'm', onComplete: () => resolve(),
+    }))
+    expect(seen['a']).toContain('必须调用 forge_handoff')
+  })
+
+  // 对话区实时进度块:派发即 onBatchStart(全部 'run'),各子代理完成时 onAgentState('ok')。
+  it('派发即 onBatchStart(列出全部子代理),子代理完成触发 onAgentState(ok)', async () => {
+    const started: { runId: string; agents: { agentId: string; name: string; provider: string }[] }[] = []
+    const states: { agentId: string; status: string; output?: string }[] = []
+    await new Promise<void>((resolve) => void makeRunDelegate(deps(fakeProvider({ handoff: (n) => `${n}!` }), ws(['a', 'b'])))({
+      workspacePath: '/ws', task: 't', projects: ['a', 'b'], provider: 'fake', model: 'm',
+      onBatchStart: (runId, agents) => started.push({ runId, agents }),
+      onAgentState: (_runId, agentId, status, output) => states.push({ agentId, status, output }),
+      onComplete: () => resolve(),
+    }))
+    expect(started).toHaveLength(1)
+    expect(started[0].agents.map(a => a.name).sort()).toEqual(['a', 'b'])
+    expect(started[0].runId).toMatch(/^delegate-/)
+    const ok = states.filter(s => s.status === 'ok')
+    expect(ok.map(s => s.agentId).sort()).toEqual(['delegate:a', 'delegate:b'])
+    // 完成时带上子代理产出(供进度块展开的「输出」)
+    expect(ok.find(s => s.agentId === 'delegate:a')?.output).toBe('a!')
+  })
+
   it('传 sessionId 时把子代理登记进 delegateRegistry(供 IDs 面板),完成后置 ok', async () => {
     await makeRunDelegate(deps(fakeProvider({ handoff: () => 'x' }), ws(['a', 'b'])))({ workspacePath: '/wsreg', task: 't', projects: ['a', 'b'], provider: 'fake', model: 'm', sessionId: 's1' })
     const rows = listDelegateAgents('/wsreg', 's1')

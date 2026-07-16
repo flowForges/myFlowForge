@@ -589,6 +589,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       },
       delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) => {
         delegatedAny = true
+        // Per-call: the batch's runId (from onBatchStart) so onComplete can mark the SAME progress block done.
+        let batchRunId: string | null = null
         // Mark this session as having in-flight background delegates (cleared in onComplete) so the
         // composer shows a running/stop state while the fire-and-forget sub-agents keep working.
         bumpDelegateBusy(payload.workspacePath, payload.sessionId, +1)
@@ -597,6 +599,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
           provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId,
           // Register each delegate sub-agent's session for cancellation, so the chat 停止 button kills it.
           onSession: (s) => chatQueue.registerActive(payload.workspacePath, () => s.cancel()),
+          // 对话区实时进度块(fire-and-forget 后主代理这轮已结束,用户不开 IDs 面板也看得见后台子代理在跑)。
+          // live-only:只广播、不 appendMessage(它是瞬态 widget,会话重载后消失;持久的汇总消息随后单独到达)。
+          onBatchStart: (runId, agents) => {
+            batchRunId = runId
+            broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'delegate-start', id: `delegate-batch:${runId}`, batch: { runId, agents: agents.map(a => ({ ...a, status: 'run' as const })), done: false, task: a.task, brief: a.brief } })
+          },
+          onAgentState: (runId, agentId, status, output) => {
+            broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'delegate-progress', id: `delegate-batch:${runId}`, agentId, status, output })
+          },
           // 派发前权限门(runDelegate 仅在 codex + 写类 + 盾牌未到「完全」时才调用):codex 需完全权限才能让子代理
           // 的 forge_handoff/forge_ask 正常工作。弹一次卡片让用户【本次授权】(不改持久盾牌);选「仅当前权限」则用当前
           // 盾牌权限跑,产出靠 agent_message 兜底文本回传。返回 'full'/'default' 给 runDelegate 决定这次的 sandbox。
@@ -631,6 +642,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
           // fire-and-forget 的产出回流点:后台委派全部完成后,把子代理汇总作为一条新 AI 消息呈现回会话。主代理
           // 这一轮通常早已结束(它拿到「已派发」确认就回复了),这里独立于轮次直接 append+广播(同 emitNote 机制)。
           onComplete: (r) => {
+            // Mark the live progress block finished (flips any lingering 'run' rows to done + collapses).
+            if (batchRunId) broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'delegate-done', id: `delegate-batch:${batchRunId}` })
             const did = `dg-done-${Date.now()}`
             broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'assistant-start', id: did, model: '委派子代理汇总' })
             const dmsg: ChatMessage = { id: did, who: 'ai', text: r.text || '(子代理无产出)', model: '委派子代理汇总', provider: payload.agent, ts: new Date().toISOString().slice(11, 19) }

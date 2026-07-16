@@ -44,6 +44,12 @@ export interface DelegateOpts {
   // Called with each spawned sub-agent session — lets the caller register it for cancellation and
   // (P5) surface it in the IDs panel. Optional.
   onSession?: (s: AgentSession) => void
+  // 批次派发即触发(全部子代理初始为 'run'):供调用方在对话区渲染一个可折叠的实时进度块,让用户在主代理
+  // 这轮结束后仍看得见后台子代理在跑(不必打开 IDs 面板)。runId 用作该进度块的稳定 id。
+  onBatchStart?: (runId: string, agents: { agentId: string; name: string; provider: string }[]) => void
+  // 单个子代理状态变化时触发('ok'=完成 / 'idle'=失败或超时),更新进度块里对应那一行。完成时带上它的产出
+  // (同聚合兜底链:handoff summary → 流式输出 → 最后一条 agent_message),供进度块展开查看「输出」。
+  onAgentState?: (runId: string, agentId: string, status: 'run' | 'ok' | 'idle', output?: string) => void
   // Fire-and-forget 完成回调:所有子代理跑完后调用一次,带聚合结果。runDelegate 会【立即】返回一个「已派发」
   // 确认(这样主代理的 forge_delegate MCP 调用不会挂到 codex 的 ~180s tool 超时被取消);真实聚合产出经此回调
   // 交回给调用方,由调用方呈现回会话(append 一条新消息)。
@@ -57,8 +63,21 @@ export interface DelegateResult {
 
 interface Target { id: string; name: string; cwd: string; provider: string; model: string }
 
-function buildDelegatePrompt(task: string, write: boolean, project: string, brief?: string): string {
+// handoff=false 用于 codex 非完全权限的子代理:它的沙箱(read-only / workspace-write)会把任何 MCP 工具调用当作
+// 沙箱逃逸、在 approval_policy=never 下直接取消(codex 原生行为:"user cancelled MCP tool call")。此时既不注入
+// forge 工具、也不能教它调 forge_handoff/forge_ask——否则它会白试一轮、最终回答还退化成那句取消错误。改为让它把结论
+// 直接写成最后一条完整回答,由聚合端的兜底链(agent_message/流式输出)回传给主代理。
+function buildDelegatePrompt(task: string, write: boolean, project: string, handoff: boolean, brief?: string): string {
   const head = (brief ?? '').trim() ? [`【需求简报 — 主代理整理的背景与要求】\n${(brief ?? '').trim()}`] : []
+  const report = handoff
+    ? [
+        '完成后必须调用 forge_handoff 工具,summary 写清你的结论与关键发现(有产物就在 artifacts 里列出路径)。这是你把结果交回主代理的唯一方式。',
+        '若中途需要用户确认或补充信息,调用 forge_ask 提问(会冒泡给用户),不要擅自假设。',
+      ]
+    : [
+        '完成后,把你的结论与关键发现直接写成最后一条完整、自足的回答(有产物就在正文里列出其路径)——这段回答就是交回主代理的内容。',
+        '注意:本次运行【没有】可用的 forge 工具,不要尝试调用 forge_handoff / forge_ask 等任何 forge_* 工具(调了也会被沙箱取消);需要澄清就在回答里把假设和待确认点写清楚。',
+      ]
   return [
     ...head,
     `你是 Forge 委派的子代理,当前工作目录就是项目「${project}」的根目录。请在这里完成下面这件事:`,
@@ -66,8 +85,7 @@ function buildDelegatePrompt(task: string, write: boolean, project: string, brie
     write
       ? '你可以修改本项目的代码/文件来完成任务。'
       : '这是只读探查:只阅读、检索、分析,不要修改任何文件。',
-    '完成后必须调用 forge_handoff 工具,summary 写清你的结论与关键发现(有产物就在 artifacts 里列出路径)。这是你把结果交回主代理的唯一方式。',
-    '若中途需要用户确认或补充信息,调用 forge_ask 提问(会冒泡给用户),不要擅自假设。',
+    ...report,
   ].join('\n\n')
 }
 
@@ -127,6 +145,8 @@ export function makeRunDelegate(deps: DelegateDeps) {
 
     // Register this batch's sub-agents so the IDs panel surfaces them (delegate has no runId/RunStore).
     if (opts.sessionId) startDelegateBatch(opts.workspacePath, opts.sessionId, targets.map(t => ({ agentId: t.id, name: t.name, provider: t.provider, sessionId: t.id, status: 'run' as const })))
+    // 派发即在对话区亮出一个可折叠的实时进度块(全部子代理初始 'run'),让主代理这轮结束后用户仍看得见后台在跑。
+    opts.onBatchStart?.(runId, targets.map(t => ({ agentId: t.id, name: t.name, provider: t.provider })))
 
     // agentId → captured handoff summary (MCP-native via ctx.setContext, or text-fence via onHandoff).
     const summaries = new Map<string, string>()
@@ -154,11 +174,17 @@ export function makeRunDelegate(deps: DelegateDeps) {
     // agentId → 最后活动时间(任何 stdout 字节/日志都刷新)。空闲看门狗据此判定卡死。
     const lastBeat = new Map<string, number>()
     const beat = (id: string) => lastBeat.set(id, Date.now())
+    // 子代理产出(同聚合的兜底优先级):handoff summary → 流式输出 → 最后一条 agent_message。用于进度块展开的「输出」。
+    const capturedOutput = (id: string): string => (summaries.get(id) ?? outputs.get(id)?.trim() ?? lastMsg.get(id) ?? '').trim()
     const runOneTarget = (t: Target, permMode: PermissionMode): AgentSession => {
       const provider = deps.providers[t.provider] ?? deps.providers['claude'] ?? Object.values(deps.providers)[0]
+      // codex 把「能否调 MCP 工具」与 sandbox_mode 绑死:只有 danger-full-access(permMode 'full')放行,read-only/
+      // workspace-write 下 forge_handoff/forge_ask 会被 approval_policy=never 直接取消。所以非完全权限的 codex 子代理
+      // 【不注入 forge】(注入了也调不动,只会白试+把最终回答退化成取消错误)。其它 CLI 的 MCP 不绑沙箱,照常注入。
+      const forgeUsable = !(t.provider === 'codex' && permMode !== 'full')
       const env = buildAgentEnv({
         proxy: deps.proxy(),
-        overrides: bridge ? {
+        overrides: (bridge && forgeUsable) ? {
           FORGE_SOCKET: bridge.socketPath,
           FORGE_AGENT_ID: t.id,
           ...(deps.mcpEntry ? { FORGE_MCP_ENTRY: deps.mcpEntry } : {}),
@@ -166,7 +192,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
         } : undefined,
       })
       const session = provider.run(
-        { stageKey: 'delegate', agentId: t.id, name: t.name, prompt: buildDelegatePrompt(opts.task, write, t.name, opts.brief), cwd: t.cwd, model: t.model, permissionMode: permMode },
+        { stageKey: 'delegate', agentId: t.id, name: t.name, prompt: buildDelegatePrompt(opts.task, write, t.name, forgeUsable, opts.brief), cwd: t.cwd, model: t.model, permissionMode: permMode },
         {
           // Capture the sub-agent's answer for the summary fallback. Assistant output STREAMS as many
           // small delta chunks (kind 'output'); they reconstruct the text by CONCATENATION. Joining them
@@ -188,8 +214,8 @@ export function makeRunDelegate(deps: DelegateDeps) {
           onConfirm: async () => 'deny',
           onInput: async () => '',
           onHandoff: (p: HandoffPayload) => { summaries.set(t.id, p.summary) },
-          onDone: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'ok') },
-          onError: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'idle') },
+          onDone: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'ok'); opts.onAgentState?.(runId, t.id, 'ok', capturedOutput(t.id)) },
+          onError: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'idle'); opts.onAgentState?.(runId, t.id, 'idle', capturedOutput(t.id)) },
           // Grand-agent (best-effort): a sub-agent's own built-in Task → depth-2 row under this sub-agent.
           onSubagent: (ev) => {
             if (!opts.sessionId) return
