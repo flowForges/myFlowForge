@@ -204,7 +204,14 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
     if (!r) return
     if (!r.ok) { setCodexErr(r.error); return }
     setCodexErr('')
-    onChange({ skin: 'custom', customPets: addCustomPet(pet.customPets ?? [], r.pet), activeCustomPetId: r.pet.id })
+    // Codex pet ids are stable per source folder, so re-importing the same folder (or re-clicking the
+    // same discovered pet) must SELECT/refresh the existing entry — never append a duplicate. Upsert by
+    // id (mirrors PetGallery.install); only a genuinely new pet counts against the cap.
+    const list = pet.customPets ?? []
+    const already = list.some(p => p.id === r.pet.id)
+    if (!already && list.length >= PET_CUSTOM_MAX) { setCodexErr(`宠物已达上限 ${PET_CUSTOM_MAX} 个`); return }
+    const next = already ? list.map(p => (p.id === r.pet.id ? r.pet : p)) : addCustomPet(list, r.pet)
+    onChange({ skin: 'custom', customPets: next, activeCustomPetId: r.pet.id })
   }
 
   const customList = pet.customPets ?? []
@@ -242,7 +249,11 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
   // get `pack-` ids and read as user pets. Split builtins out into a 「默认宠物」group; user/downloaded
   // pets keep the × delete. More pets are downloadable below via <PetGallery>.
   const builtinList = customList.filter(p => p.id.startsWith('builtin-'))
-  const userList = customList.filter(p => !p.id.startsWith('builtin-'))
+  // Codex-imported pets get a `codex-` id prefix → pull them into their OWN group at the end, so the
+  // user's own uploads (`pet-`) and library downloads (`pack-`) stay adjacent instead of having codex
+  // pets wedged between them (insertion order used to interleave all three).
+  const codexList = customList.filter(p => p.id.startsWith('codex-'))
+  const userList = customList.filter(p => !p.id.startsWith('builtin-') && !p.id.startsWith('codex-'))
   const chipStyle = (active: boolean) => ({
     display: 'flex' as const, alignItems: 'center' as const, gap: '8px', padding: '6px 8px', borderRadius: '10px',
     border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
@@ -380,6 +391,10 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
           {SKIN_CHIPS.map(renderSkinChip)}
           {builtinList.map(renderChip)}
           {userList.map(renderChip)}
+          {codexList.length > 0 && (
+            <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--faint)', marginTop: 2 }}>Codex 宠物</div>
+          )}
+          {codexList.map(renderChip)}
         </div>
 
         <div className="set-row" style={{ marginBottom: '4px' }}>

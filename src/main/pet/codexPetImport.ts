@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, basename, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import { parseCodexManifest } from '@shared/codexPetManifest'
 import type { CustomPet } from '@shared/petCustom'
@@ -7,6 +7,25 @@ import { petImagesDir, petImageRelPath } from './petImageStore'
 
 // Only filename-safe id segments touch the on-disk path.
 function safeId(s: string): string { return s.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\.+/g, '_') }
+
+// Stable short hash (djb2) of a string → base36. Lets two packs that ship the SAME manifest id
+// (e.g. scaffolds shipping id "default"/"pet") but live in different folders get distinct storage
+// keys, so their spritesheets never clobber each other in pet-images/<id>/.
+function shortHash(s: string): string {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  return (h >>> 0).toString(36)
+}
+
+// Identity of an imported codex pet = its SOURCE FOLDER, not the manifest id. Consequences:
+//  - re-importing the same folder (or re-clicking the same discovered pet) yields the SAME id, so the
+//    gallery upserts/selects the existing entry instead of appending a duplicate.
+//  - two different packs that share a manifest id get DIFFERENT ids (folder path differs) → no clobber.
+//  - the `codex-` prefix lets the pet gallery group codex pets into their own section.
+export function codexPetId(srcDir: string): string {
+  const abs = resolve(srcDir)
+  return `codex-${safeId(basename(abs))}-${shortHash(abs)}`
+}
 
 // Read + validate a pack directory's pet.json, copy its spritesheet into pet-images/<id>/spritesheet.webp,
 // and return a CustomPet carrying the atlas ref. Directory input only (no zip).
@@ -23,7 +42,7 @@ export function importCodexPetPack(
   const m = parsed.manifest
   const sheetSrc = join(srcDir, m.spritesheetPath)
   if (!existsSync(sheetSrc)) return { ok: false, error: `找不到精灵图 ${m.spritesheetPath}` }
-  const id = safeId(m.id)
+  const id = codexPetId(srcDir)
   const destDir = join(baseDir, id)
   mkdirSync(destDir, { recursive: true })
   const rel = petImageRelPath(id, 'spritesheet', 'webp')  // "<id>/spritesheet.webp"
