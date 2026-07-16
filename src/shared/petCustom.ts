@@ -10,11 +10,13 @@ export interface CustomPet {
   emoji?: string
   color?: string
   images?: Partial<Record<PetState, string>>
+  atlas?: { path: string; version: number }   // Codex v2 sprite atlas (forge-pet relpath)
 }
 
 export interface ResolvedCustomPet {
   images: Partial<Record<PetState, string>>
   emoji?: { name: string; emoji: string; color: string }
+  atlas?: { path: string; version: number }
 }
 
 // Pet config subset needed to resolve the active custom pet — the new customPets[] plus the legacy
@@ -37,6 +39,7 @@ export function resolveActiveCustomPet(pet: CustomSource): ResolvedCustomPet {
     return {
       images: active.images ?? {},
       emoji: active.emoji ? { name: active.name, emoji: active.emoji, color: active.color ?? '' } : undefined,
+      atlas: active.atlas,
     }
   }
   return { images: pet.customImages ?? {}, emoji: pet.customEmoji }

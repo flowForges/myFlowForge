@@ -38,6 +38,23 @@ describe('resolveActiveCustomPet', () => {
     expect(r.images).toEqual({})
     expect(r.emoji).toBeUndefined()
   })
+
+  it('returns the active pet atlas when present', () => {
+    const r = resolveActiveCustomPet({
+      customPets: [{ id: 'p1', name: 'Doll', atlas: { path: 'p1/spritesheet.webp', version: 2 } }],
+      activeCustomPetId: 'p1',
+    })
+    expect(r.atlas).toEqual({ path: 'p1/spritesheet.webp', version: 2 })
+    expect(r.images).toEqual({})
+  })
+
+  it('has no atlas for an image-only pet', () => {
+    const r = resolveActiveCustomPet({
+      customPets: [{ id: 'p2', name: 'Cat', images: { idle: 'p2/idle.webp' } }],
+      activeCustomPetId: 'p2',
+    })
+    expect(r.atlas).toBeUndefined()
+  })
 })
 
 describe('addCustomPet', () => {
