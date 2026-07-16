@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { makeRunDelegate, cancelWorkspaceDelegates, type DelegateResult } from './delegate'
+import { describe, it, expect, vi } from 'vitest'
+import { makeRunDelegate, cancelWorkspaceDelegates, DELEGATE_IDLE_KILL_MS, WATCHDOG_TICK_MS, type DelegateResult } from './delegate'
 
 // runDelegate 现在【立即返回「已派发」确认】,真实聚合产出经 onComplete 异步回调。测试用它拿最终结果。
 function awaitDelegate(run: ReturnType<typeof makeRunDelegate>, opts: Parameters<ReturnType<typeof makeRunDelegate>>[0]): Promise<DelegateResult> {
@@ -25,6 +25,18 @@ function fakeProvider(opts: { handoff?: (name: string) => string; output?: (name
   }
 }
 
+// A provider that records the permissionMode its sub-agent was launched with (for gate assertions).
+function capProvider(id: string, seen: Record<string, string | undefined>): AgentProvider {
+  return {
+    id, displayName: id, capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+    detect: async () => true, listModels: async () => [],
+    run(task, cb) { seen[task.name] = task.permissionMode; cb.onHandoff?.({ summary: 'ok' }); cb.onDone({ ok: true }); return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true } as AgentResult) } },
+  }
+}
+const depsFor = (key: string, provider: AgentProvider, workspace: Workspace) => ({
+  providers: { [key]: provider }, proxy: () => '', mcpEntry: undefined, readWorkspace: () => workspace,
+})
+
 function ws(projects: string[]): Workspace {
   return {
     name: 'w', path: '/ws', agent: 'fake', projects: projects.map(n => ({ repoId: n, name: n, branch: 'main' })),
@@ -40,7 +52,7 @@ const deps = (provider: AgentProvider, workspace: Workspace) => ({
 describe('runDelegate', () => {
   it('派每个目标项目一个子代理并按项目汇总各自 handoff', async () => {
     const runDelegate = makeRunDelegate(deps(fakeProvider({ handoff: (n) => `${n} 的结论` }), ws(['a', 'b'])))
-    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: '看看登录逻辑', provider: 'fake', model: 'm' })
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: '看看登录逻辑', projects: ['a', 'b'], provider: 'fake', model: 'm' })
     expect(r.per.map(p => p.project).sort()).toEqual(['a', 'b'])
     expect(r.per.every(p => p.ok)).toBe(true)
     expect(r.text).toContain('a 的结论')
@@ -70,7 +82,7 @@ describe('runDelegate', () => {
 
   it('无 handoff 时退回用日志输出作为 summary', async () => {
     const runDelegate = makeRunDelegate(deps(fakeProvider({ output: (n) => `${n} 输出内容` }), ws(['a'])))
-    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: 't', provider: 'fake', model: 'm' })
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/ws', task: 't', projects: ['a'], provider: 'fake', model: 'm' })
     expect(r.per[0].summary).toContain('a 输出内容')
   })
 
@@ -82,6 +94,14 @@ describe('runDelegate', () => {
     expect(r.text).toContain('root done')
   })
 
+  // 过度委派修复:省略 projects 不再铺满所有项目,只派一个工作区根代理(cwd=工作区根,能看到所有项目子目录)。
+  it('省略 projects → 只派一个工作区根代理(不再每项目一个)', async () => {
+    const runDelegate = makeRunDelegate(deps(fakeProvider({ handoff: (n) => `${n} done` }), ws(['a', 'b', 'c'])))
+    const r = await awaitDelegate(runDelegate, { workspacePath: '/wsroot', task: '读一个文件', provider: 'fake', model: 'm' })
+    expect(r.per).toHaveLength(1)
+    expect(r.per[0].project).toBe('workspace')
+  })
+
   it('权限盾牌下沉:write=false→子代理 readonly;write=true→用会话盾牌', async () => {
     const seen: Record<string, string | undefined> = {}
     const provider: AgentProvider = {
@@ -89,14 +109,91 @@ describe('runDelegate', () => {
       detect: async () => true, listModels: async () => [],
       run(task, cb) { seen[task.name] = task.permissionMode; cb.onHandoff?.({ summary: 'ok' }); cb.onDone({ ok: true }); return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true } as AgentResult) } },
     }
-    await makeRunDelegate(deps(provider, ws(['a'])))({ workspacePath: '/ws', task: 't', write: false, provider: 'fake', model: 'm' })
+    await makeRunDelegate(deps(provider, ws(['a'])))({ workspacePath: '/ws', task: 't', projects: ['a'], write: false, provider: 'fake', model: 'm' })
     expect(seen['a']).toBe('readonly')
-    await makeRunDelegate(deps(provider, ws(['b'])))({ workspacePath: '/ws', task: 't', write: true, permissionMode: 'full', provider: 'fake', model: 'm' })
+    await makeRunDelegate(deps(provider, ws(['b'])))({ workspacePath: '/ws', task: 't', projects: ['b'], write: true, permissionMode: 'full', provider: 'fake', model: 'm' })
     expect(seen['b']).toBe('full')
   })
 
+  // 兜底回传:codex 子代理把最终回答作为整段 agent_message(level 'accent',非 delta)发出;既非 handoff 也非
+  // 'ok'/'output' delta。原来会退化成空「完成」——现在捞 accent 作兜底,让只读探查即便调不了 forge_handoff 也有结果。
+  it('无 handoff/output 时用最后一条 agent_message(accent)兜底当 summary', async () => {
+    const provider: AgentProvider = {
+      id: 'codex', displayName: 'C', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(task, cb) {
+        cb.onLog({ ts: '', text: '读取中…', level: 'info' })
+        cb.onLog({ ts: '', text: '结论：后端用的是 Gin + MySQL', level: 'accent' })
+        cb.onDone({ ok: true })
+        return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true } as AgentResult) }
+      },
+    }
+    const r = await awaitDelegate(makeRunDelegate(depsFor('codex', provider, ws(['a']))), { workspacePath: '/ws', task: 't', provider: 'codex', model: 'm' })
+    expect(r.per[0].summary).toBe('结论：后端用的是 Gin + MySQL')
+  })
+
+  // 派发前权限门(形态二):codex + 写类 + 盾牌未到「完全」时,先弹门本次授权。授权本次 → 子代理用 full。
+  it('codex + 写 + 盾牌<完全 → 弹门;授权本次 → 子代理 permissionMode=full', async () => {
+    const seen: Record<string, string | undefined> = {}
+    const asked: { projects: string[]; write: boolean }[] = []
+    const runDelegate = makeRunDelegate(depsFor('codex', capProvider('codex', seen), ws(['a'])))
+    await new Promise<void>((resolve) => void runDelegate({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: true, provider: 'codex', model: 'm', permissionMode: 'auto',
+      askPermission: async (info) => { asked.push(info); return 'full' }, onComplete: () => resolve(),
+    }))
+    expect(asked).toHaveLength(1)
+    expect(asked[0].projects).toEqual(['a'])
+    expect(seen['a']).toBe('full')
+  })
+
+  it('codex + 写 + 选「仅当前权限」→ 子代理沿用盾牌(auto),不升 full', async () => {
+    const seen: Record<string, string | undefined> = {}
+    const runDelegate = makeRunDelegate(depsFor('codex', capProvider('codex', seen), ws(['a'])))
+    await new Promise<void>((resolve) => void runDelegate({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: true, provider: 'codex', model: 'm', permissionMode: 'auto',
+      askPermission: async () => 'default', onComplete: () => resolve(),
+    }))
+    expect(seen['a']).toBe('auto')
+  })
+
+  it('codex 读类(write=false)不弹门,子代理仍 readonly', async () => {
+    const seen: Record<string, string | undefined> = {}
+    let asked = 0
+    const runDelegate = makeRunDelegate(depsFor('codex', capProvider('codex', seen), ws(['a'])))
+    await new Promise<void>((resolve) => void runDelegate({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: false, provider: 'codex', model: 'm', permissionMode: 'auto',
+      askPermission: async () => { asked++; return 'full' }, onComplete: () => resolve(),
+    }))
+    expect(asked).toBe(0)
+    expect(seen['a']).toBe('readonly')
+  })
+
+  it('非 codex 的写类委派不弹门(其它 CLI 无 MCP↔沙箱绑定限制)', async () => {
+    const seen: Record<string, string | undefined> = {}
+    let asked = 0
+    const runDelegate = makeRunDelegate(depsFor('claude', capProvider('claude', seen), ws(['a'])))
+    await new Promise<void>((resolve) => void runDelegate({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: true, provider: 'claude', model: 'm', permissionMode: 'auto',
+      askPermission: async () => { asked++; return 'full' }, onComplete: () => resolve(),
+    }))
+    expect(asked).toBe(0)
+    expect(seen['a']).toBe('auto')
+  })
+
+  it('codex + 写 + 盾牌已是 full → 不弹门(已够权限)', async () => {
+    const seen: Record<string, string | undefined> = {}
+    let asked = 0
+    const runDelegate = makeRunDelegate(depsFor('codex', capProvider('codex', seen), ws(['a'])))
+    await new Promise<void>((resolve) => void runDelegate({
+      workspacePath: '/ws', task: 't', projects: ['a'], write: true, provider: 'codex', model: 'm', permissionMode: 'full',
+      askPermission: async () => { asked++; return 'full' }, onComplete: () => resolve(),
+    }))
+    expect(asked).toBe(0)
+    expect(seen['a']).toBe('full')
+  })
+
   it('传 sessionId 时把子代理登记进 delegateRegistry(供 IDs 面板),完成后置 ok', async () => {
-    await makeRunDelegate(deps(fakeProvider({ handoff: () => 'x' }), ws(['a', 'b'])))({ workspacePath: '/wsreg', task: 't', provider: 'fake', model: 'm', sessionId: 's1' })
+    await makeRunDelegate(deps(fakeProvider({ handoff: () => 'x' }), ws(['a', 'b'])))({ workspacePath: '/wsreg', task: 't', projects: ['a', 'b'], provider: 'fake', model: 'm', sessionId: 's1' })
     const rows = listDelegateAgents('/wsreg', 's1')
     expect(rows.map(r => r.name).sort()).toEqual(['a', 'b'])
     expect(rows.every(r => r.status === 'ok')).toBe(true)
@@ -108,7 +205,7 @@ describe('runDelegate', () => {
       detect: async () => true, listModels: async () => [],
       run(task, cb) { cb.onSubagent?.({ id: 'g1', phase: 'start', description: '读子模块' }); cb.onHandoff?.({ summary: 'x' }); cb.onDone({ ok: true }); return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true } as AgentResult) } },
     }
-    await makeRunDelegate(deps(provider, ws(['a'])))({ workspacePath: '/wsg', task: 't', provider: 'fake', model: 'm', sessionId: 's1' })
+    await makeRunDelegate(deps(provider, ws(['a'])))({ workspacePath: '/wsg', task: 't', projects: ['a'], provider: 'fake', model: 'm', sessionId: 's1' })
     const grand = listDelegateAgents('/wsg', 's1').find(r => r.depth === 2)
     expect(grand?.name).toBe('读子模块')
     expect(grand?.parentId).toBe('delegate:a')
@@ -158,5 +255,32 @@ describe('runDelegate', () => {
     expect(completed).not.toBeNull()
     expect((completed as unknown as DelegateResult).per).toHaveLength(1)
     expect((completed as unknown as DelegateResult).text).toContain('结论X')
+  })
+
+  // 探查卡死修复:子代理长时间零输出(codex 卡在自身 models 刷新/网络读)→ 空闲看门狗超时杀掉它,其 done 随即
+  // reject → Promise.all 不再被永久拖死,整批仍能 onComplete 回呈(该项目标注超时失败)。
+  it('子代理长时间无输出 → 空闲看门狗超时终止,不拖死整批「汇总回呈」', async () => {
+    vi.useFakeTimers()
+    try {
+      let cancelled = false
+      let rej: ((e: unknown) => void) | undefined
+      const provider: AgentProvider = {
+        id: 'codex', displayName: 'C', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+        detect: async () => true, listModels: async () => [],
+        run(task) {
+          const done = new Promise<AgentResult>((_r, reject) => { rej = reject })
+          return { id: task.agentId, cancel() { cancelled = true; rej?.(new Error('killed')) }, done }
+        },
+      }
+      let completed: DelegateResult | null = null
+      void makeRunDelegate(depsFor('codex', provider, ws(['a'])))({ workspacePath: '/wsidle', task: 't', projects: ['a'], provider: 'codex', model: 'm', onComplete: (r) => { completed = r } })
+      // 子代理从不产出任何活动 → 推进到超过空闲阈值,看门狗应 cancel 它,整批随后完成。
+      await vi.advanceTimersByTimeAsync(DELEGATE_IDLE_KILL_MS + WATCHDOG_TICK_MS * 2)
+      expect(cancelled).toBe(true)
+      expect(completed).not.toBeNull()
+      expect((completed as unknown as DelegateResult).per).toHaveLength(1)
+      expect((completed as unknown as DelegateResult).per[0].ok).toBe(false)
+      expect((completed as unknown as DelegateResult).per[0].summary).toContain('超时')
+    } finally { vi.useRealTimers() }
   })
 })
