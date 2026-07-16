@@ -28,6 +28,10 @@ button:disabled { cursor: default; }
 .pet-stage[data-vdir="down"] .pet-hit { top: 16px; }
 
 .pet { width: var(--pet-size, 88px); height: var(--pet-size, 88px); display: grid; place-items: center; user-select: none; }
+
+/* Codex v2 atlas sprite: cell is 192×208 (taller than wide), so the box keeps that aspect off --pet-size.
+   The shell (hit/badge/handle) wraps this unchanged. */
+.pet-atlas { width: var(--pet-size, 88px); height: calc(var(--pet-size, 88px) * 208 / 192); }
 .pet svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 6px 14px rgba(0,0,0,.45)); }
 /* pointer-events:none → the drag handler on .pet-hit owns the press, the img never intercepts it;
    -webkit-user-drag:none → belt-and-suspenders against the native OS image drag (an <img> is
