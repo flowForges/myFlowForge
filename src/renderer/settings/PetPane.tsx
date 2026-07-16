@@ -1,4 +1,4 @@
-import { useState, type ReactElement } from 'react'
+import { useState, useEffect, type ReactElement } from 'react'
 import type { Pet, PetState, Anim, Accent } from '@shared/types'
 import { ImportModal, type ImportConfig } from '../components/ImportModal'
 import { PET_SAMPLE, parsePet, type ParsedPet } from '../components/importParsers'
@@ -183,6 +183,18 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
     if (!path) return
     const next = addCustomPet(list, { id, name: `宠物 ${list.length + 1}`, images: { idle: path } })
     onChange({ skin: 'custom', customPets: next, activeCustomPetId: id })
+  }
+
+  // Codex v2 pet import: main-process copies the pack + returns a CustomPet (with atlas); we add it to
+  // the list exactly like an uploaded image pet. Discovered packs under ~/.codex/pets are listed on mount.
+  const [codexErr, setCodexErr] = useState('')
+  const [discovered, setDiscovered] = useState<{ id: string; displayName: string; dir: string }[]>([])
+  useEffect(() => { void window.forge?.codexPetList?.().then(setDiscovered).catch(() => {}) }, [])
+  const addImported = (r: { ok: true; pet: CustomPet } | { ok: false; error: string } | null) => {
+    if (!r) return
+    if (!r.ok) { setCodexErr(r.error); return }
+    setCodexErr('')
+    onChange({ skin: 'custom', customPets: addCustomPet(pet.customPets ?? [], r.pet), activeCustomPetId: r.pet.id })
   }
 
   const customList = pet.customPets ?? []
@@ -389,6 +401,40 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
           </div>
           {imgErr && (
             <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{imgErr}</div>
+          )}
+
+          <div className="set-row" style={{ marginBottom: '4px' }}>
+            <div className="info">
+              <div className="t">从 Codex 导入宠物</div>
+              <div className="d">支持 Codex v2 宠物包(含 pet.json + spritesheet.webp 的文件夹)。拖入文件夹、选择文件夹,或从本机 <code>~/.codex/pets</code> 一键启用。</div>
+            </div>
+          </div>
+          <div className="set-row" style={{ marginBottom: '8px', gap: '8px', flexWrap: 'wrap' }}>
+            <button className="wf-pick on" disabled={atMax} onClick={async () => addImported(await window.forge.codexPetPick())}>选择文件夹…</button>
+            <div
+              className="codex-drop"
+              onDragOver={e => e.preventDefault()}
+              onDrop={async e => {
+                e.preventDefault()
+                const f = e.dataTransfer.files[0] as (File & { path?: string }) | undefined
+                if (f?.path) addImported(await window.forge.codexPetImport(f.path))
+              }}
+              style={{ flex: 1, minWidth: '160px', padding: '10px 12px', border: '1px dashed var(--border)', borderRadius: '8px', color: 'var(--faint)', fontSize: '12px', textAlign: 'center' }}
+            >
+              把 Codex 宠物文件夹拖到这里
+            </div>
+          </div>
+          {discovered.length > 0 && (
+            <div className="set-row" style={{ marginBottom: '8px', gap: '6px', flexWrap: 'wrap' }}>
+              {discovered.map(d => (
+                <button key={d.dir} className="wf-pick" disabled={atMax} title={d.dir} onClick={async () => addImported(await window.forge.codexPetImport(d.dir))}>
+                  {d.displayName}
+                </button>
+              ))}
+            </div>
+          )}
+          {codexErr && (
+            <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{codexErr}</div>
           )}
 
           {pet.skin === 'custom' && (activeCustom.emoji || firstImage({ id: '', name: '', images: activeCustom.images })) && (
