@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Pet, PetState, ResolvePayload, WorkspaceMeta, PetStateConfig, ChatQueueEvent, SessionsFile } from '@shared/types'
 import { useEngine } from '../state/useEngine'
 import { derivePetState } from './derivePetState'
+import { derivePetAction } from './derivePetAction'
 import { derivePopupData } from './derivePopupData'
 import { usePetToasts } from './usePetToasts'
 import { usePetDrag } from './usePetDrag'
@@ -68,6 +69,8 @@ export function PetApp() {
   // exactly like resizingRef does for the resize handle.
   const draggingRef = useRef(false)
   const hoveredRef = useRef(false)
+  // Hover as reactive state (the ref alone won't re-render) so the atlas pet can wave on hover.
+  const [hovered, setHovered] = useState(false)
   const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([])
   const [doneReverted, setDoneReverted] = useState(false)
   const [queues, setQueues] = useState<Record<string, ChatQueueEvent['queue']>>({})
@@ -215,6 +218,14 @@ export function PetApp() {
 
   const rawState = derivePetState(run, pending, chatActivity)
   const state = rawState === 'done' && doneReverted ? 'idle' : rawState
+  // Codex atlas action (9-row) — separate from the 5-state legacy `state`. Hover greets an idle pet.
+  const petAction = derivePetAction(run, pending, chatActivity, { hovered })
+  // Look-at-cursor heading pushed from the main process (null in the deadzone); applied only while idle.
+  const [lookDeg, setLookDeg] = useState<number | null>(null)
+  useEffect(() => {
+    const off = window.forge.onPetLookAngle?.(setLookDeg)
+    return () => { off?.() }
+  }, [])
   // done → idle revert timer
   useEffect(() => {
     if (rawState !== 'done') { setDoneReverted(false); return }
@@ -353,11 +364,14 @@ export function PetApp() {
   return (
     <div className={`pet-stage${resizing ? ' pet-resizing' : ''}`} data-corner={corner} data-vdir={stageVdir} data-mode={petMode}
       style={{ '--pet-size': `${petSpriteSize(scale)}px` } as React.CSSProperties}
-      onMouseEnter={() => { hoveredRef.current = true; window.forge.petSetIgnoreMouse(false) }}
-      onMouseLeave={() => { hoveredRef.current = false; if (!resizingRef.current && !draggingRef.current) window.forge.petSetIgnoreMouse(true) }}>
+      onMouseEnter={() => { hoveredRef.current = true; setHovered(true); window.forge.petSetIgnoreMouse(false) }}
+      onMouseLeave={() => { hoveredRef.current = false; setHovered(false); if (!resizingRef.current && !draggingRef.current) window.forge.petSetIgnoreMouse(true) }}>
       <button className="pet-hit" aria-label="助手宠物" onPointerDown={onHitPointerDown} onClick={toggle}
         onContextMenu={(e) => { e.preventDefault(); window.forge.petContextMenu() }}>
-        <PetWidget skin={skin} anim={cfg.anim} accent={cfg.accent} state={state} customImages={resolvedCustom.images} customEmoji={resolvedCustom.emoji} />
+        <PetWidget skin={skin} anim={cfg.anim} accent={cfg.accent} state={state}
+          customImages={resolvedCustom.images} customEmoji={resolvedCustom.emoji}
+          atlas={resolvedCustom.atlas} action={petAction}
+          lookDeg={petAction === 'idle' ? lookDeg : undefined} />
         {/* Simple mode surfaces status through the bubble, not a count badge. */}
         <span className={`pet-badge${!simple && data.badge ? ' show' : ''}${data.badge?.warn ? ' warn' : ''}`}>{simple ? '' : (data.badge?.count ?? '')}</span>
         {/* 缩放手柄:hover 显示,按住拖动连续放大/缩小(codex 桌宠样式)。button 内不能再嵌 button,

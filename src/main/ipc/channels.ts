@@ -98,6 +98,7 @@ export const CH = {
   petContextMenu: 'pet:context-menu',
   petPickPack: 'pet:pick-pack',
   petPickImage: 'pet:pick-image',
+  petLookAngle: 'pet:look-angle',
   codexPetImport: 'codex-pet:import',
   codexPetList: 'codex-pet:list',
   codexPetPick: 'codex-pet:pick',

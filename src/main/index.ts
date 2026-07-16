@@ -13,6 +13,7 @@ import { registerIpc } from './ipc/handlers'
 import { createNotifyBridge } from './notify/notifyBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
+import { gazeAngle } from '@shared/petGaze'
 import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
 import { readSettings, writeSettings, readWorkspaceRegistry } from './config/store'
@@ -346,6 +347,18 @@ app.whenReady().then(() => {
     relocatePetToFocus(win)
   })
   app.on('browser-window-blur', (_e, win) => { if (win === mainWinRef) appFocused = false })
+
+  // Look-at-cursor: push the heading from the pet to the cursor so the idle pet turns its head. Pure gaze
+  // — never moves the window (distinct from the removed follow poll). ~140ms is smooth enough and cheap;
+  // sends null inside the deadzone so the renderer falls back to idle. The renderer only applies it while
+  // the action is 'idle', so this is harmless during runs.
+  const petGazePoll = setInterval(() => {
+    if (!petWin || petWin.isDestroyed() || petMode !== 'collapsed' || !readSettings().pet.enabled) return
+    const b = petWin.getBounds()
+    const center = { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+    petWin.webContents.send(CH.petLookAngle, gazeAngle(center, screen.getCursorScreenPoint()))
+  }, 140)
+  app.on('before-quit', () => clearInterval(petGazePoll))
 
   // Follow is CLICK/FOCUS-driven ONLY (via `browser-window-focus` above): the pet hops to a screen when
   // the user actually clicks a Forge window there. The earlier continuous cursor-SCREEN poll was removed
