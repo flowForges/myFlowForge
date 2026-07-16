@@ -12,8 +12,8 @@ describe('derivePetAction', () => {
   it('idle when nothing happening', () => {
     expect(derivePetAction(null, [])).toBe('idle')
   })
-  it('waving when hovering an otherwise-idle pet', () => {
-    expect(derivePetAction(null, [], undefined, { hovered: true })).toBe('waving')
+  it('jumps when hovering an otherwise-idle pet (matches Codex hover reaction)', () => {
+    expect(derivePetAction(null, [], undefined, { hovered: true })).toBe('jumping')
   })
   it('waiting on a confirm or input gate (overrides hover)', () => {
     expect(derivePetAction(null, [confirm], undefined, { hovered: true })).toBe('waiting')
