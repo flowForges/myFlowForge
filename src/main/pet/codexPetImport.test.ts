@@ -15,14 +15,40 @@ function makePack(dir: string, id = 'hkdoll') {
 }
 
 describe('importCodexPetPack', () => {
-  it('copies the spritesheet into the store and returns an atlas CustomPet', () => {
+  it('copies the spritesheet into the store and returns an atlas CustomPet (codex- id keyed on source folder)', () => {
     const src = join(root, 'src-pack'); makePack(src, 'hkdoll')
     const store = join(root, 'store')
     const r = importCodexPetPack(src, store)
     expect(r.ok).toBe(true)
     if (!r.ok) return
-    expect(r.pet).toMatchObject({ id: 'hkdoll', name: 'hkdoll 3D', atlas: { path: 'hkdoll/spritesheet.webp', version: 2 } })
-    expect(existsSync(join(store, 'hkdoll', 'spritesheet.webp'))).toBe(true)
+    // id no longer derives from the manifest id; it is `codex-<folder>-<hash>` so it is prefixed
+    // (groupable), stable per folder (dedup), and unique per source (no clobber).
+    expect(r.pet.id).toMatch(/^codex-src-pack-[a-z0-9]+$/)
+    expect(r.pet).toMatchObject({ name: 'hkdoll 3D', atlas: { path: `${r.pet.id}/spritesheet.webp`, version: 2 } })
+    expect(existsSync(join(store, r.pet.id, 'spritesheet.webp'))).toBe(true)
+  })
+
+  it('same source folder → same id (re-import upserts, never duplicates)', () => {
+    const src = join(root, 'src-pack'); makePack(src, 'hkdoll')
+    const store = join(root, 'store')
+    const a = importCodexPetPack(src, store)
+    const b = importCodexPetPack(src, store)
+    expect(a.ok && b.ok).toBe(true)
+    if (!a.ok || !b.ok) return
+    expect(a.pet.id).toBe(b.pet.id)
+  })
+
+  it('two different folders sharing a manifest id → distinct ids, no spritesheet clobber', () => {
+    const store = join(root, 'store')
+    const src1 = join(root, 'packA'); makePack(src1, 'default')
+    const src2 = join(root, 'packB'); makePack(src2, 'default')  // same manifest id, different folder
+    const r1 = importCodexPetPack(src1, store)
+    const r2 = importCodexPetPack(src2, store)
+    expect(r1.ok && r2.ok).toBe(true)
+    if (!r1.ok || !r2.ok) return
+    expect(r1.pet.id).not.toBe(r2.pet.id)
+    expect(existsSync(join(store, r1.pet.id, 'spritesheet.webp'))).toBe(true)
+    expect(existsSync(join(store, r2.pet.id, 'spritesheet.webp'))).toBe(true)
   })
 
   it('rejects a pack whose manifest is not v2', () => {
