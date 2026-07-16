@@ -189,7 +189,17 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
   // the list exactly like an uploaded image pet. Discovered packs under ~/.codex/pets are listed on mount.
   const [codexErr, setCodexErr] = useState('')
   const [discovered, setDiscovered] = useState<{ id: string; displayName: string; dir: string }[]>([])
-  useEffect(() => { void window.forge?.codexPetList?.().then(setDiscovered).catch(() => {}) }, [])
+  const [scanning, setScanning] = useState(false)
+  const [scanned, setScanned] = useState(false) // a scan has completed at least once (for the count copy)
+  const rescanCodex = () => {
+    if (!window.forge?.codexPetList) return
+    setScanning(true)
+    void window.forge.codexPetList()
+      .then(list => { setDiscovered(list); setScanned(true) })
+      .catch(() => {})
+      .finally(() => setScanning(false))
+  }
+  useEffect(() => { rescanCodex() }, [])
   const addImported = (r: { ok: true; pet: CustomPet } | { ok: false; error: string } | null) => {
     if (!r) return
     if (!r.ok) { setCodexErr(r.error); return }
@@ -423,6 +433,18 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             >
               把 Codex 宠物文件夹拖到这里
             </div>
+          </div>
+          <div className="set-row" style={{ marginBottom: '6px', gap: '8px', alignItems: 'center' }}>
+            <div className="d" style={{ flex: 1 }}>
+              {scanning
+                ? '正在扫描 ~/.codex/pets …'
+                : discovered.length > 0
+                  ? `已扫描到 ${discovered.length} 个 Codex 宠物,点击即可导入:`
+                  : scanned
+                    ? '未在 ~/.codex/pets 扫描到 Codex 宠物。'
+                    : ''}
+            </div>
+            <button className="wf-pick" disabled={scanning} onClick={rescanCodex}>{scanning ? '扫描中…' : '重新扫描'}</button>
           </div>
           {discovered.length > 0 && (
             <div className="set-row" style={{ marginBottom: '8px', gap: '6px', flexWrap: 'wrap' }}>
