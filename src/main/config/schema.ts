@@ -142,6 +142,7 @@ export const CustomPetSchema = z.object({
   emoji: z.string().optional(),
   color: z.string().optional(),
   images: z.partialRecord(z.enum(PET_STATES), z.string()).optional(),
+  atlas: z.object({ path: z.string(), version: z.number() }).optional(),
 })
 export type CustomPetCfg = z.infer<typeof CustomPetSchema>
 
