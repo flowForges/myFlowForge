@@ -18,8 +18,10 @@ function baseAction(run: RunState | null, pending: PendingAction[], chat: ChatAc
   return 'idle'
 }
 
-// Map runtime state → Codex atlas action. Hover greets ONLY an otherwise-idle pet (never interrupts a
-// gate / active run / completion). Look-at-cursor is layered on top in the renderer for the idle action.
+// Map runtime state → Codex atlas action. Hovering an otherwise-idle pet makes it JUMP — this matches
+// Codex's own hover reaction (verified against the Codex app; our earlier `waving` guess was wrong).
+// Hover never interrupts a gate / active run / completion. Look-at-cursor is layered on top in the
+// renderer for the idle action.
 export function derivePetAction(
   run: RunState | null,
   pending: PendingAction[],
@@ -27,6 +29,6 @@ export function derivePetAction(
   opts: { hovered?: boolean } = {},
 ): PetAction {
   const base = baseAction(run, pending, chat)
-  if (base === 'idle' && opts.hovered) return 'waving'
+  if (base === 'idle' && opts.hovered) return 'jumping'
   return base
 }
