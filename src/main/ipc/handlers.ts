@@ -25,6 +25,7 @@ import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage } from '../chat/chatStore'
+import { mergeLive } from '../chat/liveTurns'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession } from '../chat/sessionStore'
 import { agentSessionsForId } from '../chat/agentSessions'
 import { distillModelFor } from '../chat/memory/distillModel'
@@ -781,7 +782,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     appendMessage(a.workspacePath, a.sessionId, note)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
   })
-  ipcMain.handle(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => history(a.workspacePath, a.sessionId))
+  // Fold any in-flight (still-streaming) assistant message into the returned history so switching to the
+  // home view / another session mid-stream and back restores the already-produced output (it isn't
+  // persisted until the turn's terminal state).
+  ipcMain.handle(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId)))
   ipcMain.handle(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
     const r = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] })
     return r.filePaths.map(p => ({ name: basename(p), path: p, size: statSync(p).size }))

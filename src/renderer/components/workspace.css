@@ -414,6 +414,9 @@
   font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: .04em;
   color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 999px; padding: 2px 8px; transition: .12s;
+  /* Never wrap: at narrow inspector widths the flex item would shrink and break "日志台" onto
+     one character per line. Keep it a fixed, single-line pill; the stage title absorbs the squeeze. */
+  flex: none; white-space: nowrap;
 }
 .proc-expand:hover { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 45%, transparent); }
 .proc-expand svg { width: 11px; height: 11px; }

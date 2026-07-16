@@ -54,9 +54,12 @@ function messageKeys(messages: ChatMessage[]): number[] {
 // 传入顺序(消息 → pending → confirm → plan),使同刻卡片有确定次序。
 // 遍历消息,记录"上一条 ai 消息的 provider"(不限于连续,跨用户消息也保留)。当某条 ai 消息与
 // 上一条 ai 消息都携带 provider 且二者不同 → 在这条消息前插入 provider-switch 分割线。
-//   · 旧消息(Task 17 之前,无 provider 字段)或 user 消息不参与判定,只是被跳过——不会误触发,
-//     但会覆盖 prevAiProvider(即便是 undefined),故一条无 provider 的 ai 消息之后,下一条即便
-//     provider 不同也不会补插分割线(因为"上一条"已知不携带 provider,无法判定是否真的切换了)。
+//   · 旧消息(Task 17 之前,无 provider 字段)、user 消息、以及运行时产生的无 provider ai 消息
+//     (「系统」note、尚未 done 的在途流式占位)都不参与判定,只是被跳过——且【不清空】已知的
+//     prevAiProvider(粘滞)。若清空,一条无 provider 的 ai 消息夹在 codex 末条与切换总结之间时,
+//     总结上方本应出现的 provider-switch 分割线会消失(切模型丢分割线的根因)。粘滞不会误插:第一段
+//     provider 出现前 prevAiProvider 恒为 undefined,`prevAiProvider &&` 守卫保证无 provider 的纯旧
+//     会话不会补插分割线。
 //   · 第一条 ai 消息(prevAiProvider 尚为 undefined)必然不插。
 // 分割线与其触发消息共享同一 ts key,且在展开为 message 条目之前紧邻插入(而非整体作为独立前置
 // 数组块)——若整体前置,一旦分割线 ts 恰好与*更早*的一条消息(如流式承接前值的 carry-forward ts)
@@ -65,11 +68,11 @@ function messageEntries(messages: ChatMessage[], mk: number[]): TimelineEntry[] 
   const out: TimelineEntry[] = []
   let prevAiProvider: string | undefined
   messages.forEach((msg, index) => {
-    if (msg.who === 'ai') {
-      if (msg.provider && prevAiProvider && msg.provider !== prevAiProvider) {
+    if (msg.who === 'ai' && msg.provider) {
+      if (prevAiProvider && msg.provider !== prevAiProvider) {
         out.push({ kind: 'provider-switch', ts: mk[index], from: prevAiProvider, to: msg.provider })
       }
-      prevAiProvider = msg.provider
+      prevAiProvider = msg.provider // 仅在真带 provider 时推进;无 provider 的 ai 消息不清空(粘滞)
     }
     out.push({ kind: 'message', ts: mk[index], msg, index })
   })

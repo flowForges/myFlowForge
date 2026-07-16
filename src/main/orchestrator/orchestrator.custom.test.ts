@@ -65,6 +65,32 @@ describe('Orchestrator custom (non-builtin) stages (#3)', () => {
     expect(stage.agents.length).toBe(2)
   })
 
+  it('a per-project review stage honors the spec.projects subset (门控里 3 选 2 只评审所选项目)', async () => {
+    const bus = new EventBus()
+    const runs: { stageKey: string; agentId: string; prompt: string }[] = []
+    const orch = new Orchestrator({ bus, providers: { rec: recProvider(runs) }, proxy: () => '' })
+    bus.subscribe(e => { if (e.type === 'pending:add') setTimeout(() => orch.resolve({ id: e.action.id, decision: 'allow' }), 0) })
+
+    const run = await orch.startRun({
+      runId: 'c4', workspaceName: 'ws', workspacePath: ws,
+      stages: [{
+        key: 'code-review', name: '代码 CR', provider: 'rec', model: 'm', gate: false,
+        review: { mode: 'parallel', scope: 'per-project' },
+        projects: ['web', 'api'], // user ticked 2 of the 3 projects in the approval card
+      }],
+      developProjects: [
+        { name: 'web', cwd: join(ws, 'web') },
+        { name: 'api', cwd: join(ws, 'api') },
+        { name: 'infra', cwd: join(ws, 'infra') },
+      ],
+    })
+
+    expect(run.status).toBe('ok')
+    const stage = run.stages.find(s => s.key === 'code-review')!
+    // Only the 2 chosen projects get a reviewer — the review branch used to fan out over ALL 3.
+    expect(stage.agents.map(a => a.name).sort()).toEqual(['api', 'web'])
+  })
+
   it('gate:false on a custom stage skips the review gate entirely', async () => {
     const bus = new EventBus()
     const events: any[] = []

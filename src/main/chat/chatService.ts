@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 import { appendMessage, readMessages, readSession, readWatermark, writeSession, writeWatermark } from './chatStore'
+import { setLive, clearLive } from './liveTurns'
 import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
@@ -116,6 +117,15 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // on the finished message so their cards survive reload.
     const subagents = new Map<string, SubagentCard>()
     const subagentList = () => (subagents.size ? [...subagents.values()] : undefined)
+    // Mirror the in-flight message into the live buffer so chatHistory can restore it after the chat view
+    // unmounts (switch to home) or re-subscribes to another session mid-stream. ts:'' marks it as still
+    // streaming (carry-forward ordering in the timeline; also lets the renderer re-flag streamingIds).
+    const publishLive = () => setLive(ws, sid, {
+      id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: '',
+      think: { label: '主代理思考中…', steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
+      context, usage: lastUsage, subagents: subagentList(),
+    })
+    publishLive()
     const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean }) => {
       const prev = subagents.get(ev.id) ?? { id: ev.id, state: 'running' as const }
       const next: SubagentCard = {
@@ -127,6 +137,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         state: ev.phase === 'done' ? (ev.isError ? 'error' : 'done') : prev.state,
       }
       subagents.set(ev.id, next)
+      publishLive()
       emit({ workspacePath: ws, sessionId: sid, type: 'subagent', id: aid, sub: next })
     }
     // Distillation runs on THIS session's provider. Pick a model valid for it: claude gets the cheap
@@ -177,6 +188,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         subagents: subagentList(),
       }
       appendMessage(ws, sid, msg)
+      clearLive(ws, sid, aid) // persisted now covers it — drop the in-flight mirror
       bumpWatermark()
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
       scheduleDistill()
@@ -186,12 +198,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
       const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
+      clearLive(ws, sid, aid)
       scheduleDistill()
       return msg
     }
     const finishAborted = (): ChatMessage => {
       const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
       appendMessage(ws, sid, msg)
+      clearLive(ws, sid, aid)
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
       scheduleDistill()
       return msg
@@ -219,12 +233,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         let settled = false
         const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode }, {
           onSession: (id) => writeSession(ws, sid, payload.agent, id),
-          onAssistantDelta: (t) => { dbgDelta('chat', t); text += t; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
+          onAssistantDelta: (t) => { dbgDelta('chat', t); text += t; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
           onThinkDelta: (t) => {
             think += (think ? '\n' : '') + t
             const before = context.skills.length + context.rules.length + (context.mcps?.length ?? 0)
             context = mergeAgentContext(context, extractRuntimeContext(t, ws))
             const after = context.skills.length + context.rules.length + (context.mcps?.length ?? 0)
+            publishLive()
             emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t, context: after !== before ? context : undefined })
           },
           // Raw startup/runtime logs → live think steps, but NOT accumulated into `think`: they're
@@ -232,7 +247,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           // the persisted reasoning stays clean while the spawn/handshake gap no longer looks frozen.
           onStatus: (t) => emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t }),
           onConfirm: deps.confirm,
-          onUsage: (u) => { lastUsage = u },
+          onUsage: (u) => { lastUsage = u; publishLive() },
           onSubagent,
           onDone: (r) => { if (settled) return; settled = true; resolve(finishOk(r.elapsed)) },
           onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
@@ -245,7 +260,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       const session = provider.run(
         { stageKey: 'chat', agentId: aid, name: 'chat', prompt: promptText, cwd: ws, model: payload.model },
         {
-          onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { dbgDelta('run', l.text); text += (text ? '\n' : '') + l.text; emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
+          onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { dbgDelta('run', l.text); text += (text ? '\n' : '') + l.text; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
           onState: () => {},
           onConfirm: deps.confirm ?? (async () => 'deny'),
           onInput: async () => '',

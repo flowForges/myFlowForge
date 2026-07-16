@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Notifications, CloseAction } from '@shared/types'
 
 // Split out of AppearancePane (was 外观和通知 combined) so 外观 is purely visual and 通知/窗口 behavior
@@ -7,6 +8,10 @@ interface NotificationsPaneProps {
   onNotificationsChange: (partial: Partial<Notifications>) => void
   closeAction: CloseAction
   onCloseActionChange: (v: CloseAction) => void
+  // Fires a native notification right now, bypassing the focus gate + per-type switches. Lets the user
+  // tell "the OS isn't delivering at all" (permission/signing) from "real notifications only fire when
+  // the app is in the background". Returns whether the OS reports notification support.
+  onTest?: () => Promise<{ supported: boolean }>
 }
 
 const NOTIFY_TYPES: { key: 'confirm' | 'input' | 'done'; t: string; d: string }[] = [
@@ -21,7 +26,20 @@ const CLOSE_ACTIONS: { key: CloseAction; label: string }[] = [
   { key: 'quit', label: '退出应用' },
 ]
 
-export function NotificationsPane({ notifications, onNotificationsChange, closeAction, onCloseActionChange }: NotificationsPaneProps) {
+export function NotificationsPane({ notifications, onNotificationsChange, closeAction, onCloseActionChange, onTest }: NotificationsPaneProps) {
+  const [testMsg, setTestMsg] = useState<string>('')
+  const runTest = async () => {
+    if (!onTest) return
+    setTestMsg('已发送,请查看系统通知中心…')
+    try {
+      const { supported } = await onTest()
+      setTestMsg(supported
+        ? '已发送。若没看到弹窗,请到 系统设置 › 通知 里为 myFlowForge 开启「允许通知」(未签名版本首次可能需要手动允许)。'
+        : '当前系统报告不支持通知。')
+    } catch {
+      setTestMsg('发送失败。')
+    }
+  }
   return (
     <>
       <div className="set-group">
@@ -36,6 +54,13 @@ export function NotificationsPane({ notifications, onNotificationsChange, closeA
             aria-label="系统通知"
             onClick={() => onNotificationsChange({ enabled: !notifications.enabled })}
           />
+        </div>
+        <div className="set-row">
+          <div className="info">
+            <div className="t">发送测试通知</div>
+            <div className="d">{testMsg || '立即发送一条测试通知,验证系统是否放行(此按钮不受前台判断和开关限制)'}</div>
+          </div>
+          <button className="wf-pick" aria-label="发送测试通知" onClick={runTest}>发送</button>
         </div>
         {NOTIFY_TYPES.map(({ key, t, d }) => (
           <div className="set-row" key={key} style={{ opacity: notifications.enabled ? 1 : 0.45 }}>

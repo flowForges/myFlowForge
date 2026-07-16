@@ -36,7 +36,8 @@ beforeEach(() => {
     listWorkspaces: vi.fn(async () => []),
     petSetExpanded, petSetIgnoreMouse, petSetPosition, petSetScale, petResizeBegin,
     petGetBounds: vi.fn(async () => ({ bounds: { x: 1200, y: 600, width: 140, height: 120 }, workArea: { x: 0, y: 0, width: 1440, height: 900 } })),
-    petFocusWorkspace: vi.fn(), resolve: vi.fn(), setSettings: vi.fn(async (s: any) => s)
+    petFocusWorkspace: vi.fn(), resolve: vi.fn(), setSettings: vi.fn(async (s: any) => s),
+    petContextMenu: vi.fn(async () => {})
   }
 })
 
@@ -94,6 +95,13 @@ describe('PetApp P3-4', () => {
     expect(petSetIgnoreMouse).toHaveBeenCalledWith(false)
     fireEvent.mouseLeave(stage)
     expect(petSetIgnoreMouse).toHaveBeenCalledWith(true)
+  })
+
+  it('right-clicking the pet opens the native context menu (关闭宠物)', async () => {
+    const { container } = render(<PetApp />)
+    const hit = container.querySelector('.pet-hit') as HTMLElement
+    fireEvent.contextMenu(hit)
+    expect((window as any).forge.petContextMenu).toHaveBeenCalled()
   })
 
   it('re-applies settings on settingsChanged (skin)', async () => {

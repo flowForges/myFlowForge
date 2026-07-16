@@ -756,7 +756,7 @@ export function App() {
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} showNsfw={!!settings?.nsfwUnlocked} renderPane={(key) => {
         switch (key) {
           case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} /> : null
-          case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} /> : null
+          case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} />
           case 'providers': return <AgentsPane onChanged={redetect} />

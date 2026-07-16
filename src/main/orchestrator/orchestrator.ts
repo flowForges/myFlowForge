@@ -677,12 +677,20 @@ export class Orchestrator {
           }
 
           const tasks: { agent: AgentRuntime; cwd: string; provider: AgentProvider | undefined; model: string; lens?: ReviewLens }[] = []
+          // Per-stage project scoping: a stage may run on only a subset of projects (spec.projects, by
+          // name, chosen in the approval card). Falls back to ALL projects when unset or when the filter
+          // matches nothing (never a no-op stage). Computed ONCE here so BOTH the review fan-out and the
+          // plain per-project fan-out honor the subset — the review branch used to pass the full
+          // developProjects, so a per-project review stage (e.g. 代码 CR) ignored the user's 5-选-3 pick
+          // and reviewed all projects.
+          const scoped = spec.projects?.length ? opts.developProjects.filter(p => spec.projects!.includes(p.name)) : opts.developProjects
+          const stageProjs = scoped.length ? scoped : opts.developProjects
           // Any stage carrying a review config fans out parallel reviewers (built-in 'review' gets one by
           // default via resolveStages; custom stages opt in explicitly).
           if (spec.review) {
             const reviewers: ReviewerTask[] = buildReviewTasks(
               spec.review,
-              opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })),
+              stageProjs.map(p => ({ name: p.name, cwd: p.cwd })),
               { name: spec.name, cwd: opts.workspacePath },
             )
             for (const r of reviewers) {
@@ -692,11 +700,6 @@ export class Orchestrator {
               stage.agents.push(agent); tasks.push({ agent, cwd: r.cwd, provider, model: spec.model, lens: r.lens })
             }
           } else if (stageScope(spec) === 'per-project' && opts.developProjects.length > 0) {
-            // Per-stage project scoping: a stage may run on only a subset of projects (spec.projects, by
-            // name). Falls back to ALL projects when unset or when the filter matches nothing (never a
-            // no-op stage). Lets e.g. 需求分析 cover all 5 projects while 开发 touches only 2.
-            const scoped = spec.projects?.length ? opts.developProjects.filter(p => spec.projects!.includes(p.name)) : opts.developProjects
-            const stageProjs = scoped.length ? scoped : opts.developProjects
             // projectAgent: run with each project's own provider/model (develop's default); other
             // per-project stages (e.g. design) keep the stage's provider/model but run in the project cwd.
             const projectAgent = spec.projectAgent ?? spec.key === 'develop'

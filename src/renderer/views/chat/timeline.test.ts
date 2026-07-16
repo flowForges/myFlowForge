@@ -116,5 +116,22 @@ describe('buildTimeline', () => {
       const tl = buildTimeline(messages, [], [], [])
       expect(tl.map(e => e.kind)).toEqual(['message', 'message', 'message'])
     })
+
+    // 回归(切模型丢分割线):一条无 provider 的「系统」note 或在途流式占位夹在 codex 末条与切换总结之间时,
+    // prevAiProvider 若被重置为 undefined,总结上方的分割线就消失。改为「粘滞」——无 provider 的 ai 消息
+    // 不清空上一已知 provider——使真实切换的分割线在有 note 穿插时依然稳定出现。
+    it('无 provider 的系统 note 穿插在真实切换之间,分割线仍出现', () => {
+      const messages = [
+        aiMsg('codex1', '2026-07-01T12:00:00.000Z', 'codex'), // codex 的回复
+        aiMsg('sysnote', '2026-07-01T12:00:01.000Z'),         // 系统 note:无 provider
+        aiMsg('summary', '2026-07-01T12:00:02.000Z', 'claude'), // 切换后的上下文总结(新 provider)
+      ]
+      const tl = buildTimeline(messages, [], [], [])
+      expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind))
+        .toEqual(['codex1', 'sysnote', 'provider-switch', 'summary'])
+      const div = tl.find(e => e.kind === 'provider-switch')
+      expect(div && div.kind === 'provider-switch' && { from: div.from, to: div.to })
+        .toEqual({ from: 'codex', to: 'claude' })
+    })
   })
 })

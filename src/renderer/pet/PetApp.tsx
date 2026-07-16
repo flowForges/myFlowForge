@@ -355,7 +355,8 @@ export function PetApp() {
       style={{ '--pet-size': `${petSpriteSize(scale)}px` } as React.CSSProperties}
       onMouseEnter={() => { hoveredRef.current = true; window.forge.petSetIgnoreMouse(false) }}
       onMouseLeave={() => { hoveredRef.current = false; if (!resizingRef.current && !draggingRef.current) window.forge.petSetIgnoreMouse(true) }}>
-      <button className="pet-hit" aria-label="助手宠物" onPointerDown={onHitPointerDown} onClick={toggle}>
+      <button className="pet-hit" aria-label="助手宠物" onPointerDown={onHitPointerDown} onClick={toggle}
+        onContextMenu={(e) => { e.preventDefault(); window.forge.petContextMenu() }}>
         <PetWidget skin={skin} anim={cfg.anim} accent={cfg.accent} state={state} customImages={resolvedCustom.images} customEmoji={resolvedCustom.emoji} />
         {/* Simple mode surfaces status through the bubble, not a count badge. */}
         <span className={`pet-badge${!simple && data.badge ? ' show' : ''}${data.badge?.warn ? ' warn' : ''}`}>{simple ? '' : (data.badge?.count ?? '')}</span>

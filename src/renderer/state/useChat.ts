@@ -65,7 +65,15 @@ export function useChat(
     if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setDelegateActive(false); return }
     setMessages([]); setStreamingIds(new Set()); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setDelegateActive(false)
     let live = true
-    void api.current.chatHistory(workspacePath, sessionId).then((h: ChatMessage[]) => { if (live) setMessages(h) })
+    void api.current.chatHistory(workspacePath, sessionId).then((h: ChatMessage[]) => {
+      if (!live) return
+      setMessages(h)
+      // Restore the streaming affordance for an in-flight message folded in by the main-process live
+      // buffer (ts:'' uniquely marks a not-yet-persisted assistant reply) — otherwise it renders as a
+      // finished message with no spinner until the next delta upserts it.
+      const inflight = h.filter(m => m.who === 'ai' && m.ts === '').map(m => m.id)
+      if (inflight.length) setStreamingIds(new Set(inflight))
+    })
     return () => { live = false }
   }, [workspacePath, sessionId])
 

@@ -216,6 +216,15 @@ export function SettingsModal({ open, onClose, renderPane, initialPane, showNsfw
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose, initialPane])
 
+  // Active-pane liveness: if the currently selected pane disappears from the nav while the modal stays
+  // open (e.g. user disables the NSFW extension → showNsfw flips false → the 'nsfw' nav item is filtered
+  // out), the right pane would otherwise keep rendering the now-hidden pane. Fall back to the first
+  // visible nav item. `initialPane`/App-level state can't fix this since `active` is internal + only
+  // synced on a closed→open transition.
+  useEffect(() => {
+    if (open && !nav.some(n => n.key === active)) setActive(nav[0]?.key ?? 'appearance')
+  }, [open, showNsfw, active])
+
   return (
     <div
       className={`settings-overlay${open ? ' on' : ''}`}

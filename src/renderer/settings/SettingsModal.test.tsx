@@ -22,6 +22,20 @@ describe('SettingsModal tab routing', () => {
     expect(wfNav?.className).toContain('on')
   })
 
+  it('falls back off a pane that disappears from the nav while open (disabling NSFW)', () => {
+    const renderPane = vi.fn((key: string) => <div data-testid="pane">{key}</div>)
+    const { rerender } = render(
+      <SettingsModal open onClose={() => {}} renderPane={renderPane} initialPane="nsfw" showNsfw />,
+    )
+    expect(screen.getByTestId('pane').textContent).toBe('nsfw')
+    // User disables the NSFW extension: showNsfw flips false while the modal stays open. The 'nsfw'
+    // nav item is filtered out, so the right pane must not keep rendering it.
+    rerender(<SettingsModal open onClose={() => {}} renderPane={renderPane} initialPane="nsfw" showNsfw={false} />)
+    expect(screen.getByTestId('pane').textContent).not.toBe('nsfw')
+    expect(screen.getByTestId('pane').textContent).toBe('appearance')
+    expect(document.querySelector('[data-set="nsfw"]')).toBeNull()
+  })
+
   it('resets to the new initialPane when closed then reopened', () => {
     const renderPane = vi.fn((key: string) => <div data-testid="pane">{key}</div>)
     const { rerender } = render(<SettingsModal open onClose={() => {}} renderPane={renderPane} initialPane="workflow" />)

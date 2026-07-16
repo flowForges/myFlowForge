@@ -11,7 +11,7 @@ import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
 import { registerIpc } from './ipc/handlers'
 import { createNotifyBridge } from './notify/notifyBridge'
-import { showOsNotification } from './notify/osNotify'
+import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
 import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
@@ -347,32 +347,12 @@ app.whenReady().then(() => {
   })
   app.on('browser-window-blur', (_e, win) => { if (win === mainWinRef) appFocused = false })
 
-  // Cross-app follow via a low-frequency, DEBOUNCED cursor-SCREEN poll. This replaces the old
-  // `browser-window-blur` + one-shot cursor sample, which was the source of「该跟没跟 / 跟错屏」:
-  //  · blur does NOT fire on cmd+tab (focus leaves Forge with no mouse move) → 该跟没跟;
-  //  · a single cursor read at the blur instant is frequently the wrong screen → 跟错屏.
-  // Electron can't observe focus on non-Forge windows, so the cursor's screen is our only cross-app
-  // signal. We sample every 600ms and only hop AFTER the cursor has settled on a DIFFERENT display for
-  // ~2 consecutive samples (≈1.2s). Crucially this is a CROSS-SCREEN check (the pet never moves within a
-  // screen and never tracks the cursor position), so it doesn't reintroduce the old hover-jitter that
-  // made us drop continuous chasing. `browser-window-focus` still gives an instant, exact hop when a
-  // Forge window is clicked. cmd+tab without moving the mouse stays unsolvable (no cursor signal), but
-  // the next mouse move re-homes the pet within ~1.2s.
-  let petCursorDispId: number | null = null
-  let petCursorStreak = 0
-  const petFollowPoll = setInterval(() => {
-    const p = readSettings().pet
-    if (!p.enabled || !p.followCursor || !petWin || petWin.isDestroyed() || petMode !== 'collapsed') { petCursorStreak = 0; return }
-    const disp = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-    const b = petWin.getBounds()
-    const petDisp = screen.getDisplayNearestPoint({ x: b.x + b.width / 2, y: b.y + b.height / 2 })
-    if (disp.id === petDisp.id) { petCursorStreak = 0; petCursorDispId = disp.id; return }  // already on cursor's screen
-    // cursor is on a DIFFERENT screen → debounce: require it to stay there for 2 consecutive samples
-    if (disp.id === petCursorDispId) petCursorStreak++
-    else { petCursorDispId = disp.id; petCursorStreak = 1 }
-    if (petCursorStreak >= 2) { petCursorStreak = 0; relocatePetToDisplay(disp) }
-  }, 600)
-  app.on('before-quit', () => clearInterval(petFollowPoll))
+  // Follow is CLICK/FOCUS-driven ONLY (via `browser-window-focus` above): the pet hops to a screen when
+  // the user actually clicks a Forge window there. The earlier continuous cursor-SCREEN poll was removed
+  // on user request — merely moving the mouse onto another monitor (without clicking) should NOT drag the
+  // pet along; that read as unwanted「鼠标跟随」. Trade-off (accepted): clicking a NON-Forge app on another
+  // screen can't be observed by Electron, so the pet won't chase that; the next click on any Forge window
+  // re-homes it. (History: blur+one-shot sample → 该跟没跟/跟错屏; cursor poll → felt like mouse-follow.)
 
   if (readSettings().pet.enabled) createPet()
   // On startup, join whatever window is already focused (if the toggle is on).
@@ -446,6 +426,14 @@ app.whenReady().then(() => {
   ipcMain.handle(CH.petSetIgnoreMouse, (_e, ignore: boolean) => {
     if (!petWin || petWin.isDestroyed()) return
     petWin.setIgnoreMouseEvents(ignore, { forward: true })
+  })
+  // Right-click the pet → native context menu. Kept minimal (关闭宠物) but a natural home for future
+  // per-pet actions. togglePetEnabled flips pet.enabled → destroys the window + persists.
+  ipcMain.handle(CH.petContextMenu, () => {
+    if (!petWin || petWin.isDestroyed()) return
+    Menu.buildFromTemplate([
+      { label: '关闭宠物', click: () => togglePetEnabled() },
+    ]).popup({ window: petWin })
   })
   ipcMain.handle(CH.setPetActiveWorkspace, (_e, path: string | null) => {
     activeWsPath = path || null
@@ -523,6 +511,17 @@ app.whenReady().then(() => {
   })
   // confirm/input come off the engine bus (pending:add).
   const notifyBridge = createNotifyBridge({ getCfg: () => readSettings().notifications, isFocused: isMainFocused, notify: routeAndFire })
+  // Test notification: fire immediately, bypassing the focus gate + config switches, so the user can tell
+  // a system-permission problem (unsigned build never got macOS notification permission → nothing shows)
+  // apart from the focus-gating (real notifications only fire when the app is in the background). Returns
+  // whether the OS reports notification support at all.
+  ipcMain.handle(CH.notifyTest, () => {
+    showOsNotification(
+      { title: 'myFlowForge · 测试通知', body: '如果你看到这条,系统通知工作正常。真实通知仅在 App 不在前台时才会弹出。', route: { workspacePath: '' } },
+      () => { if (mainWinRef && !mainWinRef.isDestroyed()) { mainWinRef.show(); mainWinRef.focus() } },
+    )
+    return { supported: osNotificationsSupported() }
+  })
   // 'done' comes off the chat stream — a chat reply OR a workflow's done narration both emit a chat
   // 'done', so one signal covers both without double-notifying. Sniff it as broadcasts pass through.
   const notifyChatDone = (payload: any) => {

@@ -2,12 +2,19 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
 button:disabled { cursor: default; }
 #pet-root { width: 100%; height: 100%; }
-.pet-stage { position: relative; width: 100%; height: 100%; }
+/* The pet window (140×120 collapsed) is deliberately larger than the ~88px sprite to leave room for the
+   badge / resize handle / popup / bubble. Those transparent margins must NOT eat clicks meant for the
+   apps underneath: pointer-events:none here makes the empty area click-through, and each interactive
+   child re-enables events for its own painted region only (.pet-hit below; .pet-pop.open / .pet-toast /
+   .pet-bubble / .pet-simple already set pointer-events:auto only when visible). This also tightens the
+   hit region that the .pet-stage mouseenter/leave uses to toggle OS-level ignore-mouse, so hovering the
+   margin no longer flips the whole window opaque to the desktop. */
+.pet-stage { position: relative; width: 100%; height: 100%; pointer-events: none; }
 
 /* clickable container that holds the pet body + badge, anchored to the window corner.
    --pet-size is set inline on .pet-stage from settings.pet.scale (88px at scale=1) — every hard
    dependency on the 88px sprite below goes through it so the resize handle scales the whole pet. */
-.pet-hit { position: absolute; width: var(--pet-size, 88px); height: var(--pet-size, 88px); padding: 0; background: transparent; border: 0; cursor: grab; }
+.pet-hit { position: absolute; width: var(--pet-size, 88px); height: var(--pet-size, 88px); padding: 0; background: transparent; border: 0; cursor: grab; pointer-events: auto; }
 .pet-hit:active { cursor: grabbing; }
 /* The pet body is a <button>; without this, clicking it draws the platform's native focus ring — an
    orange rounded rectangle around the sprite on a transparent frameless window (looked like a stray box). */
