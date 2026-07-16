@@ -43,6 +43,7 @@ export interface StatusBarProps {
     checking: boolean
     uptodate: boolean
     checkFailed: boolean
+    checkError?: string | null
     onCheck: () => void
     onOpenUpgrade: () => void
   }
@@ -110,7 +111,7 @@ export function StatusBar({ providers, sbLog, sbTerm, usageByProvider, update }:
         {update && (
           <span
             className={'it sb-ver' + (update.checkFailed ? ' failed' : '')}
-            title={update.checkFailed ? '检查更新失败:无法连接 GitHub(可在设置里配置代理),点击重试' : '点击检查更新'}
+            title={update.checkFailed ? `检查更新失败:无法连接 GitHub(可在设置里配置代理),点击重试${update.checkError ? `\n原因:${update.checkError}` : ''}` : '点击检查更新'}
             onClick={update.onCheck}
           >
             {update.checking ? '检查中…'

@@ -90,6 +90,7 @@ interface WorkspaceViewProps {
   inspectorWidth?: number
   onInspectorHandleDown?: (e: ReactPointerEvent<HTMLDivElement>) => void
   inspectorCollapsed?: boolean
+  searchSignal?: number   // 递增即触发全局搜索:切到文件树并聚焦搜索框(Cmd+Shift+F)
   sessionsApi?: SessionsApi
   onEditWorkspace?: () => void
   archived?: boolean
@@ -130,10 +131,12 @@ function Copyable({ text, className }: { text: string; className?: string }) {
   )
 }
 
-export function WorkspaceView({ engine, providers, workspacePath, pendingStartOpts, onStartRun, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange }: WorkspaceViewProps) {
+export function WorkspaceView({ engine, providers, workspacePath, pendingStartOpts, onStartRun, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
+  // 全局搜索(Cmd+Shift+F):App 每次触发就 +1 → 切到文件树 tab;同一信号继续透传给 FileTreePane 聚焦搜索框。
+  useEffect(() => { if (searchSignal) setActiveTab('files') }, [searchSignal])
   const [quickSeed, setQuickSeed] = useState<{ text: string; nonce: number }>()
   // Task 15/16 shared mechanism: clicking "修改方向…" on a plan card (Task 15) or a stage-gate card
   // (Task 16, not yet wired) seeds a quote marker into the MAIN composer instead of opening a cramped
@@ -1081,7 +1084,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             <div className={`insp-pane${activeTab === 'files' ? ' on' : ''}`} id="pane-files">
               {activeTab === 'files' && <>
                 <ProjectPicker projects={projects} activeCwd={selected} onSelect={setActiveCwd} />
-                <FileTreePane tree={treeForPane} onOpen={openBrowse} selected={browse ? preview?.file : undefined} searchRoot={treeSearchRoot} onRefresh={refreshInspector} />
+                <FileTreePane tree={treeForPane} onOpen={openBrowse} selected={browse ? preview?.file : undefined} searchRoot={treeSearchRoot} onRefresh={refreshInspector} focusSignal={searchSignal} />
               </>}
             </div>
           </div>

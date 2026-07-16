@@ -75,6 +75,37 @@ html[data-bg-scope="app"]:not([data-theme="light"]) .titlebar,
 html[data-bg-scope="app"]:not([data-theme="light"]) .statusbar {
   text-shadow: 0 1px 2px rgba(0, 0, 0, .5);
 }
+/* 「整个应用」壁纸 + 深色系:下面这几个小控件仍是不透明的 --surface / --bg 深底,叠在亮壁纸上显成一块块【纯黑】。
+   只把它们换成半透明(壁纸透出来把黑冲淡)。纯深色(无壁纸)时维持原设计不动;浅色主题本就不黑,排除。
+   注意:必须【包含】磨砂(data-glass)模式——用户开了磨砂时这些控件仍是不透明黑底(glass.css 没覆盖它们),
+   之前误加 :not([data-glass=on]) 把这条整段排除掉了,所以一个都没变。 */
+html[data-bg-scope="app"]:not([data-theme="light"]) :is(
+  .ws-scount,           /* 侧栏工作区的会话数徽章 */
+  .chg-group-h,         /* 变更面板的项目分组头(go-blog / zgh / go-blog-backend) */
+  .insp-proj select,    /* 「全部项目」下拉 */
+  .tree-search,         /* 文件树 / 变更 的搜索框(放大镜 + 输入) */
+  .tree-expand-tools    /* 文件树右上的刷新 / 隐藏 / 折叠 按钮组容器 */
+) {
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
+}
+html[data-bg-scope="app"]:not([data-theme="light"]) :is(
+  .wf-glance-head:hover, /* 工作流列表行 hover */
+  .ws-sess:hover,        /* 侧栏会话行 hover */
+  .ws-item:hover,        /* 侧栏工作区行 hover(example 那种黑块) */
+  .tree-row:hover        /* 文件树文件 / 文件夹行 hover(zgh 那条黑) */
+) {
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
+}
+html[data-bg-scope="app"]:not([data-theme="light"]) :is(
+  .search-mode button.on,               /* 文件名 / 内容 选中项 */
+  .tree-tool-btn:hover, .tree-tool-btn.on /* 刷新 / 隐藏 / 折叠 按钮本身的 hover / 激活 */
+) {
+  background: color-mix(in srgb, var(--bg) 50%, transparent);
+}
+/* 铃铛红标外圈那道近黑分隔环(border 2px --bg-2,壁纸下成黑圈)→ 换成一圈淡色半透明,红标与壁纸之间干净过渡。 */
+html[data-bg-scope="app"]:not([data-theme="light"]) .tb-bell .nb-badge {
+  border-color: color-mix(in oklab, var(--fg) 40%, transparent);
+}
 
 .body { flex: 1; display: flex; min-height: 0; }
 .titlebar { flex: 0 0 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;

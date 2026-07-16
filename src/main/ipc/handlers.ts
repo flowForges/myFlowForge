@@ -149,7 +149,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const updateChecker = createUpdateChecker({
     repo: UPDATE_REPO,
     currentVersion: () => app.getVersion(),
-    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeProxyFetch(readSettings().termProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, arch: process.arch }),
+    // proxy-THEN-direct: the update check must survive a down/misrouted/socks proxy (settings.termProxy).
+    // makeProxyFetch had no direct fallback, so any proxy hiccup → throw → 永久「检查失败」even when GitHub
+    // is directly reachable. makeContentFetch tries the proxy then falls back to a direct fetch.
+    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().termProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, arch: process.arch }),
     emit: broadcast,
     setTimeout: (fn, ms) => { setTimeout(fn, ms) },
     setInterval: (fn, ms) => { setInterval(fn, ms) },
@@ -162,7 +165,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const info = updateChecker.current()
     if (!info) return
     const installer = pickInstaller({
-      fetch: (url, init) => makeProxyFetch(readSettings().termProxy)(url, init as any) as any,
+      fetch: (url, init) => makeContentFetch(readSettings().termProxy)(url, init as any) as any,
       openPath: shell.openPath,
       showItemInFolder: shell.showItemInFolder,
       join,
@@ -437,9 +440,38 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // sub-agent's forge_ask here so it surfaces as a select/input ReqCard and the answer flows back.
   const chatAsks = new Map<string, (r: { decision: 'allow' | 'deny'; value?: string; choice?: number }) => void>()
   let chatAskSeq = 0
+  // Owner (ws + session) + type of every OUTSTANDING chat gate, so a turn that ends WITHOUT the user
+  // answering (CLI/turn timeout, error, 停止) can drain its orphaned gates — resolve the blocked promise
+  // AND broadcast the matching *-resolved event. Without this the pet's 需确认/需输入 indicator (driven
+  // purely by confirm-request→confirm-resolved in useChatActivity) stays stuck forever, because no
+  // confirm-resolved is ever emitted for an abandoned gate. (proposeRun already drains this way; chat
+  // confirm/ask never did.)
+  const chatGateOwner = new Map<string, { ws: string; sessionId: string; type: 'confirm' | 'ask' }>()
+  const drainChatGates = (wsPath: string, opts: { sessionId?: string; type?: 'confirm' | 'ask' } = {}) => {
+    for (const [id, meta] of [...chatGateOwner]) {
+      if (meta.ws !== wsPath) continue
+      if (opts.sessionId && meta.sessionId !== opts.sessionId) continue
+      if (opts.type && meta.type !== opts.type) continue
+      chatGateOwner.delete(id)
+      if (meta.type === 'confirm') {
+        const r = chatConfirms.get(id)
+        if (!r) continue
+        chatConfirms.delete(id)
+        r('deny')
+        broadcast(CH.chatEvent, { workspacePath: meta.ws, sessionId: meta.sessionId, type: 'confirm-resolved', id })
+      } else {
+        const r = chatAsks.get(id)
+        if (!r) continue
+        chatAsks.delete(id)
+        r({ decision: 'deny' })
+        broadcast(CH.chatEvent, { workspacePath: meta.ws, sessionId: meta.sessionId, type: 'ask-resolved', id })
+      }
+    }
+  }
   const chatAsk = (wsPath: string, sessionId: string, question: string, options?: { t: string; d: string }[], agentName?: string): Promise<string | null> =>
     new Promise((resolve) => {
       const id = `ca-${++chatAskSeq}`
+      chatGateOwner.set(id, { ws: wsPath, sessionId, type: 'ask' })
       chatAsks.set(id, (r) => {
         if (options && options.length) resolve(r.decision === 'deny' ? null : (options[r.choice ?? 0]?.t ?? null))
         else resolve(r.decision === 'allow' ? (r.value ?? '') : null)
@@ -569,6 +601,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const confirm = (req: { title: string; where?: string }) => new Promise<'allow' | 'deny'>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
       chatConfirms.set(id, resolve)
+      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm' })
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where })
     })
     const store = new RunStore(payload.workspacePath, 'chat-bridge')
@@ -605,8 +638,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
             batchRunId = runId
             broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'delegate-start', id: `delegate-batch:${runId}`, batch: { runId, agents: agents.map(a => ({ ...a, status: 'run' as const })), done: false, task: a.task, brief: a.brief } })
           },
-          onAgentState: (runId, agentId, status, output) => {
-            broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'delegate-progress', id: `delegate-batch:${runId}`, agentId, status, output })
+          onAgentState: (runId, agentId, status, output, activity) => {
+            broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'delegate-progress', id: `delegate-batch:${runId}`, agentId, status, output, activity })
           },
           // 派发前权限门(runDelegate 仅在 codex + 写类 + 盾牌未到「完全」时才调用):codex 需完全权限才能让子代理
           // 的 forge_handoff/forge_ask 正常工作。弹一次卡片让用户【本次授权】(不改持久盾牌);选「仅当前权限」则用当前
@@ -707,7 +740,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       }
       return msg
     }
-    finally { await bridge?.close().catch(() => {}) }
+    finally {
+      // The turn is over. If it ended while a CLI permission gate (confirm) was still open — CLI/turn
+      // timeout, error, or the user moved on — drain THIS turn's confirm gates so the pet's 需确认
+      // indicator (and the main-window card) don't stay stuck forever awaiting a confirm-resolved that
+      // would never come. Scoped to confirm + this session so background delegate asks (which outlive
+      // the turn) are untouched.
+      drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm' })
+      await bridge?.close().catch(() => {})
+    }
   }
   const chatQueue = new ChatQueue(runTurn, broadcast)
   ipcMain.handle(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
@@ -718,7 +759,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
   // 「停止」既停 chat 轮次,也取消该工作区所有在【后台】跑的 delegate 子代理(fire-and-forget 后它们已脱离
   // chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮取消表才杀得掉,否则会留成孤儿)。
-  ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string }) => { chatQueue.stop(a.workspacePath); cancelWorkspaceDelegates(a.workspacePath) })
+  ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string }) => {
+    chatQueue.stop(a.workspacePath); cancelWorkspaceDelegates(a.workspacePath)
+    // 停止 tears down the turn AND every background delegate for this ws → drain ALL their open gates
+    // (confirm + ask) so no pet indicator / chat card is left stranded on a promise nobody will answer.
+    drainChatGates(a.workspacePath)
+  })
   ipcMain.handle(CH.sessionList, (_e, wsPath: string) => readSessions(wsPath))
   ipcMain.handle(CH.sessionNew, (_e, wsPath: string) => {
     if (isArchivedWorkspace(wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
@@ -767,6 +813,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const askResolve = chatAsks.get(a.id)
     if (askResolve) {
       chatAsks.delete(a.id)
+      chatGateOwner.delete(a.id)
       askResolve({ decision: a.decision === 'modify' ? 'deny' : a.decision, value: a.value, choice: a.choice })
       broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'ask-resolved', id: a.id })
       return
@@ -774,6 +821,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const resolve = chatConfirms.get(a.id)
     if (!resolve) return
     chatConfirms.delete(a.id)
+    chatGateOwner.delete(a.id)
     resolve(a.decision === 'modify' ? 'deny' : a.decision)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
   })

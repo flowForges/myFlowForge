@@ -147,8 +147,12 @@ export function useChat(
         setMessages(m => m.some(x => x.id === e.id) ? m : [...m, { ...blankAi(e.id), think: undefined, delegate: e.batch }])
       }
       else if (e.type === 'delegate-progress') {
+        // Live: 'run' updates stream the growing output + latest activity line; a terminal status
+        // ('ok'/'idle') clears activity (the sub-agent stopped — no "current action" left).
         setMessages(m => m.map(x => x.id === e.id && x.delegate
-          ? { ...x, delegate: { ...x.delegate, agents: x.delegate.agents.map(a => a.agentId === e.agentId ? { ...a, status: e.status, output: e.output ?? a.output } : a) } }
+          ? { ...x, delegate: { ...x.delegate, agents: x.delegate.agents.map(a => a.agentId === e.agentId
+              ? { ...a, status: e.status, output: e.output ?? a.output, activity: e.status === 'run' ? (e.activity ?? a.activity) : undefined }
+              : a) } }
           : x))
       }
       else if (e.type === 'delegate-done') {

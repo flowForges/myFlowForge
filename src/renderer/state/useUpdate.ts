@@ -39,6 +39,9 @@ export function useUpdate(): UpdateApi {
         case 'checkfailed':
           // A failed check must NOT read as "up to date". Show 检查失败 briefly, then fall back to idle
           // (keeping any previously-known pending update badge intact — info is untouched here).
+          // Keep the real reason (proxy down / 403 rate-limit / network) so the tooltip can surface it
+          // instead of swallowing it — this used to be dropped, making failures undiagnosable.
+          setError(e.message || null)
           setPhase('checkfailed')
           setTimeout(() => setPhase(p => (p === 'checkfailed' ? 'idle' : p)), 3000)
           break

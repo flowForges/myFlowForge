@@ -94,6 +94,31 @@ describe('runDelegate', () => {
     expect(r.text).toContain('root done')
   })
 
+  it('运行中通过 onAgentState 实时回传执行动作(activity)与状态,终态带产出', async () => {
+    const provider: AgentProvider = {
+      id: 'fake', displayName: 'F', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => true, listModels: async () => [],
+      run(task, cb) {
+        cb.onLog({ ts: '', text: 'Read src/login.ts', level: 'accent', kind: 'file' })  // → activity
+        cb.onLog({ ts: '', text: '部分产出…', level: 'accent', kind: 'output' })          // 产出 delta(不该污染 activity)
+        cb.onHandoff?.({ summary: 'done' })
+        cb.onDone({ ok: true })
+        return { id: task.agentId, cancel() {}, done: Promise.resolve({ ok: true } as AgentResult) }
+      },
+    }
+    const runDelegate = makeRunDelegate(deps(provider, ws([])))
+    const states: { status: string; activity?: string; output?: string }[] = []
+    await new Promise<void>((resolve) => {
+      void runDelegate({ workspacePath: '/ws', task: 't', provider: 'fake', model: 'm',
+        onAgentState: (_r, _id, status, output, activity) => { states.push({ status, activity, output }) },
+        onComplete: () => resolve() })
+    })
+    // 运行中至少有一条 'run' 回传,带最近动作行(且没被 output delta 覆盖成答案文本)
+    expect(states.some(s => s.status === 'run' && s.activity === 'Read src/login.ts')).toBe(true)
+    // 终态回传完成 + 产出
+    expect(states.some(s => s.status === 'ok' && s.output === 'done')).toBe(true)
+  })
+
   // 过度委派修复:省略 projects 不再铺满所有项目,只派一个工作区根代理(cwd=工作区根,能看到所有项目子目录)。
   it('省略 projects → 只派一个工作区根代理(不再每项目一个)', async () => {
     const runDelegate = makeRunDelegate(deps(fakeProvider({ handoff: (n) => `${n} done` }), ws(['a', 'b', 'c'])))

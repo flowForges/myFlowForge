@@ -66,7 +66,8 @@ export function FileTreePane({
   onOpen,
   selected,
   searchRoot,
-  onRefresh
+  onRefresh,
+  focusSignal
 }: {
   tree: TreeNode[]
   onOpen: (file: string, type: ChangeType, cwd?: string) => void
@@ -76,9 +77,14 @@ export function FileTreePane({
   searchRoot?: string
   /** Manual 刷新: re-read the tree now (aggregate mode has no git watcher, so new files need it). */
   onRefresh?: () => void
+  /** 递增即聚焦搜索框(全局搜索 Cmd+Shift+F);由上层传入,与其它状态解耦。 */
+  focusSignal?: number
 }) {
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<'name' | 'content'>('name')
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  // 全局搜索触发:聚焦并全选搜索框内容,用户直接开打。切到本 tab 是父层(WorkspaceView)负责的。
+  useEffect(() => { if (focusSignal) { const el = searchInputRef.current; el?.focus(); el?.select() } }, [focusSignal])
   const [showHidden, setShowHidden] = useState(false)
   // Spin the 刷新 icon on click so the refresh is visibly acknowledged. onRefresh is fire-and-forget
   // (the tree re-fetches via parent state), so spin for a fixed short beat rather than awaiting it.
@@ -172,6 +178,7 @@ export function FileTreePane({
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
           <input
+            ref={searchInputRef}
             type="text"
             id="treeSearch"
             placeholder={contentMode ? '搜索文件内容…' : '筛选文件…'}
