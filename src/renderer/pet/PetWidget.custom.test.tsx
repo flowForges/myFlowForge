@@ -80,4 +80,23 @@ describe('PetWidget custom skin', () => {
     expect(container.querySelector('img')).toBeNull()
     expect(container.querySelector('svg')).not.toBeNull()
   })
+
+  it('renders the atlas sprite when the custom pet has an atlas', () => {
+    const { container } = render(
+      <PetWidget skin="custom" anim="float" accent="none" state="working"
+        atlas={{ path: 'p1/spritesheet.webp', version: 2 }} action="running" />,
+    )
+    const el = container.querySelector('.pet-atlas') as HTMLElement
+    expect(el).toBeTruthy()
+    expect(el.getAttribute('style') ?? '').toContain('forge-pet://img/p1/spritesheet.webp')
+    // the legacy <img> path is NOT used
+    expect(container.querySelector('.pet-image-front')).toBeNull()
+  })
+
+  it('still renders the legacy image path when no atlas', () => {
+    const { container } = render(
+      <PetWidget skin="custom" anim="float" accent="none" state="idle" customImages={{ idle: 'p2/idle.webp' }} />,
+    )
+    expect(container.querySelector('.pet-atlas')).toBeNull()
+  })
 })

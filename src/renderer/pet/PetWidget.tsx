@@ -2,6 +2,8 @@ import { useEffect, useState, type ReactElement } from 'react'
 import type { Pet, PetState, Anim, Accent } from '@shared/types'
 import { petSrc } from './petSrc'
 import { usePetImageTransition } from './usePetImageTransition'
+import { PetAtlasSprite } from './PetAtlasSprite'
+import type { PetAction } from '@shared/petAtlas'
 
 const SPRITE_SVG: ReactElement = (
   <svg viewBox="0 0 64 64">
@@ -39,9 +41,12 @@ interface PetWidgetProps {
   state?: PetState
   customImages?: Partial<Record<PetState, string>>
   customEmoji?: { name: string; emoji: string; color: string }
+  atlas?: { path: string; version: number }
+  action?: PetAction
+  lookDeg?: number | null
 }
 
-export function PetWidget({ skin, anim, accent, state, customImages, customEmoji }: PetWidgetProps) {
+export function PetWidget({ skin, anim, accent, state, customImages, customEmoji, atlas, action, lookDeg }: PetWidgetProps) {
   const cls = `pet pet-anim-${anim} pet-accent-${accent}`
   const customSrc = customImages?.[state ?? 'idle'] ?? customImages?.idle
   const requestedSrc = petSrc(customSrc)
@@ -60,6 +65,16 @@ export function PetWidget({ skin, anim, accent, state, customImages, customEmoji
       )
     : null
   if (skin === 'custom') {
+    // A Codex v2 atlas pet renders the sprite sheet (animation + look-at-cursor) instead of per-state
+    // images; the shell (badge/handle/bubble) still wraps it via the outer .pet container.
+    if (atlas) {
+      return (
+        <div className={cls} data-skin="custom-atlas">
+          <PetAtlasSprite atlasPath={atlas.path} action={action ?? 'idle'} lookDeg={lookDeg} />
+          {stars}
+        </div>
+      )
+    }
     // A single-image pet stores only images.idle — every other state falls back to it.
     if (requestedSrc && brokenSrc !== requestedSrc && !imageLayers.failed.has(requestedSrc) && imageLayers.front) {
       return (
