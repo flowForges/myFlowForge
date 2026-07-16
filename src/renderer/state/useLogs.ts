@@ -138,7 +138,7 @@ export function useLogs(): LogsApi {
         push([{
           id: `${t}-stalled-${e.agentId}`,
           t, level: 'exec', src: e.agentName, color: 'var(--warn)',
-          text: `疑似卡住:${secs}s 无响应`, streaming: false,
+          text: `仍在推理中:${secs}s 无输出(长时间思考属正常,静默满 6 分钟才会终止)`, streaming: false,
         }])
         return
       }

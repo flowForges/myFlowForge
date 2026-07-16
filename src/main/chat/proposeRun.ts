@@ -40,7 +40,7 @@ export function makeProposeRun(deps: ProposeDeps) {
   // via chat:repropose-workflow), NOT owned by an agent chat turn. Turn cleanup (cancelForWorkspace) must
   // NOT dismiss it — it lives until the user decides (allow/deny). Without this, a switch's fresh card would
   // be created after the triggering turn's preProposes snapshot and get denied when that turn ends (race).
-  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string }; sessionId?: string; brief?: string; recommendReason?: string }): Promise<ProposeResult> => {
+  const fn = (wsPath: string, approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; standalone?: boolean; providerOverride?: { provider: string; model?: string }; sessionId?: string; brief?: string; userMessage?: string; recommendReason?: string }): Promise<ProposeResult> => {
     const raw = deps.readWorkspace(wsPath)
     if (!raw) { deps.emitNote(wsPath, '该工作区不存在,无法发起工作流。'); return Promise.resolve({ approved: false }) }
     // Defensive: production readWorkspace (config/store.ts) already normalizes workflows on every
@@ -62,6 +62,9 @@ export function makeProposeRun(deps: ProposeDeps) {
     if (select?.sessionId) opts = { ...opts, sessionId: select.sessionId }
     // P4: 主代理整理的需求简报,随 run 注入每个 stage 子代理 prompt(一份共享)。
     if (select?.brief) opts = { ...opts, brief: select.brief }
+    // 需求锚点:用户本轮最新原话。主代理是在新旧话题混在一起的历史里提炼 task/brief 的,可能把旧话题
+    // 当成需求写进去;把最新原话作为「以此为准」的地面真相随 run 下发,让阶段子代理在 brief 跑偏时纠偏。
+    if (select?.userMessage) opts = { ...opts, userMessage: select.userMessage }
     // #1 run-level provider override — applies ONLY to ad-hoc runs (no named workflow matched). When the
     // main agent maps the request onto a NAMED workflow (`wf`), that workflow carries the per-stage
     // provider/model the user configured in workflow settings, and those MUST win — otherwise that

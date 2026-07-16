@@ -38,7 +38,7 @@ describe('useLogs heartbeat lifecycle events', () => {
     expect(result.current.logs).toHaveLength(0)
 
     act(() => emitEngine({ type: 'agent:stalled', agentId: 'a1', agentName: '开发代理', wsName: 'ws', silentMs: 90_000 }))
-    expect(result.current.logs.some(l => l.src === '开发代理' && l.text.includes('疑似卡住'))).toBe(true)
+    expect(result.current.logs.some(l => l.src === '开发代理' && l.text.includes('仍在推理中'))).toBe(true)
   })
 
   it('adds state lines when run:update transitions to stalled or awaiting', () => {

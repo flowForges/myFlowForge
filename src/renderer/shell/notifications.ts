@@ -83,7 +83,7 @@ export function notifFromLifecycle(e: LifecycleNote): Notif {
       return { ic: 'ok', cls: 'ni-ok', t: `<b>${ws}</b> 工作流已全部完成`, m: `${ws} · 刚刚`, unread: true, ...route }
     case 'stalled': {
       const secs = e.silentMs ? Math.round(e.silentMs / 1000) : 90
-      return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 疑似卡住(${secs}s 无响应)`, m: `${ws} · 刚刚`, unread: true, ...route }
+      return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 仍在推理中(${secs}s 无输出,长时间思考属正常)`, m: `${ws} · 刚刚`, unread: true, ...route }
     }
     case 'awaiting':
       return { ic: 'warn', cls: 'ni-warn', t: `<b>${name}</b> 需要你确认/输入`, m: `${ws} · 刚刚`, unread: true, ...route }

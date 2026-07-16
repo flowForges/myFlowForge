@@ -4,7 +4,7 @@ import { CH } from './channels'
 
 let capturedBus: EventBus | null = null
 
-const { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls } = vi.hoisted(() => {
+const { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls, resolveCalls } = vi.hoisted(() => {
   const lastOrchOpts = { current: null as any }
   const liveRun = { current: null as unknown }
   const subscribers: Array<(e: any) => void> = []
@@ -14,7 +14,8 @@ const { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMoc
   const readWorkflowsMock = vi.fn((): { workflows: any[] } => ({ workflows: [] }))
   const writeWorkflowsMock = vi.fn()
   const startRunCalls: any[] = []
-  return { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls }
+  const resolveCalls: any[] = []
+  return { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls, resolveCalls }
 })
 
 const SETTINGS = {
@@ -47,7 +48,7 @@ vi.mock('../orchestrator/orchestrator', () => ({
       lastOrchOpts.current = opts
     }
     startRun(o: any) { startRunCalls.push(o); return Promise.resolve() }
-    resolve() {}
+    resolve(p: any) { resolveCalls.push(p) }
     cancel() {}
     getRun() { return liveRun.current }
   },
@@ -203,6 +204,7 @@ beforeEach(async () => {
   appendMessageMock.mockReset()
   readWorkflowsMock.mockReset().mockReturnValue({ workflows: [] })
   startRunCalls.length = 0
+  resolveCalls.length = 0
   writeWorkflowsMock.mockReset()
   refreshProviderModelsMock.mockReset()
   installPluginMock.mockReset()
@@ -354,6 +356,43 @@ describe('registerIpc broadcast wiring', () => {
     resolveFirst()
     await new Promise(r => setTimeout(r, 0))
     expect(sendTurn).toHaveBeenCalledTimes(2)
+  })
+
+  it('chatSend while a stage review gate is pending reconciles it into 打回重做 instead of a new turn', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { sendTurn } = await import('../chat/chatService') as any
+    sendTurn.mockReset().mockResolvedValue(undefined)
+    // Live run paused at a 需求评估 阶段评审门 (reworkable confirm, id starts with `review-`).
+    liveRun.current = {
+      id: 'r1', workspacePath: '/ws/a', status: 'run',
+      pending: [{ id: 'review-requirement-1', kind: 'confirm', reworkable: true, agentName: '需求评估' }],
+    }
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: '评审得不对，应该定制一个新 skill', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    // The gate was resolved as 打回重做 with the user's message as the revision direction…
+    expect(resolveCalls).toEqual([{ id: 'review-requirement-1', decision: 'modify', value: '评审得不对，应该定制一个新 skill' }])
+    // …the user message is surfaced in chat (continuity)…
+    expect(sent.some(([c, p]) => c === CH.chatEvent && (p as any).type === 'user')).toBe(true)
+    // …and NO ordinary main-agent turn ran (which is what used to pop a redundant second propose 门).
+    expect(sendTurn).not.toHaveBeenCalled()
+  })
+
+  it('chatSend with no pending review gate runs a normal turn (does not touch the engine)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { sendTurn } = await import('../chat/chatService') as any
+    sendTurn.mockReset().mockResolvedValue(undefined)
+    liveRun.current = { id: 'r1', workspacePath: '/ws/a', status: 'run', pending: [] }
+    registerIpc(() => {}, {})
+    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'hi', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    expect(resolveCalls).toEqual([])
+    expect(sendTurn).toHaveBeenCalledTimes(1)
   })
 
   it('chatSend while busy broadcasts queue-event with busy:true and a queue entry', async () => {
