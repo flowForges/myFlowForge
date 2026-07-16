@@ -181,7 +181,7 @@ export function createForgeServer(send: SendFn, allowed?: Set<string>): McpServe
   if (reg.has('forge_delegate')) server.registerTool(
     'forge_delegate',
     {
-      description: '把一个"单一动作"任务(读/检索/分析某处代码,或小改动/写测试)直接派给子代理执行:子代理会 cd 进每个目标项目目录(加载该项目 skills/rules)干活并汇报结论。用于不跨阶段的即时操作,不弹工作流门。参数:task=要子代理做的具体事(尽量含背景与目标);projects=只在这些项目名里执行(省略=全部关联项目);write=是否允许改文件(省略/false=只读探查,true=可改)。返回各子代理的产出汇总,你需自己整合后回复用户。',
+      description: '把一个"单一动作"任务(读/检索/分析某处代码,或小改动/写测试)直接派给子代理执行:子代理会 cd 进目标目录(加载该目录 skills/rules)干活并汇报结论。用于不跨阶段的即时操作,不弹工作流门。参数:task=要子代理做的具体事(尽量含背景与目标);projects=每个命名项目一个子代理并行执行(【省略=只派一个工作区根代理,它能看到所有项目子目录】;像"读某个文件/一处小改"这类单一动作请省略,不要为省事而铺满所有项目;确实要并行处理多个项目才显式列出项目名);write=是否允许改文件(省略/false=只读探查,true=可改)。返回子代理的产出汇总,你需自己整合后回复用户。',
       inputSchema: { task: z.string(), projects: z.array(z.string()).optional(), write: z.boolean().optional(), brief: z.string().optional() },
     },
     async ({ task, projects, write, brief }) => {

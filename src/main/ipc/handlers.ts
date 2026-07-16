@@ -597,6 +597,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
           provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId,
           // Register each delegate sub-agent's session for cancellation, so the chat 停止 button kills it.
           onSession: (s) => chatQueue.registerActive(payload.workspacePath, () => s.cancel()),
+          // 派发前权限门(runDelegate 仅在 codex + 写类 + 盾牌未到「完全」时才调用):codex 需完全权限才能让子代理
+          // 的 forge_handoff/forge_ask 正常工作。弹一次卡片让用户【本次授权】(不改持久盾牌);选「仅当前权限」则用当前
+          // 盾牌权限跑,产出靠 agent_message 兜底文本回传。返回 'full'/'default' 给 runDelegate 决定这次的 sandbox。
+          askPermission: async ({ projects }) => {
+            const where = projects.length ? `（项目：${projects.join('、')}）` : ''
+            const q = `本次委派会修改文件并需回传结果${where}。codex 需要「完全」权限才能正常回传/交互，当前盾牌不是。是否【本次】授权完全权限？（仅本次运行，不改你输入框下方的权限盾牌）`
+            const options = [
+              { t: '授权本次', d: '本次运行给完全权限，forge 交接/提问正常工作' },
+              { t: '仅当前权限', d: '沿用当前盾牌权限（工作区写），结果以文本回传' },
+            ]
+            const ans = await chatAsk(payload.workspacePath, payload.sessionId, q, options, '权限确认')
+            return ans === '授权本次' ? 'full' : 'default'
+          },
           // Bubble a delegate sub-agent's forge_ask to the user as a chat select/input card (same ReqCard
           // the workflow gate uses); the answer resolves the sub-agent's blocked forge_ask.
           // 交互中转(方案A · 连贯呈现 + 确定回传):委派子代理的 forge_ask 在主代理对话流里以交互卡片呈现
