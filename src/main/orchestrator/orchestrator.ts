@@ -92,6 +92,9 @@ export interface StartRunOpts {
   permissionMode?: import('@shared/permissions').PermissionMode
   // 主代理整理的需求级简报(背景/目标/约束/指定插件),注入每个 stage 子代理 prompt(一份共享)。
   brief?: string
+  // 用户本轮触发工作流的最新原始消息。作为「需求以此为准」的地面真相注入每个 stage 子代理 prompt——
+  // 当主代理把 brief/task 提炼跑偏(混入旧话题)时,阶段子代理据此纠偏。
+  userMessage?: string
 }
 export interface OrchestratorOpts {
   bus: EventBus
@@ -124,6 +127,7 @@ export class Orchestrator {
   private task?: string
   private permissionMode?: import('@shared/permissions').PermissionMode
   private brief?: string
+  private userMessage?: string
   private activeSessions = new Set<import('../agents/types').AgentSession>()
   private cancelled = false
   private now: () => number
@@ -145,11 +149,12 @@ export class Orchestrator {
       return { clear: () => clearInterval(id) }
     })
     // Silence = NO stdout byte at all (onActivity beats on any byte). A single big LLM turn — e.g. the
-    // Design stage scanning several projects with a large context on a slow/thinking model — legitimately
-    // produces no output for minutes while it waits for the model, and killing it there yields a WRONG,
-    // partial plan (worse than waiting). So warn at 2min but only kill after 6min of total silence, which
-    // still catches a genuinely hung process (silent forever) without false-killing slow-but-live turns.
-    this.hbCfg = opts.heartbeat ?? { stallMs: 120_000, killGraceMs: 240_000, pingMs: 15_000 }
+    // 需求评估/Design stage reasoning over a large context on a slow/thinking model — legitimately produces
+    // no output for MANY minutes while it waits for the model, and killing it there yields a WRONG, partial
+    // result (worse than waiting). Warning too eagerly (was 2min) made healthy long-reasoning turns spam a
+    // scary "疑似卡死" every couple minutes. So warn only after 3min of silence but still kill at 6min total
+    // (stallMs+killGraceMs), which catches a genuinely hung process without false-alarming slow-but-live turns.
+    this.hbCfg = opts.heartbeat ?? { stallMs: 180_000, killGraceMs: 180_000, pingMs: 15_000 }
     this.projectRetries = opts.projectRetries ?? 1
   }
 
@@ -339,7 +344,7 @@ export class Orchestrator {
       if (eff.kind === 'stall') {
         agent.state = 'stalled'
         const secs = Math.round(eff.silentMs / 1000)
-        this.pushLog(agent, { ts: timeStr(), text: `疑似卡住:${secs}s 无响应`, level: 'info' })
+        this.pushLog(agent, { ts: timeStr(), text: `仍在推理中:${secs}s 无输出(长时间思考属正常,静默满 6 分钟才会终止)`, level: 'info' })
         this.bus.emit({ type: 'agent:state', agentId: agent.id, state: 'stalled' })
         this.bus.emit({ type: 'agent:stalled', agentId: agent.id, agentName: agent.name, wsName: this.run.workspaceName, silentMs: eff.silentMs })
         this.update(true)
@@ -461,7 +466,7 @@ export class Orchestrator {
     try {
       // this.briefs is read at task start; parallel develop-stage agents all get the same
       // pre-stage snapshot (briefs pushed mid-stage by a sibling don't retroactively appear — by design)
-      const prompt = buildStagePrompt(spec.name, this.briefs, { textFallback: !provider.capabilities.mcpTools, task: this.task, lens, stageKey: spec.key, stageAppend: spec.prompt, reworkNote: spec.reworkNote, producesDoc: spec.producesDoc ?? spec.key === 'design', brief: this.brief })
+      const prompt = buildStagePrompt(spec.name, this.briefs, { textFallback: !provider.capabilities.mcpTools, task: this.task, lens, stageKey: spec.key, stageAppend: spec.prompt, reworkNote: spec.reworkNote, producesDoc: spec.producesDoc ?? spec.key === 'design', brief: this.brief, userMessage: this.userMessage })
       const session = provider.run(
         { stageKey: stage.key, agentId: agent.id, name: agent.name, prompt, cwd, model: spec.model, permissionMode: this.permissionMode },
         this.callbacksFor(stage, agent, store), env
@@ -569,6 +574,7 @@ export class Orchestrator {
     this.task = opts.task
     this.permissionMode = opts.permissionMode
     this.brief = opts.brief
+    this.userMessage = opts.userMessage
     this.cancelled = false
     this.run = { id: opts.runId, workspaceName: opts.workspaceName, workspacePath: opts.workspacePath, sessionId: opts.sessionId, workflowId: opts.workflowId, workflowName: opts.workflowName, projects: opts.developProjects.map(p => ({ name: p.name, cwd: p.cwd })), status: 'run', stages: opts.resume ? [...opts.resume.completedStages] : [], pending: [] }
     this.heartbeater = new Heartbeater(this.hbCfg, this.now)

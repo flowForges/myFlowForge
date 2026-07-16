@@ -61,12 +61,17 @@ function executeNowDirective(stageName: string, producesDoc: boolean): string {
 export function buildStagePrompt(
   stageName: string,
   briefs: HandoffBrief[],
-  opts: { textFallback: boolean; task?: string; lens?: ReviewLens; stageKey?: string; stageAppend?: string; reworkNote?: string; producesDoc?: boolean; brief?: string },
+  opts: { textFallback: boolean; task?: string; lens?: ReviewLens; stageKey?: string; stageAppend?: string; reworkNote?: string; producesDoc?: boolean; brief?: string; userMessage?: string },
 ): string {
   let result = opts.task ? `任务: ${opts.task}\n\n当前阶段: ${stageName}` : stageName
   // 主代理整理的需求级简报(背景/目标/约束/指定插件),置于最前作为执行上下文——修"工作流不带上下文"。
   const brief = (opts.brief ?? '').trim()
   if (brief) result = `【需求简报 — 主代理整理的背景与要求】\n${brief}\n\n` + result
+  // 需求锚点(最高权威):用户本轮触发工作流的最新原话。主代理的 task/brief 是从"新旧话题混在一起"的
+  // 历史里提炼的,可能把上一个已结束的旧话题误当成本次需求。以下原话是需求的最终依据:若上面的任务/
+  // 简报在"本次到底要做什么"上与这条原话有出入,一律以这条原话为准,只做与它相关的事,忽略无关的旧需求。
+  const userMessage = (opts.userMessage ?? '').trim()
+  if (userMessage) result = `【用户最新原话 — 需求以此为准,与上文任务/简报冲突时以本条为最终依据】\n${userMessage}\n\n` + result
 
   // 返工:用户审阅上一版后「打回重做」并给出的修改方向。以最高优先级明确要求重做整改,而不是复述。
   const rework = (opts.reworkNote ?? '').trim()

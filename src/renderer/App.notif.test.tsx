@@ -75,7 +75,7 @@ describe('App lifecycle notifications', () => {
     act(() => emit({ type: 'agent:stalled', agentId: 'a1', agentName: '<img src=x onerror=alert(1)>dev', wsName: 'ws', silentMs: 90_000 }))
     fireEvent.click(screen.getByTitle('通知'))
 
-    await waitFor(() => expect(notificationTexts(container).some(text => text.includes('dev 疑似卡住'))).toBe(true))
+    await waitFor(() => expect(notificationTexts(container).some(text => text.includes('dev 仍在推理中'))).toBe(true))
     const notifHtml = container.querySelector('.notif-list')?.innerHTML ?? ''
     expect(notifHtml).not.toContain('<img')
     expect(notifHtml).not.toContain('onerror')

@@ -582,6 +582,28 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     void proposeRun(a.workspacePath, a.approach, a.task, { ...(a.workflowId ? { workflowId: a.workflowId } : {}), standalone: true, sessionId: readSessions(a.workspacePath).activeSessionId })
   })
   const runTurn = async (payload: ChatSendPayload) => {
+    // Gate/chat continuity: a live run paused at a 阶段评审门 (需求/设计 阶段完成后的 approve/打回重做/终止 门)
+    // is normally answered by clicking the card. If the user instead types their reaction into chat ("评审得
+    // 不对，因为…"), reconcile it INTO that gate as 打回重做 (decision:'modify') so the run re-does that stage
+    // with the user's correction — analyzeRework runs the feedback through the main agent, exactly "据门内容+
+    // 用户输入重新整理，重跑，结束旧门，对话连续". Without this, the gate dangles: the message runs as an
+    // ordinary turn (the agent may even pop a second propose 门), the review 门 sits orphaned until the user
+    // later clicks 终止, which tears down the whole run and narrates "编排…失败" — the discontinuity users hit.
+    // reworkable is true ONLY for stage review gates (see PendingAction), so it uniquely identifies them.
+    {
+      const live = orch.getRun()
+      const gate = live && live.status === 'run' && live.workspacePath === payload.workspacePath
+        ? live.pending.find(p => p.kind === 'confirm' && p.reworkable && p.id.startsWith('review-'))
+        : undefined
+      if (gate) {
+        const umsg: ChatMessage = { id: `u-${Date.now()}`, who: 'user', text: payload.text, ts: new Date().toISOString().slice(11, 19) }
+        appendMessage(payload.workspacePath, payload.sessionId, umsg)
+        broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'user', message: umsg })
+        orch.resolve({ id: gate.id, decision: 'modify', value: payload.text })
+        emitNote(payload.workspacePath, payload.sessionId, `已把你的意见作为修改方向，将「${gate.agentName}」阶段打回重做，稍后回流新一版结果。`)
+        return umsg
+      }
+    }
     // Deterministic conversational resume: if the user asks to continue and a cancelled/failed run
     // exists, resume via the engine directly — bypassing the LLM propose path (which blocks on
     // approval and is killed by codex's 180s turn timeout, the very failure that stranded the user).
@@ -618,7 +640,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         proposedWorkflow = true
         if (guardBlocked()) { emitNote(payload.workspacePath, payload.sessionId, '已达最大修改次数,请直接批准或取消。'); return Promise.resolve({ approved: false }) }
         // #1: carry the chat's currently-selected main agent as this run's provider override.
-        return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId })
+        // Anchor: the user's latest raw message (payload.text) is the ground-truth requirement. The main
+        // agent authors task/brief from a history where old + new topics are mixed and can latch onto a
+        // stale topic; passing the raw latest message lets every stage prefer it over a mis-summarized brief.
+        return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId, userMessage: payload.text })
       },
       delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) => {
         delegatedAny = true

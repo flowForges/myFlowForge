@@ -9,6 +9,15 @@ import { readCodexModelsCache } from './codexModels'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
 
+// codex (Rust) emits internal engine logs on stderr — e.g.
+// `codex_models_manager::manager::failed to refresh available models: timeout waiting for child process to exit`
+// — which are NOT part of the agent's answer. We surface codex stderr as chat "思考" (onStatus → think-delta),
+// so these Rust module lines (`<crate>::<module>::…`) would show up as scary red noise every turn. Filter them
+// out of the live display only; rawErr still keeps everything for the no-reply diagnostic path.
+function isCodexInternalLog(line: string): boolean {
+  return /^codex_[a-z0-9_]+::/.test(line)
+}
+
 // Render the spawned command for the debug log: clip each arg (the prompt can be huge) and the total.
 function clipArgs(bin: string, args: string[]): string {
   const parts = [bin, ...args.map(a => { const s = String(a); return s.length > 160 ? s.slice(0, 160) + `…(+${s.length - 160})` : s })]
@@ -289,12 +298,12 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         rawErr = cap(rawErr, s)
         errBuf += s
         let nl: number
-        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line) cb.onStatus?.(line) }
+        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line && !isCodexInternalLog(line)) cb.onStatus?.(line) }
       })
       const done = child.then((res) => {
         wd.clear()
         processLine(buf); buf = ''
-        if (errBuf.trim()) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
+        if (errBuf.trim() && !isCodexInternalLog(errBuf.trim())) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
         // No reply produced → surface the best diagnostic we have so it's never a silent empty bubble:
         // a parsed error event, else the raw stderr/stdout codex emitted, else a bare exit-code note.
         if (!sawDelta) {
