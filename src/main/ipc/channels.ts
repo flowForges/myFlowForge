@@ -195,4 +195,26 @@ export const CH = {
   memoryRead: 'memory:read',
   memoryWrite: 'memory:write',
   memoryClear: 'memory:clear',
+  // Run2 (P3-A): additive, coexists with the existing engine* orchestrator channels above.
+  run2Start: 'run2:start',
+  run2ResolveGate: 'run2:resolve-gate',
+  run2ResolveLane: 'run2:resolve-lane',
+  run2AddFeedback: 'run2:add-feedback',
+  run2EditFeedback: 'run2:edit-feedback',
+  run2RemoveFeedback: 'run2:remove-feedback',
+  run2Abort: 'run2:abort',
+  run2Event: 'run2:event',
+  run2Update: 'run2:update',
 } as const
+
+// Individual named exports (in addition to the CH object above) so callers can `import * as CH from
+// './channels'` and refer to `CH.run2Start` etc. — mirrors how run2Handlers.ts/its test consume this module.
+export const run2Start = CH.run2Start
+export const run2ResolveGate = CH.run2ResolveGate
+export const run2ResolveLane = CH.run2ResolveLane
+export const run2AddFeedback = CH.run2AddFeedback
+export const run2EditFeedback = CH.run2EditFeedback
+export const run2RemoveFeedback = CH.run2RemoveFeedback
+export const run2Abort = CH.run2Abort
+export const run2Event = CH.run2Event
+export const run2Update = CH.run2Update

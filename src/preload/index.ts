@@ -291,6 +291,27 @@ const api = {
   memoryRead: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string }): Promise<string> => ipcRenderer.invoke(CH.memoryRead, a),
   memoryWrite: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string; content: string }): Promise<void> => ipcRenderer.invoke(CH.memoryWrite, a),
   memoryClear: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string }): Promise<void> => ipcRenderer.invoke(CH.memoryClear, a),
+  // Run2 (P3-A): additive API surface for the new headless run controller. Coexists with startRun/resolve/
+  // onEngineEvent above — none of those are touched.
+  run2: {
+    start: (opts: { workspacePath: string; runId: string; stages: unknown[]; projects: unknown[] }) => ipcRenderer.invoke(CH.run2Start, opts),
+    resolveGate: (a: { workspacePath: string; eventId: string; decision: unknown }) => ipcRenderer.invoke(CH.run2ResolveGate, a),
+    resolveLane: (a: { workspacePath: string; eventId: string; decision: unknown }) => ipcRenderer.invoke(CH.run2ResolveLane, a),
+    addFeedback: (a: { workspacePath: string; text: string }) => ipcRenderer.invoke(CH.run2AddFeedback, a),
+    editFeedback: (a: { workspacePath: string; id: string; text: string }) => ipcRenderer.invoke(CH.run2EditFeedback, a),
+    removeFeedback: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.run2RemoveFeedback, a),
+    abort: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.run2Abort, a),
+    onEvent: (cb: (p: { workspacePath: string; event: unknown }) => void) => {
+      const listener = (_: unknown, p: { workspacePath: string; event: unknown }) => cb(p)
+      ipcRenderer.on(CH.run2Event, listener)
+      return () => ipcRenderer.removeListener(CH.run2Event, listener)
+    },
+    onUpdate: (cb: (p: { workspacePath: string; state: unknown }) => void) => {
+      const listener = (_: unknown, p: { workspacePath: string; state: unknown }) => cb(p)
+      ipcRenderer.on(CH.run2Update, listener)
+      return () => ipcRenderer.removeListener(CH.run2Update, listener)
+    },
+  },
 }
 contextBridge.exposeInMainWorld('forge', api)
 export type ForgeApi = typeof api

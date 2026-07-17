@@ -49,6 +49,8 @@ import { searchContent } from '../fs/contentSearch'
 import { WorktreeWatcher } from '../watcher/worktreeWatcher'
 import { NarratorService } from '../narrator/narratorService'
 import { readLastRun, discardRuns, RunStore } from '../orchestrator/runStore'
+import { Run2Manager } from '../run/manager'
+import { registerRun2 } from './run2Handlers'
 import { planResume } from '../orchestrator/resumeRun'
 import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspace/archiveOps'
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
@@ -144,6 +146,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const orch = new Orchestrator({ bus, providers, proxy: () => readSettings().termProxy, mcpEntry })
   // AbortController for the in-flight workspace creation (one at a time), so 取消 can kill its git pulls.
   let setupAbort: AbortController | null = null
+
+  // Run2 (P3-A): additive headless run controller, wired alongside (not replacing) the Orchestrator above.
+  const run2Manager = new Run2Manager({
+    providers,
+    env: process.env,
+    makeStore: (w, r) => new RunStore(w, r),
+    emit: {
+      event: (w, e) => broadcast(CH.run2Event, { workspacePath: w, event: e }),
+      update: (w, s) => broadcast(CH.run2Update, { workspacePath: w, state: s }),
+    },
+    onError: (w, err) => console.error(`[run2] ${w}:`, err),
+  })
+  registerRun2({ manager: run2Manager, onInvoke: (ch, h) => ipcMain.handle(ch, h) })
 
   const UPDATE_REPO = 'flowForges/myFlowForge'
   const updateChecker = createUpdateChecker({
