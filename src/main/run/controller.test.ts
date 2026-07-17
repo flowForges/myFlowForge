@@ -99,6 +99,27 @@ describe('RunController', () => {
     expect(auths.sort()).toEqual(['develop:a', 'develop:b'])
   })
 
+  it('an abort on one lane force-unblocks concurrently blocked sibling lanes (no deadlock)', async () => {
+    const store = new RunStore(ws, 'r1')
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: askingProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const authIds: string[] = []
+    c.onEvent((e) => {
+      if (e.kind !== 'auth') return
+      authIds.push(e.id)
+      // Only once BOTH lanes are concurrently blocked on their auth event do we abort the
+      // first one. The second lane's auth event is deliberately never resolved explicitly —
+      // the abort's settleAll fallback must force-unblock it, or start() would hang forever.
+      if (authIds.length === 2) c.resolveLane(authIds[0], { type: 'abort' })
+    })
+    const final = await Promise.race([
+      c.start(),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: start() did not settle')), 2000)),
+    ])
+    expect(final.status).toBe('failed')
+    expect(final.inbox).toEqual([]) // no orphaned events left behind by the abort path
+  })
+
   it('a failed lane raises a failure event; skipLane lets siblings finish', async () => {
     const store = new RunStore(ws, 'r1')
     const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }

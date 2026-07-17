@@ -70,12 +70,20 @@ export class RunController {
   }
   resolveLane(eventId: string, d: LaneDecision): boolean {
     const e = findEvent(this.inbox, eventId)
-    if (!e) return false
+    if (!e || e.kind === 'gate') return false
     // Settle first: settle() is the idempotent source of truth (map entry consumed exactly once).
     // Only flip `aborted` if this call actually won the race to settle a still-pending resolver —
     // a stale/duplicate abort call must not resurrect an already-finished run.
     const ok = this.laneR.settle(eventId, d)
-    if (ok && d.type === 'abort') this.aborted = true
+    if (ok && d.type === 'abort') {
+      this.aborted = true
+      // Force-unblock every other in-flight lane/gate await so concurrently-running lanes
+      // (Promise.all in start()) don't hang forever waiting on a resolver nobody will settle.
+      // The post-await sites are abort-aware (short-circuit / drop-and-break), so these forced
+      // values never drive spurious retries or gate advances.
+      this.laneR.settleAll({ type: 'abort' })
+      this.gateR.settleAll({ type: 'advance' })
+    }
     return ok
   }
 
@@ -162,6 +170,14 @@ export class RunController {
           if (d.type === 'retry') { retried.push(await this.runOneOrder(oc.order)) }
           // skipLane: treat as resolved (dropped, sibling unaffected)
         }
+        if (this.aborted) {
+          // The early `break` above stops iterating once an abort decision is seen, so any
+          // remaining entries in this round (e.g. force-settled via resolveLane's settleAll)
+          // never reached `this.drop(id)`. Drain them here so no orphaned FailureEvents linger
+          // in the inbox. `drop` is idempotent (filter-based), so re-dropping already-dropped
+          // ids is harmless.
+          for (const { id } of resolved) this.drop(id)
+        }
         this.emitUpdate()
         // recompute outcomes/unresolved from retried set
         outcomes = outcomes.map((o) => retried.find((r) => r.order.id === o.order.id) ?? o)
@@ -192,6 +208,7 @@ export class RunController {
         this.emitEvent({ id, kind: 'gate', stageKey: stage.key, body, docs: refs })
         const d = await p
         this.drop(id)
+        if (this.aborted) break // force-settled by a concurrent lane abort; don't advance the machine
         if (d.type === 'redo') {
           const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
           this.pendingDirective[stage.key] = [text, d.feedback].filter(Boolean).join('\n')
