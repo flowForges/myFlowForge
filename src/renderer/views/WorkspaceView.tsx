@@ -173,16 +173,11 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     }
     setPendingSwitch(null)
   }, [pendingSwitch, wsPath, sessions.activeSessionId])
-  // Session switch → clear any seeded composer text (workflow-trigger phrase or supplement quote) so a
-  // fresh session opens EMPTY instead of inheriting the previous session's seed. Guard with a ref so
-  // the initial mount / first-settle does NOT clear (that would wipe a just-set same-session chip
-  // seed); only a genuine change from one session id to another clears. (User draft lives in draftStore.)
-  const prevSidRef = useRef<string | undefined>(undefined)
-  useEffect(() => {
-    const sid = sessions.activeSessionId
-    if (prevSidRef.current !== undefined && prevSidRef.current !== sid) setQuickSeed(undefined)
-    prevSidRef.current = sid
-  }, [sessions.activeSessionId])
+  // NOTE: the seeded composer text (workflow-trigger phrase / supplement quote) is dropped the instant the
+  // Composer injects it (onSeedConsumed → setQuickSeed(undefined)), so it can never leak into another
+  // session on the next remount. A prior clear-on-session-switch effect couldn't work: the newly-mounted
+  // Composer's seed effect (a child mount effect) runs BEFORE the parent's switch effect, so it had
+  // already re-injected the stale seed before the clear ran. (User draft lives in draftStore, untouched.)
   // #3: a run belongs to the session that started it. Show the live run + its gate/pending cards ONLY
   // in that session's tab — a run raising a permission gate must NOT steal whatever tab is in front
   // (the "画着图呢，A 的权限门跳到 C" bug). Runs with no sessionId (legacy/direct) show anywhere in the ws.
@@ -766,6 +761,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           readOnly={isReadOnlySession}
           archived={!!archived}
           seedText={quickSeed}
+          onSeedConsumed={() => setQuickSeed(undefined)}
           // Remount the composer per chat so its unsent draft is isolated per session (persisted in a
           // module store keyed by the same value) — no draft leaking across sessions, no re-render storm.
           key={`composer ${wsPath ?? ''} ${sessions.activeSessionId ?? ''}`}

@@ -81,6 +81,18 @@ describe('Markdown', () => {
     expect(firstCells[0].textContent).toBe('规划')
     expect(firstCells[1].textContent).toBe('设计')
   })
+  it('gives each table a copy button that copies TSV (header + rows)', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.assign(navigator, { clipboard: { writeText } })
+    const { container } = render(
+      <Markdown text={'| 阶段 | 内容 |\n|---|---|\n| 规划 | 设计 |\n| 开发 | 编码 |'} />,
+    )
+    const btn = container.querySelector('.tbl-copy') as HTMLElement
+    expect(btn).toBeTruthy()
+    fireEvent.click(btn)
+    expect(writeText).toHaveBeenCalledWith('阶段\t内容\n规划\t设计\n开发\t编码')
+    await waitFor(() => expect(container.querySelector('.tbl-copy.done')).toBeTruthy())
+  })
   it('renders inline markup (bold/code) inside table cells', () => {
     const { container } = render(
       <Markdown text={'| 名称 | 值 |\n| --- | --- |\n| **粗** | `代码` |'} />,

@@ -385,6 +385,10 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .req-opt .od { font-size: 11.5px; color: var(--muted); margin-top: 2px; line-height: 1.45; }
 .req-opt .ok-pick { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--border-2); margin-top: 1px; display: grid; place-items: center; }
 .req-opt:hover .ok-pick { border-color: var(--accent); }
+/* Free-text row under the options: "none of these fit, type your own". Separated by a dashed divider so
+   it reads as an escape hatch from the presets, not another option. */
+.req-opt-custom { margin-top: 4px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.req-opt-custom button:disabled { opacity: .45; cursor: default; }
 .req-resolved { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 12.5px; font-weight: 600; color: var(--ok); }
 .req-resolved svg { width: 15px; height: 15px; }
 .req-resolved.deny { color: var(--err); }
@@ -700,3 +704,13 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .code-block .cb-copy.done { color: var(--ok); }
 .code-block .cb-copy svg { width: 13px; height: 13px; }
 .code-block pre { margin: 0; border: 0; border-radius: 0; background: none; }
+/* Table with a hover-reveal copy button (top-right). The scroll wrapper keeps wide tables from
+   overflowing the message body; the button copies TSV for spreadsheet-friendly paste. */
+.table-block { position: relative; margin: 8px 0 12px; }
+.table-block .tbl-scroll { overflow-x: auto; }
+.table-block .tbl-scroll table { margin: 0; }
+.table-block .tbl-copy { position: absolute; top: 4px; right: 4px; z-index: 1; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 550; color: var(--muted); padding: 3px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); opacity: 0; transition: .13s; }
+.table-block:hover .tbl-copy, .table-block:focus-within .tbl-copy { opacity: 1; }
+.table-block .tbl-copy:hover { background: var(--border); color: var(--fg); }
+.table-block .tbl-copy.done { color: var(--ok); opacity: 1; }
+.table-block .tbl-copy svg { width: 13px; height: 13px; }

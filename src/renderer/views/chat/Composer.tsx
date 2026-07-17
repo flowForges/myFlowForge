@@ -75,8 +75,13 @@ interface Props {
   turnHasOutput?: boolean
   onSend: (m: { agent: string; agentLabel: string; model: string; text: string; attachments: Attachment[]; permissionMode: PermissionMode }) => void
   onPaste?: (f: { name: string; dataBase64: string }) => Promise<Attachment | null>
-  // When set (with a fresh nonce), fills the textarea with a starter prompt (快捷指令 chips).
+  // When set (with a fresh nonce), fills the textarea with a starter prompt (快捷指令 chips / workflow
+  // trigger phrase / supplement quote).
   seedText?: { text: string; nonce: number }
+  // Fired the instant a seed is injected, so the parent can drop it immediately (one-shot). Without this,
+  // the seed lingers in parent state and the Composer — which is remounted per session (key=draftKey) —
+  // re-injects the stale seed into whatever session you switch to next (the workflow-prompt leak).
+  onSeedConsumed?: () => void
   /** 受控选中态：提供时 Composer 以它为准并通过 onSelectionChange 上报变化（概览跟随）。 */
   selection?: { agentId: string; modelId: string; permissionMode?: PermissionMode }
   onSelectionChange?: (s: { agentId: string; modelId: string; permissionMode: PermissionMode }) => void
@@ -94,7 +99,7 @@ interface Props {
   draftKey?: string
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, selection, onSelectionChange, dynamicCommands, onPickWorkflow, autoDecide, onToggleAutoDecide, draftKey }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, autoDecide, onToggleAutoDecide, draftKey }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -208,6 +213,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     setText(seedText.text)
     const ta = taRef.current
     if (ta) { ta.focus(); requestAnimationFrame(autosize) }
+    // One-shot: tell the parent to drop the seed now so it can't be re-injected into another session on
+    // the next remount (see onSeedConsumed).
+    onSeedConsumed?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedText?.nonce])
 

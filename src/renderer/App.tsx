@@ -126,6 +126,11 @@ export function App() {
   // Workspaces with a chat turn in flight (per-workspace chat-queue busy flag). Used to light the sidebar
   // status dot for chat activity — w.status only reflects orchestrator runs, not a running chat agent.
   const [busyWs, setBusyWs] = useState<Set<string>>(new Set())
+  // The session that currently owns each workspace's in-flight chat turn (workspacePath → sessionId).
+  // Per-workspace because the chat queue serializes one turn at a time per workspace; across workspaces
+  // multiple can run. Drives the per-session status dot so you can tell WHICH session is executing —
+  // the workspace-level 运行中 pill alone can't. Derived into `runningSessionIds` below.
+  const [runningSessByWs, setRunningSessByWs] = useState<Map<string, string>>(new Map())
   // Per-workspace "just had chat activity" timestamp. home.stats.lastMessageAt is only fetched on
   // load/reload, so without this the sidebar's relative time stays stale right after a new turn. Any
   // chat-queue event for a workspace stamps it "now" so its sidebar time refreshes to 刚刚 immediately.
@@ -136,6 +141,14 @@ export function App() {
         if (e.busy === prev.has(e.workspacePath)) return prev
         const n = new Set(prev)
         if (e.busy) n.add(e.workspacePath); else n.delete(e.workspacePath)
+        return n
+      })
+      setRunningSessByWs(prev => {
+        const cur = prev.get(e.workspacePath)
+        const next = e.busy ? (e.runningSessionId ?? undefined) : undefined
+        if (cur === next) return prev
+        const n = new Map(prev)
+        if (next) n.set(e.workspacePath, next); else n.delete(e.workspacePath)
         return n
       })
       setRecentActivity(prev => { const n = new Map(prev); n.set(e.workspacePath, Date.now()); return n })
@@ -216,6 +229,14 @@ export function App() {
   const sessionsByWs = useSessionsMulti(expandedPaths)
   // Merge active workspace's live sessions (from useSessions) so active-ws session ops remain instant
   const sessionsMap = { ...sessionsByWs, ...(activeWsId ? { [activeWsId]: sessions.sessions } : {}) }
+  // Session ids with something actually executing right now: an in-flight chat turn (per-workspace, from
+  // the chat queue) plus the live orchestrator run (which carries its own sessionId). Drives the sidebar
+  // per-session dot so multiple concurrently-running sessions each light up, not just the workspace pill.
+  const runningSessionIds = useMemo(() => {
+    const s = new Set(runningSessByWs.values())
+    if (engine.run?.status === 'run' && engine.run.sessionId) s.add(engine.run.sessionId)
+    return s
+  }, [runningSessByWs, engine.run?.status, engine.run?.sessionId])
   const onToggleExpand = (id: string) => setExpandedWs(s => { const n = toggleExpanded(s, id); saveExpanded([...n]); return n })
 
   // Tell the pet which workspace the main window is "in" (null on home) so its command input can target it
@@ -605,6 +626,7 @@ export function App() {
           }}
           expandedIds={new Set(expandedPaths)}
           sessionsByWs={sessionsMap}
+          runningSessionIds={runningSessionIds}
           onToggleExpand={onToggleExpand}
           unread={unread}
         />

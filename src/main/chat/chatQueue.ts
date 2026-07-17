@@ -2,7 +2,7 @@ import type { ChatSendPayload } from '@shared/types'
 import { CH } from '../ipc/channels'
 
 interface QueuedTask { id: string; source: string; payload: ChatSendPayload }
-interface WsQueue { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string } | null; activeCancel: (() => void) | null }
+interface WsQueue { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string } | null; activeCancel: (() => void) | null }
 
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
 export type Broadcast = (channel: string, payload: unknown) => void
@@ -50,7 +50,7 @@ export class ChatQueue {
   private runOne(ws: string, task: QueuedTask): void {
     const q = this.get(ws)
     q.busy = true
-    q.running = { id: task.id, text: task.payload.text }
+    q.running = { id: task.id, text: task.payload.text, sessionId: task.payload.sessionId }
     this.emit(ws)
     Promise.resolve(this.runTurn(task.payload)).catch(() => {}).finally(() => {
       q.busy = false
@@ -69,6 +69,10 @@ export class ChatQueue {
       busy: q.busy,
       queue: q.queue.map(t => ({ id: t.id, text: t.payload.text, source: t.source })),
       running: q.running,
+      // Session that owns the in-flight turn (null when idle). Lets the sidebar light the specific
+      // session's dot, not just the workspace pill — the queue serializes per workspace, so at most one
+      // session runs here at a time, but multiple workspaces (each its own queue) can run concurrently.
+      runningSessionId: q.running?.sessionId ?? null,
     })
   }
 }

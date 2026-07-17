@@ -66,20 +66,23 @@ describe('ChatQueue', () => {
     expect(lastEvent.queue).toEqual([{ id: expect.any(String), text: 'B', source: '宠物' }])
   })
 
-  it('running is {id,text} during execution and null after', async () => {
+  it('running carries {id,text,sessionId} + runningSessionId during execution, null after', async () => {
     let release: (() => void) | null = null
     const events: any[] = []
     const runTurn = vi.fn((_p: ChatSendPayload) => new Promise<void>(res => { release = res }))
     const q = new ChatQueue(runTurn, (_c, e) => events.push(e))
     q.enqueue(mk('/w', 'Hello'), '你')
-    // first emit: busy=true, running set
+    // first emit: busy=true, running set — sessionId is threaded so the sidebar can light that
+    // specific session's dot, not just the workspace pill.
     const runningEvent = events[events.length - 1]
-    expect(runningEvent.running).toEqual({ id: expect.any(String), text: 'Hello' })
+    expect(runningEvent.running).toEqual({ id: expect.any(String), text: 'Hello', sessionId: 's1' })
+    expect(runningEvent.runningSessionId).toBe('s1')
     expect(runningEvent.busy).toBe(true)
     // complete the turn
     release!(); await Promise.resolve(); await Promise.resolve()
     const doneEvent = events[events.length - 1]
     expect(doneEvent.running).toBeNull()
+    expect(doneEvent.runningSessionId).toBeNull()
     expect(doneEvent.busy).toBe(false)
   })
 

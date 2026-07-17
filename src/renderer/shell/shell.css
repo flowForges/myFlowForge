@@ -230,6 +230,9 @@
 .ws-sess.on .ws-sess-name { color: var(--fg); }
 .ws-sess .sd { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; background: var(--faint); }
 .ws-sess .sd.workflow { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+/* Running session: pulsing green dot with glow ring — wins over the static mode color so a session that
+   is actually executing stands out (multiple can pulse at once across workspaces). */
+.ws-sess .sd.run { background: var(--run); box-shadow: 0 0 0 3px color-mix(in oklab, var(--run) 26%, transparent); animation: pulse 1.6s infinite; }
 .ws-sess-name { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-sess-edit {

@@ -70,6 +70,44 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }): ReactNode {
   )
 }
 
+// A GFM table with a hover-reveal copy button. Copying emits TSV (tab-separated cells, newline rows) —
+// the raw cell source, not the rendered markup — so it pastes cleanly into spreadsheets / Notion / docs.
+// The table itself sits in a horizontal-scroll wrapper so a wide table never overflows the message body.
+function TableBlock({ header, body, tk }: { header: string[]; body: string[][]; tk: number }): ReactNode {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    const tsv = [header, ...body].map(r => r.join('\t')).join('\n')
+    navigator.clipboard?.writeText(tsv).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1600)
+    }).catch(() => { /* clipboard unavailable */ })
+  }
+  return (
+    <div className="table-block">
+      <button className={`tbl-copy${copied ? ' done' : ''}`} onClick={copy} title="复制表格" type="button">
+        {copied ? (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="20 6 9 17 4 12" /></svg>
+        ) : (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>
+        )}
+        <span>{copied ? '已复制' : '复制'}</span>
+      </button>
+      <div className="tbl-scroll">
+        <table>
+          <thead>
+            <tr>{header.map((c, ci) => <th key={ci}>{renderInline(c, `th${tk}-${ci}`)}</th>)}</tr>
+          </thead>
+          <tbody>
+            {body.map((row, ri) => (
+              <tr key={ri}>{row.map((c, ci) => <td key={ci}>{renderInline(c, `td${tk}-${ri}-${ci}`)}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // Minimal, dependency-free Markdown → React renderer for chat messages.
 // Renders to React elements (never dangerouslySetInnerHTML) so CLI output can't inject HTML.
 // Covers the constructs assistants actually emit: headings, bold/italic, inline code,
@@ -167,18 +205,7 @@ export function renderMarkdown(text: string): ReactNode {
         } else break
       }
       const tk = key++
-      blocks.push(
-        <table key={`tbl${tk}`}>
-          <thead>
-            <tr>{header.map((c, ci) => <th key={ci}>{renderInline(c, `th${tk}-${ci}`)}</th>)}</tr>
-          </thead>
-          <tbody>
-            {body.map((row, ri) => (
-              <tr key={ri}>{row.map((c, ci) => <td key={ci}>{renderInline(c, `td${tk}-${ri}-${ci}`)}</td>)}</tr>
-            ))}
-          </tbody>
-        </table>,
-      )
+      blocks.push(<TableBlock key={`tbl${tk}`} header={header} body={body} tk={tk} />)
       continue
     }
     // heading

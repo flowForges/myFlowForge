@@ -54,6 +54,9 @@ export interface SidebarProps {
   // C2: expand state for multi-workspace session lists (C3 will render/toggle)
   expandedIds?: Set<string>
   sessionsByWs?: Record<string, ChatSession[]>
+  // Session ids with a turn/run executing right now — lights that session's status dot (not just the
+  // workspace pill) so concurrently-running sessions are individually distinguishable.
+  runningSessionIds?: Set<string>
   onToggleExpand?: (id: string) => void
   // Sessions that finished while unviewed — drives the unread dot (workspace-level when the session
   // list is collapsed, per-session when expanded).
@@ -141,11 +144,12 @@ interface GroupSectionProps {
   onNewSession?: (workspaceId: string) => void
   expandedIds?: Set<string>
   sessionsByWs?: Record<string, ChatSession[]>
+  runningSessionIds?: Set<string>
   onToggleExpand?: (id: string) => void
   unread?: ReadonlySet<string>
 }
 
-function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSelect, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, onEdit, onRename, sessions = [], activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand, unread = EMPTY_UNREAD }: GroupSectionProps) {
+function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSelect, onPin, onArchive, onRestore, onDelete, onReveal, onRemove, onEdit, onRename, sessions = [], activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, runningSessionIds, onToggleExpand, unread = EMPTY_UNREAD }: GroupSectionProps) {
   const [open, setOpen] = useState(true)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -292,7 +296,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                           onClick={() => onSwitchSession?.(item.id, s.id)}
                           onDoubleClick={e => { e.stopPropagation(); beginRename(s) }}
                         >
-                          <span className={'sd ' + s.mode} />
+                          <span className={'sd ' + s.mode + (runningSessionIds?.has(s.id) ? ' run' : '')} />
                           {editing ? (
                             <input
                               className="ws-sess-edit"
@@ -396,7 +400,7 @@ function ArchiveDock({ items, activeId, onSelect, onRestore, onDelete }: Archive
   )
 }
 
-export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onEdit, onRename, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, onToggleExpand, unread }: SidebarProps) {
+export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onEdit, onRename, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, runningSessionIds, onToggleExpand, unread }: SidebarProps) {
   const sidebarStyle = (!collapsed && width !== undefined)
     ? { flex: `0 0 ${width}px`, width }
     : undefined
@@ -442,6 +446,7 @@ export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew,
             onNewSession={onNewSession}
             expandedIds={expandedIds}
             sessionsByWs={sessionsByWs}
+            runningSessionIds={runningSessionIds}
             onToggleExpand={onToggleExpand}
             unread={unread}
           />

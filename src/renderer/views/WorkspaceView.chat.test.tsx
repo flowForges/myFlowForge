@@ -108,7 +108,8 @@ describe('WorkspaceView task-queue panel', () => {
         { id: 'q1', text: '改主色调', source: '你' },
         { id: 'q2', text: '修复登录', source: '宠物' }
       ],
-      running: null
+      running: null,
+      runningSessionId: null
     }))
     return container
   }
