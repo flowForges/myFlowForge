@@ -48,11 +48,13 @@ export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, 
       const stored = nsfwInstalled[key]
       if (stored) {
         const chk = await window.forge.nsfwBgExists?.(stored)
-        if (chk?.exists) { onChangeAppearance({ bgImage: stored, bgScope: 'app' }); return }
+        // bgWallpaperId: '' — an NSFW background is NOT a built-in wallpaper, so clear the gallery
+        // highlight (else the previously-selected built-in tile stays checked after applying this).
+        if (chk?.exists) { onChangeAppearance({ bgImage: stored, bgScope: 'app', bgWallpaperId: '' }); return }
       }
       const r = await window.forge.nsfwInstallBg?.(b) // re-download (first install, or local file gone)
       if (!r || 'error' in r) { setErr(r && 'error' in r ? r.error : '安装失败'); return }
-      onChangeAppearance({ bgImage: r.url, bgScope: 'app' })
+      onChangeAppearance({ bgImage: r.url, bgScope: 'app', bgWallpaperId: '' })
       onSetInstalled(key, r.url)
     } finally { setBusy(null) }
   }

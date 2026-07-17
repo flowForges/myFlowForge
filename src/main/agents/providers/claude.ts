@@ -22,18 +22,30 @@ function now() { return new Date().toISOString().slice(11, 19) }
 export interface ClaudeSpec { bin?: string; preArgs?: string[]; defaultModels: Model[] }
 
 // Exported for unit testing. Builds the CLI args for a run() invocation (non-preArgs path).
-// When task.allowedTools has entries, injects '--allowedTools <name...>' after 'acceptEdits'
-// and before '--model', so claude restricts the tool set to exactly the listed tools.
+// Pre-grants the forge MCP tools (forge_handoff/forge_ask) whenever forge is injected: headless
+// claude BLOCKS an MCP call unless its name is in --allowedTools, so without this a delegated
+// sub-agent can't hand off and degrades to a text "请授权 forge_handoff" reply (mirrors chat()).
+// Any task.allowedTools are merged in ahead of the forge names.
 export function buildClaudeArgs(task: AgentTask, env: NodeJS.ProcessEnv): string[] {
-  const allowedToolsArgs = task.allowedTools?.length
-    ? ['--allowedTools', ...task.allowedTools]
+  const allowed = [...(task.allowedTools ?? []), ...forgeAllowedToolNames(env)]
+  const allowedToolsArgs = allowed.length
+    ? ['--allowedTools', ...allowed]
     : []
+  // Run-path 'readonly' only ever comes from a read-only delegation (delegate.ts:256), whose
+  // callbacks hard-deny mutations (onConfirm → 'deny'). Do NOT emit claude's 'plan' mode for it:
+  // plan BLOCKS every tool call — including the forge_handoff/forge_ask just pre-granted above —
+  // so the sub-agent could never report back and degraded to a text "请授权 forge_handoff" reply.
+  // Omit the flag → default ask mode: pre-granted forge tools and read tools run, while mutating
+  // tools raise a permission request the delegate denies. (chat() keeps 'plan' — its onConfirm is
+  // interactive, so its read-only shield must stay a hard behavioral gate, not a forge-blocking one.)
+  const mode = task.permissionMode ?? 'auto'
+  const permArgs = mode === 'readonly' ? [] : permissionArgs('claude', mode)
   return [
     '-p', task.prompt,
     '--output-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
-    ...permissionArgs('claude', task.permissionMode ?? 'auto'),
+    ...permArgs,
     ...allowedToolsArgs,
     '--model', cliModel(task.model),
     ...forgeMcpArgs(env),

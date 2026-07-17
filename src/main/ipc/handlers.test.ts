@@ -18,6 +18,8 @@ const { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMoc
   return { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls, resolveCalls }
 })
 
+const { delegateCapture } = vi.hoisted(() => ({ delegateCapture: { onComplete: null as null | ((r: { text: string; per: any[] }) => void) } }))
+
 const SETTINGS = {
   appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' },
   termProxy: '',
@@ -69,6 +71,16 @@ vi.mock('../orchestrator/runStore', () => ({
 }))
 vi.mock('../mcp/forgeBridge', () => ({
   startBridge: vi.fn(() => Promise.resolve({ socketPath: '/tmp/forge.sock', close: () => Promise.resolve() }))
+}))
+vi.mock('../chat/delegate', () => ({
+  // Fire-and-forget runDelegate: capture the turn's onComplete (so a test can fire it later to simulate
+  // the background batch finishing) and return the 「已派发」ack immediately, like the real one.
+  makeRunDelegate: () => (opts: any) => {
+    opts.onBatchStart?.('rid-test', [])
+    delegateCapture.onComplete = opts.onComplete
+    return Promise.resolve({ text: '已派发', per: [] })
+  },
+  cancelWorkspaceDelegates: () => {},
 }))
 vi.mock('../chat/proposeRun', () => {
   const fn: any = vi.fn(() => Promise.resolve({ approved: true }))
@@ -354,6 +366,37 @@ describe('registerIpc broadcast wiring', () => {
     // only the first ran; second is queued
     expect(sendTurn).toHaveBeenCalledTimes(1)
     resolveFirst()
+    await new Promise(r => setTimeout(r, 0))
+    expect(sendTurn).toHaveBeenCalledTimes(2)
+  })
+
+  it('chatSend: a turn that dispatched a fire-and-forget delegate stays busy until the batch completes (next send queues)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { sendTurn } = await import('../chat/chatService') as any
+    const { startBridge } = await import('../mcp/forgeBridge') as any
+    sendTurn.mockReset()
+    delegateCapture.onComplete = null
+    // Capture the chat turn's bridge config so the sendTurn mock can drive its delegate() callback,
+    // simulating the main agent calling forge_delegate mid-turn.
+    let cfg: any = null
+    startBridge.mockImplementationOnce((_dir: string, c: any) => { cfg = c; return Promise.resolve({ socketPath: '/tmp/f.sock', close: () => Promise.resolve() }) })
+    // 1st turn: main agent dispatches a delegate (fire-and-forget) then the turn's sendTurn resolves.
+    sendTurn
+      .mockImplementationOnce(async () => { cfg.delegate({ task: 'x' }); return { text: '已派发' } })
+      .mockImplementationOnce(async () => ({ text: 'ok' }))
+    registerIpc(() => {}, {})
+    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const base = { workspacePath: '/ws/dg', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', attachments: [] }
+    send({}, { ...base, text: 'first' })
+    await new Promise(r => setTimeout(r, 0))
+    send({}, { ...base, text: 'second' })
+    await new Promise(r => setTimeout(r, 0))
+    // The background delegate is still running → the turn hasn't resolved → 'second' stays queued.
+    expect(sendTurn).toHaveBeenCalledTimes(1)
+    expect(delegateCapture.onComplete).toBeTypeOf('function')
+    // Batch completes (onComplete) → the turn finally resolves → the queued 'second' now runs.
+    delegateCapture.onComplete!({ text: 'done', per: [] })
     await new Promise(r => setTimeout(r, 0))
     expect(sendTurn).toHaveBeenCalledTimes(2)
   })
