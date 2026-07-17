@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
+import type { AgentProvider, AgentTask, AgentCallbacks, ConfirmReq, InputReq } from '../agents/types'
 import { runWorkOrder, isTransientError, type WorkOrder } from './workOrder'
 
 const order: WorkOrder = {
@@ -90,5 +90,40 @@ describe('isTransientError', () => {
     expect(isTransientError(new Error('network timeout'))).toBe(true)
     expect(isTransientError(new Error('ECONNRESET'))).toBe(true)
     expect(isTransientError(new Error('bad design decision'))).toBe(false)
+  })
+})
+
+function providerThatAsks(): AgentProvider {
+  return {
+    id: 'fake', displayName: 'F', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        cb.onState('run')
+        const ok = await cb.onConfirm({ title: 'overwrite', where: 'a.ts' })
+        const ans = await cb.onInput({ title: 'which env' })
+        cb.onHandoff?.({ summary: `confirm=${ok} input=${ans}` })
+        cb.onState('ok'); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+
+describe('runWorkOrder interactive callbacks', () => {
+  it('routes onConfirm/onInput to injected handlers with laneId', async () => {
+    const seenLanes: string[] = []
+    const out = await runWorkOrder(order, {
+      provider: providerThatAsks(), env: {},
+      onConfirm: async (_req: ConfirmReq, laneId: string) => { seenLanes.push(laneId); return 'allow' },
+      onInput: async (_req: InputReq, laneId: string) => { seenLanes.push(laneId); return 'staging' },
+    })
+    expect(out.status).toBe('ok')
+    expect(out.result?.summary).toBe('confirm=allow input=staging')
+    expect(seenLanes).toEqual(['develop:proj1', 'develop:proj1'])
+  })
+  it('falls back to auto-allow / empty when no handlers injected', async () => {
+    const out = await runWorkOrder(order, { provider: providerThatAsks(), env: {} })
+    expect(out.result?.summary).toBe('confirm=allow input=')
   })
 })

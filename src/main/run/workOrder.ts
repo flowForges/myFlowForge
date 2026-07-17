@@ -29,6 +29,8 @@ export interface RunWorkOrderDeps {
   backoffMs?: number[]
   sleep?: (ms: number) => Promise<void>
   isTransient?: (err: Error) => boolean
+  onConfirm?: (req: import('../agents/types').ConfirmReq, laneId: string) => Promise<'allow' | 'deny'>
+  onInput?: (req: import('../agents/types').InputReq, laneId: string) => Promise<string>
 }
 
 const TRANSIENT_RE = /timeout|network|econn|etimedout|socket hang|cancel/i
@@ -61,7 +63,8 @@ export async function runWorkOrder(order: WorkOrder, deps: RunWorkOrderDeps): Pr
       const cb: AgentCallbacks = {
         onLog() {}, onState() {}, onDone() {},
         onError(e) { capturedErr = e instanceof Error ? e : new Error(String(e)) },
-        async onConfirm() { return 'allow' }, async onInput() { return '' },
+        onConfirm: (req) => (deps.onConfirm ? deps.onConfirm(req, order.id) : Promise.resolve('allow')),
+        onInput: (req) => (deps.onInput ? deps.onInput(req, order.id) : Promise.resolve('')),
         onHandoff(p) { handoff = p },
       }
       const session = deps.provider.run(task, cb, deps.env)
