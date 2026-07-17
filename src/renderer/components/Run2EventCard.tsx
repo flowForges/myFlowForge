@@ -43,7 +43,6 @@ export function Run2EventCard({ event, onGate, onLane }: Run2EventCardProps) {
               <button onClick={() => onLane(event.id, { type: 'answer', value })}>提交</button>
             </div>
             <div className="req-actions">
-              <button className="req-no" onClick={() => onLane(event.id, { type: 'skipLane' })}>跳过本泳道</button>
               <button className="req-no" onClick={() => onLane(event.id, { type: 'abort' })}>终止</button>
             </div>
           </>
@@ -52,9 +51,6 @@ export function Run2EventCard({ event, onGate, onLane }: Run2EventCardProps) {
         {event.kind === 'doubt' && (
           <>
             <div className="req-note">{event.note}</div>
-            <div className="req-actions">
-              <button className="req-ok" onClick={() => onLane(event.id, { type: 'escalate' })}>升级为方案问题</button>
-            </div>
           </>
         )}
 
