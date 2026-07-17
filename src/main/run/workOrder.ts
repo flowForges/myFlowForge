@@ -50,6 +50,8 @@ export async function runWorkOrder(order: WorkOrder, deps: RunWorkOrderDeps): Pr
   while (attempts <= retries) {
     attempts++
     let handoff: HandoffPayload | null = null
+    // Reset per-attempt: a captured error from a prior attempt must never leak into this one.
+    let capturedErr: Error | null = null
     try {
       const task: AgentTask = {
         stageKey: order.stageKey, agentId: order.id, name: order.name,
@@ -57,12 +59,17 @@ export async function runWorkOrder(order: WorkOrder, deps: RunWorkOrderDeps): Pr
         permissionMode: order.permissionMode,
       }
       const cb: AgentCallbacks = {
-        onLog() {}, onState() {}, onDone() {}, onError() {},
+        onLog() {}, onState() {}, onDone() {},
+        onError(e) { capturedErr = e instanceof Error ? e : new Error(String(e)) },
         async onConfirm() { return 'allow' }, async onInput() { return '' },
         onHandoff(p) { handoff = p },
       }
       const session = deps.provider.run(task, cb, deps.env)
       const result = await session.done
+      // Real providers signal failure by RESOLVING `done` with { ok: false } (they call
+      // onState('err') + onError(err) but never reject). Route that into the same
+      // catch/retry/classify path below instead of returning a false 'ok'.
+      if (!result?.ok) throw capturedErr ?? new Error('agent reported failure')
       const payload: HandoffPayload = handoff ?? { summary: result.summary ?? '' }
       return { order, status: 'ok', result: parseHandoffResult(payload), attempts }
     } catch (e) {
