@@ -98,6 +98,18 @@ export function ReqCard({ action, onResolve, onOpenDoc, onSupplement }: ReqCardP
                 </span>
               </button>
             ))}
+            {/* None of the options fit? Type a custom answer — it's sent to the sub-agent verbatim (as the
+                answer string) instead of one of the option labels, so the user isn't boxed into the presets. */}
+            <div className="req-inrow req-opt-custom">
+              <input
+                type="text"
+                placeholder="以上都不合适？直接输入你的意见…"
+                value={value}
+                onChange={e => setValue(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && value.trim()) onResolve({ id: action.id, decision: 'allow', value: value.trim() }) }}
+              />
+              <button disabled={!value.trim()} onClick={() => onResolve({ id: action.id, decision: 'allow', value: value.trim() })}>提交</button>
+            </div>
           </div>
         )}
       </div>

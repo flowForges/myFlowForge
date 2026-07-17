@@ -46,6 +46,24 @@ export function stageGated(spec: StageSpec): boolean {
 // reads this to avoid skipping past an un-approved design straight into code.
 export const gateApprovedKey = (stageKey: string) => 'gate-approved:' + stageKey
 
+// The main agent's decision on a 打回重做 (see planRework). needsCode=false → revise the proposal purely by
+// reasoning (revised = the new full markdown, re-gated with no fan-out). needsCode=true → the minimal subset
+// of projects that genuinely need re-reading + a directive for their sub-agents.
+export interface ReworkPlan { needsCode: boolean; projects: string[]; directive: string; revised: string; summary: string }
+
+// Parse the main agent's rework decision JSON. Tolerant: strips an optional ```json fence and grabs the
+// outermost {...}. Returns undefined when nothing parseable is found (caller falls back to re-probe-all).
+export function parseReworkJson(out: string): { needsCode?: boolean; projects?: string[]; directive?: string; revised?: string; summary?: string } | undefined {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(out)
+  const raw = (fenced ? fenced[1] : out)
+  const start = raw.indexOf('{'); const end = raw.lastIndexOf('}')
+  if (start < 0 || end <= start) return undefined
+  try {
+    const obj = JSON.parse(raw.slice(start, end + 1))
+    return (obj && typeof obj === 'object') ? obj as Record<string, never> : undefined
+  } catch { return undefined }
+}
+
 export type StageScope = 'root' | 'per-project'
 // `projects` (by name) optionally scopes a PER-PROJECT stage to a subset of the run's projects — e.g.
 // analyze all 5 projects but develop only 2. Absent/empty = every project. Ignored for root stages.
@@ -168,41 +186,69 @@ export class Orchestrator {
     }
   }
 
-  // #6: run the user's rework feedback THROUGH the main agent (the run's provider) before it reaches the
-  // execution sub-agent. The user interacts with the MAIN agent, which analyzes the feedback against the
-  // task + this stage's output, keeps it on-theme, and produces a focused rework directive — instead of
-  // the raw user words going straight to the sub-agent ("一切先过主代理"). Falls back to the raw feedback
-  // if the run's provider has no chat() or the analysis fails, so a rework never gets blocked.
-  private async analyzeRework(spec: StageSpec, stageOutput: string, feedback: string): Promise<string> {
-    const fallback = feedback || '(用户要求返工,但未填写具体方向——请自查上一版最薄弱处并改进,重新给出一版。)'
+  // #rework: run the user's rework feedback THROUGH the main agent (the run's provider) and let it DECIDE,
+  // rather than blindly re-running every project. The main agent doesn't read code, but it can reason over
+  // the EXISTING proposal (consolidated + per-project docs) + the user's feedback, and returns one of:
+  //   - needsCode=false → a fully revised proposal (revised), re-gated with NO sub-agent fan-out; or
+  //   - needsCode=true  → a minimal subset of projects that genuinely need re-analysis + a rework directive.
+  // Falls back to "re-probe all with the raw feedback" (the old behavior) when the provider has no chat()
+  // or the analysis/parse fails, so a rework is never blocked.
+  private async planRework(
+    spec: StageSpec,
+    proposalBody: string,
+    projDocs: { name: string; content: string }[],
+    feedback: string,
+    projectNames: string[],
+  ): Promise<ReworkPlan> {
+    const fallbackDirective = feedback || '(用户要求返工,但未填写具体方向——请自查上一版最薄弱处并改进,重新给出一版。)'
+    const fallback: ReworkPlan = { needsCode: true, projects: projectNames, directive: fallbackDirective, revised: '', summary: '' }
     const provider = this.providers[spec.provider]
     if (!provider?.chat || this.cancelled) return fallback
+    const docsBlock = projDocs.length
+      ? projDocs.map(d => `## 项目「${d.name}」现有子方案\n${d.content}`).join('\n\n')
+      : '(无按项目拆分的子方案,仅有下方总方案)'
     const prompt = [
-      '你是本次工作流的【主代理】,负责在用户与执行子代理之间做分析与分派。用户对某个阶段的产出提出了反馈/打回,',
-      '请先分析用户的真实意图,再把它转化为给子代理的清晰返工指令——绝不能脱离总任务主旨。只输出指令本身。',
+      '你是本次工作流的【主代理】。你不读代码、不写代码,但你能结合子代理已经产出的技术方案 + 用户的反馈进行',
+      '推理判断。用户在技术方案评审门对上一版方案提出了反馈。请判断:仅凭"现有方案 + 用户反馈"能否直接把方案',
+      '改好,还是必须让子代理重新去读【某些】项目的代码才能满足反馈。能自己想明白就别让子代理白读一遍。',
       '',
       `# 总任务\n${this.task ?? '(未提供)'}`,
-      `# 刚完成的阶段\n「${spec.name}」`,
-      `# 该阶段本版产出(摘要)\n${(stageOutput || '(无摘要)').slice(0, 4000)}`,
-      `# 用户的反馈/打回意见\n${feedback || '(用户未填写具体方向)'}`,
+      `# 涉及的项目\n${projectNames.join('、') || '(单项目/根)'}`,
+      `# 现有总技术方案\n${(proposalBody || '(无)').slice(0, 6000)}`,
+      `# 各项目现有子方案\n${docsBlock}`,
+      `# 用户的反馈\n${feedback || '(未填写具体方向)'}`,
       '',
-      '# 你要输出的返工指令(交给子代理执行,不要复述用户原话、不要寒暄)',
-      '包含: 1) 用户真正想解决的核心问题(你的判断) 2) 具体要改的点 3) 必须保持不变、守住主旨的部分。',
+      '只输出一个 JSON 对象(不要代码围栏、不要多余文字),字段:',
+      '{',
+      '  "needsCode": true 或 false,   // 是否必须重新读代码才能满足用户反馈',
+      '  "projects": ["项目名", ...],   // needsCode=true 时,真正需要重新分析的【最小】项目子集(只列必须的,名字必须来自上面"涉及的项目");needsCode=false 时给 []',
+      '  "directive": "...",           // needsCode=true 时,交给子代理的清晰返工指令(要改什么、守住什么主旨)',
+      '  "revised": "...",             // needsCode=false 时,结合用户反馈修订后的【完整】技术方案 markdown 全文',
+      '  "summary": "..."              // 一句话说明你的判断(会展示给用户)',
+      '}',
     ].join('\n')
     let session: AgentSession | undefined
     try {
       const out = await new Promise<string>((resolve, reject) => {
         let acc = ''
         session = provider.chat!(
-          { id: `rework-analyze-${spec.key}-${this.now()}`, prompt, model: spec.model, cwd: this.run.workspacePath },
+          { id: `rework-plan-${spec.key}-${this.now()}`, prompt, model: spec.model, cwd: this.run.workspacePath },
           { onSession: () => {}, onAssistantDelta: (t) => { acc += t }, onThinkDelta: () => {}, onDone: () => resolve(acc), onError: reject },
           buildAgentEnv({ proxy: this.proxy() }),
         )
         if (session) this.activeSessions.add(session)
       })
-      const directive = out.trim()
-      if (!directive) return fallback
-      return `【主代理已分析用户反馈,以下是返工指令】\n${directive}\n\n【用户原始反馈(供参考)】\n${feedback || '(未填写)'}`
+      const parsed = parseReworkJson(out)
+      if (!parsed) return { ...fallback, directive: `【主代理已分析用户反馈,以下是返工指令】\n${fallbackDirective}` }
+      const needsCode = !!parsed.needsCode
+      const projects = (parsed.projects ?? []).filter(p => projectNames.includes(p))
+      return {
+        needsCode,
+        projects: needsCode ? (projects.length ? projects : projectNames) : [],
+        directive: (parsed.directive || fallbackDirective).trim(),
+        revised: (parsed.revised || '').trim(),
+        summary: (parsed.summary || '').trim(),
+      }
     } catch { return fallback }
     finally { if (session) this.activeSessions.delete(session) }
   }
@@ -617,6 +663,9 @@ export class Orchestrator {
           const r = await this.raise({ id, kind: 'select', agentId, agentName: name, wsName: opts.workspaceName, title: question, options, ...rich })
           if (rt) this.setAgentAwaiting(rt, false)
           if (r.decision === 'deny') return null
+          // A typed custom answer wins over a picked option — the user opted to write their own instead of
+          // taking a preset. Fall back to the chosen option label when no free text was entered.
+          if (r.value && r.value.trim()) return r.value.trim()
           return options[r.choice ?? 0].t
         }
         if (rt) this.setAgentAwaiting(rt, true)
@@ -659,19 +708,53 @@ export class Orchestrator {
         const briefsBase = this.briefs.length
         let reworkNote: string | undefined
         let round = 0
+        // #rework: a 打回 no longer blindly re-runs the whole stage. reprobeScope = the subset of project
+        // NAMES the user agreed to re-analyze this round (null → legacy full re-run). reviseBody = a
+        // main-agent-revised proposal to re-gate WITHOUT any fan-out (reason-only). lastDocs = the openable
+        // docs from the last real fan-out (kept for the reason-only re-gate).
+        let reprobeScope: string[] | null = null
+        let reviseBody: string | undefined
+        let lastDocs: DesignDoc[] = []
+        // Project name list for this stage — needed by the rework planner even on a reason-only round where
+        // no fan-out runs (so it's computed here, not inside the fan-out block).
+        const baseProjs0 = spec.projects?.length ? opts.developProjects.filter(p => spec.projects!.includes(p.name)) : opts.developProjects
+        const baseProjs = baseProjs0.length ? baseProjs0 : opts.developProjects
+        const baseProjNames = baseProjs.map(p => p.name)
         while (true) {
           if (this.cancelled) break
-          if (round > 0) {
-            // 重跑前重置本阶段:清掉上一版的 agents/docs、状态回到 run、briefs 回退到快照。
-            stage.agents = []
-            stage.docs = undefined
+          const roundScope = reprobeScope; reprobeScope = null
+          if (round > 0 && reviseBody === undefined) {
+            if (roundScope && roundScope.length) {
+              // Selective re-probe: keep agents/docs/briefs for projects NOT being re-analyzed; drop only
+              // the re-probed ones + the previous 汇总 agent (regenerated over the merged set). Kept projects'
+              // on-disk docs remain, so the new 汇总 still consolidates every project.
+              const reNames = new Set(roundScope)
+              stage.agents = stage.agents.filter(a => !reNames.has(a.name) && a.role !== `${spec.name} · 汇总`)
+              if (stage.docs) stage.docs = stage.docs.filter(d => !reNames.has(d.name))
+              const keep = this.briefs.slice(briefsBase).filter(b => !reNames.has(b.agentName) && b.agentName !== '主代理')
+              this.briefs.length = briefsBase
+              this.briefs.push(...keep)
+            } else {
+              // 全量重跑前重置本阶段:清掉上一版的 agents/docs、briefs 回退到快照。
+              stage.agents = []
+              stage.docs = undefined
+              this.briefs.length = briefsBase
+            }
             stage.state = 'run'
-            this.briefs.length = briefsBase
             this.update()
           }
           // 修改方向经 spec.reworkNote → runTask → buildStagePrompt 注入;round 0 时为 undefined(无影响)。
           spec.reworkNote = reworkNote
 
+          let body: string | undefined
+          let docs: DesignDoc[] = []
+          if (reviseBody !== undefined) {
+            // Reason-only rework: the main agent revised the proposal from existing output + user feedback,
+            // no code re-read. Re-gate directly with that revised body; keep last round's openable docs.
+            body = reviseBody
+            docs = lastDocs
+            reviseBody = undefined
+          } else {
           const baseEnv = buildAgentEnv({ proxy: this.proxy() })
           // Inject bridge socket into base env; FORGE_AGENT_ID is added per-task below.
           if (this.bridge) {
@@ -689,8 +772,9 @@ export class Orchestrator {
           // plain per-project fan-out honor the subset — the review branch used to pass the full
           // developProjects, so a per-project review stage (e.g. 代码 CR) ignored the user's 5-选-3 pick
           // and reviewed all projects.
-          const scoped = spec.projects?.length ? opts.developProjects.filter(p => spec.projects!.includes(p.name)) : opts.developProjects
-          const stageProjs = scoped.length ? scoped : opts.developProjects
+          // On a selective re-probe round, restrict the fan-out to just the agreed subset (kept projects
+          // stay untouched — their agents/docs/briefs were preserved above). Otherwise the full stage set.
+          const stageProjs = (roundScope && roundScope.length) ? baseProjs.filter(p => roundScope.includes(p.name)) : baseProjs
           // Any stage carrying a review config fans out parallel reviewers (built-in 'review' gets one by
           // default via resolveStages; custom stages opt in explicitly).
           if (spec.review) {
@@ -798,28 +882,16 @@ export class Orchestrator {
             break
           }
 
-          // Inter-stage review gate: after a gated stage completes OK, pause and ask the user to review
-          // the output. Reuses the raise/pending/resolve mechanism (no new IPC). The stage output is
-          // already surfaced to chat by the per-stage narrator 回流; this adds the pause + 三选一:
-          //   allow  → approve, proceed to the next stage
-          //   modify → 打回重做: re-run THIS stage with the user's revision direction (loop), then re-gate
-          //   deny   → 终止: stop the whole run
-          // Gate resolution: explicit spec.gate wins (production sets true on every stage incl. the last).
-          // The design-only FALLBACK additionally skips the last WOVEN step, preserving the old behavior
-          // where a bare design-last stage doesn't self-gate.
-          const isLast = stepIdx === woven.length - 1
-          const gated = spec.gate ?? (REVIEW_GATED_STAGES.has(spec.key) && !isLast)
-          if (!gated || this.cancelled) break
-          const id = `review-${spec.key}-${++this.pendingSeq}`
           // Collect the docs agents wrote to disk (openable in the in-app viewer). The gate body prefers
           // the consolidated doc's full content (summary agent is appended last, so it's the last doc);
-          // it falls back to the assembled handoff summaries when no doc exists.
-          const docs = buildDesignDocs(
+          // it falls back to the assembled handoff summaries when no doc exists. Fan-out path only — the
+          // reason-only path already set body/docs above from the main agent's revision.
+          docs = buildDesignDocs(
             stage.agents,
             aid => store.getContext('handoff-doc:' + aid) as string | undefined,
             aid => this.agentCwd.get(aid),
           )
-          const body = gateBodyFromDoc(
+          body = gateBodyFromDoc(
             docs[docs.length - 1],
             (d: DesignDoc) => this.readDoc(d),
             () => buildGateBody(
@@ -828,6 +900,21 @@ export class Orchestrator {
               aid => outputFromLogs(stage.agents.find(a => a.id === aid)?.logs),
             ),
           )
+          lastDocs = docs
+          }
+          // Inter-stage review gate (BOTH the fan-out and the reason-only revise re-enter here). Reuses the
+          // raise/pending/resolve mechanism (no new IPC). 三选一:
+          //   allow  → approve, proceed to the next stage
+          //   modify → 打回: the main agent reasons over your input + the existing proposal, then either
+          //            revises it directly (reason-only, no re-read) or — with your OK — re-probes a subset
+          //   deny   → 终止: stop the whole run
+          // Gate resolution: explicit spec.gate wins (production sets true on every stage incl. the last).
+          // The design-only FALLBACK additionally skips the last WOVEN step, preserving the old behavior
+          // where a bare design-last stage doesn't self-gate.
+          const isLast = stepIdx === woven.length - 1
+          const gated = spec.gate ?? (REVIEW_GATED_STAGES.has(spec.key) && !isLast)
+          if (!gated || this.cancelled) break
+          const id = `review-${spec.key}-${++this.pendingSeq}`
           const decision = await this.raise({
             id, kind: 'confirm',
             agentId: `stage:${spec.key}`, agentName: spec.name,
@@ -846,11 +933,55 @@ export class Orchestrator {
             break
           }
           if (decision.decision === 'modify') {
-            // 打回重做 → loop: re-run this same stage carrying the user's revision direction. #6: the
-            // feedback first goes through the main agent (analyzeRework), which analyzes it against the
-            // task + this stage's output and produces a focused, on-theme directive for the sub-agent,
-            // rather than piping the raw user words straight in. Empty direction still triggers a redo.
-            reworkNote = await this.analyzeRework(spec, body ?? '', (decision.value ?? '').trim())
+            // 打回 → the main agent reasons over the user's feedback + the EXISTING proposal (it doesn't read
+            // code, but it can think). It decides whether a code re-read is even needed, and if so, which
+            // projects. We never blindly re-run every project anymore.
+            const feedback = (decision.value ?? '').trim()
+            const perProject = stageScope(spec) === 'per-project' && baseProjNames.length > 0
+            const projDocs = lastDocs
+              .map(d => ({ name: d.name, content: (this.readDoc(d) ?? '').slice(0, 6000) }))
+              .filter(d => d.content)
+            const plan = await this.planRework(spec, body ?? '', projDocs, feedback, baseProjNames)
+            if (this.cancelled) break
+            // Root / single-agent stage (需求评估, root design): nothing to select or re-probe selectively —
+            // just re-run the one agent with the main-agent-analyzed directive (legacy behavior).
+            if (!perProject) {
+              reworkNote = plan.directive
+              round++
+              continue
+            }
+            if (!plan.needsCode) {
+              // Reason-only: re-gate with the main agent's revised proposal — NO sub-agent fan-out, no code
+              // re-read. (The user chose "直接出修订版方案再门控".)
+              reviseBody = plan.revised || body || '(主代理未能给出修订内容,请补充更具体的意见后再打回。)'
+              round++
+              continue
+            }
+            // Needs code. ASK the user before spending tokens re-reading — and re-probe ONLY the agreed
+            // subset (the user chose "先问你要不要重探"). The select card also accepts a free-typed reply
+            // (treated as extra direction that forces a re-probe).
+            const targets = plan.projects.length ? plan.projects : baseProjNames
+            const ask = await this.raise({
+              id: `reprobe-${spec.key}-${++this.pendingSeq}`, kind: 'select',
+              agentId: `stage:${spec.key}`, agentName: spec.name, wsName: this.run.workspaceName,
+              title: `${plan.summary || '结合你的意见,方案可能需要重新核实实现细节。'}\n要重新分析这些项目吗？（${targets.join('、')}）`,
+              role: '返工分析',
+              options: [
+                { t: `重新分析这 ${targets.length} 个项目`, d: `${targets.join('、')} —— 只重跑这些,其余项目沿用现有方案` },
+                { t: '不用,就按现有方案改', d: '主代理直接结合你的意见修订方案,不重读代码' },
+              ],
+            })
+            if (ask.decision === 'deny') { this.cancel(`「${spec.name}」被终止,已停止本次运行`); break }
+            const typed = (ask.value ?? '').trim()
+            if (ask.choice === 1 && !typed) {
+              // Declined re-probing → reason-only revise.
+              reviseBody = plan.revised || body || '(主代理未能给出修订内容,请补充更具体的意见后再打回。)'
+              round++
+              continue
+            }
+            // Re-probe the agreed subset; a typed custom reply is folded in as extra direction.
+            reprobeScope = targets
+            reworkNote = typed ? `${plan.directive}\n\n【用户补充意见】${typed}` : plan.directive
             round++
             continue
           }

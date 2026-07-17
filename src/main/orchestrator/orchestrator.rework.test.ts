@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Orchestrator } from './orchestrator'
+import { Orchestrator, parseReworkJson } from './orchestrator'
 import { EventBus } from './eventBus'
 import type { AgentProvider } from '../agents/types'
 import type { EngineEvent } from '@shared/types'
@@ -114,6 +114,91 @@ describe('Orchestrator per-stage rework loop (打回重做)', () => {
     // the gate for a non-design stage still fires and is marked reworkable
     const gate = events.find(e => e.type === 'pending:add' && e.action.kind === 'confirm')
     expect(gate && gate.type === 'pending:add' && gate.action.kind === 'confirm' && gate.action.reworkable).toBe(true)
+  })
+
+  // A provider whose chat() returns a canned rework-plan JSON (drives planRework), and whose run()
+  // records (agentId, prompt) so tests can assert WHICH projects re-ran.
+  function providerWithChat(runs: { agentId: string; stageKey: string; prompt: string }[], planJson: string): AgentProvider {
+    return {
+      id: 'rec', displayName: 'Rec',
+      capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      async detect() { return true }, async listModels() { return [] },
+      run(task, cb) {
+        runs.push({ agentId: task.agentId, stageKey: task.stageKey, prompt: task.prompt })
+        cb.onState('run')
+        const done = (async () => { cb.onState('ok'); const r = { ok: true, summary: 'ok' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+      chat(task, cb) {
+        cb.onAssistantDelta(planJson)
+        cb.onDone({ elapsed: 0 })
+        return { id: task.id, cancel() {}, done: Promise.resolve({ ok: true, summary: '' }) }
+      },
+    }
+  }
+
+  it('per-project 打回: 主代理判断无需读码 → 直接出修订版方案再门控,不重跑子代理', async () => {
+    const bus = new EventBus()
+    const runs: { agentId: string; stageKey: string; prompt: string }[] = []
+    const bodies: string[] = []
+    const provider = providerWithChat(runs, JSON.stringify({ needsCode: false, projects: [], revised: '# 修订版方案\n结合你的意见改好了', summary: '直接改' }))
+    const orch = new Orchestrator({ bus, providers: { rec: provider }, proxy: () => '' })
+    let n = 0
+    bus.subscribe(e => {
+      if (e.type === 'pending:add' && e.action.kind === 'confirm' && e.action.reworkable) {
+        bodies.push((e.action as { body?: string }).body ?? '')
+        const d = n++ === 0 ? { decision: 'modify' as const, value: '鉴权边界再细化' } : { decision: 'allow' as const }
+        setTimeout(() => orch.resolve({ id: e.action.id, ...d }), 0)
+      }
+    })
+    const run = await orch.startRun({
+      runId: 'rwpp1', workspaceName: 'ws', workspacePath: ws,
+      stages: [{ key: 'design', name: '技术方案设计', provider: 'rec', model: 'm', gate: true }],
+      developProjects: [{ name: 'p1', cwd: ws }, { name: 'p2', cwd: ws }] as never,
+    })
+    expect(run.status).toBe('ok')
+    // round 0 fan-out = p1 + p2 + 汇总 (3 design-keyed runs); the reason-only re-gate does NOT re-run anything.
+    expect(runs.filter(r => r.stageKey === 'design').length).toBe(3)
+    // the SECOND gate shows the main agent's revised proposal, not a re-fan-out result.
+    expect(bodies[1]).toContain('修订版方案')
+  })
+
+  it('per-project 打回: 主代理判断需读码 → 先问要不要重探,只重跑被选中的项目', async () => {
+    const bus = new EventBus()
+    const runs: { agentId: string; stageKey: string; prompt: string }[] = []
+    let askedReprobe = false
+    const provider = providerWithChat(runs, JSON.stringify({ needsCode: true, projects: ['p2'], directive: '重新核实 p2 的实现细节', summary: '需要重探 p2' }))
+    const orch = new Orchestrator({ bus, providers: { rec: provider }, proxy: () => '' })
+    let n = 0
+    bus.subscribe(e => {
+      if (e.type !== 'pending:add') return
+      const a = e.action
+      if (a.kind === 'confirm' && a.reworkable) {
+        const d = n++ === 0 ? { decision: 'modify' as const, value: 'p2 有问题' } : { decision: 'allow' as const }
+        setTimeout(() => orch.resolve({ id: a.id, ...d }), 0)
+      } else if (a.kind === 'select') {
+        askedReprobe = true
+        // choose "重新分析这些项目" (choice 0)
+        setTimeout(() => orch.resolve({ id: a.id, decision: 'allow', choice: 0 }), 0)
+      }
+    })
+    const run = await orch.startRun({
+      runId: 'rwpp2', workspaceName: 'ws', workspacePath: ws,
+      stages: [{ key: 'design', name: '技术方案设计', provider: 'rec', model: 'm', gate: true }],
+      developProjects: [{ name: 'p1', cwd: ws }, { name: 'p2', cwd: ws }] as never,
+    })
+    expect(run.status).toBe('ok')
+    expect(askedReprobe).toBe(true)                                 // user was asked before re-reading code
+    expect(runs.filter(r => r.agentId === 'design:p1').length).toBe(1) // p1 kept, NOT re-run
+    expect(runs.filter(r => r.agentId === 'design:p2').length).toBe(2) // only p2 re-probed
+    expect(runs.filter(r => r.agentId === 'design:p2')[1].prompt).toContain('重新核实 p2') // directive injected
+  })
+
+  it('parseReworkJson tolerates a ```json fence + surrounding prose; returns undefined when unparseable', () => {
+    expect(parseReworkJson('```json\n{"needsCode":true,"projects":["a"]}\n```')).toEqual({ needsCode: true, projects: ['a'] })
+    expect(parseReworkJson('好的,我的判断:\n{"needsCode":false,"revised":"x"}\n以上。')).toEqual({ needsCode: false, revised: 'x' })
+    expect(parseReworkJson('完全没有 JSON')).toBeUndefined()
+    expect(parseReworkJson('{坏的 json')).toBeUndefined()
   })
 
   it('gate:true gates the LAST stage too (design as sole stage fires a gate)', async () => {

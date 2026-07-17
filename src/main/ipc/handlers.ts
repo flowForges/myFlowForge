@@ -473,7 +473,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       const id = `ca-${++chatAskSeq}`
       chatGateOwner.set(id, { ws: wsPath, sessionId, type: 'ask' })
       chatAsks.set(id, (r) => {
-        if (options && options.length) resolve(r.decision === 'deny' ? null : (options[r.choice ?? 0]?.t ?? null))
+        if (r.decision === 'deny') { resolve(null); return }
+        // A typed custom answer (value) always wins over a picked option — the user chose to write their
+        // own instead of taking a preset. Falls back to the chosen option's label when no text was typed.
+        if (r.value && r.value.trim()) { resolve(r.value.trim()); return }
+        if (options && options.length) resolve(options[r.choice ?? 0]?.t ?? null)
         else resolve(r.decision === 'allow' ? (r.value ?? '') : null)
       })
       broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'ask-request', id, title: question, options, agentName })
@@ -600,7 +604,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         appendMessage(payload.workspacePath, payload.sessionId, umsg)
         broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'user', message: umsg })
         orch.resolve({ id: gate.id, decision: 'modify', value: payload.text })
-        emitNote(payload.workspacePath, payload.sessionId, `已把你的意见作为修改方向，将「${gate.agentName}」阶段打回重做，稍后回流新一版结果。`)
+        emitNote(payload.workspacePath, payload.sessionId, `已把你的意见交给主代理分析——它会结合「${gate.agentName}」的现有方案判断：能直接改就出修订版，需要重读代码才会先问你要不要重探。`)
         return umsg
       }
     }
