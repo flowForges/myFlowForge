@@ -39,6 +39,8 @@ import { canContinue } from './chat/canContinue'
 import { providerSupportsResume } from '@shared/nativeResumeProviders'
 import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
+import { useRun2 } from '../state/useRun2'
+import { RunPanel } from '../components/RunPanel'
 
 function importedToChat(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
@@ -133,6 +135,9 @@ function Copyable({ text, className }: { text: string; className?: string }) {
 
 export function WorkspaceView({ engine, providers, workspacePath, pendingStartOpts, onStartRun, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
+  // P3-B additive: chat|run2 mode toggle (new run controller UI), default 'chat' so all existing
+  // rendering below is 100% unaffected until the user explicitly switches.
+  const [mode2, setMode2] = useState<'chat' | 'run2'>('chat')
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
   // 全局搜索(Cmd+Shift+F):App 每次触发就 +1 → 切到文件树 tab;同一信号继续透传给 FileTreePane 聚焦搜索框。
@@ -155,6 +160,9 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   // Pending provider switch awaiting user confirmation (old provider already ran in this session).
   const [pendingSwitch, setPendingSwitch] = useState<{ from: string; to: string; toModel: string; permissionMode?: import('@shared/permissions').PermissionMode } | null>(null)
   const wsPath = workspacePath ?? engine.run?.workspacePath
+  // P3-B additive: new run-controller-driven panel, unconditional hook call (rules-of-hooks) — its
+  // state stays null/idle unless a run2 run is started, so it has no effect on chat-mode rendering.
+  const run2 = useRun2(wsPath)
   const localSessions = useSessions(wsPath)
   const sessions = sessionsApi ?? localSessions
   // Confirm a pending provider switch: apply the selection, persist it, and have the new provider
@@ -578,6 +586,16 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     <div className="view on" id="view-ws">
       {/* 对话主列 */}
       <div className="chat" style={{ position: 'relative' }}>
+        {/* P3-B additive: chat|run2 mode segmented control. Always visible so the user can switch
+            back from the new run-controller panel; the badge surfaces pending run2 inbox events. */}
+        <div className="run2-mode-toggle">
+          <button className={`txt-btn${mode2 === 'chat' ? ' on' : ''}`} onClick={() => setMode2('chat')}>对话</button>
+          <button className={`txt-btn${mode2 === 'run2' ? ' on' : ''}`} onClick={() => setMode2('run2')}>
+            工作流运行
+            {(run2.state?.inbox.length ?? 0) > 0 && <span className="badge">{run2.state!.inbox.length}</span>}
+          </button>
+        </div>
+        {mode2 === 'chat' && (<>
         <SessionTabs
           sessions={sessions.sessions}
           activeSessionId={sessions.activeSessionId}
@@ -820,6 +838,34 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           }}
           onPaste={wsPath ? async (f) => window.forge.savePaste({ workspacePath: wsPath, name: f.name, dataBase64: f.dataBase64 }) : undefined}
         />
+        </>)}
+        {/* P3-B additive: new run-controller panel, additive sibling shown only in run2 mode — the
+            chat column above stays fully intact (wrapped, not deleted) when mode2 === 'chat'. */}
+        {mode2 === 'run2' && (
+          <div className="run2-mode-body">
+            {run2.state === null && (
+              <button
+                className="btn-add"
+                disabled={!wsPath || !wsInfo}
+                onClick={() => {
+                  if (!wsPath || !wsInfo || !window.forge?.run2) return
+                  void window.forge.run2.start({
+                    workspacePath: wsPath,
+                    runId: 'run2-' + Date.now(),
+                    stages: wsInfo.stages,
+                    projects: wsInfo.projects.map(p => {
+                      const name = p.name || p.repoId
+                      return { name, cwd: wsPath + '/' + name, provider: p.provider || undefined, model: p.model || undefined }
+                    }),
+                  })
+                }}
+              >
+                用当前工作流配置启动（试运行）
+              </button>
+            )}
+            <RunPanel api={run2} />
+          </div>
+        )}
       </div>
 
       {/* 右侧检查器 resize handle — ALWAYS mounted (hidden via CSS when collapsed) so toggling the
