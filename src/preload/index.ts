@@ -301,6 +301,7 @@ const api = {
     editFeedback: (a: { workspacePath: string; id: string; text: string }) => ipcRenderer.invoke(CH.run2EditFeedback, a),
     removeFeedback: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.run2RemoveFeedback, a),
     abort: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.run2Abort, a),
+    getState: (workspacePath: string) => ipcRenderer.invoke(CH.run2GetState, { workspacePath }),
     onEvent: (cb: (p: { workspacePath: string; event: unknown }) => void) => {
       const listener = (_: unknown, p: { workspacePath: string; event: unknown }) => cb(p)
       ipcRenderer.on(CH.run2Event, listener)

@@ -35,4 +35,23 @@ describe('registerRun2', () => {
       expect(() => abort({}, { workspacePath: ws })).not.toThrow()
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
+
+  it('wires run2:get-state for mount/reload recovery', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+    try {
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+      expect(handlers.has(CH.run2GetState)).toBe(true)
+      const getState = handlers.get(CH.run2GetState)!
+      // unknown workspace → null
+      expect(await getState({}, { workspacePath: ws })).toBeNull()
+      // after starting a run, the handler returns the live controller state
+      const start = handlers.get(CH.run2Start)!
+      await start({}, { workspacePath: ws, runId: 'r1', stages: [{ key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false }], projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+      const state = await getState({}, { workspacePath: ws })
+      expect(state).not.toBeNull()
+      expect(typeof state.status).toBe('string')
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
 })

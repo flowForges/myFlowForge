@@ -76,4 +76,19 @@ describe('Run2Manager', () => {
     expect(errors[0].msg).toMatch(/no work orders/)
     expect(mgr.isActive(ws)).toBe(false) // lock freed despite the rejection
   })
+
+  it('a rejecting controller.start() still emits a terminal update so the renderer never hangs on "running"', async () => {
+    const updates: Array<{ ws: string; status: string }> = []
+    const mgr = new Run2Manager({
+      providers: { x: gatedProvider() }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: { event: () => {}, update: (w, s) => updates.push({ ws: w, status: s.status }) },
+    })
+    // same zero-work-orders throw as above, but this time we assert on the emitted update, not onError
+    const perProjectStages: StageSpec[] = [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }]
+    const plan = planFromStages('run-err2', perProjectStages)
+    mgr.start({ workspacePath: ws, runId: 'run-err2', plan, projects: [] })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(updates.some((u) => u.ws === ws && u.status === 'failed')).toBe(true)
+  })
 })

@@ -18,4 +18,7 @@ export function registerRun2(deps: { manager: Run2Manager; onInvoke: (channel: s
   onInvoke(CH.run2EditFeedback, (_e, p: { workspacePath: string; id: string; text: string }) => manager.editFeedback(p.workspacePath, p.id, p.text))
   onInvoke(CH.run2RemoveFeedback, (_e, p: { workspacePath: string; id: string }) => manager.removeFeedback(p.workspacePath, p.id))
   onInvoke(CH.run2Abort, (_e, p: { workspacePath: string }) => manager.abort(p.workspacePath))
+  // P3-B recovery: lets a renderer that mounts (or reloads) mid-run fetch current state instead of only
+  // ever receiving it via the run2Update broadcast. Additive — no existing behavior changes.
+  onInvoke(CH.run2GetState, (_e, p: { workspacePath: string }) => manager.get(p.workspacePath)?.state ?? null)
 }

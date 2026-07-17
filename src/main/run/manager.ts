@@ -38,7 +38,13 @@ export class Run2Manager {
     // from crashing the Electron main process; .finally frees the per-workspace serial lock.
     void controller
       .start()
-      .catch((err) => { this.deps.onError?.(opts.workspacePath, err instanceof Error ? err : new Error(String(err))) })
+      .catch((err) => {
+        const e = err instanceof Error ? err : new Error(String(err))
+        this.deps.onError?.(opts.workspacePath, e)
+        // ensure the renderer receives a terminal transition even when start() throws before its own
+        // terminal emit (e.g. the zero-work-orders guard) — otherwise it's stuck on 'running' forever.
+        this.deps.emit.update(opts.workspacePath, { ...controller.state, status: 'failed' })
+      })
       .finally(() => { this.controllers.delete(opts.workspacePath) })
     return controller.state
   }
