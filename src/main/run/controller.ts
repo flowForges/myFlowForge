@@ -10,6 +10,7 @@ import { addFeedback, editFeedback, removeFeedback, drainFeedback, type Feedback
 import { ResolverRegistry } from './resolver'
 import { buildWorkOrders, type StageInput } from './fanout'
 import { runWorkOrder, type WorkOrder, type WorkOrderOutcome } from './workOrder'
+import { saveControllerState } from './persist'
 
 export interface RunControllerDeps {
   providers: Record<string, AgentProvider>
@@ -57,7 +58,7 @@ export class RunController {
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
-  private emitUpdate() { const s = this.state; for (const f of this.updateSubs) f(s) }
+  private emitUpdate() { const s = this.state; for (const f of this.updateSubs) f(s); saveControllerState(this.deps.store, s) }
 
   addFeedback(text: string) { this.feedback = addFeedback(this.feedback, this.makeId('fb'), text); this.emitUpdate() }
   editFeedback(id: string, text: string) { this.feedback = editFeedback(this.feedback, id, text); this.emitUpdate() }
