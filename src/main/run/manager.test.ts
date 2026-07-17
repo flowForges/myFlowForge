@@ -58,4 +58,22 @@ describe('Run2Manager', () => {
     expect(mgr.resolveGate('/nope', 'x', { type: 'advance' })).toBe(false)
     expect(() => mgr.abort('/nope')).not.toThrow()
   })
+
+  it('a rejecting controller.start() routes to onError and frees the lock (no unhandled rejection)', async () => {
+    const errors: Array<{ ws: string; msg: string }> = []
+    const mgr = new Run2Manager({
+      providers: { x: gatedProvider() }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: { event: () => {}, update: () => {} },
+      onError: (w, err) => errors.push({ ws: w, msg: err.message }),
+    })
+    // a per-project stage with an EMPTY projects array makes RunController.start() throw (zero work orders)
+    const perProjectStages: StageSpec[] = [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }]
+    const plan = planFromStages('run-err', perProjectStages)
+    mgr.start({ workspacePath: ws, runId: 'run-err', plan, projects: [] })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(errors.length).toBe(1)
+    expect(errors[0].msg).toMatch(/no work orders/)
+    expect(mgr.isActive(ws)).toBe(false) // lock freed despite the rejection
+  })
 })
