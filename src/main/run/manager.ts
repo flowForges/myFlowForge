@@ -17,6 +17,7 @@ export interface Run2ManagerDeps {
   makeStore: (wsPath: string, runId: string) => RunStore
   emit: Run2Emit
   retries?: number
+  onError?: (wsPath: string, err: Error) => void
 }
 
 export class Run2Manager {
@@ -33,7 +34,12 @@ export class Run2Manager {
     controller.onEvent((e) => this.deps.emit.event(opts.workspacePath, e))
     controller.onUpdate((s) => this.deps.emit.update(opts.workspacePath, s))
     this.controllers.set(opts.workspacePath, controller)
-    void controller.start().finally(() => { this.controllers.delete(opts.workspacePath) })
+    // .catch prevents an unhandled rejection (e.g. RunController.start()'s zero-work-orders throw)
+    // from crashing the Electron main process; .finally frees the per-workspace serial lock.
+    void controller
+      .start()
+      .catch((err) => { this.deps.onError?.(opts.workspacePath, err instanceof Error ? err : new Error(String(err))) })
+      .finally(() => { this.controllers.delete(opts.workspacePath) })
     return controller.state
   }
   get(wsPath: string): RunController | undefined { return this.controllers.get(wsPath) }
