@@ -632,6 +632,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // Track whether the main agent took EITHER real forge action this turn (propose_plan OR delegate).
     // The narrated-execution backstop below only fires when it took NEITHER but still narrated a workflow.
     let delegatedAny = false
+    // forge_delegate is fire-and-forget: its MCP call returns 「已派发」at once, so without this the turn
+    // would resolve while the sub-agents keep running in the background — and the NEXT message would start
+    // a CONCURRENT turn (a 2nd batch running alongside the 1st, their progress blocks scattered). Collect a
+    // completion promise per batch dispatched THIS turn and await them before the turn resolves, so
+    // ChatQueue keeps this workspace busy and a message typed mid-run queues until the batch finishes.
+    const delegateBatches: Promise<void>[] = []
     const bridge = await startBridge(store.runDir, {
       store, runId: 'chat', workspaceName: payload.workspacePath,
       agentName: () => 'chat', agentStage: () => 'chat',
@@ -649,6 +655,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         delegatedAny = true
         // Per-call: the batch's runId (from onBatchStart) so onComplete can mark the SAME progress block done.
         let batchRunId: string | null = null
+        // Hold the turn open until THIS batch's onComplete fires (see delegateBatches above), so the queue
+        // serializes a mid-run message behind it instead of racing a concurrent turn. onComplete is
+        // guaranteed on every exit path of delegate's background IIFE, so this promise always settles.
+        let settleBatch: () => void = () => {}
+        delegateBatches.push(new Promise<void>((res) => { settleBatch = res }))
         // Mark this session as having in-flight background delegates (cleared in onComplete) so the
         // composer shows a running/stop state while the fire-and-forget sub-agents keep working.
         bumpDelegateBusy(payload.workspacePath, payload.sessionId, +1)
@@ -709,6 +720,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
             broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'done', message: dmsg })
             // Background delegates for this batch are done → clear the composer's running/stop state.
             bumpDelegateBusy(payload.workspacePath, payload.sessionId, -1)
+            settleBatch()   // release the turn's wait so the next queued message can run
           },
         })
       },
@@ -773,6 +785,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       // the turn) are untouched.
       drainChatGates(payload.workspacePath, { sessionId: payload.sessionId, type: 'confirm' })
       await bridge?.close().catch(() => {})
+      // Fire-and-forget delegates outlive the main turn on their OWN bridge (the close above is the chat
+      // bridge, unrelated). Keep the turn — and thus ChatQueue.busy for this workspace — alive until every
+      // batch dispatched this turn completes, so a message sent mid-run QUEUES behind it instead of
+      // starting a concurrent turn. In finally so it also holds when the turn ended by error/cancel after
+      // dispatching. allSettled + delegate's guaranteed onComplete means this resolves, never hangs.
+      if (delegateBatches.length) await Promise.allSettled(delegateBatches)
     }
   }
   const chatQueue = new ChatQueue(runTurn, broadcast)
