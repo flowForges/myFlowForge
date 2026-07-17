@@ -1,0 +1,113 @@
+// src/main/run/controller.test.ts
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { RunStore } from '../orchestrator/runStore'
+import { RunController } from './controller'
+import type { RunPlan } from './machine'
+import type { RunEvent } from './events'
+import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
+
+let ws: string
+beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'ctl-')) })
+afterEach(() => { rmSync(ws, { recursive: true, force: true }) })
+
+function okProvider(): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => { cb.onHandoff?.({ summary: `out ${task.agentId}` }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+function askingProvider(): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        const ok = await cb.onConfirm({ title: 'overwrite' })
+        cb.onHandoff?.({ summary: `confirm=${ok}` }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+function failingProvider(stage: string): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        if (task.stageKey === stage) { cb.onState('err'); cb.onError(new Error('boom')); return { ok: false } }
+        cb.onHandoff?.({ summary: 'out' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+
+const idFactory = () => { let n = 0; return (p: string) => `${p}-${n++}` }
+
+const plan: RunPlan = {
+  runId: 'r1', stages: [
+    { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: true },
+    { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+  ],
+}
+const projects = [{ name: 'a', cwd: '/ws/a' }, { name: 'b', cwd: '/ws/b' }]
+
+describe('RunController', () => {
+  it('raises a gate at a gated stage and advances on approval', async () => {
+    const store = new RunStore(ws, 'r1')
+    const c = new RunController(plan, { providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const events: RunEvent[] = []
+    c.onEvent((e) => {
+      events.push(e)
+      if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' })
+    })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    expect(final.machine.stages.map((s) => s.status)).toEqual(['done', 'done'])
+    expect(events.filter((e) => e.kind === 'gate').map((e) => (e as any).stageKey)).toEqual(['design'])
+  })
+
+  it('jumpBack from the develop-less flow: gate redo re-runs the stage', async () => {
+    const store = new RunStore(ws, 'r1')
+    const c = new RunController(plan, { providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let gateCount = 0
+    c.onEvent((e) => {
+      if (e.kind === 'gate') { gateCount++; c.resolveGate(e.id, gateCount === 1 ? { type: 'redo', feedback: 'tighten' } : { type: 'advance' }) }
+    })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    expect(gateCount).toBe(2) // design gate hit twice (redo then advance)
+    expect(final.machine.stages[0].round).toBe(1)
+  })
+
+  it('a lane onConfirm raises an auth event; authorize resumes it', async () => {
+    const store = new RunStore(ws, 'r1')
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: askingProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const auths: string[] = []
+    c.onEvent((e) => { if (e.kind === 'auth') { auths.push(e.laneId); c.resolveLane(e.id, { type: 'authorize' }) } })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    expect(auths.sort()).toEqual(['develop:a', 'develop:b'])
+  })
+
+  it('a failed lane raises a failure event; skipLane lets siblings finish', async () => {
+    const store = new RunStore(ws, 'r1')
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: failingProvider('develop') }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], retries: 0, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const kinds: string[] = []
+    c.onEvent((e) => { kinds.push(e.kind); if (e.kind === 'failure') c.resolveLane(e.id, { type: 'skipLane' }) })
+    const final = await c.start()
+    expect(kinds).toContain('failure')
+    // after skipping the only failed lane, the stage is treated as resolved and advances to completion
+    expect(final.machine.stages[0].status).toBe('done')
+  })
+})
