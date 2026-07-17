@@ -53,6 +53,12 @@ export async function runHeadless(plan: RunPlan, deps: RunHeadlessDeps): Promise
     }
 
     const orders = buildWorkOrders(input)
+    // Invariant: a root-scope stage always yields exactly 1 order; a per-project stage requires
+    // >=1 project to yield any. Silently proceeding with 0 orders would make `allOk` vacuously
+    // true below and the stage would "complete" having done nothing — fail loudly instead.
+    if (orders.length === 0) {
+      throw new Error(`runHeadless: stage "${stage.key}" produced no work orders (a per-project stage requires >=1 project)`)
+    }
     const stageOutcomes = await runStage(orders, (o) => ({
       provider: deps.providers[o.provider],
       env: deps.env,
@@ -71,7 +77,9 @@ export async function runHeadless(plan: RunPlan, deps: RunHeadlessDeps): Promise
     }
     deps.store.setContext('artifacts:' + stage.key, refs)
 
-    const allOk = stageOutcomes.length > 0 && stageOutcomes.every((o) => o.status === 'ok')
+    // stageOutcomes is always non-empty here: the guard above throws before this point if
+    // buildWorkOrders produced zero orders, so runStage always ran on >=1 order.
+    const allOk = stageOutcomes.every((o) => o.status === 'ok')
     if (!allOk) return { state, outcomes, status: 'failed' }
 
     state = advance(state)

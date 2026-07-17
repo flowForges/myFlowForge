@@ -5,23 +5,20 @@ import type { StagePlan } from './machine'
 
 const buildPrompt = (o: { stageKey: string; project?: string }) => `stage=${o.stageKey} proj=${o.project ?? '-'}`
 
-function okProvider(): AgentProvider {
-  return {
-    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
-    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
-    run(task: AgentTask, cb: AgentCallbacks) {
-      const done = (async () => { cb.onHandoff?.({ summary: `did ${task.agentId}` }); const r = { ok: true, summary: 'x' }; cb.onDone(r); return r })()
-      return { id: task.agentId, cancel() {}, done }
-    },
-  }
-}
 function failFor(project: string): AgentProvider {
   return {
     id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
     async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
     run(task: AgentTask, cb: AgentCallbacks) {
       const done = (async () => {
-        if (task.agentId.includes(project)) { cb.onState('err'); throw new Error('boom') }
+        if (task.agentId.includes(project)) {
+          cb.onState('err')
+          const err = new Error('boom')
+          cb.onError(err)
+          const r = { ok: false }
+          cb.onDone(r)
+          return r
+        }
         cb.onHandoff?.({ summary: `did ${task.agentId}` }); const r = { ok: true, summary: 'x' }; cb.onDone(r); return r
       })()
       return { id: task.agentId, cancel() {}, done }

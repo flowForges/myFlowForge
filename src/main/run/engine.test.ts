@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../orchestrator/runStore'
@@ -30,7 +30,14 @@ function failingDevelop(): AgentProvider {
     async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
     run(task: AgentTask, cb: AgentCallbacks) {
       const done = (async () => {
-        if (task.stageKey === 'develop') { cb.onState('err'); throw new Error('nope') }
+        if (task.stageKey === 'develop') {
+          cb.onState('err')
+          const err = new Error('nope')
+          cb.onError(err)
+          const r = { ok: false }
+          cb.onDone(r)
+          return r
+        }
         cb.onHandoff?.({ summary: `output of ${task.agentId}` }); const r = { ok: true, summary: 'x' }; cb.onDone(r); return r
       })()
       return { id: task.agentId, cancel() {}, done }
@@ -75,5 +82,14 @@ describe('runHeadless', () => {
     expect(res.state.stages[0].status).toBe('done') // design ok
     expect(res.state.stages[1].status).toBe('running') // develop stuck, not advanced
     expect(res.outcomes['develop'][0].status).toBe('failed')
+  })
+
+  it('rejects with a descriptive error when a per-project stage has no projects', async () => {
+    const store = new RunStore(ws, 'r1')
+    await expect(runHeadless(plan, {
+      providers: { x: recordingProvider() }, store, env: {},
+      projects: [],
+      sleep: async () => {},
+    })).rejects.toThrow(/stage "develop" produced no work orders/)
   })
 })

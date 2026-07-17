@@ -37,7 +37,14 @@ function flakyProvider(failTimes: number): AgentProvider {
       const shouldFail = calls <= failTimes
       const done = (async () => {
         cb.onState('run')
-        if (shouldFail) { cb.onState('err'); throw new Error('network timeout') }
+        if (shouldFail) {
+          cb.onState('err')
+          const err = new Error('network timeout')
+          cb.onError(err)
+          const r = { ok: false }
+          cb.onDone(r)
+          return r
+        }
         cb.onHandoff?.({ summary: 'ok now' })
         cb.onState('ok'); const r = { ok: true, summary: 'ok now' }; cb.onDone(r); return r
       })()
