@@ -30,7 +30,7 @@ describe('Run2EventCard', () => {
     expect(container.querySelector('.req-file')).toBeNull()
   })
 
-  it('question: submits typed value, or skipLane / abort', () => {
+  it('question: submits typed value or abort', () => {
     const onGate = vi.fn()
     const onLane = vi.fn<(id: string, d: LaneDecision) => void>()
     const event: RunEvent = { id: 'e2', kind: 'question', laneId: 'l1', stageKey: 'dev', title: '用什么命名风格?', placeholder: '例如 camelCase' }
@@ -42,22 +42,22 @@ describe('Run2EventCard', () => {
     fireEvent.click(screen.getByText('提交'))
     expect(onLane).toHaveBeenCalledWith('e2', { type: 'answer', value: 'snake_case' })
 
-    fireEvent.click(screen.getByText('跳过本泳道'))
-    expect(onLane).toHaveBeenCalledWith('e2', { type: 'skipLane' })
-
     fireEvent.click(screen.getByText('终止'))
     expect(onLane).toHaveBeenCalledWith('e2', { type: 'abort' })
+
+    // skipLane button should not exist
+    expect(screen.queryByText('跳过本泳道')).toBeNull()
   })
 
-  it('doubt: renders note, fires escalate via onLane', () => {
+  it('doubt: renders note as informational (no action buttons)', () => {
     const onGate = vi.fn()
     const onLane = vi.fn<(id: string, d: LaneDecision) => void>()
     const event: RunEvent = { id: 'e3', kind: 'doubt', laneId: 'l1', stageKey: 'dev', note: '这个依赖版本似乎不兼容' }
     render(<Run2EventCard event={event} onGate={onGate} onLane={onLane} />)
 
     expect(screen.getByText('这个依赖版本似乎不兼容')).toBeInTheDocument()
-    fireEvent.click(screen.getByText('升级为方案问题'))
-    expect(onLane).toHaveBeenCalledWith('e3', { type: 'escalate' })
+    expect(screen.queryByText('升级为方案问题')).toBeNull()
+    expect(onLane).not.toHaveBeenCalled()
   })
 
   it('failure: renders error+attempts, fires retry/skipLane via onLane', () => {
