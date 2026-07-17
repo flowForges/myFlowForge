@@ -75,6 +75,39 @@ describe('ReqCard', () => {
     expect(onResolve).toHaveBeenCalledWith({ id: 'p3', decision: 'allow', choice: 1 })
   })
 
+  it('a select card also lets the user type a custom answer (sent as value, no choice)', () => {
+    const onResolve = vi.fn<(p: ResolvePayload) => void>()
+    const action: PendingAction = {
+      ...base, id: 'p3c', kind: 'select', title: '选择策略',
+      options: [{ t: '逐文件迁移', d: '分批' }, { t: '全量替换', d: '最快' }],
+    }
+    render(<ReqCard action={action} onResolve={onResolve} />)
+
+    const custom = screen.getByPlaceholderText(/以上都不合适/) as HTMLInputElement
+    // Empty → submit disabled (no accidental blank answer).
+    const submit = custom.closest('.req-inrow')!.querySelector('button') as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    fireEvent.change(custom, { target: { value: '  按调用频率热点优先迁移  ' } })
+    expect(submit.disabled).toBe(false)
+    fireEvent.click(submit)
+    // Trimmed value, and NO choice index — the sub-agent receives the free text verbatim.
+    expect(onResolve).toHaveBeenCalledWith({ id: 'p3c', decision: 'allow', value: '按调用频率热点优先迁移' })
+    expect(onResolve).not.toHaveBeenCalledWith(expect.objectContaining({ choice: expect.anything() }))
+  })
+
+  it('a select card submits the custom answer on Enter', () => {
+    const onResolve = vi.fn<(p: ResolvePayload) => void>()
+    const action: PendingAction = {
+      ...base, id: 'p3e', kind: 'select', title: '选择策略',
+      options: [{ t: 'A', d: 'a' }],
+    }
+    render(<ReqCard action={action} onResolve={onResolve} />)
+    const custom = screen.getByPlaceholderText(/以上都不合适/) as HTMLInputElement
+    fireEvent.change(custom, { target: { value: '我的自定义意见' } })
+    fireEvent.keyDown(custom, { key: 'Enter' })
+    expect(onResolve).toHaveBeenCalledWith({ id: 'p3e', decision: 'allow', value: '我的自定义意见' })
+  })
+
   it('escapes untrusted html in title/sub (no XSS) — renders as literal text', () => {
     const action: PendingAction = {
       ...base, id: 'p4', kind: 'confirm',

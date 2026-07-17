@@ -95,7 +95,7 @@ export function createForgeServer(send: SendFn, allowed?: Set<string>): McpServe
   if (reg.has('forge_ask')) server.registerTool(
     'forge_ask',
     {
-      description: '向用户提问并等待回答（阻塞直到用户作答）。传入 options 则以单选形式呈现，返回所选项的 t。',
+      description: '向用户提问并等待回答（阻塞直到用户作答）。传入 options 则以单选形式呈现；用户既可选一项（返回该项的 t），也可能觉得选项都不合适而自行输入一段文字——此时返回用户输入的原文而非某个 t，你要理解并据此思考，不要假设返回值一定是某个选项。',
       inputSchema: { question: z.string(), options: z.array(reqOptionSchema).optional() },
     },
     async ({ question, options }) => {
