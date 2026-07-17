@@ -27,3 +27,45 @@ export function stageIndex(s: MachineState, key: string): number {
 export function currentStage(s: MachineState): StageState | null {
   return s.stages[s.currentIndex] ?? null
 }
+
+function clone(s: MachineState): MachineState {
+  return { plan: s.plan, currentIndex: s.currentIndex, stages: s.stages.map((x) => ({ ...x })) }
+}
+
+export function markRunning(s: MachineState): MachineState {
+  const n = clone(s)
+  const cur = n.stages[n.currentIndex]
+  if (cur && (cur.status === 'pending' || cur.status === 'stale')) cur.status = 'running'
+  return n
+}
+
+export function advance(s: MachineState): MachineState {
+  const n = clone(s)
+  const cur = n.stages[n.currentIndex]
+  if (cur) cur.status = 'done'
+  let i = n.currentIndex + 1
+  while (i < n.stages.length && n.stages[i].status === 'done') i++
+  n.currentIndex = Math.min(i, n.stages.length - 1)
+  return n
+}
+
+export function redo(s: MachineState): MachineState {
+  const n = clone(s)
+  const cur = n.stages[n.currentIndex]
+  if (cur) { cur.round++; cur.status = 'running' }
+  return n
+}
+
+export function jumpBack(s: MachineState, targetKey: string): MachineState {
+  const idx = stageIndex(s, targetKey)
+  if (idx < 0) return s
+  const n = clone(s)
+  for (let i = idx + 1; i < n.stages.length; i++) {
+    if (n.stages[i].status === 'done') n.stages[i].status = 'stale'
+  }
+  const target = n.stages[idx]
+  target.round++
+  target.status = 'running'
+  n.currentIndex = idx
+  return n
+}
