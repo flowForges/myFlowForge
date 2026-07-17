@@ -9,6 +9,7 @@ export interface SavedControllerState {
   feedback: RunControllerState['feedback']
   status: RunControllerState['status']
   outcomes: Record<string, SavedOutcome[]>
+  pendingDirective: RunControllerState['pendingDirective']
 }
 
 const KEY = 'run2-state'
@@ -18,7 +19,7 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
   for (const [k, list] of Object.entries(s.outcomes)) {
     outcomes[k] = list.map((o) => ({ id: o.order.id, status: o.status, project: o.order.project, error: o.error, attempts: o.attempts }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY)

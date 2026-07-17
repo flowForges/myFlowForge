@@ -29,6 +29,7 @@ export interface RunControllerState {
   feedback: FeedbackDraft[]
   outcomes: Record<string, WorkOrderOutcome[]>
   status: RunStatus
+  pendingDirective: Record<string, string>
 }
 
 export class RunController {
@@ -54,7 +55,7 @@ export class RunController {
   onEvent(fn: (e: RunEvent) => void) { this.eventSubs.push(fn); return () => { this.eventSubs = this.eventSubs.filter((f) => f !== fn) } }
   onUpdate(fn: (s: RunControllerState) => void) { this.updateSubs.push(fn); return () => { this.updateSubs = this.updateSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective } }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -88,6 +89,20 @@ export class RunController {
     return ok
   }
 
+  /**
+   * Force-abort a run from outside any live lane/gate event — e.g. a run parked at a GATE (or
+   * between stages, where resolveLane/resolveGate have nothing to attach to) can only be
+   * cancelled through this entry point. Mirrors the settleAll fan-out that resolveLane's abort
+   * branch does, so every in-flight lane/gate await unblocks the same way regardless of which
+   * path triggered the abort.
+   */
+  abort(): void {
+    this.aborted = true
+    this.laneR.settleAll({ type: 'abort' })
+    this.gateR.settleAll({ type: 'advance' })
+    this.emitUpdate()
+  }
+
   private workspacePath(): string { return this.deps.store.runDir.replace(/\/\.forge\/runs\/[^/]+$/, '') }
   private upstream(uptoIndex: number): ArtifactRef[] {
     const refs: ArtifactRef[] = []
@@ -110,6 +125,11 @@ export class RunController {
       retries: this.deps.retries,
       sleep: this.deps.sleep,
       onConfirm: async (req: ConfirmReq, laneId: string) => {
+        // If the run was already aborted (e.g. by a sibling lane, or by a concurrent onEvent
+        // resolving an EARLIER interaction with `abort`), a resolver created here would never
+        // be settled by anything — resolveLane's settleAll already ran before this call started.
+        // Short-circuit before create()/emitEvent() so we never register an orphaned resolver.
+        if (this.aborted) return 'deny'
         const id = this.makeId('auth')
         // Register the resolver BEFORE emitting: a synchronous listener (the common case — the
         // caller resolves the lane right inside the onEvent callback) must find a live resolver
@@ -121,6 +141,8 @@ export class RunController {
         return d.type === 'authorize' ? 'allow' : 'deny'
       },
       onInput: async (req: InputReq, laneId: string) => {
+        // Same abort short-circuit as onConfirm above — see comment there.
+        if (this.aborted) return ''
         const id = this.makeId('question')
         const p = this.laneR.create(id)
         this.emitEvent({ id, kind: 'question', laneId, stageKey: order.stageKey, title: req.title, placeholder: req.placeholder })

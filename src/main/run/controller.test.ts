@@ -36,6 +36,23 @@ function askingProvider(): AgentProvider {
     },
   }
 }
+// Provider that awaits TWO interaction calls in sequence: onConfirm, THEN onInput. Used to
+// reproduce Finding 1 — an abort delivered while blocked on the FIRST call must not leave the
+// SECOND call (started only after settleAll already ran) with an orphaned, never-settled resolver.
+function askThenInputProvider(): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        await cb.onConfirm({ title: 'auth' })
+        await cb.onInput({ title: 'question' })
+        cb.onHandoff?.({ summary: 'out' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
 function failingProvider(stage: string): AgentProvider {
   return {
     id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
@@ -118,6 +135,45 @@ describe('RunController', () => {
     ])
     expect(final.status).toBe('failed')
     expect(final.inbox).toEqual([]) // no orphaned events left behind by the abort path
+    // ^ this also exercises Finding 1(b): two projects both blocked on onConfirm, abort the
+    // first auth event, never resolve the second — settleAll must force-unblock it too.
+  })
+
+  it('Finding 1(a): abort on onConfirm does not deadlock when the provider later calls onInput', async () => {
+    const store = new RunStore(ws, 'r1')
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: askThenInputProvider() }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let questionSeen = false
+    c.onEvent((e) => {
+      if (e.kind === 'auth') c.resolveLane(e.id, { type: 'abort' })
+      // The question event must never fire: by the time the provider gets around to calling
+      // onInput, `aborted` is already true and onInput should short-circuit before emitting.
+      if (e.kind === 'question') questionSeen = true
+    })
+    const final = await Promise.race([
+      c.start(),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: start() did not settle')), 2000)),
+    ])
+    expect(final.status).toBe('failed')
+    expect(questionSeen).toBe(false)
+    expect(final.inbox).toEqual([])
+  })
+
+  it('Finding 2: abort() force-cancels a run parked at a gate with no live lane event', async () => {
+    const store = new RunStore(ws, 'r1')
+    const c = new RunController(plan, { providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    c.onEvent((e) => {
+      // Never resolveGate — the gate is deliberately left hanging; abort() is the only thing
+      // that can unblock a run parked here (there is no lane event to call resolveLane on).
+      if (e.kind === 'gate') c.abort()
+    })
+    const final = await Promise.race([
+      c.start(),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: start() did not settle')), 2000)),
+    ])
+    expect(final.status).toBe('failed')
+    // The gate's force-settled { type: 'advance' } must NOT spuriously advance the machine.
+    expect(final.machine.stages.map((s) => s.status)).not.toEqual(['done', 'done'])
   })
 
   it('a failed lane raises a failure event; skipLane lets siblings finish', async () => {
