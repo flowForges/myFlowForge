@@ -309,8 +309,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     [dynamicCommands, wsInfo?.workflows],
   )
   // Picking a workflow from "/" opens the run2 launcher (below) preselecting this workflow, instead of
-  // seeding a chat trigger phrase (dead since P4-B made chat never auto-trigger workflows).
-  const onPickWorkflow = useCallback((workflowId: string) => {
+  // seeding a chat trigger phrase (dead since P4-B made chat never auto-trigger workflows). Called with
+  // `undefined` when the built-in /工作流 command is picked — opens the launcher with no preselection
+  // (RunLauncher.initialWorkflowId is optional and defaults to the first workflow).
+  const onPickWorkflow = useCallback((workflowId?: string) => {
     setPendingLaunch({ workflowId })
     setRunView(true)
   }, [])

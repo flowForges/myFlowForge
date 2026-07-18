@@ -88,8 +88,10 @@ interface Props {
   /** 本机扫描到的该 provider 的自定义命令/prompt + skills(经 IPC),与 Forge 内置命令一起进 "/" 菜单。 */
   dynamicCommands?: MenuCommand[]
   /** Picking a workflow entry from the "/" menu (MenuCommand.workflowId set) calls this instead of
-      just filling the textarea with a template — see chooseSlash. */
-  onPickWorkflow?: (workflowId: string) => void
+      just filling the textarea with a template — see chooseSlash. Called with `undefined` when the
+      built-in /工作流 command (MenuCommand.openLauncher) is picked: open the launcher with no
+      preselected workflow (defaults to the first one) instead of seeding a chat trigger phrase. */
+  onPickWorkflow?: (workflowId?: string) => void
   /** Identifies the current chat (e.g. `${wsPath}::${sessionId}`). The unsent draft (text + attachments)
       is kept PER key, so switching session/workspace hides this draft there and restores it on return —
       instead of one shared draft leaking across every session. */
@@ -244,6 +246,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     // template verbatim — the parent seeds a workflow-scoped trigger phrase via its own seedText
     // plumbing (same mechanism as the 快捷指令 chips), so the user types the task and sends normally.
     if (c.workflowId) { setText(''); onPickWorkflow?.(c.workflowId) }
+    // The built-in /工作流 command: open the run2 launcher with no preselection instead of seeding a
+    // chat message (chat is pure chat — a seeded trigger phrase never auto-starts a workflow).
+    else if (c.openLauncher) { setText(''); onPickWorkflow?.(undefined) }
     else setText(c.template)
     setSlashDismissed(true)
     const ta = taRef.current
