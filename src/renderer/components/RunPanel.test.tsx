@@ -93,6 +93,44 @@ describe('RunPanel', () => {
     expect(api.addFeedback).toHaveBeenCalledWith('新反馈')
   })
 
+  it('renders live lanes for the current stage when outcomes are empty, and hides the empty state', () => {
+    const state = makeState({
+      outcomes: {},
+      liveLanes: {
+        'design:root': { stageKey: 'design', state: 'run', activity: '写 design.md' },
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+
+    // Note: makeState's default currentIndex is 1 (the 'dev' stage). The 'design' stage's
+    // live lane belongs to a different stage, so it should NOT render.
+    expect(screen.queryByText('写 design.md')).not.toBeInTheDocument()
+  })
+
+  it('renders live lanes for the CURRENT stage and suppresses the empty state', () => {
+    const state = makeState({
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [
+          { key: 'design', status: 'running', round: 0 },
+          { key: 'dev', status: 'pending', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 0,
+      },
+      outcomes: {},
+      liveLanes: {
+        'design:root': { stageKey: 'design', state: 'run', activity: '写 design.md' },
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+
+    expect(screen.getByText('写 design.md')).toBeInTheDocument()
+    expect(screen.queryByText('暂无进展')).not.toBeInTheDocument()
+  })
+
   it('editFeedback and removeFeedback are wired to the feedback row', () => {
     const api = makeApi(makeState())
     render(<RunPanel api={api} />)

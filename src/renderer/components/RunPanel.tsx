@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Run2Api } from '../state/useRun2'
 import type { StageStatus } from '../../main/run/machine'
 import type { WorkOrderOutcome } from '../../main/run/workOrder'
+import type { LiveLane } from '../../main/run/controller'
 import { Run2EventCard } from './Run2EventCard'
 
 interface RunPanelProps { api: Run2Api }
@@ -49,16 +50,33 @@ function LaneRow({ outcome }: { outcome: WorkOrderOutcome }) {
   )
 }
 
+// Live lane row: a stage's currently-running work order (not yet settled into `outcomes`).
+function LiveLaneRow({ id, lane }: { id: string; lane: LiveLane }) {
+  const label = lane.project ?? 'root'
+  return (
+    <div className="run2-lane-row live st-run">
+      <span className="run2-lane-project">{label}</span>
+      <span className="run2-lane-status">⟳ {lane.state ?? '执行中'}</span>
+      {lane.activity && <span className="run2-lane-activity">{lane.activity}</span>}
+    </div>
+  )
+}
+
 function CurrentStageLane({ api }: { api: Run2Api }) {
-  const { machine, outcomes } = api.state!
+  const { machine, outcomes, liveLanes } = api.state!
   const currentKey = machine.stages[machine.currentIndex]?.key
   const stageOutcomes = currentKey ? outcomes[currentKey] : undefined
+  const liveEntries = currentKey
+    ? Object.entries(liveLanes).filter(([, l]) => l.stageKey === currentKey)
+    : []
+  const hasOutcomes = !!stageOutcomes && stageOutcomes.length > 0
+  const hasLive = liveEntries.length > 0
   return (
     <div className="run2-lane">
       <div className="run2-lane-title">当前阶段泳道{currentKey ? `：${currentKey}` : ''}</div>
-      {stageOutcomes && stageOutcomes.length > 0
-        ? stageOutcomes.map((o) => <LaneRow key={o.order.id} outcome={o} />)
-        : <div className="run2-lane-empty">暂无进展</div>}
+      {hasOutcomes && stageOutcomes!.map((o) => <LaneRow key={o.order.id} outcome={o} />)}
+      {hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} />)}
+      {!hasOutcomes && !hasLive && <div className="run2-lane-empty">暂无进展</div>}
     </div>
   )
 }
