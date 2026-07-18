@@ -478,26 +478,19 @@
    classes for its four regions.
    ============================================================ */
 
-/* ---- chat | 工作流运行 segmented toggle (WorkspaceView) ---- */
-.run2-mode-toggle {
-  flex: 0 0 auto; display: inline-flex; align-self: flex-start; gap: 2px;
-  margin: 12px 0 0 32px; padding: 3px; border-radius: 10px;
-  background: var(--surface-2); border: 1px solid var(--border);
+/* ---- Task 1: reopen chip (chat column, only while a run is active but !runView) + back button
+   (run2-mode-body header) — replace the old always-visible chat|工作流运行 segmented toggle. ---- */
+.run2-reopen {
+  flex: 0 0 auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px;
+  margin: 12px 0 0 32px; height: 26px; padding: 0 12px; border-radius: 7px;
+  font-size: 12px; font-weight: 600; color: var(--on-accent); background: var(--accent); transition: .14s;
 }
-.run2-mode-toggle .txt-btn {
-  position: relative; display: inline-flex; align-items: center; gap: 6px;
-  height: 26px; padding: 0 12px; border-radius: 7px;
+.run2-reopen:hover { filter: brightness(1.08); }
+.run2-back {
+  align-self: flex-start; height: 26px; padding: 0 10px; border-radius: 7px;
   font-size: 12px; font-weight: 600; color: var(--muted); transition: .14s;
 }
-.run2-mode-toggle .txt-btn:hover { color: var(--fg-2); }
-.run2-mode-toggle .txt-btn.on { color: var(--on-accent); background: var(--accent); }
-.run2-mode-toggle .txt-btn .badge {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px;
-  font-family: var(--mono); font-size: 10px; font-weight: 700;
-  background: var(--err); color: #fff;
-}
-.run2-mode-toggle .txt-btn.on .badge { background: color-mix(in oklab, var(--on-accent) 30%, transparent); color: var(--on-accent); }
+.run2-back:hover { color: var(--fg-2); background: var(--surface-2); }
 
 /* ---- run2 body — sibling of the chat column, shown only in 工作流运行 mode ---- */
 .run2-mode-body {
