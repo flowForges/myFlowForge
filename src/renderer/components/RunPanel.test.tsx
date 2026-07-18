@@ -203,6 +203,9 @@ describe('RunPanel', () => {
         ],
         currentIndex: 0,
       },
+      // No pending gate here — this test is about the current-stage-follow default, not the
+      // gate-focus override. (makeState's base fixture has a gate on 'dev', which would win.)
+      inbox: [],
       outcomes: {
         design: [
           {
@@ -275,6 +278,9 @@ describe('RunPanel', () => {
         stages: [{ key: 'design', status: 'running', round: 0 }],
         currentIndex: 0,
       },
+      // No pending gate — irrelevant to file-viewer behavior (base fixture's gate is on 'dev',
+      // a stage that doesn't even exist here).
+      inbox: [],
       outcomes: {
         design: [
           {
@@ -296,5 +302,43 @@ describe('RunPanel', () => {
     // close button dismisses the viewer
     fireEvent.click(screen.getByRole('button', { name: /关闭/ }))
     expect(screen.queryByRole('heading', { name: '技术方案' })).not.toBeInTheDocument()
+  })
+
+  it('auto-focuses the gating stage\'s output (no chip click) and shows a review hint; an explicit chip click overrides it', () => {
+    const state = makeState({
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [
+          { key: 'design', status: 'awaiting-gate', round: 0 },
+          { key: 'dev', status: 'pending', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        // Current stage is 'dev' per the machine's index, but a gate is pending on 'design' —
+        // the design output should be shown by default, not dev's.
+        currentIndex: 1,
+      },
+      inbox: [{ id: 'g1', kind: 'gate', stageKey: 'design', body: '## 方案\n审一下' }],
+      outcomes: {
+        design: [
+          {
+            order: { id: 'design:root', stageKey: 'design', name: 'design-lane', project: undefined, provider: 'claude', model: 'sonnet', cwd: '/tmp', prompt: '' },
+            status: 'ok',
+            attempts: 1,
+            result: { summary: '技术方案：用 X 架构', filesChanged: [], blockers: [], doubts: [], artifacts: [] },
+          },
+        ],
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+
+    // No chip click — the gating stage's ('design') output is shown by default.
+    expect(screen.getByText(/技术方案：用 X 架构/)).toBeInTheDocument()
+    // Review hint is shown alongside it.
+    expect(screen.getByText(/待你审核的产出/)).toBeInTheDocument()
+
+    // User explicitly selects a different stage chip → override wins, hint disappears.
+    fireEvent.click(screen.getByText('review'))
+    expect(screen.queryByText(/待你审核的产出/)).not.toBeInTheDocument()
   })
 })
