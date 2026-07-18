@@ -128,6 +128,10 @@
 .wfo-cn span { display: block; margin-top: 2px; font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wfo-mode { font: 600 10px/1 var(--mono); color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px; padding: 4px 7px; flex: 0 0 auto; }
 .wfo-mode.code { color: var(--accent); border-color: color-mix(in oklch, var(--accent) 35%, var(--border)); background: var(--accent-dim); }
+/* P5-UI WF-A Task 3 addition — not in the prototype reference (it has no separate gate marker; this
+   reuses the --warn color role the prototype applies elsewhere to confirm/input states) — subtle chip
+   next to .wfo-mode for stages with `gate: true`. */
+.wfo-gate { font: 600 10px/1 var(--mono); color: var(--warn); background: color-mix(in oklch, var(--warn) 14%, transparent); border: 1px solid color-mix(in oklch, var(--warn) 30%, var(--border)); border-radius: 99px; padding: 4px 7px; flex: 0 0 auto; }
 .wfo-model { display: inline-flex; align-items: center; gap: 5px; font: 600 10.5px/1 var(--mono); color: var(--fg-2); background: var(--bg);
   border: 1px solid var(--border-2); border-radius: 7px; padding: 5px 7px; flex: 0 0 auto; transition: .12s; max-width: 156px; cursor: pointer; }
 .wfo-model:hover { border-color: var(--accent); color: var(--fg); }
