@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildLaunchInfo, resolveStartPlan } from './launch'
 import type { Workspace, Workflow } from '../config/schema'
+import { STAGE_PROMPTS } from '../config/schema'
 
 const ws: Workspace = {
   name: 'pay', path: '/ws/pay', workflowId: '', stages: [],
@@ -16,12 +17,31 @@ describe('buildLaunchInfo', () => {
   it('lists workflows + projects with cwd', () => {
     const info = buildLaunchInfo(ws)
     expect(info.workflows).toEqual([{ id: 'wf1', name: '标准五段', stages: [
-      { key: 'design', name: '技术方案设计', provider: 'claude', model: 'm', gate: true },
-      { key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: false },
+      { key: 'design', name: '技术方案设计', provider: 'claude', model: 'm', gate: true,
+        code: false, desc: '设计技术方案与阶段计划', prompt: STAGE_PROMPTS.design + '\n\n' + '额外要求:只改前端' },
+      { key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: false,
+        code: true, desc: '按项目并行开发', prompt: STAGE_PROMPTS.develop },
     ] }])
     expect(info.projects.map((p) => p.name)).toEqual(['api', 'web'])
     expect(info.projects[0].cwd).toBe('/ws/pay/api')
     expect(info.projects[0].provider).toBe('codex')
+  })
+
+  // P5-UI Task 1: LaunchStage carries code (per-project fan-out?)/desc (short blurb)/prompt (the exact
+  // instruction text the stage's agent will receive) — the config-preview overlay needs all three to
+  // render a rich flow before a run starts.
+  it('stages carry code/desc/prompt — develop fans out per-project, design does not', () => {
+    const info = buildLaunchInfo(ws)
+    const [design, develop] = info.workflows[0].stages
+
+    expect(design.code).toBe(false)
+    expect(design.desc).toBe('设计技术方案与阶段计划')
+    // prompt = built-in base + the WsStage's own custom append (mirrors planFromStages composition)
+    expect(design.prompt).toBe(STAGE_PROMPTS.design + '\n\n' + '额外要求:只改前端')
+
+    expect(develop.code).toBe(true)
+    expect(develop.desc).toBe('按项目并行开发')
+    expect(develop.prompt).toBe(STAGE_PROMPTS.develop)
   })
 
   it('falls back to the global workflow template when a workspace workflow has no stashed stages', () => {
@@ -37,7 +57,8 @@ describe('buildLaunchInfo', () => {
     ]
     const info = buildLaunchInfo(wsEmpty, globalWorkflows, [])
     expect(info.workflows[0].stages.map((s) => s.key)).toEqual(['design', 'develop'])
-    expect(info.workflows[0].stages[1]).toEqual({ key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: true })
+    expect(info.workflows[0].stages[1]).toEqual({ key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: true,
+      code: true, desc: '按项目并行开发', prompt: STAGE_PROMPTS.develop })
   })
 
   // Repro for the real-app bug report: a workspace workflow named "标准工作流" with empty stashed

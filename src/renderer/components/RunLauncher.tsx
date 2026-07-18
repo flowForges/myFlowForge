@@ -27,6 +27,12 @@ interface LaunchStage {
   provider: string
   model: string
   gate: boolean
+  // P5-UI Task 1: whether the stage fans out per-project/writes code, a short blurb, and the exact
+  // instruction text the stage's agent receives — mirrors main/run/launch.ts's LaunchStage. Not yet
+  // consumed here (the overlay component that will render them lands in a later task).
+  code: boolean
+  desc: string
+  prompt: string
 }
 
 interface LaunchWorkflow {
