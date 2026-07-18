@@ -59,8 +59,9 @@ describe('RunPanel', () => {
     expect(screen.getByText('dev')).toBeInTheDocument()
     expect(screen.getByText('review')).toBeInTheDocument()
 
-    // current-stage lane: outcome for the "dev" stage's project shows up
-    expect(screen.getByText(/app/)).toBeInTheDocument()
+    // current-stage lane: outcome for the "dev" stage's project shows up (also mirrored in the
+    // new stage-output region below, since selectedStageKey defaults to the current stage 'dev')
+    expect(screen.getAllByText(/app/).length).toBeGreaterThan(0)
 
     // event inbox: the gate event card is rendered with its [通过] action
     const passBtn = screen.getByText('通过')
@@ -127,7 +128,9 @@ describe('RunPanel', () => {
     const api = makeApi(state)
     render(<RunPanel api={api} />)
 
-    expect(screen.getByText('写 design.md')).toBeInTheDocument()
+    // Mirrored in both the current-stage lane and the stage-output region (selectedStageKey
+    // defaults to the current stage 'design').
+    expect(screen.getAllByText('写 design.md').length).toBeGreaterThan(0)
     expect(screen.queryByText('暂无进展')).not.toBeInTheDocument()
   })
 
@@ -141,5 +144,44 @@ describe('RunPanel', () => {
 
     fireEvent.click(screen.getByTitle('删除反馈'))
     expect(api.removeFeedback).toHaveBeenCalledWith('fb1')
+  })
+
+  it('stage output: renders selected stage outcome summary/files/doubts, and switching stage chips switches the shown output', () => {
+    const state = makeState({
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'dev', status: 'running', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 1,
+      },
+      outcomes: {
+        design: [
+          {
+            order: { id: 'design:root', stageKey: 'design', name: 'design-lane', project: undefined, provider: 'claude', model: 'sonnet', cwd: '/tmp', prompt: '' },
+            status: 'ok',
+            attempts: 1,
+            result: { summary: '技术方案：用 X 架构', filesChanged: ['design.md'], blockers: [], doubts: ['是否加缓存'], artifacts: [] },
+          },
+        ],
+        dev: [
+          { order: { id: 'w1', stageKey: 'dev', name: 'dev-lane', project: 'app', provider: 'claude', model: 'sonnet', cwd: '/tmp/app', prompt: '' }, status: 'ok', attempts: 1 },
+        ],
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+
+    // Default selected stage follows the current stage ('dev'); its outcome has no `result`,
+    // so the design stage's output must not be showing yet.
+    expect(screen.queryByText('技术方案：用 X 架构')).not.toBeInTheDocument()
+
+    // Click the 'design' stage chip → its outcome's output renders.
+    fireEvent.click(screen.getByText('design'))
+    expect(screen.getByText(/技术方案：用 X 架构/)).toBeInTheDocument()
+    expect(screen.getByText('design.md')).toBeInTheDocument()
+    expect(screen.getByText(/是否加缓存/)).toBeInTheDocument()
   })
 })

@@ -4,6 +4,7 @@ import type { StageStatus } from '../../main/run/machine'
 import type { WorkOrderOutcome } from '../../main/run/workOrder'
 import type { LiveLane } from '../../main/run/controller'
 import { Run2EventCard } from './Run2EventCard'
+import { Markdown } from '../views/chat/markdown'
 
 interface RunPanelProps { api: Run2Api }
 
@@ -16,14 +17,20 @@ const STAGE_GLYPH: Record<StageStatus, string> = {
 }
 
 // Region 1: overall status + stage-flow strip + cancel button.
-function RunHead({ api }: { api: Run2Api }) {
+function RunHead({ api, selectedStageKey, onSelectStage }: { api: Run2Api; selectedStageKey: string | undefined; onSelectStage: (key: string) => void }) {
   const { machine, status } = api.state!
   return (
     <div className="run2-head">
       <div className="run2-status">运行状态：{status}</div>
       <div className="run2-stage-flow">
         {machine.stages.map((s, i) => (
-          <span key={s.key} className={`run2-stage-chip${i === machine.currentIndex ? ' current' : ''} st-${s.status}`}>
+          <span
+            key={s.key}
+            role="button"
+            tabIndex={0}
+            className={`run2-stage-chip${i === machine.currentIndex ? ' current' : ''}${s.key === selectedStageKey ? ' selected' : ''} st-${s.status}`}
+            onClick={() => onSelectStage(s.key)}
+          >
             <span className="run2-stage-glyph">{STAGE_GLYPH[s.status] ?? '·'}</span>
             <span className="run2-stage-key">{s.key}</span>
           </span>
@@ -77,6 +84,67 @@ function CurrentStageLane({ api }: { api: Run2Api }) {
       {hasOutcomes && stageOutcomes!.map((o) => <LaneRow key={o.order.id} outcome={o} />)}
       {hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} />)}
       {!hasOutcomes && !hasLive && <div className="run2-lane-empty">暂无进展</div>}
+    </div>
+  )
+}
+
+// Region 2b: stage output — what each project produced for the selected stage
+// (result.summary/filesChanged/testsRun/doubts), not just live/settled activity status.
+function OutcomeCard({ outcome }: { outcome: WorkOrderOutcome }) {
+  const label = outcome.order.project ?? 'root'
+  const { result } = outcome
+  return (
+    <div className={`run2-output-card st-${outcome.status}`}>
+      <div className="run2-output-head">
+        <span className="run2-output-project">{label}</span>
+        <span className="run2-output-status">{outcome.status === 'ok' ? '完成' : '失败'}</span>
+      </div>
+      {result && (
+        <>
+          <div className="run2-output-summary"><Markdown text={result.summary} /></div>
+          {result.filesChanged.length > 0 && (
+            <div className="run2-output-files">
+              <div className="run2-output-subtitle">改动文件</div>
+              <ul>
+                {result.filesChanged.map((f) => <li key={f}>{f}</li>)}
+              </ul>
+            </div>
+          )}
+          {result.testsRun && (
+            <div className="run2-output-tests">
+              测试：{result.testsRun.passed ? '通过' : '未通过'}
+              {result.testsRun.detail ? `（${result.testsRun.detail}）` : ''}
+            </div>
+          )}
+          {result.doubts.length > 0 && (
+            <div className="run2-output-doubts">
+              <div className="run2-output-subtitle">存疑</div>
+              <ul>
+                {result.doubts.map((d, i) => <li key={i}>{d}</li>)}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+      {outcome.error && <div className="run2-output-error">失败原因：{outcome.error}</div>}
+    </div>
+  )
+}
+
+function StageOutput({ api, selectedStageKey }: { api: Run2Api; selectedStageKey: string | undefined }) {
+  const { outcomes, liveLanes } = api.state!
+  const stageOutcomes = selectedStageKey ? outcomes[selectedStageKey] : undefined
+  const liveEntries = selectedStageKey
+    ? Object.entries(liveLanes).filter(([, l]) => l.stageKey === selectedStageKey)
+    : []
+  const hasOutcomes = !!stageOutcomes && stageOutcomes.length > 0
+  const hasLive = liveEntries.length > 0
+  return (
+    <div className="run2-stage-output">
+      <div className="run2-stage-output-title">阶段产出{selectedStageKey ? `：${selectedStageKey}` : ''}</div>
+      {hasOutcomes && stageOutcomes!.map((o) => <OutcomeCard key={o.order.id} outcome={o} />)}
+      {!hasOutcomes && hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} />)}
+      {!hasOutcomes && !hasLive && <div className="run2-stage-output-empty">执行中/未开始</div>}
     </div>
   )
 }
@@ -140,13 +208,20 @@ function FeedbackDraftPanel({ api }: { api: Run2Api }) {
 }
 
 export function RunPanel({ api }: RunPanelProps) {
+  // Hook must run unconditionally (before the `!api.state` early return) to keep hook order
+  // stable across renders. Default follows the current stage; a manual chip click overrides it
+  // for the remainder of the run (no auto-follow — see task brief).
+  const [selectedStageKey, setSelectedStageKey] = useState<string | undefined>(
+    () => api.state?.machine.stages[api.state.machine.currentIndex]?.key,
+  )
   if (!api.state) {
     return <div className="run2-panel run2-empty">未在运行工作流</div>
   }
   return (
     <div className="run2-panel">
-      <RunHead api={api} />
+      <RunHead api={api} selectedStageKey={selectedStageKey} onSelectStage={setSelectedStageKey} />
       <CurrentStageLane api={api} />
+      <StageOutput api={api} selectedStageKey={selectedStageKey} />
       <EventInbox api={api} />
       <FeedbackDraftPanel api={api} />
     </div>
