@@ -31,7 +31,7 @@ export interface RunWorkOrderDeps {
   isTransient?: (err: Error) => boolean
   onConfirm?: (req: import('../agents/types').ConfirmReq, laneId: string) => Promise<'allow' | 'deny'>
   onInput?: (req: import('../agents/types').InputReq, laneId: string) => Promise<string>
-  onProgress?: (ev: { laneId: string; state?: import('../agents/types').AgentState; activity?: string }) => void
+  onProgress?: (ev: { laneId: string; state?: import('../agents/types').AgentState; activity?: string; log?: import('../agents/types').LogLine }) => void
 }
 
 const TRANSIENT_RE = /timeout|network|econn|etimedout|socket hang|cancel/i
@@ -62,7 +62,7 @@ export async function runWorkOrder(order: WorkOrder, deps: RunWorkOrderDeps): Pr
         permissionMode: order.permissionMode,
       }
       const cb: AgentCallbacks = {
-        onLog(line) { deps.onProgress?.({ laneId: order.id, activity: line.text }) },
+        onLog(line) { deps.onProgress?.({ laneId: order.id, activity: line.text, log: line }) },
         onState(s) { deps.onProgress?.({ laneId: order.id, state: s }) },
         onActivity() { deps.onProgress?.({ laneId: order.id }) },
         onDone() {},
