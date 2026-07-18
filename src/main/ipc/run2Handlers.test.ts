@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { registerRun2 } from './run2Handlers'
 import { Run2Manager } from '../run/manager'
 import { RunStore } from '../orchestrator/runStore'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import * as CH from './channels'
@@ -126,5 +126,83 @@ describe('registerRun2', () => {
       await new Promise((r) => setTimeout(r, 50))
       expect(seen).toEqual(['readonly'])
     } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
+  describe('run2:read-file (P5-UI Task 2)', () => {
+    function makeHandlers() {
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+      return handlers
+    }
+
+    it('reads a real file\'s content given cwd + relative path', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-rf-'))
+      try {
+        writeFileSync(join(ws, 'hello.md'), '# Hello World')
+        const handlers = makeHandlers()
+        const readFile = handlers.get(CH.run2ReadFile)!
+        const res = await readFile({}, { path: 'hello.md', cwd: ws })
+        expect(res).toEqual({ content: '# Hello World' })
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('reads a file given an absolute path with no cwd', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-rf-'))
+      try {
+        const abs = join(ws, 'note.txt')
+        writeFileSync(abs, 'plain text')
+        const handlers = makeHandlers()
+        const readFile = handlers.get(CH.run2ReadFile)!
+        const res = await readFile({}, { path: abs })
+        expect(res).toEqual({ content: 'plain text' })
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('returns an error for a nonexistent path', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-rf-'))
+      try {
+        const handlers = makeHandlers()
+        const readFile = handlers.get(CH.run2ReadFile)!
+        const res = await readFile({}, { path: 'nope.txt', cwd: ws })
+        expect(res).toHaveProperty('error')
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('rejects a path that traverses outside cwd', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-rf-'))
+      try {
+        const handlers = makeHandlers()
+        const readFile = handlers.get(CH.run2ReadFile)!
+        const res = await readFile({}, { path: '../../../etc/passwd', cwd: ws })
+        expect(res).toEqual({ error: '路径越界' })
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('truncates a file larger than 512KB and flags truncated', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-rf-'))
+      try {
+        const big = 'x'.repeat(600 * 1024)
+        writeFileSync(join(ws, 'big.txt'), big)
+        const handlers = makeHandlers()
+        const readFile = handlers.get(CH.run2ReadFile)!
+        const res = await readFile({}, { path: 'big.txt', cwd: ws })
+        expect('content' in res).toBe(true)
+        expect((res as any).content.length).toBeLessThanOrEqual(512 * 1024)
+        expect((res as any).truncated).toBe(true)
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('returns an error for a directory path', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-rf-'))
+      try {
+        const dir = join(ws, 'subdir')
+        mkdirSync(dir)
+        const handlers = makeHandlers()
+        const readFile = handlers.get(CH.run2ReadFile)!
+        const res = await readFile({}, { path: 'subdir', cwd: ws })
+        expect(res).toHaveProperty('error')
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
   })
 })

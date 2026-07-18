@@ -211,6 +211,8 @@ export const CH = {
   // ws.stages) into a RunPlan before starting run2 (run2StartWorkflow).
   run2LaunchInfo: 'run2:launch-info',
   run2StartWorkflow: 'run2:start-workflow',
+  // P5-UI Task 2: read a changed file's content on demand (renderer file viewer) — read-only.
+  run2ReadFile: 'run2:read-file',
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from
@@ -227,3 +229,4 @@ export const run2Event = CH.run2Event
 export const run2Update = CH.run2Update
 export const run2LaunchInfo = CH.run2LaunchInfo
 export const run2StartWorkflow = CH.run2StartWorkflow
+export const run2ReadFile = CH.run2ReadFile

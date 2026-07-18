@@ -1,3 +1,5 @@
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import * as CH from './channels'
 import { planFromStages } from '../run/planFromStages'
 import { buildLaunchInfo, resolveStartPlan, type StartWorkflowOpts } from '../run/launch'
@@ -5,6 +7,9 @@ import type { Run2Manager } from '../run/manager'
 import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
 import type { GateDecision, LaneDecision } from '../run/decisions'
 import type { Workspace, Workflow, CustomStage } from '../config/schema'
+
+// P5-UI Task 2: cap read size so the file viewer never loads a huge file into the renderer.
+const READ_FILE_MAX_BYTES = 512 * 1024
 
 // Additive P3-A IPC binder: wires the run2:* invoke channels (see channels.ts) to a Run2Manager. Coexists
 // with the existing engine* orchestrator handlers registered in handlers.ts's registerIpc — nothing here
@@ -53,5 +58,34 @@ export function registerRun2(deps: {
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
     const { plan, projects, task, permissionMode } = resolveStartPlan(ws, readWorkflows(), readCustomStages(), p)
     return manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan, projects, task, permissionMode })
+  })
+
+  // P5-UI Task 2: on-demand read of a changed file's content, for the RunPanel file viewer.
+  // `path` is normally RELATIVE to the work order's project cwd (WorkOrder.order.cwd) — filesChanged
+  // entries are stored relative — so the caller passes `cwd` and we resolve against it. `cwd` is
+  // optional so an already-absolute path also works. Read-only; never writes. No strict path
+  // whitelist (per brief) — just traversal-escape rejection + size cap, since this only ever reads
+  // paths already reported in a work order's own `filesChanged`, all under a project the user opened.
+  onInvoke(CH.run2ReadFile, (_e, p: { path: string; cwd?: string }) => {
+    const abs = p.cwd ? path.resolve(p.cwd, p.path) : path.resolve(p.path)
+    if (p.cwd) {
+      const cwdAbs = path.resolve(p.cwd)
+      if (abs !== cwdAbs && !abs.startsWith(cwdAbs + path.sep)) return { error: '路径越界' }
+    }
+    try {
+      const stat = fs.statSync(abs)
+      if (!stat.isFile()) return { error: `不是文件: ${abs}` }
+      if (stat.size > READ_FILE_MAX_BYTES) {
+        const fd = fs.openSync(abs, 'r')
+        try {
+          const buf = Buffer.alloc(READ_FILE_MAX_BYTES)
+          fs.readSync(fd, buf, 0, READ_FILE_MAX_BYTES, 0)
+          return { content: buf.toString('utf8'), truncated: true }
+        } finally { fs.closeSync(fd) }
+      }
+      return { content: fs.readFileSync(abs, 'utf8') }
+    } catch (err) {
+      return { error: String(err) }
+    }
   })
 }
