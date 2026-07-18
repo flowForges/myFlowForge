@@ -14,7 +14,6 @@ export interface ChatApi {
   busy: boolean
   queue: ChatQueueItem[]
   running: { id: string; text: string } | null
-  delegateActive: boolean
   send: (payload: Omit<ChatSendPayload, 'workspacePath' | 'sessionId'>) => void
   resolveConfirm: (payload: { id: string; decision: 'allow' | 'deny'; value?: string }) => void
   resolveAsk: (payload: { id: string; decision: 'allow' | 'deny'; value?: string; choice?: number }) => void
@@ -54,16 +53,13 @@ export function useChat(
   const [busy, setBusy] = useState(false)
   const [queue, setQueue] = useState<ChatQueueItem[]>([])
   const [running, setRunning] = useState<{ id: string; text: string } | null>(null)
-  // True while any fire-and-forget delegate sub-agent is still running for this session (the chat turn
-  // already ended). Lets the composer show a running/stop state across the fire-and-forget boundary.
-  const [delegateActive, setDelegateActive] = useState(false)
   const api = useRef(window.forge)
   const onModeChangedRef = useRef(onModeChanged)
   onModeChangedRef.current = onModeChanged
 
   useEffect(() => {
-    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setDelegateActive(false); return }
-    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setDelegateActive(false)
+    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); return }
+    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null)
     let live = true
     void api.current.chatHistory(workspacePath, sessionId).then((h: ChatMessage[]) => {
       if (!live) return
@@ -140,26 +136,6 @@ export function useChat(
       else if (e.type === 'ask-resolved') setAsks(a => a.filter(x => x.id !== e.id))
       else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, hooks: e.hooks, allProjects: e.allProjects, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, recommendReason: e.recommendReason, ts: new Date().toISOString() }])
       else if (e.type === 'plan-resolved') setPlans(p => p.filter(x => x.id !== e.id))
-      else if (e.type === 'delegate-busy') setDelegateActive(e.active)
-      // Live delegate-batch progress block (below the main reply). Not persisted — lives in renderer
-      // state only; on session reload it's gone and the persisted summary message carries the result.
-      else if (e.type === 'delegate-start') {
-        setMessages(m => m.some(x => x.id === e.id) ? m : [...m, { ...blankAi(e.id), think: undefined, delegate: e.batch }])
-      }
-      else if (e.type === 'delegate-progress') {
-        // Live: 'run' updates stream the growing output + latest activity line; a terminal status
-        // ('ok'/'idle') clears activity (the sub-agent stopped — no "current action" left).
-        setMessages(m => m.map(x => x.id === e.id && x.delegate
-          ? { ...x, delegate: { ...x.delegate, agents: x.delegate.agents.map(a => a.agentId === e.agentId
-              ? { ...a, status: e.status, output: e.output ?? a.output, activity: e.status === 'run' ? (e.activity ?? a.activity) : undefined }
-              : a) } }
-          : x))
-      }
-      else if (e.type === 'delegate-done') {
-        setMessages(m => m.map(x => x.id === e.id && x.delegate
-          ? { ...x, delegate: { ...x.delegate, done: true, agents: x.delegate.agents.map(a => a.status === 'run' ? { ...a, status: 'ok' as const } : a) } }
-          : x))
-      }
       else if (e.type === 'mode-changed') onModeChangedRef.current?.(e.mode, e.runId)
     })
     return () => { off() }
@@ -205,5 +181,5 @@ export function useChat(
     void api.current.chatStop({ workspacePath })
   }, [workspacePath])
 
-  return { messages, streamingIds, confirms, asks, plans, busy, queue, running, delegateActive, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
+  return { messages, streamingIds, confirms, asks, plans, busy, queue, running, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
 }
