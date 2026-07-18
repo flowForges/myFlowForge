@@ -181,6 +181,30 @@ describe('RunLauncher', () => {
     expect(screen.getByText(/claude.*sonnet/)).toBeInTheDocument()
   })
 
+  // Repro for the real-app bug: an initialWorkflowId (from a stale "/" pick, or a workflow that no
+  // longer exists) that doesn't match any id in the freshly-loaded launchInfo used to be KEPT verbatim
+  // (`prev || ...`), leaving `selectedWorkflow` unresolvable — the stage flow rendered "（无阶段）"
+  // even though `info.workflows` had a real entry with real stages. It must now fall back to the first
+  // loaded workflow instead of clinging to the stale id.
+  it('falls back to the first loaded workflow (and shows its real stages) when initialWorkflowId matches nothing in launchInfo', async () => {
+    launchInfo.mockResolvedValue({
+      workflows: [
+        { id: 'standard', name: '标准工作流', stages: [
+          { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', gate: true },
+          { key: 'develop', name: '代码开发', provider: 'codex', model: 'gpt-5', gate: false },
+        ] },
+      ],
+      projects: [{ name: 'api', cwd: '/ws/api' }],
+    })
+    render(<RunLauncher workspacePath="/ws" initialWorkflowId="stale-id-not-in-list" />)
+    await waitFor(() => expect(screen.getByText('标准工作流')).toBeInTheDocument())
+
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('standard')
+    expect(screen.getByText('技术方案设计')).toBeInTheDocument()
+    expect(screen.getByText('代码开发')).toBeInTheDocument()
+    expect(screen.queryByText('（无阶段）')).not.toBeInTheDocument()
+  })
+
   it('shows a placeholder note when the selected workflow has no stages', async () => {
     launchInfo.mockResolvedValue({
       workflows: [{ id: 'wf1', name: '空流程', stages: [] }],

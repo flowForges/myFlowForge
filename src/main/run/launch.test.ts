@@ -39,6 +39,36 @@ describe('buildLaunchInfo', () => {
     expect(info.workflows[0].stages.map((s) => s.key)).toEqual(['design', 'develop'])
     expect(info.workflows[0].stages[1]).toEqual({ key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: true })
   })
+
+  // Repro for the real-app bug report: a workspace workflow named "标准工作流" with empty stashed
+  // stages whose `id` does NOT match the current global template's id (e.g. a generated/stale id) still
+  // resolves via resolveWorkflowStages' by-name fallback — the launcher preview must show the SAME
+  // stages the workspace's right-panel "当前工作流" glance would (both ultimately read ws.workflows[],
+  // this is the shared resolution). Covered at this level (not just resolveStages.test.ts) so a
+  // regression here is caught where the launcher actually consumes it.
+  it('falls back to the global template by NAME when the id does not match (stale/generated workspace-workflow id)', () => {
+    const wsIdMismatch: Workspace = {
+      ...ws,
+      workflows: [{ id: 'generated-abc123', name: '标准工作流', stages: [] }],
+    } as any
+    const globalWorkflows: Workflow[] = [
+      { id: 'standard', name: '标准工作流', stages: [
+        { key: 'requirement', defaultAgent: 'claude', defaultModel: 'opus-4.8' },
+        { key: 'design', defaultAgent: 'claude', defaultModel: 'opus-4.8' },
+        { key: 'develop', defaultAgent: 'codex', defaultModel: 'g' },
+        { key: 'review', defaultAgent: 'claude', defaultModel: 'opus-4.8' },
+      ], plugins: [], stagePrompts: {} } as any,
+    ]
+    const info = buildLaunchInfo(wsIdMismatch, globalWorkflows, [])
+    expect(info.workflows[0].stages.map((s) => s.key)).toEqual(['requirement', 'design', 'develop', 'review'])
+
+    // The START path (resolveStartPlan) must resolve the SAME stages — otherwise the launcher preview
+    // and the actual run would disagree.
+    const { plan } = resolveStartPlan(wsIdMismatch, globalWorkflows, [], {
+      workspacePath: '/ws/pay', workflowId: 'generated-abc123', projectNames: [], runId: 'r1',
+    })
+    expect(plan.stages.map((s) => s.key)).toEqual(['requirement', 'design', 'develop', 'review'])
+  })
 })
 
 describe('resolveStartPlan', () => {
