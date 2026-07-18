@@ -26,7 +26,7 @@ export interface RunControllerDeps {
   permissionMode?: PermissionMode
 }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
-export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string }
+export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string; cwd?: string }
 // A single raw agent log line broadcast live during a run. Deliberately NOT part of
 // RunControllerState — logs are a high-frequency stream, not durable state: folding them into
 // state would bloat every emitUpdate() snapshot and (via saveControllerState) write O(logs)
@@ -226,6 +226,7 @@ export class RunController {
           project: order.project,
           state: ev.state ?? this.liveLanes[ev.laneId]?.state,
           activity: ev.activity ?? this.liveLanes[ev.laneId]?.activity,
+          cwd: order.cwd,
         }
         this.emitUpdate()
         if (ev.log) this.emitLog({ laneId: ev.laneId, stageKey: order.stageKey, project: order.project, agentName: order.name, line: ev.log })

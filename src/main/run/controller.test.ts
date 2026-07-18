@@ -276,7 +276,7 @@ describe('RunController', () => {
     const laneId = 'develop:a'
     const mid = snapshots.find((s) => s.liveLanes[laneId]?.activity)
     expect(mid).toBeTruthy()
-    expect(mid!.liveLanes[laneId]).toMatchObject({ stageKey: 'develop', project: 'a', state: 'run', activity: 'working on it' })
+    expect(mid!.liveLanes[laneId]).toMatchObject({ stageKey: 'develop', project: 'a', state: 'run', activity: 'working on it', cwd: '/ws/a' })
 
     expect(final.status).toBe('ok')
     expect(final.liveLanes[laneId]).toBeUndefined() // settled lane moved to outcomes, not live anymore
