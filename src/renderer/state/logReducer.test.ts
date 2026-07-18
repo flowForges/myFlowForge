@@ -266,6 +266,15 @@ describe('run2LogToLine', () => {
     expect(line.id).toContain('run2')
     expect(line.id).toContain('design:root')
   })
+
+  it('gives distinct ids to two lines with the same non-empty ts, lane, and now', () => {
+    // Real providers stamp ts at HH:MM:SS granularity → many lines share a ts within one second.
+    // The monotonic seq must still make each React key unique (else fast streams drop lines).
+    const log = makeLog({ ts: '12:00:00' })
+    const a = run2LogToLine({ workspacePath: '/ws', log }, now)
+    const b = run2LogToLine({ workspacePath: '/ws', log }, now)
+    expect(a.id).not.toBe(b.id)
+  })
 })
 
 // ── changeItemToLine ──────────────────────────────────────────────────────────

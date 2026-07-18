@@ -104,8 +104,9 @@ export function agentLogToLine(e: Extract<EngineEvent, { type: 'agent:log' }>, n
   }
 }
 
-// Monotonic fallback suffix for run2 log lines whose provider `ts` is empty — keeps id unique
-// without Math.random() (same rationale as aglogSeq above).
+// Monotonic suffix so run2 log lines get unique React keys even when they share the same
+// provider `ts` (real providers stamp `ts` at second granularity → many lines/sec collide).
+// Appended unconditionally, exactly like aglogSeq above.
 let run2LogSeq = 0
 
 /** Map a run2:log payload (RunLogLine, from Task 3's controller-level log bus) to a console LogLine. */
@@ -114,9 +115,8 @@ export function run2LogToLine(p: { workspacePath: string; log: RunLogLine }, now
   const { log } = p
   const kind = log.line.kind ?? 'output'
   const level: LogLine['level'] = KIND_TO_LEVEL[kind] ?? 'out'
-  const tsPart = log.line.ts || `${log.line.text.slice(0, 8)}-${++run2LogSeq}`
   return {
-    id: `${t}-run2-${log.laneId}-${tsPart}`,
+    id: `${t}-run2-${log.laneId}-${log.line.ts}-${++run2LogSeq}`,
     t, level, src: log.agentName, color: 'var(--accent)',
     text: log.line.text, streaming: false,
   }
