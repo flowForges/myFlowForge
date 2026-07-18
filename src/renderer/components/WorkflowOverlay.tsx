@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useState } from 'react'
 import './workflowOverlay.css'
+import type { Run2Api } from '../state/useRun2'
+import type { RunControllerState } from '../../main/run/controller'
 
 // Task 2 (WF-A): 1:1 port of the prototype's `.wfo` overlay CONFIG state — head (title/tabs/legend) +
 // flow placeholder (Task 3 fills it) + foot (goal textarea/start button/hint). SOURCE:
@@ -13,6 +15,9 @@ export interface WorkflowOverlayProps {
   initialSeed?: string
   onClose: () => void
   onStarted?: () => void
+  // B1 (WF-B): live run2 state. `run2.state != null` switches the overlay from CONFIG mode (WF-A,
+  // unchanged below) to RUN mode — progress bar, per-node status/time, animated connectors.
+  run2: Run2Api
 }
 
 // Mirrors src/main/run/launch.ts LaunchStage (T1 added code/desc/prompt on top of the P4-A fields).
@@ -60,6 +65,11 @@ const IC = {
   // Task 4 additions — check + git glyphs for the project-select rows, verbatim from the prototype IC.
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>',
   git: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="6" r="2.3"/><circle cx="6" cy="18" r="2.3"/><circle cx="18" cy="18" r="2.3"/><path d="M12 8.3v2a3.4 3.4 0 0 1-3.4 3.4H8M12 10.3a3.4 3.4 0 0 0 3.4 3.4H16"/></svg>',
+  // B1 additions — spin/x glyphs for run-state markers, verbatim from the prototype IC (reference lines
+  // 826-843; `spin` keeps its own `class="wfo-spin"` on the <svg>, matching the prototype's stMark()
+  // which wraps it in a SECOND `.wfo-spin` span — see StMark below).
+  spin: '<svg class="wfo-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 12a9 9 0 1 1-6.2-8.6" stroke-linecap="round"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
 }
 
 // Task 4: 1:1 port of the prototype's MODELS table (reference lines 368-374) — the small model catalog
@@ -94,10 +104,79 @@ function Icon({ svg }: { svg: string }) {
   return <span dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
+// B1 (WF-B): run-state vocabulary for a single stage — 1:1 with the prototype's r.state values
+// (reference lines 527, 602-611, 890-973). Node/group container classes translate 'ok' -> 'done'
+// (matching the CSS, which styles `.wfo-node.done` / `.wfo-group.done` but `.wfo-stat.ok` /
+// `.wfo-lane.ok` — see nodeClass below); the stat badge and StMark keep the raw value.
+type RunNodeState = 'wait' | 'run' | 'ok' | 'confirm' | 'input' | 'fail'
+
+// Verbatim port of the prototype's statLabel() (reference line 527).
+const STAT_LABELS: Record<RunNodeState, string> = {
+  wait: '待执行',
+  run: '执行中',
+  ok: '完成',
+  confirm: '待确认',
+  input: '待输入',
+  fail: '失败',
+}
+function statLabel(s: RunNodeState): string {
+  return STAT_LABELS[s] ?? '待执行'
+}
+
+// Verbatim port of the prototype's fmtTime() (reference line 528).
+function fmtTime(ms: number | null | undefined): string {
+  if (ms == null) return ''
+  if (ms < 1000) return ms + 'ms'
+  const s = ms / 1000
+  return s < 60 ? s.toFixed(1) + 's' : Math.floor(s / 60) + ':' + ('0' + Math.round(s % 60)).slice(-2)
+}
+
+// Verbatim port of the prototype's connClass() (reference lines 599-605), taking a resolved
+// RunNodeState directly (the caller already looked up st.run[k]).
+function connClass(state: RunNodeState | undefined): string {
+  if (!state) return ''
+  if (state === 'ok') return 'done'
+  if (state === 'run' || state === 'confirm' || state === 'input') return 'run'
+  return ''
+}
+
+// Node/group container classes use 'done' where the CSS expects it (`.wfo-node.done`), unlike the
+// stat badge / lane classes which keep 'ok' literally — see the RunNodeState comment above.
+function nodeClass(state: RunNodeState): string {
+  return state === 'ok' ? 'done' : state
+}
+
+// Status marker (dot / spin / check / x) — node, group-head, and (later, B4) per-repo lane all share
+// this. Verbatim port of the prototype's stMark() (reference lines 607-611): the 'run' branch wraps
+// IC.spin in a SECOND `.wfo-spin` span, matching the prototype exactly.
+function StMark({ state }: { state: RunNodeState }) {
+  if (state === 'run') return <span className="wfo-spin"><Icon svg={IC.spin} /></span>
+  if (state === 'ok') return <Icon svg={IC.check} />
+  if (state === 'fail') return <Icon svg={IC.x} />
+  return <span className="hd" />
+}
+
+// B1: derives a stage's RunNodeState from run2 data — mirrors the mapping table in the WF-B plan.
+// Order matters: a failed outcome/inbox failure wins over everything else, then the confirm/input
+// gates, then done/ok, then running, else wait.
+function stageRunState(stageKey: string, state: RunControllerState): RunNodeState {
+  const outcomes = state.outcomes[stageKey]
+  const hasFailedOutcome = outcomes?.some((o) => o.status === 'failed') ?? false
+  const hasFailureEvent = state.inbox.some((e) => e.kind === 'failure' && e.stageKey === stageKey)
+  if (hasFailedOutcome || hasFailureEvent) return 'fail'
+  if (state.inbox.some((e) => e.kind === 'gate' && e.stageKey === stageKey)) return 'confirm'
+  if (state.inbox.some((e) => e.kind === 'question' && e.stageKey === stageKey)) return 'input'
+  const machineStatus = state.machine.stages.find((s) => s.key === stageKey)?.status
+  const hasOkOutcome = outcomes?.some((o) => o.status === 'ok') ?? false
+  if (machineStatus === 'done' || hasOkOutcome) return 'ok'
+  if (machineStatus === 'running') return 'run'
+  return 'wait'
+}
+
 // P5-UI WF-A Task 2: opened from a workflow "/" command in chat. Loads launchInfo, lets the user pick a
 // workflow tab + type a goal. Task 3 fills in the `.wfo-flow` stage chart; Task 5 wires the 启动 button
 // to actually start a run (kept as a stub here — onStarted is threaded through for that later task).
-export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted }: WorkflowOverlayProps) {
+export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted, run2 }: WorkflowOverlayProps) {
   const [info, setInfo] = useState<LaunchInfo>(EMPTY_INFO)
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>('')
   const [goal, setGoal] = useState(() => initialSeed ?? '')
@@ -121,12 +200,13 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
 
   useEffect(() => {
     let cancelled = false
-    const run2 = (window as any).forge?.run2
-    if (!run2?.launchInfo) {
+    // Named run2Ipc (not run2) — the `run2` identifier in this component scope is the live-state prop.
+    const run2Ipc = (window as any).forge?.run2
+    if (!run2Ipc?.launchInfo) {
       setInfo(EMPTY_INFO)
       return
     }
-    run2.launchInfo(workspacePath)
+    run2Ipc.launchInfo(workspacePath)
       .then((li: LaunchInfo) => {
         if (cancelled) return
         setInfo(li)
@@ -173,8 +253,8 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   // if there are no code stages at all, ALL of the workspace's projects). Model override is DEFERRED
   // (per the WF-A plan): only workflowId/projectNames/task/runId go to run2 for now.
   const handleStart = () => {
-    const run2 = (window as any).forge?.run2
-    if (!run2?.startWorkflow || !selectedWorkflowId) return
+    const run2Ipc = (window as any).forge?.run2
+    if (!run2Ipc?.startWorkflow || !selectedWorkflowId) return
     const codeStageKeys = stages.filter((s) => s.code).map((s) => s.key)
     let projectNames: string[]
     if (codeStageKeys.length === 0) {
@@ -196,7 +276,7 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
     setQueuedNote(null)
     setStarting(true)
     Promise.resolve(
-      run2.startWorkflow({
+      run2Ipc.startWorkflow({
         workspacePath,
         workflowId: selectedWorkflowId,
         projectNames,
@@ -243,6 +323,40 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
     setOpenNodes((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
+  // B1 (WF-B): `run2.state != null` is RUN mode. `now` ticks every second while running so the
+  // per-node elapsed time (fmtTime(now - startedAt)) for the currently-running stage stays live —
+  // mirrors the prototype's setInterval-driven #wftime-<k> updater (reference lines 866-876).
+  const running = run2.state != null
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running) return
+    const id = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [running])
+
+  // Ordered stage list for RUN mode, sourced from the actual run plan (machine.plan.stages) rather
+  // than the config-tab selection above — once a run exists it is authoritative regardless of which
+  // workflow tab happens to be selected in the UI. `name`/`code` come from the plan snapshot; `desc`
+  // is enriched from launchInfo (info.workflows) by key when available, else left blank.
+  const stageDescByKey: Record<string, string> = {}
+  for (const w of info.workflows) for (const s of w.stages) stageDescByKey[s.key] = s.desc
+  const runStages = running
+    ? run2.state!.machine.plan.stages.map((sp) => ({
+        key: sp.key,
+        name: sp.name,
+        desc: stageDescByKey[sp.key] ?? '',
+        code: sp.scope === 'per-project',
+      }))
+    : []
+  const runStageStates: Record<string, RunNodeState> = {}
+  if (running) {
+    for (const rs of runStages) runStageStates[rs.key] = stageRunState(rs.key, run2.state!)
+  }
+  const doneN = running ? run2.state!.machine.stages.filter((s) => s.status === 'done').length : 0
+  const totalStages = running ? run2.state!.machine.stages.length : 0
+  const pct = totalStages ? Math.round((doneN / totalStages) * 100) : 0
+  const runAllDone = running && run2.state!.status === 'ok' && totalStages > 0
+
   return (
     <div className="wfo">
       <div className="wfo-scrim" onClick={onClose} />
@@ -251,35 +365,105 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
           <div className="wfo-title">
             <span className="ti"><Icon svg={IC.flow} /></span>
             <span className="tt">
-              开启工作流
-              <small>选择流程 · 配置模块 · 下达目标</small>
+              {running ? '工作流执行中' : (
+                <>
+                  开启工作流
+                  <small>选择流程 · 配置模块 · 下达目标</small>
+                </>
+              )}
             </span>
             <button className="wfo-x" title="关闭" onClick={onClose}>
               <Icon svg={IC.close} />
             </button>
           </div>
-          <div className="wfo-tabs">
-            {info.workflows.map((w) => (
-              <button
-                key={w.id}
-                type="button"
-                className={`wfo-tab${w.id === selectedWorkflowId ? ' on' : ''}`}
-                onClick={() => selectWorkflow(w.id)}
-              >
-                {w.name}
-                <span className="n">{w.stages.length}</span>
-              </button>
-            ))}
-          </div>
-          <div className="wfo-legend">
-            <i className="run">执行中</i>
-            <i className="ok">完成</i>
-            <i className="confirm">待确认</i>
-            <i className="input">待输入</i>
-            <i className="fail">失败</i>
-          </div>
+          {running ? (
+            <div className="wfo-prog">
+              <span className="lbl">已完成 {doneN} / {totalStages}</span>
+              <span className="bar"><i style={{ width: `${pct}%` }} /></span>
+              <span className="pct">{pct}%</span>
+            </div>
+          ) : (
+            <>
+              <div className="wfo-tabs">
+                {info.workflows.map((w) => (
+                  <button
+                    key={w.id}
+                    type="button"
+                    className={`wfo-tab${w.id === selectedWorkflowId ? ' on' : ''}`}
+                    onClick={() => selectWorkflow(w.id)}
+                  >
+                    {w.name}
+                    <span className="n">{w.stages.length}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="wfo-legend">
+                <i className="run">执行中</i>
+                <i className="ok">完成</i>
+                <i className="confirm">待确认</i>
+                <i className="input">待输入</i>
+                <i className="fail">失败</i>
+              </div>
+            </>
+          )}
         </div>
 
+        {running ? (
+        <div className="wfo-flow">
+          <div className="wfo-chart">
+            <div className="wfo-term start">
+              <Icon svg={IC.play} />开始
+            </div>
+            <div className={`wfo-conn${runStages.length ? ' ' + (connClass(runStageStates[runStages[0].key]) || 'done') : ''}`}>
+              <span className="ln" />
+              <span className="ar" />
+            </div>
+            {runStages.map((rs) => {
+              const st = runStageStates[rs.key] ?? 'wait'
+              const timing = run2.state!.stageTimings[rs.key]
+              const timeText =
+                st === 'run'
+                  ? fmtTime(now - (timing?.startedAt ?? now))
+                  : timing?.startedAt != null && timing?.endedAt != null
+                    ? fmtTime(timing.endedAt - timing.startedAt)
+                    : ''
+              const cc = connClass(st)
+              return (
+                <Fragment key={rs.key}>
+                  <div className={`wfo-node${openNodes[rs.key] ? ' open' : ''} ${nodeClass(st)}`} data-stage={rs.key}>
+                    <div className="wfo-box">
+                      <div className="wfo-cardhead" data-node={rs.key} onClick={() => toggleNode(rs.key)}>
+                        <span className="wfo-ic"><StMark state={st} /></span>
+                        <span className="wfo-cn">
+                          <b>{rs.name}</b>
+                          <span>{rs.desc}</span>
+                        </span>
+                        <span className={`wfo-stat ${st}`}>
+                          <span className="d" />
+                          {statLabel(st)}
+                        </span>
+                        <span className="wfo-time">{timeText}</span>
+                        <span className="wfo-chev">
+                          <Icon svg={IC.chev} />
+                        </span>
+                      </div>
+                      <div className="wfo-cardbody" />
+                    </div>
+                  </div>
+                  <div className={`wfo-conn${cc ? ' ' + cc : ''}`}>
+                    <span className="ln" />
+                    <span className="ar" />
+                  </div>
+                </Fragment>
+              )
+            })}
+            <div className={`wfo-term end${runAllDone ? ' done' : ''}`}>
+              <Icon svg={runAllDone ? IC.check : IC.flag} />
+              {runAllDone ? '完成' : '结束'}
+            </div>
+          </div>
+        </div>
+        ) : (
         <div className="wfo-flow">
           <div className="wfo-chart">
             <div className="wfo-term start">
@@ -414,6 +598,7 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
             </div>
           </div>
         </div>
+        )}
 
         <div className="wfo-foot">
           <div className="wfo-goal">
