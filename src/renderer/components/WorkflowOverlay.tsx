@@ -36,6 +36,8 @@ interface LaunchWorkflow {
 interface LaunchProject {
   name: string
   cwd: string
+  provider?: string
+  model?: string
 }
 
 interface LaunchInfo {
@@ -55,14 +57,37 @@ const IC = {
   // Task 3 additions — verbatim from the prototype's IC object (reference lines 826-843).
   chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>',
   flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 22V4M4 4h13l-2.2 3.5L17 11H4"/></svg>',
+  // Task 4 additions — check + git glyphs for the project-select rows, verbatim from the prototype IC.
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>',
+  git: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="6" r="2.3"/><circle cx="6" cy="18" r="2.3"/><circle cx="18" cy="18" r="2.3"/><path d="M12 8.3v2a3.4 3.4 0 0 1-3.4 3.4H8M12 10.3a3.4 3.4 0 0 0 3.4 3.4H16"/></svg>',
 }
 
-// Task 3: kept a single flat accent-color dot for every stage's model chip — the prototype's real
-// modelColor() maps a specific MODELS table (label -> oklch color) that only exists once the model
-// picker (Task 4) is wired up with a real provider/model catalog. Acceptable per the task brief; Task 4
-// replaces this with a real per-model color lookup.
-function modelColor(_stage: LaunchStage): string {
-  return 'var(--accent)'
+// Task 4: 1:1 port of the prototype's MODELS table (reference lines 368-374) — the small model catalog
+// the config-state chips cycle through and color-code. Labels are "<Provider> · <model>"; modelColor()
+// maps a label to its oklch dot color (prototype line 376), falling back to --muted for unknowns.
+const MODELS: { label: string; color: string }[] = [
+  { label: 'Claude Code · opus-4.8', color: 'oklch(70% .15 35)' },
+  { label: 'Claude Code · sonnet-4.6', color: 'oklch(72% .13 235)' },
+  { label: 'Claude Code · haiku-4.5', color: 'oklch(74% .12 200)' },
+  { label: 'Codex · gpt-5-codex', color: 'oklch(78% .03 250)' },
+  { label: 'Gemini · gemini-2.5-pro', color: 'oklch(72% .15 275)' },
+]
+
+function modelColor(label: string): string {
+  const found = MODELS.find((m) => m.label === label)
+  return found ? found.color : 'var(--muted)'
+}
+
+// The label shown inside a model chip drops any "<Provider> · " prefix (prototype uses
+// pmdl.replace(/^.*· /, "")), so the per-project chips stay compact.
+function modelShort(label: string): string {
+  return label.replace(/^.*· /, '')
+}
+
+// Cycle to the next label in the MODELS table (MVP for the model picker — the full popover is WF-C).
+function cycleModel(current: string): string {
+  const idx = MODELS.findIndex((m) => m.label === current)
+  return MODELS[(idx + 1) % MODELS.length].label
 }
 
 function Icon({ svg }: { svg: string }) {
@@ -80,6 +105,14 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   // st.openNode, which is wiped whenever the workflow tab switches (initWf() resets it) — see
   // selectWorkflow below.
   const [openNodes, setOpenNodes] = useState<Record<string, boolean>>({})
+  // Task 4: per-stage config state, mirroring the prototype's st.proj / st.model / st.projModel.
+  // projSel — which projects a code stage fans out to (default ALL selected). stageModel — the model
+  // label for a non-code stage's header chip. projModel — per-project model label for a code stage.
+  // All three are (re)initialised by the effect below whenever the selected workflow / projects change,
+  // matching the prototype's initWf() reset on tab switch.
+  const [projSel, setProjSel] = useState<Record<string, Record<string, boolean>>>({})
+  const [stageModel, setStageModel] = useState<Record<string, string>>({})
+  const [projModel, setProjModel] = useState<Record<string, Record<string, string>>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -103,9 +136,53 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
     }
   }, [workspacePath])
 
+  const stages = info.workflows.find((w) => w.id === selectedWorkflowId)?.stages ?? []
+
+  // Task 4: (re)initialise per-stage config defaults whenever the workflow / project set changes —
+  // mirrors the prototype's initWf(): every code stage starts with ALL projects selected, each stage's
+  // model defaults to `${provider} · ${model}`, and each project's model defaults to its own configured
+  // provider/model (if any) else the stage model.
+  useEffect(() => {
+    const nextSel: Record<string, Record<string, boolean>> = {}
+    const nextStageModel: Record<string, string> = {}
+    const nextProjModel: Record<string, Record<string, string>> = {}
+    for (const s of stages) {
+      const stageLabel = `${s.provider} · ${s.model}`
+      nextStageModel[s.key] = stageLabel
+      if (s.code) {
+        nextSel[s.key] = {}
+        nextProjModel[s.key] = {}
+        for (const p of info.projects) {
+          nextSel[s.key][p.name] = true
+          nextProjModel[s.key][p.name] = p.model ? `${p.provider ?? s.provider} · ${p.model}` : stageLabel
+        }
+      }
+    }
+    setProjSel(nextSel)
+    setStageModel(nextStageModel)
+    setProjModel(nextProjModel)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedWorkflowId, info])
+
   // Task 5 wires this to window.forge.run2.startWorkflow + onStarted(); kept a no-op stub for now.
   const handleStart = () => {
     // stub
+  }
+
+  const toggleProj = (stageKey: string, projName: string) => {
+    setProjSel((prev) => {
+      const forStage = prev[stageKey] ?? {}
+      return { ...prev, [stageKey]: { ...forStage, [projName]: !forStage[projName] } }
+    })
+  }
+  const cycleStageModel = (stageKey: string, current: string) => {
+    setStageModel((prev) => ({ ...prev, [stageKey]: cycleModel(current) }))
+  }
+  const cycleProjModel = (stageKey: string, projName: string, current: string) => {
+    setProjModel((prev) => ({
+      ...prev,
+      [stageKey]: { ...(prev[stageKey] ?? {}), [projName]: cycleModel(current) },
+    }))
   }
 
   // Switching workflow tabs resets which nodes are expanded (prototype's initWf() does the same).
@@ -116,8 +193,6 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   const toggleNode = (key: string) => {
     setOpenNodes((prev) => ({ ...prev, [key]: !prev[key] }))
   }
-
-  const stages = info.workflows.find((w) => w.id === selectedWorkflowId)?.stages ?? []
 
   return (
     <div className="wfo">
@@ -165,7 +240,23 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
               <span className="ln" />
               <span className="ar" />
             </div>
-            {stages.map((stage) => (
+            {stages.map((stage) => {
+              const sel = projSel[stage.key] ?? {}
+              const selNames = info.projects.filter((p) => sel[p.name])
+              const stageMdl = stageModel[stage.key] ?? `${stage.provider} · ${stage.model}`
+              // Code-stage header chip is a read-only summary of the selected projects' unique models
+              // (prototype's projModelSummary): color dots for up to 3 distinct models + a compact label.
+              const uniqModels: string[] = []
+              for (const p of selNames) {
+                const m = projModel[stage.key]?.[p.name] ?? stageMdl
+                if (!uniqModels.includes(m)) uniqModels.push(m)
+              }
+              const summaryLabel = uniqModels.length === 0
+                ? '未选项目'
+                : uniqModels.length === 1
+                  ? modelShort(uniqModels[0])
+                  : `${uniqModels.length} 种模型`
+              return (
               <Fragment key={stage.key}>
                 <div className={`wfo-node${openNodes[stage.key] ? ' open' : ''}`}>
                   <div className="wfo-box">
@@ -185,13 +276,22 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                       )}
                       {stage.code ? (
                         <span className="wfo-model ro" title="每个代码项目单独选择模型 · 展开查看">
-                          <span className="dot" style={{ background: modelColor(stage) }} />
-                          <span className="mv">{stage.provider} · {stage.model}</span>
+                          {uniqModels.slice(0, 3).map((m, i) => (
+                            <span key={i} className="dot" style={{ background: modelColor(m) }} />
+                          ))}
+                          <span className="mv">{summaryLabel}</span>
                         </span>
                       ) : (
-                        <span className="wfo-model" data-model={stage.key}>
-                          <span className="dot" style={{ background: modelColor(stage) }} />
-                          <span className="mv">{stage.provider} · {stage.model}</span>
+                        <span
+                          className="wfo-model"
+                          data-model={stage.key}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            cycleStageModel(stage.key, stageMdl)
+                          }}
+                        >
+                          <span className="dot" style={{ background: modelColor(stageMdl) }} />
+                          <span className="mv">{stageMdl}</span>
                           <Icon svg={IC.chev} />
                         </span>
                       )}
@@ -199,7 +299,58 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                         <Icon svg={IC.chev} />
                       </span>
                     </div>
-                    <div className="wfo-cardbody" />
+                    <div className="wfo-cardbody">
+                      <div className="wfo-sec">
+                        <div className="wfo-sec-h">阶段指令</div>
+                        <div className="wfo-prompt">{stage.prompt}</div>
+                      </div>
+                      {stage.code && (
+                        <div className="wfo-sec">
+                          <div className="wfo-sec-h">
+                            涉及代码项目
+                            <span className="c">已选 {selNames.length} / {info.projects.length}</span>
+                          </div>
+                          {info.projects.map((p) => {
+                            const on = !!sel[p.name]
+                            const pmdl = projModel[stage.key]?.[p.name] ?? stageMdl
+                            return (
+                              <div key={p.name} className={`wfo-proj${on ? ' on' : ''}`}>
+                                <span
+                                  className="wfo-ckhit"
+                                  data-proj={`${stage.key}::${p.name}`}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    toggleProj(stage.key, p.name)
+                                  }}
+                                >
+                                  <span className="wfo-ck"><Icon svg={IC.check} /></span>
+                                  <span className="pg"><Icon svg={IC.git} /></span>
+                                  <span className="pn">
+                                    <b>{p.name}</b>
+                                    <span>{p.provider ?? stage.provider}</span>
+                                  </span>
+                                </span>
+                                {on && (
+                                  <span
+                                    className="wfo-model sm"
+                                    data-pmodel={`${stage.key}::${p.name}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      cycleProjModel(stage.key, p.name, pmdl)
+                                    }}
+                                  >
+                                    <span className="dot" style={{ background: modelColor(pmdl) }} />
+                                    <span className="mv">{modelShort(pmdl)}</span>
+                                    <Icon svg={IC.chev} />
+                                  </span>
+                                )}
+                              </div>
+                            )
+                          })}
+                          <div className="wfo-proj-hint">每个项目各派一个开发代理 · 可分别选择模型 · 取消勾选可将其排除。</div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="wfo-conn">
@@ -207,7 +358,8 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                   <span className="ar" />
                 </div>
               </Fragment>
-            ))}
+              )
+            })}
             <div className="wfo-term end">
               <Icon svg={IC.flag} />结束
             </div>
