@@ -302,6 +302,11 @@ const api = {
     removeFeedback: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.run2RemoveFeedback, a),
     abort: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.run2Abort, a),
     getState: (workspacePath: string) => ipcRenderer.invoke(CH.run2GetState, { workspacePath }),
+    // P4-A launcher: list a workspace's named workflows + projects, and start one by id (server-side
+    // resolves ws.workflows[].stages into a RunPlan — the renderer only picks workflowId/projectNames).
+    launchInfo: (workspacePath: string) => ipcRenderer.invoke(CH.run2LaunchInfo, { workspacePath }),
+    startWorkflow: (opts: { workspacePath: string; workflowId: string; projectNames: string[]; task?: string; runId: string }) =>
+      ipcRenderer.invoke(CH.run2StartWorkflow, opts),
     onEvent: (cb: (p: { workspacePath: string; event: unknown }) => void) => {
       const listener = (_: unknown, p: { workspacePath: string; event: unknown }) => cb(p)
       ipcRenderer.on(CH.run2Event, listener)

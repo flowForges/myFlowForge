@@ -10,7 +10,7 @@ export interface Run2Emit {
   event(wsPath: string, e: RunEvent): void
   update(wsPath: string, s: RunControllerState): void
 }
-export interface Run2StartOpts { workspacePath: string; runId: string; plan: RunPlan; projects: DevelopProject[] }
+export interface Run2StartOpts { workspacePath: string; runId: string; plan: RunPlan; projects: DevelopProject[]; task?: string }
 export interface Run2ManagerDeps {
   providers: Record<string, AgentProvider>
   env: NodeJS.ProcessEnv
@@ -29,7 +29,7 @@ export class Run2Manager {
     const store = this.deps.makeStore(opts.workspacePath, opts.runId)
     const controller = new RunController(opts.plan, {
       providers: this.deps.providers, store, env: this.deps.env,
-      projects: opts.projects, retries: this.deps.retries,
+      projects: opts.projects, retries: this.deps.retries, task: opts.task,
     })
     controller.onEvent((e) => this.deps.emit.event(opts.workspacePath, e))
     controller.onUpdate((s) => this.deps.emit.update(opts.workspacePath, s))

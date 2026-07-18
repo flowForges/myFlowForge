@@ -206,6 +206,11 @@ export const CH = {
   run2GetState: 'run2:get-state',
   run2Event: 'run2:event',
   run2Update: 'run2:update',
+  // P4-A launcher: resolve a workspace's named workflows/projects server-side (run2LaunchInfo), and
+  // resolve the picked workflow's stages (ws.workflows[].stages, NOT the permanently-empty legacy
+  // ws.stages) into a RunPlan before starting run2 (run2StartWorkflow).
+  run2LaunchInfo: 'run2:launch-info',
+  run2StartWorkflow: 'run2:start-workflow',
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from
@@ -220,3 +225,5 @@ export const run2Abort = CH.run2Abort
 export const run2GetState = CH.run2GetState
 export const run2Event = CH.run2Event
 export const run2Update = CH.run2Update
+export const run2LaunchInfo = CH.run2LaunchInfo
+export const run2StartWorkflow = CH.run2StartWorkflow
