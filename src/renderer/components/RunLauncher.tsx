@@ -34,6 +34,7 @@ export function RunLauncher({ workspacePath, onStarted }: RunLauncherProps) {
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [task, setTask] = useState('')
   const [starting, setStarting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -42,12 +43,18 @@ export function RunLauncher({ workspacePath, onStarted }: RunLauncherProps) {
       setInfo(EMPTY_INFO)
       return
     }
-    run2.launchInfo(workspacePath).then((li: LaunchInfo) => {
-      if (cancelled) return
-      setInfo(li)
-      setWorkflowId(li.workflows[0]?.id ?? '')
-      setChecked(Object.fromEntries(li.projects.map((p) => [p.name, true])))
-    })
+    run2.launchInfo(workspacePath)
+      .then((li: LaunchInfo) => {
+        if (cancelled) return
+        setInfo(li)
+        setWorkflowId(li.workflows[0]?.id ?? '')
+        setChecked(Object.fromEntries(li.projects.map((p) => [p.name, true])))
+        setError(null)
+      })
+      .catch((err: any) => {
+        if (cancelled) return
+        setError('加载工作流失败')
+      })
     return () => {
       cancelled = true
     }
@@ -59,6 +66,7 @@ export function RunLauncher({ workspacePath, onStarted }: RunLauncherProps) {
     const run2 = (window as any).forge?.run2
     if (!run2?.startWorkflow || !workflowId) return
     const projectNames = info.projects.filter((p) => checked[p.name]).map((p) => p.name)
+    setError(null)
     setStarting(true)
     Promise.resolve(
       run2.startWorkflow({
@@ -68,17 +76,23 @@ export function RunLauncher({ workspacePath, onStarted }: RunLauncherProps) {
         task,
         runId: `run2-${Date.now()}`,
       })
-    ).finally(() => {
-      setStarting(false)
-      onStarted?.()
-    })
+    )
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        setStarting(false)
+        onStarted?.()
+      })
   }
 
   if (info.workflows.length === 0) {
     return (
       <div className="msg-req k-confirm plan-card run-launcher">
         <div className="req-body">
-          <div className="req-title">该工作区暂无工作流</div>
+          {error ? (
+            <div className="launcher-error">{error}</div>
+          ) : (
+            <div className="req-title">该工作区暂无工作流</div>
+          )}
           <div className="req-actions">
             <button className="req-ok" disabled>启动</button>
           </div>
@@ -93,6 +107,7 @@ export function RunLauncher({ workspacePath, onStarted }: RunLauncherProps) {
         <span className="req-kind">启动运行</span>
       </div>
       <div className="req-body">
+        {error && <div className="launcher-error">{error}</div>}
         <div className="req-sub plan-workflow">
           <span>工作流</span>
           <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)}>

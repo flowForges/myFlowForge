@@ -66,4 +66,26 @@ describe('RunLauncher', () => {
     render(<RunLauncher workspacePath="/ws" />)
     expect(screen.getByText('该工作区暂无工作流')).toBeInTheDocument()
   })
+
+  it('displays an error and re-enables the button when startWorkflow rejects', async () => {
+    const errorMsg = '工作流没有可执行阶段'
+    launchInfo.mockResolvedValue({
+      workflows: [{ id: 'wf1', name: '标准五段' }],
+      projects: [{ name: 'api', cwd: '/ws/api' }],
+    })
+    startWorkflow.mockRejectedValue(new Error(errorMsg))
+    render(<RunLauncher workspacePath="/ws" />)
+    await waitFor(() => expect(screen.getByText('标准五段')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('启动'))
+    await waitFor(() => expect(screen.getByText(errorMsg)).toBeInTheDocument())
+    expect(screen.getByText('启动')).not.toBeDisabled()
+  })
+
+  it('displays an error message when launchInfo rejects', async () => {
+    launchInfo.mockRejectedValue(new Error('network failed'))
+    render(<RunLauncher workspacePath="/ws" />)
+    await waitFor(() => expect(screen.getByText('加载工作流失败')).toBeInTheDocument())
+    expect(screen.getByText('启动')).toBeDisabled()
+  })
 })
