@@ -146,4 +146,27 @@ describe('runWorkOrder onProgress', () => {
     expect(events.some(e => e.laneId === 'develop:proj1' && e.state === 'run')).toBe(true)
     expect(events.some(e => e.activity === '写 design.md')).toBe(true)
   })
+
+  it('forwards the full LogLine (including kind) via onProgress', async () => {
+    const events: any[] = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        const done = (async () => {
+          cb.onLog({ ts: '', text: '思考中', level: 'run', kind: 'think' })
+          const r = { ok: true }
+          cb.onDone(r)
+          return r
+        })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    await runWorkOrder(order, { provider, env: {}, onProgress: (e) => events.push(e) })
+    expect(events).toContainEqual({
+      laneId: 'develop:proj1',
+      activity: '思考中',
+      log: { ts: '', text: '思考中', level: 'run', kind: 'think' },
+    })
+  })
 })
