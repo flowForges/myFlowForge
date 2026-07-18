@@ -312,4 +312,37 @@ describe('RunController', () => {
       expect(JSON.stringify(call[1])).not.toContain('调用 Bash')
     }
   })
+
+  it('stageTimings: records startedAt when a stage begins and endedAt once its lanes settle', async () => {
+    const store = new RunStore(ws, 'r1')
+    let t = 1000
+    const now = () => t++
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: okProvider() }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], sleep: async () => {}, now, makeId: idFactory() })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    const timing = final.stageTimings['develop']
+    expect(timing).toBeTruthy()
+    expect(timing.startedAt).toBeTypeOf('number')
+    expect(timing.endedAt).toBeTypeOf('number')
+    expect(timing.endedAt!).toBeGreaterThanOrEqual(timing.startedAt)
+  })
+
+  it('stageTimings: multi-stage run — each stage gets its own start/end timing', async () => {
+    const store = new RunStore(ws, 'r1')
+    let t = 5000
+    const now = () => t++
+    const c = new RunController(plan, { providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now, makeId: idFactory() })
+    c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    const design = final.stageTimings['design']
+    const develop = final.stageTimings['develop']
+    expect(design).toBeTruthy()
+    expect(develop).toBeTruthy()
+    expect(design.endedAt!).toBeGreaterThanOrEqual(design.startedAt)
+    expect(develop.endedAt!).toBeGreaterThanOrEqual(develop.startedAt)
+    // design (gated, first) must have started no later than develop
+    expect(design.startedAt).toBeLessThanOrEqual(develop.startedAt)
+  })
 })

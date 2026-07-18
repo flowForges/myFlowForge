@@ -40,6 +40,7 @@ export interface RunControllerState {
   status: RunStatus
   pendingDirective: Record<string, string>
   liveLanes: Record<string, LiveLane>
+  stageTimings: Record<string, { startedAt: number; endedAt?: number }>
 }
 
 export class RunController {
@@ -50,6 +51,7 @@ export class RunController {
   private status: RunStatus = 'running'
   private pendingDirective: Record<string, string> = {}
   private liveLanes: Record<string, LiveLane> = {}
+  private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
   private aborted = false
   private laneR = new ResolverRegistry<LaneDecision>()
   private gateR = new ResolverRegistry<GateDecision>()
@@ -58,10 +60,12 @@ export class RunController {
   private logSubs: Array<(l: RunLogLine) => void> = []
   private idn = 0
   private makeId: (p: string) => string
+  private now: () => number
 
   constructor(private plan: RunPlan, private deps: RunControllerDeps) {
     this.machine = initMachine(plan)
     this.makeId = deps.makeId ?? ((p) => `${p}-${this.idn++}`)
+    this.now = deps.now ?? Date.now
   }
 
   onEvent(fn: (e: RunEvent) => void) { this.eventSubs.push(fn); return () => { this.eventSubs = this.eventSubs.filter((f) => f !== fn) } }
@@ -70,7 +74,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes } }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings } }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -203,6 +207,7 @@ export class RunController {
       this.machine = markRunning(this.machine); this.status = 'running'; this.emitUpdate()
       const idx = this.machine.currentIndex
       const stage = this.plan.stages[idx]
+      this.stageTimings[stage.key] = { startedAt: this.now() }
       const input: StageInput = {
         stage: { ...stage },
         workspacePath: this.workspacePath(),
@@ -265,6 +270,7 @@ export class RunController {
       }
       this.deps.store.setContext('artifacts:' + stage.key, refs)
       this.outcomes[stage.key] = outcomes
+      if (this.stageTimings[stage.key]) this.stageTimings[stage.key].endedAt = this.now()
 
       // gate or auto-advance
       if (stage.gate) {
