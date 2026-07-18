@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveStages, pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from './resolveStages'
-import type { Workspace, Workflow } from '../config/schema'
+import type { Workspace, Workflow, WsWorkflow } from '../config/schema'
 
 const wf: Workflow = {
   id: 'standard',
@@ -96,6 +96,27 @@ describe('resolveWorkflowStages', () => {
     const stages = resolveWorkflowStages(pickWorkspaceWorkflow(multiWs(), 'full')!, [])
     expect(stages.map(s => s.key)).toEqual(['requirement', 'develop', 'review'])
     expect(stages[0].provider).toBe('codex')
+  })
+
+  // Repro for the run2 launcher bug: a workspace workflow with EMPTY stashed stages whose `id` does
+  // NOT match any current global template (e.g. the template was recreated/migrated under a new id)
+  // still resolves via a secondary by-NAME fallback, so the launcher preview and the actual run
+  // (resolveStartPlan, which calls this same function) both see the real stage list instead of
+  // silently falling back to [] just because the id drifted.
+  it('id 对不上时按显示名兜底全局模板(id 是旧值/生成值,但名字仍对得上某个全局模板)', () => {
+    const wsWorkflow: WsWorkflow = { id: 'generated-abc123', name: '标准工作流', stages: [] }
+    const globalWorkflows: Workflow[] = [wf, { id: 'other', name: '别的流程', stages: [{ key: 'develop', defaultAgent: 'claude', defaultModel: 'x' }], plugins: [], stagePrompts: {} }]
+    // `wf` above (module-level const) is id:'standard' name:'标准工作流' — id doesn't match
+    // wsWorkflow.id ('generated-abc123') but its name does.
+    const stages = resolveWorkflowStages(wsWorkflow, globalWorkflows)
+    expect(stages.map(s => s.key)).toEqual(['design', 'develop'])
+    expect(stages[0]).toEqual({ key: 'design', provider: 'claude', model: 'opus-4.8' })
+  })
+
+  it('id 和名字都对不上 → 仍返回 []', () => {
+    const wsWorkflow: WsWorkflow = { id: 'generated-abc123', name: '不存在的流程', stages: [] }
+    const stages = resolveWorkflowStages(wsWorkflow, [wf])
+    expect(stages).toEqual([])
   })
 })
 

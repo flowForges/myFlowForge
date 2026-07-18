@@ -44,8 +44,10 @@ const EMPTY_INFO: LaunchInfo = { workflows: [], projects: [] }
 
 // Start dialog for the run2 engine (P4-A). Loads a workspace's named workflows + projects via
 // window.forge.run2.launchInfo, lets the user pick a workflow + which projects to include + type a
-// requirement seed, then kicks off window.forge.run2.startWorkflow. Mirrors PlanCard/ReqCard's
-// .req-* / .plan-* markup conventions so it drops into the same visual language without new CSS.
+// requirement seed, then kicks off window.forge.run2.startWorkflow. Has its OWN `.run-launcher-*`
+// classes (workspace.css) — NOT chat's `.msg-req`/`.plan-card`/`.req-*`, which carry an amber "request
+// card" accent meant for chat interaction prompts and read as a warning here (fixed: this is a calm
+// glass card, not an alert).
 export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWorkflowId }: RunLauncherProps) {
   const [info, setInfo] = useState<LaunchInfo>(EMPTY_INFO)
   const [workflowId, setWorkflowId] = useState<string>(initialWorkflowId ?? '')
@@ -69,9 +71,14 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
       .then((li: LaunchInfo) => {
         if (cancelled) return
         setInfo(li)
-        // Preserve an already-picked workflow (from initialWorkflowId) once the info load completes;
-        // otherwise fall back to the first workflow, as before.
-        setWorkflowId((prev) => prev || li.workflows[0]?.id || '')
+        // Preserve an already-picked workflow (from initialWorkflowId, or a previous load) IF it still
+        // names a workflow this fresh load actually returned; otherwise fall back to the first workflow.
+        // Without the existence check, a stale/mismatched id (e.g. initialWorkflowId pointing at a
+        // workflow that no longer exists, or was picked before this launcher's load raced ahead of an
+        // edit) would silently bind the stage-flow preview to nothing — `info.workflows` has real
+        // entries with real stages, but `selectedWorkflow` (found by id) comes up empty, so the flow
+        // renders "（无阶段）" even though the workflow genuinely has stages.
+        setWorkflowId((prev) => (prev && li.workflows.some((w) => w.id === prev) ? prev : li.workflows[0]?.id ?? ''))
         setChecked(Object.fromEntries(li.projects.map((p) => [p.name, true])))
         setError(null)
       })
@@ -121,15 +128,15 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
 
   if (info.workflows.length === 0) {
     return (
-      <div className="msg-req plan-card run-launcher">
-        <div className="req-body">
+      <div className="run-launcher">
+        <div className="run-launcher-body">
           {error ? (
             <div className="launcher-error">{error}</div>
           ) : (
-            <div className="req-title">该工作区暂无工作流</div>
+            <div className="run-launcher-title">该工作区暂无工作流</div>
           )}
-          <div className="req-actions">
-            <button className="req-ok" disabled>启动</button>
+          <div className="run-launcher-actions">
+            <button className="run-launcher-start" disabled>启动</button>
           </div>
         </div>
       </div>
@@ -142,14 +149,14 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
   const stages = selectedWorkflow?.stages ?? []
 
   return (
-    <div className="msg-req plan-card run-launcher">
-      <div className="req-head">
-        <span className="req-kind">启动运行</span>
+    <div className="run-launcher">
+      <div className="run-launcher-head">
+        <span className="run-launcher-kind">启动运行</span>
       </div>
-      <div className="req-body">
+      <div className="run-launcher-body">
         {error && <div className="launcher-error">{error}</div>}
-        <div className="req-title">启动工作流</div>
-        <div className="req-sub plan-workflow">
+        <div className="run-launcher-title">启动工作流</div>
+        <div className="run-launcher-field run-launcher-workflow">
           <span>工作流</span>
           <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)}>
             {info.workflows.map((w) => (
@@ -191,7 +198,7 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
             ))}
           </div>
         </div>
-        <div className="req-sub plan-task">
+        <div className="run-launcher-field run-launcher-task">
           <textarea
             value={task}
             onChange={(e) => setTask(e.target.value)}
@@ -200,8 +207,8 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
           />
         </div>
         {queuedNote && <div className="run2-queued-note">{queuedNote}</div>}
-        <div className="req-actions">
-          <button className="req-ok" disabled={starting} onClick={start}>启动</button>
+        <div className="run-launcher-actions">
+          <button className="run-launcher-start" disabled={starting} onClick={start}>启动</button>
         </div>
       </div>
     </div>

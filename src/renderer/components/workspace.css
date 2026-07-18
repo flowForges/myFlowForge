@@ -471,11 +471,12 @@
 
 /* ============================================================
    run2 (P3-B) — chat|工作流运行 mode toggle + RunPanel + RunLauncher +
-   Run2EventCard. ADDITIVE ONLY: reuses existing tokens (--fg/--bg/--accent/…)
-   and the .msg-req/.req-*/.plan-* visual language already styled above so
-   RunLauncher and Run2EventCard (which render those classes directly) need
-   only a few kind-specific accents here; RunPanel introduces new run2-*
-   classes for its four regions.
+   Run2EventCard. ADDITIVE ONLY: reuses existing tokens (--fg/--bg/--accent/…).
+   Run2EventCard (chat-side interaction events) still renders the chat
+   .msg-req/.req-*/.plan-* classes + their kind-specific accents below;
+   RunLauncher has its OWN `.run-launcher-*` classes (not chat's — that amber
+   "request card" accent is for chat prompts/gates, not a plain start dialog);
+   RunPanel introduces new run2-* classes for its four regions.
    ============================================================ */
 
 /* ---- Task 1: reopen chip (chat column, only while a run is active but !runView) + back button
@@ -585,31 +586,44 @@
 .run2-fb-add .txt-btn { color: var(--accent); }
 .run2-fb-add .txt-btn:hover { background: var(--accent-dim); }
 
-/* ---- RunLauncher shell — a plain, calm glass card. No k-confirm class here anymore (that class
-   was designed for the amber "confirm" accent on chat interaction cards and read as a harsh warning
-   border floating on the wallpaper); the launcher just takes the neutral .msg-req border/surface. ---- */
-.run-launcher { box-shadow: var(--shadow); }
-.run-launcher .req-kind { color: var(--muted); background: var(--surface-2); }
-.run-launcher .req-title { margin-bottom: 2px; }
+/* ---- RunLauncher shell — its OWN classes (not chat's .msg-req/.plan-card/.req-*, which carry the
+   amber "request card" accent built for chat interaction prompts/gates and read as an alert here). A
+   plain, calm glass card: neutral border + surface, no warn-colored border/inset shadow. ---- */
+.run-launcher {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface); box-shadow: var(--shadow); overflow: hidden;
+}
+.run-launcher-head { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+.run-launcher-kind {
+  display: inline-flex; align-items: center; font: 700 9.5px/1 var(--mono);
+  letter-spacing: .05em; text-transform: uppercase; color: var(--muted);
+  background: var(--surface-2); padding: 4px 8px; border-radius: 99px;
+}
+.run-launcher-body { padding: 14px; }
+.run-launcher-title { font-size: 13.5px; font-weight: 600; color: var(--fg); line-height: 1.45; margin-bottom: 2px; }
 
-/* ---- RunLauncher form controls — .plan-workflow/.plan-task are reused from PlanCard's read-only
-   display (label span + text); RunLauncher instead nests a real <select>/<textarea> as the sole
-   child, so add width/appearance rules scoped to that child without touching the existing rules. ---- */
-.run-launcher .plan-workflow select {
+/* ---- RunLauncher form controls: a real <select>/<textarea> each in a labeled field row. ---- */
+.run-launcher-field { font-size: 12.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+.run-launcher-workflow select {
   height: 30px; border-radius: 7px; border: 1px solid var(--border-2);
   background: var(--bg); color: var(--fg); padding: 0 8px; font-size: 12.5px;
 }
-.run-launcher .plan-workflow select:focus { outline: none; border-color: var(--accent); }
-.run-launcher .plan-task { display: block; }
-.run-launcher .plan-task textarea {
+.run-launcher-workflow select:focus { outline: none; border-color: var(--accent); }
+.run-launcher-task { display: block; }
+.run-launcher-task textarea {
   width: 100%; resize: vertical; border: 1px solid var(--border-2); border-radius: 8px;
   background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 13px; line-height: 1.55;
   padding: 10px 12px; outline: none;
 }
-.run-launcher .plan-task textarea:focus { border-color: var(--accent); }
-.run-launcher .plan-task textarea::placeholder { color: var(--faint); }
-.run-launcher .req-actions { justify-content: flex-end; }
-.run-launcher .req-ok:disabled { opacity: .5; cursor: default; filter: none; }
+.run-launcher-task textarea:focus { border-color: var(--accent); }
+.run-launcher-task textarea::placeholder { color: var(--faint); }
+.run-launcher-actions { display: flex; gap: 8px; margin-top: 13px; justify-content: flex-end; }
+.run-launcher-start {
+  height: 32px; padding: 0 15px; border-radius: 8px; font-size: 12.5px; font-weight: 600; transition: .13s;
+  background: var(--accent); color: var(--on-accent);
+}
+.run-launcher-start:hover { filter: brightness(1.08); }
+.run-launcher-start:disabled { opacity: .5; cursor: default; filter: none; }
 
 /* ---- RunLauncher: selected-workflow stage flow — a vertical rail (index + connecting line),
    mirrors RunPanel's .run2-rail chip language (provider·model chip, gate badge) but as a readable
@@ -658,7 +672,7 @@
   color: var(--accent); background: var(--accent-dim); border-color: var(--accent);
 }
 
-/* ---- RunLauncher error text (reuses .msg-req/.plan-card/.req-* shell already styled above) ---- */
+/* ---- RunLauncher error text ---- */
 .launcher-error {
   color: var(--err); font-size: 12.5px; font-weight: 500; line-height: 1.5;
   background: color-mix(in oklab, var(--err) 12%, transparent);

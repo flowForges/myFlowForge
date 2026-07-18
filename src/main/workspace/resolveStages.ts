@@ -1,4 +1,5 @@
 import type { Workspace, WsWorkflow, WsStage, Workflow, ReviewConfig } from '../config/schema'
+import { workflowDisplayName } from '../config/schema'
 import { resolveStages as resolveLibRefs, type StageDefById } from '../../shared/customStages'
 
 // Default CR mode when a review stage carries no explicit review config (user-confirmed default).
@@ -47,10 +48,14 @@ export function pickWorkspaceWorkflow(ws: Workspace, workflowId?: string): WsWor
   return ws.workflows[0]
 }
 
-// 解析一条工作流的阶段:固化阶段非空 → 补 review 默认返回;空 → 按 wf.id 回退全局模板(沿用 resolveStages 老逻辑)。
+// 解析一条工作流的阶段:固化阶段非空 → 补 review 默认返回;空 → 回退全局模板(沿用 resolveStages 老逻辑)。
+// 回退先按 id 命中(常规:向导选模板时 WsWorkflow.id 原样抄自全局模板 id);id 对不上时按显示名二次
+// 兜底 —— 覆盖「工作区那份 id 是老快照/生成值,但用户看到的名字仍是某个全局模板」的场景(如模板后来被
+// 删除重建换了 id,或工作区文件是迁移/生成出来的,不是走向导原样复制的),让预览(launcher)和真正
+// 启动(resolveStartPlan,同一份解析)看到一致的阶段,而不是各自静默兜成空数组。
 export function resolveWorkflowStages(wf: WsWorkflow, workflows: Workflow[], customStagesById: StageDefById = {}): WsStage[] {
   if (wf.stages.length > 0) return withReviewDefaults(wf.stages)
-  const g = workflows.find(w => w.id === wf.id)
+  const g = workflows.find(w => w.id === wf.id) ?? workflows.find(w => w.name === workflowDisplayName(wf.name))
   if (!g) return []
   return materializeGlobalStages(g, customStagesById)
 }
