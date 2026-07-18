@@ -93,7 +93,7 @@ describe('WorkspaceView run2 lifecycle (runView replaces mode2 toggle)', () => {
     expect(screen.queryByText(/查看运行中|工作流运行中/)).toBeNull()
   })
 
-  it('run2 status becomes running: run view auto-opens (RunPanel visible)', async () => {
+  it('run2 status becomes running: run view auto-opens (WorkflowOverlay run mode visible)', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
 
@@ -102,7 +102,8 @@ describe('WorkspaceView run2 lifecycle (runView replaces mode2 toggle)', () => {
     })
 
     await waitFor(() => expect(screen.getByText('返回对话')).toBeInTheDocument())
-    expect(screen.getByText('取消运行')).toBeInTheDocument() // RunPanel content
+    expect(document.querySelector('.wfo-runctl')).toBeInTheDocument() // WorkflowOverlay run-mode foot
+    expect(screen.getByText('终止')).toBeInTheDocument()
     expect(document.querySelector('#composerInput')).toBeNull() // chat column hidden
   })
 
