@@ -1,10 +1,10 @@
 // src/main/run/controller.test.ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../orchestrator/runStore'
-import { RunController, type RunControllerState } from './controller'
+import { RunController, type RunControllerState, type RunLogLine } from './controller'
 import type { RunPlan } from './machine'
 import type { RunEvent } from './events'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
@@ -63,6 +63,21 @@ function progressProvider(): AgentProvider {
       const done = (async () => {
         cb.onState('run')
         cb.onLog({ ts: '0', text: 'working on it', level: 'info' })
+        cb.onHandoff?.({ summary: `out ${task.agentId}` }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+// Provider that emits a single tool-kind log line before completing — used to prove onLog
+// broadcasts the raw LogLine to subscribers without it ever landing in persisted state.
+function toolLogProvider(): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        cb.onLog({ ts: '', text: '调用 Bash', level: 'run', kind: 'tool' })
         cb.onHandoff?.({ summary: `out ${task.agentId}` }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
       })()
       return { id: task.agentId, cancel() {}, done }
@@ -266,5 +281,35 @@ describe('RunController', () => {
     expect(final.status).toBe('ok')
     expect(final.liveLanes[laneId]).toBeUndefined() // settled lane moved to outcomes, not live anymore
     expect(final.outcomes['develop']?.[0]?.status).toBe('ok')
+  })
+
+  it('onLog broadcasts live agent log lines on a channel separate from state/persistence', async () => {
+    const store = new RunStore(ws, 'r1')
+    const setContextSpy = vi.spyOn(store, 'setContext')
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: toolLogProvider() }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const logs: RunLogLine[] = []
+    c.onLog((l) => logs.push(l))
+    const final = await c.start()
+
+    expect(final.status).toBe('ok')
+    expect(logs).toHaveLength(1)
+    expect(logs[0]).toMatchObject({
+      laneId: 'develop:a',
+      stageKey: 'develop',
+      project: 'a',
+      agentName: '开发',
+      line: { kind: 'tool', text: '调用 Bash' },
+    })
+
+    // Logs must never enter RunControllerState (no persisted-state field carries them)...
+    expect(final).not.toHaveProperty('logs')
+    expect(JSON.stringify(final)).not.toContain('调用 Bash')
+    // ...and must never reach disk — every setContext() call (the sole write path to context.json)
+    // is inspected, none of them may carry the log text.
+    expect(setContextSpy.mock.calls.length).toBeGreaterThan(0)
+    for (const call of setContextSpy.mock.calls) {
+      expect(JSON.stringify(call[1])).not.toContain('调用 Bash')
+    }
   })
 })
