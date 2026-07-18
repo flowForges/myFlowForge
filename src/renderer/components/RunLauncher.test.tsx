@@ -135,4 +135,84 @@ describe('RunLauncher', () => {
     expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('我: 做个登录页')
     expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('wf1')
   })
+
+  // Task 2: the launcher renders the SELECTED workflow's stage flow (from LaunchInfo.workflows[].stages,
+  // added by Task 1) so the user can see what a workflow actually does before starting it.
+  it('renders the selected workflow stage flow (name, provider·model, gate badge) and updates it on workflow switch', async () => {
+    launchInfo.mockResolvedValue({
+      workflows: [
+        {
+          id: 'wf1',
+          name: '标准五段',
+          stages: [
+            { key: 'design', name: '技术方案设计', provider: 'codex', model: 'gpt-x', gate: true },
+            { key: 'develop', name: '代码开发', provider: 'codex', model: 'gpt-x', gate: false },
+          ],
+        },
+        {
+          id: 'wf2',
+          name: '快速迭代',
+          stages: [
+            { key: 'quick', name: '直接开发', provider: 'claude', model: 'sonnet', gate: false },
+          ],
+        },
+      ],
+      projects: [{ name: 'api', cwd: '/ws/api' }],
+    })
+    render(<RunLauncher workspacePath="/ws" />)
+    await waitFor(() => expect(screen.getByText('标准五段')).toBeInTheDocument())
+
+    // Both wf1 stages render with a provider·model chip.
+    expect(screen.getByText('技术方案设计')).toBeInTheDocument()
+    expect(screen.getByText('代码开发')).toBeInTheDocument()
+    expect(screen.getAllByText(/codex.*gpt-x/)).toHaveLength(2)
+
+    // Only the gated stage gets a gate badge.
+    const designRow = screen.getByText('技术方案设计').closest('.run2-launch-stage')!
+    const developRow = screen.getByText('代码开发').closest('.run2-launch-stage')!
+    expect(designRow.querySelector('.run2-launch-stage-gate')).not.toBeNull()
+    expect(developRow.querySelector('.run2-launch-stage-gate')).toBeNull()
+
+    // Switching the workflow select swaps the rendered stage flow.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'wf2' } })
+    await waitFor(() => expect(screen.getByText('直接开发')).toBeInTheDocument())
+    expect(screen.queryByText('技术方案设计')).not.toBeInTheDocument()
+    expect(screen.queryByText('代码开发')).not.toBeInTheDocument()
+    expect(screen.getByText(/claude.*sonnet/)).toBeInTheDocument()
+  })
+
+  it('shows a placeholder note when the selected workflow has no stages', async () => {
+    launchInfo.mockResolvedValue({
+      workflows: [{ id: 'wf1', name: '空流程', stages: [] }],
+      projects: [{ name: 'api', cwd: '/ws/api' }],
+    })
+    render(<RunLauncher workspacePath="/ws" />)
+    await waitFor(() => expect(screen.getByText('空流程')).toBeInTheDocument())
+    expect(screen.getByText('（无阶段）')).toBeInTheDocument()
+  })
+
+  // Task 2: project selection moved from checkboxes to toggle chips, but the accessible name +
+  // start-time projectNames contract is unchanged.
+  it('toggles project chips and only starts with the ones still checked', async () => {
+    launchInfo.mockResolvedValue({
+      workflows: [{ id: 'wf1', name: '标准五段', stages: [] }],
+      projects: [{ name: 'api', cwd: '/ws/api' }, { name: 'web', cwd: '/ws/web' }],
+    })
+    render(<RunLauncher workspacePath="/ws" />)
+    await waitFor(() => expect(screen.getByText('标准五段')).toBeInTheDocument())
+
+    const apiChip = screen.getByLabelText('api')
+    const webChip = screen.getByLabelText('web')
+    expect(apiChip).toHaveAttribute('aria-pressed', 'true')
+    expect(webChip).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(webChip)
+    expect(webChip).toHaveAttribute('aria-pressed', 'false')
+
+    fireEvent.click(screen.getByText('启动'))
+    await waitFor(() => expect(startWorkflow).toHaveBeenCalled())
+    expect(startWorkflow).toHaveBeenCalledWith(expect.objectContaining({
+      projectNames: ['api'],
+    }))
+  })
 })

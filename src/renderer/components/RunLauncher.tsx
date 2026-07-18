@@ -121,7 +121,7 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
 
   if (info.workflows.length === 0) {
     return (
-      <div className="msg-req k-confirm plan-card run-launcher">
+      <div className="msg-req plan-card run-launcher">
         <div className="req-body">
           {error ? (
             <div className="launcher-error">{error}</div>
@@ -136,13 +136,19 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
     )
   }
 
+  // The selected workflow's stage flow — recomputed from `info` on every render so switching the
+  // <select> (or a fresh launchInfo load) always reflects the currently-picked workflow.
+  const selectedWorkflow = info.workflows.find((w) => w.id === workflowId)
+  const stages = selectedWorkflow?.stages ?? []
+
   return (
-    <div className="msg-req k-confirm plan-card run-launcher">
+    <div className="msg-req plan-card run-launcher">
       <div className="req-head">
         <span className="req-kind">启动运行</span>
       </div>
       <div className="req-body">
         {error && <div className="launcher-error">{error}</div>}
+        <div className="req-title">启动工作流</div>
         <div className="req-sub plan-workflow">
           <span>工作流</span>
           <select value={workflowId} onChange={(e) => setWorkflowId(e.target.value)}>
@@ -151,19 +157,37 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
             ))}
           </select>
         </div>
-        <div className="plan-stages">
-          <span className="plan-stages-label">项目</span>
-          <div className="plan-stage-list">
+        <div className="run2-launch-stages">
+          {stages.length === 0 ? (
+            <div className="run2-launch-stages-empty">（无阶段）</div>
+          ) : (
+            stages.map((s, i) => (
+              <div key={s.key} className="run2-launch-stage">
+                {i > 0 && <span className="run2-launch-stage-link" aria-hidden="true" />}
+                <span className="run2-launch-stage-index">{i + 1}</span>
+                <div className="run2-launch-stage-main">
+                  <span className="run2-launch-stage-name">{s.name}</span>
+                  <span className="run2-launch-stage-model">{s.provider}·{s.model}</span>
+                </div>
+                {s.gate && <span className="run2-launch-stage-gate">门</span>}
+              </div>
+            ))
+          )}
+        </div>
+        <div className="run2-launch-projects">
+          <span className="run2-launch-projects-label">项目</span>
+          <div className="run2-launch-project-chips">
             {info.projects.map((p) => (
-              <label key={p.name} className="plan-stage-row plan-stage-head">
-                <input
-                  type="checkbox"
-                  checked={!!checked[p.name]}
-                  onChange={() => toggleProject(p.name)}
-                  aria-label={p.name}
-                />
-                <span className="plan-stage-name">{p.name}</span>
-              </label>
+              <button
+                key={p.name}
+                type="button"
+                className={`run2-launch-chip${checked[p.name] ? ' on' : ''}`}
+                onClick={() => toggleProject(p.name)}
+                aria-label={p.name}
+                aria-pressed={!!checked[p.name]}
+              >
+                {p.name}
+              </button>
             ))}
           </div>
         </div>

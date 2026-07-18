@@ -585,6 +585,13 @@
 .run2-fb-add .txt-btn { color: var(--accent); }
 .run2-fb-add .txt-btn:hover { background: var(--accent-dim); }
 
+/* ---- RunLauncher shell — a plain, calm glass card. No k-confirm class here anymore (that class
+   was designed for the amber "confirm" accent on chat interaction cards and read as a harsh warning
+   border floating on the wallpaper); the launcher just takes the neutral .msg-req border/surface. ---- */
+.run-launcher { box-shadow: var(--shadow); }
+.run-launcher .req-kind { color: var(--muted); background: var(--surface-2); }
+.run-launcher .req-title { margin-bottom: 2px; }
+
 /* ---- RunLauncher form controls — .plan-workflow/.plan-task are reused from PlanCard's read-only
    display (label span + text); RunLauncher instead nests a real <select>/<textarea> as the sole
    child, so add width/appearance rules scoped to that child without touching the existing rules. ---- */
@@ -603,6 +610,53 @@
 .run-launcher .plan-task textarea::placeholder { color: var(--faint); }
 .run-launcher .req-actions { justify-content: flex-end; }
 .run-launcher .req-ok:disabled { opacity: .5; cursor: default; filter: none; }
+
+/* ---- RunLauncher: selected-workflow stage flow — a vertical rail (index + connecting line),
+   mirrors RunPanel's .run2-rail chip language (provider·model chip, gate badge) but as a readable
+   stacked list rather than a wrapped chip row, since here it's a preview, not live status. ---- */
+.run2-launch-stages { display: flex; flex-direction: column; margin: 10px 0 4px; }
+.run2-launch-stages-empty { color: var(--faint); font-size: 12px; padding: 2px 0; }
+.run2-launch-stage {
+  position: relative; display: flex; align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px dashed var(--border);
+}
+.run2-launch-stage:last-child { border-bottom: none; padding-bottom: 2px; }
+/* Connecting line: a short vertical tick sitting above the row, centered on the index dot, so
+   consecutive stages read as one continuous flow rather than a bare list. */
+.run2-launch-stage-link {
+  position: absolute; top: -9px; left: 11px; width: 1px; height: 9px;
+  background: var(--border-2);
+}
+.run2-launch-stage-index {
+  flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font: 700 11px/1 var(--mono);
+  color: var(--fg-2); background: var(--surface-2); border: 1px solid var(--border-2);
+}
+.run2-launch-stage-main { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.run2-launch-stage-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+.run2-launch-stage-model {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px;
+  padding: 2px 8px; white-space: nowrap;
+}
+.run2-launch-stage-gate {
+  flex: 0 0 auto; font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  color: var(--accent); background: var(--accent-dim); border-radius: 99px; padding: 3px 9px;
+}
+
+/* ---- RunLauncher: project toggle chips — replaces the old dark checkbox rows with calm,
+   glass-consistent pills; checked state picks up the accent, unchecked stays a quiet outline. ---- */
+.run2-launch-projects { margin: 4px 0 2px; }
+.run2-launch-projects-label { font-size: 12.5px; color: var(--muted); display: block; margin-bottom: 7px; }
+.run2-launch-project-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.run2-launch-chip {
+  font-size: 12px; font-weight: 550; color: var(--muted); background: transparent;
+  border: 1px solid var(--border-2); border-radius: 99px; padding: 5px 12px; transition: .13s;
+}
+.run2-launch-chip:hover { border-color: var(--accent); color: var(--fg); }
+.run2-launch-chip.on {
+  color: var(--accent); background: var(--accent-dim); border-color: var(--accent);
+}
 
 /* ---- RunLauncher error text (reuses .msg-req/.plan-card/.req-* shell already styled above) ---- */
 .launcher-error {
