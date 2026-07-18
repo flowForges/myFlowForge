@@ -58,8 +58,6 @@ import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
 import { makeProposeRun } from '../chat/proposeRun'
 import { makeRunDelegate, cancelWorkspaceDelegates } from '../chat/delegate'
 import { isResumeIntent } from '../chat/workflowIntent'
-import { looksLikeNarratedWorkflow } from '../chat/narratedWorkflow'
-import { makeProposeGuard } from '../chat/proposeGuard'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
 import { importCodexPetPack, discoverCodexPets } from '../pet/codexPetImport'
@@ -649,11 +647,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where })
     })
     const store = new RunStore(payload.workspacePath, 'chat-bridge')
-    const guardBlocked = makeProposeGuard(3)
-    let proposedWorkflow = false
-    // Track whether the main agent took EITHER real forge action this turn (propose_plan OR delegate).
-    // The narrated-execution backstop below only fires when it took NEITHER but still narrated a workflow.
-    let delegatedAny = false
     // forge_delegate is fire-and-forget: its MCP call returns 「已派发」at once, so without this the turn
     // would resolve while the sub-agents keep running in the background — and the NEXT message would start
     // a CONCURRENT turn (a 2nd batch running alongside the 1st, their progress blocks scattered). Collect a
@@ -664,17 +657,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       store, runId: 'chat', workspaceName: payload.workspacePath,
       agentName: () => 'chat', agentStage: () => 'chat',
       ask: async () => null, setContext: () => {},
-      proposePlan: (approach: string, task?: string, select?: { workflowId?: string; stages?: string[]; projects?: string[]; stageProjects?: Record<string, string[]>; brief?: string; recommendReason?: string }) => {
-        proposedWorkflow = true
-        if (guardBlocked()) { emitNote(payload.workspacePath, payload.sessionId, '已达最大修改次数,请直接批准或取消。'); return Promise.resolve({ approved: false }) }
-        // #1: carry the chat's currently-selected main agent as this run's provider override.
-        // Anchor: the user's latest raw message (payload.text) is the ground-truth requirement. The main
-        // agent authors task/brief from a history where old + new topics are mixed and can latch onto a
-        // stale topic; passing the raw latest message lets every stage prefer it over a mis-summarized brief.
-        return proposeRun(payload.workspacePath, approach, task, { ...select, providerOverride: { provider: payload.agent, model: payload.model }, sessionId: payload.sessionId, userMessage: payload.text })
+      // 神经切断:聊天不再是工作流入口("聊着聊着突然启动工作流"是用户的#1投诉)。主代理调
+      // forge_propose_plan 时,不再调 proposeRun 开真门/真跑,只回一句引导去「工作流运行」启动器,
+      // 并对 MCP 调用方回 approved:false(不阻塞、不误导主代理以为方案在等待批准)。
+      proposePlan: () => {
+        emitNote(payload.workspacePath, payload.sessionId, '工作流请到「工作流运行」模式用启动器发起（聊天不再自动开工作流）。')
+        return Promise.resolve({ approved: false })
       },
       delegate: (a: { task: string; projects?: string[]; write?: boolean; brief?: string }) => {
-        delegatedAny = true
         // Per-call: the batch's runId (from onBatchStart) so onComplete can mark the SAME progress block done.
         let batchRunId: string | null = null
         // Hold the turn open until THIS batch's onComplete fires (see delegateBatches above), so the queue
@@ -778,25 +768,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       // clicking 补充 to refine a plan in chat got a spurious, half-broken workflow confirmation) and
       // violated "一切先过主代理". That intent-guessing auto-fire stays removed.
       //
-      // Narrated-execution backstop (different trigger, not intent-guessing): the dual-path redesign lets
-      // the LLM decide whether to propose, and the LLM sometimes FAILS by narrating a workflow in prose —
-      // "已提交方案给 Forge / 需要你在 UI 批准 / 已按工作流执行" — WITHOUT ever calling forge_propose_plan or
-      // forge_delegate. That bypasses the gate, starts no real run, registers no agent sessions (IDs panel
-      // empty), and renders the narration as a plain (mis-styled) message. 108f9ea only hardened the prompt.
-      // Here we detect that self-contradiction — the agent took NEITHER real forge action this turn yet its
-      // OWN OUTPUT claims it submitted/ran a workflow — and convert the narration into a REAL gate: fire a
-      // proposeRun (fire-and-forget, standalone so this turn's cleanup can't dismiss it) so the user gets an
-      // actual approval card; on approval a real orchestrator run starts. The trigger is the agent's own
-      // narrated intent, not a guess about the user's text, so it can't spuriously fire on a genuine chat
-      // answer (which neither narrates a submit nor claims to run stages).
-      if (!proposedWorkflow && !delegatedAny && looksLikeNarratedWorkflow(msg.text)) {
-        emitNote(payload.workspacePath, payload.sessionId, '⚠️ 检测到主代理只是「口头」提交/执行了工作流,并未真正发起(无真实 run、IDs 无 session)。已为你打开确认门,批准后才会真正编排为多代理工作流。')
-        void proposeRun(payload.workspacePath, payload.text, payload.text, {
-          providerOverride: { provider: payload.agent, model: payload.model },
-          sessionId: payload.sessionId,
-          standalone: true,
-        }).catch(() => {})
-      }
+      // Chat NEVER triggers a workflow (this was the user's #1 complaint — "聊着聊着突然启动工作流").
+      // forge_propose_plan's bridge callback above is neutered (redirect note + approved:false) and the
+      // narrated-execution backstop that used to convert a merely-narrated "已提交方案" into a real
+      // proposeRun gate has been removed entirely — the only workflow entry point now is the run2
+      // launcher ("工作流运行" mode).
       return msg
     }
     finally {
