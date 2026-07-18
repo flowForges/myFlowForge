@@ -118,9 +118,15 @@ export class RunController {
   }
   private buildPrompt = (o: { stageKey: string; project?: string; cwd: string; upstream: ArtifactRef[] }) => {
     const seed = this.deps.task ? `【需求原文（以此为准）】\n${this.deps.task}\n` : ''
+    // The stage's real instructions (e.g. STAGE_PROMPTS['design']) live on the StagePlan, not on
+    // the thin `o` passed in from fanout — look it up here so callers don't need to thread it through.
+    const stagePrompt = this.plan.stages.find((s) => s.key === o.stageKey)?.prompt
+    const instructions = stagePrompt ? `${stagePrompt}\n` : `【阶段】${o.stageKey}\n`
+    const scope = `${o.project ? `（项目 ${o.project}）` : ''}cwd=${o.cwd}`
     const up = o.upstream.length ? `\n上游产物：\n${o.upstream.map((a) => `- ${a.path} (${a.kind})`).join('\n')}` : ''
     const dir = this.pendingDirective[o.stageKey] ? `\n【补充/返工意见】\n${this.pendingDirective[o.stageKey]}` : ''
-    return `${seed}【阶段】${o.stageKey}${o.project ? `（项目 ${o.project}）` : ''}\ncwd=${o.cwd}${up}${dir}\n回传结构化结果。`
+    const fence = `\n完成后，请在回复最后输出一个如下格式的结果块（用于登记产物）：\n\`\`\`forge-result\n{"summary":"一句话说明你做了什么","filesChanged":["改动/产出的文件路径"],"testsRun":{"passed":true},"blockers":[],"doubts":[]}\n\`\`\`\n`
+    return `${seed}${instructions}${scope}${up}${dir}${fence}`
   }
 
   private async runOneOrder(order: WorkOrder): Promise<WorkOrderOutcome> {
