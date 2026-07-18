@@ -860,6 +860,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     initialSeed={buildConversationSeed(chat.messages)}
                     onClose={() => setRunView(false)}
                     onStarted={() => setPendingLaunch(null)}
+                    run2={run2}
                   />
                 ))
               : <RunPanel api={run2} onOpenLog={onOpenLog} />}

@@ -5,6 +5,26 @@ import { WorkflowOverlay } from './WorkflowOverlay'
 const launchInfo = vi.fn()
 const startWorkflow = vi.fn()
 
+// B1 (WF-B): every existing (WF-A) test constructs the overlay in CONFIG mode — run2.state === null.
+// The new run-mode describe block below builds its own run2 (state !== null) via this same helper.
+function makeRun2(state: any = null) {
+  return {
+    state,
+    laneLogs: {},
+    queueLength: 0,
+    resolveGate: vi.fn(),
+    resolveLane: vi.fn(),
+    addFeedback: vi.fn(),
+    editFeedback: vi.fn(),
+    removeFeedback: vi.fn(),
+    abort: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
+    jumpBack: vi.fn(),
+  }
+}
+const configRun2 = makeRun2(null)
+
 beforeEach(() => {
   launchInfo.mockReset()
   startWorkflow.mockReset()
@@ -44,7 +64,7 @@ const LAUNCH_INFO = {
 describe('WorkflowOverlay', () => {
   it('renders one .wfo-tab per workflow, first selected by default', async () => {
     launchInfo.mockResolvedValue(LAUNCH_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     expect(launchInfo).toHaveBeenCalledWith('/ws')
     await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(2))
     const tabs = container.querySelectorAll('.wfo-tab')
@@ -56,7 +76,7 @@ describe('WorkflowOverlay', () => {
 
   it('clicking the second tab makes it .on and unsets the first', async () => {
     launchInfo.mockResolvedValue(LAUNCH_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(2))
     const tabs = container.querySelectorAll('.wfo-tab')
     fireEvent.click(tabs[1])
@@ -66,7 +86,7 @@ describe('WorkflowOverlay', () => {
 
   it('disables the 启动 button when goal is empty, enables it after typing', async () => {
     launchInfo.mockResolvedValue(LAUNCH_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(2))
     const startBtn = container.querySelector('.wfo-start') as HTMLButtonElement
     expect(startBtn).toBeDisabled()
@@ -78,7 +98,7 @@ describe('WorkflowOverlay', () => {
 
   it('prefills the goal textarea from initialSeed', async () => {
     launchInfo.mockResolvedValue(LAUNCH_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" initialSeed="我: 做个登录页" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" initialSeed="我: 做个登录页" run2={configRun2} onClose={vi.fn()} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(2))
     const textarea = container.querySelector('.wfo-goal textarea') as HTMLTextAreaElement
     expect(textarea.value).toBe('我: 做个登录页')
@@ -88,7 +108,7 @@ describe('WorkflowOverlay', () => {
   it('calls onClose when clicking the scrim', async () => {
     launchInfo.mockResolvedValue(LAUNCH_INFO)
     const onClose = vi.fn()
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={onClose} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={onClose} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(2))
     fireEvent.click(container.querySelector('.wfo-scrim')!)
     expect(onClose).toHaveBeenCalled()
@@ -97,7 +117,7 @@ describe('WorkflowOverlay', () => {
   it('calls onClose when clicking the .wfo-x close button', async () => {
     launchInfo.mockResolvedValue(LAUNCH_INFO)
     const onClose = vi.fn()
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={onClose} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={onClose} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(2))
     fireEvent.click(container.querySelector('.wfo-x')!)
     expect(onClose).toHaveBeenCalled()
@@ -105,7 +125,7 @@ describe('WorkflowOverlay', () => {
 
   it('renders the legend with 5 items and the head title/hint text', async () => {
     launchInfo.mockResolvedValue(LAUNCH_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(2))
     expect(container.querySelectorAll('.wfo-legend i')).toHaveLength(5)
     expect(screen.getByText('开启工作流')).toBeInTheDocument()
@@ -114,7 +134,7 @@ describe('WorkflowOverlay', () => {
 
   it('renders a safe empty state when window.forge.run2 is absent', () => {
     ;(window as any).forge = {}
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     expect(container.querySelectorAll('.wfo-tab')).toHaveLength(0)
   })
 })
@@ -170,7 +190,7 @@ describe('WorkflowOverlay config-state flowchart (Task 3)', () => {
 
   it('renders start/end terminals, one .wfo-node per stage, connectors between them, and .wfo-mode.code for code stages', async () => {
     launchInfo.mockResolvedValue(CHART_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
 
     expect(container.querySelector('.wfo-term.start')).toBeInTheDocument()
@@ -196,7 +216,7 @@ describe('WorkflowOverlay config-state flowchart (Task 3)', () => {
 
   it('clicking a node header toggles .open on that node', async () => {
     launchInfo.mockResolvedValue(CHART_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
 
     const nodes = container.querySelectorAll('.wfo-node')
@@ -210,7 +230,7 @@ describe('WorkflowOverlay config-state flowchart (Task 3)', () => {
 
   it('switching the workflow tab re-renders the chart for that workflow', async () => {
     launchInfo.mockResolvedValue(CHART_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
 
     const tabs = container.querySelectorAll('.wfo-tab')
@@ -258,7 +278,7 @@ describe('WorkflowOverlay node body (Task 4)', () => {
 
   async function renderExpanded(nodeIndex: number) {
     launchInfo.mockResolvedValue(BODY_INFO)
-    const { container } = render(<WorkflowOverlay workspacePath="/ws" onClose={vi.fn()} />)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
     await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
     const nodes = container.querySelectorAll('.wfo-node')
     fireEvent.click(nodes[nodeIndex].querySelector('.wfo-cardhead') as HTMLElement)
@@ -339,7 +359,7 @@ describe('WorkflowOverlay launch wiring (Task 5)', () => {
     startWorkflow.mockResolvedValue({ status: 'started', state: {} })
     const onStarted = vi.fn()
     const { container } = render(
-      <WorkflowOverlay workspacePath="/ws" initialSeed="我: 做个登录页" onClose={vi.fn()} onStarted={onStarted} />
+      <WorkflowOverlay workspacePath="/ws" initialSeed="我: 做个登录页" run2={configRun2} onClose={vi.fn()} onStarted={onStarted} />
     )
     // Wait for the flowchart nodes (not just the tabs) so the projSel-init effect (which the
     // handleStart projectNames union reads) has definitely run before we click 启动 — see Task 4's
@@ -370,7 +390,7 @@ describe('WorkflowOverlay launch wiring (Task 5)', () => {
     startWorkflow.mockResolvedValue({ status: 'queued', position: 2 })
     const onStarted = vi.fn()
     const { container } = render(
-      <WorkflowOverlay workspacePath="/ws" initialSeed="做个功能" onClose={vi.fn()} onStarted={onStarted} />
+      <WorkflowOverlay workspacePath="/ws" initialSeed="做个功能" run2={configRun2} onClose={vi.fn()} onStarted={onStarted} />
     )
     await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(3))
 
@@ -379,5 +399,82 @@ describe('WorkflowOverlay launch wiring (Task 5)', () => {
     await waitFor(() => expect(startWorkflow).toHaveBeenCalledTimes(1))
     expect(onStarted).not.toHaveBeenCalled()
     await waitFor(() => expect(container.textContent).toContain('位置'))
+  })
+})
+
+describe('WorkflowOverlay run state (Task B1)', () => {
+  const RUN_LAUNCH_INFO = {
+    workflows: [
+      {
+        id: 'wf-standard',
+        name: '标准工作流',
+        stages: [
+          stage({ key: 'design', name: '技术方案设计', desc: '设计技术方案' }),
+          stage({ key: 'develop', name: '代码开发', code: true, desc: '按方案实现变更' }),
+        ],
+      },
+    ],
+    projects: [],
+  }
+
+  function runState(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      machine: {
+        plan: {
+          runId: 'run2-1',
+          stages: [
+            { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: false },
+            { key: 'develop', name: '代码开发', provider: 'codex', model: 'gpt-5-codex', scope: 'per-project', gate: true },
+          ],
+        },
+        stages: [
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'running', round: 0 },
+        ],
+        currentIndex: 1,
+      },
+      inbox: [],
+      feedback: [],
+      outcomes: {},
+      status: 'running',
+      pendingDirective: {},
+      liveLanes: {},
+      stageTimings: { design: { startedAt: 1000, endedAt: 4000 }, develop: { startedAt: 5000 } },
+      paused: false,
+      ...overrides,
+    }
+  }
+
+  it('renders .wfo-prog with doneN/total, run/done node classes + stat badges, and elapsed time for a finished stage', async () => {
+    launchInfo.mockResolvedValue(RUN_LAUNCH_INFO)
+    const run2 = makeRun2(runState())
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
+
+    expect(container.querySelector('.wfo-prog .lbl')?.textContent).toBe('已完成 1 / 2')
+    expect(container.querySelector('.wfo-prog .pct')?.textContent).toBe('50%')
+
+    const nodes = container.querySelectorAll('.wfo-node')
+    const designNode = nodes[0]
+    const developNode = nodes[1]
+
+    expect(designNode).toHaveClass('done')
+    expect(designNode.querySelector('.wfo-stat')).toHaveClass('ok')
+    expect(designNode.querySelector('.wfo-time')?.textContent).toBe('3.0s')
+
+    expect(developNode).toHaveClass('run')
+    expect(developNode.querySelector('.wfo-stat')).toHaveClass('run')
+
+    // Config-mode-only chrome must be gone once running.
+    expect(container.querySelector('.wfo-tabs')).toBeNull()
+    expect(container.querySelector('.wfo-legend')).toBeNull()
+  })
+
+  it('config mode (run2.state === null) still renders tabs, not the progress bar', async () => {
+    launchInfo.mockResolvedValue(RUN_LAUNCH_INFO)
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={configRun2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(1))
+    expect(container.querySelector('.wfo-prog')).toBeNull()
   })
 })
