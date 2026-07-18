@@ -463,8 +463,11 @@ describe('WorkflowOverlay run state (Task B1)', () => {
     expect(designNode.querySelector('.wfo-stat')).toHaveClass('ok')
     expect(designNode.querySelector('.wfo-time')?.textContent).toBe('3.0s')
 
-    expect(developNode).toHaveClass('run')
-    expect(developNode.querySelector('.wfo-stat')).toHaveClass('run')
+    // develop is a code stage → B4 fans it out to a .wfo-group (the state class lives there, not
+    // on the outer .wfo-node — see WorkflowOverlay code-stage fan-out lanes test).
+    const developGroup = developNode.querySelector('.wfo-group') as HTMLElement
+    expect(developGroup).toHaveClass('run')
+    expect(developGroup.querySelector('.wfo-stat')).toHaveClass('run')
 
     // Config-mode-only chrome must be gone once running.
     expect(container.querySelector('.wfo-tabs')).toBeNull()
@@ -646,8 +649,10 @@ describe('WorkflowOverlay confirm/input inline actions (Task B3)', () => {
     await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
 
     const developNode = container.querySelectorAll('.wfo-node')[1]
-    expect(developNode).toHaveClass('input')
-    fireEvent.click(developNode.querySelector('.wfo-cardhead') as HTMLElement)
+    // develop is a code stage → B4 fans it out to a .wfo-group; its .wfo-gact is always rendered
+    // (no expand/collapse gate) once the stage is waiting on input — see B4's test.
+    const developGroup = developNode.querySelector('.wfo-group') as HTMLElement
+    expect(developGroup).toHaveClass('input')
 
     const act = developNode.querySelector('.wfo-act') as HTMLElement
     expect(act).not.toBeNull()
@@ -657,5 +662,103 @@ describe('WorkflowOverlay confirm/input inline actions (Task B3)', () => {
     fireEvent.change(input, { target: { value: 'tests/fixtures/tokens/' } })
     fireEvent.click(act.querySelector('.wfo-btn.pri') as HTMLElement)
     expect(run2.resolveLane).toHaveBeenCalledWith('q1', { type: 'answer', value: 'tests/fixtures/tokens/' })
+  })
+})
+
+describe('WorkflowOverlay code-stage fan-out lanes (Task B4)', () => {
+  const FANOUT_LAUNCH_INFO = {
+    workflows: [
+      {
+        id: 'wf-standard',
+        name: '标准工作流',
+        stages: [
+          stage({ key: 'design', name: '技术方案设计', desc: '设计技术方案', prompt: '设计技术方案' }),
+          stage({ key: 'develop', name: '代码开发', code: true, desc: '按方案实现变更', prompt: '按技术方案实现代码变更' }),
+        ],
+      },
+    ],
+    projects: [
+      { name: 'go-blog', cwd: '/ws/go-blog', provider: 'codex', model: 'gpt-5-codex' },
+      { name: 'zgh', cwd: '/ws/zgh', provider: 'claude', model: 'sonnet-4.6' },
+    ],
+  }
+
+  function fanoutState() {
+    return {
+      machine: {
+        plan: {
+          runId: 'run2-1',
+          stages: [
+            { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: false },
+            { key: 'develop', name: '代码开发', provider: 'codex', model: 'gpt-5-codex', scope: 'per-project', gate: false },
+          ],
+        },
+        stages: [
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'running', round: 0 },
+        ],
+        currentIndex: 1,
+      },
+      inbox: [],
+      feedback: [],
+      outcomes: {
+        develop: [{ order: { id: 'develop:zgh', stageKey: 'develop', name: '代码开发', project: 'zgh', provider: 'claude', model: 'sonnet-4.6', cwd: '/ws/zgh', prompt: '' }, status: 'ok', attempts: 1 }],
+      },
+      status: 'running',
+      pendingDirective: {},
+      liveLanes: { 'develop:go-blog': { stageKey: 'develop', project: 'go-blog', state: 'run', cwd: '/ws/go-blog' } },
+      stageTimings: { design: { startedAt: 1000, endedAt: 2000 }, develop: { startedAt: 2000 } },
+      paused: false,
+    }
+  }
+
+  const scanContext = vi.fn()
+
+  beforeEach(() => {
+    scanContext.mockReset()
+    scanContext.mockResolvedValue({
+      skills: [{ name: 'brainstorming', path: '/x' }],
+      rules: [],
+      mcps: [],
+    })
+  })
+
+  it('renders the code stage as a .wfo-group with 2 parallel .wfo-lane rows (run + ok)', async () => {
+    launchInfo.mockResolvedValue(FANOUT_LAUNCH_INFO)
+    ;(window as any).forge.scanContext = scanContext
+    const run2 = makeRun2(fanoutState())
+    run2.laneLogs = {
+      'develop:go-blog': [
+        { laneId: 'develop:go-blog', stageKey: 'develop', agentName: 'Codex', line: { ts: '', text: '正在实现变更', level: 'run', kind: 'output' } },
+      ],
+    }
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
+
+    const developNode = container.querySelectorAll('.wfo-node')[1]
+    const group = developNode.querySelector('.wfo-group') as HTMLElement
+    expect(group).not.toBeNull()
+    // The group's own container class is the stage's overall stageRunState (reused verbatim from
+    // B1) — NOT derived from the individual lanes below, which is why it doesn't necessarily read
+    // 'run' here even though one lane is still going. Per-lane state is what's asserted below.
+    expect(group.querySelector('.wfo-gpar')?.textContent).toBe('2 仓库并行')
+
+    const lanes = group.querySelectorAll('.wfo-lane')
+    expect(lanes).toHaveLength(2)
+    // order follows selectedRepos (project list order): go-blog (run), zgh (ok)
+    expect(lanes[0]).toHaveClass('run')
+    expect(lanes[0].querySelector('.wfo-lname b')?.textContent).toBe('go-blog')
+    expect(lanes[1]).toHaveClass('ok')
+    expect(lanes[1].querySelector('.wfo-lname b')?.textContent).toBe('zgh')
+
+    // no plain .wfo-box single-lane node for a code stage in run mode
+    expect(developNode.querySelector(':scope > .wfo-box')).toBeNull()
+
+    // expand the running lane — shows its own laneLogs IO + caps
+    fireEvent.click(lanes[0].querySelector('.wfo-lhead') as HTMLElement)
+    await waitFor(() => expect(scanContext).toHaveBeenCalledWith('/ws/go-blog'))
+    const laneBody = lanes[0].querySelector('.wfo-lbody') as HTMLElement
+    await waitFor(() => expect(laneBody.textContent).toContain('正在实现变更'))
+    expect(laneBody.querySelector('.wfo-cap.s')?.textContent).toContain('brainstorming')
   })
 })

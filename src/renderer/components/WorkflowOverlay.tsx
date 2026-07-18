@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useState } from 'react'
 import './workflowOverlay.css'
 import type { Run2Api } from '../state/useRun2'
-import type { RunControllerState, RunLogLine } from '../../main/run/controller'
+import type { LiveLane, RunControllerState, RunLogLine } from '../../main/run/controller'
 import type { RunEvent } from '../../main/run/events'
 import type { GateDecision, LaneDecision } from '../../main/run/decisions'
+import type { WorkOrderOutcome } from '../../main/run/workOrder'
 import type { AgentContextMeta } from '@shared/types'
 
 // Task 2 (WF-A): 1:1 port of the prototype's `.wfo` overlay CONFIG state — head (title/tabs/legend) +
@@ -176,6 +177,65 @@ function stageRunState(stageKey: string, state: RunControllerState): RunNodeStat
   return 'wait'
 }
 
+// B4: per-repo lane state — mirrors the WF-B plan's mapping table (a settled outcome wins over the
+// live lane, since a lane is deleted from liveLanes the moment it settles — see controller.ts
+// runOneOrder). No confirm/input lane states: those live at the GROUP level (the whole stage gates,
+// not an individual repo) — see RunNodeGate usage in the group branch below.
+function laneRunState(liveLane: LiveLane | undefined, outcome: WorkOrderOutcome | undefined): RunNodeState {
+  if (outcome) return outcome.status === 'ok' ? 'ok' : 'fail'
+  if (liveLane?.state === 'run') return 'run'
+  return 'wait'
+}
+
+interface CodeLane {
+  project: string
+  laneId: string
+  state: RunNodeState
+  cwd: string | undefined
+  model: string
+  providerLabel: string
+}
+
+// B4: the set of lanes for a running code stage = union of liveLanes (still running) and
+// outcomes[stageKey] (settled), keyed by project — task brief's data-combining rule. Ordered by
+// launchInfo's project list when possible (falls back to encounter order for any project run2
+// reports that launchInfo doesn't know about, e.g. a stale/removed project).
+function buildCodeLanes(
+  stageKey: string,
+  stagePlan: { provider: string; model: string } | undefined,
+  state: RunControllerState,
+  projects: LaunchProject[]
+): CodeLane[] {
+  const outcomeByProject = new Map<string, WorkOrderOutcome>()
+  for (const o of state.outcomes[stageKey] ?? []) {
+    if (o.order.project) outcomeByProject.set(o.order.project, o)
+  }
+  const liveByProject = new Map<string, LiveLane>()
+  for (const laneId of Object.keys(state.liveLanes)) {
+    const l = state.liveLanes[laneId]
+    if (l.stageKey === stageKey && l.project) liveByProject.set(l.project, l)
+  }
+  const present = new Set<string>([...outcomeByProject.keys(), ...liveByProject.keys()])
+  const ordered = projects.filter((p) => present.has(p.name)).map((p) => p.name)
+  for (const n of present) if (!ordered.includes(n)) ordered.push(n)
+
+  return ordered.map((name) => {
+    const outcome = outcomeByProject.get(name)
+    const live = liveByProject.get(name)
+    const proj = projects.find((p) => p.name === name)
+    const provider = proj?.provider ?? stagePlan?.provider ?? ''
+    const model = proj?.model ?? stagePlan?.model ?? ''
+    return {
+      project: name,
+      laneId: `${stageKey}:${name}`,
+      state: laneRunState(live, outcome),
+      cwd: live?.cwd ?? outcome?.order.cwd ?? proj?.cwd,
+      model: model ? `${provider} · ${model}` : provider,
+      providerLabel: provider,
+    }
+  })
+}
+
 // B2 (WF-B): what skill/rule/mcp this stage's lane would load if it ran in its cwd right now —
 // reuses the same cwd-scanner (window.forge.scanContext) as RunPanel's LaneContext (P-B2 Task 2),
 // kept as its own tiny per-component cache rather than importing RunPanel's private cache.
@@ -222,12 +282,16 @@ function RunNodeBody({
   cwd,
   state,
   laneLogs,
+  outputId,
 }: {
   stageKey: string
   prompt: string
   cwd: string | undefined
   state: RunNodeState
   laneLogs: RunLogLine[]
+  // B4: per-repo lanes share this component for their own IO section but must not collide on the
+  // `#wfout-<stageKey>` id with the group's siblings — callers pass a lane-scoped id in that case.
+  outputId?: string
 }) {
   const caps = useNodeCaps(cwd)
   const hasCaps = !!caps && (caps.skills.length > 0 || caps.rules.length > 0 || (caps.mcps?.length ?? 0) > 0)
@@ -263,7 +327,7 @@ function RunNodeBody({
       {state !== 'wait' && (
         <div className="wfo-sec">
           <div className="wfo-sec-h">LLM 输出</div>
-          <div className="wfo-io" id={`wfout-${stageKey}`}>
+          <div className="wfo-io" id={outputId ?? `wfout-${stageKey}`}>
             {outputText}
             {state === 'run' && <span className="cur" />}
           </div>
@@ -339,6 +403,9 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   // st.openNode, which is wiped whenever the workflow tab switches (initWf() resets it) — see
   // selectWorkflow below.
   const [openNodes, setOpenNodes] = useState<Record<string, boolean>>({})
+  // B4: per-repo lane expansion in RUN mode, keyed `${stageKey}::${project}` (double colon — matches
+  // the prototype's openRepo key so it can't collide with a laneId, which uses a single colon).
+  const [openRepo, setOpenRepo] = useState<Record<string, boolean>>({})
   // Task 4: per-stage config state, mirroring the prototype's st.proj / st.model / st.projModel.
   // projSel — which projects a code stage fans out to (default ALL selected). stageModel — the model
   // label for a non-code stage's header chip. projModel — per-project model label for a code stage.
@@ -477,6 +544,9 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   const toggleNode = (key: string) => {
     setOpenNodes((prev) => ({ ...prev, [key]: !prev[key] }))
   }
+  const toggleRepo = (key: string) => {
+    setOpenRepo((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
 
   // B1 (WF-B): `run2.state != null` is RUN mode. `now` ticks every second while running so the
   // per-node elapsed time (fmtTime(now - startedAt)) for the currently-running stage stays live —
@@ -505,6 +575,8 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
         name: sp.name,
         desc: stageDescByKey[sp.key] ?? '',
         code: sp.scope === 'per-project',
+        provider: sp.provider,
+        model: sp.model,
       }))
     : []
   const runStageStates: Record<string, RunNodeState> = {}
@@ -587,33 +659,117 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                     ? fmtTime(timing.endedAt - timing.startedAt)
                     : ''
               const cc = connClass(st)
-              // B2: the stage's single lane (non-code stages fan out to exactly one order,
-              // id `${stageKey}:root` — see fanout.ts buildWorkOrders). cwd comes from the live
+              // B4: a running code stage fans out to one lane per repo instead of the single-box
+              // node below — see the `rs.code` branch. Non-code stages keep the B2 single lane
+              // (id `${stageKey}:root` — see fanout.ts buildWorkOrders); cwd comes from the live
               // lane while running, else the settled outcome's order.cwd (task brief).
               const laneId = `${rs.key}:root`
               const laneCwd = run2.state!.liveLanes[laneId]?.cwd ?? run2.state!.outcomes[rs.key]?.[0]?.order.cwd
               const laneLines = run2.laneLogs[laneId] ?? []
+              const codeLanes = rs.code
+                ? buildCodeLanes(rs.key, { provider: rs.provider, model: rs.model }, run2.state!, info.projects)
+                : []
+              const glanesCls =
+                st === 'ok' ? ' done' : st === 'run' || st === 'confirm' || st === 'input' ? ' run' : ''
               return (
                 <Fragment key={rs.key}>
-                  <div className={`wfo-node${openNodes[rs.key] ? ' open' : ''} ${nodeClass(st)}`} data-stage={rs.key}>
-                    <div className="wfo-box">
-                      <div className="wfo-cardhead" data-node={rs.key} onClick={() => toggleNode(rs.key)}>
-                        <span className="wfo-ic"><StMark state={st} /></span>
-                        <span className="wfo-cn">
-                          <b>{rs.name}</b>
-                          <span>{rs.desc}</span>
-                        </span>
-                        <span className={`wfo-stat ${st}`}>
-                          <span className="d" />
-                          {statLabel(st)}
-                        </span>
-                        <span className="wfo-time">{timeText}</span>
-                        <span className="wfo-chev">
-                          <Icon svg={IC.chev} />
-                        </span>
+                  {rs.code ? (
+                    <div className="wfo-node" data-stage={rs.key}>
+                      <div className={`wfo-group ${nodeClass(st)}`}>
+                        <div className="wfo-ghead">
+                          <span className="wfo-ic"><StMark state={st} /></span>
+                          <span className="wfo-cn">
+                            <b>{rs.name}</b>
+                            <span>{rs.desc}</span>
+                          </span>
+                          <span className="wfo-gpar">{codeLanes.length} 仓库并行</span>
+                          <span className={`wfo-stat ${st}`}>
+                            <span className="d" />
+                            {statLabel(st)}
+                          </span>
+                          <span className="wfo-time">{timeText}</span>
+                        </div>
+                        <div className={`wfo-glanes${glanesCls}`}>
+                          {codeLanes.length === 0 ? (
+                            <div className="wfo-proj-hint" style={{ padding: '2px 0' }}>未选择任何代码项目。</div>
+                          ) : (
+                            codeLanes.map((lane) => {
+                              const repoKey = `${rs.key}::${lane.project}`
+                              const open = !!openRepo[repoKey]
+                              const laneOutLines = run2.laneLogs[lane.laneId] ?? []
+                              return (
+                                <div key={lane.project} className={`wfo-lane ${lane.state}${open ? ' open' : ''}`}>
+                                  <div className="wfo-lbox">
+                                    <div className="wfo-lhead" data-lane={repoKey} onClick={() => toggleRepo(repoKey)}>
+                                      <span className="wfo-ic sm"><StMark state={lane.state} /></span>
+                                      <span className="wfo-lname">
+                                        <b>{lane.project}</b>
+                                        <span>{lane.providerLabel}</span>
+                                      </span>
+                                      <span className="wfo-lmodel">
+                                        <span className="dot" style={{ background: modelColor(lane.model) }} />
+                                        <span className="mv">{modelShort(lane.model)}</span>
+                                      </span>
+                                      <span className={`wfo-stat ${lane.state}`}>
+                                        <span className="d" />
+                                        {statLabel(lane.state)}
+                                      </span>
+                                      {/* B4 data gap: run2 doesn't track a per-lane start/end timestamp
+                                          (only the whole stage's stageTimings), so this stays blank —
+                                          see the task report. */}
+                                      <span className="wfo-time" />
+                                      <span className="wfo-chev">
+                                        <Icon svg={IC.chev} />
+                                      </span>
+                                    </div>
+                                    <div className="wfo-lbody">
+                                      <RunNodeBody
+                                        stageKey={rs.key}
+                                        prompt={stagePromptByKey[rs.key] ?? ''}
+                                        cwd={lane.cwd}
+                                        state={lane.state}
+                                        laneLogs={laneOutLines}
+                                        outputId={`wfout-${rs.key}-${lane.project}`}
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+                              )
+                            })
+                          )}
+                        </div>
+                        {(st === 'confirm' || st === 'input') && (
+                          <div className="wfo-gact">
+                            <RunNodeGate
+                              stageKey={rs.key}
+                              runState={st}
+                              inbox={run2.state!.inbox}
+                              onGate={run2.resolveGate}
+                              onLane={run2.resolveLane}
+                            />
+                          </div>
+                        )}
                       </div>
-                      <div className="wfo-cardbody">
-                        {!rs.code && (
+                    </div>
+                  ) : (
+                    <div className={`wfo-node${openNodes[rs.key] ? ' open' : ''} ${nodeClass(st)}`} data-stage={rs.key}>
+                      <div className="wfo-box">
+                        <div className="wfo-cardhead" data-node={rs.key} onClick={() => toggleNode(rs.key)}>
+                          <span className="wfo-ic"><StMark state={st} /></span>
+                          <span className="wfo-cn">
+                            <b>{rs.name}</b>
+                            <span>{rs.desc}</span>
+                          </span>
+                          <span className={`wfo-stat ${st}`}>
+                            <span className="d" />
+                            {statLabel(st)}
+                          </span>
+                          <span className="wfo-time">{timeText}</span>
+                          <span className="wfo-chev">
+                            <Icon svg={IC.chev} />
+                          </span>
+                        </div>
+                        <div className="wfo-cardbody">
                           <RunNodeBody
                             stageKey={rs.key}
                             prompt={stagePromptByKey[rs.key] ?? ''}
@@ -621,17 +777,17 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                             state={st}
                             laneLogs={laneLines}
                           />
-                        )}
-                        <RunNodeGate
-                          stageKey={rs.key}
-                          runState={st}
-                          inbox={run2.state!.inbox}
-                          onGate={run2.resolveGate}
-                          onLane={run2.resolveLane}
-                        />
+                          <RunNodeGate
+                            stageKey={rs.key}
+                            runState={st}
+                            inbox={run2.state!.inbox}
+                            onGate={run2.resolveGate}
+                            onLane={run2.resolveLane}
+                          />
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  )}
                   <div className={`wfo-conn${cc ? ' ' + cc : ''}`}>
                     <span className="ln" />
                     <span className="ar" />
