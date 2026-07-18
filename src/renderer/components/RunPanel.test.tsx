@@ -1,8 +1,17 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { RunPanel } from './RunPanel'
 import type { Run2Api } from '../state/useRun2'
 import type { RunControllerState } from '../../main/run/controller'
+
+// LaneContext (P-B2 Task 2) calls `window.forge?.scanContext(cwd)` on mount for every lane with a
+// cwd. Default it to a no-op-ish resolve (empty groups) so pre-existing tests that don't care
+// about this feature don't render stray chips or trip "not wrapped in act" warnings from an
+// unmocked/undefined call. Individual tests override `scanContext`'s resolved value or merge in
+// extra `window.forge` keys (e.g. the readFile test) rather than replacing the object wholesale.
+beforeEach(() => {
+  ;(window as any).forge = { scanContext: vi.fn().mockResolvedValue({ skills: [], rules: [], mcps: [] }) }
+})
 
 function makeState(overrides?: Partial<RunControllerState>): RunControllerState {
   const base: RunControllerState = {
@@ -278,7 +287,7 @@ describe('RunPanel', () => {
 
   it('clicking a filesChanged item opens the Run2FileViewer with the file content', async () => {
     const readFile = vi.fn().mockResolvedValue({ content: '# 技术方案' })
-    ;(window as any).forge = { run2: { readFile } }
+    ;(window as any).forge = { ...(window as any).forge, run2: { readFile } }
     const state = makeState({
       machine: {
         plan: { runId: 'r1', stages: [] },
@@ -539,5 +548,84 @@ describe('RunPanel', () => {
     const api = makeApi(state)
     render(<RunPanel api={api} />)
     expect(screen.queryByText('回退到…')).not.toBeInTheDocument()
+  })
+
+  // P-B2 Task 2: each lane's cwd is scanned (via window.forge.scanContext, the same cwd-scanner
+  // the old orchestrator's "已加载 SKILL/RULE/MCP" chips used) so the run2 run view can show what
+  // that lane's agent would load — skills/rules/mcps — without touching the engine.
+  it('shows a settled outcome lane\'s available skills/rules/mcp chips (scanned from outcome.order.cwd)', async () => {
+    const scanContext = vi.fn().mockResolvedValue({
+      skills: [{ name: 'brainstorming', path: '/x' }],
+      rules: [{ name: 'CLAUDE.md', path: '/y' }],
+      mcps: [{ name: 'forge', path: 'mcp://forge' }],
+    })
+    ;(window as any).forge = { scanContext }
+    // A cwd unique to this test — LaneContext caches scan results per-cwd at module scope (a
+    // deliberate perf optimization, see brief), and '/tmp/app' is reused by many other tests in
+    // this file whose default scanContext mock resolves empty groups; reusing it here would hit
+    // that stale cache entry instead of exercising this test's mock.
+    const state = makeState({
+      outcomes: {
+        dev: [
+          { order: { id: 'w1', stageKey: 'dev', name: 'dev-lane', project: 'app', provider: 'claude', model: 'sonnet', cwd: '/tmp/scan-outcome-app', prompt: '' }, status: 'ok', attempts: 1 },
+        ],
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+
+    expect(await screen.findByText('brainstorming')).toBeInTheDocument()
+    expect(screen.getByText('CLAUDE.md')).toBeInTheDocument()
+    expect(screen.getByText('forge')).toBeInTheDocument()
+    expect(scanContext).toHaveBeenCalledWith('/tmp/scan-outcome-app')
+  })
+
+  it('shows a running live lane\'s available skills/rules/mcp chips (scanned from liveLanes[id].cwd)', async () => {
+    const scanContext = vi.fn().mockResolvedValue({
+      skills: [{ name: 'brainstorming', path: '/x' }],
+      rules: [],
+      mcps: [],
+    })
+    ;(window as any).forge = { scanContext }
+    const state = makeState({
+      outcomes: {},
+      liveLanes: {
+        'dev:app': { stageKey: 'dev', project: 'app', state: 'run', cwd: '/tmp/live-app' },
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+
+    // Live lanes are mirrored in both the current-stage lane and the stage-output region (same
+    // pattern as the pre-existing live-lane tests above) — at least one chip must show.
+    const chips = await screen.findAllByText('brainstorming')
+    expect(chips.length).toBeGreaterThan(0)
+    expect(scanContext).toHaveBeenCalledWith('/tmp/live-app')
+  })
+
+  it('does not crash and renders no chips for a live lane with no cwd', () => {
+    // `WorkOrder.cwd` is a required string (settled outcomes always have one), but `LiveLane.cwd`
+    // is optional (see task-1: it's only known once the runtime is up) — that's the real path
+    // where a lane can lack a cwd.
+    const scanContext = vi.fn().mockResolvedValue({ skills: [{ name: 'brainstorming', path: '/x' }], rules: [], mcps: [] })
+    ;(window as any).forge = { scanContext }
+    const state = makeState({
+      outcomes: {},
+      liveLanes: {
+        'dev:app': { stageKey: 'dev', project: 'app', state: 'run' }, // no cwd
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+
+    // No cwd → LaneContext bails out synchronously, before ever calling scanContext.
+    expect(scanContext).not.toHaveBeenCalled()
+    expect(screen.queryByText('brainstorming')).not.toBeInTheDocument()
+  })
+
+  it('does not crash when window.forge.scanContext is unavailable', () => {
+    ;(window as any).forge = {}
+    const api = makeApi(makeState())
+    expect(() => render(<RunPanel api={api} />)).not.toThrow()
   })
 })
