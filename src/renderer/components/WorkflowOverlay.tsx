@@ -2,6 +2,8 @@ import { Fragment, useEffect, useState } from 'react'
 import './workflowOverlay.css'
 import type { Run2Api } from '../state/useRun2'
 import type { RunControllerState, RunLogLine } from '../../main/run/controller'
+import type { RunEvent } from '../../main/run/events'
+import type { GateDecision, LaneDecision } from '../../main/run/decisions'
 import type { AgentContextMeta } from '@shared/types'
 
 // Task 2 (WF-A): 1:1 port of the prototype's `.wfo` overlay CONFIG state — head (title/tabs/legend) +
@@ -269,6 +271,61 @@ function RunNodeBody({
       )}
     </>
   )
+}
+
+// B3 (WF-B): 1:1 port of the prototype's renderBody() confirm/input action block (reference lines
+// 709-714) — rendered inside `.wfo-cardbody` for BOTH code and non-code stages whenever the stage is
+// waiting on a gate (confirm) or question (input) inbox event. Wired straight to run2.resolveGate /
+// run2.resolveLane, same GateDecision/LaneDecision payloads Run2EventCard uses.
+function RunNodeGate({
+  stageKey,
+  runState,
+  inbox,
+  onGate,
+  onLane,
+}: {
+  stageKey: string
+  runState: RunNodeState
+  inbox: RunEvent[]
+  onGate: (eventId: string, d: GateDecision) => void
+  onLane: (eventId: string, d: LaneDecision) => void
+}) {
+  const [value, setValue] = useState('')
+
+  if (runState === 'confirm') {
+    const ev = inbox.find((e) => e.kind === 'gate' && e.stageKey === stageKey)
+    if (!ev || ev.kind !== 'gate') return null
+    return (
+      <div className="wfo-act">
+        <div className="am">{ev.body || '该阶段产出了实现方案，需要你确认后再继续下游阶段。'}</div>
+        <div className="arow">
+          <button className="wfo-btn ghost" onClick={() => onGate(ev.id, { type: 'redo' })}>要求修改</button>
+          <button className="wfo-btn pri" onClick={() => onGate(ev.id, { type: 'advance' })}>确认继续</button>
+        </div>
+      </div>
+    )
+  }
+
+  if (runState === 'input') {
+    const ev = inbox.find((e) => e.kind === 'question' && e.stageKey === stageKey)
+    if (!ev || ev.kind !== 'question') return null
+    return (
+      <div className="wfo-act">
+        <div className="am">{ev.title}</div>
+        <div className="arow">
+          <input
+            className="wfo-inp"
+            placeholder={ev.placeholder ?? ''}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <button className="wfo-btn pri" onClick={() => onLane(ev.id, { type: 'answer', value })}>提交</button>
+        </div>
+      </div>
+    )
+  }
+
+  return null
 }
 
 // P5-UI WF-A Task 2: opened from a workflow "/" command in chat. Loads launchInfo, lets the user pick a
@@ -565,6 +622,13 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                             laneLogs={laneLines}
                           />
                         )}
+                        <RunNodeGate
+                          stageKey={rs.key}
+                          runState={st}
+                          inbox={run2.state!.inbox}
+                          onGate={run2.resolveGate}
+                          onLane={run2.resolveLane}
+                        />
                       </div>
                     </div>
                   </div>
