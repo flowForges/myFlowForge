@@ -393,6 +393,48 @@ describe('RunController', () => {
       new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: abort() did not release the pause gate')), 2000)),
     ])
     expect(final.status).toBe('failed')
+    expect(final.paused).toBe(false) // terminal run must not surface as paused
+  })
+
+  it('abort() releases the pause gate of a run parked at a REAL mid-run stage boundary (pauseResolve genuinely set)', async () => {
+    const store = new RunStore(ws, 'r1')
+    const calls: string[] = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        calls.push(task.stageKey)
+        const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    // Two ungated stages: pause() succeeds at the stage-1→stage-2 boundary while status is still
+    // 'running' (same setup as the "pause holds" test) — so the loop GENUINELY parks on the pause
+    // gate with pauseResolve set after a completed stage. This is the production deadlock scenario
+    // the pre-run abort test above does NOT cover (there pauseResolve was never set by the loop).
+    const plan2: RunPlan = { runId: 'r1', stages: [
+      { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false },
+      { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+    ] }
+    const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let paused = false
+    c.onUpdate((s) => {
+      if (!paused && s.outcomes['design'] && !s.outcomes['develop']) { paused = true; c.pause() }
+    })
+    const startPromise = c.start()
+
+    await vi.waitFor(() => expect(c.state.paused).toBe(true))
+    expect(calls).toEqual(['design']) // parked at the boundary, develop not yet invoked
+
+    c.abort() // release the genuinely-set pauseResolve — start() must settle, not hang.
+    const final = await Promise.race([
+      startPromise,
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: abort() did not release a mid-run pause gate')), 2000)),
+    ])
+    expect(final.status).toBe('failed')
+    expect(final.paused).toBe(false) // cleared on terminal even though abort() left the flag set
+    expect(calls).toEqual(['design']) // develop never ran — aborted at the boundary
+    expect(final.machine.stages.map((s) => s.status)).not.toEqual(['done', 'done'])
   })
 
   it('stageTimings: multi-stage run — each stage gets its own start/end timing', async () => {

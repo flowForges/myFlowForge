@@ -156,7 +156,7 @@ export class RunController {
 
   /** Clears a pending pause and wakes the loop if it's currently parked at the pause gate. */
   resume(): void {
-    if (!this.paused) return
+    if (!this.paused || this.aborted) return
     this.paused = false
     const r = this.pauseResolve
     this.pauseResolve = null
@@ -347,6 +347,11 @@ export class RunController {
     }
 
     this.status = this.aborted ? 'failed' : (this.machine.stages.every((s) => s.status === 'done') ? 'ok' : 'failed')
+    // Clear paused on terminal: a run can leave the loop while `paused` is still true (abort while
+    // parked at the pause gate — abort() releases the gate but deliberately doesn't clear the flag).
+    // A finished run must never surface as "paused" to the UI, so normalize it before the final
+    // snapshot is emitted/persisted.
+    this.paused = false
     this.deps.store.setContext('machine', this.machine)
     this.emitUpdate()
     return this.state
