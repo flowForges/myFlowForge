@@ -557,3 +557,105 @@ describe('WorkflowOverlay run node body (Task B2)', () => {
     expect(body.querySelector('.wfo-io:not(.in) .cur')).not.toBeNull()
   })
 })
+
+describe('WorkflowOverlay confirm/input inline actions (Task B3)', () => {
+  const GATE_LAUNCH_INFO = {
+    workflows: [
+      {
+        id: 'wf-standard',
+        name: '标准工作流',
+        stages: [
+          stage({ key: 'design', name: '技术方案设计', desc: '设计技术方案', prompt: '设计技术方案' }),
+          stage({ key: 'develop', name: '代码开发', code: true, desc: '按方案实现变更', prompt: '按技术方案实现代码变更' }),
+        ],
+      },
+    ],
+    projects: [],
+  }
+
+  function baseMachine() {
+    return {
+      plan: {
+        runId: 'run2-1',
+        stages: [
+          { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: true },
+          { key: 'develop', name: '代码开发', provider: 'codex', model: 'gpt-5-codex', scope: 'per-project', gate: true },
+        ],
+      },
+      stages: [
+        { key: 'design', status: 'running', round: 0 },
+        { key: 'develop', status: 'pending', round: 0 },
+      ],
+      currentIndex: 0,
+    }
+  }
+
+  function confirmState() {
+    return {
+      machine: baseMachine(),
+      inbox: [{ id: 'g1', kind: 'gate', stageKey: 'design', body: '方案已就绪' }],
+      feedback: [],
+      outcomes: {},
+      status: 'running',
+      pendingDirective: {},
+      liveLanes: {},
+      stageTimings: { design: { startedAt: 1000 } },
+      paused: false,
+    }
+  }
+
+  function inputState() {
+    return {
+      machine: baseMachine(),
+      inbox: [{ id: 'q1', kind: 'question', stageKey: 'develop', title: '补充fixture路径' }],
+      feedback: [],
+      outcomes: {},
+      status: 'running',
+      pendingDirective: {},
+      liveLanes: {},
+      stageTimings: { design: { startedAt: 1000, endedAt: 2000 } },
+      paused: false,
+    }
+  }
+
+  it('confirm state renders .wfo-act with 确认继续/要求修改 wired to run2.resolveGate', async () => {
+    launchInfo.mockResolvedValue(GATE_LAUNCH_INFO)
+    const run2 = makeRun2(confirmState())
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
+
+    const designNode = container.querySelectorAll('.wfo-node')[0]
+    expect(designNode).toHaveClass('confirm')
+    fireEvent.click(designNode.querySelector('.wfo-cardhead') as HTMLElement)
+
+    const act = designNode.querySelector('.wfo-act') as HTMLElement
+    expect(act).not.toBeNull()
+    expect(act.querySelector('.am')?.textContent).toBe('方案已就绪')
+
+    fireEvent.click(act.querySelector('.wfo-btn.ghost') as HTMLElement)
+    expect(run2.resolveGate).toHaveBeenCalledWith('g1', { type: 'redo' })
+
+    fireEvent.click(act.querySelector('.wfo-btn.pri') as HTMLElement)
+    expect(run2.resolveGate).toHaveBeenCalledWith('g1', { type: 'advance' })
+  })
+
+  it('input state renders .wfo-act with .wfo-inp + 提交 wired to run2.resolveLane', async () => {
+    launchInfo.mockResolvedValue(GATE_LAUNCH_INFO)
+    const run2 = makeRun2(inputState())
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
+
+    const developNode = container.querySelectorAll('.wfo-node')[1]
+    expect(developNode).toHaveClass('input')
+    fireEvent.click(developNode.querySelector('.wfo-cardhead') as HTMLElement)
+
+    const act = developNode.querySelector('.wfo-act') as HTMLElement
+    expect(act).not.toBeNull()
+    expect(act.querySelector('.am')?.textContent).toBe('补充fixture路径')
+
+    const input = act.querySelector('.wfo-inp') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'tests/fixtures/tokens/' } })
+    fireEvent.click(act.querySelector('.wfo-btn.pri') as HTMLElement)
+    expect(run2.resolveLane).toHaveBeenCalledWith('q1', { type: 'answer', value: 'tests/fixtures/tokens/' })
+  })
+})
