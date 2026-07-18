@@ -5,6 +5,7 @@ import type { WorkOrderOutcome } from '../../main/run/workOrder'
 import type { LiveLane } from '../../main/run/controller'
 import { Run2EventCard } from './Run2EventCard'
 import { Markdown } from '../views/chat/markdown'
+import { Run2FileViewer } from './Run2FileViewer'
 
 interface RunPanelProps { api: Run2Api }
 
@@ -91,7 +92,7 @@ function CurrentStageLane({ api }: { api: Run2Api }) {
 
 // Region 2b: stage output — what each project produced for the selected stage
 // (result.summary/filesChanged/testsRun/doubts), not just live/settled activity status.
-function OutcomeCard({ outcome }: { outcome: WorkOrderOutcome }) {
+function OutcomeCard({ outcome, onOpenFile }: { outcome: WorkOrderOutcome; onOpenFile: (path: string, cwd: string | undefined) => void }) {
   const label = outcome.order.project ?? 'root'
   const { result } = outcome
   return (
@@ -107,7 +108,17 @@ function OutcomeCard({ outcome }: { outcome: WorkOrderOutcome }) {
             <div className="run2-output-files">
               <div className="run2-output-subtitle">改动文件</div>
               <ul>
-                {result.filesChanged.map((f) => <li key={f}>{f}</li>)}
+                {result.filesChanged.map((f) => (
+                  <li key={f}>
+                    <button
+                      type="button"
+                      className="txt-btn run2-output-file-btn"
+                      onClick={() => onOpenFile(f, outcome.order.cwd)}
+                    >
+                      {f}
+                    </button>
+                  </li>
+                ))}
               </ul>
             </div>
           )}
@@ -140,7 +151,7 @@ function OutcomeCard({ outcome }: { outcome: WorkOrderOutcome }) {
   )
 }
 
-function StageOutput({ api, selectedStageKey }: { api: Run2Api; selectedStageKey: string | undefined }) {
+function StageOutput({ api, selectedStageKey, onOpenFile }: { api: Run2Api; selectedStageKey: string | undefined; onOpenFile: (path: string, cwd: string | undefined) => void }) {
   const { outcomes, liveLanes } = api.state!
   const stageOutcomes = selectedStageKey ? outcomes[selectedStageKey] : undefined
   const liveEntries = selectedStageKey
@@ -151,7 +162,7 @@ function StageOutput({ api, selectedStageKey }: { api: Run2Api; selectedStageKey
   return (
     <div className="run2-stage-output">
       <div className="run2-stage-output-title">阶段产出{selectedStageKey ? `：${selectedStageKey}` : ''}</div>
-      {hasOutcomes && stageOutcomes!.map((o) => <OutcomeCard key={o.order.id} outcome={o} />)}
+      {hasOutcomes && stageOutcomes!.map((o) => <OutcomeCard key={o.order.id} outcome={o} onOpenFile={onOpenFile} />)}
       {!hasOutcomes && hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} />)}
       {!hasOutcomes && !hasLive && <div className="run2-stage-output-empty">执行中/未开始</div>}
     </div>
@@ -223,6 +234,9 @@ export function RunPanel({ api }: RunPanelProps) {
   // effective selection at render time (below), which follows the current stage until the user
   // explicitly clicks/keys a chip. Hook runs unconditionally to keep hook order stable.
   const [selectedStageKey, setSelectedStageKey] = useState<string | undefined>(undefined)
+  // P5-UI Task 2: which changed file (if any) is open in the Run2FileViewer modal. `cwd` is the
+  // work order's project dir — filesChanged paths are relative to it.
+  const [viewingFile, setViewingFile] = useState<{ path: string; cwd: string | undefined } | null>(null)
   if (!api.state) {
     return <div className="run2-panel run2-empty">未在运行工作流</div>
   }
@@ -233,9 +247,20 @@ export function RunPanel({ api }: RunPanelProps) {
     <div className="run2-panel">
       <RunHead api={api} selectedStageKey={effectiveKey} onSelectStage={setSelectedStageKey} />
       <CurrentStageLane api={api} />
-      <StageOutput api={api} selectedStageKey={effectiveKey} />
+      <StageOutput
+        api={api}
+        selectedStageKey={effectiveKey}
+        onOpenFile={(path, cwd) => setViewingFile({ path, cwd })}
+      />
       <EventInbox api={api} />
       <FeedbackDraftPanel api={api} />
+      {viewingFile && (
+        <Run2FileViewer
+          path={viewingFile.path}
+          cwd={viewingFile.cwd}
+          onClose={() => setViewingFile(null)}
+        />
+      )}
     </div>
   )
 }

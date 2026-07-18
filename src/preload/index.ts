@@ -307,6 +307,8 @@ const api = {
     launchInfo: (workspacePath: string) => ipcRenderer.invoke(CH.run2LaunchInfo, { workspacePath }),
     startWorkflow: (opts: { workspacePath: string; workflowId: string; projectNames: string[]; task?: string; runId: string }) =>
       ipcRenderer.invoke(CH.run2StartWorkflow, opts),
+    // P5-UI Task 2: on-demand file content read for the RunPanel file viewer (read-only).
+    readFile: (a: { path: string; cwd?: string }) => ipcRenderer.invoke(CH.run2ReadFile, a),
     onEvent: (cb: (p: { workspacePath: string; event: unknown }) => void) => {
       const listener = (_: unknown, p: { workspacePath: string; event: unknown }) => cb(p)
       ipcRenderer.on(CH.run2Event, listener)

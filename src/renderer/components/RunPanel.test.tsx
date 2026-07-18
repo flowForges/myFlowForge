@@ -265,4 +265,36 @@ describe('RunPanel', () => {
     fireEvent.keyDown(screen.getByText('design'), { key: 'Enter' })
     expect(screen.getByText(/技术方案：用 X 架构/)).toBeInTheDocument()
   })
+
+  it('clicking a filesChanged item opens the Run2FileViewer with the file content', async () => {
+    const readFile = vi.fn().mockResolvedValue({ content: '# 技术方案' })
+    ;(window as any).forge = { run2: { readFile } }
+    const state = makeState({
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [{ key: 'design', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      outcomes: {
+        design: [
+          {
+            order: { id: 'design:root', stageKey: 'design', name: 'design-lane', project: undefined, provider: 'claude', model: 'sonnet', cwd: '/tmp/proj', prompt: '' },
+            status: 'ok',
+            attempts: 1,
+            result: { summary: '技术方案：用 X 架构', filesChanged: ['design.md'], blockers: [], doubts: [], artifacts: [] },
+          },
+        ],
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+
+    fireEvent.click(screen.getByText('design.md'))
+    expect(readFile).toHaveBeenCalledWith({ path: 'design.md', cwd: '/tmp/proj' })
+    expect(await screen.findByRole('heading', { name: '技术方案' })).toBeInTheDocument()
+
+    // close button dismisses the viewer
+    fireEvent.click(screen.getByRole('button', { name: /关闭/ }))
+    expect(screen.queryByRole('heading', { name: '技术方案' })).not.toBeInTheDocument()
+  })
 })
