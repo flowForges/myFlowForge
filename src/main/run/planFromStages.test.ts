@@ -23,4 +23,26 @@ describe('planFromStages', () => {
     // review: explicit scope root, gate false
     expect(plan.stages[3]).toMatchObject({ scope: 'root', gate: false })
   })
+
+  it('resolves a built-in stage prompt from STAGE_PROMPTS when no custom prompt is set', () => {
+    const plan = planFromStages('run-2', [{ key: 'design', name: '方案', provider: 'claude', model: 'm' }])
+    expect(plan.stages[0].prompt).toBeTruthy()
+    expect(plan.stages[0].prompt).toContain('方案')
+  })
+
+  it('appends a custom prompt after the built-in base prompt for a built-in stage', () => {
+    const plan = planFromStages('run-3', [{ key: 'design', name: '方案', provider: 'claude', model: 'm', prompt: '额外要求:只改前端' }])
+    expect(plan.stages[0].prompt).toContain('方案') // base still present
+    expect(plan.stages[0].prompt).toContain('额外要求:只改前端') // custom appended
+  })
+
+  it('uses the custom prompt verbatim as the full prompt for a custom (non-built-in) stage', () => {
+    const plan = planFromStages('run-4', [{ key: 'x', name: '自定义', provider: 'claude', model: 'm', prompt: '做X' }])
+    expect(plan.stages[0].prompt).toBe('做X')
+  })
+
+  it('leaves prompt undefined for a custom stage with no prompt set', () => {
+    const plan = planFromStages('run-5', [{ key: 'y', name: '自定义', provider: 'claude', model: 'm' }])
+    expect(plan.stages[0].prompt).toBeUndefined()
+  })
 })
