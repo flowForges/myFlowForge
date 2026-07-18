@@ -136,9 +136,13 @@ function Copyable({ text, className }: { text: string; className?: string }) {
 
 export function WorkspaceView({ engine, providers, workspacePath, pendingStartOpts, onStartRun, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
-  // P3-B additive: chat|run2 mode toggle (new run controller UI), default 'chat' so all existing
-  // rendering below is 100% unaffected until the user explicitly switches.
-  const [mode2, setMode2] = useState<'chat' | 'run2'>('chat')
+  // Task 1: the run view now follows the run2 controller's status lifecycle instead of a manual
+  // chat|run2 segmented toggle. Auto-opens while a run is 'running'/'awaiting' a gate decision;
+  // the user can always step back to chat ("返回对话") while the run keeps going in the background,
+  // and reopen it via a "查看运行中" chip. NOTE: deliberately NOT driven by `run2.state !== null` —
+  // the run2 manager retains `lastState` after completion, so `state` stays non-null forever after
+  // the first run; using it here would trap the workspace in the run view permanently.
+  const [runView, setRunView] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
   // 全局搜索(Cmd+Shift+F):App 每次触发就 +1 → 切到文件树 tab;同一信号继续透传给 FileTreePane 聚焦搜索框。
@@ -164,6 +168,13 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   // P3-B additive: new run-controller-driven panel, unconditional hook call (rules-of-hooks) — its
   // state stays null/idle unless a run2 run is started, so it has no effect on chat-mode rendering.
   const run2 = useRun2(wsPath)
+  // Auto-open the run view whenever the controller starts running or is awaiting a gate decision.
+  // Intentionally does NOT fire on 'ok'/'failed' (terminal) so a finished run doesn't yank the user
+  // back in, and does not use `run2.state !== null` (see note above `runView`).
+  useEffect(() => {
+    const s = run2.state?.status
+    if (s === 'running' || s === 'awaiting') setRunView(true)
+  }, [run2.state?.status])
   const localSessions = useSessions(wsPath)
   const sessions = sessionsApi ?? localSessions
   // Confirm a pending provider switch: apply the selection, persist it, and have the new provider
@@ -587,16 +598,15 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     <div className="view on" id="view-ws">
       {/* 对话主列 */}
       <div className="chat" style={{ position: 'relative' }}>
-        {/* P3-B additive: chat|run2 mode segmented control. Always visible so the user can switch
-            back from the new run-controller panel; the badge surfaces pending run2 inbox events. */}
-        <div className="run2-mode-toggle">
-          <button className={`txt-btn${mode2 === 'chat' ? ' on' : ''}`} onClick={() => setMode2('chat')}>对话</button>
-          <button className={`txt-btn${mode2 === 'run2' ? ' on' : ''}`} onClick={() => setMode2('run2')}>
-            工作流运行
-            {(run2.state?.inbox.length ?? 0) > 0 && <span className="badge">{run2.state!.inbox.length}</span>}
+        {/* Task 1: reopen chip — only shown once the user has stepped back to chat ("返回对话")
+            while a run is still active (running or awaiting a gate decision); replaces the old
+            always-visible toggle's badge with an inbox-count badge on the chip itself. */}
+        {!runView && (run2.state?.status === 'running' || run2.state?.status === 'awaiting') && (
+          <button className="txt-btn run2-reopen" onClick={() => setRunView(true)}>
+            ⟳ 工作流运行中 · 查看{(run2.state?.inbox.length ?? 0) > 0 ? ` (${run2.state!.inbox.length})` : ''}
           </button>
-        </div>
-        {mode2 === 'chat' && (<>
+        )}
+        {!runView && (<>
         <SessionTabs
           sessions={sessions.sessions}
           activeSessionId={sessions.activeSessionId}
@@ -840,14 +850,14 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           onPaste={wsPath ? async (f) => window.forge.savePaste({ workspacePath: wsPath, name: f.name, dataBase64: f.dataBase64 }) : undefined}
         />
         </>)}
-        {/* P3-B additive: new run-controller panel, additive sibling shown only in run2 mode — the
-            chat column above stays fully intact (wrapped, not deleted) when mode2 === 'chat'. */}
-        {mode2 === 'run2' && (
+        {/* Task 1: new run-controller panel, additive sibling shown only while runView is active — the
+            chat column above stays fully intact (wrapped, not deleted) when !runView. */}
+        {runView && (
           <div className="run2-mode-body">
-            {run2.state === null && wsPath && (
-              <RunLauncher workspacePath={wsPath} />
-            )}
-            <RunPanel api={run2} />
+            <button className="txt-btn run2-back" onClick={() => setRunView(false)}>返回对话</button>
+            {run2.state === null
+              ? (wsPath && <RunLauncher workspacePath={wsPath} />)
+              : <RunPanel api={run2} />}
           </div>
         )}
       </div>
