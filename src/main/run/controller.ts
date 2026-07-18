@@ -27,6 +27,11 @@ export interface RunControllerDeps {
 }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
 export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string }
+// A single raw agent log line broadcast live during a run. Deliberately NOT part of
+// RunControllerState — logs are a high-frequency stream, not durable state: folding them into
+// state would bloat every emitUpdate() snapshot and (via saveControllerState) write O(logs)
+// times to disk. Consumers that want history must buffer onLog() themselves.
+export interface RunLogLine { laneId: string; stageKey: string; project?: string; agentName: string; line: import('../agents/types').LogLine }
 export interface RunControllerState {
   machine: MachineState
   inbox: RunEvent[]
@@ -50,6 +55,7 @@ export class RunController {
   private gateR = new ResolverRegistry<GateDecision>()
   private eventSubs: Array<(e: RunEvent) => void> = []
   private updateSubs: Array<(s: RunControllerState) => void> = []
+  private logSubs: Array<(l: RunLogLine) => void> = []
   private idn = 0
   private makeId: (p: string) => string
 
@@ -60,12 +66,18 @@ export class RunController {
 
   onEvent(fn: (e: RunEvent) => void) { this.eventSubs.push(fn); return () => { this.eventSubs = this.eventSubs.filter((f) => f !== fn) } }
   onUpdate(fn: (s: RunControllerState) => void) { this.updateSubs.push(fn); return () => { this.updateSubs = this.updateSubs.filter((f) => f !== fn) } }
+  // Separate subscription from onUpdate: log lines are broadcast live but never folded into
+  // `state` and never persisted (see RunLogLine / emitLog below).
+  onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
     return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes } }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
   private emitUpdate() { const s = this.state; for (const f of this.updateSubs) f(s); saveControllerState(this.deps.store, s) }
+  // No emitUpdate() here on purpose: a log line is not a state change, so it must not trigger
+  // an onUpdate snapshot or a saveControllerState disk write.
+  private emitLog(l: RunLogLine) { for (const f of this.logSubs) f(l) }
 
   addFeedback(text: string) { this.feedback = addFeedback(this.feedback, this.makeId('fb'), text); this.emitUpdate() }
   editFeedback(id: string, text: string) { this.feedback = editFeedback(this.feedback, id, text); this.emitUpdate() }
@@ -153,6 +165,7 @@ export class RunController {
           activity: ev.activity ?? this.liveLanes[ev.laneId]?.activity,
         }
         this.emitUpdate()
+        if (ev.log) this.emitLog({ laneId: ev.laneId, stageKey: order.stageKey, project: order.project, agentName: order.name, line: ev.log })
       },
       onConfirm: async (req: ConfirmReq, laneId: string) => {
         // If the run was already aborted (e.g. by a sibling lane, or by a concurrent onEvent
