@@ -74,6 +74,8 @@ const IC = {
   // which wraps it in a SECOND `.wfo-spin` span — see StMark below).
   spin: '<svg class="wfo-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 12a9 9 0 1 1-6.2-8.6" stroke-linecap="round"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
+  // B5 addition — verbatim from the prototype IC (reference line 836): the 终止 button's square glyph.
+  stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.4"/></svg>',
 }
 
 // Task 4: 1:1 port of the prototype's MODELS table (reference lines 368-374) — the small model catalog
@@ -588,6 +590,15 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   const pct = totalStages ? Math.round((doneN / totalStages) * 100) : 0
   const runAllDone = running && run2.state!.status === 'ok' && totalStages > 0
 
+  // B5: foot run controls — not-done (running/awaiting a gate) shows 终止 (+ 暂停/继续 from run2's
+  // pause/resume, P-C1) vs. done (status 'ok' or 'failed' — the run has stopped, one way or the
+  // other) shows a single 完成 that closes the overlay. Prototype only models the ok/终止 branches
+  // (reference lines 579-589); 'failed' reuses the done branch per the task brief since a failed run
+  // has also stopped and needs no more terminate/pause controls.
+  const runStatus = running ? run2.state!.status : null
+  const runDone = running && (runStatus === 'ok' || runStatus === 'failed')
+  const runPaused = running && !!run2.state!.paused
+
   return (
     <div className="wfo">
       <div className="wfo-scrim" onClick={onClose} />
@@ -938,25 +949,56 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
         </div>
         )}
 
-        <div className="wfo-foot">
-          <div className="wfo-goal">
-            <textarea
-              rows={1}
-              placeholder="描述本次工作流要达成的目标… 例如：把 tokens 迁移到 OKLch 并补上视觉回归测试"
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-            />
-            <button className="wfo-start" disabled={goal.trim() === '' || starting} onClick={handleStart}>
-              <Icon svg={IC.play} /> 启动
-            </button>
+        {running ? (
+          runDone ? (
+            <div className="wfo-foot">
+              <div className="wfo-runctl done">
+                <span className="rmsg">
+                  <span className="rd" />
+                  {runStatus === 'failed' ? '工作流已结束 · 存在失败阶段，请检查后处理' : '工作流已完成 · 所有阶段通过，变更已就绪'}
+                </span>
+                <button className="wfo-btn pri" onClick={onClose}>完成</button>
+              </div>
+            </div>
+          ) : (
+            <div className="wfo-foot">
+              <div className="wfo-runctl">
+                <span className="rmsg">
+                  <span className="rd" />
+                  <span>正在执行…</span>
+                </span>
+                {runPaused ? (
+                  <button className="wfo-btn ghost" onClick={() => run2.resume()}>继续</button>
+                ) : runStatus === 'running' ? (
+                  <button className="wfo-btn ghost" onClick={() => run2.pause()}>暂停</button>
+                ) : null}
+                <button className="wfo-btn ghost" onClick={() => run2.abort()}>
+                  <Icon svg={IC.stop} /> 终止
+                </button>
+              </div>
+            </div>
+          )
+        ) : (
+          <div className="wfo-foot">
+            <div className="wfo-goal">
+              <textarea
+                rows={1}
+                placeholder="描述本次工作流要达成的目标… 例如：把 tokens 迁移到 OKLch 并补上视觉回归测试"
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+              />
+              <button className="wfo-start" disabled={goal.trim() === '' || starting} onClick={handleStart}>
+                <Icon svg={IC.play} /> 启动
+              </button>
+            </div>
+            {queuedNote && <div className="wfo-queued-note">{queuedNote}</div>}
+            {startError && <div className="wfo-start-error">{startError}</div>}
+            <div className="wfo-foot-hint">
+              <Icon svg={IC.bolt} />
+              主代理将按上方流程编排为多代理执行，每个模块使用你指定的模型。<kbd>⌘↩</kbd> 启动
+            </div>
           </div>
-          {queuedNote && <div className="wfo-queued-note">{queuedNote}</div>}
-          {startError && <div className="wfo-start-error">{startError}</div>}
-          <div className="wfo-foot-hint">
-            <Icon svg={IC.bolt} />
-            主代理将按上方流程编排为多代理执行，每个模块使用你指定的模型。<kbd>⌘↩</kbd> 启动
-          </div>
-        </div>
+        )}
       </div>
     </div>
   )

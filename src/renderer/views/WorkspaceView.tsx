@@ -39,7 +39,6 @@ import { providerSupportsResume } from '@shared/nativeResumeProviders'
 import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
-import { RunPanel } from '../components/RunPanel'
 import { WorkflowOverlay } from '../components/WorkflowOverlay'
 // NOTE: RunLauncher.tsx stays on disk (WF-A Task 5 replaces its mount point below with
 // WorkflowOverlay; WF-C deletes the file). No longer imported here.
@@ -853,17 +852,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         {runView && (
           <div className="run2-mode-body">
             <button className="txt-btn run2-back" onClick={() => setRunView(false)}>返回对话</button>
-            {run2.state === null
-              ? (wsPath && (
-                  <WorkflowOverlay
-                    workspacePath={wsPath}
-                    initialSeed={buildConversationSeed(chat.messages)}
-                    onClose={() => setRunView(false)}
-                    onStarted={() => setPendingLaunch(null)}
-                    run2={run2}
-                  />
-                ))
-              : <RunPanel api={run2} onOpenLog={onOpenLog} />}
+            {wsPath && (
+              <WorkflowOverlay
+                workspacePath={wsPath}
+                initialSeed={buildConversationSeed(chat.messages)}
+                onClose={() => setRunView(false)}
+                onStarted={() => setPendingLaunch(null)}
+                run2={run2}
+              />
+            )}
           </div>
         )}
       </div>

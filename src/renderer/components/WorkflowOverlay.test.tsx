@@ -762,3 +762,84 @@ describe('WorkflowOverlay code-stage fan-out lanes (Task B4)', () => {
     expect(laneBody.querySelector('.wfo-cap.s')?.textContent).toContain('brainstorming')
   })
 })
+
+describe('WorkflowOverlay foot run controls (Task B5)', () => {
+  const FOOT_LAUNCH_INFO = {
+    workflows: [
+      {
+        id: 'wf-standard',
+        name: '标准工作流',
+        stages: [stage({ key: 'design', name: '技术方案设计', desc: '设计技术方案' })],
+      },
+    ],
+    projects: [],
+  }
+
+  function footState(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      machine: {
+        plan: { runId: 'run2-1', stages: [{ key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: false }] },
+        stages: [{ key: 'design', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      inbox: [],
+      feedback: [],
+      outcomes: {},
+      status: 'running',
+      pendingDirective: {},
+      liveLanes: {},
+      stageTimings: { design: { startedAt: 1000 } },
+      paused: false,
+      ...overrides,
+    }
+  }
+
+  it('running, not paused: shows .wfo-runctl with 终止 (abort) and 暂停 (pause), no done class', async () => {
+    launchInfo.mockResolvedValue(FOOT_LAUNCH_INFO)
+    const run2 = makeRun2(footState())
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelector('.wfo-runctl')).toBeInTheDocument())
+
+    const runctl = container.querySelector('.wfo-runctl') as HTMLElement
+    expect(runctl).not.toHaveClass('done')
+    expect(runctl.querySelector('.rmsg .rd')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('终止'))
+    expect(run2.abort).toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText('暂停'))
+    expect(run2.pause).toHaveBeenCalled()
+    expect(screen.queryByText('继续')).toBeNull()
+  })
+
+  it('running + paused: shows 继续 (resume) instead of 暂停', async () => {
+    launchInfo.mockResolvedValue(FOOT_LAUNCH_INFO)
+    const run2 = makeRun2(footState({ paused: true }))
+    render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByText('继续')).toBeInTheDocument())
+
+    expect(screen.queryByText('暂停')).toBeNull()
+    fireEvent.click(screen.getByText('继续'))
+    expect(run2.resume).toHaveBeenCalled()
+  })
+
+  it('status ok: shows .wfo-runctl.done with 完成 → onClose()', async () => {
+    launchInfo.mockResolvedValue(FOOT_LAUNCH_INFO)
+    const run2 = makeRun2(footState({ status: 'ok', machine: { plan: { runId: 'run2-1', stages: [{ key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: false }] }, stages: [{ key: 'design', status: 'done', round: 0 }], currentIndex: 0 } }))
+    const onClose = vi.fn()
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={onClose} />)
+    await waitFor(() => expect(container.querySelector('.wfo-runctl.done')).toBeInTheDocument())
+
+    expect(screen.queryByText('终止')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('status failed: also renders the done foot (完成 closes)', async () => {
+    launchInfo.mockResolvedValue(FOOT_LAUNCH_INFO)
+    const run2 = makeRun2(footState({ status: 'failed' }))
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelector('.wfo-runctl.done')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '完成' })).toBeInTheDocument()
+  })
+})
