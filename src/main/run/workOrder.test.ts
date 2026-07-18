@@ -127,3 +127,23 @@ describe('runWorkOrder interactive callbacks', () => {
     expect(out.result?.summary).toBe('confirm=allow input=')
   })
 })
+
+describe('runWorkOrder onProgress', () => {
+  it('forwards provider onState/onLog to onProgress with laneId', async () => {
+    const events: any[] = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        const done = (async () => {
+          cb.onState('run'); cb.onLog({ ts: '00:00:00', text: '写 design.md', level: 'info' })
+          cb.onHandoff?.({ summary: 'ok' }); cb.onState('ok'); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+        })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    await runWorkOrder(order, { provider, env: {}, onProgress: (e) => events.push(e) })
+    expect(events.some(e => e.laneId === 'develop:proj1' && e.state === 'run')).toBe(true)
+    expect(events.some(e => e.activity === '写 design.md')).toBe(true)
+  })
+})

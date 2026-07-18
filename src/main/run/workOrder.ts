@@ -31,6 +31,7 @@ export interface RunWorkOrderDeps {
   isTransient?: (err: Error) => boolean
   onConfirm?: (req: import('../agents/types').ConfirmReq, laneId: string) => Promise<'allow' | 'deny'>
   onInput?: (req: import('../agents/types').InputReq, laneId: string) => Promise<string>
+  onProgress?: (ev: { laneId: string; state?: import('../agents/types').AgentState; activity?: string }) => void
 }
 
 const TRANSIENT_RE = /timeout|network|econn|etimedout|socket hang|cancel/i
@@ -61,7 +62,10 @@ export async function runWorkOrder(order: WorkOrder, deps: RunWorkOrderDeps): Pr
         permissionMode: order.permissionMode,
       }
       const cb: AgentCallbacks = {
-        onLog() {}, onState() {}, onDone() {},
+        onLog(line) { deps.onProgress?.({ laneId: order.id, activity: line.text }) },
+        onState(s) { deps.onProgress?.({ laneId: order.id, state: s }) },
+        onActivity() { deps.onProgress?.({ laneId: order.id }) },
+        onDone() {},
         onError(e) { capturedErr = e instanceof Error ? e : new Error(String(e)) },
         onConfirm: (req) => (deps.onConfirm ? deps.onConfirm(req, order.id) : Promise.resolve('allow')),
         onInput: (req) => (deps.onInput ? deps.onInput(req, order.id) : Promise.resolve('')),
