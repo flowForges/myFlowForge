@@ -2,13 +2,46 @@ import { useState } from 'react'
 import type { Run2Api } from '../state/useRun2'
 import type { StageStatus } from '../../main/run/machine'
 import type { WorkOrderOutcome } from '../../main/run/workOrder'
-import type { LiveLane } from '../../main/run/controller'
+import type { LiveLane, RunLogLine } from '../../main/run/controller'
 import type { GateEvent } from '../../main/run/events'
 import { Run2EventCard } from './Run2EventCard'
 import { Markdown } from '../views/chat/markdown'
 import { Run2FileViewer } from './Run2FileViewer'
 
-interface RunPanelProps { api: Run2Api }
+interface RunPanelProps {
+  api: Run2Api
+  /** Opens the bottom real-time LogConsole (shell/App owns its open state + focus). Optional:
+   *  when not threaded through by the caller, the 看实时日志 button simply doesn't render rather
+   *  than being wired to a no-op — see task-3 brief ("拿不到打开回调则本按钮 best-effort/降级")。 */
+  onOpenLog?: () => void
+}
+
+const LOG_KIND_LABEL: Record<NonNullable<RunLogLine['line']['kind']>, string> = {
+  think: '💭 思',
+  tool: '🔧 执',
+  file: '📄 文',
+  output: '▶ 出',
+}
+
+// Compact scroll area showing a lane's recently buffered think/tool/file/output lines (from the
+// run2:log stream, buffered per-lane in useRun2). This is the "see the execution" view — a live
+// feed, not a full transcript (the bottom LogConsole remains the full transcript / expanded view).
+function LaneLog({ lines }: { lines: RunLogLine[] }) {
+  if (lines.length === 0) return null
+  return (
+    <div className="run2-lane-log">
+      {lines.map((l, i) => {
+        const kind = l.line.kind ?? 'output'
+        return (
+          <div key={i} className={`run2-lane-log-line l-${kind}`}>
+            <span className="run2-lane-log-kind">{LOG_KIND_LABEL[kind]}</span>
+            <span className="run2-lane-log-text">{l.line.text}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 const STAGE_GLYPH: Record<StageStatus, string> = {
   done: '✓',
@@ -80,13 +113,16 @@ function LaneRow({ outcome }: { outcome: WorkOrderOutcome }) {
 }
 
 // Live lane row: a stage's currently-running work order (not yet settled into `outcomes`).
-function LiveLaneRow({ id, lane }: { id: string; lane: LiveLane }) {
+// `logLines` (when present) renders the lane's recently buffered think/tool/file/output stream
+// inline, right under the status row — the "see the execution" view this task adds.
+function LiveLaneRow({ id, lane, logLines }: { id: string; lane: LiveLane; logLines?: RunLogLine[] }) {
   const label = lane.project ?? 'root'
   return (
     <div className="run2-lane-row live st-run">
       <span className="run2-lane-project">{label}</span>
       <span className="run2-lane-status">⟳ {lane.state ?? '执行中'}</span>
       {lane.activity && <span className="run2-lane-activity">{lane.activity}</span>}
+      {logLines && logLines.length > 0 && <LaneLog lines={logLines} />}
     </div>
   )
 }
@@ -104,7 +140,7 @@ function CurrentStageLane({ api }: { api: Run2Api }) {
     <div className="run2-lane">
       <div className="run2-lane-title">当前阶段泳道{currentKey ? `：${currentKey}` : ''}</div>
       {hasOutcomes && stageOutcomes!.map((o) => <LaneRow key={o.order.id} outcome={o} />)}
-      {hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} />)}
+      {hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} logLines={api.laneLogs[id]} />)}
       {!hasOutcomes && !hasLive && <div className="run2-lane-empty">暂无进展</div>}
     </div>
   )
@@ -191,7 +227,7 @@ function StageOutput({ api, selectedStageKey, gateStageKey, onOpenFile }: { api:
       )}
       <div className="run2-stage-output-title">阶段产出{selectedStageKey ? `：${selectedStageKey}` : ''}</div>
       {hasOutcomes && stageOutcomes!.map((o) => <OutcomeCard key={o.order.id} outcome={o} onOpenFile={onOpenFile} />)}
-      {!hasOutcomes && hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} />)}
+      {!hasOutcomes && hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} logLines={api.laneLogs[id]} />)}
       {!hasOutcomes && !hasLive && <div className="run2-stage-output-empty">执行中/未开始</div>}
     </div>
   )
@@ -255,7 +291,7 @@ function FeedbackDraftPanel({ api }: { api: Run2Api }) {
   )
 }
 
-export function RunPanel({ api }: RunPanelProps) {
+export function RunPanel({ api, onOpenLog }: RunPanelProps) {
   // `selectedStageKey` is a pure user override (undefined = "follow current stage"). RunPanel
   // mounts while `api.state === null` (before a run starts), so we MUST NOT snapshot the current
   // key into state at init — that would freeze it to `undefined` forever. Instead we derive the
@@ -278,6 +314,9 @@ export function RunPanel({ api }: RunPanelProps) {
   return (
     <div className="run2-panel">
       <RunHead api={api} selectedStageKey={effectiveKey} onSelectStage={setSelectedStageKey} />
+      {onOpenLog && (
+        <button type="button" className="txt-btn run2-open-logcon" onClick={onOpenLog}>看实时日志</button>
+      )}
       <CurrentStageLane api={api} />
       <StageOutput
         api={api}

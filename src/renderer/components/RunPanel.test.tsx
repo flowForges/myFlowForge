@@ -32,9 +32,10 @@ function makeState(overrides?: Partial<RunControllerState>): RunControllerState 
   return { ...base, ...overrides }
 }
 
-function makeApi(state: RunControllerState | null): Run2Api {
+function makeApi(state: RunControllerState | null, laneLogs: Run2Api['laneLogs'] = {}): Run2Api {
   return {
     state,
+    laneLogs,
     resolveGate: vi.fn(),
     resolveLane: vi.fn(),
     addFeedback: vi.fn(),
@@ -384,5 +385,46 @@ describe('RunPanel', () => {
     const api = makeApi(state)
     render(<RunPanel api={api} />)
     expect(screen.getByText('运行中')).toBeInTheDocument()
+  })
+
+  it('renders the current stage live lane\'s buffered log lines (think/tool/output)', () => {
+    const state = makeState({
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [{ key: 'design', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      inbox: [],
+      outcomes: {},
+      liveLanes: {
+        'design:root': { stageKey: 'design', state: 'run', activity: '写 design.md' },
+      },
+    })
+    const api = makeApi(state, {
+      'design:root': [
+        { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '思考中……', level: 'run', kind: 'think' } },
+        { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '写文件 design.md', level: 'run', kind: 'tool' } },
+      ],
+    })
+    render(<RunPanel api={api} />)
+    // Mirrored in both the current-stage lane and the stage-output region (same pattern as the
+    // existing live-lane tests above — selectedStageKey defaults to the current stage 'design').
+    expect(screen.getAllByText(/思考中……/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/写文件 design.md/).length).toBeGreaterThan(0)
+  })
+
+  it('renders the 看实时日志 button when onOpenLog is provided, and calls it on click', () => {
+    const api = makeApi(makeState())
+    const onOpenLog = vi.fn()
+    render(<RunPanel api={api} onOpenLog={onOpenLog} />)
+    const btn = screen.getByText('看实时日志')
+    fireEvent.click(btn)
+    expect(onOpenLog).toHaveBeenCalled()
+  })
+
+  it('does not render the 看实时日志 button when onOpenLog is absent', () => {
+    const api = makeApi(makeState())
+    render(<RunPanel api={api} />)
+    expect(screen.queryByText('看实时日志')).not.toBeInTheDocument()
   })
 })

@@ -662,6 +662,7 @@ export function App() {
                 archivedAt={activeWsMeta?.archivedAt ?? null}
                 onViewAgentLog={(id, name) => { setAgentLogFilter({ id, name }); setLogOpen(true); dock.setFocus('log') }}
                 onOpenTargetChange={setOpenTarget}
+                onOpenLog={() => { setLogOpen(true); dock.setFocus('log') }}
               />}
         </div>
       </div>

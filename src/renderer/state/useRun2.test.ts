@@ -3,16 +3,17 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { useRun2 } from './useRun2'
 
 function installForge(overrides: any = {}) {
-  let updateCb: any, eventCb: any
+  let updateCb: any, eventCb: any, logCb: any
   const run2 = {
     getState: vi.fn(async (_ws: string) => ({ machine: { plan: { runId: 'r', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {} })),
     resolveGate: vi.fn(), resolveLane: vi.fn(), addFeedback: vi.fn(), editFeedback: vi.fn(), removeFeedback: vi.fn(), abort: vi.fn(),
     onEvent: vi.fn((cb: any) => { eventCb = cb; return () => {} }),
     onUpdate: vi.fn((cb: any) => { updateCb = cb; return () => {} }),
+    onLog: vi.fn((cb: any) => { logCb = cb; return () => {} }),
     ...overrides,
   }
   ;(window as any).forge = { run2 }
-  return { run2, fire: { update: (p: any) => updateCb(p), event: (p: any) => eventCb(p) } }
+  return { run2, fire: { update: (p: any) => updateCb(p), event: (p: any) => eventCb(p), log: (p: any) => logCb(p) } }
 }
 
 describe('useRun2', () => {
@@ -63,5 +64,47 @@ describe('useRun2', () => {
     const { result } = renderHook(() => useRun2(undefined))
     expect(result.current.state).toBeNull()
     expect(() => result.current.abort()).not.toThrow()
+  })
+
+  it('buffers run2:log lines per lane for the matching workspace, and ignores other workspaces', async () => {
+    const { fire } = installForge()
+    const { result } = renderHook(() => useRun2('/ws'))
+    await waitFor(() => expect(result.current.state).not.toBeNull())
+
+    act(() => fire.log({
+      workspacePath: '/ws',
+      log: { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '思考A', level: 'run', kind: 'think' } },
+    }))
+    act(() => fire.log({
+      workspacePath: '/ws',
+      log: { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '思考B', level: 'run', kind: 'think' } },
+    }))
+    // A different workspace's log must not land in this hook's buffer.
+    act(() => fire.log({
+      workspacePath: '/other',
+      log: { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '别的工作区', level: 'run', kind: 'think' } },
+    }))
+
+    await waitFor(() => expect(result.current.laneLogs['design:root']?.length).toBe(2))
+    expect(result.current.laneLogs['design:root'].map((l) => l.line.text)).toEqual(['思考A', '思考B'])
+  })
+
+  it('caps a lane\'s buffered log lines at ~40, dropping the oldest', async () => {
+    const { fire } = installForge()
+    const { result } = renderHook(() => useRun2('/ws'))
+    await waitFor(() => expect(result.current.state).not.toBeNull())
+
+    act(() => {
+      for (let i = 0; i < 45; i++) {
+        fire.log({
+          workspacePath: '/ws',
+          log: { laneId: 'dev:app', stageKey: 'dev', agentName: 'Codex', line: { ts: '', text: `行${i}`, level: 'run', kind: 'output' } },
+        })
+      }
+    })
+
+    await waitFor(() => expect(result.current.laneLogs['dev:app']?.length).toBe(40))
+    expect(result.current.laneLogs['dev:app'][0].line.text).toBe('行5')
+    expect(result.current.laneLogs['dev:app'][39].line.text).toBe('行44')
   })
 })
