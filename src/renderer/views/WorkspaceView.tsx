@@ -235,7 +235,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // Inspector mode: forceChat overrides to chat mode; reset when a run for this ws goes live
   const [forceChat, setForceChat] = useState(false)
   const runIsLiveHere = engine.run?.workspacePath === wsPath
-  const runLiveHereNow = engine.run?.workspacePath === wsPath && engine.run?.status === 'run'
   const chatMode = !runIsLiveHere || forceChat
 
   // When a run for THIS workspace becomes live, reset forceChat so we show workflow mode
@@ -589,14 +588,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     return out
   }, [chat.messages])
 
-  const handleToChatMode = () => {
-    if (runLiveHereNow) {
-      if (!window.confirm('结束当前工作流并回到对话?')) return
-      cancel()
-    }
-    setForceChat(true)
-  }
-
   // Drive the width INLINE for both states. Collapse used to rely on removing the inline width so the
   // `.insp-collapsed { width:0 }` CSS could win — but inline style always beats CSS, so any lingering
   // inline width silently defeated the collapse (first click "did nothing"). Setting 0 explicitly makes
@@ -790,10 +781,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           providers={providers}
           disabled={!wsPath || !!archived}
           busy={chat.busy}
-          // Show the running/stop state while a turn runs OR while fire-and-forget delegate sub-agents
-          // are still working in the background (the chat turn itself already ended). Stopping cancels
-          // the background delegates too (chatStop → cancelWorkspaceDelegates).
-          running={(chat.busy && chat.running != null) || chat.delegateActive}
+          running={chat.busy && chat.running != null}
           onStop={() => chat.stop()}
           // Has the running turn produced assistant text yet? Stopping before any output restores the
           // sent message to the box; stopping after output (possible changes) does not.
@@ -974,14 +962,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         终止退出
                       </button>
                     )}
-                    <button
-                      className="txt-btn"
-                      id="toChatMode"
-                      title="结束工作流,回到纯对话"
-                      onClick={handleToChatMode}
-                    >
-                      转为对话
-                    </button>
                     <button
                       className="txt-btn"
                       id="agentExpandAll"

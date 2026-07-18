@@ -422,49 +422,6 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .sac-sec-t { font-size: 12px; line-height: 1.55; color: var(--fg-2); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; }
 .sac-sec-t.sac-muted { color: var(--muted); font-style: italic; }
 
-/* Lightweight-delegation live progress block (fire-and-forget sub-agents, surfaced in the chat stream). */
-.msg-delegate { margin: 2px 0 4px; }
-.delegate-batch { border: 1px solid var(--border); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
-.delegate-batch.db-run { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
-.delegate-batch.db-idle { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }
-.db-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 11px; text-align: left; font-size: 12.5px; color: var(--fg-2); }
-.db-head:hover { background: var(--surface-2); }
-.db-ico { flex: 0 0 auto; display: grid; place-items: center; color: var(--accent); }
-.db-ico svg { width: 15px; height: 15px; }
-.delegate-batch.db-run .db-ico { animation: sac-spin 1.6s linear infinite; }
-.db-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); }
-.db-state { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; font-family: var(--mono); letter-spacing: .03em; padding: 2px 8px; border-radius: 99px; }
-.db-state.st-run { color: var(--run); background: var(--accent-dim); }
-.db-state.st-ok { color: var(--ok); background: oklch(74% 0.15 150 / 0.14); }
-.db-state.st-idle { color: var(--err); background: oklch(68% 0.18 25 / 0.14); }
-.db-caret { flex: 0 0 auto; color: var(--faint); transition: transform .14s; font-size: 11px; }
-.db-caret.open { transform: rotate(90deg); }
-.db-list { list-style: none; margin: 0; padding: 4px 6px 7px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 1px; }
-.db-row { border-radius: 6px; }
-.db-rowhead { width: 100%; display: flex; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 6px; font-size: 12px; text-align: left; }
-.db-rowhead:hover { background: var(--surface-2); }
-.db-dot { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.db-row.r-run .db-dot { background: var(--run); animation: db-pulse 1.3s ease-in-out infinite; }
-.db-row.r-ok .db-dot { background: var(--ok); }
-.db-row.r-idle .db-dot { background: var(--err); }
-@keyframes db-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
-.db-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); font-weight: 500; }
-.db-prov { flex: 0 0 auto; font-size: 10.5px; font-family: var(--mono); color: var(--faint); }
-/* 「正在做什么」实时动作行:占据名字与状态之间的中段,单行省略,等宽字体带一点弱化色。 */
-.db-activity { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; font-family: var(--mono); color: var(--muted); opacity: .85; }
-.db-rowstate { flex: 0 0 auto; font-size: 10.5px; color: var(--muted); }
-/* 实时输出后的闪烁光标,提示还在流入。 */
-.db-cursor { display: inline-block; margin-left: 1px; color: var(--run); animation: db-blink 1s steps(2, start) infinite; }
-@keyframes db-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
-.db-row.r-run .db-rowstate { color: var(--run); }
-.db-row.r-idle .db-rowstate { color: var(--err); }
-.db-rowcaret { flex: 0 0 auto; color: var(--faint); transition: transform .14s; font-size: 10px; }
-.db-rowcaret.open { transform: rotate(90deg); }
-.db-rowbody { padding: 4px 9px 9px 22px; display: flex; flex-direction: column; gap: 8px; }
-.db-sec-h { font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; }
-.db-sec-t { font-size: 12px; line-height: 1.55; color: var(--fg-2); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
-.db-sec-t.db-muted { color: var(--muted); font-style: italic; background: none; border: none; padding: 0; }
-
 .plan-card { border-color: color-mix(in oklch, var(--warn), transparent 45%); box-shadow: inset 2px 0 0 var(--warn); }
 .plan-card .req-head { padding: 9px 12px; background: color-mix(in oklch, var(--warn), transparent 92%); }
 .plan-card .req-body { padding: 14px; }

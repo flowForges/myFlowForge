@@ -114,40 +114,6 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
     expect(chat.querySelector('.ctx-stack')).toBeNull()
   })
 
-  it('转为对话 with NO live run switches to chat mode directly (no confirm)', async () => {
-    const okEngine: EngineApi = { run: { id: 'r', workspaceName: 'ws', workspacePath: '/ws', status: 'ok', projects: [], stages: [], pending: [] } as any, pending: [], resolve: () => {}, cancel: vi.fn() }
-    const { container } = render(<WorkspaceView engine={okEngine} providers={providers} workspacePath="/ws" />)
-    const aside = container.querySelector('aside.inspector')!
-    expect(aside.classList.contains('chat')).toBe(false)
-    fireEvent.click(screen.getByText('转为对话'))
-    expect((window.confirm as any)).not.toHaveBeenCalled()
-    await waitFor(() => expect(aside.classList.contains('chat')).toBe(true))
-    expect(screen.getByText('当前工作流')).toBeInTheDocument()
-  })
-
-  it('转为对话 with a LIVE run asks to confirm, cancels run on OK then switches to chat', async () => {
-    const cancel = vi.fn()
-    const live: EngineApi = { run: { id: 'r', workspaceName: 'ws', workspacePath: '/ws', status: 'run', projects: [], stages: [], pending: [] } as any, pending: [], resolve: () => {}, cancel }
-    const { container } = render(<WorkspaceView engine={live} providers={providers} workspacePath="/ws" />)
-    const aside = container.querySelector('aside.inspector')!
-    expect(aside.classList.contains('chat')).toBe(false)
-    fireEvent.click(screen.getByText('转为对话'))
-    expect(window.confirm).toHaveBeenCalledWith('结束当前工作流并回到对话?')
-    expect(cancel).toHaveBeenCalledTimes(1)
-    await waitFor(() => expect(aside.classList.contains('chat')).toBe(true))
-  })
-
-  it('转为对话 with a LIVE run does NOTHING when confirm is dismissed', async () => {
-    ;(window.confirm as any) = vi.fn(() => false)
-    const cancel = vi.fn()
-    const live: EngineApi = { run: { id: 'r', workspaceName: 'ws', workspacePath: '/ws', status: 'run', projects: [], stages: [], pending: [] } as any, pending: [], resolve: () => {}, cancel }
-    const { container } = render(<WorkspaceView engine={live} providers={providers} workspacePath="/ws" />)
-    const aside = container.querySelector('aside.inspector')!
-    fireEvent.click(screen.getByText('转为对话'))
-    expect(cancel).not.toHaveBeenCalled()
-    expect(aside.classList.contains('chat')).toBe(false)
-  })
-
   it('forceChat resets to false when a run becomes live (workflow mode auto-activates on run)', async () => {
     // Start with idle (chat mode), then simulate a run becoming live for this ws
     const idleE: EngineApi = { run: null, pending: [], resolve: () => {}, cancel: () => {} }
