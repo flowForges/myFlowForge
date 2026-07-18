@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from 'react'
 import './workflowOverlay.css'
 import type { Run2Api } from '../state/useRun2'
-import type { RunControllerState } from '../../main/run/controller'
+import type { RunControllerState, RunLogLine } from '../../main/run/controller'
+import type { AgentContextMeta } from '@shared/types'
 
 // Task 2 (WF-A): 1:1 port of the prototype's `.wfo` overlay CONFIG state — head (title/tabs/legend) +
 // flow placeholder (Task 3 fills it) + foot (goal textarea/start button/hint). SOURCE:
@@ -173,6 +174,103 @@ function stageRunState(stageKey: string, state: RunControllerState): RunNodeStat
   return 'wait'
 }
 
+// B2 (WF-B): what skill/rule/mcp this stage's lane would load if it ran in its cwd right now —
+// reuses the same cwd-scanner (window.forge.scanContext) as RunPanel's LaneContext (P-B2 Task 2),
+// kept as its own tiny per-component cache rather than importing RunPanel's private cache.
+const nodeCapsCache = new Map<string, AgentContextMeta>()
+
+function useNodeCaps(cwd: string | undefined): AgentContextMeta | null {
+  const [meta, setMeta] = useState<AgentContextMeta | null>(() => (cwd ? nodeCapsCache.get(cwd) ?? null : null))
+  useEffect(() => {
+    if (!cwd) {
+      setMeta(null)
+      return
+    }
+    const cached = nodeCapsCache.get(cwd)
+    if (cached) {
+      setMeta(cached)
+      return
+    }
+    const scan = (window as any).forge?.scanContext
+    if (!scan) return
+    let alive = true
+    scan(cwd)
+      .then((m: AgentContextMeta) => {
+        if (!m) return
+        nodeCapsCache.set(cwd, m)
+        if (alive) setMeta(m)
+      })
+      .catch(() => { /* best-effort — a scan failure just means no chips, not a crash */ })
+    return () => {
+      alive = false
+    }
+  }, [cwd])
+  return meta
+}
+
+// B2: 1:1 port of the prototype's renderBody() run branch (reference lines 649-705) for a
+// NON-code stage's single lane — `.wfo-sec` LLM 输入 (`.wfo-io.in`) + `.wfo-sec` 已加载
+// Skill·Rule·MCP (`.wfo-caps`, live via scanContext rather than the prototype's static CAPS mock)
+// + `.wfo-sec` LLM 输出 (`.wfo-io`, laneLogs text, with a `.cur` blink cursor while `state==='run'`).
+// A code stage's per-project lane IO lives in the fan-out lanes (task B4) — callers must not render
+// this for `stage.code` stages.
+function RunNodeBody({
+  stageKey,
+  prompt,
+  cwd,
+  state,
+  laneLogs,
+}: {
+  stageKey: string
+  prompt: string
+  cwd: string | undefined
+  state: RunNodeState
+  laneLogs: RunLogLine[]
+}) {
+  const caps = useNodeCaps(cwd)
+  const hasCaps = !!caps && (caps.skills.length > 0 || caps.rules.length > 0 || (caps.mcps?.length ?? 0) > 0)
+  const outputText = laneLogs.map((l) => l.line.text).join('')
+  return (
+    <>
+      <div className="wfo-sec">
+        <div className="wfo-sec-h">LLM 输入</div>
+        <div className="wfo-io in">{prompt}</div>
+      </div>
+      {hasCaps && (
+        <div className="wfo-sec">
+          <div className="wfo-sec-h">已加载 Skill · Rule · MCP</div>
+          <div className="wfo-caps">
+            {caps!.skills.map((s) => (
+              <span key={`s-${s.name}`} className="wfo-cap s">
+                <span className="tg">S</span>{s.name}
+              </span>
+            ))}
+            {caps!.rules.map((r) => (
+              <span key={`r-${r.name}`} className="wfo-cap r">
+                <span className="tg">R</span>{r.name}
+              </span>
+            ))}
+            {(caps!.mcps ?? []).map((m) => (
+              <span key={`m-${m.name}`} className="wfo-cap m">
+                <span className="tg">M</span>{m.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {state !== 'wait' && (
+        <div className="wfo-sec">
+          <div className="wfo-sec-h">LLM 输出</div>
+          <div className="wfo-io" id={`wfout-${stageKey}`}>
+            {outputText}
+            {state === 'run' && <span className="cur" />}
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
 // P5-UI WF-A Task 2: opened from a workflow "/" command in chat. Loads launchInfo, lets the user pick a
 // workflow tab + type a goal. Task 3 fills in the `.wfo-flow` stage chart; Task 5 wires the 启动 button
 // to actually start a run (kept as a stub here — onStarted is threaded through for that later task).
@@ -339,7 +437,11 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   // workflow tab happens to be selected in the UI. `name`/`code` come from the plan snapshot; `desc`
   // is enriched from launchInfo (info.workflows) by key when available, else left blank.
   const stageDescByKey: Record<string, string> = {}
-  for (const w of info.workflows) for (const s of w.stages) stageDescByKey[s.key] = s.desc
+  const stagePromptByKey: Record<string, string> = {}
+  for (const w of info.workflows) for (const s of w.stages) {
+    stageDescByKey[s.key] = s.desc
+    stagePromptByKey[s.key] = s.prompt
+  }
   const runStages = running
     ? run2.state!.machine.plan.stages.map((sp) => ({
         key: sp.key,
@@ -428,6 +530,12 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                     ? fmtTime(timing.endedAt - timing.startedAt)
                     : ''
               const cc = connClass(st)
+              // B2: the stage's single lane (non-code stages fan out to exactly one order,
+              // id `${stageKey}:root` — see fanout.ts buildWorkOrders). cwd comes from the live
+              // lane while running, else the settled outcome's order.cwd (task brief).
+              const laneId = `${rs.key}:root`
+              const laneCwd = run2.state!.liveLanes[laneId]?.cwd ?? run2.state!.outcomes[rs.key]?.[0]?.order.cwd
+              const laneLines = run2.laneLogs[laneId] ?? []
               return (
                 <Fragment key={rs.key}>
                   <div className={`wfo-node${openNodes[rs.key] ? ' open' : ''} ${nodeClass(st)}`} data-stage={rs.key}>
@@ -447,7 +555,17 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                           <Icon svg={IC.chev} />
                         </span>
                       </div>
-                      <div className="wfo-cardbody" />
+                      <div className="wfo-cardbody">
+                        {!rs.code && (
+                          <RunNodeBody
+                            stageKey={rs.key}
+                            prompt={stagePromptByKey[rs.key] ?? ''}
+                            cwd={laneCwd}
+                            state={st}
+                            laneLogs={laneLines}
+                          />
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className={`wfo-conn${cc ? ' ' + cc : ''}`}>
