@@ -113,6 +113,11 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   const [projSel, setProjSel] = useState<Record<string, Record<string, boolean>>>({})
   const [stageModel, setStageModel] = useState<Record<string, string>>({})
   const [projModel, setProjModel] = useState<Record<string, Record<string, string>>>({})
+  // Task 5: launch state — queuedNote mirrors RunLauncher's pattern (manager.start() can return
+  // {status:'queued', position} instead of firing onStarted immediately).
+  const [starting, setStarting] = useState(false)
+  const [queuedNote, setQueuedNote] = useState<string | null>(null)
+  const [startError, setStartError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -164,9 +169,53 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedWorkflowId, info])
 
-  // Task 5 wires this to window.forge.run2.startWorkflow + onStarted(); kept a no-op stub for now.
+  // Task 5: starts the run — projectNames is the UNION of every code stage's selected projects (or,
+  // if there are no code stages at all, ALL of the workspace's projects). Model override is DEFERRED
+  // (per the WF-A plan): only workflowId/projectNames/task/runId go to run2 for now.
   const handleStart = () => {
-    // stub
+    const run2 = (window as any).forge?.run2
+    if (!run2?.startWorkflow || !selectedWorkflowId) return
+    const codeStageKeys = stages.filter((s) => s.code).map((s) => s.key)
+    let projectNames: string[]
+    if (codeStageKeys.length === 0) {
+      projectNames = info.projects.map((p) => p.name)
+    } else {
+      const union = new Set<string>()
+      for (const key of codeStageKeys) {
+        // The projSel-init effect (above) populates this asynchronously after launchInfo resolves —
+        // if it hasn't run yet for this key (undefined, as opposed to an explicit {} from user
+        // deselection), fall back to "all projects selected", matching what that effect would set.
+        const sel = projSel[key]
+        for (const p of info.projects) {
+          if (sel ? sel[p.name] : true) union.add(p.name)
+        }
+      }
+      projectNames = Array.from(union)
+    }
+    setStartError(null)
+    setQueuedNote(null)
+    setStarting(true)
+    Promise.resolve(
+      run2.startWorkflow({
+        workspacePath,
+        workflowId: selectedWorkflowId,
+        projectNames,
+        task: goal,
+        runId: `run2-${Date.now()}`,
+      })
+    )
+      .then((result: unknown) => {
+        // manager.start() returns a union: {status:'started', state} | {status:'queued', position}.
+        // Only 'queued' changes behavior — everything else (incl. legacy void) falls back to onStarted().
+        if (result && typeof result === 'object' && (result as { status?: unknown }).status === 'queued') {
+          const position = (result as { position?: unknown }).position
+          setQueuedNote(`已加入队列（位置 ${position}），等待当前工作流完成`)
+          return
+        }
+        onStarted?.()
+      })
+      .catch((err: unknown) => setStartError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setStarting(false))
   }
 
   const toggleProj = (stageKey: string, projName: string) => {
@@ -374,10 +423,12 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
               value={goal}
               onChange={(e) => setGoal(e.target.value)}
             />
-            <button className="wfo-start" disabled={goal.trim() === ''} onClick={handleStart}>
+            <button className="wfo-start" disabled={goal.trim() === '' || starting} onClick={handleStart}>
               <Icon svg={IC.play} /> 启动
             </button>
           </div>
+          {queuedNote && <div className="wfo-queued-note">{queuedNote}</div>}
+          {startError && <div className="wfo-start-error">{startError}</div>}
           <div className="wfo-foot-hint">
             <Icon svg={IC.bolt} />
             主代理将按上方流程编排为多代理执行，每个模块使用你指定的模型。<kbd>⌘↩</kbd> 启动

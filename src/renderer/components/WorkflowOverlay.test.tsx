@@ -3,12 +3,15 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { WorkflowOverlay } from './WorkflowOverlay'
 
 const launchInfo = vi.fn()
+const startWorkflow = vi.fn()
 
 beforeEach(() => {
   launchInfo.mockReset()
+  startWorkflow.mockReset()
   ;(window as any).forge = {
     run2: {
       launchInfo,
+      startWorkflow,
     },
   }
 })
@@ -327,5 +330,54 @@ describe('WorkflowOverlay node body (Task 4)', () => {
     expect(after).not.toBe(before)
     // clicking the model chip must not also toggle node open/closed
     expect(nodes[0]).toHaveClass('open')
+  })
+})
+
+describe('WorkflowOverlay launch wiring (Task 5)', () => {
+  it('prefills goal from initialSeed and clicking 启动 calls startWorkflow with workflowId/projectNames/task/runId, then onStarted on {status:"started"}', async () => {
+    launchInfo.mockResolvedValue(LAUNCH_INFO)
+    startWorkflow.mockResolvedValue({ status: 'started', state: {} })
+    const onStarted = vi.fn()
+    const { container } = render(
+      <WorkflowOverlay workspacePath="/ws" initialSeed="我: 做个登录页" onClose={vi.fn()} onStarted={onStarted} />
+    )
+    // Wait for the flowchart nodes (not just the tabs) so the projSel-init effect (which the
+    // handleStart projectNames union reads) has definitely run before we click 启动 — see Task 4's
+    // tests, which rely on the same sync point.
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(3))
+
+    const textarea = container.querySelector('.wfo-goal textarea') as HTMLTextAreaElement
+    expect(textarea.value).toBe('我: 做个登录页')
+
+    const startBtn = container.querySelector('.wfo-start') as HTMLButtonElement
+    expect(startBtn).not.toBeDisabled()
+    fireEvent.click(startBtn)
+
+    await waitFor(() => expect(startWorkflow).toHaveBeenCalledTimes(1))
+    const arg = startWorkflow.mock.calls[0][0]
+    expect(arg.workspacePath).toBe('/ws')
+    expect(arg.workflowId).toBe('wf-standard')
+    expect(arg.projectNames).toEqual(['api'])
+    expect(arg.task).toBe('我: 做个登录页')
+    expect(typeof arg.runId).toBe('string')
+    expect(arg.runId.length).toBeGreaterThan(0)
+
+    await waitFor(() => expect(onStarted).toHaveBeenCalled())
+  })
+
+  it('shows a queued note and does NOT call onStarted when startWorkflow resolves {status:"queued"}', async () => {
+    launchInfo.mockResolvedValue(LAUNCH_INFO)
+    startWorkflow.mockResolvedValue({ status: 'queued', position: 2 })
+    const onStarted = vi.fn()
+    const { container } = render(
+      <WorkflowOverlay workspacePath="/ws" initialSeed="做个功能" onClose={vi.fn()} onStarted={onStarted} />
+    )
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(3))
+
+    fireEvent.click(container.querySelector('.wfo-start') as HTMLButtonElement)
+
+    await waitFor(() => expect(startWorkflow).toHaveBeenCalledTimes(1))
+    expect(onStarted).not.toHaveBeenCalled()
+    await waitFor(() => expect(container.textContent).toContain('位置'))
   })
 })

@@ -266,6 +266,9 @@
 .wfo-start:hover { filter: brightness(1.08); }
 .wfo-start:disabled { opacity: .42; cursor: default; filter: none; }
 .wfo-start svg { width: 16px; height: 16px; }
+/* Task 5: launch feedback — queued position (neutral) / start error (attention). */
+.wfo-queued-note { margin-top: 9px; font-size: 12px; color: var(--muted); }
+.wfo-start-error { margin-top: 9px; font-size: 12px; color: var(--err); }
 .wfo-foot-hint { margin-top: 9px; font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 7px; }
 .wfo-foot-hint svg { width: 13px; height: 13px; flex: 0 0 13px; }
 .wfo-foot-hint kbd { font: 600 10px/1 var(--mono); background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 3px 5px; color: var(--muted); }

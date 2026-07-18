@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { commandsForProvider, isSlashQuery, mergeCommands, SLASH_COMMANDS, workflowMenuCommands, type MenuCommand } from './slashCommands'
 
 describe('commandsForProvider', () => {
-  it('always includes the universal 工作流 command for any provider', () => {
+  it('always includes the universal 开启工作流 command for any provider', () => {
     for (const p of ['claude', 'codex', 'cursor', 'whatever']) {
-      expect(commandsForProvider(p, '/').some(c => c.cmd === '/工作流')).toBe(true)
+      expect(commandsForProvider(p, '/').some(c => c.cmd === '/开启工作流')).toBe(true)
     }
   })
 
@@ -22,27 +22,27 @@ describe('commandsForProvider', () => {
 
   it('filters by the typed query (token or title)', () => {
     expect(commandsForProvider('claude', '/架').map(c => c.cmd)).toEqual(['/架构'])
-    // title match: '工作流' title 发起工作流
-    expect(commandsForProvider('claude', '/工作').some(c => c.cmd === '/工作流')).toBe(true)
+    // title match: '工作流' title 开启工作流
+    expect(commandsForProvider('claude', '/工作').some(c => c.cmd === '/开启工作流')).toBe(true)
     expect(commandsForProvider('claude', '/zzz')).toEqual([])
   })
 
-  it('every command except the launcher-opening 工作流 carries a non-empty template', () => {
+  it('every command except the launcher-opening 开启工作流 carries a non-empty template', () => {
     for (const c of SLASH_COMMANDS) {
-      if (c.cmd === '/工作流') continue
+      if (c.cmd === '/开启工作流') continue
       expect(c.template.length).toBeGreaterThan(0)
     }
   })
 
-  it('the built-in /工作流 command opens the run2 launcher instead of seeding a chat message', () => {
-    const wf = SLASH_COMMANDS.find(c => c.cmd === '/工作流')
+  it('the built-in /开启工作流 command opens the run2 launcher instead of seeding a chat message', () => {
+    const wf = SLASH_COMMANDS.find(c => c.cmd === '/开启工作流')
     expect(wf?.openLauncher).toBe(true)
     expect(wf?.template).toBe('')
   })
 
   it('openLauncher survives commandsForProvider into the SlashCommand list', () => {
-    const cmds = commandsForProvider('claude', '/工作流')
-    expect(cmds.find(c => c.cmd === '/工作流')?.openLauncher).toBe(true)
+    const cmds = commandsForProvider('claude', '/开启工作流')
+    expect(cmds.find(c => c.cmd === '/开启工作流')?.openLauncher).toBe(true)
   })
 })
 
@@ -72,28 +72,28 @@ describe('mergeCommands', () => {
     expect(merged.map(c => c.cmd)).toContain('/analyst')
     expect(merged.map(c => c.cmd)).not.toContain('/awesome')
   })
-  it('the built-in /工作流 MenuCommand carries openLauncher through mergeCommands', () => {
-    const merged = mergeCommands('claude', '/工作流', [])
-    const wf = merged.find(c => c.cmd === '/工作流' && c.kind === 'forge')
+  it('the built-in /开启工作流 MenuCommand carries openLauncher through mergeCommands', () => {
+    const merged = mergeCommands('claude', '/开启工作流', [])
+    const wf = merged.find(c => c.cmd === '/开启工作流' && c.kind === 'forge')
     expect(wf?.openLauncher).toBe(true)
     expect(wf?.template).toBe('')
   })
 
   it('Forge command wins on a name clash (deduped)', () => {
-    const clash: MenuCommand[] = [{ cmd: '/工作流', title: 'x', desc: '', template: '/工作流 ', kind: 'command' }]
-    const merged = mergeCommands('claude', '/工作流', clash)
-    expect(merged.filter(c => c.cmd === '/工作流')).toHaveLength(1)
-    expect(merged.find(c => c.cmd === '/工作流')?.kind).toBe('forge')
+    const clash: MenuCommand[] = [{ cmd: '/开启工作流', title: 'x', desc: '', template: '/开启工作流 ', kind: 'command' }]
+    const merged = mergeCommands('claude', '/开启工作流', clash)
+    expect(merged.filter(c => c.cmd === '/开启工作流')).toHaveLength(1)
+    expect(merged.find(c => c.cmd === '/开启工作流')?.kind).toBe('forge')
   })
   it('a WORKSPACE-WORKFLOW entry survives a built-in name clash (not deduped out)', () => {
-    // A workflow literally named "工作流" (e.g. the ensureWorkspaceWorkflows default) collides with
-    // the built-in /工作流 command. It must still appear so the user can pick it — regression for the
-    // "workspace workflows missing from the / menu" bug.
-    const wf: MenuCommand[] = [{ cmd: '/工作流', title: '工作流', desc: '按此工作流发起', template: '', kind: 'forge', workflowId: 'wf-1' }]
-    const merged = mergeCommands('claude', '/工作流', wf)
+    // A workflow literally named "开启工作流" collides with the built-in /开启工作流 command. It must
+    // still appear so the user can pick it — regression for the "workspace workflows missing from the
+    // / menu" bug.
+    const wf: MenuCommand[] = [{ cmd: '/开启工作流', title: '开启工作流', desc: '按此工作流发起', template: '', kind: 'forge', workflowId: 'wf-1' }]
+    const merged = mergeCommands('claude', '/开启工作流', wf)
     const workflowEntry = merged.find(c => c.workflowId === 'wf-1')
     expect(workflowEntry).toBeTruthy()
-    expect(merged.filter(c => c.cmd === '/工作流')).toHaveLength(2) // built-in + the workspace workflow
+    expect(merged.filter(c => c.cmd === '/开启工作流')).toHaveLength(2) // built-in + the workspace workflow
   })
 })
 
@@ -119,7 +119,7 @@ describe('isSlashQuery', () => {
   it('true while typing a slash token, false once a space or non-slash appears', () => {
     expect(isSlashQuery('/工作')).toBe(true)
     expect(isSlashQuery('/')).toBe(true)
-    expect(isSlashQuery('/工作流 做个功能')).toBe(false)  // space → writing the argument
+    expect(isSlashQuery('/开启工作流 做个功能')).toBe(false)  // space → writing the argument
     expect(isSlashQuery('hello')).toBe(false)
     expect(isSlashQuery('')).toBe(false)
   })

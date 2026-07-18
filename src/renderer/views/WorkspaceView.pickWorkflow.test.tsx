@@ -28,7 +28,7 @@ const conversation: ChatMessage[] = [
   { id: 'm2', who: 'ai', text: '好的,我先看看现有页面结构', ts: '2' } as ChatMessage,
 ]
 
-const launchInfoMock = vi.fn(async () => ({ workflows: [{ id: 'wf1', name: '快速修复' }], projects: [] }))
+const launchInfoMock = vi.fn(async () => ({ workflows: [{ id: 'wf1', name: '快速修复', stages: [] }], projects: [] }))
 
 const forgeBase = {
   chatHistory: vi.fn(async () => conversation),
@@ -97,5 +97,19 @@ describe('WorkspaceView: workflow "/" command opens the launcher seeded with the
     await waitFor(() => expect(screen.getAllByText('快速修复').length).toBeGreaterThan(0))
     const seedTa = screen.getByRole('textbox') as HTMLTextAreaElement
     expect(seedTa.value).toBe('我: 做个登录页\n\nAI: 好的,我先看看现有页面结构')
+  })
+
+  it('Task 5: run2.state===null launcher path renders WorkflowOverlay (.wfo), not the old RunLauncher', async () => {
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('做个登录页')).toBeInTheDocument())
+
+    const ta = document.querySelector('#composerInput') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: '/快速' } })
+    fireEvent.mouseDown(screen.getByText('快速修复', { selector: '.slash-title' }))
+
+    await waitFor(() => expect(launchInfoMock).toHaveBeenCalled())
+    await waitFor(() => expect(document.querySelector('.wfo')).toBeInTheDocument())
+    expect(document.querySelector('.run-launcher')).toBeNull()
   })
 })

@@ -17,7 +17,7 @@ export interface SlashCommand {
 export const SLASH_COMMANDS: SlashCommand[] = [
   // 通用 —— 任何 provider 都可用。工作流是核心的「显式调用」入口:选中直接打开 run2 启动器,不再往
   // 聊天框塞触发短语(聊天是纯聊天,不会从文字里自动识别并启动工作流)。
-  { cmd: '/工作流', title: '发起工作流', desc: '按多阶段工作流执行(先出方案,批准后运行)', providers: 'all',
+  { cmd: '/开启工作流', title: '开启工作流', desc: '按多阶段工作流执行(先出方案,批准后运行)', providers: 'all',
     template: '', openLauncher: true },
   { cmd: '/架构', title: '梳理仓库架构', desc: '目录结构、核心模块、关键数据流', providers: 'all',
     template: '梳理这个仓库的架构:目录结构、核心模块职责、关键数据流。' },

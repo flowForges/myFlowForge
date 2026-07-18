@@ -40,7 +40,9 @@ import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
 import { RunPanel } from '../components/RunPanel'
-import { RunLauncher } from '../components/RunLauncher'
+import { WorkflowOverlay } from '../components/WorkflowOverlay'
+// NOTE: RunLauncher.tsx stays on disk (WF-A Task 5 replaces its mount point below with
+// WorkflowOverlay; WF-C deletes the file). No longer imported here.
 
 function importedToChat(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
@@ -307,10 +309,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     () => [...dynamicCommands, ...workflowMenuCommands(wsInfo?.workflows ?? [])],
     [dynamicCommands, wsInfo?.workflows],
   )
-  // Picking a workflow from "/" opens the run2 launcher (below) preselecting this workflow, instead of
-  // seeding a chat trigger phrase (dead since P4-B made chat never auto-trigger workflows). Called with
-  // `undefined` when the built-in /工作流 command is picked — opens the launcher with no preselection
-  // (RunLauncher.initialWorkflowId is optional and defaults to the first workflow).
+  // Picking a workflow from "/" opens the run2 launcher (below) instead of seeding a chat trigger
+  // phrase (dead since P4-B made chat never auto-trigger workflows). Called with `undefined` when the
+  // built-in /开启工作流 command is picked. `pendingLaunch` is tracked but WorkflowOverlay (Task 5,
+  // WF-A) doesn't yet take a preselected workflowId — it always defaults to the workspace's first
+  // workflow; onStarted still clears pendingLaunch below.
   const onPickWorkflow = useCallback((workflowId?: string) => {
     setPendingLaunch({ workflowId })
     setRunView(true)
@@ -852,10 +855,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             <button className="txt-btn run2-back" onClick={() => setRunView(false)}>返回对话</button>
             {run2.state === null
               ? (wsPath && (
-                  <RunLauncher
+                  <WorkflowOverlay
                     workspacePath={wsPath}
-                    initialWorkflowId={pendingLaunch?.workflowId}
                     initialSeed={buildConversationSeed(chat.messages)}
+                    onClose={() => setRunView(false)}
                     onStarted={() => setPendingLaunch(null)}
                   />
                 ))

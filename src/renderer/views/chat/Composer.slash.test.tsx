@@ -23,10 +23,10 @@ function renderComposer(agentId = 'claude') {
 }
 
 describe('Composer slash commands', () => {
-  it('typing "/" opens the menu including the universal 发起工作流', () => {
+  it('typing "/" opens the menu including the universal 开启工作流', () => {
     const { ta } = renderComposer('claude')
     fireEvent.change(ta, { target: { value: '/' } })
-    expect(screen.getByText('发起工作流')).toBeTruthy()
+    expect(screen.getByText('开启工作流')).toBeTruthy()
   })
 
   it('menu is provider-specific: claude sees 深度思考, not codex 先出计划', () => {
@@ -47,7 +47,7 @@ describe('Composer slash commands', () => {
     const { ta } = renderComposer('claude')
     fireEvent.change(ta, { target: { value: '/架' } })
     expect(screen.getByText('梳理仓库架构')).toBeTruthy()
-    expect(screen.queryByText('发起工作流')).toBeNull()
+    expect(screen.queryByText('开启工作流')).toBeNull()
   })
 
   it('picking a command fills the textarea with its template and closes the menu', () => {
@@ -72,17 +72,17 @@ describe('Composer slash commands', () => {
     )
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '/' } })
     expect(screen.getByText('analyst')).toBeTruthy()          // dynamic command
-    expect(screen.getByText('发起工作流')).toBeTruthy()        // Forge command still present
+    expect(screen.getByText('开启工作流')).toBeTruthy()        // Forge command still present
     expect(screen.getByText('本机')).toBeTruthy()              // source tag
   })
 
   it('a space after the token closes the menu (writing the argument)', () => {
     const { ta } = renderComposer('claude')
-    fireEvent.change(ta, { target: { value: '/工作流 做个登录页' } })
-    expect(screen.queryByText('发起工作流')).toBeNull()
+    fireEvent.change(ta, { target: { value: '/开启工作流 做个登录页' } })
+    expect(screen.queryByText('开启工作流')).toBeNull()
   })
 
-  it('picking the built-in 发起工作流 opens the launcher (onPickWorkflow(undefined)) instead of seeding chat text', () => {
+  it('picking the built-in 开启工作流 opens the launcher (onPickWorkflow(undefined)) instead of seeding chat text', () => {
     const onSend = vi.fn()
     const onPickWorkflow = vi.fn()
     render(
@@ -96,11 +96,11 @@ describe('Composer slash commands', () => {
       />,
     )
     const ta = screen.getByRole('textbox') as HTMLTextAreaElement
-    fireEvent.change(ta, { target: { value: '/工作流' } })
-    fireEvent.mouseDown(screen.getByText('发起工作流'))
+    fireEvent.change(ta, { target: { value: '/开启工作流' } })
+    fireEvent.mouseDown(screen.getByText('开启工作流'))
     expect(onPickWorkflow).toHaveBeenCalledWith(undefined)
     expect(ta.value).toBe('')
-    expect(screen.queryByText('发起工作流')).toBeNull()   // menu closed after pick
+    expect(screen.queryByText('开启工作流')).toBeNull()   // menu closed after pick
   })
 
   it('picking a workspace-workflow entry calls onPickWorkflow (not the empty template) and closes the menu', () => {
