@@ -54,4 +54,23 @@ describe('registerRun2', () => {
       expect(typeof state.status).toBe('string')
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
+
+  it('run2:get-state falls back to the retained last-run state once a run has finished', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+    try {
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+      const start = handlers.get(CH.run2Start)!
+      const getState = handlers.get(CH.run2GetState)!
+      await start({}, { workspacePath: ws, runId: 'r1', stages: [{ key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false }], projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+      // let the run settle to a terminal status and drop out of the manager's active-controllers map
+      await new Promise((r) => setTimeout(r, 50))
+      expect(manager.isActive(ws)).toBe(false)
+      // the handler still returns the finished run's terminal state instead of null
+      const state = await getState({}, { workspacePath: ws })
+      expect(state).not.toBeNull()
+      expect(state.status).toBe('ok')
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
 })

@@ -91,4 +91,32 @@ describe('Run2Manager', () => {
     await new Promise((r) => setTimeout(r, 50))
     expect(updates.some((u) => u.ws === ws && u.status === 'failed')).toBe(true)
   })
+
+  it('retains the finished run\'s terminal state after completion, clearing it when a new run starts', async () => {
+    // an ungated stage completes on its own — no gate to resolve — so the run reaches a terminal status
+    // ('ok') without any manual intervention.
+    const okStages: StageSpec[] = [{ key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false }]
+    const mgr = new Run2Manager({
+      providers: { x: gatedProvider() }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: { event: () => {}, update: () => {} },
+    })
+    const plan = planFromStages('run-done', okStages)
+    mgr.start({ workspacePath: ws, runId: 'run-done', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+    // before the run settles, there is no retained last state yet (still active)
+    expect(mgr.lastStateFor(ws)).toBeNull()
+    await new Promise((r) => setTimeout(r, 50))
+    // lock freed...
+    expect(mgr.isActive(ws)).toBe(false)
+    // ...but the finished run's terminal state is still retrievable
+    const last = mgr.lastStateFor(ws)
+    expect(last).not.toBeNull()
+    expect(last!.status).toBe('ok')
+
+    // starting a new run in the same workspace supersedes (clears) the old retained state
+    const plan2 = planFromStages('run-done-2', okStages)
+    const init2 = mgr.start({ workspacePath: ws, runId: 'run-done-2', plan: plan2, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+    expect(init2.status).toBe('running')
+    expect(mgr.lastStateFor(ws)).toBeNull()
+  })
 })

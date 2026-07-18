@@ -22,10 +22,16 @@ export interface Run2ManagerDeps {
 
 export class Run2Manager {
   private controllers = new Map<string, RunController>()
+  // Additive: retains the terminal state of the most recently *completed* run per workspace, so the
+  // renderer's run2:get-state can still show a finished run's outcomes/status after the controller is
+  // removed from `controllers` (which frees the serial lock but would otherwise lose the final state).
+  private lastState = new Map<string, RunControllerState>()
   constructor(private deps: Run2ManagerDeps) {}
 
   start(opts: Run2StartOpts): RunControllerState {
     if (this.controllers.has(opts.workspacePath)) throw new Error('工作区已有工作流在执行')
+    // A new run supersedes whatever finished-run state was retained from a prior run in this workspace.
+    this.lastState.delete(opts.workspacePath)
     const store = this.deps.makeStore(opts.workspacePath, opts.runId)
     const controller = new RunController(opts.plan, {
       providers: this.deps.providers, store, env: this.deps.env,
@@ -36,6 +42,10 @@ export class Run2Manager {
     this.controllers.set(opts.workspacePath, controller)
     // .catch prevents an unhandled rejection (e.g. RunController.start()'s zero-work-orders throw)
     // from crashing the Electron main process; .finally frees the per-workspace serial lock.
+    // `caughtFailedState` lets .finally know whether .catch already produced the authoritative terminal
+    // snapshot — controller.state itself is never mutated to 'failed' by .catch (only the emitted copy
+    // is), so .finally must not blindly overwrite it with the (still 'running') live controller.state.
+    let caughtFailedState: RunControllerState | null = null
     void controller
       .start()
       .catch((err) => {
@@ -43,13 +53,22 @@ export class Run2Manager {
         this.deps.onError?.(opts.workspacePath, e)
         // ensure the renderer receives a terminal transition even when start() throws before its own
         // terminal emit (e.g. the zero-work-orders guard) — otherwise it's stuck on 'running' forever.
-        this.deps.emit.update(opts.workspacePath, { ...controller.state, status: 'failed' })
+        caughtFailedState = { ...controller.state, status: 'failed' }
+        this.deps.emit.update(opts.workspacePath, caughtFailedState)
       })
-      .finally(() => { this.controllers.delete(opts.workspacePath) })
+      .finally(() => {
+        // Snapshot the final state before dropping the controller from the active map, so a finished
+        // (ok/failed) run is still retrievable via lastStateFor() after the serial lock is freed.
+        this.lastState.set(opts.workspacePath, caughtFailedState ?? controller.state)
+        this.controllers.delete(opts.workspacePath)
+      })
     return controller.state
   }
   get(wsPath: string): RunController | undefined { return this.controllers.get(wsPath) }
   isActive(wsPath: string): boolean { return this.controllers.has(wsPath) }
+  // Additive: the retained terminal state of the most recently completed run in this workspace (null if
+  // never run, or if a new run has since started and superseded it). See `lastState` field comment.
+  lastStateFor(wsPath: string): RunControllerState | null { return this.lastState.get(wsPath) ?? null }
   resolveGate(wsPath: string, eventId: string, d: GateDecision): boolean { return this.controllers.get(wsPath)?.resolveGate(eventId, d) ?? false }
   resolveLane(wsPath: string, eventId: string, d: LaneDecision): boolean { return this.controllers.get(wsPath)?.resolveLane(eventId, d) ?? false }
   addFeedback(wsPath: string, text: string): void { this.controllers.get(wsPath)?.addFeedback(text) }

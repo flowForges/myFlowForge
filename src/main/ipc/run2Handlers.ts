@@ -32,7 +32,10 @@ export function registerRun2(deps: {
   onInvoke(CH.run2Abort, (_e, p: { workspacePath: string }) => manager.abort(p.workspacePath))
   // P3-B recovery: lets a renderer that mounts (or reloads) mid-run fetch current state instead of only
   // ever receiving it via the run2Update broadcast. Additive — no existing behavior changes.
-  onInvoke(CH.run2GetState, (_e, p: { workspacePath: string }) => manager.get(p.workspacePath)?.state ?? null)
+  // Falls back to the manager's retained last-run state so a *finished* run's outcomes/status are still
+  // visible after the controller is removed from the active map (otherwise the panel would silently
+  // revert to the launcher once a run completes) — see Run2Manager.lastStateFor.
+  onInvoke(CH.run2GetState, (_e, p: { workspacePath: string }) => manager.get(p.workspacePath)?.state ?? manager.lastStateFor(p.workspacePath) ?? null)
 
   // P4-A launcher: list a workspace's named workflows + projects (server-resolved, so the renderer never
   // has to know ws.workflows[].stages vs the legacy empty ws.stages).
