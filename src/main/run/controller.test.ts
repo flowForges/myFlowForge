@@ -437,6 +437,115 @@ describe('RunController', () => {
     expect(final.machine.stages.map((s) => s.status)).not.toEqual(['done', 'done'])
   })
 
+  it('requestJumpBack(target) at a stage boundary rolls the run back; downstream re-runs from target', async () => {
+    const store = new RunStore(ws, 'r1')
+    const calls: string[] = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        calls.push(task.stageKey)
+        const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const plan3: RunPlan = { runId: 'r1', stages: [
+      { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false },
+      { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'root', gate: false },
+      { key: 'review', name: '评审', provider: 'x', model: 'm', scope: 'root', gate: false },
+    ] }
+    const c = new RunController(plan3, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let jumped = false
+    c.onUpdate((s) => {
+      // Fires right after develop's advance, before review's work orders are built — the boundary
+      // right before the third stage, matching the brief's "boundary before stage 3" scenario.
+      if (!jumped && s.outcomes['develop'] && !s.outcomes['review']) { jumped = true; c.requestJumpBack('design') }
+    })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    // design and develop each ran twice: once before the jump, once again after rolling back to design.
+    expect(calls).toEqual(['design', 'develop', 'design', 'develop', 'review'])
+    expect(final.machine.stages.map((s) => s.status)).toEqual(['done', 'done', 'done'])
+    expect(final.machine.stages[0].round).toBe(1) // design re-ran once via jumpBack
+    expect(final.machine.stages[1].round).toBe(0) // develop re-ran via stale re-advance, not a redo round bump
+  })
+
+  it('requestJumpBack ignores an invalid target (unknown key, or not strictly before current) — run proceeds normally', async () => {
+    const store = new RunStore(ws, 'r1')
+    const calls: string[] = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        calls.push(task.stageKey)
+        const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const plan3: RunPlan = { runId: 'r1', stages: [
+      { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false },
+      { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'root', gate: false },
+      { key: 'review', name: '评审', provider: 'x', model: 'm', scope: 'root', gate: false },
+    ] }
+    const c = new RunController(plan3, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let tried = false
+    c.onUpdate((s) => {
+      if (!tried && s.outcomes['develop'] && !s.outcomes['review']) {
+        tried = true
+        c.requestJumpBack('nonexistent') // unknown key
+        c.requestJumpBack('review') // current stage itself — not strictly before currentIndex
+      }
+    })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    expect(calls).toEqual(['design', 'develop', 'review']) // no rollback, single pass through
+    expect(final.machine.stages.map((s) => s.status)).toEqual(['done', 'done', 'done'])
+  })
+
+  it('requestJumpBack requested while paused is only applied once the loop reaches the next boundary (after resume)', async () => {
+    const store = new RunStore(ws, 'r1')
+    const calls: string[] = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        calls.push(task.stageKey)
+        const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const plan3: RunPlan = { runId: 'r1', stages: [
+      { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false },
+      { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'root', gate: false },
+      { key: 'review', name: '评审', provider: 'x', model: 'm', scope: 'root', gate: false },
+    ] }
+    const c = new RunController(plan3, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let paused = false
+    c.onUpdate((s) => {
+      // Pause + request the jump at the develop→review boundary (status still 'running', matching
+      // pause()'s own guard) — the jump must sit dormant until resume() lets the loop reach a
+      // boundary, not fire immediately just because status stayed 'running' while paused.
+      if (!paused && s.outcomes['develop'] && !s.outcomes['review']) {
+        paused = true
+        c.pause()
+        c.requestJumpBack('design')
+      }
+    })
+    const startPromise = c.start()
+    await vi.waitFor(() => expect(c.state.paused).toBe(true))
+    expect(calls).toEqual(['design', 'develop']) // review not yet invoked — held at the boundary
+    c.resume()
+    const final = await Promise.race([
+      startPromise,
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: start() did not settle after resume()')), 2000)),
+    ])
+    expect(final.status).toBe('ok')
+    // The jump requested while paused is only applied once the loop reaches the boundary after
+    // resume() — design and develop each re-run once rolled back.
+    expect(calls).toEqual(['design', 'develop', 'design', 'develop', 'review'])
+    expect(final.machine.stages[0].round).toBe(1)
+  })
+
   it('stageTimings: multi-stage run — each stage gets its own start/end timing', async () => {
     const store = new RunStore(ws, 'r1')
     let t = 5000
