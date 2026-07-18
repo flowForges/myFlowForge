@@ -3,6 +3,7 @@ import type { Run2Api } from '../state/useRun2'
 import type { StageStatus } from '../../main/run/machine'
 import type { WorkOrderOutcome } from '../../main/run/workOrder'
 import type { LiveLane } from '../../main/run/controller'
+import type { GateEvent } from '../../main/run/events'
 import { Run2EventCard } from './Run2EventCard'
 import { Markdown } from '../views/chat/markdown'
 import { Run2FileViewer } from './Run2FileViewer'
@@ -151,7 +152,7 @@ function OutcomeCard({ outcome, onOpenFile }: { outcome: WorkOrderOutcome; onOpe
   )
 }
 
-function StageOutput({ api, selectedStageKey, onOpenFile }: { api: Run2Api; selectedStageKey: string | undefined; onOpenFile: (path: string, cwd: string | undefined) => void }) {
+function StageOutput({ api, selectedStageKey, gateStageKey, onOpenFile }: { api: Run2Api; selectedStageKey: string | undefined; gateStageKey: string | undefined; onOpenFile: (path: string, cwd: string | undefined) => void }) {
   const { outcomes, liveLanes } = api.state!
   const stageOutcomes = selectedStageKey ? outcomes[selectedStageKey] : undefined
   const liveEntries = selectedStageKey
@@ -159,8 +160,16 @@ function StageOutput({ api, selectedStageKey, onOpenFile }: { api: Run2Api; sele
     : []
   const hasOutcomes = !!stageOutcomes && stageOutcomes.length > 0
   const hasLive = liveEntries.length > 0
+  // Shown when the currently-displayed stage's output is on screen BECAUSE a gate is pending on
+  // it (i.e. this is the gate-focus default, not just an incidental match from a user chip
+  // click on the same key — though visually the two are indistinguishable and that's fine: the
+  // hint is correct either way since the gate really is pending on this stage).
+  const showGateHint = !!gateStageKey && selectedStageKey === gateStageKey
   return (
     <div className="run2-stage-output">
+      {showGateHint && (
+        <div className="run2-gate-review-hint">⬇ 这是待你审核的产出，看完在收件箱决定 通过/打回/回退</div>
+      )}
       <div className="run2-stage-output-title">阶段产出{selectedStageKey ? `：${selectedStageKey}` : ''}</div>
       {hasOutcomes && stageOutcomes!.map((o) => <OutcomeCard key={o.order.id} outcome={o} onOpenFile={onOpenFile} />)}
       {!hasOutcomes && hasLive && liveEntries.map(([id, l]) => <LiveLaneRow key={id} id={id} lane={l} />)}
@@ -240,9 +249,13 @@ export function RunPanel({ api }: RunPanelProps) {
   if (!api.state) {
     return <div className="run2-panel run2-empty">未在运行工作流</div>
   }
-  const { machine } = api.state
+  const { machine, inbox } = api.state
   const currentKey = machine.stages[machine.currentIndex]?.key
-  const effectiveKey = selectedStageKey ?? currentKey
+  // A pending gate's stage takes priority over "follow current stage" (but not over an explicit
+  // user chip click) — the user should land on the stage they need to review, not wherever the
+  // machine happens to be pointed.
+  const gateStageKey = (inbox.find((e) => e.kind === 'gate') as GateEvent | undefined)?.stageKey
+  const effectiveKey = selectedStageKey ?? gateStageKey ?? currentKey
   return (
     <div className="run2-panel">
       <RunHead api={api} selectedStageKey={effectiveKey} onSelectStage={setSelectedStageKey} />
@@ -250,6 +263,7 @@ export function RunPanel({ api }: RunPanelProps) {
       <StageOutput
         api={api}
         selectedStageKey={effectiveKey}
+        gateStageKey={gateStageKey}
         onOpenFile={(path, cwd) => setViewingFile({ path, cwd })}
       />
       <EventInbox api={api} />
