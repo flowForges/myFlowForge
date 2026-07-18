@@ -7,6 +7,7 @@ export interface StagePlan {
   model: string
   scope: 'root' | 'per-project'
   gate: boolean
+  prompt?: string
 }
 export interface StageState { key: string; status: StageStatus; round: number }
 export interface RunPlan { runId: string; stages: StagePlan[] }

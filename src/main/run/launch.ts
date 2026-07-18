@@ -68,6 +68,7 @@ export function resolveStartPlan(
     model: s.model,
     scope: s.scope,
     gate: s.gate,
+    prompt: s.prompt,
   }))
   const plan = planFromStages(opts.runId, stageSpecs)
 
