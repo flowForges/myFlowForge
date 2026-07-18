@@ -184,4 +184,85 @@ describe('RunPanel', () => {
     expect(screen.getByText('design.md')).toBeInTheDocument()
     expect(screen.getByText(/是否加缓存/)).toBeInTheDocument()
   })
+
+  it('stage output follows the current stage on the real mount-before-populate path (state null → populated), no chip click needed', () => {
+    // Real mount order: RunPanel mounts while api.state === null (before the run starts),
+    // then a later onUpdate populates api.state. The effective selection must follow the
+    // current stage without any user interaction.
+    const nullApi = makeApi(null)
+    const { rerender } = render(<RunPanel api={nullApi} />)
+    expect(screen.getByText('未在运行工作流')).toBeInTheDocument()
+
+    const populated = makeState({
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [
+          { key: 'design', status: 'running', round: 0 },
+          { key: 'dev', status: 'pending', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 0,
+      },
+      outcomes: {
+        design: [
+          {
+            order: { id: 'design:root', stageKey: 'design', name: 'design-lane', project: undefined, provider: 'claude', model: 'sonnet', cwd: '/tmp', prompt: '' },
+            status: 'ok',
+            attempts: 1,
+            result: { summary: '技术方案：用 X 架构', filesChanged: ['design.md'], blockers: [], doubts: [], artifacts: [] },
+          },
+        ],
+      },
+    })
+    rerender(<RunPanel api={makeApi(populated)} />)
+
+    // No chip click — design is the current stage, so its output must be shown.
+    expect(screen.getByText(/技术方案：用 X 架构/)).toBeInTheDocument()
+    expect(screen.getByText('design.md')).toBeInTheDocument()
+  })
+
+  it('stage output renders result.blockers for a failed work order with no top-level error', () => {
+    const state = makeState({
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [{ key: 'dev', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      outcomes: {
+        dev: [
+          {
+            order: { id: 'w1', stageKey: 'dev', name: 'dev-lane', project: 'app', provider: 'claude', model: 'sonnet', cwd: '/tmp/app', prompt: '' },
+            status: 'failed',
+            attempts: 1,
+            result: { summary: '尝试实现', filesChanged: [], blockers: ['缺少数据库凭据'], doubts: [], artifacts: [] },
+          },
+        ],
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    expect(screen.getByText(/缺少数据库凭据/)).toBeInTheDocument()
+  })
+
+  it('stage chip is keyboard-activatable (Enter selects the stage)', () => {
+    const state = makeState({
+      // currentIndex defaults to 1 ('dev'); 'design' has produced output.
+      outcomes: {
+        design: [
+          {
+            order: { id: 'design:root', stageKey: 'design', name: 'design-lane', project: undefined, provider: 'claude', model: 'sonnet', cwd: '/tmp', prompt: '' },
+            status: 'ok',
+            attempts: 1,
+            result: { summary: '技术方案：用 X 架构', filesChanged: [], blockers: [], doubts: [], artifacts: [] },
+          },
+        ],
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    // Current stage is 'dev' (no design output shown yet). Keyboard-select 'design' → its output shows.
+    expect(screen.queryByText(/技术方案：用 X 架构/)).not.toBeInTheDocument()
+    fireEvent.keyDown(screen.getByText('design'), { key: 'Enter' })
+    expect(screen.getByText(/技术方案：用 X 架构/)).toBeInTheDocument()
+  })
 })

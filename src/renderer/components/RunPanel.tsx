@@ -30,6 +30,7 @@ function RunHead({ api, selectedStageKey, onSelectStage }: { api: Run2Api; selec
             tabIndex={0}
             className={`run2-stage-chip${i === machine.currentIndex ? ' current' : ''}${s.key === selectedStageKey ? ' selected' : ''} st-${s.status}`}
             onClick={() => onSelectStage(s.key)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectStage(s.key) } }}
           >
             <span className="run2-stage-glyph">{STAGE_GLYPH[s.status] ?? '·'}</span>
             <span className="run2-stage-key">{s.key}</span>
@@ -114,6 +115,14 @@ function OutcomeCard({ outcome }: { outcome: WorkOrderOutcome }) {
             <div className="run2-output-tests">
               测试：{result.testsRun.passed ? '通过' : '未通过'}
               {result.testsRun.detail ? `（${result.testsRun.detail}）` : ''}
+            </div>
+          )}
+          {result.blockers.length > 0 && (
+            <div className="run2-output-blockers">
+              <div className="run2-output-subtitle">阻塞</div>
+              <ul>
+                {result.blockers.map((b, i) => <li key={i}>{b}</li>)}
+              </ul>
             </div>
           )}
           {result.doubts.length > 0 && (
@@ -208,20 +217,23 @@ function FeedbackDraftPanel({ api }: { api: Run2Api }) {
 }
 
 export function RunPanel({ api }: RunPanelProps) {
-  // Hook must run unconditionally (before the `!api.state` early return) to keep hook order
-  // stable across renders. Default follows the current stage; a manual chip click overrides it
-  // for the remainder of the run (no auto-follow — see task brief).
-  const [selectedStageKey, setSelectedStageKey] = useState<string | undefined>(
-    () => api.state?.machine.stages[api.state.machine.currentIndex]?.key,
-  )
+  // `selectedStageKey` is a pure user override (undefined = "follow current stage"). RunPanel
+  // mounts while `api.state === null` (before a run starts), so we MUST NOT snapshot the current
+  // key into state at init — that would freeze it to `undefined` forever. Instead we derive the
+  // effective selection at render time (below), which follows the current stage until the user
+  // explicitly clicks/keys a chip. Hook runs unconditionally to keep hook order stable.
+  const [selectedStageKey, setSelectedStageKey] = useState<string | undefined>(undefined)
   if (!api.state) {
     return <div className="run2-panel run2-empty">未在运行工作流</div>
   }
+  const { machine } = api.state
+  const currentKey = machine.stages[machine.currentIndex]?.key
+  const effectiveKey = selectedStageKey ?? currentKey
   return (
     <div className="run2-panel">
-      <RunHead api={api} selectedStageKey={selectedStageKey} onSelectStage={setSelectedStageKey} />
+      <RunHead api={api} selectedStageKey={effectiveKey} onSelectStage={setSelectedStageKey} />
       <CurrentStageLane api={api} />
-      <StageOutput api={api} selectedStageKey={selectedStageKey} />
+      <StageOutput api={api} selectedStageKey={effectiveKey} />
       <EventInbox api={api} />
       <FeedbackDraftPanel api={api} />
     </div>
