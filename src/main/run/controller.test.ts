@@ -328,6 +328,73 @@ describe('RunController', () => {
     expect(timing.endedAt!).toBeGreaterThanOrEqual(timing.startedAt)
   })
 
+  it('pause() at the design→develop stage boundary holds; develop is not invoked until resume()', async () => {
+    const store = new RunStore(ws, 'r1')
+    const calls: string[] = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        calls.push(task.stageKey)
+        const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    // Both stages ungated: pause()'s guard (`status !== 'running'` → no-op) means a GATED
+    // stage's boundary is already status='awaiting' by the time a gate decision resolves — so
+    // to observe pause() succeeding "right at the boundary" (status still 'running') this plan
+    // uses two ungated stages, advancing machine straight through without a gate wait.
+    const plan2: RunPlan = { runId: 'r1', stages: [
+      { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false },
+      { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+    ] }
+    const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let paused = false
+    c.onUpdate((s) => {
+      // Fires synchronously right after design's machine-advance emitUpdate(), before develop's
+      // work orders are built — i.e. exactly at the stage boundary, while status is still
+      // 'running' (pause() no-ops once status flips to 'awaiting'/'ok'/'failed').
+      if (!paused && s.outcomes['design'] && !s.outcomes['develop']) { paused = true; c.pause() }
+    })
+    const startPromise = c.start()
+
+    // Promise.all(design's lanes) still needs at least one microtask turn to settle even though
+    // the fake provider resolves "instantly" — poll rather than assume synchronous completion.
+    await vi.waitFor(() => expect(c.state.paused).toBe(true))
+    // develop must NOT have been invoked yet — the run is held at the boundary.
+    expect(calls).toEqual(['design'])
+    expect(c.state.status).not.toBe('ok')
+
+    c.resume()
+    const final = await Promise.race([
+      startPromise,
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: start() did not settle after resume()')), 2000)),
+    ])
+    expect(final.status).toBe('ok')
+    expect(final.paused).toBe(false)
+    expect(calls.filter((k) => k === 'develop')).toHaveLength(2) // both projects' develop lanes ran after resume
+    expect(final.machine.stages.map((s) => s.status)).toEqual(['done', 'done'])
+  })
+
+  it('abort() releases a paused run\'s pause gate — start() settles instead of hanging', async () => {
+    const store = new RunStore(ws, 'r1')
+    const c = new RunController(plan, { providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+
+    // Pause before the run even starts its first stage — the pause gate sits at the very top
+    // of the loop (before any other await), so calling start() synchronously runs up to and
+    // suspends on the pause promise before control returns here.
+    c.pause()
+    expect(c.state.paused).toBe(true)
+    const startPromise = c.start()
+
+    c.abort() // MUST release the pause gate — otherwise start() awaits pauseResolve forever.
+    const final = await Promise.race([
+      startPromise,
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: abort() did not release the pause gate')), 2000)),
+    ])
+    expect(final.status).toBe('failed')
+  })
+
   it('stageTimings: multi-stage run — each stage gets its own start/end timing', async () => {
     const store = new RunStore(ws, 'r1')
     let t = 5000

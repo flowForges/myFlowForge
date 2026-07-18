@@ -41,6 +41,7 @@ export interface RunControllerState {
   pendingDirective: Record<string, string>
   liveLanes: Record<string, LiveLane>
   stageTimings: Record<string, { startedAt: number; endedAt?: number }>
+  paused: boolean
 }
 
 export class RunController {
@@ -53,6 +54,10 @@ export class RunController {
   private liveLanes: Record<string, LiveLane> = {}
   private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
   private aborted = false
+  private paused = false
+  // Set only while start()'s loop is actually parked at the pause gate (see start()); abort()
+  // must resolve it to release a paused run, or start() would await it forever.
+  private pauseResolve: (() => void) | null = null
   private laneR = new ResolverRegistry<LaneDecision>()
   private gateR = new ResolverRegistry<GateDecision>()
   private eventSubs: Array<(e: RunEvent) => void> = []
@@ -74,7 +79,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings } }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -107,6 +112,14 @@ export class RunController {
       // values never drive spurious retries or gate advances.
       this.laneR.settleAll({ type: 'abort' })
       this.gateR.settleAll({ type: 'advance' })
+      // Same pause-gate release as abort() (see its comment): in practice a live lane event
+      // can't coexist with the loop being parked at the pause gate (no in-flight lane survives
+      // to a stage boundary), so this is defense-in-depth rather than a reachable-today path —
+      // but duplicating the settleAll fan-out without it would be a latent hang waiting for a
+      // future change to that invariant.
+      const r = this.pauseResolve
+      this.pauseResolve = null
+      r?.()
     }
     return ok
   }
@@ -122,7 +135,33 @@ export class RunController {
     this.aborted = true
     this.laneR.settleAll({ type: 'abort' })
     this.gateR.settleAll({ type: 'advance' })
+    // Release the pause gate too: if the run was paused (parked in start()'s
+    // `while (this.paused && !this.aborted) await ...` at a stage boundary), the settleAll calls
+    // above don't touch it — nothing else will ever resolve pauseResolve. Without this, aborting
+    // a paused run hangs start() forever. The loop re-checks `!this.aborted` after waking up, so
+    // it exits via the `if (this.aborted) break` right after — leaving `paused` true here is
+    // harmless.
+    const r = this.pauseResolve
+    this.pauseResolve = null
+    r?.()
     this.emitUpdate()
+  }
+
+  /** Requests a pause; takes effect at the next stage boundary (in-flight lanes are not interrupted — use abort() for that). No-op once the run has ended or already aborted. */
+  pause(): void {
+    if (this.aborted || this.status !== 'running') return
+    this.paused = true
+    this.emitUpdate()
+  }
+
+  /** Clears a pending pause and wakes the loop if it's currently parked at the pause gate. */
+  resume(): void {
+    if (!this.paused) return
+    this.paused = false
+    const r = this.pauseResolve
+    this.pauseResolve = null
+    this.emitUpdate()
+    r?.()
   }
 
   private workspacePath(): string { return this.deps.store.runDir.replace(/\/\.forge\/runs\/[^/]+$/, '') }
@@ -202,6 +241,16 @@ export class RunController {
 
   async start(): Promise<RunControllerState> {
     while (!this.aborted) {
+      // Pause gate: sits at the very top of the loop, before the next stage is read/started, so
+      // an in-flight stage's lanes always finish uninterrupted — pause only stops the run from
+      // ADVANCING to the next stage boundary. `while` (not `if`) guards against a spurious wakeup
+      // leaving the loop still paused; `aborted` is re-checked after the await because abort()
+      // resolves this same promise to release the gate (see abort()) and must win over a stale
+      // `paused` flag rather than let the loop try to start another stage.
+      while (this.paused && !this.aborted) {
+        await new Promise<void>((res) => { this.pauseResolve = res })
+      }
+      if (this.aborted) break
       const cur = currentStage(this.machine)
       if (!cur || cur.status === 'done') break
       this.machine = markRunning(this.machine); this.status = 'running'; this.emitUpdate()
