@@ -33,7 +33,10 @@ function LaneLog({ lines }: { lines: RunLogLine[] }) {
       {lines.map((l, i) => {
         const kind = l.line.kind ?? 'output'
         return (
-          <div key={i} className={`run2-lane-log-line l-${kind}`}>
+          // Stable-ish key: ts + index. The buffer is append-and-evict (oldest dropped at the
+          // 40-cap), so a bare index churns every row on eviction — pairing it with the line's
+          // timestamp keeps keys stable across evictions well enough at this size.
+          <div key={`${l.line.ts}-${i}`} className={`run2-lane-log-line l-${kind}`}>
             <span className="run2-lane-log-kind">{LOG_KIND_LABEL[kind]}</span>
             <span className="run2-lane-log-text">{l.line.text}</span>
           </div>
@@ -69,9 +72,12 @@ function RunHead({ api, selectedStageKey, onSelectStage }: { api: Run2Api; selec
         {machine.stages.map((s, i) => {
           const model = machine.plan.stages.find((p) => p.key === s.key)?.model ?? ''
           const timing = stageTimings?.[s.key]
+          // Only surface a live "运行中" label while the OVERALL run is actually running. On
+          // abort/failure the controller breaks before stamping `endedAt` and leaves the stage
+          // status at 'running', which would otherwise render "运行中" forever on a dead run.
           const dur = timing?.endedAt != null
             ? fmtDuration(timing.endedAt - timing.startedAt)
-            : (s.status === 'running' ? '运行中' : '')
+            : (s.status === 'running' && status === 'running' ? '运行中' : '')
           return (
             <span key={s.key} className="run2-rail-item">
               {i > 0 && <span className="run2-rail-link" aria-hidden="true">→</span>}

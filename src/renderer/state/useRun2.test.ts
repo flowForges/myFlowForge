@@ -107,4 +107,53 @@ describe('useRun2', () => {
     expect(result.current.laneLogs['dev:app'][0].line.text).toBe('行5')
     expect(result.current.laneLogs['dev:app'][39].line.text).toBe('行44')
   })
+
+  it('clears laneLogs when a NEW run (different runId) starts in the same workspace', async () => {
+    const { fire } = installForge()
+    const { result } = renderHook(() => useRun2('/ws'))
+    // Initial getState carries runId 'r'.
+    await waitFor(() => expect(result.current.state?.machine.plan.runId).toBe('r'))
+
+    act(() => fire.log({
+      workspacePath: '/ws',
+      log: { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '上一次运行的行', level: 'run', kind: 'think' } },
+    }))
+    await waitFor(() => expect(result.current.laneLogs['design:root']?.length).toBe(1))
+
+    // A brand-new run in the same ws (new runId) must wipe the previous run's buffered lines.
+    act(() => fire.update({
+      workspacePath: '/ws',
+      state: { machine: { plan: { runId: 'r2', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {} } as any,
+    }))
+    await waitFor(() => expect(result.current.state?.machine.plan.runId).toBe('r2'))
+    expect(result.current.laneLogs['design:root']).toBeUndefined()
+
+    // New run's logs buffer fresh.
+    act(() => fire.log({
+      workspacePath: '/ws',
+      log: { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '新运行的行', level: 'run', kind: 'think' } },
+    }))
+    await waitFor(() => expect(result.current.laneLogs['design:root']?.length).toBe(1))
+    expect(result.current.laneLogs['design:root'][0].line.text).toBe('新运行的行')
+  })
+
+  it('does NOT clear laneLogs on a same-run update (same runId)', async () => {
+    const { fire } = installForge()
+    const { result } = renderHook(() => useRun2('/ws'))
+    await waitFor(() => expect(result.current.state?.machine.plan.runId).toBe('r'))
+
+    act(() => fire.log({
+      workspacePath: '/ws',
+      log: { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '当前运行的行', level: 'run', kind: 'think' } },
+    }))
+    await waitFor(() => expect(result.current.laneLogs['design:root']?.length).toBe(1))
+
+    // A same-run status update (still runId 'r') must NOT drop the current run's buffered lines.
+    act(() => fire.update({
+      workspacePath: '/ws',
+      state: { machine: { plan: { runId: 'r', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'awaiting', pendingDirective: {} } as any,
+    }))
+    await waitFor(() => expect(result.current.state?.status).toBe('awaiting'))
+    expect(result.current.laneLogs['design:root']?.length).toBe(1)
+  })
 })

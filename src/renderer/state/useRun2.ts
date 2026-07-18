@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunControllerState, RunLogLine } from '../../main/run/controller'
 import type { GateDecision, LaneDecision } from '../../main/run/decisions'
 
@@ -26,14 +26,31 @@ function getRun2(): any {
 export function useRun2(workspacePath: string | undefined): Run2Api {
   const [state, setState] = useState<RunControllerState | null>(null)
   const [laneLogs, setLaneLogs] = useState<Record<string, RunLogLine[]>>({})
+  // Last run identity we've buffered logs for. A NEW run in the SAME workspace reuses lane ids,
+  // so we must clear stale lines when the runId changes (the workspacePath-keyed reset below only
+  // fires on ws switch). Reset synchronously in onUpdate the moment a new non-null runId lands,
+  // before that run's own log events arrive — so the current run's lines are never dropped.
+  const lastRunIdRef = useRef<string | null>(null)
   const run2 = getRun2()
 
   useEffect(() => {
     if (!run2 || !workspacePath) { setState(null); return }
     let alive = true
-    run2.getState(workspacePath).then((s: RunControllerState | null) => { if (alive) setState(s) })
+    run2.getState(workspacePath).then((s: RunControllerState | null) => {
+      if (!alive) return
+      // Seed the run-identity ref from the initial snapshot so the first onUpdate for this SAME
+      // run doesn't mistake it for a new run and wipe logs already buffered for it.
+      lastRunIdRef.current = s?.machine?.plan?.runId ?? null
+      setState(s)
+    })
     const offUpdate = run2.onUpdate((p: { workspacePath: string; state: RunControllerState }) => {
-      if (p.workspacePath === workspacePath) setState(p.state)
+      if (p.workspacePath !== workspacePath) return
+      const runId = p.state?.machine?.plan?.runId ?? null
+      if (runId && runId !== lastRunIdRef.current) {
+        lastRunIdRef.current = runId
+        setLaneLogs({})
+      }
+      setState(p.state)
     })
     return () => { alive = false; offUpdate?.() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -43,6 +60,7 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
   // workspacePath change so a previous workspace's buffered lines don't bleed into the new one.
   useEffect(() => {
     setLaneLogs({})
+    lastRunIdRef.current = null
     if (!run2 || !workspacePath || !run2.onLog) return
     const offLog = run2.onLog((p: { workspacePath: string; log: RunLogLine }) => {
       if (p.workspacePath !== workspacePath) return

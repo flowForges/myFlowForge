@@ -380,11 +380,36 @@ describe('RunPanel', () => {
       },
       inbox: [],
       outcomes: {},
+      status: 'running', // overall run is live — the running-stage label is only shown then
       stageTimings: { design: { startedAt: 1000 } },
     })
     const api = makeApi(state)
     render(<RunPanel api={api} />)
     expect(screen.getByText('运行中')).toBeInTheDocument()
+  })
+
+  it('flow rail: an aborted/failed run does NOT show "运行中" for a stage left in running status', () => {
+    const state = makeState({
+      machine: {
+        plan: {
+          runId: 'r1',
+          stages: [
+            { key: 'design', name: 'design', provider: 'codex', model: 'gpt-x', scope: 'root', gate: true },
+          ],
+        },
+        // On abort mid-stage the controller breaks before stamping endedAt, leaving the stage
+        // status at 'running' — but the overall run is 'failed'.
+        stages: [{ key: 'design', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      inbox: [],
+      outcomes: {},
+      status: 'failed',
+      stageTimings: { design: { startedAt: 1000 } },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    expect(screen.queryByText('运行中')).not.toBeInTheDocument()
   })
 
   it('renders the current stage live lane\'s buffered log lines (think/tool/output)', () => {
