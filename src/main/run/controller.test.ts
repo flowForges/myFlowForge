@@ -218,6 +218,23 @@ describe('RunController', () => {
     expect(prompts['requirement:root']).toContain('实现支付幂等')
   })
 
+  it('buildPrompt composes stage instructions + task seed + forge-result fence', async () => {
+    const prompts: Record<string, string> = {}
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) { prompts[task.agentId] = task.prompt; const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })(); return { id: task.agentId, cancel() {}, done } },
+    }
+    const store = new RunStore(ws, 'r1')
+    const planWithPrompt: RunPlan = { runId: 'r1', stages: [{ key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false, prompt: '产出技术方案文档' }] }
+    const c = new RunController(planWithPrompt, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, makeId: (p) => `${p}-0`, task: '实现支付幂等' })
+    await c.start()
+    const p = prompts['design:root']
+    expect(p).toContain('产出技术方案文档') // stage instructions (StagePlan.prompt) present
+    expect(p).toContain('forge-result') // structured-result fence instruction present
+    expect(p).toContain('实现支付幂等') // requirement seed still present
+  })
+
   it('liveLanes: shows per-lane live activity mid-run, then clears once the lane settles', async () => {
     const store = new RunStore(ws, 'r1')
     const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
