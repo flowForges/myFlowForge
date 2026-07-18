@@ -27,8 +27,22 @@ describe('commandsForProvider', () => {
     expect(commandsForProvider('claude', '/zzz')).toEqual([])
   })
 
-  it('every command carries a non-empty template', () => {
-    for (const c of SLASH_COMMANDS) expect(c.template.length).toBeGreaterThan(0)
+  it('every command except the launcher-opening 工作流 carries a non-empty template', () => {
+    for (const c of SLASH_COMMANDS) {
+      if (c.cmd === '/工作流') continue
+      expect(c.template.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('the built-in /工作流 command opens the run2 launcher instead of seeding a chat message', () => {
+    const wf = SLASH_COMMANDS.find(c => c.cmd === '/工作流')
+    expect(wf?.openLauncher).toBe(true)
+    expect(wf?.template).toBe('')
+  })
+
+  it('openLauncher survives commandsForProvider into the SlashCommand list', () => {
+    const cmds = commandsForProvider('claude', '/工作流')
+    expect(cmds.find(c => c.cmd === '/工作流')?.openLauncher).toBe(true)
   })
 })
 
@@ -58,6 +72,13 @@ describe('mergeCommands', () => {
     expect(merged.map(c => c.cmd)).toContain('/analyst')
     expect(merged.map(c => c.cmd)).not.toContain('/awesome')
   })
+  it('the built-in /工作流 MenuCommand carries openLauncher through mergeCommands', () => {
+    const merged = mergeCommands('claude', '/工作流', [])
+    const wf = merged.find(c => c.cmd === '/工作流' && c.kind === 'forge')
+    expect(wf?.openLauncher).toBe(true)
+    expect(wf?.template).toBe('')
+  })
+
   it('Forge command wins on a name clash (deduped)', () => {
     const clash: MenuCommand[] = [{ cmd: '/工作流', title: 'x', desc: '', template: '/工作流 ', kind: 'command' }]
     const merged = mergeCommands('claude', '/工作流', clash)

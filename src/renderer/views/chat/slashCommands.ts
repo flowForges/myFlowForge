@@ -8,12 +8,17 @@ export interface SlashCommand {
   desc: string
   providers: 'all' | string[]       // 'all' 或适用的 provider id 列表
   template: string                  // 选中后替换输入框内容;末尾留好让用户续写
+  // Set only on the built-in /工作流 command: picking it opens the run2 launcher (Composer.chooseSlash)
+  // instead of filling `template` into the chat box. Chat is pure chat now — it never auto-triggers a
+  // workflow from a seeded phrase, so seeding one here was dead (and misleading) since P4-B.
+  openLauncher?: boolean
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
-  // 通用 —— 任何 provider 都可用。工作流是核心的「显式调用」入口。
+  // 通用 —— 任何 provider 都可用。工作流是核心的「显式调用」入口:选中直接打开 run2 启动器,不再往
+  // 聊天框塞触发短语(聊天是纯聊天,不会从文字里自动识别并启动工作流)。
   { cmd: '/工作流', title: '发起工作流', desc: '按多阶段工作流执行(先出方案,批准后运行)', providers: 'all',
-    template: '开启工作流,按以下需求分阶段执行,先给出技术方案等我批准:\n' },
+    template: '', openLauncher: true },
   { cmd: '/架构', title: '梳理仓库架构', desc: '目录结构、核心模块、关键数据流', providers: 'all',
     template: '梳理这个仓库的架构:目录结构、核心模块职责、关键数据流。' },
   { cmd: '/定位', title: '定位相关代码', desc: '按功能/关键词定位代码位置', providers: 'all',
@@ -41,6 +46,9 @@ export interface MenuCommand {
   // Set only for a workspace-workflow entry (Task 13): picking it names this workflow instead of
   // filling `template` verbatim — Composer.chooseSlash special-cases this field.
   workflowId?: string
+  // Carried from SlashCommand.openLauncher (built-in /工作流 only): picking it opens the run2 launcher
+  // with no preselected workflow, instead of filling `template` — see Composer.chooseSlash.
+  openLauncher?: boolean
 }
 
 // One "/" entry per workspace workflow (Task 11's WsWorkflow list), so the user can name a workflow
@@ -60,7 +68,7 @@ export function mergeCommands(providerId: string, query: string, dynamic: MenuCo
   const q = query.replace(/^\//, '').trim().toLowerCase()
   const match = (cmd: string, title: string) => !q || cmd.slice(1).toLowerCase().includes(q) || title.toLowerCase().includes(q)
   const forge: MenuCommand[] = commandsForProvider(providerId, query)
-    .map(c => ({ cmd: c.cmd, title: c.title, desc: c.desc, template: c.template, kind: 'forge' as const }))
+    .map(c => ({ cmd: c.cmd, title: c.title, desc: c.desc, template: c.template, kind: 'forge' as const, openLauncher: c.openLauncher }))
   const seen = new Set(forge.map(c => c.cmd))
   // Workspace-workflow entries (identified by workflowId) are NEVER swallowed by a built-in name
   // clash — a workflow literally named e.g. "工作流" (the ensureWorkspaceWorkflows default, or a

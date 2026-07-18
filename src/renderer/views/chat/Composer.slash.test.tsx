@@ -82,6 +82,27 @@ describe('Composer slash commands', () => {
     expect(screen.queryByText('发起工作流')).toBeNull()
   })
 
+  it('picking the built-in 发起工作流 opens the launcher (onPickWorkflow(undefined)) instead of seeding chat text', () => {
+    const onSend = vi.fn()
+    const onPickWorkflow = vi.fn()
+    render(
+      <Composer
+        providers={providers}
+        disabled={false}
+        onSend={onSend}
+        selection={{ agentId: 'claude', modelId: 'opus' }}
+        onSelectionChange={() => {}}
+        onPickWorkflow={onPickWorkflow}
+      />,
+    )
+    const ta = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(ta, { target: { value: '/工作流' } })
+    fireEvent.mouseDown(screen.getByText('发起工作流'))
+    expect(onPickWorkflow).toHaveBeenCalledWith(undefined)
+    expect(ta.value).toBe('')
+    expect(screen.queryByText('发起工作流')).toBeNull()   // menu closed after pick
+  })
+
   it('picking a workspace-workflow entry calls onPickWorkflow (not the empty template) and closes the menu', () => {
     const onSend = vi.fn()
     const onPickWorkflow = vi.fn()
