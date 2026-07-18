@@ -47,6 +47,16 @@ function importedToChat(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
 }
 
+// Task 2: turns the current conversation into a plain-text transcript to pre-seed the run2 launcher's
+// requirement textarea when the user opens it via a workflow "/" command. Pure — caps at the last 12
+// messages (enough context without dragging in a whole long session); empty conversation → ''.
+export function buildConversationSeed(messages: Pick<ChatMessage, 'who' | 'text'>[]): string {
+  return messages
+    .slice(-12)
+    .map((m) => `${m.who === 'ai' ? 'AI' : '我'}: ${m.text}`)
+    .join('\n\n')
+}
+
 const STATE_IDX_MAP: Record<string, string> = {
   wait: '', run: 'run', ok: 'ok', err: 'err',
 }
@@ -148,6 +158,10 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
   // 全局搜索(Cmd+Shift+F):App 每次触发就 +1 → 切到文件树 tab;同一信号继续透传给 FileTreePane 聚焦搜索框。
   useEffect(() => { if (searchSignal) setActiveTab('files') }, [searchSignal])
   const [quickSeed, setQuickSeed] = useState<{ text: string; nonce: number }>()
+  // Task 2: a workflow "/" command opens the run2 launcher (below) instead of seeding a dead trigger
+  // phrase into the composer (vestigial since P4-B made chat never trigger workflows). This just
+  // remembers which workflow was picked so the launcher can preselect it once mounted.
+  const [pendingLaunch, setPendingLaunch] = useState<{ workflowId?: string } | null>(null)
   // Task 15/16 shared mechanism: clicking "修改方向…" on a plan card (Task 15) or a stage-gate card
   // (Task 16, not yet wired) seeds a quote marker into the MAIN composer instead of opening a cramped
   // inline textarea; the next send routes back to that item's resolver as a 'modify' decision rather
@@ -297,14 +311,12 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
     () => [...dynamicCommands, ...workflowMenuCommands(wsInfo?.workflows ?? [])],
     [dynamicCommands, wsInfo?.workflows],
   )
-  // Picking a workflow from "/" has no approach/task yet (the composer was just the "/token"), so —
-  // consistent with the built-in /工作流 command — seed a workflow-scoped trigger phrase and let the
-  // user type the actual task, then send normally (deterministic reproposeWorkflow needs real
-  // approach/task text, which doesn't exist at pick time).
+  // Picking a workflow from "/" opens the run2 launcher (below) preselecting this workflow, instead of
+  // seeding a chat trigger phrase (dead since P4-B made chat never auto-trigger workflows).
   const onPickWorkflow = useCallback((workflowId: string) => {
-    const wf = wsInfo?.workflows?.find(w => w.id === workflowId)
-    setQuickSeed({ text: `开启「${wf?.name ?? ''}」工作流,按以下需求分阶段执行,先给出技术方案等我批准:\n`, nonce: Date.now() })
-  }, [wsInfo?.workflows])
+    setPendingLaunch({ workflowId })
+    setRunView(true)
+  }, [])
 
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
@@ -856,7 +868,14 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
           <div className="run2-mode-body">
             <button className="txt-btn run2-back" onClick={() => setRunView(false)}>返回对话</button>
             {run2.state === null
-              ? (wsPath && <RunLauncher workspacePath={wsPath} />)
+              ? (wsPath && (
+                  <RunLauncher
+                    workspacePath={wsPath}
+                    initialWorkflowId={pendingLaunch?.workflowId}
+                    initialSeed={buildConversationSeed(chat.messages)}
+                    onStarted={() => setPendingLaunch(null)}
+                  />
+                ))
               : <RunPanel api={run2} />}
           </div>
         )}

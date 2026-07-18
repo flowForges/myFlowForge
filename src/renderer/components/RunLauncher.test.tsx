@@ -88,4 +88,17 @@ describe('RunLauncher', () => {
     await waitFor(() => expect(screen.getByText('加载工作流失败')).toBeInTheDocument())
     expect(screen.getByText('启动')).toBeDisabled()
   })
+
+  // Task 2: opened from a workflow "/" command in chat, the launcher is pre-seeded with the picked
+  // workflow + the current conversation transcript, so the user doesn't retype context.
+  it('prefills the seed textarea and preselects the workflow from initialSeed/initialWorkflowId', async () => {
+    launchInfo.mockResolvedValue({
+      workflows: [{ id: 'wf0', name: '其他工作流' }, { id: 'wf1', name: '标准五段' }],
+      projects: [{ name: 'api', cwd: '/ws/api' }],
+    })
+    render(<RunLauncher workspacePath="/ws" initialSeed="我: 做个登录页" initialWorkflowId="wf1" />)
+    await waitFor(() => expect(screen.getByText('标准五段')).toBeInTheDocument())
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('我: 做个登录页')
+    expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe('wf1')
+  })
 })

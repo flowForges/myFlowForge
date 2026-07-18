@@ -3,6 +3,11 @@ import { useEffect, useState } from 'react'
 export interface RunLauncherProps {
   workspacePath: string
   onStarted?: () => void
+  // Task 2: opened from a workflow "/" command in chat — pre-seeds the requirement textarea with the
+  // current conversation transcript and preselects the workflow the user picked. One-time bring-in
+  // (lazy useState initializer): no follow-up sync if these props change after mount.
+  initialSeed?: string
+  initialWorkflowId?: string
 }
 
 interface LaunchProject {
@@ -28,11 +33,11 @@ const EMPTY_INFO: LaunchInfo = { workflows: [], projects: [] }
 // window.forge.run2.launchInfo, lets the user pick a workflow + which projects to include + type a
 // requirement seed, then kicks off window.forge.run2.startWorkflow. Mirrors PlanCard/ReqCard's
 // .req-* / .plan-* markup conventions so it drops into the same visual language without new CSS.
-export function RunLauncher({ workspacePath, onStarted }: RunLauncherProps) {
+export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWorkflowId }: RunLauncherProps) {
   const [info, setInfo] = useState<LaunchInfo>(EMPTY_INFO)
-  const [workflowId, setWorkflowId] = useState<string>('')
+  const [workflowId, setWorkflowId] = useState<string>(initialWorkflowId ?? '')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
-  const [task, setTask] = useState('')
+  const [task, setTask] = useState(() => initialSeed ?? '')
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -47,7 +52,9 @@ export function RunLauncher({ workspacePath, onStarted }: RunLauncherProps) {
       .then((li: LaunchInfo) => {
         if (cancelled) return
         setInfo(li)
-        setWorkflowId(li.workflows[0]?.id ?? '')
+        // Preserve an already-picked workflow (from initialWorkflowId) once the info load completes;
+        // otherwise fall back to the first workflow, as before.
+        setWorkflowId((prev) => prev || li.workflows[0]?.id || '')
         setChecked(Object.fromEntries(li.projects.map((p) => [p.name, true])))
         setError(null)
       })
