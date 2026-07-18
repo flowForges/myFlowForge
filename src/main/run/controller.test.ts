@@ -187,4 +187,18 @@ describe('RunController', () => {
     // after skipping the only failed lane, the stage is treated as resolved and advances to completion
     expect(final.machine.stages[0].status).toBe('done')
   })
+
+  it('injects the run-level task seed into stage prompts', async () => {
+    const prompts: Record<string, string> = {}
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) { prompts[task.agentId] = task.prompt; const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })(); return { id: task.agentId, cancel() {}, done } },
+    }
+    const store = new RunStore(ws, 'r1')
+    const plan: RunPlan = { runId: 'r1', stages: [{ key: 'requirement', name: '需求', provider: 'x', model: 'm', scope: 'root', gate: false }] }
+    const c = new RunController(plan, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, makeId: (p) => `${p}-0`, task: '实现支付幂等' })
+    await c.start()
+    expect(prompts['requirement:root']).toContain('实现支付幂等')
+  })
 })

@@ -21,6 +21,7 @@ export interface RunControllerDeps {
   sleep?: (ms: number) => Promise<void>
   now?: () => number
   makeId?: (prefix: string) => string
+  task?: string
 }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
 export interface RunControllerState {
@@ -113,9 +114,10 @@ export class RunController {
     return refs
   }
   private buildPrompt = (o: { stageKey: string; project?: string; cwd: string; upstream: ArtifactRef[] }) => {
+    const seed = this.deps.task ? `【需求原文（以此为准）】\n${this.deps.task}\n` : ''
     const up = o.upstream.length ? `\n上游产物：\n${o.upstream.map((a) => `- ${a.path} (${a.kind})`).join('\n')}` : ''
     const dir = this.pendingDirective[o.stageKey] ? `\n【补充/返工意见】\n${this.pendingDirective[o.stageKey]}` : ''
-    return `【阶段】${o.stageKey}${o.project ? `（项目 ${o.project}）` : ''}\ncwd=${o.cwd}${up}${dir}\n回传结构化结果。`
+    return `${seed}【阶段】${o.stageKey}${o.project ? `（项目 ${o.project}）` : ''}\ncwd=${o.cwd}${up}${dir}\n回传结构化结果。`
   }
 
   private async runOneOrder(order: WorkOrder): Promise<WorkOrderOutcome> {
