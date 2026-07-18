@@ -40,6 +40,7 @@ export const LEVEL_LABELS: Record<LogLine['level'], string> = {
 // ── Event → line mappers (pure) ─────────────────────────────────────────────
 
 import type { ChatEvent, EngineEvent, ChangeItem } from '@shared/types'
+import type { RunLogLine } from '../../main/run/controller'
 
 /** Map a ChatEvent to zero-or-more LogLines. */
 export function chatEventToLines(e: ChatEvent, now: Date): LogLine[] {
@@ -79,6 +80,11 @@ export function pendingAddToLine(e: Extract<EngineEvent, { type: 'pending:add' }
   }
 }
 
+// kind (when set) is lossless → maps 1:1 to console level so the 思考/执行/文件/输出
+// filters work for workflow logs; fall back to the legacy level mapping when absent.
+// Module-level so both agentLogToLine (old EngineEvent bus) and run2LogToLine (run2 bus) share it.
+const KIND_TO_LEVEL = { think: 'think', tool: 'exec', file: 'file', output: 'out' } as const
+
 // Monotonic suffix so repeated agent:log lines (same timestamp + agent) get unique React keys
 // without Math.random() (keeps this module deterministic / side-effect-free per the header).
 let aglogSeq = 0
@@ -86,9 +92,6 @@ let aglogSeq = 0
 /** Map an agent:log EngineEvent to a LogLine. */
 export function agentLogToLine(e: Extract<EngineEvent, { type: 'agent:log' }>, now: Date): LogLine {
   const t = logStamp(now)
-  // kind (when set) is lossless → maps 1:1 to console level so the 思考/执行/文件/输出
-  // filters work for workflow logs; fall back to the legacy level mapping when absent.
-  const KIND_TO_LEVEL = { think: 'think', tool: 'exec', file: 'file', output: 'out' } as const
   const level: LogLine['level'] = e.line.kind
     ? KIND_TO_LEVEL[e.line.kind]
     : (e.line.level === 'ok') ? 'out'
@@ -98,6 +101,24 @@ export function agentLogToLine(e: Extract<EngineEvent, { type: 'agent:log' }>, n
     id: `${t}-aglog-${e.agentId}-${++aglogSeq}`,
     t, level, src: e.agentId, color: 'var(--accent)',
     text: e.line.text, streaming: false,
+  }
+}
+
+// Monotonic fallback suffix for run2 log lines whose provider `ts` is empty — keeps id unique
+// without Math.random() (same rationale as aglogSeq above).
+let run2LogSeq = 0
+
+/** Map a run2:log payload (RunLogLine, from Task 3's controller-level log bus) to a console LogLine. */
+export function run2LogToLine(p: { workspacePath: string; log: RunLogLine }, now: Date): LogLine {
+  const t = logStamp(now)
+  const { log } = p
+  const kind = log.line.kind ?? 'output'
+  const level: LogLine['level'] = KIND_TO_LEVEL[kind] ?? 'out'
+  const tsPart = log.line.ts || `${log.line.text.slice(0, 8)}-${++run2LogSeq}`
+  return {
+    id: `${t}-run2-${log.laneId}-${tsPart}`,
+    t, level, src: log.agentName, color: 'var(--accent)',
+    text: log.line.text, streaming: false,
   }
 }
 

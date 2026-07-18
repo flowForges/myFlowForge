@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { EngineEvent, ChatEvent, ChangesEvent } from '@shared/types'
+import type { RunLogLine } from '../../main/run/controller'
 import {
   LogLine, MAX_LOGS,
   appendLines, chatEventToLines, pendingAddToLine,
-  agentLogToLine, agentStateLine, changeItemToLine, logStamp,
+  agentLogToLine, agentStateLine, changeItemToLine, logStamp, run2LogToLine,
 } from './logReducer'
 
 export interface LogsApi {
@@ -166,6 +167,18 @@ export function useLogs(): LogsApi {
     })
 
     return () => { offEngine() }
+  }, [])
+
+  // run2 (P0 Task 4): the new headless run controller doesn't emit EngineEvents — it broadcasts
+  // its own RunLogLine stream (see Tasks 1-3). Feed those into the same console so the bottom log
+  // panel isn't empty during a run2 workflow run.
+  useEffect(() => {
+    const r = window.forge?.run2
+    if (!r?.onLog) return
+    const off = r.onLog((p: { workspacePath: string; log: unknown }) => {
+      push([run2LogToLine({ workspacePath: p.workspacePath, log: p.log as RunLogLine }, new Date())])
+    })
+    return () => { off() }
   }, [])
 
   useEffect(() => {

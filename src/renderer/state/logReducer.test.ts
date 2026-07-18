@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   logStamp, appendLines, chatEventToLines, pendingAddToLine,
-  agentLogToLine, agentStateLine, changeItemToLine,
+  agentLogToLine, agentStateLine, changeItemToLine, run2LogToLine,
   MAX_LOGS,
 } from './logReducer'
 import type { ChatEvent, EngineEvent, ChangeItem } from '@shared/types'
+import type { RunLogLine } from '../../main/run/controller'
 
 // ── logStamp ──────────────────────────────────────────────────────────────────
 
@@ -212,6 +213,58 @@ describe('agentStateLine', () => {
     const line = agentStateLine('a1', '设计代理', 'err', now)
     expect(line.text).toBe('失败')
     expect(line.color).toBe('var(--err)')
+  })
+})
+
+// ── run2LogToLine ─────────────────────────────────────────────────────────────
+
+describe('run2LogToLine', () => {
+  const now = new Date(0)
+
+  function makeLog(overrides: Partial<RunLogLine['line']> = {}): RunLogLine {
+    return {
+      laneId: 'design:root',
+      stageKey: 'design',
+      agentName: 'Codex',
+      line: { ts: '', text: '技术方案草拟', level: 'run', kind: 'think', ...overrides },
+    }
+  }
+
+  it('maps kind:think to level:think, keeps src/text', () => {
+    const line = run2LogToLine({ workspacePath: '/ws', log: makeLog({ kind: 'think' }) }, now)
+    expect(line.level).toBe('think')
+    expect(line.src).toBe('Codex')
+    expect(line.text).toBe('技术方案草拟')
+    expect(line.color).toBe('var(--accent)')
+    expect(line.streaming).toBe(false)
+  })
+
+  it('maps kind:tool to level:exec', () => {
+    const line = run2LogToLine({ workspacePath: '/ws', log: makeLog({ kind: 'tool' }) }, now)
+    expect(line.level).toBe('exec')
+  })
+
+  it('maps kind:output to level:out', () => {
+    const line = run2LogToLine({ workspacePath: '/ws', log: makeLog({ kind: 'output' }) }, now)
+    expect(line.level).toBe('out')
+  })
+
+  it('maps kind:file to level:file', () => {
+    const line = run2LogToLine({ workspacePath: '/ws', log: makeLog({ kind: 'file' }) }, now)
+    expect(line.level).toBe('file')
+  })
+
+  it('falls back to level:out when kind is undefined', () => {
+    const log = makeLog()
+    delete (log.line as { kind?: string }).kind
+    const line = run2LogToLine({ workspacePath: '/ws', log }, now)
+    expect(line.level).toBe('out')
+  })
+
+  it('produces a unique id including laneId', () => {
+    const line = run2LogToLine({ workspacePath: '/ws', log: makeLog() }, now)
+    expect(line.id).toContain('run2')
+    expect(line.id).toContain('design:root')
   })
 })
 
