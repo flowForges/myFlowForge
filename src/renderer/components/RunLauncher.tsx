@@ -17,9 +17,22 @@ interface LaunchProject {
   model?: string
 }
 
+// Task 1 (main): mirrors LaunchStage in src/main/run/launch.ts — the resolved per-stage
+// name/provider/model/gate the launcher picker needs to render a workflow's flow preview. Task 2 wires
+// this into the actual preview UI; unused here for now (fields carried through so the type matches the
+// IPC payload's real shape and typecheck stays honest about what's on the wire).
+interface LaunchStage {
+  key: string
+  name: string
+  provider: string
+  model: string
+  gate: boolean
+}
+
 interface LaunchWorkflow {
   id: string
   name: string
+  stages: LaunchStage[]
 }
 
 interface LaunchInfo {

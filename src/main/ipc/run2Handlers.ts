@@ -51,7 +51,11 @@ export function registerRun2(deps: {
     if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:launch-info)')
     const ws = readWorkspace(p.workspacePath)
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
-    return buildLaunchInfo(ws)
+    // readWorkflows/readCustomStages are optional deps (see comment on the class field above) — when
+    // present (real app wiring), they let buildLaunchInfo resolve a workflow's stages via the global
+    // template fallback (see launch.ts); when absent (older/lighter test wiring), each workflow's
+    // stages just resolve from its own stashed WsStage[] (empty → []), same as before this fell back.
+    return buildLaunchInfo(ws, readWorkflows?.() ?? [], readCustomStages?.() ?? [])
   })
   // P4-A launcher: resolve the picked workflow's stages server-side into a RunPlan, then start run2 —
   // fixes the P3-B temp button reading ws.stages (permanently [] under the multi-workflow model).

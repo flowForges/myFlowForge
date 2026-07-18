@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildLaunchInfo, resolveStartPlan } from './launch'
-import type { Workspace } from '../config/schema'
+import type { Workspace, Workflow } from '../config/schema'
 
 const ws: Workspace = {
   name: 'pay', path: '/ws/pay', workflowId: '', stages: [],
@@ -15,10 +15,29 @@ const ws: Workspace = {
 describe('buildLaunchInfo', () => {
   it('lists workflows + projects with cwd', () => {
     const info = buildLaunchInfo(ws)
-    expect(info.workflows).toEqual([{ id: 'wf1', name: '标准五段' }])
+    expect(info.workflows).toEqual([{ id: 'wf1', name: '标准五段', stages: [
+      { key: 'design', name: '技术方案设计', provider: 'claude', model: 'm', gate: true },
+      { key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: false },
+    ] }])
     expect(info.projects.map((p) => p.name)).toEqual(['api', 'web'])
     expect(info.projects[0].cwd).toBe('/ws/pay/api')
     expect(info.projects[0].provider).toBe('codex')
+  })
+
+  it('falls back to the global workflow template when a workspace workflow has no stashed stages', () => {
+    const wsEmpty: Workspace = {
+      ...ws,
+      workflows: [{ id: 'std', name: '', stages: [] }],
+    } as any
+    const globalWorkflows: Workflow[] = [
+      { id: 'std', name: '标准工作流', stages: [
+        { key: 'design', defaultAgent: 'claude', defaultModel: 'opus' },
+        { key: 'develop', defaultAgent: 'codex', defaultModel: 'g', gate: true },
+      ], plugins: [], stagePrompts: {} } as any,
+    ]
+    const info = buildLaunchInfo(wsEmpty, globalWorkflows, [])
+    expect(info.workflows[0].stages.map((s) => s.key)).toEqual(['design', 'develop'])
+    expect(info.workflows[0].stages[1]).toEqual({ key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: true })
   })
 })
 
