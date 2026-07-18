@@ -37,4 +37,10 @@ describe('resolveStartPlan', () => {
   it('throws on unknown workflow', () => {
     expect(() => resolveStartPlan(ws, [], [], { workspacePath: '/ws/pay', workflowId: 'nope', projectNames: [], runId: 'r1' })).toThrow()
   })
+  it('carries permissionMode through untouched (undefined stays undefined, set value passes through)', () => {
+    const noMode = resolveStartPlan(ws, [], [], { workspacePath: '/ws/pay', workflowId: 'wf1', projectNames: ['api'], runId: 'r1' })
+    expect(noMode.permissionMode).toBeUndefined()
+    const withMode = resolveStartPlan(ws, [], [], { workspacePath: '/ws/pay', workflowId: 'wf1', projectNames: ['api'], runId: 'r1', permissionMode: 'readonly' })
+    expect(withMode.permissionMode).toBe('readonly')
+  })
 })

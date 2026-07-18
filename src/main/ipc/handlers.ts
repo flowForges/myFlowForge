@@ -148,7 +148,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Run2 (P3-A): additive headless run controller, wired alongside (not replacing) the Orchestrator above.
   const run2Manager = new Run2Manager({
     providers,
-    env: process.env,
+    // Robustness: process.env has no proxy — networks where the CLI can't reach the API directly
+    // (proxied corp networks etc.) would silently fail every run2 agent. buildAgentEnv(termProxy)
+    // matches the narrator/detect/refreshModels usages elsewhere in this file (e.g. line ~105).
+    env: buildAgentEnv({ proxy: readSettings().termProxy }),
     makeStore: (w, r) => new RunStore(w, r),
     emit: {
       event: (w, e) => broadcast(CH.run2Event, { workspacePath: w, event: e }),

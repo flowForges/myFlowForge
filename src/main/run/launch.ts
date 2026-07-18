@@ -7,6 +7,7 @@
 // (or, if that workflow itself has none stashed, fall back to the global workflow template via
 // resolveWorkflowStages). Same resolution pattern as proposeRun.ts / resumeWorkspace in handlers.ts.
 import { join } from 'node:path'
+import type { PermissionMode } from '@shared/permissions'
 import type { Workspace, Workflow, CustomStage } from '../config/schema'
 import { stageName, workflowDisplayName } from '../config/schema'
 import { indexCustomStages } from '../../shared/customStages'
@@ -39,6 +40,7 @@ export interface StartWorkflowOpts {
   projectNames: string[]
   task?: string
   runId: string
+  permissionMode?: PermissionMode
 }
 
 // Resolves the PICKED workflow's stages (falling back to the global template when the workspace's own
@@ -50,7 +52,7 @@ export function resolveStartPlan(
   workflows: Workflow[],
   custom: CustomStage[],
   opts: StartWorkflowOpts,
-): { plan: RunPlan; projects: DevelopProject[]; task?: string } {
+): { plan: RunPlan; projects: DevelopProject[]; task?: string; permissionMode?: PermissionMode } {
   const wf = pickWorkspaceWorkflow(ws, opts.workflowId)
   // pickWorkspaceWorkflow silently falls back to workflows[0] when the id doesn't match (its contract
   // for the "auto-decide" caller) — the launcher needs an explicit failure instead when the caller asked
@@ -74,5 +76,5 @@ export function resolveStartPlan(
 
   const projects = buildLaunchInfo(ws).projects.filter((p) => opts.projectNames.includes(p.name))
 
-  return { plan, projects, task: opts.task }
+  return { plan, projects, task: opts.task, permissionMode: opts.permissionMode }
 }

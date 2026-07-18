@@ -1,3 +1,4 @@
+import type { PermissionMode } from '@shared/permissions'
 import type { AgentProvider } from '../agents/types'
 import type { DevelopProject } from '../orchestrator/orchestrator'
 import type { RunStore } from '../orchestrator/runStore'
@@ -10,7 +11,7 @@ export interface Run2Emit {
   event(wsPath: string, e: RunEvent): void
   update(wsPath: string, s: RunControllerState): void
 }
-export interface Run2StartOpts { workspacePath: string; runId: string; plan: RunPlan; projects: DevelopProject[]; task?: string }
+export interface Run2StartOpts { workspacePath: string; runId: string; plan: RunPlan; projects: DevelopProject[]; task?: string; permissionMode?: PermissionMode }
 export interface Run2ManagerDeps {
   providers: Record<string, AgentProvider>
   env: NodeJS.ProcessEnv
@@ -33,9 +34,14 @@ export class Run2Manager {
     // A new run supersedes whatever finished-run state was retained from a prior run in this workspace.
     this.lastState.delete(opts.workspacePath)
     const store = this.deps.makeStore(opts.workspacePath, opts.runId)
+    // Default: an unset permissionMode defaults to 'full' here (not 'auto'/sandboxed) — a real run
+    // showed codex needs full to write files without the sandbox cancelling its MCP calls. This is
+    // the single default point for BOTH run2 start paths (the raw run2:start-stages channel and the
+    // run2:start-workflow launcher), so any caller can still override it explicitly.
     const controller = new RunController(opts.plan, {
       providers: this.deps.providers, store, env: this.deps.env,
       projects: opts.projects, retries: this.deps.retries, task: opts.task,
+      permissionMode: opts.permissionMode ?? 'full',
     })
     controller.onEvent((e) => this.deps.emit.event(opts.workspacePath, e))
     controller.onUpdate((s) => this.deps.emit.update(opts.workspacePath, s))

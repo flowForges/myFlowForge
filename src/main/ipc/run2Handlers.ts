@@ -51,7 +51,7 @@ export function registerRun2(deps: {
     if (!readWorkspace || !readWorkflows || !readCustomStages) throw new Error('registerRun2: missing store deps (required for run2:start-workflow)')
     const ws = readWorkspace(p.workspacePath)
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
-    const { plan, projects, task } = resolveStartPlan(ws, readWorkflows(), readCustomStages(), p)
-    return manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan, projects, task })
+    const { plan, projects, task, permissionMode } = resolveStartPlan(ws, readWorkflows(), readCustomStages(), p)
+    return manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan, projects, task, permissionMode })
   })
 }

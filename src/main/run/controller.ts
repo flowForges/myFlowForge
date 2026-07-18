@@ -1,4 +1,5 @@
 // src/main/run/controller.ts
+import type { PermissionMode } from '@shared/permissions'
 import type { AgentProvider, ConfirmReq, InputReq } from '../agents/types'
 import type { ArtifactRef } from '../orchestrator/types'
 import type { DevelopProject } from '../orchestrator/orchestrator'
@@ -22,6 +23,7 @@ export interface RunControllerDeps {
   now?: () => number
   makeId?: (prefix: string) => string
   task?: string
+  permissionMode?: PermissionMode
 }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
 export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string }
@@ -194,6 +196,7 @@ export class RunController {
         projects: this.deps.projects,
         upstream: this.upstream(idx),
         buildPrompt: this.buildPrompt,
+        permissionMode: this.deps.permissionMode,
       }
       const orders = buildWorkOrders(input)
       if (orders.length === 0) throw new Error(`RunController: stage "${stage.key}" produced no work orders (per-project needs >=1 project)`)

@@ -235,6 +235,21 @@ describe('RunController', () => {
     expect(p).toContain('实现支付幂等') // requirement seed still present
   })
 
+  it('threads deps.permissionMode into every StageInput → WorkOrder → task.permissionMode', async () => {
+    const seenModes: Array<string | undefined> = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) { seenModes.push(task.permissionMode); const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })(); return { id: task.agentId, cancel() {}, done } },
+    }
+    const store = new RunStore(ws, 'r1')
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(), permissionMode: 'full' })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    expect(seenModes).toEqual(['full', 'full'])
+  })
+
   it('liveLanes: shows per-lane live activity mid-run, then clears once the lane settles', async () => {
     const store = new RunStore(ws, 'r1')
     const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }

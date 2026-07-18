@@ -119,4 +119,48 @@ describe('Run2Manager', () => {
     expect(init2.status).toBe('running')
     expect(mgr.lastStateFor(ws)).toBeNull()
   })
+
+  it('threads Run2StartOpts.permissionMode through the controller into the work order task', async () => {
+    const seenModes: Array<string | undefined> = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task: AgentTask, cb: AgentCallbacks) {
+        seenModes.push(task.permissionMode)
+        const done = (async () => { cb.onHandoff?.({ summary: 'done' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const mgr = new Run2Manager({
+      providers: { x: provider }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: { event: () => {}, update: () => {} },
+    })
+    const plan = planFromStages('run-perm', stages)
+    mgr.start({ workspacePath: ws, runId: 'run-perm', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }], permissionMode: 'readonly' })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(seenModes).toEqual(['readonly'])
+  })
+
+  it('defaults permissionMode to \'full\' when Run2StartOpts omits it', async () => {
+    const seenModes: Array<string | undefined> = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task: AgentTask, cb: AgentCallbacks) {
+        seenModes.push(task.permissionMode)
+        const done = (async () => { cb.onHandoff?.({ summary: 'done' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const mgr = new Run2Manager({
+      providers: { x: provider }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: { event: () => {}, update: () => {} },
+    })
+    const plan = planFromStages('run-perm-default', stages)
+    mgr.start({ workspacePath: ws, runId: 'run-perm-default', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(seenModes).toEqual(['full'])
+  })
 })

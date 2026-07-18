@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import * as CH from './channels'
+import type { Workspace } from '../config/schema'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
 
 function okProvider(): AgentProvider {
@@ -13,6 +14,19 @@ function okProvider(): AgentProvider {
     id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
     async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
     run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+// Captures task.permissionMode instead of just completing — used by the run2:start-workflow tests
+// below to verify the default/passthrough reaches the actual AgentTask handed to the provider.
+function capturingProvider(seen: Array<string | undefined>): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      seen.push(task.permissionMode)
       const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
       return { id: task.agentId, cancel() {}, done }
     },
@@ -71,6 +85,46 @@ describe('registerRun2', () => {
       const state = await getState({}, { workspacePath: ws })
       expect(state).not.toBeNull()
       expect(state.status).toBe('ok')
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
+  it('run2:start-workflow defaults permissionMode to \'full\' when the caller omits it (codex needs full to write files)', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+    try {
+      const seen: Array<string | undefined> = []
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const manager = new Run2Manager({ providers: { x: capturingProvider(seen) }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      const wsConfig: Workspace = {
+        name: 'pay', path: ws, workflowId: '', stages: [],
+        workflows: [{ id: 'wf1', name: '标准五段', stages: [{ key: 'develop', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }],
+        projects: [{ repoId: 'a', name: 'a', branch: 'main' }] as any,
+        status: 'idle', plugins: [], stepPlugins: [],
+      } as any
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [] })
+      const startWorkflow = handlers.get(CH.run2StartWorkflow)!
+      await startWorkflow({}, { workspacePath: ws, workflowId: 'wf1', projectNames: ['a'], runId: 'r1' })
+      await new Promise((r) => setTimeout(r, 50))
+      expect(seen).toEqual(['full'])
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
+  it('run2:start-workflow forwards an explicit permissionMode instead of the default', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+    try {
+      const seen: Array<string | undefined> = []
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const manager = new Run2Manager({ providers: { x: capturingProvider(seen) }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      const wsConfig: Workspace = {
+        name: 'pay', path: ws, workflowId: '', stages: [],
+        workflows: [{ id: 'wf1', name: '标准五段', stages: [{ key: 'develop', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }],
+        projects: [{ repoId: 'a', name: 'a', branch: 'main' }] as any,
+        status: 'idle', plugins: [], stepPlugins: [],
+      } as any
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [] })
+      const startWorkflow = handlers.get(CH.run2StartWorkflow)!
+      await startWorkflow({}, { workspacePath: ws, workflowId: 'wf1', projectNames: ['a'], runId: 'r1', permissionMode: 'readonly' })
+      await new Promise((r) => setTimeout(r, 50))
+      expect(seen).toEqual(['readonly'])
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 })
