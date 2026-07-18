@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Run2Api } from '../state/useRun2'
 import type { StageStatus } from '../../main/run/machine'
 import type { WorkOrderOutcome } from '../../main/run/workOrder'
 import type { LiveLane, RunLogLine } from '../../main/run/controller'
 import type { GateEvent } from '../../main/run/events'
+import type { AgentContextMeta } from '@shared/types'
 import { Run2EventCard } from './Run2EventCard'
 import { Markdown } from '../views/chat/markdown'
 import { Run2FileViewer } from './Run2FileViewer'
@@ -42,6 +43,57 @@ function LaneLog({ lines }: { lines: RunLogLine[] }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// P-B2 Task 2: what would this lane's agent load if it ran in its cwd right now — skills/rules/
+// mcps — reusing the same cwd-scanner (`window.forge.scanContext`) the old orchestrator's "已加载
+// SKILL/RULE/MCP" chips used. No engine change: this purely reads the lane's cwd (LiveLane.cwd for
+// running lanes — see task-1 — or outcome.order.cwd for settled ones) and scans it client-side.
+const laneContextCache = new Map<string, AgentContextMeta>()
+
+function LaneContext({ cwd }: { cwd?: string }) {
+  const [meta, setMeta] = useState<AgentContextMeta | null>(() => (cwd ? laneContextCache.get(cwd) ?? null : null))
+  useEffect(() => {
+    if (!cwd) { setMeta(null); return }
+    const cached = laneContextCache.get(cwd)
+    if (cached) { setMeta(cached); return }
+    const scan = window.forge?.scanContext
+    if (!scan) return
+    let alive = true
+    scan(cwd)
+      .then((m: AgentContextMeta) => {
+        if (!m) return
+        laneContextCache.set(cwd, m)
+        if (alive) setMeta(m)
+      })
+      .catch(() => { /* best-effort — a scan failure just means no chips, not a crash */ })
+    return () => { alive = false }
+  }, [cwd])
+
+  if (!cwd || !meta) return null
+  const { skills, rules, mcps } = meta
+  const hasMcps = !!mcps && mcps.length > 0
+  if (skills.length === 0 && rules.length === 0 && !hasMcps) return null
+  return (
+    <div className="run2-lane-ctx">
+      <span className="run2-lane-ctx-title">可用能力</span>
+      {skills.length > 0 && (
+        <span className="run2-ctx-group run2-ctx-group-skill">
+          {skills.map((s) => <span key={s.name} className="run2-ctx-skill">{s.name}</span>)}
+        </span>
+      )}
+      {rules.length > 0 && (
+        <span className="run2-ctx-group run2-ctx-group-rule">
+          {rules.map((r) => <span key={r.name} className="run2-ctx-rule">{r.name}</span>)}
+        </span>
+      )}
+      {hasMcps && (
+        <span className="run2-ctx-group run2-ctx-group-mcp">
+          {mcps!.map((m) => <span key={m.name} className="run2-ctx-mcp">{m.name}</span>)}
+        </span>
+      )}
     </div>
   )
 }
@@ -174,6 +226,7 @@ function LiveLaneRow({ id, lane, logLines }: { id: string; lane: LiveLane; logLi
       <span className="run2-lane-status">⟳ {lane.state ?? '执行中'}</span>
       {lane.activity && <span className="run2-lane-activity">{lane.activity}</span>}
       {logLines && logLines.length > 0 && <LaneLog lines={logLines} />}
+      <LaneContext cwd={lane.cwd} />
     </div>
   )
 }
@@ -208,6 +261,7 @@ function OutcomeCard({ outcome, onOpenFile }: { outcome: WorkOrderOutcome; onOpe
         <span className="run2-output-project">{label}</span>
         <span className="run2-output-status">{outcome.status === 'ok' ? '完成' : '失败'}</span>
       </div>
+      <LaneContext cwd={outcome.order.cwd} />
       {result && (
         <>
           <div className="run2-output-summary"><Markdown text={result.summary} /></div>
