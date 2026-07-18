@@ -478,3 +478,82 @@ describe('WorkflowOverlay run state (Task B1)', () => {
     expect(container.querySelector('.wfo-prog')).toBeNull()
   })
 })
+
+describe('WorkflowOverlay run node body (Task B2)', () => {
+  const RUN_BODY_LAUNCH_INFO = {
+    workflows: [
+      {
+        id: 'wf-standard',
+        name: '标准工作流',
+        stages: [
+          stage({ key: 'design', name: '技术方案设计', desc: '设计技术方案', prompt: '设计技术方案，输出模块划分' }),
+          stage({ key: 'develop', name: '代码开发', code: true, desc: '按方案实现变更', prompt: '按技术方案实现代码变更' }),
+        ],
+      },
+    ],
+    projects: [],
+  }
+
+  function runningDesignState() {
+    return {
+      machine: {
+        plan: {
+          runId: 'run2-1',
+          stages: [
+            { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: false },
+            { key: 'develop', name: '代码开发', provider: 'codex', model: 'gpt-5-codex', scope: 'per-project', gate: true },
+          ],
+        },
+        stages: [
+          { key: 'design', status: 'running', round: 0 },
+          { key: 'develop', status: 'pending', round: 0 },
+        ],
+        currentIndex: 0,
+      },
+      inbox: [],
+      feedback: [],
+      outcomes: {},
+      status: 'running',
+      pendingDirective: {},
+      liveLanes: { 'design:root': { stageKey: 'design', state: 'run', cwd: '/ws' } },
+      stageTimings: { design: { startedAt: 1000 } },
+      paused: false,
+    }
+  }
+
+  const scanContext = vi.fn()
+
+  beforeEach(() => {
+    scanContext.mockReset()
+    scanContext.mockResolvedValue({
+      skills: [{ name: 'brainstorming', path: '/x' }],
+      rules: [],
+      mcps: [{ name: 'forge', path: 'm' }],
+    })
+  })
+
+  it('expanding a running non-code node shows LLM 输入/输出 + skill/mcp caps + blink cursor while running', async () => {
+    launchInfo.mockResolvedValue(RUN_BODY_LAUNCH_INFO)
+    ;(window as any).forge.scanContext = scanContext
+    const run2 = makeRun2(runningDesignState())
+    run2.laneLogs = {
+      'design:root': [
+        { laneId: 'design:root', stageKey: 'design', agentName: 'Codex', line: { ts: '', text: '技术方案草拟中', level: 'run', kind: 'output' } },
+      ],
+    }
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
+
+    const designNode = container.querySelectorAll('.wfo-node')[0]
+    fireEvent.click(designNode.querySelector('.wfo-cardhead') as HTMLElement)
+
+    await waitFor(() => expect(scanContext).toHaveBeenCalledWith('/ws'))
+    const body = designNode.querySelector('.wfo-cardbody') as HTMLElement
+    await waitFor(() => expect(body.textContent).toContain('技术方案草拟中'))
+
+    expect(body.querySelector('.wfo-io.in')?.textContent).toBe('设计技术方案，输出模块划分')
+    expect(body.querySelector('.wfo-cap.s')?.textContent).toContain('brainstorming')
+    expect(body.querySelector('.wfo-cap.m')?.textContent).toContain('forge')
+    expect(body.querySelector('.wfo-io:not(.in) .cur')).not.toBeNull()
+  })
+})
