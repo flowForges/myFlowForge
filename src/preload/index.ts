@@ -327,6 +327,12 @@ const api = {
       ipcRenderer.on(CH.run2Log, listener)
       return () => ipcRenderer.removeListener(CH.run2Log, listener)
     },
+    // Task 1 (queue): a workspace's pending-queue length changed (enqueue/dequeue).
+    onQueue: (cb: (p: { workspacePath: string; length: number }) => void) => {
+      const listener = (_e: unknown, p: { workspacePath: string; length: number }) => cb(p)
+      ipcRenderer.on(CH.run2Queue, listener)
+      return () => ipcRenderer.removeListener(CH.run2Queue, listener)
+    },
   },
 }
 contextBridge.exposeInMainWorld('forge', api)

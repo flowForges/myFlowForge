@@ -157,6 +157,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       event: (w, e) => broadcast(CH.run2Event, { workspacePath: w, event: e }),
       update: (w, s) => broadcast(CH.run2Update, { workspacePath: w, state: s }),
       log: (w, l) => broadcast(CH.run2Log, { workspacePath: w, log: l }),
+      // Task 1 (queue): lets the renderer show "N runs queued" for a busy workspace.
+      queue: (w, info) => broadcast(CH.run2Queue, { workspacePath: w, length: info.length }),
     },
     onError: (w, err) => console.error(`[run2] ${w}:`, err),
   })

@@ -42,8 +42,9 @@ describe('registerRun2', () => {
       registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
       expect(handlers.has(CH.run2Start)).toBe(true)
       const start = handlers.get(CH.run2Start)!
-      const state = await start({}, { workspacePath: ws, runId: 'r1', stages: [{ key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false }], projects: [{ name: 'a', cwd: join(ws, 'a') }] })
-      expect(state.status).toBe('running')
+      const result = await start({}, { workspacePath: ws, runId: 'r1', stages: [{ key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false }], projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+      expect(result.status).toBe('started')
+      expect(result.state.status).toBe('running')
       // abort handler exists and is safe
       const abort = handlers.get(CH.run2Abort)!
       expect(() => abort({}, { workspacePath: ws })).not.toThrow()
