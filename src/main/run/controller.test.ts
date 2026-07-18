@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../orchestrator/runStore'
-import { RunController } from './controller'
+import { RunController, type RunControllerState } from './controller'
 import type { RunPlan } from './machine'
 import type { RunEvent } from './events'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
@@ -48,6 +48,22 @@ function askThenInputProvider(): AgentProvider {
         await cb.onConfirm({ title: 'auth' })
         await cb.onInput({ title: 'question' })
         cb.onHandoff?.({ summary: 'out' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+// Provider that surfaces live progress (onState + onLog) before completing — used to capture a
+// mid-run snapshot with liveLanes populated, then confirm it's gone once the lane settles.
+function progressProvider(): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        cb.onState('run')
+        cb.onLog({ ts: '0', text: 'working on it', level: 'info' })
+        cb.onHandoff?.({ summary: `out ${task.agentId}` }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
       })()
       return { id: task.agentId, cancel() {}, done }
     },
@@ -200,5 +216,23 @@ describe('RunController', () => {
     const c = new RunController(plan, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, makeId: (p) => `${p}-0`, task: '实现支付幂等' })
     await c.start()
     expect(prompts['requirement:root']).toContain('实现支付幂等')
+  })
+
+  it('liveLanes: shows per-lane live activity mid-run, then clears once the lane settles', async () => {
+    const store = new RunStore(ws, 'r1')
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: progressProvider() }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const snapshots: RunControllerState[] = []
+    c.onUpdate((s) => snapshots.push(s))
+    const final = await c.start()
+
+    const laneId = 'develop:a'
+    const mid = snapshots.find((s) => s.liveLanes[laneId]?.activity)
+    expect(mid).toBeTruthy()
+    expect(mid!.liveLanes[laneId]).toMatchObject({ stageKey: 'develop', project: 'a', state: 'run', activity: 'working on it' })
+
+    expect(final.status).toBe('ok')
+    expect(final.liveLanes[laneId]).toBeUndefined() // settled lane moved to outcomes, not live anymore
+    expect(final.outcomes['develop']?.[0]?.status).toBe('ok')
   })
 })

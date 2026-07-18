@@ -24,6 +24,7 @@ export interface RunControllerDeps {
   task?: string
 }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
+export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string }
 export interface RunControllerState {
   machine: MachineState
   inbox: RunEvent[]
@@ -31,6 +32,7 @@ export interface RunControllerState {
   outcomes: Record<string, WorkOrderOutcome[]>
   status: RunStatus
   pendingDirective: Record<string, string>
+  liveLanes: Record<string, LiveLane>
 }
 
 export class RunController {
@@ -40,6 +42,7 @@ export class RunController {
   private outcomes: Record<string, WorkOrderOutcome[]> = {}
   private status: RunStatus = 'running'
   private pendingDirective: Record<string, string> = {}
+  private liveLanes: Record<string, LiveLane> = {}
   private aborted = false
   private laneR = new ResolverRegistry<LaneDecision>()
   private gateR = new ResolverRegistry<GateDecision>()
@@ -56,7 +59,7 @@ export class RunController {
   onEvent(fn: (e: RunEvent) => void) { this.eventSubs.push(fn); return () => { this.eventSubs = this.eventSubs.filter((f) => f !== fn) } }
   onUpdate(fn: (s: RunControllerState) => void) { this.updateSubs.push(fn); return () => { this.updateSubs = this.updateSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective } }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes } }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -121,11 +124,28 @@ export class RunController {
   }
 
   private async runOneOrder(order: WorkOrder): Promise<WorkOrderOutcome> {
+    const outcome = await this.runOneOrderLive(order)
+    // Settled (ok or failed): the lane's final state now lives in `outcomes`, not `liveLanes`.
+    delete this.liveLanes[order.id]
+    this.emitUpdate()
+    return outcome
+  }
+
+  private async runOneOrderLive(order: WorkOrder): Promise<WorkOrderOutcome> {
     return runWorkOrder(order, {
       provider: this.deps.providers[order.provider],
       env: this.deps.env,
       retries: this.deps.retries,
       sleep: this.deps.sleep,
+      onProgress: (ev) => {
+        this.liveLanes[ev.laneId] = {
+          stageKey: order.stageKey,
+          project: order.project,
+          state: ev.state ?? this.liveLanes[ev.laneId]?.state,
+          activity: ev.activity ?? this.liveLanes[ev.laneId]?.activity,
+        }
+        this.emitUpdate()
+      },
       onConfirm: async (req: ConfirmReq, laneId: string) => {
         // If the run was already aborted (e.g. by a sibling lane, or by a concurrent onEvent
         // resolving an EARLIER interaction with `abort`), a resolver created here would never

@@ -26,6 +26,7 @@ function makeState(overrides?: Partial<RunControllerState>): RunControllerState 
     },
     status: 'awaiting',
     pendingDirective: {},
+    liveLanes: {},
   }
   return { ...base, ...overrides }
 }
