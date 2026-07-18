@@ -1,7 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { EngineApi } from '../state/useEngine'
-import type { StartRunOpts } from '../App'
 import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef, WsWorkflow } from '@shared/types'
 import { DEFAULT_PERMISSION_MODE, type PermissionMode } from '@shared/permissions'
 import { AgentNode } from '../components/AgentNode'
@@ -96,10 +95,6 @@ interface WorkspaceViewProps {
   engine: EngineApi
   providers: ProviderInfo[]
   workspacePath?: string   // selected workspace; falls back to the live run's path
-  // When set (a freshly-created workspace with no run yet), the first composer message starts the
-  // run seeded with that message as the task, instead of being sent as a normal chat turn.
-  pendingStartOpts?: StartRunOpts
-  onStartRun?: (opts: StartRunOpts, task: string) => void
   inspectorWidth?: number
   onInspectorHandleDown?: (e: ReactPointerEvent<HTMLDivElement>) => void
   inspectorCollapsed?: boolean
@@ -146,7 +141,7 @@ function Copyable({ text, className }: { text: string; className?: string }) {
   )
 }
 
-export function WorkspaceView({ engine, providers, workspacePath, pendingStartOpts, onStartRun, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange, onOpenLog }: WorkspaceViewProps) {
+export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange, onOpenLog }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
   // Task 1: the run view now follows the run2 controller's status lifecycle instead of a manual
   // chat|run2 segmented toggle. Auto-opens while a run is 'running'/'awaiting' a gate decision;
@@ -855,11 +850,7 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
               setPendingSupplement(null)
               return
             }
-            const runLive = engine.run?.workspacePath === wsPath
-            // First message in a freshly-created workspace starts the run (seeded with the text);
-            // once started (App clears pendingStartOpts) or if a run is already live, send as chat.
-            if (pendingStartOpts && !runLive) { onStartRun?.(pendingStartOpts, m.text) }
-            else chat.send(m)
+            chat.send(m)
           }}
           onPaste={wsPath ? async (f) => window.forge.savePaste({ workspacePath: wsPath, name: f.name, dataBase64: f.dataBase64 }) : undefined}
         />

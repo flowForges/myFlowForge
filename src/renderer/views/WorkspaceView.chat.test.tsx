@@ -44,56 +44,27 @@ describe('WorkspaceView chat', () => {
 })
 
 describe('WorkspaceView chat-first-message run start', () => {
-  // No live run for this workspace: a stashed pendingStartOpts means the first composer message
-  // starts the run (seeded with the text) instead of going to chat.
+  // The old orchestrator auto-start mechanism (pendingStartOpts/onStartRun) has been removed: a
+  // freshly-created workspace's first composer message is always a plain chat send, regardless of
+  // whether a run is live. Workflows only start explicitly via the run2 launcher.
   const idleEngine: EngineApi = { run: null, pending: [], resolve: () => {}, cancel: () => {} }
 
-  it('starts the run with the message text and does NOT chat.send when pendingStartOpts is set and no live run', async () => {
-    const onStartRun = vi.fn()
-    render(
-      <WorkspaceView
-        engine={idleEngine}
-        providers={providers}
-        workspacePath="/ws"
-        pendingStartOpts={{ workspacePath: '/ws', runId: 'r', stages: [], developProjects: [] } as any}
-        onStartRun={onStartRun}
-      />
-    )
+  it('sends the first message as plain chat when there is no live run', async () => {
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     const ta = screen.getByPlaceholderText(/给主代理下达任务/)
     fireEvent.change(ta, { target: { value: '给blog加评论系统' } })
     fireEvent.keyDown(ta, { key: 'Enter', metaKey: true })
-    await waitFor(() => expect(onStartRun).toHaveBeenCalled())
-    expect(onStartRun.mock.calls[0][0].workspacePath).toBe('/ws')
-    expect(onStartRun.mock.calls[0][1]).toBe('给blog加评论系统')
-    expect(sendChat).not.toHaveBeenCalled()
+    await waitFor(() => expect(sendChat).toHaveBeenCalled())
+    expect(sendChat.mock.calls[0][0].workspacePath).toBe('/ws')
+    expect(sendChat.mock.calls[0][0].text).toBe('给blog加评论系统')
   })
 
-  it('falls through to chat.send when there is no pendingStartOpts', async () => {
-    const onStartRun = vi.fn()
-    render(<WorkspaceView engine={engine} providers={providers} workspacePath="/ws" onStartRun={onStartRun} />)
+  it('sends as plain chat when a run is already live for this workspace', async () => {
+    render(<WorkspaceView engine={engine} providers={providers} workspacePath="/ws" />)
     const ta = screen.getByPlaceholderText(/给主代理下达任务/)
     fireEvent.change(ta, { target: { value: 'hi' } })
     fireEvent.keyDown(ta, { key: 'Enter', metaKey: true })
     await waitFor(() => expect(sendChat).toHaveBeenCalled())
-    expect(onStartRun).not.toHaveBeenCalled()
-  })
-
-  it('falls through to chat.send when a run is already live for this workspace (even if pendingStartOpts lingers)', async () => {
-    const onStartRun = vi.fn()
-    render(
-      <WorkspaceView
-        engine={engine}
-        providers={providers}
-        workspacePath="/ws"
-        pendingStartOpts={{ workspacePath: '/ws', runId: 'r', stages: [], developProjects: [] } as any}
-        onStartRun={onStartRun}
-      />
-    )
-    const ta = screen.getByPlaceholderText(/给主代理下达任务/)
-    fireEvent.change(ta, { target: { value: 'hi' } })
-    fireEvent.keyDown(ta, { key: 'Enter', metaKey: true })
-    await waitFor(() => expect(sendChat).toHaveBeenCalled())
-    expect(onStartRun).not.toHaveBeenCalled()
   })
 })
 
