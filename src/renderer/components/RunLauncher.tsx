@@ -40,6 +40,10 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
   const [task, setTask] = useState(() => initialSeed ?? '')
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Task 2 (queue): set when manager.start() reports {status:'queued'} — a queued launch isn't
+  // the active run yet, so we stay on this screen and just note the position instead of firing
+  // onStarted (which would switch the caller into the run view for a run that hasn't begun).
+  const [queuedNote, setQueuedNote] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -74,6 +78,7 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
     if (!run2?.startWorkflow || !workflowId) return
     const projectNames = info.projects.filter((p) => checked[p.name]).map((p) => p.name)
     setError(null)
+    setQueuedNote(null)
     setStarting(true)
     Promise.resolve(
       run2.startWorkflow({
@@ -84,10 +89,20 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
         runId: `run2-${Date.now()}`,
       })
     )
+      .then((result: unknown) => {
+        // manager.start() now returns a union: {status:'started', state} | {status:'queued', position}.
+        // Only the 'queued' shape changes behavior — everything else (the 'started' shape, a legacy
+        // void/undefined return, or any other unexpected shape) falls back to the old onStarted().
+        if (result && typeof result === 'object' && (result as { status?: unknown }).status === 'queued') {
+          const position = (result as { position?: unknown }).position
+          setQueuedNote(`已加入队列（位置 ${position}），等待当前工作流完成`)
+          return
+        }
+        onStarted?.()
+      })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => {
         setStarting(false)
-        onStarted?.()
       })
   }
 
@@ -147,6 +162,7 @@ export function RunLauncher({ workspacePath, onStarted, initialSeed, initialWork
             rows={3}
           />
         </div>
+        {queuedNote && <div className="run2-queued-note">{queuedNote}</div>}
         <div className="req-actions">
           <button className="req-ok" disabled={starting} onClick={start}>启动</button>
         </div>

@@ -54,6 +54,40 @@ describe('RunLauncher', () => {
     await waitFor(() => expect(onStarted).toHaveBeenCalled())
   })
 
+  // Task 2 (queue): manager.start() now returns a union — {status:'started'} vs {status:'queued'}.
+  // A queued start must NOT switch the caller into the run view (there's no active run for THIS
+  // launch yet), and must surface a local "已加入队列" note instead.
+  it('shows a queued note and does not call onStarted when startWorkflow resolves status:"queued"', async () => {
+    launchInfo.mockResolvedValue({
+      workflows: [{ id: 'wf1', name: '标准五段' }],
+      projects: [{ name: 'api', cwd: '/ws/api' }],
+    })
+    startWorkflow.mockResolvedValue({ status: 'queued', position: 2 })
+    const onStarted = vi.fn()
+    render(<RunLauncher workspacePath="/ws" onStarted={onStarted} />)
+    await waitFor(() => expect(screen.getByText('标准五段')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('启动'))
+    await waitFor(() => expect(startWorkflow).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByText('已加入队列（位置 2），等待当前工作流完成')).toBeInTheDocument())
+    expect(onStarted).not.toHaveBeenCalled()
+  })
+
+  it('calls onStarted (as before) when startWorkflow resolves status:"started"', async () => {
+    launchInfo.mockResolvedValue({
+      workflows: [{ id: 'wf1', name: '标准五段' }],
+      projects: [{ name: 'api', cwd: '/ws/api' }],
+    })
+    startWorkflow.mockResolvedValue({ status: 'started', state: { status: 'running' } })
+    const onStarted = vi.fn()
+    render(<RunLauncher workspacePath="/ws" onStarted={onStarted} />)
+    await waitFor(() => expect(screen.getByText('标准五段')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('启动'))
+    await waitFor(() => expect(onStarted).toHaveBeenCalled())
+    expect(screen.queryByText(/已加入队列/)).not.toBeInTheDocument()
+  })
+
   it('shows a placeholder and disables the start button when the workspace has no workflows', async () => {
     launchInfo.mockResolvedValue({ workflows: [], projects: [] })
     render(<RunLauncher workspacePath="/ws" />)

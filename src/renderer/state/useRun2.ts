@@ -11,6 +11,8 @@ export interface Run2Api {
   /** Recent think/tool/file/output lines per laneId, from the run2:log stream (P0), capped at
    *  ~40 lines/lane so the run view can show "what's happening right now" without unbounded growth. */
   laneLogs: Record<string, RunLogLine[]>
+  /** This workspace's pending-run queue length from the run2:queue broadcast (0 when idle/empty). */
+  queueLength: number
   resolveGate: (eventId: string, decision: GateDecision) => void
   resolveLane: (eventId: string, decision: LaneDecision) => void
   addFeedback: (text: string) => void
@@ -29,6 +31,7 @@ function getRun2(): any {
 export function useRun2(workspacePath: string | undefined): Run2Api {
   const [state, setState] = useState<RunControllerState | null>(null)
   const [laneLogs, setLaneLogs] = useState<Record<string, RunLogLine[]>>({})
+  const [queueLength, setQueueLength] = useState(0)
   // Last run identity we've buffered logs for. A NEW run in the SAME workspace reuses lane ids,
   // so we must clear stale lines when the runId changes (the workspacePath-keyed reset below only
   // fires on ws switch). Reset synchronously in onUpdate the moment a new non-null runId lands,
@@ -78,6 +81,19 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspacePath])
 
+  // Task 2 (queue): mirrors the onLog subscription's shape/lifecycle. Reset to 0 on ws
+  // change/unmount so a stale queue count from a previous workspace never lingers.
+  useEffect(() => {
+    setQueueLength(0)
+    if (!run2 || !workspacePath || !run2.onQueue) return
+    const offQueue = run2.onQueue((p: { workspacePath: string; length: number }) => {
+      if (p.workspacePath !== workspacePath) return
+      setQueueLength(p.length)
+    })
+    return () => { offQueue?.() }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspacePath])
+
   const resolveGate = useCallback((eventId: string, decision: GateDecision) => {
     const r = getRun2()
     if (r && workspacePath) r.resolveGate({ workspacePath, eventId, decision })
@@ -123,5 +139,5 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     if (r && workspacePath) r.jumpBack({ workspacePath, targetKey })
   }, [workspacePath])
 
-  return { state, laneLogs, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack }
+  return { state, laneLogs, queueLength, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack }
 }

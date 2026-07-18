@@ -3,7 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { useRun2 } from './useRun2'
 
 function installForge(overrides: any = {}) {
-  let updateCb: any, eventCb: any, logCb: any
+  let updateCb: any, eventCb: any, logCb: any, queueCb: any
   const run2 = {
     getState: vi.fn(async (_ws: string) => ({ machine: { plan: { runId: 'r', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {} })),
     resolveGate: vi.fn(), resolveLane: vi.fn(), addFeedback: vi.fn(), editFeedback: vi.fn(), removeFeedback: vi.fn(), abort: vi.fn(),
@@ -11,10 +11,11 @@ function installForge(overrides: any = {}) {
     onEvent: vi.fn((cb: any) => { eventCb = cb; return () => {} }),
     onUpdate: vi.fn((cb: any) => { updateCb = cb; return () => {} }),
     onLog: vi.fn((cb: any) => { logCb = cb; return () => {} }),
+    onQueue: vi.fn((cb: any) => { queueCb = cb; return () => {} }),
     ...overrides,
   }
   ;(window as any).forge = { run2 }
-  return { run2, fire: { update: (p: any) => updateCb(p), event: (p: any) => eventCb(p), log: (p: any) => logCb(p) } }
+  return { run2, fire: { update: (p: any) => updateCb(p), event: (p: any) => eventCb(p), log: (p: any) => logCb(p), queue: (p: any) => queueCb(p) } }
 }
 
 describe('useRun2', () => {
@@ -168,5 +169,20 @@ describe('useRun2', () => {
     }))
     await waitFor(() => expect(result.current.state?.status).toBe('awaiting'))
     expect(result.current.laneLogs['design:root']?.length).toBe(1)
+  })
+
+  // Task 2 (queue): useRun2 surfaces a workspace's pending-queue length from the run2:queue
+  // broadcast so RunPanel can show a "队列: N" badge.
+  it('defaults queueLength to 0 and updates it from matching run2:queue broadcasts, ignoring other workspaces', async () => {
+    const { fire } = installForge()
+    const { result } = renderHook(() => useRun2('/ws'))
+    await waitFor(() => expect(result.current.state).not.toBeNull())
+    expect(result.current.queueLength).toBe(0)
+
+    act(() => fire.queue({ workspacePath: '/ws', length: 3 }))
+    await waitFor(() => expect(result.current.queueLength).toBe(3))
+
+    act(() => fire.queue({ workspacePath: '/other', length: 9 }))
+    expect(result.current.queueLength).toBe(3) // unchanged
   })
 })

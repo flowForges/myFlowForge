@@ -111,6 +111,7 @@ function RunHead({ api, selectedStageKey, onSelectStage }: { api: Run2Api; selec
   return (
     <div className="run2-head">
       <div className="run2-status">运行状态：{status}</div>
+      {api.queueLength > 0 && <span className="run2-queue-badge">队列: {api.queueLength}</span>}
       <div className="run2-stage-flow run2-rail">
         {machine.stages.map((s, i) => {
           const model = machine.plan.stages.find((p) => p.key === s.key)?.model ?? ''

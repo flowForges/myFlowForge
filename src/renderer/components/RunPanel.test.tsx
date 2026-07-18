@@ -33,10 +33,11 @@ function makeState(overrides?: Partial<RunControllerState>): RunControllerState 
   return { ...base, ...overrides }
 }
 
-function makeApi(state: RunControllerState | null, laneLogs: Run2Api['laneLogs'] = {}): Run2Api {
+function makeApi(state: RunControllerState | null, laneLogs: Run2Api['laneLogs'] = {}, queueLength = 0): Run2Api {
   return {
     state,
     laneLogs,
+    queueLength,
     resolveGate: vi.fn(),
     resolveLane: vi.fn(),
     addFeedback: vi.fn(),
@@ -510,6 +511,20 @@ describe('RunPanel', () => {
     expect(devOpt).toBeInTheDocument()
     fireEvent.click(devOpt)
     expect(api.jumpBack).toHaveBeenCalledWith('dev')
+  })
+
+  // Task 2 (queue): RunHead shows a "队列: N" badge when this workspace has runs waiting behind
+  // the currently active one.
+  it('shows a queue badge when api.queueLength > 0', () => {
+    const api = makeApi(makeState(), {}, 2)
+    render(<RunPanel api={api} />)
+    expect(screen.getByText('队列: 2')).toBeInTheDocument()
+  })
+
+  it('hides the queue badge when api.queueLength is 0', () => {
+    const api = makeApi(makeState(), {}, 0)
+    render(<RunPanel api={api} />)
+    expect(screen.queryByText(/队列:/)).not.toBeInTheDocument()
   })
 
   it('control bar: 回退到… is absent when currentIndex is 0 (no prior stages)', () => {
