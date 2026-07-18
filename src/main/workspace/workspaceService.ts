@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { mirrorPath, expandTilde } from '../config/paths'
 import { ensureMirror, addWorktree, resolveBaseBranch, removeWorktree } from '../git/worktree'
 import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBranch } from '../config/store'
-import { ensureWorkspaceSkill } from '../skills/installSkill'
+import { removeWorkspaceSkill } from '../skills/installSkill'
 import { readWorkspaceMemory, writeWorkspaceMemory, mergeMemory } from '../chat/memory/memoryStore'
 import { stageName, type Project, type Workspace } from '../config/schema'
 import type { StartRunOpts, StageSpec, DevelopProject } from '../orchestrator/orchestrator'
@@ -131,7 +131,7 @@ export async function createWorkspace(args: {
   // workspace.json alone (SP-C), without re-querying knownProjects or the workflow def.
   const workspace = buildWorkspaceRecord(opts, byId)
   writeWorkspace(workspace)
-  ensureWorkspaceSkill(opts.path)        // install the workflow-trigger skill into the workspace
+  removeWorkspaceSkill(opts.path)        // pure chat (P5 T1): no forge-workflow skill anymore
   seedPurposeMemory(opts.path, opts.purpose)  // seed 建区目的 into workspace memory
   registerWorkspace(opts.name, opts.path)
 
@@ -217,7 +217,7 @@ export async function editWorkspace(args: {
   }
   writeWorkspace(workspace)
   registerWorkspace(opts.name, path)
-  ensureWorkspaceSkill(path)
+  removeWorkspaceSkill(path)   // pure chat (P5 T1): no forge-workflow skill anymore
 
   // Re-run the `__proj` hooks now that the new project(s) are on disk (user opted in).
   if (willRunHooks) {

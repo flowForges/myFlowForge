@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { writeTextAtomic } from '../util/atomicWrite'
 import { FORGE_WORKFLOW_SKILL, workflowListSection } from './forgeWorkflowSkill'
@@ -21,5 +21,17 @@ export function ensureWorkspaceSkill(wsPath: string): boolean {
   if (existsSync(file) && readFileSync(file, 'utf8') === content) return false
   mkdirSync(dirname(file), { recursive: true })
   writeTextAtomic(file, content)
+  return true
+}
+
+// Pure chat (P5 Task 1): the chat agent no longer gets forge_propose_plan/forge_delegate — workflows
+// only launch via the explicit run2 launcher — so the forge-workflow skill has no reader anymore.
+// Removes ONLY the forge-workflow skill's own directory (`<wsPath>/.claude/skills/forge-workflow/`),
+// never the parent `.claude/skills/` dir or any sibling skill living next to it. Returns whether
+// anything was removed; a missing dir is a no-op (false), never throws.
+export function removeWorkspaceSkill(wsPath: string): boolean {
+  const dir = dirname(join(wsPath, FORGE_WORKFLOW_SKILL.relPath))
+  if (!existsSync(dir)) return false
+  rmSync(dir, { recursive: true, force: true })
   return true
 }

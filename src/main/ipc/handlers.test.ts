@@ -130,7 +130,7 @@ vi.mock('../chat/chatService', () => ({
 }))
 
 vi.mock('../skills/installSkill', () => ({
-  ensureWorkspaceSkill: vi.fn(() => false)
+  removeWorkspaceSkill: vi.fn(() => false)
 }))
 
 // ── Plugin mocks ────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { expandTilde } from '../config/paths'
 import { writeWorkspace, registerWorkspace } from '../config/store'
-import { ensureWorkspaceSkill } from '../skills/installSkill'
+import { removeWorkspaceSkill } from '../skills/installSkill'
 import type { Project } from '../config/schema'
 import type { Plugin } from '../../shared/plugin'
 import type { AgentProvider } from '../agents/types'
@@ -49,11 +49,13 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   const basicHooks = stepPlugins.filter(p => p.after === '__basic')
   const projHooks = stepPlugins.filter(p => p.after === '__proj')
 
-  // 1. Write the workspace record + skill + registry EARLY so the workspace exists from the start of
-  //    the (potentially long) hook/provision process — the UI can navigate to it immediately.
+  // 1. Write the workspace record + registry EARLY so the workspace exists from the start of the
+  //    (potentially long) hook/provision process — the UI can navigate to it immediately. Pure chat
+  //    (P5 T1): don't install the forge-workflow skill anymore (chat has no forge tools to use it);
+  //    opportunistically clean up any leftover skill dir from before this change.
   const workspace = buildWorkspaceRecord(opts, byId)
   writeWorkspace(workspace)
-  ensureWorkspaceSkill(opts.path)
+  removeWorkspaceSkill(opts.path)
   seedPurposeMemory(opts.path, opts.purpose)  // seed 建区目的 into workspace memory
   registerWorkspace(opts.name, opts.path)
 
