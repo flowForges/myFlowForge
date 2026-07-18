@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import './workflowOverlay.css'
 
 // Task 2 (WF-A): 1:1 port of the prototype's `.wfo` overlay CONFIG state — head (title/tabs/legend) +
@@ -15,8 +15,16 @@ export interface WorkflowOverlayProps {
   onStarted?: () => void
 }
 
+// Mirrors src/main/run/launch.ts LaunchStage (T1 added code/desc/prompt on top of the P4-A fields).
 interface LaunchStage {
   key: string
+  name: string
+  provider: string
+  model: string
+  gate: boolean
+  code: boolean
+  desc: string
+  prompt: string
 }
 
 interface LaunchWorkflow {
@@ -44,6 +52,17 @@ const IC = {
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3" fill="currentColor" stroke="none"/></svg>',
   bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg>',
+  // Task 3 additions — verbatim from the prototype's IC object (reference lines 826-843).
+  chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>',
+  flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 22V4M4 4h13l-2.2 3.5L17 11H4"/></svg>',
+}
+
+// Task 3: kept a single flat accent-color dot for every stage's model chip — the prototype's real
+// modelColor() maps a specific MODELS table (label -> oklch color) that only exists once the model
+// picker (Task 4) is wired up with a real provider/model catalog. Acceptable per the task brief; Task 4
+// replaces this with a real per-model color lookup.
+function modelColor(_stage: LaunchStage): string {
+  return 'var(--accent)'
 }
 
 function Icon({ svg }: { svg: string }) {
@@ -57,6 +76,10 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   const [info, setInfo] = useState<LaunchInfo>(EMPTY_INFO)
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>('')
   const [goal, setGoal] = useState(() => initialSeed ?? '')
+  // Task 3: per-stage expanded state for the config-state flowchart nodes. Mirrors the prototype's
+  // st.openNode, which is wiped whenever the workflow tab switches (initWf() resets it) — see
+  // selectWorkflow below.
+  const [openNodes, setOpenNodes] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -85,6 +108,17 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
     // stub
   }
 
+  // Switching workflow tabs resets which nodes are expanded (prototype's initWf() does the same).
+  const selectWorkflow = (id: string) => {
+    setSelectedWorkflowId(id)
+    setOpenNodes({})
+  }
+  const toggleNode = (key: string) => {
+    setOpenNodes((prev) => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  const stages = info.workflows.find((w) => w.id === selectedWorkflowId)?.stages ?? []
+
   return (
     <div className="wfo">
       <div className="wfo-scrim" onClick={onClose} />
@@ -106,7 +140,7 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                 key={w.id}
                 type="button"
                 className={`wfo-tab${w.id === selectedWorkflowId ? ' on' : ''}`}
-                onClick={() => setSelectedWorkflowId(w.id)}
+                onClick={() => selectWorkflow(w.id)}
               >
                 {w.name}
                 <span className="n">{w.stages.length}</span>
@@ -123,7 +157,61 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
         </div>
 
         <div className="wfo-flow">
-          <div className="wfo-chart" />
+          <div className="wfo-chart">
+            <div className="wfo-term start">
+              <Icon svg={IC.play} />开始
+            </div>
+            <div className="wfo-conn">
+              <span className="ln" />
+              <span className="ar" />
+            </div>
+            {stages.map((stage) => (
+              <Fragment key={stage.key}>
+                <div className={`wfo-node${openNodes[stage.key] ? ' open' : ''}`}>
+                  <div className="wfo-box">
+                    <div className="wfo-cardhead" data-node={stage.key} onClick={() => toggleNode(stage.key)}>
+                      <span className="wfo-ic">
+                        <span className="hd" />
+                      </span>
+                      <span className="wfo-cn">
+                        <b>{stage.name}</b>
+                        <span>{stage.desc}</span>
+                      </span>
+                      <span className={`wfo-mode${stage.code ? ' code' : ''}`}>{stage.code ? '代码' : '读写'}</span>
+                      {stage.gate && (
+                        <span className="wfo-gate" title="需人工确认后才会继续下游阶段">
+                          门
+                        </span>
+                      )}
+                      {stage.code ? (
+                        <span className="wfo-model ro" title="每个代码项目单独选择模型 · 展开查看">
+                          <span className="dot" style={{ background: modelColor(stage) }} />
+                          <span className="mv">{stage.provider} · {stage.model}</span>
+                        </span>
+                      ) : (
+                        <span className="wfo-model" data-model={stage.key}>
+                          <span className="dot" style={{ background: modelColor(stage) }} />
+                          <span className="mv">{stage.provider} · {stage.model}</span>
+                          <Icon svg={IC.chev} />
+                        </span>
+                      )}
+                      <span className="wfo-chev">
+                        <Icon svg={IC.chev} />
+                      </span>
+                    </div>
+                    <div className="wfo-cardbody" />
+                  </div>
+                </div>
+                <div className="wfo-conn">
+                  <span className="ln" />
+                  <span className="ar" />
+                </div>
+              </Fragment>
+            ))}
+            <div className="wfo-term end">
+              <Icon svg={IC.flag} />结束
+            </div>
+          </div>
         </div>
 
         <div className="wfo-foot">
