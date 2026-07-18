@@ -188,7 +188,9 @@ describe('createWorkspace', () => {
     expect(ws.projects[0].name).toBe('go-blog')
   })
 
-  it('installs the forge-workflow skill into the new workspace', async () => {
+  // Pure chat (P5 T1): the chat agent no longer gets forge tools, so the forge-workflow skill (which
+  // only a forge-tool-wielding chat agent would ever read) is no longer installed into new workspaces.
+  it('does NOT install the forge-workflow skill into the new workspace', async () => {
     const src = join(root, 'srcproj5'); await makeSourceRepo(src)
     const { createWorkspace } = await import('./workspaceService')
     const projects = [{ id: 'proj', name: 'proj', repoUrl: src, defaultBranch: 'main' }]
@@ -201,7 +203,7 @@ describe('createWorkspace', () => {
       },
       knownProjects: projects, proxy: ''
     })
-    expect(existsSync(join(wsPath, FORGE_WORKFLOW_SKILL.relPath))).toBe(true)
+    expect(existsSync(join(wsPath, FORGE_WORKFLOW_SKILL.relPath))).toBe(false)
   })
 })
 

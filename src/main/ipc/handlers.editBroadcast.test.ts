@@ -40,7 +40,7 @@ vi.mock('../narrator/narratorService', () => ({ NarratorService: class { onEngin
 vi.mock('../workspace/workspaceList', () => ({ listWorkspaces: vi.fn(() => []) }))
 vi.mock('../workspace/workspaceRun', () => ({ workspaceToStartRunOpts: vi.fn() }))
 vi.mock('../chat/chatService', () => ({ sendTurn: vi.fn(), history: vi.fn(() => []) }))
-vi.mock('../skills/installSkill', () => ({ ensureWorkspaceSkill: vi.fn() }))
+vi.mock('../skills/installSkill', () => ({ removeWorkspaceSkill: vi.fn() }))
 vi.mock('../chat/chatStore', () => ({ appendMessage: vi.fn(), readMessages: vi.fn(() => []) }))
 vi.mock('../chat/sessionStore', () => ({
   readSessions: vi.fn(() => ({ sessions: [], activeSessionId: 's1' })),

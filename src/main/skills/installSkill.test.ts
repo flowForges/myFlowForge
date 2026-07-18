@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { ensureWorkspaceSkill } from './installSkill'
+import { dirname, join } from 'node:path'
+import { ensureWorkspaceSkill, removeWorkspaceSkill } from './installSkill'
 import { FORGE_WORKFLOW_SKILL } from './forgeWorkflowSkill'
 
 let ws: string
@@ -29,5 +29,25 @@ describe('ensureWorkspaceSkill', () => {
     writeFileSync(skillFile(), 'STALE', 'utf8')
     expect(ensureWorkspaceSkill(ws)).toBe(true)
     expect(readFileSync(skillFile(), 'utf8')).toBe(FORGE_WORKFLOW_SKILL.content)
+  })
+})
+
+describe('removeWorkspaceSkill', () => {
+  it('removes the forge-workflow skill dir and returns true, leaving a sibling skill untouched', () => {
+    ensureWorkspaceSkill(ws)   // installs .claude/skills/forge-workflow/SKILL.md
+    const forgeSkillDir = dirname(skillFile())
+    const siblingFile = join(ws, '.claude/skills/other-skill/SKILL.md')
+    mkdirSync(dirname(siblingFile), { recursive: true })
+    writeFileSync(siblingFile, 'other skill content', 'utf8')
+
+    expect(removeWorkspaceSkill(ws)).toBe(true)
+    expect(existsSync(forgeSkillDir)).toBe(false)
+    expect(existsSync(siblingFile)).toBe(true)
+  })
+
+  it('returns false and does not throw when the skill was never installed', () => {
+    expect(existsSync(dirname(skillFile()))).toBe(false)
+    expect(() => removeWorkspaceSkill(ws)).not.toThrow()
+    expect(removeWorkspaceSkill(ws)).toBe(false)
   })
 })

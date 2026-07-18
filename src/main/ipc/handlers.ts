@@ -76,7 +76,7 @@ import { pickInstaller } from '../update/installer'
 import { makeProxyFetch, makeContentFetch } from '../update/proxyFetch'
 import { writeFile, stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
-import { ensureWorkspaceSkill } from '../skills/installSkill'
+import { removeWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
 import { scanGlobalContext } from '../agents/globalContext'
 import { readInstalledSkills } from '../skills/installedSkills'
@@ -644,7 +644,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         return umsg
       }
     }
-    ensureWorkspaceSkill(payload.workspacePath)   // backfill/auto-update the skill for this workspace
+    removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
     const confirm = (req: { title: string; where?: string }) => new Promise<'allow' | 'deny'>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
@@ -743,11 +743,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         })
       },
     }).catch(() => null)
-    // FORGE_WORKFLOWS feeds forgeChatDirective (non-claude CLIs) with this workspace's named
-    // workflows so the agent can map the user's request onto a workflowId (Task 8). The claude
-    // path instead gets this via ensureWorkspaceSkill's appended SKILL.md section.
-    const chatWs = readWorkspace(payload.workspacePath)
-    const env = buildAgentEnv({ proxy: readSettings().termProxy, overrides: bridge ? { FORGE_SOCKET: bridge.socketPath, FORGE_AGENT_ID: 'chat', FORGE_MCP_ENTRY: mcpEntry, FORGE_TOOLS: 'forge_propose_plan,forge_delegate', FORGE_WORKFLOWS: JSON.stringify((chatWs?.workflows ?? []).map(wf => ({ id: wf.id, name: wf.name, stages: wf.stages.map(s => ({ key: s.key, name: s.name })) }))) } : undefined })
+    // Pure chat (P5 Task 1): the chat agent gets NO forge overrides — no FORGE_SOCKET/FORGE_TOOLS/
+    // FORGE_WORKFLOWS — so it has no forge MCP tools (forge_propose_plan/forge_delegate) for ANY
+    // provider, and forgeChatDirective(env) (gated on env.FORGE_TOOLS containing forge_propose_plan)
+    // returns '' automatically. Workflows only launch via the explicit run2 "工作流运行" launcher now.
+    const env = buildAgentEnv({ proxy: readSettings().termProxy })
     // Snapshot proposes already pending for this workspace before the turn — those belong to earlier
     // turns (fire-and-forget auto-triggers the user hasn't acted on yet) and must survive this turn.
     const preProposes = new Set(proposeRun.pendingIds(payload.workspacePath))
