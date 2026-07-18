@@ -301,6 +301,9 @@ const api = {
     editFeedback: (a: { workspacePath: string; id: string; text: string }) => ipcRenderer.invoke(CH.run2EditFeedback, a),
     removeFeedback: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.run2RemoveFeedback, a),
     abort: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.run2Abort, a),
+    pause: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.run2Pause, a),
+    resume: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.run2Resume, a),
+    jumpBack: (a: { workspacePath: string; targetKey: string }) => ipcRenderer.invoke(CH.run2JumpBack, a),
     getState: (workspacePath: string) => ipcRenderer.invoke(CH.run2GetState, { workspacePath }),
     // P4-A launcher: list a workspace's named workflows + projects, and start one by id (server-side
     // resolves ws.workflows[].stages into a RunPlan — the renderer only picks workflowId/projectNames).

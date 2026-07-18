@@ -203,6 +203,9 @@ export const CH = {
   run2EditFeedback: 'run2:edit-feedback',
   run2RemoveFeedback: 'run2:remove-feedback',
   run2Abort: 'run2:abort',
+  run2Pause: 'run2:pause',
+  run2Resume: 'run2:resume',
+  run2JumpBack: 'run2:jump-back',
   run2GetState: 'run2:get-state',
   run2Event: 'run2:event',
   run2Update: 'run2:update',
@@ -225,6 +228,9 @@ export const run2AddFeedback = CH.run2AddFeedback
 export const run2EditFeedback = CH.run2EditFeedback
 export const run2RemoveFeedback = CH.run2RemoveFeedback
 export const run2Abort = CH.run2Abort
+export const run2Pause = CH.run2Pause
+export const run2Resume = CH.run2Resume
+export const run2JumpBack = CH.run2JumpBack
 export const run2GetState = CH.run2GetState
 export const run2Event = CH.run2Event
 export const run2Update = CH.run2Update

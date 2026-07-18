@@ -84,4 +84,7 @@ export class Run2Manager {
   editFeedback(wsPath: string, id: string, text: string): void { this.controllers.get(wsPath)?.editFeedback(id, text) }
   removeFeedback(wsPath: string, id: string): void { this.controllers.get(wsPath)?.removeFeedback(id) }
   abort(wsPath: string): void { this.controllers.get(wsPath)?.abort() }
+  pause(wsPath: string): void { this.controllers.get(wsPath)?.pause() }
+  resume(wsPath: string): void { this.controllers.get(wsPath)?.resume() }
+  requestJumpBack(wsPath: string, targetKey: string): void { this.controllers.get(wsPath)?.requestJumpBack(targetKey) }
 }

@@ -50,6 +50,25 @@ describe('registerRun2', () => {
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 
+  it('wires run2:pause/resume/jump-back through to manager, no-throw on an unknown workspace', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+    try {
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+      expect(handlers.has(CH.run2Pause)).toBe(true)
+      expect(handlers.has(CH.run2Resume)).toBe(true)
+      expect(handlers.has(CH.run2JumpBack)).toBe(true)
+      const pause = handlers.get(CH.run2Pause)!
+      const resume = handlers.get(CH.run2Resume)!
+      const jumpBack = handlers.get(CH.run2JumpBack)!
+      // unknown workspace → safe no-ops (mirrors abort's contract above)
+      expect(() => pause({}, { workspacePath: ws })).not.toThrow()
+      expect(() => resume({}, { workspacePath: ws })).not.toThrow()
+      expect(() => jumpBack({}, { workspacePath: ws, targetKey: 'design' })).not.toThrow()
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
   it('wires run2:get-state for mount/reload recovery', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
     try {

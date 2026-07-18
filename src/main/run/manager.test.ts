@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -194,5 +194,37 @@ describe('Run2Manager', () => {
     mgr.start({ workspacePath: ws, runId: 'run-perm-default', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
     await new Promise((r) => setTimeout(r, 50))
     expect(seenModes).toEqual(['full'])
+  })
+
+  it('pause/resume/requestJumpBack route to the active workspace\'s controller', async () => {
+    const mgr = new Run2Manager({
+      providers: { x: gatedProvider() }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: { event: () => {}, update: () => {} },
+    })
+    const plan = planFromStages('run-ctl', stages)
+    mgr.start({ workspacePath: ws, runId: 'run-ctl', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+    const ctl = mgr.get(ws)
+    expect(ctl).toBeDefined()
+    const pauseSpy = vi.spyOn(ctl!, 'pause')
+    const resumeSpy = vi.spyOn(ctl!, 'resume')
+    const jumpSpy = vi.spyOn(ctl!, 'requestJumpBack')
+
+    mgr.pause(ws)
+    expect(pauseSpy).toHaveBeenCalledTimes(1)
+
+    mgr.resume(ws)
+    expect(resumeSpy).toHaveBeenCalledTimes(1)
+
+    mgr.requestJumpBack(ws, 'design')
+    expect(jumpSpy).toHaveBeenCalledTimes(1)
+    expect(jumpSpy).toHaveBeenCalledWith('design')
+  })
+
+  it('pause/resume/requestJumpBack on an unknown workspace are safe no-ops', () => {
+    const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+    expect(() => mgr.pause('/nope')).not.toThrow()
+    expect(() => mgr.resume('/nope')).not.toThrow()
+    expect(() => mgr.requestJumpBack('/nope', 'design')).not.toThrow()
   })
 })
