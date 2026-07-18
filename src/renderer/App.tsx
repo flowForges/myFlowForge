@@ -85,9 +85,6 @@ export function App() {
   const [pendingConfirm, setPendingConfirm] = useState<{ kind: 'archive' | 'remove'; id: string } | null>(null)
   const [createErr, setCreateErr] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  // Created workspaces don't auto-run. We stash their StartRunOpts keyed by ws path; the user's
-  // first chat message in that workspace starts the run (seeded with the message as the task).
-  const [pendingStart, setPendingStart] = useState<Record<string, StartRunOpts>>({})
   const [editing, setEditing] = useState<Workspace | null>(null)
   // Notifications start empty — they're populated by real lifecycle events (notifFromLifecycle).
   // No mock seed, so the bell shows a badge only when something real is unread.
@@ -407,13 +404,6 @@ export function App() {
   // Quick alias rename (no wizard) from the sidebar.
   const renameWs = (path: string, name: string) => { void window.forge.renameWorkspace?.({ path, name }).then(() => home.reload()) }
 
-  // Start the stashed run for a workspace, seeding it with the user's first chat message as the task,
-  // then drop the stash so subsequent composer sends fall through to normal chat.
-  const startRunForWs = (opts: StartRunOpts, task: string) => {
-    void window.forge.startRun({ ...opts, task })
-    setPendingStart(s => { const n = { ...s }; delete n[opts.workspacePath]; return n })
-  }
-
   async function handleEdit(opts: CreateWorkspaceOpts) {
     if (creating || !editing) return
     creatingNameRef.current = opts.name          // name a backgrounded edit-done notif
@@ -442,8 +432,6 @@ export function App() {
       const { startRunOpts } = await window.forge.createWorkspace(opts)
       // main expands `~` once and stores/registers/runs under the absolute path, so the renderer
       // MUST key everything off that canonical path — not the raw `opts.path` (which may be `~/…`).
-      // Using the raw path would mismatch the registry/run/chat keys: the stash would never clear
-      // and runLive would never become true, re-firing startRun on every message (duplicate runs).
       const wsPath = (startRunOpts as StartRunOpts).workspacePath
       setCreateErr(null)
       setWizardOpen(false)                       // close only on success
@@ -452,8 +440,8 @@ export function App() {
       setActiveId(wsPath)                        // highlight the new workspace in the sidebar
       setView('ws')                              // switch to the workspace view
       home.reload()                              // newly-created workspace shows on next home visit
-      // Stash the run opts instead of auto-running; the first chat message will start the run.
-      setPendingStart(s => ({ ...s, [wsPath]: startRunOpts as StartRunOpts }))
+      // No auto-run stash: the new workspace opens in plain chat. Workflows only start explicitly
+      // via the run2 launcher (see handleQuickFolder below for the same no-stash pattern).
     } catch (e) {
       setSetupVisible(false)                     // also dismiss on error
       setSetupState(INITIAL_SETUP_STATE)
@@ -469,8 +457,7 @@ export function App() {
     }
   }
 
-  // 空态快速上手:选一个本地文件夹,建一个「纯文件夹工作区」(无项目、无阶段)直接进入对话。与 handleCreate
-  // 的关键区别是 **不** stash pendingStart —— 没有工作流,第一条消息应当是普通对话而非触发运行。
+  // 空态快速上手:选一个本地文件夹,建一个「纯文件夹工作区」(无项目、无阶段)直接进入对话。
   async function handleQuickFolder() {
     if (creating) return
     let dir: string | null = null
@@ -649,8 +636,6 @@ export function App() {
                 engine={engine}
                 providers={providers}
                 workspacePath={activeWsId || undefined}
-                pendingStartOpts={activeWsId ? pendingStart[activeWsId] : undefined}
-                onStartRun={startRunForWs}
                 inspectorWidth={inspector.width}
                 onInspectorHandleDown={inspector.onHandleDown}
                 inspectorCollapsed={inspCollapsed}
