@@ -18,26 +18,45 @@ const STAGE_GLYPH: Record<StageStatus, string> = {
   pending: '·',
 }
 
-// Region 1: overall status + stage-flow strip + cancel button.
+// Pure helper: ms → human duration, e.g. 3000 -> "3s". Kept simple per task brief (no m:ss).
+export function fmtDuration(ms: number): string {
+  return `${Math.round(ms / 1000)}s`
+}
+
+// Region 1: overall status + stage-flow rail + cancel button. Each node shows the stage's model
+// (from machine.plan.stages, matched by key), status glyph, and duration (from stageTimings —
+// defend against it being absent on old/persisted state). Nodes stay clickable/keyboard-selectable,
+// driving the same selection StageOutput reads.
 function RunHead({ api, selectedStageKey, onSelectStage }: { api: Run2Api; selectedStageKey: string | undefined; onSelectStage: (key: string) => void }) {
-  const { machine, status } = api.state!
+  const { machine, status, stageTimings } = api.state!
   return (
     <div className="run2-head">
       <div className="run2-status">运行状态：{status}</div>
-      <div className="run2-stage-flow">
-        {machine.stages.map((s, i) => (
-          <span
-            key={s.key}
-            role="button"
-            tabIndex={0}
-            className={`run2-stage-chip${i === machine.currentIndex ? ' current' : ''}${s.key === selectedStageKey ? ' selected' : ''} st-${s.status}`}
-            onClick={() => onSelectStage(s.key)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectStage(s.key) } }}
-          >
-            <span className="run2-stage-glyph">{STAGE_GLYPH[s.status] ?? '·'}</span>
-            <span className="run2-stage-key">{s.key}</span>
-          </span>
-        ))}
+      <div className="run2-stage-flow run2-rail">
+        {machine.stages.map((s, i) => {
+          const model = machine.plan.stages.find((p) => p.key === s.key)?.model ?? ''
+          const timing = stageTimings?.[s.key]
+          const dur = timing?.endedAt != null
+            ? fmtDuration(timing.endedAt - timing.startedAt)
+            : (s.status === 'running' ? '运行中' : '')
+          return (
+            <span key={s.key} className="run2-rail-item">
+              {i > 0 && <span className="run2-rail-link" aria-hidden="true">→</span>}
+              <span
+                role="button"
+                tabIndex={0}
+                className={`run2-stage-chip run2-rail-node${i === machine.currentIndex ? ' current' : ''}${s.key === selectedStageKey ? ' selected' : ''} st-${s.status}`}
+                onClick={() => onSelectStage(s.key)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectStage(s.key) } }}
+              >
+                <span className="run2-stage-glyph">{STAGE_GLYPH[s.status] ?? '·'}</span>
+                <span className="run2-stage-key">{s.key}</span>
+                {model && <span className="run2-rail-model">{model}</span>}
+                {dur && <span className="run2-rail-dur">{dur}</span>}
+              </span>
+            </span>
+          )
+        })}
       </div>
       <button className="txt-btn run2-abort" onClick={() => api.abort()}>取消运行</button>
     </div>

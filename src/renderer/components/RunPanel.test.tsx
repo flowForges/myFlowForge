@@ -342,4 +342,47 @@ describe('RunPanel', () => {
     fireEvent.click(screen.getByText('review'))
     expect(screen.queryByText(/待你审核的产出/)).not.toBeInTheDocument()
   })
+
+  it('flow rail: a done stage node shows its model and computed duration', () => {
+    const state = makeState({
+      machine: {
+        plan: {
+          runId: 'r1',
+          stages: [
+            { key: 'design', name: 'design', provider: 'codex', model: 'gpt-x', scope: 'root', gate: true },
+          ],
+        },
+        stages: [{ key: 'design', status: 'done', round: 0 }],
+        currentIndex: 0,
+      },
+      inbox: [],
+      outcomes: {},
+      stageTimings: { design: { startedAt: 1000, endedAt: 4000 } },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    expect(screen.getByText('gpt-x')).toBeInTheDocument()
+    expect(screen.getByText('3s')).toBeInTheDocument()
+  })
+
+  it('flow rail: a running stage node with no endedAt shows "运行中" instead of a duration', () => {
+    const state = makeState({
+      machine: {
+        plan: {
+          runId: 'r1',
+          stages: [
+            { key: 'design', name: 'design', provider: 'codex', model: 'gpt-x', scope: 'root', gate: true },
+          ],
+        },
+        stages: [{ key: 'design', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      inbox: [],
+      outcomes: {},
+      stageTimings: { design: { startedAt: 1000 } },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    expect(screen.getByText('运行中')).toBeInTheDocument()
+  })
 })
