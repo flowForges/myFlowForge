@@ -158,7 +158,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     },
     onError: (w, err) => console.error(`[run2] ${w}:`, err),
   })
-  registerRun2({ manager: run2Manager, onInvoke: (ch, h) => ipcMain.handle(ch, h) })
+  registerRun2({
+    manager: run2Manager, onInvoke: (ch, h) => ipcMain.handle(ch, h),
+    readWorkspace, readWorkflows: () => readWorkflows().workflows, readCustomStages: () => readCustomStages().stages,
+  })
 
   const UPDATE_REPO = 'flowForges/myFlowForge'
   const updateChecker = createUpdateChecker({
