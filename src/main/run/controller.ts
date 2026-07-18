@@ -4,7 +4,7 @@ import type { AgentProvider, ConfirmReq, InputReq } from '../agents/types'
 import type { ArtifactRef } from '../orchestrator/types'
 import type { DevelopProject } from '../orchestrator/orchestrator'
 import type { RunStore } from '../orchestrator/runStore'
-import { initMachine, markRunning, currentStage, type RunPlan, type MachineState } from './machine'
+import { initMachine, markRunning, currentStage, jumpBack, type RunPlan, type MachineState } from './machine'
 import { applyGateDecision, type GateDecision, type LaneDecision } from './decisions'
 import { addEvent, removeEvent, findEvent, type RunEvent } from './events'
 import { addFeedback, editFeedback, removeFeedback, drainFeedback, type FeedbackDraft } from './feedback'
@@ -55,6 +55,10 @@ export class RunController {
   private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
   private aborted = false
   private paused = false
+  // Set by requestJumpBack(), applied at the next stage boundary (see start()). Deliberately not
+  // applied immediately — an in-flight stage's lanes must always finish uninterrupted, same
+  // rationale as pause() (see its comment).
+  private pendingJumpBack: string | null = null
   // Set only while start()'s loop is actually parked at the pause gate (see start()); abort()
   // must resolve it to release a paused run, or start() would await it forever.
   private pauseResolve: (() => void) | null = null
@@ -164,6 +168,22 @@ export class RunController {
     r?.()
   }
 
+  /**
+   * Requests a mid-run rollback to an earlier, already-passed stage. Only records the request —
+   * it's applied at the next stage boundary (start()'s loop top), same as pause(): an in-flight
+   * stage's lanes are never interrupted. `targetKey` must name a stage strictly before the
+   * current one (a real rollback, not a same-stage redo or a jump forward) or the request is
+   * silently ignored — both here (fail fast on an obviously-bad request) and again when the
+   * boundary actually applies it, since currentIndex may have moved by then.
+   */
+  requestJumpBack(targetKey: string): void {
+    if (this.status !== 'running') return
+    const idx = this.machine.stages.findIndex((s) => s.key === targetKey)
+    if (idx < 0 || idx >= this.machine.currentIndex) return
+    this.pendingJumpBack = targetKey
+    this.emitUpdate()
+  }
+
   private workspacePath(): string { return this.deps.store.runDir.replace(/\/\.forge\/runs\/[^/]+$/, '') }
   private upstream(uptoIndex: number): ArtifactRef[] {
     const refs: ArtifactRef[] = []
@@ -251,6 +271,19 @@ export class RunController {
         await new Promise<void>((res) => { this.pauseResolve = res })
       }
       if (this.aborted) break
+      // Jump-back gate: applied here, at the stage boundary, before the next stage is read/started
+      // — same in-flight-safety rationale as the pause gate above. Re-validate against the current
+      // machine (currentIndex may have moved since requestJumpBack() was called, e.g. a paused run
+      // resumed and advanced further before this check ever ran).
+      if (this.pendingJumpBack) {
+        const target = this.pendingJumpBack
+        this.pendingJumpBack = null
+        const idx = this.machine.stages.findIndex((s) => s.key === target)
+        if (idx >= 0 && idx < this.machine.currentIndex) {
+          this.machine = jumpBack(this.machine, target)
+          this.emitUpdate()
+        }
+      }
       const cur = currentStage(this.machine)
       if (!cur || cur.status === 'done') break
       this.machine = markRunning(this.machine); this.status = 'running'; this.emitUpdate()
