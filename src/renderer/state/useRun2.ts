@@ -17,6 +17,9 @@ export interface Run2Api {
   editFeedback: (id: string, text: string) => void
   removeFeedback: (id: string) => void
   abort: () => void
+  pause: () => void
+  resume: () => void
+  jumpBack: (targetKey: string) => void
 }
 
 function getRun2(): any {
@@ -105,5 +108,20 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     if (r && workspacePath) r.abort({ workspacePath })
   }, [workspacePath])
 
-  return { state, laneLogs, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort }
+  const pause = useCallback(() => {
+    const r = getRun2()
+    if (r && workspacePath) r.pause({ workspacePath })
+  }, [workspacePath])
+
+  const resume = useCallback(() => {
+    const r = getRun2()
+    if (r && workspacePath) r.resume({ workspacePath })
+  }, [workspacePath])
+
+  const jumpBack = useCallback((targetKey: string) => {
+    const r = getRun2()
+    if (r && workspacePath) r.jumpBack({ workspacePath, targetKey })
+  }, [workspacePath])
+
+  return { state, laneLogs, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack }
 }

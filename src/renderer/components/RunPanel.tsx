@@ -59,6 +59,49 @@ export function fmtDuration(ms: number): string {
   return `${Math.round(ms / 1000)}s`
 }
 
+// Run control bar: pause/resume (stage-boundary only, see task-4 brief) + rollback-to-an-earlier-
+// stage. Kept as its own component (rendered inside RunHead) so the pause/resume/rollback gating
+// logic reads as one unit next to the abort button it sits beside.
+function RunControlBar({ api }: { api: Run2Api }) {
+  const { status, paused, machine } = api.state!
+  // 暂停 must be gated on status==='running' (not just !paused) — otherwise it's a dead no-op
+  // while the run is parked at a gate (status==='awaiting'). See T1 review note in the task brief.
+  const showPause = status === 'running' && !paused
+  const priorStages = machine.stages.filter((_, i) => i < machine.currentIndex)
+  return (
+    <div className="run2-ctrl">
+      {showPause && (
+        <button type="button" className="txt-btn run2-ctrl-pause" onClick={() => api.pause()}>暂停</button>
+      )}
+      {paused && (
+        <>
+          <span className="run2-paused-badge">已暂停</span>
+          <button type="button" className="txt-btn run2-ctrl-resume" onClick={() => api.resume()}>继续</button>
+        </>
+      )}
+      {priorStages.length > 0 && (
+        <div className="run2-ctrl-rollback">
+          <span className="run2-ctrl-rollback-label">回退到…</span>
+          {priorStages.map((s) => (
+            // Full button text is "回退到 <key>" (not the bare key) — the bare stage key is
+            // already used as the stage-flow chip's text, and rendering it again here would make
+            // that text ambiguous for anything querying by stage key (tests included).
+            <button
+              type="button"
+              key={s.key}
+              className="txt-btn run2-ctrl-rollback-item"
+              disabled={status !== 'running'}
+              onClick={() => api.jumpBack(s.key)}
+            >
+              回退到 {s.key}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Region 1: overall status + stage-flow rail + cancel button. Each node shows the stage's model
 // (from machine.plan.stages, matched by key), status glyph, and duration (from stageTimings —
 // defend against it being absent on old/persisted state). Nodes stay clickable/keyboard-selectable,
@@ -97,6 +140,7 @@ function RunHead({ api, selectedStageKey, onSelectStage }: { api: Run2Api; selec
           )
         })}
       </div>
+      <RunControlBar api={api} />
       <button className="txt-btn run2-abort" onClick={() => api.abort()}>取消运行</button>
     </div>
   )
