@@ -41,6 +41,7 @@ import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
 import { RunPanel } from '../components/RunPanel'
+import { RunLauncher } from '../components/RunLauncher'
 
 function importedToChat(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
@@ -843,25 +844,8 @@ export function WorkspaceView({ engine, providers, workspacePath, pendingStartOp
             chat column above stays fully intact (wrapped, not deleted) when mode2 === 'chat'. */}
         {mode2 === 'run2' && (
           <div className="run2-mode-body">
-            {run2.state === null && (
-              <button
-                className="btn-add"
-                disabled={!wsPath || !wsInfo}
-                onClick={() => {
-                  if (!wsPath || !wsInfo || !window.forge?.run2) return
-                  void window.forge.run2.start({
-                    workspacePath: wsPath,
-                    runId: 'run2-' + Date.now(),
-                    stages: wsInfo.stages,
-                    projects: wsInfo.projects.map(p => {
-                      const name = p.name || p.repoId
-                      return { name, cwd: wsPath + '/' + name, provider: p.provider || undefined, model: p.model || undefined }
-                    }),
-                  })
-                }}
-              >
-                用当前工作流配置启动（试运行）
-              </button>
+            {run2.state === null && wsPath && (
+              <RunLauncher workspacePath={wsPath} />
             )}
             <RunPanel api={run2} />
           </div>
