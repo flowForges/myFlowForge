@@ -156,6 +156,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     emit: {
       event: (w, e) => broadcast(CH.run2Event, { workspacePath: w, event: e }),
       update: (w, s) => broadcast(CH.run2Update, { workspacePath: w, state: s }),
+      log: (w, l) => broadcast(CH.run2Log, { workspacePath: w, log: l }),
     },
     onError: (w, err) => console.error(`[run2] ${w}:`, err),
   })

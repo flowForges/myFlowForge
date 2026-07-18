@@ -206,6 +206,7 @@ export const CH = {
   run2GetState: 'run2:get-state',
   run2Event: 'run2:event',
   run2Update: 'run2:update',
+  run2Log: 'run2:log',
   // P4-A launcher: resolve a workspace's named workflows/projects server-side (run2LaunchInfo), and
   // resolve the picked workflow's stages (ws.workflows[].stages, NOT the permanently-empty legacy
   // ws.stages) into a RunPlan before starting run2 (run2StartWorkflow).
@@ -227,6 +228,7 @@ export const run2Abort = CH.run2Abort
 export const run2GetState = CH.run2GetState
 export const run2Event = CH.run2Event
 export const run2Update = CH.run2Update
+export const run2Log = CH.run2Log
 export const run2LaunchInfo = CH.run2LaunchInfo
 export const run2StartWorkflow = CH.run2StartWorkflow
 export const run2ReadFile = CH.run2ReadFile
