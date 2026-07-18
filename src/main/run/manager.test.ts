@@ -8,6 +8,7 @@ import { planFromStages } from './planFromStages'
 import type { StageSpec } from '../orchestrator/orchestrator'
 import type { RunEvent } from './events'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
+import type { RunLogLine } from './controller'
 
 let ws: string
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'mgr-')) })
@@ -118,6 +119,37 @@ describe('Run2Manager', () => {
     const init2 = mgr.start({ workspacePath: ws, runId: 'run-done-2', plan: plan2, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
     expect(init2.status).toBe('running')
     expect(mgr.lastStateFor(ws)).toBeNull()
+  })
+
+  it('bridges controller.onLog to emit.log with the workspace path', async () => {
+    const logs: Array<{ workspacePath: string; log: RunLogLine }> = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task: AgentTask, cb: AgentCallbacks) {
+        cb.onLog({ ts: '', text: 'x', level: 'run', kind: 'output' })
+        const done = (async () => { cb.onHandoff?.({ summary: 'done' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const mgr = new Run2Manager({
+      providers: { x: provider }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: {
+        event: () => {}, update: () => {},
+        log: (workspacePath, log) => logs.push({ workspacePath, log }),
+      },
+    })
+    const plan = planFromStages('run-log', stages)
+    mgr.start({ workspacePath: ws, runId: 'run-log', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(logs.length).toBeGreaterThan(0)
+    expect(logs[0].workspacePath).toBe(ws)
+    expect(logs[0].log).toMatchObject({
+      laneId: expect.any(String),
+      agentName: expect.any(String),
+      line: { kind: 'output', text: 'x' },
+    })
   })
 
   it('threads Run2StartOpts.permissionMode through the controller into the work order task', async () => {

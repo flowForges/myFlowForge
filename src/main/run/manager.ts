@@ -2,7 +2,7 @@ import type { PermissionMode } from '@shared/permissions'
 import type { AgentProvider } from '../agents/types'
 import type { DevelopProject } from '../orchestrator/orchestrator'
 import type { RunStore } from '../orchestrator/runStore'
-import { RunController, type RunControllerState } from './controller'
+import { RunController, type RunControllerState, type RunLogLine } from './controller'
 import type { RunPlan } from './machine'
 import type { GateDecision, LaneDecision } from './decisions'
 import type { RunEvent } from './events'
@@ -10,6 +10,8 @@ import type { RunEvent } from './events'
 export interface Run2Emit {
   event(wsPath: string, e: RunEvent): void
   update(wsPath: string, s: RunControllerState): void
+  // Optional: existing manager tests that build `emit` without `log` must still compile/pass.
+  log?: (wsPath: string, log: RunLogLine) => void
 }
 export interface Run2StartOpts { workspacePath: string; runId: string; plan: RunPlan; projects: DevelopProject[]; task?: string; permissionMode?: PermissionMode }
 export interface Run2ManagerDeps {
@@ -45,6 +47,7 @@ export class Run2Manager {
     })
     controller.onEvent((e) => this.deps.emit.event(opts.workspacePath, e))
     controller.onUpdate((s) => this.deps.emit.update(opts.workspacePath, s))
+    controller.onLog((l) => this.deps.emit.log?.(opts.workspacePath, l))
     this.controllers.set(opts.workspacePath, controller)
     // .catch prevents an unhandled rejection (e.g. RunController.start()'s zero-work-orders throw)
     // from crashing the Electron main process; .finally frees the per-workspace serial lock.

@@ -319,6 +319,11 @@ const api = {
       ipcRenderer.on(CH.run2Update, listener)
       return () => ipcRenderer.removeListener(CH.run2Update, listener)
     },
+    onLog: (cb: (p: { workspacePath: string; log: unknown }) => void) => {
+      const listener = (_e: unknown, p: { workspacePath: string; log: unknown }) => cb(p)
+      ipcRenderer.on(CH.run2Log, listener)
+      return () => ipcRenderer.removeListener(CH.run2Log, listener)
+    },
   },
 }
 contextBridge.exposeInMainWorld('forge', api)
