@@ -7,6 +7,7 @@ function installForge(overrides: any = {}) {
   const run2 = {
     getState: vi.fn(async (_ws: string) => ({ machine: { plan: { runId: 'r', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {} })),
     resolveGate: vi.fn(), resolveLane: vi.fn(), addFeedback: vi.fn(), editFeedback: vi.fn(), removeFeedback: vi.fn(), abort: vi.fn(),
+    pause: vi.fn(), resume: vi.fn(), jumpBack: vi.fn(),
     onEvent: vi.fn((cb: any) => { eventCb = cb; return () => {} }),
     onUpdate: vi.fn((cb: any) => { updateCb = cb; return () => {} }),
     onLog: vi.fn((cb: any) => { logCb = cb; return () => {} }),
@@ -51,12 +52,21 @@ describe('useRun2', () => {
     expect(run2.removeFeedback).toHaveBeenCalledWith({ workspacePath: '/ws', id: 'f1' })
     act(() => result.current.abort())
     expect(run2.abort).toHaveBeenCalledWith({ workspacePath: '/ws' })
+    act(() => result.current.pause())
+    expect(run2.pause).toHaveBeenCalledWith({ workspacePath: '/ws' })
+    act(() => result.current.resume())
+    expect(run2.resume).toHaveBeenCalledWith({ workspacePath: '/ws' })
+    act(() => result.current.jumpBack('design'))
+    expect(run2.jumpBack).toHaveBeenCalledWith({ workspacePath: '/ws', targetKey: 'design' })
   })
 
   it('is a safe no-op when window.forge.run2 is absent', () => {
     const { result } = renderHook(() => useRun2('/ws'))
     expect(result.current.state).toBeNull()
     expect(() => result.current.abort()).not.toThrow()
+    expect(() => result.current.pause()).not.toThrow()
+    expect(() => result.current.resume()).not.toThrow()
+    expect(() => result.current.jumpBack('design')).not.toThrow()
   })
 
   it('is a safe no-op when workspacePath is undefined', () => {
@@ -64,6 +74,9 @@ describe('useRun2', () => {
     const { result } = renderHook(() => useRun2(undefined))
     expect(result.current.state).toBeNull()
     expect(() => result.current.abort()).not.toThrow()
+    expect(() => result.current.pause()).not.toThrow()
+    expect(() => result.current.resume()).not.toThrow()
+    expect(() => result.current.jumpBack('design')).not.toThrow()
   })
 
   it('buffers run2:log lines per lane for the matching workspace, and ignores other workspaces', async () => {

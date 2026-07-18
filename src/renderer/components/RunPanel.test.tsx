@@ -43,6 +43,9 @@ function makeApi(state: RunControllerState | null, laneLogs: Run2Api['laneLogs']
     editFeedback: vi.fn(),
     removeFeedback: vi.fn(),
     abort: vi.fn(),
+    pause: vi.fn(),
+    resume: vi.fn(),
+    jumpBack: vi.fn(),
   }
 }
 
@@ -452,5 +455,74 @@ describe('RunPanel', () => {
     const api = makeApi(makeState())
     render(<RunPanel api={api} />)
     expect(screen.queryByText('看实时日志')).not.toBeInTheDocument()
+  })
+
+  it('control bar: shows 暂停 while running and unpaused, calls pause() on click; no 继续/已暂停', () => {
+    const state = makeState({ status: 'running', paused: false })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    const pauseBtn = screen.getByText('暂停')
+    expect(pauseBtn).toBeInTheDocument()
+    expect(screen.queryByText('继续')).not.toBeInTheDocument()
+    expect(screen.queryByText('已暂停')).not.toBeInTheDocument()
+    fireEvent.click(pauseBtn)
+    expect(api.pause).toHaveBeenCalled()
+  })
+
+  it('control bar: when paused, shows 继续 + 已暂停 badge instead of 暂停, calls resume() on click', () => {
+    const state = makeState({ status: 'running', paused: true })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    expect(screen.queryByText('暂停')).not.toBeInTheDocument()
+    expect(screen.getByText('已暂停')).toBeInTheDocument()
+    const resumeBtn = screen.getByText('继续')
+    fireEvent.click(resumeBtn)
+    expect(api.resume).toHaveBeenCalled()
+  })
+
+  it('control bar: does NOT show 暂停 when status is awaiting (gate-parked), even though not paused', () => {
+    const state = makeState({ status: 'awaiting', paused: false })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    expect(screen.queryByText('暂停')).not.toBeInTheDocument()
+  })
+
+  it('control bar: 回退到… lists stages before currentIndex, click one calls jumpBack(key)', () => {
+    const state = makeState({
+      status: 'running',
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'dev', status: 'done', round: 0 },
+          { key: 'review', status: 'running', round: 0 },
+        ],
+        currentIndex: 2,
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    const rollback = screen.getByText('回退到…').closest('div') as HTMLElement
+    expect(rollback).toBeTruthy()
+    const designOpt = screen.getByText(/回退到 design/)
+    const devOpt = screen.getByText(/回退到 dev/)
+    expect(designOpt).toBeInTheDocument()
+    expect(devOpt).toBeInTheDocument()
+    fireEvent.click(devOpt)
+    expect(api.jumpBack).toHaveBeenCalledWith('dev')
+  })
+
+  it('control bar: 回退到… is absent when currentIndex is 0 (no prior stages)', () => {
+    const state = makeState({
+      status: 'running',
+      machine: {
+        plan: { runId: 'r1', stages: [] },
+        stages: [{ key: 'design', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+    })
+    const api = makeApi(state)
+    render(<RunPanel api={api} />)
+    expect(screen.queryByText('回退到…')).not.toBeInTheDocument()
   })
 })
