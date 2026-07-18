@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import './workflowOverlay.css'
 import type { Run2Api } from '../state/useRun2'
 import type { LiveLane, RunControllerState, RunLogLine } from '../../main/run/controller'
@@ -163,13 +163,21 @@ function StMark({ state }: { state: RunNodeState }) {
 }
 
 // B1: derives a stage's RunNodeState from run2 data — mirrors the mapping table in the WF-B plan.
-// Order matters: a failed outcome/inbox failure wins over everything else, then the confirm/input
-// gates, then done/ok, then running, else wait.
+// Order matters: a failed outcome/inbox failure wins over everything else, then the auth/confirm/
+// input gates, then done/ok, then running, else wait.
+//
+// FIX1: a provider's mid-lane `onConfirm` (e.g. a shell command needing authorization) emits an
+// `auth` inbox event while the controller keeps the stage/lane `running` (see controller.ts
+// runOneOrderLive's onConfirm) — without this branch the stage showed 执行中 forever with no way
+// to authorize/deny short of aborting the whole run. Reuses the 'confirm' visual (same warn-colored
+// node/badge classes) rather than adding a whole new RunNodeState — RunNodeGate below picks the
+// auth-specific action UI when both an auth AND a gate event could theoretically be present.
 function stageRunState(stageKey: string, state: RunControllerState): RunNodeState {
   const outcomes = state.outcomes[stageKey]
   const hasFailedOutcome = outcomes?.some((o) => o.status === 'failed') ?? false
   const hasFailureEvent = state.inbox.some((e) => e.kind === 'failure' && e.stageKey === stageKey)
   if (hasFailedOutcome || hasFailureEvent) return 'fail'
+  if (state.inbox.some((e) => e.kind === 'auth' && e.stageKey === stageKey)) return 'confirm'
   if (state.inbox.some((e) => e.kind === 'gate' && e.stageKey === stageKey)) return 'confirm'
   if (state.inbox.some((e) => e.kind === 'question' && e.stageKey === stageKey)) return 'input'
   const machineStatus = state.machine.stages.find((s) => s.key === stageKey)?.status
@@ -198,15 +206,26 @@ interface CodeLane {
   providerLabel: string
 }
 
-// B4: the set of lanes for a running code stage = union of liveLanes (still running) and
-// outcomes[stageKey] (settled), keyed by project — task brief's data-combining rule. Ordered by
-// launchInfo's project list when possible (falls back to encounter order for any project run2
-// reports that launchInfo doesn't know about, e.g. a stale/removed project).
+// B4 (FIX3): the set of lanes for a running code stage = union of liveLanes (still running),
+// outcomes[stageKey] (settled), AND `memory` (every project ever seen for this stage this run) —
+// task brief's data-combining rule, extended so a lane never disappears once observed. The engine
+// deletes a settled lane from liveLanes THE MOMENT its own work order resolves (controller.ts
+// runOneOrder), well before outcomes[stageKey] is written for the whole stage (only after every
+// lane's outcome — including any failure retry/skip decision — has settled, see the failure-await
+// loop in controller.ts start()). Without `memory`, a lane that finishes early would vanish from
+// the fan-out list for the remainder of the stage (and ALL lanes vanish during a failure-await, since
+// liveLanes is empty and outcomes[stageKey] isn't written yet). `memory` is a per-stage Map the
+// caller owns across renders (reset when the run identity changes) — this function reads AND writes
+// it, so each call folds in anything newly observed and echoes back anything previously seen but no
+// longer present in either live/outcome data (falling back to that lane's last-known state).
+// Ordered by launchInfo's project list when possible (falls back to encounter order for any project
+// run2 reports that launchInfo doesn't know about, e.g. a stale/removed project).
 function buildCodeLanes(
   stageKey: string,
   stagePlan: { provider: string; model: string } | undefined,
   state: RunControllerState,
-  projects: LaunchProject[]
+  projects: LaunchProject[],
+  memory: Map<string, CodeLane>
 ): CodeLane[] {
   const outcomeByProject = new Map<string, WorkOrderOutcome>()
   for (const o of state.outcomes[stageKey] ?? []) {
@@ -217,24 +236,34 @@ function buildCodeLanes(
     const l = state.liveLanes[laneId]
     if (l.stageKey === stageKey && l.project) liveByProject.set(l.project, l)
   }
-  const present = new Set<string>([...outcomeByProject.keys(), ...liveByProject.keys()])
+  const present = new Set<string>([...memory.keys(), ...outcomeByProject.keys(), ...liveByProject.keys()])
   const ordered = projects.filter((p) => present.has(p.name)).map((p) => p.name)
   for (const n of present) if (!ordered.includes(n)) ordered.push(n)
 
   return ordered.map((name) => {
     const outcome = outcomeByProject.get(name)
     const live = liveByProject.get(name)
+    const prior = memory.get(name)
     const proj = projects.find((p) => p.name === name)
     const provider = proj?.provider ?? stagePlan?.provider ?? ''
     const model = proj?.model ?? stagePlan?.model ?? ''
-    return {
+    // Settled-but-not-yet-in-outcomes (e.g. mid failure-await, when the whole stage's outcomes
+    // aren't written until every lane's retry/skip decision has resolved): fall back to the lane's
+    // last-known state rather than dropping back to 'wait' (which would misleadingly suggest the
+    // lane hasn't started). 'run' is the sensible fallback if we somehow have no prior snapshot
+    // either (present only via outcome/live keys, which the `outcome || live` branch above already
+    // covers — this only triggers for a memory-only entry, so `prior` is always defined there).
+    const laneState = outcome || live ? laneRunState(live, outcome) : prior?.state ?? 'run'
+    const lane: CodeLane = {
       project: name,
       laneId: `${stageKey}:${name}`,
-      state: laneRunState(live, outcome),
-      cwd: live?.cwd ?? outcome?.order.cwd ?? proj?.cwd,
+      state: laneState,
+      cwd: live?.cwd ?? outcome?.order.cwd ?? prior?.cwd ?? proj?.cwd,
       model: model ? `${provider} · ${model}` : provider,
       providerLabel: provider,
     }
+    memory.set(name, lane)
+    return lane
   })
 }
 
@@ -359,6 +388,22 @@ function RunNodeGate({
   const [value, setValue] = useState('')
 
   if (runState === 'confirm') {
+    // FIX1: an `auth` event (mid-lane onConfirm — e.g. a shell command awaiting authorization)
+    // takes priority over a `gate` event for the same stage — see stageRunState's ordering comment.
+    // Mirrors the deleted Run2EventCard's `kind === 'auth'` branch: 批准/拒绝 → resolveLane
+    // authorize/deny, with the event's title (+ where, if given) as the message.
+    const authEv = inbox.find((e) => e.kind === 'auth' && e.stageKey === stageKey)
+    if (authEv && authEv.kind === 'auth') {
+      return (
+        <div className="wfo-act">
+          <div className="am">{authEv.where ? `${authEv.title} · ${authEv.where}` : authEv.title}</div>
+          <div className="arow">
+            <button className="wfo-btn pri" onClick={() => onLane(authEv.id, { type: 'authorize' })}>批准</button>
+            <button className="wfo-btn ghost" onClick={() => onLane(authEv.id, { type: 'deny' })}>拒绝</button>
+          </div>
+        </div>
+      )
+    }
     const ev = inbox.find((e) => e.kind === 'gate' && e.stageKey === stageKey)
     if (!ev || ev.kind !== 'gate') return null
     return (
@@ -388,6 +433,29 @@ function RunNodeGate({
           <button className="wfo-btn pri" onClick={() => onLane(ev.id, { type: 'answer', value })}>提交</button>
         </div>
       </div>
+    )
+  }
+
+  // FIX2: a failed lane offered no recovery besides aborting the whole run. Mirrors the deleted
+  // Run2EventCard's `kind === 'failure'` branch: 重跑/跳过 → resolveLane retry/skipLane. A code
+  // stage can have MULTIPLE lanes failed at once (each its own `failure` event) — render one action
+  // block per event. Renders nothing once the failure has already been resolved (e.g. skipLane
+  // already applied — the inbox event is gone, only the permanent 'failed' outcome remains).
+  if (runState === 'fail') {
+    const failEvents = inbox.filter((e) => e.kind === 'failure' && e.stageKey === stageKey)
+    if (failEvents.length === 0) return null
+    return (
+      <>
+        {failEvents.map((ev) => ev.kind === 'failure' ? (
+          <div className="wfo-act" key={ev.id}>
+            <div className="am">{ev.error}（已重试 {ev.attempts} 次）</div>
+            <div className="arow">
+              <button className="wfo-btn pri" onClick={() => onLane(ev.id, { type: 'retry' })}>重跑</button>
+              <button className="wfo-btn ghost" onClick={() => onLane(ev.id, { type: 'skipLane' })}>跳过</button>
+            </div>
+          </div>
+        ) : null)}
+      </>
     )
   }
 
@@ -421,6 +489,32 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   const [starting, setStarting] = useState(false)
   const [queuedNote, setQueuedNote] = useState<string | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
+  // FIX7: run2 retains its last run's state after completion (see the run2 manager), so
+  // `run2.state != null` alone can't distinguish "no run yet, show CONFIG" from "a run finished,
+  // still show that RUN". Reopening the overlay after a run completes would otherwise strand the
+  // user in RUN mode (just a 完成 button) with no way to configure a new run. `forceConfig`, once
+  // set (via the done-state foot's 新建工作流 button below), makes THIS mount ignore the retained
+  // run2.state and fall back to CONFIG mode — reset when a fresh run actually starts.
+  const [forceConfig, setForceConfig] = useState(false)
+  // FIX3: per-stage `project -> last-known CodeLane` memory, so a fan-out lane never disappears
+  // once observed (see buildCodeLanes' comment for why the engine's live/outcome data alone isn't
+  // enough). Reset whenever the run identity changes (mirrors useRun2's own runId-keyed reset for
+  // laneLogs) so a second run in the same workspace doesn't inherit a stale lane snapshot.
+  const codeLaneMemoryRef = useRef<Map<string, Map<string, CodeLane>>>(new Map())
+  const lastCodeRunIdRef = useRef<string | null>(null)
+  const liveRunId = run2.state?.machine.plan.runId ?? null
+  if (liveRunId !== lastCodeRunIdRef.current) {
+    lastCodeRunIdRef.current = liveRunId
+    codeLaneMemoryRef.current = new Map()
+  }
+  const getCodeLaneMemory = (stageKey: string): Map<string, CodeLane> => {
+    let m = codeLaneMemoryRef.current.get(stageKey)
+    if (!m) {
+      m = new Map()
+      codeLaneMemoryRef.current.set(stageKey, m)
+    }
+    return m
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -499,6 +593,10 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
     setStartError(null)
     setQueuedNote(null)
     setStarting(true)
+    // FIX7: starting a new run from CONFIG mode (whether it's the first run this mount, or a
+    // 新建工作流 relaunch after a previous run's retained state) resets forceConfig so the overlay
+    // follows the new run into RUN mode once run2.state reflects it.
+    setForceConfig(false)
     Promise.resolve(
       run2Ipc.startWorkflow({
         workspacePath,
@@ -550,16 +648,26 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
     setOpenRepo((prev) => ({ ...prev, [key]: !prev[key] }))
   }
 
-  // B1 (WF-B): `run2.state != null` is RUN mode. `now` ticks every second while running so the
-  // per-node elapsed time (fmtTime(now - startedAt)) for the currently-running stage stays live —
-  // mirrors the prototype's setInterval-driven #wftime-<k> updater (reference lines 866-876).
-  const running = run2.state != null
+  // B1 (WF-B): `run2.state != null` is RUN mode — EXCEPT `forceConfig` (FIX7), which makes this
+  // mount ignore a retained-but-terminal run2.state so the user can configure a brand new run.
+  const running = !forceConfig && run2.state != null
+  // B5: not-done (running/awaiting a gate) vs. done (status 'ok' or 'failed' — the run has stopped,
+  // one way or the other). Computed up here (not just near the foot, where it originally lived) so
+  // FIX6's elapsed-time interval below can gate on it too.
+  const runStatus = running ? run2.state!.status : null
+  const runDone = running && (runStatus === 'ok' || runStatus === 'failed')
+  // `now` ticks every second while running so the per-node elapsed time (fmtTime(now - startedAt))
+  // for the currently-running stage stays live — mirrors the prototype's setInterval-driven
+  // #wftime-<k> updater (reference lines 866-876). FIX6: run2 RETAINS its last run's state after
+  // completion (see the run2 manager / `runView` note in WorkspaceView), so gating only on
+  // `running` re-armed this interval forever once a run finished — stopped ticking (and re-rendering
+  // every 1s) requires also checking `!runDone`.
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    if (!running) return
+    if (!running || runDone) return
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(id)
-  }, [running])
+  }, [running, runDone])
 
   // Ordered stage list for RUN mode, sourced from the actual run plan (machine.plan.stages) rather
   // than the config-tab selection above — once a run exists it is authoritative regardless of which
@@ -591,12 +699,10 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
   const runAllDone = running && run2.state!.status === 'ok' && totalStages > 0
 
   // B5: foot run controls — not-done (running/awaiting a gate) shows 终止 (+ 暂停/继续 from run2's
-  // pause/resume, P-C1) vs. done (status 'ok' or 'failed' — the run has stopped, one way or the
-  // other) shows a single 完成 that closes the overlay. Prototype only models the ok/终止 branches
-  // (reference lines 579-589); 'failed' reuses the done branch per the task brief since a failed run
-  // has also stopped and needs no more terminate/pause controls.
-  const runStatus = running ? run2.state!.status : null
-  const runDone = running && (runStatus === 'ok' || runStatus === 'failed')
+  // pause/resume, P-C1) vs. done (runStatus/runDone, computed above alongside the FIX6 interval)
+  // shows a single 完成 that closes the overlay + (FIX7) 新建工作流. Prototype only models the
+  // ok/终止 branches (reference lines 579-589); 'failed' reuses the done branch per the task brief
+  // since a failed run has also stopped and needs no more terminate/pause controls.
   const runPaused = running && !!run2.state!.paused
 
   return (
@@ -678,7 +784,7 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
               const laneCwd = run2.state!.liveLanes[laneId]?.cwd ?? run2.state!.outcomes[rs.key]?.[0]?.order.cwd
               const laneLines = run2.laneLogs[laneId] ?? []
               const codeLanes = rs.code
-                ? buildCodeLanes(rs.key, { provider: rs.provider, model: rs.model }, run2.state!, info.projects)
+                ? buildCodeLanes(rs.key, { provider: rs.provider, model: rs.model }, run2.state!, info.projects, getCodeLaneMemory(rs.key))
                 : []
               const glanesCls =
                 st === 'ok' ? ' done' : st === 'run' || st === 'confirm' || st === 'input' ? ' run' : ''
@@ -749,7 +855,10 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                             })
                           )}
                         </div>
-                        {(st === 'confirm' || st === 'input') && (
+                        {/* FIX2: 'fail' added alongside confirm/input so a failed lane's 重跑/跳过
+                            action renders at the GROUP level, matching where confirm/input already
+                            render for a code stage (the whole group gates, not one repo box). */}
+                        {(st === 'confirm' || st === 'input' || st === 'fail') && (
                           <div className="wfo-gact">
                             <RunNodeGate
                               stageKey={rs.key}
@@ -957,6 +1066,10 @@ export function WorkflowOverlay({ workspacePath, initialSeed, onClose, onStarted
                   <span className="rd" />
                   {runStatus === 'failed' ? '工作流已结束 · 存在失败阶段，请检查后处理' : '工作流已完成 · 所有阶段通过，变更已就绪'}
                 </span>
+                {/* FIX7: without this, reopening the overlay after a run finishes is stuck showing
+                    the OLD completed run (run2 retains its last state) with no way to configure a
+                    new one short of the whole overlay closing/reopening from elsewhere. */}
+                <button className="wfo-btn ghost" onClick={() => setForceConfig(true)}>新建工作流</button>
                 <button className="wfo-btn pri" onClick={onClose}>完成</button>
               </div>
             </div>

@@ -843,3 +843,165 @@ describe('WorkflowOverlay foot run controls (Task B5)', () => {
     expect(screen.getByRole('button', { name: '完成' })).toBeInTheDocument()
   })
 })
+
+// Whole-feature review regressions from deleting the old Run2EventCard (task-wfb-fixes-report.md):
+// FIX1 (auth events had no UI at all), FIX2 (failed lanes had no recovery), FIX3 (fan-out lanes
+// vanishing), FIX7 (no way to launch a new run after one completes).
+describe('WorkflowOverlay whole-feature review fixes (auth/failure/fanout/new-run)', () => {
+  const FIX_LAUNCH_INFO = {
+    workflows: [
+      {
+        id: 'wf-standard',
+        name: '标准工作流',
+        stages: [
+          stage({ key: 'design', name: '技术方案设计', desc: '设计技术方案', prompt: '设计技术方案' }),
+          stage({ key: 'develop', name: '代码开发', code: true, desc: '按方案实现变更', prompt: '按技术方案实现代码变更' }),
+        ],
+      },
+    ],
+    projects: [
+      { name: 'go-blog', cwd: '/ws/go-blog' },
+      { name: 'zgh', cwd: '/ws/zgh' },
+    ],
+  }
+
+  function fixMachine() {
+    return {
+      plan: {
+        runId: 'run2-1',
+        stages: [
+          { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: false },
+          { key: 'develop', name: '代码开发', provider: 'codex', model: 'gpt-5-codex', scope: 'per-project', gate: false },
+        ],
+      },
+      stages: [
+        { key: 'design', status: 'running', round: 0 },
+        { key: 'develop', status: 'pending', round: 0 },
+      ],
+      currentIndex: 0,
+    }
+  }
+
+  it('FIX1: an auth inbox event renders 批准/拒绝 wired to run2.resolveLane authorize/deny', async () => {
+    launchInfo.mockResolvedValue(FIX_LAUNCH_INFO)
+    const run2 = makeRun2({
+      machine: fixMachine(),
+      inbox: [{ id: 'a1', kind: 'auth', laneId: 'design:root', stageKey: 'design', title: '需要授权执行 rm -rf tmp/', where: '/ws' }],
+      feedback: [],
+      outcomes: {},
+      status: 'running',
+      pendingDirective: {},
+      liveLanes: {},
+      stageTimings: { design: { startedAt: 1000 } },
+      paused: false,
+    })
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
+
+    const designNode = container.querySelectorAll('.wfo-node')[0]
+    // reuses the 'confirm' visual (stageRunState maps an auth event to 'confirm') — see FIX1 comment.
+    expect(designNode).toHaveClass('confirm')
+    fireEvent.click(designNode.querySelector('.wfo-cardhead') as HTMLElement)
+
+    const act = designNode.querySelector('.wfo-act') as HTMLElement
+    expect(act).not.toBeNull()
+    expect(act.querySelector('.am')?.textContent).toContain('需要授权执行 rm -rf tmp/')
+
+    fireEvent.click(screen.getByText('批准'))
+    expect(run2.resolveLane).toHaveBeenCalledWith('a1', { type: 'authorize' })
+
+    fireEvent.click(screen.getByText('拒绝'))
+    expect(run2.resolveLane).toHaveBeenCalledWith('a1', { type: 'deny' })
+  })
+
+  it('FIX2: a failure inbox event renders 重跑/跳过 wired to run2.resolveLane retry/skipLane', async () => {
+    launchInfo.mockResolvedValue(FIX_LAUNCH_INFO)
+    const run2 = makeRun2({
+      machine: fixMachine(),
+      inbox: [{ id: 'f1', kind: 'failure', laneId: 'design:root', stageKey: 'design', error: '编译失败', attempts: 2 }],
+      feedback: [],
+      outcomes: {},
+      status: 'awaiting',
+      pendingDirective: {},
+      liveLanes: {},
+      stageTimings: { design: { startedAt: 1000 } },
+      paused: false,
+    })
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
+
+    const designNode = container.querySelectorAll('.wfo-node')[0]
+    expect(designNode).toHaveClass('fail')
+    fireEvent.click(designNode.querySelector('.wfo-cardhead') as HTMLElement)
+
+    const act = designNode.querySelector('.wfo-act') as HTMLElement
+    expect(act).not.toBeNull()
+    expect(act.querySelector('.am')?.textContent).toContain('编译失败')
+
+    fireEvent.click(screen.getByText('重跑'))
+    expect(run2.resolveLane).toHaveBeenCalledWith('f1', { type: 'retry' })
+
+    fireEvent.click(screen.getByText('跳过'))
+    expect(run2.resolveLane).toHaveBeenCalledWith('f1', { type: 'skipLane' })
+  })
+
+  it('FIX3: a lane seen in liveLanes, then removed before settling into outcomes, keeps rendering', async () => {
+    launchInfo.mockResolvedValue(FIX_LAUNCH_INFO)
+    const machine = fixMachine()
+    machine.stages = [{ key: 'design', status: 'done', round: 0 }, { key: 'develop', status: 'running', round: 0 }]
+    machine.currentIndex = 1
+    const base = {
+      machine,
+      inbox: [] as unknown[],
+      feedback: [],
+      outcomes: {} as Record<string, unknown>,
+      status: 'running',
+      pendingDirective: {},
+      stageTimings: { design: { startedAt: 1000, endedAt: 2000 }, develop: { startedAt: 2000 } },
+      paused: false,
+    }
+    const run2 = makeRun2({ ...base, liveLanes: { 'develop:go-blog': { stageKey: 'develop', project: 'go-blog', state: 'run', cwd: '/ws/go-blog' } } })
+    const { container, rerender } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelectorAll('.wfo-node')).toHaveLength(2))
+
+    const developNode = () => container.querySelectorAll('.wfo-node')[1]
+    let lanes = developNode().querySelectorAll('.wfo-lane')
+    expect(lanes).toHaveLength(1)
+    expect(lanes[0].querySelector('.wfo-lname b')?.textContent).toBe('go-blog')
+
+    // The engine deletes a settled lane from liveLanes the moment ITS OWN order resolves — well
+    // before outcomes[stageKey] is written for the whole stage (e.g. mid failure-await). Simulate
+    // that gap: SAME runId, the lane is now in neither liveLanes nor outcomes.
+    const run2b = { ...run2, state: { ...base, liveLanes: {} } as unknown as typeof run2.state }
+    rerender(<WorkflowOverlay workspacePath="/ws" run2={run2b} onClose={vi.fn()} />)
+
+    lanes = developNode().querySelectorAll('.wfo-lane')
+    expect(lanes).toHaveLength(1)
+    expect(lanes[0].querySelector('.wfo-lname b')?.textContent).toBe('go-blog')
+  })
+
+  it('FIX7: from the done state, 新建工作流 switches this mount back to CONFIG mode', async () => {
+    launchInfo.mockResolvedValue(FIX_LAUNCH_INFO)
+    const machine = fixMachine()
+    machine.stages = [{ key: 'design', status: 'done', round: 0 }, { key: 'develop', status: 'done', round: 0 }]
+    machine.currentIndex = 2
+    const run2 = makeRun2({
+      machine,
+      inbox: [],
+      feedback: [],
+      outcomes: {},
+      status: 'ok',
+      pendingDirective: {},
+      liveLanes: {},
+      stageTimings: {},
+      paused: false,
+    })
+    const { container } = render(<WorkflowOverlay workspacePath="/ws" run2={run2} onClose={vi.fn()} />)
+    await waitFor(() => expect(container.querySelector('.wfo-runctl.done')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('新建工作流'))
+
+    await waitFor(() => expect(container.querySelectorAll('.wfo-tab')).toHaveLength(1))
+    expect(container.querySelector('.wfo-prog')).toBeNull()
+  })
+})

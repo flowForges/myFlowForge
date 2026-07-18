@@ -109,8 +109,6 @@ interface WorkspaceViewProps {
   onViewAgentLog?: (agentId: string, agentName: string) => void
   // Report what the 顶栏「打开位置」button should open (current workspace / previewed file), or null.
   onOpenTargetChange?: (t: OpenTarget | null) => void
-  /** Open the bottom real-time LogConsole (unfiltered — the run view's "看实时日志" button). */
-  onOpenLog?: () => void
 }
 
 // A truncated overview value: an INSTANT (CSS) tooltip shows the full text on hover, and clicking
@@ -142,7 +140,7 @@ function Copyable({ text, className }: { text: string; className?: string }) {
   )
 }
 
-export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange, onOpenLog }: WorkspaceViewProps) {
+export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
   // Task 1: the run view now follows the run2 controller's status lifecycle instead of a manual
   // chat|run2 segmented toggle. Auto-opens while a run is 'running'/'awaiting' a gate decision;
