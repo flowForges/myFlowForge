@@ -9,21 +9,36 @@
 import { join } from 'node:path'
 import type { PermissionMode } from '@shared/permissions'
 import type { Workspace, Workflow, CustomStage } from '../config/schema'
-import { stageName, workflowDisplayName } from '../config/schema'
+import { stageName, workflowDisplayName, stageBasePrompt, DEFAULT_STAGE_PER_PROJECT_AGENT } from '../config/schema'
 import { indexCustomStages } from '../../shared/customStages'
 import { pickWorkspaceWorkflow, resolveWorkflowStages } from '../workspace/resolveStages'
 import { planFromStages } from './planFromStages'
 import type { RunPlan } from './machine'
 import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
 
+// P5-UI Task 1: short stage blurb for the config-preview overlay, by builtin key. Custom/unknown keys
+// fall back to '' (the overlay just omits the line rather than showing anything misleading).
+const STAGE_DESC: Record<string, string> = {
+  requirement: '梳理与确认本次需求边界',
+  design: '设计技术方案与阶段计划',
+  develop: '按项目并行开发',
+  test: '补充与运行测试',
+  review: '多视角代码评审',
+}
+
 // P5-UI Task 1: one resolved stage of a launcher-listed workflow — just enough for the picker to
-// render a flow preview (stage name + provider/model + whether it gates).
+// render a flow preview (stage name + provider/model + whether it gates), PLUS (Task 1 extension) the
+// three fields the workflow-overlay's per-stage card needs: whether it fans out per-project/writes
+// code, a short description, and the exact instruction text its agent will receive.
 export interface LaunchStage {
   key: string
   name: string
   provider: string
   model: string
   gate: boolean
+  code: boolean
+  desc: string
+  prompt: string
 }
 
 export interface LaunchInfo {
@@ -51,13 +66,23 @@ export function buildLaunchInfo(ws: Workspace, workflows: Workflow[] = [], custo
     workflows: ws.workflows.map((w) => ({
       id: w.id,
       name: workflowDisplayName(w.name),
-      stages: resolveWorkflowStages(w, workflows, custIndex).map((s) => ({
-        key: s.key,
-        name: stageName(s.key, s.name),
-        provider: s.provider,
-        model: s.model,
-        gate: !!s.gate,
-      })),
+      stages: resolveWorkflowStages(w, workflows, custIndex).map((s) => {
+        // Mirrors planFromStages' exact prompt composition (base + custom append) so the overlay's
+        // "阶段指令" preview matches what the stage's agent will actually receive at run time.
+        const base = stageBasePrompt(s.key)
+        const custom = s.prompt
+        const prompt = custom ? (base ? base + '\n\n' + custom : custom) : (base ?? '')
+        return {
+          key: s.key,
+          name: stageName(s.key, s.name),
+          provider: s.provider,
+          model: s.model,
+          gate: !!s.gate,
+          code: s.projectAgent ?? DEFAULT_STAGE_PER_PROJECT_AGENT[s.key] ?? false,
+          desc: STAGE_DESC[s.key] ?? '',
+          prompt,
+        }
+      }),
     })),
     projects: ws.projects.map((p) => {
       const name = p.name || p.repoId
