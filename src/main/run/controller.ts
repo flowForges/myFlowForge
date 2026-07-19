@@ -54,6 +54,11 @@ export interface RunControllerState {
   liveLanes: Record<string, LiveLane>
   stageTimings: Record<string, { startedAt: number; endedAt?: number }>
   paused: boolean
+  // Set only on a finalize-gate merge/discard failure (see runFinalizeGate) — the readable,
+  // per-project error message naming what actually failed (e.g. a merge conflict + file). Absent
+  // for every other terminal path (ok, or a plain abort), so the renderer can distinguish "the
+  // merge itself failed, here's why" from a generic failed status with no specific cause.
+  error?: string
 }
 
 export class RunController {
@@ -62,6 +67,7 @@ export class RunController {
   private feedback: FeedbackDraft[] = []
   private outcomes: Record<string, WorkOrderOutcome[]> = {}
   private status: RunStatus = 'running'
+  private error?: string
   private pendingDirective: Record<string, string> = {}
   private liveLanes: Record<string, LiveLane> = {}
   private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
@@ -95,7 +101,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused, error: this.error }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -263,7 +269,13 @@ export class RunController {
       }
     }
     if (failures.length > 0) {
-      throw new Error(`${merge ? '合并' : '丢弃'}临时分支失败 — ${failures.join('; ')}`)
+      // Recorded on the controller (not just thrown) so the terminal RunControllerState carries
+      // the real, readable per-project failure — Run2Manager's `.catch` only overrides `status`
+      // to 'failed', it never had a way to surface *why*; the renderer must show this instead of
+      // guessing at a generic "failed stage" message (see RunExecPanel).
+      const message = `${merge ? '合并' : '丢弃'}临时分支失败 — ${failures.join('; ')}`
+      this.error = message
+      throw new Error(message)
     }
   }
 

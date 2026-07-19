@@ -875,6 +875,12 @@ describe('RunController', () => {
       })
       c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, (e as any).finalize ? { type: 'merge' } : { type: 'advance' }) })
       await expect(c.start()).rejects.toThrow(/b.*CONFLICT/)
+      // Finding 1: the same readable message must also be recorded on the controller's state (not
+      // just thrown) — start() rejecting means the caller (Run2Manager) never gets a resolved
+      // RunControllerState here, so `error` must already be set by the time the promise rejects
+      // (it's set synchronously in runFinalizeGate BEFORE the throw), letting the manager's
+      // `.catch` handler surface it to the renderer instead of a generic failed-stage message.
+      expect(c.state.error).toMatch(/b.*CONFLICT/)
     })
   })
 })

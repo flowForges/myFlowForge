@@ -138,6 +138,58 @@ describe('RunExecPanel', () => {
     expect(screen.getByText('分支：—')).toBeInTheDocument()
   })
 
+  it('Finding 1: a finalize-gate merge conflict shows the real error, not the generic "存在失败阶段" banner', () => {
+    // Every stage done (100%), no FailureEvent, no failed WorkOrderOutcome anywhere — this is the
+    // finalize-merge-conflict shape: `runFinalizeGate` set state.error and the run ended 'failed'
+    // even though every stage itself succeeded.
+    const state = baseState({
+      status: 'failed',
+      error: '合并临时分支失败 — a: CONFLICT (content): Merge conflict in app.ts',
+      machine: {
+        plan: baseState().machine.plan,
+        stages: [
+          { key: 'assess', status: 'done', round: 0 },
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'done', round: 0 },
+          { key: 'review', status: 'done', round: 0 },
+        ],
+        currentIndex: 4,
+      },
+      outcomes: {
+        develop: [
+          { order: { id: 'develop:zgh', stageKey: 'develop', name: '代码开发', project: 'zgh', provider: 'claude', model: 'sonnet-4.6', cwd: '/ws/zgh', prompt: '' }, status: 'ok', attempts: 1 },
+        ],
+      },
+    })
+    const run2 = makeRun2(state)
+    render(<RunExecPanel run2={run2} />)
+
+    expect(screen.getByText(/合并临时分支失败.*CONFLICT/)).toBeInTheDocument()
+    expect(screen.queryByText('工作流已结束 · 存在失败阶段，请检查后处理')).toBeNull()
+  })
+
+  it('a genuine per-lane stage failure (no state.error) keeps the existing "存在失败阶段" text', () => {
+    const state = baseState({
+      status: 'failed',
+      outcomes: {
+        develop: [
+          { order: { id: 'develop:zgh', stageKey: 'develop', name: '代码开发', project: 'zgh', provider: 'claude', model: 'sonnet-4.6', cwd: '/ws/zgh', prompt: '' }, status: 'failed', error: 'boom', attempts: 1 },
+        ],
+      },
+    })
+    const run2 = makeRun2(state)
+    render(<RunExecPanel run2={run2} />)
+    expect(screen.getByText('工作流已结束 · 存在失败阶段，请检查后处理')).toBeInTheDocument()
+  })
+
+  it('a plain abort (no error, no failed outcome) shows a neutral "已结束" instead of the misleading banner', () => {
+    const state = baseState({ status: 'failed' })
+    const run2 = makeRun2(state)
+    render(<RunExecPanel run2={run2} />)
+    expect(screen.getByText('工作流已结束')).toBeInTheDocument()
+    expect(screen.queryByText('工作流已结束 · 存在失败阶段，请检查后处理')).toBeNull()
+  })
+
   it('renders nothing but an idle message when there is no active run', () => {
     const run2 = makeRun2(null)
     render(<RunExecPanel run2={run2} />)
