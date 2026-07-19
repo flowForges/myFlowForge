@@ -42,8 +42,8 @@ function readableGitError(action: string, err: unknown): Error {
  * is the precondition check createRunTempBranches (launch.ts) runs over every participating project
  * BEFORE creating any branch.
  */
-export async function isCleanTree(cwd: string, git: GitRunner = defaultGitRunner): Promise<boolean> {
-  const status = await git(cwd, ['status', '--porcelain'])
+export async function isCleanTree(cwd: string, run: GitRunner = defaultGitRunner): Promise<boolean> {
+  const status = await run(cwd, ['status', '--porcelain'])
   return status.trim().length === 0
 }
 
@@ -52,11 +52,11 @@ export async function createTempBranch(
   cwd: string,
   base: string,
   runId: string,
-  git: GitRunner = defaultGitRunner
+  run: GitRunner = defaultGitRunner
 ): Promise<string> {
   const branch = tempBranchName(runId)
   try {
-    await git(cwd, ['checkout', '-b', branch, base])
+    await run(cwd, ['checkout', '-b', branch, base])
   } catch (err) {
     throw readableGitError(`Failed to create temp branch "${branch}" from base "${base}"`, err)
   }
@@ -68,7 +68,7 @@ export async function mergeTempBranch(
   cwd: string,
   target: string,
   runId: string,
-  git: GitRunner = defaultGitRunner
+  run: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
   // The agent(s) wrote their changes into the working tree while checked out on `branch` —
@@ -79,23 +79,23 @@ export async function mergeTempBranch(
   // the edits, then `merge` finds temp and target identical → "Already up to date", no merge
   // commit, and the target's working tree is left dirty with the run's changes).
   try {
-    await git(cwd, ['add', '-A'])
+    await run(cwd, ['add', '-A'])
     // `git status --porcelain` (not diff --cached --quiet's exit-code trick) so this is trivial to
     // drive with a fake GitRunner in unit tests: empty output = clean, anything else = staged work.
-    const status = await git(cwd, ['status', '--porcelain'])
+    const status = await run(cwd, ['status', '--porcelain'])
     if (status.trim().length > 0) {
-      await git(cwd, ['commit', '-m', `forge: run ${runId}`])
+      await run(cwd, ['commit', '-m', `forge: run ${runId}`])
     }
   } catch (err) {
     throw readableGitError(`Failed to commit run "${runId}" changes onto temp branch "${branch}"`, err)
   }
   try {
-    await git(cwd, ['checkout', target])
+    await run(cwd, ['checkout', target])
   } catch (err) {
     throw readableGitError(`Failed to merge temp branch "${branch}" into target "${target}"`, err)
   }
   try {
-    await git(cwd, ['merge', '--no-ff', branch])
+    await run(cwd, ['merge', '--no-ff', branch])
   } catch (err) {
     // A failed merge (most commonly a conflict) leaves `target`'s working tree mid-merge —
     // MERGE_HEAD set, conflict markers written into the user's real files. Never leave the
@@ -106,14 +106,18 @@ export async function mergeTempBranch(
     // be in an unexpected state.
     let detail = err instanceof Error ? err.message : String(err)
     try {
-      await git(cwd, ['merge', '--abort'])
+      await run(cwd, ['merge', '--abort'])
     } catch (abortErr) {
       const abortDetail = abortErr instanceof Error ? abortErr.message : String(abortErr)
       detail += ` (且 git merge --abort 也失败，目标分支可能仍处于合并中: ${abortDetail})`
     }
     throw readableGitError(`Failed to merge temp branch "${branch}" into target "${target}"`, detail)
   }
-  await git(cwd, ['branch', '-D', branch])
+  try {
+    await run(cwd, ['branch', '-D', branch])
+  } catch (err) {
+    throw readableGitError(`合并后清理临时分支失败 (${branch} → ${target})`, err)
+  }
 }
 
 /**
@@ -137,13 +141,13 @@ export async function discardTempBranch(
   cwd: string,
   target: string,
   runId: string,
-  git: GitRunner = defaultGitRunner
+  run: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
   try {
-    await git(cwd, ['checkout', '-f', target])
-    await git(cwd, ['clean', '-fd'])
-    await git(cwd, ['branch', '-D', branch])
+    await run(cwd, ['checkout', '-f', target])
+    await run(cwd, ['clean', '-fd'])
+    await run(cwd, ['branch', '-D', branch])
   } catch (err) {
     throw readableGitError(`Failed to discard temp branch "${branch}" (target "${target}")`, err)
   }
@@ -162,20 +166,20 @@ export async function parkTempBranch(
   cwd: string,
   target: string,
   runId: string,
-  git: GitRunner = defaultGitRunner
+  run: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
   try {
-    await git(cwd, ['add', '-A'])
-    const status = await git(cwd, ['status', '--porcelain'])
+    await run(cwd, ['add', '-A'])
+    const status = await run(cwd, ['status', '--porcelain'])
     if (status.trim().length > 0) {
-      await git(cwd, ['commit', '-m', `forge: run ${runId} (aborted)`])
+      await run(cwd, ['commit', '-m', `forge: run ${runId} (aborted)`])
     }
   } catch (err) {
     throw readableGitError(`Failed to commit run "${runId}" changes onto temp branch "${branch}" before parking`, err)
   }
   try {
-    await git(cwd, ['checkout', target])
+    await run(cwd, ['checkout', target])
   } catch (err) {
     throw readableGitError(`Failed to checkout target "${target}" while parking temp branch "${branch}"`, err)
   }
