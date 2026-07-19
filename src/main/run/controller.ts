@@ -13,6 +13,15 @@ import { buildWorkOrders, type StageInput } from './fanout'
 import { runWorkOrder, type WorkOrder, type WorkOrderOutcome } from './workOrder'
 import { saveControllerState } from './persist'
 import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault, parkTempBranch as parkTempBranchDefault } from './tempBranch'
+import { startBridge as startBridgeDefault, type BridgeRunCtx, type ForgeBridge } from '../mcp/forgeBridge'
+
+// §7.4 ③硬阻塞: the forge tools a RUN stage sub-agent gets when this run has a live bridge (see
+// setupBridge/envForOrder below) — same set as the legacy orchestrator's STAGE_FORGE_TOOLS
+// (orchestrator.ts), duplicated as a plain constant rather than imported to avoid coupling run/
+// controller.ts to the (separately-maintained, per decision D7) legacy orchestrator module.
+// Deliberately NO forge_propose_plan/forge_delegate — a stage sub-agent should ask a blocking
+// question, not try to relaunch a workflow or spawn more sub-agents.
+const RUN_FORGE_TOOLS = 'forge_read_context,forge_write_artifact,forge_ask,forge_handoff,forge_heartbeat'
 
 export interface RunControllerDeps {
   providers: Record<string, AgentProvider>
@@ -47,6 +56,17 @@ export interface RunControllerDeps {
   // Injectable for the same reason as merge/discardTempBranch above; defaults to the real
   // tempBranch.ts parkTempBranch.
   parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  // §7.4 ③硬阻塞: path to the forge MCP server entry script (handlers.ts's `join(__dirname,
+  // 'forgeMcp.js')`, threaded through from Run2ManagerDeps.mcpEntry). When present, start() opens a
+  // per-run forge bridge (setupBridge) and provisions its socket into every work order's env
+  // (envForOrder) so a stage sub-agent can call forge_ask/forge_read_context/forge_write_artifact/
+  // forge_handoff — same mechanism chat/delegate.ts already uses for its own per-batch bridge.
+  // Absent (every controller/manager test that doesn't set it, and any caller that hasn't wired it
+  // yet) → start() skips the bridge entirely; the run proceeds exactly as before this existed
+  // (text-fence ```forge-result``` handoff only, no live MCP).
+  mcpEntry?: string
+  // Injectable so tests never open a real unix socket; defaults to the real forgeBridge.ts startBridge.
+  startBridge?: (runDir: string, ctx: BridgeRunCtx) => Promise<ForgeBridge>
 }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
 export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string; cwd?: string }
@@ -202,6 +222,13 @@ export class RunController {
   private idn = 0
   private makeId: (p: string) => string
   private now: () => number
+  // §7.4 ③硬阻塞: this run's live forge bridge (null until setupBridge() resolves — or forever, if
+  // deps.mcpEntry is unset or the bridge failed to start). See setupBridge/envForOrder/askFromAgent.
+  private bridge: ForgeBridge | null = null
+  // laneId (WorkOrder.id) → its stageKey, recorded when a lane starts (runOneOrder) — looked up by
+  // askFromAgent (a forge_ask arriving from the bridge, keyed only by agentId=laneId) so the
+  // resulting `question` event carries the right stageKey, same as the text-fence onInput path below.
+  private laneStageKey: Record<string, string> = {}
 
   // `rehydrate` (P-C2/T1, disk-resume): when supplied, builds the controller from a state loaded
   // off disk instead of a fresh initMachine(plan) — see RehydrateState's doc for exactly what's
@@ -471,7 +498,95 @@ export class RunController {
     const up = o.upstream.length ? `\n上游产物：\n${o.upstream.map((a) => `- ${a.path} (${a.kind})`).join('\n')}` : ''
     const dir = this.pendingDirective[o.stageKey] ? `\n【补充/返工意见】\n${this.pendingDirective[o.stageKey]}` : ''
     const fence = `\n完成后，请在回复最后输出一个如下格式的结果块（用于登记产物）：\n\`\`\`forge-result\n{"summary":"一句话说明你做了什么","filesChanged":["改动/产出的文件路径"],"testsRun":{"passed":true},"blockers":[],"doubts":[]}\n\`\`\`\n`
-    return `${seed}${instructions}${scope}${up}${dir}${fence}`
+    // §7.4 ③硬阻塞: only meaningful when this run has a live forge bridge (envForOrder), but harmless
+    // to always include — if there's no bridge, forge_ask simply isn't an available tool and the
+    // agent falls back to `blockers` in the fence above, same as before this line existed.
+    const askHint = `\n若卡在只有人类才知道的硬阻塞（缺凭据、该连哪个环境、用哪个 API key 等），调用 forge_ask 直接问用户，不要瞎猜或直接失败。\n`
+    return `${seed}${instructions}${scope}${up}${dir}${askHint}${fence}`
+  }
+
+  /**
+   * §7.4 ③硬阻塞: opens this run's live forge bridge (once, at the top of start()) so stage
+   * sub-agents can call forge_ask/forge_read_context/forge_write_artifact/forge_handoff instead of
+   * only reporting via the ```forge-result``` text fence at the end of their turn. Mirrors
+   * chat/delegate.ts's own per-batch bridge (`startBridge(runDir, ctx)`), scoped per-run here: `ask`
+   * routes straight to THIS controller's askFromAgent, i.e. the SAME 输入门 (question) card / lane
+   * resolver the text-fence onInput path already uses.
+   *
+   * No-op when deps.mcpEntry is unset (nothing to point the MCP child at) — leaves this.bridge null,
+   * and envForOrder() then returns the plain deps.env, so the run behaves exactly as it did before
+   * this existed. Also swallows a genuine startBridge() failure (e.g. can't bind the unix socket) —
+   * additive/best-effort: a run must never fail to START just because its optional live-MCP channel
+   * couldn't open; the text-fence handoff still works either way.
+   */
+  private async setupBridge(): Promise<void> {
+    if (!this.deps.mcpEntry) return
+    const starter = this.deps.startBridge ?? startBridgeDefault
+    const ctx: BridgeRunCtx = {
+      store: this.deps.store,
+      runId: this.plan.runId,
+      workspaceName: this.workspacePath(),
+      agentName: (id) => id,
+      agentStage: (id) => this.laneStageKey[id] ?? '',
+      ask: (agentId, question) => this.askFromAgent(agentId, question),
+      setContext: (k, v) => this.deps.store.setContext(k, v),
+    }
+    try {
+      this.bridge = await starter(this.deps.store.runDir, ctx)
+    } catch (err) {
+      console.warn('[run2] forge bridge failed to start — run continues without live MCP (text-fence handoff still works):', err)
+      this.bridge = null
+    }
+  }
+
+  /**
+   * Per-order env for provider.run(): when this run has a live bridge, overlays FORGE_SOCKET/
+   * FORGE_AGENT_ID/FORGE_MCP_ENTRY/FORGE_TOOLS onto the base env. Every provider's own run() already
+   * self-provisions the forge MCP server off exactly these vars (forgeServerSpec/forgeMcpArgs/
+   * forgeCodexConfigArgs for claude/codex; provisionForgeMcp for cursor/gemini/qwen/opencode/copilot
+   * — see forgeMcpProvision.ts) — so setting them here is the ENTIRE provisioning step, same as
+   * chat/delegate.ts's own `buildAgentEnv({ overrides: {...} })` call. FORGE_AGENT_ID = the
+   * WorkOrder's own id — the SAME laneId used for every other run event (auth/question/failure/
+   * doubt) — so a forge_ask from this lane's agent (askFromAgent) routes back to exactly this
+   * lane's question card. No bridge → the base env, unchanged.
+   */
+  private envForOrder(order: WorkOrder): NodeJS.ProcessEnv {
+    if (!this.bridge) return this.deps.env
+    return {
+      ...this.deps.env,
+      FORGE_SOCKET: this.bridge.socketPath,
+      FORGE_AGENT_ID: order.id,
+      ...(this.deps.mcpEntry ? { FORGE_MCP_ENTRY: this.deps.mcpEntry } : {}),
+      FORGE_TOOLS: RUN_FORGE_TOOLS,
+    }
+  }
+
+  // Shared by the text-fence onInput callback (runOneOrderLive) and askFromAgent (the live bridge's
+  // forge_ask) — both just need to raise a `question` event for a given laneId/stageKey and await
+  // the human's answer via the same laneR/resolveLane('answer') machinery.
+  private async askQuestion(laneId: string, stageKey: string, title: string, placeholder?: string): Promise<string> {
+    if (this.aborted) return ''
+    const id = this.makeId('question')
+    const p = this.laneR.create(id)
+    this.emitEvent({ id, kind: 'question', laneId, stageKey, title, placeholder })
+    const d = await p
+    this.drop(id); this.emitUpdate()
+    return d.type === 'answer' ? d.value : ''
+  }
+
+  /**
+   * §7.4 ③硬阻塞: entry point the per-run forge bridge's `ask` calls when a stage sub-agent invokes
+   * forge_ask — e.g. a missing credential, "which staging environment", an API key: something only
+   * the human knows, that the agent decided it's blocked on rather than guessing or failing outright.
+   * `agentId` is the bridge connection's identity, provisioned as the WorkOrder.id (envForOrder) —
+   * i.e. exactly the laneId already used for every other run event — so this surfaces through the
+   * SAME 输入门 (question) card the text-fence onInput path already raises. Falls back to the
+   * currently-running stage's key if the lane isn't tracked yet (shouldn't happen in practice —
+   * laneStageKey is set in runOneOrder right before the order starts).
+   */
+  private askFromAgent(agentId: string, question: string): Promise<string> {
+    const stageKey = this.laneStageKey[agentId] ?? currentStage(this.machine)?.key ?? ''
+    return this.askQuestion(agentId, stageKey, question)
   }
 
   private async runOneOrder(order: WorkOrder): Promise<WorkOrderOutcome> {
@@ -480,6 +595,9 @@ export class RunController {
     // elapsed reflects only its latest attempt, not the sum since the very first try. Matches
     // stageTimings' own overwrite-on-restart semantics (controller.ts:544/here, same `this.now()`).
     this.laneTimings[order.id] = { startedAt: this.now() }
+    // Recorded BEFORE the lane starts (not just for timing) — askFromAgent needs it the instant a
+    // forge_ask can arrive from the bridge, which can race a live onProgress/liveLanes update.
+    this.laneStageKey[order.id] = order.stageKey
     const outcome = await this.runOneOrderLive(order)
     this.laneTimings[order.id].endedAt = this.now()
     // Settled (ok or failed): the lane's final state now lives in `outcomes`, not `liveLanes`.
@@ -491,7 +609,7 @@ export class RunController {
   private async runOneOrderLive(order: WorkOrder): Promise<WorkOrderOutcome> {
     return runWorkOrder(order, {
       provider: this.deps.providers[order.provider],
-      env: this.deps.env,
+      env: this.envForOrder(order),
       retries: this.deps.retries,
       sleep: this.deps.sleep,
       onProgress: (ev) => {
@@ -521,20 +639,20 @@ export class RunController {
         this.drop(id); this.emitUpdate()
         return d.type === 'authorize' ? 'allow' : 'deny'
       },
-      onInput: async (req: InputReq, laneId: string) => {
-        // Same abort short-circuit as onConfirm above — see comment there.
-        if (this.aborted) return ''
-        const id = this.makeId('question')
-        const p = this.laneR.create(id)
-        this.emitEvent({ id, kind: 'question', laneId, stageKey: order.stageKey, title: req.title, placeholder: req.placeholder })
-        const d = await p
-        this.drop(id); this.emitUpdate()
-        return d.type === 'answer' ? d.value : ''
-      },
+      onInput: (req: InputReq, laneId: string) => this.askQuestion(laneId, order.stageKey, req.title, req.placeholder),
     })
   }
 
   async start(): Promise<RunControllerState> {
+    // §7.4 ③硬阻塞: open the live forge bridge (if configured) BEFORE any stage's lanes start, so
+    // envForOrder() has a real socketPath to hand every work order from the very first one. No-op /
+    // best-effort — see setupBridge's doc. Gated on deps.mcpEntry (rather than always calling
+    // setupBridge and letting it no-op internally) so the COMMON case — no mcpEntry configured —
+    // never inserts an `await` before the first stage's lanes start: several manager tests assert
+    // the first work order's provider.run() was invoked SYNCHRONOUSLY right after mgr.start()
+    // returns (async-function bodies run synchronously up to their first real await), which this
+    // preserves exactly as it was before this feature existed.
+    if (this.deps.mcpEntry) await this.setupBridge()
     while (!this.aborted) {
       // Pause gate: sits at the very top of the loop, before the next stage is read/started, so
       // an in-flight stage's lanes always finish uninterrupted — pause only stops the run from
@@ -766,6 +884,11 @@ export class RunController {
     this.paused = false
     this.deps.store.setContext('machine', this.machine)
     this.emitUpdate()
+    // Best-effort: a bridge that fails to close cleanly must not turn a finished run into a thrown
+    // error at the very last step (mirrors abortCleanup's best-effort stance above).
+    if (this.bridge) {
+      try { await this.bridge.close() } catch (err) { console.error('[run2] forge bridge close failed:', err) }
+    }
     return this.state
   }
 }

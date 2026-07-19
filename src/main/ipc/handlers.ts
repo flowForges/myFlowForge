@@ -153,6 +153,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // matches the narrator/detect/refreshModels usages elsewhere in this file (e.g. line ~105).
     env: buildAgentEnv({ proxy: readSettings().termProxy }),
     makeStore: (w, r) => new RunStore(w, r),
+    // §7.4 ③硬阻塞: same forge MCP entry the legacy Orchestrator + chat/delegate.ts already use —
+    // lets each run open its own live forge bridge (RunController.setupBridge) so a stage agent can
+    // call forge_ask on a hard blocker instead of only reporting via the ```forge-result``` fence.
+    mcpEntry,
     emit: {
       event: (w, e) => broadcast(CH.run2Event, { workspacePath: w, event: e }),
       update: (w, s) => broadcast(CH.run2Update, { workspacePath: w, state: s }),

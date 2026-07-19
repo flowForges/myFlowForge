@@ -40,6 +40,12 @@ export interface Run2ManagerDeps {
   emit: Run2Emit
   retries?: number
   onError?: (wsPath: string, err: Error) => void
+  // §7.4 ③硬阻塞: threaded straight into RunControllerDeps.mcpEntry (see its doc in controller.ts) —
+  // handlers.ts's `join(__dirname, 'forgeMcp.js')`, the same entry the legacy Orchestrator and
+  // chat/delegate.ts already use. Optional so every existing manager test (none set it) keeps
+  // passing unchanged — an unset mcpEntry just means runs from this manager never open a live forge
+  // bridge, same as before this field existed.
+  mcpEntry?: string
 }
 
 // Task 1: start() used to throw when the workspace already had a run in flight. It now enqueues instead
@@ -157,6 +163,7 @@ export class Run2Manager {
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,
       parkTempBranch: opts.parkTempBranch,
+      mcpEntry: this.deps.mcpEntry,
     })
     return this.registerAndRun(opts.workspacePath, controller)
   }
@@ -261,6 +268,7 @@ export class Run2Manager {
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,
       parkTempBranch: opts.parkTempBranch,
+      mcpEntry: this.deps.mcpEntry,
     }, {
       machine: found.state.machine,
       outcomes: found.state.outcomes,
