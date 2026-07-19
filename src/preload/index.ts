@@ -87,6 +87,12 @@ const api = {
   sessionSetPermission: (a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => ipcRenderer.invoke(CH.sessionSetPermission, a),
   wsSetAutoDecide: (a: { workspacePath: string; value: boolean }) => ipcRenderer.invoke(CH.wsSetAutoDecide, a),
   chatSwitchSummary: (a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => ipcRenderer.invoke(CH.chatSwitchSummary, a),
+  // P1-5: persist a confirmed launch-gate's frozen record onto the session (see WorkspaceView's
+  // confirmLaunchGate) so it survives reload/session-switch.
+  chatAppendLaunchGate: (a: {
+    workspacePath: string; sessionId: string; id: string; ts: string
+    workflowName: string; projects: string[]; supplement: string; decidedAt: number; seed: string
+  }) => ipcRenderer.invoke(CH.chatAppendLaunchGate, a),
   notifyTest: (): Promise<{ supported: boolean }> => ipcRenderer.invoke(CH.notifyTest),
   sessionSetModel: (a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => ipcRenderer.invoke(CH.sessionSetModel, a),
   sessionContinueFrom: (a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => ipcRenderer.invoke(CH.sessionContinueFrom, a),

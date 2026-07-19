@@ -73,7 +73,8 @@ type TabId = 'agents' | 'changes' | 'files'
 // P1-3: one in-chat launch-gate card's full state (active or frozen). Keyed by `id`, matched against
 // the minimal { id, ts } entry buildTimeline merges into the timeline (see chat/timeline.ts) — the
 // timeline only orders by ts; the actual config/frozen record lives here.
-interface LaunchGateState { id: string; ts: number; config: LaunchGateConfig; frozen?: LaunchGateFrozen }
+// P1-3 follow-up: `error` set when the last confirm's run2.start rejected — card stays active.
+interface LaunchGateState { id: string; ts: number; config: LaunchGateConfig; frozen?: LaunchGateFrozen; error?: string }
 
 // Shape returned by window.forge.getWorkspace
 interface WsStageInfo { key: string; provider: string; model: string }
@@ -331,7 +332,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         name: p.name, selected: true, provider: p.provider ?? '', model: p.model ?? '',
       }))
       const config: LaunchGateConfig = {
-        seed: buildConversationSeed(chat.messages),
+        // Exclude P1-5's synthetic launch-gate marker messages (blank text) from the seed transcript —
+        // they aren't real conversation, just a persisted record riding on a ChatMessage.
+        seed: buildConversationSeed(chat.messages.filter((m) => !m.launchGate)),
         workflows,
         selectedWorkflowId,
         projects,
@@ -342,8 +345,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     })
   }, [wsPath, chat.messages])
   // Launch gate's 确认: resolve the (possibly user-edited) config down to run2's LaunchStartConfig
-  // (only the SELECTED projects go over the wire) and start the run, then freeze this card in place
-  // — it becomes a read-only record in the timeline (persistence into the session is P1-5).
+  // (only the SELECTED projects go over the wire) and start the run. P1-3 follow-up fix: the card used
+  // to freeze to a "已启动" record synchronously, BEFORE run2.start's promise resolved (fire-and-forget)
+  // — if it rejected (unknown workflow, missing workspace, …) the user was left with a permanent
+  // false-positive success record and no error. Now: freeze (and persist, P1-5) only once run2.start
+  // actually resolves; on rejection, keep the gate active with an inline error so the user can retry.
   const confirmLaunchGate = useCallback((id: string, config: LaunchGateConfig) => {
     if (!wsPath) return
     const selectedProjects = config.projects.filter((p) => p.selected)
@@ -354,21 +360,74 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       supplement: config.supplement,
       seed: config.seed,
     }
-    void run2.start(cfg)
-    const workflowName = config.workflows.find((w) => w.id === config.selectedWorkflowId)?.name ?? config.selectedWorkflowId
-    const frozen: LaunchGateFrozen = {
-      workflowName,
-      projects: selectedProjects.map((p) => p.name),
-      supplement: config.supplement,
-      decidedAt: Date.now(),
-    }
-    setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, frozen } : g)))
-  }, [wsPath, run2])
+    // Mirror the user's latest edits immediately + clear any stale error from a prior failed attempt
+    // (the card stays in its active/non-frozen render until run2.start resolves below).
+    setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, error: undefined } : g)))
+    const sid = sessions.activeSessionId
+    const createdTs = launchGates.find((g) => g.id === id)?.ts
+    void run2.start(cfg).then(() => {
+      const workflowName = config.workflows.find((w) => w.id === config.selectedWorkflowId)?.name ?? config.selectedWorkflowId
+      const decidedAt = Date.now()
+      const frozen: LaunchGateFrozen = {
+        workflowName,
+        projects: selectedProjects.map((p) => p.name),
+        supplement: config.supplement,
+        decidedAt,
+      }
+      // Freezes in place — becomes a read-only record in the timeline.
+      setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, frozen } : g)))
+      // P1-5: persist the frozen record onto the session (same id as this gate) so it survives
+      // reload/session-switch — reuses the existing synthetic-ChatMessage + appendMessage/broadcast
+      // path (see chatAppendLaunchGate), not a new storage layer.
+      if (sid) {
+        void window.forge.chatAppendLaunchGate?.({
+          workspacePath: wsPath,
+          sessionId: sid,
+          id,
+          ts: new Date(createdTs ?? decidedAt).toISOString(),
+          workflowName,
+          projects: frozen.projects,
+          supplement: frozen.supplement,
+          decidedAt,
+          seed: config.seed,
+        })
+      }
+    }).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err ?? '启动失败，请重试')
+      setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, error: message } : g)))
+    })
+  }, [wsPath, run2, sessions.activeSessionId, launchGates])
   // 取消: drop the still-active gate entirely (no record left behind, matching PlanCard's 拒绝/deny —
   // a launch that never happened isn't worth a frozen entry).
   const cancelLaunchGate = useCallback((id: string) => {
     setLaunchGates((prev) => prev.filter((g) => g.id !== id))
   }, [])
+  // P1-5: reconstruct frozen launch-gates persisted onto synthetic ChatMessages (see confirmLaunchGate /
+  // chatAppendLaunchGate) — this is what makes a frozen gate survive reload/session-switch, since
+  // `launchGates` local state above resets to [] on every mount. `config.workflows/selectedWorkflowId/
+  // projects` are left empty/blank here: LaunchGateCard only reads them in its ACTIVE branch, and a
+  // reconstructed record is always rendered frozen.
+  const persistedLaunchGates = useMemo<LaunchGateState[]>(() => (
+    chat.messages
+      .filter((m): m is ChatMessage & { launchGate: NonNullable<ChatMessage['launchGate']> } => !!m.launchGate)
+      .map((m) => {
+        const g = m.launchGate
+        const parsedTs = Date.parse(m.ts)
+        return {
+          id: m.id,
+          ts: Number.isNaN(parsedTs) ? g.decidedAt : parsedTs,
+          config: { seed: g.seed, workflows: [], selectedWorkflowId: '', projects: [], supplement: g.supplement },
+          frozen: { workflowName: g.workflowName, projects: g.projects, supplement: g.supplement, decidedAt: g.decidedAt },
+        }
+      })
+  ), [chat.messages])
+  // Merge: a persisted (message-backed) gate wins over a same-id local entry — once confirmLaunchGate's
+  // chatAppendLaunchGate round-trips back into chat.messages, the local copy is redundant. Gates still
+  // ACTIVE (not yet confirmed) only exist in local state and pass through untouched.
+  const mergedLaunchGates = useMemo<LaunchGateState[]>(() => {
+    const persistedIds = new Set(persistedLaunchGates.map((g) => g.id))
+    return [...persistedLaunchGates, ...launchGates.filter((g) => !persistedIds.has(g.id))]
+  }, [persistedLaunchGates, launchGates])
 
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
@@ -722,7 +781,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </>
             )}
             {/* 当前对话:消息与子代理/主代理的交互卡片按时间线归并内联渲染 */}
-            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans, launchGates).map(entry => {
+            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates).map(entry => {
               if (entry.kind === 'provider-switch') {
                 return (
                   <ProviderSwitchDivider
@@ -773,13 +832,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 )
               }
               if (entry.kind === 'launch-gate') {
-                const gate = launchGates.find((g) => g.id === entry.id)
+                const gate = mergedLaunchGates.find((g) => g.id === entry.id)
                 if (!gate) return null
                 return (
                   <LaunchGateCard
                     key={gate.id}
                     config={gate.config}
                     frozen={gate.frozen}
+                    error={gate.error}
                     onConfirm={(c) => confirmLaunchGate(gate.id, c)}
                     onCancel={() => cancelLaunchGate(gate.id)}
                   />

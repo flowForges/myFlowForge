@@ -63,4 +63,18 @@ describe('LaunchGateCard 活态', () => {
     fireEvent.click(screen.getByText('确认'))
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ supplement: '记得加测试' }))
   })
+
+  // P1-3 follow-up fix: run2.start rejecting must not freeze the card — it stays active with an inline
+  // error so the user can retry (see WorkspaceView's confirmLaunchGate .catch branch).
+  it('error 存在时活态展示内联错误，且仍是活态(有确认/取消按钮，不是 frozen 记录)', () => {
+    render(<LaunchGateCard config={base} error="工作流不存在" onConfirm={() => {}} onCancel={() => {}} />)
+    expect(screen.getByText('工作流不存在')).toBeTruthy()
+    expect(screen.getByText('确认')).toBeTruthy()
+    expect(screen.getByText('取消')).toBeTruthy()
+  })
+
+  it('无 error 时不展示错误区块', () => {
+    render(<LaunchGateCard config={base} onConfirm={() => {}} onCancel={() => {}} />)
+    expect(document.querySelector('.lg-error')).toBeNull()
+  })
 })

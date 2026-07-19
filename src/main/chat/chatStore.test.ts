@@ -31,6 +31,20 @@ describe('chatStore (session-aware)', () => {
     expect(readSession(ws, 's1', 'claude')).toBe('r-a')
     expect(readSession(ws, 's2', 'claude')).toBe('r-b')
   })
+  // P1-5: the frozen launch-gate record rides on a plain ChatMessage field — appendMessage/readMessages
+  // are already fully generic (JSON round-trip), so this just locks the contract: write a message
+  // carrying `launchGate`, reread the session, the record must come back byte-for-byte identical.
+  it('round-trips a persisted frozen launch-gate record', () => {
+    const gateMsg: ChatMessage = {
+      id: 'lg-1', who: 'ai', text: '', ts: '2026-07-19T00:00:03.000Z',
+      launchGate: { workflowName: '快速修复', projects: ['web', 'api'], supplement: '记得加测试', decidedAt: 1752883200000, seed: '我: 做个登录页' },
+    }
+    appendMessage(ws, 's1', gateMsg)
+    const back = readMessages(ws, 's1')
+    expect(back).toHaveLength(1)
+    expect(back[0]).toEqual(gateMsg)
+  })
+
   it('tolerates missing dir and skips corrupt lines', () => {
     expect(readMessages(join(ws, 'nope'), 's1')).toEqual([])
     appendMessage(ws, 's1', msg('1', 'user', 'hi'))

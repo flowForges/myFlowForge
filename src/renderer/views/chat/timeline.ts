@@ -72,6 +72,11 @@ function messageEntries(messages: ChatMessage[], mk: number[]): TimelineEntry[] 
   const out: TimelineEntry[] = []
   let prevAiProvider: string | undefined
   messages.forEach((msg, index) => {
+    // P1-5: a persisted frozen launch-gate rides on a synthetic ChatMessage (blank text, `launchGate`
+    // field) purely so it survives reload/session-switch — it is NOT a real chat message and must not
+    // render as a plain text bubble. The caller (WorkspaceView) reconstructs the actual 'launch-gate'
+    // timeline entry for it from the same messages array, keyed by this message's own id.
+    if (msg.launchGate) return
     if (msg.who === 'ai' && msg.provider) {
       if (prevAiProvider && msg.provider !== prevAiProvider) {
         out.push({ kind: 'provider-switch', ts: mk[index], from: prevAiProvider, to: msg.provider })

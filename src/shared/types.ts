@@ -192,6 +192,12 @@ export interface ChatMessage {
   // A lightweight-delegation batch this (transient) message represents: a live, collapsible progress
   // block listing the background sub-agents. Present only on the delegate batch message.
   delegate?: DelegateBatch
+  // P1-5: a confirmed launch-gate's frozen record, persisted onto a synthetic system ChatMessage (id ==
+  // the in-chat LaunchGateCard's id, text left blank) so it survives reload/session-switch — same
+  // append-only jsonl mechanism as `subagents`/`docs`, just a different field. buildTimeline (chat/
+  // timeline.ts) skips this message's plain-text rendering; WorkspaceView reconstructs the frozen
+  // LaunchGateCard from this field instead of relying on component-local-only state.
+  launchGate?: { workflowName: string; projects: string[]; supplement: string; decidedAt: number; seed: string }
 }
 export interface ChatSession {
   id: string

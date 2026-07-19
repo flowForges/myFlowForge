@@ -29,6 +29,10 @@ export interface LaunchGateFrozen {
 export interface LaunchGateCardProps {
   config: LaunchGateConfig
   frozen?: LaunchGateFrozen
+  // P1-3 follow-up fix: set when the last confirm's run2.start rejected (unknown workflow, missing
+  // workspace, …) — the card stays active (not frozen) so the user can edit/retry instead of being
+  // stuck behind a permanent false-positive "已启动" record.
+  error?: string
   onConfirm: (c: LaunchGateConfig) => void
   onCancel: () => void
 }
@@ -74,7 +78,7 @@ function fmtDecidedAt(ms: number): string {
 // copy rather than importing IC (a private const of that component).
 const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
 
-export function LaunchGateCard({ config, frozen, onConfirm, onCancel }: LaunchGateCardProps) {
+export function LaunchGateCard({ config, frozen, error, onConfirm, onCancel }: LaunchGateCardProps) {
   // Pure presentational: mirror the incoming config into local state so checkboxes/model chip/
   // supplement are editable in this card without the caller re-rendering it on every keystroke.
   // onConfirm reports back the (possibly edited) mirror; config.seed/workflows pass through as-is.
@@ -167,6 +171,8 @@ export function LaunchGateCard({ config, frozen, onConfirm, onCancel }: LaunchGa
             onChange={(e) => setSupplement(e.target.value)}
           />
         </div>
+
+        {error ? <div className="req-sub lg-error">{error}</div> : null}
 
         <div className="req-actions">
           <button className="req-ok" onClick={confirm}>确认</button>

@@ -82,6 +82,20 @@ describe('buildTimeline', () => {
     expect(gate && gate.kind === 'launch-gate' && gate.id).toBe('lg1')
   })
 
+  // P1-5: a persisted frozen launch-gate rides on a synthetic ChatMessage (blank text, `launchGate`
+  // field) purely so it survives reload/session-switch — it must NOT also render as a plain-text
+  // 'message' entry (the caller reconstructs its own 'launch-gate' entry for it from the same message).
+  it('携带 launchGate 字段的消息不产生 message 条目(由调用方按 id 重建 launch-gate 条目)', () => {
+    const messages = [
+      msg('m1', '2026-07-01T00:00:00.000Z'),
+      { id: 'lg1', who: 'ai' as const, text: '', ts: '2026-07-01T00:00:01.000Z', launchGate: { workflowName: 'wf', projects: [], supplement: '', decidedAt: 1, seed: '' } },
+      msg('m2', '2026-07-01T00:00:03.000Z'),
+    ]
+    const launchGates = [{ id: 'lg1', ts: Date.parse('2026-07-01T00:00:01.000Z') }]
+    const tl = buildTimeline(messages, [], [], [], launchGates)
+    expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind)).toEqual(['m1', 'launch-gate', 'm2'])
+  })
+
   // Task 19: 会话内切换 provider 时插入分割线。A→A→B→B 只在第一条 B 之前插一条,两条 A 之间不插,
   // 第二条 B 之前也不插(同 provider 连续)。
   describe('provider-switch 分割线', () => {
