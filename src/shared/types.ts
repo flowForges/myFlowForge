@@ -198,6 +198,13 @@ export interface ChatMessage {
   // timeline.ts) skips this message's plain-text rendering; WorkspaceView reconstructs the frozen
   // LaunchGateCard from this field instead of relying on component-local-only state.
   launchGate?: { workflowName: string; projects: string[]; supplement: string; decidedAt: number; seed: string }
+  // P3-4: a resolved run2 inbox event's (gate/auth/question/doubt/failure) frozen decision, persisted
+  // onto a synthetic system ChatMessage — same append-only pattern as `launchGate` just above (id ==
+  // the in-chat RunEventCard's event id, text left blank). buildTimeline (chat/timeline.ts) skips this
+  // message's plain-text rendering; WorkspaceView reconstructs the frozen RunEventCard from this field
+  // (mirrors chat/runCards.ts's FrozenRunCard shape — kept structurally inline here rather than imported,
+  // same reasoning as every other shared/types.ts field: this module stays the renderer/main boundary).
+  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number }
 }
 export interface ChatSession {
   id: string

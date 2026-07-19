@@ -82,6 +82,10 @@ function messageEntries(messages: ChatMessage[], mk: number[]): TimelineEntry[] 
     // render as a plain text bubble. The caller (WorkspaceView) reconstructs the actual 'launch-gate'
     // timeline entry for it from the same messages array, keyed by this message's own id.
     if (msg.launchGate) return
+    // P3-4: same treatment for a persisted frozen run-card marker (see ChatMessage.runCard) — the
+    // caller reconstructs the actual 'run-card' entry from this same messages array (via
+    // toRunCardEntries' `resolved` list), keyed by this message's own id.
+    if (msg.runCard) return
     if (msg.who === 'ai' && msg.provider) {
       if (prevAiProvider && msg.provider !== prevAiProvider) {
         out.push({ kind: 'provider-switch', ts: mk[index], from: prevAiProvider, to: msg.provider })

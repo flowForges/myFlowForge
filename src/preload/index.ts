@@ -93,6 +93,12 @@ const api = {
     workspacePath: string; sessionId: string; id: string; ts: string
     workflowName: string; projects: string[]; supplement: string; decidedAt: number; seed: string
   }) => ipcRenderer.invoke(CH.chatAppendLaunchGate, a),
+  // P3-4: persist a resolved run2 event's frozen record onto the session (see WorkspaceView's
+  // freezeRunCard) so it survives reload/session-switch. Mirrors chatAppendLaunchGate above.
+  chatAppendRunCard: (a: {
+    workspacePath: string; sessionId: string; ts: string
+    runCard: import('@shared/types').ChatMessage['runCard']
+  }) => ipcRenderer.invoke(CH.chatAppendRunCard, a),
   notifyTest: (): Promise<{ supported: boolean }> => ipcRenderer.invoke(CH.notifyTest),
   sessionSetModel: (a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => ipcRenderer.invoke(CH.sessionSetModel, a),
   sessionContinueFrom: (a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => ipcRenderer.invoke(CH.sessionContinueFrom, a),

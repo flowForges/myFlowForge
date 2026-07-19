@@ -44,6 +44,11 @@ import { LaunchGateCard } from '../components/LaunchGateCard'
 import type { LaunchGateConfig, LaunchGateFrozen } from '../components/LaunchGateCard'
 import type { LaunchStartConfig } from '../../main/run/launch'
 import { buildConversationSeed } from './chat/launchSeed'
+import { RunEventCard } from '../components/RunEventCard'
+import { toRunCardEntries } from './chat/runCards'
+import type { FrozenRunCard } from './chat/runCards'
+import type { RunEvent } from '../../main/run/events'
+import type { GateDecision, LaneDecision } from '../../main/run/decisions'
 // Re-exported for existing importers (WorkspaceView.pickWorkflow.test.tsx) — the single source of
 // truth for the implementation now lives in ./chat/launchSeed.ts (P1-1 extraction).
 export { buildConversationSeed }
@@ -53,6 +58,42 @@ export { buildConversationSeed }
 
 function importedToChat(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
+}
+
+// P3-4: freezing a run2 inbox event needs a standalone headline text captured BEFORE the live RunEvent
+// disappears from `inbox` — see FrozenRunCard's doc comment (chat/runCards.ts) for exactly which field
+// each kind's "title" comes from (gate uses its full `body`, since it has no separate headline field).
+function captureRunCardTitle(event: RunEvent): string {
+  switch (event.kind) {
+    case 'auth': return event.title
+    case 'question': return event.title
+    case 'doubt': return event.note
+    case 'failure': return event.error
+    case 'gate': return event.body
+  }
+}
+
+// Chinese decision labels for the frozen record's "决定：…" line (RunEventCard's frozen branch).
+function describeGateDecision(d: GateDecision): string {
+  switch (d.type) {
+    case 'advance': return '通过'
+    case 'redo': return d.feedback ? `打回本阶段：${d.feedback}` : '打回本阶段'
+    case 'jumpBack': return d.feedback ? `回退到 ${d.targetKey}：${d.feedback}` : `回退到 ${d.targetKey}`
+  }
+}
+function describeLaneDecision(d: LaneDecision): string {
+  switch (d.type) {
+    case 'authorize': return '批准'
+    case 'deny': return '拒绝'
+    case 'answer': return `回答：${d.value}`
+    case 'escalate': return '升级'
+    case 'skipLane': return '跳过'
+    case 'retry': return '重跑'
+    case 'abort': return '终止运行'
+    case 'dismiss': return '驳回继续'
+    case 'redo': return d.feedback ? `补充说明后继续：${d.feedback}` : '补充说明后继续'
+    case 'jumpBack': return d.feedback ? `回退改方案：${d.feedback}` : '回退改方案'
+  }
 }
 
 const STATE_IDX_MAP: Record<string, string> = {
@@ -162,6 +203,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // records after their run starts; `frozen` is set locally here (P1-5 will persist this into the
   // session). `ts` is this gate's position in the merged timeline (buildTimeline in the render below).
   const [launchGates, setLaunchGates] = useState<LaunchGateState[]>([])
+  // P3-4: locally-resolved run2 event cards, frozen the instant a decision is made (see freezeRunCard
+  // below) — mirrors `launchGates`' local-then-persisted-via-IPC pattern above. `runCardFirstSeenRef`
+  // stamps each run2 inbox event's first-observed time ONCE (mirrors LaunchGateState's `ts = Date.now()`
+  // stamped once at creation) so toRunCardEntries (chat/runCards.ts) keeps a card's timeline position
+  // stable across re-renders instead of it jumping when the event is later resolved/frozen.
+  const [resolvedRunCards, setResolvedRunCards] = useState<FrozenRunCard[]>([])
+  const runCardFirstSeenRef = useRef<Record<string, number>>({})
   // Task 15/16 shared mechanism: clicking "修改方向…" on a plan card (Task 15) or a stage-gate card
   // (Task 16, not yet wired) seeds a quote marker into the MAIN composer instead of opening a cramped
   // inline textarea; the next send routes back to that item's resolver as a 'modify' decision rather
@@ -447,6 +495,59 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       ...launchGates.filter((g) => !persistedIds.has(g.id) && g.sessionId === sessions.activeSessionId),
     ]
   }, [persistedLaunchGates, launchGates, sessions.activeSessionId])
+
+  // P3-4: reconstruct frozen run-cards persisted onto synthetic ChatMessages (see freezeRunCard /
+  // chatAppendRunCard below) — same reload-survival mechanism as persistedLaunchGates above.
+  const persistedRunCards = useMemo<FrozenRunCard[]>(() => (
+    chat.messages
+      .filter((m): m is ChatMessage & { runCard: NonNullable<ChatMessage['runCard']> } => !!m.runCard)
+      .map((m) => m.runCard)
+  ), [chat.messages])
+  // Merge: a persisted (message-backed) frozen record wins over a same-id local one, same dedup
+  // reasoning as mergedLaunchGates. Unlike launchGates, resolvedRunCards needs no session filter — a
+  // run2 run isn't scoped per-session the way an unconfirmed launch gate is.
+  const mergedRunCards = useMemo<FrozenRunCard[]>(() => {
+    const persistedIds = new Set(persistedRunCards.map((r) => r.id))
+    return [...persistedRunCards, ...resolvedRunCards.filter((r) => !persistedIds.has(r.id))]
+  }, [persistedRunCards, resolvedRunCards])
+  // Stamp each newly-seen run2 inbox event's arrival time once — mirrors LaunchGateState's `ts =
+  // Date.now()` stamped once at creation — so toRunCardEntries keeps a card's timeline position stable
+  // across re-renders. Mutated directly on the ref (idempotent: only ever fills in a MISSING id) rather
+  // than via setState, since it's a pure ordering cache that shouldn't itself trigger a re-render;
+  // toRunCardEntries falls back to inbox array order for any not-yet-stamped id regardless (runCards.ts).
+  for (const e of run2.state?.inbox ?? []) {
+    if (!(e.id in runCardFirstSeenRef.current)) runCardFirstSeenRef.current[e.id] = Date.now()
+  }
+  const runCardEntries = toRunCardEntries(run2.state?.inbox ?? [], mergedRunCards, runCardFirstSeenRef.current)
+  // Resolving a run2 event (gate advance/redo/jumpBack, or a lane authorize/deny/answer/retry/…) both
+  // dispatches the decision to run2 AND freezes the card in place — mirrors confirmLaunchGate's
+  // freeze-then-persist pattern, except synchronous (resolveGate/resolveLane fire-and-forget rather
+  // than return a promise to await first).
+  const freezeRunCard = useCallback((event: RunEvent, decision: string) => {
+    const at = Date.now()
+    const ts = runCardFirstSeenRef.current[event.id] ?? at
+    const frozen: FrozenRunCard = {
+      id: event.id, kind: event.kind, stageKey: event.stageKey,
+      title: captureRunCardTitle(event), decision, at, ts,
+    }
+    setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
+    const sid = sessions.activeSessionId
+    if (wsPath && sid) {
+      void window.forge.chatAppendRunCard?.({
+        workspacePath: wsPath, sessionId: sid, ts: new Date(ts).toISOString(), runCard: frozen,
+      })
+    }
+  }, [wsPath, sessions.activeSessionId])
+  const onRunGate = useCallback((eventId: string, d: GateDecision) => {
+    const event = run2.state?.inbox.find((e) => e.id === eventId)
+    run2.resolveGate(eventId, d)
+    if (event) freezeRunCard(event, describeGateDecision(d))
+  }, [run2, freezeRunCard])
+  const onRunLane = useCallback((eventId: string, d: LaneDecision) => {
+    const event = run2.state?.inbox.find((e) => e.id === eventId)
+    run2.resolveLane(eventId, d)
+    if (event) freezeRunCard(event, describeLaneDecision(d))
+  }, [run2, freezeRunCard])
 
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
@@ -792,7 +893,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </>
             )}
             {/* 当前对话:消息与子代理/主代理的交互卡片按时间线归并内联渲染 */}
-            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates).map(entry => {
+            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, runCardEntries).map(entry => {
               if (entry.kind === 'provider-switch') {
                 return (
                   <ProviderSwitchDivider
@@ -857,12 +958,18 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 )
               }
               if (entry.kind === 'run-card') {
-                // P3-1: buildTimeline's TimelineEntry union now includes 'run-card' (see runCards.ts),
-                // which this file must handle to keep the final fallthrough narrowed to 'plan' only.
-                // Actual rendering (P3-2) and wiring a real runCards list from run2's inbox (P3-4) are
-                // separate tasks — this call site doesn't pass a runCards arg yet, so this branch is
-                // currently unreachable in practice; it exists purely to satisfy exhaustiveness.
-                return null
+                // P3-4: run2 inbox event card (active) or its frozen record (resolved) — see runCards.ts/
+                // RunEventCard.tsx. onGate/onLane both dispatch the decision to run2 AND freeze the card
+                // (freezeRunCard above), so there's no separate "resolve" step here.
+                return (
+                  <RunEventCard
+                    key={entry.id}
+                    event={entry.event}
+                    frozen={entry.frozen}
+                    onGate={onRunGate}
+                    onLane={onRunLane}
+                  />
+                )
               }
               return (
                 <PlanCard

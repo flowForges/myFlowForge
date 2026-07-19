@@ -65,6 +65,9 @@ export const CH = {
   // P1-5: persist a confirmed launch-gate's frozen record onto the session (synthetic ChatMessage
   // carrying `launchGate`), so it survives reload/session-switch.
   chatAppendLaunchGate: 'chat:append-launch-gate',
+  // P3-4: persist a resolved run2 event's frozen record onto the session (synthetic ChatMessage
+  // carrying `runCard`), so it survives reload/session-switch. Mirrors chatAppendLaunchGate above.
+  chatAppendRunCard: 'chat:append-run-card',
   notifyTest: 'notify:test',
   sessionSetModel: 'session:set-model',
   sessionAgentIds: 'session:agent-ids',

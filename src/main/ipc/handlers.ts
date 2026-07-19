@@ -922,6 +922,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
     return note
   })
+  // P3-4: persist a resolved run2 inbox event's frozen record (mirrors chatAppendLaunchGate just above)
+  // so a resolved gate/auth/question/doubt/failure card survives reload/session-switch. Rides on a
+  // synthetic system ChatMessage (blank text, `runCard` field carries the frozen decision) with the
+  // SAME id as the in-chat RunEventCard's event id, so it round-trips back into chat.messages and
+  // WorkspaceView can dedupe against its own local resolved-cards state by id.
+  ipcMain.handle(CH.chatAppendRunCard, (_e, a: { workspacePath: string; sessionId: string; ts: string; runCard: NonNullable<ChatMessage['runCard']> }) => {
+    const note: ChatMessage = { id: a.runCard.id, who: 'ai', text: '', ts: a.ts, runCard: a.runCard }
+    appendMessage(a.workspacePath, a.sessionId, note)
+    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
+    return note
+  })
   // Fold any in-flight (still-streaming) assistant message into the returned history so switching to the
   // home view / another session mid-stream and back restores the already-produced output (it isn't
   // persisted until the turn's terminal state).
