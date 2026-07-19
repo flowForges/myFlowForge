@@ -40,6 +40,7 @@ import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
 import { WorkflowOverlay } from '../components/WorkflowOverlay'
+import { RunExecPanel } from '../components/RunExecPanel'
 import { LaunchGateCard } from '../components/LaunchGateCard'
 import type { LaunchGateConfig, LaunchGateFrozen } from '../components/LaunchGateCard'
 import type { LaunchStartConfig } from '../../main/run/launch'
@@ -68,7 +69,7 @@ const QUICK_CMDS = [
   { label: '解释一段代码', prompt: '解释这段限流中间件的工作原理' },
 ]
 
-type TabId = 'agents' | 'changes' | 'files'
+type TabId = 'agents' | 'changes' | 'files' | 'exec'
 
 // P1-3: one in-chat launch-gate card's full state (active or frozen). Keyed by `id`, matched against
 // the minimal { id, ts } entry buildTimeline merges into the timeline (see chat/timeline.ts) — the
@@ -195,6 +196,21 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const s = run2.state?.status
     if (s === 'running' || s === 'awaiting') setRunView(true)
   }, [run2.state?.status])
+  // P2-2: same "is a run2 run currently live" signal as the "查看运行中" reopen chip below — drives
+  // the right-inspector tab bar (执行/变更/文件树 while live, else the normal agents/changes/files set).
+  const run2Live = run2.state?.status === 'running' || run2.state?.status === 'awaiting'
+  // Default the inspector to the 执行 tab once per NEW run (keyed off runId, not status) so mid-run
+  // status churn (running↔awaiting on gate resolutions) never fights a tab the user picked manually —
+  // it only fires the moment a genuinely new run's id first appears (including on mount, if a run is
+  // already in progress when this workspace opens).
+  const run2RunId = run2.state?.machine.plan.runId ?? null
+  const execTabDefaultedRunIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (run2RunId && run2RunId !== execTabDefaultedRunIdRef.current) {
+      execTabDefaultedRunIdRef.current = run2RunId
+      setActiveTab('exec')
+    }
+  }, [run2RunId])
   const localSessions = useSessions(wsPath)
   const sessions = sessionsApi ?? localSessions
   // Confirm a pending provider switch: apply the selection, persist it, and have the new provider
@@ -1013,20 +1029,30 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
 
       {/* 右侧检查器 */}
       <aside className={'inspector' + (chatMode ? ' chat' : '') + (preview && !browse ? ' previewing' : '')} style={inspectorStyle}>
-        {/* 检查器标签栏 — 在对话/工作流模式下均可见 */}
+        {/* 检查器标签栏 — 在对话/工作流模式下均可见。run2 运行中时 执行 替换 概览/代理(P2-2)。 */}
         <div className="insp-tabs">
-            <button
-              className={`insp-tab${activeTab === 'agents' ? ' on' : ''}`}
-              data-pane="agents"
-              onClick={() => setActiveTab('agents')}
-            >
-              {chatMode ? '概览' : '代理'}
-              {!chatMode && run && (
-                <span className="badge">
-                  {totalAgents}
-                </span>
-              )}
-            </button>
+            {run2Live ? (
+              <button
+                className={`insp-tab${activeTab === 'exec' ? ' on' : ''}`}
+                data-pane="exec"
+                onClick={() => setActiveTab('exec')}
+              >
+                执行
+              </button>
+            ) : (
+              <button
+                className={`insp-tab${activeTab === 'agents' ? ' on' : ''}`}
+                data-pane="agents"
+                onClick={() => setActiveTab('agents')}
+              >
+                {chatMode ? '概览' : '代理'}
+                {!chatMode && run && (
+                  <span className="badge">
+                    {totalAgents}
+                  </span>
+                )}
+              </button>
+            )}
             <button
               className={`insp-tab${activeTab === 'changes' ? ' on' : ''}`}
               data-pane="changes"
@@ -1046,6 +1072,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             </button>
           </div>
         <div className="insp-body">
+            {/* 执行 pane — run2 运行时的执行面板(P2-2:进度+阶段流程+代码阶段分支扇出+运行级暂停/继续/终止)。 */}
+            <div className={`insp-pane${activeTab === 'exec' ? ' on' : ''}`} id="pane-exec">
+              {activeTab === 'exec' && <RunExecPanel run2={run2} />}
+            </div>
+
             {/* 代理编排 / 对话模式 pane */}
             <div className={`insp-pane${activeTab === 'agents' ? ' on' : ''}`} id="pane-agents">
               <div id="mainFlow">

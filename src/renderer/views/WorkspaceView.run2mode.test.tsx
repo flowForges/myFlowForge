@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import { WorkspaceView } from './WorkspaceView'
 import type { EngineApi } from '../state/useEngine'
 import type { ProviderInfo } from '@shared/types'
@@ -102,8 +102,11 @@ describe('WorkspaceView run2 lifecycle (runView replaces mode2 toggle)', () => {
     })
 
     await waitFor(() => expect(screen.getByText('返回对话')).toBeInTheDocument())
-    expect(document.querySelector('.wfo-runctl')).toBeInTheDocument() // WorkflowOverlay run-mode foot
-    expect(screen.getByText('终止')).toBeInTheDocument()
+    // P2-2 also mounts the right-inspector 执行 tab (RunExecPanel) — its own run-level controls
+    // render a second "终止" button, so scope this assertion to WorkflowOverlay's run-mode wrapper.
+    const overlayBody = document.querySelector('.run2-mode-body') as HTMLElement
+    expect(overlayBody.querySelector('.wfo-runctl')).toBeInTheDocument() // WorkflowOverlay run-mode foot
+    expect(within(overlayBody).getByText('终止')).toBeInTheDocument()
     expect(document.querySelector('#composerInput')).toBeNull() // chat column hidden
   })
 
