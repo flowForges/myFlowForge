@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunControllerState, RunLogLine } from '../../main/run/controller'
 import type { GateDecision, LaneDecision } from '../../main/run/decisions'
 import type { LaunchStartConfig } from '../../main/run/launch'
+import type { ResumableSummary } from '../../main/run/manager'
 
 // Per-lane buffer cap for live log lines (see `laneLogs` below) — recent context only, not a
 // full transcript (the bottom LogConsole is the full transcript).
@@ -26,6 +27,15 @@ export interface Run2Api {
   pause: () => void
   resume: () => void
   jumpBack: (targetKey: string) => void
+  /** P-C2/T3 (disk-resume): a run left interrupted by a previous app exit/crash for this workspace —
+   *  set from run2:resumable on mount/ws-change, null when there's nothing to offer (see
+   *  Run2Manager.resumable's doc). Cleared locally (optimistic) the moment 继续/丢弃 is invoked, since
+   *  either action makes the summary stale immediately (resumed → now a live run; discarded → gone). */
+  resumable: ResumableSummary | null
+  /** 继续: rebuild the interrupted run from disk and resume it (run2:resume-from-disk). */
+  resumeFromDisk: () => Promise<void>
+  /** 丢弃: clear the saved state so it stops being offered (run2:discard-resumable). */
+  discardResumable: () => Promise<void>
 }
 
 function getRun2(): any {
@@ -36,6 +46,7 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
   const [state, setState] = useState<RunControllerState | null>(null)
   const [laneLogs, setLaneLogs] = useState<Record<string, RunLogLine[]>>({})
   const [queueLength, setQueueLength] = useState(0)
+  const [resumable, setResumable] = useState<ResumableSummary | null>(null)
   // Last run identity we've buffered logs for. A NEW run in the SAME workspace reuses lane ids,
   // so we must clear stale lines when the runId changes (the workspacePath-keyed reset below only
   // fires on ws switch). Reset synchronously in onUpdate the moment a new non-null runId lands,
@@ -44,7 +55,7 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
   const run2 = getRun2()
 
   useEffect(() => {
-    if (!run2 || !workspacePath) { setState(null); return }
+    if (!run2 || !workspacePath) { setState(null); setResumable(null); return }
     let alive = true
     run2.getState(workspacePath).then((s: RunControllerState | null) => {
       if (!alive) return
@@ -52,6 +63,13 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
       // run doesn't mistake it for a new run and wipe logs already buffered for it.
       lastRunIdRef.current = s?.machine?.plan?.runId ?? null
       setState(s)
+    })
+    // P-C2/T3: check for an interrupted run left over from a previous app exit/crash — optional
+    // chaining so older test doubles / a preload without this method (not every existing test mocks
+    // it) degrade to "nothing resumable" instead of throwing.
+    setResumable(null)
+    run2.resumable?.(workspacePath)?.then((r: ResumableSummary | null) => {
+      if (alive) setResumable(r ?? null)
     })
     const offUpdate = run2.onUpdate((p: { workspacePath: string; state: RunControllerState }) => {
       if (p.workspacePath !== workspacePath) return
@@ -149,5 +167,33 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     if (r && workspacePath) r.jumpBack({ workspacePath, targetKey })
   }, [workspacePath])
 
-  return { state, laneLogs, queueLength, start, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack }
+  const resumeFromDisk = useCallback(async () => {
+    const r = getRun2()
+    if (!r || !workspacePath || !r.resumeFromDisk) return
+    setResumable(null) // optimistic: this call turns the interrupted run into a live one
+    try {
+      await r.resumeFromDisk(workspacePath)
+    } catch (err) {
+      // Restore the offer on failure (e.g. a stale/raced summary) instead of silently swallowing
+      // it — re-querying is the safe source of truth rather than assuming the old summary still holds.
+      console.error('[run2] resumeFromDisk failed', err)
+      const restored = await r.resumable?.(workspacePath)
+      setResumable(restored ?? null)
+    }
+  }, [workspacePath])
+
+  const discardResumable = useCallback(async () => {
+    const r = getRun2()
+    if (!r || !workspacePath || !r.discardResumable) return
+    setResumable(null) // optimistic: nothing left to offer once discarded
+    try {
+      await r.discardResumable(workspacePath)
+    } catch (err) {
+      console.error('[run2] discardResumable failed', err)
+      const restored = await r.resumable?.(workspacePath)
+      setResumable(restored ?? null)
+    }
+  }, [workspacePath])
+
+  return { state, laneLogs, queueLength, start, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack, resumable, resumeFromDisk, discardResumable }
 }

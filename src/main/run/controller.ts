@@ -73,6 +73,14 @@ export interface RunControllerState {
   // See RunControllerDeps.sessionId doc — copied verbatim onto state so renderer consumers (useRun2)
   // never need a separate channel just to learn which session owns this run.
   sessionId?: string
+  // P-C2/T3 (disk-resume, Finding 2): copied verbatim from RunControllerDeps.task — normally an
+  // internal-only seed baked into every stage prompt (see buildPrompt below), never otherwise
+  // surfaced on state. Echoed here purely so saveControllerState (persist.ts) can persist it and
+  // Run2Manager.resumeFromDisk can recover+pass it back through on resume — without this, a run
+  // started via the raw `task` field (run2:start-workflow) would silently lose that seed after an
+  // app-restart resume (the launch-gate path doesn't need this: its seed is baked directly into the
+  // root stage's own persisted prompt text, see launch.ts's buildGroundTruth).
+  task?: string
 }
 
 // P-C2/T1 (disk-resume): the shape RunController accepts to be reconstructed from a state loaded
@@ -187,7 +195,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId, task: this.deps.task }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }

@@ -128,6 +128,44 @@ export function registerRun2(deps: {
     return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch })
   })
 
+  // P-C2/T3 (disk-resume): checked by the renderer when a workspace opens — is there an interrupted
+  // (non-terminal) run2 state saved on disk with nothing currently driving it? See
+  // Run2Manager.resumable()'s doc for the exact gating (null for: none saved, already terminal, or a
+  // controller already live for this workspace).
+  onInvoke(CH.run2Resumable, (_e, p: { workspacePath: string }) => manager.resumable(p.workspacePath))
+
+  // P-C2/T3: 继续 — rebuilds the same kind of deps run2:launch-start builds (workspace's projects +
+  // their target branches + the injected git ops) and hands them to Run2Manager.resumeFromDisk, which
+  // rebuilds the controller from the on-disk snapshot and resumes it from the first non-done stage.
+  // Deliberately does NOT call createRunTempBranches — the resumed run reuses `plan.tempBranch`
+  // already stamped into the on-disk RunPlan (see resumeFromDisk's doc), never creates a new one.
+  // sessionId/task are recovered from the saved state itself inside resumeFromDisk (Finding 2) — this
+  // handler doesn't need to know either.
+  //
+  // Project-SUBSET caveat: which projects originally participated in the interrupted run is NOT
+  // persisted anywhere (only project NAMES inside already-executed stages' `outcomes`, and the
+  // per-run gate-selected subset itself is never written to disk — see Run2ResumeOpts' doc in
+  // manager.ts) — so this resumes with EVERY project currently configured on the workspace, not
+  // necessarily the exact subset the original (now-lost) launch-gate selection picked. Acceptable
+  // for a recovery path (better to include an extra project than to silently drop one the run
+  // actually needs); flagged here for whoever revisits this.
+  onInvoke(CH.run2ResumeFromDisk, (_e, p: { workspacePath: string }) => {
+    if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:resume-from-disk)')
+    const ws = readWorkspace(p.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
+    const info = buildLaunchInfo(ws, readWorkflows?.() ?? [], readCustomStages?.() ?? [])
+    const projects: DevelopProject[] = info.projects.map((pr) => ({ name: pr.name, cwd: pr.cwd, provider: pr.provider, model: pr.model }))
+    const projectTargets: Record<string, string> = {}
+    for (const project of projects) {
+      const target = ws.projects.find((wp) => wp.name === project.name)?.branch
+      if (target) projectTargets[project.name] = target
+    }
+    return manager.resumeFromDisk(p.workspacePath, { projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch })
+  })
+
+  // P-C2/T3: 丢弃 — clears the saved state so resumable() stops offering this interrupted run again.
+  onInvoke(CH.run2DiscardResumable, (_e, p: { workspacePath: string }) => manager.discardResumable(p.workspacePath))
+
   // P5-UI Task 2: on-demand read of a changed file's content, for the RunPanel file viewer.
   // `path` is normally RELATIVE to the work order's project cwd (WorkOrder.order.cwd) — filesChanged
   // entries are stored relative — so the caller passes `cwd` and we resolve against it. `cwd` is

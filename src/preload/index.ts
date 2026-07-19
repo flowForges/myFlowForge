@@ -329,6 +329,13 @@ const api = {
       ipcRenderer.invoke(CH.run2LaunchStart, cfg),
     // P5-UI Task 2: on-demand file content read for the RunPanel file viewer (read-only).
     readFile: (a: { path: string; cwd?: string }) => ipcRenderer.invoke(CH.run2ReadFile, a),
+    // P-C2/T3 (disk-resume): checked on workspace open — is there an interrupted run left over from
+    // before an app restart? Returns a ResumableSummary or null (see Run2Manager.resumable's doc).
+    resumable: (workspacePath: string) => ipcRenderer.invoke(CH.run2Resumable, { workspacePath }),
+    // P-C2/T3: 继续 — rebuild + resume the interrupted run from disk.
+    resumeFromDisk: (workspacePath: string) => ipcRenderer.invoke(CH.run2ResumeFromDisk, { workspacePath }),
+    // P-C2/T3: 丢弃 — clear the saved state so it stops being offered.
+    discardResumable: (workspacePath: string) => ipcRenderer.invoke(CH.run2DiscardResumable, { workspacePath }),
     onEvent: (cb: (p: { workspacePath: string; event: unknown }) => void) => {
       const listener = (_: unknown, p: { workspacePath: string; event: unknown }) => cb(p)
       ipcRenderer.on(CH.run2Event, listener)

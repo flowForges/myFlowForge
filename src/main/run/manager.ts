@@ -6,7 +6,7 @@ import { RunController, type RunControllerState, type RunLogLine } from './contr
 import type { RunPlan } from './machine'
 import type { GateDecision, LaneDecision } from './decisions'
 import type { RunEvent } from './events'
-import { findLatestRun2Run, isTerminalStatus, type SavedControllerState } from './persist'
+import { discardResumableRun, findLatestRun2Run, isTerminalStatus, type SavedControllerState } from './persist'
 
 export interface Run2Emit {
   event(wsPath: string, e: RunEvent): void
@@ -236,9 +236,14 @@ export class Run2Manager {
     const plan = found.state.machine.plan
     const controller = new RunController(plan, {
       providers: this.deps.providers, store, env: this.deps.env,
-      projects: opts.projects, retries: this.deps.retries, task: opts.task,
+      projects: opts.projects, retries: this.deps.retries,
+      // P-C2/T3 (Finding 2): recovered off the saved state itself when the resume caller doesn't
+      // supply an explicit override — see SavedControllerState.sessionId/.task doc (persist.ts) for
+      // why these are persisted at all. An explicit opts value (if a future caller ever has one)
+      // still wins, same precedence as every other opts field here.
+      task: opts.task ?? found.state.task,
       permissionMode: opts.permissionMode ?? 'full',
-      sessionId: opts.sessionId,
+      sessionId: opts.sessionId ?? found.state.sessionId,
       projectTargets: opts.projectTargets,
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,
@@ -251,6 +256,15 @@ export class Run2Manager {
       stageTimings: found.state.stageTimings,
     })
     return this.registerAndRun(wsPath, controller)
+  }
+
+  // P-C2/T3: the recovery UI's 丢弃 action — clears the on-disk state so resumable() stops offering
+  // it. Same "not while a controller is live" gating as resumable()/resumeFromDisk() (a workspace
+  // with a live controller has nothing stale on disk to discard — either it was just resumed, or a
+  // fresh run has since superseded whatever old state was there).
+  discardResumable(wsPath: string): boolean {
+    if (this.controllers.has(wsPath)) return false
+    return discardResumableRun(wsPath)
   }
   get(wsPath: string): RunController | undefined { return this.controllers.get(wsPath) }
   isActive(wsPath: string): boolean { return this.controllers.has(wsPath) }

@@ -232,6 +232,14 @@ export const CH = {
   run2LaunchStart: 'run2:launch-start',
   // P5-UI Task 2: read a changed file's content on demand (renderer file viewer) — read-only.
   run2ReadFile: 'run2:read-file',
+  // P-C2/T3 (disk-resume): checked on workspace open — is there an interrupted (non-terminal) run2
+  // state saved on disk for this workspace with nothing currently driving it? See
+  // Run2Manager.resumable()'s doc for exactly what counts.
+  run2Resumable: 'run2:resumable',
+  // P-C2/T3: 继续 — rebuilds a controller from the on-disk snapshot and resumes it (Run2Manager.resumeFromDisk).
+  run2ResumeFromDisk: 'run2:resume-from-disk',
+  // P-C2/T3: 丢弃 — clears the saved state so resumable() stops offering it again.
+  run2DiscardResumable: 'run2:discard-resumable',
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from
@@ -255,3 +263,6 @@ export const run2LaunchInfo = CH.run2LaunchInfo
 export const run2StartWorkflow = CH.run2StartWorkflow
 export const run2LaunchStart = CH.run2LaunchStart
 export const run2ReadFile = CH.run2ReadFile
+export const run2Resumable = CH.run2Resumable
+export const run2ResumeFromDisk = CH.run2ResumeFromDisk
+export const run2DiscardResumable = CH.run2DiscardResumable

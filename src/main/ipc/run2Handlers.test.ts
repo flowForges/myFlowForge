@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { registerRun2 } from './run2Handlers'
 import { Run2Manager } from '../run/manager'
 import { RunStore } from '../orchestrator/runStore'
+import { saveControllerState } from '../run/persist'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -388,6 +389,154 @@ describe('registerRun2', () => {
         })).rejects.toThrow(/当前工作区有工作流在执行/)
         expect(createCalls).toEqual([])
         manager.abort(ws) // tidy up the never-resolving run so the process can exit cleanly
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+  })
+
+  describe('run2:resumable / run2:resume-from-disk / run2:discard-resumable (P-C2/T3)', () => {
+    // Mirrors manager.test.ts's disk-resume fixture: a 2-stage plan with 'design' already `done` (the
+    // app died sometime after it finished, before 'develop' started).
+    function seedInterrupted(wsPath: string, runId: string) {
+      const plan = {
+        runId,
+        stages: [
+          { key: 'design', name: 'D', provider: 'x', model: 'm', scope: 'root' as const, gate: false },
+          { key: 'develop', name: 'Dev', provider: 'x', model: 'm', scope: 'per-project' as const, gate: false },
+        ],
+      }
+      const machine = {
+        plan,
+        stages: [
+          { key: 'design', status: 'done' as const, round: 0 },
+          { key: 'develop', status: 'pending' as const, round: 0 },
+        ],
+        currentIndex: 1,
+      }
+      const state = { machine, inbox: [], feedback: [], outcomes: {}, status: 'running' as const, pendingDirective: {}, liveLanes: {}, stageTimings: {}, paused: false }
+      saveControllerState(new RunStore(wsPath, runId), state as any)
+    }
+
+    function makeWsConfig(wsPath: string): Workspace {
+      return {
+        name: 'pay', path: wsPath, workflowId: '', stages: [],
+        workflows: [{ id: 'wf1', name: '标准五段', stages: [
+          { key: 'design', provider: 'x', model: 'm', scope: 'root', gate: false },
+          { key: 'develop', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+        ] }],
+        projects: [{ repoId: 'api', name: 'api', branch: 'main' }] as any,
+        status: 'idle', plugins: [], stepPlugins: [],
+      } as any
+    }
+
+    it('run2:resumable returns a summary for an interrupted (non-terminal) run', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-res-'))
+      try {
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+        seedInterrupted(ws, 'run-x')
+        const resumable = handlers.get(CH.run2Resumable)!
+        const summary = await resumable({}, { workspacePath: ws })
+        expect(summary).toEqual({ runId: 'run-x', resumeStageKey: 'develop', resumeStageName: 'Dev', totalStages: 2, doneCount: 1 })
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:resumable returns null for a fresh workspace with no interrupted run', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-res-'))
+      try {
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+        const resumable = handlers.get(CH.run2Resumable)!
+        expect(await resumable({}, { workspacePath: ws })).toBeNull()
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:resume-from-disk builds the workspace\'s projects/target-branches and resumes the controller from the first non-done stage', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-res-'))
+      try {
+        const calls: string[] = []
+        const discardCalls: Array<{ cwd: string; target: string }> = []
+        const capturing: AgentProvider = {
+          id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+          async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+          run(task: AgentTask, cb: AgentCallbacks) {
+            calls.push(task.stageKey)
+            const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+            return { id: task.agentId, cancel() {}, done }
+          },
+        }
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({
+          providers: { x: capturing }, env: {}, makeStore: (w, r) => new RunStore(w, r),
+          emit: {
+            // The workspace's project HAS a target branch (makeWsConfig below), so — same as
+            // run2:launch-start — resume-from-disk's rebuilt projectTargets turns the finalize gate
+            // ON; resolve it (discard) here so the run reaches a terminal 'ok', same pattern the
+            // existing run2:launch-start tests above use.
+            event: (wp, e) => { if (e.kind === 'gate' && (e as any).finalize) manager.resolveGate(wp, e.id, { type: 'discard' }) },
+            update: () => {},
+          },
+        })
+        const wsConfig = makeWsConfig(ws)
+        registerRun2({
+          manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [],
+          discardTempBranch: async (cwd, target) => { discardCalls.push({ cwd, target }) },
+        })
+        seedInterrupted(ws, 'run-x')
+
+        const resumeFromDisk = handlers.get(CH.run2ResumeFromDisk)!
+        const state = await resumeFromDisk({}, { workspacePath: ws })
+        expect(state.machine.plan.runId).toBe('run-x')
+        expect(manager.isActive(ws)).toBe(true)
+
+        await new Promise((r) => setTimeout(r, 50))
+        // 'design' was already `done` on disk — never re-invoked; only 'develop' (the first
+        // non-done stage) runs, for the workspace's configured project ('api', not persisted anywhere
+        // — rebuilt from readWorkspace, same as run2:launch-start would for a fresh start).
+        expect(calls).toEqual(['develop'])
+        expect(manager.lastStateFor(ws)?.status).toBe('ok')
+        // the finalize gate's discard action hit the workspace's configured target branch ('main').
+        expect(discardCalls).toEqual([{ cwd: join(ws, 'api'), target: 'main' }])
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:resume-from-disk throws SYNCHRONOUSLY when the readWorkspace dep is missing', () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-res-'))
+      try {
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+        seedInterrupted(ws, 'run-x')
+        const resumeFromDisk = handlers.get(CH.run2ResumeFromDisk)!
+        expect(() => resumeFromDisk({}, { workspacePath: ws })).toThrow(/readWorkspace/)
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:discard-resumable clears the saved state so run2:resumable stops offering it', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-res-'))
+      try {
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+        seedInterrupted(ws, 'run-x')
+        const resumable = handlers.get(CH.run2Resumable)!
+        expect(await resumable({}, { workspacePath: ws })).not.toBeNull()
+
+        const discard = handlers.get(CH.run2DiscardResumable)!
+        expect(await discard({}, { workspacePath: ws })).toBe(true)
+        expect(await resumable({}, { workspacePath: ws })).toBeNull()
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:discard-resumable returns false (no-op) when there is nothing resumable', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-res-'))
+      try {
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+        const discard = handlers.get(CH.run2DiscardResumable)!
+        expect(await discard({}, { workspacePath: ws })).toBe(false)
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
   })

@@ -931,6 +931,18 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           archived={archived}
           attentionIds={attentionIds}
         />
+        {/* P-C2/T3 (disk-resume): a workflow was mid-run when the app last exited/crashed for this
+            workspace — offer to continue it (rebuild from the last saved stage on disk) or discard it.
+            Never auto-resumes — always asks. Hidden for an archived (read-only) workspace. Reuses the
+            supplement-banner shell (same text-then-actions layout as the provider-switch confirm
+            banner below) so this needs no new CSS. */}
+        {run2.resumable && !archived && (
+          <div className="supplement-banner">
+            <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
+            <button className="supplement-ok" onClick={() => { void run2.resumeFromDisk() }}>继续</button>
+            <button className="supplement-cancel" onClick={() => { void run2.discardResumable() }}>丢弃</button>
+          </div>
+        )}
         {/* 只读会话: 基于此历史继续 */}
         {isReadOnlySession && canContinue(activeSession!, roMessages.length) && !archived && (
           <div className="si-continue-bar">
