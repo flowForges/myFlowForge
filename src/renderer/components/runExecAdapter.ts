@@ -21,6 +21,13 @@ export interface AdaptedStage {
   name: string
   state: AgentState
   agents: AdaptedAgent[]
+  // Spec §5.2: a jump-back (`machine.ts`'s `jumpBack`) marks every downstream 'done' stage
+  // 'stale' in the machine — its prior output isn't deleted, just invalidated until the flow
+  // moves forward again and re-runs it. Kept as a separate flag rather than folding into
+  // `AgentState` (which has no 'stale' member and is shared with AgentNode's per-agent
+  // rendering, which doesn't need this concept) — see this task's note on preferring an
+  // explicit flag over overloading the state enum.
+  stale?: boolean
 }
 
 // Per-project fan-out memory, one entry per project ever seen in a stage THIS run — so a lane
@@ -185,6 +192,13 @@ export function buildStageRuntimes(
       sp.scope === 'per-project'
         ? buildFanoutAgents(sp, state, laneLogs, getStageMemory(memoryByStage, sp.key))
         : [buildRootAgent(sp, state, laneLogs)]
-    return { key: sp.key, name: sp.name, state: stageAgentState(sp.key, state, agents), agents }
+    const machineStatus = state.machine.stages.find((s) => s.key === sp.key)?.status
+    return {
+      key: sp.key,
+      name: sp.name,
+      state: stageAgentState(sp.key, state, agents),
+      agents,
+      stale: machineStatus === 'stale',
+    }
   })
 }

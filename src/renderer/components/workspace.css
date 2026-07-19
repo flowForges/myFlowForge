@@ -250,6 +250,16 @@
 }
 .stage.run .stage-mode { color: var(--run); border-color: var(--run); background: var(--accent-dim); }
 
+/* 已失效(stale):跳回更早阶段后,该阶段之后已完成的阶段被标记失效但不删除产出,
+   等流程再次推进到此处才会重跑(spec §5.2)。低调警示色胶囊,和 .stage-mode 并排。 */
+.stage-stale {
+  font-family: var(--mono); font-size: 10px; font-weight: 600;
+  color: var(--warn); background: color-mix(in oklch, var(--warn), transparent 88%);
+  border: 1px solid color-mix(in oklch, var(--warn), transparent 60%);
+  border-radius: 99px; padding: 2px 8px; white-space: nowrap;
+}
+.stage-name:has(+ .stage-stale) { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--muted), transparent 40%); }
+
 .stage-agents {
   position: relative; display: flex; flex-direction: column;
   gap: 8px; padding: 0 0 18px 31px;

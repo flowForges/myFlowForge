@@ -167,6 +167,27 @@ describe('buildStageRuntimes', () => {
     expect(stages.find((s) => s.key === 'develop')!.agents).toEqual([])
   })
 
+  it('marks a stage stale (jump-back invalidation) via a dedicated flag, without touching sibling stages', () => {
+    const staleState = baseState({
+      machine: {
+        plan: baseState().machine.plan,
+        stages: [
+          { key: 'assess', status: 'running', round: 1 },
+          { key: 'design', status: 'stale', round: 0 },
+          { key: 'develop', status: 'stale', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 0,
+      },
+    })
+    const stages = buildStageRuntimes(staleState, {})
+    expect(stages.find((s) => s.key === 'design')!.stale).toBe(true)
+    expect(stages.find((s) => s.key === 'develop')!.stale).toBe(true)
+    // A running/pending stage that was never jumped past is not stale.
+    expect(stages.find((s) => s.key === 'assess')!.stale).toBeFalsy()
+    expect(stages.find((s) => s.key === 'review')!.stale).toBeFalsy()
+  })
+
   it('persists a fan-out lane through a momentary gap via caller-owned memory (no fresh live/outcome this tick)', () => {
     const memory = new Map<string, Map<string, LaneMemory>>()
     // Tick 1: go-blog is live.

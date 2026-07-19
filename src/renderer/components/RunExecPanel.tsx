@@ -233,6 +233,11 @@ export function RunExecPanel({ run2, onAbort }: { run2: Run2Api; onAbort?: () =>
                 <div className="stage-head">
                   <span className="stage-idx">{idx + 1}</span>
                   <span className="stage-name">{stage.name}</span>
+                  {stage.stale && (
+                    <span className="stage-stale" title="回退到更早阶段后，此阶段的产出已失效，流程推进到此处时会重新执行">
+                      已失效
+                    </span>
+                  )}
                   <span className="stage-mode">{stageMode}</span>
                 </div>
                 <div className={`stage-agents${isParallel ? ' parallel' : ''}`}>

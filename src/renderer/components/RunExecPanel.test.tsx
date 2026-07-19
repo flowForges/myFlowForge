@@ -190,6 +190,35 @@ describe('RunExecPanel', () => {
     expect(screen.queryByText('工作流已结束 · 存在失败阶段，请检查后处理')).toBeNull()
   })
 
+  it('renders a 已失效 marker on a stale (jumped-back-past) stage, and only on that stage', () => {
+    const staleState = baseState({
+      machine: {
+        plan: baseState().machine.plan,
+        stages: [
+          { key: 'assess', status: 'running', round: 1 },
+          { key: 'design', status: 'stale', round: 0 },
+          { key: 'develop', status: 'stale', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 0,
+      },
+    })
+    const run2 = makeRun2(staleState)
+    render(<RunExecPanel run2={run2} />)
+
+    const staleChips = screen.getAllByText('已失效')
+    expect(staleChips).toHaveLength(2)
+    // The marker sits inside the invalidated stages' own header, not the running/pending ones.
+    const designHeader = screen.getAllByText('技术方案设计')[0].closest('.stage-head')!
+    const developHeader = screen.getAllByText('代码开发')[0].closest('.stage-head')!
+    const assessHeader = screen.getAllByText('需求评估')[0].closest('.stage-head')!
+    const reviewHeader = screen.getAllByText('代码评审')[0].closest('.stage-head')!
+    expect(designHeader.querySelector('.stage-stale')).not.toBeNull()
+    expect(developHeader.querySelector('.stage-stale')).not.toBeNull()
+    expect(assessHeader.querySelector('.stage-stale')).toBeNull()
+    expect(reviewHeader.querySelector('.stage-stale')).toBeNull()
+  })
+
   it('renders nothing but an idle message when there is no active run', () => {
     const run2 = makeRun2(null)
     render(<RunExecPanel run2={run2} />)
