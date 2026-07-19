@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AgentRuntime } from '@shared/types'
-import { fmtLogClock } from '@shared/relTime'
+import { fmtLogClock, fmtDuration } from '@shared/relTime'
 import { AgentContextMeta } from './AgentContextMeta'
 import { useStickToBottom } from './useStickToBottom'
 
@@ -66,6 +66,18 @@ function heartbeatLabel(lastBeat?: number): string | null {
   return `心跳 ${Math.round(secs / 60)}m 前`
 }
 
+// Improvement ⑥: this lane's own elapsed execution time, from AgentRuntime.laneStartedAt/laneEndedAt
+// (populated by runExecAdapter from RunController.laneTimings — see its doc). `null` until the lane
+// has actually started (a fan-out card can render before its turn, with no timing yet). While still
+// running (no laneEndedAt), elapsed is computed against `Date.now()` — the card re-renders on every
+// onUpdate the controller emits during a live run (progress/log/gate/etc., see RunExecPanel), which
+// is frequent enough to read as "ticking" without a dedicated setInterval (deliberately not added,
+// per this task's own guidance against over-engineering a live ticker here).
+function elapsedLabel(startedAt?: number, endedAt?: number): string | null {
+  if (!startedAt) return null
+  return fmtDuration((endedAt ?? Date.now()) - startedAt)
+}
+
 interface AgentNodeProps {
   agent: AgentRuntime
   /** Controlled open state. If provided, AgentNode is controlled. */
@@ -83,6 +95,7 @@ export function AgentNode({ agent, open: openProp, onToggle, onViewLog }: AgentN
   const open = isControlled ? (openProp ?? false) : openLocal
   const stateInfo = STATE_MAP[agent.state] ?? STATE_MAP.wait
   const beatLabel = heartbeatLabel(agent.lastBeat)
+  const elapsed = elapsedLabel(agent.laneStartedAt, agent.laneEndedAt)
   const ctxCount = contextCount(agent)
   // Follow-tail: keep the live output pinned to the newest line; when the user scrolls up, surface a
   // "查看最新" jump button. Re-pins on new lines only while already at the bottom.
@@ -125,6 +138,7 @@ export function AgentNode({ agent, open: openProp, onToggle, onViewLog }: AgentN
             <span className="d" />
             {stateInfo.label}
           </span>
+          {elapsed && <span className="agent-elapsed" title="该项目本阶段执行耗时">{elapsed}</span>}
           {beatLabel && <span className="agent-beat">{beatLabel}</span>}
           <svg className="agent-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
             <polyline points="9 6 15 12 9 18" />

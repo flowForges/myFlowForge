@@ -92,6 +92,26 @@ describe('RunExecPanel', () => {
     expect(zghCard!.querySelector('.agent-state')?.textContent).toContain('完成')
   })
 
+  // Improvement ⑥: per-lane (per-project) execution timing end-to-end — state.laneTimings flows
+  // through runExecAdapter into AgentNode's `.agent-elapsed` chip, with a done lane showing its
+  // frozen total and a still-running lane (no endedAt) showing elapsed-so-far.
+  it('renders per-lane elapsed time: frozen total for a done lane, ticking elapsed for a running lane', () => {
+    const now = Date.now()
+    const run2 = makeRun2(baseState({
+      laneTimings: {
+        'develop:zgh': { startedAt: now - 75_000, endedAt: now - 3_000 }, // done: frozen 72s = 1m 12s
+        'develop:go-blog': { startedAt: now - 20_000 }, // still running: ~20s
+      },
+    }))
+    render(<RunExecPanel run2={run2} />)
+
+    const zghCard = screen.getByText('zgh').closest('.agent-node')!
+    expect(zghCard.querySelector('.agent-elapsed')).toHaveTextContent('1m 12s')
+
+    const goBlogCard = screen.getByText('go-blog').closest('.agent-node')!
+    expect(goBlogCard.querySelector('.agent-elapsed')).toHaveTextContent('20s')
+  })
+
   it('does not render any per-node decision action (gate/auth/failure buttons)', () => {
     const gatedState = baseState({
       inbox: [{ id: 'g1', kind: 'gate', stageKey: 'design', body: '方案已就绪' }],

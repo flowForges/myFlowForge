@@ -267,6 +267,7 @@ export class Run2Manager {
       feedback: found.state.feedback,
       pendingDirective: found.state.pendingDirective,
       stageTimings: found.state.stageTimings,
+      laneTimings: found.state.laneTimings,
     })
     return this.registerAndRun(wsPath, controller)
   }

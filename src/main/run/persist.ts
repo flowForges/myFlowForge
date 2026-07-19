@@ -14,6 +14,12 @@ export interface SavedControllerState {
   outcomes: Record<string, SavedOutcome[]>
   pendingDirective: RunControllerState['pendingDirective']
   stageTimings: RunControllerState['stageTimings']
+  // Improvement ⑥ (see RunControllerState.laneTimings doc, controller.ts). Optional — same
+  // backward-compat rationale as sessionId/task/projects below: an OLDER saved run2-state (written
+  // before this field existed) loads as `undefined`, and loadControllerState defaults it to `{}`
+  // (mirroring stageTimings' own `?? {}` fallback) so a resumed/historical run just shows no
+  // per-lane timing rather than throwing on a missing field.
+  laneTimings?: RunControllerState['laneTimings']
   // P-C2/T3 (disk-resume review Finding 2): the OWNING session (RunControllerDeps.sessionId, echoed
   // onto state — see controller.ts's `get state()`) and the run's `task` seed (ditto). Neither was
   // previously persisted — a resumed run would silently lose session-card scoping (the P3
@@ -43,12 +49,12 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
   for (const [k, list] of Object.entries(s.outcomes)) {
     outcomes[k] = list.map((o) => ({ id: o.order.id, status: o.status, project: o.order.project, error: o.error, attempts: o.attempts }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, sessionId: s.sessionId, task: s.task, projects: s.projects })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, sessionId: s.sessionId, task: s.task, projects: s.projects })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY) as SavedControllerState | undefined
   if (!got) return null
-  return { ...got, stageTimings: got.stageTimings ?? {} }
+  return { ...got, stageTimings: got.stageTimings ?? {}, laneTimings: got.laneTimings ?? {} }
 }
 
 // A run's status only ever reaches 'ok'/'failed' once RunController.start() itself resolves/rejects

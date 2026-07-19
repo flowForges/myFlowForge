@@ -64,6 +64,16 @@ export interface RunControllerState {
   pendingDirective: Record<string, string>
   liveLanes: Record<string, LiveLane>
   stageTimings: Record<string, { startedAt: number; endedAt?: number }>
+  // Improvement ⑥: per-LANE (one work order = one project's agent, or the single root agent for a
+  // root-scope stage) timing, keyed by the SAME `WorkOrder.id`/laneId used everywhere else
+  // (RunEvent.laneId, liveLanes keys, RunLogLine.laneId — see fanout.ts's buildWorkOrders: `${stage.
+  // key}:root` or `${stage.key}:${project}`). Mirrors stageTimings exactly (startedAt set when the
+  // lane's work order begins, endedAt once it settles ok/failed via this.now()) but at the finer
+  // per-lane granularity the right-side execution cards (RunExecPanel → runExecAdapter → AgentNode)
+  // need to show each project's own elapsed time, not just the whole stage's. A lane that re-runs
+  // (manual `retry` decision after a failure) gets a FRESH entry (see runOneOrder) so its elapsed
+  // reflects only the latest attempt, matching how stageTimings is overwritten on a stage redo.
+  laneTimings: Record<string, { startedAt: number; endedAt?: number }>
   paused: boolean
   // Set only on a finalize-gate merge/discard failure (see runFinalizeGate) — the readable,
   // per-project error message naming what actually failed (e.g. a merge conflict + file). Absent
@@ -127,6 +137,11 @@ export interface RehydrateState {
   feedback?: FeedbackDraft[]
   pendingDirective?: Record<string, string>
   stageTimings?: Record<string, { startedAt: number; endedAt?: number }>
+  // See RunControllerState.laneTimings doc. Optional/backward-compatible the same way stageTimings
+  // is — an older saved run2-state (written before this field existed) just loads as `undefined`
+  // and the rehydrated controller starts with an empty map (no per-lane timing history to show,
+  // same as stageTimings would for an even older save).
+  laneTimings?: Record<string, { startedAt: number; endedAt?: number }>
 }
 
 // A loaded machine's currentIndex/statuses reflect whatever was on disk at the last emitUpdate()
@@ -169,6 +184,7 @@ export class RunController {
   private pendingDirective: Record<string, string> = {}
   private liveLanes: Record<string, LiveLane> = {}
   private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
+  private laneTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
   private aborted = false
   private paused = false
   // Set by requestJumpBack(), applied at the next stage boundary (see start()). Deliberately not
@@ -197,6 +213,7 @@ export class RunController {
       this.feedback = rehydrate.feedback ?? []
       this.pendingDirective = rehydrate.pendingDirective ?? {}
       this.stageTimings = rehydrate.stageTimings ?? {}
+      this.laneTimings = rehydrate.laneTimings ?? {}
       for (const [stageKey, list] of Object.entries(rehydrate.outcomes ?? {})) {
         this.outcomes[stageKey] = list.map((o) => placeholderOutcome(stageKey, o))
       }
@@ -213,7 +230,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -458,7 +475,13 @@ export class RunController {
   }
 
   private async runOneOrder(order: WorkOrder): Promise<WorkOrderOutcome> {
+    // Fresh entry on every call — including a manual `retry` after a failure (see start()'s
+    // failure-handling loop, which calls runOneOrder again for the SAME order.id) — so a re-run's
+    // elapsed reflects only its latest attempt, not the sum since the very first try. Matches
+    // stageTimings' own overwrite-on-restart semantics (controller.ts:544/here, same `this.now()`).
+    this.laneTimings[order.id] = { startedAt: this.now() }
     const outcome = await this.runOneOrderLive(order)
+    this.laneTimings[order.id].endedAt = this.now()
     // Settled (ok or failed): the lane's final state now lives in `outcomes`, not `liveLanes`.
     delete this.liveLanes[order.id]
     this.emitUpdate()

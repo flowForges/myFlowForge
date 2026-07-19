@@ -92,13 +92,39 @@ describe('controller persistence', () => {
     const back = loadControllerState(store)
     expect(back?.projects).toBeUndefined()
   })
+
+  // Improvement ⑥: laneTimings (per-project/per-lane execution timing) must survive a save/load
+  // round-trip too — otherwise a resumed/historical run loses each lane's own elapsed time, not
+  // just the whole stage's (stageTimings already round-trips, see the first test in this file).
+  it('round-trips laneTimings', () => {
+    const store = new RunStore(ws, 'r1')
+    const laneTimings = { 'design:a': { startedAt: 1000, endedAt: 2500 }, 'design:b': { startedAt: 1200 } }
+    const s = {
+      machine: initMachine(plan), inbox: [], feedback: [], outcomes: {},
+      status: 'running' as const, pendingDirective: {}, laneTimings,
+    }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.laneTimings).toEqual(laneTimings)
+  })
+
+  // Backward compatibility, mirroring stageTimings' own `?? {}` fallback (persist.ts's
+  // loadControllerState): an older saved state (or one built without `laneTimings`, like every
+  // OTHER test in this file) must load with an empty object, not throw or leave it undefined.
+  it('laneTimings defaults to {} for a saved state that never set it', () => {
+    const store = new RunStore(ws, 'r1')
+    const s = { machine: initMachine(plan), inbox: [], feedback: [], outcomes: {}, status: 'running' as const, pendingDirective: {} }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.laneTimings).toEqual({})
+  })
 })
 
 describe('findLatestRun2Run (P-C2/T3 review Finding 1): latest-mtime-wins regardless of terminal-ness', () => {
   // Mirrors the fixture shape manager.test.ts's disk-resume suite uses.
   function fixtureState(status: RunControllerState['status']): RunControllerState {
     const machine: MachineState = { plan, stages: [{ key: 'design', status: 'pending', round: 0 }], currentIndex: 0 }
-    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, paused: false }
+    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false }
   }
   // Seeds a run's context.json then stamps its mtime explicitly — real filesystem mtime resolution
   // (and same-millisecond writes in a fast test) is too coarse/unreliable to order two saves by
@@ -138,7 +164,7 @@ describe('listRuns / loadRun (run-history, spec §12.7)', () => {
   function fixtureState(status: RunControllerState['status'], doneCount: number, totalStages: number, task?: string): RunControllerState {
     const stages = Array.from({ length: totalStages }, (_, i) => ({ key: `s${i}`, status: (i < doneCount ? 'done' : 'pending') as 'done' | 'pending', round: 0 }))
     const machine: MachineState = { plan, stages, currentIndex: 0 }
-    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, paused: false, task }
+    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false, task }
   }
   // Same mtime-pinning rationale as findLatestRun2Run's seedRun above — real fs mtime resolution is
   // too coarse to reliably order several saves by "which ran Nth".

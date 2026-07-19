@@ -58,6 +58,7 @@ function makeRunState(inbox: RunEvent[], sessionId?: string): RunControllerState
     pendingDirective: {},
     liveLanes: {},
     stageTimings: {},
+    laneTimings: {},
     paused: false,
     sessionId,
   }

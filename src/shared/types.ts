@@ -11,6 +11,14 @@ export interface AgentRuntime {
   context?: AgentContextMeta
   // ms epoch of the most recent activity (stdout/MCP/handoff/heartbeat); undefined until first beat
   lastBeat?: number
+  // Improvement ⑥: this lane's OWN execution timing (one work order = one project's agent, or the
+  // single root agent for a root-scope stage) — ms epoch, from RunController.laneTimings (see its
+  // doc in controller.ts). `startedAt` undefined until the lane's work order has actually begun
+  // (e.g. a fan-out project card shown before its turn); `endedAt` undefined while still running —
+  // AgentNode computes elapsed as `(endedAt ?? now) - startedAt` so a running lane's chip keeps
+  // ticking on every re-render instead of freezing at the moment it started.
+  laneStartedAt?: number
+  laneEndedAt?: number
   // Context-window usage: ctxPct = used/window % (0..100), ctxMax = window size in K. Undefined
   // until the provider parses a usage object from the stream; the agent card omits the bar then.
   ctxPct?: number

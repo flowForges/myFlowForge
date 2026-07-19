@@ -411,6 +411,14 @@
   color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 999px; padding: 2px 7px;
 }
+/* Improvement ⑥: per-lane elapsed-time chip (AgentNode) — same pill treatment as .agent-beat so
+   the two read as one family, kept as a distinct class since they can appear side by side (elapsed
+   duration vs. "time since last heartbeat" are different measurements, not alternates). */
+.agent-elapsed {
+  flex: 0 0 auto; font-family: var(--mono); font-size: 10px; font-weight: 600;
+  color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 7px;
+}
 .agent-chev { width: 13px; height: 13px; flex: 0 0 13px; color: var(--faint); transition: transform .18s; }
 .agent-node.open .agent-chev { transform: rotate(90deg); }
 .st-run { color: var(--run); } .st-run .d { background: var(--run); animation: pulse 1.4s infinite; }

@@ -39,6 +39,7 @@ export function toHistoricalState(saved: SavedControllerState): RunControllerSta
     // and a historical replay is never "paused" (there's no live process to resume).
     liveLanes: {},
     stageTimings: saved.stageTimings,
+    laneTimings: saved.laneTimings ?? {},
     paused: false,
     sessionId: saved.sessionId,
     task: saved.task,

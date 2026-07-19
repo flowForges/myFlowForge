@@ -331,7 +331,7 @@ describe('Run2Manager', () => {
         ],
         currentIndex: 1,
       }
-      return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, paused: false }
+      return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false }
     }
     function seed(runId: string, status: RunControllerState['status']) {
       saveControllerState(new RunStore(ws, runId), fixtureState(status))
@@ -432,7 +432,7 @@ describe('Run2Manager', () => {
       const persistedProjects = [{ name: 'go-blog', cwd: join(ws, 'go-blog') }]
       const state: RunControllerState = {
         machine, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {},
-        liveLanes: {}, stageTimings: {}, paused: false, projects: persistedProjects,
+        liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false, projects: persistedProjects,
       }
       saveControllerState(new RunStore(ws, 'run-subset'), state)
 

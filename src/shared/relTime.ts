@@ -68,6 +68,18 @@ export function fmtMsgTimeFull(ts: string): string {
   return ts
 }
 
+// Elapsed-DURATION label (NOT "time ago" — a span length, e.g. a lane's total run time) for the
+// per-lane execution timing chip (AgentNode). `ms` is a non-negative duration in milliseconds.
+// < 1s → "0s" (never blank, so a just-started lane still shows something); < 60s → "Ns";
+// otherwise → "Mm Ss" (seconds always shown, even ":00", so it keeps visibly ticking within the
+// minute). Mirrors SetupProgress.tsx's local `Elapsed` component's formatting, promoted here so
+// AgentNode can share it instead of re-deriving its own.
+export function fmtDuration(ms: number): string {
+  const secs = Math.max(0, Math.floor(ms / 1000))
+  if (secs < 60) return `${secs}s`
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`
+}
+
 export function fmtRelTime(ms: number, now: number): string {
   if (!ms || ms <= 0) return ''
   const diff = now - ms

@@ -188,6 +188,43 @@ describe('buildStageRuntimes', () => {
     expect(stages.find((s) => s.key === 'review')!.stale).toBeFalsy()
   })
 
+  // Improvement ⑥: per-lane execution timing (RunControllerState.laneTimings, keyed by the same
+  // laneId as liveLanes/outcomes) must be threaded onto the adapted agent so AgentNode can render
+  // an elapsed chip — for both a root-scope stage's single agent and a per-project fan-out lane.
+  it('threads laneTimings onto the adapted agent (root-scope) as laneStartedAt/laneEndedAt', () => {
+    const state = baseState({
+      laneTimings: { 'assess:root': { startedAt: 1000, endedAt: 4500 } },
+    })
+    const stages = buildStageRuntimes(state, {})
+    const assess = stages.find((s) => s.key === 'assess')!.agents[0]
+    expect(assess.laneStartedAt).toBe(1000)
+    expect(assess.laneEndedAt).toBe(4500)
+  })
+
+  it('threads laneTimings onto per-project fan-out lanes, one entry per lane', () => {
+    const state = baseState({
+      laneTimings: {
+        'develop:zgh': { startedAt: 2000, endedAt: 2800 },
+        'develop:go-blog': { startedAt: 2100 }, // still running: no endedAt
+      },
+    })
+    const stages = buildStageRuntimes(state, {})
+    const develop = stages.find((s) => s.key === 'develop')!
+    const zgh = develop.agents.find((a) => a.name === 'zgh')!
+    const goBlog = develop.agents.find((a) => a.name === 'go-blog')!
+    expect(zgh.laneStartedAt).toBe(2000)
+    expect(zgh.laneEndedAt).toBe(2800)
+    expect(goBlog.laneStartedAt).toBe(2100)
+    expect(goBlog.laneEndedAt).toBeUndefined()
+  })
+
+  it('leaves laneStartedAt/laneEndedAt undefined when no laneTimings entry exists for a lane', () => {
+    const stages = buildStageRuntimes(baseState(), {})
+    const assess = stages.find((s) => s.key === 'assess')!.agents[0]
+    expect(assess.laneStartedAt).toBeUndefined()
+    expect(assess.laneEndedAt).toBeUndefined()
+  })
+
   it('persists a fan-out lane through a momentary gap via caller-owned memory (no fresh live/outcome this tick)', () => {
     const memory = new Map<string, Map<string, LaneMemory>>()
     // Tick 1: go-blog is live.

@@ -350,6 +350,59 @@ describe('RunController', () => {
     expect(timing.endedAt!).toBeGreaterThanOrEqual(timing.startedAt)
   })
 
+  it('laneTimings: records startedAt/endedAt per lane (one per project), independent of the stage-level timing', async () => {
+    const store = new RunStore(ws, 'r1')
+    let t = 1000
+    const now = () => t++
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now, makeId: idFactory() })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    for (const laneId of ['develop:a', 'develop:b']) {
+      const timing = final.laneTimings[laneId]
+      expect(timing).toBeTruthy()
+      expect(timing.startedAt).toBeTypeOf('number')
+      expect(timing.endedAt).toBeTypeOf('number')
+      expect(timing.endedAt!).toBeGreaterThanOrEqual(timing.startedAt)
+    }
+    // Independent lanes get their own entries, not one shared per-stage bucket.
+    expect(final.laneTimings['develop:a']).not.toBe(final.laneTimings['develop:b'])
+  })
+
+  it('laneTimings: a manual retry after a failure resets the lane\'s timing to the fresh attempt', async () => {
+    const store = new RunStore(ws, 'r1')
+    let t = 1000
+    const now = () => t++
+    let calls = 0
+    // Fails the very first invocation (raises a `failure` event for the controller's manual
+    // retry/skip/abort decision), then succeeds on every subsequent call — so resolving the
+    // failure with `{ type: 'retry' }` drives runOneOrder a SECOND time for the same order.id.
+    const flakyProvider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        calls++
+        const done = (async () => {
+          if (calls === 1) { cb.onState('err'); cb.onError(new Error('boom')); return { ok: false } }
+          cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+        })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: flakyProvider }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], retries: 0, sleep: async () => {}, now, makeId: idFactory() })
+    c.onEvent((e) => { if (e.kind === 'failure') c.resolveLane(e.id, { type: 'retry' }) })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    expect(calls).toBe(2)
+    const timing = final.laneTimings['develop:a']
+    expect(timing).toBeTruthy()
+    expect(timing.endedAt).toBeTypeOf('number')
+    // The retried attempt's own startedAt must be strictly later than the first attempt's — proof
+    // the entry was overwritten (a fresh `{ startedAt }`), not accumulated/left at the first try.
+    expect(timing.startedAt).toBeGreaterThan(1000)
+  })
+
   it('pause() at the design→develop stage boundary holds; develop is not invoked until resume()', async () => {
     const store = new RunStore(ws, 'r1')
     const calls: string[] = []

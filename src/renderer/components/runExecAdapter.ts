@@ -97,6 +97,8 @@ function buildRootAgent(sp: StagePlan, state: RunControllerState, laneLogs: Reco
   else if (machineStatus === 'running') agentState = 'run'
   else agentState = 'wait'
 
+  const timing = state.laneTimings?.[laneId]
+
   return {
     id: laneId,
     name: sp.name,
@@ -111,6 +113,8 @@ function buildRootAgent(sp: StagePlan, state: RunControllerState, laneLogs: Reco
     state: agentState,
     logs: (laneLogs[laneId] ?? []).map((r) => r.line),
     cwd: live?.cwd || outcome?.order.cwd,
+    laneStartedAt: timing?.startedAt,
+    laneEndedAt: timing?.endedAt,
   }
 }
 
@@ -156,6 +160,7 @@ function buildFanoutAgents(
     const provider = outcome?.order.provider || sp.provider
     const model = outcome?.order.model || sp.model
     const cwd = live?.cwd || outcome?.order.cwd || prior?.cwd
+    const timing = state.laneTimings?.[laneId]
 
     memory.set(project, { state: agentState, cwd, provider, model })
 
@@ -168,6 +173,8 @@ function buildFanoutAgents(
       state: agentState,
       logs: (laneLogs[laneId] ?? []).map((r) => r.line),
       cwd,
+      laneStartedAt: timing?.startedAt,
+      laneEndedAt: timing?.endedAt,
     }
   })
 }
