@@ -28,6 +28,10 @@ export class RunStore {
     writeJsonAtomic(this.contextFile(), c)   // atomic: a crash mid-write must not corrupt context.json
   }
   setContext(key: string, value: unknown) { this.mutateContext(c => { c[key] = value }) }
+  // P-C2/T3 (disk-resume): removes a key entirely (rather than overwriting with some sentinel value)
+  // — used by discardResumableRun (persist.ts) to clear a run's saved run2-state so it stops being
+  // offered as resumable. No-op if the key was never set.
+  deleteContext(key: string) { this.mutateContext(c => { delete c[key] }) }
   writeArtifact(name: string, content: string): ArtifactRef {
     const base = join(this.dir, 'artifacts')
     const p = resolve(base, name)

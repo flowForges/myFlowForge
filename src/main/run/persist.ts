@@ -14,6 +14,15 @@ export interface SavedControllerState {
   outcomes: Record<string, SavedOutcome[]>
   pendingDirective: RunControllerState['pendingDirective']
   stageTimings: RunControllerState['stageTimings']
+  // P-C2/T3 (disk-resume review Finding 2): the OWNING session (RunControllerDeps.sessionId, echoed
+  // onto state — see controller.ts's `get state()`) and the run's `task` seed (ditto). Neither was
+  // previously persisted — a resumed run would silently lose session-card scoping (the P3
+  // session-scoping fix reads `run2.state.sessionId`) and its task-seed reinforcement on every stage
+  // prompt. Optional so an OLDER saved run2-state (written before this field existed) just loads as
+  // `undefined` — resumeFromDisk then falls back to whatever the resume caller supplies (unscoped/no
+  // seed), same as before this field existed.
+  sessionId?: string
+  task?: string
 }
 
 const KEY = 'run2-state'
@@ -23,7 +32,7 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
   for (const [k, list] of Object.entries(s.outcomes)) {
     outcomes[k] = list.map((o) => ({ id: o.order.id, status: o.status, project: o.order.project, error: o.error, attempts: o.attempts }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, sessionId: s.sessionId, task: s.task })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY) as SavedControllerState | undefined
@@ -61,4 +70,17 @@ export function findLatestRun2Run(wsPath: string): { runId: string; state: Saved
     if (!best || mtimeMs > best.mtimeMs) best = { mtimeMs, runId: entry, state }
   }
   return best ? { runId: best.runId, state: best.state } : null
+}
+
+// P-C2/T3: the recovery UI's 丢弃 action — clears the saved run2-state for a workspace's currently
+// resumable interrupted run (see Run2Manager.resumable's doc for exactly what counts) so it stops
+// being offered again on the next workspace open. Re-validates "is this actually resumable" itself
+// (same terminal/none gating findLatestRun2Run + isTerminalStatus already give resumable()) rather
+// than trusting a caller's possibly-stale summary — mirrors resumeFromDisk's own re-validation.
+// Returns false (no-op, nothing discarded) when there's nothing resumable for this workspace.
+export function discardResumableRun(wsPath: string): boolean {
+  const found = findLatestRun2Run(wsPath)
+  if (!found || isTerminalStatus(found.state.status)) return false
+  new RunStore(wsPath, found.runId).deleteContext(KEY)
+  return true
 }
