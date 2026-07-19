@@ -68,18 +68,28 @@ beforeEach(() => {
 })
 
 describe('RunExecPanel', () => {
-  it('renders progress, stage names, and fan-out lane names/statuses', () => {
+  it('renders progress, stage names, and fan-out lane cards (project name + state)', () => {
     const run2 = makeRun2(baseState())
     render(<RunExecPanel run2={run2} />)
 
     expect(screen.getByText('已完成 2 / 4')).toBeInTheDocument()
-    expect(screen.getByText('需求评估')).toBeInTheDocument()
-    expect(screen.getByText('技术方案设计')).toBeInTheDocument()
-    expect(screen.getByText('代码开发')).toBeInTheDocument()
-    expect(screen.getByText('代码评审')).toBeInTheDocument()
+    expect(screen.getByText('分支：—')).toBeInTheDocument()
 
-    expect(screen.getByText('go-blog')).toBeInTheDocument()
-    expect(screen.getByText('zgh')).toBeInTheDocument()
+    // Stage headers (.stage-name) — one per stage.
+    expect(document.querySelectorAll('.stage-name')).toHaveLength(4)
+    expect(screen.getAllByText('需求评估').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('技术方案设计').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('代码开发').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('代码评审').length).toBeGreaterThan(0)
+
+    // Fan-out lanes for the running per-project stage render as AgentNode cards, one per project.
+    const goBlogCard = screen.getByText('go-blog').closest('.agent-node')
+    expect(goBlogCard).not.toBeNull()
+    expect(goBlogCard!.querySelector('.agent-state')?.textContent).toContain('执行中')
+
+    const zghCard = screen.getByText('zgh').closest('.agent-node')
+    expect(zghCard).not.toBeNull()
+    expect(zghCard!.querySelector('.agent-state')?.textContent).toContain('完成')
   })
 
   it('does not render any per-node decision action (gate/auth/failure buttons)', () => {

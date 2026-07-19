@@ -121,9 +121,11 @@ describe('WorkspaceView inspector 执行 tab (P2-2)', () => {
     const execTabBtn = container.querySelector('.insp-tab[data-pane="exec"]')!
     expect(execTabBtn.classList.contains('on')).toBe(true)
 
-    // RunExecPanel content rendered inside #pane-exec.
+    // RunExecPanel content rendered inside #pane-exec. In the 代理-tab style the develop stage
+    // surfaces as a `.stage` whose `.stage-name` is 代码开发 (its root agent card reuses the same
+    // name, so scope the assertion to the stage header to stay unambiguous).
     const pane = container.querySelector('#pane-exec') as HTMLElement
-    expect(within(pane).getByText('代码开发')).toBeInTheDocument()
+    expect(within(pane).getByText('代码开发', { selector: '.stage-name' })).toBeInTheDocument()
     expect(within(pane).getByText('已完成 1 / 2')).toBeInTheDocument()
   })
 
@@ -152,6 +154,6 @@ describe('WorkspaceView inspector 执行 tab (P2-2)', () => {
     fireEvent.click(container.querySelector('.insp-tab[data-pane="exec"]')!)
     expect(container.querySelector('.insp-tab[data-pane="exec"]')!.classList.contains('on')).toBe(true)
     const pane = container.querySelector('#pane-exec') as HTMLElement
-    expect(within(pane).getByText('代码开发')).toBeInTheDocument()
+    expect(within(pane).getByText('代码开发', { selector: '.stage-name' })).toBeInTheDocument()
   })
 })
