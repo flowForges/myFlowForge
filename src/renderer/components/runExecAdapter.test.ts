@@ -71,10 +71,47 @@ describe('buildStageRuntimes', () => {
     expect(zgh.model).toBe('sonnet-4.6')
     expect(zgh.cwd).toBe('/ws/zgh')
 
-    // Stage-level aggregate: verbatim-ported `stageRunState` semantics treat ANY 'ok' outcome in
-    // the stage (no failure/awaiting signal present) as enough to call the whole stage 'ok', even
-    // while another lane is still live — a pre-existing quirk carried over from the old
-    // RunExecPanel, not something introduced here (see task report's "concerns").
+    // Stage-level aggregate: zgh settled 'ok' but go-blog is still live ('run') — the whole stage
+    // must NOT flip to 'ok' while a sibling fan-out lane is still running (P2-1b fix).
+    expect(develop.state).toBe('run')
+  })
+
+  it('keeps a fan-out stage as run while one lane is ok and a sibling lane is still running (not ok)', () => {
+    const stages = buildStageRuntimes(
+      baseState({
+        outcomes: {
+          develop: [
+            { order: { id: 'develop:zgh', stageKey: 'develop', name: '代码开发', project: 'zgh', provider: 'claude', model: 'sonnet-4.6', cwd: '/ws/zgh', prompt: '' }, status: 'ok', attempts: 1 },
+          ],
+        },
+        liveLanes: {
+          'develop:go-blog': { stageKey: 'develop', project: 'go-blog', state: 'run', cwd: '/ws/go-blog' },
+        },
+      }),
+      {}
+    )
+    const develop = stages.find((s) => s.key === 'develop')!
+    expect(develop.agents.find((a) => a.name === 'zgh')!.state).toBe('ok')
+    expect(develop.agents.find((a) => a.name === 'go-blog')!.state).toBe('run')
+    // Any lane still running → whole stage is 'run', NOT 'ok' — the bug this test guards against.
+    expect(develop.state).toBe('run')
+  })
+
+  it('marks a fan-out stage ok once every known lane has itself settled ok', () => {
+    const stages = buildStageRuntimes(
+      baseState({
+        outcomes: {
+          develop: [
+            { order: { id: 'develop:zgh', stageKey: 'develop', name: '代码开发', project: 'zgh', provider: 'claude', model: 'sonnet-4.6', cwd: '/ws/zgh', prompt: '' }, status: 'ok', attempts: 1 },
+            { order: { id: 'develop:go-blog', stageKey: 'develop', name: '代码开发', project: 'go-blog', provider: 'codex', model: 'gpt-5-codex', cwd: '/ws/go-blog', prompt: '' }, status: 'ok', attempts: 1 },
+          ],
+        },
+        liveLanes: {},
+      }),
+      {}
+    )
+    const develop = stages.find((s) => s.key === 'develop')!
+    expect(develop.agents.every((a) => a.state === 'ok')).toBe(true)
     expect(develop.state).toBe('ok')
   })
 

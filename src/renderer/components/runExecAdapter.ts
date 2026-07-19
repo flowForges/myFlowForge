@@ -47,10 +47,13 @@ function decisionAgentState(laneId: string, stageKey: string, state: RunControll
 }
 
 // Stage-level aggregate (drives StageRuntime.state / the `.stage` card's state class) — a stage
-// is 'err'/'awaiting' if ANY of its lanes/events say so, 'ok' only once the machine (or every
-// outcome) says the whole stage is done. Verbatim logic port of the old RunExecPanel's
-// `stageRunState`, just re-targeted at the `AgentState` vocabulary AgentNode expects.
-function stageAgentState(stageKey: string, state: RunControllerState): AgentState {
+// is 'err'/'awaiting' if ANY of its lanes/events say so, 'ok' only once the machine says the whole
+// stage is done OR every known lane (root's single agent, or every fan-out project lane already
+// enumerated into `agents`) has itself settled 'ok'. A single fan-out lane settling while a sibling
+// is still 'run' is the typical mid-run state for a parallel stage, not completion — see this
+// task's finding: a naive "any outcome is ok" check flipped the `.stage` header to done styling
+// while an `AgentNode` right below it still showed 执行中.
+function stageAgentState(stageKey: string, state: RunControllerState, agents: AdaptedAgent[]): AgentState {
   const outcomes = state.outcomes[stageKey]
   const hasFailedOutcome = outcomes?.some((o) => o.status === 'failed') ?? false
   const hasFailureEvent = state.inbox.some((e) => e.kind === 'failure' && e.stageKey === stageKey)
@@ -60,8 +63,9 @@ function stageAgentState(stageKey: string, state: RunControllerState): AgentStat
   )
   if (hasDecisionEvent) return 'awaiting'
   const machineStatus = state.machine.stages.find((s) => s.key === stageKey)?.status
-  const hasOkOutcome = outcomes?.some((o) => o.status === 'ok') ?? false
-  if (machineStatus === 'done' || hasOkOutcome) return 'ok'
+  if (machineStatus === 'done') return 'ok'
+  const allLanesOk = agents.length > 0 && agents.every((a) => a.state === 'ok')
+  if (allLanesOk) return 'ok'
   if (machineStatus === 'running') return 'run'
   return 'wait'
 }
@@ -181,6 +185,6 @@ export function buildStageRuntimes(
       sp.scope === 'per-project'
         ? buildFanoutAgents(sp, state, laneLogs, getStageMemory(memoryByStage, sp.key))
         : [buildRootAgent(sp, state, laneLogs)]
-    return { key: sp.key, name: sp.name, state: stageAgentState(sp.key, state), agents }
+    return { key: sp.key, name: sp.name, state: stageAgentState(sp.key, state, agents), agents }
   })
 }
