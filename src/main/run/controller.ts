@@ -184,6 +184,18 @@ export class RunController {
     this.emitUpdate()
   }
 
+  /**
+   * The "design stage" a doubt's 回退改方案 jumps back to when the caller doesn't supply an
+   * explicit targetKey (the doubt-resolution UI is a single button, no stage picker). Per
+   * spec §7.7, the design/方案 stage is the one gated "方案通过后、动代码前" — approximated here
+   * as the plan's FIRST gated stage; if the plan has no gated stage at all (unusual), fall back
+   * to the very first stage so jumpBack always has a valid target.
+   */
+  private designStageKey(): string {
+    const gated = this.plan.stages.find((s) => s.gate)
+    return (gated ?? this.plan.stages[0]).key
+  }
+
   private workspacePath(): string { return this.deps.store.runDir.replace(/\/\.forge\/runs\/[^/]+$/, '') }
   private upstream(uptoIndex: number): ArtifactRef[] {
     const refs: ArtifactRef[] = []
@@ -342,12 +354,19 @@ export class RunController {
 
       // write artifacts for ok lanes, surface doubts
       const refs: ArtifactRef[] = []
+      // Resolvers are created HERE, at emission time (same create-before-emit ordering as
+      // onConfirm/onInput/failure above), and awaited later — right before the machine actually
+      // advances — so a doubt can hold the stage even if the gate below has already resolved.
+      const doubtWaits: Array<Promise<{ id: string; note: string; d: LaneDecision }>> = []
       for (const oc of outcomes) {
         if (oc.status === 'ok' && oc.result) {
           const ref = this.deps.store.writeArtifact(`${stage.key}-${oc.order.project ?? 'root'}.md`, oc.result.summary)
           refs.push(ref)
           for (const doubt of oc.result.doubts) {
-            this.emitEvent({ id: this.makeId('doubt'), kind: 'doubt', laneId: oc.order.id, stageKey: stage.key, note: doubt })
+            const id = this.makeId('doubt')
+            const p = this.laneR.create(id)
+            this.emitEvent({ id, kind: 'doubt', laneId: oc.order.id, stageKey: stage.key, note: doubt })
+            doubtWaits.push(p.then((d) => ({ id, note: doubt, d })))
           }
         }
       }
@@ -355,14 +374,17 @@ export class RunController {
       this.outcomes[stage.key] = outcomes
       if (this.stageTimings[stage.key]) this.stageTimings[stage.key].endedAt = this.now()
 
-      // gate or auto-advance
+      // gate or auto-advance: this decides what WOULD happen next. Unresolved doubts don't block
+      // answering the gate itself (§7.2 — "冒泡存疑，兄弟继续"); they block applying the result
+      // (see below).
+      let d: GateDecision
       if (stage.gate) {
         const id = this.makeId('gate')
         const body = refs.map((r) => r.path).join('\n')
         this.status = 'awaiting'
         const p = this.gateR.create(id)
         this.emitEvent({ id, kind: 'gate', stageKey: stage.key, body, docs: refs })
-        const d = await p
+        d = await p
         this.drop(id)
         if (this.aborted) break // force-settled by a concurrent lane abort; don't advance the machine
         if (d.type === 'redo') {
@@ -372,10 +394,46 @@ export class RunController {
           const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
           this.pendingDirective[d.targetKey] = [text, d.feedback].filter(Boolean).join('\n')
         }
-        this.machine = applyGateDecision(this.machine, d)
       } else {
-        this.machine = applyGateDecision(this.machine, { type: 'advance' })
+        d = { type: 'advance' }
       }
+
+      // Doubt gate (§7.2/§7.7 P3-3): a stage must HOLD — never actually advance — while an
+      // unresolved doubt event exists for it, even if the gate above already said "advance".
+      // Await every doubt's resolution now; each one dispatches to one of four actions:
+      //   - dismiss     (驳回继续)   → drop it, `d` (the gate's decision) applies unchanged.
+      //   - redo        (补充说明后继续) → overrides `d` to redo the CURRENT stage, with the
+      //                                    doubt's note + the human's clarification threaded in
+      //                                    as this stage's pendingDirective (picked up by
+      //                                    buildPrompt on the next run).
+      //   - jumpBack    (回退改方案)  → overrides `d` to jump back to the design stage (explicit
+      //                                    targetKey if the caller supplied one, else the plan's
+      //                                    first gated stage / first stage — see designStageKey()).
+      //   - abort       (终止运行)   → stops the run like any other abort path.
+      // A later-resolved doubt's override wins if multiple doubts fired for this stage; each is
+      // still individually dropped from the inbox regardless of which one "wins".
+      if (doubtWaits.length > 0) {
+        this.status = 'awaiting'
+        const resolved = await Promise.all(doubtWaits)
+        for (const { id, note, d: ld } of resolved) {
+          this.drop(id)
+          if (ld.type === 'abort') { this.aborted = true; continue }
+          if (this.aborted || ld.type === 'dismiss') continue
+          const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
+          if (ld.type === 'redo') {
+            this.pendingDirective[stage.key] = [note, ld.feedback, text].filter(Boolean).join('\n')
+            d = { type: 'redo' }
+          } else if (ld.type === 'jumpBack') {
+            const target = ld.targetKey ?? this.designStageKey()
+            this.pendingDirective[target] = [note, ld.feedback, text].filter(Boolean).join('\n')
+            d = { type: 'jumpBack', targetKey: target }
+          }
+        }
+        this.emitUpdate()
+      }
+      if (this.aborted) break
+
+      this.machine = applyGateDecision(this.machine, d)
       this.emitUpdate()
       if (this.machine.stages.every((s) => s.status === 'done')) break
     }

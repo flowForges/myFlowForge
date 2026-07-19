@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyGateDecision } from './decisions'
+import { applyGateDecision, type LaneDecision } from './decisions'
 import { initMachine, markRunning, advance, type RunPlan } from './machine'
 
 const plan: RunPlan = {
@@ -31,5 +31,26 @@ describe('applyGateDecision', () => {
     expect(n.currentIndex).toBe(0)
     expect(n.stages[0].status).toBe('running')
     expect(n.stages[1].status).toBe('stale')
+  })
+})
+
+// P3-3: a "doubt" (方案存疑) event is resolved via one of four LaneDecision actions —
+// dismiss (驳回继续)/redo (补充说明后继续)/jumpBack (回退改方案)/abort (终止运行, already existed).
+// dismiss has no machine transform of its own (the controller just drops the event and lets the
+// stage proceed normally) — these are compile-time + shape checks that the union carries it and
+// reuses GateDecision's redo/jumpBack shapes (targetKey optional: the doubt UI is a single button
+// with no stage picker, so the controller defaults it to the design stage when omitted).
+describe('LaneDecision doubt-resolution variants', () => {
+  it('dismiss is a valid LaneDecision', () => {
+    const d: LaneDecision = { type: 'dismiss' }
+    expect(d.type).toBe('dismiss')
+  })
+  it('redo/jumpBack are valid LaneDecisions, reusing GateDecision-shaped fields', () => {
+    const redo: LaneDecision = { type: 'redo', feedback: '补充说明' }
+    const jumpBackExplicit: LaneDecision = { type: 'jumpBack', targetKey: 'design', feedback: '回退理由' }
+    const jumpBackDefault: LaneDecision = { type: 'jumpBack' } // targetKey omitted on purpose
+    expect(redo).toEqual({ type: 'redo', feedback: '补充说明' })
+    expect(jumpBackExplicit.type).toBe('jumpBack')
+    expect(jumpBackDefault).toEqual({ type: 'jumpBack' })
   })
 })
