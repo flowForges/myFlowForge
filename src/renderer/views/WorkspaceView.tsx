@@ -569,6 +569,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       // P4-3: only meaningful for kind 'gate' — preserved into the frozen record so RunEventCard
       // still labels it "收尾确认" (not "阶段评审") once the live event is gone from inbox.
       finalize: event.kind === 'gate' ? event.finalize : undefined,
+      // Improvement ①: preserve the gate's artifact refs (e.g. design.md) so the resolved card can
+      // still open the full doc after the live event is gone from inbox / after reload.
+      docs: event.kind === 'gate' ? event.docs : undefined,
     }
     setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
     // Spec §8: persist to the run's OWNING session (run2.state.sessionId), NOT necessarily whatever
@@ -1051,6 +1054,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     frozen={entry.frozen}
                     onGate={onRunGate}
                     onLane={onRunLane}
+                    onOpenDoc={openDoc}
                   />
                 )
               }

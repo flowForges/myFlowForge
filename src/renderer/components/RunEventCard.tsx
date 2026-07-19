@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { RunEvent } from '../../main/run/events'
 import type { GateDecision, LaneDecision } from '../../main/run/decisions'
+import type { ArtifactRef } from '../../main/orchestrator/types'
+import type { DesignDocRef } from '@shared/types'
 import type { FrozenRunCard } from '../views/chat/runCards'
 import { Markdown } from '../views/chat/markdown'
 // Reuses the wfo-act/am/arow/wfo-inp/wfo-btn classes ported straight from the deleted
@@ -18,6 +20,53 @@ export interface RunEventCardProps {
   frozen?: FrozenRunCard
   onGate: (eventId: string, d: GateDecision) => void
   onLane: (eventId: string, d: LaneDecision) => void
+  // Opens one of the gate's full artifact files (e.g. design.md) in the app's full-screen viewer.
+  // Same `DesignDocRef` shape ReqCard.tsx already uses for its docs list — so WorkspaceView's existing
+  // `openDoc` handler (see WorkspaceView.tsx's `openDoc = (doc) => openBrowse(...)`) can be passed here
+  // as-is, no adapter needed.
+  onOpenDoc?: (doc: DesignDocRef) => void
+}
+
+// Document icon for the "打开文档" buttons — copied 1:1 from ReqCard.tsx's DOC_ICON (kept duplicated,
+// not shared, matching how kindLabel above already duplicates reqKindLabel: each *Card.tsx stays
+// self-contained rather than reaching into its sibling).
+const DOC_ICON = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/>'
+
+// Bridges a run2 GateEvent's `docs` (ArtifactRef[] — see controller.ts's `store.writeArtifact`, which
+// writes each stage's artifact under `<runDir>/artifacts/...` and returns an ABSOLUTE path) to the
+// DesignDocRef shape `openDoc` expects ({path, cwd, name}). Unlike the old orchestrator's DesignDocRef
+// (path relative to a project worktree cwd), ArtifactRef has no `cwd` — it doesn't need one, its path
+// is already absolute. We still have to hand back a syntactically valid, TRUTHY cwd because:
+//   - FilePreview's readers resolve via `join(cwd, file)` (see git/diff.ts): `join('/', absPath)`
+//     round-trips back to the same absolute path (verified), so cwd:'/' reads the right file.
+//   - previewTarget.ts's `pickPreviewCwd`/openBrowse gate the whole open on `if (target)` — cwd:'' is
+//     falsy and would silently no-op the click, so '/' (truthy) is the correct default, not ''.
+// `name` (required on DesignDocRef) is the artifact's file name, taken from the last path segment.
+function toDesignDoc(r: ArtifactRef): DesignDocRef {
+  return { path: r.path, cwd: '/', name: r.path.split('/').pop() || r.path }
+}
+
+function DocList({ docs, onOpenDoc }: { docs: ArtifactRef[]; onOpenDoc?: (doc: DesignDocRef) => void }) {
+  return (
+    <div className="req-docs">
+      {docs.map((r, i) => {
+        const d = toDesignDoc(r)
+        return (
+          <button key={`${i}-${d.path}`} className="req-doc" title={d.path} onClick={() => onOpenDoc?.(d)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+              dangerouslySetInnerHTML={{ __html: DOC_ICON }} />
+            <span className="req-doc-info">
+              <span className="req-doc-name">{d.name}</span>
+              <span className="req-doc-path">{d.path}</span>
+            </span>
+            <span className="req-doc-copy" role="button" tabIndex={0} title="复制路径"
+              onClick={(e) => { e.stopPropagation(); void navigator.clipboard?.writeText(d.path) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); void navigator.clipboard?.writeText(d.path) } }}>复制</span>
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 // `finalize`: P4-3 — a GateEvent (or its frozen record) with `finalize: true` is the run-completion
@@ -44,7 +93,7 @@ function fmtAt(ms: number): string {
   }
 }
 
-export function RunEventCard({ event, frozen, onGate, onLane }: RunEventCardProps) {
+export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc }: RunEventCardProps) {
   // Local-only feedback/targetKey text collection (task brief "Before You Begin": no existing
   // mechanism to route free text into a gate/doubt decision from here, so a plain local textarea/
   // input is the simplest correct thing — mirrors LaunchGateCard's supplement textarea). Trimmed to
@@ -63,6 +112,7 @@ export function RunEventCard({ event, frozen, onGate, onLane }: RunEventCardProp
         <div className="req-body">
           <div className="req-title">{frozen.title}</div>
           {frozen.body ? <div className="req-sub">{frozen.body}</div> : null}
+          {frozen.kind === 'gate' && frozen.docs?.length ? <DocList docs={frozen.docs} onOpenDoc={onOpenDoc} /> : null}
           <div className="req-sub">决定：{frozen.decision}</div>
           <div className="req-sub">{fmtAt(frozen.at)}</div>
         </div>
@@ -97,6 +147,8 @@ export function RunEventCard({ event, frozen, onGate, onLane }: RunEventCardProp
         {event.kind === 'gate' && !event.finalize && (
           <>
             {event.body ? <div className="req-plan"><Markdown text={event.body} /></div> : null}
+            {/* 技术方案等阶段产物已落盘 —— 让用户在批准/打回前打开全文(design.md 等),而不是只看 body 摘要。 */}
+            {event.docs?.length ? <DocList docs={event.docs} onOpenDoc={onOpenDoc} /> : null}
             <div className="wfo-act">
               <div className="wfo-goal">
                 <textarea

@@ -26,6 +26,43 @@ describe('RunEventCard', () => {
     expect(onGate).toHaveBeenCalledWith('g1', { type: 'advance' })
   })
 
+  it('gate: docs render a 打开文档 button that maps ArtifactRef → DesignDocRef and calls onOpenDoc', () => {
+    const onOpenDoc = vi.fn()
+    const event: RunEvent = {
+      id: 'g1b', kind: 'gate', stageKey: 'design', body: '## 方案', docs: [{ path: '/ws/.forge/runs/r1/artifacts/design-root.md', kind: 'md' }],
+    }
+    render(<RunEventCard event={event} onGate={vi.fn()} onLane={vi.fn()} onOpenDoc={onOpenDoc} />)
+
+    const docBtn = document.querySelector('.req-doc') as HTMLElement
+    expect(docBtn).toBeTruthy()
+    expect(screen.getByText('design-root.md')).toBeInTheDocument()
+
+    fireEvent.click(docBtn)
+    expect(onOpenDoc).toHaveBeenCalledWith({ path: '/ws/.forge/runs/r1/artifacts/design-root.md', cwd: '/', name: 'design-root.md' })
+  })
+
+  it('gate: no docs → no doc buttons, body still renders', () => {
+    const event: RunEvent = { id: 'g1c', kind: 'gate', stageKey: 'design', body: '## 方案\n无文档' }
+    render(<RunEventCard event={event} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(document.querySelector('.req-doc')).toBeNull()
+    expect(document.querySelector('.req-docs')).toBeNull()
+    expect(screen.getByText('方案')).toBeInTheDocument()
+  })
+
+  it('frozen gate: docs are preserved and still openable after resolution', () => {
+    const onOpenDoc = vi.fn()
+    const frozen: FrozenRunCard = {
+      id: 'g1d', kind: 'gate', stageKey: 'design', title: '技术方案设计完成',
+      decision: '通过', at: 1720000000000, ts: 1,
+      docs: [{ path: '/ws/.forge/runs/r1/artifacts/design-root.md', kind: 'md' }],
+    }
+    render(<RunEventCard frozen={frozen} onGate={vi.fn()} onLane={vi.fn()} onOpenDoc={onOpenDoc} />)
+    const docBtn = document.querySelector('.req-doc') as HTMLElement
+    expect(docBtn).toBeTruthy()
+    fireEvent.click(docBtn)
+    expect(onOpenDoc).toHaveBeenCalledWith({ path: '/ws/.forge/runs/r1/artifacts/design-root.md', cwd: '/', name: 'design-root.md' })
+  })
+
   it('gate: 打回本阶段 sends redo with typed feedback', () => {
     const onGate = vi.fn()
     const event: RunEvent = { id: 'g2', kind: 'gate', stageKey: 'design', body: 'x' }

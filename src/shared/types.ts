@@ -1,4 +1,5 @@
 import type { AgentState, LogLine } from '../main/agents/types'
+import type { ArtifactRef } from '../main/orchestrator/types'
 import type { Plugin } from './plugin'
 
 export type { AgentState, LogLine }
@@ -206,7 +207,9 @@ export interface ChatMessage {
   // same reasoning as every other shared/types.ts field: this module stays the renderer/main boundary).
   // 'aborted' (P4-3): a synthetic marker persisted when a run is ended via RunExecPanel's 终止
   // button, not a real run2 RunEvent kind — see FrozenRunCard's doc (chat/runCards.ts) for why.
-  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate' | 'aborted'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number; finalize?: boolean }
+  // `docs` (improvement ①): mirrors FrozenRunCard.docs (chat/runCards.ts) — a gate's artifact refs
+  // (e.g. design.md), preserved so a resolved gate card can still open the full doc after reload.
+  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate' | 'aborted'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number; finalize?: boolean; docs?: ArtifactRef[] }
 }
 export interface ChatSession {
   id: string

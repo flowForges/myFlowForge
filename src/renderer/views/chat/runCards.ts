@@ -1,4 +1,5 @@
 import type { RunEvent } from '../../../main/run/events'
+import type { ArtifactRef } from '../../../main/orchestrator/types'
 
 // P3-1: maps a run2 controller's live inbox (unresolved human-intervention events) plus a caller-owned
 // list of already-resolved/frozen decisions into entries the chat timeline (buildTimeline) can merge
@@ -38,6 +39,10 @@ export interface FrozenRunCard {
   // "收尾确认" gate rather than an ordinary per-stage gate, so RunEventCard's frozen branch can still
   // label it "收尾确认" instead of "阶段评审" after the live event is gone.
   finalize?: boolean
+  // Improvement ①: mirrors GateEvent.docs (events.ts) — preserved into the frozen record so a
+  // resolved gate card can still open its full design doc(s) after the live event is gone from
+  // `inbox` and reload/session-switch has round-tripped it through chat:append-run-card.
+  docs?: ArtifactRef[]
 }
 
 export interface RunCardEntry {
