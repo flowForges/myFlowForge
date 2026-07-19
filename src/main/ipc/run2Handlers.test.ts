@@ -757,4 +757,61 @@ describe('registerRun2', () => {
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
   })
+
+  describe('run2:list-runs / run2:load-run (Spec §12.7, run-history)', () => {
+    function makeHandlers() {
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+      return handlers
+    }
+    function seedRun(wsPath: string, runId: string, status: 'ok' | 'failed' | 'running' | 'awaiting') {
+      const machine = { plan: { runId, stages: [{ key: 'design', name: 'D', provider: 'x', model: 'm', scope: 'root' as const, gate: false }] }, stages: [{ key: 'design', status: 'done' as const, round: 0 }], currentIndex: 0 }
+      const state = { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, paused: false, task: `task-${runId}` }
+      saveControllerState(new RunStore(wsPath, runId), state as any)
+    }
+
+    it('run2:list-runs returns every saved run for the workspace', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-hist-'))
+      try {
+        seedRun(ws, 'run-1', 'ok')
+        seedRun(ws, 'run-2', 'failed')
+        const handlers = makeHandlers()
+        const listRuns = handlers.get(CH.run2ListRuns)!
+        const list = await listRuns({}, { workspacePath: ws })
+        expect(list.map((e: any) => e.runId).sort()).toEqual(['run-1', 'run-2'])
+        expect(list.every((e: any) => e.totalStages === 1 && e.doneCount === 1)).toBe(true)
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:list-runs returns an empty array for a workspace with no runs', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-hist-'))
+      try {
+        const handlers = makeHandlers()
+        const listRuns = handlers.get(CH.run2ListRuns)!
+        expect(await listRuns({}, { workspacePath: ws })).toEqual([])
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:load-run returns the full saved state for read-only replay', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-hist-'))
+      try {
+        seedRun(ws, 'run-1', 'ok')
+        const handlers = makeHandlers()
+        const loadRun = handlers.get(CH.run2LoadRun)!
+        const saved = await loadRun({}, { workspacePath: ws, runId: 'run-1' })
+        expect(saved.status).toBe('ok')
+        expect(saved.task).toBe('task-run-1')
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:load-run returns null for an unknown runId', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-hist-'))
+      try {
+        const handlers = makeHandlers()
+        const loadRun = handlers.get(CH.run2LoadRun)!
+        expect(await loadRun({}, { workspacePath: ws, runId: 'nope' })).toBeNull()
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+  })
 })

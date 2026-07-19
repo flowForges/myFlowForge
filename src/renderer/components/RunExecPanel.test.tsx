@@ -226,4 +226,35 @@ describe('RunExecPanel', () => {
     expect(screen.queryByText('暂停')).toBeNull()
     expect(screen.queryByText(/终止/)).toBeNull()
   })
+
+  // Spec §12.7 (run-history): staticState/readOnly power the historical-replay path — a finished
+  // run's saved state rendered through the SAME stage/agent cards, with no live run2 wired at all
+  // and no run-level control buttons.
+  describe('staticState/readOnly (run-history replay)', () => {
+    it('renders stage cards from staticState with no run2 prop, and hides 暂停/继续/终止', () => {
+      render(<RunExecPanel staticState={baseState({ status: 'ok' }) as any} readOnly />)
+
+      expect(screen.getByText('已完成 2 / 4')).toBeInTheDocument()
+      expect(screen.getAllByText('代码开发').length).toBeGreaterThan(0)
+      expect(screen.getByText('历史运行回看')).toBeInTheDocument()
+      expect(screen.queryByText('暂停')).toBeNull()
+      expect(screen.queryByText('继续')).toBeNull()
+      expect(screen.queryByText(/终止/)).toBeNull()
+    })
+
+    it('a live run (no staticState/readOnly) still shows its control buttons', () => {
+      const run2 = makeRun2(baseState())
+      render(<RunExecPanel run2={run2} />)
+      expect(screen.getByText('暂停')).toBeInTheDocument()
+      expect(screen.getByText(/终止/)).toBeInTheDocument()
+      expect(screen.queryByText('历史运行回看')).toBeNull()
+    })
+
+    it('a readOnly non-terminal staticState shows a neutral message, not the live "正在执行…" controls', () => {
+      render(<RunExecPanel staticState={baseState({ status: 'running' }) as any} readOnly />)
+      expect(screen.getByText(/只读回看/)).toBeInTheDocument()
+      expect(screen.queryByText('暂停')).toBeNull()
+      expect(screen.queryByText(/终止/)).toBeNull()
+    })
+  })
 })

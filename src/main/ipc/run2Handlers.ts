@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import * as CH from './channels'
 import { planFromStages } from '../run/planFromStages'
 import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
+import { listRuns, loadRun } from '../run/persist'
 import type { Run2Manager } from '../run/manager'
 import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
 import type { GateDecision, LaneDecision } from '../run/decisions'
@@ -178,6 +179,15 @@ export function registerRun2(deps: {
 
   // P-C2/T3: 丢弃 — clears the saved state so resumable() stops offering this interrupted run again.
   onInvoke(CH.run2DiscardResumable, (_e, p: { workspacePath: string }) => manager.discardResumable(p.workspacePath))
+
+  // Spec §12.7 (run-history): list every past/interrupted run for this workspace (newest first) —
+  // pure disk read via persist.ts, no manager/live-controller involvement (mirrors
+  // discardResumableRun's disk-only nature, unlike resumable()/resumeFromDisk() which gate on live
+  // controller state).
+  onInvoke(CH.run2ListRuns, (_e, p: { workspacePath: string }) => listRuns(p.workspacePath))
+  // Spec §12.7: load one historical run's full saved state, for the renderer's read-only replay
+  // panel (RunHistoryPanel → runHistoryAdapter → RunExecPanel's staticState/readOnly mode).
+  onInvoke(CH.run2LoadRun, (_e, p: { workspacePath: string; runId: string }) => loadRun(p.workspacePath, p.runId))
 
   // P5-UI Task 2: on-demand read of a changed file's content, for the RunPanel file viewer.
   // `path` is normally RELATIVE to the work order's project cwd (WorkOrder.order.cwd) — filesChanged

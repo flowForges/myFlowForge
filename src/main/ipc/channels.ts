@@ -240,6 +240,10 @@ export const CH = {
   run2ResumeFromDisk: 'run2:resume-from-disk',
   // P-C2/T3: 丢弃 — clears the saved state so resumable() stops offering it again.
   run2DiscardResumable: 'run2:discard-resumable',
+  // Spec §12.7 (run-history): list every past/interrupted run for a workspace (newest first), and
+  // load one run's full saved state for read-only replay.
+  run2ListRuns: 'run2:list-runs',
+  run2LoadRun: 'run2:load-run',
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from
@@ -266,3 +270,5 @@ export const run2ReadFile = CH.run2ReadFile
 export const run2Resumable = CH.run2Resumable
 export const run2ResumeFromDisk = CH.run2ResumeFromDisk
 export const run2DiscardResumable = CH.run2DiscardResumable
+export const run2ListRuns = CH.run2ListRuns
+export const run2LoadRun = CH.run2LoadRun

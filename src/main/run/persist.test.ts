@@ -1,11 +1,11 @@
 // src/main/run/persist.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, utimesSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../orchestrator/runStore'
 import { wsRunDir } from '../config/paths'
-import { saveControllerState, loadControllerState, findLatestRun2Run, isTerminalStatus } from './persist'
+import { saveControllerState, loadControllerState, findLatestRun2Run, isTerminalStatus, listRuns, loadRun } from './persist'
 import { initMachine, type RunPlan, type MachineState } from './machine'
 import type { RunControllerState } from './controller'
 
@@ -131,5 +131,58 @@ describe('findLatestRun2Run (P-C2/T3 review Finding 1): latest-mtime-wins regard
 
   it('returns null when the workspace has no runs dir at all', () => {
     expect(findLatestRun2Run(join(ws, 'nope'))).toBeNull()
+  })
+})
+
+describe('listRuns / loadRun (run-history, spec §12.7)', () => {
+  function fixtureState(status: RunControllerState['status'], doneCount: number, totalStages: number, task?: string): RunControllerState {
+    const stages = Array.from({ length: totalStages }, (_, i) => ({ key: `s${i}`, status: (i < doneCount ? 'done' : 'pending') as 'done' | 'pending', round: 0 }))
+    const machine: MachineState = { plan, stages, currentIndex: 0 }
+    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, paused: false, task }
+  }
+  // Same mtime-pinning rationale as findLatestRun2Run's seedRun above — real fs mtime resolution is
+  // too coarse to reliably order several saves by "which ran Nth".
+  function seedRun(runId: string, status: RunControllerState['status'], mtimeMs: number, doneCount = 1, totalStages = 2, task?: string) {
+    saveControllerState(new RunStore(ws, runId), fixtureState(status, doneCount, totalStages, task))
+    const ctxFile = join(wsRunDir(ws, runId), 'context.json')
+    const t = mtimeMs / 1000
+    utimesSync(ctxFile, t, t)
+  }
+
+  it('returns all runs newest-first, with status/doneCount/totalStages/task', () => {
+    seedRun('run-a', 'ok', Date.now() - 2000, 2, 2, 'task A')
+    seedRun('run-b', 'running', Date.now() - 1000, 1, 3, 'task B')
+    seedRun('run-c', 'failed', Date.now(), 1, 2, 'task C')
+    const list = listRuns(ws)
+    expect(list.map((l) => l.runId)).toEqual(['run-c', 'run-b', 'run-a'])
+    expect(list[0]).toMatchObject({ runId: 'run-c', status: 'failed', doneCount: 1, totalStages: 2, task: 'task C' })
+    expect(list[1]).toMatchObject({ runId: 'run-b', status: 'running', doneCount: 1, totalStages: 3, task: 'task B' })
+    expect(list[2]).toMatchObject({ runId: 'run-a', status: 'ok', doneCount: 2, totalStages: 2, task: 'task A' })
+  })
+
+  it('skips a run directory whose context.json is corrupt (invalid JSON)', () => {
+    seedRun('run-good', 'ok', Date.now(), 2, 2)
+    const badDir = wsRunDir(ws, 'run-bad')
+    mkdirSync(badDir, { recursive: true })
+    writeFileSync(join(badDir, 'context.json'), '{ not valid json', 'utf8')
+    const list = listRuns(ws)
+    expect(list.map((l) => l.runId)).toEqual(['run-good'])
+  })
+
+  it('returns an empty array when the workspace has no runs dir at all', () => {
+    expect(listRuns(join(ws, 'nope'))).toEqual([])
+  })
+
+  it('loadRun returns the full saved state for a given runId', () => {
+    seedRun('run-x', 'ok', Date.now(), 1, 1, 'do the thing')
+    const loaded = loadRun(ws, 'run-x')
+    expect(loaded?.status).toBe('ok')
+    expect(loaded?.task).toBe('do the thing')
+    expect(loaded?.machine.stages).toHaveLength(1)
+  })
+
+  it('loadRun returns null for an unknown runId (and does not create a directory for it)', () => {
+    expect(loadRun(ws, 'nope')).toBeNull()
+    expect(existsSync(wsRunDir(ws, 'nope'))).toBe(false)
   })
 })

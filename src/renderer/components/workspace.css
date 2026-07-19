@@ -62,6 +62,24 @@
 .insp-pane { display: none; padding: 14px; }
 .insp-pane.on { display: block; }
 
+/* ---- Spec §12.7: 运行历史 (run-history list + read-only replay) ---- */
+.run-history { display: flex; flex-direction: column; gap: 6px; }
+.run-history-head { padding-bottom: 4px; }
+.run-history-empty { padding: 24px 4px; text-align: center; font-size: 12px; color: var(--faint); }
+.run-history-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); font-size: 12px; color: var(--fg-2); cursor: pointer; transition: .12s;
+}
+.run-history-row:hover { background: var(--surface-2); color: var(--fg); }
+.rh-status { flex: 0 0 auto; font-weight: 650; padding: 1px 7px; border-radius: 99px; background: var(--surface-2); color: var(--muted); }
+.rh-status.rh-ok { color: var(--good, #2e9b56); }
+.rh-status.rh-failed { color: var(--danger, #d0453c); }
+.rh-status.rh-running, .rh-status.rh-awaiting { color: var(--accent); }
+.rh-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rh-prog { flex: 0 0 auto; color: var(--muted); font-family: var(--mono); font-size: 11px; }
+.rh-time { flex: 0 0 auto; color: var(--faint); font-size: 11px; }
+
 /* ===== 对话模式 / 工作流模式 切换 ===== */
 #mainChat { display: none; }
 .inspector.chat #mainFlow { display: none; }

@@ -40,6 +40,7 @@ import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
 import { RunExecPanel } from '../components/RunExecPanel'
+import { RunHistoryPanel } from '../components/RunHistoryPanel'
 import { LaunchGateCard } from '../components/LaunchGateCard'
 import type { LaunchGateConfig, LaunchGateFrozen } from '../components/LaunchGateCard'
 import type { LaunchStartConfig } from '../../main/run/launch'
@@ -113,7 +114,7 @@ const QUICK_CMDS = [
   { label: '解释一段代码', prompt: '解释这段限流中间件的工作原理' },
 ]
 
-type TabId = 'agents' | 'changes' | 'files' | 'exec'
+type TabId = 'agents' | 'changes' | 'files' | 'exec' | 'history'
 
 // P1-3: one in-chat launch-gate card's full state (active or frozen). Keyed by `id`, matched against
 // the minimal { id, ts } entry buildTimeline merges into the timeline (see chat/timeline.ts) — the
@@ -1256,11 +1257,27 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             >
               文件树
             </button>
+            {/* Spec §12.7: 运行历史 — always present (not gated on a live/finished run like 执行 is)
+                so past runs stay reachable even after this session's run2StateForTab has gone null
+                (e.g. after switching sessions). */}
+            <button
+              className={`insp-tab${activeTab === 'history' ? ' on' : ''}`}
+              data-pane="history"
+              onClick={() => setActiveTab('history')}
+            >
+              运行历史
+            </button>
           </div>
         <div className="insp-body">
             {/* 执行 pane — run2 运行时的执行面板(P2-2:进度+阶段流程+代码阶段分支扇出+运行级暂停/继续/终止)。 */}
             <div className={`insp-pane${activeTab === 'exec' ? ' on' : ''}`} id="pane-exec">
               {activeTab === 'exec' && <RunExecPanel run2={run2} onAbort={handleRunAbort} />}
+            </div>
+
+            {/* Spec §12.7: 运行历史 pane — list of past/interrupted runs for this workspace; clicking a
+                row shows that run's saved state read-only through the same RunExecPanel. */}
+            <div className={`insp-pane${activeTab === 'history' ? ' on' : ''}`} id="pane-history">
+              {activeTab === 'history' && <RunHistoryPanel listRuns={run2.listRuns} loadRun={run2.loadRun} />}
             </div>
 
             {/* 代理编排 / 对话模式 pane */}

@@ -3,6 +3,7 @@ import type { RunControllerState, RunLogLine } from '../../main/run/controller'
 import type { GateDecision, LaneDecision } from '../../main/run/decisions'
 import type { LaunchStartConfig } from '../../main/run/launch'
 import type { ResumableSummary } from '../../main/run/manager'
+import type { RunHistoryEntry, SavedControllerState } from '../../main/run/persist'
 
 // Per-lane buffer cap for live log lines (see `laneLogs` below) — recent context only, not a
 // full transcript (the bottom LogConsole is the full transcript).
@@ -36,6 +37,10 @@ export interface Run2Api {
   resumeFromDisk: () => Promise<void>
   /** 丢弃: clear the saved state so it stops being offered (run2:discard-resumable). */
   discardResumable: () => Promise<void>
+  /** Spec §12.7 (run-history): list past/interrupted runs for the current workspace, newest first. */
+  listRuns: () => Promise<RunHistoryEntry[]>
+  /** Spec §12.7: load one historical run's full saved state, for read-only replay. */
+  loadRun: (runId: string) => Promise<SavedControllerState | null>
 }
 
 function getRun2(): any {
@@ -195,5 +200,17 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     }
   }, [workspacePath])
 
-  return { state, laneLogs, queueLength, start, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack, resumable, resumeFromDisk, discardResumable }
+  const listRuns = useCallback(async () => {
+    const r = getRun2()
+    if (!r || !workspacePath || !r.listRuns) return []
+    return (await r.listRuns(workspacePath)) ?? []
+  }, [workspacePath])
+
+  const loadRun = useCallback(async (runId: string) => {
+    const r = getRun2()
+    if (!r || !workspacePath || !r.loadRun) return null
+    return (await r.loadRun(workspacePath, runId)) ?? null
+  }, [workspacePath])
+
+  return { state, laneLogs, queueLength, start, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack, resumable, resumeFromDisk, discardResumable, listRuns, loadRun }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import './workflowOverlay.css'
 import type { Run2Api } from '../state/useRun2'
+import type { RunControllerState } from '../../main/run/controller'
 import type { AgentContextMeta, AgentRuntime } from '@shared/types'
 import { AgentNode } from './AgentNode'
 import { buildStageRuntimes, type AdaptedAgent, type LaneMemory } from './runExecAdapter'
@@ -75,19 +76,29 @@ function AgentNodeWithCaps({ agent, open, onToggle }: { agent: AdaptedAgent; ope
 // (mirrors the old WorkspaceView's STATE_IDX_MAP); 'wait'/'awaiting'/'stalled' get no extra class.
 const STAGE_STATE_CLS: Record<string, string> = { run: 'run', ok: 'ok', err: 'err' }
 
-export function RunExecPanel({ run2, onAbort }: { run2: Run2Api; onAbort?: () => void }): ReactElement {
+// Spec §12.7 (run-history): `staticState`/`readOnly` let a caller show a HISTORICAL run's saved
+// state (loaded via run2:load-run, adapted by runHistoryAdapter.ts) through the exact same card/
+// stage rendering as a live run, without needing a live `Run2Api` — `run2` becomes optional and is
+// only consulted for state/logs/abort when `staticState` is absent. `readOnly` independently hides
+// the run-level 暂停/继续/终止 controls (a historical run has no live process to control) — kept as a
+// separate flag rather than always-derived-from-staticState in case a future caller wants read-only
+// display of a still-LIVE run without also faking its state.
+export function RunExecPanel({ run2, onAbort, staticState, readOnly }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean }): ReactElement {
   // Per-stage `project -> last-known LaneMemory` so a fan-out lane never disappears once observed
   // (see runExecAdapter's LaneMemory doc). Reset whenever the run identity changes.
   const memoryRef = useRef<Map<string, Map<string, LaneMemory>>>(new Map())
   const lastRunIdRef = useRef<string | null>(null)
-  const liveRunId = run2.state?.machine.plan.runId ?? null
+  const state = staticState ?? run2?.state ?? null
+  const liveRunId = state?.machine.plan.runId ?? null
   if (liveRunId !== lastRunIdRef.current) {
     lastRunIdRef.current = liveRunId
     memoryRef.current = new Map()
   }
 
-  const state = run2.state
-  const stages = state ? buildStageRuntimes(state, run2.laneLogs, memoryRef.current) : []
+  // A historical run has no live lane-log stream — an empty laneLogs just means each agent card
+  // shows its final output only, no scrolling "recent activity" lines, which is correct for replay.
+  const laneLogs = staticState ? {} : (run2?.laneLogs ?? {})
+  const stages = state ? buildStageRuntimes(state, laneLogs, memoryRef.current) : []
   const allAgentIds = stages.flatMap((s) => s.agents.map((a) => a.id))
   const runningIds = stages.flatMap((s) => s.agents.filter((a) => a.state === 'run').map((a) => a.id))
 
@@ -163,7 +174,7 @@ export function RunExecPanel({ run2, onAbort }: { run2: Run2Api; onAbort?: () =>
     <div className="wfo-run-panel">
       <div className="wfo-head">
         <div className="wfo-title">
-          <span className="tt">工作流执行中</span>
+          <span className="tt">{readOnly ? '历史运行回看' : '工作流执行中'}</span>
           <span className="wfo-branch">分支：{tempBranch}</span>
         </div>
         <div className="wfo-prog">
@@ -171,7 +182,14 @@ export function RunExecPanel({ run2, onAbort }: { run2: Run2Api; onAbort?: () =>
           <span className="bar"><i style={{ width: `${pct}%` }} /></span>
           <span className="pct">{pct}%</span>
         </div>
-        {runDone ? (
+        {readOnly ? (
+          <div className="wfo-runctl done">
+            <span className="rmsg">
+              <span className="rd" />
+              {runDone ? (runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪') : '只读回看 · 此运行未在此进程结束'}
+            </span>
+          </div>
+        ) : runDone ? (
           <div className="wfo-runctl done">
             <span className="rmsg">
               <span className="rd" />
@@ -185,15 +203,15 @@ export function RunExecPanel({ run2, onAbort }: { run2: Run2Api; onAbort?: () =>
               <span>正在执行…</span>
             </span>
             {runPaused ? (
-              <button className="wfo-btn ghost" onClick={() => run2.resume()}>继续</button>
+              <button className="wfo-btn ghost" onClick={() => run2?.resume()}>继续</button>
             ) : runStatus === 'running' ? (
-              <button className="wfo-btn ghost" onClick={() => run2.pause()}>暂停</button>
+              <button className="wfo-btn ghost" onClick={() => run2?.pause()}>暂停</button>
             ) : null}
             {/* P4-3: prefer the caller's onAbort (WorkspaceView wires one that records a "运行已终止"
                 timeline marker before aborting — see its doc) so a pending gate/auth/question/
                 doubt/failure card doesn't just silently vanish; falls back to a bare run2.abort()
                 for callers that don't need that (e.g. this component's own unit tests). */}
-            <button className="wfo-btn ghost" onClick={() => (onAbort ?? run2.abort)()}>
+            <button className="wfo-btn ghost" onClick={() => (onAbort ?? run2?.abort)?.()}>
               <Icon svg={IC.stop} /> 终止
             </button>
           </div>

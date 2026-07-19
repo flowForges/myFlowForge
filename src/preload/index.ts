@@ -336,6 +336,10 @@ const api = {
     resumeFromDisk: (workspacePath: string) => ipcRenderer.invoke(CH.run2ResumeFromDisk, { workspacePath }),
     // P-C2/T3: 丢弃 — clear the saved state so it stops being offered.
     discardResumable: (workspacePath: string) => ipcRenderer.invoke(CH.run2DiscardResumable, { workspacePath }),
+    // Spec §12.7 (run-history): list past runs for a workspace (newest first), and load one run's
+    // full saved state for read-only replay.
+    listRuns: (workspacePath: string) => ipcRenderer.invoke(CH.run2ListRuns, { workspacePath }),
+    loadRun: (workspacePath: string, runId: string) => ipcRenderer.invoke(CH.run2LoadRun, { workspacePath, runId }),
     onEvent: (cb: (p: { workspacePath: string; event: unknown }) => void) => {
       const listener = (_: unknown, p: { workspacePath: string; event: unknown }) => cb(p)
       ipcRenderer.on(CH.run2Event, listener)

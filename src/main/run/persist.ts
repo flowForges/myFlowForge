@@ -1,7 +1,7 @@
 // src/main/run/persist.ts
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { wsRunsDir } from '../config/paths'
+import { wsRunDir, wsRunsDir } from '../config/paths'
 import { RunStore } from '../orchestrator/runStore'
 import type { RunControllerState } from './controller'
 
@@ -59,28 +59,84 @@ export function isTerminalStatus(status: RunControllerState['status']): boolean 
   return status === 'ok' || status === 'failed'
 }
 
-// P-C2/T2 (disk-resume): a workspace's saved run2-state lives inside a SPECIFIC run's directory
-// (`.forge/runs/<runId>/context.json`, keyed by runId — see RunStore/saveControllerState above), but
-// after an app restart the manager only knows the WORKSPACE, not which runId was last active. Scans
-// every run directory under this workspace's `.forge/runs/` and returns whichever one BOTH (a)
-// actually has a saved run2-state (skips directories from the old orchestrator, or a run whose
-// controller never got past construction) and (b) has the most recently modified context.json —
-// i.e. the run that was still in flight when the app died (an ended run's file also stops changing
-// once its terminal emitUpdate() writes it, but ties only matter across MULTIPLE crashed runs in the
-// same workspace, an edge case not worth resolving more precisely than mtime).
-export function findLatestRun2Run(wsPath: string): { runId: string; state: SavedControllerState } | null {
+// Shared scan primitive for findLatestRun2Run/listRuns below: every run directory under this
+// workspace's `.forge/runs/` that actually has a saved run2-state (skips directories from the old
+// orchestrator, or a run whose controller never got past construction), paired with its
+// context.json's mtime (used by both callers — findLatestRun2Run for "most recent", listRuns for
+// "newest first").
+function scanRun2Dirs(wsPath: string): Array<{ runId: string; mtimeMs: number; state: SavedControllerState }> {
   const dir = wsRunsDir(wsPath)
-  if (!existsSync(dir)) return null
-  let best: { mtimeMs: number; runId: string; state: SavedControllerState } | null = null
+  if (!existsSync(dir)) return []
+  const out: Array<{ runId: string; mtimeMs: number; state: SavedControllerState }> = []
   for (const entry of readdirSync(dir)) {
     const ctxFile = join(dir, entry, 'context.json')
     if (!existsSync(ctxFile)) continue
     const state = loadControllerState(new RunStore(wsPath, entry))
     if (!state) continue
     const mtimeMs = statSync(ctxFile).mtimeMs
-    if (!best || mtimeMs > best.mtimeMs) best = { mtimeMs, runId: entry, state }
+    out.push({ runId: entry, mtimeMs, state })
+  }
+  return out
+}
+
+// P-C2/T2 (disk-resume): a workspace's saved run2-state lives inside a SPECIFIC run's directory
+// (`.forge/runs/<runId>/context.json`, keyed by runId — see RunStore/saveControllerState above), but
+// after an app restart the manager only knows the WORKSPACE, not which runId was last active. Scans
+// every run directory under this workspace's `.forge/runs/` and returns whichever one has the most
+// recently modified context.json — i.e. the run that was still in flight when the app died (an
+// ended run's file also stops changing once its terminal emitUpdate() writes it, but ties only
+// matter across MULTIPLE crashed runs in the same workspace, an edge case not worth resolving more
+// precisely than mtime).
+export function findLatestRun2Run(wsPath: string): { runId: string; state: SavedControllerState } | null {
+  let best: { mtimeMs: number; runId: string; state: SavedControllerState } | null = null
+  for (const r of scanRun2Dirs(wsPath)) {
+    if (!best || r.mtimeMs > best.mtimeMs) best = r
   }
   return best ? { runId: best.runId, state: best.state } : null
+}
+
+// Spec §12.7: run-history list — every past/interrupted run for a workspace, newest first, for a
+// read-only "运行历史" review UI (see run2Handlers.ts's run2:list-runs / renderer's
+// RunHistoryPanel). Deliberately a thin summary (not the full SavedControllerState — see loadRun
+// below for that) so the list itself stays cheap even with many runs. `workflowName` is always
+// absent for the same reason ResumableSummary's is (manager.ts) — RunPlan has no name field to
+// derive one from.
+export interface RunHistoryEntry {
+  runId: string
+  status: RunControllerState['status']
+  doneCount: number
+  totalStages: number
+  workflowName?: string
+  task?: string
+  modifiedAt: number
+}
+
+export function listRuns(wsPath: string): RunHistoryEntry[] {
+  return scanRun2Dirs(wsPath)
+    .map(({ runId, mtimeMs, state }) => {
+      const stages = state.machine.stages
+      return {
+        runId,
+        status: state.status,
+        doneCount: stages.filter((s) => s.status === 'done').length,
+        totalStages: stages.length,
+        task: state.task,
+        modifiedAt: mtimeMs,
+      }
+    })
+    .sort((a, b) => b.modifiedAt - a.modifiedAt)
+}
+
+// Spec §12.7: loads one historical run's full saved state for read-only replay (the run-history
+// list's "点开进只读运行面板回看" — RunHistoryPanel loads this on row click, then the renderer adapts
+// it into a display-only RunControllerState shape — see runHistoryAdapter.ts). Guards on the run
+// directory existing first (rather than just delegating straight to `new RunStore` +
+// loadControllerState, as findLatestRun2Run's per-entry scan does) so an unknown/typo'd runId
+// doesn't spuriously create an empty `.forge/runs/<runId>/artifacts` directory as a side effect of
+// RunStore's constructor.
+export function loadRun(wsPath: string, runId: string): SavedControllerState | null {
+  if (!existsSync(wsRunDir(wsPath, runId))) return null
+  return loadControllerState(new RunStore(wsPath, runId))
 }
 
 // P-C2/T3: the recovery UI's 丢弃 action — clears the saved run2-state for a workspace's currently
