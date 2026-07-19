@@ -152,4 +152,24 @@ describe('buildLaunchPlan + buildLaunchProjects (P1-4 launch gate start)', () =>
   it('throws on an unknown workflow id', () => {
     expect(() => buildLaunchPlan({ ...cfg, workflowId: 'nope' }, ws)).toThrow()
   })
+
+  // Regression: the picker (buildLaunchInfo) resolves a workflow with empty stashed stages via the
+  // global template fallback, so it previews resolved stages — buildLaunchPlan must resolve the SAME
+  // fallback (given the deps) instead of throwing "没有可执行阶段" on confirm.
+  it('resolves the global-template fallback (not a throw) when the workspace workflow has empty stashed stages', () => {
+    const wsEmpty: Workspace = {
+      ...ws,
+      workflows: [{ id: 'wf1', name: '标准五段', stages: [] }],
+    } as any
+    const globalWorkflows: Workflow[] = [
+      { id: 'wf1', name: '标准五段', stages: [
+        { key: 'design', defaultAgent: 'claude', defaultModel: 'opus' },
+        { key: 'develop', defaultAgent: 'codex', defaultModel: 'g', gate: true },
+      ], plugins: [], stagePrompts: {} } as any,
+    ]
+    const plan = buildLaunchPlan(cfg, wsEmpty, globalWorkflows, [])
+    expect(plan.stages.map((s) => s.key)).toEqual(['design', 'develop'])
+    expect(plan.stages[0].provider).toBe('claude')
+    expect(plan.stages[1].provider).toBe('codex')
+  })
 })
