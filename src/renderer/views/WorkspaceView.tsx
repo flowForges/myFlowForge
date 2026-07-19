@@ -856,6 +856,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                   />
                 )
               }
+              if (entry.kind === 'run-card') {
+                // P3-1: buildTimeline's TimelineEntry union now includes 'run-card' (see runCards.ts),
+                // which this file must handle to keep the final fallthrough narrowed to 'plan' only.
+                // Actual rendering (P3-2) and wiring a real runCards list from run2's inbox (P3-4) are
+                // separate tasks — this call site doesn't pass a runCards arg yet, so this branch is
+                // currently unreachable in practice; it exists purely to satisfy exhaustiveness.
+                return null
+              }
               return (
                 <PlanCard
                   key={entry.plan.id}

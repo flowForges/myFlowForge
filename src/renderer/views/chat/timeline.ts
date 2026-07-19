@@ -1,4 +1,5 @@
 import type { ChatMessage, PendingAction, ChatConfirm } from '@shared/types'
+import type { RunCardEntry } from './runCards'
 
 // tsconfig.node.json 未设 --jsx,即使是 `import type` 也会因模块解析到 .tsx 而触发 TS6142。
 // 因此无法直接 import PlanCard.PlanReq,改用结构等价的本地定义;TypeScript 鸭子类型保证运行时兼容。
@@ -26,6 +27,10 @@ export type TimelineEntry =
   // 相邻两条 ai 消息 provider 不同时插入的分割线,携带 provider id(而非显示名——显示名映射复用
   // 现有 agent label 机制,在渲染处按 providers 列表解析,保持 timeline.ts 纯粹/易测)。
   | { kind: 'provider-switch'; ts: number; from: string; to: string }
+  // P3-1: run2 inbox 事件(gate/auth/failure/doubt/question)映射出的卡片,活跃(event)或已冻结
+  // (frozen)——见 runCards.ts。RunCardEntry 本身已含 kind/ts,直接作为一个 union 成员复用,不再
+  // 二次包一层,避免和其它条目的"外层 kind + 内层 payload"风格重复嵌套。
+  | RunCardEntry
 
 // 卡片(pending/confirm/plan)排序键:缺失/不可解析 → +Infinity 排末尾;否则用毫秒时间戳。
 function key(ts?: string): number {
@@ -96,6 +101,9 @@ export function buildTimeline(
   // P1-3: active + frozen launch gates, each just {id, ts} — default [] keeps every pre-existing
   // 4-arg call site (tests, other callers) valid without a migration.
   launchGates: { id: string; ts: number }[] = [],
+  // P3-1: active + frozen run2 inbox-event cards (see runCards.ts) — default [] keeps every
+  // pre-existing 5-arg call site valid without a migration.
+  runCards: RunCardEntry[] = [],
 ): TimelineEntry[] {
   const mk = messageKeys(messages)
   const entries: TimelineEntry[] = [
@@ -104,6 +112,7 @@ export function buildTimeline(
     ...confirms.map((confirm): TimelineEntry => ({ kind: 'confirm', ts: key(confirm.ts), confirm })),
     ...plans.map((plan): TimelineEntry => ({ kind: 'plan', ts: key(plan.ts), plan })),
     ...launchGates.map((g): TimelineEntry => ({ kind: 'launch-gate', id: g.id, ts: g.ts })),
+    ...runCards,
   ]
   return entries.sort((a, b) => a.ts - b.ts)
 }
