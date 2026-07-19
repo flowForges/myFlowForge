@@ -393,6 +393,64 @@ describe('registerRun2', () => {
     })
   })
 
+  describe('run2:launch-start rejects when an interrupted run is resumable (Finding 2, Important)', () => {
+    it('rejects before touching git or the manager when a disk-resumable interrupted run exists for the workspace', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+      try {
+        const createCalls: string[] = []
+        const stubCreate = async (cwd: string, _base: string, runId: string) => {
+          createCalls.push(cwd)
+          return `forge/run-${runId}`
+        }
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        const wsConfig: Workspace = {
+          name: 'pay', path: ws, workflowId: '', stages: [],
+          workflows: [{ id: 'wf1', name: '标准五段', stages: [
+            { key: 'design', provider: 'x', model: 'm', scope: 'root', gate: false },
+            { key: 'develop', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+          ] }],
+          projects: [{ repoId: 'api', name: 'api', branch: 'main' }] as any,
+          status: 'idle', plugins: [], stepPlugins: [],
+        } as any
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: stubCreate, checkClean: async () => true })
+
+        // Seed an INTERRUPTED (non-terminal) run2-state for this workspace — no live controller (the
+        // process that ran it died), so manager.isActive() is false but manager.resumable() must be
+        // non-null. Before Finding 2's fix, isActive()-only gating let launch-start sail right past
+        // this and start a brand-new run/temp-branch while the old one's work was still parked.
+        const plan = { runId: 'run-old', stages: [
+          { key: 'design', name: 'D', provider: 'x', model: 'm', scope: 'root' as const, gate: false },
+          { key: 'develop', name: 'Dev', provider: 'x', model: 'm', scope: 'per-project' as const, gate: false },
+        ] }
+        const machine = {
+          plan,
+          stages: [
+            { key: 'design', status: 'done' as const, round: 0 },
+            { key: 'develop', status: 'pending' as const, round: 0 },
+          ],
+          currentIndex: 1,
+        }
+        const state = { machine, inbox: [], feedback: [], outcomes: {}, status: 'running' as const, pendingDirective: {}, liveLanes: {}, stageTimings: {}, paused: false }
+        saveControllerState(new RunStore(ws, 'run-old'), state as any)
+        expect(manager.isActive(ws)).toBe(false)
+        expect(manager.resumable(ws)).not.toBeNull()
+
+        const launchStart = handlers.get(CH.run2LaunchStart)!
+        await expect(launchStart({}, {
+          workspacePath: ws, workflowId: 'wf1',
+          projects: [{ name: 'api', provider: 'x', model: 'm' }],
+          supplement: '', seed: '',
+        })).rejects.toThrow(/未完成的工作流/)
+        expect(createCalls).toEqual([])
+        expect(manager.isActive(ws)).toBe(false)
+        // the interrupted run must still be sitting there to resume/discard — launch-start must not
+        // have clobbered or consumed it.
+        expect(manager.resumable(ws)).not.toBeNull()
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+  })
+
   describe('run2:resumable / run2:resume-from-disk / run2:discard-resumable (P-C2/T3)', () => {
     // Mirrors manager.test.ts's disk-resume fixture: a 2-stage plan with 'design' already `done` (the
     // app died sometime after it finished, before 'develop' started).
@@ -498,6 +556,87 @@ describe('registerRun2', () => {
         expect(manager.lastStateFor(ws)?.status).toBe('ok')
         // the finalize gate's discard action hit the workspace's configured target branch ('main').
         expect(discardCalls).toEqual([{ cwd: join(ws, 'api'), target: 'main' }])
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    // P-C2/T3 review Finding 1 (CRITICAL): the persisted `projects` subset must win over the
+    // handler's own "every project on the workspace" reconstruction (buildLaunchInfo) — otherwise a
+    // resumed per-project stage fans out against (and the finalize gate later merges/discards real
+    // git on) a project the original run never selected.
+    it('run2:resume-from-disk honors the PERSISTED project subset — fan-out and finalize touch ONLY that project, never the workspace\'s other projects', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-res-'))
+      try {
+        const calls: string[] = []
+        const mergeCalls: Array<{ cwd: string; target: string }> = []
+        const capturing: AgentProvider = {
+          id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+          async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+          run(task: AgentTask, cb: AgentCallbacks) {
+            calls.push(task.cwd)
+            const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+            return { id: task.agentId, cancel() {}, done }
+          },
+        }
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({
+          providers: { x: capturing }, env: {}, makeStore: (w, r) => new RunStore(w, r),
+          emit: {
+            event: (wp, e) => { if (e.kind === 'gate' && (e as any).finalize) manager.resolveGate(wp, e.id, { type: 'merge' }) },
+            update: () => {},
+          },
+        })
+        // 3-project workspace — the ORIGINAL (now-interrupted) run only ever selected 'go-blog'.
+        const wsConfig: Workspace = {
+          name: 'multi', path: ws, workflowId: '', stages: [],
+          workflows: [{ id: 'wf1', name: '标准五段', stages: [
+            { key: 'design', provider: 'x', model: 'm', scope: 'root', gate: false },
+            { key: 'develop', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+          ] }],
+          projects: [
+            { repoId: 'api', name: 'api', branch: 'main' },
+            { repoId: 'go-blog', name: 'go-blog', branch: 'main' },
+            { repoId: 'web', name: 'web', branch: 'main' },
+          ] as any,
+          status: 'idle', plugins: [], stepPlugins: [],
+        } as any
+        registerRun2({
+          manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [],
+          mergeTempBranch: async (cwd, target) => { mergeCalls.push({ cwd, target }) },
+        })
+
+        // Seed the interrupted run's saved state WITH a persisted `projects` subset of just go-blog.
+        const plan = {
+          runId: 'run-x', stages: [
+            { key: 'design', name: 'D', provider: 'x', model: 'm', scope: 'root' as const, gate: false },
+            { key: 'develop', name: 'Dev', provider: 'x', model: 'm', scope: 'per-project' as const, gate: false },
+          ],
+        }
+        const machine = {
+          plan,
+          stages: [
+            { key: 'design', status: 'done' as const, round: 0 },
+            { key: 'develop', status: 'pending' as const, round: 0 },
+          ],
+          currentIndex: 1,
+        }
+        const persistedProjects = [{ name: 'go-blog', cwd: join(ws, 'go-blog'), provider: 'x', model: 'm' }]
+        const state = {
+          machine, inbox: [], feedback: [], outcomes: {}, status: 'running' as const, pendingDirective: {},
+          liveLanes: {}, stageTimings: {}, paused: false, projects: persistedProjects,
+        }
+        saveControllerState(new RunStore(ws, 'run-x'), state as any)
+
+        const resumeFromDisk = handlers.get(CH.run2ResumeFromDisk)!
+        const result = await resumeFromDisk({}, { workspacePath: ws })
+        expect(result.machine.plan.runId).toBe('run-x')
+        expect(manager.isActive(ws)).toBe(true)
+
+        await new Promise((r) => setTimeout(r, 50))
+        // fan-out: only go-blog's cwd ran the develop stage — api/web NEVER touched.
+        expect(calls).toEqual([join(ws, 'go-blog')])
+        expect(manager.lastStateFor(ws)?.status).toBe('ok')
+        // finalize: only go-blog's real branch got merged — api/web's real branches untouched.
+        expect(mergeCalls).toEqual([{ cwd: join(ws, 'go-blog'), target: 'main' }])
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
 

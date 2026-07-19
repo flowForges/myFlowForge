@@ -189,6 +189,41 @@ describe('useRun2', () => {
     expect(result.current.laneLogs['design:root']?.length).toBe(1)
   })
 
+  // P-C2/T3 review Finding 3 (Minor — untested optimistic-restore-on-failure): resumeFromDisk/
+  // discardResumable clear `resumable` optimistically BEFORE the IPC call, then re-query and restore
+  // it if that call rejects (see useRun2.ts's comments on both callbacks) — a stale/raced summary
+  // must not leave the recovery banner permanently hidden. Neither branch had a test before this.
+  it('resumeFromDisk: on a REJECTED call, restores the resumable offer via a fresh resumable() query (not silently hidden)', async () => {
+    const restoredSummary = { runId: 'r-old', resumeStageKey: 's2', resumeStageName: 'S2', totalStages: 3, doneCount: 1 }
+    const { run2 } = installForge({
+      resumable: vi.fn(async () => restoredSummary),
+      resumeFromDisk: vi.fn(async () => { throw new Error('stale/raced summary') }),
+    })
+    const { result } = renderHook(() => useRun2('/ws'))
+    await waitFor(() => expect(result.current.resumable).toEqual(restoredSummary))
+
+    await act(async () => { await result.current.resumeFromDisk() })
+
+    expect(run2.resumeFromDisk).toHaveBeenCalledWith('/ws')
+    // re-queried resumable() after the rejection — restored, not left null.
+    expect(result.current.resumable).toEqual(restoredSummary)
+  })
+
+  it('discardResumable: on a REJECTED call, restores the resumable offer via a fresh resumable() query (not silently hidden)', async () => {
+    const restoredSummary = { runId: 'r-old', resumeStageKey: 's2', resumeStageName: 'S2', totalStages: 3, doneCount: 1 }
+    const { run2 } = installForge({
+      resumable: vi.fn(async () => restoredSummary),
+      discardResumable: vi.fn(async () => { throw new Error('stale/raced summary') }),
+    })
+    const { result } = renderHook(() => useRun2('/ws'))
+    await waitFor(() => expect(result.current.resumable).toEqual(restoredSummary))
+
+    await act(async () => { await result.current.discardResumable() })
+
+    expect(run2.discardResumable).toHaveBeenCalledWith('/ws')
+    expect(result.current.resumable).toEqual(restoredSummary)
+  })
+
   // Task 2 (queue): useRun2 surfaces a workspace's pending-queue length from the run2:queue
   // broadcast so RunPanel can show a "队列: N" badge.
   it('defaults queueLength to 0 and updates it from matching run2:queue broadcasts, ignoring other workspaces', async () => {
