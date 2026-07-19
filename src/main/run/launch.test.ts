@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { buildLaunchInfo, resolveStartPlan } from './launch'
+import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, type LaunchStartConfig } from './launch'
+import { buildWorkOrders } from './fanout'
 import type { Workspace, Workflow } from '../config/schema'
 import { STAGE_PROMPTS } from '../config/schema'
 
@@ -112,5 +113,43 @@ describe('resolveStartPlan', () => {
     expect(noMode.permissionMode).toBeUndefined()
     const withMode = resolveStartPlan(ws, [], [], { workspacePath: '/ws/pay', workflowId: 'wf1', projectNames: ['api'], runId: 'r1', permissionMode: 'readonly' })
     expect(withMode.permissionMode).toBe('readonly')
+  })
+})
+
+// P1-4: the in-chat launch gate's 确认 button calls buildLaunchPlan/buildLaunchProjects (via a new
+// run2:launch-start IPC handler — see run2Handlers.test.ts) instead of the floating WorkflowOverlay.
+// `cfg.projects` is ALREADY the caller-selected subset (see LaunchStartConfig doc) — ws has `api`+`web`,
+// but only `api` is passed here, so `web` must never appear in the develop stage's fan-out.
+describe('buildLaunchPlan + buildLaunchProjects (P1-4 launch gate start)', () => {
+  const cfg: LaunchStartConfig = {
+    workspacePath: '/ws/pay',
+    workflowId: 'wf1',
+    projects: [{ name: 'api', provider: 'codex', model: 'g2' }], // 'web' deliberately NOT selected
+    supplement: '补充:优先兼容旧接口',
+    seed: '用户原话:先做支付幂等',
+  }
+
+  it('only selected projects reach the develop-stage fan-out, with their chosen provider/model overriding the stage default', () => {
+    const plan = buildLaunchPlan(cfg, ws)
+    const projects = buildLaunchProjects(cfg, ws)
+    const develop = plan.stages.find((s) => s.key === 'develop')!
+    const orders = buildWorkOrders({ stage: develop, workspacePath: ws.path, projects, upstream: [], buildPrompt: () => 'x' })
+    expect(orders.map((o) => o.project)).toEqual(['api'])
+    expect(orders[0].provider).toBe('codex') // from cfg.projects override
+    expect(orders[0].model).toBe('g2')       // overrides stage's default model 'g'
+  })
+
+  it('injects supplement + seed into the root (first) stage prompt as ground truth', () => {
+    const plan = buildLaunchPlan(cfg, ws)
+    const root = plan.stages[0]
+    expect(root.key).toBe('design') // first stage in the fixture's workflow
+    expect(root.prompt).toContain(cfg.supplement)
+    expect(root.prompt).toContain(cfg.seed)
+    // the stage's own custom prompt must still survive alongside the injected ground truth
+    expect(root.prompt).toContain('额外要求:只改前端')
+  })
+
+  it('throws on an unknown workflow id', () => {
+    expect(() => buildLaunchPlan({ ...cfg, workflowId: 'nope' }, ws)).toThrow()
   })
 })

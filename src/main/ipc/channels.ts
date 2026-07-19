@@ -218,6 +218,12 @@ export const CH = {
   // ws.stages) into a RunPlan before starting run2 (run2StartWorkflow).
   run2LaunchInfo: 'run2:launch-info',
   run2StartWorkflow: 'run2:start-workflow',
+  // P1-4: the in-chat launch gate's 确认 button. Distinct from `run2Start` (the raw
+  // stages+projects channel, unused by any renderer UI — see run2Handlers.ts) because that name is
+  // already taken with a different (lower-level) payload shape; this one takes a `LaunchStartConfig`
+  // (workflowId + gate-selected per-project provider/model + supplement/seed) and resolves it
+  // server-side via launch.ts's buildLaunchPlan/buildLaunchProjects, same pattern as run2StartWorkflow.
+  run2LaunchStart: 'run2:launch-start',
   // P5-UI Task 2: read a changed file's content on demand (renderer file viewer) — read-only.
   run2ReadFile: 'run2:read-file',
 } as const
@@ -241,4 +247,5 @@ export const run2Log = CH.run2Log
 export const run2Queue = CH.run2Queue
 export const run2LaunchInfo = CH.run2LaunchInfo
 export const run2StartWorkflow = CH.run2StartWorkflow
+export const run2LaunchStart = CH.run2LaunchStart
 export const run2ReadFile = CH.run2ReadFile

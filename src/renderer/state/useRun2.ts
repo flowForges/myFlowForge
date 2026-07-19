@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunControllerState, RunLogLine } from '../../main/run/controller'
 import type { GateDecision, LaneDecision } from '../../main/run/decisions'
+import type { LaunchStartConfig } from '../../main/run/launch'
 
 // Per-lane buffer cap for live log lines (see `laneLogs` below) — recent context only, not a
 // full transcript (the bottom LogConsole is the full transcript).
@@ -13,6 +14,9 @@ export interface Run2Api {
   laneLogs: Record<string, RunLogLine[]>
   /** This workspace's pending-run queue length from the run2:queue broadcast (0 when idle/empty). */
   queueLength: number
+  /** P1-4: launch gate's 确认 button — resolves cfg (workflow + selected projects' provider/model +
+   *  supplement/seed) into a RunPlan server-side (run2:launch-start) and starts run2. */
+  start: (config: LaunchStartConfig) => Promise<void>
   resolveGate: (eventId: string, decision: GateDecision) => void
   resolveLane: (eventId: string, decision: LaneDecision) => void
   addFeedback: (text: string) => void
@@ -94,6 +98,12 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspacePath])
 
+  const start = useCallback((config: LaunchStartConfig) => {
+    const r = getRun2()
+    if (!r) return Promise.resolve()
+    return r.launchStart(config)
+  }, [])
+
   const resolveGate = useCallback((eventId: string, decision: GateDecision) => {
     const r = getRun2()
     if (r && workspacePath) r.resolveGate({ workspacePath, eventId, decision })
@@ -139,5 +149,5 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     if (r && workspacePath) r.jumpBack({ workspacePath, targetKey })
   }, [workspacePath])
 
-  return { state, laneLogs, queueLength, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack }
+  return { state, laneLogs, queueLength, start, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack }
 }

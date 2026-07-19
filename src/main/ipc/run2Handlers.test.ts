@@ -148,6 +148,40 @@ describe('registerRun2', () => {
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 
+  it('run2:launch-start resolves the gate config (per-project provider/model) into a plan+projects and starts the run', async () => {
+    const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+    try {
+      const seen: Array<string | undefined> = []
+      const handlers = new Map<string, (...a: any[]) => any>()
+      const manager = new Run2Manager({ providers: { codex: capturingProvider(seen), x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      const wsConfig: Workspace = {
+        name: 'pay', path: ws, workflowId: '', stages: [],
+        workflows: [{ id: 'wf1', name: '标准五段', stages: [
+          { key: 'design', provider: 'x', model: 'm', scope: 'root', gate: false },
+          { key: 'develop', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+        ] }],
+        projects: [{ repoId: 'api', name: 'api', branch: 'main' }, { repoId: 'web', name: 'web', branch: 'main' }] as any,
+        status: 'idle', plugins: [], stepPlugins: [],
+      } as any
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [] })
+      expect(handlers.has(CH.run2LaunchStart)).toBe(true)
+      const launchStart = handlers.get(CH.run2LaunchStart)!
+      const result = await launchStart({}, {
+        workspacePath: ws, workflowId: 'wf1',
+        projects: [{ name: 'api', provider: 'codex', model: 'g2' }], // 'web' NOT selected
+        supplement: '补充说明文本', seed: '用户原话文本',
+      })
+      expect(result.status).toBe('started')
+      await new Promise((r) => setTimeout(r, 50))
+      // only the selected project's agent ran (captured by capturingProvider, wired to the 'codex'
+      // provider id) — 'web' never ran because it wasn't in cfg.projects
+      expect(seen).toEqual(['full'])
+      const getState = handlers.get(CH.run2GetState)!
+      const state = await getState({}, { workspacePath: ws })
+      expect(state.status).toBe('ok')
+    } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
   describe('run2:read-file (P5-UI Task 2)', () => {
     function makeHandlers() {
       const handlers = new Map<string, (...a: any[]) => any>()

@@ -310,6 +310,11 @@ const api = {
     launchInfo: (workspacePath: string) => ipcRenderer.invoke(CH.run2LaunchInfo, { workspacePath }),
     startWorkflow: (opts: { workspacePath: string; workflowId: string; projectNames: string[]; task?: string; runId: string }) =>
       ipcRenderer.invoke(CH.run2StartWorkflow, opts),
+    // P1-4: in-chat launch gate's 确认 button — carries the gate's own per-project provider/model
+    // selection + supplement/seed (see LaunchStartConfig in src/main/run/launch.ts), unlike
+    // startWorkflow above which only forwards a workflowId + projectNames.
+    launchStart: (cfg: { workspacePath: string; workflowId: string; projects: { name: string; provider: string; model: string }[]; supplement: string; seed: string }) =>
+      ipcRenderer.invoke(CH.run2LaunchStart, cfg),
     // P5-UI Task 2: on-demand file content read for the RunPanel file viewer (read-only).
     readFile: (a: { path: string; cwd?: string }) => ipcRenderer.invoke(CH.run2ReadFile, a),
     onEvent: (cb: (p: { workspacePath: string; event: unknown }) => void) => {

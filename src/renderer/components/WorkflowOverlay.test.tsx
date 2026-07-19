@@ -12,6 +12,7 @@ function makeRun2(state: any = null) {
     state,
     laneLogs: {},
     queueLength: 0,
+    start: vi.fn(),
     resolveGate: vi.fn(),
     resolveLane: vi.fn(),
     addFeedback: vi.fn(),

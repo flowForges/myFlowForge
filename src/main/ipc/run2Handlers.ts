@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as CH from './channels'
 import { planFromStages } from '../run/planFromStages'
-import { buildLaunchInfo, resolveStartPlan, type StartWorkflowOpts } from '../run/launch'
+import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
 import type { Run2Manager } from '../run/manager'
 import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
 import type { GateDecision, LaneDecision } from '../run/decisions'
@@ -65,6 +65,19 @@ export function registerRun2(deps: {
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
     const { plan, projects, task, permissionMode } = resolveStartPlan(ws, readWorkflows(), readCustomStages(), p)
     return manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan, projects, task, permissionMode })
+  })
+
+  // P1-4: in-chat launch gate → run2. Unlike run2StartWorkflow (renderer picks workflowId +
+  // projectNames only, provider/model always comes from the stage default), this channel carries the
+  // gate's own per-project provider/model + supplement/seed — buildLaunchPlan/buildLaunchProjects
+  // (launch.ts) resolve those into the RunPlan + DevelopProject[] the engine actually runs.
+  onInvoke(CH.run2LaunchStart, (_e, p: LaunchStartConfig) => {
+    if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:launch-start)')
+    const ws = readWorkspace(p.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
+    const plan = buildLaunchPlan(p, ws)
+    const projects = buildLaunchProjects(p, ws)
+    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects })
   })
 
   // P5-UI Task 2: on-demand read of a changed file's content, for the RunPanel file viewer.

@@ -7,6 +7,7 @@
 // (or, if that workflow itself has none stashed, fall back to the global workflow template via
 // resolveWorkflowStages). Same resolution pattern as proposeRun.ts / resumeWorkspace in handlers.ts.
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { PermissionMode } from '@shared/permissions'
 import type { Workspace, Workflow, CustomStage } from '../config/schema'
 import { stageName, workflowDisplayName, stageBasePrompt, DEFAULT_STAGE_PER_PROJECT_AGENT } from '../config/schema'
@@ -134,4 +135,79 @@ export function resolveStartPlan(
   const projects = buildLaunchInfo(ws).projects.filter((p) => opts.projectNames.includes(p.name))
 
   return { plan, projects, task: opts.task, permissionMode: opts.permissionMode }
+}
+
+// P1-4: the in-chat launch gate's config (replaces the floating WorkflowOverlay's start path). `projects`
+// is ALREADY the caller/gate-selected subset — see field doc — so nothing here needs to filter workspace
+// projects down; the "only selected projects fan out" guarantee comes from buildLaunchProjects only ever
+// emitting entries for cfg.projects (never the workspace's full project list).
+export interface LaunchStartConfig {
+  workspacePath: string
+  workflowId: string
+  // Selected projects with their PER-PROJECT provider/model choice from the gate — already filtered to
+  // just the ones the user checked. Threading these into the develop (code) stage's fan-out is what
+  // fixes the known gap where startWorkflow dropped the per-project override and fell back to the
+  // workflow's default agent/model (see buildLaunchProjects below).
+  projects: { name: string; provider: string; model: string }[]
+  // Free-text supplementary instructions the user typed into the gate, alongside...
+  supplement: string
+  // ...`seed`: the user's latest raw chat message — the run's "ground truth" anchor (mirrors the
+  // existing `【需求原文（以此为准）】` pattern RunController.buildPrompt injects from `task` — see
+  // controller.ts — except here it's baked directly into the root/entry stage's own prompt, per this
+  // task's brief, rather than threaded as a separate `task` field to every stage).
+  seed: string
+}
+
+// Ground-truth block prepended to the root stage's prompt — same anchor phrasing as
+// RunController.buildPrompt's `【需求原文（以此为准）】` seed, so a stage agent that's seen that pattern
+// elsewhere recognizes this as "the real ask, not a stale/paraphrased brief". `supplement` (the gate's
+// free-text box) is appended as a second, clearly-separated block. Either half may be empty (e.g. a
+// launch with no typed supplement) — omitted rather than emitting an empty-body heading.
+function buildGroundTruth(supplement: string, seed: string): string {
+  const parts: string[] = []
+  if (seed && seed.trim()) parts.push(`【需求原文（以此为准）】\n${seed}`)
+  if (supplement && supplement.trim()) parts.push(`【补充说明】\n${supplement}`)
+  return parts.join('\n\n')
+}
+
+// Resolves the picked workflow's stages into a RunPlan for the launch gate — same workflow-lookup
+// contract as resolveStartPlan (throws on an unknown workflowId) but, per this task's scope, only
+// resolves a workspace's OWN stashed `ws.workflows[].stages` (skips resolveStartPlan's global-template
+// fallback for a workflow with no stashed stages — that path needs `Workflow[]`/`CustomStage[]` deps this
+// function's brief-mandated signature doesn't carry; see task report for this known gap).
+export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace): RunPlan {
+  const wf = pickWorkspaceWorkflow(ws, cfg.workflowId)
+  if (!wf || wf.id !== cfg.workflowId) throw new Error(`未知工作流: ${cfg.workflowId}`)
+
+  const resolved = resolveWorkflowStages(wf, [], {})
+  if (resolved.length === 0) throw new Error(`工作流「${workflowDisplayName(wf.name)}」没有可执行阶段`)
+
+  const groundTruth = buildGroundTruth(cfg.supplement, cfg.seed)
+  const stageSpecs: StageSpec[] = resolved.map((s, i) => {
+    // Root/entry stage = the first stage in run order (typically 需求梳理) — the gate's supplement/seed
+    // become that stage's ground truth, matching the brief's "拼进 root 阶段 prompt" instruction.
+    const prompt = i === 0 && groundTruth
+      ? (s.prompt ? `${groundTruth}\n\n${s.prompt}` : groundTruth)
+      : s.prompt
+    return {
+      key: s.key,
+      name: stageName(s.key, s.name),
+      provider: s.provider,
+      model: s.model,
+      scope: s.scope,
+      gate: s.gate,
+      prompt,
+    }
+  })
+  return planFromStages(`run2-${randomUUID()}`, stageSpecs)
+}
+
+// Companion to buildLaunchPlan: the DevelopProject[] to pass alongside its RunPlan into
+// Run2Manager.start. `cfg.projects` is already the gate-selected subset (see LaunchStartConfig doc), so
+// this is a plain name→cwd/provider/model mapping — NOT a filter — which is exactly what fixes the known
+// gap (startWorkflow silently dropped per-project provider/model): fanout.buildWorkOrders prefers
+// `p.provider || stage.provider` / `p.model || stage.model` per project, so a selected project's own
+// choice here now wins over the develop stage's default agent.
+export function buildLaunchProjects(cfg: LaunchStartConfig, ws: Workspace): DevelopProject[] {
+  return cfg.projects.map((p) => ({ name: p.name, cwd: join(ws.path, p.name), provider: p.provider, model: p.model }))
 }

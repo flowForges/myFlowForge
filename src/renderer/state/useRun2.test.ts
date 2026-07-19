@@ -6,6 +6,7 @@ function installForge(overrides: any = {}) {
   let updateCb: any, eventCb: any, logCb: any, queueCb: any
   const run2 = {
     getState: vi.fn(async (_ws: string) => ({ machine: { plan: { runId: 'r', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {} })),
+    launchStart: vi.fn(async () => {}),
     resolveGate: vi.fn(), resolveLane: vi.fn(), addFeedback: vi.fn(), editFeedback: vi.fn(), removeFeedback: vi.fn(), abort: vi.fn(),
     pause: vi.fn(), resume: vi.fn(), jumpBack: vi.fn(),
     onEvent: vi.fn((cb: any) => { eventCb = cb; return () => {} }),
@@ -59,6 +60,23 @@ describe('useRun2', () => {
     expect(run2.resume).toHaveBeenCalledWith({ workspacePath: '/ws' })
     act(() => result.current.jumpBack('design'))
     expect(run2.jumpBack).toHaveBeenCalledWith({ workspacePath: '/ws', targetKey: 'design' })
+  })
+
+  // P1-4: the in-chat launch gate's 确认 button calls start(config) — verifies it reaches
+  // window.forge.run2.launchStart with the config untouched (no workspacePath wrapping needed, cfg
+  // already carries it).
+  it('start(config) forwards the launch config to window.forge.run2.launchStart', async () => {
+    const { run2 } = installForge()
+    const { result } = renderHook(() => useRun2('/ws'))
+    await waitFor(() => expect(result.current.state).not.toBeNull())
+    const cfg = { workspacePath: '/ws', workflowId: 'wf1', projects: [{ name: 'api', provider: 'codex', model: 'g2' }], supplement: '补充', seed: '原话' }
+    await act(async () => { await result.current.start(cfg as any) })
+    expect(run2.launchStart).toHaveBeenCalledWith(cfg)
+  })
+
+  it('start(config) is a safe no-op when window.forge.run2 is absent', async () => {
+    const { result } = renderHook(() => useRun2('/ws'))
+    await expect(result.current.start({} as any)).resolves.toBeUndefined()
   })
 
   it('is a safe no-op when window.forge.run2 is absent', () => {
