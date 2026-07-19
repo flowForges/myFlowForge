@@ -39,4 +39,29 @@ describe('AgentNode per-lane elapsed timing', () => {
     expect(screen.getByText('5s')).toBeTruthy()
     expect(screen.getByText('心跳 8s 前')).toBeTruthy()
   })
+
+  // Important fix: a lane with no laneEndedAt persisted from a hard-killed run (app crash mid-lane)
+  // is non-terminal and re-surfaces in read-only run-history replay. There, ticking against
+  // Date.now() would render a nonsense "minutes since the crash" duration. `live={false}` (the
+  // signal RunExecPanel threads down for its staticState/readOnly replay path) must show a plain
+  // 未完成 marker instead, never a bogus computed duration.
+  it('read-only (live=false) with no laneEndedAt shows 未完成, not a time-since-now duration', () => {
+    const longAgo = Date.now() - 18_732 * 60_000 // simulate an app crash a long time ago
+    const agent: AgentRuntime = { ...mk('run'), laneStartedAt: longAgo }
+    const { container } = render(<AgentNode agent={agent} live={false} />)
+    expect(container.querySelector('.agent-elapsed')).toHaveTextContent('未完成')
+    expect(container.querySelector('.agent-elapsed')?.textContent).not.toMatch(/\d+m/)
+  })
+
+  it('live (default) with no laneEndedAt still ticks elapsed-so-far against now', () => {
+    const agent: AgentRuntime = { ...mk('run'), laneStartedAt: Date.now() - 45_000 }
+    const { container } = render(<AgentNode agent={agent} live />)
+    expect(container.querySelector('.agent-elapsed')).toHaveTextContent('45s')
+  })
+
+  it('a settled (done) lane shows its frozen total regardless of live/read-only', () => {
+    const agent: AgentRuntime = { ...mk('ok'), laneStartedAt: 1_000, laneEndedAt: 73_000 }
+    const { container } = render(<AgentNode agent={agent} live={false} />)
+    expect(container.querySelector('.agent-elapsed')).toHaveTextContent('1m 12s')
+  })
 })

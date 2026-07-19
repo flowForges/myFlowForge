@@ -276,5 +276,43 @@ describe('RunExecPanel', () => {
       expect(screen.queryByText('暂停')).toBeNull()
       expect(screen.queryByText(/终止/)).toBeNull()
     })
+
+    // Important fix: a lane that was mid-flight when the app was hard-killed persists
+    // {startedAt} with no endedAt — non-terminal, so it re-appears in run-history replay. The
+    // elapsed pill must NOT tick against the current time there (that renders "minutes since the
+    // crash"); it must show 未完成. The same shape on a LIVE panel still ticks normally.
+    it('a crashed lane (startedAt, no endedAt) shows 未完成 in read-only replay, not minutes-since-crash', () => {
+      const longAgo = Date.now() - 18_732 * 60_000
+      const crashedState = baseState({
+        status: 'running',
+        laneTimings: { 'develop:go-blog': { startedAt: longAgo } },
+      })
+      render(<RunExecPanel staticState={crashedState as any} readOnly />)
+
+      const goBlogCard = screen.getByText('go-blog').closest('.agent-node')!
+      const pill = goBlogCard.querySelector('.agent-elapsed')
+      expect(pill).toHaveTextContent('未完成')
+      expect(pill?.textContent).not.toMatch(/\d+m/)
+    })
+
+    // Minor guard: staticState without readOnly must still be treated as read-only for control
+    // rendering (a static snapshot has no live process behind it even if a caller forgets the flag).
+    it('staticState without readOnly still hides the live run-level controls (defensive)', () => {
+      render(<RunExecPanel staticState={baseState({ status: 'running' }) as any} />)
+      expect(screen.queryByText('暂停')).toBeNull()
+      expect(screen.queryByText('正在执行…')).toBeNull()
+      expect(screen.queryByText(/终止/)).toBeNull()
+    })
+
+    it('the same crashed-shape lane on a LIVE panel still ticks elapsed-so-far against now', () => {
+      const now = Date.now()
+      const run2 = makeRun2(baseState({
+        laneTimings: { 'develop:go-blog': { startedAt: now - 20_000 } },
+      }))
+      render(<RunExecPanel run2={run2} />)
+
+      const goBlogCard = screen.getByText('go-blog').closest('.agent-node')!
+      expect(goBlogCard.querySelector('.agent-elapsed')).toHaveTextContent('20s')
+    })
   })
 })

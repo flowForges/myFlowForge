@@ -63,13 +63,13 @@ function useNodeCaps(cwd: string | undefined): AgentContextMeta | null {
 // Thin wrapper around the reused `AgentNode` — loads Skill/Rule/MCP chips for this agent's `cwd`
 // (via `useNodeCaps`, a stable per-component-instance hook call) and merges them onto the runtime
 // object AgentNode actually renders, so AgentNode itself needs no awareness of run2/scanContext.
-function AgentNodeWithCaps({ agent, open, onToggle }: { agent: AdaptedAgent; open: boolean; onToggle: () => void }) {
+function AgentNodeWithCaps({ agent, open, onToggle, live }: { agent: AdaptedAgent; open: boolean; onToggle: () => void; live: boolean }) {
   const caps = useNodeCaps(agent.cwd)
   const hasCaps = !!caps && (caps.skills.length > 0 || caps.rules.length > 0 || (caps.mcps?.length ?? 0) > 0)
   const runtime: AgentRuntime = hasCaps
     ? { ...agent, context: { skills: caps!.skills, rules: caps!.rules, mcps: caps!.mcps } }
     : agent
-  return <AgentNode agent={runtime} open={open} onToggle={onToggle} />
+  return <AgentNode agent={runtime} open={open} onToggle={onToggle} live={live} />
 }
 
 // `.stage` card state class — only 'run'/'ok'/'err' are styled distinctly in workspace.css
@@ -89,6 +89,11 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly }: { run2?: 
   const memoryRef = useRef<Map<string, Map<string, LaneMemory>>>(new Map())
   const lastRunIdRef = useRef<string | null>(null)
   const state = staticState ?? run2?.state ?? null
+  // Minor guard: a `staticState` (historical/loaded run) has no live `run2` process behind it even
+  // if a future caller forgets to also pass `readOnly` — treat it as read-only for every decision
+  // that assumes a live process (run-level controls below, and the per-lane elapsed pill in
+  // AgentNode, which must not tick a crashed/never-finished lane against `Date.now()`).
+  const isReadOnly = readOnly || !!staticState
   const liveRunId = state?.machine.plan.runId ?? null
   if (liveRunId !== lastRunIdRef.current) {
     lastRunIdRef.current = liveRunId
@@ -174,7 +179,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly }: { run2?: 
     <div className="wfo-run-panel">
       <div className="wfo-head">
         <div className="wfo-title">
-          <span className="tt">{readOnly ? '历史运行回看' : '工作流执行中'}</span>
+          <span className="tt">{isReadOnly ? '历史运行回看' : '工作流执行中'}</span>
           <span className="wfo-branch">分支：{tempBranch}</span>
         </div>
         <div className="wfo-prog">
@@ -182,7 +187,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly }: { run2?: 
           <span className="bar"><i style={{ width: `${pct}%` }} /></span>
           <span className="pct">{pct}%</span>
         </div>
-        {readOnly ? (
+        {isReadOnly ? (
           <div className="wfo-runctl done">
             <span className="rmsg">
               <span className="rd" />
@@ -271,6 +276,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly }: { run2?: 
                         agent={agent}
                         open={effectiveOpenIds.has(agent.id)}
                         onToggle={() => handleToggle(agent.id)}
+                        live={!isReadOnly}
                       />
                     ))
                   )}

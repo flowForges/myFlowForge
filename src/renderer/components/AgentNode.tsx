@@ -73,8 +73,16 @@ function heartbeatLabel(lastBeat?: number): string | null {
 // onUpdate the controller emits during a live run (progress/log/gate/etc., see RunExecPanel), which
 // is frequent enough to read as "ticking" without a dedicated setInterval (deliberately not added,
 // per this task's own guidance against over-engineering a live ticker here).
-function elapsedLabel(startedAt?: number, endedAt?: number): string | null {
+//
+// `live` distinguishes an actively-running panel from a read-only historical replay (RunExecPanel's
+// `staticState`/`readOnly`). A lane with no `endedAt` in a LIVE run is genuinely still going, so it
+// ticks against `Date.now()`. The same shape in a historical replay means the process was killed
+// mid-lane (app crash/force-quit) before it could record `laneEndedAt` — ticking against "now" would
+// render a nonsense "minutes since the crash" duration, so read-only mode reports it as unfinished
+// instead.
+function elapsedLabel(startedAt: number | undefined, endedAt: number | undefined, live: boolean): string | null {
   if (!startedAt) return null
+  if (endedAt == null && !live) return '未完成'
   return fmtDuration((endedAt ?? Date.now()) - startedAt)
 }
 
@@ -86,16 +94,20 @@ interface AgentNodeProps {
   onToggle?: () => void
   /** When provided, shows a "在日志台查看" affordance that opens the bottom log drawer for this agent. */
   onViewLog?: () => void
+  /** Whether this card belongs to a LIVE running panel vs a read-only historical replay. Defaults
+   *  to `true` (existing callers — a live run or WorkspaceView's old tab — keep ticking). Only
+   *  RunExecPanel's read-only/`staticState` replay path passes `false` — see `elapsedLabel` above. */
+  live?: boolean
 }
 
-export function AgentNode({ agent, open: openProp, onToggle, onViewLog }: AgentNodeProps) {
+export function AgentNode({ agent, open: openProp, onToggle, onViewLog, live = true }: AgentNodeProps) {
   const [openLocal, setOpenLocal] = useState(agent.state === 'run')
   // If onToggle is provided, use controlled mode; otherwise uncontrolled
   const isControlled = onToggle !== undefined
   const open = isControlled ? (openProp ?? false) : openLocal
   const stateInfo = STATE_MAP[agent.state] ?? STATE_MAP.wait
   const beatLabel = heartbeatLabel(agent.lastBeat)
-  const elapsed = elapsedLabel(agent.laneStartedAt, agent.laneEndedAt)
+  const elapsed = elapsedLabel(agent.laneStartedAt, agent.laneEndedAt, live)
   const ctxCount = contextCount(agent)
   // Follow-tail: keep the live output pinned to the newest line; when the user scrolls up, surface a
   // "查看最新" jump button. Re-pins on new lines only while already at the bottom.

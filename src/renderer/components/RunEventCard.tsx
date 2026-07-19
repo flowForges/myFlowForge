@@ -43,6 +43,8 @@ const DOC_ICON = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2
 //     falsy and would silently no-op the click, so '/' (truthy) is the correct default, not ''.
 // `name` (required on DesignDocRef) is the artifact's file name, taken from the last path segment.
 function toDesignDoc(r: ArtifactRef): DesignDocRef {
+  // cwd MUST stay '/' — see the doc comment above: r.path is already absolute, and join('/', r.path)
+  // round-trips to it; don't "simplify" this to a relative cwd, it will break the reader.
   return { path: r.path, cwd: '/', name: r.path.split('/').pop() || r.path }
 }
 
