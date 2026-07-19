@@ -702,22 +702,37 @@ export class RunController {
       //   - abort       (终止运行)   → stops the run like any other abort path.
       // A later-resolved doubt's override wins if multiple doubts fired for this stage; each is
       // still individually dropped from the inbox regardless of which one "wins".
+      //
+      // P3-3 review (multi-doubt "last-wins" ordering): the shared feedback-DRAFT queue
+      // (this.feedback — free text typed via addFeedback/editFeedback, NOT a doubt's own
+      // `ld.feedback`) is drained exactly ONCE below, after the loop, for whichever decision
+      // actually wins the batch. Draining it INSIDE the loop (the previous shape) emptied the
+      // shared queue on the FIRST non-dismiss/non-abort doubt; a LATER doubt that goes on to
+      // override `d` (the one that actually wins) would then always see an already-empty queue and
+      // silently lose the user's typed feedback. Rare in practice (needs >=2 doubts on one stage
+      // resolved in the same batch), but deterministic and worth getting right. Single-doubt
+      // behavior is byte-for-byte unchanged: same `[note, ld.feedback, text]` join, same order.
       if (doubtWaits.length > 0) {
         this.status = 'awaiting'
         const resolved = await Promise.all(doubtWaits)
+        let winningNote: string | undefined
         for (const { id, note, d: ld } of resolved) {
           this.drop(id)
           if (ld.type === 'abort') { this.aborted = true; continue }
           if (this.aborted || ld.type === 'dismiss') continue
-          const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
           if (ld.type === 'redo') {
-            this.pendingDirective[stage.key] = [note, ld.feedback, text].filter(Boolean).join('\n')
+            winningNote = [note, ld.feedback].filter(Boolean).join('\n')
             d = { type: 'redo' }
           } else if (ld.type === 'jumpBack') {
             const target = ld.targetKey ?? this.designStageKey()
-            this.pendingDirective[target] = [note, ld.feedback, text].filter(Boolean).join('\n')
+            winningNote = [note, ld.feedback].filter(Boolean).join('\n')
             d = { type: 'jumpBack', targetKey: target }
           }
+        }
+        if (winningNote !== undefined && (d.type === 'redo' || d.type === 'jumpBack')) {
+          const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
+          const key = d.type === 'redo' ? stage.key : d.targetKey
+          this.pendingDirective[key] = [winningNote, text].filter(Boolean).join('\n')
         }
         this.emitUpdate()
       }

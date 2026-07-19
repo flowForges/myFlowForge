@@ -752,6 +752,80 @@ describe('RunController', () => {
       expect(final.machine.stages[0].round).toBe(1)
     })
 
+    // Prior review (P3-3): with MULTIPLE unresolved doubts on one stage resolved in the same batch,
+    // does the shared feedback-draft queue (this.feedback — free text added via addFeedback/
+    // editFeedback, distinct from a doubt's own `ld.feedback`) actually apply to the decision that
+    // WINS the batch? A previous shape drained that queue inside the per-doubt loop, on the FIRST
+    // non-dismiss/non-abort doubt — emptying it before a LATER doubt (whose override actually wins,
+    // per the documented "later-resolved doubt's override wins" rule) ever got a look at it. Fixed
+    // by draining once, after the loop, keyed off the winning decision.
+    it('P3-3 multi-doubt: two unresolved doubts on one stage, resolved in one batch — the shared feedback-draft queue reaches the WINNING decision, not lost on the other doubt', async () => {
+      const store = new RunStore(ws, 'r1')
+      const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const projectOf = (cwd: string) => (cwd.endsWith('/a') ? 'a' : 'b')
+      const seen = new Set<string>()
+      const prompts: Array<{ proj: string; prompt: string }> = []
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          const proj = projectOf(task.cwd)
+          const done = (async () => {
+            prompts.push({ proj, prompt: task.prompt })
+            if (!seen.has(proj)) {
+              seen.add(proj)
+              const note = proj === 'a' ? 'note-a' : 'note-b'
+              const block = `\`\`\`forge-result\n${JSON.stringify({ summary: 'd', filesChanged: [], testsRun: { passed: true }, blockers: [], doubts: [note] })}\n\`\`\``
+              cb.onHandoff?.({ summary: block })
+            } else {
+              cb.onHandoff?.({ summary: 'ok' })
+            }
+            const r = { ok: true, summary: '' }; cb.onDone(r); return r
+          })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      // The user typed extra shared feedback BEFORE either doubt resolves.
+      c.addFeedback('共享补充：两处都要看')
+      const doubtEvents: Array<{ id: string; note: string }> = []
+      c.onEvent((e) => {
+        if (e.kind !== 'doubt') return
+        doubtEvents.push({ id: e.id, note: e.note })
+        if (doubtEvents.length === 2) {
+          // Both doubts resolve to 'redo' (so the run reaches a clean 'ok' terminus). Resolved in
+          // REVERSE creation order (b, then a) — proves the "winner" is decided by doubtWaits' array
+          // (creation) order via Promise.all, not by real-world resolution order.
+          const a = doubtEvents.find((x) => x.note === 'note-a')!
+          const b = doubtEvents.find((x) => x.note === 'note-b')!
+          c.resolveLane(b.id, { type: 'redo', feedback: 'b-own-feedback' })
+          c.resolveLane(a.id, { type: 'redo', feedback: 'a-own-feedback' })
+        }
+      })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: multi-doubt redo did not resume the run')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      const aPrompts = prompts.filter((p) => p.proj === 'a').map((p) => p.prompt)
+      const bPrompts = prompts.filter((p) => p.proj === 'b').map((p) => p.prompt)
+      expect(aPrompts).toHaveLength(2) // redo bumped the round — both lanes re-ran once more
+      expect(bPrompts).toHaveLength(2)
+      // "b" is last in CREATION order (outcomes loop runs project 'a' before 'b'), so its decision
+      // wins: its own note/feedback are woven into the shared redo directive...
+      expect(bPrompts[1]).toContain('note-b')
+      expect(bPrompts[1]).toContain('b-own-feedback')
+      // ...while "a"'s own note/feedback are discarded (only ITS decision was overridden — the
+      // doubt event itself is still individually dropped, per the existing comment above).
+      expect(bPrompts[1]).not.toContain('note-a')
+      expect(bPrompts[1]).not.toContain('a-own-feedback')
+      // The bug: the shared feedback-draft queue must still reach the winning ("b") directive — both
+      // lanes read the SAME pendingDirective[stage.key], so it shows up in both re-run prompts.
+      expect(bPrompts[1]).toContain('共享补充：两处都要看')
+      expect(aPrompts[1]).toContain('共享补充：两处都要看')
+      expect(final.machine.stages[0].round).toBe(1)
+    })
+
     it('终止运行: abort on a doubt event stops the whole run', async () => {
       const store = new RunStore(ws, 'r1')
       const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }

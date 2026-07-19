@@ -313,6 +313,85 @@ describe('Run2Manager', () => {
     expect(() => mgr.requestJumpBack('/nope', 'design')).not.toThrow()
   })
 
+  // Prior review gap: Run2Manager threads mergeTempBranch/discardTempBranch/parkTempBranch (Run2StartOpts)
+  // through to the RunController it constructs (startNow), but that wiring had no DEDICATED coverage —
+  // only exercised incidentally by other tests that never actually configure projectTargets. These two
+  // tests reuse the exact fake-git injection pattern controller.test.ts uses for its own P4-3 (finalize
+  // merge/discard) and Finding 4 (abort-parks) coverage, but drive it through manager.start() instead of
+  // `new RunController` directly, proving the manager — not just the controller — wires them correctly.
+  describe('git-op deps passthrough: manager.start() wires mergeTempBranch/parkTempBranch through to the controller', () => {
+    it('finalize gate 合并并完成 calls the mergeTempBranch injected via Run2StartOpts, for every participating project', async () => {
+      const mergeCalls: Array<{ cwd: string; target: string; runId: string }> = []
+      const mgr = new Run2Manager({
+        providers: { x: gatedProvider() }, env: {},
+        makeStore: (w, r) => new RunStore(w, r),
+        emit: {
+          event: (_ws, e) => { if (e.kind === 'gate') mgr.resolveGate(_ws, e.id, (e as any).finalize ? { type: 'merge' } : { type: 'advance' }) },
+          update: () => {},
+        },
+      })
+      const gitStages: StageSpec[] = [
+        { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: true },
+        { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+      ]
+      const plan = planFromStages('run-git-merge', gitStages)
+      const projects = [{ name: 'a', cwd: join(ws, 'a') }, { name: 'b', cwd: join(ws, 'b') }]
+      mgr.start({
+        workspacePath: ws, runId: 'run-git-merge', plan, projects,
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd, target, runId) => { mergeCalls.push({ cwd, target, runId }) },
+      })
+      await new Promise((r) => setTimeout(r, 50))
+      expect(mgr.lastStateFor(ws)?.status).toBe('ok')
+      expect(mergeCalls).toEqual([
+        { cwd: join(ws, 'a'), target: 'main', runId: 'run-git-merge' },
+        { cwd: join(ws, 'b'), target: 'main', runId: 'run-git-merge' },
+      ])
+    })
+
+    it('a mid-run abort calls the parkTempBranch injected via Run2StartOpts, for every participating project (Finding 4: abort parks, never merges/discards)', async () => {
+      const parkCalls: Array<{ cwd: string; target: string; runId: string }> = []
+      const authIds: string[] = []
+      const askingProvider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task: AgentTask, cb: AgentCallbacks) {
+          const done = (async () => {
+            const ok = await cb.onConfirm({ title: 'overwrite' })
+            cb.onHandoff?.({ summary: `confirm=${ok}` }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+          })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const perProjectStages: StageSpec[] = [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }]
+      const mgr = new Run2Manager({
+        providers: { x: askingProvider }, env: {},
+        makeStore: (w, r) => new RunStore(w, r),
+        emit: {
+          event: (_ws, e) => {
+            if (e.kind !== 'auth') return
+            authIds.push(e.id)
+            if (authIds.length === 2) mgr.resolveLane(_ws, authIds[0], { type: 'abort' })
+          },
+          update: () => {},
+        },
+      })
+      const plan = planFromStages('run-git-park', perProjectStages)
+      const projects = [{ name: 'a', cwd: join(ws, 'a') }, { name: 'b', cwd: join(ws, 'b') }]
+      mgr.start({
+        workspacePath: ws, runId: 'run-git-park', plan, projects,
+        projectTargets: { a: 'main', b: 'main' },
+        parkTempBranch: async (cwd, target, runId) => { parkCalls.push({ cwd, target, runId }) },
+      })
+      await new Promise((r) => setTimeout(r, 50))
+      expect(mgr.lastStateFor(ws)?.status).toBe('failed')
+      expect(parkCalls).toEqual([
+        { cwd: join(ws, 'a'), target: 'main', runId: 'run-git-park' },
+        { cwd: join(ws, 'b'), target: 'main', runId: 'run-git-park' },
+      ])
+    })
+  })
+
   describe('disk-resume (P-C2/T2): resumable()/resumeFromDisk() for an interrupted run', () => {
     // Mirrors exactly what saveControllerState (persist.ts) writes on every emitUpdate() — a
     // 3-stage plan with s1 already `done` (the app died sometime after s1 finished, before s2/s3).
