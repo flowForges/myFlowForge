@@ -28,6 +28,25 @@ function Icon({ svg }: { svg: string }) {
   return <span dangerouslySetInnerHTML={{ __html: svg }} />
 }
 
+// Verbatim port of WorkflowOverlay's MODELS table + modelColor/modelShort (WorkflowOverlay.tsx:84-101)
+// — colors the per-lane model chip's `.dot` and strips the "<Provider> · " prefix for its label.
+const MODELS: { label: string; color: string }[] = [
+  { label: 'Claude Code · opus-4.8', color: 'oklch(70% .15 35)' },
+  { label: 'Claude Code · sonnet-4.6', color: 'oklch(72% .13 235)' },
+  { label: 'Claude Code · haiku-4.5', color: 'oklch(74% .12 200)' },
+  { label: 'Codex · gpt-5-codex', color: 'oklch(78% .03 250)' },
+  { label: 'Gemini · gemini-2.5-pro', color: 'oklch(72% .15 275)' },
+]
+
+function modelColor(label: string): string {
+  const found = MODELS.find((m) => m.label === label)
+  return found ? found.color : 'var(--muted)'
+}
+
+function modelShort(label: string): string {
+  return label.replace(/^.*· /, '')
+}
+
 // Verbatim port of WorkflowOverlay's RunNodeState vocabulary + helpers (statLabel/fmtTime/
 // connClass/nodeClass/StMark/stageRunState/laneRunState) — see WorkflowOverlay.tsx for the
 // original provenance comments; unchanged here since this is a pure display port.
@@ -408,7 +427,8 @@ export function RunExecPanel({ run2 }: { run2: Run2Api }): ReactElement {
                                       <span>{lane.providerLabel}</span>
                                     </span>
                                     <span className="wfo-lmodel">
-                                      <span className="mv">{lane.model}</span>
+                                      <span className="dot" style={{ background: modelColor(lane.model) }} />
+                                      <span className="mv">{modelShort(lane.model)}</span>
                                     </span>
                                     <span className={`wfo-stat ${lane.state}`}>
                                       <span className="d" />

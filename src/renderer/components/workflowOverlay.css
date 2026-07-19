@@ -47,6 +47,15 @@
 [data-glass="on"] .wfo-panel { background: oklch(30% .03 262 / .72); backdrop-filter: blur(22px) saturate(1.7); -webkit-backdrop-filter: blur(22px) saturate(1.7); }
 [data-theme="light"][data-glass="on"] .wfo-panel { background: oklch(99% .01 262 / .78); }
 
+/* P2-1: RunExecPanel's root — this is NOT the floating overlay (no scrim/backdrop/rise-in), it lives
+   inline inside the right-side inspector, so it skips .wfo-panel's outer background/border/shadow.
+   It still needs the SAME flex-column + fixed-header + scrolling-body containment as .wfo-panel so
+   .wfo-head stays put and .wfo-flow's stage/lane list scrolls within the panel instead of the page. */
+.wfo-run-panel { display: flex; flex-direction: column; height: 100%; max-height: 100%; overflow: hidden; }
+/* P2-1/P4: temp-branch line next to the run title (.wfo-title .tt) — same small-mono-muted treatment
+   as the sibling `.wfo-title .tt small` rule above. */
+.wfo-branch { font: 600 11px/1 var(--mono); color: var(--faint); margin-left: 6px; }
+
 /* head + 工作流筛选 */
 .wfo-head { flex: 0 0 auto; padding: 15px 17px 13px; border-bottom: 1px solid var(--border); }
 .wfo-title { display: flex; align-items: center; gap: 10px; }
