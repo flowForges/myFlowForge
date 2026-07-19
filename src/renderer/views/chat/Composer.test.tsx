@@ -90,6 +90,18 @@ describe('Composer', () => {
     expect(btn.classList.contains('queueing')).toBe(false)
     expect(btn.title).toBe('发送 (回车)')
   })
+  it('lockedReason disables the textarea + send button and overrides the placeholder (priority over busy)', () => {
+    const onSend = vi.fn()
+    render(<Composer providers={providers} disabled={false} busy onSend={onSend} lockedReason="执行中…（对门的操作请在上方卡片进行）" />)
+    const ta = screen.getByPlaceholderText('执行中…（对门的操作请在上方卡片进行）') as HTMLTextAreaElement
+    expect(ta.disabled).toBe(true)
+    const btn = screen.getByTitle('执行中…（对门的操作请在上方卡片进行）') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    fireEvent.change(ta, { target: { value: 'x' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(onSend).not.toHaveBeenCalled()
+  })
+
   it('does not send empty text, and clears after send', () => {
     const onSend = vi.fn()
     render(<Composer providers={providers} disabled={false} onSend={onSend} />)
