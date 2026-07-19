@@ -9,3 +9,10 @@
 /* P1-3 follow-up fix: inline error when a confirm's run2.start rejects — card stays active (not
    frozen) so the user can retry. Mirrors the var(--err) tone used elsewhere for run failures. */
 .lg-error { font-size: 12px; color: var(--err); margin-top: 6px; }
+
+/* Improvement ⑦: model popup's degrade-gracefully state — a provider with no discovered models
+   (not installed / not yet loaded) shows a free-text input instead, mirroring Composer's own
+   "自定义模型…" custom-model fallback (workflowOverlay.css's .wfo-mpop has no equivalent for this,
+   since the old overlay only ever picked from its own hardcoded MODELS table). */
+.wfo-mpop-empty { padding: 4px 8px 6px; }
+.wfo-mpop-input { width: 100%; background: var(--surface); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; color: var(--fg); font: 600 12px var(--mono); outline: none; margin-top: 4px; }
