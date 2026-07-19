@@ -386,7 +386,20 @@ export class RunController {
         this.emitEvent({ id, kind: 'gate', stageKey: stage.key, body, docs: refs })
         d = await p
         this.drop(id)
-        if (this.aborted) break // force-settled by a concurrent lane abort; don't advance the machine
+        if (this.aborted) {
+          // force-settled by a concurrent lane abort; don't advance the machine. The doubt
+          // resolvers above were created BEFORE this gate and share the same abort-triggered
+          // settleAll() (see resolveLane/abort), so they're already settled — but nothing has
+          // consumed/dropped them yet since we're breaking out before reaching the doubt-drain
+          // block below. Drain them here so no orphaned doubt event survives in the inbox
+          // (same rationale as the failure-loop drain above).
+          if (doubtWaits.length > 0) {
+            const resolved = await Promise.all(doubtWaits)
+            for (const { id } of resolved) this.drop(id)
+            this.emitUpdate()
+          }
+          break
+        }
         if (d.type === 'redo') {
           const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
           this.pendingDirective[stage.key] = [text, d.feedback].filter(Boolean).join('\n')

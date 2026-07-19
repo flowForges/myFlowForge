@@ -711,5 +711,31 @@ describe('RunController', () => {
       expect(final.status).toBe('failed')
       expect(final.inbox).toEqual([]) // no orphaned doubt event left behind
     })
+
+    it('abort while a GATE is still pending also drains a pending doubt for the same stage (no orphaned inbox entry)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const plan2: RunPlan = { runId: 'r1', stages: [
+        { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: true },
+        { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+      ] }
+      const c = new RunController(plan2, { providers: { x: doubtProvider('note-race', 'design') }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      c.onEvent((e) => {
+        // The doubt event (emitted first, per the outcomes loop running before gate creation)
+        // is deliberately left unresolved. abort() fires once the GATE event shows up — at that
+        // point the gate's resolver is still pending, reproducing the race: abort()'s settleAll
+        // force-settles BOTH the gate and the earlier-registered doubt resolver, but the loop
+        // breaks at the gate-await site (controller.ts ~389) BEFORE ever reaching the
+        // doubt-drain block below it — the fix must drain the doubt there instead, or its event
+        // and resolver id leak into the final inbox forever.
+        if (e.kind === 'gate') c.abort()
+      })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: abort during a pending gate+doubt race did not settle')), 2000)),
+      ])
+      expect(final.status).toBe('failed')
+      expect(final.inbox.some((e) => e.kind === 'doubt')).toBe(false) // no orphaned doubt event survives the abort
+      expect(final.inbox).toEqual([]) // nothing lingers at all
+    })
   })
 })
