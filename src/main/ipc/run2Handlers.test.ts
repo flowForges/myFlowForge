@@ -178,11 +178,13 @@ describe('registerRun2', () => {
       // P4-2: run2:launch-start now creates a real temp-branch checkout per participating project
       // before starting — stub it out here (no real git repo backs this tmpdir) so this test still
       // only exercises plan/project resolution + manager wiring, not git. Same for the P4-3 finalize
-      // gate's merge action below (mergeTempBranch) — stubbed for the same reason.
+      // gate's merge action below (mergeTempBranch) — stubbed for the same reason. Finding 3: the
+      // clean-tree precondition also runs real git by default — stub it too (this tmpdir isn't a repo).
       registerRun2({
         manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [],
         createTempBranch: async () => 'forge/run-stub',
         mergeTempBranch: async (cwd, target) => { mergeCalls.push({ cwd, target }) },
+        checkClean: async () => true,
       })
       expect(handlers.has(CH.run2LaunchStart)).toBe(true)
       const launchStart = handlers.get(CH.run2LaunchStart)!
@@ -229,7 +231,7 @@ describe('registerRun2', () => {
         const handlers = new Map<string, (...a: any[]) => any>()
         const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
         const wsConfig = makeWsConfig(ws, { api: 'feat/for-new-flow', web: 'main' })
-        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: stubCreate })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: stubCreate, checkClean: async () => true })
         const launchStart = handlers.get(CH.run2LaunchStart)!
         const result = await launchStart({}, {
           workspacePath: ws, workflowId: 'wf1',
@@ -243,6 +245,30 @@ describe('registerRun2', () => {
           { cwd: join(ws, 'web'), base: 'main', runId },
         ])
         expect(result.state.machine.plan.tempBranch).toBe(`forge/run-${runId}`)
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('Finding 3: a dirty project rejects run2:launch-start before any branch is created — checkClean wired through', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+      try {
+        const createCalls: string[] = []
+        const stubCreate = async (cwd: string, _base: string, runId: string) => { createCalls.push(cwd); return `forge/run-${runId}` }
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        const wsConfig = makeWsConfig(ws, { api: 'main', web: 'main' })
+        registerRun2({
+          manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [],
+          createTempBranch: stubCreate,
+          checkClean: async (cwd) => !cwd.endsWith('web'),
+        })
+        const launchStart = handlers.get(CH.run2LaunchStart)!
+        await expect(launchStart({}, {
+          workspacePath: ws, workflowId: 'wf1',
+          projects: [{ name: 'api', provider: 'x', model: 'm' }, { name: 'web', provider: 'x', model: 'm' }],
+          supplement: '', seed: '',
+        })).rejects.toThrow(/web/)
+        expect(createCalls).toEqual([]) // no branch created for EITHER project
+        expect(manager.isActive(ws)).toBe(false)
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
 
@@ -263,6 +289,7 @@ describe('registerRun2', () => {
           manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [],
           createTempBranch: async (cwd, _base, runId) => `forge/run-${runId}`,
           discardTempBranch: async (cwd, target) => { discardCalls.push({ cwd, target }) },
+          checkClean: async () => true,
         })
         const launchStart = handlers.get(CH.run2LaunchStart)!
         const result = await launchStart({}, {
@@ -296,7 +323,7 @@ describe('registerRun2', () => {
         const handlers = new Map<string, (...a: any[]) => any>()
         const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
         const wsConfig = makeWsConfig(ws, { api: 'main', web: 'main' })
-        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: failingCreate, discardTempBranch: stubRollback })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: failingCreate, discardTempBranch: stubRollback, checkClean: async () => true })
         const launchStart = handlers.get(CH.run2LaunchStart)!
         await expect(launchStart({}, {
           workspacePath: ws, workflowId: 'wf1',
@@ -340,7 +367,7 @@ describe('registerRun2', () => {
           projects: [{ repoId: 'api', name: 'api', branch: 'main' }] as any,
           status: 'idle', plugins: [], stepPlugins: [],
         } as any
-        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: stubCreate })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: stubCreate, checkClean: async () => true })
         const launchStart = handlers.get(CH.run2LaunchStart)!
         // First launch-start: goes through (run #1 becomes active and never finishes, per neverDoneProvider).
         const first = await launchStart({}, {

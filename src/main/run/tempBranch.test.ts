@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch } from './tempBranch'
+import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch } from './tempBranch'
 
 describe('tempBranch', () => {
   it('分支名稳定', () => {
@@ -108,5 +108,76 @@ describe('tempBranch', () => {
     await mergeTempBranch('/repo2', 'main', 'a', git)
     await discardTempBranch('/repo3', 'main', 'a', git)
     expect(cwds).toEqual(['/repo1', '/repo2', '/repo2', '/repo2', '/repo2', '/repo2', '/repo3', '/repo3', '/repo3'])
+  })
+
+  describe('isCleanTree (Finding 3)', () => {
+    it('true 当 git status --porcelain 输出为空', async () => {
+      const git = async () => ''
+      expect(await isCleanTree('/repo', git)).toBe(true)
+    })
+
+    it('false 当有未跟踪新文件或未提交改动', async () => {
+      const git = async () => '?? new.txt\n'
+      expect(await isCleanTree('/repo', git)).toBe(false)
+    })
+
+    it('把 cwd 传给 git runner', async () => {
+      const cwds: string[] = []
+      const git = async (cwd: string) => { cwds.push(cwd); return '' }
+      await isCleanTree('/repo', git)
+      expect(cwds).toEqual(['/repo'])
+    })
+  })
+
+  describe('parkTempBranch (Finding 4 — abort PARKS instead of discards)', () => {
+    it('提交 temp 分支上的未提交改动，再 checkout target — 不删除/不 clean temp 分支', async () => {
+      const calls: string[][] = []
+      const git = async (_cwd: string, args: string[]) => {
+        calls.push(args)
+        if (args[0] === 'status' && args[1] === '--porcelain') return 'A  new.txt\n M existing.txt\n'
+        return ''
+      }
+      await parkTempBranch('/repo', 'main', 'abc', git)
+      expect(calls).toEqual([
+        ['add', '-A'],
+        ['status', '--porcelain'],
+        ['commit', '-m', 'forge: run abc (aborted)'],
+        ['checkout', 'main'],
+      ])
+    })
+
+    it('temp 分支干净(status 无输出)时跳过 commit，直接 checkout target', async () => {
+      const calls: string[][] = []
+      const git = async (_cwd: string, args: string[]) => {
+        calls.push(args)
+        if (args[0] === 'status' && args[1] === '--porcelain') return ''
+        return ''
+      }
+      await parkTempBranch('/repo', 'main', 'abc', git)
+      expect(calls).toEqual([
+        ['add', '-A'],
+        ['status', '--porcelain'],
+        ['checkout', 'main'],
+      ])
+    })
+
+    it('绝不调用 branch -D 或 clean -fd — 温度分支保留，工作可恢复', async () => {
+      const calls: string[][] = []
+      const git = async (_cwd: string, args: string[]) => {
+        calls.push(args)
+        if (args[0] === 'status' && args[1] === '--porcelain') return 'A  new.txt\n'
+        return ''
+      }
+      await parkTempBranch('/repo', 'main', 'abc', git)
+      expect(calls.some((c) => c[0] === 'branch')).toBe(false)
+      expect(calls.some((c) => c[0] === 'clean')).toBe(false)
+    })
+
+    it('把 cwd 传给 git runner', async () => {
+      const cwds: string[] = []
+      const git = async (cwd: string) => { cwds.push(cwd); return '' }
+      await parkTempBranch('/repo', 'main', 'abc', git)
+      expect(cwds).toEqual(['/repo', '/repo', '/repo'])
+    })
   })
 })

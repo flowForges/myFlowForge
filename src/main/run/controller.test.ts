@@ -820,16 +820,18 @@ describe('RunController', () => {
       expect(final.status).toBe('ok')
     })
 
-    it('I1: mid-run abort NEVER merges but DOES discard every participating project\'s temp branch (target left clean)', async () => {
+    it('Finding 4: mid-run abort NEVER merges or discards but PARKS every participating project\'s temp branch (target left clean, temp branch kept)', async () => {
       const store = new RunStore(ws, 'r1')
       const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
       const mergeCalls: string[] = []
-      const discardCalls: Array<{ cwd: string; target: string; runId: string }> = []
+      const discardCalls: string[] = []
+      const parkCalls: Array<{ cwd: string; target: string; runId: string }> = []
       const c = new RunController(plan2, {
         providers: { x: askingProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
         projectTargets: { a: 'main', b: 'main' },
         mergeTempBranch: async (cwd) => { mergeCalls.push(cwd) },
-        discardTempBranch: async (cwd, target, runId) => { discardCalls.push({ cwd, target, runId }) },
+        discardTempBranch: async (cwd) => { discardCalls.push(cwd) },
+        parkTempBranch: async (cwd, target, runId) => { parkCalls.push({ cwd, target, runId }) },
       })
       const authIds: string[] = []
       c.onEvent((e) => {
@@ -843,21 +845,24 @@ describe('RunController', () => {
       ])
       expect(final.status).toBe('failed')
       expect(mergeCalls).toEqual([])
-      expect(discardCalls).toEqual([
+      expect(discardCalls).toEqual([]) // abort must not delete the temp branch — that's what discard does
+      expect(parkCalls).toEqual([
         { cwd: '/ws/a', target: 'main', runId: 'r1' },
         { cwd: '/ws/b', target: 'main', runId: 'r1' },
       ])
     })
 
-    it('I1: abort() while parked at the finalize gate (no live lane) never merges but discards every project (target left clean)', async () => {
+    it('Finding 4: abort() while parked at the finalize gate (no live lane) never merges/discards but parks every project (target left clean, temp branch kept)', async () => {
       const store = new RunStore(ws, 'r1')
       const mergeCalls: string[] = []
-      const discardCalls: Array<{ cwd: string; target: string; runId: string }> = []
+      const discardCalls: string[] = []
+      const parkCalls: Array<{ cwd: string; target: string; runId: string }> = []
       const c = new RunController(plan, {
         providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
         projectTargets: { a: 'main', b: 'main' },
         mergeTempBranch: async (cwd) => { mergeCalls.push(cwd) },
-        discardTempBranch: async (cwd, target, runId) => { discardCalls.push({ cwd, target, runId }) },
+        discardTempBranch: async (cwd) => { discardCalls.push(cwd) },
+        parkTempBranch: async (cwd, target, runId) => { parkCalls.push({ cwd, target, runId }) },
       })
       c.onEvent((e) => {
         if (e.kind === 'gate' && !(e as any).finalize) c.resolveGate(e.id, { type: 'advance' })
@@ -869,19 +874,20 @@ describe('RunController', () => {
       ])
       expect(final.status).toBe('failed')
       expect(mergeCalls).toEqual([])
-      expect(discardCalls).toEqual([
+      expect(discardCalls).toEqual([])
+      expect(parkCalls).toEqual([
         { cwd: '/ws/a', target: 'main', runId: 'r1' },
         { cwd: '/ws/b', target: 'main', runId: 'r1' },
       ])
     })
 
-    it('I1: mid-run abort with NO projectTargets configured never calls discard (nothing to clean up)', async () => {
+    it('I1: mid-run abort with NO projectTargets configured never calls park (nothing to clean up)', async () => {
       const store = new RunStore(ws, 'r1')
       const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
-      const discardCalls: string[] = []
+      const parkCalls: string[] = []
       const c = new RunController(plan2, {
         providers: { x: askingProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
-        discardTempBranch: async (cwd) => { discardCalls.push(cwd) },
+        parkTempBranch: async (cwd) => { parkCalls.push(cwd) },
       })
       const authIds: string[] = []
       c.onEvent((e) => {
@@ -894,18 +900,18 @@ describe('RunController', () => {
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock')), 2000)),
       ])
       expect(final.status).toBe('failed')
-      expect(discardCalls).toEqual([])
+      expect(parkCalls).toEqual([])
     })
 
-    it('I1: abort cleanup is best-effort — a discard failure for one project does not crash the abort', async () => {
+    it('Finding 4: abort cleanup is best-effort — a park failure for one project does not crash the abort', async () => {
       const store = new RunStore(ws, 'r1')
       const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
-      const discardCalls: string[] = []
+      const parkCalls: string[] = []
       const c = new RunController(plan2, {
         providers: { x: askingProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
         projectTargets: { a: 'main', b: 'main' },
-        discardTempBranch: async (cwd) => {
-          discardCalls.push(cwd)
+        parkTempBranch: async (cwd) => {
+          parkCalls.push(cwd)
           if (cwd === '/ws/a') throw new Error('branch already gone')
         },
       })
@@ -919,9 +925,9 @@ describe('RunController', () => {
         c.start(),
         new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock')), 2000)),
       ])
-      // Never rejects/throws despite project "a"'s discard failing — best-effort per abortCleanup's doc.
+      // Never rejects/throws despite project "a"'s park failing — best-effort per abortCleanup's doc.
       expect(final.status).toBe('failed')
-      expect(discardCalls).toEqual(['/ws/a', '/ws/b']) // still attempted for BOTH projects
+      expect(parkCalls).toEqual(['/ws/a', '/ws/b']) // still attempted for BOTH projects
     })
 
     it('a merge failure for one project surfaces a readable per-project error — start() rejects rather than silently dropping it', async () => {
