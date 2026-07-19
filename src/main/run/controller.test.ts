@@ -738,4 +738,143 @@ describe('RunController', () => {
       expect(final.inbox).toEqual([]) // nothing lingers at all
     })
   })
+
+  describe('P4-3: finalize gate (收尾确认) — merges or discards the run temp branch', () => {
+    it('no projectTargets configured: run completes exactly as before, no finalize gate appears', async () => {
+      const store = new RunStore(ws, 'r1')
+      const c = new RunController(plan, { providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      const events: RunEvent[] = []
+      c.onEvent((e) => { events.push(e); if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(events.some((e) => e.kind === 'gate' && (e as any).finalize)).toBe(false)
+    })
+
+    it('run completion holds at a finalize gate; 合并并完成 calls mergeTempBranch for every participating project', async () => {
+      const store = new RunStore(ws, 'r1')
+      const mergeCalls: Array<{ cwd: string; target: string; runId: string }> = []
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'develop-branch' },
+        mergeTempBranch: async (cwd, target, runId) => { mergeCalls.push({ cwd, target, runId }) },
+      })
+      const events: RunEvent[] = []
+      c.onEvent((e) => {
+        events.push(e)
+        if (e.kind === 'gate') c.resolveGate(e.id, (e as any).finalize ? { type: 'merge' } : { type: 'advance' })
+      })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      const finalizeEvents = events.filter((e) => e.kind === 'gate' && (e as any).finalize)
+      expect(finalizeEvents).toHaveLength(1)
+      expect(finalizeEvents[0]).toMatchObject({ body: '全部完成，合并到目标分支？' })
+      expect(mergeCalls).toEqual([
+        { cwd: '/ws/a', target: 'main', runId: 'r1' },
+        { cwd: '/ws/b', target: 'develop-branch', runId: 'r1' },
+      ])
+    })
+
+    it('丢弃本次 calls discardTempBranch for every participating project instead of merging', async () => {
+      const store = new RunStore(ws, 'r1')
+      const mergeCalls: string[] = []
+      const discardCalls: Array<{ cwd: string; target: string; runId: string }> = []
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd) => { mergeCalls.push(cwd) },
+        discardTempBranch: async (cwd, target, runId) => { discardCalls.push({ cwd, target, runId }) },
+      })
+      c.onEvent((e) => {
+        if (e.kind === 'gate') c.resolveGate(e.id, (e as any).finalize ? { type: 'discard' } : { type: 'advance' })
+      })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(mergeCalls).toEqual([]) // discard path never touches merge
+      expect(discardCalls).toEqual([
+        { cwd: '/ws/a', target: 'main', runId: 'r1' },
+        { cwd: '/ws/b', target: 'main', runId: 'r1' },
+      ])
+    })
+
+    it('holds the run at the finalize gate until resolved — status stays "awaiting", never auto-completes', async () => {
+      const store = new RunStore(ws, 'r1')
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        discardTempBranch: async () => {},
+      })
+      let finalizeId = ''
+      c.onEvent((e) => {
+        if (e.kind === 'gate' && !(e as any).finalize) c.resolveGate(e.id, { type: 'advance' })
+        if (e.kind === 'gate' && (e as any).finalize) finalizeId = e.id // deliberately left unresolved for now
+      })
+      const startPromise = c.start()
+      await vi.waitFor(() => expect(finalizeId).not.toBe(''))
+      expect(c.state.status).toBe('awaiting')
+
+      c.resolveGate(finalizeId, { type: 'discard' })
+      const final = await Promise.race([
+        startPromise,
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: finalize gate never resolved')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+    })
+
+    it('mid-run abort does NOT merge or discard — the temp branch persists, only the finalize gate acts on it', async () => {
+      const store = new RunStore(ws, 'r1')
+      const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const mergeCalls: string[] = []
+      const discardCalls: string[] = []
+      const c = new RunController(plan2, {
+        providers: { x: askingProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd) => { mergeCalls.push(cwd) },
+        discardTempBranch: async (cwd) => { discardCalls.push(cwd) },
+      })
+      const authIds: string[] = []
+      c.onEvent((e) => {
+        if (e.kind !== 'auth') return
+        authIds.push(e.id)
+        if (authIds.length === 2) c.resolveLane(authIds[0], { type: 'abort' })
+      })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock')), 2000)),
+      ])
+      expect(final.status).toBe('failed')
+      expect(mergeCalls).toEqual([])
+      expect(discardCalls).toEqual([])
+    })
+
+    it('abort() while parked at the finalize gate (no live lane) does not merge/discard either', async () => {
+      const store = new RunStore(ws, 'r1')
+      const mergeCalls: string[] = []
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd) => { mergeCalls.push(cwd) },
+      })
+      c.onEvent((e) => {
+        if (e.kind === 'gate' && !(e as any).finalize) c.resolveGate(e.id, { type: 'advance' })
+        if (e.kind === 'gate' && (e as any).finalize) c.abort()
+      })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: abort at the finalize gate did not settle')), 2000)),
+      ])
+      expect(final.status).toBe('failed')
+      expect(mergeCalls).toEqual([])
+    })
+
+    it('a merge failure for one project surfaces a readable per-project error — start() rejects rather than silently dropping it', async () => {
+      const store = new RunStore(ws, 'r1')
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd) => { if (cwd === '/ws/b') throw new Error('CONFLICT (content): app.ts') },
+      })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, (e as any).finalize ? { type: 'merge' } : { type: 'advance' }) })
+      await expect(c.start()).rejects.toThrow(/b.*CONFLICT/)
+    })
+  })
 })

@@ -28,6 +28,10 @@ export interface FrozenRunCard {
   decision: string
   at: number
   ts: number
+  // P4-3: mirrors GateEvent.finalize (events.ts) — set when this frozen record is the run-completion
+  // "收尾确认" gate rather than an ordinary per-stage gate, so RunEventCard's frozen branch can still
+  // label it "收尾确认" instead of "阶段评审" after the live event is gone.
+  finalize?: boolean
 }
 
 export interface RunCardEntry {

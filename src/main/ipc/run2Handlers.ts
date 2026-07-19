@@ -28,9 +28,15 @@ export function registerRun2(deps: {
   // P4-2: injectable so tests can stub real git out of run2:launch-start (production omits both —
   // createRunTempBranches falls back to the real tempBranch.ts functions on its own).
   createTempBranch?: (cwd: string, base: string, runId: string) => Promise<string>
+  // Reused for TWO purposes: (1) createRunTempBranches' rollback-on-create-failure (P4-2, unchanged),
+  // and (2) the P4-3 finalize gate's 丢弃本次 action (see run2:launch-start below) — both are exactly
+  // "checkout target, force-delete the temp branch", so one injected function covers both call sites.
   discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  // P4-3: injectable so tests can stub real git out of the finalize gate's 合并并完成 action.
+  // Production omits it — RunController falls back to the real tempBranch.ts mergeTempBranch.
+  mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
 }) {
-  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch } = deps
+  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch, mergeTempBranch } = deps
   onInvoke(CH.run2Start, (_e, p: { workspacePath: string; runId: string; stages: StageSpec[]; projects: DevelopProject[] }) =>
     manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan: planFromStages(p.runId, p.stages), projects: p.projects }))
   onInvoke(CH.run2ResolveGate, (_e, p: { workspacePath: string; eventId: string; decision: GateDecision }) => manager.resolveGate(p.workspacePath, p.eventId, p.decision))
@@ -101,7 +107,17 @@ export function registerRun2(deps: {
     // `plan.tempBranch`, never directly on the target. Throws (aborting the start, run never launches)
     // on any project's checkout failure — see createRunTempBranches for the rollback/error contract.
     await createRunTempBranches(ws, projects, plan.runId, createTempBranch, discardTempBranch)
-    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects })
+    // P4-3: same per-project target-branch lookup createRunTempBranches just used to check each
+    // project out — threaded through to the controller so its run-completion finalize gate knows
+    // what to merge/discard back onto (see RunControllerDeps.projectTargets doc in controller.ts).
+    // createRunTempBranches already guarantees every entry in `projects` has a `ws.projects[].branch`
+    // (it throws above otherwise), so this lookup is total — never silently drops a project.
+    const projectTargets: Record<string, string> = {}
+    for (const project of projects) {
+      const target = ws.projects.find((wp) => wp.name === project.name)?.branch
+      if (target) projectTargets[project.name] = target
+    }
+    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, projectTargets, mergeTempBranch, discardTempBranch })
   })
 
   // P5-UI Task 2: on-demand read of a changed file's content, for the RunPanel file viewer.

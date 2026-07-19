@@ -4,6 +4,15 @@ export type GateDecision =
   | { type: 'advance' }
   | { type: 'redo'; feedback?: string }
   | { type: 'jumpBack'; targetKey: string; feedback?: string }
+  // P4-3: resolves the run-completion "收尾确认" gate (a GateEvent with `finalize: true` — see
+  // events.ts). `merge` → mergeTempBranch every participating project onto its target branch;
+  // `discard` → discardTempBranch instead. Never routed through applyGateDecision's per-stage
+  // machine transform (the machine is already all-`done` by the time this gate appears) — the
+  // controller dispatches these directly in runFinalizeGate(). Reusing GateDecision (rather than a
+  // separate decision type) means the existing resolveGate/gateR/IPC/renderer plumbing needs no
+  // new resolve path.
+  | { type: 'merge' }
+  | { type: 'discard' }
 
 export type LaneDecision =
   | { type: 'authorize' }
@@ -32,5 +41,10 @@ export function applyGateDecision(s: MachineState, d: GateDecision): MachineStat
     case 'advance': return advance(s)
     case 'redo': return redo(s)
     case 'jumpBack': return jumpBack(s, d.targetKey)
+    // 'merge'/'discard' resolve the finalize gate (see GateDecision doc above) — the controller
+    // never calls applyGateDecision for these (there's no stage left to transform), so these are
+    // unreachable no-ops kept only so this switch stays exhaustive.
+    case 'merge': return s
+    case 'discard': return s
   }
 }

@@ -21,6 +21,12 @@ export interface Run2StartOpts {
   // Optional (Task 1 queue): who queued this run, for future display purposes. Not read internally —
   // purely additive passthrough so callers can attach it without affecting behavior.
   sessionId?: string
+  // P4-3: threaded straight through into RunControllerDeps — see its doc in controller.ts. Only
+  // run2:launch-start (the one channel that actually checks projects out onto a real temp branch,
+  // P4-2) populates these; every other caller omits them and the finalize gate stays off.
+  projectTargets?: Record<string, string>
+  mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
 }
 export interface Run2ManagerDeps {
   providers: Record<string, AgentProvider>
@@ -101,6 +107,9 @@ export class Run2Manager {
       providers: this.deps.providers, store, env: this.deps.env,
       projects: opts.projects, retries: this.deps.retries, task: opts.task,
       permissionMode: opts.permissionMode ?? 'full',
+      projectTargets: opts.projectTargets,
+      mergeTempBranch: opts.mergeTempBranch,
+      discardTempBranch: opts.discardTempBranch,
     })
     controller.onEvent((e) => this.deps.emit.event(opts.workspacePath, e))
     controller.onUpdate((s) => this.deps.emit.update(opts.workspacePath, s))

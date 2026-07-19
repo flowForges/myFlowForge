@@ -114,6 +114,35 @@ describe('RunEventCard', () => {
     expect(onLane).toHaveBeenCalledWith('q1', { type: 'answer', value: 'src/bar' })
   })
 
+  it('finalize gate: renders 收尾确认 body + 合并并完成/丢弃本次, both route through onGate with merge/discard', () => {
+    const onGate = vi.fn()
+    const event: RunEvent = { id: 'fz1', kind: 'gate', stageKey: '__finalize__', body: '全部完成，合并到目标分支？', finalize: true }
+    render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
+
+    expect(document.querySelector('.msg-req')?.classList.contains('k-gate')).toBe(true)
+    expect(screen.getByText('收尾确认')).toBeInTheDocument()
+    expect(screen.getByText('全部完成，合并到目标分支？')).toBeInTheDocument()
+    // the ordinary gate's actions must NOT be present on a finalize card
+    expect(screen.queryByText('通过')).not.toBeInTheDocument()
+    expect(screen.queryByText('打回本阶段')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('合并并完成'))
+    expect(onGate).toHaveBeenCalledWith('fz1', { type: 'merge' })
+    fireEvent.click(screen.getByText('丢弃本次'))
+    expect(onGate).toHaveBeenCalledWith('fz1', { type: 'discard' })
+  })
+
+  it('frozen finalize gate: labels 收尾确认 (not 阶段评审) and shows the decision, no buttons', () => {
+    const frozen: FrozenRunCard = {
+      id: 'fz1', kind: 'gate', stageKey: '__finalize__', title: '全部完成，合并到目标分支？',
+      decision: '合并并完成', at: 1720000000000, ts: 1, finalize: true,
+    }
+    const { container } = render(<RunEventCard frozen={frozen} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.getByText('收尾确认')).toBeInTheDocument()
+    expect(screen.getByText('决定：合并并完成')).toBeInTheDocument()
+    expect(container.querySelectorAll('button')).toHaveLength(0)
+  })
+
   it('frozen: renders decision record with NO buttons', () => {
     const frozen: FrozenRunCard = {
       id: 'g1', kind: 'gate', stageKey: 'design', title: '技术方案设计完成',
