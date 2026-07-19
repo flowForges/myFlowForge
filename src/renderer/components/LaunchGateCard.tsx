@@ -1,8 +1,11 @@
 import { useState } from 'react'
-// Reuses the wfo-tab / wfo-proj / wfo-model chip classes (tabs + per-project checkbox + model chip)
-// straight from the launch-config region of WorkflowOverlay.tsx — port only, no import of that
-// component (it is slated for deletion once run2's chat-inline cards replace it, see P1 plan).
+// Reuses the wfo-tab / wfo-proj / wfo-model / wfo-sec(-h) / wfo-goal classes — and their exact
+// wrapper markup — straight from the launch-config region of WorkflowOverlay.tsx — port only, no
+// import of that component (it is slated for deletion once run2's chat-inline cards replace it,
+// see P1 plan). launchGateCard.css holds only the handful of rules with no wfo-* equivalent
+// (the "原始需求" seed label and the frozen record's decided-at timestamp).
 import './workflowOverlay.css'
+import './launchGateCard.css'
 
 // Task P1-2: LaunchGateCard — in-chat launch gate for a run2 workflow. 活态(此文件的主渲染分支)
 // shows ①seed(只读) ②workflow tabs ③per-project checkbox+model chip ④supplement textarea+确认/取消;
@@ -81,13 +84,13 @@ export function LaunchGateCard({ config, frozen, onConfirm, onCancel }: LaunchGa
 
   if (frozen) {
     return (
-      <div className="msg-req k-confirm lg-gate done" data-req="launch-gate">
+      <div className="msg-req k-confirm done" data-req="launch-gate">
         <div className="req-head">
           <span className="req-kind">工作流已启动</span>
         </div>
         <div className="req-body">
-          <div className="lg-seed-label">原始需求</div>
-          <div className="req-sub lg-seed">{config.seed}</div>
+          <div className="wfo-sec-h">原始需求</div>
+          <div className="req-sub">{config.seed}</div>
           <div className="req-title">{frozen.workflowName}</div>
           <div className="req-sub">涉及项目：{frozen.projects.length ? frozen.projects.join('、') : '（无）'}</div>
           {frozen.supplement ? <div className="req-sub">补充：{frozen.supplement}</div> : null}
@@ -110,15 +113,15 @@ export function LaunchGateCard({ config, frozen, onConfirm, onCancel }: LaunchGa
   const selectedCount = projects.filter((p) => p.selected).length
 
   return (
-    <div className="msg-req k-confirm lg-gate" data-req="launch-gate">
+    <div className="msg-req k-confirm" data-req="launch-gate">
       <div className="req-head">
         <span className="req-kind">开启工作流</span>
       </div>
       <div className="req-body">
-        <div className="lg-seed-label">原始需求</div>
-        <div className="req-sub lg-seed">{config.seed}</div>
+        <div className="wfo-sec-h">原始需求</div>
+        <div className="req-sub">{config.seed}</div>
 
-        <div className="wfo-tabs lg-wf-tabs">
+        <div className="wfo-tabs">
           {config.workflows.map((w) => (
             <button
               key={w.id}
@@ -126,14 +129,14 @@ export function LaunchGateCard({ config, frozen, onConfirm, onCancel }: LaunchGa
               className={`wfo-tab${w.id === selectedWorkflowId ? ' on' : ''}`}
               onClick={() => setSelectedWorkflowId(w.id)}
             >
-              <span className="lg-wf-name">{w.name}</span>
+              {w.name}
               <span className="n">{w.stageCount}</span>
             </button>
           ))}
         </div>
 
-        <div className="lg-projects">
-          <div className="lg-projects-label">
+        <div className="wfo-sec">
+          <div className="wfo-sec-h">
             涉及代码项目
             <span className="c">已选 {selectedCount} / {projects.length}</span>
           </div>
@@ -156,13 +159,14 @@ export function LaunchGateCard({ config, frozen, onConfirm, onCancel }: LaunchGa
           ))}
         </div>
 
-        <textarea
-          className="lg-supplement"
-          rows={2}
-          placeholder="补充说明…（可选）"
-          value={supplement}
-          onChange={(e) => setSupplement(e.target.value)}
-        />
+        <div className="wfo-goal">
+          <textarea
+            rows={2}
+            placeholder="补充说明…（可选）"
+            value={supplement}
+            onChange={(e) => setSupplement(e.target.value)}
+          />
+        </div>
 
         <div className="req-actions">
           <button className="req-ok" onClick={confirm}>确认</button>

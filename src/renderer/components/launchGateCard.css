@@ -1,0 +1,7 @@
+/* LaunchGateCard — bits with no wfo-* equivalent in workflowOverlay.css (that stylesheet is shared
+   and still backs everything else this card renders: .wfo-sec(-h), .wfo-tabs/.wfo-tab, .wfo-proj,
+   .wfo-model, .wfo-goal). Keep this file to just the genuinely new pieces below. */
+
+/* Frozen record's timestamp caption, under the "涉及项目/补充" lines — WorkflowOverlay has no
+   equivalent (it never renders a decided-at record), so this is the one truly new bit. */
+.lg-decided-at { font-size: 11px; color: var(--faint); margin-top: 8px; }
