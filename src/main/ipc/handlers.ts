@@ -904,6 +904,24 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     appendMessage(a.workspacePath, a.sessionId, note)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
   })
+  // P1-5: persist a confirmed launch-gate's frozen record so it survives reload/session-switch.
+  // Reuses the exact appendMessage + broadcast(chatEvent 'done') mechanism every other persisted chat
+  // card uses (see chatSwitchSummary just above, and subagents in chatService.ts) — the record rides on
+  // a synthetic system ChatMessage (blank text, `launchGate` field carries the record) with the SAME id
+  // as the renderer's in-chat LaunchGateCard, so when this broadcast round-trips back into chat.messages
+  // WorkspaceView can dedupe it against its own local (already-frozen) entry by id.
+  ipcMain.handle(CH.chatAppendLaunchGate, (_e, a: {
+    workspacePath: string; sessionId: string; id: string; ts: string
+    workflowName: string; projects: string[]; supplement: string; decidedAt: number; seed: string
+  }) => {
+    const note: ChatMessage = {
+      id: a.id, who: 'ai', text: '', ts: a.ts,
+      launchGate: { workflowName: a.workflowName, projects: a.projects, supplement: a.supplement, decidedAt: a.decidedAt, seed: a.seed },
+    }
+    appendMessage(a.workspacePath, a.sessionId, note)
+    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
+    return note
+  })
   // Fold any in-flight (still-streaming) assistant message into the returned history so switching to the
   // home view / another session mid-stream and back restores the already-produced output (it isn't
   // persisted until the turn's terminal state).

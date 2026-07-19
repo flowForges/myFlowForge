@@ -5,3 +5,8 @@
 /* Frozen record's timestamp caption, under the "涉及项目/补充" lines — WorkflowOverlay has no
    equivalent (it never renders a decided-at record), so this is the one truly new bit. */
 .lg-decided-at { font-size: 11px; color: var(--faint); margin-top: 8px; }
+
+/* P1-3 follow-up fix: inline error when a confirm's run2.start rejects — card stays active (not
+   frozen) so the user can retry. Mirrors the (var(--err)) tone used elsewhere for run failures, e.g.
+   .run2-lane-error in workspace.css. */
+.lg-error { font-size: 12px; color: var(--err); margin-top: 6px; }

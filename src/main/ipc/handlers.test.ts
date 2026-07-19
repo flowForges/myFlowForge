@@ -807,6 +807,36 @@ describe('registerIpc broadcast wiring', () => {
     // No assertion on broadcast — stop on idle queue is a silent no-op per ChatQueue.stop impl
   })
 
+  // P1-5: the frozen launch-gate record's persistence handler — reuses the exact appendMessage +
+  // broadcast(chatEvent 'done') mechanism every other persisted chat card uses (chatSwitchSummary,
+  // right above in handlers.ts), just carrying a `launchGate` field instead of real text.
+  it('chat:append-launch-gate persists a synthetic ChatMessage carrying `launchGate` and broadcasts it', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+    expect(handler(CH.chatAppendLaunchGate)).toBeTruthy()
+
+    const payload = {
+      workspacePath: '/ws/a', sessionId: 's1', id: 'lg-1', ts: '2026-07-19T00:00:03.000Z',
+      workflowName: '快速修复', projects: ['web', 'api'], supplement: '记得加测试', decidedAt: 1752883200000, seed: '我: 做个登录页',
+    }
+    const returned = await handler(CH.chatAppendLaunchGate)({}, payload)
+
+    const expectedNote = {
+      id: 'lg-1', who: 'ai', text: '', ts: '2026-07-19T00:00:03.000Z',
+      launchGate: { workflowName: '快速修复', projects: ['web', 'api'], supplement: '记得加测试', decidedAt: 1752883200000, seed: '我: 做个登录页' },
+    }
+    expect(appendMessageMock).toHaveBeenCalledWith('/ws/a', 's1', expectedNote)
+    expect(returned).toEqual(expectedNote)
+    const bcast = sent.find(([c, p]) => c === CH.chatEvent && (p as any).type === 'done')
+    expect(bcast).toBeTruthy()
+    expect((bcast![1] as any).message).toEqual(expectedNote)
+    expect((bcast![1] as any).workspacePath).toBe('/ws/a')
+    expect((bcast![1] as any).sessionId).toBe('s1')
+  })
+
   it('chat:repropose-workflow re-invokes proposeRun with the chosen workflowId (undefined for ad-hoc)', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any

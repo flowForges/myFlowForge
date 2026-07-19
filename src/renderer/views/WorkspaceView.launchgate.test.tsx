@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { WorkspaceView } from './WorkspaceView'
 import type { EngineApi } from '../state/useEngine'
 import type { ProviderInfo, ChatMessage } from '@shared/types'
@@ -43,9 +43,14 @@ const launchStartMock = vi.fn(async (_cfg: {
   projects: { name: string; provider: string; model: string }[]
   supplement: string; seed: string
 }) => ({}))
+const chatAppendLaunchGateMock = vi.fn(async (_a: {
+  workspacePath: string; sessionId: string; id: string; ts: string
+  workflowName: string; projects: string[]; supplement: string; decidedAt: number; seed: string
+}) => ({}))
 
 const forgeBase = {
   chatHistory: vi.fn(async () => conversation),
+  chatAppendLaunchGate: chatAppendLaunchGateMock,
   sendChat: vi.fn(async () => ({})), openFiles: async () => [], savePaste: vi.fn(),
   onChatEvent: () => () => {}, onChatQueueEvent: () => () => {},
   sessionList: async () => ({ sessions: [{ id: 's-1', title: '新会话', mode: 'chat', createdAt: 0 }], activeSessionId: 's-1' }),
@@ -78,6 +83,8 @@ const forgeBase = {
 beforeEach(() => {
   launchInfoMock.mockClear()
   launchStartMock.mockClear()
+  launchStartMock.mockImplementation(async () => ({}))
+  chatAppendLaunchGateMock.mockClear()
   ;(window as any).forge = { ...forgeBase }
   ;(window as any).confirm = vi.fn(() => true)
 })
@@ -130,5 +137,93 @@ describe('WorkspaceView: 启动门在对话时间线内(触发/凝固)', () => {
     // Card freezes: 确认 button disappears, a read-only "已启动" record replaces it.
     await waitFor(() => expect(screen.queryByText('确认')).toBeNull())
     expect(screen.getByText('工作流已启动')).toBeInTheDocument()
+  })
+})
+
+// Task P1-5: the frozen record must persist into the session (survive reload/session-switch) and the
+// P1-3 follow-up fix — freeze only after run2.start actually resolves, not optimistically before it.
+describe('WorkspaceView: 启动门凝固记录持久化 + 仅在 run2.start 成功后才凝固', () => {
+  it('确认成功后调用 chatAppendLaunchGate,携带 workflowName/projects/supplement/decidedAt/seed', async () => {
+    await openComposerAndPickBuiltin()
+    await waitFor(() => expect(screen.getByText('确认')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('确认'))
+
+    await waitFor(() => expect(chatAppendLaunchGateMock).toHaveBeenCalledTimes(1))
+    const call = chatAppendLaunchGateMock.mock.calls[0][0]
+    expect(call.workspacePath).toBe('/ws')
+    expect(call.sessionId).toBe('s-1')
+    expect(typeof call.id).toBe('string')
+    expect(typeof call.ts).toBe('string')
+    expect(call.workflowName).toBe('快速修复')
+    expect(call.projects).toEqual(['web', 'api'])
+    expect(call.supplement).toBe('')
+    expect(typeof call.decidedAt).toBe('number')
+    expect(call.seed).toBe('我: 做个登录页\n\nAI: 好的,我先看看现有页面结构')
+
+    // Persisted with the same id as the (now frozen) in-chat card.
+    await waitFor(() => expect(screen.getByText('工作流已启动')).toBeInTheDocument())
+  })
+
+  it('重载会话(chatHistory 里带持久化的 launchGate 记录)后凝固卡片依旧展示,内容一致', async () => {
+    const persisted: ChatMessage[] = [
+      ...conversation,
+      {
+        id: 'lg-persisted-1', who: 'ai', text: '', ts: '2026-07-19T00:00:03.000Z',
+        launchGate: { workflowName: '快速修复', projects: ['web'], supplement: '记得加测试', decidedAt: 1752883200000, seed: '我: 做个登录页' },
+      } as ChatMessage,
+    ]
+    ;(window as any).forge = { ...forgeBase, chatHistory: vi.fn(async () => persisted) }
+
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+
+    // Frozen record renders straight from the reloaded session history — no confirm click needed, and
+    // no plain-text bubble for the underlying synthetic marker message (blank text, so nothing to show
+    // besides the reconstructed card). Scoped to the launch-gate card itself: "快速修复" also appears
+    // elsewhere in the workspace chrome (e.g. the workflow glance panel), so a bare screen query would
+    // match more than one element.
+    await waitFor(() => expect(screen.getByText('工作流已启动')).toBeInTheDocument())
+    const card = document.querySelector('[data-req="launch-gate"]') as HTMLElement
+    expect(card).toBeTruthy()
+    expect(within(card).getByText('快速修复')).toBeInTheDocument()
+    expect(within(card).getByText('涉及项目：web')).toBeInTheDocument()
+    expect(within(card).getByText('补充：记得加测试')).toBeInTheDocument()
+    // Only the two real conversation bubbles show as plain messages — the marker message doesn't.
+    expect(screen.getByText('做个登录页')).toBeInTheDocument()
+    expect(screen.getByText('好的,我先看看现有页面结构')).toBeInTheDocument()
+  })
+
+  it('run2.launchStart 被拒绝时不凝固、不持久化,卡片保持活态并展示错误', async () => {
+    launchStartMock.mockImplementationOnce(async () => { throw new Error('工作流不存在') })
+    await openComposerAndPickBuiltin()
+    await waitFor(() => expect(screen.getByText('确认')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('确认'))
+
+    await waitFor(() => expect(launchStartMock).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.getByText('工作流不存在')).toBeInTheDocument())
+
+    // Still active: 确认 button remains, no frozen "已启动" record, nothing persisted.
+    expect(screen.getByText('确认')).toBeInTheDocument()
+    expect(screen.queryByText('工作流已启动')).toBeNull()
+    expect(chatAppendLaunchGateMock).not.toHaveBeenCalled()
+  })
+
+  it('拒绝后重新确认(这次成功)则正常凝固', async () => {
+    launchStartMock.mockImplementationOnce(async () => { throw new Error('网络错误') })
+    await openComposerAndPickBuiltin()
+    await waitFor(() => expect(screen.getByText('确认')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('确认'))
+    await waitFor(() => expect(screen.getByText('网络错误')).toBeInTheDocument())
+
+    // Retry — the mock's default implementation (reset in beforeEach) resolves this time.
+    fireEvent.click(screen.getByText('确认'))
+
+    await waitFor(() => expect(launchStartMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByText('工作流已启动')).toBeInTheDocument())
+    expect(screen.queryByText('网络错误')).toBeNull()
+    expect(chatAppendLaunchGateMock).toHaveBeenCalledTimes(1)
   })
 })
