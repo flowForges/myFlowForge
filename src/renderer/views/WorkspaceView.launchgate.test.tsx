@@ -4,9 +4,9 @@ import { WorkspaceView } from './WorkspaceView'
 import type { EngineApi } from '../state/useEngine'
 import type { ProviderInfo, ChatMessage } from '@shared/types'
 
-// Task P1-3: the in-chat LaunchGateCard replaces the floating overlay as the "/开启工作流" trigger's
-// destination. Picking the built-in command (or a named workspace-workflow "/" entry) now inserts an
-// ACTIVE LaunchGateCard into the chat timeline instead of opening WorkflowOverlay via setRunView(true).
+// Task P1-3: the in-chat LaunchGateCard replaces the floating overlay (WorkflowOverlay, removed
+// entirely in P2-4) as the "/开启工作流" trigger's destination. Picking the built-in command (or a
+// named workspace-workflow "/" entry) inserts an ACTIVE LaunchGateCard into the chat timeline.
 // Confirming calls run2.launchStart with only the selected projects, then freezes the card in place.
 
 const providers: ProviderInfo[] = [

@@ -479,27 +479,6 @@
    RunPanel introduces new run2-* classes for its four regions.
    ============================================================ */
 
-/* ---- Task 1: reopen chip (chat column, only while a run is active but !runView) + back button
-   (run2-mode-body header) — replace the old always-visible chat|工作流运行 segmented toggle. ---- */
-.run2-reopen {
-  flex: 0 0 auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px;
-  margin: 12px 0 0 32px; height: 26px; padding: 0 12px; border-radius: 7px;
-  font-size: 12px; font-weight: 600; color: var(--on-accent); background: var(--accent); transition: .14s;
-}
-.run2-reopen:hover { filter: brightness(1.08); }
-.run2-back {
-  align-self: flex-start; height: 26px; padding: 0 10px; border-radius: 7px;
-  font-size: 12px; font-weight: 600; color: var(--muted); transition: .14s;
-}
-.run2-back:hover { color: var(--fg-2); background: var(--surface-2); }
-
-/* ---- run2 body — sibling of the chat column, shown only in 工作流运行 mode ---- */
-.run2-mode-body {
-  flex: 1; min-height: 0; overflow-y: auto; padding: 16px 32px 24px;
-  display: flex; flex-direction: column; gap: 14px;
-}
-.run2-mode-body .run-launcher { max-width: 760px; width: 100%; margin: 0 auto; }
-
 /* ---- RunPanel shell ---- */
 .run2-panel { display: flex; flex-direction: column; gap: 14px; max-width: 760px; width: 100%; margin: 0 auto; }
 .run2-panel.run2-empty {

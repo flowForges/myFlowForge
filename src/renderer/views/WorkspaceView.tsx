@@ -39,7 +39,6 @@ import { providerSupportsResume } from '@shared/nativeResumeProviders'
 import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
-import { WorkflowOverlay } from '../components/WorkflowOverlay'
 import { RunExecPanel } from '../components/RunExecPanel'
 import { LaunchGateCard } from '../components/LaunchGateCard'
 import type { LaunchGateConfig, LaunchGateFrozen } from '../components/LaunchGateCard'
@@ -48,8 +47,9 @@ import { buildConversationSeed } from './chat/launchSeed'
 // Re-exported for existing importers (WorkspaceView.pickWorkflow.test.tsx) — the single source of
 // truth for the implementation now lives in ./chat/launchSeed.ts (P1-1 extraction).
 export { buildConversationSeed }
-// NOTE: RunLauncher.tsx stays on disk (WF-A Task 5 replaces its mount point below with
-// WorkflowOverlay; WF-C deletes the file). No longer imported here.
+// NOTE: RunLauncher.tsx and WorkflowOverlay.tsx have both been retired (P2-4): launch is an in-chat
+// LaunchGateCard (P1), and a live run renders in the right-side 执行 tab via RunExecPanel (P2-1/2)
+// — the chat column stays mounted and visible for the whole lifetime of a run.
 
 function importedToChat(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
@@ -151,13 +151,6 @@ function Copyable({ text, className }: { text: string; className?: string }) {
 
 export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
-  // Task 1: the run view now follows the run2 controller's status lifecycle instead of a manual
-  // chat|run2 segmented toggle. Auto-opens while a run is 'running'/'awaiting' a gate decision;
-  // the user can always step back to chat ("返回对话") while the run keeps going in the background,
-  // and reopen it via a "查看运行中" chip. NOTE: deliberately NOT driven by `run2.state !== null` —
-  // the run2 manager retains `lastState` after completion, so `state` stays non-null forever after
-  // the first run; using it here would trap the workspace in the run view permanently.
-  const [runView, setRunView] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
   // 全局搜索(Cmd+Shift+F):App 每次触发就 +1 → 切到文件树 tab;同一信号继续透传给 FileTreePane 聚焦搜索框。
@@ -189,15 +182,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // P3-B additive: new run-controller-driven panel, unconditional hook call (rules-of-hooks) — its
   // state stays null/idle unless a run2 run is started, so it has no effect on chat-mode rendering.
   const run2 = useRun2(wsPath)
-  // Auto-open the run view whenever the controller starts running or is awaiting a gate decision.
-  // Intentionally does NOT fire on 'ok'/'failed' (terminal) so a finished run doesn't yank the user
-  // back in, and does not use `run2.state !== null` (see note above `runView`).
-  useEffect(() => {
-    const s = run2.state?.status
-    if (s === 'running' || s === 'awaiting') setRunView(true)
-  }, [run2.state?.status])
-  // P2-2: same "is a run2 run currently live" signal as the "查看运行中" reopen chip below — drives
-  // the right-inspector tab bar (执行/变更/文件树 while live, else the normal agents/changes/files set).
+  // P2-2/P2-4: "is a run2 run currently live" — drives the right-inspector tab bar (执行/变更/文件树
+  // while live, else the normal agents/changes/files set) and locks the composer (P2-3). The chat
+  // column itself is always mounted/visible now (P2-4 removed the floating run-mode overlay that
+  // used to replace it); a live run only ever shows in the right-side 执行 tab.
   const run2Live = run2.state?.status === 'running' || run2.state?.status === 'awaiting'
   // Default the inspector to the 执行 tab once per NEW run (keyed off runId, not status) so mid-run
   // status churn (running↔awaiting on gate resolutions) never fights a tab the user picked manually —
@@ -334,9 +322,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   )
   // P1-3: picking a workflow from "/" (built-in /开启工作流, called with `undefined`, or a named
   // workspace-workflow entry, called with its id) now inserts an ACTIVE LaunchGateCard into the chat
-  // timeline instead of opening the floating WorkflowOverlay via setRunView(true). Reuses the same
-  // run2:launch-info path WorkflowOverlay already calls (buildLaunchInfo server-side) for the
-  // workflow list + resolved project defaults — no separate data source invented here.
+  // timeline (the floating run-launcher overlay this replaced was removed entirely in P2-4). Reuses
+  // the same run2:launch-info path (buildLaunchInfo server-side) for the workflow list + resolved
+  // project defaults — no separate data source invented here.
   const onPickWorkflow = useCallback((workflowId?: string) => {
     if (!wsPath) return
     // P1-6: capture the session this gate belongs to right now (at trigger time), not once the async
@@ -742,17 +730,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
 
   return (
     <div className="view on" id="view-ws">
-      {/* 对话主列 */}
+      {/* 对话主列 — always mounted (P2-4 removed the floating run-mode overlay that used to replace
+          this column while a run was active; a live run now only renders in the right 执行 tab). */}
       <div className="chat" style={{ position: 'relative' }}>
-        {/* Task 1: reopen chip — only shown once the user has stepped back to chat ("返回对话")
-            while a run is still active (running or awaiting a gate decision); replaces the old
-            always-visible toggle's badge with an inbox-count badge on the chip itself. */}
-        {!runView && (run2.state?.status === 'running' || run2.state?.status === 'awaiting') && (
-          <button className="txt-btn run2-reopen" onClick={() => setRunView(true)}>
-            ⟳ 工作流运行中 · 查看{(run2.state?.inbox.length ?? 0) > 0 ? ` (${run2.state!.inbox.length})` : ''}
-          </button>
-        )}
-        {!runView && (<>
         <SessionTabs
           sessions={sessions.sessions}
           activeSessionId={sessions.activeSessionId}
@@ -1007,22 +987,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           }}
           onPaste={wsPath ? async (f) => window.forge.savePaste({ workspacePath: wsPath, name: f.name, dataBase64: f.dataBase64 }) : undefined}
         />
-        </>)}
-        {/* Task 1: new run-controller panel, additive sibling shown only while runView is active — the
-            chat column above stays fully intact (wrapped, not deleted) when !runView. */}
-        {runView && (
-          <div className="run2-mode-body">
-            <button className="txt-btn run2-back" onClick={() => setRunView(false)}>返回对话</button>
-            {wsPath && (
-              <WorkflowOverlay
-                workspacePath={wsPath}
-                initialSeed={buildConversationSeed(chat.messages)}
-                onClose={() => setRunView(false)}
-                run2={run2}
-              />
-            )}
-          </div>
-        )}
       </div>
 
       {/* 右侧检查器 resize handle — ALWAYS mounted (hidden via CSS when collapsed) so toggling the

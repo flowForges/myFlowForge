@@ -9,10 +9,9 @@ import type { RunControllerState } from '../../main/run/controller'
 // run is live (running/awaiting), and is defaulted-to the moment a new run starts. Chat mode (no
 // run2 state) keeps the existing 概览|变更|文件树 tab bar untouched.
 //
-// NOTE: WorkflowOverlay (still mounted pending P2-4) auto-opens its own RUN-mode subtree on the
-// same 'running'/'awaiting' status and renders the SAME stage names as RunExecPanel, so assertions
-// about exec-pane CONTENT are scoped to `#pane-exec` via `within` rather than global `screen`
-// queries (which would otherwise ambiguously match both places).
+// NOTE: assertions about exec-pane CONTENT are scoped to `#pane-exec` via `within` rather than
+// global `screen` queries — a defensive habit kept from when the (now-removed, P2-4) floating
+// WorkflowOverlay rendered the same stage names elsewhere on the page.
 
 const providers: ProviderInfo[] = [
   { id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus-4.8', label: 'opus-4.8' }] },
@@ -122,8 +121,7 @@ describe('WorkspaceView inspector 执行 tab (P2-2)', () => {
     const execTabBtn = container.querySelector('.insp-tab[data-pane="exec"]')!
     expect(execTabBtn.classList.contains('on')).toBe(true)
 
-    // RunExecPanel content rendered inside #pane-exec (scoped — WorkflowOverlay renders the same
-    // stage names elsewhere on the page while its run-mode subtree is still auto-open).
+    // RunExecPanel content rendered inside #pane-exec.
     const pane = container.querySelector('#pane-exec') as HTMLElement
     expect(within(pane).getByText('代码开发')).toBeInTheDocument()
     expect(within(pane).getByText('已完成 1 / 2')).toBeInTheDocument()

@@ -8,7 +8,8 @@ import type { ProviderInfo, ChatMessage } from '@shared/types'
 // into the composer (vestigial since P4-B made chat never trigger workflows).
 // P1-3: it now inserts an in-chat LaunchGateCard (preselecting the picked workflow, prefilled with
 // the current conversation transcript as its read-only seed) instead of opening the floating
-// WorkflowOverlay — see WorkspaceView.launchgate.test.tsx for the fuller confirm/freeze coverage.
+// WorkflowOverlay (removed entirely in P2-4) — see WorkspaceView.launchgate.test.tsx for the fuller
+// confirm/freeze coverage.
 
 const providers: ProviderInfo[] = [
   { id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus-4.8', label: 'opus-4.8' }] },

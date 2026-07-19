@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, waitFor, act } from '@testing-library/react'
 import { WorkspaceView } from './WorkspaceView'
 import type { EngineApi } from '../state/useEngine'
 import type { ProviderInfo } from '@shared/types'
@@ -91,7 +91,7 @@ describe('WorkspaceView: composer locked while a workflow run is active', () => 
     expect(ta.placeholder).not.toMatch(/执行中/)
   })
 
-  it('run active + stepped back to chat ("返回对话"): composer is disabled and shows the 执行中 notice', async () => {
+  it('run active: chat column stays visible and the composer is disabled with the 执行中 notice', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
 
@@ -99,10 +99,8 @@ describe('WorkspaceView: composer locked while a workflow run is active', () => 
       emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'running' }) })
     })
 
-    // Run auto-opens the run view (composer hidden); step back to chat to see the locked composer.
-    await waitFor(() => expect(screen.getByText('返回对话')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('返回对话'))
-
+    // P2-4: no floating run-mode overlay to step back from — the chat column (and composer) is
+    // always mounted; a live run only locks the composer, it never hides the chat.
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
     const ta = document.querySelector('#composerInput') as HTMLTextAreaElement
     expect(ta.disabled).toBe(true)
