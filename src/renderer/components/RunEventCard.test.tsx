@@ -15,6 +15,7 @@ describe('RunEventCard', () => {
     const event: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', body: '## 方案\n采用网关架构' }
     render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
 
+    expect(document.querySelector('.msg-req')?.classList.contains('k-gate')).toBe(true)
     expect(screen.getByText('通过')).toBeInTheDocument()
     expect(screen.getByText('打回本阶段')).toBeInTheDocument()
     expect(screen.getByText('回退到某阶段')).toBeInTheDocument()
@@ -75,6 +76,8 @@ describe('RunEventCard', () => {
     const event: RunEvent = { id: 'd1', kind: 'doubt', laneId: 'l3', stageKey: 'impl', note: '这个方案好像漏了鉴权' }
     render(<RunEventCard event={event} onGate={vi.fn()} onLane={onLane} />)
 
+    expect(document.querySelector('.msg-req')?.classList.contains('k-doubt')).toBe(true)
+    expect(document.querySelector('.msg-req')?.classList.contains('k-confirm')).toBe(false)
     expect(screen.getByText('这个方案好像漏了鉴权')).toBeInTheDocument()
     expect(screen.getByText('回退改方案')).toBeInTheDocument()
     expect(screen.getByText('驳回继续')).toBeInTheDocument()
@@ -120,5 +123,8 @@ describe('RunEventCard', () => {
     expect(screen.getByText('技术方案设计完成')).toBeInTheDocument()
     expect(screen.getByText('决定：通过')).toBeInTheDocument()
     expect(container.querySelectorAll('button')).toHaveLength(0)
+    const card = container.querySelector('.msg-req')
+    expect(card?.classList.contains('k-gate')).toBe(true)
+    expect(card?.classList.contains('done')).toBe(true)
   })
 })

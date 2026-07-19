@@ -50,7 +50,7 @@ export function RunEventCard({ event, frozen, onGate, onLane }: RunEventCardProp
 
   if (frozen) {
     return (
-      <div className={`msg-req k-confirm done`} data-req={frozen.id}>
+      <div className={`msg-req k-${frozen.kind} done`} data-req={frozen.id}>
         <div className="req-head">
           <span className="req-kind">{kindLabel(frozen.kind)}</span>
         </div>
@@ -69,7 +69,7 @@ export function RunEventCard({ event, frozen, onGate, onLane }: RunEventCardProp
   const fb = () => (feedback.trim() ? feedback.trim() : undefined)
 
   return (
-    <div className="msg-req k-confirm" data-req={event.id}>
+    <div className={`msg-req k-${event.kind}`} data-req={event.id}>
       <div className="req-head">
         <span className="req-kind">{kindLabel(event.kind)}</span>
       </div>
