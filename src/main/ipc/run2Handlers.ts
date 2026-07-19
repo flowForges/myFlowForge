@@ -106,6 +106,17 @@ export function registerRun2(deps: {
     if (manager.isActive(p.workspacePath)) {
       throw new Error('当前工作区有工作流在执行，请等它结束后再启动')
     }
+    // Finding 2 (Important — disk-resume review): a workspace can ALSO have an INTERRUPTED run sitting
+    // on disk (no live controller — see Run2Manager.resumable's doc) with its participating project(s)
+    // still checked out onto the run's temp branch. Nothing in the checkClean pre-pass below catches
+    // this if that project's tree happens to be clean (checked out onto the temp branch IS a clean
+    // state) — a new launch-start would then create a SECOND temp branch off the same base while the
+    // interrupted run's temp branch/work is still parked there, silently orphaning it. Reject here too,
+    // before touching git or the manager, so the user must resolve the interrupted run (继续/丢弃 in the
+    // recovery banner) before starting a new one.
+    if (manager.resumable(p.workspacePath)) {
+      throw new Error('当前工作区有未完成的工作流，请先在恢复提示里选择「继续」或「丢弃」再启动新的')
+    }
     const ws = readWorkspace(p.workspacePath)
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
     const plan = buildLaunchPlan(p, ws, readWorkflows?.() ?? [], readCustomStages?.() ?? [])
@@ -142,13 +153,15 @@ export function registerRun2(deps: {
   // sessionId/task are recovered from the saved state itself inside resumeFromDisk (Finding 2) — this
   // handler doesn't need to know either.
   //
-  // Project-SUBSET caveat: which projects originally participated in the interrupted run is NOT
-  // persisted anywhere (only project NAMES inside already-executed stages' `outcomes`, and the
-  // per-run gate-selected subset itself is never written to disk — see Run2ResumeOpts' doc in
-  // manager.ts) — so this resumes with EVERY project currently configured on the workspace, not
-  // necessarily the exact subset the original (now-lost) launch-gate selection picked. Acceptable
-  // for a recovery path (better to include an extra project than to silently drop one the run
-  // actually needs); flagged here for whoever revisits this.
+  // Project-SUBSET (P-C2/T3 review Finding 1, CRITICAL — fixed): the `projects`/`projectTargets` built
+  // below from `buildLaunchInfo` are ONLY a legacy fallback now — Run2Manager.resumeFromDisk prefers
+  // the on-disk snapshot's OWN persisted `projects` (the exact gate-selected subset the original run
+  // was launched with, saved by saveControllerState — see persist.ts's SavedControllerState.projects
+  // doc) whenever it's present, and only falls back to this handler's "every project on the
+  // workspace" reconstruction for a saved state written before that field existed. Getting this wrong
+  // previously meant a still-pending per-project stage would resume against a project the original
+  // run never selected (never checked out onto the run's temp branch), and a finalize-gate
+  // merge/discard would then run real git directly against that project's REAL branch.
   onInvoke(CH.run2ResumeFromDisk, (_e, p: { workspacePath: string }) => {
     if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:resume-from-disk)')
     const ws = readWorkspace(p.workspacePath)

@@ -399,6 +399,57 @@ describe('Run2Manager', () => {
       expect(mgr.lastStateFor(ws)?.status).toBe('ok')
     })
 
+    // P-C2/T3 review Finding 1 (CRITICAL): the resumed controller must fan out per-project work
+    // ONLY against the run's ORIGINAL gate-selected subset (persisted via saveControllerState's
+    // `projects` field — see persist.ts), never against whatever "every project on the workspace"
+    // list a resume caller happens to supply. Getting this wrong let a resumed per-project stage run
+    // an agent against a project the original run never selected and never checked out onto the
+    // run's temp branch — corrupting that project's REAL branch at the finalize gate.
+    it('resumeFromDisk() prefers the PERSISTED projects subset over the caller-supplied opts.projects', async () => {
+      const calls: string[] = []
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task: AgentTask, cb: AgentCallbacks) {
+          calls.push(task.cwd)
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const plan: RunPlan = { runId: 'run-subset', stages: [
+        { key: 's1', name: 'S1', provider: 'x', model: 'm', scope: 'root', gate: false },
+        { key: 's2', name: 'S2', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+      ] }
+      const machine: MachineState = {
+        plan,
+        stages: [
+          { key: 's1', status: 'done', round: 0 },
+          { key: 's2', status: 'pending', round: 0 },
+        ],
+        currentIndex: 1,
+      }
+      // The ORIGINAL run only ever selected ONE project ('go-blog') — persisted verbatim.
+      const persistedProjects = [{ name: 'go-blog', cwd: join(ws, 'go-blog') }]
+      const state: RunControllerState = {
+        machine, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {},
+        liveLanes: {}, stageTimings: {}, paused: false, projects: persistedProjects,
+      }
+      saveControllerState(new RunStore(ws, 'run-subset'), state)
+
+      const mgr = new Run2Manager({ providers: { x: provider }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      // Caller supplies THREE projects (mirrors the IPC handler's legacy "every project on the
+      // workspace" reconstruction) — the fix must ignore the extras in favor of the persisted subset.
+      mgr.resumeFromDisk(ws, { projects: [
+        { name: 'api', cwd: join(ws, 'api') },
+        { name: 'go-blog', cwd: join(ws, 'go-blog') },
+        { name: 'web', cwd: join(ws, 'web') },
+      ] })
+
+      await new Promise((r) => setTimeout(r, 50))
+      expect(calls).toEqual([join(ws, 'go-blog')]) // only the persisted project ran — never api/web
+      expect(mgr.lastStateFor(ws)?.status).toBe('ok')
+    })
+
     it('resumeFromDisk() registers under the serial lock: rejects a second resumeFromDisk while active, and start() queues instead of stealing the lock', async () => {
       const { provider, calls } = controllableProvider()
       const mgr = new Run2Manager({ providers: { x: provider }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })

@@ -55,9 +55,12 @@ export type Run2StartResult =
 // already the method's own argument; runId + the full RunPlan — including its stamped tempBranch,
 // see machine.ts's RunPlan/planFromStages — are read back off disk via findLatestRun2Run, NOT
 // rebuilt from the workspace's current launch config, which no longer exists in this process).
-// `projects` stays required: the participating projects' cwds are never persisted (only their
-// NAMES appear inside `outcomes`/`projectTargets`), so the resume caller (T3's IPC handler, which
-// has the workspace's project list) must supply them again.
+// `projects` stays required here as a FALLBACK, not the source of truth: resumeFromDisk below
+// prefers the on-disk snapshot's own `state.projects` (P-C2/T3 review Finding 1, CRITICAL — the
+// EXACT gate-selected subset the original run was launched with, persisted by saveControllerState —
+// see its doc in persist.ts) and only falls back to this caller-supplied value for an OLDER saved
+// state written before `projects` was persisted at all. The T3 IPC handler still builds and passes
+// this as "every project on the workspace" for that legacy fallback path.
 export type Run2ResumeOpts = Omit<Run2StartOpts, 'workspacePath' | 'runId' | 'plan'>
 
 // What the UI shows before offering "continue this run?" after an app restart — see
@@ -234,9 +237,19 @@ export class Run2Manager {
     }
     const store = this.deps.makeStore(wsPath, found.runId)
     const plan = found.state.machine.plan
+    // P-C2/T3 review Finding 1 (CRITICAL): the persisted state's OWN `projects` — the exact
+    // gate-selected subset the original run was launched with — wins over the caller's
+    // `opts.projects` (which the T3 IPC handler builds as "every project on the workspace", a
+    // legacy-fallback reconstruction, not authoritative). Only when the saved state predates this
+    // field (`undefined` — see persist.ts's SavedControllerState.projects doc) do we fall back to
+    // whatever the caller supplied, same as before this fix existed. Getting this wrong is exactly
+    // what let a still-pending per-project stage resume against a project the original run never
+    // selected — one never checked out onto the run's temp branch — corrupting its real branch at
+    // the finalize gate (finalizeTargets() in controller.ts maps over THIS array).
+    const projects = found.state.projects ?? opts.projects
     const controller = new RunController(plan, {
       providers: this.deps.providers, store, env: this.deps.env,
-      projects: opts.projects, retries: this.deps.retries,
+      projects, retries: this.deps.retries,
       // P-C2/T3 (Finding 2): recovered off the saved state itself when the resume caller doesn't
       // supply an explicit override — see SavedControllerState.sessionId/.task doc (persist.ts) for
       // why these are persisted at all. An explicit opts value (if a future caller ever has one)

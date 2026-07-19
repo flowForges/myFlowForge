@@ -23,6 +23,17 @@ export interface SavedControllerState {
   // seed), same as before this field existed.
   sessionId?: string
   task?: string
+  // P-C2/T3 review Finding 1 (CRITICAL): the EXACT gate-selected project subset this run was
+  // launched with (RunControllerDeps.projects — see its doc in controller.ts), persisted so
+  // resumeFromDisk can honor the ORIGINAL selection instead of a resume caller's "every project on
+  // the workspace" reconstruction. Without this, a still-pending per-project stage resumed after an
+  // app restart would fan out against a project the original run never selected — one that was never
+  // checked out onto the run's temp branch — and a later finalize-gate merge/discard would then run
+  // real git (`add -A`/commit/`clean -fd`) directly against that project's REAL branch, corrupting
+  // it. Optional (same rationale as sessionId/task) so an OLDER saved run2-state loads as
+  // `undefined`; resumeFromDisk's caller must then fall back to its own reconstruction — see the
+  // fallback's risk noted at that call site.
+  projects?: RunControllerState['projects']
 }
 
 const KEY = 'run2-state'
@@ -32,7 +43,7 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
   for (const [k, list] of Object.entries(s.outcomes)) {
     outcomes[k] = list.map((o) => ({ id: o.order.id, status: o.status, project: o.order.project, error: o.error, attempts: o.attempts }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, sessionId: s.sessionId, task: s.task })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, sessionId: s.sessionId, task: s.task, projects: s.projects })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY) as SavedControllerState | undefined

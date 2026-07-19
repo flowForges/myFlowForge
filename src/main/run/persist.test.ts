@@ -65,6 +65,33 @@ describe('controller persistence', () => {
     expect(back?.sessionId).toBeUndefined()
     expect(back?.task).toBeUndefined()
   })
+
+  // P-C2/T3 review Finding 1 (CRITICAL): `projects` — the EXACT gate-selected subset a run was
+  // launched with — must survive a save/load round-trip, or a disk-resumed run has no record of
+  // which projects actually participated and a resume caller must fall back to reconstructing
+  // "every project on the workspace" (see manager.ts's resumeFromDisk doc for the corruption this
+  // caused before persisting it).
+  it('round-trips projects (the gate-selected subset)', () => {
+    const store = new RunStore(ws, 'r1')
+    const projects = [{ name: 'go-blog', cwd: '/ws/go-blog', provider: 'codex', model: 'gpt' }]
+    const s = {
+      machine: initMachine(plan), inbox: [], feedback: [], outcomes: {},
+      status: 'running' as const, pendingDirective: {}, projects,
+    }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.projects).toEqual(projects)
+  })
+
+  // Backward compatibility: same rationale as sessionId/task above — an older saved state (or one
+  // built without `projects`, like every OTHER test in this file) must load with it simply absent.
+  it('projects is absent (not defaulted) for a saved state that never set it', () => {
+    const store = new RunStore(ws, 'r1')
+    const s = { machine: initMachine(plan), inbox: [], feedback: [], outcomes: {}, status: 'running' as const, pendingDirective: {} }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.projects).toBeUndefined()
+  })
 })
 
 describe('findLatestRun2Run (P-C2/T3 review Finding 1): latest-mtime-wins regardless of terminal-ness', () => {

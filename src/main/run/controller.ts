@@ -81,6 +81,24 @@ export interface RunControllerState {
   // app-restart resume (the launch-gate path doesn't need this: its seed is baked directly into the
   // root stage's own persisted prompt text, see launch.ts's buildGroundTruth).
   task?: string
+  // P-C2/T3 review Finding 1 (CRITICAL): copied verbatim from RunControllerDeps.projects — the EXACT
+  // gate-selected project subset this run was launched with (buildLaunchProjects(cfg, ws) at
+  // run2:launch-start — NOT every project on the workspace). Echoed here purely so
+  // saveControllerState (persist.ts) can persist it and Run2Manager.resumeFromDisk can recover it —
+  // without this, a disk-resumed run had no record of which projects actually participated, and a
+  // resume caller had to reconstruct "all projects" from the workspace config instead. A per-project
+  // stage's fan-out (buildWorkOrders, above) reads `this.deps.projects` directly, and
+  // finalizeTargets() below maps over the SAME array to decide which repos get merged/discarded —
+  // so persisting+honoring this exact list on resume is what keeps a resumed run from fanning out
+  // develop-stage work (and later merging/discarding real git branches) against a project the
+  // original run never selected and never checked out onto the run's temp branch.
+  //
+  // Optional (like sessionId/task above) so a state literal built without deps.projects (existing
+  // controller/manager/persist tests that construct RunControllerState by hand, and any saved
+  // context.json written before this field existed) still type-checks/loads — resumeFromDisk treats
+  // an absent value as "unknown subset" and falls back to whatever the resume caller supplies (see
+  // its doc in manager.ts) rather than defaulting to something that looks authoritative but isn't.
+  projects?: DevelopProject[]
 }
 
 // P-C2/T1 (disk-resume): the shape RunController accepts to be reconstructed from a state loaded
@@ -195,7 +213,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId, task: this.deps.task }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
