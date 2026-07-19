@@ -938,6 +938,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         <Composer
           providers={providers}
           disabled={!wsPath || !!archived}
+          // While a workflow run is active, the chat input is locked entirely — all gate/decision
+          // interaction happens via cards (not built yet at this task), never via chat. This is the
+          // "返回对话" case: the run keeps going in the background, chat is visible again, but must
+          // not accept input that could be confused with a gate answer.
+          lockedReason={run2Live ? '执行中…（对门的操作请在上方卡片进行）' : undefined}
           busy={chat.busy}
           running={chat.busy && chat.running != null}
           onStop={() => chat.stop()}

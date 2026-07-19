@@ -99,13 +99,21 @@ interface Props {
   autoDecide?: boolean
   onToggleAutoDecide?: () => void
   draftKey?: string
+  /** When set, the composer is locked (input disabled, send/stop disabled) and this text replaces the
+      placeholder — takes priority over archived/readOnly/busy placeholders. Used while a workflow run
+      is active: all gate/decision interaction happens via cards, never via the chat input. */
+  lockedReason?: string
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, autoDecide, onToggleAutoDecide, draftKey }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, autoDecide, onToggleAutoDecide, draftKey, lockedReason }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
   // change; a remount restores the leaving session's draft and loads the entering one. Isolated + stable.
+  // `lockedReason` (set while a workflow run is active) overrides disabled/placeholder — gate/decision
+  // interaction happens via cards, never the chat input; see the WorkspaceView `run2Live` derivation.
+  const locked = !!lockedReason
+  const effectiveDisabled = disabled || locked
   const dk = draftKey ?? ''
   const [text, setText] = useState(() => (dk ? draftStore[dk]?.text : '') ?? '')
   const [attachments, setAttachments] = useState<Attachment[]>(() => (dk ? draftStore[dk]?.attachments : undefined) ?? [])
@@ -223,7 +231,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
 
   function send() {
     const t = text.trim()
-    if (!t || disabled || !agent) return
+    if (!t || effectiveDisabled || !agent) return
     onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode })
     lastSentRef.current = t
     setText('')
@@ -236,7 +244,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   }
 
   // Slash-command dropdown (derived each render). Only while typing a "/token" and not dismissed.
-  const slashCmds = (!disabled && !readOnly && !archived && isSlashQuery(text) && !slashDismissed)
+  const slashCmds = (!disabled && !readOnly && !archived && !locked && isSlashQuery(text) && !slashDismissed)
     ? mergeCommands(agentId, text, dynamicCommands ?? [])
     : []
   const showSlash = slashCmds.length > 0
@@ -330,9 +338,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           ref={taRef}
           id="composerInput"
           rows={1}
-          placeholder={archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴文件 / 截图'}
+          placeholder={locked ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴文件 / 截图'}
           value={text}
-          disabled={disabled || readOnly}
+          disabled={effectiveDisabled || readOnly}
           onChange={e => {
             const v = e.target.value
             setText(v); setSlashSel(0)
@@ -478,7 +486,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           {running && !text.trim() ? (
             <button className="send stop" id="stopBtn" title="停止 (Esc)" onClick={handleStop}>{STOP_ICON}</button>
           ) : (
-            <button className={`send${busy ? ' queueing' : ''}`} id="sendBtn" title={busy ? '执行中 · 发送将进入队列' : '发送 (回车)'} disabled={disabled || readOnly} onClick={send}>{SEND_ARROW}</button>
+            <button className={`send${busy ? ' queueing' : ''}`} id="sendBtn" title={locked ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)'} disabled={effectiveDisabled || readOnly} onClick={send}>{SEND_ARROW}</button>
           )}
         </div>
       </div>
