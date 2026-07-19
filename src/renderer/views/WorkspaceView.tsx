@@ -425,12 +425,18 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       return
     }
     const selectedProjects = config.projects.filter((p) => p.selected)
+    // Spec §8: the run belongs to the session the gate was OPENED in (LaunchGateState.sessionId,
+    // captured at open-time — see its P1-6 doc above), not necessarily whichever session is active
+    // right now at confirm-time. Falls back to the current activeSessionId if the gate somehow has
+    // none (shouldn't happen in practice — every gate is created with `sid` — but keeps this total).
+    const ownerSessionId = launchGates.find((g) => g.id === id)?.sessionId ?? sessions.activeSessionId
     const cfg: LaunchStartConfig = {
       workspacePath: wsPath,
       workflowId: config.selectedWorkflowId,
       projects: selectedProjects.map((p) => ({ name: p.name, provider: p.provider, model: p.model })),
       supplement: config.supplement,
       seed: config.seed,
+      sessionId: ownerSessionId,
     }
     // Mirror the user's latest edits immediately + clear any stale error from a prior failed attempt
     // (the card stays in its active/non-frozen render until run2.start resolves below).
@@ -516,21 +522,30 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       .map((m) => m.runCard)
   ), [chat.messages])
   // Merge: a persisted (message-backed) frozen record wins over a same-id local one, same dedup
-  // reasoning as mergedLaunchGates. Unlike launchGates, resolvedRunCards needs no session filter — a
-  // run2 run isn't scoped per-session the way an unconfirmed launch gate is.
+  // reasoning as mergedLaunchGates. resolvedRunCards itself needs no session filter here — it only
+  // ever gains an entry via freezeRunCard, which (below) only fires from a card the user could
+  // actually see, i.e. already gated to the owning session by run2StateForTab.
   const mergedRunCards = useMemo<FrozenRunCard[]>(() => {
     const persistedIds = new Set(persistedRunCards.map((r) => r.id))
     return [...persistedRunCards, ...resolvedRunCards.filter((r) => !persistedIds.has(r.id))]
   }, [persistedRunCards, resolvedRunCards])
+  // Spec §8 / mirrors liveRunForTab above (line ~279): a run2 run belongs to the session that started
+  // it — its gate/auth/question/doubt/failure cards must only appear in THAT session's tab, not
+  // whichever tab happens to be in front when the run raises one (the same "画着图呢，A 的权限门跳到 C"
+  // class of bug the old orchestrator already guards against). A run with no sessionId (legacy /
+  // started via a non-gate channel that never threaded one through) shows anywhere in the workspace.
+  const run2StateForTab = run2.state && (!run2.state.sessionId || run2.state.sessionId === sessions.activeSessionId)
+    ? run2.state
+    : null
   // Stamp each newly-seen run2 inbox event's arrival time once — mirrors LaunchGateState's `ts =
   // Date.now()` stamped once at creation — so toRunCardEntries keeps a card's timeline position stable
   // across re-renders. Mutated directly on the ref (idempotent: only ever fills in a MISSING id) rather
   // than via setState, since it's a pure ordering cache that shouldn't itself trigger a re-render;
   // toRunCardEntries falls back to inbox array order for any not-yet-stamped id regardless (runCards.ts).
-  for (const e of run2.state?.inbox ?? []) {
+  for (const e of run2StateForTab?.inbox ?? []) {
     if (!(e.id in runCardFirstSeenRef.current)) runCardFirstSeenRef.current[e.id] = Date.now()
   }
-  const runCardEntries = toRunCardEntries(run2.state?.inbox ?? [], mergedRunCards, runCardFirstSeenRef.current)
+  const runCardEntries = toRunCardEntries(run2StateForTab?.inbox ?? [], mergedRunCards, runCardFirstSeenRef.current)
   // Resolving a run2 event (gate advance/redo/jumpBack, or a lane authorize/deny/answer/retry/…) both
   // dispatches the decision to run2 AND freezes the card in place — mirrors confirmLaunchGate's
   // freeze-then-persist pattern, except synchronous (resolveGate/resolveLane fire-and-forget rather
@@ -546,13 +561,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       finalize: event.kind === 'gate' ? event.finalize : undefined,
     }
     setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
-    const sid = sessions.activeSessionId
+    // Spec §8: persist to the run's OWNING session (run2.state.sessionId), NOT necessarily whatever
+    // is active right now — the card must land on the record of the session that started the run even
+    // if it's somehow resolved while a different tab is in front. Falls back to activeSessionId for a
+    // legacy/sessionId-less run (see run2StateForTab above).
+    const sid = run2.state?.sessionId ?? sessions.activeSessionId
     if (wsPath && sid) {
       void window.forge.chatAppendRunCard?.({
         workspacePath: wsPath, sessionId: sid, ts: new Date(ts).toISOString(), runCard: frozen,
       })
     }
-  }, [wsPath, sessions.activeSessionId])
+  }, [wsPath, run2.state?.sessionId, sessions.activeSessionId])
   const onRunGate = useCallback((eventId: string, d: GateDecision) => {
     const event = run2.state?.inbox.find((e) => e.id === eventId)
     run2.resolveGate(eventId, d)

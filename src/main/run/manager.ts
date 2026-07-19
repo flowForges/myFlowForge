@@ -18,8 +18,9 @@ export interface Run2Emit {
 }
 export interface Run2StartOpts {
   workspacePath: string; runId: string; plan: RunPlan; projects: DevelopProject[]; task?: string; permissionMode?: PermissionMode
-  // Optional (Task 1 queue): who queued this run, for future display purposes. Not read internally —
-  // purely additive passthrough so callers can attach it without affecting behavior.
+  // Spec §8: the session that started this run — threaded straight into RunControllerDeps.sessionId
+  // (see its doc in controller.ts) so the renderer can scope interaction cards (gate/auth/question/
+  // doubt/failure) to the OWNING session only. Optional — absent for legacy/direct-start callers.
   sessionId?: string
   // P4-3: threaded straight through into RunControllerDeps — see its doc in controller.ts. Only
   // run2:launch-start (the one channel that actually checks projects out onto a real temp branch,
@@ -110,6 +111,7 @@ export class Run2Manager {
       providers: this.deps.providers, store, env: this.deps.env,
       projects: opts.projects, retries: this.deps.retries, task: opts.task,
       permissionMode: opts.permissionMode ?? 'full',
+      sessionId: opts.sessionId,
       projectTargets: opts.projectTargets,
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,

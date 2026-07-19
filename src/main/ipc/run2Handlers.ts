@@ -125,7 +125,7 @@ export function registerRun2(deps: {
       const target = ws.projects.find((wp) => wp.name === project.name)?.branch
       if (target) projectTargets[project.name] = target
     }
-    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch })
+    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch })
   })
 
   // P5-UI Task 2: on-demand read of a changed file's content, for the RunPanel file viewer.
