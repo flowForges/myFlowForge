@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { buildTimeline } from './timeline'
 import type { PlanReq } from './timeline'
 import type { ChatMessage, PendingAction, ChatConfirm } from '@shared/types'
+import type { RunCardEntry } from './runCards'
 
 const msg = (id: string, ts: string): ChatMessage => ({ id, who: 'ai', text: id, ts })
 const aiMsg = (id: string, ts: string, provider?: string): ChatMessage => ({ id, who: 'ai', text: id, ts, provider })
@@ -94,6 +95,18 @@ describe('buildTimeline', () => {
     const launchGates = [{ id: 'lg1', ts: Date.parse('2026-07-01T00:00:01.000Z') }]
     const tl = buildTimeline(messages, [], [], [], launchGates)
     expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind)).toEqual(['m1', 'launch-gate', 'm2'])
+  })
+
+  // P3-1: run-card(runCards.ts 产出)按 ts 与消息归并。
+  it('run-card 按 ts 与消息归并', () => {
+    const messages = [msg('m1', '2026-07-01T00:00:00.000Z'), msg('m2', '2026-07-01T00:00:03.000Z')]
+    const runCards: RunCardEntry[] = [
+      { kind: 'run-card', id: 'rc1', ts: Date.parse('2026-07-01T00:00:01.000Z'), event: { id: 'rc1', kind: 'gate', stageKey: 's', body: 'b' } },
+    ]
+    const tl = buildTimeline(messages, [], [], [], [], runCards)
+    expect(tl.map(e => e.kind)).toEqual(['message', 'run-card', 'message'])
+    const rc = tl.find(e => e.kind === 'run-card')
+    expect(rc && rc.kind === 'run-card' && rc.id).toBe('rc1')
   })
 
   // Task 19: 会话内切换 provider 时插入分割线。A→A→B→B 只在第一条 B 之前插一条,两条 A 之间不插,

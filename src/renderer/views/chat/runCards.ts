@@ -1,0 +1,59 @@
+import type { RunEvent } from '../../../main/run/events'
+
+// P3-1: maps a run2 controller's live inbox (unresolved human-intervention events) plus a caller-owned
+// list of already-resolved/frozen decisions into entries the chat timeline (buildTimeline) can merge
+// and render as cards. This module is a PURE mapping layer — no state, no side effects — mirroring how
+// timeline.ts itself stays a pure ts-merge utility (see its P1-3 comment). The actual card component
+// is P3-2; wiring this into WorkspaceView (owning the resolved list + first-seen map below) is P3-4.
+
+// A resolved run2 decision, frozen for display once the live RunEvent is gone from `inbox` (removeEvent
+// drops it — see src/main/run/events.ts). Carries just enough to render the frozen record without the
+// original event object:
+//  · `title` — a snapshot of the original event's headline text, captured by the freezer (P3-4) at
+//    resolution time from whichever field the event kind carried (auth/question.title, doubt.note,
+//    failure.error, or gate.body) — since the live RunEvent is gone, the frozen record must carry its
+//    own copy.
+//  · `body` — optional longer snapshot (e.g. a gate's full body) when `title` alone isn't enough.
+//  · `at` — epoch ms when the decision was actually made (for "decided 2m ago" style display).
+//  · `ts` — the ordering timestamp used for timeline merge. Deliberately the event's ORIGINAL
+//    first-seen time, not `at` — so a card doesn't jump to a new timeline position the moment it's
+//    resolved. This mirrors LaunchGateState/LaunchGateFrozen (src/renderer/views/WorkspaceView.tsx):
+//    the outer wrapper's `ts` is fixed at creation, `decidedAt` lives on the frozen record separately.
+export interface FrozenRunCard {
+  id: string
+  kind: RunEvent['kind']
+  stageKey: string
+  title: string
+  body?: string
+  decision: string
+  at: number
+  ts: number
+}
+
+export interface RunCardEntry {
+  kind: 'run-card'
+  event?: RunEvent
+  frozen?: FrozenRunCard
+  ts: number
+  id: string
+}
+
+// Ordering-key decision (see task brief "Before You Begin"): RunEvent (src/main/run/events.ts) carries
+// no `ts` field at all. However `addEvent` always appends (`[...inbox, e]`), so `inbox`'s array order
+// IS arrival order already. We prefer a caller-supplied `firstSeenAt` map (event id → epoch ms of first
+// observation) when available — the expected P3-4 wiring pattern mirrors LaunchGateState, which assigns
+// `ts = Date.now()` once when a card is first created and keeps it stable thereafter. When no map entry
+// exists (e.g. a plain unit test, or the map not yet populated for a brand-new event this tick), we fall
+// back to the event's index within `inbox` — still deterministic, and consistent with arrival order.
+export function toRunCardEntries(
+  inbox: RunEvent[],
+  resolved: FrozenRunCard[],
+  firstSeenAt: Record<string, number> = {},
+): RunCardEntry[] {
+  const resolvedIds = new Set(resolved.map((r) => r.id))
+  const active: RunCardEntry[] = inbox
+    .filter((e) => !resolvedIds.has(e.id))
+    .map((e, i) => ({ kind: 'run-card', event: e, id: e.id, ts: firstSeenAt[e.id] ?? i }))
+  const frozen: RunCardEntry[] = resolved.map((f) => ({ kind: 'run-card', frozen: f, id: f.id, ts: f.ts }))
+  return [...active, ...frozen].sort((a, b) => a.ts - b.ts)
+}
