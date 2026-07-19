@@ -101,11 +101,16 @@ function buildRootAgent(sp: StagePlan, state: RunControllerState, laneLogs: Reco
     id: laneId,
     name: sp.name,
     role: sp.name,
-    provider: outcome?.order.provider ?? sp.provider,
-    model: outcome?.order.model ?? sp.model,
+    // `||` (not `??`): a resumed `done` stage's outcome is a placeholder (see controller.ts's
+    // placeholderOutcome, P-C2/T1 review Finding 2) whose provider/model/cwd are '' — not absent —
+    // so `??` would never fall back to the stage plan and the resumed card would show blank fields.
+    // A real (non-placeholder) outcome's order always carries non-empty values (see fanout.ts), so
+    // this never changes behavior on the normal path.
+    provider: outcome?.order.provider || sp.provider,
+    model: outcome?.order.model || sp.model,
     state: agentState,
     logs: (laneLogs[laneId] ?? []).map((r) => r.line),
-    cwd: live?.cwd ?? outcome?.order.cwd,
+    cwd: live?.cwd || outcome?.order.cwd,
   }
 }
 
@@ -146,9 +151,11 @@ function buildFanoutAgents(
     // otherwise fall back to the last-known state through the momentary gap (see LaneMemory doc).
     else agentState = prior?.state ?? 'run'
 
-    const provider = outcome?.order.provider ?? sp.provider
-    const model = outcome?.order.model ?? sp.model
-    const cwd = live?.cwd ?? outcome?.order.cwd ?? prior?.cwd
+    // `||` (not `??`) for the same reason as buildRootAgent above — a resumed `done` stage's
+    // placeholder outcome carries '' for provider/model/cwd, not absent (P-C2/T1 review Finding 2).
+    const provider = outcome?.order.provider || sp.provider
+    const model = outcome?.order.model || sp.model
+    const cwd = live?.cwd || outcome?.order.cwd || prior?.cwd
 
     memory.set(project, { state: agentState, cwd, provider, model })
 
