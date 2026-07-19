@@ -476,5 +476,88 @@ describe('Run2Manager', () => {
       seed('run-x', 'failed')
       expect(() => mgr.resumeFromDisk(ws, { projects: [] })).toThrow()
     })
+
+    // P-C2/T4: the capstone end-to-end test — unlike every test above (which hand-builds a
+    // RunControllerState fixture via saveControllerState), this one drives a REAL RunController
+    // through manager.start(), lets it persist mid-flight PURELY via its own automatic
+    // emitUpdate()→saveControllerState() wiring (P2 Task 7), abandons that controller mid-run
+    // (simulating the app process disappearing), then hands the SAME on-disk workspace to a
+    // brand-new Run2Manager (simulating a fresh process after restart) and resumes it to completion.
+    it('end-to-end: a run started via manager.start(), persisted automatically mid-flight (no hand-built fixture), resumes on a brand-new Run2Manager and completes — done stage never re-invoked, only the persisted project subset participates, sessionId recovered', async () => {
+      const wsA = join(ws, 'a')
+      const wsB = join(ws, 'b')
+      const callsBeforeCrash: string[] = []
+      // The process running BEFORE the crash: s1 (root) completes normally; s2 (per-project) starts
+      // BOTH lanes, but project 'b's agent never resolves `done` — exactly what a real crash leaves
+      // behind (an in-flight lane with nothing left to await it). s3 is never reached.
+      const providerBeforeCrash: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task: AgentTask, cb: AgentCallbacks) {
+          callsBeforeCrash.push(`${task.stageKey}:${task.cwd}`)
+          if (task.stageKey === 's2' && task.cwd === wsB) {
+            return { id: task.agentId, cancel() {}, done: new Promise(() => {}) } // the "process died" lane
+          }
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const mgr1 = new Run2Manager({ providers: { x: providerBeforeCrash }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      const plan: RunPlan = {
+        runId: 'run-e2e', stages: [
+          { key: 's1', name: 'S1', provider: 'x', model: 'm', scope: 'root', gate: false },
+          { key: 's2', name: 'S2', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+          { key: 's3', name: 'S3', provider: 'x', model: 'm', scope: 'root', gate: false },
+        ],
+      }
+      // The run only ever selects TWO projects — a THIRD ('c') will be in the resume caller's
+      // opts.projects below (mirroring run2Handlers' legacy "every project on the workspace"
+      // fallback), proving the persisted subset — not the caller's list — wins.
+      const selectedProjects = [{ name: 'a', cwd: wsA }, { name: 'b', cwd: wsB }]
+      mgr1.start({ workspacePath: ws, runId: 'run-e2e', plan, projects: selectedProjects, sessionId: 'sess-e2e' })
+
+      // Let s1 finish and s2's lanes start (one hangs on project 'b'). By now the REAL controller's
+      // emitUpdate() has already written s1:'done'/s2:'running' to disk (saveControllerState) —
+      // exactly the on-disk snapshot a real crash would leave at this instant.
+      await new Promise((r) => setTimeout(r, 50))
+      expect(callsBeforeCrash.sort()).toEqual([`s1:${ws}`, `s2:${wsA}`, `s2:${wsB}`].sort())
+      // mgr1's controller.start() promise never settles (project 'b' hangs forever) — deliberately
+      // abandoned here and never referenced again, mirroring the app process disappearing.
+
+      // --- "app restart": a BRAND-NEW Run2Manager wired to brand-new provider objects, sharing
+      // nothing in memory with mgr1 — only the on-disk workspace path connects them.
+      const callsAfterRestart: string[] = []
+      const providerAfterRestart: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task: AgentTask, cb: AgentCallbacks) {
+          callsAfterRestart.push(`${task.stageKey}:${task.cwd}`)
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const mgr2 = new Run2Manager({ providers: { x: providerAfterRestart }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+
+      const summary = mgr2.resumable(ws)
+      expect(summary).toMatchObject({ runId: 'run-e2e', resumeStageKey: 's2', resumeStageName: 'S2', totalStages: 3, doneCount: 1 })
+
+      const resumedState = mgr2.resumeFromDisk(ws, { projects: [
+        { name: 'a', cwd: wsA }, { name: 'b', cwd: wsB }, { name: 'c', cwd: join(ws, 'c') },
+      ] })
+      expect(resumedState.status).toBe('running')
+      expect(mgr2.isActive(ws)).toBe(true)
+
+      await new Promise((r) => setTimeout(r, 50))
+
+      // (a) s1's provider is NEVER re-invoked in the resumed process — it had already reached `done`.
+      expect(callsAfterRestart.some((c) => c.startsWith('s1:'))).toBe(false)
+      // (b) the run reaches completion (s2's remaining work + s3 both run, to a terminal 'ok').
+      expect(mgr2.lastStateFor(ws)?.status).toBe('ok')
+      // (c) only the persisted subset (a, b) ever ran — project 'c' from the caller's opts never did.
+      expect(callsAfterRestart).toEqual([`s2:${wsA}`, `s2:${wsB}`, `s3:${ws}`])
+      // (d) sessionId recovered from disk — the resumed run stays scoped to the ORIGINAL session that
+      // launched it (spec §8: interaction cards scope to the owning session).
+      expect(mgr2.lastStateFor(ws)?.sessionId).toBe('sess-e2e')
+    })
   })
 })
