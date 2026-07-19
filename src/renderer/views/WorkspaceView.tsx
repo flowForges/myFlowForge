@@ -1051,6 +1051,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     config={gate.config}
                     frozen={gate.frozen}
                     error={gate.error}
+                    providers={providers}
                     onConfirm={(c) => confirmLaunchGate(gate.id, c)}
                     onCancel={() => cancelLaunchGate(gate.id)}
                   />
