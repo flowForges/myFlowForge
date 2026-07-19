@@ -51,9 +51,27 @@ export async function mergeTempBranch(
   const branch = tempBranchName(runId)
   try {
     await git(cwd, ['checkout', target])
-    await git(cwd, ['merge', '--no-ff', branch])
   } catch (err) {
     throw readableGitError(`Failed to merge temp branch "${branch}" into target "${target}"`, err)
+  }
+  try {
+    await git(cwd, ['merge', '--no-ff', branch])
+  } catch (err) {
+    // A failed merge (most commonly a conflict) leaves `target`'s working tree mid-merge —
+    // MERGE_HEAD set, conflict markers written into the user's real files. Never leave the
+    // user's project repo in that state: best-effort abort the merge BEFORE surfacing the
+    // error, so `target` is restored to the clean commit it was on pre-merge. If the abort
+    // itself fails (e.g. no merge in progress for some other reason), fold that into the
+    // error message rather than swallowing it — the caller still needs to know the repo may
+    // be in an unexpected state.
+    let detail = err instanceof Error ? err.message : String(err)
+    try {
+      await git(cwd, ['merge', '--abort'])
+    } catch (abortErr) {
+      const abortDetail = abortErr instanceof Error ? abortErr.message : String(abortErr)
+      detail += ` (且 git merge --abort 也失败，目标分支可能仍处于合并中: ${abortDetail})`
+    }
+    throw readableGitError(`Failed to merge temp branch "${branch}" into target "${target}"`, detail)
   }
   await git(cwd, ['branch', '-D', branch])
 }
