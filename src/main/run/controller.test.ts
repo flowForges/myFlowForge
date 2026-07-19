@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../orchestrator/runStore'
 import { RunController, type RunControllerState, type RunLogLine } from './controller'
-import type { RunPlan } from './machine'
+import type { RunPlan, MachineState } from './machine'
 import type { RunEvent } from './events'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
 
@@ -945,6 +945,132 @@ describe('RunController', () => {
       // (it's set synchronously in runFinalizeGate BEFORE the throw), letting the manager's
       // `.catch` handler surface it to the renderer instead of a generic failed-stage message.
       expect(c.state.error).toMatch(/b.*CONFLICT/)
+    })
+  })
+
+  describe('P-C2/T1: rehydrating a controller from a state loaded off disk (app-restart resume)', () => {
+    it('resumes from the first non-done stage: `done` stages\' providers are never re-invoked', async () => {
+      const store = new RunStore(ws, 'r1')
+      const calls: string[] = []
+      let s3Prompt = ''
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          calls.push(task.stageKey)
+          if (task.stageKey === 's3') s3Prompt = task.prompt
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const plan3: RunPlan = { runId: 'r1', stages: [
+        { key: 's1', name: 'S1', provider: 'x', model: 'm', scope: 'root', gate: false },
+        { key: 's2', name: 'S2', provider: 'x', model: 'm', scope: 'root', gate: false },
+        { key: 's3', name: 'S3', provider: 'x', model: 'm', scope: 'root', gate: false },
+      ] }
+      // Simulate s1/s2 having ALREADY completed and written their artifacts to disk (exactly as the
+      // real controller does via writeArtifact + setContext('artifacts:<key>', refs)) before the app
+      // died — this is the ONLY place downstream prompt assembly gets upstream content from; it must
+      // still be there for a brand-new RunStore instance (same runDir) after "restart".
+      const ref1 = store.writeArtifact('s1-root.md', 'design output from s1')
+      store.setContext('artifacts:s1', [ref1])
+      const ref2 = store.writeArtifact('s2-root.md', 'output from s2')
+      store.setContext('artifacts:s2', [ref2])
+
+      const savedMachine: MachineState = {
+        plan: plan3,
+        stages: [
+          { key: 's1', status: 'done', round: 0 },
+          { key: 's2', status: 'done', round: 0 },
+          { key: 's3', status: 'pending', round: 0 },
+        ],
+        currentIndex: 2,
+      }
+      // Deliberately NOT passing `outcomes` into rehydrate — proves resume's prompt assembly for s3
+      // does not depend on the (slim, in-memory) outcomes of s1/s2 at all, only on the on-disk
+      // artifacts context restored above.
+      const c = new RunController(
+        plan3,
+        { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() },
+        { machine: savedMachine },
+      )
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: resumed start() did not settle')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      expect(calls).toEqual(['s3']) // s1/s2 providers never re-invoked
+      expect(final.machine.stages.map((s) => s.status)).toEqual(['done', 'done', 'done'])
+      // The resumed downstream stage's prompt embeds BOTH upstream artifact paths — read via
+      // store.getContext('artifacts:...'), i.e. from files on disk, not from in-memory outcomes.
+      expect(s3Prompt).toContain(ref1.path)
+      expect(s3Prompt).toContain(ref2.path)
+    })
+
+    it('a stage that was mid-flight (`running`) at crash time is NOT treated as complete — it re-runs', async () => {
+      const store = new RunStore(ws, 'r1')
+      const calls: string[] = []
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          calls.push(task.stageKey)
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const plan2: RunPlan = { runId: 'r1', stages: [
+        { key: 's1', name: 'S1', provider: 'x', model: 'm', scope: 'root', gate: false },
+        { key: 's2', name: 'S2', provider: 'x', model: 'm', scope: 'root', gate: false },
+      ] }
+      // s2 was mid-flight (its lane process died with the app) — never reached `done`.
+      const savedMachine: MachineState = {
+        plan: plan2,
+        stages: [
+          { key: 's1', status: 'done', round: 0 },
+          { key: 's2', status: 'running', round: 0 },
+        ],
+        currentIndex: 1,
+      }
+      const c = new RunController(
+        plan2,
+        { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() },
+        { machine: savedMachine, outcomes: { s1: [{ id: 's1-0', status: 'ok', attempts: 1 }] } },
+      )
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: resumed start() did not settle')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      expect(calls).toEqual(['s2']) // s2's provider IS invoked — re-run, not skipped
+      expect(final.machine.stages.map((s) => s.status)).toEqual(['done', 'done'])
+      // outcomes reconstructed for display continuity only (see RehydrateState's doc) — s1 shows up
+      // even though its providers never ran in THIS process instance.
+      expect(final.outcomes['s1']?.[0]?.status).toBe('ok')
+    })
+
+    it('a loaded machine that is already fully `done` resumes straight to the finalize check without invoking any provider', async () => {
+      const store = new RunStore(ws, 'r1')
+      const calls: string[] = []
+      const provider = okProvider()
+      const origRun = provider.run.bind(provider)
+      provider.run = (task, cb, env) => { calls.push(task.stageKey); return origRun(task, cb, env) }
+      const savedMachine: MachineState = {
+        plan,
+        stages: [
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'done', round: 0 },
+        ],
+        currentIndex: 1,
+      }
+      const c = new RunController(
+        plan,
+        { providers: { x: provider }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() },
+        { machine: savedMachine },
+      )
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(calls).toEqual([]) // nothing re-invoked — every stage was already done
     })
   })
 })

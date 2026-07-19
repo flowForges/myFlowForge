@@ -75,6 +75,64 @@ export interface RunControllerState {
   sessionId?: string
 }
 
+// P-C2/T1 (disk-resume): the shape RunController accepts to be reconstructed from a state loaded
+// off disk (see persist.ts's loadControllerState) instead of a fresh initMachine(plan). Deliberately
+// narrower than RunControllerState — two fields are NOT accepted, on purpose:
+//  - `inbox` (pending gate/auth/question/failure/doubt events) is never restored. Every one of
+//    those events has a live Promise sitting in THIS process's `laneR`/`gateR` ResolverRegistry —
+//    the old process (and its resolvers) died with the app, so a restored event could never be
+//    resolved by anything and would hang the UI forever. Rehydration always starts with an empty
+//    inbox; the stage that was mid-flight (or parked awaiting a gate) simply re-runs from scratch
+//    (see `sanitizeForResume` below) and raises whatever fresh events it needs this time around.
+//  - `status`/`liveLanes` are always recomputed by start(), never taken from disk.
+// `outcomes` IS accepted, but only in the SLIM on-disk shape persist.ts writes (id/status/project/
+// error/attempts — no `result.summary`/`filesChanged`, see persist.ts's SavedOutcome) — restored
+// only so `state.outcomes` (renderer history for already-`done` stages) has continuity across a
+// resume. Resume's own logic never reads it back: buildPrompt's upstream() call reads
+// `deps.store.getContext('artifacts:<stageKey>')` — ArtifactRef paths written by writeArtifact()
+// and persisted in the SAME on-disk context.json that RunStore re-reads fresh from disk on every
+// call (see runStore.ts's getContext/readContext) — so a downstream stage's prompt assembly after
+// resume is correct even with `outcomes` entirely omitted (see controller.test.ts's file-vs-slim
+// verification test).
+export interface SlimOutcome { id: string; status: 'ok' | 'failed'; project?: string; error?: string; attempts: number }
+export interface RehydrateState {
+  machine: MachineState
+  outcomes?: Record<string, SlimOutcome[]>
+  feedback?: FeedbackDraft[]
+  pendingDirective?: Record<string, string>
+  stageTimings?: Record<string, { startedAt: number; endedAt?: number }>
+}
+
+// A loaded machine's currentIndex/statuses reflect whatever was on disk at the last emitUpdate()
+// before the process died — for a clean stop that's exactly "first non-done stage" already, but a
+// stage that was ACTUALLY mid-flight (its lanes running, or parked awaiting a gate decision) when
+// the app died is normalized back to 'pending' here so it unambiguously re-runs from scratch on the
+// next start() — its in-process lane/gate state (liveLanes, laneR/gateR resolvers) is gone, so
+// there is nothing to "continue", only to redo (matches the plan's "只从完成的阶段续跑": a stage
+// only counts as complete if it reached `done`). `currentIndex` is then recomputed from the
+// (possibly just-changed) statuses rather than trusted verbatim off disk, as cheap defense against
+// a stale/corrupt index. `plan` is taken from the constructor's own argument (not the loaded
+// machine's embedded copy) so the freshly-supplied RunPlan — not a possibly-stale on-disk one — is
+// what the rest of the controller (this.plan.stages lookups in buildPrompt etc.) actually runs.
+function sanitizeForResume(plan: RunPlan, loaded: MachineState): MachineState {
+  const stages = loaded.stages.map((s) =>
+    (s.status === 'running' || s.status === 'awaiting-gate') ? { ...s, status: 'pending' as const } : { ...s })
+  const idx = stages.findIndex((s) => s.status !== 'done')
+  return { plan, stages, currentIndex: idx < 0 ? stages.length - 1 : idx }
+}
+
+// Reconstructs a placeholder WorkOrderOutcome from a slim on-disk outcome, for `state.outcomes`
+// display continuity only (see RehydrateState's doc — this is NEVER read by resume's own prompt
+// assembly). `result` is intentionally left undefined: the slim on-disk shape never carried it.
+function placeholderOutcome(stageKey: string, o: SlimOutcome): WorkOrderOutcome {
+  return {
+    order: { id: o.id, stageKey, name: stageKey, project: o.project, provider: '', model: '', cwd: '', prompt: '' },
+    status: o.status,
+    error: o.error,
+    attempts: o.attempts,
+  }
+}
+
 export class RunController {
   private machine: MachineState
   private inbox: RunEvent[] = []
@@ -103,8 +161,22 @@ export class RunController {
   private makeId: (p: string) => string
   private now: () => number
 
-  constructor(private plan: RunPlan, private deps: RunControllerDeps) {
-    this.machine = initMachine(plan)
+  // `rehydrate` (P-C2/T1, disk-resume): when supplied, builds the controller from a state loaded
+  // off disk instead of a fresh initMachine(plan) — see RehydrateState's doc for exactly what's
+  // restored vs. deliberately dropped/recomputed. Omitted (the normal path) behaves exactly as
+  // before this param existed.
+  constructor(private plan: RunPlan, private deps: RunControllerDeps, rehydrate?: RehydrateState) {
+    if (rehydrate) {
+      this.machine = sanitizeForResume(plan, rehydrate.machine)
+      this.feedback = rehydrate.feedback ?? []
+      this.pendingDirective = rehydrate.pendingDirective ?? {}
+      this.stageTimings = rehydrate.stageTimings ?? {}
+      for (const [stageKey, list] of Object.entries(rehydrate.outcomes ?? {})) {
+        this.outcomes[stageKey] = list.map((o) => placeholderOutcome(stageKey, o))
+      }
+    } else {
+      this.machine = initMachine(plan)
+    }
     this.makeId = deps.makeId ?? ((p) => `${p}-${this.idn++}`)
     this.now = deps.now ?? Date.now
   }
