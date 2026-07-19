@@ -178,6 +178,12 @@ describe('buildLaunchPlan + buildLaunchProjects (P1-4 launch gate start)', () =>
 // temp branch off ITS OWN configured target branch (ws.projects[].branch) — no real git here, createBranch
 // is injected as a fake recorder/failure-simulator per the task's "do not touch real git in tests" rule.
 describe('createRunTempBranches (P4-2)', () => {
+  // Every test in this describe block cares about the create/rollback contract, not the Finding 3
+  // clean-tree precondition — pass an always-clean fake so the (real, by default) isCleanTree check
+  // never runs against these fictitious `/ws/pay/*` paths. The precondition itself is covered by its
+  // own describe block below (fake-runner) and by tempBranch.integration.test.ts (real git).
+  const alwaysClean = async () => true
+
   it('creates a branch for each project off its own target branch (cwd/base/runId all correct)', async () => {
     const calls: Array<{ cwd: string; base: string; runId: string }> = []
     const fakeCreate = async (cwd: string, base: string, runId: string) => {
@@ -189,6 +195,8 @@ describe('createRunTempBranches (P4-2)', () => {
       [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
       'r1',
       fakeCreate,
+      undefined,
+      alwaysClean,
     )
     // fixture ws (top of file): api's own branch = 'main', web's own branch = 'main' too — distinct cwd
     // per project, same runId/branch-name across all of them.
@@ -202,13 +210,13 @@ describe('createRunTempBranches (P4-2)', () => {
     const wsMixedBranches = { ...ws, projects: [{ repoId: 'api', name: 'api', branch: 'feat/api-x' }, { repoId: 'web', name: 'web', branch: 'develop' }] as any } as any
     const calls: Array<{ cwd: string; base: string }> = []
     const fakeCreate = async (cwd: string, base: string) => { calls.push({ cwd, base }); return 'forge/run-r1' }
-    await createRunTempBranches(wsMixedBranches, [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }], 'r1', fakeCreate)
+    await createRunTempBranches(wsMixedBranches, [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }], 'r1', fakeCreate, undefined, alwaysClean)
     expect(calls).toEqual([{ cwd: '/ws/pay/api', base: 'feat/api-x' }, { cwd: '/ws/pay/web', base: 'develop' }])
   })
 
   it('throws a readable error naming the project when its own project entry has no branch configured', async () => {
     const wsNoBranch = { ...ws, projects: [{ repoId: 'api', name: 'api', branch: '' }] as any } as any
-    await expect(createRunTempBranches(wsNoBranch, [{ name: 'api', cwd: '/ws/pay/api' }], 'r1', async () => 'x'))
+    await expect(createRunTempBranches(wsNoBranch, [{ name: 'api', cwd: '/ws/pay/api' }], 'r1', async () => 'x', undefined, alwaysClean))
       .rejects.toThrow(/api/)
   })
 
@@ -227,6 +235,7 @@ describe('createRunTempBranches (P4-2)', () => {
       'r1',
       fakeCreate,
       fakeRollback,
+      alwaysClean,
     )).rejects.toThrow(/web/)
     expect(createCalls).toEqual(['/ws/pay/api', '/ws/pay/web'])
     // api's branch was already created when web failed → rolled back to ITS OWN target ('main')
@@ -245,6 +254,7 @@ describe('createRunTempBranches (P4-2)', () => {
       'r1',
       fakeCreate,
       fakeRollback,
+      alwaysClean,
     )).rejects.toThrow(/rollback also failed/)
   })
 
@@ -259,7 +269,66 @@ describe('createRunTempBranches (P4-2)', () => {
       [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
       'r1',
       fakeCreate,
+      undefined,
+      alwaysClean,
     )).rejects.toThrow()
     expect(calls).toEqual(['/ws/pay/api'])
+  })
+
+  describe('clean-tree precondition (Finding 3 — reject dirty-tree run start)', () => {
+    it('checks EVERY project BEFORE creating any branch, and creates none when one is dirty', async () => {
+      const cleanChecks: string[] = []
+      const createCalls: string[] = []
+      const fakeCheckClean = async (cwd: string) => { cleanChecks.push(cwd); return cwd !== '/ws/pay/web' }
+      const fakeCreate = async (cwd: string) => { createCalls.push(cwd); return 'forge/run-r1' }
+      await expect(createRunTempBranches(
+        ws,
+        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
+        'r1',
+        fakeCreate,
+        undefined,
+        fakeCheckClean,
+      )).rejects.toThrow(/web/)
+      expect(cleanChecks).toEqual(['/ws/pay/api', '/ws/pay/web']) // every project checked...
+      expect(createCalls).toEqual([]) // ...and NO branch created anywhere, not even for the clean one
+    })
+
+    it('names ALL dirty projects in the error when more than one is dirty', async () => {
+      const fakeCheckClean = async () => false
+      await expect(createRunTempBranches(
+        ws,
+        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
+        'r1',
+        async () => 'forge/run-r1',
+        undefined,
+        fakeCheckClean,
+      )).rejects.toThrow(/api.*web|web.*api/s)
+    })
+
+    it('proceeds to create branches when every project is clean', async () => {
+      const createCalls: string[] = []
+      const fakeCreate = async (cwd: string) => { createCalls.push(cwd); return 'forge/run-r1' }
+      await createRunTempBranches(
+        ws,
+        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
+        'r1',
+        fakeCreate,
+        undefined,
+        async () => true,
+      )
+      expect(createCalls).toEqual(['/ws/pay/api', '/ws/pay/web'])
+    })
+
+    it('defaults to the real tempBranch.ts isCleanTree when no checkClean is injected', async () => {
+      // No checkClean passed — createRunTempBranches must fall back to the real isCleanTree, which
+      // runs real `git status --porcelain` and throws (not silently pass) against a nonexistent
+      // directory, proving the default isn't a silent no-op.
+      await expect(createRunTempBranches(
+        ws,
+        [{ name: 'api', cwd: '/definitely/not/a/real/git/repo/path-xyz' }],
+        'r1',
+        async () => 'forge/run-r1',
+      )).rejects.toThrow()
+    })
   })
 })

@@ -12,7 +12,7 @@ import { ResolverRegistry } from './resolver'
 import { buildWorkOrders, type StageInput } from './fanout'
 import { runWorkOrder, type WorkOrder, type WorkOrderOutcome } from './workOrder'
 import { saveControllerState } from './persist'
-import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault } from './tempBranch'
+import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault, parkTempBranch as parkTempBranchDefault } from './tempBranch'
 
 export interface RunControllerDeps {
   providers: Record<string, AgentProvider>
@@ -36,6 +36,11 @@ export interface RunControllerDeps {
   // Injectable so tests never touch real git; default to the real tempBranch.ts functions.
   mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
   discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  // Finding 4 (Important — abort semantics), USER DECISION option B: an ABORTED run (mid-run 终止, or
+  // 终止 while parked at the finalize gate) PARKS instead of discarding — see abortCleanup's doc.
+  // Injectable for the same reason as merge/discardTempBranch above; defaults to the real
+  // tempBranch.ts parkTempBranch.
+  parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
 }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
 export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string; cwd?: string }
@@ -216,9 +221,11 @@ export class RunController {
 
   /**
    * P4-3 收尾确认: called once, right after the main stage loop breaks with EVERY stage `done` (never
-   * on abort — see start()'s call site, which only reaches this when `!this.aborted`). Mid-run
-   * jumpBack/abort never merge or discard anything themselves — a run's code only ever lands on its
-   * temp branch (plan.tempBranch) mid-flight; this is the ONE place that decides its fate.
+   * on abort — see start()'s call site, which only reaches this when `!this.aborted`). jumpBack never
+   * touches git at all — a mid-run jump back to an earlier stage just re-runs stages, still on the
+   * same temp branch, nothing to reconcile yet. abort() PARKS (see abortCleanup's doc) rather than
+   * merging or discarding; this finalize gate remains the ONE place a run's temp branch gets merged
+   * or discarded (Finding 5).
    *
    * No-ops entirely (returns immediately) when `deps.projectTargets` has no entries matching
    * `deps.projects` — i.e. this run was never checked out onto a real temp branch (see
@@ -230,8 +237,8 @@ export class RunController {
    *   - `merge`   → mergeTempBranch(cwd, target, runId) for every participating project.
    *   - `discard` → discardTempBranch(cwd, target, runId) for every participating project.
    *   - anything else (only reachable via abort()'s settleAll force-resolving every pending
-   *     gate/lane with `{type:'advance'}` — see resolveLane/abort) → leave the temp branch exactly
-   *     as-is; the run ends failed like any other abort, never touching git.
+   *     gate/lane with `{type:'advance'}` — see resolveLane/abort) → PARKS instead (abortCleanup),
+   *     same as any other abort; the run ends failed, but the work is preserved on the temp branch.
    *
    * Per-project failures are collected (not stopped at the first one, so one bad repo doesn't block
    * the rest from finishing) and re-thrown together as a single readable Error naming every failed
@@ -242,7 +249,7 @@ export class RunController {
    */
   /**
    * The `{ name, cwd, target }` list every project actually checked out onto this run's temp
-   * branch — shared by runFinalizeGate (merge/discard) and abortCleanup (discard-on-abort) so
+   * branch — shared by runFinalizeGate (merge/discard) and abortCleanup (park-on-abort) so
    * both act on exactly the same set of repos. Empty when this run never touched a temp branch
    * (see RunControllerDeps.projectTargets doc) — both callers no-op in that case.
    */
@@ -253,11 +260,12 @@ export class RunController {
   }
 
   /**
-   * I1: an aborted run (mid-run 终止, or 终止 while parked at the finalize gate) must leave every
-   * participating project's temp branch discarded and the target branch clean — same acceptance
-   * bar as the discard finalize decision (spec §6 "目标分支保持干净"). Reuses discardTempBranch's
-   * exact semantics (checkout -f target + branch -D temp) via the same injectable dep so tests
-   * never touch real git.
+   * Finding 4 (Important — abort semantics), USER DECISION option B (preserve): an aborted run
+   * (mid-run 终止, or 终止 while parked at the finalize gate) must NOT destroy the agent's
+   * in-progress work — it PARKS every participating project instead: commit whatever's dirty onto
+   * the temp branch, then checkout the target (now clean), and KEEP the temp branch (no delete, no
+   * `clean -fd`). The work stays recoverable on `forge/run-<runId>`. Reuses parkTempBranch's exact
+   * semantics via the same injectable dep so tests never touch real git.
    *
    * Best-effort per project: an aborted run must not itself crash because cleanup for one repo
    * failed (e.g. the temp branch already gone) — collect failures via console.error and move on,
@@ -266,10 +274,10 @@ export class RunController {
   private async abortCleanup(): Promise<void> {
     const targets = this.finalizeTargets()
     if (targets.length === 0) return
-    const discard = this.deps.discardTempBranch ?? discardTempBranchDefault
+    const park = this.deps.parkTempBranch ?? parkTempBranchDefault
     for (const t of targets) {
       try {
-        await discard(t.cwd, t.target, this.plan.runId)
+        await park(t.cwd, t.target, this.plan.runId)
       } catch (err) {
         console.error(`[run2] abort cleanup failed for project "${t.name}" (target "${t.target}"):`, err)
       }
@@ -290,8 +298,8 @@ export class RunController {
 
     if (this.aborted) {
       // 终止 while parked at this gate (abort()'s settleAll force-resolves it with
-      // `{type:'advance'}` — see resolveLane/abort) — same "discard, leave target clean" contract
-      // as any other abort path (see abortCleanup's doc).
+      // `{type:'advance'}` — see resolveLane/abort) — same "park, preserve the work" contract as
+      // any other abort path (see abortCleanup's doc).
       await this.abortCleanup()
       return
     }
@@ -582,10 +590,11 @@ export class RunController {
       await this.runFinalizeGate()
     } else if (this.aborted) {
       // I1: a MID-run abort (loop above `break`s before ever reaching runFinalizeGate) still left
-      // whatever project(s) were checked out onto this run's temp branch dirty/mid-run — clean
-      // them up here so 终止 always leaves every target branch clean, matching the
-      // 终止-at-the-finalize-gate path handled inside runFinalizeGate itself. Best-effort, see
-      // abortCleanup's doc — never lets a cleanup failure turn a clean abort into a thrown error.
+      // whatever project(s) were checked out onto this run's temp branch dirty/mid-run — park them
+      // here (commit + checkout target, temp branch kept) so 终止 always leaves every target branch
+      // clean WITHOUT destroying the agent's work, matching the 终止-at-the-finalize-gate path
+      // handled inside runFinalizeGate itself. Best-effort, see abortCleanup's doc — never lets a
+      // cleanup failure turn a clean abort into a thrown error.
       await this.abortCleanup()
     }
 

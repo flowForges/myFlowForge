@@ -6,8 +6,14 @@ import { git } from '../git/gitRunner'
  * Design: each run writes code on a local branch `forge/run-<runId>` branched
  * off the project's configured target branch. Only after the whole run finishes
  * and the user confirms does it merge back to the target branch (--no-ff, so the
- * run's history stays visible as a single mergeable unit); a discarded/aborted
- * run just deletes the temp branch and the target stays clean.
+ * run's history stays visible as a single mergeable unit); a discarded run (the
+ * finalize gate's 丢弃本次) deletes the temp branch and the target stays clean.
+ *
+ * An ABORTED run (mid-run 终止, or 终止 while parked at the finalize gate) is
+ * different: per product decision it PARKS instead of discarding — the agent's
+ * in-progress work is committed onto the temp branch (kept, not deleted) and the
+ * target is simply checked back out clean, so the work stays recoverable on
+ * `forge/run-<runId>` instead of being destroyed (see parkTempBranch below).
  *
  * This module is pure git orchestration — no engine wiring here (see P4-2/P4-3).
  */
@@ -23,6 +29,22 @@ export function tempBranchName(runId: string): string {
 function readableGitError(action: string, err: unknown): Error {
   const detail = err instanceof Error ? err.message : String(err)
   return new Error(`${action}: ${detail}`)
+}
+
+/**
+ * True iff `cwd`'s working tree is clean — `git status --porcelain` empty output.
+ *
+ * Finding 3 (Important — data loss): `git checkout -b temp <base>` SUCCEEDS even when the tree is
+ * dirty, as long as `base` is the branch already checked out (the normal case for a run's target
+ * branch). Every downstream temp-branch operation (mergeTempBranch's `add -A`, discardTempBranch's
+ * `checkout -f`/`clean -fd`) then assumes everything sitting in the tree belongs to THIS run — an
+ * assumption that's only true if the tree was clean before the temp branch was ever created. This
+ * is the precondition check createRunTempBranches (launch.ts) runs over every participating project
+ * BEFORE creating any branch.
+ */
+export async function isCleanTree(cwd: string, git: GitRunner = defaultGitRunner): Promise<boolean> {
+  const status = await git(cwd, ['status', '--porcelain'])
+  return status.trim().length === 0
 }
 
 /** Checkout a new temp branch `forge/run-<runId>` off `base`. Returns the branch name. */
@@ -124,5 +146,37 @@ export async function discardTempBranch(
     await git(cwd, ['branch', '-D', branch])
   } catch (err) {
     throw readableGitError(`Failed to discard temp branch "${branch}" (target "${target}")`, err)
+  }
+}
+
+/**
+ * Finding 4 (Important — abort semantics), USER DECISION option B (preserve): an ABORTED run must
+ * NOT destroy the agent's in-progress work the way discardTempBranch does. Instead: commit whatever
+ * is dirty on the temp branch (same commit-before-switch step as mergeTempBranch, so nothing carries
+ * over onto `target`'s working tree — see mergeTempBranch's doc for why that matters), then check
+ * `target` back out. UNLIKE mergeTempBranch/discardTempBranch, this never merges, never deletes the
+ * temp branch, and never runs `clean -fd` — the temp branch (with its commit, if any) is left exactly
+ * as-is so the work stays recoverable on `forge/run-<runId>` after the abort.
+ */
+export async function parkTempBranch(
+  cwd: string,
+  target: string,
+  runId: string,
+  git: GitRunner = defaultGitRunner
+): Promise<void> {
+  const branch = tempBranchName(runId)
+  try {
+    await git(cwd, ['add', '-A'])
+    const status = await git(cwd, ['status', '--porcelain'])
+    if (status.trim().length > 0) {
+      await git(cwd, ['commit', '-m', `forge: run ${runId} (aborted)`])
+    }
+  } catch (err) {
+    throw readableGitError(`Failed to commit run "${runId}" changes onto temp branch "${branch}" before parking`, err)
+  }
+  try {
+    await git(cwd, ['checkout', target])
+  } catch (err) {
+    throw readableGitError(`Failed to checkout target "${target}" while parking temp branch "${branch}"`, err)
   }
 }

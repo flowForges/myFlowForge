@@ -27,6 +27,9 @@ export interface Run2StartOpts {
   projectTargets?: Record<string, string>
   mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
   discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  // Finding 4 (Important — abort semantics): the abort path parks instead of discarding — see its
+  // doc in controller.ts. Threaded through the same way as merge/discardTempBranch above.
+  parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
 }
 export interface Run2ManagerDeps {
   providers: Record<string, AgentProvider>
@@ -110,6 +113,7 @@ export class Run2Manager {
       projectTargets: opts.projectTargets,
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,
+      parkTempBranch: opts.parkTempBranch,
     })
     controller.onEvent((e) => this.deps.emit.event(opts.workspacePath, e))
     controller.onUpdate((s) => this.deps.emit.update(opts.workspacePath, s))
