@@ -157,6 +157,11 @@ export interface LaunchStartConfig {
   // controller.ts — except here it's baked directly into the root/entry stage's own prompt, per this
   // task's brief, rather than threaded as a separate `task` field to every stage).
   seed: string
+  // Spec §8: the session the launch gate was opened/confirmed in — the OWNING session for this run.
+  // Threaded through to Run2Manager.start (Run2StartOpts.sessionId) so run2 interaction cards only
+  // show/resolve in that session (WorkspaceView.tsx), not whichever tab happens to be active. Optional
+  // so existing callers/tests that build a LaunchStartConfig without it keep compiling unchanged.
+  sessionId?: string
 }
 
 // Ground-truth block prepended to the root stage's prompt — same anchor phrasing as

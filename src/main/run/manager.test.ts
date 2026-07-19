@@ -255,6 +255,30 @@ describe('Run2Manager', () => {
     expect(seenModes).toEqual(['full'])
   })
 
+  it('threads Run2StartOpts.sessionId through to the controller\'s exposed state (spec §8 run-owning-session)', () => {
+    const mgr = new Run2Manager({
+      providers: { x: gatedProvider() }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: { event: () => {}, update: () => {} },
+    })
+    const plan = planFromStages('run-sid', stages)
+    const result = mgr.start({ workspacePath: ws, runId: 'run-sid', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }], sessionId: 'sess-owner' })
+    expect(result.status).toBe('started')
+    expect(result.status === 'started' && result.state.sessionId).toBe('sess-owner')
+    expect(mgr.get(ws)?.state.sessionId).toBe('sess-owner')
+  })
+
+  it('leaves sessionId undefined when Run2StartOpts omits it (legacy/direct-start callers)', () => {
+    const mgr = new Run2Manager({
+      providers: { x: gatedProvider() }, env: {},
+      makeStore: (w, r) => new RunStore(w, r),
+      emit: { event: () => {}, update: () => {} },
+    })
+    const plan = planFromStages('run-nosid', stages)
+    const result = mgr.start({ workspacePath: ws, runId: 'run-nosid', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+    expect(result.status === 'started' && result.state.sessionId).toBeUndefined()
+  })
+
   it('pause/resume/requestJumpBack route to the active workspace\'s controller', async () => {
     const mgr = new Run2Manager({
       providers: { x: gatedProvider() }, env: {},

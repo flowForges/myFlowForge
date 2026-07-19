@@ -25,6 +25,12 @@ export interface RunControllerDeps {
   makeId?: (prefix: string) => string
   task?: string
   permissionMode?: PermissionMode
+  // Spec §8: "一次 run 绑定到发起它的会话" — the session that started this run, threaded straight
+  // through from Run2StartOpts.sessionId (manager.ts) so the renderer can scope interaction cards
+  // (gate/auth/question/doubt/failure) to that ONE session (WorkspaceView.tsx), mirroring the old
+  // orchestrator's engine.run.sessionId pattern. Optional/absent for legacy or non-gate-launched runs
+  // (raw run2:start / run2:start-workflow channels) — those show anywhere in the workspace, unchanged.
+  sessionId?: string
   // P4-3: project name → its target branch, populated ONLY for a run whose participating projects
   // were actually checked out onto `plan.tempBranch` at start (see createRunTempBranches/P4-2,
   // wired in from run2Handlers.ts's run2:launch-start). ANY entry here turns on the run-completion
@@ -64,6 +70,9 @@ export interface RunControllerState {
   // for every other terminal path (ok, or a plain abort), so the renderer can distinguish "the
   // merge itself failed, here's why" from a generic failed status with no specific cause.
   error?: string
+  // See RunControllerDeps.sessionId doc — copied verbatim onto state so renderer consumers (useRun2)
+  // never need a separate channel just to learn which session owns this run.
+  sessionId?: string
 }
 
 export class RunController {
@@ -106,7 +115,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused, error: this.error }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }

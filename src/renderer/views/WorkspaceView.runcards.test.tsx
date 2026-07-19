@@ -35,7 +35,7 @@ const conversation: ChatMessage[] = [
 
 const gateEvent: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', body: '设计方案：采用微服务架构' }
 
-function makeRunState(inbox: RunEvent[]): RunControllerState {
+function makeRunState(inbox: RunEvent[], sessionId?: string): RunControllerState {
   return {
     machine: {
       plan: {
@@ -59,6 +59,7 @@ function makeRunState(inbox: RunEvent[]): RunControllerState {
     liveLanes: {},
     stageTimings: {},
     paused: false,
+    sessionId,
   }
 }
 
@@ -186,5 +187,77 @@ describe('WorkspaceView: run2 事件卡挂进对话时间线(+凝固持久化)',
     // the two real conversation messages show up as such.
     expect(screen.getByText('做个登录页')).toBeInTheDocument()
     expect(screen.getByText('好的,我先看看现有页面结构')).toBeInTheDocument()
+  })
+})
+
+// Deferred Minor fix: run2 interaction cards must be scoped to the session that STARTED the run
+// (spec §8 — "一次 run 绑定到发起它的会话"), mirroring the old orchestrator's engine.run.sessionId
+// gating (WorkspaceView.tsx ~line 279-281). Before this fix, cards derived unconditionally from
+// run2.state.inbox and showed up in whichever tab happened to be in front.
+describe('WorkspaceView: run2 事件卡按发起会话隔离', () => {
+  const twoSessionsFile = (active: string) => ({
+    sessions: [
+      { id: 's-A', title: '会话A', mode: 'workflow' as const, createdAt: 0 },
+      { id: 's-B', title: '会话B', mode: 'chat' as const, createdAt: 1 },
+    ],
+    activeSessionId: active,
+  })
+  const histories: Record<string, ChatMessage[]> = {
+    's-A': [{ id: 'a1', who: 'user', text: '会话A的历史', ts: '1' } as ChatMessage],
+    's-B': [{ id: 'b1', who: 'user', text: '会话B的历史', ts: '1' } as ChatMessage],
+  }
+
+  function twoSessionForge(runSessionId: string | undefined, inbox: RunEvent[] = [gateEvent]) {
+    return {
+      ...forgeBase,
+      chatHistory: vi.fn(async (_ws: string, sid: string) => histories[sid] ?? []),
+      sessionList: vi.fn(async () => twoSessionsFile('s-A')),
+      sessionSwitch: vi.fn(async (a: { sessionId: string }) => twoSessionsFile(a.sessionId)),
+      run2: { ...forgeBase.run2, getState: vi.fn(async () => makeRunState(inbox, runSessionId)) },
+    }
+  }
+
+  it('run 的 sessionId 是 s-A：在 s-A 展示方案门卡，切到 s-B 后卡片消失，切回 s-A 后重新出现', async () => {
+    ;(window as any).forge = twoSessionForge('s-A')
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+
+    // Starts on s-A (the run's owning session) — card visible.
+    await waitFor(() => expect(screen.getByText('设计方案：采用微服务架构')).toBeInTheDocument())
+
+    // Switch to s-B: the run belongs to s-A, so its gate card must NOT show here.
+    fireEvent.click(screen.getByText('会话B'))
+    await waitFor(() => expect(screen.getByText('会话B的历史')).toBeInTheDocument())
+    expect(screen.queryByText('设计方案：采用微服务架构')).toBeNull()
+
+    // Switch back to s-A: the card reappears.
+    fireEvent.click(screen.getByText('会话A'))
+    await waitFor(() => expect(screen.getByText('设计方案：采用微服务架构')).toBeInTheDocument())
+  })
+
+  it('run 无 sessionId(legacy)：任意会话都展示方案门卡', async () => {
+    ;(window as any).forge = twoSessionForge(undefined)
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('设计方案：采用微服务架构')).toBeInTheDocument())
+
+    // Switch to s-B: a legacy (no-sessionId) run's card shows anywhere in the workspace.
+    fireEvent.click(screen.getByText('会话B'))
+    await waitFor(() => expect(screen.getByText('会话B的历史')).toBeInTheDocument())
+    expect(screen.getByText('设计方案：采用微服务架构')).toBeInTheDocument()
+  })
+
+  it('freezeRunCard 把冻结记录持久化到 run 的发起会话(run2.state.sessionId)，而非当前 activeSessionId', async () => {
+    ;(window as any).forge = twoSessionForge('s-A')
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('通过')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('通过'))
+
+    await waitFor(() => expect(chatAppendRunCardMock).toHaveBeenCalledTimes(1))
+    // Currently-active session (s-A) IS the run's owning session in this scenario — asserts the
+    // persisted record is keyed off run2.state.sessionId, not just "whatever's active right now".
+    expect(chatAppendRunCardMock.mock.calls[0][0].sessionId).toBe('s-A')
   })
 })
