@@ -40,21 +40,15 @@ import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
 import { WorkflowOverlay } from '../components/WorkflowOverlay'
+import { buildConversationSeed } from './chat/launchSeed'
+// Re-exported for existing importers (WorkspaceView.pickWorkflow.test.tsx) — the single source of
+// truth for the implementation now lives in ./chat/launchSeed.ts (P1-1 extraction).
+export { buildConversationSeed }
 // NOTE: RunLauncher.tsx stays on disk (WF-A Task 5 replaces its mount point below with
 // WorkflowOverlay; WF-C deletes the file). No longer imported here.
 
 function importedToChat(im: ImportedMessage, i: number): ChatMessage {
   return { id: String(i), who: im.who, text: im.text, ts: im.ts }
-}
-
-// Task 2: turns the current conversation into a plain-text transcript to pre-seed the run2 launcher's
-// requirement textarea when the user opens it via a workflow "/" command. Pure — caps at the last 12
-// messages (enough context without dragging in a whole long session); empty conversation → ''.
-export function buildConversationSeed(messages: Pick<ChatMessage, 'who' | 'text'>[]): string {
-  return messages
-    .slice(-12)
-    .map((m) => `${m.who === 'ai' ? 'AI' : '我'}: ${m.text}`)
-    .join('\n\n')
 }
 
 const STATE_IDX_MAP: Record<string, string> = {
