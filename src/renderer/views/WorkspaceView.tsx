@@ -79,6 +79,9 @@ function describeGateDecision(d: GateDecision): string {
     case 'advance': return '通过'
     case 'redo': return d.feedback ? `打回本阶段：${d.feedback}` : '打回本阶段'
     case 'jumpBack': return d.feedback ? `回退到 ${d.targetKey}：${d.feedback}` : `回退到 ${d.targetKey}`
+    // P4-3: resolves the run-completion finalize gate (see RunEventCard's finalize branch).
+    case 'merge': return '合并并完成'
+    case 'discard': return '丢弃本次'
   }
 }
 function describeLaneDecision(d: LaneDecision): string {
@@ -538,6 +541,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const frozen: FrozenRunCard = {
       id: event.id, kind: event.kind, stageKey: event.stageKey,
       title: captureRunCardTitle(event), decision, at, ts,
+      // P4-3: only meaningful for kind 'gate' — preserved into the frozen record so RunEventCard
+      // still labels it "收尾确认" (not "阶段评审") once the live event is gone from inbox.
+      finalize: event.kind === 'gate' ? event.finalize : undefined,
     }
     setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
     const sid = sessions.activeSessionId

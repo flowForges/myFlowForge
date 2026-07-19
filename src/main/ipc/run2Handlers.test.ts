@@ -153,7 +153,19 @@ describe('registerRun2', () => {
     try {
       const seen: Array<string | undefined> = []
       const handlers = new Map<string, (...a: any[]) => any>()
-      const manager = new Run2Manager({ providers: { codex: capturingProvider(seen), x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      const mergeCalls: Array<{ cwd: string; target: string }> = []
+      const manager = new Run2Manager({
+        providers: { codex: capturingProvider(seen), x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r),
+        emit: {
+          event: (wp, e) => {
+            // P4-3: this run's project DOES have a target branch (wsConfig.projects[].branch below),
+            // so it now stops at a finalize gate after both stages complete — resolve it here (merge)
+            // so this test keeps exercising the full run-to-'ok' path, same as before P4-3 existed.
+            if (e.kind === 'gate' && (e as any).finalize) manager.resolveGate(wp, e.id, { type: 'merge' })
+          },
+          update: () => {},
+        },
+      })
       const wsConfig: Workspace = {
         name: 'pay', path: ws, workflowId: '', stages: [],
         workflows: [{ id: 'wf1', name: '标准五段', stages: [
@@ -165,8 +177,13 @@ describe('registerRun2', () => {
       } as any
       // P4-2: run2:launch-start now creates a real temp-branch checkout per participating project
       // before starting — stub it out here (no real git repo backs this tmpdir) so this test still
-      // only exercises plan/project resolution + manager wiring, not git.
-      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: async () => 'forge/run-stub' })
+      // only exercises plan/project resolution + manager wiring, not git. Same for the P4-3 finalize
+      // gate's merge action below (mergeTempBranch) — stubbed for the same reason.
+      registerRun2({
+        manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [],
+        createTempBranch: async () => 'forge/run-stub',
+        mergeTempBranch: async (cwd, target) => { mergeCalls.push({ cwd, target }) },
+      })
       expect(handlers.has(CH.run2LaunchStart)).toBe(true)
       const launchStart = handlers.get(CH.run2LaunchStart)!
       const result = await launchStart({}, {
@@ -182,6 +199,9 @@ describe('registerRun2', () => {
       const getState = handlers.get(CH.run2GetState)!
       const state = await getState({}, { workspacePath: ws })
       expect(state.status).toBe('ok')
+      // only 'api' participated in the run (per cfg.projects above) — the finalize gate merges just
+      // that one project's temp branch back onto its own configured target ('main').
+      expect(mergeCalls).toEqual([{ cwd: join(ws, 'api'), target: 'main' }])
     } finally { rmSync(ws, { recursive: true, force: true }) }
   })
 
@@ -223,6 +243,42 @@ describe('registerRun2', () => {
           { cwd: join(ws, 'web'), base: 'main', runId },
         ])
         expect(result.state.machine.plan.tempBranch).toBe(`forge/run-${runId}`)
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('P4-3: threads each participating project\'s target branch through to the controller\'s finalize gate (合并/丢弃 hit the right branch per project)', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+      try {
+        const discardCalls: Array<{ cwd: string; target: string }> = []
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({
+          providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r),
+          emit: {
+            event: (wp, e) => { if (e.kind === 'gate' && (e as any).finalize) manager.resolveGate(wp, e.id, { type: 'discard' }) },
+            update: () => {},
+          },
+        })
+        const wsConfig = makeWsConfig(ws, { api: 'feat/for-new-flow', web: 'main' })
+        registerRun2({
+          manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [],
+          createTempBranch: async (cwd, _base, runId) => `forge/run-${runId}`,
+          discardTempBranch: async (cwd, target) => { discardCalls.push({ cwd, target }) },
+        })
+        const launchStart = handlers.get(CH.run2LaunchStart)!
+        const result = await launchStart({}, {
+          workspacePath: ws, workflowId: 'wf1',
+          projects: [{ name: 'api', provider: 'x', model: 'm' }, { name: 'web', provider: 'x', model: 'm' }],
+          supplement: '', seed: '',
+        })
+        expect(result.status).toBe('started')
+        await new Promise((r) => setTimeout(r, 50))
+        const getState = handlers.get(CH.run2GetState)!
+        const state = await getState({}, { workspacePath: ws })
+        expect(state.status).toBe('ok')
+        expect(discardCalls).toEqual([
+          { cwd: join(ws, 'api'), target: 'feat/for-new-flow' },
+          { cwd: join(ws, 'web'), target: 'main' },
+        ])
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
 

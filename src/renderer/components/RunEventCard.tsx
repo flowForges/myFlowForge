@@ -20,9 +20,12 @@ export interface RunEventCardProps {
   onLane: (eventId: string, d: LaneDecision) => void
 }
 
-function kindLabel(kind: RunEvent['kind']): string {
+// `finalize`: P4-3 — a GateEvent (or its frozen record) with `finalize: true` is the run-completion
+// "收尾确认" gate (see events.ts), not an ordinary per-stage review gate; only meaningful when
+// `kind === 'gate'`, so callers pass it as `undefined` for every other kind.
+function kindLabel(kind: RunEvent['kind'], finalize?: boolean): string {
   switch (kind) {
-    case 'gate': return '阶段评审'
+    case 'gate': return finalize ? '收尾确认' : '阶段评审'
     case 'auth': return '需要授权'
     case 'question': return '需要回答'
     case 'doubt': return '方案存疑'
@@ -52,7 +55,7 @@ export function RunEventCard({ event, frozen, onGate, onLane }: RunEventCardProp
     return (
       <div className={`msg-req k-${frozen.kind} done`} data-req={frozen.id}>
         <div className="req-head">
-          <span className="req-kind">{kindLabel(frozen.kind)}</span>
+          <span className="req-kind">{kindLabel(frozen.kind, frozen.finalize)}</span>
         </div>
         <div className="req-body">
           <div className="req-title">{frozen.title}</div>
@@ -71,10 +74,24 @@ export function RunEventCard({ event, frozen, onGate, onLane }: RunEventCardProp
   return (
     <div className={`msg-req k-${event.kind}`} data-req={event.id}>
       <div className="req-head">
-        <span className="req-kind">{kindLabel(event.kind)}</span>
+        <span className="req-kind">{kindLabel(event.kind, event.kind === 'gate' ? event.finalize : undefined)}</span>
       </div>
       <div className="req-body">
-        {event.kind === 'gate' && (
+        {event.kind === 'gate' && event.finalize && (
+          // P4-3: run-completion "收尾确认" gate — 合并并完成 merges the run's temp branch onto every
+          // participating project's target branch (mergeTempBranch); 丢弃本次 deletes it instead
+          // (discardTempBranch). Both route through onGate → resolveGate, same as the ordinary gate
+          // buttons below — just a different GateDecision.type ('merge'/'discard').
+          <div className="wfo-act">
+            {event.body ? <div className="req-plan"><Markdown text={event.body} /></div> : null}
+            <div className="arow">
+              <button className="wfo-btn pri" onClick={() => onGate(event.id, { type: 'merge' })}>合并并完成</button>
+              <button className="wfo-btn ghost" onClick={() => onGate(event.id, { type: 'discard' })}>丢弃本次</button>
+            </div>
+          </div>
+        )}
+
+        {event.kind === 'gate' && !event.finalize && (
           <>
             {event.body ? <div className="req-plan"><Markdown text={event.body} /></div> : null}
             <div className="wfo-act">

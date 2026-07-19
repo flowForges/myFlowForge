@@ -12,6 +12,7 @@ import { ResolverRegistry } from './resolver'
 import { buildWorkOrders, type StageInput } from './fanout'
 import { runWorkOrder, type WorkOrder, type WorkOrderOutcome } from './workOrder'
 import { saveControllerState } from './persist'
+import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault } from './tempBranch'
 
 export interface RunControllerDeps {
   providers: Record<string, AgentProvider>
@@ -24,6 +25,17 @@ export interface RunControllerDeps {
   makeId?: (prefix: string) => string
   task?: string
   permissionMode?: PermissionMode
+  // P4-3: project name → its target branch, populated ONLY for a run whose participating projects
+  // were actually checked out onto `plan.tempBranch` at start (see createRunTempBranches/P4-2,
+  // wired in from run2Handlers.ts's run2:launch-start). ANY entry here turns on the run-completion
+  // "收尾确认" finalize gate (see runFinalizeGate below); absent/empty (the raw run2:start /
+  // run2:start-workflow channels, or a plain unit test's literal RunPlan) means this run has no
+  // temp branch to reconcile, so it completes exactly as it did before P4-3 — no extra gate, no
+  // test churn for every pre-existing controller test.
+  projectTargets?: Record<string, string>
+  // Injectable so tests never touch real git; default to the real tempBranch.ts functions.
+  mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
 }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
 export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string; cwd?: string }
@@ -194,6 +206,65 @@ export class RunController {
   private designStageKey(): string {
     const gated = this.plan.stages.find((s) => s.gate)
     return (gated ?? this.plan.stages[0]).key
+  }
+
+  /**
+   * P4-3 收尾确认: called once, right after the main stage loop breaks with EVERY stage `done` (never
+   * on abort — see start()'s call site, which only reaches this when `!this.aborted`). Mid-run
+   * jumpBack/abort never merge or discard anything themselves — a run's code only ever lands on its
+   * temp branch (plan.tempBranch) mid-flight; this is the ONE place that decides its fate.
+   *
+   * No-ops entirely (returns immediately) when `deps.projectTargets` has no entries matching
+   * `deps.projects` — i.e. this run was never checked out onto a real temp branch (see
+   * RunControllerDeps.projectTargets doc), so there is nothing to reconcile and the run completes
+   * exactly as it did before this gate existed.
+   *
+   * Otherwise emits a GateEvent with `finalize: true` (reusing the 'gate' kind/resolveGate/gateR
+   * machinery — see events.ts/decisions.ts) and awaits its decision:
+   *   - `merge`   → mergeTempBranch(cwd, target, runId) for every participating project.
+   *   - `discard` → discardTempBranch(cwd, target, runId) for every participating project.
+   *   - anything else (only reachable via abort()'s settleAll force-resolving every pending
+   *     gate/lane with `{type:'advance'}` — see resolveLane/abort) → leave the temp branch exactly
+   *     as-is; the run ends failed like any other abort, never touching git.
+   *
+   * Per-project failures are collected (not stopped at the first one, so one bad repo doesn't block
+   * the rest from finishing) and re-thrown together as a single readable Error naming every failed
+   * project — this propagates out of start() and is caught by Run2Manager's existing
+   * `.catch(...) → status 'failed'` handling (the same path a zero-work-orders throw already takes),
+   * so a merge conflict surfaces as a clear failure instead of silently vanishing or crashing the
+   * manager.
+   */
+  private async runFinalizeGate(): Promise<void> {
+    const targets = this.deps.projects
+      .map((p) => ({ name: p.name, cwd: p.cwd, target: this.deps.projectTargets?.[p.name] }))
+      .filter((t): t is { name: string; cwd: string; target: string } => !!t.target)
+    if (targets.length === 0) return
+
+    const id = this.makeId('gate')
+    this.status = 'awaiting'
+    const p = this.gateR.create(id)
+    this.emitEvent({ id, kind: 'gate', stageKey: '__finalize__', body: '全部完成，合并到目标分支？', finalize: true })
+    const d = await p
+    this.drop(id)
+    this.emitUpdate()
+
+    if (this.aborted || (d.type !== 'merge' && d.type !== 'discard')) return
+
+    const merge = d.type === 'merge'
+    const action = merge
+      ? (this.deps.mergeTempBranch ?? mergeTempBranchDefault)
+      : (this.deps.discardTempBranch ?? discardTempBranchDefault)
+    const failures: string[] = []
+    for (const t of targets) {
+      try {
+        await action(t.cwd, t.target, this.plan.runId)
+      } catch (err) {
+        failures.push(`${t.name}: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(`${merge ? '合并' : '丢弃'}临时分支失败 — ${failures.join('; ')}`)
+    }
   }
 
   private workspacePath(): string { return this.deps.store.runDir.replace(/\/\.forge\/runs\/[^/]+$/, '') }
@@ -449,6 +520,13 @@ export class RunController {
       this.machine = applyGateDecision(this.machine, d)
       this.emitUpdate()
       if (this.machine.stages.every((s) => s.status === 'done')) break
+    }
+
+    // P4-3: only reached on a genuine full-plan completion — never on abort (the loop above always
+    // `break`s with `this.aborted` true first on any abort path, before this line). May throw (a
+    // merge/discard failure) — that's intentional, see runFinalizeGate's doc.
+    if (!this.aborted && this.machine.stages.every((s) => s.status === 'done')) {
+      await this.runFinalizeGate()
     }
 
     this.status = this.aborted ? 'failed' : (this.machine.stages.every((s) => s.status === 'done') ? 'ok' : 'failed')
