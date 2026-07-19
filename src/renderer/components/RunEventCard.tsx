@@ -1,0 +1,171 @@
+import { useState } from 'react'
+import type { RunEvent } from '../../main/run/events'
+import type { GateDecision, LaneDecision } from '../../main/run/decisions'
+import type { FrozenRunCard } from '../views/chat/runCards'
+import { Markdown } from '../views/chat/markdown'
+// Reuses the wfo-act/am/arow/wfo-inp/wfo-btn classes ported straight from the deleted
+// WorkflowOverlay's RunNodeGate action block (see `git show 9c9780e~1:src/renderer/components/
+// WorkflowOverlay.tsx` for the ancestor markup) — same import pattern as LaunchGateCard.tsx/
+// RunExecPanel.tsx, which already pull this stylesheet for the same classes.
+import './workflowOverlay.css'
+
+// P3-2: in-chat card for a single run2 inbox event (or its frozen/resolved record once the live
+// event is gone — see runCards.ts's toRunCardEntries, wired in by P3-4). Outer wrapper reuses the
+// `.msg-req`/`.req-head`/`.req-body`/`.req-kind`/`.req-title`/`.req-sub` family (ReqCard.tsx is the
+// sibling for forge_ask cards) so this looks native inside the chat timeline, not a bolted-on panel.
+export interface RunEventCardProps {
+  event?: RunEvent
+  frozen?: FrozenRunCard
+  onGate: (eventId: string, d: GateDecision) => void
+  onLane: (eventId: string, d: LaneDecision) => void
+}
+
+function kindLabel(kind: RunEvent['kind']): string {
+  switch (kind) {
+    case 'gate': return '阶段评审'
+    case 'auth': return '需要授权'
+    case 'question': return '需要回答'
+    case 'doubt': return '方案存疑'
+    case 'failure': return '阶段执行失败'
+  }
+}
+
+function fmtAt(ms: number): string {
+  try {
+    return new Date(ms).toLocaleString()
+  } catch {
+    return String(ms)
+  }
+}
+
+export function RunEventCard({ event, frozen, onGate, onLane }: RunEventCardProps) {
+  // Local-only feedback/targetKey text collection (task brief "Before You Begin": no existing
+  // mechanism to route free text into a gate/doubt decision from here, so a plain local textarea/
+  // input is the simplest correct thing — mirrors LaunchGateCard's supplement textarea). Trimmed to
+  // undefined when empty so callers never see a stray `feedback: ''`.
+  const [feedback, setFeedback] = useState('')
+  const [showJumpForm, setShowJumpForm] = useState(false)
+  const [jumpTarget, setJumpTarget] = useState('')
+  const [answer, setAnswer] = useState('')
+
+  if (frozen) {
+    return (
+      <div className={`msg-req k-confirm done`} data-req={frozen.id}>
+        <div className="req-head">
+          <span className="req-kind">{kindLabel(frozen.kind)}</span>
+        </div>
+        <div className="req-body">
+          <div className="req-title">{frozen.title}</div>
+          {frozen.body ? <div className="req-sub">{frozen.body}</div> : null}
+          <div className="req-sub">决定：{frozen.decision}</div>
+          <div className="req-sub">{fmtAt(frozen.at)}</div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!event) return null
+
+  const fb = () => (feedback.trim() ? feedback.trim() : undefined)
+
+  return (
+    <div className="msg-req k-confirm" data-req={event.id}>
+      <div className="req-head">
+        <span className="req-kind">{kindLabel(event.kind)}</span>
+      </div>
+      <div className="req-body">
+        {event.kind === 'gate' && (
+          <>
+            {event.body ? <div className="req-plan"><Markdown text={event.body} /></div> : null}
+            <div className="wfo-act">
+              <div className="wfo-goal">
+                <textarea
+                  placeholder="补充说明（可选，打回/回退时附带）"
+                  value={feedback}
+                  onChange={(e) => setFeedback(e.target.value)}
+                  rows={2}
+                />
+              </div>
+              {showJumpForm ? (
+                <input
+                  className="wfo-inp"
+                  placeholder="回退目标阶段 key"
+                  value={jumpTarget}
+                  onChange={(e) => setJumpTarget(e.target.value)}
+                />
+              ) : null}
+              <div className="arow">
+                <button className="wfo-btn pri" onClick={() => onGate(event.id, { type: 'advance' })}>通过</button>
+                <button className="wfo-btn ghost" onClick={() => onGate(event.id, { type: 'redo', feedback: fb() })}>打回本阶段</button>
+                {showJumpForm ? (
+                  <button
+                    className="wfo-btn ghost"
+                    disabled={!jumpTarget.trim()}
+                    onClick={() => onGate(event.id, { type: 'jumpBack', targetKey: jumpTarget.trim(), feedback: fb() })}
+                  >确认回退</button>
+                ) : (
+                  <button className="wfo-btn ghost" onClick={() => setShowJumpForm(true)}>回退到某阶段</button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {event.kind === 'auth' && (
+          <div className="wfo-act">
+            <div className="am">{event.where ? `${event.title} · ${event.where}` : event.title}</div>
+            <div className="arow">
+              <button className="wfo-btn pri" onClick={() => onLane(event.id, { type: 'authorize' })}>批准</button>
+              <button className="wfo-btn ghost" onClick={() => onLane(event.id, { type: 'deny' })}>拒绝</button>
+            </div>
+          </div>
+        )}
+
+        {event.kind === 'failure' && (
+          <div className="wfo-act">
+            <div className="am">{event.error}（已重试 {event.attempts} 次）</div>
+            <div className="arow">
+              <button className="wfo-btn pri" onClick={() => onLane(event.id, { type: 'retry' })}>重跑</button>
+              <button className="wfo-btn ghost" onClick={() => onLane(event.id, { type: 'skipLane' })}>跳过</button>
+            </div>
+          </div>
+        )}
+
+        {event.kind === 'doubt' && (
+          <div className="wfo-act">
+            <div className="am">{event.note}</div>
+            <div className="wfo-goal">
+              <textarea
+                placeholder="补充说明（继续时可选附带）"
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                rows={2}
+              />
+            </div>
+            <div className="arow">
+              <button className="wfo-btn ghost" onClick={() => onLane(event.id, { type: 'jumpBack' })}>回退改方案</button>
+              <button className="wfo-btn ghost" onClick={() => onLane(event.id, { type: 'dismiss' })}>驳回继续</button>
+              <button className="wfo-btn pri" onClick={() => onLane(event.id, { type: 'redo', feedback: fb() })}>补充说明后继续</button>
+              <button className="wfo-btn ghost" onClick={() => onLane(event.id, { type: 'abort' })}>终止运行</button>
+            </div>
+          </div>
+        )}
+
+        {event.kind === 'question' && (
+          <div className="wfo-act">
+            <div className="am">{event.title}</div>
+            <div className="arow">
+              <input
+                className="wfo-inp"
+                placeholder={event.placeholder ?? ''}
+                value={answer}
+                onChange={(e) => setAnswer(e.target.value)}
+              />
+              <button className="wfo-btn pri" onClick={() => onLane(event.id, { type: 'answer', value: answer })}>提交</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
