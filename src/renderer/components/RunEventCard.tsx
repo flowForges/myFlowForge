@@ -23,13 +23,16 @@ export interface RunEventCardProps {
 // `finalize`: P4-3 — a GateEvent (or its frozen record) with `finalize: true` is the run-completion
 // "收尾确认" gate (see events.ts), not an ordinary per-stage review gate; only meaningful when
 // `kind === 'gate'`, so callers pass it as `undefined` for every other kind.
-function kindLabel(kind: RunEvent['kind'], finalize?: boolean): string {
+// 'aborted' (deferred fix P4-3): synthetic marker kind, only ever reaches this frozen-only branch
+// (never live) — see FrozenRunCard's doc (chat/runCards.ts).
+function kindLabel(kind: RunEvent['kind'] | 'aborted', finalize?: boolean): string {
   switch (kind) {
     case 'gate': return finalize ? '收尾确认' : '阶段评审'
     case 'auth': return '需要授权'
     case 'question': return '需要回答'
     case 'doubt': return '方案存疑'
     case 'failure': return '阶段执行失败'
+    case 'aborted': return '运行已终止'
   }
 }
 

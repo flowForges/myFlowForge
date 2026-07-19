@@ -204,7 +204,9 @@ export interface ChatMessage {
   // message's plain-text rendering; WorkspaceView reconstructs the frozen RunEventCard from this field
   // (mirrors chat/runCards.ts's FrozenRunCard shape — kept structurally inline here rather than imported,
   // same reasoning as every other shared/types.ts field: this module stays the renderer/main boundary).
-  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number; finalize?: boolean }
+  // 'aborted' (P4-3): a synthetic marker persisted when a run is ended via RunExecPanel's 终止
+  // button, not a real run2 RunEvent kind — see FrozenRunCard's doc (chat/runCards.ts) for why.
+  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate' | 'aborted'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number; finalize?: boolean }
 }
 export interface ChatSession {
   id: string
