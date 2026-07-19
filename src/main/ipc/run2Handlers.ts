@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as CH from './channels'
 import { planFromStages } from '../run/planFromStages'
-import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
+import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
 import type { Run2Manager } from '../run/manager'
 import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
 import type { GateDecision, LaneDecision } from '../run/decisions'
@@ -25,8 +25,12 @@ export function registerRun2(deps: {
   readWorkspace?: (wsPath: string) => Workspace | null
   readWorkflows?: () => Workflow[]
   readCustomStages?: () => CustomStage[]
+  // P4-2: injectable so tests can stub real git out of run2:launch-start (production omits both —
+  // createRunTempBranches falls back to the real tempBranch.ts functions on its own).
+  createTempBranch?: (cwd: string, base: string, runId: string) => Promise<string>
+  discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
 }) {
-  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages } = deps
+  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch } = deps
   onInvoke(CH.run2Start, (_e, p: { workspacePath: string; runId: string; stages: StageSpec[]; projects: DevelopProject[] }) =>
     manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan: planFromStages(p.runId, p.stages), projects: p.projects }))
   onInvoke(CH.run2ResolveGate, (_e, p: { workspacePath: string; eventId: string; decision: GateDecision }) => manager.resolveGate(p.workspacePath, p.eventId, p.decision))
@@ -76,12 +80,17 @@ export function registerRun2(deps: {
   // so buildLaunchPlan can resolve the global-template fallback for a workflow whose stashed
   // ws.workflows[].stages is empty — otherwise the picker (buildLaunchInfo, which DOES resolve this
   // fallback) would preview stages that then throw "没有可执行阶段" on confirm.
-  onInvoke(CH.run2LaunchStart, (_e, p: LaunchStartConfig) => {
+  onInvoke(CH.run2LaunchStart, async (_e, p: LaunchStartConfig) => {
     if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:launch-start)')
     const ws = readWorkspace(p.workspacePath)
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
     const plan = buildLaunchPlan(p, ws, readWorkflows?.() ?? [], readCustomStages?.() ?? [])
     const projects = buildLaunchProjects(p, ws)
+    // P4-2: every participating project gets checked out onto the run's shared temp branch off ITS OWN
+    // target branch BEFORE the controller starts running any lane — so all code writes land on
+    // `plan.tempBranch`, never directly on the target. Throws (aborting the start, run never launches)
+    // on any project's checkout failure — see createRunTempBranches for the rollback/error contract.
+    await createRunTempBranches(ws, projects, plan.runId, createTempBranch, discardTempBranch)
     return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects })
   })
 

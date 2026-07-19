@@ -143,8 +143,9 @@ export function RunExecPanel({ run2 }: { run2: Run2Api }): ReactElement {
   const runStatus = state.status
   const runDone = runStatus === 'ok' || runStatus === 'failed'
   const runPaused = !!state.paused
-  // P4 will populate machine.plan.tempBranch; render '—' until then.
-  const tempBranch = (state.machine.plan as { tempBranch?: string }).tempBranch ?? '—'
+  // P4-2: machine.plan.tempBranch is now populated by planFromStages (forge/run-<runId>) for every run
+  // start path; '—' only ever shows for a plan literal that predates this field (e.g. an older test).
+  const tempBranch = state.machine.plan.tempBranch ?? '—'
   const totalAgents = allAgentIds.length
 
   return (

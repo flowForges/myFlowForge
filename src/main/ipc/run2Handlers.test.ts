@@ -163,7 +163,10 @@ describe('registerRun2', () => {
         projects: [{ repoId: 'api', name: 'api', branch: 'main' }, { repoId: 'web', name: 'web', branch: 'main' }] as any,
         status: 'idle', plugins: [], stepPlugins: [],
       } as any
-      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [] })
+      // P4-2: run2:launch-start now creates a real temp-branch checkout per participating project
+      // before starting — stub it out here (no real git repo backs this tmpdir) so this test still
+      // only exercises plan/project resolution + manager wiring, not git.
+      registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: async () => 'forge/run-stub' })
       expect(handlers.has(CH.run2LaunchStart)).toBe(true)
       const launchStart = handlers.get(CH.run2LaunchStart)!
       const result = await launchStart({}, {
@@ -180,6 +183,76 @@ describe('registerRun2', () => {
       const state = await getState({}, { workspacePath: ws })
       expect(state.status).toBe('ok')
     } finally { rmSync(ws, { recursive: true, force: true }) }
+  })
+
+  describe('run2:launch-start temp-branch wiring (P4-2)', () => {
+    function makeWsConfig(ws: string, branches: Record<string, string>): Workspace {
+      return {
+        name: 'pay', path: ws, workflowId: '', stages: [],
+        workflows: [{ id: 'wf1', name: '标准五段', stages: [
+          { key: 'design', provider: 'x', model: 'm', scope: 'root', gate: false },
+          { key: 'develop', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+        ] }],
+        projects: Object.entries(branches).map(([name, branch]) => ({ repoId: name, name, branch })) as any,
+        status: 'idle', plugins: [], stepPlugins: [],
+      } as any
+    }
+
+    it('creates a temp branch for EACH participating project off its own target branch, before the run starts, and stamps plan.tempBranch', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+      try {
+        const calls: Array<{ cwd: string; base: string; runId: string }> = []
+        const stubCreate = async (cwd: string, base: string, runId: string) => {
+          calls.push({ cwd, base, runId })
+          return `forge/run-${runId}`
+        }
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        const wsConfig = makeWsConfig(ws, { api: 'feat/for-new-flow', web: 'main' })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: stubCreate })
+        const launchStart = handlers.get(CH.run2LaunchStart)!
+        const result = await launchStart({}, {
+          workspacePath: ws, workflowId: 'wf1',
+          projects: [{ name: 'api', provider: 'x', model: 'm' }, { name: 'web', provider: 'x', model: 'm' }],
+          supplement: '', seed: '',
+        })
+        expect(result.status).toBe('started')
+        const runId = result.state.machine.plan.runId
+        expect(calls).toEqual([
+          { cwd: join(ws, 'api'), base: 'feat/for-new-flow', runId },
+          { cwd: join(ws, 'web'), base: 'main', runId },
+        ])
+        expect(result.state.machine.plan.tempBranch).toBe(`forge/run-${runId}`)
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('aborts the start (never calls manager.start) and rolls back already-created branches when one project fails to check out', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+      try {
+        const createCalls: string[] = []
+        const rollbackCalls: Array<{ cwd: string; target: string }> = []
+        const failingCreate = async (cwd: string, base: string, runId: string) => {
+          createCalls.push(cwd)
+          if (cwd.endsWith('web')) throw new Error('本地更改未提交')
+          return `forge/run-${runId}`
+        }
+        const stubRollback = async (cwd: string, target: string) => { rollbackCalls.push({ cwd, target }) }
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        const wsConfig = makeWsConfig(ws, { api: 'main', web: 'main' })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: failingCreate, discardTempBranch: stubRollback })
+        const launchStart = handlers.get(CH.run2LaunchStart)!
+        await expect(launchStart({}, {
+          workspacePath: ws, workflowId: 'wf1',
+          projects: [{ name: 'api', provider: 'x', model: 'm' }, { name: 'web', provider: 'x', model: 'm' }],
+          supplement: '', seed: '',
+        })).rejects.toThrow(/web/)
+        expect(createCalls).toEqual([join(ws, 'api'), join(ws, 'web')])
+        expect(rollbackCalls).toEqual([{ cwd: join(ws, 'api'), target: 'main' }])
+        // the run must never have started on the half-created state
+        expect(manager.isActive(ws)).toBe(false)
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
   })
 
   describe('run2:read-file (P5-UI Task 2)', () => {

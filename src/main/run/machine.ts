@@ -10,7 +10,10 @@ export interface StagePlan {
   prompt?: string
 }
 export interface StageState { key: string; status: StageStatus; round: number }
-export interface RunPlan { runId: string; stages: StagePlan[] }
+// tempBranch: the local git branch (`forge/run-<runId>`, see tempBranch.ts) every participating
+// project's worktree is checked out onto before lanes start — same name across all repos in the run,
+// only each project's cwd differs. Optional so pre-existing RunPlan literals in tests keep compiling.
+export interface RunPlan { runId: string; stages: StagePlan[]; tempBranch?: string }
 export interface MachineState { plan: RunPlan; stages: StageState[]; currentIndex: number }
 
 export function initMachine(plan: RunPlan): MachineState {

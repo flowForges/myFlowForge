@@ -16,6 +16,7 @@ import { pickWorkspaceWorkflow, resolveWorkflowStages } from '../workspace/resol
 import { planFromStages } from './planFromStages'
 import type { RunPlan } from './machine'
 import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
+import { createTempBranch, discardTempBranch } from './tempBranch'
 
 // P5-UI Task 1: short stage blurb for the config-preview overlay, by builtin key. Custom/unknown keys
 // fall back to '' (the overlay just omits the line rather than showing anything misleading).
@@ -212,4 +213,55 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
 // choice here now wins over the develop stage's default agent.
 export function buildLaunchProjects(cfg: LaunchStartConfig, ws: Workspace): DevelopProject[] {
   return cfg.projects.map((p) => ({ name: p.name, cwd: join(ws.path, p.name), provider: p.provider, model: p.model }))
+}
+
+// P4-2: at run START (before any lane executes), every participating project's worktree gets checked
+// out onto the run's shared temp branch (`forge/run-<runId>`, see tempBranch.ts) off THAT project's own
+// configured target branch (`ws.projects[].branch` — the branch already checked out in its worktree,
+// same field WorkspaceView's project inspector shows as the "git 分支" tag). This is what makes the
+// run's code writes land on a throwaway branch instead of the target directly.
+//
+// `projects` is the already gate-selected DevelopProject[] (from buildLaunchProjects) — just needs each
+// one's own target branch looked up by name from `ws.projects`.
+//
+// Real git — a dirty tree, a missing/renamed base branch, or any other checkout failure throws from
+// createBranch. On failure we do NOT leave some projects on the temp branch and others not in a
+// confusing half-state: we best-effort roll back (discardTempBranch) every project whose branch we
+// already created before re-throwing a single readable error naming which project failed and why (plus
+// whether rollback of the earlier ones succeeded). `createBranch`/`rollback` are injected (default to
+// the real tempBranch.ts functions) purely so callers can stub real git out in tests.
+export async function createRunTempBranches(
+  ws: Workspace,
+  projects: { name: string; cwd: string }[],
+  runId: string,
+  createBranch: (cwd: string, base: string, runId: string) => Promise<string> = createTempBranch,
+  rollback: (cwd: string, target: string, runId: string) => Promise<void> = discardTempBranch,
+): Promise<void> {
+  const created: { name: string; cwd: string; target: string }[] = []
+  for (const project of projects) {
+    const target = ws.projects.find((p) => p.name === project.name)?.branch
+    if (!target) {
+      throw new Error(`项目「${project.name}」缺少目标分支配置(工作区projects未设置branch),无法创建运行分支`)
+    }
+    try {
+      await createBranch(project.cwd, target, runId)
+      created.push({ name: project.name, cwd: project.cwd, target })
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      const rollbackFailures: string[] = []
+      for (const c of created) {
+        try {
+          await rollback(c.cwd, c.target, runId)
+        } catch (rollbackErr) {
+          rollbackFailures.push(`${c.name}(${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)})`)
+        }
+      }
+      const rollbackNote = rollbackFailures.length
+        ? ` — 回滚也失败,请手动检查这些项目的分支状态: ${rollbackFailures.join(', ')}`
+        : created.length
+          ? ` (已回滚已建的 ${created.length} 个项目分支: ${created.map((c) => c.name).join(', ')})`
+          : ''
+      throw new Error(`项目「${project.name}」创建运行分支失败: ${detail}${rollbackNote}`)
+    }
+  }
 }

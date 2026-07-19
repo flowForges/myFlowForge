@@ -1,6 +1,7 @@
 import { stageScope, type StageSpec } from '../orchestrator/orchestrator'
 import { stageBasePrompt } from '../config/schema'
 import type { RunPlan, StagePlan } from './machine'
+import { tempBranchName } from './tempBranch'
 
 // Resolves the prompt actually sent to a stage's agent: built-in stages have a constant base
 // (STAGE_PROMPTS), and any stage-level `prompt` is appended after it (custom stages have no base,
@@ -20,5 +21,9 @@ export function planFromStages(runId: string, stages: StageSpec[]): RunPlan {
       prompt,
     }
   })
-  return { runId, stages: mapped }
+  // P4-2: every RunPlan gets its run's temp-branch name stamped in (single value shared across all
+  // participating projects' repos — only cwd differs per project). This is the ONE place all current
+  // plan-building callers (resolveStartPlan, buildLaunchPlan, the raw run2:start channel) funnel
+  // through, so RunExecPanel's header always has a real value instead of the '—' placeholder.
+  return { runId, stages: mapped, tempBranch: tempBranchName(runId) }
 }
