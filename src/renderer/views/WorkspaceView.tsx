@@ -74,7 +74,12 @@ type TabId = 'agents' | 'changes' | 'files'
 // the minimal { id, ts } entry buildTimeline merges into the timeline (see chat/timeline.ts) — the
 // timeline only orders by ts; the actual config/frozen record lives here.
 // P1-3 follow-up: `error` set when the last confirm's run2.start rejected — card stays active.
-interface LaunchGateState { id: string; ts: number; config: LaunchGateConfig; frozen?: LaunchGateFrozen; error?: string }
+// P1-6: `sessionId` — the session this gate was opened in (captured from sessions.activeSessionId at
+// creation). Only set for locally-created ACTIVE gates; persisted/frozen ones reconstruct from a
+// session-scoped ChatMessage instead (see persistedLaunchGates) and don't need it. Used to scope an
+// active gate's visibility to its own session — see mergedLaunchGates below — so an unconfirmed gate
+// opened in session A never bleeds into session B's timeline when the user switches tabs.
+interface LaunchGateState { id: string; ts: number; config: LaunchGateConfig; frozen?: LaunchGateFrozen; error?: string; sessionId?: string }
 
 // Shape returned by window.forge.getWorkspace
 interface WsStageInfo { key: string; provider: string; model: string }
@@ -318,6 +323,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // workflow list + resolved project defaults — no separate data source invented here.
   const onPickWorkflow = useCallback((workflowId?: string) => {
     if (!wsPath) return
+    // P1-6: capture the session this gate belongs to right now (at trigger time), not once the async
+    // launchInfo round-trip resolves below — the user could switch sessions while it's in flight.
+    const sid = sessions.activeSessionId
     const run2Ipc = (window as any).forge?.run2
     const infoPromise: Promise<{
       workflows: { id: string; name: string; stages: unknown[] }[]
@@ -341,9 +349,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         supplement: '',
       }
       const now = Date.now()
-      setLaunchGates((prev) => [...prev, { id: `lg-${now}-${prev.length}`, ts: now, config }])
+      setLaunchGates((prev) => [...prev, { id: `lg-${now}-${prev.length}`, ts: now, config, sessionId: sid }])
     })
-  }, [wsPath, chat.messages])
+  }, [wsPath, chat.messages, sessions.activeSessionId])
   // Launch gate's 确认: resolve the (possibly user-edited) config down to run2's LaunchStartConfig
   // (only the SELECTED projects go over the wire) and start the run. P1-3 follow-up fix: the card used
   // to freeze to a "已启动" record synchronously, BEFORE run2.start's promise resolved (fire-and-forget)
@@ -423,11 +431,18 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   ), [chat.messages])
   // Merge: a persisted (message-backed) gate wins over a same-id local entry — once confirmLaunchGate's
   // chatAppendLaunchGate round-trips back into chat.messages, the local copy is redundant. Gates still
-  // ACTIVE (not yet confirmed) only exist in local state and pass through untouched.
+  // ACTIVE (not yet confirmed) only exist in local state and pass through untouched — EXCEPT: `launchGates`
+  // is component-level state that outlives any single session (it doesn't reset on session switch), so an
+  // active gate must also be scoped to the session it was opened in (P1-6) or it bleeds into whichever
+  // session happens to be active later. Frozen/persisted gates need no such filter — they already ride on
+  // a session-scoped ChatMessage (chat.messages is refetched per sessions.activeSessionId).
   const mergedLaunchGates = useMemo<LaunchGateState[]>(() => {
     const persistedIds = new Set(persistedLaunchGates.map((g) => g.id))
-    return [...persistedLaunchGates, ...launchGates.filter((g) => !persistedIds.has(g.id))]
-  }, [persistedLaunchGates, launchGates])
+    return [
+      ...persistedLaunchGates,
+      ...launchGates.filter((g) => !persistedIds.has(g.id) && g.sessionId === sessions.activeSessionId),
+    ]
+  }, [persistedLaunchGates, launchGates, sessions.activeSessionId])
 
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
