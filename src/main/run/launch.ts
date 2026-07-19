@@ -171,15 +171,17 @@ function buildGroundTruth(supplement: string, seed: string): string {
 }
 
 // Resolves the picked workflow's stages into a RunPlan for the launch gate — same workflow-lookup
-// contract as resolveStartPlan (throws on an unknown workflowId) but, per this task's scope, only
-// resolves a workspace's OWN stashed `ws.workflows[].stages` (skips resolveStartPlan's global-template
-// fallback for a workflow with no stashed stages — that path needs `Workflow[]`/`CustomStage[]` deps this
-// function's brief-mandated signature doesn't carry; see task report for this known gap).
-export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace): RunPlan {
+// contract as resolveStartPlan (throws on an unknown workflowId), and the SAME global-template fallback
+// (see resolveWorkflowStages / buildLaunchInfo above): a workflow whose stashed `ws.workflows[].stages`
+// is empty resolves via the matching global `Workflow` template instead of throwing. `workflows`/`custom`
+// are optional (default []) so existing 2-arg callers (tests, and the common non-empty-stages case) keep
+// compiling/behaving unchanged; the IPC handler (run2Handlers.ts) passes the real store-backed values.
+export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows: Workflow[] = [], custom: CustomStage[] = []): RunPlan {
   const wf = pickWorkspaceWorkflow(ws, cfg.workflowId)
   if (!wf || wf.id !== cfg.workflowId) throw new Error(`未知工作流: ${cfg.workflowId}`)
 
-  const resolved = resolveWorkflowStages(wf, [], {})
+  const custIndex = indexCustomStages(custom)
+  const resolved = resolveWorkflowStages(wf, workflows, custIndex)
   if (resolved.length === 0) throw new Error(`工作流「${workflowDisplayName(wf.name)}」没有可执行阶段`)
 
   const groundTruth = buildGroundTruth(cfg.supplement, cfg.seed)

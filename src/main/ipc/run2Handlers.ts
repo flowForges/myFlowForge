@@ -71,11 +71,16 @@ export function registerRun2(deps: {
   // projectNames only, provider/model always comes from the stage default), this channel carries the
   // gate's own per-project provider/model + supplement/seed — buildLaunchPlan/buildLaunchProjects
   // (launch.ts) resolve those into the RunPlan + DevelopProject[] the engine actually runs.
+  //
+  // readWorkflows/readCustomStages are passed through (same optional-dep pattern as run2LaunchInfo above)
+  // so buildLaunchPlan can resolve the global-template fallback for a workflow whose stashed
+  // ws.workflows[].stages is empty — otherwise the picker (buildLaunchInfo, which DOES resolve this
+  // fallback) would preview stages that then throw "没有可执行阶段" on confirm.
   onInvoke(CH.run2LaunchStart, (_e, p: LaunchStartConfig) => {
     if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:launch-start)')
     const ws = readWorkspace(p.workspacePath)
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
-    const plan = buildLaunchPlan(p, ws)
+    const plan = buildLaunchPlan(p, ws, readWorkflows?.() ?? [], readCustomStages?.() ?? [])
     const projects = buildLaunchProjects(p, ws)
     return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects })
   })
