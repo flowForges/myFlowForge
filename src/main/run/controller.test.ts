@@ -1072,5 +1072,125 @@ describe('RunController', () => {
       expect(final.status).toBe('ok')
       expect(calls).toEqual([]) // nothing re-invoked — every stage was already done
     })
+
+    it('Finding 1 (Critical): a redo\'s feedback survives resume — captured "app died at the round\'s gate", rehydrated, the resumed re-run\'s prompt still contains it', async () => {
+      const store = new RunStore(ws, 'r1')
+      const prompts: string[] = []
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          prompts.push(task.prompt)
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const plan4: RunPlan = { runId: 'r1', stages: [
+        { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: true },
+      ] }
+      const c1 = new RunController(plan4, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+
+      let gateCount = 0
+      let snapshot: RunControllerState | null = null
+      c1.onEvent((e) => {
+        if (e.kind !== 'gate') return
+        gateCount++
+        if (gateCount === 1) {
+          // Round 0's gate: ask for a redo with feedback — this is the feedback that must survive.
+          c1.resolveGate(e.id, { type: 'redo', feedback: '补充：加上错误处理' })
+          return
+        }
+        // Round 1's gate (the redo round re-ran and is now parked here, exactly where a real crash
+        // is most likely — user reviewing the redo). Capture the on-disk-equivalent snapshot RIGHT
+        // NOW, before resolving anything further — this mirrors what persist.ts would have written
+        // to disk at this exact instant (see emitEvent → emitUpdate → saveControllerState).
+        snapshot = c1.state
+        // Resolve so this controller instance finishes cleanly (no orphaned promise in the test).
+        c1.resolveGate(e.id, { type: 'advance' })
+      })
+      const final1 = await Promise.race([
+        c1.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: c1.start() did not settle')), 2000)),
+      ])
+      expect(final1.status).toBe('ok')
+      expect(gateCount).toBe(2)
+      expect(prompts).toHaveLength(2) // round 0, round 1
+      expect(prompts[1]).toContain('补充：加上错误处理') // round 1's OWN run got the feedback, as before this fix
+
+      // The regression this locks: at the moment we captured `snapshot` (parked at round 1's gate,
+      // "app died here"), the on-disk pendingDirective for 'design' must still hold the feedback —
+      // the bug proactively cleared it right after round 1's lanes finished, long before this gate.
+      expect(snapshot).not.toBeNull()
+      expect(snapshot!.machine.stages[0].round).toBe(1)
+      expect(snapshot!.pendingDirective['design']).toBe('补充：加上错误处理')
+
+      // Now rehydrate a FRESH controller from exactly that captured snapshot (a new process, as if
+      // the app restarted) and confirm the resumed re-run of 'design' still embeds the feedback.
+      const store2 = new RunStore(ws, 'r1') // same runDir — same on-disk artifacts/context as c1
+      const resumedPrompts: string[] = []
+      const provider2: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          resumedPrompts.push(task.prompt)
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const c2 = new RunController(
+        plan4,
+        { providers: { x: provider2 }, store: store2, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() },
+        { machine: snapshot!.machine, pendingDirective: snapshot!.pendingDirective, feedback: snapshot!.feedback, stageTimings: snapshot!.stageTimings }
+      )
+      c2.onEvent((e) => { if (e.kind === 'gate') c2.resolveGate(e.id, { type: 'advance' }) })
+      const final2 = await Promise.race([
+        c2.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: resumed c2.start() did not settle')), 2000)),
+      ])
+      expect(final2.status).toBe('ok')
+      expect(resumedPrompts).toHaveLength(1) // the parked round re-runs exactly once
+      expect(resumedPrompts[0]).toContain('补充：加上错误处理') // the fix: feedback is NOT lost across resume
+    })
+
+    it('Finding 3: resume-while-parked-at-the-finalize-gate — no stage re-runs, and the finalize gate is re-emitted', async () => {
+      const store = new RunStore(ws, 'r1')
+      const calls: string[] = []
+      const provider = okProvider()
+      const origRun = provider.run.bind(provider)
+      provider.run = (task, cb, env) => { calls.push(task.stageKey); return origRun(task, cb, env) }
+      // Every stage already `done` — exactly the state persisted once the machine loop `break`s and
+      // control reaches runFinalizeGate() (see start()'s tail), which is where the app died: the
+      // finalize gate itself was raised but never resolved before the crash.
+      const savedMachine: MachineState = {
+        plan,
+        stages: [
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'done', round: 0 },
+        ],
+        currentIndex: 1,
+      }
+      const mergeCalls: string[] = []
+      const c = new RunController(
+        plan,
+        {
+          providers: { x: provider }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+          projectTargets: { a: 'main', b: 'main' }, // turns the finalize gate on — see runFinalizeGate's doc
+          mergeTempBranch: async (cwd) => { mergeCalls.push(cwd) },
+        },
+        { machine: savedMachine },
+      )
+      let finalizeId = ''
+      c.onEvent((e) => { if (e.kind === 'gate' && (e as any).finalize) finalizeId = e.id })
+      const startPromise = c.start()
+      await vi.waitFor(() => expect(finalizeId).not.toBe(''))
+      c.resolveGate(finalizeId, { type: 'merge' })
+      const final = await Promise.race([
+        startPromise,
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: resumed finalize gate never resolved')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      expect(calls).toEqual([]) // no stage re-ran on resume — every stage was already done
+      expect(mergeCalls).toEqual(['/ws/a', '/ws/b']) // the user could still decide merge vs. discard
+    })
   })
 })

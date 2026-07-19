@@ -528,8 +528,23 @@ export class RunController {
       if (orders.length === 0) throw new Error(`RunController: stage "${stage.key}" produced no work orders (per-project needs >=1 project)`)
 
       // run all lanes concurrently
+      //
+      // Deliberately NOT clearing `this.pendingDirective[stage.key]` here (P-C2/T1 review Finding 1,
+      // Critical, empirically reproduced): buildWorkOrders() above already READ it (via buildPrompt)
+      // to build THIS round's prompt, so clearing looked like harmless "consumed" bookkeeping — but
+      // the gate/doubt/failure-retry awaits for *this same round* haven't happened yet, and that's
+      // exactly where the app is most likely to die (user reviewing a redo's gate). If it dies there,
+      // the on-disk pendingDirective is already '' even though `round` is still >0; on resume the
+      // stage re-runs FROM SCRATCH (sanitizeForResume never resumes mid-round) and buildPrompt reads
+      // the now-empty directive — the user's redo feedback is silently dropped, and the resumed
+      // re-run behaves as if it were a fresh (non-redo) round. It's safe to just leave the value in
+      // place: nothing re-reads a stale directive without an explicit fresh write immediately before
+      // it matters — a `redo` decision overwrites `pendingDirective[stage.key]` (below) and a
+      // `jumpBack` decision unconditionally overwrites `pendingDirective[targetKey]` (below, and in
+      // the doubt-handling block), even with an empty string when there's no new feedback. So the
+      // only stage that ever reads a directive is one whose own most recent redo/jumpBack decision
+      // just set it — there is no path where a stale, no-longer-relevant value leaks into a prompt.
       let outcomes = await Promise.all(orders.map((o) => this.runOneOrder(o)))
-      this.pendingDirective[stage.key] = '' // consumed
 
       // failure handling: surface + await lane decisions (retry/skip/abort)
       let unresolved = outcomes.filter((o) => o.status === 'failed')
