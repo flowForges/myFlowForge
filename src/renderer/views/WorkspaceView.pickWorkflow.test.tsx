@@ -5,9 +5,10 @@ import type { EngineApi } from '../state/useEngine'
 import type { ProviderInfo, ChatMessage } from '@shared/types'
 
 // Task 2: picking a workflow "/" command in the composer used to just stuff a dead trigger phrase
-// into the composer (vestigial since P4-B made chat never trigger workflows). It should instead open
-// the run2 launcher, preselecting the picked workflow and prefilling the seed with the current
-// conversation transcript.
+// into the composer (vestigial since P4-B made chat never trigger workflows).
+// P1-3: it now inserts an in-chat LaunchGateCard (preselecting the picked workflow, prefilled with
+// the current conversation transcript as its read-only seed) instead of opening the floating
+// WorkflowOverlay — see WorkspaceView.launchgate.test.tsx for the fuller confirm/freeze coverage.
 
 const providers: ProviderInfo[] = [
   { id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus-4.8', label: 'opus-4.8' }] },
@@ -77,8 +78,8 @@ describe('buildConversationSeed (pure)', () => {
   })
 })
 
-describe('WorkspaceView: workflow "/" command opens the launcher seeded with the conversation', () => {
-  it('picking a workspace-workflow "/" command opens run view with the RunLauncher preselecting the workflow and prefilled with the conversation transcript', async () => {
+describe('WorkspaceView: workflow "/" command inserts an in-chat LaunchGateCard seeded with the conversation', () => {
+  it('picking a workspace-workflow "/" command stays in chat, showing a LaunchGateCard preselecting the workflow and prefilled with the conversation transcript', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
     // Conversation loaded into chat.messages.
@@ -88,18 +89,22 @@ describe('WorkspaceView: workflow "/" command opens the launcher seeded with the
     fireEvent.change(ta, { target: { value: '/快速' } })
     fireEvent.mouseDown(screen.getByText('快速修复', { selector: '.slash-title' }))
 
-    // Run view opens (chat column's composer unmounts).
-    await waitFor(() => expect(screen.getByText('返回对话')).toBeInTheDocument())
-    expect(document.querySelector('#composerInput')).toBeNull()
-
-    // RunLauncher mounted, preselecting wf1 + prefilled with the conversation transcript.
+    // Stays in chat — composer remains mounted, no "返回对话"/floating overlay.
     await waitFor(() => expect(launchInfoMock).toHaveBeenCalled())
-    await waitFor(() => expect(screen.getAllByText('快速修复').length).toBeGreaterThan(0))
-    const seedTa = screen.getByRole('textbox') as HTMLTextAreaElement
-    expect(seedTa.value).toBe('我: 做个登录页\n\nAI: 好的,我先看看现有页面结构')
+    await waitFor(() => expect(screen.getByText('确认')).toBeInTheDocument())
+    expect(document.querySelector('#composerInput')).toBeInTheDocument()
+    expect(screen.queryByText('返回对话')).toBeNull()
+
+    // LaunchGateCard mounted, preselecting wf1 (its tab shows "on") + prefilled seed = conversation transcript.
+    // Scoped to .wfo-tab — "快速修复" (the workflow name) can also appear elsewhere on the page (e.g.
+    // the inspector's workflow glance), so a bare screen.getByText would match more than one element.
+    const tab = Array.from(document.querySelectorAll('.wfo-tab')).find((el) => el.textContent?.includes('快速修复'))
+    expect(tab).toHaveClass('on')
+    const seedEl = document.querySelector('[data-req="launch-gate"] .req-sub')
+    expect(seedEl?.textContent).toBe('我: 做个登录页\n\nAI: 好的,我先看看现有页面结构')
   })
 
-  it('Task 5: run2.state===null launcher path renders WorkflowOverlay (.wfo), not the old RunLauncher', async () => {
+  it('renders the in-chat LaunchGateCard, not WorkflowOverlay (.wfo) or the old RunLauncher', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
     await waitFor(() => expect(screen.getByText('做个登录页')).toBeInTheDocument())
@@ -109,7 +114,8 @@ describe('WorkspaceView: workflow "/" command opens the launcher seeded with the
     fireEvent.mouseDown(screen.getByText('快速修复', { selector: '.slash-title' }))
 
     await waitFor(() => expect(launchInfoMock).toHaveBeenCalled())
-    await waitFor(() => expect(document.querySelector('.wfo')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('[data-req="launch-gate"]')).toBeInTheDocument())
+    expect(document.querySelector('.wfo')).toBeNull()
     expect(document.querySelector('.run-launcher')).toBeNull()
   })
 })

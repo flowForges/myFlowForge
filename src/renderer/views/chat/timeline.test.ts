@@ -72,6 +72,16 @@ describe('buildTimeline', () => {
     expect(tl.map(e => e.kind === 'message' ? e.msg.id : e.kind)).toEqual(['u', 'ai', 'plan'])
   })
 
+  // P1-3: launch-gate 卡片按 ts 与消息/其他卡片归并,只携带 id(实际 config/frozen 由渲染方按 id 查)。
+  it('launch-gate 按 ts 归并进时间线', () => {
+    const messages = [msg('m1', '2026-07-01T00:00:00.000Z'), msg('m2', '2026-07-01T00:00:03.000Z')]
+    const launchGates = [{ id: 'lg1', ts: Date.parse('2026-07-01T00:00:01.000Z') }]
+    const tl = buildTimeline(messages, [], [], [], launchGates)
+    expect(tl.map(e => e.kind)).toEqual(['message', 'launch-gate', 'message'])
+    const gate = tl.find(e => e.kind === 'launch-gate')
+    expect(gate && gate.kind === 'launch-gate' && gate.id).toBe('lg1')
+  })
+
   // Task 19: 会话内切换 provider 时插入分割线。A→A→B→B 只在第一条 B 之前插一条,两条 A 之间不插,
   // 第二条 B 之前也不插(同 provider 连续)。
   describe('provider-switch 分割线', () => {

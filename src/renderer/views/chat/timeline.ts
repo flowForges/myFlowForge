@@ -19,6 +19,10 @@ export type TimelineEntry =
   | { kind: 'pending'; ts: number; action: PendingAction }
   | { kind: 'confirm'; ts: number; confirm: ChatConfirm }
   | { kind: 'plan'; ts: number; plan: PlanReq }
+  // P1-3: in-chat launch gate card (active while awaiting confirm/cancel, frozen afterwards). Only
+  // carries id+ts here — the actual LaunchGateConfig/frozen record lives in the caller's own state
+  // (WorkspaceView), keyed by this id, so timeline.ts stays a pure ts-merge utility.
+  | { kind: 'launch-gate'; id: string; ts: number }
   // 相邻两条 ai 消息 provider 不同时插入的分割线,携带 provider id(而非显示名——显示名映射复用
   // 现有 agent label 机制,在渲染处按 providers 列表解析,保持 timeline.ts 纯粹/易测)。
   | { kind: 'provider-switch'; ts: number; from: string; to: string }
@@ -84,6 +88,9 @@ export function buildTimeline(
   pending: PendingAction[],
   confirms: ChatConfirm[],
   plans: PlanReq[],
+  // P1-3: active + frozen launch gates, each just {id, ts} — default [] keeps every pre-existing
+  // 4-arg call site (tests, other callers) valid without a migration.
+  launchGates: { id: string; ts: number }[] = [],
 ): TimelineEntry[] {
   const mk = messageKeys(messages)
   const entries: TimelineEntry[] = [
@@ -91,6 +98,7 @@ export function buildTimeline(
     ...pending.map((action): TimelineEntry => ({ kind: 'pending', ts: key(action.ts), action })),
     ...confirms.map((confirm): TimelineEntry => ({ kind: 'confirm', ts: key(confirm.ts), confirm })),
     ...plans.map((plan): TimelineEntry => ({ kind: 'plan', ts: key(plan.ts), plan })),
+    ...launchGates.map((g): TimelineEntry => ({ kind: 'launch-gate', id: g.id, ts: g.ts })),
   ]
   return entries.sort((a, b) => a.ts - b.ts)
 }

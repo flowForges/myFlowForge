@@ -40,6 +40,9 @@ import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
 import { WorkflowOverlay } from '../components/WorkflowOverlay'
+import { LaunchGateCard } from '../components/LaunchGateCard'
+import type { LaunchGateConfig, LaunchGateFrozen } from '../components/LaunchGateCard'
+import type { LaunchStartConfig } from '../../main/run/launch'
 import { buildConversationSeed } from './chat/launchSeed'
 // Re-exported for existing importers (WorkspaceView.pickWorkflow.test.tsx) — the single source of
 // truth for the implementation now lives in ./chat/launchSeed.ts (P1-1 extraction).
@@ -66,6 +69,11 @@ const QUICK_CMDS = [
 ]
 
 type TabId = 'agents' | 'changes' | 'files'
+
+// P1-3: one in-chat launch-gate card's full state (active or frozen). Keyed by `id`, matched against
+// the minimal { id, ts } entry buildTimeline merges into the timeline (see chat/timeline.ts) — the
+// timeline only orders by ts; the actual config/frozen record lives here.
+interface LaunchGateState { id: string; ts: number; config: LaunchGateConfig; frozen?: LaunchGateFrozen }
 
 // Shape returned by window.forge.getWorkspace
 interface WsStageInfo { key: string; provider: string; model: string }
@@ -148,10 +156,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // 全局搜索(Cmd+Shift+F):App 每次触发就 +1 → 切到文件树 tab;同一信号继续透传给 FileTreePane 聚焦搜索框。
   useEffect(() => { if (searchSignal) setActiveTab('files') }, [searchSignal])
   const [quickSeed, setQuickSeed] = useState<{ text: string; nonce: number }>()
-  // Task 2: a workflow "/" command opens the run2 launcher (below) instead of seeding a dead trigger
-  // phrase into the composer (vestigial since P4-B made chat never trigger workflows). This just
-  // remembers which workflow was picked so the launcher can preselect it once mounted.
-  const [pendingLaunch, setPendingLaunch] = useState<{ workflowId?: string } | null>(null)
+  // P1-3: a workflow "/" command (built-in /开启工作流 or a named workspace-workflow entry) inserts an
+  // ACTIVE LaunchGateCard into the chat timeline (replaces the old "open the floating overlay" trigger —
+  // see onPickWorkflow below). Each trigger appends a NEW entry so earlier ones stay visible as frozen
+  // records after their run starts; `frozen` is set locally here (P1-5 will persist this into the
+  // session). `ts` is this gate's position in the merged timeline (buildTimeline in the render below).
+  const [launchGates, setLaunchGates] = useState<LaunchGateState[]>([])
   // Task 15/16 shared mechanism: clicking "修改方向…" on a plan card (Task 15) or a stage-gate card
   // (Task 16, not yet wired) seeds a quote marker into the MAIN composer instead of opening a cramped
   // inline textarea; the next send routes back to that item's resolver as a 'modify' decision rather
@@ -300,14 +310,64 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     () => [...dynamicCommands, ...workflowMenuCommands(wsInfo?.workflows ?? [])],
     [dynamicCommands, wsInfo?.workflows],
   )
-  // Picking a workflow from "/" opens the run2 launcher (below) instead of seeding a chat trigger
-  // phrase (dead since P4-B made chat never auto-trigger workflows). Called with `undefined` when the
-  // built-in /开启工作流 command is picked. `pendingLaunch` is tracked but WorkflowOverlay (Task 5,
-  // WF-A) doesn't yet take a preselected workflowId — it always defaults to the workspace's first
-  // workflow; onStarted still clears pendingLaunch below.
+  // P1-3: picking a workflow from "/" (built-in /开启工作流, called with `undefined`, or a named
+  // workspace-workflow entry, called with its id) now inserts an ACTIVE LaunchGateCard into the chat
+  // timeline instead of opening the floating WorkflowOverlay via setRunView(true). Reuses the same
+  // run2:launch-info path WorkflowOverlay already calls (buildLaunchInfo server-side) for the
+  // workflow list + resolved project defaults — no separate data source invented here.
   const onPickWorkflow = useCallback((workflowId?: string) => {
-    setPendingLaunch({ workflowId })
-    setRunView(true)
+    if (!wsPath) return
+    const run2Ipc = (window as any).forge?.run2
+    const infoPromise: Promise<{
+      workflows: { id: string; name: string; stages: unknown[] }[]
+      projects: { name: string; provider?: string; model?: string }[]
+    }> = run2Ipc?.launchInfo ? run2Ipc.launchInfo(wsPath) : Promise.resolve({ workflows: [], projects: [] })
+    void infoPromise.then((info) => {
+      const workflows = info.workflows.map((w) => ({ id: w.id, name: w.name, stageCount: w.stages.length }))
+      const selectedWorkflowId = workflowId && workflows.some((w) => w.id === workflowId)
+        ? workflowId
+        : (workflows[0]?.id ?? '')
+      const projects = info.projects.map((p) => ({
+        name: p.name, selected: true, provider: p.provider ?? '', model: p.model ?? '',
+      }))
+      const config: LaunchGateConfig = {
+        seed: buildConversationSeed(chat.messages),
+        workflows,
+        selectedWorkflowId,
+        projects,
+        supplement: '',
+      }
+      const now = Date.now()
+      setLaunchGates((prev) => [...prev, { id: `lg-${now}-${prev.length}`, ts: now, config }])
+    })
+  }, [wsPath, chat.messages])
+  // Launch gate's 确认: resolve the (possibly user-edited) config down to run2's LaunchStartConfig
+  // (only the SELECTED projects go over the wire) and start the run, then freeze this card in place
+  // — it becomes a read-only record in the timeline (persistence into the session is P1-5).
+  const confirmLaunchGate = useCallback((id: string, config: LaunchGateConfig) => {
+    if (!wsPath) return
+    const selectedProjects = config.projects.filter((p) => p.selected)
+    const cfg: LaunchStartConfig = {
+      workspacePath: wsPath,
+      workflowId: config.selectedWorkflowId,
+      projects: selectedProjects.map((p) => ({ name: p.name, provider: p.provider, model: p.model })),
+      supplement: config.supplement,
+      seed: config.seed,
+    }
+    void run2.start(cfg)
+    const workflowName = config.workflows.find((w) => w.id === config.selectedWorkflowId)?.name ?? config.selectedWorkflowId
+    const frozen: LaunchGateFrozen = {
+      workflowName,
+      projects: selectedProjects.map((p) => p.name),
+      supplement: config.supplement,
+      decidedAt: Date.now(),
+    }
+    setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, frozen } : g)))
+  }, [wsPath, run2])
+  // 取消: drop the still-active gate entirely (no record left behind, matching PlanCard's 拒绝/deny —
+  // a launch that never happened isn't worth a frozen entry).
+  const cancelLaunchGate = useCallback((id: string) => {
+    setLaunchGates((prev) => prev.filter((g) => g.id !== id))
   }, [])
 
   // Clear any pending debounce write timer on unmount.
@@ -662,7 +722,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </>
             )}
             {/* 当前对话:消息与子代理/主代理的交互卡片按时间线归并内联渲染 */}
-            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans).map(entry => {
+            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans, launchGates).map(entry => {
               if (entry.kind === 'provider-switch') {
                 return (
                   <ProviderSwitchDivider
@@ -709,6 +769,19 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     key={c.id}
                     action={{ id: c.id, kind: 'confirm', agentId: 'chat', agentName: '主代理', wsName, provider: 'claude', title: c.title, where: c.where }}
                     onResolve={(p) => chat.resolveConfirm({ id: p.id, decision: p.decision === 'allow' ? 'allow' : 'deny', value: p.value })}
+                  />
+                )
+              }
+              if (entry.kind === 'launch-gate') {
+                const gate = launchGates.find((g) => g.id === entry.id)
+                if (!gate) return null
+                return (
+                  <LaunchGateCard
+                    key={gate.id}
+                    config={gate.config}
+                    frozen={gate.frozen}
+                    onConfirm={(c) => confirmLaunchGate(gate.id, c)}
+                    onCancel={() => cancelLaunchGate(gate.id)}
                   />
                 )
               }
@@ -849,7 +922,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 workspacePath={wsPath}
                 initialSeed={buildConversationSeed(chat.messages)}
                 onClose={() => setRunView(false)}
-                onStarted={() => setPendingLaunch(null)}
                 run2={run2}
               />
             )}
