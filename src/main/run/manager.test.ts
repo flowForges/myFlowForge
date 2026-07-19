@@ -5,10 +5,12 @@ import { tmpdir } from 'node:os'
 import { RunStore } from '../orchestrator/runStore'
 import { Run2Manager } from './manager'
 import { planFromStages } from './planFromStages'
+import { saveControllerState } from './persist'
 import type { StageSpec } from '../orchestrator/orchestrator'
 import type { RunEvent } from './events'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
-import type { RunLogLine } from './controller'
+import type { RunControllerState, RunLogLine } from './controller'
+import type { MachineState, RunPlan } from './machine'
 
 let ws: string
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'mgr-')) })
@@ -309,5 +311,119 @@ describe('Run2Manager', () => {
     expect(() => mgr.pause('/nope')).not.toThrow()
     expect(() => mgr.resume('/nope')).not.toThrow()
     expect(() => mgr.requestJumpBack('/nope', 'design')).not.toThrow()
+  })
+
+  describe('disk-resume (P-C2/T2): resumable()/resumeFromDisk() for an interrupted run', () => {
+    // Mirrors exactly what saveControllerState (persist.ts) writes on every emitUpdate() — a
+    // 3-stage plan with s1 already `done` (the app died sometime after s1 finished, before s2/s3).
+    function fixtureState(status: RunControllerState['status']): RunControllerState {
+      const plan: RunPlan = { runId: 'run-x', stages: [
+        { key: 's1', name: 'S1', provider: 'x', model: 'm', scope: 'root', gate: false },
+        { key: 's2', name: 'S2', provider: 'x', model: 'm', scope: 'root', gate: false },
+        { key: 's3', name: 'S3', provider: 'x', model: 'm', scope: 'root', gate: false },
+      ] }
+      const machine: MachineState = {
+        plan,
+        stages: [
+          { key: 's1', status: 'done', round: 0 },
+          { key: 's2', status: 'pending', round: 0 },
+          { key: 's3', status: 'pending', round: 0 },
+        ],
+        currentIndex: 1,
+      }
+      return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, paused: false }
+    }
+    function seed(runId: string, status: RunControllerState['status']) {
+      saveControllerState(new RunStore(ws, runId), fixtureState(status))
+    }
+
+    it('resumable() summarizes a non-terminal saved run2-state (resume stage = first non-done, doneCount counts `done` stages)', () => {
+      const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      seed('run-x', 'running')
+      expect(mgr.resumable(ws)).toEqual({
+        runId: 'run-x', resumeStageKey: 's2', resumeStageName: 'S2', totalStages: 3, doneCount: 1,
+      })
+    })
+
+    it('resumable() also recognizes an `awaiting` (parked at a gate) saved status as non-terminal', () => {
+      const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      seed('run-x', 'awaiting')
+      expect(mgr.resumable(ws)?.resumeStageKey).toBe('s2')
+    })
+
+    it('resumable() returns null for a TERMINAL (ok/failed) saved run2-state — a finished run is not resumable', () => {
+      const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      seed('run-ok', 'ok')
+      expect(mgr.resumable(ws)).toBeNull()
+      seed('run-failed', 'failed')
+      expect(mgr.resumable(ws)).toBeNull()
+    })
+
+    it('resumable() returns null when there is no saved run2-state at all', () => {
+      const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      expect(mgr.resumable(ws)).toBeNull()
+    })
+
+    it('resumable() returns null when the workspace already has a LIVE in-memory controller (disk-resume is only for a run nothing is driving)', () => {
+      const mgr = new Run2Manager({ providers: { x: gatedProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      // a non-terminal saved state also happens to be sitting on disk for this workspace...
+      seed('run-x', 'running')
+      // ...but a DIFFERENT run is live in memory right now — not resumable while that's the case.
+      const plan = planFromStages('run-live', stages)
+      mgr.start({ workspacePath: ws, runId: 'run-live', plan, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+      expect(mgr.isActive(ws)).toBe(true)
+      expect(mgr.resumable(ws)).toBeNull()
+    })
+
+    it('resumeFromDisk() rebuilds a controller via rehydrate and resumes from the first non-done stage (the `done` stage\'s provider is never re-invoked)', async () => {
+      const calls: string[] = []
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task: AgentTask, cb: AgentCallbacks) {
+          calls.push(task.stageKey)
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const mgr = new Run2Manager({ providers: { x: provider }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      seed('run-x', 'running')
+
+      const state = mgr.resumeFromDisk(ws, { projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+      expect(state.status).toBe('running')
+      expect(mgr.isActive(ws)).toBe(true)
+
+      await new Promise((r) => setTimeout(r, 50))
+      expect(calls).toEqual(['s2', 's3']) // s1 was already `done` on disk — never re-invoked
+      expect(mgr.isActive(ws)).toBe(false)
+      expect(mgr.lastStateFor(ws)?.status).toBe('ok')
+    })
+
+    it('resumeFromDisk() registers under the serial lock: rejects a second resumeFromDisk while active, and start() queues instead of stealing the lock', async () => {
+      const { provider, calls } = controllableProvider()
+      const mgr = new Run2Manager({ providers: { x: provider }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      seed('run-x', 'running')
+
+      mgr.resumeFromDisk(ws, { projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+      expect(mgr.isActive(ws)).toBe(true)
+      expect(calls.length).toBe(1) // s2 started
+
+      // a second resumeFromDisk while the workspace is already active must not spin up a
+      // competing controller for the same workspace.
+      expect(() => mgr.resumeFromDisk(ws, { projects: [{ name: 'a', cwd: join(ws, 'a') }] })).toThrow()
+
+      // a plain start() while active queues (existing serial-lock behavior, unchanged by this task).
+      const planOther = planFromStages('run-other', ungatedStages)
+      const initOther = mgr.start({ workspacePath: ws, runId: 'run-other', plan: planOther, projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+      expect(initOther).toEqual({ status: 'queued', position: 1 })
+      expect(calls.length).toBe(1) // still just the resumed run's lane — nothing else started
+    })
+
+    it('resumeFromDisk() throws when there is nothing resumable (no saved state, or a terminal one)', () => {
+      const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      expect(() => mgr.resumeFromDisk(ws, { projects: [] })).toThrow()
+      seed('run-x', 'failed')
+      expect(() => mgr.resumeFromDisk(ws, { projects: [] })).toThrow()
+    })
   })
 })

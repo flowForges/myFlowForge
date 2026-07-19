@@ -6,6 +6,7 @@ import { RunController, type RunControllerState, type RunLogLine } from './contr
 import type { RunPlan } from './machine'
 import type { GateDecision, LaneDecision } from './decisions'
 import type { RunEvent } from './events'
+import { findLatestRun2Run, isTerminalStatus, type SavedControllerState } from './persist'
 
 export interface Run2Emit {
   event(wsPath: string, e: RunEvent): void
@@ -47,6 +48,45 @@ export interface Run2ManagerDeps {
 export type Run2StartResult =
   | { status: 'started'; state: RunControllerState }
   | { status: 'queued'; position: number }
+
+// P-C2/T2 (disk-resume): everything resumeFromDisk() needs that a fresh start() gets from
+// Run2StartOpts but disk-resume can't get from there (no launch call happened this process) —
+// `workspacePath`/`runId`/`plan` are dropped because resume derives them itself (workspacePath is
+// already the method's own argument; runId + the full RunPlan — including its stamped tempBranch,
+// see machine.ts's RunPlan/planFromStages — are read back off disk via findLatestRun2Run, NOT
+// rebuilt from the workspace's current launch config, which no longer exists in this process).
+// `projects` stays required: the participating projects' cwds are never persisted (only their
+// NAMES appear inside `outcomes`/`projectTargets`), so the resume caller (T3's IPC handler, which
+// has the workspace's project list) must supply them again.
+export type Run2ResumeOpts = Omit<Run2StartOpts, 'workspacePath' | 'runId' | 'plan'>
+
+// What the UI shows before offering "continue this run?" after an app restart — see
+// Run2Manager.resumable() below. `workflowName` is deliberately always absent: RunPlan (the thing
+// saved to disk) has no name field, only stage keys/prompts, so there is nothing to derive one from
+// without adding new persistence — left optional for whenever a caller has a name from elsewhere.
+export interface ResumableSummary {
+  runId: string
+  workflowName?: string
+  resumeStageKey: string
+  resumeStageName: string
+  totalStages: number
+  doneCount: number
+}
+
+function summarizeResumable(runId: string, state: SavedControllerState): ResumableSummary {
+  const stages = state.machine.stages
+  const doneCount = stages.filter((s) => s.status === 'done').length
+  const idx = stages.findIndex((s) => s.status !== 'done')
+  const resumeStage = stages[idx] ?? stages[stages.length - 1]
+  const stagePlan = state.machine.plan.stages.find((s) => s.key === resumeStage?.key)
+  return {
+    runId,
+    resumeStageKey: resumeStage?.key ?? '',
+    resumeStageName: stagePlan?.name ?? resumeStage?.key ?? '',
+    totalStages: stages.length,
+    doneCount,
+  }
+}
 
 export class Run2Manager {
   private controllers = new Map<string, RunController>()
@@ -100,8 +140,6 @@ export class Run2Manager {
   }
 
   private startNow(opts: Run2StartOpts): RunControllerState {
-    // A new run supersedes whatever finished-run state was retained from a prior run in this workspace.
-    this.lastState.delete(opts.workspacePath)
     const store = this.deps.makeStore(opts.workspacePath, opts.runId)
     // Default: an unset permissionMode defaults to 'full' here (not 'auto'/sandboxed) — a real run
     // showed codex needs full to write files without the sandbox cancelling its MCP calls. This is
@@ -117,10 +155,21 @@ export class Run2Manager {
       discardTempBranch: opts.discardTempBranch,
       parkTempBranch: opts.parkTempBranch,
     })
-    controller.onEvent((e) => this.deps.emit.event(opts.workspacePath, e))
-    controller.onUpdate((s) => this.deps.emit.update(opts.workspacePath, s))
-    controller.onLog((l) => this.deps.emit.log?.(opts.workspacePath, l))
-    this.controllers.set(opts.workspacePath, controller)
+    return this.registerAndRun(opts.workspacePath, controller)
+  }
+
+  // Shared by startNow() (fresh RunController from a launch config) and resumeFromDisk() (P-C2/T2 —
+  // a RunController rehydrated from the on-disk snapshot of an interrupted run): wires the
+  // event/update/log bridges, takes the per-workspace serial lock, kicks off the async start()
+  // loop, and releases the lock (+ dequeues the next queued run) once it settles either way.
+  private registerAndRun(wsPath: string, controller: RunController): RunControllerState {
+    // A (re)started run supersedes whatever finished-run state was retained from a prior run in
+    // this workspace.
+    this.lastState.delete(wsPath)
+    controller.onEvent((e) => this.deps.emit.event(wsPath, e))
+    controller.onUpdate((s) => this.deps.emit.update(wsPath, s))
+    controller.onLog((l) => this.deps.emit.log?.(wsPath, l))
+    this.controllers.set(wsPath, controller)
     // .catch prevents an unhandled rejection (e.g. RunController.start()'s zero-work-orders throw)
     // from crashing the Electron main process; .finally frees the per-workspace serial lock.
     // `caughtFailedState` lets .finally know whether .catch already produced the authoritative terminal
@@ -131,22 +180,77 @@ export class Run2Manager {
       .start()
       .catch((err) => {
         const e = err instanceof Error ? err : new Error(String(err))
-        this.deps.onError?.(opts.workspacePath, e)
+        this.deps.onError?.(wsPath, e)
         // ensure the renderer receives a terminal transition even when start() throws before its own
         // terminal emit (e.g. the zero-work-orders guard) — otherwise it's stuck on 'running' forever.
         caughtFailedState = { ...controller.state, status: 'failed' }
-        this.deps.emit.update(opts.workspacePath, caughtFailedState)
+        this.deps.emit.update(wsPath, caughtFailedState)
       })
       .finally(() => {
         // Snapshot the final state before dropping the controller from the active map, so a finished
         // (ok/failed) run is still retrievable via lastStateFor() after the serial lock is freed.
-        this.lastState.set(opts.workspacePath, caughtFailedState ?? controller.state)
-        this.controllers.delete(opts.workspacePath)
+        this.lastState.set(wsPath, caughtFailedState ?? controller.state)
+        this.controllers.delete(wsPath)
         // Task 1: the lock is now free — dequeue+start whatever's next for this workspace, if anything.
         // Must run AFTER the delete above, since start()/startNow() re-checks `controllers.has(wsPath)`.
-        this.startNext(opts.workspacePath)
+        this.startNext(wsPath)
       })
     return controller.state
+  }
+
+  // P-C2/T2: what the UI queries (e.g. on workspace open) to learn whether a workflow was mid-run
+  // when the app last died. Returns null when there's nothing to offer: no saved state at all, a
+  // saved state that already reached a TERMINAL status (ok/failed — a run that finished cleanly,
+  // or already got a manager-level failure snapshot, is not "interrupted"), or — importantly — a
+  // workspace that already has a LIVE controller in memory (a run that's actually still going,
+  // e.g. this same process resumed it already, or it was started fresh this session) — disk-resume
+  // is only for a run that died with no process left driving it.
+  resumable(wsPath: string): ResumableSummary | null {
+    if (this.controllers.has(wsPath)) return null
+    const found = findLatestRun2Run(wsPath)
+    if (!found || isTerminalStatus(found.state.status)) return null
+    return summarizeResumable(found.runId, found.state)
+  }
+
+  // P-C2/T2: rebuilds a RunController from the on-disk snapshot of an interrupted run (same runId —
+  // this CONTINUES that run, it does not start a new one) via RunController's rehydrate path (T1;
+  // see controller.ts's RehydrateState/sanitizeForResume), then registers + starts it exactly like
+  // a fresh run — resume from the first non-`done` stage happens inside start() itself.
+  //
+  // Deliberately throws (rather than start()'s enqueue-behind-the-active-run) when the workspace
+  // already has a live controller: queuing a disk-resume behind an already-running controller makes
+  // no sense — resumable() would have returned null for this workspace in the first place, so a
+  // caller reaching here despite that has a stale/racy view of the world and should be told loudly,
+  // not have its resume silently queued behind a run it didn't know was live. Same handling for "no
+  // resumable state" (already terminal, or was never saved) — resumable() is the intended
+  // pre-check; resumeFromDisk() re-validates rather than trusting a caller's possibly-stale summary.
+  resumeFromDisk(wsPath: string, opts: Run2ResumeOpts): RunControllerState {
+    if (this.controllers.has(wsPath)) {
+      throw new Error(`Run2Manager.resumeFromDisk: workspace already has an active run: ${wsPath}`)
+    }
+    const found = findLatestRun2Run(wsPath)
+    if (!found || isTerminalStatus(found.state.status)) {
+      throw new Error(`Run2Manager.resumeFromDisk: no resumable run for workspace: ${wsPath}`)
+    }
+    const store = this.deps.makeStore(wsPath, found.runId)
+    const plan = found.state.machine.plan
+    const controller = new RunController(plan, {
+      providers: this.deps.providers, store, env: this.deps.env,
+      projects: opts.projects, retries: this.deps.retries, task: opts.task,
+      permissionMode: opts.permissionMode ?? 'full',
+      sessionId: opts.sessionId,
+      projectTargets: opts.projectTargets,
+      mergeTempBranch: opts.mergeTempBranch,
+      discardTempBranch: opts.discardTempBranch,
+      parkTempBranch: opts.parkTempBranch,
+    }, {
+      machine: found.state.machine,
+      outcomes: found.state.outcomes,
+      feedback: found.state.feedback,
+      pendingDirective: found.state.pendingDirective,
+      stageTimings: found.state.stageTimings,
+    })
+    return this.registerAndRun(wsPath, controller)
   }
   get(wsPath: string): RunController | undefined { return this.controllers.get(wsPath) }
   isActive(wsPath: string): boolean { return this.controllers.has(wsPath) }

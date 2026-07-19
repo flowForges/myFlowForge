@@ -1,5 +1,8 @@
 // src/main/run/persist.ts
-import type { RunStore } from '../orchestrator/runStore'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { wsRunsDir } from '../config/paths'
+import { RunStore } from '../orchestrator/runStore'
 import type { RunControllerState } from './controller'
 
 export interface SavedOutcome { id: string; status: 'ok' | 'failed'; project?: string; error?: string; attempts: number }
@@ -26,4 +29,36 @@ export function loadControllerState(store: RunStore): SavedControllerState | nul
   const got = store.getContext(KEY) as SavedControllerState | undefined
   if (!got) return null
   return { ...got, stageTimings: got.stageTimings ?? {} }
+}
+
+// A run's status only ever reaches 'ok'/'failed' once RunController.start() itself resolves/rejects
+// (see controller.ts's terminal assignment right before its final emitUpdate) — 'running'/'awaiting'
+// mean the process that was driving it died before it got there. Shared by Run2Manager.resumable()/
+// resumeFromDisk() (manager.ts) so both agree on exactly what counts as "still resumable".
+export function isTerminalStatus(status: RunControllerState['status']): boolean {
+  return status === 'ok' || status === 'failed'
+}
+
+// P-C2/T2 (disk-resume): a workspace's saved run2-state lives inside a SPECIFIC run's directory
+// (`.forge/runs/<runId>/context.json`, keyed by runId — see RunStore/saveControllerState above), but
+// after an app restart the manager only knows the WORKSPACE, not which runId was last active. Scans
+// every run directory under this workspace's `.forge/runs/` and returns whichever one BOTH (a)
+// actually has a saved run2-state (skips directories from the old orchestrator, or a run whose
+// controller never got past construction) and (b) has the most recently modified context.json —
+// i.e. the run that was still in flight when the app died (an ended run's file also stops changing
+// once its terminal emitUpdate() writes it, but ties only matter across MULTIPLE crashed runs in the
+// same workspace, an edge case not worth resolving more precisely than mtime).
+export function findLatestRun2Run(wsPath: string): { runId: string; state: SavedControllerState } | null {
+  const dir = wsRunsDir(wsPath)
+  if (!existsSync(dir)) return null
+  let best: { mtimeMs: number; runId: string; state: SavedControllerState } | null = null
+  for (const entry of readdirSync(dir)) {
+    const ctxFile = join(dir, entry, 'context.json')
+    if (!existsSync(ctxFile)) continue
+    const state = loadControllerState(new RunStore(wsPath, entry))
+    if (!state) continue
+    const mtimeMs = statSync(ctxFile).mtimeMs
+    if (!best || mtimeMs > best.mtimeMs) best = { mtimeMs, runId: entry, state }
+  }
+  return best ? { runId: best.runId, state: best.state } : null
 }
