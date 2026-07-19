@@ -255,6 +255,60 @@ describe('registerRun2', () => {
     })
   })
 
+  describe('run2:launch-start rejects a second start while the workspace has a live run (P4-2 review fix)', () => {
+    it('does not call createTempBranch or manager.start, and surfaces a readable error', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
+      try {
+        const createCalls: string[] = []
+        const stubCreate = async (cwd: string, _base: string, runId: string) => {
+          createCalls.push(cwd)
+          return `forge/run-${runId}`
+        }
+        const handlers = new Map<string, (...a: any[]) => any>()
+        // A provider whose run() never resolves `done` — keeps the controller "active" (still in
+        // manager.controllers) for the duration of this test, simulating a live in-flight run.
+        const neverDoneProvider: AgentProvider = {
+          id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+          async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+          run(task: AgentTask, _cb: AgentCallbacks) {
+            return { id: task.agentId, cancel() {}, done: new Promise(() => {}) }
+          },
+        }
+        const manager = new Run2Manager({ providers: { x: neverDoneProvider }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        const wsConfig: Workspace = {
+          name: 'pay', path: ws, workflowId: '', stages: [],
+          workflows: [{ id: 'wf1', name: '标准五段', stages: [
+            { key: 'design', provider: 'x', model: 'm', scope: 'root', gate: false },
+            { key: 'develop', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+          ] }],
+          projects: [{ repoId: 'api', name: 'api', branch: 'main' }] as any,
+          status: 'idle', plugins: [], stepPlugins: [],
+        } as any
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [], createTempBranch: stubCreate })
+        const launchStart = handlers.get(CH.run2LaunchStart)!
+        // First launch-start: goes through (run #1 becomes active and never finishes, per neverDoneProvider).
+        const first = await launchStart({}, {
+          workspacePath: ws, workflowId: 'wf1',
+          projects: [{ name: 'api', provider: 'x', model: 'm' }],
+          supplement: '', seed: '',
+        })
+        expect(first.status).toBe('started')
+        expect(manager.isActive(ws)).toBe(true)
+        createCalls.length = 0 // only count calls made by the SECOND (rejected) attempt below
+
+        // Second launch-start for the SAME workspace while run #1 is still live: must reject before
+        // touching git or the manager — no temp branch, no manager.start/enqueue.
+        await expect(launchStart({}, {
+          workspacePath: ws, workflowId: 'wf1',
+          projects: [{ name: 'api', provider: 'x', model: 'm' }],
+          supplement: '', seed: '',
+        })).rejects.toThrow(/当前工作区有工作流在执行/)
+        expect(createCalls).toEqual([])
+        manager.abort(ws) // tidy up the never-resolving run so the process can exit cleanly
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+  })
+
   describe('run2:read-file (P5-UI Task 2)', () => {
     function makeHandlers() {
       const handlers = new Map<string, (...a: any[]) => any>()

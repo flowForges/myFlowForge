@@ -82,6 +82,16 @@ export function registerRun2(deps: {
   // fallback) would preview stages that then throw "没有可执行阶段" on confirm.
   onInvoke(CH.run2LaunchStart, async (_e, p: LaunchStartConfig) => {
     if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:launch-start)')
+    // P4-2 review fix: Run2Manager.start() ENQUEUES (doesn't throw) a second run for a workspace that
+    // already has one active — but createRunTempBranches below runs REAL `git checkout -b` on each
+    // project's cwd. If two launch-gate cards both confirm for the same workspace while run #1 is live,
+    // an unconditional checkout here would swap HEAD out from under run #1's lanes mid-flight (real
+    // working-tree corruption). Design spec §8: a workspace runs at most one workflow at a time; a
+    // second attempt is rejected with a message, not queued into a git race. So: reject BEFORE touching
+    // git or the manager when this workspace already has a live run — no branch is ever created for it.
+    if (manager.isActive(p.workspacePath)) {
+      throw new Error('当前工作区有工作流在执行，请等它结束后再启动')
+    }
     const ws = readWorkspace(p.workspacePath)
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
     const plan = buildLaunchPlan(p, ws, readWorkflows?.() ?? [], readCustomStages?.() ?? [])

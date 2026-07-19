@@ -412,6 +412,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // actually resolves; on rejection, keep the gate active with an inline error so the user can retry.
   const confirmLaunchGate = useCallback((id: string, config: LaunchGateConfig) => {
     if (!wsPath) return
+    // Defense-in-depth (P4-2 review fix): the main-process handler already rejects a second
+    // run2:launch-start while this workspace has a live run (before any git touches the working
+    // tree) — this guard just stops a stale second gate card's confirm from even attempting the
+    // IPC round-trip when the user opened two launch gates before confirming either. Mirror the
+    // main process's own rejection message so the UX is identical whichever guard actually fires.
+    if (run2Live) {
+      setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, error: '当前工作区有工作流在执行，请等它结束后再启动' } : g)))
+      return
+    }
     const selectedProjects = config.projects.filter((p) => p.selected)
     const cfg: LaunchStartConfig = {
       workspacePath: wsPath,
@@ -456,7 +465,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       const message = err instanceof Error ? err.message : String(err ?? '启动失败，请重试')
       setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, error: message } : g)))
     })
-  }, [wsPath, run2, sessions.activeSessionId, launchGates])
+  }, [wsPath, run2, run2Live, sessions.activeSessionId, launchGates])
   // 取消: drop the still-active gate entirely (no record left behind, matching PlanCard's 拒绝/deny —
   // a launch that never happened isn't worth a frozen entry).
   const cancelLaunchGate = useCallback((id: string) => {
