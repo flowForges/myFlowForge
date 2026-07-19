@@ -98,6 +98,28 @@ function failingProvider(stage: string): AgentProvider {
   }
 }
 
+// Provider that raises exactly one "doubt" (via the forge-result fence's `doubts` field) the
+// first time it runs the named stage, and behaves like okProvider() otherwise — used to test
+// that a doubt event holds the stage from advancing until a human resolves it.
+function doubtProvider(note: string, forStage: string): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        if (task.stageKey === forStage) {
+          const block = `\`\`\`forge-result\n${JSON.stringify({ summary: 'done', filesChanged: [], testsRun: { passed: true }, blockers: [], doubts: [note] })}\n\`\`\``
+          cb.onHandoff?.({ summary: block })
+        } else {
+          cb.onHandoff?.({ summary: 'out' })
+        }
+        const r = { ok: true, summary: '' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+
 const idFactory = () => { let n = 0; return (p: string) => `${p}-${n++}` }
 
 const plan: RunPlan = {
@@ -562,5 +584,132 @@ describe('RunController', () => {
     expect(develop.endedAt!).toBeGreaterThanOrEqual(develop.startedAt)
     // design (gated, first) must have started no later than develop
     expect(design.startedAt).toBeLessThanOrEqual(develop.startedAt)
+  })
+
+  describe('doubt gates stage advance (P3-3)', () => {
+    it('a doubt holds a gated stage from advancing even after its gate already passed; dismiss lets it proceed', async () => {
+      const store = new RunStore(ws, 'r1')
+      const plan2: RunPlan = { runId: 'r1', stages: [
+        { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: true },
+        { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+      ] }
+      const c = new RunController(plan2, { providers: { x: doubtProvider('note-1', 'design') }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      let doubtId = ''
+      c.onEvent((e) => {
+        if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) // the gate itself passes right away
+        if (e.kind === 'doubt') doubtId = e.id // deliberately left unresolved for now
+      })
+      const startPromise = c.start()
+      await vi.waitFor(() => expect(doubtId).not.toBe(''))
+      // Give the (already-passed) gate decision a chance to be applied — it must NOT be: the
+      // stage must still be held by the unresolved doubt.
+      await vi.waitFor(() => expect(c.state.status).toBe('awaiting'))
+      expect(c.state.machine.currentIndex).toBe(0)
+      expect(c.state.machine.stages[0].status).not.toBe('done')
+
+      c.resolveLane(doubtId, { type: 'dismiss' })
+      const final = await Promise.race([
+        startPromise,
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: dismiss did not unblock the run')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      expect(final.machine.stages.map((s) => s.status)).toEqual(['done', 'done'])
+      expect(final.inbox).toEqual([]) // no orphaned doubt event left behind
+    })
+
+    it('回退改方案: jumpBack rewinds to the design stage (first gated stage), carrying the doubt note as feedback', async () => {
+      const store = new RunStore(ws, 'r1')
+      const plan2: RunPlan = { runId: 'r1', stages: [
+        { key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: true },
+        { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false },
+      ] }
+      const designPrompts: string[] = []
+      let developRuns = 0
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          const done = (async () => {
+            if (task.stageKey === 'design') designPrompts.push(task.prompt)
+            if (task.stageKey === 'develop') {
+              developRuns++
+              if (developRuns === 1) {
+                // only the FIRST develop round raises the doubt, so the re-run after jumpBack
+                // completes cleanly and the whole run can reach 'ok'.
+                const block = `\`\`\`forge-result\n${JSON.stringify({ summary: 'done', filesChanged: [], testsRun: { passed: true }, blockers: [], doubts: ['方案没考虑并发写入'] })}\n\`\`\``
+                cb.onHandoff?.({ summary: block })
+                const r = { ok: true, summary: '' }; cb.onDone(r); return r
+              }
+            }
+            cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+          })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      c.onEvent((e) => {
+        if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' })
+        // No targetKey supplied — the doubt-resolution "回退改方案" action defaults to the
+        // design stage (first gated stage in the plan).
+        if (e.kind === 'doubt') c.resolveLane(e.id, { type: 'jumpBack' })
+      })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: jumpBack did not resume the run')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      expect(designPrompts).toHaveLength(2) // design ran once initially, once again after the jumpBack
+      expect(designPrompts[1]).toContain('方案没考虑并发写入')
+      expect(final.machine.stages[0].round).toBe(1) // design's re-run bumped its round
+    })
+
+    it('补充说明后继续: redo re-runs the CURRENT stage with the clarification threaded into its prompt', async () => {
+      const store = new RunStore(ws, 'r1')
+      const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const prompts: string[] = []
+      let doubted = false
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          const done = (async () => {
+            prompts.push(task.prompt)
+            if (!doubted) {
+              doubted = true
+              const block = `\`\`\`forge-result\n${JSON.stringify({ summary: 'd', filesChanged: [], testsRun: { passed: true }, blockers: [], doubts: ['缺少单测覆盖'] })}\n\`\`\``
+              cb.onHandoff?.({ summary: block })
+            } else {
+              cb.onHandoff?.({ summary: 'ok' })
+            }
+            const r = { ok: true, summary: '' }; cb.onDone(r); return r
+          })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      c.onEvent((e) => { if (e.kind === 'doubt') c.resolveLane(e.id, { type: 'redo', feedback: '补充：请补上单测' }) })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: redo did not resume the run')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      expect(prompts).toHaveLength(2)
+      expect(prompts[1]).toContain('缺少单测覆盖') // the doubt's own note
+      expect(prompts[1]).toContain('补充：请补上单测') // the human's clarification
+      expect(final.machine.stages[0].round).toBe(1)
+    })
+
+    it('终止运行: abort on a doubt event stops the whole run', async () => {
+      const store = new RunStore(ws, 'r1')
+      const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const c = new RunController(plan2, { providers: { x: doubtProvider('note', 'develop') }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      c.onEvent((e) => { if (e.kind === 'doubt') c.resolveLane(e.id, { type: 'abort' }) })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: abort did not stop the run')), 2000)),
+      ])
+      expect(final.status).toBe('failed')
+      expect(final.inbox).toEqual([]) // no orphaned doubt event left behind
+    })
   })
 })
