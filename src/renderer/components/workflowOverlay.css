@@ -56,6 +56,19 @@
    as the sibling `.wfo-title .tt small` rule above. */
 .wfo-branch { font: 600 11px/1 var(--mono); color: var(--faint); margin-left: 6px; }
 
+/* P2-fix: RunExecPanel reuses the flow-node/lane header markup ported from the wide (~900px) floating
+   overlay, but now lives in the ~400-460px right inspector. Without these, the stage title's flex-1
+   column (.wfo-cn) collapses toward zero width and its CJK text wraps to a vertical single-char column
+   (unlike .wfo-lname b, .wfo-cn b had no nowrap/ellipsis), and the node/lane header badges overflow the
+   panel's right edge. Scope to .wfo-run-panel so the shared classes' overlay-width behavior elsewhere
+   (LaunchGateCard) is untouched. */
+.wfo-run-panel .wfo-flow { overflow-x: hidden; padding: 16px 12px 12px; }
+.wfo-run-panel .wfo-ghead,
+.wfo-run-panel .wfo-lhead { flex-wrap: wrap; row-gap: 6px; }
+.wfo-run-panel .wfo-cn { min-width: 44%; }
+.wfo-run-panel .wfo-cn b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wfo-run-panel .wfo-term .g { max-width: 160px; }
+
 /* head + 工作流筛选 */
 .wfo-head { flex: 0 0 auto; padding: 15px 17px 13px; border-bottom: 1px solid var(--border); }
 .wfo-title { display: flex; align-items: center; gap: 10px; }
