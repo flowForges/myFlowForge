@@ -487,6 +487,8 @@
 .msg-req.k-doubt { border-color: var(--border-2); }
 .msg-req.k-failure { border-color: color-mix(in oklab, var(--err) 45%, var(--border-2)); }
 .msg-req.k-gate { border-color: color-mix(in oklab, var(--warn) 45%, var(--border-2)); }
+/* P4-3: synthetic "运行已终止" marker (RunExecPanel 终止 button) — always frozen-only, dim/neutral. */
+.msg-req.k-aborted { border-color: var(--border-2); }
 
 /* ---- RunLauncher shell — its OWN classes (not chat's .msg-req/.plan-card/.req-*, which carry the
    amber "request card" accent built for chat interaction prompts/gates and read as an alert here). A

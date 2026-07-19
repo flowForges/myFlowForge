@@ -233,10 +233,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // P3-B additive: new run-controller-driven panel, unconditional hook call (rules-of-hooks) — its
   // state stays null/idle unless a run2 run is started, so it has no effect on chat-mode rendering.
   const run2 = useRun2(wsPath)
-  // P2-2/P2-4: "is a run2 run currently live" — drives the right-inspector tab bar (执行/变更/文件树
-  // while live, else the normal agents/changes/files set) and locks the composer (P2-3). The chat
-  // column itself is always mounted/visible now (P2-4 removed the floating run-mode overlay that
-  // used to replace it); a live run only ever shows in the right-side 执行 tab.
+  // P2-2/P2-4: "is a run2 run currently live" — locks the composer (P2-3) and guards a second
+  // launch-gate confirm while one's already running. The chat column itself is always mounted/
+  // visible now (P2-4 removed the floating run-mode overlay that used to replace it); a live run
+  // only ever shows in the right-side 执行 tab. NOTE: the inspector tab BAR itself is gated on the
+  // session-scoped `run2StateForTab` (declared further below), not this — see its comment — so the
+  // 执行 tab stays reachable after the run reaches ok/failed, not just while `run2Live`.
   const run2Live = run2.state?.status === 'running' || run2.state?.status === 'awaiting'
   // Default the inspector to the 执行 tab once per NEW run (keyed off runId, not status) so mid-run
   // status churn (running↔awaiting on gate resolutions) never fights a tab the user picked manually —
@@ -534,6 +536,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // whichever tab happens to be in front when the run raises one (the same "画着图呢，A 的权限门跳到 C"
   // class of bug the old orchestrator already guards against). A run with no sessionId (legacy /
   // started via a non-gate channel that never threaded one through) shows anywhere in the workspace.
+  // Deferred fix (P2-2): also reused above (~line 1151) to gate the 执行 tab BUTTON itself — unlike
+  // `run2Live` (running/awaiting only), this stays non-null through ok/failed too (the controller's
+  // `lastState` is retained per workspace after the run ends), so the tab remains clickable to review
+  // a finished/failed run instead of vanishing the moment it completes. It only goes null again once
+  // this session has no run2 state of its own — i.e. on switching to a session that never started one
+  // (a session-scoped run for another session, or none at all) — which is exactly when the tab should
+  // hide. A brand-new run in this same session simply replaces `run2.state` (new runId), so the tab
+  // just keeps showing the latest run — never both stuck open AND stale.
   const run2StateForTab = run2.state && (!run2.state.sessionId || run2.state.sessionId === sessions.activeSessionId)
     ? run2.state
     : null
@@ -582,6 +592,45 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     run2.resolveLane(eventId, d)
     if (event) freezeRunCard(event, describeLaneDecision(d))
   }, [run2, freezeRunCard])
+  // Deferred fix (P4-3): RunExecPanel's 终止 button used to call run2.abort() directly. abort()
+  // force-settles (resolveGate/resolveLane's settleAll) any pending gate/auth/question/doubt/failure
+  // event and DROPS it from inbox server-side — bypassing onRunGate/onRunLane above entirely, so no
+  // freezeRunCard ever runs. Result: whatever card was pending just vanishes from the chat timeline
+  // with no trace the run was even interrupted there. Fix: persist a single frozen "运行已终止"
+  // marker into the run's OWNING session (same freezeRunCard pattern) the instant 终止 is clicked —
+  // BEFORE calling run2.abort() — rather than trying to infer "was this abort?" from the terminal
+  // state afterwards: a plain abort and a genuine stage failure both land on status 'failed' with no
+  // distinguishing field (see controller.ts `this.status = this.aborted ? 'failed' : …`), so the
+  // click itself is the only reliable signal. Deduped by runId (abortedRunIdsRef) so a double-click
+  // before the button disappears, or any re-render, never persists it twice.
+  const abortedRunIdsRef = useRef<Set<string>>(new Set())
+  const handleRunAbort = useCallback(() => {
+    const st = run2.state
+    const runId = st?.machine?.plan?.runId
+    if (runId && !abortedRunIdsRef.current.has(runId)) {
+      abortedRunIdsRef.current.add(runId)
+      const at = Date.now()
+      const frozen: FrozenRunCard = {
+        id: `abort-${runId}`,
+        kind: 'aborted',
+        stageKey: st!.machine.stages[st!.machine.currentIndex]?.key ?? '',
+        title: '运行已终止',
+        decision: '用户终止运行',
+        at,
+        ts: at,
+      }
+      setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
+      // Spec §8 / mirrors freezeRunCard above: persist to the run's OWNING session, not necessarily
+      // whatever tab is active right now.
+      const sid = st!.sessionId ?? sessions.activeSessionId
+      if (wsPath && sid) {
+        void window.forge.chatAppendRunCard?.({
+          workspacePath: wsPath, sessionId: sid, ts: new Date(at).toISOString(), runCard: frozen,
+        })
+      }
+    }
+    run2.abort()
+  }, [run2, wsPath, sessions.activeSessionId])
 
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
@@ -1147,9 +1196,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
 
       {/* 右侧检查器 */}
       <aside className={'inspector' + (chatMode ? ' chat' : '') + (preview && !browse ? ' previewing' : '')} style={inspectorStyle}>
-        {/* 检查器标签栏 — 在对话/工作流模式下均可见。run2 运行中时 执行 替换 概览/代理(P2-2)。 */}
+        {/* 检查器标签栏 — 在对话/工作流模式下均可见。run2 运行中(或运行已结束但仍是当前会话最后一个
+            run,即 run2StateForTab 非空)时 执行 替换 概览/代理(P2-2；deferred fix: 原先用 run2Live
+            门控，运行一结束 tab 按钮就消失，用户切去变更/文件树后再也点不回执行面板去看终态/合并失败
+            错误 —— 改用 session 域的 run2StateForTab，运行结束后 tab 仍可点；换会话/换新 run 才隐藏)。 */}
         <div className="insp-tabs">
-            {run2Live ? (
+            {run2StateForTab ? (
               <button
                 className={`insp-tab${activeTab === 'exec' ? ' on' : ''}`}
                 data-pane="exec"
@@ -1192,7 +1244,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         <div className="insp-body">
             {/* 执行 pane — run2 运行时的执行面板(P2-2:进度+阶段流程+代码阶段分支扇出+运行级暂停/继续/终止)。 */}
             <div className={`insp-pane${activeTab === 'exec' ? ' on' : ''}`} id="pane-exec">
-              {activeTab === 'exec' && <RunExecPanel run2={run2} />}
+              {activeTab === 'exec' && <RunExecPanel run2={run2} onAbort={handleRunAbort} />}
             </div>
 
             {/* 代理编排 / 对话模式 pane */}

@@ -75,7 +75,7 @@ function AgentNodeWithCaps({ agent, open, onToggle }: { agent: AdaptedAgent; ope
 // (mirrors the old WorkspaceView's STATE_IDX_MAP); 'wait'/'awaiting'/'stalled' get no extra class.
 const STAGE_STATE_CLS: Record<string, string> = { run: 'run', ok: 'ok', err: 'err' }
 
-export function RunExecPanel({ run2 }: { run2: Run2Api }): ReactElement {
+export function RunExecPanel({ run2, onAbort }: { run2: Run2Api; onAbort?: () => void }): ReactElement {
   // Per-stage `project -> last-known LaneMemory` so a fan-out lane never disappears once observed
   // (see runExecAdapter's LaneMemory doc). Reset whenever the run identity changes.
   const memoryRef = useRef<Map<string, Map<string, LaneMemory>>>(new Map())
@@ -189,7 +189,11 @@ export function RunExecPanel({ run2 }: { run2: Run2Api }): ReactElement {
             ) : runStatus === 'running' ? (
               <button className="wfo-btn ghost" onClick={() => run2.pause()}>暂停</button>
             ) : null}
-            <button className="wfo-btn ghost" onClick={() => run2.abort()}>
+            {/* P4-3: prefer the caller's onAbort (WorkspaceView wires one that records a "运行已终止"
+                timeline marker before aborting — see its doc) so a pending gate/auth/question/
+                doubt/failure card doesn't just silently vanish; falls back to a bare run2.abort()
+                for callers that don't need that (e.g. this component's own unit tests). */}
+            <button className="wfo-btn ghost" onClick={() => (onAbort ?? run2.abort)()}>
               <Icon svg={IC.stop} /> 终止
             </button>
           </div>

@@ -261,3 +261,74 @@ describe('WorkspaceView: run2 事件卡按发起会话隔离', () => {
     expect(chatAppendRunCardMock.mock.calls[0][0].sessionId).toBe('s-A')
   })
 })
+
+// Deferred Minor fix (P4-3): RunExecPanel's 终止 button used to call run2.abort() directly — the
+// controller force-settles (drops) any pending gate/auth/question/doubt/failure inbox event without
+// ever routing through onRunGate/onRunLane's freeze-and-persist path, so whatever card was pending
+// just vanished from the chat timeline with no trace. Now WorkspaceView wires an onAbort into
+// RunExecPanel that persists a single frozen "运行已终止" marker (same freezeRunCard mechanism, owning-
+// session-scoped) BEFORE calling run2.abort().
+describe('WorkspaceView: 终止运行 leaves a frozen "运行已终止" record in the owning session', () => {
+  it('clicking 终止 persists exactly one record; a repeat click or a later reload does not double-write', async () => {
+    const abortMock = vi.fn()
+    ;(window as any).forge = {
+      ...forgeBase,
+      run2: { ...forgeBase.run2, abort: abortMock, getState: vi.fn(async () => makeRunState([gateEvent], 's-1')) },
+    }
+
+    const { unmount } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+
+    // A running run2 state auto-defaults the right inspector to the 执行 tab (P2-2), so RunExecPanel
+    // (and its 终止 button) is already on-screen without any manual tab click. `#pane-exec` itself is
+    // always mounted (only its CONTENT is conditional on activeTab==='exec'), so wait for the button
+    // specifically rather than just the pane div existing.
+    await waitFor(() => {
+      const el = document.querySelector('#pane-exec') as HTMLElement
+      expect(within(el).queryByRole('button', { name: /终止/ })).toBeTruthy()
+    })
+    const pane = document.querySelector('#pane-exec') as HTMLElement
+    const abortBtn = within(pane).getByRole('button', { name: /终止/ })
+
+    fireEvent.click(abortBtn)
+    expect(abortMock).toHaveBeenCalledTimes(1)
+
+    await waitFor(() => expect(chatAppendRunCardMock).toHaveBeenCalledTimes(1))
+    const call = chatAppendRunCardMock.mock.calls[0][0]
+    expect(call.workspacePath).toBe('/ws')
+    expect(call.sessionId).toBe('s-1')
+    expect(call.runCard.id).toBe('abort-run-1')
+    expect(call.runCard.kind).toBe('aborted')
+    expect(call.runCard.stageKey).toBe('design')
+    expect(call.runCard.decision).toBe('用户终止运行')
+    expect(typeof call.runCard.at).toBe('number')
+
+    // A second click (e.g. before the button visually disappears) must NOT double-write the record,
+    // even though it does still forward the abort itself every time.
+    fireEvent.click(abortBtn)
+    expect(abortMock).toHaveBeenCalledTimes(2)
+    expect(chatAppendRunCardMock).toHaveBeenCalledTimes(1)
+
+    unmount()
+
+    // "Reload": a fresh mount that already has the persisted marker in chatHistory (mirrors the
+    // sibling reload test above) and a finished/gone run2 state — must NOT re-append on mount.
+    chatAppendRunCardMock.mockClear()
+    const persisted: ChatMessage[] = [
+      ...conversation,
+      {
+        id: 'abort-run-1', who: 'ai', text: '', ts: '2026-07-19T00:00:03.000Z',
+        runCard: { id: 'abort-run-1', kind: 'aborted', stageKey: 'design', title: '运行已终止', decision: '用户终止运行', at: 1752883200000, ts: 1752883200000 },
+      } as ChatMessage,
+    ]
+    ;(window as any).forge = {
+      ...forgeBase,
+      chatHistory: vi.fn(async () => persisted),
+      run2: { ...forgeBase.run2, getState: vi.fn(async () => null) },
+    }
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+    await waitFor(() => expect(document.querySelector('[data-req="abort-run-1"]')).toBeTruthy())
+    expect(chatAppendRunCardMock).not.toHaveBeenCalled()
+  })
+})

@@ -21,7 +21,13 @@ import type { RunEvent } from '../../../main/run/events'
 //    the outer wrapper's `ts` is fixed at creation, `decidedAt` lives on the frozen record separately.
 export interface FrozenRunCard {
   id: string
-  kind: RunEvent['kind']
+  // Deferred fix (P4-3): 'aborted' is a synthetic marker kind — never a real controller-emitted
+  // RunEvent, only ever CONSTRUCTED directly as a FrozenRunCard (WorkspaceView's recordRunAbort) the
+  // moment the user hits 终止 in RunExecPanel, since that force-settles/drops any pending inbox event
+  // without ever routing through resolveGate/resolveLane (i.e. without a normal freeze). It records
+  // that the run ended by user abort instead of letting a pending gate/auth/question/doubt/failure
+  // card just vanish from the timeline with no trace.
+  kind: RunEvent['kind'] | 'aborted'
   stageKey: string
   title: string
   body?: string

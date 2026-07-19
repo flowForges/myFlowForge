@@ -156,4 +156,50 @@ describe('WorkspaceView inspector 执行 tab (P2-2)', () => {
     const pane = container.querySelector('#pane-exec') as HTMLElement
     expect(within(pane).getByText('代码开发', { selector: '.stage-name' })).toBeInTheDocument()
   })
+
+  // Deferred fix (P2-2): the 执行 tab BUTTON used to be gated on run2Live (running/awaiting only) —
+  // the instant a run reached ok/failed, the button itself disappeared, stranding a user who'd
+  // navigated to 变更/文件树 with no way back to review the finished run (or a merge-failure error).
+  // Now gated on the session-scoped run2StateForTab, which stays non-null through ok/failed.
+  it('run reaches terminal status (ok/failed, same owning session): 执行 tab stays present/clickable; switching to a session with no run hides it', async () => {
+    const twoSessionsFile = (active: string) => ({
+      sessions: [
+        { id: 's-1', title: '会话一', mode: 'workflow' as const, createdAt: 0 },
+        { id: 's-2', title: '会话二', mode: 'chat' as const, createdAt: 1 },
+      ],
+      activeSessionId: active,
+    })
+    ;(window as any).forge = {
+      ...forgeBase,
+      sessionList: vi.fn(async () => twoSessionsFile('s-1')),
+      sessionSwitch: vi.fn(async (a: { sessionId: string }) => twoSessionsFile(a.sessionId)),
+    }
+
+    const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+
+    act(() => {
+      emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'running', sessionId: 's-1' }) })
+    })
+    await waitFor(() => expect(container.querySelector('.insp-tab[data-pane="exec"]')).not.toBeNull())
+
+    // Run finishes: status running -> ok. The tab BUTTON must remain (not just its content).
+    act(() => {
+      emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'ok', sessionId: 's-1' }) })
+    })
+    await waitFor(() => expect(container.querySelector('.insp-tab[data-pane="exec"]')).not.toBeNull())
+
+    // Still clickable: navigate away then back, terminal RunExecPanel content still renders.
+    fireEvent.click(container.querySelector('.insp-tab[data-pane="changes"]')!)
+    expect(container.querySelector('.insp-tab[data-pane="exec"]')!.classList.contains('on')).toBe(false)
+    fireEvent.click(container.querySelector('.insp-tab[data-pane="exec"]')!)
+    expect(container.querySelector('.insp-tab[data-pane="exec"]')!.classList.contains('on')).toBe(true)
+    const pane = container.querySelector('#pane-exec') as HTMLElement
+    expect(within(pane).getByText('代码开发', { selector: '.stage-name' })).toBeInTheDocument()
+
+    // Switch to a DIFFERENT session that never ran anything: the tab hides again.
+    fireEvent.click(screen.getByText('会话二'))
+    await waitFor(() => expect(container.querySelector('.insp-tab[data-pane="agents"]')).not.toBeNull())
+    expect(container.querySelector('.insp-tab[data-pane="exec"]')).toBeNull()
+  })
 })
