@@ -8,6 +8,7 @@ import { RunController, type RunControllerState, type RunLogLine } from './contr
 import type { RunPlan, MachineState } from './machine'
 import type { RunEvent } from './events'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
+import type { BridgeRunCtx, ForgeBridge } from '../mcp/forgeBridge'
 
 let ws: string
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'ctl-')) })
@@ -1318,6 +1319,130 @@ describe('RunController', () => {
       expect(final.status).toBe('ok')
       expect(calls).toEqual([]) // no stage re-ran on resume — every stage was already done
       expect(mergeCalls).toEqual(['/ws/a', '/ws/b']) // the user could still decide merge vs. discard
+    })
+  })
+
+  // ④ (spec §7.4 ③硬阻塞): a run stage sub-agent that hits a HARD blocker (missing credential, "which
+  // staging env", etc.) should be able to call forge_ask instead of guessing/failing — routed through
+  // a per-run live forge bridge (RunController.setupBridge/envForOrder/askFromAgent), reusing the
+  // SAME 输入门 (question) card / resolveLane('answer') path the text-fence onInput callback already
+  // uses. `startBridge` is injected (RunControllerDeps.startBridge) so these tests never open a real
+  // unix socket — they capture the BridgeRunCtx handed to it and drive `ctx.ask(...)` directly,
+  // exactly what the real forgeBridge.ts dispatch does when a stage agent calls forge_ask.
+  describe('forge_ask bridge (§7.4 ③硬阻塞: hard blocker asks the user)', () => {
+    function fakeBridgeStarter(capture: { ctx?: BridgeRunCtx }, socketPath = '/fake/forge.sock') {
+      return async (_runDir: string, ctx: BridgeRunCtx): Promise<ForgeBridge> => {
+        capture.ctx = ctx
+        return { socketPath, close: async () => {} }
+      }
+    }
+    // A provider whose stage agent doesn't finish until the test releases it — lets the test drive
+    // a forge_ask (via the captured bridge ctx) while the lane is still "in flight", without racing
+    // the lane's own natural completion.
+    function blockingProvider(): { provider: AgentProvider; release: () => void } {
+      let release!: () => void
+      const gate = new Promise<void>((res) => { release = res })
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          const done = (async () => {
+            await gate
+            cb.onHandoff?.({ summary: 'ok' })
+            const r = { ok: true, summary: '' }; cb.onDone(r); return r
+          })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      return { provider, release }
+    }
+
+    it('a forge_ask from a run stage agent surfaces a `question` event for the asking lane, and resolveLane(answer) both resolves it and answers the bridge caller', async () => {
+      const store = new RunStore(ws, 'r1')
+      const capture: { ctx?: BridgeRunCtx } = {}
+      const { provider, release } = blockingProvider()
+      const p: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const c = new RunController(p, {
+        providers: { x: provider }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        mcpEntry: '/fake/forgeMcp.js', startBridge: fakeBridgeStarter(capture),
+      })
+      const events: RunEvent[] = []
+      c.onEvent((e) => events.push(e))
+      const startPromise = c.start()
+
+      // setupBridge() is awaited before any lane starts (see start()'s doc) — wait for the bridge ctx
+      // to actually be captured rather than assuming a fixed number of microtask ticks.
+      await vi.waitFor(() => expect(capture.ctx).toBeTruthy())
+
+      // Simulate the bridge dispatching a real forge_ask call from project a's develop-stage agent —
+      // agentId is the lane's own WorkOrder.id (`${stageKey}:${project}`, see fanout.ts), exactly what
+      // envForOrder() provisions as FORGE_AGENT_ID for that lane.
+      const askPromise = capture.ctx!.ask('develop:a', '缺少 STRIPE_API_KEY，该连哪个环境？')
+
+      await vi.waitFor(() => expect(events.some((e) => e.kind === 'question')).toBe(true))
+      const q = events.find((e) => e.kind === 'question')!
+      expect(q).toMatchObject({ laneId: 'develop:a', stageKey: 'develop', title: '缺少 STRIPE_API_KEY，该连哪个环境？' })
+
+      const resolved = c.resolveLane(q.id, { type: 'answer', value: 'sk-test-123' })
+      expect(resolved).toBe(true)
+      await expect(askPromise).resolves.toBe('sk-test-123')
+
+      // Let project a's (and b's) agent finish so the run itself completes cleanly.
+      release()
+      const final = await startPromise
+      expect(final.status).toBe('ok')
+    })
+
+    it('provisions the bridge socket into the stage agent env (FORGE_SOCKET/FORGE_AGENT_ID/FORGE_MCP_ENTRY/FORGE_TOOLS)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const capture: { ctx?: BridgeRunCtx } = {}
+      const seenEnvs: Record<string, NodeJS.ProcessEnv> = {}
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb, env) {
+          seenEnvs[task.agentId] = env
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const p: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const c = new RunController(p, {
+        providers: { x: provider }, store, env: { EXISTING: '1' }, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        mcpEntry: '/fake/forgeMcp.js', startBridge: fakeBridgeStarter(capture, '/fake/run-r1/forge.sock'),
+      })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      // Base env is preserved (proxy/etc. — buildAgentEnv's output, opaque to the controller) alongside
+      // the injected forge vars, and FORGE_AGENT_ID is the WorkOrder's own laneId per project.
+      expect(seenEnvs['develop:a']).toMatchObject({
+        EXISTING: '1',
+        FORGE_SOCKET: '/fake/run-r1/forge.sock',
+        FORGE_AGENT_ID: 'develop:a',
+        FORGE_MCP_ENTRY: '/fake/forgeMcp.js',
+      })
+      expect(seenEnvs['develop:a'].FORGE_TOOLS).toContain('forge_ask')
+      expect(seenEnvs['develop:b']).toMatchObject({ FORGE_AGENT_ID: 'develop:b', FORGE_SOCKET: '/fake/run-r1/forge.sock' })
+    })
+
+    it('without deps.mcpEntry, no bridge starts and the stage agent env is unchanged (additive: text-fence handoff still works)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const seenEnvs: Record<string, NodeJS.ProcessEnv> = {}
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb, env) {
+          seenEnvs[task.agentId] = env
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const p: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const c = new RunController(p, { providers: { x: provider }, store, env: { EXISTING: '1' }, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(seenEnvs['develop:a']).toEqual({ EXISTING: '1' })
+      expect(seenEnvs['develop:a'].FORGE_SOCKET).toBeUndefined()
     })
   })
 })
