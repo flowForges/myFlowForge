@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { WorkspaceView } from './WorkspaceView'
 import type { EngineApi } from '../state/useEngine'
 import type { ProviderInfo, ChatMessage } from '@shared/types'
+import type { RunControllerState } from '../../main/run/controller'
 
 // Task P1-3: the in-chat LaunchGateCard replaces the floating overlay (WorkflowOverlay, removed
 // entirely in P2-4) as the "/开启工作流" trigger's destination. Picking the built-in command (or a
@@ -225,6 +226,45 @@ describe('WorkspaceView: 启动门凝固记录持久化 + 仅在 run2.start 成�
     await waitFor(() => expect(screen.getByText('工作流已启动')).toBeInTheDocument())
     expect(screen.queryByText('网络错误')).toBeNull()
     expect(chatAppendLaunchGateMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+// P4-2 review fix: createRunTempBranches (real `git checkout -b`) runs BEFORE manager.start, but
+// Run2Manager.start ENQUEUES (doesn't throw) a second run for a workspace that already has one live.
+// If a user opens two launch-gate cards before confirming either, confirming the second while the
+// first's run is live must NOT reach run2.launchStart at all (renderer defense-in-depth mirroring the
+// main-process guard) — it should reject locally and show the same message, keeping the card active.
+describe('WorkspaceView: 第二张启动门在本工作区已有活跑时拒绝确认(不触发 run2.launchStart)', () => {
+  it('run2Live 为真时点击确认:不调用 launchStart,卡片保持活态并展示提示', async () => {
+    let emitRun2Update: (p: { workspacePath: string; state: RunControllerState }) => void = () => {}
+    ;(window as any).forge = {
+      ...forgeBase,
+      run2: { ...forgeBase.run2, onUpdate: (cb: any) => { emitRun2Update = cb; return () => {} } },
+    }
+
+    await openComposerAndPickBuiltin()
+    await waitFor(() => expect(screen.getByText('确认')).toBeInTheDocument())
+
+    // Simulate a run having gone live in this workspace (e.g. from an earlier-confirmed sibling gate)
+    // while this card is still sitting open/unconfirmed.
+    act(() => {
+      emitRun2Update({
+        workspacePath: '/ws',
+        state: {
+          machine: { plan: { runId: 'r-live', stages: [] }, stages: [], currentIndex: 0 },
+          inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {}, liveLanes: {},
+        } as any,
+      })
+    })
+
+    fireEvent.click(screen.getByText('确认'))
+
+    expect(launchStartMock).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByText('当前工作区有工作流在执行，请等它结束后再启动')).toBeInTheDocument())
+    // Still active: 确认 button remains, no frozen "已启动" record, nothing persisted.
+    expect(screen.getByText('确认')).toBeInTheDocument()
+    expect(screen.queryByText('工作流已启动')).toBeNull()
+    expect(chatAppendLaunchGateMock).not.toHaveBeenCalled()
   })
 })
 
