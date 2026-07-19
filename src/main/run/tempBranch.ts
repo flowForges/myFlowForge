@@ -49,6 +49,24 @@ export async function mergeTempBranch(
   git: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
+  // The agent(s) wrote their changes into the working tree while checked out on `branch` —
+  // nothing has committed them yet (createTempBranch/agents only ever `checkout -b`/edit files).
+  // Commit them onto the temp branch HERE, BEFORE switching away, or the switch to `target` below
+  // would carry the uncommitted edits over onto the target's working tree instead of merging real
+  // history (the exact bug this function used to have: `checkout target` on a dirty tree "moves"
+  // the edits, then `merge` finds temp and target identical → "Already up to date", no merge
+  // commit, and the target's working tree is left dirty with the run's changes).
+  try {
+    await git(cwd, ['add', '-A'])
+    // `git status --porcelain` (not diff --cached --quiet's exit-code trick) so this is trivial to
+    // drive with a fake GitRunner in unit tests: empty output = clean, anything else = staged work.
+    const status = await git(cwd, ['status', '--porcelain'])
+    if (status.trim().length > 0) {
+      await git(cwd, ['commit', '-m', `forge: run ${runId}`])
+    }
+  } catch (err) {
+    throw readableGitError(`Failed to commit run "${runId}" changes onto temp branch "${branch}"`, err)
+  }
   try {
     await git(cwd, ['checkout', target])
   } catch (err) {
@@ -76,7 +94,23 @@ export async function mergeTempBranch(
   await git(cwd, ['branch', '-D', branch])
 }
 
-/** Checkout `target` and force-delete the temp branch, discarding all run changes. */
+/**
+ * Checkout `target` and force-delete the temp branch, discarding all run changes.
+ *
+ * Uses `checkout -f` (not a plain `checkout`): the agent(s) left uncommitted edits in the working
+ * tree on `branch`, and a plain checkout would carry those edits over onto `target`'s working tree
+ * instead of discarding them (the exact "discard doesn't discard" bug this function used to have).
+ * Force is safe here — createTempBranch only ever succeeds off a clean tree, so every uncommitted
+ * change present now belongs to this run and is exactly what the caller asked to discard. If the
+ * run's changes were separately committed onto `branch` (e.g. by mergeTempBranch elsewhere), the
+ * `branch -D` below drops those commits too since they're never reachable from `target`.
+ *
+ * `checkout -f` alone is NOT enough, though: it only resets git's modifications to TRACKED files —
+ * a brand-new file the agent wrote (never `git add`ed) is untracked, and switching branches leaves
+ * untracked files sitting in the working tree untouched (confirmed empirically against real git —
+ * see tempBranch.integration.test.ts). `git clean -fd` after the checkout removes exactly those
+ * leftover untracked files/dirs, so a NEW file the agent created doesn't survive a discard.
+ */
 export async function discardTempBranch(
   cwd: string,
   target: string,
@@ -85,7 +119,8 @@ export async function discardTempBranch(
 ): Promise<void> {
   const branch = tempBranchName(runId)
   try {
-    await git(cwd, ['checkout', target])
+    await git(cwd, ['checkout', '-f', target])
+    await git(cwd, ['clean', '-fd'])
     await git(cwd, ['branch', '-D', branch])
   } catch (err) {
     throw readableGitError(`Failed to discard temp branch "${branch}" (target "${target}")`, err)

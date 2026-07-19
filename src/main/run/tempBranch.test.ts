@@ -19,11 +19,35 @@ describe('tempBranch', () => {
     await expect(createTempBranch('/repo', 'feat/missing', 'abc', git)).rejects.toThrow(/forge\/run-abc.*feat\/missing/s)
   })
 
-  it('mergeTempBranch checkout target 后 --no-ff 合并再删 temp 分支', async () => {
+  it('mergeTempBranch 先在 temp 分支 add+commit 未提交改动，再 checkout target --no-ff 合并，最后删 temp 分支', async () => {
     const calls: string[][] = []
-    const git = async (_cwd: string, args: string[]) => { calls.push(args); return '' }
+    const git = async (_cwd: string, args: string[]) => {
+      calls.push(args)
+      if (args[0] === 'status' && args[1] === '--porcelain') return 'A  new.txt\n M existing.txt\n'
+      return ''
+    }
     await mergeTempBranch('/repo', 'main', 'abc', git)
     expect(calls).toEqual([
+      ['add', '-A'],
+      ['status', '--porcelain'],
+      ['commit', '-m', 'forge: run abc'],
+      ['checkout', 'main'],
+      ['merge', '--no-ff', 'forge/run-abc'],
+      ['branch', '-D', 'forge/run-abc'],
+    ])
+  })
+
+  it('mergeTempBranch 当 temp 分支上没有任何改动(status 干净)时跳过 commit，不报 "nothing to commit"', async () => {
+    const calls: string[][] = []
+    const git = async (_cwd: string, args: string[]) => {
+      calls.push(args)
+      if (args[0] === 'status' && args[1] === '--porcelain') return ''
+      return ''
+    }
+    await mergeTempBranch('/repo', 'main', 'abc', git)
+    expect(calls).toEqual([
+      ['add', '-A'],
+      ['status', '--porcelain'],
       ['checkout', 'main'],
       ['merge', '--no-ff', 'forge/run-abc'],
       ['branch', '-D', 'forge/run-abc'],
@@ -66,12 +90,13 @@ describe('tempBranch', () => {
     await expect(mergeTempBranch('/repo', 'main', 'abc', git)).rejects.toThrow(/no merge to abort/)
   })
 
-  it('discardTempBranch checkout target 后强删 temp 分支', async () => {
+  it('discardTempBranch force-checkout target(丢弃未提交改动)+clean -fd(丢弃未跟踪新文件) 后强删 temp 分支', async () => {
     const calls: string[][] = []
     const git = async (_cwd: string, args: string[]) => { calls.push(args); return '' }
     await discardTempBranch('/repo', 'main', 'abc', git)
     expect(calls).toEqual([
-      ['checkout', 'main'],
+      ['checkout', '-f', 'main'],
+      ['clean', '-fd'],
       ['branch', '-D', 'forge/run-abc'],
     ])
   })
@@ -82,6 +107,6 @@ describe('tempBranch', () => {
     await createTempBranch('/repo1', 'main', 'a', git)
     await mergeTempBranch('/repo2', 'main', 'a', git)
     await discardTempBranch('/repo3', 'main', 'a', git)
-    expect(cwds).toEqual(['/repo1', '/repo2', '/repo2', '/repo2', '/repo3', '/repo3'])
+    expect(cwds).toEqual(['/repo1', '/repo2', '/repo2', '/repo2', '/repo2', '/repo2', '/repo3', '/repo3', '/repo3'])
   })
 })

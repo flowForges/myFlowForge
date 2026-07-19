@@ -240,10 +240,44 @@ export class RunController {
    * so a merge conflict surfaces as a clear failure instead of silently vanishing or crashing the
    * manager.
    */
-  private async runFinalizeGate(): Promise<void> {
-    const targets = this.deps.projects
+  /**
+   * The `{ name, cwd, target }` list every project actually checked out onto this run's temp
+   * branch — shared by runFinalizeGate (merge/discard) and abortCleanup (discard-on-abort) so
+   * both act on exactly the same set of repos. Empty when this run never touched a temp branch
+   * (see RunControllerDeps.projectTargets doc) — both callers no-op in that case.
+   */
+  private finalizeTargets(): Array<{ name: string; cwd: string; target: string }> {
+    return this.deps.projects
       .map((p) => ({ name: p.name, cwd: p.cwd, target: this.deps.projectTargets?.[p.name] }))
       .filter((t): t is { name: string; cwd: string; target: string } => !!t.target)
+  }
+
+  /**
+   * I1: an aborted run (mid-run 终止, or 终止 while parked at the finalize gate) must leave every
+   * participating project's temp branch discarded and the target branch clean — same acceptance
+   * bar as the discard finalize decision (spec §6 "目标分支保持干净"). Reuses discardTempBranch's
+   * exact semantics (checkout -f target + branch -D temp) via the same injectable dep so tests
+   * never touch real git.
+   *
+   * Best-effort per project: an aborted run must not itself crash because cleanup for one repo
+   * failed (e.g. the temp branch already gone) — collect failures via console.error and move on,
+   * rather than throwing and turning a clean abort into a confusing failure-with-stack-trace.
+   */
+  private async abortCleanup(): Promise<void> {
+    const targets = this.finalizeTargets()
+    if (targets.length === 0) return
+    const discard = this.deps.discardTempBranch ?? discardTempBranchDefault
+    for (const t of targets) {
+      try {
+        await discard(t.cwd, t.target, this.plan.runId)
+      } catch (err) {
+        console.error(`[run2] abort cleanup failed for project "${t.name}" (target "${t.target}"):`, err)
+      }
+    }
+  }
+
+  private async runFinalizeGate(): Promise<void> {
+    const targets = this.finalizeTargets()
     if (targets.length === 0) return
 
     const id = this.makeId('gate')
@@ -254,7 +288,14 @@ export class RunController {
     this.drop(id)
     this.emitUpdate()
 
-    if (this.aborted || (d.type !== 'merge' && d.type !== 'discard')) return
+    if (this.aborted) {
+      // 终止 while parked at this gate (abort()'s settleAll force-resolves it with
+      // `{type:'advance'}` — see resolveLane/abort) — same "discard, leave target clean" contract
+      // as any other abort path (see abortCleanup's doc).
+      await this.abortCleanup()
+      return
+    }
+    if (d.type !== 'merge' && d.type !== 'discard') return
 
     const merge = d.type === 'merge'
     const action = merge
@@ -539,6 +580,13 @@ export class RunController {
     // merge/discard failure) — that's intentional, see runFinalizeGate's doc.
     if (!this.aborted && this.machine.stages.every((s) => s.status === 'done')) {
       await this.runFinalizeGate()
+    } else if (this.aborted) {
+      // I1: a MID-run abort (loop above `break`s before ever reaching runFinalizeGate) still left
+      // whatever project(s) were checked out onto this run's temp branch dirty/mid-run — clean
+      // them up here so 终止 always leaves every target branch clean, matching the
+      // 终止-at-the-finalize-gate path handled inside runFinalizeGate itself. Best-effort, see
+      // abortCleanup's doc — never lets a cleanup failure turn a clean abort into a thrown error.
+      await this.abortCleanup()
     }
 
     this.status = this.aborted ? 'failed' : (this.machine.stages.every((s) => s.status === 'done') ? 'ok' : 'failed')
