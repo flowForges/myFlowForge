@@ -657,6 +657,14 @@ export class RunController {
     // returns (async-function bodies run synchronously up to their first real await), which this
     // preserves exactly as it was before this feature existed.
     if (this.deps.mcpEntry) await this.setupBridge()
+    // §7.4 finding (Important, resource leak): everything below that can throw — the
+    // `orders.length === 0` guard inside the loop and runFinalizeGate()'s merge/discard failures —
+    // must still release this run's live bridge (a real listening unix-socket server). Wrapping the
+    // whole run body in try/finally guarantees `this.bridge?.close()` runs on EVERY exit: normal
+    // completion, abort `break`, or any throw from inside the loop/finalize. `this.bridge = null`
+    // after close makes it idempotent so the normal path (which used to close inline at the very
+    // end) can't double-close even though that inline close is now just this same finally.
+    try {
     while (!this.aborted) {
       // Pause gate: sits at the very top of the loop, before the next stage is read/started, so
       // an in-flight stage's lanes always finish uninterrupted — pause only stops the run from
@@ -888,10 +896,17 @@ export class RunController {
     this.paused = false
     this.deps.store.setContext('machine', this.machine)
     this.emitUpdate()
-    // Best-effort: a bridge that fails to close cleanly must not turn a finished run into a thrown
-    // error at the very last step (mirrors abortCleanup's best-effort stance above).
-    if (this.bridge) {
-      try { await this.bridge.close() } catch (err) { console.error('[run2] forge bridge close failed:', err) }
+    } finally {
+      // Best-effort: a bridge that fails to close cleanly must not turn a finished run into a
+      // thrown error (mirrors abortCleanup's best-effort stance above) — and must not mask/replace
+      // a genuine throw from the try block above (finally's own errors here are swallowed, not
+      // rethrown). `this.bridge = null` makes this safe to reach exactly once no matter which exit
+      // path got here.
+      if (this.bridge) {
+        const b = this.bridge
+        this.bridge = null
+        try { await b.close() } catch (err) { console.error('[run2] forge bridge close failed:', err) }
+      }
     }
     return this.state
   }

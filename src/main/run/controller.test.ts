@@ -1444,5 +1444,63 @@ describe('RunController', () => {
       expect(seenEnvs['develop:a']).toEqual({ EXISTING: '1' })
       expect(seenEnvs['develop:a'].FORGE_SOCKET).toBeUndefined()
     })
+
+    // Review finding (Important, resource leak): the per-run bridge is a REAL listening unix-socket
+    // server (forgeBridge.ts's net.createServer().listen). Before this fix, `this.bridge.close()`
+    // only ran on start()'s normal-completion tail — AFTER the main while loop — so two throw sites
+    // INSIDE that loop/finalize (the `orders.length===0` guard, and a mergeTempBranch/discardTempBranch
+    // failure in runFinalizeGate) bypassed the close entirely and leaked the socket+fd for the
+    // process's lifetime. start() now wraps the whole run body in try/finally so `this.bridge?.close()`
+    // runs on EVERY exit — these two tests drive each throw site with mcpEntry set and assert the
+    // captured fake bridge's close() was actually invoked (exactly once — no double-close).
+    it('closes the bridge when the run throws mid-loop (orders.length===0 guard) — no leaked socket', async () => {
+      const store = new RunStore(ws, 'r1')
+      const closeCalls: number[] = []
+      const bridgeStarter = async (): Promise<ForgeBridge> => ({
+        socketPath: '/fake/forge.sock', close: async () => { closeCalls.push(1) },
+      })
+      // scope 'per-project' with zero projects → buildWorkOrders() returns [] → the guard throws
+      // inside the loop, before any lane ever starts.
+      const p: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const c = new RunController(p, {
+        providers: {}, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        mcpEntry: '/fake/forgeMcp.js', startBridge: bridgeStarter,
+      })
+      await expect(c.start()).rejects.toThrow(/no work orders/)
+      expect(closeCalls).toEqual([1]) // closed exactly once despite the throw
+    })
+
+    it('closes the bridge when runFinalizeGate throws (merge failure) — no leaked socket', async () => {
+      const store = new RunStore(ws, 'r1')
+      const closeCalls: number[] = []
+      const bridgeStarter = async (): Promise<ForgeBridge> => ({
+        socketPath: '/fake/forge.sock', close: async () => { closeCalls.push(1) },
+      })
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd) => { if (cwd === '/ws/b') throw new Error('CONFLICT (content): app.ts') },
+        mcpEntry: '/fake/forgeMcp.js', startBridge: bridgeStarter,
+      })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, (e as any).finalize ? { type: 'merge' } : { type: 'advance' }) })
+      await expect(c.start()).rejects.toThrow(/b.*CONFLICT/)
+      expect(closeCalls).toEqual([1]) // closed exactly once despite runFinalizeGate's throw
+    })
+
+    it('normal completion still closes the bridge exactly once (no double-close)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const closeCalls: number[] = []
+      const bridgeStarter = async (): Promise<ForgeBridge> => ({
+        socketPath: '/fake/forge.sock', close: async () => { closeCalls.push(1) },
+      })
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        mcpEntry: '/fake/forgeMcp.js', startBridge: bridgeStarter,
+      })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(closeCalls).toEqual([1])
+    })
   })
 })
