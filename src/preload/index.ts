@@ -337,6 +337,9 @@ const api = {
     // full saved state for read-only replay.
     listRuns: (workspacePath: string) => ipcRenderer.invoke(CH.run2ListRuns, { workspacePath }),
     loadRun: (workspacePath: string, runId: string) => ipcRenderer.invoke(CH.run2LoadRun, { workspacePath, runId }),
+    // Run-state UX fix: delete one run-history entry (refused by the main-process handler for the
+    // workspace's currently-live run).
+    deleteRun: (workspacePath: string, runId: string) => ipcRenderer.invoke(CH.run2DeleteRun, { workspacePath, runId }),
     onEvent: (cb: (p: { workspacePath: string; event: unknown }) => void) => {
       const listener = (_: unknown, p: { workspacePath: string; event: unknown }) => cb(p)
       ipcRenderer.on(CH.run2Event, listener)

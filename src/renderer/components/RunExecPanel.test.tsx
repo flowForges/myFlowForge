@@ -204,6 +204,45 @@ describe('RunExecPanel', () => {
     expect(screen.queryByText('暂停')).toBeNull()
   })
 
+  // Fix 1 (honest pause): pause() only takes effect at the next stage boundary — an in-flight
+  // stage's lanes keep running to completion (controller.ts's start() loop only checks `paused`
+  // at the top, before the NEXT stage). The status message must say so instead of either lying
+  // with "正在执行…" (looks like pause did nothing) or claiming "已暂停" while a lane is still
+  // visibly working.
+  it('paused with an in-flight stage: shows "本阶段完成后停下", not "正在执行…"', () => {
+    // baseState's default develop stage is 'running' with a go-blog lane at liveLanes state 'run'.
+    const run2 = makeRun2(baseState({ paused: true }))
+    render(<RunExecPanel run2={run2} />)
+
+    expect(screen.getByText('暂停中 · 本阶段完成后停下')).toBeInTheDocument()
+    expect(screen.queryByText('正在执行…')).toBeNull()
+    expect(screen.getByText('继续')).toBeInTheDocument()
+  })
+
+  it('paused and fully parked (no lane in-flight): shows "已暂停"', () => {
+    const parkedState = baseState({
+      paused: true,
+      outcomes: {},
+      liveLanes: {},
+      machine: {
+        plan: baseState().machine.plan,
+        stages: [
+          { key: 'assess', status: 'done', round: 0 },
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'pending', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 2,
+      },
+    })
+    const run2 = makeRun2(parkedState)
+    render(<RunExecPanel run2={run2} />)
+
+    expect(screen.getByText('已暂停')).toBeInTheDocument()
+    expect(screen.queryByText('暂停中 · 本阶段完成后停下')).toBeNull()
+    expect(screen.queryByText('正在执行…')).toBeNull()
+  })
+
   it('renders "—" for tempBranch when the plan does not have one yet', () => {
     const run2 = makeRun2(baseState())
     render(<RunExecPanel run2={run2} />)

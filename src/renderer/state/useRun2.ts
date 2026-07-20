@@ -41,6 +41,9 @@ export interface Run2Api {
   listRuns: () => Promise<RunHistoryEntry[]>
   /** Spec §12.7: load one historical run's full saved state, for read-only replay. */
   loadRun: (runId: string) => Promise<SavedControllerState | null>
+  /** Run-state UX fix: delete one run-history entry's saved state (run2:delete-run). Rejects for
+   *  the workspace's currently-live run — see run2Handlers.ts's guard. */
+  deleteRun: (runId: string) => Promise<void>
 }
 
 function getRun2(): any {
@@ -212,5 +215,11 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     return (await r.loadRun(workspacePath, runId)) ?? null
   }, [workspacePath])
 
-  return { state, laneLogs, queueLength, start, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack, resumable, resumeFromDisk, discardResumable, listRuns, loadRun }
+  const deleteRun = useCallback(async (runId: string) => {
+    const r = getRun2()
+    if (!r || !workspacePath || !r.deleteRun) return
+    await r.deleteRun(workspacePath, runId)
+  }, [workspacePath])
+
+  return { state, laneLogs, queueLength, start, resolveGate, resolveLane, addFeedback, editFeedback, removeFeedback, abort, pause, resume, jumpBack, resumable, resumeFromDisk, discardResumable, listRuns, loadRun, deleteRun }
 }

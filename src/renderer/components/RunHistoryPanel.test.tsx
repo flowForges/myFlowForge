@@ -66,4 +66,92 @@ describe('RunHistoryPanel', () => {
     await waitFor(() => expect(screen.getByText('需求B')).toBeInTheDocument())
     expect(screen.getByText('需求A')).toBeInTheDocument()
   })
+
+  // Run-state UX fix: a saved non-terminal run (running/awaiting) with no live controller behind
+  // it (the app died mid-run) must not read as active work — only the workspace's actual live run
+  // (liveRunId) keeps the live label.
+  describe('中断 label vs live label', () => {
+    const nonTerminalEntries: RunHistoryEntry[] = [
+      { runId: 'run-live', status: 'running', doneCount: 1, totalStages: 4, task: '进行中的需求', modifiedAt: 3000 },
+      { runId: 'run-orphan', status: 'running', doneCount: 0, totalStages: 4, task: '被中断的需求', modifiedAt: 2000 },
+      { runId: 'run-awaiting-orphan', status: 'awaiting', doneCount: 2, totalStages: 4, task: '等待中但被中断', modifiedAt: 1000 },
+    ]
+
+    it('labels the live run 执行中 and every other non-terminal entry 中断', async () => {
+      const listRuns = vi.fn(async () => nonTerminalEntries)
+      const loadRun = vi.fn(async () => null)
+      render(<RunHistoryPanel listRuns={listRuns} loadRun={loadRun} liveRunId="run-live" />)
+
+      await waitFor(() => expect(screen.getByText('进行中的需求')).toBeInTheDocument())
+
+      const liveRow = screen.getByText('进行中的需求').closest('.run-history-row')!
+      expect(liveRow.querySelector('.rh-status')).toHaveTextContent('执行中')
+
+      const orphanRow = screen.getByText('被中断的需求').closest('.run-history-row')!
+      expect(orphanRow.querySelector('.rh-status')).toHaveTextContent('中断')
+
+      const awaitingOrphanRow = screen.getByText('等待中但被中断').closest('.run-history-row')!
+      expect(awaitingOrphanRow.querySelector('.rh-status')).toHaveTextContent('中断')
+    })
+
+    it('with no liveRunId at all, every non-terminal entry shows 中断 (nothing is live)', async () => {
+      const listRuns = vi.fn(async () => nonTerminalEntries)
+      const loadRun = vi.fn(async () => null)
+      render(<RunHistoryPanel listRuns={listRuns} loadRun={loadRun} />)
+
+      await waitFor(() => expect(screen.getByText('进行中的需求')).toBeInTheDocument())
+      expect(screen.getAllByText('中断')).toHaveLength(3)
+    })
+
+    it('terminal entries (ok/failed) are unaffected by liveRunId', async () => {
+      const listRuns = vi.fn(async () => entries)
+      const loadRun = vi.fn(async () => null)
+      render(<RunHistoryPanel listRuns={listRuns} loadRun={loadRun} liveRunId="some-other-run" />)
+
+      await waitFor(() => expect(screen.getByText('需求B')).toBeInTheDocument())
+      expect(screen.getByText('需求B').closest('.run-history-row')!.querySelector('.rh-status')).toHaveTextContent('已失败')
+      expect(screen.getByText('需求A').closest('.run-history-row')!.querySelector('.rh-status')).toHaveTextContent('已完成')
+    })
+  })
+
+  describe('delete', () => {
+    it('renders no delete button when deleteRun is not provided', async () => {
+      const listRuns = vi.fn(async () => entries)
+      const loadRun = vi.fn(async () => null)
+      render(<RunHistoryPanel listRuns={listRuns} loadRun={loadRun} />)
+      await waitFor(() => expect(screen.getByText('需求B')).toBeInTheDocument())
+      expect(document.querySelector('.rh-del-btn')).toBeNull()
+    })
+
+    it('clicking delete then confirm calls deleteRun(runId) and removes the row, without opening it', async () => {
+      const listRuns = vi.fn(async () => entries)
+      const loadRun = vi.fn(async () => null)
+      const deleteRun = vi.fn(async () => {})
+      render(<RunHistoryPanel listRuns={listRuns} loadRun={loadRun} deleteRun={deleteRun} />)
+
+      await waitFor(() => expect(screen.getByText('需求B')).toBeInTheDocument())
+      const row = screen.getByText('需求B').closest('.run-history-row')!
+      fireEvent.click(row.querySelector('.rh-del-btn')!)
+      fireEvent.click(screen.getByText('确认删除'))
+
+      expect(deleteRun).toHaveBeenCalledWith('run-2')
+      expect(loadRun).not.toHaveBeenCalled()
+      await waitFor(() => expect(screen.queryByText('需求B')).toBeNull())
+      expect(screen.getByText('需求A')).toBeInTheDocument()
+    })
+
+    it('hides the delete button for the currently-live run', async () => {
+      const listRuns = vi.fn(async () => entries)
+      const loadRun = vi.fn(async () => null)
+      const deleteRun = vi.fn(async () => {})
+      render(<RunHistoryPanel listRuns={listRuns} loadRun={loadRun} deleteRun={deleteRun} liveRunId="run-2" />)
+
+      await waitFor(() => expect(screen.getByText('需求B')).toBeInTheDocument())
+      const liveRow = screen.getByText('需求B').closest('.run-history-row')!
+      expect(liveRow.querySelector('.rh-del-btn')).toBeNull()
+
+      const otherRow = screen.getByText('需求A').closest('.run-history-row')!
+      expect(otherRow.querySelector('.rh-del-btn')).not.toBeNull()
+    })
+  })
 })

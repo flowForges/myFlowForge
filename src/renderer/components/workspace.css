@@ -76,9 +76,20 @@
 .rh-status.rh-ok { color: var(--good, #2e9b56); }
 .rh-status.rh-failed { color: var(--danger, #d0453c); }
 .rh-status.rh-running, .rh-status.rh-awaiting { color: var(--accent); }
+/* Run-state UX fix: a non-terminal saved run that is NOT the workspace's live run — muted/warn,
+   distinct from the live 执行中/等待中 accent color so a stale orphaned entry doesn't read as
+   active work. */
+.rh-status.rh-interrupted { color: var(--warn, #c9820a); }
 .rh-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rh-prog { flex: 0 0 auto; color: var(--muted); font-family: var(--mono); font-size: 11px; }
 .rh-time { flex: 0 0 auto; color: var(--faint); font-size: 11px; }
+.rh-del-btn {
+  flex: 0 0 auto; border: none; background: transparent; color: var(--faint); cursor: pointer;
+  font-size: 12px; line-height: 1; padding: 2px 4px; border-radius: 6px; transition: .12s;
+}
+.rh-del-btn:hover { color: var(--danger, #d0453c); background: var(--surface-2); }
+.rh-del-confirm { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; }
+.rh-del-confirm .rh-del-yes { color: var(--danger, #d0453c); }
 
 /* ===== 对话模式 / 工作流模式 切换 ===== */
 #mainChat { display: none; }

@@ -168,3 +168,17 @@ export function discardResumableRun(wsPath: string): boolean {
   new RunStore(wsPath, found.runId).deleteContext(KEY)
   return true
 }
+
+// Run-state UX fix (run-history delete): clears one EXPLICIT run's saved state so it stops
+// appearing in listRuns()'s history — generalizes discardResumableRun above (which only ever
+// targets "whichever run is currently resumable") to an arbitrary runId picked from the history
+// list, terminal or not. Guards on the run directory existing first, same as loadRun, so deleting
+// an unknown/already-deleted runId is a harmless no-op rather than creating an empty directory as
+// a RunStore-construction side effect. Callers (run2Handlers.ts's run2:delete-run) are responsible
+// for refusing to delete the workspace's currently-LIVE run — this function itself has no notion
+// of "live" (that's manager-state, not disk-state) and will happily delete whatever runId it's given.
+export function deleteRun(wsPath: string, runId: string): boolean {
+  if (!existsSync(wsRunDir(wsPath, runId))) return false
+  new RunStore(wsPath, runId).deleteContext(KEY)
+  return true
+}

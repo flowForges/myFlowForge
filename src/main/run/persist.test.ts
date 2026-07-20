@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../orchestrator/runStore'
 import { wsRunDir } from '../config/paths'
-import { saveControllerState, loadControllerState, findLatestRun2Run, isTerminalStatus, listRuns, loadRun } from './persist'
+import { saveControllerState, loadControllerState, findLatestRun2Run, isTerminalStatus, listRuns, loadRun, deleteRun } from './persist'
 import { initMachine, type RunPlan, type MachineState } from './machine'
 import type { RunControllerState } from './controller'
 
@@ -250,5 +250,40 @@ describe('listRuns / loadRun (run-history, spec §12.7)', () => {
   it('loadRun returns null for an unknown runId (and does not create a directory for it)', () => {
     expect(loadRun(ws, 'nope')).toBeNull()
     expect(existsSync(wsRunDir(ws, 'nope'))).toBe(false)
+  })
+})
+
+// Run-state UX fix: run-history 删除 — generalizes discardResumableRun to an EXPLICIT runId picked
+// from the history list, regardless of terminal-ness (a finished run's saved state can be deleted
+// too, unlike discardResumableRun which only ever targets a non-terminal "resumable" run).
+describe('deleteRun (run-history delete)', () => {
+  function fixtureState(status: RunControllerState['status'], task?: string): RunControllerState {
+    const machine: MachineState = { plan, stages: [{ key: 's0', status: 'done', round: 0 }], currentIndex: 0 }
+    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false, task }
+  }
+
+  it('clears the given run so it no longer loads or appears in listRuns', () => {
+    saveControllerState(new RunStore(ws, 'run-del'), fixtureState('ok', 'to be deleted'))
+    expect(loadRun(ws, 'run-del')).not.toBeNull()
+
+    expect(deleteRun(ws, 'run-del')).toBe(true)
+
+    expect(loadRun(ws, 'run-del')).toBeNull()
+    expect(listRuns(ws).map((l) => l.runId)).not.toContain('run-del')
+  })
+
+  it('also deletes a non-terminal (running/awaiting) run\'s state, unlike discardResumableRun\'s terminal gate', () => {
+    saveControllerState(new RunStore(ws, 'run-orphan'), fixtureState('running'))
+    expect(deleteRun(ws, 'run-orphan')).toBe(true)
+    expect(loadRun(ws, 'run-orphan')).toBeNull()
+  })
+
+  it('returns false and is a no-op for an unknown runId (does not create a directory for it)', () => {
+    expect(deleteRun(ws, 'nope')).toBe(false)
+    expect(existsSync(wsRunDir(ws, 'nope'))).toBe(false)
+  })
+
+  it('returns false for an unknown workspace path', () => {
+    expect(deleteRun(join(ws, 'no-such-ws'), 'run-x')).toBe(false)
   })
 })

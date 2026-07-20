@@ -3,7 +3,7 @@ import * as path from 'node:path'
 import * as CH from './channels'
 import { planFromStages } from '../run/planFromStages'
 import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
-import { listRuns, loadRun } from '../run/persist'
+import { listRuns, loadRun, deleteRun } from '../run/persist'
 import type { Run2Manager } from '../run/manager'
 import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
 import type { GateDecision, LaneDecision } from '../run/decisions'
@@ -188,6 +188,22 @@ export function registerRun2(deps: {
   // Spec §12.7: load one historical run's full saved state, for the renderer's read-only replay
   // panel (RunHistoryPanel → runHistoryAdapter → RunExecPanel's staticState/readOnly mode).
   onInvoke(CH.run2LoadRun, (_e, p: { workspacePath: string; runId: string }) => loadRun(p.workspacePath, p.runId))
+  // Run-state UX fix: 删除 one history entry. Refuses to delete the workspace's currently-LIVE run
+  // (an active controller is still writing to that run's context.json — deleting it out from under
+  // a live run would just have the next emitUpdate() recreate it, or worse race a concurrent write)
+  // — the renderer's delete button is already hidden for the live entry (RunHistoryPanel/
+  // WorkspaceView thread `liveRunId` through for that), but re-check here too since IPC is the real
+  // trust boundary, not the UI.
+  // Declared `async` (not just returning a throwing arrow body) so a live-run rejection surfaces as
+  // a rejected Promise even when a test calls the handler function directly (bypassing Electron's
+  // own ipcMain.handle, which normally wraps a throwing sync handler into a rejection itself) — same
+  // reasoning as run2LaunchStart's `async` above.
+  onInvoke(CH.run2DeleteRun, async (_e, p: { workspacePath: string; runId: string }) => {
+    if (manager.get(p.workspacePath)?.state.machine.plan.runId === p.runId) {
+      throw new Error('无法删除当前正在运行的记录')
+    }
+    return deleteRun(p.workspacePath, p.runId)
+  })
 
   // P5-UI Task 2: on-demand read of a changed file's content, for the RunPanel file viewer.
   // `path` is normally RELATIVE to the work order's project cwd (WorkOrder.order.cwd) — filesChanged

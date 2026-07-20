@@ -813,5 +813,61 @@ describe('registerRun2', () => {
         expect(await loadRun({}, { workspacePath: ws, runId: 'nope' })).toBeNull()
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
+
+    // Run-state UX fix: run-history delete.
+    it('run2:delete-run clears a saved (non-live) run so it no longer loads or lists', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-hist-'))
+      try {
+        seedRun(ws, 'run-1', 'ok')
+        const handlers = makeHandlers()
+        const deleteRun = handlers.get(CH.run2DeleteRun)!
+        const listRuns = handlers.get(CH.run2ListRuns)!
+        const loadRun = handlers.get(CH.run2LoadRun)!
+
+        expect(await deleteRun({}, { workspacePath: ws, runId: 'run-1' })).toBe(true)
+        expect(await loadRun({}, { workspacePath: ws, runId: 'run-1' })).toBeNull()
+        expect(await listRuns({}, { workspacePath: ws })).toEqual([])
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:delete-run refuses to delete the workspace\'s currently-live run', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-hist-'))
+      try {
+        const handlers = new Map<string, (...a: any[]) => any>()
+        // A provider whose run() never resolves — keeps the controller live in manager.controllers
+        // for the duration of the test (same pattern as the launch-start "live run" test above).
+        const neverDoneProvider: AgentProvider = {
+          id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+          async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+          run(task: AgentTask, _cb: AgentCallbacks) {
+            return { id: task.agentId, cancel() {}, done: new Promise(() => {}) }
+          },
+        }
+        const manager = new Run2Manager({ providers: { x: neverDoneProvider }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h) })
+        const start = handlers.get(CH.run2Start)!
+        const deleteRun = handlers.get(CH.run2DeleteRun)!
+
+        await start({}, {
+          workspacePath: ws, runId: 'run-live',
+          stages: [{ key: 'design', name: 'D', provider: 'x', model: 'm', scope: 'root', gate: false, prompt: '' }],
+          projects: [],
+        })
+        expect(manager.isActive(ws)).toBe(true)
+
+        await expect(deleteRun({}, { workspacePath: ws, runId: 'run-live' })).rejects.toThrow(/无法删除/)
+
+        manager.abort(ws) // tidy up the never-resolving run so the process can exit cleanly
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('run2:delete-run returns false for an unknown runId', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-hist-'))
+      try {
+        const handlers = makeHandlers()
+        const deleteRun = handlers.get(CH.run2DeleteRun)!
+        expect(await deleteRun({}, { workspacePath: ws, runId: 'nope' })).toBe(false)
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
   })
 })
