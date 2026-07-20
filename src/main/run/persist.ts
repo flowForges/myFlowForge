@@ -5,7 +5,15 @@ import { wsRunDir, wsRunsDir } from '../config/paths'
 import { RunStore } from '../orchestrator/runStore'
 import type { RunControllerState } from './controller'
 
-export interface SavedOutcome { id: string; status: 'ok' | 'failed'; project?: string; error?: string; attempts: number }
+// provider/model/cwd are display-only metadata (used solely by runHistoryAdapter.ts to render a
+// historical agent card's provider/model chips and cwd — see runExecAdapter.ts's
+// buildRootAgent/buildFanoutAgents) — NEVER upstream content. Resume's own prompt assembly still
+// reads ONLY `deps.store.getContext('artifacts:<stageKey>')` (see controller.ts's RehydrateState
+// doc / T1's file-vs-slim invariant), so persisting these three fields here does not change what
+// a resumed run's downstream stage sees. Optional so an OLDER saved outcome (written before this
+// fix) just loads with them absent — a historical card for that older run renders blank exactly
+// as it did before, never throws.
+export interface SavedOutcome { id: string; status: 'ok' | 'failed'; project?: string; error?: string; attempts: number; provider?: string; model?: string; cwd?: string }
 export interface SavedControllerState {
   machine: RunControllerState['machine']
   inbox: RunControllerState['inbox']
@@ -47,7 +55,10 @@ const KEY = 'run2-state'
 export function saveControllerState(store: RunStore, s: RunControllerState): void {
   const outcomes: Record<string, SavedOutcome[]> = {}
   for (const [k, list] of Object.entries(s.outcomes)) {
-    outcomes[k] = list.map((o) => ({ id: o.order.id, status: o.status, project: o.order.project, error: o.error, attempts: o.attempts }))
+    outcomes[k] = list.map((o) => ({
+      id: o.order.id, status: o.status, project: o.order.project, error: o.error, attempts: o.attempts,
+      provider: o.order.provider, model: o.order.model, cwd: o.order.cwd,
+    }))
   }
   store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, sessionId: s.sessionId, task: s.task, projects: s.projects })
 }

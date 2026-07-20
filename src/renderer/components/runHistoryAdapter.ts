@@ -5,13 +5,14 @@
 //
 // This conversion is NOT optional plumbing — `buildStageRuntimes` reads `.order.project`/`.order.provider`/
 // `.order.model`/`.order.cwd` directly (see runExecAdapter.ts's buildRootAgent/buildFanoutAgents).
-// `SavedOutcome` has no `.order` at all (see persist.ts:42-45's save-side flattening), so feeding a
+// `SavedOutcome` has no `.order` at all (see persist.ts's save-side flattening), so feeding a
 // SavedControllerState's raw `outcomes` straight into `buildStageRuntimes` throws a TypeError the
-// moment any stage has a saved outcome. Only `id`/`status`/`project`/`error`/`attempts` survive the
-// save (provider/model/cwd/prompt are never persisted per-outcome) — this adapter fills those four
-// with empty strings so the shape is safe to read, not so it displays them; a historical agent card
-// therefore never shows provider/model/cwd, which is an accepted limitation of the history view (see
-// its doc/report), not a bug.
+// moment any stage has a saved outcome. `provider`/`model`/`cwd` ARE persisted per-outcome (see
+// persist.ts's SavedOutcome) — this adapter fills `.order` from them when present so a historical
+// agent card shows the real values, same as a live run's; only `prompt` (never persisted — it's
+// upstream content, not display metadata) and an OLDER saved outcome missing these fields fall
+// back to ''. `runExecAdapter`'s own stage-plan fallback (`||`, not `??`) then covers root-scope
+// stages/older saves the same way it already does for live-run placeholders.
 import type { SavedControllerState } from '../../main/run/persist'
 import type { RunControllerState } from '../../main/run/controller'
 import type { WorkOrder, WorkOrderOutcome } from '../../main/run/workOrder'
@@ -22,7 +23,7 @@ export function toHistoricalState(saved: SavedControllerState): RunControllerSta
     outcomes[stageKey] = list.map((o) => {
       const order: WorkOrder = {
         id: o.id, stageKey, name: o.id, project: o.project,
-        provider: '', model: '', cwd: '', prompt: '',
+        provider: o.provider ?? '', model: o.model ?? '', cwd: o.cwd ?? '', prompt: '',
       }
       return { order, status: o.status, error: o.error, attempts: o.attempts }
     })
