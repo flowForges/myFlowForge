@@ -150,7 +150,7 @@ export interface RunControllerState {
 // call (see runStore.ts's getContext/readContext) — so a downstream stage's prompt assembly after
 // resume is correct even with `outcomes` entirely omitted (see controller.test.ts's file-vs-slim
 // verification test).
-export interface SlimOutcome { id: string; status: 'ok' | 'failed'; project?: string; error?: string; attempts: number }
+export interface SlimOutcome { id: string; status: 'ok' | 'failed'; project?: string; error?: string; attempts: number; provider?: string; model?: string; cwd?: string }
 export interface RehydrateState {
   machine: MachineState
   outcomes?: Record<string, SlimOutcome[]>
@@ -185,9 +185,13 @@ function sanitizeForResume(plan: RunPlan, loaded: MachineState): MachineState {
 // Reconstructs a placeholder WorkOrderOutcome from a slim on-disk outcome, for `state.outcomes`
 // display continuity only (see RehydrateState's doc — this is NEVER read by resume's own prompt
 // assembly). `result` is intentionally left undefined: the slim on-disk shape never carried it.
+// provider/model/cwd are filled from the persisted slim outcome when present (an older on-disk
+// save written before they were persisted just has them `undefined`, so this falls back to the
+// same '' placeholders as before — see runExecAdapter.ts's `||` fallback-to-stage-plan comment for
+// why '' rather than undefined matters there).
 function placeholderOutcome(stageKey: string, o: SlimOutcome): WorkOrderOutcome {
   return {
-    order: { id: o.id, stageKey, name: stageKey, project: o.project, provider: '', model: '', cwd: '', prompt: '' },
+    order: { id: o.id, stageKey, name: stageKey, project: o.project, provider: o.provider ?? '', model: o.model ?? '', cwd: o.cwd ?? '', prompt: '' },
     status: o.status,
     error: o.error,
     attempts: o.attempts,

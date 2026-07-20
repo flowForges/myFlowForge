@@ -118,6 +118,46 @@ describe('controller persistence', () => {
     const back = loadControllerState(store)
     expect(back?.laneTimings).toEqual({})
   })
+
+  // Item ⑤: provider/model/cwd must survive a save/load round-trip on a per-outcome basis, sourced
+  // from the outcome's own `order` — otherwise historical run-history replay can't show them (see
+  // runHistoryAdapter.ts).
+  it('round-trips provider/model/cwd per outcome (sourced from order)', () => {
+    const store = new RunStore(ws, 'r1')
+    const s = {
+      machine: initMachine(plan), inbox: [], feedback: [],
+      outcomes: {
+        design: [{
+          order: { id: 'design:root', stageKey: 'design', name: 'design', provider: 'codex', model: 'gpt-5', cwd: '/ws/go-blog', prompt: 'do it' },
+          status: 'ok' as const, attempts: 1,
+        }],
+      },
+      status: 'ok' as const, pendingDirective: {},
+    }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.outcomes.design[0]).toMatchObject({ provider: 'codex', model: 'gpt-5', cwd: '/ws/go-blog' })
+  })
+
+  // Backward compatibility: a legacy saved outcome (written before provider/model/cwd were
+  // persisted, like every OTHER outcome fixture in this file) must load with them simply absent —
+  // not throw, not default to a sentinel.
+  it('a legacy saved outcome without provider/model/cwd loads with them absent, not throwing', () => {
+    const store = new RunStore(ws, 'r1')
+    // Simulates on-disk data written by an OLDER build: outcomes shaped per the old, narrower
+    // SavedOutcome (no provider/model/cwd) rather than saveControllerState's current (order-based)
+    // output.
+    store.setContext('run2-state', {
+      machine: initMachine(plan), inbox: [], feedback: [],
+      outcomes: { design: [{ id: 'design:root', status: 'ok', project: undefined, attempts: 1 }] },
+      status: 'ok', pendingDirective: {},
+    })
+    const back = loadControllerState(store)
+    expect(back?.outcomes.design[0].id).toBe('design:root')
+    expect(back?.outcomes.design[0].provider).toBeUndefined()
+    expect(back?.outcomes.design[0].model).toBeUndefined()
+    expect(back?.outcomes.design[0].cwd).toBeUndefined()
+  })
 })
 
 describe('findLatestRun2Run (P-C2/T3 review Finding 1): latest-mtime-wins regardless of terminal-ness', () => {
