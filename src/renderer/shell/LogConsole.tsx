@@ -23,7 +23,7 @@ export interface LogConsoleProps {
   busy: boolean
   onClear: () => void
   onClose: () => void
-  /** When set, only this agent's lines are shown (matched by id against LogLine.src). */
+  /** When set, only this agent's lines are shown (matched by id against LogLine.filterId, falling back to .src). */
   agentFilter?: { id: string; name: string } | null
   onClearAgentFilter?: () => void
 }
@@ -117,7 +117,10 @@ export function LogConsole({ open, dual, focused, onHandleDown, logs, busy, onCl
           </div>
         ) : (
           logs.map(line => {
-            const hidden = (filter !== 'all' && filter !== line.level) || (!!agentFilter && line.src !== agentFilter.id)
+            // Matched against `filterId` when the line carries one (run2 lines — see LogLine's doc,
+            // `src` there is a shared stage name, not unique per lane) and falls back to `src`
+            // otherwise (the pre-existing/old-orchestrator behavior, unchanged).
+            const hidden = (filter !== 'all' && filter !== line.level) || (!!agentFilter && (line.filterId ?? line.src) !== agentFilter.id)
             return (
               <div
                 key={line.id}

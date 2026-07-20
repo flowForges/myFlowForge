@@ -129,6 +129,37 @@ describe('RunExecPanel', () => {
     expect(document.querySelector('.wfo-act')).toBeNull()
   })
 
+  // Regression: the old 代理-tab AgentNode showed a "日志台" button (onViewLog) opening the bottom
+  // 实时日志 drawer filtered to that agent — RunExecPanel's run2 cards dropped it. Wire it back.
+  it('renders a 日志台 button on each agent card when onViewLog is provided, and calls it with (laneId, name)', () => {
+    const run2 = makeRun2(baseState())
+    const onViewLog = vi.fn()
+    render(<RunExecPanel run2={run2} onViewLog={onViewLog} />)
+
+    const zghCard = screen.getByText('zgh').closest('.agent-node')!
+    const logBtn = zghCard.querySelector('.proc-expand') as HTMLElement
+    expect(logBtn).not.toBeNull()
+    fireEvent.click(logBtn)
+    // AdaptedAgent.id for a per-project lane is the laneId `${stageKey}:${project}` (see
+    // runExecAdapter.ts) — that's what must be passed so the log-console filter (keyed on
+    // LogLine.filterId for run2 lines) actually matches this lane's log lines.
+    expect(onViewLog).toHaveBeenCalledWith('develop:zgh', 'zgh')
+  })
+
+  it('does not render a 日志台 button when onViewLog is not provided', () => {
+    const run2 = makeRun2(baseState())
+    render(<RunExecPanel run2={run2} />)
+    const zghCard = screen.getByText('zgh').closest('.agent-node')!
+    expect(zghCard.querySelector('.proc-expand')).toBeNull()
+  })
+
+  it('omits the 日志台 button in read-only/historical replay even when onViewLog is passed (no live log stream to show)', () => {
+    const onViewLog = vi.fn()
+    render(<RunExecPanel staticState={baseState() as any} readOnly onViewLog={onViewLog} />)
+    const zghCard = screen.getByText('zgh').closest('.agent-node')!
+    expect(zghCard.querySelector('.proc-expand')).toBeNull()
+  })
+
   it('shows run-level 暂停/终止 controls and wires them to run2', () => {
     const run2 = makeRun2(baseState())
     render(<RunExecPanel run2={run2} />)

@@ -275,6 +275,31 @@ describe('run2LogToLine', () => {
     const b = run2LogToLine({ workspacePath: '/ws', log }, now)
     expect(a.id).not.toBe(b.id)
   })
+
+  // Bugfix: a fan-out stage's parallel lanes all share the SAME agentName (fanout.ts's
+  // buildWorkOrders sets `order.name = stage.name` for every lane in a stage), so a 日志台 filter
+  // keyed on `src` (agentName) would show either nothing (filtering by the unique laneId, which
+  // never equals src) or every parallel lane's lines at once (filtering by agentName itself).
+  // `filterId` carries the true per-lane key so a single lane's 日志台 button can isolate its logs.
+  it('tags filterId with the unique laneId, distinct from the (shared-across-lanes) src', () => {
+    const laneA = run2LogToLine({ workspacePath: '/ws', log: makeLog({}) }, now)
+    expect(laneA.filterId).toBe('design:root')
+  })
+
+  it('two parallel lanes in the same stage share src (agentName) but have distinct filterId (laneId)', () => {
+    const lineGoBlog = run2LogToLine({
+      workspacePath: '/ws',
+      log: { laneId: 'develop:go-blog', stageKey: 'develop', agentName: '代码开发', line: { ts: '', text: 'a', level: 'run', kind: 'think' } },
+    }, now)
+    const lineZgh = run2LogToLine({
+      workspacePath: '/ws',
+      log: { laneId: 'develop:zgh', stageKey: 'develop', agentName: '代码开发', line: { ts: '', text: 'b', level: 'run', kind: 'think' } },
+    }, now)
+    expect(lineGoBlog.src).toBe(lineZgh.src) // same shared stage name
+    expect(lineGoBlog.filterId).not.toBe(lineZgh.filterId) // but distinct, per-lane filter keys
+    expect(lineGoBlog.filterId).toBe('develop:go-blog')
+    expect(lineZgh.filterId).toBe('develop:zgh')
+  })
 })
 
 // ── changeItemToLine ──────────────────────────────────────────────────────────

@@ -19,7 +19,10 @@ import { buildStageRuntimes, type AdaptedAgent, type LaneMemory } from './runExe
 // (暂停/继续/终止) are kept in the `.wfo-head` progress header since they aren't per-node decisions.
 
 const IC = {
-  stop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.4"/></svg>',
+  // width/height are load-bearing here — an un-sized inline <svg> defaults to a ~300x150px replaced
+  // element, which is what made the old 终止 button render as a giant square with its label wrapping
+  // underneath (see the `.wfo-btn svg` sizing rule in workflowOverlay.css for the CSS-side backstop).
+  stop: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.4"/></svg>',
 }
 
 function Icon({ svg }: { svg: string }) {
@@ -63,13 +66,21 @@ function useNodeCaps(cwd: string | undefined): AgentContextMeta | null {
 // Thin wrapper around the reused `AgentNode` — loads Skill/Rule/MCP chips for this agent's `cwd`
 // (via `useNodeCaps`, a stable per-component-instance hook call) and merges them onto the runtime
 // object AgentNode actually renders, so AgentNode itself needs no awareness of run2/scanContext.
-function AgentNodeWithCaps({ agent, open, onToggle, live }: { agent: AdaptedAgent; open: boolean; onToggle: () => void; live: boolean }) {
+function AgentNodeWithCaps({ agent, open, onToggle, live, onViewLog }: { agent: AdaptedAgent; open: boolean; onToggle: () => void; live: boolean; onViewLog?: (agentId: string, agentName: string) => void }) {
   const caps = useNodeCaps(agent.cwd)
   const hasCaps = !!caps && (caps.skills.length > 0 || caps.rules.length > 0 || (caps.mcps?.length ?? 0) > 0)
   const runtime: AgentRuntime = hasCaps
     ? { ...agent, context: { skills: caps!.skills, rules: caps!.rules, mcps: caps!.mcps } }
     : agent
-  return <AgentNode agent={runtime} open={open} onToggle={onToggle} live={live} />
+  return (
+    <AgentNode
+      agent={runtime}
+      open={open}
+      onToggle={onToggle}
+      live={live}
+      onViewLog={onViewLog ? () => onViewLog(agent.id, agent.name) : undefined}
+    />
+  )
 }
 
 // `.stage` card state class — only 'run'/'ok'/'err' are styled distinctly in workspace.css
@@ -83,7 +94,7 @@ const STAGE_STATE_CLS: Record<string, string> = { run: 'run', ok: 'ok', err: 'er
 // the run-level 暂停/继续/终止 controls (a historical run has no live process to control) — kept as a
 // separate flag rather than always-derived-from-staticState in case a future caller wants read-only
 // display of a still-LIVE run without also faking its state.
-export function RunExecPanel({ run2, onAbort, staticState, readOnly }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean }): ReactElement {
+export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean; onViewLog?: (agentId: string, agentName: string) => void }): ReactElement {
   // Per-stage `project -> last-known LaneMemory` so a fan-out lane never disappears once observed
   // (see runExecAdapter's LaneMemory doc). Reset whenever the run identity changes.
   const memoryRef = useRef<Map<string, Map<string, LaneMemory>>>(new Map())
@@ -207,18 +218,20 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly }: { run2?: 
               <span className="rd" />
               <span>正在执行…</span>
             </span>
-            {runPaused ? (
-              <button className="wfo-btn ghost" onClick={() => run2?.resume()}>继续</button>
-            ) : runStatus === 'running' ? (
-              <button className="wfo-btn ghost" onClick={() => run2?.pause()}>暂停</button>
-            ) : null}
-            {/* P4-3: prefer the caller's onAbort (WorkspaceView wires one that records a "运行已终止"
-                timeline marker before aborting — see its doc) so a pending gate/auth/question/
-                doubt/failure card doesn't just silently vanish; falls back to a bare run2.abort()
-                for callers that don't need that (e.g. this component's own unit tests). */}
-            <button className="wfo-btn ghost" onClick={() => (onAbort ?? run2?.abort)?.()}>
-              <Icon svg={IC.stop} /> 终止
-            </button>
+            <span className="wfo-runctl-btns">
+              {runPaused ? (
+                <button className="wfo-btn ghost sm" onClick={() => run2?.resume()}>继续</button>
+              ) : runStatus === 'running' ? (
+                <button className="wfo-btn ghost sm" onClick={() => run2?.pause()}>暂停</button>
+              ) : null}
+              {/* P4-3: prefer the caller's onAbort (WorkspaceView wires one that records a "运行已终止"
+                  timeline marker before aborting — see its doc) so a pending gate/auth/question/
+                  doubt/failure card doesn't just silently vanish; falls back to a bare run2.abort()
+                  for callers that don't need that (e.g. this component's own unit tests). */}
+              <button className="wfo-btn danger sm" onClick={() => (onAbort ?? run2?.abort)?.()}>
+                <Icon svg={IC.stop} /> 终止
+              </button>
+            </span>
           </div>
         )}
       </div>
@@ -277,6 +290,10 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly }: { run2?: 
                         open={effectiveOpenIds.has(agent.id)}
                         onToggle={() => handleToggle(agent.id)}
                         live={!isReadOnly}
+                        // A historical/read-only run has no live lane-log stream (see the `laneLogs`
+                        // comment above) — the bottom 实时日志 drawer has nothing to show for it, so
+                        // omit the 日志台 button entirely rather than open an empty drawer.
+                        onViewLog={isReadOnly ? undefined : onViewLog}
                       />
                     ))
                   )}

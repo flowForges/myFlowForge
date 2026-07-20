@@ -6,6 +6,16 @@ export interface LogLine {
   t: string           // "HH:MM:SS"
   level: 'think' | 'exec' | 'file' | 'out' | 'user'
   src: string
+  // Optional dedicated key for the 日志台/`agentFilter` "only this agent" filter — kept separate
+  // from `src` (which is also the line's DISPLAY label) because `src` isn't always unique per
+  // filterable unit: run2's `src` is `RunLogLine.agentName`, which is the STAGE name shared by every
+  // parallel fan-out lane (see fanout.ts's buildWorkOrders — every lane in a stage gets the same
+  // `order.name`), so filtering by `src` on a run2 line would show either nothing (filtering by the
+  // laneId, which never equals agentName) or every lane's lines at once (filtering by agentName).
+  // `filterId` lets `run2LogToLine` carry the truly-unique `laneId` for filtering while leaving
+  // `src` alone for display. Undefined here means "filter by `src`" (the old/pre-run2 behavior,
+  // unchanged) — see LogConsole's `hidden` check.
+  filterId?: string
   color: string
   text: string
   streaming: boolean
@@ -117,7 +127,7 @@ export function run2LogToLine(p: { workspacePath: string; log: RunLogLine }, now
   const level: LogLine['level'] = KIND_TO_LEVEL[kind] ?? 'out'
   return {
     id: `${t}-run2-${log.laneId}-${log.line.ts}-${++run2LogSeq}`,
-    t, level, src: log.agentName, color: 'var(--accent)',
+    t, level, src: log.agentName, filterId: log.laneId, color: 'var(--accent)',
     text: log.line.text, streaming: false,
   }
 }

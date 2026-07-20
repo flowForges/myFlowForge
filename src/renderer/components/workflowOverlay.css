@@ -274,9 +274,20 @@
 .wfo-act .arow { display: flex; gap: 8px; align-items: center; }
 .wfo-inp { flex: 1; min-width: 0; height: 32px; border-radius: 8px; border: 1px solid var(--border-2); background: var(--surface); color: var(--fg); padding: 0 10px; font-size: 12.5px; font-family: var(--font); }
 .wfo-inp:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
-.wfo-btn { height: 32px; padding: 0 13px; border-radius: 8px; font-size: 12px; font-weight: 600; transition: .13s; flex: 0 0 auto; }
+.wfo-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 13px;
+  border-radius: 8px; font-size: 12px; font-weight: 600; line-height: 1; white-space: nowrap; transition: .13s; flex: 0 0 auto; }
+/* Bugfix (run-control restyle): the raw <svg> icons ported into `.wfo-btn` (e.g. RunExecPanel's
+   终止 stop-icon) have no width/height of their own — unsized inline SVG defaults to ~300x150px,
+   which is what made 终止 render as a giant square box with its label wrapping underneath. */
+.wfo-btn svg { width: 13px; height: 13px; flex: 0 0 13px; }
 .wfo-btn.pri { background: var(--accent); color: var(--on-accent); } .wfo-btn.pri:hover { filter: brightness(1.08); }
 .wfo-btn.ghost { background: var(--surface-2); color: var(--fg-2); border: 1px solid var(--border); } .wfo-btn.ghost:hover { background: var(--bg); }
+/* Compact variant for the narrow (~400-460px) inspector run-control group. */
+.wfo-btn.sm { height: 29px; padding: 0 11px; font-size: 11.5px; }
+/* 终止 reads as a clear, slightly-destructive action (not a bare square icon). */
+.wfo-btn.danger { background: color-mix(in oklch, var(--err) 10%, var(--surface)); color: var(--err);
+  border: 1px solid color-mix(in oklch, var(--err) 36%, var(--border)); }
+.wfo-btn.danger:hover { background: color-mix(in oklch, var(--err) 18%, var(--surface)); }
 
 /* 底部:目标输入 / 运行控制 */
 .wfo-foot { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 13px 17px 15px; background: color-mix(in oklch, var(--surface) 35%, var(--bg-2)); }
@@ -294,9 +305,16 @@
 .wfo-foot-hint { margin-top: 9px; font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 7px; }
 .wfo-foot-hint svg { width: 13px; height: 13px; flex: 0 0 13px; }
 .wfo-foot-hint kbd { font: 600 10px/1 var(--mono); background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 3px 5px; color: var(--muted); }
-.wfo-runctl { display: flex; align-items: center; gap: 10px; }
+/* P2/P4-restyle: `.wfo-runctl` also renders inline in `.wfo-head` (RunExecPanel's run-level
+   暂停/继续/终止 group) — the padded/tinted "status strip" look keeps it from reading as loose,
+   boxy controls floating under the progress bar, and stays legible at the narrow (~400-460px)
+   inspector width. */
+.wfo-runctl { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 8px 10px 8px 11px;
+  border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
 .wfo-runctl .rmsg { flex: 1; min-width: 0; font-size: 12px; color: var(--fg-2); display: flex; align-items: center; gap: 8px; }
 .wfo-runctl .rmsg .rd { width: 7px; height: 7px; border-radius: 50%; background: var(--run); flex: 0 0 7px; animation: pulse 1.5s infinite; }
+.wfo-runctl-btns { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.wfo-runctl.done { background: color-mix(in oklch, var(--ok) 9%, var(--surface-2)); border-color: color-mix(in oklch, var(--ok) 34%, var(--border)); }
 .wfo-runctl.done .rmsg .rd { background: var(--ok); animation: none; }
 
 /* 模型选择浮层(fixed) */
