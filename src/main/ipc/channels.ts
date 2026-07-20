@@ -244,6 +244,9 @@ export const CH = {
   // load one run's full saved state for read-only replay.
   run2ListRuns: 'run2:list-runs',
   run2LoadRun: 'run2:load-run',
+  // Run-state UX fix: delete one run-history entry's saved state (never the workspace's currently
+  // live run — see run2Handlers.ts's guard).
+  run2DeleteRun: 'run2:delete-run',
 } as const
 
 // Individual named exports (in addition to the CH object above) so callers can `import * as CH from
@@ -272,3 +275,4 @@ export const run2ResumeFromDisk = CH.run2ResumeFromDisk
 export const run2DiscardResumable = CH.run2DiscardResumable
 export const run2ListRuns = CH.run2ListRuns
 export const run2LoadRun = CH.run2LoadRun
+export const run2DeleteRun = CH.run2DeleteRun

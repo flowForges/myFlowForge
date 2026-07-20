@@ -218,7 +218,18 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }
           <div className="wfo-runctl">
             <span className="rmsg">
               <span className="rd" />
-              <span>正在执行…</span>
+              {/* Fix 1 (honest pause): pause() only takes effect at the next STAGE BOUNDARY — an
+                  in-flight stage's lanes keep running to completion (see controller.ts's start()
+                  loop, which checks `this.paused` only at the top, before starting the next stage).
+                  Swapping straight to "已暂停" while a lane is still visibly working would make the
+                  user think pause silently failed. `runningIds` (computed above from the same
+                  stage/lane state AgentNode renders) tells us whether anything is actually still
+                  running right now, so the message always matches what the user sees on screen. */}
+              <span>
+                {runPaused
+                  ? (runningIds.length > 0 ? '暂停中 · 本阶段完成后停下' : '已暂停')
+                  : '正在执行…'}
+              </span>
             </span>
             <span className="wfo-runctl-btns">
               {runPaused ? (

@@ -1273,7 +1273,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             {/* Spec §12.7: 运行历史 pane — list of past/interrupted runs for this workspace; clicking a
                 row shows that run's saved state read-only through the same RunExecPanel. */}
             <div className={`insp-pane${activeTab === 'history' ? ' on' : ''}`} id="pane-history">
-              {activeTab === 'history' && <RunHistoryPanel listRuns={run2.listRuns} loadRun={run2.loadRun} />}
+              {activeTab === 'history' && (
+                <RunHistoryPanel
+                  listRuns={run2.listRuns}
+                  loadRun={run2.loadRun}
+                  liveRunId={run2.state?.machine.plan.runId ?? null}
+                  deleteRun={run2.deleteRun}
+                />
+              )}
             </div>
 
             {/* 代理编排 / 对话模式 pane */}
