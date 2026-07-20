@@ -167,6 +167,74 @@ describe('buildStageRuntimes', () => {
     expect(stages.find((s) => s.key === 'develop')!.agents).toEqual([])
   })
 
+  // Fix 4: a PENDING per-project stage (not started yet) previously showed an empty agents list
+  // (RunExecPanel's "暂无代码项目在此阶段运行") even though the run has a selected project subset —
+  // seed the lane list from `state.projects` and mark each seeded-but-unstarted project 'wait',
+  // matching how a pending root-scope stage already shows a 等待 card.
+  it('seeds a PENDING per-project stage with its selected state.projects, as wait (not run) lanes', () => {
+    const pendingState = baseState({
+      machine: {
+        plan: baseState().machine.plan,
+        stages: [
+          { key: 'assess', status: 'done', round: 0 },
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'pending', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 1,
+      },
+      outcomes: {},
+      liveLanes: {},
+      projects: [
+        { name: 'go-blog-backend', cwd: '/ws/go-blog-backend', provider: 'codex', model: 'gpt-5-codex' },
+      ],
+    })
+    const stages = buildStageRuntimes(pendingState, {})
+    const develop = stages.find((s) => s.key === 'develop')!
+    expect(develop.agents).toHaveLength(1)
+    expect(develop.agents[0].name).toBe('go-blog-backend')
+    expect(develop.agents[0].state).toBe('wait')
+  })
+
+  // A per-project stage with NO selected projects at all (state.projects empty/absent) is the only
+  // case that should still fall through to the "暂无代码项目" empty state.
+  it('still shows an empty agents list for a per-project stage when state.projects is genuinely empty', () => {
+    const pendingState = baseState({
+      machine: {
+        plan: baseState().machine.plan,
+        stages: [
+          { key: 'assess', status: 'done', round: 0 },
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'pending', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 1,
+      },
+      outcomes: {},
+      liveLanes: {},
+      projects: [],
+    })
+    const stages = buildStageRuntimes(pendingState, {})
+    expect(stages.find((s) => s.key === 'develop')!.agents).toEqual([])
+  })
+
+  // A RUNNING per-project stage must keep its existing behavior for a seeded-but-not-yet-started
+  // project: assumed still starting up ('run'), not 'wait' — 'wait' is only for a pending/stale stage.
+  it('shows a seeded state.projects lane as run (not wait) while its stage is actually running', () => {
+    const runningState = baseState({
+      outcomes: {},
+      liveLanes: {},
+      projects: [
+        { name: 'go-blog-backend', cwd: '/ws/go-blog-backend', provider: 'codex', model: 'gpt-5-codex' },
+      ],
+    })
+    const stages = buildStageRuntimes(runningState, {})
+    const develop = stages.find((s) => s.key === 'develop')!
+    expect(develop.agents).toHaveLength(1)
+    expect(develop.agents[0].name).toBe('go-blog-backend')
+    expect(develop.agents[0].state).toBe('run')
+  })
+
   it('marks a stage stale (jump-back invalidation) via a dedicated flag, without touching sibling stages', () => {
     const staleState = baseState({
       machine: {

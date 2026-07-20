@@ -136,9 +136,20 @@ function buildFanoutAgents(
     const l = state.liveLanes[laneId]
     if (l.stageKey === sp.key && l.project) liveByProject.set(l.project, l)
   }
-  const present = [...memory.keys(), ...outcomeByProject.keys(), ...liveByProject.keys()]
+  // UX2 Fix 4: `state.projects` is the run's selected DevelopProject[] subset (P-C2/⑤) — seed the
+  // lane list with it FIRST so a per-project stage that hasn't started yet (PENDING, nothing in
+  // outcomes/liveLanes/memory) still shows a card per selected project instead of the panel's
+  // "暂无代码项目在此阶段运行" empty state (which should now only fire when no project was selected
+  // at all — see the dedup loop below, which just unions everything by first-seen order).
+  const selectedProjects = (state.projects ?? []).map((p) => p.name)
+  const present = [...selectedProjects, ...memory.keys(), ...outcomeByProject.keys(), ...liveByProject.keys()]
   const ordered: string[] = []
   for (const n of present) if (!ordered.includes(n)) ordered.push(n)
+
+  // Stage-level machine status — distinguishes a genuinely-running fan-out (a not-yet-started lane
+  // is assumed to be starting up, i.e. 'run') from a PENDING/stale stage (a seeded-but-unstarted
+  // project must show 'wait', not 'run' — see stageAgentState's same machineStatus lookup).
+  const machineStatus = state.machine.stages.find((s) => s.key === sp.key)?.status
 
   return ordered.map((project) => {
     const laneId = `${sp.key}:${project}`
@@ -151,9 +162,11 @@ function buildFanoutAgents(
     if (outcome) agentState = outcome.status === 'ok' ? 'ok' : 'err'
     else if (decision) agentState = decision
     else if (live) agentState = 'run'
-    // Genuinely new (never in memory, no outcome/live this tick) → assume still starting up;
-    // otherwise fall back to the last-known state through the momentary gap (see LaneMemory doc).
-    else agentState = prior?.state ?? 'run'
+    // Fall back to the last-known state through a momentary gap (see LaneMemory doc); a genuinely
+    // new lane (never seen before) is 'run' only while its stage is actually running (still assumed
+    // starting up) — a project seeded from `state.projects` before the stage has even started
+    // (pending/stale) must show 'wait' instead (Fix 4), matching the 等待 root-stage cards.
+    else agentState = prior?.state ?? (machineStatus === 'running' ? 'run' : 'wait')
 
     // `||` (not `??`) for the same reason as buildRootAgent above — a resumed `done` stage's
     // placeholder outcome carries '' for provider/model/cwd, not absent (P-C2/T1 review Finding 2).
