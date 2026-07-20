@@ -85,6 +85,34 @@ describe('runWorkOrder', () => {
   })
 })
 
+function providerThatEmitsSession(sessionId: string): AgentProvider {
+  return {
+    id: 'fake', displayName: 'F', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        cb.onState('run')
+        cb.onSession?.(sessionId)
+        cb.onHandoff?.({ summary: 'done' })
+        cb.onState('ok'); const r = { ok: true, summary: 'done' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
+
+describe('runWorkOrder onSession', () => {
+  it('forwards the provider-emitted session id to deps.onSession with laneId + provider', async () => {
+    const calls: Array<[string, string, string]> = []
+    const out = await runWorkOrder(order, {
+      provider: providerThatEmitsSession('sess-123'), env: {},
+      onSession: (laneId, provider, sessionId) => { calls.push([laneId, provider, sessionId]) },
+    })
+    expect(out.status).toBe('ok')
+    expect(calls).toEqual([[order.id, order.provider, 'sess-123']])
+  })
+})
+
 describe('isTransientError', () => {
   it('classifies timeouts/network as transient', () => {
     expect(isTransientError(new Error('network timeout'))).toBe(true)

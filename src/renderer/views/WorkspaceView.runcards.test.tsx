@@ -59,6 +59,7 @@ function makeRunState(inbox: RunEvent[], sessionId?: string): RunControllerState
     liveLanes: {},
     stageTimings: {},
     laneTimings: {},
+    laneSessions: {},
     paused: false,
     sessionId,
   }

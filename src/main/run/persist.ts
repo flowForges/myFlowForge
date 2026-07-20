@@ -28,6 +28,11 @@ export interface SavedControllerState {
   // (mirroring stageTimings' own `?? {}` fallback) so a resumed/historical run just shows no
   // per-lane timing rather than throwing on a missing field.
   laneTimings?: RunControllerState['laneTimings']
+  // See RunControllerState.laneSessions doc (controller.ts). Optional — same backward-compat
+  // rationale as laneTimings/sessionId/task below: an OLDER saved run2-state (written before this
+  // field existed) loads as `undefined`, and callers (findRun2RunForSession/composeAgentSessions)
+  // treat a missing/empty map as "no lane has captured a session id yet" — same as a fresh run.
+  laneSessions?: RunControllerState['laneSessions']
   // P-C2/T3 (disk-resume review Finding 2): the OWNING session (RunControllerDeps.sessionId, echoed
   // onto state — see controller.ts's `get state()`) and the run's `task` seed (ditto). Neither was
   // previously persisted — a resumed run would silently lose session-card scoping (the P3
@@ -60,12 +65,12 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
       provider: o.order.provider, model: o.order.model, cwd: o.order.cwd,
     }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, sessionId: s.sessionId, task: s.task, projects: s.projects })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY) as SavedControllerState | undefined
   if (!got) return null
-  return { ...got, stageTimings: got.stageTimings ?? {}, laneTimings: got.laneTimings ?? {} }
+  return { ...got, stageTimings: got.stageTimings ?? {}, laneTimings: got.laneTimings ?? {}, laneSessions: got.laneSessions ?? {} }
 }
 
 // A run's status only ever reaches 'ok'/'failed' once RunController.start() itself resolves/rejects
@@ -110,6 +115,25 @@ export function findLatestRun2Run(wsPath: string): { runId: string; state: Saved
     if (!best || r.mtimeMs > best.mtimeMs) best = r
   }
   return best ? { runId: best.runId, state: best.state } : null
+}
+
+// composeAgentSessions (chat/agentSessions.ts) needs "which run2 run does THIS chat session own"
+// to surface its stage agents' captured session ids in the IDs panel. Unlike the legacy
+// orchestrator (which sets `ChatSession.runId` — see sessionStore.ts's setSessionMode), a run2
+// launch never sets that field (run2Handlers.ts only threads sessionId into RunControllerDeps,
+// echoed onto `state.sessionId` — see controller.ts) — so ownership has to be matched by scanning
+// every run under this workspace's `.forge/runs/` for one whose saved `sessionId` equals the chat
+// session's id, rather than a direct id lookup. A workspace can have many past/parked runs (see
+// listRuns) for the SAME session (re-launch after a prior run finished) — prefer a currently
+// running (non-terminal) one if any match, else the most recently modified terminal one, mirroring
+// findLatestRun2Run's own "most recently modified" tie-break.
+export function findRun2RunForSession(wsPath: string, sessionId: string): { runId: string; state: SavedControllerState } | null {
+  const owned = scanRun2Dirs(wsPath).filter((r) => r.state.sessionId === sessionId)
+  if (owned.length === 0) return null
+  const running = owned.filter((r) => !isTerminalStatus(r.state.status))
+  const pool = running.length > 0 ? running : owned
+  const best = pool.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a))
+  return { runId: best.runId, state: best.state }
 }
 
 // Spec §12.7: run-history list — every past/interrupted run for a workspace, newest first, for a

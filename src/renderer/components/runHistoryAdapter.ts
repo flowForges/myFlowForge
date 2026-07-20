@@ -41,6 +41,7 @@ export function toHistoricalState(saved: SavedControllerState): RunControllerSta
     liveLanes: {},
     stageTimings: saved.stageTimings,
     laneTimings: saved.laneTimings ?? {},
+    laneSessions: saved.laneSessions ?? {},
     paused: false,
     sessionId: saved.sessionId,
     task: saved.task,

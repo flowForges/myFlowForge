@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../orchestrator/runStore'
 import { wsRunDir } from '../config/paths'
-import { saveControllerState, loadControllerState, findLatestRun2Run, isTerminalStatus, listRuns, loadRun, deleteRun } from './persist'
+import { saveControllerState, loadControllerState, findLatestRun2Run, findRun2RunForSession, isTerminalStatus, listRuns, loadRun, deleteRun } from './persist'
 import { initMachine, type RunPlan, type MachineState } from './machine'
 import type { RunControllerState } from './controller'
 
@@ -52,6 +52,32 @@ describe('controller persistence', () => {
     const back = loadControllerState(store)
     expect(back?.sessionId).toBe('sess-42')
     expect(back?.task).toBe('【需求原文】做个登录页')
+  })
+
+  // See RunControllerState.laneSessions doc (controller.ts) — the same round-trip guarantee as
+  // sessionId/task above: without this, a run2 stage agent's captured CLI session id would vanish
+  // on a disk-resumed run, and the IDs panel (composeAgentSessions) would show it as uncaptured
+  // even though the original run had already surfaced it.
+  it('round-trips laneSessions', () => {
+    const store = new RunStore(ws, 'r1')
+    const s = {
+      machine: initMachine(plan), inbox: [], feedback: [], outcomes: {},
+      status: 'running' as const, pendingDirective: {},
+      laneSessions: { 'design:root': { provider: 'claude', sessionId: 'sess-99' } },
+    }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.laneSessions).toEqual({ 'design:root': { provider: 'claude', sessionId: 'sess-99' } })
+  })
+
+  // Backward compatibility: an older saved run2-state (written before laneSessions existed) must
+  // load with an empty map, not throw and not be defaulted to something that looks authoritative.
+  it('laneSessions defaults to {} for a saved state that never set it', () => {
+    const store = new RunStore(ws, 'r1')
+    const s = { machine: initMachine(plan), inbox: [], feedback: [], outcomes: {}, status: 'running' as const, pendingDirective: {} }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.laneSessions).toEqual({})
   })
 
   // Backward compatibility: a state saved before this field existed (or one built without it, like
@@ -164,7 +190,7 @@ describe('findLatestRun2Run (P-C2/T3 review Finding 1): latest-mtime-wins regard
   // Mirrors the fixture shape manager.test.ts's disk-resume suite uses.
   function fixtureState(status: RunControllerState['status']): RunControllerState {
     const machine: MachineState = { plan, stages: [{ key: 'design', status: 'pending', round: 0 }], currentIndex: 0 }
-    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false }
+    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, laneSessions: {}, paused: false }
   }
   // Seeds a run's context.json then stamps its mtime explicitly — real filesystem mtime resolution
   // (and same-millisecond writes in a fast test) is too coarse/unreliable to order two saves by
@@ -200,11 +226,59 @@ describe('findLatestRun2Run (P-C2/T3 review Finding 1): latest-mtime-wins regard
   })
 })
 
+// composeAgentSessions (chat/agentSessions.ts) uses this to find which run2 run a chat session
+// owns — run2 launches never set ChatSession.runId (see findRun2RunForSession's doc), so ownership
+// is matched by the saved state's own `sessionId` field instead.
+describe('findRun2RunForSession', () => {
+  function fixtureState(status: RunControllerState['status'], sessionId?: string): RunControllerState {
+    const machine: MachineState = { plan, stages: [{ key: 'design', status: 'pending', round: 0 }], currentIndex: 0 }
+    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, laneSessions: {}, paused: false, sessionId }
+  }
+  function seedRun(runId: string, status: RunControllerState['status'], sessionId: string | undefined, mtimeMs: number) {
+    saveControllerState(new RunStore(ws, runId), fixtureState(status, sessionId))
+    const ctxFile = join(wsRunDir(ws, runId), 'context.json')
+    const t = mtimeMs / 1000
+    utimesSync(ctxFile, t, t)
+  }
+
+  it('returns null when no run is owned by this session', () => {
+    seedRun('run-a', 'running', 'sess-OTHER', Date.now())
+    expect(findRun2RunForSession(ws, 'sess-mine')).toBeNull()
+  })
+
+  it('finds the single run owned by this session', () => {
+    seedRun('run-a', 'running', 'sess-mine', Date.now())
+    const found = findRun2RunForSession(ws, 'sess-mine')
+    expect(found?.runId).toBe('run-a')
+  })
+
+  it('prefers a currently-running owned run over an older terminal owned run', () => {
+    seedRun('run-old-done', 'ok', 'sess-mine', Date.now() - 3600_000)
+    seedRun('run-new-running', 'running', 'sess-mine', Date.now() - 1000)
+    const found = findRun2RunForSession(ws, 'sess-mine')
+    expect(found?.runId).toBe('run-new-running')
+  })
+
+  it('falls back to the most recently modified terminal run when none are running', () => {
+    seedRun('run-a', 'ok', 'sess-mine', Date.now() - 2000)
+    seedRun('run-b', 'failed', 'sess-mine', Date.now())
+    const found = findRun2RunForSession(ws, 'sess-mine')
+    expect(found?.runId).toBe('run-b')
+  })
+
+  it('ignores runs owned by a different session even if newer', () => {
+    seedRun('run-mine', 'running', 'sess-mine', Date.now() - 5000)
+    seedRun('run-other', 'running', 'sess-OTHER', Date.now())
+    const found = findRun2RunForSession(ws, 'sess-mine')
+    expect(found?.runId).toBe('run-mine')
+  })
+})
+
 describe('listRuns / loadRun (run-history, spec §12.7)', () => {
   function fixtureState(status: RunControllerState['status'], doneCount: number, totalStages: number, task?: string): RunControllerState {
     const stages = Array.from({ length: totalStages }, (_, i) => ({ key: `s${i}`, status: (i < doneCount ? 'done' : 'pending') as 'done' | 'pending', round: 0 }))
     const machine: MachineState = { plan, stages, currentIndex: 0 }
-    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false, task }
+    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, laneSessions: {}, paused: false, task }
   }
   // Same mtime-pinning rationale as findLatestRun2Run's seedRun above — real fs mtime resolution is
   // too coarse to reliably order several saves by "which ran Nth".
@@ -259,7 +333,7 @@ describe('listRuns / loadRun (run-history, spec §12.7)', () => {
 describe('deleteRun (run-history delete)', () => {
   function fixtureState(status: RunControllerState['status'], task?: string): RunControllerState {
     const machine: MachineState = { plan, stages: [{ key: 's0', status: 'done', round: 0 }], currentIndex: 0 }
-    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false, task }
+    return { machine, inbox: [], feedback: [], outcomes: {}, status, pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, laneSessions: {}, paused: false, task }
   }
 
   it('clears the given run so it no longer loads or appears in listRuns', () => {

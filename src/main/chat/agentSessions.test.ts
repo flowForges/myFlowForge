@@ -49,6 +49,42 @@ it('union: a session with BOTH a workflow run and chat mains lists all agents (e
   expect(ids).toEqual(['claude-abc', 'codex-chat-9', 'codex-wf-1'])   // all three, workflow + both chat mains
 })
 
+// run2 stage agents (RunControllerState.laneSessions, run/controller.ts) — unlike the legacy
+// orchestrator branch above, a run2 launch never sets ChatSession.runId (findRun2RunForSession's
+// doc), so the fixture session below deliberately omits `runId` and relies on matching
+// state.sessionId instead — that IS the bug this fix closes.
+it('run2 session → a captured lane shows its session id, an uncaptured running lane gets a placeholder row', async () => {
+  const { RunStore } = await import('../orchestrator/runStore')
+  const { saveControllerState } = await import('./../run/persist')
+  const { composeAgentSessions } = await import('./agentSessions')
+  const ws = join(home, 'ws')
+  const plan = { runId: 'run2-1', stages: [{ key: 'develop', name: '代码开发', provider: 'x', model: 'm', scope: 'per-project' as const, gate: false }] }
+  const machine = { plan, stages: [{ key: 'develop', status: 'running' as const, round: 0 }], currentIndex: 0 }
+  const state = {
+    machine, inbox: [], feedback: [], outcomes: {}, status: 'running' as const, pendingDirective: {},
+    liveLanes: {}, stageTimings: {}, laneTimings: {}, paused: false,
+    sessionId: 's1',
+    projects: [{ name: 'a', cwd: '/ws/a' }, { name: 'b', cwd: '/ws/b' }],
+    laneSessions: { 'develop:a': { provider: 'claude', sessionId: 'claude-run2-1' } },
+  }
+  saveControllerState(new RunStore(ws, 'run2-1'), state as any)
+
+  // No `runId` on the session — mirrors real run2 launches (see doc above).
+  const rows = composeAgentSessions(ws, { id: 's1', title: 't', mode: 'chat', createdAt: 0 })
+  const captured = rows.find((r) => r.agentName === 'a')
+  expect(captured).toMatchObject({ provider: 'claude', providerLabel: 'Claude Code', role: '代码开发', sessionId: 'claude-run2-1', status: 'run' })
+
+  const uncaptured = rows.find((r) => r.agentName === 'b')
+  expect(uncaptured).toMatchObject({ provider: '', providerLabel: '—', role: '代码开发', sessionId: '会话未捕获', status: 'run' })
+})
+
+it('run2 session → composeAgentSessions returns nothing run2-related for a session that owns no run2 run', async () => {
+  const { composeAgentSessions } = await import('./agentSessions')
+  const ws = join(home, 'ws')
+  const rows = composeAgentSessions(ws, { id: 'no-run-here', title: 't', mode: 'chat', createdAt: 0 })
+  expect(rows).toEqual([])
+})
+
 it('agentSessionsForId finds the session then composes', async () => {
   const { writeSession } = await import('./chatStore')
   const { newSession } = await import('./sessionStore')

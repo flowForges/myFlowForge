@@ -94,6 +94,15 @@ export interface RunControllerState {
   // (manual `retry` decision after a failure) gets a FRESH entry (see runOneOrder) so its elapsed
   // reflects only the latest attempt, matching how stageTimings is overwritten on a stage redo.
   laneTimings: Record<string, { startedAt: number; endedAt?: number }>
+  // laneId (WorkOrder.id, e.g. `${stageKey}:root` / `${stageKey}:${project}` — see fanout.ts's
+  // buildWorkOrders) → the CLI-native session id that lane's provider emitted via `cb.onSession`
+  // (see workOrder.ts's RunWorkOrderDeps.onSession / runOneOrderLive below). This is what lets the
+  // "Agent Session IDs" panel (composeAgentSessions, chat/agentSessions.ts) surface a run2 stage
+  // agent's session — previously ONLY the legacy orchestrator captured session ids at all, so a
+  // run2 run showed nothing there even mid-run. Set once per lane (last onSession call wins on a
+  // retried lane); never removed for a settled lane (mirrors outcomes — a finished run still shows
+  // its stage agents' ids, same as the legacy orchestrator's run store).
+  laneSessions: Record<string, { provider: string; sessionId: string }>
   paused: boolean
   // Set only on a finalize-gate merge/discard failure (see runFinalizeGate) — the readable,
   // per-project error message naming what actually failed (e.g. a merge conflict + file). Absent
@@ -162,6 +171,11 @@ export interface RehydrateState {
   // and the rehydrated controller starts with an empty map (no per-lane timing history to show,
   // same as stageTimings would for an even older save).
   laneTimings?: Record<string, { startedAt: number; endedAt?: number }>
+  // See RunControllerState.laneSessions doc. Optional/backward-compatible the same way laneTimings
+  // is — an older saved run2-state (written before this field existed) loads as `undefined`, and
+  // the rehydrated controller just starts with no captured session ids (same as a fresh run whose
+  // stage agents haven't emitted one yet — composeAgentSessions falls back to its placeholder row).
+  laneSessions?: Record<string, { provider: string; sessionId: string }>
 }
 
 // A loaded machine's currentIndex/statuses reflect whatever was on disk at the last emitUpdate()
@@ -209,6 +223,7 @@ export class RunController {
   private liveLanes: Record<string, LiveLane> = {}
   private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
   private laneTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
+  private laneSessions: Record<string, { provider: string; sessionId: string }> = {}
   private aborted = false
   private paused = false
   // Set by requestJumpBack(), applied at the next stage boundary (see start()). Deliberately not
@@ -245,6 +260,7 @@ export class RunController {
       this.pendingDirective = rehydrate.pendingDirective ?? {}
       this.stageTimings = rehydrate.stageTimings ?? {}
       this.laneTimings = rehydrate.laneTimings ?? {}
+      this.laneSessions = rehydrate.laneSessions ?? {}
       for (const [stageKey, list] of Object.entries(rehydrate.outcomes ?? {})) {
         this.outcomes[stageKey] = list.map((o) => placeholderOutcome(stageKey, o))
       }
@@ -261,7 +277,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -626,6 +642,10 @@ export class RunController {
         }
         this.emitUpdate()
         if (ev.log) this.emitLog({ laneId: ev.laneId, stageKey: order.stageKey, project: order.project, agentName: order.name, line: ev.log })
+      },
+      onSession: (laneId, provider, sessionId) => {
+        this.laneSessions[laneId] = { provider, sessionId }
+        this.emitUpdate()
       },
       onConfirm: async (req: ConfirmReq, laneId: string) => {
         // If the run was already aborted (e.g. by a sibling lane, or by a concurrent onEvent

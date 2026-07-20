@@ -54,6 +54,21 @@ function askThenInputProvider(): AgentProvider {
     },
   }
 }
+// Provider that emits a CLI-native session id (cb.onSession) before completing — used to prove the
+// controller captures it into state.laneSessions (see RunControllerState.laneSessions doc).
+function sessionProvider(sessionId: string): AgentProvider {
+  return {
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      const done = (async () => {
+        cb.onSession?.(sessionId)
+        cb.onHandoff?.({ summary: `out ${task.agentId}` }); const r = { ok: true, summary: '' }; cb.onDone(r); return r
+      })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  }
+}
 // Provider that surfaces live progress (onState + onLog) before completing — used to capture a
 // mid-run snapshot with liveLanes populated, then confirm it's gone once the lane settles.
 function progressProvider(): AgentProvider {
@@ -304,6 +319,20 @@ describe('RunController', () => {
     expect(final.status).toBe('ok')
     expect(final.liveLanes[laneId]).toBeUndefined() // settled lane moved to outcomes, not live anymore
     expect(final.outcomes['develop']?.[0]?.status).toBe('ok')
+  })
+
+  it('laneSessions: captures a provider-emitted CLI session id per lane, in state and on disk', async () => {
+    const store = new RunStore(ws, 'r1')
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: sessionProvider('sess-123') }, store, env: {}, projects: [{ name: 'a', cwd: '/ws/a' }], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const final = await c.start()
+
+    const laneId = 'develop:a'
+    expect(final.laneSessions[laneId]).toEqual({ provider: 'x', sessionId: 'sess-123' })
+
+    const { loadControllerState } = await import('./persist')
+    const saved = loadControllerState(store)
+    expect(saved?.laneSessions?.[laneId]).toEqual({ provider: 'x', sessionId: 'sess-123' })
   })
 
   it('onLog broadcasts live agent log lines on a channel separate from state/persistence', async () => {

@@ -32,6 +32,13 @@ export interface RunWorkOrderDeps {
   onConfirm?: (req: import('../agents/types').ConfirmReq, laneId: string) => Promise<'allow' | 'deny'>
   onInput?: (req: import('../agents/types').InputReq, laneId: string) => Promise<string>
   onProgress?: (ev: { laneId: string; state?: import('../agents/types').AgentState; activity?: string; log?: import('../agents/types').LogLine }) => void
+  // Surfaces the CLI-native session id a provider's `run()` emits via `cb.onSession(id)` (same
+  // mechanism the legacy orchestrator captures via its own onSession callback — orchestrator.ts's
+  // `store.setAgentSession`) — without this, run2 never captured a stage agent's session id at all,
+  // so it could never show up in the "Agent Session IDs" panel (composeAgentSessions only knew about
+  // the OLD orchestrator's run store). Optional/best-effort: a provider that never calls onSession
+  // (or a test double that doesn't implement it) simply never fires this — no behavior change.
+  onSession?: (laneId: string, provider: string, sessionId: string) => void
 }
 
 const TRANSIENT_RE = /timeout|network|econn|etimedout|socket hang|cancel/i
@@ -67,6 +74,7 @@ export async function runWorkOrder(order: WorkOrder, deps: RunWorkOrderDeps): Pr
         onActivity() { deps.onProgress?.({ laneId: order.id }) },
         onDone() {},
         onError(e) { capturedErr = e instanceof Error ? e : new Error(String(e)) },
+        onSession(id) { deps.onSession?.(order.id, order.provider, id) },
         onConfirm: (req) => (deps.onConfirm ? deps.onConfirm(req, order.id) : Promise.resolve('allow')),
         onInput: (req) => (deps.onInput ? deps.onInput(req, order.id) : Promise.resolve('')),
         onHandoff(p) { handoff = p },
