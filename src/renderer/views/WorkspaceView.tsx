@@ -1272,7 +1272,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         <div className="insp-body">
             {/* 执行 pane — run2 运行时的执行面板(P2-2:进度+阶段流程+代码阶段分支扇出+运行级暂停/继续/终止)。 */}
             <div className={`insp-pane${activeTab === 'exec' ? ' on' : ''}`} id="pane-exec">
-              {activeTab === 'exec' && <RunExecPanel run2={run2} onAbort={handleRunAbort} />}
+              {activeTab === 'exec' && <RunExecPanel run2={run2} onAbort={handleRunAbort} onViewLog={onViewAgentLog} />}
             </div>
 
             {/* Spec §12.7: 运行历史 pane — list of past/interrupted runs for this workspace; clicking a

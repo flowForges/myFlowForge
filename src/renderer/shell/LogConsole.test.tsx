@@ -127,6 +127,19 @@ describe('LogConsole', () => {
     expect(screen.getByText('from-a2').closest('.lg-line')).toHaveClass('hide')
   })
 
+  // Bugfix: run2 log lines carry a `filterId` (the unique lane id) distinct from `src` (a stage
+  // name SHARED by every parallel fan-out lane) — the filter must prefer filterId when present so
+  // a single lane's 日志台 button isolates just that lane, not every lane sharing the same src.
+  it('prefers filterId over src when a line has both (run2 fan-out lanes)', () => {
+    const logs = [
+      mkLine({ id: '1', level: 'out', src: '代码开发', filterId: 'develop:go-blog', text: 'from-go-blog' }),
+      mkLine({ id: '2', level: 'out', src: '代码开发', filterId: 'develop:zgh', text: 'from-zgh' }),
+    ]
+    render(<LogConsole {...baseProps} logs={logs} agentFilter={{ id: 'develop:go-blog', name: 'go-blog' }} />)
+    expect(screen.getByText('from-go-blog').closest('.lg-line')).not.toHaveClass('hide')
+    expect(screen.getByText('from-zgh').closest('.lg-line')).toHaveClass('hide')
+  })
+
   it('agentFilter combines with the level filter (both must match)', () => {
     const logs = [
       mkLine({ id: '1', level: 'out', src: 'a1', text: 'a1-out' }),
