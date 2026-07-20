@@ -52,8 +52,15 @@
    It still needs the SAME flex-column + fixed-header + scrolling-body containment as .wfo-panel so
    .wfo-head stays put and .wfo-flow's stage/lane list scrolls within the panel instead of the page. */
 .wfo-run-panel { display: flex; flex-direction: column; height: 100%; max-height: 100%; overflow: hidden; }
-/* P2-1/P4: temp-branch line next to the run title (.wfo-title .tt) — same small-mono-muted treatment
-   as the sibling `.wfo-title .tt small` rule above. */
+/* P2-1/P4/UX2: temp-branch line under the run title (.wfo-title .tt) — a secondary caption, NOT a
+   same-row sibling: at the ~400px inspector width the bold 14.5px title ("工作流执行中") wraps to two
+   lines with the branch text sitting misaligned to its right (Fix 3). Scoped to `.wfo-run-panel` —
+   `.wfo-title` has no other consumer (grepped: only RunExecPanel.tsx), but keep the scope anyway so
+   a future overlay-width user of `.wfo-title` doesn't inherit this stacked layout silently. */
+.wfo-run-panel .wfo-title { flex-direction: column; align-items: flex-start; gap: 2px; }
+.wfo-run-panel .wfo-branch {
+  margin-left: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .wfo-branch { font: 600 11px/1 var(--mono); color: var(--faint); margin-left: 6px; }
 
 /* P2-fix: RunExecPanel reuses the flow-node/lane header markup ported from the wide (~900px) floating
@@ -74,7 +81,7 @@
 .wfo-title { display: flex; align-items: center; gap: 10px; }
 .wfo-title .ti { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-dim); color: var(--accent); flex: 0 0 26px; }
 .wfo-title .ti svg { width: 15px; height: 15px; }
-.wfo-title .tt { font-size: 14.5px; font-weight: 700; color: var(--fg); }
+.wfo-title .tt { font-size: 14.5px; font-weight: 700; color: var(--fg); white-space: nowrap; }
 .wfo-title .tt small { font: 600 11px/1 var(--mono); color: var(--faint); margin-left: 6px; }
 .wfo-x { margin-left: auto; width: 28px; height: 28px; border-radius: 8px; color: var(--faint); display: grid; place-items: center; transition: .13s; }
 .wfo-x:hover { background: var(--surface); color: var(--fg); }

@@ -228,13 +228,15 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc }: RunEv
         {event.kind === 'question' && (
           <div className="wfo-act">
             <div className="am">{event.title}</div>
-            <div className="arow">
-              <input
-                className="wfo-inp"
+            <div className="wfo-goal">
+              <textarea
                 placeholder={event.placeholder ?? ''}
                 value={answer}
                 onChange={(e) => setAnswer(e.target.value)}
+                rows={3}
               />
+            </div>
+            <div className="arow">
               <button className="wfo-btn pri" onClick={() => onLane(event.id, { type: 'answer', value: answer })}>提交</button>
             </div>
           </div>

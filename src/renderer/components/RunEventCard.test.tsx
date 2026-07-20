@@ -141,11 +141,14 @@ describe('RunEventCard', () => {
     expect(onLane).toHaveBeenCalledWith('d2', { type: 'abort' })
   })
 
-  it('question: renders title + input, submits answer', () => {
+  it('question: renders title + a multi-line textarea (not a single-line input), submits answer', () => {
     const onLane = vi.fn()
     const event: RunEvent = { id: 'q1', kind: 'question', laneId: 'l5', stageKey: 'impl', title: '用哪个目录名？', placeholder: 'src/foo' }
     render(<RunEventCard event={event} onGate={vi.fn()} onLane={onLane} />)
     const input = screen.getByPlaceholderText('src/foo')
+    // The answer can be a long requirement description — this must be a <textarea>, not a
+    // single-line <input>, so the user can see/edit multi-line text (see task's Fix 1).
+    expect(input.tagName).toBe('TEXTAREA')
     fireEvent.change(input, { target: { value: 'src/bar' } })
     fireEvent.click(screen.getByText('提交'))
     expect(onLane).toHaveBeenCalledWith('q1', { type: 'answer', value: 'src/bar' })

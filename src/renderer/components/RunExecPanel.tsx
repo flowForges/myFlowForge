@@ -22,7 +22,9 @@ const IC = {
   // width/height are load-bearing here — an un-sized inline <svg> defaults to a ~300x150px replaced
   // element, which is what made the old 终止 button render as a giant square with its label wrapping
   // underneath (see the `.wfo-btn svg` sizing rule in workflowOverlay.css for the CSS-side backstop).
-  stop: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2.4"/></svg>',
+  // Filled (not outlined) rounded square — an empty outline reads as a broken/unloaded icon; a
+  // solid glyph reads instantly as "stop", matching the universal stop-button convention.
+  stop: '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" stroke="none"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>',
 }
 
 function Icon({ svg }: { svg: string }) {
@@ -191,7 +193,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }
       <div className="wfo-head">
         <div className="wfo-title">
           <span className="tt">{isReadOnly ? '历史运行回看' : '工作流执行中'}</span>
-          <span className="wfo-branch">分支：{tempBranch}</span>
+          <span className="wfo-branch" title={`分支：${tempBranch}`}>分支：{tempBranch}</span>
         </div>
         <div className="wfo-prog">
           <span className="lbl">已完成 {doneN} / {totalStages}</span>

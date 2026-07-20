@@ -171,6 +171,27 @@ describe('RunExecPanel', () => {
     const abortBtn = screen.getByText(/终止/)
     fireEvent.click(abortBtn)
     expect(run2.abort).toHaveBeenCalled()
+
+    // Fix 2: the 终止 button's icon must be a filled glyph (an empty stroked outline previously
+    // read as a broken/unloaded icon) — assert the svg has no stroke and paints via fill.
+    const stopSvg = abortBtn.querySelector('svg')!
+    expect(stopSvg).not.toBeNull()
+    expect(stopSvg.getAttribute('fill')).toBe('currentColor')
+    expect(stopSvg.getAttribute('stroke')).toBe('none')
+  })
+
+  // Fix 3: header title ("工作流执行中"/"历史运行回看") and the 分支 caption must stack vertically
+  // (not sit side by side on one row, which wrapped the bold title in the narrow inspector).
+  it('stacks the header title and 分支 caption vertically', () => {
+    const run2 = makeRun2(baseState())
+    render(<RunExecPanel run2={run2} />)
+
+    const title = screen.getByText('工作流执行中')
+    const branch = screen.getByText(/分支：/)
+    const titleRow = title.closest('.wfo-title')
+    expect(titleRow).not.toBeNull()
+    // Both the title and the branch caption live inside the same `.wfo-title` stack.
+    expect(titleRow!.contains(branch)).toBe(true)
   })
 
   it('shows 继续 instead of 暂停 when the run is paused, wired to resume', () => {
