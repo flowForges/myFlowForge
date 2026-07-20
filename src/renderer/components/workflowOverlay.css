@@ -285,9 +285,15 @@
 /* Compact variant for the narrow (~400-460px) inspector run-control group. */
 .wfo-btn.sm { height: 29px; padding: 0 11px; font-size: 11.5px; }
 /* 终止 reads as a clear, slightly-destructive action (not a bare square icon). */
-.wfo-btn.danger { background: color-mix(in oklch, var(--err) 10%, var(--surface)); color: var(--err);
-  border: 1px solid color-mix(in oklch, var(--err) 36%, var(--border)); }
-.wfo-btn.danger:hover { background: color-mix(in oklch, var(--err) 18%, var(--surface)); }
+/* 终止: reads as a calm ghost sibling of 暂停 at rest (same neutral fill/border/weight) so the two
+   controls look like a coordinated pair — not a loud red pill next to a gray one. Only reveals its
+   destructive red tint on hover, i.e. right as you're about to click it. The stop icon (muted at rest)
+   is what distinguishes it from 暂停, not color. */
+.wfo-btn.danger { background: var(--surface-2); color: var(--fg-2); border: 1px solid var(--border); }
+.wfo-btn.danger svg { color: var(--faint); }
+.wfo-btn.danger:hover { background: color-mix(in oklch, var(--err) 12%, var(--surface)); color: var(--err);
+  border-color: color-mix(in oklch, var(--err) 38%, var(--border)); }
+.wfo-btn.danger:hover svg { color: var(--err); }
 
 /* 底部:目标输入 / 运行控制 */
 .wfo-foot { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 13px 17px 15px; background: color-mix(in oklch, var(--surface) 35%, var(--bg-2)); }
