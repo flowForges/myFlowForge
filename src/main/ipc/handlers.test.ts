@@ -113,17 +113,6 @@ vi.mock('../workspace/workspaceList', () => ({
   listWorkspaces: listWorkspacesMock
 }))
 
-vi.mock('../workspace/workspaceRun', () => ({
-  // Pass ws.stages/ws.projects through (rather than hard-coding []) so tests can assert on the
-  // resolved StartRunOpts a caller (e.g. resumeWorkspace) built from a `filled` workspace.
-  workspaceToStartRunOpts: vi.fn((ws: any, task?: string, wf?: { id: string; name: string }) => ({
-    runId: `run-${ws.name}`, workspaceName: ws.name, workspacePath: ws.path, task,
-    workflowId: wf?.id, workflowName: wf?.name,
-    stages: ws.stages ?? [],
-    developProjects: ws.projects ?? [],
-  }))
-}))
-
 vi.mock('../chat/chatService', () => ({
   sendTurn: vi.fn(),
   history: vi.fn(() => [])
@@ -318,34 +307,8 @@ describe('registerIpc broadcast wiring', () => {
     expect((modeEvt![1] as any).mode).toBe('chat')
   })
 
-  it('engineStartRun surfaces a non-empty task as a chat user message (persist + broadcast)', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.engineStartRun)
-    expect(call).toBeTruthy()
-    await call[1]({}, { runId: 'r', workspaceName: 'w', workspacePath: '/ws/a', stages: [], developProjects: [], task: '给blog加评论系统' })
-    // persisted to chat.jsonl
-    expect(appendMessageMock).toHaveBeenCalledWith('/ws/a', 's1', expect.objectContaining({ who: 'user', text: '给blog加评论系统' }))
-    // broadcast a chat 'user' event with the task text
-    const userEvt = sent.find(([c, p]) => c === CH.chatEvent && (p as any).type === 'user')
-    expect(userEvt).toBeTruthy()
-    expect((userEvt![1] as any).workspacePath).toBe('/ws/a')
-    expect((userEvt![1] as any).sessionId).toBe('s1')
-    expect((userEvt![1] as any).message.text).toBe('给blog加评论系统')
-  })
-
-  it('engineStartRun without a task does NOT post a chat user message', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.engineStartRun)
-    await call[1]({}, { runId: 'r', workspaceName: 'w', workspacePath: '/ws/a', stages: [], developProjects: [] })
-    expect(appendMessageMock).not.toHaveBeenCalled()
-    expect(sent.some(([c, p]) => c === CH.chatEvent && (p as any).type === 'user')).toBe(false)
-  })
+  // engineStartRun (engine:start-run) removed entirely — see the "old orchestrator run-start/resume
+  // triggers are gone" test below for the airtight assertion that the channel is never registered.
 
   it('chatSend serializes turns per workspace: second send is queued until first resolves', async () => {
     const { registerIpc } = await import('./handlers')
@@ -602,147 +565,9 @@ describe('registerIpc broadcast wiring', () => {
     expect(listWorkspacesMock).toHaveBeenCalledWith(undefined, [], ['/ws/b', '/ws/a'])
   })
 
-  it('workspaceRun: reads workspace and no-ops when stages are empty', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
-    const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
-      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
-      return call[1]({}, ...args)
-    }
-    liveRun.current = null
-    readWorkspaceMock.mockReturnValue({ name: 'ws', path: '/ws/a', workflowId: 'standard', stages: [], projects: [], status: 'idle' })
-    const result = await invokeHandler(CH.workspaceRun, '/ws/a')
-    expect(readWorkspaceMock).toHaveBeenCalledWith('/ws/a')
-    expect(result).toBeUndefined()
-  })
-
-  it('workspaceRun: no-ops when a run is already active (status: run)', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
-    const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
-      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
-      return call[1]({}, ...args)
-    }
-    liveRun.current = { id: 'r1', workspacePath: '/ws/live', status: 'run' }
-    readWorkspaceMock.mockReturnValue({ name: 'ws', path: '/ws/a', workflowId: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'opus-4.8' }], projects: [], status: 'idle' })
-    const result = await invokeHandler(CH.workspaceRun, '/ws/a')
-    expect(result).toBeUndefined()
-  })
-
-  it('workspaceRun: no-ops when workspace is not found', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
-    const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
-      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
-      return call[1]({}, ...args)
-    }
-    liveRun.current = null
-    readWorkspaceMock.mockReturnValue(null)
-    const result = await invokeHandler(CH.workspaceRun, '/ws/missing')
-    expect(result).toBeUndefined()
-  })
-
-  // FIX 1 regression: readWorkspace/ensureWorkspaceWorkflows leaves ws.stages permanently [] for
-  // any workspace under the multi-workflow model (stages live in ws.workflows[].stages). Before the
-  // fix, resumeWorkspace built `base` from raw `ws` (empty stages) → planResume's allSpecs was empty
-  // → findIndex returned -1 → resume bailed with "工作流已全部完成,无需继续。" even though the prior
-  // run's workflow (wf1) still has an unfinished 'develop' stage.
-  it('engine:resume resolves stages from the failed run\'s workflow (workflows[].stages), not empty ws.stages', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    const { readLastRun } = await import('../orchestrator/runStore') as any
-    const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
-      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
-      return call[1]({}, ...args)
-    }
-    liveRun.current = null
-    // The prior failed run: 'requirement' finished ok, 'develop' never ran. References workflow wf1.
-    readLastRun.mockReturnValueOnce({
-      id: 'run-1', workspacePath: '/ws/a', status: 'err', workflowId: 'wf1',
-      stages: [{ key: 'requirement', state: 'ok', agents: [] }],
-    })
-    // Post-multi-workflow shape: ws.stages is the empty legacy seed; the real stages live under
-    // ws.workflows[0].stages.
-    readWorkspaceMock.mockReturnValue({
-      name: 'ws', path: '/ws/a', workflowId: 'wf1', status: 'err', projects: [],
-      stages: [],
-      workflows: [{ id: 'wf1', name: 'WF1', stages: [
-        { key: 'requirement', provider: 'claude', model: 'opus' },
-        { key: 'develop', provider: 'claude', model: 'sonnet' },
-      ] }],
-    })
-    await invokeHandler(CH.engineResume, { workspacePath: '/ws/a' })
-    const notes = sent.filter(([c, p]) => c === CH.chatEvent && (p as any).type === 'done')
-      .map(([, p]) => (p as any).message?.text as string | undefined)
-    // Must NOT bail with the "nothing left to resume" note.
-    expect(notes.some(t => t?.includes('已全部完成'))).toBe(false)
-    // Must actually start a run — with the remaining ('develop') stage, proving stages were resolved
-    // from ws.workflows[wf1].stages rather than the empty legacy ws.stages.
-    expect(startRunCalls.length).toBe(1)
-    expect(startRunCalls[0].stages.map((s: any) => s.key)).toEqual(['develop'])
-  })
-
-  // FIX 1 follow-up: an AD-HOC prior run has workflowId === undefined. It must resolve the UNION of
-  // all workflows' stages (mirror proposeRun's ad-hoc path), NOT silently collapse to workflows[0].
-  // Before the short-circuit fix, pickWorkspaceWorkflow(ws, undefined) returned workflows[0] ('light'),
-  // whose stages were both already done → resume bailed with "已全部完成" and dropped the never-run
-  // 'develop'/'review' stages that the ad-hoc union run actually included.
-  it('engine:resume for an ad-hoc prior run (no workflowId) resolves the union of all workflows\' stages', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    const { readLastRun } = await import('../orchestrator/runStore') as any
-    const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
-      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
-      return call[1]({}, ...args)
-    }
-    liveRun.current = null
-    // Ad-hoc prior run: workflowId undefined; 'requirement'+'design' done, 'develop'/'review' never ran.
-    readLastRun.mockReturnValueOnce({
-      id: 'run-2', workspacePath: '/ws/a', status: 'err', workflowId: undefined,
-      stages: [{ key: 'requirement', state: 'ok', agents: [] }, { key: 'design', state: 'ok', agents: [] }],
-    })
-    // Two workflows: the union (first-wins dedup) is [requirement, design, develop, review]. 'develop'
-    // and 'review' live ONLY in the 2nd workflow, so collapsing to workflows[0] would drop them.
-    readWorkspaceMock.mockReturnValue({
-      name: 'ws', path: '/ws/a', workflowId: '', status: 'err', projects: [],
-      stages: [],
-      workflows: [
-        { id: 'light', name: 'Light', stages: [
-          { key: 'requirement', provider: 'claude', model: 'opus' },
-          { key: 'design', provider: 'claude', model: 'opus' },
-        ] },
-        { id: 'full', name: 'Full', stages: [
-          { key: 'requirement', provider: 'claude', model: 'opus' },
-          { key: 'develop', provider: 'claude', model: 'sonnet' },
-          { key: 'review', provider: 'claude', model: 'opus' },
-        ] },
-      ],
-    })
-    await invokeHandler(CH.engineResume, { workspacePath: '/ws/a' })
-    const notes = sent.filter(([c, p]) => c === CH.chatEvent && (p as any).type === 'done')
-      .map(([, p]) => (p as any).message?.text as string | undefined)
-    expect(notes.some(t => t?.includes('已全部完成'))).toBe(false)
-    expect(startRunCalls.length).toBe(1)
-    // The remaining stages MUST include 'develop' and 'review', which live only in the 2nd workflow —
-    // proving the union was resolved. The buggy collapse-to-workflows[0] path (Light = [requirement,
-    // design]) could never surface them. ('design' also re-runs here because it is a review-gated
-    // stage whose gate approval wasn't persisted in this test — orthogonal to the union fix.)
-    const remainingKeys = startRunCalls[0].stages.map((s: any) => s.key)
-    expect(remainingKeys).toContain('develop')
-    expect(remainingKeys).toContain('review')
-  })
+  // workspaceRun (workspaces:run) and engine:resume (both old orch.startRun triggers, plus the
+  // resumeWorkspace() helper they shared) are removed entirely — run2 has its own disk-resume
+  // (P-C2) and its own launcher start path. See the airtight registration-check test below.
 
   it('broadcasts sessionsChanged after sessionNew/Switch/Close/Rename', async () => {
     const { registerIpc } = await import('./handlers')
@@ -837,27 +662,10 @@ describe('registerIpc broadcast wiring', () => {
     expect((bcast![1] as any).sessionId).toBe('s1')
   })
 
-  it('chat:repropose-workflow re-invokes proposeRun with the chosen workflowId (undefined for ad-hoc)', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    const { makeProposeRun } = await import('../chat/proposeRun') as any
-    registerIpc(() => {}, {})
-    const proposeFn = makeProposeRun.mock.results.at(-1).value as any
-    proposeFn.mockClear()
-    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
-    expect(handler(CH.chatReproposeWorkflow)).toBeTruthy()
-
-    // Named workflow → proposeRun called with select.workflowId + standalone (UI-initiated, exempt
-    // from turn cleanup — see proposeRun.ts / the standalone race regression test).
-    await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: '方案文本', task: '任务文本', workflowId: 'wf-2' })
-    // #3: the propose is attributed to the workspace's active session (mock activeSessionId === 's1').
-    expect(proposeFn).toHaveBeenCalledWith('/ws/a', '方案文本', '任务文本', { workflowId: 'wf-2', standalone: true, sessionId: 's1' })
-
-    // No workflowId → ad-hoc, but still standalone
-    proposeFn.mockClear()
-    await handler(CH.chatReproposeWorkflow)({}, { workspacePath: '/ws/a', approach: 'x', task: 'y' })
-    expect(proposeFn).toHaveBeenCalledWith('/ws/a', 'x', 'y', { standalone: true, sessionId: 's1' })
-  })
+  // chat:repropose-workflow removed entirely (the last live orch.startRun trigger via proposeRun) —
+  // see the airtight registration-check test below. proposeRun itself is still wired for
+  // pendingIds/cancelForWorkspace/has/resolve (turn cleanup + chat:resolve on any already-pending
+  // plan card), just never invoked to START a new one anymore.
 
   it('configUpdateWorkflow 写入 stagePrompts(不动 plugins)', async () => {
     readWorkflowsMock.mockReturnValue({ workflows: [{ id: 'standard', name: 'S', stages: [] as any[], plugins: [] as any[], stagePrompts: {} }] })
@@ -900,6 +708,47 @@ describe('registerIpc broadcast wiring', () => {
     expect(refreshProviderModelsMock).toHaveBeenCalledOnce()
     expect(refreshProviderModelsMock.mock.calls[0][0]).toBe('qoder')
     expect(result).toEqual(stubResult)
+  })
+})
+
+// The old orchestrator's workflow-run START/RESUME triggers must be gone entirely — run2's launcher
+// (run2:launch-start) is the only way left to start a workflow run. This locks that in: none of the
+// four historical orch.startRun call sites (workspaces:run, engine:start-run, engine:resume via the
+// chat resume-intent path AND the direct IPC, chat:repropose-workflow) are reachable anymore.
+describe('old orchestrator run start/resume triggers are disabled', () => {
+  it('never registers a handler for the removed old-run channels', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    registerIpc(() => {}, {})
+    const registered = new Set((ipcMain.handle as any).mock.calls.map((c: any[]) => c[0]))
+    // Literal strings (not CH.* — the constants themselves no longer exist) so this test would fail
+    // loudly if any of these channels were ever reintroduced under their old names.
+    for (const ch of ['workspaces:run', 'engine:start-run', 'engine:resume', 'chat:repropose-workflow']) {
+      expect(registered.has(ch)).toBe(false)
+    }
+    // The channels that stay (read-only status + cleanup for any run already in the orchestrator).
+    for (const ch of [CH.engineResolve, CH.engineCancel, CH.engineDiscard, CH.engineLastRun]) {
+      expect(registered.has(ch)).toBe(true)
+    }
+  })
+
+  it('a "继续执行" chat message does NOT resume an old run — it runs as an ordinary chat turn', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { sendTurn } = await import('../chat/chatService') as any
+    const { readLastRun } = await import('../orchestrator/runStore') as any
+    sendTurn.mockReset().mockResolvedValue(undefined)
+    // Exactly the scenario the old isResumeIntent branch acted on: a resumable (errored) prior run
+    // exists for this workspace. If any old-run resume path were still reachable, this would have
+    // fired orch.startRun instead of an ordinary turn.
+    readLastRun.mockReturnValue({ id: 'run-1', workspacePath: '/ws/a', status: 'err', workflowId: 'wf1' })
+    liveRun.current = null
+    registerIpc(() => {}, {})
+    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: '继续执行', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    expect(startRunCalls).toEqual([])
+    expect(sendTurn).toHaveBeenCalledTimes(1)
   })
 })
 
