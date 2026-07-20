@@ -61,9 +61,10 @@ import type { AgentState, ChatQueueEvent, CreateWorkspaceOpts, EngineEvent, Setu
 
 // Minimal renderer-facing shape of the orchestrator's StartRunOpts. The canonical type lives in
 // main (src/main/orchestrator/orchestrator.ts), which the renderer must not import at runtime;
-// the renderer only ever receives an opaque StartRunOpts from window.forge.createWorkspace, spreads
-// it back into window.forge.startRun, and (now) attaches the seeding task. We keep the fields the
-// renderer actually touches typed, plus an index signature so the opaque payload round-trips intact.
+// the renderer only ever receives an opaque StartRunOpts from window.forge.createWorkspace to read
+// the canonical workspacePath off of (window.forge.startRun itself is gone — the old orchestrator's
+// run-start path is disabled; workflows only ever start via run2's launcher now). We keep the fields
+// the renderer actually touches typed, plus an index signature so the opaque payload round-trips intact.
 export interface StartRunOpts { workspacePath: string; task?: string; [k: string]: unknown }
 
 export function App() {

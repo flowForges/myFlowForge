@@ -1,9 +1,8 @@
 import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
 import { EventBus } from '../orchestrator/eventBus'
-import { Orchestrator, gateApprovedKey } from '../orchestrator/orchestrator'
+import { Orchestrator } from '../orchestrator/orchestrator'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
-import { indexCustomStages } from '../../shared/customStages'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -15,8 +14,6 @@ import { basename, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
 import { resolveSetupInteraction } from '../workspace/setupInteractions'
-import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
-import { resolveStages, pickWorkspaceWorkflow, resolveWorkflowStages, unionWorkflowStages } from '../workspace/resolveStages'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
 import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
 import { workflowNameTaken } from '../../shared/workflowName'
@@ -31,7 +28,6 @@ import { agentSessionsForId } from '../chat/agentSessions'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ResolvePayload, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, EngineEvent } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
-import type { StartRunOpts } from '../orchestrator/orchestrator'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti, readBranch } from '../git/changes'
@@ -51,13 +47,11 @@ import { NarratorService } from '../narrator/narratorService'
 import { readLastRun, discardRuns, RunStore } from '../orchestrator/runStore'
 import { Run2Manager } from '../run/manager'
 import { registerRun2 } from './run2Handlers'
-import { planResume } from '../orchestrator/resumeRun'
 import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspace/archiveOps'
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
 import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
 import { makeProposeRun } from '../chat/proposeRun'
 import { makeRunDelegate, cancelWorkspaceDelegates } from '../chat/delegate'
-import { isResumeIntent } from '../chat/workflowIntent'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
 import { importCodexPetPack, discoverCodexPets } from '../pet/codexPetImport'
@@ -381,18 +375,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
     setStageModel(a.path, a.stageKey, a.provider, a.model)
   })
-  ipcMain.handle(CH.workspaceRun, (_e, path: string) => {
-    if (isArchivedWorkspace(path)) throw new Error('工作区已归档，恢复后才能继续。')
-    const ws = readWorkspace(path)
-    if (!ws) return
-    const live = orch.getRun()
-    if (live && live.status === 'run') return
-    const stages = resolveStages(ws, readWorkflows().workflows, indexCustomStages(readCustomStages().stages))
-    if (stages.length === 0) return
-    const filled = { ...ws, stages }
-    if (ws.stages.length === 0) writeWorkspace(filled)   // backfill pre-SP-A workspaces permanently
-    return orch.startRun({ ...workspaceToStartRunOpts(filled), sessionId: readSessions(path).activeSessionId })
-  })
   // Quick alias rename — just the display name (registry + workspace.json), no re-provisioning.
   ipcMain.handle(CH.workspaceRename, (_e, a: { path: string; name: string }) => {
     const name = a.name.trim()
@@ -412,25 +394,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     })
     broadcast(CH.workspacesChanged, {})
     return result
-  })
-  ipcMain.handle(CH.engineStartRun, (_e, rawOpts: StartRunOpts) => {
-    // Every stage pauses on a review gate (approve / 打回重做 / 终止) in production runs — default
-    // gate:true on any stage that doesn't set it explicitly (an explicit false still opts out). This
-    // is the choke point for the direct run-IPC; proposeRun/resume/create paths set gate in their
-    // own mappings. Orchestrator unit tests call orch.startRun directly and keep the design-only default.
-    // #3: attribute the run to the session that triggered it (falls back to the active session) so its
-    // gate cards only surface in that tab.
-    const opts: StartRunOpts = { ...rawOpts, sessionId: rawOpts.sessionId ?? readSessions(rawOpts.workspacePath).activeSessionId, stages: rawOpts.stages.map(s => ({ gate: true, ...s })) }
-    if (isArchivedWorkspace(opts.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
-    // The seeding task (the user's first chat message in the workspace) is surfaced as a chat
-    // user message so it appears in the chat stream alongside the agents' replies.
-    if (typeof opts.task === 'string' && opts.task.trim()) {
-      const sid = readSessions(opts.workspacePath).activeSessionId
-      const msg: ChatMessage = { id: `u-task-${Date.now()}`, who: 'user', text: opts.task, ts: new Date().toISOString().slice(11, 19) }
-      appendMessage(opts.workspacePath, sid, msg)
-      broadcast(CH.chatEvent, { workspacePath: opts.workspacePath, sessionId: sid, type: 'user', message: msg })
-    }
-    return orch.startRun(opts)
   })
   ipcMain.handle(CH.engineResolve, (_e, payload: ResolvePayload) => orch.resolve(payload))
   ipcMain.handle(CH.engineCancel, () => {
@@ -529,53 +492,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'delegate-busy', active: n > 0 })
   }
 
-  // 继续执行: deterministically resume a cancelled/failed run — replay the stages that finished ok
-  // and re-run from the first incomplete one, WITHOUT going through the LLM propose (which is fragile:
-  // forge_propose_plan blocks on approval and codex kills the turn at 180s). Prior stages' handoff
-  // summaries seed the resumed stages' context, so switching model (claude↔codex) still carries over.
-  const resumeWorkspace = (wsPath: string, override?: { provider?: string; model?: string }) => {
-    const sid = readSessions(wsPath).activeSessionId
-    const live = orch.getRun()
-    const prior = live && live.workspacePath === wsPath ? live : readLastRun(wsPath)
-    if (!prior || prior.status === 'run') { emitNote(wsPath, sid, '没有可继续的运行。'); return null }
-    const ws = readWorkspace(wsPath)
-    if (!ws) { emitNote(wsPath, sid, '该工作区不存在,无法继续。'); return null }
-    // ws.stages is the legacy migration seed and is permanently [] for any workspace created/edited
-    // under the multi-workflow model (stages live in ws.workflows[].stages now). Resolve the stages
-    // from the FAILED RUN's own workflow (prior.workflowId) — same pattern proposeRun.ts uses —
-    // so base.stages is actually populated and planResume doesn't bail with "已全部完成".
-    const custom = indexCustomStages(readCustomStages().stages)
-    // Ad-hoc runs (no named workflow) carry prior.workflowId === undefined; they must resolve the
-    // UNION of all workflow stages (mirror proposeRun.ts), not silently collapse to workflows[0].
-    // pickWorkspaceWorkflow(ws, undefined) returns workflows[0], so short-circuit to null first.
-    const wf = prior.workflowId ? pickWorkspaceWorkflow(ws, prior.workflowId) : null
-    const stages = wf
-      ? resolveWorkflowStages(wf, readWorkflows().workflows, custom)
-      : unionWorkflowStages(ws, readWorkflows().workflows, custom)
-    const filled = { ...ws, stages }
-    const base = workspaceToStartRunOpts(filled, undefined, wf ? { id: wf.id, name: wf.name } : undefined)
-    const store = new RunStore(wsPath, prior.id)
-    const modelOverride = override && (override.provider || override.model) ? override : undefined
-    const plan = planResume(
-      prior, base.stages,
-      (id) => { const v = store.getContext('handoff:' + id); return typeof v === 'string' ? v : undefined },
-      modelOverride,
-      (stageKey) => store.getContext(gateApprovedKey(stageKey)) === true,
-    )
-    if (!plan) { emitNote(wsPath, sid, '工作流已全部完成,无需继续。'); return null }
-    const developProjects = modelOverride
-      ? base.developProjects.map(p => ({ ...p, ...(modelOverride.provider ? { provider: modelOverride.provider } : {}), ...(modelOverride.model ? { model: modelOverride.model } : {}) }))
-      : base.developProjects
-    orch.startRun({ ...base, sessionId: sid, stages: plan.remainingSpecs, developProjects, resume: { completedStages: plan.completedStages, priorBriefs: plan.priorBriefs } })
-      .catch(e => console.error('[resume] startRun failed', e))
-    setSessionMode(wsPath, sid, 'workflow', base.runId)
-    broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId: sid, type: 'mode-changed', mode: 'workflow', runId: base.runId })
-    const modelNote = modelOverride ? ` · 使用 ${modelOverride.model || modelOverride.provider}` : ''
-    emitNote(wsPath, sid, `已从第 ${plan.completedStages.length + 1} 阶段继续执行${modelNote}`)
-    return orch.getRun()
-  }
-  ipcMain.handle(CH.engineResume, (_e, a: { workspacePath: string; provider?: string; model?: string }) =>
-    resumeWorkspace(a.workspacePath, { provider: a.provider, model: a.model }))
+  // 旧编排器(orch)的「继续执行」已停用:run2 有自己的磁盘续跑(P-C2),不再需要这条重放旧 run 的路径。
+  // engine:resume 通道整体移除,不留任何能触发 orch.startRun 的入口。
 
   // proposeRun is the choke-point for chat-triggered workflows: all three chat triggers converge
   // here — the MCP forge_propose_plan tool, the forge:run fence text, and the 「发起工作流」button
@@ -603,14 +521,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Lightweight delegation (path A): the chat agent dispatches sub-agents into projects without the
   // workflow gate. Shares providers/mcpEntry with the orchestrator; runs are ephemeral (no run slot).
   const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().termProxy, mcpEntry, readWorkspace })
-  // Task 12: the approval card's workflow-switch dropdown re-proposes the SAME task/approach under a
-  // different (or ad-hoc, workflowId omitted) workflow. Renderer denies the old card first, then calls
-  // this; proposeRun emits a fresh plan-request with the chosen workflow's stage set.
-  ipcMain.handle(CH.chatReproposeWorkflow, (_e, a: { workspacePath: string; approach: string; task?: string; workflowId?: string }) => {
-    // standalone: this propose is UI-initiated (not owned by an agent turn), so turn cleanup
-    // (cancelForWorkspace) must not dismiss it before the user decides — see proposeRun.ts.
-    void proposeRun(a.workspacePath, a.approach, a.task, { ...(a.workflowId ? { workflowId: a.workflowId } : {}), standalone: true, sessionId: readSessions(a.workspacePath).activeSessionId })
-  })
+  // chat:repropose-workflow (旧「切换工作流」重新提案通道)已移除:它是 proposeRun→orch.startRun 的
+  // 最后一个存活触发点(PlanCard 的 workflow-switch 下拉),且本就无法触达(没有任何路径会先创建出
+  // 让它重新提案的初始 plan-request 卡片——chat 的 proposePlan 桥已在别处被切断)。proposeRun 对象本身
+  // 保留(pendingIds/cancelForWorkspace/has/resolve 仍被下面的 turn 清理与 chat:resolve 使用)。
   const runTurn = async (payload: ChatSendPayload) => {
     // Gate/chat continuity: a live run paused at a 阶段评审门 (需求/设计 阶段完成后的 approve/打回重做/终止 门)
     // is normally answered by clicking the card. If the user instead types their reaction into chat ("评审得
@@ -634,20 +548,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         return umsg
       }
     }
-    // Deterministic conversational resume: if the user asks to continue and a cancelled/failed run
-    // exists, resume via the engine directly — bypassing the LLM propose path (which blocks on
-    // approval and is killed by codex's 180s turn timeout, the very failure that stranded the user).
-    if (isResumeIntent(payload.text)) {
-      const live = orch.getRun()
-      const last = live && live.workspacePath === payload.workspacePath ? live : readLastRun(payload.workspacePath)
-      if (last && last.status === 'err') {
-        const umsg: ChatMessage = { id: `u-${Date.now()}`, who: 'user', text: payload.text, ts: new Date().toISOString().slice(11, 19) }
-        appendMessage(payload.workspacePath, payload.sessionId, umsg)
-        broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'user', message: umsg })
-        resumeWorkspace(payload.workspacePath)
-        return umsg
-      }
-    }
+    // 旧编排器的「继续执行」意图分支已移除:一条「继续/接着做」的聊天消息不再重放旧 orch 运行,就当
+    // 普通对话轮次处理(run2 有自己的续跑入口,不走 chat 的意图猜测)。
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
     const confirm = (req: { title: string; where?: string }) => new Promise<'allow' | 'deny'>((resolve) => {

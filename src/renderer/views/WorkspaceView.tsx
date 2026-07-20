@@ -1081,14 +1081,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     if (pendingSupplement?.kind === 'plan' && pendingSupplement.id === entry.plan.id) setPendingSupplement(null)
                     chat.resolvePlan({ id: entry.plan.id, decision: d.decision, value: d.value, selection: d.selection })
                   }}
-                  onSwitchWorkflow={(workflowId) => {
-                    if (!wsPath) return
-                    // Dismiss the current card, then re-propose the same task/approach under the chosen
-                    // workflow (undefined = ad-hoc). Backend emits a fresh plan-request with new stages.
-                    if (pendingSupplement?.kind === 'plan' && pendingSupplement.id === entry.plan.id) setPendingSupplement(null)
-                    chat.resolvePlan({ id: entry.plan.id, decision: 'deny' })
-                    void window.forge.reproposeWorkflow({ workspacePath: wsPath, approach: entry.plan.approach, task: entry.plan.task, workflowId })
-                  }}
+                  // onSwitchWorkflow (re-propose under a different workflow) removed with
+                  // chat:repropose-workflow — the old orch.startRun trigger it backed is gone; the
+                  // dropdown still renders (PlanCard treats the prop as optional) but is now inert.
                   onSupplement={() => startSupplement('plan', entry.plan.id, '方案')}
                 />
               )
@@ -1312,24 +1307,18 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         取消运行
                       </button>
                     )}
-                    {run?.status === 'err' && !(engine.run?.workspacePath === wsPath && engine.run?.status === 'run') && (
-                      <button
-                        className="txt-btn resume"
-                        id="resumeRun"
-                        title={selection ? `从中断处继续 · 用 ${selection.modelId} 续跑剩余阶段` : '从中断处继续执行剩余阶段'}
-                        onClick={() => { if (wsPath) void window.forge.resumeRun(wsPath, selection ? { provider: selection.agentId, model: selection.modelId } : undefined) }}
-                      >
-                        继续执行
-                      </button>
-                    )}
+                    {/* 继续执行(resumeRun → orch.startRun)removed: the old orchestrator's start/resume
+                        path is disabled entirely — run2 has its own disk-resume. 终止退出 stays as the
+                        way to dismiss/clear a leftover errored old run so nothing gets stuck showing
+                        this read-only 已中断 state forever. */}
                     {run?.status === 'err' && !(engine.run?.workspacePath === wsPath && engine.run?.status === 'run') && (
                       <button
                         className="txt-btn"
                         id="discardRun"
-                        title="放弃这次工作流,不再从中断处继续;之后需要时重新单独发起一次全新的工作流"
+                        title="清除这次已中断的运行记录(旧编排器的继续执行已停用,新工作流请用「工作流运行」发起)"
                         onClick={() => {
                           if (!wsPath) return
-                          if (!window.confirm('终止并退出这次工作流?将放弃中断处的进度,之后需要时请重新单独发起。')) return
+                          if (!window.confirm('清除这次已中断的运行记录?之后需要时请通过「工作流运行」重新发起。')) return
                           void window.forge.discardRun(wsPath)
                           setForceChat(true)
                         }}
