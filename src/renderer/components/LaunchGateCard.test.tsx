@@ -1,11 +1,22 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { LaunchGateCard, type LaunchGateConfig } from './LaunchGateCard'
 import type { ProviderInfo } from '@shared/types'
 
 const base: LaunchGateConfig = {
   seed: '把 token 迁到 OKLCH',
-  workflows: [{ id: 'std', name: '标准工作流', stageCount: 4 }, { id: 'basic', name: '基础流程', stageCount: 2 }],
+  workflows: [
+    { id: 'std', name: '标准工作流', stageCount: 4, stages: [
+      { key: 'requirement', name: '需求梳理', gate: false, code: false },
+      { key: 'develop', name: '代码开发', gate: false, code: true },
+      { key: 'test', name: '测试', gate: false, code: true },
+      { key: 'review', name: '代码评审', gate: true, code: false },
+    ] },
+    { id: 'basic', name: '基础流程', stageCount: 2, stages: [
+      { key: 'requirement', name: '需求梳理', gate: false, code: false },
+      { key: 'develop', name: '代码开发', gate: false, code: true },
+    ] },
+  ],
   selectedWorkflowId: 'std',
   projects: [
     { name: 'go-blog', selected: true, provider: 'claude', model: 'claude-opus-4-8' },
@@ -101,7 +112,7 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
     render(<LaunchGateCard config={base} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
     expect(document.querySelector('.wfo-mpop')).toBeNull()
 
-    fireEvent.click(document.querySelector('.wfo-model')!)
+    fireEvent.click(document.querySelector('.lg-model-chip')!)
 
     const pop = document.querySelector('.wfo-mpop')!
     expect(pop).toBeTruthy()
@@ -115,7 +126,7 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
 
-    fireEvent.click(document.querySelector('.wfo-model')!)
+    fireEvent.click(document.querySelector('.lg-model-chip')!)
     fireEvent.click(screen.getByText('sonnet-4.6'))
 
     // Picking closes the popup and updates the chip's displayed label immediately.
@@ -140,7 +151,7 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={cfg} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
 
-    fireEvent.click(document.querySelector('.wfo-model')!)
+    fireEvent.click(document.querySelector('.lg-model-chip')!)
     const input = screen.getByPlaceholderText('输入模型 id')
     expect(input).toBeInTheDocument()
 
@@ -158,5 +169,76 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
   it('不传 providers 时(旧调用点)仍能渲染当前值，不因缺 prop 崩溃', () => {
     render(<LaunchGateCard config={base} onConfirm={() => {}} onCancel={() => {}} />)
     expect(screen.getByText(/claude-opus-4-8/)).toBeInTheDocument()
+  })
+})
+
+// Q2: each selected project can switch its 编码代理(provider), not just its model — the picker lists
+// installed providers, and choosing one resets the model (belongs to the old provider).
+describe('LaunchGateCard 编码代理(provider)选择', () => {
+  it('点击 provider chip 打开弹层，列出已安装的编码代理', () => {
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
+    fireEvent.click(document.querySelector('.lg-provider-chip')!)
+    const pop = document.querySelector('.wfo-mpop') as HTMLElement
+    expect(pop).toBeTruthy()
+    // Both installed providers are offered inside the popup (Claude Code also appears as the chip label
+    // outside it, so scope the query to the popup).
+    expect(within(pop).getByText('Codex')).toBeInTheDocument()
+    expect(within(pop).getByText('Claude Code')).toBeInTheDocument()
+  })
+
+  it('切换 provider 后确认，回传新 provider 且 model 被重置为空', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    fireEvent.click(document.querySelector('.lg-provider-chip')!)
+    fireEvent.click(screen.getByText('Codex'))
+    // popup closed, provider chip now shows Codex
+    expect(document.querySelector('.wfo-mpop')).toBeNull()
+    fireEvent.click(screen.getByText('确认'))
+    expect(onConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projects: expect.arrayContaining([
+          expect.objectContaining({ name: 'go-blog', provider: 'codex', model: '' }),
+        ]),
+      })
+    )
+  })
+})
+
+describe('LaunchGateCard 需求(AI 总结 + 可编辑)', () => {
+  it('seedLoading 时展示「正在总结」占位，不渲染需求输入框', () => {
+    render(<LaunchGateCard config={{ ...base, seed: '' }} seedLoading onConfirm={() => {}} onCancel={() => {}} />)
+    expect(screen.getByText(/正在根据对话总结需求/)).toBeInTheDocument()
+    expect(document.querySelector('.lg-seed-input')).toBeNull()
+  })
+
+  it('总结完成后需求进入可编辑输入框；编辑后确认回传编辑值', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} onConfirm={onConfirm} onCancel={() => {}} />)
+    const input = document.querySelector('.lg-seed-input') as HTMLTextAreaElement
+    expect(input).toBeTruthy()
+    expect(input.value).toBe('把 token 迁到 OKLCH')
+    fireEvent.change(input, { target: { value: '把设计 token 全量迁到 OKLCH 并更新暗色' } })
+    fireEvent.click(screen.getByText('确认'))
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({ seed: '把设计 token 全量迁到 OKLCH 并更新暗色' }))
+  })
+
+  it('异步总结落地(config.seed 变化)后同步进输入框', () => {
+    const { rerender } = render(<LaunchGateCard config={{ ...base, seed: '' }} onConfirm={() => {}} onCancel={() => {}} />)
+    expect((document.querySelector('.lg-seed-input') as HTMLTextAreaElement).value).toBe('')
+    rerender(<LaunchGateCard config={{ ...base, seed: 'AI 总结出来的需求' }} onConfirm={() => {}} onCancel={() => {}} />)
+    expect((document.querySelector('.lg-seed-input') as HTMLTextAreaElement).value).toBe('AI 总结出来的需求')
+  })
+})
+
+describe('LaunchGateCard 工作流阶段流程预览', () => {
+  it('展示所选工作流的阶段流程；切换工作流后流程随之变化', () => {
+    render(<LaunchGateCard config={base} onConfirm={() => {}} onCancel={() => {}} />)
+    // std 工作流的阶段都显示
+    expect(screen.getByText('需求梳理')).toBeInTheDocument()
+    expect(screen.getByText('代码评审')).toBeInTheDocument()
+    // 切到 basic(只有 2 步),代码评审不应再出现
+    fireEvent.click(screen.getByText('基础流程'))
+    expect(screen.queryByText('代码评审')).toBeNull()
+    expect(screen.getByText('代码开发')).toBeInTheDocument()
   })
 })

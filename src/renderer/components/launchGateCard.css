@@ -16,3 +16,28 @@
    since the old overlay only ever picked from its own hardcoded MODELS table). */
 .wfo-mpop-empty { padding: 4px 8px 6px; }
 .wfo-mpop-input { width: 100%; background: var(--surface); border: 1px solid var(--accent); border-radius: 6px; padding: 6px 8px; color: var(--fg); font: 600 12px var(--mono); outline: none; margin-top: 4px; }
+
+/* Workflow-stage flow preview (需求梳理→设计→开发→测试→评审…): shows the whole pipeline the picked
+   workflow will run, so switching workflow tabs reveals more than just the project list. Wraps on
+   narrow cards; the 写码/门 tags mark stages that fan out per-project and stages that pause for
+   confirmation. WorkflowOverlay's heavy .wfo-node flow is overkill here — this is a compact inline row. */
+.lg-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 4px; margin-top: 2px; }
+.lg-flow-step { display: inline-flex; align-items: center; gap: 5px; }
+.lg-flow-name { font: 600 11.5px/1 var(--font); color: var(--fg-2); background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; }
+.lg-flow-tag { font: 600 9.5px/1 var(--mono); color: var(--muted); background: var(--surface); border-radius: 5px; padding: 3px 5px; }
+.lg-flow-tag.gate { color: var(--warn); background: color-mix(in oklch, var(--warn) 14%, transparent); }
+.lg-flow-arrow { color: var(--faint); font-size: 12px; margin: 0 1px; }
+
+/* 原始需求 = editable AI summary (was a read-only .req-sub). Reuses the composer textarea feel so it
+   reads as an input, not a static line. */
+.lg-seed-input {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 56px; margin: 2px 0 2px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+  color: var(--fg); font: 13px/1.5 var(--font); outline: none; transition: border-color .13s;
+}
+.lg-seed-input:focus { border-color: var(--accent); }
+.lg-seed-input::placeholder { color: var(--faint); }
+/* "正在总结…" state while the summary generates — muted text + a small spinner. */
+.lg-seed-loading { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); padding: 8px 2px; }
+.lg-seed-spin { width: 13px; height: 13px; flex: 0 0 13px; border-radius: 50%; border: 2px solid var(--border-2); border-top-color: var(--accent); animation: lg-seed-spin .7s linear infinite; }
+@keyframes lg-seed-spin { to { transform: rotate(360deg); } }

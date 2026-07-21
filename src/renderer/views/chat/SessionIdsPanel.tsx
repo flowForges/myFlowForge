@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AgentSessionInfo } from '@shared/types'
+import type { AgentSessionInfo, ChatQueueEvent } from '@shared/types'
 
 function Copy({ text, label = '复制' }: { text: string; label?: string }) {
   const [done, setDone] = useState(false)
@@ -58,6 +58,24 @@ export function SessionIdsPanel({
     }
   }, [workspacePath, sessionId])
 
+  // Live status: the snapshot above can't tell 运行中 from 已完成 on its own (the main-Agent row's
+  // liveness is only known to the ChatQueue in the main process). Re-pull whenever this workspace's
+  // queue changes — a turn starting flips the active provider's row to 运行中, ending flips it back —
+  // so the panel reflects real liveness without the user hitting 刷新.
+  useEffect(() => {
+    let live = true
+    const off = window.forge.onChatQueueEvent?.((e: ChatQueueEvent) => {
+      if (!live || e.workspacePath !== workspacePath) return
+      void window.forge.agentSessionIds(workspacePath, sessionId).then((r: AgentSessionInfo[]) => {
+        if (live) setRows(r)
+      })
+    })
+    return () => {
+      live = false
+      off?.()
+    }
+  }, [workspacePath, sessionId])
+
   if (!rows) return null
 
   return (
@@ -94,7 +112,7 @@ export function SessionIdsPanel({
       ) : (
         <div className="sid-list">
           {rows.map((r, i) => (
-            <div className={`sid-card${r.depth ? ' sid-card-child' : ''}${r.depth === 2 ? ' sid-card-grand' : ''}`} key={i}>
+            <div className={`sid-card${r.depth ? ' sid-card-child' : ''}${r.depth === 2 ? ' sid-card-grand' : ''}${!archived && r.status === 'run' ? ' sid-card-run' : ''}`} key={i}>
               <div className="sid-top">
                 <span className={`sid-provider ${r.provider}`} />
                 <div className="sid-main">

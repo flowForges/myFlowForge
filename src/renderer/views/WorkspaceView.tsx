@@ -128,7 +128,7 @@ type TabId = 'agents' | 'changes' | 'files' | 'exec' | 'history'
 // session-scoped ChatMessage instead (see persistedLaunchGates) and don't need it. Used to scope an
 // active gate's visibility to its own session — see mergedLaunchGates below — so an unconfirmed gate
 // opened in session A never bleeds into session B's timeline when the user switches tabs.
-interface LaunchGateState { id: string; ts: number; config: LaunchGateConfig; frozen?: LaunchGateFrozen; error?: string; sessionId?: string }
+interface LaunchGateState { id: string; ts: number; config: LaunchGateConfig; frozen?: LaunchGateFrozen; error?: string; sessionId?: string; auto?: boolean; seedLoading?: boolean }
 
 // Shape returned by window.forge.getWorkspace
 interface WsStageInfo { key: string; provider: string; model: string }
@@ -389,30 +389,50 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const sid = sessions.activeSessionId
     const run2Ipc = (window as any).forge?.run2
     const infoPromise: Promise<{
-      workflows: { id: string; name: string; stages: unknown[] }[]
+      workflows: { id: string; name: string; stages: { key: string; name: string; gate?: boolean; code?: boolean }[] }[]
       projects: { name: string; provider?: string; model?: string }[]
     }> = run2Ipc?.launchInfo ? run2Ipc.launchInfo(wsPath) : Promise.resolve({ workflows: [], projects: [] })
     void infoPromise.then((info) => {
-      const workflows = info.workflows.map((w) => ({ id: w.id, name: w.name, stageCount: w.stages.length }))
+      const workflows = info.workflows.map((w) => ({
+        id: w.id, name: w.name, stageCount: w.stages.length,
+        stages: w.stages.map((s) => ({ key: s.key, name: s.name, gate: !!s.gate, code: !!s.code })),
+      }))
       const selectedWorkflowId = workflowId && workflows.some((w) => w.id === workflowId)
         ? workflowId
         : (workflows[0]?.id ?? '')
       const projects = info.projects.map((p) => ({
         name: p.name, selected: true, provider: p.provider ?? '', model: p.model ?? '',
       }))
+      // Raw last-N transcript — kept as the FALLBACK requirement (used verbatim if the AI summary below
+      // fails/returns empty, and shown greyed under the "正在总结" state so the gate is never blank).
+      // Exclude P1-5's synthetic launch-gate marker messages (blank text) — they aren't real conversation.
+      const rawSeed = buildConversationSeed(chat.messages.filter((m) => !m.launchGate))
       const config: LaunchGateConfig = {
-        // Exclude P1-5's synthetic launch-gate marker messages (blank text) from the seed transcript —
-        // they aren't real conversation, just a persisted record riding on a ChatMessage.
-        seed: buildConversationSeed(chat.messages.filter((m) => !m.launchGate)),
+        seed: '',   // filled by the AI summary (or rawSeed fallback) once summarizeRequirement resolves
         workflows,
         selectedWorkflowId,
         projects,
         supplement: '',
       }
       const now = Date.now()
-      setLaunchGates((prev) => [...prev, { id: `lg-${now}-${prev.length}`, ts: now, config, sessionId: sid }])
+      const gateId = `lg-${now}`
+      // 「⚡ 自动」(per-workspace autoDecide):不弹确认门,用默认直接启动。门以 auto 标记入列,由下方 effect
+      // 自动确认——但先卡在 seedLoading 上,等 AI 需求总结回来再放行(见 effect 的 !g.seedLoading 门)。
+      // 需求原文不再是「最后 N 条原始对话」,而是让当前会话的编码代理把整段对话总结成一段可执行需求
+      // (可编辑),失败/超时回退 rawSeed。seedLoading=true 时门里展示「正在总结…」。
+      setLaunchGates((prev) => [...prev, { id: gateId, ts: now, config, sessionId: sid, auto: autoDecide, seedLoading: true }])
+      const agent = selection?.agentId ?? ''
+      const summarize = agent
+        ? window.forge.chatSummarizeRequirement?.({ workspacePath: wsPath, sessionId: sid ?? '', agent, model: selection?.modelId ?? '' })
+        : undefined
+      void Promise.resolve(summarize)
+        .then((s) => (s && s.trim() ? s.trim() : rawSeed))
+        .catch(() => rawSeed)
+        .then((seed) => {
+          setLaunchGates((prev) => prev.map((g) => (g.id === gateId ? { ...g, config: { ...g.config, seed }, seedLoading: false } : g)))
+        })
     })
-  }, [wsPath, chat.messages, sessions.activeSessionId])
+  }, [wsPath, chat.messages, sessions.activeSessionId, autoDecide, selection?.agentId, selection?.modelId])
   // Launch gate's 确认: resolve the (possibly user-edited) config down to run2's LaunchStartConfig
   // (only the SELECTED projects go over the wire) and start the run. P1-3 follow-up fix: the card used
   // to freeze to a "已启动" record synchronously, BEFORE run2.start's promise resolved (fire-and-forget)
@@ -481,6 +501,22 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, error: message } : g)))
     })
   }, [wsPath, run2, run2Live, sessions.activeSessionId, launchGates])
+  // 「⚡ 自动」auto-confirm: an auto-flagged gate (see onPickWorkflow) launches itself once, reusing
+  // confirmLaunchGate wholesale (its run2Live guard + start + freeze/persist + error handling). Guarded
+  // by a ref so a re-render never re-fires it; if the launch fails, confirmLaunchGate stamps the gate's
+  // error (which clears `pending` → the card turns interactive) and the ref keeps it from auto-retrying,
+  // so a failed auto-launch degrades to a normal manual gate the user can retry.
+  const autoStartedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    for (const g of launchGates) {
+      // Wait for the AI requirement summary (seedLoading) before auto-launching — else the run would
+      // start with an empty 需求原文.
+      if (g.auto && !g.seedLoading && !g.frozen && !g.error && !autoStartedRef.current.has(g.id)) {
+        autoStartedRef.current.add(g.id)
+        confirmLaunchGate(g.id, g.config)
+      }
+    }
+  }, [launchGates, confirmLaunchGate])
   // 取消: drop the still-active gate entirely (no record left behind, matching PlanCard's 拒绝/deny —
   // a launch that never happened isn't worth a frozen entry).
   const cancelLaunchGate = useCallback((id: string) => {
@@ -1109,6 +1145,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     config={gate.config}
                     frozen={gate.frozen}
                     error={gate.error}
+                    pending={!!gate.auto && !gate.frozen && !gate.error}
+                    seedLoading={!!gate.seedLoading}
                     providers={providers}
                     onConfirm={(c) => confirmLaunchGate(gate.id, c)}
                     onCancel={() => cancelLaunchGate(gate.id)}

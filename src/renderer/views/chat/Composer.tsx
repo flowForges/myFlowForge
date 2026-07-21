@@ -468,10 +468,11 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
               ))}
             </div>
           </div>
-          {/* 「允许 LLM 自行决策」:开=工作流不弹选择门,主代理自填决策直接启动(per-workspace) */}
+          {/* 「工作流自动启动」(per-workspace autoDecide):开=从 / 菜单选工作流后不弹确认门,直接用默认
+              (默认工作流/全部项目/默认模型)启动;关=弹确认门等你确认(见 WorkspaceView.onPickWorkflow) */}
           <button
             className={'cb-btn cb-auto' + (autoDecide ? ' on' : '')}
-            title={autoDecide ? 'LLM 自动决策:开 — 工作流不弹选择门,主代理自填决策直接启动' : 'LLM 自动决策:关 — 工作流会弹门等你确认'}
+            title={autoDecide ? '工作流自动启动:开 — 选工作流后不弹确认门,直接用默认配置启动' : '工作流自动启动:关 — 选工作流后弹确认门等你确认'}
             onClick={() => onToggleAutoDecide?.()}
           >
             <span>{autoDecide ? '⚡ 自动' : '⚙ 手动'}</span>

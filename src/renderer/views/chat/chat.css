@@ -224,7 +224,15 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   padding: 14px 14px 6px; min-height: calc(1.55em + 20px); max-height: 180px;
 }
 .composer textarea::placeholder { color: var(--faint); }
-.composer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; }
+.composer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; flex-wrap: nowrap; }
+/* Keep the control row on ONE line at any pane width. The three text dropdowns (model/version/
+   permission) are the only shrinkable items — they truncate their labels with an ellipsis when
+   cramped; the icon buttons (auto/attach/expand) and the send button never shrink. Without this the
+   labels' intrinsic width forces the row to overflow/wrap on narrow screens. */
+.composer-bar > .menu { min-width: 0; flex: 0 1 auto; }
+.composer-bar > .menu > .cb-btn { width: 100%; min-width: 0; }
+.composer-bar > .cb-btn, .composer-bar .send { flex: 0 0 auto; }
+.cb-btn > span:not(.mc-logo-sm):not(.dd-chev) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cb-btn { height: 30px; padding: 0 10px; border-radius: var(--r); font-size: 12.5px; font-weight: 500; color: var(--fg-2); display: inline-flex; align-items: center; gap: 6px; transition: .14s; border: 1px solid transparent; }
 .cb-btn:hover { background: var(--surface-2); }
 .cb-btn svg { width: 15px; height: 15px; }

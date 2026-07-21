@@ -101,8 +101,11 @@ describe('WorkspaceView: workflow "/" command inserts an in-chat LaunchGateCard 
     // the inspector's workflow glance), so a bare screen.getByText would match more than one element.
     const tab = Array.from(document.querySelectorAll('.wfo-tab')).find((el) => el.textContent?.includes('快速修复'))
     expect(tab).toHaveClass('on')
-    const seedEl = document.querySelector('[data-req="launch-gate"] .req-sub')
-    expect(seedEl?.textContent).toBe('我: 做个登录页\n\nAI: 好的,我先看看现有页面结构')
+    // 需求现在是可编辑输入框,由 AI 总结异步填充;本 mock 没有 chatSummarizeRequirement,故回退到原始对话转录。
+    await waitFor(() =>
+      expect((document.querySelector('[data-req="launch-gate"] .lg-seed-input') as HTMLTextAreaElement)?.value)
+        .toBe('我: 做个登录页\n\nAI: 好的,我先看看现有页面结构'),
+    )
   })
 
   it('renders the in-chat LaunchGateCard, not WorkflowOverlay (.wfo) or the old RunLauncher', async () => {

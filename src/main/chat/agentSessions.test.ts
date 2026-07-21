@@ -14,6 +14,21 @@ it('chat session → one row per agent with provider label', async () => {
   expect(rows[0]).toMatchObject({ provider: 'claude', providerLabel: 'Claude Code', sessionId: 'claude-abc' })
 })
 
+it('chat main Agent shows 运行中(run) only for the provider with an in-flight turn', async () => {
+  const { writeSession } = await import('./chatStore')
+  const { composeAgentSessions } = await import('./agentSessions')
+  const ws = join(home, 'ws')
+  writeSession(ws, 's1', 'claude', 'claude-abc')
+  writeSession(ws, 's1', 'codex', 'codex-xyz')
+  // No running provider → both finished (the old hardcoded 'ok').
+  const idle = composeAgentSessions(ws, { id: 's1', title: 't', mode: 'chat', createdAt: 0 })
+  expect(idle.map(r => r.status)).toEqual(['ok', 'ok'])
+  // claude's turn is in flight → its row is 'run', codex stays 'ok'.
+  const rows = composeAgentSessions(ws, { id: 's1', title: 't', mode: 'chat', createdAt: 0 }, 'claude')
+  expect(rows.find(r => r.provider === 'claude')?.status).toBe('run')
+  expect(rows.find(r => r.provider === 'codex')?.status).toBe('ok')
+})
+
 it('workflow session → rows from run agents that captured a session id', async () => {
   const { RunStore } = await import('../run/runStore')
   const { composeAgentSessions } = await import('./agentSessions')

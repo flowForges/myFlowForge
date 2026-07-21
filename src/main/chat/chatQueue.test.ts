@@ -75,7 +75,7 @@ describe('ChatQueue', () => {
     // first emit: busy=true, running set — sessionId is threaded so the sidebar can light that
     // specific session's dot, not just the workspace pill.
     const runningEvent = events[events.length - 1]
-    expect(runningEvent.running).toEqual({ id: expect.any(String), text: 'Hello', sessionId: 's1' })
+    expect(runningEvent.running).toEqual({ id: expect.any(String), text: 'Hello', sessionId: 's1', provider: 'claude' })
     expect(runningEvent.runningSessionId).toBe('s1')
     expect(runningEvent.busy).toBe(true)
     // complete the turn

@@ -325,7 +325,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
   ipcMain.handle(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
   ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
-  // 「允许 LLM 自行决策」per-workspace 开关:写入 workspace.json,供 proposeRun 读取以决定是否弹门。
+  // 「工作流自动启动」per-workspace 开关:写入 workspace.json,渲染层 WorkspaceView.onPickWorkflow 读取
+  // 以决定选工作流后是否弹确认门(LaunchGateCard)。
   ipcMain.handle(CH.wsSetAutoDecide, (_e, a: { workspacePath: string; value: boolean }) => {
     const ws = readWorkspace(a.workspacePath)
     if (ws) writeWorkspace({ ...ws, autoDecide: a.value })
@@ -615,7 +616,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.sessionsChanged, { workspacePath: a.wsPath, file })
     return file
   })
-  ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId))
+  ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId, chatQueue.runningProvider(a.workspacePath, a.sessionId)))
   ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
     const askResolve = chatAsks.get(a.id)
     if (askResolve) {
@@ -663,6 +664,42 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const note: ChatMessage = { id, who: 'ai', text: body ? `【上下文总结 · 由 ${provider.displayName} 生成】\n${body}` : '(未能生成上下文总结,可直接继续对话)', model: '上下文总结', provider: a.toAgent, ts: new Date().toISOString() }
     appendMessage(a.workspacePath, a.sessionId, note)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
+  })
+  // Launch-gate requirement summary: when the user opens the workflow launch gate, distill the whole
+  // conversation into ONE concise, executable requirement string (shown in the gate as an editable
+  // "原始需求"). Unlike chatSwitchSummary above this returns a plain string (no persisted message, no
+  // event stream) — the renderer awaits it and drops it into the gate. Same provider/model/env recipe
+  // as the distiller: cheap distill model when available, else the session's own model. Fail-open with
+  // a hard timeout so a hung provider never leaves the gate spinning — the renderer falls back to the
+  // raw last-N transcript when this returns ''.
+  ipcMain.handle(CH.chatSummarizeRequirement, async (_e, a: { workspacePath: string; sessionId: string; agent: string; model: string }): Promise<string> => {
+    const provider = providers[a.agent] ?? providers['claude']
+    if (!provider?.chat) return ''
+    const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
+    if (!msgs.length) return ''
+    const env = buildAgentEnv({ proxy: readSettings().termProxy })
+    const model = distillModelFor(a.agent) ?? a.model
+    const id = `req-sum-${Date.now()}`
+    const transcript = msgs.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${m.text}`).join('\n')
+    const prompt = [
+      '下面是用户与 AI 的完整对话,他们在讨论接下来要开发的一个需求。请把这段对话提炼成一段清晰、准确、可直接执行的中文需求描述,作为即将启动的开发工作流的「需求原文」。',
+      '要求:抓住用户真正想实现的目标与关键约束/决策;把多轮讨论里达成的最终结论合并进来(以最新结论为准,忽略中途被推翻的想法);去掉寒暄和过程细节;直接输出需求正文,控制在几句话内,不要加「以下是」之类的前缀。',
+      '对话:', transcript,
+    ].join('\n')
+    let acc = ''
+    let session: { cancel: () => void } | undefined
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => { try { session?.cancel() } catch { /* best-effort */ } resolve() }, 45_000)
+      const finish = () => { clearTimeout(timer); resolve() }
+      session = provider.chat!({ id, prompt, model, cwd: a.workspacePath }, {
+        onSession: () => {},
+        onAssistantDelta: (t) => { acc += t },
+        onThinkDelta: () => {},
+        onDone: finish,
+        onError: finish,
+      }, env)
+    })
+    return acc.trim()
   })
   // P1-5: persist a confirmed launch-gate's frozen record so it survives reload/session-switch.
   // Reuses the exact appendMessage + broadcast(chatEvent 'done') mechanism every other persisted chat

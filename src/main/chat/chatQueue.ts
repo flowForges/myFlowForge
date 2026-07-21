@@ -2,7 +2,7 @@ import type { ChatSendPayload } from '@shared/types'
 import { CH } from '../ipc/channels'
 
 interface QueuedTask { id: string; source: string; payload: ChatSendPayload }
-interface WsQueue { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string } | null; activeCancel: (() => void) | null }
+interface WsQueue { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; activeCancel: (() => void) | null }
 
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
 export type Broadcast = (channel: string, payload: unknown) => void
@@ -47,10 +47,19 @@ export class ChatQueue {
     if (q?.activeCancel) q.activeCancel()
   }
 
+  // Provider id of the turn currently in-flight for this session, or null when the session isn't
+  // running. Lets the IDs panel mark the specific main-Agent row as 运行中 (the resume map otherwise
+  // has no liveness — see agentSessions.ts). At most one turn runs per workspace, so a sessionId match
+  // is enough; a different session's turn (or idle) returns null.
+  runningProvider(ws: string, sessionId: string): string | null {
+    const q = this.map.get(ws)
+    return q?.running?.sessionId === sessionId ? q.running.provider : null
+  }
+
   private runOne(ws: string, task: QueuedTask): void {
     const q = this.get(ws)
     q.busy = true
-    q.running = { id: task.id, text: task.payload.text, sessionId: task.payload.sessionId }
+    q.running = { id: task.id, text: task.payload.text, sessionId: task.payload.sessionId, provider: task.payload.agent }
     this.emit(ws)
     Promise.resolve(this.runTurn(task.payload)).catch(() => {}).finally(() => {
       q.busy = false

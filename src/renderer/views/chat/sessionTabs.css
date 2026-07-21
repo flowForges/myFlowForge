@@ -87,8 +87,17 @@
 .sid-agent { font-size: 12.5px; font-weight: 600; }
 .sid-meta { color: var(--fg-2); font-size: 11px; margin-top: 1px; }
 .sid-state { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--surface); }
-.sid-state.run { color: var(--accent); }
+.sid-state.run { color: var(--accent); font-weight: 600; background: color-mix(in oklab, var(--accent) 15%, transparent); }
 .sid-state.archived { color: var(--warn); background: oklch(80% .13 80 / .13); }
+/* Running rows read as live at a glance: accent-tinted border + a pulsing provider dot. Without this a
+   still-running agent was visually identical to a finished one (both fell back to the neutral pill). */
+.sid-card-run { border-color: color-mix(in oklab, var(--accent) 42%, var(--border)); }
+.sid-card-run .sid-provider { animation: sid-run-pulse 1.5s ease-in-out infinite; }
+@keyframes sid-run-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 5px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
 .sid-code { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .sid-code code { flex: 1; padding: 6px 9px; border-radius: 7px; background: var(--surface); font-size: 12px; overflow-wrap: anywhere; }
 .sid-copy { flex: 0 0 auto; padding: 5px 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); font-size: 12px; cursor: pointer; }

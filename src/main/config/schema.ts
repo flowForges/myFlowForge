@@ -439,8 +439,9 @@ export const WorkspaceSchema = z.object({
   status: z.enum(['idle', 'run', 'ok', 'err']).default('idle'),
   plugins: z.array(PluginSchema).default(() => []),   // workspace-level plugins (run after every stage)
   stepPlugins: z.array(PluginSchema).default(() => []), // stage-scoped plugins (keyed by plugin.after)
-  // 「允许 LLM 自行决策」:开 = forge_propose_plan 不弹工作流选择门,主代理自填门里的决策(工作流/阶段/
-  // hook/项目)后直接启动。per-workspace,默认关(缺省/false 都视为关)。不影响子代理改代码的权限(那由权限盾牌管)。
+  // 「工作流自动启动」:开 = 从 / 菜单选工作流后不弹确认门(LaunchGateCard),直接用默认配置(默认工作流/
+  // 全部项目/默认模型)启动;关(缺省/false)= 弹确认门等用户确认。per-workspace。消费点在渲染层
+  // WorkspaceView.onPickWorkflow + 自动确认 effect。不影响子代理改代码的权限(那由权限盾牌管)。
   autoDecide: z.boolean().optional(),
 })
 export type Workspace = z.infer<typeof WorkspaceSchema>
