@@ -6,7 +6,7 @@ import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBran
 import { removeWorkspaceSkill } from '../skills/installSkill'
 import { readWorkspaceMemory, writeWorkspaceMemory, mergeMemory } from '../chat/memory/memoryStore'
 import { stageName, type Project, type Workspace } from '../config/schema'
-import type { StartRunOpts, StageSpec, DevelopProject } from '../orchestrator/orchestrator'
+import type { StartRunOpts, StageSpec, DevelopProject } from '../run/runTypes'
 import type { AgentProvider } from '../agents/types'
 import type { CreateWorkspaceOpts, CreateWorkspaceStage, SetupEvent, WsStage } from '@shared/types'
 import { runStepHook } from './stepHooks'

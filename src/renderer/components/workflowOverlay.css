@@ -57,10 +57,16 @@
    lines with the branch text sitting misaligned to its right (Fix 3). Scoped to `.wfo-run-panel` —
    `.wfo-title` has no other consumer (grepped: only RunExecPanel.tsx), but keep the scope anyway so
    a future overlay-width user of `.wfo-title` doesn't inherit this stacked layout silently. */
-.wfo-run-panel .wfo-title { flex-direction: column; align-items: flex-start; gap: 2px; }
+/* User feedback (2026-07-20): center the run title so "工作流执行中" + its branch line sit centered
+   in the inspector rather than hugging the left edge. */
+.wfo-run-panel .wfo-title { flex-direction: column; align-items: center; text-align: center; gap: 2px; }
 .wfo-run-panel .wfo-branch {
   margin-left: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* copyable: cursor + hover affordance (the whole branch line copies its full name on click) */
+  cursor: pointer; border: 0; background: none; padding: 0; font: inherit; color: var(--faint);
 }
+.wfo-run-panel .wfo-branch:hover { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+.wfo-run-panel .wfo-branch.copied { color: var(--ok); }
 .wfo-branch { font: 600 11px/1 var(--mono); color: var(--faint); margin-left: 6px; }
 
 /* P2-fix: RunExecPanel reuses the flow-node/lane header markup ported from the wide (~900px) floating

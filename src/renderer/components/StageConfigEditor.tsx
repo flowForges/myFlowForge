@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { ProviderInfo, ReviewConfig } from '@shared/types'
+import type { ProviderInfo, ReviewConfig, ReviewLens } from '@shared/types'
+import { REVIEW_LENSES, REVIEW_LENS_LABELS } from '@shared/types'
 import type { CfgStage } from '../state/useConfig'
 
 // Effective built-in defaults (mirror the main-process behavior tables) so a toggle shows the real
@@ -9,7 +10,9 @@ export function builtinStageDefaults(key: string): { scope: 'root' | 'per-projec
     scope: key === 'develop' || key === 'design' ? 'per-project' : 'root',
     gate: true,
     summary: key === 'design',
-    review: key === 'review' ? { mode: 'parallel', scope: 'per-project' } : undefined,
+    // ②多镜头CR: the review stage defaults to 并行多视角 with all four lenses (mirrors resolveStages.ts's
+    // DEFAULT_REVIEW_CONFIG so the editor shows the real effective value).
+    review: key === 'review' ? { mode: 'parallel', reviewers: [...REVIEW_LENSES] } : undefined,
   }
 }
 
@@ -35,14 +38,24 @@ export function StageConfigEditor({ stage, isBuiltin, builtinName, builtinBasePr
   // review tri-state: 'off' | 'single' | 'parallel'
   const initReview: 'off' | 'single' | 'parallel' = stage.review?.mode ?? (def.review ? def.review.mode : 'off')
   const [reviewMode, setReviewMode] = useState<'off' | 'single' | 'parallel'>(initReview)
+  // ②多镜头CR: which lenses the 并行多视角 fan-out runs. Seed from an explicit lens array if present,
+  // else all four (the default). Toggled below; empty selection falls back to all four on save (a
+  // parallel review with zero reviewers makes no sense).
+  const initLenses: ReviewLens[] = Array.isArray(stage.review?.reviewers)
+    ? (stage.review!.reviewers as ReviewLens[])
+    : [...REVIEW_LENSES]
+  const [lenses, setLenses] = useState<ReviewLens[]>(initLenses)
+  const toggleLens = (l: ReviewLens) => setLenses(prev => prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l])
 
   const models = providers.find(p => p.id === agent)?.models ?? []
 
   function save() {
+    // Keep REVIEW_LENSES canonical order; empty → all four.
+    const picked = REVIEW_LENSES.filter(l => lenses.includes(l))
     const review: ReviewConfig | undefined =
       reviewMode === 'off' ? undefined
         : reviewMode === 'single' ? { mode: 'single' }
-          : { mode: 'parallel', scope: 'per-project' }
+          : { mode: 'parallel', reviewers: picked.length ? picked : [...REVIEW_LENSES] }
     onSave({
       ...(isBuiltin ? {} : { name: name.trim() || stage.key }),
       defaultAgent: agent,
@@ -109,6 +122,18 @@ export function StageConfigEditor({ stage, isBuiltin, builtinName, builtinBasePr
             </button>
           ))}
         </div>
+        {/* ②多镜头CR: pick which视角 the 并行多视角 fan-out runs — one reviewer per checked lens. */}
+        {reviewMode === 'parallel' ? (
+          <div className="sce-lenses">
+            <span className="sce-flag-label">评审视角</span>
+            {REVIEW_LENSES.map(l => (
+              <button key={l} className={`sce-flag${lenses.includes(l) ? ' on' : ''}`} onClick={() => toggleLens(l)}
+                title={`勾选后会有一个专门审「${REVIEW_LENS_LABELS[l]}」的评审员`}>
+                {REVIEW_LENS_LABELS[l]}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="sce-actions">

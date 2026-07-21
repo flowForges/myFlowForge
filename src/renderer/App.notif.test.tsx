@@ -1,18 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App } from './App'
-import type { EngineEvent, RunState } from '@shared/types'
 
-let listeners: Array<(e: EngineEvent) => void>
 let setupListeners: Array<(e: any) => void>
 
 beforeEach(() => {
-  listeners = []
   setupListeners = []
   ;(window as any).forge = {
     listWorkspaces: async () => [], openWorkspaceDir: async () => [],
     homeStats: async () => ({}),
-    onEngineEvent: (cb: (e: EngineEvent) => void) => { listeners.push(cb); return () => {} },
     onNavigateWorkspace: () => () => {},
     onSetupEvent: (cb: (e: any) => void) => { setupListeners.push(cb); return () => {} },
     cancelSetup: async () => {},
@@ -38,10 +34,6 @@ beforeEach(() => {
   }
 })
 
-function emit(e: EngineEvent) {
-  for (const listener of listeners) listener(e)
-}
-
 function emitSetup(e: any) {
   for (const listener of setupListeners) listener(e)
 }
@@ -50,39 +42,12 @@ function notificationTexts(container: HTMLElement): string[] {
   return Array.from(container.querySelectorAll('.ni-t')).map(el => el.textContent ?? '')
 }
 
-function runWithAgent(state: RunState['stages'][number]['agents'][number]['state']): RunState {
-  return {
-    id: 'r1',
-    workspaceName: 'ws',
-    workspacePath: '/tmp/ws',
-    status: 'run',
-    projects: [],
-    pending: [],
-    stages: [{
-      key: 'develop',
-      name: '开发',
-      state: 'run',
-      agents: [{ id: 'a1', name: '<img src=x onerror=alert(1)>dev', role: '开发', provider: 'claude', model: 'opus-4.8', state, logs: [] }],
-    }],
-  }
-}
+// NOTE: the legacy orchestrator engine-bus lifecycle notification tests (stalled / awaiting+failed /
+// aggregate run-done) were removed with the orchestrator — App no longer subscribes to any engine bus,
+// so those notifications no longer exist. Setup-completion + empty-center behavior remains and is
+// covered below.
 
 describe('App lifecycle notifications', () => {
-  it('routes stalled lifecycle events into sanitized unread notifications', async () => {
-    const { container } = render(<App />)
-    await waitFor(() => expect(listeners.length).toBeGreaterThan(0))
-
-    act(() => emit({ type: 'agent:stalled', agentId: 'a1', agentName: '<img src=x onerror=alert(1)>dev', wsName: 'ws', silentMs: 90_000 }))
-    fireEvent.click(screen.getByTitle('通知'))
-
-    await waitFor(() => expect(notificationTexts(container).some(text => text.includes('dev 仍在推理中'))).toBe(true))
-    const notifHtml = container.querySelector('.notif-list')?.innerHTML ?? ''
-    expect(notifHtml).not.toContain('<img')
-    expect(notifHtml).not.toContain('onerror')
-    // The center starts empty (no mock seed), so a single stalled event = exactly 1 unread.
-    expect(screen.getByText('1 条未读')).toBeInTheDocument()
-  })
-
   it('backgrounded setup fires a completion notification the user can click into', async () => {
     const { container } = render(<App />)
     await waitFor(() => expect(setupListeners.length).toBeGreaterThan(0))
@@ -102,45 +67,11 @@ describe('App lifecycle notifications', () => {
 
   it('starts with an empty notification center — no persistent fake badge', async () => {
     render(<App />)
-    await waitFor(() => expect(listeners.length).toBeGreaterThan(0))
-    const bell = screen.getByTitle('通知')
+    const bell = await screen.findByTitle('通知')
     // No real notifications yet → bell carries no unread badge.
     expect(bell.className).not.toContain('has')
     fireEvent.click(bell)
     expect(screen.getByText('暂无通知')).toBeInTheDocument()
     expect(screen.getByText('已全部读完')).toBeInTheDocument()
-  })
-
-  it('routes awaiting + per-agent failed, but NO per-agent 完成 spam', async () => {
-    const { container } = render(<App />)
-    await waitFor(() => expect(listeners.length).toBeGreaterThan(0))
-
-    act(() => {
-      emit({ type: 'pending:add', action: { id: 'p1', kind: 'confirm', agentId: 'a1', agentName: 'dev', wsName: 'ws', title: '确认' } })
-      // First sighting (ok) seeds the agent without firing; the ok→err transition then fires 'failed'.
-      emit({ type: 'run:update', run: runWithAgent('ok') })
-      emit({ type: 'run:update', run: runWithAgent('err') })
-    })
-    fireEvent.click(screen.getByTitle('通知'))
-
-    await waitFor(() => expect(notificationTexts(container).some(text => text.includes('dev 需要你确认/输入'))).toBe(true))
-    expect(notificationTexts(container).some(text => text.includes('dev 失败/被终止'))).toBe(true)
-    // Per-agent 完成 notifications were removed — an agent reaching 'ok' must NOT add a bell row.
-    expect(notificationTexts(container).some(text => text.includes('已完成'))).toBe(false)
-  })
-
-  it('fires ONE aggregate notification when the whole workflow completes', async () => {
-    const { container } = render(<App />)
-    await waitFor(() => expect(listeners.length).toBeGreaterThan(0))
-
-    const running: RunState = { ...runWithAgent('run'), status: 'run' }
-    const finished: RunState = { ...runWithAgent('ok'), status: 'ok' }
-    act(() => {
-      emit({ type: 'run:update', run: running })   // seed run status
-      emit({ type: 'run:update', run: finished })  // run → ok transition
-    })
-    fireEvent.click(screen.getByTitle('通知'))
-
-    await waitFor(() => expect(notificationTexts(container).filter(t => t.includes('工作流已全部完成'))).toHaveLength(1))
   })
 })

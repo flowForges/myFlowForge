@@ -1,7 +1,11 @@
 import type { AgentRuntime, AgentState } from '@shared/types'
+import { REVIEW_LENS_LABELS } from '@shared/types'
 import type { StagePlan } from '../../main/run/machine'
 import type { LiveLane, RunControllerState, RunLogLine } from '../../main/run/controller'
 import type { WorkOrderOutcome } from '../../main/run/workOrder'
+import { reviewLenses, reviewLaneId, isLensReviewStage } from '../../main/run/reviewFanout'
+import { hooksAfter, hookLaneId } from '../../main/run/hooks'
+import type { Plugin } from '../../shared/plugin'
 
 // P2-1b: maps run2's live `RunControllerState` (+ per-lane log buffers) onto the SAME
 // `StageRuntime`/`AgentRuntime` shape the old orchestrator's 代理 tab rendered via `AgentNode`
@@ -28,6 +32,10 @@ export interface AdaptedStage {
   // rendering, which doesn't need this concept) — see this task's note on preferring an
   // explicit flag over overloading the state enum.
   stale?: boolean
+  // ③stage hooks: true when this AdaptedStage is a woven hook (key `hook:<pluginId>`) rather than a
+  // real plan stage — RunExecPanel renders it with HookNode (its single agent carries hook:true +
+  // hookSkills/hookTools) instead of the usual stage-agents block.
+  hook?: boolean
 }
 
 // Per-project fan-out memory, one entry per project ever seen in a stage THIS run — so a lane
@@ -192,6 +200,82 @@ function buildFanoutAgents(
   })
 }
 
+// ②多镜头CR: a lens-mode review stage renders one agent card per视角 (正确性/安全/性能/规范) instead of
+// a single root card or per-project lanes. The lens set is deterministic from the stage's review
+// config (reviewLenses), so — unlike per-project fan-out — no LaneMemory seeding is needed: the cards
+// exist the moment the stage plan does. Each lane is keyed by reviewLaneId (matches fanout.ts's order
+// id / every RunEvent.laneId / liveLanes key for this reviewer).
+function buildReviewLensAgents(sp: StagePlan, state: RunControllerState, laneLogs: Record<string, RunLogLine[]>): AdaptedAgent[] {
+  const lenses = reviewLenses(sp.review) ?? []
+  const machineStatus = state.machine.stages.find((s) => s.key === sp.key)?.status
+  const outcomeByLens = new Map<string, WorkOrderOutcome>()
+  for (const o of state.outcomes[sp.key] ?? []) if (o.order.lens) outcomeByLens.set(o.order.lens, o)
+
+  return lenses.map((lens) => {
+    const laneId = reviewLaneId(sp.key, lens)
+    const outcome = outcomeByLens.get(lens)
+    const live = state.liveLanes[laneId] as LiveLane | undefined
+    const decision = decisionAgentState(laneId, sp.key, state)
+
+    let agentState: AgentState
+    if (outcome) agentState = outcome.status === 'ok' ? 'ok' : 'err'
+    else if (decision) agentState = decision
+    else if (live) agentState = 'run'
+    else if (machineStatus === 'done') agentState = 'ok'
+    else agentState = machineStatus === 'running' ? 'run' : 'wait'
+
+    const timing = state.laneTimings?.[laneId]
+    return {
+      id: laneId,
+      name: REVIEW_LENS_LABELS[lens],
+      role: sp.name,
+      provider: outcome?.order.provider || sp.provider,
+      model: outcome?.order.model || sp.model,
+      state: agentState,
+      logs: (laneLogs[laneId] ?? []).map((r) => r.line),
+      cwd: live?.cwd || outcome?.order.cwd,
+      laneStartedAt: timing?.startedAt,
+      laneEndedAt: timing?.endedAt,
+    }
+  })
+}
+
+// ③stage hooks: a woven hook rendered as its own single-agent stage (HookNode). Keyed by
+// hookLaneId(plugin.id) — the SAME id the controller records outcomes/liveLanes/timings under (see
+// controller.runHook) — so its live state, settled outcome, and blocking-failure card all resolve to
+// this node. The agent carries hook:true + the plugin's skills/tools so HookNode shows its capability
+// chips. The stage's `name` is the plugin name (its own header), matching the orchestrator's hook stage.
+function buildHookStage(plugin: Plugin, state: RunControllerState, laneLogs: Record<string, RunLogLine[]>): AdaptedStage {
+  const laneId = hookLaneId(plugin.id)
+  const outcome = (state.outcomes[laneId] ?? [])[0]
+  const live = state.liveLanes[laneId] as LiveLane | undefined
+  const decision = decisionAgentState(laneId, laneId, state)
+
+  let agentState: AgentState
+  if (outcome) agentState = outcome.status === 'ok' ? 'ok' : 'err'
+  else if (decision) agentState = decision
+  else if (live) agentState = 'run'
+  else agentState = 'wait'
+
+  const timing = state.laneTimings?.[laneId]
+  const agent: AdaptedAgent = {
+    id: laneId,
+    name: plugin.name,
+    role: '插件 · HOOK',
+    provider: outcome?.order.provider || state.machine.plan.stages[0]?.provider || '',
+    model: outcome?.order.model || state.machine.plan.stages[0]?.model || '',
+    state: agentState,
+    logs: (laneLogs[laneId] ?? []).map((r) => r.line),
+    cwd: live?.cwd || outcome?.order.cwd,
+    laneStartedAt: timing?.startedAt,
+    laneEndedAt: timing?.endedAt,
+    hook: true,
+    hookSkills: plugin.skills,
+    hookTools: plugin.tools,
+  }
+  return { key: laneId, name: plugin.name, state: agentState, agents: [agent], hook: true }
+}
+
 function getStageMemory(memoryByStage: Map<string, Map<string, LaneMemory>>, stageKey: string): Map<string, LaneMemory> {
   let m = memoryByStage.get(stageKey)
   if (!m) {
@@ -214,11 +298,13 @@ export function buildStageRuntimes(
   laneLogs: Record<string, RunLogLine[]>,
   memoryByStage: Map<string, Map<string, LaneMemory>> = new Map()
 ): AdaptedStage[] {
-  return state.machine.plan.stages.map((sp) => {
+  const buildRealStage = (sp: typeof state.machine.plan.stages[number]): AdaptedStage => {
     const agents =
-      sp.scope === 'per-project'
-        ? buildFanoutAgents(sp, state, laneLogs, getStageMemory(memoryByStage, sp.key))
-        : [buildRootAgent(sp, state, laneLogs)]
+      isLensReviewStage(sp)
+        ? buildReviewLensAgents(sp, state, laneLogs)
+        : sp.scope === 'per-project'
+          ? buildFanoutAgents(sp, state, laneLogs, getStageMemory(memoryByStage, sp.key))
+          : [buildRootAgent(sp, state, laneLogs)]
     const machineStatus = state.machine.stages.find((s) => s.key === sp.key)?.status
     return {
       key: sp.key,
@@ -227,5 +313,21 @@ export function buildStageRuntimes(
       agents,
       stale: machineStatus === 'stale',
     }
-  })
+  }
+
+  // ③stage hooks: interleave woven hooks (RunPlan.hooks) at their weave points — '__start' before the
+  // first stage, each stage's `after` hooks right after it, '__wf' at the very end — mirroring the
+  // controller's own run order (runHooksAfter). A hook-less run produces exactly the plain stage list
+  // it did before this existed.
+  const hooks = state.machine.plan.hooks
+  if (!hooks || hooks.length === 0) return state.machine.plan.stages.map(buildRealStage)
+
+  const out: AdaptedStage[] = []
+  for (const h of hooksAfter(hooks, '__start')) out.push(buildHookStage(h, state, laneLogs))
+  for (const sp of state.machine.plan.stages) {
+    out.push(buildRealStage(sp))
+    for (const h of hooksAfter(hooks, sp.key)) out.push(buildHookStage(h, state, laneLogs))
+  }
+  for (const h of hooksAfter(hooks, '__wf')) out.push(buildHookStage(h, state, laneLogs))
+  return out
 }

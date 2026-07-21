@@ -27,7 +27,7 @@ function setup(onCreate = vi.fn()) {
 }
 
 describe('CreateWorkspace review CR mode', () => {
-  it('defaults enabled review stage to parallel/per-project in create opts', () => {
+  it('defaults enabled review stage to 并行多视角 (all four lenses) in create opts — ②多镜头CR', () => {
     const onCreate = setup()
     expect(screen.getByText('单 agent 全量')).toBeInTheDocument()
     expect(screen.getByText('并行 · 按项目')).toBeInTheDocument()
@@ -35,7 +35,7 @@ describe('CreateWorkspace review CR mode', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /创建/ }))
     const review = onCreate.mock.calls[0][0].workflows[0].stages.find((s: any) => s.key === 'review')
-    expect(review.review).toEqual({ mode: 'parallel', scope: 'per-project' })
+    expect(review.review).toEqual({ mode: 'parallel', reviewers: ['correctness', 'security', 'performance', 'style'] })
   })
 
   it('selecting single agent writes review.mode=single', () => {

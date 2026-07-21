@@ -14,8 +14,9 @@ import { stageName, workflowDisplayName, stageBasePrompt, DEFAULT_STAGE_PER_PROJ
 import { indexCustomStages } from '../../shared/customStages'
 import { pickWorkspaceWorkflow, resolveWorkflowStages } from '../workspace/resolveStages'
 import { planFromStages } from './planFromStages'
+import { collectRunHooks } from './hooks'
 import type { RunPlan } from './machine'
-import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
+import type { StageSpec, DevelopProject } from './runTypes'
 import { createTempBranch, discardTempBranch, isCleanTree } from './tempBranch'
 
 // P5-UI Task 1: short stage blurb for the config-preview overlay, by builtin key. Custom/unknown keys
@@ -130,8 +131,10 @@ export function resolveStartPlan(
     scope: s.scope,
     gate: s.gate,
     prompt: s.prompt,
+    review: s.review, // ②多镜头CR: honor the review stage's fan-out config (per-lens reviewers)
   }))
-  const plan = planFromStages(opts.runId, stageSpecs)
+  // ③stage hooks: thread the workspace's woven hooks (ws.plugins) + run-end (__wf) step hooks.
+  const plan = planFromStages(opts.runId, stageSpecs, collectRunHooks(ws.plugins, ws.stepPlugins))
 
   const projects = buildLaunchInfo(ws).projects.filter((p) => opts.projectNames.includes(p.name))
 
@@ -205,9 +208,11 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
       scope: s.scope,
       gate: s.gate,
       prompt,
+      review: s.review, // ②多镜头CR: honor the review stage's fan-out config (per-lens reviewers)
     }
   })
-  return planFromStages(`run2-${randomUUID()}`, stageSpecs)
+  // ③stage hooks: thread the workspace's woven hooks (ws.plugins) + run-end (__wf) step hooks.
+  return planFromStages(`run2-${randomUUID()}`, stageSpecs, collectRunHooks(ws.plugins, ws.stepPlugins))
 }
 
 // Companion to buildLaunchPlan: the DevelopProject[] to pass alongside its RunPlan into

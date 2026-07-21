@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { RunEvent } from '../../main/run/events'
 import type { GateDecision, LaneDecision } from '../../main/run/decisions'
-import type { ArtifactRef } from '../../main/orchestrator/types'
+import type { ArtifactRef } from '../../main/run/runTypes'
 import type { DesignDocRef } from '@shared/types'
 import type { FrozenRunCard } from '../views/chat/runCards'
 import { Markdown } from '../views/chat/markdown'
@@ -76,7 +76,7 @@ function DocList({ docs, onOpenDoc }: { docs: ArtifactRef[]; onOpenDoc?: (doc: D
 // `kind === 'gate'`, so callers pass it as `undefined` for every other kind.
 // 'aborted' (deferred fix P4-3): synthetic marker kind, only ever reaches this frozen-only branch
 // (never live) — see FrozenRunCard's doc (chat/runCards.ts).
-function kindLabel(kind: RunEvent['kind'] | 'aborted', finalize?: boolean): string {
+function kindLabel(kind: RunEvent['kind'] | 'aborted' | 'summary', finalize?: boolean): string {
   switch (kind) {
     case 'gate': return finalize ? '收尾确认' : '阶段评审'
     case 'auth': return '需要授权'
@@ -84,6 +84,7 @@ function kindLabel(kind: RunEvent['kind'] | 'aborted', finalize?: boolean): stri
     case 'doubt': return '方案存疑'
     case 'failure': return '阶段执行失败'
     case 'aborted': return '运行已终止'
+    case 'summary': return '本次运行总结'
   }
 }
 
@@ -106,6 +107,24 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc }: RunEv
   const [answer, setAnswer] = useState('')
 
   if (frozen) {
+    // ①汇总: the run-completion "本次运行总结" card — the run's full summary rendered as Markdown, with
+    // no "决定：…" line (it records nothing the user decided, unlike every other frozen card). Distinct
+    // from the frozen finalize GATE card (kind 'gate', finalize:true), which keeps its short 合并/丢弃
+    // decision record.
+    if (frozen.kind === 'summary') {
+      return (
+        <div className="msg-req k-summary done" data-req={frozen.id}>
+          <div className="req-head">
+            <span className="req-kind">{kindLabel('summary')}</span>
+          </div>
+          <div className="req-body">
+            {frozen.title ? <div className="req-title">{frozen.title}</div> : null}
+            {frozen.body ? <div className="req-plan"><Markdown text={frozen.body} /></div> : null}
+            <div className="req-sub">{fmtAt(frozen.at)}</div>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className={`msg-req k-${frozen.kind} done`} data-req={frozen.id}>
         <div className="req-head">

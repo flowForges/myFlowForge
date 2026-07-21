@@ -1,4 +1,4 @@
-import type { ArtifactRef } from '../orchestrator/types'
+import type { ArtifactRef } from './runTypes'
 
 export interface AuthEvent { id: string; kind: 'auth'; laneId: string; stageKey: string; title: string; where?: string }
 export interface QuestionEvent { id: string; kind: 'question'; laneId: string; stageKey: string; title: string; placeholder?: string }

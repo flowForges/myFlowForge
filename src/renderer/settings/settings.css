@@ -383,6 +383,8 @@
 .sce-flag.on { color: var(--fg); border-color: var(--accent); background: var(--accent-dim); }
 .sce-flag-label { font-size: 11.5px; color: var(--faint); margin-right: 2px; }
 .sce-review { display: inline-flex; align-items: center; gap: 5px; padding-left: 6px; margin-left: 2px; border-left: 1px solid var(--border); }
+/* ②多镜头CR: lens picker row — full-width under the review-mode buttons when 并行多视角 is chosen. */
+.sce-lenses { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; width: 100%; margin-top: 6px; }
 .sce-actions { display: flex; gap: 8px; margin-top: 2px; }
 .sce-save { height: 32px; padding: 0 16px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font-size: 12.5px; font-weight: 600; }
 .sce-save:hover { filter: brightness(1.07); }

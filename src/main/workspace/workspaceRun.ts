@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { stageName, type Workspace } from '../config/schema'
-import type { StartRunOpts } from '../orchestrator/orchestrator'
+import type { StartRunOpts } from '../run/runTypes'
 
 // Pure reconstructor: rebuild a StartRunOpts from a persisted Workspace so a run can be
 // re-run later (SP-C) without knownProjects or the workflow def. Equivalent in shape to the

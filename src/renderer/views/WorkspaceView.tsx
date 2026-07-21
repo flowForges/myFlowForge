@@ -70,7 +70,10 @@ function captureRunCardTitle(event: RunEvent): string {
     case 'question': return event.title
     case 'doubt': return event.note
     case 'failure': return event.error
-    case 'gate': return event.body
+    // ①汇总: a finalize gate's body is now the full run summary (markdown, potentially long) — too big
+    // for a frozen record's single-line title. Freeze it to a short label instead; the full summary
+    // lives in the dedicated "本次运行总结" card appended on completion (see appendSummaryCard below).
+    case 'gate': return event.finalize ? '全部完成，收尾确认' : event.body
   }
 }
 
@@ -502,6 +505,22 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         }
       })
   ), [chat.messages])
+  // User feedback (2026-07-20): show the REAL context size — nothing computed/approximate. The only
+  // genuinely real signal any CLI emits is the model's own per-turn `usage` (input+cache tokens),
+  // captured on the assistant message (see chatService onUsage → ChatMessage.usage). We surface that
+  // raw token count verbatim and NOTHING else: no %/bar, because the context WINDOW is a hardcoded
+  // guess (contextWindowFor) and no CLI exposes the native session's true remaining context / auto-
+  // compact point (researched per-provider). `usage.used` only exists for providers that actually
+  // report it (claude/qoder/opencode); codex/cursor/gemini/qwen/copilot emit none, so the pill is
+  // simply absent for them rather than showing a fabricated number.
+  const latestUsage = useMemo(() => {
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const u = chat.messages[i].usage
+      if (u?.used) return u
+    }
+    return undefined
+  }, [chat.messages])
+
   // Merge: a persisted (message-backed) gate wins over a same-id local entry — once confirmLaunchGate's
   // chatAppendLaunchGate round-trips back into chat.messages, the local copy is redundant. Gates still
   // ACTIVE (not yet confirmed) only exist in local state and pass through untouched — EXCEPT: `launchGates`
@@ -635,6 +654,45 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     }
     run2.abort()
   }, [run2, wsPath, sessions.activeSessionId])
+
+  // ①汇总: append the "本次运行总结" chat card to the run's OWNING session exactly once, the instant the
+  // run reaches terminal 'ok' carrying a summary (the controller sets state.summary BEFORE the finalize
+  // gate — see controller.ts's buildRunSummary — so this fires for both temp-branch runs and
+  // no-temp-branch runs alike). Effect-driven (not a click handler like handleRunAbort) because
+  // completion isn't a user action.
+  //
+  // Gated on run2StateForTab, NOT the workspace-global run2.state: run2.state is retained per-WORKSPACE
+  // (manager keeps the last run's terminal state), so keying off it would (a) DISPLAY the card in
+  // whatever session is in front — mergedRunCards feeds the timeline unfiltered — and (b) write it while
+  // a DIFFERENT session is active, where persistedRunCards (the ACTIVE session's messages) can't see the
+  // owning session's card and so can't dedupe it. run2StateForTab is non-null only when the owning
+  // session is the active one (or the run has no sessionId) — the exact same §8 scoping every other
+  // frozen run-card already relies on (freezeRunCard/handleRunAbort only ever fire from the visible
+  // owning session). The two renderer guards below (ref + persistedRunCards) then cover the common
+  // remount case; the remaining fresh-ref-before-chatHistory-loads race is closed server-side —
+  // chatAppendRunCard is idempotent by id (handlers.ts), so a lost race just re-writes the same line
+  // once, never twice.
+  const summaryCardedRunIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const st = run2StateForTab
+    if (!st || st.status !== 'ok' || !st.summary) return
+    const runId = st.machine?.plan?.runId
+    if (!runId || summaryCardedRunIdsRef.current.has(runId)) return
+    const cardId = `summary-${runId}`
+    if (persistedRunCards.some((r) => r.id === cardId)) { summaryCardedRunIdsRef.current.add(runId); return }
+    summaryCardedRunIdsRef.current.add(runId)
+    const at = Date.now()
+    const frozen: FrozenRunCard = {
+      id: cardId, kind: 'summary', stageKey: '__summary__', title: '', body: st.summary, decision: '', at, ts: at,
+    }
+    setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
+    const sid = st.sessionId ?? sessions.activeSessionId
+    if (wsPath && sid) {
+      void window.forge.chatAppendRunCard?.({
+        workspacePath: wsPath, sessionId: sid, ts: new Date(at).toISOString(), runCard: frozen,
+      })
+    }
+  }, [run2StateForTab, wsPath, sessions.activeSessionId, persistedRunCards])
 
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
@@ -1126,6 +1184,23 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             <button className="supplement-cancel" onClick={() => setPendingSwitch(null)}>取消</button>
           </div>
         )}
+        {latestUsage?.used ? (() => {
+          // Context bar like Claude Code's statusline: the model's REAL reported tokens
+          // (usage.used = input+cache_read+cache_creation from the CLI stream — the same accounting
+          // Claude Code itself uses) over the model's REAL context window (usage.window: 200K, or 1M
+          // for [1m] variants). Only shown for providers that actually report usage (claude/qoder;
+          // opencode coarser) — absent for codex/cursor/gemini/qwen/copilot, which report nothing.
+          const window = latestUsage.window || 200_000
+          const pct = Math.min(100, Math.round((latestUsage.used / window) * 100))
+          const hi = pct >= 90 ? ' hi' : pct >= 75 ? ' warn' : ''
+          return (
+            <div className={`ctx-real${hi}`} title={`上下文 ${latestUsage.used.toLocaleString()} / ${window.toLocaleString()} tokens（模型真实上报的输入+缓存 token ÷ 该模型真实上下文窗口，最近一轮）。CLI 不暴露「自动压缩前还剩多少」，此为当前占用比例。`}>
+              <span className="ctx-label">上下文</span>
+              <span className="ctx-bar"><i style={{ width: `${pct}%` }} /></span>
+              <span className="ctx-pct">{pct}%</span>
+            </div>
+          )
+        })() : null}
         <Composer
           providers={providers}
           disabled={!wsPath || !!archived}
@@ -1314,25 +1389,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         取消运行
                       </button>
                     )}
-                    {/* 继续执行(resumeRun → orch.startRun)removed: the old orchestrator's start/resume
-                        path is disabled entirely — run2 has its own disk-resume. 终止退出 stays as the
-                        way to dismiss/clear a leftover errored old run so nothing gets stuck showing
-                        this read-only 已中断 state forever. */}
-                    {run?.status === 'err' && !(engine.run?.workspacePath === wsPath && engine.run?.status === 'run') && (
-                      <button
-                        className="txt-btn"
-                        id="discardRun"
-                        title="清除这次已中断的运行记录(旧编排器的继续执行已停用,新工作流请用「工作流运行」发起)"
-                        onClick={() => {
-                          if (!wsPath) return
-                          if (!window.confirm('清除这次已中断的运行记录?之后需要时请通过「工作流运行」重新发起。')) return
-                          void window.forge.discardRun(wsPath)
-                          setForceChat(true)
-                        }}
-                      >
-                        终止退出
-                      </button>
-                    )}
+                    {/* 继续执行 / 终止退出 (resumeRun / discardRun → old orchestrator) removed entirely:
+                        the legacy orchestrator run channels are gone. run2 owns its own disk-resume and
+                        run-history; this read-only old-run panel only ever renders from an injected
+                        engine.run (never in production, where engine.run is always null). */}
                     <button
                       className="txt-btn"
                       id="agentExpandAll"

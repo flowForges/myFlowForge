@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSyn
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { wsRunDir, wsRunsDir } from '../config/paths'
 import { writeJsonAtomic } from '../util/atomicWrite'
-import type { AgentMessage, ArtifactRef } from './types'
+import type { AgentMessage, ArtifactRef } from './runTypes'
 import type { RunState, AgentState } from '@shared/types'
 
 export class RunStore {

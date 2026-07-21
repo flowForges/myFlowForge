@@ -1,5 +1,5 @@
 import type { AgentState, LogLine } from '../main/agents/types'
-import type { ArtifactRef } from '../main/orchestrator/types'
+import type { ArtifactRef } from '../main/run/runTypes'
 import type { Plugin } from './plugin'
 
 export type { AgentState, LogLine }
@@ -103,6 +103,21 @@ export interface ReviewConfig {
   mode: 'single' | 'parallel'
   scope?: 'workspace' | 'per-project'
   reviewers?: number | ReviewLens[]
+}
+// ②多镜头CR: the ordered lens set + their display labels + one-line focus, shared by the renderer
+// (StageConfigEditor's lens picker) and main (run2's reviewFanout: lane names + per-lens prompt
+// directive). Single source of truth so the two sides never drift on which lenses exist or how
+// they're labelled. Mirrors config/schema.ts's REVIEW_LENSES (kept for the orchestrator's own zod
+// enum until it's deleted) — both list the same four in the same order.
+export const REVIEW_LENSES: ReviewLens[] = ['correctness', 'security', 'performance', 'style']
+export const REVIEW_LENS_LABELS: Record<ReviewLens, string> = {
+  correctness: '正确性', security: '安全', performance: '性能', style: '规范',
+}
+export const REVIEW_LENS_FOCUS: Record<ReviewLens, string> = {
+  correctness: '逻辑/边界/错误处理是否正确,有没有 bug、竞态、空值、回归',
+  security: '注入/越权/敏感信息泄露/不安全依赖/输入校验等安全隐患',
+  performance: '算法复杂度、N+1、无谓拷贝/重渲染、内存与 IO 热点',
+  style: '命名/结构/可读性/是否遵循本仓既有约定与规范',
 }
 export interface CreateWorkspaceProject { repoId: string; branch: string; provider?: string; model?: string }
 // Custom-stage fields (#3) — mirror WsStageSchema. name/prompt/behavior flags default (per built-in
@@ -215,9 +230,11 @@ export interface ChatMessage {
   // same reasoning as every other shared/types.ts field: this module stays the renderer/main boundary).
   // 'aborted' (P4-3): a synthetic marker persisted when a run is ended via RunExecPanel's 终止
   // button, not a real run2 RunEvent kind — see FrozenRunCard's doc (chat/runCards.ts) for why.
+  // 'summary' (①汇总): a synthetic marker persisted when a run reaches terminal 'ok', carrying the
+  // run's "本次运行总结" in `body` — likewise not a real run2 RunEvent kind (see FrozenRunCard's doc).
   // `docs` (improvement ①): mirrors FrozenRunCard.docs (chat/runCards.ts) — a gate's artifact refs
   // (e.g. design.md), preserved so a resolved gate card can still open the full doc after reload.
-  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate' | 'aborted'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number; finalize?: boolean; docs?: ArtifactRef[] }
+  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate' | 'aborted' | 'summary'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number; finalize?: boolean; docs?: ArtifactRef[] }
 }
 export interface ChatSession {
   id: string

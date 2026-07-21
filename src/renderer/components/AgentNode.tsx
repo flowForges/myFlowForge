@@ -147,7 +147,9 @@ export function AgentNode({ agent, open: openProp, onToggle, onViewLog, live = t
             </span>
           </div>
           <span className={`agent-state ${stateInfo.cls}`}>
-            <span className="d" />
+            {/* User feedback (2026-07-20): a ⚡ bolt on an executing agent makes "执行中" obvious at a
+                glance (the plain status dot alone read as too subtle); other states keep the dot. */}
+            {agent.state === 'run' ? <span className="agent-bolt" aria-hidden="true">⚡</span> : <span className="d" />}
             {stateInfo.label}
           </span>
           {elapsed && <span className="agent-elapsed" title="该项目本阶段执行耗时">{elapsed}</span>}

@@ -37,10 +37,10 @@ describe('resolveStages', () => {
     expect(result).toEqual([])
   })
 
-  it('(d) defaults a review stage WITHOUT review config to parallel/per-project', () => {
+  it('(d) defaults a review stage WITHOUT review config to 并行多视角 (all four lenses — ②多镜头CR)', () => {
     const stages = [{ key: 'review' as const, provider: 'claude', model: 'opus-4.8' }]
     const result = resolveStages({ workflowId: 'standard', stages }, [wf])
-    expect(result[0].review).toEqual({ mode: 'parallel', scope: 'per-project' })
+    expect(result[0].review).toEqual({ mode: 'parallel', reviewers: ['correctness', 'security', 'performance', 'style'] })
   })
 
   it('(e) keeps an explicit review config (single / multi-lens) intact', () => {

@@ -1,9 +1,9 @@
 // src/main/run/controller.ts
 import type { PermissionMode } from '@shared/permissions'
 import type { AgentProvider, ConfirmReq, InputReq } from '../agents/types'
-import type { ArtifactRef } from '../orchestrator/types'
-import type { DevelopProject } from '../orchestrator/orchestrator'
-import type { RunStore } from '../orchestrator/runStore'
+import type { ArtifactRef } from './runTypes'
+import type { DevelopProject } from './runTypes'
+import type { RunStore } from './runStore'
 import { initMachine, markRunning, currentStage, jumpBack, type RunPlan, type MachineState } from './machine'
 import { applyGateDecision, type GateDecision, type LaneDecision } from './decisions'
 import { addEvent, removeEvent, findEvent, type RunEvent } from './events'
@@ -14,6 +14,14 @@ import { runWorkOrder, type WorkOrder, type WorkOrderOutcome } from './workOrder
 import { saveControllerState } from './persist'
 import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault, parkTempBranch as parkTempBranchDefault } from './tempBranch'
 import { startBridge as startBridgeDefault, type BridgeRunCtx, type ForgeBridge } from '../mcp/forgeBridge'
+import { composeRunDigest, runRunSummary } from './runSummary'
+import { isLensReviewStage, composeReviewReport, lensDirective } from './reviewFanout'
+import type { ReviewLens } from '@shared/types'
+import { hooksAfter, hookLaneId, buildHookPrompt } from './hooks'
+import { executeHook } from './executeHook'
+import { claudeAllowedTools } from '../agents/pluginTools'
+import type { Plugin } from '../../shared/plugin'
+import type { AgentTask, AgentCallbacks } from '../agents/types'
 
 // §7.4 ③硬阻塞: the forge tools a RUN stage sub-agent gets when this run has a live bridge (see
 // setupBridge/envForOrder below) — same set as the legacy orchestrator's STAGE_FORGE_TOOLS
@@ -67,7 +75,18 @@ export interface RunControllerDeps {
   mcpEntry?: string
   // Injectable so tests never open a real unix socket; defaults to the real forgeBridge.ts startBridge.
   startBridge?: (runDir: string, ctx: BridgeRunCtx) => Promise<ForgeBridge>
+  // ①汇总 (end-of-run summary): injectable so controller tests never spin up a real provider.chat.
+  // Defaults to the real one-shot summarizer (runRunSummary, over the run's ROOT stage
+  // provider/model) — given the deterministic digest + the run's task seed it returns a synthesized
+  // "本次运行总结" (or the digest verbatim on any failure — see runSummary.ts). Called EXACTLY ONCE,
+  // at genuine full-plan completion (start()), never on abort/failure — so most existing controller
+  // tests (which abort or don't complete every stage) never reach it and need no summarize dep.
+  summarize?: (input: RunSummaryInput) => Promise<string>
 }
+// Input handed to RunControllerDeps.summarize — the deterministic digest of every lane's reported
+// outcome plus the run's driving provider/model/cwd/env, so an injected stub can ignore the provider
+// entirely and the default just forwards to runRunSummary.
+export interface RunSummaryInput { digest: string; task?: string; provider?: AgentProvider; model: string; cwd: string; env: NodeJS.ProcessEnv }
 export type RunStatus = 'running' | 'awaiting' | 'ok' | 'failed'
 export interface LiveLane { stageKey: string; project?: string; state?: string; activity?: string; cwd?: string }
 // A single raw agent log line broadcast live during a run. Deliberately NOT part of
@@ -109,6 +128,13 @@ export interface RunControllerState {
   // for every other terminal path (ok, or a plain abort), so the renderer can distinguish "the
   // merge itself failed, here's why" from a generic failed status with no specific cause.
   error?: string
+  // ①汇总 (end-of-run summary): the synthesized "本次运行总结" (or its deterministic digest fallback)
+  // produced ONCE at genuine full-plan completion (start(), before runFinalizeGate) — see
+  // buildRunSummary. Absent until then, and never set on abort/failure (the run must reach every
+  // stage `done`). Surfaced on state so (a) the renderer can append the "本次运行总结" chat card the
+  // instant status flips to 'ok', and (b) the finalize gate reuses it as its body. Persisted
+  // (SavedControllerState.summary) as durable run metadata.
+  summary?: string
   // See RunControllerDeps.sessionId doc — copied verbatim onto state so renderer consumers (useRun2)
   // never need a separate channel just to learn which session owns this run.
   sessionId?: string
@@ -219,6 +245,7 @@ export class RunController {
   private outcomes: Record<string, WorkOrderOutcome[]> = {}
   private status: RunStatus = 'running'
   private error?: string
+  private summary?: string
   private pendingDirective: Record<string, string> = {}
   private liveLanes: Record<string, LiveLane> = {}
   private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
@@ -277,7 +304,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, summary: this.summary, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -455,6 +482,140 @@ export class RunController {
     }
   }
 
+  /**
+   * ①汇总: composes the deterministic digest of every lane's reported outcome (composeRunDigest) and
+   * hands it to the summarizer (deps.summarize, default runRunSummary over the run's ROOT stage
+   * provider/model) to synthesize a "本次运行总结". Best-effort in every direction: runRunSummary
+   * itself returns the digest verbatim on any provider failure/timeout, and this method additionally
+   * try/catches (an INJECTED summarize stub could throw) — so a genuine full-plan completion never
+   * fails to finalize just because the summary narrative couldn't be produced. Always returns a
+   * non-empty string (the digest is the floor) whenever any stage produced outcomes.
+   */
+  private async buildRunSummary(): Promise<string> {
+    const digest = composeRunDigest(this.plan.stages, this.outcomes, this.deps.projects)
+    try {
+      const root = this.plan.stages[0]
+      const provider = root ? this.deps.providers[root.provider] : undefined
+      const summarize = this.deps.summarize
+        ?? ((i: RunSummaryInput) => runRunSummary(i.provider, { digest: i.digest, task: i.task, model: i.model, cwd: i.cwd, env: i.env }))
+      const out = await summarize({ digest, task: this.deps.task, provider, model: root?.model ?? '', cwd: this.workspacePath(), env: this.deps.env })
+      return out?.trim() ? out : digest
+    } catch {
+      return digest
+    }
+  }
+
+  /**
+   * ③stage hooks: run every hook woven at `afterKey` ('__start' before the first stage / a stage key
+   * right after that stage advances forward / '__wf' after the whole run finishes), one at a time in
+   * plan order. No-op when the run has no hooks for this point. Sequential (not Promise.all) so a
+   * blocking failure card for one hook is resolved before the next starts — and so the ordered
+   * `after` semantics hold.
+   */
+  private async runHooksAfter(afterKey: string): Promise<void> {
+    for (const plugin of hooksAfter(this.plan.hooks, afterKey)) {
+      if (this.aborted) return
+      // Resume idempotency (review Finding 1): a hook that ALREADY produced an outcome in a prior
+      // (pre-restart) run — restored into this.outcomes via rehydrate — must NOT re-execute. Without
+      // this, resumeFromDisk (which calls start() again from the top) would re-run every '__start'
+      // hook on every resume, double-firing a non-idempotent hook (provision a sandbox, run a
+      // migration, post a notification). Within a SINGLE run a hook has no outcome until it runs and
+      // runHooksAfter is called once per weave point, so this only ever skips on resume. (A retry
+      // loops INSIDE runHook, not here, so a to-be-retried hook is unaffected.)
+      if (this.outcomes[hookLaneId(plugin.id)]) continue
+      await this.runHook(plugin)
+    }
+  }
+
+  /**
+   * Run one hook as a restricted micro-agent (executeHook) at the workspace root, limited to its own
+   * skills/tools. BLOCKING on failure (user decision): a failed hook raises a `failure` event and
+   * awaits the user's 重跑/跳过/终止 — reusing the SAME laneR/resolveLane machinery a stage-lane failure
+   * uses. Retry re-runs the hook; skip leaves the failed outcome recorded and moves on; abort stops the
+   * run. Uses the run's ROOT stage provider/model (same choice as the legacy orchestrator's runHook and
+   * as ①汇总's summarizer).
+   */
+  private async runHook(plugin: Plugin): Promise<void> {
+    if (this.aborted) return
+    const laneId = hookLaneId(plugin.id)
+    const provId = this.plan.stages[0]?.provider ?? 'claude'
+    const provider = this.deps.providers[provId] ?? this.deps.providers['claude']
+    const model = this.plan.stages[0]?.model ?? ''
+    // Upstream = every artifact produced so far (all done stages); only done stages have an
+    // 'artifacts:<key>' context entry, so this naturally excludes not-yet-run stages.
+    const upstream = this.upstream(this.plan.stages.length)
+    this.laneStageKey[laneId] = laneId
+
+    let attempts = 0
+    while (!this.aborted) {
+      attempts++
+      this.laneTimings[laneId] = { startedAt: this.now() }
+      const result = provider
+        ? await this.runHookOnce(plugin, laneId, provider, model, buildHookPrompt(plugin, upstream, this.deps.task))
+        : { ok: false, output: '', error: `未找到插件 provider: ${provId}` }
+      const t = this.laneTimings[laneId]; if (t) t.endedAt = this.now()
+      delete this.liveLanes[laneId]
+
+      const order: WorkOrder = { id: laneId, stageKey: laneId, name: plugin.name, provider: provId, model, cwd: this.workspacePath(), prompt: '' }
+      this.outcomes[laneId] = [{
+        order,
+        status: result.ok ? 'ok' : 'failed',
+        result: result.ok ? { summary: result.output || '插件完成', filesChanged: [], blockers: [], doubts: [], artifacts: [] } : undefined,
+        error: result.ok ? undefined : (result.error || result.output || '插件执行未成功'),
+        attempts,
+      }]
+      this.emitUpdate()
+      if (result.ok) return
+
+      // Aborted DURING the hook (abort()'s settleAll already flushed every pending resolver) — do NOT
+      // now create+emit a failure resolver, because nothing would ever settle it (hang). Same guard as
+      // the ①汇总 abort-during-await fix.
+      if (this.aborted) return
+
+      // BLOCKING failure: raise a failure card and await the user's decision (create-before-emit).
+      const id = this.makeId('failure')
+      const p = this.laneR.create(id)
+      this.emitEvent({ id, kind: 'failure', laneId, stageKey: laneId, error: result.error || result.output || 'hook failed', attempts })
+      const d = await p
+      this.drop(id); this.emitUpdate()
+      if (d.type === 'abort') { this.aborted = true; return }
+      if (d.type === 'retry') continue
+      return // skipLane → keep the failed outcome, move on to the next hook/stage
+    }
+  }
+
+  private async runHookOnce(plugin: Plugin, laneId: string, provider: AgentProvider, model: string, prompt: string) {
+    const task: AgentTask = {
+      stageKey: laneId, agentId: laneId, name: plugin.name, prompt, cwd: this.workspacePath(), model,
+      allowedTools: claudeAllowedTools(plugin.tools), skills: plugin.skills, permissionMode: this.deps.permissionMode,
+    }
+    const cb: AgentCallbacks = {
+      onLog: (line) => {
+        this.liveLanes[laneId] = { stageKey: laneId, state: this.liveLanes[laneId]?.state, activity: line.text, cwd: this.workspacePath() }
+        this.emitUpdate()
+        this.emitLog({ laneId, stageKey: laneId, agentName: plugin.name, line })
+      },
+      onState: (s) => {
+        this.liveLanes[laneId] = { stageKey: laneId, state: s, activity: this.liveLanes[laneId]?.activity, cwd: this.workspacePath() }
+        this.emitUpdate()
+      },
+      onActivity: () => { this.emitUpdate() },
+      onDone: () => {},
+      onError: () => {},
+      onSession: (sid) => { this.laneSessions[laneId] = { provider: provider.id, sessionId: sid }; this.emitUpdate() },
+      onConfirm: async (req) => {
+        if (this.aborted) return 'deny'
+        const id = this.makeId('auth')
+        const pp = this.laneR.create(id)
+        this.emitEvent({ id, kind: 'auth', laneId, stageKey: laneId, title: req.title, where: req.where })
+        const dd = await pp; this.drop(id); this.emitUpdate()
+        return dd.type === 'authorize' ? 'allow' : 'deny'
+      },
+      onInput: (req) => this.askQuestion(laneId, laneId, req.title, req.placeholder),
+    }
+    return executeHook(provider, task, cb, this.envForAgent(laneId))
+  }
+
   private async runFinalizeGate(): Promise<void> {
     const targets = this.finalizeTargets()
     if (targets.length === 0) return
@@ -462,7 +623,12 @@ export class RunController {
     const id = this.makeId('gate')
     this.status = 'awaiting'
     const p = this.gateR.create(id)
-    this.emitEvent({ id, kind: 'gate', stageKey: '__finalize__', body: '全部完成，合并到目标分支？', finalize: true })
+    // ①汇总: the finalize gate's body IS the run summary (rendered as Markdown by RunEventCard's
+    // finalize branch) so the user sees "本次改动：项目A改X，项目B改Y…" right where they decide
+    // 合并并完成 / 丢弃本次. Falls back to the plain prompt only when no summary was produced (e.g. a
+    // run with zero recorded outcomes) — this.summary is set in start() just before this is called.
+    const body = this.summary ? `**本次运行总结**\n\n${this.summary}` : '全部完成，合并到目标分支？'
+    this.emitEvent({ id, kind: 'gate', stageKey: '__finalize__', body, finalize: true })
     const d = await p
     this.drop(id)
     this.emitUpdate()
@@ -508,12 +674,15 @@ export class RunController {
     }
     return refs
   }
-  private buildPrompt = (o: { stageKey: string; project?: string; cwd: string; upstream: ArtifactRef[] }) => {
+  private buildPrompt = (o: { stageKey: string; project?: string; cwd: string; upstream: ArtifactRef[]; lens?: ReviewLens }) => {
     const seed = this.deps.task ? `【需求原文（以此为准）】\n${this.deps.task}\n` : ''
     // The stage's real instructions (e.g. STAGE_PROMPTS['design']) live on the StagePlan, not on
     // the thin `o` passed in from fanout — look it up here so callers don't need to thread it through.
     const stagePrompt = this.plan.stages.find((s) => s.key === o.stageKey)?.prompt
     const instructions = stagePrompt ? `${stagePrompt}\n` : `【阶段】${o.stageKey}\n`
+    // ②多镜头CR: a per-lens reviewer gets its视角 focus appended so it審 exactly one lens (see
+    // reviewFanout.ts). Empty for every non-review order.
+    const lens = o.lens ? lensDirective(o.lens) : ''
     const scope = `${o.project ? `（项目 ${o.project}）` : ''}cwd=${o.cwd}`
     const up = o.upstream.length ? `\n上游产物：\n${o.upstream.map((a) => `- ${a.path} (${a.kind})`).join('\n')}` : ''
     const dir = this.pendingDirective[o.stageKey] ? `\n【补充/返工意见】\n${this.pendingDirective[o.stageKey]}` : ''
@@ -522,7 +691,7 @@ export class RunController {
     // to always include — if there's no bridge, forge_ask simply isn't an available tool and the
     // agent falls back to `blockers` in the fence above, same as before this line existed.
     const askHint = `\n若卡在只有人类才知道的硬阻塞（缺凭据、该连哪个环境、用哪个 API key 等），调用 forge_ask 直接问用户，不要瞎猜或直接失败。\n`
-    return `${seed}${instructions}${scope}${up}${dir}${askHint}${fence}`
+    return `${seed}${instructions}${lens}${scope}${up}${dir}${askHint}${fence}`
   }
 
   /**
@@ -571,11 +740,17 @@ export class RunController {
    * lane's question card. No bridge → the base env, unchanged.
    */
   private envForOrder(order: WorkOrder): NodeJS.ProcessEnv {
+    return this.envForAgent(order.id)
+  }
+  // Shared by envForOrder (stage lanes) and runHook (③stage hooks) — both provision the same per-run
+  // forge bridge, keyed by the agent's own laneId as FORGE_AGENT_ID so a forge_ask routes back to that
+  // exact lane/hook. No bridge → the base env, unchanged.
+  private envForAgent(agentId: string): NodeJS.ProcessEnv {
     if (!this.bridge) return this.deps.env
     return {
       ...this.deps.env,
       FORGE_SOCKET: this.bridge.socketPath,
-      FORGE_AGENT_ID: order.id,
+      FORGE_AGENT_ID: agentId,
       ...(this.deps.mcpEntry ? { FORGE_MCP_ENTRY: this.deps.mcpEntry } : {}),
       FORGE_TOOLS: RUN_FORGE_TOOLS,
     }
@@ -685,6 +860,11 @@ export class RunController {
     // after close makes it idempotent so the normal path (which used to close inline at the very
     // end) can't double-close even though that inline close is now just this same finally.
     try {
+    // ③stage hooks: '__start' hooks run before the first stage. Gated on `hooks?.length` so a hook-less
+    // run (every existing controller/manager test) inserts NO extra await here — preserving the
+    // "first work order's provider.run() is invoked synchronously after start()" invariant those tests
+    // assert (same reasoning as the setupBridge gate above).
+    if (this.plan.hooks?.length) await this.runHooksAfter('__start')
     while (!this.aborted) {
       // Pause gate: sits at the very top of the loop, before the next stage is read/started, so
       // an in-flight stage's lanes always finish uninterrupted — pause only stops the run from
@@ -787,7 +967,10 @@ export class RunController {
       const doubtWaits: Array<Promise<{ id: string; note: string; d: LaneDecision }>> = []
       for (const oc of outcomes) {
         if (oc.status === 'ok' && oc.result) {
-          const ref = this.deps.store.writeArtifact(`${stage.key}-${oc.order.project ?? 'root'}.md`, oc.result.summary)
+          // ②多镜头CR: a lens reviewer has no `project` — key its artifact by lens so N lens reviewers
+          // don't all collide on the same `${stage.key}-root.md` (last-writer-wins would drop every
+          //视角 but one). project → lens → 'root' covers per-project, per-lens, and single/root orders.
+          const ref = this.deps.store.writeArtifact(`${stage.key}-${oc.order.project ?? oc.order.lens ?? 'root'}.md`, oc.result.summary)
           refs.push(ref)
           for (const doubt of oc.result.doubts) {
             const id = this.makeId('doubt')
@@ -807,7 +990,12 @@ export class RunController {
       let d: GateDecision
       if (stage.gate) {
         const id = this.makeId('gate')
-        const body = refs.map((r) => r.path).join('\n')
+        // ②多镜头CR: a lens-mode review stage's gate body IS the consolidated多视角 report (grouped by
+        // lens verdict — see reviewFanout.composeReviewReport), so the user sees every视角's finding in
+        // one place before 通过/打回. Every other gated stage keeps the plain artifact-path list.
+        const body = isLensReviewStage(stage)
+          ? composeReviewReport(stage.name, outcomes)
+          : refs.map((r) => r.path).join('\n')
         this.status = 'awaiting'
         const p = this.gateR.create(id)
         this.emitEvent({ id, kind: 'gate', stageKey: stage.key, body, docs: refs })
@@ -890,6 +1078,13 @@ export class RunController {
 
       this.machine = applyGateDecision(this.machine, d)
       this.emitUpdate()
+      // ③stage hooks: this stage's `after` hooks run only when it ADVANCES forward (d 'advance') —
+      // never on a redo/jumpBack (the stage isn't done). Blocking: a hook can raise a failure card and
+      // its 终止 sets `aborted`, so re-check and break out of the loop just like any other abort.
+      if (this.plan.hooks?.length && d.type === 'advance') {
+        await this.runHooksAfter(stage.key)
+        if (this.aborted) break
+      }
       if (this.machine.stages.every((s) => s.status === 'done')) break
     }
 
@@ -897,7 +1092,27 @@ export class RunController {
     // `break`s with `this.aborted` true first on any abort path, before this line). May throw (a
     // merge/discard failure) — that's intentional, see runFinalizeGate's doc.
     if (!this.aborted && this.machine.stages.every((s) => s.status === 'done')) {
-      await this.runFinalizeGate()
+      // ③stage hooks: '__wf' hooks run after every stage is done, BEFORE the run summary + finalize
+      // gate. Blocking (a hook's 终止 sets `aborted`).
+      if (this.plan.hooks?.length) await this.runHooksAfter('__wf')
+      // ①汇总: produce the run summary BEFORE the finalize gate so (a) the gate body can carry it and
+      // (b) it lands on state via emitUpdate() even for a run with NO temp branch (runFinalizeGate
+      // no-ops in that case — see finalizeTargets — but the renderer still gets state.summary and can
+      // append the "本次运行总结" chat card on the terminal 'ok' below). Skipped if a __wf hook aborted.
+      if (!this.aborted) {
+        this.summary = await this.buildRunSummary()
+        this.emitUpdate()
+      }
+      // CRITICAL: both the __wf hooks and buildRunSummary above are `await`s (a real provider.chat can
+      // take seconds), so 终止 can land DURING either. abort()'s settleAll only force-resolves resolvers
+      // that ALREADY exist — the finalize gate's resolver is created inside runFinalizeGate, AFTER that
+      // flush, so opening the gate after an abort would await a resolver nothing will ever settle
+      // (hang). Re-check here: if aborted anywhere above, park like every other abort path.
+      if (this.aborted) {
+        await this.abortCleanup()
+      } else {
+        await this.runFinalizeGate()
+      }
     } else if (this.aborted) {
       // I1: a MID-run abort (loop above `break`s before ever reaching runFinalizeGate) still left
       // whatever project(s) were checked out onto this run's temp branch dirty/mid-run — park them

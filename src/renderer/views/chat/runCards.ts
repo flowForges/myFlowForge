@@ -1,5 +1,5 @@
 import type { RunEvent } from '../../../main/run/events'
-import type { ArtifactRef } from '../../../main/orchestrator/types'
+import type { ArtifactRef } from '../../../main/run/runTypes'
 
 // P3-1: maps a run2 controller's live inbox (unresolved human-intervention events) plus a caller-owned
 // list of already-resolved/frozen decisions into entries the chat timeline (buildTimeline) can merge
@@ -28,7 +28,12 @@ export interface FrozenRunCard {
   // without ever routing through resolveGate/resolveLane (i.e. without a normal freeze). It records
   // that the run ended by user abort instead of letting a pending gate/auth/question/doubt/failure
   // card just vanish from the timeline with no trace.
-  kind: RunEvent['kind'] | 'aborted'
+  //
+  // ①汇总: 'summary' is likewise a synthetic marker kind — never a controller-emitted RunEvent, only
+  // ever CONSTRUCTED directly as a FrozenRunCard (WorkspaceView's appendSummaryCard) the instant a run
+  // reaches terminal 'ok', carrying the run's "本次运行总结" in `body`. Rendered by RunEventCard's
+  // frozen branch as a read-only summary card (no decision line).
+  kind: RunEvent['kind'] | 'aborted' | 'summary'
   stageKey: string
   title: string
   body?: string

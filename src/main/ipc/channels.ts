@@ -37,15 +37,8 @@ export const CH = {
   workspaceRename: 'workspaces:rename',
   workspaceSetup: 'workspace:setup',
   workspaceSetupResolve: 'workspace:setup-resolve',
-  // engineStartRun/engineResume/chatReproposeWorkflow (old orchestrator run start/resume triggers)
-  // removed — run2 (run2LaunchStart below) is the only workflow-run entry point now. engineResolve/
-  // engineCancel/engineDiscard/engineLastRun/engineEvent stay: they're read-only status + cleanup for
-  // any run already in the (in-memory) orchestrator, harmless with no start path left.
-  engineResolve: 'engine:resolve',
-  engineLastRun: 'engine:last-run',
-  engineCancel: 'engine:cancel',
-  engineDiscard: 'engine:discard',
-  engineEvent: 'engine:event',
+  // The legacy orchestrator (and all its engine:* run channels — resolve/cancel/discard/last-run/event)
+  // has been removed entirely. run2 (run2LaunchStart below) is the only workflow-run path now.
   chatSend: 'chat:send',
   chatHistory: 'chat:history',
   chatEvent: 'chat:event',

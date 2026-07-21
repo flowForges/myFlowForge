@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() }, dialog: {}, app: { getVersion: () => '0', getPath: () => '/tmp' }, shell: {} }))
-vi.mock('../orchestrator/orchestrator', () => ({ Orchestrator: class { startRun() {} getRun() { return null } } }))
 vi.mock('../sessionImport/sources/index', () => ({
   scanAll: () => ([{ source: 'claude', externalId: 'a', cwd: '/other', title: 't', startedAt: 1, lastTs: 1, messageCount: 2, filePaths: ['/f'], hasBody: true }]),
   readSession: () => ([{ who: 'user', text: 'hi', ts: '' }]),

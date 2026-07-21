@@ -7,7 +7,7 @@ import type { Workspace } from '../config/schema'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { buildAgentEnv } from '../agents/env'
 import { startBridge, type BridgeRunCtx } from '../mcp/forgeBridge'
-import { STAGE_FORGE_TOOLS } from '../orchestrator/orchestrator'
+import { STAGE_FORGE_TOOLS } from '../run/runTypes'
 import { startDelegateBatch, updateDelegateSession, updateDelegateState, addDelegateAgent } from './delegateRegistry'
 
 // Lightweight delegation (path A of the dual-path design): the main chat agent dispatches sub-agents

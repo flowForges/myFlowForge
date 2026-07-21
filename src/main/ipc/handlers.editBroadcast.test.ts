@@ -1,42 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { EventBus } from '../orchestrator/eventBus'
 import { CH } from './channels'
 
 // Focused test: CH.workspaceEdit handler must broadcast workspacesChanged on success.
-
-const { subscribers } = vi.hoisted(() => ({
-  subscribers: [] as Array<(e: any) => void>,
-}))
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const editWorkspaceMock = vi.fn(async (_a: any) => ({ workspace: { name: 'edited' } } as any))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() }, dialog: {} }))
-vi.mock('../orchestrator/orchestrator', () => ({
-  Orchestrator: class {
-    startRun() {}
-    resolve() {}
-    getRun() { return null }
-  }
-}))
-vi.mock('../orchestrator/eventBus', () => ({
-  EventBus: class {
-    subscribe(fn: (e: any) => void) { subscribers.push(fn); return () => {} }
-    emit(e: any) { subscribers.forEach(fn => fn(e)) }
-  }
-}))
-vi.mock('../orchestrator/runStore', () => ({
-  readLastRun: vi.fn(),
+vi.mock('../run/runStore', () => ({
   RunStore: class { get runDir() { return '/tmp' } getContext() { return null } setContext() {} appendMessage() {} writeArtifact() { return { path: '/tmp/a', kind: 'file' } } saveState() {} }
 }))
 vi.mock('../mcp/forgeBridge', () => ({ startBridge: vi.fn(() => Promise.resolve({ socketPath: '/tmp/forge.sock', close: () => Promise.resolve() })) }))
-vi.mock('../chat/proposeRun', () => {
-  const fn: any = vi.fn(() => Promise.resolve({ approved: true }))
-  fn.has = vi.fn(() => false)
-  fn.resolve = vi.fn()
-  return { makeProposeRun: vi.fn(() => fn) }
-})
-vi.mock('../narrator/narratorService', () => ({ NarratorService: class { onEngineEvent() {} } }))
 vi.mock('../workspace/workspaceList', () => ({ listWorkspaces: vi.fn(() => []) }))
 vi.mock('../workspace/workspaceRun', () => ({ workspaceToStartRunOpts: vi.fn() }))
 vi.mock('../chat/chatService', () => ({ sendTurn: vi.fn(), history: vi.fn(() => []) }))
@@ -91,7 +65,6 @@ beforeEach(() => {
   vi.resetModules()
   editWorkspaceMock.mockReset()
   editWorkspaceMock.mockResolvedValue({ workspace: { name: 'edited' } })
-  subscribers.length = 0
 })
 
 describe('CH.workspaceEdit broadcast', () => {

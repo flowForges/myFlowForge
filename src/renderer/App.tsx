@@ -153,6 +153,28 @@ export function App() {
     })
     return () => { off() }
   }, [])
+  // User feedback (2026-07-20): a RUNNING workflow's session dot didn't light. `engine.run.sessionId`
+  // below only covers the LEGACY orchestrator run — now unreachable (run2 is the sole workflow path),
+  // so a run2 run's owning session never lit. Track each workspace's live run2 run's owning session
+  // (workspacePath → sessionId) from the run2:update broadcast; a non-terminal run (running/awaiting)
+  // lights it, terminal (ok/failed) clears it. Folded into `runningSessionIds` below.
+  const [run2SessByWs, setRun2SessByWs] = useState<Map<string, string>>(new Map())
+  useEffect(() => {
+    const off = (window as any).forge?.run2?.onUpdate?.((p: { workspacePath: string; state: { sessionId?: string; status?: string } | null }) => {
+      const st = p.state
+      const sid = st?.sessionId
+      const active = !!st && st.status !== 'ok' && st.status !== 'failed'
+      setRun2SessByWs(prev => {
+        const cur = prev.get(p.workspacePath)
+        const next = active && sid ? sid : undefined
+        if (cur === next) return prev
+        const n = new Map(prev)
+        if (next) n.set(p.workspacePath, next); else n.delete(p.workspacePath)
+        return n
+      })
+    })
+    return () => { off?.() }
+  }, [])
   // Relative "last activity" labels (刚刚 / N 分钟前 / N 小时前) are computed against `now`. Without a
   // periodic tick that `now` is frozen at the last render, so a 刚刚 never ages to 2 小时前 on its own.
   // Re-stamp every minute (matches the label's minute granularity) to keep them current.
@@ -233,8 +255,9 @@ export function App() {
   const runningSessionIds = useMemo(() => {
     const s = new Set(runningSessByWs.values())
     if (engine.run?.status === 'run' && engine.run.sessionId) s.add(engine.run.sessionId)
+    for (const sid of run2SessByWs.values()) s.add(sid) // live run2 workflow's owning session (see above)
     return s
-  }, [runningSessByWs, engine.run?.status, engine.run?.sessionId])
+  }, [runningSessByWs, engine.run?.status, engine.run?.sessionId, run2SessByWs])
   const onToggleExpand = (id: string) => setExpandedWs(s => { const n = toggleExpanded(s, id); saveExpanded([...n]); return n })
 
   // Tell the pet which workspace the main window is "in" (null on home) so its command input can target it
@@ -337,46 +360,9 @@ export function App() {
     return () => { off() }
   }, [])
 
-  useEffect(() => {
-    const off = window.forge.onEngineEvent((e: EngineEvent) => {
-      if (e.type === 'agent:stalled') {
-        setNotifs(ns => [notifFromLifecycle({ kind: 'stalled', agentName: e.agentName, wsName: e.wsName, silentMs: e.silentMs }), ...ns])
-        return
-      }
-
-      if (e.type === 'pending:add') {
-        setNotifs(ns => [notifFromLifecycle({ kind: 'awaiting', agentName: e.action.agentName, wsName: e.action.wsName }), ...ns])
-        return
-      }
-
-      if (e.type !== 'run:update') return
-      const run = e.run
-      // Whole-workflow completion → one aggregate notif (replaces the old per-agent "已完成" spam).
-      // Seed on first sighting so a run already finished when observed on mount/reload can't fire a
-      // stale toast — we only notify on a witnessed non-ok → ok transition.
-      const runSeen = notifRunPrev.current.has(run.id)
-      const runPrev = notifRunPrev.current.get(run.id)
-      notifRunPrev.current.set(run.id, run.status)
-      if (runSeen && runPrev !== 'ok' && run.status === 'ok') {
-        setNotifs(ns => [notifFromLifecycle({ kind: 'run-done', agentName: run.workspaceName, wsName: run.workspaceName, wsPath: run.workspacePath }), ...ns])
-      }
-      // Per-agent: surface failures only (完成 is covered by the aggregate above). Same seed guard.
-      for (const stage of run.stages) {
-        for (const agent of stage.agents) {
-          const seen = notifAgentPrev.current.has(agent.id)
-          const was = notifAgentPrev.current.get(agent.id)
-          notifAgentPrev.current.set(agent.id, agent.state)
-          if (seen && was !== agent.state && agent.state === 'err') {
-            setNotifs(ns => [
-              notifFromLifecycle({ kind: 'failed', agentName: agent.name, wsName: run.workspaceName, wsPath: run.workspacePath }),
-              ...ns,
-            ])
-          }
-        }
-      }
-    })
-    return () => { off() }
-  }, [])
+  // The legacy orchestrator engine-event stream (agent:stalled / pending:add / run:update failure
+  // notifications) is gone with the orchestrator; run2 surfaces its own run cards/notifications. No
+  // engine-bus subscription remains here.
 
   // Main-process event-loop stalls (perf monitor) surface as a bell notification.
   useEffect(() => {

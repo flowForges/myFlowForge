@@ -183,6 +183,21 @@ describe('RunEventCard', () => {
     expect(container.querySelectorAll('button')).toHaveLength(0)
   })
 
+  it('①汇总: frozen summary card labels 本次运行总结, renders body as markdown, NO 决定 line / buttons', () => {
+    const frozen: FrozenRunCard = {
+      id: 'summary-r1', kind: 'summary', stageKey: '__summary__', title: '',
+      body: '## 本次改动\n- 项目A 改了 x', decision: '', at: 1720000000000, ts: 1,
+    }
+    const { container } = render(<RunEventCard frozen={frozen} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.getByText('本次运行总结')).toBeInTheDocument()
+    // body rendered as markdown (heading text present, not the raw "##")
+    expect(screen.getByText('本次改动')).toBeInTheDocument()
+    // a summary card records nothing the user decided
+    expect(screen.queryByText(/决定：/)).toBeNull()
+    expect(container.querySelectorAll('button')).toHaveLength(0)
+    expect(container.querySelector('.msg-req')?.classList.contains('k-summary')).toBe(true)
+  })
+
   it('frozen: renders decision record with NO buttons', () => {
     const frozen: FrozenRunCard = {
       id: 'g1', kind: 'gate', stageKey: 'design', title: '技术方案设计完成',

@@ -1,9 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, fireEvent, waitFor, act } from '@testing-library/react'
 import { PetApp } from './PetApp'
-import type { EngineEvent } from '@shared/types'
 
-let listeners: ((e: EngineEvent) => void)[]
 let queueListeners: ((e: any) => void)[]
 let settingsCb: ((s: unknown) => void) | null
 let petSetExpanded: ReturnType<typeof vi.fn>
@@ -11,7 +9,6 @@ let petSetIgnoreMouse: ReturnType<typeof vi.fn>
 let petSetPosition: ReturnType<typeof vi.fn>
 let petSetScale: ReturnType<typeof vi.fn>
 let petResizeBegin: ReturnType<typeof vi.fn>
-const emit = (e: EngineEvent) => listeners.forEach(l => l(e))
 // These tests exercise the FULL-mode popup (workspace list, command queue, session picker), so pin the
 // pet to 'full'. Simple mode has its own tests (PetSimplePanel / deriveSimpleKind).
 const SETTINGS = (over: any = {}) => ({ pet: { skin: 'bot', corner: 'right', enabled: true, interactionMode: 'full', pos: { bottom: 24 }, notify: { confirm: true, input: true, done: false }, states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' }, ...over } } })
@@ -19,10 +16,9 @@ const SETTINGS = (over: any = {}) => ({ pet: { skin: 'bot', corner: 'right', ena
 const SETTINGS_SIMPLE = () => { const s = SETTINGS(); s.pet.interactionMode = 'simple'; return s }
 
 beforeEach(() => {
-  listeners = []; queueListeners = []; settingsCb = null
+  queueListeners = []; settingsCb = null
   petSetExpanded = vi.fn(); petSetIgnoreMouse = vi.fn(); petSetPosition = vi.fn(); petSetScale = vi.fn(async () => 'up'); petResizeBegin = vi.fn(async () => {})
   ;(window as any).forge = {
-    onEngineEvent: (cb: any) => { listeners.push(cb); return () => {} },
     onChatEvent: vi.fn(() => () => {}),
     onChatQueueEvent: (cb: any) => { queueListeners.push(cb); return () => {} },
     sendChat: vi.fn(async () => {}),
@@ -71,22 +67,9 @@ describe('PetApp P3-4', () => {
     await waitFor(() => expect(container.querySelector('.pet.pet-anim-float.pet-accent-none')).not.toBeNull())
   })
 
-  it('switches to the working anim when a run starts', async () => {
-    const { container } = render(<PetApp />)
-    act(() => emit({ type: 'run:update', run: { id: 'r', workspaceName: 'w', workspacePath: '/w', status: 'run', projects: [], stages: [], pending: [] } }))
-    await waitFor(() => expect(container.querySelector('.pet-anim-spin-halo')).not.toBeNull())
-  })
-
-  it('reverts done → idle after the timeout', () => {
-    vi.useFakeTimers()
-    try {
-      const { container } = render(<PetApp />)
-      act(() => emit({ type: 'run:update', run: { id: 'r', workspaceName: 'w', workspacePath: '/w', status: 'ok', projects: [], stages: [], pending: [] } }))
-      expect(container.querySelector('.pet-anim-pulse-ok')).not.toBeNull()
-      act(() => { vi.advanceTimersByTime(4000) })
-      expect(container.querySelector('.pet-anim-float')).not.toBeNull()
-    } finally { vi.useRealTimers() }
-  })
+  // The run-driven pet animation tests (working anim on run:update run, done→idle revert) were removed
+  // with the legacy orchestrator engine bus — the pet no longer receives engine run events. Pet state
+  // now derives from chat activity (covered by derivePetState/derivePetAction/useChatActivity tests).
 
   it('toggles ignore-mouse on hover of the interactive stage', async () => {
     const { container } = render(<PetApp />)
@@ -114,33 +97,9 @@ describe('PetApp P3-4', () => {
     await waitFor(() => expect(container.querySelector('.pet')!.getAttribute('data-skin')).toBe('ghost'))
   })
 
-  it('shows the queue for the current workspace and wires send (provider from the live run)', async () => {
-    const sendChat = (window as any).forge.sendChat as ReturnType<typeof vi.fn>
-    const cancel = (window as any).forge.chatCancelQueued as ReturnType<typeof vi.fn>
-    const { container, getByText } = render(<PetApp />)
-    // a live run on /w whose first agent provider is 'codex'
-    act(() => emit({ type: 'run:update', run: { id: 'r', workspaceName: 'w', workspacePath: '/w', status: 'run', projects: [], stages: [{ key: 'dev', name: 'Dev', state: 'run', agents: [{ id: 'a', name: 'Codex', role: 'dev', provider: 'codex', model: 'm', state: 'run', logs: [] }] }], pending: [] } } as any))
-    // queue events for /w (current) and /other (ignored)
-    act(() => queueListeners.forEach(l => l({ workspacePath: '/other', busy: false, queue: [{ id: 'z', text: 'nope', source: '你' }] })))
-    act(() => queueListeners.forEach(l => l({ workspacePath: '/w', busy: true, queue: [{ id: 'q1', text: '做X', source: '宠物' }] })))
-    // open the popup
-    const hit = container.querySelector('.pet-hit') as HTMLElement
-    await act(async () => { fireEvent.click(hit) })
-    await waitFor(() => expect(getByText('指令队列 · 1 · 排队中')).toBeInTheDocument())
-    expect(container.querySelector('.pp-q .qt')!.textContent).toBe('做X')
-    // send a command → uses run's provider + model (codex → Codex, model 'm' from the live agent)
-    const input = container.querySelector('.pp-send input') as HTMLInputElement
-    fireEvent.change(input, { target: { value: '开工' } })
-    fireEvent.click(getByText('发送'))
-    await waitFor(() => expect(sendChat).toHaveBeenCalled())
-    expect(sendChat).toHaveBeenCalledWith(
-      { workspacePath: '/w', sessionId: 's-1', agent: 'codex', agentLabel: 'Codex', model: 'm', text: '开工', attachments: [] },
-      '宠物'
-    )
-    // cancel
-    fireEvent.click(container.querySelector('.pp-q .qx')!)
-    expect(cancel).toHaveBeenCalledWith({ workspacePath: '/w', id: 'q1' })
-  })
+  // "provider from the live run" queue-send test removed with the legacy engine bus (the pet no longer
+  // gets a live run to read a provider off). Queue send/cancel/stop targeting is covered by the
+  // cross-workspace tests below, which resolve provider from workspace config, not an engine run.
 
   it('idle: targets the main-window active workspace, resolving provider/model from its config', async () => {
     let activeCb: (p: string | null) => void = () => {}
@@ -157,19 +116,6 @@ describe('PetApp P3-4', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     await waitFor(() => expect(sendChat).toHaveBeenCalled())
     expect(sendChat.mock.calls[0][0]).toMatchObject({ workspacePath: '/ws/idle', agent: 'codex', model: 'gpt-5' })
-  })
-
-  it('simple mode: clicking the pet body while an agent runs focuses the workspace (not collapse)', async () => {
-    ;(window as any).forge.getSettings = async () => SETTINGS_SIMPLE()
-    const petFocusWorkspace = (window as any).forge.petFocusWorkspace as ReturnType<typeof vi.fn>
-    const { container } = render(<PetApp />)
-    await waitFor(() => expect(container.querySelector('.pet')).not.toBeNull())
-    // an agent starts running → the simple status panel shows "执行中"
-    act(() => emit({ type: 'run:update', run: { id: 'r', workspaceName: 'w', workspacePath: '/w', status: 'run', projects: [], stages: [], pending: [] } }))
-    await waitFor(() => expect(container.querySelector('.pet-simple')).not.toBeNull())
-    // clicking the pet body jumps to the running workspace instead of toggling the panel
-    await act(async () => { fireEvent.click(container.querySelector('.pet-hit') as HTMLElement) })
-    expect(petFocusWorkspace).toHaveBeenCalledWith('/w')
   })
 
   it('home: enables input after click-selecting a workspace row (no main active workspace)', async () => {

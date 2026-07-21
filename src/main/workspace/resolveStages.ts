@@ -1,9 +1,12 @@
 import type { Workspace, WsWorkflow, WsStage, Workflow, ReviewConfig } from '../config/schema'
 import { workflowDisplayName } from '../config/schema'
+import { REVIEW_LENSES } from '../../shared/types'
 import { resolveStages as resolveLibRefs, type StageDefById } from '../../shared/customStages'
 
-// Default CR mode when a review stage carries no explicit review config (user-confirmed default).
-const DEFAULT_REVIEW_CONFIG: ReviewConfig = { mode: 'parallel', scope: 'per-project' }
+// Default CR config when a review stage carries none: ②多镜头CR = 并行多视角, all four lenses
+// (正确性/安全/性能/规范). User-confirmed default. Both run2 (reviewFanout.ts) and the legacy
+// orchestrator (buildReviewTasks) fan a lens-array config into one reviewer per视角.
+const DEFAULT_REVIEW_CONFIG: ReviewConfig = { mode: 'parallel', reviewers: [...REVIEW_LENSES] }
 
 // Fill the review stage's default CR config when absent; leave every other stage and any explicit
 // review config untouched. Returns a new array (does not mutate the input stages).

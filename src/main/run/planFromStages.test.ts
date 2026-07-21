@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { planFromStages } from './planFromStages'
-import type { StageSpec } from '../orchestrator/orchestrator'
+import type { StageSpec } from '../run/runTypes'
 
 const stages: StageSpec[] = [
   { key: 'requirement', name: '需求', provider: 'claude', model: 'm' },
@@ -22,6 +22,28 @@ describe('planFromStages', () => {
     expect(plan.stages[2]).toMatchObject({ scope: 'per-project', provider: 'codex', model: 'g' })
     // review: explicit scope root, gate false
     expect(plan.stages[3]).toMatchObject({ scope: 'root', gate: false })
+  })
+
+  it('design gates by DEFAULT when no explicit gate is set; a non-design stage does not (方案门 fix)', () => {
+    const plan = planFromStages('run-g', [
+      { key: 'design', name: '方案', provider: 'claude', model: 'm' },      // no explicit gate
+      { key: 'requirement', name: '需求', provider: 'claude', model: 'm' }, // no explicit gate
+    ])
+    expect(plan.stages[0]).toMatchObject({ key: 'design', gate: true })   // default-gated
+    expect(plan.stages[1]).toMatchObject({ key: 'requirement', gate: false })
+  })
+
+  it('an explicit gate:false on design still wins over the default', () => {
+    const plan = planFromStages('run-g2', [{ key: 'design', name: '方案', provider: 'claude', model: 'm', gate: false }])
+    expect(plan.stages[0].gate).toBe(false)
+  })
+
+  it('③hooks: attaches hooks when passed, omits the field entirely when none', () => {
+    const noHooks = planFromStages('run-h0', [{ key: 'design', name: '方案', provider: 'claude', model: 'm' }])
+    expect('hooks' in noHooks).toBe(false)
+    const withHooks = planFromStages('run-h1', [{ key: 'design', name: '方案', provider: 'claude', model: 'm' }],
+      [{ id: 'a', name: 'H', prompt: 'x', after: '__start', skills: [], tools: [] }])
+    expect(withHooks.hooks?.map(h => h.id)).toEqual(['a'])
   })
 
   it('resolves a built-in stage prompt from STAGE_PROMPTS when no custom prompt is set', () => {

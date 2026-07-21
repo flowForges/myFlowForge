@@ -3,8 +3,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { RunStore } from '../orchestrator/runStore'
+import { RunStore } from '../run/runStore'
 import { RunController, type RunControllerState, type RunLogLine } from './controller'
+import { loadControllerState } from './persist'
 import type { RunPlan, MachineState } from './machine'
 import type { RunEvent } from './events'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
@@ -896,6 +897,155 @@ describe('RunController', () => {
     })
   })
 
+  describe('②多镜头CR: a lens-mode review stage fans out per-lens reviewers + consolidates', () => {
+    const reviewPlan: RunPlan = {
+      runId: 'r1', stages: [
+        { key: 'review', name: '代码 CR', provider: 'x', model: 'm', scope: 'root', gate: true, review: { mode: 'parallel', reviewers: ['correctness', 'security'] } },
+      ],
+    }
+    it('runs one reviewer per lens; the gate body is the consolidated 多视角 report; artifacts do not collide', async () => {
+      const store = new RunStore(ws, 'r1')
+      const c = new RunController(reviewPlan, { providers: { x: okProvider() }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      const gateBodies: string[] = []
+      c.onEvent((e) => { if (e.kind === 'gate') { if (!(e as any).finalize) gateBodies.push((e as any).body); c.resolveGate(e.id, { type: 'advance' }) } })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      // one lane per lens, ids encode the lens
+      const outcomes = final.outcomes['review'] ?? []
+      expect(outcomes.map((o) => o.order.id).sort()).toEqual(['review:workspace:correctness', 'review:workspace:security'])
+      expect(outcomes.map((o) => o.order.lens).sort()).toEqual(['correctness', 'security'])
+      // gate body = consolidated report grouped by lens verdict
+      expect(gateBodies).toHaveLength(1)
+      expect(gateBodies[0]).toContain('代码 CR汇总 · 2 个视角')
+      expect(gateBodies[0]).toContain('### 正确性')
+      expect(gateBodies[0]).toContain('### 安全')
+      // artifacts keyed by lens, no collision (both preserved)
+      const refs = store.getContext('artifacts:review') as Array<{ path: string }>
+      expect(refs.map((r) => r.path.split('/').pop()).sort()).toEqual(['review-correctness.md', 'review-security.md'])
+    })
+    it('each reviewer prompt carries only its own lens directive', async () => {
+      const store = new RunStore(ws, 'r1')
+      const prompts: Record<string, string> = {}
+      const capture: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task: AgentTask, cb: AgentCallbacks) {
+          prompts[task.agentId] = task.prompt
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const c = new RunController(reviewPlan, { providers: { x: capture }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
+      await c.start()
+      expect(prompts['review:workspace:correctness']).toContain('只聚焦「正确性」')
+      expect(prompts['review:workspace:correctness']).not.toContain('只聚焦「安全」')
+      expect(prompts['review:workspace:security']).toContain('只聚焦「安全」')
+    })
+  })
+
+  describe('③stage hooks — woven micro-agents, blocking on failure', () => {
+    const H = (id: string, after: string): any => ({ id, name: `H-${id}`, prompt: 'do', after, skills: [], tools: ['read'] })
+    // Records the order provider.run was invoked in (stage lanes AND hooks both go through run()).
+    function orderProvider(order: string[], failFirst = new Set<string>()): AgentProvider {
+      const seen = new Set<string>()
+      return {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task: AgentTask, cb: AgentCallbacks) {
+          order.push(task.agentId)
+          const fail = failFirst.has(task.agentId) && !seen.has(task.agentId)
+          seen.add(task.agentId)
+          const done = (async () => {
+            cb.onLog({ ts: '', text: `did ${task.agentId}`, kind: 'output' } as any)
+            if (fail) cb.onState('err')
+            cb.onHandoff?.({ summary: `out ${task.agentId}` })
+            const r = { ok: !fail, summary: '' }; cb.onDone(r); return r
+          })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+    }
+    const planWith = (hooks: any[]): RunPlan => ({ runId: 'r1', stages: [{ key: 'design', name: '方案', provider: 'x', model: 'm', scope: 'root', gate: false }], hooks })
+
+    it('__start hooks run before the first stage; after-stage + __wf hooks at their points; outcomes recorded', async () => {
+      const store = new RunStore(ws, 'r1')
+      const order: string[] = []
+      const c = new RunController(planWith([H('s', '__start'), H('d', 'design'), H('w', '__wf')]),
+        { providers: { x: orderProvider(order) }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(order).toEqual(['hook:s', 'design:root', 'hook:d', 'hook:w'])
+      expect(final.outcomes['hook:s']?.[0]?.status).toBe('ok')
+      expect(final.outcomes['hook:w']?.[0]?.status).toBe('ok')
+    })
+
+    it('a hook-less run inserts no hook lanes (unchanged)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const order: string[] = []
+      const c = new RunController(planWith([]),
+        { providers: { x: orderProvider(order) }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      await c.start()
+      expect(order).toEqual(['design:root'])
+    })
+
+    it('a failing hook BLOCKS on a failure card; 重跑 re-runs it to success', async () => {
+      const store = new RunStore(ws, 'r1')
+      const order: string[] = []
+      const c = new RunController(planWith([H('f', '__start')]),
+        { providers: { x: orderProvider(order, new Set(['hook:f'])) }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      c.onEvent((e) => { if (e.kind === 'failure' && e.laneId === 'hook:f') c.resolveLane(e.id, { type: 'retry' }) })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(order.filter((o) => o === 'hook:f')).toHaveLength(2) // failed once, retried once
+      expect(final.outcomes['hook:f']?.[0]?.status).toBe('ok')
+    })
+
+    it('a failing hook: 跳过 leaves it failed but the run completes', async () => {
+      const store = new RunStore(ws, 'r1')
+      const order: string[] = []
+      const c = new RunController(planWith([H('f', '__start')]),
+        { providers: { x: orderProvider(order, new Set(['hook:f'])) }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      c.onEvent((e) => { if (e.kind === 'failure') c.resolveLane(e.id, { type: 'skipLane' }) })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(final.outcomes['hook:f']?.[0]?.status).toBe('failed')
+      expect(order).toContain('design:root') // run still proceeded to the stage
+    })
+
+    it('resume: a hook with a restored outcome is NOT re-executed (idempotency — review Finding 1)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const order: string[] = []
+      const plan = planWith([H('s', '__start')])
+      // Simulate a disk-resume where the __start hook already ran in the prior process (its outcome
+      // was restored via rehydrate). It must be skipped, not fired again.
+      const rehydrate = {
+        machine: { plan, stages: [{ key: 'design', status: 'pending' as const, round: 0 }], currentIndex: 0 },
+        outcomes: { 'hook:s': [{ id: 'hook:s', status: 'ok' as const, attempts: 1 }] },
+      }
+      const c = new RunController(plan, { providers: { x: orderProvider(order) }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() }, rehydrate)
+      await c.start()
+      expect(order).not.toContain('hook:s') // skipped (already ran before the restart)
+      expect(order).toContain('design:root') // the not-yet-done stage still runs
+    })
+
+    it('a failing hook: 终止 stops the whole run (status failed, no finalize gate)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const order: string[] = []
+      const c = new RunController(planWith([H('f', '__start')]),
+        { providers: { x: orderProvider(order, new Set(['hook:f'])) }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(), projectTargets: { a: 'main', b: 'main' }, parkTempBranch: async () => {} })
+      const events: RunEvent[] = []
+      c.onEvent((e) => { events.push(e); if (e.kind === 'failure') c.resolveLane(e.id, { type: 'abort' }) })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock')), 2000)),
+      ])
+      expect(final.status).toBe('failed')
+      expect(order).not.toContain('design:root') // aborted before the first stage ever started
+      expect(events.some((e) => e.kind === 'gate' && (e as any).finalize)).toBe(false)
+    })
+  })
+
   describe('P4-3: finalize gate (收尾确认) — merges or discards the run temp branch', () => {
     it('no projectTargets configured: run completes exactly as before, no finalize gate appears', async () => {
       const store = new RunStore(ws, 'r1')
@@ -924,11 +1074,87 @@ describe('RunController', () => {
       expect(final.status).toBe('ok')
       const finalizeEvents = events.filter((e) => e.kind === 'gate' && (e as any).finalize)
       expect(finalizeEvents).toHaveLength(1)
-      expect(finalizeEvents[0]).toMatchObject({ body: '全部完成，合并到目标分支？' })
+      // ①汇总: the finalize gate body now carries the run summary (okProvider has no .chat →
+      // runRunSummary falls back to the deterministic digest of each lane's reported outcome).
+      expect((finalizeEvents[0] as any).body).toContain('本次运行总结')
+      expect((finalizeEvents[0] as any).body).toContain('out develop:a')
       expect(mergeCalls).toEqual([
         { cwd: '/ws/a', target: 'main', runId: 'r1' },
         { cwd: '/ws/b', target: 'develop-branch', runId: 'r1' },
       ])
+    })
+
+    it('①汇总: injected summarize narrative becomes state.summary AND the finalize gate body; is persisted', async () => {
+      const store = new RunStore(ws, 'r1')
+      let seenDigest = ''
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async () => {},
+        summarize: async ({ digest }) => { seenDigest = digest; return '一句话总结：完成了 A 和 B' },
+      })
+      const events: RunEvent[] = []
+      c.onEvent((e) => { events.push(e); if (e.kind === 'gate') c.resolveGate(e.id, (e as any).finalize ? { type: 'merge' } : { type: 'advance' }) })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(final.summary).toBe('一句话总结：完成了 A 和 B')
+      // summarize received the deterministic digest of each lane's reported outcome as its input
+      expect(seenDigest).toContain('out develop:a')
+      const fin = events.find((e) => e.kind === 'gate' && (e as any).finalize) as any
+      expect(fin.body).toContain('一句话总结：完成了 A 和 B')
+      // durable: persisted onto SavedControllerState so a reload/history sees it
+      expect(loadControllerState(store)?.summary).toBe('一句话总结：完成了 A 和 B')
+    })
+
+    it('①汇总: a run with no temp branch (no finalize gate) still produces state.summary', async () => {
+      const store = new RunStore(ws, 'r1')
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        summarize: async () => 'S',
+      })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(final.summary).toBe('S')
+      expect(final.inbox.some((e) => (e as any).finalize)).toBe(false) // no finalize gate without targets
+    })
+
+    it('①汇总: summarize throwing falls back to the deterministic digest', async () => {
+      const store = new RunStore(ws, 'r1')
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        summarize: async () => { throw new Error('boom') },
+      })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      expect(final.summary).toContain('out develop:a') // digest fallback
+    })
+
+    it('①汇总: 终止 DURING summarization parks (never opens a finalize gate whose resolver would hang)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const mergeCalls: string[] = []
+      const parkCalls: string[] = []
+      let c: RunController
+      c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd) => { mergeCalls.push(cwd) },
+        discardTempBranch: async () => {},
+        parkTempBranch: async (cwd) => { parkCalls.push(cwd) },
+        // Simulate the user hitting 终止 while the (real, seconds-long) summarizer is running.
+        summarize: async () => { c.abort(); return 'S' },
+      })
+      const events: RunEvent[] = []
+      c.onEvent((e) => { events.push(e); if (e.kind === 'gate' && !(e as any).finalize) c.resolveGate(e.id, { type: 'advance' }) })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock: finalize gate opened after abort-during-summary')), 2000)),
+      ])
+      expect(final.status).toBe('failed')
+      expect(events.some((e) => e.kind === 'gate' && (e as any).finalize)).toBe(false) // gate never opened
+      expect(mergeCalls).toEqual([])
+      expect(parkCalls).toEqual(['/ws/a', '/ws/b']) // parked — work preserved, target left clean
     })
 
     it('丢弃本次 calls discardTempBranch for every participating project instead of merging', async () => {

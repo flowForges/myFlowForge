@@ -54,7 +54,13 @@ const LENS_LABELS: Record<ReviewLens, string> = {
   performance: '性能',
   style: '风格',
 }
-const DEFAULT_LENSES: ReviewLens[] = ['correctness', 'security']
+// ②多镜头CR: default to all four lenses (matches resolveStages.ts's DEFAULT_REVIEW_CONFIG +
+// StageConfigEditor + wizardModel), so "并行·按视角" and a fresh review stage start with every视角 on.
+const DEFAULT_LENSES: ReviewLens[] = ['correctness', 'security', 'performance', 'style']
+// The review config a FRESH (untouched) review stage shows as selected — 并行·按视角, all lenses — so
+// the wizard's default matches the backend default rather than the per-project DEFAULT_REVIEW (which
+// stays the value written only when the user explicitly picks the "并行·按项目" card).
+const DEFAULT_REVIEW_FRESH: ReviewConfig = { mode: 'parallel', scope: 'workspace', reviewers: DEFAULT_LENSES }
 
 // --- Plugin (hook) editing: two scopes inside the wizard ---
 // wf scope: after = stage key or '__start' (flow strip in section 3).
@@ -831,8 +837,13 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
               {stageOrderFrom(active).filter(k => active.stages[k]?.on).map(k => {
                 const ss = active.stages[k]
                 const on = ss.on
-                const review = ss.review ?? DEFAULT_REVIEW
-                const reviewMode = review.mode === 'single' ? 'single' : (review.scope === 'workspace' && Array.isArray(review.reviewers) ? 'lens' : 'per-project')
+                const review = ss.review ?? DEFAULT_REVIEW_FRESH
+                // ②多镜头CR: detect lens mode by a non-empty reviewers[] ALONE — do NOT also require
+                // scope==='workspace'. Every writer of a lens config (resolveStages default,
+                // wizardModel, StageConfigEditor, reviewLenses in the engine) omits scope, so keying on
+                // it would mislabel a real lens config as 'per-project' here and let the user silently
+                // downgrade it. Matches the engine's reviewLenses() and StageConfigEditor's own check.
+                const reviewMode = review.mode === 'single' ? 'single' : (Array.isArray(review.reviewers) && review.reviewers.length > 0 ? 'lens' : 'per-project')
                 const num = on ? stageOrderFrom(active).filter(x => active.stages[x]?.on).indexOf(k) + 1 : '·'
                 const devOn = k === DEV_KEY && on
                 const reviewOn = k === REVIEW_KEY && on

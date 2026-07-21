@@ -1,6 +1,6 @@
 {
   "name": "myflowforge",
-  "version": "1.0.34",
+  "version": "1.1.0-beta.1",
   "description": "A desktop cockpit that orchestrates Claude Code, Codex, Cursor, Gemini and qoder into one governed, multi-stage AI coding workflow.",
   "main": "out/main/index.js",
   "scripts": {

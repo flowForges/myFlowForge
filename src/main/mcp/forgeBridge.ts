@@ -2,9 +2,9 @@ import * as net from 'node:net'
 import { rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import type { RunStore } from '../orchestrator/runStore'
-import type { AgentMessage } from '../orchestrator/types'
-import { pickDocArtifact } from '../orchestrator/gateBody'
+import type { RunStore } from '../run/runStore'
+import type { AgentMessage } from '../run/runTypes'
+import { pickDocArtifact } from '../run/docArtifact'
 
 // ─── Public types ────────────────────────────────────────────────────────────
 

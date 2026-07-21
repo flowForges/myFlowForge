@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import * as net from 'node:net'
-import { RunStore } from '../orchestrator/runStore'
+import { RunStore } from '../run/runStore'
 import type { BridgeRunCtx, ForgeBridge } from './forgeBridge'
 import { startBridge } from './forgeBridge'
 

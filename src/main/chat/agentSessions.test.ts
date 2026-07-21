@@ -15,7 +15,7 @@ it('chat session → one row per agent with provider label', async () => {
 })
 
 it('workflow session → rows from run agents that captured a session id', async () => {
-  const { RunStore } = await import('../orchestrator/runStore')
+  const { RunStore } = await import('../run/runStore')
   const { composeAgentSessions } = await import('./agentSessions')
   const ws = join(home, 'ws')
   const store = new RunStore(ws, 'run1')
@@ -30,7 +30,7 @@ it('workflow session → rows from run agents that captured a session id', async
 })
 
 it('union: a session with BOTH a workflow run and chat mains lists all agents (either mode)', async () => {
-  const { RunStore } = await import('../orchestrator/runStore')
+  const { RunStore } = await import('../run/runStore')
   const { writeSession } = await import('./chatStore')
   const { composeAgentSessions } = await import('./agentSessions')
   const ws = join(home, 'ws')
@@ -54,7 +54,7 @@ it('union: a session with BOTH a workflow run and chat mains lists all agents (e
 // doc), so the fixture session below deliberately omits `runId` and relies on matching
 // state.sessionId instead — that IS the bug this fix closes.
 it('run2 session → a captured lane shows its session id, an uncaptured running lane gets a placeholder row', async () => {
-  const { RunStore } = await import('../orchestrator/runStore')
+  const { RunStore } = await import('../run/runStore')
   const { saveControllerState } = await import('./../run/persist')
   const { composeAgentSessions } = await import('./agentSessions')
   const ws = join(home, 'ws')

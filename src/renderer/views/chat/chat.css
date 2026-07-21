@@ -288,6 +288,25 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   color: var(--fg-2); font-size: 12.5px; animation: tqIn .18s ease;
 }
 .supplement-banner span { flex: 1; min-width: 0; }
+/* User feedback (2026-07-21): Context bar like Claude Code's statusline — real reported tokens ÷ real
+   model window (see WorkspaceView latestUsage). Label + bar + %, right-aligned above the composer. */
+.ctx-real {
+  display: flex; align-items: center; gap: 7px; cursor: help;
+  width: 100%; max-width: clamp(720px, 90%, 1180px); margin: 0 auto 4px; padding: 0 4px;
+  justify-content: flex-end; font-family: var(--mono); font-size: 11px; color: var(--faint);
+}
+.ctx-real .ctx-label { flex: 0 0 auto; }
+.ctx-real .ctx-bar {
+  flex: 0 0 auto; width: 96px; height: 6px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--border); overflow: hidden;
+}
+.ctx-real .ctx-bar i { display: block; height: 100%; background: var(--ok); transition: width .3s ease; }
+.ctx-real .ctx-pct { flex: 0 0 auto; min-width: 30px; text-align: right; color: var(--muted); }
+/* warm/hot as context fills — mirrors the statusline turning the bar orange/red near the window cap */
+.ctx-real.warn .ctx-bar i { background: var(--warn); }
+.ctx-real.warn .ctx-pct { color: var(--warn); }
+.ctx-real.hi .ctx-bar i { background: var(--err); }
+.ctx-real.hi .ctx-pct { color: var(--err); }
 .supplement-cancel { flex: 0 0 auto; height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600; color: var(--faint); transition: .13s; }
 .supplement-cancel:hover { background: var(--surface); color: var(--err); }
 /* Provider-switch confirm banner: same shell, with a primary 确认切换 button. */

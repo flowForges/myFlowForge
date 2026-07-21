@@ -1,21 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import type { EventBus } from '../orchestrator/eventBus'
 import { CH } from './channels'
 
-let capturedBus: EventBus | null = null
-
-const { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls, resolveCalls } = vi.hoisted(() => {
-  const lastOrchOpts = { current: null as any }
-  const liveRun = { current: null as unknown }
-  const subscribers: Array<(e: any) => void> = []
+const { readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock } = vi.hoisted(() => {
   const readWorkspaceMock = vi.fn()
   const writeWorkspaceMock = vi.fn()
   const listWorkspacesMock = vi.fn(() => [])
   const readWorkflowsMock = vi.fn((): { workflows: any[] } => ({ workflows: [] }))
   const writeWorkflowsMock = vi.fn()
-  const startRunCalls: any[] = []
-  const resolveCalls: any[] = []
-  return { lastOrchOpts, liveRun, subscribers, readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock, startRunCalls, resolveCalls }
+  return { readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock }
 })
 
 const { delegateCapture } = vi.hoisted(() => ({ delegateCapture: { onComplete: null as null | ((r: { text: string; per: any[] }) => void) } }))
@@ -43,23 +35,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   dialog: {}
 }))
-vi.mock('../orchestrator/orchestrator', () => ({
-  Orchestrator: class {
-    constructor(opts: { bus: EventBus; proxy: () => string }) {
-      capturedBus = opts.bus
-      lastOrchOpts.current = opts
-    }
-    startRun(o: any) { startRunCalls.push(o); return Promise.resolve() }
-    resolve(p: any) { resolveCalls.push(p) }
-    cancel() {}
-    getRun() { return liveRun.current }
-  },
-  // resumeRun.ts (real, unmocked) imports these from the orchestrator module.
-  REVIEW_GATED_STAGES: new Set(['design']),
-  gateApprovedKey: (stageKey: string) => 'gate-approved:' + stageKey,
-}))
-vi.mock('../orchestrator/runStore', () => ({
-  readLastRun: vi.fn(() => ({ id: 'from-disk' })),
+vi.mock('../run/runStore', () => ({
   RunStore: class {
     get runDir() { return '/tmp/chat-bridge' }
     getContext() { return null }
@@ -82,24 +58,6 @@ vi.mock('../chat/delegate', () => ({
   },
   cancelWorkspaceDelegates: () => {},
 }))
-vi.mock('../chat/proposeRun', () => {
-  const fn: any = vi.fn(() => Promise.resolve({ approved: true }))
-  fn.has = vi.fn(() => false)
-  fn.resolve = vi.fn()
-  fn.pendingIds = vi.fn(() => [])
-  fn.cancelForWorkspace = vi.fn(() => [])
-  return { makeProposeRun: vi.fn(() => fn) }
-})
-vi.mock('../narrator/narratorService', () => ({
-  NarratorService: class { onEngineEvent() {} }
-}))
-vi.mock('../orchestrator/eventBus', () => ({
-  EventBus: class {
-    subscribe(fn: (e: any) => void) { subscribers.push(fn); return () => {} }
-    emit(e: any) { subscribers.forEach(fn => fn(e)) }
-  }
-}))
-
 const refreshProviderModelsMock = vi.fn()
 vi.mock('../agents/refreshModels', () => ({
   refreshProviderModels: (...args: any[]) => refreshProviderModelsMock(...args),
@@ -194,18 +152,12 @@ vi.mock('../config/store', () => ({
 const originalTermProxy = REREAD_SETTINGS.termProxy
 
 beforeEach(async () => {
-  capturedBus = null
-  lastOrchOpts.current = null
-  liveRun.current = null
   REREAD_SETTINGS.termProxy = originalTermProxy
-  subscribers.length = 0
   readWorkspaceMock.mockReset()
   writeWorkspaceMock.mockReset()
   listWorkspacesMock.mockReset().mockReturnValue([])
   appendMessageMock.mockReset()
   readWorkflowsMock.mockReset().mockReturnValue({ workflows: [] })
-  startRunCalls.length = 0
-  resolveCalls.length = 0
   writeWorkflowsMock.mockReset()
   refreshProviderModelsMock.mockReset()
   installPluginMock.mockReset()
@@ -223,42 +175,6 @@ afterEach(() => {
 })
 
 describe('registerIpc broadcast wiring', () => {
-  it('broadcasts engine events emitted on the bus to all windows', async () => {
-    const { registerIpc } = await import('./handlers')
-    const sent: [string, unknown][] = []
-    const broadcast = (ch: string, p: unknown) => { sent.push([ch, p]) }
-    registerIpc(broadcast, {})
-    expect(capturedBus).not.toBeNull()
-    const evt = { type: 'agent:state', agentId: 'a1', state: 'run' } as const
-    capturedBus!.emit(evt)
-    expect(sent).toContainEqual([CH.engineEvent, evt])
-  })
-
-  it('passes termProxy as a live getter (hot-reload)', async () => {
-    const { registerIpc } = await import('./handlers')
-    registerIpc(() => {}, {})
-    expect(lastOrchOpts.current).not.toBeNull()
-    expect(typeof lastOrchOpts.current.proxy).toBe('function')
-    REREAD_SETTINGS.termProxy = 'http://new-proxy:1'
-    expect(lastOrchOpts.current.proxy()).toBe('http://new-proxy:1')
-  })
-
-  it('engine:last-run prefers matching live run, else reads disk snapshot', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
-    const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
-      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
-      return call[1]({}, ...args)
-    }
-    liveRun.current = { id: 'live', workspacePath: '/ws/a' }
-    expect(await invokeHandler(CH.engineLastRun, '/ws/a')).toEqual({ id: 'live', workspacePath: '/ws/a' })
-    expect(await invokeHandler(CH.engineLastRun, '/ws/b')).toEqual({ id: 'from-disk' })
-    liveRun.current = null
-    expect(await invokeHandler(CH.engineLastRun, '/ws/a')).toEqual({ id: 'from-disk' })
-  })
-
   it('broadcasts settingsChanged and calls onSettings when settings are written', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any
@@ -277,38 +193,6 @@ describe('registerIpc broadcast wiring', () => {
     // onSettings must be forwarded that SAME re-read value.
     expect(onSettings).toHaveBeenCalledWith(REREAD_SETTINGS)
   })
-
-  it('writes workspace.json status once when a run reaches terminal status', async () => {
-    const { registerIpc } = await import('./handlers')
-    registerIpc(() => {}, {})
-    const run = { id: 'r1', workspaceName: 'x', workspacePath: '/ws/a', status: 'ok', projects: [], stages: [], pending: [] }
-    readWorkspaceMock.mockReturnValue({ name: 'x', path: '/ws/a', projects: [], workflowId: 'wf', status: 'run' })
-    subscribers.forEach(fn => fn({ type: 'run:update', run }))
-    expect(writeWorkspaceMock).toHaveBeenCalledWith(expect.objectContaining({ status: 'ok' }))
-    writeWorkspaceMock.mockClear()
-    subscribers.forEach(fn => fn({ type: 'run:update', run }))   // 同 run 再发终态
-    expect(writeWorkspaceMock).not.toHaveBeenCalled()             // 去重:只写一次
-  })
-
-  it('returns the triggering workflow session to chat mode when its run finishes (no stuck 运行中 dot)', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { readSessions, setSessionMode } = await import('../chat/sessionStore') as any
-    const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    setSessionMode.mockClear()
-    // The session that triggered run r9 is in workflow mode; on terminal ok it must flip back to chat.
-    readSessions.mockReturnValueOnce({ sessions: [{ id: 'sWf', title: 'wf', mode: 'workflow', createdAt: 0, runId: 'r9' }], activeSessionId: 'sWf' })
-    readWorkspaceMock.mockReturnValue({ name: 'x', path: '/ws/a', projects: [], workflowId: 'wf', status: 'run' })
-    const run = { id: 'r9', workspaceName: 'x', workspacePath: '/ws/a', status: 'ok', projects: [], stages: [], pending: [] }
-    subscribers.forEach(fn => fn({ type: 'run:update', run }))
-    expect(setSessionMode).toHaveBeenCalledWith('/ws/a', 'sWf', 'chat')
-    const modeEvt = sent.find(([c, p]) => c === CH.chatEvent && (p as any).type === 'mode-changed')
-    expect(modeEvt).toBeTruthy()
-    expect((modeEvt![1] as any).mode).toBe('chat')
-  })
-
-  // engineStartRun (engine:start-run) removed entirely — see the "old orchestrator run-start/resume
-  // triggers are gone" test below for the airtight assertion that the channel is never registered.
 
   it('chatSend serializes turns per workspace: second send is queued until first resolves', async () => {
     const { registerIpc } = await import('./handlers')
@@ -364,40 +248,15 @@ describe('registerIpc broadcast wiring', () => {
     expect(sendTurn).toHaveBeenCalledTimes(2)
   })
 
-  it('chatSend while a stage review gate is pending reconciles it into 打回重做 instead of a new turn', async () => {
+  it('chatSend runs an ordinary chat turn (the legacy workflow engine is gone)', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     sendTurn.mockReset().mockResolvedValue(undefined)
-    // Live run paused at a 需求评估 阶段评审门 (reworkable confirm, id starts with `review-`).
-    liveRun.current = {
-      id: 'r1', workspacePath: '/ws/a', status: 'run',
-      pending: [{ id: 'review-requirement-1', kind: 'confirm', reworkable: true, agentName: '需求评估' }],
-    }
-    const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
-    send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: '评审得不对，应该定制一个新 skill', attachments: [] })
-    await new Promise(r => setTimeout(r, 0))
-    // The gate was resolved as 打回重做 with the user's message as the revision direction…
-    expect(resolveCalls).toEqual([{ id: 'review-requirement-1', decision: 'modify', value: '评审得不对，应该定制一个新 skill' }])
-    // …the user message is surfaced in chat (continuity)…
-    expect(sent.some(([c, p]) => c === CH.chatEvent && (p as any).type === 'user')).toBe(true)
-    // …and NO ordinary main-agent turn ran (which is what used to pop a redundant second propose 门).
-    expect(sendTurn).not.toHaveBeenCalled()
-  })
-
-  it('chatSend with no pending review gate runs a normal turn (does not touch the engine)', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    const { sendTurn } = await import('../chat/chatService') as any
-    sendTurn.mockReset().mockResolvedValue(undefined)
-    liveRun.current = { id: 'r1', workspacePath: '/ws/a', status: 'run', pending: [] }
     registerIpc(() => {}, {})
     const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
     send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'hi', attachments: [] })
     await new Promise(r => setTimeout(r, 0))
-    expect(resolveCalls).toEqual([])
     expect(sendTurn).toHaveBeenCalledTimes(1)
   })
 
@@ -502,7 +361,7 @@ describe('registerIpc broadcast wiring', () => {
     expect(resolved).toBeTruthy()
   })
 
-  it('workspacesList passes live workspace path to listWorkspaces when run is active', async () => {
+  it('workspacesList passes undefined livePath to listWorkspaces (legacy live-run path removed)', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any
     registerIpc(() => {}, {})
@@ -511,42 +370,8 @@ describe('registerIpc broadcast wiring', () => {
       if (!call) throw new Error(`No handler registered for channel: ${channel}`)
       return call[1]({}, ...args)
     }
-    // When a run is active (status 'run'), livePath should be forwarded
-    liveRun.current = { id: 'r1', workspacePath: '/ws/live', status: 'run' }
-    await invokeHandler(CH.workspacesList)
-    expect(listWorkspacesMock).toHaveBeenCalledWith('/ws/live', [], [])
-
-    // When run status is not 'run' (e.g. finished), livePath should be undefined
-    listWorkspacesMock.mockClear()
-    liveRun.current = { id: 'r1', workspacePath: '/ws/live', status: 'ok' }
     await invokeHandler(CH.workspacesList)
     expect(listWorkspacesMock).toHaveBeenCalledWith(undefined, [], [])
-
-    // When no run at all, livePath should be undefined
-    listWorkspacesMock.mockClear()
-    liveRun.current = null
-    await invokeHandler(CH.workspacesList)
-    expect(listWorkspacesMock).toHaveBeenCalledWith(undefined, [], [])
-  })
-
-  it('engineCancel returns the active session to chat mode and broadcasts mode-changed', async () => {
-    const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    const { setSessionMode } = await import('../chat/sessionStore') as any
-    const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
-      if (!call) throw new Error(`No handler registered for channel: ${channel}`)
-      return call[1]({}, ...args)
-    }
-    setSessionMode.mockClear()
-    liveRun.current = { id: 'r1', workspacePath: '/ws/live', status: 'run' }
-    await invokeHandler(CH.engineCancel)
-    // sessionFile1.activeSessionId === 's1'
-    expect(setSessionMode).toHaveBeenCalledWith('/ws/live', 's1', 'chat')
-    const evt = sent.filter(([c]) => c === CH.chatEvent).map(([, p]) => p as any).find(p => p.type === 'mode-changed')
-    expect(evt).toMatchObject({ workspacePath: '/ws/live', sessionId: 's1', mode: 'chat' })
   })
 
   it('workspacesSetOrder persists the manual order and returns the re-listed workspaces', async () => {
@@ -662,10 +487,39 @@ describe('registerIpc broadcast wiring', () => {
     expect((bcast![1] as any).sessionId).toBe('s1')
   })
 
-  // chat:repropose-workflow removed entirely (the last live orch.startRun trigger via proposeRun) —
-  // see the airtight registration-check test below. proposeRun itself is still wired for
-  // pendingIds/cancelForWorkspace/has/resolve (turn cleanup + chat:resolve on any already-pending
-  // plan card), just never invoked to START a new one anymore.
+  it('chat:append-run-card persists a synthetic ChatMessage carrying `runCard` and broadcasts it (new id)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+
+    const runCard = { id: 'summary-r1', kind: 'summary' as const, stageKey: '__summary__', title: '', body: '本次总结', decision: '', at: 1, ts: 1 }
+    const returned = await handler(CH.chatAppendRunCard)({}, { workspacePath: '/ws/a', sessionId: 's1', ts: '2026-07-20T00:00:00.000Z', runCard })
+
+    const expectedNote = { id: 'summary-r1', who: 'ai', text: '', ts: '2026-07-20T00:00:00.000Z', runCard }
+    expect(appendMessageMock).toHaveBeenCalledWith('/ws/a', 's1', expectedNote)
+    expect(returned).toEqual(expectedNote)
+    expect(sent.find(([c, p]) => c === CH.chatEvent && (p as any).type === 'done')).toBeTruthy()
+  })
+
+  it('chat:append-run-card is idempotent by id — an already-persisted card is NOT appended/broadcast again (①汇总 remount race)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const { readMessages } = await import('../chat/chatStore') as any
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+
+    const runCard = { id: 'summary-r1', kind: 'summary' as const, stageKey: '__summary__', title: '', body: '本次总结', decision: '', at: 1, ts: 1 }
+    const existing = { id: 'summary-r1', who: 'ai', text: '', ts: 'earlier', runCard }
+    readMessages.mockReturnValueOnce([existing]) // the card already lives in the session's jsonl
+
+    const returned = await handler(CH.chatAppendRunCard)({}, { workspacePath: '/ws/a', sessionId: 's1', ts: '2026-07-20T00:00:00.000Z', runCard })
+    expect(returned).toEqual(existing)              // returns the pre-existing record verbatim
+    expect(appendMessageMock).not.toHaveBeenCalled() // no second jsonl line
+    expect(sent.find(([c, p]) => c === CH.chatEvent && (p as any).type === 'done')).toBeUndefined() // no re-broadcast
+  })
 
   it('configUpdateWorkflow 写入 stagePrompts(不动 plugins)', async () => {
     readWorkflowsMock.mockReturnValue({ workflows: [{ id: 'standard', name: 'S', stages: [] as any[], plugins: [] as any[], stagePrompts: {} }] })
@@ -711,43 +565,32 @@ describe('registerIpc broadcast wiring', () => {
   })
 })
 
-// The old orchestrator's workflow-run START/RESUME triggers must be gone entirely — run2's launcher
-// (run2:launch-start) is the only way left to start a workflow run. This locks that in: none of the
-// four historical orch.startRun call sites (workspaces:run, engine:start-run, engine:resume via the
-// chat resume-intent path AND the direct IPC, chat:repropose-workflow) are reachable anymore.
-describe('old orchestrator run start/resume triggers are disabled', () => {
-  it('never registers a handler for the removed old-run channels', async () => {
+// The entire legacy orchestrator (and every engine:* run channel it owned) has been removed — run2's
+// launcher (run2:launch-start) is the only way left to start a workflow run. This locks that in: none
+// of the historical orch.startRun call sites, nor the read-only engine:* channels, are registered.
+describe('old orchestrator run + engine channels are gone', () => {
+  it('never registers a handler for the removed old-run or engine channels', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any
     registerIpc(() => {}, {})
     const registered = new Set((ipcMain.handle as any).mock.calls.map((c: any[]) => c[0]))
     // Literal strings (not CH.* — the constants themselves no longer exist) so this test would fail
     // loudly if any of these channels were ever reintroduced under their old names.
-    for (const ch of ['workspaces:run', 'engine:start-run', 'engine:resume', 'chat:repropose-workflow']) {
+    for (const ch of ['workspaces:run', 'engine:start-run', 'engine:resume', 'chat:repropose-workflow',
+      'engine:resolve', 'engine:cancel', 'engine:discard', 'engine:last-run', 'engine:event']) {
       expect(registered.has(ch)).toBe(false)
-    }
-    // The channels that stay (read-only status + cleanup for any run already in the orchestrator).
-    for (const ch of [CH.engineResolve, CH.engineCancel, CH.engineDiscard, CH.engineLastRun]) {
-      expect(registered.has(ch)).toBe(true)
     }
   })
 
-  it('a "继续执行" chat message does NOT resume an old run — it runs as an ordinary chat turn', async () => {
+  it('a "继续执行" chat message runs as an ordinary chat turn (no legacy resume path)', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
-    const { readLastRun } = await import('../orchestrator/runStore') as any
     sendTurn.mockReset().mockResolvedValue(undefined)
-    // Exactly the scenario the old isResumeIntent branch acted on: a resumable (errored) prior run
-    // exists for this workspace. If any old-run resume path were still reachable, this would have
-    // fired orch.startRun instead of an ordinary turn.
-    readLastRun.mockReturnValue({ id: 'run-1', workspacePath: '/ws/a', status: 'err', workflowId: 'wf1' })
-    liveRun.current = null
     registerIpc(() => {}, {})
     const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
     send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: '继续执行', attachments: [] })
     await new Promise(r => setTimeout(r, 0))
-    expect(startRunCalls).toEqual([])
     expect(sendTurn).toHaveBeenCalledTimes(1)
   })
 })

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { registerRun2 } from './run2Handlers'
 import { Run2Manager } from '../run/manager'
-import { RunStore } from '../orchestrator/runStore'
+import { RunStore } from '../run/runStore'
 import { saveControllerState } from '../run/persist'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'

@@ -1,7 +1,5 @@
 import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
-import { EventBus } from '../orchestrator/eventBus'
-import { Orchestrator } from '../orchestrator/orchestrator'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
@@ -21,12 +19,12 @@ import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
-import { appendMessage } from '../chat/chatStore'
+import { appendMessage, readMessages } from '../chat/chatStore'
 import { mergeLive } from '../chat/liveTurns'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession } from '../chat/sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom } from '../chat/sessionStore'
 import { agentSessionsForId } from '../chat/agentSessions'
 import { distillModelFor } from '../chat/memory/distillModel'
-import type { CreateWorkspaceOpts, ResolvePayload, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, EngineEvent } from '@shared/types'
+import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
@@ -43,14 +41,12 @@ import { readDiff, readFile } from '../git/diff'
 import { readTree } from '../fs/fileTree'
 import { searchContent } from '../fs/contentSearch'
 import { WorktreeWatcher } from '../watcher/worktreeWatcher'
-import { NarratorService } from '../narrator/narratorService'
-import { readLastRun, discardRuns, RunStore } from '../orchestrator/runStore'
+import { RunStore } from '../run/runStore'
 import { Run2Manager } from '../run/manager'
 import { registerRun2 } from './run2Handlers'
 import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspace/archiveOps'
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
 import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
-import { makeProposeRun } from '../chat/proposeRun'
 import { makeRunDelegate, cancelWorkspaceDelegates } from '../chat/delegate'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
@@ -89,45 +85,10 @@ import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
 import type { DiscoveredSession } from '@shared/types'
 
-export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void, onEngineEvent?: (e: EngineEvent) => void) {
-  const bus = new EventBus()
-  bus.subscribe(e => broadcast(CH.engineEvent, e))
-  // External sink (main process wires OS notifications here — it owns the window for focus/routing).
-  if (onEngineEvent) bus.subscribe(onEngineEvent)
-  const narrator = new NarratorService({
-    providers,
-    env: () => buildAgentEnv({ proxy: readSettings().termProxy }),
-    emit: (e) => broadcast(CH.chatEvent, e),
-    proxy: () => readSettings().termProxy
-  })
-  bus.subscribe(e => narrator.onEngineEvent(e))
-
-  // Keep workspace.json status truthful: when a run reaches terminal status,
-  // write it back once so reloads reflect reality. (Home only *shows* a badge while
-  // a run is live — see HomeView — so a persisted ok/err is data, not a visible 失败.)
-  const statusWritten = new Set<string>()
-  bus.subscribe(e => {
-    if (e.type !== 'run:update') return
-    const r = e.run
-    if (r.status !== 'ok' && r.status !== 'err') return
-    if (statusWritten.has(r.id)) return
-    statusWritten.add(r.id)
-    const ws = readWorkspace(r.workspacePath)
-    if (ws && ws.status !== r.status) writeWorkspace({ ...ws, status: r.status })
-    // Return the triggering session to chat mode now the run is over (mirrors engineCancel). Without
-    // this, a session that ran a workflow to completion stays mode:'workflow' forever — showing a
-    // persistent "running-like" dot in the sidebar long after the run finished. Match by runId so the
-    // right session is reset even if the user has since switched the active session.
-    const owner = readSessions(r.workspacePath).sessions.find(s => s.runId === r.id && s.mode === 'workflow')
-    if (owner) {
-      setSessionMode(r.workspacePath, owner.id, 'chat')
-      broadcast(CH.chatEvent, { workspacePath: r.workspacePath, sessionId: owner.id, type: 'mode-changed', mode: 'chat' })
-    }
-  })
-
-  // Startup heal: runs live only in the (in-memory) orchestrator, so on a fresh launch nothing is
-  // running — any session still stuck in mode:'workflow' (from a completed run before the reset fix, or
-  // an app crash mid-run) is stale. Reset them to chat so their sidebar dot doesn't imply a live agent.
+export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void) {
+  // Startup heal: the legacy in-memory orchestrator is gone; on a fresh launch nothing is running — any
+  // session still stuck in mode:'workflow' (from a completed run before the reset fix, or an app crash
+  // mid-run) is stale. Reset them to chat so their sidebar dot doesn't imply a live agent.
   for (const w of readWorkspaceRegistry()) {
     for (const s of readSessions(w.path).sessions) {
       if (s.mode === 'workflow') setSessionMode(w.path, s.id, 'chat')
@@ -135,7 +96,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   }
 
   const mcpEntry = join(__dirname, 'forgeMcp.js')
-  const orch = new Orchestrator({ bus, providers, proxy: () => readSettings().termProxy, mcpEntry })
   // AbortController for the in-flight workspace creation (one at a time), so 取消 can kill its git pulls.
   let setupAbort: AbortController | null = null
 
@@ -332,8 +292,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   ipcMain.handle(CH.contextScan, (_e, workspacePath?: string) => {
     if (workspacePath && existsSync(workspacePath)) return scanWorkspaceContext(workspacePath, true)
-    const live = orch.getRun()
-    if (live?.workspacePath && existsSync(live.workspacePath)) return scanWorkspaceContext(live.workspacePath, true)
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }
   })
   ipcMain.handle(CH.contextScanGlobal, () => scanGlobalContext())
@@ -395,33 +353,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.workspacesChanged, {})
     return result
   })
-  ipcMain.handle(CH.engineResolve, (_e, payload: ResolvePayload) => orch.resolve(payload))
-  ipcMain.handle(CH.engineCancel, () => {
-    const live = orch.getRun()
-    orch.cancel()
-    // After cancel the run is dead — return the triggering session to chat mode so the user isn't
-    // stuck in workflow mode and can freely continue (via 继续执行) or start a new turn.
-    if (live) {
-      const sid = readSessions(live.workspacePath).activeSessionId
-      setSessionMode(live.workspacePath, sid, 'chat')
-      broadcast(CH.chatEvent, { workspacePath: live.workspacePath, sessionId: sid, type: 'mode-changed', mode: 'chat' })
-    }
-  })
-  // '终止退出': abandon a failed/interrupted run entirely — clear the in-memory terminal run, delete
-  // its persisted state (so nothing offers to resume it), and return the owning session to chat mode.
-  ipcMain.handle(CH.engineDiscard, (_e, wsPath: string) => {
-    const live = orch.getRun()
-    const sid = (live && live.workspacePath === wsPath && live.sessionId) || readSessions(wsPath).activeSessionId
-    orch.clearRun(wsPath)
-    discardRuns(wsPath)
-    setSessionMode(wsPath, sid, 'chat')
-    broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId: sid, type: 'mode-changed', mode: 'chat' })
-  })
-  ipcMain.handle(CH.engineLastRun, (_e, wsPath: string) => {
-    const live = orch.getRun()
-    return live && live.workspacePath === wsPath ? live : readLastRun(wsPath)
-  })
-
   const chatEmit = (e: ChatEvent) => broadcast(CH.chatEvent, e)
   const chatConfirms = new Map<string, (decision: 'allow' | 'deny') => void>()
   let chatConfirmSeq = 0
@@ -492,64 +423,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'delegate-busy', active: n > 0 })
   }
 
-  // 旧编排器(orch)的「继续执行」已停用:run2 有自己的磁盘续跑(P-C2),不再需要这条重放旧 run 的路径。
-  // engine:resume 通道整体移除,不留任何能触发 orch.startRun 的入口。
-
-  // proposeRun is the choke-point for chat-triggered workflows: all three chat triggers converge
-  // here — the MCP forge_propose_plan tool, the forge:run fence text, and the 「发起工作流」button
-  // (which sends a chat planning message that routes through proposeRun). For chat-triggered
-  // workflows, orch.startRun is invoked ONLY via proposeRun's approval resolver.
-  const proposeRun = makeProposeRun({
-    getRun: () => orch.getRun(),
-    readWorkspace,
-    readWorkflows: () => readWorkflows().workflows,
-    readCustomStages: () => readCustomStages().stages,
-    writeWorkspace,
-    startRun: (o) => {
-      // Sink the initiating session's permission shield into the run so stage sub-agents inherit it
-      // (not just the main chat agent). Absent → provider default ('auto'), the historical behavior.
-      const sid = o.sessionId ?? readSessions(o.workspacePath).activeSessionId
-      const permissionMode = o.permissionMode ?? (sid ? getSession(o.workspacePath, sid)?.permissionMode : undefined)
-      orch.startRun({ ...o, permissionMode }).catch(e => console.error('[propose] startRun failed', e))
-    },
-    emitPlanRequest: (wp, req) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'plan-request', ...req }),
-    emitNote: (wp, text) => emitNote(wp, readSessions(wp).activeSessionId, text),
-    // #1: flip the active session's mode + tell the renderer which session switched and to what run.
-    setSessionMode: (wp, mode, runId) => { setSessionMode(wp, readSessions(wp).activeSessionId, mode, runId) },
-    emitModeChanged: (wp, mode, runId) => broadcast(CH.chatEvent, { workspacePath: wp, sessionId: readSessions(wp).activeSessionId, type: 'mode-changed', mode, runId }),
-  })
   // Lightweight delegation (path A): the chat agent dispatches sub-agents into projects without the
-  // workflow gate. Shares providers/mcpEntry with the orchestrator; runs are ephemeral (no run slot).
+  // workflow gate. Runs are ephemeral (no run slot). The legacy orchestrator + its chat-triggered
+  // proposeRun gate are gone — the only workflow-run entry point is now the run2 「工作流运行」launcher.
   const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().termProxy, mcpEntry, readWorkspace })
-  // chat:repropose-workflow (旧「切换工作流」重新提案通道)已移除:它是 proposeRun→orch.startRun 的
-  // 最后一个存活触发点(PlanCard 的 workflow-switch 下拉),且本就无法触达(没有任何路径会先创建出
-  // 让它重新提案的初始 plan-request 卡片——chat 的 proposePlan 桥已在别处被切断)。proposeRun 对象本身
-  // 保留(pendingIds/cancelForWorkspace/has/resolve 仍被下面的 turn 清理与 chat:resolve 使用)。
   const runTurn = async (payload: ChatSendPayload) => {
-    // Gate/chat continuity: a live run paused at a 阶段评审门 (需求/设计 阶段完成后的 approve/打回重做/终止 门)
-    // is normally answered by clicking the card. If the user instead types their reaction into chat ("评审得
-    // 不对，因为…"), reconcile it INTO that gate as 打回重做 (decision:'modify') so the run re-does that stage
-    // with the user's correction — analyzeRework runs the feedback through the main agent, exactly "据门内容+
-    // 用户输入重新整理，重跑，结束旧门，对话连续". Without this, the gate dangles: the message runs as an
-    // ordinary turn (the agent may even pop a second propose 门), the review 门 sits orphaned until the user
-    // later clicks 终止, which tears down the whole run and narrates "编排…失败" — the discontinuity users hit.
-    // reworkable is true ONLY for stage review gates (see PendingAction), so it uniquely identifies them.
-    {
-      const live = orch.getRun()
-      const gate = live && live.status === 'run' && live.workspacePath === payload.workspacePath
-        ? live.pending.find(p => p.kind === 'confirm' && p.reworkable && p.id.startsWith('review-'))
-        : undefined
-      if (gate) {
-        const umsg: ChatMessage = { id: `u-${Date.now()}`, who: 'user', text: payload.text, ts: new Date().toISOString().slice(11, 19) }
-        appendMessage(payload.workspacePath, payload.sessionId, umsg)
-        broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'user', message: umsg })
-        orch.resolve({ id: gate.id, decision: 'modify', value: payload.text })
-        emitNote(payload.workspacePath, payload.sessionId, `已把你的意见交给主代理分析——它会结合「${gate.agentName}」的现有方案判断：能直接改就出修订版，需要重读代码才会先问你要不要重探。`)
-        return umsg
-      }
-    }
-    // 旧编排器的「继续执行」意图分支已移除:一条「继续/接着做」的聊天消息不再重放旧 orch 运行,就当
-    // 普通对话轮次处理(run2 有自己的续跑入口,不走 chat 的意图猜测)。
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
     const confirm = (req: { title: string; where?: string }) => new Promise<'allow' | 'deny'>((resolve) => {
@@ -654,9 +532,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // provider, and forgeChatDirective(env) (gated on env.FORGE_TOOLS containing forge_propose_plan)
     // returns '' automatically. Workflows only launch via the explicit run2 "工作流运行" launcher now.
     const env = buildAgentEnv({ proxy: readSettings().termProxy })
-    // Snapshot proposes already pending for this workspace before the turn — those belong to earlier
-    // turns (fire-and-forget auto-triggers the user hasn't acted on yet) and must survive this turn.
-    const preProposes = new Set(proposeRun.pendingIds(payload.workspacePath))
     try {
       const msg = await sendTurn(payload, {
         provider,
@@ -665,25 +540,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         confirm,
         onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, () => session.cancel()),
       })
-      // A forge_propose_plan blocks the turn awaiting the user's decision. If the turn ended (API error /
-      // codex 180s tool timeout / cancel) while one was still pending, it's now orphaned — the agent that
-      // asked is gone. Deny+clear it (excluding prior turns' proposes) and broadcast plan-resolved so the
-      // card is cleanly removed instead of lingering/vanishing, and tell the user why nothing ran.
-      const orphaned = proposeRun.cancelForWorkspace(payload.workspacePath, preProposes)
-      for (const id of orphaned) {
-        broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: readSessions(payload.workspacePath).activeSessionId, type: 'plan-resolved', id })
-      }
-      if (orphaned.length) emitNote(payload.workspacePath, payload.sessionId, '⚠️ 主代理未完成方案提交(已中断或超时),待审批方案已取消,请重试。')
-      // #6/#9: the MAIN AGENT is the sole decider of whether a turn becomes a workflow. We used to
-      // auto-fire proposeRun here whenever a regex (isWorkflowIntent) matched the user's TEXT but the
-      // agent hadn't called forge_propose_plan — that overrode the main agent's judgment (e.g. the user
-      // clicking 补充 to refine a plan in chat got a spurious, half-broken workflow confirmation) and
-      // violated "一切先过主代理". That intent-guessing auto-fire stays removed.
-      //
       // Chat NEVER triggers a workflow (this was the user's #1 complaint — "聊着聊着突然启动工作流").
-      // forge_propose_plan's bridge callback above is neutered (redirect note + approved:false) and the
-      // narrated-execution backstop that used to convert a merely-narrated "已提交方案" into a real
-      // proposeRun gate has been removed entirely — the only workflow entry point now is the run2
+      // forge_propose_plan's bridge callback above is neutered (redirect note + approved:false); the
+      // legacy proposeRun gate has been removed entirely — the only workflow entry point now is the run2
       // launcher ("工作流运行" mode).
       return msg
     }
@@ -758,11 +617,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId))
   ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
-    if (proposeRun.has(a.id)) {
-      proposeRun.resolve(a.id, { decision: a.decision, value: a.value, selection: a.selection })
-      broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'plan-resolved', id: a.id })
-      return
-    }
     const askResolve = chatAsks.get(a.id)
     if (askResolve) {
       chatAsks.delete(a.id)
@@ -834,6 +688,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // SAME id as the in-chat RunEventCard's event id, so it round-trips back into chat.messages and
   // WorkspaceView can dedupe against its own local resolved-cards state by id.
   ipcMain.handle(CH.chatAppendRunCard, (_e, a: { workspacePath: string; sessionId: string; ts: string; runCard: NonNullable<ChatMessage['runCard']> }) => {
+    // Idempotent by id: every run-card id is write-once (an event id, `abort-<runId>`, or
+    // `summary-<runId>`) — never re-appended with different content. Persisting the same id twice must
+    // be a no-op, because appendMessage (chatStore.ts) writes the jsonl with a blind appendFileSync (no
+    // id-dedupe). This matters most for the STATE-DRIVEN 本次运行总结 card (①汇总): unlike the other
+    // cards, which persist only from a one-shot user action, its WorkspaceView effect re-fires on every
+    // remount, and can race a fresh-ref-before-chatHistory-loads window — without this guard that race
+    // would append a duplicate summary line every time. Return the existing record so callers still get
+    // a note back, and don't re-broadcast (the active session already has it / will on next load).
+    const existing = readMessages(a.workspacePath, a.sessionId).find((m) => m.id === a.runCard.id)
+    if (existing) return existing
     const note: ChatMessage = { id: a.runCard.id, who: 'ai', text: '', ts: a.ts, runCard: a.runCard }
     appendMessage(a.workspacePath, a.sessionId, note)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'done', message: note })
@@ -1081,8 +945,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const MAX_PINNED = 5
   ipcMain.handle(CH.workspacesList, () => {
     const s = readSettings()
-    const live = orch.getRun()
-    const livePath = live && live.status === 'run' ? live.workspacePath : undefined
+    // The legacy in-memory orchestrator run is gone; run2 runs don't surface a "live path" here.
+    const livePath = undefined
     return listWorkspaces(livePath, s.pinnedWorkspaces, s.workspaceOrder)
   })
   ipcMain.handle(CH.workspacesHomeStats, () => readHomeStats(readSettings().termProxy))
@@ -1097,8 +961,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // Keep every window's settings snapshot fresh so a later config:set-settings (which writes the
     // whole settings object) doesn't clobber the pins with a stale value. Mirrors workspacesSetOrder.
     broadcast(CH.settingsChanged, readSettings())
-    const live = orch.getRun()
-    const livePath = live && live.status === 'run' ? live.workspacePath : undefined
+    // The legacy in-memory orchestrator run is gone; run2 runs don't surface a "live path" here.
+    const livePath = undefined
     return listWorkspaces(livePath, pinned, s.workspaceOrder)
   })
   ipcMain.handle(CH.workspacesSetOrder, (_e, a: { order: string[] }) => {
@@ -1107,14 +971,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // Keep every window's settings snapshot fresh so a later config:set-settings (which writes the
     // whole settings object) doesn't clobber the manual order with a stale value.
     broadcast(CH.settingsChanged, readSettings())
-    const live = orch.getRun()
-    const livePath = live && live.status === 'run' ? live.workspacePath : undefined
+    // The legacy in-memory orchestrator run is gone; run2 runs don't surface a "live path" here.
+    const livePath = undefined
     return listWorkspaces(livePath, s.pinnedWorkspaces, a.order)
   })
   const wsList = () => {
     const s = readSettings()
-    const live = orch.getRun()
-    const livePath = live && live.status === 'run' ? live.workspacePath : undefined
+    // The legacy in-memory orchestrator run is gone; run2 runs don't surface a "live path" here.
+    const livePath = undefined
     return listWorkspaces(livePath, s.pinnedWorkspaces, s.workspaceOrder)
   }
   ipcMain.handle(CH.workspaceArchive, (_e, path: string) => {
@@ -1217,8 +1081,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         try { const ws = JSON.parse(readFileSync(wsJson, 'utf8')); if (ws?.name) registerWorkspace(String(ws.name), dir) } catch { /* ignore malformed */ }
       }
     }
-    const live = orch.getRun()
-    const livePath = live && live.status === 'run' ? live.workspacePath : undefined
+    // The legacy in-memory orchestrator run is gone; run2 runs don't surface a "live path" here.
+    const livePath = undefined
     return listWorkspaces(livePath, readSettings().pinnedWorkspaces)
   })
 

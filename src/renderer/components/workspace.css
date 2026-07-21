@@ -417,6 +417,10 @@
   font-size: 11px; font-weight: 600; font-family: var(--mono); flex: 0 0 auto;
 }
 .agent-state .d { width: 7px; height: 7px; border-radius: 50%; }
+/* User feedback (2026-07-20): ⚡ marks an executing agent — a gentle pulse draws the eye to what's
+   running now without being noisy. Sized to sit inline with the 11px state label. */
+.agent-state .agent-bolt { font-size: 11px; line-height: 1; animation: agent-bolt-pulse 1.4s ease-in-out infinite; }
+@keyframes agent-bolt-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .agent-beat {
   flex: 0 0 auto; font-family: var(--mono); font-size: 10px; font-weight: 600;
   color: var(--faint); background: var(--surface-2); border: 1px solid var(--border);
@@ -536,6 +540,9 @@
 .msg-req.k-gate { border-color: color-mix(in oklab, var(--warn) 45%, var(--border-2)); }
 /* P4-3: synthetic "运行已终止" marker (RunExecPanel 终止 button) — always frozen-only, dim/neutral. */
 .msg-req.k-aborted { border-color: var(--border-2); }
+/* ①汇总: synthetic "本次运行总结" completion card — always frozen-only. Calm success-tinted accent to
+   read as a positive wrap-up, distinct from the warn-tinted finalize gate above it. */
+.msg-req.k-summary { border-color: color-mix(in oklab, var(--ok, var(--accent)) 40%, var(--border-2)); }
 
 /* ---- RunLauncher shell — its OWN classes (not chat's .msg-req/.plan-card/.req-*, which carry the
    amber "request card" accent built for chat interaction prompts/gates and read as an alert here). A

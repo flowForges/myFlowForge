@@ -355,7 +355,9 @@ export function PetApp() {
       .catch(() => {})
   }, [petMode])
 
-  const onResolve = (p: ResolvePayload) => window.forge.resolve(p)
+  // Legacy engine-bus pending actions are gone (run always null here), so this never fires with a real
+  // pending; kept as an inert prop for PetPopup/PendingActionCard. run2/chat gates resolve elsewhere.
+  const onResolve = (_p: ResolvePayload) => {}
   const onGo = (path: string) => { window.forge.petFocusWorkspace(path); closePop() }
   const onToastView = (id: string) => { dismiss(id); openPop() }
 

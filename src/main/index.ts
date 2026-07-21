@@ -10,14 +10,12 @@ import { relocatePetToRegion, PET_EXPANDED, PET_BUBBLE, petCollapsedSize, petPop
 import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
 import { registerIpc } from './ipc/handlers'
-import { createNotifyBridge } from './notify/notifyBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
 import { gazeAngle } from '@shared/petGaze'
 import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
 import { readSettings, writeSettings, readWorkspaceRegistry } from './config/store'
-import { reconcileDeadRuns } from './orchestrator/reconcile'
 import { fixExecPath } from './agents/pathFix'
 import type { Settings } from './config/schema'
 import { TerminalManager } from './terminal/terminalManager'
@@ -522,8 +520,6 @@ app.whenReady().then(() => {
     mainWinRef.show(); mainWinRef.focus()
     if (n.route.workspacePath) mainWinRef.webContents.send(CH.navigateWorkspace, { path: n.route.workspacePath })
   })
-  // confirm/input come off the engine bus (pending:add).
-  const notifyBridge = createNotifyBridge({ getCfg: () => readSettings().notifications, isFocused: isMainFocused, notify: routeAndFire })
   // Test notification: fire immediately, bypassing the focus gate + config switches, so the user can tell
   // a system-permission problem (unsigned build never got macOS notification permission → nothing shows)
   // apart from the focus-gating (real notifications only fire when the app is in the background). Returns
@@ -547,7 +543,7 @@ app.whenReady().then(() => {
     registry.broadcast(channel, payload)
     if (channel === CH.chatEvent) notifyChatDone(payload)
   }
-  registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings, notifyBridge)
+  registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings)
 
   // ── Plugin Scheduler ────────────────────────────────────────────────────────
   const scheduler = new PluginScheduler({
@@ -684,10 +680,6 @@ app.whenReady().then(() => {
   app.on('before-quit', () => { quitting = true; termManager.killAll(); scheduler.stop(); unregisterGlobalShortcuts() })
   mainWin.on('closed', () => termManager.killAll())
   // ── End terminal PTY bridge ─────────────────────────────────────────────────
-
-  // Startup reconciliation: write dead (non-terminal) runs/workspaces to terminal status
-  // so they never appear active after a crash or forced restart.
-  try { reconcileDeadRuns(readWorkspaceRegistry().map(w => w.path)) } catch (e) { console.warn('[reconcile] failed', e); logError('reconcile', '启动对账失败', e instanceof Error ? e.message : String(e)) }
 
   // Dock-icon click / re-activation. The pet window keeps the process alive, so getAllWindows()
   // is never empty — the old "create only when 0 windows" check never fired, leaving a hidden or

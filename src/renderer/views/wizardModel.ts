@@ -1,4 +1,5 @@
 import type { CreateWorkspaceOpts, CreateWorkspaceStage, ReviewConfig, StageCustomFields, Workspace, WsStage } from '@shared/types'
+import { REVIEW_LENSES } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 
 // provider+model packed into one <select> value so a model picker maps back to both.
@@ -46,7 +47,10 @@ function stagesOf(wf: WizardWorkflow): CreateWorkspaceStage[] {
         key: k,
         provider: s.provider,
         model: s.model,
-        ...(k === 'review' ? { review: s.review ?? { mode: 'parallel' as const, scope: 'per-project' as const } } : (s.review ? { review: s.review } : {})),
+        // ②多镜头CR: an untouched review stage defaults to 并行多视角 all four lenses (matches
+        // resolveStages.ts's DEFAULT_REVIEW_CONFIG + StageConfigEditor), so wizard-created workspaces
+        // get multi-lens CR by default instead of silently opting out with a per-project config.
+        ...(k === 'review' ? { review: s.review ?? { mode: 'parallel' as const, reviewers: [...REVIEW_LENSES] } } : (s.review ? { review: s.review } : {})),
         ...(s.prompt && s.prompt.trim() ? { prompt: s.prompt.trim() } : {}),
         // Carry a custom stage's identity + behavior flags through to the run (built-ins leave these unset).
         ...(s.name ? { name: s.name } : {}),

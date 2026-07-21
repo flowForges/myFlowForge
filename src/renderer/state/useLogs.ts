@@ -115,59 +115,9 @@ export function useLogs(): LogsApi {
     return () => { offChat() }
   }, [])
 
-  useEffect(() => {
-    const offEngine = window.forge.onEngineEvent((e: EngineEvent) => {
-      const now = new Date()
-
-      if (e.type === 'pending:add') {
-        push([pendingAddToLine(e, now)])
-        return
-      }
-
-      if (e.type === 'agent:log') {
-        push([agentLogToLine(e, now)])
-        return
-      }
-
-      if (e.type === 'agent:heartbeat') {
-        return
-      }
-
-      if (e.type === 'agent:stalled') {
-        const secs = Math.round(e.silentMs / 1000)
-        const t = logStamp(now)
-        push([{
-          id: `${t}-stalled-${e.agentId}`,
-          t, level: 'exec', src: e.agentName, color: 'var(--warn)',
-          text: `仍在推理中:${secs}s 无输出(长时间思考属正常,静默满 6 分钟才会终止)`, streaming: false,
-        }])
-        return
-      }
-
-      if (e.type === 'run:update') {
-        const status = e.run.status
-        if (status === 'run') setBusy(true)
-        else if (status === 'ok' || status === 'err') setBusy(false)
-
-        const newLines: LogLine[] = []
-        // Diff per-agent state
-        for (const stage of e.run.stages) {
-          for (const agent of stage.agents) {
-            const prev = agentPrevState.current.get(agent.id)
-            const cur = agent.state
-            if (prev !== cur && (cur === 'run' || cur === 'stalled' || cur === 'awaiting' || cur === 'ok' || cur === 'err')) {
-              newLines.push(agentStateLine(agent.id, agent.name, cur, now))
-            }
-            agentPrevState.current.set(agent.id, cur)
-          }
-        }
-        if (newLines.length) push(newLines)
-        return
-      }
-    })
-
-    return () => { offEngine() }
-  }, [])
+  // The legacy orchestrator engine-event log stream (pending:add / agent:log / agent:stalled /
+  // run:update per-agent state lines) is gone with the orchestrator. run2 feeds this console via its
+  // own RunLogLine stream (below); nothing subscribes to the removed engine bus here anymore.
 
   // run2 (P0 Task 4): the new headless run controller doesn't emit EngineEvents — it broadcasts
   // its own RunLogLine stream (see Tasks 1-3). Feed those into the same console so the bottom log

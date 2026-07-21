@@ -2,7 +2,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { wsRunDir, wsRunsDir } from '../config/paths'
-import { RunStore } from '../orchestrator/runStore'
+import { RunStore } from './runStore'
 import type { RunControllerState } from './controller'
 
 // provider/model/cwd are display-only metadata (used solely by runHistoryAdapter.ts to render a
@@ -53,6 +53,12 @@ export interface SavedControllerState {
   // `undefined`; resumeFromDisk's caller must then fall back to its own reconstruction — see the
   // fallback's risk noted at that call site.
   projects?: RunControllerState['projects']
+  // ①汇总 (see RunControllerState.summary doc, controller.ts): the synthesized run summary, persisted
+  // as durable run metadata so a finished run's summary survives an app restart (RunHistoryPanel /
+  // any future replay). Optional — same backward-compat rationale as the fields above: an OLDER saved
+  // run2-state loads it as `undefined` (a run that finished before this field existed simply has no
+  // stored summary, exactly as before). Only ever set on a run that completed every stage.
+  summary?: string
 }
 
 const KEY = 'run2-state'
@@ -65,7 +71,7 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
       provider: o.order.provider, model: o.order.model, cwd: o.order.cwd,
     }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects, summary: s.summary })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY) as SavedControllerState | undefined

@@ -51,6 +51,26 @@ describe('buildWorkOrders', () => {
     expect(orders[1].model).toBe('m')
     expect(orders[1].cwd).toBe('/ws/b')
   })
+  it('②多镜头CR: a lens-mode review stage fans out one reviewer per lens at workspace root (wins over scope)', () => {
+    const reviewStage: StagePlan = {
+      key: 'review', name: '代码 CR', provider: 'x', model: 'm', scope: 'root', gate: true,
+      review: { mode: 'parallel', reviewers: ['correctness', 'security'] },
+    }
+    const orders = buildWorkOrders({ stage: reviewStage, workspacePath: '/ws', projects: [{ name: 'a', cwd: '/ws/a' }], upstream: [], buildPrompt })
+    expect(orders.map((o) => o.id)).toEqual(['review:workspace:correctness', 'review:workspace:security'])
+    expect(orders.map((o) => o.lens)).toEqual(['correctness', 'security'])
+    expect(orders.every((o) => o.cwd === '/ws')).toBe(true) // root, not per-project
+  })
+  it('②多镜头CR: a non-lens review config falls through to the stage’s normal shape', () => {
+    const reviewStage: StagePlan = { key: 'review', name: '代码 CR', provider: 'x', model: 'm', scope: 'root', gate: true, review: { mode: 'single' } }
+    const orders = buildWorkOrders({ stage: reviewStage, workspacePath: '/ws', projects: [], upstream: [], buildPrompt })
+    expect(orders.map((o) => o.id)).toEqual(['review:root']) // single root order, unchanged
+  })
+  it('②多镜头CR: a PER-PROJECT stage carrying a stray lens config is NOT hijacked into lens fan-out', () => {
+    const strayed: StagePlan = { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: true, review: { mode: 'parallel', reviewers: ['security'] } }
+    const orders = buildWorkOrders({ stage: strayed, workspacePath: '/ws', projects: [{ name: 'a', cwd: '/ws/a' }, { name: 'b', cwd: '/ws/b' }], upstream: [], buildPrompt })
+    expect(orders.map((o) => o.id)).toEqual(['develop:a', 'develop:b']) // per-project preserved, no lens lanes
+  })
 })
 
 describe('runStage', () => {

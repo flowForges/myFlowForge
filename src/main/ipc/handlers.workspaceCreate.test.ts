@@ -1,35 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { EventBus } from '../orchestrator/eventBus'
 import { CH } from './channels'
 
 // Focused routing test for CH.workspaceCreate: always routes through runWorkspaceSetup (observable
 // progress path), regardless of step plugins. createWorkspace is mocked only to prove it's never called.
 
-const { createWorkspaceMock, runWorkspaceSetupMock, subscribers } = vi.hoisted(() => ({
+const { createWorkspaceMock, runWorkspaceSetupMock } = vi.hoisted(() => ({
   createWorkspaceMock: vi.fn(async () => ({ workspace: { name: 'fast' }, startRunOpts: {} })),
   runWorkspaceSetupMock: vi.fn(async () => ({ workspace: { name: 'setup' }, startRunOpts: {} })),
-  subscribers: [] as Array<(e: any) => void>,
 }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() }, dialog: {} }))
-vi.mock('../orchestrator/orchestrator', () => ({
-  Orchestrator: class { startRun() {} resolve() {} getRun() { return null } }
-}))
-vi.mock('../orchestrator/eventBus', () => ({
-  EventBus: class {
-    subscribe(fn: (e: any) => void) { subscribers.push(fn); return () => {} }
-    emit(e: any) { subscribers.forEach(fn => fn(e)) }
-  }
-}))
-vi.mock('../orchestrator/runStore', () => ({ readLastRun: vi.fn(), RunStore: class { get runDir() { return '/tmp' } } }))
+vi.mock('../run/runStore', () => ({ RunStore: class { get runDir() { return '/tmp' } } }))
 vi.mock('../mcp/forgeBridge', () => ({ startBridge: vi.fn(() => Promise.resolve(null)) }))
-vi.mock('../chat/proposeRun', () => {
-  const fn: any = vi.fn(); fn.has = vi.fn(() => false); fn.resolve = vi.fn()
-  return { makeProposeRun: vi.fn(() => fn) }
-})
-vi.mock('../narrator/narratorService', () => ({ NarratorService: class { onEngineEvent() {} } }))
 vi.mock('../workspace/workspaceList', () => ({ listWorkspaces: vi.fn(() => []) }))
-vi.mock('../workspace/workspaceRun', () => ({ workspaceToStartRunOpts: vi.fn() }))
 vi.mock('../chat/chatService', () => ({ sendTurn: vi.fn(), history: vi.fn(() => []) }))
 vi.mock('../skills/installSkill', () => ({ removeWorkspaceSkill: vi.fn() }))
 vi.mock('../chat/chatStore', () => ({ appendMessage: vi.fn(), readMessages: vi.fn(() => []) }))
@@ -70,7 +53,7 @@ async function invoke(channel: string, broadcast: (ch: string, p: unknown) => vo
   return call[1]({}, ...args)
 }
 
-beforeEach(() => { createWorkspaceMock.mockClear(); runWorkspaceSetupMock.mockClear(); subscribers.length = 0 })
+beforeEach(() => { createWorkspaceMock.mockClear(); runWorkspaceSetupMock.mockClear() })
 
 describe('CH.workspaceCreate routing', () => {
   it('no step plugins → still routes through runWorkspaceSetup (observable path)', async () => {

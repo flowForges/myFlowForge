@@ -4,6 +4,7 @@ import type { Run2Api } from '../state/useRun2'
 import type { RunControllerState } from '../../main/run/controller'
 import type { AgentContextMeta, AgentRuntime } from '@shared/types'
 import { AgentNode } from './AgentNode'
+import { HookNode } from './HookNode'
 import { buildStageRuntimes, type AdaptedAgent, type LaneMemory } from './runExecAdapter'
 
 // P2-1b: right-side run-execution display. Rebuilt to reuse the OLD 代理-tab style (inspector-
@@ -107,6 +108,9 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }
   // that assumes a live process (run-level controls below, and the per-lane elapsed pill in
   // AgentNode, which must not tick a crashed/never-finished lane against `Date.now()`).
   const isReadOnly = readOnly || !!staticState
+  // User feedback (2026-07-20): the temp-branch line is truncated with an ellipsis — let the user
+  // click it to copy the FULL branch name, with a brief "已复制" confirmation.
+  const [branchCopied, setBranchCopied] = useState(false)
   const liveRunId = state?.machine.plan.runId ?? null
   if (liveRunId !== lastRunIdRef.current) {
     lastRunIdRef.current = liveRunId
@@ -193,7 +197,15 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }
       <div className="wfo-head">
         <div className="wfo-title">
           <span className="tt">{isReadOnly ? '历史运行回看' : '工作流执行中'}</span>
-          <span className="wfo-branch" title={`分支：${tempBranch}`}>分支：{tempBranch}</span>
+          <button
+            className={`wfo-branch${branchCopied ? ' copied' : ''}`}
+            title={branchCopied ? '已复制' : '点击复制完整分支名'}
+            onClick={() => {
+              void navigator.clipboard?.writeText(tempBranch)
+              setBranchCopied(true)
+              setTimeout(() => setBranchCopied(false), 1500)
+            }}
+          >分支：{tempBranch}{branchCopied ? ' ✓ 已复制' : ''}</button>
         </div>
         <div className="wfo-prog">
           <span className="lbl">已完成 {doneN} / {totalStages}</span>
@@ -272,7 +284,25 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }
         </div>
 
         <div className="pipe">
-          {stages.map((stage, idx) => {
+          {(() => { let stageNo = 0; return stages.map((stage) => {
+            // ③stage hooks: a woven hook renders as a HookNode inline in the pipe (not a numbered
+            // stage) — same as the legacy orchestrator's flow. Its single agent carries hook:true +
+            // capability chips (see runExecAdapter.buildHookStage).
+            if (stage.hook) {
+              const agent = stage.agents[0]
+              return (
+                <div key={stage.key} className="stage hook-stage">
+                  {agent && (
+                    <HookNode
+                      agent={agent}
+                      open={effectiveOpenIds.has(agent.id)}
+                      onToggle={() => handleToggle(agent.id)}
+                    />
+                  )}
+                </div>
+              )
+            }
+            const idx = stageNo++
             const n = stage.agents.length
             const isParallel = n > 1
             const stageMode = isParallel ? `并行 · ${n} 代理` : '单代理'
@@ -313,7 +343,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }
                 </div>
               </div>
             )
-          })}
+          }) })()}
         </div>
       </div>
     </div>

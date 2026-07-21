@@ -12,6 +12,11 @@ export interface WorkOrder {
   cwd: string
   prompt: string
   permissionMode?: PermissionMode
+  // ②多镜头CR: set only on a multi-lens review reviewer (id `${stageKey}:workspace:${lens}`) — the
+  // review视角 this reviewer审. Used to (a) name a unique per-lens artifact file (avoid the
+  // review-root.md collision when every lens reviewer has no `project`) and (b) let the exec panel /
+  // consolidated report group by lens. Absent for every other order (root, per-project, single).
+  lens?: import('@shared/types').ReviewLens
 }
 
 export interface WorkOrderOutcome {

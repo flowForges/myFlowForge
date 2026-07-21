@@ -5,7 +5,7 @@ import { planFromStages } from '../run/planFromStages'
 import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
 import { listRuns, loadRun, deleteRun } from '../run/persist'
 import type { Run2Manager } from '../run/manager'
-import type { StageSpec, DevelopProject } from '../orchestrator/orchestrator'
+import type { StageSpec, DevelopProject } from '../run/runTypes'
 import type { GateDecision, LaneDecision } from '../run/decisions'
 import type { Workspace, Workflow, CustomStage } from '../config/schema'
 

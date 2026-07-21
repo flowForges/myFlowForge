@@ -55,6 +55,57 @@ describe('buildStageRuntimes', () => {
     expect(assess.state).toBe('ok')
   })
 
+  it('②多镜头CR: a lens-mode review stage renders one agent per lens (id/label/state)', () => {
+    const st = baseState({
+      machine: {
+        plan: {
+          runId: 'run2-1',
+          stages: [{ key: 'review', name: '代码 CR', provider: 'claude', model: 'opus', scope: 'root', gate: true, review: { mode: 'parallel', reviewers: ['correctness', 'security'] } }],
+        },
+        stages: [{ key: 'review', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      outcomes: {
+        review: [{ order: { id: 'review:workspace:correctness', stageKey: 'review', name: '代码 CR · 正确性', provider: 'claude', model: 'opus', cwd: '/ws', prompt: '', lens: 'correctness' }, status: 'ok', attempts: 1 }],
+      },
+      liveLanes: { 'review:workspace:security': { stageKey: 'review', state: 'run', cwd: '/ws' } },
+    })
+    const review = buildStageRuntimes(st, {}).find((s) => s.key === 'review')!
+    expect(review.agents.map((a) => a.id)).toEqual(['review:workspace:correctness', 'review:workspace:security'])
+    expect(review.agents.map((a) => a.name)).toEqual(['正确性', '安全'])
+    expect(review.agents[0].state).toBe('ok')  // has a settled outcome
+    expect(review.agents[1].state).toBe('run') // live lane
+  })
+
+  it('③stage hooks: interleaves hook stages at __start / after-stage / __wf, marked hook:true', () => {
+    const st = baseState({
+      machine: {
+        plan: {
+          runId: 'run2-1',
+          stages: [{ key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: true, prompt: 'x' }],
+          hooks: [
+            { id: 's', name: '预处理', prompt: 'p', after: '__start', skills: ['analyze'], tools: ['read'] },
+            { id: 'd', name: '方案检查', prompt: 'p', after: 'design', skills: [], tools: [] },
+            { id: 'w', name: '收尾', prompt: 'p', after: '__wf', skills: [], tools: [] },
+          ],
+        },
+        stages: [{ key: 'design', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      outcomes: { 'hook:s': [{ order: { id: 'hook:s', stageKey: 'hook:s', name: '预处理', provider: 'claude', model: 'opus', cwd: '/ws', prompt: '' }, status: 'ok', attempts: 1 }] },
+    })
+    const rows = buildStageRuntimes(st, {})
+    expect(rows.map((r) => r.key)).toEqual(['hook:s', 'design', 'hook:d', 'hook:w'])
+    expect(rows.filter((r) => r.hook).map((r) => r.key)).toEqual(['hook:s', 'hook:d', 'hook:w'])
+    // the __start hook has a settled ok outcome; its single agent carries hook:true + capability chips
+    const start = rows.find((r) => r.key === 'hook:s')!
+    expect(start.state).toBe('ok')
+    expect(start.agents[0].hook).toBe(true)
+    expect(start.agents[0].hookSkills).toEqual(['analyze'])
+    // a hook-less plan is untouched (no hook rows)
+    expect(buildStageRuntimes(baseState(), {}).some((r) => r.hook)).toBe(false)
+  })
+
   it('maps per-project fan-out lanes from liveLanes (running) and outcomes (settled)', () => {
     const stages = buildStageRuntimes(baseState(), {})
     const develop = stages.find((s) => s.key === 'develop')!

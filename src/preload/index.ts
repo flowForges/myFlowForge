@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH } from '../main/ipc/channels'
-import type { EngineEvent, ResolvePayload, ChatEvent, ChangesEvent, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
+import type { ChatEvent, ChangesEvent, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
 
 const api = {
@@ -46,18 +46,8 @@ const api = {
   setStageModel: (a: { path: string; stageKey: string; provider: string; model: string }) => ipcRenderer.invoke(CH.workspaceSetStageModel, a),
   editWorkspace: (a: { path: string; opts: unknown; runProjHooks?: boolean }) => ipcRenderer.invoke(CH.workspaceEdit, a),
   renameWorkspace: (a: { path: string; name: string }) => ipcRenderer.invoke(CH.workspaceRename, a),
-  // runWorkspace/startRun/resumeRun (old orchestrator run start/resume triggers) removed — run2 is the
-  // only workflow-run entry point now (see run2LaunchStart below). resolve/cancelRun/discardRun/lastRun
-  // stay: read-only status + cleanup for any run already in the (in-memory) orchestrator.
-  resolve: (p: ResolvePayload) => ipcRenderer.invoke(CH.engineResolve, p),
-  cancelRun: () => ipcRenderer.invoke(CH.engineCancel),
-  discardRun: (wsPath: string) => ipcRenderer.invoke(CH.engineDiscard, wsPath),
-  lastRun: (wsPath: string) => ipcRenderer.invoke(CH.engineLastRun, wsPath),
-  onEngineEvent: (cb: (e: EngineEvent) => void) => {
-    const listener = (_: unknown, e: EngineEvent) => cb(e)
-    ipcRenderer.on(CH.engineEvent, listener)
-    return () => ipcRenderer.removeListener(CH.engineEvent, listener)
-  },
+  // The legacy orchestrator run channels (startRun/resumeRun/resolve/cancel/discard/lastRun/engineEvent)
+  // have been removed entirely — run2 (see run2LaunchStart below) is the only workflow-run path now.
   onSetupEvent: (cb: (e: SetupEvent) => void) => {
     const listener = (_: unknown, e: SetupEvent) => cb(e)
     ipcRenderer.on(CH.workspaceSetup, listener)
