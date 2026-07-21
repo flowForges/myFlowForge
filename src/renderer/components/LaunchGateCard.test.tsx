@@ -7,14 +7,14 @@ const base: LaunchGateConfig = {
   seed: '把 token 迁到 OKLCH',
   workflows: [
     { id: 'std', name: '标准工作流', stageCount: 4, stages: [
-      { key: 'requirement', name: '需求梳理', gate: false, code: false },
-      { key: 'develop', name: '代码开发', gate: false, code: true },
-      { key: 'test', name: '测试', gate: false, code: true },
-      { key: 'review', name: '代码评审', gate: true, code: false },
+      { key: 'requirement', name: '需求梳理', gate: false, code: false, provider: 'claude', model: 'claude-opus-4-8' },
+      { key: 'develop', name: '代码开发', gate: false, code: true, provider: 'claude', model: 'claude-opus-4-8' },
+      { key: 'test', name: '测试', gate: false, code: true, provider: 'claude', model: 'claude-opus-4-8' },
+      { key: 'review', name: '代码评审', gate: true, code: false, provider: 'claude', model: 'claude-opus-4-8' },
     ] },
     { id: 'basic', name: '基础流程', stageCount: 2, stages: [
-      { key: 'requirement', name: '需求梳理', gate: false, code: false },
-      { key: 'develop', name: '代码开发', gate: false, code: true },
+      { key: 'requirement', name: '需求梳理', gate: false, code: false, provider: 'claude', model: 'claude-opus-4-8' },
+      { key: 'develop', name: '代码开发', gate: false, code: true, provider: 'claude', model: 'claude-opus-4-8' },
     ] },
   ],
   selectedWorkflowId: 'std',
@@ -28,6 +28,13 @@ const base: LaunchGateConfig = {
 // Improvement ⑦: the model chip's picker is fed by a `providers` prop (the SAME shape
 // WorkspaceView/Composer pass down — real, locally-discovered providers/models), never a
 // hardcoded catalog. These test doubles stand in for that discovered data.
+// The launch gate now renders provider/model chips on BOTH stage rows and project rows, so a bare
+// document.querySelector('.lg-model-chip') would hit the first stage's chip. Scope to a project row.
+function projectChip(projectName: string, chip: '.lg-model-chip' | '.lg-provider-chip'): HTMLElement {
+  const row = Array.from(document.querySelectorAll('.wfo-proj')).find((el) => el.querySelector('.pn b')?.textContent === projectName)
+  return row!.querySelector(chip) as HTMLElement
+}
+
 const providers: ProviderInfo[] = [
   {
     id: 'claude', displayName: 'Claude Code', installed: true,
@@ -112,7 +119,7 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
     render(<LaunchGateCard config={base} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
     expect(document.querySelector('.wfo-mpop')).toBeNull()
 
-    fireEvent.click(document.querySelector('.lg-model-chip')!)
+    fireEvent.click(projectChip('go-blog', '.lg-model-chip'))
 
     const pop = document.querySelector('.wfo-mpop')!
     expect(pop).toBeTruthy()
@@ -126,7 +133,7 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
 
-    fireEvent.click(document.querySelector('.lg-model-chip')!)
+    fireEvent.click(projectChip('go-blog', '.lg-model-chip'))
     fireEvent.click(screen.getByText('sonnet-4.6'))
 
     // Picking closes the popup and updates the chip's displayed label immediately.
@@ -151,7 +158,7 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={cfg} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
 
-    fireEvent.click(document.querySelector('.lg-model-chip')!)
+    fireEvent.click(projectChip('go-blog', '.lg-model-chip'))
     const input = screen.getByPlaceholderText('输入模型 id')
     expect(input).toBeInTheDocument()
 
@@ -168,7 +175,8 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
 
   it('不传 providers 时(旧调用点)仍能渲染当前值，不因缺 prop 崩溃', () => {
     render(<LaunchGateCard config={base} onConfirm={() => {}} onCancel={() => {}} />)
-    expect(screen.getByText(/claude-opus-4-8/)).toBeInTheDocument()
+    // model id shows on the project chip AND the root-stage chips — just assert it renders somewhere.
+    expect(screen.getAllByText(/claude-opus-4-8/).length).toBeGreaterThan(0)
   })
 })
 
@@ -177,7 +185,7 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
 describe('LaunchGateCard 编码代理(provider)选择', () => {
   it('点击 provider chip 打开弹层，列出已安装的编码代理', () => {
     render(<LaunchGateCard config={base} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
-    fireEvent.click(document.querySelector('.lg-provider-chip')!)
+    fireEvent.click(projectChip('go-blog', '.lg-provider-chip'))
     const pop = document.querySelector('.wfo-mpop') as HTMLElement
     expect(pop).toBeTruthy()
     // Both installed providers are offered inside the popup (Claude Code also appears as the chip label
@@ -186,10 +194,10 @@ describe('LaunchGateCard 编码代理(provider)选择', () => {
     expect(within(pop).getByText('Claude Code')).toBeInTheDocument()
   })
 
-  it('切换 provider 后确认，回传新 provider 且 model 被重置为空', () => {
+  it('切换 provider 后确认，回传新 provider 且 model 切到新 provider 的默认模型(非空,避免回退到 stage 的 claude 模型)', () => {
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
-    fireEvent.click(document.querySelector('.lg-provider-chip')!)
+    fireEvent.click(projectChip('go-blog', '.lg-provider-chip'))
     fireEvent.click(screen.getByText('Codex'))
     // popup closed, provider chip now shows Codex
     expect(document.querySelector('.wfo-mpop')).toBeNull()
@@ -197,7 +205,8 @@ describe('LaunchGateCard 编码代理(provider)选择', () => {
     expect(onConfirm).toHaveBeenCalledWith(
       expect.objectContaining({
         projects: expect.arrayContaining([
-          expect.objectContaining({ name: 'go-blog', provider: 'codex', model: '' }),
+          // codex's first discovered model, NOT '' (empty would fall back to the stage's claude model)
+          expect.objectContaining({ name: 'go-blog', provider: 'codex', model: 'gpt-5-codex' }),
         ]),
       })
     )
@@ -240,5 +249,60 @@ describe('LaunchGateCard 工作流阶段流程预览', () => {
     fireEvent.click(screen.getByText('基础流程'))
     expect(screen.queryByText('代码评审')).toBeNull()
     expect(screen.getByText('代码开发')).toBeInTheDocument()
+  })
+})
+
+// #1+#3: stages are checkable (uncheck = drop from run plan) and root stages can switch provider/model.
+describe('LaunchGateCard 阶段可选 + 阶段 provider', () => {
+  it('取消勾选某阶段后确认，stageChoices 里该阶段 enabled=false', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    fireEvent.click(screen.getByText('需求梳理'))
+    fireEvent.click(screen.getByText('确认'))
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      stageChoices: expect.arrayContaining([expect.objectContaining({ key: 'requirement', enabled: false })]),
+    }))
+  })
+
+  it('全部阶段取消勾选时，确认按钮禁用', () => {
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
+    for (const name of ['需求梳理', '代码开发', '测试', '代码评审']) fireEvent.click(screen.getByText(name))
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('改根阶段 provider 后确认，stageChoices 反映新 provider + 默认模型', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    // requirement 是 root stage(code:false),渲染 provider chip;它排在项目行之前,是第一个 .lg-provider-chip
+    fireEvent.click(document.querySelector('.lg-provider-chip')!)
+    fireEvent.click(screen.getByText('Codex'))
+    fireEvent.click(screen.getByText('确认'))
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      stageChoices: expect.arrayContaining([expect.objectContaining({ key: 'requirement', provider: 'codex', model: 'gpt-5-codex' })]),
+    }))
+  })
+})
+
+describe('LaunchGateCard hook 可选', () => {
+  const withHooks: LaunchGateConfig = {
+    ...base,
+    hooks: [
+      { id: 'h1', name: '跑测试', after: 'develop' },
+      { id: 'h2', name: '收尾总结', after: '__wf' },
+    ],
+  }
+  it('展示 hook 列表 + 触发时机；取消勾选后确认 hookChoices 反映', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={withHooks} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    expect(screen.getByText('跑测试')).toBeInTheDocument()
+    expect(screen.getByText('全部结束后')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('跑测试'))
+    fireEvent.click(screen.getByText('确认'))
+    expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      hookChoices: expect.arrayContaining([
+        expect.objectContaining({ id: 'h1', enabled: false }),
+        expect.objectContaining({ id: 'h2', enabled: true }),
+      ]),
+    }))
   })
 })

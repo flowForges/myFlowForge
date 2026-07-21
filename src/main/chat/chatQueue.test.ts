@@ -116,4 +116,31 @@ describe('ChatQueue', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(calls).toEqual(['A', 'B'])
   })
+
+  it('holds chat turns while a run2 workflow is active, drains them on runDone in FIFO order', async () => {
+    const calls: string[] = []
+    let runActive = true
+    const runTurn = vi.fn((p: ChatSendPayload) => { calls.push(p.text); return Promise.resolve() })
+    const q = new ChatQueue(runTurn, () => {}, () => runActive)
+    // While the workflow runs, sends are held (typed + queued, not executed).
+    q.enqueue(mk('/w', 'A'), '你')
+    q.enqueue(mk('/w', 'B'), '你')
+    await new Promise(r => setTimeout(r, 0))
+    expect(calls).toEqual([])
+    // Workflow finishes → drain in order.
+    runActive = false
+    q.runDone('/w')
+    await new Promise(r => setTimeout(r, 0))
+    expect(calls).toEqual(['A', 'B'])
+  })
+
+  it('a different workspace is NOT held by another workspace\'s active run', async () => {
+    const calls: string[] = []
+    const runTurn = vi.fn((p: ChatSendPayload) => { calls.push(p.workspacePath); return Promise.resolve() })
+    const q = new ChatQueue(runTurn, () => {}, (ws) => ws === '/w1') // only /w1 has an active run
+    q.enqueue(mk('/w1', 'A'), '你')  // held
+    q.enqueue(mk('/w2', 'B'), '你')  // runs — different workspace
+    await new Promise(r => setTimeout(r, 0))
+    expect(calls).toEqual(['/w2'])
+  })
 })

@@ -90,16 +90,18 @@ describe('Composer', () => {
     expect(btn.classList.contains('queueing')).toBe(false)
     expect(btn.title).toBe('发送 (回车)')
   })
-  it('lockedReason disables the textarea + send button and overrides the placeholder (priority over busy)', () => {
+  it('lockedReason 进入队列模式:输入仍可用、send 为 queueing 且可点、占位/标题替换(优先于 busy),发送会入队', () => {
     const onSend = vi.fn()
-    render(<Composer providers={providers} disabled={false} busy onSend={onSend} lockedReason="执行中…（对门的操作请在上方卡片进行）" />)
-    const ta = screen.getByPlaceholderText('执行中…（对门的操作请在上方卡片进行）') as HTMLTextAreaElement
-    expect(ta.disabled).toBe(true)
-    const btn = screen.getByTitle('执行中…（对门的操作请在上方卡片进行）') as HTMLButtonElement
-    expect(btn.disabled).toBe(true)
+    render(<Composer providers={providers} disabled={false} busy onSend={onSend} lockedReason="工作流执行中 · 发送将排队，结束后依次执行" />)
+    const ta = screen.getByPlaceholderText('工作流执行中 · 发送将排队，结束后依次执行') as HTMLTextAreaElement
+    expect(ta.disabled).toBe(false)
+    const btn = screen.getByTitle('工作流执行中 · 发送将排队，结束后依次执行') as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    expect(btn.classList.contains('queueing')).toBe(true)
+    // Typing + sending is allowed — the message queues on the main side (ChatQueue) until the run ends.
     fireEvent.change(ta, { target: { value: 'x' } })
     fireEvent.keyDown(ta, { key: 'Enter' })
-    expect(onSend).not.toHaveBeenCalled()
+    expect(onSend).toHaveBeenCalled()
   })
 
   it('does not send empty text, and clears after send', () => {

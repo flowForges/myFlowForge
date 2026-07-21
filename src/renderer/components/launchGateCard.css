@@ -38,6 +38,10 @@
 .lg-seed-input:focus { border-color: var(--accent); }
 .lg-seed-input::placeholder { color: var(--faint); }
 /* "正在总结…" state while the summary generates — muted text + a small spinner. */
+/* code stages take provider/model from the per-project pickers, so their stage row shows a read-only
+   hint chip instead of an editable provider/model picker. */
+.wfo-proj .wfo-model.ro { cursor: default; color: var(--faint); border-style: dashed; }
+.wfo-proj .wfo-model.ro:hover { border-color: var(--border-2); color: var(--faint); }
 .lg-seed-loading { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); padding: 8px 2px; }
 .lg-seed-spin { width: 13px; height: 13px; flex: 0 0 13px; border-radius: 50%; border: 2px solid var(--border-2); border-top-color: var(--accent); animation: lg-seed-spin .7s linear infinite; }
 @keyframes lg-seed-spin { to { transform: rotate(360deg); } }

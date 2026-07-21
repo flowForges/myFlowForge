@@ -10,7 +10,11 @@ export type Broadcast = (channel: string, payload: unknown) => void
 export class ChatQueue {
   private map = new Map<string, WsQueue>()
   private seq = 0
-  constructor(private runTurn: RunTurn, private broadcast: Broadcast) {}
+  // isRunActive(ws): a run2 workflow is executing in this workspace → hold chat turns (don't start them)
+  // until it finishes. run2 lanes mutate the working tree, so running a chat turn concurrently could
+  // collide; instead the user can keep typing/queueing and the queue drains when runDone(ws) fires. When
+  // omitted (tests, older callers) nothing is ever held — plain FIFO on `busy`.
+  constructor(private runTurn: RunTurn, private broadcast: Broadcast, private isRunActive?: (ws: string) => boolean) {}
 
   private get(ws: string): WsQueue {
     let q = this.map.get(ws)
@@ -21,9 +25,26 @@ export class ChatQueue {
   enqueue(payload: ChatSendPayload, source: string): void {
     const ws = payload.workspacePath
     const q = this.get(ws)
-    const task: QueuedTask = { id: `q-${++this.seq}`, source, payload }
-    if (q.busy) { q.queue.push(task); this.emit(ws) }
-    else this.runOne(ws, task)
+    q.queue.push({ id: `q-${++this.seq}`, source, payload })
+    this.pump(ws)
+    this.emit(ws)
+  }
+
+  // Start the next queued task if the workspace is idle AND no run2 workflow is holding it. Central
+  // gate used by enqueue, turn-completion, and runDone so the "hold while a run is active" rule lives
+  // in exactly one place.
+  private pump(ws: string): void {
+    const q = this.get(ws)
+    if (q.busy || this.isRunActive?.(ws)) return
+    const next = q.queue.shift()
+    if (next) this.runOne(ws, next)
+  }
+
+  // Called when a run2 workflow for this workspace reaches a terminal state (Run2Manager) — release any
+  // chat turns the user queued while it ran, in FIFO order.
+  runDone(ws: string): void {
+    this.pump(ws)
+    this.emit(ws)
   }
 
   cancel(ws: string, id: string): void {
@@ -65,9 +86,8 @@ export class ChatQueue {
       q.busy = false
       q.running = null
       q.activeCancel = null
-      const next = q.queue.shift()
-      if (next) this.runOne(ws, next)
-      else this.emit(ws)
+      this.pump(ws)   // start the next queued turn if the workspace is now free (and no run2 is holding)
+      this.emit(ws)
     })
   }
 

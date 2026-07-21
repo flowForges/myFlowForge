@@ -5,10 +5,10 @@ import type { EngineApi } from '../state/useEngine'
 import type { ProviderInfo } from '@shared/types'
 import type { RunControllerState } from '../../main/run/controller'
 
-// Task P2-3: while a workflow run is active, the chat input box is LOCKED entirely — all gate/decision
-// interaction happens via cards, never via the chat input (roots out the old "chat reply vs. gate
-// answer" ambiguity). Locked = disabled + placeholder/notice text, driven by the same run2 liveness
-// derivation the file already uses for the reopen chip / auto-open (`run2Live`).
+// #4/#5 (was P2-3): while a workflow run is active, the chat input is in QUEUE mode — NOT hard-disabled.
+// The user can type and send; the message is held on the main side (ChatQueue.isRunActive) and runs after
+// the workflow finishes. Gate/decision interaction still happens via cards. Driven by the same run2
+// liveness derivation the file uses for the reopen chip / auto-open (`run2Live`, workspace-scoped).
 
 const providers: ProviderInfo[] = [
   { id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus-4.8', label: 'opus-4.8' }] }
@@ -91,7 +91,7 @@ describe('WorkspaceView: composer locked while a workflow run is active', () => 
     expect(ta.placeholder).not.toMatch(/执行中/)
   })
 
-  it('run active: chat column stays visible and the composer is disabled with the 执行中 notice', async () => {
+  it('run active: chat column stays visible and the composer is in QUEUE mode (typable, 排队 notice, send enabled)', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
 
@@ -99,15 +99,14 @@ describe('WorkspaceView: composer locked while a workflow run is active', () => 
       emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'running' }) })
     })
 
-    // P2-4: no floating run-mode overlay to step back from — the chat column (and composer) is
-    // always mounted; a live run only locks the composer, it never hides the chat.
+    // #4/#5: a live run no longer hard-disables the composer — it's in queue mode. The user can type
+    // and send; the message is held on the main side (ChatQueue) and runs after the workflow finishes.
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
     const ta = document.querySelector('#composerInput') as HTMLTextAreaElement
-    expect(ta.disabled).toBe(true)
-    expect(ta.placeholder).toMatch(/执行中/)
-    expect(ta.placeholder).toMatch(/上方卡片/)
+    expect(ta.disabled).toBe(false)
+    expect(ta.placeholder).toMatch(/排队/)
 
     const sendBtn = document.querySelector('#sendBtn') as HTMLButtonElement
-    expect(sendBtn.disabled).toBe(true)
+    expect(sendBtn.disabled).toBe(false)
   })
 })

@@ -19,9 +19,12 @@ export interface SessionTabsProps {
   // #3: sessions whose (off-screen) workflow run is waiting on a permission gate — badge their tab so
   // the user knows to switch there, instead of the gate stealing the current tab.
   attentionIds?: ReadonlySet<string>
+  // Per-provider latest reported context usage for the active session — shown in the IDs panel next to
+  // each provider's 主 Agent row.
+  usageByProvider?: Record<string, { used: number; window: number }>
 }
 
-export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds }: SessionTabsProps) {
+export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds, usageByProvider }: SessionTabsProps) {
   const multi = sessions.length > 1
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -94,7 +97,7 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
             IDs
           </button>
           {idsOpen && workspacePath && activeSessionId && (
-            <SessionIdsPanel workspacePath={workspacePath} sessionId={activeSessionId} archived={!!archived} />
+            <SessionIdsPanel workspacePath={workspacePath} sessionId={activeSessionId} archived={!!archived} usageByProvider={usageByProvider} />
           )}
         </div>
         <button

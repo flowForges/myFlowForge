@@ -40,6 +40,10 @@ export interface Run2ManagerDeps {
   emit: Run2Emit
   retries?: number
   onError?: (wsPath: string, err: Error) => void
+  // Fired when a workspace's run reaches a terminal state AND no successor run took the lock — i.e. the
+  // workspace is fully free of run2 work. Used to release chat turns the user queued while it ran (the
+  // ChatQueue holds them via isRunActive). Optional so existing tests/callers keep passing unchanged.
+  onRunDone?: (wsPath: string) => void
   // §7.4 ③硬阻塞: threaded straight into RunControllerDeps.mcpEntry (see its doc in controller.ts) —
   // handlers.ts's `join(__dirname, 'forgeMcp.js')`, the same entry the legacy Orchestrator and
   // chat/delegate.ts already use. Optional so every existing manager test (none set it) keeps
@@ -204,6 +208,9 @@ export class Run2Manager {
         // Task 1: the lock is now free — dequeue+start whatever's next for this workspace, if anything.
         // Must run AFTER the delete above, since start()/startNow() re-checks `controllers.has(wsPath)`.
         this.startNext(wsPath)
+        // Release chat turns queued during the run — but only if a successor run2 didn't just take the
+        // lock (startNext above), else we'd let a chat turn run concurrently with the next workflow.
+        if (!this.isActive(wsPath)) this.deps.onRunDone?.(wsPath)
       })
     return controller.state
   }

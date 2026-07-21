@@ -389,13 +389,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const sid = sessions.activeSessionId
     const run2Ipc = (window as any).forge?.run2
     const infoPromise: Promise<{
-      workflows: { id: string; name: string; stages: { key: string; name: string; gate?: boolean; code?: boolean }[] }[]
+      workflows: { id: string; name: string; stages: { key: string; name: string; gate?: boolean; code?: boolean; provider?: string; model?: string }[] }[]
       projects: { name: string; provider?: string; model?: string }[]
-    }> = run2Ipc?.launchInfo ? run2Ipc.launchInfo(wsPath) : Promise.resolve({ workflows: [], projects: [] })
+      hooks?: { id: string; name: string; after: string }[]
+    }> = run2Ipc?.launchInfo ? run2Ipc.launchInfo(wsPath) : Promise.resolve({ workflows: [], projects: [], hooks: [] })
     void infoPromise.then((info) => {
       const workflows = info.workflows.map((w) => ({
         id: w.id, name: w.name, stageCount: w.stages.length,
-        stages: w.stages.map((s) => ({ key: s.key, name: s.name, gate: !!s.gate, code: !!s.code })),
+        stages: w.stages.map((s) => ({ key: s.key, name: s.name, gate: !!s.gate, code: !!s.code, provider: s.provider ?? '', model: s.model ?? '' })),
       }))
       const selectedWorkflowId = workflowId && workflows.some((w) => w.id === workflowId)
         ? workflowId
@@ -413,6 +414,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         selectedWorkflowId,
         projects,
         supplement: '',
+        hooks: info.hooks ?? [],
       }
       const now = Date.now()
       const gateId = `lg-${now}`
@@ -463,6 +465,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       supplement: config.supplement,
       seed: config.seed,
       sessionId: ownerSessionId,
+      // Interactive stage/hook choices from the gate (skip unchecked, per-stage provider/model override).
+      stages: config.stageChoices,
+      hooks: config.hookChoices,
     }
     // Mirror the user's latest edits immediately + clear any stale error from a prior failed attempt
     // (the card stays in its active/non-frozen render until run2.start resolves below).
@@ -555,6 +560,19 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       if (u?.used) return u
     }
     return undefined
+  }, [chat.messages])
+
+  // Per-provider latest reported context usage for THIS session — surfaced in the IDs panel next to
+  // each provider's 主 Agent row (user request: the context is session-scoped, so show it with the
+  // session it belongs to). Same raw signal as latestUsage (model's own per-turn usage token count),
+  // just bucketed by the provider that produced it so a multi-provider session shows each one's own.
+  const usageByProvider = useMemo(() => {
+    const out: Record<string, { used: number; window: number }> = {}
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const m = chat.messages[i]
+      if (m.who === 'ai' && m.provider && m.usage?.used && !out[m.provider]) out[m.provider] = m.usage
+    }
+    return out
   }, [chat.messages])
 
   // Merge: a persisted (message-backed) gate wins over a same-id local entry — once confirmLaunchGate's
@@ -1025,6 +1043,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           workspacePath={wsPath}
           archived={archived}
           attentionIds={attentionIds}
+          usageByProvider={usageByProvider}
         />
         {/* P-C2/T3 (disk-resume): a workflow was mid-run when the app last exited/crashed for this
             workspace — offer to continue it (rebuild from the last saved stage on disk) or discard it.
@@ -1242,11 +1261,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         <Composer
           providers={providers}
           disabled={!wsPath || !!archived}
-          // While a workflow run is active, the chat input is locked entirely — all gate/decision
-          // interaction happens via the inline cards (ReqCard/LaunchGateCard etc.) above, never via
-          // chat. Chat stays visible throughout the run, but must not accept input that could be
-          // confused with a gate answer.
-          lockedReason={run2Live ? '执行中…（对门的操作请在上方卡片进行）' : undefined}
+          // While a workflow run is active, the chat input is in QUEUE mode (not disabled): the user can
+          // type and send, and the message is held on the main side (ChatQueue) and runs after the
+          // workflow finishes. run2Live is workspace-scoped, so a NEW session in the same workspace is
+          // also in queue mode (it can type+queue, not frozen). Gate/decision interaction still happens
+          // via the inline cards above. The main-side hold avoids a chat turn mutating the tree while the
+          // run's lanes do (#4/#5).
+          lockedReason={run2Live ? '工作流执行中 · 发送将排队，结束后依次执行' : undefined}
           busy={chat.busy}
           running={chat.busy && chat.running != null}
           onStop={() => chat.stop()}

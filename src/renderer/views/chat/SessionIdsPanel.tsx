@@ -21,10 +21,12 @@ export function SessionIdsPanel({
   workspacePath,
   sessionId,
   archived,
+  usageByProvider,
 }: {
   workspacePath: string
   sessionId: string
   archived: boolean
+  usageByProvider?: Record<string, { used: number; window: number }>
 }) {
   const [rows, setRows] = useState<AgentSessionInfo[] | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -136,6 +138,17 @@ export function SessionIdsPanel({
                 <code title={r.sessionId}>{r.sessionId}</code>
                 <Copy text={r.sessionId} />
               </div>
+              {(() => {
+                // Context usage belongs to the chat 主 Agent turns (rows with no role / not a delegate),
+                // matched to the provider that reported it. Absent for workflow lanes / delegates / a
+                // provider that never reports usage (codex/cursor/gemini/…).
+                const u = !r.role && !r.depth ? usageByProvider?.[r.provider] : undefined
+                return u?.used ? (
+                  <div className="sid-ctx" title="该编码代理在本会话最近一轮真实上报的输入+缓存 token（CLI 不暴露自动压缩前的真实剩余，故只显原始 token 数）">
+                    上下文 <b>{u.used.toLocaleString()}</b> tokens
+                  </div>
+                ) : null
+              })()}
             </div>
           ))}
         </div>

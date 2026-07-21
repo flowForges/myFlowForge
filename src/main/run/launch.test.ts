@@ -153,6 +153,36 @@ describe('buildLaunchPlan + buildLaunchProjects (P1-4 launch gate start)', () =>
     expect(() => buildLaunchPlan({ ...cfg, workflowId: 'nope' }, ws)).toThrow()
   })
 
+  // #3: gate stage on/off — an unchecked stage is dropped from the plan (not merely hinted in the supplement).
+  it('drops stages the gate unchecked (enabled:false) from the plan', () => {
+    const plan = buildLaunchPlan({ ...cfg, stages: [{ key: 'design', enabled: false }, { key: 'develop', enabled: true }] }, ws)
+    expect(plan.stages.map((s) => s.key)).toEqual(['develop'])
+  })
+
+  it('throws when the gate unchecked every stage', () => {
+    expect(() => buildLaunchPlan({ ...cfg, stages: [{ key: 'design', enabled: false }, { key: 'develop', enabled: false }] }, ws)).toThrow('至少')
+  })
+
+  // #1: gate per-stage provider/model override wins over the workflow's stage default.
+  it('applies the gate per-stage provider/model override', () => {
+    const plan = buildLaunchPlan({ ...cfg, stages: [{ key: 'design', enabled: true, provider: 'qoder', model: 'qm' }] }, ws)
+    const design = plan.stages.find((s) => s.key === 'design')!
+    expect(design.provider).toBe('qoder')
+    expect(design.model).toBe('qm')
+  })
+
+  it('drops hooks the gate unchecked, keeps the rest', () => {
+    const wsHooked: Workspace = {
+      ...ws,
+      plugins: [
+        { id: 'h1', name: '跑测试', prompt: '', after: 'develop', skills: [], tools: [] },
+        { id: 'h2', name: '收尾', prompt: '', after: '__start', skills: [], tools: [] },
+      ],
+    } as any
+    const plan = buildLaunchPlan({ ...cfg, hooks: [{ id: 'h1', enabled: false }, { id: 'h2', enabled: true }] }, wsHooked)
+    expect((plan.hooks ?? []).map((h) => h.id)).toEqual(['h2'])
+  })
+
   // Regression: the picker (buildLaunchInfo) resolves a workflow with empty stashed stages via the
   // global template fallback, so it previews resolved stages — buildLaunchPlan must resolve the SAME
   // fallback (given the deps) instead of throwing "没有可执行阶段" on confirm.

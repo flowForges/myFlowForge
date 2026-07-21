@@ -119,6 +119,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       queue: (w, info) => broadcast(CH.run2Queue, { workspacePath: w, length: info.length }),
     },
     onError: (w, err) => console.error(`[run2] ${w}:`, err),
+    // When a run finishes, drain any chat turns the user queued while it ran. Deferred closure — chatQueue
+    // is declared below (line ~570) but this only fires at run-completion time, long after it's inited.
+    onRunDone: (w) => chatQueue.runDone(w),
   })
   registerRun2({
     manager: run2Manager, onInvoke: (ch, h) => ipcMain.handle(ch, h),
@@ -563,7 +566,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       if (delegateBatches.length) await Promise.allSettled(delegateBatches)
     }
   }
-  const chatQueue = new ChatQueue(runTurn, broadcast)
+  const chatQueue = new ChatQueue(runTurn, broadcast, (ws) => run2Manager.isActive(ws))
   ipcMain.handle(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
     chatQueue.enqueue(payload, source ?? '你')

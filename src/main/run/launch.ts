@@ -47,6 +47,10 @@ export interface LaunchStage {
 export interface LaunchInfo {
   workflows: { id: string; name: string; stages: LaunchStage[] }[]
   projects: { name: string; cwd: string; provider?: string; model?: string }[]
+  // Workflow-scope hooks (ws.plugins + run-end stepPlugins, see collectRunHooks) so the launch gate can
+  // list them with on/off toggles — same "既然可选" treatment as stages. `after` is the weave point
+  // ('__start' / a stage key / '__wf') so the gate can show WHEN each hook fires.
+  hooks: { id: string; name: string; after: string }[]
 }
 
 // Lists a workspace's named workflows (id + display name + resolved stages) and its projects (name +
@@ -91,6 +95,7 @@ export function buildLaunchInfo(ws: Workspace, workflows: Workflow[] = [], custo
       const name = p.name || p.repoId
       return { name, cwd: join(ws.path, name), provider: p.provider || undefined, model: p.model || undefined }
     }),
+    hooks: collectRunHooks(ws.plugins, ws.stepPlugins).map((h) => ({ id: h.id, name: h.name, after: h.after })),
   }
 }
 
@@ -165,6 +170,16 @@ export interface LaunchStartConfig {
   // show/resolve in that session (WorkspaceView.tsx), not whichever tab happens to be active. Optional
   // so existing callers/tests that build a LaunchStartConfig without it keep compiling unchanged.
   sessionId?: string
+  // Per-stage choices from the launch gate's interactive flow: which stages to actually run (unchecked
+  // stages are DROPPED from the plan — this is how "跳过需求评估" works, instead of hoping the agent
+  // reads it out of the supplement), plus an optional provider/model override per stage (for root-scope
+  // stages the gate exposes a picker; code/per-project stages keep taking their provider/model from the
+  // per-project choice). Keyed by stage key. Omitted → every stage runs with its workflow-default agent
+  // (old behavior), so existing callers/tests keep working unchanged.
+  stages?: { key: string; enabled: boolean; provider?: string; model?: string }[]
+  // Per-hook on/off from the gate (see LaunchInfo.hooks). Unchecked hooks are dropped from the run.
+  // Keyed by plugin id; a hook id absent here defaults to enabled. Omitted → all hooks run (old behavior).
+  hooks?: { id: string; enabled: boolean }[]
 }
 
 // Ground-truth block prepended to the root stage's prompt — same anchor phrasing as
@@ -190,8 +205,15 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
   if (!wf || wf.id !== cfg.workflowId) throw new Error(`未知工作流: ${cfg.workflowId}`)
 
   const custIndex = indexCustomStages(custom)
-  const resolved = resolveWorkflowStages(wf, workflows, custIndex)
-  if (resolved.length === 0) throw new Error(`工作流「${workflowDisplayName(wf.name)}」没有可执行阶段`)
+  const resolvedAll = resolveWorkflowStages(wf, workflows, custIndex)
+  if (resolvedAll.length === 0) throw new Error(`工作流「${workflowDisplayName(wf.name)}」没有可执行阶段`)
+
+  // Interactive stage choices (gate): drop unchecked stages, apply per-stage provider/model overrides.
+  // A stage key absent from cfg.stages defaults to enabled with no override (backward compatible — a
+  // caller that passes no stages runs everything as before). Guard against disabling every stage.
+  const stageChoice = new Map((cfg.stages ?? []).map((s) => [s.key, s]))
+  const resolved = resolvedAll.filter((s) => stageChoice.get(s.key)?.enabled !== false)
+  if (resolved.length === 0) throw new Error('至少要保留一个阶段')
 
   const groundTruth = buildGroundTruth(cfg.supplement, cfg.seed)
   const stageSpecs: StageSpec[] = resolved.map((s, i) => {
@@ -200,19 +222,23 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
     const prompt = i === 0 && groundTruth
       ? (s.prompt ? `${groundTruth}\n\n${s.prompt}` : groundTruth)
       : s.prompt
+    const choice = stageChoice.get(s.key)
     return {
       key: s.key,
       name: stageName(s.key, s.name),
-      provider: s.provider,
-      model: s.model,
+      provider: choice?.provider || s.provider,
+      model: choice?.model || s.model,
       scope: s.scope,
       gate: s.gate,
       prompt,
       review: s.review, // ②多镜头CR: honor the review stage's fan-out config (per-lens reviewers)
     }
   })
-  // ③stage hooks: thread the workspace's woven hooks (ws.plugins) + run-end (__wf) step hooks.
-  return planFromStages(`run2-${randomUUID()}`, stageSpecs, collectRunHooks(ws.plugins, ws.stepPlugins))
+  // ③stage hooks: thread the workspace's woven hooks (ws.plugins) + run-end (__wf) step hooks — minus any
+  // the gate unchecked (既然阶段可选,hook 也可选). A hook id absent from cfg.hooks defaults to enabled.
+  const hookChoice = new Map((cfg.hooks ?? []).map((h) => [h.id, h]))
+  const hooks = collectRunHooks(ws.plugins, ws.stepPlugins).filter((h) => hookChoice.get(h.id)?.enabled !== false)
+  return planFromStages(`run2-${randomUUID()}`, stageSpecs, hooks)
 }
 
 // Companion to buildLaunchPlan: the DevelopProject[] to pass alongside its RunPlan into

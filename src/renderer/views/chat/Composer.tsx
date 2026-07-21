@@ -99,9 +99,9 @@ interface Props {
   autoDecide?: boolean
   onToggleAutoDecide?: () => void
   draftKey?: string
-  /** When set, the composer is locked (input disabled, send/stop disabled) and this text replaces the
-      placeholder — takes priority over archived/readOnly/busy placeholders. Used while a workflow run
-      is active: all gate/decision interaction happens via cards, never via the chat input. */
+  /** Set while a workflow run is active. Puts the composer in QUEUE mode (NOT hard-disabled): the user
+      can still type and send — the message queues on the main side and runs after the workflow finishes.
+      This text replaces the placeholder/send-title, and the slash menu is suppressed while it's set. */
   lockedReason?: string
 }
 
@@ -110,10 +110,14 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
   // change; a remount restores the leaving session's draft and loads the entering one. Isolated + stable.
-  // `lockedReason` (set while a workflow run is active) overrides disabled/placeholder — gate/decision
-  // interaction happens via cards, never the chat input; see the WorkspaceView `run2Live` derivation.
-  const locked = !!lockedReason
-  const effectiveDisabled = disabled || locked
+  // `lockedReason` (set while a workflow run is active) puts the composer in QUEUE mode — it does NOT
+  // hard-disable input anymore. The user can keep typing and send; the message queues on the main side
+  // (ChatQueue holds it while the run2 workflow runs — see chatQueue.isRunActive) and executes in order
+  // once the run finishes. Gate/decision interaction still happens via the cards above, so the slash
+  // menu stays suppressed while a run is active. (See WorkspaceView's `run2Live` derivation.)
+  const runQueued = !!lockedReason
+  const queueing = !!busy || runQueued
+  const effectiveDisabled = disabled
   const dk = draftKey ?? ''
   const [text, setText] = useState(() => (dk ? draftStore[dk]?.text : '') ?? '')
   const [attachments, setAttachments] = useState<Attachment[]>(() => (dk ? draftStore[dk]?.attachments : undefined) ?? [])
@@ -244,7 +248,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   }
 
   // Slash-command dropdown (derived each render). Only while typing a "/token" and not dismissed.
-  const slashCmds = (!disabled && !readOnly && !archived && !locked && isSlashQuery(text) && !slashDismissed)
+  const slashCmds = (!disabled && !readOnly && !archived && !runQueued && isSlashQuery(text) && !slashDismissed)
     ? mergeCommands(agentId, text, dynamicCommands ?? [])
     : []
   const showSlash = slashCmds.length > 0
@@ -338,7 +342,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           ref={taRef}
           id="composerInput"
           rows={1}
-          placeholder={locked ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴文件 / 截图'}
+          placeholder={runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴文件 / 截图'}
           value={text}
           disabled={effectiveDisabled || readOnly}
           onChange={e => {
@@ -487,7 +491,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           {running && !text.trim() ? (
             <button className="send stop" id="stopBtn" title="停止 (Esc)" onClick={handleStop}>{STOP_ICON}</button>
           ) : (
-            <button className={`send${busy ? ' queueing' : ''}`} id="sendBtn" title={locked ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)'} disabled={effectiveDisabled || readOnly} onClick={send}>{SEND_ARROW}</button>
+            <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)'} disabled={effectiveDisabled || readOnly} onClick={send}>{SEND_ARROW}</button>
           )}
         </div>
       </div>
