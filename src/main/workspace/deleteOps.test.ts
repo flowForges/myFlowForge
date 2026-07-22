@@ -35,6 +35,47 @@ describe('deleteWorkspace', () => {
     expect(res.purged).toBe(true)
     expect(existsSync(wsPath)).toBe(false)
   })
+
+  it('in-place workspace delete leaves the folder + the user\'s real repo, only tears down .forge', async () => {
+    const { registerWorkspace, writeWorkspace } = await import('../config/store')
+    const { deleteWorkspace } = await import('./deleteOps')
+    const wsPath = join(home, 'ws-inplace')                       // the user's folder-of-repos
+    mkdirSync(join(wsPath, 'api', '.git'), { recursive: true })   // an already-existing on-disk repo
+    writeFileSync(join(wsPath, 'api', 'src.txt'), 'user code')
+    registerWorkspace('ws-inplace', wsPath)
+    writeWorkspace({ name: 'ws-inplace', path: wsPath, workflowId: 'wf', stages: [], workflows: [], projects: [{ repoId: 'api', name: 'api', branch: 'b', provider: '', model: '', inPlace: true }], status: 'idle', plugins: [], stepPlugins: [] })
+    expect(existsSync(join(wsPath, '.forge'))).toBe(true)
+
+    const res = await deleteWorkspace(wsPath)
+
+    expect(res.purged).toBe(false)                               // folder not fully purged
+    expect(existsSync(wsPath)).toBe(true)                        // the user's folder is intact
+    expect(existsSync(join(wsPath, 'api'))).toBe(true)           // the user's real repo is intact
+    expect(existsSync(join(wsPath, 'api', 'src.txt'))).toBe(true)
+    expect(existsSync(join(wsPath, '.forge'))).toBe(false)       // Forge's own state torn down
+  })
+
+  it('mixed workspace delete removes the cloned project dir but keeps the folder + in-place repo', async () => {
+    const { registerWorkspace, writeWorkspace } = await import('../config/store')
+    const { deleteWorkspace } = await import('./deleteOps')
+    const wsPath = join(home, 'ws-mixed')
+    mkdirSync(join(wsPath, 'api', '.git'), { recursive: true })  // in-place repo
+    writeFileSync(join(wsPath, 'api', 'src.txt'), 'user code')
+    mkdirSync(join(wsPath, 'web'), { recursive: true })          // a Forge-cloned project
+    registerWorkspace('ws-mixed', wsPath)
+    writeWorkspace({ name: 'ws-mixed', path: wsPath, workflowId: 'wf', stages: [], workflows: [], projects: [
+      { repoId: 'api', name: 'api', branch: 'b', provider: '', model: '', inPlace: true },
+      { repoId: 'web', name: 'web', branch: 'b', provider: '', model: '' },
+    ], status: 'idle', plugins: [], stepPlugins: [] })
+
+    const res = await deleteWorkspace(wsPath)
+
+    expect(res.purged).toBe(false)
+    expect(existsSync(wsPath)).toBe(true)                        // folder kept (has an in-place repo)
+    expect(existsSync(join(wsPath, 'api'))).toBe(true)          // in-place repo kept
+    expect(existsSync(join(wsPath, 'web'))).toBe(false)         // cloned project dir removed
+    expect(existsSync(join(wsPath, '.forge'))).toBe(false)      // Forge state removed
+  })
 })
 
 describe('discardPartialCreation (wipe a partial creation, keep the parent folder)', () => {
@@ -55,6 +96,25 @@ describe('discardPartialCreation (wipe a partial creation, keep the parent folde
     expect(existsSync(join(wsPath, 'proj'))).toBe(false)      // worktree dir removed
     expect(existsSync(join(wsPath, '.forge'))).toBe(false)    // .forge state removed
     expect(existsSync(join(wsPath, 'keep-me.txt'))).toBe(true) // user's own file untouched
+  })
+
+  it('never deletes an in-place project\'s real repo dir, but still removes .forge + registry entry', async () => {
+    const { registerWorkspace, writeWorkspace, readWorkspaceRegistry } = await import('../config/store')
+    const { discardPartialCreation } = await import('./deleteOps')
+    const wsPath = join(home, 'ws-partial-inplace')
+    mkdirSync(join(wsPath, 'api', '.git'), { recursive: true })  // the user's pre-existing repo
+    writeFileSync(join(wsPath, 'api', 'src.txt'), 'user code')
+    registerWorkspace('ws-partial-inplace', wsPath)
+    writeWorkspace({ name: 'ws-partial-inplace', path: wsPath, workflowId: 'wf', stages: [], workflows: [], projects: [{ repoId: 'api', name: 'api', branch: 'b', provider: '', model: '', inPlace: true }], status: 'idle', plugins: [], stepPlugins: [] })
+    expect(existsSync(join(wsPath, '.forge'))).toBe(true)
+
+    await discardPartialCreation(wsPath)
+
+    expect(readWorkspaceRegistry().find(w => w.path === wsPath)).toBeUndefined()  // off the list
+    expect(existsSync(wsPath)).toBe(true)                       // parent folder kept
+    expect(existsSync(join(wsPath, 'api'))).toBe(true)          // in-place repo NOT deleted
+    expect(existsSync(join(wsPath, 'api', 'src.txt'))).toBe(true)
+    expect(existsSync(join(wsPath, '.forge'))).toBe(false)      // .forge state removed
   })
 })
 

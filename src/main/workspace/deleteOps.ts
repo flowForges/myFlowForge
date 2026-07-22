@@ -23,6 +23,8 @@ export async function discardPartialCreation(path: string): Promise<void> {
   const ws = readWorkspace(path)
   if (ws) {
     for (const p of ws.projects) {
+      // NEVER touch an in-place project's dir — it is the user's pre-existing repo, not a Forge mirror/worktree.
+      if (p.inPlace) continue
       try { await removeWorktree({ mirror: mirrorPath(p.repoId), worktreePath: join(path, p.name) }) } catch { /* best-effort */ }
       try { rmSync(join(path, p.name), { recursive: true, force: true }) } catch { /* best-effort */ }
     }
@@ -38,10 +40,24 @@ export async function deleteWorkspace(path: string): Promise<{ purged: boolean }
   const ws = readWorkspace(path)
   let purged = false
   if (ws) {
+    // If ANY project is in-place, `path` is the user's own folder-of-repos — we must never rmSync it.
+    const hasInPlace = ws.projects.some(p => p.inPlace)
     for (const p of ws.projects) {
+      // In-place projects have no Forge mirror/worktree to remove — skip them.
+      if (p.inPlace) continue
       try { await removeWorktree({ mirror: mirrorPath(p.repoId), worktreePath: join(path, p.name) }) } catch { /* best-effort */ }
     }
-    try { rmSync(path, { recursive: true, force: true }); purged = true } catch { /* leave registry cleanup to run */ }
+    if (hasInPlace) {
+      // Tear down only Forge's own footprint: cloned project dirs + .forge state. Leave the folder and
+      // every in-place repo exactly where they are. `purged` stays false — the folder is not fully removed.
+      for (const p of ws.projects) {
+        if (p.inPlace) continue
+        try { rmSync(join(path, p.name), { recursive: true, force: true }) } catch { /* best-effort */ }
+      }
+      try { rmSync(wsForgeDir(path), { recursive: true, force: true }) } catch { /* best-effort */ }
+    } else {
+      try { rmSync(path, { recursive: true, force: true }); purged = true } catch { /* leave registry cleanup to run */ }
+    }
   }
   unregisterWorkspace(path)
   removeImportedCwd(path)
