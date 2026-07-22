@@ -359,4 +359,58 @@ describe('sticky detection (persist last-good, survive flaky/cold probe)', () =>
     await detectProviders({ claude: fake('claude', 'Claude', true) }, {}, { persist: (u) => persisted.push(...u) })
     expect(persisted[0]).toMatchObject({ id: 'claude', installed: true })
   })
+
+  it('force detect: probe fails but the bin is definitively present → stays installed, models preserved, NOT wiped', async () => {
+    const cachedModels = [{ id: 'cached-m', label: 'Cached' }]
+    mockedReadAgentsConfig.mockReturnValue({
+      providers: [{
+        id: 'claude', binOverride: '', env: {}, modelsCache: cachedModels, modelsFetchedAt: Date.now(),
+        detectedInstalled: true, detectedBinPath: '/opt/bin/claude', detectedVersion: '1.2.3',
+      }],
+      custom: [],
+    } as any)
+    const persisted: any[] = []
+    const claude: AgentProvider = {
+      id: 'claude', displayName: 'Claude Code', bin: '/opt/bin/claude',
+      capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => false,   // --version probe + detect() both fail (cold-start flake/timeout)
+      listModels: async () => [],
+      run: () => ({ id: 'x', cancel() {}, done: Promise.resolve({ ok: true }) }),
+    }
+    const res = await detectProviders({ claude }, process.env, {
+      trustPersisted: false,          // explicit 重新检测 (force)
+      binPresent: async () => true,   // definitive: the bin IS present on disk
+      persist: (u) => persisted.push(...u),
+    })
+    const info = res.find(r => r.id === 'claude')!
+    expect(info.installed).toBe(true)
+    expect(info.models).toEqual(cachedModels)   // models preserved, not wiped
+    expect(persisted).toHaveLength(1)
+    expect(persisted[0]).toMatchObject({ id: 'claude', installed: true, version: '1.2.3' })
+  })
+
+  it('force detect: bin is definitively absent → still clears (force still wipes a genuinely-gone CLI)', async () => {
+    mockedReadAgentsConfig.mockReturnValue({
+      providers: [{
+        id: 'claude', binOverride: '', env: {}, modelsCache: [{ id: 'm', label: 'M' }], modelsFetchedAt: Date.now(),
+        detectedInstalled: true, detectedBinPath: '/opt/bin/claude', detectedVersion: '1.2.3',
+      }],
+      custom: [],
+    } as any)
+    const persisted: any[] = []
+    const claude: AgentProvider = {
+      id: 'claude', displayName: 'Claude Code', bin: '/opt/bin/claude',
+      capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+      detect: async () => false,
+      listModels: async () => [],
+      run: () => ({ id: 'x', cancel() {}, done: Promise.resolve({ ok: true }) }),
+    }
+    const res = await detectProviders({ claude }, process.env, {
+      trustPersisted: false,           // explicit 重新检测 (force)
+      binPresent: async () => false,   // definitive: the bin is genuinely gone
+      persist: (u) => persisted.push(...u),
+    })
+    expect(res.find(r => r.id === 'claude')!.installed).toBe(false)
+    expect(persisted).toEqual([{ id: 'claude', installed: false, binPath: '', version: '', at: expect.any(Number) }])
+  })
 })

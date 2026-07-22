@@ -1,4 +1,5 @@
 import { execa } from 'execa'
+import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import type { AgentProvider } from './types'
 import type { ProviderInfo } from '@shared/types'
@@ -33,6 +34,15 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
   })
 }
 
+// Definitive presence: an installed CLI whose --version probe merely flaked/timed out must NOT be
+// wiped by a force 重新检测. `which`/abs-path is the confident signal; probeCli (ENOENT / non-zero
+// exit / timeout) conflates "genuinely absent" with "present but slow/flaky" into one `false`.
+async function defaultBinPresent(bin: string | undefined, env: NodeJS.ProcessEnv): Promise<boolean> {
+  if (!bin) return false
+  if (isAbsolute(bin)) return existsSync(bin)
+  try { const r = await execa('which', [bin], { env }); return r.exitCode === 0 && r.stdout.trim().length > 0 } catch { return false }
+}
+
 export interface DetectOptions {
   timeoutMs?: number
   nowMs?: number
@@ -45,6 +55,10 @@ export interface DetectOptions {
   trustPersisted?: boolean
   // Injectable for tests: persist the detection snapshot. Defaults to writing agents.json.
   persist?: (updates: { id: string; installed: boolean; binPath: string; version: string; at: number }[]) => void
+  // Injectable for tests: strict "is the bin definitively present" check, distinct from probeCli
+  // (which conflates absent/slow/erroring into one `installed:false`). Defaults to a real
+  // which/absolute-path-exists check. Only a `false` here lets a force 重新检测 wipe a provider.
+  binPresent?: (bin: string | undefined, env: NodeJS.ProcessEnv) => Promise<boolean>
 }
 
 export async function detectProviders(
@@ -59,6 +73,7 @@ export async function detectProviders(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_DETECT_TIMEOUT_MS
   const nowMs = opts.nowMs ?? Date.now()
   const trustPersisted = opts.trustPersisted ?? true
+  const binPresent = opts.binPresent ?? defaultBinPresent
 
   const agentsCfg = readAgentsConfig()
   const persist = opts.persist ?? defaultPersist
@@ -78,18 +93,37 @@ export async function detectProviders(
     // custom detection logic (or bin-less test fakes) keep working.
     const probe = p.bin ? await withTimeout(probeCli(p.bin, env), timeoutMs, NOT_INSTALLED) : NOT_INSTALLED
     const probeInstalled = probe.installed || await withTimeout(p.detect(), timeoutMs, false)
+    // Definitive presence check (which/abs-path exists) — distinct from `probeInstalled`, which
+    // conflates "genuinely absent" with "present but --version flaked/timed out".
+    const present = p.bin ? await withTimeout(binPresent(p.bin, env), timeoutMs, false) : false
 
     // Sticky detection: keep a previously-detected agent when this probe fails and we're not force-
     // detecting, so a cold-start timeout / transient failure can't make it disappear.
     const wasInstalled = provCfg?.detectedInstalled ?? false
-    const installed = probeInstalled || (trustPersisted && wasInstalled)
+    // present-but-probe-flaked keeps it installed even on force; only a definitively-absent bin clears.
+    const installed = probeInstalled || present || (trustPersisted && wasInstalled)
 
+    let binPath: string
+    let version: string
     if (probeInstalled) {
-      const binPath = await resolveBinPath(p.bin, env)
-      persistUpdates.push({ id: p.id, installed: true, binPath, version: probe.version, at: nowMs })
+      binPath = await resolveBinPath(p.bin, env)
+      version = probe.version
+      persistUpdates.push({ id: p.id, installed: true, binPath, version, at: nowMs })
+    } else if (present && (wasInstalled || installed)) {
+      // Bin is definitively there but --version flaked/timed out: refresh the resolved path, keep
+      // the last-known version, do NOT wipe (this is the force-reset-safe path).
+      binPath = await resolveBinPath(p.bin, env)
+      version = provCfg?.detectedVersion ?? ''
+      persistUpdates.push({ id: p.id, installed: true, binPath, version, at: nowMs })
     } else if (!trustPersisted && wasInstalled) {
-      // Explicit 重新检测 confirmed it's gone → clear the sticky flag.
-      persistUpdates.push({ id: p.id, installed: false, binPath: '', version: '', at: nowMs })
+      // Explicit 重新检测 AND the bin is definitively absent → clear the sticky flag (genuinely gone).
+      binPath = ''
+      version = ''
+      persistUpdates.push({ id: p.id, installed: false, binPath, version, at: nowMs })
+    } else {
+      // Sticky (non-force) carry-forward, or never installed at all.
+      binPath = installed ? (provCfg?.detectedBinPath || p.bin || '') : (p.bin ?? '')
+      version = installed ? (provCfg?.detectedVersion ?? '') : ''
     }
 
     let models: { id: string; label: string; description?: string }[] = []
@@ -102,9 +136,6 @@ export async function detectProviders(
       }
     }
 
-    // Prefer the fresh probe; fall back to the persisted snapshot when we kept it sticky.
-    const binPath = probeInstalled ? await resolveBinPath(p.bin, env) : (installed ? (provCfg?.detectedBinPath || p.bin || '') : (p.bin ?? ''))
-    const version = probeInstalled ? probe.version : (installed ? (provCfg?.detectedVersion ?? '') : '')
     const meta = getBuiltinProvider(p.id)
     return {
       id: p.id, displayName: p.displayName, installed, models, bin: p.bin ?? '', binPath,
