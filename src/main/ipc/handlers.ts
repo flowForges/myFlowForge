@@ -11,6 +11,7 @@ import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWri
 import { basename, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
+import { scanRepos } from '../workspace/scanRepos'
 import { resolveSetupInteraction } from '../workspace/setupInteractions'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
 import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
@@ -328,6 +329,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
   ipcMain.handle(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
   ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
+  ipcMain.handle(CH.workspaceScanRepos, (_e, path: string) => scanRepos(path))
   // 「工作流自动启动」per-workspace 开关:写入 workspace.json,渲染层 WorkspaceView.onPickWorkflow 读取
   // 以决定选工作流后是否弹确认门(LaunchGateCard)。
   ipcMain.handle(CH.wsSetAutoDecide, (_e, a: { workspacePath: string; value: boolean }) => {

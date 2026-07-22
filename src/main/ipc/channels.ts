@@ -33,6 +33,9 @@ export const CH = {
   workspaceCancelSetup: 'workspace:cancel-setup',
   workspaceDiscardPartial: 'workspace:discard-partial',
   workspaceGet: 'workspaces:get',
+  // Batch-3/Task3: scan an arbitrary folder for already-cloned git repos (bounded, recursive), each
+  // with its current branch — prepopulates the "create workspace from existing folder" form.
+  workspaceScanRepos: 'workspace:scan-repos',
   workspaceEdit: 'workspaces:edit',
   workspaceRename: 'workspaces:rename',
   workspaceSetup: 'workspace:setup',

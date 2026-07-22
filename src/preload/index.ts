@@ -43,6 +43,9 @@ const api = {
   cancelSetup: (): Promise<void> => ipcRenderer.invoke(CH.workspaceCancelSetup),
   discardPartialWorkspace: (path: string): Promise<void> => ipcRenderer.invoke(CH.workspaceDiscardPartial, path),
   getWorkspace: (path: string) => ipcRenderer.invoke(CH.workspaceGet, path),
+  // Batch-3/Task3: scan a folder for existing git repos (bounded, recursive) with their current
+  // branch — for the "create workspace from existing folder" form to prepopulate.
+  scanRepos: (path: string): Promise<import('@shared/types').DetectedRepo[]> => ipcRenderer.invoke(CH.workspaceScanRepos, path),
   setStageModel: (a: { path: string; stageKey: string; provider: string; model: string }) => ipcRenderer.invoke(CH.workspaceSetStageModel, a),
   editWorkspace: (a: { path: string; opts: unknown; runProjHooks?: boolean }) => ipcRenderer.invoke(CH.workspaceEdit, a),
   renameWorkspace: (a: { path: string; name: string }) => ipcRenderer.invoke(CH.workspaceRename, a),
