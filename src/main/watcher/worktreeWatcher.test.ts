@@ -50,4 +50,20 @@ describe('WorktreeWatcher', () => {
     // real source is not ignored
     expect(ig.test('/w/src/index.ts')).toBe(false)
   })
+  it('caps recursion depth and ignores heavy build/dep dirs so a giant multi-repo folder cannot starve the main process', () => {
+    let opts: any
+    const watcher = new WorktreeWatcher((_p, o) => { opts = o; return makeFake() as any }, 150)
+    watcher.start('/w', vi.fn())
+    expect(opts.depth).toBe(6)
+    const ig = opts.ignored as RegExp
+    expect(ig.test('/w/dist/index.js')).toBe(true)
+    expect(ig.test('/w/build/out.js')).toBe(true)
+    expect(ig.test('/w/target/debug/foo')).toBe(true)
+    expect(ig.test('/w/.venv/lib/site-packages')).toBe(true)
+    expect(ig.test('/w/vendor/bundle/gem.rb')).toBe(true)
+    expect(ig.test('/w/.next/cache/x')).toBe(true)
+    expect(ig.test('/w/coverage/lcov.info')).toBe(true)
+    // normal source is still watched
+    expect(ig.test('/w/src/index.ts')).toBe(false)
+  })
 })
