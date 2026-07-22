@@ -266,7 +266,7 @@ export interface ChatSendPayload {
   source?: string      // who sent it, default '你'
   permissionMode?: import('./permissions').PermissionMode   // agent sandbox scope (readonly/auto/full)
 }
-export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string }[]; running: { id: string; text: string; sessionId: string } | null; runningSessionId: string | null }
+export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string }[]; running: { id: string; text: string; sessionId: string } | null; runningSessionId: string | null; runningSessionIds: string[] }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'user'; message: ChatMessage }
   | { type: 'assistant-start'; id: string; model: string; context?: AgentContextMeta }

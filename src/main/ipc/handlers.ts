@@ -473,7 +473,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
           workspacePath: payload.workspacePath, task: a.task, projects: a.projects, write: a.write, brief: a.brief,
           provider: payload.agent, model: payload.model, permissionMode: payload.permissionMode, sessionId: payload.sessionId,
           // Register each delegate sub-agent's session for cancellation, so the chat 停止 button kills it.
-          onSession: (s) => chatQueue.registerActive(payload.workspacePath, () => s.cancel()),
+          onSession: (s) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => s.cancel()),
           // 对话区实时进度块(fire-and-forget 后主代理这轮已结束,用户不开 IDs 面板也看得见后台子代理在跑)。
           // live-only:只广播、不 appendMessage(它是瞬态 widget,会话重载后消失;持久的汇总消息随后单独到达)。
           onBatchStart: (runId, agents) => {
@@ -542,7 +542,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         env,
         emit: chatEmit,
         confirm,
-        onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, () => session.cancel()),
+        onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel()),
       })
       // Chat NEVER triggers a workflow (this was the user's #1 complaint — "聊着聊着突然启动工作流").
       // forge_propose_plan's bridge callback above is neutered (redirect note + approved:false); the
@@ -566,7 +566,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       if (delegateBatches.length) await Promise.allSettled(delegateBatches)
     }
   }
-  const chatQueue = new ChatQueue(runTurn, broadcast, (ws) => run2Manager.isActive(ws))
+  const chatQueue = new ChatQueue(runTurn, broadcast)
   ipcMain.handle(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
     chatQueue.enqueue(payload, source ?? '你')

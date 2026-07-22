@@ -2,106 +2,104 @@ import type { ChatSendPayload } from '@shared/types'
 import { CH } from '../ipc/channels'
 
 interface QueuedTask { id: string; source: string; payload: ChatSendPayload }
-interface WsQueue { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; activeCancel: (() => void) | null }
+interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; activeCancel: (() => void) | null }
 
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
 export type Broadcast = (channel: string, payload: unknown) => void
 
+// Chat turns serialize PER SESSION: each session runs one turn at a time, but different sessions in the
+// same workspace run concurrently (a plain chat in session B is no longer held behind session A's turn
+// or behind a running workflow). Only ONE workflow may run per workspace, but that is enforced by
+// Run2Manager.start — not here — so a running workflow does not block chat at all.
 export class ChatQueue {
-  private map = new Map<string, WsQueue>()
+  private map = new Map<string, Map<string, Lane>>()   // ws → (sessionId → Lane)
   private seq = 0
-  // isRunActive(ws): a run2 workflow is executing in this workspace → hold chat turns (don't start them)
-  // until it finishes. run2 lanes mutate the working tree, so running a chat turn concurrently could
-  // collide; instead the user can keep typing/queueing and the queue drains when runDone(ws) fires. When
-  // omitted (tests, older callers) nothing is ever held — plain FIFO on `busy`.
-  constructor(private runTurn: RunTurn, private broadcast: Broadcast, private isRunActive?: (ws: string) => boolean) {}
+  constructor(private runTurn: RunTurn, private broadcast: Broadcast) {}
 
-  private get(ws: string): WsQueue {
-    let q = this.map.get(ws)
-    if (!q) { q = { busy: false, queue: [], running: null, activeCancel: null }; this.map.set(ws, q) }
-    return q
+  private lanes(ws: string): Map<string, Lane> {
+    let m = this.map.get(ws)
+    if (!m) { m = new Map(); this.map.set(ws, m) }
+    return m
+  }
+  private lane(ws: string, sid: string): Lane {
+    const m = this.lanes(ws)
+    let l = m.get(sid)
+    if (!l) { l = { busy: false, queue: [], running: null, activeCancel: null }; m.set(sid, l) }
+    return l
   }
 
   enqueue(payload: ChatSendPayload, source: string): void {
-    const ws = payload.workspacePath
-    const q = this.get(ws)
-    q.queue.push({ id: `q-${++this.seq}`, source, payload })
-    this.pump(ws)
+    const { workspacePath: ws, sessionId: sid } = payload
+    this.lane(ws, sid).queue.push({ id: `q-${++this.seq}`, source, payload })
+    this.pump(ws, sid)
     this.emit(ws)
   }
 
-  // Start the next queued task if the workspace is idle AND no run2 workflow is holding it. Central
-  // gate used by enqueue, turn-completion, and runDone so the "hold while a run is active" rule lives
-  // in exactly one place.
-  private pump(ws: string): void {
-    const q = this.get(ws)
-    if (q.busy || this.isRunActive?.(ws)) return
-    const next = q.queue.shift()
-    if (next) this.runOne(ws, next)
+  private pump(ws: string, sid: string): void {
+    const lane = this.lane(ws, sid)
+    if (lane.busy) return
+    const next = lane.queue.shift()
+    if (next) this.runOne(ws, sid, next)
   }
 
-  // Called when a run2 workflow for this workspace reaches a terminal state (Run2Manager) — release any
-  // chat turns the user queued while it ran, in FIFO order.
-  runDone(ws: string): void {
-    this.pump(ws)
-    this.emit(ws)
-  }
+  // Kept as a no-op so Run2Manager's terminal-state call site (manager.ts) still compiles; a running
+  // workflow no longer holds chat, so there is nothing to release when it ends.
+  runDone(_ws: string): void {}
 
   cancel(ws: string, id: string): void {
-    const q = this.map.get(ws); if (!q) return
-    const i = q.queue.findIndex(t => t.id === id)
-    if (i > -1) { q.queue.splice(i, 1); this.emit(ws) }
+    const m = this.map.get(ws); if (!m) return
+    for (const lane of m.values()) {
+      const i = lane.queue.findIndex(t => t.id === id)
+      if (i > -1) { lane.queue.splice(i, 1); this.emit(ws); return }
+    }
   }
 
   clear(ws: string): void {
-    const q = this.map.get(ws); if (!q) return
-    if (q.queue.length) { q.queue = []; this.emit(ws) }
+    const m = this.map.get(ws); if (!m) return
+    let changed = false
+    for (const lane of m.values()) if (lane.queue.length) { lane.queue = []; changed = true }
+    if (changed) this.emit(ws)
   }
 
-  registerActive(ws: string, cancel: () => void): void {
-    const q = this.get(ws)
-    q.activeCancel = cancel
+  registerActive(ws: string, sessionId: string, cancel: () => void): void {
+    this.lane(ws, sessionId).activeCancel = cancel
   }
 
+  // 停止 targets the whole workspace (the chat 停止 button is per-workspace): cancel every running lane.
   stop(ws: string): void {
-    const q = this.map.get(ws)
-    if (q?.activeCancel) q.activeCancel()
+    const m = this.map.get(ws); if (!m) return
+    for (const lane of m.values()) lane.activeCancel?.()
   }
 
-  // Provider id of the turn currently in-flight for this session, or null when the session isn't
-  // running. Lets the IDs panel mark the specific main-Agent row as 运行中 (the resume map otherwise
-  // has no liveness — see agentSessions.ts). At most one turn runs per workspace, so a sessionId match
-  // is enough; a different session's turn (or idle) returns null.
   runningProvider(ws: string, sessionId: string): string | null {
-    const q = this.map.get(ws)
-    return q?.running?.sessionId === sessionId ? q.running.provider : null
+    return this.map.get(ws)?.get(sessionId)?.running?.provider ?? null
   }
 
-  private runOne(ws: string, task: QueuedTask): void {
-    const q = this.get(ws)
-    q.busy = true
-    q.running = { id: task.id, text: task.payload.text, sessionId: task.payload.sessionId, provider: task.payload.agent }
+  private runOne(ws: string, sid: string, task: QueuedTask): void {
+    const lane = this.lane(ws, sid)
+    lane.busy = true
+    lane.running = { id: task.id, text: task.payload.text, sessionId: sid, provider: task.payload.agent }
     this.emit(ws)
     Promise.resolve(this.runTurn(task.payload)).catch(() => {}).finally(() => {
-      q.busy = false
-      q.running = null
-      q.activeCancel = null
-      this.pump(ws)   // start the next queued turn if the workspace is now free (and no run2 is holding)
+      lane.busy = false
+      lane.running = null
+      lane.activeCancel = null
+      this.pump(ws, sid)
       this.emit(ws)
     })
   }
 
   private emit(ws: string): void {
-    const q = this.get(ws)
+    const lanes = [...this.lanes(ws).values()]
+    const running = lanes.map(l => l.running).filter((r): r is NonNullable<typeof r> => !!r)
+    const queue = lanes.flatMap(l => l.queue)
     this.broadcast(CH.chatQueueEvent, {
       workspacePath: ws,
-      busy: q.busy,
-      queue: q.queue.map(t => ({ id: t.id, text: t.payload.text, source: t.source })),
-      running: q.running,
-      // Session that owns the in-flight turn (null when idle). Lets the sidebar light the specific
-      // session's dot, not just the workspace pill — the queue serializes per workspace, so at most one
-      // session runs here at a time, but multiple workspaces (each its own queue) can run concurrently.
-      runningSessionId: q.running?.sessionId ?? null,
+      busy: running.length > 0,
+      queue: queue.map(t => ({ id: t.id, text: t.payload.text, source: t.source })),
+      running: running[0] ?? null,
+      runningSessionId: running[0]?.sessionId ?? null,
+      runningSessionIds: running.map(r => r.sessionId),
     })
   }
 }

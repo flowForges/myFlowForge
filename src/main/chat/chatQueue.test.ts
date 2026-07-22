@@ -5,6 +5,9 @@ import type { ChatSendPayload } from '@shared/types'
 const mk = (ws: string, text: string, agent = 'claude'): ChatSendPayload =>
   ({ workspacePath: ws, sessionId: 's1', agent, agentLabel: 'Claude Code', model: 'opus-4.8', text, attachments: [] })
 
+const mkS = (ws: string, sid: string, text: string): ChatSendPayload =>
+  ({ workspacePath: ws, sessionId: sid, agent: 'claude', agentLabel: 'Claude Code', model: 'opus-4.8', text, attachments: [] })
+
 describe('ChatQueue', () => {
   it('runs immediately when idle; queues when busy; FIFO after done', async () => {
     const calls: string[] = []
@@ -93,7 +96,7 @@ describe('ChatQueue', () => {
     const q = new ChatQueue(runTurn, () => {})
     q.enqueue(mk('/w', 'A'), '你')
     // register the cancel fn (simulating what runTurn internals would do)
-    q.registerActive('/w', cancelSpy)
+    q.registerActive('/w', 's1', cancelSpy)
     q.stop('/w')
     expect(cancelSpy).toHaveBeenCalledTimes(1)
     // resolve the turn so it cleans up
@@ -111,36 +114,35 @@ describe('ChatQueue', () => {
     const q = new ChatQueue(runTurn, () => {})
     q.enqueue(mk('/w', 'A'), '你')
     q.enqueue(mk('/w', 'B'), '你')
-    q.registerActive('/w', () => { releaseA?.() }) // cancel resolves A's promise
+    q.registerActive('/w', 's1', () => { releaseA?.() }) // cancel resolves A's promise
     q.stop('/w')
     await new Promise(r => setTimeout(r, 0))
     expect(calls).toEqual(['A', 'B'])
   })
 
-  it('holds chat turns while a run2 workflow is active, drains them on runDone in FIFO order', async () => {
+  it('same session serializes; different sessions in one ws run concurrently', async () => {
     const calls: string[] = []
-    let runActive = true
-    const runTurn = vi.fn((p: ChatSendPayload) => { calls.push(p.text); return Promise.resolve() })
-    const q = new ChatQueue(runTurn, () => {}, () => runActive)
-    // While the workflow runs, sends are held (typed + queued, not executed).
-    q.enqueue(mk('/w', 'A'), '你')
-    q.enqueue(mk('/w', 'B'), '你')
-    await new Promise(r => setTimeout(r, 0))
-    expect(calls).toEqual([])
-    // Workflow finishes → drain in order.
-    runActive = false
-    q.runDone('/w')
-    await new Promise(r => setTimeout(r, 0))
-    expect(calls).toEqual(['A', 'B'])
+    const releases: Record<string, () => void> = {}
+    const runTurn = vi.fn((p: ChatSendPayload) =>
+      new Promise<void>(res => { calls.push(`${p.sessionId}:${p.text}`); releases[`${p.sessionId}:${p.text}`] = res }))
+    const events: any[] = []
+    const q = new ChatQueue(runTurn, (_c, e) => events.push(e))
+    q.enqueue(mkS('/w', 's1', 'A'), '你')
+    q.enqueue(mkS('/w', 's1', 'B'), '你')   // queues behind A (same session)
+    q.enqueue(mkS('/w', 's2', 'C'), '你')   // runs immediately (different session)
+    expect(calls).toEqual(['s1:A', 's2:C'])
+    const last = events[events.length - 1]
+    expect(last.runningSessionIds.sort()).toEqual(['s1', 's2'])
+    expect(last.busy).toBe(true)
+    releases['s1:A'](); await Promise.resolve(); await Promise.resolve()
+    expect(calls).toEqual(['s1:A', 's2:C', 's1:B'])
   })
 
-  it('a different workspace is NOT held by another workspace\'s active run', async () => {
+  it('a running workflow no longer holds chat turns (no isRunActive)', () => {
     const calls: string[] = []
-    const runTurn = vi.fn((p: ChatSendPayload) => { calls.push(p.workspacePath); return Promise.resolve() })
-    const q = new ChatQueue(runTurn, () => {}, (ws) => ws === '/w1') // only /w1 has an active run
-    q.enqueue(mk('/w1', 'A'), '你')  // held
-    q.enqueue(mk('/w2', 'B'), '你')  // runs — different workspace
-    await new Promise(r => setTimeout(r, 0))
-    expect(calls).toEqual(['/w2'])
+    const runTurn = vi.fn((p: ChatSendPayload) => { calls.push(p.text); return new Promise<void>(() => {}) })
+    const q = new ChatQueue(runTurn, () => {})   // 2-arg constructor
+    q.enqueue(mkS('/w', 's1', 'A'), '你')
+    expect(calls).toEqual(['A'])   // runs immediately even if a workflow is active in /w
   })
 })
