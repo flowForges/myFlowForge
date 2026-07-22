@@ -11,6 +11,12 @@ const workflows = [{ id: 'standard', name: '标准工作流', stages: [
 const providers = [{ id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus-4.8', label: 'opus-4.8' }, { id: 'sonnet-4.6', label: 'sonnet-4.6' }] }]
 const projects = [{ id: 'proj1', name: 'proj1', repoUrl: 'git@x:y/proj1.git', defaultBranch: 'main' }]
 
+// A detected in-place row's .pj-name div holds both the name text AND a nested 就地·不克隆 tag <span>,
+// so its combined textContent no longer equals the bare name — screen.getByText(name) can't find it.
+// Locate the row by its .pj-name prefix instead.
+const projRowByName = (name: string): HTMLElement =>
+  Array.from(document.querySelectorAll('.cr-proj')).find(r => r.querySelector('.pj-name')?.textContent?.startsWith(name)) as HTMLElement
+
 const defaultProps = {
   open: true as const,
   onCancel: () => {},
@@ -70,6 +76,56 @@ describe('CreateWorkspace', () => {
     await waitFor(() => expect(onDiscardPartial).toHaveBeenCalledWith('/abs/ws-p'))
     await waitFor(() => expect(screen.queryByText('检测到未完成的创建')).toBeNull())
     expect((screen.getByPlaceholderText('~/code/') as HTMLInputElement).value).toBe('')
+  })
+
+  it('auto-scans the picked folder and prepopulates 涉及项目 with detected repos, pre-checked in-place (Task 5)', async () => {
+    const onPickPath = vi.fn(async () => '/Users/me/code/ws-scan')
+    const scanRepos = vi.fn(async () => [
+      { name: 'api', relPath: 'api', absPath: '/Users/me/code/ws-scan/api', branch: 'main' },
+      { name: 'lib', relPath: 'packages/lib', absPath: '/Users/me/code/ws-scan/packages/lib', branch: 'dev' },
+    ])
+    ;(globalThis as any).window.forge = { scanRepos }
+    const onCreate = vi.fn()
+    render(<CreateWorkspace {...defaultProps} onCreate={onCreate} onPickPath={onPickPath} />)
+    fireEvent.click(screen.getByText('选择…'))
+    expect(onPickPath).toHaveBeenCalled()
+    await waitFor(() => expect(scanRepos).toHaveBeenCalledWith('/Users/me/code/ws-scan'))
+    // both detected repos show up as pre-checked rows, tagged 就地·不克隆, showing their current branch
+    await waitFor(() => expect(projRowByName('api')).toBeTruthy())
+    expect(projRowByName('packages/lib')).toBeTruthy()
+    expect(screen.getAllByText('就地·不克隆')).toHaveLength(2)
+    const apiRow = projRowByName('api')
+    expect(apiRow.className).toContain(' on')   // pre-checked
+    expect((within(apiRow).getByDisplayValue('main'))).toBeInTheDocument()
+    const libRow = projRowByName('packages/lib')
+    expect((within(libRow).getByDisplayValue('dev'))).toBeInTheDocument()
+    // the registered project (proj1) is untouched, still present alongside the in-place rows
+    expect(screen.getByText('proj1')).toBeInTheDocument()
+    // create → both in-place repos carry inPlace:true + repoId = relPath (so <wsPath>/<repoId> resolves)
+    fireEvent.click(screen.getByRole('button', { name: /创建/ }))
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    const opts = onCreate.mock.calls[0][0]
+    const api = opts.projects.find((p: any) => p.repoId === 'api')
+    const lib = opts.projects.find((p: any) => p.repoId === 'packages/lib')
+    expect(api).toMatchObject({ repoId: 'api', branch: 'main', inPlace: true })
+    expect(lib).toMatchObject({ repoId: 'packages/lib', branch: 'dev', inPlace: true })
+    delete (globalThis as any).window.forge
+  })
+
+  it('re-picking a DIFFERENT folder replaces the previously-detected in-place rows, no leak (Task 5)', async () => {
+    const scanRepos = vi.fn()
+      .mockResolvedValueOnce([{ name: 'api', relPath: 'api', absPath: '/a/api', branch: 'main' }])
+      .mockResolvedValueOnce([{ name: 'svc', relPath: 'svc', absPath: '/b/svc', branch: 'trunk' }])
+    ;(globalThis as any).window.forge = { scanRepos }
+    let call = 0
+    const onPickPath = vi.fn(async () => (++call === 1 ? '/a' : '/b'))
+    render(<CreateWorkspace {...defaultProps} onPickPath={onPickPath} />)
+    fireEvent.click(screen.getByText('选择…'))
+    await waitFor(() => expect(projRowByName('api')).toBeTruthy())
+    fireEvent.click(screen.getByText('选择…'))
+    await waitFor(() => expect(projRowByName('svc')).toBeTruthy())
+    expect(projRowByName('api')).toBeFalsy()   // the first folder's detected row is gone, not leaked
+    delete (globalThis as any).window.forge
   })
 
   it('shows an error banner when the error prop is set', () => {

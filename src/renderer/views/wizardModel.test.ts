@@ -39,6 +39,26 @@ describe('wizard model', () => {
     expect(opts.projects.map(p => p.repoId)).toEqual(['proj1'])             // only selected
     expect(opts.purpose).toBe('把三层记忆做成可开关的功能')                    // 建区目的 passthrough (trimmed non-empty)
   })
+
+  it('carries inPlace through buildCreateOpts for an auto-detected repo row (Task 5)', () => {
+    const state: WizardState = {
+      path: '~/code/ws-a', name: '', nameEdited: false, purpose: '',
+      workflows: [emptyWorkflow('light', 'Light', {
+        develop: { on: true, provider: 'claude', model: 'opus-4.8' },
+      }, ['develop'])],
+      activeWorkflowId: 'light',
+      projects: [
+        { repoId: 'api', name: 'api', sel: true, branch: 'main', model: 'claude::opus-4.8', inPlace: true },
+        { repoId: 'proj1', name: 'proj1', sel: true, branch: 'forge/ws-a', model: 'sonnet-4.6' },
+      ],
+      plugins: [], stepPlugins: []
+    }
+    const opts = buildCreateOpts(state)
+    const inPlaceProj = opts.projects.find(p => p.repoId === 'api')!
+    expect(inPlaceProj.inPlace).toBe(true)
+    const regularProj = opts.projects.find(p => p.repoId === 'proj1')!
+    expect(regularProj.inPlace).toBeUndefined()
+  })
 })
 
 describe('packModel/unpackModel', () => {

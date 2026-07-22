@@ -148,6 +148,8 @@
 .cr-proj .pj-lock { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600; font-family: var(--mono); color: var(--ok); background: oklch(74% .15 150 / .14); border-radius: 99px; padding: 2px 8px; flex: 0 0 auto; }
 .cr-proj .pj-lock svg { width: 10px; height: 10px; }
 .cr-proj .pj-remove { display: inline-flex; align-items: center; font-size: 10px; font-weight: 700; font-family: var(--mono); color: var(--err); background: color-mix(in oklch, var(--err), transparent 86%); border-radius: 99px; padding: 2px 8px; flex: 0 0 auto; }
+/* Task 5: 就地使用·不克隆 tag for an auto-detected on-disk repo row (scanRepos), next to its name. */
+.cr-proj .pj-inplace { display: inline-flex; align-items: center; margin-left: 7px; font-size: 9.5px; font-weight: 600; font-family: var(--mono); color: var(--accent); background: color-mix(in oklch, var(--accent), transparent 88%); border-radius: 99px; padding: 1px 7px; vertical-align: middle; }
 .cr-proj.removing { opacity: .72; }
 .cr-proj.removing .pj-name { text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--err), transparent 40%); }
 .cr-removal-warn { margin: 0 22px 8px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5;

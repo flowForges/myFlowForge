@@ -233,6 +233,9 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   // early return — so hook order stays stable across open/closed renders).
   const [partial, setPartial] = useState<import('@shared/types').Workspace | null>(null)
   const [discarding, setDiscarding] = useState(false)
+  // Task 5: auto-scan the picked folder for existing repos and prepopulate 涉及项目 with them in-place
+  // (pre-checked, no clone). `scanning` drives a lightweight "扫描中…" affordance while the IPC runs.
+  const [scanning, setScanning] = useState(false)
 
   // Full (re)seed ONLY when the modal opens or the edit target changes — NOT on every projects/
   // workflows change, so adding a project/workflow from inside the wizard can't wipe the user's
@@ -274,7 +277,10 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
         const dev = seedStage(workflows[0]?.stages.find(st => st.key === DEV_KEY)?.defaultModel ?? '')
         return { repoId: p.id, name: p.name, sel: pendingSelect.current.has(p.name), branch: '', model: packModel(dev.provider, dev.model) }
       })
-      return { ...s, projects: next }
+      // Task 5: in-place rows (scanned repos) aren't part of the registered `projects` list this effect
+      // rebuilds from — carry them over untouched so a config change elsewhere (e.g. adding a project in
+      // Settings while the wizard is open) doesn't silently wipe the scanned rows.
+      return { ...s, projects: [...next, ...s.projects.filter(p => p.inPlace)] }
     })
     pendingSelect.current.clear()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -347,6 +353,30 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     try { await onDiscardPartial(partial.path) } finally { setDiscarding(false) }
     setPartial(null)
     setState(freshState())   // 清除选择 — back to a blank wizard
+  }
+
+  // Task 5: on picking a workspace folder, scan it for already-checked-out repos and prepopulate
+  // 涉及项目 with them, pre-checked, tagged 就地使用·不克隆 (in-place: no clone, worktree = <wsPath>/<relPath>).
+  // Re-picking a DIFFERENT folder must not leak the previous folder's detected rows — every scan first
+  // drops all existing inPlace rows, then adds the new folder's (or none, if the folder has no repos).
+  const scanForRepos = async (rawPath: string) => {
+    if (!window.forge?.scanRepos) return
+    setScanning(true)
+    try {
+      const repos = await window.forge.scanRepos(rawPath)
+      const model = defaultProjModel()
+      update(s => ({
+        ...s,
+        projects: [
+          ...s.projects.filter(p => !p.inPlace),
+          ...repos.map(r => ({ repoId: r.relPath, name: r.relPath, sel: true, branch: r.branch, model, inPlace: true })),
+        ],
+      }))
+    } catch {
+      // scan failed (e.g. not a directory yet) — leave projects as-is, no in-place rows added.
+    } finally {
+      setScanning(false)
+    }
   }
 
   // Derive the display name from a repo url/path the same way the store does (last path segment).
@@ -674,7 +704,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 <div className="inp">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
                   <input className="mono" id="crPath" placeholder="~/code/" spellCheck={false} autoCapitalize="off" autoComplete="off" value={state.path} readOnly={!!editing} onChange={e => setPath(e.target.value)} onBlur={e => void probePartial(e.target.value)} />
-                  {!editing && <button className="pick" id="crPick" onClick={async () => { const d = await onPickPath?.(); if (d) { setPath(d); void probePartial(d) } }}>选择…</button>}
+                  {!editing && <button className="pick" id="crPick" onClick={async () => { const d = await onPickPath?.(); if (d) { setPath(d); void probePartial(d); void scanForRepos(d) } }}>选择…</button>}
                 </div>
               </div>
             </div>
@@ -707,7 +737,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
 
           {/* 2 涉及项目 */}
           <div className="cr-sec">
-            <div className="cr-sec-h"><span className="n">2</span><h4>涉及项目</h4><span className="hint" id="crProjHint">{state.projects.length ? '已选 ' + selectedCount + ' / ' + state.projects.length : '先圈定本次需求动哪些项目 · 各设代码分支'}</span></div>
+            <div className="cr-sec-h"><span className="n">2</span><h4>涉及项目</h4><span className="hint" id="crProjHint">{scanning ? '扫描中…' : (state.projects.length ? '已选 ' + selectedCount + ' / ' + state.projects.length : '先圈定本次需求动哪些项目 · 各设代码分支')}</span></div>
             <div className="cr-branch-all" id="crBranchAll">
               <span className="lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>统一分支</span>
               <input id="crBranchAllInput" placeholder="feat/my-task" spellCheck={false} autoCapitalize="off" autoComplete="off" value={branchAll} onChange={e => setBranchAll(e.target.value)} />
@@ -722,8 +752,8 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                     <button className="st-chk" data-prtoggle={i} title={p.existing && p.sel ? '取消勾选将移除该项目(删除本地代码)' : undefined} onClick={() => toggleProject(p.repoId)}>{CK}</button>
                     <span className="pj-ic">{GIT}</span>
                     <div className="pj-main" onClick={() => toggleProject(p.repoId)}>
-                      <div className="pj-name">{p.name}</div>
-                      <div className="pj-repo">{projects.find(pp => pp.id === p.repoId)?.repoUrl ?? ''}</div>
+                      <div className="pj-name">{p.name}{p.inPlace && <span className="pj-inplace" title="工作区文件夹下已检测到的仓库,直接就地使用,不克隆">就地·不克隆</span>}</div>
+                      <div className="pj-repo">{p.inPlace ? '' : (projects.find(pp => pp.id === p.repoId)?.repoUrl ?? '')}</div>
                     </div>
                     {p.existing && (p.sel ? <span className="pj-lock">已包含</span> : <span className="pj-remove">将移除</span>)}
                     <span className="pj-branch">{BRANCH}<input data-prbranch={i} value={branchFor(p)} spellCheck={false} onChange={e => setProjectBranch(p.repoId, e.target.value)} /></span>

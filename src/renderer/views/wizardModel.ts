@@ -12,7 +12,10 @@ export const unpackModel = (v: string): { provider: string; model: string } => {
 // custom?: this is a user-defined (non-builtin) stage; carries its template name + behavior flags so it
 // runs correctly and its chip renders with the right label. Built-in stages leave these undefined.
 export interface WizardStage extends StageCustomFields { on: boolean; provider: string; model: string; review?: ReviewConfig; prompt?: string; custom?: boolean }
-export interface WizardProject { repoId: string; name: string; sel: boolean; branch: string; model: string; provider?: string; locked?: boolean; existing?: boolean }
+// inPlace: this row is an on-disk repo auto-detected under the picked workspace folder (Task 3's
+// scanRepos) rather than a registered project — it skips clone/provision and its worktree dir is
+// `<wsPath>/<repoId>` (repoId = the repo's path relative to the workspace folder). See CreateWorkspaceProject.
+export interface WizardProject { repoId: string; name: string; sel: boolean; branch: string; model: string; provider?: string; locked?: boolean; existing?: boolean; inPlace?: boolean }
 // One tab of the wizard: a named workflow with its own stage config + the display order those stages
 // were seeded in (STAGE_KEYS at the call site, or a persisted workflow's own key order ∪ STAGE_KEYS).
 export interface WizardWorkflow { id: string; name: string; stages: Record<string, WizardStage>; stageOrder: string[] }
@@ -66,7 +69,7 @@ function stagesOf(wf: WizardWorkflow): CreateWorkspaceStage[] {
 export function buildCreateOpts(state: WizardState): CreateWorkspaceOpts {
   const projects = state.projects
     .filter(p => p.sel)
-    .map(p => ({ repoId: p.repoId, branch: p.branch, provider: p.provider, model: p.model }))
+    .map(p => ({ repoId: p.repoId, branch: p.branch, provider: p.provider, model: p.model, ...(p.inPlace ? { inPlace: true } : {}) }))
   return {
     name: deriveWsName(state.path, state.nameEdited, state.name),
     path: state.path.trim(),
