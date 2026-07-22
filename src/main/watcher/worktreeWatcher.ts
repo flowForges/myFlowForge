@@ -15,8 +15,17 @@ export class WorktreeWatcher {
     this.stop()
     // Ignore .git / node_modules and Forge's own per-workspace state dir. .forge holds the live
     // run unix socket (forge.sock); fs.watch on a socket throws UNKNOWN → unhandled rejection, so
-    // the dir must never be descended into (it's internal state, not user source, anyway).
-    const w = this.watchFn(cwd, { ignored: /(^|[/\\])(\.git|node_modules|\.forge)([/\\]|$)/, ignoreInitial: true })
+    // the dir must never be descended into (it's internal state, not user source, anyway). Also
+    // skip other heavy build/dep dirs (dist/build/target/.venv/vendor/.next/coverage) and cap
+    // recursion depth: if cwd ever ends up pointed at a giant multi-repo folder (e.g. a
+    // workspace with no scoped project), an unbounded chokidar scan + fs.watch handle setup can
+    // starve the main-process event loop and freeze the whole app. depth: 6 is deep enough for
+    // any normal single-repo worktree.
+    const w = this.watchFn(cwd, {
+      ignored: /(^|[/\\])(\.git|node_modules|\.forge|dist|build|target|\.venv|vendor|\.next|coverage)([/\\]|$)/,
+      ignoreInitial: true,
+      depth: 6,
+    })
     const fire = () => {
       if (this.timer) clearTimeout(this.timer)
       this.timer = setTimeout(onChange, this.debounceMs)
