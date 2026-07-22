@@ -64,6 +64,9 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
 
   useEffect(() => {
     if (!run2 || !workspacePath) { setState(null); setResumable(null); return }
+    // Clear synchronously (before the async getState below resolves) so an A->B workspace switch
+    // never leaves A's run2 state visible on the live 执行 tab during the fetch window.
+    setState(null)
     let alive = true
     run2.getState(workspacePath).then((s: RunControllerState | null) => {
       if (!alive) return

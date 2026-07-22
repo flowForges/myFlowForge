@@ -40,6 +40,30 @@ describe('RunHistoryPanel', () => {
     expect(listRuns).toHaveBeenCalled()
   })
 
+  // Regression (N3): WorkspaceView reuses this panel across workspace switches, so the caller
+  // must remount it via `key={wsPath}` for a switch to re-fetch. Simulate that remount here by
+  // re-rendering with a different `key` (the same mechanism React uses when the caller's key prop
+  // changes) and assert the new workspace's list replaces the old one instead of sticking around.
+  it('remounts and re-fetches when given a new key (simulating a workspace switch)', async () => {
+    const listRunsA = vi.fn(async () => entries)
+    const entriesB: RunHistoryEntry[] = [
+      { runId: 'run-b1', status: 'ok', doneCount: 1, totalStages: 1, task: '工作区B的需求', modifiedAt: 500 },
+    ]
+    const listRunsB = vi.fn(async () => entriesB)
+    const loadRun = vi.fn(async () => null)
+
+    const { rerender } = render(<RunHistoryPanel key="ws-a" listRuns={listRunsA} loadRun={loadRun} />)
+    await waitFor(() => expect(screen.getByText('需求B')).toBeInTheDocument())
+    expect(listRunsA).toHaveBeenCalledTimes(1)
+
+    rerender(<RunHistoryPanel key="ws-b" listRuns={listRunsB} loadRun={loadRun} />)
+
+    await waitFor(() => expect(screen.getByText('工作区B的需求')).toBeInTheDocument())
+    expect(screen.queryByText('需求B')).toBeNull()
+    expect(screen.queryByText('需求A')).toBeNull()
+    expect(listRunsB).toHaveBeenCalledTimes(1)
+  })
+
   it('shows an empty message when there are no saved runs', async () => {
     const listRuns = vi.fn(async () => [])
     const loadRun = vi.fn(async () => null)

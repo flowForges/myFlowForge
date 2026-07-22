@@ -224,6 +224,42 @@ describe('useRun2', () => {
     expect(result.current.resumable).toEqual(restoredSummary)
   })
 
+  // Regression (N3): an A->B workspace switch must clear A's state SYNCHRONOUSLY (in the same
+  // effect pass), not just once B's getState() resolves — otherwise the live 执行 tab briefly
+  // shows A's stale run while B's fetch is in flight.
+  it('clears state synchronously on workspacePath change, before the new workspace\'s getState resolves', async () => {
+    let resolveB: (v: any) => void = () => {}
+    const pendingB = new Promise((resolve) => { resolveB = resolve })
+    const getState = vi.fn((ws: string) => {
+      if (ws === '/ws-a') return Promise.resolve({ machine: { plan: { runId: 'a', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {} })
+      return pendingB
+    })
+    installForge({ getState })
+    const { result, rerender } = renderHook(({ ws }) => useRun2(ws), { initialProps: { ws: '/ws-a' } })
+    await waitFor(() => expect(result.current.state?.machine.plan.runId).toBe('a'))
+
+    act(() => { rerender({ ws: '/ws-b' }) })
+    // getState('/ws-b') is still pending (pendingB unresolved) — state must already be cleared.
+    expect(result.current.state).toBeNull()
+
+    act(() => { resolveB({ machine: { plan: { runId: 'b', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {} }) })
+    await waitFor(() => expect(result.current.state?.machine.plan.runId).toBe('b'))
+  })
+
+  // Same-workspace re-renders (e.g. a parent re-rendering with an unchanged workspacePath) must
+  // NOT re-run this effect at all, so an in-progress run's state is never wiped mid-run.
+  it('does NOT clear state on a re-render with the SAME workspacePath', async () => {
+    const { fire } = installForge()
+    const { result, rerender } = renderHook(({ ws }) => useRun2(ws), { initialProps: { ws: '/ws' } })
+    await waitFor(() => expect(result.current.state?.status).toBe('running'))
+
+    act(() => fire.update({ workspacePath: '/ws', state: { machine: { plan: { runId: 'r', stages: [] }, stages: [], currentIndex: 0 }, inbox: [], feedback: [], outcomes: {}, status: 'awaiting', pendingDirective: {} } }))
+    await waitFor(() => expect(result.current.state?.status).toBe('awaiting'))
+
+    rerender({ ws: '/ws' })
+    expect(result.current.state?.status).toBe('awaiting') // unchanged, not reset to null
+  })
+
   // Task 2 (queue): useRun2 surfaces a workspace's pending-queue length from the run2:queue
   // broadcast so RunPanel can show a "队列: N" badge.
   it('defaults queueLength to 0 and updates it from matching run2:queue broadcasts, ignoring other workspaces', async () => {

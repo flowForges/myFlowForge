@@ -1421,6 +1421,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             <div className={`insp-pane${activeTab === 'history' ? ' on' : ''}`} id="pane-history">
               {activeTab === 'history' && (
                 <RunHistoryPanel
+                  key={wsPath}
                   listRuns={run2.listRuns}
                   loadRun={run2.loadRun}
                   liveRunId={run2.state?.machine.plan.runId ?? null}
