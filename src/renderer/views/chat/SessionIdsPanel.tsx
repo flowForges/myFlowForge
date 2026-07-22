@@ -119,7 +119,7 @@ export function SessionIdsPanel({
                 <span className={`sid-provider ${r.provider}`} />
                 <div className="sid-main">
                   <div className="sid-agent">{r.agentName}</div>
-                  <div className="sid-meta">
+                  <div className="sid-meta" title={`${r.providerLabel}${r.role ? ` · ${r.role}` : ''} · ${r.lastActiveAt}`}>
                     {r.providerLabel}
                     {r.role ? ` · ${r.role}` : ''} · {r.lastActiveAt}
                   </div>

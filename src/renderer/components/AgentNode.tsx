@@ -138,12 +138,19 @@ export function AgentNode({ agent, open: openProp, onToggle, onViewLog, live = t
           <div className="agent-meta">
             <span className="agent-name">{agent.name}</span>
             <span className="agent-role">{agent.role}</span>
-            <span className="agent-model">
-              <span className={`prov-dot p-${agent.provider}`} />
-              {agent.model}
-              {(agent as AgentRuntime & { ver?: string }).ver && (
-                <span className="ver">· {(agent as AgentRuntime & { ver?: string }).ver}</span>
-              )}
+            <span className="agent-model" title={`${agent.provider} · ${agent.model}`}>
+              <span className={`prov-badge p-${agent.provider}`}>
+                <span className={`prov-dot p-${agent.provider}`} />
+                {agent.provider}
+              </span>
+              <span className="agent-model-track">
+                <span className="agent-model-name">
+                  {agent.model}
+                  {(agent as AgentRuntime & { ver?: string }).ver && (
+                    <span className="ver">· {(agent as AgentRuntime & { ver?: string }).ver}</span>
+                  )}
+                </span>
+              </span>
             </span>
           </div>
           <span className={`agent-state ${stateInfo.cls}`}>
