@@ -144,6 +144,10 @@
 .ws-item:hover .ws-grip { opacity: .5; }
 .ws-grip:hover { opacity: .9 !important; }
 .window.collapsed .ws-grip { display: none; }
+/* Reserve the grip column in the non-draggable 置顶 group too, so pinned and all rows share the same
+   left edge (previously only the draggable group had a grip → 6px horizontal drift). */
+.ws-grip.inert { opacity: 0 !important; pointer-events: none; cursor: default; }
+.ws-item:hover .ws-grip.inert { opacity: 0 !important; }
 .ws-item.dragging { opacity: .4; }
 /* Insertion indicator: the dragged row drops just above the hovered target. */
 .ws-item.drag-over { box-shadow: inset 0 2px 0 var(--accent); }

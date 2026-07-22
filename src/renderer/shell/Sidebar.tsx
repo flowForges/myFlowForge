@@ -217,7 +217,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                 onDrop={draggable ? e => { e.preventDefault(); dropOn(item.id) } : undefined}
                 onDragEnd={draggable ? () => { setDragId(null); setOverId(null) } : undefined}
               >
-                {draggable && <span className="ws-grip" aria-hidden="true">{GRIP_ICON}</span>}
+                <span className={`ws-grip${draggable ? '' : ' inert'}`} aria-hidden="true">{GRIP_ICON}</span>
                 {/* avatar initial (visible only in collapsed mode via CSS); its .st dot marks run state */}
                 <span className="ws-ava">
                   {avaInitial(item.name)}
