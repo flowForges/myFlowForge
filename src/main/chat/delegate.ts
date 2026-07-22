@@ -101,25 +101,41 @@ const stubStore = {
 // workspace → 该工作区当前在【后台】跑的 delegate 子代理 session 集合。fire-and-forget 后子代理脱离了 chat
 // 轮次(轮末 chatQueue.activeCancel 被置 null),没有这张跨轮存活的表,用户点「停止」或关闭工作区时就杀不掉后台
 // 子代理,会留成孤儿进程。启动时 track,后台完成/失败时 untrack;取消时遍历 cancel。
-const activeDelegates = new Map<string, Set<AgentSession>>()
-function trackDelegate(wsPath: string, s: AgentSession) {
+// 每条记录带上发起会话的 sid(未传则记 '' ),这样「停止」能只杀当前会话派发的子代理,不误杀同工作区里另一个
+// 并发会话仍在跑的委派(归档/删除等无 sessionId 的调用方继续走「取消全部」)。
+interface DelegateEntry { sid: string; s: AgentSession }
+const activeDelegates = new Map<string, Set<DelegateEntry>>()
+function trackDelegate(wsPath: string, sessionId: string | undefined, s: AgentSession) {
   let set = activeDelegates.get(wsPath)
   if (!set) { set = new Set(); activeDelegates.set(wsPath, set) }
-  set.add(s)
+  set.add({ sid: sessionId ?? '', s })
 }
 function untrackDelegate(wsPath: string, s: AgentSession) {
   const set = activeDelegates.get(wsPath)
   if (!set) return
-  set.delete(s)
+  for (const entry of set) if (entry.s === s) { set.delete(entry); break }
   if (!set.size) activeDelegates.delete(wsPath)
 }
-/** 取消某工作区所有在后台跑的 delegate 子代理(用户点「停止」/关闭工作区时调)。返回被取消的数量。 */
-export function cancelWorkspaceDelegates(wsPath: string): number {
+/**
+ * 取消某工作区在后台跑的 delegate 子代理(用户点「停止」/关闭工作区/归档/删除时调)。传 sessionId 时只取消该
+ * 会话派发的子代理(并发的其它会话不受影响);省略 sessionId 取消该工作区的全部(归档/删除等既有调用方保持不变)。
+ * 返回被取消的数量。
+ */
+export function cancelWorkspaceDelegates(wsPath: string, sessionId?: string): number {
   const set = activeDelegates.get(wsPath)
   if (!set) return 0
   let n = 0
-  for (const s of set) { try { s.cancel(); n++ } catch { /* already gone */ } }
-  activeDelegates.delete(wsPath)
+  if (sessionId === undefined) {
+    for (const entry of set) { try { entry.s.cancel(); n++ } catch { /* already gone */ } }
+    activeDelegates.delete(wsPath)
+    return n
+  }
+  for (const entry of [...set]) {
+    if (entry.sid !== sessionId) continue
+    try { entry.s.cancel(); n++ } catch { /* already gone */ }
+    set.delete(entry)
+  }
+  if (!set.size) activeDelegates.delete(wsPath)
   return n
 }
 
@@ -263,7 +279,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
         let abort: () => void = () => {}
         const gateAborted = new Promise<'aborted'>((res) => { abort = () => res('aborted') })
         const pseudo: AgentSession = { id: `${runId}:gate`, cancel: () => abort(), done: Promise.resolve({ ok: false } as AgentResult) }
-        trackDelegate(opts.workspacePath, pseudo)
+        trackDelegate(opts.workspacePath, opts.sessionId, pseudo)
         const choice = await Promise.race([opts.askPermission({ projects: targets.map(t => t.name), write }), gateAborted])
         untrackDelegate(opts.workspacePath, pseudo)
         if (choice === 'aborted') {
@@ -290,7 +306,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
         return
       }
       // 登记到跨轮存活的取消表(fire-and-forget 后靠它才能在「停止」/关闭工作区时杀掉后台子代理)。
-      for (const { session } of running) trackDelegate(opts.workspacePath, session)
+      for (const { session } of running) trackDelegate(opts.workspacePath, opts.sessionId, session)
 
       // 空闲看门狗:每 tick 检查各子代理最后活动时间,超阈值静默即 cancel(其 done 随即 resolve/reject → Promise.all
       // 不再被单个卡住的子代理拖死)。timedOut 记下被杀者,汇总时标注为超时失败而非普通异常。

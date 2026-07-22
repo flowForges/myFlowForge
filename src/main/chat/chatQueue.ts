@@ -65,9 +65,12 @@ export class ChatQueue {
     this.lane(ws, sessionId).activeCancel = cancel
   }
 
-  // 停止 targets the whole workspace (the chat 停止 button is per-workspace): cancel every running lane.
-  stop(ws: string): void {
+  // 停止 targets the ACTIVE session's lane only — stopping session A's turn must not kill a concurrently
+  // running session B in the same workspace. Callers that omit sessionId (legacy/back-compat: e.g. the
+  // pet's workspace-wide stop) still cancel every lane, as before.
+  stop(ws: string, sessionId?: string): void {
     const m = this.map.get(ws); if (!m) return
+    if (sessionId !== undefined) { m.get(sessionId)?.activeCancel?.(); return }
     for (const lane of m.values()) lane.activeCancel?.()
   }
 

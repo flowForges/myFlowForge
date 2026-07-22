@@ -183,8 +183,8 @@ export function useChat(
 
   const stop = useCallback(() => {
     if (!workspacePath) return
-    void api.current.chatStop({ workspacePath })
-  }, [workspacePath])
+    void api.current.chatStop({ workspacePath, sessionId })
+  }, [workspacePath, sessionId])
 
   return { messages, streamingIds, confirms, asks, plans, busy, queue, running, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
 }

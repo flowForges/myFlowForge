@@ -573,13 +573,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   ipcMain.handle(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
   ipcMain.handle(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
-  // 「停止」既停 chat 轮次,也取消该工作区所有在【后台】跑的 delegate 子代理(fire-and-forget 后它们已脱离
-  // chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮取消表才杀得掉,否则会留成孤儿)。
-  ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string }) => {
-    chatQueue.stop(a.workspacePath); cancelWorkspaceDelegates(a.workspacePath)
-    // 停止 tears down the turn AND every background delegate for this ws → drain ALL their open gates
-    // (confirm + ask) so no pet indicator / chat card is left stranded on a promise nobody will answer.
-    drainChatGates(a.workspacePath)
+  // 「停止」只停当前【会话】的轮次 + 它派发的后台 delegate 子代理 + 它挂起的门(confirm/ask),不动同工作区里
+  // 并发跑着的另一个会话(fire-and-forget 的子代理已脱离 chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮
+  // 取消表才杀得掉,否则会留成孤儿)。省略 sessionId(如宠物的工作区级停止)仍是「取消这个工作区的全部」。
+  ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string; sessionId?: string }) => {
+    chatQueue.stop(a.workspacePath, a.sessionId); cancelWorkspaceDelegates(a.workspacePath, a.sessionId)
+    drainChatGates(a.workspacePath, a.sessionId ? { sessionId: a.sessionId } : {})
   })
   ipcMain.handle(CH.sessionList, (_e, wsPath: string) => readSessions(wsPath))
   ipcMain.handle(CH.sessionNew, (_e, wsPath: string) => {
