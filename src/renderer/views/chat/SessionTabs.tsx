@@ -19,12 +19,14 @@ export interface SessionTabsProps {
   // #3: sessions whose (off-screen) workflow run is waiting on a permission gate — badge their tab so
   // the user knows to switch there, instead of the gate stealing the current tab.
   attentionIds?: ReadonlySet<string>
+  // Session ids with an in-flight agent turn — pulses that tab's dot (mirrors the sidebar dot).
+  runningIds?: ReadonlySet<string>
   // Per-provider latest reported context usage for the active session — shown in the IDs panel next to
   // each provider's 主 Agent row.
   usageByProvider?: Record<string, { used: number; window: number }>
 }
 
-export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds, usageByProvider }: SessionTabsProps) {
+export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds, runningIds, usageByProvider }: SessionTabsProps) {
   const multi = sessions.length > 1
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -64,7 +66,7 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
               {isReadOnly && s.external && (
                 <span className="si-src-badge" title={s.external.source}>{s.external.source.slice(0, 2).toUpperCase()}</span>
               )}
-              <span className={'sd ' + s.mode} />
+              <span className={'sd ' + s.mode + (runningIds?.has(s.id) ? ' run' : '')} />
               {attentionIds?.has(s.id) && s.id !== activeSessionId && (
                 <span className="sess-attn" title="该会话的工作流在等待你确认" />
               )}

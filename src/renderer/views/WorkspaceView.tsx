@@ -166,6 +166,8 @@ interface WorkspaceViewProps {
   onViewAgentLog?: (agentId: string, agentName: string) => void
   // Report what the 顶栏「打开位置」button should open (current workspace / previewed file), or null.
   onOpenTargetChange?: (t: OpenTarget | null) => void
+  // Session ids with an in-flight agent turn (App's memo) — pulses the matching session-tab dot.
+  runningSessionIds?: ReadonlySet<string>
 }
 
 // A truncated overview value: an INSTANT (CSS) tooltip shows the full text on hover, and clicking
@@ -197,7 +199,7 @@ function Copyable({ text, className }: { text: string; className?: string }) {
   )
 }
 
-export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange }: WorkspaceViewProps) {
+export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange, runningSessionIds }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
@@ -1043,6 +1045,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           workspacePath={wsPath}
           archived={archived}
           attentionIds={attentionIds}
+          runningIds={runningSessionIds}
           usageByProvider={usageByProvider}
         />
         {/* P-C2/T3 (disk-resume): a workflow was mid-run when the app last exited/crashed for this

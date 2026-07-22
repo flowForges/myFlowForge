@@ -16,6 +16,8 @@
 .sess-tab.on { background: var(--surface); color: var(--fg); border-color: var(--border-2); }
 .sess-tab .sd { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; background: var(--faint); }
 .sess-tab .sd.workflow { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.sess-tab .sd.run { background: var(--run); animation: sess-sd-pulse 1.5s ease-in-out infinite; }
+@keyframes sess-sd-pulse { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--run) 55%, transparent); } 50% { opacity: .5; box-shadow: 0 0 0 3px transparent; } }
 .sess-tab .st-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sess-tab .st-edit {
   width: 128px; min-width: 0; border: none; outline: none; background: transparent; color: var(--fg);

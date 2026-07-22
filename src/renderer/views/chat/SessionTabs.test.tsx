@@ -36,4 +36,14 @@ describe('SessionTabs', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onRename).toHaveBeenCalledWith('s2', '接口联调')
   })
+
+  it('running session tab dot gets the run class', () => {
+    const sessions = [{ id: 's1', title: 'A', mode: 'chat', createdAt: 0 }, { id: 's2', title: 'B', mode: 'chat', createdAt: 0 }] as any
+    const { container } = render(
+      <SessionTabs sessions={sessions} activeSessionId="s1" onSwitch={() => {}} onClose={() => {}}
+        onRename={() => {}} onNew={() => {}} runningIds={new Set(['s2'])} />)
+    const dots = container.querySelectorAll('.sd')
+    expect(dots[1].className).toContain('run')
+    expect(dots[0].className).not.toContain('run')
+  })
 })
