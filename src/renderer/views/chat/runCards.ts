@@ -48,6 +48,10 @@ export interface FrozenRunCard {
   // resolved gate card can still open its full design doc(s) after the live event is gone from
   // `inbox` and reload/session-switch has round-tripped it through chat:append-run-card.
   docs?: ArtifactRef[]
+  // #6: mirrors GateEvent.stageName — preserved so a reloaded resolved gate keeps its stage-name
+  // title (e.g. 技术方案设计) instead of reverting to the generic 阶段评审. Optional: old persisted
+  // cards lack it, so RunEventCard's kindLabel defaults to 阶段评审 when absent.
+  stageName?: string
 }
 
 export interface RunCardEntry {

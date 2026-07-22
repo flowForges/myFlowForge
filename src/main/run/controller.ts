@@ -1,4 +1,8 @@
 // src/main/run/controller.ts
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { join, basename, isAbsolute } from 'node:path'
+import { wsDocsDir } from '../config/paths'
+import { pickDocArtifact } from './docArtifact'
 import type { PermissionMode } from '@shared/permissions'
 import type { AgentProvider, ConfirmReq, InputReq } from '../agents/types'
 import type { ArtifactRef } from './runTypes'
@@ -628,7 +632,7 @@ export class RunController {
     // 合并并完成 / 丢弃本次. Falls back to the plain prompt only when no summary was produced (e.g. a
     // run with zero recorded outcomes) — this.summary is set in start() just before this is called.
     const body = this.summary ? `**本次运行总结**\n\n${this.summary}` : '全部完成，合并到目标分支？'
-    this.emitEvent({ id, kind: 'gate', stageKey: '__finalize__', body, finalize: true })
+    this.emitEvent({ id, kind: 'gate', stageKey: '__finalize__', stageName: '收尾确认', body, finalize: true })
     const d = await p
     this.drop(id)
     this.emitUpdate()
@@ -965,12 +969,37 @@ export class RunController {
       // onConfirm/onInput/failure above), and awaited later — right before the machine actually
       // advances — so a doubt can hold the stage even if the gate below has already resolved.
       const doubtWaits: Array<Promise<{ id: string; note: string; d: LaneDecision }>> = []
+      // #6: a producesDoc stage (design) hands off a real markdown 技术方案 file — prefer it over the
+      // one-line summary so the gate shows the actual plan, and mirror it into <ws>/<basename>_docs/
+      // (user-visible). Robust: the artifact path is agent-self-reported, so we only trust it after a
+      // successful read; anything unreadable/missing falls back to the summary artifact (guaranteeing a
+      // real file always backs the gate ref).
+      const stageProducesDoc = stage.producesDoc ?? false
       for (const oc of outcomes) {
         if (oc.status === 'ok' && oc.result) {
           // ②多镜头CR: a lens reviewer has no `project` — key its artifact by lens so N lens reviewers
           // don't all collide on the same `${stage.key}-root.md` (last-writer-wins would drop every
           //视角 but one). project → lens → 'root' covers per-project, per-lens, and single/root orders.
-          const ref = this.deps.store.writeArtifact(`${stage.key}-${oc.order.project ?? oc.order.lens ?? 'root'}.md`, oc.result.summary)
+          const projLabel = oc.order.project ?? oc.order.lens ?? 'root'
+          let ref: ArtifactRef | undefined
+          if (stageProducesDoc) {
+            const docPath = pickDocArtifact(oc.result.artifacts)
+            if (docPath) {
+              // forge_write_artifact returns an absolute path; be defensive about a relative one.
+              const src = isAbsolute(docPath) ? docPath : join(this.workspacePath(), docPath)
+              try {
+                const content = readFileSync(src, 'utf8')
+                const destDir = wsDocsDir(this.workspacePath())
+                mkdirSync(destDir, { recursive: true })
+                const dest = join(destDir, `${stage.key}-${projLabel}.md`)
+                writeFileSync(dest, content, 'utf8')
+                ref = { path: dest, kind: 'md' }
+              } catch { /* unreadable reported path → fall through to the summary fallback below */ }
+            }
+          }
+          // Fallback (and every non-producesDoc stage): write the summary into the run-dir artifacts.
+          // This always yields a readable file so the gate body/DocList never points at a missing path.
+          if (!ref) ref = this.deps.store.writeArtifact(`${stage.key}-${projLabel}.md`, oc.result.summary)
           refs.push(ref)
           for (const doubt of oc.result.doubts) {
             const id = this.makeId('doubt')
@@ -993,12 +1022,17 @@ export class RunController {
         // ②多镜头CR: a lens-mode review stage's gate body IS the consolidated多视角 report (grouped by
         // lens verdict — see reviewFanout.composeReviewReport), so the user sees every视角's finding in
         // one place before 通过/打回. Every other gated stage keeps the plain artifact-path list.
+        // #6: a producesDoc stage's gate body embeds the FULL doc text (read from the guaranteed-readable
+        // refs, one `## <filename>` section each) so the user reviews the real 技术方案 inline — not the
+        // bare artifact paths. reads are wrapped so a race/deletion degrades to the path rather than throwing.
         const body = isLensReviewStage(stage)
           ? composeReviewReport(stage.name, outcomes)
-          : refs.map((r) => r.path).join('\n')
+          : stageProducesDoc
+            ? refs.map((r) => { try { return `## ${basename(r.path)}\n\n${readFileSync(r.path, 'utf8')}` } catch { return r.path } }).join('\n\n---\n\n')
+            : refs.map((r) => r.path).join('\n')
         this.status = 'awaiting'
         const p = this.gateR.create(id)
-        this.emitEvent({ id, kind: 'gate', stageKey: stage.key, body, docs: refs })
+        this.emitEvent({ id, kind: 'gate', stageKey: stage.key, stageName: stage.name, body, docs: refs })
         d = await p
         this.drop(id)
         if (this.aborted) {

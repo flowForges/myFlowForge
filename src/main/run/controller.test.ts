@@ -1,6 +1,6 @@
 // src/main/run/controller.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../run/runStore'
@@ -160,6 +160,71 @@ describe('RunController', () => {
     expect(final.status).toBe('ok')
     expect(final.machine.stages.map((s) => s.status)).toEqual(['done', 'done'])
     expect(events.filter((e) => e.kind === 'gate').map((e) => (e as any).stageKey)).toEqual(['design'])
+  })
+
+  it('#6 producesDoc gate: mirrors the reported doc into <ws>/_docs, embeds its full text, carries stageName', async () => {
+    const store = new RunStore(ws, 'r1')
+    // The design agent writes a real markdown plan via forge_write_artifact and LISTS its returned
+    // absolute path in the handoff artifacts. Stub that: write a temp .md with real content and report it.
+    const docSrc = join(ws, 'agent-out.md')
+    const planText = '# 技术方案\n\n## 模块划分\n- 网关\n- 支付核心\n\n## 风险\n幂等键碰撞'
+    writeFileSync(docSrc, planText, 'utf8')
+    const docProvider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task: AgentTask, cb: AgentCallbacks) {
+        const done = (async () => {
+          cb.onHandoff?.({ summary: '完成', artifacts: [{ path: docSrc, kind: 'md' }] })
+          const r = { ok: true, summary: '' }; cb.onDone(r); return r
+        })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const docPlan: RunPlan = {
+      runId: 'r1',
+      stages: [{ key: 'design', name: '技术方案设计', provider: 'x', model: 'm', scope: 'root', gate: true, producesDoc: true }],
+    }
+    const c = new RunController(docPlan, { providers: { x: docProvider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let gate: any
+    c.onEvent((e) => { if (e.kind === 'gate') { gate = e; c.resolveGate(e.id, { type: 'advance' }) } })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    // (a) gate docs point at a <ws>/<basename>_docs/ file, not the run-dir artifacts
+    expect(gate.docs?.[0]?.path).toContain(`${ws.split('/').pop()}_docs`)
+    expect(existsSync(gate.docs[0].path)).toBe(true)
+    expect(readFileSync(gate.docs[0].path, 'utf8')).toBe(planText)
+    // (b) body embeds the FULL doc text (not a bare path)
+    expect(gate.body).toContain('## 模块划分')
+    expect(gate.body).toContain('幂等键碰撞')
+    // (c) the gate event carries the stage name for the title
+    expect(gate.stageName).toBe('技术方案设计')
+  })
+
+  it('#6 producesDoc gate falls back to the summary artifact when the reported doc path is unreadable', async () => {
+    const store = new RunStore(ws, 'r1')
+    const badProvider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task: AgentTask, cb: AgentCallbacks) {
+        const done = (async () => {
+          cb.onHandoff?.({ summary: '完成(方案见正文)', artifacts: [{ path: join(ws, 'does-not-exist.md'), kind: 'md' }] })
+          const r = { ok: true, summary: '' }; cb.onDone(r); return r
+        })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const docPlan: RunPlan = {
+      runId: 'r1',
+      stages: [{ key: 'design', name: '技术方案设计', provider: 'x', model: 'm', scope: 'root', gate: true, producesDoc: true }],
+    }
+    const c = new RunController(docPlan, { providers: { x: badProvider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    let gate: any
+    c.onEvent((e) => { if (e.kind === 'gate') { gate = e; c.resolveGate(e.id, { type: 'advance' }) } })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    // ref still points at a readable file (the summary artifact in the run dir), and body has the summary
+    expect(existsSync(gate.docs[0].path)).toBe(true)
+    expect(gate.body).toContain('完成(方案见正文)')
   })
 
   it('jumpBack from the develop-less flow: gate redo re-runs the stage', async () => {

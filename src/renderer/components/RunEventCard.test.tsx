@@ -12,7 +12,7 @@ describe('RunEventCard', () => {
 
   it('gate: renders body + 通过/打回本阶段/回退到某阶段, and 通过 fires resolveGate advance', () => {
     const onGate = vi.fn()
-    const event: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', body: '## 方案\n采用网关架构' }
+    const event: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: '## 方案\n采用网关架构' }
     render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
 
     expect(document.querySelector('.msg-req')?.classList.contains('k-gate')).toBe(true)
@@ -26,10 +26,36 @@ describe('RunEventCard', () => {
     expect(onGate).toHaveBeenCalledWith('g1', { type: 'advance' })
   })
 
+  it('#6 gate: titles the card with stageName (not the generic 阶段评审); falls back when absent', () => {
+    const named: RunEvent = { id: 'gN', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: 'x' }
+    const { rerender } = render(<RunEventCard event={named} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.getByText('技术方案设计')).toBeInTheDocument()
+    expect(screen.queryByText('阶段评审')).toBeNull()
+    // absent stageName (old/loose event) falls back to 阶段评审
+    const bare = { id: 'gB', kind: 'gate', stageKey: 'design', body: 'x' } as unknown as RunEvent
+    rerender(<RunEventCard event={bare} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.getByText('阶段评审')).toBeInTheDocument()
+  })
+
+  it('#6 frozen gate: keeps its stageName title after reload; defaults to 阶段评审 when the old card lacks it', () => {
+    const withName: FrozenRunCard = {
+      id: 'fN', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', title: '技术方案已就绪',
+      decision: '通过', at: 1720000000000, ts: 1,
+    }
+    const { rerender } = render(<RunEventCard frozen={withName} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.getByText('技术方案设计')).toBeInTheDocument()
+    const legacy: FrozenRunCard = {
+      id: 'fL', kind: 'gate', stageKey: 'design', title: '旧卡',
+      decision: '通过', at: 1720000000000, ts: 1,
+    }
+    rerender(<RunEventCard frozen={legacy} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.getByText('阶段评审')).toBeInTheDocument()
+  })
+
   it('gate: docs render a 打开文档 button that maps ArtifactRef → DesignDocRef and calls onOpenDoc', () => {
     const onOpenDoc = vi.fn()
     const event: RunEvent = {
-      id: 'g1b', kind: 'gate', stageKey: 'design', body: '## 方案', docs: [{ path: '/ws/.forge/runs/r1/artifacts/design-root.md', kind: 'md' }],
+      id: 'g1b', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: '## 方案', docs: [{ path: '/ws/.forge/runs/r1/artifacts/design-root.md', kind: 'md' }],
     }
     render(<RunEventCard event={event} onGate={vi.fn()} onLane={vi.fn()} onOpenDoc={onOpenDoc} />)
 
@@ -42,7 +68,7 @@ describe('RunEventCard', () => {
   })
 
   it('gate: no docs → no doc buttons, body still renders', () => {
-    const event: RunEvent = { id: 'g1c', kind: 'gate', stageKey: 'design', body: '## 方案\n无文档' }
+    const event: RunEvent = { id: 'g1c', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: '## 方案\n无文档' }
     render(<RunEventCard event={event} onGate={vi.fn()} onLane={vi.fn()} />)
     expect(document.querySelector('.req-doc')).toBeNull()
     expect(document.querySelector('.req-docs')).toBeNull()
@@ -65,7 +91,7 @@ describe('RunEventCard', () => {
 
   it('gate: 打回本阶段 sends redo with typed feedback', () => {
     const onGate = vi.fn()
-    const event: RunEvent = { id: 'g2', kind: 'gate', stageKey: 'design', body: 'x' }
+    const event: RunEvent = { id: 'g2', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: 'x' }
     render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
     const fb = screen.getByPlaceholderText('补充说明（可选，打回/回退时附带）')
     fireEvent.change(fb, { target: { value: '再调整一下接口命名' } })
@@ -75,7 +101,7 @@ describe('RunEventCard', () => {
 
   it('gate: 回退到某阶段 reveals a target-key input and sends jumpBack once filled', () => {
     const onGate = vi.fn()
-    const event: RunEvent = { id: 'g3', kind: 'gate', stageKey: 'impl', body: 'x' }
+    const event: RunEvent = { id: 'g3', kind: 'gate', stageKey: 'impl', stageName: '实现', body: 'x' }
     render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
     fireEvent.click(screen.getByText('回退到某阶段'))
     const targetInput = screen.getByPlaceholderText('回退目标阶段 key')
@@ -156,7 +182,7 @@ describe('RunEventCard', () => {
 
   it('finalize gate: renders 收尾确认 body + 合并并完成/丢弃本次, both route through onGate with merge/discard', () => {
     const onGate = vi.fn()
-    const event: RunEvent = { id: 'fz1', kind: 'gate', stageKey: '__finalize__', body: '全部完成，合并到目标分支？', finalize: true }
+    const event: RunEvent = { id: 'fz1', kind: 'gate', stageKey: '__finalize__', stageName: '收尾确认', body: '全部完成，合并到目标分支？', finalize: true }
     render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
 
     expect(document.querySelector('.msg-req')?.classList.contains('k-gate')).toBe(true)

@@ -1,5 +1,5 @@
 import { stageScope, type StageSpec } from './runTypes'
-import { stageBasePrompt } from '../config/schema'
+import { stageBasePrompt, DEFAULT_STAGE_PRODUCES_DOC } from '../config/schema'
 import type { RunPlan, StagePlan } from './machine'
 import type { Plugin } from '../../shared/plugin'
 import { tempBranchName } from './tempBranch'
@@ -22,6 +22,14 @@ export function planFromStages(runId: string, stages: StageSpec[], hooks?: Plugi
     const base = stageBasePrompt(s.key)
     const custom = s.prompt
     const prompt = custom ? (base ? base + '\n\n' + custom : custom) : base
+    // #6: a producesDoc stage (design by default) MUST hand off a real markdown 技术方案 file — the flag
+    // was latent (stored but never consumed at runtime), so the design agent only reported summary:'完成'
+    // and the gate had no real plan to show. Append an explicit forge_write_artifact directive so the
+    // agent writes the doc and LISTS its returned path in the handoff artifacts (controller mirrors it
+    // into <ws>/<basename>_docs/ and surfaces the full text in the gate).
+    const producesDoc = s.producesDoc ?? DEFAULT_STAGE_PRODUCES_DOC[s.key] ?? false
+    const DOC_DIRECTIVE = '\n\n【交付物·必做】用 forge_write_artifact 写出完整的技术方案 markdown(文件名 design-<项目名>.md:模块划分、接口/数据结构、关键技术决策与替代方案、风险与影响面)。forge_handoff 的 summary 只写一句话概述,正文放进 artifact,并在 handoff 的 artifacts 里列出该文件。'
+    const finalPrompt = producesDoc && prompt ? prompt + DOC_DIRECTIVE : prompt
     return {
       key: s.key,
       name: s.name,
@@ -31,7 +39,11 @@ export function planFromStages(runId: string, stages: StageSpec[], hooks?: Plugi
       // Explicit config wins; otherwise design (and any future DEFAULT_GATED_STAGES member) gates by
       // default — matches the orchestrator's stageGated so a standard workflow's 方案门 actually fires.
       gate: s.gate ?? DEFAULT_GATED_STAGES.has(s.key),
-      prompt,
+      prompt: finalPrompt,
+      // #6: carry producesDoc onto the plan stage so the controller knows to surface real doc content
+      // (and mirror it into _docs) at this stage's gate. Resolved here (explicit flag wins, else the
+      // per-key default) so the controller reads a single boolean.
+      producesDoc,
       // ②多镜头CR: carry the review stage's fan-out config into the plan so fanout.buildWorkOrders can
       // fan it into per-lens reviewers (see reviewFanout.ts). undefined for every non-review stage.
       review: s.review,

@@ -3,7 +3,7 @@ import { toRunCardEntries } from './runCards'
 import type { FrozenRunCard } from './runCards'
 import type { RunEvent } from '../../../main/run/events'
 
-const gate: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', body: 'approve design?' }
+const gate: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: 'approve design?' }
 const failure: RunEvent = { id: 'f1', kind: 'failure', laneId: 'l1', stageKey: 'code', error: 'boom', attempts: 2 }
 
 describe('toRunCardEntries', () => {

@@ -101,7 +101,7 @@ describe('buildTimeline', () => {
   it('run-card 按 ts 与消息归并', () => {
     const messages = [msg('m1', '2026-07-01T00:00:00.000Z'), msg('m2', '2026-07-01T00:00:03.000Z')]
     const runCards: RunCardEntry[] = [
-      { kind: 'run-card', id: 'rc1', ts: Date.parse('2026-07-01T00:00:01.000Z'), event: { id: 'rc1', kind: 'gate', stageKey: 's', body: 'b' } },
+      { kind: 'run-card', id: 'rc1', ts: Date.parse('2026-07-01T00:00:01.000Z'), event: { id: 'rc1', kind: 'gate', stageKey: 's', stageName: '阶段', body: 'b' } },
     ]
     const tl = buildTimeline(messages, [], [], [], [], runCards)
     expect(tl.map(e => e.kind)).toEqual(['message', 'run-card', 'message'])

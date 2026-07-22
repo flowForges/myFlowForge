@@ -76,9 +76,12 @@ function DocList({ docs, onOpenDoc }: { docs: ArtifactRef[]; onOpenDoc?: (doc: D
 // `kind === 'gate'`, so callers pass it as `undefined` for every other kind.
 // 'aborted' (deferred fix P4-3): synthetic marker kind, only ever reaches this frozen-only branch
 // (never live) — see FrozenRunCard's doc (chat/runCards.ts).
-function kindLabel(kind: RunEvent['kind'] | 'aborted' | 'summary', finalize?: boolean): string {
+function kindLabel(kind: RunEvent['kind'] | 'aborted' | 'summary', finalize?: boolean, stageName?: string): string {
   switch (kind) {
-    case 'gate': return finalize ? '收尾确认' : '阶段评审'
+    // #6: a per-stage review gate titles itself with the stage name (e.g. 技术方案设计) instead of the
+    // generic 阶段评审; falls back when stageName is absent (old persisted cards). The finalize gate
+    // keeps its fixed 收尾确认 title.
+    case 'gate': return finalize ? '收尾确认' : (stageName || '阶段评审')
     case 'auth': return '需要授权'
     case 'question': return '需要回答'
     case 'doubt': return '方案存疑'
@@ -128,7 +131,7 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc }: RunEv
     return (
       <div className={`msg-req k-${frozen.kind} done`} data-req={frozen.id}>
         <div className="req-head">
-          <span className="req-kind">{kindLabel(frozen.kind, frozen.finalize)}</span>
+          <span className="req-kind">{kindLabel(frozen.kind, frozen.finalize, frozen.stageName)}</span>
         </div>
         <div className="req-body">
           <div className="req-title">{frozen.title}</div>
@@ -148,7 +151,7 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc }: RunEv
   return (
     <div className={`msg-req k-${event.kind}`} data-req={event.id}>
       <div className="req-head">
-        <span className="req-kind">{kindLabel(event.kind, event.kind === 'gate' ? event.finalize : undefined)}</span>
+        <span className="req-kind">{kindLabel(event.kind, event.kind === 'gate' ? event.finalize : undefined, event.kind === 'gate' ? event.stageName : undefined)}</span>
       </div>
       <div className="req-body">
         {event.kind === 'gate' && event.finalize && (

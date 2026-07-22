@@ -33,7 +33,7 @@ const conversation: ChatMessage[] = [
   { id: 'm2', who: 'ai', text: '好的,我先看看现有页面结构', ts: '2' } as ChatMessage,
 ]
 
-const gateEvent: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', body: '设计方案：采用微服务架构' }
+const gateEvent: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: '设计方案：采用微服务架构' }
 
 function makeRunState(inbox: RunEvent[], sessionId?: string): RunControllerState {
   return {

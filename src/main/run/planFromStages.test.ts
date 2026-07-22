@@ -67,4 +67,13 @@ describe('planFromStages', () => {
     const plan = planFromStages('run-5', [{ key: 'y', name: '自定义', provider: 'claude', model: 'm' }])
     expect(plan.stages[0].prompt).toBeUndefined()
   })
+
+  it('a producesDoc stage gets an explicit forge_write_artifact instruction', () => {
+    const plan = planFromStages('r1', [
+      { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', producesDoc: true },
+    ] as any)
+    expect(plan.stages[0].prompt).toContain('forge_write_artifact')
+    expect(plan.stages[0].prompt).toMatch(/design-.*\.md|技术方案/)
+    expect(plan.stages[0].producesDoc).toBe(true)
+  })
 })

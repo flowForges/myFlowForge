@@ -648,6 +648,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       // Improvement ①: preserve the gate's artifact refs (e.g. design.md) so the resolved card can
       // still open the full doc after the live event is gone from inbox / after reload.
       docs: event.kind === 'gate' ? event.docs : undefined,
+      // #6: preserve the gate's stage name so a reloaded resolved gate keeps its 技术方案设计 title.
+      stageName: event.kind === 'gate' ? event.stageName : undefined,
     }
     setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
     // Spec §8: persist to the run's OWNING session (run2.state.sessionId), NOT necessarily whatever

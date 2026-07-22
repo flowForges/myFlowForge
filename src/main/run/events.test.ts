@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { addEvent, removeEvent, findEvent, type RunEvent, type GateEvent } from './events'
 
-const gate: GateEvent = { id: 'g1', kind: 'gate', stageKey: 'design', body: 'the design doc' }
+const gate: GateEvent = { id: 'g1', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: 'the design doc' }
 const auth: RunEvent = { id: 'a1', kind: 'auth', laneId: 'develop:x', stageKey: 'develop', title: '覆盖 config' }
 
 describe('events inbox', () => {

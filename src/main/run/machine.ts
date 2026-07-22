@@ -8,6 +8,11 @@ export interface StagePlan {
   scope: 'root' | 'per-project'
   gate: boolean
   prompt?: string
+  // #6: force a real markdown 技术方案 deliverable at this stage (design by default). When true the
+  // controller prefers the lane's reported doc artifact over the one-line summary, mirrors it into
+  // <ws>/<basename>_docs/, and embeds its full text in the gate body. Resolved in planFromStages
+  // (explicit spec flag ?? DEFAULT_STAGE_PRODUCES_DOC[key] ?? false). Absent/false for every other stage.
+  producesDoc?: boolean
   // ②多镜头CR: the code-review (代码 CR) stage's fan-out config, threaded from the workspace stage
   // config (WsStage.review) via planFromStages. When present and in lens mode (mode:'parallel',
   // reviewers = ReviewLens[]), fanout.buildWorkOrders fans this stage into one reviewer per lens at

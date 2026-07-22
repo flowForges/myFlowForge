@@ -10,7 +10,10 @@ export interface FailureEvent { id: string; kind: 'failure'; laneId: string; sta
 // RunEvent kind — least churn, since resolveGate already only cares that `e.kind === 'gate'`.
 // Renderer (RunEventCard) branches on this flag to show 合并并完成/丢弃本次 instead of the normal
 // 通过/打回本阶段/回退到某阶段 actions.
-export interface GateEvent { id: string; kind: 'gate'; stageKey: string; body: string; docs?: ArtifactRef[]; finalize?: boolean }
+// `stageName`: #6 — the stage's human name (e.g. 技术方案设计) so the gate card titles itself with the
+// stage instead of the generic 阶段评审. Emitted by the controller from stage.name; the renderer
+// (RunEventCard) and the frozen gate card (runCards.FrozenRunCard) both carry it through.
+export interface GateEvent { id: string; kind: 'gate'; stageKey: string; stageName: string; body: string; docs?: ArtifactRef[]; finalize?: boolean }
 
 export type RunEvent = AuthEvent | QuestionEvent | DoubtEvent | FailureEvent | GateEvent
 
