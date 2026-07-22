@@ -21,6 +21,12 @@ function clipArgs(bin: string, args: string[]): string {
 // expired, or minted by a different CLI when the user switched coding agents mid-session).
 const INVALID_SESSION_RE = /invalid session identifier|session not found|no (such )?session|unknown session|no rollout/i
 
+// A --resume failure where the RESUMED session carries a forge MCP config path (--mcp-config) that no
+// longer exists — e.g. a session first created under the pre-run2 build referenced
+// .forge/runs/chat-bridge/mcp.chat.json, which the current build never re-creates. Retrying WITHOUT
+// --resume mints a clean session free of the stale flag.
+const STALE_MCP_CONFIG_RE = /mcp[.\-]config|mcp\.[a-z0-9_-]+\.json|chat-bridge|forge\.sock|no such file.*mcp/i
+
 const KIND_LEVEL = { think: 'info', tool: 'accent', file: 'accent', output: 'accent' } as const
 
 export interface QoderSpec { bin?: string; preArgs?: string[]; defaultModels: Model[] }
@@ -241,8 +247,9 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
           // user ran codex/claude on this session before switching to qoder — session ids are NOT
           // interchangeable across CLIs). Retry once WITHOUT --resume; the fresh turn mints a new
           // valid qoder id (emitted via onSession) that overwrites the bad one for future turns.
-          if (useResume && !!task.sessionId && !gotText && res.exitCode !== 0 && INVALID_SESSION_RE.test(rawErr) && !cancelled) {
-            logWarn('qoder', 'resume 会话标识无效,自动改为新开会话重试', `resume id: ${task.sessionId}\ncwd: ${task.cwd}\n${rawErr.trim().slice(-600)}`)
+          if (useResume && !!task.sessionId && !gotText && res.exitCode !== 0
+              && (INVALID_SESSION_RE.test(rawErr) || STALE_MCP_CONFIG_RE.test(rawErr)) && !cancelled) {
+            logWarn('qoder', 'resume 失败(会话无效或引用了失效的 MCP 配置),自动改为新开会话重试', `resume id: ${task.sessionId}\ncwd: ${task.cwd}\n${rawErr.trim().slice(-600)}`)
             return attempt(false)
           }
           // Surface real failures so the chat never just goes silent (auth error, bad flag, not installed).

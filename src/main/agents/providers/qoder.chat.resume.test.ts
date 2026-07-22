@@ -26,6 +26,19 @@ const FAKE_AUTH_FAIL = `#!/usr/bin/env node
 process.stderr.write('authentication failed: please login\\n'); process.exit(1)
 `
 
+// Fake qodercli: rejects a --resume because the resumed session references a forge MCP config
+// path (a pre-run2 session's --mcp-config <ws>/.forge/runs/chat-bridge/mcp.chat.json, which
+// bridge.close() deleted and the current build never re-writes for plain chat), but succeeds fresh.
+const FAKE_STALE_MCP_CONFIG = `#!/usr/bin/env node
+const args = process.argv.slice(2)
+if (args.includes('--resume')) { process.stderr.write("Error: ENOENT: no such file or directory, open '.forge/runs/chat-bridge/mcp.chat.json' (--mcp-config)\\n"); process.exit(1) }
+const out = o => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ session_id: 'fresh-qoder-id-2' })
+out({ type: 'assistant', text: '你好(MCP 配置失效已新开会话)' })
+out({ type: 'result' })
+process.exit(0)
+`
+
 function mkCb() {
   const state = { text: '', think: '', sessions: [] as string[], errored: false }
   const cb: ChatCallbacks = {
@@ -63,6 +76,21 @@ describe('qoder chat() self-heals an invalid resume session id', () => {
     expect(state.text).toContain('Qoder 执行失败')
     expect(state.text).toContain('authentication failed')
     expect(getAppLog().some(e => e.scope === 'qoder' && e.level === 'error')).toBe(true)
+  })
+
+  it('retries without --resume when resume fails because the resumed session references a missing forge mcp-config', async () => {
+    const bin = join(dir, 'qoder.js'); writeFileSync(bin, FAKE_STALE_MCP_CONFIG); chmodSync(bin, 0o755)
+    const provider = makeQoderProvider({ bin, defaultModels: [] })
+    const { cb, state } = mkCb()
+    const s = provider.chat!({ id: 'a1', prompt: 'hi', model: 'default', cwd: dir, sessionId: 'stale-pre-run2-id' }, cb, process.env)
+    await s.done
+    // Retried fresh → got the real reply, not the failure bubble.
+    expect(state.text).toContain('MCP 配置失效已新开会话')
+    expect(state.text).not.toContain('Qoder 执行失败')
+    // Emitted the fresh, valid qoder id → chatService overwrites the bad stored id (self-heal).
+    expect(state.sessions).toContain('fresh-qoder-id-2')
+    // Logged for diagnosability.
+    expect(getAppLog().some(e => e.scope === 'qoder' && /resume/.test(e.msg))).toBe(true)
   })
 
   it('first turn (no sessionId) does not attempt resume and works normally', async () => {
