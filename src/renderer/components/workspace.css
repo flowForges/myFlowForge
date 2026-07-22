@@ -387,9 +387,9 @@
   text-transform: capitalize;
 }
 .agent-model .prov-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
-.agent-model .p-claude  { background: var(--accent); }
-.agent-model .p-codex   { background: var(--ok); }
-.agent-model .p-gemini  { background: oklch(70% 0.14 280); }
+.agent-model .prov-dot.p-claude  { background: var(--accent); }
+.agent-model .prov-dot.p-codex   { background: var(--ok); }
+.agent-model .prov-dot.p-gemini  { background: oklch(70% 0.14 280); }
 /* model name: normally ellipsis-clipped; on row hover, if it overflows, marquee once and back. */
 .agent-model-track {
   min-width: 0; flex: 1 1 auto; overflow: hidden;
@@ -407,7 +407,7 @@
 }
 @keyframes agent-model-marquee {
   0%, 12% { transform: translateX(0); }
-  50% { transform: translateX(min(0px, calc(100% - 100cqw))); }
+  50% { transform: translateX(min(0px, calc(100cqw - 100%))); }
   88%, 100% { transform: translateX(0); }
 }
 .agent-model .ver { color: var(--muted); margin-left: 4px; font-weight: 500; }
