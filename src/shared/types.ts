@@ -297,6 +297,7 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
 
 export type { Settings, Appearance, Pet, PetState, Anim, Accent, PetStateConfig, AgentsConfig, CustomAgent, CustomPetCfg, Terminal, CloseAction, AppIcon, DockIcon, Notifications, Keybindings } from '../main/config/schema'
 export type { AppLogEntry, LogLevel } from '../main/log/appLog'
+export type { DetectedRepo } from '../main/workspace/scanRepos'
 
 export interface SessionImportCoverage {
   supported: { id: string; label: string }[]
