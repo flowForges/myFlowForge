@@ -279,8 +279,12 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
       })
       // Task 5: in-place rows (scanned repos) aren't part of the registered `projects` list this effect
       // rebuilds from — carry them over untouched so a config change elsewhere (e.g. adding a project in
-      // Settings while the wizard is open) doesn't silently wipe the scanned rows.
-      return { ...s, projects: [...next, ...s.projects.filter(p => p.inPlace)] }
+      // Settings while the wizard is open) doesn't silently wipe the scanned rows. An in-place row wins
+      // over a registered row with the same id (same rule as scanForRepos), so a prop change can't
+      // reintroduce a colliding duplicate-key row.
+      const inPlaceRows = s.projects.filter(p => p.inPlace)
+      const inPlaceIds = new Set(inPlaceRows.map(p => p.repoId))
+      return { ...s, projects: [...next.filter(p => !inPlaceIds.has(p.repoId)), ...inPlaceRows] }
     })
     pendingSelect.current.clear()
     // eslint-disable-next-line react-hooks/exhaustive-deps
