@@ -320,6 +320,29 @@ describe('runDelegate', () => {
     expect(cancelWorkspaceDelegates('/wscancel')).toBe(0) // 已 untrack,不会重复取消
   })
 
+  it('cancelWorkspaceDelegates(ws, sid) 只取消该 session 的后台子代理,另一 session 的仍在跑', async () => {
+    const cancelled: Record<string, boolean> = { s1: false, s2: false }
+    const rejects: Record<string, (e: unknown) => void> = {}
+    function makeProvider(sid: string): AgentProvider {
+      return {
+        id: 'fake', displayName: 'F', capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+        detect: async () => true, listModels: async () => [],
+        run(task) {
+          const done = new Promise<AgentResult>((_res, reject) => { rejects[sid] = reject })
+          return { id: task.agentId, cancel() { cancelled[sid] = true; rejects[sid]?.(new Error('cancelled')) }, done }
+        },
+      }
+    }
+    await makeRunDelegate(deps(makeProvider('s1'), ws(['a'])))({ workspacePath: '/wssplit', task: 't', provider: 'fake', model: 'm', sessionId: 's1' })
+    await makeRunDelegate(deps(makeProvider('s2'), ws(['a'])))({ workspacePath: '/wssplit', task: 't', provider: 'fake', model: 'm', sessionId: 's2' })
+    expect(cancelWorkspaceDelegates('/wssplit', 's1')).toBe(1)
+    expect(cancelled.s1).toBe(true)
+    expect(cancelled.s2).toBe(false)
+    // s2's delegate is still trackable/cancelable — cancelWorkspaceDelegates with no sessionId cancels the rest.
+    expect(cancelWorkspaceDelegates('/wssplit')).toBe(1)
+    expect(cancelled.s2).toBe(true)
+  })
+
   it('子代理异常时 onComplete 仍触发、text 标注失败(fire-and-forget 下失败不会石沉大海)', async () => {
     const provider: AgentProvider = {
       id: 'fake', displayName: 'F', capabilities: { structuredOutput: false, permissionHook: false, pty: false },

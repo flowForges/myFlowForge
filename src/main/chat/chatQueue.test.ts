@@ -103,6 +103,23 @@ describe('ChatQueue', () => {
     release!(); await Promise.resolve(); await Promise.resolve()
   })
 
+  it('stop(ws, sessionId) cancels only that session lane; stop(ws) with no sessionId cancels all (back-compat)', () => {
+    const c1 = vi.fn()
+    const c2 = vi.fn()
+    const runTurn = vi.fn(() => new Promise<void>(() => {}))
+    const q = new ChatQueue(runTurn, () => {})
+    q.enqueue(mkS('/w', 's1', 'A'), '你')
+    q.enqueue(mkS('/w', 's2', 'B'), '你')
+    q.registerActive('/w', 's1', c1)
+    q.registerActive('/w', 's2', c2)
+    q.stop('/w', 's1')
+    expect(c1).toHaveBeenCalledTimes(1)
+    expect(c2).not.toHaveBeenCalled()
+    // back-compat: stop(ws) with no sessionId still cancels every lane
+    q.stop('/w')
+    expect(c2).toHaveBeenCalledTimes(1)
+  })
+
   it('stop() resolves current turn and advances to next queued item', async () => {
     const calls: string[] = []
     let releaseA: (() => void) | null = null

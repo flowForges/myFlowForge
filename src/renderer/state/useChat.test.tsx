@@ -200,11 +200,11 @@ describe('useChat', () => {
     expect(result.current.running).toBeNull()
   })
 
-  it('stop() calls chatStop with the current workspacePath', async () => {
+  it('stop() calls chatStop with the current workspacePath + sessionId (scoped to the active session)', async () => {
     const { result } = renderHook(() => useChat('/ws', 's1'))
     await waitFor(() => expect(queueHandler).not.toBeNull())
     act(() => { result.current.stop() })
-    expect((window as any).forge.chatStop).toHaveBeenCalledWith({ workspacePath: '/ws' })
+    expect((window as any).forge.chatStop).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 's1' })
   })
 
   it('scopes busy/queue/running to THIS session — idle session sees nothing of another running session', async () => {
