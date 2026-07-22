@@ -332,7 +332,7 @@ export interface WorkspaceMeta { name: string; path: string; projectCount: numbe
 // contract for editing (SP-B); the main schema's zod-inferred type is structurally assignable to this.
 export interface WsStage extends StageCustomFields { key: string; provider: string; model: string; review?: ReviewConfig; prompt?: string }
 export interface WsWorkflow { id: string; name: string; stages: WsStage[] }
-export interface WsProject { repoId: string; name: string; branch: string; provider: string; model: string }
+export interface WsProject { repoId: string; name: string; branch: string; provider: string; model: string; inPlace?: boolean }
 export interface Workspace {
   name: string
   path: string

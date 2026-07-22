@@ -435,6 +435,98 @@ describe('editWorkspace', () => {
     const { editWorkspace } = await import('./workspaceService')
     await expect(editWorkspace({ path: join(root, 'nope'), opts: { name: 'x', path: join(root, 'nope'), workflows: [], projects: [] }, knownProjects: [], proxy: '' })).rejects.toThrow()
   })
+
+  // Task 4b: in-place repos (used where they live, never cloned) are NOT registered projects, so the
+  // old toProvision guard (byId.get(...) || throw '未知项目') crashed any edit of a workspace holding one.
+  it('edits a workspace containing an in-place project without throwing 未知项目 or provisioning it', async () => {
+    const { editWorkspace } = await import('./workspaceService')
+    const { writeWorkspace, readWorkspace } = await import('../config/store')
+    const wsPath = join(root, 'ws-inplace-edit')
+    // The in-place repo lives at <wsPath>/api and is its OWN real git repo (no mirror, not in knownProjects).
+    mkdirSync(join(wsPath, 'api', '.git'), { recursive: true })
+    writeWorkspace({
+      name: 'inplace', path: wsPath, workflowId: '', stages: [],
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
+      projects: [{ repoId: 'api', name: 'api', branch: 'main', provider: '', model: '', inPlace: true }],
+      status: 'idle', plugins: [], stepPlugins: [],
+    })
+    const events: import('@shared/types').SetupEvent[] = []
+    // knownProjects is EMPTY — an in-place repoId is never registered. Rename the workspace to exercise
+    // the edit path while re-sending the same in-place project. Must NOT throw and must NOT try to clone.
+    await editWorkspace({
+      path: wsPath, knownProjects: [], proxy: '', emit: e => events.push(e),
+      opts: { name: 'inplace-renamed', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
+        projects: [{ repoId: 'api', branch: 'main', inPlace: true }] },
+    })
+    expect(events).toEqual([])   // nothing provisioned → no setup/provision events
+    expect(existsSync(join(wsPath, 'api', '.git'))).toBe(true)   // real repo untouched
+    const ws = readWorkspace(wsPath)!
+    expect(ws.name).toBe('inplace-renamed')
+    expect(ws.projects).toEqual([{ repoId: 'api', name: 'api', branch: 'main', provider: '', model: '', inPlace: true }])
+  })
+
+  // Data-loss guard: de-selecting an in-place repo drops it from the record but must NEVER delete its
+  // on-disk dir (that's the user's actual code), whereas a de-selected Forge-managed clone IS deleted.
+  it('de-selecting an in-place project keeps its real dir; a de-selected clone is still removed', async () => {
+    const { editWorkspace } = await import('./workspaceService')
+    const { writeWorkspace, readWorkspace } = await import('../config/store')
+    const wsPath = join(root, 'ws-inplace-deselect')
+    // in-place repo = user's real code at <wsPath>/api ; clone = Forge-managed worktree at <wsPath>/web
+    mkdirSync(join(wsPath, 'api', '.git'), { recursive: true })
+    writeFileSync(join(wsPath, 'api', 'CODE.md'), '# real user code\n')
+    mkdirSync(join(wsPath, 'web'), { recursive: true })
+    writeFileSync(join(wsPath, 'web', 'README.md'), '# cloned worktree\n')
+    writeWorkspace({
+      name: 'mix', path: wsPath, workflowId: '', stages: [],
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
+      projects: [
+        { repoId: 'api', name: 'api', branch: 'main', provider: '', model: '', inPlace: true },
+        { repoId: 'web', name: 'web', branch: 'main', provider: '', model: '' },
+      ],
+      status: 'idle', plugins: [], stepPlugins: [],
+    })
+    // De-select BOTH projects. The clone dir must be removed; the in-place dir must survive.
+    await editWorkspace({
+      path: wsPath, knownProjects: [], proxy: '',
+      opts: { name: 'mix', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
+        projects: [] },
+    })
+    expect(existsSync(join(wsPath, 'api', 'CODE.md'))).toBe(true)   // real code PRESERVED
+    expect(existsSync(join(wsPath, 'web'))).toBe(false)             // clone deleted
+    expect(readWorkspace(wsPath)!.projects).toEqual([])            // both dropped from record
+  })
+
+  it('inPlace round-trips through buildWorkspaceRecord and is carried across a rename edit', async () => {
+    const { buildWorkspaceRecord, editWorkspace } = await import('./workspaceService')
+    const { writeWorkspace, readWorkspace } = await import('../config/store')
+    // create-time: buildWorkspaceRecord persists inPlace when the selection sets it
+    const rec = buildWorkspaceRecord(
+      { name: 'w', path: '/ws', workflows: [],
+        projects: [{ repoId: 'api', branch: 'main', inPlace: true }, { repoId: 'x', branch: 'main' }] } as any,
+      new Map(),
+    )
+    expect(rec.projects[0]).toMatchObject({ repoId: 'api', inPlace: true })
+    expect(rec.projects[1].inPlace).toBeUndefined()   // a non-in-place selection stays a clone
+
+    // edit-time: an edit that does NOT re-send inPlace must still carry it from the existing record
+    const wsPath = join(root, 'ws-inplace-carry')
+    mkdirSync(join(wsPath, 'api', '.git'), { recursive: true })
+    writeWorkspace({
+      name: 'w', path: wsPath, workflowId: '', stages: [],
+      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
+      projects: [{ repoId: 'api', name: 'api', branch: 'main', provider: '', model: '', inPlace: true }],
+      status: 'idle', plugins: [], stepPlugins: [],
+    })
+    await editWorkspace({
+      path: wsPath, knownProjects: [], proxy: '',
+      opts: { name: 'w2', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }],
+        projects: [{ repoId: 'api', branch: 'main' }] },   // inPlace intentionally omitted
+    })
+    expect(readWorkspace(wsPath)!.projects[0].inPlace).toBe(true)
+  })
 })
 
 describe('buildStartRunOpts', () => {
