@@ -424,7 +424,8 @@ export type WsWorkflow = z.infer<typeof WsWorkflowSchema>
 // name/provider/model default to '' so OLD workspace.json files (which stored only {repoId,branch}) still parse.
 export const WsProjectSchema = z.object({
   repoId: z.string(), name: z.string().default(''), branch: z.string(),
-  provider: z.string().default(''), model: z.string().default('')
+  provider: z.string().default(''), model: z.string().default(''),
+  inPlace: z.boolean().optional()   // repo used in place (no clone); its on-disk dir is the user's real repo — never delete on de-select
 })
 export type WsProject = z.infer<typeof WsProjectSchema>
 export const WorkspaceSchema = z.object({

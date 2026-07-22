@@ -61,7 +61,7 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
       // is no longer registered) must NOT crash here with `undefined.name` — fall back to the repoId.
       // The provision loop then throws the clear 未知项目 error.
       const proj = byId.get(sel.repoId)
-      return { repoId: sel.repoId, name: proj?.name || sel.repoId, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '' }
+      return { repoId: sel.repoId, name: proj?.name || sel.repoId, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '', ...(sel.inPlace ? { inPlace: true } : {}) }
     }),
     status: 'idle',
     plugins: opts.plugins ?? [],
@@ -170,6 +170,10 @@ export async function editWorkspace(args: {
   // workspaces' worktrees are untouched. Best-effort: a git failure still falls through to rm the dir.
   const keepIds = new Set(opts.projects.map(p => p.repoId))
   for (const gone of existing.projects.filter(p => !keepIds.has(p.repoId))) {
+    // An in-place repo's on-disk dir IS the user's real repository (used where it lives, never cloned).
+    // De-selecting it drops it from the record but must NEVER touch the dir — only Forge-managed clones
+    // may be deleted. Skip both removeWorktree and the rm below.
+    if (gone.inPlace) continue
     const worktreePath = join(path, gone.name)
     await removeWorktree({ mirror: mirrorPath(gone.repoId), worktreePath }).catch(() => {})
     if (existsSync(worktreePath)) { try { rmSync(worktreePath, { recursive: true, force: true }) } catch { /* leave it */ } }
@@ -179,6 +183,10 @@ export async function editWorkspace(args: {
   // record. A failed pull writes the project into workspace.json but leaves no worktree; keying the
   // skip on "already in the record" would strand it forever. A worktree's `.git` is a file.
   const toProvision = opts.projects.filter(sel => {
+    // In-place repos are used where they live — never cloned/provisioned, and never registered as a
+    // known project (so byId.get would miss + throw). Honor the flag from the incoming selection OR the
+    // existing record (a rename edit may omit it) and bail before the 未知项目 guard.
+    if (sel.inPlace || existing.projects.find(p => p.repoId === sel.repoId)?.inPlace) return false
     const proj = byId.get(sel.repoId)
     if (!proj) throw new Error(`未知项目: ${sel.repoId}`)
     return !existsSync(join(path, proj.name, '.git'))
@@ -209,7 +217,11 @@ export async function editWorkspace(args: {
     projects: opts.projects.map(sel => {
       const proj = byId.get(sel.repoId)
       const name = proj?.name || existing.projects.find(p => p.repoId === sel.repoId)?.name || sel.repoId
-      return { repoId: sel.repoId, name, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '' }
+      // Preserve in-place identity across edits: carry the flag from the incoming selection OR the
+      // existing record, so an edit that doesn't re-send `inPlace` (e.g. a rename) doesn't lose it and
+      // silently turn the user's real repo into a deletable "clone".
+      const wasInPlace = existing.projects.find(p => p.repoId === sel.repoId)?.inPlace
+      return { repoId: sel.repoId, name, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '', ...(sel.inPlace || wasInPlace ? { inPlace: true } : {}) }
     }),
     status: existing.status,
     plugins: opts.plugins ?? existing.plugins ?? [],
