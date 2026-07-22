@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession } from '../agents/types'
@@ -260,6 +260,41 @@ describe('runWorkspaceSetup', () => {
     expect(res.startRunOpts.developProjects).toEqual([
       { name: 'api', cwd: join(wsPath, 'api'), provider: undefined, model: undefined },
       { name: 'alpha', cwd: join(wsPath, 'alpha'), provider: undefined, model: undefined },
+    ])
+  })
+
+  it('never clones over a NON-inPlace project whose worktree .git already exists; still provisions a missing one', async () => {
+    const { runWorkspaceSetup } = await import('./workspaceSetup')
+    const wsPath = join(root, 'ws-existing-repo')
+    // A repo is ALREADY checked out at <wsPath>/alpha (the user's real repo). Provisioning it would
+    // call addWorktree → unconditional rmSync → DATA LOSS. It must be skipped and registered as-is.
+    mkdirSync(join(wsPath, 'alpha', '.git'), { recursive: true })
+    const provision = vi.fn(async (proj: { name: string }) => join(wsPath, proj.name))
+
+    const res = await runWorkspaceSetup({
+      opts: {
+        name: 'existing-repo', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
+        projects: [
+          { repoId: 'r1', branch: 'main' },   // alpha — already checked out on disk
+          { repoId: 'r2', branch: 'main' },   // beta — missing, still provisions normally
+        ],
+      },
+      knownProjects: [
+        { id: 'r1', name: 'alpha', repoUrl: 'u1', defaultBranch: 'main' } as any,
+        { id: 'r2', name: 'beta', repoUrl: 'u2', defaultBranch: 'main' } as any,
+      ],
+      proxy: '', providers: {}, provision,
+      emit: () => {},
+    })
+
+    // provision called ONLY for the missing project (beta) — never over the on-disk alpha repo.
+    expect(provision).toHaveBeenCalledTimes(1)
+    expect(provision.mock.calls[0][0]).toMatchObject({ id: 'r2' })
+    // alpha registered as already-present with cwd = <wsPath>/alpha; beta provisioned normally.
+    expect(res.startRunOpts.developProjects).toEqual([
+      { name: 'alpha', cwd: join(wsPath, 'alpha'), provider: undefined, model: undefined },
+      { name: 'beta', cwd: join(wsPath, 'beta'), provider: undefined, model: undefined },
     ])
   })
 
