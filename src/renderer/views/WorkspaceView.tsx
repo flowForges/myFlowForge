@@ -73,7 +73,14 @@ function captureRunCardTitle(event: RunEvent): string {
     // ①汇总: a finalize gate's body is now the full run summary (markdown, potentially long) — too big
     // for a frozen record's single-line title. Freeze it to a short label instead; the full summary
     // lives in the dedicated "本次运行总结" card appended on completion (see appendSummaryCard below).
-    case 'gate': return event.finalize ? '全部完成，收尾确认' : event.body
+    // Fix wave 1 (review): a producesDoc gate's body is likewise the FULL plan markdown (#6) — same
+    // problem, same fix. Mirror the finalize special-case: title with the short stage name instead of
+    // dumping the whole 技术方案 into `.req-title`. The full doc stays reachable via the frozen card's
+    // `docs` (unchanged) — only the title text is shortened here.
+    case 'gate':
+      if (event.finalize) return '全部完成，收尾确认'
+      if (event.producesDoc) return event.stageName || '技术方案已就绪'
+      return event.body
   }
 }
 

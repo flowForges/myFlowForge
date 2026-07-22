@@ -13,7 +13,13 @@ export interface FailureEvent { id: string; kind: 'failure'; laneId: string; sta
 // `stageName`: #6 — the stage's human name (e.g. 技术方案设计) so the gate card titles itself with the
 // stage instead of the generic 阶段评审. Emitted by the controller from stage.name; the renderer
 // (RunEventCard) and the frozen gate card (runCards.FrozenRunCard) both carry it through.
-export interface GateEvent { id: string; kind: 'gate'; stageKey: string; stageName: string; body: string; docs?: ArtifactRef[]; finalize?: boolean }
+// `producesDoc`: review findings (Task 7 fix wave 1) — a producesDoc stage's gate `body` is the FULL
+// plan markdown (see controller.ts ~line 1030), which is fine for the live gate's body but WAY too
+// big to ever use as a title (captureRunCardTitle/WorkspaceView.tsx would otherwise dump the whole
+// plan into the frozen card's single-line `.req-title`, mirroring the finalize gate's pre-existing
+// problem/fix). Carried through so the renderer can special-case it the same way it already does for
+// `finalize`.
+export interface GateEvent { id: string; kind: 'gate'; stageKey: string; stageName: string; body: string; docs?: ArtifactRef[]; finalize?: boolean; producesDoc?: boolean }
 
 export type RunEvent = AuthEvent | QuestionEvent | DoubtEvent | FailureEvent | GateEvent
 

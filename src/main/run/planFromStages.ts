@@ -28,7 +28,11 @@ export function planFromStages(runId: string, stages: StageSpec[], hooks?: Plugi
     // agent writes the doc and LISTS its returned path in the handoff artifacts (controller mirrors it
     // into <ws>/<basename>_docs/ and surfaces the full text in the gate).
     const producesDoc = s.producesDoc ?? DEFAULT_STAGE_PRODUCES_DOC[s.key] ?? false
-    const DOC_DIRECTIVE = '\n\n【交付物·必做】用 forge_write_artifact 写出完整的技术方案 markdown(文件名 design-<项目名>.md:模块划分、接口/数据结构、关键技术决策与替代方案、风险与影响面)。forge_handoff 的 summary 只写一句话概述,正文放进 artifact,并在 handoff 的 artifacts 里列出该文件。'
+    // Fix wave 1 (review, Minor 2): the directive used to name a specific file (design-<项目名>.md),
+    // but the controller always renames the artifact to `<stageKey>-<projLabel>.md` when it mirrors it
+    // into <ws>/<basename>_docs/ (see controller.ts ~line 994) — the agent's chosen filename is never
+    // actually used. Say "a markdown file" instead of promising a name the system doesn't honor.
+    const DOC_DIRECTIVE = '\n\n【交付物·必做】用 forge_write_artifact 写出完整的技术方案 markdown 文件(内容包括:模块划分、接口/数据结构、关键技术决策与替代方案、风险与影响面)。forge_handoff 的 summary 只写一句话概述,正文放进 artifact,并在 handoff 的 artifacts 里列出该文件。'
     const finalPrompt = producesDoc && prompt ? prompt + DOC_DIRECTIVE : prompt
     return {
       key: s.key,

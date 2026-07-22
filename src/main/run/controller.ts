@@ -1032,7 +1032,9 @@ export class RunController {
             : refs.map((r) => r.path).join('\n')
         this.status = 'awaiting'
         const p = this.gateR.create(id)
-        this.emitEvent({ id, kind: 'gate', stageKey: stage.key, stageName: stage.name, body, docs: refs })
+        // Fix wave 1 (review): carry `producesDoc` onto the event so the renderer can title a frozen
+        // producesDoc gate with the short stage name instead of the full plan `body` (see events.ts).
+        this.emitEvent({ id, kind: 'gate', stageKey: stage.key, stageName: stage.name, body, docs: refs, producesDoc: stageProducesDoc })
         d = await p
         this.drop(id)
         if (this.aborted) {

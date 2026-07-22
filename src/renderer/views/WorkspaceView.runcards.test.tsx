@@ -192,6 +192,58 @@ describe('WorkspaceView: run2 事件卡挂进对话时间线(+凝固持久化)',
   })
 })
 
+// Fix wave 1 (review, Important + Minor 1): a producesDoc (design) gate's `body` is the FULL plan
+// markdown (#6) — when the gate resolves/freezes, captureRunCardTitle must NOT use that body as the
+// frozen `.req-title` (it would dump the whole 技术方案 as an unformatted title blob). Exercises the
+// REAL freeze path (click 通过 → freezeRunCard → captureRunCardTitle) rather than fabricating a short
+// title in the fixture.
+describe('WorkspaceView: producesDoc 方案门冻结后标题不塞全文(#7 fix wave 1)', () => {
+  const longPlanBody = [
+    '## 技术方案',
+    '### 模块划分',
+    '- 网关层负责路由与鉴权',
+    '- 服务层拆分为用户/订单/支付三个子模块',
+    '### 接口设计',
+    '- POST /api/login',
+    '- GET /api/orders/:id',
+    '### 风险与影响面',
+    '- 数据库迁移需要停机窗口',
+  ].join('\n')
+  const docGateEvent: RunEvent = {
+    id: 'gDoc', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: longPlanBody, producesDoc: true,
+  }
+
+  it('点通过 → 冻结记录的 title 是短的阶段名,不含方案正文', async () => {
+    ;(window as any).forge = {
+      ...forgeBase,
+      run2: { ...forgeBase.run2, getState: vi.fn(async () => makeRunState([docGateEvent], 's-1')) },
+    }
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
+
+    // Live gate still shows the full body (unchanged — that's the whole point of Task 7).
+    await waitFor(() => expect(screen.getByText('模块划分')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('通过'))
+
+    await waitFor(() => expect(chatAppendRunCardMock).toHaveBeenCalledTimes(1))
+    const call = chatAppendRunCardMock.mock.calls[0][0]
+    expect(call.runCard.title).toBe('技术方案设计')
+    expect(call.runCard.title).not.toContain('模块划分')
+    expect(call.runCard.title).not.toContain('风险与影响面')
+    expect((call.runCard.title as string).length).toBeLessThan(30)
+
+    // Frozen card in the DOM: title is short, full plan is gone from the title slot (docs stay openable
+    // — unaffected by this fix, not re-asserted here since Task 7's own tests already cover DocList).
+    const card = document.querySelector('[data-req="gDoc"]') as HTMLElement
+    expect(card).toBeTruthy()
+    // Both the card's kind-label header AND its title slot legitimately read "技术方案设计" once frozen
+    // (see `.req-kind`/`.req-title` in RunEventCard.tsx) — assert the title slot specifically.
+    expect(card.querySelector('.req-title')?.textContent).toBe('技术方案设计')
+    expect(within(card).queryByText(/模块划分/)).toBeNull()
+  })
+})
+
 // Deferred Minor fix: run2 interaction cards must be scoped to the session that STARTED the run
 // (spec §8 — "一次 run 绑定到发起它的会话"), mirroring the old orchestrator's engine.run.sessionId
 // gating (WorkspaceView.tsx ~line 279-281). Before this fix, cards derived unconditionally from
