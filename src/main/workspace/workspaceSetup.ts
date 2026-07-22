@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { expandTilde } from '../config/paths'
 import { writeWorkspace, registerWorkspace } from '../config/store'
 import { removeWorkspaceSkill } from '../skills/installSkill'
@@ -77,6 +78,17 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
   let index = 0
   for (const sel of opts.projects) {
     throwIfCancelled()
+    if (sel.inPlace) {
+      // Existing on-disk repo detected at workspace-create time (Task 3): the worktree is ALREADY at
+      // <wsPath>/<repoId> (repoId = the repo's path relative to the workspace folder) — no clone, no
+      // branch switch, no global project registration. Just register it in developProjects/records.
+      const name = sel.repoId
+      const worktreePath = join(opts.path, name)
+      emit({ type: 'provision', project: name, index, total })
+      developProjects.push({ name, cwd: worktreePath, provider: sel.provider, model: sel.model })
+      index++
+      continue
+    }
     const proj = byId.get(sel.repoId)
     if (!proj) throw new Error(`项目「${sel.repoId}」未注册,无法拉取 —— 请在向导的「项目」步骤重新添加该项目(填写仓库地址)后再创建。`)
     const name = proj.name || sel.repoId
