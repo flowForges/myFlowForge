@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { expandTilde } from '../config/paths'
 import { writeWorkspace, registerWorkspace } from '../config/store'
@@ -92,6 +93,17 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
     const proj = byId.get(sel.repoId)
     if (!proj) throw new Error(`项目「${sel.repoId}」未注册,无法拉取 —— 请在向导的「项目」步骤重新添加该项目(填写仓库地址)后再创建。`)
     const name = proj.name || sel.repoId
+    // Defense-in-depth (never clone over a real repo): if a git repo is ALREADY checked out at
+    // <wsPath>/<name>, do NOT provision it — addWorktree's unconditional rmSync(worktreePath) would
+    // DELETE the user's real repository and replace it with a clone. Register it as already-present
+    // instead. Mirrors editWorkspace's `!existsSync(join(path, proj.name, '.git'))` provision guard.
+    if (existsSync(join(opts.path, name, '.git'))) {
+      const worktreePath = join(opts.path, name)
+      emit({ type: 'provision', project: name, index, total })
+      developProjects.push({ name, cwd: worktreePath, provider: sel.provider, model: sel.model })
+      index++
+      continue
+    }
     emit({ type: 'provision:start', project: name, index, total })
     let worktreePath: string
     try {

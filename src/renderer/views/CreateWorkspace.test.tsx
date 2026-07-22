@@ -112,6 +112,28 @@ describe('CreateWorkspace', () => {
     delete (globalThis as any).window.forge
   })
 
+  it('dedupes a scanned repo against a registered project of the same id: one in-place row, no clone variant (data-loss guard)', async () => {
+    // A registered project cloned from a repo named "api" has id='api' (deriveProjectId returns a slug).
+    // Scanning a folder that contains that same repo yields relPath='api'. The two must collapse to a
+    // SINGLE in-place row — otherwise the clone variant could be selected and addWorktree would rmSync
+    // the user's real repo.
+    const registered = [{ id: 'api', name: 'api', repoUrl: 'git@x:y/api.git', defaultBranch: 'main' }]
+    const scanRepos = vi.fn(async () => [{ name: 'api', relPath: 'api', absPath: '/ws/api', branch: 'main' }])
+    ;(globalThis as any).window.forge = { scanRepos }
+    render(<CreateWorkspace {...defaultProps} projects={registered} onPickPath={async () => '/ws'} />)
+    fireEvent.click(screen.getByText('选择…'))
+    await waitFor(() => expect(scanRepos).toHaveBeenCalledWith('/ws'))
+    const apiRows = () => Array.from(document.querySelectorAll('.cr-proj'))
+      .filter(r => r.querySelector('.pj-name')?.textContent?.startsWith('api')) as HTMLElement[]
+    // exactly ONE row for repoId 'api' — no duplicate React key, no clone variant alongside it
+    await waitFor(() => expect(apiRows()).toHaveLength(1))
+    const row = apiRows()[0]
+    // and it is the in-place (就地·不克隆) pre-checked row, not the registered clone row
+    expect(within(row).getByText('就地·不克隆')).toBeInTheDocument()
+    expect(row.className).toContain(' on')
+    delete (globalThis as any).window.forge
+  })
+
   it('re-picking a DIFFERENT folder replaces the previously-detected in-place rows, no leak (Task 5)', async () => {
     const scanRepos = vi.fn()
       .mockResolvedValueOnce([{ name: 'api', relPath: 'api', absPath: '/a/api', branch: 'main' }])

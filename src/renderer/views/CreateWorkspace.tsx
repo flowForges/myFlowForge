@@ -365,10 +365,16 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     try {
       const repos = await window.forge.scanRepos(rawPath)
       const model = defaultProjModel()
+      // Dedupe scanned repos against EXISTING rows (registered projects OR prior in-place rows): a
+      // registered project cloned from a repo named e.g. "api" has id='api' (deriveProjectId → slug),
+      // which can equal a scanned repo's relPath. The scanned in-place row must WIN and be the ONLY row
+      // for that repoId — otherwise the collision yields a duplicate React key AND a clone variant whose
+      // selection would drive addWorktree's rmSync over the user's real repo (data loss).
+      const scannedIds = new Set(repos.map(r => r.relPath))
       update(s => ({
         ...s,
         projects: [
-          ...s.projects.filter(p => !p.inPlace),
+          ...s.projects.filter(p => !p.inPlace && !scannedIds.has(p.repoId)),
           ...repos.map(r => ({ repoId: r.relPath, name: r.relPath, sel: true, branch: r.branch, model, inPlace: true })),
         ],
       }))
