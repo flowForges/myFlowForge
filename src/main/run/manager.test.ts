@@ -430,6 +430,12 @@ describe('Run2Manager', () => {
       expect(mgr.resumable(ws)?.resumeStageKey).toBe('s2')
     })
 
+    it('resumable() carries the owning sessionId through from the saved state (N1: banner must be scoped to the owning session)', () => {
+      const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      saveControllerState(new RunStore(ws, 'run-x'), { ...fixtureState('running'), sessionId: 's1' })
+      expect(mgr.resumable(ws)?.sessionId).toBe('s1')
+    })
+
     it('resumable() returns null for a TERMINAL (ok/failed) saved run2-state — a finished run is not resumable', () => {
       const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
       seed('run-ok', 'ok')
