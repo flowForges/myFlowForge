@@ -383,7 +383,7 @@
 .agent-model .prov-badge {
   flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 7px; border-radius: 5px; font-weight: 700; letter-spacing: .01em;
-  background: var(--surface-2); border: 1px solid var(--border); color: var(--fg);
+  background: color-mix(in oklab, var(--accent) 10%, var(--surface-2)); border: 1px solid var(--border); color: var(--fg);
   text-transform: capitalize;
 }
 .agent-model .prov-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
@@ -392,9 +392,9 @@
 .agent-model .prov-dot.p-gemini  { background: oklch(70% 0.14 280); }
 /* model name: normally ellipsis-clipped; on row hover, if it overflows, marquee once and back. */
 .agent-model-track {
-  min-width: 0; flex: 1 1 auto; overflow: hidden;
-  border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px;
-  background: var(--surface-2);
+  min-width: 44px; flex: 1 1 auto; overflow: hidden;
+  border: 1px solid var(--border-2); border-radius: 5px; padding: 2px 8px;
+  background: color-mix(in oklab, var(--surface-2) 45%, transparent);
   container-type: inline-size;
 }
 .agent-model-name {

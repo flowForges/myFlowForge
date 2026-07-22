@@ -146,7 +146,8 @@
 [data-glass="on"] .wf-card,
 [data-glass="on"] .wf-mgr-row,
 [data-glass="on"] .agent-ic,
-[data-glass="on"] .agent-model { background: oklch(50% .04 262 / .14); }
+[data-glass="on"] .agent-model-track,
+[data-glass="on"] .agent-model .prov-badge { background: oklch(50% .04 262 / .14); }
 /* inputs / segmented controls / leaf chips */
 [data-glass="on"] .sel,
 [data-glass="on"] .proj-field input,
@@ -188,7 +189,8 @@
 [data-theme="light"][data-glass="on"] .wf-card,
 [data-theme="light"][data-glass="on"] .wf-mgr-row,
 [data-theme="light"][data-glass="on"] .agent-ic,
-[data-theme="light"][data-glass="on"] .agent-model { background: oklch(100% 0 0 / .45); }
+[data-theme="light"][data-glass="on"] .agent-model-track,
+[data-theme="light"][data-glass="on"] .agent-model .prov-badge { background: oklch(100% 0 0 / .45); }
 [data-theme="light"][data-glass="on"] .sel,
 [data-theme="light"][data-glass="on"] .proj-field input,
 [data-theme="light"][data-glass="on"] .cr-field .inp,
