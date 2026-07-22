@@ -129,7 +129,7 @@ export function App() {
   // Per-workspace because the chat queue serializes one turn at a time per workspace; across workspaces
   // multiple can run. Drives the per-session status dot so you can tell WHICH session is executing —
   // the workspace-level 运行中 pill alone can't. Derived into `runningSessionIds` below.
-  const [runningSessByWs, setRunningSessByWs] = useState<Map<string, string>>(new Map())
+  const [runningSessByWs, setRunningSessByWs] = useState<Map<string, string[]>>(new Map())
   // Per-workspace "just had chat activity" timestamp. home.stats.lastMessageAt is only fetched on
   // load/reload, so without this the sidebar's relative time stays stale right after a new turn. Any
   // chat-queue event for a workspace stamps it "now" so its sidebar time refreshes to 刚刚 immediately.
@@ -144,10 +144,11 @@ export function App() {
       })
       setRunningSessByWs(prev => {
         const cur = prev.get(e.workspacePath)
-        const next = e.busy ? (e.runningSessionId ?? undefined) : undefined
-        if (cur === next) return prev
+        const next = e.runningSessionIds
+        // Skip the state churn when the running-session set is unchanged (order-insensitive).
+        if ((cur ?? []).length === next.length && (cur ?? []).every(s => next.includes(s))) return prev
         const n = new Map(prev)
-        if (next) n.set(e.workspacePath, next); else n.delete(e.workspacePath)
+        if (next.length) n.set(e.workspacePath, next); else n.delete(e.workspacePath)
         return n
       })
       setRecentActivity(prev => { const n = new Map(prev); n.set(e.workspacePath, Date.now()); return n })
@@ -291,7 +292,8 @@ export function App() {
   // the chat queue) plus the live orchestrator run (which carries its own sessionId). Drives the sidebar
   // per-session dot so multiple concurrently-running sessions each light up, not just the workspace pill.
   const runningSessionIds = useMemo(() => {
-    const s = new Set(runningSessByWs.values())
+    const s = new Set<string>()
+    for (const ids of runningSessByWs.values()) for (const sid of ids) s.add(sid)
     if (engine.run?.status === 'run' && engine.run.sessionId) s.add(engine.run.sessionId)
     for (const sid of run2SessByWs.values()) s.add(sid) // live run2 workflow's owning session (see above)
     return s

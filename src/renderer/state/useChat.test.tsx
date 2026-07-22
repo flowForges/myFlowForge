@@ -3,7 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { useChat } from './useChat'
 import type { ChatEvent, ChatMessage } from '@shared/types'
 
-interface QueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string }[]; running: { id: string; text: string } | null }
+interface QueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
 let handler: ((e: ChatEvent) => void) | null = null
 let queueHandler: ((e: QueueEvent) => void) | null = null
 const history: ChatMessage[] = [{ id: 'h1', who: 'user', text: 'old', ts: '0' }]
@@ -150,12 +150,12 @@ describe('useChat', () => {
     await waitFor(() => expect(queueHandler).not.toBeNull())
 
     // Event for a different workspace — ignored
-    act(() => { queueHandler!({ workspacePath: '/other', busy: true, queue: [{ id: 'x', text: 'leak', source: '你' }], running: null }) })
+    act(() => { queueHandler!({ workspacePath: '/other', busy: true, queue: [{ id: 'x', text: 'leak', source: '你', sessionId: 's1' }], running: null, runningTurns: [], runningSessionId: 's1', runningSessionIds: ['s1'] }) })
     expect(result.current.busy).toBe(false)
     expect(result.current.queue).toEqual([])
 
     // Event for the active workspace — applied
-    act(() => { queueHandler!({ workspacePath: '/ws', busy: true, queue: [{ id: 'q1', text: 'task one', source: '你' }], running: null }) })
+    act(() => { queueHandler!({ workspacePath: '/ws', busy: true, queue: [{ id: 'q1', text: 'task one', source: '你', sessionId: 's1' }], running: null, runningTurns: [{ id: 'r0', text: 'running', sessionId: 's1' }], runningSessionId: 's1', runningSessionIds: ['s1'] }) })
     expect(result.current.busy).toBe(true)
     expect(result.current.queue).toEqual([{ id: 'q1', text: 'task one', source: '你' }])
   })
@@ -166,7 +166,7 @@ describe('useChat', () => {
       { initialProps: { ws: '/ws1' as string | undefined } }
     )
     await waitFor(() => expect(queueHandler).not.toBeNull())
-    act(() => { queueHandler!({ workspacePath: '/ws1', busy: true, queue: [{ id: 'q1', text: 't', source: '你' }], running: null }) })
+    act(() => { queueHandler!({ workspacePath: '/ws1', busy: true, queue: [{ id: 'q1', text: 't', source: '你', sessionId: 's1' }], running: null, runningTurns: [{ id: 'r0', text: 't0', sessionId: 's1' }], runningSessionId: 's1', runningSessionIds: ['s1'] }) })
     expect(result.current.busy).toBe(true)
 
     rerender({ ws: '/ws2' })
@@ -179,11 +179,11 @@ describe('useChat', () => {
     await waitFor(() => expect(queueHandler).not.toBeNull())
 
     // running item arrives
-    act(() => { queueHandler!({ workspacePath: '/ws', busy: true, queue: [], running: { id: 'r1', text: '跑着的' } }) })
+    act(() => { queueHandler!({ workspacePath: '/ws', busy: true, queue: [], running: { id: 'r1', text: '跑着的', sessionId: 's1' }, runningTurns: [{ id: 'r1', text: '跑着的', sessionId: 's1' }], runningSessionId: 's1', runningSessionIds: ['s1'] }) })
     expect(result.current.running).toEqual({ id: 'r1', text: '跑着的' })
 
     // busy ends, running clears
-    act(() => { queueHandler!({ workspacePath: '/ws', busy: false, queue: [], running: null }) })
+    act(() => { queueHandler!({ workspacePath: '/ws', busy: false, queue: [], running: null, runningTurns: [], runningSessionId: null, runningSessionIds: [] }) })
     expect(result.current.running).toBeNull()
   })
 
@@ -193,7 +193,7 @@ describe('useChat', () => {
       { initialProps: { ws: '/ws1' as string | undefined } }
     )
     await waitFor(() => expect(queueHandler).not.toBeNull())
-    act(() => { queueHandler!({ workspacePath: '/ws1', busy: true, queue: [], running: { id: 'r1', text: '跑着的' } }) })
+    act(() => { queueHandler!({ workspacePath: '/ws1', busy: true, queue: [], running: { id: 'r1', text: '跑着的', sessionId: 's1' }, runningTurns: [{ id: 'r1', text: '跑着的', sessionId: 's1' }], runningSessionId: 's1', runningSessionIds: ['s1'] }) })
     expect(result.current.running).toEqual({ id: 'r1', text: '跑着的' })
 
     rerender({ ws: '/ws2' })
@@ -205,6 +205,37 @@ describe('useChat', () => {
     await waitFor(() => expect(queueHandler).not.toBeNull())
     act(() => { result.current.stop() })
     expect((window as any).forge.chatStop).toHaveBeenCalledWith({ workspacePath: '/ws' })
+  })
+
+  it('scopes busy/queue/running to THIS session — idle session sees nothing of another running session', async () => {
+    // Session s2 is running (with a queued s2 item); s1 is idle. The workspace-wide event carries both
+    // lanes, but each session view must only reflect its own.
+    const evt: QueueEvent = {
+      workspacePath: '/ws',
+      busy: true,
+      queue: [{ id: 'q2', text: 's2 queued', source: '你', sessionId: 's2' }],
+      running: { id: 'r2', text: 's2 running', sessionId: 's2' },
+      runningTurns: [{ id: 'r2', text: 's2 running', sessionId: 's2' }],
+      runningSessionId: 's2',
+      runningSessionIds: ['s2'],
+    }
+
+    // idle session s1
+    const s1 = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(queueHandler).not.toBeNull())
+    act(() => { queueHandler!(evt) })
+    expect(s1.result.current.busy).toBe(false)
+    expect(s1.result.current.queue).toEqual([])
+    expect(s1.result.current.running).toBeNull()
+    s1.unmount()
+
+    // running session s2
+    const s2 = renderHook(() => useChat('/ws', 's2'))
+    await waitFor(() => expect(queueHandler).not.toBeNull())
+    act(() => { queueHandler!(evt) })
+    expect(s2.result.current.busy).toBe(true)
+    expect(s2.result.current.queue).toEqual([{ id: 'q2', text: 's2 queued', source: '你' }])
+    expect(s2.result.current.running).toEqual({ id: 'r2', text: 's2 running' })
   })
 
   it('cancelQueued and clearQueue call the bridge with the workspace path', async () => {
