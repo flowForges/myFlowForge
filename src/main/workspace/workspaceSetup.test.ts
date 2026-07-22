@@ -234,6 +234,56 @@ describe('runWorkspaceSetup', () => {
     expect(provisioned).toEqual([])   // never reached the git pull
   })
 
+  it('an in-place project skips provision entirely and registers with cwd = <wsPath>/<repoId>', async () => {
+    const { runWorkspaceSetup } = await import('./workspaceSetup')
+    const wsPath = join(root, 'ws-inplace')
+    const provision = vi.fn(async (proj: { name: string }) => join(wsPath, proj.name))
+
+    const res = await runWorkspaceSetup({
+      opts: {
+        name: 'inplace', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
+        projects: [
+          { repoId: 'api', branch: 'main', inPlace: true },   // already on disk, no registered project
+          { repoId: 'r1', branch: 'main' },                   // normal registered project — still provisions
+        ],
+      },
+      knownProjects: [{ id: 'r1', name: 'alpha', repoUrl: 'u1', defaultBranch: 'main' } as any],
+      proxy: '', providers: {}, provision,
+      emit: () => {},
+    })
+
+    // provision was called ONLY for the registered project, never for the in-place one.
+    expect(provision).toHaveBeenCalledTimes(1)
+    expect(provision.mock.calls[0][0]).toMatchObject({ id: 'r1' })
+
+    expect(res.startRunOpts.developProjects).toEqual([
+      { name: 'api', cwd: join(wsPath, 'api'), provider: undefined, model: undefined },
+      { name: 'alpha', cwd: join(wsPath, 'alpha'), provider: undefined, model: undefined },
+    ])
+  })
+
+  it('a nested in-place project (relPath repoId) derives cwd <wsPath>/<relPath>', async () => {
+    const { runWorkspaceSetup } = await import('./workspaceSetup')
+    const wsPath = join(root, 'ws-inplace-nested')
+    const provision = vi.fn(async () => { throw new Error('should not be called') })
+
+    const res = await runWorkspaceSetup({
+      opts: {
+        name: 'inplace-nested', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
+        projects: [{ repoId: 'packages/lib', branch: 'x', inPlace: true }],
+      },
+      knownProjects: [], proxy: '', providers: {}, provision,
+      emit: () => {},
+    })
+
+    expect(provision).not.toHaveBeenCalled()
+    expect(res.startRunOpts.developProjects).toEqual([
+      { name: 'packages/lib', cwd: join(wsPath, 'packages/lib'), provider: undefined, model: undefined },
+    ])
+  })
+
   it('cancelling mid-hook cancels the running hook session and aborts with SetupCancelledError', async () => {
     const { runWorkspaceSetup, SetupCancelledError } = await import('./workspaceSetup')
     const ctrl = new AbortController()

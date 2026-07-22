@@ -119,7 +119,12 @@ export const REVIEW_LENS_FOCUS: Record<ReviewLens, string> = {
   performance: '算法复杂度、N+1、无谓拷贝/重渲染、内存与 IO 热点',
   style: '命名/结构/可读性/是否遵循本仓既有约定与规范',
 }
-export interface CreateWorkspaceProject { repoId: string; branch: string; provider?: string; model?: string }
+// `inPlace`: the repo is an already-detected on-disk repo (Task 3's DetectedRepo) whose worktree dir
+// already exists at `<wsPath>/<repoId>` — repoId is set to the repo's path RELATIVE to the workspace
+// folder (e.g. `api`, or `packages/lib` for a nested repo) so the derived cwd is correct either way.
+// runWorkspaceSetup skips clone/branch provisioning for it entirely; it is registered workspace-local,
+// never written to the global projects.json.
+export interface CreateWorkspaceProject { repoId: string; branch: string; provider?: string; model?: string; inPlace?: boolean }
 // Custom-stage fields (#3) — mirror WsStageSchema. name/prompt/behavior flags default (per built-in
 // key) when absent, so a plain built-in stage needs none of them.
 export interface StageCustomFields {
