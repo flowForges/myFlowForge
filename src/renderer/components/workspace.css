@@ -394,7 +394,10 @@
 .agent-model-track {
   min-width: 44px; flex: 1 1 auto; overflow: hidden;
   border: 1px solid var(--border-2); border-radius: 5px; padding: 2px 8px;
-  background: color-mix(in oklab, var(--surface-2) 45%, transparent);
+  /* Raised chip: mix a little foreground into surface-2 so it reads clearly LIGHTER than the card in
+     dark theme (fg≈white → lightens) instead of a dark "black hole" box; in light theme fg is dark so
+     it just gains a faint definition. Glass mode overrides this with its own translucency (glass.css). */
+  background: color-mix(in oklab, var(--fg) 8%, var(--surface-2));
   container-type: inline-size;
 }
 .agent-model-name {
