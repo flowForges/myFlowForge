@@ -84,6 +84,13 @@ export interface ResumableSummary {
   resumeStageName: string
   totalStages: number
   doneCount: number
+  // N1: the OWNING session (SavedControllerState.sessionId, itself echoed from
+  // RunControllerDeps.sessionId — see its doc in controller.ts / persist.ts), so the renderer can
+  // scope the "是否继续" resume banner to that session only (same convention as run2StateForTab in
+  // WorkspaceView.tsx: absent/legacy-saved-state sessionId means "show unscoped", never absent means
+  // "hide outside the owning session"). Optional so an OLDER saved run2-state (written before
+  // sessionId was persisted at all — persist.ts:43) still resumes, just unscoped.
+  sessionId?: string
 }
 
 function summarizeResumable(runId: string, state: SavedControllerState): ResumableSummary {
@@ -98,6 +105,7 @@ function summarizeResumable(runId: string, state: SavedControllerState): Resumab
     resumeStageName: stagePlan?.name ?? resumeStage?.key ?? '',
     totalStages: stages.length,
     doneCount,
+    sessionId: state.sessionId,
   }
 }
 

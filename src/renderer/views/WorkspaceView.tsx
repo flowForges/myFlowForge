@@ -1061,8 +1061,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             workspace — offer to continue it (rebuild from the last saved stage on disk) or discard it.
             Never auto-resumes — always asks. Hidden for an archived (read-only) workspace. Reuses the
             supplement-banner shell (same text-then-actions layout as the provider-switch confirm
-            banner below) so this needs no new CSS. */}
-        {run2.resumable && !archived && (
+            banner below) so this needs no new CSS.
+            N1: also gated on session ownership (same legacy-fallback convention as run2StateForTab
+            above) — resumable.sessionId comes from the saved run2-state (manager.ts's
+            summarizeResumable), so an OLDER saved state without it still shows unscoped, but a
+            sessionId-bearing one only shows in the session that started the run — not every session
+            in the workspace. */}
+        {run2.resumable && !archived && (!run2.resumable.sessionId || run2.resumable.sessionId === sessions.activeSessionId) && (
           <div className="supplement-banner">
             <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
             <button className="supplement-ok" onClick={() => { void run2.resumeFromDisk() }}>继续</button>
