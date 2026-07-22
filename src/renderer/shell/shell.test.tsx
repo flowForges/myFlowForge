@@ -134,17 +134,17 @@ describe('Sidebar', () => {
     expect(screen.getByText('design-system')).toBeInTheDocument()
   })
 
-  it('marks an idle workspace as running (rail + 运行中 pill) when live (an agent is executing)', () => {
+  it('marks an idle workspace as running (rail + status badge) when live (an agent is executing)', () => {
     const liveGroups = [{ key: 'recent', label: '最近', items: [
       { id: 'a', name: '空闲区', sub: 's', status: 'idle' as AgentState },
-      { id: 'b', name: '执行区', sub: 's', status: 'idle' as AgentState, live: true },
+      { id: 'b', name: '执行区', sub: 's', status: 'idle' as AgentState, live: true, statusBadge: { kind: 'run' as const, count: 1 } },
     ] }]
     const { container } = render(<Sidebar {...baseProps} groups={liveGroups} activeId="" />)
     const items = container.querySelectorAll('.ws-item')
     // Idle workspaces carry NO marker at all (gray dot removed); only the live one is is-running.
     expect(items[0].className).not.toContain('is-running')
     expect(items[1].className).toContain('is-running')
-    expect(container.querySelectorAll('.ws-run-pill').length).toBe(1)
+    expect(container.querySelectorAll('.ws-status-badge.run').length).toBe(1)
   })
 
   it('moves the date off the workspace row onto each session row', () => {

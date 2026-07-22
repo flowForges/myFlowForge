@@ -57,7 +57,8 @@ import { ActionConfirm } from './shell/ActionConfirm'
 import { markAllRead, notifFromLifecycle, sanitize, type Notif } from './shell/notifications'
 import { SetupProgress, INITIAL_SETUP_STATE, applySetupEvent } from './views/SetupProgress'
 import type { SetupProgressState } from './views/SetupProgress'
-import type { AgentState, ChatQueueEvent, CreateWorkspaceOpts, EngineEvent, SetupEvent, Workspace } from '@shared/types'
+import type { AgentState, ChatEvent, ChatQueueEvent, CreateWorkspaceOpts, EngineEvent, SetupEvent, Workspace } from '@shared/types'
+import { deriveWsBadge } from './shell/wsBadge'
 
 // Minimal renderer-facing shape of the orchestrator's StartRunOpts. The canonical type lives in
 // main (src/main/orchestrator/orchestrator.ts), which the renderer must not import at runtime;
@@ -159,8 +160,29 @@ export function App() {
   // (workspacePath → sessionId) from the run2:update broadcast; a non-terminal run (running/awaiting)
   // lights it, terminal (ok/failed) clears it. Folded into `runningSessionIds` below.
   const [run2SessByWs, setRun2SessByWs] = useState<Map<string, string>>(new Map())
+  // Per-workspace pending-gate counts for the sidebar status badge (#3). Chat gates come from ChatEvent
+  // (confirm-request/ask-request, each carries workspacePath); workflow gates come from run2 state.pending.
+  const [chatGateByWs, setChatGateByWs] = useState<Map<string, { confirm: Set<string>; input: Set<string> }>>(new Map())
   useEffect(() => {
-    const off = (window as any).forge?.run2?.onUpdate?.((p: { workspacePath: string; state: { sessionId?: string; status?: string } | null }) => {
+    const off = window.forge.onChatEvent((e: ChatEvent) => {
+      setChatGateByWs(prev => {
+        const n = new Map(prev)
+        const cur = n.get(e.workspacePath) ?? { confirm: new Set<string>(), input: new Set<string>() }
+        const confirm = new Set(cur.confirm), input = new Set(cur.input)
+        if (e.type === 'confirm-request') confirm.add(e.id)
+        else if (e.type === 'confirm-resolved') confirm.delete(e.id)
+        else if (e.type === 'ask-request') input.add(e.id)
+        else if (e.type === 'ask-resolved') input.delete(e.id)
+        else return prev
+        n.set(e.workspacePath, { confirm, input })
+        return n
+      })
+    })
+    return () => { off() }
+  }, [])
+  const [run2GateByWs, setRun2GateByWs] = useState<Map<string, { confirm: number; input: number }>>(new Map())
+  useEffect(() => {
+    const off = (window as any).forge?.run2?.onUpdate?.((p: { workspacePath: string; state: { sessionId?: string; status?: string; pending?: import('@shared/types').PendingAction[] } | null }) => {
       const st = p.state
       const sid = st?.sessionId
       const active = !!st && st.status !== 'ok' && st.status !== 'failed'
@@ -170,6 +192,14 @@ export function App() {
         if (cur === next) return prev
         const n = new Map(prev)
         if (next) n.set(p.workspacePath, next); else n.delete(p.workspacePath)
+        return n
+      })
+      setRun2GateByWs(prev => {
+        const pend = st?.pending ?? []
+        const confirm = pend.filter(a => a.kind === 'confirm').length
+        const input = pend.filter(a => a.kind === 'input' || a.kind === 'select').length
+        const n = new Map(prev)
+        if (confirm || input) n.set(p.workspacePath, { confirm, input }); else n.delete(p.workspacePath)
         return n
       })
     })
@@ -194,22 +224,30 @@ export function App() {
   const { settings, update } = useSettings()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
-    const items = home.workspaces.map(w => ({
-      id: w.path, name: w.name,
-      sub: w.archived
-        ? (w.description || '已归档 · 只读')
-        : (w.imported ? '本机导入' : `${w.projectCount} 个项目 · ${w.workflowId}`),
-      status: w.status as AgentState,
-      imported: w.imported,
+    const items = home.workspaces.map(w => {
+      const cg = chatGateByWs.get(w.path)
+      const rg = run2GateByWs.get(w.path)
+      const confirm = (cg?.confirm.size ?? 0) + (rg?.confirm ?? 0)
+      const input = (cg?.input.size ?? 0) + (rg?.input ?? 0)
       // Light the dot when an agent is actually executing here: a chat turn in flight OR the live
       // orchestrator run. Kept separate from `status` (which drives the persisted 运行中 pill).
-      live: busyWs.has(w.path) || (engine.run?.status === 'run' && engine.run.workspacePath === w.path),
-      pinned: w.pinned,
-      lastActivity: fmtRelTime(Math.max(home.stats[w.path]?.lastMessageAt ?? 0, recentActivity.get(w.path) ?? 0), now),
-      archived: w.archived,
-      archivedAt: w.archivedAt,
-      createdAt: w.createdAt,
-    }))
+      const live = busyWs.has(w.path) || (engine.run?.status === 'run' && engine.run.workspacePath === w.path)
+      return {
+        id: w.path, name: w.name,
+        sub: w.archived
+          ? (w.description || '已归档 · 只读')
+          : (w.imported ? '本机导入' : `${w.projectCount} 个项目`),
+        status: w.status as AgentState,
+        imported: w.imported,
+        live,
+        statusBadge: w.archived ? null : deriveWsBadge({ live, confirm, input }),
+        pinned: w.pinned,
+        lastActivity: fmtRelTime(Math.max(home.stats[w.path]?.lastMessageAt ?? 0, recentActivity.get(w.path) ?? 0), now),
+        archived: w.archived,
+        archivedAt: w.archivedAt,
+        createdAt: w.createdAt,
+      }
+    })
     const live = items.filter(i => !i.archived)
     const pinned = live.filter(i => i.pinned)
     const rest = live.filter(i => !i.pinned)
@@ -220,7 +258,7 @@ export function App() {
       ...(pinned.length ? [{ key: 'pinned', label: '置顶', items: pinned }] : []),
       { key: 'all', label: '全部', items: rest },
     ]
-  }, [home.workspaces, home.stats, busyWs, engine.run, recentActivity, nowTick])
+  }, [home.workspaces, home.stats, busyWs, engine.run, recentActivity, nowTick, chatGateByWs, run2GateByWs])
   const archivedItems = useMemo(
     () => home.workspaces.filter(w => w.archived).map(w => ({
       id: w.path, name: w.name,

@@ -167,6 +167,14 @@
   content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--run);
   animation: pulse 1.4s infinite;
 }
+/* Per-workspace status badge (#3): 待输入 > 待确认 > 执行中, highest-priority only. */
+.ws-status-badge {
+  flex: 0 0 auto; margin-left: 6px; font-size: 10px; font-weight: 650;
+  border-radius: 99px; padding: 1px 7px; white-space: nowrap;
+}
+.ws-status-badge.run     { color: var(--run);  background: color-mix(in oklab, var(--run) 16%, transparent); }
+.ws-status-badge.confirm { color: var(--warn); background: color-mix(in oklab, var(--warn) 16%, transparent); }
+.ws-status-badge.input   { color: var(--accent); background: var(--accent-dim); }
 /* 本机导入工作区：名字旁的小图标（替代突兀的「导入」徽章） */
 .ws-imp-ico { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--faint); }
 .ws-imp-ico svg { width: 12px; height: 12px; }

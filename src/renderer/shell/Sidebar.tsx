@@ -5,6 +5,7 @@ import { sessionBadge } from './sessionBadge'
 import { reorder } from './reorder'
 import { WsMenu, type WsMenuItem } from './WsMenu'
 import { workspaceHasUnread, isSessionUnread } from '../state/unread'
+import { type WsBadge } from './wsBadge'
 import './shell.css'
 
 export interface WorkspaceItem {
@@ -13,6 +14,7 @@ export interface WorkspaceItem {
   sub: string
   status: AgentState
   badge?: string
+  statusBadge?: WsBadge | null
   pinned?: boolean
   live?: boolean          // an agent (chat or run) is executing here → force the dot to the run state
   lastActivity?: string   // relative "last conversation" label, e.g. 5 分钟前 / 昨天 / 6月1日
@@ -241,7 +243,12 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                       <span className="ws-name-txt" onDoubleClick={e => { e.stopPropagation(); if (!item.archived && onRename) beginWsRename(item.id, item.name) }}>{item.name}</span>
                     )}
                     {item.imported && <span className="ws-imp-ico" title="本机导入的工作区">{IMPORT_ICON}</span>}
-                    {running && <span className="ws-run-pill">运行中</span>}
+                    {item.statusBadge && <span className={`ws-status-badge ${item.statusBadge.kind}`}>
+                      {item.statusBadge.kind === 'run' ? '⚡ 执行中'
+                        : item.statusBadge.kind === 'confirm' ? '❓ 待确认'
+                        : '✏️ 待输入'}
+                      {item.statusBadge.count > 1 ? ` ×${item.statusBadge.count}` : ''}
+                    </span>}
                     {/* unread dot at the workspace level, only while its session list is collapsed */}
                     {!expandedIds?.has(item.id) && workspaceHasUnread(unread, item.id) && <span className="ws-unread" title="有已完成待查看的会话" aria-label="未读" />}
                   </span>
