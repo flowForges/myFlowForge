@@ -577,8 +577,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 并发跑着的另一个会话(fire-and-forget 的子代理已脱离 chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮
   // 取消表才杀得掉,否则会留成孤儿)。省略 sessionId(如宠物的工作区级停止)仍是「取消这个工作区的全部」。
   ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string; sessionId?: string }) => {
-    chatQueue.stop(a.workspacePath, a.sessionId); cancelWorkspaceDelegates(a.workspacePath, a.sessionId)
-    drainChatGates(a.workspacePath, a.sessionId ? { sessionId: a.sessionId } : {})
+    // Normalize once so all three stop ops treat "no session" identically — an empty-string sessionId
+    // (should never reach here, real ids are non-empty) would otherwise be "defined" to stop()/delegates
+    // but falsy to drainChatGates, diverging their scope.
+    const sid = a.sessionId || undefined
+    chatQueue.stop(a.workspacePath, sid); cancelWorkspaceDelegates(a.workspacePath, sid)
+    drainChatGates(a.workspacePath, sid ? { sessionId: sid } : {})
   })
   ipcMain.handle(CH.sessionList, (_e, wsPath: string) => readSessions(wsPath))
   ipcMain.handle(CH.sessionNew, (_e, wsPath: string) => {
