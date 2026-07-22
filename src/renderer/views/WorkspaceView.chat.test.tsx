@@ -76,10 +76,11 @@ describe('WorkspaceView task-queue panel', () => {
       workspacePath: '/ws',
       busy: true,
       queue: [
-        { id: 'q1', text: '改主色调', source: '你' },
-        { id: 'q2', text: '修复登录', source: '宠物' }
+        { id: 'q1', text: '改主色调', source: '你', sessionId: 'default' },
+        { id: 'q2', text: '修复登录', source: '宠物', sessionId: 'default' }
       ],
       running: null,
+      runningTurns: [],
       runningSessionId: null,
       runningSessionIds: []
     }))

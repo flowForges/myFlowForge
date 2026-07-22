@@ -76,12 +76,17 @@ export function useChat(
   useEffect(() => {
     const off = api.current.onChatQueueEvent(e => {
       if (e.workspacePath !== workspacePath) return
-      setBusy(e.busy)
-      setQueue(e.queue)
-      setRunning(e.running ?? null)
+      // The chat queue runs one turn PER SESSION concurrently, but each session's chat view must only
+      // reflect ITS OWN lane — otherwise an idle session B shows session A's 执行中/排队 state and a 停止
+      // button that would cancel A's turn. Filter the workspace-wide event down to this session.
+      const sid = sessionId ?? ''
+      setBusy(e.runningSessionIds.includes(sid))
+      setQueue(e.queue.filter(q => q.sessionId === sid).map(q => ({ id: q.id, text: q.text, source: q.source })))
+      const mine = e.runningTurns.find(r => r.sessionId === sid)
+      setRunning(mine ? { id: mine.id, text: mine.text } : null)
     })
     return () => { off() }
-  }, [workspacePath])
+  }, [workspacePath, sessionId])
 
   useEffect(() => {
     const off = api.current.onChatEvent((e: ChatEvent) => {

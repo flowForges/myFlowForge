@@ -96,8 +96,9 @@ export class ChatQueue {
     this.broadcast(CH.chatQueueEvent, {
       workspacePath: ws,
       busy: running.length > 0,
-      queue: queue.map(t => ({ id: t.id, text: t.payload.text, source: t.source })),
+      queue: queue.map(t => ({ id: t.id, text: t.payload.text, source: t.source, sessionId: t.payload.sessionId })),
       running: running[0] ?? null,
+      runningTurns: running.map(r => ({ id: r.id, text: r.text, sessionId: r.sessionId })),
       runningSessionId: running[0]?.sessionId ?? null,
       runningSessionIds: running.map(r => r.sessionId),
     })

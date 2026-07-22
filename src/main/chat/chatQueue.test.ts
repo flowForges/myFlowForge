@@ -66,7 +66,7 @@ describe('ChatQueue', () => {
     q.enqueue(mk('/w', 'A'), '你')
     q.enqueue(mk('/w', 'B'), '宠物')
     expect(lastEvent.workspacePath).toBe('/w')
-    expect(lastEvent.queue).toEqual([{ id: expect.any(String), text: 'B', source: '宠物' }])
+    expect(lastEvent.queue).toEqual([{ id: expect.any(String), text: 'B', source: '宠物', sessionId: 's1' }])
   })
 
   it('running carries {id,text,sessionId} + runningSessionId during execution, null after', async () => {
@@ -134,6 +134,15 @@ describe('ChatQueue', () => {
     const last = events[events.length - 1]
     expect(last.runningSessionIds.sort()).toEqual(['s1', 's2'])
     expect(last.busy).toBe(true)
+    // runningTurns lists every running lane with its turn text + owning session (drives per-session UI).
+    expect([...last.runningTurns].sort((a: any, b: any) => a.sessionId.localeCompare(b.sessionId)))
+      .toEqual([
+        { id: expect.any(String), text: 'A', sessionId: 's1' },
+        { id: expect.any(String), text: 'C', sessionId: 's2' },
+      ])
+    // the pending s1:B item carries its owning sessionId so a session view can filter to its own lane.
+    const s1bItem = last.queue.find((q: any) => q.text === 'B')
+    expect(s1bItem).toMatchObject({ text: 'B', sessionId: 's1' })
     releases['s1:A'](); await Promise.resolve(); await Promise.resolve()
     expect(calls).toEqual(['s1:A', 's2:C', 's1:B'])
   })
