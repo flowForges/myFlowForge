@@ -74,7 +74,7 @@ export function PetApp() {
   const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([])
   const [doneReverted, setDoneReverted] = useState(false)
   const [queues, setQueues] = useState<Record<string, ChatQueueEvent['queue']>>({})
-  const [runningByWs, setRunningByWs] = useState<Record<string, { id: string; text: string } | null>>({})
+  const [runningByWs, setRunningByWs] = useState<Record<string, { id: string; text: string; sessionId: string } | null>>({})
   const [busyWs, setBusyWs] = useState<Set<string>>(new Set())
   const [cmdText, setCmdText] = useState('')
   const [sessionsByWs, setSessionsByWs] = useState<Record<string, SessionsFile>>({})
@@ -199,7 +199,10 @@ export function PetApp() {
   }
   const onStop = () => {
     if (!running || !tgtWs) return
-    window.forge.chatStop({ workspacePath: tgtWs })
+    // Session-scoped stop: kill only the lane the pet is watching (running.sessionId), not every lane
+    // in the workspace — mirrors the composer's per-session 停止. A workspace-wide stop here used to
+    // also cancel a concurrent session B's turn the user never touched.
+    window.forge.chatStop({ workspacePath: tgtWs, sessionId: running.sessionId })
   }
 
   // Pick a specific session as the send target; always return to main view (M3 fix, prototype line 7214)

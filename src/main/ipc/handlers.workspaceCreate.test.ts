@@ -5,8 +5,8 @@ import { CH } from './channels'
 // progress path), regardless of step plugins. createWorkspace is mocked only to prove it's never called.
 
 const { createWorkspaceMock, runWorkspaceSetupMock } = vi.hoisted(() => ({
-  createWorkspaceMock: vi.fn(async () => ({ workspace: { name: 'fast' }, startRunOpts: {} })),
-  runWorkspaceSetupMock: vi.fn(async () => ({ workspace: { name: 'setup' }, startRunOpts: {} })),
+  createWorkspaceMock: vi.fn(async () => ({ workspace: { name: 'fast' }, workspacePath: '/ws/a', developProjects: [] })),
+  runWorkspaceSetupMock: vi.fn(async () => ({ workspace: { name: 'setup' }, workspacePath: '/ws/a', developProjects: [] })),
 }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() }, dialog: {} }))

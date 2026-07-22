@@ -155,7 +155,10 @@
 
 /* 项目行:文件夹名与标签一样左对齐,git 分支紧跟在文件夹名后面(与文件树里同款 .tree-branch-tag),
    取代原来那条会被长名字截掉的远端值列. */
-.ic-row.ic-proj { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
+/* Group heading so the repo sublist reads as "this workspace's repos" — a multi-repo workspace
+   otherwise looks like it has other workspaces nested under it (user-reported confusion). */
+.ic-proj-head { margin-top: 7px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+.ic-row.ic-proj { display: flex; align-items: center; gap: 6px; padding: 4px 0 4px 10px; }
 .ic-row.ic-proj > .ic-proj-name { color: var(--fg-2); font-weight: 500; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ic-row.ic-proj .tree-branch-tag { margin-left: 0; }
 

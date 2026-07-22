@@ -5,8 +5,8 @@ import { ensureMirror, addWorktree, resolveBaseBranch, removeWorktree } from '..
 import { writeWorkspace, registerWorkspace, readWorkspace, setProjectDefaultBranch } from '../config/store'
 import { removeWorkspaceSkill } from '../skills/installSkill'
 import { readWorkspaceMemory, writeWorkspaceMemory, mergeMemory } from '../chat/memory/memoryStore'
-import { stageName, type Project, type Workspace } from '../config/schema'
-import type { StartRunOpts, StageSpec, DevelopProject } from '../run/runTypes'
+import { type Project, type Workspace } from '../config/schema'
+import type { DevelopProject } from '../run/runTypes'
 import type { AgentProvider } from '../agents/types'
 import type { CreateWorkspaceOpts, CreateWorkspaceStage, SetupEvent, WsStage } from '@shared/types'
 import { runStepHook } from './stepHooks'
@@ -27,7 +27,13 @@ function toWsStage(s: CreateWorkspaceStage): WsStage {
   }
 }
 
-export interface CreateWorkspaceResult { workspace: Workspace; startRunOpts: StartRunOpts }
+// The two live outputs of provisioning: the canonical (tilde-expanded) workspace path the renderer
+// keys everything off, and the provisioned developProjects (worktree names/cwds — the only externally
+// observable record of what got pulled). The old run-plan fields (runId/stages/workflowId/…) that
+// buildStartRunOpts used to stuff in here were vestigial from the deleted orchestrator's auto-run-on-
+// create — nothing has consumed them since a new workspace just opens in plain chat (runs start
+// explicitly via the run2 launch gate, which builds its own plan).
+export interface CreateWorkspaceResult { workspace: Workspace; workspacePath: string; developProjects: DevelopProject[] }
 
 // Provision one project's git worktree under the workspace: ensure the bare mirror, then add the
 // worktree at <wsPath>/<project name>. Shared by createWorkspace (all projects), editWorkspace
@@ -79,35 +85,6 @@ export function seedPurposeMemory(wsPath: string, purpose: string | undefined): 
   try { writeWorkspaceMemory(wsPath, mergeMemory(readWorkspaceMemory(wsPath), `## 建区目的\n${p}`)) } catch { /* seeding is best-effort */ }
 }
 
-// Assemble StartRunOpts from create opts + the provisioned developProjects. Shared by both create
-// paths so a run can be (re)built identically regardless of whether setup hooks ran. A workspace may
-// carry several workflows now — the stashed pending-start run defaults to the FIRST one; the chat/
-// forge_propose_plan flow picks a different workflowId explicitly for later runs.
-export function buildStartRunOpts(opts: CreateWorkspaceOpts, developProjects: DevelopProject[]): StartRunOpts {
-  const wf = opts.workflows[0]
-  const stages: StageSpec[] = (wf?.stages ?? []).map(s => ({
-    key: s.key, name: stageName(s.key, s.name), provider: s.provider, model: s.model,
-    // Every stage pauses on a review gate by default (approve / 打回重做 / 终止); an explicit per-stage
-    // gate flag wins. Custom-stage behavior flags flow straight through to the orchestrator.
-    gate: s.gate ?? true,
-    review: s.review,
-    ...(s.prompt ? { prompt: s.prompt } : {}),
-    ...(s.scope ? { scope: s.scope } : {}),
-    ...(s.summary !== undefined ? { summary: s.summary } : {}),
-    ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
-    ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
-  }))
-  return {
-    runId: `run-${opts.name}`,
-    workspaceName: opts.name,
-    workspacePath: opts.path,
-    workflowId: wf?.id,
-    workflowName: wf?.name,
-    stages,
-    developProjects
-  }
-}
-
 export async function createWorkspace(args: {
   opts: CreateWorkspaceOpts
   knownProjects: Project[]
@@ -135,8 +112,7 @@ export async function createWorkspace(args: {
   seedPurposeMemory(opts.path, opts.purpose)  // seed 建区目的 into workspace memory
   registerWorkspace(opts.name, opts.path)
 
-  const startRunOpts = buildStartRunOpts(opts, developProjects)
-  return { workspace, startRunOpts }
+  return { workspace, workspacePath: opts.path, developProjects }
 }
 
 // Edit an existing workspace's persisted config in place: rename, adjust stages/models, ADD projects

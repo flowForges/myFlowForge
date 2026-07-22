@@ -100,6 +100,26 @@ it('run2 session → composeAgentSessions returns nothing run2-related for a ses
   expect(rows).toEqual([])
 })
 
+it('native Task sub-agents appear as depth-1 rows (each its own, not deduped into one placeholder)', async () => {
+  const { writeSession } = await import('./chatStore')
+  const { setNativeSubagents } = await import('./nativeSubagentRegistry')
+  const { composeAgentSessions } = await import('./agentSessions')
+  const ws = join(home, 'ws')
+  writeSession(ws, 's1', 'claude', 'claude-abc')
+  setNativeSubagents(ws, 's1', [
+    { id: 't1', name: '探查子代理', provider: 'claude', status: 'run' },
+    { id: 't2', name: '审阅子代理', provider: 'claude', status: 'ok' },
+  ])
+  const rows = composeAgentSessions(ws, { id: 's1', title: 't', mode: 'chat', createdAt: 0 })
+  const subs = rows.filter(r => r.role === '原生子代理(Task)')
+  // Both native sub-agents survive (they share the '会话未捕获' placeholder id, so they must bypass the
+  // provider+sessionId dedup — otherwise they'd collapse to one row).
+  expect(subs).toHaveLength(2)
+  expect(subs.map(r => r.agentName)).toEqual(['探查子代理', '审阅子代理'])
+  expect(subs.every(r => r.depth === 1)).toBe(true)
+  expect(subs.find(r => r.agentName === '探查子代理')?.status).toBe('run')
+})
+
 it('agentSessionsForId finds the session then composes', async () => {
   const { writeSession } = await import('./chatStore')
   const { newSession } = await import('./sessionStore')

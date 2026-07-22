@@ -9,7 +9,7 @@ import type { AgentProvider } from '../agents/types'
 import type { DevelopProject } from '../run/runTypes'
 import type { CreateWorkspaceOpts, SetupEvent } from '@shared/types'
 import { runStepHook } from './stepHooks'
-import { provisionWorktree, buildWorkspaceRecord, buildStartRunOpts, seedPurposeMemory, type CreateWorkspaceResult } from './workspaceService'
+import { provisionWorktree, buildWorkspaceRecord, seedPurposeMemory, type CreateWorkspaceResult } from './workspaceService'
 
 // Re-export SetupEvent from @shared/types for any code that imports it from here.
 export type { SetupEvent }
@@ -124,6 +124,5 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
 
   emit({ type: 'setup:done', workspacePath: opts.path })
 
-  const startRunOpts = buildStartRunOpts(opts, developProjects)
-  return { workspace, startRunOpts }
+  return { workspace, workspacePath: opts.path, developProjects }
 }

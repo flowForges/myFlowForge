@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs'
 import { appendMessage, readMessages, readSession, readWatermark, writeSession, writeWatermark } from './chatStore'
 import { setLive, clearLive } from './liveTurns'
+import { setNativeSubagents } from './nativeSubagentRegistry'
 import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
@@ -10,6 +11,8 @@ import { distillModelFor } from './memory/distillModel'
 import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD, SYSTEM_PROMOTE_EVERY_K } from './memory/tokenEstimate'
 import { readSettings } from '../config/store'
 import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext, mentionedSkills } from '../agents/contextMeta'
+import { scanGlobalContext } from '../agents/globalContext'
+import { homedir } from 'node:os'
 import { readInstalledSkills } from '../skills/installedSkills'
 import { getSession } from './sessionStore'
 import { providerSupportsResume, providerResumeReliable } from '../agents/resumeSupport'
@@ -49,7 +52,15 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // (write); the on-disk memory files are untouched. Default true (see MemorySchema).
     const memoryOn = readSettings().memory.enabled
     const label = `${payload.agentLabel} · ${payload.model}`
-    let context = mergeAgentContext(discoverAgentContext(ws, ws), forgeMcpContext(env))
+    // "已加载 SKILL / RULE / MCP" card source. Provider-aware now (payload.agent): the project scan +
+    // the real home-level rules/MCP (scanGlobalContext, previously never wired into chat) are both
+    // filtered to what THIS CLI actually reads, so a Codex session stops listing CLAUDE.md/.claude
+    // skills it never loads. forge MCP is real for every provider (injected via env). Runtime scrapes
+    // (extractRuntimeContext / mentionedSkills, below) still add anything the model actually prints.
+    let context = mergeAgentContext(
+      mergeAgentContext(discoverAgentContext(ws, ws, payload.agent), scanGlobalContext(homedir(), payload.agent, false)),
+      forgeMcpContext(env),
+    )
 
     // 原生续聊：续自导入会话、同源同代理、该 provider 真的传 --resume、还没拿到新 resumeId、原 cwd 仍在
     // → 用原会话 id 让 CLI 原生 resume（完整上下文），跳过文本摘要 preamble。
@@ -117,6 +128,15 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // on the finished message so their cards survive reload.
     const subagents = new Map<string, SubagentCard>()
     const subagentList = () => (subagents.size ? [...subagents.values()] : undefined)
+    // Reset the IDs-panel view of this session's native Task sub-agents at turn start, then keep it in
+    // sync as they arrive (see onSubagent) so the panel reflects the current turn, not a stale prior one.
+    setNativeSubagents(ws, sid, [])
+    const syncNativeSubagents = () => setNativeSubagents(ws, sid, [...subagents.values()].map(c => ({
+      id: c.id,
+      name: c.description || c.subagentType || '子代理',
+      provider: payload.agent,
+      status: c.state === 'running' ? 'run' as const : c.state === 'error' ? 'idle' as const : 'ok' as const,
+    })))
     // Mirror the in-flight message into the live buffer so chatHistory can restore it after the chat view
     // unmounts (switch to home) or re-subscribes to another session mid-stream. ts:'' marks it as still
     // streaming (carry-forward ordering in the timeline; also lets the renderer re-flag streamingIds).
@@ -137,6 +157,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         state: ev.phase === 'done' ? (ev.isError ? 'error' : 'done') : prev.state,
       }
       subagents.set(ev.id, next)
+      syncNativeSubagents()
       publishLive()
       emit({ workspacePath: ws, sessionId: sid, type: 'subagent', id: aid, sub: next })
     }

@@ -51,9 +51,8 @@ describe('createWorkspace', () => {
     expect(branch.trim()).toBe('forge/ws-a')
     expect(existsSync(join(wsPath, '.forge', 'workspace.json'))).toBe(true)
     expect(result.workspace.name).toBe('design-migration')
-    expect(result.startRunOpts.stages.find(s => s.key === 'develop')).toBeTruthy()
-    expect(result.startRunOpts.developProjects.map(p => p.name)).toEqual(['proj'])
-    expect(result.startRunOpts.developProjects[0].cwd).toBe(join(wsPath, 'proj'))
+    expect(result.developProjects.map(p => p.name)).toEqual(['proj'])
+    expect(result.developProjects[0].cwd).toBe(join(wsPath, 'proj'))
   })
 
   it('self-heals a wrong project default branch: worktree still created + corrected branch written back', async () => {
@@ -75,7 +74,7 @@ describe('createWorkspace', () => {
     })
     // worktree provisioned despite the bogus base branch
     expect(existsSync(join(wsPath, proj.name, 'README.md'))).toBe(true)
-    expect(result.startRunOpts.developProjects[0].cwd).toBe(join(wsPath, proj.name))
+    expect(result.developProjects[0].cwd).toBe(join(wsPath, proj.name))
     // and the correction is persisted so future workspaces + the UI show the real branch
     expect(readProjects().projects[0].defaultBranch).toBe('main')
   })
@@ -91,8 +90,8 @@ describe('createWorkspace', () => {
     expect(existsSync(join(wsPath, '.forge', 'workspace.json'))).toBe(true)
     expect(result.workspace.name).toBe('just-chat')
     expect(result.workspace.projects).toEqual([])
-    expect(result.startRunOpts.workspacePath).toBe(wsPath)
-    expect(result.startRunOpts.developProjects).toEqual([])
+    expect(result.workspacePath).toBe(wsPath)
+    expect(result.developProjects).toEqual([])
   })
 
   it('carries per-project provider and model into StartRunOpts.developProjects', async () => {
@@ -108,7 +107,7 @@ describe('createWorkspace', () => {
       },
       knownProjects: projects, proxy: ''
     })
-    expect(result.startRunOpts.developProjects[0]).toMatchObject({
+    expect(result.developProjects[0]).toMatchObject({
       provider: 'codex',
       model: 'gpt-5-codex'
     })
@@ -526,16 +525,6 @@ describe('editWorkspace', () => {
         projects: [{ repoId: 'api', branch: 'main' }] },   // inPlace intentionally omitted
     })
     expect(readWorkspace(wsPath)!.projects[0].inPlace).toBe(true)
-  })
-})
-
-describe('buildStartRunOpts', () => {
-  it('buildStartRunOpts 透传 stage 追加段', async () => {
-    const { buildStartRunOpts } = await import('./workspaceService')
-    const opts: any = { name: 'w', path: '/w',
-      workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'design', provider: 'claude', model: 'opus-4.8', prompt: '画时序图' }] }], projects: [] }
-    const sr = buildStartRunOpts(opts, [])
-    expect(sr.stages[0].prompt).toBe('画时序图')
   })
 })
 

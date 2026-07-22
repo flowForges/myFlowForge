@@ -21,6 +21,26 @@ describe('discoverAgentContext', () => {
     expect(meta.rules.map(r => r.name)).toEqual(['AGENTS.md', 'CLAUDE.md'])
     expect(meta.skills.map(s => s.name)).toEqual(['planner', 'reviewer'])
   })
+
+  it('filters to only what the running provider actually reads', () => {
+    const ws = mkdtempSync(join(tmpdir(), 'ctx-prov-'))
+    mkdirSync(join(ws, '.claude', 'skills', 'reviewer'), { recursive: true })
+    mkdirSync(join(ws, '.codex', 'skills', 'planner'), { recursive: true })
+    writeFileSync(join(ws, 'CLAUDE.md'), '# claude rules')
+    writeFileSync(join(ws, 'AGENTS.md'), '# agents rules')
+    writeFileSync(join(ws, '.claude', 'skills', 'reviewer', 'SKILL.md'), '# reviewer')
+    writeFileSync(join(ws, '.codex', 'skills', 'planner', 'SKILL.md'), '# planner')
+
+    // A Claude session sees only CLAUDE.md + .claude/skills — never the Codex AGENTS.md / .codex skills.
+    const claude = discoverAgentContext(ws, ws, 'claude')
+    expect(claude.rules.map(r => r.name)).toEqual(['CLAUDE.md'])
+    expect(claude.skills.map(s => s.name)).toEqual(['reviewer'])
+
+    // A Codex session sees the mirror image.
+    const codex = discoverAgentContext(ws, ws, 'codex')
+    expect(codex.rules.map(r => r.name)).toEqual(['AGENTS.md'])
+    expect(codex.skills.map(s => s.name)).toEqual(['planner'])
+  })
 })
 
 describe('scanWorkspaceContext rule coverage (multi-CLI)', () => {

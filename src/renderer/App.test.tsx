@@ -13,7 +13,7 @@ beforeEach(() => {
     listWorkflows: async () => [{ id: 'standard', name: '标准工作流', stages: [{ key: 'design', defaultAgent: 'claude', defaultModel: 'opus-4.8' }] }],
     detectProviders: async () => [{ id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus-4.8', label: 'opus-4.8' }] }],
     addProject: async () => [], deleteProject: async () => [],
-    createWorkspace: vi.fn(async (opts) => ({ workspace: { name: opts.name, path: opts.path, projects: [], workflowId: 'standard', status: 'idle' }, startRunOpts: { runId: 'r', workspaceName: opts.name, workspacePath: opts.path, stages: [], developProjects: [] } })),
+    createWorkspace: vi.fn(async (opts) => ({ workspace: { name: opts.name, path: opts.path, projects: [], workflowId: 'standard', status: 'idle' }, workspacePath: opts.path, developProjects: [] })),
     startRun: vi.fn(async () => ({})),
     resolve: () => {}, getSettings: async () => ({}), setSettings: async () => ({}), onSettingsChanged: () => () => {},
     getWorkspace: async () => null, runWorkspace: vi.fn(async () => {}),

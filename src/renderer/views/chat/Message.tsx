@@ -3,6 +3,8 @@ import type { ChatMessage, DesignDocRef } from '@shared/types'
 import { fmtMsgTime, fmtMsgTimeFull } from '@shared/relTime'
 import { ThinkBlock } from './ThinkBlock'
 import { SubagentCards } from './SubagentCards'
+import { DelegateBlock } from './DelegateBlock'
+import { TurnTimer } from './TurnTimer'
 import { Markdown } from './markdown'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
@@ -33,6 +35,13 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
   const showAnswer = !isUser && (!!msg.text || !streaming)
   const [copied, setCopied] = useState(false)
 
+  // A live-only delegate-batch message carries a `delegate` block and no text — render just the block
+  // (no answer eyebrow / copy meta / empty bubble). It rides in the timeline right below the main agent's
+  // 「已派发」reply. See DelegateBlock / useChat's delegate-* cases.
+  if (!isUser && msg.delegate) {
+    return <div className="msg ai msg-delegate"><DelegateBlock batch={msg.delegate} /></div>
+  }
+
   // Switching into a session whose messages are large parses every body's Markdown synchronously in
   // one commit → the app freezes (beachball). For a big, settled (non-streaming) reply, show the raw
   // text first (cheap) and upgrade to parsed Markdown in a low-priority transition, so the switch
@@ -54,9 +63,10 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
       {/* Only two roles (you vs the agent) and the layout already distinguishes them — drop the
          「你」/「主代理」avatar + label. Keep just the model tag on AI replies. The real-time log
          still attributes each line to its agent. */}
-      {!isUser && msg.model && (
+      {!isUser && (msg.model || streaming || (msg.startedAt != null && msg.endedAt != null)) && (
         <div className="msg-head">
-          <span className="msg-model">{msg.model}</span>
+          {msg.model && <span className="msg-model">{msg.model}</span>}
+          <TurnTimer startedAt={msg.startedAt} endedAt={msg.endedAt} streaming={streaming} />
         </div>
       )}
       {msg.think && <ThinkBlock think={msg.think} streaming={streaming} />}

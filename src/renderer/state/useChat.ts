@@ -99,7 +99,7 @@ export function useChat(
       if (e.type === 'user') setMessages(m => [...m, e.message])
       else if (e.type === 'assistant-start') {
         setStreamingIds(s => new Set(s).add(e.id))
-        setMessages(m => m.some(x => x.id === e.id) ? m : [...m, { ...blankAi(e.id), model: e.model, context: e.context }])
+        setMessages(m => m.some(x => x.id === e.id) ? m : [...m, { ...blankAi(e.id), model: e.model, context: e.context, startedAt: Date.now() }])
       }
       else if (e.type === 'assistant-delta') {
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
@@ -125,14 +125,45 @@ export function useChat(
         }
         setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? upsert(x) : x) : [...m, upsert(blankAi(e.id))])
       }
+      // Live delegate-batch progress block (fire-and-forget sub-agents keep running after the main turn
+      // ends). Main-side broadcasts these (handlers.ts onBatchStart/onAgentState/onComplete) but they were
+      // previously dropped here, so the user never saw the background sub-agents execute. Live-only: the
+      // block message (id `delegate-batch:<runId>`, blank text, carries `delegate`) is never persisted —
+      // the aggregated result arrives afterwards as its own `done` message.
+      else if (e.type === 'delegate-start') {
+        setMessages(m => m.some(x => x.id === e.id)
+          ? m.map(x => x.id === e.id ? { ...x, delegate: e.batch } : x)
+          : [...m, { id: e.id, who: 'ai', text: '', ts: '', delegate: e.batch }])
+      }
+      else if (e.type === 'delegate-progress') {
+        setMessages(m => m.map(x => {
+          if (x.id !== e.id || !x.delegate) return x
+          const agents = x.delegate.agents.map(a => a.agentId === e.agentId
+            ? { ...a, status: e.status, output: e.output ?? a.output, activity: e.activity ?? a.activity }
+            : a)
+          return { ...x, delegate: { ...x.delegate, agents } }
+        }))
+      }
+      else if (e.type === 'delegate-done') {
+        setMessages(m => m.map(x => x.id === e.id && x.delegate
+          ? { ...x, delegate: { ...x.delegate, done: true, agents: x.delegate.agents.map(a => a.status === 'run' ? { ...a, status: 'ok' as const } : a) } }
+          : x))
+      }
       else if (e.type === 'done') {
-        setMessages(m => m.some(x => x.id === e.message.id) ? m.map(x => x.id === e.message.id ? e.message : x) : [...m, e.message])
+        // `e.message` is the freshly-persisted turn (from main) and REPLACES the streaming stub, so carry
+        // the renderer-captured startedAt forward and stamp endedAt here — otherwise the turn timer loses
+        // its start and can't show a 用时 total.
+        const endedAt = Date.now()
+        setMessages(m => m.some(x => x.id === e.message.id)
+          ? m.map(x => x.id === e.message.id ? { ...e.message, startedAt: x.startedAt ?? e.message.startedAt, endedAt } : x)
+          : [...m, { ...e.message, endedAt }])
         setStreamingIds(s => { const n = new Set(s); n.delete(e.message.id); return n })
       }
       else if (e.type === 'error') {
+        const endedAt = Date.now()
         setMessages(m => m.some(x => x.id === e.id)
-          ? m.map(x => x.id === e.id ? { ...x, text: x.text || `错误: ${e.error}`, think: undefined } : x)
-          : [...m, { ...blankAi(e.id), text: `错误: ${e.error}`, think: undefined }])
+          ? m.map(x => x.id === e.id ? { ...x, text: x.text || `错误: ${e.error}`, think: undefined, endedAt } : x)
+          : [...m, { ...blankAi(e.id), text: `错误: ${e.error}`, think: undefined, endedAt }])
         setStreamingIds(s => { const n = new Set(s); n.delete(e.id); return n })
       }
       else if (e.type === 'confirm-request') setConfirms(c => [...c, { id: e.id, title: e.title, where: e.where, ts: new Date().toISOString() }])

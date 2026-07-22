@@ -60,14 +60,6 @@ import type { SetupProgressState } from './views/SetupProgress'
 import type { AgentState, ChatEvent, ChatQueueEvent, CreateWorkspaceOpts, EngineEvent, SetupEvent, Workspace } from '@shared/types'
 import { deriveWsBadge } from './shell/wsBadge'
 
-// Minimal renderer-facing shape of the orchestrator's StartRunOpts. The canonical type lives in
-// main (src/main/orchestrator/orchestrator.ts), which the renderer must not import at runtime;
-// the renderer only ever receives an opaque StartRunOpts from window.forge.createWorkspace to read
-// the canonical workspacePath off of (window.forge.startRun itself is gone — the old orchestrator's
-// run-start path is disabled; workflows only ever start via run2's launcher now). We keep the fields
-// the renderer actually touches typed, plus an index signature so the opaque payload round-trips intact.
-export interface StartRunOpts { workspacePath: string; task?: string; [k: string]: unknown }
-
 export function App() {
   const [collapsed, setCollapsed] = useState(false)
   const [inspCollapsed, setInspCollapsed] = useState(false)
@@ -456,10 +448,9 @@ export function App() {
     creatingNameRef.current = opts.name          // name the in-flight workspace for a backgrounded-done notif
     setCreating(true)                            // disable the create button + show 创建中… (git worktree/fetch is slow)
     try {
-      const { startRunOpts } = await window.forge.createWorkspace(opts)
       // main expands `~` once and stores/registers/runs under the absolute path, so the renderer
       // MUST key everything off that canonical path — not the raw `opts.path` (which may be `~/…`).
-      const wsPath = (startRunOpts as StartRunOpts).workspacePath
+      const { workspacePath: wsPath } = await window.forge.createWorkspace(opts)
       setCreateErr(null)
       setWizardOpen(false)                       // close only on success
       setSetupVisible(false)                     // dismiss setup progress panel
@@ -493,10 +484,9 @@ export function App() {
     setCreating(true)
     try {
       const name = dir.split('/').filter(Boolean).pop() || '工作区'
-      const { startRunOpts } = await window.forge.createWorkspace({
+      const { workspacePath: wsPath } = await window.forge.createWorkspace({
         name, path: dir, workflows: [], projects: [],
       })
-      const wsPath = (startRunOpts as StartRunOpts).workspacePath
       setCreateErr(null)
       setSetupVisible(false)                     // dismiss setup progress panel (no run to watch)
       setSetupState(INITIAL_SETUP_STATE)         // reset for next creation

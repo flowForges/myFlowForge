@@ -33,10 +33,10 @@ vi.mock('../config/store', () => ({
   readWorkspaceRegistry: () => [],
 }))
 vi.mock('../workspace/workspaceService', () => ({
-  createWorkspace: vi.fn(async () => ({ workspace: { name: 'new' }, startRunOpts: {} })),
+  createWorkspace: vi.fn(async () => ({ workspace: { name: 'new' }, workspacePath: '/ws/a', developProjects: [] })),
   editWorkspace: (args: any) => editWorkspaceMock(args),
 }))
-vi.mock('../workspace/workspaceSetup', () => ({ runWorkspaceSetup: vi.fn(async () => ({ workspace: { name: 'setup' }, startRunOpts: {} })) }))
+vi.mock('../workspace/workspaceSetup', () => ({ runWorkspaceSetup: vi.fn(async () => ({ workspace: { name: 'setup' }, workspacePath: '/ws/a', developProjects: [] })) }))
 vi.mock('../workspace/archiveOps', () => ({ archiveWorkspaceLifecycle: vi.fn(), restoreWorkspaceLifecycle: vi.fn() }))
 vi.mock('../workspace/archivedGuard', () => ({ isArchivedWorkspace: vi.fn(() => false) }))
 vi.mock('../workspace/deleteWorkspace', () => ({ deleteWorkspace: vi.fn(async () => ({ deleted: true })) }))

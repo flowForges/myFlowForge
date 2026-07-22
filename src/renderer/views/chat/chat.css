@@ -59,6 +59,13 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
    describes, so it visibly belongs to the reply below it (was right-pushed via margin-left:auto, which
    detached it from its message). */
 .msg-model { font-family: var(--mono); font-size: 10.5px; color: var(--faint); margin-left: 0; margin-right: auto; }
+/* Whole-turn live timer (TurnTimer.tsx) — sits at the header's right edge (msg-model's margin-right:auto
+   pushes it there); when there's no model tag yet it's the lone left-aligned item. Live = pulsing dot +
+   ticking counter so a mid-execution turn never looks frozen; settled = muted 用时 total. */
+.turn-timer { font-family: var(--mono); font-size: 10.5px; color: var(--faint); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.turn-timer.live { color: var(--muted); }
+.turn-timer .tt-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: 0 0 6px; animation: tt-pulse 1.2s ease-in-out infinite; }
+@keyframes tt-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 /* 会话区正文字号 = 14px × 会话区缩放(设置·外观·会话区字号,独立于应用界面字号)。 */
 .msg-body { font-size: calc(14px * var(--chat-font-scale, 1)); line-height: 1.62; color: var(--fg-2); }
 .msg-body p { margin-bottom: 10px; }
@@ -427,6 +434,14 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
    agents. Hover for the full explanation. */
 .sac-lead { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--faint); cursor: help; }
 .sac-lead-dot { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in oklab, var(--accent) 60%, var(--muted)); flex: 0 0 auto; }
+.sac-lead-dot.live { background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
+/* Delegate-batch rows (DelegateBlock.tsx): per-agent live status dot + collapsed 最近一步动作 line. */
+.dg-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }
+.dg-dot.dg-run { background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
+.dg-dot.dg-ok { background: var(--ok, #3fb950); }
+.dg-dot.dg-idle { background: var(--err); }
+.dg-activity { padding: 0 11px 8px 30px; font-size: 11px; color: var(--muted); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.msg-delegate { gap: 0; }
 .subagent-card { border: 1px solid var(--border); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
 .subagent-card.s-running { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
 .subagent-card.s-error { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }

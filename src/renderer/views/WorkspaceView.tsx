@@ -1563,6 +1563,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                   <div className="ic-card-h">会话</div>
                   <div className="ic-row"><span>编码代理</span><b>{agentLabel}</b></div>
                   <div className="ic-row"><span>工作目录</span><Copyable text={displayPath} className="mono" /></div>
+                  {(wsInfo?.projects ?? []).length > 0 && (
+                    <div className="ic-proj-head" title="本工作区是多仓工作区,下面是它包含的 git 仓库/项目(各有自己的分支),不是其它工作区">
+                      本工作区项目 · {(wsInfo?.projects ?? []).length} 个仓库
+                    </div>
+                  )}
                   {(wsInfo?.projects ?? []).map(p => (
                     <div className="ic-row ic-proj" key={p.repoId || p.name}>
                       <span className="ic-proj-name" title={p.name || p.repoId}>{p.name || p.repoId}</span>

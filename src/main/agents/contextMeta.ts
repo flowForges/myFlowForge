@@ -3,25 +3,31 @@ import { basename, join, relative, resolve } from 'node:path'
 import type { AgentContextMeta, AgentContextRef } from '@shared/types'
 
 // Rule-file conventions across the coding CLIs this app supports — not just Claude/AGENTS.md.
-// Each carries a `reason` so the UI can show which ecosystem a detected rule belongs to.
-const RULE_SPECS: { file: string; reason: string }[] = [
-  { file: 'CLAUDE.md', reason: 'Claude Code 规则' },
-  { file: 'AGENTS.md', reason: 'Codex / Agents 规则' },
-  { file: 'GEMINI.md', reason: 'Gemini CLI 规则' },
-  { file: 'QODER.md', reason: 'Qoder 规则' },
-  { file: '.cursorrules', reason: 'Cursor 规则（legacy）' },
-  { file: '.windsurfrules', reason: 'Windsurf 规则' },
-  { file: 'copilot-instructions.md', reason: 'GitHub Copilot 指令' },
+// Each carries a `reason` so the UI can show which ecosystem a detected rule belongs to, and the
+// `providers` that ACTUALLY read it: the chat context is filtered to the running provider so a Codex
+// session no longer lists CLAUDE.md / .claude/skills it never loads (the "已加载" card was previously a
+// provider-agnostic folder scan, hence inaccurate). Undefined provider = show all (scanWorkspaceContext).
+const RULE_SPECS: { file: string; reason: string; providers: string[] }[] = [
+  { file: 'CLAUDE.md', reason: 'Claude Code 规则', providers: ['claude'] },
+  { file: 'AGENTS.md', reason: 'Codex / Agents 规则', providers: ['codex', 'qwen', 'agents'] },
+  { file: 'GEMINI.md', reason: 'Gemini CLI 规则', providers: ['gemini'] },
+  { file: 'QODER.md', reason: 'Qoder 规则', providers: ['qoder'] },
+  { file: '.cursorrules', reason: 'Cursor 规则（legacy）', providers: ['cursor'] },
+  { file: '.windsurfrules', reason: 'Windsurf 规则', providers: ['windsurf'] },
+  { file: 'copilot-instructions.md', reason: 'GitHub Copilot 指令', providers: ['copilot'] },
 ]
 const RULE_FILES = RULE_SPECS.map(s => s.file)
 const RULE_REASON = new Map(RULE_SPECS.map(s => [s.file, s.reason]))
-const SKILL_DIRS = [
-  join('.claude', 'skills'),
-  join('.codex', 'skills'),
-  join('.qoder', 'skills'),
-  join('.cursor', 'skills'),
-  join('.agents', 'skills'),
+const SKILL_DIRS: { dir: string; providers: string[] }[] = [
+  { dir: join('.claude', 'skills'), providers: ['claude'] },
+  { dir: join('.codex', 'skills'), providers: ['codex'] },
+  { dir: join('.qoder', 'skills'), providers: ['qoder'] },
+  { dir: join('.cursor', 'skills'), providers: ['cursor'] },
+  { dir: join('.agents', 'skills'), providers: ['codex', 'qwen', 'agents'] },
 ]
+// True when `provider` is unset (show everything — the generic workspace scan) or the source belongs to
+// that provider's ecosystem.
+const providerReads = (providers: string[], provider?: string) => !provider || providers.includes(provider)
 const WALK_SKIP = new Set(['.git', 'node_modules', 'dist', 'build', '.forge', '.vite', 'coverage'])
 
 function rel(root: string, path: string): string {
@@ -165,7 +171,7 @@ function pushWorkspaceRefs(dir: string, root: string, out: AgentContextMeta) {
       if (st?.isFile()) out.rules.push({ name: entry, path: rel(root, path), reason: 'Cursor 规则', state: 'ok' })
     }
   }
-  for (const skillDir of SKILL_DIRS) {
+  for (const { dir: skillDir } of SKILL_DIRS) {
     const full = join(dir, skillDir)
     const st = safeStat(full)
     if (!st?.isDirectory()) continue
@@ -203,13 +209,16 @@ export function scanWorkspaceContext(workspaceRoot: string, includeForgeMcp = tr
   return scanned
 }
 
-function findRules(cwd: string, root: string): AgentContextRef[] {
+function findRules(cwd: string, root: string, provider?: string): AgentContextRef[] {
   const items: AgentContextRef[] = []
   for (const dir of pathChain(cwd, root)) {
-    for (const file of RULE_FILES) {
-      const path = join(dir, file)
-      if (existsSync(path)) items.push({ name: basename(path), path: rel(root, path), reason: RULE_REASON.get(file) })
+    for (const spec of RULE_SPECS) {
+      if (!providerReads(spec.providers, provider)) continue
+      const path = join(dir, spec.file)
+      if (existsSync(path)) items.push({ name: basename(path), path: rel(root, path), reason: spec.reason })
     }
+    // Cursor's modern rules dir — only Cursor reads it.
+    if (!providerReads(['cursor'], provider)) continue
     const cursorRules = join(dir, '.cursor', 'rules')
     if (existsSync(cursorRules)) {
       for (const entry of readdirSync(cursorRules).sort()) {
@@ -222,10 +231,11 @@ function findRules(cwd: string, root: string): AgentContextRef[] {
   return uniqueByPath(items).slice(0, 12)
 }
 
-function findSkills(cwd: string, root: string): AgentContextRef[] {
+function findSkills(cwd: string, root: string, provider?: string): AgentContextRef[] {
   const items: AgentContextRef[] = []
   for (const dir of pathChain(cwd, root)) {
-    for (const skillDir of SKILL_DIRS) {
+    for (const { dir: skillDir, providers } of SKILL_DIRS) {
+      if (!providerReads(providers, provider)) continue
       const full = join(dir, skillDir)
       if (!existsSync(full)) continue
       for (const entry of readdirSync(full).sort()) {
@@ -240,10 +250,13 @@ function findSkills(cwd: string, root: string): AgentContextRef[] {
   return uniqueByPath(items).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 12)
 }
 
-export function discoverAgentContext(cwd: string, workspaceRoot = cwd): AgentContextMeta {
+// `provider` (the running CLI id, e.g. 'claude'/'codex'/'cursor') filters the scan to the rule files &
+// skill dirs that provider actually reads — so the "已加载" card reflects the current agent, not a union
+// of every CLI's conventions. Omit it (scanWorkspaceContext's use) to scan all.
+export function discoverAgentContext(cwd: string, workspaceRoot = cwd, provider?: string): AgentContextMeta {
   return {
-    skills: findSkills(cwd, workspaceRoot),
-    rules: findRules(cwd, workspaceRoot),
+    skills: findSkills(cwd, workspaceRoot, provider),
+    rules: findRules(cwd, workspaceRoot, provider),
     mcps: [],
   }
 }

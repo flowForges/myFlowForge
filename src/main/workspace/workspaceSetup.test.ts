@@ -88,7 +88,7 @@ describe('runWorkspaceSetup', () => {
 
     // result shape mirrors createWorkspace
     expect(res.workspace.name).toBe('order')
-    expect(res.startRunOpts.developProjects.map(p => p.name)).toEqual(['proj'])
+    expect(res.developProjects.map(p => p.name)).toEqual(['proj'])
   })
 
   it('hook cwd is the workspace root and allowedTools come from plugin.tools', async () => {
@@ -257,7 +257,7 @@ describe('runWorkspaceSetup', () => {
     expect(provision).toHaveBeenCalledTimes(1)
     expect(provision.mock.calls[0][0]).toMatchObject({ id: 'r1' })
 
-    expect(res.startRunOpts.developProjects).toEqual([
+    expect(res.developProjects).toEqual([
       { name: 'api', cwd: join(wsPath, 'api'), provider: undefined, model: undefined },
       { name: 'alpha', cwd: join(wsPath, 'alpha'), provider: undefined, model: undefined },
     ])
@@ -292,7 +292,7 @@ describe('runWorkspaceSetup', () => {
     expect(provision).toHaveBeenCalledTimes(1)
     expect(provision.mock.calls[0][0]).toMatchObject({ id: 'r2' })
     // alpha registered as already-present with cwd = <wsPath>/alpha; beta provisioned normally.
-    expect(res.startRunOpts.developProjects).toEqual([
+    expect(res.developProjects).toEqual([
       { name: 'alpha', cwd: join(wsPath, 'alpha'), provider: undefined, model: undefined },
       { name: 'beta', cwd: join(wsPath, 'beta'), provider: undefined, model: undefined },
     ])
@@ -314,7 +314,7 @@ describe('runWorkspaceSetup', () => {
     })
 
     expect(provision).not.toHaveBeenCalled()
-    expect(res.startRunOpts.developProjects).toEqual([
+    expect(res.developProjects).toEqual([
       { name: 'packages/lib', cwd: join(wsPath, 'packages/lib'), provider: undefined, model: undefined },
     ])
   })

@@ -310,7 +310,7 @@
 
 /* 底部:目标输入 / 运行控制 */
 .wfo-foot { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 13px 17px 15px; background: color-mix(in oklch, var(--surface) 35%, var(--bg-2)); }
-.wfo-goal { display: flex; align-items: flex-end; gap: 9px; }
+.wfo-goal { display: flex; align-items: flex-end; gap: 9px; margin-top: 13px; }
 .wfo-goal textarea { flex: 1; min-width: 0; resize: none; max-height: 100px; background: var(--surface); border: 1px solid var(--border-2); border-radius: 11px; padding: 10px 12px; color: var(--fg); font: 13px/1.5 var(--font); }
 .wfo-goal textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .wfo-goal textarea::placeholder { color: var(--faint); }
