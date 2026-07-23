@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { makeCodexProvider, parseCodexEvent, codexToolActivity, codexErrorMessage, forgeChatDirective } from './codex'
+import { makeCodexProvider, parseCodexEvent, codexToolActivity, codexErrorMessage, forgeChatDirective, isCodexInternalLog } from './codex'
 import { forgeCodexConfigArgs } from '../mcpConfig'
 import { getAppLog, clearAppLog } from '../../log/appLog'
 import type { LogLine, ChatTask } from '../types'
@@ -63,6 +63,20 @@ describe('parseCodexEvent (current thread/item format)', () => {
     // Captured from a live `codex exec --json` run:
     expect(parseCodexEvent({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'OK' } }))
       .toEqual([{ kind: 'assistant-final', text: 'OK' }])
+  })
+})
+
+describe('isCodexInternalLog (stderr noise filter)', () => {
+  it('filters bare codex Rust module lines', () => {
+    expect(isCodexInternalLog('codex_models_manager::manager::failed to refresh available models: timeout')).toBe(true)
+  })
+  it('filters the newer timestamped tracing format (missing supports_reasoning_summaries)', () => {
+    expect(isCodexInternalLog('2026-07-23T06:42:02.601837Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 88 column 5')).toBe(true)
+    expect(isCodexInternalLog('2026-07-23T06:42:02Z WARN codex_core::client: retrying')).toBe(true)
+  })
+  it('does NOT filter the agent\'s real output that merely mentions codex', () => {
+    expect(isCodexInternalLog('我用 codex_models_manager 这个模块做了修改')).toBe(false)
+    expect(isCodexInternalLog('这是正常的思考内容')).toBe(false)
   })
 })
 
