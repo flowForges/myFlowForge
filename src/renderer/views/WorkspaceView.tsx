@@ -1262,23 +1262,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             <button className="supplement-cancel" onClick={() => setPendingSwitch(null)}>取消</button>
           </div>
         )}
-        {latestUsage?.used ? (() => {
-          // Context bar like Claude Code's statusline: the model's REAL reported tokens
-          // (usage.used = input+cache_read+cache_creation from the CLI stream — the same accounting
-          // Claude Code itself uses) over the model's REAL context window (usage.window: 200K, or 1M
-          // for [1m] variants). Only shown for providers that actually report usage (claude/qoder;
-          // opencode coarser) — absent for codex/cursor/gemini/qwen/copilot, which report nothing.
-          const window = latestUsage.window || 200_000
-          const pct = Math.min(100, Math.round((latestUsage.used / window) * 100))
-          const hi = pct >= 90 ? ' hi' : pct >= 75 ? ' warn' : ''
-          return (
-            <div className={`ctx-real${hi}`} title={`上下文 ${latestUsage.used.toLocaleString()} / ${window.toLocaleString()} tokens（模型真实上报的输入+缓存 token ÷ 该模型真实上下文窗口，最近一轮）。CLI 不暴露「自动压缩前还剩多少」，此为当前占用比例。`}>
-              <span className="ctx-label">上下文</span>
-              <span className="ctx-bar"><i style={{ width: `${pct}%` }} /></span>
-              <span className="ctx-pct">{pct}%</span>
-            </div>
-          )
-        })() : null}
+        {/* 上下文 % 进度条已移除:window 是按模型猜的、CLI 不暴露「自动压缩前还剩多少」,百分比不准且误导。
+            模型真实上报的 token 数仍在会话 IDs 面板(SessionIdsPanel「上下文 … tokens」)按真实数值展示。 */}
         <Composer
           providers={providers}
           disabled={!wsPath || !!archived}
