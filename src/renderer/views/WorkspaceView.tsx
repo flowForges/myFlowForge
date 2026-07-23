@@ -1593,7 +1593,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                       <div className="ic-empty">暂无引用文件。粘贴或附加文件后,会在此列出本次对话引用的内容。</div>
                     ) : (
                       sessionRefs.map(f => (
-                        <div className="ic-ref" key={f.path + '::' + f.name}><FileIc name={f.name} /><span className="nm">{f.name}</span></div>
+                        // Click to open the file in its default app (an image → Preview) — revealPath
+                        // maps to shell.openPath. Previously these were non-interactive so a referenced
+                        // image couldn't be viewed at all.
+                        <button type="button" className="ic-ref" key={f.path + '::' + f.name} title={`打开 ${f.name}`} onClick={() => { void window.forge.revealPath?.(f.path) }}>
+                          <FileIc name={f.name} /><span className="nm">{f.name}</span>
+                        </button>
                       ))
                     )}
                   </div>
