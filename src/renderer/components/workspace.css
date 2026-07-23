@@ -201,10 +201,21 @@
 .ic-chip { font-size: 11.5px; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; transition: .14s; }
 .ic-chip:hover { border-color: var(--accent); color: var(--fg); }
 
-/* 工作流速览卡 — 只读列出该工作区所有已命名工作流,逐条展开看每阶段 provider/model. */
+/* 统一「工作流」区 — 列出该工作区全部工作流,逐条展开看每阶段 provider/model,每行可「启动」,顶部可「编辑」. */
+.wf-glance .ic-card-h { display: flex; align-items: center; gap: 8px; }
+.wf-edit-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); transition: .12s; }
+.wf-edit-btn:hover:not(:disabled) { border-color: var(--border-2); background: var(--surface-2); }
+.wf-edit-btn:disabled { opacity: .5; cursor: default; }
+.wf-edit-btn svg { width: 11px; height: 11px; }
+.wf-glance-empty { font-size: 11.5px; color: var(--faint); padding: 2px 2px 4px; }
+.wf-glance-row { display: flex; align-items: center; gap: 4px; }
+.wf-launch-btn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border-radius: 7px; font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); transition: .12s; }
+.wf-launch-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.wf-launch-btn:disabled { opacity: .45; cursor: default; }
+.wf-launch-btn svg { width: 10px; height: 10px; }
 .wf-glance-item + .wf-glance-item { margin-top: 4px; }
 .wf-glance-head {
-  display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 4px; border-radius: 7px;
+  display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; padding: 6px 4px; border-radius: 7px;
   font-size: 12.5px; text-align: left; transition: background .12s;
 }
 .wf-glance-head:hover { background: var(--surface); }

@@ -58,7 +58,7 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
     const aside = container.querySelector('aside.inspector')!
     expect(aside).toBeTruthy()
     await waitFor(() => expect(aside.classList.contains('chat')).toBe(true))
-    expect(screen.getByText('当前工作流')).toBeInTheDocument()
+    expect(screen.getByTitle('编辑工作流')).toBeInTheDocument()
     expect(screen.queryByText('发起工作流')).toBeNull()
   })
 
@@ -73,11 +73,12 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
 
   it('does not show the removed workflow-conversion card in chat mode', async () => {
     const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('当前工作流')).toBeInTheDocument())
+    // Wait for the async workspace load → the unified 工作流 panel's first workflow auto-expands.
+    await waitFor(() => expect(container.querySelector('.wf-glance-stages')).toBeTruthy())
     // The old manual "把这次对话转为工作流" conversion card is gone.
     expect(screen.queryByText('把这次对话转为工作流')).toBeNull()
-    // Stage names now appear (read-only) in the new 当前工作流 overview CTA's .ic-stages.
-    const stages = container.querySelector('.ic-cta .ic-stages')!
+    // Stage names now appear (read-only) in the unified 工作流 panel's auto-expanded first workflow.
+    const stages = container.querySelector('.wf-glance-stages')!
     expect(stages).toHaveTextContent('需求评估')
     expect(stages).toHaveTextContent('代码开发')
   })
@@ -90,7 +91,7 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
 
   it('shows loaded skills and rules in the right chat inspector, not inline under the LLM message', async () => {
     const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('当前工作流')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTitle('编辑工作流')).toBeInTheDocument())
     await waitFor(() => expect(screen.getByText('新会话')).toBeInTheDocument())
     act(() => {
       emitChat({
@@ -140,7 +141,7 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
 
   it('shows a right-inspector workflow pending card while a proposed workflow waits for approval', async () => {
     const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('当前工作流')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTitle('编辑工作流')).toBeInTheDocument())
     await waitFor(() => expect(screen.getByText('新会话')).toBeInTheDocument())
 
     act(() => {
@@ -187,7 +188,7 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
 
   it('clicking a 快捷指令 chip seeds the composer textarea with the prompt', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('当前工作流')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTitle('编辑工作流')).toBeInTheDocument())
     fireEvent.click(screen.getByText('梳理仓库架构'))
     const ta = document.querySelector('#composerInput') as HTMLTextAreaElement
     await waitFor(() => expect(ta.value).toBe('梳理这个仓库的整体架构,画出模块依赖关系'))
@@ -196,14 +197,14 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
   it('clicking 编辑工作流 calls onEditWorkspace', async () => {
     const onEditWorkspace = vi.fn()
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" onEditWorkspace={onEditWorkspace} />)
-    await waitFor(() => expect(screen.getByText('当前工作流')).toBeInTheDocument())
-    fireEvent.click(screen.getByText('编辑工作流'))
+    await waitFor(() => expect(screen.getByTitle('编辑工作流')).toBeInTheDocument())
+    fireEvent.click(screen.getByTitle('编辑工作流'))
     expect(onEditWorkspace).toHaveBeenCalledTimes(1)
   })
 
   it('本次对话引用 shows the empty state when no message references a file', async () => {
     const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('当前工作流')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTitle('编辑工作流')).toBeInTheDocument())
     const inspector = container.querySelector('#mainChat')!
     expect(inspector).toHaveTextContent('暂无引用文件')
     expect(inspector.querySelector('.ic-ref')).toBeNull()
@@ -226,7 +227,7 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
       ],
     }
     const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('当前工作流')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTitle('编辑工作流')).toBeInTheDocument())
     const inspector = container.querySelector('#mainChat')!
     await waitFor(() => expect(inspector.querySelectorAll('.ic-ref').length).toBe(3))
     expect(inspector).toHaveTextContent('app.ts')

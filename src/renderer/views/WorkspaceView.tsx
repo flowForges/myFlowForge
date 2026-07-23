@@ -5,7 +5,6 @@ import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocR
 import { DEFAULT_PERMISSION_MODE, type PermissionMode } from '@shared/permissions'
 import { AgentNode } from '../components/AgentNode'
 import { HookNode } from '../components/HookNode'
-import { WorkflowStrip } from '../components/WorkflowStrip'
 import { WorkflowGlance } from '../components/WorkflowGlance'
 import type { Plugin } from '@shared/plugin'
 import { ReqCard } from '../components/ReqCard'
@@ -115,7 +114,6 @@ const STATE_IDX_MAP: Record<string, string> = {
 }
 
 // Stage key → display name (mirrors src/renderer/settings/WorkflowPane.tsx).
-const STAGE_NAMES: Record<string, string> = { requirement: '需求评估', design: '技术方案设计', develop: '代码开发', test: '写单测', review: '代码 CR' }
 
 // Quick-command chips that seed the composer with a starter prompt.
 const QUICK_CMDS = [
@@ -1529,24 +1527,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </div>{/* /mainFlow */}
 
               <div id="mainChat">
-                <div className="ic-cta">
-                  <div className="ic-cta-h">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l1.9 5.1L20 10l-5.1 1.9L13 17l-1.9-5.1L6 10l5.1-1.9z"/></svg>
-                    当前工作流
-                  </div>
-                  <p>这是当前工作区已配置的执行流程。识别到任务型指令时将按此链路编排为多代理执行。</p>
-                  <WorkflowStrip
-                    stages={(wsInfo?.workflows?.[0]?.stages ?? wsInfo?.stages ?? []).map(s => ({ key: s.key, name: STAGE_NAMES[s.key] ?? s.key }))}
-                    plugins={[...(wsInfo?.plugins ?? []), ...(wsInfo?.stepPlugins ?? [])]}
-                  />
-                  <button className="ic-edit-flow" disabled={!!archived} onClick={() => onEditWorkspace?.()}>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
-                    编辑工作流
-                  </button>
-                </div>
-
-                {/* 工作流速览 — 该工作区所有已命名工作流,逐条展开看每阶段 provider/model,不必进运行/编辑态。 */}
-                <WorkflowGlance workflows={wsInfo?.workflows ?? []} />
+                {/* 统一「工作流」区:工作区的全部工作流,每个可展开看阶段、每行可直接「启动」(选任意流,不再是
+                    硬编码的「当前工作流」),顶部一个「编辑」入口。取代旧的「当前工作流」卡(它只显 workflows[0]、
+                    切不了,又和下面的列表重复)。legacy 只有 stages 的旧工作区合成一条展示,避免回归。 */}
+                <WorkflowGlance
+                  workflows={wsInfo?.workflows?.length ? wsInfo.workflows : (wsInfo?.stages?.length ? [{ id: wsInfo.workflowId || 'standard', name: '工作流', stages: wsInfo.stages }] : [])}
+                  onEdit={() => onEditWorkspace?.()}
+                  onLaunch={onPickWorkflow}
+                  archived={!!archived}
+                />
 
                 {chat.plans.length > 0 && (
                   <div className="ic-card workflow-pending-card">

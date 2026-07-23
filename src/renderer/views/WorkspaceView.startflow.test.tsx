@@ -44,7 +44,7 @@ const idleEngine: EngineApi = { run: null, pending: [], resolve: () => {}, cance
 describe('WorkspaceView LLM 自动识别工作流入口', () => {
   it('does not render manual workflow conversion UI or start a workflow from the inspector', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('当前工作流')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTitle('编辑工作流')).toBeInTheDocument())
     expect(screen.queryByText('把这次对话转为工作流')).toBeNull()
     expect(screen.queryByText('发起工作流')).toBeNull()
 

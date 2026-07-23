@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { WorkflowGlance, stageDisplayName } from './WorkflowGlance'
 import type { WsWorkflow } from '@shared/types'
@@ -51,6 +51,32 @@ describe('WorkflowGlance', () => {
     // clicking again collapses it back
     fireEvent.click(screen.getByText('流程 B'))
     expect(screen.queryByText('codex · gpt-5')).toBeNull()
+  })
+
+  it('a per-row 启动 button launches that specific workflow', () => {
+    const onLaunch = vi.fn()
+    render(
+      <WorkflowGlance
+        onLaunch={onLaunch}
+        workflows={[
+          wf({ id: 'a', name: '流程 A', stages: [{ key: 'design', provider: 'claude', model: 'opus' }] }),
+          wf({ id: 'b', name: '流程 B', stages: [{ key: 'develop', provider: 'codex', model: 'gpt-5' }] }),
+        ]}
+      />,
+    )
+    const launches = screen.getAllByTitle(/^启动「/)
+    expect(launches).toHaveLength(2)
+    fireEvent.click(launches[1])
+    expect(onLaunch).toHaveBeenCalledWith('b')
+  })
+
+  it('header 编辑 button opens the config; empty list still shows the header when onEdit is given', () => {
+    const onEdit = vi.fn()
+    render(<WorkflowGlance workflows={[]} onEdit={onEdit} />)
+    // With an action wired, the empty panel renders (header + hint) instead of collapsing to null.
+    expect(screen.getByText('还没有配置工作流。点「编辑」添加执行阶段。')).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle('编辑工作流'))
+    expect(onEdit).toHaveBeenCalledTimes(1)
   })
 
   it('shows a custom stage name and stage count', () => {
