@@ -72,6 +72,10 @@ export interface ChatCallbacks {
   // A built-in Task sub-agent the main agent spawned. phase 'start' when the Task tool_use appears
   // (fields may be partial), 'update' to enrich once the full input is seen, 'done' on the tool_result.
   onSubagent?(ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean }): void
+  // The main agent's OWN tool call (Read/Bash/Edit/…), surfaced live as the "执行" block. phase 'start'
+  // when the tool_use appears (title known), 'done' on its result (output/isError known, where the
+  // provider streams tool output). `id` = the tool_use id, correlating start↔done.
+  onToolActivity?(ev: { id: string; phase: 'start' | 'done'; name?: string; title?: string; output?: string; isError?: boolean }): void
   onDone(r: { elapsed: number }): void
   onError(err: Error): void
   onConfirm?(req: ConfirmReq): Promise<'allow' | 'deny'>

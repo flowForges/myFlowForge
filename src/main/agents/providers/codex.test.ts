@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { makeCodexProvider, parseCodexEvent, codexErrorMessage, forgeChatDirective } from './codex'
+import { makeCodexProvider, parseCodexEvent, codexToolActivity, codexErrorMessage, forgeChatDirective } from './codex'
 import { forgeCodexConfigArgs } from '../mcpConfig'
 import { getAppLog, clearAppLog } from '../../log/appLog'
 import type { LogLine, ChatTask } from '../types'
@@ -63,6 +63,26 @@ describe('parseCodexEvent (current thread/item format)', () => {
     // Captured from a live `codex exec --json` run:
     expect(parseCodexEvent({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: 'OK' } }))
       .toEqual([{ kind: 'assistant-final', text: 'OK' }])
+  })
+})
+
+describe('codexToolActivity (chat 执行 block)', () => {
+  it('surfaces a command_execution with its output + exit code, keyed by item id', () => {
+    expect(codexToolActivity({ type: 'item.completed', item: { id: 'it_1', type: 'command_execution', command: ['npm', 'test'], aggregated_output: 'PASS 12 tests', exit_code: 0 } }))
+      .toEqual({ id: 'it_1', phase: 'done', title: '调用 shell: npm test', output: 'PASS 12 tests', isError: false })
+  })
+  it('marks a non-zero exit code as an error', () => {
+    const a = codexToolActivity({ type: 'item.completed', item: { id: 'it_2', type: 'command_execution', command: ['false'], output: 'boom', exit_code: 1 } })
+    expect(a?.isError).toBe(true)
+    expect(a?.output).toBe('boom')
+  })
+  it('surfaces a file_change as a title-only step', () => {
+    expect(codexToolActivity({ type: 'item.completed', item: { id: 'it_3', type: 'file_change', changes: [{ path: 'a.ts' }, { path: 'b.ts' }] } }))
+      .toEqual({ id: 'it_3', phase: 'done', title: '编辑文件: a.ts, b.ts' })
+  })
+  it('returns null for non-tool items (reasoning/assistant/etc.)', () => {
+    expect(codexToolActivity({ type: 'item.completed', item: { type: 'reasoning', text: 'thinking' } })).toBeNull()
+    expect(codexToolActivity({ type: 'turn.started' })).toBeNull()
   })
 })
 

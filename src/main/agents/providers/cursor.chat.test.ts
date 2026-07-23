@@ -39,12 +39,12 @@ process.exit(${exitCode})
 }
 
 describe('cursor chat()', () => {
-  it('fires onAssistantDelta for text, onThinkDelta for tool/file, onActivity, onDone', async () => {
+  it('fires onAssistantDelta for text, onToolActivity for tool/file, onActivity, onDone', async () => {
     const cli = fakeBin(CHAT_STREAM)
     const provider = makeCursorProvider({ bin: 'node', preArgs: [cli], defaultModels: [] })
 
     const assistantChunks: string[] = []
-    const thinkChunks: string[] = []
+    const toolActs: { title?: string; phase: string }[] = []
     let activityCount = 0
     let doneResult: { elapsed: number } | null = null
 
@@ -53,7 +53,8 @@ describe('cursor chat()', () => {
       {
         onSession: () => {},
         onAssistantDelta: t => assistantChunks.push(t),
-        onThinkDelta: t => thinkChunks.push(t),
+        onThinkDelta: () => {},
+        onToolActivity: ev => toolActs.push(ev),
         onActivity: () => { activityCount++ },
         onDone: r => { doneResult = r },
         onError: (e) => { throw e },
@@ -67,10 +68,9 @@ describe('cursor chat()', () => {
     // onAssistantDelta fired with assistant text
     expect(assistantChunks.join('')).toContain('你好')
 
-    // onThinkDelta fired for tool_use (both Bash and Edit route through think/file)
-    expect(thinkChunks.length).toBeGreaterThanOrEqual(1)
-    const thinkText = thinkChunks.join(' ')
-    expect(thinkText).toContain('调用')
+    // tool_use blocks (Bash + Edit) now surface as 执行-block activity (title-only for cursor, no id/output)
+    expect(toolActs.length).toBe(2)
+    expect(toolActs.map(t => t.title).join(' ')).toContain('调用')
 
     // liveness callback fired
     expect(activityCount).toBeGreaterThan(0)

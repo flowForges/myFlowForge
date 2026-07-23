@@ -80,6 +80,34 @@ export function parseCodexEvent(obj: any): CodexAction[] {
   return out
 }
 
+// Codex 执行-block activity for chat(): reads an item.completed command_execution / file_change for its
+// id + title + (command) output/exit-code, so the chat 执行 block can show what codex ran AND what it
+// printed. Kept SEPARATE from parseCodexEvent (which stays think-only, feeding run()'s onLog + its
+// unchanged tests) — chat() calls this and then drops the duplicate '调用 shell' / '编辑文件' think step.
+export function codexToolActivity(obj: any): { id: string; phase: 'done'; title: string; output?: string; isError?: boolean } | null {
+  if (obj?.type !== 'item.completed' || !obj.item || typeof obj.item !== 'object') return null
+  const it = obj.item
+  const itype = String(it.type ?? it.item_type ?? '')
+  const id: string | undefined = typeof it.id === 'string' && it.id ? it.id : undefined
+  if (itype === 'command_execution' || itype === 'exec_command') {
+    const cmd = Array.isArray(it.command) ? it.command.join(' ') : String(it.command ?? '')
+    if (!cmd) return null
+    const output = typeof it.aggregated_output === 'string' ? it.aggregated_output
+      : typeof it.output === 'string' ? it.output
+      : typeof it.stdout === 'string' ? it.stdout : undefined
+    const exit = typeof it.exit_code === 'number' ? it.exit_code : undefined
+    return { id: id ?? `sh:${clipCmd(cmd)}`, phase: 'done', title: `调用 shell: ${clipCmd(cmd)}`, output: output || undefined, isError: exit != null && exit !== 0 }
+  }
+  if (itype === 'file_change' || itype === 'patch' || itype === 'apply_patch') {
+    const changes = Array.isArray(it.changes) ? it.changes : (Array.isArray(it.files) ? it.files : [])
+    const paths = changes.map((c: any) => (typeof c === 'string' ? c : (c?.path ?? c?.file ?? ''))).filter(Boolean)
+    const label = paths.length ? paths.map((p: string) => clipCmd(p)).join(', ') : clipCmd(it.path ?? it.file ?? '')
+    if (!label) return null
+    return { id: id ?? `file:${label}`, phase: 'done', title: `编辑文件: ${label}` }
+  }
+  return null
+}
+
 type CodexActionLoggable = { kind: 'assistant' | 'assistant-final'; text: string } | { kind: 'think'; text: string }
 
 /** Map a CodexAction (from parseCodexEvent) to the log level + kind for run() onLog. */
@@ -273,11 +301,15 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // symmetry with run() so a compatible usage shape would feed the session context meter.
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        // Surface codex's command/file execution in the 执行 block (title + output), then drop the
+        // duplicate think step parseCodexEvent renders for the same item.
+        const toolAct = codexToolActivity(obj)
+        if (toolAct) cb.onToolActivity?.(toolAct)
         for (const a of parseCodexEvent(obj)) {
           if (a.kind === 'session') cb.onSession(a.id)
           else if (a.kind === 'assistant') { sawDelta = true; cb.onAssistantDelta(a.text) }
           else if (a.kind === 'assistant-final') { if (!sawDelta) cb.onAssistantDelta(a.text) }
-          else if (a.kind === 'think') cb.onThinkDelta(a.text)
+          else if (a.kind === 'think') { if (a.text.startsWith('调用 shell') || a.text.startsWith('编辑文件')) continue; cb.onThinkDelta(a.text) }
         }
       }
       const processLine = (raw: string) => {

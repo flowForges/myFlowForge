@@ -153,6 +153,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
       let buf = ''
       let gotText = false
       let sessionSent: string | undefined
+      let toolN = 0   // cursor's stream carries no per-tool id → synthesize one per 执行 step
       let rawErr = ''
       child.stderr?.on('data', (b: Buffer) => { rawErr = (rawErr + b.toString()).slice(-2000) })
       const processLine = (raw: string) => {
@@ -184,7 +185,10 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
         }
         for (const ev of events) {
           if (ev.kind === 'output') { gotText = true; cb.onAssistantDelta(ev.text) }
-          else cb.onThinkDelta(ev.text)   // think | tool | file → thinking trace
+          // Cursor's stream exposes no per-tool id or output — surface each tool call as a title-only
+          // 执行 step (synthesized id; marked done since there's no separate result event to await).
+          else if (ev.kind === 'tool' || ev.kind === 'file') cb.onToolActivity?.({ id: `t${++toolN}`, phase: 'done', title: ev.text })
+          else cb.onThinkDelta(ev.text)   // think → thinking trace
         }
       }
       child.stdout?.on('data', (b: Buffer) => {

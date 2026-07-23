@@ -43,8 +43,8 @@ describe('parseChatStreamActions (real Claude CLI nested format)', () => {
     ] } }
     expect(parseChatStreamActions(obj)).toEqual([
       { kind: 'think', text: '让我读一下入口文件' },
-      { kind: 'tool', text: '调用 Read pkg/main.go' },
-      { kind: 'tool', text: '调用 Bash: go build ./...' },
+      { kind: 'tool', text: '调用 Read pkg/main.go', name: 'Read' },
+      { kind: 'tool', text: '调用 Bash: go build ./...', name: 'Bash' },
     ])
   })
   it('keeps a tool-less message as the final answer (reply body)', () => {
@@ -78,7 +78,7 @@ describe('parseChatStreamActions (partial stream_event deltas)', () => {
   })
   it('maps a tool_use content_block_start to a tool step', () => {
     expect(parseChatStreamActions({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', name: 'Read', input: { file_path: 'a.ts' } } } }))
-      .toEqual([{ kind: 'tool', text: '调用 Read a.ts' }])
+      .toEqual([{ kind: 'tool', text: '调用 Read a.ts', name: 'Read' }])
   })
   it('ignores empty deltas and unrelated stream events', () => {
     expect(parseChatStreamActions({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '' } } })).toEqual([])

@@ -215,6 +215,38 @@ process.exit(0)
     expect(usages[usages.length - 1]).toEqual({ used: 6300, window: 200000 })
   })
 
+  it('surfaces a non-Task tool call to onToolActivity: title on the tool_use, output on its tool_result', async () => {
+    const chatCli = join(dir, 'chat-tool.js')
+    writeFileSync(chatCli, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ type: 'system', subtype: 'init', session_id: 'sess-t' })
+out({ type: 'assistant', session_id: 'sess-t', message: { role: 'assistant', content: [ { type: 'tool_use', id: 'tu_bash', name: 'Bash', input: { command: 'npm test' } } ] } })
+out({ type: 'user', session_id: 'sess-t', message: { content: [ { type: 'tool_result', tool_use_id: 'tu_bash', content: 'PASS 12 tests', is_error: false } ] } })
+out({ type: 'assistant', session_id: 'sess-t', message: { role: 'assistant', content: [ { type: 'text', text: '测试通过' } ] } })
+out({ type: 'result', subtype: 'success', result: '测试通过', session_id: 'sess-t' })
+process.exit(0)
+`)
+    chmodSync(chatCli, 0o755)
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [chatCli], defaultModels: [] })
+    const acts: { id: string; phase: string; title?: string; output?: string; isError?: boolean }[] = []
+    let thinkText = ''
+    const s = provider.chat!(
+      { id: 'a1', prompt: 'run tests', model: 'opus-4.8', cwd: dir },
+      {
+        onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: (t) => { thinkText += t },
+        onToolActivity: (ev) => acts.push(ev), onDone: () => {}, onError: () => {},
+      },
+      process.env
+    )
+    await s.done
+    // The Bash call surfaces as a 执行 activity (title on start, output on its result), NOT a think step.
+    const start = acts.find(a => a.phase === 'start')
+    const done = acts.find(a => a.phase === 'done')
+    expect(start).toMatchObject({ id: 'tu_bash', title: '调用 Bash: npm test' })
+    expect(done).toMatchObject({ id: 'tu_bash', output: 'PASS 12 tests', isError: false })
+    expect(thinkText).not.toContain('调用 Bash')
+  })
+
   it('advertises permissionHook capability', () => {
     const provider = makeClaudeProvider({ defaultModels: [] })
     expect(provider.capabilities.permissionHook).toBe(true)
