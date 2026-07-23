@@ -802,7 +802,7 @@ export function App() {
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'sessions': return <SessionImportPane />
           case 'memory': return settings ? <MemoryPane enabled={settings.memory.enabled} onToggle={(v) => update({ memory: { enabled: v } })} wsPath={activeWsId || undefined} sessionId={sessions.activeSessionId ?? undefined} /> : null
-          case 'debug': return <DebugLogPane perfStallToast={settings?.perfStallToast ?? false} onTogglePerfToast={(v) => update({ perfStallToast: v })} perfDiagnostics={settings?.perfDiagnostics ?? false} onTogglePerfDiagnostics={(v) => update({ perfDiagnostics: v })} />
+          case 'debug': return <DebugLogPane perfDiagnostics={settings?.perfDiagnostics ?? false} onTogglePerfDiagnostics={(v) => update({ perfDiagnostics: v })} />
           case 'about': return <AboutPane version={updateCtx.currentVersion} />
           default: return null
         }

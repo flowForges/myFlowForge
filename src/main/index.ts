@@ -580,9 +580,10 @@ app.whenReady().then(() => {
 
   // Perf monitor: detect main event-loop stalls, attribute to the running span, log + toast big ones.
   const stallReporter = new StallReporter({
-    // Opt-in: only pop the stall as a bell notification when the user enabled it in the 调试 pane.
-    // Stalls are always logged (StallReporter.report → logWarn) so the debug log stays complete.
-    toast: (msg) => { if (readSettings().perfStallToast) sendMain(CH.perfStall, { msg }) },
+    // The single 卡顿监控 toggle (perfDiagnostics) gates whether the monitor runs AT ALL (below), so if
+    // a stall is ever reported the user opted in — always surface it (bell + the debug log). No separate
+    // toast opt-in anymore (that second toggle was redundant with enabling the monitor).
+    toast: (msg) => sendMain(CH.perfStall, { msg }),
     now: () => performance.now(),
   })
   // The stall monitor's 50ms sampler wakes the main event loop 20×/s forever — a real idle-power drain
