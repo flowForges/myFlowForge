@@ -21,6 +21,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     template: '', openLauncher: true },
   { cmd: '/架构', title: '梳理仓库架构', desc: '目录结构、核心模块、关键数据流', providers: 'all',
     template: '梳理这个仓库的架构:目录结构、核心模块职责、关键数据流。' },
+  { cmd: '/概览', title: '工作区概览', desc: '梳理所有项目,生成一份概览文档落到工作区', providers: 'all',
+    template: '梳理当前工作区下的所有项目:逐个说明每个仓库/项目的用途、技术栈、核心模块与目录结构,以及项目之间的关系;汇总成一份整体概览,并写入当前工作区根目录下的 `WORKSPACE_OVERVIEW.md`。' },
   { cmd: '/定位', title: '定位相关代码', desc: '按功能/关键词定位代码位置', providers: 'all',
     template: '定位与以下功能相关的代码位置(给出文件与行号):' },
   { cmd: '/解释', title: '解释代码', desc: '解释一段代码的作用与实现', providers: 'all',
