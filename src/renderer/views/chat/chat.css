@@ -272,6 +272,9 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .sess-new.disabled { opacity: .38; pointer-events: none; cursor: not-allowed; }
 
 /* —— 指令队列(上一轮未结束时排队) —— */
+/* Match .composer-wrap's horizontal padding so the queue's inner max-width clamp resolves against the
+   same width as the composer → the queue lines up exactly with the input box (was wider). */
+.tq-wrap { padding: 0 clamp(32px, 4%, 72px); }
 .task-queue { width: 100%; max-width: clamp(720px, 90%, 1180px); margin: 0 auto 8px; display: none; flex-direction: column; gap: 6px; }
 .task-queue.show { display: flex; animation: tqIn .2s ease; }
 @keyframes tqIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }

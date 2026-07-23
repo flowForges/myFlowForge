@@ -1232,17 +1232,22 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           </div>
         </div>
         {chat.queue.length > 0 && (
-          <div className="task-queue show">
-            <div className="tq-head"><span className="tq-dot" />队列中 {chat.queue.length} 条指令 · 当前任务完成后依次执行<button className="tq-clear" onClick={() => chat.clearQueue()}>全部取消</button></div>
-            {chat.queue.map((q, i) => (
-              <div className="tq-item" key={q.id}>
-                <span className="tq-ord">{i + 1}</span>
-                <span className="tq-txt">{q.text}</span>
-                {q.source !== '你' && <span className="tq-src">来自{q.source}</span>}
-                <span className="tq-wait">排队中</span>
-                <button className="tq-x" title="取消(AI 尚未读取)" onClick={() => { setQuickSeed({ text: q.text, nonce: Date.now() }); chat.cancelQueued(q.id) }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button>
-              </div>
-            ))}
+          // Same horizontal inset as .composer-wrap so the queue lines up exactly with the input box
+          // (it's a sibling of the Composer, which is padded in by composer-wrap — without this the
+          // queue rows run wider than the input box).
+          <div className="tq-wrap">
+            <div className="task-queue show">
+              <div className="tq-head"><span className="tq-dot" />队列中 {chat.queue.length} 条指令 · 当前任务完成后依次执行<button className="tq-clear" onClick={() => chat.clearQueue()}>全部取消</button></div>
+              {chat.queue.map((q, i) => (
+                <div className="tq-item" key={q.id}>
+                  <span className="tq-ord">{i + 1}</span>
+                  <span className="tq-txt">{q.text}</span>
+                  {q.source !== '你' && <span className="tq-src">来自{q.source}</span>}
+                  <span className="tq-wait">排队中</span>
+                  <button className="tq-x" title="取消(AI 尚未读取)" onClick={() => { setQuickSeed({ text: q.text, nonce: Date.now() }); chat.cancelQueued(q.id) }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {pendingSupplement && (
