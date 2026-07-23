@@ -81,6 +81,13 @@ describe('isCodexInternalLog (stderr noise filter)', () => {
 })
 
 describe('codexToolActivity (chat 执行 block)', () => {
+  it('emits a live running row on item.started (so a long command is not just a blinking cursor)', () => {
+    expect(codexToolActivity({ type: 'item.started', item: { id: 'it_9', type: 'command_execution', command: ['npm', 'test'] } }))
+      .toEqual({ id: 'it_9', phase: 'start', title: '调用 shell: npm test' })
+    // started before the command string is populated → generic 运行中 row, still correlatable by id
+    expect(codexToolActivity({ type: 'item.started', item: { id: 'it_10', type: 'command_execution' } }))
+      .toEqual({ id: 'it_10', phase: 'start', title: '调用 shell…' })
+  })
   it('surfaces a command_execution with its output + exit code, keyed by item id', () => {
     expect(codexToolActivity({ type: 'item.completed', item: { id: 'it_1', type: 'command_execution', command: ['npm', 'test'], aggregated_output: 'PASS 12 tests', exit_code: 0 } }))
       .toEqual({ id: 'it_1', phase: 'done', title: '调用 shell: npm test', output: 'PASS 12 tests', isError: false })
