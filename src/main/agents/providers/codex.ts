@@ -86,30 +86,41 @@ export function parseCodexEvent(obj: any): CodexAction[] {
   return out
 }
 
-// Codex 执行-block activity for chat(): reads an item.completed command_execution / file_change for its
-// id + title + (command) output/exit-code, so the chat 执行 block can show what codex ran AND what it
-// printed. Kept SEPARATE from parseCodexEvent (which stays think-only, feeding run()'s onLog + its
-// unchanged tests) — chat() calls this and then drops the duplicate '调用 shell' / '编辑文件' think step.
-export function codexToolActivity(obj: any): { id: string; phase: 'done'; title: string; output?: string; isError?: boolean } | null {
-  if (obj?.type !== 'item.completed' || !obj.item || typeof obj.item !== 'object') return null
+// Codex 执行-block activity for chat(): reads a command_execution / file_change item for its id + title
+// + (on completion) output/exit-code, so the chat 执行 block shows what codex ran AND what it printed.
+// Handles BOTH `item.started` (phase 'start' — a live "运行中" row the moment codex kicks off a command;
+// without this codex tools only appeared AFTER they finished, so a long command looked frozen / just a
+// blinking cursor) and `item.completed` (phase 'done' — fills in output/status). Correlated by item.id.
+// Kept SEPARATE from parseCodexEvent (which stays think-only, feeding run()'s onLog + its unchanged
+// tests) — chat() calls this and then drops the duplicate '调用 shell' / '编辑文件' think step.
+export function codexToolActivity(obj: any): { id: string; phase: 'start' | 'done'; title: string; output?: string; isError?: boolean } | null {
+  const started = obj?.type === 'item.started'
+  const completed = obj?.type === 'item.completed'
+  if ((!started && !completed) || !obj.item || typeof obj.item !== 'object') return null
   const it = obj.item
   const itype = String(it.type ?? it.item_type ?? '')
   const id: string | undefined = typeof it.id === 'string' && it.id ? it.id : undefined
+  const phase = started ? 'start' as const : 'done' as const
   if (itype === 'command_execution' || itype === 'exec_command') {
     const cmd = Array.isArray(it.command) ? it.command.join(' ') : String(it.command ?? '')
+    // item.started may arrive before the command string is populated — still show a generic 运行中 row so
+    // the turn doesn't look frozen; the matching item.completed (same id) fills in the real command+output.
+    const title = cmd ? `调用 shell: ${clipCmd(cmd)}` : '调用 shell…'
+    if (!cmd && !id) return null   // nothing to show and nothing to correlate later
+    if (started) return { id: id ?? `sh:${clipCmd(cmd)}`, phase, title }
     if (!cmd) return null
     const output = typeof it.aggregated_output === 'string' ? it.aggregated_output
       : typeof it.output === 'string' ? it.output
       : typeof it.stdout === 'string' ? it.stdout : undefined
     const exit = typeof it.exit_code === 'number' ? it.exit_code : undefined
-    return { id: id ?? `sh:${clipCmd(cmd)}`, phase: 'done', title: `调用 shell: ${clipCmd(cmd)}`, output: output || undefined, isError: exit != null && exit !== 0 }
+    return { id: id ?? `sh:${clipCmd(cmd)}`, phase, title, output: output || undefined, isError: exit != null && exit !== 0 }
   }
   if (itype === 'file_change' || itype === 'patch' || itype === 'apply_patch') {
     const changes = Array.isArray(it.changes) ? it.changes : (Array.isArray(it.files) ? it.files : [])
     const paths = changes.map((c: any) => (typeof c === 'string' ? c : (c?.path ?? c?.file ?? ''))).filter(Boolean)
     const label = paths.length ? paths.map((p: string) => clipCmd(p)).join(', ') : clipCmd(it.path ?? it.file ?? '')
-    if (!label) return null
-    return { id: id ?? `file:${label}`, phase: 'done', title: `编辑文件: ${label}` }
+    if (!label) return started && id ? { id, phase, title: '编辑文件…' } : null
+    return { id: id ?? `file:${label}`, phase, title: `编辑文件: ${label}` }
   }
   return null
 }
