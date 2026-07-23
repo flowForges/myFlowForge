@@ -9,13 +9,19 @@ import { readCodexModelsCache } from './codexModels'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
 
-// codex (Rust) emits internal engine logs on stderr — e.g.
-// `codex_models_manager::manager::failed to refresh available models: timeout waiting for child process to exit`
-// — which are NOT part of the agent's answer. We surface codex stderr as chat "思考" (onStatus → think-delta),
-// so these Rust module lines (`<crate>::<module>::…`) would show up as scary red noise every turn. Filter them
-// out of the live display only; rawErr still keeps everything for the no-reply diagnostic path.
-function isCodexInternalLog(line: string): boolean {
-  return /^codex_[a-z0-9_]+::/.test(line)
+// codex (Rust) emits internal engine logs on stderr — either bare, e.g.
+//   `codex_models_manager::manager::failed to refresh available models: …`
+// or (newer codex / tracing format) with a leading ISO timestamp + level, e.g.
+//   `2026-07-23T06:42:02.601837Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` …`
+// — none of which are part of the agent's answer. We surface codex stderr as chat "思考" (onStatus →
+// think-delta), so these Rust `<crate>::<module>` lines would show up as scary red noise every turn
+// (e.g. codex's own stale-models-cache warning). Filter them out of the live display only; rawErr still
+// keeps everything for the no-reply diagnostic path.
+export function isCodexInternalLog(line: string): boolean {
+  // bare module line …
+  if (/^codex_[a-z0-9_]+::/.test(line)) return true
+  // … or a tracing line: "<ISO ts> <LEVEL> codex_<crate>::<module>: …"
+  return /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?\s+(ERROR|WARN|WARNING|INFO|DEBUG|TRACE)\s+codex_[a-z0-9_]+::/.test(line)
 }
 
 // Render the spawned command for the debug log: clip each arg (the prompt can be huge) and the total.
