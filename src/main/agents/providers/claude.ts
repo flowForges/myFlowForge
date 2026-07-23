@@ -1,6 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
-import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor } from '../chatStream'
+import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor, splitThinkLines } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
@@ -176,6 +176,17 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       // two start sources (empty-input content_block_start, then the full assistant message) — first
       // is 'start', later enrichment is 'update'. A running sub-agent counts as activity (not "no reply").
       const subagentIds = new Set<string>()
+      // Reasoning arrives as word-level `thinking_delta` fragments (--include-partial-messages), so
+      // buffer them and only emit whole lines — otherwise the think panel shows one word per line
+      // (chatService joins each delta with '\n'). Discrete steps (assistant text / tool labels) flush
+      // the buffer first so any trailing reasoning line stays intact on its own line. Mirrors qoder.ts.
+      let thinkBuf = ''
+      const pushThink = (t: string) => {
+        const { lines, rest } = splitThinkLines(thinkBuf + t)
+        for (const l of lines) cb.onThinkDelta(l)
+        thinkBuf = rest
+      }
+      const flushThink = () => { const t = thinkBuf.trim(); thinkBuf = ''; if (t) cb.onThinkDelta(t) }
       const onSubagent = (a: { id: string; subagentType?: string; description?: string; prompt?: string }) => {
         sawTool = true
         const phase = subagentIds.has(a.id) ? 'update' as const : 'start' as const
@@ -216,9 +227,10 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         }
         for (const action of parseChatStreamActions(obj)) {
           if (action.kind === 'session') cb.onSession(action.id)
-          else if (action.kind === 'assistant') { sawAssistant = true; cb.onAssistantDelta(action.text) }
-          else if (action.kind === 'think') cb.onThinkDelta(action.text)
+          else if (action.kind === 'assistant') { flushThink(); sawAssistant = true; cb.onAssistantDelta(action.text) }
+          else if (action.kind === 'think') pushThink(action.text)
           else if (action.kind === 'tool' || action.kind === 'file') {
+            flushThink()
             sawTool = true
             // A correlatable tool call → the "执行" block (title now, output paired by id on its result).
             // Without an id (can't pair a result) fall back to the old think-step so it's still visible.
@@ -259,6 +271,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const done = child.then((res) => {
         wd.clear()
         processLine(buf); buf = ''
+        flushThink()   // surface any trailing reasoning line that never got a closing newline
         if (errBuf.trim()) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
         const elapsed = Math.round((Date.now() - start) / 1000)
         // No assistant text at all → surface a diagnostic instead of a silent blank bubble (and leave

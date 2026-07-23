@@ -247,6 +247,34 @@ process.exit(0)
     expect(thinkText).not.toContain('调用 Bash')
   })
 
+  it('coalesces word-granular thinking_delta into whole lines (no one-word-per-line)', async () => {
+    const chatCli = join(dir, 'chat-think.js')
+    // Real claude with --include-partial-messages streams reasoning as word-level thinking_delta.
+    // Emit two reasoning lines split across many tiny deltas; the second line has no trailing newline
+    // (flushed at stream end). Each delta must NOT become its own onThinkDelta call.
+    writeFileSync(chatCli, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+const think = (t) => out({ type: 'stream_event', session_id: 'sess-tk', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: t } } })
+out({ type: 'system', subtype: 'init', session_id: 'sess-tk' })
+;['先', '读', '一下', '配置', '。', '\\n', '再', '看', 'provider'].forEach(think)
+out({ type: 'assistant', session_id: 'sess-tk', message: { role: 'assistant', content: [ { type: 'text', text: '好的' } ] } })
+out({ type: 'result', subtype: 'success', result: '好的', session_id: 'sess-tk' })
+process.exit(0)
+`)
+    chmodSync(chatCli, 0o755)
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [chatCli], defaultModels: [] })
+    const thinkLines: string[] = []
+    const s = provider.chat!(
+      { id: 'a1', prompt: '看看项目', model: 'opus-4.8', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: (t) => thinkLines.push(t), onDone: () => {}, onError: () => {} },
+      process.env
+    )
+    await s.done
+    // Whole lines, not one word per call: the pre-newline words join into one line, the trailing tail
+    // flushes as another — 9 word-deltas collapse to 2 think emissions.
+    expect(thinkLines).toEqual(['先读一下配置。', '再看provider'])
+  })
+
   it('attributes a sub-agent\'s own tool call (parent_tool_use_id) to the sub-agent as a step, not the main 执行 block', async () => {
     const chatCli = join(dir, 'chat-sa.js')
     writeFileSync(chatCli, `#!/usr/bin/env node
