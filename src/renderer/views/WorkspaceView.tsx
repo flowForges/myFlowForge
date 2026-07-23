@@ -1334,6 +1334,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               setPendingSupplement(null)
               return
             }
+            // The agent is waiting on a forge_ask (an inline 选项 card). That turn is busy, so a normal
+            // send would just enqueue BEHIND the very turn blocked waiting for this answer — a deadlock
+            // the user could only escape by clicking the card. If a question is pending for this session,
+            // route the typed text to it as the custom answer (same path as the card's 自定义 input).
+            const pendingAsk = chat.asks[chat.asks.length - 1]
+            if (pendingAsk && m.text.trim()) {
+              chat.resolveAsk({ id: pendingAsk.id, decision: 'allow', value: m.text.trim() })
+              return
+            }
             chat.send(m)
           }}
           onPaste={wsPath ? async (f) => window.forge.savePaste({ workspacePath: wsPath, name: f.name, dataBase64: f.dataBase64 }) : undefined}

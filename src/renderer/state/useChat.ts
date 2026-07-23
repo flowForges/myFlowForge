@@ -61,6 +61,17 @@ export function useChat(
     if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); return }
     setMessages([]); setStreamingIds(new Set()); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null)
     let live = true
+    // The chat queue lives on the main side and its event only fires when the queue CHANGES. Switching
+    // away and back resets this view to empty, so pull the current snapshot to re-seed THIS session's
+    // lane — otherwise a message queued behind a running turn silently disappears on switch-back.
+    void api.current.chatQueueState?.({ workspacePath })?.then((e) => {
+      if (!live || e.workspacePath !== workspacePath) return
+      const sid = sessionId
+      setBusy(e.runningSessionIds.includes(sid))
+      setQueue(e.queue.filter(q => q.sessionId === sid).map(q => ({ id: q.id, text: q.text, source: q.source })))
+      const mine = e.runningTurns.find(r => r.sessionId === sid)
+      setRunning(mine ? { id: mine.id, text: mine.text } : null)
+    })
     void api.current.chatHistory(workspacePath, sessionId).then((h: ChatMessage[]) => {
       if (!live) return
       setMessages(h)

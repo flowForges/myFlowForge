@@ -47,6 +47,7 @@ export const CH = {
   chatEvent: 'chat:event',
   chatResolve: 'chat:resolve',
   chatQueueEvent: 'chat:queue-event',
+  chatQueueState: 'chat:queue-state',
   chatCancelQueued: 'chat:cancel-queued',
   chatClearQueue: 'chat:clear-queue',
   chatStop: 'chat:stop',

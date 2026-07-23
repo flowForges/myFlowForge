@@ -59,6 +59,7 @@ const api = {
   // #13: answer a setup hook's confirm/input card.
   resolveSetupInteraction: (id: string, answer: { decision?: 'allow' | 'deny'; value?: string }) => ipcRenderer.invoke(CH.workspaceSetupResolve, { id, answer }),
   sendChat: (payload: unknown, source?: string) => ipcRenderer.invoke(CH.chatSend, payload, source),
+  chatQueueState: (a: { workspacePath: string }): Promise<ChatQueueEvent> => ipcRenderer.invoke(CH.chatQueueState, a),
   chatCancelQueued: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.chatCancelQueued, a),
   chatClearQueue: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.chatClearQueue, a),
   chatStop: (a: { workspacePath: string; sessionId?: string }) => ipcRenderer.invoke(CH.chatStop, a),

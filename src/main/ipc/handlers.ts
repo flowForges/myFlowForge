@@ -573,6 +573,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
     chatQueue.enqueue(payload, source ?? '你')
   })
+  ipcMain.handle(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
   ipcMain.handle(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
   ipcMain.handle(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
   // 「停止」只停当前【会话】的轮次 + 它派发的后台 delegate 子代理 + 它挂起的门(confirm/ask),不动同工作区里
