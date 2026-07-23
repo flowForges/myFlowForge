@@ -579,14 +579,25 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
         </div>
         <div className="set-row" style={{ marginTop: '14px' }}>
           <div className="info">
-            <div className="t">跟随焦点屏幕</div>
-            <div className="d">多显示器时,点亮(聚焦)哪个屏幕上的窗口,宠物就跳到那个屏幕的相同相对位置,并停在那儿</div>
+            <div className="t">跟随焦点屏幕 / 看向光标</div>
+            <div className="d">开:多显示器时宠物跳到你聚焦的那块屏幕,并转头看向光标。关:宠物无视光标——省掉每秒约 7 次的光标轮询(更省电)</div>
           </div>
           <button
             className={`toggle${pet.followCursor ? ' on' : ''}`}
             data-pet-follow
-            aria-label="跟随焦点屏幕"
+            aria-label="跟随焦点屏幕 / 看向光标"
             onClick={() => onChange({ followCursor: !pet.followCursor })}
+          />
+        </div>
+        <div className="set-row" style={{ marginTop: '14px' }}>
+          <div className="info">
+            <div className="t">空闲动画</div>
+            <div className="d">开:宠物空闲时持续呼吸/换帧(活泼)。关:空闲时定格不动,停掉每秒约 5.5 次的重绘——最省电的一项</div>
+          </div>
+          <button
+            className={`toggle${pet.idleAnimation ? ' on' : ''}`}
+            aria-label="空闲动画"
+            onClick={() => onChange({ idleAnimation: !pet.idleAnimation })}
           />
         </div>
       </div>

@@ -165,9 +165,14 @@ export const PetSchema = z.object({
   // monitors). When set, overrides corner docking so the pet stays wherever it was dragged — including
   // on a secondary display; absent = legacy corner dock on the primary display.
   free: z.object({ x: z.number(), y: z.number() }).optional(),
-  // Follow-cursor: when on, the pet hops to whichever display the cursor is on, at the same relative
-  // position — handy across multiple monitors/desktops. .default keeps old on-disk configs parsing.
+  // Follow-cursor: when on, the pet hops to whichever display the cursor is on AND its eyes track the
+  // cursor (a 7Hz gaze poll). Off = the pet ignores the cursor entirely (no display-hop, no gaze poll),
+  // which removes a continuous idle wakeup. .default keeps old on-disk configs parsing.
   followCursor: z.boolean().default(true),
+  // Idle animation: when on (default), the idle pet keeps breathing (sprite frame loop + float bob).
+  // Off = the idle pet holds a single still frame, so it stops re-rendering ~5.5×/s when nothing is
+  // happening — the biggest idle-power saver for users who want a calmer/greener pet.
+  idleAnimation: z.boolean().default(true),
   // Sprite size multiplier (drag the hover resize handle). Out-of-range/junk values fall back to 1
   // via .catch so a hand-edited settings.json never fails the WHOLE settings parse.
   scale: z.number().min(PET_SCALE_MIN).max(PET_SCALE_MAX).catch(1).default(1),
@@ -183,7 +188,7 @@ export const PetSchema = z.object({
 })
 export type Pet = z.infer<typeof PetSchema>
 const defaultSkills = (): Record<string, boolean> => ({ 'code-review': true, 'test-driven': true, 'deep-research': false, 'systematic-debugging': true })
-const defaultPet = (): Pet => ({ enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: defaultStates() })
+const defaultPet = (): Pet => ({ enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: true, idleAnimation: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: defaultStates() })
 export const HeartbeatSchema = z.object({
   stallMs: z.number().int().positive().default(90_000),
   killGraceMs: z.number().int().positive().default(60_000),
@@ -266,6 +271,10 @@ export const SettingsSchema = z.object({
   // Off by default — real stalls are still written to the debug log regardless; this only controls
   // whether they pop as user-facing notifications (opt-in from the 调试 pane).
   perfStallToast: z.boolean().catch(false).default(false),
+  // Developer diagnostic: run the event-loop stall monitor (a 50ms sampling interval). OFF by default —
+  // that sampler wakes the main event loop 20×/s continuously, which alone prevents CPU idle / App Nap,
+  // so it must not run in a normal (packaged) session. Turn on only when diagnosing 卡顿; see index.ts.
+  perfDiagnostics: z.boolean().catch(false).default(false),
   // License-gated extra content (see shared/nsfw.ts). nsfwUnlocked flips true after a valid activation
   // code; nsfwCode keeps the validated code locally to authenticate catalog + image-byte fetches.
   nsfwUnlocked: z.boolean().catch(false).default(false),
@@ -294,6 +303,7 @@ export const defaultSettings = (): Settings => ({
   defaultOpenerId: '',
   keybindings: { overrides: {} },
   perfStallToast: false,
+  perfDiagnostics: false,
   nsfwUnlocked: false,
   nsfwCode: '',
   nsfwInstalled: {},

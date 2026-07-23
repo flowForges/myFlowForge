@@ -20,9 +20,11 @@ export function filterByScope(entries: AppLogEntry[], scope: string | null): App
 interface DebugLogPaneProps {
   perfStallToast?: boolean
   onTogglePerfToast?: (v: boolean) => void
+  perfDiagnostics?: boolean
+  onTogglePerfDiagnostics?: (v: boolean) => void
 }
 
-export function DebugLogPane({ perfStallToast = false, onTogglePerfToast }: DebugLogPaneProps = {}) {
+export function DebugLogPane({ perfStallToast = false, onTogglePerfToast, perfDiagnostics = false, onTogglePerfDiagnostics }: DebugLogPaneProps = {}) {
   const [entries, setEntries] = useState<AppLogEntry[]>([])
   const [level, setLevel] = useState<LogLevel | 'all'>('all')
   const [scopeFilter, setScopeFilter] = useState<string | null>(null)
@@ -72,10 +74,19 @@ export function DebugLogPane({ perfStallToast = false, onTogglePerfToast }: Debu
           <label className="dl-auto" style={{ marginTop: 6 }}>
             <input
               type="checkbox"
+              checked={perfDiagnostics}
+              onChange={e => onTogglePerfDiagnostics?.(e.target.checked)}
+            />
+            启用主进程卡顿监控(每 50ms 采样；默认关闭以省电，会持续唤醒事件循环。重启后生效)
+          </label>
+          <label className="dl-auto" style={{ marginTop: 6 }}>
+            <input
+              type="checkbox"
               checked={perfStallToast}
+              disabled={!perfDiagnostics}
               onChange={e => onTogglePerfToast?.(e.target.checked)}
             />
-            在通知里提示主进程卡顿(开发者诊断，默认关闭；卡顿始终记录到上方日志)
+            在通知里提示主进程卡顿(需先开启上面的监控；卡顿始终记录到上方日志)
           </label>
         </div>
         <div className="dl-actions">

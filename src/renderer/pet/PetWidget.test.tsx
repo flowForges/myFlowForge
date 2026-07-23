@@ -7,6 +7,11 @@ describe('PetWidget', () => {
     const { container } = render(<PetWidget skin="sprite" anim="spin-halo" accent="warn" />)
     expect(container.querySelector('.pet.pet-anim-spin-halo.pet-accent-warn')).not.toBeNull()
   })
+  it('frozen holds still: swaps the float bob for pet-anim-none (idle-still / hidden power saver)', () => {
+    const { container } = render(<PetWidget skin="sprite" anim="float" accent="none" frozen />)
+    expect(container.querySelector('.pet.pet-anim-float')).toBeNull()
+    expect(container.querySelector('.pet.pet-anim-none')).not.toBeNull()
+  })
   it('reflects the skin via data-skin and renders an svg', () => {
     const { container } = render(<PetWidget skin="bot" anim="float" accent="none" />)
     const root = container.querySelector('.pet')!

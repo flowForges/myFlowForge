@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { PetPane } from './PetPane'
 import type { Pet } from '@shared/types'
 
-const pet: Pet = { enabled: true, skin: 'sprite', customPets: [], corner: 'right', pos: { bottom: 24 }, followCursor: false, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'full', states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } } }
+const pet: Pet = { enabled: true, skin: 'sprite', customPets: [], corner: 'right', pos: { bottom: 24 }, followCursor: false, idleAnimation: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'full', states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } } }
 
 describe('PetPane', () => {
   it('reflects pet config and reports changes', () => {

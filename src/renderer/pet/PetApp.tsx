@@ -108,10 +108,20 @@ export function PetApp() {
   const sessionsForTarget = tgtRaw.ws?.sessions ?? []
   // View state for pet popup: 'main' = normal view, 'pick' = session picker drawer
   const [petView, setPetView] = useState<'main' | 'pick'>('main')
+  // 空闲动画开关(设置·宠物):关 → 空闲时定格单帧、不再每秒重绘 ~5.5 次(省电)。默认开(保持活泼)。
+  const [idleAnim, setIdleAnim] = useState(true)
+  // 宠物窗口不可见时(如被隐藏)暂停动画,让主进程能真正空闲。visibilitychange 覆盖 petWin.hide()。
+  const [docHidden, setDocHidden] = useState(() => typeof document !== 'undefined' && document.hidden)
+  useEffect(() => {
+    const onVis = () => setDocHidden(document.hidden)
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [])
 
   const apply = (s: any) => {
     applyTheme({ ...DEFAULT_APPEARANCE, ...(s?.appearance ?? {}) })
     setSkin(s?.pet?.skin ?? 'sprite'); setCorner(s?.pet?.corner ?? 'right')
+    setIdleAnim(s?.pet?.idleAnimation ?? true)
     setInteractionMode(s?.pet?.interactionMode ?? 'simple')
     setNotify(s?.pet?.notify ?? DEFAULT_NOTIFY); setStates(s?.pet?.states ?? DEFAULT_STATES)
     setCustomImages(s?.pet?.customImages ?? {})
@@ -376,6 +386,7 @@ export function PetApp() {
         <PetWidget skin={skin} anim={cfg.anim} accent={cfg.accent} state={state}
           customImages={resolvedCustom.images} customEmoji={resolvedCustom.emoji}
           atlas={resolvedCustom.atlas} action={petAction}
+          frozen={docHidden || (!idleAnim && petAction === 'idle')}
           lookDeg={petAction === 'idle' ? lookDeg : undefined} />
         {/* Simple mode surfaces status through the bubble, not a count badge. */}
         <span className={`pet-badge${!simple && data.badge ? ' show' : ''}${data.badge?.warn ? ' warn' : ''}`}>{simple ? '' : (data.badge?.count ?? '')}</span>

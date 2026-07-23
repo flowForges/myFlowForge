@@ -32,6 +32,9 @@ export class EventLoopMonitor {
         try { onStall(Math.round(drift), activeSpans()) } catch { /* never throw */ }
       }
     }, SAMPLE_MS)
+    // Don't let this diagnostic sampler keep the process alive on quit (a real timer has .unref();
+    // the test-injected fake may not).
+    ;(this.handle as { unref?: () => void })?.unref?.()
   }
 
   stop(): void {
