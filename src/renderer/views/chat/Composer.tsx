@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
+import { applyListContinuation } from './listContinuation'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -205,6 +206,17 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     setOpenMenu(null)
   }
 
+  // After a programmatic edit (list continuation) sets `text`, restore the caret to the intended spot —
+  // a controlled textarea otherwise jumps the caret to the end on re-render.
+  const pendingCursor = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    if (pendingCursor.current != null && taRef.current) {
+      const c = pendingCursor.current
+      taRef.current.selectionStart = taRef.current.selectionEnd = c
+      pendingCursor.current = null
+    }
+  }, [text])
+
   function autosize() {
     const ta = taRef.current
     if (!ta) return
@@ -367,8 +379,22 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             // Never send mid-IME-composition (Chinese/Japanese/etc.) — that Enter just
             // commits the candidate. Sending here would fire half-typed pinyin.
             if (e.nativeEvent.isComposing) return
-            // Shift+Enter inserts a newline; plain Enter (or ⌘/Ctrl+Enter) sends.
+            // Shift+Enter inserts a newline (native).
             if (e.shiftKey) return
+            // Smart list continuation: on a list line, plain Enter continues the list (1.→2., -→-,
+            // - [x]→- [ ]) or exits an empty item — instead of sending. ⌘/Ctrl+Enter always sends, so
+            // it's the escape hatch to send a message that ends in a list.
+            if (!e.metaKey && !e.ctrlKey) {
+              const ta = e.currentTarget
+              const edit = applyListContinuation(ta.value, ta.selectionStart, ta.selectionEnd)
+              if (edit) {
+                e.preventDefault()
+                pendingCursor.current = edit.cursor
+                setText(edit.value)
+                autosize()
+                return
+              }
+            }
             e.preventDefault()
             send()
           }}
