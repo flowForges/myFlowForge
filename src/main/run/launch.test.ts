@@ -305,59 +305,62 @@ describe('createRunTempBranches (P4-2)', () => {
     expect(calls).toEqual(['/ws/pay/api'])
   })
 
-  describe('clean-tree precondition (Finding 3 — reject dirty-tree run start)', () => {
-    it('checks EVERY project BEFORE creating any branch, and creates none when one is dirty', async () => {
-      const cleanChecks: string[] = []
+  describe('dirty-tree handling — STASH instead of reject (user decision)', () => {
+    it('stashes a dirty project (not throw) and still creates its branch off the now-clean tree', async () => {
+      const stashCalls: string[] = []
       const createCalls: string[] = []
-      const fakeCheckClean = async (cwd: string) => { cleanChecks.push(cwd); return cwd !== '/ws/pay/web' }
+      const fakeCheckClean = async (cwd: string) => cwd !== '/ws/pay/web'   // web is dirty
+      const fakeStash = async (cwd: string) => { stashCalls.push(cwd); return true }
       const fakeCreate = async (cwd: string) => { createCalls.push(cwd); return 'forge/run-r1' }
-      await expect(createRunTempBranches(
+      const res = await createRunTempBranches(
         ws,
         [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
-        'r1',
-        fakeCreate,
-        undefined,
-        fakeCheckClean,
-      )).rejects.toThrow(/web/)
-      expect(cleanChecks).toEqual(['/ws/pay/api', '/ws/pay/web']) // every project checked...
-      expect(createCalls).toEqual([]) // ...and NO branch created anywhere, not even for the clean one
-    })
-
-    it('names ALL dirty projects in the error when more than one is dirty', async () => {
-      const fakeCheckClean = async () => false
-      await expect(createRunTempBranches(
-        ws,
-        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
-        'r1',
-        async () => 'forge/run-r1',
-        undefined,
-        fakeCheckClean,
-      )).rejects.toThrow(/api.*web|web.*api/s)
-    })
-
-    it('proceeds to create branches when every project is clean', async () => {
-      const createCalls: string[] = []
-      const fakeCreate = async (cwd: string) => { createCalls.push(cwd); return 'forge/run-r1' }
-      await createRunTempBranches(
-        ws,
-        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
-        'r1',
-        fakeCreate,
-        undefined,
-        async () => true,
+        'r1', fakeCreate, undefined, fakeCheckClean, fakeStash,
       )
-      expect(createCalls).toEqual(['/ws/pay/api', '/ws/pay/web'])
+      expect(stashCalls).toEqual(['/ws/pay/web'])                   // only the dirty one stashed
+      expect(createCalls).toEqual(['/ws/pay/api', '/ws/pay/web'])   // both branches still created
+      expect(res.stashed).toEqual(['web'])
     })
 
-    it('defaults to the real tempBranch.ts isCleanTree when no checkClean is injected', async () => {
-      // No checkClean passed — createRunTempBranches must fall back to the real isCleanTree, which
-      // runs real `git status --porcelain` and throws (not silently pass) against a nonexistent
-      // directory, proving the default isn't a silent no-op.
+    it('stashes every dirty project and reports them all', async () => {
+      const res = await createRunTempBranches(
+        ws,
+        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
+        'r1', async () => 'forge/run-r1', undefined, async () => false, async () => true,
+      )
+      expect([...res.stashed].sort()).toEqual(['api', 'web'])
+    })
+
+    it('stashes nothing when every project is clean', async () => {
+      const stashCalls: string[] = []
+      const res = await createRunTempBranches(
+        ws,
+        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
+        'r1', async () => 'forge/run-r1', undefined, async () => true, async (cwd: string) => { stashCalls.push(cwd); return true },
+      )
+      expect(stashCalls).toEqual([])
+      expect(res.stashed).toEqual([])
+    })
+
+    it('restores (pops) stashes it made when the run can\'t start (createBranch fails)', async () => {
+      const popCalls: string[] = []
+      await expect(createRunTempBranches(
+        ws,
+        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
+        'r1',
+        async (cwd: string) => { if (cwd === '/ws/pay/web') throw new Error('boom'); return 'forge/run-r1' },
+        async () => {}, async () => false, async () => true,
+        async (cwd: string) => { popCalls.push(cwd); return 'popped' as const },
+      )).rejects.toThrow(/web/)
+      // both projects were dirty → both stashed → both restored when the run aborts before starting
+      expect([...popCalls].sort()).toEqual(['/ws/pay/api', '/ws/pay/web'])
+    })
+
+    it('defaults to the real tempBranch.ts isCleanTree (errors on a bogus repo path, not a silent pass)', async () => {
       await expect(createRunTempBranches(
         ws,
         [{ name: 'api', cwd: '/definitely/not/a/real/git/repo/path-xyz' }],
-        'r1',
-        async () => 'forge/run-r1',
+        'r1', async () => 'forge/run-r1',
       )).rejects.toThrow()
     })
   })

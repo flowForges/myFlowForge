@@ -44,8 +44,13 @@ export function registerRun2(deps: {
   // createRunTempBranches' clean-tree precondition. Production omits it — createRunTempBranches falls
   // back to the real tempBranch.ts isCleanTree.
   checkClean?: (cwd: string) => Promise<boolean>
+  // Dirty-tree handling: injectable so tests can stub real git out of createRunTempBranches' stash /
+  // restore. Production omits both — createRunTempBranches falls back to the real tempBranch.ts
+  // stashRun / popRunStash (a dirty tree is stashed at start and the controller pops it at finalize).
+  stashRun?: (cwd: string, runId: string) => Promise<boolean>
+  popRunStash?: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'>
 }) {
-  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch, mergeTempBranch, parkTempBranch, checkClean } = deps
+  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch, mergeTempBranch, parkTempBranch, checkClean, stashRun, popRunStash } = deps
   onInvoke(CH.run2Start, (_e, p: { workspacePath: string; runId: string; stages: StageSpec[]; projects: DevelopProject[] }) =>
     manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan: planFromStages(p.runId, p.stages), projects: p.projects }))
   onInvoke(CH.run2ResolveGate, (_e, p: { workspacePath: string; eventId: string; decision: GateDecision }) => manager.resolveGate(p.workspacePath, p.eventId, p.decision))
@@ -126,7 +131,7 @@ export function registerRun2(deps: {
     // target branch BEFORE the controller starts running any lane — so all code writes land on
     // `plan.tempBranch`, never directly on the target. Throws (aborting the start, run never launches)
     // on any project's checkout failure — see createRunTempBranches for the rollback/error contract.
-    await createRunTempBranches(ws, projects, plan.runId, createTempBranch, discardTempBranch, checkClean)
+    await createRunTempBranches(ws, projects, plan.runId, createTempBranch, discardTempBranch, checkClean, stashRun, popRunStash)
     // P4-3: same per-project target-branch lookup createRunTempBranches just used to check each
     // project out — threaded through to the controller so its run-completion finalize gate knows
     // what to merge/discard back onto (see RunControllerDeps.projectTargets doc in controller.ts).

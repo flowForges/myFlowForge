@@ -15,7 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git } from '../git/gitRunner'
-import { createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, tempBranchName } from './tempBranch'
+import { createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, tempBranchName, stashRun, popRunStash } from './tempBranch'
 import { createRunTempBranches } from './launch'
 import type { Workspace } from '../config/schema'
 
@@ -177,7 +177,7 @@ describe.skipIf(!gitAvailable)('tempBranch (real git integration)', () => {
   }, 20000)
 })
 
-describe.skipIf(!gitAvailable)('createRunTempBranches dirty-tree rejection (Finding 3, real git)', () => {
+describe.skipIf(!gitAvailable)('createRunTempBranches dirty-tree stash + restore (real git)', () => {
   let repoA: string
   let repoB: string
   beforeEach(async () => {
@@ -201,35 +201,38 @@ describe.skipIf(!gitAvailable)('createRunTempBranches dirty-tree rejection (Find
     } as any
   }
 
-  it('a pre-existing UNTRACKED file in one project rejects the whole run start — no temp branch created in EITHER project', async () => {
+  it('a pre-existing UNTRACKED file is STASHED (not rejected): the run proceeds and every project gets its temp branch', async () => {
     writeFileSync(join(repoB, 'unrelated-untracked.txt'), 'not part of this run\n')
 
-    await expect(createRunTempBranches(
+    const res = await createRunTempBranches(
       fixtureWs(),
       [{ name: 'api', cwd: repoA }, { name: 'web', cwd: repoB }],
       'run-dirty',
-    )).rejects.toThrow(/web/)
+    )
 
-    expect(await branchExists(repoA, tempBranchName('run-dirty'))).toBe(false)
-    expect(await branchExists(repoB, tempBranchName('run-dirty'))).toBe(false)
-    expect(await currentBranch(repoA)).toBe('main')
-    expect(await currentBranch(repoB)).toBe('main')
-    // The pre-existing untracked file must still be sitting there, untouched.
-    expect(existsSync(join(repoB, 'unrelated-untracked.txt'))).toBe(true)
+    expect(res.stashed).toEqual(['web'])                                    // the dirty project was stashed
+    expect(await branchExists(repoA, tempBranchName('run-dirty'))).toBe(true)
+    expect(await branchExists(repoB, tempBranchName('run-dirty'))).toBe(true)
+    expect(await currentBranch(repoB)).toBe(tempBranchName('run-dirty'))
+    // During the run the user's untracked file is stashed away (clean tree); it's restored at finalize.
+    expect(existsSync(join(repoB, 'unrelated-untracked.txt'))).toBe(false)
+    expect(await porcelainStatus(repoB)).toBe('')
   }, 20000)
 
-  it('a pre-existing TRACKED-FILE edit in one project also rejects — no half-state, no branch anywhere', async () => {
+  it('a pre-existing TRACKED-FILE edit is STASHED too: the run proceeds, the edit set aside (restored at finalize)', async () => {
     writeFileSync(join(repoA, 'existing.txt'), 'hello\nunrelated pending edit\n')
 
-    await expect(createRunTempBranches(
+    const res = await createRunTempBranches(
       fixtureWs(),
       [{ name: 'api', cwd: repoA }, { name: 'web', cwd: repoB }],
       'run-dirty2',
-    )).rejects.toThrow(/api/)
+    )
 
-    expect(await branchExists(repoA, tempBranchName('run-dirty2'))).toBe(false)
-    expect(await branchExists(repoB, tempBranchName('run-dirty2'))).toBe(false)
-    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).toContain('unrelated pending edit')
+    expect(res.stashed).toEqual(['api'])
+    expect(await branchExists(repoA, tempBranchName('run-dirty2'))).toBe(true)
+    // The edit is stashed → the temp branch's tree is clean; it comes back at finalize (see cycle tests).
+    expect(await porcelainStatus(repoA)).toBe('')
+    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).not.toContain('unrelated pending edit')
   }, 20000)
 
   it('when every project IS clean, createRunTempBranches proceeds and checks out the real temp branch in each', async () => {
@@ -240,5 +243,59 @@ describe.skipIf(!gitAvailable)('createRunTempBranches dirty-tree rejection (Find
     )
     expect(await currentBranch(repoA)).toBe(tempBranchName('run-clean'))
     expect(await currentBranch(repoB)).toBe(tempBranchName('run-clean'))
+  }, 20000)
+
+  // ---- Dirty-tree stash/restore (user decision): start a run with uncommitted changes safely ----
+
+  it('stashRun stashes tracked + untracked changes (tree clean after); popRunStash restores them', async () => {
+    writeFileSync(join(repoA, 'existing.txt'), 'hello\nuser edit\n')   // tracked edit
+    writeFileSync(join(repoA, 'user-new.txt'), 'user untracked\n')     // untracked new file
+    expect(await porcelainStatus(repoA)).not.toBe('')
+
+    expect(await stashRun(repoA, 'run-s')).toBe(true)
+    expect(await porcelainStatus(repoA)).toBe('')                      // clean → temp branch can be created
+    expect(existsSync(join(repoA, 'user-new.txt'))).toBe(false)        // untracked change is stashed away too
+
+    expect(await popRunStash(repoA, 'run-s')).toBe('popped')
+    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).toContain('user edit')
+    expect(existsSync(join(repoA, 'user-new.txt'))).toBe(true)
+    expect(await stashRun(repoA, 'noop')).toBe(true)                   // still dirty → nothing was lost
+  }, 20000)
+
+  it('MERGE cycle: a dirty tree is stashed, the run merges its own work, and the user\'s uncommitted changes come back', async () => {
+    writeFileSync(join(repoA, 'existing.txt'), 'hello\nuser edit\n')
+    writeFileSync(join(repoA, 'user-new.txt'), 'user untracked\n')
+
+    await stashRun(repoA, 'run-m')                                     // stash the user's work
+    await createTempBranch(repoA, 'main', 'run-m')                     // temp branch off a CLEAN tree
+    writeFileSync(join(repoA, 'agent.txt'), 'agent work\n')            // the run writes its own file
+    await mergeTempBranch(repoA, 'main', 'run-m')                      // merge the run into main
+    expect(await popRunStash(repoA, 'run-m')).toBe('popped')           // restore the user's work
+
+    expect(await currentBranch(repoA)).toBe('main')
+    // The run's work is committed & merged onto main …
+    expect(await git(['log', '--oneline'], { cwd: repoA })).toContain('run run-m')
+    expect(existsSync(join(repoA, 'agent.txt'))).toBe(true)
+    // … and the user's uncommitted changes are back, still uncommitted, NOT swallowed by the run.
+    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).toContain('user edit')
+    expect(existsSync(join(repoA, 'user-new.txt'))).toBe(true)
+    expect(await porcelainStatus(repoA)).not.toBe('')                 // user's edits show as uncommitted
+  }, 20000)
+
+  it('DISCARD cycle: the run\'s work is thrown away by clean -fd but the user\'s stashed changes survive (the whole point)', async () => {
+    writeFileSync(join(repoA, 'existing.txt'), 'hello\nuser edit\n')
+    writeFileSync(join(repoA, 'user-new.txt'), 'user untracked\n')
+
+    await stashRun(repoA, 'run-d')
+    await createTempBranch(repoA, 'main', 'run-d')
+    writeFileSync(join(repoA, 'agent.txt'), 'agent work\n')            // run's untracked file
+    await discardTempBranch(repoA, 'main', 'run-d')                   // checkout -f + clean -fd wipes the run
+    expect(await popRunStash(repoA, 'run-d')).toBe('popped')
+
+    expect(await currentBranch(repoA)).toBe('main')
+    expect(existsSync(join(repoA, 'agent.txt'))).toBe(false)          // run's work discarded …
+    // … but the user's uncommitted work is intact (it was stashed BEFORE clean -fd ran).
+    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).toContain('user edit')
+    expect(existsSync(join(repoA, 'user-new.txt'))).toBe(true)
   }, 20000)
 })

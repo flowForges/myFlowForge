@@ -26,6 +26,48 @@ export function tempBranchName(runId: string): string {
   return `forge/run-${runId}`
 }
 
+const stashLabel = (runId: string) => `forge-prerun-${runId}`
+
+/**
+ * Dirty-tree support (user decision): a workflow may be started while the working tree has uncommitted
+ * changes. Rather than hard-blocking, we STASH the user's changes (tracked + untracked) so the run's
+ * temp branch is created off a CLEAN tree, then restore them at finalize (popRunStash, called after
+ * merge/discard/park). The stash is labeled with the runId so popRunStash finds exactly THIS run's
+ * stash even if the user has other stashes. Returns true iff something was stashed (clean tree → false).
+ */
+export async function stashRun(cwd: string, runId: string, run: GitRunner = defaultGitRunner): Promise<boolean> {
+  const status = await run(cwd, ['status', '--porcelain'])
+  if (status.trim().length === 0) return false
+  try {
+    await run(cwd, ['stash', 'push', '--include-untracked', '-m', stashLabel(runId)])
+  } catch (err) {
+    throw readableGitError(`Failed to stash uncommitted changes before run "${runId}"`, err)
+  }
+  return true
+}
+
+/**
+ * Restore this run's pre-run stash (see stashRun) onto the CURRENT branch — called after the run's temp
+ * branch has been merged/discarded/parked (target is checked back out and clean). Finds the stash by its
+ * runId LABEL (not blindly stash@{0}, which another stash could shadow); a no-op when the run started
+ * clean (no stash). BEST-EFFORT by contract — the caller must NOT let a pop failure turn a successful
+ * finalize into an error: on a pop CONFLICT (the run touched the same files) git keeps the stash entry +
+ * writes markers, so the user's changes are never lost — just left for them to resolve.
+ */
+export async function popRunStash(cwd: string, runId: string, run: GitRunner = defaultGitRunner): Promise<'popped' | 'none' | 'conflict'> {
+  let list = ''
+  try { list = await run(cwd, ['stash', 'list']) } catch { return 'none' }
+  const line = list.split('\n').find((l) => l.includes(stashLabel(runId)))
+  if (!line) return 'none'
+  const ref = line.slice(0, line.indexOf(':'))   // "stash@{N}"
+  try {
+    await run(cwd, ['stash', 'pop', ref])
+    return 'popped'
+  } catch {
+    return 'conflict'
+  }
+}
+
 function readableGitError(action: string, err: unknown): Error {
   const detail = err instanceof Error ? err.message : String(err)
   return new Error(`${action}: ${detail}`)

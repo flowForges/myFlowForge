@@ -17,7 +17,7 @@ import { planFromStages } from './planFromStages'
 import { collectRunHooks } from './hooks'
 import type { RunPlan } from './machine'
 import type { StageSpec, DevelopProject } from './runTypes'
-import { createTempBranch, discardTempBranch, isCleanTree } from './tempBranch'
+import { createTempBranch, discardTempBranch, isCleanTree, stashRun, popRunStash } from './tempBranch'
 
 // P5-UI Task 1: short stage blurb for the config-preview overlay, by builtin key. Custom/unknown keys
 // fall back to '' (the overlay just omits the line rather than showing anything misleading).
@@ -276,6 +276,9 @@ export function buildLaunchProjects(cfg: LaunchStartConfig, ws: Workspace): Deve
 // already created before re-throwing a single readable error naming which project failed and why (plus
 // whether rollback of the earlier ones succeeded). `createBranch`/`rollback`/`checkClean` are injected
 // (default to the real tempBranch.ts functions) purely so callers can stub real git out in tests.
+// Returns the names of projects whose dirty working tree was stashed at start (for a user-facing
+// notice). The stash itself is keyed by runId and restored by the controller's finalize (popRunStash)
+// after merge/discard/park — see stashRun/popRunStash in tempBranch.ts.
 export async function createRunTempBranches(
   ws: Workspace,
   projects: { name: string; cwd: string }[],
@@ -283,19 +286,27 @@ export async function createRunTempBranches(
   createBranch: (cwd: string, base: string, runId: string) => Promise<string> = createTempBranch,
   rollback: (cwd: string, target: string, runId: string) => Promise<void> = discardTempBranch,
   checkClean: (cwd: string) => Promise<boolean> = isCleanTree,
-): Promise<void> {
-  const dirty: string[] = []
+  stash: (cwd: string, runId: string) => Promise<boolean> = stashRun,
+  popStash: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'> = popRunStash,
+): Promise<{ stashed: string[] }> {
+  // Dirty tree (user decision): instead of hard-blocking, STASH the uncommitted changes so the temp
+  // branch is created off a clean tree. The controller pops the stash back after the run finalizes, so
+  // the user's changes are never lost and end up back on their branch. (Was: throw "请先提交或清理".)
+  const stashed: { name: string; cwd: string }[] = []
   for (const project of projects) {
-    if (!(await checkClean(project.cwd))) dirty.push(project.name)
+    if (!(await checkClean(project.cwd))) {
+      if (await stash(project.cwd, runId)) stashed.push({ name: project.name, cwd: project.cwd })
+    }
   }
-  if (dirty.length > 0) {
-    throw new Error(`项目 ${dirty.join('、')} 有未提交或未跟踪的改动，请先提交或清理后再启动工作流`)
-  }
+  // If we can't even start the run, restore every stash we just made (the changes belong back on the
+  // user's tree, not marooned in a stash for a run that never ran).
+  const unstashAll = async () => { for (const s of stashed) { try { await popStash(s.cwd, runId) } catch { /* best-effort */ } } }
 
   const created: { name: string; cwd: string; target: string }[] = []
   for (const project of projects) {
     const target = ws.projects.find((p) => p.name === project.name)?.branch
     if (!target) {
+      await unstashAll()
       throw new Error(`项目「${project.name}」缺少目标分支配置(工作区projects未设置branch),无法创建运行分支`)
     }
     try {
@@ -311,6 +322,7 @@ export async function createRunTempBranches(
           rollbackFailures.push(`${c.name}(${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)})`)
         }
       }
+      await unstashAll()   // run isn't starting → give the user their stashed changes back
       const rollbackNote = rollbackFailures.length
         ? ` — 回滚也失败,请手动检查这些项目的分支状态: ${rollbackFailures.join(', ')}`
         : created.length
@@ -319,4 +331,5 @@ export async function createRunTempBranches(
       throw new Error(`项目「${project.name}」创建运行分支失败: ${detail}${rollbackNote}`)
     }
   }
+  return { stashed: stashed.map((s) => s.name) }
 }

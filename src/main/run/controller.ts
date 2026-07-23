@@ -16,7 +16,7 @@ import { ResolverRegistry } from './resolver'
 import { buildWorkOrders, type StageInput } from './fanout'
 import { runWorkOrder, type WorkOrder, type WorkOrderOutcome } from './workOrder'
 import { saveControllerState } from './persist'
-import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault, parkTempBranch as parkTempBranchDefault } from './tempBranch'
+import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault, parkTempBranch as parkTempBranchDefault, popRunStash as popRunStashDefault } from './tempBranch'
 import { startBridge as startBridgeDefault, type BridgeRunCtx, type ForgeBridge } from '../mcp/forgeBridge'
 import { composeRunDigest, runRunSummary } from './runSummary'
 import { isLensReviewStage, composeReviewReport, lensDirective } from './reviewFanout'
@@ -68,6 +68,10 @@ export interface RunControllerDeps {
   // Injectable for the same reason as merge/discardTempBranch above; defaults to the real
   // tempBranch.ts parkTempBranch.
   parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  // Dirty-tree support: restore the user's pre-run stash (stashRun, keyed by runId) after a project's
+  // temp branch is merged/discarded/parked, so uncommitted changes started with come back onto their
+  // branch. No-op when the run started clean. Injectable for tests; defaults to tempBranch.popRunStash.
+  popRunStash?: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'>
   // §7.4 ③硬阻塞: path to the forge MCP server entry script (handlers.ts's `join(__dirname,
   // 'forgeMcp.js')`, threaded through from Run2ManagerDeps.mcpEntry). When present, start() opens a
   // per-run forge bridge (setupBridge) and provisions its socket into every work order's env
@@ -477,12 +481,27 @@ export class RunController {
     const targets = this.finalizeTargets()
     if (targets.length === 0) return
     const park = this.deps.parkTempBranch ?? parkTempBranchDefault
+    const popStash = this.deps.popRunStash ?? popRunStashDefault
     for (const t of targets) {
       try {
         await park(t.cwd, t.target, this.plan.runId)
+        // Even on abort, give the user their pre-run stashed changes back (the run's work is parked on
+        // forge/run-<id>; their uncommitted changes belong back on their branch).
+        await this.restoreStash(popStash, t.cwd, t.name)
       } catch (err) {
         console.error(`[run2] abort cleanup failed for project "${t.name}" (target "${t.target}"):`, err)
       }
+    }
+  }
+
+  // Restore a project's pre-run stash (best-effort). A pop CONFLICT keeps the stash + writes markers —
+  // the user's changes are never lost — so only log it, never fail the finalize.
+  private async restoreStash(popStash: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'>, cwd: string, name: string): Promise<void> {
+    try {
+      const r = await popStash(cwd, this.plan.runId)
+      if (r === 'conflict') console.warn(`[run2] project "${name}" pre-run stash pop conflicted — user's changes preserved in git stash for manual pop`)
+    } catch (err) {
+      console.error(`[run2] failed to restore pre-run stash for project "${name}":`, err)
     }
   }
 
@@ -650,10 +669,15 @@ export class RunController {
     const action = merge
       ? (this.deps.mergeTempBranch ?? mergeTempBranchDefault)
       : (this.deps.discardTempBranch ?? discardTempBranchDefault)
+    const popStash = this.deps.popRunStash ?? popRunStashDefault
     const failures: string[] = []
     for (const t of targets) {
       try {
         await action(t.cwd, t.target, this.plan.runId)
+        // Restore the user's pre-run stash (if any) onto their branch now that the temp branch is
+        // merged/discarded away. Best-effort — a pop conflict keeps the stash (changes never lost), so
+        // it must not fail an otherwise-successful finalize.
+        await this.restoreStash(popStash, t.cwd, t.name)
       } catch (err) {
         failures.push(`${t.name}: ${err instanceof Error ? err.message : String(err)}`)
       }

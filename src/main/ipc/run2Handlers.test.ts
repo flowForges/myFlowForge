@@ -249,10 +249,11 @@ describe('registerRun2', () => {
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
 
-    it('Finding 3: a dirty project rejects run2:launch-start before any branch is created — checkClean wired through', async () => {
+    it('a dirty project is STASHED (not rejected): the run starts, its branch is still created, stash is wired through', async () => {
       const ws = mkdtempSync(join(tmpdir(), 'r2h-'))
       try {
         const createCalls: string[] = []
+        const stashCalls: string[] = []
         const stubCreate = async (cwd: string, _base: string, runId: string) => { createCalls.push(cwd); return `forge/run-${runId}` }
         const handlers = new Map<string, (...a: any[]) => any>()
         const manager = new Run2Manager({ providers: { x: okProvider() }, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
@@ -260,16 +261,20 @@ describe('registerRun2', () => {
         registerRun2({
           manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig, readWorkflows: () => [], readCustomStages: () => [],
           createTempBranch: stubCreate,
-          checkClean: async (cwd) => !cwd.endsWith('web'),
+          checkClean: async (cwd) => !cwd.endsWith('web'),   // web is dirty
+          stashRun: async (cwd) => { stashCalls.push(cwd); return true },
+          popRunStash: async () => 'popped',
         })
         const launchStart = handlers.get(CH.run2LaunchStart)!
-        await expect(launchStart({}, {
+        const result = await launchStart({}, {
           workspacePath: ws, workflowId: 'wf1',
           projects: [{ name: 'api', provider: 'x', model: 'm' }, { name: 'web', provider: 'x', model: 'm' }],
           supplement: '', seed: '',
-        })).rejects.toThrow(/web/)
-        expect(createCalls).toEqual([]) // no branch created for EITHER project
-        expect(manager.isActive(ws)).toBe(false)
+        })
+        expect(result.status).toBe('started')                            // dirty tree no longer rejects the start
+        expect(stashCalls).toEqual([join(ws, 'web')])                    // only the dirty project got stashed
+        expect(createCalls).toEqual([join(ws, 'api'), join(ws, 'web')])  // both branches still created (off clean trees)
+        manager.abort(ws)   // stop the background run cleanly
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
 
