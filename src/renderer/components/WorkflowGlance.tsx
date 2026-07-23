@@ -59,6 +59,9 @@ export function WorkflowGlance({ workflows, onEdit, onLaunch, archived }: Workfl
           </button>
         )}
       </div>
+      {onLaunch && workflows.length > 0 && (
+        <div className="wf-glance-hint">点每行「启动」运行,或在输入框输入 <code>/</code> 选择工作流。</div>
+      )}
       {workflows.length === 0 ? (
         <div className="wf-glance-empty">还没有配置工作流。点「编辑」添加执行阶段。</div>
       ) : workflows.map(wf => {

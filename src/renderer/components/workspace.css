@@ -208,6 +208,8 @@
 .wf-edit-btn:disabled { opacity: .5; cursor: default; }
 .wf-edit-btn svg { width: 11px; height: 11px; }
 .wf-glance-empty { font-size: 11.5px; color: var(--faint); padding: 2px 2px 4px; }
+.wf-glance-hint { font-size: 11px; color: var(--faint); padding: 0 2px 8px; line-height: 1.5; }
+.wf-glance-hint code { font-family: var(--mono); font-size: 10.5px; padding: 1px 5px; border-radius: 5px; background: var(--surface-2); color: var(--fg-2); }
 .wf-glance-row { display: flex; align-items: center; gap: 4px; }
 .wf-launch-btn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border-radius: 7px; font-size: 11px; font-weight: 600; color: var(--on-accent); background: var(--accent); transition: .12s; }
 .wf-launch-btn:hover:not(:disabled) { filter: brightness(1.08); }
