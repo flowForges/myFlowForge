@@ -51,6 +51,15 @@ describe('readHomeStats', () => {
     expect(out).toEqual({})
   })
 
+  it('skips the git scan for an archived workspace (read-only), but keeps its cheap branch field', async () => {
+    vi.mocked(readWorkspaceRegistry).mockReturnValue([{ name: 'w', path: '/ws/arc', createdAt: 0, archived: true, archivedAt: 123, description: '' }])
+    vi.mocked(readWorkspace).mockReturnValue(ws({ projects: [{ repoId: 'r1', name: 'web', branch: 'forge/x' }] }) as never)
+    const out = await readHomeStats()
+    expect(readChanges).not.toHaveBeenCalled()           // no git subprocess for archived
+    expect(out['/ws/arc'].changes).toEqual({ a: 0, e: 0, d: 0 })
+    expect(out['/ws/arc'].branch).toBe('forge/x')
+  })
+
   it('falls back to "main" when no project carries a branch', async () => {
     vi.mocked(readWorkspaceRegistry).mockReturnValue([{ name: 'w', path: '/ws/a', createdAt: 0, archived: false, archivedAt: null, description: '' }])
     vi.mocked(readWorkspace).mockReturnValue(ws({ projects: [{ repoId: 'r1', name: 'web', branch: '' }] }) as never)
