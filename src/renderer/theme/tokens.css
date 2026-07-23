@@ -4,6 +4,10 @@
   --fg: oklch(95% 0.005 250); --fg-2: oklch(82% 0.008 250); --muted: oklch(64% 0.012 250); --faint: oklch(50% 0.012 250);
   --border: oklch(28% 0.011 250); --border-2: oklch(34% 0.013 250);
   --accent: oklch(72% 0.15 235); --accent-dim: oklch(72% 0.15 235 / 0.16); --on-accent: oklch(15% 0.02 250);
+  /* Terminal (xterm) text-selection highlight. xterm sets NO default selection color from our theme, so
+     it fell back to its built-in translucent white — visible on dark, INVISIBLE on the light background.
+     rgba (not oklch) to be safe with xterm's own color parser. Dark keeps the familiar light-grey look. */
+  --term-selection: rgba(255, 255, 255, 0.26);
   --run: oklch(74% 0.14 235); --ok: oklch(74% 0.15 150); --warn: oklch(80% 0.13 80); --err: oklch(68% 0.18 25);
   --add: oklch(74% 0.15 150); --del: oklch(68% 0.18 25);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
@@ -23,6 +27,8 @@
   --fg: oklch(24% 0.012 250); --fg-2: oklch(34% 0.012 250); --muted: oklch(50% 0.012 250); --faint: oklch(62% 0.01 250);
   --border: oklch(89% 0.006 250); --border-2: oklch(84% 0.008 250);
   --accent: oklch(56% 0.16 250); --accent-dim: oklch(56% 0.16 250 / 0.12); --on-accent: oklch(99% 0 0);
+  /* Light: a clearly-visible blue selection on the near-white terminal bg (the default white was invisible). */
+  --term-selection: rgba(45, 105, 215, 0.28);
   --run: oklch(56% 0.15 250); --ok: oklch(56% 0.15 150); --warn: oklch(64% 0.14 70); --err: oklch(56% 0.2 25);
   --add: oklch(52% 0.15 150); --del: oklch(56% 0.2 25);
   --shadow: 0 12px 40px rgba(15,23,42,0.14);

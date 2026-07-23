@@ -73,5 +73,11 @@ export function XtermView({ termId, active, font }: {
 function readXtermTheme() {
   const cs = getComputedStyle(document.documentElement)
   const v = (n: string, fb: string) => (cs.getPropertyValue(n).trim() || fb)
-  return { background: v('--bg', '#0b1020'), foreground: v('--fg-2', '#d6dbe6'), cursor: v('--accent', '#7aa2f7') }
+  // selectionInactiveBackground = same as active so the highlight stays visible after the user clicks
+  // away to copy (default fades it). See --term-selection (tokens.css) for why xterm needed this.
+  const sel = v('--term-selection', 'rgba(120,160,235,0.3)')
+  return {
+    background: v('--bg', '#0b1020'), foreground: v('--fg-2', '#d6dbe6'), cursor: v('--accent', '#7aa2f7'),
+    selectionBackground: sel, selectionInactiveBackground: sel,
+  }
 }
