@@ -161,6 +161,49 @@ describe('chatService.sendTurn – user cancel vs real error', () => {
     }
   })
 
+  it('cancel finalizes an in-flight sub-agent: its card is no longer running (was 运行中 forever)', async () => {
+    const { dir, cleanup } = makeTmpDir()
+    try {
+      const events: ChatEvent[] = []
+
+      // Provider that spawns a native Task sub-agent (phase:'start' → running) but never sends its
+      // 'done' — simulating the process being killed by cancel mid sub-agent.
+      const provider: AgentProvider = {
+        id: 'claude',
+        displayName: 'Claude Code',
+        capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true },
+        async listModels() { return [] },
+        run() { return { id: 'x', cancel() {}, done: Promise.resolve({ ok: true }) } },
+        chat(task: ChatTask, cb: ChatCallbacks) {
+          cb.onSession('sess-sub')
+          cb.onAssistantDelta('launching')
+          cb.onSubagent?.({ id: 'task-1', phase: 'start', subagentType: 'Explore', description: '探查子代理' })
+          const done = new Promise<{ ok: boolean }>((resolve) => {
+            Promise.resolve().then(() => {
+              cb.onError(new Error('process exited with SIGTERM'))
+              resolve({ ok: false })
+            })
+          })
+          return { id: task.id, cancel: vi.fn(), done }
+        },
+      }
+
+      const msg = await sendTurn(payload(dir), {
+        provider,
+        env: process.env,
+        emit: (e) => events.push(e),
+        onSessionStart: (s) => { s.cancel() },
+      })
+
+      const sub = msg.subagents?.find(s => s.id === 'task-1')
+      expect(sub).toBeDefined()
+      expect(sub!.state).not.toBe('running')
+    } finally {
+      cleanup()
+    }
+  })
+
   it('wrapped session passed to onSessionStart: calling wrapped cancel sets aborted + delegates to original', async () => {
     const { dir, cleanup } = makeTmpDir()
     try {

@@ -504,7 +504,11 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 /* Sub-agent live activity: collapsed = latest tool call; expanded = the step list. */
 .sac-activity { padding: 0 12px 9px 34px; font-size: 11px; font-family: var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sac-steps { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow-y: auto; }
-.sac-step { font-size: 11px; font-family: var(--mono); color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
+/* flex: 0 0 auto — the parent .sac-steps is a column flexbox with max-height, so without this the
+   default flex-shrink:1 compresses every row below its natural height once the steps overflow, stacking
+   the lines on top of each other (looked like overlapping text) instead of scrolling. Keep each row at
+   its own height and let .sac-steps scroll. */
+.sac-step { flex: 0 0 auto; font-size: 11px; line-height: 1.55; font-family: var(--mono); color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
 
 .plan-card { border-color: color-mix(in oklch, var(--warn), transparent 45%); box-shadow: inset 2px 0 0 var(--warn); }
 .plan-card .req-head { padding: 9px 12px; background: color-mix(in oklch, var(--warn), transparent 92%); }

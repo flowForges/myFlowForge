@@ -9,11 +9,15 @@ function stateLabel(s: SubagentCard['state']): string {
   return s === 'running' ? '运行中' : s === 'error' ? '失败' : '已完成'
 }
 
-function Card({ sub }: { sub: SubagentCard }) {
+function Card({ sub, live }: { sub: SubagentCard; live: boolean }) {
   const [open, setOpen] = useState(false)
   const title = sub.description || sub.subagentType || '探查子代理'
+  // A sub-agent card can only be genuinely '运行中' while the turn is still streaming. On a settled
+  // (persisted / reloaded) message a 'running' state is a lost terminal event — the turn is over, so the
+  // sub-agent is too. Render it as ended ('已完成') instead of a card frozen at 运行中 forever.
+  const state: SubagentCard['state'] = !live && sub.state === 'running' ? 'done' : sub.state
   return (
-    <div className={`subagent-card s-${sub.state}`}>
+    <div className={`subagent-card s-${state}`}>
       <button className="sac-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
         <span className="sac-ico" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -21,7 +25,7 @@ function Card({ sub }: { sub: SubagentCard }) {
           </svg>
         </span>
         <span className="sac-title">子代理 · {title}{sub.subagentType && sub.description ? <span className="sac-type"> ({sub.subagentType})</span> : null}</span>
-        <span className={`sac-state st-${sub.state}`}>{stateLabel(sub.state)}</span>
+        <span className={`sac-state st-${state}`}>{stateLabel(state)}</span>
         <span className={`sac-caret${open ? ' open' : ''}`} aria-hidden="true">▸</span>
       </button>
       {/* Collapsed: the sub-agent's latest tool call, so its live activity is legible without expanding
@@ -46,7 +50,7 @@ function Card({ sub }: { sub: SubagentCard }) {
               <div className="sac-sec-h">结果</div>
               <div className="sac-sec-t">{sub.result}</div>
             </div>
-          ) : sub.state === 'running' ? (
+          ) : state === 'running' ? (
             <div className="sac-sec"><div className="sac-sec-t sac-muted">运行中,子代理跑在独立进程里,实时回传它的工具调用…</div></div>
           ) : null}
         </div>
@@ -55,7 +59,7 @@ function Card({ sub }: { sub: SubagentCard }) {
   )
 }
 
-export function SubagentCards({ subagents }: { subagents: SubagentCard[] }) {
+export function SubagentCards({ subagents, live = false }: { subagents: SubagentCard[]; live?: boolean }) {
   if (!subagents.length) return null
   return (
     <div className="subagent-cards">
@@ -66,7 +70,7 @@ export function SubagentCards({ subagents }: { subagents: SubagentCard[] }) {
         <span className="sac-lead-dot" aria-hidden="true" />
         主代理派出的原生子代理(它自己去探查,非工作流阶段代理)
       </div>
-      {subagents.map(s => <Card key={s.id} sub={s} />)}
+      {subagents.map(s => <Card key={s.id} sub={s} live={live} />)}
     </div>
   )
 }

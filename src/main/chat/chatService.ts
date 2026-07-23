@@ -147,6 +147,17 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       provider: payload.agent,
       status: c.state === 'running' ? 'run' as const : c.state === 'error' ? 'idle' as const : 'ok' as const,
     })))
+    // When the main agent turn ends by ANY path, its native Task sub-agents have necessarily ended too
+    // (the parent stream can't finish while a Task tool_use is still pending). If a sub-agent's terminal
+    // event was lost — or cancel killed the process before it arrived — the card would stay '运行中'
+    // forever. Finalize every still-running sub-agent / tool here so persisted history reflects reality.
+    // `done` on success (assume it completed), `error` on cancel/error.
+    const finalizeRunning = (outcome: 'done' | 'error') => {
+      let changed = false
+      for (const [id, c] of subagents) if (c.state === 'running') { subagents.set(id, { ...c, state: outcome, result: outcome === 'error' ? (c.result ?? '已取消') : c.result }); changed = true }
+      for (const [id, t] of tools) if (t.status === 'run') { tools.set(id, { ...t, status: outcome === 'done' ? 'ok' : 'error' }); changed = true }
+      if (changed) syncNativeSubagents()
+    }
     // Mirror the in-flight message into the live buffer so chatHistory can restore it after the chat view
     // unmounts (switch to home) or re-subscribes to another session mid-stream. ts:'' marks it as still
     // streaming (carry-forward ordering in the timeline; also lets the renderer re-flag streamingIds).
@@ -228,6 +239,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       context = mergeAgentContext(context, { skills: mentionedSkills(text + '\n' + think, cachedInstalledSkills()), rules: [], mcps: [] })
       dbgFinal(text)
 
+      finalizeRunning('done')
       const steps = think.split('\n').map(s => s.trim()).filter(Boolean)
       const msg: ChatMessage = {
         id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(),
@@ -246,6 +258,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       return msg
     }
     const finishErr = (err: Error): ChatMessage => {
+      finalizeRunning('error')
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
       const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
       appendMessage(ws, sid, msg)
@@ -254,7 +267,8 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       return msg
     }
     const finishAborted = (): ChatMessage => {
-      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), startedAt, endedAt: Date.now() }
+      finalizeRunning('error')
+      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
       appendMessage(ws, sid, msg)
       clearLive(ws, sid, aid)
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
