@@ -120,6 +120,11 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     emit({ workspacePath: ws, sessionId: sid, type: 'user', message: userMsg })
 
     const aid = mkId('a')
+    // Whole-turn start (≈ LLM begins). Stamped main-side so it survives into the live mirror + persisted
+    // message — the renderer also captures it on assistant-start, but that's lost when the chat view
+    // mounts mid-turn / the turn was started from the pet / on reload, which hid the 用时 total (the
+    // "计时器没了" bug). endedAt is stamped on finish below.
+    const startedAt = Date.now()
     emit({ workspacePath: ws, sessionId: sid, type: 'assistant-start', id: aid, model: label, context })
     let text = ''
     let think = ''
@@ -146,7 +151,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // unmounts (switch to home) or re-subscribes to another session mid-stream. ts:'' marks it as still
     // streaming (carry-forward ordering in the timeline; also lets the renderer re-flag streamingIds).
     const publishLive = () => setLive(ws, sid, {
-      id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: '',
+      id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: '', startedAt,
       think: { label: '主代理思考中…', steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
       context, usage: lastUsage, subagents: subagentList(), tools: toolList(),
     })
@@ -227,6 +232,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         usage: lastUsage,
         subagents: subagentList(),
         tools: toolList(),
+        startedAt, endedAt: Date.now(),
       }
       appendMessage(ws, sid, msg)
       clearLive(ws, sid, aid) // persisted now covers it — drop the in-flight mirror
@@ -237,14 +243,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     }
     const finishErr = (err: Error): ChatMessage => {
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
-      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
       appendMessage(ws, sid, msg)
       clearLive(ws, sid, aid)
       scheduleDistill()
       return msg
     }
     const finishAborted = (): ChatMessage => {
-      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), startedAt, endedAt: Date.now() }
       appendMessage(ws, sid, msg)
       clearLive(ws, sid, aid)
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })

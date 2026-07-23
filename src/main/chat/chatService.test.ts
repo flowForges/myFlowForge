@@ -42,6 +42,10 @@ describe('chatService.sendTurn', () => {
     expect(first.text).toBe('Hello')
     expect(first.model).toBe('Claude Code · opus-4.8')
     expect(first.think?.elapsed).toBe(3)
+    // Whole-turn timing is stamped + persisted (survives reload/rehydration → the 用时 total shows).
+    expect(typeof first.startedAt).toBe('number')
+    expect(typeof first.endedAt).toBe('number')
+    expect(first.endedAt!).toBeGreaterThanOrEqual(first.startedAt!)
     expect(first.think?.steps).toContain('think a')
     expect(events.map(e => e.type)).toEqual(['user', 'assistant-start', 'think-delta', 'assistant-delta', 'assistant-delta', 'done'])
     expect(readMessages(ws, 's1').map(m => m.who)).toEqual(['user', 'ai'])
