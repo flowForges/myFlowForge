@@ -174,6 +174,19 @@ export interface SubagentCard {
   result?: string            // the sub-agent's returned text (on done)
 }
 
+// One of the MAIN agent's OWN tool calls this turn (Read/Bash/Edit/…), surfaced live so the user sees
+// what the current CLI is actually executing — the title while it runs, the raw output (collapsible) on
+// completion — instead of a silent spinner. Correlated start↔result by `id` (the tool_use id, where the
+// provider exposes one). Not every provider streams tool structure: claude gives title+output; codex/
+// qoder/cursor give at least titles; gemini/qwen/copilot expose nothing (plain-text run only).
+export interface ToolActivity {
+  id: string
+  title: string              // human label, e.g. "调用 Read package.json" / "调用 Bash: npm test"
+  name?: string              // raw tool name (Read/Bash/Edit/…) when known
+  output?: string            // the tool's result/stdout (on done), where the provider streams it
+  status: 'run' | 'ok' | 'error'
+}
+
 // One background sub-agent in a lightweight-delegation batch, surfaced live in the chat stream so the
 // user sees progress without opening the IDs panel. status: 'run' = still working, 'ok' = finished,
 // 'idle' = failed / timed-out (mirrors the delegateRegistry states).
@@ -207,6 +220,9 @@ export interface ChatMessage {
   think?: ChatThink
   // Built-in Task sub-agents this assistant turn spawned (persisted so cards survive reload).
   subagents?: SubagentCard[]
+  // The main agent's OWN tool calls this turn (Read/Bash/Edit/…) — the "执行" block. Persisted so the
+  // execution trace survives reload. See ToolActivity.
+  tools?: ToolActivity[]
   context?: AgentContextMeta
   files?: Attachment[]
   ts: string
@@ -290,6 +306,10 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'ask-resolved'; id: string }
   | { type: 'done'; message: ChatMessage }
   | { type: 'subagent'; id: string; sub: SubagentCard }
+  // A main-agent tool call's live state (the "执行" block). `id` = the assistant message id; `tool`
+  // carries the per-tool activity keyed by its own tool id. phase 'start' when the tool_use appears
+  // (title known), 'done' on its result (output/status known).
+  | { type: 'tool-activity'; id: string; tool: ToolActivity }
   | { type: 'plan-request'; id: string; approach: string; stages: { key: string; name: string; agents: number; perProject: boolean; projects: string[] }[]; hooks: { id: string; name: string; after: string }[]; allProjects: string[]; task?: string; workflowId?: string; workflowName?: string; workflowOptions?: { id: string; name: string }[]; recommendReason?: string }
   | { type: 'plan-resolved'; id: string }
   | { type: 'mode-changed'; mode: 'chat' | 'workflow'; runId?: string }

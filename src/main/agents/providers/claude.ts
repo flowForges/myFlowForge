@@ -202,9 +202,21 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         for (const action of parseChatStreamActions(obj)) {
           if (action.kind === 'session') cb.onSession(action.id)
           else if (action.kind === 'assistant') { sawAssistant = true; cb.onAssistantDelta(action.text) }
-          else if (action.kind === 'think' || action.kind === 'tool' || action.kind === 'file') { if (action.kind !== 'think') sawTool = true; cb.onThinkDelta(action.text) }
+          else if (action.kind === 'think') cb.onThinkDelta(action.text)
+          else if (action.kind === 'tool' || action.kind === 'file') {
+            sawTool = true
+            // A correlatable tool call → the "执行" block (title now, output paired by id on its result).
+            // Without an id (can't pair a result) fall back to the old think-step so it's still visible.
+            if (action.id) cb.onToolActivity?.({ id: action.id, phase: 'start', name: action.name, title: action.text })
+            else cb.onThinkDelta(action.text)
+          }
           else if (action.kind === 'subagent-start') onSubagent(action)
-          else if (action.kind === 'subagent-result') { if (subagentIds.has(action.id)) cb.onSubagent?.({ id: action.id, phase: 'done', result: action.result, isError: action.isError }) }
+          else if (action.kind === 'subagent-result') {
+            // parseChatStreamActions emits a 'subagent-result' for EVERY tool_result. A known Task id →
+            // its sub-agent card; any other id → a regular tool's output, into the 执行 block.
+            if (subagentIds.has(action.id)) cb.onSubagent?.({ id: action.id, phase: 'done', result: action.result, isError: action.isError })
+            else cb.onToolActivity?.({ id: action.id, phase: 'done', output: action.result, isError: action.isError })
+          }
         }
       }
       const processLine = (raw: string) => {

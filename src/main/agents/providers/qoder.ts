@@ -224,7 +224,13 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
             if (action.kind === 'session') cb.onSession(action.id)
             else if (action.kind === 'assistant') { flushThink(); gotText = true; cb.onAssistantDelta(action.text) }
             else if (action.kind === 'think') pushThink(action.text)
-            else if (action.kind === 'tool' || action.kind === 'file') { flushThink(); cb.onThinkDelta(action.text) }
+            else if (action.kind === 'tool' || action.kind === 'file') {
+              flushThink()
+              // 执行 block (title now; qoder has no Task cards, so tool_results below carry the output).
+              if (action.id) cb.onToolActivity?.({ id: action.id, phase: 'start', name: action.name, title: action.text })
+              else cb.onThinkDelta(action.text)
+            }
+            else if (action.kind === 'subagent-result') cb.onToolActivity?.({ id: action.id, phase: 'done', output: action.result, isError: action.isError })
           }
         }
         const processLine = (raw: string) => {

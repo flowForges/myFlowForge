@@ -3,7 +3,7 @@ import { appendMessage, readMessages, readSession, readWatermark, writeSession, 
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
 import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
-import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard } from '@shared/types'
+import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
 import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
 import { distillSession, promoteToWorkspace, promoteToSystem, type DistillDeps } from './memory/distiller'
@@ -128,6 +128,11 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // on the finished message so their cards survive reload.
     const subagents = new Map<string, SubagentCard>()
     const subagentList = () => (subagents.size ? [...subagents.values()] : undefined)
+    // The main agent's OWN tool calls this turn (the "执行" block) — accumulated live (title on start,
+    // output/status on done) keyed by tool_use id, persisted on the finished message so the execution
+    // trace survives reload. Insertion order = execution order (Map preserves it).
+    const tools = new Map<string, ToolActivity>()
+    const toolList = () => (tools.size ? [...tools.values()] : undefined)
     // Reset the IDs-panel view of this session's native Task sub-agents at turn start, then keep it in
     // sync as they arrive (see onSubagent) so the panel reflects the current turn, not a stale prior one.
     setNativeSubagents(ws, sid, [])
@@ -143,8 +148,22 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const publishLive = () => setLive(ws, sid, {
       id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: '',
       think: { label: '主代理思考中…', steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
-      context, usage: lastUsage, subagents: subagentList(),
+      context, usage: lastUsage, subagents: subagentList(), tools: toolList(),
     })
+    // Main-agent tool call → the 执行 block. 'start' registers the row (title); 'done' fills output/status.
+    const onToolActivity = (ev: { id: string; phase: 'start' | 'done'; name?: string; title?: string; output?: string; isError?: boolean }) => {
+      const prev = tools.get(ev.id) ?? { id: ev.id, title: ev.title ?? ev.name ?? '调用工具', status: 'run' as const }
+      const next: ToolActivity = {
+        ...prev,
+        title: ev.title ?? prev.title,
+        name: ev.name ?? prev.name,
+        output: ev.output ?? prev.output,
+        status: ev.phase === 'done' ? (ev.isError ? 'error' : 'ok') : prev.status,
+      }
+      tools.set(ev.id, next)
+      publishLive()
+      emit({ workspacePath: ws, sessionId: sid, type: 'tool-activity', id: aid, tool: next })
+    }
     publishLive()
     const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean }) => {
       const prev = subagents.get(ev.id) ?? { id: ev.id, state: 'running' as const }
@@ -207,6 +226,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         context,
         usage: lastUsage,
         subagents: subagentList(),
+        tools: toolList(),
       }
       appendMessage(ws, sid, msg)
       clearLive(ws, sid, aid) // persisted now covers it — drop the in-flight mirror
@@ -217,7 +237,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     }
     const finishErr = (err: Error): ChatMessage => {
       emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
-      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList() }
       appendMessage(ws, sid, msg)
       clearLive(ws, sid, aid)
       scheduleDistill()
@@ -270,6 +290,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onConfirm: deps.confirm,
           onUsage: (u) => { lastUsage = u; publishLive() },
           onSubagent,
+          onToolActivity,
           onDone: (r) => { if (settled) return; settled = true; resolve(finishOk(r.elapsed)) },
           onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
         }, env)

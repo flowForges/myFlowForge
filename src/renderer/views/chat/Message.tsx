@@ -4,6 +4,7 @@ import { fmtMsgTime, fmtMsgTimeFull } from '@shared/relTime'
 import { ThinkBlock } from './ThinkBlock'
 import { SubagentCards } from './SubagentCards'
 import { DelegateBlock } from './DelegateBlock'
+import { ToolBlock } from './ToolBlock'
 import { TurnTimer } from './TurnTimer'
 import { Markdown } from './markdown'
 
@@ -70,6 +71,7 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
         </div>
       )}
       {msg.think && <ThinkBlock think={msg.think} streaming={streaming} />}
+      {!isUser && msg.tools?.length ? <ToolBlock tools={msg.tools} /> : null}
       {!isUser && msg.subagents?.length ? <SubagentCards subagents={msg.subagents} /> : null}
       {isUser ? (
         <div className="msg-body user-body">

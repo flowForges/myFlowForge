@@ -125,6 +125,16 @@ export function useChat(
         }
         setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? upsert(x) : x) : [...m, upsert(blankAi(e.id))])
       }
+      // Main-agent tool call (执行 block): upsert by tool id, preserving execution order.
+      else if (e.type === 'tool-activity') {
+        setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
+        const upsert = (x: ChatMessage): ChatMessage => {
+          const list = x.tools ?? []
+          const i = list.findIndex(t => t.id === e.tool.id)
+          return { ...x, tools: i >= 0 ? list.map(t => t.id === e.tool.id ? e.tool : t) : [...list, e.tool] }
+        }
+        setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? upsert(x) : x) : [...m, upsert(blankAi(e.id))])
+      }
       // Live delegate-batch progress block (fire-and-forget sub-agents keep running after the main turn
       // ends). Main-side broadcasts these (handlers.ts onBatchStart/onAgentState/onComplete) but they were
       // previously dropped here, so the user never saw the background sub-agents execute. Live-only: the

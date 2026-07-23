@@ -4,8 +4,10 @@ export type ChatStreamAction =
   | { kind: 'session'; id: string }
   | { kind: 'assistant'; text: string }
   | { kind: 'think'; text: string }
-  | { kind: 'tool'; text: string }
-  | { kind: 'file'; text: string }
+  // `id`/`name` carry the tool_use id + raw tool name when the stream exposes them (claude/qoder), so the
+  // adapter can surface a correlated "执行" activity (title now, output paired by id on the tool_result).
+  | { kind: 'tool'; text: string; id?: string; name?: string }
+  | { kind: 'file'; text: string; id?: string; name?: string }
   | { kind: 'result'; text?: string }
   // A built-in Task sub-agent: the tool_use starts it, the matching tool_result finishes it.
   | { kind: 'subagent-start'; id: string; subagentType?: string; description?: string; prompt?: string }
@@ -56,8 +58,8 @@ export function splitThinkLines(buffer: string): { lines: string[]; rest: string
 }
 
 const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'apply_patch'])
-function toolAction(name: string, input: any): ChatStreamAction {
-  return { kind: FILE_TOOLS.has(name) ? 'file' : 'tool', text: toolStep(name, input) }
+function toolAction(name: string, input: any, id?: string): ChatStreamAction {
+  return { kind: FILE_TOOLS.has(name) ? 'file' : 'tool', text: toolStep(name, input), id, name }
 }
 
 // One stream-json line can carry a session id AND several content blocks (the *real*
@@ -81,7 +83,7 @@ export function parseChatStreamActions(obj: any): ChatStreamAction[] {
       if (cb.name === SUBAGENT_TOOL && typeof cb.id === 'string') {
         out.push({ kind: 'subagent-start', id: cb.id, subagentType: cb.input?.subagent_type, description: cb.input?.description, prompt: cb.input?.prompt })
       } else {
-        out.push(toolAction(cb.name, cb.input))
+        out.push(toolAction(cb.name, cb.input, typeof cb.id === 'string' ? cb.id : undefined))
       }
     }
     return out
@@ -110,7 +112,7 @@ export function parseChatStreamActions(obj: any): ChatStreamAction[] {
       // A Task sub-agent gets its own card (this full message carries the complete input); every other
       // tool call is surfaced as a visible process step (so the user sees activity, not just a spinner).
       else if (b?.type === 'tool_use' && b.name === SUBAGENT_TOOL && typeof b.id === 'string') out.push({ kind: 'subagent-start', id: b.id, subagentType: b.input?.subagent_type, description: b.input?.description, prompt: b.input?.prompt })
-      else if (b?.type === 'tool_use' && typeof b.name === 'string') out.push(toolAction(b.name, b.input))
+      else if (b?.type === 'tool_use' && typeof b.name === 'string') out.push(toolAction(b.name, b.input, typeof b.id === 'string' ? b.id : undefined))
     }
     return out
   }
