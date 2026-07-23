@@ -247,6 +247,38 @@ process.exit(0)
     expect(thinkText).not.toContain('调用 Bash')
   })
 
+  it('attributes a sub-agent\'s own tool call (parent_tool_use_id) to the sub-agent as a step, not the main 执行 block', async () => {
+    const chatCli = join(dir, 'chat-sa.js')
+    writeFileSync(chatCli, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ type: 'system', subtype: 'init', session_id: 'sess-sa' })
+out({ type: 'assistant', session_id: 'sess-sa', message: { content: [ { type: 'tool_use', id: 'toolu_task', name: 'Task', input: { subagent_type: 'Explore', description: '探查鉴权' } } ] } })
+out({ type: 'assistant', parent_tool_use_id: 'toolu_task', session_id: 'sess-sa', message: { content: [ { type: 'tool_use', id: 'toolu_read', name: 'Read', input: { file_path: 'auth.ts' } } ] } })
+out({ type: 'assistant', session_id: 'sess-sa', message: { content: [ { type: 'text', text: '完成' } ] } })
+out({ type: 'result', subtype: 'success', result: '完成', session_id: 'sess-sa' })
+process.exit(0)
+`)
+    chmodSync(chatCli, 0o755)
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [chatCli], defaultModels: [] })
+    const subEvents: { id: string; phase: string; step?: string }[] = []
+    const toolActs: { id: string; title?: string }[] = []
+    const s = provider.chat!(
+      { id: 'a1', prompt: '查一下鉴权', model: 'opus-4.8', cwd: dir },
+      {
+        onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {},
+        onSubagent: (ev) => subEvents.push(ev), onToolActivity: (ev) => toolActs.push(ev),
+        onDone: () => {}, onError: () => {},
+      },
+      process.env
+    )
+    await s.done
+    // The sub-agent's Read appears as a STEP on the Task sub-agent, attributed by parent_tool_use_id.
+    const step = subEvents.find(e => e.step)
+    expect(step).toMatchObject({ id: 'toolu_task', step: '调用 Read auth.ts' })
+    // And it must NOT leak into the main turn's 执行 block.
+    expect(toolActs.find(a => a.title?.includes('Read'))).toBeUndefined()
+  })
+
   it('advertises permissionHook capability', () => {
     const provider = makeClaudeProvider({ defaultModels: [] })
     expect(provider.capabilities.permissionHook).toBe(true)

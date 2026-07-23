@@ -24,6 +24,9 @@ function Card({ sub }: { sub: SubagentCard }) {
         <span className={`sac-state st-${sub.state}`}>{stateLabel(sub.state)}</span>
         <span className={`sac-caret${open ? ' open' : ''}`} aria-hidden="true">▸</span>
       </button>
+      {/* Collapsed: the sub-agent's latest tool call, so its live activity is legible without expanding
+          every card — the point is not to look frozen while N sub-agents探查. */}
+      {sub.steps?.length && !open ? <div className="sac-activity" title={sub.steps[sub.steps.length - 1]}>{sub.steps[sub.steps.length - 1]}</div> : null}
       {open && (
         <div className="sac-body">
           {sub.prompt ? (
@@ -32,13 +35,19 @@ function Card({ sub }: { sub: SubagentCard }) {
               <div className="sac-sec-t">{sub.prompt}</div>
             </div>
           ) : null}
+          {sub.steps?.length ? (
+            <div className="sac-sec">
+              <div className="sac-sec-h">执行步骤 ({sub.steps.length})</div>
+              <div className="sac-steps">{sub.steps.map((s, i) => <div className="sac-step" key={i}>{s}</div>)}</div>
+            </div>
+          ) : null}
           {sub.result ? (
             <div className="sac-sec">
               <div className="sac-sec-h">结果</div>
               <div className="sac-sec-t">{sub.result}</div>
             </div>
           ) : sub.state === 'running' ? (
-            <div className="sac-sec"><div className="sac-sec-t sac-muted">运行中,子代理跑在独立进程里,完成后回传结果…</div></div>
+            <div className="sac-sec"><div className="sac-sec-t sac-muted">运行中,子代理跑在独立进程里,实时回传它的工具调用…</div></div>
           ) : null}
         </div>
       )}

@@ -170,14 +170,18 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       emit({ workspacePath: ws, sessionId: sid, type: 'tool-activity', id: aid, tool: next })
     }
     publishLive()
-    const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean }) => {
+    const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean; step?: string }) => {
       const prev = subagents.get(ev.id) ?? { id: ev.id, state: 'running' as const }
+      // A `step` appends one of the sub-agent's own tool calls (its live internal activity). Cap the
+      // list so a very busy sub-agent can't grow the message unbounded.
+      const steps = ev.step ? [...(prev.steps ?? []), ev.step].slice(-40) : prev.steps
       const next: SubagentCard = {
         ...prev,
         subagentType: ev.subagentType ?? prev.subagentType,
         description: ev.description ?? prev.description,
         prompt: ev.prompt ?? prev.prompt,
         result: ev.result ?? prev.result,
+        steps,
         state: ev.phase === 'done' ? (ev.isError ? 'error' : 'done') : prev.state,
       }
       subagents.set(ev.id, next)

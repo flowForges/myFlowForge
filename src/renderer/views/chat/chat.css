@@ -501,6 +501,10 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .sac-sec-h { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
 .sac-sec-t { font-size: 12px; line-height: 1.55; color: var(--fg-2); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; }
 .sac-sec-t.sac-muted { color: var(--muted); font-style: italic; }
+/* Sub-agent live activity: collapsed = latest tool call; expanded = the step list. */
+.sac-activity { padding: 0 12px 9px 34px; font-size: 11px; font-family: var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sac-steps { display: flex; flex-direction: column; gap: 3px; max-height: 220px; overflow-y: auto; }
+.sac-step { font-size: 11px; font-family: var(--mono); color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 2px 0; }
 
 .plan-card { border-color: color-mix(in oklch, var(--warn), transparent 45%); box-shadow: inset 2px 0 0 var(--warn); }
 .plan-card .req-head { padding: 9px 12px; background: color-mix(in oklch, var(--warn), transparent 92%); }

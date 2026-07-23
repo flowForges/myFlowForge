@@ -172,6 +172,11 @@ export interface SubagentCard {
   description?: string       // short label the model gave the task
   prompt?: string            // the full task prompt handed to the sub-agent
   result?: string            // the sub-agent's returned text (on done)
+  // The sub-agent's OWN tool calls as it runs (Read/Bash/Grep…), attributed via the stream's
+  // parent_tool_use_id. Lets the card show WHAT each sub-agent is doing live, not just running/done —
+  // so multiple探查 sub-agents don't look like a frozen cursor. Titles only (claude streams subagent
+  // tool_use by default; text/thinking需 --forward-subagent-text which we don't enable).
+  steps?: string[]
 }
 
 // One of the MAIN agent's OWN tool calls this turn (Read/Bash/Edit/…), surfaced live so the user sees

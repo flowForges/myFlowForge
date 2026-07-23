@@ -187,6 +187,21 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           const decision = cb.onConfirm ? await cb.onConfirm({ title: `${obj.tool} 请求执行`, where: obj.path }) : 'deny'
           reply(decision === 'allow'); return
         }
+        // A sub-agent's OWN internal event: claude tags it with a top-level parent_tool_use_id = the Task
+        // tool_use id that spawned it (main-turn events have it null/absent). Attribute the sub-agent's
+        // tool calls to that Task's card as live steps — and RETURN so they don't leak into the main
+        // turn's 执行 block (the parser is parent-agnostic). Read from the full `assistant` message (full
+        // tool input → good titles); the partial stream_event for the same tool is skipped. We only get
+        // tool_use/tool_result for sub-agents by default (text/thinking需 --forward-subagent-text).
+        const parentId = typeof obj?.parent_tool_use_id === 'string' ? obj.parent_tool_use_id : null
+        if (parentId) {
+          if (obj.type === 'assistant') {
+            for (const action of parseChatStreamActions(obj)) {
+              if (action.kind === 'tool' || action.kind === 'file') cb.onSubagent?.({ id: parentId, phase: 'update', step: action.text })
+            }
+          }
+          return
+        }
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
         if (obj?.type === 'stream_event') streamed = true
