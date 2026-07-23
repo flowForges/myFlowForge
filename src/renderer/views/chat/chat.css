@@ -195,6 +195,17 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   border-radius: 99px; padding: 4px 8px;
 }
 .ans-eyebrow svg { width: 12px; height: 12px; }
+/* 生成中的头部动效(仅 streaming 时):星星轻闪 + 药丸掠光。settled 消息保持静止,避免空闲重绘
+   (跟省电那批一致:任一时刻只有一条在途消息在动)。 */
+.ans-eyebrow.live { position: relative; overflow: hidden; }
+.ans-eyebrow.live svg { animation: eyebrow-twinkle 1.4s ease-in-out infinite; transform-origin: center; }
+.ans-eyebrow.live::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg, transparent 20%, color-mix(in oklch, var(--accent) 32%, transparent) 50%, transparent 80%);
+  transform: translateX(-100%); animation: eyebrow-sheen 1.9s ease-in-out infinite;
+}
+@keyframes eyebrow-twinkle { 0%, 100% { transform: scale(1) rotate(0); opacity: .8; } 50% { transform: scale(1.18) rotate(14deg); opacity: 1; } }
+@keyframes eyebrow-sheen { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(100%); } }
 .msg-body.ans { color: var(--fg); }
 /* Raw-text placeholder shown for one frame while a large reply's Markdown parse is deferred off the
    session-switch commit. pre-wrap preserves newlines so its height stays close to the parsed output,

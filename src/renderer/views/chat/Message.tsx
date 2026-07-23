@@ -80,7 +80,10 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
       ) : (
         <div className={`answer-block${showAnswer ? ' show' : ''}`}>
           {showAnswer && (
-            <div className="ans-eyebrow">
+            // `live` (only while streaming) animates the pill — the star twinkles + a sheen sweeps —
+            // so生成中 feels alive instead of枯燥. Settled messages stay static (no idle-GPU cost; only
+            // the single in-flight message ever animates).
+            <div className={`ans-eyebrow${streaming ? ' live' : ''}`}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3"><path d="M12 3l2.2 5.6L20 9.8l-4.4 3.6L17 19l-5-3.2L7 19l1.4-5.6L4 9.8l5.8-1.2z" /></svg>
               {streaming ? '回答中' : '回答'}
             </div>
