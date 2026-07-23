@@ -1184,6 +1184,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     providers={providers}
                     onConfirm={(c) => confirmLaunchGate(gate.id, c)}
                     onCancel={() => cancelLaunchGate(gate.id)}
+                    checkDirty={(window as any).forge?.run2?.checkDirty ? () => (window as any).forge.run2.checkDirty(wsPath) : undefined}
                   />
                 )
               }

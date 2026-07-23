@@ -63,6 +63,10 @@ export interface LaunchGateCardProps {
   seedLoading?: boolean
   onConfirm: (c: LaunchGateConfig) => void
   onCancel: () => void
+  // Returns the names of the workspace's projects with uncommitted changes. When provided, the first
+  // 确认 with a dirty selected project shows a "会自动 stash 保存并在结束后恢复" warning + a 仍要启动
+  // button instead of launching immediately — so the user knows their changes are set aside safely.
+  checkDirty?: () => Promise<string[]>
 }
 
 function findProvider(providers: ProviderInfo[], providerId: string): ProviderInfo | undefined {
@@ -88,7 +92,7 @@ function fmtDecidedAt(ms: number): string {
 // copy rather than importing IC (a private const of that component).
 const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
 
-export function LaunchGateCard({ config, frozen, error, pending, seedLoading, providers = [], onConfirm, onCancel }: LaunchGateCardProps) {
+export function LaunchGateCard({ config, frozen, error, pending, seedLoading, providers = [], onConfirm, onCancel, checkDirty }: LaunchGateCardProps) {
   // Pure presentational: mirror the incoming config into local state so checkboxes/model chip/
   // supplement are editable in this card without the caller re-rendering it on every keystroke.
   // onConfirm reports back the (possibly edited) mirror; config.seed/workflows pass through as-is.
@@ -119,6 +123,10 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // two popups is open at a time (opening one closes the other).
   const [providerPopupFor, setProviderPopupFor] = useState<string | null>(null)
   const [customModelDraft, setCustomModelDraft] = useState('')
+  // Dirty-tree warning: null = not checked yet; [] = checked, all clean; [names] = dirty selected
+  // projects, first 确认 shows the warning and the button becomes 仍要启动 (a second click launches).
+  // Declared with the other hooks (before any `frozen` early return) so hook order stays stable.
+  const [dirtyWarn, setDirtyWarn] = useState<string[] | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
 
   // Close whichever popup is open on any click outside it (or outside the chip that opened it) —
@@ -216,13 +224,23 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   }
   const toggleHook = (id: string) => setHookState((prev) => ({ ...prev, [id]: prev[id] === false }))
   const hookWhen = (after: string) => (after === '__start' ? '开始前' : after === '__wf' ? '全部结束后' : `阶段「${after}」后`)
-  const confirm = () => {
+  const doConfirm = () => {
     const stageChoices = stagesOf(selectedWorkflowId).map((s) => {
       const st = stageState[s.key] ?? stageDefault(s.key)
       return { key: s.key, enabled: st.enabled, provider: st.provider, model: st.model }
     })
     const hookChoices = (config.hooks ?? []).map((h) => ({ id: h.id, enabled: hookState[h.id] !== false }))
     onConfirm({ seed, workflows: config.workflows, selectedWorkflowId, projects, supplement, hooks: config.hooks, stageChoices, hookChoices })
+  }
+  const confirm = async () => {
+    if (checkDirty && dirtyWarn === null) {
+      let dirty: string[] = []
+      try { dirty = await checkDirty() } catch { dirty = [] }
+      const selectedDirty = dirty.filter((name) => projects.some((p) => p.selected && p.name === name))
+      setDirtyWarn(selectedDirty)
+      if (selectedDirty.length > 0) return   // warn first; the next 仍要启动 click launches
+    }
+    doConfirm()
   }
 
   const selectedCount = projects.filter((p) => p.selected).length
@@ -399,8 +417,14 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
 
         {error ? <div className="req-sub lg-error">{error}</div> : null}
 
+        {dirtyWarn && dirtyWarn.length > 0 ? (
+          <div className="lg-dirty-warn">
+            <b>{dirtyWarn.join('、')}</b> 有未提交的改动。启动后会自动 <b>git stash</b> 保存这些改动(不会删除),工作流在临时分支上执行,结束后合并回你的分支并<b>恢复</b>你的改动。确认继续?
+          </div>
+        ) : null}
+
         <div className="req-actions">
-          <button className="req-ok" onClick={confirm} disabled={selectedStages.length > 0 && enabledStageCount === 0} title={selectedStages.length > 0 && enabledStageCount === 0 ? '至少保留一个阶段' : undefined}>确认</button>
+          <button className="req-ok" onClick={confirm} disabled={selectedStages.length > 0 && enabledStageCount === 0} title={selectedStages.length > 0 && enabledStageCount === 0 ? '至少保留一个阶段' : undefined}>{dirtyWarn && dirtyWarn.length > 0 ? '仍要启动' : '确认'}</button>
           <button className="req-no" onClick={onCancel}>取消</button>
         </div>
       </div>

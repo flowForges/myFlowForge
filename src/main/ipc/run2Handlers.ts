@@ -3,6 +3,7 @@ import * as path from 'node:path'
 import * as CH from './channels'
 import { planFromStages } from '../run/planFromStages'
 import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
+import { isCleanTree } from '../run/tempBranch'
 import { listRuns, loadRun, deleteRun } from '../run/persist'
 import type { Run2Manager } from '../run/manager'
 import type { StageSpec, DevelopProject } from '../run/runTypes'
@@ -142,7 +143,23 @@ export function registerRun2(deps: {
       const target = ws.projects.find((wp) => wp.name === project.name)?.branch
       if (target) projectTargets[project.name] = target
     }
-    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch })
+    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash })
+  })
+
+  // Dirty-tree pre-check for the launch gate: which of the workspace's projects have uncommitted
+  // changes? Read-only. A dirty tree no longer blocks a run (it's stashed + restored), but the gate
+  // warns the user first so they know their changes will be set aside and brought back.
+  onInvoke(CH.run2CheckDirty, async (_e, p: { workspacePath: string }): Promise<string[]> => {
+    if (!readWorkspace) return []
+    const ws = readWorkspace(p.workspacePath)
+    if (!ws) return []
+    const clean = checkClean ?? isCleanTree
+    const dirty: string[] = []
+    for (const proj of ws.projects) {
+      const name = proj.name || proj.repoId
+      try { if (!(await clean(path.join(p.workspacePath, name)))) dirty.push(name) } catch { /* not a repo / missing → nothing to stash */ }
+    }
+    return dirty
   })
 
   // P-C2/T3 (disk-resume): checked by the renderer when a workspace opens — is there an interrupted
@@ -179,7 +196,7 @@ export function registerRun2(deps: {
       const target = ws.projects.find((wp) => wp.name === project.name)?.branch
       if (target) projectTargets[project.name] = target
     }
-    return manager.resumeFromDisk(p.workspacePath, { projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch })
+    return manager.resumeFromDisk(p.workspacePath, { projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash })
   })
 
   // P-C2/T3: 丢弃 — clears the saved state so resumable() stops offering this interrupted run again.

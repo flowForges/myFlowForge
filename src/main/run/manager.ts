@@ -32,6 +32,9 @@ export interface Run2StartOpts {
   // Finding 4 (Important — abort semantics): the abort path parks instead of discarding — see its
   // doc in controller.ts. Threaded through the same way as merge/discardTempBranch above.
   parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  // Dirty-tree: restore the user's pre-run stash after finalize — threaded through the same way; tests
+  // inject a stub so they never touch real git. Production omits it → controller uses the real one.
+  popRunStash?: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'>
 }
 export interface Run2ManagerDeps {
   providers: Record<string, AgentProvider>
@@ -175,6 +178,7 @@ export class Run2Manager {
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,
       parkTempBranch: opts.parkTempBranch,
+      popRunStash: opts.popRunStash,
       mcpEntry: this.deps.mcpEntry,
     })
     return this.registerAndRun(opts.workspacePath, controller)
@@ -283,6 +287,7 @@ export class Run2Manager {
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,
       parkTempBranch: opts.parkTempBranch,
+      popRunStash: opts.popRunStash,
       mcpEntry: this.deps.mcpEntry,
     }, {
       machine: found.state.machine,

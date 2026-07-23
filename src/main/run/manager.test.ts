@@ -340,6 +340,7 @@ describe('Run2Manager', () => {
         workspacePath: ws, runId: 'run-git-merge', plan, projects,
         projectTargets: { a: 'main', b: 'main' },
         mergeTempBranch: async (cwd, target, runId) => { mergeCalls.push({ cwd, target, runId }) },
+        popRunStash: async () => 'none',   // stub the post-finalize stash restore so it never touches real git
       })
       await new Promise((r) => setTimeout(r, 50))
       expect(mgr.lastStateFor(ws)?.status).toBe('ok')

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { LaunchGateCard, type LaunchGateConfig } from './LaunchGateCard'
 import type { ProviderInfo } from '@shared/types'
 
@@ -305,4 +305,26 @@ describe('LaunchGateCard hook 可选', () => {
       ]),
     }))
   })
+
+  it("dirty selected project → first 确认 warns (no launch); 仍要启动 then launches", async () => {
+    const onConfirm = vi.fn()
+    const checkDirty = vi.fn(async () => ["go-blog"])   // go-blog is selected + dirty
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} checkDirty={checkDirty} />)
+    fireEvent.click(screen.getByText("确认"))
+    await screen.findByText("仍要启动")
+    expect(onConfirm).not.toHaveBeenCalled()
+    expect(screen.getByText(/有未提交的改动/)).toBeInTheDocument()
+    fireEvent.click(screen.getByText("仍要启动"))
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it("a dirty but UNSELECTED project does not warn — launches immediately", async () => {
+    const onConfirm = vi.fn()
+    const checkDirty = vi.fn(async () => ["zgh"])       // zgh is dirty but not selected
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} checkDirty={checkDirty} />)
+    fireEvent.click(screen.getByText("确认"))
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
+    expect(screen.queryByText("仍要启动")).toBeNull()
+  })
+
 })
