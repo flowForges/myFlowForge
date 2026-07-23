@@ -9,7 +9,7 @@ const DEFAULTS: Settings = {
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
   termProxy: '',
   skills: { 'code-review': true, 'test-driven': true, 'deep-research': false, 'systematic-debugging': true },
-  pet: { enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } } },
+  pet: { enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: true, idleAnimation: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } } },
   heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
   pinnedWorkspaces: [],
   workspaceOrder: [],
@@ -20,6 +20,7 @@ const DEFAULTS: Settings = {
   defaultOpenerId: '',
   keybindings: { overrides: {} },
   perfStallToast: false,
+  perfDiagnostics: false,
   nsfwUnlocked: false,
   nsfwCode: '',
   nsfwInstalled: {},
@@ -40,6 +41,7 @@ export interface SettingsUpdate {
   defaultOpenerId?: string
   keybindings?: Keybindings
   perfStallToast?: boolean
+  perfDiagnostics?: boolean
   disabledProviders?: string[]
   nsfwUnlocked?: boolean
   nsfwCode?: string
@@ -72,6 +74,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     defaultOpenerId: partial.defaultOpenerId ?? base.defaultOpenerId,
     keybindings: partial.keybindings ?? base.keybindings ?? { overrides: {} },
     perfStallToast: partial.perfStallToast ?? base.perfStallToast,
+    perfDiagnostics: partial.perfDiagnostics ?? base.perfDiagnostics,
     nsfwUnlocked: partial.nsfwUnlocked ?? base.nsfwUnlocked,
     nsfwCode: partial.nsfwCode ?? base.nsfwCode,
     nsfwInstalled: partial.nsfwInstalled ?? base.nsfwInstalled,

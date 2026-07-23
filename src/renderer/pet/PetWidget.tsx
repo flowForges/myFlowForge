@@ -44,10 +44,13 @@ interface PetWidgetProps {
   atlas?: { path: string; version: number }
   action?: PetAction
   lookDeg?: number | null
+  // Hold still (no float bob, no atlas frame loop): set when idle-animation is off & the pet is idle,
+  // or the pet window is hidden. Stops the continuous idle re-render/repaint — see PetApp's `frozen`.
+  frozen?: boolean
 }
 
-export function PetWidget({ skin, anim, accent, state, customImages, customEmoji, atlas, action, lookDeg }: PetWidgetProps) {
-  const cls = `pet pet-anim-${anim} pet-accent-${accent}`
+export function PetWidget({ skin, anim, accent, state, customImages, customEmoji, atlas, action, lookDeg, frozen }: PetWidgetProps) {
+  const cls = `pet pet-anim-${frozen ? 'none' : anim} pet-accent-${accent}`
   const customSrc = customImages?.[state ?? 'idle'] ?? customImages?.idle
   const requestedSrc = petSrc(customSrc)
   const candidates = [...new Set(Object.values(customImages ?? {}).map(value => petSrc(value)).filter((value): value is string => Boolean(value)))]
@@ -70,7 +73,7 @@ export function PetWidget({ skin, anim, accent, state, customImages, customEmoji
     if (atlas) {
       return (
         <div className={cls} data-skin="custom-atlas">
-          <PetAtlasSprite atlasPath={atlas.path} action={action ?? 'idle'} lookDeg={lookDeg} />
+          <PetAtlasSprite atlasPath={atlas.path} action={action ?? 'idle'} lookDeg={lookDeg} reducedMotion={frozen} />
           {stars}
         </div>
       )

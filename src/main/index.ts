@@ -351,11 +351,15 @@ app.whenReady().then(() => {
   // sends null inside the deadzone so the renderer falls back to idle. The renderer only applies it while
   // the action is 'idle', so this is harmless during runs.
   const petGazePoll = setInterval(() => {
-    if (!petWin || petWin.isDestroyed() || petMode !== 'collapsed' || !readSettings().pet.enabled) return
+    const pet = readSettings().pet
+    // Gate on pet.followCursor too: with it off the pet ignores the cursor entirely, so skip the native
+    // cursor read + the ~7Hz IPC that would otherwise re-render the pet on every mouse move (idle drain).
+    if (!petWin || petWin.isDestroyed() || petMode !== 'collapsed' || !pet.enabled || !pet.followCursor) return
     const b = petWin.getBounds()
     const center = { x: b.x + b.width / 2, y: b.y + b.height / 2 }
     petWin.webContents.send(CH.petLookAngle, gazeAngle(center, screen.getCursorScreenPoint()))
   }, 140)
+  petGazePoll.unref?.()   // diagnostic-grade poll — never keep the process alive on quit
   app.on('before-quit', () => clearInterval(petGazePoll))
 
   // Follow is CLICK/FOCUS-driven ONLY (via `browser-window-focus` above): the pet hops to a screen when
@@ -581,8 +585,11 @@ app.whenReady().then(() => {
     toast: (msg) => { if (readSettings().perfStallToast) sendMain(CH.perfStall, { msg }) },
     now: () => performance.now(),
   })
+  // The stall monitor's 50ms sampler wakes the main event loop 20×/s forever — a real idle-power drain
+  // (it alone keeps the CPU from ever quiescing / App Nap from engaging). So it's OFF unless the user
+  // opts in via the 调试 pane (perfDiagnostics); a normal session never runs it.
   const perfMonitor = new EventLoopMonitor()
-  perfMonitor.start((ms, active) => stallReporter.report(ms, active))
+  if (readSettings().perfDiagnostics) perfMonitor.start((ms, active) => stallReporter.report(ms, active))
 
   // Assigned just below (after scheduleCwd is defined). The pty onData closure references it, but that
   // only fires asynchronously once a terminal is spawned, long after this synchronous setup completes.

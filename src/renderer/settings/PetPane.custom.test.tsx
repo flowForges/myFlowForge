@@ -5,7 +5,7 @@ import type { Pet } from '@shared/types'
 import { PET_CUSTOM_MAX } from '@shared/petCustom'
 
 const BASE_PET: Pet = {
-  enabled: true, skin: 'sprite', customPets: [], corner: 'right', pos: { bottom: 24 }, followCursor: false, scale: 1,
+  enabled: true, skin: 'sprite', customPets: [], corner: 'right', pos: { bottom: 24 }, followCursor: false, idleAnimation: true, scale: 1,
   notify: { confirm: true, input: true, done: false }, interactionMode: 'full',
   states: {
     idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' },
