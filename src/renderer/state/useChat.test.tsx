@@ -7,12 +7,15 @@ interface QueueEvent { workspacePath: string; busy: boolean; queue: { id: string
 let handler: ((e: ChatEvent) => void) | null = null
 let queueHandler: ((e: QueueEvent) => void) | null = null
 const history: ChatMessage[] = [{ id: 'h1', who: 'user', text: 'old', ts: '0' }]
+let queueSnapshot: QueueEvent = { workspacePath: '/ws', busy: false, queue: [], running: null, runningTurns: [], runningSessionId: null, runningSessionIds: [] }
 
 beforeEach(() => {
   handler = null
   queueHandler = null
+  queueSnapshot = { workspacePath: '/ws', busy: false, queue: [], running: null, runningTurns: [], runningSessionId: null, runningSessionIds: [] }
   ;(window as any).forge = {
     chatHistory: vi.fn(async () => history),
+    chatQueueState: vi.fn(async () => queueSnapshot),
     sendChat: vi.fn(async () => ({})),
     onChatEvent: (cb: (e: ChatEvent) => void) => { handler = cb; return () => { handler = null } },
     onChatQueueEvent: (cb: (e: QueueEvent) => void) => { queueHandler = cb; return () => { queueHandler = null } },
@@ -158,6 +161,22 @@ describe('useChat', () => {
     act(() => { queueHandler!({ workspacePath: '/ws', busy: true, queue: [{ id: 'q1', text: 'task one', source: '你', sessionId: 's1' }], running: null, runningTurns: [{ id: 'r0', text: 'running', sessionId: 's1' }], runningSessionId: 's1', runningSessionIds: ['s1'] }) })
     expect(result.current.busy).toBe(true)
     expect(result.current.queue).toEqual([{ id: 'q1', text: 'task one', source: '你' }])
+  })
+
+  it('re-seeds the queue from the main-side snapshot on mount (switch away and back keeps queued items)', async () => {
+    // The queue event only fires when the queue CHANGES, so on switch-back the view must pull the
+    // current snapshot — otherwise a message queued behind a running turn silently disappears.
+    queueSnapshot = {
+      workspacePath: '/ws', busy: true,
+      queue: [{ id: 'q9', text: '排队的指令', source: '你', sessionId: 's1' }],
+      running: { id: 'r9', text: '正在跑', sessionId: 's1' },
+      runningTurns: [{ id: 'r9', text: '正在跑', sessionId: 's1' }],
+      runningSessionId: 's1', runningSessionIds: ['s1'],
+    }
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.queue).toEqual([{ id: 'q9', text: '排队的指令', source: '你' }]))
+    expect(result.current.busy).toBe(true)
+    expect(result.current.running).toEqual({ id: 'r9', text: '正在跑' })
   })
 
   it('resets busy/queue when the active workspace changes', async () => {

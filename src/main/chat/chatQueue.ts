@@ -1,4 +1,4 @@
-import type { ChatSendPayload } from '@shared/types'
+import type { ChatSendPayload, ChatQueueEvent } from '@shared/types'
 import { CH } from '../ipc/channels'
 
 interface QueuedTask { id: string; source: string; payload: ChatSendPayload }
@@ -92,11 +92,18 @@ export class ChatQueue {
     })
   }
 
-  private emit(ws: string): void {
+  // The current queue/running state for a workspace, in the same shape as the broadcast event. The
+  // chatQueueEvent only fires when the queue CHANGES, so a chat view that mounts (or a session switched
+  // away and back) must pull this snapshot to re-seed its lane — otherwise a stable queue is invisible.
+  snapshot(ws: string): ChatQueueEvent {
+    return this.buildEvent(ws)
+  }
+
+  private buildEvent(ws: string): ChatQueueEvent {
     const lanes = [...this.lanes(ws).values()]
     const running = lanes.map(l => l.running).filter((r): r is NonNullable<typeof r> => !!r)
     const queue = lanes.flatMap(l => l.queue)
-    this.broadcast(CH.chatQueueEvent, {
+    return {
       workspacePath: ws,
       busy: running.length > 0,
       queue: queue.map(t => ({ id: t.id, text: t.payload.text, source: t.source, sessionId: t.payload.sessionId })),
@@ -104,6 +111,10 @@ export class ChatQueue {
       runningTurns: running.map(r => ({ id: r.id, text: r.text, sessionId: r.sessionId })),
       runningSessionId: running[0]?.sessionId ?? null,
       runningSessionIds: running.map(r => r.sessionId),
-    })
+    }
+  }
+
+  private emit(ws: string): void {
+    this.broadcast(CH.chatQueueEvent, this.buildEvent(ws))
   }
 }
