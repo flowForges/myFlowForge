@@ -689,6 +689,8 @@ export function App() {
           onClose={() => { setLogOpen(false); setAgentLogFilter(null) }}
           agentFilter={agentLogFilter}
           onClearAgentFilter={() => setAgentLogFilter(null)}
+          activeWs={activeWsId || undefined}
+          activeSess={sessions.activeSessionId ?? undefined}
         />
         <TerminalPanel
           open={termOpen}

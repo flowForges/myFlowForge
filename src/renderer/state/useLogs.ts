@@ -48,6 +48,7 @@ export function useLogs(): LogsApi {
         streamingLines.current.set(e.id, lineId)
         const line: LogLine = {
           id: lineId, t, level: 'out', src: '主代理', color: 'var(--accent)',
+          ws: e.workspacePath, sess: e.sessionId,
           text: '', streaming: true,
         }
         setLogs(prev => appendLines(prev, [line]))
@@ -69,6 +70,7 @@ export function useLogs(): LogsApi {
           streamingLines.current.set(e.id, newId)
           const line: LogLine = {
             id: newId, t, level: 'think', src: '主代理', color: 'var(--accent)',
+            ws: e.workspacePath, sess: e.sessionId,
             text: e.text, streaming: true,
           }
           setLogs(prev => appendLines(prev, [line]))
@@ -89,6 +91,7 @@ export function useLogs(): LogsApi {
           streamingLines.current.set(e.id, newId)
           const line: LogLine = {
             id: newId, t, level: 'out', src: '主代理', color: 'var(--accent)',
+            ws: e.workspacePath, sess: e.sessionId,
             text: e.text, streaming: true,
           }
           setLogs(prev => appendLines(prev, [line]))
@@ -107,9 +110,9 @@ export function useLogs(): LogsApi {
         return
       }
 
-      // user / error → use pure mappers
+      // user / error → use pure mappers. Stamp the session so the log can auto-scope to it.
       const lines = chatEventToLines(e, now)
-      if (lines.length) push(lines)
+      if (lines.length) push(lines.map(l => ({ ...l, ws: e.workspacePath, sess: e.sessionId })))
     })
 
     return () => { offChat() }

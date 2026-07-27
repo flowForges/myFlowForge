@@ -26,9 +26,14 @@ export interface LogConsoleProps {
   /** When set, only this agent's lines are shown (matched by id against LogLine.filterId, falling back to .src). */
   agentFilter?: { id: string; name: string } | null
   onClearAgentFilter?: () => void
+  /** The workspace+session the user is currently viewing. When no agentFilter is pinned, the log
+   *  auto-scopes to this session so session A doesn't show session B's agent output. Lines without a
+   *  session (run2/changes/system) are always shown. */
+  activeWs?: string
+  activeSess?: string
 }
 
-export function LogConsole({ open, dual, focused, onHandleDown, logs, busy, onClear, onClose, agentFilter, onClearAgentFilter }: LogConsoleProps) {
+export function LogConsole({ open, dual, focused, onHandleDown, logs, busy, onClear, onClose, agentFilter, onClearAgentFilter, activeWs, activeSess }: LogConsoleProps) {
   const [filter, setFilter] = useState<Filter>('all')
   const [auto, setAuto] = useState(true)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -120,7 +125,15 @@ export function LogConsole({ open, dual, focused, onHandleDown, logs, busy, onCl
             // Matched against `filterId` when the line carries one (run2 lines — see LogLine's doc,
             // `src` there is a shared stage name, not unique per lane) and falls back to `src`
             // otherwise (the pre-existing/old-orchestrator behavior, unchanged).
-            const hidden = (filter !== 'all' && filter !== line.level) || (!!agentFilter && (line.filterId ?? line.src) !== agentFilter.id)
+            // Session auto-scope: when NO agent is pinned, hide lines belonging to a DIFFERENT
+            // (workspace, session) than the one being viewed — you shouldn't see session B's agent
+            // output while sitting in A. Lines with no session (run2/changes/system) are always shown.
+            // A pinned agentFilter takes over instead (it's an explicit "watch this one agent" choice).
+            const outOfSession = !agentFilter && line.sess != null && activeSess != null
+              && (line.sess !== activeSess || (line.ws != null && activeWs != null && line.ws !== activeWs))
+            const hidden = (filter !== 'all' && filter !== line.level)
+              || (!!agentFilter && (line.filterId ?? line.src) !== agentFilter.id)
+              || outOfSession
             return (
               <div
                 key={line.id}

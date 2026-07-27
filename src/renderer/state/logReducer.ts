@@ -16,6 +16,12 @@ export interface LogLine {
   // `src` alone for display. Undefined here means "filter by `src`" (the old/pre-run2 behavior,
   // unchanged) — see LogConsole's `hidden` check.
   filterId?: string
+  // Workspace + chat session this line belongs to, so the live log can auto-scope to the session the
+  // user is viewing (you shouldn't see workspace/session B's agent output while sitting in A). Set from
+  // the source ChatEvent's workspacePath/sessionId. Undefined = unattributed (run2/changes/system lines)
+  // → always shown regardless of the active session. See LogConsole's `hidden` check.
+  ws?: string
+  sess?: string
   color: string
   text: string
   streaming: boolean

@@ -65,6 +65,29 @@ describe('LogConsole', () => {
     expect(outLine).toHaveClass('hide')
   })
 
+  it('auto-scopes to the active session: hides other sessions, keeps unattributed lines', () => {
+    const logs = [
+      mkLine({ id: 'a', level: 'out', text: 'from A', ws: '/ws', sess: 'sA' }),
+      mkLine({ id: 'b', level: 'out', text: 'from B', ws: '/ws', sess: 'sB' }),
+      mkLine({ id: 's', level: 'out', text: 'system line' }),   // no session → always shown
+    ]
+    render(<LogConsole {...baseProps} logs={logs} activeWs="/ws" activeSess="sA" />)
+    expect(screen.getByText('from A').closest('.lg-line')).not.toHaveClass('hide')
+    expect(screen.getByText('from B').closest('.lg-line')).toHaveClass('hide')
+    expect(screen.getByText('system line').closest('.lg-line')).not.toHaveClass('hide')
+  })
+
+  it('a pinned agentFilter overrides session scope (watch one agent across the noise)', () => {
+    const logs = [
+      mkLine({ id: 'a', level: 'out', text: 'agent one', src: 'a1', ws: '/ws', sess: 'sB' }),
+      mkLine({ id: 'b', level: 'out', text: 'agent two', src: 'a2', ws: '/ws', sess: 'sA' }),
+    ]
+    render(<LogConsole {...baseProps} logs={logs} activeWs="/ws" activeSess="sA" agentFilter={{ id: 'a1', name: 'a1' }} />)
+    // The pinned agent (a1) shows even though its session (sB) != active (sA); the other is hidden.
+    expect(screen.getByText('agent one').closest('.lg-line')).not.toHaveClass('hide')
+    expect(screen.getByText('agent two').closest('.lg-line')).toHaveClass('hide')
+  })
+
   it('active filter button has "on" class', () => {
     render(<LogConsole {...baseProps} />)
     // Initially "全部" is active
