@@ -5,7 +5,7 @@ import { forgeChatDirective } from '../forgeChatDirective'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
-import { logError } from '../../log/appLog'
+import { logError, appLog } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
 import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, type CanUseTool } from './claudeControl'
 
@@ -318,6 +318,11 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           cb.onError(new Error(diag))
           return { ok: false, summary: diag }
         }
+        // Per-turn end-condition breadcrumb (filter the debug log by scope 'claude'). A clean but
+        // PREMATURE exit — output truncated while claude looked done — otherwise leaves no trace; this
+        // records exit code, elapsed, whether any text/tool was seen, and whether the idle watchdog
+        // fired, so a truncation report can be pinned to its actual cause.
+        appLog('info', 'claude', `chat 结束 · 退出码 ${res.exitCode} · ${elapsed}s · 文本=${sawAssistant} 工具=${sawTool} 看门狗=${wd.firedFlag}`)
         cb.onDone({ elapsed })
         return { ok: res.exitCode === 0, summary: res.exitCode === 0 ? '完成' : `退出码 ${res.exitCode}` }
       }).catch((err) => { wd.clear(); cb.onError(err as Error); return { ok: false } })

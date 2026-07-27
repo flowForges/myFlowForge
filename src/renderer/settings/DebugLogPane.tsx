@@ -59,6 +59,9 @@ export function DebugLogPane({ perfDiagnostics = false, onTogglePerfDiagnostics 
     flash('已复制 ' + shown.length + ' 行')
   }
 
+  // Distinct scopes actually present (claude/codex/qoder/perf/…), so a noisy scope (e.g. a codex
+  // session spamming 无回复) can be filtered out to find another provider's entries.
+  const scopes = [...new Set(entries.map(e => e.scope).filter(Boolean))].sort()
   const scoped = filterByScope(entries, scopeFilter)
   const shown = level === 'all' ? scoped : scoped.filter(e => RANK[e.level] >= RANK[level as LogLevel])
   const errs = entries.filter(e => e.level === 'error').length
@@ -91,7 +94,9 @@ export function DebugLogPane({ perfDiagnostics = false, onTogglePerfDiagnostics 
           {LEVELS.map(l => (
             <button key={l.key} className={'dl-fch' + (level === l.key ? ' on' : '')} onClick={() => setLevel(l.key)}>{l.label}</button>
           ))}
-          <button className={'dl-fch' + (scopeFilter === 'perf' ? ' on' : '')} onClick={() => setScopeFilter(scopeFilter === 'perf' ? null : 'perf')}>性能</button>
+          {scopes.map(sc => (
+            <button key={sc} className={'dl-fch' + (scopeFilter === sc ? ' on' : '')} onClick={() => setScopeFilter(scopeFilter === sc ? null : sc)}>{sc === 'perf' ? '性能' : sc}</button>
+          ))}
         </div>
         <span className="dl-stat">{shown.length} 条{errs ? ` · ${errs} 错误` : ''}</span>
         <label className="dl-auto"><input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />自动滚动</label>
