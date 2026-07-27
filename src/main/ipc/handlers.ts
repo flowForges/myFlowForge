@@ -1,6 +1,7 @@
 import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
-import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel } from '../config/store'
+import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
+import { providerSupportsPermissions } from '@shared/permissions'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -442,6 +443,21 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm' })
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where })
     })
+    // Pre-run consent gate: providers with no sandbox dimension (cursor/gemini/opencode/qwen/copilot)
+    // ignore the permission档 and run with blanket full access (--force/--allow-all-tools/--yolo). Make
+    // that explicit — ask ONCE per (workspace, provider), remember an allow. 'full' mode = the user
+    // already chose full access, so skip. Interactive/sandboxed providers (claude/codex/qoder) don't hit this.
+    if (!providerSupportsPermissions(provider.id) && payload.permissionMode !== 'full'
+        && !isFullAccessAcked(payload.workspacePath, provider.id)) {
+      const decision = await confirm({
+        title: `${provider.displayName} 无法逐操作确认，本次将以「完全访问」运行（可修改任意文件、可联网）。是否授权？（本工作区将记住）`,
+      })
+      if (decision !== 'allow') {
+        emitNote(payload.workspacePath, payload.sessionId, `已取消：未授权 ${provider.displayName} 以完全访问运行。`)
+        return
+      }
+      ackFullAccess(payload.workspacePath, provider.id)
+    }
     const store = new RunStore(payload.workspacePath, 'chat-bridge')
     // forge_delegate is fire-and-forget: its MCP call returns 「已派发」at once, so without this the turn
     // would resolve while the sub-agents keep running in the background — and the NEXT message would start
