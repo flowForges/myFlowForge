@@ -447,16 +447,25 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // ignore the permission档 and run with blanket full access (--force/--allow-all-tools/--yolo). Make
     // that explicit — ask ONCE per (workspace, provider), remember an allow. 'full' mode = the user
     // already chose full access, so skip. Interactive/sandboxed providers (claude/codex/qoder) don't hit this.
-    if (!providerSupportsPermissions(provider.id) && payload.permissionMode !== 'full'
-        && !isFullAccessAcked(payload.workspacePath, provider.id)) {
+    // Classify by payload.agent — the selected provider id, always present — NOT provider.id, which
+    // requires the provider object to be resolved (undefined when providers is empty). Label falls back
+    // to the id if the provider object isn't available.
+    const gateProviderId = payload.agent
+    const gateLabel = provider?.displayName ?? payload.agent
+    if (!providerSupportsPermissions(gateProviderId) && payload.permissionMode !== 'full'
+        && !isFullAccessAcked(payload.workspacePath, gateProviderId)) {
       const decision = await confirm({
-        title: `${provider.displayName} 无法逐操作确认，本次将以「完全访问」运行（可修改任意文件、可联网）。是否授权？（本工作区将记住）`,
+        title: `${gateLabel} 无法逐操作确认，本次将以「完全访问」运行（可修改任意文件、可联网）。是否授权？（本工作区将记住）`,
       })
       if (decision !== 'allow') {
-        emitNote(payload.workspacePath, payload.sessionId, `已取消：未授权 ${provider.displayName} 以完全访问运行。`)
+        emitNote(payload.workspacePath, payload.sessionId, `已取消：未授权 ${gateLabel} 以完全访问运行。`)
         return
       }
-      ackFullAccess(payload.workspacePath, provider.id)
+      ackFullAccess(payload.workspacePath, gateProviderId)
+      // Keep the renderer's in-memory settings snapshot in sync — otherwise its next config:set-settings
+      // (any UI settings save) writes back a stale fullAccessAck and wipes this ack. Mirrors the
+      // pinnedWorkspaces/workspaceOrder writers in this file.
+      broadcast(CH.settingsChanged, readSettings())
     }
     const store = new RunStore(payload.workspacePath, 'chat-bridge')
     // forge_delegate is fire-and-forget: its MCP call returns 「已派发」at once, so without this the turn
