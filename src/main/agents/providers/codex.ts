@@ -8,6 +8,9 @@ import { permissionArgs } from '../permissionArgs'
 import { readCodexModelsCache } from './codexModels'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
+import { driveCodexTurn } from './codexAppServer'
+import { codexSandboxApproval } from './codexApproval'
+import { readSettings } from '../../config/store'
 
 // codex (Rust) emits internal engine logs on stderr — either bare, e.g.
 //   `codex_models_manager::manager::failed to refresh available models: …`
@@ -154,6 +157,12 @@ export function codexErrorMessage(obj: any): string | null {
 // Only force `-m` for an explicitly-chosen non-default model.
 function codexModelArgs(model: string): string[] { return model && model !== 'default' ? ['-m', model] : [] }
 
+// App-server variant of the above: `-m` is a flag scoped to the `exec`/`chat` subcommand. The
+// app-server transport spawns `codex [...] app-server` directly (no `exec` subcommand in front),
+// so `-m` before `app-server` may not be recognised — pass the model as a `-c` config override
+// instead, which codex accepts at any point on the command line.
+function codexModelConfigArgs(model: string): string[] { return model && model !== 'default' ? ['-c', `model="${model}"`] : [] }
+
 // The forge_propose_plan chat directive now lives in ../forgeChatDirective (shared with qoder,
 // which also can't see .claude/skills). Re-exported here for existing importers/tests.
 export { forgeChatDirective } from '../forgeChatDirective'
@@ -177,23 +186,16 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      const args = spec.preArgs
-        ? [...spec.preArgs]
-        : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
-      // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
-      let buf = ''
       let ctxMaxSeen = 0
-      const processLine = (raw: string) => {
-        const line = raw.trim()
-        if (!line) return
-        let obj: unknown
-        try { obj = JSON.parse(line) } catch {
-          // Garbage / non-JSON raw line: run through scanner at info level
-          const kept = scanner.feedLine(line)
-          if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
-          return
-        }
+      // Only the app-server transport ever emits a streamed 'assistant' delta ahead of the final
+      // 'assistant-final' item — exec's `codex exec --json` only emits item.completed, never deltas,
+      // so this stays false (inert) on the exec path. Mirrors chat()'s `handle` dedup below.
+      let sawDelta = false
+      // Per-line rendering shared by both transports: exec's processLine (below, fed raw JSONL from
+      // stdout) and the app-server branch (fed the exec-shaped events driveCodexTurn adapts).
+      // `rawLine` is the original JSONL text — only exec has one; the app-server branch (no raw
+      // wire text, just an already-parsed object) falls back to re-stringifying it.
+      const handleRunEvent = (obj: unknown, rawLine?: string) => {
         // Codex usage (if present in a claude-compatible shape) feeds the same context bar; when
         // codex's usage shape differs, extractContextTokens returns null and the bar simply omits.
         const used = extractContextTokens(obj)
@@ -204,6 +206,11 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           for (const a of actions) {
             if (a.kind === 'session') { cb.onSession?.(a.id); continue }  // forward session id to sidecar
             const loggable = a as CodexActionLoggable
+            if (loggable.kind === 'assistant') sawDelta = true
+            // A streamed delta already rendered the text — drop the duplicate full-text
+            // item.completed render (app-server double-renders otherwise: fragmented deltas +
+            // a full duplicate). Deltas themselves are still logged (still `kept`/`cb.onLog`d below).
+            else if (loggable.kind === 'assistant-final' && sawDelta) continue
             const { level, kind } = codexKind(loggable)
             const kept = loggable.text.split('\n').flatMap(l => scanner.feedLine(l))
             if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level, kind })
@@ -221,7 +228,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           // is detected and the line isn't silently dropped; recognised type-less-text
           // events (lifecycle noise) still fall through and are ignored.
           if (t === undefined) {
-            const kept = scanner.feedLine(line)
+            const kept = scanner.feedLine(rawLine ?? JSON.stringify(o))
             if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
           }
           return
@@ -232,6 +239,68 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         else level = 'info'
         const kept = String(text).split('\n').flatMap(l => scanner.feedLine(l))
         if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level })
+      }
+      // App-server transport: drive the turn over JSON-RPC instead of spawning `codex exec`. Gated
+      // by the codexTransport setting (default 'exec') and skipped for preArgs specs (e.g. custom
+      // codex-derived providers) which don't necessarily speak app-server the same way.
+      const useAppServer = readSettings().codexTransport === 'app-server' && !spec.preArgs
+      if (useAppServer) {
+        const forge = forgeCodexConfigArgs(env).length > 0
+        const { sandbox, approvalPolicy } = codexSandboxApproval(task.permissionMode ?? 'auto', forge)
+        let handle: ReturnType<typeof driveCodexTurn> | null = null
+        try {
+          handle = driveCodexTurn(
+            { cwd: task.cwd, prompt: task.prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy },
+            {
+              onEvent: (e) => { cb.onActivity?.(); handleRunEvent(e) },
+              onApproval: async (r) => cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') }),
+              onSession: (id) => cb.onSession?.(id),
+              onError: (m) => { logError('codex', 'app-server run 错误', m) },
+            },
+          )
+        } catch {
+          // This catch only covers a SYNCHRONOUS driveCodexTurn throw (a spawn-option error
+          // thrown before the child even starts — codex missing / app-server unsupported), and
+          // falls through to the exec path below. An ASYNC spawn/handshake failure (e.g. an old
+          // codex binary that doesn't support app-server: the child's 'error'/'close' fires AFTER
+          // driveCodexTurn already returned a handle) does NOT hit this catch — it surfaces as a
+          // failed turn via cb.onError + a failed `done` below instead of silently retrying
+          // through exec. Acceptable while this transport is opt-in/default-off (codexTransport
+          // defaults to 'exec'); a mid-run fallback was considered and rejected as too complex.
+          handle = null
+        }
+        if (handle) {
+          const appServerHandle = handle
+          const done = appServerHandle.done.then((res) => {
+            for (const out of scanner.flush()) cb.onLog({ ts: now(), text: out, level: 'info' })
+            cb.onState(res.ok ? 'ok' : 'err')
+            const result = { ok: res.ok, summary: res.ok ? '完成' : 'codex app-server 失败' }
+            cb.onDone(result)
+            return result
+          }).catch((err) => {
+            logError('codex', 'app-server done 异常', String((err as Error)?.message ?? err))
+            return { ok: false }
+          })
+          return { id: task.agentId, cancel: () => appServerHandle.cancel(), done }
+        }
+      }
+      const args = spec.preArgs
+        ? [...spec.preArgs]
+        : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
+      // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
+      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
+      let buf = ''
+      const processLine = (raw: string) => {
+        const line = raw.trim()
+        if (!line) return
+        let obj: unknown
+        try { obj = JSON.parse(line) } catch {
+          // Garbage / non-JSON raw line: run through scanner at info level
+          const kept = scanner.feedLine(line)
+          if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
+          return
+        }
+        handleRunEvent(obj, line)
       }
       child.stdout?.on('data', (b: Buffer) => {
         // Any stdout byte means the process is alive — including in-flight item.started/updated
@@ -279,6 +348,85 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
+      const start = Date.now()
+      let sawDelta = false
+      let lastErr: string | null = null
+      let ctxMaxSeen = 0
+      // Per-event handling shared by both transports: exec's processLine (below, fed raw JSONL from
+      // stdout) and the app-server branch (fed the exec-shaped events driveCodexTurn adapts). Hoisted
+      // above the transport branch — along with its mutable state (sawDelta/lastErr/ctxMaxSeen) — so
+      // both share the exact same function/state instead of duplicating it.
+      const handle = (obj: unknown) => {
+        const err = codexErrorMessage(obj)
+        if (err) lastErr = err
+        // Best-effort context usage: codex's chat events rarely carry a claude-compatible usage
+        // object, so extractContextTokens usually returns null and the bar simply omits. Kept for
+        // symmetry with run() so a compatible usage shape would feed the session context meter.
+        const used = extractContextTokens(obj)
+        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        // Surface codex's command/file execution in the 执行 block (title + output), then drop the
+        // duplicate think step parseCodexEvent renders for the same item.
+        const toolAct = codexToolActivity(obj)
+        if (toolAct) cb.onToolActivity?.(toolAct)
+        for (const a of parseCodexEvent(obj)) {
+          if (a.kind === 'session') cb.onSession(a.id)
+          else if (a.kind === 'assistant') { sawDelta = true; cb.onAssistantDelta(a.text) }
+          else if (a.kind === 'assistant-final') { if (!sawDelta) cb.onAssistantDelta(a.text) }
+          else if (a.kind === 'think') { if (a.text.startsWith('调用 shell') || a.text.startsWith('编辑文件')) continue; cb.onThinkDelta(a.text) }
+        }
+      }
+      // App-server transport: drive the turn over JSON-RPC instead of spawning `codex exec`. Gated by
+      // the codexTransport setting (default 'exec') and skipped for preArgs specs, mirroring run()'s
+      // app-server branch. Events are fed through the same `handle` the exec path below uses, so both
+      // transports render identically; `cb.onConfirm` is optional on ChatCallbacks, so a missing
+      // confirm gate fails closed to 'deny' rather than approving unattended.
+      const useAppServer = readSettings().codexTransport === 'app-server' && !spec.preArgs
+      if (useAppServer) {
+        const forge = forgeCodexConfigArgs(env).length > 0
+        const { sandbox, approvalPolicy } = codexSandboxApproval(task.permissionMode ?? 'auto', forge)
+        let appHandle: ReturnType<typeof driveCodexTurn> | null = null
+        // The exec chat path guards against a wedged turn with an INACTIVITY watchdog (`wd` below,
+        // armed on spawn, beaten on every stdout/stderr chunk). The app-server transport has no
+        // equivalent liveness guard of its own — if codex wedges mid-turn (process alive, emitting
+        // nothing over the JSON-RPC stream), `done` never resolves and the spinner never clears.
+        // Mirror the exec path: arm on start, beat on every event/approval, clear on settle.
+        const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => appHandle?.cancel())
+        try {
+          appHandle = driveCodexTurn(
+            { cwd: task.cwd, prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
+            {
+              onEvent: (e) => { wd.beat(); handle(e) },
+              onApproval: async (r) => { wd.beat(); return cb.onConfirm ? await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') }) : 'deny' },
+              onSession: (id) => cb.onSession(id),
+              onError: (m) => { cb.onError(new Error(m)) },
+            },
+          )
+        } catch {
+          // This catch only covers a SYNCHRONOUS driveCodexTurn throw (a spawn-option error
+          // thrown before the child even starts — codex missing / app-server unsupported), and
+          // falls through to the exec path below. An ASYNC spawn/handshake failure (e.g. an old
+          // codex binary that doesn't support app-server: the child's 'error'/'close' fires AFTER
+          // driveCodexTurn already returned a handle) does NOT hit this catch — it surfaces as a
+          // failed turn via cb.onError + a failed `done` below instead of silently retrying
+          // through exec. Acceptable while this transport is opt-in/default-off (codexTransport
+          // defaults to 'exec'); a mid-turn fallback was considered and rejected as too complex.
+          wd.clear()
+          appHandle = null
+        }
+        if (appHandle) {
+          const session = appHandle
+          const done = session.done.then((res) => {
+            wd.clear()
+            cb.onDone({ elapsed: Math.round((Date.now() - start) / 1000) })
+            return { ok: res.ok, summary: res.ok ? '完成' : 'codex app-server 失败' }
+          }).catch((err) => {
+            wd.clear()
+            logError('codex', 'app-server done 异常', String((err as Error)?.message ?? err))
+            return { ok: false }
+          })
+          return { id: task.id, cancel: () => { wd.clear(); session.cancel() }, done }
+        }
+      }
       // codex only executes an MCP tool call when sandbox_mode is danger-full-access; with
       // read-only/workspace-write it treats the call as a sandbox escape and — since approval_policy
       // is "never" — cancels it ("user cancelled MCP tool call"), so chat-initiated forge_delegate /
@@ -301,34 +449,11 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
       const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
-      const start = Date.now()
       let buf = ''
-      let sawDelta = false
-      let lastErr: string | null = null
       let rawOut = ''   // raw stdout we couldn't turn into assistant/think output
       let rawErr = ''   // raw stderr (codex logs/errors)
       let errBuf = ''   // stderr line-splitter for live onStatus forwarding
-      let ctxMaxSeen = 0
       const cap = (s: string, add: string) => (s + add).slice(-2000)   // keep a bounded tail
-      const handle = (obj: unknown) => {
-        const err = codexErrorMessage(obj)
-        if (err) lastErr = err
-        // Best-effort context usage: codex's chat events rarely carry a claude-compatible usage
-        // object, so extractContextTokens usually returns null and the bar simply omits. Kept for
-        // symmetry with run() so a compatible usage shape would feed the session context meter.
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
-        // Surface codex's command/file execution in the 执行 block (title + output), then drop the
-        // duplicate think step parseCodexEvent renders for the same item.
-        const toolAct = codexToolActivity(obj)
-        if (toolAct) cb.onToolActivity?.(toolAct)
-        for (const a of parseCodexEvent(obj)) {
-          if (a.kind === 'session') cb.onSession(a.id)
-          else if (a.kind === 'assistant') { sawDelta = true; cb.onAssistantDelta(a.text) }
-          else if (a.kind === 'assistant-final') { if (!sawDelta) cb.onAssistantDelta(a.text) }
-          else if (a.kind === 'think') { if (a.text.startsWith('调用 shell') || a.text.startsWith('编辑文件')) continue; cb.onThinkDelta(a.text) }
-        }
-      }
       const processLine = (raw: string) => {
         const line = raw.trim()
         if (!line) return
