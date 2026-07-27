@@ -325,6 +325,68 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
+      const start = Date.now()
+      let sawDelta = false
+      let lastErr: string | null = null
+      let ctxMaxSeen = 0
+      // Per-event handling shared by both transports: exec's processLine (below, fed raw JSONL from
+      // stdout) and the app-server branch (fed the exec-shaped events driveCodexTurn adapts). Hoisted
+      // above the transport branch — along with its mutable state (sawDelta/lastErr/ctxMaxSeen) — so
+      // both share the exact same function/state instead of duplicating it.
+      const handle = (obj: unknown) => {
+        const err = codexErrorMessage(obj)
+        if (err) lastErr = err
+        // Best-effort context usage: codex's chat events rarely carry a claude-compatible usage
+        // object, so extractContextTokens usually returns null and the bar simply omits. Kept for
+        // symmetry with run() so a compatible usage shape would feed the session context meter.
+        const used = extractContextTokens(obj)
+        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        // Surface codex's command/file execution in the 执行 block (title + output), then drop the
+        // duplicate think step parseCodexEvent renders for the same item.
+        const toolAct = codexToolActivity(obj)
+        if (toolAct) cb.onToolActivity?.(toolAct)
+        for (const a of parseCodexEvent(obj)) {
+          if (a.kind === 'session') cb.onSession(a.id)
+          else if (a.kind === 'assistant') { sawDelta = true; cb.onAssistantDelta(a.text) }
+          else if (a.kind === 'assistant-final') { if (!sawDelta) cb.onAssistantDelta(a.text) }
+          else if (a.kind === 'think') { if (a.text.startsWith('调用 shell') || a.text.startsWith('编辑文件')) continue; cb.onThinkDelta(a.text) }
+        }
+      }
+      // App-server transport: drive the turn over JSON-RPC instead of spawning `codex exec`. Gated by
+      // the codexTransport setting (default 'exec') and skipped for preArgs specs, mirroring run()'s
+      // app-server branch. Events are fed through the same `handle` the exec path below uses, so both
+      // transports render identically; `cb.onConfirm` is optional on ChatCallbacks, so a missing
+      // confirm gate fails closed to 'deny' rather than approving unattended.
+      const useAppServer = readSettings().codexTransport === 'app-server' && !spec.preArgs
+      if (useAppServer) {
+        const forge = forgeCodexConfigArgs(env).length > 0
+        const { sandbox, approvalPolicy } = codexSandboxApproval(task.permissionMode ?? 'auto', forge)
+        let appHandle: ReturnType<typeof driveCodexTurn> | null = null
+        try {
+          appHandle = driveCodexTurn(
+            { cwd: task.cwd, prompt, modelArgs: codexModelArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
+            {
+              onEvent: (e) => handle(e),
+              onApproval: async (r) => cb.onConfirm ? await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') }) : 'deny',
+              onSession: (id) => cb.onSession(id),
+              onError: (m) => { cb.onError(new Error(m)) },
+            },
+          )
+        } catch {
+          // Synchronous spawn throw (codex missing / app-server unsupported): fall through to the
+          // exec path below. A mid-turn app-server error (after the handle exists) surfaces via
+          // onError + a failed `done` instead — it is reported, not silently retried via exec.
+          appHandle = null
+        }
+        if (appHandle) {
+          const session = appHandle
+          const done = session.done.then((res) => {
+            cb.onDone({ elapsed: Math.round((Date.now() - start) / 1000) })
+            return { ok: res.ok, summary: res.ok ? '完成' : 'codex app-server 失败' }
+          })
+          return { id: task.id, cancel: () => session.cancel(), done }
+        }
+      }
       // codex only executes an MCP tool call when sandbox_mode is danger-full-access; with
       // read-only/workspace-write it treats the call as a sandbox escape and — since approval_policy
       // is "never" — cancels it ("user cancelled MCP tool call"), so chat-initiated forge_delegate /
@@ -347,34 +409,11 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
       const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
-      const start = Date.now()
       let buf = ''
-      let sawDelta = false
-      let lastErr: string | null = null
       let rawOut = ''   // raw stdout we couldn't turn into assistant/think output
       let rawErr = ''   // raw stderr (codex logs/errors)
       let errBuf = ''   // stderr line-splitter for live onStatus forwarding
-      let ctxMaxSeen = 0
       const cap = (s: string, add: string) => (s + add).slice(-2000)   // keep a bounded tail
-      const handle = (obj: unknown) => {
-        const err = codexErrorMessage(obj)
-        if (err) lastErr = err
-        // Best-effort context usage: codex's chat events rarely carry a claude-compatible usage
-        // object, so extractContextTokens usually returns null and the bar simply omits. Kept for
-        // symmetry with run() so a compatible usage shape would feed the session context meter.
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
-        // Surface codex's command/file execution in the 执行 block (title + output), then drop the
-        // duplicate think step parseCodexEvent renders for the same item.
-        const toolAct = codexToolActivity(obj)
-        if (toolAct) cb.onToolActivity?.(toolAct)
-        for (const a of parseCodexEvent(obj)) {
-          if (a.kind === 'session') cb.onSession(a.id)
-          else if (a.kind === 'assistant') { sawDelta = true; cb.onAssistantDelta(a.text) }
-          else if (a.kind === 'assistant-final') { if (!sawDelta) cb.onAssistantDelta(a.text) }
-          else if (a.kind === 'think') { if (a.text.startsWith('调用 shell') || a.text.startsWith('编辑文件')) continue; cb.onThinkDelta(a.text) }
-        }
-      }
       const processLine = (raw: string) => {
         const line = raw.trim()
         if (!line) return
