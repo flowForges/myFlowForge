@@ -287,6 +287,9 @@ export const SettingsSchema = z.object({
   // qwen/copilot). Once allowed for a workspace we don't re-prompt. Keyed: workspacePath → provider ids.
   fullAccessAck: z.record(z.string(), z.array(z.string())).catch({}).default(() => ({})),
   memory: MemorySchema.default(defaultMemory),
+  // codex 驱动通路:'exec' = 现有的一次性 CLI 子进程调用(默认,稳定);'app-server' = 新的常驻
+  // JSON-RPC app-server 传输(见 codexRpc.ts),支持权限交互等更细粒度控制。先落地开关,接线在后续任务。
+  codexTransport: z.enum(['exec', 'app-server']).catch('exec').default('exec'),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -313,6 +316,7 @@ export const defaultSettings = (): Settings => ({
   nsfwInstalled: {},
   fullAccessAck: {},
   memory: { enabled: true },
+  codexTransport: 'exec',
 })
 
 export const ProjectSchema = z.object({

@@ -26,6 +26,7 @@ const DEFAULTS: Settings = {
   nsfwInstalled: {},
   fullAccessAck: {},
   memory: { enabled: true },
+  codexTransport: 'exec',
 }
 
 export interface SettingsUpdate {
@@ -83,6 +84,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // loaded settings on load (cast), else keep base, matching pluginCreds/pinnedWorkspaces above.
     fullAccessAck: (partial as Partial<Settings>).fullAccessAck ?? base.fullAccessAck,
     memory: { ...base.memory, ...(partial.memory ?? {}) },
+    codexTransport: (partial as Partial<Settings>).codexTransport ?? base.codexTransport,
   }
 }
 
