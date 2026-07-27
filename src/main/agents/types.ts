@@ -7,7 +7,9 @@ export interface Model { id: string; label: string; description?: string }
 export interface AgentCapabilities { structuredOutput: boolean; permissionHook: boolean; pty: boolean; mcpTools?: boolean; liveModels?: boolean }
 
 export interface LogLine { ts: string; text: string; level: 'info' | 'ok' | 'accent' | 'run'; kind?: 'think' | 'tool' | 'file' | 'output' }
-export interface ConfirmReq { title: string; where?: string }
+// agentId: which sub-agent lane raised this (undefined = main agent). toolName: the gated tool
+// (e.g. Bash/Write) for a clearer gate label. Both optional → existing callers unaffected.
+export interface ConfirmReq { title: string; where?: string; agentId?: string; toolName?: string }
 export interface InputReq { title: string; placeholder?: string }
 export interface AgentResult { ok: boolean; summary?: string }
 
