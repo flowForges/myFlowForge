@@ -282,6 +282,10 @@ export const SettingsSchema = z.object({
   // Which gated items have been installed → their local ref (bg: forge-bg:// URL; pet: local customPets
   // id). Drives the 安装/设置 button state; a missing/deleted local file just re-downloads on 设置.
   nsfwInstalled: z.record(z.string(), z.string()).catch({}).default({}),
+  // Provider ids the user has one-time acknowledged to run with FULL access in a given workspace,
+  // for coding agents that ignore the permission档 and run unrestricted (cursor/gemini/opencode/
+  // qwen/copilot). Once allowed for a workspace we don't re-prompt. Keyed: workspacePath → provider ids.
+  fullAccessAck: z.record(z.string(), z.array(z.string())).catch({}).default(() => ({})),
   memory: MemorySchema.default(defaultMemory),
 })
 export type Settings = z.infer<typeof SettingsSchema>
@@ -307,6 +311,7 @@ export const defaultSettings = (): Settings => ({
   nsfwUnlocked: false,
   nsfwCode: '',
   nsfwInstalled: {},
+  fullAccessAck: {},
   memory: { enabled: true },
 })
 

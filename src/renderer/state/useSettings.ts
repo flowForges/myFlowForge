@@ -24,6 +24,7 @@ const DEFAULTS: Settings = {
   nsfwUnlocked: false,
   nsfwCode: '',
   nsfwInstalled: {},
+  fullAccessAck: {},
   memory: { enabled: true },
 }
 
@@ -78,6 +79,9 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     nsfwUnlocked: partial.nsfwUnlocked ?? base.nsfwUnlocked,
     nsfwCode: partial.nsfwCode ?? base.nsfwCode,
     nsfwInstalled: partial.nsfwInstalled ?? base.nsfwInstalled,
+    // Not managed via this update path (see ackFullAccess in config/store.ts) — preserve from the
+    // loaded settings on load (cast), else keep base, matching pluginCreds/pinnedWorkspaces above.
+    fullAccessAck: (partial as Partial<Settings>).fullAccessAck ?? base.fullAccessAck,
     memory: { ...base.memory, ...(partial.memory ?? {}) },
   }
 }

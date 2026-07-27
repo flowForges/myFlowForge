@@ -28,6 +28,18 @@ export function writeJson(file: string, data: unknown) {
 export const readSettings = () => readJson(sysFile('settings.json'), SettingsSchema, defaultSettings)
 export const writeSettings = (s: Settings) => writeJson(sysFile('settings.json'), SettingsSchema.parse(s))
 
+// One-time per-(workspace, provider) full-access consent (see runTurn's pre-run gate). Providers that
+// ignore the permission档 (no sandbox dimension) run unrestricted; we ask once per workspace, then remember.
+export function isFullAccessAcked(workspacePath: string, providerId: string): boolean {
+  return (readSettings().fullAccessAck[workspacePath] ?? []).includes(providerId)
+}
+export function ackFullAccess(workspacePath: string, providerId: string): void {
+  const s = readSettings()
+  const cur = s.fullAccessAck[workspacePath] ?? []
+  if (cur.includes(providerId)) return
+  writeSettings({ ...s, fullAccessAck: { ...s.fullAccessAck, [workspacePath]: [...cur, providerId] } })
+}
+
 export const readProjects = () => readJson(sysFile('projects.json'), ProjectsSchema, defaultProjects)
 export const writeProjects = (data: { projects: import('./schema').Project[] }) => writeJson(sysFile('projects.json'), ProjectsSchema.parse(data))
 // Add a project to the system-wide library, deduped by derived id (same repo name → same id).
