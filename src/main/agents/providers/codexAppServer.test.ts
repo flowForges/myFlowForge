@@ -120,6 +120,37 @@ describe('driveCodexTurn', () => {
     await expect(h.done).resolves.toEqual({ ok: true })
   })
 
+  it('does not write to the killed child when a late-resolving approval settles after cancel()', async () => {
+    // cancel() settles+kills the child. A pending onApproval that resolves
+    // afterwards must not call respond() (which would write to dead stdin).
+    const f = fakeChild()
+    let resolveApproval!: (v: 'allow' | 'deny') => void
+    const pending = new Promise<'allow' | 'deny'>(r => { resolveApproval = r })
+    const h = driveCodexTurn(
+      { cwd: '/ws', prompt: 'x', modelArgs: [], configArgs: [], sandbox: 'read-only', approvalPolicy: 'on-request' },
+      { onEvent: () => {}, onApproval: async () => pending, onSession: () => {}, onError: () => {} },
+      { spawn: () => f.child },
+    )
+    f.push({ id: f.writes[0].id, result: {} })
+    const start = f.writes.find(w => w.method === 'thread/start')
+    f.push({ id: start.id, result: { thread: { id: 't' } } })
+    f.push({ id: 55, method: 'item/commandExecution/requestApproval', params: { command: 'rm x' } })
+    await new Promise(r => setTimeout(r, 0))
+    expect(f.writes.find(w => w.id === 55)).toBeUndefined() // still pending, no response yet
+
+    h.cancel() // settles + kills the child
+    await expect(h.done).resolves.toEqual({ ok: false })
+    const writeCountAfterCancel = f.writes.length
+
+    resolveApproval('allow') // late-resolving approval fires after settle
+    await new Promise(r => setTimeout(r, 0))
+
+    // respond() is a no-op post-settle: no new write appears, and specifically
+    // no decision response is written for the pending approval id.
+    expect(f.writes.length).toBe(writeCountAfterCancel)
+    expect(f.writes.find(w => w.id === 55 && w.result?.decision)).toBeUndefined()
+  })
+
   it('falls back to opts.resumeThreadId when thread/resume omits the thread id', async () => {
     const f = fakeChild()
     driveCodexTurn(

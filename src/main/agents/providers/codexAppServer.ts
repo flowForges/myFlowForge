@@ -85,6 +85,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   }
 
   function respond(id: number, result: unknown): void {
+    if (settled) return // the child is already killed; writing now would hit a dead stdin
     try {
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`)
     } catch {
@@ -165,7 +166,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
       // Response to one of our own requests, routed by id.
       if (msg.id === initId) {
         if (msg.error) {
-          cb.onError(msg.error.message ?? 'codex initialize 失败')
+          safeError(msg.error.message ?? 'codex initialize 失败')
           settle(false)
           continue
         }
@@ -181,7 +182,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
       }
       if (startId !== null && msg.id === startId) {
         if (msg.error) {
-          cb.onError(msg.error.message ?? 'codex thread/start 失败')
+          safeError(msg.error.message ?? 'codex thread/start 失败')
           settle(false)
           continue
         }
@@ -194,7 +195,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
       if (turnId !== null && msg.id === turnId) {
         // turn/start's result is ignored; the turn itself runs via notifications.
         if (msg.error) {
-          cb.onError(msg.error.message ?? 'codex turn/start 失败')
+          safeError(msg.error.message ?? 'codex turn/start 失败')
           settle(false)
         }
         continue
