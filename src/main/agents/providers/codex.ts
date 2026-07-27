@@ -8,6 +8,9 @@ import { permissionArgs } from '../permissionArgs'
 import { readCodexModelsCache } from './codexModels'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
+import { driveCodexTurn } from './codexAppServer'
+import { codexSandboxApproval } from './codexApproval'
+import { readSettings } from '../../config/store'
 
 // codex (Rust) emits internal engine logs on stderr — either bare, e.g.
 //   `codex_models_manager::manager::failed to refresh available models: …`
@@ -177,23 +180,12 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      const args = spec.preArgs
-        ? [...spec.preArgs]
-        : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
-      // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
-      let buf = ''
       let ctxMaxSeen = 0
-      const processLine = (raw: string) => {
-        const line = raw.trim()
-        if (!line) return
-        let obj: unknown
-        try { obj = JSON.parse(line) } catch {
-          // Garbage / non-JSON raw line: run through scanner at info level
-          const kept = scanner.feedLine(line)
-          if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
-          return
-        }
+      // Per-line rendering shared by both transports: exec's processLine (below, fed raw JSONL from
+      // stdout) and the app-server branch (fed the exec-shaped events driveCodexTurn adapts).
+      // `rawLine` is the original JSONL text — only exec has one; the app-server branch (no raw
+      // wire text, just an already-parsed object) falls back to re-stringifying it.
+      const handleRunEvent = (obj: unknown, rawLine?: string) => {
         // Codex usage (if present in a claude-compatible shape) feeds the same context bar; when
         // codex's usage shape differs, extractContextTokens returns null and the bar simply omits.
         const used = extractContextTokens(obj)
@@ -221,7 +213,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           // is detected and the line isn't silently dropped; recognised type-less-text
           // events (lifecycle noise) still fall through and are ignored.
           if (t === undefined) {
-            const kept = scanner.feedLine(line)
+            const kept = scanner.feedLine(rawLine ?? JSON.stringify(o))
             if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
           }
           return
@@ -232,6 +224,60 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         else level = 'info'
         const kept = String(text).split('\n').flatMap(l => scanner.feedLine(l))
         if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level })
+      }
+      // App-server transport: drive the turn over JSON-RPC instead of spawning `codex exec`. Gated
+      // by the codexTransport setting (default 'exec') and skipped for preArgs specs (e.g. custom
+      // codex-derived providers) which don't necessarily speak app-server the same way.
+      const useAppServer = readSettings().codexTransport === 'app-server' && !spec.preArgs
+      if (useAppServer) {
+        const forge = forgeCodexConfigArgs(env).length > 0
+        const { sandbox, approvalPolicy } = codexSandboxApproval(task.permissionMode ?? 'auto', forge)
+        let handle: ReturnType<typeof driveCodexTurn> | null = null
+        try {
+          handle = driveCodexTurn(
+            { cwd: task.cwd, prompt: task.prompt, modelArgs: codexModelArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy },
+            {
+              onEvent: (e) => { cb.onActivity?.(); handleRunEvent(e) },
+              onApproval: async (r) => cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') }),
+              onSession: (id) => cb.onSession?.(id),
+              onError: (m) => { logError('codex', 'app-server run 错误', m) },
+            },
+          )
+        } catch {
+          // Synchronous spawn throw (codex missing / app-server unsupported): fall through to the
+          // exec path below. A mid-run app-server error (after the handle exists) surfaces via
+          // onError + a failed `done` instead — it is reported, not silently retried via exec.
+          handle = null
+        }
+        if (handle) {
+          const appServerHandle = handle
+          const done = appServerHandle.done.then((res) => {
+            for (const out of scanner.flush()) cb.onLog({ ts: now(), text: out, level: 'info' })
+            cb.onState(res.ok ? 'ok' : 'err')
+            const result = { ok: res.ok, summary: res.ok ? '完成' : 'codex app-server 失败' }
+            cb.onDone(result)
+            return result
+          })
+          return { id: task.agentId, cancel: () => appServerHandle.cancel(), done }
+        }
+      }
+      const args = spec.preArgs
+        ? [...spec.preArgs]
+        : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
+      // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
+      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
+      let buf = ''
+      const processLine = (raw: string) => {
+        const line = raw.trim()
+        if (!line) return
+        let obj: unknown
+        try { obj = JSON.parse(line) } catch {
+          // Garbage / non-JSON raw line: run through scanner at info level
+          const kept = scanner.feedLine(line)
+          if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
+          return
+        }
+        handleRunEvent(obj, line)
       }
       child.stdout?.on('data', (b: Buffer) => {
         // Any stdout byte means the process is alive — including in-flight item.started/updated
