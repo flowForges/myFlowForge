@@ -151,6 +151,36 @@ describe('driveCodexTurn', () => {
     expect(f.writes.find(w => w.id === 55 && w.result?.decision)).toBeUndefined()
   })
 
+  it('send() after settle is a no-op: cancel() called post-completion does not fire onError', async () => {
+    // Regression for FIX #6: cancel()'s `turn/interrupt` send used to call cb.onError
+    // unconditionally on a write failure. A cancel() that arrives after the turn already
+    // settled (turn/completed) + killed the child writes to now-dead stdin — that must be a
+    // silent no-op (via safeError, which checks `settled`), not a spurious post-completion error.
+    const f = fakeChild()
+    let deadStdin = false
+    f.child.stdin.write = (s: string) => {
+      if (deadStdin) throw new Error('write EPIPE')
+      for (const ln of s.split('\n')) if (ln.trim()) f.writes.push(JSON.parse(ln))
+    }
+    let err = ''
+    const h = driveCodexTurn(
+      { cwd: '/ws', prompt: 'x', modelArgs: [], configArgs: [], sandbox: 'read-only', approvalPolicy: 'on-request' },
+      { onEvent: () => {}, onApproval: async () => 'allow', onSession: () => {}, onError: m => { err = m } },
+      { spawn: () => f.child },
+    )
+    f.push({ id: f.writes[0].id, result: {} })
+    const start = f.writes.find(w => w.method === 'thread/start')
+    f.push({ id: start.id, result: { thread: { id: 't' } } })
+    f.push({ method: 'turn/completed', params: {} })
+    await expect(h.done).resolves.toEqual({ ok: true })   // settled + child killed
+    deadStdin = true                                       // simulate the now-dead stdin post-kill
+
+    h.cancel()   // a late cancel() still sends turn/interrupt — must not surface an error
+    await new Promise(r => setTimeout(r, 0))
+
+    expect(err).toBe('')
+  })
+
   it('falls back to opts.resumeThreadId when thread/resume omits the thread id', async () => {
     const f = fakeChild()
     driveCodexTurn(

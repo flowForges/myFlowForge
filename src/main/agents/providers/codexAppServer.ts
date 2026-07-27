@@ -79,7 +79,10 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     try {
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', ...(id !== undefined ? { id } : {}), method, params: params ?? {} })}\n`)
     } catch (e) {
-      cb.onError(e instanceof Error ? e.message : String(e))
+      // A send from cancel()'s `turn/interrupt` fires AFTER the turn already settled+killed the
+      // child, so its stdin is dead by then — that's an expected post-settle write failure, not a
+      // real error. safeError() (unlike a bare cb.onError) no-ops once `settled`, matching respond().
+      safeError(e instanceof Error ? e.message : String(e))
       settle(false)
     }
   }
@@ -204,7 +207,12 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   })
   child.stderr.on('data', () => {}) // drain so the child never blocks on a full pipe
   child.on('error', (err) => {
-    safeError(err instanceof Error ? err.message : String(err))
+    // Actionable hint: this fires for an ASYNC spawn failure (e.g. codex missing, or an old
+    // codex build that doesn't understand the `app-server` subcommand) — the caller-side
+    // synchronous try/catch around driveCodexTurn() cannot catch this (the handle already
+    // returned), so the message itself needs to point at the likely cause.
+    const m = err instanceof Error ? err.message : String(err)
+    safeError(`codex app-server 启动失败(是否已安装/支持 app-server?): ${m}`)
     settle(false)
   })
   child.on('close', () => settle(false))
