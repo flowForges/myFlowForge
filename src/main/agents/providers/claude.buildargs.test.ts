@@ -15,7 +15,7 @@ describe('buildClaudeArgs', () => {
   it('without allowedTools: contains standard flags and NOT --allowedTools', () => {
     const args = buildClaudeArgs(baseTask, process.env)
     expect(args).toContain('-p')
-    expect(args).toContain('hi')
+    expect(args).not.toContain('hi')
     expect(args).toContain('--output-format')
     expect(args).toContain('stream-json')
     expect(args).toContain('--permission-mode')
@@ -97,5 +97,15 @@ describe('buildClaudeArgs', () => {
   it('permissionMode auto/full still emit their --permission-mode flag', () => {
     expect(buildClaudeArgs({ ...baseTask, permissionMode: 'auto' } as any, process.env)).toContain('acceptEdits')
     expect(buildClaudeArgs({ ...baseTask, permissionMode: 'full' } as any, process.env)).toContain('bypassPermissions')
+  })
+
+  it('emits control-protocol flags and no positional prompt', () => {
+    const args = buildClaudeArgs({ agentId: 'a', prompt: 'hello', model: 'opus-4.8', permissionMode: 'auto' } as any, {} as any)
+    expect(args).toContain('--input-format'); expect(args).toContain('stream-json')
+    expect(args).toContain('--permission-prompt-tool'); expect(args).toContain('stdio')
+    // '-p' is the print flag; the prompt is delivered on stdin, so it must NOT appear as an argv item.
+    expect(args).not.toContain('hello')
+    const pIdx = args.indexOf('-p')
+    expect(args[pIdx + 1]).not.toBe('hello')
   })
 })

@@ -42,10 +42,11 @@ export function buildClaudeArgs(task: AgentTask, env: NodeJS.ProcessEnv): string
   const mode = task.permissionMode ?? 'auto'
   const permArgs = mode === 'readonly' ? [] : permissionArgs('claude', mode)
   return [
-    '-p', task.prompt,
+    '-p',
     '--output-format', 'stream-json',
     '--include-partial-messages',
     '--verbose',
+    ...CLAUDE_CONTROL_FLAGS,
     ...permArgs,
     ...allowedToolsArgs,
     '--model', cliModel(task.model),
@@ -80,19 +81,25 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         args = buildClaudeArgs(task, env)
       }
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      try {
+        child.stdin?.write(controlInitLine() + '\n')
+        child.stdin?.write(userMessageLine(task.prompt) + '\n')
+      } catch { /* stdin gone */ }
       let buf = ''
-      // Write a permission decision back to claude's stdin; tolerate a closed/dead stream
+      // Answer a pending can_use_tool control_request on stdin; tolerate a closed/dead stream
       // (e.g. the run was cancelled while a confirm was pending) instead of throwing.
-      const reply = (allow: boolean) => {
-        try { child.stdin?.write(JSON.stringify({ type: 'permission_response', allow }) + '\n') } catch { /* stdin gone */ }
+      const respond = (req: CanUseTool, allow: boolean) => {
+        try { child.stdin?.write((allow ? controlAllowLine(req) : controlDenyLine(req)) + '\n') } catch { /* stdin gone */ }
       }
       let streamed = false
       let ctxMaxSeen = 0
       const KIND_LEVEL = { think: 'info', tool: 'accent', file: 'accent', output: 'accent' } as const
       const handle = async (obj: any) => {
-        if (obj?.type === 'permission_request') {
-          const decision = await cb.onConfirm({ title: `${obj.tool} 请求执行`, where: obj.path })
-          reply(decision === 'allow'); return
+        const cut = parseCanUseTool(obj)
+        if (cut) {
+          const decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName })
+          respond(cut, decision === 'allow')
+          return
         }
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
@@ -116,7 +123,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         let obj: unknown
         try { obj = JSON.parse(line) } catch { cb.onLog({ ts: now(), text: line, level: 'info' }); return }
         // If onConfirm throws, deny so claude is never left blocked, and surface the error.
-        handle(obj).catch((err) => { reply(false); cb.onError(err instanceof Error ? err : new Error(String(err))) })
+        handle(obj).catch((err) => { cb.onError(err instanceof Error ? err : new Error(String(err))) })
       }
       child.stdout?.on('data', (b: Buffer) => {
         // Any stdout byte means the process is alive — including a long stream of input_json_delta
