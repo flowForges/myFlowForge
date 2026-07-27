@@ -65,7 +65,14 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   function settle(ok: boolean): void {
     if (settled) return
     settled = true
+    try { child.kill() } catch { /* best-effort: child may already be gone */ }
     resolveDone({ ok })
+  }
+
+  // A stray notification/error arriving after the turn already settled (success
+  // or failure) must not surface a spurious error to the caller.
+  function safeError(message: string): void {
+    if (!settled) cb.onError(message)
   }
 
   function send(method: string, params?: unknown, id?: number): void {
@@ -112,9 +119,18 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
         if (APPROVAL_METHODS.has(method)) {
           const params = msg.params ?? {}
           const req = { method, command: params.command, paths: params.paths }
-          void cb.onApproval(req).then((decision) => {
-            respond(id, { decision: codexDecision(method, decision === 'allow') })
-          })
+          void cb.onApproval(req)
+            .then((decision) => {
+              respond(id, { decision: codexDecision(method, decision === 'allow') })
+            })
+            .catch((e) => {
+              // Fail closed: the server is blocked awaiting this response, so a
+              // rejected approval callback (e.g. the confirm gate was torn down)
+              // must still be answered — otherwise `done` hangs forever. Let the
+              // decline flow to turn/completed naturally rather than force-settling.
+              respond(id, { decision: codexDecision(method, false) })
+              safeError(e instanceof Error ? e.message : String(e))
+            })
         } else {
           respond(id, {})
         }
@@ -131,13 +147,13 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
         }
         if (method === 'error') {
           const m = params.error && typeof params.error === 'object' ? params.error.message : (params.message ?? params.error)
-          cb.onError(String(m ?? 'codex error'))
+          safeError(String(m ?? 'codex error'))
           settle(false)
           continue
         }
         if (method === 'thread/status/changed' && params?.status?.type === 'systemError') {
           const m = params.status.message ?? params.status.error ?? 'codex system error'
-          cb.onError(String(m))
+          safeError(String(m))
           settle(false)
           continue
         }
@@ -169,7 +185,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
           settle(false)
           continue
         }
-        threadId = msg.result?.thread?.id ?? msg.result?.threadId
+        threadId = msg.result?.thread?.id ?? msg.result?.threadId ?? opts.resumeThreadId
         if (threadId) cb.onSession(threadId)
         turnId = ++rpcId
         send('turn/start', { threadId, input: [{ type: 'text', text: opts.prompt }] }, turnId)
@@ -187,7 +203,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   })
   child.stderr.on('data', () => {}) // drain so the child never blocks on a full pipe
   child.on('error', (err) => {
-    cb.onError(err instanceof Error ? err.message : String(err))
+    safeError(err instanceof Error ? err.message : String(err))
     settle(false)
   })
   child.on('close', () => settle(false))
@@ -197,8 +213,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   return {
     cancel(): void {
       send('turn/interrupt', { threadId })
-      child.kill()
-      settle(false)
+      settle(false) // kills the child (see settle())
     },
     done,
   }
