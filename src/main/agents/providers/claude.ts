@@ -7,6 +7,7 @@ import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
+import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
 // full name ('claude-opus-4-8'). Our friendly ids ('opus-4.8') are display labels and are
@@ -152,11 +153,18 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       // forge_propose_plan never run — the chat-delegation "子代理没执行/被取消" bug.
       const forgeAllow = forgeAllowedToolNames(env)
       const allowArgs = forgeAllow.length ? ['--allowedTools', ...forgeAllow] : []
+      // Prompt now goes to stdin as a user message (Step 4), NOT an argv positional — required by
+      // --input-format stream-json. CLAUDE_CONTROL_FLAGS turns on the can_use_tool control protocol.
       const args = spec.preArgs
         ? [...spec.preArgs]
-        : ['-p', chatPrompt, '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...permissionArgs('claude', task.permissionMode ?? 'auto'), ...allowArgs, '--model', cliModel(task.model), ...forgeMcpArgs(env)]
+        : ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...CLAUDE_CONTROL_FLAGS, ...permissionArgs('claude', task.permissionMode ?? 'auto'), ...allowArgs, '--model', cliModel(task.model), ...forgeMcpArgs(env)]
       if (!spec.preArgs && task.sessionId) args.push('--resume', task.sessionId)
       const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      // Control-protocol handshake + prompt delivery (must come before we await output).
+      try {
+        child.stdin?.write(controlInitLine() + '\n')
+        child.stdin?.write(userMessageLine(chatPrompt) + '\n')
+      } catch { /* stdin gone — the turn will error out and be reported normally */ }
       // Inactivity watchdog: reclaim a genuinely wedged turn (240s of total silence) instead of an
       // endless 思考中 spinner — but never kill a long, still-streaming turn.
       const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
@@ -169,8 +177,10 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let errBuf = ''            // stderr line-splitter for live onStatus forwarding
       let ctxMaxSeen = 0
       const cap = (s: string, add: string) => (s + add).slice(-2000)
-      const reply = (allow: boolean) => {
-        try { child.stdin?.write(JSON.stringify({ type: 'permission_response', allow }) + '\n') } catch { /* stdin gone */ }
+      // Answer a pending can_use_tool control_request on stdin. Tolerate a closed/dead stream (e.g.
+      // the turn was cancelled while a gate was open).
+      const respond = (req: CanUseTool, allow: boolean) => {
+        try { child.stdin?.write((allow ? controlAllowLine(req) : controlDenyLine(req)) + '\n') } catch { /* stdin gone */ }
       }
       // Track which tool_use ids are Task sub-agents so their tool_result can be correlated; dedupe the
       // two start sources (empty-input content_block_start, then the full assistant message) — first
@@ -194,9 +204,14 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         cb.onSubagent?.({ id: a.id, phase, subagentType: a.subagentType, description: a.description, prompt: a.prompt })
       }
       const handle = async (obj: any) => {
-        if (obj?.type === 'permission_request') {
-          const decision = cb.onConfirm ? await cb.onConfirm({ title: `${obj.tool} 请求执行`, where: obj.path }) : 'deny'
-          reply(decision === 'allow'); return
+        const cut = parseCanUseTool(obj)
+        if (cut) {
+          // Fail-closed: no gate handler → deny. agentId routes the gate to the right sub-agent lane.
+          const decision = cb.onConfirm
+            ? await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName })
+            : 'deny'
+          respond(cut, decision === 'allow')
+          return
         }
         // A sub-agent's OWN internal event: claude tags it with a top-level parent_tool_use_id = the Task
         // tool_use id that spawned it (main-turn events have it null/absent). Attribute the sub-agent's
@@ -251,7 +266,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         if (!line) return
         let obj: unknown
         try { obj = JSON.parse(line) } catch { sawAssistant = true; cb.onAssistantDelta(line); return }
-        handle(obj).catch((err) => { reply(false); cb.onError(err instanceof Error ? err : new Error(String(err))) })
+        handle(obj).catch((err) => { cb.onError(err instanceof Error ? err : new Error(String(err))) })
       }
       child.stdout?.on('data', (b: Buffer) => {
         wd.beat()
