@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { makeClaudeProvider, cliModel } from './claude'
+import { makeClaudeProvider, cliModel, isClaudeBenignStderr } from './claude'
 import type { LogLine } from '../types'
 
 let dir: string, cli: string
@@ -28,6 +28,17 @@ describe('cliModel', () => {
   it('passes through values the CLI already accepts (alias or full name)', () => {
     expect(cliModel('opus')).toBe('opus')
     expect(cliModel('claude-opus-4-8')).toBe('claude-opus-4-8')
+  })
+})
+
+describe('isClaudeBenignStderr', () => {
+  it('drops the print-mode stdin wait warning and node process warnings', () => {
+    expect(isClaudeBenignStderr('Warning: no stdin data received in 3s, proceeding without it.')).toBe(true)
+    expect(isClaudeBenignStderr('(node:18913) Warning: `--localstorage-file` was provided without a valid path')).toBe(true)
+  })
+  it('keeps real error output (surfaced to the reply)', () => {
+    expect(isClaudeBenignStderr('Error: model may not exist')).toBe(false)
+    expect(isClaudeBenignStderr('anthropic api: 401 unauthorized')).toBe(false)
   })
 })
 

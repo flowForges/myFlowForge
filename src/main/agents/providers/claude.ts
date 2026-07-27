@@ -20,6 +20,14 @@ export function cliModel(id: string): string { return CLI_MODEL_ALIAS[id] ?? id 
 
 function now() { return new Date().toISOString().slice(11, 19) }
 
+// Benign claude stderr that must NOT be surfaced into the reply (it isn't the assistant's answer):
+// print-mode's "no stdin data received in 3s, proceeding without it…" wait warning (we now feed stdin
+// immediately so it rarely fires, but filter it defensively), and node process warnings. rawErr still
+// keeps everything for the no-reply diagnostic. Mirrors codex's isCodexInternalLog.
+export function isClaudeBenignStderr(line: string): boolean {
+  return /no stdin data received/i.test(line) || /^\(node:\d+\)\s/.test(line)
+}
+
 export interface ClaudeSpec { bin?: string; preArgs?: string[]; defaultModels: Model[] }
 
 // Exported for unit testing. Builds the CLI args for a run() invocation (non-preArgs path).
@@ -291,13 +299,13 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // Stream stderr live, line by line, into the think block so startup/handshake activity shows.
         errBuf += s
         let nl: number
-        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line) cb.onStatus?.(line) }
+        while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line && !isClaudeBenignStderr(line)) cb.onStatus?.(line) }
       })
       const done = child.then((res) => {
         wd.clear()
         processLine(buf); buf = ''
         flushThink()   // surface any trailing reasoning line that never got a closing newline
-        if (errBuf.trim()) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
+        if (errBuf.trim() && !isClaudeBenignStderr(errBuf.trim())) { cb.onStatus?.(errBuf.trim()) } errBuf = ''
         const elapsed = Math.round((Date.now() - start) / 1000)
         // No assistant text at all → surface a diagnostic instead of a silent blank bubble (and leave
         // a trail in the debug log, mirroring codex/opencode). Killed-for-silence gets the clearest note.
