@@ -97,7 +97,9 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const handle = async (obj: any) => {
         const cut = parseCanUseTool(obj)
         if (cut) {
-          const decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName })
+          let decision: 'allow' | 'deny' = 'deny'
+          try { decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName }) }
+          catch (e) { respond(cut, false); cb.onError(e instanceof Error ? e : new Error(String(e))); return }
           respond(cut, decision === 'allow')
           return
         }
@@ -213,10 +215,11 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const handle = async (obj: any) => {
         const cut = parseCanUseTool(obj)
         if (cut) {
-          // Fail-closed: no gate handler → deny. agentId routes the gate to the right sub-agent lane.
-          const decision = cb.onConfirm
-            ? await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName })
-            : 'deny'
+          // Fail-closed: no handler OR a thrown/torn-down gate → DENY. Never leave the CLI waiting on
+          // a control_response (that hangs the turn). agentId routes the gate to the right lane.
+          let decision: 'allow' | 'deny' = 'deny'
+          try { if (cb.onConfirm) decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName }) }
+          catch (e) { respond(cut, false); cb.onError(e instanceof Error ? e : new Error(String(e))); return }
           respond(cut, decision === 'allow')
           return
         }

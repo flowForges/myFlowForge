@@ -9,7 +9,7 @@ let dir: string, cli: string
 const FAKE = `#!/usr/bin/env node
 const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
 out({ type: 'assistant', text: '分析代码库' })
-out({ type: 'permission_request', tool: 'Write', path: 'theme.ts' })
+out({ type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: 'theme.ts' }, tool_use_id: 'toolu_1' } })
 out({ type: 'result', subtype: 'success', text: '已完成' })
 process.exit(0)
 `
@@ -32,7 +32,7 @@ describe('cliModel', () => {
 })
 
 describe('claude provider', () => {
-  it('maps text to logs and a permission_request to onConfirm', async () => {
+  it('maps text to logs and a can_use_tool request to onConfirm', async () => {
     const provider = makeClaudeProvider({ bin: 'node', preArgs: [cli], defaultModels: [] })
     const logs: LogLine[] = []
     let confirmAsked: string | undefined
