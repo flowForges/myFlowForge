@@ -260,6 +260,9 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
                 <button className="agent-model-del" onClick={() => removeModelRow(b.id, idx)} title="删除">×</button>
               </div>
             ))}
+            <p className="agent-models-hint" style={{ fontSize: 11, color: 'var(--faint)', margin: '2px 0 4px' }}>
+              自动检测读不到的模型(如 qoder 的自定义模型 —— 用 modelID 填 ID)可在此手动添加;手动添加的模型会被保留,不会被后续自动刷新覆盖掉。
+            </p>
             <div className="agent-models-actions">
               <button className="ghost agent-models-add" onClick={() => addModelRow(b.id)}>添加模型</button>
               <button

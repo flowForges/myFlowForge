@@ -232,7 +232,7 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
           />
         </div>
       </div>
-      <WallpaperGallery current={appearance.bgWallpaperId ?? ''} onApply={applyWallpaper} />
+      <WallpaperGallery current={appearance.bgWallpaperId ?? ''} onApply={applyWallpaper} onClear={() => onChange({ bgImage: '', bgScope: 'off', bgWallpaperId: '' })} />
       <div className="set-group">
         <h4>背景图</h4>
         <div className="set-row">

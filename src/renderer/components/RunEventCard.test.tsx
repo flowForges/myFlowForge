@@ -26,6 +26,22 @@ describe('RunEventCard', () => {
     expect(onGate).toHaveBeenCalledWith('g1', { type: 'advance' })
   })
 
+  it('failure: labels the card with its project so two failed lanes are distinguishable, and 重跑 retries that lane', () => {
+    const onLane = vi.fn()
+    const event: RunEvent = { id: 'f1', kind: 'failure', laneId: 'design:go-blog', stageKey: 'design', error: '探查失败', attempts: 1 }
+    render(<RunEventCard event={event} onGate={vi.fn()} onLane={onLane} />)
+    expect(screen.getByText('阶段执行失败')).toBeInTheDocument()
+    expect(screen.getByText('项目 go-blog')).toBeInTheDocument()   // the fix: which project failed
+    fireEvent.click(screen.getByText('重跑'))
+    expect(onLane).toHaveBeenCalledWith('f1', { type: 'retry' })
+  })
+
+  it('failure: a root (single-scope) lane shows no project chip', () => {
+    const event: RunEvent = { id: 'f2', kind: 'failure', laneId: 'design:root', stageKey: 'design', error: 'x', attempts: 1 }
+    render(<RunEventCard event={event} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.queryByText(/^项目 /)).toBeNull()
+  })
+
   it('#6 gate: titles the card with stageName (not the generic 阶段评审); falls back when absent', () => {
     const named: RunEvent = { id: 'gN', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: 'x' }
     const { rerender } = render(<RunEventCard event={named} onGate={vi.fn()} onLane={vi.fn()} />)
@@ -99,13 +115,16 @@ describe('RunEventCard', () => {
     expect(onGate).toHaveBeenCalledWith('g2', { type: 'redo', feedback: '再调整一下接口命名' })
   })
 
-  it('gate: 回退到某阶段 reveals a target-key input and sends jumpBack once filled', () => {
+  it('gate: 回退到某阶段 reveals a NAMED stage dropdown (not a raw key input) and sends jumpBack with the picked key', () => {
     const onGate = vi.fn()
     const event: RunEvent = { id: 'g3', kind: 'gate', stageKey: 'impl', stageName: '实现', body: 'x' }
-    render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
+    const stages = [{ key: 'design', name: '技术方案设计' }, { key: 'impl', name: '实现' }, { key: 'review', name: '代码 CR' }]
+    render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} stages={stages} />)
     fireEvent.click(screen.getByText('回退到某阶段'))
-    const targetInput = screen.getByPlaceholderText('回退目标阶段 key')
-    fireEvent.change(targetInput, { target: { value: 'design' } })
+    // The current stage (impl) is excluded; the user picks by human name, not by typing a key.
+    expect(screen.getByRole('option', { name: '技术方案设计' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: '实现' })).toBeNull()
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'design' } })
     fireEvent.click(screen.getByText('确认回退'))
     expect(onGate).toHaveBeenCalledWith('g3', { type: 'jumpBack', targetKey: 'design', feedback: undefined })
   })

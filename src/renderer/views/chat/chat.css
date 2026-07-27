@@ -383,6 +383,11 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .k-confirm .req-kind { color: var(--warn); background: oklch(80% .13 80 / .16); }
 .k-input   .req-kind { color: var(--accent); background: var(--accent-dim); }
 .k-select  .req-kind { color: oklch(72% .14 300); background: oklch(72% .14 300 / .16); }
+/* 泳道范围事件(失败/授权/回答/存疑)的项目标签 —— 一个阶段并行多项目时,同名的两张卡靠它区分是哪个项目。
+   紧跟在右侧的 req-kind 之后(req-kind 用 margin-left:auto 顶到最右,故它坐落其左)。 */
+.req-proj { display: inline-flex; align-items: center; font: 600 9.5px/1 var(--mono); letter-spacing: .03em;
+  color: var(--muted); background: var(--surface); border: 1px solid var(--border); padding: 4px 7px; border-radius: 99px; }
+.k-failure .req-proj { color: var(--err); border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }
 .req-body { padding: 12px 13px; }
 .req-title { font-size: 13.5px; font-weight: 600; color: var(--fg); line-height: 1.45; }
 .req-sub { font-size: 12.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }

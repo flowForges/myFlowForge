@@ -76,6 +76,23 @@ describe('refreshProviderModels', () => {
     expect(written.providers[0].modelsFetchedAt).toBe(NOW)
   })
 
+  it('UNIONS user-pinned customModels into a live refresh so a qoder 自定义模型 is never dropped', async () => {
+    // The user pinned a custom model that `--list-models` never returns (server/account-specific).
+    const custom = [{ id: 'my-custom-modelID', label: '我的自定义模型' }]
+    mockedRead.mockReturnValue({
+      providers: [{ id: 'qoder', binOverride: '', env: {}, modelsCache: custom, modelsFetchedAt: 100, customModels: custom }],
+      custom: [],
+    })
+    const live = [{ id: 'qoder-default-1', label: 'Default 1' }]  // live list WITHOUT the custom model
+    const p = makeProvider('qoder', async () => live)
+    const result = await refreshProviderModels('qoder', { qoder: p }, {}, 9999)
+
+    // live models first, then the pinned custom appended — never lost.
+    expect(result.models).toEqual([{ id: 'qoder-default-1', label: 'Default 1' }, { id: 'my-custom-modelID', label: '我的自定义模型' }])
+    const written = mockedWrite.mock.calls[0][0]
+    expect(written.providers[0].modelsCache.map((m: { id: string }) => m.id)).toContain('my-custom-modelID')
+  })
+
   it('keeps old cache and returns error when listModelsLive returns empty array', async () => {
     const oldCache = [{ id: 'old', label: 'Old Model' }]
     mockedRead.mockReturnValue({

@@ -298,7 +298,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                       return (
                         <button
                           key={s.id}
-                          className={`ws-sess${s.id === activeSessionId ? ' on' : ''}`}
+                          className={`ws-sess${s.id === activeSessionId ? ' on' : ''}${runningSessionIds?.has(s.id) ? ' is-running' : ''}`}
                           title={s.title}
                           onClick={() => onSwitchSession?.(item.id, s.id)}
                           onDoubleClick={e => { e.stopPropagation(); beginRename(s) }}

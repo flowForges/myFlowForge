@@ -149,6 +149,15 @@ export function setSessionSummary(wsPath: string, sessionId: string, summary: st
   return data
 }
 
+// Advance the workspace-memory promotion watermark: the message count already distilled into workspace
+// memory. Next promotion only feeds messages added since. No-op for an unknown session id.
+export function setSessionMemPromoted(wsPath: string, sessionId: string, count: number): SessionsFile {
+  const data = readSessions(wsPath)
+  const s = data.sessions.find(x => x.id === sessionId)
+  if (s) { s.memPromotedAt = count; write(wsPath, data) }
+  return data
+}
+
 // 读取单个会话的元数据（chatService 判定原生 resume 时用 continuedFrom）。
 export function getSession(wsPath: string, sessionId: string): ChatSession | undefined {
   return readSessions(wsPath).sessions.find(s => s.id === sessionId)

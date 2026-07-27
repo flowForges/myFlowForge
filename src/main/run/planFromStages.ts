@@ -22,17 +22,18 @@ export function planFromStages(runId: string, stages: StageSpec[], hooks?: Plugi
     const base = stageBasePrompt(s.key)
     const custom = s.prompt
     const prompt = custom ? (base ? base + '\n\n' + custom : custom) : base
-    // #6: a producesDoc stage (design by default) MUST hand off a real markdown 技术方案 file — the flag
-    // was latent (stored but never consumed at runtime), so the design agent only reported summary:'完成'
-    // and the gate had no real plan to show. Append an explicit forge_write_artifact directive so the
-    // agent writes the doc and LISTS its returned path in the handoff artifacts (controller mirrors it
-    // into <ws>/<basename>_docs/ and surfaces the full text in the gate).
+    // #6: a producesDoc stage (design + requirement by default) MUST hand off a real markdown deliverable —
+    // the flag was latent (stored but never consumed at runtime), so the agent only reported summary:'完成'
+    // and the gate had no real content to show. Append an explicit forge_write_artifact directive so the
+    // agent writes the doc and LISTS its returned path in the handoff artifacts (controller mirrors it into
+    // <ws>/<basename>_docs/ and surfaces the full text in the gate).
     const producesDoc = s.producesDoc ?? DEFAULT_STAGE_PRODUCES_DOC[s.key] ?? false
-    // Fix wave 1 (review, Minor 2): the directive used to name a specific file (design-<项目名>.md),
-    // but the controller always renames the artifact to `<stageKey>-<projLabel>.md` when it mirrors it
-    // into <ws>/<basename>_docs/ (see controller.ts ~line 994) — the agent's chosen filename is never
-    // actually used. Say "a markdown file" instead of promising a name the system doesn't honor.
-    const DOC_DIRECTIVE = '\n\n【交付物·必做】用 forge_write_artifact 写出完整的技术方案 markdown 文件(内容包括:模块划分、接口/数据结构、关键技术决策与替代方案、风险与影响面)。forge_handoff 的 summary 只写一句话概述,正文放进 artifact,并在 handoff 的 artifacts 里列出该文件。'
+    // GENERIC directive: WHAT to write is stage-specific and already lives in each stage's STAGE_PROMPTS
+    // (design→技术方案, requirement→需求理解+关联清单), so this only enforces the MECHANISM (write a real
+    // markdown artifact, don't bury the deliverable in the reply). It used to hardcode "技术方案" — wrong
+    // for the requirement stage, which must produce a 关联清单. It also no longer names a specific filename:
+    // the controller always renames to `<stageKey>-<projLabel>.md` when mirroring into <ws>/<basename>_docs/.
+    const DOC_DIRECTIVE = '\n\n【交付物·必做】用 forge_write_artifact 把本阶段的交付内容写成一个完整的 markdown 文件(不要只写在回复正文里,否则下游拿不到)。forge_handoff 的 summary 只写一句话概述,正文放进 artifact,并在 handoff 的 artifacts 里列出该文件路径。'
     const finalPrompt = producesDoc && prompt ? prompt + DOC_DIRECTIVE : prompt
     return {
       key: s.key,

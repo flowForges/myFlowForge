@@ -90,7 +90,18 @@ describe('chatService memory wiring', () => {
       { workspacePath: ws, sessionId: sid, agent: 'claude', agentLabel: 'Claude Code', model: 'opus-4.8', text: 'go', attachments: [] },
       { provider, env: {}, emit: () => {} }
     )
-    expect(wsp).toHaveBeenCalled()          // every turn
+    expect(wsp).toHaveBeenCalled()          // 20 new messages ≥ throttle (6) → promoted
     expect(sys).toHaveBeenCalledWith(ws, expect.anything())  // cadence hit at 20
+  })
+  it('throttles workspace promotion: no promote until WORKSPACE_PROMOTE_EVERY_K new messages accrue', async () => {
+    const sid = readSessions(ws).sessions[0].id
+    // A fresh session, one turn = user+assistant = 2 messages < 6 → below the throttle, so no promotion.
+    const wsp = vi.spyOn(distiller, 'promoteToWorkspace').mockResolvedValue()
+    const { provider } = recordingProvider()
+    await sendTurn(
+      { workspacePath: ws, sessionId: sid, agent: 'claude', agentLabel: 'Claude Code', model: 'opus-4.8', text: 'hi', attachments: [] },
+      { provider, env: {}, emit: () => {} }
+    )
+    expect(wsp).not.toHaveBeenCalled()
   })
 })

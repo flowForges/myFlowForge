@@ -304,6 +304,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     }
     return s
   }, [engine.run, engine.pending, wsPath, sessions.activeSessionId])
+  // #4 (cross-workspace/session gate leak): resolvedRunCards is an EPHEMERAL mirror of just-frozen cards —
+  // every entry is ALSO persisted to its OWNING session (chatAppendRunCard in freezeRunCard). But it carries
+  // no sessionId, mergedRunCards renders it UNFILTERED, and WorkspaceView never remounts on switch (App reuses
+  // one instance, only the workspacePath prop changes). So a gate frozen in workspace A / session 1 kept
+  // rendering after switching to workspace B / session 2, and vanished on app restart (fresh mount) — exactly
+  // the reported "换工作区还能看到权限门，重进 app 就没了". Clearing on any ws/session change is lossless: the
+  // persisted copy re-materializes via persistedRunCards when you return to the owning session.
+  useEffect(() => { setResolvedRunCards([]) }, [wsPath, sessions.activeSessionId])
   const chat = useChat(wsPath, sessions.activeSessionId, (mode) => {
     if (mode === 'workflow') setForceChat(false)
   })
@@ -1200,6 +1208,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     onGate={onRunGate}
                     onLane={onRunLane}
                     onOpenDoc={openDoc}
+                    stages={run2StateForTab?.machine.plan.stages}
                   />
                 )
               }

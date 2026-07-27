@@ -396,7 +396,14 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
             { cwd: task.cwd, prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
             {
               onEvent: (e) => { wd.beat(); handle(e) },
-              onApproval: async (r) => { wd.beat(); return cb.onConfirm ? await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') }) : 'deny' },
+              // Pause the idle watchdog while the user decides on this approval — awaiting a human is not
+              // a wedge, so the 240s inactivity timer must not cancel the turn out from under them.
+              onApproval: async (r) => {
+                if (!cb.onConfirm) return 'deny'
+                wd.pause()
+                try { return await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') }) }
+                finally { wd.resume() }
+              },
               onSession: (id) => cb.onSession(id),
               onError: (m) => { cb.onError(new Error(m)) },
             },

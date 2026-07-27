@@ -226,8 +226,12 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           // Fail-closed: no handler OR a thrown/torn-down gate → DENY. Never leave the CLI waiting on
           // a control_response (that hangs the turn). agentId routes the gate to the right lane.
           let decision: 'allow' | 'deny' = 'deny'
+          // Pause the inactivity watchdog while the user decides — a permission prompt is a human wait,
+          // not a wedged turn, so it must not be killed by the 240s idle timer (finally always resumes).
+          wd.pause()
           try { if (cb.onConfirm) decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName }) }
           catch (e) { respond(cut, false); cb.onError(e instanceof Error ? e : new Error(String(e))); return }
+          finally { wd.resume() }
           respond(cut, decision === 'allow')
           return
         }

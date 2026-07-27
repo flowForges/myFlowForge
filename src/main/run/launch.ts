@@ -194,6 +194,19 @@ function buildGroundTruth(supplement: string, seed: string): string {
   return parts.join('\n\n')
 }
 
+// The run's `deps.task` seed for the launch-gate path — the requirement (seed) + the user's supplement,
+// as PLAIN content (RunController.buildPrompt wraps it in its own `【需求原文（以此为准）】` header, prepended
+// to EVERY stage). Without this the gate path left deps.task unset, so only the ROOT stage (which bakes
+// buildGroundTruth into its own prompt) saw the requirement — every downstream stage (技术方案设计, 开发…)
+// got an empty seed and depended entirely on the upstream artifact. When a requirement stage then failed
+// or was killed, the downstream stage lost the requirement completely (saw only a "完成" fallback). Empty
+// → '' (the caller passes `|| undefined` so buildPrompt emits no seed block at all).
+export function launchTaskSeed(cfg: { seed: string; supplement: string }): string {
+  const seed = (cfg.seed ?? '').trim()
+  const supplement = (cfg.supplement ?? '').trim()
+  return [seed, supplement && `【补充说明】\n${supplement}`].filter(Boolean).join('\n\n')
+}
+
 // Resolves the picked workflow's stages into a RunPlan for the launch gate — same workflow-lookup
 // contract as resolveStartPlan (throws on an unknown workflowId), and the SAME global-template fallback
 // (see resolveWorkflowStages / buildLaunchInfo above): a workflow whose stashed `ws.workflows[].stages`

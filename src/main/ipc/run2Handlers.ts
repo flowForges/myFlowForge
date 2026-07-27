@@ -2,7 +2,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as CH from './channels'
 import { planFromStages } from '../run/planFromStages'
-import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
+import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, launchTaskSeed, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
 import { isCleanTree } from '../run/tempBranch'
 import { listRuns, loadRun, deleteRun } from '../run/persist'
 import type { Run2Manager } from '../run/manager'
@@ -143,7 +143,11 @@ export function registerRun2(deps: {
       const target = ws.projects.find((wp) => wp.name === project.name)?.branch
       if (target) projectTargets[project.name] = target
     }
-    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash })
+    // Carry the requirement (seed + supplement) as `task` so RunController.buildPrompt prepends
+    // 【需求原文（以此为准）】to EVERY stage — not just the root stage that bakes it in. Otherwise a
+    // downstream stage (技术方案设计, 开发…) whose upstream requirement stage failed/degraded loses the
+    // original ask entirely and sees only a "完成" fallback. `|| undefined` so an empty launch emits no seed.
+    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, task: launchTaskSeed(p) || undefined, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash })
   })
 
   // Dirty-tree pre-check for the launch gate: which of the workspace's projects have uncommitted

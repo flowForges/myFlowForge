@@ -25,6 +25,9 @@ export interface RunEventCardProps {
   // `openDoc` handler (see WorkspaceView.tsx's `openDoc = (doc) => openBrowse(...)`) can be passed here
   // as-is, no adapter needed.
   onOpenDoc?: (doc: DesignDocRef) => void
+  // The run's stages (key + human name), so the 回退 (jump-back) control can offer a NAMED dropdown
+  // instead of asking the user to type a raw internal stage key (design/develop/…) they can't know.
+  stages?: { key: string; name: string }[]
 }
 
 // Document icon for the "打开文档" buttons — copied 1:1 from ReqCard.tsx's DOC_ICON (kept duplicated,
@@ -91,6 +94,17 @@ function kindLabel(kind: RunEvent['kind'] | 'aborted' | 'summary', finalize?: bo
   }
 }
 
+// A lane-scoped event (auth/question/doubt/failure) carries laneId = `${stageKey}:${project|root}`.
+// Surfacing the project is essential when a stage fans out per project: two projects failing produce two
+// otherwise IDENTICAL "阶段执行失败" cards. Without the project label the user can't tell them apart or
+// realize BOTH still need a decision — they resolve one 重跑 and leave the other parked (no logs update),
+// exactly the "点了重跑只有一个项目重新跑" report. Stage-level events (gate/finalize) have no laneId.
+function laneProject(event: RunEvent): string {
+  if (!('laneId' in event) || !event.laneId) return ''
+  const proj = event.laneId.slice(event.laneId.lastIndexOf(':') + 1)
+  return proj && proj !== 'root' ? proj : ''
+}
+
 function fmtAt(ms: number): string {
   try {
     return new Date(ms).toLocaleString()
@@ -99,7 +113,7 @@ function fmtAt(ms: number): string {
   }
 }
 
-export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc }: RunEventCardProps) {
+export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages = [] }: RunEventCardProps) {
   // Local-only feedback/targetKey text collection (task brief "Before You Begin": no existing
   // mechanism to route free text into a gate/doubt decision from here, so a plain local textarea/
   // input is the simplest correct thing — mirrors LaunchGateCard's supplement textarea). Trimmed to
@@ -152,6 +166,7 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc }: RunEv
     <div className={`msg-req k-${event.kind}`} data-req={event.id}>
       <div className="req-head">
         <span className="req-kind">{kindLabel(event.kind, event.kind === 'gate' ? event.finalize : undefined, event.kind === 'gate' ? event.stageName : undefined)}</span>
+        {laneProject(event) && <span className="req-proj">项目 {laneProject(event)}</span>}
       </div>
       <div className="req-body">
         {event.kind === 'gate' && event.finalize && (
@@ -183,12 +198,18 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc }: RunEv
                 />
               </div>
               {showJumpForm ? (
-                <input
+                // Named dropdown of the run's stages (excluding THIS one) — the user picks 技术方案设计 /
+                // 代码开发 by name; we send its internal key. No more "type the stage key" (unknowable).
+                <select
                   className="wfo-inp"
-                  placeholder="回退目标阶段 key"
                   value={jumpTarget}
                   onChange={(e) => setJumpTarget(e.target.value)}
-                />
+                >
+                  <option value="">选择要回退到的阶段…</option>
+                  {stages.filter((s) => s.key !== event.stageKey).map((s) => (
+                    <option key={s.key} value={s.key}>{s.name}</option>
+                  ))}
+                </select>
               ) : null}
               <div className="arow">
                 <button className="wfo-btn pri" onClick={() => onGate(event.id, { type: 'advance' })}>通过</button>

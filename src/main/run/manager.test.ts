@@ -21,7 +21,7 @@ function gatedProvider(): AgentProvider {
     id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
     async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
     run(task: AgentTask, cb: AgentCallbacks) {
-      const done = (async () => { cb.onHandoff?.({ summary: 'done' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+      const done = (async () => { cb.onHandoff?.({ summary: 'done', artifacts: [{ path: 'design.md', kind: 'md' }] }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
       return { id: task.agentId, cancel() {}, done }
     },
   }
@@ -43,7 +43,7 @@ function controllableProvider(): { provider: AgentProvider; calls: Array<{ task:
     run(task: AgentTask, cb: AgentCallbacks) {
       let resolveFn: () => void = () => {}
       const done = new Promise<{ ok: boolean; summary: string }>((resolve) => {
-        resolveFn = () => { cb.onHandoff?.({ summary: 'done' }); const r = { ok: true, summary: '' }; cb.onDone(r); resolve(r) }
+        resolveFn = () => { cb.onHandoff?.({ summary: 'done', artifacts: [{ path: 'design.md', kind: 'md' }] }); const r = { ok: true, summary: '' }; cb.onDone(r); resolve(r) }
       })
       calls.push({ task, resolve: resolveFn })
       return { id: task.agentId, cancel() {}, done }
@@ -189,7 +189,7 @@ describe('Run2Manager', () => {
       async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
       run(task: AgentTask, cb: AgentCallbacks) {
         cb.onLog({ ts: '', text: 'x', level: 'run', kind: 'output' })
-        const done = (async () => { cb.onHandoff?.({ summary: 'done' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        const done = (async () => { cb.onHandoff?.({ summary: 'done', artifacts: [{ path: 'design.md', kind: 'md' }] }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
         return { id: task.agentId, cancel() {}, done }
       },
     }
@@ -220,7 +220,7 @@ describe('Run2Manager', () => {
       async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
       run(task: AgentTask, cb: AgentCallbacks) {
         seenModes.push(task.permissionMode)
-        const done = (async () => { cb.onHandoff?.({ summary: 'done' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        const done = (async () => { cb.onHandoff?.({ summary: 'done', artifacts: [{ path: 'design.md', kind: 'md' }] }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
         return { id: task.agentId, cancel() {}, done }
       },
     }
@@ -242,7 +242,7 @@ describe('Run2Manager', () => {
       async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
       run(task: AgentTask, cb: AgentCallbacks) {
         seenModes.push(task.permissionMode)
-        const done = (async () => { cb.onHandoff?.({ summary: 'done' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        const done = (async () => { cb.onHandoff?.({ summary: 'done', artifacts: [{ path: 'design.md', kind: 'md' }] }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
         return { id: task.agentId, cancel() {}, done }
       },
     }

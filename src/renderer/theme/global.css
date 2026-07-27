@@ -2,9 +2,12 @@
 button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
 button:disabled { cursor: default; }
 body { font-family: var(--font); color: var(--fg); background: transparent; font-weight: var(--app-fw, 400); -webkit-font-smoothing: var(--app-smoothing, antialiased); }
-/* 文本字重「适中」:把继承 400 的正文基础字重略提到 450 + 关掉 antialiased,让字看起来更"实"更清晰,
-   而不动标题/强调等已显式加重(500/600/700)的文本 —— 避免全局一刀切加粗读起来乱。默认即适中。 */
-[data-text-weight="medium"] { --app-fw: 450; --app-smoothing: auto; }
+/* 文本字重「适中」:把继承 400 的正文基础字重略提到 450,让字看起来更"实" —— 而不动标题/强调等已显式加重
+   (500/600/700)的文本,避免全局一刀切加粗读起来乱。默认即适中。
+   平滑:两档都用 antialiased(灰度抗锯齿)。曾用 -webkit-font-smoothing:auto(次像素/LCD)想让「适中」更锐,
+   但在纯色(无壁纸)背景下次像素渲染会在字缘出彩色 fringe,读起来发"毛刺"/发尖 —— 正是无壁纸时字发糙的病根。
+   用 450 字重维持"实"感即可,平滑一律走 antialiased,纯色下字干净、有壁纸时行为也一致。 */
+[data-text-weight="medium"] { --app-fw: 450; --app-smoothing: antialiased; }
 [data-text-weight="normal"] { --app-fw: 400; --app-smoothing: antialiased; }
 /* 壁纸开着时(app / chat 范围)一律用灰度抗锯齿:-webkit-font-smoothing:auto(次像素/LCD)假设背景不
    透明,叠在半透明壁纸上会出彩边、发虚——正是"字发糊/带灰底"的病根之一。强制 antialiased 后字在图上才干净

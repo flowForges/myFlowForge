@@ -10,6 +10,15 @@
 export interface IdleWatchdog {
   /** Call on every stdout/stderr chunk (any byte = alive) to reset the countdown. */
   beat(): void
+  /**
+   * Suspend the countdown while the turn is legitimately blocked on a HUMAN (a confirm/input gate).
+   * Waiting for the user is not a wedge — in a real terminal claude/codex wait indefinitely — so the
+   * inactivity timer must not fire and kill the turn (which wasted the run or applied a default). No-op
+   * once fired/cleared. Pair every pause() with a resume() (use try/finally so an error still resumes).
+   */
+  pause(): void
+  /** Re-arm the countdown after a pause (the user answered). No-op if already fired/cleared/not paused. */
+  resume(): void
   /** Stop the watchdog (call on process exit). Idempotent. */
   clear(): void
   /** True once the watchdog has fired (the turn was killed for inactivity). */
@@ -27,11 +36,16 @@ export function makeIdleWatchdog(
   let handle: unknown = null
   let fired = false
   let done = false
+  let paused = false
   const arm = () => { handle = timers.set(() => { if (done) return; fired = true; done = true; onIdle() }, idleMs) }
   const disarm = () => { if (handle != null) { timers.clear(handle); handle = null } }
   arm()
   return {
-    beat() { if (done) return; disarm(); arm() },
+    // While paused (awaiting a human), swallow beats so a stray late chunk doesn't secretly re-arm the
+    // countdown mid-gate; resume() is the only thing that re-arms.
+    beat() { if (done || paused) return; disarm(); arm() },
+    pause() { if (done) return; paused = true; disarm() },
+    resume() { if (done || !paused) return; paused = false; arm() },
     clear() { done = true; disarm() },
     get firedFlag() { return fired },
   }

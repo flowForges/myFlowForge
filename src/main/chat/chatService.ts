@@ -8,13 +8,14 @@ import { buildMemoryPreamble } from './memory/preamble'
 import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
 import { distillSession, promoteToWorkspace, promoteToSystem, type DistillDeps } from './memory/distiller'
 import { distillModelFor } from './memory/distillModel'
-import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD, SYSTEM_PROMOTE_EVERY_K } from './memory/tokenEstimate'
+import { removeNativeSession } from '../agents/nativeSessionCleanup'
+import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD, SYSTEM_PROMOTE_EVERY_K, WORKSPACE_PROMOTE_EVERY_K } from './memory/tokenEstimate'
 import { readSettings } from '../config/store'
 import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext, mentionedSkills } from '../agents/contextMeta'
 import { scanGlobalContext } from '../agents/globalContext'
 import { homedir } from 'node:os'
 import { readInstalledSkills } from '../skills/installedSkills'
-import { getSession } from './sessionStore'
+import { getSession, setSessionMemPromoted } from './sessionStore'
 import { providerSupportsResume, providerResumeReliable } from '../agents/resumeSupport'
 import { logDebug } from '../log/appLog'
 import { perfSpan } from '../perf/perfSpans'
@@ -207,12 +208,18 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const oneShot: DistillDeps['oneShot'] = (prompt) => new Promise<string>((resolve, reject) => {
       if (!provider.chat) { resolve(''); return }
       let acc = ''
+      // The distill one-shot spawns a FRESH provider session, which the CLI persists to its native store
+      // (Codex rollout / Claude·qoder project jsonl / opencode storage) — cluttering the user's real
+      // session picker with "记忆蒸馏器" threads. Capture the minted native id and delete just that
+      // throwaway session once the call ends (fire-and-forget, best-effort; only ever removes our own id).
+      let nativeSid = ''
+      const cleanup = () => { if (nativeSid) void removeNativeSession(payload.agent, nativeSid) }
       provider.chat({ id: mkId('distill'), prompt, model: distillModel, cwd: ws }, {
-        onSession: () => {},
+        onSession: (id) => { nativeSid = id },
         onAssistantDelta: (t) => { acc += t },
         onThinkDelta: () => {},
-        onDone: () => resolve(acc),
-        onError: (err) => reject(err),
+        onDone: () => { cleanup(); resolve(acc) },
+        onError: (err) => { cleanup(); reject(err) },
       }, env)
     })
     const scheduleDistill = () => {
@@ -220,7 +227,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       const deps: DistillDeps = { oneShot }
       const msgCount = readMessages(ws, sid).length
       if (estimateMessagesTokens(readMessages(ws, sid)) > SESSION_DISTILL_THRESHOLD) void distillSession(ws, sid, deps)
-      void promoteToWorkspace(ws, sid, deps)
+      // workspace 提炼:节流 + 增量。原来【每轮】都把整段历史重发给模型做蒸馏(WORKSPACE_PROMOTE_EVERY_K 常量
+      // 早就定义好却从没接线)——是 token 大头。现在每积累 K 条新消息才跑一次,且只喂 [watermark, len) 的增量;
+      // 跑完把水位推进到当前消息数(best-effort 完成即推进,失败仅丢这一段增量,可接受)。
+      const promotedAt = getSession(ws, sid)?.memPromotedAt ?? 0
+      if (msgCount - promotedAt >= WORKSPACE_PROMOTE_EVERY_K) {
+        void promoteToWorkspace(ws, sid, deps, promotedAt).then(() => setSessionMemPromoted(ws, sid, msgCount))
+      }
       // App/system level is expensive → run only at a low cadence (every K messages). This is the lowest-
       // frequency point that still has a live provider `oneShot`; closeSession has none to run it on.
       if (msgCount > 0 && msgCount % SYSTEM_PROMOTE_EVERY_K === 0) void promoteToSystem(ws, deps)

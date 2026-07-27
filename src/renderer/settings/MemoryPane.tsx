@@ -87,6 +87,10 @@ export function MemoryPane({ enabled, onToggle, wsPath, sessionId }: MemoryPaneP
           开启后,助手会自动把对话里的关键信息沉淀为三层记忆并在后续对话里参考。
           关闭是非破坏性的——只暂停读取与写入,已保存的记忆文件保留在本机,重新开启即恢复。
         </p>
+        <p className="mem-switch-hint" style={{ color: 'var(--del)' }}>
+          注意:记忆功能<b>默认关闭</b>。开启后每轮对话结束会在后台额外跑一次「记忆蒸馏」的 LLM 调用(走你当前
+          provider 的额度),<b>会额外消耗 token</b>。若同一 provider、同一会话连续对话,原生上下文已足够,通常无需开启。
+        </p>
       </div>
 
       <MemorySection

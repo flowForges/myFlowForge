@@ -47,9 +47,9 @@ export const STAGE_NAMES: Record<StageKey, string> = {
 // 每个阶段的内置默认提示词正文(恒发给阶段子代理)。文案取自原型 STAGE_LIB,key 用代码现有。
 // 用户只能在其后追加(WsStage.prompt / Workflow.stagePrompts),不能改这里。
 export const STAGE_PROMPTS: Record<StageKey, string> = {
-  requirement: '拆解本次需求,明确目标、范围边界与验收标准;识别关键风险与待澄清的问题,并把结论整理成要点交给后续阶段。以理解和拆解需求为主:只在为澄清可行性/范围而必要时,按需查看少量关键代码或入口文件,不要对整个仓库做穷尽式通读或审计——那是后续设计/开发阶段的事。控制探查深度,尽快产出需求要点,不要为求全把时间耗在全仓浏览上。',
-  design: '基于需求产出技术方案:模块划分、接口/数据结构设计、关键技术决策与替代方案,并评估技术风险与影响面。',
-  develop: '按技术方案实现代码变更,遵循项目既有规范与目录约定;保持改动聚焦、可回滚,并在必要处补充说明性注释。',
+  requirement: '拆解本次需求,明确目标、范围边界与验收标准;识别关键风险与待澄清的问题。**产出(必须)两部分,并用 forge_write_artifact 登记为一个 markdown 文件(kind=md):①【需求理解】你如何理解本需求(供用户在评审门快速核对是否跑偏,在此拦截"我要 ABC 你却做成 BCD");②【关联清单】本需求相关的文件/模块/入口路径,供后续设计/开发直接定位,避免它们重扫全仓。** 以理解和定位为主:按需查看关键入口/相关代码来编好关联清单,但不要对整个仓库穷尽式通读或审计;判据是"你能说清这个需求会碰到哪些地方"即可,尽快产出,不要把时间耗在全仓浏览上。',
+  design: '基于需求产出技术方案:模块划分、接口/数据结构设计、关键技术决策与替代方案,并评估技术风险与影响面。**探查(重要):上游若给了【关联清单】,就从清单里的文件/模块出发重点阅读,必要时再顺藤摸瓜——不要对整个仓库重新穷尽式通读(那是重复劳动,又慢又耗 token)。判据是"能说清方案影响面"即可。** **产出方式(必须):把完整技术方案写成一个 markdown 文件,并调用 forge_write_artifact 登记它(kind=md)——不要只把方案正文写在回复里,否则下游拿不到方案。**',
+  develop: '按技术方案实现代码变更,遵循项目既有规范与目录约定;保持改动聚焦、可回滚,并在必要处补充说明性注释。**探查:参考上游【技术方案】与【关联清单】直接定位相关部分动手,不要为了改动先把整个仓库重扫一遍。**',
   test: '为本次改动补充单元 / 回归测试,覆盖核心路径与边界条件;确保测试可独立运行且能稳定复现回归。',
   review: '审查改动 diff:正确性、安全性、规范与可维护性;区分「必须修复」与「建议项」,并明确是否可以合并。',
 }
@@ -70,7 +70,9 @@ export function stageBasePrompt(key: string): string | undefined {
 }
 // 阶段行为默认(按内置 key)。自定义 key 落到最保守项。显式 flag 永远优先(在各消费点用 `spec.flag ?? 默认`)。
 export const DEFAULT_STAGE_PER_PROJECT_AGENT: Record<string, boolean> = { develop: true }   // 用各项目自己的 provider/model
-export const DEFAULT_STAGE_PRODUCES_DOC: Record<string, boolean> = { design: true }          // 强制写 markdown 方案文件
+// 强制写 markdown 交付文件(否则该阶段判失败,不糊弄):design=技术方案;requirement=需求理解+关联清单
+// (关联清单必须落成可被下游读取的产物,设计/开发才能从清单出发、不重扫全仓——工作流减重的关键)。
+export const DEFAULT_STAGE_PRODUCES_DOC: Record<string, boolean> = { requirement: true, design: true }
 export const DEFAULT_STAGE_SUMMARY: Record<string, boolean> = { design: true }               // per-project 后追加汇总代理
 
 // 字号从旧的枚举(小/中/大)升级为具体 px 数值。旧配置里的字符串按下表兼容映射,新值直接存数字。
@@ -236,8 +238,11 @@ export type Keybindings = z.infer<typeof KeybindingsSchema>
 
 // 记忆功能总开关。默认开(保持现有三层记忆行为);关闭是非破坏性的——只暂停读(注入前言)与写
 // (蒸馏),磁盘上的 system.md/workspace.md/session summary 原样保留。用对象包裹便于将来加子标志。
-export const MemorySchema = z.object({ enabled: z.boolean().catch(true).default(true) })
-export const defaultMemory = (): z.infer<typeof MemorySchema> => ({ enabled: true })
+// 默认【关闭】:记忆蒸馏会在每轮后用当前 provider CLI 跑额外的一次性 LLM 调用(消耗 token、走用户额度),而同
+// provider/同 session 的原生 --resume 本就带完整上下文、蒸馏多为冗余。改成用户按需开启(开启处提示会费 token)。
+// .catch/.default(false) 只影响【未显式设过】的配置;已手动开过的用户保留其 true。
+export const MemorySchema = z.object({ enabled: z.boolean().catch(false).default(false) })
+export const defaultMemory = (): z.infer<typeof MemorySchema> => ({ enabled: false })
 
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
@@ -315,7 +320,7 @@ export const defaultSettings = (): Settings => ({
   nsfwCode: '',
   nsfwInstalled: {},
   fullAccessAck: {},
-  memory: { enabled: true },
+  memory: { enabled: false },
   codexTransport: 'exec',
 })
 
@@ -376,6 +381,13 @@ export const ProviderConfigSchema = z.object({
   env: z.record(z.string(), z.string()).default({}),
   modelsCache: z.array(ModelSchema).default([]),
   modelsFetchedAt: z.number().default(0),
+  // User-pinned models (from 设置 → 代理 → 添加模型). These are SACRED: a live `--list-models` refresh
+  // must UNION them in, never drop them. Fixes qoder (and any CLI) 自定义模型 vanishing — a user-defined
+  // custom model is server/account-specific and never appears in `--list-models`, so a stale refresh used
+  // to silently overwrite it away. Kept separate from modelsCache (the auto-detected snapshot) for provenance.
+  // Optional (not .default([])) so hand-built ProviderConfig literals/older on-disk configs stay valid; every
+  // read sites `?? []`.
+  customModels: z.array(ModelSchema).optional(),
   // Last-good DETECTION snapshot, persisted so agents survive an app upgrade/relaunch and a flaky/slow
   // cold-start probe doesn't make them vanish. Only an explicit 重新检测 (force) clears a stale one.
   detectedInstalled: z.boolean().optional(),

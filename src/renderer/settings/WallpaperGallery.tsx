@@ -4,6 +4,7 @@ import type { WallpaperCatalog, WallpaperItem } from '@shared/wallpaper'
 interface WallpaperGalleryProps {
   current: string                                  // appearance.bgWallpaperId — highlights the applied tile
   onApply: (url: string, id: string) => void       // caller sets bgImage + bgScope + bgWallpaperId
+  onClear?: () => void                             // 再次点击已选中的壁纸 → 取消选择,恢复无背景图
 }
 
 const CHECK = (
@@ -13,7 +14,7 @@ const CHECK = (
 // Built-in wallpaper gallery. Lists the public jsDelivr catalog, shows on-disk-cached thumbnails, and on
 // click downloads the full image and hands its forge-bg:// URL back to be set as the background. No
 // activation code — this is available to everyone and never touches the NSFW Worker.
-export function WallpaperGallery({ current, onApply }: WallpaperGalleryProps) {
+export function WallpaperGallery({ current, onApply, onClear }: WallpaperGalleryProps) {
   const [catalog, setCatalog] = useState<WallpaperCatalog | null>(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -60,8 +61,8 @@ export function WallpaperGallery({ current, onApply }: WallpaperGalleryProps) {
         key={w.id}
         className={`wp-tile${on ? ' on' : ''}`}
         disabled={busyThis || !!busy}
-        title={w.desc || w.name}
-        onClick={() => void apply(w)}
+        title={on ? '已选中 · 再次点击取消,恢复无背景' : (w.desc || w.name)}
+        onClick={() => (on ? onClear?.() : void apply(w))}
       >
         <div className="wp-thumb">
           {thumb ? <img src={thumb} alt="" /> : <span className="wp-thumb-ph">加载中…</span>}
@@ -82,7 +83,7 @@ export function WallpaperGallery({ current, onApply }: WallpaperGalleryProps) {
         <button className="wf-pick" style={{ fontSize: 11, padding: '2px 8px' }} onClick={load}>刷新</button>
       </div>
       <p className="set-desc">
-        精选壁纸,点一张即下载并设为应用背景(下方可调背景范围与可见度)。图片按需从网络下载,不占安装包。
+        精选壁纸,点一张即下载并设为应用背景(下方可调背景范围与可见度)。<b>再次点击已选中的那张即可取消,恢复无背景图</b>。图片按需从网络下载,不占安装包。
         {err && <span style={{ color: 'var(--del)', marginLeft: 6 }}>{err}</span>}
       </p>
       <p className="set-desc" style={{ color: 'var(--faint)', fontSize: 11 }}>

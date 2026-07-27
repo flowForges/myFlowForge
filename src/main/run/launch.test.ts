@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, type LaunchStartConfig } from './launch'
+import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, launchTaskSeed, type LaunchStartConfig } from './launch'
 import { buildWorkOrders } from './fanout'
 import type { Workspace, Workflow } from '../config/schema'
 import { STAGE_PROMPTS } from '../config/schema'
@@ -363,5 +363,17 @@ describe('createRunTempBranches (P4-2)', () => {
         'r1', async () => 'forge/run-r1',
       )).rejects.toThrow()
     })
+  })
+})
+
+describe('launchTaskSeed — carries the requirement to every stage via deps.task', () => {
+  it('combines the requirement seed and the supplement (both preserved for downstream stages)', () => {
+    expect(launchTaskSeed({ seed: '做一个登录页', supplement: '要支持手机号' }))
+      .toBe('做一个登录页\n\n【补充说明】\n要支持手机号')
+  })
+  it('seed only / supplement only / neither', () => {
+    expect(launchTaskSeed({ seed: '只有需求', supplement: '' })).toBe('只有需求')
+    expect(launchTaskSeed({ seed: '', supplement: '只有补充' })).toBe('【补充说明】\n只有补充')
+    expect(launchTaskSeed({ seed: '  ', supplement: '  ' })).toBe('')  // caller passes `|| undefined`
   })
 })

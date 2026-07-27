@@ -245,6 +245,13 @@
 /* Running session: pulsing green dot with glow ring — wins over the static mode color so a session that
    is actually executing stands out (multiple can pulse at once across workspaces). */
 .ws-sess .sd.run { background: var(--run); box-shadow: 0 0 0 3px color-mix(in oklab, var(--run) 26%, transparent); animation: pulse 1.6s infinite; }
+/* 正在执行 agent 的会话行:原来只有一个脉动小圆点,存在感太弱。整行再叠 —— 柔和运行色底 + 左侧运行光条
+   (贴齐工作区行 .ws-item.is-running 的语言,但更细)+ 提亮标题为 --run —— 让它在会话列表里一眼可辨。
+   运行态优先级高于选中态:放在 .on 之后,同为运行行时运行底色盖过 accent-dim。 */
+.ws-sess.is-running { background: color-mix(in oklab, var(--run) 12%, transparent); box-shadow: inset 2px 0 0 var(--run), 0 0 10px color-mix(in oklab, var(--run) 20%, transparent); }
+.ws-sess.is-running:hover { background: color-mix(in oklab, var(--run) 18%, transparent); }
+.ws-sess.is-running .ws-sess-name { color: var(--run); font-weight: 500; }
+.ws-sess.is-running.on { background: color-mix(in oklab, var(--run) 20%, transparent); }
 .ws-sess-name { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-sess-edit {

@@ -54,13 +54,13 @@ describe('SettingsSchema skills + pet', () => {
     const parsed = SettingsSchema.parse({ appearance: { theme:'dark', accent:'blue', vibrancy:true, glass:false, density:'comfortable', fontSize:'medium' }, termProxy:'' })
     expect(parsed.terminal.fontSize).toBe(12.5)
   })
-  it('memory defaults to enabled; parses off; old files without memory default on', () => {
+  it('memory defaults to DISABLED (opt-in; distillation costs tokens); respects explicit on; old files without memory default off', () => {
     const base = defaultSettings()
-    expect(base.memory).toEqual({ enabled: true })
-    expect(SettingsSchema.parse({ ...base }).memory.enabled).toBe(true)
-    expect(SettingsSchema.parse({ ...base, memory: { enabled: false } }).memory.enabled).toBe(false)
+    expect(base.memory).toEqual({ enabled: false })
+    expect(SettingsSchema.parse({ ...base }).memory.enabled).toBe(false)
+    expect(SettingsSchema.parse({ ...base, memory: { enabled: true } }).memory.enabled).toBe(true)
     const old = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, termProxy: '' })
-    expect(old.memory.enabled).toBe(true)
+    expect(old.memory.enabled).toBe(false)
   })
   it('defaults app icon to the fourth colorway and menu bar off', () => {
     const s = defaultSettings()

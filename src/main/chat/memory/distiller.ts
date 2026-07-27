@@ -41,9 +41,13 @@ export async function distillSession(wsPath: string, sessionId: string, deps: Di
 
 // Workspace-level: distill durable facts (decisions/conventions/architecture) from the session
 // and merge (dedup-by-heading) into <ws>/.forge/memory/workspace.md.
-export async function promoteToWorkspace(wsPath: string, sessionId: string, deps: DistillDeps): Promise<void> {
+// sinceIndex: only distill messages added since the last promotion (the caller's watermark). Feeding the
+// FULL transcript every turn was the token hog — the same-provider/same-session native --resume already
+// carries prior context, so we only need the incremental delta merged onto the existing memory below.
+export async function promoteToWorkspace(wsPath: string, sessionId: string, deps: DistillDeps, sinceIndex = 0): Promise<void> {
   return failOpen(async () => {
-    const messages = readMessages(wsPath, sessionId)
+    const all = readMessages(wsPath, sessionId)
+    const messages = sinceIndex > 0 ? all.slice(sinceIndex) : all
     if (messages.length === 0) return
     const existing = readWorkspaceMemory(wsPath)
     const prompt = [

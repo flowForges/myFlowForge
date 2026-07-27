@@ -953,6 +953,19 @@ export class RunController {
       // just set it — there is no path where a stale, no-longer-relevant value leaks into a prompt.
       let outcomes = await Promise.all(orders.map((o) => this.runOneOrder(o)))
 
+      // A producesDoc stage (技术方案设计) MUST hand back a real doc artifact via forge_write_artifact/
+      // forge_handoff. An 'ok' lane that registered NO doc carries only the provider's bare "完成" success
+      // string as its summary — writing THAT as the 技术方案 is the "打开方案文件只有'完成'两个字" bug.
+      // Downgrade such a lane to 'failed' so it flows through the normal 重跑/跳过 gate with a clear reason,
+      // instead of silently emitting a garbage doc the user then has to discover by opening it.
+      if ((stage.producesDoc ?? false)) {
+        outcomes = outcomes.map((o) =>
+          o.status === 'ok' && !pickDocArtifact(o.result?.artifacts)
+            ? { ...o, status: 'failed' as const, error: `「${stage.name}」没有产出应交付的文档：agent 未通过 forge_write_artifact 登记 markdown（只回了一句摘要，下游拿不到内容）。请重跑，或换一个会写文件的 provider/model。` }
+            : o
+        )
+      }
+
       // failure handling: surface + await lane decisions (retry/skip/abort)
       let unresolved = outcomes.filter((o) => o.status === 'failed')
       while (unresolved.length > 0 && !this.aborted) {

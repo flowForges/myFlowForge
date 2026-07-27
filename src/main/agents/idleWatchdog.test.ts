@@ -48,4 +48,32 @@ describe('makeIdleWatchdog', () => {
     expect(t.pending()).toBe(0)
     expect(onIdle).not.toHaveBeenCalled()
   })
+
+  it('pause() suspends the countdown so a user-gate wait is never killed; resume() re-arms', () => {
+    const t = fakeTimers()
+    const onIdle = vi.fn()
+    const wd = makeIdleWatchdog(1000, onIdle, t)
+    wd.pause()                        // user is deciding on a confirm/input gate
+    expect(t.pending()).toBe(0)       // no armed timer while paused
+    wd.beat()                         // stray late chunk mid-gate must NOT re-arm
+    expect(t.pending()).toBe(0)
+    t.fireArmed()                     // nothing armed → cannot fire
+    expect(onIdle).not.toHaveBeenCalled()
+    wd.resume()                       // user answered
+    expect(t.pending()).toBe(1)       // countdown armed again
+    t.fireArmed()
+    expect(onIdle).toHaveBeenCalledTimes(1)
+  })
+
+  it('resume() is a no-op when not paused / already cleared', () => {
+    const t = fakeTimers()
+    const onIdle = vi.fn()
+    const wd = makeIdleWatchdog(1000, onIdle, t)
+    wd.resume()                       // never paused → no extra timer
+    expect(t.pending()).toBe(1)
+    wd.clear()
+    wd.pause(); wd.resume()           // after clear → no-ops
+    expect(t.pending()).toBe(0)
+    expect(onIdle).not.toHaveBeenCalled()
+  })
 })

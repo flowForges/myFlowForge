@@ -267,7 +267,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const existing = cfg.providers.find(p => p.id === a.id)
     const providersCfg = [
       ...cfg.providers.filter(p => p.id !== a.id),
-      { id: a.id, binOverride: a.bin.trim(), env: existing?.env ?? {}, modelsCache: existing?.modelsCache ?? [], modelsFetchedAt: existing?.modelsFetchedAt ?? 0 },
+      { id: a.id, binOverride: a.bin.trim(), env: existing?.env ?? {}, modelsCache: existing?.modelsCache ?? [], modelsFetchedAt: existing?.modelsFetchedAt ?? 0, customModels: existing?.customModels ?? [] },
     ]
     writeAgentsConfig({ ...cfg, providers: providersCfg })
     rebuildProviderRegistry(providers)   // mutate in place so orchestrator/handlers see new bins

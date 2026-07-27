@@ -275,6 +275,9 @@ export interface ChatSession {
   createdAt: number
   runId?: string
   summary?: string
+  // 已提炼进 workspace 记忆的消息数水位:promoteToWorkspace 只处理 [memPromotedAt, len) 这段增量,
+  // 且每 WORKSPACE_PROMOTE_EVERY_K 条才跑一次 —— 避免每轮把整段历史重发给模型(蒸馏 token 大头)。
+  memPromotedAt?: number
   readonly?: true
   external?: { source: SourceId; externalId: string; filePaths: string[] }
   continuedFrom?: { source: SourceId; externalId: string }
