@@ -374,6 +374,16 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
                 e.preventDefault(); chooseSlash(slashCmds[slashActive]); return
               }
             }
+            // Shift+Tab cycles the permission mode (只读审阅 → 自动 → 完全访问 → …). Bound to THIS
+            // textarea's keydown on purpose, so it's scoped to the focused composer — never a global
+            // shortcut. Mirrors clicking through the split-button picker.
+            if (e.key === 'Tab' && e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              const order = PERMISSION_MODES.map(m => m.id)
+              const i = order.indexOf(permissionMode)
+              setPermissionMode(order[(i + 1) % order.length])
+              return
+            }
             if (e.key === 'Escape' && running) { e.preventDefault(); handleStop(); return }
             if (e.key !== 'Enter') return
             // Never send mid-IME-composition (Chinese/Japanese/etc.) — that Enter just
@@ -473,7 +483,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             <button
               className={'cb-btn cb-perm perm-' + permissionMode}
               data-menu="permMenu"
-              title={providerSupportsPermissions(agentId) ? '权限模式:agent 能自主执行到什么程度' : '当前编码代理不支持权限档,按其默认行为运行'}
+              title={providerSupportsPermissions(agentId) ? '权限模式:agent 能自主执行到什么程度 · ⇧⇥ 切换' : '当前编码代理不支持权限档,按其默认行为运行 · ⇧⇥ 切换'}
               onClick={() => setOpenMenu(openMenu === 'perm' ? null : 'perm')}
             >
               {SHIELD}
