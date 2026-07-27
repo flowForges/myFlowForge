@@ -22,11 +22,40 @@ export function XtermView({ termId, active, font }: {
     // redraw-heavy shell prompt (powerlevel10k/gitstatus) typing feels laggy. The WebGL addon
     // renders on the GPU (far faster). Load AFTER open(); on WebGL context loss, dispose it so
     // xterm transparently falls back to the DOM renderer instead of freezing.
-    try {
-      const webgl = new WebglAddon()
-      webgl.onContextLoss(() => { try { webgl.dispose() } catch { /* already gone */ } })
-      term.loadAddon(webgl)
-    } catch { /* no WebGL (rare) → stay on the DOM renderer */ }
+    //
+    // BUT only when window.devicePixelRatio is an integer. The WebGL renderer packs glyphs into an
+    // integer-pixel GPU atlas; at a FRACTIONAL device-pixel ratio each cell's advance no longer
+    // lines up with xterm's fractional cell layout, so echoed characters drift across the row —
+    // "git push" renders as "git p ush", the next keystroke as "ggit push …". Our whole-window zoom
+    // (setZoomFactor, keyed off the UI font size: 14px = 1.0×, so e.g. 13px → 0.93×) folds into
+    // devicePixelRatio, so on a 2× display any non-14px font size makes it fractional (2×0.93≈1.86).
+    // Fall back to the DOM renderer there — it lays out via the browser and stays correct at any
+    // zoom. Re-evaluate when the ratio changes (the user changes the UI font size).
+    let webgl: WebglAddon | null = null
+    const syncRenderer = () => {
+      const integral = Number.isInteger(window.devicePixelRatio)
+      if (integral && !webgl) {
+        try {
+          const w = new WebglAddon()
+          w.onContextLoss(() => { try { w.dispose() } catch { /* already gone */ } })
+          term.loadAddon(w); webgl = w
+        } catch { /* no WebGL (rare) → stay on the DOM renderer */ }
+      } else if (!integral && webgl) {
+        try { webgl.dispose() } catch { /* already gone */ }
+        webgl = null
+        try { term.refresh(0, term.rows - 1) } catch { /* not visible */ }
+      }
+    }
+    syncRenderer()
+    // devicePixelRatio has no 'change' event; a resolution media query fires once when it changes,
+    // so re-arm a fresh query against the new value each time.
+    let dprQuery: MediaQueryList | null = null
+    const onDprChange = () => { syncRenderer(); armDpr() }
+    const armDpr = () => {
+      dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+      dprQuery.addEventListener('change', onDprChange, { once: true })
+    }
+    armDpr()
     fit.fit()
     termRef.current = term; fitRef.current = fit
     void window.forge.termResize(termId, term.cols, term.rows)
@@ -42,7 +71,7 @@ export function XtermView({ termId, active, font }: {
       }, 90)
     })
     ro.observe(el)
-    return () => { offData(); clearTimeout(refitTimer); ro.disconnect(); term.dispose() }
+    return () => { offData(); dprQuery?.removeEventListener('change', onDprChange); clearTimeout(refitTimer); ro.disconnect(); term.dispose() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [termId])
 
