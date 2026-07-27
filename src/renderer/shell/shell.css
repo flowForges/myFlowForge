@@ -328,6 +328,9 @@
 .open-loc-main:disabled { opacity: .5; cursor: default; }
 .open-loc-main:disabled:hover { background: transparent; color: var(--fg-2); box-shadow: none; }
 .open-loc .ol-ico { flex: 0 0 15px; width: 15px; height: 15px; border-radius: 4px; object-fit: contain; }
+/* The popover is portaled to <body> (outside .open-loc), so the rule above can't reach its icons —
+   without this they render at the image's native size (huge). Size them for the menu list here. */
+.open-loc-pop .ol-ico { flex: 0 0 20px; width: 20px; height: 20px; border-radius: 5px; object-fit: contain; }
 .open-loc-main .ol-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .open-loc-pop {
   position: absolute; top: calc(100% + 4px); left: 0; z-index: 80; min-width: 190px; max-height: 60vh; overflow-y: auto;
