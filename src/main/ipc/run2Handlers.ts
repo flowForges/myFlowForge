@@ -189,7 +189,7 @@ export function registerRun2(deps: {
   // previously meant a still-pending per-project stage would resume against a project the original
   // run never selected (never checked out onto the run's temp branch), and a finalize-gate
   // merge/discard would then run real git directly against that project's REAL branch.
-  onInvoke(CH.run2ResumeFromDisk, (_e, p: { workspacePath: string }) => {
+  onInvoke(CH.run2ResumeFromDisk, (_e, p: { workspacePath: string; sessionId?: string }) => {
     if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:resume-from-disk)')
     const ws = readWorkspace(p.workspacePath)
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
@@ -200,7 +200,7 @@ export function registerRun2(deps: {
       const target = ws.projects.find((wp) => wp.name === project.name)?.branch
       if (target) projectTargets[project.name] = target
     }
-    return manager.resumeFromDisk(p.workspacePath, { projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash })
+    return manager.resumeFromDisk(p.workspacePath, { projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash, sessionId: p.sessionId })
   })
 
   // P-C2/T3: 丢弃 — clears the saved state so resumable() stops offering this interrupted run again.

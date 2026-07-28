@@ -283,6 +283,12 @@ export class RunController {
   // askFromAgent (a forge_ask arriving from the bridge, keyed only by agentId=laneId) so the
   // resulting `question` event carries the right stageKey, same as the text-fence onInput path below.
   private laneStageKey: Record<string, string> = {}
+  // Disk-resume ONE-SHOT flag (see start()'s resume shortcut): true only until the loop has processed
+  // the first stage after a rehydrate. Lets that one stage — if its lanes already finished before the
+  // crash (its 'artifacts:<key>' context is persisted) and no redo directive is pending — RE-RAISE its
+  // gate from disk instead of re-running every lane (the "点继续后又把整阶段重跑一遍、看着像卡死" waste).
+  // Scoped to the resumed stage only so an in-process jumpBack-without-feedback still genuinely re-runs.
+  private resuming = false
 
   // `rehydrate` (P-C2/T1, disk-resume): when supplied, builds the controller from a state loaded
   // off disk instead of a fresh initMachine(plan) — see RehydrateState's doc for exactly what's
@@ -290,6 +296,7 @@ export class RunController {
   // before this param existed.
   constructor(private plan: RunPlan, private deps: RunControllerDeps, rehydrate?: RehydrateState) {
     if (rehydrate) {
+      this.resuming = true
       this.machine = sanitizeForResume(plan, rehydrate.machine)
       this.feedback = rehydrate.feedback ?? []
       this.pendingDirective = rehydrate.pendingDirective ?? {}
@@ -940,6 +947,48 @@ export class RunController {
       }
       const cur = currentStage(this.machine)
       if (!cur || cur.status === 'done') break
+      // Disk-resume shortcut (one-shot, this resumed stage only): if the app died while this stage was
+      // parked at its gate, its lanes ALREADY finished (proof: 'artifacts:<key>' was persisted at that
+      // point — see below) and its outputs are on disk. Re-raise the gate from those persisted artifacts
+      // instead of re-running every lane again (the reported "点继续后把整个技术方案设计重跑一遍、界面看着
+      //像卡死" waste). Skipped when a redo directive is pending (its feedback must reshape a FRESH run) or
+      // it's a lens-review stage (its gate body needs live outcomes, not just artifact files) — those fall
+      // through to a normal re-run. `resuming` is cleared unconditionally so this only ever fires once.
+      if (this.resuming) {
+        this.resuming = false
+        const stg = this.plan.stages[this.machine.currentIndex]
+        const savedRefs = (this.deps.store.getContext('artifacts:' + stg.key) as ArtifactRef[] | undefined) ?? []
+        const hasDirective = !!this.pendingDirective[stg.key]?.trim()
+        if (stg.gate && savedRefs.length > 0 && !hasDirective && !isLensReviewStage(stg)) {
+          const stageProducesDoc = stg.producesDoc ?? false
+          const body = stageProducesDoc
+            ? savedRefs.map((r) => { try { return `## ${basename(r.path)}\n\n${readFileSync(r.path, 'utf8')}` } catch { return r.path } }).join('\n\n---\n\n')
+            : savedRefs.map((r) => r.path).join('\n')
+          const id = this.makeId('gate')
+          this.status = 'awaiting'
+          const p = this.gateR.create(id)
+          this.emitEvent({ id, kind: 'gate', stageKey: stg.key, stageName: stg.name, body, docs: savedRefs, producesDoc: stageProducesDoc })
+          const d = await p
+          this.drop(id)
+          if (this.aborted) break
+          if (d.type === 'redo') {
+            // Loop back and re-run THIS stage with the feedback — the one case a re-run IS wanted.
+            const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
+            this.pendingDirective[stg.key] = [text, d.feedback].filter(Boolean).join('\n')
+            continue
+          }
+          if (d.type === 'jumpBack') {
+            const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
+            this.pendingDirective[d.targetKey] = [text, d.feedback].filter(Boolean).join('\n')
+          }
+          this.machine = applyGateDecision(this.machine, d.type === 'jumpBack' ? d : { type: 'advance' })
+          this.emitUpdate()
+          if (this.plan.hooks?.length && d.type !== 'jumpBack') { await this.runHooksAfter(stg.key); if (this.aborted) break }
+          if (this.machine.stages.every((s) => s.status === 'done')) break
+          continue
+        }
+        // Not eligible (mid-flight crash, pending redo, or lens review) → fall through and re-run normally.
+      }
       this.machine = markRunning(this.machine); this.status = 'running'; this.emitUpdate()
       const idx = this.machine.currentIndex
       const stage = this.plan.stages[idx]

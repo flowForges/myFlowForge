@@ -282,7 +282,12 @@ export class Run2Manager {
       // still wins, same precedence as every other opts field here.
       task: opts.task ?? found.state.task,
       permissionMode: opts.permissionMode ?? 'full',
-      sessionId: opts.sessionId ?? found.state.sessionId,
+      // #3 attribute-on-resume: the SAVED owner wins (a run keeps belonging to the session that started
+      // it), and the resuming session is only a FALLBACK for a run whose saved sessionId was lost
+      // (old/unscoped) — without this such a run stays unscoped and the strict per-session 执行 panel
+      // guard (WorkspaceView) would hide it everywhere. (Precedence flipped from opts-wins: a resume now
+      // always passes the current session, so opts-wins would wrongly re-home a correctly-owned run.)
+      sessionId: found.state.sessionId ?? opts.sessionId,
       projectTargets: opts.projectTargets,
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,

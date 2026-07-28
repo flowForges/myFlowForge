@@ -1642,6 +1642,80 @@ describe('RunController', () => {
       expect(resumedPrompts[0]).toContain('补充：加上错误处理') // the fix: feedback is NOT lost across resume
     })
 
+    it('disk-resume shortcut: a stage parked at its gate (artifacts on disk, NO pending directive) re-raises its gate WITHOUT re-running lanes', async () => {
+      const store = new RunStore(ws, 'r1')
+      // Persist design's artifact exactly as controller line ~1070 would have, just before the crash at
+      // its gate — this is the on-disk proof that its lanes already finished.
+      const docPath = join(ws, 'design-root.md')
+      writeFileSync(docPath, '# 技术方案\n采用网关架构', 'utf8')
+      store.setContext('artifacts:design', [{ path: docPath, kind: 'md' }])
+      const plan2: RunPlan = { runId: 'r1', stages: [
+        { key: 'design', name: '技术方案设计', provider: 'x', model: 'm', scope: 'root', gate: true, producesDoc: true },
+        { key: 'develop', name: '代码开发', provider: 'x', model: 'm', scope: 'root', gate: false },
+      ] }
+      const runCalls: string[] = []
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          runCalls.push(task.stageKey)
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok', artifacts: [{ path: docPath, kind: 'md' }] }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      // Rehydrate as if the app died at design's gate: design 'running' (sanitized → pending), develop pending.
+      const machine: MachineState = { plan: plan2, currentIndex: 0, stages: [
+        { key: 'design', status: 'running', round: 0 },
+        { key: 'develop', status: 'pending', round: 0 },
+      ] }
+      const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() }, { machine })
+      let designGateBody: string | undefined
+      c.onEvent((e) => {
+        if (e.kind !== 'gate') return
+        if (e.stageKey === 'design') designGateBody = e.body
+        c.resolveGate(e.id, { type: 'advance' })
+      })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      // The fix: design's lanes were NOT re-run on resume — only the downstream develop stage ran.
+      expect(runCalls).toEqual(['develop'])
+      // The re-raised gate body was rebuilt from the on-disk doc (producesDoc embeds the full text).
+      expect(designGateBody).toContain('采用网关架构')
+    })
+
+    it('disk-resume shortcut does NOT fire when a redo directive is pending — the stage still re-runs with the feedback', async () => {
+      const store = new RunStore(ws, 'r1')
+      const docPath = join(ws, 'design-root.md')
+      writeFileSync(docPath, '# 旧方案', 'utf8')
+      store.setContext('artifacts:design', [{ path: docPath, kind: 'md' }])
+      const plan2: RunPlan = { runId: 'r1', stages: [
+        { key: 'design', name: '技术方案设计', provider: 'x', model: 'm', scope: 'root', gate: true, producesDoc: true },
+      ] }
+      const prompts: string[] = []
+      const provider: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task, cb) {
+          prompts.push(task.prompt)
+          const done = (async () => { cb.onHandoff?.({ summary: 'ok', artifacts: [{ path: docPath, kind: 'md' }] }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const machine: MachineState = { plan: plan2, currentIndex: 0, stages: [{ key: 'design', status: 'running', round: 1 }] }
+      const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() }, { machine, pendingDirective: { design: '补充：加上鉴权' } })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
+      const final = await Promise.race([
+        c.start(),
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('deadlock')), 2000)),
+      ])
+      expect(final.status).toBe('ok')
+      expect(prompts).toHaveLength(1)                 // re-ran (directive must reshape a fresh run)
+      expect(prompts[0]).toContain('补充：加上鉴权')   // with the feedback threaded in
+    })
+
     it('Finding 3: resume-while-parked-at-the-finalize-gate — no stage re-runs, and the finalize gate is re-emitted', async () => {
       const store = new RunStore(ws, 'r1')
       const calls: string[] = []
