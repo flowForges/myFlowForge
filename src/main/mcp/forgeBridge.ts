@@ -161,6 +161,15 @@ async function dispatch(
       const content = args.content as string
       // May throw for traversal attacks — propagates as error response
       const ref = ctx.store.writeArtifact(name, content)
+      // Record the write as this lane's produced artifact so a producesDoc stage's doc-check can trust
+      // the WRITE itself — not a separately-declared forge_handoff.artifacts entry the model may omit.
+      // Weaker models reliably call forge_write_artifact (the .md lands on disk) but skip re-listing the
+      // path in the handoff; without this the stage was wrongly failed ("agent 未通过 forge_write_artifact
+      // 登记 markdown") for a missing DECLARATION even though the deliverable exists. Keyed by agentId
+      // (== WorkOrder.id) so the controller can fold it back into exactly this lane's outcome.
+      const key = `written-artifacts:${agentId}`
+      const prev = (ctx.store.getContext(key) as Array<{ path: string; kind: string }> | undefined) ?? []
+      ctx.setContext(key, [...prev, ref])
       appendAudit(ctx, agentId, 'status', args, [ref])
       return { path: ref.path }
     }

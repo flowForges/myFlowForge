@@ -823,10 +823,31 @@ export class RunController {
     this.laneStageKey[order.id] = order.stageKey
     const outcome = await this.runOneOrderLive(order)
     this.laneTimings[order.id].endedAt = this.now()
+    this.foldWrittenArtifacts(outcome)
     // Settled (ok or failed): the lane's final state now lives in `outcomes`, not `liveLanes`.
     delete this.liveLanes[order.id]
     this.emitUpdate()
     return outcome
+  }
+
+  /**
+   * forge_write_artifact is the source of truth for a stage's deliverable. A lane can finish 'ok' with
+   * the .md physically written to disk yet omit that path from forge_handoff.artifacts / the forge-result
+   * fence — weaker models routinely write the file but skip the redundant declaration. Fold whatever this
+   * lane actually wrote via forge_write_artifact (recorded by the bridge under `written-artifacts:<laneId>`)
+   * into the outcome's self-reported artifacts, deduped by path, so the producesDoc doc-check (start()) and
+   * the downstream doc-mirroring both see the real file — instead of failing 需求评估/技术方案设计 for a
+   * missing declaration and forcing a needless 重跑. No-op without a bridge, without recorded writes, or on
+   * a failed outcome that carries no result.
+   */
+  private foldWrittenArtifacts(outcome: WorkOrderOutcome): void {
+    if (!outcome.result) return
+    const written = this.deps.store.getContext('written-artifacts:' + outcome.order.id) as ArtifactRef[] | undefined
+    if (!written?.length) return
+    const seen = new Set(outcome.result.artifacts.map((a) => a.path))
+    for (const w of written) {
+      if (!seen.has(w.path)) { outcome.result.artifacts.push({ path: w.path, kind: w.kind }); seen.add(w.path) }
+    }
   }
 
   private async runOneOrderLive(order: WorkOrder): Promise<WorkOrderOutcome> {

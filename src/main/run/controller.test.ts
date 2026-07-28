@@ -227,6 +227,48 @@ describe('RunController', () => {
     expect(gate.body).toContain('完成(方案见正文)')
   })
 
+  it('#6 producesDoc: a doc WRITTEN via forge_write_artifact but not re-declared in the handoff still passes', async () => {
+    // Root-cause regression: weaker models call forge_write_artifact (the file lands on disk) yet omit
+    // the redundant path from forge_handoff.artifacts / the forge-result fence. The write itself must be
+    // sufficient — otherwise the producesDoc downgrade fails 需求评估/技术方案设计 and forces a needless 重跑.
+    const store = new RunStore(ws, 'r1')
+    const docSrc = join(ws, 'agent-out.md')
+    const planText = '# 技术方案\n\n## 模块划分\n- 网关\n\n## 风险\n幂等键碰撞'
+    writeFileSync(docSrc, planText, 'utf8')
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task: AgentTask, cb: AgentCallbacks) {
+        const done = (async () => {
+          // Exactly what the forge bridge's write_artifact handler records — WITHOUT the agent listing
+          // the path in the handoff (bare summary, no artifacts).
+          store.setContext(`written-artifacts:${task.agentId}`, [{ path: docSrc, kind: 'md' }])
+          cb.onHandoff?.({ summary: '完成' })
+          const r = { ok: true, summary: '完成' }; cb.onDone(r); return r
+        })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const docPlan: RunPlan = {
+      runId: 'r1',
+      stages: [{ key: 'design', name: '技术方案设计', provider: 'x', model: 'm', scope: 'root', gate: true, producesDoc: true }],
+    }
+    const c = new RunController(docPlan, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const kinds: string[] = []
+    let gate: any
+    c.onEvent((e) => {
+      kinds.push(e.kind)
+      if (e.kind === 'gate') { gate = e; c.resolveGate(e.id, { type: 'advance' }) }
+      if (e.kind === 'failure') c.resolveLane(e.id, { type: 'skipLane' })
+    })
+    const final = await c.start()
+    // The written doc is honored: no failure, and the gate mirrors the real doc content.
+    expect(kinds).not.toContain('failure')
+    expect(final.status).toBe('ok')
+    expect(readFileSync(gate.docs[0].path, 'utf8')).toBe(planText)
+    expect(gate.body).toContain('幂等键碰撞')
+  })
+
   it('jumpBack from the develop-less flow: gate redo re-runs the stage', async () => {
     const store = new RunStore(ws, 'r1')
     const c = new RunController(plan, { providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
