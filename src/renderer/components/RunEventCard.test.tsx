@@ -10,15 +10,17 @@ describe('RunEventCard', () => {
     expect(container.firstChild).toBeNull()
   })
 
-  it('gate: renders body + 通过/打回本阶段/回退到某阶段, and 通过 fires resolveGate advance', () => {
+  it('gate: renders body + 通过/打回本阶段, and 通过 fires resolveGate advance', () => {
     const onGate = vi.fn()
+    // First stage (design) with no earlier stages → 回退到某阶段 is correctly hidden (see the dedicated
+    // jumpBack tests below); only 通过/打回本阶段 show here.
     const event: RunEvent = { id: 'g1', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: '## 方案\n采用网关架构' }
-    render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
+    render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} stages={[{ key: 'design', name: '技术方案设计' }, { key: 'impl', name: '实现' }]} />)
 
     expect(document.querySelector('.msg-req')?.classList.contains('k-gate')).toBe(true)
     expect(screen.getByText('通过')).toBeInTheDocument()
     expect(screen.getByText('打回本阶段')).toBeInTheDocument()
-    expect(screen.getByText('回退到某阶段')).toBeInTheDocument()
+    expect(screen.queryByText('回退到某阶段')).toBeNull()   // first stage: nothing to roll back to
     // body rendered as markdown
     expect(screen.getByText('方案')).toBeInTheDocument()
 
@@ -115,18 +117,28 @@ describe('RunEventCard', () => {
     expect(onGate).toHaveBeenCalledWith('g2', { type: 'redo', feedback: '再调整一下接口命名' })
   })
 
-  it('gate: 回退到某阶段 reveals a NAMED stage dropdown (not a raw key input) and sends jumpBack with the picked key', () => {
+  it('gate: 回退到某阶段 only offers EARLIER stages (not the current one, NOT later ones — that would be a skip) and sends jumpBack with the picked key', () => {
     const onGate = vi.fn()
     const event: RunEvent = { id: 'g3', kind: 'gate', stageKey: 'impl', stageName: '实现', body: 'x' }
     const stages = [{ key: 'design', name: '技术方案设计' }, { key: 'impl', name: '实现' }, { key: 'review', name: '代码 CR' }]
     render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} stages={stages} />)
     fireEvent.click(screen.getByText('回退到某阶段'))
-    // The current stage (impl) is excluded; the user picks by human name, not by typing a key.
+    // Only the earlier stage (design) is offered; the current stage (impl) and the LATER stage (review)
+    // are both excluded — jumpBack is a rollback, never a skip-forward. Picked by human name.
     expect(screen.getByRole('option', { name: '技术方案设计' })).toBeInTheDocument()
     expect(screen.queryByRole('option', { name: '实现' })).toBeNull()
+    expect(screen.queryByRole('option', { name: '代码 CR' })).toBeNull()   // regression: later stage must NOT appear
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'design' } })
     fireEvent.click(screen.getByText('确认回退'))
     expect(onGate).toHaveBeenCalledWith('g3', { type: 'jumpBack', targetKey: 'design', feedback: undefined })
+  })
+
+  it('gate: the 回退到某阶段 control is hidden at the first stage (nothing earlier to roll back to)', () => {
+    const event: RunEvent = { id: 'g4', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: 'x' }
+    const stages = [{ key: 'design', name: '技术方案设计' }, { key: 'impl', name: '实现' }, { key: 'review', name: '代码 CR' }]
+    render(<RunEventCard event={event} onGate={vi.fn()} onLane={vi.fn()} stages={stages} />)
+    expect(screen.getByText('通过')).toBeInTheDocument()
+    expect(screen.queryByText('回退到某阶段')).toBeNull()
   })
 
   it('auth: renders title+where and 批准/拒绝 route through resolveLane', () => {

@@ -123,6 +123,12 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
   const [jumpTarget, setJumpTarget] = useState('')
   const [answer, setAnswer] = useState('')
 
+  // 回退 (jumpBack) may ONLY target stages that run BEFORE the current one — offering a later stage is a
+  // skip-forward, not a rollback (the reported bug: at 技术方案设计 the dropdown listed 代码开发/写单测/
+  // 代码CR). At the first stage there is nothing to roll back to, so the whole 回退 control is hidden.
+  const curStageIdx = stages.findIndex((s) => s.key === event?.stageKey)
+  const jumpBackStages = curStageIdx > 0 ? stages.slice(0, curStageIdx) : []
+
   if (frozen) {
     // ①汇总: the run-completion "本次运行总结" card — the run's full summary rendered as Markdown, with
     // no "决定：…" line (it records nothing the user decided, unlike every other frozen card). Distinct
@@ -206,7 +212,7 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
                   onChange={(e) => setJumpTarget(e.target.value)}
                 >
                   <option value="">选择要回退到的阶段…</option>
-                  {stages.filter((s) => s.key !== event.stageKey).map((s) => (
+                  {jumpBackStages.map((s) => (
                     <option key={s.key} value={s.key}>{s.name}</option>
                   ))}
                 </select>
@@ -214,7 +220,7 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
               <div className="arow">
                 <button className="wfo-btn pri" onClick={() => onGate(event.id, { type: 'advance' })}>通过</button>
                 <button className="wfo-btn ghost" onClick={() => onGate(event.id, { type: 'redo', feedback: fb() })}>打回本阶段</button>
-                {showJumpForm ? (
+                {jumpBackStages.length > 0 && (showJumpForm ? (
                   <button
                     className="wfo-btn ghost"
                     disabled={!jumpTarget.trim()}
@@ -222,7 +228,7 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
                   >确认回退</button>
                 ) : (
                   <button className="wfo-btn ghost" onClick={() => setShowJumpForm(true)}>回退到某阶段</button>
-                )}
+                ))}
               </div>
             </div>
           </>
