@@ -33,8 +33,9 @@ export interface Run2Api {
    *  Run2Manager.resumable's doc). Cleared locally (optimistic) the moment 继续/丢弃 is invoked, since
    *  either action makes the summary stale immediately (resumed → now a live run; discarded → gone). */
   resumable: ResumableSummary | null
-  /** 继续: rebuild the interrupted run from disk and resume it (run2:resume-from-disk). */
-  resumeFromDisk: () => Promise<void>
+  /** 继续: rebuild the interrupted run from disk and resume it (run2:resume-from-disk). `sessionId`
+   *  attributes a run whose saved owner was lost to the resuming session (#3). */
+  resumeFromDisk: (sessionId?: string) => Promise<void>
   /** 丢弃: clear the saved state so it stops being offered (run2:discard-resumable). */
   discardResumable: () => Promise<void>
   /** Spec §12.7 (run-history): list past/interrupted runs for the current workspace, newest first. */
@@ -178,12 +179,14 @@ export function useRun2(workspacePath: string | undefined): Run2Api {
     if (r && workspacePath) r.jumpBack({ workspacePath, targetKey })
   }, [workspacePath])
 
-  const resumeFromDisk = useCallback(async () => {
+  const resumeFromDisk = useCallback(async (sessionId?: string) => {
     const r = getRun2()
     if (!r || !workspacePath || !r.resumeFromDisk) return
     setResumable(null) // optimistic: this call turns the interrupted run into a live one
     try {
-      await r.resumeFromDisk(workspacePath)
+      // #3: pass the resuming session so a run whose saved sessionId was lost (old/unscoped) gets
+      // attributed to THIS session, keeping it visible under the strict per-session 执行 panel guard.
+      await r.resumeFromDisk(workspacePath, sessionId)
     } catch (err) {
       // Restore the offer on failure (e.g. a stale/raced summary) instead of silently swallowing
       // it — re-querying is the safe source of truth rather than assuming the old summary still holds.

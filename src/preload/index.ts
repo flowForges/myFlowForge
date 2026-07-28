@@ -326,7 +326,7 @@ const api = {
     // before an app restart? Returns a ResumableSummary or null (see Run2Manager.resumable's doc).
     resumable: (workspacePath: string) => ipcRenderer.invoke(CH.run2Resumable, { workspacePath }),
     // P-C2/T3: 继续 — rebuild + resume the interrupted run from disk.
-    resumeFromDisk: (workspacePath: string) => ipcRenderer.invoke(CH.run2ResumeFromDisk, { workspacePath }),
+    resumeFromDisk: (workspacePath: string, sessionId?: string) => ipcRenderer.invoke(CH.run2ResumeFromDisk, { workspacePath, sessionId }),
     // P-C2/T3: 丢弃 — clear the saved state so it stops being offered.
     discardResumable: (workspacePath: string) => ipcRenderer.invoke(CH.run2DiscardResumable, { workspacePath }),
     // Spec §12.7 (run-history): list past runs for a workspace (newest first), and load one run's

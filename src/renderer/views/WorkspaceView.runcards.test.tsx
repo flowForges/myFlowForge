@@ -89,7 +89,7 @@ const forgeBase = {
   runWorkspace: vi.fn(async () => {}),
   commandsList: vi.fn(async () => []),
   run2: {
-    getState: vi.fn(async () => makeRunState([gateEvent])),
+    getState: vi.fn(async () => makeRunState([gateEvent], 's-1')),
     onUpdate: (_cb: any) => () => {},
     onLog: (_cb: any) => () => {},
     onQueue: (_cb: any) => () => {},
@@ -116,13 +116,15 @@ beforeEach(() => {
 const idleEngine: EngineApi = { run: null, pending: [], resolve: () => {}, cancel: () => {} }
 
 describe('WorkspaceView: run2 事件卡挂进对话时间线(+凝固持久化)', () => {
-  it('inbox 有 gate 事件 → 时间线出方案门卡(通过/打回本阶段/回退到某阶段)', async () => {
+  it('inbox 有 gate 事件 → 时间线出方案门卡(通过/打回本阶段);首阶段无回退按钮', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
 
     await waitFor(() => expect(screen.getByText('通过')).toBeInTheDocument())
     expect(screen.getByText('打回本阶段')).toBeInTheDocument()
-    expect(screen.getByText('回退到某阶段')).toBeInTheDocument()
+    // The fixture's gate is on the FIRST stage (design) — nothing earlier to roll back to, so the
+    // 回退到某阶段 control is correctly hidden (see the RunEventCard jumpBack-only-earlier-stages fix).
+    expect(screen.queryByText('回退到某阶段')).toBeNull()
     expect(screen.getByText('设计方案：采用微服务架构')).toBeInTheDocument()
   })
 
@@ -289,16 +291,21 @@ describe('WorkspaceView: run2 事件卡按发起会话隔离', () => {
     await waitFor(() => expect(screen.getByText('设计方案：采用微服务架构')).toBeInTheDocument())
   })
 
-  it('run 无 sessionId(legacy)：任意会话都展示方案门卡', async () => {
+  it('run 无 sessionId(legacy)：严格隔离下不挂到任何会话(不再到处串;可见性靠恢复补归属恢复)', async () => {
+    // #3: previously an unscoped run's card leaked into whatever tab was in front ("切到会话B还是会话A
+    // 的工作流"). Now the live panel is strict (sessionId===active): an ownerless run shows in NO session.
+    // A resumed unscoped run is re-attributed to the resuming session (manager.resumeFromDisk) so it stays
+    // visible there — this legacy fixture just has no owner and is never resumed, so it shows nowhere.
     ;(window as any).forge = twoSessionForge(undefined)
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
-    await waitFor(() => expect(screen.getByText('设计方案：采用微服务架构')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('会话A的历史')).toBeInTheDocument())
+    expect(screen.queryByText('设计方案：采用微服务架构')).toBeNull()
 
-    // Switch to s-B: a legacy (no-sessionId) run's card shows anywhere in the workspace.
+    // And still nothing after switching — it does not leak into s-B either.
     fireEvent.click(screen.getByText('会话B'))
     await waitFor(() => expect(screen.getByText('会话B的历史')).toBeInTheDocument())
-    expect(screen.getByText('设计方案：采用微服务架构')).toBeInTheDocument()
+    expect(screen.queryByText('设计方案：采用微服务架构')).toBeNull()
   })
 
   it('freezeRunCard 把冻结记录持久化到 run 的发起会话(run2.state.sessionId)，而非当前 activeSessionId', async () => {

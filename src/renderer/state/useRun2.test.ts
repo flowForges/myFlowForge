@@ -204,7 +204,7 @@ describe('useRun2', () => {
 
     await act(async () => { await result.current.resumeFromDisk() })
 
-    expect(run2.resumeFromDisk).toHaveBeenCalledWith('/ws')
+    expect(run2.resumeFromDisk).toHaveBeenCalledWith('/ws', undefined)
     // re-queried resumable() after the rejection — restored, not left null.
     expect(result.current.resumable).toEqual(restoredSummary)
   })

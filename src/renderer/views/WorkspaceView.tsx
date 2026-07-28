@@ -233,6 +233,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     setPendingSupplement({ kind, id, label })
     setQuickSeed({ text: `> 针对【技术方案·${label}】补充：\n`, nonce: Date.now() })
   }, [])
+  // 门开时的补充模式:当本会话有一个待决的阶段评审门时,主输入框自动进入「补充」态(见 supplementGate 派生
+  // 与下方 onSend)。用户点横幅「取消」把这个门 id 记进 dismissedGateId → 该门恢复普通聊天;换一个新门(不同
+  // id)会重新进入补充态。用 state 而非 ref,以便取消能立刻触发重渲染隐藏横幅。
+  const [dismissedGateId, setDismissedGateId] = useState<string | null>(null)
   const [selection, setSelection] = useState<{ agentId: string; modelId: string; permissionMode?: import('@shared/permissions').PermissionMode }>()
   // 本机扫描到的当前 provider 的自定义命令/prompt + skills(进 "/" 菜单)。随 provider/workspace 变化拉取。
   const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
@@ -636,9 +640,23 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // (a session-scoped run for another session, or none at all) — which is exactly when the tab should
   // hide. A brand-new run in this same session simply replaces `run2.state` (new runId), so the tab
   // just keeps showing the latest run — never both stuck open AND stale.
-  const run2StateForTab = run2.state && (!run2.state.sessionId || run2.state.sessionId === sessions.activeSessionId)
+  // #3 (session-scoping leak): a run belongs to the session that started it — the LIVE 执行 panel must
+  // show ONLY in that session's tab. The old guard treated a MISSING sessionId as "show in every session"
+  // (`!run2.state.sessionId || …`), so an unscoped run (an old disk-resumed one, or a non-gate raw start)
+  // leaked its whole workflow UI into every tab — the reported "切到会话B还是会话A的工作流". Strict now:
+  // no sessionId, or a different session → not this tab. Resumed runs are given a sessionId on resume
+  // (attribute-on-resume, see run2Handlers/manager.resumeFromDisk) so they stay visible in their session.
+  const run2StateForTab = run2.state && run2.state.sessionId && run2.state.sessionId === sessions.activeSessionId
     ? run2.state
     : null
+  // #3 (right-panel leak): the 执行 pane belongs to the run's OWNING session. `activeTab` is set to
+  // 'exec' when a run starts (effect above) and is plain component state that does NOT reset on a
+  // session switch — so after switching to a session that does NOT own the run, the 执行 tab BUTTON
+  // correctly falls back to 概览 (gated on run2StateForTab) yet the PANE kept rendering the
+  // workspace-level run2 (the reported "切会话右侧还是那个工作流；只有切工作区才有用"). Derive the
+  // tab actually shown: downgrade a stuck 'exec' to 概览/代理 when this session doesn't own the run.
+  // Derived (not a setState) so switching BACK to the owning session restores 执行 automatically.
+  const effectiveTab: TabId = activeTab === 'exec' && !run2StateForTab ? 'agents' : activeTab
   // Stamp each newly-seen run2 inbox event's arrival time once — mirrors LaunchGateState's `ts =
   // Date.now()` stamped once at creation — so toRunCardEntries keeps a card's timeline position stable
   // across re-renders. Mutated directly on the ref (idempotent: only ever fills in a MISSING id) rather
@@ -648,6 +666,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     if (!(e.id in runCardFirstSeenRef.current)) runCardFirstSeenRef.current[e.id] = Date.now()
   }
   const runCardEntries = toRunCardEntries(run2StateForTab?.inbox ?? [], mergedRunCards, runCardFirstSeenRef.current)
+  // The stage-review gate (non-finalize) currently awaiting a decision in THIS session, if any. Its
+  // presence flips the composer into "supplement" mode so a message typed in the main box feeds the
+  // workflow (打回本阶段 + 补充说明 rerun) rather than silently starting an unrelated chat — unless the
+  // user dismissed it (dismissedGateId) to send a plain chat instead. run2StateForTab is already scoped
+  // to the run's owning session (#3), so this never arms for a gate the user can't see.
+  const awaitingStageGate = (run2StateForTab?.inbox ?? []).find(
+    (e): e is Extract<RunEvent, { kind: 'gate' }> => e.kind === 'gate' && !e.finalize,
+  ) ?? null
+  const supplementGate = awaitingStageGate && dismissedGateId !== awaitingStageGate.id ? awaitingStageGate : null
   // Resolving a run2 event (gate advance/redo/jumpBack, or a lane authorize/deny/answer/retry/…) both
   // dispatches the decision to run2 AND freezes the card in place — mirrors confirmLaunchGate's
   // freeze-then-persist pattern, except synchronous (resolveGate/resolveLane fire-and-forget rather
@@ -1086,7 +1113,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         {run2.resumable && !archived && (!run2.resumable.sessionId || run2.resumable.sessionId === sessions.activeSessionId) && (
           <div className="supplement-banner">
             <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
-            <button className="supplement-ok" onClick={() => { void run2.resumeFromDisk() }}>继续</button>
+            <button className="supplement-ok" onClick={() => { void run2.resumeFromDisk(sessions.activeSessionId ?? undefined) }}>继续</button>
             <button className="supplement-cancel" onClick={() => { void run2.discardResumable() }}>丢弃</button>
           </div>
         )}
@@ -1274,6 +1301,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             <button className="supplement-cancel" onClick={() => setPendingSupplement(null)}>取消</button>
           </div>
         )}
+        {supplementGate && !pendingSupplement && (
+          <div className="supplement-banner">
+            <span>补充中：针对【{supplementGate.stageName}】—— 发送即把补充意见<b>打回本阶段重跑</b>（点取消改为与工作流并行的独立聊天）</span>
+            <button className="supplement-cancel" onClick={() => setDismissedGateId(supplementGate.id)}>取消</button>
+          </div>
+        )}
         {pendingSwitch && (
           <div className="supplement-banner switch-banner">
             <span>当前对话由 <b>{providerLabel(pendingSwitch.from)}</b> 执行。切换到 <b>{providerLabel(pendingSwitch.to)}</b> 会丢失原生上下文；确认后将由 {providerLabel(pendingSwitch.to)} 读取并总结已有对话（会花一些 token）再继续。</span>
@@ -1286,13 +1319,19 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         <Composer
           providers={providers}
           disabled={!wsPath || !!archived}
-          // While a workflow run is active, the chat input is in QUEUE mode (not disabled): the user can
-          // type and send, and the message is held on the main side (ChatQueue) and runs after the
-          // workflow finishes. run2Live is workspace-scoped, so a NEW session in the same workspace is
-          // also in queue mode (it can type+queue, not frozen). Gate/decision interaction still happens
-          // via the inline cards above. The main-side hold avoids a chat turn mutating the tree while the
-          // run's lanes do (#4/#5).
-          lockedReason={run2Live ? '工作流执行中 · 发送将排队，结束后依次执行' : undefined}
+          // ChatQueue no longer blocks chat behind a workflow (chatQueue.ts: runDone is a no-op, pump only
+          // serializes per-session) — a message sent while a run is live runs IMMEDIATELY as an independent
+          // chat, NOT queued-until-the-run-ends. lockedReason is therefore just an honest placeholder, not a
+          // queue promise. Three cases: (a) a stage gate is awaiting → supplement mode (the typed text 打回
+          // 本阶段 reruns with it; see supplementGate/onSend); (b) a run is otherwise live → the message is a
+          // parallel independent chat that does NOT enter the workflow; (c) no run → normal composer.
+          lockedReason={
+            supplementGate
+              ? `补充给【${supplementGate.stageName}】：发送将打回本阶段并带补充重跑 · 点上方「取消」改为独立聊天`
+              : run2Live
+                ? '工作流运行中 · 在此发送是与它并行的独立对话，不会进入该工作流'
+                : undefined
+          }
           busy={chat.busy}
           running={chat.busy && chat.running != null}
           onStop={() => chat.stop()}
@@ -1353,6 +1392,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               setPendingSupplement(null)
               return
             }
+            // Auto supplement to an awaiting run2 stage gate (Option C): route the typed text back to the
+            // workflow as a 打回本阶段(redo)+补充说明 rerun instead of a silent unrelated chat. Cancelled
+            // via the banner (dismissedGateId) → falls through to chat.send below. onRunGate also freezes
+            // the gate card, same as clicking 打回本阶段 on the card itself.
+            if (supplementGate && m.text.trim()) {
+              onRunGate(supplementGate.id, { type: 'redo', feedback: m.text.trim() })
+              return
+            }
             // The agent is waiting on a forge_ask (an inline 选项 card). That turn is busy, so a normal
             // send would just enqueue BEHIND the very turn blocked waiting for this answer — a deadlock
             // the user could only escape by clicking the card. If a question is pending for this session,
@@ -1384,7 +1431,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         <div className="insp-tabs">
             {run2StateForTab ? (
               <button
-                className={`insp-tab${activeTab === 'exec' ? ' on' : ''}`}
+                className={`insp-tab${effectiveTab === 'exec' ? ' on' : ''}`}
                 data-pane="exec"
                 onClick={() => setActiveTab('exec')}
               >
@@ -1392,7 +1439,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </button>
             ) : (
               <button
-                className={`insp-tab${activeTab === 'agents' ? ' on' : ''}`}
+                className={`insp-tab${effectiveTab === 'agents' ? ' on' : ''}`}
                 data-pane="agents"
                 onClick={() => setActiveTab('agents')}
               >
@@ -1434,8 +1481,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           </div>
         <div className="insp-body">
             {/* 执行 pane — run2 运行时的执行面板(P2-2:进度+阶段流程+代码阶段分支扇出+运行级暂停/继续/终止)。 */}
-            <div className={`insp-pane${activeTab === 'exec' ? ' on' : ''}`} id="pane-exec">
-              {activeTab === 'exec' && <RunExecPanel run2={run2} onAbort={handleRunAbort} onViewLog={onViewAgentLog} />}
+            <div className={`insp-pane${effectiveTab === 'exec' ? ' on' : ''}`} id="pane-exec">
+              {effectiveTab === 'exec' && <RunExecPanel run2={run2} onAbort={handleRunAbort} onViewLog={onViewAgentLog} />}
             </div>
 
             {/* Spec §12.7: 运行历史 pane — list of past/interrupted runs for this workspace; clicking a
@@ -1453,7 +1500,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             </div>
 
             {/* 代理编排 / 对话模式 pane */}
-            <div className={`insp-pane${activeTab === 'agents' ? ' on' : ''}`} id="pane-agents">
+            <div className={`insp-pane${effectiveTab === 'agents' ? ' on' : ''}`} id="pane-agents">
               <div id="mainFlow">
               {run && (
                 <>
