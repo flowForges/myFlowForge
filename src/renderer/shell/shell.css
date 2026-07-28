@@ -238,20 +238,26 @@
 .ws-sess::before { content: ""; position: absolute; left: -9px; top: 50%; width: 6px; height: 1px;
   background: var(--border); }
 .ws-sess:hover { background: var(--surface); }
-.ws-sess.on { background: var(--accent-dim); }
-.ws-sess.on .ws-sess-name { color: var(--fg); }
+/* #2 焦点(当前查看)的会话:accent 底 + 实心左条 —— 结构性的「你在这」标记。用左条(而非只靠底色)是因为
+   --accent 与 --run 在所有主题里几乎同色,只靠底色无法与「运行中」区分(见下)。 */
+.ws-sess.on { background: var(--accent-dim); box-shadow: inset 3px 0 0 var(--accent); }
+.ws-sess.on .ws-sess-name { color: var(--fg); font-weight: 500; }
 .ws-sess .sd { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; background: var(--faint); }
 .ws-sess .sd.workflow { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 /* Running session: pulsing green dot with glow ring — wins over the static mode color so a session that
    is actually executing stands out (multiple can pulse at once across workspaces). */
 .ws-sess .sd.run { background: var(--run); box-shadow: 0 0 0 3px color-mix(in oklab, var(--run) 26%, transparent); animation: pulse 1.6s infinite; }
-/* 正在执行 agent 的会话行:原来只有一个脉动小圆点,存在感太弱。整行再叠 —— 柔和运行色底 + 左侧运行光条
-   (贴齐工作区行 .ws-item.is-running 的语言,但更细)+ 提亮标题为 --run —— 让它在会话列表里一眼可辨。
-   运行态优先级高于选中态:放在 .on 之后,同为运行行时运行底色盖过 accent-dim。 */
-.ws-sess.is-running { background: color-mix(in oklab, var(--run) 12%, transparent); box-shadow: inset 2px 0 0 var(--run), 0 0 10px color-mix(in oklab, var(--run) 20%, transparent); }
-.ws-sess.is-running:hover { background: color-mix(in oklab, var(--run) 18%, transparent); }
+/* #2 正在执行 agent 的会话:signaled by MOTION + TEXT (the pulsing .sd.run dot + the 「运行中」pill +
+   run-colored name), NOT by a background/left-rail that would mimic — and be indistinguishable from —
+   the focus state above (--accent ≈ --run in every theme). So NO inset rail and no heavy bg here; the
+   two states now live on orthogonal channels and read clearly apart, together, or alone. */
 .ws-sess.is-running .ws-sess-name { color: var(--run); font-weight: 500; }
-.ws-sess.is-running.on { background: color-mix(in oklab, var(--run) 20%, transparent); }
+/* When a running session is ALSO the focused one, the focus rail/bg (.on above) still applies and wins;
+   the pulsing dot + 「运行中」pill make its running state equally unmistakable. */
+.ws-sess-run { flex: 0 0 auto; font-size: 9px; line-height: 1; font-family: var(--mono); color: var(--run);
+  padding: 2px 5px; border-radius: 999px; letter-spacing: .04em;
+  border: 1px solid color-mix(in oklab, var(--run) 42%, transparent);
+  background: color-mix(in oklab, var(--run) 12%, transparent); }
 .ws-sess-name { flex: 1 1 auto; min-width: 0; font-size: 12px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-sess-edit {
