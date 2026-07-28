@@ -93,6 +93,16 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         child.stdin?.write(controlInitLine() + '\n')
         child.stdin?.write(userMessageLine(task.prompt) + '\n')
       } catch { /* stdin gone */ }
+      // Under the control protocol (--input-format stream-json) claude holds stdin open for permission
+      // responses and NEVER self-exits after its turn — it blocks waiting for a next message that never
+      // comes. Two things reclaim it: (1) the `result` event below (the normal end-of-turn signal) kills
+      // the child immediately; (2) this inactivity watchdog is the safety net for a genuinely wedged
+      // agent that never even emits `result` — without it workOrder's `await session.done` (process
+      // exit) would hang the whole workflow lane forever (the 0/N-for-40min wedge). Mirrors chat().
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
+      // Set from the `result` event; overrides the SIGTERM exit code we then raise so a clean turn
+      // reports ok:true rather than `退出码 143`.
+      let turnOk: boolean | null = null
       let buf = ''
       // Answer a pending can_use_tool control_request on stdin; tolerate a closed/dead stream
       // (e.g. the run was cancelled while a confirm was pending) instead of throwing.
@@ -106,8 +116,12 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         const cut = parseCanUseTool(obj)
         if (cut) {
           let decision: 'allow' | 'deny' = 'deny'
+          // A permission prompt is a legitimate human wait, not a wedge — suspend the idle watchdog so
+          // it can't SIGTERM the agent mid-decision (finally always resumes).
+          wd.pause()
           try { decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName }) }
           catch (e) { respond(cut, false); cb.onError(e instanceof Error ? e : new Error(String(e))); return }
+          finally { wd.resume() }
           respond(cut, decision === 'allow')
           return
         }
@@ -118,7 +132,15 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         for (const a of parseChatStreamActions(obj)) {
           if (a.kind === 'session') { cb.onSession?.(a.id); continue }
           if (a.kind === 'ignore') continue
-          if (a.kind === 'result') { if (a.text) cb.onLog({ ts: now(), text: a.text, level: 'ok', kind: 'output' }); continue }
+          if (a.kind === 'result') {
+            if (a.text) cb.onLog({ ts: now(), text: a.text, level: 'ok', kind: 'output' })
+            // End of turn. claude won't self-exit (stdin held open), so terminate now — otherwise the
+            // lane hangs forever on `await session.done` after the agent already handed off. Capture
+            // success from the raw result so the SIGTERM exit code (143) isn't misread as a failure.
+            turnOk = (obj as { subtype?: string; is_error?: boolean })?.subtype === 'success' && (obj as { is_error?: boolean })?.is_error !== true
+            try { child.kill('SIGTERM') } catch { /* already gone */ }
+            continue
+          }
           // A stage agent's own built-in Task sub-agents: surface as log lines (the run path has no
           // sub-agent card UI; the workflow's own real sub-agents are the visible ones here).
           if (a.kind === 'subagent-start') { cb.onSubagent?.({ id: a.id, phase: 'start', subagentType: a.subagentType, description: a.description }); cb.onLog({ ts: now(), text: `调用子代理 ${a.subagentType ?? ''}${a.description ? ' · ' + a.description : ''}`.trim(), level: 'accent', kind: 'tool' }); continue }
@@ -137,8 +159,10 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       }
       child.stdout?.on('data', (b: Buffer) => {
         // Any stdout byte means the process is alive — including a long stream of input_json_delta
-        // events (a big Write's content) that map to no log line. Signal liveness before parsing so
-        // the orchestrator watchdog never kills a healthy agent mid-generation.
+        // events (a big Write's content) that map to no log line. Beat the local watchdog and signal
+        // liveness before parsing so neither this nor the orchestrator watchdog kills a healthy agent
+        // mid-generation.
+        wd.beat()
         cb.onActivity?.()
         buf += b.toString()
         let nl: number
@@ -148,13 +172,17 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         }
       })
       const done = child.then((res) => {
+        wd.clear()
         processLine(buf); buf = '' // flush any final line that had no trailing newline (e.g. the result event)
-        const ok = res.exitCode === 0
+        // A clean `result` (turnOk===true) means success even though we then SIGTERM'd the non-exiting
+        // process (exit code 143). Fall back to the exit code only when no result arrived (a wedge the
+        // watchdog reclaimed, or a crash) → ok:false so the lane fails/retries rather than false-passes.
+        const ok = turnOk ?? (res.exitCode === 0)
         cb.onState(ok ? 'ok' : 'err')
         const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
         cb.onDone(result); return result
-      }).catch((err) => { cb.onState('err'); cb.onError(err as Error); return { ok: false } })
-      return { id: task.agentId, cancel: () => { child.kill('SIGTERM') }, done }
+      }).catch((err) => { wd.clear(); cb.onState('err'); cb.onError(err as Error); return { ok: false } })
+      return { id: task.agentId, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
     },
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
       // claude 主代理靠自动发现的 .claude/skills/forge-workflow 学工作流规则,但那依赖它自行按 frontmatter
@@ -190,6 +218,9 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let streamed = false
       let sawAssistant = false   // any assistant text produced this turn
       let sawTool = false        // any tool/file action (e.g. forge_propose_plan → a plan card, NOT an empty reply)
+      // Set from the `result` event; like run(), it overrides the SIGTERM exit code we then raise so a
+      // clean turn isn't misreported as `退出码 143`.
+      let turnOk: boolean | null = null
       let rawErr = ''            // captured stderr for the no-reply diagnostic
       let errBuf = ''            // stderr line-splitter for live onStatus forwarding
       let ctxMaxSeen = 0
@@ -262,6 +293,17 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           }
           return
         }
+        // End of turn. claude under --input-format stream-json holds stdin open (needed to answer
+        // permission control_requests) and does NOT self-exit after its turn — so without this the chat
+        // turn hangs `busy` until the 240s idle watchdog: the user can't reply (their message just
+        // queues) and has to hit 停止. Terminate on the `result` event (claude's authoritative end-of-turn
+        // signal), mirroring run(). It arrives only AFTER every tool/permission gate, so this never cuts a
+        // pending gate short. Success comes from the raw result so the SIGTERM exit (143) isn't misread.
+        if (obj?.type === 'result') {
+          turnOk = (obj as { subtype?: string; is_error?: boolean }).subtype === 'success' && (obj as { is_error?: boolean }).is_error !== true
+          try { child.kill('SIGTERM') } catch { /* already gone */ }
+          return
+        }
         for (const action of parseChatStreamActions(obj)) {
           if (action.kind === 'session') cb.onSession(action.id)
           else if (action.kind === 'assistant') { flushThink(); sawAssistant = true; cb.onAssistantDelta(action.text) }
@@ -326,9 +368,12 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // PREMATURE exit — output truncated while claude looked done — otherwise leaves no trace; this
         // records exit code, elapsed, whether any text/tool was seen, and whether the idle watchdog
         // fired, so a truncation report can be pinned to its actual cause.
-        appLog('info', 'claude', `chat 结束 · 退出码 ${res.exitCode} · ${elapsed}s · 文本=${sawAssistant} 工具=${sawTool} 看门狗=${wd.firedFlag}`)
+        appLog('info', 'claude', `chat 结束 · 退出码 ${res.exitCode} · ${elapsed}s · 文本=${sawAssistant} 工具=${sawTool} result收尾=${turnOk != null} 看门狗=${wd.firedFlag}`)
         cb.onDone({ elapsed })
-        return { ok: res.exitCode === 0, summary: res.exitCode === 0 ? '完成' : `退出码 ${res.exitCode}` }
+        // A clean `result` (turnOk===true) is success even though we then SIGTERM'd the non-exiting
+        // process (exit 143); fall back to the exit code only when no result arrived.
+        const ok = turnOk ?? (res.exitCode === 0)
+        return { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
       }).catch((err) => { wd.clear(); cb.onError(err as Error); return { ok: false } })
       return { id: task.id, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
     }
