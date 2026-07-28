@@ -16,8 +16,9 @@ describe('planFromStages', () => {
     expect(plan.stages.map((s) => s.key)).toEqual(['requirement', 'design', 'develop', 'review'])
     // requirement: no scope → default 'root'; no gate → false
     expect(plan.stages[0]).toMatchObject({ scope: 'root', gate: false, provider: 'claude', model: 'm' })
-    // design: DEFAULT_STAGE_SCOPE.design = per-project; gate explicitly true
-    expect(plan.stages[1]).toMatchObject({ scope: 'per-project', gate: true })
+    // design: now defaults to 'root' (single agent reads all projects → one coherent 方案; the old
+    // per-project fan-out produced N unmerged docs). gate still explicitly true.
+    expect(plan.stages[1]).toMatchObject({ scope: 'root', gate: true })
     // develop: DEFAULT_STAGE_SCOPE.develop = per-project
     expect(plan.stages[2]).toMatchObject({ scope: 'per-project', provider: 'codex', model: 'g' })
     // review: explicit scope root, gate false

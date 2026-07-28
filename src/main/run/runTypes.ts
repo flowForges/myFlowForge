@@ -48,10 +48,14 @@ export interface StageSpec { key: string; name: string; provider: string; model:
 //  - 'root'        → one agent in the workspace root
 //  - 'per-project' → one agent per project, each in its project worktree, so it loads
 //                    that project's project-level skills/rules.
-// `develop` MUST be per-project (it edits project code); `design` defaults to per-project
-// (so it can read each project's skills/rules); the rest stay at the workspace root.
-// An explicit `spec.scope` overrides the default.
-const DEFAULT_STAGE_SCOPE: Record<string, StageScope> = { develop: 'per-project', design: 'per-project' }
+// `develop` MUST be per-project (it edits project code, and needs each project's project-level
+// skills/rules loaded in its own worktree). `design` is deliberately ROOT: one agent reads ALL
+// involved projects and produces ONE coherent 技术方案. Per-project design fan-out (the old default)
+// gave N separate docs with NO merge step (the `summary` hook was never wired), so cross-project
+// decisions were never reconciled — a plan you can't actually build from. Single-agent trades away
+// per-project skill/rule auto-loading (acceptable for read+plan work) for a consistent whole-picture
+// design. The rest stay at the workspace root. An explicit `spec.scope` overrides the default.
+const DEFAULT_STAGE_SCOPE: Record<string, StageScope> = { develop: 'per-project' }
 export function stageScope(spec: StageSpec): StageScope { return spec.scope ?? DEFAULT_STAGE_SCOPE[spec.key] ?? 'root' }
 export interface DevelopProject { name: string; cwd: string; provider?: string; model?: string }
 export interface StartRunOpts {

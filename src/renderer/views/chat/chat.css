@@ -764,3 +764,24 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .table-block .tbl-copy:hover { background: var(--border); color: var(--fg); }
 .table-block .tbl-copy.done { color: var(--ok); opacity: 1; }
 .table-block .tbl-copy svg { width: 13px; height: 13px; }
+
+/* 返工瞬态「重新XXX中」运行卡(WorkspaceView 从 machine 派生,见 allRunCardEntries)。用 --run 语义色 +
+   脉冲点表示「正在跑新一轮」,阶段完成重抬门后自动消失。区别于活跃 inbox 卡/已冻结决定卡,故样式更轻。 */
+.rerun-card {
+  display: flex; align-items: center; gap: 8px; margin: 6px 0;
+  padding: 9px 12px; border-radius: 9px;
+  font-size: 12.5px; color: var(--fg-2);
+  background: color-mix(in oklab, var(--accent-dim) 55%, transparent);
+  border: 1px solid color-mix(in oklab, var(--run) 28%, transparent);
+}
+.rerun-card .rerun-dot {
+  flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--run);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--run) 24%, transparent);
+  animation: tt-pulse 1.4s ease-in-out infinite;
+}
+.rerun-card .rerun-tag {
+  flex: 0 0 auto; margin-left: auto; font: 650 9px/1 var(--mono); letter-spacing: .06em;
+  color: var(--run); padding: 3px 7px; border-radius: 99px;
+  background: color-mix(in oklab, var(--run) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--run) 34%, transparent);
+}

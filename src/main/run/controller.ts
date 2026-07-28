@@ -710,7 +710,6 @@ export class RunController {
     return refs
   }
   private buildPrompt = (o: { stageKey: string; project?: string; cwd: string; upstream: ArtifactRef[]; lens?: ReviewLens }) => {
-    const seed = this.deps.task ? `【需求原文（以此为准）】\n${this.deps.task}\n` : ''
     // The stage's real instructions (e.g. STAGE_PROMPTS['design']) live on the StagePlan, not on
     // the thin `o` passed in from fanout — look it up here so callers don't need to thread it through.
     const stagePrompt = this.plan.stages.find((s) => s.key === o.stageKey)?.prompt
@@ -720,13 +719,47 @@ export class RunController {
     const lens = o.lens ? lensDirective(o.lens) : ''
     const scope = `${o.project ? `（项目 ${o.project}）` : ''}cwd=${o.cwd}`
     const up = o.upstream.length ? `\n上游产物：\n${o.upstream.map((a) => `- ${a.path} (${a.kind})`).join('\n')}` : ''
-    const dir = this.pendingDirective[o.stageKey] ? `\n【补充/返工意见】\n${this.pendingDirective[o.stageKey]}` : ''
+    // 返工轮（用户在本阶段门上点了「打回/补充」）。补充意见就是这次重跑的全部目的，必须【置顶】为最高优先级，
+    // 而不是像原来那样把 dir 附在 prompt 末尾——实测那样会被前面的需求原文/上游/阶段说明淹没，弱模型直接无视。
+    // 更关键：upstream() 故意不含本阶段【自身】上一轮的产物，所以不显式回灌，agent 就只能凭需求原文从零重写，
+    // 把用户补充的内容、以及更早几轮的修正一起丢掉（用户实测 ABC→补 DE→再改 C，新方案里补充内容根本不体现）。
+    // 因此返工时把「上一轮自己的产物」原样喂回去当修改基线，让增/改都在当前方案上累积，而非每轮推倒重来。
+    const dirText = this.pendingDirective[o.stageKey]?.trim()
+    let rework = ''
+    if (dirText) {
+      const prior = this.priorStageDocs(o.stageKey, o.project)
+      rework = `【最高优先级 · 用户对上一轮结果的修改/补充意见】\n`
+        + `你上一轮已经产出过一版。请在下方【上一轮产物】基础上，逐条落实用户这次的意见：该加的加、该改的改、`
+        + `没提到的保持原样，不要推倒从零重写。凡本意见与下面「需求原文」有冲突，一律以本意见为准（用户就是来纠正/补充需求的）。\n`
+        + `${dirText}\n`
+        + (prior ? `\n【上一轮产物（在此基础上修改）】\n${prior}\n` : '')
+        + `\n`
+    }
+    // 有返工意见时，需求原文降级为「背景参考」，避免「以此为准」把用户的修改意见顶回去（尤其是 C 改 D 这类修改）。
+    const seed = this.deps.task
+      ? `【需求原文（${dirText ? '背景参考，与上面的修改意见冲突时以修改意见为准' : '以此为准'}）】\n${this.deps.task}\n`
+      : ''
     const fence = `\n完成后，请在回复最后输出一个如下格式的结果块（用于登记产物）：\n\`\`\`forge-result\n{"summary":"一句话说明你做了什么","filesChanged":["改动/产出的文件路径"],"testsRun":{"passed":true},"blockers":[],"doubts":[]}\n\`\`\`\n`
     // §7.4 ③硬阻塞: only meaningful when this run has a live forge bridge (envForOrder), but harmless
     // to always include — if there's no bridge, forge_ask simply isn't an available tool and the
     // agent falls back to `blockers` in the fence above, same as before this line existed.
     const askHint = `\n若卡在只有人类才知道的硬阻塞（缺凭据、该连哪个环境、用哪个 API key 等），调用 forge_ask 直接问用户，不要瞎猜或直接失败。\n`
-    return `${seed}${instructions}${lens}${scope}${up}${dir}${askHint}${fence}`
+    return `${rework}${seed}${instructions}${lens}${scope}${up}${askHint}${fence}`
+  }
+
+  // 返工重跑时把本阶段【上一轮已产出的文档】原样读回来当作修改基线：per-project 时优先取文件名匹配该项目的那份，
+  // 匹配不到就全给（root 单 agent 时就是那一份）。artifacts:<stageKey> 由上一轮完成时 setContext 落盘（见
+  // runOneOrder 收尾处的 store.setContext('artifacts:'+stage.key, refs)），此刻仍在盘上，读不到就跳过。
+  private priorStageDocs(stageKey: string, project?: string): string {
+    const refs = (this.deps.store.getContext('artifacts:' + stageKey) as ArtifactRef[] | undefined) ?? []
+    if (!refs.length) return ''
+    const matched = project ? refs.filter((r) => basename(r.path).includes(project)) : refs
+    const use = matched.length ? matched : refs
+    const parts: string[] = []
+    for (const r of use) {
+      try { parts.push(`## ${basename(r.path)}\n\n${readFileSync(r.path, 'utf8')}`) } catch { /* 读不到就跳过 */ }
+    }
+    return parts.join('\n\n---\n\n')
   }
 
   /**
@@ -975,11 +1008,13 @@ export class RunController {
             // Loop back and re-run THIS stage with the feedback — the one case a re-run IS wanted.
             const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
             this.pendingDirective[stg.key] = [text, d.feedback].filter(Boolean).join('\n')
+            delete this.outcomes[stg.key] // #1: 重跑本阶段 → 作废上一轮 outcome(见 voidOutcome 注释)
             continue
           }
           if (d.type === 'jumpBack') {
             const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
             this.pendingDirective[d.targetKey] = [text, d.feedback].filter(Boolean).join('\n')
+            delete this.outcomes[d.targetKey] // #1: 回退目标阶段将重跑 → 其 outcome 作废
           }
           this.machine = applyGateDecision(this.machine, d.type === 'jumpBack' ? d : { type: 'advance' })
           this.emitUpdate()
@@ -989,6 +1024,13 @@ export class RunController {
         }
         // Not eligible (mid-flight crash, pending redo, or lens review) → fall through and re-run normally.
       }
+      // #1 面板反馈:重跑本阶段前再兜底清一次上一轮残留的 outcome。渲染适配器(runExecAdapter)判定卡片
+      // 状态「先看 outcome、再看 live/running」,那条陈旧的 status:'ok' 会把正在重跑的阶段顶成「完成」——
+      // 用户看到面板一动不动、只有实时日志在跑,以为卡住了。redo/jumpBack/存疑打回都已在各自决定处即时作废
+      // (见上方 delete this.outcomes),这里兜住的是 requestJumpBack(回退按钮)那条不经决定处的路径 + 任何
+      // 遗漏。只清 outcome(stageTimings 下面会被覆盖);绝不动 artifacts:<key>——priorStageDocs 要靠它回灌基线。
+      const rerunStage = currentStage(this.machine)
+      if (rerunStage) delete this.outcomes[rerunStage.key]
       this.machine = markRunning(this.machine); this.status = 'running'; this.emitUpdate()
       const idx = this.machine.currentIndex
       const stage = this.plan.stages[idx]
@@ -1161,9 +1203,11 @@ export class RunController {
         if (d.type === 'redo') {
           const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
           this.pendingDirective[stage.key] = [text, d.feedback].filter(Boolean).join('\n')
+          delete this.outcomes[stage.key] // #1: 决定重跑本阶段 → 上一轮 outcome 立即作废(见 voidOutcome 注释)
         } else if (d.type === 'jumpBack') {
           const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
           this.pendingDirective[d.targetKey] = [text, d.feedback].filter(Boolean).join('\n')
+          delete this.outcomes[d.targetKey] // #1: 回退目标阶段将重跑 → 其 outcome 作废
         }
       } else {
         d = { type: 'advance' }
@@ -1214,6 +1258,7 @@ export class RunController {
           const { text, drained } = drainFeedback(this.feedback); this.feedback = drained
           const key = d.type === 'redo' ? stage.key : d.targetKey
           this.pendingDirective[key] = [winningNote, text].filter(Boolean).join('\n')
+          delete this.outcomes[key] // #1: 存疑打回/回退 → 目标阶段将重跑, 作废其 outcome
         }
         this.emitUpdate()
       }

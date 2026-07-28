@@ -666,6 +666,19 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     if (!(e.id in runCardFirstSeenRef.current)) runCardFirstSeenRef.current[e.id] = Date.now()
   }
   const runCardEntries = toRunCardEntries(run2StateForTab?.inbox ?? [], mergedRunCards, runCardFirstSeenRef.current)
+  // 返工反馈:用户在某阶段门上「打回并补充」后,该阶段会重跑,但对话区在阶段跑完重抬门之前不产生任何 inbox
+  // 事件,用户「感觉不到新一轮在跑」。这里从 machine 派生一张瞬态「重新XXX中」运行卡(某阶段 running 且
+  // round>=1 = 一次重跑,而非首跑),阶段完成状态转 awaiting/done 后条件不再成立,卡片自动消失。永不持久化。
+  const reworkRunning = (() => {
+    const m = run2StateForTab?.machine
+    if (!m || run2StateForTab?.status !== 'running') return null
+    const st = m.stages.find((s) => s.status === 'running' && s.round >= 1)
+    if (!st) return null
+    return { key: st.key, name: m.plan.stages.find((p) => p.key === st.key)?.name ?? st.key }
+  })()
+  const allRunCardEntries = reworkRunning
+    ? [...runCardEntries, { kind: 'run-card' as const, id: `rerunning:${reworkRunning.key}`, ts: Number.MAX_SAFE_INTEGER, rerunning: { stageName: reworkRunning.name } }]
+    : runCardEntries
   // The stage-review gate (non-finalize) currently awaiting a decision in THIS session, if any. Its
   // presence flips the composer into "supplement" mode so a message typed in the main box feeds the
   // workflow (打回本阶段 + 补充说明 rerun) rather than silently starting an unrelated chat — unless the
@@ -1165,7 +1178,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </>
             )}
             {/* 当前对话:消息与子代理/主代理的交互卡片按时间线归并内联渲染 */}
-            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, runCardEntries).map(entry => {
+            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries).map(entry => {
               if (entry.kind === 'provider-switch') {
                 return (
                   <ProviderSwitchDivider
@@ -1234,6 +1247,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 )
               }
               if (entry.kind === 'run-card') {
+                // 返工瞬态「重新XXX中」运行卡(WorkspaceView 从 machine 派生注入,见 allRunCardEntries)——
+                // 既非活跃 inbox 事件、也非冻结决定,单独渲染一张带脉冲点的运行提示,让用户看到新一轮在跑。
+                if (entry.rerunning) {
+                  return (
+                    <div key={entry.id} className="rerun-card">
+                      <span className="rerun-dot" aria-hidden="true" />
+                      正在根据你的补充重新进行「{entry.rerunning.stageName}」…
+                      <span className="rerun-tag">运行中</span>
+                    </div>
+                  )
+                }
                 // P3-4: run2 inbox event card (active) or its frozen record (resolved) — see runCards.ts/
                 // RunEventCard.tsx. onGate/onLane both dispatch the decision to run2 AND freeze the card
                 // (freezeRunCard above), so there's no separate "resolve" step here.

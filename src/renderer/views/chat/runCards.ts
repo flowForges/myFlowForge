@@ -58,6 +58,10 @@ export interface RunCardEntry {
   kind: 'run-card'
   event?: RunEvent
   frozen?: FrozenRunCard
+  // 返工重跑时的瞬态「重新XXX中」指示卡:既不是 inbox 活跃事件、也不是已冻结决定,而是由 WorkspaceView
+  // 从 machine 状态(某阶段 status:'running' 且 round>=1)每次渲染时派生注入,阶段一完成重抬门即消失,
+  // 从不持久化。放这里而非包一层新 union,保持时间线归并逻辑不变。
+  rerunning?: { stageName: string }
   ts: number
   id: string
 }

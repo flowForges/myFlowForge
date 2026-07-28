@@ -396,6 +396,61 @@ describe('RunController', () => {
     expect(p).toContain('实现支付幂等') // requirement seed still present
   })
 
+  it('返工重跑: 补充意见置顶为最高优先级 + 回灌上一轮产物当基线 + 需求原文降级为背景参考', async () => {
+    // 回归: 用户在方案门上「打回并补充」后, 新方案里根本不体现补充内容 (实测 ABC→补 DE→改 C)。根因是
+    // 补充意见原来附在 prompt 末尾被淹没, 且 upstream() 不含本阶段自身上一轮产物→agent 只能凭需求原文从零
+    // 重写, 把补充和更早的修正一起丢掉。修复: 返工时把补充意见置顶 + 把上一轮产物回灌当修改基线。
+    const store = new RunStore(ws, 'r1')
+    const docSrc = join(ws, 'design-out.md')
+    writeFileSync(docSrc, '# 技术方案 v1\n\n## 能力\n- A\n- B\n- C(用方案 X)', 'utf8')
+    const prompts: string[] = []
+    const provider: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task, cb) {
+        prompts.push(task.prompt)
+        const done = (async () => { cb.onHandoff?.({ summary: '完成', artifacts: [{ path: docSrc, kind: 'md' }] }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'design', name: '技术方案设计', provider: 'x', model: 'm', scope: 'root', gate: true, producesDoc: true }] }
+    const c = new RunController(plan2, { providers: { x: provider }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory(), task: '实现一个支付网关' })
+    // #1 面板反馈: 重跑一开始 (markRunning 那一刻) 就必须清掉上一轮的 ok outcome, 否则渲染适配器「先看
+    // outcome 再看 running」会把正在重跑的阶段画成「完成」。捕获重跑后的第一条 running 更新, 此刻 outcome
+    // 必须已空 (lanes 尚未跑完, 只有陈旧值可能残留)。之后 lanes 跑完再落新 outcome 是正常的, 不在此断言。
+    let firstRerunOutcome: unknown = 'unset'
+    c.onUpdate((s) => {
+      const st = s.machine.stages[0]
+      if (st.status === 'running' && st.round >= 1 && firstRerunOutcome === 'unset') firstRerunOutcome = s.outcomes['design'] ?? null
+    })
+    let redone = false
+    c.onEvent((e) => {
+      if (e.kind !== 'gate') return
+      if (!redone) { redone = true; c.resolveGate(e.id, { type: 'redo', feedback: '漏了 D 和 E，另外 C 改成 C2' }) }
+      else c.resolveGate(e.id, { type: 'advance' })
+    })
+    const final = await c.start()
+    expect(firstRerunOutcome).toBeNull()
+    expect(final.status).toBe('ok')
+    expect(prompts).toHaveLength(2) // redo 重跑了一轮
+    const [first, second] = prompts
+    // 首轮: 普通结构, 需求原文「以此为准」, 没有返工块
+    expect(first).not.toContain('最高优先级')
+    expect(first).toContain('以此为准')
+    // 二轮: (a) 补充意见置顶为最高优先级并逐字带入
+    expect(second).toContain('最高优先级')
+    expect(second).toContain('漏了 D 和 E，另外 C 改成 C2')
+    // (b) 上一轮产物被回灌当修改基线 (含其正文, 不是从零重写)
+    expect(second).toContain('上一轮产物')
+    expect(second).toContain('## 能力')
+    expect(second).toContain('C(用方案 X)')
+    // (c) 需求原文降级为背景参考, 冲突时以补充意见为准 (修改类补充不再被「以此为准」顶回去)
+    expect(second).toContain('背景参考')
+    // 补充意见必须排在需求原文之前 (置顶才不会被前文淹没)
+    expect(second.indexOf('最高优先级')).toBeLessThan(second.indexOf('背景参考'))
+    expect(final.machine.stages[0].round).toBe(1)
+  })
+
   it('threads deps.permissionMode into every StageInput → WorkOrder → task.permissionMode', async () => {
     const seenModes: Array<string | undefined> = []
     const provider: AgentProvider = {
