@@ -222,9 +222,11 @@ export function App() {
       const rg = run2GateByWs.get(w.path)
       const confirm = (cg?.confirm.size ?? 0) + (rg?.confirm ?? 0)
       const input = (cg?.input.size ?? 0) + (rg?.input ?? 0)
-      // Light the dot when an agent is actually executing here: a chat turn in flight OR the live
-      // orchestrator run. Kept separate from `status` (which drives the persisted 运行中 pill).
-      const live = busyWs.has(w.path) || (engine.run?.status === 'run' && engine.run.workspacePath === w.path)
+      // Light the dot when an agent is actually executing here: a chat turn in flight, a live run2
+      // workflow, OR the legacy orchestrator run. run2SessByWs must be included — a running workflow
+      // that isn't also holding a chat turn otherwise lit the per-session dot but never the
+      // workspace-level rail/执行中 badge. Kept separate from `status` (the persisted 运行中 pill).
+      const live = busyWs.has(w.path) || run2SessByWs.has(w.path) || (engine.run?.status === 'run' && engine.run.workspacePath === w.path)
       return {
         id: w.path, name: w.name,
         sub: w.archived
@@ -251,7 +253,7 @@ export function App() {
       ...(pinned.length ? [{ key: 'pinned', label: '置顶', items: pinned }] : []),
       { key: 'all', label: '全部', items: rest },
     ]
-  }, [home.workspaces, home.stats, busyWs, engine.run, recentActivity, nowTick, chatGateByWs, run2GateByWs])
+  }, [home.workspaces, home.stats, busyWs, run2SessByWs, engine.run, recentActivity, nowTick, chatGateByWs, run2GateByWs])
   const archivedItems = useMemo(
     () => home.workspaces.filter(w => w.archived).map(w => ({
       id: w.path, name: w.name,

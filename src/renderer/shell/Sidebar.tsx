@@ -206,7 +206,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
           // pill (the gray status dot is gone, per prototype).
           const running = dotStatus === 'run' && !item.archived
           return (
-            <div key={item.id}>
+            <div key={item.id} className={`ws-row${expandedIds?.has(item.id) ? ' open' : ''}`}>
               <button
                 className={`ws-item${isOn ? ' on' : ''}${item.archived ? ' archived' : ''}${running ? ' is-running' : ''}${expandedIds?.has(item.id) ? ' expanded' : ''}${draggable && dragId === item.id ? ' dragging' : ''}${draggable && overId === item.id && dragId !== item.id ? ' drag-over' : ''}`}
                 onClick={() => { onSelect(item.id); onToggleExpand?.(item.id) }}
