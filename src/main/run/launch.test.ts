@@ -19,9 +19,9 @@ describe('buildLaunchInfo', () => {
     const info = buildLaunchInfo(ws)
     expect(info.workflows).toEqual([{ id: 'wf1', name: '标准五段', stages: [
       { key: 'design', name: '技术方案设计', provider: 'claude', model: 'm', gate: true,
-        code: false, desc: '设计技术方案与阶段计划', prompt: STAGE_PROMPTS.design + '\n\n' + '额外要求:只改前端' },
+        code: false, producesDoc: true, lensCount: 0, desc: '设计技术方案与阶段计划', prompt: STAGE_PROMPTS.design + '\n\n' + '额外要求:只改前端' },
       { key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: false,
-        code: true, desc: '按项目并行开发', prompt: STAGE_PROMPTS.develop },
+        code: true, producesDoc: false, lensCount: 0, desc: '按项目并行开发', prompt: STAGE_PROMPTS.develop },
     ] }])
     expect(info.projects.map((p) => p.name)).toEqual(['api', 'web'])
     expect(info.projects[0].cwd).toBe('/ws/pay/api')
@@ -59,7 +59,7 @@ describe('buildLaunchInfo', () => {
     const info = buildLaunchInfo(wsEmpty, globalWorkflows, [])
     expect(info.workflows[0].stages.map((s) => s.key)).toEqual(['design', 'develop'])
     expect(info.workflows[0].stages[1]).toEqual({ key: 'develop', name: '代码开发', provider: 'codex', model: 'g', gate: true,
-      code: true, desc: '按项目并行开发', prompt: STAGE_PROMPTS.develop })
+      code: true, producesDoc: false, lensCount: 0, desc: '按项目并行开发', prompt: STAGE_PROMPTS.develop })
   })
 
   // Repro for the real-app bug report: a workspace workflow named "标准工作流" with empty stashed
@@ -171,6 +171,19 @@ describe('buildLaunchPlan + buildLaunchProjects (P1-4 launch gate start)', () =>
     expect(design.model).toBe('qm')
   })
 
+  // 单代理⇄按项目 toggle: the gate's per-stage perProject choice overrides the stage's default scope
+  // (true → per-project fan-out, false → single root agent); omitting it leaves the default untouched.
+  it('honors the gate 单代理⇄按项目 toggle over the stage default scope', () => {
+    const designScope = (stages: LaunchStartConfig['stages']) =>
+      buildLaunchPlan({ ...cfg, stages }, ws).stages.find((s) => s.key === 'design')!.scope
+    // forcing perProject:false pins the stage to a single root agent
+    expect(designScope([{ key: 'design', enabled: true, perProject: false }, { key: 'develop', enabled: true }])).toBe('root')
+    // forcing perProject:true overrides even an explicit root scope → per-project fan-out
+    expect(designScope([{ key: 'design', enabled: true, perProject: true }, { key: 'develop', enabled: true }])).toBe('per-project')
+    // omitting perProject leaves the stage's own scope (this fixture pins design to 'root') untouched
+    expect(designScope([{ key: 'design', enabled: true }, { key: 'develop', enabled: true }])).toBe('root')
+  })
+
   it('drops hooks the gate unchecked, keeps the rest', () => {
     const wsHooked: Workspace = {
       ...ws,
@@ -201,6 +214,44 @@ describe('buildLaunchPlan + buildLaunchProjects (P1-4 launch gate start)', () =>
     expect(plan.stages.map((s) => s.key)).toEqual(['design', 'develop'])
     expect(plan.stages[0].provider).toBe('claude')
     expect(plan.stages[1].provider).toBe('codex')
+  })
+})
+
+// 代码CR(review) 的诚实标签 + 「按项目真能用」证据:review 默认 4 视角多镜头(不是单代理);门里切「按项目」后
+// buildWorkOrders 真的按项目扇出成每项目一个 reviewer(和 develop 同一套机制)。
+describe('review 扇出:多镜头(off) ⇄ 按项目(on)', () => {
+  const wsReview: Workspace = {
+    name: 'r', path: '/ws/r', workflowId: '', stages: [],
+    // review 无显式 review 配置 → resolveWorkflowStages 的 withReviewDefaults 补上默认 4 视角
+    workflows: [{ id: 'wf', name: 'wf', stages: [{ key: 'review', provider: 'claude', model: 'm' }] }],
+    projects: [{ repoId: 'a', name: 'a', branch: 'main' }, { repoId: 'b', name: 'b', branch: 'main' }] as any,
+    status: 'idle', plugins: [], stepPlugins: [],
+  } as any
+  const cfgFor = (perProject: boolean): LaunchStartConfig => ({
+    workspacePath: '/ws/r', workflowId: 'wf',
+    projects: [{ name: 'a', provider: 'claude', model: 'm' }, { name: 'b', provider: 'claude', model: 'm' }],
+    supplement: '', seed: '', stages: [{ key: 'review', enabled: true, perProject }],
+  })
+  const reviewOrders = (perProject: boolean) => {
+    const cfg = cfgFor(perProject)
+    const stage = buildLaunchPlan(cfg, wsReview).stages.find((s) => s.key === 'review')!
+    return buildWorkOrders({ stage, workspacePath: '/ws/r', projects: buildLaunchProjects(cfg, wsReview), upstream: [], buildPrompt: () => 'x' })
+  }
+
+  it('buildLaunchInfo 给 review 标 lensCount=4(供门显示「多镜头」而非「单代理」)', () => {
+    const review = buildLaunchInfo(wsReview, [], []).workflows[0].stages.find((s) => s.key === 'review')!
+    expect(review.lensCount).toBe(4)
+  })
+
+  it('off(单代理开关关)= 多镜头:在工作区根扇成 4 个每视角 reviewer,不是单代理', () => {
+    const orders = reviewOrders(false)
+    expect(orders.length).toBe(4)
+    expect(orders.every((o) => o.cwd === '/ws/r')).toBe(true)   // 都在工作区根,审聚合变更
+  })
+
+  it('on(按项目)= 每个项目一个 reviewer(真能用,和 develop 同一套按项目扇出)', () => {
+    const orders = reviewOrders(true)
+    expect(orders.map((o) => o.project).sort()).toEqual(['a', 'b'])
   })
 })
 

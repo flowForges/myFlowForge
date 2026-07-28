@@ -48,3 +48,75 @@
 .lg-seed-loading { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); padding: 8px 2px; }
 .lg-seed-spin { width: 13px; height: 13px; flex: 0 0 13px; border-radius: 50%; border: 2px solid var(--border-2); border-top-color: var(--accent); animation: lg-seed-spin .7s linear infinite; }
 @keyframes lg-seed-spin { to { transform: rotate(360deg); } }
+
+/* #4: launch-gate 的确认/取消靠右(主操作确认落最右),符合常见习惯;scoped 到本卡片,不动其它 req 卡的左对齐。 */
+[data-req="launch-gate"] .req-actions { justify-content: flex-end; }
+
+/* 工作流选项(标准/基础/自定义)居中 — scoped 到启动门,不影响浮层里的同类 tabs。 */
+[data-req="launch-gate"] .wfo-tabs { justify-content: center; }
+
+/* #3: 统一编码代理 bulk bar — 一键把所有阶段/项目的 provider 切成同一个。放在工作流 tabs 之后、阶段列表之前。
+   做成一条 accent 轻底的整栏:左标签、右下拉按钮(space-between),不再是挤在一起的裸 label+pill。 */
+.lg-bulk { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin: 12px 0 14px; padding: 7px 8px 7px 12px; border-radius: 10px;
+  background: color-mix(in oklch, var(--accent) 5%, var(--bg));
+  border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--border)); }
+.lg-bulk-label { font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg-2); }
+.wfo-model.sm.lg-bulk-chip { max-width: none; padding: 6px 10px; font-size: 11px; color: var(--fg);
+  background: var(--bg-2); border-color: color-mix(in oklch, var(--accent) 32%, var(--border-2)); }
+.wfo-model.sm.lg-bulk-chip:hover { border-color: var(--accent); }
+.lg-bulk-caret { color: var(--muted); font-size: 9px; margin-left: 3px; }
+
+/* #2: provider/model chips — the model chip now shows the bare model (no redundant provider prefix),
+   so give both chips a bit more room and consistent breathing space instead of the cramped 118px that
+   truncated everything to "Claude Code · …". Scoped to the launch gate. */
+[data-req="launch-gate"] .wfo-proj .wfo-model.sm { max-width: 150px; padding: 5px 8px; font-size: 10.5px; }
+[data-req="launch-gate"] .wfo-proj .lg-model-chip { min-width: 0; }
+
+/* 流程视图:阶段=编号节点 + 左侧竖轨,每个阶段下挂子卡片(单代理=一张「工作区」卡;按项目=每个选中项目一张卡),
+   子卡片从竖轨分出一条横支线——对齐右侧执行面板(.pipe/.stage)的观感,把「阶段」和「代码项目」拧成一条流。 */
+.lg-pipe { position: relative; }
+.lg-stg { position: relative; }
+/* 竖轨:每个阶段都从本节点圆心(top:12px,藏在节点背后)往下画,把节点和它下面的子卡片(lane)串起来——lane 的横
+   支线(.lg-lane::before,x=11)要接到这条轨上。非末阶段:bottom 伸到本阶段底部以下 14px,穿过下一节点圆心接上它。
+   末阶段:没有下一节点,只需伸到它最后一张 lane 的圆心(≈本阶段底部以上 22px),不往下悬空。z-index:0 让节点(z-index:2)
+   盖住轨头尾。 */
+.lg-stg::before { content: ''; position: absolute; left: 11px; top: 12px; width: 1.5px; background: var(--border-2); z-index: 0; }
+.lg-stg:not(:last-child)::before { bottom: -14px; }
+.lg-stg:last-child::before { bottom: 22px; }
+.lg-stg.on::before { background: color-mix(in oklch, var(--accent) 40%, var(--border)); }
+.lg-stg-head { display: flex; align-items: center; gap: 9px; margin: 0 0 9px; }
+.lg-stg-idx { flex: 0 0 24px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
+  font: 700 11px/1 var(--mono); position: relative; z-index: 2; cursor: pointer; transition: .12s;
+  background: var(--surface-2); color: var(--muted); border: 1.5px solid var(--border-2); }
+.lg-stg.on .lg-stg-idx { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.lg-stg-name { font-size: 13px; font-weight: 680; letter-spacing: -.01em; color: var(--fg); cursor: pointer; }
+.lg-stg:not(.on) .lg-stg-name { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--muted), transparent 40%); }
+.lg-stg-gate { font: 600 10px/1 var(--mono); color: var(--warn); background: color-mix(in oklch, var(--warn) 14%, transparent); border: 1px solid color-mix(in oklch, var(--warn) 30%, var(--border)); border-radius: 99px; padding: 3px 7px; }
+.lg-stg-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+.lg-stg-mode { font: 600 10px/1 var(--mono); color: var(--faint); background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 3px 8px; white-space: nowrap; }
+.lg-stg.per.on .lg-stg-mode { color: var(--accent); border-color: transparent; background: var(--accent-dim, color-mix(in oklch, var(--accent) 14%, transparent)); }
+/* 子卡片区:缩进,让横支线从竖轨(x=11)分出到卡片(x=31) */
+.lg-stg-lanes { display: flex; flex-direction: column; gap: 7px; padding: 0 0 16px 31px; position: relative; }
+.lg-stg:last-child .lg-stg-lanes { padding-bottom: 2px; }
+.lg-lane { position: relative; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); transition: .12s; }
+.lg-lane::before { content: ''; position: absolute; left: -20px; top: 50%; width: 16px; height: 1.5px; background: var(--border-2); }
+.lg-lane.off { opacity: .5; }
+.lg-lane:hover { border-color: var(--border-2); }
+.lg-lane-ck { flex: 0 0 auto; cursor: pointer; display: grid; place-items: center; }
+.lg-lane-ck .wfo-ck { width: 17px; height: 17px; flex: 0 0 17px; }
+.lg-lane:not(.off) .lg-lane-ck .wfo-ck { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.lg-lane-ic { flex: 0 0 26px; width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
+.lg-lane-ic svg { width: 14px; height: 14px; }
+.lg-lane-nm { flex: 1; min-width: 0; }
+.lg-lane-nm b { display: block; font-size: 12.5px; font-weight: 600; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lg-lane-nm span { display: block; font: 10.5px/1.3 var(--mono); color: var(--faint); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lg-lane-empty { position: relative; font-size: 11.5px; color: var(--faint); padding: 6px 2px; }
+.lg-lane-empty::before { content: ''; position: absolute; left: -20px; top: 50%; width: 16px; height: 1.5px; background: var(--border-2); }
+
+/* 单代理⇄按项目 scope 开关(写单测/代码CR 行):紧凑分段控件。选中段点亮成 accent。 */
+.lg-scope-tog { display: inline-flex; flex: 0 0 auto; border: 1px solid var(--border-2); border-radius: 7px; overflow: hidden; background: var(--bg); }
+.lg-scope-tog button { padding: 4px 8px; font: 600 10px/1 var(--mono); color: var(--muted); background: transparent; transition: .1s; }
+.lg-scope-tog button + button { border-left: 1px solid var(--border-2); }
+.lg-scope-tog button.on { color: var(--on-accent); background: var(--accent); }
+.lg-scope-tog button:not(.on):hover { color: var(--fg-2); background: var(--surface); }

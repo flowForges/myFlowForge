@@ -18,7 +18,7 @@ export interface LaunchGateConfig {
   // per-project/writes code (its provider/model comes from the per-project pickers, not a per-stage one);
   // `gate` = it pauses for confirmation; `provider`/`model` = the stage's default agent (editable in the
   // gate for non-code stages). Empty for rehydrated (frozen) gates — they render a static record.
-  workflows: { id: string; name: string; stageCount: number; stages: { key: string; name: string; gate: boolean; code: boolean; provider: string; model: string }[] }[]
+  workflows: { id: string; name: string; stageCount: number; stages: { key: string; name: string; gate: boolean; code: boolean; producesDoc?: boolean; lensCount?: number; provider: string; model: string }[] }[]
   selectedWorkflowId: string
   projects: { name: string; selected: boolean; provider: string; model: string }[]
   supplement: string
@@ -27,7 +27,7 @@ export interface LaunchGateConfig {
   // Interactive results the card fills on confirm (like `projects` carries edited selection): which
   // stages/hooks to run + per-stage provider/model overrides. WorkspaceView maps these into the run's
   // LaunchStartConfig.stages/hooks. Absent on rehydrated/old configs → run everything (backward compat).
-  stageChoices?: { key: string; enabled: boolean; provider: string; model: string }[]
+  stageChoices?: { key: string; enabled: boolean; provider: string; model: string; perProject?: boolean }[]
   hookChoices?: { id: string; enabled: boolean }[]
 }
 
@@ -72,12 +72,15 @@ export interface LaunchGateCardProps {
 function findProvider(providers: ProviderInfo[], providerId: string): ProviderInfo | undefined {
   return providers.find((p) => p.id === providerId)
 }
+// Model-only label for the model chip: the provider chip already sits right next to it showing the
+// provider name, so repeating it here (the old `${provider} · ${model}`) just duplicated text and — once
+// truncated to the chip's max-width — showed "Claude Code · …" while hiding the ACTUAL model. Show the
+// bare model (or a "选模型" prompt when unset).
 function modelLabel(providers: ProviderInfo[], provider: string, model: string): string {
+  if (!model) return '选模型'
   const p = findProvider(providers, provider)
   const m = p?.models.find((mm) => mm.id === model)
-  const providerName = p?.displayName ?? provider
-  if (!model) return `${providerName} · 选模型`
-  return `${providerName} · ${m?.label ?? model}`
+  return m?.label ?? model
 }
 
 function fmtDecidedAt(ms: number): string {
@@ -91,6 +94,8 @@ function fmtDecidedAt(ms: number): string {
 // Verbatim check-glyph from WorkflowOverlay's IC.check (reference line 70) — kept as a tiny local
 // copy rather than importing IC (a private const of that component).
 const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
+// Terminal glyph for a lane's icon box (工作区 / 项目 card) — mirrors the execution panel's lane cards.
+const TERM_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>'
 
 export function LaunchGateCard({ config, frozen, error, pending, seedLoading, providers = [], onConfirm, onCancel, checkDirty }: LaunchGateCardProps) {
   // Pure presentational: mirror the incoming config into local state so checkboxes/model chip/
@@ -110,9 +115,13 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // supplement. Non-code (root) stages also get a provider/model picker (code stages take theirs from
   // the per-project pickers below).
   const stagesOf = (wfId: string) => config.workflows.find((w) => w.id === wfId)?.stages ?? []
+  // A non-code, non-doc stage (写单测/代码CR) can be toggled between 单代理(root) and 按项目(per-project) at
+  // launch. Doc stages (需求评估/技术方案设计) produce a single deliverable and code stages are already
+  // per-project, so neither gets the toggle.
+  const stageAllowsPerProject = (s: { code: boolean; producesDoc?: boolean }) => !s.code && !s.producesDoc
   const initStageState = (wfId: string) =>
-    Object.fromEntries(stagesOf(wfId).map((s) => [s.key, { enabled: true, provider: s.provider, model: s.model }]))
-  const [stageState, setStageState] = useState<Record<string, { enabled: boolean; provider: string; model: string }>>(() => initStageState(config.selectedWorkflowId))
+    Object.fromEntries(stagesOf(wfId).map((s) => [s.key, { enabled: true, provider: s.provider, model: s.model, perProject: false }]))
+  const [stageState, setStageState] = useState<Record<string, { enabled: boolean; provider: string; model: string; perProject: boolean }>>(() => initStageState(config.selectedWorkflowId))
   useEffect(() => { setStageState(initStageState(selectedWorkflowId)) }, [selectedWorkflowId]) // eslint-disable-line react-hooks/exhaustive-deps
   // 既然阶段可选,hook 也可选(workspace 级 hooks,不随工作流切换)。默认全开。
   const [hookState, setHookState] = useState<Record<string, boolean>>(() => Object.fromEntries((config.hooks ?? []).map((h) => [h.id, true])))
@@ -122,6 +131,9 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // Which project's provider (编码代理) popup is open, if any — mirrors modelPopupFor. Only one of the
   // two popups is open at a time (opening one closes the other).
   const [providerPopupFor, setProviderPopupFor] = useState<string | null>(null)
+  // #3: whether the "统一编码代理" bulk picker is open. Switches EVERY provider selector (all non-code
+  // stages + all projects) to one provider in a single click, instead of editing ~7 chips by hand.
+  const [bulkPopupOpen, setBulkPopupOpen] = useState(false)
   const [customModelDraft, setCustomModelDraft] = useState('')
   // Dirty-tree warning: null = not checked yet; [] = checked, all clean; [names] = dirty selected
   // projects, first 确认 shows the warning and the button becomes 仍要启动 (a second click launches).
@@ -133,16 +145,17 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // mirrors the usual popover UX; the confirm/cancel buttons below are also "outside" so this doesn't
   // block them.
   useEffect(() => {
-    if (!modelPopupFor && !providerPopupFor) return
+    if (!modelPopupFor && !providerPopupFor && !bulkPopupOpen) return
     const onDocMouseDown = (e: MouseEvent) => {
       const target = e.target as Node
-      if (cardRef.current?.contains(target) && (target as Element).closest?.('.wfo-model, .wfo-mpop')) return
+      if (cardRef.current?.contains(target) && (target as Element).closest?.('.wfo-model, .wfo-mpop, .lg-bulk-chip')) return
       setModelPopupFor(null)
       setProviderPopupFor(null)
+      setBulkPopupOpen(false)
     }
     document.addEventListener('mousedown', onDocMouseDown)
     return () => document.removeEventListener('mousedown', onDocMouseDown)
-  }, [modelPopupFor, providerPopupFor])
+  }, [modelPopupFor, providerPopupFor, bulkPopupOpen])
 
   if (frozen) {
     return (
@@ -208,11 +221,29 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     setProviderPopupFor(null)
   }
   const installedProviders = providers.filter((p) => p.installed)
+  // #3: switch every provider selector to one provider at once. Applies to all projects AND all non-code
+  // stages (code stages inherit their provider from the per-project pickers, so they're left alone). Each
+  // gets the new provider's first discovered model as its default — same rule as chooseProjectProvider /
+  // chooseStageProvider (never leave model '' or the fanout silently falls back to the stage's claude id).
+  const applyProviderToAll = (providerId: string) => {
+    const dm = providers.find((p) => p.id === providerId)?.models[0]?.id ?? ''
+    setProjects((prev) => prev.map((p) => ({ ...p, provider: providerId, model: dm })))
+    setStageState((prev) => {
+      const next = { ...prev }
+      for (const s of stagesOf(selectedWorkflowId)) {
+        if (s.code) continue
+        next[s.key] = { ...(next[s.key] ?? stageDefault(s.key)), provider: providerId, model: dm }
+      }
+      return next
+    })
+    setBulkPopupOpen(false)
+  }
   // Stage popups share the same modelPopupFor/providerPopupFor state as projects — keyed with a
   // `stage:` prefix so a stage key can never collide with a project name.
   const stageKeyOf = (stageKey: string) => `stage:${stageKey}`
-  const stageDefault = (key: string) => { const s = stagesOf(selectedWorkflowId).find((x) => x.key === key); return { enabled: true, provider: s?.provider ?? '', model: s?.model ?? '' } }
+  const stageDefault = (key: string) => { const s = stagesOf(selectedWorkflowId).find((x) => x.key === key); return { enabled: true, provider: s?.provider ?? '', model: s?.model ?? '', perProject: false } }
   const toggleStage = (key: string) => setStageState((prev) => { const cur = prev[key] ?? stageDefault(key); return { ...prev, [key]: { ...cur, enabled: !cur.enabled } } })
+  const setStagePerProject = (key: string, perProject: boolean) => setStageState((prev) => { const cur = prev[key] ?? stageDefault(key); return { ...prev, [key]: { ...cur, perProject } } })
   const chooseStageProvider = (key: string, providerId: string) => {
     const dm = providers.find((p) => p.id === providerId)?.models[0]?.id ?? ''
     setStageState((prev) => ({ ...prev, [key]: { ...(prev[key] ?? stageDefault(key)), provider: providerId, model: dm } }))
@@ -227,7 +258,10 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   const doConfirm = () => {
     const stageChoices = stagesOf(selectedWorkflowId).map((s) => {
       const st = stageState[s.key] ?? stageDefault(s.key)
-      return { key: s.key, enabled: st.enabled, provider: st.provider, model: st.model }
+      const base = { key: s.key, enabled: st.enabled, provider: st.provider, model: st.model }
+      // Only send perProject for toggle-eligible stages — sending it for develop/design would force their
+      // scope and collapse the per-project fan-out they get by default (buildLaunchPlan honors it verbatim).
+      return stageAllowsPerProject(s) ? { ...base, perProject: st.perProject } : base
     })
     const hookChoices = (config.hooks ?? []).map((h) => ({ id: h.id, enabled: hookState[h.id] !== false }))
     onConfirm({ seed, workflows: config.workflows, selectedWorkflowId, projects, supplement, hooks: config.hooks, stageChoices, hookChoices })
@@ -246,6 +280,16 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   const selectedCount = projects.filter((p) => p.selected).length
   const selectedStages = config.workflows.find((w) => w.id === selectedWorkflowId)?.stages ?? []
   const enabledStageCount = selectedStages.filter((s) => stageState[s.key]?.enabled ?? true).length
+  // Whether a stage fans out per project: an inherently-code stage (代码开发) OR a toggle-eligible stage
+  // the user switched to 按项目. Its lanes are the selected projects; a single-agent stage has one 工作区 lane.
+  const isPerProjectStage = (s: { key: string; code: boolean; producesDoc?: boolean }, st: { perProject: boolean }) =>
+    s.code || (stageAllowsPerProject(s) && st.perProject)
+  // Guard confirm when an enabled per-project stage has no project selected — it would have zero lanes.
+  const anyPerProjectEnabled = selectedStages.some((s) => { const st = stageState[s.key] ?? stageDefault(s.key); return st.enabled && isPerProjectStage(s, st) })
+  const noProjectSelected = anyPerProjectEnabled && selectedCount === 0
+  const noStageEnabled = selectedStages.length > 0 && enabledStageCount === 0
+  const confirmBlocked = noStageEnabled || noProjectSelected
+  const confirmBlockReason = noStageEnabled ? '至少保留一个阶段' : noProjectSelected ? '至少选择一个代码项目' : undefined
 
   // Shared provider + model chip pair (used by both per-project rows and per-stage rows). popupKey
   // namespaces the open-popup state so a project and a stage never fight over the same popup.
@@ -311,19 +355,6 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
         <span className="req-kind">开启工作流</span>
       </div>
       <div className="req-body">
-        <div className="wfo-sec-h">原始需求{seedLoading ? '' : '（AI 总结，可编辑）'}</div>
-        {seedLoading ? (
-          <div className="lg-seed-loading"><span className="lg-seed-spin" />正在根据对话总结需求…</div>
-        ) : (
-          <textarea
-            className="lg-seed-input"
-            rows={3}
-            value={seed}
-            placeholder="本次要做的需求（可修正 AI 的总结）…"
-            onChange={(e) => setSeed(e.target.value)}
-          />
-        )}
-
         <div className="wfo-tabs">
           {config.workflows.map((w) => (
             <button
@@ -338,53 +369,86 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
           ))}
         </div>
 
+        {installedProviders.length > 0 ? (
+          <div className="lg-bulk">
+            <span className="lg-bulk-label">统一编码代理</span>
+            <span className="wfo-model sm lg-bulk-chip" style={{ position: 'relative' }} onClick={() => { setModelPopupFor(null); setProviderPopupFor(null); setBulkPopupOpen((v) => !v) }}>
+              <span className="mv">全部设为…</span>
+              <span className="lg-bulk-caret">▾</span>
+              {bulkPopupOpen ? (
+                <div className="wfo-mpop" style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4 }} onClick={(e) => e.stopPropagation()}>
+                  <div className="mh">把所有阶段/项目切成同一个代理</div>
+                  {installedProviders.map((pv) => (
+                    <button key={pv.id} type="button" onClick={() => applyProviderToAll(pv.id)}>
+                      {pv.displayName}
+                      <span className="ck" dangerouslySetInnerHTML={{ __html: CHECK_SVG }} />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </span>
+          </div>
+        ) : null}
+
         {selectedStages.length > 0 ? (
-          <div className="wfo-sec">
+          <div className="wfo-sec lg-pipe">
             <div className="wfo-sec-h">工作流阶段<span className="c">已选 {enabledStageCount} / {selectedStages.length}</span></div>
-            {selectedStages.map((s) => {
+            {selectedStages.map((s, i) => {
               const st = stageState[s.key] ?? stageDefault(s.key)
+              const per = isPerProjectStage(s, st)
+              // 代码CR defaults to 多镜头 (lensCount 视角并行 at the workspace root), NOT a single agent — so
+              // its "off" state must read 多镜头, not the misleading 单代理. Every other toggle-eligible stage
+              // (写单测…) is a genuine single root agent when off.
+              const lensN = s.lensCount ?? 0
+              const offLabel = lensN > 0 ? '多镜头' : '单代理'
+              const modeLabel = !st.enabled ? '已停用' : per ? `按项目 · ${selectedCount}` : lensN > 0 ? `多镜头 · ${lensN}` : '单代理'
               return (
-                <div key={s.key} className={`wfo-proj${st.enabled ? ' on' : ''}`}>
-                  <span className="wfo-ckhit" onClick={() => toggleStage(s.key)}>
-                    <span className="wfo-ck" dangerouslySetInnerHTML={{ __html: CHECK_SVG }} />
-                    <span className="pn">
-                      <b>{s.name}</b>
-                      <span>{s.code ? '按项目并行 · 写码' : '单代理'}{s.gate ? ' · 门' : ''}</span>
+                <div key={s.key} className={`lg-stg${st.enabled ? ' on' : ''}${per ? ' per' : ''}`} data-stage={s.key}>
+                  <div className="lg-stg-head">
+                    <button type="button" className="lg-stg-idx" onClick={() => toggleStage(s.key)} title="点击启用/停用该阶段">{i + 1}</button>
+                    <span className="lg-stg-name" onClick={() => toggleStage(s.key)}>{s.name}</span>
+                    {s.gate ? <span className="lg-stg-gate">门</span> : null}
+                    <span className="lg-stg-right">
+                      {st.enabled && stageAllowsPerProject(s) ? (
+                        <span className="lg-scope-tog" onClick={(e) => e.stopPropagation()}>
+                          <button type="button" className={!st.perProject ? 'on' : ''} onClick={() => setStagePerProject(s.key, false)}>{offLabel}</button>
+                          <button type="button" className={st.perProject ? 'on' : ''} onClick={() => setStagePerProject(s.key, true)}>按项目</button>
+                        </span>
+                      ) : null}
+                      <span className="lg-stg-mode">{modeLabel}</span>
                     </span>
-                  </span>
-                  {st.enabled && !s.code
-                    ? renderChips(stageKeyOf(s.key), st.provider, st.model, (id) => chooseStageProvider(s.key, id), (id) => chooseStageModel(s.key, id))
-                    : st.enabled && s.code
-                    ? <span className="wfo-model sm ro">按项目设置</span>
-                    : null}
+                  </div>
+                  {st.enabled ? (
+                    <div className="lg-stg-lanes">
+                      {per ? (
+                        projects.length === 0 ? (
+                          <div className="lg-lane-empty">本工作区没有代码项目</div>
+                        ) : (
+                          projects.map((p) => (
+                            <div key={p.name} className={`lg-lane${p.selected ? '' : ' off'}`} data-proj={p.name}>
+                              <span className="lg-lane-ck" onClick={() => toggleProject(p.name)}>
+                                <span className="wfo-ck" dangerouslySetInnerHTML={{ __html: CHECK_SVG }} />
+                              </span>
+                              <span className="lg-lane-ic" dangerouslySetInnerHTML={{ __html: TERM_SVG }} />
+                              <span className="lg-lane-nm"><b>{p.name}</b><span>{p.provider || 'claude'}</span></span>
+                              {p.selected ? renderChips(`proj:${s.key}:${p.name}`, p.provider, p.model, (id) => chooseProjectProvider(p.name, id), (id) => chooseProjectModel(p.name, id)) : null}
+                            </div>
+                          ))
+                        )
+                      ) : (
+                        <div className="lg-lane" data-lane="root">
+                          <span className="lg-lane-ic" dangerouslySetInnerHTML={{ __html: TERM_SVG }} />
+                          <span className="lg-lane-nm"><b>工作区</b><span>{lensN > 0 ? `${s.name} · 多镜头 ${lensN} 视角` : s.name}</span></span>
+                          {renderChips(stageKeyOf(s.key), st.provider, st.model, (id) => chooseStageProvider(s.key, id), (id) => chooseStageModel(s.key, id))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               )
             })}
           </div>
         ) : null}
-
-        <div className="wfo-sec">
-          <div className="wfo-sec-h">
-            涉及代码项目
-            <span className="c">已选 {selectedCount} / {projects.length}</span>
-          </div>
-          {projects.map((p) => {
-            return (
-              <div key={p.name} className={`wfo-proj${p.selected ? ' on' : ''}`}>
-                <span className="wfo-ckhit" onClick={() => toggleProject(p.name)}>
-                  <span className="wfo-ck" dangerouslySetInnerHTML={{ __html: CHECK_SVG }} />
-                  <span className="pn">
-                    <b>{p.name}</b>
-                    <span>{p.provider}</span>
-                  </span>
-                </span>
-                {p.selected
-                  ? renderChips(p.name, p.provider, p.model, (id) => chooseProjectProvider(p.name, id), (id) => chooseProjectModel(p.name, id))
-                  : null}
-              </div>
-            )
-          })}
-        </div>
 
         {(config.hooks ?? []).length > 0 ? (
           <div className="wfo-sec">
@@ -406,6 +470,20 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
           </div>
         ) : null}
 
+        <div className="wfo-sec-h" style={{ marginTop: 14 }}>原始需求{seedLoading ? '' : '（AI 总结，可编辑）'}</div>
+        {seedLoading ? (
+          <div className="lg-seed-loading"><span className="lg-seed-spin" />正在根据对话总结需求…</div>
+        ) : (
+          <textarea
+            className="lg-seed-input"
+            rows={3}
+            value={seed}
+            placeholder="本次要做的需求（可修正 AI 的总结）…"
+            onChange={(e) => setSeed(e.target.value)}
+          />
+        )}
+
+        <div className="wfo-sec-h" style={{ marginTop: 12 }}>补充说明（可选）</div>
         <div className="wfo-goal">
           <textarea
             rows={2}
@@ -424,8 +502,8 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
         ) : null}
 
         <div className="req-actions">
-          <button className="req-ok" onClick={confirm} disabled={selectedStages.length > 0 && enabledStageCount === 0} title={selectedStages.length > 0 && enabledStageCount === 0 ? '至少保留一个阶段' : undefined}>{dirtyWarn && dirtyWarn.length > 0 ? '仍要启动' : '确认'}</button>
           <button className="req-no" onClick={onCancel}>取消</button>
+          <button className="req-ok" onClick={confirm} disabled={confirmBlocked} title={confirmBlockReason}>{dirtyWarn && dirtyWarn.length > 0 ? '仍要启动' : '确认'}</button>
         </div>
       </div>
     </div>

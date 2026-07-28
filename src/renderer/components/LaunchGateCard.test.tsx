@@ -20,7 +20,7 @@ const base: LaunchGateConfig = {
   selectedWorkflowId: 'std',
   projects: [
     { name: 'go-blog', selected: true, provider: 'claude', model: 'claude-opus-4-8' },
-    { name: 'zgh', selected: false, provider: 'claude', model: 'claude-opus-4-8' },
+    { name: 'zgh', selected: true, provider: 'claude', model: 'claude-opus-4-8' },
   ],
   supplement: '',
 }
@@ -28,11 +28,19 @@ const base: LaunchGateConfig = {
 // Improvement ⑦: the model chip's picker is fed by a `providers` prop (the SAME shape
 // WorkspaceView/Composer pass down — real, locally-discovered providers/models), never a
 // hardcoded catalog. These test doubles stand in for that discovered data.
-// The launch gate now renders provider/model chips on BOTH stage rows and project rows, so a bare
-// document.querySelector('.lg-model-chip') would hit the first stage's chip. Scope to a project row.
-function projectChip(projectName: string, chip: '.lg-model-chip' | '.lg-provider-chip'): HTMLElement {
-  const row = Array.from(document.querySelectorAll('.wfo-proj')).find((el) => el.querySelector('.pn b')?.textContent === projectName)
-  return row!.querySelector(chip) as HTMLElement
+// Projects now render as lane cards under EACH per-project stage (代码开发/写单测按项目/…). Scope to a
+// specific stage's lane (default 代码开发/develop) so a project name that repeats across stages resolves
+// to one card, then pick its provider/model chip.
+function projectChip(projectName: string, chip: '.lg-model-chip' | '.lg-provider-chip', stage = 'develop'): HTMLElement {
+  const lane = document.querySelector(`.lg-stg[data-stage="${stage}"] .lg-lane[data-proj="${projectName}"]`)
+  return lane!.querySelector(chip) as HTMLElement
+}
+// Click a stage's enable checkbox (its numbered node) or a project lane's checkbox, scoped by data attrs.
+function clickStageToggle(stageKey: string): void {
+  fireEvent.click(document.querySelector(`.lg-stg[data-stage="${stageKey}"] .lg-stg-idx`)!)
+}
+function clickProjectCheckbox(projectName: string, stage = 'develop'): void {
+  fireEvent.click(document.querySelector(`.lg-stg[data-stage="${stage}"] .lg-lane[data-proj="${projectName}"] .lg-lane-ck`)!)
 }
 
 const providers: ProviderInfo[] = [
@@ -80,7 +88,7 @@ describe('LaunchGateCard 活态', () => {
   it('取消勾选项目后确认，该项目 selected 变为 false', () => {
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={base} onConfirm={onConfirm} onCancel={() => {}} />)
-    fireEvent.click(screen.getByText('go-blog'))
+    clickProjectCheckbox('go-blog')   // deselect go-blog (zgh stays selected, so confirm isn't blocked)
     fireEvent.click(screen.getByText('确认'))
     expect(onConfirm).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -121,12 +129,14 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
 
     fireEvent.click(projectChip('go-blog', '.lg-model-chip'))
 
-    const pop = document.querySelector('.wfo-mpop')!
+    const pop = document.querySelector('.wfo-mpop') as HTMLElement
     expect(pop).toBeTruthy()
-    expect(screen.getByText('opus-4.8')).toBeInTheDocument()
-    expect(screen.getByText('sonnet-4.6')).toBeInTheDocument()
+    // The model chip now shows the bare model (opus-4.8 is go-blog's current model, also its chip label),
+    // so scope the popup-content assertions to the popup itself.
+    expect(within(pop).getByText('opus-4.8')).toBeInTheDocument()
+    expect(within(pop).getByText('sonnet-4.6')).toBeInTheDocument()
     // Only claude's models show — codex's gpt-5-codex must not leak in (go-blog's provider is claude).
-    expect(screen.queryByText('gpt-5-codex')).toBeNull()
+    expect(within(pop).queryByText('gpt-5-codex')).toBeNull()
   })
 
   it('选中弹层里的一项模型后确认，该项目的 model 更新为选中值', () => {
@@ -136,9 +146,10 @@ describe('LaunchGateCard 模型选择弹层(真实可用模型,非静态表)', (
     fireEvent.click(projectChip('go-blog', '.lg-model-chip'))
     fireEvent.click(screen.getByText('sonnet-4.6'))
 
-    // Picking closes the popup and updates the chip's displayed label immediately.
+    // Picking closes the popup and updates the chip's displayed label immediately (go-blog's card repeats
+    // under every per-project stage, so its updated model label now shows in more than one lane).
     expect(document.querySelector('.wfo-mpop')).toBeNull()
-    expect(screen.getByText(/sonnet-4\.6/)).toBeInTheDocument()
+    expect(screen.getAllByText(/sonnet-4\.6/).length).toBeGreaterThan(0)
 
     fireEvent.click(screen.getByText('确认'))
     expect(onConfirm).toHaveBeenCalledWith(
@@ -211,6 +222,60 @@ describe('LaunchGateCard 编码代理(provider)选择', () => {
       })
     )
   })
+
+  // #3: 一键把所有 provider 切成同一个 — 覆盖所有项目 + 所有非写码阶段;写码阶段(develop/test)从项目继承,不动。
+  it('「统一编码代理·全部设为」一键把所有项目与非写码阶段切成同一个 provider', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    fireEvent.click(screen.getByText('全部设为…'))
+    const pop = document.querySelector('.wfo-mpop') as HTMLElement
+    expect(pop).toBeTruthy()
+    fireEvent.click(within(pop).getByText('Codex'))
+    fireEvent.click(screen.getByText('确认'))
+    const arg = onConfirm.mock.calls[0][0]
+    // every project (selected or not) → codex + codex's default model, never ''
+    for (const p of arg.projects) { expect(p.provider).toBe('codex'); expect(p.model).toBe('gpt-5-codex') }
+    // non-code stages (requirement/review) → codex; code stages (develop/test) inherit → left as claude
+    const byKey = Object.fromEntries(arg.stageChoices.map((s: { key: string; provider: string }) => [s.key, s.provider]))
+    expect(byKey.requirement).toBe('codex')
+    expect(byKey.review).toBe('codex')
+    expect(byKey.develop).toBe('claude')
+    expect(byKey.test).toBe('claude')
+  })
+})
+
+describe('LaunchGateCard 阶段级 单代理⇄按项目 切换', () => {
+  it('非写码非文档阶段(代码评审)可切「按项目」,确认回传 perProject:true;写码阶段不带该字段', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    const reviewRow = document.querySelector('.lg-stg[data-stage="review"]') as HTMLElement
+    expect(reviewRow).toBeTruthy()
+    // the row offers a 单代理 / 按项目 segmented toggle; click 按项目
+    fireEvent.click(within(reviewRow).getByText('按项目'))
+    fireEvent.click(screen.getByText('确认'))
+    const arg = onConfirm.mock.calls[0][0]
+    expect(arg.stageChoices.find((s: { key: string }) => s.key === 'review').perProject).toBe(true)
+    // a code stage (develop) is not toggle-eligible → no perProject field is sent for it
+    expect(arg.stageChoices.find((s: { key: string }) => s.key === 'develop').perProject).toBeUndefined()
+  })
+
+  it('代码CR(lensCount>0)的开关诚实标为「多镜头⇄按项目」,不是误导的「单代理」', () => {
+    // review 默认多镜头(4视角),其 off 状态不是单代理 —— 门必须如实标注。
+    const cfg: LaunchGateConfig = {
+      ...base,
+      workflows: base.workflows.map((w) => w.id === 'std'
+        ? { ...w, stages: w.stages.map((s) => (s.key === 'review' ? { ...s, lensCount: 4 } : s)) }
+        : w),
+    }
+    render(<LaunchGateCard config={cfg} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
+    const reviewRow = document.querySelector('.lg-stg[data-stage="review"]') as HTMLElement
+    expect(within(reviewRow).getByText('多镜头')).toBeInTheDocument()   // the toggle's off-label
+    // no 单代理 anywhere in the review row (toggle off-label + mode tag both read 多镜头)
+    expect(within(reviewRow).queryByText('单代理')).toBeNull()
+    // switching to 按项目 still works from the honest toggle
+    fireEvent.click(within(reviewRow).getByText('按项目'))
+    expect(within(reviewRow).getByText('按项目').className).toContain('on')
+  })
 })
 
 describe('LaunchGateCard 需求(AI 总结 + 可编辑)', () => {
@@ -242,13 +307,13 @@ describe('LaunchGateCard 需求(AI 总结 + 可编辑)', () => {
 describe('LaunchGateCard 工作流阶段流程预览', () => {
   it('展示所选工作流的阶段流程；切换工作流后流程随之变化', () => {
     render(<LaunchGateCard config={base} onConfirm={() => {}} onCancel={() => {}} />)
-    // std 工作流的阶段都显示
-    expect(screen.getByText('需求梳理')).toBeInTheDocument()
-    expect(screen.getByText('代码评审')).toBeInTheDocument()
-    // 切到 basic(只有 2 步),代码评审不应再出现
+    // std 工作流的阶段节点都显示(按 data-stage 定位,阶段名在节点头与单代理子卡里各出现一次)
+    expect(document.querySelector('.lg-stg[data-stage="requirement"]')).toBeTruthy()
+    expect(document.querySelector('.lg-stg[data-stage="review"]')).toBeTruthy()
+    // 切到 basic(只有 2 步),代码评审阶段不应再出现
     fireEvent.click(screen.getByText('基础流程'))
-    expect(screen.queryByText('代码评审')).toBeNull()
-    expect(screen.getByText('代码开发')).toBeInTheDocument()
+    expect(document.querySelector('.lg-stg[data-stage="review"]')).toBeNull()
+    expect(document.querySelector('.lg-stg[data-stage="develop"]')).toBeTruthy()
   })
 })
 
@@ -257,7 +322,7 @@ describe('LaunchGateCard 阶段可选 + 阶段 provider', () => {
   it('取消勾选某阶段后确认，stageChoices 里该阶段 enabled=false', () => {
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
-    fireEvent.click(screen.getByText('需求梳理'))
+    clickStageToggle('requirement')   // click its numbered node to disable it
     fireEvent.click(screen.getByText('确认'))
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
       stageChoices: expect.arrayContaining([expect.objectContaining({ key: 'requirement', enabled: false })]),
@@ -266,7 +331,7 @@ describe('LaunchGateCard 阶段可选 + 阶段 provider', () => {
 
   it('全部阶段取消勾选时，确认按钮禁用', () => {
     render(<LaunchGateCard config={base} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
-    for (const name of ['需求梳理', '代码开发', '测试', '代码评审']) fireEvent.click(screen.getByText(name))
+    for (const key of ['requirement', 'develop', 'test', 'review']) clickStageToggle(key)
     expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -320,8 +385,9 @@ describe('LaunchGateCard hook 可选', () => {
 
   it("a dirty but UNSELECTED project does not warn — launches immediately", async () => {
     const onConfirm = vi.fn()
-    const checkDirty = vi.fn(async () => ["zgh"])       // zgh is dirty but not selected
+    const checkDirty = vi.fn(async () => ["zgh"])       // zgh is dirty
     render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} checkDirty={checkDirty} />)
+    clickProjectCheckbox("zgh")   // deselect zgh so it's dirty-but-excluded (go-blog stays selected)
     fireEvent.click(screen.getByText("确认"))
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
     expect(screen.queryByText("仍要启动")).toBeNull()

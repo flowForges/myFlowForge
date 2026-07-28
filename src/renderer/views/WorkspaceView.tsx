@@ -404,14 +404,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const sid = sessions.activeSessionId
     const run2Ipc = (window as any).forge?.run2
     const infoPromise: Promise<{
-      workflows: { id: string; name: string; stages: { key: string; name: string; gate?: boolean; code?: boolean; provider?: string; model?: string }[] }[]
+      workflows: { id: string; name: string; stages: { key: string; name: string; gate?: boolean; code?: boolean; producesDoc?: boolean; lensCount?: number; provider?: string; model?: string }[] }[]
       projects: { name: string; provider?: string; model?: string }[]
       hooks?: { id: string; name: string; after: string }[]
     }> = run2Ipc?.launchInfo ? run2Ipc.launchInfo(wsPath) : Promise.resolve({ workflows: [], projects: [], hooks: [] })
     void infoPromise.then((info) => {
       const workflows = info.workflows.map((w) => ({
         id: w.id, name: w.name, stageCount: w.stages.length,
-        stages: w.stages.map((s) => ({ key: s.key, name: s.name, gate: !!s.gate, code: !!s.code, provider: s.provider ?? '', model: s.model ?? '' })),
+        stages: w.stages.map((s) => ({ key: s.key, name: s.name, gate: !!s.gate, code: !!s.code, producesDoc: !!s.producesDoc, lensCount: s.lensCount ?? 0, provider: s.provider ?? '', model: s.model ?? '' })),
       }))
       const selectedWorkflowId = workflowId && workflows.some((w) => w.id === workflowId)
         ? workflowId
@@ -437,7 +437,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       // 自动确认——但先卡在 seedLoading 上,等 AI 需求总结回来再放行(见 effect 的 !g.seedLoading 门)。
       // 需求原文不再是「最后 N 条原始对话」,而是让当前会话的编码代理把整段对话总结成一段可执行需求
       // (可编辑),失败/超时回退 rawSeed。seedLoading=true 时门里展示「正在总结…」。
-      setLaunchGates((prev) => [...prev, { id: gateId, ts: now, config, sessionId: sid, auto: autoDecide, seedLoading: true }])
+      // Only ONE active (unconfirmed) launch gate per session: re-picking a workflow (or clicking 启动
+      // again) REPLACES the pending gate instead of stacking a second permission door in the chat — the
+      // bug where 3 clicks left 3 gates. Frozen (already-launched) records and OTHER sessions' gates stay.
+      setLaunchGates((prev) => [...prev.filter((g) => g.frozen || g.sessionId !== sid), { id: gateId, ts: now, config, sessionId: sid, auto: autoDecide, seedLoading: true }])
       const agent = selection?.agentId ?? ''
       const summarize = agent
         ? window.forge.chatSummarizeRequirement?.({ workspacePath: wsPath, sessionId: sid ?? '', agent, model: selection?.modelId ?? '' })
@@ -825,6 +828,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
   const prevLenRef = useRef(0)
+  // A newly-opened launch gate isn't part of visibleMessages (it lives in mergedLaunchGates, merged into
+  // the timeline separately), so the visibleMessages-length check below would never pin to it. Track the
+  // gate count on its own and treat a new gate as a "must be seen" turn — otherwise clicking 开启工作流
+  // drops the gate card in below the fold and the user has no idea anything happened.
+  const prevGateLenRef = useRef(0)
   const onChatScroll = () => {
     const el = scrollRef.current
     if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
@@ -833,11 +841,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const el = scrollRef.current
     if (!el) return
     if (visibleMessages.length > prevLenRef.current) stickRef.current = true   // new turn → pin to bottom
+    if (mergedLaunchGates.length > prevGateLenRef.current) stickRef.current = true   // a new launch gate → pin
     prevLenRef.current = visibleMessages.length
+    prevGateLenRef.current = mergedLaunchGates.length
     // rAF: wait for the new Markdown / think-block layout before measuring scrollHeight,
     // otherwise we scroll to a stale (too-short) height and the latest output stays hidden.
     if (stickRef.current) requestAnimationFrame(() => { el.scrollTop = el.scrollHeight })
-  }, [visibleMessages, chat.streamingIds, chat.plans.length, chat.confirms.length, pending.length])
+  }, [visibleMessages, mergedLaunchGates.length, chat.streamingIds, chat.plans.length, chat.confirms.length, pending.length])
 
   // Inspector worktree: switch which project's 变更/文件树 we show, or aggregate across all.
   // Prefer the live run's projects; fall back to workspace config projects so chat mode

@@ -10,10 +10,11 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { PermissionMode } from '@shared/permissions'
 import type { Workspace, Workflow, CustomStage } from '../config/schema'
-import { stageName, workflowDisplayName, stageBasePrompt, DEFAULT_STAGE_PER_PROJECT_AGENT } from '../config/schema'
+import { stageName, workflowDisplayName, stageBasePrompt, DEFAULT_STAGE_PER_PROJECT_AGENT, DEFAULT_STAGE_PRODUCES_DOC } from '../config/schema'
 import { indexCustomStages } from '../../shared/customStages'
 import { pickWorkspaceWorkflow, resolveWorkflowStages } from '../workspace/resolveStages'
 import { planFromStages } from './planFromStages'
+import { reviewLenses } from './reviewFanout'
 import { collectRunHooks } from './hooks'
 import type { RunPlan } from './machine'
 import type { StageSpec, DevelopProject } from './runTypes'
@@ -40,6 +41,14 @@ export interface LaunchStage {
   model: string
   gate: boolean
   code: boolean
+  // producesDoc = this stage hands off a single markdown deliverable (需求评估/技术方案设计). The gate uses
+  // it to decide whether to offer the 单代理⇄按项目 fan-out toggle — a doc stage produces ONE deliverable,
+  // so per-project fan-out doesn't apply; only non-code, non-doc stages (写单测/代码CR) get the toggle.
+  producesDoc: boolean
+  // lensCount = how many CR视角 this stage fans into when NOT per-project (代码CR defaults to 多镜头, 4
+  // lenses). >0 ⇒ its "off" (root) state is 多镜头, NOT 单代理 — the gate labels the toggle 多镜头⇄按项目
+  // and the mode tag 多镜头·N accordingly, instead of the misleading 单代理. 0/undefined for every other stage.
+  lensCount?: number
   desc: string
   prompt: string
 }
@@ -86,6 +95,8 @@ export function buildLaunchInfo(ws: Workspace, workflows: Workflow[] = [], custo
           model: s.model,
           gate: !!s.gate,
           code: s.projectAgent ?? DEFAULT_STAGE_PER_PROJECT_AGENT[s.key] ?? false,
+          producesDoc: s.producesDoc ?? DEFAULT_STAGE_PRODUCES_DOC[s.key] ?? false,
+          lensCount: reviewLenses(s.review)?.length ?? 0,
           desc: STAGE_DESC[s.key] ?? '',
           prompt,
         }
@@ -176,7 +187,11 @@ export interface LaunchStartConfig {
   // stages the gate exposes a picker; code/per-project stages keep taking their provider/model from the
   // per-project choice). Keyed by stage key. Omitted → every stage runs with its workflow-default agent
   // (old behavior), so existing callers/tests keep working unchanged.
-  stages?: { key: string; enabled: boolean; provider?: string; model?: string }[]
+  // `perProject`: the gate's 单代理⇄按项目 toggle for a non-code, non-doc stage (写单测/代码CR). Present ONLY
+  // for toggle-eligible stages — true → force scope 'per-project' (one agent per project), false → force
+  // 'root' (single). Absent (undefined) for every other stage so its own scope default is left untouched
+  // (critical: sending false for develop/design would wrongly collapse their per-project fan-out to root).
+  stages?: { key: string; enabled: boolean; provider?: string; model?: string; perProject?: boolean }[]
   // Per-hook on/off from the gate (see LaunchInfo.hooks). Unchecked hooks are dropped from the run.
   // Keyed by plugin id; a hook id absent here defaults to enabled. Omitted → all hooks run (old behavior).
   hooks?: { id: string; enabled: boolean }[]
@@ -236,12 +251,18 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
       ? (s.prompt ? `${groundTruth}\n\n${s.prompt}` : groundTruth)
       : s.prompt
     const choice = stageChoice.get(s.key)
+    // 单代理⇄按项目 toggle (写单测/代码CR): an explicit gate choice wins over the stage's default scope.
+    // undefined (every non-toggle stage) leaves s.scope alone so planFromStages' stageScope default still
+    // applies (develop/design → per-project). true → per-project fan-out; false → root/single.
+    const scope = choice?.perProject === true ? 'per-project'
+      : choice?.perProject === false ? 'root'
+      : s.scope
     return {
       key: s.key,
       name: stageName(s.key, s.name),
       provider: choice?.provider || s.provider,
       model: choice?.model || s.model,
-      scope: s.scope,
+      scope,
       gate: s.gate,
       prompt,
       review: s.review, // ②多镜头CR: honor the review stage's fan-out config (per-lens reviewers)
