@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { WallpaperCatalog, WallpaperItem } from '@shared/wallpaper'
 
 interface WallpaperGalleryProps {
@@ -11,6 +11,54 @@ const CHECK = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="20 6 9 17 4 12" /></svg>
 )
 
+// One wallpaper tile. Thumbnails are loaded LAZILY — only when the tile scrolls into view — so a gallery
+// of 100+ wallpapers doesn't fire 100 thumbnail requests the moment the pane opens. `onShow` is called
+// once, the first time the tile is (near) visible. Where IntersectionObserver is unavailable (jsdom in
+// tests, ancient engines) we fall back to loading eagerly on mount so nothing silently stays blank.
+function WallpaperTile({ w, thumb, busy, anyBusy, on, onPick, onShow }: {
+  w: WallpaperItem
+  thumb: string | undefined
+  busy: boolean
+  anyBusy: boolean
+  on: boolean
+  onPick: () => void
+  onShow: () => void
+}) {
+  const ref = useRef<HTMLButtonElement | null>(null)
+  const shownRef = useRef(false)
+  useEffect(() => {
+    if (shownRef.current) return
+    const fire = () => { if (!shownRef.current) { shownRef.current = true; onShow() } }
+    if (typeof IntersectionObserver === 'undefined') { fire(); return }
+    const el = ref.current
+    if (!el) { fire(); return }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { fire(); io.disconnect() }
+    }, { rootMargin: '200px' })   // start fetching a bit before the tile actually enters the viewport
+    io.observe(el)
+    return () => io.disconnect()
+    // onShow identity is stable per render but we only ever fire once (shownRef guard), so deps are fine.
+  }, [onShow])
+  return (
+    <button
+      ref={ref}
+      className={`wp-tile${on ? ' on' : ''}`}
+      disabled={busy || anyBusy}
+      title={on ? '已选中 · 再次点击取消,恢复无背景' : (w.desc || w.name)}
+      onClick={onPick}
+    >
+      <div className="wp-thumb">
+        {thumb ? <img src={thumb} alt="" /> : <span className="wp-thumb-ph">加载中…</span>}
+        {busy && (
+          <div className="wp-loading"><span className="wp-spin" />下载中…</div>
+        )}
+      </div>
+      <div className="wp-name">{w.name}</div>
+      {on && !busy && <span className="wp-check">{CHECK}</span>}
+    </button>
+  )
+}
+
 // Built-in wallpaper gallery. Lists the public jsDelivr catalog, shows on-disk-cached thumbnails, and on
 // click downloads the full image and hands its forge-bg:// URL back to be set as the background. No
 // activation code — this is available to everyone and never touches the NSFW Worker.
@@ -19,17 +67,21 @@ export function WallpaperGallery({ current, onApply, onClear }: WallpaperGallery
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [thumbs, setThumbs] = useState<Record<string, string>>({}) // id → forge-bg:// URL (on-disk cache)
+  const requested = useRef<Set<string>>(new Set())                 // ids whose thumb load已发起(去重,不重复请求)
 
   const load = () => {
-    setErr(''); setCatalog(null); setThumbs({})
+    setErr(''); setCatalog(null); setThumbs({}); requested.current = new Set()
     void window.forge?.wallpaperCatalog?.().then(r => {
       if (!r) { setErr('加载失败'); setCatalog({ wallpapers: [] }); return }
       if ('error' in r) { setErr(r.error); setCatalog({ wallpapers: [] }); return }
       setCatalog(r)
-      for (const w of r.wallpapers) void loadThumb(w)
+      // Thumbnails are NOT bulk-loaded here — each tile requests its own when it scrolls into view.
     }).catch(() => { setErr('加载失败'); setCatalog({ wallpapers: [] }) })
   }
-  const loadThumb = async (w: WallpaperItem) => {
+  // Load one thumbnail on demand (called by a tile when it becomes visible). Idempotent per id.
+  const requestThumb = async (w: WallpaperItem) => {
+    if (requested.current.has(w.id) || thumbs[w.id]) return
+    requested.current.add(w.id)
     const r = await window.forge?.wallpaperPreview?.(w)
     if (r && 'url' in r) setThumbs(prev => ({ ...prev, [w.id]: r.url }))
   }
@@ -52,30 +104,6 @@ export function WallpaperGallery({ current, onApply, onClear }: WallpaperGallery
     byCat[w.cat].push(w)
   }
 
-  const tile = (w: WallpaperItem) => {
-    const thumb = thumbs[w.id]
-    const busyThis = busy === w.id
-    const on = !!current && current === w.id
-    return (
-      <button
-        key={w.id}
-        className={`wp-tile${on ? ' on' : ''}`}
-        disabled={busyThis || !!busy}
-        title={on ? '已选中 · 再次点击取消,恢复无背景' : (w.desc || w.name)}
-        onClick={() => (on ? onClear?.() : void apply(w))}
-      >
-        <div className="wp-thumb">
-          {thumb ? <img src={thumb} alt="" /> : <span className="wp-thumb-ph">加载中…</span>}
-          {busyThis && (
-            <div className="wp-loading"><span className="wp-spin" />下载中…</div>
-          )}
-        </div>
-        <div className="wp-name">{w.name}</div>
-        {on && !busyThis && <span className="wp-check">{CHECK}</span>}
-      </button>
-    )
-  }
-
   return (
     <div className="set-group">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -94,7 +122,20 @@ export function WallpaperGallery({ current, onApply, onClear }: WallpaperGallery
       {cats.map(cat => (
         <div key={cat} className="wp-group">
           <div className="wp-group-h">{cat}</div>
-          <div className="wp-grid">{byCat[cat].map(tile)}</div>
+          <div className="wp-grid">
+            {byCat[cat].map(w => (
+              <WallpaperTile
+                key={w.id}
+                w={w}
+                thumb={thumbs[w.id]}
+                busy={busy === w.id}
+                anyBusy={!!busy}
+                on={!!current && current === w.id}
+                onPick={() => (current === w.id ? onClear?.() : void apply(w))}
+                onShow={() => void requestThumb(w)}
+              />
+            ))}
+          </div>
         </div>
       ))}
     </div>

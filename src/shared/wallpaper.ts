@@ -5,7 +5,7 @@
 // uploaded background (forge-bg://), so nothing is bundled into the installer.
 
 export const WALLPAPER_CATALOG_URL =
-  'https://cdn.jsdelivr.net/gh/flowForges/wallpapers@v1/catalog.json'
+  'https://cdn.jsdelivr.net/gh/flowForges/wallpapers@v2/catalog.json'
 
 export interface WallpaperItem {
   id: string
@@ -19,3 +19,11 @@ export interface WallpaperItem {
 export interface WallpaperCatalog {
   wallpapers: WallpaperItem[]
 }
+
+// Client-side exclusion list: catalog ids hidden from the built-in gallery even though the remote
+// (jsDelivr-cached, @v1-pinned) catalog still ships them — e.g. an image whose composition renders
+// poorly as an app background. Filtered out in wallpaperService.wallpaperCatalog, so the gallery never
+// lists them and no thumbnail/full download is ever requested for them.
+export const WALLPAPER_EXCLUDED_IDS = new Set<string>([
+  'cm01', // 【纯美】银发白衣仙侠少女:样式不对,下架
+])

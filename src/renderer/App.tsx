@@ -31,6 +31,7 @@ import { CreateWorkspace } from './views/CreateWorkspace'
 import { SettingsModal } from './settings/SettingsModal'
 import { ProjectPane } from './settings/ProjectPane'
 import { AppearancePane } from './settings/AppearancePane'
+import { BackgroundPane } from './settings/BackgroundPane'
 import { NotificationsPane } from './settings/NotificationsPane'
 import { AppIconPane } from './settings/AppIconPane'
 import { TermProxyPane } from './settings/TermProxyPane'
@@ -790,6 +791,7 @@ export function App() {
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} showNsfw={!!settings?.nsfwUnlocked} renderPane={(key) => {
         switch (key) {
           case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} /> : null
+          case 'wallpaper': return settings ? <BackgroundPane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} /> : null
           case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} />

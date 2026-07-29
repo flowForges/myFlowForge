@@ -23,14 +23,18 @@ export function applyTheme(a: Appearance): void {
   const LEGACY_CHAT = { small: 12.5, medium: 14, large: 16 } as Record<string, number>
   const chatPx = typeof a.chatFontSize === 'number' ? a.chatFontSize : (LEGACY_CHAT[a.chatFontSize as unknown as string] ?? 14)
   root.style.setProperty('--chat-font-scale', String(chatPx / 14))
+  // 会话区行距/字间距:独立于字号,chat.css 的 .msg-body 消费这两个变量。非数字兜底到舒展的默认。
+  root.style.setProperty('--chat-line-height', String(typeof a.chatLineHeight === 'number' ? a.chatLineHeight : 1.7))
+  root.style.setProperty('--chat-letter-spacing', `${typeof a.chatLetterSpacing === 'number' ? a.chatLetterSpacing : 0}em`)
   // 应用字体族:非空则覆盖 --font(带系统栈兜底);空则清除,回落到 tokens.css 里的系统字体栈。
   if (a.fontFamily && a.fontFamily.trim()) {
     root.style.setProperty('--font', `${a.fontFamily.trim()}, -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif`)
   } else {
     root.style.removeProperty('--font')
   }
-  // 文本字重:'medium' 让正文更实、更清晰(global.css 据此提升 body 基础字重并关掉 antialiased)。
-  root.setAttribute('data-text-weight', a.textWeight ?? 'medium')
+  // 文本字重:直接把数值(300–600)写进 --app-fw,只作用于 body 基础字重(见 global.css 的 body 规则),
+  // 不动已显式加重的标题/强调文本。旧枚举值经 schema 迁移后到这里已是数字;非数字兜底 450。
+  root.style.setProperty('--app-fw', String(typeof a.textWeight === 'number' ? a.textWeight : 450))
   // Background image: expose the image + its opacity as CSS vars and a scope attribute; the CSS
   // (.app-bg-layer for 'app', .chat::before for 'chat') keys off data-bg-scope. Off when no image.
   const bgOn = !!a.bgImage && a.bgScope && a.bgScope !== 'off'

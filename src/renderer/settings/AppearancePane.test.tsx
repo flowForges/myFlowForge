@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { AppearancePane } from './AppearancePane'
 import type { Appearance, Terminal } from '@shared/types'
 
-const appearance: Appearance = { theme: 'dark', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 }
+const appearance: Appearance = { theme: 'dark', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 }
 const terminal: Terminal = { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 }
 
 describe('AppearancePane', () => {
@@ -48,12 +48,16 @@ describe('AppearancePane', () => {
     fireEvent.change(input, { target: { value: 'Inter' } })
     expect(onChange).toHaveBeenCalledWith({ fontFamily: 'Inter' })
   })
-  it('渲染「文本字重」两选并回写 textWeight', () => {
+  it('「文本字重」滑块回写数值,并可一键恢复建议值', () => {
     const onChange = vi.fn()
-    render(<AppearancePane appearance={appearance} onChange={onChange} terminal={terminal} onTerminalChange={() => {}} />)
-    // 默认 medium 高亮
-    expect(screen.getByText('适中(更清晰)').className).toContain('on')
-    fireEvent.click(screen.getByText('标准'))
-    expect(onChange).toHaveBeenCalledWith({ textWeight: 'normal' })
+    // 起始为一个非建议值,验证滑块显示它、且「恢复」按钮写回 450。
+    render(<AppearancePane appearance={{ ...appearance, textWeight: 500 }} onChange={onChange} terminal={terminal} onTerminalChange={() => {}} />)
+    const slider = screen.getByLabelText('文本字重') as HTMLInputElement
+    expect(slider.value).toBe('500')
+    fireEvent.change(slider, { target: { value: '350' } })
+    expect(onChange).toHaveBeenCalledWith({ textWeight: 350 })
+    // 数值按钮点一下恢复到建议字重 450
+    fireEvent.click(screen.getByText('500'))
+    expect(onChange).toHaveBeenCalledWith({ textWeight: 450 })
   })
 })

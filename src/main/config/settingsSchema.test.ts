@@ -37,6 +37,18 @@ describe('SettingsSchema skills + pet', () => {
     expect(parsed.pet.skin).toBe('custom')
     expect(parsed.pet.activeCustomPetId).toBe(`builtin-${DEFAULT_BUILTIN_PET_ID}`)
   })
+  it('textWeight: 旧枚举迁移为数值,数值吸附步进,越界/垃圾回落 450', () => {
+    const base = defaultSettings()
+    expect(base.appearance.textWeight).toBe(450)                                            // 新默认
+    const parse = (v: unknown) => SettingsSchema.parse({ ...base, appearance: { ...base.appearance, textWeight: v } }).appearance.textWeight
+    expect(parse('medium')).toBe(450)                                                       // 旧「适中」
+    expect(parse('normal')).toBe(400)                                                       // 旧「标准」
+    expect(parse(500)).toBe(500)                                                            // 数值透传
+    expect(parse(437)).toBe(425)                                                            // 吸附到步进 25 网格
+    expect(parse(900)).toBe(600)                                                            // 越上界夹到 600
+    expect(parse(100)).toBe(300)                                                            // 越下界夹到 300
+    expect(parse('banana')).toBe(450)                                                       // 垃圾回落
+  })
   it('closeAction: 默认 ask,合法值透传,垃圾值回落 ask,旧配置缺省补 ask', () => {
     expect(defaultSettings().closeAction).toBe('ask')
     const base = defaultSettings()

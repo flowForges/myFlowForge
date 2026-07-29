@@ -351,7 +351,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
       <div className="set-group">
         <h4>桌面宠物</h4>
         <p className="set-desc">宠物常驻应用一角,守望所有工作区。点击它可查看哪些工作区、哪些代理在执行;当代理需要确认或输入时,它会提醒你。</p>
-        <div className="set-row" style={{ marginTop: '14px' }}>
+        <div className="set-row">
           <div className="info">
             <div className="t">启用桌面宠物</div>
             <div className="d">在窗口角落显示宠物</div>
@@ -384,7 +384,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
 
       {/* 形象 = 宠物:一个统一的选择器。内置简约形象(精灵/机器人/幽灵)、5 只默认宠物、以及用户自定义
           都在同一画廊里,点选任意一个即为当前形象——不再把「形象」与「宠物」拆成两处。 */}
-      <div className="set-group">
+      <div className="set-group pet-group-tight">
         <h4>形象</h4>
         <p className="set-desc">桌面宠物的形象。内置简约形象与默认宠物都在这里,点选任意一个即为当前显示;也可上传自定义,或在下方「宠物库」下载更多。</p>
         <div className="pet-custom-gallery" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
@@ -577,7 +577,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             </button>
           ))}
         </div>
-        <div className="set-row" style={{ marginTop: '14px' }}>
+        <div className="set-row">
           <div className="info">
             <div className="t">跟随焦点屏幕 / 看向光标</div>
             <div className="d">开:多显示器时宠物跳到你聚焦的那块屏幕,并转头看向光标。关:宠物无视光标——省掉每秒约 7 次的光标轮询(更省电)</div>
@@ -589,7 +589,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             onClick={() => onChange({ followCursor: !pet.followCursor })}
           />
         </div>
-        <div className="set-row" style={{ marginTop: '14px' }}>
+        <div className="set-row">
           <div className="info">
             <div className="t">空闲动画</div>
             <div className="d">开:宠物空闲时持续呼吸/换帧(活泼)。关:空闲时定格不动,停掉每秒约 5.5 次的重绘——最省电的一项</div>

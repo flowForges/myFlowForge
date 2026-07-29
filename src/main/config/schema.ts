@@ -100,11 +100,18 @@ export const AppearanceSchema = z.object({
   // chatFontSize 单独控制、互不影响;终端字号仍在 terminal.fontSize。旧枚举值自动兼容为 px。
   fontSize: fontSizePx(LEGACY_APP_FONT_PX, 14),
   chatFontSize: fontSizePx(LEGACY_CHAT_FONT_PX, 14),
+  // 会话区排版微调(独立于字号):行距(line-height 倍数)与字间距(letter-spacing,em)。默认取偏舒展的
+  // 1.7 行距 + 0 字间距(更接近 codex 那种协调、透气的观感);用户可各自拉动。越界/非法回落默认。
+  chatLineHeight: z.preprocess((v) => (typeof v === 'number' ? Math.min(2.2, Math.max(1.3, v)) : 1.7), z.number().catch(1.7).default(1.7)),
+  chatLetterSpacing: z.preprocess((v) => (typeof v === 'number' ? Math.min(0.08, Math.max(-0.02, v)) : 0), z.number().catch(0).default(0)),
   // 应用整体字体族(逗号分隔备选)。'' = 跟随系统栈。作用于 --font,不影响终端字体。
   fontFamily: z.string().catch('').default(''),
-  // 文本字重:'medium' 把正文基础字重略加实 + 关闭 antialiased 使渲染更清晰(治"字太瘦"),
-  // 但不动已显式加重的标题/强调文本;'normal' = 原始系统外观。
-  textWeight: z.enum(['normal', 'medium']).catch('medium').default('medium'),
+  // 正文基础字重(数值,300–600,步进 25)。只作用于 body 基础字重(--app-fw),不动已显式加重的
+  // 标题/强调文本。旧枚举值自动迁移:'normal'→400、'medium'→450;非法/越界值回落 450 并吸附到步进网格。
+  textWeight: z.preprocess((v) => {
+    const n = v === 'normal' ? 400 : v === 'medium' ? 450 : typeof v === 'number' ? v : 450
+    return Math.min(600, Math.max(300, Math.round(n / 25) * 25))
+  }, z.number().catch(450).default(450)),
   // 背景图:用户上传的图片落盘到 ~/.myFlowForge/backgrounds/,此处只存 forge-bg:// URL(不再内联 base64,
   // 故无 6MB 上限)。bgScope 决定铺在整个应用还是仅会话区;'off' 或空图 = 关闭。bgOpacity 是图片层的可见度
   // (其上有一层底色蒙版保证正文可读)。
@@ -298,7 +305,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, fontFamily: '', textWeight: 'medium', bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
+  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },

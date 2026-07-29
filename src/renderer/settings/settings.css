@@ -299,6 +299,13 @@
 /* wrapping variant for long option rows (e.g. per-state pet anims): labels stay on one line, buttons wrap */
 .seg-wrap { flex-wrap: wrap; row-gap: 4px; }
 .seg-wrap .wf-pick { white-space: nowrap; flex: 0 0 auto; }
+/* 宠物设置排版整理:形象画廊与逐状态预览的一致间距,收敛原本散落的行内 margin 造成的参差观感。 */
+.pet-custom-gallery { align-items: center; }
+.pet-custom-preview { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.pet-custom-preview .set-row { padding: 6px 0; border-bottom: none; }
+/* 宠物「形象」大组里连续的说明行 + 按钮行:让紧邻的行不画分隔线、间距更紧凑,读起来成组而非零散。 */
+.pet-group-tight .set-row { border-bottom: none; padding: 6px 0; }
+.pet-group-tight .set-row:first-of-type { padding-top: 2px; }
 .wf-new .mk { height: 34px; padding: 0 15px; border-radius: 7px; background: var(--accent); color: var(--on-accent); font-size: 12.5px; font-weight: 600; flex: 0 0 auto; }
 .wf-new .mk:disabled { opacity: .4; cursor: default; }
 .wf-new-err { margin-top: 8px; font-size: 11.5px; color: var(--err); }
