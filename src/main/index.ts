@@ -33,6 +33,7 @@ import { registerPetScheme, handlePetProtocol } from './pet/petProtocol'
 import { migratePetImagesInPet } from './pet/petImageStore'
 import { registerBackgroundScheme, handleBackgroundProtocol } from './appearance/backgroundProtocol'
 import { bgRelFromUrl, gcBackgrounds } from './appearance/backgroundStore'
+import { previewKeepRels } from './appearance/previewCache'
 import { registerFontScheme, handleFontProtocol } from './appearance/fontProtocol'
 import { join } from 'node:path'
 import { resolveDockIconPath, resolveMenuBarIconPath } from './appIcon'
@@ -132,7 +133,9 @@ app.whenReady().then(() => {
   handleBackgroundProtocol()
   try {
     const a = readSettings().appearance
-    const keep = new Set([bgRelFromUrl(a.bgImage), bgRelFromUrl(a.homeBgImage)].filter((r): r is string => !!r))
+    // Keep the applied backgrounds AND every cached preview thumbnail (preview index) — otherwise startup
+    // GC wipes the thumbnails and the next Settings-open re-downloads them all (NSFW → Cloudflare Worker).
+    const keep = new Set([bgRelFromUrl(a.bgImage), bgRelFromUrl(a.homeBgImage), ...previewKeepRels()].filter((r): r is string => !!r))
     const removed = gcBackgrounds(keep)
     if (removed > 0) logInfo('appearance', `已清理 ${removed} 张无引用的背景图`)
   } catch (e) { logError('appearance', `背景图清理失败: ${String(e)}`) }

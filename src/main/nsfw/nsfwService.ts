@@ -1,6 +1,7 @@
 import { NSFW_WORKER_URL, nsfwConfigured, type NsfwCatalog, type NsfwPet, type NsfwBg } from '../../shared/nsfw'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
 import { storeBackgroundFromBytes, backgroundImageUrl } from '../appearance/backgroundStore'
+import type { PreviewCache } from '../appearance/previewCache'
 
 // License-gated extra content. The app holds only NSFW_WORKER_URL; the Worker validates the activation
 // code and proxies image bytes. These functions take an injected fetch (proxy-aware in prod, faked in
@@ -76,13 +77,18 @@ export async function nsfwInstallPet(
 // a forge-bg:// URL. The renderer holds only the small URL and streams the bytes from disk — the full
 // image never sits in renderer memory as a data URL. Content-addressed, so a later install of the same
 // image reuses this exact file (no re-download).
-export async function nsfwPreview(kind: 'pet' | 'bg', id: string, code: string, fetchImpl: NsfwFetch): Promise<{ url: string } | { error: string }> {
+export async function nsfwPreview(kind: 'pet' | 'bg', id: string, code: string, fetchImpl: NsfwFetch, cache?: PreviewCache): Promise<{ url: string } | { error: string }> {
   if (!nsfwConfigured()) return { error: '内容服务未配置' }
   const path = kind === 'pet' ? `content/pet/${encodeURIComponent(id)}/idle` : `content/bg/${encodeURIComponent(id)}`
+  // Cache key is the Worker PATH (no `?key=<code>` — never persist the activation code to disk). A hit
+  // returns the already-downloaded thumbnail with zero network → no Cloudflare request on re-open.
+  const cached = cache?.lookup(path)
+  if (cached) return { url: backgroundImageUrl(cached) }
   const r = await fetchImage(`${NSFW_WORKER_URL}/${path}?key=${encodeURIComponent(code)}`, fetchImpl)
   if ('error' in r) return r
   const stored = storeBackgroundFromBytes(r.buf, r.ext)
   if ('error' in stored) return stored
+  cache?.record(path, stored.rel)
   return { url: backgroundImageUrl(stored.rel) }
 }
 

@@ -32,6 +32,11 @@ describe('wallpaperCatalog', () => {
     const f = fakeFetch(() => ({ ok: true, status: 200, body: { wallpapers: [item, noThumb, { id: 'x' }, { name: 'no-url' }] } }))
     expect(await wallpaperCatalog(f)).toEqual({ wallpapers: [item, noThumb] })
   })
+  it('drops blocklisted ids (WALLPAPER_EXCLUDED_IDS) — e.g. cm01 银发白衣仙侠少女', async () => {
+    const cm01 = { id: 'cm01', cat: '纯美', name: '【纯美】银发白衣仙侠少女', url: 'u/cm01', thumb: 't/cm01' }
+    const f = fakeFetch(() => ({ ok: true, status: 200, body: { wallpapers: [item, cm01] } }))
+    expect(await wallpaperCatalog(f)).toEqual({ wallpapers: [item] })  // cm01 filtered out
+  })
   it('malformed body → empty array', async () => {
     const f = fakeFetch(() => ({ ok: true, status: 200, body: { junk: 1 } }))
     expect(await wallpaperCatalog(f)).toEqual({ wallpapers: [] })
@@ -62,6 +67,15 @@ describe('wallpaper preview/install error paths (no file writes)', () => {
     const f = fakeFetch((url) => { fetched.push(url); return { ok: false, status: 404 } })
     await wallpaperPreview({ id: 'cm09', cat: '纯美', name: 'B', url: 'u/cm09' }, f)
     expect(fetched).toEqual(['u/cm09'])
+  })
+  it('a preview-cache HIT returns the cached file with ZERO network', async () => {
+    const fetched: string[] = []
+    const f = fakeFetch((url) => { fetched.push(url); return { ok: true, status: 200, bytes: new Uint8Array([1]), ct: 'image/jpeg' } })
+    // cache keyed by the resolved thumb src (item.thumb here).
+    const cache = { lookup: (k: string) => (k === item.thumb ? 'cachedwp.jpg' : null), record: () => {} }
+    const r = await wallpaperPreview(item, f, cache)
+    expect(r).toEqual({ url: 'forge-bg://img/cachedwp.jpg' })
+    expect(fetched).toEqual([])                 // no network on a hit
   })
   it('install 404 → error before writing', async () => {
     const f = fakeFetch(() => ({ ok: false, status: 404 }))

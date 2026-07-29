@@ -1,5 +1,6 @@
-import { WALLPAPER_CATALOG_URL, type WallpaperCatalog, type WallpaperItem } from '../../shared/wallpaper'
+import { WALLPAPER_CATALOG_URL, WALLPAPER_EXCLUDED_IDS, type WallpaperCatalog, type WallpaperItem } from '../../shared/wallpaper'
 import { storeBackgroundFromBytes, backgroundImageUrl } from '../appearance/backgroundStore'
+import type { PreviewCache } from '../appearance/previewCache'
 
 // Built-in wallpapers. Unlike NSFW content there is no activation code and no Worker — we fetch the public
 // catalog + images straight from jsDelivr. The injected fetch is proxy-aware in prod and faked in tests,
@@ -26,7 +27,9 @@ export async function wallpaperCatalog(fetchImpl: WallpaperFetch): Promise<Wallp
     const res = await fetchImpl(WALLPAPER_CATALOG_URL)
     if (!res.ok) return { error: `获取壁纸目录失败(${res.status})` }
     const c = (await res.json()) as Partial<WallpaperCatalog>
-    const wallpapers = Array.isArray(c.wallpapers) ? c.wallpapers.filter(validItem) : []
+    const wallpapers = Array.isArray(c.wallpapers)
+      ? c.wallpapers.filter(validItem).filter((w) => !WALLPAPER_EXCLUDED_IDS.has(w.id))
+      : []
     return { wallpapers }
   } catch { return { error: '无法连接壁纸服务' } }
 }
@@ -42,15 +45,20 @@ async function fetchImage(url: string, fetchImpl: WallpaperFetch): Promise<{ buf
 
 // Download the small thumbnail for on-screen preview and cache it on disk → forge-bg:// URL. Content-
 // addressed, so applying the same thumbnail (or the full image, if identical bytes) reuses the file.
-export async function wallpaperPreview(item: WallpaperItem, fetchImpl: WallpaperFetch): Promise<{ url: string } | { error: string }> {
+export async function wallpaperPreview(item: WallpaperItem, fetchImpl: WallpaperFetch, cache?: PreviewCache): Promise<{ url: string } | { error: string }> {
   // Prefer the catalog's thumb. If it's missing (e.g. a stale-cached catalog.json), derive the thumb path
   // from the full url by convention (…/bg/<id>.<ext> → …/thumb/<id>.<ext>); the thumb files are served
   // fresh even when catalog.json is cached. Falls back to the full url if neither yields a thumb.
   const derived = item.url.includes('/bg/') ? item.url.replace('/bg/', '/thumb/') : ''
-  const r = await fetchImage(item.thumb || derived || item.url, fetchImpl)
+  const src = item.thumb || derived || item.url
+  // Cache key is the thumb URL (public, no secret). A hit returns the already-downloaded file → no refetch.
+  const cached = cache?.lookup(src)
+  if (cached) return { url: backgroundImageUrl(cached) }
+  const r = await fetchImage(src, fetchImpl)
   if ('error' in r) return r
   const stored = storeBackgroundFromBytes(r.buf, r.ext)
   if ('error' in stored) return stored
+  cache?.record(src, stored.rel)
   return { url: backgroundImageUrl(stored.rel) }
 }
 

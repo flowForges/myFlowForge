@@ -54,6 +54,7 @@ import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
 import { importCodexPetPack, discoverCodexPets } from '../pet/codexPetImport'
 import { storeBackgroundFromPath, backgroundImageUrl, bgRelFromUrl, gcBackgrounds, resolveBackgroundAbs } from '../appearance/backgroundStore'
+import { makeDiskPreviewCache, previewKeepRels } from '../appearance/previewCache'
 import { listDownloadedFonts, downloadCatalogFont, deleteDownloadedFont } from '../appearance/fontStore'
 import { catalogEntry } from '../../shared/fontCatalog'
 import { nsfwValidate, nsfwCatalog, nsfwPreview, nsfwInstallPet, nsfwInstallBg } from '../nsfw/nsfwService'
@@ -958,7 +959,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if ('error' in stored) return { error: stored.error }
     try {
       const a = readSettings().appearance
-      const keep = new Set([stored.rel, bgRelFromUrl(a.bgImage), bgRelFromUrl(a.homeBgImage)].filter((x): x is string => !!x))
+      const keep = new Set([stored.rel, bgRelFromUrl(a.bgImage), bgRelFromUrl(a.homeBgImage), ...previewKeepRels()].filter((x): x is string => !!x))
       gcBackgrounds(keep)
     } catch { /* GC is best-effort; a leftover file is harmless */ }
     return { url: backgroundImageUrl(stored.rel) }
@@ -988,9 +989,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // License-gated extra content. All requests go through the user's configured proxy and carry the
   // locally-stored activation code (settings.nsfwCode); the Worker holds the real keys + image bytes.
   const nsfwFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback
+  // Shared preview cache: a persistent url-key → on-disk-file index so re-opening Settings returns the
+  // already-downloaded thumbnails with NO network — the fix for "every open re-hits the Cloudflare Worker
+  // per thumbnail". Shared across NSFW + built-in wallpaper previews (both store under backgrounds/).
+  const previewCache = makeDiskPreviewCache()
   ipcMain.handle(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
   ipcMain.handle(CH.nsfwCatalog, () => nsfwCatalog(readSettings().nsfwCode, nsfwFetch()))
-  ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, readSettings().nsfwCode, nsfwFetch()))
+  ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, readSettings().nsfwCode, nsfwFetch(), previewCache))
   ipcMain.handle(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, readSettings().nsfwCode, nsfwFetch()))
   ipcMain.handle(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, readSettings().nsfwCode, nsfwFetch()))
   // Does the local file behind a forge-bg:// URL still exist? (An installed extra bg may have been
@@ -1005,7 +1010,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // and stored on disk like any uploaded background. No activation code, no Worker (so no Worker quota).
   const wallpaperFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback (also used by pet packs)
   ipcMain.handle(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
-  ipcMain.handle(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch()))
+  ipcMain.handle(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch(), previewCache))
   ipcMain.handle(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
 
   // Downloadable pet packs — same public jsDelivr pipeline as wallpapers, no activation code.

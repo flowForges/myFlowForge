@@ -66,6 +66,15 @@ describe('nsfwPreview', () => {
     const f = fakeFetch(() => ({ ok: false, status: 404 }))
     expect(await nsfwPreview('pet', 'x', 'CODE', f)).toEqual({ error: '下载失败(404)' })
   })
+  it('a preview-cache HIT returns the cached file with ZERO network (no Cloudflare request)', async () => {
+    let fetches = 0
+    const f: NsfwFetch = async () => { fetches++; return { ok: true, status: 200, json: async () => ({}), arrayBuffer: async () => new ArrayBuffer(0), headers: { get: () => 'image/jpeg' } } }
+    // cache keyed by the Worker PATH (not the ?key= URL) — see nsfwPreview.
+    const cache = { lookup: (k: string) => (k === 'content/bg/ns01' ? 'cached123.jpg' : null), record: () => {} }
+    const r = await nsfwPreview('bg', 'ns01', 'CODE', f, cache)
+    expect(r).toEqual({ url: 'forge-bg://img/cached123.jpg' })
+    expect(fetches).toBe(0)                    // ← the whole point: no re-download on re-open
+  })
 })
 
 describe('install error paths (no file writes)', () => {
