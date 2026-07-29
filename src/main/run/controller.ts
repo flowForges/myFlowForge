@@ -8,7 +8,7 @@ import type { AgentProvider, ConfirmReq, InputReq } from '../agents/types'
 import type { ArtifactRef } from './runTypes'
 import type { DevelopProject } from './runTypes'
 import type { RunStore } from './runStore'
-import { initMachine, markRunning, currentStage, jumpBack, type RunPlan, type MachineState } from './machine'
+import { initMachine, markRunning, currentStage, jumpBack, type RunPlan, type MachineState, type StagePlan } from './machine'
 import { applyGateDecision, type GateDecision, type LaneDecision } from './decisions'
 import { addEvent, removeEvent, findEvent, type RunEvent } from './events'
 import { addFeedback, editFeedback, removeFeedback, drainFeedback, type FeedbackDraft } from './feedback'
@@ -19,6 +19,7 @@ import { saveControllerState } from './persist'
 import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault, parkTempBranch as parkTempBranchDefault, popRunStash as popRunStashDefault } from './tempBranch'
 import { startBridge as startBridgeDefault, type BridgeRunCtx, type ForgeBridge } from '../mcp/forgeBridge'
 import { composeRunDigest, runRunSummary } from './runSummary'
+import { runGateAnswer } from './gateAnswer'
 import { isLensReviewStage, composeReviewReport, lensDirective } from './reviewFanout'
 import type { ReviewLens } from '@shared/types'
 import { hooksAfter, hookLaneId, buildHookPrompt } from './hooks'
@@ -90,7 +91,15 @@ export interface RunControllerDeps {
   // at genuine full-plan completion (start()), never on abort/failure — so most existing controller
   // tests (which abort or don't complete every stage) never reach it and need no summarize dep.
   summarize?: (input: RunSummaryInput) => Promise<string>
+  // 工作流交互 (gate Q&A): injectable so controller tests can answer a gate question deterministically
+  // without a real provider.chat. Defaults to runGateAnswer over the run's ROOT stage provider/model.
+  // Called only when a user resolves a gate with an `ask` decision — answers the question, then the
+  // gate is re-raised (no stage re-run).
+  answerGate?: (input: GateAnswerInput) => Promise<string>
 }
+// Input handed to RunControllerDeps.answerGate — the current stage's doc + the user's question + the
+// run's task seed and root provider/model/cwd/env (mirrors RunSummaryInput's shape).
+export interface GateAnswerInput { stageName: string; doc: string; question: string; task?: string; provider?: AgentProvider; model: string; cwd: string; env: NodeJS.ProcessEnv }
 // Input handed to RunControllerDeps.summarize — the deterministic digest of every lane's reported
 // outcome plus the run's driving provider/model/cwd/env, so an injected stub can ignore the provider
 // entirely and the default just forwards to runRunSummary.
@@ -533,6 +542,26 @@ export class RunController {
     } catch {
       return digest
     }
+  }
+
+  /**
+   * 工作流交互 (gate Q&A): answer a user's question at a review gate with a one-shot over the ROOT
+   * provider — WITHOUT re-running the stage — then emit the Q&A as an `answer` event so the renderer
+   * shows it inline. The caller (the gate loop) re-raises the SAME gate afterward. Best-effort in every
+   * direction (runGateAnswer never throws; an injected stub is try/caught) so a failed answer just shows
+   * a fallback and keeps the gate open, never aborting the run.
+   */
+  private async answerGateQuestion(stage: StagePlan, doc: string, question: string): Promise<void> {
+    let answer = ''
+    try {
+      const root = this.plan.stages[0]
+      const provider = root ? this.deps.providers[root.provider] : undefined
+      const answerGate = this.deps.answerGate
+        ?? ((i: GateAnswerInput) => runGateAnswer(i.provider, { stageName: i.stageName, doc: i.doc, question: i.question, task: i.task, model: i.model, cwd: i.cwd, env: i.env }))
+      answer = await answerGate({ stageName: stage.name, doc, question, task: this.deps.task, provider, model: root?.model ?? '', cwd: this.workspacePath(), env: this.deps.env })
+    } catch { answer = '' }
+    const id = this.makeId('answer')
+    this.emitEvent({ id, kind: 'answer', stageKey: stage.key, stageName: stage.name, question, body: answer.trim() || '（暂时没能生成回答，可以再问一次，或改用「打回本阶段」补充说明后重跑。）' })
   }
 
   /**
@@ -997,12 +1026,19 @@ export class RunController {
           const body = stageProducesDoc
             ? savedRefs.map((r) => { try { return `## ${basename(r.path)}\n\n${readFileSync(r.path, 'utf8')}` } catch { return r.path } }).join('\n\n---\n\n')
             : savedRefs.map((r) => r.path).join('\n')
-          const id = this.makeId('gate')
           this.status = 'awaiting'
-          const p = this.gateR.create(id)
-          this.emitEvent({ id, kind: 'gate', stageKey: stg.key, stageName: stg.name, body, docs: savedRefs, producesDoc: stageProducesDoc })
-          const d = await p
-          this.drop(id)
+          // 工作流交互: same ask-loop as the normal gate — answer a question + re-raise without re-running.
+          let d: GateDecision
+          for (;;) {
+            const id = this.makeId('gate')
+            const p = this.gateR.create(id)
+            this.emitEvent({ id, kind: 'gate', stageKey: stg.key, stageName: stg.name, body, docs: savedRefs, producesDoc: stageProducesDoc })
+            d = await p
+            this.drop(id)
+            if (this.aborted) break
+            if (d.type === 'ask') { await this.answerGateQuestion(stg, body, d.question); continue }
+            break
+          }
           if (this.aborted) break
           if (d.type === 'redo') {
             // Loop back and re-run THIS stage with the feedback — the one case a re-run IS wanted.
@@ -1167,7 +1203,6 @@ export class RunController {
       // (see below).
       let d: GateDecision
       if (stage.gate) {
-        const id = this.makeId('gate')
         // ②多镜头CR: a lens-mode review stage's gate body IS the consolidated多视角 report (grouped by
         // lens verdict — see reviewFanout.composeReviewReport), so the user sees every视角's finding in
         // one place before 通过/打回. Every other gated stage keeps the plain artifact-path list.
@@ -1180,12 +1215,21 @@ export class RunController {
             ? refs.map((r) => { try { return `## ${basename(r.path)}\n\n${readFileSync(r.path, 'utf8')}` } catch { return r.path } }).join('\n\n---\n\n')
             : refs.map((r) => r.path).join('\n')
         this.status = 'awaiting'
-        const p = this.gateR.create(id)
-        // Fix wave 1 (review): carry `producesDoc` onto the event so the renderer can title a frozen
-        // producesDoc gate with the short stage name instead of the full plan `body` (see events.ts).
-        this.emitEvent({ id, kind: 'gate', stageKey: stage.key, stageName: stage.name, body, docs: refs, producesDoc: stageProducesDoc })
-        d = await p
-        this.drop(id)
+        // 工作流交互: loop the gate so an `ask` reply answers the user's question (one-shot over the root
+        // provider — seconds, no stage re-run) and RE-RAISES the same gate. Every other decision breaks
+        // out and is handled below. `ask` deliberately does NOT bump the machine round or set a directive.
+        for (;;) {
+          const id = this.makeId('gate')
+          const p = this.gateR.create(id)
+          // Fix wave 1 (review): carry `producesDoc` onto the event so the renderer can title a frozen
+          // producesDoc gate with the short stage name instead of the full plan `body` (see events.ts).
+          this.emitEvent({ id, kind: 'gate', stageKey: stage.key, stageName: stage.name, body, docs: refs, producesDoc: stageProducesDoc })
+          d = await p
+          this.drop(id)
+          if (this.aborted) break
+          if (d.type === 'ask') { await this.answerGateQuestion(stage, body, d.question); continue }
+          break
+        }
         if (this.aborted) {
           // force-settled by a concurrent lane abort; don't advance the machine. The doubt
           // resolvers above were created BEFORE this gate and share the same abort-triggered

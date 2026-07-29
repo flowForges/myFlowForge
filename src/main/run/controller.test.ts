@@ -282,6 +282,30 @@ describe('RunController', () => {
     expect(final.machine.stages[0].round).toBe(1)
   })
 
+  it('gate ask: answers the question via a one-shot and re-raises the SAME gate — WITHOUT re-running the stage', async () => {
+    const store = new RunStore(ws, 'r1')
+    const base = okProvider()
+    let runs = 0
+    const countingProvider: AgentProvider = { ...base, run(task, cb) { runs++; return base.run(task, cb, {}) } }
+    const answers: string[] = []
+    let gateCount = 0
+    const c = new RunController(plan, {
+      providers: { x: countingProvider }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+      // deterministic one-shot answerer — proves the ask path answers without touching a real provider.chat
+      answerGate: async (i) => `解释:${i.question}`,
+    })
+    c.onEvent((e) => {
+      if (e.kind === 'answer') answers.push(e.body)
+      if (e.kind === 'gate') { gateCount++; c.resolveGate(e.id, gateCount === 1 ? { type: 'ask', question: '这个待澄清项是什么意思' } : { type: 'advance' }) }
+    })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    expect(gateCount).toBe(2)                                   // gate raised → answered → re-raised
+    expect(answers).toEqual(['解释:这个待澄清项是什么意思'])       // the AI's answer was emitted as an event
+    expect(final.machine.stages[0].round).toBe(0)              // NOT a redo — the design stage never bumped a round
+    expect(runs).toBe(1 + projects.length)                     // design ran ONCE (+ per-project develop) — no re-run
+  })
+
   it('a lane onConfirm raises an auth event; authorize resumes it', async () => {
     const store = new RunStore(ws, 'r1')
     const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }

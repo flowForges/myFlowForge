@@ -33,7 +33,9 @@ export interface FrozenRunCard {
   // ever CONSTRUCTED directly as a FrozenRunCard (WorkspaceView's appendSummaryCard) the instant a run
   // reaches terminal 'ok', carrying the run's "本次运行总结" in `body`. Rendered by RunEventCard's
   // frozen branch as a read-only summary card (no decision line).
-  kind: RunEvent['kind'] | 'aborted' | 'summary'
+  // 'answer' events (gate Q&A) are informational and live-only — they carry no resolver and are never
+  // frozen into history — so they're excluded here (a frozen card is never kind 'answer').
+  kind: Exclude<RunEvent['kind'], 'answer'> | 'aborted' | 'summary'
   stageKey: string
   title: string
   body?: string

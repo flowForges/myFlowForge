@@ -4,6 +4,11 @@ export type GateDecision =
   | { type: 'advance' }
   | { type: 'redo'; feedback?: string }
   | { type: 'jumpBack'; targetKey: string; feedback?: string }
+  // 工作流交互: the user is ASKING a question about this stage's output (not supplementing/approving) —
+  // e.g. "这个待澄清项是什么意思？". The controller answers it with a one-shot over the ROOT provider
+  // (gateAnswer.ts) and re-raises the SAME gate, WITHOUT re-running the stage. Never routed through
+  // applyGateDecision (no machine transform — the stage stays put); handled directly in the gate loop.
+  | { type: 'ask'; question: string }
   // P4-3: resolves the run-completion "收尾确认" gate (a GateEvent with `finalize: true` — see
   // events.ts). `merge` → mergeTempBranch every participating project onto its target branch;
   // `discard` → discardTempBranch instead. Never routed through applyGateDecision's per-stage
@@ -46,5 +51,8 @@ export function applyGateDecision(s: MachineState, d: GateDecision): MachineStat
     // unreachable no-ops kept only so this switch stays exhaustive.
     case 'merge': return s
     case 'discard': return s
+    // 'ask' is answered + re-raised in the gate loop, never applied to the machine — no-op here so the
+    // switch stays exhaustive.
+    case 'ask': return s
   }
 }

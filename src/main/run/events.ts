@@ -20,8 +20,13 @@ export interface FailureEvent { id: string; kind: 'failure'; laneId: string; sta
 // problem/fix). Carried through so the renderer can special-case it the same way it already does for
 // `finalize`.
 export interface GateEvent { id: string; kind: 'gate'; stageKey: string; stageName: string; body: string; docs?: ArtifactRef[]; finalize?: boolean; producesDoc?: boolean }
+// 工作流交互: the answer to a user's gate question (GateDecision `ask`). Purely informational — it carries
+// no resolver (unlike gate/auth/question/doubt); the controller emits it, then re-raises the gate. The
+// renderer (RunEventCard) shows it as a Q&A card so the user sees their question + the AI's reply inline,
+// with the same gate still open below for them to then 通过/打回/再问.
+export interface AnswerEvent { id: string; kind: 'answer'; stageKey: string; stageName: string; question: string; body: string }
 
-export type RunEvent = AuthEvent | QuestionEvent | DoubtEvent | FailureEvent | GateEvent
+export type RunEvent = AuthEvent | QuestionEvent | DoubtEvent | FailureEvent | GateEvent | AnswerEvent
 
 export function addEvent(inbox: RunEvent[], e: RunEvent): RunEvent[] {
   return [...inbox, e]

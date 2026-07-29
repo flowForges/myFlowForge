@@ -111,10 +111,27 @@ describe('RunEventCard', () => {
     const onGate = vi.fn()
     const event: RunEvent = { id: 'g2', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: 'x' }
     render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
-    const fb = screen.getByPlaceholderText('补充说明（可选，打回/回退时附带）')
+    const fb = screen.getByPlaceholderText(/补充说明（打回\/回退时附带）/)
     fireEvent.change(fb, { target: { value: '再调整一下接口命名' } })
     fireEvent.click(screen.getByText('打回本阶段'))
     expect(onGate).toHaveBeenCalledWith('g2', { type: 'redo', feedback: '再调整一下接口命名' })
+  })
+
+  it('gate: 问 AI（不重跑）sends an ask decision with the typed question — no stage re-run', () => {
+    const onGate = vi.fn()
+    const event: RunEvent = { id: 'g3', kind: 'gate', stageKey: 'design', stageName: '技术方案设计', body: 'x' }
+    render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
+    const fb = screen.getByPlaceholderText(/或在此输入问题/)
+    fireEvent.change(fb, { target: { value: '待澄清项3是什么意思' } })
+    fireEvent.click(screen.getByText('问 AI（不重跑）'))
+    expect(onGate).toHaveBeenCalledWith('g3', { type: 'ask', question: '待澄清项3是什么意思' })
+  })
+
+  it('renders an answer event (gate Q&A) as a read-only card showing the question + answer', () => {
+    const event: RunEvent = { id: 'a1', kind: 'answer', stageKey: 'design', stageName: '技术方案设计', question: '这是什么意思', body: '意思是……' }
+    render(<RunEventCard event={event} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.getByText(/这是什么意思/)).toBeTruthy()
+    expect(screen.getByText(/意思是/)).toBeTruthy()
   })
 
   it('gate: 回退到某阶段 only offers EARLIER stages (not the current one, NOT later ones — that would be a skip) and sends jumpBack with the picked key', () => {

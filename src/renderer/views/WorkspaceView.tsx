@@ -80,6 +80,8 @@ function captureRunCardTitle(event: RunEvent): string {
       if (event.finalize) return '全部完成，收尾确认'
       if (event.producesDoc) return event.stageName || '技术方案已就绪'
       return event.body
+    // 'answer' is live-only (never frozen), but the switch stays exhaustive over RunEvent['kind'].
+    case 'answer': return event.question
   }
 }
 
@@ -92,6 +94,9 @@ function describeGateDecision(d: GateDecision): string {
     // P4-3: resolves the run-completion finalize gate (see RunEventCard's finalize branch).
     case 'merge': return '合并并完成'
     case 'discard': return '丢弃本次'
+    // 'ask' never freezes a gate (the gate stays open after answering), so this label is only for
+    // exhaustiveness — the frozen "决定：" line never shows it.
+    case 'ask': return '向 AI 提问'
   }
 }
 function describeLaneDecision(d: LaneDecision): string {
@@ -696,7 +701,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const at = Date.now()
     const ts = runCardFirstSeenRef.current[event.id] ?? at
     const frozen: FrozenRunCard = {
-      id: event.id, kind: event.kind, stageKey: event.stageKey,
+      // freezeRunCard is only ever called for a resolvable event (gate/auth/question/doubt/failure) —
+      // never an informational 'answer' — so the cast is safe (FrozenRunCard.kind excludes 'answer').
+      id: event.id, kind: event.kind as FrozenRunCard['kind'], stageKey: event.stageKey,
       title: captureRunCardTitle(event), decision, at, ts,
       // P4-3: only meaningful for kind 'gate' — preserved into the frozen record so RunEventCard
       // still labels it "收尾确认" (not "阶段评审") once the live event is gone from inbox.

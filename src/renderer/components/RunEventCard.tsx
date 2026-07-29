@@ -91,6 +91,7 @@ function kindLabel(kind: RunEvent['kind'] | 'aborted' | 'summary', finalize?: bo
     case 'failure': return '阶段执行失败'
     case 'aborted': return '运行已终止'
     case 'summary': return '本次运行总结'
+    case 'answer': return '答疑'
   }
 }
 
@@ -197,7 +198,7 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
             <div className="wfo-act">
               <div className="wfo-goal">
                 <textarea
-                  placeholder="补充说明（可选，打回/回退时附带）"
+                  placeholder="补充说明（打回/回退时附带）· 或在此输入问题后点「问 AI」，让 AI 直接解答、不重跑本阶段"
                   value={feedback}
                   onChange={(e) => setFeedback(e.target.value)}
                   rows={2}
@@ -219,6 +220,14 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
               ) : null}
               <div className="arow">
                 <button className="wfo-btn pri" onClick={() => onGate(event.id, { type: 'advance' })}>通过</button>
+                {/* 工作流交互:把上面文本框里的内容当成一个「问题」直接让 AI 解答,不重跑本阶段(几秒 vs 十几分钟)。
+                    留空时禁用。答案会以一张答疑卡出现在本门上方,门保持打开,可继续追问/通过/打回。 */}
+                <button
+                  className="wfo-btn ghost"
+                  disabled={!feedback.trim()}
+                  title="把文本框里的内容作为问题,让 AI 直接解答,不重新执行本阶段"
+                  onClick={() => onGate(event.id, { type: 'ask', question: feedback.trim() })}
+                >问 AI（不重跑）</button>
                 <button className="wfo-btn ghost" onClick={() => onGate(event.id, { type: 'redo', feedback: fb() })}>打回本阶段</button>
                 {jumpBackStages.length > 0 && (showJumpForm ? (
                   <button
@@ -288,6 +297,15 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
             <div className="arow">
               <button className="wfo-btn pri" onClick={() => onLane(event.id, { type: 'answer', value: answer })}>提交</button>
             </div>
+          </div>
+        )}
+
+        {event.kind === 'answer' && (
+          // 工作流交互: the AI's answer to a gate question (GateDecision `ask`). Informational, no buttons —
+          // the gate itself is re-raised below it so the user can keep asking / 通过 / 打回.
+          <div className="wfo-act">
+            <div className="am" style={{ opacity: 0.8 }}>问：{event.question}</div>
+            {event.body ? <div className="req-plan"><Markdown text={event.body} /></div> : null}
           </div>
         )}
       </div>
