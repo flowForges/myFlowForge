@@ -129,6 +129,35 @@ describe('Markdown', () => {
     // the continuation text must not leak out as a raw paragraph
     expect(container.querySelectorAll('p')).toHaveLength(0)
   })
+  it('keeps a pipe inside an inline code span from creating extra columns', () => {
+    // AI output describing syntax: a cell with `a | b` (spaced pipe in backticks).
+    // The pipe is INSIDE code, not a column separator — must stay 2 columns.
+    const { container } = render(
+      <Markdown text={'| 语法 | 说明 |\n| --- | --- |\n| `a | b` | 或 |'} />,
+    )
+    const table = container.querySelector('table')!
+    expect(table.querySelectorAll('thead th')).toHaveLength(2)
+    const cells = table.querySelectorAll('tbody tr td')
+    expect(cells).toHaveLength(2)                       // NOT 3 (extra column bug)
+    expect(cells[0].querySelector('code')?.textContent).toBe('a | b')
+    expect(cells[1].textContent).toBe('或')
+  })
+  it('keeps two pipes inside inline code from creating two extra columns', () => {
+    const { container } = render(
+      <Markdown text={'| 语法 | 说明 |\n| --- | --- |\n| `x | y | z` | 三段 |'} />,
+    )
+    const cells = container.querySelectorAll('tbody tr td')
+    expect(cells).toHaveLength(2)                       // NOT 4
+    expect(cells[0].querySelector('code')?.textContent).toBe('x | y | z')
+  })
+  it('treats an escaped pipe (\\|) as a literal cell character, not a separator', () => {
+    const { container } = render(
+      <Markdown text={'| a | b |\n| --- | --- |\n| c \\| d | e |'} />,
+    )
+    const cells = container.querySelectorAll('tbody tr td')
+    expect(cells).toHaveLength(2)
+    expect(cells[0].textContent).toBe('c | d')
+  })
   it('does NOT treat a pipe line without a separator row as a table (paragraph)', () => {
     const out = html('| a | b | c |')
     expect(out).not.toContain('<table>')

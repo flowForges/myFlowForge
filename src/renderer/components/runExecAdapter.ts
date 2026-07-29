@@ -149,6 +149,7 @@ function buildFanoutAgents(
   // outcomes/liveLanes/memory) still shows a card per selected project instead of the panel's
   // "暂无代码项目在此阶段运行" empty state (which should now only fire when no project was selected
   // at all — see the dedup loop below, which just unions everything by first-seen order).
+  const projectMeta = new Map((state.projects ?? []).map((p) => [p.name, p]))
   const selectedProjects = (state.projects ?? []).map((p) => p.name)
   const present = [...selectedProjects, ...memory.keys(), ...outcomeByProject.keys(), ...liveByProject.keys()]
   const ordered: string[] = []
@@ -178,8 +179,12 @@ function buildFanoutAgents(
 
     // `||` (not `??`) for the same reason as buildRootAgent above — a resumed `done` stage's
     // placeholder outcome carries '' for provider/model/cwd, not absent (P-C2/T1 review Finding 2).
-    const provider = outcome?.order.provider || sp.provider
-    const model = outcome?.order.model || sp.model
+    // Before a lane settles (pending/running) there's no outcome and LiveLane carries no provider, so
+    // fall back to the run's PER-PROJECT choice (state.projects) — the qoder the user picked in the
+    // launch gate — BEFORE the stage default (sp.provider), else the panel mislabels the lane.
+    const meta = projectMeta.get(project)
+    const provider = outcome?.order.provider || meta?.provider || sp.provider
+    const model = outcome?.order.model || meta?.model || sp.model
     const cwd = live?.cwd || outcome?.order.cwd || prior?.cwd
     const timing = state.laneTimings?.[laneId]
 

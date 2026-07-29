@@ -180,12 +180,27 @@ export function renderMarkdown(text: string): ReactNode {
     const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
     if (line.includes('|') && i + 1 < lines.length && SEP.test(lines[i + 1])) {
       flushPara()
-      // Split a table row on '|', trim, and drop empty cells from outer pipes.
+      // Split a table row into cells on the '|' that are REAL column boundaries —
+      // not the pipes inside an inline `code span` and not an escaped `\|`. A naive
+      // raw.split('|') shatters a cell like `a | b` (spaced pipe in backticks) into
+      // extra columns; GFM also lets `\|` stand for a literal pipe. So walk the row,
+      // tracking code spans, and break only on unescaped, non-code pipes.
       const splitRow = (raw: string): string[] => {
-        const cells = raw.split('|').map(c => c.trim())
-        if (cells.length && cells[0] === '') cells.shift()
-        if (cells.length && cells[cells.length - 1] === '') cells.pop()
-        return cells
+        const cells: string[] = []
+        let cur = ''
+        let inCode = false
+        for (let p = 0; p < raw.length; p++) {
+          const ch = raw[p]
+          if (!inCode && ch === '\\' && raw[p + 1] === '|') { cur += '|'; p++; continue }
+          if (ch === '`') { inCode = !inCode; cur += ch; continue }
+          if (ch === '|' && !inCode) { cells.push(cur); cur = ''; continue }
+          cur += ch
+        }
+        cells.push(cur)
+        const trimmed = cells.map(c => c.trim())
+        if (trimmed.length && trimmed[0] === '') trimmed.shift()
+        if (trimmed.length && trimmed[trimmed.length - 1] === '') trimmed.pop()
+        return trimmed
       }
       const header = splitRow(line)
       i += 2 // skip header + separator

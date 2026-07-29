@@ -247,6 +247,35 @@ describe('buildStageRuntimes', () => {
     expect(develop.agents[0].state).toBe('wait')
   })
 
+  // The panel must show the user's PER-PROJECT provider choice (from state.projects) on a lane that
+  // hasn't settled an outcome yet — while pending/running there is no outcome, so a naive
+  // `outcome?.order.provider || sp.provider` fallback mislabels the lane with the stage default
+  // (the reported bug: chose qoder, panel showed the develop stage's default provider).
+  it('labels a not-yet-settled per-project lane with its selected provider, not the stage default', () => {
+    const pendingState = baseState({
+      machine: {
+        plan: baseState().machine.plan,
+        stages: [
+          { key: 'assess', status: 'done', round: 0 },
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'running', round: 0 },
+          { key: 'review', status: 'pending', round: 0 },
+        ],
+        currentIndex: 2,
+      },
+      outcomes: {},
+      liveLanes: {},
+      // develop stage default provider is 'codex' (see baseState); user chose 'qoder' for this project.
+      projects: [
+        { name: 'go-blog-backend', cwd: '/ws/go-blog-backend', provider: 'qoder', model: 'qoder-pro' },
+      ],
+    })
+    const develop = buildStageRuntimes(pendingState, {}).find((s) => s.key === 'develop')!
+    expect(develop.agents).toHaveLength(1)
+    expect(develop.agents[0].provider).toBe('qoder')     // NOT 'codex' (the stage default)
+    expect(develop.agents[0].model).toBe('qoder-pro')
+  })
+
   // A per-project stage with NO selected projects at all (state.projects empty/absent) is the only
   // case that should still fall through to the "暂无代码项目" empty state.
   it('still shows an empty agents list for a per-project stage when state.projects is genuinely empty', () => {
