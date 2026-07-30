@@ -172,7 +172,8 @@ export function renderMarkdown(text: string): ReactNode {
       i++
       while (i < lines.length && !/^```\s*$/.test(lines[i])) { body.push(lines[i]); i++ }
       i++ // skip closing fence
-      blocks.push(<CodeBlock key={`pre${key++}`} code={body.join('\n')} lang={fence[1] || undefined} />)
+      // 修图10:空代码块(body 全空白)不渲染——LLM 常在结尾多输出一个空围栏,渲染成"1 行"空块很干扰。
+      if (body.join('').trim()) blocks.push(<CodeBlock key={`pre${key++}`} code={body.join('\n')} lang={fence[1] || undefined} />)
       continue
     }
     // GFM table: a header row with a pipe, immediately followed by a separator

@@ -35,6 +35,11 @@ describe('Markdown', () => {
     expect(container.querySelector('.code-block pre > code')?.textContent).toBe('func main() {}')
     expect(container.querySelector('.cb-lang')?.textContent).toBe('go')   // info-string shown as label
   })
+  it('drops an empty fenced code block (LLM trailing ``` noise, 修图10)', () => {
+    const { container } = render(<Markdown text={'方案结尾。\n\n```\n\n```'} />)
+    expect(container.querySelector('.code-block')).toBeNull()   // empty block not rendered
+    expect(container.textContent).toContain('方案结尾。')
+  })
   it('gives each code block a copy button that copies the exact source', async () => {
     const writeText = vi.fn(() => Promise.resolve())
     Object.assign(navigator, { clipboard: { writeText } })
