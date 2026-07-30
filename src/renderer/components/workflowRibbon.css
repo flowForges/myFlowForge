@@ -1,0 +1,57 @@
+/* P2.3 工作流状态条:钉在对话区顶部。紫色调区别普通会话;执行中转 accent;完成转静默。 */
+.wf-ribbon {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: color-mix(in srgb, #8b5cf6 16%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, #8b5cf6 40%, transparent);
+  backdrop-filter: saturate(1.2);
+}
+.wf-ribbon.executing {
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  border-bottom-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.wf-ribbon.done {
+  background: color-mix(in srgb, var(--muted) 12%, var(--bg));
+  border-bottom-color: color-mix(in srgb, var(--muted) 30%, transparent);
+}
+.wf-ribbon-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #8b5cf6;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #8b5cf6 30%, transparent);
+  flex: 0 0 auto;
+}
+.wf-ribbon.executing .wf-ribbon-dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); animation: wf-pulse 1.4s ease-in-out infinite; }
+.wf-ribbon.done .wf-ribbon-dot { background: var(--muted); box-shadow: none; }
+@keyframes wf-pulse { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
+.wf-ribbon-name { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-ribbon-sep { opacity: .4; }
+.wf-ribbon-stage b { font-weight: 700; color: #8b5cf6; }
+.wf-ribbon.executing .wf-ribbon-stage b { color: var(--accent); }
+.wf-ribbon-prov { opacity: .75; }
+.wf-ribbon-spacer { flex: 1 1 auto; }
+.wf-ribbon-exec { opacity: .8; font-style: italic; }
+.wf-ribbon-next {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 7px;
+  border: 1px solid color-mix(in srgb, #8b5cf6 55%, transparent);
+  background: #8b5cf6; color: #fff;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.wf-ribbon-next:hover:not(:disabled) { filter: brightness(1.08); }
+.wf-ribbon-next:disabled { opacity: .45; cursor: not-allowed; }
+.wf-ribbon-next-ic { width: 13px; height: 13px; display: inline-flex; }
+.wf-ribbon-next-ic svg { width: 100%; height: 100%; }
+.wf-ribbon-exit {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px;
+  border: none; background: transparent; color: var(--muted); cursor: pointer;
+}
+.wf-ribbon-exit:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--fg); }
+.wf-ribbon-exit svg { width: 13px; height: 13px; }
