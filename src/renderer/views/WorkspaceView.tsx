@@ -158,7 +158,6 @@ interface WorkspaceInfo {
   // already returns this (ensureWorkspaceWorkflows guarantees it); optional here only for callers that
   // predate multi-workflow support.
   workflows?: WsWorkflow[];
-  autoDecide?: boolean;
 }
 
 interface WorkspaceViewProps {

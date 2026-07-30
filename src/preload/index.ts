@@ -76,7 +76,6 @@ const api = {
   sessionClose: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.sessionClose, a),
   sessionRename: (a: { workspacePath: string; sessionId: string; title: string }) => ipcRenderer.invoke(CH.sessionRename, a),
   sessionSetPermission: (a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => ipcRenderer.invoke(CH.sessionSetPermission, a),
-  wsSetAutoDecide: (a: { workspacePath: string; value: boolean }) => ipcRenderer.invoke(CH.wsSetAutoDecide, a),
   chatSwitchSummary: (a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => ipcRenderer.invoke(CH.chatSwitchSummary, a),
   chatSummarizeRequirement: (a: { workspacePath: string; sessionId: string; agent: string; model: string }): Promise<string> => ipcRenderer.invoke(CH.chatSummarizeRequirement, a),
   // P1-5: persist a confirmed launch-gate's frozen record onto the session (see WorkspaceView's

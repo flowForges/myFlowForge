@@ -336,12 +336,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
   ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
   ipcMain.handle(CH.workspaceScanRepos, (_e, path: string) => scanRepos(path))
-  // 「工作流自动启动」per-workspace 开关:写入 workspace.json,渲染层 WorkspaceView.onPickWorkflow 读取
-  // 以决定选工作流后是否弹确认门(LaunchGateCard)。
-  ipcMain.handle(CH.wsSetAutoDecide, (_e, a: { workspacePath: string; value: boolean }) => {
-    const ws = readWorkspace(a.workspacePath)
-    if (ws) writeWorkspace({ ...ws, autoDecide: a.value })
-  })
+  // P4.1(2026-07-30):wsSetAutoDecide 已删除(autoDecide 随提案门一并废除)。
   ipcMain.handle(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
     setStageModel(a.path, a.stageKey, a.provider, a.model)
   })

@@ -97,8 +97,6 @@ interface Props {
       is kept PER key, so switching session/workspace hides this draft there and restores it on return —
       instead of one shared draft leaking across every session. */
   /** 「允许 LLM 自行决策」(per-workspace):开=工作流不弹选择门,主代理自填门决策直接启动。 */
-  autoDecide?: boolean
-  onToggleAutoDecide?: () => void
   draftKey?: string
   /** Set while a workflow run is active. Puts the composer in QUEUE mode (NOT hard-disabled): the user
       can still type and send — the message queues on the main side and runs after the workflow finishes.

@@ -483,7 +483,6 @@ export const WorkspaceSchema = z.object({
   // 「工作流自动启动」:开 = 从 / 菜单选工作流后不弹确认门(LaunchGateCard),直接用默认配置(默认工作流/
   // 全部项目/默认模型)启动;关(缺省/false)= 弹确认门等用户确认。per-workspace。消费点在渲染层
   // WorkspaceView.onPickWorkflow + 自动确认 effect。不影响子代理改代码的权限(那由权限盾牌管)。
-  autoDecide: z.boolean().optional(),
 })
 export type Workspace = z.infer<typeof WorkspaceSchema>
 

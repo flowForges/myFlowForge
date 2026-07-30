@@ -57,7 +57,6 @@ export const CH = {
   sessionClose: 'session:close',
   sessionRename: 'session:rename',
   sessionSetPermission: 'session:set-permission',
-  wsSetAutoDecide: 'workspace:set-auto-decide',
   chatSwitchSummary: 'chat:switch-summary',
   chatSummarizeRequirement: 'chat:summarize-requirement',
   // P1-5: persist a confirmed launch-gate's frozen record onto the session (synthetic ChatMessage
