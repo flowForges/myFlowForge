@@ -15,7 +15,11 @@ describe('planToStageViews', () => {
   it('maps each StagePlan to a stage view carrying provider/model/permission/scope/preamble', () => {
     const views = planToStageViews(plan)
     expect(views).toHaveLength(3)
-    expect(views[1]).toMatchObject({ key: 'design', provider: 'claude', model: 'opus', scope: 'root', permissionMode: 'readonly', preamble: '出方案' })
+    expect(views[1]).toMatchObject({ key: 'design', provider: 'claude', model: 'opus', scope: 'root', permissionMode: 'readonly' })
+    // root(对话)阶段 preamble = 原 prompt + 对话模式覆盖说明(修图6)
+    expect(views[1].preamble).toContain('出方案')
+    expect(views[1].preamble).toContain('对话模式')
+    // per-project(执行)阶段不加对话说明,保持原样(它们真的有 forge 工具)
     expect(views[2]).toMatchObject({ key: 'develop', scope: 'per-project', preamble: '写代码' })
   })
 })

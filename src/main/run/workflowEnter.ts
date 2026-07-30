@@ -8,6 +8,12 @@ import { isExecutionStage, type WorkflowSessionState, type WorkflowStageView } f
 
 // RunPlan 的每个 StagePlan → 会话视角的 WorkflowStageView。preamble = 该阶段发给 agent 的指令(stage.prompt),
 // 对话阶段进入时一次性注入(见 chatService),扇出阶段作为执行尾段各 lane 的 prompt 基座。
+// 修图6:对话(root)阶段跑在普通聊天里,**没有** forge_write_artifact / forge_handoff 等 MCP 工具(那是
+// 执行阶段的 RunController 子代理才有)。内置阶段 prompt(STAGE_PROMPTS + DOC_DIRECTIVE)却让 agent 去调这些
+// 工具,导致它到处找、找不到、只好写本地文件、并困惑地报告。给对话阶段的角色提示追加一段覆盖说明,明确"对话
+// 模式、无这些工具、直接把交付物完整写在回复里给用户审阅"。执行(per-project)阶段保持原样(它们确实有 forge 工具)。
+const CHAT_MODE_NOTE = '\n\n【本阶段=对话模式】你正与用户直接对话,**没有** forge_write_artifact / forge_handoff 等工具(那是后续"执行"阶段才有)。不要查找或调用它们。请把本阶段的交付物(方案/清单等)**完整写在你的回复正文里**给用户审阅;不要只写进文件或试图"登记"。用户看后会追问或点「下一步」。'
+
 export function planToStageViews(plan: RunPlan): WorkflowStageView[] {
   return plan.stages.map((s) => ({
     key: s.key,
@@ -16,7 +22,7 @@ export function planToStageViews(plan: RunPlan): WorkflowStageView[] {
     model: s.model,
     permissionMode: s.permissionMode,
     scope: s.scope,
-    preamble: s.prompt,
+    preamble: s.scope === 'root' && s.prompt ? s.prompt + CHAT_MODE_NOTE : s.prompt,
   }))
 }
 

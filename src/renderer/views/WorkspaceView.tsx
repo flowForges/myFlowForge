@@ -1190,6 +1190,33 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           runningIds={runningSessionIds}
           usageByProvider={usageByProvider}
         />
+        {/* 修图5:工作流 ribbon 作为对话列的固定头(在滚动区之外),始终吸顶,不随消息滚动。 */}
+        {activeWorkflow ? (() => {
+          const wf = activeWorkflow
+          const stage = wf.stages[wf.currentIndex]
+          const nextStage = wf.stages[wf.currentIndex + 1]
+          // 修图7:不再在对话阶段把按钮叫「开始执行」(让人以为已自动执行);统一为「下一步 · <下一阶段名>」,
+          // 跨 provider 时补注「换 X」。真正的"开始执行"发生在点下一步后的任务简报卡上。
+          const advanceLabel = wf.phase === 'done' ? ''
+            : !nextStage ? '完成工作流'
+            : stage && nextStage.provider !== stage.provider ? `下一步 · ${nextStage.name}（换 ${providerLabel(nextStage.provider)}）`
+            : `下一步 · ${nextStage.name}`
+          return (
+            <WorkflowRibbon
+              flowName={wf.flowName}
+              stageIndex={wf.currentIndex}
+              stageCount={wf.stages.length}
+              stageName={stage?.name ?? ''}
+              provider={providerLabel(stage?.provider ?? '')}
+              phase={wf.phase}
+              advanceDisabled={chat.busy || !!advanceDraft}
+              advanceHint={chat.busy ? '当前有对话在进行，请等它结束' : advanceDraft ? '请先确认或取消上面的交接稿/简报' : undefined}
+              advanceLabel={advanceLabel}
+              onAdvance={onWorkflowAdvance}
+              onExit={onWorkflowExit}
+            />
+          )
+        })() : null}
         {/* P-C2/T3 (disk-resume): a workflow was mid-run when the app last exited/crashed for this
             workspace — offer to continue it (rebuild from the last saved stage on disk) or discard it.
             Never auto-resumes — always asks. Hidden for an archived (read-only) workspace. Reuses the
@@ -1233,31 +1260,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         )}
         <ChatJumpRail messages={visibleMessages} scrollRef={scrollRef} />
         <div className="chat-scroll" ref={scrollRef} onScroll={onChatScroll}>
-          {activeWorkflow ? (() => {
-            const wf = activeWorkflow
-            const stage = wf.stages[wf.currentIndex]
-            const nextStage = wf.stages[wf.currentIndex + 1]
-            const advanceLabel = wf.phase === 'done' ? ''
-              : !nextStage ? '完成工作流'
-              : nextStage.scope === 'per-project' ? '开始执行'
-              : stage && nextStage.provider !== stage.provider ? `下一步 · 换 ${providerLabel(nextStage.provider)}`
-              : '下一步'
-            return (
-              <WorkflowRibbon
-                flowName={wf.flowName}
-                stageIndex={wf.currentIndex}
-                stageCount={wf.stages.length}
-                stageName={stage?.name ?? ''}
-                provider={providerLabel(stage?.provider ?? '')}
-                phase={wf.phase}
-                advanceDisabled={chat.busy || !!advanceDraft}
-                advanceHint={chat.busy ? '当前有对话在进行，请等它结束' : advanceDraft ? '请先确认或取消上面的交接稿/简报' : undefined}
-                advanceLabel={advanceLabel}
-                onAdvance={onWorkflowAdvance}
-                onExit={onWorkflowExit}
-              />
-            )
-          })() : null}
           {archived && <ArchiveNote createdAt={createdAt ?? 0} archivedAt={archivedAt ?? null} />}
           {willUseTextFallback && (
             <div className="ws-archive-note">
