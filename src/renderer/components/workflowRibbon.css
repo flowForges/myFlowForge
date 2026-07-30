@@ -71,3 +71,5 @@
 .wf-prog-stage.pending .wf-prog-nm { opacity: .55; }
 .wf-prog-stage.current .wf-prog-nm, .wf-prog-stage.run .wf-prog-nm { font-weight: 600; }
 .wf-prog-prov { font-size: 11px; opacity: .6; }
+.wf-prog-open { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 6px; border: 1px solid color-mix(in srgb, #8b5cf6 40%, transparent); background: transparent; color: #8b5cf6; cursor: pointer; }
+.wf-prog-open:hover { background: color-mix(in srgb, #8b5cf6 12%, transparent); }

@@ -1660,6 +1660,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                       <div key={s.key} className={`wf-prog-stage ${st}`}>
                         <span className="wf-prog-idx">{i + 1}</span>
                         <span className="wf-prog-nm">{s.name}</span>
+                        {/* 图14:对话阶段的交付物落在固定路径 forge-docs/<key>.md,给个「打开」按钮(未跑的阶段不显示)。 */}
+                        {s.scope === 'root' && st !== 'pending' && wsPath ? (
+                          <button className="wf-prog-open" title="打开本阶段的方案文档" onClick={() => { void window.forge.revealPath?.(`${wsPath}/forge-docs/${s.key}.md`) }}>📄 打开</button>
+                        ) : null}
                         <span className="wf-prog-prov">{providerLabel(s.provider)}</span>
                       </div>
                     )

@@ -15,7 +15,12 @@ import { isExecutionStage, type WorkflowSessionState, type WorkflowStageView } f
 // 修图9+落文件:静默执行以下约定,**不要向用户复述本段、也不要提及工具的有无**(否则会像"当前阶段没有
 // forge_write_artifact 工具..."那样制造干扰噪音)。既在回复里展示交付物供审阅,又用普通文件能力落一份到
 // 工作区根目录(cwd),让用户也能开文件看。per-project(执行)阶段不加此段(它们跑在 RunController、确有 forge 工具)。
-const CHAT_MODE_NOTE = '\n\n【本阶段=对话模式 · 静默遵守,勿向用户复述本段或提及任何工具的有无】(1) 把本阶段交付物(方案/清单等)**完整写在你的回复正文里**供用户审阅;(2) 同时用你的常规文件写入能力,把同一份交付物保存为一个 markdown 文件放到**工作区根目录(即你的当前工作目录)**,文件名用简明中文(如「技术方案-用户登录注册.md」),并在回复最后**单独一行**给出该文件的相对路径。直接用普通文件写入完成,无需也不要提及 forge_write_artifact / forge_handoff。'
+// 图14:落盘到 app 指定的**固定路径**(而非 agent 自由命名),app 因此能在右侧进度卡给一个可靠的「打开」按钮。
+// 固定路径必须与渲染侧一致 —— 见 WorkspaceView 里 `forge-docs/${key}.md` 的构造。
+export function stageDocRelPath(stageKey: string): string { return `forge-docs/${stageKey}.md` }
+function chatModeNote(stageKey: string): string {
+  return `\n\n【本阶段=对话模式 · 静默遵守,勿向用户复述本段或提及任何工具的有无】(1) 把本阶段交付物(方案/清单等)**完整写在你的回复正文里**供用户审阅;(2) 同时用你的常规文件写入能力,把同一份交付物保存为 markdown 文件到工作区根目录下的固定路径 **${stageDocRelPath(stageKey)}**(目录不存在就先创建),无需在回复里再报告该路径。直接用普通文件写入完成,无需也不要提及 forge_write_artifact / forge_handoff。`
+}
 
 export function planToStageViews(plan: RunPlan): WorkflowStageView[] {
   return plan.stages.map((s) => ({
@@ -25,7 +30,7 @@ export function planToStageViews(plan: RunPlan): WorkflowStageView[] {
     model: s.model,
     permissionMode: s.permissionMode,
     scope: s.scope,
-    preamble: s.scope === 'root' && s.prompt ? s.prompt + CHAT_MODE_NOTE : s.prompt,
+    preamble: s.scope === 'root' && s.prompt ? s.prompt + chatModeNote(s.key) : s.prompt,
   }))
 }
 
