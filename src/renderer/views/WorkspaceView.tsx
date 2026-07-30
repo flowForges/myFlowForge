@@ -1648,28 +1648,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             {/* 代理编排 / 对话模式 pane */}
             <div className={`insp-pane${effectiveTab === 'agents' ? ' on' : ''}`} id="pane-agents">
               <div id="mainFlow">
-              {/* 修图8:对话阶段右侧也能看到当前工作流进度(执行阶段有 RunExecPanel,对话阶段此前空)。 */}
-              {activeWorkflow && (
-                <div className="wf-prog">
-                  <div className="wf-prog-h">当前工作流 · {activeWorkflow.flowName}</div>
-                  {activeWorkflow.stages.map((s, i) => {
-                    const st = activeWorkflow.phase === 'done' || i < activeWorkflow.currentIndex ? 'done'
-                      : i === activeWorkflow.currentIndex ? (activeWorkflow.phase === 'executing' ? 'run' : 'current')
-                      : 'pending'
-                    return (
-                      <div key={s.key} className={`wf-prog-stage ${st}`}>
-                        <span className="wf-prog-idx">{i + 1}</span>
-                        <span className="wf-prog-nm">{s.name}</span>
-                        {/* 图14:对话阶段的交付物落在固定路径 forge-docs/<key>.md,给个「打开」按钮(未跑的阶段不显示)。 */}
-                        {s.scope === 'root' && st !== 'pending' && wsPath ? (
-                          <button className="wf-prog-open" title="打开本阶段的方案文档" onClick={() => { void window.forge.revealPath?.(`${wsPath}/forge-docs/${s.key}.md`) }}>📄 打开</button>
-                        ) : null}
-                        <span className="wf-prog-prov">{providerLabel(s.provider)}</span>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
               {run && (
                 <>
                   <div className="orch-note">
@@ -1756,6 +1734,29 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </div>{/* /mainFlow */}
 
               <div id="mainChat">
+                {/* 修图12/图8:当前工作流进度卡。必须放在 #mainChat(聊天模式可见);#mainFlow 在 .inspector.chat
+                    下被 CSS display:none 隐藏,之前放那里所以对话式工作流永远看不到进度。 */}
+                {activeWorkflow && (
+                  <div className="wf-prog">
+                    <div className="wf-prog-h">当前工作流 · {activeWorkflow.flowName}</div>
+                    {activeWorkflow.stages.map((s, i) => {
+                      const st = activeWorkflow.phase === 'done' || i < activeWorkflow.currentIndex ? 'done'
+                        : i === activeWorkflow.currentIndex ? (activeWorkflow.phase === 'executing' ? 'run' : 'current')
+                        : 'pending'
+                      return (
+                        <div key={s.key} className={`wf-prog-stage ${st}`}>
+                          <span className="wf-prog-idx">{i + 1}</span>
+                          <span className="wf-prog-nm">{s.name}</span>
+                          {/* 图14:对话阶段交付物落固定路径 forge-docs/<key>.md,给「打开」按钮(未跑的阶段不显示)。 */}
+                          {s.scope === 'root' && st !== 'pending' && wsPath ? (
+                            <button className="wf-prog-open" title="打开本阶段的方案文档" onClick={() => { void window.forge.revealPath?.(`${wsPath}/forge-docs/${s.key}.md`) }}>📄 打开</button>
+                          ) : null}
+                          <span className="wf-prog-prov">{providerLabel(s.provider)}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
                 {/* 统一「工作流」区:工作区的全部工作流,每个可展开看阶段、每行可直接「启动」(选任意流,不再是
                     硬编码的「当前工作流」),顶部一个「编辑」入口。取代旧的「当前工作流」卡(它只显 workflows[0]、
                     切不了,又和下面的列表重复)。legacy 只有 stages 的旧工作区合成一条展示,避免回归。 */}
