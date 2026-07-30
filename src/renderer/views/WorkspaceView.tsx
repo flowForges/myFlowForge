@@ -854,6 +854,16 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     if (!wsPath || !sessions.activeSessionId) return
     void window.forge.workflowExit({ workspacePath: wsPath, sessionId: sessions.activeSessionId })
   }, [wsPath, sessions.activeSessionId])
+  // 执行尾段 run 走到终态(ok/failed,含 finalize 合并/丢弃已决)→ 把工作流置 done,ribbon 不再卡"执行中"。
+  useEffect(() => {
+    const wf = activeWorkflow
+    if (!wf || wf.phase !== 'executing') return
+    const st = run2.state
+    if (!st || st.machine?.plan?.runId !== wf.runId) return
+    if ((st.status === 'ok' || st.status === 'failed') && wsPath && sessions.activeSessionId) {
+      void window.forge.workflowFinish({ workspacePath: wsPath, sessionId: sessions.activeSessionId })
+    }
+  }, [activeWorkflow?.phase, activeWorkflow?.runId, run2.state?.status, run2.state?.machine?.plan?.runId, wsPath, sessions.activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Imported history: loaded for BOTH a pure read-only imported session AND a session that was
   // "基于此历史继续" (writable but still carries `external`), so the continued chat can show the
   // imported history above a divider — the user keeps the original context inline.

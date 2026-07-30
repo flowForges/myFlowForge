@@ -74,6 +74,8 @@ export const CH = {
   workflowEnter: 'workflow:enter',
   workflowAdvance: 'workflow:advance',
   workflowExit: 'workflow:exit',
+  // finish=执行尾段 run 终态(ok/failed)后把 workflowSession 置 done(ribbon 不再卡在"执行中")。
+  workflowFinish: 'workflow:finish',
   dialogOpenFiles: 'dialog:open-files',
   dialogPickDirectory: 'dialog:pick-directory',
   dialogPickFile: 'dialog:pick-file',

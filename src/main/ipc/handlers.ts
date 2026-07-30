@@ -695,6 +695,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
     return file
   })
+  ipcMain.handle(CH.workflowFinish, (_e, a: { workspacePath: string; sessionId: string }) => {
+    const s = getSession(a.workspacePath, a.sessionId)
+    if (!s?.workflowSession) return readSessions(a.workspacePath)
+    const next: WorkflowSessionState = { ...s.workflowSession, phase: 'done', currentIndex: s.workflowSession.stages.length }
+    const file = setSessionWorkflow(a.workspacePath, a.sessionId, next)
+    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
+    return file
+  })
   ipcMain.handle(CH.sessionContinueFrom, (_e, a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => {
     if (isArchivedWorkspace(a.wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
     const file = continueFrom(a.wsPath, a)
