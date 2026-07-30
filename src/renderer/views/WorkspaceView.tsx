@@ -1742,6 +1742,26 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                   const total = wf.stages.length
                   const cur = Math.min(wf.currentIndex + 1, total)
                   const phaseNote = wf.phase === 'done' ? ' · 已完成' : wf.phase === 'executing' ? ' · 执行中' : ''
+                  // 用户诉求(img20):右侧完全复用执行面板的 AgentNode 卡片。当前对话步 = 正在执行的 agent,
+                  // 把左侧 AI 的最新输出镜像成它的执行日志(重复无妨),并展示该 agent 已加载的 skill/rule/mcp。
+                  const nowIso = new Date().toISOString()
+                  const curAi = [...liveMessages].reverse().find((m) => m.who === 'ai' && !!m.text.trim())
+                  const curLogs = curAi ? curAi.text.split('\n').map((t) => ({ ts: nowIso, text: t, level: 'info' as const })) : []
+                  const wfAgents: import('@shared/types').AgentRuntime[] = wf.stages.map((s, i) => {
+                    const done = wf.phase === 'done' || i < wf.currentIndex
+                    const active = i === wf.currentIndex && wf.phase !== 'done'
+                    const convActive = active && s.scope === 'root'   // 当前对话步:镜像输出 + 上下文
+                    return {
+                      id: `${s.key}:root`,
+                      name: s.name,
+                      role: `第 ${i + 1} 步 · ${s.scope === 'per-project' ? '按项目扇出' : '对话'}`,
+                      provider: s.provider,
+                      model: s.model,
+                      state: done ? 'ok' : active ? 'run' : 'wait',
+                      logs: convActive ? curLogs : [],
+                      context: convActive ? loadedContext : undefined,
+                    }
+                  })
                   return (
                     <div id="wfProgress">
                       <div className="orch-note">
@@ -1749,37 +1769,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         <span>当前工作流 <b>{wf.flowName}</b> · 第 <b>{cur}</b>/{total} 步{phaseNote}</span>
                       </div>
                       <div className="pipe">
-                        {wf.stages.map((s, i) => {
-                          const done = wf.phase === 'done' || i < wf.currentIndex
-                          const active = i === wf.currentIndex && wf.phase !== 'done'
-                          const stateCls = done ? 'st-ok' : active ? 'st-run' : 'st-wait'
-                          const stateLabel = done ? '完成' : active ? (wf.phase === 'executing' ? '执行中' : '进行中') : '等待'
-                          return (
-                            <div key={s.key} className="agent-node">
-                              <div className={`agent-card${active ? ' run' : ''}`}>
-                                <div className="agent-top">
-                                  <div className="agent-ic">
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
-                                  </div>
-                                  <div className="agent-meta">
-                                    <span className="agent-name">{s.name}</span>
-                                    <span className="agent-role">第 {i + 1} 步 · {s.scope === 'per-project' ? '按项目扇出' : '单代理对话'}</span>
-                                    <span className="agent-model" title={s.provider}>
-                                      <span className={`prov-badge p-${s.provider}`}><span className={`prov-dot p-${s.provider}`} />{providerLabel(s.provider)}</span>
-                                    </span>
-                                  </div>
-                                  <span className={`agent-state ${stateCls}`}>
-                                    {active ? <span className="agent-bolt" aria-hidden="true">⚡</span> : <span className="d" />}
-                                    {stateLabel}
-                                  </span>
-                                  {s.scope === 'root' && (done || active) && wsPath ? (
-                                    <button className="wf-prog-open" title="打开本阶段的方案文档" onClick={() => { void window.forge.revealPath?.(`${wsPath}/forge-docs/${s.key}.md`) }}>📄 打开</button>
-                                  ) : null}
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
+                        {wfAgents.map((rt) => <AgentNode key={rt.id} agent={rt} />)}
                       </div>
                     </div>
                   )
