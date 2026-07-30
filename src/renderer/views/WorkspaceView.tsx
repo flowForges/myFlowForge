@@ -6,6 +6,7 @@ import { DEFAULT_PERMISSION_MODE, type PermissionMode } from '@shared/permission
 import { AgentNode } from '../components/AgentNode'
 import { HookNode } from '../components/HookNode'
 import { WorkflowGlance } from '../components/WorkflowGlance'
+import { WorkflowRibbon } from '../components/WorkflowRibbon'
 import type { Plugin } from '@shared/plugin'
 import { ReqCard } from '../components/ReqCard'
 import { PlanCard } from '../components/PlanCard'
@@ -501,7 +502,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     setLaunchGates((prev) => prev.map((g) => (g.id === id ? { ...g, config, error: undefined } : g)))
     const sid = sessions.activeSessionId
     const createdTs = launchGates.find((g) => g.id === id)?.ts
-    void run2.start(cfg).then(() => {
+    // 对话式工作流(2026-07-30):启动不再自动跑完整个工作流,而是把配置固化成 session 上的 WorkflowSessionState,
+    // 进入"阶段0对话态"(顶部 ribbon + 下一步驱动)。执行尾段在推进到扇出阶段时才由 workflow:advance 启动。
+    void window.forge.workflowEnter(cfg).then(() => {
       const workflowName = config.workflows.find((w) => w.id === config.selectedWorkflowId)?.name ?? config.selectedWorkflowId
       const decidedAt = Date.now()
       const frozen: LaunchGateFrozen = {
@@ -828,6 +831,29 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // permission facet — agent/model stay as seeded.
   // Per-session permission is restored by the unified selection effect above (on session switch).
   const activePerm = activeSession?.permissionMode ?? DEFAULT_PERMISSION_MODE
+  // 对话式工作流(2026-07-30):当前会话的工作流状态,驱动顶部 ribbon 与 composer 的阶段偏置。
+  const activeWorkflow = activeSession?.workflowSession
+  // 停在对话阶段时,把 composer 的 provider/model/权限偏置到当前阶段配置(切阶段即"换挡")。切阶段
+  // (currentIndex/phase 变化)会重跑;value-equal 短路避免无谓 re-render。用户手动切 provider 不会被
+  // 覆盖(依赖项不含 selection,且只在阶段变化时触发)。
+  useEffect(() => {
+    if (!wsPath) return
+    const wf = activeWorkflow
+    if (!wf || wf.phase !== 'chatting') return
+    const stage = wf.stages[wf.currentIndex]
+    if (!stage) return
+    const next = { agentId: stage.provider, modelId: stage.model, permissionMode: (stage.permissionMode ?? DEFAULT_PERMISSION_MODE) }
+    selForRef.current = { ws: wsPath, sid: sessions.activeSessionId }
+    setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode ? prev : next))
+  }, [activeWorkflow?.currentIndex, activeWorkflow?.phase, activeSession?.id, wsPath, sessions.activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  const onWorkflowAdvance = useCallback(() => {
+    if (!wsPath || !sessions.activeSessionId) return
+    void window.forge.workflowAdvance({ workspacePath: wsPath, sessionId: sessions.activeSessionId })
+  }, [wsPath, sessions.activeSessionId])
+  const onWorkflowExit = useCallback(() => {
+    if (!wsPath || !sessions.activeSessionId) return
+    void window.forge.workflowExit({ workspacePath: wsPath, sessionId: sessions.activeSessionId })
+  }, [wsPath, sessions.activeSessionId])
   // Imported history: loaded for BOTH a pure read-only imported session AND a session that was
   // "基于此历史继续" (writable but still carries `external`), so the continued chat can show the
   // imported history above a divider — the user keeps the original context inline.
@@ -1163,6 +1189,31 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         )}
         <ChatJumpRail messages={visibleMessages} scrollRef={scrollRef} />
         <div className="chat-scroll" ref={scrollRef} onScroll={onChatScroll}>
+          {activeWorkflow ? (() => {
+            const wf = activeWorkflow
+            const stage = wf.stages[wf.currentIndex]
+            const nextStage = wf.stages[wf.currentIndex + 1]
+            const advanceLabel = wf.phase === 'done' ? ''
+              : !nextStage ? '完成工作流'
+              : nextStage.scope === 'per-project' ? '开始执行'
+              : stage && nextStage.provider !== stage.provider ? `下一步 · 换 ${providerLabel(nextStage.provider)}`
+              : '下一步'
+            return (
+              <WorkflowRibbon
+                flowName={wf.flowName}
+                stageIndex={wf.currentIndex}
+                stageCount={wf.stages.length}
+                stageName={stage?.name ?? ''}
+                provider={providerLabel(stage?.provider ?? '')}
+                phase={wf.phase}
+                advanceDisabled={chat.busy}
+                advanceHint={chat.busy ? '当前有对话在进行，请等它结束' : undefined}
+                advanceLabel={advanceLabel}
+                onAdvance={onWorkflowAdvance}
+                onExit={onWorkflowExit}
+              />
+            )
+          })() : null}
           {archived && <ArchiveNote createdAt={createdAt ?? 0} archivedAt={archivedAt ?? null} />}
           {willUseTextFallback && (
             <div className="ws-archive-note">

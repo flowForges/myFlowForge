@@ -52,6 +52,11 @@ const chatAppendLaunchGateMock = vi.fn(async (_a: {
 const forgeBase = {
   chatHistory: vi.fn(async () => conversation),
   chatAppendLaunchGate: chatAppendLaunchGateMock,
+  // 对话式工作流(2026-07-30):启动门确认改调 workflowEnter(进入对话态),不再自动 run2.launchStart。
+  // cfg 形状与 launchStart 相同,故复用同一个 mock —— 既有断言(次数/cfg/拒绝/run2Live 守卫)原样成立。
+  workflowEnter: launchStartMock,
+  workflowAdvance: vi.fn(async () => ({})),
+  workflowExit: vi.fn(async () => ({})),
   sendChat: vi.fn(async () => ({})), openFiles: async () => [], savePaste: vi.fn(),
   onChatEvent: () => () => {}, onChatQueueEvent: () => () => {},
   sessionList: async () => ({ sessions: [{ id: 's-1', title: '新会话', mode: 'chat', createdAt: 0 }], activeSessionId: 's-1' }),
