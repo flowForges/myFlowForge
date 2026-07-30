@@ -35,6 +35,9 @@ export interface WorkflowSessionState {
   projects: { name: string; provider: string; model: string; permissionMode?: PermissionMode }[]
   supplement?: string
   seed?: string
+  // 已注入过角色提示(preamble)的阶段 index——保证每阶段的角色提示只在进入后的第一轮注入一次,
+  // 而非每轮重复。chatService 读到 currentIndex !== preambleDoneIndex 时注入并回写此值。
+  preambleDoneIndex?: number
 }
 
 export function currentStage(ws: WorkflowSessionState): WorkflowStageView | undefined {

@@ -23,7 +23,11 @@ import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages } from '../chat/chatStore'
 import { mergeLive } from '../chat/liveTurns'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom } from '../chat/sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow } from '../chat/sessionStore'
+import { buildLaunchPlan, buildLaunchProjects, type LaunchStartConfig } from '../run/launch'
+import { buildWorkflowSession, tailLaunchConfig } from '../run/workflowEnter'
+import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
+import { workflowDisplayName } from '../config/schema'
 import { agentSessionsForId } from '../chat/agentSessions'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage } from '@shared/types'
@@ -126,7 +130,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // is declared below (line ~570) but this only fires at run-completion time, long after it's inited.
     onRunDone: (w) => chatQueue.runDone(w),
   })
-  registerRun2({
+  const run2 = registerRun2({
     manager: run2Manager, onInvoke: (ch, h) => ipcMain.handle(ch, h),
     readWorkspace, readWorkflows: () => readWorkflows().workflows, readCustomStages: () => readCustomStages().stages,
   })
@@ -642,6 +646,52 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   ipcMain.handle(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
     const file = setSessionModel(a.workspacePath, a.sessionId, a.agentId, a.modelId)
+    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
+    return file
+  })
+  // 对话式工作流(2026-07-30):enter=把选定工作流配置固化成 session 上的 WorkflowSessionState(停在阶段0,
+  // 不自动跑);advance=推进到下一阶段(跨进扇出阶段时用 run2 的 launchRun 启动执行尾段 run,记下 runId);
+  // exit=清除工作流状态、退回普通会话。全部复用 P1 已打通的 buildLaunchPlan/权限透传。
+  ipcMain.handle(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
+    if (!p.sessionId) throw new Error('workflow:enter 缺少 sessionId')
+    const ws = readWorkspace(p.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
+    const plan = buildLaunchPlan(p, ws, readWorkflows().workflows, readCustomStages().stages)
+    const projects = buildLaunchProjects(p, ws)
+    const wf = ws.workflows.find((w) => w.id === p.workflowId)
+    const session = buildWorkflowSession({
+      flowId: p.workflowId,
+      flowName: workflowDisplayName(wf?.name ?? p.workflowId),
+      plan,
+      projects: projects.map((pr) => ({ name: pr.name, provider: pr.provider ?? '', model: pr.model ?? '', permissionMode: pr.permissionMode })),
+      supplement: p.supplement,
+      seed: p.seed,
+    })
+    const file = setSessionWorkflow(p.workspacePath, p.sessionId, session)
+    broadcast(CH.sessionsChanged, { workspacePath: p.workspacePath, file })
+    return session
+  })
+  ipcMain.handle(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string }) => {
+    const s = getSession(a.workspacePath, a.sessionId)
+    if (!s?.workflowSession) throw new Error('该会话不在工作流中')
+    let next: WorkflowSessionState = advanceWorkflow(s.workflowSession)
+    // Crossing into the fan-out execution tail → kick off ONE RunController run for stages[currentIndex..],
+    // reusing run2's launch kickoff (temp branches + lane cards + finalize + summary). Only if not already started.
+    if (next.phase === 'executing' && !next.runId) {
+      const cfg = tailLaunchConfig(
+        { workspacePath: a.workspacePath, flowId: next.flowId, sessionId: a.sessionId, supplement: next.supplement, seed: next.seed, projects: next.projects },
+        next.stages, next.currentIndex,
+      )
+      const result = await run2.launchRun(cfg)
+      const runId = result?.status === 'started' ? result.state.machine.plan.runId : undefined
+      next = { ...next, runId }
+    }
+    const file = setSessionWorkflow(a.workspacePath, a.sessionId, next)
+    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
+    return next
+  })
+  ipcMain.handle(CH.workflowExit, (_e, a: { workspacePath: string; sessionId: string }) => {
+    const file = setSessionWorkflow(a.workspacePath, a.sessionId, undefined)
     broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
     return file
   })

@@ -101,7 +101,10 @@ export function registerRun2(deps: {
   // so buildLaunchPlan can resolve the global-template fallback for a workflow whose stashed
   // ws.workflows[].stages is empty — otherwise the picker (buildLaunchInfo, which DOES resolve this
   // fallback) would preview stages that then throw "没有可执行阶段" on confirm.
-  onInvoke(CH.run2LaunchStart, async (_e, p: LaunchStartConfig) => {
+  // Extracted so the conversational-workflow advance handler (handlers.ts, workflow:advance) can reuse
+  // the EXACT same kickoff (buildLaunchPlan + temp branches + manager.start) for the execution tail —
+  // returned from registerRun2 below. run2:launch-start remains a thin wrapper over it.
+  const launchRun = async (p: LaunchStartConfig) => {
     if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:launch-start)')
     // P4-2 review fix: Run2Manager.start() ENQUEUES (doesn't throw) a second run for a workspace that
     // already has one active — but createRunTempBranches below runs REAL `git checkout -b` on each
@@ -148,7 +151,8 @@ export function registerRun2(deps: {
     // downstream stage (技术方案设计, 开发…) whose upstream requirement stage failed/degraded loses the
     // original ask entirely and sees only a "完成" fallback. `|| undefined` so an empty launch emits no seed.
     return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, task: launchTaskSeed(p) || undefined, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash })
-  })
+  }
+  onInvoke(CH.run2LaunchStart, (_e, p: LaunchStartConfig) => launchRun(p))
 
   // Dirty-tree pre-check for the launch gate: which of the workspace's projects have uncommitted
   // changes? Read-only. A dirty tree no longer blocks a run (it's stashed + restored), but the gate
@@ -259,4 +263,7 @@ export function registerRun2(deps: {
       return { error: String(err) }
     }
   })
+
+  // Handle for handlers.ts's conversational-workflow advance path to reuse the RunController kickoff.
+  return { launchRun }
 }

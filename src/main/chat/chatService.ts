@@ -15,7 +15,7 @@ import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgen
 import { scanGlobalContext } from '../agents/globalContext'
 import { homedir } from 'node:os'
 import { readInstalledSkills } from '../skills/installedSkills'
-import { getSession, setSessionMemPromoted } from './sessionStore'
+import { getSession, setSessionMemPromoted, setSessionWorkflow } from './sessionStore'
 import { providerSupportsResume, providerResumeReliable } from '../agents/resumeSupport'
 import { logDebug } from '../log/appLog'
 import { perfSpan } from '../perf/perfSpans'
@@ -111,7 +111,19 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       // 按标题作答/丢历史" bug). Re-feed the clamped local history as a safety net.
       contPre = buildLocalHistoryPreamble(ws, sid)
     }
-    const promptText = [contPre, preamble, payload.text].filter(Boolean).join('\n')
+    // 对话式工作流:进入某个对话阶段后的第一轮,一次性注入该阶段的"角色提示"(preamble),告诉 agent
+    // 现在在做哪一步、直到用户点"下一步"才换阶段。注入到 promptText 而非 payload.text,保持存档干净;
+    // 用 preambleDoneIndex 记账,保证每阶段只注入一次(不每轮重复)。
+    let stagePre = ''
+    const wfs = meta?.workflowSession
+    if (wfs && wfs.phase === 'chatting') {
+      const stage = wfs.stages[wfs.currentIndex]
+      if (stage && wfs.currentIndex !== wfs.preambleDoneIndex) {
+        stagePre = `【工作流「${wfs.flowName}」· 第 ${wfs.currentIndex + 1}/${wfs.stages.length} 步:${stage.name}】\n${stage.preamble ?? ''}\n（本阶段内你都在与用户就这一步对话、按需迭代；用户点「下一步」才进入下一阶段，届时会另行告知。）`
+        setSessionWorkflow(ws, sid, { ...wfs, preambleDoneIndex: wfs.currentIndex })
+      }
+    }
+    const promptText = [stagePre, contPre, preamble, payload.text].filter(Boolean).join('\n')
 
     const userMsg: ChatMessage = {
       id: mkId('u'), who: 'user', text: payload.text,

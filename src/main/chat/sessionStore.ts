@@ -133,6 +133,18 @@ export function setSessionModel(wsPath: string, sessionId: string, agentId: stri
   return data
 }
 
+// 对话式工作流:把 WorkflowSessionState 固化到 session(enter/advance 后调用),或传 undefined 清除(exit)。
+export function setSessionWorkflow(wsPath: string, sessionId: string, workflowSession?: import('@shared/workflowSession').WorkflowSessionState): SessionsFile {
+  const data = readSessions(wsPath)
+  const s = data.sessions.find(x => x.id === sessionId)
+  if (s) {
+    if (workflowSession) { s.workflowSession = workflowSession; s.mode = 'workflow' }
+    else { delete s.workflowSession; s.mode = 'chat' }
+    write(wsPath, data)
+  }
+  return data
+}
+
 // Auto-name a still-default session from its first user instruction (called by chatService).
 export function autoNameIfDefault(wsPath: string, sessionId: string, text: string): void {
   const data = readSessions(wsPath)

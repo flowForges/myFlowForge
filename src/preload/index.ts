@@ -94,6 +94,10 @@ const api = {
   notifyTest: (): Promise<{ supported: boolean }> => ipcRenderer.invoke(CH.notifyTest),
   sessionSetModel: (a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => ipcRenderer.invoke(CH.sessionSetModel, a),
   sessionContinueFrom: (a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => ipcRenderer.invoke(CH.sessionContinueFrom, a),
+  // 对话式工作流(2026-07-30):进入/推进/退出。enter 收启动门同款配置(LaunchStartConfig 结构),返回 WorkflowSessionState。
+  workflowEnter: (cfg: { workspacePath: string; workflowId: string; projects: { name: string; provider: string; model: string; permissionMode?: import('@shared/permissions').PermissionMode }[]; supplement: string; seed: string; sessionId?: string; stages?: { key: string; enabled: boolean; provider?: string; model?: string; perProject?: boolean; permissionMode?: import('@shared/permissions').PermissionMode }[]; hooks?: { id: string; enabled: boolean }[] }) => ipcRenderer.invoke(CH.workflowEnter, cfg),
+  workflowAdvance: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.workflowAdvance, a),
+  workflowExit: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.workflowExit, a),
   agentSessionIds: (workspacePath: string, sessionId: string) => ipcRenderer.invoke(CH.sessionAgentIds, { workspacePath, sessionId }),
   chatResolve: (a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> }; workspacePath: string }) => ipcRenderer.invoke(CH.chatResolve, a),
   openFiles: () => ipcRenderer.invoke(CH.dialogOpenFiles),

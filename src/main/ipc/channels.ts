@@ -69,6 +69,11 @@ export const CH = {
   notifyTest: 'notify:test',
   sessionSetModel: 'session:set-model',
   sessionAgentIds: 'session:agent-ids',
+  // 对话式工作流(2026-07-30):enter=把某工作流配置固化成 session 上的 WorkflowSessionState(不自动跑);
+  // advance=推进到下一阶段(跨到扇出阶段时启动执行尾段 run);exit=退出工作流清除状态。
+  workflowEnter: 'workflow:enter',
+  workflowAdvance: 'workflow:advance',
+  workflowExit: 'workflow:exit',
   dialogOpenFiles: 'dialog:open-files',
   dialogPickDirectory: 'dialog:pick-directory',
   dialogPickFile: 'dialog:pick-file',

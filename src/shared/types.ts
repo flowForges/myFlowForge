@@ -283,6 +283,9 @@ export interface ChatSession {
   continuedFrom?: { source: SourceId; externalId: string }
   // Per-session agent permission (sandbox) scope, remembered across switches. Absent = default 'auto'.
   permissionMode?: import('./permissions').PermissionMode
+  // 对话式工作流(2026-07-30):本 session 若在某个工作流里,记下轻量 WorkflowSessionState(阶段/进度/
+  // provider 配置/执行尾段 runId)。缺省=普通会话,不在工作流里。见 shared/workflowSession.ts。
+  workflowSession?: import('./workflowSession').WorkflowSessionState
   // The coding agent + model this session last used. Remembered PER SESSION so each session keeps its
   // own choice (and switching sessions restores it) instead of one workspace-wide selection leaking.
   agentId?: string
