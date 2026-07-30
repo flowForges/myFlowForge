@@ -153,6 +153,24 @@ describe('buildLaunchPlan + buildLaunchProjects (P1-4 launch gate start)', () =>
     expect(() => buildLaunchPlan({ ...cfg, workflowId: 'nope' }, ws)).toThrow()
   })
 
+  // P1.2: the gate's per-stage / per-project permission choice reaches the plan and the develop lanes.
+  it('threads per-stage and per-project permissionMode into the plan and fan-out', () => {
+    const plan = buildLaunchPlan({
+      ...cfg,
+      projects: [{ name: 'api', provider: 'codex', model: 'g2', permissionMode: 'full' }],
+      stages: [{ key: 'develop', enabled: true, permissionMode: 'readonly' }],
+    }, ws)
+    const projects = buildLaunchProjects({
+      ...cfg,
+      projects: [{ name: 'api', provider: 'codex', model: 'g2', permissionMode: 'full' }],
+    }, ws)
+    const develop = plan.stages.find((s) => s.key === 'develop')!
+    expect(develop.permissionMode).toBe('readonly') // per-stage choice on the plan
+    expect(projects[0].permissionMode).toBe('full')  // per-project choice on the DevelopProject
+    const orders = buildWorkOrders({ stage: develop, workspacePath: ws.path, projects, upstream: [], buildPrompt: () => 'x' })
+    expect(orders[0].permissionMode).toBe('full') // project override wins over the stage's readonly
+  })
+
   // #3: gate stage on/off — an unchecked stage is dropped from the plan (not merely hinted in the supplement).
   it('drops stages the gate unchecked (enabled:false) from the plan', () => {
     const plan = buildLaunchPlan({ ...cfg, stages: [{ key: 'design', enabled: false }, { key: 'develop', enabled: true }] }, ws)

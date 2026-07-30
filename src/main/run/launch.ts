@@ -168,7 +168,7 @@ export interface LaunchStartConfig {
   // just the ones the user checked. Threading these into the develop (code) stage's fan-out is what
   // fixes the known gap where startWorkflow dropped the per-project override and fell back to the
   // workflow's default agent/model (see buildLaunchProjects below).
-  projects: { name: string; provider: string; model: string }[]
+  projects: { name: string; provider: string; model: string; permissionMode?: PermissionMode }[]
   // Free-text supplementary instructions the user typed into the gate, alongside...
   supplement: string
   // ...`seed`: the user's latest raw chat message — the run's "ground truth" anchor (mirrors the
@@ -191,7 +191,7 @@ export interface LaunchStartConfig {
   // for toggle-eligible stages — true → force scope 'per-project' (one agent per project), false → force
   // 'root' (single). Absent (undefined) for every other stage so its own scope default is left untouched
   // (critical: sending false for develop/design would wrongly collapse their per-project fan-out to root).
-  stages?: { key: string; enabled: boolean; provider?: string; model?: string; perProject?: boolean }[]
+  stages?: { key: string; enabled: boolean; provider?: string; model?: string; perProject?: boolean; permissionMode?: PermissionMode }[]
   // Per-hook on/off from the gate (see LaunchInfo.hooks). Unchecked hooks are dropped from the run.
   // Keyed by plugin id; a hook id absent here defaults to enabled. Omitted → all hooks run (old behavior).
   hooks?: { id: string; enabled: boolean }[]
@@ -266,6 +266,8 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
       gate: s.gate,
       prompt,
       review: s.review, // ②多镜头CR: honor the review stage's fan-out config (per-lens reviewers)
+      // P1.2: the gate's per-stage permission choice → StageSpec → StagePlan → fanout per-lane resolution.
+      permissionMode: choice?.permissionMode,
     }
   })
   // ③stage hooks: thread the workspace's woven hooks (ws.plugins) + run-end (__wf) step hooks — minus any
@@ -282,7 +284,7 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
 // `p.provider || stage.provider` / `p.model || stage.model` per project, so a selected project's own
 // choice here now wins over the develop stage's default agent.
 export function buildLaunchProjects(cfg: LaunchStartConfig, ws: Workspace): DevelopProject[] {
-  return cfg.projects.map((p) => ({ name: p.name, cwd: join(ws.path, p.name), provider: p.provider, model: p.model }))
+  return cfg.projects.map((p) => ({ name: p.name, cwd: join(ws.path, p.name), provider: p.provider, model: p.model, permissionMode: p.permissionMode }))
 }
 
 // P4-2: at run START (before any lane executes), every participating project's worktree gets checked
