@@ -1734,29 +1734,56 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </div>{/* /mainFlow */}
 
               <div id="mainChat">
-                {/* 修图12/图8:当前工作流进度卡。必须放在 #mainChat(聊天模式可见);#mainFlow 在 .inspector.chat
-                    下被 CSS display:none 隐藏,之前放那里所以对话式工作流永远看不到进度。 */}
-                {activeWorkflow && (
-                  <div className="wf-prog">
-                    <div className="wf-prog-h">当前工作流 · {activeWorkflow.flowName}</div>
-                    {activeWorkflow.stages.map((s, i) => {
-                      const st = activeWorkflow.phase === 'done' || i < activeWorkflow.currentIndex ? 'done'
-                        : i === activeWorkflow.currentIndex ? (activeWorkflow.phase === 'executing' ? 'run' : 'current')
-                        : 'pending'
-                      return (
-                        <div key={s.key} className={`wf-prog-stage ${st}`}>
-                          <span className="wf-prog-idx">{i + 1}</span>
-                          <span className="wf-prog-nm">{s.name}</span>
-                          {/* 图14:对话阶段交付物落固定路径 forge-docs/<key>.md,给「打开」按钮(未跑的阶段不显示)。 */}
-                          {s.scope === 'root' && st !== 'pending' && wsPath ? (
-                            <button className="wf-prog-open" title="打开本阶段的方案文档" onClick={() => { void window.forge.revealPath?.(`${wsPath}/forge-docs/${s.key}.md`) }}>📄 打开</button>
-                          ) : null}
-                          <span className="wf-prog-prov">{providerLabel(s.provider)}</span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
+                {/* 修图12/图8/图20:当前工作流进度。必须放 #mainChat(聊天模式可见,#mainFlow 被 .inspector.chat
+                    display:none 隐藏)。复用执行面板的富卡片样式(.orch-note/.pipe/.agent-node/.agent-card)——
+                    每个阶段一张带边框卡:终端图标 + 阶段名 + provider chip + 状态(当前⚡/完成/等待);对话阶段跑过的带📄打开。 */}
+                {activeWorkflow && (() => {
+                  const wf = activeWorkflow
+                  const total = wf.stages.length
+                  const cur = Math.min(wf.currentIndex + 1, total)
+                  const phaseNote = wf.phase === 'done' ? ' · 已完成' : wf.phase === 'executing' ? ' · 执行中' : ''
+                  return (
+                    <div id="wfProgress">
+                      <div className="orch-note">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
+                        <span>当前工作流 <b>{wf.flowName}</b> · 第 <b>{cur}</b>/{total} 步{phaseNote}</span>
+                      </div>
+                      <div className="pipe">
+                        {wf.stages.map((s, i) => {
+                          const done = wf.phase === 'done' || i < wf.currentIndex
+                          const active = i === wf.currentIndex && wf.phase !== 'done'
+                          const stateCls = done ? 'st-ok' : active ? 'st-run' : 'st-wait'
+                          const stateLabel = done ? '完成' : active ? (wf.phase === 'executing' ? '执行中' : '进行中') : '等待'
+                          return (
+                            <div key={s.key} className="agent-node">
+                              <div className={`agent-card${active ? ' run' : ''}`}>
+                                <div className="agent-top">
+                                  <div className="agent-ic">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></svg>
+                                  </div>
+                                  <div className="agent-meta">
+                                    <span className="agent-name">{s.name}</span>
+                                    <span className="agent-role">第 {i + 1} 步 · {s.scope === 'per-project' ? '按项目扇出' : '单代理对话'}</span>
+                                    <span className="agent-model" title={s.provider}>
+                                      <span className={`prov-badge p-${s.provider}`}><span className={`prov-dot p-${s.provider}`} />{providerLabel(s.provider)}</span>
+                                    </span>
+                                  </div>
+                                  <span className={`agent-state ${stateCls}`}>
+                                    {active ? <span className="agent-bolt" aria-hidden="true">⚡</span> : <span className="d" />}
+                                    {stateLabel}
+                                  </span>
+                                  {s.scope === 'root' && (done || active) && wsPath ? (
+                                    <button className="wf-prog-open" title="打开本阶段的方案文档" onClick={() => { void window.forge.revealPath?.(`${wsPath}/forge-docs/${s.key}.md`) }}>📄 打开</button>
+                                  ) : null}
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })()}
                 {/* 统一「工作流」区:工作区的全部工作流,每个可展开看阶段、每行可直接「启动」(选任意流,不再是
                     硬编码的「当前工作流」),顶部一个「编辑」入口。取代旧的「当前工作流」卡(它只显 workflows[0]、
                     切不了,又和下面的列表重复)。legacy 只有 stages 的旧工作区合成一条展示,避免回归。 */}
