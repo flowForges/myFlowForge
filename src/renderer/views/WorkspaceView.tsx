@@ -1686,11 +1686,28 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         const note = activeWorkflow.phase === 'done'
                           ? '工作流已完成 · 所有阶段已走完'
                           : `对话阶段 · 第 ${cur}/${total} 步，在左侧会话区与当前 provider 对话推进`
+                        // 把左侧会话区当前 AI 的实时输出镜像成当前对话阶段卡的「执行过程」(img20 诉求:执行
+                        // 过程也输出、随左侧流式更新)。scanContext 负责真实的 skill/rule/mcp chips。
+                        const curStage = activeWorkflow.stages[activeWorkflow.currentIndex]
+                        let logsOverride: Record<string, import('../../main/run/controller').RunLogLine[]> | undefined
+                        if (activeWorkflow.phase !== 'done' && curStage?.scope === 'root') {
+                          const curAi = [...liveMessages].reverse().find((m) => m.who === 'ai' && !!m.text.trim())
+                          if (curAi) {
+                            const laneId = `${curStage.key}:root`
+                            logsOverride = {
+                              [laneId]: curAi.text.split('\n').map((text) => ({
+                                laneId, stageKey: curStage.key, agentName: curStage.name,
+                                line: { ts: '', text, level: 'info' as const, kind: 'output' as const },
+                              })),
+                            }
+                          }
+                        }
                         return (
                           <RunExecPanel
                             staticState={toWorkflowProgressState(activeWorkflow, wsPath ?? '')}
                             titleOverride={`工作流 · ${activeWorkflow.flowName}`}
                             statusOverride={note}
+                            logsOverride={logsOverride}
                             onViewLog={onViewAgentLog}
                           />
                         )

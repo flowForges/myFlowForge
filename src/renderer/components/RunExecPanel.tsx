@@ -103,7 +103,12 @@ const STAGE_STATE_CLS: Record<string, string> = { run: 'run', ok: 'ok', err: 'er
 // `statusOverride` is set, the header shows `titleOverride` as its title, hides the branch chip, and
 // renders a single read-only status line (statusOverride) with no run-control buttons. Everything
 // below the head (`.wfo-flow` staged pipe + AgentNode cards) is byte-for-byte the same beta.16 style.
-export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, titleOverride, statusOverride }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean; onViewLog?: (agentId: string, agentName: string) => void; titleOverride?: string; statusOverride?: string }): ReactElement {
+// `logsOverride`: staticState-only lane-log injection. A conversational-workflow stage has no run2
+// lane-log stream, but the user wants the right card to mirror the LEFT chat's live AI output as the
+// stage's 执行过程 (same as img20). WorkspaceView builds `{ '<stageKey>:root': RunLogLine[] }` from the
+// current AI message and passes it here; it replaces the empty `{}` the staticState path otherwise
+// uses. Ignored for a live run2 (which has its own real laneLogs).
+export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, titleOverride, statusOverride, logsOverride }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean; onViewLog?: (agentId: string, agentName: string) => void; titleOverride?: string; statusOverride?: string; logsOverride?: Record<string, import('../../main/run/controller').RunLogLine[]> }): ReactElement {
   // Per-stage `project -> last-known LaneMemory` so a fan-out lane never disappears once observed
   // (see runExecAdapter's LaneMemory doc). Reset whenever the run identity changes.
   const memoryRef = useRef<Map<string, Map<string, LaneMemory>>>(new Map())
@@ -125,7 +130,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
 
   // A historical run has no live lane-log stream — an empty laneLogs just means each agent card
   // shows its final output only, no scrolling "recent activity" lines, which is correct for replay.
-  const laneLogs = staticState ? {} : (run2?.laneLogs ?? {})
+  const laneLogs = staticState ? (logsOverride ?? {}) : (run2?.laneLogs ?? {})
   const stages = state ? buildStageRuntimes(state, laneLogs, memoryRef.current) : []
   const allAgentIds = stages.flatMap((s) => s.agents.map((a) => a.id))
   const runningIds = stages.flatMap((s) => s.agents.filter((a) => a.state === 'run').map((a) => a.id))
