@@ -878,11 +878,24 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     if (!nxt || (nxt.scope !== 'per-project' && nxt.provider === cur?.provider)) {
       void window.forge.workflowAdvance({ workspacePath: wsPath, sessionId: sid }); return
     }
-    // 进入执行(扇出)→ 每项目可编辑任务简报,用需求原文预填。
+    // 进入执行(扇出)→ 每项目可编辑任务简报。预填 = 蒸馏本会话对话(需求评审 + 技术方案设计两阶段
+    // 达成的结论,以最新为准),而非原始需求那一句话 —— 否则扇出的 agent 只拿到最初一句、不知道方案定了
+    // 什么,技术方案白做。蒸馏期间 loading,拿到后填进每个项目(用户再逐项目编辑);失败回退原 seed
+    // (不劣于旧行为)。
     if (nxt.scope === 'per-project') {
-      const briefs: Record<string, string> = {}
-      for (const p of wf.projects) briefs[p.name] = wf.seed ?? ''
-      setAdvanceDraft({ mode: 'briefs', handoff: '', briefs, loading: false }); return
+      const empty: Record<string, string> = {}
+      for (const p of wf.projects) empty[p.name] = ''
+      setAdvanceDraft({ mode: 'briefs', handoff: '', briefs: empty, loading: true })
+      const fill = (text: string) => setAdvanceDraft((d) => {
+        if (!d || d.mode !== 'briefs') return d
+        const briefs: Record<string, string> = {}
+        for (const p of wf.projects) briefs[p.name] = text
+        return { ...d, briefs, loading: false }
+      })
+      void Promise.resolve(window.forge.chatSummarizeRequirement?.({ workspacePath: wsPath, sessionId: sid, agent: cur?.provider ?? '', model: cur?.model ?? '' }))
+        .then((sum: string | undefined) => fill((sum && sum.trim()) ? sum.trim() : (wf.seed ?? '')))
+        .catch(() => fill(wf.seed ?? ''))
+      return
     }
     // 跨 provider 的对话阶段推进 → 由"当前"provider 蒸馏交接稿,用户可编辑。
     setAdvanceDraft({ mode: 'handoff', handoff: '', briefs: {}, loading: true })

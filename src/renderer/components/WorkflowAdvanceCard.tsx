@@ -41,13 +41,19 @@ export function WorkflowAdvanceCard({
         ) : (
           <>
             <div className="wf-adv-hint">每个项目要做什么，改成你想要的；这会作为该项目执行 agent 的首要指令。</div>
-            {briefs.map((b) => (
-              <div key={b.project} className="wf-adv-brief">
-                <div className="wf-adv-brief-nm">{b.project}</div>
-                <textarea className="wf-adv-ta" rows={3} value={b.text} placeholder={`${b.project} 要做的…`} onChange={(e) => onChangeBrief(b.project, e.target.value)} />
-              </div>
-            ))}
-            {briefs.length === 0 ? <div className="wf-adv-hint">（没有选定的执行项目）</div> : null}
+            {loading ? (
+              <div className="wf-adv-loading"><span className="wf-adv-spin" />正在把技术方案整理成各项目任务简报…</div>
+            ) : (
+              <>
+                {briefs.map((b) => (
+                  <div key={b.project} className="wf-adv-brief">
+                    <div className="wf-adv-brief-nm">{b.project}</div>
+                    <textarea className="wf-adv-ta" rows={3} value={b.text} placeholder={`${b.project} 要做的…`} onChange={(e) => onChangeBrief(b.project, e.target.value)} />
+                  </div>
+                ))}
+                {briefs.length === 0 ? <div className="wf-adv-hint">（没有选定的执行项目）</div> : null}
+              </>
+            )}
           </>
         )}
       </div>
