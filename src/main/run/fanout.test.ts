@@ -102,6 +102,20 @@ describe('buildWorkOrders · per-lane permission (项目 > 阶段 > 运行级)',
   })
 })
 
+describe('buildWorkOrders · per-project brief (D4)', () => {
+  it('prepends a project brief to that lane prompt as highest-priority instruction', () => {
+    const orders = buildWorkOrders({
+      stage: devStage, workspacePath: '/ws',
+      projects: [{ name: 'a', cwd: '/ws/a', brief: '先做登录幂等' }, { name: 'b', cwd: '/ws/b' }],
+      upstream: [], buildPrompt,
+    })
+    expect(orders[0].prompt).toContain('本项目任务简报')
+    expect(orders[0].prompt).toContain('先做登录幂等')
+    expect(orders[0].prompt).toContain('stage=develop proj=a') // base prompt still present after the brief
+    expect(orders[1].prompt).toBe('stage=develop proj=b')      // no brief → unchanged
+  })
+})
+
 describe('runStage', () => {
   it('one failing lane does not sink the siblings', async () => {
     const input: StageInput = {

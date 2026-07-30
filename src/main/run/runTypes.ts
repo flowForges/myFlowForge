@@ -57,7 +57,7 @@ export interface StageSpec { key: string; name: string; provider: string; model:
 // design. The rest stay at the workspace root. An explicit `spec.scope` overrides the default.
 const DEFAULT_STAGE_SCOPE: Record<string, StageScope> = { develop: 'per-project' }
 export function stageScope(spec: StageSpec): StageScope { return spec.scope ?? DEFAULT_STAGE_SCOPE[spec.key] ?? 'root' }
-export interface DevelopProject { name: string; cwd: string; provider?: string; model?: string; permissionMode?: PermissionMode }
+export interface DevelopProject { name: string; cwd: string; provider?: string; model?: string; permissionMode?: PermissionMode; brief?: string }
 export interface StartRunOpts {
   runId: string
   workspaceName: string

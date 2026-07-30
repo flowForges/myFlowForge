@@ -41,12 +41,17 @@ export function buildWorkOrders(input: StageInput): WorkOrder[] {
       permissionMode: stagePerm,
     }]
   }
-  return projects.map((p) => ({
-    id: `${stage.key}:${p.name}`, stageKey: stage.key, name: stage.name, project: p.name,
-    provider: p.provider || stage.provider, model: p.model || stage.model, cwd: p.cwd,
-    prompt: buildPrompt({ stageKey: stage.key, project: p.name, cwd: p.cwd, upstream }),
-    permissionMode: p.permissionMode ?? stagePerm,
-  }))
+  return projects.map((p) => {
+    const base = buildPrompt({ stageKey: stage.key, project: p.name, cwd: p.cwd, upstream })
+    // D4(2026-07-30):进入执行前用户为该项目编辑的"任务简报",作为该 lane 的最高优先指令前置到 prompt。
+    const prompt = p.brief && p.brief.trim() ? `【本项目任务简报（以此为准）】\n${p.brief.trim()}\n\n${base}` : base
+    return {
+      id: `${stage.key}:${p.name}`, stageKey: stage.key, name: stage.name, project: p.name,
+      provider: p.provider || stage.provider, model: p.model || stage.model, cwd: p.cwd,
+      prompt,
+      permissionMode: p.permissionMode ?? stagePerm,
+    }
+  })
 }
 
 export async function runStage(

@@ -25,7 +25,7 @@ export function buildWorkflowSession(args: {
   flowId: string
   flowName: string
   plan: RunPlan
-  projects: { name: string; provider: string; model: string; permissionMode?: WorkflowStageView['permissionMode'] }[]
+  projects: { name: string; provider: string; model: string; permissionMode?: WorkflowStageView['permissionMode']; brief?: string }[]
   supplement?: string
   seed?: string
 }): WorkflowSessionState {
@@ -46,7 +46,7 @@ export function buildWorkflowSession(args: {
 // 进入执行尾段时,构造交给 run2 launch-start 机制的 LaunchStartConfig:只启用 fromIndex 起的阶段,
 // 每阶段带回它在会话里配好的 provider/model/权限/范围(perProject 显式复原 scope,确定性)。
 export function tailLaunchConfig(
-  base: { workspacePath: string; flowId: string; sessionId?: string; supplement?: string; seed?: string; projects: { name: string; provider: string; model: string; permissionMode?: WorkflowStageView['permissionMode'] }[] },
+  base: { workspacePath: string; flowId: string; sessionId?: string; supplement?: string; seed?: string; projects: { name: string; provider: string; model: string; permissionMode?: WorkflowStageView['permissionMode']; brief?: string }[] },
   stages: WorkflowStageView[],
   fromIndex: number,
 ): LaunchStartConfig {

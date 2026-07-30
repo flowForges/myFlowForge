@@ -32,7 +32,7 @@ export interface WorkflowSessionState {
   // 执行尾段一旦启动,记下对应的 RunController runId(用于 ribbon/面板关联该 run 的 lane 卡)。
   runId?: string
   // 启动时选定、供执行尾段用的项目(名字 + provider/model/权限覆盖)。对话阶段用不到。
-  projects: { name: string; provider: string; model: string; permissionMode?: PermissionMode }[]
+  projects: { name: string; provider: string; model: string; permissionMode?: PermissionMode; brief?: string }[]
   supplement?: string
   seed?: string
   // 已注入过角色提示(preamble)的阶段 index——保证每阶段的角色提示只在进入后的第一轮注入一次,

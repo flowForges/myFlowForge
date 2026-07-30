@@ -671,10 +671,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.sessionsChanged, { workspacePath: p.workspacePath, file })
     return session
   })
-  ipcMain.handle(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string }) => {
+  ipcMain.handle(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string> }) => {
     const s = getSession(a.workspacePath, a.sessionId)
     if (!s?.workflowSession) throw new Error('该会话不在工作流中')
     let next: WorkflowSessionState = advanceWorkflow(s.workflowSession)
+    // D3(2026-07-30):跨 provider 推进时,用户编辑过的交接稿覆盖下一(对话)阶段的角色提示 preamble ——
+    // chatService 会在进入该阶段的首轮把它注入给新 provider(作为该步的地面真相),取代自动蒸馏。
+    if (a.handoffText && a.handoffText.trim() && next.phase === 'chatting' && next.stages[next.currentIndex]) {
+      const stages = next.stages.map((st, i) => (i === next.currentIndex ? { ...st, preamble: a.handoffText!.trim() } : st))
+      next = { ...next, stages }
+    }
+    // D4:进入执行前用户为各项目编辑的任务简报,合并到 projects[].brief,由 tailLaunchConfig 带进执行尾段。
+    if (a.briefs && next.phase === 'executing') {
+      next = { ...next, projects: next.projects.map((p) => ({ ...p, brief: a.briefs![p.name] ?? p.brief })) }
+    }
     // Crossing into the fan-out execution tail → kick off ONE RunController run for stages[currentIndex..],
     // reusing run2's launch kickoff (temp branches + lane cards + finalize + summary). Only if not already started.
     if (next.phase === 'executing' && !next.runId) {

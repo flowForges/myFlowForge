@@ -168,7 +168,7 @@ export interface LaunchStartConfig {
   // just the ones the user checked. Threading these into the develop (code) stage's fan-out is what
   // fixes the known gap where startWorkflow dropped the per-project override and fell back to the
   // workflow's default agent/model (see buildLaunchProjects below).
-  projects: { name: string; provider: string; model: string; permissionMode?: PermissionMode }[]
+  projects: { name: string; provider: string; model: string; permissionMode?: PermissionMode; brief?: string }[]
   // Free-text supplementary instructions the user typed into the gate, alongside...
   supplement: string
   // ...`seed`: the user's latest raw chat message — the run's "ground truth" anchor (mirrors the
@@ -285,7 +285,7 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
 // `p.provider || stage.provider` / `p.model || stage.model` per project, so a selected project's own
 // choice here now wins over the develop stage's default agent.
 export function buildLaunchProjects(cfg: LaunchStartConfig, ws: Workspace): DevelopProject[] {
-  return cfg.projects.map((p) => ({ name: p.name, cwd: join(ws.path, p.name), provider: p.provider, model: p.model, permissionMode: p.permissionMode }))
+  return cfg.projects.map((p) => ({ name: p.name, cwd: join(ws.path, p.name), provider: p.provider, model: p.model, permissionMode: p.permissionMode, brief: p.brief }))
 }
 
 // P4-2: at run START (before any lane executes), every participating project's worktree gets checked
