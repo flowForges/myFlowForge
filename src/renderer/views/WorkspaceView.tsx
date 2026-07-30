@@ -42,6 +42,7 @@ import { deriveOpenTarget } from '../shell/deriveOpenTarget'
 import type { OpenTarget } from '@shared/openers'
 import { useRun2 } from '../state/useRun2'
 import { RunExecPanel } from '../components/RunExecPanel'
+import { toWorkflowProgressState } from '../components/workflowProgressAdapter'
 import { RunHistoryPanel } from '../components/RunHistoryPanel'
 import { LaunchGateCard } from '../components/LaunchGateCard'
 import type { LaunchGateConfig, LaunchGateFrozen } from '../components/LaunchGateCard'
@@ -1734,43 +1735,34 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </div>{/* /mainFlow */}
 
               <div id="mainChat">
-                {/* 修图12/图8/图20:当前工作流进度。必须放 #mainChat(聊天模式可见,#mainFlow 被 .inspector.chat
-                    display:none 隐藏)。复用执行面板的富卡片样式(.orch-note/.pipe/.agent-node/.agent-card)——
-                    每个阶段一张带边框卡:终端图标 + 阶段名 + provider chip + 状态(当前⚡/完成/等待);对话阶段跑过的带📄打开。 */}
+                {/* 当前工作流进度。必须放 #mainChat(聊天模式可见,#mainFlow 被 .inspector.chat
+                    display:none 隐藏)。用户诉求:别再手写卡片,直接复用 beta.16 那套 RunExecPanel
+                    (.wfo-head 头部 + .wfo-flow 分阶段 pipe + AgentNode)。
+                    · 执行尾段(phase==='executing')有真 run2 → 直接传 live run2(真分支/实时日志/控制)。
+                    · 对话阶段 → workflowProgressAdapter 合成只读 state 喂给同一个 RunExecPanel;头部标题/状态
+                      用 titleOverride/statusOverride 覆盖(对话阶段无临时分支、无 暂停/终止),其余卡片样式一致。 */}
                 {activeWorkflow && (() => {
                   const wf = activeWorkflow
                   const total = wf.stages.length
+                  if (wf.phase === 'executing' && run2.state) {
+                    return (
+                      <div id="wfProgress">
+                        <RunExecPanel run2={run2} onAbort={handleRunAbort} onViewLog={onViewAgentLog} />
+                      </div>
+                    )
+                  }
                   const cur = Math.min(wf.currentIndex + 1, total)
-                  const phaseNote = wf.phase === 'done' ? ' · 已完成' : wf.phase === 'executing' ? ' · 执行中' : ''
-                  // 用户诉求(img20):右侧完全复用执行面板的 AgentNode 卡片。当前对话步 = 正在执行的 agent,
-                  // 把左侧 AI 的最新输出镜像成它的执行日志(重复无妨),并展示该 agent 已加载的 skill/rule/mcp。
-                  const nowIso = new Date().toISOString()
-                  const curAi = [...liveMessages].reverse().find((m) => m.who === 'ai' && !!m.text.trim())
-                  const curLogs = curAi ? curAi.text.split('\n').map((t) => ({ ts: nowIso, text: t, level: 'info' as const })) : []
-                  const wfAgents: import('@shared/types').AgentRuntime[] = wf.stages.map((s, i) => {
-                    const done = wf.phase === 'done' || i < wf.currentIndex
-                    const active = i === wf.currentIndex && wf.phase !== 'done'
-                    const convActive = active && s.scope === 'root'   // 当前对话步:镜像输出 + 上下文
-                    return {
-                      id: `${s.key}:root`,
-                      name: s.name,
-                      role: `第 ${i + 1} 步 · ${s.scope === 'per-project' ? '按项目扇出' : '对话'}`,
-                      provider: s.provider,
-                      model: s.model,
-                      state: done ? 'ok' : active ? 'run' : 'wait',
-                      logs: convActive ? curLogs : [],
-                      context: convActive ? loadedContext : undefined,
-                    }
-                  })
+                  const note = wf.phase === 'done'
+                    ? '工作流已完成 · 所有阶段已走完'
+                    : `对话阶段 · 第 ${cur}/${total} 步，在左侧会话区与当前 provider 对话推进`
                   return (
                     <div id="wfProgress">
-                      <div className="orch-note">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
-                        <span>当前工作流 <b>{wf.flowName}</b> · 第 <b>{cur}</b>/{total} 步{phaseNote}</span>
-                      </div>
-                      <div className="pipe">
-                        {wfAgents.map((rt) => <AgentNode key={rt.id} agent={rt} />)}
-                      </div>
+                      <RunExecPanel
+                        staticState={toWorkflowProgressState(wf, wsPath ?? '')}
+                        titleOverride={`工作流 · ${wf.flowName}`}
+                        statusOverride={note}
+                        onViewLog={onViewAgentLog}
+                      />
                     </div>
                   )
                 })()}

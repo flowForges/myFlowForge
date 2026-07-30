@@ -97,7 +97,13 @@ const STAGE_STATE_CLS: Record<string, string> = { run: 'run', ok: 'ok', err: 'er
 // the run-level 暂停/继续/终止 controls (a historical run has no live process to control) — kept as a
 // separate flag rather than always-derived-from-staticState in case a future caller wants read-only
 // display of a still-LIVE run without also faking its state.
-export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean; onViewLog?: (agentId: string, agentName: string) => void }): ReactElement {
+// `titleOverride`/`statusOverride`: the conversational-workflow mirror (workflowProgressAdapter →
+// staticState) reuses this whole panel verbatim, but its `.wfo-head` semantics differ from a real
+// run — there's no temp branch and no live process to 暂停/终止 during a chat stage. When
+// `statusOverride` is set, the header shows `titleOverride` as its title, hides the branch chip, and
+// renders a single read-only status line (statusOverride) with no run-control buttons. Everything
+// below the head (`.wfo-flow` staged pipe + AgentNode cards) is byte-for-byte the same beta.16 style.
+export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, titleOverride, statusOverride }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean; onViewLog?: (agentId: string, agentName: string) => void; titleOverride?: string; statusOverride?: string }): ReactElement {
   // Per-stage `project -> last-known LaneMemory` so a fan-out lane never disappears once observed
   // (see runExecAdapter's LaneMemory doc). Reset whenever the run identity changes.
   const memoryRef = useRef<Map<string, Map<string, LaneMemory>>>(new Map())
@@ -196,23 +202,32 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog }
     <div className="wfo-run-panel">
       <div className="wfo-head">
         <div className="wfo-title">
-          <span className="tt">{isReadOnly ? '历史运行回看' : '工作流执行中'}</span>
-          <button
-            className={`wfo-branch${branchCopied ? ' copied' : ''}`}
-            title={branchCopied ? '已复制' : '点击复制完整分支名'}
-            onClick={() => {
-              void navigator.clipboard?.writeText(tempBranch)
-              setBranchCopied(true)
-              setTimeout(() => setBranchCopied(false), 1500)
-            }}
-          >分支：{tempBranch}{branchCopied ? ' ✓ 已复制' : ''}</button>
+          <span className="tt">{titleOverride ?? (isReadOnly ? '历史运行回看' : '工作流执行中')}</span>
+          {!statusOverride && (
+            <button
+              className={`wfo-branch${branchCopied ? ' copied' : ''}`}
+              title={branchCopied ? '已复制' : '点击复制完整分支名'}
+              onClick={() => {
+                void navigator.clipboard?.writeText(tempBranch)
+                setBranchCopied(true)
+                setTimeout(() => setBranchCopied(false), 1500)
+              }}
+            >分支：{tempBranch}{branchCopied ? ' ✓ 已复制' : ''}</button>
+          )}
         </div>
         <div className="wfo-prog">
           <span className="lbl">已完成 {doneN} / {totalStages}</span>
           <span className="bar"><i style={{ width: `${pct}%` }} /></span>
           <span className="pct">{pct}%</span>
         </div>
-        {isReadOnly ? (
+        {statusOverride ? (
+          <div className="wfo-runctl done">
+            <span className="rmsg">
+              <span className="rd" />
+              {statusOverride}
+            </span>
+          </div>
+        ) : isReadOnly ? (
           <div className="wfo-runctl done">
             <span className="rmsg">
               <span className="rd" />
