@@ -1648,6 +1648,24 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             {/* 代理编排 / 对话模式 pane */}
             <div className={`insp-pane${effectiveTab === 'agents' ? ' on' : ''}`} id="pane-agents">
               <div id="mainFlow">
+              {/* 修图8:对话阶段右侧也能看到当前工作流进度(执行阶段有 RunExecPanel,对话阶段此前空)。 */}
+              {activeWorkflow && (
+                <div className="wf-prog">
+                  <div className="wf-prog-h">当前工作流 · {activeWorkflow.flowName}</div>
+                  {activeWorkflow.stages.map((s, i) => {
+                    const st = activeWorkflow.phase === 'done' || i < activeWorkflow.currentIndex ? 'done'
+                      : i === activeWorkflow.currentIndex ? (activeWorkflow.phase === 'executing' ? 'run' : 'current')
+                      : 'pending'
+                    return (
+                      <div key={s.key} className={`wf-prog-stage ${st}`}>
+                        <span className="wf-prog-idx">{i + 1}</span>
+                        <span className="wf-prog-nm">{s.name}</span>
+                        <span className="wf-prog-prov">{providerLabel(s.provider)}</span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
               {run && (
                 <>
                   <div className="orch-note">
@@ -1737,12 +1755,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 {/* 统一「工作流」区:工作区的全部工作流,每个可展开看阶段、每行可直接「启动」(选任意流,不再是
                     硬编码的「当前工作流」),顶部一个「编辑」入口。取代旧的「当前工作流」卡(它只显 workflows[0]、
                     切不了,又和下面的列表重复)。legacy 只有 stages 的旧工作区合成一条展示,避免回归。 */}
-                <WorkflowGlance
-                  workflows={wsInfo?.workflows?.length ? wsInfo.workflows : (wsInfo?.stages?.length ? [{ id: wsInfo.workflowId || 'standard', name: '工作流', stages: wsInfo.stages }] : [])}
-                  onEdit={() => onEditWorkspace?.()}
-                  onLaunch={onPickWorkflow}
-                  archived={!!archived}
-                />
+                {/* 修图8:工作流进行中隐藏"模板+启动按钮"列表(避免像没启动那样误导);进度看上方 wf-prog。 */}
+                {!activeWorkflow && (
+                  <WorkflowGlance
+                    workflows={wsInfo?.workflows?.length ? wsInfo.workflows : (wsInfo?.stages?.length ? [{ id: wsInfo.workflowId || 'standard', name: '工作流', stages: wsInfo.stages }] : [])}
+                    onEdit={() => onEditWorkspace?.()}
+                    onLaunch={onPickWorkflow}
+                    archived={!!archived}
+                  />
+                )}
 
                 {chat.plans.length > 0 && (
                   <div className="ic-card workflow-pending-card">

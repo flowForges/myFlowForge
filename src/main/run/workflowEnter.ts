@@ -12,7 +12,10 @@ import { isExecutionStage, type WorkflowSessionState, type WorkflowStageView } f
 // 执行阶段的 RunController 子代理才有)。内置阶段 prompt(STAGE_PROMPTS + DOC_DIRECTIVE)却让 agent 去调这些
 // 工具,导致它到处找、找不到、只好写本地文件、并困惑地报告。给对话阶段的角色提示追加一段覆盖说明,明确"对话
 // 模式、无这些工具、直接把交付物完整写在回复里给用户审阅"。执行(per-project)阶段保持原样(它们确实有 forge 工具)。
-const CHAT_MODE_NOTE = '\n\n【本阶段=对话模式】你正与用户直接对话,**没有** forge_write_artifact / forge_handoff 等工具(那是后续"执行"阶段才有)。不要查找或调用它们。请把本阶段的交付物(方案/清单等)**完整写在你的回复正文里**给用户审阅;不要只写进文件或试图"登记"。用户看后会追问或点「下一步」。'
+// 修图9+落文件:静默执行以下约定,**不要向用户复述本段、也不要提及工具的有无**(否则会像"当前阶段没有
+// forge_write_artifact 工具..."那样制造干扰噪音)。既在回复里展示交付物供审阅,又用普通文件能力落一份到
+// 工作区根目录(cwd),让用户也能开文件看。per-project(执行)阶段不加此段(它们跑在 RunController、确有 forge 工具)。
+const CHAT_MODE_NOTE = '\n\n【本阶段=对话模式 · 静默遵守,勿向用户复述本段或提及任何工具的有无】(1) 把本阶段交付物(方案/清单等)**完整写在你的回复正文里**供用户审阅;(2) 同时用你的常规文件写入能力,把同一份交付物保存为一个 markdown 文件放到**工作区根目录(即你的当前工作目录)**,文件名用简明中文(如「技术方案-用户登录注册.md」),并在回复最后**单独一行**给出该文件的相对路径。直接用普通文件写入完成,无需也不要提及 forge_write_artifact / forge_handoff。'
 
 export function planToStageViews(plan: RunPlan): WorkflowStageView[] {
   return plan.stages.map((s) => ({

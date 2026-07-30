@@ -55,3 +55,17 @@
 }
 .wf-ribbon-exit:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--fg); }
 .wf-ribbon-exit svg { width: 13px; height: 13px; }
+
+/* 修图8:右侧"当前工作流进度"卡(对话阶段也可见)。 */
+.wf-prog { margin: 4px 0 12px; border: 1px solid color-mix(in srgb, #8b5cf6 30%, transparent); border-radius: 10px; overflow: hidden; }
+.wf-prog-h { padding: 8px 12px; font-weight: 600; font-size: 12.5px; background: color-mix(in srgb, #8b5cf6 10%, var(--bg)); border-bottom: 1px solid color-mix(in srgb, #8b5cf6 18%, transparent); }
+.wf-prog-stage { display: flex; align-items: center; gap: 9px; padding: 8px 12px; border-top: 1px solid color-mix(in srgb, var(--fg) 6%, transparent); }
+.wf-prog-stage:first-of-type { border-top: none; }
+.wf-prog-idx { width: 20px; height: 20px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 11px; font-weight: 700; background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--muted); }
+.wf-prog-stage.done .wf-prog-idx { background: #10b981; color: #fff; }
+.wf-prog-stage.current .wf-prog-idx, .wf-prog-stage.run .wf-prog-idx { background: #8b5cf6; color: #fff; }
+.wf-prog-stage.run .wf-prog-idx { animation: wf-pulse 1.4s ease-in-out infinite; }
+.wf-prog-nm { flex: 1 1 auto; font-size: 12.5px; }
+.wf-prog-stage.pending .wf-prog-nm { opacity: .55; }
+.wf-prog-stage.current .wf-prog-nm, .wf-prog-stage.run .wf-prog-nm { font-weight: 600; }
+.wf-prog-prov { font-size: 11px; opacity: .6; }
