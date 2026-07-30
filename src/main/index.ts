@@ -135,9 +135,12 @@ app.whenReady().then(() => {
     const a = readSettings().appearance
     // Keep the applied backgrounds AND every cached preview thumbnail (preview index) — otherwise startup
     // GC wipes the thumbnails and the next Settings-open re-downloads them all (NSFW → Cloudflare Worker).
-    const keep = new Set([bgRelFromUrl(a.bgImage), bgRelFromUrl(a.homeBgImage), ...previewKeepRels()].filter((r): r is string => !!r))
+    const keptPreviews = previewKeepRels()
+    const keep = new Set([bgRelFromUrl(a.bgImage), bgRelFromUrl(a.homeBgImage), ...keptPreviews].filter((r): r is string => !!r))
     const removed = gcBackgrounds(keep)
-    if (removed > 0) logInfo('appearance', `已清理 ${removed} 张无引用的背景图`)
+    // 诊断(图11 NSFW 跨重启重下):记录本次启动保留了多少缓存预览、清了多少文件。若 keptPreviews=0 却之前预览过,
+    // 说明 preview-index.json 没持久;若 keptPreviews>0 但仍全量重下,说明 lookup 时文件已不在(GC 之外的原因)。
+    logInfo('appearance', `启动背景 GC:保留预览索引 ${keptPreviews.length} 条,清理无引用背景 ${removed} 张`)
   } catch (e) { logError('appearance', `背景图清理失败: ${String(e)}`) }
 
   // Serve downloaded font files via forge-font://. Also grant the Local Font Access API permission so
