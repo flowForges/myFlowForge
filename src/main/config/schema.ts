@@ -349,6 +349,7 @@ export const StageConfigSchema = z.object({
   summary: z.boolean().optional(),                    // per-project 后追加汇总代理
   projectAgent: z.boolean().optional(),               // 用各项目自己的 provider/model
   producesDoc: z.boolean().optional(),                // 强制写 markdown 方案文件
+  permissionMode: z.enum(['readonly', 'auto', 'full']).optional(),  // 每阶段权限档(未设 → 回退运行级);见 shared/permissions.ts
   // —— 全局自定义阶段库引用 ——
   // 若本阶段项带 libId,即为对全局库(customStages.json)某条定义的引用:name/agent/model/prompt/flags
   // 在物化 / 显示时由库定义解析提供(shared/customStages.ts resolveStages)。key/name 仍冗余保留作缓存
@@ -447,6 +448,7 @@ export const WsStageSchema = z.object({
   summary: z.boolean().optional(),
   projectAgent: z.boolean().optional(),
   producesDoc: z.boolean().optional(),
+  permissionMode: z.enum(['readonly', 'auto', 'full']).optional(),  // 每阶段权限档(未设 → 回退运行级)
 })
 export type WsStage = z.infer<typeof WsStageSchema>
 

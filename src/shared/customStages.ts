@@ -1,4 +1,5 @@
 import type { ReviewConfig } from './types'
+import type { PermissionMode } from './permissions'
 
 // —— 自定义工作流阶段全局库 · resolver(纯 TS,main 与 renderer 都 import)——
 // 模版的 stages 项若带 libId,即为对全局库(customStages.json)某条定义的引用。解析时用库定义提供
@@ -21,6 +22,7 @@ export interface StageRef {
   summary?: boolean
   projectAgent?: boolean
   producesDoc?: boolean
+  permissionMode?: PermissionMode
 }
 
 // 全局库里一条完整定义:必带 id + name,agent/model 恒有值。

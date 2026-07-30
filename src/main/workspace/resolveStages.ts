@@ -29,6 +29,7 @@ function materializeGlobalStages(g: Workflow, customStagesById: StageDefById = {
     ...(s.summary !== undefined ? { summary: s.summary } : {}),
     ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
     ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+    ...(s.permissionMode ? { permissionMode: s.permissionMode } : {}),
     // prompt: the template's per-stage append (stagePrompts) OR the stage's own prompt (custom body).
     ...((s.prompt ?? g.stagePrompts?.[s.key]) ? { prompt: s.prompt ?? g.stagePrompts[s.key] } : {}),
   })))

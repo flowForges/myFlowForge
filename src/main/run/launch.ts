@@ -266,8 +266,9 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
       gate: s.gate,
       prompt,
       review: s.review, // ②多镜头CR: honor the review stage's fan-out config (per-lens reviewers)
-      // P1.2: the gate's per-stage permission choice → StageSpec → StagePlan → fanout per-lane resolution.
-      permissionMode: choice?.permissionMode,
+      // P1.2/P1.3: the gate's per-stage permission choice wins; else the stage's own persisted default;
+      // else undefined → fanout falls back to the run-wide permission.
+      permissionMode: choice?.permissionMode ?? s.permissionMode,
     }
   })
   // ③stage hooks: thread the workspace's woven hooks (ws.plugins) + run-end (__wf) step hooks — minus any
