@@ -44,6 +44,9 @@ export interface RunWorkOrderDeps {
   // the OLD orchestrator's run store). Optional/best-effort: a provider that never calls onSession
   // (or a test double that doesn't implement it) simply never fires this — no behavior change.
   onSession?: (laneId: string, provider: string, sessionId: string) => void
+  // 终止支持(2026-07-30 修图4):每次 attempt 起一个 provider 会话后,把它的 cancel 句柄登记给上层
+  // (controller.liveCancels),让"终止运行"能真正杀掉正在跑的 CLI 进程,而不只是标记 aborted。
+  registerCancel?: (cancel: () => void) => void
 }
 
 const TRANSIENT_RE = /timeout|network|econn|etimedout|socket hang|cancel/i
@@ -85,6 +88,7 @@ export async function runWorkOrder(order: WorkOrder, deps: RunWorkOrderDeps): Pr
         onHandoff(p) { handoff = p },
       }
       const session = deps.provider.run(task, cb, deps.env)
+      deps.registerCancel?.(() => { try { session.cancel() } catch { /* already gone */ } })
       const result = await session.done
       // Real providers signal failure by RESOLVING `done` with { ok: false } (they call
       // onState('err') + onError(err) but never reject). Route that into the same

@@ -268,6 +268,10 @@ export class RunController {
   private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
   private laneTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
   private laneSessions: Record<string, { provider: string; sessionId: string }> = {}
+  // 终止支持(2026-07-30 修图4):正在跑的 lane 的 cancel 句柄(keyed by laneId/order.id),由 runOneOrderLive
+  // 经 workOrder.registerCancel 登记,lane 结束时删除。abort() / resolveLane 的 abort 分支调 killLiveLanes()
+  // 真正杀掉这些 CLI 进程——否则"终止"只标记 aborted,进程仍在后台跑(对话区显示已终止、右侧 lane 仍在跑)。
+  private liveCancels = new Map<string, () => void>()
   private aborted = false
   private paused = false
   // Set by requestJumpBack(), applied at the next stage boundary (see start()). Deliberately not
@@ -355,6 +359,7 @@ export class RunController {
     const ok = this.laneR.settle(eventId, d)
     if (ok && d.type === 'abort') {
       this.aborted = true
+      this.killLiveLanes()   // 修图4:真正杀掉正在跑的 lane 进程,而不只标记 aborted
       // Force-unblock every other in-flight lane/gate await so concurrently-running lanes
       // (Promise.all in start()) don't hang forever waiting on a resolver nobody will settle.
       // The post-await sites are abort-aware (short-circuit / drop-and-break), so these forced
@@ -380,8 +385,15 @@ export class RunController {
    * branch does, so every in-flight lane/gate await unblocks the same way regardless of which
    * path triggered the abort.
    */
+  // 真正杀掉所有正在跑的 lane 进程(见 liveCancels 字段注释)。幂等:cancel 已结束的会话是 no-op。
+  private killLiveLanes(): void {
+    for (const cancel of this.liveCancels.values()) { try { cancel() } catch { /* already gone */ } }
+    this.liveCancels.clear()
+  }
+
   abort(): void {
     this.aborted = true
+    this.killLiveLanes()
     this.laneR.settleAll({ type: 'abort' })
     this.gateR.settleAll({ type: 'advance' })
     // Release the pause gate too: if the run was paused (parked in start()'s
@@ -920,11 +932,13 @@ export class RunController {
   }
 
   private async runOneOrderLive(order: WorkOrder): Promise<WorkOrderOutcome> {
-    return runWorkOrder(order, {
+    const oc = await runWorkOrder(order, {
       provider: this.deps.providers[order.provider],
       env: this.envForOrder(order),
       retries: this.deps.retries,
       sleep: this.deps.sleep,
+      // 修图4:登记本 lane 当前会话的 cancel 句柄,让"终止"能真杀进程。每次 attempt 覆盖为最新会话。
+      registerCancel: (cancel) => this.liveCancels.set(order.id, cancel),
       onProgress: (ev) => {
         this.liveLanes[ev.laneId] = {
           stageKey: order.stageKey,
@@ -958,6 +972,8 @@ export class RunController {
       },
       onInput: (req: InputReq, laneId: string) => this.askQuestion(laneId, order.stageKey, req.title, req.placeholder),
     })
+    this.liveCancels.delete(order.id)   // lane 结束(ok/failed),句柄不再有效
+    return oc
   }
 
   async start(): Promise<RunControllerState> {

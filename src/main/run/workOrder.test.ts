@@ -8,6 +8,25 @@ const order: WorkOrder = {
 }
 const noSleep = async () => {}
 
+describe('runWorkOrder · registerCancel (终止支持,修图4)', () => {
+  it('registers a cancel handle that cancels the live provider session', async () => {
+    let cancelled = false
+    const provider: AgentProvider = {
+      id: 'fake', displayName: 'F', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task: AgentTask, cb: AgentCallbacks) {
+        const done = (async () => { cb.onState('run'); cb.onHandoff?.({ summary: 'x' }); const r = { ok: true, summary: 'x' }; cb.onDone(r); return r })()
+        return { id: task.agentId, cancel() { cancelled = true }, done }
+      },
+    }
+    let captured: (() => void) | null = null
+    await runWorkOrder(order, { provider, env: {}, sleep: noSleep, registerCancel: (c) => { captured = c } })
+    expect(captured).toBeTypeOf('function')
+    captured!()
+    expect(cancelled).toBe(true)
+  })
+})
+
 function providerThatHandsOff(summary: string): AgentProvider {
   return {
     id: 'fake', displayName: 'F', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
