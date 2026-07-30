@@ -647,6 +647,23 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 对话式工作流(2026-07-30):enter=把选定工作流配置固化成 session 上的 WorkflowSessionState(停在阶段0,
   // 不自动跑);advance=推进到下一阶段(跨进扇出阶段时用 run2 的 launchRun 启动执行尾段 run,记下 runId);
   // exit=清除工作流状态、退回普通会话。全部复用 P1 已打通的 buildLaunchPlan/权限透传。
+  // 图3修复:进入一个"对话阶段"时自动起手一轮 —— 让该阶段的 provider 按本阶段(内置/自定义)prompt 跑一次,
+  // 产出交付物(如技术方案)并**在回复里完整展示**供用户审阅,而不是要用户先自己开口它才动、也不是只写进文件
+  // 用户看不到。kick 文案显式要求"回复里展示",压过内置 prompt 里"放进 artifact 别只写回复"的下游导向。
+  const kickConversationalStage = (workspacePath: string, sessionId: string, ws: WorkflowSessionState) => {
+    if (ws.phase !== 'chatting') return
+    const stage = ws.stages[ws.currentIndex]
+    if (!stage || !stage.provider) return
+    chatQueue.enqueue({
+      workspacePath, sessionId,
+      agent: stage.provider,
+      agentLabel: providers[stage.provider]?.displayName ?? stage.provider,
+      model: stage.model,
+      text: `请开始「${stage.name}」这一步:按本阶段要求完成工作,并在你的回复里**完整展示**交付物(如方案/清单)供我审阅;如涉及落盘也可同时写成文件。完成后我会审阅、必要时追问,然后我再点「下一步」进入下一阶段。`,
+      attachments: [],
+      permissionMode: stage.permissionMode ?? 'auto',
+    }, '工作流')
+  }
   ipcMain.handle(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
     if (!p.sessionId) throw new Error('workflow:enter 缺少 sessionId')
     const ws = readWorkspace(p.workspacePath)
@@ -664,6 +681,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     })
     const file = setSessionWorkflow(p.workspacePath, p.sessionId, session)
     broadcast(CH.sessionsChanged, { workspacePath: p.workspacePath, file })
+    kickConversationalStage(p.workspacePath, p.sessionId, session)   // 图3:进入阶段0自动起手产出交付物
     return session
   })
   ipcMain.handle(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string> }) => {
@@ -693,6 +711,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     const file = setSessionWorkflow(a.workspacePath, a.sessionId, next)
     broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
+    kickConversationalStage(a.workspacePath, a.sessionId, next)   // 图3:推进到新对话阶段也自动起手
     return next
   })
   ipcMain.handle(CH.workflowExit, (_e, a: { workspacePath: string; sessionId: string }) => {

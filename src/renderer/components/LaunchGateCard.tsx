@@ -221,17 +221,17 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     setProviderPopupFor(null)
   }
   const installedProviders = providers.filter((p) => p.installed)
-  // #3: switch every provider selector to one provider at once. Applies to all projects AND all non-code
-  // stages (code stages inherit their provider from the per-project pickers, so they're left alone). Each
-  // gets the new provider's first discovered model as its default — same rule as chooseProjectProvider /
-  // chooseStageProvider (never leave model '' or the fanout silently falls back to the stage's claude id).
+  // #3: switch every provider selector to one provider at once. Applies to ALL projects AND ALL stages.
+  // 修图1(2026-07-30):原本 `if (s.code) continue` 跳过代码类阶段(以为它们只从项目选择器取 provider)——
+  // 但一个被存成 per-project 的阶段(如某些工作区里的「技术方案设计」)也是 code 类,会被跳过、留在模板默认
+  // (claude),导致「统一编码代理→codex」对它无效。既然本函数也把所有项目设成同一 provider,一并设置每个
+  // 阶段的 provider 无害且正确(per-project 阶段的 lane 仍走 `p.provider || stage.provider`,两者都成了 codex)。
   const applyProviderToAll = (providerId: string) => {
     const dm = providers.find((p) => p.id === providerId)?.models[0]?.id ?? ''
     setProjects((prev) => prev.map((p) => ({ ...p, provider: providerId, model: dm })))
     setStageState((prev) => {
       const next = { ...prev }
       for (const s of stagesOf(selectedWorkflowId)) {
-        if (s.code) continue
         next[s.key] = { ...(next[s.key] ?? stageDefault(s.key)), provider: providerId, model: dm }
       }
       return next
