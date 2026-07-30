@@ -7,6 +7,7 @@ import { AgentNode } from '../components/AgentNode'
 import { HookNode } from '../components/HookNode'
 import { WorkflowGlance } from '../components/WorkflowGlance'
 import { WorkflowRibbon } from '../components/WorkflowRibbon'
+import { WorkflowAdvanceCard } from '../components/WorkflowAdvanceCard'
 import type { Plugin } from '@shared/plugin'
 import { ReqCard } from '../components/ReqCard'
 import { PlanCard } from '../components/PlanCard'
@@ -844,12 +845,41 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     selForRef.current = { ws: wsPath, sid: sessions.activeSessionId }
     setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode ? prev : next))
   }, [activeWorkflow?.currentIndex, activeWorkflow?.phase, activeSession?.id, wsPath, sessions.activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // D3/D4:推进的可编辑草稿(跨 provider 的交接稿 / 进执行前的每项目简报)。null = 无待确认草稿。
+  const [advanceDraft, setAdvanceDraft] = useState<{ mode: 'handoff' | 'briefs'; handoff: string; briefs: Record<string, string>; loading: boolean } | null>(null)
   const onWorkflowAdvance = useCallback(() => {
-    if (!wsPath || !sessions.activeSessionId) return
-    void window.forge.workflowAdvance({ workspacePath: wsPath, sessionId: sessions.activeSessionId })
-  }, [wsPath, sessions.activeSessionId])
+    const wf = activeWorkflow
+    if (!wsPath || !sessions.activeSessionId || !wf) return
+    const cur = wf.stages[wf.currentIndex]
+    const nxt = wf.stages[wf.currentIndex + 1]
+    const sid = sessions.activeSessionId
+    // 收尾,或"同 provider 的下一个对话阶段"→ 直接推进,不打断。
+    if (!nxt || (nxt.scope !== 'per-project' && nxt.provider === cur?.provider)) {
+      void window.forge.workflowAdvance({ workspacePath: wsPath, sessionId: sid }); return
+    }
+    // 进入执行(扇出)→ 每项目可编辑任务简报,用需求原文预填。
+    if (nxt.scope === 'per-project') {
+      const briefs: Record<string, string> = {}
+      for (const p of wf.projects) briefs[p.name] = wf.seed ?? ''
+      setAdvanceDraft({ mode: 'briefs', handoff: '', briefs, loading: false }); return
+    }
+    // 跨 provider 的对话阶段推进 → 由"当前"provider 蒸馏交接稿,用户可编辑。
+    setAdvanceDraft({ mode: 'handoff', handoff: '', briefs: {}, loading: true })
+    void Promise.resolve(window.forge.chatSummarizeRequirement?.({ workspacePath: wsPath, sessionId: sid, agent: cur?.provider ?? '', model: cur?.model ?? '' }))
+      .then((sum: string | undefined) => setAdvanceDraft((d) => (d && d.mode === 'handoff' ? { ...d, handoff: (sum && sum.trim()) ? sum.trim() : '', loading: false } : d)))
+      .catch(() => setAdvanceDraft((d) => (d && d.mode === 'handoff' ? { ...d, loading: false } : d)))
+  }, [wsPath, sessions.activeSessionId, activeWorkflow])
+  const confirmAdvanceDraft = useCallback(() => {
+    if (!wsPath || !sessions.activeSessionId || !advanceDraft) return
+    const payload: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string> } = { workspacePath: wsPath, sessionId: sessions.activeSessionId }
+    if (advanceDraft.mode === 'handoff') payload.handoffText = advanceDraft.handoff
+    else payload.briefs = advanceDraft.briefs
+    void window.forge.workflowAdvance(payload)
+    setAdvanceDraft(null)
+  }, [wsPath, sessions.activeSessionId, advanceDraft])
   const onWorkflowExit = useCallback(() => {
     if (!wsPath || !sessions.activeSessionId) return
+    setAdvanceDraft(null)
     void window.forge.workflowExit({ workspacePath: wsPath, sessionId: sessions.activeSessionId })
   }, [wsPath, sessions.activeSessionId])
   // 执行尾段 run 走到终态(ok/failed,含 finalize 合并/丢弃已决)→ 把工作流置 done,ribbon 不再卡"执行中"。
@@ -1214,8 +1244,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 stageName={stage?.name ?? ''}
                 provider={providerLabel(stage?.provider ?? '')}
                 phase={wf.phase}
-                advanceDisabled={chat.busy}
-                advanceHint={chat.busy ? '当前有对话在进行，请等它结束' : undefined}
+                advanceDisabled={chat.busy || !!advanceDraft}
+                advanceHint={chat.busy ? '当前有对话在进行，请等它结束' : advanceDraft ? '请先确认或取消上面的交接稿/简报' : undefined}
                 advanceLabel={advanceLabel}
                 onAdvance={onWorkflowAdvance}
                 onExit={onWorkflowExit}
@@ -1404,6 +1434,24 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             <button className="supplement-cancel" onClick={() => setPendingSwitch(null)}>取消</button>
           </div>
         )}
+        {/* D3/D4:推进工作流时的可编辑交接稿 / 每项目任务简报卡(贴 composer 上方)。 */}
+        {advanceDraft && activeWorkflow ? (() => {
+          const nxt = activeWorkflow.stages[activeWorkflow.currentIndex + 1]
+          return (
+            <WorkflowAdvanceCard
+              mode={advanceDraft.mode}
+              toStageName={nxt?.name ?? '执行'}
+              toProvider={nxt ? providerLabel(nxt.provider) : ''}
+              loading={advanceDraft.loading}
+              handoff={advanceDraft.handoff}
+              briefs={activeWorkflow.projects.map((p) => ({ project: p.name, text: advanceDraft.briefs[p.name] ?? '' }))}
+              onChangeHandoff={(v) => setAdvanceDraft((d) => (d ? { ...d, handoff: v } : d))}
+              onChangeBrief={(proj, v) => setAdvanceDraft((d) => (d ? { ...d, briefs: { ...d.briefs, [proj]: v } } : d))}
+              onConfirm={confirmAdvanceDraft}
+              onCancel={() => setAdvanceDraft(null)}
+            />
+          )
+        })() : null}
         {/* 上下文 % 进度条已移除:window 是按模型猜的、CLI 不暴露「自动压缩前还剩多少」,百分比不准且误导。
             模型真实上报的 token 数仍在会话 IDs 面板(SessionIdsPanel「上下文 … tokens」)按真实数值展示。 */}
         <Composer

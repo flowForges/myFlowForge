@@ -1,0 +1,37 @@
+/* D3/D4 推进交接/简报卡 —— 贴在 composer 上方,紫色系呼应工作流 ribbon。 */
+.wf-adv {
+  margin: 8px 10px 0;
+  border: 1px solid color-mix(in srgb, #8b5cf6 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, #8b5cf6 8%, var(--bg));
+  overflow: hidden;
+}
+.wf-adv-head {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, #8b5cf6 20%, transparent);
+}
+.wf-adv-kind { font-weight: 600; font-size: 13px; color: #8b5cf6; }
+.wf-adv-to { font-size: 12px; opacity: .7; }
+.wf-adv-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.wf-adv-hint { font-size: 12px; opacity: .65; }
+.wf-adv-ta {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  padding: 8px 10px; border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 15%, transparent);
+  background: var(--bg); color: var(--fg);
+  font: inherit; font-size: 13px; line-height: 1.5;
+}
+.wf-adv-ta:focus { outline: none; border-color: color-mix(in srgb, #8b5cf6 60%, transparent); }
+.wf-adv-brief { display: flex; flex-direction: column; gap: 4px; }
+.wf-adv-brief-nm { font-size: 12px; font-weight: 600; opacity: .85; }
+.wf-adv-loading { display: flex; align-items: center; gap: 8px; font-size: 12.5px; opacity: .75; padding: 6px 0; }
+.wf-adv-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid color-mix(in srgb, #8b5cf6 30%, transparent); border-top-color: #8b5cf6; animation: wf-adv-sp .8s linear infinite; }
+@keyframes wf-adv-sp { to { transform: rotate(360deg) } }
+.wf-adv-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 12px; border-top: 1px solid color-mix(in srgb, #8b5cf6 20%, transparent); }
+.wf-adv-no, .wf-adv-ok { padding: 5px 14px; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }
+.wf-adv-no { background: transparent; color: var(--muted); border-color: color-mix(in srgb, var(--fg) 15%, transparent); }
+.wf-adv-no:hover { color: var(--fg); }
+.wf-adv-ok { background: #8b5cf6; color: #fff; }
+.wf-adv-ok:hover:not(:disabled) { filter: brightness(1.08); }
+.wf-adv-ok:disabled { opacity: .5; cursor: not-allowed; }
