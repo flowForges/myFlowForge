@@ -277,6 +277,24 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   }, [run2RunId])
   const localSessions = useSessions(wsPath)
   const sessions = sessionsApi ?? localSessions
+  const activeSession = useMemo(
+    () => sessions.sessions.find(s => s.id === sessions.activeSessionId),
+    [sessions.sessions, sessions.activeSessionId],
+  )
+  // 对话式工作流(2026-07-30):当前会话的工作流状态,驱动顶部 ribbon、composer 阶段偏置,以及「执行」
+  // tab 的显隐(对话阶段没有 run2 但仍要显示进度面板,见 effectiveTab / 执行 tab)。
+  const activeWorkflow = activeSession?.workflowSession
+  // 进入某会话的某工作流时,自动把右侧 tab 切到「执行」看进度(同 beta.16 运行开始自动切 执行)。按
+  // 会话+flowId 记账,只在首次进入该工作流时切一次 —— 之后阶段推进(新对象但同 flowId)不再抢用户手动
+  // 切过去的 tab。
+  const wfTabDefaultedRef = useRef<string | null>(null)
+  useEffect(() => {
+    const key = activeWorkflow ? `${sessions.activeSessionId}:${activeWorkflow.flowId}` : null
+    if (key && key !== wfTabDefaultedRef.current) {
+      wfTabDefaultedRef.current = key
+      setActiveTab('exec')
+    }
+  }, [activeWorkflow, sessions.activeSessionId])
   // Confirm a pending provider switch: apply the selection, persist it, and have the new provider
   // summarize the prior conversation as a visible message (a provider-switch divider auto-inserts).
   const confirmSwitch = useCallback(() => {
@@ -664,7 +682,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // workspace-level run2 (the reported "切会话右侧还是那个工作流；只有切工作区才有用"). Derive the
   // tab actually shown: downgrade a stuck 'exec' to 概览/代理 when this session doesn't own the run.
   // Derived (not a setState) so switching BACK to the owning session restores 执行 automatically.
-  const effectiveTab: TabId = activeTab === 'exec' && !run2StateForTab ? 'agents' : activeTab
+  // 对话式工作流:即便没有 live run(run2StateForTab 为 null),只要本会话在工作流里,「执行」tab 也要
+  // 保持有效(渲染合成的只读进度面板),不降级回概览。
+  const effectiveTab: TabId = activeTab === 'exec' && !run2StateForTab && !activeWorkflow ? 'agents' : activeTab
   // Stamp each newly-seen run2 inbox event's arrival time once — mirrors LaunchGateState's `ts =
   // Date.now()` stamped once at creation — so toRunCardEntries keeps a card's timeline position stable
   // across re-renders. Mutated directly on the ref (idempotent: only ever fills in a MISSING id) rather
@@ -822,17 +842,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
 
   // Read-only imported session: load full history via sessionImportRead (not chatHistory).
-  const activeSession = useMemo(
-    () => sessions.sessions.find(s => s.id === sessions.activeSessionId),
-    [sessions.sessions, sessions.activeSessionId],
-  )
   // Permission mode is remembered PER SESSION. When the active session changes (switch/create),
   // restore its saved mode into the composer selection; absent = default 'auto'. Only touches the
   // permission facet — agent/model stay as seeded.
   // Per-session permission is restored by the unified selection effect above (on session switch).
   const activePerm = activeSession?.permissionMode ?? DEFAULT_PERMISSION_MODE
-  // 对话式工作流(2026-07-30):当前会话的工作流状态,驱动顶部 ribbon 与 composer 的阶段偏置。
-  const activeWorkflow = activeSession?.workflowSession
   // D1(图2修复):执行阶段把 run2 的 liveLanes 镜像到对话区(下方 WorkflowExecBlock)。
   const execLanes = useMemo(() => {
     const st = run2.state
@@ -1584,6 +1598,24 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               >
                 执行
               </button>
+            ) : activeWorkflow ? (
+              /* 对话式工作流(无 live run):概览 与 执行(进度)并列,用户可自由切换,进度不再堆在概览上。 */
+              <>
+                <button
+                  className={`insp-tab${effectiveTab === 'exec' ? ' on' : ''}`}
+                  data-pane="exec"
+                  onClick={() => setActiveTab('exec')}
+                >
+                  执行
+                </button>
+                <button
+                  className={`insp-tab${effectiveTab === 'agents' ? ' on' : ''}`}
+                  data-pane="agents"
+                  onClick={() => setActiveTab('agents')}
+                >
+                  概览
+                </button>
+              </>
             ) : (
               <button
                 className={`insp-tab${effectiveTab === 'agents' ? ' on' : ''}`}
@@ -1629,7 +1661,29 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         <div className="insp-body">
             {/* 执行 pane — run2 运行时的执行面板(P2-2:进度+阶段流程+代码阶段分支扇出+运行级暂停/继续/终止)。 */}
             <div className={`insp-pane${effectiveTab === 'exec' ? ' on' : ''}`} id="pane-exec">
-              {effectiveTab === 'exec' && <RunExecPanel run2={run2} onAbort={handleRunAbort} onViewLog={onViewAgentLog} />}
+              {effectiveTab === 'exec' && (
+                run2StateForTab
+                  ? <RunExecPanel run2={run2} onAbort={handleRunAbort} onViewLog={onViewAgentLog} />
+                  : activeWorkflow
+                    ? (() => {
+                        // 对话阶段:复用 beta.16 的 RunExecPanel(合成只读 state);头部覆盖为"工作流·<名>"、
+                        // 隐藏临时分支与运行控制,其余卡片样式与真运行逐字节一致。
+                        const total = activeWorkflow.stages.length
+                        const cur = Math.min(activeWorkflow.currentIndex + 1, total)
+                        const note = activeWorkflow.phase === 'done'
+                          ? '工作流已完成 · 所有阶段已走完'
+                          : `对话阶段 · 第 ${cur}/${total} 步，在左侧会话区与当前 provider 对话推进`
+                        return (
+                          <RunExecPanel
+                            staticState={toWorkflowProgressState(activeWorkflow, wsPath ?? '')}
+                            titleOverride={`工作流 · ${activeWorkflow.flowName}`}
+                            statusOverride={note}
+                            onViewLog={onViewAgentLog}
+                          />
+                        )
+                      })()
+                    : null
+              )}
             </div>
 
             {/* Spec §12.7: 运行历史 pane — list of past/interrupted runs for this workspace; clicking a
@@ -1735,37 +1789,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </div>{/* /mainFlow */}
 
               <div id="mainChat">
-                {/* 当前工作流进度。必须放 #mainChat(聊天模式可见,#mainFlow 被 .inspector.chat
-                    display:none 隐藏)。用户诉求:别再手写卡片,直接复用 beta.16 那套 RunExecPanel
-                    (.wfo-head 头部 + .wfo-flow 分阶段 pipe + AgentNode)。
-                    · 执行尾段(phase==='executing')有真 run2 → 直接传 live run2(真分支/实时日志/控制)。
-                    · 对话阶段 → workflowProgressAdapter 合成只读 state 喂给同一个 RunExecPanel;头部标题/状态
-                      用 titleOverride/statusOverride 覆盖(对话阶段无临时分支、无 暂停/终止),其余卡片样式一致。 */}
-                {activeWorkflow && (() => {
-                  const wf = activeWorkflow
-                  const total = wf.stages.length
-                  if (wf.phase === 'executing' && run2.state) {
-                    return (
-                      <div id="wfProgress">
-                        <RunExecPanel run2={run2} onAbort={handleRunAbort} onViewLog={onViewAgentLog} />
-                      </div>
-                    )
-                  }
-                  const cur = Math.min(wf.currentIndex + 1, total)
-                  const note = wf.phase === 'done'
-                    ? '工作流已完成 · 所有阶段已走完'
-                    : `对话阶段 · 第 ${cur}/${total} 步，在左侧会话区与当前 provider 对话推进`
-                  return (
-                    <div id="wfProgress">
-                      <RunExecPanel
-                        staticState={toWorkflowProgressState(wf, wsPath ?? '')}
-                        titleOverride={`工作流 · ${wf.flowName}`}
-                        statusOverride={note}
-                        onViewLog={onViewAgentLog}
-                      />
-                    </div>
-                  )
-                })()}
+                {/* 工作流进度不再堆在概览上 —— 它在右侧独立的「执行」tab 里(见上方 #pane-exec:
+                    对话阶段渲染 workflowProgressAdapter 合成的只读 RunExecPanel,执行尾段渲染 live run2)。
+                    进工作流时自动切到「执行」tab(见 wfTabDefaultedRef effect)。 */}
                 {/* 统一「工作流」区:工作区的全部工作流,每个可展开看阶段、每行可直接「启动」(选任意流,不再是
                     硬编码的「当前工作流」),顶部一个「编辑」入口。取代旧的「当前工作流」卡(它只显 workflows[0]、
                     切不了,又和下面的列表重复)。legacy 只有 stages 的旧工作区合成一条展示,避免回归。 */}
