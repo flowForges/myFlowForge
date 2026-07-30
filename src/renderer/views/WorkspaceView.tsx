@@ -8,6 +8,7 @@ import { HookNode } from '../components/HookNode'
 import { WorkflowGlance } from '../components/WorkflowGlance'
 import { WorkflowRibbon } from '../components/WorkflowRibbon'
 import { WorkflowAdvanceCard } from '../components/WorkflowAdvanceCard'
+import { WorkflowExecBlock } from '../components/WorkflowExecBlock'
 import type { Plugin } from '@shared/plugin'
 import { ReqCard } from '../components/ReqCard'
 import { PlanCard } from '../components/PlanCard'
@@ -831,6 +832,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const activePerm = activeSession?.permissionMode ?? DEFAULT_PERMISSION_MODE
   // 对话式工作流(2026-07-30):当前会话的工作流状态,驱动顶部 ribbon 与 composer 的阶段偏置。
   const activeWorkflow = activeSession?.workflowSession
+  // D1(图2修复):执行阶段把 run2 的 liveLanes 镜像到对话区(下方 WorkflowExecBlock)。
+  const execLanes = useMemo(() => {
+    const st = run2.state
+    if (!st || activeWorkflow?.phase !== 'executing') return []
+    return Object.entries(st.liveLanes).map(([laneId, l]) => ({ laneId, label: l.project ?? l.stageKey, stageName: l.stageKey, state: l.state, activity: l.activity }))
+  }, [run2.state, activeWorkflow?.phase])
   // 停在对话阶段时,把 composer 的 provider/model/权限偏置到当前阶段配置(切阶段即"换挡")。切阶段
   // (currentIndex/phase 变化)会重跑;value-equal 短路避免无谓 re-render。用户手动切 provider 不会被
   // 覆盖(依赖项不含 selection,且只在阶段变化时触发)。
@@ -1393,6 +1400,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 onResolve={(p) => chat.resolveAsk({ id: p.id, decision: p.decision === 'deny' ? 'deny' : 'allow', value: p.value, choice: p.choice })}
               />
             ))}
+            {execLanes.length > 0 ? (
+              <WorkflowExecBlock
+                stageName={activeWorkflow?.stages[activeWorkflow.currentIndex]?.name ?? '执行'}
+                lanes={execLanes}
+              />
+            ) : null}
           </div>
         </div>
         {chat.queue.length > 0 && (
