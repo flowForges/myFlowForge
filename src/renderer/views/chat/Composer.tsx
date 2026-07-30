@@ -106,7 +106,7 @@ interface Props {
   lockedReason?: string
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, autoDecide, onToggleAutoDecide, draftKey, lockedReason }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, draftKey, lockedReason }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -508,15 +508,8 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
               ))}
             </div>
           </div>
-          {/* 「工作流自动启动」(per-workspace autoDecide):开=从 / 菜单选工作流后不弹确认门,直接用默认
-              (默认工作流/全部项目/默认模型)启动;关=弹确认门等你确认(见 WorkspaceView.onPickWorkflow) */}
-          <button
-            className={'cb-btn cb-auto' + (autoDecide ? ' on' : '')}
-            title={autoDecide ? '工作流自动启动:开 — 选工作流后不弹确认门,直接用默认配置启动' : '工作流自动启动:关 — 选工作流后弹确认门等你确认'}
-            onClick={() => onToggleAutoDecide?.()}
-          >
-            <span>{autoDecide ? '⚡ 自动' : '⚙ 手动'}</span>
-          </button>
+          {/* P4.1(2026-07-30):删除「⚡自动/⚙手动」工作流自动启动开关 —— 提案门已废除,该开关失去意义,
+              且与权限档的「自动(工作区)」撞名造成混淆。启动统一进对话式工作流(见 confirmLaunchGate)。 */}
           <button className="cb-btn" id="attachBtn" title="附加文件" onClick={pickFiles}>
             {PAPERCLIP}
           </button>

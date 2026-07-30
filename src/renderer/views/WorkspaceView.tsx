@@ -339,14 +339,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
 
   // Load workspace data for the chat panel
   const [wsInfo, setWsInfo] = useState<WorkspaceInfo | null>(null)
-  // 「允许 LLM 自行决策」(per-workspace):开=工作流不弹选择门,主代理自填门决策。初值随 wsInfo 载入。
-  const [autoDecide, setAutoDecide] = useState(false)
+  // P4.1(2026-07-30):autoDecide(⚡自动/⚙手动)已删除 —— 提案门废除后失去意义,且与权限档「自动」撞名。
   const reloadWsInfo = useCallback(() => {
     if (!wsPath) { setWsInfo(null); return }
     void window.forge.getWorkspace(wsPath).then((ws: WorkspaceInfo | null) => setWsInfo(ws))
   }, [wsPath])
   useEffect(() => { reloadWsInfo() }, [reloadWsInfo])
-  useEffect(() => { setAutoDecide(!!wsInfo?.autoDecide) }, [wsInfo])
   useEffect(() => {
     const off = window.forge.onWorkspacesChanged?.(() => reloadWsInfo())
     return () => { off?.() }
@@ -450,7 +448,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       // Only ONE active (unconfirmed) launch gate per session: re-picking a workflow (or clicking 启动
       // again) REPLACES the pending gate instead of stacking a second permission door in the chat — the
       // bug where 3 clicks left 3 gates. Frozen (already-launched) records and OTHER sessions' gates stay.
-      setLaunchGates((prev) => [...prev.filter((g) => g.frozen || g.sessionId !== sid), { id: gateId, ts: now, config, sessionId: sid, auto: autoDecide, seedLoading: true }])
+      setLaunchGates((prev) => [...prev.filter((g) => g.frozen || g.sessionId !== sid), { id: gateId, ts: now, config, sessionId: sid, auto: false, seedLoading: true }])
       const agent = selection?.agentId ?? ''
       const summarize = agent
         ? window.forge.chatSummarizeRequirement?.({ workspacePath: wsPath, sessionId: sid ?? '', agent, model: selection?.modelId ?? '' })
@@ -462,7 +460,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           setLaunchGates((prev) => prev.map((g) => (g.id === gateId ? { ...g, config: { ...g.config, seed }, seedLoading: false } : g)))
         })
     })
-  }, [wsPath, chat.messages, sessions.activeSessionId, autoDecide, selection?.agentId, selection?.modelId])
+  }, [wsPath, chat.messages, sessions.activeSessionId, selection?.agentId, selection?.modelId])
   // Launch gate's 确认: resolve the (possibly user-edited) config down to run2's LaunchStartConfig
   // (only the SELECTED projects go over the wire) and start the run. P1-3 follow-up fix: the card used
   // to freeze to a "已启动" record synchronously, BEFORE run2.start's promise resolved (fire-and-forget)
@@ -1441,12 +1439,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           selection={selection}
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
-          autoDecide={autoDecide}
-          onToggleAutoDecide={() => {
-            const next = !autoDecide
-            setAutoDecide(next)
-            if (wsPath) window.forge.wsSetAutoDecide?.({ workspacePath: wsPath, value: next })
-          }}
           onSelectionChange={(s) => {
             // Provider switch guard: agent changed AND the old provider already ran this session → don't
             // switch yet; raise a confirm banner (switch loses native context; the new provider will
