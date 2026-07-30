@@ -52,6 +52,8 @@ export function planFromStages(runId: string, stages: StageSpec[], hooks?: Plugi
       // ②多镜头CR: carry the review stage's fan-out config into the plan so fanout.buildWorkOrders can
       // fan it into per-lens reviewers (see reviewFanout.ts). undefined for every non-review stage.
       review: s.review,
+      // 每阶段权限档,透传给 fanout 做每 lane 解析(项目 > 阶段 > 运行级)。undefined → 回退运行级。
+      permissionMode: s.permissionMode,
     }
   })
   // P4-2: every RunPlan gets its run's temp-branch name stamped in (single value shared across all

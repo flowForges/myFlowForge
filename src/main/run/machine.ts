@@ -20,6 +20,9 @@ export interface StagePlan {
   // every non-review stage (and for a review stage left at 'off'/'single'), so those behave exactly
   // as before this existed.
   review?: import('@shared/types').ReviewConfig
+  // 每阶段权限档(agent 能动到什么程度 / 沙箱范围)。fanout 解析每条 lane 的权限时按「项目 > 阶段 > 运行级」
+  // 取:project.permissionMode ?? stage.permissionMode ?? run-wide。未设 → 回退运行级(现行为不变)。
+  permissionMode?: import('@shared/permissions').PermissionMode
 }
 export interface StageState { key: string; status: StageStatus; round: number }
 // tempBranch: the local git branch (`forge/run-<runId>`, see tempBranch.ts) every participating

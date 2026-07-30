@@ -73,6 +73,35 @@ describe('buildWorkOrders', () => {
   })
 })
 
+describe('buildWorkOrders · per-lane permission (项目 > 阶段 > 运行级)', () => {
+  it('root: stage.permissionMode wins over the run-wide input.permissionMode', () => {
+    const stage: StagePlan = { ...rootStage, permissionMode: 'readonly' }
+    const orders = buildWorkOrders({ stage, workspacePath: '/ws', projects: [], upstream: [], buildPrompt, permissionMode: 'full' })
+    expect(orders[0].permissionMode).toBe('readonly')
+  })
+  it('root: falls back to the run-wide permissionMode when the stage sets none', () => {
+    const orders = buildWorkOrders({ stage: rootStage, workspacePath: '/ws', projects: [], upstream: [], buildPrompt, permissionMode: 'full' })
+    expect(orders[0].permissionMode).toBe('full')
+  })
+  it('per-project: project.permissionMode wins over stage and run-wide', () => {
+    const stage: StagePlan = { ...devStage, permissionMode: 'auto' }
+    const orders = buildWorkOrders({
+      stage, workspacePath: '/ws',
+      projects: [{ name: 'a', cwd: '/ws/a', permissionMode: 'full' }, { name: 'b', cwd: '/ws/b' }],
+      upstream: [], buildPrompt, permissionMode: 'readonly',
+    })
+    expect(orders[0].permissionMode).toBe('full') // project override
+    expect(orders[1].permissionMode).toBe('auto') // falls back to stage
+  })
+  it('per-project: falls back to run-wide when neither project nor stage sets one', () => {
+    const orders = buildWorkOrders({
+      stage: devStage, workspacePath: '/ws',
+      projects: [{ name: 'a', cwd: '/ws/a' }], upstream: [], buildPrompt, permissionMode: 'auto',
+    })
+    expect(orders[0].permissionMode).toBe('auto')
+  })
+})
+
 describe('runStage', () => {
   it('one failing lane does not sink the siblings', async () => {
     const input: StageInput = {

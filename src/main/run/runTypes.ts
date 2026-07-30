@@ -42,7 +42,7 @@ export type StageScope = 'root' | 'per-project'
 // summary: after per-project runs, append a 汇总 agent (design's cross-project consolidation). projectAgent:
 // use each project's own provider/model (develop). producesDoc: force a markdown deliverable (design). All
 // default (per built-in key) via the config helpers; custom stages set them explicitly.
-export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[]; gate?: boolean; reworkNote?: string; summary?: boolean; projectAgent?: boolean; producesDoc?: boolean }
+export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[]; gate?: boolean; reworkNote?: string; summary?: boolean; projectAgent?: boolean; producesDoc?: boolean; permissionMode?: PermissionMode }
 
 // Where a stage's agent(s) are spawned:
 //  - 'root'        → one agent in the workspace root
@@ -57,7 +57,7 @@ export interface StageSpec { key: string; name: string; provider: string; model:
 // design. The rest stay at the workspace root. An explicit `spec.scope` overrides the default.
 const DEFAULT_STAGE_SCOPE: Record<string, StageScope> = { develop: 'per-project' }
 export function stageScope(spec: StageSpec): StageScope { return spec.scope ?? DEFAULT_STAGE_SCOPE[spec.key] ?? 'root' }
-export interface DevelopProject { name: string; cwd: string; provider?: string; model?: string }
+export interface DevelopProject { name: string; cwd: string; provider?: string; model?: string; permissionMode?: PermissionMode }
 export interface StartRunOpts {
   runId: string
   workspaceName: string

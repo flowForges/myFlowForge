@@ -23,11 +23,14 @@ export function buildWorkOrders(input: StageInput): WorkOrder[] {
   // root. Gated on isLensReviewStage (root scope + lens config) so a stray lens config on a PER-PROJECT
   // stage (e.g. develop) can't hijack its per-project fan-out — see isLensReviewStage's doc. Non-lens
   // review configs (single / per-project) fall through to the normal shapes below unchanged.
+  // Per-lane permission resolves 项目 > 阶段 > 运行级. `?? permissionMode` at each level preserves the
+  // old behavior when nothing is set (every lane inherits the run-wide value).
+  const stagePerm = stage.permissionMode ?? permissionMode
   if (isLensReviewStage(stage)) {
     return buildReviewOrders(
       stage, workspacePath,
       ({ stageKey, cwd, lens }) => buildPrompt({ stageKey, cwd, upstream, lens }),
-      permissionMode,
+      stagePerm,
     )
   }
   if (stage.scope === 'root') {
@@ -35,14 +38,14 @@ export function buildWorkOrders(input: StageInput): WorkOrder[] {
       id: `${stage.key}:root`, stageKey: stage.key, name: stage.name,
       provider: stage.provider, model: stage.model, cwd: workspacePath,
       prompt: buildPrompt({ stageKey: stage.key, cwd: workspacePath, upstream }),
-      permissionMode,
+      permissionMode: stagePerm,
     }]
   }
   return projects.map((p) => ({
     id: `${stage.key}:${p.name}`, stageKey: stage.key, name: stage.name, project: p.name,
     provider: p.provider || stage.provider, model: p.model || stage.model, cwd: p.cwd,
     prompt: buildPrompt({ stageKey: stage.key, project: p.name, cwd: p.cwd, upstream }),
-    permissionMode,
+    permissionMode: p.permissionMode ?? stagePerm,
   }))
 }
 
