@@ -1,6 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
-import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor, splitThinkLines } from '../chatStream'
+import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
 import { createFenceScanner } from '../handoffFence'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
@@ -100,6 +100,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         }
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         const actions = parseChatStreamActions(obj)
         if (actions.length === 0) {
           // Unrecognised JSON line (e.g. handoff fence body JSON): run through scanner so the
@@ -218,6 +219,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         const handle = (obj: any) => {
           const used = extractContextTokens(obj)
           if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+          { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
           if (obj?.type === 'stream_event') streamed = true
           if (obj?.type === 'assistant' && streamed) return   // deltas already streamed; skip to avoid duplicates
           for (const action of parseChatStreamActions(obj)) {

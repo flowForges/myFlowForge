@@ -1,6 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
-import { parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor, splitThinkLines } from '../chatStream'
+import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
@@ -127,6 +127,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         }
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         if (obj?.type === 'stream_event') streamed = true
         if (obj?.type === 'assistant' && streamed) return   // deltas already streamed this turn; skip the full message to avoid duplicates
         for (const a of parseChatStreamActions(obj)) {
@@ -283,6 +284,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         }
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         if (obj?.type === 'stream_event') streamed = true
         // deltas already streamed the assistant text; skip its text to avoid duplication — but STILL
         // extract Task sub-agent blocks, which only appear (with full input) in this message, not the

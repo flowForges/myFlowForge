@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseChatStreamObj, parseChatStreamActions, buildChatPrompt, extractContextTokens, contextWindowFor, splitThinkLines } from './chatStream'
+import { parseChatStreamObj, parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from './chatStream'
 
 describe('parseChatStreamObj', () => {
   it('extracts session id from a system/init event', () => {
@@ -184,5 +184,19 @@ describe('splitThinkLines (coalesce word-level reasoning)', () => {
 
   it('holds a fragment with no newline entirely in rest', () => {
     expect(splitThinkLines('partial')).toEqual({ lines: [], rest: 'partial' })
+  })
+})
+
+describe('extractTurnTokens', () => {
+  it('reads input(+cache) and output from a result event', () => {
+    const obj = { type: 'result', usage: { input_tokens: 100, cache_read_input_tokens: 50, cache_creation_input_tokens: 10, output_tokens: 30 } }
+    expect(extractTurnTokens(obj)).toEqual({ input: 160, output: 30 })
+  })
+  it('ignores non-result events (those are context snapshots, not turn cost)', () => {
+    expect(extractTurnTokens({ type: 'assistant', message: { usage: { input_tokens: 100, output_tokens: 5 } } })).toBeNull()
+  })
+  it('returns null when a result carries no usable usage', () => {
+    expect(extractTurnTokens({ type: 'result' })).toBeNull()
+    expect(extractTurnTokens({ type: 'result', usage: { input_tokens: 0, output_tokens: 0 } })).toBeNull()
   })
 })

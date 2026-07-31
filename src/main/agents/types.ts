@@ -39,6 +39,8 @@ export interface AgentCallbacks {
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired (run() only) when the running max usage increases.
   onUsage?(u: { used: number; window: number }): void
+  // 每轮 token 成本(input+output),用于用量汇总账本;仅在有 result 事件用量时触发(见 extractTurnTokens)。
+  onTurnTokens?(t: { input: number; output: number }): void
   onConfirm(req: ConfirmReq): Promise<'allow' | 'deny'>
   onInput(req: InputReq): Promise<string>
   onDone(result: AgentResult): void
@@ -71,6 +73,8 @@ export interface ChatCallbacks {
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired when the running max usage increases.
   onUsage?(u: { used: number; window: number }): void
+  // 每轮 token 成本(input+output),用于用量汇总账本;仅在有 result 事件用量时触发(见 extractTurnTokens)。
+  onTurnTokens?(t: { input: number; output: number }): void
   // A built-in Task sub-agent the main agent spawned. phase 'start' when the Task tool_use appears
   // (fields may be partial), 'update' to enrich once the full input is seen, 'done' on the tool_result.
   // `step` (with phase 'update') appends one of the sub-agent's OWN tool calls (attributed via the

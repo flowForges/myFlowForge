@@ -300,6 +300,7 @@ const api = {
   memoryRead: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string }): Promise<string> => ipcRenderer.invoke(CH.memoryRead, a),
   memoryWrite: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string; content: string }): Promise<void> => ipcRenderer.invoke(CH.memoryWrite, a),
   memoryClear: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string }): Promise<void> => ipcRenderer.invoke(CH.memoryClear, a),
+  tokenUsageAggregate: (): Promise<import('../main/ipc/tokenUsageHandlers').TokenUsageRow[]> => ipcRenderer.invoke(CH.tokenUsageAggregate),
   // Run2 (P3-A): additive API surface for the new headless run controller. Coexists with startRun/resolve/
   // onEngineEvent above — none of those are touched.
   run2: {

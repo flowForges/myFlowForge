@@ -236,6 +236,11 @@ export interface ChatMessage {
   // Chat-session context-window usage at the time this assistant message finished: used =
   // total context tokens consumed, window = model's context window. Set on the done message.
   usage?: { used: number; window: number }
+  // Per-TURN token cost of this assistant turn (input incl. cache + output), from the provider's
+  // cumulative `result` usage (see extractTurnTokens). Distinct from `usage` (a context-size snapshot):
+  // `tokens` is additive and safe to SUM for the (workspace × provider × day) usage ledger. Absent for
+  // providers that don't emit result usage, and for older messages recorded before this existed.
+  tokens?: { input: number; output: number }
   // Design docs a stage produced, carried onto the persisted stage-note message so they stay
   // openable in the timeline AFTER the (ephemeral) design-gate card is resolved and unmounts.
   docs?: DesignDocRef[]

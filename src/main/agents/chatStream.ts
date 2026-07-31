@@ -144,6 +144,21 @@ export function extractContextTokens(obj: any): number | null {
   return total > 0 ? total : null
 }
 
+// Per-TURN token cost (input + output), for the token-usage ledger (工作区×provider×每天 汇总).
+// Unlike extractContextTokens (a live context-size snapshot), this reads the `result` event's
+// CUMULATIVE usage across the whole turn's tool loop — which is exactly "what this turn cost". Returns
+// null when there's no result-event usage (most providers only emit it on the terminal result line).
+// input = fresh input + cache tiers (what we paid to feed the model); output = generated tokens.
+export function extractTurnTokens(obj: any): { input: number; output: number } | null {
+  if (obj?.type !== 'result') return null
+  const u = obj?.usage ?? obj?.message?.usage
+  if (!u || typeof u !== 'object') return null
+  const n = (x: any) => (typeof x === 'number' && x > 0 ? x : 0)
+  const input = n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens)
+  const output = n(u.output_tokens)
+  return input > 0 || output > 0 ? { input, output } : null
+}
+
 // Context-window size in tokens for a model id (claude/qoder default 200K; 1m variants 1M).
 export function contextWindowFor(model: string): number {
   return /1m/i.test(model || '') ? 1_000_000 : 200_000

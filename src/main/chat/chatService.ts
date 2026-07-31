@@ -145,6 +145,8 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     let text = ''
     let think = ''
     let lastUsage: { used: number; window: number } | undefined
+    // 本轮累计 token 成本(input+output),用于用量汇总账本。一个 turn 里可能有多段 result 用量,累加之。
+    let turnTokens: { input: number; output: number } | undefined
     // Built-in Task sub-agents spawned this turn, keyed by tool_use id — accumulated live and persisted
     // on the finished message so their cards survive reload.
     const subagents = new Map<string, SubagentCard>()
@@ -274,6 +276,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         think: steps.length ? { label: '已思考', elapsed, steps } : undefined,
         context,
         usage: lastUsage,
+        tokens: turnTokens,
         subagents: subagentList(),
         tools: toolList(),
         startedAt, endedAt: Date.now(),
@@ -341,6 +344,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onStatus: (t) => emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t }),
           onConfirm: deps.confirm,
           onUsage: (u) => { lastUsage = u; publishLive() },
+          onTurnTokens: (t) => { turnTokens = { input: (turnTokens?.input ?? 0) + t.input, output: (turnTokens?.output ?? 0) + t.output } },
           onSubagent,
           onToolActivity,
           onDone: (r) => { if (settled) return; settled = true; resolve(finishOk(r.elapsed)) },

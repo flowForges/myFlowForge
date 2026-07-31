@@ -1,7 +1,7 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { createFenceScanner } from '../handoffFence'
-import { buildChatPrompt, extractContextTokens, contextWindowFor } from '../chatStream'
+import { buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor } from '../chatStream'
 import { forgeCodexConfigArgs } from '../mcpConfig'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
@@ -200,6 +200,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // codex's usage shape differs, extractContextTokens returns null and the bar simply omits.
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         // Try parseCodexEvent first — it handles both item format and legacy msg format.
         const actions = parseCodexEvent(obj)
         if (actions.length > 0) {
@@ -364,6 +365,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // symmetry with run() so a compatible usage shape would feed the session context meter.
         const used = extractContextTokens(obj)
         if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         // Surface codex's command/file execution in the 执行 block (title + output), then drop the
         // duplicate think step parseCodexEvent renders for the same item.
         const toolAct = codexToolActivity(obj)

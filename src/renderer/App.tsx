@@ -50,6 +50,7 @@ import { SessionImportPane } from './settings/SessionImportPane'
 import { DebugLogPane } from './settings/DebugLogPane'
 import { AboutPane } from './settings/AboutPane'
 import { MemoryPane } from './settings/MemoryPane'
+import { TokenUsagePane } from './settings/TokenUsagePane'
 import { KeybindingsPane } from './settings/KeybindingsPane'
 import { useKeybindings } from './state/useKeybindings'
 import { UpgradeModal } from './shell/UpgradeModal'
@@ -810,6 +811,7 @@ export function App() {
           case 'sessions': return <SessionImportPane />
           case 'memory': return settings ? <MemoryPane enabled={settings.memory.enabled} onToggle={(v) => update({ memory: { enabled: v } })} wsPath={activeWsId || undefined} sessionId={sessions.activeSessionId ?? undefined} /> : null
           case 'debug': return <DebugLogPane perfDiagnostics={settings?.perfDiagnostics ?? false} onTogglePerfDiagnostics={(v) => update({ perfDiagnostics: v })} />
+          case 'usage': return <TokenUsagePane />
           case 'about': return <AboutPane version={updateCtx.currentVersion} />
           default: return null
         }

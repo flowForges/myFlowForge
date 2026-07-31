@@ -206,6 +206,7 @@ export const CH = {
   appLogEvent: 'app-log:event',
   perfStall: 'perf:stall',
   memoryRead: 'memory:read',
+  tokenUsageAggregate: 'token-usage:aggregate',
   memoryWrite: 'memory:write',
   memoryClear: 'memory:clear',
   // Run2 (P3-A): additive, coexists with the existing engine* orchestrator channels above.
