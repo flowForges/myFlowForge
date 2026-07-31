@@ -733,9 +733,16 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .slash-hd { padding: 6px 9px 4px; font-size: 11px; font-weight: 600; color: var(--faint); }
 .slash-item {
   display: grid; grid-template-columns: auto 1fr; gap: 1px 9px; width: 100%;
-  padding: 7px 9px; border-radius: 8px; text-align: left; cursor: pointer; transition: background .12s;
+  padding: 7px 9px; border-radius: 8px; text-align: left; cursor: pointer;
+  transition: background .12s, box-shadow .12s; position: relative;
 }
-.slash-item.on, .slash-item:hover { background: var(--surface-2); }
+/* hover:轻微;键盘选中(.on):明显的 accent 高亮 + 左竖条,一眼看出当前选的是哪条(用户反馈选中态看不出)。 */
+.slash-item:hover { background: var(--surface-2); }
+.slash-item.on {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.slash-item.on .slash-title { color: var(--accent); font-weight: 650; }
 .slash-cmd { grid-row: 1 / span 2; align-self: center; font-family: ui-monospace, monospace; font-size: 12.5px; font-weight: 600; color: var(--accent); }
 .slash-title { font-size: 12.5px; font-weight: 550; color: var(--fg); display: inline-flex; align-items: center; gap: 6px; }
 .slash-tag { font-size: 10px; font-weight: 600; color: var(--muted); background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
