@@ -162,11 +162,13 @@ export function listRuns(wsPath: string): RunHistoryEntry[] {
   return scanRun2Dirs(wsPath)
     .map(({ runId, mtimeMs, state }) => {
       const stages = state.machine.stages
+      // 对话式工作流:尾段前已完成的对话阶段(plan.leadStages)也计入进度,让运行历史显示 1/4 而非 0/3。
+      const lead = state.machine.plan.leadStages?.length ?? 0
       return {
         runId,
         status: state.status,
-        doneCount: stages.filter((s) => s.status === 'done').length,
-        totalStages: stages.length,
+        doneCount: lead + stages.filter((s) => s.status === 'done').length,
+        totalStages: lead + stages.length,
         task: state.task,
         modifiedAt: mtimeMs,
       }

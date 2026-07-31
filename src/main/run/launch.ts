@@ -195,6 +195,8 @@ export interface LaunchStartConfig {
   // Per-hook on/off from the gate (see LaunchInfo.hooks). Unchecked hooks are dropped from the run.
   // Keyed by plugin id; a hook id absent here defaults to enabled. Omitted → all hooks run (old behavior).
   hooks?: { id: string; enabled: boolean }[]
+  // 对话式工作流尾段:尾段之前已完成的对话阶段(见 RunPlan.leadStages)。透传到 plan 供进度显示按完整工作流算。
+  leadStages?: { key: string; name: string; provider: string; model: string }[]
 }
 
 // Ground-truth block prepended to the root stage's prompt — same anchor phrasing as
@@ -275,7 +277,10 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
   // the gate unchecked (既然阶段可选,hook 也可选). A hook id absent from cfg.hooks defaults to enabled.
   const hookChoice = new Map((cfg.hooks ?? []).map((h) => [h.id, h]))
   const hooks = collectRunHooks(ws.plugins, ws.stepPlugins).filter((h) => hookChoice.get(h.id)?.enabled !== false)
-  return planFromStages(`run2-${randomUUID()}`, stageSpecs, hooks)
+  const plan = planFromStages(`run2-${randomUUID()}`, stageSpecs, hooks)
+  // 对话式工作流:把尾段之前的已完成对话阶段记到 plan,供进度/运行历史按完整工作流显示(1/4 而非 0/3)。
+  if (cfg.leadStages?.length) plan.leadStages = cfg.leadStages
+  return plan
 }
 
 // Companion to buildLaunchPlan: the DevelopProject[] to pass alongside its RunPlan into

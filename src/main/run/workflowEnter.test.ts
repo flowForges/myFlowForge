@@ -56,6 +56,8 @@ describe('tailLaunchConfig', () => {
     expect(cfg.stages!.map((s) => s.perProject)).toEqual([false, false, true])
     // per-stage permission carried
     expect(cfg.stages!.find((s) => s.key === 'design')!.permissionMode).toBe('readonly')
+    // lead stages = the already-done conversational stages before the tail (for full-workflow progress)
+    expect(cfg.leadStages!.map((s) => s.key)).toEqual(['requirement', 'design'])
   })
 })
 

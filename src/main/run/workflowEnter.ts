@@ -80,6 +80,8 @@ export function tailLaunchConfig(
       // 显式复原每阶段范围:扇出→per-project,对话→root。buildLaunchPlan 对显式 perProject 恒生效。
       perProject: sv.scope === 'per-project',
     })),
+    // 尾段之前已完成的对话阶段(技术方案设计等)→ 供面板/运行历史按完整工作流显示进度(1/4 而非 0/3)。
+    leadStages: stages.slice(0, fromIndex).map((sv) => ({ key: sv.key, name: sv.name, provider: sv.provider, model: sv.model })),
   }
 }
 

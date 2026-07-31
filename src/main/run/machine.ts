@@ -37,6 +37,10 @@ export interface RunPlan {
   // launch (planFromStages). Absent/empty for the raw run2:start channel and any run with no hooks,
   // so those behave exactly as before this existed.
   hooks?: import('../../shared/plugin').Plugin[]
+  // 对话式工作流:执行尾段(代码开发/写单测/代码CR)是 ONE run,但它前面还有已完成的对话阶段(技术方案设计
+  // 等)。把那些"前置已完成阶段"记在这里,让面板/运行历史按完整工作流显示进度(1/4 而非 0/3),而不是只看
+  // 尾段的 3 个阶段。随 machine.plan 一起持久化(persist 存整个 machine),故运行历史回看也对得上。
+  leadStages?: { key: string; name: string; provider: string; model: string }[]
 }
 export interface MachineState { plan: RunPlan; stages: StageState[]; currentIndex: number }
 

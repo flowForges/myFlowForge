@@ -80,7 +80,7 @@ export function RunHistoryPanel({
         <div className="run-history-head">
           <button className="txt-btn" onClick={() => setSelected(null)}>← 返回运行历史</button>
         </div>
-        <RunExecPanel staticState={selected.state} readOnly />
+        <RunExecPanel staticState={selected.state} readOnly leadingDoneStages={selected.state.machine.plan.leadStages} />
       </div>
     )
   }
