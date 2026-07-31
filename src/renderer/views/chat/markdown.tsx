@@ -162,18 +162,25 @@ export function renderMarkdown(text: string): ReactNode {
     para.length = 0
   }
 
+  // 有序列表连续编号计数器:LLM 常把"1. …正文… 1. …"每项都写成 1(源码就是 1、1),被中间的段落/代码块/
+  // 子列表打断成多个单项 <ol> 后各自从 1 开始 → 用户看到一堆「1.」。用一个跨块的运行计数器:同一标题下的
+  // 有序项连续编号(遇标题重置);显式从 >1 开始的列表(如 3. 4.)仍尊重其起始号。
+  let olSeq = 0
   while (i < lines.length) {
     const line = lines[i]
-    // fenced code block
-    const fence = /^```(\w*)\s*$/.exec(line)
+    // fenced code block —— 容忍前导缩进(LLM 常把代码块缩进到列表项下,`   ```sql` 之前的正则要求顶格 → 没
+    // 识别成围栏,原样漏出反引号)。记住围栏缩进,body 各行去掉同样多的前导空白,代码不被整体右移。
+    const fence = /^(\s*)```(\w*)\s*$/.exec(line)
     if (fence) {
       flushPara()
+      const indent = fence[1].length
+      const strip = new RegExp('^\\s{0,' + indent + '}')
       const body: string[] = []
       i++
-      while (i < lines.length && !/^```\s*$/.test(lines[i])) { body.push(lines[i]); i++ }
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { body.push(lines[i].replace(strip, '')); i++ }
       i++ // skip closing fence
       // 修图10:空代码块(body 全空白)不渲染——LLM 常在结尾多输出一个空围栏,渲染成"1 行"空块很干扰。
-      if (body.join('').trim()) blocks.push(<CodeBlock key={`pre${key++}`} code={body.join('\n')} lang={fence[1] || undefined} />)
+      if (body.join('').trim()) blocks.push(<CodeBlock key={`pre${key++}`} code={body.join('\n')} lang={fence[2] || undefined} />)
       continue
     }
     // GFM table: a header row with a pipe, immediately followed by a separator
@@ -228,6 +235,7 @@ export function renderMarkdown(text: string): ReactNode {
     const h = /^(#{1,6})\s+(.*)$/.exec(line)
     if (h) {
       flushPara()
+      olSeq = 0   // 新标题 = 新章节,有序编号从头开始
       const level = h[1].length
       const Tag = (`h${Math.min(level, 6)}`) as 'h1'
       blocks.push(<Tag key={`h${key++}`}>{renderInline(h[2], `h${key}`)}</Tag>)
@@ -250,10 +258,13 @@ export function renderMarkdown(text: string): ReactNode {
     // 「1.」。取该项自身写的数字当 start,被打断的项也显示真实序号(如 1. …正文… 2. → 显示 1、2 而非 1、1)。
     if (/^\s*\d+\.\s+/.test(line)) {
       flushPara()
-      const startNum = parseInt(line.match(/^\s*(\d+)\./)?.[1] ?? '1', 10)
+      const srcNum = parseInt(line.match(/^\s*(\d+)\./)?.[1] ?? '1', 10)
       const items: string[] = []
       while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+\.\s+/, '')); i++ }
-      blocks.push(<ol start={startNum} key={`ol${key++}`}>{items.map((it, idx) => <li key={idx}>{renderInline(it, `ol${key}-${idx}`)}</li>)}</ol>)
+      // 源码从 1 开始(常见的"懒编号 1.") → 接着上一段有序序列继续编号;显式从 >1 开始 → 尊重其起始号。
+      const start = srcNum === 1 ? olSeq + 1 : srcNum
+      olSeq = start + items.length - 1
+      blocks.push(<ol start={start} key={`ol${key++}`}>{items.map((it, idx) => <li key={idx}>{renderInline(it, `ol${key}-${idx}`)}</li>)}</ol>)
       continue
     }
     // blockquote

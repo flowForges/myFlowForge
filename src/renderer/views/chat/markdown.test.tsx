@@ -29,8 +29,17 @@ describe('Markdown', () => {
   it('renders unordered and ordered lists', () => {
     expect(html('- a\n- b')).toContain('<ul><li>a</li><li>b</li></ul>')
     expect(html('1. x\n2. y')).toContain('<ol start="1"><li>x</li><li>y</li></ol>')
-    // a numbered item split into its own <ol> by intervening content keeps its real number (start=3), not 1
+    // an explicit start >1 is honored
     expect(html('3. z')).toContain('<ol start="3">')
+    // two lazy "1." items split by intervening content number continuously (1, 2), not (1, 1)
+    expect(html('## H\n1. a\n\npara\n\n1. b')).toContain('<ol start="2">')
+    // …but a new heading resets the sequence back to 1
+    expect(html('## H1\n1. a\n\n## H2\n1. b').match(/<ol start="1"/g)?.length).toBe(2)
+  })
+  it('renders an INDENTED fenced code block (list-continuation code, not raw backticks)', () => {
+    const out = html('现在:\n\n   ```sql\n   ALTER TABLE x;\n   ```')
+    expect(out).toContain('<pre>')
+    expect(out).not.toContain('```')
   })
   it('renders fenced code blocks verbatim (no inline parsing inside)', () => {
     const { container } = render(<Markdown text={'```go\nfunc main() {}\n```'} />)
