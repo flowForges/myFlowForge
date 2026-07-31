@@ -654,12 +654,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (ws.phase !== 'chatting') return
     const stage = ws.stages[ws.currentIndex]
     if (!stage || !stage.provider) return
+    // 把选定项目列表告诉对话阶段的 agent —— 尤其技术方案阶段要据此产出「各项目任务分工」(见 STAGE_PROMPTS.design)。
+    const projNote = ws.projects.length
+      ? `\n\n本工作流涉及以下项目/仓库:${ws.projects.map((p) => p.name).join('、')}。若本步产出技术方案,请据此为每个项目单列任务分工。`
+      : ''
     chatQueue.enqueue({
       workspacePath, sessionId,
       agent: stage.provider,
       agentLabel: providers[stage.provider]?.displayName ?? stage.provider,
       model: stage.model,
-      text: `请开始「${stage.name}」这一步:按本阶段要求完成工作,并在你的回复里**完整展示**交付物(如方案/清单)供我审阅;如涉及落盘也可同时写成文件。完成后我会审阅、必要时追问,然后我再点「下一步」进入下一阶段。`,
+      text: `请开始「${stage.name}」这一步:按本阶段要求完成工作,并在你的回复里**完整展示**交付物(如方案/清单)供我审阅;如涉及落盘也可同时写成文件。完成后我会审阅、必要时追问,然后我再点「下一步」进入下一阶段。${projNote}`,
       attachments: [],
       permissionMode: stage.permissionMode ?? 'auto',
     }, '工作流')
