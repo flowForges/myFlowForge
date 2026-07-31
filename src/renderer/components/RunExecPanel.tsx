@@ -108,7 +108,12 @@ const STAGE_STATE_CLS: Record<string, string> = { run: 'run', ok: 'ok', err: 'er
 // stage's 执行过程 (same as img20). WorkspaceView builds `{ '<stageKey>:root': RunLogLine[] }` from the
 // current AI message and passes it here; it replaces the empty `{}` the staticState path otherwise
 // uses. Ignored for a live run2 (which has its own real laneLogs).
-export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, titleOverride, statusOverride, logsOverride }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean; onViewLog?: (agentId: string, agentName: string) => void; titleOverride?: string; statusOverride?: string; logsOverride?: Record<string, import('../../main/run/controller').RunLogLine[]> }): ReactElement {
+// `leadingDoneStages`: conversational-workflow stages that already completed BEFORE this run's
+// fan-out tail (e.g. 技术方案设计). The execution tail is ONE run2 run over only [代码开发,写单测,代码CR],
+// so the run's own plan doesn't know about the earlier design step — the panel would show 0/3 and
+// drop 技术方案设计. Passing the earlier stages here renders them as leading 已完成 stage cards and folds
+// them into the 已完成 N/M count + numbering, so the panel reads as the FULL workflow (1/4, design shown).
+export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, titleOverride, statusOverride, logsOverride, leadingDoneStages }: { run2?: Run2Api; onAbort?: () => void; staticState?: RunControllerState; readOnly?: boolean; onViewLog?: (agentId: string, agentName: string) => void; titleOverride?: string; statusOverride?: string; logsOverride?: Record<string, import('../../main/run/controller').RunLogLine[]>; leadingDoneStages?: { key: string; name: string; provider: string; model: string }[] }): ReactElement {
   // Per-stage `project -> last-known LaneMemory` so a fan-out lane never disappears once observed
   // (see runExecAdapter's LaneMemory doc). Reset whenever the run identity changes.
   const memoryRef = useRef<Map<string, Map<string, LaneMemory>>>(new Map())
@@ -181,8 +186,9 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
     )
   }
 
-  const doneN = state.machine.stages.filter((s) => s.status === 'done').length
-  const totalStages = state.machine.stages.length
+  const leadN = leadingDoneStages?.length ?? 0
+  const doneN = leadN + state.machine.stages.filter((s) => s.status === 'done').length
+  const totalStages = leadN + state.machine.stages.length
   const pct = totalStages ? Math.round((doneN / totalStages) * 100) : 0
   const runStatus = state.status
   const runDone = runStatus === 'ok' || runStatus === 'failed'
@@ -304,7 +310,19 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
         </div>
 
         <div className="pipe">
-          {(() => { let stageNo = 0; return stages.map((stage) => {
+          {leadingDoneStages?.map((s, i) => (
+            <div key={`lead-${s.key}`} className="stage ok">
+              <div className="stage-head">
+                <span className="stage-idx">{i + 1}</span>
+                <span className="stage-name">{s.name}</span>
+                <span className="stage-mode">单代理</span>
+              </div>
+              <div className="stage-agents">
+                <AgentNode agent={{ id: `${s.key}:root`, name: s.name, role: s.name, provider: s.provider, model: s.model, state: 'ok', logs: [] }} />
+              </div>
+            </div>
+          ))}
+          {(() => { let stageNo = leadN; return stages.map((stage) => {
             // ③stage hooks: a woven hook renders as a HookNode inline in the pipe (not a numbered
             // stage) — same as the legacy orchestrator's flow. Its single agent carries hook:true +
             // capability chips (see runExecAdapter.buildHookStage).

@@ -1244,8 +1244,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         {/* 修图5:工作流 ribbon 作为对话列的固定头(在滚动区之外),始终吸顶,不随消息滚动。 */}
         {activeWorkflow ? (() => {
           const wf = activeWorkflow
-          const stage = wf.stages[wf.currentIndex]
-          const nextStage = wf.stages[wf.currentIndex + 1]
+          // 执行尾段是 ONE run2 run 覆盖 stages[currentIndex..](代码开发/写单测/代码CR),workflow 的
+          // currentIndex 停在尾段起点不动 → ribbon 会卡在"代码开发 2/4"。执行时把 run2 尾段内部的
+          // currentIndex 叠加上来,得到真实的"当前在第几步"(代码开发→2/4、写单测→3/4、代码CR→4/4)。
+          const execOffset = wf.phase === 'executing' && run2.state
+            ? Math.min(run2.state.machine.currentIndex, Math.max(0, wf.stages.length - 1 - wf.currentIndex))
+            : 0
+          const effIndex = wf.currentIndex + execOffset
+          const stage = wf.stages[effIndex]
+          const nextStage = wf.stages[effIndex + 1]
           // 修图7:不再在对话阶段把按钮叫「开始执行」(让人以为已自动执行);统一为「下一步 · <下一阶段名>」,
           // 跨 provider 时补注「换 X」。真正的"开始执行"发生在点下一步后的任务简报卡上。
           const advanceLabel = wf.phase === 'done' ? ''
@@ -1255,7 +1262,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           return (
             <WorkflowRibbon
               flowName={wf.flowName}
-              stageIndex={wf.currentIndex}
+              stageIndex={effIndex}
               stageCount={wf.stages.length}
               stageName={stage?.name ?? ''}
               provider={providerLabel(stage?.provider ?? '')}
@@ -1700,7 +1707,16 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             <div className={`insp-pane${effectiveTab === 'exec' ? ' on' : ''}`} id="pane-exec">
               {effectiveTab === 'exec' && (
                 run2StateForTab
-                  ? <RunExecPanel run2={run2} onAbort={handleRunAbort} onViewLog={onViewAgentLog} />
+                  ? <RunExecPanel
+                      run2={run2}
+                      onAbort={handleRunAbort}
+                      onViewLog={onViewAgentLog}
+                      // 执行尾段:把尾段之前已完成的对话阶段(技术方案设计等)作为前置 done 卡显示,进度按完整
+                      // 工作流算(1/4 而非 0/3),design 阶段不再消失。
+                      leadingDoneStages={activeWorkflow
+                        ? activeWorkflow.stages.slice(0, activeWorkflow.currentIndex).map((s) => ({ key: s.key, name: s.name, provider: s.provider, model: s.model }))
+                        : undefined}
+                    />
                   : activeWorkflow
                     ? (() => {
                         // 对话阶段:复用 beta.16 的 RunExecPanel(合成只读 state);头部覆盖为"工作流·<名>"、
