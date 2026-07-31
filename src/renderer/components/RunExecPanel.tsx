@@ -353,10 +353,13 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
                         open={effectiveOpenIds.has(agent.id)}
                         onToggle={() => handleToggle(agent.id)}
                         live={!isReadOnly}
-                        // A historical/read-only run has no live lane-log stream (see the `laneLogs`
-                        // comment above) — the bottom 实时日志 drawer has nothing to show for it, so
-                        // omit the 日志台 button entirely rather than open an empty drawer.
-                        onViewLog={isReadOnly ? undefined : onViewLog}
+                        // 日志台 button: a live run (not readOnly) filters the bottom drawer to this lane;
+                        // the conversational-workflow mirror (isReadOnly via staticState, but marked by
+                        // statusOverride) opens the drawer at current-session scope (its output is 主代理
+                        // chat, not a run2 lane). A genuine historical replay is isReadOnly WITHOUT
+                        // statusOverride — it has no live stream, so the button stays omitted even if a
+                        // caller wired onViewLog.
+                        onViewLog={(!isReadOnly || statusOverride) ? onViewLog : undefined}
                       />
                     ))
                   )}

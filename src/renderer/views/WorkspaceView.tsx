@@ -177,6 +177,10 @@ interface WorkspaceViewProps {
   archivedAt?: number | null
   /** Open the bottom 实时日志 drawer scoped to one agent (its full output, larger view). */
   onViewAgentLog?: (agentId: string, agentName: string) => void
+  /** Open the bottom 实时日志 drawer with NO agent filter (defaults to current-session scope). Used by
+   *  a conversational workflow stage's 日志台 button — its output is the main-agent chat, which lives in
+   *  the log stream as 主代理/this-session, not under a run2 lane id, so a per-lane filter would be empty. */
+  onOpenLog?: () => void
   // Report what the 顶栏「打开位置」button should open (current workspace / previewed file), or null.
   onOpenTargetChange?: (t: OpenTarget | null) => void
   // Session ids with an in-flight agent turn (App's memo) — pulses the matching session-tab dot.
@@ -212,7 +216,7 @@ function Copyable({ text, className }: { text: string; className?: string }) {
   )
 }
 
-export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenTargetChange, runningSessionIds }: WorkspaceViewProps) {
+export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth, onInspectorHandleDown, inspectorCollapsed, searchSignal, sessionsApi, onEditWorkspace, archived, createdAt, archivedAt, onViewAgentLog, onOpenLog, onOpenTargetChange, runningSessionIds }: WorkspaceViewProps) {
   const { resolve, cancel } = engine
   const [activeTab, setActiveTab] = useState<TabId>('agents')
   const onViewChanges = useCallback(() => setActiveTab('changes'), [])
@@ -1708,7 +1712,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                             titleOverride={`工作流 · ${activeWorkflow.flowName}`}
                             statusOverride={note}
                             logsOverride={logsOverride}
-                            onViewLog={onViewAgentLog}
+                            // 对话阶段的「日志台」:不按 lane 过滤(其输出是主代理聊天,不在 run2 lane 下),
+                            // 直接打开底部实时日志(默认当前会话作用域)。
+                            onViewLog={onOpenLog ? () => onOpenLog() : undefined}
                           />
                         )
                       })()

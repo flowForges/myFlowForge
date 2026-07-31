@@ -160,6 +160,16 @@ describe('RunExecPanel', () => {
     expect(zghCard.querySelector('.proc-expand')).toBeNull()
   })
 
+  it('KEEPS the 日志台 button on a conversational-workflow mirror (staticState + statusOverride) — it opens the session log', () => {
+    const onViewLog = vi.fn()
+    render(<RunExecPanel staticState={baseState() as any} statusOverride="对话阶段 · 第 1/2 步" onViewLog={onViewLog} />)
+    const zghCard = screen.getByText('zgh').closest('.agent-node')!
+    const logBtn = zghCard.querySelector('.proc-expand') as HTMLElement
+    expect(logBtn).not.toBeNull()
+    logBtn.click()
+    expect(onViewLog).toHaveBeenCalled()
+  })
+
   it('shows run-level 暂停/终止 controls and wires them to run2', () => {
     const run2 = makeRun2(baseState())
     render(<RunExecPanel run2={run2} />)
