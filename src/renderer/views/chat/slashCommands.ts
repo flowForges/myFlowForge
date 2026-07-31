@@ -35,6 +35,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   // Codex 专属
   { cmd: '/计划', title: '先出计划', desc: '让 Codex 先给实现计划再动手', providers: ['codex'],
     template: '先给出详细的实现计划,等我确认后再改代码:\n' },
+  // Codex / Claude 原生 /goal —— 选中把 `/goal ` 填入输入框,续写后发送,透传给 CLI 触发其原生命令。
+  { cmd: '/goal', title: '设定目标', desc: 'Codex / Claude 原生 /goal:设定或对齐本次会话目标', providers: ['codex', 'claude'],
+    template: '/goal ' },
 ]
 
 // A row in the "/" menu: Forge's own commands ('forge') plus the user's real on-disk commands
