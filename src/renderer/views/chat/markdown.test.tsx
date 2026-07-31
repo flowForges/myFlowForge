@@ -28,7 +28,9 @@ describe('Markdown', () => {
   })
   it('renders unordered and ordered lists', () => {
     expect(html('- a\n- b')).toContain('<ul><li>a</li><li>b</li></ul>')
-    expect(html('1. x\n2. y')).toContain('<ol><li>x</li><li>y</li></ol>')
+    expect(html('1. x\n2. y')).toContain('<ol start="1"><li>x</li><li>y</li></ol>')
+    // a numbered item split into its own <ol> by intervening content keeps its real number (start=3), not 1
+    expect(html('3. z')).toContain('<ol start="3">')
   })
   it('renders fenced code blocks verbatim (no inline parsing inside)', () => {
     const { container } = render(<Markdown text={'```go\nfunc main() {}\n```'} />)

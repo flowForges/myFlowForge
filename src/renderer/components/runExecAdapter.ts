@@ -213,12 +213,17 @@ function buildFanoutAgents(
 function buildReviewLensAgents(sp: StagePlan, state: RunControllerState, laneLogs: Record<string, RunLogLine[]>): AdaptedAgent[] {
   const lenses = reviewLenses(sp.review) ?? []
   const machineStatus = state.machine.stages.find((s) => s.key === sp.key)?.status
-  const outcomeByLens = new Map<string, WorkOrderOutcome>()
-  for (const o of state.outcomes[sp.key] ?? []) if (o.order.lens) outcomeByLens.set(o.order.lens, o)
+  // Key outcomes by lane id (order.id = reviewLaneId), NOT by order.lens: persist.ts's SavedOutcome
+  // drops the `lens` tag, so a HISTORICAL replay (runHistoryAdapter) rehydrates review outcomes with
+  // order.lens === undefined and this map would be empty → every lens lane falls back to machine status
+  // and shows 执行中/未完成 even for a finished (ok) review. order.id survives persistence and equals
+  // reviewLaneId(sp.key, lens), so matching on it makes the lanes reflect their real status:'ok' in replay.
+  const outcomeById = new Map<string, WorkOrderOutcome>()
+  for (const o of state.outcomes[sp.key] ?? []) if (o.order.id) outcomeById.set(o.order.id, o)
 
   return lenses.map((lens) => {
     const laneId = reviewLaneId(sp.key, lens)
-    const outcome = outcomeByLens.get(lens)
+    const outcome = outcomeById.get(laneId)
     const live = state.liveLanes[laneId] as LiveLane | undefined
     const decision = decisionAgentState(laneId, sp.key, state)
 

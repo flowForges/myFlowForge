@@ -245,12 +245,15 @@ export function renderMarkdown(text: string): ReactNode {
       blocks.push(<ul key={`ul${key++}`}>{items.map((it, idx) => <li key={idx}>{renderInline(it, `ul${key}-${idx}`)}</li>)}</ul>)
       continue
     }
-    // ordered list
+    // ordered list — 保留源码里的起始编号(<ol start={n}>)。这个 line-based 解析器只收「连续」的编号行,
+    // 一旦某项下面跟了段落/代码块/子列表,列表就会被截断成多个单项 <ol>,每个默认从 1 开始 → 用户看到一堆
+    // 「1.」。取该项自身写的数字当 start,被打断的项也显示真实序号(如 1. …正文… 2. → 显示 1、2 而非 1、1)。
     if (/^\s*\d+\.\s+/.test(line)) {
       flushPara()
+      const startNum = parseInt(line.match(/^\s*(\d+)\./)?.[1] ?? '1', 10)
       const items: string[] = []
       while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+\.\s+/, '')); i++ }
-      blocks.push(<ol key={`ol${key++}`}>{items.map((it, idx) => <li key={idx}>{renderInline(it, `ol${key}-${idx}`)}</li>)}</ol>)
+      blocks.push(<ol start={startNum} key={`ol${key++}`}>{items.map((it, idx) => <li key={idx}>{renderInline(it, `ol${key}-${idx}`)}</li>)}</ol>)
       continue
     }
     // blockquote
