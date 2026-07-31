@@ -79,7 +79,7 @@ function DocList({ docs, onOpenDoc }: { docs: ArtifactRef[]; onOpenDoc?: (doc: D
 // `kind === 'gate'`, so callers pass it as `undefined` for every other kind.
 // 'aborted' (deferred fix P4-3): synthetic marker kind, only ever reaches this frozen-only branch
 // (never live) — see FrozenRunCard's doc (chat/runCards.ts).
-function kindLabel(kind: RunEvent['kind'] | 'aborted' | 'summary', finalize?: boolean, stageName?: string): string {
+function kindLabel(kind: RunEvent['kind'] | 'aborted' | 'summary' | 'review', finalize?: boolean, stageName?: string): string {
   switch (kind) {
     // #6: a per-stage review gate titles itself with the stage name (e.g. 技术方案设计) instead of the
     // generic 阶段评审; falls back when stageName is absent (old persisted cards). The finalize gate
@@ -91,6 +91,7 @@ function kindLabel(kind: RunEvent['kind'] | 'aborted' | 'summary', finalize?: bo
     case 'failure': return '阶段执行失败'
     case 'aborted': return '运行已终止'
     case 'summary': return '本次运行总结'
+    case 'review': return '代码 CR 结果'
     case 'answer': return '答疑'
   }
 }
@@ -135,11 +136,12 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
     // no "决定：…" line (it records nothing the user decided, unlike every other frozen card). Distinct
     // from the frozen finalize GATE card (kind 'gate', finalize:true), which keeps its short 合并/丢弃
     // decision record.
-    if (frozen.kind === 'summary') {
+    // #8: 'review'(代码 CR 结果)与 'summary' 同款只读渲染 —— Markdown 正文、无「决定：…」行。
+    if (frozen.kind === 'summary' || frozen.kind === 'review') {
       return (
-        <div className="msg-req k-summary done" data-req={frozen.id}>
+        <div className={`msg-req k-${frozen.kind} done`} data-req={frozen.id}>
           <div className="req-head">
-            <span className="req-kind">{kindLabel('summary')}</span>
+            <span className="req-kind">{kindLabel(frozen.kind)}</span>
           </div>
           <div className="req-body">
             {frozen.title ? <div className="req-title">{frozen.title}</div> : null}

@@ -842,6 +842,30 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     }
   }, [run2StateForTab, wsPath, sessions.activeSessionId, persistedRunCards])
 
+  // #8:代码CR 阶段完成时,贴一张持久「代码CR 结果」卡(multi-lens 报告)。删阶段门后 CR 结论没地方看,
+  // 用户反馈"执行完了就完了"。与总结卡同机制(FrozenRunCard + chatAppendRunCard 幂等),但不等 status==='ok',
+  // CR 一完成(state.reviewReports 出现该阶段)就贴,不必等到整轮结束。
+  const reviewCardedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const st = run2StateForTab
+    const runId = st?.machine?.plan?.runId
+    if (!st || !runId || !st.reviewReports) return
+    for (const [stageKey, report] of Object.entries(st.reviewReports)) {
+      if (!report?.trim()) continue
+      const cardId = `review-${runId}-${stageKey}`
+      if (reviewCardedRef.current.has(cardId)) continue
+      if (persistedRunCards.some((r) => r.id === cardId)) { reviewCardedRef.current.add(cardId); continue }
+      reviewCardedRef.current.add(cardId)
+      const at = Date.now()
+      const frozen: FrozenRunCard = { id: cardId, kind: 'review', stageKey, title: '', body: report, decision: '', at, ts: at }
+      setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
+      const sid = st.sessionId ?? sessions.activeSessionId
+      if (wsPath && sid) {
+        void window.forge.chatAppendRunCard?.({ workspacePath: wsPath, sessionId: sid, ts: new Date(at).toISOString(), runCard: frozen })
+      }
+    }
+  }, [run2StateForTab, wsPath, sessions.activeSessionId, persistedRunCards])
+
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
 

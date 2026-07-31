@@ -152,6 +152,9 @@ export interface RunControllerState {
   // instant status flips to 'ok', and (b) the finalize gate reuses it as its body. Persisted
   // (SavedControllerState.summary) as durable run metadata.
   summary?: string
+  // #8:每个 lens-mode 代码CR 阶段的多视角报告(composeReviewReport),keyed by stageKey。渲染层据此贴一张
+  // 持久「代码CR 结果」卡。删阶段门后 CR 结论无处呈现,故 surface 到 state。
+  reviewReports?: Record<string, string>
   // See RunControllerDeps.sessionId doc — copied verbatim onto state so renderer consumers (useRun2)
   // never need a separate channel just to learn which session owns this run.
   sessionId?: string
@@ -263,6 +266,9 @@ export class RunController {
   private status: RunStatus = 'running'
   private error?: string
   private summary?: string
+  // ②多镜头CR:每个 lens-mode 代码CR 阶段完成时,把 composeReviewReport 合成的多视角报告存这里(keyed by
+  // stageKey),供渲染层贴一张持久的「代码CR 结果」卡片。对话式工作流删了阶段门→CR 报告过去从没被呈现。
+  private reviewReports: Record<string, string> = {}
   private pendingDirective: Record<string, string> = {}
   private liveLanes: Record<string, LiveLane> = {}
   private stageTimings: Record<string, { startedAt: number; endedAt?: number }> = {}
@@ -332,7 +338,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, summary: this.summary, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, summary: this.summary, reviewReports: { ...this.reviewReports }, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -1232,6 +1238,9 @@ export class RunController {
       }
       this.deps.store.setContext('artifacts:' + stage.key, refs)
       this.outcomes[stage.key] = outcomes
+      // #8:代码CR(lens 模式)阶段完成时,合成多视角报告存到 state,让渲染层贴一张持久「代码CR 结果」卡片
+      // (对话式工作流无阶段门,否则这段报告只在门体里出现;删门后就没地方看 CR 结论了)。
+      if (isLensReviewStage(stage)) this.reviewReports[stage.key] = composeReviewReport(stage.name, outcomes)
       if (this.stageTimings[stage.key]) this.stageTimings[stage.key].endedAt = this.now()
 
       // gate or auto-advance: this decides what WOULD happen next. Unresolved doubts don't block

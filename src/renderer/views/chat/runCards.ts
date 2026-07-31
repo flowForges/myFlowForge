@@ -35,7 +35,9 @@ export interface FrozenRunCard {
   // frozen branch as a read-only summary card (no decision line).
   // 'answer' events (gate Q&A) are informational and live-only — they carry no resolver and are never
   // frozen into history — so they're excluded here (a frozen card is never kind 'answer').
-  kind: Exclude<RunEvent['kind'], 'answer'> | 'aborted' | 'summary'
+  // #8: 'review' — a synthetic marker kind like 'summary', constructed directly as a FrozenRunCard when
+  // a lens-mode 代码CR stage finishes, carrying composeReviewReport's multi-视角 report in `body`.
+  kind: Exclude<RunEvent['kind'], 'answer'> | 'aborted' | 'summary' | 'review'
   stageKey: string
   title: string
   body?: string

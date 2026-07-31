@@ -587,6 +587,7 @@
 /* ①汇总: synthetic "本次运行总结" completion card — always frozen-only. Calm success-tinted accent to
    read as a positive wrap-up, distinct from the warn-tinted finalize gate above it. */
 .msg-req.k-summary { border-color: color-mix(in oklab, var(--ok, var(--accent)) 40%, var(--border-2)); }
+.msg-req.k-review { border-color: color-mix(in oklab, var(--accent) 40%, var(--border-2)); }
 
 /* ---- RunLauncher shell — its OWN classes (not chat's .msg-req/.plan-card/.req-*, which carry the
    amber "request card" accent built for chat interaction prompts/gates and read as an alert here). A
