@@ -86,6 +86,20 @@ describe('extractProjectBriefs', () => {
     expect(sections['zgh']).not.toContain('略')
   })
 
+  it('assigns a prefix-colliding project to the LONGEST match (go-blog-backend not swallowed by go-blog)', () => {
+    const doc = [
+      '## 各项目任务分工',
+      '### 📦 go-blog',
+      '目标：改后端。',
+      '### 📦 go-blog-backend',
+      '目标：改前端。',
+    ].join('\n')
+    const { sections } = extractProjectBriefs(doc, ['go-blog', 'go-blog-backend'])
+    expect(sections['go-blog']).toContain('改后端')
+    expect(sections['go-blog']).not.toContain('改前端')
+    expect(sections['go-blog-backend']).toContain('改前端')
+  })
+
   it('matches headings that merely contain the project name', () => {
     const doc = '## 各项目任务分工\n### go-blog（前端）\n做前端\n'
     const { sections } = extractProjectBriefs(doc, ['go-blog'])

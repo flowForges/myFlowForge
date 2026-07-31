@@ -11,15 +11,19 @@
   padding: 8px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
 }
-/* 运行指示器:不再用眨眼(opacity blink),改成雷达波纹(sonar ripple)——实心点 + 一圈圈向外扩散淡出的
-   ring,更新颖也更不刺眼。done/err 为静态点。 */
-.wf-exec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); position: relative; flex: 0 0 auto; }
-.wf-exec-dot::after, .wf-exec-lane-dot.run::after {
-  content: ""; position: absolute; inset: 0; border-radius: 50%;
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent);
-  animation: wf-exec-ripple 1.6s cubic-bezier(.2,.6,.35,1) infinite;
+/* 运行指示器:四角星(sparkle/十字星),旋转+缩放"闪烁"——参考旧版子代理执行的样式,比圆点/波纹更有辨识度
+   和活力。done/err 仍是静态实心圆点(见下)。 */
+.wf-exec-dot, .wf-exec-lane-dot.run {
+  background: var(--accent); border-radius: 0;
+  clip-path: polygon(50% 0%, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0% 50%, 39% 39%);
+  animation: wf-exec-twinkle 1.5s ease-in-out infinite;
 }
-@keyframes wf-exec-ripple { 0% { transform: scale(1); opacity: .85 } 100% { transform: scale(2.8); opacity: 0 } }
+.wf-exec-dot { width: 11px; height: 11px; position: relative; flex: 0 0 auto; }
+.wf-exec-lane-dot.run { width: 11px; height: 11px; }
+@keyframes wf-exec-twinkle {
+  0%, 100% { transform: rotate(0deg) scale(.62); opacity: .65; }
+  50%      { transform: rotate(90deg) scale(1.1); opacity: 1; }
+}
 .wf-exec-title { font-weight: 600; font-size: 13px; }
 .wf-exec-count { margin-left: auto; font-size: 12px; opacity: .65; }
 .wf-exec-lanes { display: flex; flex-direction: column; }

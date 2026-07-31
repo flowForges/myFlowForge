@@ -120,7 +120,12 @@ export function extractProjectBriefs(md: string, projectNames: string[]): { foun
     const h = line.match(/^#{2,4}\s+(.+?)\s*$/)
     if (h) {
       const title = norm(h[1])
-      const matched = projectNames.find((p) => norm(p) === title || title.includes(norm(p)))
+      // 匹配优先级:①标题正好等于项目名;②否则取"标题包含其名"的项目里名字最长的那个。②很关键——
+      // "go-blog" 是 "go-blog-backend" 的前缀,若用 find 取第一个包含项,"### 📦 go-blog-backend" 会被错分给
+      // go-blog,导致 backend 丢了自己的节(→空简报→被误判无需改动而跳过)。取最长名保证归到最具体的项目。
+      const exact = projectNames.find((p) => norm(p) === title)
+      const matched = exact
+        ?? projectNames.filter((p) => title.includes(norm(p))).sort((a, b) => b.length - a.length)[0]
       if (matched) { flush(); curName = matched; continue }
       // 非项目标题:结束当前项目节(避免把别的小节吞进来)。
       flush(); curName = null; continue
