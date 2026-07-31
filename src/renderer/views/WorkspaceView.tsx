@@ -1713,6 +1713,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         // 把左侧会话区当前 AI 的实时输出镜像成当前对话阶段卡的「执行过程」(img20 诉求:执行
                         // 过程也输出、随左侧流式更新)。scanContext 负责真实的 skill/rule/mcp chips。
                         const curStage = activeWorkflow.stages[activeWorkflow.currentIndex]
+                        // Issue 2:当前步 AI 是否正在流式输出 → 执行中;否则(输出完/空闲)→ 已完成。
+                        const curStreaming = liveMessages.some((m) => m.who === 'ai' && chat.streamingIds.has(m.id))
                         let logsOverride: Record<string, import('../../main/run/controller').RunLogLine[]> | undefined
                         if (activeWorkflow.phase !== 'done' && curStage?.scope === 'root') {
                           const curAi = [...liveMessages].reverse().find((m) => m.who === 'ai' && !!m.text.trim())
@@ -1728,7 +1730,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         }
                         return (
                           <RunExecPanel
-                            staticState={toWorkflowProgressState(activeWorkflow, wsPath ?? '')}
+                            staticState={toWorkflowProgressState(activeWorkflow, wsPath ?? '', curStreaming)}
                             titleOverride={`工作流 · ${activeWorkflow.flowName}`}
                             statusOverride={note}
                             logsOverride={logsOverride}

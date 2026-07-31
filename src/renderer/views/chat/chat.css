@@ -369,6 +369,9 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
    messages had a 24px avatar + gap; avatars were dropped and the body now sits flush-left, so the
    confirm/plan/系统 cards must too (they'd otherwise float 33px off the left edge). */
 .msg-req { margin-top: 4px; border: 1px solid var(--border-2); border-radius: 12px; overflow: hidden; background: var(--surface); }
+/* 启动门卡片(工作流已启动)后面紧跟自动起手的用户消息;.msg 只有 margin-bottom、顶部无间距,故两者
+   会粘在一起。给启动门卡片补一段下间距,与消息之间的节奏一致(用户反复反馈)。 */
+.msg-req[data-req="launch-gate"] { margin-bottom: 22px; }
 .msg-req.k-confirm { border-color: oklch(80% .13 80 / .5); }
 .msg-req.k-input   { border-color: var(--accent-dim); }
 .msg-req.k-select  { border-color: oklch(72% .14 300 / .45); }

@@ -37,6 +37,16 @@ describe('toWorkflowProgressState', () => {
     expect(design.agents[0].cwd).toBe('/ws')
   })
 
+  it('idle current stage (not streaming) → ok card via a synthetic outcome, no liveLane, progress unchanged', () => {
+    const st = toWorkflowProgressState(wf({ currentIndex: 1 }), '/ws', false)
+    expect(Object.keys(st.liveLanes)).toHaveLength(0)
+    expect(st.outcomes['design']?.[0]?.status).toBe('ok')
+    const stages = buildStageRuntimes(st, {}, new Map())
+    expect(stages.find((s) => s.key === 'design')!.agents[0].state).toBe('ok')
+    // progress bar (machine.stages 'done') must NOT count the current in-progress stage
+    expect(st.machine.stages.map((s) => s.status)).toEqual(['done', 'running', 'pending'])
+  })
+
   it('done phase marks every stage done and status ok, no liveLane', () => {
     const st = toWorkflowProgressState(wf({ currentIndex: 3, phase: 'done' }), '/ws')
     expect(st.machine.stages.every((s) => s.status === 'done')).toBe(true)

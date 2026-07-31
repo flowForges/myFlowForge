@@ -13,9 +13,13 @@
 import type { RunControllerState, LiveLane } from '../../main/run/controller'
 import type { StagePlan, StageStatus } from '../../main/run/machine'
 import type { DevelopProject } from '../../main/run/runTypes'
+import type { WorkOrderOutcome } from '../../main/run/workOrder'
 import type { WorkflowSessionState } from '@shared/workflowSession'
 
-export function toWorkflowProgressState(wf: WorkflowSessionState, wsPath: string): RunControllerState {
+// currentStreaming:当前对话步的 AI 是否正在流式输出。true → 该步卡片显示「执行中」;false(输出完、空闲)
+// → 显示「已完成」。用户在同一步继续对话、AI 再次输出时会重新变回 true(执行中)。进度条(已完成 N/M)始终
+// 按 currentIndex 计,不随流式状态来回跳(当前步在推进前不计入 done)。
+export function toWorkflowProgressState(wf: WorkflowSessionState, wsPath: string, currentStreaming = true): RunControllerState {
   const stages: StagePlan[] = wf.stages.map((s) => ({
     key: s.key,
     name: s.name,
@@ -32,11 +36,23 @@ export function toWorkflowProgressState(wf: WorkflowSessionState, wsPath: string
     return { key: s.key, status, round: 0 }
   })
 
-  // 当前对话阶段 → 注入 liveLane(带工作区 cwd),使其卡渲染 'run' 且携带 cwd 供加载上下文 chips。
+  // 当前对话阶段:流式中 → 注入 liveLane(卡片 'run'=执行中);空闲 → 注入一个 ok 结果(卡片 'ok'=已完成)。
+  // 两者都带工作区 cwd,供加载 skill/rule/mcp chips。machineStatus 仍为 'running'(不计入进度条 done),所以
+  // 进度条稳定不随流式来回跳。
   const liveLanes: Record<string, LiveLane> = {}
+  const outcomes: Record<string, WorkOrderOutcome[]> = {}
   const cur = wf.stages[wf.currentIndex]
   if (!done && cur && cur.scope === 'root') {
-    liveLanes[`${cur.key}:root`] = { stageKey: cur.key, cwd: wsPath }
+    const laneId = `${cur.key}:root`
+    if (currentStreaming) {
+      liveLanes[laneId] = { stageKey: cur.key, cwd: wsPath }
+    } else {
+      outcomes[cur.key] = [{
+        order: { id: laneId, stageKey: cur.key, name: cur.name, provider: cur.provider, model: cur.model, cwd: wsPath, prompt: '' },
+        status: 'ok',
+        attempts: 1,
+      }]
+    }
   }
 
   // 供尚未运行的扇出阶段预览"每项目一张 wait 卡"(buildFanoutAgents 以 state.projects 播种)。cwd 未知
@@ -58,7 +74,7 @@ export function toWorkflowProgressState(wf: WorkflowSessionState, wsPath: string
     },
     inbox: [],
     feedback: [],
-    outcomes: {},
+    outcomes,
     status: done ? 'ok' : 'running',
     pendingDirective: {},
     liveLanes,
