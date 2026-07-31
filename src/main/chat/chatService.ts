@@ -15,7 +15,7 @@ import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgen
 import { scanGlobalContext } from '../agents/globalContext'
 import { homedir } from 'node:os'
 import { readInstalledSkills } from '../skills/installedSkills'
-import { getSession, setSessionMemPromoted, setSessionWorkflow } from './sessionStore'
+import { getSession, setSessionMemPromoted, setSessionWorkflow, autoNameIfDefault } from './sessionStore'
 import { providerSupportsResume, providerResumeReliable } from '../agents/resumeSupport'
 import { logDebug } from '../log/appLog'
 import { perfSpan } from '../perf/perfSpans'
@@ -130,6 +130,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       files: payload.attachments.length ? payload.attachments : undefined, ts: now()
     }
     appendMessage(ws, sid, userMsg)
+    // 会话自动命名:普通聊天用首条用户消息命名(仍是 '新会话' 才改,导入会话有真实标题不受影响)。工作流
+    // 会话不在这里命名——它在 workflow:enter 用 seed(原始需求)命名,避免被 "请开始「…」" 这类 kick 消息覆盖。
+    if (!wfs && payload.text?.trim()) autoNameIfDefault(ws, sid, payload.text)
     emit({ workspacePath: ws, sessionId: sid, type: 'user', message: userMsg })
 
     const aid = mkId('a')

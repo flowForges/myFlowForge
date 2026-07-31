@@ -23,7 +23,7 @@ import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages } from '../chat/chatStore'
 import { mergeLive } from '../chat/liveTurns'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow } from '../chat/sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
 import { buildLaunchPlan, buildLaunchProjects, type LaunchStartConfig } from '../run/launch'
 import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProjectBriefs } from '../run/workflowEnter'
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
@@ -683,6 +683,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       supplement: p.supplement,
       seed: p.seed,
     })
+    // 会话自动命名:工作流用 seed(用户的原始需求)命名这个会话(仍是 '新会话' 才改;导入会话有真实标题不受
+    // 影响)。在 setSessionWorkflow 之前做,避免被它的写入覆盖;kick 的 "请开始「…」" 消息因此不会再命名它。
+    if (p.seed?.trim()) autoNameIfDefault(p.workspacePath, p.sessionId, p.seed)
     const file = setSessionWorkflow(p.workspacePath, p.sessionId, session)
     broadcast(CH.sessionsChanged, { workspacePath: p.workspacePath, file })
     kickConversationalStage(p.workspacePath, p.sessionId, session)   // 图3:进入阶段0自动起手产出交付物
