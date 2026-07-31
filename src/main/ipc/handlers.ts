@@ -691,7 +691,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     kickConversationalStage(p.workspacePath, p.sessionId, session)   // 图3:进入阶段0自动起手产出交付物
     return session
   })
-  ipcMain.handle(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string> }) => {
+  ipcMain.handle(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string>; skip?: string[] }) => {
     const s = getSession(a.workspacePath, a.sessionId)
     if (!s?.workflowSession) throw new Error('该会话不在工作流中')
     let next: WorkflowSessionState = advanceWorkflow(s.workflowSession)
@@ -704,6 +704,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // D4:进入执行前用户为各项目编辑的任务简报,合并到 projects[].brief,由 tailLaunchConfig 带进执行尾段。
     if (a.briefs && next.phase === 'executing') {
       next = { ...next, projects: next.projects.map((p) => ({ ...p, brief: a.briefs![p.name] ?? p.brief })) }
+    }
+    // #2:用户在简报卡里勾了"本次跳过"的项目 → 不进执行尾段(不起 lane、不浪费 token)。至少保留一个项目,
+    // 否则扇出为空、这个执行阶段没有意义(全跳过应由用户直接不进执行,而非启动一个空 run)。
+    if (a.skip?.length && next.phase === 'executing') {
+      const kept = next.projects.filter((p) => !a.skip!.includes(p.name))
+      if (kept.length) next = { ...next, projects: kept }
     }
     // Crossing into the fan-out execution tail → kick off ONE RunController run for stages[currentIndex..],
     // reusing run2's launch kickoff (temp branches + lane cards + finalize + summary). Only if not already started.

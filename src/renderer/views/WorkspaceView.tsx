@@ -871,7 +871,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode ? prev : next))
   }, [activeWorkflow?.currentIndex, activeWorkflow?.phase, activeSession?.id, wsPath, sessions.activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   // D3/D4:推进的可编辑草稿(跨 provider 的交接稿 / 进执行前的每项目简报)。null = 无待确认草稿。
-  const [advanceDraft, setAdvanceDraft] = useState<{ mode: 'handoff' | 'briefs'; handoff: string; briefs: Record<string, string>; loading: boolean; warn?: string } | null>(null)
+  const [advanceDraft, setAdvanceDraft] = useState<{ mode: 'handoff' | 'briefs'; handoff: string; briefs: Record<string, string>; loading: boolean; warn?: string; skip?: Record<string, boolean> } | null>(null)
   const onWorkflowAdvance = useCallback(() => {
     const wf = activeWorkflow
     if (!wsPath || !sessions.activeSessionId || !wf) return
@@ -893,11 +893,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       for (const p of wf.projects) empty[p.name] = ''
       setAdvanceDraft({ mode: 'briefs', handoff: '', briefs: empty, loading: true, warn: undefined })
       const names = wf.projects.map((p) => p.name)
+      // #2:某项目本次无需改动 → 默认勾"跳过"(不启动它的 lane,省 token)。判据:该项目那节为空,或明确写了
+      // "无需改动/不需要开发"。用户仍可在卡片上手动改。
+      const noWork = (t: string) => !t.trim() || /无需改动|不需要开发|无需开发|无改动|不需修改|no\s*change/i.test(t)
       const fillEach = (per: Record<string, string>, warn?: string) => setAdvanceDraft((d) => {
         if (!d || d.mode !== 'briefs') return d
         const briefs: Record<string, string> = {}
-        for (const p of wf.projects) briefs[p.name] = per[p.name] ?? ''
-        return { ...d, briefs, loading: false, warn }
+        const skip: Record<string, boolean> = {}
+        for (const p of wf.projects) { briefs[p.name] = per[p.name] ?? ''; skip[p.name] = noWork(briefs[p.name]) }
+        return { ...d, briefs, loading: false, warn, skip }
       })
       const distillFallback = (warn: string) =>
         Promise.resolve(window.forge.chatSummarizeRequirement?.({ workspacePath: wsPath, sessionId: sid, agent: cur?.provider ?? '', model: cur?.model ?? '' }))
@@ -928,9 +932,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   }, [wsPath, sessions.activeSessionId, activeWorkflow])
   const confirmAdvanceDraft = useCallback(() => {
     if (!wsPath || !sessions.activeSessionId || !advanceDraft) return
-    const payload: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string> } = { workspacePath: wsPath, sessionId: sessions.activeSessionId }
+    const payload: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string>; skip?: string[] } = { workspacePath: wsPath, sessionId: sessions.activeSessionId }
     if (advanceDraft.mode === 'handoff') payload.handoffText = advanceDraft.handoff
-    else payload.briefs = advanceDraft.briefs
+    else {
+      payload.briefs = advanceDraft.briefs
+      // #2:勾了"跳过"的项目不进执行(至少保留一个,全跳过就当作不跳,交给用户)。
+      const skip = Object.entries(advanceDraft.skip ?? {}).filter(([, v]) => v).map(([k]) => k)
+      if (skip.length && skip.length < Object.keys(advanceDraft.briefs).length) payload.skip = skip
+    }
     void window.forge.workflowAdvance(payload)
     setAdvanceDraft(null)
   }, [wsPath, sessions.activeSessionId, advanceDraft])
@@ -1517,9 +1526,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               loading={advanceDraft.loading}
               warn={advanceDraft.warn}
               handoff={advanceDraft.handoff}
-              briefs={activeWorkflow.projects.map((p) => ({ project: p.name, text: advanceDraft.briefs[p.name] ?? '' }))}
+              briefs={activeWorkflow.projects.map((p) => ({ project: p.name, text: advanceDraft.briefs[p.name] ?? '', skip: !!advanceDraft.skip?.[p.name] }))}
               onChangeHandoff={(v) => setAdvanceDraft((d) => (d ? { ...d, handoff: v } : d))}
               onChangeBrief={(proj, v) => setAdvanceDraft((d) => (d ? { ...d, briefs: { ...d.briefs, [proj]: v } } : d))}
+              onToggleSkip={(proj, skip) => setAdvanceDraft((d) => (d ? { ...d, skip: { ...d.skip, [proj]: skip } } : d))}
               onConfirm={confirmAdvanceDraft}
               onCancel={() => setAdvanceDraft(null)}
             />

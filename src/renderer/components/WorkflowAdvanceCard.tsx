@@ -12,16 +12,18 @@ export interface WorkflowAdvanceCardProps {
   // Change 2:进代码开发前若没找到技术方案文档等,给一条警告(不阻断,提醒用户)。
   warn?: string
   handoff: string
-  briefs: { project: string; text: string }[]
+  briefs: { project: string; text: string; skip?: boolean }[]
   onChangeHandoff: (v: string) => void
   onChangeBrief: (project: string, v: string) => void
+  // #2:勾"本次跳过"的项目不进执行(不起 lane、省 token)。无需改动的项目默认勾上。
+  onToggleSkip?: (project: string, skip: boolean) => void
   onConfirm: () => void
   onCancel: () => void
 }
 
 export function WorkflowAdvanceCard({
   mode, toStageName, toProvider, loading, warn, handoff, briefs,
-  onChangeHandoff, onChangeBrief, onConfirm, onCancel,
+  onChangeHandoff, onChangeBrief, onToggleSkip, onConfirm, onCancel,
 }: WorkflowAdvanceCardProps) {
   const isHandoff = mode === 'handoff'
   return (
@@ -49,9 +51,19 @@ export function WorkflowAdvanceCard({
             ) : (
               <>
                 {briefs.map((b) => (
-                  <div key={b.project} className="wf-adv-brief">
-                    <div className="wf-adv-brief-nm">{b.project}</div>
-                    <textarea className="wf-adv-ta" rows={3} value={b.text} placeholder={`${b.project} 要做的…`} onChange={(e) => onChangeBrief(b.project, e.target.value)} />
+                  <div key={b.project} className={`wf-adv-brief${b.skip ? ' skipped' : ''}`}>
+                    <div className="wf-adv-brief-nm">
+                      <span>{b.project}</span>
+                      {onToggleSkip && (
+                        <label className="wf-adv-skip" title="勾选后本项目不进代码开发,不启动它的 agent(省 token)">
+                          <input type="checkbox" checked={!!b.skip} onChange={(e) => onToggleSkip(b.project, e.target.checked)} />
+                          本次跳过
+                        </label>
+                      )}
+                    </div>
+                    {!b.skip && (
+                      <textarea className="wf-adv-ta" rows={3} value={b.text} placeholder={`${b.project} 要做的…`} onChange={(e) => onChangeBrief(b.project, e.target.value)} />
+                    )}
                   </div>
                 ))}
                 {briefs.length === 0 ? <div className="wf-adv-hint">（没有选定的执行项目）</div> : null}
