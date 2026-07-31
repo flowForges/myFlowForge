@@ -11,15 +11,24 @@
   padding: 8px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
 }
-.wf-exec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: wf-exec-pulse 1.4s ease-in-out infinite; }
-@keyframes wf-exec-pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+/* 运行指示器:不再用眨眼(opacity blink),改成雷达波纹(sonar ripple)——实心点 + 一圈圈向外扩散淡出的
+   ring,更新颖也更不刺眼。done/err 为静态点。 */
+.wf-exec-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); position: relative; flex: 0 0 auto; }
+.wf-exec-dot::after, .wf-exec-lane-dot.run::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: wf-exec-ripple 1.6s cubic-bezier(.2,.6,.35,1) infinite;
+}
+@keyframes wf-exec-ripple { 0% { transform: scale(1); opacity: .85 } 100% { transform: scale(2.8); opacity: 0 } }
 .wf-exec-title { font-weight: 600; font-size: 13px; }
 .wf-exec-count { margin-left: auto; font-size: 12px; opacity: .65; }
 .wf-exec-lanes { display: flex; flex-direction: column; }
-.wf-exec-lane { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-top: 1px solid color-mix(in srgb, var(--fg) 6%, transparent); }
+.wf-exec-lane { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-top: 1px solid color-mix(in srgb, var(--fg) 6%, transparent); transition: background .2s; }
 .wf-exec-lane:first-child { border-top: none; }
-.wf-exec-lane-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
-.wf-exec-lane-dot.run { background: var(--accent); animation: wf-exec-pulse 1.4s ease-in-out infinite; }
+/* 正在执行的项目行:淡 accent 底色 + 左侧一条 accent 竖条,一眼分辨谁在跑。 */
+.wf-exec-lane[data-state="run"] { background: color-mix(in srgb, var(--accent) 7%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.wf-exec-lane-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; position: relative; }
+.wf-exec-lane-dot.run { background: var(--accent); }
 .wf-exec-lane-dot.done { background: #10b981; }
 .wf-exec-lane-dot.err { background: #ef4444; }
 .wf-exec-lane-nm { font-weight: 600; font-size: 12.5px; flex: 0 0 auto; }
