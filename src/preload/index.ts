@@ -97,6 +97,7 @@ const api = {
   workflowEnter: (cfg: { workspacePath: string; workflowId: string; projects: { name: string; provider: string; model: string; permissionMode?: import('@shared/permissions').PermissionMode }[]; supplement: string; seed: string; sessionId?: string; stages?: { key: string; enabled: boolean; provider?: string; model?: string; perProject?: boolean; permissionMode?: import('@shared/permissions').PermissionMode }[]; hooks?: { id: string; enabled: boolean }[] }) => ipcRenderer.invoke(CH.workflowEnter, cfg),
   workflowAdvance: (a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string> }) => ipcRenderer.invoke(CH.workflowAdvance, a),
   workflowExit: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.workflowExit, a),
+  workflowPrepareBriefs: (a: { workspacePath: string; stageKey: string; projects: string[] }): Promise<{ docExists: boolean; docPath: string; sections: Record<string, string> }> => ipcRenderer.invoke(CH.workflowPrepareBriefs, a),
   workflowFinish: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.workflowFinish, a),
   agentSessionIds: (workspacePath: string, sessionId: string) => ipcRenderer.invoke(CH.sessionAgentIds, { workspacePath, sessionId }),
   chatResolve: (a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> }; workspacePath: string }) => ipcRenderer.invoke(CH.chatResolve, a),

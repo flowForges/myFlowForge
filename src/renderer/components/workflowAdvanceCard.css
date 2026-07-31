@@ -15,6 +15,11 @@
 .wf-adv-to { font-size: 12px; opacity: .7; }
 .wf-adv-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .wf-adv-hint { font-size: 12px; opacity: .65; }
+.wf-adv-warn {
+  font-size: 12px; line-height: 1.5; padding: 7px 10px; border-radius: 8px;
+  color: var(--warn, #c9820a); background: color-mix(in srgb, var(--warn, #c9820a) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn, #c9820a) 30%, transparent);
+}
 .wf-adv-ta {
   width: 100%; box-sizing: border-box; resize: vertical;
   padding: 8px 10px; border-radius: 8px;

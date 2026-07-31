@@ -25,7 +25,7 @@ import { appendMessage, readMessages } from '../chat/chatStore'
 import { mergeLive } from '../chat/liveTurns'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow } from '../chat/sessionStore'
 import { buildLaunchPlan, buildLaunchProjects, type LaunchStartConfig } from '../run/launch'
-import { buildWorkflowSession, tailLaunchConfig } from '../run/workflowEnter'
+import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProjectBriefs } from '../run/workflowEnter'
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
 import { workflowDisplayName } from '../config/schema'
 import { agentSessionsForId } from '../chat/agentSessions'
@@ -722,6 +722,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const file = setSessionWorkflow(a.workspacePath, a.sessionId, undefined)
     broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
     return file
+  })
+  // Change 2(doc-as-contract):进代码开发前读技术方案文档,抽每项目那节预填简报 + 报告文档是否存在。
+  ipcMain.handle(CH.workflowPrepareBriefs, (_e, a: { workspacePath: string; stageKey: string; projects: string[] }): { docExists: boolean; docPath: string; sections: Record<string, string> } => {
+    const rel = stageDocRelPath(a.stageKey)
+    const docPath = join(a.workspacePath, rel)
+    let md = ''
+    try { if (existsSync(docPath)) md = readFileSync(docPath, 'utf8') } catch { /* best-effort */ }
+    const docExists = !!md.trim()
+    const { sections } = docExists ? extractProjectBriefs(md, a.projects) : { sections: {} as Record<string, string> }
+    return { docExists, docPath, sections }
   })
   ipcMain.handle(CH.workflowFinish, (_e, a: { workspacePath: string; sessionId: string }) => {
     const s = getSession(a.workspacePath, a.sessionId)

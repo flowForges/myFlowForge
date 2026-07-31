@@ -1,5 +1,5 @@
 // src/main/run/controller.ts
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs'
 import { join, basename, isAbsolute } from 'node:path'
 import { wsDocsDir } from '../config/paths'
 import { pickDocArtifact } from './docArtifact'
@@ -785,7 +785,27 @@ export class RunController {
     // to always include — if there's no bridge, forge_ask simply isn't an available tool and the
     // agent falls back to `blockers` in the fence above, same as before this line existed.
     const askHint = `\n若卡在只有人类才知道的硬阻塞（缺凭据、该连哪个环境、用哪个 API key 等），调用 forge_ask 直接问用户，不要瞎猜或直接失败。\n`
-    return `${rework}${seed}${instructions}${lens}${scope}${up}${askHint}${fence}`
+    // Change 2(doc-as-contract):对话式工作流里,技术方案/关联清单只落到工作区根 forge-docs/*.md(聊天阶段
+    // 没 forge_write_artifact,故上游产物 up 恒空)。给 per-project 的开发 lane 显式指路:读那几份完整文档、
+    // 聚焦本项目那一节、可举报不可重设计。文档不存在(旧 RunController 路径,靠 up 传)→ 空串,不影响旧路径。
+    const docRead = o.project ? this.forgeDocsDirective(o.project) : ''
+    return `${rework}${seed}${instructions}${lens}${scope}${up}${docRead}${askHint}${fence}`
+  }
+
+  // Change 2(doc-as-contract):列出工作区根 `forge-docs/*.md`(对话式工作流阶段落盘的技术方案/关联清单),
+  // 让本项目的开发 lane 读整份完整文档、聚焦自己那一节、并对任务合理性做校验(可举报不可重设计)。没有该目录
+  // (旧 RunController 路径)→ 返回空串,老行为不变。用绝对路径,agent 无论 cwd 在哪个项目子目录都读得到。
+  private forgeDocsDirective(project: string): string {
+    const dir = join(this.workspacePath(), 'forge-docs')
+    let files: string[] = []
+    try {
+      if (existsSync(dir)) files = readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md'))
+    } catch { /* best-effort — no directive if we can't read it */ }
+    if (!files.length) return ''
+    const list = files.map((f) => `- ${join(dir, f)}`).join('\n')
+    return `\n【完整技术方案 / 上游文档（务必先通读）】\n下列文件是本次需求的完整技术方案与关联清单，动手前请**完整读一遍**（用你的文件读取能力按绝对路径打开）：\n${list}\n`
+      + `你负责其中「## 各项目任务分工」下「### ${project}」这一节；整体方案是共享背景，务必先看全貌再聚焦本节。\n`
+      + `【任务校验（可举报不可重设计）】先判断分配给「${project}」的这节任务在本项目实际代码里是否落地合理：若方案与现状冲突/不可行/有明显更优解，先用 forge_ask 或结果块的 doubts/blockers 提出，交回用户裁决，**不要硬写、也不要自行改设计**。无异议再动手实现。\n`
   }
 
   // 返工重跑时把本阶段【上一轮已产出的文档】原样读回来当作修改基线：per-project 时优先取文件名匹配该项目的那份，

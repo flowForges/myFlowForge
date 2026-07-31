@@ -9,6 +9,8 @@ export interface WorkflowAdvanceCardProps {
   toStageName: string
   toProvider: string
   loading?: boolean
+  // Change 2:进代码开发前若没找到技术方案文档等,给一条警告(不阻断,提醒用户)。
+  warn?: string
   handoff: string
   briefs: { project: string; text: string }[]
   onChangeHandoff: (v: string) => void
@@ -18,7 +20,7 @@ export interface WorkflowAdvanceCardProps {
 }
 
 export function WorkflowAdvanceCard({
-  mode, toStageName, toProvider, loading, handoff, briefs,
+  mode, toStageName, toProvider, loading, warn, handoff, briefs,
   onChangeHandoff, onChangeBrief, onConfirm, onCancel,
 }: WorkflowAdvanceCardProps) {
   const isHandoff = mode === 'handoff'
@@ -29,6 +31,7 @@ export function WorkflowAdvanceCard({
         <span className="wf-adv-to">→ {toStageName}{toProvider ? ` · ${toProvider}` : ''}</span>
       </div>
       <div className="wf-adv-body">
+        {warn && <div className="wf-adv-warn">{warn}</div>}
         {isHandoff ? (
           <>
             <div className="wf-adv-hint">这份交接稿会作为下一步 provider 的起点，跑偏的删掉、要点补上。</div>

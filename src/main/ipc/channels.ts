@@ -73,6 +73,9 @@ export const CH = {
   workflowEnter: 'workflow:enter',
   workflowAdvance: 'workflow:advance',
   workflowExit: 'workflow:exit',
+  // Change 2(doc-as-contract):进入代码开发前读技术方案文档 forge-docs/<designKey>.md,抽出每个项目那节
+  // 预填任务简报 + 报告文档是否存在(缺了就警告,别把空文档甩给编码 agent)。
+  workflowPrepareBriefs: 'workflow:prepare-briefs',
   // finish=执行尾段 run 终态(ok/failed)后把 workflowSession 置 done(ribbon 不再卡在"执行中")。
   workflowFinish: 'workflow:finish',
   dialogOpenFiles: 'dialog:open-files',

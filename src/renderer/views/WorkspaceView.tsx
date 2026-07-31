@@ -871,7 +871,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode ? prev : next))
   }, [activeWorkflow?.currentIndex, activeWorkflow?.phase, activeSession?.id, wsPath, sessions.activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   // D3/D4:推进的可编辑草稿(跨 provider 的交接稿 / 进执行前的每项目简报)。null = 无待确认草稿。
-  const [advanceDraft, setAdvanceDraft] = useState<{ mode: 'handoff' | 'briefs'; handoff: string; briefs: Record<string, string>; loading: boolean } | null>(null)
+  const [advanceDraft, setAdvanceDraft] = useState<{ mode: 'handoff' | 'briefs'; handoff: string; briefs: Record<string, string>; loading: boolean; warn?: string } | null>(null)
   const onWorkflowAdvance = useCallback(() => {
     const wf = activeWorkflow
     if (!wsPath || !sessions.activeSessionId || !wf) return
@@ -887,18 +887,37 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     // 什么,技术方案白做。蒸馏期间 loading,拿到后填进每个项目(用户再逐项目编辑);失败回退原 seed
     // (不劣于旧行为)。
     if (nxt.scope === 'per-project') {
+      // Change 2(doc-as-contract):进代码开发前,每项目简报预填 = 技术方案文档里该项目那一节(而非盲蒸馏)。
+      // 缺文档 → 警告 + 回退到蒸馏摘要(不劣于旧行为,但提醒用户编码 agent 拿不到完整方案)。
       const empty: Record<string, string> = {}
       for (const p of wf.projects) empty[p.name] = ''
-      setAdvanceDraft({ mode: 'briefs', handoff: '', briefs: empty, loading: true })
-      const fill = (text: string) => setAdvanceDraft((d) => {
+      setAdvanceDraft({ mode: 'briefs', handoff: '', briefs: empty, loading: true, warn: undefined })
+      const names = wf.projects.map((p) => p.name)
+      const fillEach = (per: Record<string, string>, warn?: string) => setAdvanceDraft((d) => {
         if (!d || d.mode !== 'briefs') return d
         const briefs: Record<string, string> = {}
-        for (const p of wf.projects) briefs[p.name] = text
-        return { ...d, briefs, loading: false }
+        for (const p of wf.projects) briefs[p.name] = per[p.name] ?? ''
+        return { ...d, briefs, loading: false, warn }
       })
-      void Promise.resolve(window.forge.chatSummarizeRequirement?.({ workspacePath: wsPath, sessionId: sid, agent: cur?.provider ?? '', model: cur?.model ?? '' }))
-        .then((sum: string | undefined) => fill((sum && sum.trim()) ? sum.trim() : (wf.seed ?? '')))
-        .catch(() => fill(wf.seed ?? ''))
+      const distillFallback = (warn: string) =>
+        Promise.resolve(window.forge.chatSummarizeRequirement?.({ workspacePath: wsPath, sessionId: sid, agent: cur?.provider ?? '', model: cur?.model ?? '' }))
+          .then((sum: string | undefined) => {
+            const text = (sum && sum.trim()) ? sum.trim() : (wf.seed ?? '')
+            const per: Record<string, string> = {}
+            for (const n of names) per[n] = text
+            fillEach(per, warn)
+          })
+          .catch(() => { const per: Record<string, string> = {}; for (const n of names) per[n] = wf.seed ?? ''; fillEach(per, warn) })
+      void Promise.resolve(window.forge.workflowPrepareBriefs?.({ workspacePath: wsPath, stageKey: cur?.key ?? 'design', projects: names }))
+        .then((res) => {
+          if (res?.docExists) {
+            // 用每项目那一节预填;文档里没有某项目的节 → 该项目留空提示用户补(编码 agent 仍会读整份文档)。
+            fillEach(res.sections ?? {}, undefined)
+          } else {
+            void distillFallback('⚠ 未找到技术方案文档(forge-docs)，编码 agent 将拿不到完整方案。已用对话摘要预填，建议先补出方案或逐项目写清任务。')
+          }
+        })
+        .catch(() => { void distillFallback('⚠ 读取技术方案文档失败,已用对话摘要预填。') })
       return
     }
     // 跨 provider 的对话阶段推进 → 由"当前"provider 蒸馏交接稿,用户可编辑。
@@ -1489,6 +1508,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               toStageName={nxt?.name ?? '执行'}
               toProvider={nxt ? providerLabel(nxt.provider) : ''}
               loading={advanceDraft.loading}
+              warn={advanceDraft.warn}
               handoff={advanceDraft.handoff}
               briefs={activeWorkflow.projects.map((p) => ({ project: p.name, text: advanceDraft.briefs[p.name] ?? '' }))}
               onChangeHandoff={(v) => setAdvanceDraft((d) => (d ? { ...d, handoff: v } : d))}

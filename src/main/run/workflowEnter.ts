@@ -82,3 +82,51 @@ export function tailLaunchConfig(
     })),
   }
 }
+
+// —— Change 2(2026-07-31,doc-as-contract):从技术方案文档里抽出「各项目任务分工」下每个项目那一节 ——
+// design 阶段被要求产出一节 `## 各项目任务分工`,其下每个项目一个 `### <项目名>` 子节(见 STAGE_PROMPTS.design)。
+// 进入代码开发前,把每个项目那一节抽出来预填「任务简报」——让用户逐项目审阅/编辑该项目要做什么(来源=方案文档,
+// 而非盲蒸馏),同时代码 lane 仍会读整份文档(见 controller.buildPrompt)。纯字符串解析,便于单测。
+//  - 优先在「## …分工…」小节内按 `### <名>` 切;找不到分工小节时,退而在全文任意层级标题里找匹配项目名的一节。
+//  - 标题匹配:与项目名完全相等,或标题文本包含项目名(容忍「### go-blog（前端）」这类)。
+export function extractProjectBriefs(md: string, projectNames: string[]): { found: boolean; sections: Record<string, string> } {
+  const sections: Record<string, string> = {}
+  if (!md || !md.trim() || !projectNames.length) return { found: false, sections }
+  const lines = md.split('\n')
+  // 定位「## …分工…」小节的行区间 [start, end)(end = 下一个同级或更高级 ## 标题,或 EOF)。找不到则用全文。
+  let blockStart = 0
+  let blockEnd = lines.length
+  const fenIdx = lines.findIndex((l) => /^##\s+.*分工/.test(l))
+  if (fenIdx >= 0) {
+    blockStart = fenIdx + 1
+    blockEnd = lines.length
+    for (let i = blockStart; i < lines.length; i++) {
+      if (/^##\s+/.test(lines[i]) && !/^###/.test(lines[i])) { blockEnd = i; break }
+    }
+  }
+  const scope = fenIdx >= 0 ? lines.slice(blockStart, blockEnd) : lines
+  // 在 scope 内按任意 ### / #### 标题切段,标题文本匹配项目名的收集其正文。
+  const norm = (s: string) => s.trim().toLowerCase()
+  let curName: string | null = null
+  let buf: string[] = []
+  const flush = () => {
+    if (curName && buf.length) {
+      const text = buf.join('\n').trim()
+      if (text) sections[curName] = sections[curName] ? `${sections[curName]}\n\n${text}` : text
+    }
+    buf = []
+  }
+  for (const line of scope) {
+    const h = line.match(/^#{2,4}\s+(.+?)\s*$/)
+    if (h) {
+      const title = norm(h[1])
+      const matched = projectNames.find((p) => norm(p) === title || title.includes(norm(p)))
+      if (matched) { flush(); curName = matched; continue }
+      // 非项目标题:结束当前项目节(避免把别的小节吞进来)。
+      flush(); curName = null; continue
+    }
+    if (curName) buf.push(line)
+  }
+  flush()
+  return { found: Object.keys(sections).length > 0, sections }
+}

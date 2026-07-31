@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planToStageViews, buildWorkflowSession, tailLaunchConfig } from './workflowEnter'
+import { planToStageViews, buildWorkflowSession, tailLaunchConfig, extractProjectBriefs } from './workflowEnter'
 import type { RunPlan } from './machine'
 
 const plan: RunPlan = {
@@ -56,5 +56,52 @@ describe('tailLaunchConfig', () => {
     expect(cfg.stages!.map((s) => s.perProject)).toEqual([false, false, true])
     // per-stage permission carried
     expect(cfg.stages!.find((s) => s.key === 'design')!.permissionMode).toBe('readonly')
+  })
+})
+
+describe('extractProjectBriefs', () => {
+  const md = [
+    '# 技术方案',
+    '## 整体方案',
+    '整体设计……',
+    '## 各项目任务分工',
+    '### go-blog',
+    '目标：前端接入角色权限。',
+    '- 改 src/router 菜单守卫',
+    '### zgh',
+    '目标：无。',
+    '## 风险',
+    '略',
+  ].join('\n')
+
+  it('extracts each project section under the 分工 heading', () => {
+    const { found, sections } = extractProjectBriefs(md, ['go-blog', 'zgh', 'go-blog-backend'])
+    expect(found).toBe(true)
+    expect(sections['go-blog']).toContain('前端接入角色权限')
+    expect(sections['go-blog']).toContain('菜单守卫')
+    expect(sections['zgh']).toContain('目标：无')
+    // a project with no subsection is simply absent (caller falls back)
+    expect(sections['go-blog-backend']).toBeUndefined()
+    // must not bleed the following ## 风险 section into zgh
+    expect(sections['zgh']).not.toContain('略')
+  })
+
+  it('matches headings that merely contain the project name', () => {
+    const doc = '## 各项目任务分工\n### go-blog（前端）\n做前端\n'
+    const { sections } = extractProjectBriefs(doc, ['go-blog'])
+    expect(sections['go-blog']).toContain('做前端')
+  })
+
+  it('falls back to whole-doc heading search when there is no 分工 section', () => {
+    const doc = '# 方案\n## go-blog\n做这个\n## other\n无关'
+    const { found, sections } = extractProjectBriefs(doc, ['go-blog'])
+    expect(found).toBe(true)
+    expect(sections['go-blog']).toContain('做这个')
+    expect(sections['go-blog']).not.toContain('无关')
+  })
+
+  it('returns found=false for empty/irrelevant docs', () => {
+    expect(extractProjectBriefs('', ['a']).found).toBe(false)
+    expect(extractProjectBriefs('# 方案\n没有任何项目节', ['a']).found).toBe(false)
   })
 })
