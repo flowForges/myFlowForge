@@ -30,6 +30,8 @@ function harness() {
   const lane: { ws: string; id: string; d: unknown }[] = []
   const stopped: { ws: string; sid: string }[] = []
   const created: { ws: string; title?: string; id: string }[] = []
+  const modelSet: { ws: string; sid: string; agent: string; model: string }[] = []
+  const permSet: { ws: string; sid: string; mode: string }[] = []
   let seq = 0
   const wsList: { path: string; name: string; activeSessionId: string; sessions: { id: string; title: string; mode: string }[] }[] =
     [{ path: '/ws1', name: 'WS One', activeSessionId: 'sess-abc', sessions: [{ id: 'sess-abc', title: 'Chat A', mode: 'chat' }] }]
@@ -49,8 +51,12 @@ function harness() {
     resolveAgentForSession: async () => ({ agent: 'claude', agentLabel: 'Claude Code', model: 'opus' }),
     createSession: (ws, title) => { const id = `new-${++seq}`; wsList.find(w => w.path === ws)?.sessions.push({ id, title: title || '新会话', mode: 'chat' }); created.push({ ws, title, id }); return id },
     stopSession: (ws, sid) => stopped.push({ ws, sid }),
+    sessionMeta: () => ({ agent: 'claude', agentLabel: 'Claude Code', model: 'opus', permission: 'auto' }),
+    listModels: async () => [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }],
+    setModel: (ws, sid, agent, model) => modelSet.push({ ws, sid, agent, model }),
+    setPermission: (ws, sid, mode) => permSet.push({ ws, sid, mode }),
   })
-  return { bridge, fake, enqueued, chat, gate, lane, stopped, created, cfg: () => cfg }
+  return { bridge, fake, enqueued, chat, gate, lane, stopped, created, modelSet, permSet, cfg: () => cfg }
 }
 
 const msg = (text: string, over: Partial<InboundBotMessage> = {}): InboundBotMessage => ({
@@ -189,6 +195,28 @@ describe('BotBridge — gate answering', () => {
     const h = await attached()
     await h.bridge.handleInbound(msg('stop'))
     expect(h.stopped).toEqual([{ ws: '/ws1', sid: 'sess-abc' }])
+  })
+
+  it('model <name> switches the session model', async () => {
+    const h = await attached()
+    await h.bridge.handleInbound(msg('model sonnet'))
+    expect(h.modelSet).toEqual([{ ws: '/ws1', sid: 'sess-abc', agent: 'claude', model: 'sonnet' }])
+  })
+
+  it('model with a number picks from the list', async () => {
+    const h = await attached()
+    await h.bridge.handleInbound(msg('model 2'))
+    expect(h.modelSet.at(-1)?.model).toBe('sonnet')
+  })
+
+  it('perm switches permission (zh + en)', async () => {
+    const h = await attached()
+    await h.bridge.handleInbound(msg('perm 只读'))
+    await h.bridge.handleInbound(msg('perm full'))
+    expect(h.permSet).toEqual([
+      { ws: '/ws1', sid: 'sess-abc', mode: 'readonly' },
+      { ws: '/ws1', sid: 'sess-abc', mode: 'full' },
+    ])
   })
 
   it('attach w<id> attaches the workspace active session', async () => {

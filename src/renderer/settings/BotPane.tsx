@@ -23,6 +23,8 @@ const COMMANDS: { cmd: string; desc: string }[] = [
   { cmd: 'list', desc: '列出工作区与会话' },
   { cmd: 'attach <id>', desc: '选定焦点（s<n>=会话，w<n>=工作区取活动会话）' },
   { cmd: 'new [w<id>] [标题]', desc: '在工作区新建并 attach 一个会话' },
+  { cmd: 'model [名称]', desc: '查看/切换模型（model o3 或 model 2）' },
+  { cmd: 'perm [值]', desc: '切权限：readonly / auto / full（只读/自动/完全）' },
   { cmd: 'status', desc: '查看当前焦点与待处理' },
   { cmd: 'stop', desc: '停止当前焦点会话' },
   { cmd: 'unbind', desc: '解绑本聊天' },

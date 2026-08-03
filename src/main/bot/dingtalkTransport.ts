@@ -167,7 +167,7 @@ export class DingTalkTransport implements BotTransport {
   private async sendViaWebhook(webhook: string, msg: OutboundBotMessage): Promise<void> {
     const body = msg.kind === 'text'
       ? { msgtype: 'text', text: { content: msg.text } }
-      : { msgtype: 'markdown', markdown: { title: msg.title, text: renderCardMarkdown(msg) } }
+      : { msgtype: 'markdown', markdown: { title: mdTitle(msg), text: mdBody(msg) } }
     const r = await fetch(webhook, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     })
@@ -178,7 +178,7 @@ export class DingTalkTransport implements BotTransport {
     const token = await this.getToken()
     const msgParam = msg.kind === 'text'
       ? { content: msg.text }
-      : { title: msg.title, text: renderCardMarkdown(msg) }
+      : { title: mdTitle(msg), text: mdBody(msg) }
     const r = await fetch(BATCH_SEND_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-acs-dingtalk-access-token': token },
@@ -205,8 +205,14 @@ export class DingTalkTransport implements BotTransport {
   }
 }
 
-// A 1:1 robot has no interactive buttons, so actions render as reply-keyword hints in markdown.
-function renderCardMarkdown(msg: Extract<OutboundBotMessage, { kind: 'card' }>): string {
+// DingTalk markdown notifications need a (plain-text) title for the push preview.
+function mdTitle(msg: Extract<OutboundBotMessage, { kind: 'md' | 'card' }>): string {
+  return msg.title || 'MyFlowForge'
+}
+// A 1:1 robot has no interactive buttons, so a card's actions render as reply-keyword hints. `md`
+// messages carry already-markdown content (agent output) and pass through untouched.
+function mdBody(msg: Extract<OutboundBotMessage, { kind: 'md' | 'card' }>): string {
+  if (msg.kind === 'md') return msg.text
   let out = `### ${msg.title}\n\n${msg.text}`
   if (msg.actions?.length) {
     out += '\n\n' + msg.actions.map(a => `- 回复 **${a.key}** → ${a.label}`).join('\n')

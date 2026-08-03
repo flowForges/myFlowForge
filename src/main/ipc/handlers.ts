@@ -845,6 +845,27 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return f.activeSessionId
     },
     stopSession: (ws, sessionId) => { chatQueue.stop(ws, sessionId); cancelWorkspaceDelegates(ws, sessionId) },
+    sessionMeta: (ws, sessionId) => {
+      const s = getSession(ws, sessionId)
+      if (!s) return null
+      const agent = s.agentId || 'claude'
+      return { agent, agentLabel: providers[agent]?.displayName ?? agent, model: s.modelId || '', permission: s.permissionMode || 'auto' }
+    },
+    listModels: async (agent) => {
+      try {
+        const env = buildAgentEnv({ proxy: readSettings().termProxy })
+        const models = await (providers[agent] ?? providers['claude'])?.listModels(env)
+        return (models ?? []).map(mm => ({ id: mm.id, label: mm.label }))
+      } catch { return [] }
+    },
+    setModel: (ws, sessionId, agent, model) => {
+      const file = setSessionModel(ws, sessionId, agent, model)
+      broadcast(CH.sessionsChanged, { workspacePath: ws, file })
+    },
+    setPermission: (ws, sessionId, mode) => {
+      const file = setSessionPermission(ws, sessionId, mode)
+      broadcast(CH.sessionsChanged, { workspacePath: ws, file })
+    },
     emitStatus: (st) => broadcast(CH.botStatusEvent, st),
   })
   ipcMain.handle(CH.botConnect, async () => {

@@ -33,6 +33,7 @@ export interface InboundBotMessage {
 
 export type OutboundBotMessage =
   | { kind: 'text'; text: string }
+  | { kind: 'md'; title: string; text: string }   // rendered as DingTalk markdown (## ** ` links etc.)
   | { kind: 'card'; title: string; text: string; actions?: { key: string; label: string }[] }
 
 // A chat platform connection. Core stays platform-agnostic behind this.
