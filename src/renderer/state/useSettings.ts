@@ -26,7 +26,7 @@ const DEFAULTS: Settings = {
   nsfwInstalled: {},
   fullAccessAck: {},
   memory: { enabled: true },
-  botBridge: { enabled: false, dingtalk: { clientId: '', clientSecret: '' }, verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} } },
+  botBridge: { dingtalk: { enabled: false, clientId: '', clientSecret: '' }, telegram: { enabled: false, botToken: '' }, feishu: { enabled: false, appId: '', appSecret: '' }, verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} } },
   codexTransport: 'exec',
 }
 

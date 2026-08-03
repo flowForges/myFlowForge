@@ -178,14 +178,14 @@ const api = {
     ipcRenderer.on(CH.settingsChanged, listener)
     return () => ipcRenderer.removeListener(CH.settingsChanged, listener)
   },
-  // Bot bridge (钉钉)
-  botConnect: (): Promise<import('@shared/types').BotStatus> => ipcRenderer.invoke(CH.botConnect),
-  botDisconnect: (): Promise<import('@shared/types').BotStatus> => ipcRenderer.invoke(CH.botDisconnect),
-  botGetStatus: (): Promise<import('@shared/types').BotStatus> => ipcRenderer.invoke(CH.botGetStatus),
+  // Bot bridge (钉钉/Telegram/飞书)
+  botConnect: (platform: import('@shared/types').BotPlatform): Promise<Record<string, import('@shared/types').BotStatus>> => ipcRenderer.invoke(CH.botConnect, { platform }),
+  botDisconnect: (platform: import('@shared/types').BotPlatform): Promise<Record<string, import('@shared/types').BotStatus>> => ipcRenderer.invoke(CH.botDisconnect, { platform }),
+  botGetStatus: (): Promise<Record<string, import('@shared/types').BotStatus>> => ipcRenderer.invoke(CH.botGetStatus),
   botRegenPairing: (): Promise<string> => ipcRenderer.invoke(CH.botRegenPairing),
   botUnbind: (chatId: string): Promise<unknown> => ipcRenderer.invoke(CH.botUnbind, { chatId }),
-  onBotStatus: (cb: (s: import('@shared/types').BotStatus) => void) => {
-    const listener = (_: unknown, s: import('@shared/types').BotStatus) => cb(s)
+  onBotStatus: (cb: (e: import('@shared/types').BotStatusEvent) => void) => {
+    const listener = (_: unknown, e: import('@shared/types').BotStatusEvent) => cb(e)
     ipcRenderer.on(CH.botStatusEvent, listener)
     return () => ipcRenderer.removeListener(CH.botStatusEvent, listener)
   },

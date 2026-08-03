@@ -267,10 +267,30 @@ export const BotBindingSchema = z.object({
   focus: z.object({ workspacePath: z.string(), sessionId: z.string() }).nullable().catch(null).default(null),
   boundAt: z.number().catch(0).default(0),
 })
-export const BotBridgeSchema = z.object({
-  enabled: z.boolean().catch(false).default(false),
-  dingtalk: z.object({ clientId: z.string().catch('').default(''), clientSecret: z.string().catch('').default('') })
-    .catch({ clientId: '', clientSecret: '' }).default(() => ({ clientId: '', clientSecret: '' })),
+// Migrate the pre-multi-platform shape ({ enabled, dingtalk:{clientId,clientSecret} }) into the
+// per-platform shape so an existing settings.json keeps its DingTalk connection after upgrade.
+const migrateBotBridge = (v: unknown): unknown => {
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    const dt = o.dingtalk as Record<string, unknown> | undefined
+    if (dt && typeof dt === 'object' && !('enabled' in dt) && 'enabled' in o) {
+      o.dingtalk = { ...dt, enabled: !!o.enabled }
+    }
+  }
+  return v
+}
+export const BotBridgeSchema = z.preprocess(migrateBotBridge, z.object({
+  dingtalk: z.object({
+    enabled: z.boolean().catch(false).default(false),
+    clientId: z.string().catch('').default(''), clientSecret: z.string().catch('').default(''),
+  }).catch({ enabled: false, clientId: '', clientSecret: '' }).default(() => ({ enabled: false, clientId: '', clientSecret: '' })),
+  telegram: z.object({
+    enabled: z.boolean().catch(false).default(false), botToken: z.string().catch('').default(''),
+  }).catch({ enabled: false, botToken: '' }).default(() => ({ enabled: false, botToken: '' })),
+  feishu: z.object({
+    enabled: z.boolean().catch(false).default(false),
+    appId: z.string().catch('').default(''), appSecret: z.string().catch('').default(''),
+  }).catch({ enabled: false, appId: '', appSecret: '' }).default(() => ({ enabled: false, appId: '', appSecret: '' })),
   verbosity: z.enum(['essential', 'stages', 'verbose']).catch('essential').default('essential'),
   pairingCode: z.string().catch('').default(''),
   bindings: z.array(BotBindingSchema).catch([]).default(() => []),
@@ -279,10 +299,12 @@ export const BotBridgeSchema = z.object({
     ws: z.record(z.string(), z.string()).catch({}).default(() => ({})),
     session: z.record(z.string(), z.string()).catch({}).default(() => ({})),
   }).catch({ seq: 0, ws: {}, session: {} }).default(() => ({ seq: 0, ws: {}, session: {} })),
-})
+}))
 export const defaultBotBridge = (): z.infer<typeof BotBridgeSchema> => ({
-  enabled: false, dingtalk: { clientId: '', clientSecret: '' }, verbosity: 'essential',
-  pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} },
+  dingtalk: { enabled: false, clientId: '', clientSecret: '' },
+  telegram: { enabled: false, botToken: '' },
+  feishu: { enabled: false, appId: '', appSecret: '' },
+  verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} },
 })
 
 export const SettingsSchema = z.object({

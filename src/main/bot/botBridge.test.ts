@@ -23,7 +23,7 @@ class FakeTransport implements BotTransport {
 }
 
 function harness() {
-  let cfg: BotBridgeConfig = { ...defaultBotConfig(), dingtalk: { clientId: 'x', clientSecret: 'y' } }
+  let cfg: BotBridgeConfig = { ...defaultBotConfig(), dingtalk: { enabled: true, clientId: 'x', clientSecret: 'y' } }
   const enqueued: { text: string; ws: string; sid: string }[] = []
   const chat: { id: string; d: string; v?: string; c?: number }[] = []
   const gate: { ws: string; id: string; d: unknown }[] = []
@@ -37,7 +37,7 @@ function harness() {
     [{ path: '/ws1', name: 'WS One', activeSessionId: 'sess-abc', sessions: [{ id: 'sess-abc', title: 'Chat A', mode: 'chat' }] }]
   const bridge = new BotBridge()
   const fake = new FakeTransport()
-  bridge.setTransportFactory(() => fake)
+  bridge.setTransportFactory(() => fake)   // any platform → the fake
   bridge.attach({
     // Clone on read like the real readSettings().botBridge (a fresh Zod parse each call) — returning
     // the same object reference would mask config-object-identity bugs (e.g. attach saving a stale copy).
@@ -55,6 +55,7 @@ function harness() {
     listModels: async () => [{ id: 'opus', label: 'Opus' }, { id: 'sonnet', label: 'Sonnet' }],
     setModel: (ws, sid, agent, model) => modelSet.push({ ws, sid, agent, model }),
     setPermission: (ws, sid, mode) => permSet.push({ ws, sid, mode }),
+    emitStatus: () => {},
   })
   return { bridge, fake, enqueued, chat, gate, lane, stopped, created, modelSet, permSet, cfg: () => cfg }
 }
@@ -67,7 +68,7 @@ const msg = (text: string, over: Partial<InboundBotMessage> = {}): InboundBotMes
 
 async function attached() {
   const h = harness()
-  await h.bridge.connect()
+  await h.bridge.connect('dingtalk')
   await h.bridge.handleInbound(msg(`bind ${h.cfg().pairingCode}`))
   await h.bridge.handleInbound(msg('list'))
   const sid = h.cfg().ids.session['sess-abc']       // short id for the only session
@@ -109,7 +110,7 @@ describe('genPairing', () => {
 describe('BotBridge — binding', () => {
   it('rejects a wrong code, binds on the right one, and rotates the code', async () => {
     const h = harness()
-    await h.bridge.connect()
+    await h.bridge.connect('dingtalk')
     const code = h.cfg().pairingCode
     expect(code).toMatch(/^\d{6}$/)
     await h.bridge.handleInbound(msg('bind 000000'))
@@ -123,7 +124,7 @@ describe('BotBridge — binding', () => {
 
   it('an unbound chat gets only the pairing prompt', async () => {
     const h = harness()
-    await h.bridge.connect()
+    await h.bridge.connect('dingtalk')
     await h.bridge.handleInbound(msg('list'))
     expect(h.fake.lastText()).toContain('未绑定')
   })
@@ -221,7 +222,7 @@ describe('BotBridge — gate answering', () => {
 
   it('attach w<id> attaches the workspace active session', async () => {
     const h = harness()
-    await h.bridge.connect()
+    await h.bridge.connect('dingtalk')
     await h.bridge.handleInbound(msg(`bind ${h.cfg().pairingCode}`))
     await h.bridge.handleInbound(msg('list'))
     const wid = h.cfg().ids.ws['/ws1']
@@ -231,7 +232,7 @@ describe('BotBridge — gate answering', () => {
 
   it('new creates a session in the focus workspace and attaches it', async () => {
     const h = harness()
-    await h.bridge.connect()
+    await h.bridge.connect('dingtalk')
     await h.bridge.handleInbound(msg(`bind ${h.cfg().pairingCode}`))
     await h.bridge.handleInbound(msg('list'))
     const wid = h.cfg().ids.ws['/ws1']
@@ -246,7 +247,7 @@ describe('BotBridge — gate answering', () => {
 
   it('attach persists focus across messages (fresh-config identity)', async () => {
     const h = harness()
-    await h.bridge.connect()
+    await h.bridge.connect('dingtalk')
     await h.bridge.handleInbound(msg(`bind ${h.cfg().pairingCode}`))
     await h.bridge.handleInbound(msg('list'))
     const sid = h.cfg().ids.session['sess-abc']

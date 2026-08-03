@@ -9,8 +9,14 @@
 .bot-status.error { color: var(--err); }
 .bot-status.error .dot { background: oklch(66% .18 25); }
 
-/* credential fields — reuse proj-field look; two side by side on wide */
+/* per-platform section */
+.bot-platform { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in oklch, var(--surface) 45%, transparent); }
+.bot-platform-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
+.bot-platform-head h4 { margin: 0; text-transform: none; font-size: 14px; letter-spacing: 0; color: var(--fg); }
+
+/* credential fields — reuse proj-field look; side by side on wide */
 .bot-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.bot-fields.cols-1 { grid-template-columns: 1fr; }
 @media (max-width: 560px) { .bot-fields { grid-template-columns: 1fr; } }
 .bot-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
 

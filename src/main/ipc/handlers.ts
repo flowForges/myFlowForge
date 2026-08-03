@@ -32,7 +32,7 @@ import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflo
 import { workflowDisplayName } from '../config/schema'
 import { agentSessionsForId } from '../chat/agentSessions'
 import { botBridge, genPairing } from '../bot/botBridge'
-import type { BotBridgeConfig } from '../bot/botTypes'
+import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
@@ -866,17 +866,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       const file = setSessionPermission(ws, sessionId, mode)
       broadcast(CH.sessionsChanged, { workspacePath: ws, file })
     },
-    emitStatus: (st) => broadcast(CH.botStatusEvent, st),
+    emitStatus: (platform, st) => broadcast(CH.botStatusEvent, { platform, status: st }),
   })
-  ipcMain.handle(CH.botConnect, async () => {
-    persistBotConfig({ ...(readSettings().botBridge as BotBridgeConfig), enabled: true })
-    await botBridge.connect(); return botBridge.getStatus()
+  ipcMain.handle(CH.botConnect, async (_e, a: { platform: BotPlatform }) => {
+    const bb = readSettings().botBridge as BotBridgeConfig
+    persistBotConfig({ ...bb, [a.platform]: { ...bb[a.platform], enabled: true } })
+    await botBridge.connect(a.platform); return botBridge.getStatuses()
   })
-  ipcMain.handle(CH.botDisconnect, async () => {
-    persistBotConfig({ ...(readSettings().botBridge as BotBridgeConfig), enabled: false })
-    await botBridge.disconnect(); return botBridge.getStatus()
+  ipcMain.handle(CH.botDisconnect, async (_e, a: { platform: BotPlatform }) => {
+    const bb = readSettings().botBridge as BotBridgeConfig
+    persistBotConfig({ ...bb, [a.platform]: { ...bb[a.platform], enabled: false } })
+    await botBridge.disconnect(a.platform); return botBridge.getStatuses()
   })
-  ipcMain.handle(CH.botGetStatus, () => botBridge.getStatus())
+  ipcMain.handle(CH.botGetStatus, () => botBridge.getStatuses())
   ipcMain.handle(CH.botRegenPairing, () => {
     const code = genPairing()
     persistBotConfig({ ...(readSettings().botBridge as BotBridgeConfig), pairingCode: code })

@@ -2,6 +2,26 @@ import { describe, it, expect } from 'vitest'
 import { SettingsSchema, defaultSettings } from './schema'
 import { BUILTIN_PET_IDS, DEFAULT_BUILTIN_PET_ID } from '@shared/builtinPets'
 
+describe('SettingsSchema botBridge', () => {
+  it('defaults to per-platform disabled config', () => {
+    const s = defaultSettings()
+    expect(s.botBridge.dingtalk).toEqual({ enabled: false, clientId: '', clientSecret: '' })
+    expect(s.botBridge.telegram).toEqual({ enabled: false, botToken: '' })
+    expect(s.botBridge.feishu).toEqual({ enabled: false, appId: '', appSecret: '' })
+  })
+
+  it('migrates the legacy { enabled, dingtalk } shape into dingtalk.enabled', () => {
+    const parsed = SettingsSchema.parse({
+      ...defaultSettings(),
+      botBridge: { enabled: true, dingtalk: { clientId: 'ding123', clientSecret: 'sec' }, pairingCode: '654321' },
+    })
+    expect(parsed.botBridge.dingtalk).toEqual({ enabled: true, clientId: 'ding123', clientSecret: 'sec' })
+    expect(parsed.botBridge.pairingCode).toBe('654321')
+    expect(parsed.botBridge.telegram.enabled).toBe(false)
+    expect('enabled' in parsed.botBridge).toBe(false)   // legacy top-level flag dropped after migration
+  })
+})
+
 describe('SettingsSchema skills + pet', () => {
   it('defaultSettings includes skills + pet defaults', () => {
     const s = defaultSettings()

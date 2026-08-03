@@ -302,11 +302,13 @@ export interface SessionsFile { sessions: ChatSession[]; activeSessionId: string
 
 // Bot bridge (钉钉/Telegram/飞书) live connection status — pushed to the settings pane over
 // CH.botStatusEvent. Persisted bot config (creds/bindings) rides in Settings.botBridge instead.
+export type BotPlatform = 'dingtalk' | 'telegram' | 'feishu'
 export type BotStatus =
   | { state: 'offline' }
   | { state: 'connecting' }
   | { state: 'online' }
   | { state: 'error'; reason: string }
+export interface BotStatusEvent { platform: BotPlatform; status: BotStatus }
 export interface ChatConfirm { id: string; title: string; where?: string; ts?: string }
 export interface ChatSendPayload {
   workspacePath: string

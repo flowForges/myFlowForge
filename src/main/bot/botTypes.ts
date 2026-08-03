@@ -2,10 +2,8 @@
 // later) implements BotTransport; the bridge core in botBridge.ts speaks only these types so it never
 // knows which platform it is driving.
 
-import type { BotStatus } from '@shared/types'
-export type { BotStatus }
-
-export type BotPlatform = 'dingtalk' | 'telegram' | 'feishu'
+import type { BotStatus, BotPlatform } from '@shared/types'
+export type { BotStatus, BotPlatform }
 
 export type BotChatType = 'private' | 'group'
 
@@ -62,11 +60,14 @@ export interface BotBinding {
   boundAt: number
 }
 
-export interface DingtalkCreds { clientId: string; clientSecret: string }
+export interface DingtalkCreds { enabled: boolean; clientId: string; clientSecret: string }
+export interface TelegramCreds { enabled: boolean; botToken: string }
+export interface FeishuCreds { enabled: boolean; appId: string; appSecret: string }
 
 export interface BotBridgeConfig {
-  enabled: boolean
   dingtalk: DingtalkCreds
+  telegram: TelegramCreds
+  feishu: FeishuCreds
   verbosity: BotVerbosity
   pairingCode: string
   bindings: BotBinding[]
@@ -74,10 +75,20 @@ export interface BotBridgeConfig {
   ids: { seq: number; ws: Record<string, string>; session: Record<string, string> }
 }
 
+export const BOT_PLATFORMS: BotPlatform[] = ['dingtalk', 'telegram', 'feishu']
+
+// Is a platform configured enough to attempt a connection?
+export function platformReady(cfg: BotBridgeConfig, p: BotPlatform): boolean {
+  if (p === 'dingtalk') return cfg.dingtalk.enabled && !!cfg.dingtalk.clientId && !!cfg.dingtalk.clientSecret
+  if (p === 'telegram') return cfg.telegram.enabled && !!cfg.telegram.botToken
+  return cfg.feishu.enabled && !!cfg.feishu.appId && !!cfg.feishu.appSecret
+}
+
 export function defaultBotConfig(): BotBridgeConfig {
   return {
-    enabled: false,
-    dingtalk: { clientId: '', clientSecret: '' },
+    dingtalk: { enabled: false, clientId: '', clientSecret: '' },
+    telegram: { enabled: false, botToken: '' },
+    feishu: { enabled: false, appId: '', appSecret: '' },
     verbosity: 'essential',
     pairingCode: '',
     bindings: [],
