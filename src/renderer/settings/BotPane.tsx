@@ -136,9 +136,8 @@ export function BotPane({ config, onChange }: BotPaneProps) {
             <li key={c.cmd}><code>{c.cmd}</code><span>{c.desc}</span></li>
           ))}
         </ul>
-        <p className="bot-cmds note">
-          有待处理门时直接回复即作答（<b>allow</b> / <b>deny</b>、序号、或文本）；
-          否则直接发消息 = 给焦点会话开新对话。
+        <p className="bot-note">
+          有待处理门时直接回复即作答（<b>allow</b> / <b>deny</b>、序号、或文本）；否则直接发消息 = 给焦点会话开新对话。
         </p>
       </div>
     </div>

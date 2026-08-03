@@ -50,4 +50,5 @@
 .bot-cmds li { display: flex; gap: 10px; align-items: baseline; font-size: 12.5px; color: var(--fg-2); list-style: none; }
 .bot-cmds code { font-family: var(--mono); font-size: 12px; color: var(--accent); background: var(--accent-dim);
   padding: 1px 7px; border-radius: 5px; flex: 0 0 auto; min-width: 92px; }
-.bot-cmds .note { font-size: 12px; color: var(--muted); line-height: 1.5; margin-top: 6px; }
+.bot-note { font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 10px; }
+.bot-note b { color: var(--fg-2); font-weight: 600; }

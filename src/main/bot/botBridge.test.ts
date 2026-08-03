@@ -33,7 +33,9 @@ function harness() {
   const fake = new FakeTransport()
   bridge.setTransportFactory(() => fake)
   bridge.attach({
-    readConfig: () => cfg,
+    // Clone on read like the real readSettings().botBridge (a fresh Zod parse each call) — returning
+    // the same object reference would mask config-object-identity bugs (e.g. attach saving a stale copy).
+    readConfig: () => structuredClone(cfg),
     writeConfig: (c) => { cfg = c },
     enqueue: (p) => enqueued.push({ text: p.text, ws: p.workspacePath, sid: p.sessionId }),
     resolveChatGate: (id, d, v, c) => { chat.push({ id, d, v, c }); return true },
@@ -182,6 +184,20 @@ describe('BotBridge — gate answering', () => {
     const h = await attached()
     await h.bridge.handleInbound(msg('stop'))
     expect(h.stopped).toEqual([{ ws: '/ws1', sid: 'sess-abc' }])
+  })
+
+  it('attach persists focus across messages (fresh-config identity)', async () => {
+    const h = harness()
+    await h.bridge.connect()
+    await h.bridge.handleInbound(msg(`bind ${h.cfg().pairingCode}`))
+    await h.bridge.handleInbound(msg('list'))
+    const sid = h.cfg().ids.session['sess-abc']
+    await h.bridge.handleInbound(msg(`attach ${sid}`))
+    // focus must be persisted to disk, not just mutated on a transient config copy
+    expect(h.cfg().bindings[0].focus).toEqual({ workspacePath: '/ws1', sessionId: 'sess-abc' })
+    // a following plain message must reach that focus, not fall back to "还没 attach"
+    await h.bridge.handleInbound(msg('看看有哪些项目'))
+    expect(h.enqueued).toEqual([{ text: '看看有哪些项目', ws: '/ws1', sid: 'sess-abc' }])
   })
 })
 
