@@ -56,7 +56,7 @@ export function upsertProject(input: { repoUrl: string; branch: string }): impor
     // default branch (e.g. master → main) can be fixed by just adding it again. id/name stay stable.
     writeProjects({ projects: list.map(p => p.id === id ? { ...p, repoUrl, defaultBranch } : p) })
   } else {
-    writeProjects({ projects: [...list, { id, name, repoUrl, defaultBranch }] })
+    writeProjects({ projects: [...list, { id, name, repoUrl, defaultBranch, alias: '' }] })
   }
   return readProjects().projects
 }
@@ -67,6 +67,16 @@ export function setProjectDefaultBranch(id: string, branch: string): import('./s
   const list = readProjects().projects
   if (b && list.some(p => p.id === id)) {
     writeProjects({ projects: list.map(p => p.id === id ? { ...p, defaultBranch: b } : p) })
+  }
+  return readProjects().projects
+}
+// Change only a project's alias (inline edit in ProjectPane). Unlike branch, a BLANK alias is a valid
+// value (clearing the nickname), so this only guards the id — trimmed, empty allowed.
+export function setProjectAlias(id: string, alias: string): import('./schema').Project[] {
+  const a = alias.trim()
+  const list = readProjects().projects
+  if (list.some(p => p.id === id)) {
+    writeProjects({ projects: list.map(p => p.id === id ? { ...p, alias: a } : p) })
   }
   return readProjects().projects
 }

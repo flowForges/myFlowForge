@@ -11,18 +11,19 @@
   padding: 8px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
 }
-/* 运行指示器:四角星(sparkle/十字星),旋转+缩放"闪烁"——参考旧版子代理执行的样式,比圆点/波纹更有辨识度
-   和活力。done/err 仍是静态实心圆点(见下)。 */
-.wf-exec-dot, .wf-exec-lane-dot.run {
-  background: var(--accent); border-radius: 0;
-  clip-path: polygon(50% 0%, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0% 50%, 39% 39%);
-  animation: wf-exec-twinkle 1.5s ease-in-out infinite;
+/* 运行指示器 —— 回到 v1.0.34 子代理执行卡的观感(用户反馈原来忽大忽小的 twinkle 动效不如旧版):
+   头部一个平滑「旋转」的星标(匀速自转,像旧版 magnifier 的 sac-spin),各泳道用「脉冲」圆点。
+   done/err 仍是静态实心圆点(见下)。 */
+.wf-exec-ico { width: 14px; height: 14px; flex: 0 0 auto; display: grid; place-items: center; color: var(--accent); }
+.wf-exec-ico svg { width: 14px; height: 14px; animation: wf-exec-spin 1.5s linear infinite; transform-origin: 50% 50%; }
+@keyframes wf-exec-spin { to { transform: rotate(360deg); } }
+.wf-exec-lane-dot.run {
+  background: var(--accent);
+  animation: wf-exec-pulse 1.3s ease-in-out infinite;
 }
-.wf-exec-dot { width: 11px; height: 11px; position: relative; flex: 0 0 auto; }
-.wf-exec-lane-dot.run { width: 11px; height: 11px; }
-@keyframes wf-exec-twinkle {
-  0%, 100% { transform: rotate(0deg) scale(.62); opacity: .65; }
-  50%      { transform: rotate(90deg) scale(1.1); opacity: 1; }
+@keyframes wf-exec-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklch, var(--accent) 45%, transparent); }
+  50%      { opacity: .55; box-shadow: 0 0 0 4px transparent; }
 }
 .wf-exec-title { font-weight: 600; font-size: 13px; }
 .wf-exec-count { margin-left: auto; font-size: 12px; opacity: .65; }

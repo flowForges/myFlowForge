@@ -41,12 +41,14 @@ function baseState(overrides: Partial<Record<string, unknown>> = {}): RunControl
 }
 
 describe('buildStageRuntimes', () => {
-  it('maps root-scope stages to a single agent named/roled after the stage', () => {
+  it('maps root-scope stages to a single 工作区 agent roled after the stage', () => {
     const stages = buildStageRuntimes(baseState(), {})
     const assess = stages.find((s) => s.key === 'assess')!
     expect(assess.agents).toHaveLength(1)
     expect(assess.agents[0].id).toBe('assess:root')
-    expect(assess.agents[0].name).toBe('需求评估')
+    // Root card is titled 工作区 (it runs at the workspace root); the stage name is its sub-label/role —
+    // avoids repeating the stage name as both title and role under the stage header.
+    expect(assess.agents[0].name).toBe('工作区')
     expect(assess.agents[0].role).toBe('需求评估')
     expect(assess.agents[0].provider).toBe('claude')
     expect(assess.agents[0].model).toBe('opus')
@@ -104,6 +106,31 @@ describe('buildStageRuntimes', () => {
     expect(start.agents[0].hookSkills).toEqual(['analyze'])
     // a hook-less plan is untouched (no hook rows)
     expect(buildStageRuntimes(baseState(), {}).some((r) => r.hook)).toBe(false)
+  })
+
+  it('③stage hooks: a hook anchored to a LEAD stage weaves at run start (not silently dropped)', () => {
+    // Conversational tail run: design ran in chat and is a leadStage; the tail plan is just [develop].
+    // A hook `after: 'design'` points at a key no longer in plan.stages — before the fix it vanished.
+    // Now startHookKeys folds design's key into the start weave, so it renders before the first stage.
+    const st = baseState({
+      machine: {
+        plan: {
+          runId: 'run2-tail',
+          stages: [{ key: 'develop', name: '代码开发', provider: 'codex', model: 'x', scope: 'per-project', gate: false, prompt: 'x' }],
+          leadStages: [{ key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus' }],
+          hooks: [
+            { id: 'ad', name: '当前时间', prompt: 'p', after: 'design', skills: [], tools: [] },
+            { id: 'av', name: '暂停插件', prompt: 'p', after: 'develop', skills: [], tools: [] },
+          ],
+        },
+        stages: [{ key: 'develop', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      liveLanes: {},
+    })
+    const rows = buildStageRuntimes(st, {})
+    // after-design hook (lead-anchored) fires at start → before develop; after-develop hook stays after it
+    expect(rows.map((r) => r.key)).toEqual(['hook:ad', 'develop', 'hook:av'])
   })
 
   it('maps per-project fan-out lanes from liveLanes (running) and outcomes (settled)', () => {

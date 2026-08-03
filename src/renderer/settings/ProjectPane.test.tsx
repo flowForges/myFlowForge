@@ -25,6 +25,27 @@ describe('ProjectPane', () => {
     expect(onEditBranch).toHaveBeenCalledWith('p1', 'main')
   })
 
+  it('edits a project alias inline (click 加别名 → type → Enter), and allows clearing it', () => {
+    const onEditAlias = vi.fn()
+    const { rerender } = render(<ProjectPane
+      projects={[{ id: 'p1', name: 'P1', repoUrl: 'git@x:y/p1.git', defaultBranch: 'main' }]}
+      onAdd={vi.fn()} onDelete={vi.fn()} onEditAlias={onEditAlias} />)
+    fireEvent.click(screen.getByRole('button', { name: /加别名/ }))     // empty alias → 加别名 affordance
+    const input = screen.getByPlaceholderText('别名')
+    fireEvent.change(input, { target: { value: '核心后台' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onEditAlias).toHaveBeenCalledWith('p1', '核心后台')
+    // a set alias renders as the pill label and a blank value clears it
+    rerender(<ProjectPane
+      projects={[{ id: 'p1', name: 'P1', repoUrl: 'git@x:y/p1.git', defaultBranch: 'main', alias: '核心后台' }]}
+      onAdd={vi.fn()} onDelete={vi.fn()} onEditAlias={onEditAlias} />)
+    fireEvent.click(screen.getByRole('button', { name: /核心后台/ }))
+    const input2 = screen.getByDisplayValue('核心后台')
+    fireEvent.change(input2, { target: { value: '' } })
+    fireEvent.keyDown(input2, { key: 'Enter' })
+    expect(onEditAlias).toHaveBeenCalledWith('p1', '')                 // blank clears (valid, unlike branch)
+  })
+
   it('does not call onEditBranch when the branch is unchanged or blank', () => {
     const onEditBranch = vi.fn()
     render(<ProjectPane

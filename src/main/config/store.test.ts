@@ -74,6 +74,15 @@ describe('config store', () => {
     expect(setProjectDefaultBranch('widget', '  ')[0].defaultBranch).toBe('main')   // blank ignored
   })
 
+  it('setProjectAlias sets, trims, and (unlike branch) clears an alias; persists; no-op for unknown id', async () => {
+    const { upsertProject, setProjectAlias, readProjects } = await import('./store')
+    upsertProject({ repoUrl: 'git@github.com:acme/widget.git', branch: 'main' })
+    expect(setProjectAlias('widget', '  小部件  ')[0].alias).toBe('小部件')          // set + trimmed
+    expect(readProjects().projects[0].alias).toBe('小部件')                          // persisted
+    expect(setProjectAlias('widget', '')[0].alias).toBe('')                          // blank CLEARS (valid)
+    expect(setProjectAlias('nope', 'x').find(p => p.id === 'nope')).toBeUndefined()  // unknown id untouched
+  })
+
   it('writes settings atomically and leaves no .tmp behind', async () => {
     const { readSettings, writeSettings } = await import('./store')
     const { defaultSettings } = await import('./schema')

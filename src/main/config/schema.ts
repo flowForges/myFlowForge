@@ -332,7 +332,10 @@ export const defaultSettings = (): Settings => ({
 })
 
 export const ProjectSchema = z.object({
-  id: z.string(), name: z.string(), repoUrl: z.string(), defaultBranch: z.string().default('main')
+  // alias: an optional user-set nickname, purely a search aid — the 新建工作区 project picker matches on
+  // name OR alias so a large library (三四十个项目) is quick to find. Defaults to '' so every existing
+  // on-disk projects.json stays valid without migration.
+  id: z.string(), name: z.string(), repoUrl: z.string(), defaultBranch: z.string().default('main'), alias: z.string().optional()
 })
 export type Project = z.infer<typeof ProjectSchema>
 export const ProjectsSchema = z.object({ projects: z.array(ProjectSchema) })

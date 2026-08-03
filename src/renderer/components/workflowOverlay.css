@@ -108,10 +108,22 @@
 
 /* 运行态进度条 */
 .wfo-prog { display: flex; align-items: center; gap: 11px; margin-top: 13px; }
-.wfo-prog .lbl { font: 600 11.5px/1 var(--mono); color: var(--fg-2); flex: 0 0 auto; }
-.wfo-prog .bar { flex: 1; height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
-.wfo-prog .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--ok)); border-radius: 99px; transition: width .45s cubic-bezier(.4,0,.2,1); }
-.wfo-prog .pct { font: 600 11px/1 var(--mono); color: var(--muted); flex: 0 0 auto; }
+.wfo-prog .lbl { font: 600 11.5px/1 var(--mono); color: var(--fg-2); flex: 0 0 auto; white-space: nowrap; }
+.wfo-prog .lbl b { color: var(--accent); font-weight: 700; }
+/* Current-progress bar (user feedback: show where we ARE, not "已完成 N/M"). overflow:visible so the
+   frontier caret can stand taller than the 6px track. */
+.wfo-prog .bar { position: relative; flex: 1; height: 6px; border-radius: 99px; background: var(--surface-2); overflow: visible; }
+/* Solid fill through the already-done stages. */
+.wfo-prog .bar .fill { position: absolute; left: 0; top: 0; height: 100%; width: 0; border-radius: 99px; background: linear-gradient(90deg, var(--accent), var(--ok)); transition: width .45s cubic-bezier(.4,0,.2,1); z-index: 1; }
+/* The stage in flight: a live segment with a light stripe flowing left→right — reads instantly as
+   "this step is executing now". */
+.wfo-prog .bar .seg { position: absolute; top: 0; height: 100%; border-radius: 99px; overflow: hidden; z-index: 2; background: color-mix(in oklch, var(--run) 26%, var(--surface-2)); }
+.wfo-prog .bar .seg::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent 0%, color-mix(in oklch, var(--run) 90%, transparent) 50%, transparent 100%); background-size: 45% 100%; background-repeat: no-repeat; animation: wfo-seg-flow 1.15s linear infinite; }
+@keyframes wfo-seg-flow { 0% { background-position: -45% 0; } 100% { background-position: 145% 0; } }
+/* Parked between stages (advanced but next not started / paused / at a gate): a blinking text-caret at
+   the frontier says "we're right here, waiting to move on". */
+.wfo-prog .bar .pcursor { position: absolute; top: 50%; width: 2px; height: 12px; border-radius: 2px; transform: translate(-50%, -50%); z-index: 3; background: var(--accent); box-shadow: 0 0 6px color-mix(in oklch, var(--accent) 70%, transparent); animation: wfo-cursor-blink 1.05s step-end infinite; }
+@keyframes wfo-cursor-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
 
 /* —— 流程图(向下 · 节点相连 · 箭头) —— */
 .wfo-flow { flex: 1 1 auto; overflow-y: auto; padding: 20px 17px 12px; }

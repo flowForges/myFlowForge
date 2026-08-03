@@ -4,7 +4,7 @@ import type { StagePlan } from '../../main/run/machine'
 import type { LiveLane, RunControllerState, RunLogLine } from '../../main/run/controller'
 import type { WorkOrderOutcome } from '../../main/run/workOrder'
 import { reviewLenses, reviewLaneId, isLensReviewStage } from '../../main/run/reviewFanout'
-import { hooksAfter, hookLaneId } from '../../main/run/hooks'
+import { hooksAfter, hookLaneId, startHookKeys } from '../../main/run/hooks'
 import type { Plugin } from '../../shared/plugin'
 
 // P2-1b: maps run2's live `RunControllerState` (+ per-lane log buffers) onto the SAME
@@ -109,7 +109,11 @@ function buildRootAgent(sp: StagePlan, state: RunControllerState, laneLogs: Reco
 
   return {
     id: laneId,
-    name: sp.name,
+    // A single-agent (root) stage runs at the workspace root. The stage card's header already shows the
+    // stage name right above, so repeating it as BOTH the card title and its sub-label read as the same
+    // text three times ("不协调/山寨"). Title it 工作区 with the stage as the sub-label — identical to the
+    // launch card's root lane, so the launch preview and the running card match.
+    name: '工作区',
     role: sp.name,
     // `||` (not `??`): a resumed `done` stage's outcome is a placeholder (see controller.ts's
     // placeholderOutcome, P-C2/T1 review Finding 2) whose provider/model/cwd are '' — not absent —
@@ -333,7 +337,13 @@ export function buildStageRuntimes(
   if (!hooks || hooks.length === 0) return state.machine.plan.stages.map(buildRealStage)
 
   const out: AdaptedStage[] = []
-  for (const h of hooksAfter(hooks, '__start')) out.push(buildHookStage(h, state, laneLogs))
+  // '__start' hooks + hooks anchored to a LEAD stage (an already-done conversational stage that isn't a
+  // real plan stage — e.g. after-design when the tail run is [develop,test,review]). They render as
+  // HookNodes at the TOP of the pipe, right after RunExecPanel's leading 已完成 cards — i.e. "after
+  // design, before develop", mirroring the controller's startHookKeys firing so panel == run order.
+  for (const k of startHookKeys(state.machine.plan.leadStages)) {
+    for (const h of hooksAfter(hooks, k)) out.push(buildHookStage(h, state, laneLogs))
+  }
   for (const sp of state.machine.plan.stages) {
     out.push(buildRealStage(sp))
     for (const h of hooksAfter(hooks, sp.key)) out.push(buildHookStage(h, state, laneLogs))

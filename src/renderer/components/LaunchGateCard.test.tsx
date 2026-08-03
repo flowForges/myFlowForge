@@ -223,8 +223,8 @@ describe('LaunchGateCard 编码代理(provider)选择', () => {
     )
   })
 
-  // #3: 一键把所有 provider 切成同一个 — 覆盖所有项目 + 所有非写码阶段;写码阶段(develop/test)从项目继承,不动。
-  it('「统一编码代理·全部设为」一键把所有项目与非写码阶段切成同一个 provider', () => {
+  // #3: 一键把所有 provider 切成同一个 — 覆盖所有项目 + 所有阶段(含写码阶段,见 applyProviderToAll 注释)。
+  it('「统一编码代理·全部设为」一键把所有项目与阶段切成同一个 provider', () => {
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
     fireEvent.click(screen.getByText('全部设为…'))
@@ -235,12 +235,15 @@ describe('LaunchGateCard 编码代理(provider)选择', () => {
     const arg = onConfirm.mock.calls[0][0]
     // every project (selected or not) → codex + codex's default model, never ''
     for (const p of arg.projects) { expect(p.provider).toBe('codex'); expect(p.model).toBe('gpt-5-codex') }
-    // non-code stages (requirement/review) → codex; code stages (develop/test) inherit → left as claude
+    // 全部设为 switches EVERY stage to the bulk provider — including code stages (develop/test): a
+    // per-project code stage's lanes resolve `p.provider || stage.provider`, and since all projects are
+    // now codex too, setting the stage provider to codex as well is harmless + correct (see
+    // applyProviderToAll's doc). So all four stages read codex.
     const byKey = Object.fromEntries(arg.stageChoices.map((s: { key: string; provider: string }) => [s.key, s.provider]))
     expect(byKey.requirement).toBe('codex')
     expect(byKey.review).toBe('codex')
-    expect(byKey.develop).toBe('claude')
-    expect(byKey.test).toBe('claude')
+    expect(byKey.develop).toBe('codex')
+    expect(byKey.test).toBe('codex')
   })
 })
 
@@ -359,9 +362,13 @@ describe('LaunchGateCard hook 可选', () => {
   it('展示 hook 列表 + 触发时机；取消勾选后确认 hookChoices 反映', () => {
     const onConfirm = vi.fn()
     render(<LaunchGateCard config={withHooks} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    // Hooks now render inline on the pipeline (between the stages they weave after), each with an
+    // 已启用/已停用 toggle — no longer a bottom list with a spelled-out 触发时机.
     expect(screen.getByText('跑测试')).toBeInTheDocument()
-    expect(screen.getByText('全部结束后')).toBeInTheDocument()
-    fireEvent.click(screen.getByText('跑测试'))
+    expect(screen.getByText('收尾总结')).toBeInTheDocument()
+    // toggle 跑测试 (h1) off via its inline switch
+    const h1row = screen.getByText('跑测试').closest('.lg-hook') as HTMLElement
+    fireEvent.click(within(h1row).getByText('已启用'))
     fireEvent.click(screen.getByText('确认'))
     expect(onConfirm).toHaveBeenCalledWith(expect.objectContaining({
       hookChoices: expect.arrayContaining([

@@ -1,6 +1,6 @@
 import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
-import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
+import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions } from '@shared/permissions'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
@@ -62,7 +62,7 @@ import { storeBackgroundFromPath, backgroundImageUrl, bgRelFromUrl, gcBackground
 import { makeDiskPreviewCache, previewKeepRels } from '../appearance/previewCache'
 import { listDownloadedFonts, downloadCatalogFont, deleteDownloadedFont } from '../appearance/fontStore'
 import { catalogEntry } from '../../shared/fontCatalog'
-import { nsfwValidate, nsfwCatalog, nsfwPreview, nsfwInstallPet, nsfwInstallBg } from '../nsfw/nsfwService'
+import { nsfwValidate, nsfwCatalog, nsfwPreview, nsfwGallery, nsfwInstallPet, nsfwInstallBg } from '../nsfw/nsfwService'
 import { wallpaperCatalog, wallpaperPreview, wallpaperInstall } from '../wallpaper/wallpaperService'
 import type { WallpaperItem } from '../../shared/wallpaper'
 import { petPackCatalog, petPackPreview, petPackInstall } from '../petPack/petPackService'
@@ -205,6 +205,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return readProjects().projects
   })
   ipcMain.handle(CH.configUpdateProjectBranch, (_e, input: { id: string; branch: string }) => setProjectDefaultBranch(input.id, input.branch))
+  ipcMain.handle(CH.configUpdateProjectAlias, (_e, input: { id: string; alias: string }) => setProjectAlias(input.id, input.alias))
   ipcMain.handle(CH.configListWorkflows, () => readWorkflows().workflows)
   ipcMain.handle(CH.configAddWorkflow, (_e, input: { name: string; stages: import('../config/buildWorkflow').StageSeed[] }) => {
     const list = readWorkflows().workflows
@@ -1102,6 +1103,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
   ipcMain.handle(CH.nsfwCatalog, () => nsfwCatalog(readSettings().nsfwCode, nsfwFetch()))
   ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, readSettings().nsfwCode, nsfwFetch(), previewCache))
+  // Gallery (design E): returns catalog + already-cached thumbnails immediately; the missing ones stream
+  // in and arrive one-by-one as CH.nsfwPreviewEvent {key,url} on the SAME window.
+  ipcMain.handle(CH.nsfwGallery, (e, force?: boolean) => {
+    const emit = (key: string, url: string) => { try { e.sender.send(CH.nsfwPreviewEvent, { key, url }) } catch { /* window closed */ } }
+    return nsfwGallery(readSettings().nsfwCode, nsfwFetch(), previewCache, emit, { force: !!force })
+  })
   ipcMain.handle(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, readSettings().nsfwCode, nsfwFetch()))
   ipcMain.handle(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, readSettings().nsfwCode, nsfwFetch()))
   // Does the local file behind a forge-bg:// URL still exist? (An installed extra bg may have been

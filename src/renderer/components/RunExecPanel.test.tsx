@@ -72,7 +72,9 @@ describe('RunExecPanel', () => {
     const run2 = makeRun2(baseState())
     render(<RunExecPanel run2={run2} />)
 
-    expect(screen.getByText('已完成 2 / 4')).toBeInTheDocument()
+    // Progress now reads as CURRENT position (第 N/M 步 · 当前阶段), not a "已完成" count. develop is
+    // running at currentIndex 2 → 第 3/4 步 · 代码开发. Text is split across a <b>, so assert on .lbl.
+    expect(document.querySelector('.wfo-prog .lbl')?.textContent).toContain('第 3 / 4 步 · 代码开发')
     expect(screen.getByText('分支：—')).toBeInTheDocument()
 
     // Stage headers (.stage-name) — one per stage.
@@ -355,7 +357,8 @@ describe('RunExecPanel', () => {
     it('renders stage cards from staticState with no run2 prop, and hides 暂停/继续/终止', () => {
       render(<RunExecPanel staticState={baseState({ status: 'ok' }) as any} readOnly />)
 
-      expect(screen.getByText('已完成 2 / 4')).toBeInTheDocument()
+      // A terminal (status 'ok') replay shows the completed-stage count with the 阶段 suffix.
+      expect(screen.getByText('已完成 2 / 4 阶段')).toBeInTheDocument()
       expect(screen.getAllByText('代码开发').length).toBeGreaterThan(0)
       expect(screen.getByText('历史运行回看')).toBeInTheDocument()
       expect(screen.queryByText('暂停')).toBeNull()

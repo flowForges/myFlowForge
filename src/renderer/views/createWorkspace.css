@@ -126,6 +126,17 @@
 .cr-branch-all input:focus { border-color: var(--accent); }
 .cr-branch-all .apply { height: 30px; padding: 0 12px; border-radius: 7px; background: var(--surface-2); color: var(--fg-2); font-size: 12px; font-weight: 600; flex: 0 0 auto; }
 .cr-branch-all .apply:hover { background: var(--border); }
+/* 项目搜索框:大项目库时出现,按名/别名筛选。放在项目列表上方,和统一分支条同风格。 */
+.cr-proj-search { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 0 10px; height: 34px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
+.cr-proj-search:focus-within { border-color: var(--accent); }
+.cr-proj-search svg { width: 14px; height: 14px; color: var(--muted); flex: 0 0 14px; }
+.cr-proj-search input { flex: 1; min-width: 0; height: 100%; background: none; border: none; outline: none; color: var(--fg); font-size: 12.5px; }
+.cr-proj-search input::placeholder { color: var(--faint); }
+.cr-proj-search-n { font-family: var(--mono); font-size: 11px; color: var(--faint); flex: 0 0 auto; }
+.cr-proj-search-x { font-size: 16px; line-height: 1; color: var(--muted); padding: 0 2px; flex: 0 0 auto; cursor: pointer; }
+.cr-proj-search-x:hover { color: var(--fg); }
+/* 别名标签:项目名旁的中性小胶囊(区别于 accent 的 pj-inplace)。 */
+.cr-proj .pj-name .pj-alias { display: inline-flex; align-items: center; margin-left: 7px; font-size: 9.5px; font-weight: 600; font-family: var(--mono); color: var(--fg-2); background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; vertical-align: middle; }
 .cr-projs { display: flex; flex-direction: column; gap: 7px; }
 .cr-proj { display: flex; align-items: center; gap: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; transition: .14s; }
 .cr-proj.on { border-color: var(--border-2); }

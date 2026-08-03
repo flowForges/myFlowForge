@@ -1166,6 +1166,26 @@ describe('RunController', () => {
       expect(final.outcomes['hook:w']?.[0]?.status).toBe('ok')
     })
 
+    it('a hook anchored to a LEAD stage fires at run start (conversational tail run)', async () => {
+      // design ran in chat → it's a leadStage, and the tail plan is just [develop]. An after-design hook
+      // has no matching plan stage, so before the fix it never ran. startHookKeys now folds design in.
+      const store = new RunStore(ws, 'rt')
+      const order: string[] = []
+      const plan: RunPlan = {
+        runId: 'rt',
+        stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'root', gate: false }],
+        leadStages: [{ key: 'design', name: '方案', provider: 'x', model: 'm' }],
+        hooks: [H('ad', 'design'), H('av', 'develop')],
+      }
+      const c = new RunController(plan,
+        { providers: { x: orderProvider(order) }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      const final = await c.start()
+      expect(final.status).toBe('ok')
+      // after-design hook runs BEFORE develop (at start); after-develop runs after it
+      expect(order).toEqual(['hook:ad', 'develop:root', 'hook:av'])
+      expect(final.outcomes['hook:ad']?.[0]?.status).toBe('ok')
+    })
+
     it('a hook-less run inserts no hook lanes (unchanged)', async () => {
       const store = new RunStore(ws, 'r1')
       const order: string[] = []

@@ -25,6 +25,20 @@ export function hooksAfter(hooks: Plugin[] | undefined, afterKey: string): Plugi
   return (hooks ?? []).filter((h) => h.after === afterKey)
 }
 
+/**
+ * The weave keys whose hooks must fire at the run's very START, in order: '__start' first, then each
+ * lead stage. A **lead stage** is a conversational stage that already completed before this fan-out
+ * tail began (e.g. 技术方案设计/design driven in the chat, folded into the plan as a leadStage rather
+ * than a real plan stage). A hook anchored to a lead stage — `after: 'design'` when design is no longer
+ * in `plan.stages` — would otherwise be silently DROPPED by the per-stage weave and never run/render
+ * (the reported bug: an after-design hook vanished while an after-develop one worked). Folding it into
+ * the start point runs it "after design completed, before the first tail stage", which is exactly where
+ * the user placed it. A run with no leadStages (a normal full run) yields just ['__start'], unchanged.
+ */
+export function startHookKeys(leadStages?: { key: string }[]): string[] {
+  return ['__start', ...(leadStages ?? []).map((s) => s.key)]
+}
+
 /** A hook lane's id / stage key — namespaced so it never collides with a real stage key. */
 export function hookLaneId(pluginId: string): string { return `hook:${pluginId}` }
 

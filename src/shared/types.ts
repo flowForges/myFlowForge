@@ -265,7 +265,7 @@ export interface ChatMessage {
   // run's "本次运行总结" in `body` — likewise not a real run2 RunEvent kind (see FrozenRunCard's doc).
   // `docs` (improvement ①): mirrors FrozenRunCard.docs (chat/runCards.ts) — a gate's artifact refs
   // (e.g. design.md), preserved so a resolved gate card can still open the full doc after reload.
-  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate' | 'aborted' | 'summary' | 'review'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number; finalize?: boolean; docs?: ArtifactRef[] }
+  runCard?: { id: string; kind: 'auth' | 'question' | 'doubt' | 'failure' | 'gate' | 'aborted' | 'summary' | 'review' | 'hook'; stageKey: string; title: string; body?: string; decision: string; at: number; ts: number; finalize?: boolean; docs?: ArtifactRef[] }
   // Whole-turn wall-clock (epoch ms): stamped by the renderer's chat event loop — startedAt on
   // assistant-start (≈ when the LLM begins thinking), endedAt on done/error. Drives the live turn
   // timer in the message header (counts up every second while streaming) and the frozen 用时 total

@@ -23,6 +23,14 @@
   background: color-mix(in srgb, var(--muted) 12%, var(--bg));
   border-bottom-color: color-mix(in srgb, var(--muted) 30%, transparent);
 }
+/* 重启后进程已死、可恢复:静态的琥珀色中断态,不再流动脉冲,和下面的"从 X 继续"提示同一个故事。 */
+.wf-ribbon.interrupted {
+  background: color-mix(in srgb, var(--warn) 12%, var(--bg));
+  border-bottom-color: color-mix(in srgb, var(--warn) 34%, transparent);
+}
+.wf-ribbon.interrupted .wf-ribbon-dot { background: var(--warn); box-shadow: none; animation: none; }
+.wf-ribbon.interrupted .wf-ribbon-stage b { color: var(--warn); }
+.wf-ribbon-broken { color: var(--warn); opacity: .95; font-style: normal; font-weight: 600; }
 .wf-ribbon-dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: #8b5cf6;

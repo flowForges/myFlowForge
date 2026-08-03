@@ -214,7 +214,7 @@ export function App() {
   const notifAgentPrev = useRef<Map<string, AgentState>>(new Map())
   const notifRunPrev = useRef<Map<string, AgentState>>(new Map())
   const home = useHome()
-  const { projects, workflows, customStages, providers, addProject, deleteProject, updateProjectBranch, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, upsertCustomStage, deleteCustomStage, redetect } = useConfig()
+  const { projects, workflows, customStages, providers, addProject, deleteProject, updateProjectBranch, updateProjectAlias, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, upsertCustomStage, deleteCustomStage, redetect } = useConfig()
   const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
   const sidebarGroups = useMemo(() => {
@@ -796,7 +796,7 @@ export function App() {
           case 'wallpaper': return settings ? <BackgroundPane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} /> : null
           case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
-          case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} />
+          case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} onEditAlias={updateProjectAlias} />
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
           case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} customStages={customStages} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} onUpsertCustomStage={upsertCustomStage} />

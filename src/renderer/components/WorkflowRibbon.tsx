@@ -14,6 +14,9 @@ export interface WorkflowRibbonProps {
   // 推进按钮是否禁用(如当前轮次还在跑,或正处于执行尾段)。
   advanceDisabled?: boolean
   advanceHint?: string
+  // 重启后:phase 仍冻结在 'executing' 但进程已死(有可恢复断点、无活的 run2)。此时不该继续显示"执行中…"
+  // (会和下面"从 X 继续"的恢复提示打架),改显示"已中断·可恢复",并把阶段对齐到真实断点。
+  interrupted?: boolean
   // 推进按钮文案会随"下一阶段是否切 provider / 是否进入执行"变化,由父组件算好传入。
   advanceLabel?: string
   onAdvance: () => void
@@ -25,12 +28,14 @@ const X_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 
 export function WorkflowRibbon({
   flowName, stageIndex, stageCount, stageName, provider, phase,
-  advanceDisabled, advanceHint, advanceLabel, onAdvance, onExit,
+  advanceDisabled, advanceHint, advanceLabel, onAdvance, onExit, interrupted,
 }: WorkflowRibbonProps) {
   const done = phase === 'done'
-  const executing = phase === 'executing'
+  // 中断态优先于"执行中":进程已死,别再显示流动的执行态。
+  const interruptedNow = !!interrupted && !done
+  const executing = phase === 'executing' && !interruptedNow
   return (
-    <div className={`wf-ribbon${executing ? ' executing' : ''}${done ? ' done' : ''}`} data-phase={phase}>
+    <div className={`wf-ribbon${executing ? ' executing' : ''}${interruptedNow ? ' interrupted' : ''}${done ? ' done' : ''}`} data-phase={interruptedNow ? 'interrupted' : phase}>
       <span className="wf-ribbon-dot" />
       <span className="wf-ribbon-name" title={flowName}>{flowName}</span>
       <span className="wf-ribbon-sep">·</span>
@@ -44,8 +49,9 @@ export function WorkflowRibbon({
         </>
       ) : null}
       <span className="wf-ribbon-spacer" />
+      {interruptedNow ? <span className="wf-ribbon-exec wf-ribbon-broken">已中断 · 可恢复</span> : null}
       {executing ? <span className="wf-ribbon-exec">执行中…</span> : null}
-      {!done && !executing ? (
+      {!done && !executing && !interruptedNow ? (
         <button
           type="button"
           className="wf-ribbon-next"

@@ -189,7 +189,6 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
   const leadN = leadingDoneStages?.length ?? 0
   const doneN = leadN + state.machine.stages.filter((s) => s.status === 'done').length
   const totalStages = leadN + state.machine.stages.length
-  const pct = totalStages ? Math.round((doneN / totalStages) * 100) : 0
   const runStatus = state.status
   const runDone = runStatus === 'ok' || runStatus === 'failed'
   const runPaused = !!state.paused
@@ -209,6 +208,18 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
   const tempBranch = state.machine.plan.tempBranch ?? '—'
   const totalAgents = allAgentIds.length
 
+  // Progress redesign (user feedback): show the CURRENT position, not a "已完成 N/M" count. The bar
+  // fills solid through the done stages; the stage in flight gets an animated flowing segment; when the
+  // run is parked between stages (just advanced / paused / at a gate, next stage not yet started) a
+  // text-caret blinks at the frontier to mark "we're here". leadStages are always already done, so the
+  // current step in full-workflow numbering is doneN+1 while running.
+  const curPlanStage = state.machine.plan.stages[state.machine.currentIndex]
+  const curStageRunning = state.machine.stages[state.machine.currentIndex]?.status === 'running'
+  const curStepNum = runDone ? totalStages : Math.min(doneN + 1, totalStages)
+  const curStepName = runDone ? '全部阶段完成' : (curPlanStage?.name ?? '')
+  const basePct = totalStages ? (doneN / totalStages) * 100 : 0
+  const segPct = totalStages ? (1 / totalStages) * 100 : 0
+
   return (
     <div className="wfo-run-panel">
       <div className="wfo-head">
@@ -227,9 +238,16 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
           )}
         </div>
         <div className="wfo-prog">
-          <span className="lbl">已完成 {doneN} / {totalStages}</span>
-          <span className="bar"><i style={{ width: `${pct}%` }} /></span>
-          <span className="pct">{pct}%</span>
+          <span className="lbl">
+            {runDone
+              ? `已完成 ${doneN} / ${totalStages} 阶段`
+              : <>第 <b>{curStepNum}</b> / {totalStages} 步{curStepName ? ` · ${curStepName}` : ''}</>}
+          </span>
+          <span className={`bar${curStageRunning && !runDone ? ' running' : ''}`}>
+            <i className="fill" style={{ width: `${basePct}%` }} />
+            {!runDone && curStageRunning && <i className="seg" style={{ left: `${basePct}%`, width: `${segPct}%` }} />}
+            {!runDone && !curStageRunning && <span className="pcursor" style={{ left: `${basePct}%` }} />}
+          </span>
         </div>
         {statusOverride ? (
           <div className="wfo-runctl done">
@@ -318,7 +336,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
                 <span className="stage-mode">单代理</span>
               </div>
               <div className="stage-agents">
-                <AgentNode agent={{ id: `${s.key}:root`, name: s.name, role: s.name, provider: s.provider, model: s.model, state: 'ok', logs: [] }} />
+                <AgentNode agent={{ id: `${s.key}:root`, name: '工作区', role: s.name, provider: s.provider, model: s.model, state: 'ok', logs: [] }} />
               </div>
             </div>
           ))}

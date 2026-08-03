@@ -86,6 +86,12 @@
 .proj-info button.branch:hover { border-color: var(--accent); }
 .proj-info .branch svg { width: 11px; height: 11px; }
 .proj-info .branch-edit { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--accent); background: var(--surface-2); border: 1px solid var(--accent); border-radius: 99px; padding: 2px 8px; width: 108px; outline: none; }
+/* 别名胶囊 —— 中性色区别于分支(accent),空态更淡("加别名"提示)。 */
+.proj-info .alias { font-size: 10.5px; font-weight: 600; color: var(--fg-2); background: var(--surface-2); padding: 2px 8px 2px 6px; border-radius: 99px; display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; border: 1px solid var(--border); cursor: pointer; }
+.proj-info .alias.empty { color: var(--faint); background: transparent; border-style: dashed; }
+.proj-info button.alias:hover { border-color: var(--border-2); color: var(--fg); }
+.proj-info .alias svg { width: 11px; height: 11px; }
+.proj-info .alias-edit { font-size: 10.5px; font-weight: 600; color: var(--fg); background: var(--surface-2); border: 1px solid var(--accent); border-radius: 99px; padding: 2px 8px; width: 108px; outline: none; }
 .proj-info .repo { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proj-del { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); flex: 0 0 30px; transition: .14s; }
 .proj-del:hover { background: oklch(68% 0.18 25 / 0.14); color: var(--del); }

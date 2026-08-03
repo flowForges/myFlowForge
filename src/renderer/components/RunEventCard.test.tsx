@@ -272,6 +272,20 @@ describe('RunEventCard', () => {
     expect(container.querySelector('.msg-req')?.classList.contains('k-summary')).toBe(true)
   })
 
+  it('hook: frozen hook card labels 插件 · HOOK, shows the hook name (title) + output (body), no 决定 line / buttons', () => {
+    const frozen: FrozenRunCard = {
+      id: 'hook-r1-hook:t', kind: 'hook', stageKey: 'hook:t', title: '当前时间',
+      body: '当前系统日期与时间：`2026-08-02T16:05:36+08:00`', decision: '', at: 1720000000000, ts: 1,
+    }
+    const { container } = render(<RunEventCard frozen={frozen} onGate={vi.fn()} onLane={vi.fn()} />)
+    expect(screen.getByText('插件 · HOOK')).toBeInTheDocument()
+    expect(screen.getByText('当前时间')).toBeInTheDocument()          // hook name (title)
+    expect(screen.getByText(/当前系统日期与时间/)).toBeInTheDocument() // output (body) in the conversation
+    expect(screen.queryByText(/决定：/)).toBeNull()
+    expect(container.querySelectorAll('button')).toHaveLength(0)
+    expect(container.querySelector('.msg-req')?.classList.contains('k-hook')).toBe(true)
+  })
+
   it('frozen: renders decision record with NO buttons', () => {
     const frozen: FrozenRunCard = {
       id: 'g1', kind: 'gate', stageKey: 'design', title: '技术方案设计完成',

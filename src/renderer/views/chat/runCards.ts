@@ -37,7 +37,11 @@ export interface FrozenRunCard {
   // frozen into history — so they're excluded here (a frozen card is never kind 'answer').
   // #8: 'review' — a synthetic marker kind like 'summary', constructed directly as a FrozenRunCard when
   // a lens-mode 代码CR stage finishes, carrying composeReviewReport's multi-视角 report in `body`.
-  kind: Exclude<RunEvent['kind'], 'answer'> | 'aborted' | 'summary' | 'review'
+  // 'hook' — a synthetic marker kind (like summary/review), constructed when a workflow hook micro-agent
+  // finishes, carrying the hook's own output in `body` and its name in `title`, so the hook's result
+  // shows up IN THE CONVERSATION (not only the right-panel HookNode) — a hook shouldn't feel like a
+  // hidden separate agent (user feedback).
+  kind: Exclude<RunEvent['kind'], 'answer'> | 'aborted' | 'summary' | 'review' | 'hook'
   stageKey: string
   title: string
   body?: string

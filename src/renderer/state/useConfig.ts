@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ProviderInfo, ReviewConfig, StageCustomFields, Settings } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
 
-export interface CfgProject { id: string; name: string; repoUrl: string; defaultBranch: string }
+export interface CfgProject { id: string; name: string; repoUrl: string; defaultBranch: string; alias?: string }
 // A workflow-template stage: identity + default agent/model + optional custom fields (#3). `libId`, when
 // present, references a global custom-stage-library definition (设置 → 自定义阶段) — resolved for display.
 export interface CfgStage extends StageCustomFields { key: string; defaultAgent: string; defaultModel: string; prompt?: string; review?: ReviewConfig; libId?: string }
@@ -51,6 +51,7 @@ export function useConfig() {
   const addProject = useCallback(async (repoUrl: string, branch: string) => { const list = await window.forge.addProject({ repoUrl, branch }); setProjects(list); return list }, [])
   const deleteProject = useCallback(async (id: string) => { setProjects(await window.forge.deleteProject(id)) }, [])
   const updateProjectBranch = useCallback(async (id: string, branch: string) => { setProjects(await window.forge.updateProjectBranch({ id, branch })) }, [])
+  const updateProjectAlias = useCallback(async (id: string, alias: string) => { setProjects(await window.forge.updateProjectAlias({ id, alias })) }, [])
 
   // stages: bare built-in keys OR full CfgStage configs (custom stages), order preserved.
   const addWorkflow = useCallback(async (name: string, stages: (string | CfgStage)[]) => { const list = await window.forge.addWorkflow({ name, stages }); setWorkflows(list); return list }, [])
@@ -74,5 +75,5 @@ export function useConfig() {
     if (list) setCustomStages(list as CfgCustomStage[])
   }, [])
 
-  return { projects, workflows, customStages, providers, addProject, deleteProject, updateProjectBranch, reloadProjects, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, upsertCustomStage, deleteCustomStage, redetect }
+  return { projects, workflows, customStages, providers, addProject, deleteProject, updateProjectBranch, updateProjectAlias, reloadProjects, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, upsertCustomStage, deleteCustomStage, redetect }
 }

@@ -22,7 +22,9 @@ export function WorkflowExecBlock({ stageName, lanes }: { stageName: string; lan
   return (
     <div className="wf-exec">
       <div className="wf-exec-head">
-        <span className="wf-exec-dot" />
+        <span className="wf-exec-ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 8.1L22 12l-8.1 1.9L12 22l-1.9-8.1L2 12l8.1-1.9z" /></svg>
+        </span>
         <span className="wf-exec-title">执行中 · {stageName}</span>
         <span className="wf-exec-count">{lanes.length} 个项目并行</span>
       </div>

@@ -10,6 +10,7 @@ const api = {
   addProject: (input: { repoUrl: string; branch: string }) => ipcRenderer.invoke(CH.configAddProject, input),
   deleteProject: (id: string) => ipcRenderer.invoke(CH.configDeleteProject, id),
   updateProjectBranch: (input: { id: string; branch: string }) => ipcRenderer.invoke(CH.configUpdateProjectBranch, input),
+  updateProjectAlias: (input: { id: string; alias: string }) => ipcRenderer.invoke(CH.configUpdateProjectAlias, input),
   listWorkflows: () => ipcRenderer.invoke(CH.configListWorkflows),
   // stages: bare keys (built-in defaults) or full stage configs (custom stages), in order.
   addWorkflow: (input: { name: string; stages: unknown[] }) => ipcRenderer.invoke(CH.configAddWorkflow, input),
@@ -153,6 +154,12 @@ const api = {
   nsfwValidate: (code: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(CH.nsfwValidate, code),
   nsfwCatalog: (): Promise<import('@shared/nsfw').NsfwCatalog | { error: string }> => ipcRenderer.invoke(CH.nsfwCatalog),
   nsfwPreview: (kind: 'pet' | 'bg', id: string): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.nsfwPreview, kind, id),
+  nsfwGallery: (force?: boolean): Promise<import('@shared/nsfw').NsfwGallery | { error: string; rateLimited?: boolean }> => ipcRenderer.invoke(CH.nsfwGallery, force),
+  onNsfwPreview: (cb: (e: import('@shared/nsfw').NsfwPreviewEvent) => void): (() => void) => {
+    const h = (_: unknown, ev: import('@shared/nsfw').NsfwPreviewEvent) => cb(ev)
+    ipcRenderer.on(CH.nsfwPreviewEvent, h)
+    return () => ipcRenderer.removeListener(CH.nsfwPreviewEvent, h)
+  },
   nsfwInstallPet: (petId: string, pet: import('@shared/nsfw').NsfwPet): Promise<{ name: string; images: Record<string, string> } | { error: string }> => ipcRenderer.invoke(CH.nsfwInstallPet, petId, pet),
   nsfwInstallBg: (bg: import('@shared/nsfw').NsfwBg): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.nsfwInstallBg, bg),
   nsfwBgExists: (url: string): Promise<{ exists: boolean }> => ipcRenderer.invoke(CH.nsfwBgExists, url),

@@ -98,15 +98,21 @@ export interface ResumableSummary {
 
 function summarizeResumable(runId: string, state: SavedControllerState): ResumableSummary {
   const stages = state.machine.stages
-  const doneCount = stages.filter((s) => s.status === 'done').length
   const idx = stages.findIndex((s) => s.status !== 'done')
   const resumeStage = stages[idx] ?? stages[stages.length - 1]
   const stagePlan = state.machine.plan.stages.find((s) => s.key === resumeStage?.key)
+  // Count in FULL-workflow terms, not just this tail run's stages: a conversational workflow's tail run
+  // only holds [代码开发,写单测,代码CR] while the earlier chat stages (技术方案设计…) are folded into the
+  // plan as leadStages (always already done). Without the +leadStages the banner shows "1/3" while the
+  // ribbon shows "2/4" for the very same point — they disagreed and read as messy. Fold leadStages into
+  // both so the banner reads "已完成 2/4，从写单测继续" and lines up with the ribbon.
+  const leadN = state.machine.plan.leadStages?.length ?? 0
+  const doneCount = leadN + stages.filter((s) => s.status === 'done').length
   return {
     runId,
     resumeStageKey: resumeStage?.key ?? '',
     resumeStageName: stagePlan?.name ?? resumeStage?.key ?? '',
-    totalStages: stages.length,
+    totalStages: leadN + stages.length,
     doneCount,
     sessionId: state.sessionId,
   }

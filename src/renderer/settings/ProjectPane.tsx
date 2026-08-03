@@ -16,6 +16,8 @@ interface ProjectPaneProps {
   onAdd: (repoUrl: string, branch: string) => void
   onDelete: (id: string) => void
   onEditBranch?: (id: string, branch: string) => void
+  // Inline-edit a project's 别名 (search alias). A blank value clears it (unlike branch).
+  onEditAlias?: (id: string, alias: string) => void
 }
 
 function deriveName(url: string): string {
@@ -42,6 +44,13 @@ const BRANCH = (
   </svg>
 )
 
+const TAG = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+    <line x1="7" y1="7" x2="7.01" y2="7" />
+  </svg>
+)
+
 const TRASH = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
     <polyline points="3 6 5 6 21 6" />
@@ -49,12 +58,14 @@ const TRASH = (
   </svg>
 )
 
-export function ProjectPane({ projects, onAdd, onDelete, onEditBranch }: ProjectPaneProps) {
+export function ProjectPane({ projects, onAdd, onDelete, onEditBranch, onEditAlias }: ProjectPaneProps) {
   const [repo, setRepo] = useState('')
   const [branch, setBranch] = useState('')
   const [importCfg, setImportCfg] = useState<ImportConfig | null>(null)
   // Inline branch edit: which project id is being edited + its draft value.
   const [editBr, setEditBr] = useState<{ id: string; value: string } | null>(null)
+  // Inline alias edit (mirrors editBr): which project id is being aliased + its draft.
+  const [editAlias, setEditAlias] = useState<{ id: string; value: string } | null>(null)
   // Transient export feedback (success / cancel / failure).
   const [exportMsg, setExportMsg] = useState<string | null>(null)
 
@@ -70,6 +81,13 @@ export function ProjectPane({ projects, onAdd, onDelete, onEditBranch }: Project
     const next = (editBr?.value ?? '').trim()
     setEditBr(null)
     if (next && next !== original) onEditBranch?.(id, next)
+  }
+  // A blank alias is a valid value (clears the nickname), so commit even when empty — only skip when
+  // unchanged from the original.
+  const commitAlias = (id: string, original: string) => {
+    const next = (editAlias?.value ?? '').trim()
+    setEditAlias(null)
+    if (next !== original) onEditAlias?.(id, next)
   }
 
   const derived = deriveName(repo)
@@ -179,6 +197,28 @@ export function ProjectPane({ projects, onAdd, onDelete, onEditBranch }: Project
                       onClick={() => onEditBranch && setEditBr({ id: p.id, value: p.defaultBranch })}
                     >{BRANCH}{p.defaultBranch}</button>
                   )}
+                  {onEditAlias && (editAlias?.id === p.id ? (
+                    <input
+                      className="alias-edit"
+                      autoFocus
+                      placeholder="别名"
+                      value={editAlias.value}
+                      title="回车保存,Esc 取消(留空可清除别名)"
+                      onChange={e => setEditAlias({ id: p.id, value: e.target.value })}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') { e.preventDefault(); commitAlias(p.id, p.alias ?? '') }
+                        else if (e.key === 'Escape') { e.preventDefault(); setEditAlias(null) }
+                      }}
+                      onBlur={() => commitAlias(p.id, p.alias ?? '')}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className={'alias' + (p.alias ? '' : ' empty')}
+                      title="别名 · 便于在新建工作区时搜索"
+                      onClick={() => setEditAlias({ id: p.id, value: p.alias ?? '' })}
+                    >{TAG}{p.alias || '加别名'}</button>
+                  ))}
                 </div>
                 <div className="repo">{p.repoUrl}</div>
               </div>

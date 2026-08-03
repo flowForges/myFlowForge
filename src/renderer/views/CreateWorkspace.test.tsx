@@ -42,6 +42,29 @@ describe('CreateWorkspace', () => {
     expect(opts.projects.map((p: any) => p.repoId)).toContain('proj1')
   })
 
+  it('project search (>4 projects) filters by name AND alias, and shows a no-match state', () => {
+    const many = [
+      { id: 'alpha', name: 'alpha', repoUrl: 'git@x:y/alpha.git', defaultBranch: 'main' },
+      { id: 'beta', name: 'beta', repoUrl: 'git@x:y/beta.git', defaultBranch: 'main' },
+      { id: 'gamma', name: 'gamma', repoUrl: 'git@x:y/gamma.git', defaultBranch: 'main', alias: '核心后台' },
+      { id: 'delta', name: 'delta', repoUrl: 'git@x:y/delta.git', defaultBranch: 'main' },
+      { id: 'epsilon', name: 'epsilon', repoUrl: 'git@x:y/epsilon.git', defaultBranch: 'main' },
+    ]
+    render(<CreateWorkspace {...defaultProps} projects={many} />)
+    const search = screen.getByPlaceholderText('搜索项目名 / 别名…')
+    // by name
+    fireEvent.change(search, { target: { value: 'gamm' } })
+    expect(projRowByName('gamma')).toBeTruthy()
+    expect(projRowByName('alpha')).toBeFalsy()
+    // by alias (gamma has 别名 核心后台)
+    fireEvent.change(search, { target: { value: '后台' } })
+    expect(projRowByName('gamma')).toBeTruthy()
+    expect(projRowByName('beta')).toBeFalsy()
+    // no match
+    fireEvent.change(search, { target: { value: 'zzzzz' } })
+    expect(screen.getByText(/没有匹配/)).toBeInTheDocument()
+  })
+
   it('picks a directory via onPickPath and fills the path input', async () => {
     const onPickPath = vi.fn(async () => '/Users/me/code/picked')
     render(<CreateWorkspace open onCancel={() => {}} onCreate={() => {}} projects={projects} workflows={workflows} providers={providers} onOpenProjectSettings={() => {}} onNewWorkflow={() => {}} onPickPath={onPickPath} />)

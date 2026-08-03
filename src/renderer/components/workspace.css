@@ -287,7 +287,7 @@
   content: ""; position: absolute; inset: -4px; border-radius: 50%;
   border: 1.5px solid var(--run); opacity: .35; animation: pulse 1.6s infinite;
 }
-.stage-name { font-size: 13px; font-weight: 680; letter-spacing: -.01em; }
+.stage-name { font-size: 12.5px; font-weight: 650; letter-spacing: -.01em; }
 .stage-mode {
   margin-left: auto; font-family: var(--mono); font-size: 10px; font-weight: 600;
   color: var(--faint); background: var(--surface); border: 1px solid var(--border);
@@ -355,7 +355,7 @@
 .agent-card {
   width: 100%; text-align: left; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--r);
-  padding: 10px 11px; transition: .14s; position: relative; cursor: pointer;
+  padding: 8px 10px; transition: .14s; position: relative; cursor: pointer;
 }
 .agent-card:hover { border-color: var(--border-2); }
 .agent-card.run { border-color: var(--run); box-shadow: 0 0 0 1px var(--run); }
@@ -385,7 +385,7 @@
 .agent-card.run .agent-ic { background: var(--accent-dim); }
 .agent-card.run .agent-ic svg { color: var(--run); }
 .agent-meta { min-width: 0; flex: 1; }
-.agent-name { font-size: 13px; font-weight: 600; display: block; }
+.agent-name { font-size: 12.5px; font-weight: 600; display: block; }
 .agent-role {
   font-size: 11px; color: var(--faint); margin-top: 1px;
   display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

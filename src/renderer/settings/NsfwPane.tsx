@@ -1,10 +1,18 @@
 import { useEffect, useState } from 'react'
 import type { Pet, Appearance } from '@shared/types'
 import type { NsfwCatalog, NsfwPet, NsfwBg } from '@shared/nsfw'
+import { NSFW_PREVIEW_COOLDOWN_MS, NSFW_GALLERY_MEMO_MS } from '@shared/nsfw'
 import { addCustomPet, PET_CUSTOM_MAX } from '@shared/petCustom'
 
 let seq = 0
 const genPetId = () => `pet-${Date.now()}-${seq++}-${Math.round(Math.random() * 1e6)}`
+
+// Module-level memo of the last successful batch gallery — survives pane unmount/remount (switching
+// settings panes) so re-opening 扩展内容 within NSFW_GALLERY_MEMO_MS costs ZERO Cloudflare requests.
+// Only a forced 刷新 or an expired window re-fetches. (Cleared on process exit — a fresh run pays 1.)
+let galleryMemo: { at: number; pets: NsfwPet[]; backgrounds: NsfwBg[]; previews: Record<string, string> } | null = null
+// Test-only: clears the cross-mount gallery memo so each test starts cold.
+export function __resetNsfwGalleryMemo(): void { galleryMemo = null }
 
 interface NsfwPaneProps {
   pet: Pet
@@ -20,26 +28,52 @@ interface NsfwPaneProps {
 //   设置 — downloaded before → if the local file is still there just apply it; if it was deleted/GC'd,
 //          re-download then apply. Nothing is held in memory: images live on disk, served via protocol.
 export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, onSetInstalled, onDisable }: NsfwPaneProps) {
-  const [catalog, setCatalog] = useState<NsfwCatalog | null>(null)
+  const [catalog, setCatalog] = useState<NsfwCatalog | null>(galleryMemo ? { pets: galleryMemo.pets, backgrounds: galleryMemo.backgrounds } : null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
-  const [previews, setPreviews] = useState<Record<string, string>>({}) // key → forge-bg:// URL (on-disk cache)
+  const [previews, setPreviews] = useState<Record<string, string>>(galleryMemo?.previews ?? {}) // key → forge-bg:// URL (on-disk cache)
+  // 限流:一次批量刷新后,把「刷新」按钮禁用 NSFW_PREVIEW_COOLDOWN_MS,防止一直点。nowTick 只在冷却期间跑,
+  // 用来刷新倒计时显示。
+  const [cooldownUntil, setCooldownUntil] = useState(0)
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    if (cooldownUntil <= Date.now()) return
+    const t = setInterval(() => setNowTick(Date.now()), 500)
+    return () => clearInterval(t)
+  }, [cooldownUntil])
+  const cooldownLeft = Math.max(0, Math.ceil((cooldownUntil - nowTick) / 1000))
 
-  const load = () => {
-    setErr(''); setCatalog(null); setPreviews({})
-    void window.forge.nsfwCatalog?.().then(r => {
-      if (!r) { setErr('加载失败'); setCatalog({ pets: [], backgrounds: [] }); return }
-      if ('error' in r) { setErr(r.error); setCatalog({ pets: [], backgrounds: [] }); return }
-      setCatalog(r)
-      for (const p of r.pets) void loadPreview('pet:' + p.id, 'pet', p.id)
-      for (const b of r.backgrounds) void loadPreview('bg:' + b.id, 'bg', b.id)
-    }).catch(() => { setErr('加载失败'); setCatalog({ pets: [], backgrounds: [] }) })
+  // 加载(设计 E):先要一次很小的 /catalog(目录+已缓存缩略图,秒回),缺失的缩略图从 Worker 流式返回,
+  // 一张一张经 onNsfwPreview 事件补进来(见下方订阅)。force=false 时先吃 module 级 memo(重开面板零请求);
+  // force=true(点刷新)强制重拉并起冷却。
+  const load = async (force: boolean) => {
+    if (!force && galleryMemo && Date.now() - galleryMemo.at < NSFW_GALLERY_MEMO_MS) {
+      setCatalog({ pets: galleryMemo.pets, backgrounds: galleryMemo.backgrounds })
+      setPreviews(galleryMemo.previews)
+      return
+    }
+    setErr('')
+    const r = await window.forge.nsfwGallery?.(force).catch(() => null)
+    if (!r) { setErr('加载失败'); setCatalog({ pets: [], backgrounds: [] }); return }
+    if ('error' in r) {
+      setErr(r.error)                                              // rateLimited 或真错误 → 保留现有内容
+      if (!catalog) setCatalog({ pets: [], backgrounds: [] })
+      if (r.rateLimited) setCooldownUntil(Date.now() + NSFW_PREVIEW_COOLDOWN_MS)
+      return
+    }
+    galleryMemo = { at: Date.now(), pets: r.pets, backgrounds: r.backgrounds, previews: { ...r.previews } }
+    setCatalog({ pets: r.pets, backgrounds: r.backgrounds })
+    setPreviews(r.previews)                                        // 已缓存的先出;缺的靠下方事件流补
+    setCooldownUntil(Date.now() + NSFW_PREVIEW_COOLDOWN_MS)
   }
-  const loadPreview = async (key: string, kind: 'pet' | 'bg', id: string) => {
-    const r = await window.forge.nsfwPreview?.(kind, id)
-    if (r && 'url' in r) setPreviews(prev => ({ ...prev, [key]: r.url }))
-  }
-  useEffect(load, [])
+  // 进度订阅:每张流式到达的缩略图补进 previews + memo(挂载时订阅一次,跨 load 持续生效)。
+  useEffect(() => {
+    return window.forge.onNsfwPreview?.(({ key, url }) => {
+      setPreviews(prev => (prev[key] === url ? prev : { ...prev, [key]: url }))
+      if (galleryMemo) galleryMemo.previews[key] = url
+    })
+  }, [])
+  useEffect(() => { void load(false) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const activateBg = async (b: NsfwBg) => {
     const key = 'bg:' + b.id
@@ -102,7 +136,13 @@ export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, 
       <div className="set-group">
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <h4 style={{ margin: 0 }}>扩展内容</h4>
-          <button className="wf-pick" style={{ fontSize: 11, padding: '2px 8px' }} onClick={load}>刷新</button>
+          <button
+            className="wf-pick"
+            style={{ fontSize: 11, padding: '2px 8px' }}
+            disabled={cooldownLeft > 0}
+            title={cooldownLeft > 0 ? `刚刷新过,${cooldownLeft}s 后可再刷新` : '重新拉取一次(每次一个请求)'}
+            onClick={() => void load(true)}
+          >{cooldownLeft > 0 ? `刷新 (${cooldownLeft}s)` : '刷新'}</button>
         </div>
         <p className="set-desc">已激活的额外宠物与背景图。「安装」= 首次下载并应用;「设置」= 已下载过,直接应用(本地图不在了会自动重下)。</p>
         <p className="set-desc" style={{ color: 'var(--faint)', fontSize: 11 }}>

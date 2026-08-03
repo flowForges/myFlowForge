@@ -212,6 +212,8 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
 
   const [state, setState] = useState<WizardState>(freshState)
   const [branchAll, setBranchAll] = useState('')
+  // 项目搜索:大项目库(三四十个)里按项目名或别名快速筛选,不用一个个翻。见下方 projMatches。
+  const [projQuery, setProjQuery] = useState('')
   const [plugEdit, setPlugEdit] = useState<PlugEdit | null>(null)
   // Insert flow: clicking "+" opens a picker (choose-from-library / create-new) rather than the editor.
   const [plugPick, setPlugPick] = useState<{ scope: 'wf' | 'step'; after: string } | null>(null)
@@ -314,6 +316,19 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   const enabledCount = state.workflows.reduce((n, wf) => n + Object.keys(wf.stages).filter(k => wf.stages[k]?.on).length, 0)
   const selectedCount = state.projects.filter(p => p.sel).length
   const chosen = state.projects.filter(p => p.sel)
+  // 项目搜索:按 项目名 / 别名 / 仓库地址 匹配(不区分大小写)。别名与地址从 projects 里按 id 查(WizardProject
+  // 不带这两个字段,和第 766 行 repoUrl 的查法一致)。空查询=全部显示。plain const(非 hook)—— 必须在
+  // 上面的 `if (!open) return null` 之后也安全,几十个项目重建 Map 成本可忽略。
+  const projMeta = new Map<string, { alias: string; repoUrl: string }>()
+  for (const pp of projects) projMeta.set(pp.id, { alias: (pp.alias ?? '').toLowerCase(), repoUrl: pp.repoUrl.toLowerCase() })
+  const projMatches = (p: { repoId: string; name: string }) => {
+    const q = projQuery.trim().toLowerCase()
+    if (!q) return true
+    if (p.name.toLowerCase().includes(q)) return true
+    const meta = projMeta.get(p.repoId)
+    return !!meta && (meta.alias.includes(q) || meta.repoUrl.includes(q))
+  }
+  const projMatchCount = projQuery.trim() ? state.projects.filter(projMatches).length : state.projects.length
   const canCreate = enabledCount > 0
 
   const update = (fn: (s: WizardState) => WizardState) => setState(fn)
@@ -753,22 +768,40 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
               <input id="crBranchAllInput" placeholder="feat/my-task" spellCheck={false} autoCapitalize="off" autoComplete="off" value={branchAll} onChange={e => setBranchAll(e.target.value)} />
               <button className="apply" id="crBranchApply" onClick={applyBranchAll}>应用到选中项目</button>
             </div>
+            {state.projects.length > 4 && (
+              <div className="cr-proj-search" id="crProjSearch">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
+                <input
+                  placeholder="搜索项目名 / 别名…"
+                  spellCheck={false}
+                  value={projQuery}
+                  onChange={e => setProjQuery(e.target.value)}
+                />
+                {projQuery ? <button className="cr-proj-search-x" title="清除" onClick={() => setProjQuery('')}>×</button> : <span className="cr-proj-search-n">{projMatchCount} / {state.projects.length}</span>}
+              </div>
+            )}
             <div className="cr-projs" id="crProjs">
               {state.projects.length === 0 ? (
                 <div className="cr-proj-empty">尚未配置 Git 项目。在下方新增,或到 <a id="crGoProj" onClick={onOpenProjectSettings}>设置 · 项目设置</a> 添加。</div>
+              ) : projMatchCount === 0 ? (
+                <div className="cr-proj-empty">没有匹配「{projQuery.trim()}」的项目。别名可到 <a onClick={onOpenProjectSettings}>设置 · 项目设置</a> 里加。</div>
               ) : (
-                state.projects.map((p, i) => (
+                state.projects.map((p, i) => {
+                  if (!projMatches(p)) return null
+                  const alias = projects.find(pp => pp.id === p.repoId)?.alias   // original case for display
+                  return (
                   <div className={'cr-proj' + (p.sel ? ' on' : ' off') + (p.existing && !p.sel ? ' removing' : '')} data-pi={i} key={p.repoId}>
                     <button className="st-chk" data-prtoggle={i} title={p.existing && p.sel ? '取消勾选将移除该项目(删除本地代码)' : undefined} onClick={() => toggleProject(p.repoId)}>{CK}</button>
                     <span className="pj-ic">{GIT}</span>
                     <div className="pj-main" onClick={() => toggleProject(p.repoId)}>
-                      <div className="pj-name">{p.name}{p.inPlace && <span className="pj-inplace" title="工作区文件夹下已检测到的仓库,直接就地使用,不克隆">就地·不克隆</span>}</div>
+                      <div className="pj-name">{p.name}{alias ? <span className="pj-alias" title="别名">{alias}</span> : null}{p.inPlace && <span className="pj-inplace" title="工作区文件夹下已检测到的仓库,直接就地使用,不克隆">就地·不克隆</span>}</div>
                       <div className="pj-repo">{p.inPlace ? '' : (projects.find(pp => pp.id === p.repoId)?.repoUrl ?? '')}</div>
                     </div>
                     {p.existing && (p.sel ? <span className="pj-lock">已包含</span> : <span className="pj-remove">将移除</span>)}
                     <span className="pj-branch">{BRANCH}<input data-prbranch={i} value={branchFor(p)} spellCheck={false} onChange={e => setProjectBranch(p.repoId, e.target.value)} /></span>
                   </div>
-                ))
+                  )
+                })
               )}
             </div>
             {onAddProject && (

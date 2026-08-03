@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { ProviderInfo } from '@shared/types'
 // Reuses the wfo-tab / wfo-proj / wfo-model / wfo-mpop / wfo-sec(-h) / wfo-goal classes — and their
 // exact wrapper markup — straight from the launch-config region of WorkflowOverlay.tsx — port only,
@@ -96,6 +96,9 @@ function fmtDecidedAt(ms: number): string {
 const CHECK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>'
 // Terminal glyph for a lane's icon box (工作区 / 项目 card) — mirrors the execution panel's lane cards.
 const TERM_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>'
+// Puzzle glyph for an inline hook node on the pipeline (same path as HookNode's right-panel node) — so
+// a hook reads as the SAME thing in the launch preview and in the running execution timeline.
+const PUZZLE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.6 2.6 0 0 1 0 5.2H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.6 2.6 0 0 1 5.2 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg>'
 
 export function LaunchGateCard({ config, frozen, error, pending, seedLoading, providers = [], onConfirm, onCancel, checkDirty }: LaunchGateCardProps) {
   // Pure presentational: mirror the incoming config into local state so checkboxes/model chip/
@@ -277,8 +280,15 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     doConfirm()
   }
 
+  const allHooks = config.hooks ?? []
+  const hooksFor = (afterKey: string) => allHooks.filter((h) => h.after === afterKey)
   const selectedCount = projects.filter((p) => p.selected).length
   const selectedStages = config.workflows.find((w) => w.id === selectedWorkflowId)?.stages ?? []
+  // Hooks whose weave point isn't a stage in THIS workflow tab (nor __start/__wf) — e.g. after a stage
+  // the picked workflow doesn't include. They'd vanish if only rendered inline, so they get a trailing
+  // row (with an explicit 阶段「x」后 label since their position no longer conveys the timing).
+  const stageKeySet = new Set(selectedStages.map((s) => s.key))
+  const orphanHooks = allHooks.filter((h) => h.after !== '__start' && h.after !== '__wf' && !stageKeySet.has(h.after))
   const enabledStageCount = selectedStages.filter((s) => stageState[s.key]?.enabled ?? true).length
   // Whether a stage fans out per project: an inherently-code stage (代码开发) OR a toggle-eligible stage
   // the user switched to 按项目. Its lanes are the selected projects; a single-agent stage has one 工作区 lane.
@@ -349,6 +359,25 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     )
   }
 
+  // An inline hook node on the pipeline (puzzle node on the rail + name + on/off toggle). `showWhen`
+  // spells out the timing for orphan rows whose position no longer implies it. Placed between the
+  // stages it weaves after, so the launch preview reads top-to-bottom exactly as the run will execute.
+  const hookRow = (h: { id: string; name: string; after: string }, showWhen: boolean) => {
+    const on = hookState[h.id] !== false
+    return (
+      <div key={`hook-${h.id}`} className={`lg-hook${on ? ' on' : ''}`}>
+        <button type="button" className="lg-hook-node" onClick={() => toggleHook(h.id)} title="点击启用/停用该 hook">
+          <span className="lg-hook-ic" dangerouslySetInnerHTML={{ __html: PUZZLE_SVG }} />
+        </button>
+        <span className="lg-hook-nm">
+          <b>{h.name}</b>
+          <span>插件 · HOOK{showWhen ? ` · ${hookWhen(h.after)}` : ''}</span>
+        </span>
+        <button type="button" className={`lg-hook-tog${on ? ' on' : ''}`} onClick={() => toggleHook(h.id)}>{on ? '已启用' : '已停用'}</button>
+      </div>
+    )
+  }
+
   return (
     <div className="msg-req k-confirm" data-req="launch-gate" ref={cardRef}>
       <div className="req-head">
@@ -393,6 +422,7 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
         {selectedStages.length > 0 ? (
           <div className="wfo-sec lg-pipe">
             <div className="wfo-sec-h">工作流阶段<span className="c">已选 {enabledStageCount} / {selectedStages.length}</span></div>
+            {hooksFor('__start').map((h) => hookRow(h, false))}
             {selectedStages.map((s, i) => {
               const st = stageState[s.key] ?? stageDefault(s.key)
               const per = isPerProjectStage(s, st)
@@ -403,7 +433,8 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
               const offLabel = lensN > 0 ? '多镜头' : '单代理'
               const modeLabel = !st.enabled ? '已停用' : per ? `按项目 · ${selectedCount}` : lensN > 0 ? `多镜头 · ${lensN}` : '单代理'
               return (
-                <div key={s.key} className={`lg-stg${st.enabled ? ' on' : ''}${per ? ' per' : ''}`} data-stage={s.key}>
+                <Fragment key={s.key}>
+                <div className={`lg-stg${st.enabled ? ' on' : ''}${per ? ' per' : ''}`} data-stage={s.key}>
                   <div className="lg-stg-head">
                     <button type="button" className="lg-stg-idx" onClick={() => toggleStage(s.key)} title="点击启用/停用该阶段">{i + 1}</button>
                     <span className="lg-stg-name" onClick={() => toggleStage(s.key)}>{s.name}</span>
@@ -445,28 +476,12 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
                     </div>
                   ) : null}
                 </div>
+                {hooksFor(s.key).map((h) => hookRow(h, false))}
+                </Fragment>
               )
             })}
-          </div>
-        ) : null}
-
-        {(config.hooks ?? []).length > 0 ? (
-          <div className="wfo-sec">
-            <div className="wfo-sec-h">
-              Hook 步骤
-              <span className="c">已选 {(config.hooks ?? []).filter((h) => hookState[h.id] !== false).length} / {(config.hooks ?? []).length}</span>
-            </div>
-            {(config.hooks ?? []).map((h) => (
-              <div key={h.id} className={`wfo-proj${hookState[h.id] !== false ? ' on' : ''}`}>
-                <span className="wfo-ckhit" onClick={() => toggleHook(h.id)}>
-                  <span className="wfo-ck" dangerouslySetInnerHTML={{ __html: CHECK_SVG }} />
-                  <span className="pn">
-                    <b>{h.name}</b>
-                    <span>{hookWhen(h.after)}</span>
-                  </span>
-                </span>
-              </div>
-            ))}
+            {hooksFor('__wf').map((h) => hookRow(h, false))}
+            {orphanHooks.map((h) => hookRow(h, true))}
           </div>
         ) : null}
 

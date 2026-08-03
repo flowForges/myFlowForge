@@ -22,7 +22,7 @@ import { composeRunDigest, runRunSummary } from './runSummary'
 import { runGateAnswer } from './gateAnswer'
 import { isLensReviewStage, composeReviewReport, lensDirective } from './reviewFanout'
 import type { ReviewLens } from '@shared/types'
-import { hooksAfter, hookLaneId, buildHookPrompt } from './hooks'
+import { hooksAfter, hookLaneId, buildHookPrompt, startHookKeys } from './hooks'
 import { executeHook } from './executeHook'
 import { claudeAllowedTools } from '../agents/pluginTools'
 import type { Plugin } from '../../shared/plugin'
@@ -1024,7 +1024,12 @@ export class RunController {
     // run (every existing controller/manager test) inserts NO extra await here — preserving the
     // "first work order's provider.run() is invoked synchronously after start()" invariant those tests
     // assert (same reasoning as the setupBridge gate above).
-    if (this.plan.hooks?.length) await this.runHooksAfter('__start')
+    // '__start' hooks — plus any hook anchored to a LEAD stage (a conversational stage already done
+    // before this tail run, e.g. an after-design hook when design ran in chat and is now a leadStage,
+    // not a plan stage). Without the leadStage keys those hooks would never fire (they aren't iterated
+    // in the per-stage loop below) — see startHookKeys' doc. The outcome-exists guard in runHooksAfter
+    // still keeps every one idempotent on resume.
+    if (this.plan.hooks?.length) { for (const k of startHookKeys(this.plan.leadStages)) await this.runHooksAfter(k) }
     while (!this.aborted) {
       // Pause gate: sits at the very top of the loop, before the next stage is read/started, so
       // an in-flight stage's lanes always finish uninterrupted — pause only stops the run from

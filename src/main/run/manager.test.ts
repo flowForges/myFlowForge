@@ -425,6 +425,17 @@ describe('Run2Manager', () => {
       })
     })
 
+    it('resumable() folds leadStages into the count so it reads in FULL-workflow numbering (2/4, not 1/3)', () => {
+      // Conversational tail run: 技术方案设计 already ran in chat → a leadStage; the tail plan is the
+      // 3 stages below with s1(develop) done. The banner must count the design leadStage too so it
+      // reads "已完成 2/4，从 S2 继续" and lines up with the ribbon's 4-stage numbering (not 1/3).
+      const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+      const st = fixtureState('running')
+      st.machine.plan.leadStages = [{ key: 'design', name: '技术方案设计', provider: 'x', model: 'm' }]
+      saveControllerState(new RunStore(ws, 'run-lead'), st)
+      expect(mgr.resumable(ws)).toMatchObject({ resumeStageKey: 's2', resumeStageName: 'S2', totalStages: 4, doneCount: 2 })
+    })
+
     it('resumable() also recognizes an `awaiting` (parked at a gate) saved status as non-terminal', () => {
       const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
       seed('run-x', 'awaiting')

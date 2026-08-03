@@ -866,6 +866,37 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     }
   }, [run2StateForTab, wsPath, sessions.activeSessionId, persistedRunCards])
 
+  // Hook 输出进对话:每当一个工作流 hook 微代理产出结果(outcomes 里 laneId 以 "hook:" 开头),就贴一张
+  // 持久「插件 · HOOK」卡到对话里(title=hook 名、body=它的输出)——让 hook 的产出出现在左侧对话,而不是只
+  // 藏在右侧 HookNode。与 summary/review 卡同机制(FrozenRunCard + chatAppendRunCard 幂等),按 laneId 逐个贴。
+  const hookCardedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const st = run2StateForTab
+    const runId = st?.machine?.plan?.runId
+    if (!st || !runId) return
+    const hooks = st.machine.plan.hooks ?? []
+    for (const [laneId, outs] of Object.entries(st.outcomes)) {
+      if (!laneId.startsWith('hook:')) continue
+      const outcome = outs[0]
+      if (!outcome) continue
+      const cardId = `hook-${runId}-${laneId}`
+      if (hookCardedRef.current.has(cardId)) continue
+      if (persistedRunCards.some((r) => r.id === cardId)) { hookCardedRef.current.add(cardId); continue }
+      hookCardedRef.current.add(cardId)
+      const name = hooks.find((h) => `hook:${h.id}` === laneId)?.name ?? laneId.slice(5)
+      const body = outcome.status === 'ok'
+        ? (outcome.result?.summary || '（hook 已完成，无输出）')
+        : `⚠️ hook 执行未成功：${outcome.error || '未知错误'}`
+      const at = Date.now()
+      const frozen: FrozenRunCard = { id: cardId, kind: 'hook', stageKey: laneId, title: name, body, decision: '', at, ts: at }
+      setResolvedRunCards((prev) => (prev.some((r) => r.id === frozen.id) ? prev : [...prev, frozen]))
+      const sid = st.sessionId ?? sessions.activeSessionId
+      if (wsPath && sid) {
+        void window.forge.chatAppendRunCard?.({ workspacePath: wsPath, sessionId: sid, ts: new Date(at).toISOString(), runCard: frozen })
+      }
+    }
+  }, [run2StateForTab, wsPath, sessions.activeSessionId, persistedRunCards])
+
   // Clear any pending debounce write timer on unmount.
   useEffect(() => () => { if (writeTimer.current) clearTimeout(writeTimer.current) }, [])
 
@@ -879,7 +910,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const execLanes = useMemo(() => {
     const st = run2.state
     if (!st || activeWorkflow?.phase !== 'executing') return []
-    return Object.entries(st.liveLanes).map(([laneId, l]) => ({ laneId, label: l.project ?? l.stageKey, stageName: l.stageKey, state: l.state, activity: l.activity }))
+    const hooks = st.machine.plan.hooks ?? []
+    return Object.entries(st.liveLanes).map(([laneId, l]) => {
+      // A live hook lane (laneId "hook:<id>") should read by its plugin NAME in the conversation mirror,
+      // not the raw "hook:<id>" stageKey — so a running hook shows as "当前时间 执行中…" inline instead of
+      // looking like a mystery lane (part of surfacing hooks in the conversation, not just the右侧面板).
+      const hookName = laneId.startsWith('hook:') ? hooks.find((h) => `hook:${h.id}` === laneId)?.name : undefined
+      return { laneId, label: hookName ?? l.project ?? l.stageKey, stageName: l.stageKey, state: l.state, activity: l.activity }
+    })
   }, [run2.state, activeWorkflow?.phase])
   // 停在对话阶段时,把 composer 的 provider/model/权限偏置到当前阶段配置(切阶段即"换挡")。切阶段
   // (currentIndex/phase 变化)会重跑;value-equal 短路避免无谓 re-render。用户手动切 provider 不会被
@@ -1283,7 +1321,16 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           const execOffset = wf.phase === 'executing' && run2.state
             ? Math.min(run2.state.machine.currentIndex, Math.max(0, wf.stages.length - 1 - wf.currentIndex))
             : 0
-          const effIndex = wf.currentIndex + execOffset
+          // 重启后中断态:phase 冻结在 'executing',但没有匹配本 run 的活 run2、却有可恢复断点。此时 ribbon
+          // 该显示"已中断·可恢复"、并把阶段对齐到真实断点(恢复提示里的 resumeStageKey),而不是卡在尾段起点
+          // 的"代码开发 · 执行中"和下面的"从写单测继续"打架。
+          const liveMatch = !!run2.state && run2.state.machine?.plan?.runId === wf.runId
+          const interrupted = wf.phase === 'executing' && !liveMatch && run2.resumable?.runId === wf.runId
+          let effIndex = wf.currentIndex + execOffset
+          if (interrupted && run2.resumable) {
+            const ri = wf.stages.findIndex((s) => s.key === run2.resumable!.resumeStageKey)
+            if (ri >= 0) effIndex = ri
+          }
           const stage = wf.stages[effIndex]
           const nextStage = wf.stages[effIndex + 1]
           // 修图7:不再在对话阶段把按钮叫「开始执行」(让人以为已自动执行);统一为「下一步 · <下一阶段名>」,
@@ -1303,6 +1350,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               advanceDisabled={chat.busy || !!advanceDraft}
               advanceHint={chat.busy ? '当前有对话在进行，请等它结束' : advanceDraft ? '请先确认或取消上面的交接稿/简报' : undefined}
               advanceLabel={advanceLabel}
+              interrupted={interrupted}
               onAdvance={onWorkflowAdvance}
               onExit={onWorkflowExit}
             />
