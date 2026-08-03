@@ -255,6 +255,36 @@ export type Keybindings = z.infer<typeof KeybindingsSchema>
 export const MemorySchema = z.object({ enabled: z.boolean().catch(false).default(false) })
 export const defaultMemory = (): z.infer<typeof MemorySchema> => ({ enabled: false })
 
+// Bot bridge (钉钉/Telegram/飞书): connects an external chat bot to the app so a phone can answer
+// gates, see results, and drive sessions. Credentials + bindings + short-id state persist here (local
+// only, plaintext — same as pluginCreds/nsfwCode). See src/main/bot/. Design: docs .../bot-bridge.
+export const BotBindingSchema = z.object({
+  platform: z.enum(['dingtalk', 'telegram', 'feishu']),
+  chatId: z.string(),
+  chatType: z.enum(['private', 'group']).catch('private').default('private'),
+  userId: z.string().optional(),
+  robotCode: z.string().optional(),
+  focus: z.object({ workspacePath: z.string(), sessionId: z.string() }).nullable().catch(null).default(null),
+  boundAt: z.number().catch(0).default(0),
+})
+export const BotBridgeSchema = z.object({
+  enabled: z.boolean().catch(false).default(false),
+  dingtalk: z.object({ clientId: z.string().catch('').default(''), clientSecret: z.string().catch('').default('') })
+    .catch({ clientId: '', clientSecret: '' }).default(() => ({ clientId: '', clientSecret: '' })),
+  verbosity: z.enum(['essential', 'stages', 'verbose']).catch('essential').default('essential'),
+  pairingCode: z.string().catch('').default(''),
+  bindings: z.array(BotBindingSchema).catch([]).default(() => []),
+  ids: z.object({
+    seq: z.number().catch(0).default(0),
+    ws: z.record(z.string(), z.string()).catch({}).default(() => ({})),
+    session: z.record(z.string(), z.string()).catch({}).default(() => ({})),
+  }).catch({ seq: 0, ws: {}, session: {} }).default(() => ({ seq: 0, ws: {}, session: {} })),
+})
+export const defaultBotBridge = (): z.infer<typeof BotBridgeSchema> => ({
+  enabled: false, dingtalk: { clientId: '', clientSecret: '' }, verbosity: 'essential',
+  pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} },
+})
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
   notifications: NotificationsSchema.default(defaultNotifications),
@@ -303,6 +333,7 @@ export const SettingsSchema = z.object({
   // qwen/copilot). Once allowed for a workspace we don't re-prompt. Keyed: workspacePath → provider ids.
   fullAccessAck: z.record(z.string(), z.array(z.string())).catch({}).default(() => ({})),
   memory: MemorySchema.default(defaultMemory),
+  botBridge: BotBridgeSchema.default(defaultBotBridge),
   // codex 驱动通路:'exec' = 现有的一次性 CLI 子进程调用(默认,稳定);'app-server' = 新的常驻
   // JSON-RPC app-server 传输(见 codexRpc.ts),支持权限交互等更细粒度控制。先落地开关,接线在后续任务。
   codexTransport: z.enum(['exec', 'app-server']).catch('exec').default('exec'),
@@ -332,6 +363,7 @@ export const defaultSettings = (): Settings => ({
   nsfwInstalled: {},
   fullAccessAck: {},
   memory: { enabled: false },
+  botBridge: defaultBotBridge(),
   codexTransport: 'exec',
 })
 

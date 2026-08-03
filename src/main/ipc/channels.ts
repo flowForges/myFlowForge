@@ -154,6 +154,13 @@ export const CH = {
   petActiveWorkspace: 'pet:active-workspace',
   settingsChanged: 'settings:changed',
   sessionsChanged: 'sessions:changed',
+  // Bot bridge (钉钉): renderer settings pane ⇄ main.
+  botConnect: 'bot:connect',
+  botDisconnect: 'bot:disconnect',
+  botGetStatus: 'bot:get-status',
+  botStatusEvent: 'bot:status-event',
+  botRegenPairing: 'bot:regen-pairing',
+  botUnbind: 'bot:unbind',
   updateGet: 'update:get',
   updateCheck: 'update:check',
   updateStart: 'update:start',

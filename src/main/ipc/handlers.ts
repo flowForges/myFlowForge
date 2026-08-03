@@ -31,6 +31,8 @@ import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProject
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
 import { workflowDisplayName } from '../config/schema'
 import { agentSessionsForId } from '../chat/agentSessions'
+import { botBridge, genPairing } from '../bot/botBridge'
+import type { BotBridgeConfig } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
@@ -779,6 +781,65 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     chatGateOwner.delete(a.id)
     resolve(a.decision === 'modify' ? 'deny' : a.decision)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
+  })
+
+  // ---- Bot bridge (钉钉) ----
+  // Resolve a chat ask/confirm gate by id, mirroring CH.chatResolve but callable from the bot bridge
+  // (which lives here so it can touch the closure-local gate maps directly, no ipc round-trip).
+  const resolveChatGateById = (id: string, decision: 'allow' | 'deny', value?: string, choice?: number): boolean => {
+    const owner = chatGateOwner.get(id)
+    const ask = chatAsks.get(id)
+    if (ask) {
+      chatAsks.delete(id); chatGateOwner.delete(id)
+      ask({ decision, value, choice })
+      if (owner) broadcast(CH.chatEvent, { workspacePath: owner.ws, sessionId: owner.sessionId, type: 'ask-resolved', id })
+      return true
+    }
+    const conf = chatConfirms.get(id)
+    if (conf) {
+      chatConfirms.delete(id); chatGateOwner.delete(id)
+      conf(decision)
+      if (owner) broadcast(CH.chatEvent, { workspacePath: owner.ws, sessionId: owner.sessionId, type: 'confirm-resolved', id })
+      return true
+    }
+    return false
+  }
+  botBridge.attach({
+    readConfig: () => readSettings().botBridge as BotBridgeConfig,
+    writeConfig: (cfg) => { const s = readSettings(); writeSettings({ ...s, botBridge: cfg }) },
+    enqueue: (payload, source) => chatQueue.enqueue(payload as ChatSendPayload, source),
+    resolveChatGate: resolveChatGateById,
+    resolveRun2Gate: (ws, eventId, decision) => run2Manager.resolveGate(ws, eventId, decision),
+    resolveRun2Lane: (ws, eventId, decision) => run2Manager.resolveLane(ws, eventId, decision),
+    listWorkspaces: () => readWorkspaceRegistry().filter(w => !w.archived).map(w => ({
+      path: w.path, name: w.name,
+      sessions: readSessions(w.path).sessions.map(s => ({ id: s.id, title: s.title, mode: s.mode })),
+    })),
+    resolveAgentForSession: (ws, sessionId) => {
+      const s = getSession(ws, sessionId)
+      const agent = s?.agentId || 'claude'
+      return { agent, agentLabel: providers[agent]?.displayName ?? agent, model: s?.modelId || '' }
+    },
+    stopSession: (ws, sessionId) => { chatQueue.stop(ws, sessionId); cancelWorkspaceDelegates(ws, sessionId) },
+    emitStatus: (st) => broadcast(CH.botStatusEvent, st),
+  })
+  ipcMain.handle(CH.botConnect, async () => {
+    const s = readSettings(); writeSettings({ ...s, botBridge: { ...s.botBridge, enabled: true } })
+    await botBridge.connect(); return botBridge.getStatus()
+  })
+  ipcMain.handle(CH.botDisconnect, async () => {
+    const s = readSettings(); writeSettings({ ...s, botBridge: { ...s.botBridge, enabled: false } })
+    await botBridge.disconnect(); return botBridge.getStatus()
+  })
+  ipcMain.handle(CH.botGetStatus, () => botBridge.getStatus())
+  ipcMain.handle(CH.botRegenPairing, () => {
+    const s = readSettings(); const code = genPairing()
+    writeSettings({ ...s, botBridge: { ...s.botBridge, pairingCode: code } }); return code
+  })
+  ipcMain.handle(CH.botUnbind, (_e, a: { chatId: string }) => {
+    const s = readSettings()
+    writeSettings({ ...s, botBridge: { ...s.botBridge, bindings: s.botBridge.bindings.filter(b => b.chatId !== a.chatId) } })
+    return readSettings().botBridge.bindings
   })
   // Provider-switch context summary: after the user confirms switching agent mid-session, the NEW
   // provider reads the prior conversation and produces a visible summary message (provider = toAgent,

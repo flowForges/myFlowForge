@@ -188,6 +188,13 @@ const NAV: NavEntry[] = [
     ),
   },
   {
+    key: 'bot',
+    label: '机器人',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="4" y="8" width="16" height="12" rx="2" /><path d="M12 8V4M9 3h6" /><circle cx="9" cy="13" r="1.2" fill="currentColor" stroke="none" /><circle cx="15" cy="13" r="1.2" fill="currentColor" stroke="none" /><path d="M9 17h6" /></svg>
+    ),
+  },
+  {
     key: 'debug',
     label: '调试日志',
     icon: (

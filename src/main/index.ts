@@ -10,6 +10,7 @@ import { relocatePetToRegion, PET_EXPANDED, PET_BUBBLE, petCollapsedSize, petPop
 import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
 import { registerIpc } from './ipc/handlers'
+import { botBridge } from './bot/botBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
 import { gazeAngle } from '@shared/petGaze'
@@ -552,6 +553,7 @@ app.whenReady().then(() => {
   const broadcastWithNotify = (channel: string, payload: unknown) => {
     registry.broadcast(channel, payload)
     if (channel === CH.chatEvent) notifyChatDone(payload)
+    botBridge.observe(channel, payload)   // mirror gate/ask/done/run2 events to the phone
   }
   registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings)
 

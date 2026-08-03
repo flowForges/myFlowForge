@@ -26,6 +26,7 @@ const DEFAULTS: Settings = {
   nsfwInstalled: {},
   fullAccessAck: {},
   memory: { enabled: true },
+  botBridge: { enabled: false, dingtalk: { clientId: '', clientSecret: '' }, verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} } },
   codexTransport: 'exec',
 }
 
@@ -49,6 +50,7 @@ export interface SettingsUpdate {
   nsfwCode?: string
   nsfwInstalled?: Record<string, string>
   memory?: { enabled: boolean }
+  botBridge?: Settings['botBridge']
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
@@ -84,6 +86,9 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // loaded settings on load (cast), else keep base, matching pluginCreds/pinnedWorkspaces above.
     fullAccessAck: (partial as Partial<Settings>).fullAccessAck ?? base.fullAccessAck,
     memory: { ...base.memory, ...(partial.memory ?? {}) },
+    // Managed via the bot:* IPC (connect/regen-pairing/unbind each write settings + broadcast), not
+    // this update path — preserve from the loaded settings on load (cast), else base, like pluginCreds.
+    botBridge: (partial as Partial<Settings>).botBridge ?? base.botBridge,
     codexTransport: (partial as Partial<Settings>).codexTransport ?? base.codexTransport,
   }
 }

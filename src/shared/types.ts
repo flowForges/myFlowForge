@@ -299,6 +299,14 @@ export interface ChatSession {
   modelId?: string
 }
 export interface SessionsFile { sessions: ChatSession[]; activeSessionId: string; dismissedImported?: string[] }
+
+// Bot bridge (钉钉/Telegram/飞书) live connection status — pushed to the settings pane over
+// CH.botStatusEvent. Persisted bot config (creds/bindings) rides in Settings.botBridge instead.
+export type BotStatus =
+  | { state: 'offline' }
+  | { state: 'connecting' }
+  | { state: 'online' }
+  | { state: 'error'; reason: string }
 export interface ChatConfirm { id: string; title: string; where?: string; ts?: string }
 export interface ChatSendPayload {
   workspacePath: string

@@ -50,6 +50,7 @@ import { SessionImportPane } from './settings/SessionImportPane'
 import { DebugLogPane } from './settings/DebugLogPane'
 import { AboutPane } from './settings/AboutPane'
 import { MemoryPane } from './settings/MemoryPane'
+import { BotPane } from './settings/BotPane'
 import { TokenUsagePane } from './settings/TokenUsagePane'
 import { KeybindingsPane } from './settings/KeybindingsPane'
 import { useKeybindings } from './state/useKeybindings'
@@ -810,6 +811,7 @@ export function App() {
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'sessions': return <SessionImportPane />
           case 'memory': return settings ? <MemoryPane enabled={settings.memory.enabled} onToggle={(v) => update({ memory: { enabled: v } })} wsPath={activeWsId || undefined} sessionId={sessions.activeSessionId ?? undefined} /> : null
+          case 'bot': return settings ? <BotPane config={settings.botBridge} onChange={(bb) => update({ botBridge: bb })} /> : null
           case 'debug': return <DebugLogPane perfDiagnostics={settings?.perfDiagnostics ?? false} onTogglePerfDiagnostics={(v) => update({ perfDiagnostics: v })} />
           case 'usage': return <TokenUsagePane />
           case 'about': return <AboutPane version={updateCtx.currentVersion} />
