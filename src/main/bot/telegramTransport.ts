@@ -4,6 +4,15 @@
 import type {
   BotTransport, InboundBotMessage, BotStatus, BotAddress, OutboundBotMessage, TelegramCreds,
 } from './botTypes'
+import { makeProxyFetch } from '../update/proxyFetch'
+
+// api.telegram.org is often only reachable via the user's proxy (settings.termProxy). In-process
+// undici fetch ignores HTTP_PROXY env, so route through an explicit ProxyAgent when a proxy is set.
+function buildFetch(proxy?: string): typeof fetch {
+  const p = proxy?.trim()
+  if (!p) return fetch
+  try { return makeProxyFetch(p) as typeof fetch } catch { return fetch }   // socks5:// → ProxyAgent throws
+}
 
 interface TgUpdate {
   update_id: number
@@ -22,8 +31,9 @@ export class TelegramTransport implements BotTransport {
   private stopped = false
   private offset = 0
   private backoff = 1000
+  private fetch: typeof fetch
 
-  constructor(private creds: TelegramCreds) {}
+  constructor(private creds: TelegramCreds, proxy?: string) { this.fetch = buildFetch(proxy) }
 
   onMessage(cb: (m: InboundBotMessage) => void): void { this.msgCbs.push(cb) }
   onStatus(cb: (s: BotStatus) => void): void { this.statusCbs.push(cb) }
@@ -36,7 +46,7 @@ export class TelegramTransport implements BotTransport {
     this.status({ state: 'connecting' })
     // validate the token up front so a bad token surfaces clearly instead of silently looping
     try {
-      const r = await fetch(this.api('getMe'))
+      const r = await this.fetch(this.api('getMe'))
       const j = (await r.json()) as { ok?: boolean; description?: string }
       if (!j.ok) { this.status({ state: 'error', reason: j.description || 'getMe failed' }); return }
     } catch (e) { this.status({ state: 'error', reason: (e as Error).message }); return }
@@ -53,7 +63,7 @@ export class TelegramTransport implements BotTransport {
     while (!this.stopped) {
       try {
         const url = `${this.api('getUpdates')}?timeout=50&offset=${this.offset}&allowed_updates=${encodeURIComponent('["message"]')}`
-        const r = await fetch(url)
+        const r = await this.fetch(url)
         const j = (await r.json()) as { ok?: boolean; result?: TgUpdate[] }
         if (!j.ok) { await this.wait(); continue }
         this.backoff = 1000
@@ -93,7 +103,7 @@ export class TelegramTransport implements BotTransport {
 
   private async post(chatId: string, text: string, parseMode?: string): Promise<boolean> {
     try {
-      const r = await fetch(this.api('sendMessage'), {
+      const r = await this.fetch(this.api('sendMessage'), {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, text, ...(parseMode ? { parse_mode: parseMode } : {}), disable_web_page_preview: true }),
       })

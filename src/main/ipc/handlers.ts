@@ -866,6 +866,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       const file = setSessionPermission(ws, sessionId, mode)
       broadcast(CH.sessionsChanged, { workspacePath: ws, file })
     },
+    getProxy: () => readSettings().termProxy,
     emitStatus: (platform, st) => broadcast(CH.botStatusEvent, { platform, status: st }),
   })
   ipcMain.handle(CH.botConnect, async (_e, a: { platform: BotPlatform }) => {
