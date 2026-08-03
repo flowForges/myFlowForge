@@ -804,9 +804,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     return false
   }
+  // Persist a bot-bridge config AND broadcast settingsChanged — otherwise the renderer keeps showing a
+  // stale pairing code / bindings after the main process rotates them (attach bootstrap, bind rotation,
+  // regen, connect/disconnect). This was the "配对码不正确" bug: disk had the new code, pane the old one.
+  const persistBotConfig = (bb: BotBridgeConfig) => {
+    const s = readSettings(); writeSettings({ ...s, botBridge: bb })
+    const next = readSettings(); broadcast(CH.settingsChanged, next); onSettings?.(next)
+  }
   botBridge.attach({
     readConfig: () => readSettings().botBridge as BotBridgeConfig,
-    writeConfig: (cfg) => { const s = readSettings(); writeSettings({ ...s, botBridge: cfg }) },
+    writeConfig: (cfg) => persistBotConfig(cfg),
     enqueue: (payload, source) => chatQueue.enqueue(payload as ChatSendPayload, source),
     resolveChatGate: resolveChatGateById,
     resolveRun2Gate: (ws, eventId, decision) => run2Manager.resolveGate(ws, eventId, decision),
@@ -824,22 +831,23 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     emitStatus: (st) => broadcast(CH.botStatusEvent, st),
   })
   ipcMain.handle(CH.botConnect, async () => {
-    const s = readSettings(); writeSettings({ ...s, botBridge: { ...s.botBridge, enabled: true } })
+    persistBotConfig({ ...(readSettings().botBridge as BotBridgeConfig), enabled: true })
     await botBridge.connect(); return botBridge.getStatus()
   })
   ipcMain.handle(CH.botDisconnect, async () => {
-    const s = readSettings(); writeSettings({ ...s, botBridge: { ...s.botBridge, enabled: false } })
+    persistBotConfig({ ...(readSettings().botBridge as BotBridgeConfig), enabled: false })
     await botBridge.disconnect(); return botBridge.getStatus()
   })
   ipcMain.handle(CH.botGetStatus, () => botBridge.getStatus())
   ipcMain.handle(CH.botRegenPairing, () => {
-    const s = readSettings(); const code = genPairing()
-    writeSettings({ ...s, botBridge: { ...s.botBridge, pairingCode: code } }); return code
+    const code = genPairing()
+    persistBotConfig({ ...(readSettings().botBridge as BotBridgeConfig), pairingCode: code })
+    return code
   })
   ipcMain.handle(CH.botUnbind, (_e, a: { chatId: string }) => {
-    const s = readSettings()
-    writeSettings({ ...s, botBridge: { ...s.botBridge, bindings: s.botBridge.bindings.filter(b => b.chatId !== a.chatId) } })
-    return readSettings().botBridge.bindings
+    const bb = readSettings().botBridge as BotBridgeConfig
+    persistBotConfig({ ...bb, bindings: bb.bindings.filter(b => b.chatId !== a.chatId) })
+    return (readSettings().botBridge as BotBridgeConfig).bindings
   })
   // Provider-switch context summary: after the user confirms switching agent mid-session, the NEW
   // provider reads the prior conversation and produces a visible summary message (provider = toAgent,
