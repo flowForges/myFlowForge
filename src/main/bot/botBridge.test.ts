@@ -29,6 +29,10 @@ function harness() {
   const gate: { ws: string; id: string; d: unknown }[] = []
   const lane: { ws: string; id: string; d: unknown }[] = []
   const stopped: { ws: string; sid: string }[] = []
+  const created: { ws: string; title?: string; id: string }[] = []
+  let seq = 0
+  const wsList: { path: string; name: string; activeSessionId: string; sessions: { id: string; title: string; mode: string }[] }[] =
+    [{ path: '/ws1', name: 'WS One', activeSessionId: 'sess-abc', sessions: [{ id: 'sess-abc', title: 'Chat A', mode: 'chat' }] }]
   const bridge = new BotBridge()
   const fake = new FakeTransport()
   bridge.setTransportFactory(() => fake)
@@ -41,11 +45,12 @@ function harness() {
     resolveChatGate: (id, d, v, c) => { chat.push({ id, d, v, c }); return true },
     resolveRun2Gate: (ws, id, d) => { gate.push({ ws, id, d }); return true },
     resolveRun2Lane: (ws, id, d) => { lane.push({ ws, id, d }); return true },
-    listWorkspaces: () => [{ path: '/ws1', name: 'WS One', sessions: [{ id: 'sess-abc', title: 'Chat A', mode: 'chat' }] }],
-    resolveAgentForSession: () => ({ agent: 'claude', agentLabel: 'Claude Code', model: 'opus' }),
+    listWorkspaces: () => wsList,
+    resolveAgentForSession: async () => ({ agent: 'claude', agentLabel: 'Claude Code', model: 'opus' }),
+    createSession: (ws, title) => { const id = `new-${++seq}`; wsList.find(w => w.path === ws)?.sessions.push({ id, title: title || '新会话', mode: 'chat' }); created.push({ ws, title, id }); return id },
     stopSession: (ws, sid) => stopped.push({ ws, sid }),
   })
-  return { bridge, fake, enqueued, chat, gate, lane, stopped, cfg: () => cfg }
+  return { bridge, fake, enqueued, chat, gate, lane, stopped, created, cfg: () => cfg }
 }
 
 const msg = (text: string, over: Partial<InboundBotMessage> = {}): InboundBotMessage => ({
@@ -184,6 +189,31 @@ describe('BotBridge — gate answering', () => {
     const h = await attached()
     await h.bridge.handleInbound(msg('stop'))
     expect(h.stopped).toEqual([{ ws: '/ws1', sid: 'sess-abc' }])
+  })
+
+  it('attach w<id> attaches the workspace active session', async () => {
+    const h = harness()
+    await h.bridge.connect()
+    await h.bridge.handleInbound(msg(`bind ${h.cfg().pairingCode}`))
+    await h.bridge.handleInbound(msg('list'))
+    const wid = h.cfg().ids.ws['/ws1']
+    await h.bridge.handleInbound(msg(`attach ${wid}`))
+    expect(h.cfg().bindings[0].focus).toEqual({ workspacePath: '/ws1', sessionId: 'sess-abc' })
+  })
+
+  it('new creates a session in the focus workspace and attaches it', async () => {
+    const h = harness()
+    await h.bridge.connect()
+    await h.bridge.handleInbound(msg(`bind ${h.cfg().pairingCode}`))
+    await h.bridge.handleInbound(msg('list'))
+    const wid = h.cfg().ids.ws['/ws1']
+    await h.bridge.handleInbound(msg(`attach ${wid}`))
+    await h.bridge.handleInbound(msg('new 修登录bug'))
+    expect(h.created).toEqual([{ ws: '/ws1', title: '修登录bug', id: 'new-1' }])
+    expect(h.cfg().bindings[0].focus).toEqual({ workspacePath: '/ws1', sessionId: 'new-1' })
+    // the new session receives turns
+    await h.bridge.handleInbound(msg('开工'))
+    expect(h.enqueued.at(-1)).toEqual({ text: '开工', ws: '/ws1', sid: 'new-1' })
   })
 
   it('attach persists focus across messages (fresh-config identity)', async () => {

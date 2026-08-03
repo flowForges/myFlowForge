@@ -818,14 +818,31 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     resolveChatGate: resolveChatGateById,
     resolveRun2Gate: (ws, eventId, decision) => run2Manager.resolveGate(ws, eventId, decision),
     resolveRun2Lane: (ws, eventId, decision) => run2Manager.resolveLane(ws, eventId, decision),
-    listWorkspaces: () => readWorkspaceRegistry().filter(w => !w.archived).map(w => ({
-      path: w.path, name: w.name,
-      sessions: readSessions(w.path).sessions.map(s => ({ id: s.id, title: s.title, mode: s.mode })),
-    })),
-    resolveAgentForSession: (ws, sessionId) => {
+    listWorkspaces: () => readWorkspaceRegistry().filter(w => !w.archived).map(w => {
+      const sf = readSessions(w.path)
+      return {
+        path: w.path, name: w.name, activeSessionId: sf.activeSessionId,
+        sessions: sf.sessions.map(s => ({ id: s.id, title: s.title, mode: s.mode })),
+      }
+    }),
+    resolveAgentForSession: async (ws, sessionId) => {
       const s = getSession(ws, sessionId)
       const agent = s?.agentId || 'claude'
-      return { agent, agentLabel: providers[agent]?.displayName ?? agent, model: s?.modelId || '' }
+      const agentLabel = providers[agent]?.displayName ?? agent
+      let model = s?.modelId || ''
+      if (!model) {   // a brand-new session has no model yet; empty model 400s the chat API
+        try {
+          const env = buildAgentEnv({ proxy: readSettings().termProxy })
+          const models = await (providers[agent] ?? providers['claude'])?.listModels(env)
+          model = models?.[0]?.id || ''
+        } catch { /* leave empty — a clear API error beats a crash */ }
+      }
+      return { agent, agentLabel, model }
+    },
+    createSession: (ws, title) => {
+      const f = newSession(ws, title)
+      broadcast(CH.sessionsChanged, { workspacePath: ws, file: f })
+      return f.activeSessionId
     },
     stopSession: (ws, sessionId) => { chatQueue.stop(ws, sessionId); cancelWorkspaceDelegates(ws, sessionId) },
     emitStatus: (st) => broadcast(CH.botStatusEvent, st),

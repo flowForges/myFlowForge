@@ -21,7 +21,8 @@ const VERBOSITY: { key: BotConfig['verbosity']; label: string; hint: string }[] 
 
 const COMMANDS: { cmd: string; desc: string }[] = [
   { cmd: 'list', desc: '列出工作区与会话' },
-  { cmd: 'attach <id>', desc: '选定焦点会话（如 attach s1）' },
+  { cmd: 'attach <id>', desc: '选定焦点（s<n>=会话，w<n>=工作区取活动会话）' },
+  { cmd: 'new [w<id>] [标题]', desc: '在工作区新建并 attach 一个会话' },
   { cmd: 'status', desc: '查看当前焦点与待处理' },
   { cmd: 'stop', desc: '停止当前焦点会话' },
   { cmd: 'unbind', desc: '解绑本聊天' },
