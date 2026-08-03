@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { Appearance } from '@shared/types'
+import { DEFAULT_BG_POSITION } from '@shared/wallpaper'
 import { WallpaperGallery } from './WallpaperGallery'
 
 // 「壁纸背景」设置页。把内置壁纸库和所有"背景图"相关控件从「外观」页拆出来单独成页 —— 选内置壁纸、
@@ -17,10 +18,42 @@ interface BackgroundPaneProps {
   onChange: (partial: Partial<Appearance>) => void
 }
 
+// 纵向位置滑块:0=顶部对齐(保住画面上部/人物头部)…100=底部对齐。图按 cover 铺满后从这里决定纵向裁剪点。
+function BgPositionRow({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+  return (
+    <div className="set-row">
+      <div className="info">
+        <div className="t">{label}</div>
+        <div className="d">图片铺满窗口后要裁掉多出的部分 · 往「上」调可保住竖图顶部(人物头部)不被削掉 · 每张壁纸各自记忆</div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '180px', justifyContent: 'flex-end' }}>
+        <span style={{ fontSize: '11px', color: 'var(--faint)' }}>上</span>
+        <input
+          type="range"
+          aria-label={label}
+          min={0}
+          max={100}
+          step={1}
+          value={value}
+          onChange={e => onChange(Number(e.target.value))}
+          style={{ flex: '1 1 auto', maxWidth: '130px' }}
+        />
+        <span style={{ fontSize: '11px', color: 'var(--faint)' }}>下</span>
+        <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: '12px', color: 'var(--muted)', width: '38px', textAlign: 'right' }}>
+          {value}%
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function BackgroundPane({ appearance, onChange }: BackgroundPaneProps) {
   const bgImage = appearance.bgImage ?? ''
   const bgScope = appearance.bgScope ?? 'off'
   const bgOpacity = appearance.bgOpacity ?? 0.35
+  // 壁纸纵向焦点:按图片 URL 记忆,换壁纸各调各的(见 schema.ts bgPositions)。空图时回退默认。
+  const bgPositions = appearance.bgPositions ?? {}
+  const setBgPos = (key: string, v: number) => onChange({ bgPositions: { ...bgPositions, [key]: v } })
   const [bgErr, setBgErr] = useState('')
   const pickBg = async () => {
     setBgErr('')
@@ -98,6 +131,7 @@ export function BackgroundPane({ appearance, onChange }: BackgroundPaneProps) {
                 </span>
               </div>
             </div>
+            <BgPositionRow label="纵向位置" value={bgPositions[bgImage] ?? DEFAULT_BG_POSITION} onChange={v => setBgPos(bgImage, v)} />
           </>
         )}
         <div className="set-row">
@@ -142,6 +176,9 @@ export function BackgroundPane({ appearance, onChange }: BackgroundPaneProps) {
               </span>
             </div>
           </div>
+        )}
+        {homeBgImage && homeBgOn && (
+          <BgPositionRow label="首页背景纵向位置" value={bgPositions[homeBgImage] ?? DEFAULT_BG_POSITION} onChange={v => setBgPos(homeBgImage, v)} />
         )}
       </div>
     </>

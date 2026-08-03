@@ -82,6 +82,21 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   const [modelDrafts, setModelDrafts] = useState<Record<string, ModelRow[]>>({})
   // Per-provider save state: { [id]: 'idle' | 'saving' | error-string }
   const [modelSaveState, setModelSaveState] = useState<Record<string, string | 'saving'>>({})
+  // CLI 有新版提示(只提示):{ [id]: { latest, npmPackage } }，仅收录 hasUpdate 的。查不到/无 npm 包的略过。
+  const [cliUpdates, setCliUpdates] = useState<Record<string, { latest: string; npmPackage: string }>>({})
+
+  // Query each installed CLI's latest npm version and keep only the ones with an update. Best-effort:
+  // any failure just leaves the map empty (no pill), never blocks the pane.
+  const checkUpdates = useCallback(async (det: ProviderInfo[]) => {
+    const installedWithVer = det.filter(d => d.installed && d.version).map(d => ({ id: d.id, version: d.version }))
+    if (!installedWithVer.length || !window.forge.checkCliUpdates) return
+    try {
+      const res = await window.forge.checkCliUpdates(installedWithVer)
+      const map: Record<string, { latest: string; npmPackage: string }> = {}
+      for (const u of res) if (u.hasUpdate) map[u.id] = { latest: u.latest, npmPackage: u.npmPackage }
+      setCliUpdates(map)
+    } catch { /* courtesy hint — ignore failures */ }
+  }, [])
 
 
   const load = useCallback(async () => {
@@ -91,6 +106,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     const detP = (window.forge.detectProviders() as Promise<ProviderInfo[]>)
       .then(det => {
         setDetected(det)
+        void checkUpdates(det)
         // Initialise model drafts from detected models
         const mDrafts: Record<string, ModelRow[]> = {}
         for (const d of det) {
@@ -107,7 +123,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     for (const b of BUILTINS) drafts[b.id] = cfg.providers.find(p => p.id === b.id)?.binOverride ?? ''
     setBinDrafts(drafts)
     await detP
-  }, [])
+  }, [checkUpdates])
   useEffect(() => { void load() }, [load])
 
   const info = (id: string) => detected.find(d => d.id === id)
@@ -123,7 +139,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   }
   const apply = async (fn: () => Promise<ProviderInfo[]>) => {
     setBusy(true)
-    try { setDetected(await fn()); setConfig(await window.forge.getAgentsConfig()); onChanged?.() }
+    try { const det = await fn(); setDetected(det); void checkUpdates(det); setConfig(await window.forge.getAgentsConfig()); onChanged?.() }
     finally { setBusy(false) }
   }
 
@@ -210,6 +226,12 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
             </div>
             <div className="agent-row-meta">
               {info(b.id)?.version && <span className="agent-ver" title="检测到的 CLI 版本">v{info(b.id)!.version}</span>}
+              {cliUpdates[b.id] && (
+                <span
+                  className="agent-ver-new"
+                  title={`有新版 v${cliUpdates[b.id].latest} · 更新命令:npm i -g ${cliUpdates[b.id].npmPackage}@latest`}
+                >有新版 v{cliUpdates[b.id].latest}</span>
+              )}
               {info(b.id)?.binPath && <span className="agent-path" title={info(b.id)!.binPath}>{info(b.id)!.binPath}</span>}
             </div>
             {info(b.id)?.liveModels && (() => {

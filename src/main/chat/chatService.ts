@@ -10,6 +10,7 @@ import { distillSession, promoteToWorkspace, promoteToSystem, type DistillDeps }
 import { distillModelFor } from './memory/distillModel'
 import { removeNativeSession } from '../agents/nativeSessionCleanup'
 import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD, SYSTEM_PROMOTE_EVERY_K, WORKSPACE_PROMOTE_EVERY_K } from './memory/tokenEstimate'
+import { estimateTokens as estimateContextTokens } from '@shared/estimateTokens'
 import { readSettings } from '../config/store'
 import { discoverAgentContext, extractRuntimeContext, forgeMcpContext, mergeAgentContext, mentionedSkills } from '../agents/contextMeta'
 import { scanGlobalContext } from '../agents/globalContext'
@@ -271,12 +272,23 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
 
       finalizeRunning('done')
       const steps = think.split('\n').map(s => s.trim()).filter(Boolean)
+      // Token-usage accounting. Prefer the provider's real reported per-turn usage (turnTokens, from the
+      // `result` event). When absent — qoder/codex/cursor/gemini/… don't emit it — fall back to a
+      // CJK-aware ESTIMATE so the (workspace × provider × day) 用量 ledger still reflects context
+      // consumption for every provider. input ≈ the whole conversation fed to the model this turn
+      // (readMessages already includes the just-appended user message, before the reply is appended);
+      // output ≈ the reply text. Marked estimated:true so the UI can flag it as approximate.
+      const tokens = turnTokens ?? {
+        input: readMessages(ws, sid).reduce((sum, m) => sum + estimateContextTokens(m.text), 0),
+        output: estimateContextTokens(text),
+        estimated: true,
+      }
       const msg: ChatMessage = {
         id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(),
         think: steps.length ? { label: '已思考', elapsed, steps } : undefined,
         context,
         usage: lastUsage,
-        tokens: turnTokens,
+        tokens,
         subagents: subagentList(),
         tools: toolList(),
         startedAt, endedAt: Date.now(),

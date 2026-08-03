@@ -47,7 +47,7 @@ html[data-vibrancy="on"]:not([data-glass="on"]) .inspector { background: var(--g
    (旧版靠一层随 --bg 变色的「蓙」压淡图,深色的黑蓙在同等 alpha 下感知远弱于浅色的白蓙,且封顶 50%,
    所以深色系下滑块几乎无效。改成直接调图片 opacity 后不再有明暗不对称。) */
 .app-bg-layer { position: absolute; inset: 0; z-index: -1; display: none; pointer-events: none;
-  background-image: var(--app-bg-image); background-size: cover; background-position: center; background-repeat: no-repeat;
+  background-image: var(--app-bg-image); background-size: cover; background-position: 50% var(--app-bg-pos, 35%); background-repeat: no-repeat;
   opacity: var(--app-bg-opacity, .35);
   border-radius: 12px; }
 [data-bg-scope="app"] .app-bg-layer { display: block; }

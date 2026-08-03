@@ -478,6 +478,8 @@
 .agent-path { font-family: var(--mono); font-size: 11px; color: var(--faint); min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 检测到的 CLI 版本徽标 */
 .agent-ver { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; }
+/* 「有新版」提示 pill(只提示，不代为更新；hover 看更新命令）。用 accent 色区别于普通版本号，引人注意但不刺眼。 */
+.agent-ver-new { font-size: 10.5px; font-weight: 600; cursor: help; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 99px; padding: 1px 7px; white-space: nowrap; }
 /* 「可用模型」旁的来源提示(liveModels 自动检测) */
 .agent-models-hint { margin-left: 8px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--faint); }
 .agent-row-bin button.ghost, .agent-add button.ghost { background: var(--surface); color: var(--fg-2); border: 1px solid var(--border); font-weight: 500; }

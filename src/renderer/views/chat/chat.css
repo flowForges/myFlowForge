@@ -17,7 +17,7 @@
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   /* 「可见度」= 图片 opacity(见 global.css 说明):淡下去透出纯色窗口底,浅/深一致。 */
   background-image: var(--app-bg-image);
-  background-size: cover; background-position: center; background-repeat: no-repeat;
+  background-size: cover; background-position: 50% var(--app-bg-pos, 35%); background-repeat: no-repeat;
   opacity: var(--app-bg-opacity, .35);
 }
 /* 壁纸开着时(app / chat 范围)的正文可读性——关键前提:投影颜色必须固定,不能跟 var(--bg) 走。

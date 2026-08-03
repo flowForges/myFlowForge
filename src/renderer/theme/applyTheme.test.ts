@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { applyTheme } from './applyTheme'
 import type { Appearance } from '@shared/types'
 
-const base: Appearance = { theme: 'dark', accent: 'blue', vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 }
+const base: Appearance = { theme: 'dark', accent: 'blue', vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
 afterEach(() => { document.documentElement.removeAttribute('data-theme'); document.documentElement.removeAttribute('data-vibrancy'); document.documentElement.removeAttribute('data-glass'); document.documentElement.removeAttribute('data-density') })
 
 describe('applyTheme', () => {
@@ -35,6 +35,18 @@ describe('applyTheme', () => {
     const r = document.documentElement
     expect(r.getAttribute('data-glass')).toBe('off')
     expect(r.style.getPropertyValue('--glass-blur-strength')).toBe('1')
+  })
+  it('sets --app-bg-pos from bgPositions keyed by image URL (default when absent)', () => {
+    // Remembered position for the active image wins…
+    applyTheme({ ...base, bgImage: 'forge-bg://w1.jpg', bgPositions: { 'forge-bg://w1.jpg': 12 } })
+    expect(document.documentElement.style.getPropertyValue('--app-bg-pos')).toBe('12%')
+    // …and an image with no stored position falls back to the slightly-top default (35%).
+    applyTheme({ ...base, bgImage: 'forge-bg://other.jpg', bgPositions: { 'forge-bg://w1.jpg': 12 } })
+    expect(document.documentElement.style.getPropertyValue('--app-bg-pos')).toBe('35%')
+  })
+  it('sets --home-bg-pos from bgPositions keyed by the home image URL', () => {
+    applyTheme({ ...base, homeBgImage: 'forge-bg://home.jpg', bgPositions: { 'forge-bg://home.jpg': 80 } })
+    expect(document.documentElement.style.getPropertyValue('--home-bg-pos')).toBe('80%')
   })
   it('resolves auto theme via prefers-color-scheme', () => {
     vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('dark'), media: q, addEventListener() {}, removeEventListener() {} }))

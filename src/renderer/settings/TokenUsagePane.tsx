@@ -38,24 +38,27 @@ export function TokenUsagePane() {
 
   // 分组聚合:按选中的维度合并。
   const grouped = useMemo(() => {
-    const m = new Map<string, { label: string; sub: string; input: number; output: number; turns: number }>()
+    const m = new Map<string, { label: string; sub: string; input: number; output: number; turns: number; estimated: boolean }>()
     for (const r of filtered) {
       const key = group === 'day' ? r.day : group === 'workspace' ? r.workspace : r.provider
       const label = key
       const sub = group === 'day' ? `${r.workspace} · ${r.provider}` : group === 'workspace' ? `${r.day} · ${r.provider}` : `${r.day} · ${r.workspace}`
-      const cur = m.get(key) ?? { label, sub, input: 0, output: 0, turns: 0 }
+      const cur = m.get(key) ?? { label, sub, input: 0, output: 0, turns: 0, estimated: false }
       cur.input += r.input; cur.output += r.output; cur.turns += r.turns
+      if (r.estimated) cur.estimated = true
       m.set(key, cur)
     }
     return [...m.values()].sort((a, b) => (group === 'day' ? b.label.localeCompare(a.label) : (b.input + b.output) - (a.input + a.output)))
   }, [filtered, group])
+
+  const anyEstimated = useMemo(() => filtered.some((r) => r.estimated), [filtered])
 
   return (
     <div className="tu-pane">
       <div className="tu-head">
         <div>
           <h2>Token 用量</h2>
-          <p className="tu-note">按工作区 × provider × 每天统计每轮对话的输入/输出 token。仅统计本功能上线后记录的消息;部分 provider 未上报用量时可能缺失。</p>
+          <p className="tu-note">按工作区 × provider × 每天统计每轮对话的输入/输出 token(输入≈喂给模型的上下文)。优先用 provider 真实上报的用量;未上报时(qoder/codex/cursor 等)按对话内容估算,标 <span className="tu-est-tag">≈估算</span>。仅统计本功能上线后记录的消息。</p>
         </div>
         <button className="tu-refresh" onClick={load}>刷新</button>
       </div>
@@ -63,7 +66,7 @@ export function TokenUsagePane() {
       <div className="tu-totals">
         <div className="tu-stat"><span className="tu-stat-v">{fmt(total.input)}</span><span className="tu-stat-l">输入</span></div>
         <div className="tu-stat"><span className="tu-stat-v">{fmt(total.output)}</span><span className="tu-stat-l">输出</span></div>
-        <div className="tu-stat"><span className="tu-stat-v">{fmt(total.input + total.output)}</span><span className="tu-stat-l">合计</span></div>
+        <div className="tu-stat"><span className="tu-stat-v">{anyEstimated ? '≈' : ''}{fmt(total.input + total.output)}</span><span className="tu-stat-l">合计</span></div>
         <div className="tu-stat"><span className="tu-stat-v">{total.turns}</span><span className="tu-stat-l">轮次</span></div>
       </div>
 
@@ -103,7 +106,7 @@ export function TokenUsagePane() {
             </div>
             {grouped.map((g) => (
               <div className="tu-row" key={g.label}>
-                <span className="tu-lbl"><b>{g.label}</b><i>{g.sub}</i></span>
+                <span className="tu-lbl"><b>{g.label}{g.estimated ? <span className="tu-est-tag" title="含按内容估算的轮次(该 provider 未上报真实用量)">≈估算</span> : null}</b><i>{g.sub}</i></span>
                 <span className="tu-num">{fmt(g.input)}</span>
                 <span className="tu-num">{fmt(g.output)}</span>
                 <span className="tu-num tu-strong">{fmt(g.input + g.output)}</span>

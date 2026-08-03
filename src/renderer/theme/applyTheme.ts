@@ -1,4 +1,5 @@
 import type { Appearance } from '@shared/types'
+import { DEFAULT_BG_POSITION } from '@shared/wallpaper'
 
 export function prefersDark(): boolean {
   try { return window.matchMedia('(prefers-color-scheme: dark)').matches } catch { return false }
@@ -41,10 +42,16 @@ export function applyTheme(a: Appearance): void {
   root.setAttribute('data-bg-scope', bgOn ? a.bgScope : 'off')
   root.style.setProperty('--app-bg-image', a.bgImage ? `url("${a.bgImage}")` : 'none')
   root.style.setProperty('--app-bg-opacity', String(a.bgOpacity ?? 0.35))
+  // 壁纸纵向焦点:按当前图片 URL 从 bgPositions 查其记忆的裁剪位置(缺省略偏上),供三处 cover 图层
+  // (.app-bg-layer / .chat::before / .home-bg-layer)统一消费。见 schema.ts bgPositions 说明。
+  const bgPos = a.bgPositions?.[a.bgImage] ?? DEFAULT_BG_POSITION
+  root.style.setProperty('--app-bg-pos', `${bgPos}%`)
   // 首页背景:独立开关 + 独立图/不透明度。仅 HomeView 的 .home-bg-layer 消费,故只在首页生效,
   // 且盖过 'app' 范围背景(它在 #view-home 内、天然在最底层 .app-bg-layer 之上)。
   const homeBgOn = !!a.homeBgImage && !!a.homeBgOn
   root.setAttribute('data-home-bg', homeBgOn ? 'on' : 'off')
   root.style.setProperty('--home-bg-image', a.homeBgImage ? `url("${a.homeBgImage}")` : 'none')
   root.style.setProperty('--home-bg-opacity', String(a.homeBgOpacity ?? 0.35))
+  const homeBgPos = a.bgPositions?.[a.homeBgImage] ?? DEFAULT_BG_POSITION
+  root.style.setProperty('--home-bg-pos', `${homeBgPos}%`)
 }

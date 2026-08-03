@@ -37,3 +37,11 @@
 .tu-strong { color: var(--accent); font-weight: 600; }
 
 .tu-empty { padding: 32px 16px; text-align: center; font-size: 12.5px; color: var(--faint); border: 1px dashed var(--border); border-radius: 12px; }
+
+/* “≈估算” 标记:该行/合计含按内容估算(provider 未上报真实用量)的轮次。 */
+.tu-est-tag {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 600; line-height: 16px; vertical-align: middle;
+  color: var(--muted); background: color-mix(in srgb, var(--fg) 8%, transparent);
+  border: 1px solid var(--border);
+}

@@ -25,10 +25,13 @@ export function parseProjects(text: string): ParsedProject[] {
   if (!t) return out
   if (t[0] === '[' || t[0] === '{') {
     let data = JSON.parse(t)
+    // Unwrap the 导出 file shape: readProjects() writes `{ "projects": [...] }`, not a bare array.
+    if (data && !Array.isArray(data) && Array.isArray(data.projects)) data = data.projects
     if (!Array.isArray(data)) data = [data]
     for (const o of data) {
-      const repo = String(o?.repo || o?.url || o?.git || '').trim()
-      if (repo) out.push({ repo, branch: String(o?.branch || o?.ref || 'main').trim() || 'main' })
+      // Field aliases include repoUrl/defaultBranch so a file exported by 导出 re-imports unchanged.
+      const repo = String(o?.repo || o?.url || o?.git || o?.repoUrl || '').trim()
+      if (repo) out.push({ repo, branch: String(o?.branch || o?.ref || o?.defaultBranch || 'main').trim() || 'main' })
     }
   } else {
     for (const raw of t.split(/\r?\n/)) {

@@ -7,6 +7,7 @@ import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
 import { rebuildProviderRegistry } from '../agents/registry'
 import { refreshProviderModels, setProviderModels } from '../agents/refreshModels'
+import { checkCliUpdates } from '../agents/cliLatest'
 import { buildAgentEnv } from '../agents/env'
 import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from 'node:fs'
 import { basename, join } from 'node:path'
@@ -265,6 +266,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // last-known-good agents sticky so a slow cold-start probe never makes them vanish.
   ipcMain.handle(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>
     cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true }))
+  // "有新版" 提示(只提示):安装版本由 detect 探测,这里查各 CLI 的 npm latest 并比对。走 termProxy(undici
+  // 不认 HTTP_PROXY 环境变量),失败/未知包静默略过 —— 提示是锦上添花,绝不能拖垮或报错阻塞设置页。
+  ipcMain.handle(CH.agentsCliUpdates, (_e, installed: { id: string; version?: string }[]) =>
+    checkCliUpdates(installed ?? [], makeProxyFetch(readSettings().termProxy), Date.now()))
   // Registry just changed (bin override / custom agent add-remove) — bypass the cache but stay sticky
   // (trustPersisted) so a transient probe failure during the rebuild doesn't wipe known-good agents.
   const redetect = () => cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: true, trustPersisted: true })

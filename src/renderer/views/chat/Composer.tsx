@@ -4,6 +4,7 @@ import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import { applyListContinuation } from './listContinuation'
+import { shouldOffloadPaste, pastedFileName, base64OfUtf8 } from './largePaste'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -292,7 +293,21 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   }
 
   async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
-    const files = e.clipboardData?.files
+    const cd = e.clipboardData
+    if (!cd) return
+    const files = cd.files
+    // Very large TEXT paste (no files): offload to a temp-file attachment instead of dumping it into the
+    // controlled textarea — a huge value makes every later keystroke re-render + reflow, so typing lags
+    // badly behind the IME. The chip is one-click removable and the agent reads it via the 附件 path.
+    if ((!files || !files.length) && onPaste) {
+      const pasted = cd.getData('text')
+      if (pasted && shouldOffloadPaste(pasted)) {
+        e.preventDefault()
+        const att = await onPaste({ name: pastedFileName(pasted, new Date()), dataBase64: base64OfUtf8(pasted) })
+        if (att) setAttachments(prev => [...prev, att])
+        return
+      }
+    }
     if (!files || !files.length || !onPaste) return
     e.preventDefault()
     for (const file of Array.from(files)) {

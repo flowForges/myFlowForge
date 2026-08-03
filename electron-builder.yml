@@ -19,6 +19,11 @@ electronDist: node_modules/electron/dist
 # loader (lib/utils.js loadNativeModule) falls back to prebuilds/ when build/Release is absent, and
 # our postinstall chmod's the prebuilt spawn-helper, so the terminal still works in the package.
 npmRebuild: false
+# Ad-hoc code-sign the packaged .app (see scripts/afterPack.cjs). The build has no Developer ID
+# (identity: null below), and a *fully unsigned* macOS app is never registered with the notification
+# daemon → notifications silently never fire. An ad-hoc signature is enough to make local notifications
+# work (it does NOT remove the Gatekeeper warning — that needs real signing + notarization).
+afterPack: ./scripts/afterPack.cjs
 files:
   - from: .
     filter:
@@ -47,8 +52,9 @@ mac:
   target:
     - dmg
     - dir
-  # Local/unsigned trial build: skip code signing. The .app will be unsigned — open via
-  # right-click → Open (or `xattr -dr com.apple.quarantine` on the .app).
+  # No paid Developer ID: skip electron-builder's signing step. The afterPack hook then applies an
+  # ad-hoc signature (codesign --sign -) so macOS notifications register + fire. Gatekeeper still flags
+  # it (unidentified developer) — open via right-click → Open, or `xattr -dr com.apple.quarantine`.
   identity: null
   category: public.app-category.developer-tools
 dmg:

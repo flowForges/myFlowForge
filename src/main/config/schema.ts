@@ -124,7 +124,11 @@ export const AppearanceSchema = z.object({
   // homeBgImage 同样存 forge-bg:// URL,homeBgOpacity 是首页图片层的可见度。首页上此背景盖过 'app' 范围背景。
   homeBgImage: z.string().default(''),
   homeBgOn: z.boolean().default(false),
-  homeBgOpacity: z.number().min(0.05).max(1).default(0.35)
+  homeBgOpacity: z.number().min(0.05).max(1).default(0.35),
+  // 壁纸纵向焦点(0–100,%):`background-size:cover` 把图铺满窗口后要裁掉溢出部分,这个值决定纵向从哪里裁 ——
+  // 0=顶部对齐(保住画面上部/人物头部,裁底)、50=居中、100=底部对齐。按【图片 URL】分别记忆,故换壁纸各调各的
+  // (解决"有些竖构图壁纸被削头")。缺省 = DEFAULT_BG_POSITION(略偏上)。app/会话区背景与首页背景都查这张表。
+  bgPositions: z.record(z.string(), z.number().min(0).max(100)).catch({}).default({})
 })
 export type Appearance = z.infer<typeof AppearanceSchema>
 export const SkillsSchema = z.record(z.string(), z.boolean())
@@ -305,7 +309,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35 },
+  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },

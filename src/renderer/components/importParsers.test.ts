@@ -15,6 +15,20 @@ describe('parseProjects', () => {
   it('the sample parses to 4 projects', () => {
     expect(parseProjects(PROJ_SAMPLE)).toHaveLength(4)
   })
+  it('re-imports a file produced by 导出 (the { projects: [...] } config shape)', () => {
+    // The export handler writes readProjects() verbatim: a wrapper object whose items use
+    // repoUrl/defaultBranch (not repo/branch). Round-tripping export → import must work.
+    const exported = JSON.stringify({
+      projects: [
+        { id: 'a', name: 'a', repoUrl: 'git@x:y/a.git', defaultBranch: 'main', alias: '' },
+        { id: 'b', name: 'b', repoUrl: 'https://x/b.git', defaultBranch: 'dev', alias: 'bee' },
+      ],
+    })
+    expect(parseProjects(exported)).toEqual([
+      { repo: 'git@x:y/a.git', branch: 'main' },
+      { repo: 'https://x/b.git', branch: 'dev' },
+    ])
+  })
 })
 
 describe('parsePlugins', () => {

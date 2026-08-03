@@ -118,6 +118,30 @@ describe('chatService.sendTurn', () => {
     expect(msg.usage).toBeUndefined()
   })
 
+  it('uses the provider’s REAL per-turn tokens when reported (not estimated)', async () => {
+    const provider: AgentProvider = {
+      ...fakeChatProvider(),
+      chat(task: ChatTask, cb: ChatCallbacks) {
+        cb.onSession('sess-t')
+        cb.onTurnTokens?.({ input: 1200, output: 34 })
+        cb.onAssistantDelta('ok')
+        cb.onDone({ elapsed: 1 })
+        return { id: task.id, cancel() {}, done: Promise.resolve({ ok: true }) }
+      },
+    }
+    const msg = await sendTurn(payload('hi'), { provider, env: process.env, emit: () => {} })
+    expect(msg.tokens).toEqual({ input: 1200, output: 34 })
+    expect(msg.tokens?.estimated).toBeUndefined()
+  })
+
+  it('ESTIMATES per-turn tokens when the provider never reports them (so 用量 still moves)', async () => {
+    // fakeChatProvider never calls onTurnTokens (like qoder/codex) — the ledger would otherwise be empty.
+    const msg = await sendTurn(payload('帮我看看这段上下文消耗'), { provider: fakeChatProvider(), env: process.env, emit: () => {} })
+    expect(msg.tokens?.estimated).toBe(true)
+    expect(msg.tokens?.input).toBeGreaterThan(0)   // whole-conversation context fed to the model
+    expect(msg.tokens?.output).toBeGreaterThan(0)  // the reply text
+  })
+
   it('falls back to run() for a provider without chat()', async () => {
     const runProvider: AgentProvider = {
       id: 'codex', displayName: 'Codex', capabilities: { structuredOutput: false, permissionHook: false, pty: false },

@@ -126,8 +126,8 @@ export function ProjectPane({ projects, onAdd, onDelete, onEditBranch, onEditAli
         <h4>Git 项目</h4>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {exportMsg ? <span style={{ fontSize: 12, opacity: 0.75 }}>{exportMsg}</span> : null}
-          <button className="imp-btn" onClick={doExport} title="把当前所有项目配置导出为 JSON 文件">{DOWNLOAD_SVG}导出</button>
-          <button className="imp-btn" onClick={openImport}>{UPLOAD_SVG}批量导入</button>
+          <button className="imp-btn" onClick={doExport} title="把当前所有项目配置导出为 JSON 文件">{UPLOAD_SVG}导出</button>
+          <button className="imp-btn" onClick={openImport}>{DOWNLOAD_SVG}批量导入</button>
         </div>
       </div>
       <div className="proj-add">

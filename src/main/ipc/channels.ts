@@ -26,6 +26,7 @@ export const CH = {
   agentsRemoveCustom: 'agents:remove-custom',
   agentsRefreshModels: 'agents:refresh-models',
   agentsSetModels: 'agents:set-models',
+  agentsCliUpdates: 'agents:cli-updates',
   contextScan: 'context:scan',
   contextScanGlobal: 'context:scan-global',
   skillsList: 'skills:list',
