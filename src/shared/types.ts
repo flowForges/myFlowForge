@@ -96,7 +96,7 @@ export type EngineEvent =
 export interface ResolvePayload { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }
 
 export interface ModelInfo { id: string; label: string; description?: string; contextWindow?: number }
-export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; authCmd?: string; installHelp?: string }
+export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; authCmd?: string; installHelp?: string; timezone?: string }
 
 export type ReviewLens = 'correctness' | 'security' | 'performance' | 'style'
 export interface ReviewConfig {

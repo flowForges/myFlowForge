@@ -344,9 +344,12 @@ export const SettingsSchema = z.object({
   // so it must not run in a normal (packaged) session. Turn on only when diagnosing 卡顿; see index.ts.
   perfDiagnostics: z.boolean().catch(false).default(false),
   // License-gated extra content (see shared/nsfw.ts). nsfwUnlocked flips true after a valid activation
-  // code; nsfwCode keeps the validated code locally to authenticate catalog + image-byte fetches.
+  // code. nsfwCodes holds ALL activated codes (multi-code additive: the app joins them and the Worker
+  // returns the union of their content subsets). nsfwCode is the LEGACY single code, kept for migration
+  // (read fallback: an old install with only nsfwCode set behaves as nsfwCodes=[nsfwCode]).
   nsfwUnlocked: z.boolean().catch(false).default(false),
   nsfwCode: z.string().catch('').default(''),
+  nsfwCodes: z.array(z.string()).catch([]).default([]),
   // Which gated items have been installed → their local ref (bg: forge-bg:// URL; pet: local customPets
   // id). Drives the 安装/设置 button state; a missing/deleted local file just re-downloads on 设置.
   nsfwInstalled: z.record(z.string(), z.string()).catch({}).default({}),
@@ -382,6 +385,7 @@ export const defaultSettings = (): Settings => ({
   perfDiagnostics: false,
   nsfwUnlocked: false,
   nsfwCode: '',
+  nsfwCodes: [],
   nsfwInstalled: {},
   fullAccessAck: {},
   memory: { enabled: false },
@@ -457,6 +461,9 @@ export const ProviderConfigSchema = z.object({
   // Optional (not .default([])) so hand-built ProviderConfig literals/older on-disk configs stay valid; every
   // read sites `?? []`.
   customModels: z.array(ModelSchema).optional(),
+  // Per-provider timezone (IANA name, e.g. 'Asia/Shanghai'). Injected as env.TZ when spawning this
+  // provider so its runtime clock matches the user's chosen region. Empty/absent = follow system TZ.
+  timezone: z.string().optional(),
   // Last-good DETECTION snapshot, persisted so agents survive an app upgrade/relaunch and a flaky/slow
   // cold-start probe doesn't make them vanish. Only an explicit 重新检测 (force) clears a stale one.
   detectedInstalled: z.boolean().optional(),

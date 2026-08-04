@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Pet, Appearance } from '@shared/types'
 import type { NsfwCatalog, NsfwPet, NsfwBg } from '@shared/nsfw'
 import { NSFW_PREVIEW_COOLDOWN_MS, NSFW_GALLERY_MEMO_MS } from '@shared/nsfw'
@@ -20,6 +20,9 @@ interface NsfwPaneProps {
   onChangePet: (p: Partial<Pet>) => void
   onChangeAppearance: (p: Partial<Appearance>) => void
   onSetInstalled: (key: string, ref: string) => void
+  codes: string[]                                // 已激活的激活码(多码追加:合并各码解锁的内容)
+  onAddCode: () => void                          // 追加一个激活码(打开兑换弹窗)
+  onRemoveCode: (code: string) => void           // 移除某个激活码(其解锁的内容随之消失)
   onDisable: () => void                          // 关闭扩展:重新锁定(隐藏本 pane 入口),需重新兑换才能再开
 }
 
@@ -27,7 +30,7 @@ interface NsfwPaneProps {
 //   安装 — never downloaded → download, store on disk, apply, remember it.
 //   设置 — downloaded before → if the local file is still there just apply it; if it was deleted/GC'd,
 //          re-download then apply. Nothing is held in memory: images live on disk, served via protocol.
-export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, onSetInstalled, onDisable }: NsfwPaneProps) {
+export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, onSetInstalled, codes, onAddCode, onRemoveCode, onDisable }: NsfwPaneProps) {
   const [catalog, setCatalog] = useState<NsfwCatalog | null>(galleryMemo ? { pets: galleryMemo.pets, backgrounds: galleryMemo.backgrounds } : null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -74,6 +77,15 @@ export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, 
     })
   }, [])
   useEffect(() => { void load(false) }, [])  // eslint-disable-line react-hooks/exhaustive-deps
+  // When the active codes change (add/remove), the unlocked content set changes → clear the cross-mount
+  // memo and force a fresh gallery pull. Skip the initial mount (the load(false) above already ran).
+  const codesKey = codes.join(',')
+  const firstCodesRun = useRef(true)
+  useEffect(() => {
+    if (firstCodesRun.current) { firstCodesRun.current = false; return }
+    galleryMemo = null
+    void load(true)
+  }, [codesKey])  // eslint-disable-line react-hooks/exhaustive-deps
 
   const activateBg = async (b: NsfwBg) => {
     const key = 'bg:' + b.id
@@ -150,6 +162,25 @@ export function NsfwPane({ pet, nsfwInstalled, onChangePet, onChangeAppearance, 
         </p>
         {err && <p className="set-desc" style={{ color: 'var(--del, var(--err))' }}>{err}</p>}
         {!catalog && <p className="set-desc">加载中…</p>}
+      </div>
+
+      <div className="set-group">
+        <h4>已激活激活码</h4>
+        <p className="set-desc">可叠加多个激活码,内容会合并(自动去重)。移除某个码后,它单独解锁的内容将不再显示。</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          {codes.map(c => (
+            <span key={c} className="nsfw-code-chip" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontFamily: 'var(--mono)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 99, padding: '3px 6px 3px 10px' }}>
+              {c}
+              <button
+                title="移除此激活码"
+                onClick={() => { if (window.confirm(`移除激活码 ${c}?它单独解锁的内容将不再显示(其它码不受影响)。`)) onRemoveCode(c) }}
+                style={{ display: 'inline-grid', placeItems: 'center', width: 16, height: 16, borderRadius: 99, color: 'var(--faint)', fontSize: 13, lineHeight: 1 }}
+              >×</button>
+            </span>
+          ))}
+          {codes.length === 0 && <span className="set-desc" style={{ color: 'var(--faint)' }}>暂无(点右侧添加)</span>}
+          <button className="wf-pick" style={{ fontSize: 11, padding: '3px 10px' }} onClick={onAddCode}>+ 添加激活码</button>
+        </div>
       </div>
 
       {catalog && catalog.pets.length > 0 && (

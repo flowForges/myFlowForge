@@ -5,8 +5,9 @@ interface TermProxyPaneProps {
   onChange: (v: string) => void
 }
 
-// A sensible default + the ports the common local proxies listen on, so a first-time user gets an
-// editable starting point instead of an empty box whose placeholder vanishes the moment they type.
+// Shown ONLY as the input placeholder (a hint), never prefilled into the value: an unsaved box must
+// look unsaved. Prefilling this read as "a proxy is configured" when it wasn't — the provider then ran
+// direct-connect and 403'd. The 常用 preset chips give first-timers a one-click starting point instead.
 const DEFAULT_PROXY = 'http://127.0.0.1:7897'
 // termProxy is exported into HTTP_PROXY/HTTPS_PROXY/ALL_PROXY (see buildAgentEnv), so both http://
 // and socks5:// work — the latter covers Shadowsocks-style clients that only expose a local SOCKS port.
@@ -21,18 +22,15 @@ const COMMON_PROXIES: { label: string; url: string }[] = [
 ]
 
 export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
-  // When nothing is saved yet, prefill the box with a default the user can edit directly. `touched`
-  // guards against silently enabling a proxy: an untouched default is NOT saved on blur, so users who
-  // don't need a proxy still stay on direct-connect.
-  const [value, setValue] = useState(termProxy || DEFAULT_PROXY)
-  const [touched, setTouched] = useState(!!termProxy)
+  // The box mirrors exactly what's saved. When nothing is saved it stays EMPTY (the placeholder hints
+  // a value) — never prefill an unsaved default, which reads as "a proxy is configured" when it isn't.
+  const [value, setValue] = useState(termProxy)
   const [saved, setSaved] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 出口 IP 检测(按需):idle | loading | 结果 | 错误。纯信息展示,失败绝不影响任何 provider。
+  const [ipState, setIpState] = useState<'idle' | 'loading' | { ip: string; region: string; via: 'proxy' | 'direct' } | { error: string }>('idle')
 
-  useEffect(() => {
-    setValue(termProxy || DEFAULT_PROXY)
-    setTouched(!!termProxy)
-  }, [termProxy])
+  useEffect(() => { setValue(termProxy) }, [termProxy])
 
   const flashSaved = () => {
     setSaved(true)
@@ -43,15 +41,32 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
 
   const commit = (v: string) => {
     setValue(v)
-    setTouched(true)
     if (v !== termProxy) { onChange(v); flashSaved() }
+  }
+
+  const active = termProxy.trim() !== ''
+
+  const detectIp = async () => {
+    setIpState('loading')
+    try {
+      const r = await window.forge.checkExitIp()
+      setIpState(r)
+    } catch {
+      setIpState({ error: '检测失败（超时或网络不可达）' })
+    }
   }
 
   return (
     <div className="set-group">
       <h4>终端代理</h4>
       <p className="set-desc">编码代理的命令行与网络请求将通过此代理转发。支持 http:// 与 socks5://(Shadowsocks 等)。留空则直连。</p>
-      <div className="proj-field" style={{ marginTop: 14 }}>
+      {/* Truthful current-state line — reflects the SAVED value, not the editing box, so the user can
+          never mistake an unsaved/empty box for an active proxy (the 403 footgun). */}
+      <div className={`proxy-current ${active ? 'on' : 'off'}`}>
+        <span className="dot" />
+        {active ? <>当前：经代理 <code>{termProxy}</code> 转发</> : <>当前：直连（未启用代理）</>}
+      </div>
+      <div className="proj-field" style={{ marginTop: 12 }}>
         <label htmlFor="termProxy">代理地址</label>
         <input
           id="termProxy"
@@ -61,12 +76,8 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
           autoCapitalize="off"
           autoComplete="off"
           value={value}
-          onChange={e => { setValue(e.target.value); setTouched(true) }}
-          onBlur={() => {
-            // Untouched prefilled default → treat as "not set", don't persist a proxy the user never chose.
-            if (!touched && !termProxy) return
-            if (value !== termProxy) { onChange(value); flashSaved() }
-          }}
+          onChange={e => setValue(e.target.value)}
+          onBlur={() => commit(value.trim())}
         />
       </div>
       <div className="proxy-presets" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
@@ -91,10 +102,27 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
         <button
           type="button"
           className="btn-ghost"
-          onClick={() => { setValue(''); setTouched(true); onChange(''); flashSaved() }}
+          onClick={() => commit('')}
         >
           清空 · 直连
         </button>
+      </div>
+      {/* 出口 IP 检测 —— 按需信息展示。走当前代理(有则经代理、无则直连),纯查看你的公网出口落在哪个地区,
+          不参与 provider 启动、不影响执行。 */}
+      <div className="proxy-exitip">
+        <button type="button" className="btn-ghost" disabled={ipState === 'loading'} onClick={() => void detectIp()}>
+          {ipState === 'loading' ? '检测中…' : '检测出口 IP'}
+        </button>
+        {typeof ipState === 'object' && 'ip' in ipState && (
+          <span className="proxy-exitip-result">
+            出口 IP <code>{ipState.ip}</code>
+            {ipState.region ? ` · ${ipState.region}` : ''}
+            <span className="proxy-exitip-via">{ipState.via === 'proxy' ? '（经代理）' : '（直连）'}</span>
+          </span>
+        )}
+        {typeof ipState === 'object' && 'error' in ipState && (
+          <span className="proxy-exitip-err">{ipState.error}</span>
+        )}
       </div>
     </div>
   )

@@ -6,9 +6,11 @@ import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
 import { rebuildProviderRegistry } from '../agents/registry'
-import { refreshProviderModels, setProviderModels } from '../agents/refreshModels'
+import { refreshProviderModels, setProviderModels, setProviderTimezone } from '../agents/refreshModels'
+import { checkExitIp } from '../net/exitIp'
 import { checkCliUpdates } from '../agents/cliLatest'
 import { buildAgentEnv } from '../agents/env'
+import { providerTimezone } from '../agents/providerConfig'
 import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from 'node:fs'
 import { basename, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
@@ -309,6 +311,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     invalidateDetectCache()   // ditto: edited model list must show up on the next detect
     return r
   })
+  ipcMain.handle(CH.agentsSetTimezone, (_e, a: { id: string; timezone: string }) => {
+    setProviderTimezone(a.id, a.timezone)
+    invalidateDetectCache()   // detect surfaces provCfg.timezone → refresh so the UI reflects the change
+  })
+  ipcMain.handle(CH.netCheckExitIp, () => checkExitIp(readSettings().termProxy))
   ipcMain.handle(CH.contextScan, (_e, workspacePath?: string) => {
     if (workspacePath && existsSync(workspacePath)) return scanWorkspaceContext(workspacePath, true)
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }
@@ -571,7 +578,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // FORGE_WORKFLOWS — so it has no forge MCP tools (forge_propose_plan/forge_delegate) for ANY
     // provider, and forgeChatDirective(env) (gated on env.FORGE_TOOLS containing forge_propose_plan)
     // returns '' automatically. Workflows only launch via the explicit run2 "工作流运行" launcher now.
-    const env = buildAgentEnv({ proxy: readSettings().termProxy })
+    const env = buildAgentEnv({ proxy: readSettings().termProxy, timezone: providerTimezone(payload.agent) })
     try {
       const msg = await sendTurn(payload, {
         provider,
@@ -1211,21 +1218,29 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // License-gated extra content. All requests go through the user's configured proxy and carry the
   // locally-stored activation code (settings.nsfwCode); the Worker holds the real keys + image bytes.
   const nsfwFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback
+  // The activation key sent to the Worker: ALL activated codes joined by comma (multi-code additive →
+  // Worker returns the deduped union of their subsets). Falls back to the legacy single nsfwCode so an
+  // install that predates nsfwCodes keeps working. encodeURIComponent in nsfwService escapes the commas.
+  const nsfwKey = () => {
+    const s = readSettings()
+    const codes = s.nsfwCodes?.length ? s.nsfwCodes : (s.nsfwCode ? [s.nsfwCode] : [])
+    return codes.join(',')
+  }
   // Shared preview cache: a persistent url-key → on-disk-file index so re-opening Settings returns the
   // already-downloaded thumbnails with NO network — the fix for "every open re-hits the Cloudflare Worker
   // per thumbnail". Shared across NSFW + built-in wallpaper previews (both store under backgrounds/).
   const previewCache = makeDiskPreviewCache()
   ipcMain.handle(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
-  ipcMain.handle(CH.nsfwCatalog, () => nsfwCatalog(readSettings().nsfwCode, nsfwFetch()))
-  ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, readSettings().nsfwCode, nsfwFetch(), previewCache))
+  ipcMain.handle(CH.nsfwCatalog, () => nsfwCatalog(nsfwKey(), nsfwFetch()))
+  ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, nsfwKey(), nsfwFetch(), previewCache))
   // Gallery (design E): returns catalog + already-cached thumbnails immediately; the missing ones stream
   // in and arrive one-by-one as CH.nsfwPreviewEvent {key,url} on the SAME window.
   ipcMain.handle(CH.nsfwGallery, (e, force?: boolean) => {
     const emit = (key: string, url: string) => { try { e.sender.send(CH.nsfwPreviewEvent, { key, url }) } catch { /* window closed */ } }
-    return nsfwGallery(readSettings().nsfwCode, nsfwFetch(), previewCache, emit, { force: !!force })
+    return nsfwGallery(nsfwKey(), nsfwFetch(), previewCache, emit, { force: !!force })
   })
-  ipcMain.handle(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, readSettings().nsfwCode, nsfwFetch()))
-  ipcMain.handle(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, readSettings().nsfwCode, nsfwFetch()))
+  ipcMain.handle(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, nsfwKey(), nsfwFetch()))
+  ipcMain.handle(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, nsfwKey(), nsfwFetch()))
   // Does the local file behind a forge-bg:// URL still exist? (An installed extra bg may have been
   // GC'd; if gone, the renderer re-downloads instead of pointing at a missing file.)
   ipcMain.handle(CH.nsfwBgExists, (_e, url: string) => {

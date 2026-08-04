@@ -6,6 +6,7 @@ import type { PermissionMode } from '@shared/permissions'
 import type { Workspace } from '../config/schema'
 import { workspaceToStartRunOpts } from '../workspace/workspaceRun'
 import { buildAgentEnv } from '../agents/env'
+import { providerTimezone } from '../agents/providerConfig'
 import { startBridge, type BridgeRunCtx } from '../mcp/forgeBridge'
 import { STAGE_FORGE_TOOLS } from '../run/runTypes'
 import { startDelegateBatch, updateDelegateSession, updateDelegateState, addDelegateAgent } from './delegateRegistry'
@@ -212,6 +213,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
       const forgeUsable = !(t.provider === 'codex' && permMode !== 'full')
       const env = buildAgentEnv({
         proxy: deps.proxy(),
+        timezone: providerTimezone(t.provider),
         overrides: (bridge && forgeUsable) ? {
           FORGE_SOCKET: bridge.socketPath,
           FORGE_AGENT_ID: t.id,

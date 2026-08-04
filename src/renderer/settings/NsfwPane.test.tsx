@@ -22,7 +22,7 @@ beforeEach(() => { __resetNsfwGalleryMemo(); mockForge() })
 
 const noop = () => {}
 const renderPane = (onChangeAppearance: (p: unknown) => void, nsfwInstalled: Record<string, string> = {}) =>
-  render(<NsfwPane pet={pet} nsfwInstalled={nsfwInstalled} onChangePet={noop} onChangeAppearance={onChangeAppearance as never} onSetInstalled={noop} onDisable={noop} />)
+  render(<NsfwPane pet={pet} nsfwInstalled={nsfwInstalled} onChangePet={noop} onChangeAppearance={onChangeAppearance as never} onSetInstalled={noop} codes={['TEST-1234']} onAddCode={noop} onRemoveCode={noop} onDisable={noop} />)
 
 // An NSFW background is not a built-in wallpaper. Applying one must clear appearance.bgWallpaperId,
 // otherwise the wallpaper gallery keeps the previously-selected built-in tile highlighted even though

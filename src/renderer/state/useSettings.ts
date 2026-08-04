@@ -23,6 +23,7 @@ const DEFAULTS: Settings = {
   perfDiagnostics: false,
   nsfwUnlocked: false,
   nsfwCode: '',
+  nsfwCodes: [],
   nsfwInstalled: {},
   fullAccessAck: {},
   memory: { enabled: true },
@@ -48,6 +49,7 @@ export interface SettingsUpdate {
   disabledProviders?: string[]
   nsfwUnlocked?: boolean
   nsfwCode?: string
+  nsfwCodes?: string[]
   nsfwInstalled?: Record<string, string>
   memory?: { enabled: boolean }
   botBridge?: Settings['botBridge']
@@ -81,6 +83,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     perfDiagnostics: partial.perfDiagnostics ?? base.perfDiagnostics,
     nsfwUnlocked: partial.nsfwUnlocked ?? base.nsfwUnlocked,
     nsfwCode: partial.nsfwCode ?? base.nsfwCode,
+    nsfwCodes: partial.nsfwCodes ?? base.nsfwCodes,
     nsfwInstalled: partial.nsfwInstalled ?? base.nsfwInstalled,
     // Not managed via this update path (see ackFullAccess in config/store.ts) — preserve from the
     // loaded settings on load (cast), else keep base, matching pluginCreds/pinnedWorkspaces above.

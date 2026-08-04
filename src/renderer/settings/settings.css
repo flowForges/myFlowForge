@@ -49,6 +49,17 @@
 
 /* 终端代理设置 */
 .set-desc { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+.proxy-current { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 6px 11px; border-radius: 8px; font-size: 12.5px; border: 1px solid var(--border); background: var(--surface); }
+.proxy-current .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.proxy-current code { font-size: 12px; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.proxy-current.on { color: var(--fg-2); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+.proxy-current.on .dot { background: var(--ok); }
+.proxy-current.off { color: var(--faint); }
+.proxy-exitip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.proxy-exitip-result { font-size: 12.5px; color: var(--fg-2); }
+.proxy-exitip-result code { font-size: 12px; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.proxy-exitip-via { color: var(--faint); margin-left: 4px; }
+.proxy-exitip-err { font-size: 12.5px; color: var(--danger, #d9534f); }
 .proxy-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
 .proxy-status { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--faint); transition: color .15s; }
 .proxy-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transition: background .15s; }
@@ -480,6 +491,11 @@
 .agent-ver { font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; }
 /* 「有新版」提示 pill(只提示，不代为更新；hover 看更新命令）。用 accent 色区别于普通版本号，引人注意但不刺眼。 */
 .agent-ver-new { font-size: 10.5px; font-weight: 600; cursor: help; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 99px; padding: 1px 7px; white-space: nowrap; }
+/* 每 provider 时区选择行 */
+.agent-tz { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.agent-tz-label { font-size: 12px; font-weight: 500; color: var(--muted); }
+.agent-tz-select { height: 30px; padding: 0 9px; border-radius: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); font-size: 12.5px; min-width: 200px; }
+.agent-tz-hint { font-size: 11px; color: var(--faint); }
 /* 「可用模型」旁的来源提示(liveModels 自动检测) */
 .agent-models-hint { margin-left: 8px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--faint); }
 .agent-row-bin button.ghost, .agent-add button.ghost { background: var(--surface); color: var(--fg-2); border: 1px solid var(--border); font-weight: 500; }

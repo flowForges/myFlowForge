@@ -28,6 +28,7 @@ beforeEach(() => {
     addCustomAgent: vi.fn(async () => makeDetected()),
     refreshModels: vi.fn(async (_id: string) => ({ models: [] })),
     setModels: vi.fn(async () => []),
+    setTimezone: vi.fn(async () => {}),
     getSettings: vi.fn(async () => ({ disabledProviders: [] })),
     setSettings: vi.fn(async () => {}),
     onSettingsChanged: vi.fn(() => () => {}),
@@ -35,12 +36,12 @@ beforeEach(() => {
 })
 
 describe('AgentsPane BUILTINS from catalog', () => {
-  it('renders exactly 8 builtin provider rows (from catalog)', async () => {
+  it('renders exactly 10 builtin provider rows (from catalog)', async () => {
     render(<AgentsPane />)
     for (const p of BUILTIN_PROVIDERS) {
       expect(await screen.findByText(p.displayName)).toBeInTheDocument()
     }
-    expect(BUILTIN_PROVIDERS).toHaveLength(8)
+    expect(BUILTIN_PROVIDERS).toHaveLength(10)
   })
 
   it('builtin rows display the catalog displayNames', async () => {
@@ -200,8 +201,9 @@ describe('AgentsPane 刷新模型 button', () => {
     await screen.findByText('Qoder')
     fireEvent.click(screen.getByText('刷新模型'))
     await waitFor(() =>
-      // detectProviders should have been called: once on mount, once after refresh
-      expect((window as any).forge.detectProviders).toHaveBeenCalledTimes(2)
+      // detectProviders on mount fires twice — the cached probe (instant render) + one background
+      // force re-probe (self-heals a stale 有新版 pill after `npm i -g`) — then once more after refresh.
+      expect((window as any).forge.detectProviders).toHaveBeenCalledTimes(3)
     )
   })
 
@@ -268,6 +270,23 @@ describe('AgentsPane 可用模型 editable list', () => {
     })
   })
 
+  it('"×" persists the deletion immediately (calls setModels without the removed model)', async () => {
+    // Regression: the × only spliced local state and never wrote to disk, so reopening the pane
+    // brought the "deleted" model back. Deletion must persist on click, like custom-agent delete.
+    ;(window as any).forge.detectProviders = vi.fn(async () =>
+      makeDetected([{ id: 'claude', installed: true, models: [{ id: 'opus', label: 'opus' }, { id: 'sonnet', label: 'sonnet' }] }])
+    )
+    render(<AgentsPane />)
+    await screen.findByText('Claude Code')
+    fireEvent.click(screen.getAllByTitle('删除')[0])  // remove opus (first row)
+    await waitFor(() => expect((window as any).forge.setModels).toHaveBeenCalled())
+    const call = (window as any).forge.setModels.mock.calls[0]
+    expect(call[0]).toBe('claude')
+    const persisted: { id: string }[] = call[1]
+    expect(persisted.some(m => m.id === 'opus')).toBe(false)
+    expect(persisted.some(m => m.id === 'sonnet')).toBe(true)
+  })
+
   it('"保存模型" calls window.forge.setModels with edited rows (filters empty id rows)', async () => {
     ;(window as any).forge.detectProviders = vi.fn(async () =>
       makeDetected([{ id: 'claude', installed: true, models: [{ id: 'opus', label: 'opus' }] }])
@@ -288,6 +307,22 @@ describe('AgentsPane 可用模型 editable list', () => {
     const call = (window as any).forge.setModels.mock.calls[0]
     const models: { id: string }[] = call[1]
     expect(models.every((m: { id: string }) => m.id !== '')).toBe(true)
+  })
+
+  it('renders a timezone select seeded from detection and persists changes immediately', async () => {
+    ;(window as any).forge.detectProviders = vi.fn(async () =>
+      makeDetected([{ id: 'claude', installed: true, timezone: 'Asia/Shanghai' }])
+    )
+    render(<AgentsPane />)
+    await screen.findByText('Claude Code')
+    const select = document.getElementById('tz-claude') as HTMLSelectElement
+    expect(select).not.toBeNull()
+    expect(select.value).toBe('Asia/Shanghai')  // seeded from detected timezone
+    fireEvent.change(select, { target: { value: 'America/New_York' } })
+    await waitFor(() =>
+      expect((window as any).forge.setTimezone).toHaveBeenCalledWith('claude', 'America/New_York')
+    )
+    expect(select.value).toBe('America/New_York')  // optimistic update
   })
 
   it('"恢复默认" calls window.forge.setModels with empty array', async () => {

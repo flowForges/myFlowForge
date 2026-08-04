@@ -142,6 +142,7 @@ export async function detectProviders(
       custom: !BUILTIN_IDS.has(p.id), liveModels: p.capabilities.liveModels,
       installCmd: meta?.installCmd, authCmd: meta?.authCmd, installHelp: meta?.installHelp,
       ...(version ? { version } : {}),
+      ...(provCfg?.timezone ? { timezone: provCfg.timezone } : {}),
     }
   }))
   if (persistUpdates.length) persist(persistUpdates)

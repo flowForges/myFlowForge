@@ -790,7 +790,13 @@ export function App() {
         )
       })()}
 
-      {unlockOpen && <UnlockModal onClose={() => setUnlockOpen(false)} onUnlock={(code) => { update({ nsfwUnlocked: true, nsfwCode: code }); setSettingsPane('nsfw'); setSettingsOpen(true) }} />}
+      {unlockOpen && <UnlockModal onClose={() => setUnlockOpen(false)} onUnlock={(code) => {
+        // Multi-code additive: append the newly-validated code (dedup) rather than replacing — the app
+        // sends the union of all activated codes and the Worker returns the merged content subsets.
+        const cur = settings?.nsfwCodes ?? []
+        const next = cur.includes(code) ? cur : [...cur, code]
+        update({ nsfwUnlocked: true, nsfwCodes: next, nsfwCode: code }); setSettingsPane('nsfw'); setSettingsOpen(true)
+      }} />}
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} showNsfw={!!settings?.nsfwUnlocked} renderPane={(key) => {
         switch (key) {
           case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} /> : null
@@ -807,7 +813,7 @@ export function App() {
           case 'loads': return <LoadPane />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
           case 'plugins': return <PluginPane plugins={pluginsApi.plugins} results={pluginsApi.results} catalog={pluginsApi.catalog} install={pluginsApi.install} uninstall={pluginsApi.uninstall} setEnabled={pluginsApi.setEnabled} refresh={pluginsApi.refresh} installExample={pluginsApi.installExample} installError={pluginsApi.installError} creds={pluginsApi.creds} setCred={pluginsApi.setCred} />
-          case 'nsfw': return settings ? <NsfwPane pet={settings.pet} nsfwInstalled={settings.nsfwInstalled ?? {}} onChangePet={(p) => update({ pet: { ...settings.pet, ...p } })} onChangeAppearance={(p) => update({ appearance: p })} onSetInstalled={(k, ref) => update({ nsfwInstalled: { ...(settings.nsfwInstalled ?? {}), [k]: ref } })} onDisable={() => { update({ nsfwUnlocked: false, nsfwCode: '' }); setSettingsPane('appearance') }} /> : null
+          case 'nsfw': return settings ? <NsfwPane pet={settings.pet} nsfwInstalled={settings.nsfwInstalled ?? {}} codes={settings.nsfwCodes ?? []} onAddCode={() => setUnlockOpen(true)} onRemoveCode={(c) => { const next = (settings.nsfwCodes ?? []).filter(x => x !== c); update({ nsfwCodes: next, nsfwCode: next[next.length - 1] ?? '' }) }} onChangePet={(p) => update({ pet: { ...settings.pet, ...p } })} onChangeAppearance={(p) => update({ appearance: p })} onSetInstalled={(k, ref) => update({ nsfwInstalled: { ...(settings.nsfwInstalled ?? {}), [k]: ref } })} onDisable={() => { update({ nsfwUnlocked: false, nsfwCode: '', nsfwCodes: [] }); setSettingsPane('appearance') }} /> : null
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null
           case 'sessions': return <SessionImportPane />
           case 'memory': return settings ? <MemoryPane enabled={settings.memory.enabled} onToggle={(v) => update({ memory: { enabled: v } })} wsPath={activeWsId || undefined} sessionId={sessions.activeSessionId ?? undefined} /> : null

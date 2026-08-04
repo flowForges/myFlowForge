@@ -37,6 +37,8 @@ const api = {
   removeCustomAgent: (id: string) => ipcRenderer.invoke(CH.agentsRemoveCustom, id),
   refreshModels: (providerId: string) => ipcRenderer.invoke(CH.agentsRefreshModels, providerId),
   setModels: (id: string, models: { id: string; label: string; description?: string }[]) => ipcRenderer.invoke(CH.agentsSetModels, { id, models }),
+  setTimezone: (id: string, timezone: string): Promise<void> => ipcRenderer.invoke(CH.agentsSetTimezone, { id, timezone }),
+  checkExitIp: (): Promise<{ ip: string; region: string; via: 'proxy' | 'direct' }> => ipcRenderer.invoke(CH.netCheckExitIp),
   // 查各 CLI 是否有新版(只提示):传入已探测到的安装版本,返回可确定有/无新版的那些(未知包/查不到的略过)。
   checkCliUpdates: (installed: { id: string; version?: string }[]): Promise<import('../main/agents/cliLatest').CliUpdateInfo[]> => ipcRenderer.invoke(CH.agentsCliUpdates, installed),
   scanContext: (workspacePath?: string) => ipcRenderer.invoke(CH.contextScan, workspacePath),

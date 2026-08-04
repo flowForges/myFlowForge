@@ -146,7 +146,8 @@ vi.mock('../config/store', () => ({
   registerWorkspace: vi.fn(),
   readWorkspace: readWorkspaceMock,
   writeWorkspace: writeWorkspaceMock,
-  readWorkspaceRegistry: () => []
+  readWorkspaceRegistry: () => [],
+  readAgentsConfig: () => ({ providers: [], custom: [] })
 }))
 
 const originalTermProxy = REREAD_SETTINGS.termProxy

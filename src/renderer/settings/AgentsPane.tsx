@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type MouseEvent } from 'react'
 import type { ProviderInfo, AgentsConfig, CustomAgent, ModelInfo } from '@shared/types'
 import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
+import { TIMEZONE_OPTIONS } from '@shared/timezones'
 import { useSettings } from '../state/useSettings'
 
 // Built-in providers whose bin path can be overridden — derived from the shared catalog.
@@ -84,6 +85,8 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   const [modelSaveState, setModelSaveState] = useState<Record<string, string | 'saving'>>({})
   // CLI 有新版提示(只提示):{ [id]: { latest, npmPackage } }，仅收录 hasUpdate 的。查不到/无 npm 包的略过。
   const [cliUpdates, setCliUpdates] = useState<Record<string, { latest: string; npmPackage: string }>>({})
+  // Per-provider timezone selection, seeded from detection and updated optimistically on change.
+  const [tzByProvider, setTzByProvider] = useState<Record<string, string>>({})
 
   // Query each installed CLI's latest npm version and keep only the ones with an update. Best-effort:
   // any failure just leaves the map empty (no pill), never blocks the pane.
@@ -109,12 +112,15 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
         void checkUpdates(det)
         // Initialise model drafts from detected models
         const mDrafts: Record<string, ModelRow[]> = {}
+        const tz: Record<string, string> = {}
         for (const d of det) {
           if (BUILTINS.some(b => b.id === d.id)) {
             mDrafts[d.id] = d.models.map(m => ({ id: m.id, label: m.label, description: m.description }))
+            tz[d.id] = d.timezone ?? ''
           }
         }
         setModelDrafts(mDrafts)
+        setTzByProvider(tz)
       })
       .finally(() => setDetecting(false))
     const cfg = await window.forge.getAgentsConfig() as AgentsConfig
@@ -123,6 +129,14 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     for (const b of BUILTINS) drafts[b.id] = cfg.providers.find(p => p.id === b.id)?.binOverride ?? ''
     setBinDrafts(drafts)
     await detP
+    // Self-heal against out-of-band CLI changes the cached detect can't see — most importantly a
+    // `npm i -g <cli>@latest` the user just ran, which otherwise leaves a stale "有新版" pill for up to
+    // DETECT_CACHE_TTL_MS (the cached probe keeps serving the pre-update version). Force ONE fresh
+    // re-probe in the background and refresh only the detected version + update state — NOT the model
+    // drafts, so it never clobbers rows the user may already be editing.
+    void (window.forge.detectProviders({ force: true }) as Promise<ProviderInfo[]>)
+      .then(det => { setDetected(det); void checkUpdates(det) })
+      .catch(() => {})
   }, [checkUpdates])
   useEffect(() => { void load() }, [load])
 
@@ -174,11 +188,17 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     setModelDrafts(prev => ({ ...prev, [providerId]: [...(prev[providerId] ?? []), { id: '', label: '' }] }))
   }
   const removeModelRow = (providerId: string, idx: number) => {
-    setModelDrafts(prev => {
-      const rows = [...(prev[providerId] ?? [])]
-      rows.splice(idx, 1)
-      return { ...prev, [providerId]: rows }
-    })
+    const rows = [...(modelDrafts[providerId] ?? [])]
+    rows.splice(idx, 1)
+    setModelDrafts(prev => ({ ...prev, [providerId]: rows }))
+    // Persist the deletion right away — like custom-agent delete. Previously × only mutated local
+    // state, so the model came back on reopen (its customModels/modelsCache entry was never cleared).
+    // We DON'T re-detect here: the splice already reflects the removal in the UI, and setModels
+    // invalidates the main-process detect cache so the next mount re-probes the truthful list.
+    const valid = rows
+      .filter(r => r.id.trim() !== '')
+      .map(r => ({ id: r.id.trim(), label: r.label.trim() || r.id.trim(), description: r.description?.trim() || undefined }))
+    void window.forge.setModels(providerId, valid).catch(() => {})
   }
   const saveModels = useCallback(async (providerId: string) => {
     const rows = modelDrafts[providerId] ?? []
@@ -207,6 +227,12 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
       setModelSaveState(s => ({ ...s, [providerId]: String(err) }))
     }
   }, [])
+
+  // Timezone change → optimistic local update + immediate persist (like the other per-provider settings).
+  const changeTimezone = (providerId: string, tz: string) => {
+    setTzByProvider(prev => ({ ...prev, [providerId]: tz }))
+    void window.forge.setTimezone(providerId, tz).catch(() => {})
+  }
 
   if (!config) return null
   return (
@@ -258,6 +284,19 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
             />
             <button className="ghost" disabled={busy} onClick={() => browse(b.id)}>选择…</button>
             <button disabled={busy} onClick={() => apply(() => window.forge.setAgentBin(b.id, binDrafts[b.id] ?? ''))}>保存</button>
+          </div>
+          {/* Per-provider timezone — injected as TZ when this provider spawns; 跟随系统 = no injection */}
+          <div className="agent-tz">
+            <label className="agent-tz-label" htmlFor={`tz-${b.id}`}>时区</label>
+            <select
+              id={`tz-${b.id}`}
+              className="agent-tz-select"
+              value={tzByProvider[b.id] ?? ''}
+              onChange={e => changeTimezone(b.id, e.target.value)}
+            >
+              {TIMEZONE_OPTIONS.map(tz => <option key={tz.value} value={tz.value}>{tz.label}</option>)}
+            </select>
+            <span className="agent-tz-hint">运行此代理时设为该时区（留空跟随系统）</span>
           </div>
           {/* Editable model list */}
           <div className="agent-models">

@@ -13,6 +13,16 @@ function unionById(primary: Model[], extra: Model[]): Model[] {
   return [...primary, ...extra.filter(m => !seen.has(m.id))]
 }
 
+/** Persist a provider's timezone (IANA name). Empty string clears it (= follow system TZ). */
+export function setProviderTimezone(providerId: string, timezone: string): void {
+  const cfg = readAgentsConfig()
+  const tz = timezone.trim()
+  const existing = cfg.providers.find(c => c.id === providerId)
+  if (existing) existing.timezone = tz || undefined
+  else cfg.providers.push({ id: providerId, binOverride: '', env: {}, modelsCache: [], modelsFetchedAt: 0, timezone: tz || undefined })
+  writeAgentsConfig(cfg)
+}
+
 export function setProviderModels(providerId: string, models: Model[], nowMs: number = Date.now()): Model[] {
   const cfg = readAgentsConfig()
   const existing = cfg.providers.find(c => c.id === providerId)
