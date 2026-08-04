@@ -35,8 +35,8 @@ beforeEach(() => {
 })
 
 describe('BUILTIN_IDS from catalog', () => {
-  it('contains exactly the 8 builtin provider ids', () => {
-    expect(BUILTIN_IDS).toEqual(['claude', 'codex', 'gemini', 'qoder', 'cursor', 'opencode', 'qwen', 'copilot'])
+  it('contains exactly the 10 builtin provider ids', () => {
+    expect(BUILTIN_IDS).toEqual(['claude', 'codex', 'gemini', 'qoder', 'cursor', 'opencode', 'qwen', 'copilot', 'pi', 'kimi'])
   })
 })
 

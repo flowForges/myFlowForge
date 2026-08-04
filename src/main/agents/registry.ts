@@ -7,6 +7,8 @@ import { makeCursorProvider } from './providers/cursor'
 import { makeOpencodeProvider } from './providers/opencode'
 import { makeQwenProvider } from './providers/qwen'
 import { makeCopilotProvider } from './providers/copilot'
+import { makePiProvider } from './providers/pi'
+import { makeKimiProvider } from './providers/kimi'
 import { makeSubprocessProvider } from './providers/subprocess'
 import { readAgentsConfig } from '../config/store'
 import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
@@ -27,6 +29,8 @@ const FACTORIES: Record<string, ProviderFactory> = {
   opencode: makeOpencodeProvider,
   qwen: makeQwenProvider,
   copilot: makeCopilotProvider,
+  pi: makePiProvider,
+  kimi: makeKimiProvider,
 }
 
 // Build the live provider registry from agents.json: built-ins (with optional bin overrides)

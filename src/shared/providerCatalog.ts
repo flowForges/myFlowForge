@@ -146,6 +146,41 @@ export const BUILTIN_PROVIDERS: BuiltinProviderMeta[] = [
     authCmd: 'copilot',
     installHelp: '需 GitHub Copilot 订阅。安装后运行 copilot，在其中用 /login 登录 GitHub 账号。',
   },
+  {
+    id: 'pi',
+    displayName: 'Pi',
+    defaultBin: 'pi',
+    glyph: 'π',
+    brandBg: 'oklch(66% .15 160 / .2)',
+    brandColor: 'oklch(70% .14 160)',
+    // pi（earendil-works/pi，npm @earendil-works/pi-coding-agent）是多 provider 封装的编码代理。
+    // 无头:pi -p "<prompt>"（--mode text 默认打印回复到 stdout）。模型用 --model provider/id;不传即用其默认
+    // provider(默认 google)。模型随登录的 provider 变化,故只给「账号默认」,具体模型可在此手动添加。
+    defaultModels: [
+      { id: 'default', label: '账号默认', description: '用 pi 配置的默认 provider/模型' },
+    ],
+    installCmd: 'npm install -g --ignore-scripts @earendil-works/pi-coding-agent',
+    authCmd: 'pi',
+    installHelp: '安装后运行 pi，用 /login 登录一个 provider（OAuth 或 API key），或设置对应 API key 环境变量后启动。',
+  },
+  {
+    id: 'kimi',
+    displayName: 'Kimi Code',
+    defaultBin: 'kimi',
+    glyph: 'K',
+    brandBg: 'oklch(60% .2 20 / .2)',
+    brandColor: 'oklch(66% .19 20)',
+    // Kimi Code CLI（MoonshotAI/kimi-code，npm @moonshot-ai/kimi-code，二进制 kimi）—— 新的 TypeScript 版
+    // （非老的 Python kimi-cli）。无头:kimi -p "<prompt>" --output-format text（print 模式隐含 --afk 自动批准所有
+    // 工具调用）。模型用 --model;不传用账号默认。
+    defaultModels: [
+      { id: 'default', label: '账号默认', description: '用 kimi 配置的默认模型' },
+      { id: 'kimi-k2.5', label: 'kimi-k2.5', description: 'K2.5 · 256K 上下文' },
+    ],
+    installCmd: 'npm install -g @moonshot-ai/kimi-code',
+    authCmd: 'kimi',
+    installHelp: '安装后运行 kimi，用 /login 选择 Kimi Code OAuth 或 Moonshot 开放平台 API key（也可设 MOONSHOT_API_KEY）。',
+  },
 ]
 
 // Lookup helpers
@@ -164,4 +199,6 @@ export const PROVIDER_DEFAULT_WINDOW: Record<string, number> = {
   opencode: 200_000,
   qwen: 256_000,
   copilot: 128_000,
+  pi: 200_000,
+  kimi: 256_000,
 }

@@ -12,6 +12,8 @@ export const CLI_NPM_PACKAGE: Record<string, string> = {
   qwen: '@qwen-code/qwen-code',
   copilot: '@github/copilot',
   opencode: 'opencode-ai',
+  pi: '@earendil-works/pi-coding-agent',
+  kimi: '@moonshot-ai/kimi-code',
 }
 
 export interface CliUpdateInfo {
