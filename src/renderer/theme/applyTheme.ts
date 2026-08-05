@@ -1,15 +1,50 @@
 import type { Appearance } from '@shared/types'
 import { DEFAULT_BG_POSITION } from '@shared/wallpaper'
+import { KNOWN_SKIN_IDS, SKIN_BASE } from '@shared/skins'
 
 export function prefersDark(): boolean {
   try { return window.matchMedia('(prefers-color-scheme: dark)').matches } catch { return false }
 }
 
+// 叠在自定义强调色上的文字色:按所选 #rrggbb 的感知亮度(sRGB 加权)判深/浅,亮色配深字、暗色配白字,
+// 保证强调色按钮上的文字可读。非法输入(非 6 位 hex)回落到白字。与预设色里 --on-accent 的处理同理。
+export function onAccentFor(hex: string): string {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex.trim())
+  if (!m) return 'oklch(99% 0 0)'
+  const n = parseInt(m[1], 16)
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
+  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+  return lum > 0.5 ? 'oklch(20% 0 0)' : 'oklch(99% 0 0)'
+}
+
 export function applyTheme(a: Appearance): void {
   const root = document.documentElement
-  const theme = a.theme === 'auto' ? (prefersDark() ? 'dark' : 'light') : a.theme
+  // 主题皮肤(叠加层):有效内置 id → 打 data-skin(skins.css 的 :root[data-skin] 覆盖整套 token + 显示 motif)。
+  const skin = a.activeSkin && KNOWN_SKIN_IDS.has(a.activeSkin) ? a.activeSkin : ''
+  // 皮肤生效时 data-theme 跟随皮肤的明暗基调(light/dark),让所有 [data-theme=...] 作用域的样式(尤其一些
+  // 硬编码白字/深底的 dark 规则)与皮肤一致 —— 否则浅色皮肤上仍会命中 dark 规则导致白字失明。无皮肤时用用户
+  // 自己的主题(auto 跟随系统)。
+  const theme = skin ? SKIN_BASE[skin] : (a.theme === 'auto' ? (prefersDark() ? 'dark' : 'light') : a.theme)
   root.setAttribute('data-theme', theme)
   root.setAttribute('data-accent', a.accent)
+  if (skin) root.setAttribute('data-skin', skin)
+  else root.removeAttribute('data-skin')
+  // 自定义强调色:accent==='custom' 时,把用户选的颜色直接写成内联 --accent 及其派生基色(内联样式优先级高过
+  // tokens.css 里 [data-accent=...] 的规则)。其它深浅/hover/ring 都在各站点用 color-mix(var(--accent)) 现算,
+  // 故只需喂 4 个:--accent 本色、--accent-dim 低透明度底色、--run 运行态(取同色)、--on-accent 叠加其上的文字色
+  // (按所选色的感知亮度判黑/白,保证按钮文字可读)。切回预设色时清掉这些内联,交还给 data-accent 属性选择器。
+  const custom = a.accent === 'custom' ? (a.accentCustom ?? '').trim() : ''
+  if (custom) {
+    root.style.setProperty('--accent', custom)
+    root.style.setProperty('--accent-dim', `color-mix(in oklab, ${custom} 16%, transparent)`)
+    root.style.setProperty('--run', custom)
+    root.style.setProperty('--on-accent', onAccentFor(custom))
+  } else {
+    root.style.removeProperty('--accent')
+    root.style.removeProperty('--accent-dim')
+    root.style.removeProperty('--run')
+    root.style.removeProperty('--on-accent')
+  }
   root.setAttribute('data-vibrancy', a.vibrancy ? 'on' : 'off')
   // 磨砂度 drives the glass system: any blurAmount > 0 turns on the frosted-panel CSS (data-glass) and
   // scales the panel backdrop-blur via a CSS var (0..1 → 0..designed strength). The window-level desktop

@@ -83,7 +83,14 @@ const fontSizePx = (legacy: Record<string, number>, def: number) =>
 
 export const AppearanceSchema = z.object({
   theme: z.enum(['dark', 'light', 'auto', 'midnight', 'sepia', 'forest']),
-  accent: z.enum(['blue', 'violet', 'indigo', 'cyan', 'teal', 'emerald', 'lime', 'amber', 'orange', 'rose', 'magenta', 'graphite']).default('blue'),
+  accent: z.enum(['blue', 'violet', 'indigo', 'cyan', 'teal', 'emerald', 'lime', 'amber', 'orange', 'rose', 'magenta', 'graphite', 'custom']).default('blue'),
+  // 'custom' 强调色的实际取值(#rrggbb)。仅当 accent==='custom' 生效;applyTheme 据此写内联 --accent/--accent-dim/
+  // --run/--on-accent(其余深浅色都在各 CSS 站点用 color-mix 从 --accent 现算,故只需喂这几个基色)。可选,老配置无此字段。
+  accentCustom: z.string().optional(),
+  // 主题皮肤(叠加层):内置皮肤 id(见 src/shared/skins.ts)。applyTheme 据此在根节点打 data-skin,
+  // skins.css 的 :root[data-skin=id] 块覆盖整套中性色+accent。null/缺省 = 不套皮肤,用用户原本的 theme/accent。
+  // 纯叠加,不改写其它外观字段;清空即还原。可选,老配置无此字段。
+  activeSkin: z.string().nullable().optional(),
   vibrancy: z.boolean(),
   glass: z.boolean().default(false),
   // Whole-window transparency via BrowserWindow.setOpacity — reliable + live (no restart), unlike the

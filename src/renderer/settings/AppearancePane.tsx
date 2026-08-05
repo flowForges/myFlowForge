@@ -1,5 +1,8 @@
+import { useEffect, useState } from 'react'
 import type { Appearance, Terminal } from '@shared/types'
+import { vibrancyMaterial } from '@shared/vibrancy'
 import { FontPicker } from './FontPicker'
+import { SkinsPane } from './SkinsPane'
 
 // 「外观」页只留与背景图无关的外观设置:主题、强调色、界面(窗口透明度/磨砂度/密度)、字体、终端字体。
 // 内置壁纸库与所有背景图控件已拆到独立的「壁纸背景」页(BackgroundPane),两者操作同一套背景状态、放一起更顺。
@@ -55,15 +58,28 @@ const CHAT_LH_SUGGESTED = 1.7
 
 export function AppearancePane({ appearance, onChange, terminal, onTerminalChange }: AppearancePaneProps) {
   const opacity = appearance.windowOpacity ?? 1
+  const skinActive = !!appearance.activeSkin   // 套了皮肤 → 基础主题(明暗/配色)被接管,下面那段变灰提示
+  const customAccent = appearance.accentCustom ?? ''
   const blur = appearance.blurAmount ?? 0
+  // 磨砂度改动是否真需要重启:应用内面板毛玻璃是实时 CSS,不需要;只有「桌面背景磨砂(原生 vibrancy)」需要,
+  // 而它是建窗时定死的。所以只在当前磨砂级别落到与「启动时窗口实际用的级别」不同的 vibrancy 档位时,才提示重启
+  // ——同档位内拖动、或压根没改,都不提示,避免那颗一直挂着的「没用的重启按钮」。
+  const [baselineBlur, setBaselineBlur] = useState<number | null>(null)
+  useEffect(() => { window.forge?.appVibrancyBaseline?.().then(setBaselineBlur).catch(() => {}) }, [])
+  const restartPending = baselineBlur != null && vibrancyMaterial(baselineBlur) !== vibrancyMaterial(blur)
   const appFont = appearance.fontFamily ?? ''
   const textWeight = appearance.textWeight ?? WEIGHT_SUGGESTED
   const chatLineHeight = appearance.chatLineHeight ?? CHAT_LH_SUGGESTED
   const chatLetterSpacing = appearance.chatLetterSpacing ?? 0
   return (
     <>
-      <div className="set-group">
-        <h4>主题</h4>
+      {/* 主题皮肤画廊置于外观页最顶:一键成套预设(接管配色)。选「默认」时,下面的手动主题/强调色才是主控。 */}
+      <SkinsPane appearance={appearance} onChange={onChange} />
+      <div className={`set-group${skinActive ? ' set-group-overridden' : ''}`}>
+        <h4>基础主题</h4>
+        {skinActive
+          ? <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>明暗与配色<b style={{ color: 'var(--fg-2)' }}>已被主题皮肤接管</b> —— 点上方「恢复默认外观」清掉皮肤后,这里的手动挡才生效(自定义强调色仍可随时覆盖皮肤)。</p>
+          : <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>没套皮肤(或想在皮肤之外微调)时,这里是手动挡:明暗基调 + 强调色。</p>}
         <div className="theme-cards" id="themeCards">
           {THEMES.map(({ key, label }) => (
             <button
@@ -86,6 +102,21 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
               <i style={{ background: color }} />{ACK}
             </button>
           ))}
+          {/* 自定义强调色:一颗打开系统色卡(原生 <input type=color>)的色板,选中即写 accent='custom'+accentCustom。
+              未选时显示彩虹环示意「自选」,选中后显示所选色。 */}
+          <label className={`accent-sw accent-sw-custom${appearance.accent === 'custom' ? ' on' : ''}`} title="自定义(用色卡自选)">
+            <i style={appearance.accent === 'custom' && customAccent
+              ? { background: customAccent }
+              : { background: 'conic-gradient(from 90deg, #f43f5e, #f59e0b, #84cc16, #06b6d4, #6366f1, #d946ef, #f43f5e)' }} />
+            {ACK}
+            <input
+              type="color"
+              className="accent-color-input"
+              aria-label="自定义强调色"
+              value={/^#[0-9a-fA-F]{6}$/.test(customAccent) ? customAccent : '#3b82f6'}
+              onChange={e => onChange({ accent: 'custom', accentCustom: e.target.value })}
+            />
+          </label>
         </div>
       </div>
       <div className="set-group">
@@ -132,10 +163,10 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
             </span>
           </div>
         </div>
-        {blur > 0 && (
+        {restartPending && (
           <div className="set-row">
             <div className="info">
-              <div className="d" style={{ color: 'var(--muted)' }}>桌面背景磨砂在下次启动时应用</div>
+              <div className="d" style={{ color: 'var(--muted)' }}>桌面背景磨砂已改变,需重启才能应用到窗口</div>
             </div>
             <button className="wf-pick" onClick={() => window.forge.appRelaunch()}>立即重启生效</button>
           </div>

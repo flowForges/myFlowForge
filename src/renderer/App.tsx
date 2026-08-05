@@ -571,6 +571,9 @@ export function App() {
       {/* App-wide background image layer (shown only when appearance.bgScope === 'app'; the chat-only
           scope is drawn by .chat::before instead). Fixed, behind all chrome, image + opacity from CSS vars. */}
       <div className="app-bg-layer" aria-hidden="true" />
+      {/* 主题皮肤氛围层:与 .app-bg-layer 同层次(--bg 之上、内容之下),仅在 data-skin 激活时由 skins.css
+          显示对应 motif。纯装饰、不吃事件。 */}
+      <div className="skin-motif" aria-hidden="true" />
       <Titlebar
         collapsed={collapsed}
         onToggleSidebar={() => setCollapsed(c => !c)}

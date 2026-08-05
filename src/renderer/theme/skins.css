@@ -1,0 +1,160 @@
+/* ============================================================================
+   主题皮肤(叠加层)。每套皮肤两部分:
+     1) :root[data-skin="id"]  —— 覆盖整套中性色 + accent(和 tokens.css 的命名主题变体同构)。
+        特异性 (0,2,0) 胜过 [data-theme](0,1,0);本文件在 index.html 里最后引入,顺序压过 accent 块。
+        只覆盖 token,不动任何组件样式 —— 全 App 通过 var() 自动跟随。
+     2) [data-skin="id"] .skin-motif —— 该皮肤的全窗氛围层(纯 CSS 渐变)。
+   .skin-motif 复刻 .app-bg-layer 的层次:在 .window 的 --bg 之上、内容之下(z-index:-1),
+   透过透明的主内容视图显示,被不透明面板(侧栏/标题栏)自然遮成边框。data-skin 由 applyTheme 打/清。
+   加一套皮肤 = 加一个 :root[data-skin] 块 + 一个 .skin-motif 块 + src/shared/skins.ts 加一条元数据。
+   ============================================================================ */
+
+.skin-motif { position: absolute; inset: 0; z-index: -1; pointer-events: none; display: none; overflow: hidden; }
+[data-skin] .skin-motif { display: block; }
+
+/* ---------- 熔炉 Forge(dark · 暗铁熔金)---------- */
+:root[data-skin="forge"] {
+  --bg: #14100c; --bg-2: #1b150e; --sidebar: #100c08;
+  --surface: #2e281f; --surface-2: #3a3328;
+  --fg: #f6ece0; --fg-2: #d8c4ad; --muted: #d0ad86; --faint: #a98a63;
+  --border: #2e2418; --border-2: #3a2d1d;
+  --accent: #ff7a1a; --accent-dim: color-mix(in oklab, #ff7a1a 16%, transparent); --on-accent: #1a1008;
+  --run: #ff9a3c;
+  --glass-window: color-mix(in srgb, #14100c 86%, transparent);
+  --glass-panel: color-mix(in srgb, #211a12 84%, transparent);
+  --glass-sidebar: color-mix(in srgb, #100c08 84%, transparent);
+}
+[data-skin="forge"] .skin-motif {
+  background:
+    radial-gradient(120% 60% at 50% 118%, rgba(255,122,26,.42), transparent 60%),
+    radial-gradient(70% 45% at 80% 116%, rgba(255,206,92,.30), transparent 60%),
+    radial-gradient(2px 2px at 18% 72%, rgba(255,206,92,.9), transparent),
+    radial-gradient(2px 2px at 44% 60%, rgba(255,154,60,.9), transparent),
+    radial-gradient(1.5px 1.5px at 66% 68%, rgba(255,206,92,.8), transparent),
+    radial-gradient(1.5px 1.5px at 84% 52%, rgba(255,122,26,.8), transparent),
+    radial-gradient(1.5px 1.5px at 30% 40%, rgba(255,206,92,.55), transparent);
+}
+
+/* ---------- 极夜 Aurora(dark · 极光星夜)---------- */
+:root[data-skin="aurora"] {
+  --bg: #0a0e1a; --bg-2: #0e1424; --sidebar: #080b16;
+  --surface: #242a37; --surface-2: #303748;
+  --fg: #eef3ff; --fg-2: #c4d1ec; --muted: #aebbd8; --faint: #8496bd;
+  --border: #202a44; --border-2: #2a3757;
+  --accent: #4fd6c4; --accent-dim: color-mix(in oklab, #4fd6c4 16%, transparent); --on-accent: #04121a;
+  --run: #5fe0cf;
+  --glass-window: color-mix(in srgb, #0a0e1a 86%, transparent);
+  --glass-panel: color-mix(in srgb, #141d33 84%, transparent);
+  --glass-sidebar: color-mix(in srgb, #080b16 84%, transparent);
+}
+[data-skin="aurora"] .skin-motif {
+  background:
+    radial-gradient(1.5px 1.5px at 22% 24%, rgba(238,243,255,.9), transparent),
+    radial-gradient(1.5px 1.5px at 62% 18%, rgba(207,224,255,.8), transparent),
+    radial-gradient(1px 1px at 82% 34%, rgba(255,255,255,.7), transparent),
+    radial-gradient(1.5px 1.5px at 40% 60%, rgba(238,243,255,.55), transparent),
+    linear-gradient(115deg, transparent 32%, rgba(79,214,196,.20) 46%, rgba(169,139,255,.24) 60%, transparent 74%),
+    linear-gradient(158deg, transparent 58%, rgba(79,214,196,.13) 74%, transparent 88%);
+}
+
+/* ---------- 墨山水 Ink(light · 宣纸远山)---------- */
+:root[data-skin="ink"] {
+  --bg: #f1ebdf; --bg-2: #ece5d6; --sidebar: #ebe3d3;
+  --surface: #faf6ec; --surface-2: #f3ecdd;
+  --fg: #2b2a26; --fg-2: #4a473f; --muted: #6d6759; --faint: #847d6b;
+  --border: #ddd4c2; --border-2: #cfc4ad;
+  --accent: #c0392b; --accent-dim: color-mix(in oklab, #c0392b 12%, transparent); --on-accent: #ffffff;
+  --run: #c0392b;
+  --glass-window: color-mix(in srgb, #f1ebdf 58%, transparent);
+  --glass-panel: color-mix(in srgb, #faf6ec 55%, transparent);
+  --glass-sidebar: color-mix(in srgb, #ebe3d3 55%, transparent);
+}
+[data-skin="ink"] .skin-motif {
+  background:
+    linear-gradient(180deg, rgba(43,42,38,0), rgba(43,42,38,.06) 80%, rgba(43,42,38,.14)),
+    radial-gradient(80% 42% at 18% 112%, rgba(44,43,39,.30), transparent 60%),
+    radial-gradient(64% 40% at 60% 118%, rgba(44,43,39,.22), transparent 60%),
+    radial-gradient(46% 34% at 92% 120%, rgba(44,43,39,.28), transparent 60%);
+}
+
+/* ---------- 深海 Abyss(dark · 生物荧光)---------- */
+:root[data-skin="abyss"] {
+  --bg: #050d10; --bg-2: #081418; --sidebar: #04090b;
+  --surface: #1e2d2f; --surface-2: #283c3e;
+  --fg: #e6fbf7; --fg-2: #b3ded7; --muted: #92b7b2; --faint: #6f938e;
+  --border: #13282d; --border-2: #1b373d;
+  --accent: #22d3c5; --accent-dim: color-mix(in oklab, #22d3c5 16%, transparent); --on-accent: #02110f;
+  --run: #2fe0d1;
+  --glass-window: color-mix(in srgb, #050d10 86%, transparent);
+  --glass-panel: color-mix(in srgb, #0d1c21 84%, transparent);
+  --glass-sidebar: color-mix(in srgb, #04090b 84%, transparent);
+}
+[data-skin="abyss"] .skin-motif {
+  background:
+    radial-gradient(60% 44% at 28% 16%, rgba(34,211,197,.16), transparent 60%),
+    radial-gradient(50% 40% at 84% 26%, rgba(124,255,178,.13), transparent 60%),
+    radial-gradient(1.5px 1.5px at 24% 62%, rgba(124,255,178,.8), transparent),
+    radial-gradient(1.5px 1.5px at 50% 46%, rgba(34,211,197,.8), transparent),
+    radial-gradient(1px 1px at 70% 72%, rgba(124,255,178,.7), transparent),
+    radial-gradient(1.5px 1.5px at 88% 58%, rgba(34,211,197,.7), transparent),
+    radial-gradient(1px 1px at 38% 30%, rgba(124,255,178,.55), transparent);
+}
+
+/* ---------- 合成波 Synthwave(dark · 霓虹网格)---------- */
+:root[data-skin="synth"] {
+  --bg: #140720; --bg-2: #1a0a2a; --sidebar: #0f0518;
+  --surface: #2b2536; --surface-2: #383044;
+  --fg: #fdeaff; --fg-2: #e6c7ef; --muted: #c6a1da; --faint: #9d78ba;
+  --border: #301546; --border-2: #3f1e5a;
+  --accent: #ff4d8d; --accent-dim: color-mix(in oklab, #ff4d8d 16%, transparent); --on-accent: #1a0512;
+  --run: #ff6ba0;
+  --glass-window: color-mix(in srgb, #140720 86%, transparent);
+  --glass-panel: color-mix(in srgb, #200c31 84%, transparent);
+  --glass-sidebar: color-mix(in srgb, #0f0518 84%, transparent);
+}
+[data-skin="synth"] .skin-motif {
+  background:
+    radial-gradient(50% 44% at 50% 116%, rgba(255,77,141,.30), transparent 62%),
+    radial-gradient(24% 26% at 50% 108%, rgba(255,143,180,.28), transparent 70%);
+}
+[data-skin="synth"] .skin-motif::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 46%;
+  background:
+    repeating-linear-gradient(90deg, rgba(33,230,255,.28) 0 1px, transparent 1px 46px),
+    repeating-linear-gradient(0deg, rgba(33,230,255,.28) 0 1px, transparent 1px 38px);
+  transform: perspective(320px) rotateX(62deg); transform-origin: bottom; opacity: .5;
+}
+
+/* ---------- 苔庭 Mossgarden(light · 植物庭院)---------- */
+:root[data-skin="moss"] {
+  --bg: #efece2; --bg-2: #e9e5d8; --sidebar: #e8e4d6;
+  --surface: #f8f5ec; --surface-2: #f1ede0;
+  --fg: #33352c; --fg-2: #4c4e42; --muted: #6f6f5e; --faint: #82826f;
+  --border: #dcd8c8; --border-2: #cdc8b4;
+  --accent: #6f8f5a; --accent-dim: color-mix(in oklab, #6f8f5a 14%, transparent); --on-accent: #ffffff;
+  --run: #6f8f5a;
+  --glass-window: color-mix(in srgb, #efece2 58%, transparent);
+  --glass-panel: color-mix(in srgb, #f8f5ec 55%, transparent);
+  --glass-sidebar: color-mix(in srgb, #e8e4d6 55%, transparent);
+}
+[data-skin="moss"] .skin-motif {
+  background:
+    radial-gradient(56% 44% at 80% 10%, rgba(198,123,78,.16), transparent 60%),
+    radial-gradient(64% 52% at 18% 112%, rgba(111,143,90,.24), transparent 62%),
+    radial-gradient(5px 9px at 30% 28%, rgba(111,143,90,.28), transparent),
+    radial-gradient(4px 8px at 58% 20%, rgba(111,143,90,.22), transparent),
+    radial-gradient(4px 7px at 80% 38%, rgba(198,123,78,.22), transparent),
+    radial-gradient(4px 8px at 44% 60%, rgba(111,143,90,.18), transparent);
+}
+
+/* 皮肤生效时统一软化边框:所有 border 换成随该皮肤 --fg 的半透明色(与壁纸模式 global.css:57-60 同法),
+   让整窗的分隔线 / 卡片外框 / 顶栏底栏切割不再是硬黑线。放在各皮肤块之后,覆盖它们各自设的 --border。
+   这是对「黑色分割线太多」的通盘处理:一次性作用于所有走 var(--border) 的接缝,无需逐个组件改。 */
+:root[data-skin] {
+  --border: color-mix(in oklab, var(--fg) 13%, transparent);
+  --border-2: color-mix(in oklab, var(--fg) 22%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 目前 motif 为静态渐变,无动画;此处占位,后续若加飘动动效需在此关掉。 */
+}

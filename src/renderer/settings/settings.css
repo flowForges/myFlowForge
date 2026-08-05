@@ -133,6 +133,44 @@
 .accent-sw.on { border-color: var(--fg-2); }
 .accent-sw .ck { position: absolute; width: 13px; height: 13px; color: #fff; opacity: 0; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
 .accent-sw.on .ck { opacity: 1; }
+/* 自定义强调色色板:整块可点,原生 <input type=color> 铺满但透明,点哪都唤起系统色卡。 */
+.accent-sw-custom { cursor: pointer; overflow: hidden; }
+.accent-sw-custom .accent-color-input {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; padding: 0; border: 0; background: transparent; opacity: 0; cursor: pointer;
+}
+
+/* 套了皮肤时,「基础主题」段的明暗卡片调淡表示被接管(仍可点,hover 提亮以便预览/选择)。 */
+.set-group-overridden .theme-cards { opacity: .4; transition: opacity .15s; }
+.set-group-overridden .theme-cards:hover { opacity: .72; }
+
+/* ---- 主题皮肤画廊 ---- */
+.skins-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.skins-sub { margin: 4px 0 0; color: var(--muted); font-size: 12px; max-width: 480px; line-height: 1.55; }
+.skin-reset { flex: 0 0 auto; height: 30px; padding: 0 13px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--fg-2); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.skin-reset:hover:not(:disabled) { border-color: var(--border-2); }
+.skin-reset:disabled { opacity: .45; cursor: default; }
+.skins-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+.skin-card { display: flex; flex-direction: column; gap: 0; text-align: left; padding: 0; overflow: hidden;
+  border-radius: 12px; border: 1.5px solid var(--border); background: var(--surface); cursor: pointer;
+  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease; }
+.skin-card:hover { transform: translateY(-2px); border-color: var(--border-2); box-shadow: 0 10px 26px -18px rgba(0,0,0,.5); }
+.skin-card.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.skin-prev { position: relative; height: 74px; overflow: hidden; }
+.skin-prev-side { position: absolute; left: 0; top: 0; bottom: 0; width: 32%; border-right: 1px solid rgba(255,255,255,.08); }
+.skin-prev-pill { position: absolute; left: calc(32% + 12px); top: 44px; width: 46px; height: 12px; border-radius: 99px; }
+.skin-prev-dot { position: absolute; right: 12px; bottom: 12px; width: 18px; height: 18px; border-radius: 50%;
+  box-shadow: 0 0 12px 1px currentColor; }
+.skin-info { padding: 11px 13px 13px; display: flex; flex-direction: column; gap: 7px; }
+.skin-nm { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+.skin-nm b { font-size: 14px; color: var(--fg); font-weight: 650; }
+.skin-en { font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); font-family: var(--mono); }
+.skin-tag { margin-left: auto; font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 99px;
+  color: var(--accent); background: var(--accent-dim); white-space: nowrap; }
+.skin-vibe { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.skin-sw { display: flex; gap: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.skin-sw i { flex: 1; height: 14px; }
 
 /* toggle / select */
 .toggle { width: 40px; height: 24px; border-radius: 99px; background: var(--surface-2); position: relative; transition: background .16s; flex: 0 0 40px; }
