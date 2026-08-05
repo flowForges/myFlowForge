@@ -158,7 +158,9 @@
 /* Group heading so the repo sublist reads as "this workspace's repos" — a multi-repo workspace
    otherwise looks like it has other workspaces nested under it (user-reported confusion). */
 .ic-proj-head { margin-top: 7px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
-.ic-row.ic-proj { display: flex; align-items: center; gap: 6px; padding: 4px 0 4px 10px; }
+/* 仓库行与上方 编码代理/工作目录 标签、以及「本工作区项目」小标题共用同一条左缘(x=0),不再额外缩进 10px
+   ——否则上半键值区在左缘、下半仓库列表却右移,左缘参差看着别扭。 */
+.ic-row.ic-proj { display: flex; align-items: center; gap: 6px; padding: 4px 0; }
 .ic-row.ic-proj > .ic-proj-name { color: var(--fg-2); font-weight: 500; min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ic-row.ic-proj .tree-branch-tag { margin-left: 0; }
 
@@ -267,7 +269,7 @@
 .stage { position: relative; }
 .stage:not(:last-child)::after {
   content: ""; position: absolute; left: 11px; top: 25px; bottom: -3px;
-  width: 1.5px; background: var(--border);
+  width: 1.5px; background: color-mix(in oklab, var(--border) 55%, transparent);
 }
 .stage.ok:not(:last-child)::after,
 .stage.run:not(:last-child)::after {
@@ -315,7 +317,7 @@
 .agent-node { position: relative; }
 .stage-agents .agent-node::before {
   content: ""; position: absolute; left: -20px; top: 18px;
-  width: 16px; height: 1.5px; background: var(--border);
+  width: 16px; height: 1.5px; background: color-mix(in oklab, var(--border) 55%, transparent);
 }
 /* —— 并发阶段:突出「多代理同时执行」 —— */
 /* 阶段头的 mode 胶囊在并发时变成强调态,前缀分叉符号 */
@@ -354,7 +356,7 @@
 
 .agent-card {
   width: 100%; text-align: left; background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--r);
+  border: 1px solid color-mix(in oklab, var(--border) 60%, transparent); border-radius: var(--r);
   padding: 8px 10px; transition: .14s; position: relative; cursor: pointer;
 }
 .agent-card:hover { border-color: var(--border-2); }

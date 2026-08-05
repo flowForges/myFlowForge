@@ -6,8 +6,9 @@
 .dl-actions .set-btn.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, transparent); }
 
 .dl-bar { display: flex; align-items: center; gap: 12px; margin: 14px 0 8px; flex-wrap: wrap; }
-.dl-filters { display: flex; gap: 6px; }
-.dl-fch { height: 26px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
+.dl-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+/* flex:0 0 auto + nowrap:窄空间下整颗 chip 一起换行,而不是把「全部/错误」这种两字标签逐字挤成竖排。 */
+.dl-fch { flex: 0 0 auto; white-space: nowrap; display: inline-flex; align-items: center; height: 26px; padding: 0 11px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
 .dl-fch.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .dl-stat { color: var(--muted); font-size: 12px; }
 .dl-auto { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }

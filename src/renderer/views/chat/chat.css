@@ -466,14 +466,14 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .msg-delegate { gap: 0; }
 
 /* 执行 block (ToolBlock.tsx): the main agent's own tool calls this turn — titles live, output collapsible. */
-.tool-block { margin: 2px 0 10px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in oklab, var(--surface) 55%, transparent); overflow: hidden; }
+.tool-block { margin: 2px 0 10px; border: 1px solid color-mix(in oklab, var(--border) 48%, transparent); border-radius: 9px; background: color-mix(in oklab, var(--surface) 55%, transparent); overflow: hidden; }
 .tool-lead { display: flex; align-items: center; gap: 6px; padding: 7px 11px; font-size: 11px; color: var(--faint); cursor: pointer; list-style: none; user-select: none; }
 .tool-lead::-webkit-details-marker { display: none; }
 .tool-lead-dot { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in oklab, var(--accent) 55%, var(--muted)); flex: 0 0 6px; }
 .tool-lead-dot.live { background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
-.tool-rows { border-top: 1px solid var(--border); }
-.tool-row { border-top: 1px solid color-mix(in oklab, var(--border) 55%, transparent); }
-.tool-row:first-child { border-top: none; }
+.tool-rows { border-top: 1px solid color-mix(in oklab, var(--border) 42%, transparent); }
+/* 去掉逐行分隔线 —— 整块被「网格线」切碎的主因。行与行靠留白 + hover 高亮区分,只留头部一条淡线。 */
+.tool-row { border-top: none; }
 .tool-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 11px; text-align: left; font-size: 12px; color: var(--fg-2); background: none; }
 .tool-head:not(:disabled) { cursor: pointer; }
 .tool-head:not(:disabled):hover { background: var(--surface-2); }
@@ -488,7 +488,7 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .tool-caret { font-size: 10px; color: var(--faint); transition: transform .12s; flex: 0 0 auto; }
 .tool-caret.open { transform: rotate(90deg); }
 .tool-output { margin: 0; padding: 8px 11px 10px 25px; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: color-mix(in oklab, var(--surface-2) 50%, transparent); }
-.subagent-card { border: 1px solid var(--border); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
+.subagent-card { border: 1px solid color-mix(in oklab, var(--border) 55%, transparent); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
 .subagent-card.s-running { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
 .subagent-card.s-error { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }
 .sac-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 11px; text-align: left; font-size: 12.5px; color: var(--fg-2); }
@@ -505,7 +505,7 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .sac-state.st-error { color: var(--err); background: oklch(68% 0.18 25 / 0.14); }
 .sac-caret { flex: 0 0 auto; color: var(--faint); transition: transform .14s; font-size: 11px; }
 .sac-caret.open { transform: rotate(90deg); }
-.sac-body { padding: 2px 12px 11px; display: flex; flex-direction: column; gap: 9px; border-top: 1px solid var(--border); }
+.sac-body { padding: 2px 12px 11px; display: flex; flex-direction: column; gap: 9px; border-top: 1px solid color-mix(in oklab, var(--border) 42%, transparent); }
 .sac-sec-h { font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
 .sac-sec-t { font-size: 12px; line-height: 1.55; color: var(--fg-2); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; }
 .sac-sec-t.sac-muted { color: var(--muted); font-style: italic; }

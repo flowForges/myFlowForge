@@ -9,8 +9,8 @@
   padding: 6px 10px;
   font-size: 12.5px;
   color: var(--fg);
-  background: color-mix(in srgb, #8b5cf6 16%, var(--bg));
-  border-bottom: 1px solid color-mix(in srgb, #8b5cf6 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
   backdrop-filter: saturate(1.2);
   /* 修图13:与下方内容(启动门/kick 气泡)拉开距离,别贴在一起。 */
   margin-bottom: 10px;
@@ -33,8 +33,8 @@
 .wf-ribbon-broken { color: var(--warn); opacity: .95; font-style: normal; font-weight: 600; }
 .wf-ribbon-dot {
   width: 8px; height: 8px; border-radius: 50%;
-  background: #8b5cf6;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #8b5cf6 30%, transparent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
   flex: 0 0 auto;
 }
 .wf-ribbon.executing .wf-ribbon-dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); animation: wf-pulse 1.4s ease-in-out infinite; }
@@ -42,7 +42,7 @@
 @keyframes wf-pulse { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
 .wf-ribbon-name { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wf-ribbon-sep { opacity: .4; }
-.wf-ribbon-stage b { font-weight: 700; color: #8b5cf6; }
+.wf-ribbon-stage b { font-weight: 700; color: var(--accent); }
 .wf-ribbon.executing .wf-ribbon-stage b { color: var(--accent); }
 .wf-ribbon-prov { opacity: .75; }
 .wf-ribbon-spacer { flex: 1 1 auto; }
@@ -50,8 +50,8 @@
 .wf-ribbon-next {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 3px 10px; border-radius: 7px;
-  border: 1px solid color-mix(in srgb, #8b5cf6 55%, transparent);
-  background: #8b5cf6; color: #fff;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--accent); color: var(--on-accent);
   font-size: 12px; font-weight: 600; cursor: pointer;
 }
 .wf-ribbon-next:hover:not(:disabled) { filter: brightness(1.08); }
@@ -67,19 +67,19 @@
 .wf-ribbon-exit svg { width: 13px; height: 13px; }
 
 /* 修图8:右侧"当前工作流进度"卡(对话阶段也可见)。 */
-.wf-prog { margin: 4px 0 12px; border: 1px solid color-mix(in srgb, #8b5cf6 30%, transparent); border-radius: 10px; overflow: hidden; }
-.wf-prog-h { padding: 8px 12px; font-weight: 600; font-size: 12.5px; background: color-mix(in srgb, #8b5cf6 10%, var(--bg)); border-bottom: 1px solid color-mix(in srgb, #8b5cf6 18%, transparent); }
+.wf-prog { margin: 4px 0 12px; border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 10px; overflow: hidden; }
+.wf-prog-h { padding: 8px 12px; font-weight: 600; font-size: 12.5px; background: color-mix(in srgb, var(--accent) 10%, var(--bg)); border-bottom: 1px solid color-mix(in srgb, var(--accent) 18%, transparent); }
 .wf-prog-stage { display: flex; align-items: center; gap: 9px; padding: 8px 12px; border-top: 1px solid color-mix(in srgb, var(--fg) 6%, transparent); }
 .wf-prog-stage:first-of-type { border-top: none; }
 .wf-prog-idx { width: 20px; height: 20px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 11px; font-weight: 700; background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--muted); }
-.wf-prog-stage.done .wf-prog-idx { background: #10b981; color: #fff; }
-.wf-prog-stage.current .wf-prog-idx, .wf-prog-stage.run .wf-prog-idx { background: #8b5cf6; color: #fff; }
+.wf-prog-stage.done .wf-prog-idx { background: var(--ok); color: #fff; }
+.wf-prog-stage.current .wf-prog-idx, .wf-prog-stage.run .wf-prog-idx { background: var(--accent); color: var(--on-accent); }
 .wf-prog-stage.run .wf-prog-idx { animation: wf-pulse 1.4s ease-in-out infinite; }
 .wf-prog-nm { flex: 1 1 auto; font-size: 12.5px; }
 .wf-prog-stage.pending .wf-prog-nm { opacity: .55; }
 .wf-prog-stage.current .wf-prog-nm, .wf-prog-stage.run .wf-prog-nm { font-weight: 600; }
 .wf-prog-prov { font-size: 11px; opacity: .6; }
-.wf-prog-open { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 6px; border: 1px solid color-mix(in srgb, #8b5cf6 40%, transparent); background: transparent; color: #8b5cf6; cursor: pointer; }
-.wf-prog-open:hover { background: color-mix(in srgb, #8b5cf6 12%, transparent); }
+.wf-prog-open { flex: 0 0 auto; font-size: 11px; padding: 2px 7px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); background: transparent; color: var(--accent); cursor: pointer; }
+.wf-prog-open:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 #wfProgress { margin-bottom: 12px; }
 #wfProgress .pipe { margin-top: 6px; }

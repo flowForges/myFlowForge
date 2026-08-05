@@ -84,7 +84,7 @@ html[data-bg-scope="app"]:not([data-theme="light"]) .statusbar {
 html[data-bg-scope="app"]:not([data-theme="light"]) :is(
   .ws-scount,           /* 侧栏工作区的会话数徽章 */
   .chg-group-h,         /* 变更面板的项目分组头(go-blog / zgh / go-blog-backend) */
-  .insp-proj select,    /* 「全部项目」下拉 */
+  .insp-proj .ipk-trigger,  /* 「全部项目」下拉触发器(自绘) */
   .tree-search,         /* 文件树 / 变更 的搜索框(放大镜 + 输入) */
   .tree-expand-tools    /* 文件树右上的刷新 / 隐藏 / 折叠 按钮组容器 */
 ) {
