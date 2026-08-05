@@ -3,7 +3,7 @@ import { registerGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts/
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { createMainWindow } from './windows/mainWindow'
+import { createMainWindow, builtWindowBlurAmount } from './windows/mainWindow'
 import { createPetWindow, resolvePetLayout, MARGIN, clampPetSprite, petClampRegion } from './windows/petWindow'
 import { parkWindowInDock, resolveCloseAction, resolveDockActivationAction } from './windows/closeBehavior'
 import { relocatePetToRegion, PET_EXPANDED, PET_BUBBLE, petCollapsedSize, petPopupSize, clampPetScale, petMaxSize, petResizeFootprint } from '@shared/petGeometry'
@@ -480,6 +480,10 @@ app.whenReady().then(() => {
   // rebuild the window. Let the settings UI trigger it directly. Force-quit past the close-action
   // guard (set quitting) so the app actually exits and relaunches instead of parking in the Dock.
   ipcMain.handle(CH.appRelaunch, () => { quitting = true; app.relaunch(); app.exit(0) })
+  // The 磨砂度 the current window was actually built with, so the settings UI only prompts for a restart
+  // when a level change crosses into a different vibrancy material (a genuine window rebuild) — not on
+  // every blur>0. Returns a raw blurAmount; the renderer buckets it via the shared vibrancyMaterial().
+  ipcMain.handle(CH.appVibrancyBaseline, () => builtWindowBlurAmount())
 
   const onSettings = (s: Settings) => {
     // Window transparency applies LIVE (setOpacity) — the slider updates instantly, no restart.

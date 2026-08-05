@@ -176,6 +176,7 @@ export const CH = {
   windowToggleMaximize: 'window:toggle-maximize',
   windowClose: 'window:close',
   appRelaunch: 'app:relaunch',
+  appVibrancyBaseline: 'app:vibrancy-baseline',
   appIconOptions: 'app-icon:options',
   termCreate: 'term:create',
   termWrite: 'term:write',

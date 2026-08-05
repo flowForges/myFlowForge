@@ -248,6 +248,7 @@ const api = {
   windowToggleMaximize: () => ipcRenderer.invoke(CH.windowToggleMaximize),
   windowClose: () => ipcRenderer.invoke(CH.windowClose),
   appRelaunch: () => ipcRenderer.invoke(CH.appRelaunch),
+  appVibrancyBaseline: (): Promise<number> => ipcRenderer.invoke(CH.appVibrancyBaseline),
   getAppIconOptions: (): Promise<Array<{ id: import('@shared/types').DockIcon; label: string; filename: string; src: string }>> => ipcRenderer.invoke(CH.appIconOptions),
   termCreate: (opts: { termId: string; cwd?: string; cols: number; rows: number }) => ipcRenderer.invoke(CH.termCreate, opts),
   termWrite: (termId: string, data: string) => ipcRenderer.send(CH.termWrite, { termId, data }),

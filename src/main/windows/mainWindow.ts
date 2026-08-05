@@ -1,17 +1,15 @@
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 import { readSettings } from '../config/store'
+import { vibrancyMaterial } from '@shared/vibrancy'
 
-// 磨砂度 (0..1) → macOS vibrancy material, or undefined when off. The glass.css system (see its header)
-// expects a transparent + `under-window`-style window so the real desktop shows through frosted; we pick
-// a progressively stronger material as the amount rises. Set at window CREATION only.
-export function vibrancyMaterial(amount: number | undefined): 'sidebar' | 'under-window' | 'fullscreen-ui' | undefined {
-  const a = amount ?? 0
-  if (a <= 0) return undefined
-  if (a < 0.4) return 'sidebar'
-  if (a < 0.75) return 'under-window'
-  return 'fullscreen-ui'
-}
+export { vibrancyMaterial }
+
+// The 磨砂度 (blurAmount) the current main window was actually BUILT with. Because vibrancy/transparent
+// are construction-time only, this is the baseline the settings UI compares against to decide whether a
+// level change truly needs a relaunch (same material bucket → no restart). Updated on each createMainWindow.
+let builtBlurAmount = 0
+export function builtWindowBlurAmount(): number { return builtBlurAmount }
 
 export function createMainWindow(): BrowserWindow {
   // Frameless, custom traffic-lights. Two visual modes:
@@ -21,7 +19,8 @@ export function createMainWindow(): BrowserWindow {
   //     relaunch — this avoids the live-toggle render glitch that shelved the path); CSS panel blur is live.
   const theme = (() => { try { return readSettings().appearance.theme } catch { return 'light' } })()
   const opacity = (() => { try { return readSettings().appearance.windowOpacity ?? 1 } catch { return 1 } })()
-  const vibrancy = (() => { try { return vibrancyMaterial(readSettings().appearance.blurAmount) } catch { return undefined } })()
+  builtBlurAmount = (() => { try { return readSettings().appearance.blurAmount ?? 0 } catch { return 0 } })()
+  const vibrancy = vibrancyMaterial(builtBlurAmount)
   // 让窗口在【光标所在屏(= 启动时用户操作/聚焦的那块屏)】居中,而不是默认居中主屏 —— 多屏下(如外接显示器上
   // 启动)之前无 x/y 会跑到非当前屏。取光标屏的 workArea 居中;取不到(无头/测试环境)则回落 Electron 默认。
   const W = 1280, H = 820
