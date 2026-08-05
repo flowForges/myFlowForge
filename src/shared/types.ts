@@ -280,6 +280,9 @@ export interface ChatSession {
   title: string
   mode: 'chat' | 'workflow'
   createdAt: number
+  // 「最后一次对话时间」(会话消息文件 mtime)。派生字段,不落盘,由 CH.sessionList 处理器按需附加(见
+  // sessionLastMessageMtime)。会话列表显示的时间用它而非 createdAt —— 用户关心最近聊的时间,不是首次开始。
+  lastMessageAt?: number
   runId?: string
   summary?: string
   // 已提炼进 workspace 记忆的消息数水位:promoteToWorkspace 只处理 [memPromotedAt, len) 这段增量,

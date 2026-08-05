@@ -323,7 +323,7 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                           {/* #2: accent(focus) 与 run(running) 在所有主题里几乎同色,单靠底色/左条分不清「当前查看」与
                               「正在跑 agent」。用正交通道:焦点=实心左条(CSS),运行=脉冲点 + 这个「运行中」标签(动效+文字)。 */}
                           {!editing && runningSessionIds?.has(s.id) && <span className="ws-sess-run" title="该会话正在运行 agent">运行中</span>}
-                          {!editing && <span className="ws-sess-time" title="会话时间">{fmtRelTime(s.createdAt, Date.now())}</span>}
+                          {!editing && <span className="ws-sess-time" title="最后对话时间">{fmtRelTime(s.lastMessageAt ?? s.createdAt, Date.now())}</span>}
                           {isSessionUnread(unread, item.id, s.id) && <span className="ws-unread" title="有已完成待查看" aria-label="未读" />}
                           {(() => { const b = sessionBadge(s); return b.kind !== 'new'
                             ? <span className={`ws-sess-badge ${b.kind}`}>{b.label}</span> : null })()}

@@ -25,7 +25,7 @@ import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
-import { appendMessage, readMessages } from '../chat/chatStore'
+import { appendMessage, readMessages, sessionLastMessageMtime } from '../chat/chatStore'
 import { mergeLive } from '../chat/liveTurns'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
 import { buildLaunchPlan, buildLaunchProjects, type LaunchStartConfig } from '../run/launch'
@@ -628,7 +628,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     chatQueue.stop(a.workspacePath, sid); cancelWorkspaceDelegates(a.workspacePath, sid)
     drainChatGates(a.workspacePath, sid ? { sessionId: sid } : {})
   })
-  ipcMain.handle(CH.sessionList, (_e, wsPath: string) => readSessions(wsPath))
+  // 给每个会话附加派生的 lastMessageAt(消息文件 mtime),供侧栏会话列表显示「最后对话时间」而非首次开始时间。
+  // 仅在此 IPC 出口附加,不写回 sessions.json(保持存储干净;每次读时按文件重新派生)。
+  ipcMain.handle(CH.sessionList, (_e, wsPath: string) => {
+    const f = readSessions(wsPath)
+    return { ...f, sessions: f.sessions.map(s => ({ ...s, lastMessageAt: sessionLastMessageMtime(wsPath, s.id) ?? s.createdAt })) }
+  })
   ipcMain.handle(CH.sessionNew, (_e, wsPath: string) => {
     if (isArchivedWorkspace(wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
     const file = newSession(wsPath)

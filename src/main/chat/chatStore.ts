@@ -1,10 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatMessage } from '@shared/types'
 import { wsForgeDir } from '../config/paths'
 
 export function sessionsDir(wsPath: string) { return join(wsForgeDir(wsPath), 'sessions') }
 export function sessionMessagesFile(wsPath: string, sessionId: string) { return join(sessionsDir(wsPath), `${sessionId}.jsonl`) }
+
+// 会话「最后一次对话时间」= 该会话消息文件(<ws>/.forge/sessions/<id>.jsonl)的 mtime。appendMessage 每轮都会
+// touch 它,所以是「最后活动」的廉价准确代理,无需解析消息体(与 homeStats 的 lastMessageMtime 同法)。
+// 无消息文件(刚建/外部导入会话)返回 undefined,由调用方回落到 createdAt。
+export function sessionLastMessageMtime(wsPath: string, sessionId: string): number | undefined {
+  try { return statSync(sessionMessagesFile(wsPath, sessionId)).mtimeMs } catch { return undefined }
+}
 function resumeFile(wsPath: string) { return join(wsForgeDir(wsPath), 'chat-session.json') }
 function ensureDir(d: string) { if (!existsSync(d)) mkdirSync(d, { recursive: true }) }
 
