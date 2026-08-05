@@ -164,6 +164,8 @@
 .pm-pager button:disabled { opacity: .4; cursor: default; }
 .pm-page { font-family: var(--mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .pm-foot { text-align: center; margin-top: 14px !important; color: var(--faint); }
+.pm-link { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.pm-link:hover { filter: brightness(1.1); }
 
 /* 套了皮肤时,「基础主题」段的明暗卡片调淡表示被接管(仍可点,hover 提亮以便预览/选择)。 */
 .set-group-overridden .theme-cards { opacity: .4; transition: opacity .15s; }

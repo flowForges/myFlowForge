@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Pet } from '@shared/types'
 import { addCustomPet } from '@shared/petCustom'
-import { CODEX_PET_MARKET_SITE, marketLocalId, type CodexMarketPet, type CodexMarketPage } from '@shared/codexPetMarket'
+import { CODEX_PET_MARKET_SITE, CODEX_PET_MARKET_HOME, marketLocalId, type CodexMarketPet, type CodexMarketPage } from '@shared/codexPetMarket'
+
+// 点击站点名 → 系统浏览器打开 codex-pets.net(Electron shell.openExternal)。
+const openSite = () => { void window.forge?.openExternal?.(CODEX_PET_MARKET_HOME) }
+const SiteLink = () => <button className="pm-link" onClick={openSite} title={`在浏览器打开 ${CODEX_PET_MARKET_HOME}`}>{CODEX_PET_MARKET_SITE}</button>
 
 // 缩略图缓存(会话级):previewUrl → forge-bg url。翻页来回不重复下载。
 const previewCache = new Map<string, string>()
@@ -72,7 +76,7 @@ export function PetMarketPane({ pet, onChange }: Props) {
       <div className="skins-head">
         <div>
           <h4>宠物市场</h4>
-          <p className="skins-sub">来自第三方社区库 <b style={{ color: 'var(--fg-2)' }}>{CODEX_PET_MARKET_SITE}</b> 的宠物,<b style={{ color: 'var(--fg-2)' }}>非本 app 自制</b>,每只都标注作者。点「安装」即下载并启用为当前宠物。</p>
+          <p className="skins-sub">来自第三方社区库 <SiteLink /> 的宠物,<b style={{ color: 'var(--fg-2)' }}>非本 app 自制</b>,每只都标注作者。点「安装」即下载并启用为当前宠物。</p>
         </div>
       </div>
 
@@ -114,7 +118,7 @@ export function PetMarketPane({ pet, onChange }: Props) {
             <span className="pm-page">{data.page} / {totalPages}</span>
             <button disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>下一页</button>
           </div>
-          <p className="skins-sub pm-foot">共 {data.total} 只 · 内容与版权归原作者及 {CODEX_PET_MARKET_SITE} 所有。</p>
+          <p className="skins-sub pm-foot">共 {data.total} 只 · 内容与版权归原作者及 <SiteLink /> 所有。</p>
         </>
       )}
     </div>

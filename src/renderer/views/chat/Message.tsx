@@ -71,7 +71,7 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
         </div>
       )}
       {msg.think && <ThinkBlock think={msg.think} streaming={streaming} />}
-      {!isUser && msg.tools?.length ? <ToolBlock tools={msg.tools} /> : null}
+      {!isUser && msg.tools?.length ? <ToolBlock tools={msg.tools} stateKey={msg.id} /> : null}
       {!isUser && msg.subagents?.length ? <SubagentCards subagents={msg.subagents} live={streaming} /> : null}
       {isUser ? (
         <div className="msg-body user-body">

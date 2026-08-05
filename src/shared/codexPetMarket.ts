@@ -3,6 +3,7 @@
 // 只放常量+类型;抓取/安装在 src/main/codexPetMarket/service.ts,渲染在 PetMarketPane.tsx。
 
 export const CODEX_PET_MARKET_SITE = 'codex-pets.net'
+export const CODEX_PET_MARKET_HOME = 'https://codex-pets.net'
 export const CODEX_PET_MARKET_API = 'https://codex-pets.net/api/pets'
 export const CODEX_PET_MARKET_PAGE_SIZE = 30
 
