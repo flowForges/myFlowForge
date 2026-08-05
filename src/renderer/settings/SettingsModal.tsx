@@ -7,6 +7,8 @@ interface SettingsModalProps {
   initialPane?: string
   // The gated NSFW pane's nav entry only shows once unlocked (hidden by default).
   showNsfw?: boolean
+  // 宠物市场页:仅当「codex 宠物市场」官方插件已启用时才显示(同 showNsfw 的 gating 套路)。
+  showPetMarket?: boolean
 }
 
 interface NavEntry {
@@ -164,6 +166,16 @@ const NAV: NavEntry[] = [
     ),
   },
   {
+    key: 'petMarket',
+    label: '宠物市场',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M4 8h16l-1 11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z" />
+        <path d="M8.5 8a3.5 3.5 0 0 1 7 0" />
+      </svg>
+    ),
+  },
+  {
     key: 'plugins',
     label: '插件',
     icon: (
@@ -224,8 +236,8 @@ const NAV: NavEntry[] = [
   },
 ]
 
-export function SettingsModal({ open, onClose, renderPane, initialPane, showNsfw }: SettingsModalProps) {
-  const nav = NAV.filter(n => n.key !== 'nsfw' || showNsfw)
+export function SettingsModal({ open, onClose, renderPane, initialPane, showNsfw, showPetMarket }: SettingsModalProps) {
+  const nav = NAV.filter(n => (n.key !== 'nsfw' || showNsfw) && (n.key !== 'petMarket' || showPetMarket))
   const [active, setActive] = useState(initialPane ?? 'appearance')
   const prevOpenRef = useRef(open)
   useEffect(() => {
@@ -248,7 +260,7 @@ export function SettingsModal({ open, onClose, renderPane, initialPane, showNsfw
   // synced on a closed→open transition.
   useEffect(() => {
     if (open && !nav.some(n => n.key === active)) setActive(nav[0]?.key ?? 'appearance')
-  }, [open, showNsfw, active])
+  }, [open, showNsfw, showPetMarket, active])
 
   return (
     <div

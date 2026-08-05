@@ -175,6 +175,9 @@ const api = {
   petPackCatalog: (): Promise<import('@shared/petPack').PetPackCatalog | { error: string }> => ipcRenderer.invoke(CH.petPackCatalog),
   petPackPreview: (item: import('@shared/petPack').PetPackItem): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.petPackPreview, item),
   petPackInstall: (petId: string, item: import('@shared/petPack').PetPackItem): Promise<{ name: string; images: Record<string, string> } | { error: string }> => ipcRenderer.invoke(CH.petPackInstall, petId, item),
+  codexMarketCatalog: (page: number): Promise<import('@shared/codexPetMarket').CodexMarketPage | { error: string }> => ipcRenderer.invoke(CH.codexMarketCatalog, page),
+  codexMarketPreview: (url: string): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.codexMarketPreview, url),
+  codexMarketInstall: (item: import('@shared/codexPetMarket').CodexMarketPet): Promise<{ ok: true; pet: import('@shared/petCustom').CustomPet } | { ok: false; error: string }> => ipcRenderer.invoke(CH.codexMarketInstall, item),
   onSettingsChanged: (cb: (s: unknown) => void) => {
     const listener = (_: unknown, s: unknown) => cb(s)
     ipcRenderer.on(CH.settingsChanged, listener)

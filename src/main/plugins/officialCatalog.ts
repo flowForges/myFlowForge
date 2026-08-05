@@ -4,6 +4,7 @@ import { PluginsFileSchema } from './pluginSchema'
 import { readPlugins } from './pluginStore'
 import { readJson, writeJson } from '../config/store'
 import { pluginsFile } from '../config/paths'
+import { PET_MARKET_PLUGIN_ID } from '@shared/codexPetMarket'
 
 interface OfficialDef { provider: string; name: string; description: string }
 
@@ -15,11 +16,21 @@ export const OFFICIAL_PROVIDERS: OfficialDef[] = [
   { provider: 'qoder',  name: 'Qoder 额度 · 官方',  description: '暂无可读数据源，连接后显示真实额度。' },
 ]
 
+// 「功能」官方插件(非 statusbar-usage provider):启用后解锁一块 App 内功能。目前只有 codex 宠物市场——
+// 装/启用它 → 设置里出现「宠物市场」页(App 据 plugins 里它是否 enabled 决定,见 PET_MARKET_PLUGIN_ID)。
+interface OfficialFeatureDef { id: string; name: string; description: string; type: string; icon: string }
+export const OFFICIAL_FEATURES: OfficialFeatureDef[] = [
+  {
+    id: PET_MARKET_PLUGIN_ID, name: 'codex 宠物市场', type: 'pet-market', icon: 'gauge',
+    description: '浏览并一键安装 codex-pets.net 社区宠物(第三方来源,已标注作者)。启用后在设置里出现「宠物市场」页。',
+  },
+]
+
 const idFor = (provider: string) => `forge-official-${provider}-usage`
 
 export function listCatalog(): CatalogEntry[] {
   const installed = new Set(readPlugins().map(p => p.id))
-  return OFFICIAL_PROVIDERS.map(d => ({
+  const providers: CatalogEntry[] = OFFICIAL_PROVIDERS.map(d => ({
     id: idFor(d.provider),
     name: d.name,
     description: d.description,
@@ -29,18 +40,22 @@ export function listCatalog(): CatalogEntry[] {
     installed: installed.has(idFor(d.provider)),
     available: true,
   }))
+  const features: CatalogEntry[] = OFFICIAL_FEATURES.map(f => ({
+    id: f.id, name: f.name, description: f.description, icon: f.icon, type: f.type,
+    installed: installed.has(f.id), available: true,
+  }))
+  return [...providers, ...features]
 }
 
 export function installOfficial(id: string): { ok: true } | { ok: false; error: string } {
-  const def = OFFICIAL_PROVIDERS.find(d => idFor(d.provider) === id)
-  if (!def) return { ok: false, error: '未知官方插件: ' + id }
+  const feature = OFFICIAL_FEATURES.find(f => f.id === id)
+  const provider = OFFICIAL_PROVIDERS.find(d => idFor(d.provider) === id)
+  if (!feature && !provider) return { ok: false, error: '未知官方插件: ' + id }
   const existing = readPlugins()
   const prior = existing.find(p => p.id === id)
-  const plugin: InstalledPlugin = {
-    id, dir: '', type: 'statusbar-usage', provider: def.provider,
-    name: def.name, entry: 'native', refreshSec: 300,
-    enabled: prior?.enabled ?? true, native: true,
-  }
+  const plugin: InstalledPlugin = feature
+    ? { id, dir: '', type: feature.type, name: feature.name, entry: 'native', refreshSec: 300, enabled: prior?.enabled ?? true, native: true }
+    : { id, dir: '', type: 'statusbar-usage', provider: provider!.provider, name: provider!.name, entry: 'native', refreshSec: 300, enabled: prior?.enabled ?? true, native: true }
   const updated = prior ? existing.map(p => (p.id === id ? plugin : p)) : [...existing, plugin]
   writeJson(pluginsFile(), PluginsFileSchema.parse({ plugins: updated }))
   return { ok: true }

@@ -140,6 +140,31 @@
   margin: 0; padding: 0; border: 0; background: transparent; opacity: 0; cursor: pointer;
 }
 
+/* ---- 宠物市场(codex-pets.net)---- */
+.pm-err { margin: 0 0 12px; padding: 8px 11px; border-radius: 8px; font-size: 12.5px;
+  color: var(--err); background: color-mix(in oklab, var(--err) 12%, transparent); border: 1px solid color-mix(in oklab, var(--err) 30%, transparent); }
+.pm-empty { padding: 40px 0; text-align: center; color: var(--muted); font-size: 13px; }
+.pm-retry { color: var(--accent); font-weight: 600; }
+.pm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.pm-card { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.pm-thumb { aspect-ratio: 1 / 1; background: color-mix(in oklab, var(--surface-2) 60%, transparent); display: grid; place-items: center; overflow: hidden; }
+.pm-thumb img { width: 100%; height: 100%; object-fit: contain; image-rendering: auto; }
+.pm-ph { width: 34px; height: 34px; border-radius: 8px; background: color-mix(in oklab, var(--fg) 8%, transparent); animation: pm-pulse 1.3s ease-in-out infinite; }
+@keyframes pm-pulse { 0%,100% { opacity: .5 } 50% { opacity: .85 } }
+.pm-info { padding: 8px 10px 4px; }
+.pm-nm { font-size: 12.5px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-by { font-size: 10.5px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+.pm-install { margin: 6px 10px 10px; height: 26px; border-radius: 7px; border: 1px solid var(--accent);
+  background: var(--accent); color: var(--on-accent); font-size: 12px; font-weight: 600; cursor: pointer; }
+.pm-install:hover:not(:disabled) { filter: brightness(1.06); }
+.pm-install.on, .pm-install:disabled { background: var(--surface-2); color: var(--muted); border-color: var(--border); cursor: default; filter: none; }
+.pm-pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 16px; }
+.pm-pager button { height: 30px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg-2); font-size: 12.5px; cursor: pointer; }
+.pm-pager button:hover:not(:disabled) { border-color: var(--border-2); }
+.pm-pager button:disabled { opacity: .4; cursor: default; }
+.pm-page { font-family: var(--mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pm-foot { text-align: center; margin-top: 14px !important; color: var(--faint); }
+
 /* 套了皮肤时,「基础主题」段的明暗卡片调淡表示被接管(仍可点,hover 提亮以便预览/选择)。 */
 .set-group-overridden .theme-cards { opacity: .4; transition: opacity .15s; }
 .set-group-overridden .theme-cards:hover { opacity: .72; }

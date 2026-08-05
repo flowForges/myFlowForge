@@ -20,6 +20,7 @@ vi.mock('../config/paths', () => ({
 }))
 
 import { listCatalog, installOfficial, OFFICIAL_PROVIDERS } from './officialCatalog'
+import { PET_MARKET_PLUGIN_ID } from '@shared/codexPetMarket'
 
 let base: string
 
@@ -34,9 +35,10 @@ afterEach(() => {
 })
 
 describe('officialCatalog', () => {
-  it('lists 5 official providers, none labelled 示例', () => {
+  it('lists 5 official providers + the pet-market feature, none labelled 示例', () => {
     const c = listCatalog()
-    expect(c.map(e => e.provider).sort()).toEqual(['claude', 'codex', 'cursor', 'gemini', 'qoder'])
+    expect(c.filter(e => e.provider).map(e => e.provider).sort()).toEqual(['claude', 'codex', 'cursor', 'gemini', 'qoder'])
+    expect(c.some(e => e.id === PET_MARKET_PLUGIN_ID && e.type === 'pet-market')).toBe(true)
     expect(c.every(e => e.available)).toBe(true)
     expect(c.some(e => /示例/.test(e.name) || /示例/.test(e.description))).toBe(false)
     expect(c.every(e => e.id.startsWith('forge-official-'))).toBe(true)

@@ -41,6 +41,8 @@ import { CustomStagesPane } from './settings/CustomStagesPane'
 import { HookLibraryPane } from './settings/HookLibraryPane'
 import { SkillPane } from './settings/SkillPane'
 import { PetPane } from './settings/PetPane'
+import { PetMarketPane } from './settings/PetMarketPane'
+import { PET_MARKET_PLUGIN_ID } from '@shared/codexPetMarket'
 import { LoadPane } from './settings/LoadPane'
 import { PluginPane } from './settings/PluginPane'
 import { NsfwPane } from './settings/NsfwPane'
@@ -805,7 +807,7 @@ export function App() {
         const next = cur.includes(code) ? cur : [...cur, code]
         update({ nsfwUnlocked: true, nsfwCodes: next, nsfwCode: code }); setSettingsPane('nsfw'); setSettingsOpen(true)
       }} />}
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} showNsfw={!!settings?.nsfwUnlocked} renderPane={(key) => {
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} initialPane={settingsPane} showNsfw={!!settings?.nsfwUnlocked} showPetMarket={pluginsApi.plugins.some(p => p.id === PET_MARKET_PLUGIN_ID && p.enabled)} renderPane={(key) => {
         switch (key) {
           case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} /> : null
           case 'wallpaper': return settings ? <BackgroundPane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} /> : null
@@ -820,6 +822,7 @@ export function App() {
           case 'skills': return <SkillPane />
           case 'loads': return <LoadPane />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
+          case 'petMarket': return settings ? <PetMarketPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
           case 'plugins': return <PluginPane plugins={pluginsApi.plugins} results={pluginsApi.results} catalog={pluginsApi.catalog} install={pluginsApi.install} uninstall={pluginsApi.uninstall} setEnabled={pluginsApi.setEnabled} refresh={pluginsApi.refresh} installExample={pluginsApi.installExample} installError={pluginsApi.installError} creds={pluginsApi.creds} setCred={pluginsApi.setCred} />
           case 'nsfw': return settings ? <NsfwPane pet={settings.pet} nsfwInstalled={settings.nsfwInstalled ?? {}} codes={settings.nsfwCodes ?? []} onAddCode={() => setUnlockOpen(true)} onRemoveCode={(c) => { const next = (settings.nsfwCodes ?? []).filter(x => x !== c); update({ nsfwCodes: next, nsfwCode: next[next.length - 1] ?? '' }) }} onChangePet={(p) => update({ pet: { ...settings.pet, ...p } })} onChangeAppearance={(p) => update({ appearance: p })} onSetInstalled={(k, ref) => update({ nsfwInstalled: { ...(settings.nsfwInstalled ?? {}), [k]: ref } })} onDisable={() => { update({ nsfwUnlocked: false, nsfwCode: '', nsfwCodes: [] }); setSettingsPane('appearance') }} /> : null
           case 'keybindings': return settings ? <KeybindingsPane keybindings={settings.keybindings} onChange={(kb) => update({ keybindings: kb })} globalFailed={globalFailed} /> : null

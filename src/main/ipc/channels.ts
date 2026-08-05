@@ -119,6 +119,10 @@ export const CH = {
   codexPetImport: 'codex-pet:import',
   codexPetList: 'codex-pet:list',
   codexPetPick: 'codex-pet:pick',
+  // codex-pets.net 宠物市场(第三方,插件 gating):分页列表 / 缩略图 / 安装
+  codexMarketCatalog: 'codex-market:catalog',
+  codexMarketPreview: 'codex-market:preview',
+  codexMarketInstall: 'codex-market:install',
   appearancePickBgImage: 'appearance:pick-bg-image',
   // Main → renderer: a tray/dock context-menu item was chosen; the payload is a keybinding-action name
   // (e.g. 'new-workspace') the renderer dispatches through its existing kbHandlers.

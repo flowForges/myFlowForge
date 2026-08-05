@@ -71,6 +71,8 @@ import { nsfwValidate, nsfwCatalog, nsfwPreview, nsfwGallery, nsfwInstallPet, ns
 import { wallpaperCatalog, wallpaperPreview, wallpaperInstall } from '../wallpaper/wallpaperService'
 import type { WallpaperItem } from '../../shared/wallpaper'
 import { petPackCatalog, petPackPreview, petPackInstall } from '../petPack/petPackService'
+import { codexMarketCatalog, codexMarketPreview, codexMarketInstall } from '../codexPetMarket/service'
+import type { CodexMarketPet } from '@shared/codexPetMarket'
 import type { PetPackItem } from '../../shared/petPack'
 import type { NsfwPet, NsfwBg } from '../../shared/nsfw'
 import { createUpdateChecker } from '../update/updateChecker'
@@ -1265,6 +1267,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.petPackCatalog, () => petPackCatalog(wallpaperFetch()))
   ipcMain.handle(CH.petPackPreview, (_e, item: PetPackItem) => petPackPreview(item, wallpaperFetch()))
   ipcMain.handle(CH.petPackInstall, (_e, petId: string, item: PetPackItem) => petPackInstall(petId, item, wallpaperFetch()))
+
+  // codex-pets.net 宠物市场(第三方社区库,插件 gating)。走同一条 proxy-first fetch(wallpaperFetch)避免 CORS。
+  ipcMain.handle(CH.codexMarketCatalog, (_e, page: number) => codexMarketCatalog(page, wallpaperFetch()))
+  ipcMain.handle(CH.codexMarketPreview, (_e, url: string) => codexMarketPreview(url, wallpaperFetch()))
+  ipcMain.handle(CH.codexMarketInstall, (_e, item: CodexMarketPet) => codexMarketInstall(item, wallpaperFetch()))
 
   const MAX_PINNED = 5
   ipcMain.handle(CH.workspacesList, () => {
