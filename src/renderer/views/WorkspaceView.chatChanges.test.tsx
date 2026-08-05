@@ -58,15 +58,13 @@ describe('WorkspaceView chat mode 变更/文件树 sourced from workspace config
     const changesTab = screen.getByText('变更')
     fireEvent.click(changesTab)
 
-    // ProjectPicker renders a <select> with proj-a and proj-b options when >1 project
+    // ProjectPicker (custom dropdown) renders proj-a and proj-b options when >1 project
     // — this only happens if projects comes from wsInfo (since run is null → run.projects = [])
     await waitFor(() => {
-      const select = document.querySelector('.insp-proj select') as HTMLSelectElement | null
-      expect(select).not.toBeNull()
+      expect(document.querySelector('.insp-proj .ipk-trigger')).not.toBeNull()
     })
 
-    const select = document.querySelector('.insp-proj select') as HTMLSelectElement
-    const optionTexts = Array.from(select.options).map(o => o.text)
+    const optionTexts = Array.from(document.querySelectorAll('.insp-proj .menu-item')).map(o => o.textContent)
     expect(optionTexts).toContain('proj-a')
     expect(optionTexts).toContain('proj-b')
   })

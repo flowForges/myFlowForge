@@ -1,7 +1,18 @@
 /* 项目选择器 (project picker) */
 /* Sits at the top of the 变更/文件树 pane (the pane already supplies side padding). */
-.insp-proj { margin: 0 0 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
-.insp-proj select { width: 100%; height: 28px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; color: var(--fg-2); font-size: 12px; font-family: var(--font); padding: 0 8px; outline: none; }
+.insp-proj { position: relative; margin: 0 0 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+/* 自绘下拉触发器(取代原生 <select>) */
+.insp-proj .ipk-trigger {
+  width: 100%; height: 28px; display: flex; align-items: center; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 7px;
+  color: var(--fg-2); font-size: 12px; padding: 0 8px; cursor: pointer; text-align: left; transition: .14s;
+}
+.insp-proj .ipk-trigger:hover { border-color: var(--border-2); }
+.insp-proj .ipk-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.insp-proj .ipk-chev { width: 13px; height: 13px; flex: 0 0 auto; color: var(--muted); transition: transform .14s; }
+.insp-proj.open .ipk-chev { transform: rotate(180deg); }
+/* 复用 .menu-pop 外观,但朝下展开、与触发器同宽(.menu-pop 默认朝上、min-width:230) */
+.insp-proj .ipk-pop { top: 34px; bottom: auto; left: 0; right: 0; min-width: 0; }
 
 /* Changes 文件变更视图 */
 .chg-summary { display: flex; gap: 8px; margin-bottom: 14px; }

@@ -5,17 +5,19 @@ import { ProjectPicker, ALL_PROJECTS } from './ProjectPicker'
 const projects = [{ name: 'web', cwd: '/w/web' }, { name: 'api', cwd: '/w/api' }]
 
 describe('ProjectPicker', () => {
-  it('renders a 全部项目 option plus each project and reports selection', () => {
+  it('opens the custom dropdown, renders 全部项目 + each project, and reports selection', () => {
     const onSelect = vi.fn()
     render(<ProjectPicker projects={projects} activeCwd={ALL_PROJECTS} onSelect={onSelect} />)
+    fireEvent.click(screen.getByRole('button', { name: /全部项目/ }))   // open (trigger shows active label)
     expect(screen.getByRole('option', { name: '全部项目' })).toBeInTheDocument()
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: '/w/api' } })
+    fireEvent.click(screen.getByRole('option', { name: 'api' }))
     expect(onSelect).toHaveBeenCalledWith('/w/api')
   })
   it('selecting 全部项目 reports the ALL_PROJECTS sentinel', () => {
     const onSelect = vi.fn()
     render(<ProjectPicker projects={projects} activeCwd="/w/web" onSelect={onSelect} />)
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: ALL_PROJECTS } })
+    fireEvent.click(screen.getByRole('button', { name: /web/ }))        // open
+    fireEvent.click(screen.getByRole('option', { name: '全部项目' }))
     expect(onSelect).toHaveBeenCalledWith(ALL_PROJECTS)
   })
   it('renders nothing for a single project', () => {
