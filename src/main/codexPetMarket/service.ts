@@ -26,7 +26,8 @@ function normalizePet(p: unknown): CodexMarketPet | null {
   return {
     id: o.id,
     displayName: str('displayName') || o.id,
-    previewUrl: str('previewUrl') || str('posterUrl') || o.spritesheetUrl,
+    // 缩略图优先 poster(单图正方 ~256²),不用 preview —— preview.webp 是多帧横向帧条,方形容器里会缩成一条细线。
+    previewUrl: str('posterUrl') || str('previewUrl') || o.spritesheetUrl,
     spritesheetUrl: o.spritesheetUrl,
     petJsonUrl: petJsonUrlFromSpritesheet(o.spritesheetUrl),
     ownerName: str('ownerName') || str('ownerHandle'),

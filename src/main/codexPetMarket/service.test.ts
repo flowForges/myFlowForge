@@ -27,7 +27,8 @@ const samplePage = {
   page: 2, pageSize: 30, total: 2960, totalPages: 99,
   pets: [
     { id: 'yuki', displayName: 'Yuki', spritesheetUrl: 'https://codex-pets.net/assets/pets/v/1/yuki/spritesheet.webp',
-      previewUrl: 'https://codex-pets.net/assets/pets/v/1/yuki/preview.webp', ownerName: 'kira' },
+      previewUrl: 'https://codex-pets.net/assets/pets/v/1/yuki/preview.webp',
+      posterUrl: 'https://codex-pets.net/assets/pets/v/1/yuki/poster.webp', ownerName: 'kira' },
     { id: 'noOwnerName', spritesheetUrl: 'https://x/y/z/spritesheet.webp', ownerHandle: 'h1' }, // fallbacks
     { displayName: 'invalid (no id/sheet)' }, // dropped
   ],
@@ -44,6 +45,8 @@ describe('codexMarketCatalog', () => {
       id: 'yuki', displayName: 'Yuki', ownerName: 'kira',
       petJsonUrl: 'https://codex-pets.net/assets/pets/v/1/yuki/pet.json',
     })
+    // thumbnail prefers poster (single square) over preview (multi-frame filmstrip)
+    expect(res.pets[0].previewUrl).toContain('poster.webp')
     // fallbacks: displayName←id, ownerName←ownerHandle, previewUrl←spritesheetUrl
     expect(res.pets[1]).toMatchObject({ displayName: 'noOwnerName', ownerName: 'h1', previewUrl: 'https://x/y/z/spritesheet.webp' })
   })
