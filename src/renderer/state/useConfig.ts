@@ -48,7 +48,7 @@ export function useConfig() {
 
   const redetect = useCallback(async () => { setRawProviders(await window.forge.detectProviders()) }, [])
 
-  const addProject = useCallback(async (repoUrl: string, branch: string) => { const list = await window.forge.addProject({ repoUrl, branch }); setProjects(list); return list }, [])
+  const addProject = useCallback(async (repoUrl: string, branch: string, alias?: string) => { const list = await window.forge.addProject({ repoUrl, branch, alias }); setProjects(list); return list }, [])
   const deleteProject = useCallback(async (id: string) => { setProjects(await window.forge.deleteProject(id)) }, [])
   const updateProjectBranch = useCallback(async (id: string, branch: string) => { setProjects(await window.forge.updateProjectBranch({ id, branch })) }, [])
   const updateProjectAlias = useCallback(async (id: string, alias: string) => { setProjects(await window.forge.updateProjectAlias({ id, alias })) }, [])

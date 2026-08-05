@@ -1177,7 +1177,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // instead of the cramped inspector split. `browse` doubles as the sidebar source: 'files' shows
   // the file tree, 'changes' shows the changes list (continuous review picking, default diff mode).
   const [browse, setBrowse] = useState<false | 'files' | 'changes'>(false)
-  const openBrowse = (file: string, type: ChangeType, groupCwd?: string, mode?: 'diff' | 'full') => {
+  // Browsing the file tree opens 全文 by default — you're reading a file, not reviewing a change, and
+  // for an unchanged/untracked file a "diff" is either empty or a misleading all-added dump. The 变更
+  // (changes-review) entry below keeps diff as its default. openDoc passes 'full' explicitly.
+  const openBrowse = (file: string, type: ChangeType, groupCwd?: string, mode: 'diff' | 'full' = 'full') => {
     const target = pickPreviewCwd(groupCwd, cwd, wsPath)
     if (target) { setPreview({ file, type, cwd: target, mode }); setBrowse('files') }
   }

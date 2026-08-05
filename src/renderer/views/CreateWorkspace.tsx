@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { CreateWorkspaceOpts, ProviderInfo, ReviewConfig, ReviewLens } from '@shared/types'
 import type { Plugin, LibraryHook } from '@shared/plugin'
 import type { CfgProject, CfgWorkflow, CfgCustomStage } from '../state/useConfig'
 import { indexCustomStages, resolveStages as resolveLibRefs, type CustomStageDef } from '../../shared/customStages'
-import { deriveWorkBranch } from '@shared/branchName'
+import { deriveWorkBranch, branchSlug } from '@shared/branchName'
 import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, emptyWorkflow, type WizardState, type WizardStage, type WizardProject, type WizardWorkflow } from './wizardModel'
 import { PluginEditor } from '../components/PluginEditor'
 import { movePluginBefore } from '../../shared/pluginReorder'
@@ -74,6 +74,13 @@ const PLUGIN_PRESETS = [
 ]
 // Step boundary labels (prototype STEP_LABEL + sh-tag boundary captions).
 const STEP_LABEL: Record<string, string> = { __basic: '基本信息 之后', __proj: '涉及项目 之后', __wf: '工作流 之后' }
+// Conventional branch prefixes offered as quick-picks on the unified-branch row.
+const BRANCH_TYPES: { key: string; hint: string }[] = [
+  { key: 'feat', hint: '日常开发' },
+  { key: 'fix', hint: '修复 Bug' },
+  { key: 'urgent', hint: '紧急开发' },
+  { key: 'forge', hint: '通用' },
+]
 const STEP_BARS: { after: string; caption: string }[] = [
   { after: '__basic', caption: '基本信息 → 涉及项目' },
   { after: '__proj', caption: '涉及项目 → 工作流' },
@@ -238,6 +245,26 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
   // Task 5: auto-scan the picked folder for existing repos and prepopulate 涉及项目 with them in-place
   // (pre-checked, no clone). `scanning` drives a lightweight "扫描中…" affordance while the IPC runs.
   const [scanning, setScanning] = useState(false)
+
+  // Step nav (guidance): the modal body scrolls, so its 基本信息/涉及项目/工作流程 sections are easy to
+  // miss below the fold. A sticky 1·2·3 rail under the title advertises them all up-front and tracks
+  // which one is in view; clicking jumps there. Purely presentational — no effect on create logic.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const [activeStep, setActiveStep] = useState(0)
+  const scrollToStep = (i: number) => {
+    const body = bodyRef.current
+    const sec = body?.querySelectorAll<HTMLElement>('.cr-sec')[i]
+    if (body && sec) body.scrollTo({ top: Math.max(0, sec.offsetTop - body.offsetTop - 8), behavior: 'smooth' })
+  }
+  const onBodyScroll = () => {
+    const body = bodyRef.current
+    if (!body) return
+    const secs = Array.from(body.querySelectorAll<HTMLElement>('.cr-sec'))
+    const mark = body.scrollTop + body.offsetTop + 90   // a bit below the top edge
+    let cur = 0
+    secs.forEach((s, i) => { if (s.offsetTop <= mark) cur = i })
+    setActiveStep(cur)
+  }
 
   // Full (re)seed ONLY when the modal opens or the edit target changes — NOT on every projects/
   // workflows change, so adding a project/workflow from inside the wizard can't wipe the user's
@@ -548,6 +575,17 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     setCustomModelKeys(prev => { const n = new Set(prev); n.delete(pk); return n })
   }
   const applyBranchAll = () => { const v = branchAll.trim(); if (!v) return; update(s => ({ ...s, projects: s.projects.map(p => p.sel ? { ...p, branch: v } : p) })) }
+  // Standard branch prefixes — nudges the unified branch toward a conventional shape. Clicking swaps only
+  // the prefix (the part before the first '/'), keeping whatever task name the user already typed.
+  const activeBranchType = BRANCH_TYPES.find(b => branchAll.startsWith(b.key + '/'))?.key ?? ''
+  const applyBranchType = (t: string) => {
+    const cur = branchAll.trim()
+    // Keep whatever task name the user already typed; if there's none, generate a full, ready-to-use one
+    // from the workspace name (falling back to its path's last segment) so we never leave a half branch "t/".
+    let rest = cur.includes('/') ? cur.slice(cur.indexOf('/') + 1) : cur
+    if (!rest) rest = branchSlug((state.name || '').trim() || deriveWsName(state.path, false, '')) || 'task'
+    setBranchAll(`${t}/${rest}`)
+  }
 
   // --- plugin (hook) editing — both scopes share one open-editor state ---
   const plugKey = (scope: 'wf' | 'step'): 'plugins' | 'stepPlugins' => (scope === 'step' ? 'stepPlugins' : 'plugins')
@@ -707,7 +745,20 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
           <button className="cr-x" id="crClose" onClick={onCancel} disabled={creating}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg></button>
         </div>
 
-        <div className="cr-body">
+        {/* Step rail — advertises the three parts of the form so nothing below the fold gets missed. */}
+        <div className="cr-steps" role="tablist">
+          {['基本信息', '涉及项目', '工作流程'].map((label, i) => (
+            <Fragment key={label}>
+              {i > 0 && <span className="cr-step-sep" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="9 6 15 12 9 18" /></svg></span>}
+              <button type="button" role="tab" aria-selected={activeStep === i} className={'cr-step' + (activeStep === i ? ' on' : '') + (activeStep > i ? ' done' : '')} onClick={() => scrollToStep(i)}>
+                <span className="n">{i + 1}</span>
+                <span className="lb">{label}</span>
+              </button>
+            </Fragment>
+          ))}
+        </div>
+
+        <div className="cr-body" ref={bodyRef} onScroll={onBodyScroll}>
           {/* Restore banner: this folder has an unfinished creation — config restored; continue or clear. */}
           {!editing && partial && (
             <div className="cr-restore">
@@ -728,9 +779,10 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                 <label>工作区路径</label>
                 <div className="inp">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
-                  <input className="mono" id="crPath" placeholder="~/code/" spellCheck={false} autoCapitalize="off" autoComplete="off" value={state.path} readOnly={!!editing} onChange={e => setPath(e.target.value)} onBlur={e => void probePartial(e.target.value)} />
-                  {!editing && <button className="pick" id="crPick" onClick={async () => { const d = await onPickPath?.(); if (d) { setPath(d); void probePartial(d); void scanForRepos(d) } }}>选择…</button>}
+                  <input className="mono" id="crPath" placeholder="输入或粘贴路径,如 ~/code/my-app" spellCheck={false} autoCapitalize="off" autoComplete="off" value={state.path} readOnly={!!editing} onChange={e => setPath(e.target.value)} onBlur={e => void probePartial(e.target.value)} />
+                  {!editing && <button className="pick" id="crPick" title="浏览文件夹" onClick={async () => { const d = await onPickPath?.(); if (d) { setPath(d); void probePartial(d); void scanForRepos(d) } }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>浏览</button>}
                 </div>
+                {!editing && <div className="cr-name-tip">可直接输入完整路径,或点「浏览」选择文件夹。</div>}
               </div>
             </div>
             <div className="cr-row" style={{ marginTop: 14 }}>
@@ -763,6 +815,14 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
           {/* 2 涉及项目 */}
           <div className="cr-sec">
             <div className="cr-sec-h"><span className="n">2</span><h4>涉及项目</h4><span className="hint" id="crProjHint">{scanning ? '扫描中…' : (state.projects.length ? '已选 ' + selectedCount + ' / ' + state.projects.length : '先圈定本次需求动哪些项目 · 各设代码分支')}</span></div>
+            <div className="cr-branch-types" role="group" aria-label="分支类型">
+              <span className="lab">分支类型</span>
+              {BRANCH_TYPES.map(b => (
+                <button key={b.key} type="button" className={'cr-btype' + (activeBranchType === b.key ? ' on' : '')} title={`${b.key} · ${b.hint}`} onClick={() => applyBranchType(b.key)}>
+                  <span className="k">{b.key}</span><span className="h">{b.hint}</span>
+                </button>
+              ))}
+            </div>
             <div className="cr-branch-all" id="crBranchAll">
               <span className="lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>统一分支</span>
               <input id="crBranchAllInput" placeholder="feat/my-task" spellCheck={false} autoCapitalize="off" autoComplete="off" value={branchAll} onChange={e => setBranchAll(e.target.value)} />

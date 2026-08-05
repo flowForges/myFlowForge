@@ -12,12 +12,18 @@ describe('parseProjects', () => {
       { repo: '/local/path', branch: 'main' },
     ])
   })
+  it('reads an optional alias — JSON field and per-line 3rd column', () => {
+    expect(parseProjects('[{"repo":"git@x:y/a.git","branch":"main","alias":"前台"}]'))
+      .toEqual([{ repo: 'git@x:y/a.git', branch: 'main', alias: '前台' }])
+    expect(parseProjects('git@x:y/a.git, main, 前台')).toEqual([{ repo: 'git@x:y/a.git', branch: 'main', alias: '前台' }])
+  })
   it('the sample parses to 4 projects', () => {
     expect(parseProjects(PROJ_SAMPLE)).toHaveLength(4)
   })
-  it('re-imports a file produced by 导出 (the { projects: [...] } config shape)', () => {
+  it('re-imports a file produced by 导出 (the { projects: [...] } config shape), preserving alias', () => {
     // The export handler writes readProjects() verbatim: a wrapper object whose items use
-    // repoUrl/defaultBranch (not repo/branch). Round-tripping export → import must work.
+    // repoUrl/defaultBranch (not repo/branch). Round-tripping export → import must work — and must
+    // carry the 别名 through (a non-empty alias survives; an empty one is simply omitted).
     const exported = JSON.stringify({
       projects: [
         { id: 'a', name: 'a', repoUrl: 'git@x:y/a.git', defaultBranch: 'main', alias: '' },
@@ -26,7 +32,7 @@ describe('parseProjects', () => {
     })
     expect(parseProjects(exported)).toEqual([
       { repo: 'git@x:y/a.git', branch: 'main' },
-      { repo: 'https://x/b.git', branch: 'dev' },
+      { repo: 'https://x/b.git', branch: 'dev', alias: 'bee' },
     ])
   })
 })

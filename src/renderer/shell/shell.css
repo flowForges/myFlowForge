@@ -126,17 +126,14 @@
   transition: background .12s;
 }
 .ws-item:hover { background: var(--surface); }
-.ws-item.on { background: var(--accent-dim); }
+/* 工作区行不再用「铺满整行的底色」表达选中——满宽色块和空白行交替就成了短—长—短—长,还让选中/未选的
+   左缘看着参差。焦点(当前正在看的工作区)只留一条 left:0 的 3px accent 竖条:所有行都在同一左缘、不撑宽度、
+   不形成色块。选中的底色交给会话区(.ws-sess.on)去表达。 */
+.ws-item.on { box-shadow: inset 3px 0 0 var(--accent); }
 .ws-item.on .ws-name { color: var(--fg); }
-/* 运行中:左侧动态光条(无静态灰点)—— 贴原型 */
 .ws-item { position: relative; }
-.ws-item.is-running { background: color-mix(in oklab, var(--accent-dim) 54%, transparent); }
-.ws-item.is-running::before {
-  content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px;
-  border-radius: 99px; background: var(--run);
-  box-shadow: 0 0 12px color-mix(in oklab, var(--run) 55%, transparent);
-  animation: runRail 1.8s ease-in-out infinite;
-}
+/* 运行中(有 agent 在跑):不铺底色、不加下划线/竖条,直接让已有的状态徽章本身「活」起来(见 .ws-status-badge
+   的流光+呼吸动效)。零布局影响、天然和标题行对齐、不挤副标题。于是:焦点=左竖条、运行=徽章动效,两条正交通道。 */
 
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
 @keyframes runRail { 0%,100%{opacity:.95; transform:scaleY(1)} 50%{opacity:.5; transform:scaleY(.72)} }
@@ -182,12 +179,27 @@
 }
 /* Per-workspace status badge (#3): 待输入 > 待确认 > 执行中, highest-priority only. */
 .ws-status-badge {
+  position: relative; overflow: hidden;
   flex: 0 0 auto; margin-left: 6px; font-size: 10px; font-weight: 650;
   border-radius: 99px; padding: 1px 7px; white-space: nowrap;
+  animation: wsBadgeBreath 2.1s ease-in-out infinite;
 }
 .ws-status-badge.run     { color: var(--run);  background: color-mix(in oklab, var(--run) 16%, transparent); }
 .ws-status-badge.confirm { color: var(--warn); background: color-mix(in oklab, var(--warn) 16%, transparent); }
 .ws-status-badge.input   { color: var(--accent); background: var(--accent-dim); }
+/* 「执行效果」= 徽章本身活起来:一道顺着徽章自身颜色(currentColor)扫过的高光(流光)+ 极轻的辉光呼吸。
+   动效跟徽章自带颜色走,所以 执行中/待确认/待输入 各自是绿/橙/蓝,无需分别写。纯视觉、零布局影响。 */
+.ws-status-badge::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg, transparent 32%, color-mix(in oklab, currentColor 30%, transparent) 50%, transparent 68%);
+  background-size: 220% 100%; background-repeat: no-repeat;
+  animation: wsBadgeSweep 2.1s linear infinite;
+}
+@keyframes wsBadgeSweep { 0% { background-position: 160% 0; } 100% { background-position: -160% 0; } }
+@keyframes wsBadgeBreath {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 0%, transparent); }
+  50%      { box-shadow: 0 0 7px 0 color-mix(in oklab, currentColor 32%, transparent); }
+}
 /* 本机导入工作区：名字旁的小图标（替代突兀的「导入」徽章） */
 .ws-imp-ico { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--faint); }
 .ws-imp-ico svg { width: 12px; height: 12px; }

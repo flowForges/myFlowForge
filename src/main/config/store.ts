@@ -44,19 +44,21 @@ export const readProjects = () => readJson(sysFile('projects.json'), ProjectsSch
 export const writeProjects = (data: { projects: import('./schema').Project[] }) => writeJson(sysFile('projects.json'), ProjectsSchema.parse(data))
 // Add a project to the system-wide library, deduped by derived id (same repo name → same id).
 // Returns the full list. Shared by the IPC configAddProject handler and the SP-B wizard add-project.
-export function upsertProject(input: { repoUrl: string; branch: string }): import('./schema').Project[] {
+export function upsertProject(input: { repoUrl: string; branch: string; alias?: string }): import('./schema').Project[] {
   const list = readProjects().projects
   const name = deriveProjectName(input.repoUrl)
   const id = deriveProjectId(name)
   const repoUrl = input.repoUrl.trim()
   const defaultBranch = input.branch.trim() || 'main'
+  const alias = input.alias?.trim()   // optional; carried through by 导入 so aliases survive the round-trip
   const existing = list.find(p => p.id === id)
   if (existing) {
     // Re-adding the same repo is a correction, not a no-op: update branch+url so a mistyped
     // default branch (e.g. master → main) can be fixed by just adding it again. id/name stay stable.
-    writeProjects({ projects: list.map(p => p.id === id ? { ...p, repoUrl, defaultBranch } : p) })
+    // Only overwrite the alias when one was supplied, so a plain re-add doesn't wipe an existing nickname.
+    writeProjects({ projects: list.map(p => p.id === id ? { ...p, repoUrl, defaultBranch, ...(alias ? { alias } : {}) } : p) })
   } else {
-    writeProjects({ projects: [...list, { id, name, repoUrl, defaultBranch, alias: '' }] })
+    writeProjects({ projects: [...list, { id, name, repoUrl, defaultBranch, alias: alias ?? '' }] })
   }
   return readProjects().projects
 }

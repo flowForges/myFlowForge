@@ -21,6 +21,24 @@
 .cr-x { margin-left: auto; width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; color: var(--muted); }
 .cr-x:hover { background: var(--surface); color: var(--fg); }
 .cr-x svg { width: 16px; height: 16px; }
+
+/* Step rail: a fixed 1·2·3 guide between the title and the scrolling body, so new users see there's a
+   涉及项目 and 工作流程 step below the fold, not just 基本信息. The in-view step lights up; passed steps
+   read as done. Sits outside .cr-body so it never scrolls away. */
+.cr-steps { flex: 0 0 auto; display: flex; align-items: stretch; gap: 4px; padding: 11px 16px; border-bottom: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 55%, var(--bg)); }
+/* Each step gets an equal share of the row (flex:1) so the rail spans the full width evenly. */
+.cr-step { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 10px; border-radius: 9px; color: var(--muted); font-size: 12.5px; font-weight: 600; transition: color .14s, background .14s; }
+.cr-step:hover { color: var(--fg-2); background: var(--surface); }
+.cr-step .n { width: 20px; height: 20px; flex: 0 0 20px; border-radius: 50%; display: grid; place-items: center; font: 700 11px/1 var(--mono); background: var(--surface-2); color: var(--muted); border: 1.5px solid transparent; transition: .14s; }
+.cr-step .lb { white-space: nowrap; }
+/* Active step: accent-dim pill + a glowing accent number, so the current section clearly stands out. */
+.cr-step.on { color: var(--accent); background: var(--accent-dim); }
+.cr-step.on .n { background: var(--accent); color: var(--on-accent); border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 18%, transparent); }
+.cr-step.done { color: var(--fg-2); }
+.cr-step.done .n { background: var(--accent-dim); color: var(--accent); border-color: color-mix(in oklch, var(--accent) 45%, transparent); }
+.cr-step-sep { flex: 0 0 auto; align-self: center; display: inline-flex; color: var(--border-2); }
+.cr-step-sep svg { width: 15px; height: 15px; }
+
 .cr-body { flex: 1; overflow-y: auto; padding: 4px 24px 8px; }
 .cr-sec { padding: 20px 0; border-bottom: 1px solid var(--border); }
 .cr-sec:last-child { border-bottom: none; }
@@ -36,8 +54,11 @@
 .cr-field .inp svg { width: 15px; height: 15px; color: var(--faint); flex: 0 0 15px; }
 .cr-field input { flex: 1; min-width: 0; height: 100%; background: none; border: none; outline: none; color: var(--fg); font-size: 13px; }
 .cr-field input.mono { font-family: var(--mono); font-size: 12.5px; }
-.cr-field .pick { height: 26px; padding: 0 10px; border-radius: 6px; background: var(--surface-2); color: var(--fg-2); font-size: 12px; font-weight: 500; flex: 0 0 auto; }
-.cr-field .pick:hover { background: var(--border); }
+/* Secondary "browse" affordance — muted so the text field reads as the primary way in (you can type a
+   path directly). Icon + short label instead of the old "选择…" that made the row look select-only. */
+.cr-field .pick { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border-radius: 6px; background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 500; flex: 0 0 auto; transition: background .12s, color .12s; }
+.cr-field .pick svg { width: 13px; height: 13px; flex: 0 0 13px; }
+.cr-field .pick:hover { background: var(--border); color: var(--fg-2); }
 .cr-name-tip { font-size: 11px; color: var(--faint); margin-top: 6px; }
 .cr-opt { color: var(--faint); font-weight: 400; }
 .cr-purpose {
@@ -126,6 +147,21 @@
 .cr-branch-all input:focus { border-color: var(--accent); }
 .cr-branch-all .apply { height: 30px; padding: 0 12px; border-radius: 7px; background: var(--surface-2); color: var(--fg-2); font-size: 12px; font-weight: 600; flex: 0 0 auto; }
 .cr-branch-all .apply:hover { background: var(--border); }
+/* Standard branch-type quick-picks (feat / fix / urgent / forge) — click to prefix the unified branch,
+   nudging users toward conventional names instead of a free-for-all. Sits just above 统一分支. */
+.cr-branch-types { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 9px; }
+.cr-branch-types .lab { font-size: 11.5px; color: var(--faint); font-weight: 500; flex: 0 0 auto; margin-right: 2px; }
+/* Rectangular chips (not a full pill — the round shape read as odd), center-aligned so the mono key and
+   its hint sit on one line, and no stray browser focus ring (we draw a clean accent one on keyboard focus).
+   30px tall to line up with the 统一分支 input right below. */
+.cr-btype { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--fg-2); transition: border-color .12s, background .12s, color .12s; outline: none; }
+.cr-btype .k { font: 700 12px/1 var(--mono); letter-spacing: .01em; }
+.cr-btype .h { font-size: 11px; color: var(--faint); }
+.cr-btype:hover { border-color: color-mix(in oklch, var(--accent) 45%, var(--border)); background: var(--surface-2); color: var(--fg); }
+.cr-btype:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.cr-btype.on { border-color: var(--accent); background: var(--accent-dim); }
+.cr-btype.on .k { color: var(--accent); }
+.cr-btype.on .h { color: color-mix(in oklch, var(--accent) 65%, var(--fg-2)); }
 /* 项目搜索框:大项目库时出现,按名/别名筛选。放在项目列表上方,和统一分支条同风格。 */
 .cr-proj-search { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 0 10px; height: 34px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
 .cr-proj-search:focus-within { border-color: var(--accent); }

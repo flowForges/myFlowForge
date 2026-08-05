@@ -13,7 +13,7 @@ const DOWNLOAD_SVG = (
 
 interface ProjectPaneProps {
   projects: CfgProject[]
-  onAdd: (repoUrl: string, branch: string) => void
+  onAdd: (repoUrl: string, branch: string, alias?: string) => void
   onDelete: (id: string) => void
   onEditBranch?: (id: string, branch: string) => void
   // Inline-edit a project's 别名 (search alias). A blank value clears it (unlike branch).
@@ -113,7 +113,7 @@ export function ProjectPane({ projects, onAdd, onDelete, onEditBranch, onEditAli
       for (const it of list) {
         if (existing.has(it.repo)) { dup++; continue }
         existing.add(it.repo)
-        onAdd(it.repo, it.branch)
+        onAdd(it.repo, it.branch, it.alias)
         added++
       }
       return `已导入 ${added} 个项目` + (dup ? `(${dup} 个已存在,跳过)` : '')

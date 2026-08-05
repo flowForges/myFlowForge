@@ -89,7 +89,7 @@
 .lg-stg-idx { flex: 0 0 24px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;
   font: 700 11px/1 var(--mono); position: relative; z-index: 2; cursor: pointer; transition: .12s;
   background: var(--surface-2); color: var(--muted); border: 1.5px solid var(--border-2); }
-.lg-stg.on .lg-stg-idx { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.lg-stg.on .lg-stg-idx { background: var(--accent); color: var(--on-accent); border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 15%, transparent); }
 .lg-stg-name { font-size: 13px; font-weight: 680; letter-spacing: -.01em; color: var(--fg); cursor: pointer; }
 .lg-stg:not(.on) .lg-stg-name { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--muted), transparent 40%); }
 .lg-stg-gate { font: 600 10px/1 var(--mono); color: var(--warn); background: color-mix(in oklch, var(--warn) 14%, transparent); border: 1px solid color-mix(in oklch, var(--warn) 30%, var(--border)); border-radius: 99px; padding: 3px 7px; }
@@ -99,10 +99,16 @@
 /* 子卡片区:缩进,让横支线从竖轨(x=11)分出到卡片(x=31) */
 .lg-stg-lanes { display: flex; flex-direction: column; gap: 7px; padding: 0 0 16px 31px; position: relative; }
 .lg-stg:last-child .lg-stg-lanes { padding-bottom: 2px; }
-.lg-lane { position: relative; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); transition: .12s; }
+.lg-lane { position: relative; display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); transition: border-color .12s, background .12s, opacity .12s; }
 .lg-lane::before { content: ''; position: absolute; left: -20px; top: 50%; width: 16px; height: 1.5px; background: var(--border-2); }
+/* Selected lanes read as active agents (matches the design system's .wfo-proj.on) — accent border +
+   wash + an accent-tinted terminal glyph — instead of looking identical to the unchecked ones save for
+   opacity. The lit >_ icon is the most legible "this project will run" cue across a stage's project rows. */
+.lg-lane:not(.off) { border-color: color-mix(in oklch, var(--accent) 34%, var(--border)); background: color-mix(in oklch, var(--accent) 7%, var(--bg)); }
+.lg-lane:not(.off) .lg-lane-ic { background: var(--accent-dim); color: var(--accent); }
 .lg-lane.off { opacity: .5; }
-.lg-lane:hover { border-color: var(--border-2); }
+.lg-lane:hover { border-color: color-mix(in oklch, var(--accent) 50%, var(--border-2)); }
+.lg-lane.off:hover { border-color: var(--border-2); }
 .lg-lane-ck { flex: 0 0 auto; cursor: pointer; display: grid; place-items: center; }
 .lg-lane-ck .wfo-ck { width: 17px; height: 17px; flex: 0 0 17px; }
 .lg-lane:not(.off) .lg-lane-ck .wfo-ck { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }

@@ -204,7 +204,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     isPackaged: app.isPackaged,
   }))
   ipcMain.handle(CH.configListProjects, () => readProjects().projects)
-  ipcMain.handle(CH.configAddProject, (_e, input: { repoUrl: string; branch: string }) => upsertProject(input))
+  ipcMain.handle(CH.configAddProject, (_e, input: { repoUrl: string; branch: string; alias?: string }) => upsertProject(input))
   ipcMain.handle(CH.configDeleteProject, (_e, id: string) => {
     writeProjects({ projects: readProjects().projects.filter(p => p.id !== id) })
     return readProjects().projects

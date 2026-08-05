@@ -75,8 +75,18 @@ export function XtermView({ termId, active, font }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [termId])
 
-  // Re-fit + focus when this tab becomes active.
-  useEffect(() => { if (active) { try { fitRef.current?.fit(); termRef.current?.focus() } catch { /* */ } } }, [active])
+  // Re-fit + focus when this tab becomes active. Also snap to the bottom: reopening a terminal that
+  // already has output refits into a new row count, which can leave the viewport parked a line or two
+  // above the buffer's end — hiding the prompt/cursor the user is about to type at. scrollToBottom()
+  // after the fit puts the live prompt back in view.
+  useEffect(() => {
+    if (!active) return
+    try {
+      fitRef.current?.fit()
+      termRef.current?.scrollToBottom()
+      termRef.current?.focus()
+    } catch { /* not visible */ }
+  }, [active])
   // Live-apply font changes.
   useEffect(() => {
     const t = termRef.current; if (!t) return

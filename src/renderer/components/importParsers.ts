@@ -4,18 +4,19 @@
 const stripComments = (text: string) => text.replace(/^\s*\/\/.*$/gm, '').trim()
 
 // ---------- Projects ----------
-export interface ParsedProject { repo: string; branch: string }
+export interface ParsedProject { repo: string; branch: string; alias?: string }
 
 export const PROJ_SAMPLE = [
   '[',
-  '  { "repo": "git@github.com:acme/web-app.git", "branch": "main" },',
-  '  { "repo": "git@github.com:acme/api-server.git", "branch": "develop" },',
+  '  { "repo": "git@github.com:acme/web-app.git", "branch": "main", "alias": "前台" },',
+  '  { "repo": "git@github.com:acme/api-server.git", "branch": "develop", "alias": "接口" },',
   '  { "repo": "https://github.com/acme/design-tokens.git", "branch": "feat/v3" },',
   '  { "repo": "/Users/me/code/internal-cli", "branch": "main" }',
   ']',
   '',
-  '// 也支持每行一条(去掉上面的 JSON,改写成):',
-  '// git@github.com:acme/web-app.git, main',
+  '// alias(别名)可选,便于在新建工作区时搜索。',
+  '// 也支持每行一条(去掉上面的 JSON,改写成 repo, branch, 别名):',
+  '// git@github.com:acme/web-app.git, main, 前台',
   '// /Users/me/code/internal-cli  develop',
 ].join('\n')
 
@@ -31,7 +32,8 @@ export function parseProjects(text: string): ParsedProject[] {
     for (const o of data) {
       // Field aliases include repoUrl/defaultBranch so a file exported by 导出 re-imports unchanged.
       const repo = String(o?.repo || o?.url || o?.git || o?.repoUrl || '').trim()
-      if (repo) out.push({ repo, branch: String(o?.branch || o?.ref || o?.defaultBranch || 'main').trim() || 'main' })
+      const alias = String(o?.alias || '').trim()
+      if (repo) out.push({ repo, branch: String(o?.branch || o?.ref || o?.defaultBranch || 'main').trim() || 'main', ...(alias ? { alias } : {}) })
     }
   } else {
     for (const raw of t.split(/\r?\n/)) {
@@ -39,7 +41,8 @@ export function parseProjects(text: string): ParsedProject[] {
       if (!ln || ln[0] === '#') continue
       const parts = ln.split(/\s*,\s*|\s+/)
       const repo = (parts[0] || '').trim()
-      if (repo) out.push({ repo, branch: (parts[1] || 'main').trim() || 'main' })
+      const alias = (parts[2] || '').trim()
+      if (repo) out.push({ repo, branch: (parts[1] || 'main').trim() || 'main', ...(alias ? { alias } : {}) })
     }
   }
   return out

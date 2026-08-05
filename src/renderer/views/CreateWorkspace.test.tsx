@@ -32,7 +32,7 @@ describe('CreateWorkspace', () => {
   it('builds opts from path + project selection and calls onCreate', () => {
     const onCreate = vi.fn(); const onCancel = vi.fn()
     render(<CreateWorkspace open onCancel={onCancel} onCreate={onCreate} projects={projects} workflows={workflows} providers={providers} onOpenProjectSettings={() => {}} onNewWorkflow={() => {}} />)
-    fireEvent.change(screen.getByPlaceholderText(/~\/code|路径/i), { target: { value: '~/code/ws-a' } })
+    fireEvent.change(screen.getByPlaceholderText(/~\/code/i), { target: { value: '~/code/ws-a' } })
     // select the project
     fireEvent.click(screen.getByText('proj1'))
     fireEvent.click(screen.getByRole('button', { name: /创建/ }))
@@ -68,9 +68,9 @@ describe('CreateWorkspace', () => {
   it('picks a directory via onPickPath and fills the path input', async () => {
     const onPickPath = vi.fn(async () => '/Users/me/code/picked')
     render(<CreateWorkspace open onCancel={() => {}} onCreate={() => {}} projects={projects} workflows={workflows} providers={providers} onOpenProjectSettings={() => {}} onNewWorkflow={() => {}} onPickPath={onPickPath} />)
-    fireEvent.click(screen.getByText('选择…'))
+    fireEvent.click(screen.getByText('浏览'))
     expect(onPickPath).toHaveBeenCalled()
-    await waitFor(() => expect((screen.getByPlaceholderText('~/code/') as HTMLInputElement).value).toBe('/Users/me/code/picked'))
+    await waitFor(() => expect((screen.getByPlaceholderText(/~\/code/i) as HTMLInputElement).value).toBe('/Users/me/code/picked'))
   })
 
   it('detects an unfinished creation on the picked folder: restores config, shows the banner, and 清除重来 discards + resets', async () => {
@@ -89,16 +89,16 @@ describe('CreateWorkspace', () => {
       onPickPath={async () => '/abs/ws-p'}
       onProbeWorkspace={onProbeWorkspace}
       onDiscardPartial={onDiscardPartial} />)
-    fireEvent.click(screen.getByText('选择…'))
+    fireEvent.click(screen.getByText('浏览'))
     // banner appears once the async probe resolves, and the path is restored
     expect(await screen.findByText('检测到未完成的创建')).toBeInTheDocument()
     expect(onProbeWorkspace).toHaveBeenCalledWith('/abs/ws-p')
-    expect((screen.getByPlaceholderText('~/code/') as HTMLInputElement).value).toBe('/abs/ws-p')
+    expect((screen.getByPlaceholderText(/~\/code/i) as HTMLInputElement).value).toBe('/abs/ws-p')
     // 清除重来 → discards the partial and resets the wizard (banner gone, path cleared)
     fireEvent.click(screen.getByRole('button', { name: /清除重来/ }))
     await waitFor(() => expect(onDiscardPartial).toHaveBeenCalledWith('/abs/ws-p'))
     await waitFor(() => expect(screen.queryByText('检测到未完成的创建')).toBeNull())
-    expect((screen.getByPlaceholderText('~/code/') as HTMLInputElement).value).toBe('')
+    expect((screen.getByPlaceholderText(/~\/code/i) as HTMLInputElement).value).toBe('')
   })
 
   it('auto-scans the picked folder and prepopulates 涉及项目 with detected repos, pre-checked in-place (Task 5)', async () => {
@@ -110,7 +110,7 @@ describe('CreateWorkspace', () => {
     ;(globalThis as any).window.forge = { scanRepos }
     const onCreate = vi.fn()
     render(<CreateWorkspace {...defaultProps} onCreate={onCreate} onPickPath={onPickPath} />)
-    fireEvent.click(screen.getByText('选择…'))
+    fireEvent.click(screen.getByText('浏览'))
     expect(onPickPath).toHaveBeenCalled()
     await waitFor(() => expect(scanRepos).toHaveBeenCalledWith('/Users/me/code/ws-scan'))
     // both detected repos show up as pre-checked rows, tagged 就地·不克隆, showing their current branch
@@ -144,7 +144,7 @@ describe('CreateWorkspace', () => {
     const scanRepos = vi.fn(async () => [{ name: 'api', relPath: 'api', absPath: '/ws/api', branch: 'main' }])
     ;(globalThis as any).window.forge = { scanRepos }
     render(<CreateWorkspace {...defaultProps} projects={registered} onPickPath={async () => '/ws'} />)
-    fireEvent.click(screen.getByText('选择…'))
+    fireEvent.click(screen.getByText('浏览'))
     await waitFor(() => expect(scanRepos).toHaveBeenCalledWith('/ws'))
     const apiRows = () => Array.from(document.querySelectorAll('.cr-proj'))
       .filter(r => r.querySelector('.pj-name')?.textContent?.startsWith('api')) as HTMLElement[]
@@ -165,9 +165,9 @@ describe('CreateWorkspace', () => {
     let call = 0
     const onPickPath = vi.fn(async () => (++call === 1 ? '/a' : '/b'))
     render(<CreateWorkspace {...defaultProps} onPickPath={onPickPath} />)
-    fireEvent.click(screen.getByText('选择…'))
+    fireEvent.click(screen.getByText('浏览'))
     await waitFor(() => expect(projRowByName('api')).toBeTruthy())
-    fireEvent.click(screen.getByText('选择…'))
+    fireEvent.click(screen.getByText('浏览'))
     await waitFor(() => expect(projRowByName('svc')).toBeTruthy())
     expect(projRowByName('api')).toBeFalsy()   // the first folder's detected row is gone, not leaked
     delete (globalThis as any).window.forge
@@ -302,7 +302,7 @@ describe('CreateWorkspace', () => {
   it('disables the create button and shows a pending label while creating', () => {
     const onCreate = vi.fn()
     render(<CreateWorkspace {...defaultProps} onCreate={onCreate} creating />)
-    fireEvent.change(screen.getByPlaceholderText(/~\/code|路径/i), { target: { value: '~/code/ws-x' } })
+    fireEvent.change(screen.getByPlaceholderText(/~\/code/i), { target: { value: '~/code/ws-x' } })
     const createBtn = screen.getByRole('button', { name: /创建中/ })
     expect(createBtn).toBeDisabled()
     fireEvent.click(createBtn)
@@ -329,7 +329,7 @@ describe('CreateWorkspace', () => {
       />
     )
     // set path so workspace name resolves
-    fireEvent.change(screen.getByPlaceholderText(/~\/code|路径/i), { target: { value: '~/code/ws-c' } })
+    fireEvent.change(screen.getByPlaceholderText(/~\/code/i), { target: { value: '~/code/ws-c' } })
     // select the project
     fireEvent.click(screen.getByText('proj1'))
     // change the per-project model to the codex option using the data-stpm selector
@@ -367,7 +367,7 @@ describe('CreateWorkspace – custom model', () => {
   it('entering a custom model id stores it as provider::id in stage model', () => {
     const onCreate = vi.fn()
     render(<CreateWorkspace {...defaultProps} onCreate={onCreate} />)
-    fireEvent.change(screen.getByPlaceholderText(/~\/code|路径/i), { target: { value: '~/code/cust' } })
+    fireEvent.change(screen.getByPlaceholderText(/~\/code/i), { target: { value: '~/code/cust' } })
     // design stage is enabled in the standard workflow
     const sel = document.querySelector('[data-stmodel="design"]') as HTMLSelectElement
     fireEvent.change(sel, { target: { value: '__custom__' } })
@@ -411,10 +411,10 @@ describe('CreateWorkspace – edit mode', () => {
     render(<CreateWorkspace {...defaultProps} editing={editingWs} />)
     expect(screen.getByText('编辑工作区')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /保存修改/ })).toBeInTheDocument()
-    const path = screen.getByPlaceholderText('~/code/') as HTMLInputElement
+    const path = screen.getByPlaceholderText(/~\/code/i) as HTMLInputElement
     expect(path.value).toBe('/abs/ws-a')
     expect(path.readOnly).toBe(true)
-    expect(screen.queryByText('选择…')).toBeNull()
+    expect(screen.queryByText('浏览')).toBeNull()
     expect(screen.getByDisplayValue('设计迁移')).toBeInTheDocument()
   })
 

@@ -31,6 +31,22 @@ describe('2c read pipeline e2e', () => {
     const tree = await readTree(repo, changes)
     expect(tree.some(n => n.name === 'a.ts' && n.chg === 'M')).toBe(true)
   })
+
+  it('a tracked, unchanged file diffs as plain context — NOT an all-added dump', async () => {
+    // a.ts is committed and untouched → `git diff HEAD` is empty. It must render as context lines
+    // (no green `+`), so an existing file the user never touched doesn't look freshly added.
+    const diff = await readDiff(repo, 'a.ts')
+    expect(diff.length).toBeGreaterThan(0)
+    expect(diff.every(l => l.kind === 'ctx')).toBe(true)
+    expect(diff.some(l => l.kind === 'add')).toBe(false)
+  })
+
+  it('an untracked (new-to-branch) file still diffs as all-added', async () => {
+    writeFileSync(join(repo, 'fresh.ts'), 'const n = 1\nconst m = 2\n')
+    const diff = await readDiff(repo, 'fresh.ts')
+    expect(diff.length).toBeGreaterThan(0)
+    expect(diff.every(l => l.kind === 'add')).toBe(true)
+  })
 })
 
 // 「本次会话变更」 must be relative to the pull baseline: a freshly-pulled worktree shows NOTHING

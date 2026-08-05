@@ -18,7 +18,7 @@ import { useResizable } from './state/useResizable'
 import { usePanelDock } from './state/panelDock'
 import { useSessions } from './state/useSessions'
 import { useSessionsMulti } from './state/useSessionsMulti'
-import { toggleExpanded, loadExpanded, saveExpanded } from './state/expandedWs'
+import { toggleExpanded, ensureExpanded, loadExpanded, saveExpanded } from './state/expandedWs'
 import { useUpdate } from './state/useUpdate'
 import { usePlugins } from './state/usePlugins'
 import { applyTheme } from './theme/applyTheme'
@@ -296,6 +296,9 @@ export function App() {
     return s
   }, [runningSessByWs, engine.run?.status, engine.run?.sessionId, run2SessByWs])
   const onToggleExpand = (id: string) => setExpandedWs(s => { const n = toggleExpanded(s, id); saveExpanded([...n]); return n })
+  // Entering a workspace (after create / navigate) should open it expanded so its session list — and the
+  // just-restored active session — are visible without a second click. Add-only (never collapses).
+  const expandWorkspace = (id: string) => setExpandedWs(s => { const n = ensureExpanded(s, id); if (n !== s) saveExpanded([...n]); return n })
 
   // Tell the pet which workspace the main window is "in" (null on home) so its command input can target it
   // even when idle. On home the pet falls back to a workspace the user click-selects in its own list.
@@ -461,6 +464,7 @@ export function App() {
       setSetupVisible(false)                     // dismiss setup progress panel
       setSetupState(INITIAL_SETUP_STATE)         // reset for next creation
       setActiveId(wsPath)                        // highlight the new workspace in the sidebar
+      expandWorkspace(wsPath)                    // open it expanded so its session list is visible right away
       setView('ws')                              // switch to the workspace view
       home.reload()                              // newly-created workspace shows on next home visit
       // No auto-run stash: the new workspace opens in plain chat. Workflows only start explicitly
@@ -496,6 +500,7 @@ export function App() {
       setSetupVisible(false)                     // dismiss setup progress panel (no run to watch)
       setSetupState(INITIAL_SETUP_STATE)         // reset for next creation
       setActiveId(wsPath)
+      expandWorkspace(wsPath)                    // open it expanded so its session list is visible right away
       setView('ws')
       home.reload()
     } catch (e) {

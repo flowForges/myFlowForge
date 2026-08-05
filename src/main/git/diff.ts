@@ -38,9 +38,17 @@ export async function readDiff(cwd: string, file: string, proxy = ''): Promise<D
   let out = ''
   try { out = await git(['diff', 'HEAD', '--', file], { cwd, proxy }) } catch { out = '' }
   if (out.trim()) return parseUnifiedDiff(out)
+  // No diff vs HEAD. Two cases both yield empty output: (a) the file is tracked but unchanged, or
+  // (b) it's untracked / new-to-branch (git diff HEAD ignores untracked files). Only (b) is genuinely
+  // "all added" — painting a tracked, unchanged file as all-green `+` is what made an existing,
+  // never-touched file look like the user added the whole thing. So probe tracked-ness: unchanged
+  // tracked content renders as plain context lines; only new/untracked content stays as adds.
+  let tracked = true
+  try { await git(['ls-files', '--error-unmatch', '--', file], { cwd, proxy }) } catch { tracked = false }
   try {
     const text = readFileSync(join(cwd, file), 'utf8').replace(/\n$/, '')
-    return text.split('\n').map((t, i) => ({ kind: 'add' as const, ln: i + 1, text: t }))
+    const kind: DiffLine['kind'] = tracked ? 'ctx' : 'add'
+    return text.split('\n').map((t, i) => ({ kind, ln: i + 1, text: t }))
   } catch { return [] }
 }
 
