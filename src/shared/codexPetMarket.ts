@@ -29,6 +29,10 @@ export interface CodexMarketPage {
   pageSize: number
   total: number
   totalPages: number
+  // 这一页来自本地缓存(这次没连上 codex-pets.net)。UI 据此打「离线 · 显示上次结果」的横幅,
+  // staleReason 是本次失败的真实原因(超时/DNS/限流…),让用户知道该修什么。
+  stale?: boolean
+  staleReason?: string
 }
 
 // 由 spritesheet 直链推出同目录的 pet.json 直链:替换最后一个路径段(连带 query)为 pet.json。

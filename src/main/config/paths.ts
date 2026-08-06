@@ -25,3 +25,6 @@ export const wsRunDir = (wsPath: string, runId: string) => join(wsRunsDir(wsPath
 export const wsDocsDir = (wsPath: string) => join(wsPath, `${basename(wsPath)}_docs`)
 
 export const pluginsFile = () => sysFile('integrations.json')
+
+// 宠物市场目录的离线缓存(codex-pets.net 拉不到时顶上)。纯缓存,删了只会退回「拉不到就空白」。
+export const codexMarketCacheDir = () => sysFile('codex-market-cache')

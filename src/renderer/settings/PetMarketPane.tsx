@@ -51,7 +51,7 @@ export function PetMarketPane({ pet, onChange }: Props) {
         }
       }
       setLoading(false)
-    }).catch(() => { if (my === reqRef.current) { setError('加载失败'); setLoading(false) } })
+    }).catch(() => { if (my === reqRef.current) { setError('加载失败 —— 主进程没有响应,请重试'); setLoading(false) } })
   }, [page, reloadN])
 
   const install = async (item: CodexMarketPet) => {
@@ -82,10 +82,28 @@ export function PetMarketPane({ pet, onChange }: Props) {
 
       {installErr && <div className="pm-err">{installErr}</div>}
 
+      {/* 这次没连上、但盘里有上次的目录 → 照常渲染,顶部说明白它是旧的、以及这次为什么没连上。
+          比整页报错强得多:用户仍能浏览,想装某只时资源直链再试一次网络即可。 */}
+      {!loading && data?.stale && (
+        <div className="pm-stale">
+          离线 · 显示上次结果{data.staleReason ? ` —— ${data.staleReason}` : ''}
+          {' · '}<button className="pm-retry" onClick={() => setReloadN(n => n + 1)}>重试</button>
+          {' · '}<button className="pm-retry" onClick={openSite}>用浏览器打开 {CODEX_PET_MARKET_SITE}</button>
+        </div>
+      )}
+
       {loading ? (
         <div className="pm-empty">加载中…</div>
       ) : error ? (
-        <div className="pm-empty">{error} · <button className="pm-retry" onClick={() => setReloadN(n => n + 1)}>重试</button></div>
+        <div className="pm-empty">
+          <div>连不上 <SiteLink /></div>
+          <div className="pm-err-why">{error}</div>
+          <div>
+            <button className="pm-retry" onClick={() => setReloadN(n => n + 1)}>重试</button>
+            {' · '}
+            <button className="pm-retry" onClick={openSite}>用浏览器打开 {CODEX_PET_MARKET_SITE}</button>
+          </div>
+        </div>
       ) : !data || !data.pets.length ? (
         <div className="pm-empty">这一页没有宠物。</div>
       ) : (
