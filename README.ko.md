@@ -4,9 +4,9 @@
 
 # myFlowForge
 
-**당신의 AI 코딩 워크플로우를 벼려내세요.**
+**AI 코딩 에이전트를 위한 macOS 콕핏.**
 
-**Claude Code, Codex, Cursor, Gemini, qoder & opencode** 를 하나의 통제된 다단계 코딩 파이프라인으로 오케스트레이션하는 데스크톱 콕핏 — 계획 승인 게이트, 네이티브 세션 가져오기, 실시간 사용량 추적, MCP 통합, 그리고 곁을 지켜주는 데스크톱 펫까지 갖췄습니다.
+**Claude Code, Codex, Cursor, Gemini, qoder, opencode, Trae** 를 비롯한 코딩 CLI 를 하나의 macOS 데스크톱에 모읍니다 —— **대화 도중에 에이전트와 모델을 바꾸고**, **여러 프로젝트를 동시에 개발**하며, **가벼운 워크플로우(수동 기어)** 로 매 단계를 직접 쥐고, 단계 사이에 나만의 **Hook** 을 끼워 넣으세요.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
@@ -20,175 +20,216 @@
 
 ---
 
-## 📸 스크린샷
-
 <div align="center">
 
-<img src="assets/screenshots/home.jpg" alt="홈 화면 — 워크스페이스, 오늘의 변경, 로컬 시간 인사" width="90%" />
+<img src="assets/screenshots/home.jpg" alt="홈 —— 워크스페이스, 실행 중인 에이전트, 오늘의 변경 사항을 한눈에" width="90%" />
 
-<sub><b>홈</b> — 이어서 시작: 워크스페이스, 실행 중인 에이전트, 오늘의 변경을 한눈에.</sub>
-
-<br /><br />
-
-<img src="assets/screenshots/workspace.jpg" alt="워크스페이스 — 다단계 워크플로 패널, 채팅, 변경/파일 인스펙터" width="90%" />
-
-<sub><b>워크스페이스</b> — 다단계 워크플로 패널, 에이전트별 채팅, 실시간 변경/파일 인스펙터 — 데스크톱 펫과 함께.</sub>
+<sub><b>홈</b> —— 하던 일을 이어서. 배경화면도 스킨도 강조색도 모두 바꿀 수 있습니다.</sub>
 
 </div>
 
 ---
 
-## myFlowForge란 무엇인가요?
+## myFlowForge 란
 
-최신 AI 코딩 도구들은 저마다 자기 터미널, 자기 세션 상태, 자기 할당량 속에서 따로 살아가며 공유된 계획이 없습니다. **myFlowForge** 는 이 모두를 한 지붕 아래로 모아 "AI와 대화하기"를 **반복 가능하고 검토 가능한 엔지니어링 워크플로우**로 바꿔줍니다.
+AI 코딩 CLI 는 저마다 자기 터미널에 틀어박혀 있습니다. 세션 상태도 할당량도 따로고, 서로의 존재조차 모릅니다. 하나를 고르면 그 작업이 끝날 때까지 함께 가는 수밖에 없죠.
 
-당신이 원하는 바를 설명하면, Forge가 선택한 에이전트들을 단계별 파이프라인 — **요구사항 → 설계 → 개발 → 테스트 → 리뷰** — 을 통해 이끌어 갑니다. 그리고 **하드 게이트**에서 멈춰, 단 한 줄의 코드가 작성되기 *전에* 기술 계획을 당신이 승인할 수 있게 합니다. 각 단계는 서로 다른 에이전트와 모델을 사용해, 여러 프로젝트에 걸쳐 병렬로 실행할 수 있으며, 다정한 데스크톱 펫이 지금 무슨 일이 일어나는지 한눈에 보여줍니다.
+**myFlowForge 는 그것들을 한 지붕 아래 모읍니다.** 에이전트와 모델은 *매 턴* 의 속성이지 세션의 속성이 아닙니다. Claude Opus 로 설계를 다듬고, 구현은 Codex 에 넘기고, 마무리 잡일은 저렴한 모델로 —— 전부 같은 대화 안에서, 맥락을 그대로 유지한 채.
 
-> ⚠️ **프로젝트 상태:** myFlowForge는 활발히 개발 중인 개인 프로젝트입니다. 현재 **macOS** (Apple Silicon & Intel) 를 대상으로 합니다. Electron 기반이므로 소스로부터 다른 플랫폼용으로도 빌드할 수 있지만, 오늘 기준 패키징되는 것은 macOS뿐입니다.
+그 위에 얹히는 것이 **가벼운 워크플로우** 입니다. 알아서 굴러가 버리는 컨베이어 벨트가 아니라, 같은 대화에 얇은 구조 한 겹을 씌우는 것뿐. 모든 단계는 당신이 "다음" 을 누를 때까지 기다립니다.
 
-## ✨ 주요 특징
+> ⚠️ **프로젝트 상태:** 활발히 개발 중인 개인 프로젝트입니다. 대상은 **macOS**(Apple Silicon 및 Intel). Electron 기반이라 소스에서 다른 플랫폼용으로 빌드할 수는 있지만, 현재 패키지를 배포하는 것은 macOS 뿐입니다. 릴리스 대부분은 beta —— 새 기능은 그쪽에 들어갑니다.
 
-- **🎛️ 멀티 에이전트 오케스트레이션** — 각 워크플로우 단계를 서로 다른 코딩 CLI (Claude Code, Codex, Cursor, Gemini, qoder, opencode) 와 서로 다른 모델로 라우팅합니다. **opencode** 자체가 멀티 프로바이더 게이트웨이여서 — 한 번만 연결하면 다양한 모델 벤더에 닿을 수 있습니다.
-- **📂 에디터에서 열기** — 타이틀바의 "위치 열기" 버튼이 설치된 에디터 (VS Code, Cursor, JetBrains, Zed, Finder, 터미널…) 를 감지해 현재 워크스페이스 — 또는 미리 보고 있는 파일 — 를 원하는 것으로 열고, 그 선택을 기본값으로 기억합니다.
-- **⌨️ 채팅 슬래시 명령** — 채팅에서 `/` 를 입력하면 워크플로우 트리거 메뉴와 함께 **실제 디스크에 있는 명령/프롬프트 및 설치된 스킬**이 에이전트별로 필터링되어 나타납니다.
-- **🔄 통제된 다단계 파이프라인** — 요구사항 → 설계 → 개발 → 테스트 → 리뷰, 그리고 **하드 계획 승인 게이트**: 실행이 시작되기 전에 기술 설계를 검토하고 승인 (또는 거부) 합니다.
-- **✂️ 선택적이고 토큰 효율적인 실행** — 구성된 워크플로우가 더 이상 모든 작업을 모든 프로젝트의 모든 단계로 억지로 통과시키지 않습니다. 작은 작업을 평이한 언어로 설명하면 오케스트레이션 에이전트가 **간소화된 계획**을 제안합니다 — 필요한 단계만 실행하고 (예: 테스트/리뷰 건너뛰기), 각 단계의 범위를 일부 프로젝트로 한정합니다 (예: 다섯 개 모두 분석하되 두 개에서만 코드 작성). 승인 카드는 당신이 확정하기 전에 무엇이 실행될지를 정확히 보여줍니다.
-- **🧭 실행자가 아닌 오케스트레이터** — 메인 채팅 에이전트는 절대 코드를 작성하거나 자체 내부 서브 에이전트를 만들지 않습니다. 오직 작업을 분해하고, 손을 쓰는 모든 단계를 Forge의 실제 오케스트레이션된 서브 에이전트에 위임할 뿐입니다.
-- **🧩 병렬 프로젝트 & 워크스페이스** — 여러 워크스페이스를 각각 격리된 git worktree로 동시에 실행하고, 여러 에이전트가 병렬 레인에서 나란히 작업하는 모습을 지켜보세요.
-- **📥 네이티브 세션 가져오기** — 기존 로컬 Claude / Codex / Cursor / qoder 세션을 읽기 전용으로 스캔하여 중앙 인덱스로 가져온 뒤, 워크스페이스로 이어서 진행합니다.
-- **📊 실시간 사용량 & 할당량 추적** — 실제 사용량 어댑터가 각 프로바이더의 남은 할당량과 리셋 시각을 드러냅니다.
-- **🔌 MCP 통합** — 내장된 Forge MCP 서버가 에이전트를 앱으로 다시 이어주어 (질문하기, 계획 제안하기, 산출물 넘기기) 도구 기반의 신뢰할 수 있는 제어를 제공합니다.
-- **🖥️ 실시간 관측 가능성** — 스트리밍되는 사고 / 실행 / 파일 변경 / 출력 로그, 필터링 가능한 로그 콘솔, 그리고 프로젝트 간 변경 증거.
-- **🐾 데스크톱 펫** — 당신의 포커스를 따라다니고, 에이전트 활동을 미리 보여주며, 확인 카드를 팝업으로 띄우는, 드래그 및 크기 조절이 가능한 동반자 — 설정 가능한 이펙트와 여러 펫 팩을 갖췄습니다.
-- **🎨 세련되고 개인화 가능한 UI** — 글래스모피즘, **6가지 테마** (light / dark / auto + midnight / sepia / forest), **12가지 강조 색상**, **커스텀 배경 이미지** (앱 전체 또는 채팅 영역, 투명도 조절 가능), 실시간 현지 시각 인사말이 있는 재설계된 홈 대시보드, 크기 조절 가능한 패널, 그리고 알림 센터.
+## ✨ 정말 중요한 다섯 가지
 
-## 🤖 지원 코딩 에이전트
+### 1. 하나를 편애하는 게 아니라, 모아서 쓰는 것
 
-| 에이전트 | 채팅 | 워크플로우 실행 | 네이티브 이어가기 | 모델 | MCP |
-|-------|:----:|:------------:|:-------------:|:------:|:---:|
-| **Claude Code** | ✅ | ✅ | ✅ | 동적 | ✅ |
-| **Codex** | ✅ | ✅ | ✅ | 동적 | ✅ |
-| **Cursor** | ✅ | ✅ | ✅ | 동적 | — |
-| **Gemini** | ✅ | ✅ | — | 동적 | — |
-| **qoder** | ✅ | ✅ | ✅ | 동적 | ✅ |
-| **opencode** | ✅ | ✅ | ✅ | 동적 (멀티 벤더) | — |
+12 개의 코딩 CLI 가 한 화면에 공존합니다: **Claude Code · Codex · Cursor · Gemini · qoder · opencode · Qwen · Copilot · Pi · Kimi · Reasonix · Trae**.
 
-> 모델은 각 CLI의 실제 로컬 구성에서 발견됩니다 — 하드코딩된 것은 전혀 없으며, 프로바이더별로 모델 목록을 편집할 수 있습니다. **opencode** 는 `opencode models` 에서 모델을 발견하므로, 단 하나의 통합으로 그 안에 구성해 둔 모든 프로바이더를 끌어옵니다.
+모델 목록은 **각 CLI 의 실제 로컬 설정에서 읽어옵니다**. 하드코딩은 한 줄도 없어서, 화면에 보이는 것은 당신 계정에서 실제로 돌아가는 것뿐입니다. 직접 항목을 추가할 수도 있고, 다음 갱신 때 덮어써지지 않습니다. **opencode** 는 그 자체가 멀티 벤더 게이트웨이라, 하나만 연결하면 한꺼번에 넓어집니다.
 
-## 🔧 작동 방식
+### 2. 같은 세션 안에서 에이전트와 모델 바꾸기
+
+입력창 아래에는 늘 에이전트 · 모델 · 권한 모드 세 개의 선택기가 있습니다. 다음 메시지를 보내기 전이라면 언제든 바꿀 수 있습니다.
+
+- 어떤 모델이 막히거나 엉뚱한 답을 한다 → 바꿔서 이어서 물어보세요. 지금까지의 대화를 보고 있습니다.
+- 어떤 제공자의 할당량이 떨어졌다 → 다른 쪽으로, 같은 세션 그대로.
+- 생각은 비싼 모델에게, 힘쓰는 일은 저렴한 모델에게.
+
+네이티브 이어하기를 지원하는 에이전트(Claude Code, Codex, Cursor, qoder, opencode)는 자기 세션 기록을 그대로 이어갑니다. 나머지는 myFlowForge 가 맥락을 재구성합니다. 어느 쪽이든 당신은 그냥 말을 이어가면 됩니다.
+
+### 3. 여러 프로젝트를 동시에 개발
+
+워크스페이스는 **여러 저장소** 를 담을 수 있습니다. 단계는 *프로젝트별로 팬아웃* 할 수 있어서, 프런트엔드 · 백엔드 · SDK 가 각자의 에이전트에 이끌려 동시에 나아갑니다. 각각 독립된 **git worktree** 에서 돌기 때문에 부딪히지 않고, 모든 diff 는 하나의 「변경」 패널에 모입니다.
+
+일부만 고를 수도 있습니다. 저장소 다섯 개를 전부 분석하되 코드는 그중 둘에만 쓰는 것 —— 지극히 평범한 설정입니다.
+
+### 4. 가벼운 워크플로우 —— 수동 기어
+
+워크플로우를 시작해도 끝까지 단숨에 달리지 **않습니다**. 들어가는 것은 「대화 모드」입니다.
+
+- 상단 리본에 *N / M 단계 · 현재 단계 · 어떤 에이전트가 움직이는지* 가 표시됩니다.
+- 해당 단계의 에이전트는 **눈앞의 대화 안에서** 작업합니다. 출력도 도구 호출도 파일 쓰기도 전부 보입니다.
+- 마음에 안 들면 그냥 계속 말을 거세요. 추가 질문이나 수정으로 단계가 다시 실행되지 않습니다.
+- 만족했다면 **「다음」**. 그때 비로소 인계문이 작성되어 다음 에이전트에게 넘어갑니다.
+
+기술 설계 단계는 **실체가 있는 markdown 문서**(`forge-docs/design.md`)를 프로젝트별 절로 나누어 씁니다. 요약본이 아니라 이 문서야말로 에이전트 사이의 유일한 계약입니다. 하위 에이전트는 **문서 전체를 읽은 뒤** 자기 절에 집중합니다.
+
+게이트가 걸린 단계는 멈춰서 당신을 기다립니다: **승인**, **되돌리기**(당신의 의견이 맨 위에 고정되고 직전 산출물이 기준선으로 다시 주어집니다), 혹은 재실행 없이 **질문만** 하기. 뒤늦게 설계가 틀렸다는 걸 깨달았다면 앞 단계로 돌아가 다시 할 수 있습니다.
+
+### 5. 단계 사이의 Hook
+
+Hook 은 단계**와** 단계 사이에 끼워 넣는 작은 한 걸음입니다. 단계가 "에이전트에게 본격적인 개발을 시키는 것"이라면, Hook 은 "가는 김에 잡일을 처리하는 것"입니다.
+
+**실행 전**, **특정 단계 뒤**, **실행 전체가 끝난 뒤** 에 붙일 수 있습니다. 최신 코드 받기, 설계 문서를 wiki 에 동기화, lint 실행, 보드 갱신, 알림 발송 등.
+
+각 Hook 은 워크스페이스 루트에서 **제한된 마이크로 에이전트** 로 돕니다. 자기에게 주어진 Skill 과 도구만 지니고, 현재 작업과 상위 단계가 만든 산출물 목록을 받아 일하고, 끝나면 한 줄로 보고합니다. 사람만 알 수 있는 벽(자격 증명이 없다, 어느 환경인지)에 부딪히면 넘겨짚지 않고 당신에게 직접 묻습니다. 실패하면 파이프라인 전체를 **막고** 재실행 / 건너뛰기 / 중단 세 가지를 제시합니다. Hook 은 슬롯과 무관한 전역 라이브러리에 있습니다 —— 한 번 쓰면 어디에나 붙일 수 있습니다.
+
+---
+
+<div align="center">
+
+<img src="assets/screenshots/workflow.jpg" alt="단계 구성 —— 각 단계가 자기 에이전트와 모델을 고르고, 코드 개발은 두 저장소로 팬아웃" width="90%" />
+
+<sub><b>단계 구성</b> —— 다섯 단계가 각자의 에이전트와 모델을 가지며, <i>코드 개발</i>은 두 저장소로 팬아웃.</sub>
+
+</div>
+
+---
+
+## 🤖 지원하는 코딩 에이전트
+
+| 에이전트 | 대화 | 워크플로우 | 네이티브 이어하기 | MCP | 모델 출처 |
+|----------|:----:|:----------:|:-----------------:|:---:|-----------|
+| **Claude Code** | ✅ | ✅ | ✅ | ✅ | CLI 에서 동적 검색 |
+| **Codex** | ✅ | ✅ | ✅ | ✅ | CLI 에서 동적 검색 |
+| **Cursor** | ✅ | ✅ | ✅ | ✅ | CLI 에서 동적 검색 |
+| **qoder** | ✅ | ✅ | ✅ | ✅ | 동적 검색 + 사용자 지정 |
+| **opencode** | ✅ | ✅ | ✅ | ✅ | 멀티 벤더 게이트웨이 |
+| **Gemini** | ✅ | ✅ | — | ✅ | 사전 정의 목록 |
+| **Qwen** | ✅ | ✅ | — | ✅ | 사전 정의 목록 |
+| **Copilot** | ✅ | ✅ | — | ✅ | 사전 정의 목록 |
+| **Pi** | ✅ | ✅ | — | — | 계정 기본값 / 사용자 지정 |
+| **Kimi** | ✅ | ✅ | — | — | kimi-k2.5 · 256K |
+| **Reasonix** | ✅ | ✅ | — | — | deepseek-flash / reasoner |
+| **Trae** 🆕 | ✅ | ✅ | — | — | 계정 기본값(`/model` 또는 `trae_cli.yaml`) |
+
+> **Trae**(ByteDance 의 TraeCode CLI)는 npm 으로 배포되지 않습니다. 공식 `install.sh` 가 `traecli` 를 `~/.local/bin` 에 넣으니 PATH 에 추가해 두세요. 워크플로우 안에서 무인으로 파일을 고치게 하려면 `traecli config edit` 에서 `permission_mode: bypass_permissions` 를 설정하세요.
+
+myFlowForge 는 **API 키를 저장하지도, 요청을 중계하지도 않습니다** —— 구동하는 것은 당신 컴퓨터에 이미 설치되고 로그인된 CLI 입니다. 설치되지 않은 것은 설정 화면에서 설치 안내와 함께 표시됩니다.
+
+## 🔧 한 번의 실행은 이런 모양
 
 ```
-   You describe the goal
+      목표를 말한다
             │
             ▼
-   📋 Requirement  ──►  🎨 Design  ──►  ✋ PLAN GATE  ──►  💻 Develop  ──►  🧪 Test  ──►  🔍 Review
-     (clarify)         (tech plan)     approve / reject      (code)        (verify)     (audit)
-            │                                │
-            │                                └─ You confirm the plan is correct *before* any code is written
-            ▼
-   Each stage → your chosen agent + model, isolated git worktree, live streaming logs
+  ┌─ hook ─┐        ┌─ hook ─┐                    ┌─ hook ─┐
+  │ 실행 전│        │ 설계 후│                    │ 실행 후│
+  └───┬────┘        └───┬────┘                    └───┬────┘
+      ▼                 ▼                             ▼
+ 📋 요구사항 → 🎨 기술 설계 → ✋ 게이트 → 💻 코드 개발 → 🧪 테스트 → 🔍 코드 리뷰
+   (명확화)     (design.md)   당신이 판단   (팬아웃)     (검증)     (다관점)
+                     │                       │
+                     │                       └─ 프로젝트당 에이전트 하나,
+                     │                          병렬 레인, 각자의 worktree
+                     └─ 실체가 있는 문서. 하위 에이전트는 전문을 읽는다
+
+ 모든 화살표는 "다음" 을 누를 때까지 기다립니다. 단계는 추가 · 삭제 · 재정렬 ·
+ 건너뛰기가 자유 —— 「요구사항 → 코드 개발」 두 걸음만 돌려도 됩니다.
 ```
 
-워크플로우를 트리거하는 세 가지 방법, 모두 동일한 단일 게이트로 수렴합니다:
+시작 방법은 세 가지, 모두 같은 게이트로 모입니다:
 
-1. 메인 채팅 에이전트가 의도를 감지하고 **`forge_propose_plan`** MCP 도구를 호출합니다.
-2. 폴백으로서의 스킬 기반 펜스드 지시문(directive).
-3. 명시적인 **"워크플로우 시작"** 버튼.
+1. 워크플로우 패널에서 「시작」을 누른다.
+2. 입력창에 `/` 를 치고 워크플로우를 고른다.
+3. 한 묶음의 개발 요구사항을 평범한 말로 설명한다. 메인 에이전트가 그것을 인식하고 MCP 를 통해 확인 게이트를 띄웁니다. 단순 질문 · 논의 · 한 군데만 고치는 작업으로는 발동하지 않습니다.
 
-## 📥 다운로드 & 설치
+## 🧩 이런 것들도 들어 있습니다
+
+- **네이티브 세션 가져오기** —— 로컬의 Claude / Codex / Cursor / qoder 기록을 읽기 전용으로 훑어 워크스페이스로 가져와 그대로 이어갑니다.
+- **MCP 브리지** —— 내장 Forge MCP 서버 덕분에 에이전트가 앱을 거꾸로 호출할 수 있습니다: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`. MCP 를 지원하는 8 개 에이전트에 주입되고, 나머지는 텍스트 지시로 대체됩니다.
+- **실시간 관측** —— 사고 / 도구 호출 / 파일 변경 / 원시 출력이 모두 스트리밍. 필터링 가능한 로그 콘솔, 실행 이력, 프로젝트를 가로지르는 변경 증적.
+- **토큰 사용량과 할당량** —— 각 제공자의 잔량과 초기화 시각, 그리고 워크스페이스 × 에이전트 × 일 별 소비량.
+- **봇 브리지** —— 휴대폰의 **DingTalk(딩톡)** 에서 게이트에 답하고, 결과를 확인하고, 대화를 시작하고, 워크플로우를 조작합니다(Telegram / Feishu 는 연결 지점 준비됨).
+- **권한 모드** —— 읽기 전용 · 워크스페이스 자동(기본) · 전체 접근. 세션 단위로도 단계 단위로도 설정할 수 있으며 각 CLI 의 실제 샌드박스 범위에 대응합니다. 어떤 에이전트가 실제로 이를 따르는지는 UI 가 분명히 알려줍니다.
+- **슬래시 명령 · Skill · 플러그인** —— `/` 로 디스크에 실제 존재하는 명령과 설치된 Skill 을 에이전트별로 걸러 보여줍니다.
+- **사용자 지정 워크플로우** —— 절차 자체를 직접 조립합니다. 이름 붙인 워크플로우를 얼마든지 저장할 수 있고, 각 단계가 에이전트 · 모델 · 권한 모드 · 팬아웃 형태 · 게이트 여부 · 문서 산출 여부를 따로 정합니다.
+- **사용자 지정 단계** —— 직접 쓴 단계들의 전역 라이브러리. 어떤 워크플로우에서든 참조할 수 있습니다.
+- **파일 브라우저와 diff** —— 변경 표시가 달린 전체 화면 트리, 구문 강조 미리보기, diff / 전문 전환.
+- **내장 터미널** —— 워크스페이스 바로 아래에서 도는 진짜 pty. 제공자별 프록시와 시간대 설정 포함.
+- **데스크톱 펫** —— 포커스된 화면을 따라다니고, 에이전트의 움직임을 미리 보여주고, 확인 카드를 띄웁니다. 펫 마켓을 둘러보거나 자기 이미지를 올릴 수도 있습니다.
+- **창 투명도와 프로스트 글래스** —— 슬라이더 하나로 완전 불투명부터 macOS 네이티브 3 단계 vibrancy 까지. 바탕화면이 은은하게 비칩니다.
+- **개인화** —— 오리지널 스킨 6 종, 강조색 12 가지, 내장 배경화면 갤러리 또는 내 이미지, 앱 전체와 대화 영역에 독립적인 px 단위 글꼴 크기. 라이트 / 다크는 각각 따로 대비를 맞췄습니다.
+
+## 📥 다운로드와 설치
 
 [**Releases**](https://github.com/flowForges/myFlowForge/releases) 페이지에서 최신 `.dmg` 를 받으세요:
 
-| 당신의 Mac | 권장 다운로드 |
-|----------|----------------------|
-| Apple Silicon (M1/M2/M3/M4) | `myFlowForge-<version>-arm64.dmg` 또는 유니버설 빌드 |
-| Intel | `myFlowForge-<version>.dmg` (x64) 또는 유니버설 빌드 |
-| 잘 모르겠다면 | `myFlowForge-<version>-universal.dmg` — 둘 다에서 동작 |
+| 사용 중인 Mac | 다운로드 |
+|---------------|----------|
+| Apple Silicon(M1/M2/M3/M4) | `myFlowForge-<버전>-arm64.dmg` |
+| Intel | `myFlowForge-<버전>.dmg` |
 
-> **⚠️ 이 앱은 아직 코드 서명이 되어 있지 않습니다.** 첫 실행 시 macOS가 앱을 *"열 수 없습니다"* 또는 *"손상되었습니다"* 라고 경고할 수 있습니다. 서명되지 않은 앱에서는 예상되는 동작입니다. 열려면:
-> - `/Applications` 에서 앱을 **우클릭** → **열기** → 대화상자에서 **열기**, **또는**
+> **⚠️ 앱은 아직 코드 서명이 되어 있지 않습니다.** 그래서 처음 열 때 macOS 가 *"열 수 없습니다"* 또는 *"손상되었습니다"* 라고 할 수 있습니다. 서명되지 않은 앱의 정상적인 모습이지 파일이 망가진 게 아닙니다. 둘 중 하나로 여세요:
+> - `/응용 프로그램` 의 앱을 **우클릭** → **열기** → 대화상자에서 다시 **열기**
 > - 터미널에서 한 번 실행: `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
 >
-> myFlowForge는 이 Releases 피드에서 업데이트를 확인하고 앱 내에서 더 새로운 버전을 제안합니다.
+> myFlowForge 는 같은 Releases 피드를 확인해 앱 안에서 새 버전을 안내합니다.
 
-## 🚀 시작하기
+## 🚀 소스에서 실행하기
 
-### 사전 준비물
-
-- **macOS** (Apple Silicon 또는 Intel)
-- **Node.js** ≥ 20 및 **npm**
-- 지원되는 코딩 CLI 중 하나 이상이 설치되고 인증되어 있어야 합니다 (Claude Code, Codex, Cursor, Gemini, qoder). Forge는 당신이 가진 것을 감지하고 나머지를 설치하도록 안내합니다.
-
-### 개발 모드로 설치 & 실행
+**전제 조건:** macOS 11 이상, Node.js ≥ 20, git, 그리고 지원되는 코딩 CLI 가 최소 하나 설치 · 인증되어 있을 것.
 
 ```bash
-# 1. Clone
 git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
-
-# 2. Install dependencies
 npm install
-
-# 3. Launch in dev mode (hot reload)
-npm run dev
+npm run dev          # 개발 모드, 렌더러 핫 리로드
 ```
-
-### 유용한 스크립트
 
 | 명령 | 하는 일 |
-|---------|--------------|
-| `npm run dev` | 핫 리로드로 앱 시작 |
-| `npm test` | 전체 테스트 스위트 실행 (Vitest) |
-| `npm run typecheck` | 메인 & 렌더러 tsconfig 모두 타입 체크 |
+|------|---------|
+| `npm run dev` | 핫 리로드로 실행 |
+| `npm test` | 전체 테스트 실행(Vitest) |
+| `npm run typecheck` | 메인 · 렌더러 두 tsconfig 를 함께 타입 검사 |
 | `npm run build` | 프로덕션 번들 빌드 |
-| `npm run dist` | macOS 배포본 (`.dmg`) 빌드 |
+| `npm run dist:mac-all` | Intel 과 Apple Silicon 두 `.dmg` 빌드 |
 
-### 배포본 빌드하기
-
-```bash
-npm run dist            # macOS x64
-npm run dist:arm64      # Apple Silicon
-npm run dist:universal  # Universal binary
-```
-
-산출물은 `release/` 에 기록됩니다.
+산출물은 `release/` 에 놓입니다. `src/main/**` 을 고쳤다면 **Electron 을 완전히 재시작** 해야 합니다. 핫 리로드는 렌더러만 새로 고칩니다.
 
 ## 🏗️ 기술 스택
 
-- **셸:** [Electron](https://www.electronjs.org/) 42 + [electron‑vite](https://electron-vite.org/)
-- **UI:** [React](https://react.dev/) 19 + TypeScript 6
-- **터미널:** [xterm.js](https://xtermjs.org/) + [node‑pty](https://github.com/microsoft/node-pty)
-- **에이전트 브리지:** [Model Context Protocol SDK](https://modelcontextprotocol.io/)
-- **프로세스 제어:** [execa](https://github.com/sindresorhus/execa) · **검증:** [zod](https://zod.dev/) · **파일 감시:** [chokidar](https://github.com/paulmillr/chokidar)
-- **테스트:** [Vitest](https://vitest.dev/) + Testing Library (전반에 걸쳐 테스트 주도 개발)
-- **패키징:** [electron‑builder](https://www.electron.build/)
+**셸:** [Electron](https://www.electronjs.org/) 42 + [electron-vite](https://electron-vite.org/) · **UI:** [React](https://react.dev/) 19 + TypeScript 6 · **터미널:** [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty) · **에이전트 브리지:** [Model Context Protocol SDK](https://modelcontextprotocol.io/) · **프로세스 제어:** [execa](https://github.com/sindresorhus/execa) · **검증:** [zod](https://zod.dev/) · **파일 감시:** [chokidar](https://github.com/paulmillr/chokidar) · **테스트:** [Vitest](https://vitest.dev/) + Testing Library · **패키징:** [electron-builder](https://www.electron.build/)
 
-## 📁 프로젝트 구조
+## 📁 디렉터리 구조
 
 ```
 src/
-├── main/          # Electron main process
-│   ├── agents/    # CLI adapters (claude, codex, cursor, gemini, qoder, opencode) + providers
-│   ├── orchestrator/  # Workflow engine & stage gating
-│   ├── chat/      # Per-workspace chat, queue, memory
-│   ├── mcp/       # Forge MCP server (agent → app bridge)
-│   ├── pet/       # Desktop pet window
-│   ├── sessionImport/  # Native session scanning & import
-│   ├── usage/     # Provider quota adapters
-│   └── ...        # git, fs, terminal, update, watcher, windows
-├── renderer/      # React UI (views, components, pet, settings, theme)
-├── preload/       # Context‑isolated IPC bridge
-└── shared/        # Types shared across processes
+├── main/              # Electron 메인 프로세스
+│   ├── agents/        # 각 CLI 어댑터 + 제공자 레지스트리 · 검출 · 권한
+│   ├── run/           # 워크플로우 엔진: 단계, 게이트, 팬아웃, hook, 인계
+│   ├── chat/          # 워크스페이스별 대화 · 큐 · 메모리
+│   ├── mcp/           # Forge MCP 서버(에이전트 → 앱)
+│   ├── bot/           # 봇 브리지(DingTalk / Telegram / Feishu 전송 계층)
+│   ├── plugins/       # 플러그인 호스트, 카탈로그, 스케줄러, 확장 지점
+│   ├── sessionImport/ # 네이티브 세션 스캔과 가져오기
+│   ├── usage/         # 제공자별 할당량 어댑터
+│   ├── pet/           # 데스크톱 펫 창
+│   └── ...            # git, fs, 터미널, 업데이트, 감시, 창, 외관
+├── renderer/          # React UI(뷰, 컴포넌트, 설정, 테마, 펫)
+├── preload/           # 컨텍스트가 분리된 IPC 브리지
+└── shared/            # 프로세스 간 공유 타입과 순수 로직
 ```
 
 ## 🤝 기여하기
 
-기여, 이슈, 기능 요청을 환영합니다! 이 프로젝트는 **테스트 주도** 워크플로우를 따릅니다 — 변경 사항과 함께 테스트를 추가하거나 업데이트하고, PR을 열기 전에 `npm test` 와 `npm run typecheck` 가 통과하는지 확인해 주세요.
+이슈와 PR 을 환영합니다. 이 프로젝트는 **테스트 주도** 입니다 —— 변경에는 테스트를 함께 넣고, `npm test` 와 `npm run typecheck` 가 통과하는지 확인한 뒤 PR 을 올려 주세요.
 
 ## 📄 라이선스
 
-[MIT License](LICENSE) 하에 배포됩니다 © 2026 zghua.
+[MIT License](LICENSE) 로 배포 © 2026 zghua.
 
 ## 🙏 감사의 말
 
-Electron, React, Vite, 그리고 Model Context Protocol을 둘러싼 훌륭한 오픈소스 생태계 — 그리고 이 앱이 오케스트레이션하는 코딩 에이전트들: Claude Code, Codex, Cursor, Gemini, qoder — 위에 만들어졌습니다.
+Electron, React, Vite, Model Context Protocol 을 둘러싼 훌륭한 오픈소스 생태계 —— 그리고 이 앱이 오케스트레이션하는 코딩 에이전트들 위에 서 있습니다.

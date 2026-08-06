@@ -4,9 +4,9 @@
 
 # myFlowForge
 
-**Forja tu flujo de trabajo de programación con IA.**
+**Una cabina de mando en macOS para tus agentes de programación con IA.**
 
-Una cabina de mando de escritorio que orquesta **Claude Code, Codex, Cursor, Gemini, qoder y opencode** en una única canalización de programación gobernada y multietapa — con puertas de aprobación de plan, importación de sesiones nativas, seguimiento de uso en vivo, integración con MCP y una mascota de escritorio que te acompaña.
+Un escritorio macOS que reúne **Claude Code, Codex, Cursor, Gemini, qoder, opencode, Trae** y más en un solo sitio —— para que puedas **cambiar de agente y de modelo en mitad de la conversación**, **desarrollar varios proyectos en paralelo**, llevar el trabajo con un **flujo ligero y en marcha manual**, e intercalar tus propios **hooks** entre etapas.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
@@ -20,19 +20,11 @@ Una cabina de mando de escritorio que orquesta **Claude Code, Codex, Cursor, Gem
 
 ---
 
-## 📸 Capturas de pantalla
-
 <div align="center">
 
-<img src="assets/screenshots/home.jpg" alt="Panel de inicio — espacios de trabajo, cambios de hoy y saludo con hora local" width="90%" />
+<img src="assets/screenshots/home.jpg" alt="Inicio — espacios de trabajo, agentes en marcha y los cambios de hoy de un vistazo" width="90%" />
 
-<sub><b>Inicio</b> — retoma donde lo dejaste: espacios de trabajo, agentes en ejecución y los cambios de hoy de un vistazo.</sub>
-
-<br /><br />
-
-<img src="assets/screenshots/workspace.jpg" alt="Espacio de trabajo — panel de flujo multietapa, chat e inspector de cambios/archivos" width="90%" />
-
-<sub><b>Espacio de trabajo</b> — el panel de flujo de trabajo multietapa, chat por agente e inspector de cambios/archivos en vivo — con tu mascota de escritorio.</sub>
+<sub><b>Inicio</b> — retoma donde lo dejaste. El fondo, la piel y el color de acento son tuyos para cambiarlos.</sub>
 
 </div>
 
@@ -40,150 +32,200 @@ Una cabina de mando de escritorio que orquesta **Claude Code, Codex, Cursor, Gem
 
 ## ¿Qué es myFlowForge?
 
-Las herramientas modernas de programación con IA viven cada una en su propia terminal, con su propio estado de sesión, su propia cuota y sin un plan compartido. **myFlowForge** las reúne todas bajo un mismo techo y convierte el "conversar con una IA" en un **flujo de trabajo de ingeniería repetible y revisable**.
+Cada CLI de programación con IA vive en su propia terminal, con su propio estado de sesión, su propia cuota y sin la menor idea de que las demás existen. Eliges una y te casas con ella hasta que acabe la tarea.
 
-Tú describes lo que quieres. Forge conduce a los agentes que elijas a través de una canalización por etapas — **Requisito → Diseño → Desarrollo → Prueba → Revisión** — deteniéndose en una **puerta estricta** para que puedas aprobar el plan técnico *antes* de que se escriba una sola línea de código. Cada etapa puede ejecutar un agente y un modelo distintos, en paralelo entre varios proyectos, mientras una amable mascota de escritorio te muestra de un vistazo lo que está ocurriendo.
+**myFlowForge las pone a todas bajo el mismo techo.** El agente y el modelo son propiedades de *cada turno*, no de la sesión: puedes madurar un diseño con Claude Opus, pasarle la implementación a Codex y bajar a algo barato para los remates, todo dentro de una misma conversación y sin perder el contexto.
 
-> ⚠️ **Estado del proyecto:** myFlowForge es un proyecto personal en desarrollo activo. Actualmente está orientado a **macOS** (Apple Silicon e Intel). Al estar basado en Electron, puede compilarse para otras plataformas desde el código fuente, pero hoy solo se empaqueta para macOS.
+Encima de eso se apoya un **flujo de trabajo ligero**: no una cadena de montaje que se te escapa de las manos, sino una fina capa de estructura sobre esa misma conversación. Cada etapa espera a que pulses *Siguiente*.
 
-## ✨ Aspectos destacados
+> ⚠️ **Estado del proyecto:** un proyecto personal en desarrollo activo. Está pensado para **macOS** (Apple Silicon e Intel). Al estar basado en Electron puede compilarse desde el código para otras plataformas, pero hoy solo se empaqueta para macOS. La mayoría de las versiones publicadas son beta: ahí es donde aterrizan las novedades.
 
-- **🎛️ Orquestación multiagente** — Dirige cada etapa del flujo de trabajo a una CLI de programación distinta (Claude Code, Codex, Cursor, Gemini, qoder, opencode) y a un modelo distinto. **opencode** es en sí mismo una pasarela multiproveedor — conéctalo una vez para alcanzar a muchos proveedores de modelos.
-- **📂 Abrir en tu editor** — Un botón "Abrir ubicación" en la barra de título detecta los editores instalados (VS Code, Cursor, JetBrains, Zed, Finder, terminales…) y abre el espacio de trabajo actual — o el archivo que estás previsualizando — en el que elijas, recordado como predeterminado.
-- **⌨️ Comandos slash en el chat** — Escribe `/` en el chat para ver un menú de disparadores de flujo de trabajo, además de tus **comandos/prompts reales en disco y las skills instaladas**, filtrados por agente.
-- **🔄 Canalización multietapa gobernada** — Requisito → Diseño → Desarrollo → Prueba → Revisión, con una **puerta estricta de aprobación de plan**: revisa y aprueba (o rechaza) el diseño técnico antes de que comience la ejecución.
-- **✂️ Ejecución selectiva y eficiente en tokens** — Un flujo de trabajo configurado ya no obliga a que cada tarea pase por todas las etapas y todos los proyectos. Describe una tarea pequeña en lenguaje sencillo y el agente orquestador propone un **plan recortado** — ejecuta solo las etapas que necesitas (p. ej. omitir Prueba/Revisión) y acota cada etapa a un subconjunto de proyectos (p. ej. analizar los cinco, escribir código solo en dos). La tarjeta de aprobación muestra exactamente qué se ejecutará antes de que confirmes.
-- **🧭 Orquestador, no ejecutor** — El agente de chat principal nunca escribe código ni genera sus propios subagentes internos; solo descompone tareas y delega cada paso práctico a los subagentes reales y orquestados de Forge.
-- **🧩 Proyectos y espacios de trabajo en paralelo** — Ejecuta varios espacios de trabajo de forma concurrente, cada uno con worktrees de git aislados; observa a varios agentes trabajar codo con codo en carriles paralelos.
-- **📥 Importación de sesiones nativas** — Escanea en modo solo lectura e importa tus sesiones locales existentes de Claude / Codex / Cursor / qoder a un índice central, y luego reanúdalas como espacios de trabajo.
-- **📊 Seguimiento de uso y cuota en vivo** — Adaptadores de uso reales exponen la cuota restante y los tiempos de reinicio de cada proveedor.
-- **🔌 Integración con MCP** — Un servidor Forge MCP integrado conecta a los agentes de vuelta a la aplicación (hacer preguntas, proponer planes, entregar artefactos) para un control fiable y basado en herramientas.
-- **🖥️ Observabilidad en tiempo real** — Registros en streaming de pensamiento / ejecución / cambios de archivos / salida, una consola de registros filtrable y evidencia de cambios entre proyectos.
-- **🐾 Mascota de escritorio** — Un compañero arrastrable y redimensionable que sigue tu foco, previsualiza la actividad de los agentes y muestra tarjetas de confirmación emergentes — con efectos configurables y múltiples packs de mascotas.
-- **🎨 Interfaz pulida y personalizable** — Glassmorphism, **6 temas** (claro / oscuro / automático + medianoche / sepia / bosque), **12 colores de acento**, una **imagen de fondo personalizada** (para toda la app o el área de chat, con opacidad ajustable), un panel de inicio rediseñado con un saludo según la hora local en vivo, paneles redimensionables y un centro de notificaciones.
+## ✨ Las cinco cosas que de verdad importan
 
-## 🤖 Agentes de programación compatibles
+### 1. Una colección de agentes, no un favorito
 
-| Agente | Chat | Ejecución de flujo | Reanudación nativa | Modelos | MCP |
-|-------|:----:|:------------:|:-------------:|:------:|:---:|
-| **Claude Code** | ✅ | ✅ | ✅ | dinámico | ✅ |
-| **Codex** | ✅ | ✅ | ✅ | dinámico | ✅ |
-| **Cursor** | ✅ | ✅ | ✅ | dinámico | — |
-| **Gemini** | ✅ | ✅ | — | dinámico | — |
-| **qoder** | ✅ | ✅ | ✅ | dinámico | ✅ |
-| **opencode** | ✅ | ✅ | ✅ | dinámico (multiproveedor) | — |
+Doce CLI de programación conviven en una sola interfaz: **Claude Code · Codex · Cursor · Gemini · qoder · opencode · Qwen · Copilot · Pi · Kimi · Reasonix · Trae**.
 
-> Los modelos se descubren a partir de la configuración local real de cada CLI — nada está codificado de forma fija, y puedes editar la lista de modelos por proveedor. **opencode** descubre sus modelos con `opencode models`, de modo que una sola integración incorpora todos los proveedores que hayas configurado en él.
+Las listas de modelos se **leen de la configuración local real de cada CLI**: nada codificado a mano, así que lo que ves es lo que tu cuenta puede ejecutar de verdad. También puedes añadir entradas a mano y sobreviven a la siguiente actualización. **opencode** es en sí mismo una pasarela multiproveedor: lo conectas una vez y llegas a muchos.
 
-## 🔧 Cómo funciona
+### 2. Cambiar de agente y de modelo dentro de una misma sesión
+
+Agente, modelo y modo de permisos son tres selectores que están siempre bajo el cuadro de escritura. Cambia el que quieras antes de tu siguiente mensaje:
+
+- Un modelo se atasca o se desvía → cambia y sigue preguntando; ve la conversación hasta ese punto.
+- Se te acabó la cuota con un proveedor → pásate a otro, en la misma sesión.
+- Modelo caro para pensar, modelo barato para el trabajo bruto.
+
+Los agentes con reanudación nativa (Claude Code, Codex, Cursor, qoder, opencode) continúan su propio historial de sesión. Para el resto, myFlowForge reconstruye el contexto. En ambos casos tú simplemente sigues hablando.
+
+### 3. Varios proyectos, desarrollados a la vez
+
+Un espacio de trabajo alberga **varios repositorios**. Una etapa puede *abrirse en abanico por proyecto*: frontend, backend y SDK avanzan a la vez, cada uno movido por su propio agente en su propio **git worktree**, así que nunca chocan, y todos los diffs acaban en un mismo panel de Cambios para revisarlos.
+
+El abanico admite un subconjunto: analizar los cinco repositorios pero escribir código solo en dos es una configuración perfectamente normal.
+
+### 4. Un flujo ligero, en marcha manual
+
+Arrancar un flujo **no** lo lanza hasta el final. Entra en un modo conversacional:
+
+- Una cinta arriba muestra *paso N de M · etapa actual · qué agente está al mando*.
+- El agente de esa etapa trabaja **en el chat que tienes delante**: salida, llamadas a herramientas y escrituras de archivos, todo a la vista.
+- ¿No te convence? Sigue hablando sin más. Las repreguntas y las correcciones no reejecutan la etapa.
+- ¿Contento? Pulsa **Siguiente**. Solo entonces se escribe el traspaso y entra el siguiente agente.
+
+La etapa de diseño escribe un **documento markdown de verdad** (`forge-docs/design.md`), con una sección por proyecto. Ese documento —y no un resumen que pierde matices— es el único contrato entre agentes; los agentes posteriores lo leen entero y luego se centran en su propia sección.
+
+Las etapas con compuerta se detienen y te esperan: **aprobar**, **devolver** (tus notas quedan fijadas arriba y la salida anterior vuelve como línea base) o simplemente **preguntar** sin provocar una reejecución. ¿Te das cuenta tarde de que el diseño estaba mal? Salta a una etapa anterior y rehazla.
+
+### 5. Hooks entre las etapas
+
+Un hook es un pequeño paso encajado **entre** etapas. Si una etapa es un agente haciendo ingeniería de verdad, un hook es un recado que se despacha por el camino.
+
+Engánchalo **antes de la ejecución**, **después de cualquier etapa** o **al terminar todo**: traer el último código, sincronizar el documento de diseño con tu wiki, pasar el lint, actualizar un tablero, mandar un aviso.
+
+Cada hook se ejecuta como un **microagente restringido** en la raíz del espacio de trabajo: solo las skills y herramientas que le diste, más la tarea y los artefactos producidos aguas arriba. Informa en una línea y te pregunta directamente cuando topa con algo que solo un humano puede resolver. Un fallo **bloquea** la tubería y ofrece reintentar / omitir / abortar. Los hooks viven en una biblioteca global, independiente de cualquier ranura: se escriben una vez y se enganchan donde haga falta.
+
+---
+
+<div align="center">
+
+<img src="assets/screenshots/workflow.jpg" alt="Composición de etapas — cada etapa elige su agente y su modelo; Desarrollo se abre en abanico a dos proyectos" width="90%" />
+
+<sub><b>Composición de etapas</b> — cinco etapas, cada una con su agente y su modelo; <i>Desarrollo</i> se abre en abanico sobre dos repositorios.</sub>
+
+</div>
+
+---
+
+## 🤖 Agentes de programación soportados
+
+| Agente | Chat | Flujo | Reanudación nativa | MCP | Modelos |
+|--------|:----:|:-----:|:------------------:|:---:|---------|
+| **Claude Code** | ✅ | ✅ | ✅ | ✅ | detectados desde el CLI |
+| **Codex** | ✅ | ✅ | ✅ | ✅ | detectados desde el CLI |
+| **Cursor** | ✅ | ✅ | ✅ | ✅ | detectados desde el CLI |
+| **qoder** | ✅ | ✅ | ✅ | ✅ | detectados + lista propia |
+| **opencode** | ✅ | ✅ | ✅ | ✅ | pasarela multiproveedor |
+| **Gemini** | ✅ | ✅ | — | ✅ | lista predefinida |
+| **Qwen** | ✅ | ✅ | — | ✅ | lista predefinida |
+| **Copilot** | ✅ | ✅ | — | ✅ | lista predefinida |
+| **Pi** | ✅ | ✅ | — | — | predeterminado de la cuenta / propio |
+| **Kimi** | ✅ | ✅ | — | — | kimi-k2.5 · 256K |
+| **Reasonix** | ✅ | ✅ | — | — | deepseek-flash / reasoner |
+| **Trae** 🆕 | ✅ | ✅ | — | — | predeterminado de la cuenta (`/model` o `trae_cli.yaml`) |
+
+> **Trae** (el TraeCode CLI de ByteDance) no se distribuye por npm: su `install.sh` oficial deja `traecli` en `~/.local/bin`, así que asegúrate de tenerlo en el PATH. Para que edite archivos sin supervisión dentro de un flujo, ejecuta `traecli config edit` y pon `permission_mode: bypass_permissions`.
+
+myFlowForge **no guarda claves de API ni retransmite peticiones**: mueve los CLI que ya tienes instalados y autenticados en tu máquina. Lo que falte aparece señalado en Ajustes con instrucciones de instalación.
+
+## 🔧 Cómo es una ejecución
 
 ```
-   You describe the goal
+   Describes el objetivo
             │
             ▼
-   📋 Requirement  ──►  🎨 Design  ──►  ✋ PLAN GATE  ──►  💻 Develop  ──►  🧪 Test  ──►  🔍 Review
-     (clarify)         (tech plan)     approve / reject      (code)        (verify)     (audit)
-            │                                │
-            │                                └─ You confirm the plan is correct *before* any code is written
-            ▼
-   Each stage → your chosen agent + model, isolated git worktree, live streaming logs
+  ┌─ hook ─┐        ┌─ hook ─┐                    ┌─ hook ─┐
+  │  antes │        │ tras el│                    │ tras la│
+  │   de   │        │ diseño │                    │ tanda  │
+  └───┬────┘        └───┬────┘                    └───┬────┘
+      ▼                 ▼                             ▼
+ 📋 Requisitos → 🎨 Diseño → ✋ COMPUERTA → 💻 Desarrollo → 🧪 Pruebas → 🔍 Revisión
+   (aclarar)    (design.md)   tú decides     (en abanico)   (verificar)  (multienfoque)
+                     │                            │
+                     │                            └─ un agente por proyecto,
+                     │                               carriles paralelos, worktree propio
+                     └─ un documento real, leído entero por cada agente posterior
+
+ Cada flecha espera a que pulses «Siguiente». Las etapas se añaden, se quitan,
+ se reordenan o se saltan — ejecutar solo Requisitos → Desarrollo es perfectamente válido.
 ```
 
-Tres formas de disparar un flujo de trabajo, todas convergiendo en la misma puerta única:
+Tres formas de arrancarlo, todas desembocando en la misma compuerta:
 
-1. El agente de chat principal detecta la intención y llama a la herramienta MCP **`forge_propose_plan`**.
-2. Una directiva delimitada por skills como alternativa.
-3. El botón explícito **"Iniciar flujo de trabajo"**.
+1. Pulsa **Iniciar** en el panel de flujo.
+2. Escribe `/` en el cuadro de escritura y elige uno.
+3. Describe una tarea de desarrollo completa en lenguaje llano: el agente principal la reconoce y levanta una compuerta de plan a través de MCP. Las preguntas sueltas, las discusiones y los arreglos de una línea no la disparan.
+
+## 🧩 Y además
+
+- **Importación de sesiones nativas** — escaneo de solo lectura de tu historial local de Claude / Codex / Cursor / qoder; impórtalo como espacio de trabajo y sigue.
+- **Puente MCP** — un servidor Forge MCP integrado deja que los agentes llamen de vuelta a la app: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`. Se inyecta en los ocho agentes que soportan MCP; el resto recurre a una directiva de texto.
+- **Observabilidad en tiempo real** — pensamiento, llamadas a herramientas, cambios de archivos y salida en bruto en streaming; consola de registro filtrable, historial de ejecuciones y evidencia de cambios entre proyectos.
+- **Uso de tokens y cuota** — cuota restante y hora de reinicio por proveedor, más el gasto por espacio de trabajo × agente × día.
+- **Puente de bots** — responde compuertas, consulta resultados, inicia una conversación y gobierna flujos desde **DingTalk** en el móvil (Telegram / Feishu ya cableados para más adelante).
+- **Modos de permiso** — solo lectura · automático en el espacio de trabajo (por defecto) · acceso total, por sesión o por etapa. Se mapean sobre el sandbox real de cada CLI, y la interfaz dice sin rodeos qué agentes lo respetan de verdad.
+- **Comandos con barra, skills y plugins** — `/` muestra tus comandos reales en disco y las skills instaladas, filtrados por agente.
+- **Flujos de trabajo propios** — el proceso lo montas tú: guarda tantos flujos con nombre como quieras, cada uno con su conjunto de etapas; cada etapa elige su agente, modelo, modo de permisos, forma de abanico, si lleva compuerta y si debe producir un documento.
+- **Etapas propias** — una biblioteca global de etapas escritas por ti, referenciable desde cualquier flujo.
+- **Explorador de archivos y diff** — árbol a pantalla completa con marcas de cambio, vista previa con resaltado de sintaxis y conmutador diff / texto completo.
+- **Terminal integrada** — un pty de verdad enraizado en el espacio de trabajo, con proxy y zona horaria por proveedor.
+- **Mascota de escritorio** — sigue la pantalla enfocada, previsualiza la actividad de los agentes y saca tarjetas de confirmación; curiosea el mercado de mascotas o trae tus propias imágenes.
+- **Transparencia y cristal esmerilado** — un único deslizador lleva toda la ventana desde totalmente opaca hasta los tres materiales de *vibrancy* nativos de macOS, dejando ver el escritorio.
+- **Personalización** — 6 pieles originales, 12 colores de acento, una galería de fondos o tu propia imagen, tamaños de fuente en píxeles exactos e independientes para la app y para el chat, con contraste ajustado por separado en claro y oscuro.
 
 ## 📥 Descarga e instalación
 
-Consigue el `.dmg` más reciente en la página de [**Releases**](https://github.com/flowForges/myFlowForge/releases):
+Coge el último `.dmg` desde la página de [**Releases**](https://github.com/flowForges/myFlowForge/releases):
 
-| Tu Mac | Descarga recomendada |
-|----------|----------------------|
-| Apple Silicon (M1/M2/M3/M4) | `myFlowForge-<version>-arm64.dmg` o la compilación universal |
-| Intel | `myFlowForge-<version>.dmg` (x64) o la compilación universal |
-| No estás seguro | `myFlowForge-<version>-universal.dmg` — funciona en ambos |
+| Tu Mac | Descarga |
+|--------|----------|
+| Apple Silicon (M1/M2/M3/M4) | `myFlowForge-<versión>-arm64.dmg` |
+| Intel | `myFlowForge-<versión>.dmg` |
 
-> **⚠️ La aplicación aún no está firmada con código.** En el primer lanzamiento, macOS puede advertir que la app *"no se puede abrir"* o *"está dañada"*. Esto es normal en una app sin firmar. Para abrirla:
-> - **Haz clic derecho** en la app dentro de `/Applications` → **Abrir** → **Abrir** en el diálogo, **o**
-> - ejecuta una vez en la Terminal: `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
+> **⚠️ La app aún no está firmada.** Al abrirla por primera vez macOS puede decir que *«no se puede abrir»* o que *«está dañada»*: es lo que ocurre con una app sin firmar, el archivo está bien. Puedes:
+> - **Clic derecho** sobre la app en `/Aplicaciones` → **Abrir** → **Abrir** en el diálogo, o
+> - ejecutar una vez: `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
 >
-> myFlowForge consulta este feed de Releases en busca de actualizaciones y ofrece versiones más nuevas dentro de la app.
+> myFlowForge consulta este mismo canal de Releases y te ofrece las versiones nuevas desde dentro de la app.
 
-## 🚀 Primeros pasos
+## 🚀 Primeros pasos desde el código
 
-### Requisitos previos
-
-- **macOS** (Apple Silicon o Intel)
-- **Node.js** ≥ 20 y **npm**
-- Una o más de las CLIs de programación compatibles instaladas y autenticadas (Claude Code, Codex, Cursor, Gemini, qoder). Forge detecta lo que tienes y te guía en la instalación del resto.
-
-### Instalar y ejecutar en desarrollo
+**Requisitos previos:** macOS 11+, Node.js ≥ 20, git y al menos un CLI de programación soportado, instalado y autenticado.
 
 ```bash
-# 1. Clone
 git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
-
-# 2. Install dependencies
 npm install
-
-# 3. Launch in dev mode (hot reload)
-npm run dev
+npm run dev          # modo desarrollo con recarga en caliente del renderer
 ```
-
-### Scripts útiles
 
 | Comando | Qué hace |
-|---------|--------------|
-| `npm run dev` | Inicia la app con recarga en caliente |
-| `npm test` | Ejecuta la suite de pruebas completa (Vitest) |
-| `npm run typecheck` | Verifica los tipos de ambos tsconfig (main y renderer) |
-| `npm run build` | Compila el bundle de producción |
-| `npm run dist` | Compila un distribuible de macOS (`.dmg`) |
+|---------|----------|
+| `npm run dev` | Arranca con recarga en caliente |
+| `npm test` | Ejecuta toda la batería de pruebas (Vitest) |
+| `npm run typecheck` | Comprueba tipos en los tsconfig de main y renderer |
+| `npm run build` | Compila el paquete de producción |
+| `npm run dist:mac-all` | Compila los `.dmg` de Intel y Apple Silicon |
 
-### Compilar un distribuible
+Los artefactos van a `release/`. Los cambios bajo `src/main/**` requieren **reiniciar Electron por completo**; la recarga en caliente solo refresca el renderer.
 
-```bash
-npm run dist            # macOS x64
-npm run dist:arm64      # Apple Silicon
-npm run dist:universal  # Universal binary
-```
+## 🏗️ Pila técnica
 
-Los artefactos se escriben en `release/`.
-
-## 🏗️ Pila tecnológica
-
-- **Shell:** [Electron](https://www.electronjs.org/) 42 + [electron‑vite](https://electron-vite.org/)
-- **UI:** [React](https://react.dev/) 19 + TypeScript 6
-- **Terminal:** [xterm.js](https://xtermjs.org/) + [node‑pty](https://github.com/microsoft/node-pty)
-- **Puente de agentes:** [Model Context Protocol SDK](https://modelcontextprotocol.io/)
-- **Control de procesos:** [execa](https://github.com/sindresorhus/execa) · **Validación:** [zod](https://zod.dev/) · **Vigilancia de archivos:** [chokidar](https://github.com/paulmillr/chokidar)
-- **Pruebas:** [Vitest](https://vitest.dev/) + Testing Library (Desarrollo Guiado por Pruebas en todo el proyecto)
-- **Empaquetado:** [electron‑builder](https://www.electron.build/)
+**Contenedor:** [Electron](https://www.electronjs.org/) 42 + [electron-vite](https://electron-vite.org/) · **UI:** [React](https://react.dev/) 19 + TypeScript 6 · **Terminal:** [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty) · **Puente de agentes:** [Model Context Protocol SDK](https://modelcontextprotocol.io/) · **Control de procesos:** [execa](https://github.com/sindresorhus/execa) · **Validación:** [zod](https://zod.dev/) · **Vigilancia de archivos:** [chokidar](https://github.com/paulmillr/chokidar) · **Pruebas:** [Vitest](https://vitest.dev/) + Testing Library · **Empaquetado:** [electron-builder](https://www.electron.build/)
 
 ## 📁 Estructura del proyecto
 
 ```
 src/
-├── main/          # Electron main process
-│   ├── agents/    # CLI adapters (claude, codex, cursor, gemini, qoder, opencode) + providers
-│   ├── orchestrator/  # Workflow engine & stage gating
-│   ├── chat/      # Per-workspace chat, queue, memory
-│   ├── mcp/       # Forge MCP server (agent → app bridge)
-│   ├── pet/       # Desktop pet window
-│   ├── sessionImport/  # Native session scanning & import
-│   ├── usage/     # Provider quota adapters
-│   └── ...        # git, fs, terminal, update, watcher, windows
-├── renderer/      # React UI (views, components, pet, settings, theme)
-├── preload/       # Context‑isolated IPC bridge
-└── shared/        # Types shared across processes
+├── main/              # Proceso principal de Electron
+│   ├── agents/        # Adaptadores de CLI + registro de proveedores, detección, permisos
+│   ├── run/           # Motor de flujo: etapas, compuertas, abanico, hooks, traspasos
+│   ├── chat/          # Chat, cola y memoria por espacio de trabajo
+│   ├── mcp/           # Servidor Forge MCP (puente agente → app)
+│   ├── bot/           # Puente de bots (transportes DingTalk / Telegram / Feishu)
+│   ├── plugins/       # Anfitrión de plugins, catálogo, planificador, puntos de extensión
+│   ├── sessionImport/ # Escaneo e importación de sesiones nativas
+│   ├── usage/         # Adaptadores de cuota por proveedor
+│   ├── pet/           # Ventana de la mascota de escritorio
+│   └── ...            # git, fs, terminal, actualizaciones, vigilancia, ventanas, apariencia
+├── renderer/          # Interfaz React (vistas, componentes, ajustes, tema, mascota)
+├── preload/           # Puente IPC con aislamiento de contexto
+└── shared/            # Tipos y lógica pura compartidos entre procesos
 ```
 
 ## 🤝 Contribuir
 
-¡Las contribuciones, incidencias y solicitudes de funcionalidades son bienvenidas! Este proyecto sigue un flujo de trabajo **guiado por pruebas** — por favor, añade o actualiza pruebas con tus cambios y asegúrate de que `npm test` y `npm run typecheck` pasen antes de abrir un PR.
+Las incidencias y los PR son bienvenidos. El proyecto es **dirigido por pruebas**: añade o actualiza pruebas junto con tus cambios y comprueba que `npm test` y `npm run typecheck` pasan antes de abrir un PR.
 
 ## 📄 Licencia
 
@@ -191,4 +233,4 @@ Publicado bajo la [Licencia MIT](LICENSE) © 2026 zghua.
 
 ## 🙏 Agradecimientos
 
-Construido sobre el excelente ecosistema de código abierto en torno a Electron, React, Vite y el Model Context Protocol — y los agentes de programación que orquesta: Claude Code, Codex, Cursor, Gemini y qoder.
+Construido sobre el ecosistema de código abierto que rodea a Electron, React, Vite y el Model Context Protocol —— y sobre los agentes de programación que orquesta.
