@@ -1,13 +1,23 @@
 import { useState } from 'react'
 import type { PluginsApi } from '../state/usePlugins'
 import type { CatalogEntry } from '@shared/plugins'
+import { isFeaturePlugin } from '@shared/plugins'
 import { fmtRelTime } from '@shared/relTime'
 
 const TYPE_LABELS: Record<string, string> = {
   'statusbar-usage': '状态栏额度显示',
+  'pet-market': '功能 · 宠物市场',
 }
 function typeLabel(type: string): string {
   return TYPE_LABELS[type] ?? type
+}
+
+// 退避剩余时长,给人看的粗粒度即可(「约 12 分钟后重试」)。
+function fmtCooldown(ms: number): string {
+  const mins = Math.ceil(ms / 60000)
+  if (mins <= 1) return '约 1 分钟后重试'
+  if (mins < 60) return `约 ${mins} 分钟后重试`
+  return `约 ${Math.ceil(mins / 60)} 小时后重试`
 }
 
 // Per-provider guidance for the manual credential field. Claude/Codex/Gemini are auto-read from the
@@ -76,11 +86,21 @@ export function PluginPane({ plugins, results, catalog, install, uninstall, setE
         ) : (
           <div className="plugin-list">
             {plugins.map(p => {
+              // 功能插件(宠物市场)不进调度、永远没有运行结果 —— 它的状态就是「开/关」本身。
+              // 别把它当数据插件显示「未运行」(更别说以前那条「不支持的类型」红字)。
+              const feature = isFeaturePlugin(p)
               const r = results[p.id]
-              const hasResult = !!r
-              const statusOn = hasResult && r.ok
+              const hasResult = !feature && !!r
+              const statusOn = feature ? p.enabled : hasResult && r.ok
               const statusErr = hasResult && !r.ok
-              const statusText = !hasResult ? '未运行' : r.ok ? fmtRelTime(r.at, now) : (r.error ?? '错误')
+              const statusText = feature
+                ? (p.enabled ? '已启用' : '已停用')
+                : !hasResult ? '未运行' : r.ok ? fmtRelTime(r.at, now) : (r.error ?? '错误')
+              // 失败退避后下次自动重试可能在很久以后(429 尤其)。不说清楚,用户只会看到一条不动的错误,
+              // 以为插件彻底坏了。这里把等待时长摆出来 —— 想立刻重试就点旁边的「刷新」(它绕过退避)。
+              const cooldown = !feature && hasResult && !r.ok && r.nextAt && r.nextAt > now
+                ? fmtCooldown(r.nextAt - now)
+                : ''
               const statusCls = ['plugin-status', statusOn ? 'on' : '', statusErr ? 'err' : ''].filter(Boolean).join(' ')
               const canCred = p.type === 'statusbar-usage' && !!p.provider
               const provider = p.provider ?? ''
@@ -90,9 +110,11 @@ export function PluginPane({ plugins, results, catalog, install, uninstall, setE
                   <div className="plugin-ic"><PluginIcon /></div>
                   <div className="plugin-rmeta">
                     <div className="t">{p.name}</div>
-                    <div className="d"><span>{typeLabel(p.type)}</span>{` · ${p.type}`}{p.provider ? ` · ${p.provider}` : ''}{` · 每 ${p.refreshSec}s`}</div>
+                    <div className="d"><span>{typeLabel(p.type)}</span>{` · ${p.type}`}{p.provider ? ` · ${p.provider}` : ''}{feature ? '' : ` · 每 ${p.refreshSec}s`}</div>
                   </div>
-                  <span className={statusCls}>{statusText}</span>
+                  <span className={statusCls} title={cooldown || undefined}>
+                    {statusText}{cooldown ? ` · ${cooldown}` : ''}
+                  </span>
                   <div className="plugin-row-actions">
                     {canCred && (
                       <button className={`plugin-action${creds[provider] ? ' primary' : ''}`} onClick={() => setCredOpen(s => ({ ...s, [p.id]: !s[p.id] }))} title="设置该插件的凭据(token/cookie)">
@@ -102,7 +124,7 @@ export function PluginPane({ plugins, results, catalog, install, uninstall, setE
                     <button className={`plugin-action${!p.enabled ? ' primary' : ''}`} onClick={() => void setEnabled(p.id, !p.enabled)}>
                       {p.enabled ? '禁用' : '启用'}
                     </button>
-                    <button className="plugin-action" onClick={() => void refresh(p.id)}>刷新</button>
+                    {!feature && <button className="plugin-action" onClick={() => void refresh(p.id)}>刷新</button>}
                     <button className="plugin-action danger" onClick={() => void uninstall(p.id)}>卸载</button>
                   </div>
                   {open && (

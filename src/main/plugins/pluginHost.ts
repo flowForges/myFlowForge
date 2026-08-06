@@ -5,7 +5,9 @@ import { EXTENSION_POINTS } from './extensionPoints'
 
 export type PluginRunResult =
   | { ok: true; type: string; data: unknown }
-  | { ok: false; error: string }
+  // retryAfterSec: the server's own `Retry-After` (429/503). When present the scheduler paces the
+  // next attempt by it instead of its own backoff curve — see PluginScheduler.nextDelayMs.
+  | { ok: false; error: string; retryAfterSec?: number }
 
 // Injectable exec dep: returns { stdout, failed }
 export type ExecRun = (

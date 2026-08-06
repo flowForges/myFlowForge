@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { PluginScheduler, type PluginSnapshot } from './pluginScheduler'
+import { PluginScheduler, nextDelayMs, MAX_BACKOFF_MS, MANUAL_REFRESH_MIN_MS, type PluginSnapshot } from './pluginScheduler'
 import type { InstalledPlugin } from './pluginSchema'
 import type { PluginRunResult } from './pluginHost'
 
@@ -280,6 +280,158 @@ describe('PluginScheduler', () => {
       const snap = sched.snapshot()
       expect(snap.plugins).toEqual([pa])
       expect(snap.results['a']).toMatchObject({ ok: true, data: 99 })
+    })
+  })
+
+  // 回归:宠物市场这类「功能插件」(native 且非 statusbar-usage)没有可执行入口也没有 pluginHost 扩展点。
+  // 以前调度器照跑不误 → 每 refreshSec 在插件卡上刷一条「不支持的类型: pet-market」。它必须完全不进调度。
+  describe('功能插件(native 非额度类)不进调度', () => {
+    const petMarket = (enabled = true): InstalledPlugin => ({
+      id: 'forge-official-pet-market', dir: '', type: 'pet-market', name: 'codex 宠物市场',
+      entry: 'native', refreshSec: 300, enabled, native: true,
+    })
+
+    it('start() 不跑它、不给它排定时器', async () => {
+      const { deps, runSpy, setTimerSpy } = makeDeps([petMarket()])
+      new PluginScheduler(deps).start()
+      await Promise.resolve()
+      expect(runSpy).not.toHaveBeenCalled()
+      expect(setTimerSpy).not.toHaveBeenCalled()
+    })
+
+    it('手点刷新也不跑它', async () => {
+      const { deps, runSpy } = makeDeps([petMarket()])
+      await new PluginScheduler(deps).refresh('forge-official-pet-market')
+      expect(runSpy).not.toHaveBeenCalled()
+    })
+
+    it('全量 refresh() 跳过它但照常跑额度插件', async () => {
+      const usage: InstalledPlugin = {
+        id: 'forge-official-claude-usage', dir: '', type: 'statusbar-usage', provider: 'claude',
+        name: 'Claude 额度', entry: 'native', refreshSec: 300, enabled: true, native: true,
+      }
+      const { deps, runSpy } = makeDeps([petMarket(), usage])
+      await new PluginScheduler(deps).refresh()
+      expect(runSpy).toHaveBeenCalledTimes(1)
+      expect(runSpy.mock.calls[0][0].id).toBe('forge-official-claude-usage')
+    })
+
+    it('reconcile() 清掉老版本遗留的错误结果(自愈)', async () => {
+      // 先让它以「可调度」的身份留下一条错误结果,模拟从老版本升级上来的用户。
+      const legacy: InstalledPlugin = { ...petMarket(), native: false }
+      const plugins: InstalledPlugin[] = [legacy]
+      const { deps, runSpy } = makeDeps(plugins)
+      runSpy.mockResolvedValue(errResult('不支持的类型: pet-market'))
+      const sched = new PluginScheduler(deps)
+      await sched.refresh(legacy.id)
+      expect(sched.snapshot().results[legacy.id]).toMatchObject({ ok: false })
+
+      // 升级后它被正确标为 native 功能插件 → reconcile 应把它移出调度并丢掉那条错误结果。
+      plugins[0] = petMarket()
+      sched.reconcile()
+      expect(sched.snapshot().results[legacy.id]).toBeUndefined()
+    })
+  })
+
+  // ── 429 防线 ──────────────────────────────────────────────────────────────
+  // 以前无论成败都按固定 refreshSec 重排 → 撞上 429 就以同一频率一直撞,直到用户自己关掉插件。
+  describe('nextDelayMs (失败退避曲线)', () => {
+    it('成功就是常规间隔', () => {
+      expect(nextDelayMs(300, 0)).toBe(300_000)
+    })
+
+    it('连续失败按 2 的幂次往后退', () => {
+      expect(nextDelayMs(300, 1)).toBe(600_000)
+      expect(nextDelayMs(300, 2)).toBe(1_200_000)
+      expect(nextDelayMs(300, 3)).toBe(2_400_000)
+    })
+
+    it('封顶 1 小时,且大指数不溢出', () => {
+      expect(nextDelayMs(300, 10)).toBe(MAX_BACKOFF_MS)
+      expect(nextDelayMs(300, 999)).toBe(MAX_BACKOFF_MS)
+    })
+
+    it('服务器给了 Retry-After 就听它的,且不受 1 小时上限压制', () => {
+      // 服务器说等两小时。硬压到 1 小时只会再撞一次 429 —— 所以这里必须超过 MAX_BACKOFF_MS。
+      expect(nextDelayMs(300, 1, 7200)).toBe(7_200_000)
+      expect(nextDelayMs(300, 1, 7200)).toBeGreaterThan(MAX_BACKOFF_MS)
+    })
+
+    it('Retry-After 比常规间隔还短时,不早于常规间隔', () => {
+      expect(nextDelayMs(300, 1, 5)).toBe(300_000)
+    })
+  })
+
+  describe('调度器的退避与节流', () => {
+    it('失败后按退避重排,成功后回到常规间隔', async () => {
+      const p = makePlugin('a', true, 60)
+      const { deps, runSpy, setTimerSpy } = makeDeps([p])
+      const sched = new PluginScheduler(deps)
+
+      runSpy.mockResolvedValue(errResult('HTTP 429'))
+      sched.start()
+      await Promise.resolve(); await Promise.resolve()
+      expect(setTimerSpy.mock.calls.at(-1)?.[1]).toBe(120_000)   // 60s × 2^1
+
+      // 第二次失败继续退
+      await sched.refresh('a', true)
+      expect(setTimerSpy.mock.calls.at(-1)?.[1]).toBe(240_000)   // 60s × 2^2
+
+      // 一次成功就复位
+      runSpy.mockResolvedValue(okResult())
+      await sched.refresh('a', true)
+      expect(setTimerSpy.mock.calls.at(-1)?.[1]).toBe(60_000)
+    })
+
+    it('把服务器的 Retry-After 作为下次间隔', async () => {
+      const p = makePlugin('a', true, 60)
+      const { deps, runSpy, setTimerSpy } = makeDeps([p])
+      runSpy.mockResolvedValue({ ok: false, error: '请求过于频繁（429），稍后再试', retryAfterSec: 900 })
+      const sched = new PluginScheduler(deps)
+      sched.start()
+      await Promise.resolve(); await Promise.resolve()
+      expect(setTimerSpy.mock.calls.at(-1)?.[1]).toBe(900_000)
+    })
+
+    it('结果里带上 nextAt,供 UI 显示还要等多久', async () => {
+      const p = makePlugin('a', true, 60)
+      const { deps, runSpy, nowMs } = makeDeps([p])
+      nowMs.mockReturnValue(1000)
+      runSpy.mockResolvedValue(errResult('HTTP 429'))
+      const sched = new PluginScheduler(deps)
+      sched.start()
+      await Promise.resolve(); await Promise.resolve()
+      expect(sched.snapshot().results['a']).toMatchObject({ ok: false, at: 1000, nextAt: 1000 + 120_000 })
+    })
+
+    it('非 force 的刷新在最小间隔内被吞掉(但仍广播,UI 不至于卡住)', async () => {
+      const p = makePlugin('a', true, 60)
+      const { deps, runSpy, broadcastSpy, nowMs } = makeDeps([p])
+      nowMs.mockReturnValue(1000)
+      const sched = new PluginScheduler(deps)
+
+      await sched.refresh('a', true)
+      expect(runSpy).toHaveBeenCalledTimes(1)
+
+      broadcastSpy.mockClear()
+      nowMs.mockReturnValue(1000 + MANUAL_REFRESH_MIN_MS - 1)
+      await sched.refresh('a')                       // 未到最小间隔 → 不跑
+      expect(runSpy).toHaveBeenCalledTimes(1)
+      expect(broadcastSpy).toHaveBeenCalledTimes(1)
+
+      nowMs.mockReturnValue(1000 + MANUAL_REFRESH_MIN_MS)
+      await sched.refresh('a')                       // 到点 → 跑
+      expect(runSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('force 无视最小间隔(用户点「刷新」就该真刷)', async () => {
+      const p = makePlugin('a', true, 60)
+      const { deps, runSpy, nowMs } = makeDeps([p])
+      nowMs.mockReturnValue(1000)
+      const sched = new PluginScheduler(deps)
+      await sched.refresh('a', true)
+      await sched.refresh('a', true)
+      expect(runSpy).toHaveBeenCalledTimes(2)
     })
   })
 })

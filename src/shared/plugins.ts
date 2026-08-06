@@ -23,12 +23,22 @@ export interface InstalledPlugin {
   native?: boolean
 }
 
+// 「功能插件」= 原生插件里不产出数据的那一类(目前只有 codex 宠物市场)。它没有可执行入口(entry:'native'、
+// dir:'')，也没有 pluginHost 扩展点 —— 启用与否本身就是它的全部效果(启用 → 设置里出现「宠物市场」页)。
+// 调度器必须跳过它:跑它只会掉进 pluginHost 的 EXTENSION_POINTS 查表落空，在插件卡上常驻一条
+// 「不支持的类型: pet-market」红字，而且每 refreshSec 重复一次。
+export function isFeaturePlugin(p: Pick<InstalledPlugin, 'type' | 'native'>): boolean {
+  return p.native === true && p.type !== 'statusbar-usage'
+}
+
 export interface PluginResult {
   ok: boolean
   type?: string
   data?: unknown
   error?: string
   at: number
+  /** 下次自动运行的时刻。失败退避后这个值会明显往后推,UI 据此告诉用户「还要等多久」。 */
+  nextAt?: number
 }
 
 export interface PluginSnapshot {

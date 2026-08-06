@@ -82,7 +82,7 @@ vi.mock('../skills/installSkill', () => ({
 
 // ── Plugin mocks ────────────────────────────────────────────────────────────
 const {
-  installPluginMock, uninstallPluginMock, setPluginEnabledMock,
+  installPluginMock, uninstallPluginMock, setPluginEnabledMock, readPluginsMock,
   mockScheduler,
 } = vi.hoisted(() => {
   const mockScheduler = {
@@ -94,6 +94,7 @@ const {
     installPluginMock: vi.fn(),
     uninstallPluginMock: vi.fn(),
     setPluginEnabledMock: vi.fn(),
+    readPluginsMock: vi.fn((..._args: any[]): any[] => []),
     mockScheduler,
   }
 })
@@ -102,7 +103,7 @@ vi.mock('../plugins/pluginStore', () => ({
   installPlugin: (...args: any[]) => installPluginMock(...args),
   uninstallPlugin: (...args: any[]) => uninstallPluginMock(...args),
   setPluginEnabled: (...args: any[]) => setPluginEnabledMock(...args),
-  readPlugins: vi.fn(() => []),
+  readPlugins: (...args: any[]) => readPluginsMock(...args),
 }))
 
 vi.mock('../plugins/pluginSchedulerRef', () => ({
@@ -681,16 +682,32 @@ describe('plugin IPC handlers', () => {
     expect(mockScheduler.refresh).not.toHaveBeenCalled()
   })
 
-  it('plugins:refresh calls scheduler.refresh with optional id', async () => {
+  // 带 id = 用户在插件卡上点了「刷新」,是明确意图 → force,绕过最小间隔(否则 429 退避期间用户
+  // 想立刻重试都做不到)。不带 id 的全量刷新必须走节流,它才是 429 的来源。
+  it('plugins:refresh with an id forces the run (user clicked 刷新)', async () => {
     const { invokeHandler } = await setup()
     await invokeHandler(CH.pluginsRefresh, 'plug-a')
-    expect(mockScheduler.refresh).toHaveBeenCalledWith('plug-a')
+    expect(mockScheduler.refresh).toHaveBeenCalledWith('plug-a', true)
   })
 
-  it('plugins:refresh with no id calls scheduler.refresh(undefined)', async () => {
+  it('plugins:refresh with no id stays throttled', async () => {
     const { invokeHandler } = await setup()
     await invokeHandler(CH.pluginsRefresh)
-    expect(mockScheduler.refresh).toHaveBeenCalledWith(undefined)
+    expect(mockScheduler.refresh).toHaveBeenCalledWith(undefined, false)
+  })
+
+  // 429 防线:保存一条凭据只该重跑用到它的那一个插件。从前这里是无参 refresh(),等于把 claude/codex/
+  // gemini/cursor 的额度 API 一起打一遍 —— 用户改一次 cookie 就可能吃到 429。
+  it('plugins:set-cred only re-runs the plugin that uses that provider', async () => {
+    readPluginsMock.mockReturnValue([
+      { id: 'forge-official-claude-usage', type: 'statusbar-usage', provider: 'claude', enabled: true },
+      { id: 'forge-official-codex-usage', type: 'statusbar-usage', provider: 'codex', enabled: true },
+      { id: 'forge-official-pet-market', type: 'pet-market', enabled: true, native: true },
+    ])
+    const { invokeHandler } = await setup()
+    await invokeHandler(CH.pluginsSetCred, { provider: 'codex', value: 'tok' })
+    expect(mockScheduler.refresh).toHaveBeenCalledTimes(1)
+    expect(mockScheduler.refresh).toHaveBeenCalledWith('forge-official-codex-usage', true)
   })
 })
 

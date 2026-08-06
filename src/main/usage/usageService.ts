@@ -1,7 +1,7 @@
 import type { InstalledPlugin } from '../plugins/pluginSchema'
 import type { PluginRunResult } from '../plugins/pluginHost'
 import type { HttpClient, StatusbarUsage } from './types'
-import { makeHttp } from './http'
+import { makeHttp, UsageHttpError } from './http'
 import { readSettings } from '../config/store'
 import { fetchCodexUsage } from './codex'
 import { fetchClaudeUsage } from './claude'
@@ -59,7 +59,9 @@ export async function runUsagePlugin(
     const data = await fetcher(http, cred)
     return { ok: true, type: 'statusbar-usage', data }
   } catch (e) {
-    return { ok: false, error: friendly(sanitize(e)) }
+    // Surface the server's own cooldown when it gave one (429/503) so the scheduler stops hammering.
+    const retryAfterSec = e instanceof UsageHttpError ? e.retryAfterSec : undefined
+    return { ok: false, error: friendly(sanitize(e)), ...(retryAfterSec !== undefined ? { retryAfterSec } : {}) }
   }
 }
 

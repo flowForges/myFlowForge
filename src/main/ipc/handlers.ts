@@ -87,7 +87,7 @@ import { scanGlobalContext } from '../agents/globalContext'
 import { readInstalledSkills } from '../skills/installedSkills'
 import { getAppLog, clearAppLog, formatAppLog } from '../log/appLog'
 import { resolveAppIconOptions } from '../appIcon'
-import { installPlugin, uninstallPlugin, setPluginEnabled } from '../plugins/pluginStore'
+import { installPlugin, uninstallPlugin, setPluginEnabled, readPlugins } from '../plugins/pluginStore'
 import { listCatalog, installOfficial } from '../plugins/officialCatalog'
 import { getPluginScheduler } from '../plugins/pluginSchedulerRef'
 import { scanAll, readSession } from '../sessionImport/sources/index'
@@ -1082,7 +1082,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     getPluginScheduler()?.reconcile()
   })
   ipcMain.handle(CH.pluginsRefresh, (_e, id?: string) => {
-    void getPluginScheduler()?.refresh(id)
+    // 带 id = 用户在某张插件卡上点了「刷新」,是明确意图 → 绕过最小间隔。不带 id 的全量刷新走节流。
+    void getPluginScheduler()?.refresh(id, id !== undefined)
   })
   ipcMain.handle(CH.pluginsGetCreds, () => readSettings().pluginCreds ?? {})
   ipcMain.handle(CH.pluginsSetCred, (_e, a: { provider: string; value: string }) => {
@@ -1091,7 +1092,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (a.value.trim()) creds[a.provider] = a.value.trim()
     else delete creds[a.provider]   // empty value clears the override → back to auto-read
     writeSettings({ ...s, pluginCreds: creds })
-    void getPluginScheduler()?.refresh()   // re-run plugins so the new credential takes effect
+    // 只重跑真正用到这条凭据的那个插件。从前这里是无参 refresh() —— 改一次 cookie 就把 claude/codex/
+    // gemini/cursor 的额度 API 全打一遍,是 429 的主要来源之一。
+    const affected = readPlugins().find(p => p.type === 'statusbar-usage' && p.provider === a.provider)
+    if (affected) void getPluginScheduler()?.refresh(affected.id, true)
     return creds
   })
   // 走用户代理拉远程「下架名单」(与 nsfw/wallpaper 同一条 makeContentFetch 通道);fail-open,拉不到就显示全部。
@@ -1269,10 +1273,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.petPackPreview, (_e, item: PetPackItem) => petPackPreview(item, wallpaperFetch()))
   ipcMain.handle(CH.petPackInstall, (_e, petId: string, item: PetPackItem) => petPackInstall(petId, item, wallpaperFetch()))
 
-  // codex-pets.net 宠物市场(第三方社区库,插件 gating)。走同一条 proxy-first fetch(wallpaperFetch)避免 CORS。
-  ipcMain.handle(CH.codexMarketCatalog, (_e, page: number) => codexMarketCatalog(page, wallpaperFetch()))
-  ipcMain.handle(CH.codexMarketPreview, (_e, url: string) => codexMarketPreview(url, wallpaperFetch()))
-  ipcMain.handle(CH.codexMarketInstall, (_e, item: CodexMarketPet) => codexMarketInstall(item, wallpaperFetch()))
+  // codex-pets.net 宠物市场(第三方社区库,插件 gating)。走同一条 proxy-first fetch 避免 CORS,但**必须带
+  // 超时** —— 它是个第三方社区小站,慢/挂是常态,而 undici 的 fetch 自己没有整体超时:不设死线就是用户
+  // 盯着转圈直到天荒地老。代理那一跳给更短的死线,超时即回退直连(以前只有代理"抛异常"才回退,挂起不回退)。
+  const marketFetch = (timeoutMs: number) =>
+    makeContentFetch(readSettings().termProxy, undefined, { timeoutMs, proxyTimeoutMs: 5_000 })
+  ipcMain.handle(CH.codexMarketCatalog, (_e, page: number) => codexMarketCatalog(page, marketFetch(8_000)))
+  ipcMain.handle(CH.codexMarketPreview, (_e, url: string) => codexMarketPreview(url, marketFetch(15_000)))
+  ipcMain.handle(CH.codexMarketInstall, (_e, item: CodexMarketPet) => codexMarketInstall(item, marketFetch(60_000)))
 
   const MAX_PINNED = 5
   ipcMain.handle(CH.workspacesList, () => {
