@@ -177,6 +177,17 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
+
+      // Sub-agent (Task) cards — qoder speaks the same claude-compatible stream-json, so
+      // parseChatStreamActions already emits subagent-start/-result; we just have to forward them
+      // (previously dropped, so qoder-spawned sub-agents never showed a card). Mirrors claude.ts.
+      const subagentIds = new Set<string>()
+      const onSubagent = (a: { id: string; subagentType?: string; description?: string; prompt?: string }) => {
+        const phase = subagentIds.has(a.id) ? 'update' as const : 'start' as const
+        subagentIds.add(a.id)
+        cb.onSubagent?.({ id: a.id, phase, subagentType: a.subagentType, description: a.description, prompt: a.prompt })
+      }
+
       const baseArgs = (): string[] => spec.preArgs
         ? [...spec.preArgs]
         : [
@@ -205,6 +216,10 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         let gotText = false
         let rawErr = ''
         let ctxMaxSeen = 0
+        // Authoritative final-answer text, rebuilt from the full `assistant` messages (which carry the
+        // model's real newlines). qoder's streamed partials drop those newlines → the reply renders as
+        // one blob; we overwrite it with this once the complete message lands. See onAssistantReplace.
+        let authAssistant = ''
         child.stderr?.on('data', (b: Buffer) => { rawErr = (rawErr + b.toString()).slice(-2000) })
         // Reasoning arrives as word-level `thinking_delta` fragments (--include-partial-messages), so
         // buffer them and only emit whole lines — otherwise the think panel shows one word per line.
@@ -217,22 +232,53 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         }
         const flushThink = () => { if (thinkBuf.trim()) cb.onThinkDelta(thinkBuf.trim()); thinkBuf = '' }
         const handle = (obj: any) => {
+          // A sub-agent's OWN tool call: qoder (claude-compatible stream-json) tags it with a top-level
+          // parent_tool_use_id = the Task tool_use id that spawned it (main-turn events have it absent).
+          // Attribute those calls to the parent's card as live steps and RETURN so they don't leak into
+          // the main turn's 执行 block (the parser is parent-agnostic). Mirrors claude.ts.
+          const parentId = typeof obj?.parent_tool_use_id === 'string' ? obj.parent_tool_use_id : null
+          if (parentId) {
+            if (obj.type === 'assistant') {
+              for (const action of parseChatStreamActions(obj)) {
+                if (action.kind === 'tool' || action.kind === 'file') cb.onSubagent?.({ id: parentId, phase: 'update', step: action.text })
+              }
+            }
+            return
+          }
           const used = extractContextTokens(obj)
           if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
           { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
           if (obj?.type === 'stream_event') streamed = true
-          if (obj?.type === 'assistant' && streamed) return   // deltas already streamed; skip to avoid duplicates
+          // deltas already streamed the assistant text; skip re-streaming it to avoid duplication — but
+          // STILL (a) extract Task sub-agent blocks (only here, with full input) and (b) capture the
+          // full answer text and REPLACE the reply body with it, because the streamed partials lost the
+          // model's paragraph newlines (→ one blob). parseChatStreamActions routes a tool-USING message's
+          // prose to 'think', so only real final-answer text arrives as 'assistant' here — no narration leak.
+          if (obj?.type === 'assistant' && streamed) {
+            let gotAuth = false
+            for (const action of parseChatStreamActions(obj)) {
+              if (action.kind === 'subagent-start') onSubagent(action)
+              else if (action.kind === 'assistant') { authAssistant += action.text; gotAuth = true }
+            }
+            if (gotAuth) cb.onAssistantReplace?.(authAssistant)
+            return
+          }
           for (const action of parseChatStreamActions(obj)) {
             if (action.kind === 'session') cb.onSession(action.id)
             else if (action.kind === 'assistant') { flushThink(); gotText = true; cb.onAssistantDelta(action.text) }
             else if (action.kind === 'think') pushThink(action.text)
             else if (action.kind === 'tool' || action.kind === 'file') {
               flushThink()
-              // 执行 block (title now; qoder has no Task cards, so tool_results below carry the output).
+              // 执行 block (title now; the paired tool_result below carries the output).
               if (action.id) cb.onToolActivity?.({ id: action.id, phase: 'start', name: action.name, title: action.text })
               else cb.onThinkDelta(action.text)
             }
-            else if (action.kind === 'subagent-result') cb.onToolActivity?.({ id: action.id, phase: 'done', output: action.result, isError: action.isError })
+            else if (action.kind === 'subagent-start') onSubagent(action)
+            else if (action.kind === 'subagent-result') {
+              // A known Task id → its sub-agent card; any other id → a regular tool's output into 执行.
+              if (subagentIds.has(action.id)) cb.onSubagent?.({ id: action.id, phase: 'done', result: action.result, isError: action.isError })
+              else cb.onToolActivity?.({ id: action.id, phase: 'done', output: action.result, isError: action.isError })
+            }
           }
         }
         const processLine = (raw: string) => {

@@ -36,12 +36,12 @@ beforeEach(() => {
 })
 
 describe('AgentsPane BUILTINS from catalog', () => {
-  it('renders exactly 10 builtin provider rows (from catalog)', async () => {
+  it('renders exactly 12 builtin provider rows (from catalog)', async () => {
     render(<AgentsPane />)
     for (const p of BUILTIN_PROVIDERS) {
       expect(await screen.findByText(p.displayName)).toBeInTheDocument()
     }
-    expect(BUILTIN_PROVIDERS).toHaveLength(10)
+    expect(BUILTIN_PROVIDERS).toHaveLength(12)
   })
 
   it('builtin rows display the catalog displayNames', async () => {

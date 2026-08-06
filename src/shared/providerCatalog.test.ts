@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { BUILTIN_PROVIDERS, BUILTIN_IDS, getBuiltinProvider } from './providerCatalog'
 
 describe('BUILTIN_PROVIDERS catalog', () => {
-  it('has exactly the 10 expected ids in order', () => {
-    expect(BUILTIN_IDS).toEqual(['claude', 'codex', 'gemini', 'qoder', 'cursor', 'opencode', 'qwen', 'copilot', 'pi', 'kimi'])
+  it('has exactly the 12 expected ids in order', () => {
+    expect(BUILTIN_IDS).toEqual(['claude', 'codex', 'gemini', 'qoder', 'cursor', 'opencode', 'qwen', 'copilot', 'pi', 'kimi', 'reasonix', 'trae'])
   })
 
   it('every entry has non-empty metadata fields', () => {

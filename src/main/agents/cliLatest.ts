@@ -14,6 +14,7 @@ export const CLI_NPM_PACKAGE: Record<string, string> = {
   opencode: 'opencode-ai',
   pi: '@earendil-works/pi-coding-agent',
   kimi: '@moonshot-ai/kimi-code',
+  reasonix: 'reasonix',
 }
 
 export interface CliUpdateInfo {

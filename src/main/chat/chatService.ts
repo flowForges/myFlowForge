@@ -342,6 +342,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode }, {
           onSession: (id) => writeSession(ws, sid, payload.agent, id),
           onAssistantDelta: (t) => { dbgDelta('chat', t); text += t; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
+          onAssistantReplace: (full) => { text = full; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-replace', id: aid, text: full }) },
           onThinkDelta: (t) => {
             think += (think ? '\n' : '') + t
             const before = context.skills.length + context.rules.length + (context.mcps?.length ?? 0)

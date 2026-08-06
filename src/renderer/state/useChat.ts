@@ -118,6 +118,13 @@ export function useChat(
           ? m.map(x => x.id === e.id ? { ...x, text: x.text + e.text } : x)
           : [...m, { ...blankAi(e.id), text: e.text }])
       }
+      else if (e.type === 'assistant-replace') {
+        // Overwrite (not append) — the provider sent the authoritative full reply with real newlines.
+        setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
+        setMessages(m => m.some(x => x.id === e.id)
+          ? m.map(x => x.id === e.id ? { ...x, text: e.text } : x)
+          : [...m, { ...blankAi(e.id), text: e.text }])
+      }
       else if (e.type === 'think-delta') {
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
         const apply = (x: ChatMessage): ChatMessage => ({

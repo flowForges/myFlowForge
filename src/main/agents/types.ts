@@ -64,6 +64,11 @@ export interface ChatTask {
 export interface ChatCallbacks {
   onSession(id: string): void
   onAssistantDelta(text: string): void
+  // Overwrite the accumulated reply body with an authoritative full text. Used when a provider streams
+  // word-level partials that lack the model's real paragraph newlines (qoder), then delivers a complete
+  // assistant message that DOES carry them — replacing keeps live streaming yet fixes the final segmentation.
+  // A no-op in effect when the text already matches (claude), so it's safe to call unconditionally.
+  onAssistantReplace?(text: string): void
   onThinkDelta(text: string): void
   onActivity?(): void
   // Raw startup/runtime log lines (CLI stderr, MCP-connect chatter, non-JSON stdout). Surfaced live in

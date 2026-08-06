@@ -9,6 +9,8 @@ import { makeQwenProvider } from './providers/qwen'
 import { makeCopilotProvider } from './providers/copilot'
 import { makePiProvider } from './providers/pi'
 import { makeKimiProvider } from './providers/kimi'
+import { makeReasonixProvider } from './providers/reasonix'
+import { makeTraeProvider } from './providers/trae'
 import { makeSubprocessProvider } from './providers/subprocess'
 import { readAgentsConfig } from '../config/store'
 import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
@@ -31,6 +33,8 @@ const FACTORIES: Record<string, ProviderFactory> = {
   copilot: makeCopilotProvider,
   pi: makePiProvider,
   kimi: makeKimiProvider,
+  reasonix: makeReasonixProvider,
+  trae: makeTraeProvider,
 }
 
 // Build the live provider registry from agents.json: built-ins (with optional bin overrides)

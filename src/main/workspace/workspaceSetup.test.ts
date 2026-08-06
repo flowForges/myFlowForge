@@ -110,6 +110,25 @@ describe('runWorkspaceSetup', () => {
     expect(tasks[0].allowedTools).toEqual(['Read'])
   })
 
+  it('drops the「MCP 调用」tool for setup hooks (no forge bridge here → would grant dead tools)', async () => {
+    const { runWorkspaceSetup } = await import('./workspaceSetup')
+    const { provider, tasks } = fakeProvider()
+    const wsPath = join(root, 'ws-mcp')
+    await runWorkspaceSetup({
+      opts: {
+        name: 'mcp', path: wsPath,
+        workflows: [{ id: 'standard', name: 'standard', stages: [{ key: 'develop', provider: 'claude', model: 'sonnet' }] }],
+        projects: [{ repoId: 'proj', branch: 'forge/x' }],
+        stepPlugins: [{ id: 'b1', name: 'Basic1', prompt: 'p', after: '__basic', skills: [], tools: ['read', 'mcp', 'web'] }],
+      },
+      knownProjects: SRC_PROJECTS(), proxy: '', providers: { claude: provider },
+      emit: () => {}, provision: async () => join(wsPath, 'proj'),
+    })
+    // read → Read, web → WebSearch/WebFetch survive; mcp (mcp__forge__*) is filtered out (no bridge).
+    expect(tasks[0].allowedTools).toEqual(['Read', 'WebSearch', 'WebFetch'])
+    expect(tasks[0].allowedTools).not.toContain('mcp__forge__*')
+  })
+
   it('a hook that errors does NOT block provision or later hooks; setup:done still fires', async () => {
     const { runWorkspaceSetup } = await import('./workspaceSetup')
     const { provider } = fakeProvider({ errOn: (t) => t.agentId === 'setup:b1' })

@@ -1094,7 +1094,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     void getPluginScheduler()?.refresh()   // re-run plugins so the new credential takes effect
     return creds
   })
-  ipcMain.handle(CH.pluginsCatalog, () => listCatalog())
+  // 走用户代理拉远程「下架名单」(与 nsfw/wallpaper 同一条 makeContentFetch 通道);fail-open,拉不到就显示全部。
+  ipcMain.handle(CH.pluginsCatalog, () => listCatalog(makeContentFetch(readSettings().termProxy)))
   ipcMain.handle(CH.pluginsInstallExample, (_e, id: string) => {
     const r = installOfficial(id)
     if (r.ok) getPluginScheduler()?.reconcile()

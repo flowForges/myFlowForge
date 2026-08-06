@@ -181,6 +181,42 @@ export const BUILTIN_PROVIDERS: BuiltinProviderMeta[] = [
     authCmd: 'kimi',
     installHelp: '安装后运行 kimi，用 /login 选择 Kimi Code OAuth 或 Moonshot 开放平台 API key（也可设 MOONSHOT_API_KEY）。',
   },
+  {
+    id: 'reasonix',
+    displayName: 'Reasonix',
+    defaultBin: 'reasonix',
+    glyph: '∴',
+    brandBg: 'oklch(60% .16 275 / .2)',
+    brandColor: 'oklch(70% .16 275)',
+    // Reasonix（esengine/DeepSeek-Reasonix，npm reasonix，二进制 reasonix）—— DeepSeek 原生编码代理。
+    // 无头:reasonix run -y "<prompt>"（-y 允许无人值守写入,否则 writer 失败关闭;--model 选 DeepSeek 模型,
+    // 不传即用配置的默认 deepseek-flash）。DeepSeek-only,故模型只列 DeepSeek 家。
+    defaultModels: [
+      { id: 'default', label: '账号默认', description: '用 reasonix 配置的默认模型（deepseek-flash）' },
+      { id: 'deepseek-flash', label: 'deepseek-flash', description: '高速', contextWindow: 128_000 },
+      { id: 'deepseek-reasoner', label: 'deepseek-reasoner', description: '深度推理', contextWindow: 128_000 },
+    ],
+    installCmd: 'npm install -g reasonix',
+    authCmd: 'reasonix setup',
+    installHelp: '安装后运行 reasonix setup，按提示粘贴 DeepSeek API key（保存在 ~/.reasonix）。',
+  },
+  {
+    id: 'trae',
+    displayName: 'Trae',
+    defaultBin: 'traecli',
+    glyph: 'T',
+    brandBg: 'oklch(64% .12 200 / .2)',
+    brandColor: 'oklch(72% .12 200)',
+    // TraeCode CLI（字节跳动 Trae，二进制 traecli，install.sh 装到 ~/.local/bin,非 npm）。无头:traecli -p
+    // "<prompt>"(纯文本流到 stdout)。模型无 CLI 开关(用 /model 或 trae_cli.yaml),故只列「账号默认」。想无人
+    // 值守写文件:traecli config edit 里设 permission_mode: bypass_permissions。
+    defaultModels: [
+      { id: 'default', label: '账号默认', description: '用 /model 或 trae_cli.yaml 里配置的模型' },
+    ],
+    installCmd: 'sh -c "$(curl -L https://trae.cn/trae-cli/install.sh)"',
+    authCmd: 'traecli',
+    installHelp: '装到 ~/.local/bin（记得把它加进 PATH）。运行 traecli 用企业账号登录；无头/CI 用 TRAECLI_PERSONAL_ACCESS_TOKEN 环境变量。想让它无人值守改文件，traecli config edit 设 permission_mode: bypass_permissions。',
+  },
 ]
 
 // Lookup helpers
@@ -201,4 +237,6 @@ export const PROVIDER_DEFAULT_WINDOW: Record<string, number> = {
   copilot: 128_000,
   pi: 200_000,
   kimi: 256_000,
+  reasonix: 128_000,
+  trae: 128_000,
 }

@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { makePiProvider } from './pi'
 import { makeKimiProvider } from './kimi'
+import { makeReasonixProvider } from './reasonix'
+import { makeTraeProvider } from './trae'
 import type { LogLine } from '../types'
 
 // A fake CLI that echoes its argv (so we can lock the invocation) then prints two output lines.
@@ -67,5 +69,51 @@ describe('kimi provider', () => {
   it('reports id and displayName', () => {
     const p = makeKimiProvider({ bin: 'kimi', defaultModels: [] })
     expect(p.id).toBe('kimi'); expect(p.displayName).toBe('Kimi Code')
+  })
+})
+
+describe('reasonix provider', () => {
+  it('invokes `run -y <prompt>` and surfaces output as accent logs (chat downgrade)', async () => {
+    const provider = makeReasonixProvider({ bin: cli, defaultModels: [] })
+    const logs: LogLine[] = [], states: string[] = []
+    const res = await provider.run({ stageKey: 't', agentId: 'r1', name: 'T', prompt: 'hi', cwd: dir, model: 'default' }, cbs(logs, states) as never, process.env).done
+    expect(res.ok).toBe(true)
+    expect(logs.some(l => l.text === 'ARGS ["run","-y","hi"]')).toBe(true)   // no --model for 账号默认
+    expect(logs.map(l => l.text)).toContain('第一行输出')
+    expect(logs.every(l => l.level === 'accent')).toBe(true)
+    expect(states.at(-1)).toBe('ok')
+  })
+  it('adds --model (before the prompt) only for a non-default model', async () => {
+    const logs: LogLine[] = [], states: string[] = []
+    await makeReasonixProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'r2', name: 'T', prompt: 'hi', cwd: dir, model: 'deepseek-reasoner' }, cbs(logs, states) as never, process.env).done
+    expect(logs.some(l => l.text === 'ARGS ["run","-y","--model","deepseek-reasoner","hi"]')).toBe(true)
+  })
+  it('reports id, displayName and mcpTools:false', () => {
+    const p = makeReasonixProvider({ bin: 'reasonix', defaultModels: [] })
+    expect(p.id).toBe('reasonix'); expect(p.displayName).toBe('Reasonix')
+    expect(p.capabilities.mcpTools).toBe(false)
+  })
+})
+
+describe('trae provider', () => {
+  it('invokes `-p <prompt>` and surfaces output as accent logs (chat downgrade)', async () => {
+    const provider = makeTraeProvider({ bin: cli, defaultModels: [] })
+    const logs: LogLine[] = [], states: string[] = []
+    const res = await provider.run({ stageKey: 't', agentId: 'tr1', name: 'T', prompt: 'hi', cwd: dir, model: 'default' }, cbs(logs, states) as never, process.env).done
+    expect(res.ok).toBe(true)
+    expect(logs.some(l => l.text === 'ARGS ["-p","hi"]')).toBe(true)
+    expect(logs.map(l => l.text)).toContain('第一行输出')
+    expect(logs.every(l => l.level === 'accent')).toBe(true)
+    expect(states.at(-1)).toBe('ok')
+  })
+  it('never passes --model (traecli has no CLI model flag) even for a non-default model', async () => {
+    const logs: LogLine[] = [], states: string[] = []
+    await makeTraeProvider({ bin: cli, defaultModels: [] }).run({ stageKey: 't', agentId: 'tr2', name: 'T', prompt: 'hi', cwd: dir, model: 'claude-3-7-sonnet-20250219' }, cbs(logs, states) as never, process.env).done
+    expect(logs.some(l => l.text === 'ARGS ["-p","hi"]')).toBe(true)   // still no --model
+  })
+  it('reports id, displayName and mcpTools:false', () => {
+    const p = makeTraeProvider({ bin: 'traecli', defaultModels: [] })
+    expect(p.id).toBe('trae'); expect(p.displayName).toBe('Trae')
+    expect(p.capabilities.mcpTools).toBe(false)
   })
 })

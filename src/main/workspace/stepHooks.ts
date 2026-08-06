@@ -65,7 +65,10 @@ export async function runStepHook(phase: '__basic' | '__proj', plugin: Plugin, c
         prompt: buildPluginPrompt(plugin, [], undefined),
         cwd,
         model,
-        allowedTools: claudeAllowedTools(plugin.tools),
+        // Setup hooks run with NO forge bridge (env above is proxy-only), so the「MCP 调用」chip would
+        // grant `mcp__forge__*` tools that don't exist in this context — a dead, misleading no-op. Drop it
+        // here so the grant is honest. (RUN-stage hooks DO get a live bridge, so they keep it.)
+        allowedTools: claudeAllowedTools(plugin.tools.filter(t => t !== 'mcp')),
         skills: plugin.skills,
       },
       cb,

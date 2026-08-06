@@ -5,6 +5,7 @@ import { readPlugins } from './pluginStore'
 import { readJson, writeJson } from '../config/store'
 import { pluginsFile } from '../config/paths'
 import { PET_MARKET_PLUGIN_ID } from '@shared/codexPetMarket'
+import { pluginBlocklist, type BlocklistFetch } from './blocklist'
 
 interface OfficialDef { provider: string; name: string; description: string }
 
@@ -28,7 +29,10 @@ export const OFFICIAL_FEATURES: OfficialFeatureDef[] = [
 
 const idFor = (provider: string) => `forge-official-${provider}-usage`
 
-export function listCatalog(): CatalogEntry[] {
+// 插件广场目录。传入 fetchImpl(走用户代理的注入 fetch)时,会先拉一次远程「下架名单」,把被下架且用户「尚未
+// 安装」的插件从广场里隐藏 —— 已安装的仍保留(既能看到状态也能管理),完全不影响其运行。不传 fetchImpl(或
+// Worker 未配置)时不做任何过滤,行为与从前一致。fail-open:拉名单失败就照常显示全部(见 blocklist.ts)。
+export async function listCatalog(fetchImpl?: BlocklistFetch): Promise<CatalogEntry[]> {
   const installed = new Set(readPlugins().map(p => p.id))
   const providers: CatalogEntry[] = OFFICIAL_PROVIDERS.map(d => ({
     id: idFor(d.provider),
@@ -44,7 +48,11 @@ export function listCatalog(): CatalogEntry[] {
     id: f.id, name: f.name, description: f.description, icon: f.icon, type: f.type,
     installed: installed.has(f.id), available: true,
   }))
-  return [...providers, ...features]
+  const all = [...providers, ...features]
+  if (!fetchImpl) return all
+  const blocked = await pluginBlocklist(fetchImpl)
+  // 已安装的即使被下架也保留;只把「未安装 + 被下架」的隐藏 → 新用户看不到、装不了,老用户不受影响。
+  return all.filter(e => e.installed || !blocked.has(e.id))
 }
 
 export function installOfficial(id: string): { ok: true } | { ok: false; error: string } {

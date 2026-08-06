@@ -329,6 +329,8 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'user'; message: ChatMessage }
   | { type: 'assistant-start'; id: string; model: string; context?: AgentContextMeta }
   | { type: 'assistant-delta'; id: string; text: string }
+  // Replace (not append) the reply body with an authoritative full text — see ChatCallbacks.onAssistantReplace.
+  | { type: 'assistant-replace'; id: string; text: string }
   | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta }
   | { type: 'confirm-request'; id: string; title: string; where?: string }
   | { type: 'confirm-resolved'; id: string }

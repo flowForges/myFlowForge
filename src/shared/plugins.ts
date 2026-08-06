@@ -2,6 +2,15 @@
 // src/main/plugins/pluginScheduler.ts WITHOUT importing from main-process modules (which would pull
 // in Zod, Node built-ins, and Electron APIs into the renderer bundle).
 
+import { NSFW_WORKER_URL } from './nsfw'
+
+// 插件广场远程下架名单 —— 一个 public 的 GET 端点(无需激活码),返回 { blocked: [...ids] }。改 Worker 的
+// PLUGIN_BLOCKLIST 变量即可即时把某个有问题的插件从「插件广场」里隐藏(已安装用户不受影响)。复用 NSFW Worker
+// 的地址(同一个 Worker),NSFW 未配置时此项为空 → 下架功能休眠(不隐藏任何插件)。见 cloudflare/nsfw-worker.js。
+export const PLUGIN_BLOCKLIST_URL = NSFW_WORKER_URL.trim()
+  ? `${NSFW_WORKER_URL.trim().replace(/\/+$/, '')}/plugins-blocklist`
+  : ''
+
 export interface InstalledPlugin {
   id: string
   dir: string

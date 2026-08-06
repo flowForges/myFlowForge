@@ -195,9 +195,10 @@
   animation: wsBadgeSweep 2.1s linear infinite;
 }
 @keyframes wsBadgeSweep { 0% { background-position: 160% 0; } 100% { background-position: -160% 0; } }
+/* 固定辉光半径,只让亮度轻微起伏 —— 不再「一大一小」地长大缩小,只随流光呼吸明暗。 */
 @keyframes wsBadgeBreath {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 0%, transparent); }
-  50%      { box-shadow: 0 0 7px 0 color-mix(in oklab, currentColor 32%, transparent); }
+  0%, 100% { box-shadow: 0 0 5px 0 color-mix(in oklab, currentColor 12%, transparent); }
+  50%      { box-shadow: 0 0 5px 0 color-mix(in oklab, currentColor 34%, transparent); }
 }
 /* 本机导入工作区：名字旁的小图标（替代突兀的「导入」徽章） */
 .ws-imp-ico { flex: 0 0 auto; display: inline-flex; align-items: center; color: var(--faint); }

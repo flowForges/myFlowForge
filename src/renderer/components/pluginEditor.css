@@ -9,6 +9,9 @@
 .plug-preset svg { width: 11px; height: 11px; }
 /* 插件可挂载的技能 / 工具:编辑器多选 chip */
 .pe-field .pe-hint { font-weight: 480; color: var(--fg-3); font-size: 10px; margin-left: 6px; letter-spacing: 0; }
+/* 诚实说明:工具限定的真实生效范围(仅 claude/qoder 强制),避免过度承诺 */
+.pe-field .pe-note { margin: 6px 0 0; font-size: 10px; line-height: 1.5; color: var(--fg-3); }
+.pe-field .pe-note b { color: var(--fg-2); font-weight: 620; }
 .hk-picks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 5px; }
 .hk-pick { font-size: 11px; font-weight: 540; color: var(--fg-2); background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 4px 10px 4px 6px; display: inline-flex; align-items: center; gap: 6px; transition: .12s; }
 .hk-pick:hover { border-color: var(--accent); color: var(--fg); }

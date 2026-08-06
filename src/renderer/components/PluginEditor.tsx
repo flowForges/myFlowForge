@@ -103,7 +103,7 @@ export function PluginEditor({ initial, afterLabel, presets, showSaveToLibrary, 
       <div className="pe-field">
         <label>
           技能 Skill
-          <span className="pe-hint">运行时为该插件加载</span>
+          <span className="pe-hint">以提示注入,请代理运行时加载(claude/qoder 等支持 skill 的代理才真正生效)</span>
         </label>
         <div className="hk-picks">
           {HOOK_SKILLS.map(skill => (
@@ -141,6 +141,10 @@ export function PluginEditor({ initial, afterLabel, presets, showSaveToLibrary, 
             </button>
           ))}
         </div>
+        <p className="pe-note">
+          工具限定仅在 hook 运行于 <b>claude / qoder</b> 时强制生效;其它编码代理为提示级(尽力而为)。
+          联网搜索 / MCP 调用还取决于该代理是否具备该能力 —— 建工作区阶段的 hook 无 MCP 环境,勾选无效。
+        </p>
       </div>
 
       {/* Footer */}
