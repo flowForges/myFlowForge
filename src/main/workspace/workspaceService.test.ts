@@ -146,7 +146,8 @@ describe('createWorkspace', () => {
       ],
     }])
     expect(ws.projects).toEqual([
-      { repoId: 'proj', name: 'proj', branch: 'forge/ws-c', provider: 'codex', model: 'gpt-5-codex' }
+      // repoUrl 现在会被存进工作区(全局注册表被删时唯一的 git 重建线索),故用 objectContaining
+      expect.objectContaining({ repoId: 'proj', name: 'proj', branch: 'forge/ws-c', provider: 'codex', model: 'gpt-5-codex' })
     ])
   })
 
@@ -165,7 +166,7 @@ describe('createWorkspace', () => {
       knownProjects: projects, proxy: ''
     })
     const ws = readWorkspace(wsPath)!
-    expect(ws.projects[0]).toEqual({ repoId: 'proj', name: 'proj', branch: 'forge/ws-d', provider: '', model: '' })
+    expect(ws.projects[0]).toEqual(expect.objectContaining({ repoId: 'proj', name: 'proj', branch: 'forge/ws-d', provider: '', model: '' }))
   })
 
   it('defaults persisted project name to repoId when the known project has no display name', async () => {
@@ -260,7 +261,7 @@ describe('editWorkspace', () => {
       ],
     }])
     expect(ws.projects).toEqual([
-      { repoId: 'proj', name: 'proj', branch: 'forge/ws-edit', provider: 'codex', model: 'gpt-5-codex' },
+      expect.objectContaining({ repoId: 'proj', name: 'proj', branch: 'forge/ws-edit', provider: 'codex', model: 'gpt-5-codex' }),
     ])
   })
 

@@ -145,10 +145,38 @@ export function unregisterWorkspace(path: string) {
   writeRegistry(readWorkspaceRegistry().filter(w => w.path !== path))
 }
 
+/**
+ * 老工作区文件里没有 per-project 的 repoUrl(那是后加的字段)。趁全局注册表**还在**的时候,把地址
+ * 回填进工作区自己的记录 —— 等注册表被删了再想补就晚了(那正是它要防的事故)。
+ *
+ * 纯内存回填 + 命中才写盘,所以:老工作区第一次被读到就自动获得这层保护;新工作区本来就带着地址,
+ * 一次也不会写。拿不到地址(inPlace / 注册表里已无此项)就保持空,不做任何猜测。
+ */
+export function backfillRepoUrls(ws: Workspace): { ws: Workspace; changed: boolean } {
+  const missing = ws.projects.some(p => !p.repoUrl && !p.inPlace)
+  if (!missing) return { ws, changed: false }
+  const known = new Map(readProjects().projects.map(p => [p.id, p]))
+  let changed = false
+  const projects = ws.projects.map(p => {
+    if (p.repoUrl || p.inPlace) return p
+    const url = known.get(p.repoId)?.repoUrl
+    if (!url) return p
+    changed = true
+    return { ...p, repoUrl: url }
+  })
+  return changed ? { ws: { ...ws, projects }, changed } : { ws, changed: false }
+}
+
 export function readWorkspace(wsPath: string): Workspace | null {
   const file = wsConfigFile(wsPath)
   if (!existsSync(file)) return null
-  try { return ensureWorkspaceWorkflows(WorkspaceSchema.parse(JSON.parse(readFileSync(file, 'utf8')))) } catch { return null }
+  try {
+    const parsed = ensureWorkspaceWorkflows(WorkspaceSchema.parse(JSON.parse(readFileSync(file, 'utf8'))))
+    const { ws, changed } = backfillRepoUrls(parsed)
+    // 回写是尽力而为:只读挂载、只读工作区等场景不该因为写不进去就读不出来。
+    if (changed) { try { writeWorkspace(ws) } catch { /* best-effort */ } }
+    return ws
+  } catch { return null }
 }
 export function writeWorkspace(ws: Workspace) {
   mkdirSync(wsForgeDir(ws.path), { recursive: true })

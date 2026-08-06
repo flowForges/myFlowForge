@@ -67,7 +67,10 @@ export function buildWorkspaceRecord(opts: CreateWorkspaceOpts, byId: Map<string
       // is no longer registered) must NOT crash here with `undefined.name` — fall back to the repoId.
       // The provision loop then throws the clear 未知项目 error.
       const proj = byId.get(sel.repoId)
-      return { repoId: sel.repoId, name: proj?.name || sel.repoId, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '', ...(sel.inPlace ? { inPlace: true } : {}) }
+      // repoUrl 存一份进工作区:全局注册表被删时(用户重装 app 常做的事),这是唯一能重建 git 的线索。
+      // inPlace 的项目本来就没有注册表条目,拿不到就留空 —— 留空只是回到"需要用户填一次"的老状态,
+      // 不会让任何事更糟。
+      return { repoId: sel.repoId, name: proj?.name || sel.repoId, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '', ...(proj?.repoUrl ? { repoUrl: proj.repoUrl } : {}), ...(sel.inPlace ? { inPlace: true } : {}) }
     }),
     status: 'idle',
     plugins: opts.plugins ?? [],
@@ -197,7 +200,10 @@ export async function editWorkspace(args: {
       // existing record, so an edit that doesn't re-send `inPlace` (e.g. a rename) doesn't lose it and
       // silently turn the user's real repo into a deletable "clone".
       const wasInPlace = existing.projects.find(p => p.repoId === sel.repoId)?.inPlace
-      return { repoId: sel.repoId, name, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '', ...(sel.inPlace || wasInPlace ? { inPlace: true } : {}) }
+      // repoUrl 同理要保住:优先用注册表的当前值,注册表已无此项时**沿用工作区里已存的那份** ——
+      // 编辑工作区绝不能把这条唯一的恢复线索洗掉(注册表恰恰是最容易被删的那个)。
+      const repoUrl = proj?.repoUrl || existing.projects.find(p => p.repoId === sel.repoId)?.repoUrl || ''
+      return { repoId: sel.repoId, name, branch: sel.branch, provider: sel.provider ?? '', model: sel.model ?? '', ...(repoUrl ? { repoUrl } : {}), ...(sel.inPlace || wasInPlace ? { inPlace: true } : {}) }
     }),
     status: existing.status,
     plugins: opts.plugins ?? existing.plugins ?? [],

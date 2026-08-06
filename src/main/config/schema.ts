@@ -540,6 +540,15 @@ export type WsWorkflow = z.infer<typeof WsWorkflowSchema>
 export const WsProjectSchema = z.object({
   repoId: z.string(), name: z.string().default(''), branch: z.string(),
   provider: z.string().default(''), model: z.string().default(''),
+  // 远端地址的**工作区内副本**。真身在全局注册表(~/.myFlowForge/projects.json),但那个目录看起来
+  // 就像个应用缓存目录 —— 用户重装 app 时删掉它是很自然的动作。一旦删掉:每个项目的 .git 只是指向
+  // 已消失 mirror 的悬空指针(git worktree 模型),而重建所需的 repoUrl 也一起没了 → git 永久失效、
+  // 无法自动恢复(真实事故)。branch/provider/model 本来就存在这里,唯独 repoUrl 没存,是这条分工拧了。
+  // 存一份在工作区内,就能"读地址 → 重建 mirror → 修复",用户无感。
+  // optional 而非 default(''):default 会让**输出类型变成必填**,全仓库每个 WsProject 字面量(含大量
+  // 测试)都得跟着改 —— 对一个已经有真实用户的代码库,这个爆炸半径不值当。optional 让老文件、老代码
+  // 一行都不用动;读取方一律 `p.repoUrl || ''`。
+  repoUrl: z.string().optional(),
   inPlace: z.boolean().optional()   // repo used in place (no clone); its on-disk dir is the user's real repo — never delete on de-select
 })
 export type WsProject = z.infer<typeof WsProjectSchema>

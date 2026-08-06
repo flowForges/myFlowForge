@@ -8,6 +8,7 @@ import type { Plugin } from '../../shared/plugin'
 import type { AgentProvider } from '../agents/types'
 import type { DevelopProject } from '../run/runTypes'
 import type { CreateWorkspaceOpts, SetupEvent } from '@shared/types'
+import { diagnoseRepo, repairDanglingRepo } from '../git/repairWorktree'
 import { runStepHook } from './stepHooks'
 import { provisionWorktree, buildWorkspaceRecord, seedPurposeMemory, type CreateWorkspaceResult } from './workspaceService'
 
@@ -100,6 +101,22 @@ export async function runWorkspaceSetup(args: RunWorkspaceSetupArgs): Promise<Cr
     if (existsSync(join(opts.path, name, '.git'))) {
       const worktreePath = join(opts.path, name)
       emit({ type: 'provision', project: name, index, total })
+      // ★ 但「有 .git」不等于「git 能用」。用户删掉 ~/.myFlowForge 后,这里的 .git 只是一个指向
+      // 已消失 mirror 的悬空指针 —— 老代码在这里直接登记通过,于是重新添加多少次工作区都还是坏的。
+      // 就地修复(保住工作区文件),而不是走上面那条会 rmSync 掉用户目录的重建路径。
+      const health = await diagnoseRepo(worktreePath)
+      if (health.state === 'dangling') {
+        emit({ type: 'provision:start', project: name, index, total })
+        const r = await repairDanglingRepo({
+          cwd: worktreePath, repoUrl: proj.repoUrl, baseBranch: sel.branch || 'main',
+          // 分支名用工作区自己记的那个(workspace.json 幸存),恢复出来才和用户原来的一致,
+          // 而不是凭空多一个 forge/<目录名>。
+          branch: sel.branch || undefined, proxy,
+        })
+        if (!r.ok) {
+          emit({ type: 'provision:error', project: name, index, total, message: `git 已失效且自动修复失败:${r.error}` })
+        }
+      }
       developProjects.push({ name, cwd: worktreePath, provider: sel.provider, model: sel.model })
       index++
       continue
