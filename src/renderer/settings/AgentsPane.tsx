@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
 import type { ProviderInfo, AgentsConfig, CustomAgent, ModelInfo } from '@shared/types'
 import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
 import { TIMEZONE_OPTIONS } from '@shared/timezones'
@@ -76,7 +76,18 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   const [detecting, setDetecting] = useState(true)
   const [binDrafts, setBinDrafts] = useState<Record<string, string>>({})
   const [nc, setNc] = useState(EMPTY_CUSTOM)
+  // 全局忙(只给「重新检测」这类真·全局操作用)。单个 provider 的保存/删除走下面的 rowBusy。
   const [busy, setBusy] = useState(false)
+  // Per-provider busy + 「已保存」闪现,让一行的操作只影响那一行(见 apply 的注释)。
+  const [rowBusy, setRowBusy] = useState<Record<string, boolean>>({})
+  const [rowSaved, setRowSaved] = useState<Record<string, boolean>>({})
+  const savedTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const flashRowSaved = useCallback((id: string) => {
+    setRowSaved(s => ({ ...s, [id]: true }))
+    if (savedTimers.current[id]) clearTimeout(savedTimers.current[id])
+    savedTimers.current[id] = setTimeout(() => setRowSaved(s => ({ ...s, [id]: false })), 1800)
+  }, [])
+  useEffect(() => () => { Object.values(savedTimers.current).forEach(clearTimeout) }, [])
   // Per-provider refresh state: { [id]: 'idle' | 'loading' | error-string }
   const [refreshState, setRefreshState] = useState<Record<string, string | 'loading'>>({})
   // Per-provider editable model rows: { [providerId]: ModelRow[] }
@@ -151,10 +162,22 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     const p = await window.forge.pickFile()
     if (p) setBinDrafts(d => ({ ...d, [id]: p }))
   }
-  const apply = async (fn: () => Promise<ProviderInfo[]>) => {
-    setBusy(true)
-    try { const det = await fn(); setDetected(det); void checkUpdates(det); setConfig(await window.forge.getAgentsConfig()); onChanged?.() }
-    finally { setBusy(false) }
+  /**
+   * 用户反馈:「点击任意一个保存,好像所有的都在保存」。成因就是这里 —— 原先只有一个全局 `busy`,
+   * 每个 provider 行的「选择…」「保存」都写 `disabled={busy}`,于是点一个,整页按钮一起变灰;
+   * 而且 bin 保存**完全没有成功反馈**,两件事叠起来就像"全都在保存"。
+   *
+   * 现在 scope 传入发起这次操作的 provider id:只有那一行进入 busy,并在那一行给一枚「已保存」。
+   * 不带 scope(全局操作,如重新检测)时仍然锁全局 —— 那本来就是全局动作。
+   */
+  const apply = async (fn: () => Promise<ProviderInfo[]>, scope?: string) => {
+    if (scope) setRowBusy(s => ({ ...s, [scope]: true })); else setBusy(true)
+    try {
+      const det = await fn(); setDetected(det); void checkUpdates(det)
+      setConfig(await window.forge.getAgentsConfig()); onChanged?.()
+      if (scope) flashRowSaved(scope)
+    }
+    finally { if (scope) setRowBusy(s => ({ ...s, [scope]: false })); else setBusy(false) }
   }
 
   const handleRefreshModels = useCallback(async (providerId: string) => {
@@ -282,8 +305,13 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
               value={binDrafts[b.id] ?? ''}
               onChange={e => setBinDrafts(d => ({ ...d, [b.id]: e.target.value }))}
             />
-            <button className="ghost" disabled={busy} onClick={() => browse(b.id)}>选择…</button>
-            <button disabled={busy} onClick={() => apply(() => window.forge.setAgentBin(b.id, binDrafts[b.id] ?? ''))}>保存</button>
+            <button className="ghost" disabled={!!rowBusy[b.id]} onClick={() => browse(b.id)}>选择…</button>
+            <button
+              disabled={!!rowBusy[b.id]}
+              onClick={() => apply(() => window.forge.setAgentBin(b.id, binDrafts[b.id] ?? ''), b.id)}
+            >{rowBusy[b.id] ? '保存中…' : '保存'}</button>
+            {/* 只在本行给反馈 —— 以前保存 bin 没有任何成功提示,加上全局变灰,就成了"好像全都在保存"。 */}
+            {rowSaved[b.id] && <span className="agent-row-saved">已保存</span>}
           </div>
           {/* Per-provider timezone — injected as TZ when this provider spawns; 跟随系统 = no injection */}
           <div className="agent-tz">
@@ -355,7 +383,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
             <span className="agent-row-name">{c.displayName}</span>
             <div className="agent-row-actions">
               <EnableToggle id={c.id} disabled={isDisabled(c.id)} onToggle={toggleDisabled} />
-              <button className="agent-del" disabled={busy} onClick={() => apply(() => window.forge.removeCustomAgent(c.id))}>删除</button>
+              <button className="agent-del" disabled={!!rowBusy[c.id]} onClick={() => apply(() => window.forge.removeCustomAgent(c.id), c.id)}>删除</button>
             </div>
           </div>
           <div className="agent-row-bin"><code>{c.bin} {c.argsTemplate}</code></div>

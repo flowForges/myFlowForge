@@ -353,3 +353,50 @@ describe('AgentsPane install guidance', () => {
     expect(screen.getAllByText('复制安装命令').length).toBe(1)  // 仅 claude(codex 已检测,不显示)
   })
 })
+
+// 用户反馈:「编码代理,点击任意一个保存,好像所有的都在保存的感觉」。
+// 成因是 apply() 用一个全局 busy,而每行的「选择…」「保存」都写 disabled={busy} —— 点一个,
+// 整页按钮同时变灰;再加上 bin 保存原本没有任何成功提示,读起来就像全都在保存。
+describe('保存只影响被点的那一行', () => {
+  const rowOf = (displayName: string): HTMLElement => {
+    const el = [...document.querySelectorAll('.agent-row')]
+      .find(n => n.querySelector('.agent-row-name')?.textContent === displayName)
+    if (!el) throw new Error(`找不到 provider 行: ${displayName}`)
+    return el as HTMLElement
+  }
+  const saveBtnOf = (displayName: string) =>
+    [...rowOf(displayName).querySelectorAll('.agent-row-bin button')]
+      .find(b => /保存/.test(b.textContent ?? '')) as HTMLButtonElement
+
+  it('点一个 provider 的保存,不会禁用其它 provider 的保存', async () => {
+    let release: (v: unknown) => void = () => {}
+    ;(window as any).forge.setAgentBin = vi.fn(() => new Promise(res => { release = res }))
+
+    render(<AgentsPane />)
+    await screen.findByText('Claude Code')
+
+    fireEvent.click(saveBtnOf('Claude Code'))
+
+    // 本行进入保存中…
+    await waitFor(() => expect(saveBtnOf('Claude Code').textContent).toBe('保存中…'))
+    expect(saveBtnOf('Claude Code').disabled).toBe(true)
+    // …别的行必须照常可用(这正是用户看到"全都在保存"的那一幕)
+    expect(saveBtnOf('Codex').disabled).toBe(false)
+    expect(saveBtnOf('Codex').textContent).toBe('保存')
+
+    release(makeDetected())
+    await waitFor(() => expect(saveBtnOf('Claude Code').disabled).toBe(false))
+  })
+
+  it('保存成功后只在该行显示「已保存」', async () => {
+    render(<AgentsPane />)
+    await screen.findByText('Claude Code')
+
+    fireEvent.click(saveBtnOf('Claude Code'))
+    await waitFor(() => {
+      expect(rowOf('Claude Code').querySelector('.agent-row-saved')).toBeTruthy()
+    })
+    expect(rowOf('Codex').querySelector('.agent-row-saved')).toBeNull()
+    expect((window as any).forge.setAgentBin).toHaveBeenCalledTimes(1)
+  })
+})

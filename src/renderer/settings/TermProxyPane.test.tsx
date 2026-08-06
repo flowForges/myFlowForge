@@ -63,7 +63,7 @@ describe('TermProxyPane', () => {
       const onChange = vi.fn()
       render(<TermProxyPane termProxy="http://127.0.0.1:7897" onChange={onChange} />)
       const input = screen.getByPlaceholderText('http://127.0.0.1:7897') as HTMLInputElement
-      const status = screen.getByText('已保存').closest('.proxy-status') as HTMLElement
+      const status = document.querySelector('.proxy-status') as HTMLElement
 
       expect(status.classList.contains('saved')).toBe(false)
 
@@ -78,5 +78,54 @@ describe('TermProxyPane', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // 用户反馈:手动填完代理地址后,没有任何东西告诉你"存上了没有" —— 习惯性去找保存按钮却找不到。
+  // 而且原先那行「已保存」是**常驻**的:哪怕框是空的、从没存过,也一直写着已保存,属于假信息。
+  describe('保存状态必须如实', () => {
+    const setup = (termProxy: string) => {
+      const onChange = vi.fn()
+      render(<TermProxyPane termProxy={termProxy} onChange={onChange} />)
+      return { onChange, input: screen.getByPlaceholderText('http://127.0.0.1:7897') as HTMLInputElement }
+    }
+    const statusText = () => (document.querySelector('.proxy-status') as HTMLElement).textContent ?? ''
+    const saveBtn = () => document.querySelector('.proxy-save') as HTMLButtonElement
+
+    it('未改动时:按钮是禁用的「已保存」,状态行不喊未保存', () => {
+      setup('http://127.0.0.1:7897')
+      expect(saveBtn().disabled).toBe(true)
+      expect(saveBtn().textContent).toBe('已保存')
+      expect(statusText()).not.toContain('未保存')
+    })
+
+    it('改动后:状态行明说未保存,按钮变成可点的「保存」', () => {
+      const { input } = setup('http://127.0.0.1:7897')
+      fireEvent.change(input, { target: { value: 'http://127.0.0.1:1080' } })
+      expect(statusText()).toContain('未保存')
+      expect(saveBtn().disabled).toBe(false)
+      expect(saveBtn().textContent).toBe('保存')
+      expect(document.querySelector('.proxy-status')!.className).toContain('dirty')
+    })
+
+    it('点保存按钮真的提交,并回到已保存', () => {
+      const { input, onChange } = setup('http://127.0.0.1:7897')
+      fireEvent.change(input, { target: { value: 'http://127.0.0.1:1080' } })
+      fireEvent.click(saveBtn())
+      expect(onChange).toHaveBeenCalledWith('http://127.0.0.1:1080')
+    })
+
+    it('回车提交(不必先失焦)', () => {
+      const { input, onChange } = setup('http://127.0.0.1:7897')
+      fireEvent.change(input, { target: { value: 'socks5://127.0.0.1:1080' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(onChange).toHaveBeenCalledWith('socks5://127.0.0.1:1080')
+    })
+
+    it('前后空格不算改动(trim 后与已保存值相同)', () => {
+      const { input } = setup('http://127.0.0.1:7897')
+      fireEvent.change(input, { target: { value: '  http://127.0.0.1:7897  ' } })
+      expect(saveBtn().disabled).toBe(true)
+      expect(statusText()).not.toContain('未保存')
+    })
   })
 })

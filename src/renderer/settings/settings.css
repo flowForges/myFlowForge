@@ -65,6 +65,17 @@
 .proxy-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); transition: background .15s; }
 .proxy-status.saved { color: var(--ok); }
 .proxy-status.saved .dot { background: var(--ok); }
+/* 「有未保存的修改」压过 saved:框里的内容和生效值不一致时,必须是警告色而不是绿色。 */
+.proxy-status.dirty, .proxy-status.dirty.saved { color: var(--warn); }
+.proxy-status.dirty .dot, .proxy-status.dirty.saved .dot { background: var(--warn); }
+/* 输入框 + 保存按钮同排(.proj-field input 是 width:100%,不包一层会把按钮挤到下一行)。 */
+.proxy-input-row { display: flex; align-items: center; gap: 8px; }
+.proxy-input-row input { flex: 1 1 auto; min-width: 0; }
+.proxy-save { flex: 0 0 auto; height: 34px; padding: 0 15px; border-radius: 7px; font-size: 12.5px; font-weight: 600;
+  background: var(--accent); border: 1px solid transparent; color: var(--on-accent, #0b0b0c); transition: .14s; }
+.proxy-save:hover:not(:disabled) { filter: brightness(1.08); }
+/* 没有未保存修改时,按钮退成一枚安静的「已保存」状态标,而不是一个还能点的动作。 */
+.proxy-save:disabled { background: var(--surface); border-color: var(--border); color: var(--faint); cursor: default; font-weight: 500; }
 .btn-ghost { height: 30px; padding: 0 13px; border-radius: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--fg-2); font-size: 12.5px; font-weight: 500; transition: .14s; }
 .btn-ghost:hover { background: var(--surface-2); border-color: var(--border-2); }
 
@@ -143,8 +154,13 @@
 /* ---- 宠物市场(codex-pets.net)---- */
 .pm-err { margin: 0 0 12px; padding: 8px 11px; border-radius: 8px; font-size: 12.5px;
   color: var(--err); background: color-mix(in oklab, var(--err) 12%, transparent); border: 1px solid color-mix(in oklab, var(--err) 30%, transparent); }
-.pm-empty { padding: 40px 0; text-align: center; color: var(--muted); font-size: 13px; }
+.pm-empty { padding: 40px 0; text-align: center; color: var(--muted); font-size: 13px; display: grid; gap: 8px; justify-items: center; }
+/* 失败原因单独一行、弱化 —— 主行说「连不上 X」,这行说「为什么」。 */
+.pm-err-why { max-width: 460px; color: var(--faint); font-size: 12.5px; line-height: 1.55; }
 .pm-retry { color: var(--accent); font-weight: 600; }
+/* 离线降级横幅:内容照常渲染,只是提醒它是上次的结果。用 warn 而非 err —— 页面是能用的。 */
+.pm-stale { margin: 0 0 12px; padding: 8px 11px; border-radius: 8px; font-size: 12.5px;
+  color: var(--warn); background: color-mix(in oklab, var(--warn) 10%, transparent); border: 1px solid color-mix(in oklab, var(--warn) 26%, transparent); }
 .pm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .pm-card { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; background: var(--surface); }
 .pm-thumb { aspect-ratio: 1 / 1; background: color-mix(in oklab, var(--surface-2) 60%, transparent); display: grid; place-items: center; overflow: hidden; }
@@ -546,6 +562,9 @@
 .agent-row-bin code { font-family: var(--mono); font-size: 11.5px; color: var(--muted); background: var(--surface); padding: 4px 9px; border-radius: 6px; }
 .agent-row-bin button { height: 32px; padding: 0 13px; border-radius: 7px; font-size: 12.5px; font-weight: 500; background: var(--accent); color: var(--on-accent); }
 .agent-row-bin button:disabled { opacity: .5; }
+/* 本行保存成功的一次性反馈。只出现在被点的那一行 —— 以前 bin 保存没有任何成功提示,加上全局
+   busy 让整页按钮一起变灰,用户读成了「点一个好像全都在保存」。 */
+.agent-row-saved { flex: 0 0 auto; font-size: 12px; font-weight: 600; color: var(--ok); white-space: nowrap; }
 .agent-add { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .agent-add input { height: 32px; padding: 0 11px; border-radius: 7px; background: var(--surface); border: 1px solid var(--border); color: var(--fg); font-size: 12.5px; font-family: var(--mono); outline: none; flex: 1 1 140px; }
 .agent-add input:focus { border-color: var(--accent); }

@@ -251,6 +251,8 @@
   font-size: 10px; font-weight: 600; font-family: var(--mono); color: var(--faint);
   background: var(--surface); border-radius: 99px; padding: 1px 6px 1px 5px; white-space: nowrap; }
 .ws-scount svg { width: 10px; height: 10px; }
+/* 当前工作区:角标隐形但仍占位,避免切换工作区时两行同时重排(见 Sidebar.tsx 的说明)。 */
+.ws-scount.ghost { visibility: hidden; }
 /* 当前工作区:展开的会话子列表。会话是次级内容 —— 比工作区行更紧凑、更淡,只保留一条竖向连接线做归属,
    去掉每行的横向短杠(密集展开时那些短杠是主要的视觉噪音)。 */
 .ws-sess-list { margin: 2px 0 2px 17px; padding-left: 9px; border-left: 1px solid var(--border);
@@ -305,8 +307,11 @@
 .window.collapsed .ws-sess-list, .window.collapsed .ws-scount { display: none; }
 
 /* ---- ws-actions: hover action buttons (archive/restore/delete) — 贴原型尺寸 ---- */
-.ws-actions { display: none; align-items: center; gap: 2px; }
-.ws-item:hover .ws-actions { display: inline-flex; }
+/* 悬停才露出的 ⋯ 菜单。用 opacity 而不是 display —— 与同行的 .ws-grip / .ws-pin / .ws-newsess 一致。
+   原先是 display:none↔inline-flex,于是鼠标每划过一行,那 ~22px 就凭空挤进来一次,.ws-meta(flex:1)
+   跟着重排:光是把鼠标移到下面的工作区,整条列表就在一路抖。占位常驻 = 零布局变化。 */
+.ws-actions { display: inline-flex; align-items: center; gap: 2px; opacity: 0; pointer-events: none; transition: opacity .12s; }
+.ws-item:hover .ws-actions { opacity: 1; pointer-events: auto; }
 .ws-act { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 5px; color: var(--faint); cursor: pointer; transition: .12s; }
 .ws-act:hover { background: var(--surface-2); color: var(--fg-2); }
 .ws-act.danger:hover { color: var(--del); background: oklch(68% .18 25 / .14); }
@@ -315,8 +320,8 @@
 .ws-item.archived.on { background: color-mix(in oklab, var(--surface) 72%, transparent); }
 
 /* ---- ws-menu: 「更多操作」⋯ 下拉(取代一排易误点的图标) ---- */
-/* 菜单打开时即使鼠标移出行也保持 actions 可见,方便移到菜单项。 */
-.ws-actions:has(.ws-menu.open) { display: inline-flex; }
+/* 菜单打开时即使鼠标移出行也保持 actions 可见,方便移到菜单项。跟着上面改成 opacity 通道。 */
+.ws-actions:has(.ws-menu.open) { opacity: 1; pointer-events: auto; }
 .ws-menu { position: relative; display: inline-flex; }
 .ws-menu-btn svg { width: 15px; height: 15px; }
 .ws-menu.open .ws-menu-btn { background: var(--surface-2); color: var(--fg-2); }

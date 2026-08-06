@@ -257,7 +257,17 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                 <span className="ws-aside">
                   {/* 日期已下放到会话维度(见下方 ws-sess-time),工作区行不再显示时间,列表更干净。 */}
                   {isOn && item.badge && <span className="ws-badge">{item.badge}</span>}
-                  {!isOn && (sessionsByWs?.[item.id]?.length ?? 0) > 1 && <span className="ws-scount" title={`${sessionsByWs![item.id].length} 个会话`}>{CHAT_ICON}{sessionsByWs![item.id].length}</span>}
+                  {/* 会话计数角标只在「非当前工作区」上可见(当前工作区的会话就列在下面,不必再数一遍)。
+                      但**必须保留占位** —— 早先写成 `!isOn && …`,于是切换工作区时这枚 ~38px 的角标在
+                      旧行"长出来"、新行"消失",两行的 .ws-meta(flex:1) 同时重排,整条列表看着在抖。
+                      改成常驻渲染 + 选中时 visibility 隐藏:观感不变,布局零变化。 */}
+                  {(sessionsByWs?.[item.id]?.length ?? 0) > 1 && (
+                    <span
+                      className={`ws-scount${isOn ? ' ghost' : ''}`}
+                      aria-hidden={isOn || undefined}
+                      title={isOn ? undefined : `${sessionsByWs![item.id].length} 个会话`}
+                    >{CHAT_ICON}{sessionsByWs![item.id].length}</span>
+                  )}
                 </span>
                 <span className="ws-actions">
                   {(() => {

@@ -45,6 +45,10 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
   }
 
   const active = termProxy.trim() !== ''
+  // 输入框里的内容和已保存的值不一致 = 有未保存的修改。用户反馈:光靠 onBlur 静默提交,
+  // 手动改完之后没有任何东西告诉你"存上了没有",于是习惯性去找保存按钮却找不到。
+  // 现在:脏了就明说「未保存」并把保存按钮点亮,存上了就常驻显示「已保存」。
+  const dirty = value.trim() !== termProxy
 
   const detectIp = async () => {
     setIpState('loading')
@@ -68,6 +72,7 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
       </div>
       <div className="proj-field" style={{ marginTop: 12 }}>
         <label htmlFor="termProxy">代理地址</label>
+        <div className="proxy-input-row">
         <input
           id="termProxy"
           type="text"
@@ -78,7 +83,17 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
           value={value}
           onChange={e => setValue(e.target.value)}
           onBlur={() => commit(value.trim())}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(value.trim()) } }}
         />
+        {/* 显式保存按钮。onBlur 依然会提交(改完点别处一样生效),这个按钮是给"改完想确认一下"的手感。 */}
+        <button
+          type="button"
+          className="proxy-save"
+          disabled={!dirty}
+          title={dirty ? '保存代理地址' : '没有未保存的修改'}
+          onClick={() => commit(value.trim())}
+        >{dirty ? '保存' : '已保存'}</button>
+        </div>
       </div>
       <div className="proxy-presets" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
         <span style={{ fontSize: 12, color: 'var(--faint)', alignSelf: 'center' }}>常用:</span>
@@ -95,9 +110,10 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
         ))}
       </div>
       <div className="proxy-foot">
-        <span className={`proxy-status${saved ? ' saved' : ''}`}>
+        {/* 常驻状态行 —— 原先这里只有一枚闪 1.4s 的「已保存」,绝大多数时候是隐形的,等于没有反馈。 */}
+        <span className={`proxy-status on${dirty ? ' dirty' : ''}${saved ? ' saved' : ''}`}>
           <span className="dot" />
-          已保存
+          {dirty ? '有未保存的修改 —— 按回车或点「保存」' : saved ? '已保存' : '已保存(与当前生效值一致)'}
         </span>
         <button
           type="button"
