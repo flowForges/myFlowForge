@@ -65,6 +65,34 @@ describe('CreateWorkspace', () => {
     expect(screen.getByText(/没有匹配/)).toBeInTheDocument()
   })
 
+  it('取消后重开:搜索词与步骤进度都归零(弹窗只是 return null,组件不卸载,state 会留着)', () => {
+    const many = [
+      { id: 'alpha', name: 'alpha', repoUrl: 'git@x:y/alpha.git', defaultBranch: 'main' },
+      { id: 'beta', name: 'beta', repoUrl: 'git@x:y/beta.git', defaultBranch: 'main' },
+      { id: 'gamma', name: 'gamma', repoUrl: 'git@x:y/gamma.git', defaultBranch: 'main' },
+      { id: 'delta', name: 'delta', repoUrl: 'git@x:y/delta.git', defaultBranch: 'main' },
+      { id: 'epsilon', name: 'epsilon', repoUrl: 'git@x:y/epsilon.git', defaultBranch: 'main' },
+    ]
+    const { rerender } = render(<CreateWorkspace {...defaultProps} projects={many} />)
+    fireEvent.change(screen.getByPlaceholderText('搜索项目名 / 别名…'), { target: { value: 'gamm' } })
+    expect(projRowByName('alpha')).toBeFalsy()   // 列表已被过滤
+    // 步骤导轨由 .cr-body 的滚动监听驱动 —— 派发一次滚动把进度推到最后一步(jsdom 里各段 offsetTop 均为 0,
+    // 所以监听会把 activeStep 判成最后一段),模拟用户已经走到后面。
+    const body = document.querySelector('.cr-body')!
+    body.scrollTop = 500
+    fireEvent.scroll(body)
+    const steps = screen.getAllByRole('tab')
+    expect(steps[steps.length - 1].getAttribute('aria-selected')).toBe('true')
+
+    // 取消 → 再次打开
+    rerender(<CreateWorkspace {...defaultProps} open={false} projects={many} />)
+    rerender(<CreateWorkspace {...defaultProps} projects={many} />)
+
+    expect((screen.getByPlaceholderText('搜索项目名 / 别名…') as HTMLInputElement).value).toBe('')
+    expect(projRowByName('alpha')).toBeTruthy()  // 过滤已清掉,项目全在
+    expect(screen.getAllByRole('tab')[0].getAttribute('aria-selected')).toBe('true')
+  })
+
   it('picks a directory via onPickPath and fills the path input', async () => {
     const onPickPath = vi.fn(async () => '/Users/me/code/picked')
     render(<CreateWorkspace open onCancel={() => {}} onCreate={() => {}} projects={projects} workflows={workflows} providers={providers} onOpenProjectSettings={() => {}} onNewWorkflow={() => {}} onPickPath={onPickPath} />)

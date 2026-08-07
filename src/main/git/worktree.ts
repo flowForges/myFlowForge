@@ -3,8 +3,9 @@ import { dirname } from 'node:path'
 import { git } from './gitRunner'
 import { deriveWorkBranch } from '../../shared/branchName'
 
-// Default work branch for a workspace: feat/<ascii-slug>, never a CJK/`forge/` branch. See branchName.ts.
-export const deriveBranch = (workspaceId: string) => deriveWorkBranch(workspaceId)
+// Default work branch for a workspace: feat/<ascii-slug>-<MMDD>, never a CJK/`forge/` branch.
+// See branchName.ts. `today` is injectable for tests.
+export const deriveBranch = (workspaceId: string, today?: Date) => deriveWorkBranch(workspaceId, today)
 
 // True if `fullRef` (a full ref path, e.g. refs/remotes/origin/main) resolves in the mirror.
 async function refExists(mirror: string, fullRef: string): Promise<boolean> {

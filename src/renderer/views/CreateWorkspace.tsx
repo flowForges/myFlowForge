@@ -3,7 +3,7 @@ import type { CreateWorkspaceOpts, ProviderInfo, ReviewConfig, ReviewLens } from
 import type { Plugin, LibraryHook } from '@shared/plugin'
 import type { CfgProject, CfgWorkflow, CfgCustomStage } from '../state/useConfig'
 import { indexCustomStages, resolveStages as resolveLibRefs, type CustomStageDef } from '../../shared/customStages'
-import { deriveWorkBranch, branchSlug } from '@shared/branchName'
+import { deriveWorkBranch } from '@shared/branchName'
 import { deriveWsName, buildCreateOpts, packModel, unpackModel, buildEditState, emptyWorkflow, type WizardState, type WizardStage, type WizardProject, type WizardWorkflow } from './wizardModel'
 import { PluginEditor } from '../components/PluginEditor'
 import { movePluginBefore } from '../../shared/pluginReorder'
@@ -286,6 +286,15 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     setNewBranch('')
     setCustomModelKeys(new Set())
     setCustomModelInputs({})
+    // 关闭时组件只是 `return null`(见下面的 early return),并没有卸载 —— 所有 useState 都留着。所以每一项
+    // 会话内状态都必须在这里显式归零,否则取消后重开会看到上一轮的残留:搜索词还在(列表还是被过滤的,像是项目
+    // 丢了)、步骤导轨还停在上次滚到的那一步(但内容已经滚回顶部,对不上)。
+    setProjQuery('')
+    setActiveStep(0)
+    setPlugPick(null)
+    setDraggedPlugId(null)
+    setRemovalConfirm(false)
+    setRunHooksOnAdd(true)
     // Clear any restore banner from a PRIOR open — freshState() blanks the path, so a stale `partial`
     // (probed last time) would otherwise show "检测到未完成的创建" on a wizard the user hasn't touched.
     // The banner reappears only after a real probe (pick / blur) resolves a partial.
@@ -583,7 +592,8 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     // Keep whatever task name the user already typed; if there's none, generate a full, ready-to-use one
     // from the workspace name (falling back to its path's last segment) so we never leave a half branch "t/".
     let rest = cur.includes('/') ? cur.slice(cur.indexOf('/') + 1) : cur
-    if (!rest) rest = branchSlug((state.name || '').trim() || deriveWsName(state.path, false, '')) || 'task'
+    // 走和每个项目那一栏同一条推导(含日期后缀),两处给出的默认名必须一致 —— 只把前缀换掉。
+    if (!rest) rest = deriveWorkBranch((state.name || '').trim() || deriveWsName(state.path, false, '')).split('/').slice(1).join('/')
     setBranchAll(`${t}/${rest}`)
   }
 
@@ -825,7 +835,7 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
             </div>
             <div className="cr-branch-all" id="crBranchAll">
               <span className="lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>统一分支</span>
-              <input id="crBranchAllInput" placeholder="feat/my-task" spellCheck={false} autoCapitalize="off" autoComplete="off" value={branchAll} onChange={e => setBranchAll(e.target.value)} />
+              <input id="crBranchAllInput" placeholder={wsName ? deriveWorkBranch(wsName) : "feat/my-task"} spellCheck={false} autoCapitalize="off" autoComplete="off" value={branchAll} onChange={e => setBranchAll(e.target.value)} />
               <button className="apply" id="crBranchApply" onClick={applyBranchAll}>应用到选中项目</button>
             </div>
             {state.projects.length > 4 && (
