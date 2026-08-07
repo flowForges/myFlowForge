@@ -88,6 +88,19 @@ describe('Composer 大段粘贴转附件', () => {
     expect(ta.value).toContain(BIG)
   })
 
+  it('★ 存盘 IPC reject(盘满/无权限)时也把原文插回正文 —— 跟返回 null 走同一条兜底,内容不会凭空消失', async () => {
+    const onPaste = vi.fn(() => Promise.reject(new Error('ENOSPC: no space left on device')))
+    const { ta } = setup(onPaste)
+
+    fireEvent.change(ta, { target: { value: '前' } })
+    ta.selectionStart = ta.selectionEnd = 1
+    await act(async () => { pasteBig(ta); await Promise.resolve() })
+
+    // preventDefault 已经吃掉了原生粘贴;若 reject 没被接住,这里会停在「前」——两千多字凭空消失。
+    expect(ta.value).toBe('前' + BIG)
+    expect(ta.value).toContain(BIG)
+  })
+
   it('小段粘贴照旧走原生行为,不转文件也不动正文', async () => {
     const onPaste = vi.fn(async () => ATT)
     const { ta } = setup(onPaste)

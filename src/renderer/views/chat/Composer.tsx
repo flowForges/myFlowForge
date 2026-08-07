@@ -310,7 +310,17 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
         const name = pastedFileName(pasted, new Date())
         // 正文也要在 await 之前留一份快照:下面用它跟「最新正文」比对,判断当时的选区还准不准。
         const textAtPaste = text
-        const att = await onPaste({ name, dataBase64: base64OfUtf8(pasted) })
+        // onPaste 是存盘 IPC(chatSavePaste):盘满 ENOSPC、无权限 EPERM、只读工作树都会 reject。
+        // preventDefault() 已经把原生粘贴吃掉了,这里不接住的话异常会变成控制台里一条没人理的
+        // unhandled rejection,用户粘的正文就此凭空消失。reject 和 handler 主动返回的 null 是
+        // 同一种「转文件失败」,所以都归到 att=null,走下面与 `att === null` 相同的兜底分支
+        // (插回原文,见 insertPastedText 的注释)。
+        let att: Attachment | null = null
+        try {
+          att = await onPaste({ name, dataBase64: base64OfUtf8(pasted) })
+        } catch {
+          att = null
+        }
         // ★ 一律用函数式更新。`text` 是 await 之前捕获的闭包值,存盘那几百毫秒里用户还在打字 ——
         // 直接 setText(insertPastePlaceholder(text, …)) 会把这期间敲进去的字连同光标一起回滚掉。
         // 选区落点的取舍见 resolvePasteSelection 的注释(原位 vs 追加到末尾)。

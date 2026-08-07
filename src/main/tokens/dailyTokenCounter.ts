@@ -41,7 +41,11 @@ export const GROWTH_BASELINE_DAYS = 7
 export function dayKeyMinus(day: string, n: number): string {
   const [y, m, d] = day.split('-').map(Number)
   const t = Date.UTC(y, m - 1, d - n)
-  if (!Number.isFinite(t)) return day   // day 不是合法日期串:退化成「不设窗口下界」
+  // day 不是合法日期串:原样返回,即 cutoff === today。scanTokenBaseline 里 `r.day < cutoff` 会把
+  // 所有早于 today 的行都当成窗口外——不是「不设下界」,恰恰相反,是把窗口塌缩成空,历史全被排除
+  // (recentDayTotals 为空,goal 落回默认值)。生产里 today 恒来自 localDayKey,从不会走到这条分支;
+  // 这里选择安全降级而不是抛错,只是把这句注释写成了跟实际行为相反的话,顺手改准。
+  if (!Number.isFinite(t)) return day
   const dt = new Date(t)
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`
 }

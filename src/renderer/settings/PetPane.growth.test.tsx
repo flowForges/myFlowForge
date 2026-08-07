@@ -352,4 +352,32 @@ describe('PetPane 每日 token 目标', () => {
     render(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 1200000 }} onChange={vi.fn()} />)
     expect(goalInput().value).toBe('1200000')
   })
+
+  // ★ Minor #2:回填(初始 state + 外部 prop 变化的 effect)也要过 clampDailyGoal —— 手改
+  // settings.json 写个越界值之后,输入框不能显示一个「看到的 ≠ 生效的」的骗人数字。
+  it('初始 prop 就越界(手改 settings.json)时,回填也按 MIN/MAX 收敛,不是原样显示', () => {
+    render(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 1 }} onChange={vi.fn()} />)
+    expect(goalInput().value).toBe(String(GROWTH_GOAL_MIN))
+  })
+
+  it('外部把 prop 改成越界值(切设置 / 别处写入)时,回填同样收敛', () => {
+    const { rerender } = render(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 200000 }} onChange={vi.fn()} />)
+    expect(goalInput().value).toBe('200000')
+    rerender(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 999999999 }} onChange={vi.fn()} />)
+    expect(goalInput().value).toBe(String(GROWTH_GOAL_MAX))
+  })
+
+  // ★ Minor #3:goalNote 是本地 state,不随 pet.growthDailyGoal 的外部变化自动重算 —— 必须跟着
+  // 回填的 effect 一起清掉,否则会留一条跟当前 prop 对不上的过期提示。
+  it('外部改动 prop 后,上一次 commitGoal 留下的过期提示被清掉', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(<PetPane pet={BASE_PET} onChange={onChange} />)
+    fireEvent.change(goalInput(), { target: { value: '1' } })
+    fireEvent.blur(goalInput())
+    expect(screen.queryByRole('status')).not.toBeNull() // 先造出一条提示
+
+    // 外部(非本组件的 commitGoal)把 prop 换成别的值 —— 模拟切设置 / 别处写入
+    rerender(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 300000 }} onChange={onChange} />)
+    expect(screen.queryByRole('status')).toBeNull()
+  })
 })

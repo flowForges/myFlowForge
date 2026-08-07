@@ -787,3 +787,49 @@ describe('growth:pet-import handler 的 I/O 失败', () => {
     expect(await h({})).toBeNull()
   })
 })
+
+describe('chat:save-paste handler 的 I/O 失败', () => {
+  const getHandler = async (ch: string) => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    registerIpc(() => {}, {})
+    const found = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)
+    if (!found) throw new Error(`No handler registered for channel: ${ch}`)
+    return found[1]
+  }
+
+  // 粘贴大段文本转文件走这条 handler(见 Composer.handlePaste)。盘满 ENOSPC、无权限 EPERM、只读
+  // 工作树都会让 mkdirSync/writeFileSync 抛出 —— 不接住的话 rejection 会穿到渲染层,而那时
+  // preventDefault() 已经吃掉了原生粘贴,用户粘的正文就凭空消失。这里用真实文件系统造一个必然失败
+  // 的场景:把 workspacePath 指到一个「文件」上,mkdirSync(..., '.forge/attachments') 在文件下面
+  // 建目录必然 ENOTDIR。
+  it('mkdirSync 抛异常(路径下有同名文件挡道)时返回 null,而不是让 rejection 穿出去', async () => {
+    const os = await import('node:os')
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const blocker = path.join(os.tmpdir(), `forge-savepaste-blocker-${Date.now()}`)
+    fs.writeFileSync(blocker, 'x') // 这是个文件,不是目录
+    try {
+      const h = await getHandler(CH.chatSavePaste)
+      const r = await h({}, { workspacePath: blocker, name: 'pasted.txt', dataBase64: 'aGk=' })
+      expect(r).toBeNull()
+    } finally {
+      fs.rmSync(blocker, { force: true })
+    }
+  })
+
+  it('成功路径原样透传 Attachment(不能被 try/catch 改了语义)', async () => {
+    const os = await import('node:os')
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-savepaste-ok-'))
+    try {
+      const h = await getHandler(CH.chatSavePaste)
+      const r = await h({}, { workspacePath: dir, name: 'pasted.txt', dataBase64: 'aGk=' })
+      expect(r).toMatchObject({ name: 'pasted.txt', size: 2 })
+      expect(fs.readFileSync(r.path, 'utf8')).toBe('hi')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

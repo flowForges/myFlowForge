@@ -72,7 +72,7 @@ describe('dayKeyMinus', () => {
     expect(dayKeyMinus('2026-03-09', 1)).toBe('2026-03-08')
     expect(dayKeyMinus('2026-03-08', 1)).toBe('2026-03-07')
   })
-  it('非法日期串退化成原值(不设窗口下界),不抛不产出 NaN 串', () => {
+  it('非法日期串退化成原值(等价 cutoff=today,把窗口塌缩成空,历史全被排除),不抛不产出 NaN 串', () => {
     expect(dayKeyMinus('not-a-day', 7)).toBe('not-a-day')
   })
 })

@@ -228,12 +228,18 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
   // 每日目标是「编辑中的草稿 + 失焦/回车提交」,不是每敲一键就写一次盘 —— 与本文件的重命名
   // (commitRename)、TermProxyPane 的代理地址同一套手感。逐键提交的话输入 100000 会连写 6 次
   // 设置,中途的 1、10 还会把宠物进度瞬间顶满再跳回来,肉眼可见地抖。
-  const [goalDraft, setGoalDraft] = useState(pet.growthDailyGoal?.toString() ?? '')
-  useEffect(() => { setGoalDraft(pet.growthDailyGoal?.toString() ?? '') }, [pet.growthDailyGoal])
+  const [goalDraft, setGoalDraft] = useState(clampDailyGoal(pet.growthDailyGoal)?.toString() ?? '')
   // 输入被 clamp 时的说明行。min/max 只是 HTML 属性,程序化赋值和真实浏览器都拦不住,所以真正的
   // 收敛在 commitGoal 里做;而「改了值却不吭声」比不改更糟(用户以为存的是 1,实际是 50000),
   // 所以 clamp 一旦改动了用户输入,就明说改成了什么。
   const [goalNote, setGoalNote] = useState('')
+  useEffect(() => {
+    // 回填也要过 clamp:手改 settings.json 写个 1 之后,不过 clamp 的话输入框显示 1、宠物却按
+    // 50000(计数器那侧的兜底 clamp)跑,还没有任何提示 —— 正是 clamp 想消灭的「看到的 ≠ 生效的」。
+    setGoalDraft(clampDailyGoal(pet.growthDailyGoal)?.toString() ?? '')
+    // 外部改动(切设置 / 别处改了这个值)之后,上一次 commitGoal 留下的提示已经过期了,一起清掉。
+    setGoalNote('')
+  }, [pet.growthDailyGoal])
   const commitGoal = () => {
     const t = goalDraft.trim()
     const n = Number(t)

@@ -1021,13 +1021,21 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const r = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] })
     return r.filePaths.map(p => ({ name: basename(p), path: p, size: statSync(p).size }))
   })
-  ipcMain.handle(CH.chatSavePaste, (_e, a: { workspacePath: string; name: string; dataBase64: string }): Attachment => {
-    const dir = join(a.workspacePath, '.forge', 'attachments')
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-    const dest = join(dir, a.name)
-    const bytes = Buffer.from(a.dataBase64, 'base64')
-    writeFileSync(dest, bytes)
-    return { name: a.name, path: dest, size: bytes.length }
+  // 大段粘贴转文件走这里(见 Composer.handlePaste)。盘满 ENOSPC、无权限 EPERM、只读工作树都会让
+  // mkdirSync/writeFileSync 抛出 —— 不接住的话异常会穿过 ipcMain.handle 变成渲染层的 unhandled
+  // rejection,preventDefault() 已经吃掉的原生粘贴内容就凭空消失了。转成 null,与 Composer 里
+  // `att === null` 的既有失败分支同形,由它把原文插回正文兜底。
+  ipcMain.handle(CH.chatSavePaste, (_e, a: { workspacePath: string; name: string; dataBase64: string }): Attachment | null => {
+    try {
+      const dir = join(a.workspacePath, '.forge', 'attachments')
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+      const dest = join(dir, a.name)
+      const bytes = Buffer.from(a.dataBase64, 'base64')
+      writeFileSync(dest, bytes)
+      return { name: a.name, path: dest, size: bytes.length }
+    } catch {
+      return null
+    }
   })
 
   const watcher = new WorktreeWatcher((p, opts) => chokidarWatch(p, opts as object) as unknown as import('../watcher/worktreeWatcher').FsWatcherLike)
