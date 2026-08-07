@@ -213,15 +213,18 @@ const DARK_LADDER: Rung[] = [
   ['--bg', 20, 1.00], ['--bg-2', 23, 1.09], ['--sidebar', 17, 1.18],
   ['--surface', 26, 1.09], ['--surface-2', 30, 1.18],
   ['--fg', 95, 0.36], ['--fg-2', 82, 0.55], ['--muted', 64, 0.82], ['--faint', 50, 0.82],
-  ['--border', 28, 0.55], ['--border-2', 34, 0.64],
 ]
 
 const LIGHT_LADDER: Rung[] = [
   ['--bg', 98, 1.00], ['--bg-2', 96, 1.20], ['--sidebar', 95, 1.40],
   ['--surface', 99, 0.70], ['--surface-2', 96.5, 1.50],
   ['--fg', 24, 0.50], ['--fg-2', 34, 0.50], ['--muted', 50, 0.50], ['--faint', 62, 0.40],
-  ['--border', 89, 0.80], ['--border-2', 84, 1.00],
 ]
+
+// 边框不走实色阶梯,而是正文色的半透明版 —— 侧栏/检视区/标题栏/状态栏那几道接缝直接压在壁纸上,
+// 实色边框在深色基调下就是几条刺眼的硬黑线(global.css:57-60 的原注释:read as harsh BLACK LINES)。
+// 那条规则和 skins.css:153 都已这么处理,但内联变量优先级更高会把它们压掉,所以这里必须自己产出同款。
+const BORDER_ALPHA = { '--border': 0.13, '--border-2': 0.22 } as const
 
 // 毛玻璃三件套:取 bg / bg-2 / sidebar 同色,只加透明度(深色保持偏不透明,免得亮壁纸把 UI 冲淡成灰黄)。
 const GLASS: Record<'dark' | 'light', { prop: string; from: string; alpha: number }[]> = {
@@ -258,6 +261,10 @@ export function paletteVars(p: WallpaperPalette): Record<string, string> {
     const r = rung.get(g.from)!
     vars[g.prop] = oklch(r.L, r.C, p.hueBg, g.alpha)
   }
+  const fg = rung.get('--fg')!
+  for (const [prop, alpha] of Object.entries(BORDER_ALPHA)) {
+    vars[prop] = oklch(fg.L, fg.C, p.hueBg, alpha)
+  }
   if (p.hueAccent != null) {
     const a = ACCENT_BAND[p.base]
     // 自己把彩度夹到该色相在该明度下真正可达的范围,而不是丢一个色域外的值让浏览器去压 ——
@@ -276,6 +283,7 @@ export function paletteVars(p: WallpaperPalette): Record<string, string> {
 export const PALETTE_PROPS: readonly string[] = [
   ...DARK_LADDER.map(([prop]) => prop),
   ...GLASS.dark.map(g => g.prop),
+  ...Object.keys(BORDER_ALPHA),
   '--accent', '--accent-dim', '--run', '--on-accent',
 ]
 

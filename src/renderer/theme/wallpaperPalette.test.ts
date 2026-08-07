@@ -187,6 +187,18 @@ describe('paletteVars · 对比度护栏', () => {
     expect(paletteVars({ base: 'light', hueBg: 200, chromaBg: 0.02, hueAccent: 280 })['--accent']).toContain('0.16')
   })
 
+  it('★边框必须是半透明的 fg 色,不能是实色(实色在壁纸上就是刺眼的硬黑线)', () => {
+    // global.css:57-60 早就为壁纸模式把 --border 换成了半透明 fg 色,skins.css:153 对皮肤同理。
+    // 内联变量优先级高过这两条规则,所以自动配色必须自己产出同样柔和的边框,否则等于把那个修复撤销了。
+    for (const p of [dark, light]) {
+      const v = paletteVars(p)
+      expect(v['--border']).toMatch(/ \/ 0\.\d+\)$/)
+      expect(v['--border-2']).toMatch(/ \/ 0\.\d+\)$/)
+      // 用的是正文色(与底色反向)而不是一个更暗的实色 —— 深色基调下边框应基于亮的 --fg
+      expect(L(v['--border'])).toBe(L(v['--fg']))
+    }
+  })
+
   it('PALETTE_PROPS 覆盖 paletteVars 可能产出的每一个属性(否则关掉开关会有残留)', () => {
     const emitted = new Set([...Object.keys(paletteVars(dark)), ...Object.keys(paletteVars(light))])
     for (const prop of emitted) expect(PALETTE_PROPS).toContain(prop)
