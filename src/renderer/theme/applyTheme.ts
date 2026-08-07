@@ -24,7 +24,10 @@ export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): vo
   // 并盖过手选皮肤(否则皮肤的 motif 与它的配色会打架)。取不到调色板时静默回落到下面的常规路径。
   const auto = a.autoWallpaperTheme && palette ? palette : null
   // 灰度壁纸取不出点缀色(hueAccent=null)→ 只接管中性色,强调色仍交还给用户自己的选择。
-  const autoAccent = !!auto && auto.hueAccent != null
+  // 用户在强调色里选了「跟随壁纸」以外的颜色时(wallpaperAccentAuto===false)走同一条路:壁纸的取色
+  // 规则再准也难保每张都合口味,而这条路径本来就为灰度壁纸跑通了,复用它比另开一套稳。
+  // 缺省(undefined)= 跟随,所以只认显式的 false。
+  const autoAccent = !!auto && auto.hueAccent != null && a.wallpaperAccentAuto !== false
   // 主题皮肤(叠加层):有效内置 id → 打 data-skin(skins.css 的 :root[data-skin] 覆盖整套 token + 显示 motif)。
   const skin = auto ? '' : (a.activeSkin && KNOWN_SKIN_IDS.has(a.activeSkin) ? a.activeSkin : '')
   // 皮肤生效时 data-theme 跟随皮肤的明暗基调(light/dark),让所有 [data-theme=...] 作用域的样式(尤其一些
@@ -42,7 +45,12 @@ export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): vo
   // 先无条件清掉上一轮内联的整套配色属性(壁纸配色 + 自定义强调色共用这批),再按本轮情况重写,
   // 保证关掉开关/换回预设强调色时不会残留。
   for (const prop of PALETTE_PROPS) root.style.removeProperty(prop)
-  if (auto) for (const [prop, value] of Object.entries(paletteVars(auto))) root.style.setProperty(prop, value)
+  // 强调色不跟随时,把 hueAccent 抹成 null 再产出 —— paletteVars 见到 null 就不写 accent 四件套,
+  // 于是 --accent 交还给 [data-accent] 属性选择器(预设色)或下面的 custom 内联(自定义色)。
+  if (auto) {
+    const src = autoAccent ? auto : { ...auto, hueAccent: null }
+    for (const [prop, value] of Object.entries(paletteVars(src))) root.style.setProperty(prop, value)
+  }
   const custom = !autoAccent && a.accent === 'custom' ? (a.accentCustom ?? '').trim() : ''
   if (custom) {
     root.style.setProperty('--accent', custom)

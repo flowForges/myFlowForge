@@ -3,6 +3,8 @@ import type { Appearance, Terminal } from '@shared/types'
 import { vibrancyMaterial } from '@shared/vibrancy'
 import { FontPicker } from './FontPicker'
 import { SkinsPane } from './SkinsPane'
+import { useWallpaperPalette } from '../theme/wallpaperSample'
+import { paletteSwatches } from '../theme/wallpaperPalette'
 
 // 「外观」页只留与背景图无关的外观设置:主题、强调色、界面(窗口透明度/磨砂度/密度)、字体、终端字体。
 // 内置壁纸库与所有背景图控件已拆到独立的「壁纸背景」页(BackgroundPane),两者操作同一套背景状态、放一起更顺。
@@ -62,6 +64,13 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
   const autoWp = !!appearance.autoWallpaperTheme // 跟随壁纸配色 → 明暗 + 中性色 + 强调色全被接管(比皮肤更强)
   const themeTakenOver = skinActive || autoWp
   const customAccent = appearance.accentCustom ?? ''
+  // 壁纸模式下,只有「不跟随壁纸」时下面那些预设/自定义色才算被选中(否则选中的是第一颗「跟随壁纸」)。
+  const accentPicked = !autoWp || appearance.wallpaperAccentAuto === false
+  // 「跟随壁纸」那颗色块直接显示壁纸当下算出来的强调色,好让用户点之前就看得见自动会给什么。
+  // always:true —— 开关关着时也取样,否则刚打开开关的那一瞬色块是空的。取不到(灰度壁纸/没设壁纸)时
+  // 下面回落成一小段灰渐变,与「此时自动也给不出颜色」的事实一致。
+  const wpPalette = useWallpaperPalette(appearance, { always: true })
+  const wallpaperAccentColor = wpPalette && wpPalette.hueAccent != null ? paletteSwatches(wpPalette)[2] : null
   const blur = appearance.blurAmount ?? 0
   // 磨砂度改动是否真需要重启:应用内面板毛玻璃是实时 CSS,不需要;只有「桌面背景磨砂(原生 vibrancy)」需要,
   // 而它是建窗时定死的。所以只在当前磨砂级别落到与「启动时窗口实际用的级别」不同的 vibrancy 档位时,才提示重启
@@ -100,16 +109,34 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
       </div>
       <div className="set-group">
         <h4>强调色</h4>
-        {autoWp && <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>强调色<b style={{ color: 'var(--fg-2)' }}>已被「跟随壁纸配色」接管</b> —— 取的是壁纸里最鲜艳的那抹点缀色。只有壁纸接近灰度时,才回落到这里选的颜色。</p>}
-        <div className="accent-row" style={autoWp ? { opacity: .4 } : undefined}>
+        {autoWp && <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>第一颗是<b style={{ color: 'var(--fg-2)' }}>跟随壁纸</b>(取壁纸里最鲜艳的那抹点缀色)。挑别的颜色也行 —— 明暗与底色仍跟着壁纸走,只有强调色听你的;想回自动就点回第一颗。</p>}
+        <div className="accent-row">
+          {/* 「跟随壁纸」= 强调色行里的第一颗,与 12 个预设、自定义色平起平坐(而不是另开一个开关):
+              选它 = 全自动,选别的 = 底色仍跟壁纸、强调色手动。色块直接显示壁纸当下算出来的那个颜色,
+              所以点之前就看得见「自动」会给什么。只有开了「跟随壁纸配色」才出现这一颗。 */}
+          {autoWp && (
+            <button
+              className={`accent-sw${appearance.wallpaperAccentAuto !== false ? ' on' : ''}`}
+              title="跟随壁纸(自动取色)"
+              aria-label="强调色跟随壁纸"
+              onClick={() => onChange({ wallpaperAccentAuto: true })}
+            >
+              <i style={{ background: wallpaperAccentColor ?? 'linear-gradient(135deg, var(--muted), var(--faint))' }} />{ACK}
+            </button>
+          )}
           {ACCENTS.map(({ key, label, color }) => (
-            <button key={key} className={`accent-sw${appearance.accent === key ? ' on' : ''}`} title={label} onClick={() => onChange({ accent: key })}>
+            <button
+              key={key}
+              className={`accent-sw${accentPicked && appearance.accent === key ? ' on' : ''}`}
+              title={label}
+              onClick={() => onChange(autoWp ? { accent: key, wallpaperAccentAuto: false } : { accent: key })}
+            >
               <i style={{ background: color }} />{ACK}
             </button>
           ))}
           {/* 自定义强调色:一颗打开系统色卡(原生 <input type=color>)的色板,选中即写 accent='custom'+accentCustom。
               未选时显示彩虹环示意「自选」,选中后显示所选色。 */}
-          <label className={`accent-sw accent-sw-custom${appearance.accent === 'custom' ? ' on' : ''}`} title="自定义(用色卡自选)">
+          <label className={`accent-sw accent-sw-custom${accentPicked && appearance.accent === 'custom' ? ' on' : ''}`} title="自定义(用色卡自选)">
             <i style={appearance.accent === 'custom' && customAccent
               ? { background: customAccent }
               : { background: 'conic-gradient(from 90deg, #f43f5e, #f59e0b, #84cc16, #06b6d4, #6366f1, #d946ef, #f43f5e)' }} />
@@ -119,7 +146,9 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
               className="accent-color-input"
               aria-label="自定义强调色"
               value={/^#[0-9a-fA-F]{6}$/.test(customAccent) ? customAccent : '#3b82f6'}
-              onChange={e => onChange({ accent: 'custom', accentCustom: e.target.value })}
+              onChange={e => onChange(autoWp
+                ? { accent: 'custom', accentCustom: e.target.value, wallpaperAccentAuto: false }
+                : { accent: 'custom', accentCustom: e.target.value })}
             />
           </label>
         </div>

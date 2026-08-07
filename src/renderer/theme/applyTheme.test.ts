@@ -136,6 +136,39 @@ describe('applyTheme', () => {
     expect(r.style.getPropertyValue('--accent')).toBe('#ff0088')
   })
 
+  // ---- 强调色可以不跟随壁纸(强调色行里的第一颗「跟随壁纸」被取消选中时)----
+  it('wallpaperAccentAuto=false:底色仍跟壁纸,强调色交还给用户的自定义色', () => {
+    applyTheme({ ...wpBase, wallpaperAccentAuto: false, accent: 'custom', accentCustom: '#ff0088' }, pal)
+    const r = document.documentElement
+    // 明暗与中性色照旧由壁纸接管
+    expect(r.getAttribute('data-theme')).toBe('light')
+    expect(r.style.getPropertyValue('--bg')).toBe('oklch(98% 0.02 90)')
+    // 强调色四件套不再由壁纸产出,而是用户那一个
+    expect(r.style.getPropertyValue('--accent')).toBe('#ff0088')
+    expect(r.style.getPropertyValue('--run')).toBe('#ff0088')
+  })
+
+  it('wallpaperAccentAuto=false + 预设强调色:accent 完全不内联,交还给 [data-accent] 选择器', () => {
+    applyTheme({ ...wpBase, wallpaperAccentAuto: false, accent: 'rose' }, pal)
+    const r = document.documentElement
+    expect(r.getAttribute('data-accent')).toBe('rose')
+    expect(r.style.getPropertyValue('--bg')).toBe('oklch(98% 0.02 90)')   // 底色仍跟壁纸
+    expect(r.style.getPropertyValue('--accent')).toBe('')                 // 没有内联 → tokens.css 的 [data-accent=rose] 生效
+    expect(r.style.getPropertyValue('--accent-dim')).toBe('')
+    expect(r.style.getPropertyValue('--on-accent')).toBe('')
+  })
+
+  it('缺省(老配置没有这个字段)= 跟随壁纸,行为与改动前一致', () => {
+    applyTheme({ ...wpBase, accent: 'rose' }, pal)   // 不带 wallpaperAccentAuto
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 300)')
+  })
+
+  it('从「不跟随」切回「跟随」不留残留', () => {
+    applyTheme({ ...wpBase, wallpaperAccentAuto: false, accent: 'custom', accentCustom: '#ff0088' }, pal)
+    applyTheme({ ...wpBase, wallpaperAccentAuto: true, accent: 'custom', accentCustom: '#ff0088' }, pal)
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 300)')
+  })
+
   it('有点缀色时,壁纸强调色压过自定义强调色', () => {
     applyTheme({ ...wpBase, accent: 'custom', accentCustom: '#ff0088' }, pal)
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 300)')
