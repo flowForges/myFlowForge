@@ -564,17 +564,31 @@ app.whenReady().then(() => {
   registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings)
 
   // 成长宠物的今日 token 基线。全量扫盘只在这里跑这一次,之后靠 chatService 每轮累加。
-  // 放在 registerIpc 之后:handler 里读的是 ref,ref 这时才被填上。
-  {
+  //
+  // 为什么推到 setImmediate:scanTokenBaseline 同步遍历所有工作区的 .forge/sessions/*.jsonl 读
+  // 全部消息。主窗口早在上面就创建了,在 whenReady 里直接扫会把主进程(连同 IPC)卡住,会话多的
+  // 用户能直接感觉到。推后一个 tick 让就绪流程先跑完,扫盘再补上。
+  //
+  // 延后期间的竞态是自愈的,前提是下面这一整块必须留在同一个同步 tick 里(扫盘 → 建计数器 →
+  // 装进 ref,中间不能有 await):
+  //   · 空窗期结束的对话轮 → ref 还是 null,addDailyTokens 静默丢弃;但 finishOk 是先
+  //     appendMessage(同步 appendFileSync)再 addDailyTokens,消息此刻已经在 jsonl 里,
+  //     稍后的扫盘会把它算进基线 → 不丢。
+  //   · 装好之后的对话轮 → 走累加;而基线是在 append 之前扫的 → 不重复。
+  // 一旦把扫盘和 setDailyTokenCounter 拆到两个 tick,这两条就同时破了(中间 append 的既不进
+  // 基线也没人累加,或者反过来两头都算)。别拆。
+  setImmediate(() => {
     const day = localDayKey(new Date())
     setDailyTokenCounter(createDailyTokenCounter({
       baseline: scanTokenBaseline(day),
       day,
-      // TODO(Task 5): 换成 settings.pet?.growthDailyGoal —— 该字段在下个任务才进 schema
+      // TODO(Task 5): 换成 settings.pet?.growthDailyGoal —— 该字段在下个任务才进 schema。
+      // 届时还要把 `const settings = readSettings()` 一并加回本块开头(现在没有这一行,
+      // 因为字段还不存在,留着就是个未使用变量)。
       goalOverride: undefined,
       onChange: (s) => registry.broadcast(CH.growthSignal, s),
     }))
-  }
+  })
 
   // ── Plugin Scheduler ────────────────────────────────────────────────────────
   const scheduler = new PluginScheduler({
