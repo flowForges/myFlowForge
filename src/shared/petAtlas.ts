@@ -31,10 +31,17 @@ export const FRAME_DURATIONS: Record<PetAction, number[]> = {
   review: [150, 150, 150, 150, 150, 280],
 }
 
-// background-position for a cell in the cols×rows grid, paired with `background-size: 800% 1100%`.
-// The Nth of M positions is N/(M-1)*100% (0% first, 100% last).
+// background-position for a cell in an arbitrary cols×rows grid, paired with
+// `background-size: ${cols*100}% ${rows*100}%`. The Nth of M positions is N/(M-1)*100%
+// (0% first, 100% last). Single-row/column grids pin to 0% instead of dividing by zero.
+export function gridBackgroundPosition(col: number, row: number, cols: number, rows: number): { x: string; y: string } {
+  const axis = (i: number, n: number): string => (n <= 1 ? '0%' : `${(i / (n - 1)) * 100}%`)
+  return { x: axis(col, cols), y: axis(row, rows) }
+}
+
+// Codex v2's fixed 8×11 grid, paired with `background-size: 800% 1100%`.
 export function cellBackgroundPosition(col: number, row: number): { x: string; y: string } {
-  return { x: `${(col / (ATLAS.cols - 1)) * 100}%`, y: `${(row / (ATLAS.rows - 1)) * 100}%` }
+  return gridBackgroundPosition(col, row, ATLAS.cols, ATLAS.rows)
 }
 
 // Map a heading in degrees (000 = up / 12 o'clock, clockwise) to one of the 16 look cells on rows 9-10.

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { ATLAS, ROW_OF, FRAME_DURATIONS, PET_ACTIONS, cellBackgroundPosition, lookCellForAngle, resolveAction, SPRITE_VERSION } from './petAtlas'
+import { gridBackgroundPosition } from './petAtlas'
 
 describe('petAtlas contract', () => {
   it('locks the v2 atlas dimensions and version', () => {
@@ -58,5 +59,23 @@ describe('resolveAction fallback chain', () => {
   })
   it('failed → idle when missing', () => {
     expect(resolveAction('failed', new Set(['idle'] as const))).toBe('idle')
+  })
+})
+
+describe('gridBackgroundPosition', () => {
+  it('N 选 M 的第 N 个位置 = N/(M-1)*100%', () => {
+    expect(gridBackgroundPosition(0, 0, 8, 3)).toEqual({ x: '0%', y: '0%' })
+    expect(gridBackgroundPosition(7, 2, 8, 3)).toEqual({ x: '100%', y: '100%' })
+    expect(gridBackgroundPosition(1, 1, 3, 3)).toEqual({ x: '50%', y: '50%' })
+  })
+
+  it('单列/单行网格不产出 NaN', () => {
+    expect(gridBackgroundPosition(0, 0, 1, 1)).toEqual({ x: '0%', y: '0%' })
+  })
+
+  it('cellBackgroundPosition 与它在 codex 网格上完全一致(回归)', () => {
+    for (const [col, row] of [[0, 0], [3, 5], [7, 10]] as const) {
+      expect(cellBackgroundPosition(col, row)).toEqual(gridBackgroundPosition(col, row, ATLAS.cols, ATLAS.rows))
+    }
   })
 })

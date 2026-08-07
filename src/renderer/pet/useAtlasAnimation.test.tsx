@@ -37,3 +37,34 @@ describe('useAtlasAnimation', () => {
     expect(result.current).toBe(0)
   })
 })
+
+describe('useAtlasAnimation — 自定义时长', () => {
+  it('传了 durations 就按它走,长度决定帧数', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useAtlasAnimation('idle', { durations: [100, 100, 100] }))
+    expect(result.current).toBe(0)
+    act(() => { vi.advanceTimersByTime(100) })
+    expect(result.current).toBe(1)
+    act(() => { vi.advanceTimersByTime(100) })
+    expect(result.current).toBe(2)
+    act(() => { vi.advanceTimersByTime(100) })
+    expect(result.current).toBe(0)      // 回环
+    vi.useRealTimers()
+  })
+
+  it('单帧不起定时器', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useAtlasAnimation('idle', { durations: [500] }))
+    act(() => { vi.advanceTimersByTime(5000) })
+    expect(result.current).toBe(0)
+    vi.useRealTimers()
+  })
+
+  it('不传 durations 时仍走内置 FRAME_DURATIONS(回归)', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useAtlasAnimation('idle'))
+    act(() => { vi.advanceTimersByTime(280) })
+    expect(result.current).toBe(1)     // FRAME_DURATIONS.idle[0] === 280
+    vi.useRealTimers()
+  })
+})
