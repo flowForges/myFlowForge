@@ -225,6 +225,9 @@ export const CH = {
   perfStall: 'perf:stall',
   memoryRead: 'memory:read',
   tokenUsageAggregate: 'token-usage:aggregate',
+  // 成长宠物:主进程 → 宠物窗口的实时信号(今日 token / 每日目标 / 0~1 进度)。
+  growthSignal: 'growth:signal',
+  growthSignalGet: 'growth:signal-get',
   memoryWrite: 'memory:write',
   memoryClear: 'memory:clear',
   // Run2 (P3-A): additive, coexists with the existing engine* orchestrator channels above.

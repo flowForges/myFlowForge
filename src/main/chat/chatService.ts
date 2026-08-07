@@ -20,6 +20,7 @@ import { getSession, setSessionMemPromoted, setSessionWorkflow, autoNameIfDefaul
 import { providerSupportsResume, providerResumeReliable } from '../agents/resumeSupport'
 import { logDebug } from '../log/appLog'
 import { perfSpan } from '../perf/perfSpans'
+import { addDailyTokens } from '../tokens/growthSignalRef'
 
 export interface SendTurnDeps {
   provider: AgentProvider
@@ -294,6 +295,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         startedAt, endedAt: Date.now(),
       }
       appendMessage(ws, sid, msg)
+      // 成长宠物的实时信号 —— tokens 上面刚算好(真实上报优先,否则 CJK 估算),直接喂给今日计数器。
+      // 注意不要改用 aggregateTokenUsage:那是全量扫盘,不能每轮调。
+      addDailyTokens((tokens.input || 0) + (tokens.output || 0))
       clearLive(ws, sid, aid) // persisted now covers it — drop the in-flight mirror
       bumpWatermark()
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })

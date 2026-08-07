@@ -327,6 +327,13 @@ const api = {
   memoryWrite: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string; content: string }): Promise<void> => ipcRenderer.invoke(CH.memoryWrite, a),
   memoryClear: (a: { level: 'system' | 'workspace' | 'session'; wsPath?: string; sessionId?: string }): Promise<void> => ipcRenderer.invoke(CH.memoryClear, a),
   tokenUsageAggregate: (): Promise<import('../main/ipc/tokenUsageHandlers').TokenUsageRow[]> => ipcRenderer.invoke(CH.tokenUsageAggregate),
+  // 成长宠物:一次性拉取当前信号 + 订阅后续实时推送。
+  growthSignalGet: (): Promise<import('../main/tokens/dailyTokenCounter').GrowthSignal | null> => ipcRenderer.invoke(CH.growthSignalGet),
+  onGrowthSignal: (cb: (s: import('../main/tokens/dailyTokenCounter').GrowthSignal) => void) => {
+    const listener = (_: unknown, s: import('../main/tokens/dailyTokenCounter').GrowthSignal) => cb(s)
+    ipcRenderer.on(CH.growthSignal, listener)
+    return () => ipcRenderer.removeListener(CH.growthSignal, listener)
+  },
   // Run2 (P3-A): additive API surface for the new headless run controller. Coexists with startRun/resolve/
   // onEngineEvent above — none of those are touched.
   run2: {

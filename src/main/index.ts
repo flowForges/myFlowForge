@@ -18,6 +18,8 @@ import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
 import { readSettings, writeSettings, readWorkspaceRegistry } from './config/store'
 import { fixExecPath } from './agents/pathFix'
+import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './tokens/dailyTokenCounter'
+import { setDailyTokenCounter } from './tokens/growthSignalRef'
 import type { Settings } from './config/schema'
 import { TerminalManager } from './terminal/terminalManager'
 import { TermBatcher } from './terminal/termBatch'
@@ -560,6 +562,19 @@ app.whenReady().then(() => {
     botBridge.observe(channel, payload)   // mirror gate/ask/done/run2 events to the phone
   }
   registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings)
+
+  // 成长宠物的今日 token 基线。全量扫盘只在这里跑这一次,之后靠 chatService 每轮累加。
+  // 放在 registerIpc 之后:handler 里读的是 ref,ref 这时才被填上。
+  {
+    const day = localDayKey(new Date())
+    setDailyTokenCounter(createDailyTokenCounter({
+      baseline: scanTokenBaseline(day),
+      day,
+      // TODO(Task 5): 换成 settings.pet?.growthDailyGoal —— 该字段在下个任务才进 schema
+      goalOverride: undefined,
+      onChange: (s) => registry.broadcast(CH.growthSignal, s),
+    }))
+  }
 
   // ── Plugin Scheduler ────────────────────────────────────────────────────────
   const scheduler = new PluginScheduler({

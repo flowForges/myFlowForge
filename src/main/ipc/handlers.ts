@@ -20,6 +20,7 @@ import { resolveSetupInteraction } from '../workspace/setupInteractions'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
 import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
 import { aggregateTokenUsage } from './tokenUsageHandlers'
+import { currentGrowthSignal } from '../tokens/growthSignalRef'
 import { workflowNameTaken } from '../../shared/workflowName'
 import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
@@ -1449,6 +1450,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // memory.enabled toggle — the user can always view/edit/clear stored memory regardless of the switch.
   ipcMain.handle(CH.memoryRead, (_e, a: MemoryArg) => memoryRead(a))
   ipcMain.handle(CH.tokenUsageAggregate, () => aggregateTokenUsage())
+  ipcMain.handle(CH.growthSignalGet, () => currentGrowthSignal())
   ipcMain.handle(CH.memoryWrite, (_e, a: MemoryArg) => memoryWrite(a))
   ipcMain.handle(CH.memoryClear, (_e, a: MemoryArg) => memoryClear(a))
 }
