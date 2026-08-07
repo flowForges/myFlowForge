@@ -37,10 +37,16 @@ export const TUNING = {
   TINT_FROM_CHROMA: 0.25,
   /** 色相直方图桶数(36 桶 = 每桶 10°)。 */
   HUE_BUCKETS: 36,
-  /** 点缀色必须与主调色相至少相差这么多度,否则不算「另一抹色」。 */
-  ACCENT_MIN_HUE_GAP: 30,
-  /** 点缀色所在桶在「有彩色像素」中的最小面积占比 —— 挡掉几十个孤立噪点像素。 */
-  ACCENT_MIN_SHARE: 0.015,
+  /**
+   * 点缀色必须与主调色相至少相差这么多度。OKLCH 里 30° 只是相邻色调(青 vs 青绿),不足以读成「另一抹色」,
+   * 结果是整窗一片同色系的浑浊 —— 真机上「青蓝天空壁纸出橄榄绿」就有这一份。45° 起才是肉眼可辨的第二色。
+   */
+  ACCENT_MIN_HUE_GAP: 45,
+  /**
+   * 点缀色所在桶在「有彩色像素」中的最小面积占比。1.5% 太宽松:实测一张 36% 面积是青蓝天空的壁纸,
+   * accent 被 1.9% 的金色枝叶抢走,整个 App 变橄榄。3% 才算「画面里真的有这抹色」。
+   */
+  ACCENT_MIN_SHARE: 0.03,
   /** 像素彩度达到多少才算「有彩色」(参与色相投票与占比统计)。 */
   COLORFUL_MIN_C: 0.04,
   /** 有彩色像素占比低于此 → 判为灰度/极灰壁纸,出纯中性皮肤并保留用户原强调色。 */
@@ -80,6 +86,49 @@ export function hueGap(a: number, b: number): number {
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 
 // ---------------------------------------------------------------------------
+// 色域可达性。同一个「明度 + 彩度」组合,不同色相能不能真的画出来差别极大:浅色底的 accent 明度是 56%,
+// 蓝色在那个明度轻松吃满 0.16 彩度,而黄/金在 56% 上只能到 ~0.11 —— 硬要 0.16 只会被浏览器压回去,
+// 出来就是一坨橄榄泥(真机实测:要 0.16 得到 0.117)。
+// 所以取色时必须知道「这个色相在目标明度下到底能多鲜艳」,把上不去的色相判负,而不是选了再让浏览器压。
+// ---------------------------------------------------------------------------
+function oklchToLinearRgb(L: number, C: number, hDeg: number): [number, number, number] {
+  const h = (hDeg * Math.PI) / 180
+  const a = C * Math.cos(h), b = C * Math.sin(h)
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3
+  const s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+  ]
+}
+
+/** 给定明度与色相,sRGB 里能达到的最大彩度(二分,~24 次迭代足够精确到 1e-7)。 */
+export function maxChromaAt(L: number, hDeg: number): number {
+  let lo = 0, hi = 0.4
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2
+    if (oklchToLinearRgb(L, mid, hDeg).every(v => v >= -0.0005 && v <= 1.0005)) lo = mid
+    else hi = mid
+  }
+  return lo
+}
+
+// 强调色波段:和 tokens.css 里 12 个预设强调色完全同一档(深色 L72/C.15、浅色 L56/C.16),
+// 所以壁纸取出来的 accent 天然和内置强调色一样安全 —— 只有色相是新的。
+const ACCENT_BAND = {
+  dark: { L: 72, C: 0.15, runL: 74, runC: 0.14, dimA: 0.16, on: 'oklch(15% 0.02 %H)' },
+  light: { L: 56, C: 0.16, runL: 56, runC: 0.15, dimA: 0.12, on: 'oklch(99% 0 0)' },
+} as const
+
+/** 某个色相当 accent 时实际能拿到的彩度(被色域卡住就是卡住后的值)。用于取色打分与最终产出。 */
+function reachableAccentChroma(base: 'light' | 'dark', hue: number): number {
+  const band = ACCENT_BAND[base]
+  return Math.min(band.C, maxChromaAt(band.L / 100, hue))
+}
+
+// ---------------------------------------------------------------------------
 // 取色主函数。输入是 RGBA 像素数组(canvas.getImageData().data 的形状),输出两个色相角 + 基调。
 // 全部是算术:平均、直方图、圆周均值 —— 没有任何图像识别。
 // ---------------------------------------------------------------------------
@@ -95,7 +144,6 @@ export function extractPalette(pixels: ArrayLike<number>): WallpaperPalette | nu
   const sumC = new Float64Array(N)
   const sumSin = new Float64Array(N)
   const sumCos = new Float64Array(N)
-  const maxC = new Float64Array(N)
 
   let sumL = 0, seen = 0, colorful = 0
 
@@ -115,7 +163,6 @@ export function extractPalette(pixels: ArrayLike<number>): WallpaperPalette | nu
     sumC[b] += C
     sumSin[b] += Math.sin(rad) * w
     sumCos[b] += Math.cos(rad) * w
-    if (C > maxC[b]) maxC[b] = C
   }
 
   if (seen === 0) return null
@@ -134,13 +181,19 @@ export function extractPalette(pixels: ArrayLike<number>): WallpaperPalette | nu
   const hueBg = bucketHue(dom)
   const chromaBg = clamp((sumC[dom] / count[dom]) * TUNING.TINT_FROM_CHROMA, TUNING.TINT_MIN, TUNING.TINT_MAX)
 
-  // 点缀色 = 离主调够远、面积够大的桶里最鲜艳的那个。占比分母用「有彩色像素数」,
-  // 否则灰调壁纸里每个桶的占比都小到过不了门槛。
-  let acc = -1
+  // 点缀色 = 离主调够远、面积够大的桶里「贡献度」最高的那个。
+  // 打分 = 面积占比 × 该色相当 accent 时真正可达的彩度。两个因子都是必须的:
+  //   · 只看最高彩度 → 1.9% 的金色枝叶能压过 36% 的青蓝天空(真机上就是这么变橄榄的)
+  //   · 不看可达彩度 → 选中在目标明度下必然发浑的暖色相,再鲜艳的金色也会被压成泥
+  // 占比分母用「有彩色像素数」,否则灰调壁纸里每个桶的占比都小到过不了门槛。
+  let acc = -1, accScore = 0
   for (let b = 0; b < N; b++) {
-    if (count[b] / colorful < TUNING.ACCENT_MIN_SHARE) continue
-    if (hueGap(bucketHue(b), hueBg) < TUNING.ACCENT_MIN_HUE_GAP) continue
-    if (acc < 0 || maxC[b] > maxC[acc]) acc = b
+    const share = count[b] / colorful
+    if (share < TUNING.ACCENT_MIN_SHARE) continue
+    const hue = bucketHue(b)
+    if (hueGap(hue, hueBg) < TUNING.ACCENT_MIN_HUE_GAP) continue
+    const score = share * reachableAccentChroma(base, hue)
+    if (score > accScore) { accScore = score; acc = b }
   }
   // 找不到第二抹色 → 退化成单色相(accent 用主调色相,靠明度/彩度拉开)。
   const hueAccent = acc < 0 ? hueBg : bucketHue(acc)
@@ -184,13 +237,6 @@ const GLASS: Record<'dark' | 'light', { prop: string; from: string; alpha: numbe
   ],
 }
 
-// 强调色波段:和 tokens.css 里 12 个预设强调色完全同一档(深色 L72/C.15、浅色 L56/C.16),
-// 所以壁纸取出来的 accent 天然和内置强调色一样安全 —— 只有色相是新的。
-const ACCENT_BAND = {
-  dark: { L: 72, C: 0.15, runL: 74, runC: 0.14, dimA: 0.16, on: 'oklch(15% 0.02 %H)' },
-  light: { L: 56, C: 0.16, runL: 56, runC: 0.15, dimA: 0.12, on: 'oklch(99% 0 0)' },
-} as const
-
 const num = (v: number, digits: number) => String(Number(v.toFixed(digits)))
 const oklch = (L: number, C: number, h: number, alpha?: number) =>
   `oklch(${num(L, 2)}% ${num(C, 4)} ${num(h, 1)}${alpha == null ? '' : ` / ${alpha}`})`
@@ -214,9 +260,13 @@ export function paletteVars(p: WallpaperPalette): Record<string, string> {
   }
   if (p.hueAccent != null) {
     const a = ACCENT_BAND[p.base]
-    vars['--accent'] = oklch(a.L, a.C, p.hueAccent)
-    vars['--accent-dim'] = oklch(a.L, a.C, p.hueAccent, a.dimA)
-    vars['--run'] = oklch(a.runL, a.runC, p.hueAccent)
+    // 自己把彩度夹到该色相在该明度下真正可达的范围,而不是丢一个色域外的值让浏览器去压 ——
+    // 压完的结果不可预测(实测色相不变但彩度掉三成),也会让 --accent-dim / --run 与 --accent 不同步。
+    const accC = reachableAccentChroma(p.base, p.hueAccent)
+    const runC = Math.min(a.runC, maxChromaAt(a.runL / 100, p.hueAccent))
+    vars['--accent'] = oklch(a.L, accC, p.hueAccent)
+    vars['--accent-dim'] = oklch(a.L, accC, p.hueAccent, a.dimA)
+    vars['--run'] = oklch(a.runL, runC, p.hueAccent)
     vars['--on-accent'] = a.on.replace('%H', num(p.hueAccent, 1))
   }
   return vars

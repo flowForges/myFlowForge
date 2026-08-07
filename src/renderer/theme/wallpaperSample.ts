@@ -14,7 +14,9 @@ import { TUNING, extractPalette, wallpaperSourceFor, type WallpaperPalette } fro
 // 内存 Map 挡住同一次会话里的重复取样,localStorage 挡住重启后的重复取样(宠物窗与主窗同源,天然共享)。
 // ============================================================================
 
-const LS_KEY = 'forge.wpPalette.v1'
+// ★取色规则一改就必须升这个版本号,否则老用户的壁纸命中的是上一版算法留下的缓存,新规则永远不生效
+// (v1→v2:accent 改为按「面积 × 可达彩度」打分,修掉碎片抢 accent 与暖色相变浑)。
+const LS_KEY = 'forge.wpPalette.v2'
 const LS_MAX = 40
 
 const memo = new Map<string, WallpaperPalette | null>()

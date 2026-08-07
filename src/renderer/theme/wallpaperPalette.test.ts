@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  PALETTE_PROPS, TUNING, extractPalette, hueGap, paletteSwatches, paletteVars, srgbToOklch,
-  wallpaperSourceFor, type WallpaperPalette,
+  PALETTE_PROPS, TUNING, extractPalette, hueGap, maxChromaAt, paletteSwatches, paletteVars,
+  srgbToOklch, wallpaperSourceFor, type WallpaperPalette,
 } from './wallpaperPalette'
 import type { Appearance } from '@shared/types'
 
@@ -82,8 +82,32 @@ describe('extractPalette · 取色', () => {
   })
 
   it('点缀色面积太小(低于门槛)时不被选中,退化成单色相', () => {
-    // 2 / 1002 ≈ 0.2%,低于 ACCENT_MIN_SHARE(1.5%)→ 当噪点丢掉。
+    // 2 / 1002 ≈ 0.2%,远低于 ACCENT_MIN_SHARE → 当噪点丢掉。
     const p = extractPalette(img(fill('#0f6f6a', 1000), fill('#ff7a1a', 2)))!
+    expect(p.hueAccent).toBe(p.hueBg)
+  })
+
+  // ---- 回归:真机上「塞尔达青蓝天空壁纸 → 橄榄绿 accent」那个 bug(见 wallpaperPalette.ts 的取色注释)----
+  it('★面积不足的碎片抢不走 accent(1.9% 的金色叶子 vs 36% 的青蓝天空)', () => {
+    // 现场复刻:大面积浅青主调 + 一小撮高饱和金色。金色 maxC 更高,但只占 2%,不该定调整个 App。
+    const p = extractPalette(img(fill('#7fd0e0', 980), fill('#f0c020', 20)))!
+    expect(p.base).toBe('light')
+    expect(hueGap(p.hueAccent!, hueOf('#f0c020'))).toBeGreaterThan(30)  // 不是金色
+    expect(p.hueAccent).toBe(p.hueBg)                                    // 退化成主调
+  })
+
+  it('★同等面积下,在目标明度会变浑的暖色相输给能真正鲜艳的冷色相', () => {
+    // 金色在图里更饱和(maxC 更大),但浅色底的 accent 明度是 56%,金色在那个明度下彩度上不去(必浑);
+    // 蓝色则能吃满目标彩度。按「面积 × 可达彩度」打分,蓝色应胜出。
+    const p = extractPalette(img(fill('#7fd0e0', 900), fill('#f0c020', 50), fill('#7a3fd0', 50)))!
+    expect(p.base).toBe('light')
+    expect(hueGap(p.hueAccent!, hueOf('#7a3fd0'))).toBeLessThan(25)
+    expect(hueGap(p.hueAccent!, hueOf('#f0c020'))).toBeGreaterThan(60)
+  })
+
+  it('★点缀色必须与主调明显不同色相(相邻色调不算另一抹色)', () => {
+    // 190° 主调 + 一片 40° 开外但不到 45° 的邻近色 → 不该被当点缀色。
+    const p = extractPalette(img(fill('#0f6f6a', 800), fill('#0f7f4a', 200)))!
     expect(p.hueAccent).toBe(p.hueBg)
   })
 
@@ -105,7 +129,7 @@ describe('extractPalette · 取色', () => {
 
 describe('paletteVars · 对比度护栏', () => {
   const dark: WallpaperPalette = { base: 'dark', hueBg: 264, chromaBg: 0.02, hueAccent: 40 }
-  const light: WallpaperPalette = { base: 'light', hueBg: 90, chromaBg: 0.02, hueAccent: 200 }
+  const light: WallpaperPalette = { base: 'light', hueBg: 90, chromaBg: 0.02, hueAccent: 300 }
   const L = (v: string) => Number(/oklch\(([\d.]+)%/.exec(v)![1])
 
   it('深色基调:明度阶梯照抄内置深色主题(底 20% / 侧栏 17% / 正文 95%)', () => {
@@ -135,7 +159,7 @@ describe('paletteVars · 对比度护栏', () => {
 
   it('accent 落在与内置预设强调色相同的波段(深色 L72/C.15、浅色 L56/C.16)', () => {
     expect(paletteVars(dark)['--accent']).toBe('oklch(72% 0.15 40)')
-    expect(paletteVars(light)['--accent']).toBe('oklch(56% 0.16 200)')
+    expect(paletteVars(light)['--accent']).toBe('oklch(56% 0.16 300)')
   })
 
   it('深色 accent 配深字、浅色 accent 配白字', () => {
@@ -150,6 +174,17 @@ describe('paletteVars · 对比度护栏', () => {
     expect(v['--accent-dim']).toBeUndefined()
     expect(v['--run']).toBeUndefined()
     expect(v['--on-accent']).toBeUndefined()
+  })
+
+  it('★accent 的彩度被压到该色相在该明度下真正可达的范围内(不产出色域外的值)', () => {
+    // 黄绿色相在浅色底的 56% 明度下达不到 0.16 —— 必须自己夹住,而不是丢给浏览器去压。
+    const muddy = paletteVars({ base: 'light', hueBg: 200, chromaBg: 0.02, hueAccent: 95 })
+    const c = Number(/oklch\([\d.]+% ([\d.]+)/.exec(muddy['--accent'])![1])
+    expect(c).toBeLessThan(0.16)
+    expect(maxChromaAt(0.56, 95)).toBeLessThan(0.16)
+    // 蓝色相则能吃满目标彩度。
+    expect(maxChromaAt(0.56, 280)).toBeGreaterThan(0.16)
+    expect(paletteVars({ base: 'light', hueBg: 200, chromaBg: 0.02, hueAccent: 280 })['--accent']).toContain('0.16')
   })
 
   it('PALETTE_PROPS 覆盖 paletteVars 可能产出的每一个属性(否则关掉开关会有残留)', () => {

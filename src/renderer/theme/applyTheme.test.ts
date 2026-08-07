@@ -95,14 +95,14 @@ describe('applyTheme', () => {
   })
   // ---- 跟随壁纸配色(自动皮肤):接管明暗 + 中性色 + 强调色,关掉不留残留 ----
   const wpBase = { ...base, autoWallpaperTheme: true, bgImage: 'forge-bg://img/a.png', bgScope: 'app' as const }
-  const pal = { base: 'light' as const, hueBg: 90, chromaBg: 0.02, hueAccent: 200 }
+  const pal = { base: 'light' as const, hueBg: 90, chromaBg: 0.02, hueAccent: 300 }
 
   it('壁纸配色接管明暗基调与整套中性色', () => {
     applyTheme(wpBase, pal)
     const r = document.documentElement
     expect(r.getAttribute('data-theme')).toBe('light')          // 用户是 dark,壁纸判浅 → 壁纸说了算
     expect(r.style.getPropertyValue('--bg')).toBe('oklch(98% 0.02 90)')
-    expect(r.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 200)')
+    expect(r.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 300)')
   })
 
   it('壁纸配色盖过手选皮肤(否则皮肤的 motif 与配色打架)', () => {
@@ -138,7 +138,7 @@ describe('applyTheme', () => {
 
   it('有点缀色时,壁纸强调色压过自定义强调色', () => {
     applyTheme({ ...wpBase, accent: 'custom', accentCustom: '#ff0088' }, pal)
-    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 200)')
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 300)')
   })
 
   it('resolves auto theme via prefers-color-scheme', () => {
