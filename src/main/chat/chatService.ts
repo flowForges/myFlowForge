@@ -9,6 +9,7 @@ import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continua
 import { distillSession, promoteToWorkspace, promoteToSystem, type DistillDeps } from './memory/distiller'
 import { distillModelFor } from './memory/distillModel'
 import { removeNativeSession } from '../agents/nativeSessionCleanup'
+import { paceAssistantDeltas } from '../agents/paceDeltas'
 import { estimateMessagesTokens, SESSION_DISTILL_THRESHOLD, SYSTEM_PROMOTE_EVERY_K, WORKSPACE_PROMOTE_EVERY_K } from './memory/tokenEstimate'
 import { estimateTokens as estimateContextTokens } from '@shared/estimateTokens'
 import { readSettings } from '../config/store'
@@ -330,10 +331,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     let dbgN = 0
     const dbgDelta = (via: string, t: string) => { if (dbgN < 40) { logDebug('chat', `Δ#${dbgN} ${payload.agent}/${via}`, JSON.stringify(t)); dbgN++ } }
     const dbgFinal = (t: string) => logDebug('chat', `final ${payload.agent} len=${t.length}`, JSON.stringify(t.slice(0, 400)))
+    // 「停止」时要立刻把伪流式还没放完的文本一次倒完 —— 否则用户喊了停,字还在一个字一个字往外冒。
+    // 用 ref 而不是直接引用:wrapSession 定义在这里,而被包的回调要到下面才建出来。
+    let flushPaced: (() => void) | null = null
     const wrapSession = (session: AgentSession): AgentSession => ({
       id: session.id,
       done: session.done,
-      cancel: () => { aborted = true; session.cancel() },
+      cancel: () => { aborted = true; flushPaced?.(); session.cancel() },
     })
 
     if (provider.chat) {
@@ -343,7 +347,10 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         // assistant text). Only the first settles — otherwise finishOk (empty text) overwrites
         // finishErr's error bubble, leaving a blank reply.
         let settled = false
-        const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode }, {
+        // paceAssistantDeltas:把「一整坨突然出现」的回复摊成逐段浮现(见 paceDeltas.ts)。
+        // 只有大分片会被摊开 —— claude 那种逐 token 的真流式零延迟穿过去,所以这里可以无条件包一层,
+        // 不用维护「哪些 provider 需要」的名单。代价是有积压时 onDone 会晚 ~1 秒到。
+        const paced = paceAssistantDeltas({
           onSession: (id) => writeSession(ws, sid, payload.agent, id),
           onAssistantDelta: (t) => { dbgDelta('chat', t); text += t; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: t }) },
           onAssistantReplace: (full) => { text = full; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-replace', id: aid, text: full }) },
@@ -366,7 +373,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onToolActivity,
           onDone: (r) => { if (settled) return; settled = true; resolve(finishOk(r.elapsed)) },
           onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
-        }, env)
+        })
+        flushPaced = paced.flushPaced
+        const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode }, paced, env)
         deps.onSessionStart?.(wrapSession(session))
       })
     }
