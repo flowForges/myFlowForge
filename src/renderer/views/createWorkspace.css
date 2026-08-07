@@ -163,7 +163,11 @@
 .cr-btype.on .k { color: var(--accent); }
 .cr-btype.on .h { color: color-mix(in oklch, var(--accent) 65%, var(--fg-2)); }
 /* 项目搜索框:大项目库时出现,按名/别名筛选。放在项目列表上方,和统一分支条同风格。 */
-.cr-proj-search { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 0 10px; height: 34px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
+/* 项目多时列表很长,向下滚动后搜索框吸顶(粘在 .cr-body 滚动视口顶部),不用滚回顶部就能筛;
+   同时它一吸顶,上面那个「统一分支」输入框就滚走了,两个长得像的输入框不再同屏,不会再看混。
+   8px 外扩阴影用面板底色把上下缝隙补实,否则项目行会从 margin-bottom 的缝里透出来。 */
+.cr-proj-search { position: sticky; top: 0; z-index: 3; box-shadow: 0 0 0 8px var(--bg);
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 0 10px; height: 34px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }
 .cr-proj-search:focus-within { border-color: var(--accent); }
 .cr-proj-search svg { width: 14px; height: 14px; color: var(--muted); flex: 0 0 14px; }
 .cr-proj-search input { flex: 1; min-width: 0; height: 100%; background: none; border: none; outline: none; color: var(--fg); font-size: 12.5px; }
