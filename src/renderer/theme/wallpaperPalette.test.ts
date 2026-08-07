@@ -142,6 +142,22 @@ describe('paletteVars · 对比度护栏', () => {
     expect(L(v['--faint'])).toBeGreaterThan(L(v['--bg']) + 20)
   })
 
+  it('★深色次级文字亮度对齐 6 套内置皮肤的调优结果,而不是 tokens.css 的基础值', () => {
+    // 壁纸模式下面板是半透明的,亮壁纸会把面板顶亮,tokens.css 基础深色的 muted 64 / faint 50 直接读不出。
+    // 4 套内置深色皮肤真机调优后落在 muted 75.1–79.2、faint 63.3–67.3、fg-2 83.1–86.8 —— 取其下沿当底线。
+    const v = paletteVars(dark)
+    expect(L(v['--muted'])).toBeGreaterThanOrEqual(74)
+    expect(L(v['--faint'])).toBeGreaterThanOrEqual(62)
+    expect(L(v['--fg-2'])).toBeGreaterThanOrEqual(83)
+  })
+
+  it('★浅色次级文字不能比内置浅色皮肤更淡(浅底上太淡=失明)', () => {
+    // ink / mossgarden 调优后 faint 落在 59.1 / 60.1;基础值 62 比它们还淡,在浅底上对比度不够。
+    const v = paletteVars(light)
+    expect(L(v['--faint'])).toBeLessThanOrEqual(60)
+    expect(L(v['--muted'])).toBeLessThanOrEqual(52)
+  })
+
   it('浅色基调:正文远暗于底色', () => {
     const v = paletteVars(light)
     expect(L(v['--bg'])).toBe(98)
