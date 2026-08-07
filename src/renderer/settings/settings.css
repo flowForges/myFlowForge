@@ -4,8 +4,12 @@
 .settings-overlay {
   position: absolute; inset: 0; z-index: 100; display: none;
   /* 遮罩更实(0.55→0.82):窗口透明时,浅遮罩会透出半透的 app 内容,让设置区看着比主体更「透/雾」。
-     加深遮罩把背后 app 挡住,设置弹层聚焦、显得更实。 */
-  background: oklch(8% 0.01 250 / 0.82); backdrop-filter: blur(6px);
+     加深遮罩把背后 app 挡住,设置弹层聚焦、显得更实。
+     ★这里刻意没有 backdrop-filter:遮罩已经 82% 不透明,背后基本看不见,那 6px 模糊贡献的观感不到两成,
+     却要为整个视口逐帧做一次模糊 —— 全视口 backdrop-filter 是 Chromium 里最贵的操作之一,背后只要有
+     任何东西在动(宠物、spinner、流式文本)就得重算一遍。glass.css 开头那段注释已经写明这套设计是为了
+     省 GPU 才从 CSS 模糊改走 WindowServer 合成的,设置遮罩这一处当初漏网了。 */
+  background: oklch(8% 0.01 250 / 0.82);
   align-items: center; justify-content: center; padding: 40px;
 }
 .settings-overlay.on { display: flex; animation: fade .18s; }
