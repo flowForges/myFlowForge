@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   clampDailyGoal, computeDailyGoal, growthProgress, growthActionFor, resolveGrowthAction, pickGrowthSprite,
-  GROWTH_GOAL_DEFAULT, GROWTH_GOAL_MIN, GROWTH_GOAL_MAX,
+  GROWTH_GOAL_DEFAULT, GROWTH_GOAL_MAX, GROWTH_GOAL_AUTO_MIN,
 } from './growthProgress'
 import type { GrowthManifest } from './growthPet'
 
@@ -23,16 +23,24 @@ const M: GrowthManifest = {
 // ★ 上下限原本只在 computeDailyGoal 里生效,用户手填那条路(设置 → schema → 计数器)全程不 clamp。
 // 抽出这个共用函数就是为了让两条路共享同一套边界。
 describe('clampDailyGoal', () => {
-  it('低于下限抬到 MIN —— 填 1 会让 progress 恒为 1,宠物永远停在最后一档', () => {
-    expect(clampDailyGoal(1)).toBe(GROWTH_GOAL_MIN)
-    expect(clampDailyGoal(GROWTH_GOAL_MIN - 1)).toBe(GROWTH_GOAL_MIN)
+  // ★手填不设实质下限:填个很小的数正是「我想现在就看它长一遍」的唯一办法(真实日用量动辄几十万,
+  // 不放开就没法验收)。「填 1 之后宠物永远停在最后一档」的解法是把读数显示出来,不是禁止用户填。
+  it('手填的小目标原样保留(下限是 1,不是自动推算那道 5 万)', () => {
+    expect(clampDailyGoal(1)).toBe(1)
+    expect(clampDailyGoal(5_000)).toBe(5_000)
+    expect(clampDailyGoal(GROWTH_GOAL_AUTO_MIN - 1)).toBe(GROWTH_GOAL_AUTO_MIN - 1)
+  })
+  it('0 / 负数 / 非数字仍然拒掉(交给调用方回落到自动)', () => {
+    expect(clampDailyGoal(0)).toBeUndefined()
+    expect(clampDailyGoal(-5)).toBeUndefined()
+    expect(clampDailyGoal(NaN)).toBeUndefined()
   })
   it('高于上限压到 MAX —— 填 1e12 会让进度条永远不动', () => {
     expect(clampDailyGoal(1e12)).toBe(GROWTH_GOAL_MAX)
     expect(clampDailyGoal(GROWTH_GOAL_MAX + 1)).toBe(GROWTH_GOAL_MAX)
   })
   it('范围内原样返回(边界含两端)', () => {
-    expect(clampDailyGoal(GROWTH_GOAL_MIN)).toBe(GROWTH_GOAL_MIN)
+    expect(clampDailyGoal(1)).toBe(1)
     expect(clampDailyGoal(GROWTH_GOAL_MAX)).toBe(GROWTH_GOAL_MAX)
     expect(clampDailyGoal(200_000)).toBe(200_000)
   })
@@ -60,8 +68,10 @@ describe('computeDailyGoal', () => {
   it('忽略 0 和负数(没干活的那天不该把基线压低)', () => {
     expect(computeDailyGoal([0, 0, 300_000])).toBe(300_000)
   })
-  it('clamp 到上下限', () => {
-    expect(computeDailyGoal([1_000])).toBe(GROWTH_GOAL_MIN)
+  // 自动推算用的是它自己那道更高的下限:某天只用了 1000 token 就把目标定成 1000 的话,
+  // 往后天天开局即满,而用户根本不知道这个数是哪来的 —— 这跟「手填小目标」是两回事。
+  it('clamp 到 AUTO_MIN / MAX(不是手填那道 1)', () => {
+    expect(computeDailyGoal([1_000])).toBe(GROWTH_GOAL_AUTO_MIN)
     expect(computeDailyGoal([99_000_000])).toBe(GROWTH_GOAL_MAX)
   })
 })

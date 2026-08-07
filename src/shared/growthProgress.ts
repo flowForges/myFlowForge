@@ -5,14 +5,19 @@ import type { PetState } from './types'
 
 // 每日目标的上下限与首次默认。作者在包里排的是「节奏」(0~1 的相对位置),使用者一天用多少 token
 // 由这个分母吸收 —— 重度 claude 用户(日耗数百万)和 codex 用户(估算值偏小)才能走完同一条曲线。
-export const GROWTH_GOAL_MIN = 50_000
+//
+// ★手填与自动推算的下限刻意不同,别再合并回一个:
+//  · 手填(GROWTH_GOAL_MIN=1)是用户的明确意图,不该拦。填个很小的数正是「我想现在就看它长一遍」
+//    的唯一办法 —— 一天真实用量动辄几十万,不放开就没法验收。
+//  · 自动(GROWTH_GOAL_AUTO_MIN)是从历史推的,得有底。某天只用了 200 token 就把目标定成 200 的话,
+//    往后天天开局即满,而用户根本不知道这个数是哪来的。
+export const GROWTH_GOAL_MIN = 1
 export const GROWTH_GOAL_MAX = 5_000_000
+export const GROWTH_GOAL_AUTO_MIN = 50_000
 export const GROWTH_GOAL_DEFAULT = 200_000
 
 /**
- * 把任意 goal 收进 [MIN, MAX]。自动推算与用户手填必须共用这一条 —— 上下限原来只在
- * computeDailyGoal 里生效,手填那条路(设置 → schema → 计数器)全程没人 clamp,结果是
- * 输入 1 就让 progress 恒等于 1、宠物永远停在最后一档,而且没有任何提示解释为什么。
+ * 把用户手填的 goal 收进 [GROWTH_GOAL_MIN, GROWTH_GOAL_MAX]。
  * 非数字/非正数 → undefined,交给调用方决定回落到自动还是默认。
  */
 export function clampDailyGoal(goal: number | undefined): number | undefined {
@@ -30,7 +35,8 @@ export function computeDailyGoal(dayTotals: number[]): number {
   if (!used.length) return GROWTH_GOAL_DEFAULT
   const mid = used.length >> 1
   const median = used.length % 2 ? used[mid] : (used[mid - 1] + used[mid]) / 2
-  return clampDailyGoal(median) ?? GROWTH_GOAL_DEFAULT
+  // 自动这条路用它自己那道更高的下限(见常量处的说明),不能跟手填共用 GROWTH_GOAL_MIN=1。
+  return Math.round(Math.min(GROWTH_GOAL_MAX, Math.max(GROWTH_GOAL_AUTO_MIN, median)))
 }
 
 /** 今日累计 → 0~1。只增不减、封顶 1(达标后停在最后一档,不循环不溢出)。 */

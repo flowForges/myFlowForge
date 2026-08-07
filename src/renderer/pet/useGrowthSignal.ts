@@ -11,10 +11,12 @@ export function useGrowthSignal(): GrowthSignalView | null {
   const pushed = useRef(false)
   useEffect(() => {
     let alive = true
-    void Promise.resolve(window.forge.growthSignalGet?.())
+    // ★可选链要一路加到 window.forge 本身,不能只加在方法上:这个 hook 现在也被设置页用,
+    // 而那边的测试环境里 window.forge 整个不存在,`window.forge.x?.()` 会直接抛。
+    void Promise.resolve(window.forge?.growthSignalGet?.())
       .then((s) => { if (alive && s && !pushed.current) setSig(s) })
       .catch(() => { /* 拿不到就等广播 */ })
-    const off = window.forge.onGrowthSignal?.((s) => { pushed.current = true; setSig(s) })
+    const off = window.forge?.onGrowthSignal?.((s) => { pushed.current = true; setSig(s) })
     return () => { alive = false; off?.() }
   }, [])
   return sig

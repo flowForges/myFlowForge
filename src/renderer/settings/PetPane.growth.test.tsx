@@ -322,12 +322,22 @@ describe('PetPane 每日 token 目标', () => {
     expect(goalInput().value).toBe(String(GROWTH_GOAL_MAX))
   })
 
+  // 手填的小目标现在是合法的(填个很小的数正是「我想现在就看它长一遍」的唯一办法),
+  // 所以只有超出上限才会被收敛并提示。
+  it('填了很小的目标不再被收敛,也不提示', () => {
+    const onChange = vi.fn()
+    render(<PetPane pet={BASE_PET} onChange={onChange} />)
+    fireEvent.change(goalInput(), { target: { value: '5000' } })
+    fireEvent.blur(goalInput())
+    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: 5000 })
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
   it('被收敛时给出可见提示(不静默改用户填的值)', () => {
     render(<PetPane pet={BASE_PET} onChange={vi.fn()} />)
-    fireEvent.change(goalInput(), { target: { value: '1' } })
+    fireEvent.change(goalInput(), { target: { value: '999999999' } })
     fireEvent.blur(goalInput())
     const note = screen.getByRole('status')
-    expect(note.textContent).toContain('50,000')
     expect(note.textContent).toContain('5,000,000')
   })
 
@@ -340,7 +350,7 @@ describe('PetPane 每日 token 目标', () => {
 
   it('改回范围内的值后提示消失', () => {
     render(<PetPane pet={BASE_PET} onChange={vi.fn()} />)
-    fireEvent.change(goalInput(), { target: { value: '1' } })
+    fireEvent.change(goalInput(), { target: { value: '999999999' } })
     fireEvent.blur(goalInput())
     expect(screen.queryByRole('status')).not.toBeNull()
     fireEvent.change(goalInput(), { target: { value: '300000' } })
@@ -372,7 +382,7 @@ describe('PetPane 每日 token 目标', () => {
   it('外部改动 prop 后,上一次 commitGoal 留下的过期提示被清掉', () => {
     const onChange = vi.fn()
     const { rerender } = render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: '1' } })
+    fireEvent.change(goalInput(), { target: { value: '999999999' } })
     fireEvent.blur(goalInput())
     expect(screen.queryByRole('status')).not.toBeNull() // 先造出一条提示
 

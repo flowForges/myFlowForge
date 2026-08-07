@@ -8,6 +8,7 @@ import { clampDailyGoal, GROWTH_GOAL_MIN, GROWTH_GOAL_MAX } from '@shared/growth
 import { gridBackgroundPosition } from '@shared/petAtlas'
 import { PetGallery } from './PetGallery'
 import { petSrc } from '../pet/petSrc'
+import { useGrowthSignal } from '../pet/useGrowthSignal'
 
 let petIdSeq = 0
 function genPetId(): string { return `pet-${Date.now()}-${petIdSeq++}-${Math.round(Math.random() * 1e6)}` }
@@ -258,6 +259,20 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
       ? `目标需在 ${GROWTH_GOAL_MIN.toLocaleString('en-US')} – ${GROWTH_GOAL_MAX.toLocaleString('en-US')} 之间,已按 ${next.toLocaleString('en-US')} 生效。`
       : '')
   }
+  // 成长信号的实时读数(今日 token / 目标 / 当前落在第几档)。订阅主进程广播,与桌宠看到的是同一个数。
+  const growth = useGrowthSignal()
+  const activeGrowth = (pet.customPets ?? []).find(p => p.id === pet.activeCustomPetId)?.growth
+  const growthReadout = !growth ? '' : (() => {
+    const goal = growth.goal.toLocaleString('en-US')
+    const today = growth.todayTokens.toLocaleString('en-US')
+    const pct = Math.round(growth.progress * 100)
+    if (!activeGrowth) return `今日 ${today} / 目标 ${goal}(${pct}%)· 当前没有选中成长宠物`
+    // 与 pickGrowthSprite 同一条规则:最后一个 at <= progress 的阶段。
+    let i = 0
+    activeGrowth.stages.forEach((s, k) => { if (s.at <= growth.progress) i = k })
+    const st = activeGrowth.stages[i]
+    return `今日 ${today} / 目标 ${goal}(${pct}%)· 当前:${st?.name ?? '第 ' + (i + 1) + ' 档'}(${i + 1}/${activeGrowth.stages.length})`
+  })()
   // 装包结果 → customPets。Codex 包与成长包共用这一段(两边的 id 都按源文件夹稳定生成),
   // 只有「错误显示在哪一行」不同,所以把 setter 作为参数传进来。
   const addImported = (
@@ -599,12 +614,20 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
               // 直接引 shared 的常量,免得三处上下限各写各的。
               min={GROWTH_GOAL_MIN}
               max={GROWTH_GOAL_MAX}
-              step={10000}
+              step={1000}
               onChange={e => setGoalDraft(e.target.value)}
               onBlur={commitGoal}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitGoal() } }}
             />
           </div>
+          {/* ★实时读数。不是为了好看,是为了可诊断:没有它的时候,「今天没用所以是种子」和「功能坏了」
+              在界面上长得一模一样,只能靠猜。有了这行,一眼就知道卡在哪 —— 是没数据、目标太大,还是真没生效。
+              也是把目标填得很小(比如 5000)去验收时唯一能看懂发生了什么的地方。 */}
+          {/* 刻意不给 role="status":这行随每轮对话变,当成实时区会让读屏软件一直念。
+              真正需要播报的是下面那条 clamp 提示(只在改动了用户输入时才出现)。 */}
+          {growthReadout && (
+            <div className="d" style={{ marginBottom: '8px' }}>{growthReadout}</div>
+          )}
           {goalNote && (
             <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }} role="status">{goalNote}</div>
           )}

@@ -55,6 +55,17 @@ describe('useGrowthSignal', () => {
     expect(() => unmount()).not.toThrow()
   })
 
+  // window.forge 整个不存在(设置页的测试环境就是这样,而这个 hook 现在也被设置页用)。
+  // 可选链只加在方法上是不够的 —— `window.forge.x?.()` 在 forge 为 undefined 时照样抛。
+  it('returns null (and never throws) when window.forge is missing entirely', async () => {
+    delete (window as any).forge
+    const { result, unmount } = renderHook(() => useGrowthSignal())
+    expect(result.current).toBeNull()
+    await act(async () => { await Promise.resolve() })
+    expect(result.current).toBeNull()
+    expect(() => unmount()).not.toThrow()
+  })
+
   it('survives a rejected growthSignalGet and still takes the broadcast', async () => {
     ;(window as any).forge.growthSignalGet = vi.fn(async () => { throw new Error('no handler') })
     const { result } = renderHook(() => useGrowthSignal())
