@@ -15,8 +15,9 @@ import { TUNING, extractPalette, wallpaperSourceFor, type WallpaperPalette } fro
 // ============================================================================
 
 // ★取色规则一改就必须升这个版本号,否则老用户的壁纸命中的是上一版算法留下的缓存,新规则永远不生效
-// (v1→v2:accent 改为按「面积 × 可达彩度」打分,修掉碎片抢 accent 与暖色相变浑)。
-const LS_KEY = 'forge.wpPalette.v2'
+// (v1→v2:accent 改为按「面积 × 可达彩度」打分,修掉碎片抢 accent 与暖色相变浑;
+//  v2→v3:accent 候选加了「实际平均彩度」下限,修掉人物壁纸的肤色靠面积当选 —— 见 TUNING.ACCENT_MIN_AVG_C)。
+const LS_KEY = 'forge.wpPalette.v3'
 const LS_MAX = 40
 
 const memo = new Map<string, WallpaperPalette | null>()

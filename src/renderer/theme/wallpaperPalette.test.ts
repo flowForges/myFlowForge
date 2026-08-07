@@ -87,6 +87,25 @@ describe('extractPalette · 取色', () => {
     expect(p.hueAccent).toBe(p.hueBg)
   })
 
+  // ---- 回归:真机上「绿裙人物壁纸 → 橙色 accent」那个 bug。根因是打分只问「这个色相最多能多鲜艳」,
+  //      从不问「它在这张壁纸里实际有多鲜艳」,于是一大片近乎灰的肤色靠面积就赢了。----
+  it('★大面积的近灰肤色抢不走 accent(30% 肤色 vs 70% 绿)', () => {
+    // #e0c0aa 实际彩度只有 0.047 —— 比 COLORFUL_MIN_C(0.04)才高一点点,本质是带暖调的灰。
+    // 它离绿色 78°(远超 45° 门槛)、面积 30%(远超 3% 门槛),旧规则下必被选中。
+    const p = extractPalette(img(fill('#5f7f4a', 700), fill('#e0c0aa', 300)))!
+    expect(hueGap(p.hueBg, hueOf('#5f7f4a'))).toBeLessThan(15)
+    expect(hueGap(p.hueAccent!, hueOf('#e0c0aa'))).toBeGreaterThan(30)  // 不是肤色
+    expect(p.hueAccent).toBe(p.hueBg)                                    // 退化成主调(绿)
+  })
+
+  it('★但真正饱和的第二色照样选得中(门槛不能把好色一起挡掉)', () => {
+    // 把肤色换成真橙(实际彩度 0.187,远高于 ACCENT_MIN_AVG_C),面积 10%:仍远超 3% 面积门槛。
+    // 面积不能给到 30% —— 主调是按 ΣC² 投票的,那么大一片高饱和橙会直接把主调夺走,角色就对调了。
+    const p = extractPalette(img(fill('#5f7f4a', 900), fill('#ff7a1a', 100)))!
+    expect(hueGap(p.hueBg, hueOf('#5f7f4a'))).toBeLessThan(15)
+    expect(hueGap(p.hueAccent!, hueOf('#ff7a1a'))).toBeLessThan(15)
+  })
+
   // ---- 回归:真机上「塞尔达青蓝天空壁纸 → 橄榄绿 accent」那个 bug(见 wallpaperPalette.ts 的取色注释)----
   it('★面积不足的碎片抢不走 accent(1.9% 的金色叶子 vs 36% 的青蓝天空)', () => {
     // 现场复刻:大面积浅青主调 + 一小撮高饱和金色。金色 maxC 更高,但只占 2%,不该定调整个 App。

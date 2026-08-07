@@ -49,6 +49,17 @@ export const TUNING = {
   ACCENT_MIN_SHARE: 0.03,
   /** 像素彩度达到多少才算「有彩色」(参与色相投票与占比统计)。 */
   COLORFUL_MIN_C: 0.04,
+  /**
+   * 点缀色所在桶的**实际**平均彩度下限。比 COLORFUL_MIN_C 高一档,含义是「这抹色不只是勉强算有色,
+   * 而是真的鲜艳到能当第二色」。
+   * 为什么要有它:打分用的 reachableAccentChroma 问的是「这个色相**最多**能多鲜艳」,不是「它在这张
+   * 壁纸里**实际**有多鲜艳」。真机第三轮:一张绿裙人物壁纸里,14% 面积的**肤色**(hue 65°,实际彩度
+   * 只有 0.045 —— 比 COLORFUL_MIN_C 才高 0.005,本质是带暖调的灰)压过了 58% 面积的绿,整个 App 变橙。
+   * 人物壁纸的肤色是这条规则最典型的假阳性。
+   * 定 0.05 是在 210 张本地壁纸上扫出来的:再高会让大量壁纸白白丢掉第二色(0.08 时 77 张变单色相),
+   * 0.05 只影响 25 张 —— 其中 17 张原本选的彩度都在 0.042–0.050(全是灰),8 张换成了更饱和的那抹。
+   */
+  ACCENT_MIN_AVG_C: 0.05,
   /** 有彩色像素占比低于此 → 判为灰度/极灰壁纸,出纯中性皮肤并保留用户原强调色。 */
   COLORFUL_MIN_SHARE: 0.02,
   /** 像素 alpha 低于此忽略(透明 png 的空白区不该参与统计)。 */
@@ -181,15 +192,18 @@ export function extractPalette(pixels: ArrayLike<number>): WallpaperPalette | nu
   const hueBg = bucketHue(dom)
   const chromaBg = clamp((sumC[dom] / count[dom]) * TUNING.TINT_FROM_CHROMA, TUNING.TINT_MIN, TUNING.TINT_MAX)
 
-  // 点缀色 = 离主调够远、面积够大的桶里「贡献度」最高的那个。
+  // 点缀色 = 离主调够远、面积够大、且自己真的够鲜艳的桶里「贡献度」最高的那个。
   // 打分 = 面积占比 × 该色相当 accent 时真正可达的彩度。两个因子都是必须的:
   //   · 只看最高彩度 → 1.9% 的金色枝叶能压过 36% 的青蓝天空(真机上就是这么变橄榄的)
   //   · 不看可达彩度 → 选中在目标明度下必然发浑的暖色相,再鲜艳的金色也会被压成泥
   // 占比分母用「有彩色像素数」,否则灰调壁纸里每个桶的占比都小到过不了门槛。
+  // ★ACCENT_MIN_AVG_C 这道门槛是第三轮真机反馈补的:打分里的「可达彩度」问的是「这个色相**最多**能
+  // 多鲜艳」,完全没问「它在这张壁纸里**实际**有多鲜艳」—— 于是一大片近乎灰的肤色靠面积就能赢。
   let acc = -1, accScore = 0
   for (let b = 0; b < N; b++) {
     const share = count[b] / colorful
     if (share < TUNING.ACCENT_MIN_SHARE) continue
+    if (sumC[b] / count[b] < TUNING.ACCENT_MIN_AVG_C) continue
     const hue = bucketHue(b)
     if (hueGap(hue, hueBg) < TUNING.ACCENT_MIN_HUE_GAP) continue
     const score = share * reachableAccentChroma(base, hue)
