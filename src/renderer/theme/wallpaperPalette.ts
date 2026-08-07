@@ -60,6 +60,14 @@ export const TUNING = {
    * 0.05 只影响 25 张 —— 其中 17 张原本选的彩度都在 0.042–0.050(全是灰),8 张换成了更饱和的那抹。
    */
   ACCENT_MIN_AVG_C: 0.05,
+  /**
+   * 点缀色桶的投票权重(ΣC²)至少要有主调桶的这个比例。前面三道门槛问的都是「这个桶自己够不够格」,
+   * 这一道问的是「它相对主调够不够分量」—— 少了它,单色相壁纸会被迫从一堆等分的碎色里随机挑一个。
+   * 用投票权重而不是面积或彩度:ΣC² 把两者都含进去了,不用再叠第四个门槛。
+   * 定 0.05 是在 211 张本地壁纸上扫的:那张出问题的粉发壁纸 ratio 只有 2.3%(第一名领先第二名也只有
+   * 2.3%,而全部有 accent 的壁纸中位数是 38%),0.05 修好它且只让 88 张里的 7 张回落成单色相。
+   */
+  ACCENT_MIN_VOTE_RATIO: 0.05,
   /** 有彩色像素占比低于此 → 判为灰度/极灰壁纸,出纯中性皮肤并保留用户原强调色。 */
   COLORFUL_MIN_SHARE: 0.02,
   /** 像素 alpha 低于此忽略(透明 png 的空白区不该参与统计)。 */
@@ -199,11 +207,16 @@ export function extractPalette(pixels: ArrayLike<number>): WallpaperPalette | nu
   // 占比分母用「有彩色像素数」,否则灰调壁纸里每个桶的占比都小到过不了门槛。
   // ★ACCENT_MIN_AVG_C 这道门槛是第三轮真机反馈补的:打分里的「可达彩度」问的是「这个色相**最多**能
   // 多鲜艳」,完全没问「它在这张壁纸里**实际**有多鲜艳」—— 于是一大片近乎灰的肤色靠面积就能赢。
+  // ★ACCENT_MIN_VOTE_RATIO 是第四轮补的:上面三道门槛都是「这个桶自己够不够格」,没有一道在问
+  // 「它相对主调够不够分量」。单色相壁纸(整张就一个色系)里,过了门槛的全是 5% 上下的碎色,
+  // 谁当选纯看噪声 —— 真机上一张粉发壁纸的前四名得分是 0.0052/0.0051/0.0049/0.0047,第一名只领先
+  // 2.3%(正常壁纸的中位数是 38%),于是壁纸是粉的、按钮是青的。这种壁纸本就不该有第二色。
   let acc = -1, accScore = 0
   for (let b = 0; b < N; b++) {
     const share = count[b] / colorful
     if (share < TUNING.ACCENT_MIN_SHARE) continue
     if (sumC[b] / count[b] < TUNING.ACCENT_MIN_AVG_C) continue
+    if (weight[b] < weight[dom] * TUNING.ACCENT_MIN_VOTE_RATIO) continue
     const hue = bucketHue(b)
     if (hueGap(hue, hueBg) < TUNING.ACCENT_MIN_HUE_GAP) continue
     const score = share * reachableAccentChroma(base, hue)
