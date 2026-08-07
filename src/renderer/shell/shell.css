@@ -69,6 +69,16 @@
 }
 .window.collapsed .ws-ava { display: inline-flex; }
 .ws-item.on .ws-ava { background: var(--accent-dim); color: var(--accent); border-color: transparent; }
+/* 折叠成 60px 窄轨后,选中/悬停一律由 34px 头像块自己承担 —— 行是整行宽(60 轨 - 12 padding = 48px),
+   而头像只有 34px,把 .ws-item 那套行级底色留在窄轨里会画出两个错位的框:一条比头像宽一圈的胶囊,
+   外加一条贴在轨道左缘、与头像脱开 7px 的 inset 竖条。(2f71362 给 .ws-item.on 补行底色时漏了这一路;
+   在那之前 .ws-item.on 只有竖条,窄轨里虽然也脱开但不明显。)
+   过渡属性跟展开态保持一致:只动 background/box-shadow,不碰任何会改变尺寸的属性。 */
+.ws-ava { transition: background .22s cubic-bezier(.22,.61,.36,1), box-shadow .22s cubic-bezier(.22,.61,.36,1); }
+.window.collapsed .ws-item:hover { background: transparent; }
+.window.collapsed .ws-item:not(.on):hover .ws-ava { background: var(--surface); }
+.window.collapsed .ws-item.on { background: transparent; box-shadow: none; }
+.window.collapsed .ws-item.on .ws-ava { box-shadow: 0 0 0 2px var(--accent); }
 /* Collapsed-rail run marker: only the running state shows a dot — idle/ok = nothing (prototype). */
 .ws-ava .st {
   display: none; position: absolute; right: -2px; bottom: -2px;
@@ -639,5 +649,5 @@
    (会改变文字宽度导致重排抖动,见 .ws-item 的过渡说明)。 */
 .ws-item .ws-name, .ws-sess .ws-sess-name { transition: color .22s cubic-bezier(.22,.61,.36,1); }
 @media (prefers-reduced-motion: reduce) {
-  .ws-item, .ws-sess, .ws-item .ws-name, .ws-sess .ws-sess-name { transition: none; }
+  .ws-item, .ws-sess, .ws-item .ws-name, .ws-sess .ws-sess-name, .ws-ava { transition: none; }
 }
