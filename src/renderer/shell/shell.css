@@ -123,7 +123,10 @@
 .ws-item {
   width: 100%; display: flex; align-items: center; gap: 9px;
   padding: 7px 8px; border-radius: 7px; text-align: left;
-  transition: background .12s;
+  /* 焦点在工作区之间移动时要「自然地切过去」:底色和那条 3px accent 竖条都参与过渡。
+     原来只过渡 background,竖条(box-shadow)是硬切的,所以切换看着生硬。不要把 font-weight 之类
+     会改变文字宽度的属性放进来 —— 那会引起重排抖动。 */
+  transition: background .16s ease, box-shadow .16s ease;
 }
 .ws-item:hover { background: var(--surface); }
 /* 焦点(当前正在看的工作区):accent 底色 + 一条 left:0 的 3px accent 竖条。底色让「选中」一眼可辨(与会话区
@@ -258,7 +261,7 @@
 .ws-sess-list { margin: 2px 0 2px 17px; padding-left: 9px; border-left: 1px solid var(--border);
   display: flex; flex-direction: column; gap: 1px; }
 .ws-sess { width: 100%; display: flex; align-items: center; gap: 7px; padding: 4px 7px;
-  border-radius: 6px; text-align: left; transition: background .12s; position: relative; }
+  border-radius: 6px; text-align: left; transition: background .16s ease, box-shadow .16s ease; position: relative; }
 .ws-sess:hover { background: var(--surface); }
 /* #2 焦点(当前查看)的会话:accent 底 + 实心左条 —— 结构性的「你在这」标记。用左条(而非只靠底色)是因为
    --accent 与 --run 在所有主题里几乎同色,只靠底色无法与「运行中」区分(见下)。 */
@@ -630,3 +633,10 @@
 .sbp-fill.warn { background: linear-gradient(90deg, oklch(72% .14 75), oklch(78% .15 60)); }
 .sbp-fill.danger { background: linear-gradient(90deg, oklch(60% .2 25), oklch(66% .21 30)); }
 .sbp-reset { font: 9.5px/1 var(--mono); color: var(--faint); margin-top: 5px; text-align: right; }
+
+/* 选中态的文字提亮跟着底色一起过渡,避免底色渐变而文字瞬变的割裂感。只过渡 color —— font-weight 不能过渡
+   (会改变文字宽度导致重排抖动,见 .ws-item 的过渡说明)。 */
+.ws-item .ws-name, .ws-sess .ws-sess-name { transition: color .16s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .ws-item, .ws-sess, .ws-item .ws-name, .ws-sess .ws-sess-name { transition: none; }
+}
