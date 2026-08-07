@@ -5,6 +5,7 @@ import { setNativeSubagents } from './nativeSubagentRegistry'
 import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
+import { inlineHtmlPreamble } from './inlineHtmlDirective'
 import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
 import { distillSession, promoteToWorkspace, promoteToSystem, type DistillDeps } from './memory/distiller'
 import { distillModelFor } from './memory/distillModel'
@@ -55,6 +56,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // Memory master switch. Off = non-destructive pause: no preamble injection (read) and no distillation
     // (write); the on-disk memory files are untouched. Default true (see MemorySchema).
     const memoryOn = readSettings().memory.enabled
+    // 内嵌 HTML 可视化(设置 → 外观):打开后每轮前置一段格式指令,鼓励模型用内嵌 HTML 片段表达对比矩阵/
+    // 流程结构/信息卡片。渲染端的白名单才是安全边界,这段只是「请求」。
+    const inlineHtmlOn = readSettings().appearance.chatInlineHtml === true
     const label = `${payload.agentLabel} · ${payload.model}`
     // "已加载 SKILL / RULE / MCP" card source. Provider-aware now (payload.agent): the project scan +
     // the real home-level rules/MCP (scanGlobalContext, previously never wired into chat) are both
@@ -126,7 +130,8 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         setSessionWorkflow(ws, sid, { ...wfs, preambleDoneIndex: wfs.currentIndex })
       }
     }
-    const promptText = [stagePre, contPre, preamble, payload.text].filter(Boolean).join('\n')
+    // 格式指令排在最前:它是「怎么写」的全局约束,后面的阶段角色/历史/记忆都是「写什么」的内容。
+    const promptText = [inlineHtmlPreamble(inlineHtmlOn), stagePre, contPre, preamble, payload.text].filter(Boolean).join('\n')
 
     const userMsg: ChatMessage = {
       id: mkId('u'), who: 'user', text: payload.text,

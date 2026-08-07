@@ -779,6 +779,52 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .table-block .tbl-copy.done { color: var(--ok); opacity: 1; }
 .table-block .tbl-copy svg { width: 13px; height: 13px; }
 
+/* 表头排序 —— 整个表头是一个按钮(点哪都能排),箭头平时很淡,hover 才提示可点,排序中高亮为 accent。
+   刻意不动 font-weight:排序态切换时字重变化会让整列宽度跳一下。 */
+.tbl-sort { display: inline-flex; align-items: center; gap: 4px; width: 100%; font: inherit; color: inherit; background: none; border: none; padding: 0; cursor: pointer; text-align: inherit; }
+.tbl-sort .tbl-arrow { width: 11px; height: 11px; flex: 0 0 11px; opacity: 0; transition: opacity .13s, color .13s; }
+.msg-body th:hover .tbl-arrow, .req-title th:hover .tbl-arrow { opacity: .45; }
+.tbl-th.sorted-asc .tbl-arrow, .tbl-th.sorted-desc .tbl-arrow { opacity: 1; color: var(--accent); }
+/* 升序只留上半箭头、降序只留下半 —— 用裁剪而不是换图标,免得图标尺寸差异让表头宽度跳动。 */
+.tbl-th.sorted-asc .tbl-arrow polyline:last-child { display: none; }
+.tbl-th.sorted-desc .tbl-arrow polyline:first-child { display: none; }
+
+/* 引用块复制 —— 与代码块/表格同一套 hover 显形手势 */
+.quote-block { position: relative; }
+.quote-block .bq-copy { position: absolute; top: 2px; right: 4px; z-index: 1; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 550; color: var(--muted); padding: 3px 8px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); opacity: 0; transition: .13s; }
+.quote-block:hover .bq-copy, .quote-block:focus-within .bq-copy { opacity: 1; }
+.quote-block .bq-copy:hover { background: var(--border); color: var(--fg); }
+.quote-block .bq-copy.done { color: var(--ok); opacity: 1; }
+.quote-block .bq-copy svg { width: 13px; height: 13px; }
+
+/* ---- 内嵌 HTML 片段 ------------------------------------------------------
+   片段自己带内联 style(已被 htmlStyle 净化并把颜色映射成 token),这里只负责它在消息流里的外部行为:
+   不撑破消息体、宽内容自己横向滚动、以及继承会话区的字号/行距设定。刻意不给片段内部任何默认装饰 ——
+   那是模型的排版意图,我们只接管配色。 */
+.md-html { margin: 10px 0; max-width: 100%; overflow-x: auto; }
+.md-html * { max-width: 100%; box-sizing: border-box; }
+/* 片段里的表格若被提升成 TableBlock,继续吃上面那套表格样式;没提升的裸表格也给同样的边框,免得两种
+   来源的表格长得不一样。 */
+.md-html table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.md-html th, .md-html td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md-html details { margin: 6px 0; }
+.md-html summary { cursor: pointer; color: var(--fg-2); }
+.md-html summary:hover { color: var(--fg); }
+
+/* 流式期间的半截片段占位。片段没闭合前不渲染(半截 DOM 每帧都在变会抖),先摆这条,写完那一帧换成真卡片。
+   做成 <details>:模型若忘了写闭合标签,用户点开还能看到原文,内容不会被永久吞掉。
+   呼吸动画只跑在收起状态的 summary 上,且它通常只存在几秒 —— 不构成常驻 GPU 开销;展开后停掉,免得
+   用户在读原文时底下一直闪。 */
+.md-html-pending { margin: 10px 0; padding: 8px 12px; border: 1px dashed var(--border-2); border-radius: var(--r); }
+.md-html-pending > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; list-style: none; }
+.md-html-pending > summary::-webkit-details-marker { display: none; }
+.md-html-pending > summary::before { content: "▸ "; opacity: .7; }
+.md-html-pending[open] > summary::before { content: "▾ "; }
+.md-html-pending:not([open]) > summary { animation: mdHtmlPending 1.4s ease-in-out infinite; }
+.md-html-pending > pre { margin: 8px 0 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; overflow-x: auto; font-size: 12px; color: var(--fg-2); white-space: pre-wrap; word-break: break-all; }
+@keyframes mdHtmlPending { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .md-html-pending:not([open]) > summary { animation: none; } }
+
 /* 返工瞬态「重新XXX中」运行卡(WorkspaceView 从 machine 派生,见 allRunCardEntries)。用 --run 语义色 +
    脉冲点表示「正在跑新一轮」,阶段完成重抬门后自动消失。区别于活跃 inbox 卡/已冻结决定卡,故样式更轻。 */
 .rerun-card {

@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { CodeBlock, TableBlock, QuoteBlock } from './blocks'
+import { renderHtmlFragment, newFragmentScan, feedFragment, BLOCK_TAGS } from './htmlFragment'
 
 // Base directory for resolving RELATIVE markdown image paths (e.g. a design doc's `![](./diagram.png)`).
 // Provided by whoever renders a doc that lives on disk (FilePreview); absent in chat bubbles → relative
@@ -28,96 +30,27 @@ function MdImage({ src, alt }: { src: string; alt: string }): ReactNode {
   return <img className="md-img" src={url} alt={alt} />
 }
 
-// A fenced code block with a hover-reveal copy button plus a fold toggle. Copying the exact source
-// (not the rendered text) is what users want for commands/snippets, so the button lives on each
-// block. The left-side toggle (chevron + lang + line count) collapses long blocks so a big snippet
-// doesn't dominate the transcript. `lang` (the info string after ```) shows as a small label.
-function CodeBlock({ code, lang }: { code: string; lang?: string }): ReactNode {
-  const [copied, setCopied] = useState(false)
-  const [collapsed, setCollapsed] = useState(false)
-  const lineCount = code.split('\n').length
-  const copy = () => {
-    navigator.clipboard?.writeText(code).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
-    }).catch(() => { /* clipboard unavailable */ })
-  }
-  return (
-    <div className={`code-block${collapsed ? ' collapsed' : ''}`}>
-      <div className="cb-bar">
-        <button
-          className="cb-fold"
-          onClick={() => setCollapsed(c => !c)}
-          title={collapsed ? '展开代码' : '折叠代码'}
-          aria-expanded={!collapsed}
-          type="button"
-        >
-          <svg className="cb-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
-          {lang ? <span className="cb-lang">{lang}</span> : null}
-          <span className="cb-lines">{lineCount} 行</span>
-        </button>
-        <button className={`cb-copy${copied ? ' done' : ''}`} onClick={copy} title="复制代码" type="button">
-          {copied ? (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="20 6 9 17 4 12" /></svg>
-          ) : (
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>
-          )}
-          <span>{copied ? '已复制' : '复制'}</span>
-        </button>
-      </div>
-      {collapsed ? null : <pre><code>{code}</code></pre>}
-    </div>
-  )
-}
-
-// A GFM table with a hover-reveal copy button. Copying emits TSV (tab-separated cells, newline rows) —
-// the raw cell source, not the rendered markup — so it pastes cleanly into spreadsheets / Notion / docs.
-// The table itself sits in a horizontal-scroll wrapper so a wide table never overflows the message body.
-function TableBlock({ header, body, tk }: { header: string[]; body: string[][]; tk: number }): ReactNode {
-  const [copied, setCopied] = useState(false)
-  const copy = () => {
-    const tsv = [header, ...body].map(r => r.join('\t')).join('\n')
-    navigator.clipboard?.writeText(tsv).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
-    }).catch(() => { /* clipboard unavailable */ })
-  }
-  return (
-    <div className="table-block">
-      <button className={`tbl-copy${copied ? ' done' : ''}`} onClick={copy} title="复制表格" type="button">
-        {copied ? (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="20 6 9 17 4 12" /></svg>
-        ) : (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></svg>
-        )}
-        <span>{copied ? '已复制' : '复制'}</span>
-      </button>
-      <div className="tbl-scroll">
-        <table>
-          <thead>
-            <tr>{header.map((c, ci) => <th key={ci}>{renderInline(c, `th${tk}-${ci}`)}</th>)}</tr>
-          </thead>
-          <tbody>
-            {body.map((row, ri) => (
-              <tr key={ri}>{row.map((c, ci) => <td key={ci}>{renderInline(c, `td${tk}-${ri}-${ci}`)}</td>)}</tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
 // Minimal, dependency-free Markdown → React renderer for chat messages.
 // Renders to React elements (never dangerouslySetInnerHTML) so CLI output can't inject HTML.
 // Covers the constructs assistants actually emit: headings, bold/italic, inline code,
 // fenced code blocks, ordered/unordered lists, blockquotes, horizontal rules, links.
+//
+// 「内嵌 HTML」(设置里可开,默认关)会额外放开一条通道:模型穿插在正文里的裸 HTML 片段交给 htmlFragment
+// 处理。注意那条路同样是「解析 → 按白名单重建 React 元素」,上面那条不变量依旧成立 —— 全程没有
+// dangerouslySetInnerHTML。关掉时片段原样当纯文本走老路径,行为与本功能上线前一致。
+
+/** 是否渲染内嵌 HTML 片段(appearance.chatInlineHtml)。App 在根部提供,默认 false。 */
+export const ChatHtmlCtx = createContext<boolean>(false)
 
 // ---- inline ----------------------------------------------------------------
 
+// 行内 HTML:提示词鼓励模型「像加粗一样穿插」,所以句子中间会出现 <span style="…">…</span>。不识别的话
+// 用户会看见裸标签,所以行内也走同一套白名单(块级标签不在这里,它们由块级识别接手)。
+const INLINE_HTML = /<(span|strong|b|em|i|code|small|del|sup|sub)\b[^>]*>[\s\S]*?<\/\1>/i
+
 // Split a run of text into inline tokens. Order matters: code first (it suppresses
 // other markup inside), then links, then bold, then italic.
-export function renderInline(text: string, keyBase = 'i'): ReactNode[] {
+export function renderInline(text: string, keyBase = 'i', allowHtml = false): ReactNode[] {
   const out: ReactNode[] = []
   let rest = text
   let k = 0
@@ -128,11 +61,12 @@ export function renderInline(text: string, keyBase = 'i'): ReactNode[] {
     // earliest-index winner picks it — so it renders as an <img>, not a stray '!' + link.
     { re: /!\[([^\]]*)\]\(([^)\s]+)\)/, make: m => <MdImage key={`${keyBase}-${k++}`} alt={m[1]} src={m[2]} /> },
     { re: /\[([^\]]+)\]\(([^)\s]+)\)/, make: m => <a key={`${keyBase}-${k++}`} href={m[2]} target="_blank" rel="noreferrer">{m[1]}</a> },
-    { re: /\*\*([^*]+)\*\*/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`)}</strong> },
-    { re: /__([^_]+)__/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`)}</strong> },
+    { re: /\*\*([^*]+)\*\*/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`, allowHtml)}</strong> },
+    { re: /__([^_]+)__/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`, allowHtml)}</strong> },
     { re: /\*([^*]+)\*/, make: m => <em key={`${keyBase}-${k++}`}>{m[1]}</em> },
     { re: /_([^_]+)_/, make: m => <em key={`${keyBase}-${k++}`}>{m[1]}</em> },
   ]
+  if (allowHtml) PATTERNS.push({ re: INLINE_HTML, make: m => renderHtmlFragment(m[0], `${keyBase}h${k++}`) })
   while (rest) {
     let best: { idx: number; len: number; node: ReactNode } | null = null
     for (const { re, make } of PATTERNS) {
@@ -149,16 +83,17 @@ export function renderInline(text: string, keyBase = 'i'): ReactNode[] {
 
 // ---- block -----------------------------------------------------------------
 
-export function renderMarkdown(text: string): ReactNode {
+export function renderMarkdown(text: string, allowHtml = false): ReactNode {
   const lines = text.replace(/\r\n/g, '\n').split('\n')
   const blocks: ReactNode[] = []
   let i = 0
   let key = 0
   const para: string[] = []
+  const inline = (t: string, kb: string): ReactNode[] => renderInline(t, kb, allowHtml)
   const flushPara = () => {
     if (!para.length) return
     const joined = para.join('\n')
-    blocks.push(<p key={`p${key++}`}>{joined.split('\n').flatMap((ln, idx) => idx === 0 ? renderInline(ln, `p${key}-${idx}`) : [<br key={`br${key}-${idx}`} />, ...renderInline(ln, `p${key}-${idx}`)])}</p>)
+    blocks.push(<p key={`p${key++}`}>{joined.split('\n').flatMap((ln, idx) => idx === 0 ? inline(ln, `p${key}-${idx}`) : [<br key={`br${key}-${idx}`} />, ...inline(ln, `p${key}-${idx}`)])}</p>)
     para.length = 0
   }
 
@@ -168,6 +103,37 @@ export function renderMarkdown(text: string): ReactNode {
   let olSeq = 0
   while (i < lines.length) {
     const line = lines[i]
+    // 内嵌 HTML 块 —— 整行以一个块级标签起手。和围栏不冲突:围栏行以 ``` 开头、匹配不到这个正则,所以
+    // 模型把片段包进 ```html 时仍然走下面的代码块分支(那种写法用户要的是「看代码」)。
+    const htmlOpen = allowHtml ? /^\s*<([a-z][a-z0-9]*)\b/i.exec(line) : null
+    if (htmlOpen && BLOCK_TAGS.has(htmlOpen[1].toLowerCase())) {
+      flushPara()
+      // 往后吃行,直到片段闭合。流式输出时最后一段片段是半截的(`<div style="padd`),这时不渲染 ——
+      // 半截 DOM 每帧都在变,画面会抖;先摆一条占位,等模型把它写完的那一帧再换成真卡片。
+      // 用增量扫描器逐行喂:每行拿整段重扫会让收集一个 N 行片段变成 O(N²)。
+      const buf: string[] = []
+      const scan = newFragmentScan()
+      let closed = false
+      while (i < lines.length) {
+        buf.push(lines[i])
+        if (feedFragment(scan, (buf.length > 1 ? '\n' : '') + lines[i])) { i++; closed = true; break }
+        i++
+      }
+      const k = key++
+      const raw = buf.join('\n')
+      blocks.push(closed
+        ? <div className="md-html" key={`html${k}`}>{renderHtmlFragment(raw, `h${k}`)}</div>
+        // 未闭合:绝大多数情况是「还在流式输出中」,但也可能是模型忘了写闭合标签 —— 后者如果只显示占位,
+        // 这条消息剩下的内容就永远看不到了。所以做成可展开的:平时是一行不打扰的占位,点开能看到原文,
+        // 内容在任何情况下都不会丢。
+        : (
+          <details className="md-html-pending" key={`htmlp${k}`}>
+            <summary>可视化生成中…</summary>
+            <pre>{raw}</pre>
+          </details>
+        ))
+      continue
+    }
     // fenced code block —— 容忍前导缩进(LLM 常把代码块缩进到列表项下,`   ```sql` 之前的正则要求顶格 → 没
     // 识别成围栏,原样漏出反引号)。记住围栏缩进,body 各行去掉同样多的前导空白,代码不被整体右移。
     const fence = /^(\s*)```(\w*)\s*$/.exec(line)
@@ -228,7 +194,7 @@ export function renderMarkdown(text: string): ReactNode {
         } else break
       }
       const tk = key++
-      blocks.push(<TableBlock key={`tbl${tk}`} header={header} body={body} tk={tk} />)
+      blocks.push(<TableBlock key={`tbl${tk}`} header={header} body={body} tk={tk} renderCell={inline} />)
       continue
     }
     // heading
@@ -238,7 +204,7 @@ export function renderMarkdown(text: string): ReactNode {
       olSeq = 0   // 新标题 = 新章节,有序编号从头开始
       const level = h[1].length
       const Tag = (`h${Math.min(level, 6)}`) as 'h1'
-      blocks.push(<Tag key={`h${key++}`}>{renderInline(h[2], `h${key}`)}</Tag>)
+      blocks.push(<Tag key={`h${key++}`}>{inline(h[2], `h${key}`)}</Tag>)
       i++; continue
     }
     // horizontal rule
@@ -250,7 +216,7 @@ export function renderMarkdown(text: string): ReactNode {
       flushPara()
       const items: string[] = []
       while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*+]\s+/, '')); i++ }
-      blocks.push(<ul key={`ul${key++}`}>{items.map((it, idx) => <li key={idx}>{renderInline(it, `ul${key}-${idx}`)}</li>)}</ul>)
+      blocks.push(<ul key={`ul${key++}`}>{items.map((it, idx) => <li key={idx}>{inline(it, `ul${key}-${idx}`)}</li>)}</ul>)
       continue
     }
     // ordered list — 保留源码里的起始编号(<ol start={n}>)。这个 line-based 解析器只收「连续」的编号行,
@@ -264,7 +230,7 @@ export function renderMarkdown(text: string): ReactNode {
       // 源码从 1 开始(常见的"懒编号 1.") → 接着上一段有序序列继续编号;显式从 >1 开始 → 尊重其起始号。
       const start = srcNum === 1 ? olSeq + 1 : srcNum
       olSeq = start + items.length - 1
-      blocks.push(<ol start={start} key={`ol${key++}`}>{items.map((it, idx) => <li key={idx}>{renderInline(it, `ol${key}-${idx}`)}</li>)}</ol>)
+      blocks.push(<ol start={start} key={`ol${key++}`}>{items.map((it, idx) => <li key={idx}>{inline(it, `ol${key}-${idx}`)}</li>)}</ol>)
       continue
     }
     // blockquote
@@ -272,7 +238,8 @@ export function renderMarkdown(text: string): ReactNode {
       flushPara()
       const quote: string[] = []
       while (i < lines.length && /^\s*>\s?/.test(lines[i])) { quote.push(lines[i].replace(/^\s*>\s?/, '')); i++ }
-      blocks.push(<blockquote key={`bq${key++}`}>{renderInline(quote.join('\n'), `bq${key}`)}</blockquote>)
+      const qtext = quote.join('\n')
+      blocks.push(<QuoteBlock key={`bq${key++}`} text={qtext}>{inline(qtext, `bq${key}`)}</QuoteBlock>)
       continue
     }
     // blank line → paragraph break
@@ -290,22 +257,29 @@ export function renderMarkdown(text: string): ReactNode {
 // parsed tree instead of re-parsing large bodies (a big part of the switch-into-a-heavy-session jank).
 const PARSE_CACHE = new Map<string, ReactNode>()
 const PARSE_CACHE_MAX = 240
-export function renderMarkdownCached(text: string): ReactNode {
-  const hit = PARSE_CACHE.get(text)
+// 缓存键必须带上 allowHtml —— 同一段原文在开关两侧解析结果不同,只按 text 缓存的话,用户在设置里切换后
+// 会拿到上一次的树(而且因为命中缓存,重进会话都刷不掉)。
+export function renderMarkdownCached(text: string, allowHtml = false): ReactNode {
+  const ck = `${allowHtml ? 'h' : 'm'} ${text}`
+  const hit = PARSE_CACHE.get(ck)
   if (hit !== undefined) {
     // Refresh LRU recency.
-    PARSE_CACHE.delete(text)
-    PARSE_CACHE.set(text, hit)
+    PARSE_CACHE.delete(ck)
+    PARSE_CACHE.set(ck, hit)
     return hit
   }
-  const node = renderMarkdown(text)
-  PARSE_CACHE.set(text, node)
+  const node = renderMarkdown(text, allowHtml)
+  PARSE_CACHE.set(ck, node)
   if (PARSE_CACHE.size > PARSE_CACHE_MAX) PARSE_CACHE.delete(PARSE_CACHE.keys().next().value as string)
   return node
 }
 
-export function Markdown({ text, imageBaseCwd }: { text: string; imageBaseCwd?: string }): ReactNode {
-  const body = useMemo(() => renderMarkdownCached(text), [text])
+export function Markdown({ text, imageBaseCwd, allowHtml }: { text: string; imageBaseCwd?: string; allowHtml?: boolean }): ReactNode {
+  // 默认跟随全局设置(App 在根部 provide);显式传 allowHtml 可以就地覆盖,给不想跟随全局开关的调用方
+  // 留一个口子。
+  const ctxHtml = useContext(ChatHtmlCtx)
+  const html = allowHtml ?? ctxHtml
+  const body = useMemo(() => renderMarkdownCached(text, html), [text, html])
   // Only wrap in a provider when a base is given (on-disk doc); chat bubbles render unchanged.
   return imageBaseCwd ? <MdImageBaseCtx.Provider value={imageBaseCwd}>{body}</MdImageBaseCtx.Provider> : body
 }

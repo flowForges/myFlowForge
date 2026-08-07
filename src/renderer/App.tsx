@@ -66,6 +66,7 @@ import { SetupProgress, INITIAL_SETUP_STATE, applySetupEvent } from './views/Set
 import type { SetupProgressState } from './views/SetupProgress'
 import type { AgentState, ChatEvent, ChatQueueEvent, CreateWorkspaceOpts, EngineEvent, SetupEvent, Workspace } from '@shared/types'
 import { deriveWsBadge } from './shell/wsBadge'
+import { ChatHtmlCtx } from './views/chat/markdown'
 
 export function App() {
   const [collapsed, setCollapsed] = useState(false)
@@ -574,6 +575,7 @@ export function App() {
   }, [])
 
   return (
+    <ChatHtmlCtx.Provider value={settings?.appearance.chatInlineHtml ?? false}>
     <div className={`window${collapsed ? ' collapsed' : ''}${inspCollapsed ? ' insp-collapsed' : ''}${view === 'home' ? ' home-mode' : ''}`}>
       {/* App-wide background image layer (shown only when appearance.bgScope === 'app'; the chat-only
           scope is drawn by .chat::before instead). Fixed, behind all chrome, image + opacity from CSS vars. */}
@@ -881,5 +883,6 @@ export function App() {
         </button>
       )}
     </div>
+    </ChatHtmlCtx.Provider>
   )
 }

@@ -120,6 +120,10 @@ export const AppearanceSchema = z.object({
   // 1.7 行距 + 0 字间距(更接近 codex 那种协调、透气的观感);用户可各自拉动。越界/非法回落默认。
   chatLineHeight: z.preprocess((v) => (typeof v === 'number' ? Math.min(2.2, Math.max(1.3, v)) : 1.7), z.number().catch(1.7).default(1.7)),
   chatLetterSpacing: z.preprocess((v) => (typeof v === 'number' ? Math.min(0.08, Math.max(-0.02, v)) : 0), z.number().catch(0).default(0)),
+  // 内嵌 HTML:打开后(1)给对话 provider 注入格式指令,鼓励它在对比矩阵/流程结构/信息卡片这类场景内嵌
+  // HTML 片段;(2)渲染端把片段按白名单重建成真元素,配色映射到本应用的 token,于是卡片跟随皮肤和壁纸
+  // 自动配色。默认关 —— 它会显著增加输出 token,且收益随对话内容而定,由用户自己决定要不要常开。
+  chatInlineHtml: z.boolean().catch(false).default(false),
   // 应用整体字体族(逗号分隔备选)。'' = 跟随系统栈。作用于 --font,不影响终端字体。
   fontFamily: z.string().catch('').default(''),
   // 正文基础字重(数值,300–600,步进 25)。只作用于 body 基础字重(--app-fw),不动已显式加重的
@@ -408,7 +412,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
+  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },

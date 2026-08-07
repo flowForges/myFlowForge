@@ -327,6 +327,21 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
             </span>
           </div>
         </div>
+        <div className="set-row">
+          <div className="info">
+            <div className="t">内嵌 HTML 可视化</div>
+            <div className="d">
+              开启后会提示 AI 在对比矩阵、流程结构、信息卡片这类场景内嵌 HTML 片段,让回复更紧凑好读;
+              片段配色会自动映射到当前主题皮肤与壁纸配色。<b>会增加输出 token</b>(被 HTML 化的部分约 3–6 倍),
+              各 provider 的配合程度也不同,建议按需开启。
+            </div>
+          </div>
+          <button
+            className={`toggle${appearance.chatInlineHtml ? ' on' : ''}`}
+            aria-label="内嵌 HTML 可视化"
+            onClick={() => onChange({ chatInlineHtml: !appearance.chatInlineHtml })}
+          />
+        </div>
       </div>
       <div className="set-group">
         <h4>终端字体</h4>

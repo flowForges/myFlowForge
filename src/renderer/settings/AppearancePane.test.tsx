@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { AppearancePane } from './AppearancePane'
 import type { Appearance, Terminal } from '@shared/types'
 
-const appearance: Appearance = { theme: 'dark', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
+const appearance: Appearance = { theme: 'dark', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
 const terminal: Terminal = { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 }
 
 describe('AppearancePane', () => {
@@ -47,6 +47,18 @@ describe('AppearancePane', () => {
     const input = screen.getByPlaceholderText("如: 'PingFang SC', 'Inter', sans-serif") as HTMLInputElement
     fireEvent.change(input, { target: { value: 'Inter' } })
     expect(onChange).toHaveBeenCalledWith({ fontFamily: 'Inter' })
+  })
+  it('「内嵌 HTML 可视化」开关回写 chatInlineHtml,默认关', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(<AppearancePane appearance={appearance} onChange={onChange} terminal={terminal} onTerminalChange={() => {}} />)
+    const toggle = screen.getByLabelText('内嵌 HTML 可视化')
+    expect(toggle.className).not.toContain('on')      // 默认关
+    fireEvent.click(toggle)
+    expect(onChange).toHaveBeenCalledWith({ chatInlineHtml: true })
+    rerender(<AppearancePane appearance={{ ...appearance, chatInlineHtml: true }} onChange={onChange} terminal={terminal} onTerminalChange={() => {}} />)
+    expect(screen.getByLabelText('内嵌 HTML 可视化').className).toContain('on')
+    fireEvent.click(screen.getByLabelText('内嵌 HTML 可视化'))
+    expect(onChange).toHaveBeenCalledWith({ chatInlineHtml: false })
   })
   it('「文本字重」滑块回写数值,并可一键恢复建议值', () => {
     const onChange = vi.fn()
