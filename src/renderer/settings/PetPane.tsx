@@ -202,6 +202,21 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
   useEffect(() => { rescanCodex() }, [])
   // 成长宠物包的报错走自己的一行,别串到 Codex 那一段去。
   const [growthErr, setGrowthErr] = useState('')
+  // 每日目标是「编辑中的草稿 + 失焦/回车提交」,不是每敲一键就写一次盘 —— 与本文件的重命名
+  // (commitRename)、TermProxyPane 的代理地址同一套手感。逐键提交的话输入 100000 会连写 6 次
+  // 设置,中途的 1、10 还会把宠物进度瞬间顶满再跳回来,肉眼可见地抖。
+  const [goalDraft, setGoalDraft] = useState(pet.growthDailyGoal?.toString() ?? '')
+  useEffect(() => { setGoalDraft(pet.growthDailyGoal?.toString() ?? '') }, [pet.growthDailyGoal])
+  const commitGoal = () => {
+    const t = goalDraft.trim()
+    const n = Number(t)
+    // 空 / 非数字 / 非正数 / 小数一律回落到「自动」—— 与 schema 的 z.number().int().positive().catch(undefined)
+    // 逐条同构,免得设置里存一个之后会被静默丢弃的坏值。不四舍五入:3.5 是敲错了,不是「想要 4」。
+    const next = t && Number.isInteger(n) && n > 0 ? n : undefined
+    if (next !== pet.growthDailyGoal) onChange({ growthDailyGoal: next })
+    // 被拒的输入不能继续留在框里骗人,归一化回真正保存的值。
+    setGoalDraft(next?.toString() ?? '')
+  }
   // 装包结果 → customPets。Codex 包与成长包共用这一段(两边的 id 都按源文件夹稳定生成),
   // 只有「错误显示在哪一行」不同,所以把 setter 作为参数传进来。
   const addImported = (
@@ -498,6 +513,9 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             <button
               className="wf-pick on"
               disabled={atMax}
+              // Codex 那段也有一个「选择文件夹…」,光看按钮文字两者无法区分(读屏软件尤其如此),
+              // 所以这里给一个说明白的可访问名。
+              aria-label="安装成长宠物包"
               title={atMax ? `已达上限 ${PET_CUSTOM_MAX} 个` : undefined}
               onClick={async () => addImported(await window.forge.growthPetImport(), setGrowthErr)}
             >
@@ -514,16 +532,13 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
               type="number"
               aria-label="每日 token 目标"
               placeholder="留空 = 自动"
-              value={pet.growthDailyGoal ?? ''}
+              value={goalDraft}
               min={50000}
               max={5000000}
               step={10000}
-              onChange={e => {
-                // 空 / 非数字 / 非正数一律回落到「自动」—— 与 schema 的 .catch(undefined) 同一套语义,
-                // 免得设置里存了个之后被静默丢弃的坏值。
-                const n = Math.round(Number(e.target.value.trim()))
-                onChange({ growthDailyGoal: n > 0 ? n : undefined })
-              }}
+              onChange={e => setGoalDraft(e.target.value)}
+              onBlur={commitGoal}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitGoal() } }}
             />
           </div>
           {growthErr && (

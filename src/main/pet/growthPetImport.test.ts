@@ -1,8 +1,22 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { importGrowthPetPack, growthPetId } from './growthPetImport'
+
+// importGrowthPetPack 的 path.relative 守卫是纯纵深防御:只要 shared 的 isSafeRelPath 还在正常
+// 工作,任何越界字符串都在它那里就被拦掉了,函数早退,守卫永远打不到。所以想验它,唯一办法是
+// 模拟「shared 那层被改坏/被绕过」—— 放行一个逃得出源目录的 sheet,看深层守卫还拦不拦得住。
+// 默认不劫持(bypass 为 null 时走真实实现),只有那一条用例把 bypass 打开。
+const H = vi.hoisted(() => ({ bypass: null as null | Record<string, unknown> }))
+vi.mock('@shared/growthPet', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shared/growthPet')>()
+  return {
+    ...actual,
+    parseGrowthManifest: (raw: unknown) =>
+      H.bypass ? { ok: true, manifest: H.bypass } : actual.parseGrowthManifest(raw),
+  }
+})
 
 let src: string
 let dest: string
@@ -25,6 +39,7 @@ beforeEach(() => {
   writeFileSync(join(src, '1-trunk.png'), 'trunkbytes')
 })
 afterEach(() => {
+  H.bypass = null
   rmSync(src, { recursive: true, force: true })
   rmSync(dest, { recursive: true, force: true })
 })
@@ -88,14 +103,41 @@ describe('importGrowthPetPack', () => {
     expect(r.error).toContain('dailyTokens')
   })
 
-  it('拒绝越出包目录的 sheet(纵深防御,shared 校验之外再挡一次)', () => {
-    // 绕过 shared 的字符串校验:用一个看着合法、但拼出来会跳出源目录的子路径。
+  // 注意这条验的是 shared 那一层。`sub/../../escape.png` 里有 `..` 段,isSafeRelPath 直接就拦了,
+  // 装包函数在 `if (!parsed.ok) return parsed` 就早退 —— 根本走不到深层的 path.relative 守卫。
+  // 深层守卫由下面那条单独覆盖(它得把 shared mock 掉才打得到)。
+  it('shared 层拦截越界路径', () => {
     mkdirSync(join(src, 'sub'), { recursive: true })
     writeFileSync(join(src, 'pet.json'), JSON.stringify(manifest({
       stages: [{ at: 0, sheet: 'sub/../../escape.png' }],
     })))
     const r = importGrowthPetPack(src, dest)
     expect(r.ok).toBe(false)
+    if (r.ok) return
+    expect(r.error).toContain('越出包目录')
+  })
+
+  it('shared 放行了也照样拦:深层 path.relative 守卫独立生效', () => {
+    // 模拟 shared 的字符串校验被改坏/被绕过,放行一个逃出源目录的 sheet。这是那条守卫存在的
+    // 唯一理由 —— 不 mock 就永远打不到它,守卫也就成了摆设(删掉全绿)。
+    const outside = join(src, '..', `gp-escape-${process.pid}.png`)
+    writeFileSync(outside, 'pwned')
+    try {
+      H.bypass = {
+        id: 'x', name: '越界',
+        atlas: { cols: 1, cellW: 1, cellH: 1 },
+        actions: { idle: { row: 0, durations: [100] } },
+        stages: [{ at: 0, sheet: `../${basename(outside)}` }],
+      }
+      const r = importGrowthPetPack(src, dest)
+      expect(r.ok).toBe(false)
+      if (r.ok) return
+      expect(r.error).toContain('越出包目录')
+      // 而且一个字节都没拷出去 —— 越界的文件绝不能落进宠物图库。
+      expect(existsSync(join(dest, growthPetId(src)))).toBe(false)
+    } finally {
+      rmSync(outside, { force: true })
+    }
   })
 
   it('不同子目录下的同名阶段图不会互相覆盖', () => {
