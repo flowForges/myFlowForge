@@ -334,6 +334,8 @@ const api = {
     ipcRenderer.on(CH.growthSignal, listener)
     return () => ipcRenderer.removeListener(CH.growthSignal, listener)
   },
+  // 成长宠物包安装:主进程弹目录选择器,校验并拷贝后返回一个 CustomPet(取消 → null)。
+  growthPetImport: (): Promise<{ ok: true; pet: import('@shared/petCustom').CustomPet } | { ok: false; error: string } | null> => ipcRenderer.invoke(CH.growthPetImport),
   // Run2 (P3-A): additive API surface for the new headless run controller. Coexists with startRun/resolve/
   // onEngineEvent above — none of those are touched.
   run2: {

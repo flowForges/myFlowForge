@@ -228,6 +228,8 @@ export const CH = {
   // 成长宠物:主进程 → 宠物窗口的实时信号(今日 token / 每日目标 / 0~1 进度)。
   growthSignal: 'growth:signal',
   growthSignalGet: 'growth:signal-get',
+  // 成长宠物:从本地文件夹装一个成长宠物包(选目录 → 校验 → 拷贝阶段图 → 返回 CustomPet)。
+  growthPetImport: 'growth:pet-import',
   memoryWrite: 'memory:write',
   memoryClear: 'memory:clear',
   // Run2 (P3-A): additive, coexists with the existing engine* orchestrator channels above.

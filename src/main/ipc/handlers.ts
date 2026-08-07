@@ -64,6 +64,7 @@ import { makeRunDelegate, cancelWorkspaceDelegates } from '../chat/delegate'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
 import { importCodexPetPack, discoverCodexPets } from '../pet/codexPetImport'
+import { importGrowthPetPack } from '../pet/growthPetImport'
 import { storeBackgroundFromPath, backgroundImageUrl, bgRelFromUrl, gcBackgrounds, resolveBackgroundAbs } from '../appearance/backgroundStore'
 import { makeDiskPreviewCache, previewKeepRels } from '../appearance/previewCache'
 import { listDownloadedFonts, downloadCatalogFont, deleteDownloadedFont } from '../appearance/fontStore'
@@ -1185,6 +1186,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return null
     return importCodexPetPack(r.filePaths[0])
+  })
+
+  // 成长宠物包:同样是「选一个目录 → 校验 → 拷进宠物图库 → 返回 CustomPet」,只是包里带的是
+  // 每阶段一张 atlas(kind:"growth")。取消时返回 null,与 codexPetPick 一致 —— 用户主动取消不是错误,
+  // 渲染层不该把它当成红字报错弹出来。
+  ipcMain.handle(CH.growthPetImport, async () => {
+    const r = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择成长宠物包目录' })
+    if (r.canceled || !r.filePaths[0]) return null
+    return importGrowthPetPack(r.filePaths[0])
   })
 
   // Background image: open a picker, store the chosen image on disk under ~/.myFlowForge/backgrounds

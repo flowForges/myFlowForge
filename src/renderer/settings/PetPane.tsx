@@ -200,16 +200,23 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
       .finally(() => setScanning(false))
   }
   useEffect(() => { rescanCodex() }, [])
-  const addImported = (r: { ok: true; pet: CustomPet } | { ok: false; error: string } | null) => {
+  // 成长宠物包的报错走自己的一行,别串到 Codex 那一段去。
+  const [growthErr, setGrowthErr] = useState('')
+  // 装包结果 → customPets。Codex 包与成长包共用这一段(两边的 id 都按源文件夹稳定生成),
+  // 只有「错误显示在哪一行」不同,所以把 setter 作为参数传进来。
+  const addImported = (
+    r: { ok: true; pet: CustomPet } | { ok: false; error: string } | null,
+    setErr: (s: string) => void = setCodexErr,
+  ) => {
     if (!r) return
-    if (!r.ok) { setCodexErr(r.error); return }
-    setCodexErr('')
+    if (!r.ok) { setErr(r.error); return }
+    setErr('')
     // Codex pet ids are stable per source folder, so re-importing the same folder (or re-clicking the
     // same discovered pet) must SELECT/refresh the existing entry — never append a duplicate. Upsert by
     // id (mirrors PetGallery.install); only a genuinely new pet counts against the cap.
     const list = pet.customPets ?? []
     const already = list.some(p => p.id === r.pet.id)
-    if (!already && list.length >= PET_CUSTOM_MAX) { setCodexErr(`宠物已达上限 ${PET_CUSTOM_MAX} 个`); return }
+    if (!already && list.length >= PET_CUSTOM_MAX) { setErr(`宠物已达上限 ${PET_CUSTOM_MAX} 个`); return }
     const next = already ? list.map(p => (p.id === r.pet.id ? r.pet : p)) : addCustomPet(list, r.pet)
     onChange({ skin: 'custom', customPets: next, activeCustomPetId: r.pet.id })
   }
@@ -253,7 +260,9 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
   // user's own uploads (`pet-`) and library downloads (`pack-`) stay adjacent instead of having codex
   // pets wedged between them (insertion order used to interleave all three).
   const codexList = customList.filter(p => p.id.startsWith('codex-'))
-  const userList = customList.filter(p => !p.id.startsWith('builtin-') && !p.id.startsWith('codex-'))
+  // 成长宠物包同理:`growth-` 前缀自成一组,别混进用户自己上传的那一堆里。
+  const growthList = customList.filter(p => p.id.startsWith('growth-'))
+  const userList = customList.filter(p => !p.id.startsWith('builtin-') && !p.id.startsWith('codex-') && !p.id.startsWith('growth-'))
   const chipStyle = (active: boolean) => ({
     display: 'flex' as const, alignItems: 'center' as const, gap: '8px', padding: '6px 8px', borderRadius: '10px',
     border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
@@ -395,6 +404,10 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--faint)', marginTop: 2 }}>Codex 宠物</div>
           )}
           {codexList.map(renderChip)}
+          {growthList.length > 0 && (
+            <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--faint)', marginTop: 2 }}>成长宠物</div>
+          )}
+          {growthList.map(renderChip)}
         </div>
 
         <div className="set-row" style={{ marginBottom: '4px' }}>
@@ -472,6 +485,49 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
           )}
           {codexErr && (
             <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{codexErr}</div>
+          )}
+
+          {/* 成长宠物包:一个文件夹 = pet.json + 每阶段一张 atlas。装进来后宠物的形态跟着今日 token 用量长。 */}
+          <div className="set-row" style={{ marginBottom: '4px' }}>
+            <div className="info">
+              <div className="t">安装成长宠物包</div>
+              <div className="d">会随今日 token 用量逐阶段长大的宠物包(含 <code>pet.json</code>(<code>kind: "growth"</code>)与每阶段一张 atlas 的文件夹)。重装同一个文件夹 = 升级,不会多出一只。</div>
+            </div>
+          </div>
+          <div className="set-row" style={{ marginBottom: '8px', gap: '8px' }}>
+            <button
+              className="wf-pick on"
+              disabled={atMax}
+              title={atMax ? `已达上限 ${PET_CUSTOM_MAX} 个` : undefined}
+              onClick={async () => addImported(await window.forge.growthPetImport(), setGrowthErr)}
+            >
+              选择文件夹…
+            </button>
+          </div>
+          <div className="set-row" style={{ marginBottom: '8px' }}>
+            <div className="info">
+              <div className="t">每日 token 目标</div>
+              <div className="d">成长进度 = 今日 token ÷ 这个目标。留空 = 按过去若干天用量的中位数自动推算。</div>
+            </div>
+            <input
+              className="sel"
+              type="number"
+              aria-label="每日 token 目标"
+              placeholder="留空 = 自动"
+              value={pet.growthDailyGoal ?? ''}
+              min={50000}
+              max={5000000}
+              step={10000}
+              onChange={e => {
+                // 空 / 非数字 / 非正数一律回落到「自动」—— 与 schema 的 .catch(undefined) 同一套语义,
+                // 免得设置里存了个之后被静默丢弃的坏值。
+                const n = Math.round(Number(e.target.value.trim()))
+                onChange({ growthDailyGoal: n > 0 ? n : undefined })
+              }}
+            />
+          </div>
+          {growthErr && (
+            <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{growthErr}</div>
           )}
 
           {pet.skin === 'custom' && (activeCustom.emoji || firstImage({ id: '', name: '', images: activeCustom.images })) && (
