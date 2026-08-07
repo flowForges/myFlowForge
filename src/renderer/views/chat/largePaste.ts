@@ -34,6 +34,34 @@ export function insertPastePlaceholder(
   return { text: before + chunk + after, caret: selStart + chunk.length }
 }
 
+/**
+ * 存盘是异步的:选区(selStart/selEnd)和当时的正文都是在 `await onPaste(...)` 之前读的,而那几百
+ * 毫秒里用户还能继续打字。所以插入之前要拿「最新的正文」重新判定一次选区还成不成立。
+ *
+ * 判据:latest 的前 selEnd 个字符与粘贴那一刻完全一致(前缀 + 被选中的那段都没变)。
+ *  - 成立 → 说明用户是在插入点【之后】改的字(最常见:光标本来就在末尾,他接着往下敲),
+ *    原位插入依然准确;
+ *  - 不成立 → 用户在前面插/删过字,原来的下标已经指向别的位置了。此时插到【末尾】而不是硬按
+ *    旧下标插:硬插会把占位符戳进某个词/某行的中间,读起来是错的,而且是静默的错;插到末尾
+ *    位置虽然不理想,但语义清楚(「还有这么一个附件」),而且绝不丢用户的字。
+ */
+export function resolvePasteSelection(
+  latest: string, atPaste: string, selStart: number, selEnd: number,
+): { start: number; end: number } {
+  const intact = selEnd <= latest.length && latest.slice(0, selEnd) === atPaste.slice(0, selEnd)
+  return intact ? { start: selStart, end: selEnd } : { start: latest.length, end: latest.length }
+}
+
+/**
+ * 转文件失败时的兜底:把粘贴的原文按原生粘贴的语义插回选区(替换掉选中的那段)。
+ * 不加空格、不加括号 —— 这条路要还原的就是「用户本来会得到什么」。
+ */
+export function insertPastedText(
+  text: string, selStart: number, selEnd: number, raw: string,
+): { text: string; caret: number } {
+  return { text: text.slice(0, selStart) + raw + text.slice(selEnd), caret: selStart + raw.length }
+}
+
 const pad = (n: number) => String(n).padStart(2, '0')
 
 // Name the temp file. Detect JSON (opening/closing bracket) for a .json extension so the agent + the

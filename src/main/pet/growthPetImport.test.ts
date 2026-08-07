@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, lstatSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, lstatSync, readdirSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { importGrowthPetPack, growthPetId } from './growthPetImport'
@@ -256,7 +256,9 @@ describe('importGrowthPetPack 重装时清理旧阶段图', () => {
   // ★ 审查实测出来的缺口:path.relative 是纯词法比较、不看 realpath,而 readdir/rm 会跟着软链走。
   // 在 pet-images/ 下放一个名字正好等于目标 id、指向别处的软链,没有 lstat 那道守卫就能把链接
   // 对面的文件删掉 —— 那已经是 pet-images 之外了。
-  it.skipIf(!canSymlink)('pet-images/<id> 自身是符号链接时一步不删(不跟随链接)', () => {
+  // 删和写是两条独立的路:mkdirSync(recursive) 对已存在的软链不报错、writeFileSync 照样跟着链接
+  // 把图写到对面。所以这条用例两侧都要断言 —— 只查「没少东西」会漏掉「多了东西」。
+  it.skipIf(!canSymlink)('pet-images/<id> 自身是符号链接时既不删也不写(两侧都不跟随链接)', () => {
     const id = growthPetId(src)
     const victim = mkdtempSync(join(tmpdir(), 'gp-victim-'))
     try {
@@ -264,16 +266,32 @@ describe('importGrowthPetPack 重装时清理旧阶段图', () => {
       // dest/<id> 不是真目录,而是一条指向 victim 的软链。
       symlinkSync(victim, join(dest, id), 'dir')
 
-      importGrowthPetPack(src, dest)
+      const r = importGrowthPetPack(src, dest)
+      // 拒装,而不是"装成功了(其实写到了链接对面)"。
+      expect(r.ok).toBe(false)
 
       // 链接对面的文件必须原封不动 —— 它压根不在宠物图库里。
       expect(readFileSync(join(victim, 'precious.txt'), 'utf8')).toBe('precious')
+      // ★ 写入侧:链接对面不准多出任何东西(旧断言只查了"没少",漏掉了"多了")。
+      expect(readdirSync(victim).sort()).toEqual(['precious.txt'])
       // 而且软链本身也没被当成"旧文件"删掉(它在 destAbs 的上一层,本来就不该被扫到)。
       expect(lstatSync(join(dest, id)).isSymbolicLink()).toBe(true)
     } finally {
       rmSync(join(dest, id), { force: true })
       rmSync(victim, { recursive: true, force: true })
     }
+  })
+
+  // 同一道守卫的另一半:目标名被一个普通文件占住。没有守卫的话 mkdirSync 会抛 EEXIST 穿出去
+  // (对用户就是"点了没反应"),有守卫则给出人话报错。
+  it('pet-images/<id> 被同名普通文件占住时给出报错而不是抛异常', () => {
+    const id = growthPetId(src)
+    writeFileSync(join(dest, id), 'not a dir')
+    let r!: ReturnType<typeof importGrowthPetPack>
+    expect(() => { r = importGrowthPetPack(src, dest) }).not.toThrow()
+    expect(r.ok).toBe(false)
+    // 用户放的东西不动它
+    expect(readFileSync(join(dest, id), 'utf8')).toBe('not a dir')
   })
 
   // ★ 顺序:清理必须在写入之后。写到一半 I/O 挂了(这里用「目标文件名被一个同名目录占住」

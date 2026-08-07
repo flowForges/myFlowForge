@@ -186,7 +186,12 @@ export const CustomPetSchema = z.object({
   color: z.string().optional(),
   images: z.partialRecord(z.enum(PET_STATES), z.string()).optional(),
   atlas: z.object({ path: z.string(), version: z.number() }).optional(),
-  growth: GrowthPackSchema.optional(),
+  // .catch(undefined) 与下面的 growthDailyGoal 同一条理由,但后果更重:settings.json 是一整份
+  // 解析的,这里抛一次,store.readJson 的 catch 就会把【整份设置】换成 defaultSettings() —— 用户
+  // 的工作区、皮肤、快捷键一次性回到出厂,下次写盘还会把这个结果固化下来。一个坏宠物包(作者手改
+  // pet.json、旧版本写下的字段)不该有这种爆炸半径,所以坏 growth 块只丢它自己,退成 undefined
+  // (宠物还在,只是不再按成长包渲染),其余设置原封不动。
+  growth: GrowthPackSchema.optional().catch(undefined),
 })
 export type CustomPetCfg = z.infer<typeof CustomPetSchema>
 

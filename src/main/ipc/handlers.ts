@@ -1194,7 +1194,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   ipcMain.handle(CH.growthPetImport, async () => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择成长宠物包目录' })
     if (r.canceled || !r.filePaths[0]) return null
-    return importGrowthPetPack(r.filePaths[0])
+    // importGrowthPetPack 只把「包本身不合格」变成 {ok:false},写盘的 I/O 异常照抛(ENOSPC 盘满、
+    // EPERM 无权、EISDIR 目标名被目录占住 —— 最后这个在 growthPetImport.test.ts 里就是真实用例)。
+    // 不在这里接住的话,异常会穿过 ipcMain.handle 变成渲染层的未处理 rejection:红字行不出现,
+    // 用户看到的是「点了没反应」。转成与既有失败同形的 {ok:false,error},渲染层原路显示。
+    try {
+      return importGrowthPetPack(r.filePaths[0])
+    } catch (e) {
+      return { ok: false, error: `安装失败:${e instanceof Error ? e.message : String(e)}` }
+    }
   })
 
   // Background image: open a picker, store the chosen image on disk under ~/.myFlowForge/backgrounds

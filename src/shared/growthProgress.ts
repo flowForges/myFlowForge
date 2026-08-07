@@ -10,6 +10,17 @@ export const GROWTH_GOAL_MAX = 5_000_000
 export const GROWTH_GOAL_DEFAULT = 200_000
 
 /**
+ * 把任意 goal 收进 [MIN, MAX]。自动推算与用户手填必须共用这一条 —— 上下限原来只在
+ * computeDailyGoal 里生效,手填那条路(设置 → schema → 计数器)全程没人 clamp,结果是
+ * 输入 1 就让 progress 恒等于 1、宠物永远停在最后一档,而且没有任何提示解释为什么。
+ * 非数字/非正数 → undefined,交给调用方决定回落到自动还是默认。
+ */
+export function clampDailyGoal(goal: number | undefined): number | undefined {
+  if (goal == null || !Number.isFinite(goal) || goal <= 0) return undefined
+  return Math.round(Math.min(GROWTH_GOAL_MAX, Math.max(GROWTH_GOAL_MIN, goal)))
+}
+
+/**
  * 由「过去若干天各自的 token 总量」推每日目标。
  * 用中位数而非平均:某一天通宵会把平均永久拉高,从此再也长不到结果。
  * 只算有用量的天 —— 没干活的那天不该把基线压低。
@@ -19,7 +30,7 @@ export function computeDailyGoal(dayTotals: number[]): number {
   if (!used.length) return GROWTH_GOAL_DEFAULT
   const mid = used.length >> 1
   const median = used.length % 2 ? used[mid] : (used[mid - 1] + used[mid]) / 2
-  return Math.round(Math.min(GROWTH_GOAL_MAX, Math.max(GROWTH_GOAL_MIN, median)))
+  return clampDailyGoal(median) ?? GROWTH_GOAL_DEFAULT
 }
 
 /** 今日累计 → 0~1。只增不减、封顶 1(达标后停在最后一档,不循环不溢出)。 */

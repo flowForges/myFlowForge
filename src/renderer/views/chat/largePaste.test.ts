@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   shouldOffloadPaste, pastedFileName, base64OfUtf8, PASTE_OFFLOAD_THRESHOLD,
-  pastePlaceholder, insertPastePlaceholder,
+  pastePlaceholder, insertPastePlaceholder, insertPastedText, resolvePasteSelection,
 } from './largePaste'
 
 describe('shouldOffloadPaste', () => {
@@ -44,6 +44,36 @@ describe('insertPastePlaceholder', () => {
     const a = insertPastePlaceholder('先看报错：\n\n再对比配置：\n', 6, 6, 'a.txt')
     const b = insertPastePlaceholder(a.text, a.text.length, a.text.length, 'b.json')
     expect(b.text).toBe('先看报错：\n[a.txt]\n再对比配置：\n[b.json]')
+  })
+})
+
+// ★ 存盘是异步的:选区和正文都是 await 之前读的,那几百毫秒里用户还能继续打字。
+// 插入前必须拿最新正文重新判定一次选区,否则要么把占位符插错位置,要么把用户敲的字回滚掉。
+describe('resolvePasteSelection', () => {
+  it('用户在插入点之后接着打字 → 选区仍然有效,原位插', () => {
+    expect(resolvePasteSelection('先看这个报错，', '先看这个报错', 6, 6)).toEqual({ start: 6, end: 6 })
+  })
+  it('正文一个字没动 → 原样返回', () => {
+    expect(resolvePasteSelection('abc', 'abc', 1, 1)).toEqual({ start: 1, end: 1 })
+  })
+  it('用户在插入点之前插了字 → 旧下标已经指向别处,退到末尾', () => {
+    // 粘贴时是 'abc' 的下标 3;等待期间在最前面插了 'XY' → 'XYabc'
+    expect(resolvePasteSelection('XYabc', 'abc', 3, 3)).toEqual({ start: 5, end: 5 })
+  })
+  it('用户在等待期间删字删到比选区还短 → 退到末尾,不越界', () => {
+    expect(resolvePasteSelection('a', 'abcdef', 4, 6)).toEqual({ start: 1, end: 1 })
+  })
+  it('选中一段再粘贴:那段还在就替换它,被改过就退到末尾', () => {
+    expect(resolvePasteSelection('保留XXXX保留', '保留XXXX保留', 2, 6)).toEqual({ start: 2, end: 6 })
+    // 选中的那段被改掉了 → 退到末尾(len 8),而不是硬按旧下标 2..6 把新内容也吃掉
+    expect(resolvePasteSelection('保留YYYY保留', '保留XXXX保留', 2, 6)).toEqual({ start: 8, end: 8 })
+  })
+})
+
+describe('insertPastedText', () => {
+  it('按原生粘贴语义插回选区(替换选中段),不加空格不加括号', () => {
+    expect(insertPastedText('abcd', 2, 2, 'XY')).toEqual({ text: 'abXYcd', caret: 4 })
+    expect(insertPastedText('保留XXXX保留', 2, 6, '新')).toEqual({ text: '保留新保留', caret: 3 })
   })
 })
 

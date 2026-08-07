@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  computeDailyGoal, growthProgress, growthActionFor, resolveGrowthAction, pickGrowthSprite,
+  clampDailyGoal, computeDailyGoal, growthProgress, growthActionFor, resolveGrowthAction, pickGrowthSprite,
   GROWTH_GOAL_DEFAULT, GROWTH_GOAL_MIN, GROWTH_GOAL_MAX,
 } from './growthProgress'
 import type { GrowthManifest } from './growthPet'
@@ -19,6 +19,32 @@ const M: GrowthManifest = {
     { at: 0.9, name: '结果', sheet: 'fruit.png' },
   ],
 }
+
+// ★ 上下限原本只在 computeDailyGoal 里生效,用户手填那条路(设置 → schema → 计数器)全程不 clamp。
+// 抽出这个共用函数就是为了让两条路共享同一套边界。
+describe('clampDailyGoal', () => {
+  it('低于下限抬到 MIN —— 填 1 会让 progress 恒为 1,宠物永远停在最后一档', () => {
+    expect(clampDailyGoal(1)).toBe(GROWTH_GOAL_MIN)
+    expect(clampDailyGoal(GROWTH_GOAL_MIN - 1)).toBe(GROWTH_GOAL_MIN)
+  })
+  it('高于上限压到 MAX —— 填 1e12 会让进度条永远不动', () => {
+    expect(clampDailyGoal(1e12)).toBe(GROWTH_GOAL_MAX)
+    expect(clampDailyGoal(GROWTH_GOAL_MAX + 1)).toBe(GROWTH_GOAL_MAX)
+  })
+  it('范围内原样返回(边界含两端)', () => {
+    expect(clampDailyGoal(GROWTH_GOAL_MIN)).toBe(GROWTH_GOAL_MIN)
+    expect(clampDailyGoal(GROWTH_GOAL_MAX)).toBe(GROWTH_GOAL_MAX)
+    expect(clampDailyGoal(200_000)).toBe(200_000)
+  })
+  it('空/非数/非正 → undefined(交给调用方回落到自动)', () => {
+    expect(clampDailyGoal(undefined)).toBeUndefined()
+    expect(clampDailyGoal(0)).toBeUndefined()
+    expect(clampDailyGoal(-5)).toBeUndefined()
+    expect(clampDailyGoal(NaN)).toBeUndefined()
+    // Infinity 也走 undefined 而不是 MAX:它只可能来自坏数据,回落到自动比强行给个上限更诚实。
+    expect(clampDailyGoal(Infinity)).toBeUndefined()
+  })
+})
 
 describe('computeDailyGoal', () => {
   it('无历史时给保守默认', () => {

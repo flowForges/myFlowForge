@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import { PetPane } from './PetPane'
 import type { Pet } from '@shared/types'
 import { PET_CUSTOM_MAX } from '@shared/petCustom'
+import { GROWTH_GOAL_MIN, GROWTH_GOAL_MAX } from '@shared/growthProgress'
 
 const BASE_PET: Pet = {
   enabled: true, skin: 'sprite', customPets: [], corner: 'right', pos: { bottom: 24 }, followCursor: false, idleAnimation: true, scale: 1,
@@ -81,6 +82,28 @@ describe('PetPane 成长宠物包安装', () => {
 
     expect(screen.getByText('目录下没有 pet.json')).not.toBeNull()
     expect(onChange).not.toHaveBeenCalled()
+  })
+
+  // ★ IPC 本身 reject(主进程重启 / 通道没注册 / 主进程那侧漏了一个 throw)时,没有 catch 的
+  // async onClick 会把 rejection 丢给 window.onunhandledrejection —— 界面上一点反应都没有,
+  // 用户只知道「按钮点了没用」。这类无声失败必须变成看得见的红字。
+  it('IPC 直接 reject 时也显示红字,不是无声失败', async () => {
+    ;(window as any).forge.growthPetImport = vi.fn().mockRejectedValue(new Error('ENOSPC: no space left on device'))
+    const onChange = vi.fn()
+    const unhandled: unknown[] = []
+    const onRej = (e: PromiseRejectionEvent) => { unhandled.push(e.reason); e.preventDefault() }
+    window.addEventListener('unhandledrejection', onRej)
+    try {
+      render(<PetPane pet={BASE_PET} onChange={onChange} />)
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('安装成长宠物包'))
+        await Promise.resolve()
+      })
+      expect(screen.getByText(/ENOSPC/)).not.toBeNull()
+      expect(onChange).not.toHaveBeenCalled()
+    } finally {
+      window.removeEventListener('unhandledrejection', onRej)
+    }
   })
 
   it('用户取消(返回 null)既不报错也不改设置', async () => {
@@ -277,6 +300,52 @@ describe('PetPane 每日 token 目标', () => {
     fireEvent.blur(goalInput())
     expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: undefined })
     expect(goalInput().value).toBe('')
+  })
+
+  // ★ min/max 只是 HTML 属性,fireEvent(以及真实浏览器里的直接输入)都不拦。收敛必须在
+  // commitGoal 里做,而且不能静默 —— 存的和用户看到的必须是同一个数,并且明说改过。
+  it('低于下限的输入被抬到 MIN,存的和框里显示的都是 MIN', () => {
+    const onChange = vi.fn()
+    render(<PetPane pet={BASE_PET} onChange={onChange} />)
+    fireEvent.change(goalInput(), { target: { value: '1' } })
+    fireEvent.blur(goalInput())
+    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: GROWTH_GOAL_MIN })
+    expect(goalInput().value).toBe(String(GROWTH_GOAL_MIN))
+  })
+
+  it('高于上限的输入被压到 MAX', () => {
+    const onChange = vi.fn()
+    render(<PetPane pet={BASE_PET} onChange={onChange} />)
+    fireEvent.change(goalInput(), { target: { value: '999999999' } })
+    fireEvent.blur(goalInput())
+    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: GROWTH_GOAL_MAX })
+    expect(goalInput().value).toBe(String(GROWTH_GOAL_MAX))
+  })
+
+  it('被收敛时给出可见提示(不静默改用户填的值)', () => {
+    render(<PetPane pet={BASE_PET} onChange={vi.fn()} />)
+    fireEvent.change(goalInput(), { target: { value: '1' } })
+    fireEvent.blur(goalInput())
+    const note = screen.getByRole('status')
+    expect(note.textContent).toContain('50,000')
+    expect(note.textContent).toContain('5,000,000')
+  })
+
+  it('范围内的值不提示(提示只在真的改了用户输入时出现)', () => {
+    render(<PetPane pet={BASE_PET} onChange={vi.fn()} />)
+    fireEvent.change(goalInput(), { target: { value: '200000' } })
+    fireEvent.blur(goalInput())
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('改回范围内的值后提示消失', () => {
+    render(<PetPane pet={BASE_PET} onChange={vi.fn()} />)
+    fireEvent.change(goalInput(), { target: { value: '1' } })
+    fireEvent.blur(goalInput())
+    expect(screen.queryByRole('status')).not.toBeNull()
+    fireEvent.change(goalInput(), { target: { value: '300000' } })
+    fireEvent.blur(goalInput())
+    expect(screen.queryByRole('status')).toBeNull()
   })
 
   it('已保存的值原样回填输入框', () => {

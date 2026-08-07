@@ -98,6 +98,18 @@ export function importGrowthPetPack(
     jobs.push({ from, to: join(destDir, name), rel: `${id}/${name}` })
   }
 
+  // 写入侧也要挡软链,不能只靠 pruneStale 那道(它管的是删)。mkdirSync(recursive) 对「已经存在的
+  // 软链指向目录」不报错,writeFileSync 又会跟着链接走 —— 结果是把图写到 pet-images 之外的地方。
+  // pet-images/ 下出现一个名字正好等于目标 id 的软链本来就不是我们放的,一律拒装:不跟随、也不删
+  // (删掉等于替用户处理他自己放进来的东西)。顺带把「被普通文件占住」也拦在这里给出人话报错,
+  // 否则下面的 mkdirSync 会抛一个 EEXIST/ENOTDIR 出去。
+  try {
+    const st = lstatSync(destDir)
+    if (!st.isDirectory()) {
+      const what = st.isSymbolicLink() ? '符号链接' : '同名文件'
+      return { ok: false, error: `宠物图库里 ${id} 被一个${what}占用,已取消安装(请先移除它)` }
+    }
+  } catch { /* 不存在 = 首次安装,正常往下走 */ }
   mkdirSync(destDir, { recursive: true })
   for (const j of jobs) writeFileSync(j.to, readFileSync(j.from))
   // 写完再清。中途 I/O 挂掉时旧图还在,宠物不至于哑掉(详见 pruneStale 的注释)。

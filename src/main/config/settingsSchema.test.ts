@@ -94,6 +94,48 @@ describe('SettingsSchema skills + pet', () => {
     const old = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, termProxy: '' })
     expect(old.memory.enabled).toBe(false)
   })
+  // ★ 终审实测出来的爆炸半径:customPets[].growth 上没有 .catch 时,一个坏成长包会让整份
+  // SettingsSchema.parse 抛出;store.readJson 的 `catch { return fallback() }` 接住之后,用户的
+  // 全部设置一次性回到出厂,下次写盘就固化。所以坏 growth 只准丢它自己。
+  it('坏掉的 growth 块只丢自己,不让整份设置解析失败(store 会把 throw 变成出厂重置)', () => {
+    const base = defaultSettings()
+    const bad = {
+      ...base,
+      // 三处都不合法:cols 必须 positive、actions 缺 cellW/cellH 的兄弟字段、stages 至少 1 项。
+      pet: { ...base.pet, customPets: [{ id: 'growth-x', name: '成长树', growth: { atlas: { cols: 0 }, actions: {}, stages: [] } }] },
+      // 下面这些是「其余设置」的取样,必须原封不动地活下来 —— 它们才是「没被重置」的证据。
+      appearance: { ...base.appearance, theme: 'dark' as const, fontSize: 17 },
+      termProxy: 'http://127.0.0.1:7890',
+      pinnedWorkspaces: ['/a/b'],
+      lastActiveWorkspace: '/a/b',
+      keybindings: { overrides: { 'new-workspace': 'Cmd+Shift+N' } },
+      closeAction: 'quit' as const,
+    }
+    let parsed!: ReturnType<typeof SettingsSchema.parse>
+    expect(() => { parsed = SettingsSchema.parse(bad) }).not.toThrow()
+    // 坏字段退成 undefined,宠物本身还在(只是不再按成长包渲染)
+    expect(parsed.pet.customPets).toHaveLength(1)
+    expect(parsed.pet.customPets[0].id).toBe('growth-x')
+    expect(parsed.pet.customPets[0].growth).toBeUndefined()
+    // ★ 其余设置逐条完好 —— 这条才是「用户没被重置」的证据
+    expect(parsed.appearance.theme).toBe('dark')
+    expect(parsed.appearance.fontSize).toBe(17)
+    expect(parsed.termProxy).toBe('http://127.0.0.1:7890')
+    expect(parsed.pinnedWorkspaces).toEqual(['/a/b'])
+    expect(parsed.lastActiveWorkspace).toBe('/a/b')
+    expect(parsed.keybindings.overrides).toEqual({ 'new-workspace': 'Cmd+Shift+N' })
+    expect(parsed.closeAction).toBe('quit')
+  })
+  it('合法的 growth 块照常透传(.catch 不能把好包也吃掉)', () => {
+    const base = defaultSettings()
+    const growth = {
+      atlas: { cols: 4, cellW: 100, cellH: 100 },
+      actions: { idle: { row: 0, durations: [200, 200] } },
+      stages: [{ at: 0, sheet: 'growth-x/0.png' }],
+    }
+    const parsed = SettingsSchema.parse({ ...base, pet: { ...base.pet, customPets: [{ id: 'growth-x', name: '成长树', growth }] } })
+    expect(parsed.pet.customPets[0].growth).toEqual(growth)
+  })
   it('defaults app icon to the fourth colorway and menu bar off', () => {
     const s = defaultSettings()
     expect(s.appIcon.dockIcon).toBe('ember-violet')

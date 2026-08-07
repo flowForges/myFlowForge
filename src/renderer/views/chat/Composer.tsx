@@ -4,7 +4,7 @@ import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import { applyListContinuation } from './listContinuation'
-import { shouldOffloadPaste, pastedFileName, base64OfUtf8, insertPastePlaceholder } from './largePaste'
+import { shouldOffloadPaste, pastedFileName, base64OfUtf8, insertPastePlaceholder, insertPastedText, resolvePasteSelection } from './largePaste'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -308,15 +308,28 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
         const selStart = ta?.selectionStart ?? text.length
         const selEnd = ta?.selectionEnd ?? text.length
         const name = pastedFileName(pasted, new Date())
+        // 正文也要在 await 之前留一份快照:下面用它跟「最新正文」比对,判断当时的选区还准不准。
+        const textAtPaste = text
         const att = await onPaste({ name, dataBase64: base64OfUtf8(pasted) })
-        if (att) {
-          setAttachments(prev => [...prev, att])
-          // 在粘贴处留一个 [文件名] 占位:附件本身是无序的一排 chip,只有正文里的占位符能说清
-          // 「这个报错」「那份配置」分别指哪一个。用 att.name 而不是 name —— 主进程可能因重名改过名。
-          const next = insertPastePlaceholder(text, selStart, selEnd, att.name || name)
-          setText(next.text)
+        // ★ 一律用函数式更新。`text` 是 await 之前捕获的闭包值,存盘那几百毫秒里用户还在打字 ——
+        // 直接 setText(insertPastePlaceholder(text, …)) 会把这期间敲进去的字连同光标一起回滚掉。
+        // 选区落点的取舍见 resolvePasteSelection 的注释(原位 vs 追加到末尾)。
+        // 注:updater 里写 pendingCursor 是刻意的 —— 只有在 updater 内部才拿得到最新正文,而这段
+        // 计算是幂等的(同一个 prev 永远算出同一个 caret),React 严格模式重复调用也无副作用。
+        setText(prev => {
+          const sel = resolvePasteSelection(prev, textAtPaste, selStart, selEnd)
+          const next = att
+            // 在粘贴处留一个 [文件名] 占位:附件本身是无序的一排 chip,只有正文里的占位符能说清
+            // 「这个报错」「那份配置」分别指哪一个。用 att.name 而不是 name —— 主进程可能因重名改过名。
+            ? insertPastePlaceholder(prev, sel.start, sel.end, att.name || name)
+            // 存盘失败(onPaste 返回 null):e.preventDefault() 已经把原生粘贴吃掉了,这里不补的话
+            // 用户粘的东西凭空消失、连个占位符都没有。转文件只是优化,失败就退回原生行为把原文插回去 ——
+            // 大文本留在输入框里会卡,但「卡」远好过「丢」。
+            : insertPastedText(prev, sel.start, sel.end, pasted)
           pendingCursor.current = next.caret
-        }
+          return next.text
+        })
+        if (att) setAttachments(prev => [...prev, att])
         return
       }
     }

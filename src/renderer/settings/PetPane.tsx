@@ -4,6 +4,7 @@ import { ImportModal, type ImportConfig } from '../components/ImportModal'
 import { PET_SAMPLE, parsePet, type ParsedPet } from '../components/importParsers'
 import { addCustomPet, removeCustomPet, resolveActiveCustomPet, PET_CUSTOM_MAX, type CustomPet } from '@shared/petCustom'
 import { growthRowCount } from '@shared/growthPet'
+import { clampDailyGoal, GROWTH_GOAL_MIN, GROWTH_GOAL_MAX } from '@shared/growthProgress'
 import { gridBackgroundPosition } from '@shared/petAtlas'
 import { PetGallery } from './PetGallery'
 import { petSrc } from '../pet/petSrc'
@@ -229,15 +230,27 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
   // 设置,中途的 1、10 还会把宠物进度瞬间顶满再跳回来,肉眼可见地抖。
   const [goalDraft, setGoalDraft] = useState(pet.growthDailyGoal?.toString() ?? '')
   useEffect(() => { setGoalDraft(pet.growthDailyGoal?.toString() ?? '') }, [pet.growthDailyGoal])
+  // 输入被 clamp 时的说明行。min/max 只是 HTML 属性,程序化赋值和真实浏览器都拦不住,所以真正的
+  // 收敛在 commitGoal 里做;而「改了值却不吭声」比不改更糟(用户以为存的是 1,实际是 50000),
+  // 所以 clamp 一旦改动了用户输入,就明说改成了什么。
+  const [goalNote, setGoalNote] = useState('')
   const commitGoal = () => {
     const t = goalDraft.trim()
     const n = Number(t)
     // 空 / 非数字 / 非正数 / 小数一律回落到「自动」—— 与 schema 的 z.number().int().positive().catch(undefined)
     // 逐条同构,免得设置里存一个之后会被静默丢弃的坏值。不四舍五入:3.5 是敲错了,不是「想要 4」。
-    const next = t && Number.isInteger(n) && n > 0 ? n : undefined
+    const raw = t && Number.isInteger(n) && n > 0 ? n : undefined
+    // ★ 再过一道 clamp:上下限原本只在 computeDailyGoal(自动推算)里生效,手填这条路一路裸奔到
+    // 计数器。输入 1 → goal=1 → progress 恒为 1 → 宠物永远停在最后一档,还查不出原因。
+    // 计数器那侧也 clamp(那是兜住手改 settings.json 的最后一道),这里 clamp 是为了当场给反馈:
+    // 存进设置的就是生效的那个数,输入框、设置、进度条三者一致,不留"看到的 ≠ 生效的"。
+    const next = clampDailyGoal(raw)
     if (next !== pet.growthDailyGoal) onChange({ growthDailyGoal: next })
-    // 被拒的输入不能继续留在框里骗人,归一化回真正保存的值。
+    // 被拒/被收敛的输入不能继续留在框里骗人,归一化回真正保存的值。
     setGoalDraft(next?.toString() ?? '')
+    setGoalNote(raw != null && next != null && raw !== next
+      ? `目标需在 ${GROWTH_GOAL_MIN.toLocaleString('en-US')} – ${GROWTH_GOAL_MAX.toLocaleString('en-US')} 之间,已按 ${next.toLocaleString('en-US')} 生效。`
+      : '')
   }
   // 装包结果 → customPets。Codex 包与成长包共用这一段(两边的 id 都按源文件夹稳定生成),
   // 只有「错误显示在哪一行」不同,所以把 setter 作为参数传进来。
@@ -554,7 +567,13 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
               // 所以这里给一个说明白的可访问名。
               aria-label="安装成长宠物包"
               title={atMax ? `已达上限 ${PET_CUSTOM_MAX} 个,但重装已装过的成长包升级不受限` : undefined}
-              onClick={async () => addImported(await window.forge.growthPetImport(), setGrowthErr)}
+              // 兜底 catch:主进程那侧已经把装包异常转成 {ok:false} 了,但 IPC 本身也会失败
+              // (主进程重启/通道未注册)。没有 catch 的话 async onClick 里的 rejection 无人接手,
+              // 红字行不出现 —— 用户看到的是「点了没反应」,这类"无声失败"最难自查。
+              onClick={async () => {
+                try { addImported(await window.forge.growthPetImport(), setGrowthErr) }
+                catch (e) { setGrowthErr(`安装失败:${e instanceof Error ? e.message : String(e)}`) }
+              }}
             >
               选择文件夹…
             </button>
@@ -562,7 +581,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
           <div className="set-row" style={{ marginBottom: '8px' }}>
             <div className="info">
               <div className="t">每日 token 目标</div>
-              <div className="d">成长进度 = 今日 token ÷ 这个目标。留空 = 按过去若干天用量的中位数自动推算。</div>
+              <div className="d">成长进度 = 今日 token ÷ 这个目标。留空 = 按过去 7 天用量的中位数自动推算。可填范围 {GROWTH_GOAL_MIN.toLocaleString('en-US')} – {GROWTH_GOAL_MAX.toLocaleString('en-US')}。</div>
             </div>
             <input
               className="sel"
@@ -570,14 +589,19 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
               aria-label="每日 token 目标"
               placeholder="留空 = 自动"
               value={goalDraft}
-              min={50000}
-              max={5000000}
+              // min/max 只是给浏览器的微调按钮/原生提示用的,真正的收敛在 commitGoal 里 —— 取值
+              // 直接引 shared 的常量,免得三处上下限各写各的。
+              min={GROWTH_GOAL_MIN}
+              max={GROWTH_GOAL_MAX}
               step={10000}
               onChange={e => setGoalDraft(e.target.value)}
               onBlur={commitGoal}
               onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitGoal() } }}
             />
           </div>
+          {goalNote && (
+            <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }} role="status">{goalNote}</div>
+          )}
           {growthErr && (
             <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{growthErr}</div>
           )}

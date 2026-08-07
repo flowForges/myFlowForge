@@ -33,7 +33,13 @@ const SETTINGS = {
 
 vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
-  dialog: {}
+  dialog: { showOpenDialog: vi.fn() }
+}))
+// 装成长宠物包的 handler 要证明它能接住写盘异常,所以这里让装包函数可控地抛。
+const { importGrowthPetPackMock } = vi.hoisted(() => ({ importGrowthPetPackMock: vi.fn() }))
+vi.mock('../pet/growthPetImport', () => ({
+  importGrowthPetPack: (...a: any[]) => importGrowthPetPackMock(...a),
+  growthPetId: (d: string) => `growth-${d}`,
 }))
 vi.mock('../run/runStore', () => ({
   RunStore: class {
@@ -733,5 +739,51 @@ describe('plugin catalog IPC', () => {
     const h = await getHandler(CH.pluginsInstallExample)
     const r = await h({}, 'forge-official-claude-usage')
     expect(r.ok).toBe(true)
+  })
+})
+
+// ★ 装包会写盘,I/O 异常是真实存在的(growthPetImport.test.ts 里就有一条 EISDIR 的用例)。
+// 异常穿过 ipcMain.handle 会在渲染层变成未处理 rejection —— 红字行不出现,用户看到的是
+// 「点了没反应」。这一组钉死:异常必须被转成与既有失败同形的 {ok:false,error}。
+describe('growth:pet-import handler 的 I/O 失败', () => {
+  const getHandler = async (ch: string) => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    registerIpc(() => {}, {})
+    const found = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)
+    if (!found) throw new Error(`No handler registered for channel: ${ch}`)
+    return found[1]
+  }
+
+  beforeEach(async () => {
+    const { dialog } = await import('electron') as any
+    dialog.showOpenDialog.mockReset().mockResolvedValue({ canceled: false, filePaths: ['/some/pack'] })
+    importGrowthPetPackMock.mockReset()
+  })
+
+  it('写盘抛异常时转成 {ok:false,error},而不是让 rejection 穿出去', async () => {
+    importGrowthPetPackMock.mockImplementation(() => {
+      throw Object.assign(new Error("EISDIR: illegal operation on a directory, open '/x/1-trunk.svg'"), { code: 'EISDIR' })
+    })
+    const h = await getHandler(CH.growthPetImport)
+    const r = await h({})
+    expect(r).toMatchObject({ ok: false })
+    expect(r.error).toContain('EISDIR')
+  })
+
+  it('盘满(ENOSPC)同样被接住', async () => {
+    importGrowthPetPackMock.mockImplementation(() => { throw new Error('ENOSPC: no space left on device') })
+    const h = await getHandler(CH.growthPetImport)
+    await expect(h({})).resolves.toMatchObject({ ok: false })
+  })
+
+  it('成功路径原样透传,取消仍然是 null(不能被 try/catch 改了语义)', async () => {
+    importGrowthPetPackMock.mockReturnValue({ ok: true, pet: { id: 'growth-x', name: '树' } })
+    const h = await getHandler(CH.growthPetImport)
+    expect(await h({})).toMatchObject({ ok: true, pet: { id: 'growth-x' } })
+
+    const { dialog } = await import('electron') as any
+    dialog.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    expect(await h({})).toBeNull()
   })
 })
