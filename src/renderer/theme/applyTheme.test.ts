@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { applyTheme, onAccentFor } from './applyTheme'
 import type { Appearance } from '@shared/types'
 
-const base: Appearance = { theme: 'dark', accent: 'blue', vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
+const base: Appearance = { theme: 'dark', accent: 'blue', autoWallpaperTheme: false, vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
 afterEach(() => { document.documentElement.removeAttribute('data-theme'); document.documentElement.removeAttribute('data-vibrancy'); document.documentElement.removeAttribute('data-glass'); document.documentElement.removeAttribute('data-density'); document.documentElement.removeAttribute('data-skin') })
 
 describe('applyTheme', () => {
@@ -93,6 +93,54 @@ describe('applyTheme', () => {
     expect(onAccentFor('#1e3a8a')).toBe('oklch(99% 0 0)') // deep blue → white text
     expect(onAccentFor('not-a-hex')).toBe('oklch(99% 0 0)')
   })
+  // ---- 跟随壁纸配色(自动皮肤):接管明暗 + 中性色 + 强调色,关掉不留残留 ----
+  const wpBase = { ...base, autoWallpaperTheme: true, bgImage: 'forge-bg://img/a.png', bgScope: 'app' as const }
+  const pal = { base: 'light' as const, hueBg: 90, chromaBg: 0.02, hueAccent: 200 }
+
+  it('壁纸配色接管明暗基调与整套中性色', () => {
+    applyTheme(wpBase, pal)
+    const r = document.documentElement
+    expect(r.getAttribute('data-theme')).toBe('light')          // 用户是 dark,壁纸判浅 → 壁纸说了算
+    expect(r.style.getPropertyValue('--bg')).toBe('oklch(98% 0.02 90)')
+    expect(r.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 200)')
+  })
+
+  it('壁纸配色盖过手选皮肤(否则皮肤的 motif 与配色打架)', () => {
+    applyTheme({ ...wpBase, activeSkin: 'forge' }, pal)
+    const r = document.documentElement
+    expect(r.hasAttribute('data-skin')).toBe(false)
+    expect(r.getAttribute('data-theme')).toBe('light')
+  })
+
+  it('开关关掉 → 内联配色全部清干净,回到用户原本的主题', () => {
+    applyTheme(wpBase, pal)
+    applyTheme({ ...wpBase, autoWallpaperTheme: false }, pal)
+    const r = document.documentElement
+    expect(r.getAttribute('data-theme')).toBe('dark')
+    expect(r.style.getPropertyValue('--bg')).toBe('')
+    expect(r.style.getPropertyValue('--accent')).toBe('')
+    expect(r.style.getPropertyValue('--glass-window')).toBe('')
+  })
+
+  it('还没取到调色板时静默走原路径(不闪、不报错)', () => {
+    applyTheme(wpBase, null)
+    const r = document.documentElement
+    expect(r.getAttribute('data-theme')).toBe('dark')
+    expect(r.style.getPropertyValue('--bg')).toBe('')
+  })
+
+  it('灰度壁纸:只接管中性色,自定义强调色仍然生效', () => {
+    applyTheme({ ...wpBase, accent: 'custom', accentCustom: '#ff0088' }, { base: 'dark', hueBg: 0, chromaBg: 0, hueAccent: null })
+    const r = document.documentElement
+    expect(r.style.getPropertyValue('--bg')).toBe('oklch(20% 0 0)')
+    expect(r.style.getPropertyValue('--accent')).toBe('#ff0088')
+  })
+
+  it('有点缀色时,壁纸强调色压过自定义强调色', () => {
+    applyTheme({ ...wpBase, accent: 'custom', accentCustom: '#ff0088' }, pal)
+    expect(document.documentElement.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 200)')
+  })
+
   it('resolves auto theme via prefers-color-scheme', () => {
     vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('dark'), media: q, addEventListener() {}, removeEventListener() {} }))
     applyTheme({ ...base, theme: 'auto' })

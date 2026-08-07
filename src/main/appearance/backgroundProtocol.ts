@@ -9,9 +9,12 @@ import { logError } from '../log/appLog'
 
 // MUST run before app 'ready' (privileged schemes can only be declared at that point). `secure` +
 // `standard` let the scheme load inside the http:// dev origin (and CSS url()) without mixed-content blocks.
+// `corsEnabled` (+ the ACAO header below) additionally lets the renderer read the decoded PIXELS back:
+// the wallpaper auto-theming samples the image into a canvas, and without CORS this scheme is cross-origin
+// to the renderer, so drawImage would taint the canvas and getImageData would throw SecurityError.
 export function registerBackgroundScheme(): void {
   protocol.registerSchemesAsPrivileged([
-    { scheme: BG_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+    { scheme: BG_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
   ])
 }
 
@@ -29,6 +32,14 @@ export function handleBackgroundProtocol(): void {
     const ext = abs.slice(abs.lastIndexOf('.') + 1).toLowerCase()
     const mime = BG_MIME_BY_EXT[ext] ?? 'application/octet-stream'
     // Content-addressed filename → bytes for a given URL never change, so cache aggressively.
-    return new Response(readFileSync(abs), { headers: { 'content-type': mime, 'cache-control': 'public, max-age=31536000, immutable' } })
+    return new Response(readFileSync(abs), {
+      headers: {
+        'content-type': mime,
+        'cache-control': 'public, max-age=31536000, immutable',
+        // 见上:让渲染进程能以 crossOrigin="anonymous" 加载并读回像素(壁纸取色)。图片本来就是本地文件,
+        // 且此 scheme 只服务 backgrounds 目录内(resolveBackgroundAbs 做了越界防护),放开无额外暴露面。
+        'access-control-allow-origin': '*',
+      },
+    })
   })
 }

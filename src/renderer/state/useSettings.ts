@@ -3,7 +3,7 @@ import type { Settings, Appearance, Pet, Terminal, CloseAction, AppIcon, Notific
 import { DEFAULT_BUILTIN_PET_ID, builtinPets } from '@shared/builtinPets'
 
 const DEFAULTS: Settings = {
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
+  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
   notifications: { enabled: true, confirm: true, input: true, done: true },
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },

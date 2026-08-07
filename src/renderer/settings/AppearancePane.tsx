@@ -59,6 +59,8 @@ const CHAT_LH_SUGGESTED = 1.7
 export function AppearancePane({ appearance, onChange, terminal, onTerminalChange }: AppearancePaneProps) {
   const opacity = appearance.windowOpacity ?? 1
   const skinActive = !!appearance.activeSkin   // 套了皮肤 → 基础主题(明暗/配色)被接管,下面那段变灰提示
+  const autoWp = !!appearance.autoWallpaperTheme // 跟随壁纸配色 → 明暗 + 中性色 + 强调色全被接管(比皮肤更强)
+  const themeTakenOver = skinActive || autoWp
   const customAccent = appearance.accentCustom ?? ''
   const blur = appearance.blurAmount ?? 0
   // 磨砂度改动是否真需要重启:应用内面板毛玻璃是实时 CSS,不需要;只有「桌面背景磨砂(原生 vibrancy)」需要,
@@ -75,11 +77,13 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
     <>
       {/* 主题皮肤画廊置于外观页最顶:一键成套预设(接管配色)。选「默认」时,下面的手动主题/强调色才是主控。 */}
       <SkinsPane appearance={appearance} onChange={onChange} />
-      <div className={`set-group${skinActive ? ' set-group-overridden' : ''}`}>
+      <div className={`set-group${themeTakenOver ? ' set-group-overridden' : ''}`}>
         <h4>基础主题</h4>
-        {skinActive
-          ? <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>明暗与配色<b style={{ color: 'var(--fg-2)' }}>已被主题皮肤接管</b> —— 点上方「恢复默认外观」清掉皮肤后,这里的手动挡才生效(自定义强调色仍可随时覆盖皮肤)。</p>
-          : <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>没套皮肤(或想在皮肤之外微调)时,这里是手动挡:明暗基调 + 强调色。</p>}
+        {autoWp
+          ? <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>明暗与配色<b style={{ color: 'var(--fg-2)' }}>已被「跟随壁纸配色」接管</b> —— 深浅基调按壁纸亮度自动判定。关掉上方那个开关后,这里的手动挡才生效。</p>
+          : skinActive
+            ? <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>明暗与配色<b style={{ color: 'var(--fg-2)' }}>已被主题皮肤接管</b> —— 点上方「恢复默认外观」清掉皮肤后,这里的手动挡才生效(自定义强调色仍可随时覆盖皮肤)。</p>
+            : <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>没套皮肤(或想在皮肤之外微调)时,这里是手动挡:明暗基调 + 强调色。</p>}
         <div className="theme-cards" id="themeCards">
           {THEMES.map(({ key, label }) => (
             <button
@@ -96,7 +100,8 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
       </div>
       <div className="set-group">
         <h4>强调色</h4>
-        <div className="accent-row">
+        {autoWp && <p className="skins-sub" style={{ margin: '-4px 0 12px' }}>强调色<b style={{ color: 'var(--fg-2)' }}>已被「跟随壁纸配色」接管</b> —— 取的是壁纸里最鲜艳的那抹点缀色。只有壁纸接近灰度时,才回落到这里选的颜色。</p>}
+        <div className="accent-row" style={autoWp ? { opacity: .4 } : undefined}>
           {ACCENTS.map(({ key, label, color }) => (
             <button key={key} className={`accent-sw${appearance.accent === key ? ' on' : ''}`} title={label} onClick={() => onChange({ accent: key })}>
               <i style={{ background: color }} />{ACK}

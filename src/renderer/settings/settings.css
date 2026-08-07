@@ -194,7 +194,23 @@
   background: var(--surface); color: var(--fg-2); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
 .skin-reset:hover:not(:disabled) { border-color: var(--border-2); }
 .skin-reset:disabled { opacity: .45; cursor: default; }
+/* 跟随壁纸配色(算出来的「自动皮肤」),放在画廊之上、和皮肤卡同级 */
+.wp-auto { border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface);
+  padding: 12px 14px; margin-bottom: 16px; transition: border-color .14s ease, box-shadow .14s ease; }
+.wp-auto.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.wp-auto-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.wp-auto-row .info .t { font-size: 13.5px; color: var(--fg); font-weight: 600; }
+.wp-auto-row .info .d { margin-top: 3px; font-size: 11.5px; color: var(--muted); line-height: 1.5; max-width: 460px; }
+.wp-auto-prev { display: flex; align-items: center; gap: 10px; margin-top: 11px; padding-top: 11px;
+  border-top: 1px solid var(--border); }
+.wp-auto-sw { display: flex; gap: 0; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); flex: 0 0 auto; }
+.wp-auto-sw i { width: 30px; height: 16px; }
+.wp-auto-meta { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
 .skins-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 14px; }
+/* 被壁纸配色接管时,成套皮肤画廊调淡且不可点(与「基础主题」段被皮肤接管的处理一致)。 */
+.skins-grid-off { opacity: .4; }
+.skins-grid-off .skin-card { cursor: default; }
+.skins-grid-off .skin-card:hover { transform: none; border-color: var(--border); box-shadow: none; }
 .skin-card { display: flex; flex-direction: column; gap: 0; text-align: left; padding: 0; overflow: hidden;
   border-radius: 12px; border: 1.5px solid var(--border); background: var(--surface); cursor: pointer;
   transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease; }

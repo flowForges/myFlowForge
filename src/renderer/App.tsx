@@ -22,6 +22,7 @@ import { toggleExpanded, ensureExpanded, loadExpanded, saveExpanded } from './st
 import { useUpdate } from './state/useUpdate'
 import { usePlugins } from './state/usePlugins'
 import { applyTheme } from './theme/applyTheme'
+import { useWallpaperPalette } from './theme/wallpaperSample'
 import { injectDownloadedFontFaces } from './theme/fontFaces'
 import { fmtRelTime } from '@shared/relTime'
 import { WorkspaceView } from './views/WorkspaceView'
@@ -332,19 +333,21 @@ export function App() {
   // transparency can't change → glitchy render. Freeze data-vibrancy to the launch value; the
   // setting only takes effect on the next restart (the toggle copy says so).
   const launchVibrancy = useRef<boolean | null>(null)
+  // 壁纸自动配色:开关打开时从当前壁纸取调色板(异步取样 + 缓存),交给 applyTheme 接管整套配色。
+  const wallpaperPalette = useWallpaperPalette(settings?.appearance)
   useEffect(() => {
     if (!settings) return
     if (launchVibrancy.current === null) launchVibrancy.current = settings.appearance.vibrancy
     // Window transparency is now done via setOpacity (main process), not the vibrancy/glass CSS path,
     // which is shelved — keep vibrancy frozen to its launch value (harmless; both default off).
     const appearance = { ...settings.appearance, vibrancy: launchVibrancy.current }
-    applyTheme(appearance)
+    applyTheme(appearance, wallpaperPalette)
     if (appearance.theme !== 'auto') return
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = () => applyTheme(appearance)
+    const onChange = () => applyTheme(appearance, wallpaperPalette)
     mq.addEventListener?.('change', onChange)
     return () => mq.removeEventListener?.('change', onChange)
-  }, [settings])
+  }, [settings, wallpaperPalette])
 
   useEffect(() => {
     const off = window.forge.onNavigateWorkspace(({ path }) => { setActiveId(path); setView('ws') })

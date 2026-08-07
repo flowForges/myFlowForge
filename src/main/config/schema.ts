@@ -91,6 +91,10 @@ export const AppearanceSchema = z.object({
   // skins.css 的 :root[data-skin=id] 块覆盖整套中性色+accent。null/缺省 = 不套皮肤,用用户原本的 theme/accent。
   // 纯叠加,不改写其它外观字段;清空即还原。可选,老配置无此字段。
   activeSkin: z.string().nullable().optional(),
+  // 壁纸自动配色:打开后从当前壁纸取「主调色相 + 点缀色相」,套进已验证的明度阶梯生成一整套临时皮肤
+  // (明暗也按壁纸亮度定),接管基础主题/强调色/手选皮肤。配色本身不落盘 —— 换壁纸即重算,关掉即还原。
+  // 取色与生成规则见 src/renderer/theme/wallpaperPalette.ts。
+  autoWallpaperTheme: z.boolean().default(false),
   vibrancy: z.boolean(),
   glass: z.boolean().default(false),
   // Whole-window transparency via BrowserWindow.setOpacity — reliable + live (no restart), unlike the
@@ -372,7 +376,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
+  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
   notifications: defaultNotifications(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },

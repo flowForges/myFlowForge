@@ -19,12 +19,14 @@ import { deriveSimpleKind } from './deriveSimpleKind'
 import { petTgt } from './petTarget'
 import type { PetTarget } from './petTarget'
 import { applyTheme } from '../theme/applyTheme'
+import { wallpaperSourceFor } from '../theme/wallpaperPalette'
+import { loadWallpaperPalette, peekWallpaperPalette } from '../theme/wallpaperSample'
 import type { Appearance } from '@shared/types'
 
 // pet.html hard-codes a data-theme. Without syncing the app's real appearance, the pet popup could
 // diverge from the main window's theme. Mirror the main window's theme onto the pet document.
 // Defaults cover a settings object that predates the appearance block (light = new-user default).
-const DEFAULT_APPEARANCE: Appearance = { theme: 'light', accent: 'blue', vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
+const DEFAULT_APPEARANCE: Appearance = { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
 
 const DEFAULT_NOTIFY: Pet['notify'] = { confirm: true, input: true, done: false }
 const DEFAULT_STATES: Pet['states'] = {
@@ -119,7 +121,12 @@ export function PetApp() {
   }, [])
 
   const apply = (s: any) => {
-    applyTheme({ ...DEFAULT_APPEARANCE, ...(s?.appearance ?? {}) })
+    const ap = { ...DEFAULT_APPEARANCE, ...(s?.appearance ?? {}) }
+    // 壁纸自动配色:先用缓存(与主窗同源,通常已命中)同步上色,未命中时异步取样完再补一次。
+    applyTheme(ap, peekWallpaperPalette(ap.autoWallpaperTheme ? wallpaperSourceFor(ap) : ''))
+    if (ap.autoWallpaperTheme) {
+      loadWallpaperPalette(wallpaperSourceFor(ap)).then(p => { if (p) applyTheme(ap, p) }).catch(() => {})
+    }
     setSkin(s?.pet?.skin ?? 'sprite'); setCorner(s?.pet?.corner ?? 'right')
     setIdleAnim(s?.pet?.idleAnimation ?? true)
     setInteractionMode(s?.pet?.interactionMode ?? 'simple')
