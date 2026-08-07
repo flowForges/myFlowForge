@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, rmSync, lstatSync } from 'node:fs'
 import { join, basename, resolve, relative, isAbsolute } from 'node:path'
 import { parseGrowthManifest } from '@shared/growthPet'
 import type { CustomPet } from '@shared/petCustom'
@@ -22,14 +22,23 @@ export function growthPetId(srcDir: string): string {
 
 /**
  * 重装同一个文件夹时 id 不变,但作者可能改了文件名(0-seed.png → 0-seed.svg)或减少了阶段数,
- * 旧文件会永远留在 pet-images/<id>/ 里白占盘。写新图之前把这个目录里不再被引用的旧文件删掉。
+ * 旧文件会永远留在 pet-images/<id>/ 里白占盘。新图写完之后把这个目录里不再被引用的旧文件删掉。
+ *
+ * 顺序刻意放在写入之后:写到一半 I/O 挂了(ENOSPC/EPERM)时,旧图还在原地,设置里指向的
+ * 那些 sheet 依然能显示;放在写入之前的话,同样的失败会留下「旧的删了、新的没写完、设置仍指向
+ * 旧路径」的哑巴宠物。成功路径两种顺序等价 —— 本次要写的文件名都在 keep 里,写完再删名单外的,
+ * 结果一样。
  *
  * 这是破坏性操作,守卫按「宁可不删」写:
- *  - destDir 必须真的在 baseDir 之内且不等于 baseDir(用 path.relative 复查,不看字符串前缀),
- *    否则一步不删 —— 绝不会碰到别的宠物目录,更不会碰到 pet-images 之外;
- *  - 只删 destDir 这一层的普通文件,不递归、不删目录、不碰符号链接(装包只写平铺的普通文件,
- *    所以任何目录/链接都不是我们放的,不归我们清);
- *  - keep 是本次要写的文件名集合,命中的一律留着。
+ *  - destDir 必须真的在 baseDir 之内且是它的直接子目录(用 path.relative 复查,不看字符串前缀),
+ *    否则一步不删;
+ *  - destAbs 自身必须是真目录,不能是符号链接 —— path.relative 是纯词法比较、不看 realpath,
+ *    而 readdir/rm 会跟着链接走。pet-images/ 下放一个名字正好等于目标 id、指向别处的软链,
+ *    没有这道 lstat 就能把链接对面的文件删掉。是链接就早退,不跟随;
+ *  - 只删 destDir 这一层的普通文件,不递归、不删目录、也不删目录内部的符号链接条目
+ *    (Dirent.isFile() 对 symlink 为 false);装包只写平铺的普通文件,所以任何目录/链接
+ *    都不是我们放的,不归我们清;
+ *  - keep 是本次写入的文件名集合,命中的一律留着。
  */
 function pruneStale(baseDir: string, destDir: string, keep: ReadonlySet<string>): void {
   const baseAbs = resolve(baseDir)
@@ -39,6 +48,8 @@ function pruneStale(baseDir: string, destDir: string, keep: ReadonlySet<string>)
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) return
   // 而且只能是 baseDir 的直接子目录 —— 多一层都说明 id 里混进了分隔符,不该发生,发生了就别删。
   if (rel.split(/[\\/]/).length !== 1) return
+  // 词法守卫拦不住「destDir 自身是软链」:那种情况下上面几条全过,readdir/rm 却会落到链接对面。
+  try { if (!lstatSync(destAbs).isDirectory()) return } catch { return }
   let entries
   try { entries = readdirSync(destAbs, { withFileTypes: true }) } catch { return }
   for (const e of entries) {
@@ -88,8 +99,9 @@ export function importGrowthPetPack(
   }
 
   mkdirSync(destDir, { recursive: true })
-  pruneStale(baseDir, destDir, used)
   for (const j of jobs) writeFileSync(j.to, readFileSync(j.from))
+  // 写完再清。中途 I/O 挂掉时旧图还在,宠物不至于哑掉(详见 pruneStale 的注释)。
+  pruneStale(baseDir, destDir, used)
 
   return {
     ok: true,

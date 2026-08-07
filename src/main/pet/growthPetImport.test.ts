@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync, lstatSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { importGrowthPetPack, growthPetId } from './growthPetImport'
+
+// Windows 上建符号链接可能要额外权限。建不出来就跳过那条用例,别把整个套件拖红。
+const canSymlink = (() => {
+  const probe = mkdtempSync(join(tmpdir(), 'gp-symprobe-'))
+  try { symlinkSync(probe, join(probe, 'link'), 'dir'); return true } catch { return false }
+  finally { rmSync(probe, { recursive: true, force: true }) }
+})()
 
 // importGrowthPetPack 的 path.relative 守卫是纯纵深防御:只要 shared 的 isSafeRelPath 还在正常
 // 工作,任何越界字符串都在它那里就被拦掉了,函数早退,守卫永远打不到。所以想验它,唯一办法是
@@ -192,7 +199,7 @@ describe('importGrowthPetPack 重装时清理旧阶段图', () => {
     expect(existsSync(join(dest, id, '1-trunk.png'))).toBe(false)
   })
 
-  it('本次要写的文件不会被误删(先清后写,清的是名单外的)', () => {
+  it('本次写入的文件不会被误删(清的只是名单外的)', () => {
     const id = growthPetId(src)
     expect(importGrowthPetPack(src, dest).ok).toBe(true)
     // 名字完全没变的重装:两张图都还得在,内容还得是新的。
@@ -244,5 +251,53 @@ describe('importGrowthPetPack 重装时清理旧阶段图', () => {
     rewriteAsV2()
     expect(importGrowthPetPack(src, dest).ok).toBe(true)
     expect(readFileSync(join(dest, id, 'keepme', 'x.png'), 'utf8')).toBe('nested')
+  })
+
+  // ★ 审查实测出来的缺口:path.relative 是纯词法比较、不看 realpath,而 readdir/rm 会跟着软链走。
+  // 在 pet-images/ 下放一个名字正好等于目标 id、指向别处的软链,没有 lstat 那道守卫就能把链接
+  // 对面的文件删掉 —— 那已经是 pet-images 之外了。
+  it.skipIf(!canSymlink)('pet-images/<id> 自身是符号链接时一步不删(不跟随链接)', () => {
+    const id = growthPetId(src)
+    const victim = mkdtempSync(join(tmpdir(), 'gp-victim-'))
+    try {
+      writeFileSync(join(victim, 'precious.txt'), 'precious')
+      // dest/<id> 不是真目录,而是一条指向 victim 的软链。
+      symlinkSync(victim, join(dest, id), 'dir')
+
+      importGrowthPetPack(src, dest)
+
+      // 链接对面的文件必须原封不动 —— 它压根不在宠物图库里。
+      expect(readFileSync(join(victim, 'precious.txt'), 'utf8')).toBe('precious')
+      // 而且软链本身也没被当成"旧文件"删掉(它在 destAbs 的上一层,本来就不该被扫到)。
+      expect(lstatSync(join(dest, id)).isSymbolicLink()).toBe(true)
+    } finally {
+      rmSync(join(dest, id), { force: true })
+      rmSync(victim, { recursive: true, force: true })
+    }
+  })
+
+  // ★ 顺序:清理必须在写入之后。写到一半 I/O 挂了(这里用「目标文件名被一个同名目录占住」
+  // 真实地制造 EISDIR),旧图必须还在 —— 否则会留下「旧的删了、新的没写完、设置仍指向旧路径」
+  // 的哑巴宠物。
+  it('写入中途失败时不删任何旧图(清理排在写入之后)', () => {
+    const id = growthPetId(src)
+    expect(importGrowthPetPack(src, dest).ok).toBe(true)
+
+    // 第二版换了两个文件名 → 旧的 0-seed.png / 1-trunk.png 都会落到清理名单里。
+    rmSync(join(src, '0-seed.png'))
+    rmSync(join(src, '1-trunk.png'))
+    writeFileSync(join(src, '0-seed.svg'), '<svg/>')
+    writeFileSync(join(src, '1-trunk.svg'), '<svg/>')
+    writeFileSync(join(src, 'pet.json'), JSON.stringify(manifest({
+      stages: [{ at: 0, sheet: '0-seed.svg' }, { at: 0.5, sheet: '1-trunk.svg' }],
+    })))
+    // 让第二张图写不进去:目标路径被一个同名目录占着 → writeFileSync 抛 EISDIR。
+    mkdirSync(join(dest, id, '1-trunk.svg'), { recursive: true })
+
+    expect(() => importGrowthPetPack(src, dest)).toThrow()
+
+    // 两张旧图一个都没少,宠物还能照常显示。
+    expect(readFileSync(join(dest, id, '0-seed.png'), 'utf8')).toBe('seedbytes')
+    expect(readFileSync(join(dest, id, '1-trunk.png'), 'utf8')).toBe('trunkbytes')
   })
 })
