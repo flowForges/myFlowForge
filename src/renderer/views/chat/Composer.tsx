@@ -4,7 +4,7 @@ import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import { applyListContinuation } from './listContinuation'
-import { shouldOffloadPaste, pastedFileName, base64OfUtf8 } from './largePaste'
+import { shouldOffloadPaste, pastedFileName, base64OfUtf8, insertPastePlaceholder } from './largePaste'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -303,8 +303,20 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
       const pasted = cd.getData('text')
       if (pasted && shouldOffloadPaste(pasted)) {
         e.preventDefault()
-        const att = await onPaste({ name: pastedFileName(pasted, new Date()), dataBase64: base64OfUtf8(pasted) })
-        if (att) setAttachments(prev => [...prev, att])
+        // 选区要在 await 之前读:onPaste 是异步的,等它回来时 textarea 的选区早就不是粘贴那一刻了。
+        const ta = taRef.current
+        const selStart = ta?.selectionStart ?? text.length
+        const selEnd = ta?.selectionEnd ?? text.length
+        const name = pastedFileName(pasted, new Date())
+        const att = await onPaste({ name, dataBase64: base64OfUtf8(pasted) })
+        if (att) {
+          setAttachments(prev => [...prev, att])
+          // 在粘贴处留一个 [文件名] 占位:附件本身是无序的一排 chip,只有正文里的占位符能说清
+          // 「这个报错」「那份配置」分别指哪一个。用 att.name 而不是 name —— 主进程可能因重名改过名。
+          const next = insertPastePlaceholder(text, selStart, selEnd, att.name || name)
+          setText(next.text)
+          pendingCursor.current = next.caret
+        }
         return
       }
     }

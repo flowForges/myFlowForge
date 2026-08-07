@@ -4,12 +4,34 @@
 // file (reusing the existing savePaste attachment pipeline) and show it as an attachment chip — the
 // textarea stays tiny, the chip is one-click removable, and the agent reads the file via the 附件 path.
 
-// Only offload genuinely large pastes — a few thousand chars type fine and turning them into files
-// would be surprising. ~10k chars is where the controlled-textarea reflow starts to bite.
-export const PASTE_OFFLOAD_THRESHOLD = 10_000
+// 阈值。原本是 10k(「reflow 开始卡」的那条线),但真机上一大坨粘进来不转文件、直接堆在输入框里的
+// 观感很差 —— 卡不卡只是其中一个理由,「输入框还看得清吗」才是日常真正在意的。2000 字 ≈ 一个中等函数 /
+// 一段 stack trace / 半页 markdown:这以下随手粘进来还能看能改,这以上就该收成附件。
+export const PASTE_OFFLOAD_THRESHOLD = 2_000
 
 export function shouldOffloadPaste(text: string): boolean {
   return text.length >= PASTE_OFFLOAD_THRESHOLD
+}
+
+// 转成附件后,在粘贴处留下的占位引用。
+// 为什么必须留:不留的话,连粘三坨就得到三个孤立附件,而正文里没有任何位置标记 —— agent 看到的是
+// 「一句话 + 三个文件」,分不清「这个报错」「那份配置」各指哪一个。占位符把位置钉回正文里。
+export function pastePlaceholder(name: string): string {
+  return `[${name}]`
+}
+
+// 把占位符插进选区处(选中再粘 = 替换掉选中的那段,与原生粘贴行为一致)。
+// 两侧按需补一个空格:紧贴着前后文字会读成一个词,而已经有空白就别再加。
+// 返回新文本与插入后的光标位置(受控 textarea 重渲染会把光标弹到末尾,调用方要自己还原)。
+export function insertPastePlaceholder(
+  text: string, selStart: number, selEnd: number, name: string,
+): { text: string; caret: number } {
+  const before = text.slice(0, selStart)
+  const after = text.slice(selEnd)
+  const lead = before && !/\s$/.test(before) ? ' ' : ''
+  const trail = after && !/^\s/.test(after) ? ' ' : ''
+  const chunk = lead + pastePlaceholder(name) + trail
+  return { text: before + chunk + after, caret: selStart + chunk.length }
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
