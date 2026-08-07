@@ -22,7 +22,7 @@ afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 describe('worktree manager', () => {
   it('derives a workspace-scoped branch name (feat/ prefix, ascii-slugged, dated)', () => {
-    expect(deriveBranch('wsA', new Date(2026, 7, 7))).toBe('feat/wsa-0807')
+    expect(deriveBranch('wsA', new Date(2026, 7, 7))).toBe('feat/wsa-260807')
   })
   it('clones a bare mirror once and adds an isolated worktree on its own branch', async () => {
     const mirror = join(root, 'mirror', 'proj.git')

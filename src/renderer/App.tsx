@@ -18,6 +18,7 @@ import { useResizable } from './state/useResizable'
 import { usePanelDock } from './state/panelDock'
 import { useSessions } from './state/useSessions'
 import { useSessionsMulti } from './state/useSessionsMulti'
+import { mergeActiveSessions } from './state/sessionsMap'
 import { toggleExpanded, ensureExpanded, loadExpanded, saveExpanded } from './state/expandedWs'
 import { useUpdate } from './state/useUpdate'
 import { usePlugins } from './state/usePlugins'
@@ -286,8 +287,9 @@ export function App() {
   const [expandedWs, setExpandedWs] = useState<Set<string>>(() => new Set(loadExpanded()))
   const expandedPaths = useMemo(() => Array.from(expandedWs), [expandedWs])
   const sessionsByWs = useSessionsMulti(expandedPaths)
-  // Merge active workspace's live sessions (from useSessions) so active-ws session ops remain instant
-  const sessionsMap = { ...sessionsByWs, ...(activeWsId ? { [activeWsId]: sessions.sessions } : {}) }
+  // Merge active workspace's live sessions (from useSessions) so active-ws session ops remain instant.
+  // 空的实时列表不覆盖缓存 —— 切换工作区那一帧会话行不能整段消失,见 sessionsMap.ts。
+  const sessionsMap = mergeActiveSessions(sessionsByWs, activeWsId, sessions.sessions)
   // Session ids with something actually executing right now: an in-flight chat turn (per-workspace, from
   // the chat queue) plus the live orchestrator run (which carries its own sessionId). Drives the sidebar
   // per-session dot so multiple concurrently-running sessions each light up, not just the workspace pill.

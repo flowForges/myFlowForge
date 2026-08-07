@@ -28,11 +28,12 @@ export function branchSlug(name: string): string {
     .replace(/^[-._]+|[-._]+$/g, '')
 }
 
-// 分支名的日期后缀,MMDD(本地日期)。加它是为了让「同一个工作区名 / 同一个项目的不同需求」不再撞成同一个
+// 分支名的日期后缀,YYMMDD(本地日期)。加它是为了让「同一个工作区名 / 同一个项目的不同需求」不再撞成同一个
 // 分支 —— 中文别名会被整段丢掉,`为 go-blog 开放注册` 和 `给 go-blog 加登录` 本来都退化成 feat/go-blog。
-// 顺带在分支列表里能一眼看出这活儿是哪天开的。
+// 顺带在分支列表里能一眼看出这活儿是哪天开的;带年份是为了跨年不复用同一个名字。
 export function dateSuffix(d: Date = new Date()): string {
-  return `${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getFullYear() % 100)}${p(d.getMonth() + 1)}${p(d.getDate())}`
 }
 
 // The default work branch for a workspace alias: `feat/<slug>-<MMDD>`, with a stable `ws-<hash>` fallback
