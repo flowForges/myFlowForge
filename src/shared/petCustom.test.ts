@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { resolveActiveCustomPet, addCustomPet, removeCustomPet, PET_CUSTOM_MAX, type CustomPet } from './petCustom'
+import type { GrowthPack } from './growthPet'
 
 const emojiPet = (id: string, emoji = '🐱'): CustomPet => ({ id, name: `p${id}`, emoji, color: 'red' })
 
@@ -74,5 +75,29 @@ describe('removeCustomPet', () => {
   it('removes by id and leaves the rest in order', () => {
     const list = [emojiPet('a'), emojiPet('b'), emojiPet('c')]
     expect(removeCustomPet(list, 'b').map(p => p.id)).toEqual(['a', 'c'])
+  })
+})
+
+describe('resolveActiveCustomPet — 成长宠物', () => {
+  const growth: GrowthPack = {
+    atlas: { cols: 8, cellW: 192, cellH: 208 },
+    actions: { idle: { row: 0, durations: [200, 200] } },
+    stages: [{ at: 0, sheet: 'growth-tree-abc/0-seed.png' }],
+  }
+
+  it('把 growth 透传给渲染层', () => {
+    const r = resolveActiveCustomPet({
+      customPets: [{ id: 'growth-tree-abc', name: '成长树', growth }],
+      activeCustomPetId: 'growth-tree-abc',
+    })
+    expect(r.growth).toEqual(growth)
+  })
+
+  it('普通宠物的 growth 为 undefined', () => {
+    const r = resolveActiveCustomPet({
+      customPets: [{ id: 'p1', name: '猫娘', images: { idle: 'p1/idle.webp' } }],
+      activeCustomPetId: 'p1',
+    })
+    expect(r.growth).toBeUndefined()
   })
 })

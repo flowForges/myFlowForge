@@ -3,6 +3,7 @@ import type { Plugin as SharedPlugin, LibraryHook as SharedLibraryHook } from '.
 import { PET_SCALE_MIN, PET_SCALE_MAX } from '../../shared/petGeometry'
 import { DEFAULT_BUILTIN_PET_ID, builtinPets } from '../../shared/builtinPets'
 import { PET_CUSTOM_MAX } from '../../shared/petCustom'
+import { GROWTH_ACTIONS } from '@shared/growthPet'
 
 export const STAGE_KEYS = ['requirement', 'design', 'develop', 'test', 'review'] as const
 export type StageKey = (typeof STAGE_KEYS)[number]
@@ -158,6 +159,24 @@ const defaultStates = (): Record<PetState, PetStateConfig> => ({
   input: { anim: 'tilt', accent: 'accent' },
   done: { anim: 'pulse-ok', accent: 'ok' }
 })
+const GrowthActionCfgSchema = z.object({
+  row: z.number().int().min(0),
+  durations: z.array(z.number().positive()).min(1),
+})
+const GrowthPackSchema = z.object({
+  atlas: z.object({
+    cols: z.number().int().positive(),
+    cellW: z.number().int().positive(),
+    cellH: z.number().int().positive(),
+  }),
+  actions: z.partialRecord(z.enum(GROWTH_ACTIONS), GrowthActionCfgSchema),
+  stages: z.array(z.object({
+    at: z.number().min(0).max(1),
+    name: z.string().optional(),
+    sheet: z.string(),
+  })).min(1),
+})
+
 // A single user-defined custom pet — either emoji-based (emoji+color) or image-pack-based (per-state
 // images), or both. `id` is a stable client-generated key used to select/delete it.
 export const CustomPetSchema = z.object({
@@ -167,6 +186,7 @@ export const CustomPetSchema = z.object({
   color: z.string().optional(),
   images: z.partialRecord(z.enum(PET_STATES), z.string()).optional(),
   atlas: z.object({ path: z.string(), version: z.number() }).optional(),
+  growth: GrowthPackSchema.optional(),
 })
 export type CustomPetCfg = z.infer<typeof CustomPetSchema>
 
@@ -200,6 +220,9 @@ export const PetSchema = z.object({
   // Sprite size multiplier (drag the hover resize handle). Out-of-range/junk values fall back to 1
   // via .catch so a hand-edited settings.json never fails the WHOLE settings parse.
   scale: z.number().min(PET_SCALE_MIN).max(PET_SCALE_MAX).catch(1).default(1),
+  // 成长宠物的「每日 token 目标」= 进度的分母。留空 = 自动按过去若干天的用量中位数推算。
+  // .catch 让手改坏的 settings.json 退回自动,而不是整份设置解析失败。
+  growthDailyGoal: z.number().int().positive().optional().catch(undefined),
   notify: z.object({ confirm: z.boolean(), input: z.boolean(), done: z.boolean() }),
   // Pet interaction style. 'simple' (default): a light collapsible bubble showing running agents /
   // confirm-input / done — click the pet when idle to focus the app. 'full': the legacy popover with the

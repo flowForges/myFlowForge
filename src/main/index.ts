@@ -578,14 +578,12 @@ app.whenReady().then(() => {
   // 一旦把扫盘和 setDailyTokenCounter 拆到两个 tick,这两条就同时破了(中间 append 的既不进
   // 基线也没人累加,或者反过来两头都算)。别拆。
   setImmediate(() => {
+    const settings = readSettings()
     const day = localDayKey(new Date())
     setDailyTokenCounter(createDailyTokenCounter({
       baseline: scanTokenBaseline(day),
       day,
-      // TODO(Task 5): 换成 settings.pet?.growthDailyGoal —— 该字段在下个任务才进 schema。
-      // 届时还要把 `const settings = readSettings()` 一并加回本块开头(现在没有这一行,
-      // 因为字段还不存在,留着就是个未使用变量)。
-      goalOverride: undefined,
+      goalOverride: settings.pet?.growthDailyGoal,
       onChange: (s) => registry.broadcast(CH.growthSignal, s),
     }))
   })
