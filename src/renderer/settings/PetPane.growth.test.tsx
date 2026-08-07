@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import { PetPane } from './PetPane'
 import type { Pet } from '@shared/types'
+import { PET_CUSTOM_MAX } from '@shared/petCustom'
 
 const BASE_PET: Pet = {
   enabled: true, skin: 'sprite', customPets: [], corner: 'right', pos: { bottom: 24 }, followCursor: false, idleAnimation: true, scale: 1,
@@ -113,6 +114,112 @@ describe('PetPane 成长宠物包安装', () => {
   it('没有成长宠物时不显示「成长宠物」分组标题', () => {
     render(<PetPane pet={{ ...BASE_PET, customPets: [{ id: 'pet-1', name: '豆豆', emoji: '🐱' }] }} onChange={vi.fn()} />)
     expect(screen.queryByText('成长宠物')).toBeNull()
+  })
+})
+
+// Minor #2:到上限时安装按钮仍可点 —— 重装已装过的包是升级,不占新名额。
+describe('PetPane 成长宠物包与宠物数量上限', () => {
+  // 填满名额;caller 传进来的那几只放在最前面,便于制造「已装过 / 没装过」两种局面。
+  const fill = (...head: { id: string; name: string }[]): Pet => ({
+    ...BASE_PET, skin: 'custom',
+    customPets: [
+      ...head,
+      ...Array.from({ length: PET_CUSTOM_MAX - head.length }, (_, i) => ({ id: `pet-fill-${i}`, name: `填充 ${i}` })),
+    ],
+  })
+  const clickInstall = async () => {
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('安装成长宠物包'))
+      await Promise.resolve()
+    })
+  }
+
+  it('已达上限时按钮仍然可点(否则连升级都堵死了)', () => {
+    render(<PetPane pet={fill()} onChange={vi.fn()} />)
+    const btn = screen.getByLabelText('安装成长宠物包') as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+  })
+
+  it('已达上限时重装已装过的成长包 = 升级,照样生效', async () => {
+    const onChange = vi.fn()
+    const pet = fill({ id: 'growth-tree-abc', name: '旧名字' })
+    expect(pet.customPets).toHaveLength(PET_CUSTOM_MAX) // 名额确实是满的
+    render(<PetPane pet={pet} onChange={onChange} />)
+
+    await clickInstall()
+
+    expect(onChange).toHaveBeenCalled()
+    const arg = onChange.mock.calls[0]![0]
+    expect(arg.customPets).toHaveLength(PET_CUSTOM_MAX) // 没多出一只
+    expect(arg.customPets.find((p: { id: string }) => p.id === 'growth-tree-abc').name).toBe('成长树')
+    expect(arg.activeCustomPetId).toBe('growth-tree-abc')
+    // 升级不是「新增」,不该冒出任何上限报错。
+    expect(screen.queryByText(/已达上限/)).toBeNull()
+  })
+
+  it('已达上限时装一个没装过的新包会被拒,并给出说人话的提示', async () => {
+    const onChange = vi.fn()
+    render(<PetPane pet={fill()} onChange={onChange} />)
+
+    await clickInstall()
+
+    expect(onChange).not.toHaveBeenCalled()
+    const msg = screen.getByText(/已达上限/)
+    expect(msg.textContent).toContain('成长树')   // 到底是哪个包被拒了
+    expect(msg.textContent).toContain('升级')     // 并说清「重装升级不受限」
+  })
+})
+
+// Minor #1:画廊 chip 的缩略图。成长宠物没有 images/emoji,但有第一阶段的 atlas。
+describe('PetPane 成长宠物缩略图', () => {
+  const thumbOf = (id: string) => document.querySelector(`[data-growth-thumb="${id}"]`) as HTMLElement | null
+
+  it('用第一阶段的 atlas 当缩略图,而不是落到 🐾 占位', () => {
+    render(<PetPane pet={{ ...BASE_PET, skin: 'custom', customPets: [GROWTH_PET] }} onChange={vi.fn()} />)
+    const el = thumbOf(GROWTH_PET.id)
+    expect(el).not.toBeNull()
+    expect(el!.style.backgroundImage).toContain('growth-tree-abc/0-seed.png')
+    // chip 里不该再有那个占位表情。
+    expect(screen.queryByText('🐾')).toBeNull()
+  })
+
+  it('只露出 idle 行第 0 帧,不是整张密密麻麻的格子', () => {
+    render(<PetPane pet={{ ...BASE_PET, skin: 'custom', customPets: [GROWTH_PET] }} onChange={vi.fn()} />)
+    const el = thumbOf(GROWTH_PET.id)!
+    // cols=4、动作只有 idle(row 0) → 1 行:放大到 400% × 100%,再定位到左上第一格。
+    expect(el.style.backgroundSize).toBe('400% 100%')
+    expect(el.style.backgroundPosition).toBe('0% 0%')
+    expect(el.style.backgroundRepeat).toBe('no-repeat')
+  })
+
+  it('多行 atlas 时按最大 row 推出行数,并定位到 idle 那一行', () => {
+    const multi = {
+      ...GROWTH_PET,
+      id: 'growth-multi',
+      growth: {
+        ...GROWTH_PET.growth,
+        // idle 故意不在第 0 行:缩略图必须跟着 idle.row 走,不能写死 0。
+        actions: { idle: { row: 1, durations: [200] }, working: { row: 0, durations: [200] }, alert: { row: 3, durations: [200] } },
+      },
+    }
+    render(<PetPane pet={{ ...BASE_PET, skin: 'custom', customPets: [multi] }} onChange={vi.fn()} />)
+    const el = thumbOf('growth-multi')!
+    expect(el.style.backgroundSize).toBe('400% 400%')          // max row 3 → 4 行
+    expect(el.style.backgroundPosition).toBe(`0% ${(1 / 3) * 100}%`) // 4 行里的第 2 行 = 1/3
+  })
+
+  it('成长包坏了(stages 空)时安静回落到 🐾,不渲染半截背景', () => {
+    const broken = { ...GROWTH_PET, id: 'growth-broken', growth: { ...GROWTH_PET.growth, stages: [] } }
+    render(<PetPane pet={{ ...BASE_PET, skin: 'custom', customPets: [broken] }} onChange={vi.fn()} />)
+    expect(thumbOf('growth-broken')).toBeNull()
+    expect(screen.getByText('🐾')).not.toBeNull()
+  })
+
+  it('普通宠物(有 images)照旧走 <img>,不受影响', () => {
+    const normal = { id: 'pet-1', name: '豆豆', images: { idle: 'pet-1/idle.png' } }
+    render(<PetPane pet={{ ...BASE_PET, skin: 'custom', customPets: [normal] }} onChange={vi.fn()} />)
+    expect(thumbOf('pet-1')).toBeNull()
+    expect(document.querySelector('.pet-chip img')).not.toBeNull()
   })
 })
 

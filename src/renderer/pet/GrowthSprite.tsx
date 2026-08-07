@@ -1,5 +1,6 @@
 import type { ReactElement, CSSProperties } from 'react'
 import type { GrowthPack } from '@shared/growthPet'
+import { growthRowCount } from '@shared/growthPet'
 import type { PetState } from '@shared/types'
 import { pickGrowthSprite } from '@shared/growthProgress'
 import { gridBackgroundPosition } from '@shared/petAtlas'
@@ -18,11 +19,8 @@ interface Props {
 // (第 9/10 行),成长包没有这套;合成一个组件只会多出永远为假的分支,还把 codex 宠物暴露在回归风险里。
 // 共享的只有 gridBackgroundPosition 这点纯网格数学和 useAtlasAnimation 的逐帧驱动。
 export function GrowthSprite({ growth, progress, state, reducedMotion }: Props): ReactElement {
-  // 网格行数不在 manifest 里声明 —— 由动作里最大的 row 推出,免得作者写的 rows 和实际对不上。
-  // actions 是 Partial 的,理论上可能空(校验器要求至少 idle,但这里不依赖它):空数组时 Math.max
-  // 会返回 -Infinity,兜底成 1 行,画面退化成整张图的第一行而不是 NaN。
-  const rowsRaw = Math.max(-1, ...Object.values(growth.actions).map((a) => a.row)) + 1
-  const rows = Math.max(1, rowsRaw)
+  // 网格行数由动作里最大的 row 推出(见 growthRowCount);设置页的缩略图共用同一份计算。
+  const rows = growthRowCount(growth.actions)
   const pick = pickGrowthSprite({ id: '', name: '', ...growth }, progress, state)
   const frame = useAtlasAnimation(pick.action, { reducedMotion, durations: pick.durations })
   const pos = gridBackgroundPosition(Math.min(frame, growth.atlas.cols - 1), pick.row, growth.atlas.cols, rows)

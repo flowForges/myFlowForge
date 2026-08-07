@@ -164,3 +164,85 @@ describe('importGrowthPetPack', () => {
     expect(existsSync(join(dest, growthPetId(src)))).toBe(false)
   })
 })
+
+// 重装 = 同一个 id、同一个目录。作者改了文件名或减了阶段,旧图就再也没人引用了,得清掉。
+describe('importGrowthPetPack 重装时清理旧阶段图', () => {
+  // 把源包换成「改了文件名 / 少了一个阶段」的第二版,阶段图也一并换掉。
+  function rewriteAsV2(): void {
+    rmSync(join(src, '0-seed.png'))
+    rmSync(join(src, '1-trunk.png'))
+    writeFileSync(join(src, '0-seed.svg'), '<svg/>')
+    writeFileSync(join(src, 'pet.json'), JSON.stringify(manifest({
+      stages: [{ at: 0, sheet: '0-seed.svg' }],
+    })))
+  }
+
+  it('不再被引用的旧图被删掉', () => {
+    const id = growthPetId(src)
+    expect(importGrowthPetPack(src, dest).ok).toBe(true)
+    expect(existsSync(join(dest, id, '0-seed.png'))).toBe(true)
+    expect(existsSync(join(dest, id, '1-trunk.png'))).toBe(true)
+
+    rewriteAsV2()
+    const r = importGrowthPetPack(src, dest)
+    if (!r.ok) throw new Error(r.error)
+    expect(r.pet.id).toBe(id) // 同一只宠物,不是新加的
+    expect(existsSync(join(dest, id, '0-seed.svg'))).toBe(true)
+    expect(existsSync(join(dest, id, '0-seed.png'))).toBe(false)
+    expect(existsSync(join(dest, id, '1-trunk.png'))).toBe(false)
+  })
+
+  it('本次要写的文件不会被误删(先清后写,清的是名单外的)', () => {
+    const id = growthPetId(src)
+    expect(importGrowthPetPack(src, dest).ok).toBe(true)
+    // 名字完全没变的重装:两张图都还得在,内容还得是新的。
+    writeFileSync(join(src, '0-seed.png'), 'seedbytes-v2')
+    const r = importGrowthPetPack(src, dest)
+    if (!r.ok) throw new Error(r.error)
+    expect(readFileSync(join(dest, id, '0-seed.png'), 'utf8')).toBe('seedbytes-v2')
+    expect(readFileSync(join(dest, id, '1-trunk.png'), 'utf8')).toBe('trunkbytes')
+  })
+
+  // ★ 破坏性操作的护栏:清理只准在自己那个 <id>/ 目录里发生。
+  it('绝不碰别的宠物的目录,也不碰 pet-images 根下的东西', () => {
+    const id = growthPetId(src)
+    // 邻居:另一只宠物的目录 + 图库根下的一个文件。
+    mkdirSync(join(dest, 'pet-neighbour'), { recursive: true })
+    writeFileSync(join(dest, 'pet-neighbour', 'idle.png'), 'neighbour')
+    mkdirSync(join(dest, 'growth-other-xyz'), { recursive: true })
+    writeFileSync(join(dest, 'growth-other-xyz', '0-seed.png'), 'other-growth')
+    writeFileSync(join(dest, 'root-file.png'), 'root')
+
+    expect(importGrowthPetPack(src, dest).ok).toBe(true)
+    rewriteAsV2()
+    expect(importGrowthPetPack(src, dest).ok).toBe(true)
+
+    // 别人的一个字节都没动 —— 先断言这个:清理跑错目录时,红的必须是这几条,而不是下面那条
+    // 「自己清干净了」(否则一条错方向的实现也能因为别的原因变红,分不清是哪个守卫在起作用)。
+    expect(readFileSync(join(dest, 'pet-neighbour', 'idle.png'), 'utf8')).toBe('neighbour')
+    expect(readFileSync(join(dest, 'growth-other-xyz', '0-seed.png'), 'utf8')).toBe('other-growth')
+    expect(readFileSync(join(dest, 'root-file.png'), 'utf8')).toBe('root')
+    // 而自己的目录确实清干净了(证明这条用例真的走到了清理,不是因为没清理才"没删到别人")。
+    expect(existsSync(join(dest, id, '0-seed.png'))).toBe(false)
+  })
+
+  it('装包失败时一个旧文件都不删(校验没过就别动磁盘)', () => {
+    const id = growthPetId(src)
+    expect(importGrowthPetPack(src, dest).ok).toBe(true)
+    // 第二版少了一张图 → 装包在核对阶段就失败。
+    rmSync(join(src, '1-trunk.png'))
+    expect(importGrowthPetPack(src, dest).ok).toBe(false)
+    expect(readFileSync(join(dest, id, '0-seed.png'), 'utf8')).toBe('seedbytes')
+    expect(readFileSync(join(dest, id, '1-trunk.png'), 'utf8')).toBe('trunkbytes')
+  })
+
+  it('目录里的子目录不会被删(只清这一层的普通文件)', () => {
+    const id = growthPetId(src)
+    expect(importGrowthPetPack(src, dest).ok).toBe(true)
+    mkdirSync(join(dest, id, 'keepme'), { recursive: true })
+    writeFileSync(join(dest, id, 'keepme', 'x.png'), 'nested')
+    rewriteAsV2()
+    expect(importGrowthPetPack(src, dest).ok).toBe(true)
+    expect(readFileSync(join(dest, id, 'keepme', 'x.png'), 'utf8')).toBe('nested')
+  })
+})

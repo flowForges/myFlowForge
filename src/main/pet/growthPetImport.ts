@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs'
 import { join, basename, resolve, relative, isAbsolute } from 'node:path'
 import { parseGrowthManifest } from '@shared/growthPet'
 import type { CustomPet } from '@shared/petCustom'
@@ -18,6 +18,33 @@ function shortHash(s: string): string {
 export function growthPetId(srcDir: string): string {
   const abs = resolve(srcDir)
   return `growth-${safeId(basename(abs))}-${shortHash(abs)}`
+}
+
+/**
+ * 重装同一个文件夹时 id 不变,但作者可能改了文件名(0-seed.png → 0-seed.svg)或减少了阶段数,
+ * 旧文件会永远留在 pet-images/<id>/ 里白占盘。写新图之前把这个目录里不再被引用的旧文件删掉。
+ *
+ * 这是破坏性操作,守卫按「宁可不删」写:
+ *  - destDir 必须真的在 baseDir 之内且不等于 baseDir(用 path.relative 复查,不看字符串前缀),
+ *    否则一步不删 —— 绝不会碰到别的宠物目录,更不会碰到 pet-images 之外;
+ *  - 只删 destDir 这一层的普通文件,不递归、不删目录、不碰符号链接(装包只写平铺的普通文件,
+ *    所以任何目录/链接都不是我们放的,不归我们清);
+ *  - keep 是本次要写的文件名集合,命中的一律留着。
+ */
+function pruneStale(baseDir: string, destDir: string, keep: ReadonlySet<string>): void {
+  const baseAbs = resolve(baseDir)
+  const destAbs = resolve(destDir)
+  const rel = relative(baseAbs, destAbs)
+  // rel === '' 意味着 destDir 就是 baseDir 本身(清空整个宠物图库),必须挡掉。
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return
+  // 而且只能是 baseDir 的直接子目录 —— 多一层都说明 id 里混进了分隔符,不该发生,发生了就别删。
+  if (rel.split(/[\\/]/).length !== 1) return
+  let entries
+  try { entries = readdirSync(destAbs, { withFileTypes: true }) } catch { return }
+  for (const e of entries) {
+    if (!e.isFile() || keep.has(e.name)) continue
+    try { rmSync(join(destAbs, e.name), { force: true }) } catch { /* best-effort:删不掉只是占点盘 */ }
+  }
 }
 
 /**
@@ -61,6 +88,7 @@ export function importGrowthPetPack(
   }
 
   mkdirSync(destDir, { recursive: true })
+  pruneStale(baseDir, destDir, used)
   for (const j of jobs) writeFileSync(j.to, readFileSync(j.from))
 
   return {

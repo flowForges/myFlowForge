@@ -1,8 +1,10 @@
-import { useState, useEffect, type ReactElement } from 'react'
+import { useState, useEffect, type CSSProperties, type ReactElement } from 'react'
 import type { Pet, PetState, Anim, Accent } from '@shared/types'
 import { ImportModal, type ImportConfig } from '../components/ImportModal'
 import { PET_SAMPLE, parsePet, type ParsedPet } from '../components/importParsers'
 import { addCustomPet, removeCustomPet, resolveActiveCustomPet, PET_CUSTOM_MAX, type CustomPet } from '@shared/petCustom'
+import { growthRowCount } from '@shared/growthPet'
+import { gridBackgroundPosition } from '@shared/petAtlas'
 import { PetGallery } from './PetGallery'
 import { petSrc } from '../pet/petSrc'
 
@@ -14,6 +16,26 @@ function firstImage(p: CustomPet): string | undefined {
   const imgs = p.images ?? {}
   for (const s of CUSTOM_PREVIEW_STATES) { const v = imgs[s]; if (v) return v }
   return undefined
+}
+
+// 成长宠物没有 images/emoji,但它有图 —— 第一阶段的 atlas。直接 <img> 整张贴上去会是一片密密麻麻的
+// 小格子(行=动作、列=帧),所以按 GrowthSprite 同一套网格数学只露出 idle 行第 0 帧。
+// 返回 undefined = 这不是成长宠物(或包坏了),调用方回落到原来的 emoji/🐾。
+function growthThumbStyle(p: CustomPet): CSSProperties | undefined {
+  const g = p.growth
+  const sheet = g?.stages[0]?.sheet
+  if (!g || !sheet) return undefined
+  const url = petSrc(sheet)
+  if (!url) return undefined
+  const rows = growthRowCount(g.actions)
+  // idle 缺失时校验器本该拦下,这里仍兜到第 0 行 —— 缩略图不值得为一个坏包整块消失。
+  const pos = gridBackgroundPosition(0, g.actions.idle?.row ?? 0, g.atlas.cols, rows)
+  return {
+    backgroundImage: `url(${url})`,
+    backgroundSize: `${g.atlas.cols * 100}% ${rows * 100}%`,
+    backgroundPosition: `${pos.x} ${pos.y}`,
+    backgroundRepeat: 'no-repeat',
+  }
 }
 
 interface PetPaneProps {
@@ -231,7 +253,12 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
     // id (mirrors PetGallery.install); only a genuinely new pet counts against the cap.
     const list = pet.customPets ?? []
     const already = list.some(p => p.id === r.pet.id)
-    if (!already && list.length >= PET_CUSTOM_MAX) { setErr(`宠物已达上限 ${PET_CUSTOM_MAX} 个`); return }
+    // 到上限只挡「新增」。重装一个已装过的包走的是 upsert 分支,不占名额,所以按钮不该预先禁用
+    // (点之前根本不知道用户会选哪个文件夹 —— 是新增还是升级只有装完拿到 id 才知道)。
+    if (!already && list.length >= PET_CUSTOM_MAX) {
+      setErr(`宠物已达上限 ${PET_CUSTOM_MAX} 个,无法再新增「${r.pet.name}」。先删掉一只再装(重装已装过的包属于升级,不受上限限制)。`)
+      return
+    }
     const next = already ? list.map(p => (p.id === r.pet.id ? r.pet : p)) : addCustomPet(list, r.pet)
     onChange({ skin: 'custom', customPets: next, activeCustomPetId: r.pet.id })
   }
@@ -309,6 +336,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
     const active = pet.skin === 'custom' && (pet.activeCustomPetId ?? customList[0]?.id) === p.id
     const builtin = p.id.startsWith('builtin-')
     const thumb = firstImage(p)
+    const growthThumb = thumb ? undefined : growthThumbStyle(p)
     return (
       <div
         key={p.id}
@@ -328,7 +356,14 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
       >
         {thumb
           ? <img src={petSrc(thumb)} alt="" style={{ width: '24px', height: '24px', objectFit: 'contain', borderRadius: '4px' }} />
-          : <span style={{ fontSize: '20px', color: p.color || undefined }} role="img" aria-label={p.name}>{p.emoji || '🐾'}</span>}
+          : growthThumb
+            ? <span
+                data-growth-thumb={p.id}
+                role="img"
+                aria-label={p.name}
+                style={{ width: '24px', height: '24px', flex: '0 0 24px', borderRadius: '4px', ...growthThumb }}
+              />
+            : <span style={{ fontSize: '20px', color: p.color || undefined }} role="img" aria-label={p.name}>{p.emoji || '🐾'}</span>}
         {renamingId === p.id ? (
           <input
             className="pet-chip-rename"
@@ -512,11 +547,13 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
           <div className="set-row" style={{ marginBottom: '8px', gap: '8px' }}>
             <button
               className="wf-pick on"
-              disabled={atMax}
+              // 到上限也不禁用:重装同一个文件夹是升级(id 按源文件夹稳定生成),不占新名额,禁用会把
+              // 升级路径一起堵死。而点之前无从得知用户要选哪个文件夹,所以只能装完再判 —— 真是新增
+              // 且已满时 addImported 会拒掉并在下面那行给出明确提示。
               // Codex 那段也有一个「选择文件夹…」,光看按钮文字两者无法区分(读屏软件尤其如此),
               // 所以这里给一个说明白的可访问名。
               aria-label="安装成长宠物包"
-              title={atMax ? `已达上限 ${PET_CUSTOM_MAX} 个` : undefined}
+              title={atMax ? `已达上限 ${PET_CUSTOM_MAX} 个,但重装已装过的成长包升级不受限` : undefined}
               onClick={async () => addImported(await window.forge.growthPetImport(), setGrowthErr)}
             >
               选择文件夹…

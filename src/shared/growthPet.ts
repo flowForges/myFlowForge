@@ -30,6 +30,17 @@ export const DEFAULT_GROWTH_ACTIONS: Record<GrowthAction, GrowthActionCfg> = {
   alert: { row: 2, durations: [150, 150, 150, 150, 150, 280] },
 }
 
+/**
+ * atlas 的网格行数。不在 manifest 里声明 —— 由动作里最大的 row 推出,免得作者写的 rows 和实际对不上。
+ * actions 是 Partial 的,理论上可能空(校验器要求至少 idle,但这里不依赖它):空对象时 Math.max
+ * 会返回 -Infinity,兜底成 1 行,画面退化成整张图的第一行而不是 NaN。
+ * 渲染(GrowthSprite)和设置页缩略图(PetPane)都要这个数,算错一处两边就对不齐,所以只留这一份。
+ */
+export function growthRowCount(actions: Partial<Record<GrowthAction, GrowthActionCfg>>): number {
+  const raw = Math.max(-1, ...Object.values(actions).map((a) => a.row)) + 1
+  return Math.max(1, raw)
+}
+
 /** 便宜的分派判断:没有 kind:"growth" 的包走原来的普通宠物路径,老包完全不受影响。 */
 export function isGrowthManifestRaw(raw: unknown): boolean {
   return typeof raw === 'object' && raw !== null && (raw as { kind?: unknown }).kind === 'growth'
