@@ -99,4 +99,42 @@ describe('PetWidget custom skin', () => {
     )
     expect(container.querySelector('.pet-atlas')).toBeNull()
   })
+
+  // 成长包优先级最高:growth > codex atlas > 逐状态图 > emoji。
+  it('renders the growth sprite (and nothing else) when the custom pet has a growth pack', () => {
+    const { container } = render(
+      <PetWidget skin="custom" anim="float" accent="none" state="idle" growthProgress={0.6}
+        growth={{
+          atlas: { cols: 4, cellW: 100, cellH: 100 },
+          actions: { idle: { row: 0, durations: [200, 200] } },
+          stages: [{ at: 0, sheet: 'g1/0.png' }, { at: 0.5, sheet: 'g1/1.png' }],
+        }}
+        atlas={{ path: 'p1/spritesheet.webp', version: 2 }} action="running"
+        customImages={{ idle: 'p2/idle.webp' }} customEmoji={{ name: 'x', emoji: '🐱', color: '' }} />,
+    )
+    const el = container.querySelector('.pet-growth') as HTMLElement
+    expect(el).toBeTruthy()
+    expect(el.style.backgroundImage).toContain('forge-pet://img/g1/1.png')
+    expect(container.querySelector('.pet-atlas')).toBeNull()
+    expect(container.querySelector('.pet-image-front')).toBeNull()
+    expect(container.querySelector('.pet-emoji')).toBeNull()
+  })
+
+  // 少了 .pet 外壳,--pet-size 撑不起来 → .pet-growth 的 width/height:100% 会塌成 0×0。
+  it('keeps the .pet shell (size + anim classes) around the growth sprite', () => {
+    const { container } = render(
+      <PetWidget skin="custom" anim="spin-halo" accent="warn" state="idle"
+        growth={{
+          atlas: { cols: 4, cellW: 100, cellH: 100 },
+          actions: { idle: { row: 0, durations: [200, 200] } },
+          stages: [{ at: 0, sheet: 'g1/0.png' }],
+        }} />,
+    )
+    const wrapper = container.querySelector('.pet') as HTMLElement
+    expect(wrapper).toBeTruthy()
+    expect(wrapper.dataset.skin).toBe('custom-growth')
+    expect(wrapper.classList.contains('pet-anim-spin-halo')).toBe(true)
+    expect(wrapper.classList.contains('pet-accent-warn')).toBe(true)
+    expect(wrapper.querySelector('.pet-growth')).toBeTruthy()
+  })
 })

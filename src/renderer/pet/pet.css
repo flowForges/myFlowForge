@@ -419,3 +419,16 @@ button:disabled { cursor: default; }
   background: oklch(63% .2 25 / .14); color: var(--err); border: 1px solid oklch(63% .2 25 / .32);
   font-size: 11.5px; font-weight: 600; transition: .14s; cursor: pointer; }
 .pp-stop:hover { background: oklch(63% .2 25 / .22); }
+
+/* ===== 成长宠物 =====
+   阶段图铺满宠物框,阶段内的子进度驱动一点点缩放 —— token 是连续量,画面就该连续长。
+   --growth-sub 由 GrowthSprite 写入(0~1)。 */
+.pet-growth {
+  width: 100%; height: 100%;
+  transform: scale(calc(0.94 + 0.06 * var(--growth-sub, 0)));
+  transform-origin: 50% 100%;   /* 从底部长 —— 树是从地里往上长的 */
+  transition: transform .4s cubic-bezier(.22,.61,.36,1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .pet-growth { transform: none; transition: none; }
+}

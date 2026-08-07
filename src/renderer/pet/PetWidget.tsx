@@ -3,7 +3,9 @@ import type { Pet, PetState, Anim, Accent } from '@shared/types'
 import { petSrc } from './petSrc'
 import { usePetImageTransition } from './usePetImageTransition'
 import { PetAtlasSprite } from './PetAtlasSprite'
+import { GrowthSprite } from './GrowthSprite'
 import type { PetAction } from '@shared/petAtlas'
+import type { GrowthPack } from '@shared/growthPet'
 
 const SPRITE_SVG: ReactElement = (
   <svg viewBox="0 0 64 64">
@@ -42,6 +44,10 @@ interface PetWidgetProps {
   customImages?: Partial<Record<PetState, string>>
   customEmoji?: { name: string; emoji: string; color: string }
   atlas?: { path: string; version: number }
+  // 成长宠物包(kind:"growth")。存在时优先级最高:成长包 > codex atlas > 逐状态图 > emoji。
+  growth?: GrowthPack
+  /** 今日 token 进度 0~1,来自主进程广播的成长信号。 */
+  growthProgress?: number
   action?: PetAction
   lookDeg?: number | null
   // Hold still (no float bob, no atlas frame loop): set when idle-animation is off & the pet is idle,
@@ -49,7 +55,7 @@ interface PetWidgetProps {
   frozen?: boolean
 }
 
-export function PetWidget({ skin, anim, accent, state, customImages, customEmoji, atlas, action, lookDeg, frozen }: PetWidgetProps) {
+export function PetWidget({ skin, anim, accent, state, customImages, customEmoji, atlas, growth, growthProgress, action, lookDeg, frozen }: PetWidgetProps) {
   const cls = `pet pet-anim-${frozen ? 'none' : anim} pet-accent-${accent}`
   const customSrc = customImages?.[state ?? 'idle'] ?? customImages?.idle
   const requestedSrc = petSrc(customSrc)
@@ -68,6 +74,16 @@ export function PetWidget({ skin, anim, accent, state, customImages, customEmoji
       )
     : null
   if (skin === 'custom') {
+    // 成长宠物包优先于其它一切:阶段图由今日 token 进度选,动作行由状态选。和 atlas 一样,
+    // 外层仍套 .pet 容器 —— 尺寸(--pet-size)、动效类、星星都靠它,少了这层图就是 0×0。
+    if (growth) {
+      return (
+        <div className={cls} data-skin="custom-growth">
+          <GrowthSprite growth={growth} progress={growthProgress ?? 0} state={state ?? 'idle'} reducedMotion={frozen} />
+          {stars}
+        </div>
+      )
+    }
     // A Codex v2 atlas pet renders the sprite sheet (animation + look-at-cursor) instead of per-state
     // images; the shell (badge/handle/bubble) still wraps it via the outer .pet container.
     if (atlas) {

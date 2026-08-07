@@ -11,6 +11,7 @@ import { petSpriteSize } from '@shared/petGeometry'
 import { useChatActivity } from './useChatActivity'
 import { PetWidget } from './PetWidget'
 import { resolveActiveCustomPet, type CustomPet } from '@shared/petCustom'
+import { useGrowthSignal } from './useGrowthSignal'
 import { PetPopup } from './PetPopup'
 import { PetToasts } from './PetToasts'
 import { PetBubble } from './PetBubble'
@@ -280,6 +281,8 @@ export function PetApp() {
   const cfg: PetStateConfig = states[state] ?? DEFAULT_STATES[state]
   // Which custom pet to show: the selected entry of customPets, else the legacy singular custom fields.
   const resolvedCustom = resolveActiveCustomPet({ customPets, activeCustomPetId, customImages, customEmoji })
+  // 成长宠物的今日 token 进度(主进程广播)。没这个 IPC 时是 null,成长包就停在第一阶段。
+  const growthSignal = useGrowthSignal()
   const data = derivePopupData(run, pending, workspaces, busyWs)
 
   // ── Simple interaction mode ────────────────────────────────────────────────────────────────────
@@ -393,6 +396,7 @@ export function PetApp() {
         <PetWidget skin={skin} anim={cfg.anim} accent={cfg.accent} state={state}
           customImages={resolvedCustom.images} customEmoji={resolvedCustom.emoji}
           atlas={resolvedCustom.atlas} action={petAction}
+          growth={resolvedCustom.growth} growthProgress={growthSignal?.progress ?? 0}
           frozen={docHidden || (!idleAnim && petAction === 'idle')}
           lookDeg={petAction === 'idle' ? lookDeg : undefined} />
         {/* Simple mode surfaces status through the bubble, not a count badge. */}

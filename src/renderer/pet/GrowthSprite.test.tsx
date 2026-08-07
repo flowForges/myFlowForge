@@ -1,0 +1,64 @@
+import { describe, it, expect } from 'vitest'
+import { render } from '@testing-library/react'
+import { GrowthSprite } from './GrowthSprite'
+import type { GrowthPack } from '@shared/growthPet'
+
+const PACK: GrowthPack = {
+  atlas: { cols: 4, cellW: 100, cellH: 100 },
+  actions: {
+    idle: { row: 0, durations: [200, 200] },
+    working: { row: 1, durations: [100, 100] },
+  },
+  stages: [
+    { at: 0, name: '种子', sheet: 'gt/0-seed.png' },
+    { at: 0.5, name: '树干', sheet: 'gt/1-trunk.png' },
+  ],
+}
+
+function el(c: HTMLElement): HTMLElement {
+  const node = c.querySelector('.pet-growth')
+  if (!node) throw new Error('.pet-growth 没渲染出来')
+  return node as HTMLElement
+}
+
+describe('GrowthSprite', () => {
+  it('按进度选阶段图', () => {
+    const a = render(<GrowthSprite growth={PACK} progress={0.2} state="idle" reducedMotion />)
+    expect(el(a.container).style.backgroundImage).toContain('0-seed.png')
+    const b = render(<GrowthSprite growth={PACK} progress={0.7} state="idle" reducedMotion />)
+    expect(el(b.container).style.backgroundImage).toContain('1-trunk.png')
+  })
+
+  it('background-size 按包自己的网格算(4 列 × 2 行)', () => {
+    const { container } = render(<GrowthSprite growth={PACK} progress={0} state="idle" reducedMotion />)
+    expect(el(container).style.backgroundSize).toBe('400% 200%')
+  })
+
+  it('working 走 working 行', () => {
+    const { container } = render(<GrowthSprite growth={PACK} progress={0} state="working" reducedMotion />)
+    expect(el(container).dataset.action).toBe('working')
+    // row 1 of 2 → y = 100%
+    expect(el(container).style.backgroundPosition).toBe('0% 100%')
+  })
+
+  it('包里没画 alert 行时回落到 idle', () => {
+    const { container } = render(<GrowthSprite growth={PACK} progress={0} state="confirm" reducedMotion />)
+    expect(el(container).dataset.action).toBe('idle')
+  })
+
+  it('把阶段内子进度写成 CSS 变量,供缩放动效用', () => {
+    const { container } = render(<GrowthSprite growth={PACK} progress={0.25} state="idle" reducedMotion />)
+    // 阶段 0 跨度 0→0.5,进度 0.25 = 0.5
+    expect(el(container).style.getPropertyValue('--growth-sub')).toBe('0.5')
+  })
+
+  it('预加载所有阶段图,阶段一跳就有图', () => {
+    render(<GrowthSprite growth={PACK} progress={0} state="idle" reducedMotion />)
+    // React 19 把 <link rel="preload"> 提升到 document.head —— 那才是预加载真正生效的位置,
+    // 所以断言查 head 而不是渲染容器(head 里按 href 去重,断言两张图各自在场即可)。
+    const hrefs = [...document.head.querySelectorAll('link[rel="preload"][as="image"]')]
+      .map((l) => l.getAttribute('href'))
+    expect(hrefs).toContain('forge-pet://img/gt/0-seed.png')
+    expect(hrefs).toContain('forge-pet://img/gt/1-trunk.png')
+  })
+})
