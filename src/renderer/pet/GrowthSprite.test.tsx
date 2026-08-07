@@ -55,9 +55,12 @@ describe('GrowthSprite', () => {
   it('预加载所有阶段图,阶段一跳就有图', () => {
     render(<GrowthSprite growth={PACK} progress={0} state="idle" reducedMotion />)
     // React 19 把 <link rel="preload"> 提升到 document.head —— 那才是预加载真正生效的位置,
-    // 所以断言查 head 而不是渲染容器(head 里按 href 去重,断言两张图各自在场即可)。
-    const hrefs = [...document.head.querySelectorAll('link[rel="preload"][as="image"]')]
-      .map((l) => l.getAttribute('href'))
+    // 所以断言查 head 而不是渲染容器。用例之间不会串:RTL 的 auto-cleanup 卸载组件时,
+    // React 会把它提升上去的 link 一并撤掉,所以这里断长度是安全的 —— 而且比只断 href 更强,
+    // 能抓住「多预加载了一张」和「同一张重复预加载」。
+    const links = [...document.head.querySelectorAll('link[rel="preload"][as="image"]')]
+    expect(links).toHaveLength(2)
+    const hrefs = links.map((l) => l.getAttribute('href'))
     expect(hrefs).toContain('forge-pet://img/gt/0-seed.png')
     expect(hrefs).toContain('forge-pet://img/gt/1-trunk.png')
   })

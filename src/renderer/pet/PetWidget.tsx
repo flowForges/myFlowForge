@@ -75,7 +75,9 @@ export function PetWidget({ skin, anim, accent, state, customImages, customEmoji
     : null
   if (skin === 'custom') {
     // 成长宠物包优先于其它一切:阶段图由今日 token 进度选,动作行由状态选。和 atlas 一样,
-    // 外层仍套 .pet 容器 —— 尺寸(--pet-size)、动效类、星星都靠它,少了这层图就是 0×0。
+    // 外层仍套 .pet 容器 —— 少了它就丢掉 pet-anim-*(浮动)、pet-accent-*(--accent)、data-skin
+    // 和 stars。尺寸也归它管:.pet-atlas 自己按 --pet-size 算宽高(pet.css:34),而 .pet-growth
+    // 用的是 100%/100%(pet.css:426),必须有个带尺寸的父级 —— 这点不对称容易踩。
     if (growth) {
       return (
         <div className={cls} data-skin="custom-growth">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 export interface GrowthSignalView { todayTokens: number; goal: number; progress: number }
 
@@ -6,12 +6,15 @@ export interface GrowthSignalView { todayTokens: number; goal: number; progress:
 // 之后跟着 chatService 每轮对话的累加走。没有这个 IPC(旧 preload)时返回 null,调用方回落到普通宠物。
 export function useGrowthSignal(): GrowthSignalView | null {
   const [sig, setSig] = useState<GrowthSignalView | null>(null)
+  // 广播先于首次 invoke 的 resolve 到达时,那次拉取拿到的是更旧的快照 —— 让它别回写,
+  // 否则进度会倒退一格再被下一次广播纠正(肉眼可见的一跳)。
+  const pushed = useRef(false)
   useEffect(() => {
     let alive = true
     void Promise.resolve(window.forge.growthSignalGet?.())
-      .then((s) => { if (alive && s) setSig(s) })
+      .then((s) => { if (alive && s && !pushed.current) setSig(s) })
       .catch(() => { /* 拿不到就等广播 */ })
-    const off = window.forge.onGrowthSignal?.((s) => setSig(s))
+    const off = window.forge.onGrowthSignal?.((s) => { pushed.current = true; setSig(s) })
     return () => { alive = false; off?.() }
   }, [])
   return sig
