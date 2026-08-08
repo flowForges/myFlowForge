@@ -319,7 +319,11 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                           onClick={() => onSwitchSession?.(item.id, s.id)}
                           onDoubleClick={e => { e.stopPropagation(); beginRename(s) }}
                         >
-                          <span className={'sd ' + s.mode + (runningSessionIds?.has(s.id) ? ' run' : '')} />
+                          {/* 未读复用这颗本来就有的会话圆点(让它亮起来),不再在行尾另加一颗 —— 一行里两颗
+                              圆点既冗余又把时间挤到中间。运行中优先于未读:正在跑的那颗要保持脉冲。 */}
+                          <span className={'sd ' + s.mode
+                            + (runningSessionIds?.has(s.id) ? ' run'
+                              : isSessionUnread(unread, item.id, s.id) ? ' unread' : '')} />
                           {editing ? (
                             <input
                               className="ws-sess-edit"
@@ -340,7 +344,6 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                               「正在跑 agent」。用正交通道:焦点=实心左条(CSS),运行=脉冲点 + 这个「运行中」标签(动效+文字)。 */}
                           {!editing && runningSessionIds?.has(s.id) && <span className="ws-sess-run" title="该会话正在运行 agent">运行中</span>}
                           {!editing && <span className="ws-sess-time" title="最后对话时间">{fmtRelTime(s.lastMessageAt ?? s.createdAt, Date.now())}</span>}
-                          {isSessionUnread(unread, item.id, s.id) && <span className="ws-unread" title="有已完成待查看" aria-label="未读" />}
                           {(() => { const b = sessionBadge(s); return b.kind !== 'new'
                             ? <span className={`ws-sess-badge ${b.kind}`}>{b.label}</span> : null })()}
                           {multi && (

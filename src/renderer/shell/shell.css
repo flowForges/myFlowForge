@@ -284,6 +284,9 @@
 .ws-sess .sd.workflow { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 /* Running session: pulsing green dot with glow ring — wins over the static mode color so a session that
    is actually executing stands out (multiple can pulse at once across workspaces). */
+/* 未读:让本来就有的那颗会话圆点亮起来(accent + 光晕),而不是在行尾再加一颗。静态不脉冲 —— 脉冲是
+   「正在跑」的语言,已经跑完的会话只是等你看一眼。 */
+.ws-sess .sd.unread { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .ws-sess .sd.run { background: var(--run); box-shadow: 0 0 0 3px color-mix(in oklab, var(--run) 26%, transparent); animation: pulse 1.6s infinite; }
 /* #2 正在执行 agent 的会话:signaled by MOTION + TEXT (the pulsing .sd.run dot + the 「运行中」pill +
    run-colored name), NOT by a background/left-rail that would mimic — and be indistinguishable from —

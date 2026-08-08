@@ -373,7 +373,12 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         for (const a of parseCodexEvent(obj)) {
           if (a.kind === 'session') cb.onSession(a.id)
           else if (a.kind === 'assistant') { sawDelta = true; cb.onAssistantDelta(a.text) }
-          else if (a.kind === 'assistant-final') { if (!sawDelta) cb.onAssistantDelta(a.text) }
+          // ★ assistant-final 也必须置位 sawDelta。codex 经常整轮只发这一个事件(不发增量),此时正文其实
+          // 已经交付给上层了,但 sawDelta 还是 false → 下面的收尾会判成「无回复」,走 cb.onError,而随后的
+          // cb.onDone 又被 chatService 的 settled 守卫丢弃。后果是这一轮明明答得好好的,却:不记 tokens
+          // (用量统计长期为空)、不发 done(侧栏未读圆点永远不亮)、对外是 error(机器人报 ❌ 出错)。
+          // 界面上看不出来 —— 正文是累积在 chatService 的 text 里的,照常显示。
+          else if (a.kind === 'assistant-final') { if (!sawDelta) { sawDelta = true; cb.onAssistantDelta(a.text) } }
           else if (a.kind === 'think') { if (a.text.startsWith('调用 shell') || a.text.startsWith('编辑文件')) continue; cb.onThinkDelta(a.text) }
         }
       }

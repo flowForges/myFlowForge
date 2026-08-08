@@ -636,3 +636,59 @@ setInterval(() => {}, 60000)
     expect(states[states.length - 1]).toBe('err')
   }, 5000)
 })
+
+describe('★ codex 只发 assistant-final(不发增量)的那一轮', () => {
+  // 这是 codex 的常态:整轮只有一个 item.completed/assistant_message,没有任何 delta。
+  // 曾经 assistant-final 分支交付了正文却不置位 sawDelta,收尾就判成「无回复」→ cb.onError,而随后的
+  // cb.onDone 被 chatService 的 settled 守卫丢弃。界面上看不出来(正文照常显示),代价全在看不见的地方:
+  // 不记 tokens(用量统计长期为空)、不发 done(侧栏未读圆点不亮)、对外是 error(机器人报 ❌ 出错)。
+  const finalOnlyCli = (d: string): string => {
+    const p = join(d, 'codexfinal.js')
+    writeFileSync(p, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ type: 'thread.started', thread_id: 't-1' })
+out({ type: 'item.completed', item: { type: 'assistant_message', text: '这是完整回答,一次性给出。' } })
+process.exit(0)
+`)
+    chmodSync(p, 0o755)
+    return p
+  }
+
+  it('正文照常交付', async () => {
+    const provider = makeCodexProvider({ bin: 'node', preArgs: [finalOnlyCli(dir)], defaultModels: [] })
+    let text = ''
+    const s = provider.chat!({ id: 'a1', prompt: 'q', model: 'gpt-5-codex', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: t => { text += t }, onThinkDelta: () => {}, onDone: () => {}, onError: () => {} }, process.env)
+    await s.done
+    expect(text).toBe('这是完整回答,一次性给出。')
+  })
+
+  it('★ 不得报错 —— 有正文就不是「无回复」', async () => {
+    const provider = makeCodexProvider({ bin: 'node', preArgs: [finalOnlyCli(dir)], defaultModels: [] })
+    const errors: string[] = []
+    const s = provider.chat!({ id: 'a1', prompt: 'q', model: 'gpt-5-codex', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => {}, onError: (e) => { errors.push(e.message) } }, process.env)
+    await s.done
+    expect(errors).toEqual([])
+  })
+
+  it('★ 必须发 onDone —— 未读圆点、token 记账都挂在这一步上', async () => {
+    const provider = makeCodexProvider({ bin: 'node', preArgs: [finalOnlyCli(dir)], defaultModels: [] })
+    let done = false
+    const s = provider.chat!({ id: 'a1', prompt: 'q', model: 'gpt-5-codex', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => { done = true }, onError: () => {} }, process.env)
+    await s.done
+    expect(done).toBe(true)
+  })
+
+  it('真的一个字都没输出时,仍然要报「无回复」', async () => {
+    const p = join(dir, 'codexsilent.js')
+    writeFileSync(p, `#!/usr/bin/env node\nprocess.exit(0)\n`); chmodSync(p, 0o755)
+    const provider = makeCodexProvider({ bin: 'node', preArgs: [p], defaultModels: [] })
+    const errors: string[] = []
+    const s = provider.chat!({ id: 'a1', prompt: 'q', model: 'gpt-5-codex', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => {}, onError: (e) => { errors.push(e.message) } }, process.env)
+    await s.done
+    expect(errors.length).toBe(1)
+  })
+})

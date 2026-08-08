@@ -43,8 +43,10 @@ describe('侧栏未读圆点', () => {
     const { container } = renderSidebar({ sessions, unread: unreadOf('s2') })
     const rows = container.querySelectorAll('.ws-sess')
     expect(rows).toHaveLength(2)
-    expect(rows[0].querySelector('.ws-unread')).toBeNull()
-    expect(rows[1].querySelector('.ws-unread')).toBeTruthy()
+    // 复用行首那颗会话圆点(加 .unread),不在行尾另加一颗
+    expect(rows[0].querySelector('.sd.unread')).toBeNull()
+    expect(rows[1].querySelector('.sd.unread')).toBeTruthy()
+    expect(rows[1].querySelector('.ws-unread')).toBeNull()
   })
   it('收起时,未读上浮成工作区级圆点', () => {
     const { container } = renderSidebar({ sessions, unread: unreadOf('s2'), expanded: false })
