@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { PluginsApi } from '../state/usePlugins'
 import type { CatalogEntry } from '@shared/plugins'
 import { isFeaturePlugin } from '@shared/plugins'
@@ -40,11 +40,17 @@ function PluginIcon() {
 
 type Tab = 'installed' | 'marketplace'
 
-export function PluginPane({ plugins, results, catalog, install, uninstall, setEnabled, refresh, installExample, installError, creds, setCred }: Omit<PluginsApi, 'usageByProvider'>) {
+export function PluginPane({ plugins, results, catalog, loadCatalog, install, uninstall, setEnabled, refresh, installExample, installError, creds, setCred }: Omit<PluginsApi, 'usageByProvider'>) {
   const [tab, setTab] = useState<Tab>('installed')
   const [credOpen, setCredOpen] = useState<Record<string, boolean>>({})
   const [credDraft, setCredDraft] = useState<Record<string, string>>({})
   const [credSaved, setCredSaved] = useState<Record<string, boolean>>({})
+  // ★ 目录只在切到「广场」页签时拉。这一次调用会去打 Cloudflare Worker 的「下架名单」端点,原先挂在
+  // usePlugins 的 mount 上(每次启动 app 都打)、还跟着 pluginsChanged 广播走(pluginScheduler 每个周期
+  // 都广播 → 开着 app 就每分钟一次)。用户明确要求「不打开广场就不许请求」,所以触发点收到这里。
+  // plugins.length 进依赖:装/卸之后目录里的「已安装」标记要跟着变;它是个数字,调度器每个周期重建
+  // plugins 数组并不会让它变化,所以不会退回到「每分钟一拉」。
+  useEffect(() => { if (tab === 'marketplace') loadCatalog() }, [tab, plugins.length, loadCatalog])
   const now = Date.now()
   const draftFor = (provider: string) => credDraft[provider] ?? creds[provider] ?? ''
   const saveCred = async (provider: string) => {

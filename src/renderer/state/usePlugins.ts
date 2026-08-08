@@ -6,6 +6,8 @@ export interface PluginsApi {
   results: Record<string, PluginResult>
   usageByProvider: Record<string, StatusbarUsage>
   catalog: CatalogEntry[]
+  /** 拉取广场目录(会打远程「下架名单」端点)。只该由插件广场面板在打开时调用 —— 别放进任何常驻订阅。 */
+  loadCatalog: () => void
   install: () => Promise<void>
   uninstall: (id: string) => Promise<void>
   setEnabled: (id: string, enabled: boolean) => Promise<void>
@@ -38,8 +40,9 @@ export function usePlugins(): PluginsApi {
     return () => { live = false }
   }, [])
 
-  // Mount: 初次加载 catalog
-  useEffect(() => { loadCatalog() }, [loadCatalog])
+  // ★ 刻意不在 mount 时加载 catalog。listPluginCatalog 会去打 Cloudflare Worker 拉「下架名单」,而这个
+  // hook 挂在 App 根上 —— 放在这里等于每次启动 app(dev 下每次 HMR 重挂)都白打一次,用户可能根本不开
+  // 插件广场。改成由「插件广场」那个面板自己在挂载时调 loadCatalog(),做到「不打开就不请求」。
 
   // Mount: load user-pasted plugin credentials (optional API → guard for older preloads/tests)
   useEffect(() => {
@@ -59,10 +62,12 @@ export function usePlugins(): PluginsApi {
     const unsub = window.forge.onPluginsChanged(snap => {
       setPlugins(snap.plugins)
       setResults(snap.results)
-      loadCatalog()
+      // ★ 这里不能顺手 loadCatalog():pluginScheduler 每个刷新周期都会广播一次(哪怕没有插件到期),
+      // 跟着拉 catalog 就变成「app 开着就每分钟打一次 Worker」—— 60s 缓存只是把频率压到每分钟一次,
+      // 并没有阻止请求。广场打开时的刷新由面板自己负责(见 PluginPane)。
     })
     return () => { unsub() }
-  }, [loadCatalog])
+  }, [])
 
   // Derived: usageByProvider from statusbar-usage ok results
   const usageByProvider = useMemo<Record<string, StatusbarUsage>>(() => {
@@ -108,5 +113,5 @@ export function usePlugins(): PluginsApi {
     else setInstallError(null)
   }, [])
 
-  return { plugins, results, usageByProvider, catalog, install, uninstall, setEnabled, refresh, installExample, installError, creds, setCred }
+  return { plugins, results, usageByProvider, catalog, loadCatalog, install, uninstall, setEnabled, refresh, installExample, installError, creds, setCred }
 }

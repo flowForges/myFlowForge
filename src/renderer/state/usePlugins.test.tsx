@@ -271,10 +271,27 @@ describe('usePlugins', () => {
     expect((window as any).forge.refreshPlugins).toHaveBeenCalledWith(undefined)
   })
 
-  it('mount 时加载 catalog', async () => {
+  // ★ 这个 hook 挂在 App 根上,而 listPluginCatalog 会去打 Cloudflare Worker 的「下架名单」端点。
+  // 用户明确要求「不打开插件广场就不许请求」,所以 mount 不能自动拉 —— 触发点在 PluginPane 的广场页签。
+  it('★ mount 时不拉 catalog(否则每次启动 app 都白打一次 Worker)', async () => {
     const { result } = renderHook(() => usePlugins())
+    await waitFor(() => expect(result.current.plugins).toBeDefined())
+    expect((window as any).forge.listPluginCatalog).not.toHaveBeenCalled()
+    expect(result.current.catalog).toEqual([])
+  })
+
+  it('显式调 loadCatalog 才拉', async () => {
+    const { result } = renderHook(() => usePlugins())
+    act(() => { result.current.loadCatalog() })
     await waitFor(() => expect(result.current.catalog.length).toBe(1))
     expect(result.current.catalog[0].id).toBe('forge-example-claude-usage')
+  })
+
+  it('★ pluginsChanged 广播不得连带拉 catalog —— pluginScheduler 每个周期都广播', async () => {
+    const { result } = renderHook(() => usePlugins())
+    await waitFor(() => expect(result.current.plugins).toBeDefined())
+    act(() => { pluginsChangedCb?.({ plugins: [], results: {} }) })
+    expect((window as any).forge.listPluginCatalog).not.toHaveBeenCalled()
   })
 
   it('installExample 成功不写 installError', async () => {

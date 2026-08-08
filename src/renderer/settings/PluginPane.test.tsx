@@ -33,12 +33,14 @@ function renderPane(opts: {
   catalog?: CatalogEntry[]
   installError?: string | null
   creds?: Record<string, string>
+  loadCatalog?: () => void
 } = {}) {
   return render(
     <PluginPane
       plugins={opts.plugins ?? []}
       results={opts.results ?? {}}
       catalog={opts.catalog ?? []}
+      loadCatalog={opts.loadCatalog ?? (() => {})}
       install={mockInstall}
       uninstall={mockUninstall}
       setEnabled={mockSetEnabled}
@@ -160,5 +162,31 @@ describe('PluginPane', () => {
   it('无 provider 的插件不显示「凭据」按钮', () => {
     renderPane({ plugins: [pluginB] })
     expect(screen.queryByRole('button', { name: /凭据/ })).toBeNull()
+  })
+})
+
+// ★ Cloudflare 免费额度守卫。loadCatalog 会去打 Worker 的「下架名单」端点,用户明确要求「不打开插件广场
+// 就不许请求」。原先它挂在 usePlugins 的 mount 上(每次启动 app 一次)、还跟着 pluginsChanged 广播走
+// (pluginScheduler 每周期都广播 → 开着 app 每分钟一次)。
+describe('插件广场 · 目录只在打开广场时才拉', () => {
+  it('停在「已安装」页签时一次都不拉', () => {
+    const loadCatalog = vi.fn()
+    renderPane({ loadCatalog })
+    expect(loadCatalog).not.toHaveBeenCalled()
+  })
+
+  it('切到「插件广场」页签才拉', () => {
+    const loadCatalog = vi.fn()
+    renderPane({ loadCatalog })
+    fireEvent.click(screen.getByRole('button', { name: /插件广场/ }))
+    expect(loadCatalog).toHaveBeenCalledTimes(1)
+  })
+
+  it('在广场页签里来回点同一个页签不重复拉', () => {
+    const loadCatalog = vi.fn()
+    renderPane({ loadCatalog })
+    fireEvent.click(screen.getByRole('button', { name: /插件广场/ }))
+    fireEvent.click(screen.getByRole('button', { name: /插件广场/ }))
+    expect(loadCatalog).toHaveBeenCalledTimes(1)
   })
 })
