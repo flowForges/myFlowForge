@@ -67,6 +67,9 @@ export function WallpaperGallery({ current, onApply, onClear }: WallpaperGallery
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [thumbs, setThumbs] = useState<Record<string, string>>({}) // id → forge-bg:// URL (on-disk cache)
+  // 当前分类('' = 全部)。壁纸到两三百张之后,纵向堆叠所有分类要滚很久 —— chips 让「我想看风景」一步到位。
+  // 缩略图本来就是懒加载的,所以「全部」也不会一次打几百个请求;分类解决的是**找**的问题,不是加载的问题。
+  const [cat, setCat] = useState('')
   const requested = useRef<Set<string>>(new Set())                 // ids whose thumb load已发起(去重,不重复请求)
 
   const load = () => {
@@ -103,6 +106,10 @@ export function WallpaperGallery({ current, onApply, onClear }: WallpaperGallery
     if (!byCat[w.cat]) { byCat[w.cat] = []; cats.push(w.cat) }
     byCat[w.cat].push(w)
   }
+  // 选中的分类若在刷新后消失(目录换了批次),回落到全部,别卡在一个空列表上。
+  const activeCat = cat && byCat[cat] ? cat : ''
+  const shownCats = activeCat ? [activeCat] : cats
+  const total = catalog?.wallpapers.length ?? 0
 
   return (
     <div className="set-group">
@@ -119,9 +126,22 @@ export function WallpaperGallery({ current, onApply, onClear }: WallpaperGallery
       </p>
       {!catalog && <p className="set-desc">加载中…</p>}
       {catalog && catalog.wallpapers.length === 0 && !err && <p className="set-desc">暂无可用壁纸。</p>}
-      {cats.map(cat => (
+      {cats.length > 1 && (
+        <div className="wp-cats">
+          <button className={`wp-cat${activeCat === '' ? ' on' : ''}`} onClick={() => setCat('')}>
+            全部<span className="wp-cat-n">{total}</span>
+          </button>
+          {cats.map(c => (
+            <button key={c} className={`wp-cat${activeCat === c ? ' on' : ''}`} onClick={() => setCat(c)}>
+              {c}<span className="wp-cat-n">{byCat[c].length}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      {shownCats.map(cat => (
         <div key={cat} className="wp-group">
-          <div className="wp-group-h">{cat}</div>
+          {/* 只选了一类时不必再顶一个同名标题 —— chips 已经写着当前在看哪类。 */}
+          {!activeCat && <div className="wp-group-h">{cat}</div>}
           <div className="wp-grid">
             {byCat[cat].map(w => (
               <WallpaperTile

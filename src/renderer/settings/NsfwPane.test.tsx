@@ -77,12 +77,12 @@ describe('NsfwPane applying a background clears the wallpaper-gallery highlight'
 // 「关闭按钮没了」其实就是这个。按钮一直在,这里把它和网格布局一起钉住。
 describe('NsfwPane 布局', () => {
   it('★ 关闭扩展的按钮始终在(它是唯一的退出口)', () => {
-    const { container } = renderPane()
+    const { container } = renderPane(vi.fn())
     const btn = Array.from(container.querySelectorAll('button')).find(b => b.textContent === '关闭此扩展')
     expect(btn).toBeTruthy()
   })
   it('内容列表用网格容器,不是纵向单列', () => {
-    const { container } = renderPane()
+    const { container } = renderPane(vi.fn())
     // .nsfw-list 的 grid 化在 settings.css 里;这里钉住结构:卡片都在同一个 .nsfw-list 容器内
     for (const list of container.querySelectorAll('.nsfw-list')) {
       expect(list.querySelectorAll('.nsfw-card').length).toBeGreaterThan(0)

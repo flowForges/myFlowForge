@@ -19,11 +19,49 @@ beforeEach(() => mockForge())
 
 describe('WallpaperGallery', () => {
   it('lists wallpapers grouped by category', async () => {
-    render(<WallpaperGallery current="" onApply={() => {}} />)
-    await waitFor(() => expect(screen.getByText('风景游戏')).toBeTruthy())
-    expect(screen.getByText('纯美')).toBeTruthy()
+    const { container } = render(<WallpaperGallery current="" onApply={() => {}} />)
+    // 分类名现在同时出现在 chip 和分组标题里,所以按 .wp-group-h 取,别用 getByText(会撞上)。
+    await waitFor(() => expect(container.querySelectorAll('.wp-group-h').length).toBe(2))
+    expect([...container.querySelectorAll('.wp-group-h')].map(e => e.textContent)).toEqual(['风景游戏', '纯美'])
     expect(screen.getByText('【风景游戏】圣剑光辉')).toBeTruthy()
     expect(screen.getByText('【纯美】银发少女')).toBeTruthy()
+  })
+
+  // 壁纸到两三百张之后,把所有分类堆着滚太长 —— chips 让「我要看风景」一步到位。
+  describe('分类页签', () => {
+    const chip = (c: HTMLElement, name: string) =>
+      [...c.querySelectorAll('.wp-cat')].find(e => e.textContent?.startsWith(name)) as HTMLElement
+
+    it('每个分类一个 chip,带数量;另有「全部」', async () => {
+      const { container } = render(<WallpaperGallery current="" onApply={() => {}} />)
+      await waitFor(() => expect(container.querySelectorAll('.wp-cat').length).toBe(3))
+      expect(chip(container, '全部').textContent).toContain('2')
+      expect(chip(container, '风景游戏').textContent).toContain('1')
+    })
+
+    it('★ 选一类后只剩那一类,别的不再渲染', async () => {
+      const { container } = render(<WallpaperGallery current="" onApply={() => {}} />)
+      await waitFor(() => expect(container.querySelectorAll('.wp-cat').length).toBe(3))
+      fireEvent.click(chip(container, '风景游戏'))
+      expect(screen.getByText('【风景游戏】圣剑光辉')).toBeTruthy()
+      expect(screen.queryByText('【纯美】银发少女')).toBeNull()
+    })
+
+    it('选中一类时不再顶一个同名分组标题(chip 已经写着)', async () => {
+      const { container } = render(<WallpaperGallery current="" onApply={() => {}} />)
+      await waitFor(() => expect(container.querySelectorAll('.wp-cat').length).toBe(3))
+      fireEvent.click(chip(container, '纯美'))
+      expect(container.querySelectorAll('.wp-group-h').length).toBe(0)
+    })
+
+    it('点「全部」回到分组视图', async () => {
+      const { container } = render(<WallpaperGallery current="" onApply={() => {}} />)
+      await waitFor(() => expect(container.querySelectorAll('.wp-cat').length).toBe(3))
+      fireEvent.click(chip(container, '纯美'))
+      fireEvent.click(chip(container, '全部'))
+      expect(container.querySelectorAll('.wp-group-h').length).toBe(2)
+      expect(screen.getByText('【风景游戏】圣剑光辉')).toBeTruthy()
+    })
   })
 
   it('clicking a tile installs and reports the forge-bg url + id', async () => {

@@ -316,6 +316,18 @@
 .nsfw-install { flex: 0 0 auto; width: 100%; justify-content: center; }
 .nsfw-divider { border: none; border-top: 1px solid var(--border-2); margin: 4px 0; }
 
+/* 分类 chips。壁纸到两三百张后,把所有分类纵向堆着滚要滚很久;chips 让「我要看风景」一步到位。
+   带计数是因为分类大小很不均衡,先看到数量能少点几次。 */
+.wp-cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.wp-cat {
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 99px;
+  font-size: 11.5px; font-weight: 550; color: var(--muted);
+  border: 1px solid var(--border); background: var(--surface-2); transition: .13s;
+}
+.wp-cat:hover { color: var(--fg); border-color: var(--border-2); }
+.wp-cat.on { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.wp-cat-n { font-size: 10px; font-variant-numeric: tabular-nums; opacity: .7; }
+
 /* Built-in wallpaper gallery — a thumbnail grid where clicking a tile downloads + applies it. */
 .wp-group { margin-top: 10px; }
 .wp-group-h { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
