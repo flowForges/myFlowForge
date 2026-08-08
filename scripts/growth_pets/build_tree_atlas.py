@@ -5,20 +5,40 @@ from __future__ import annotations
 
 import argparse
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 from scripts.growth_pets.build_atlas import CELL, COLS, ROWS, _trim_and_fit
 
-SUN_POSITIONS = {2: (95, 14), 3: (60, 14), 4: (25, 14)}
-SPROUT_LEFT_PIVOT = (58, 47)
-SPROUT_RIGHT_PIVOT = (62, 47)
-SPROUT_FIXED_CORE_BOX = (55, 40, 65, 89)
-SPROUT_ANGLES = {
-    0: (0, 3, 6, 3, 0, -2),
-    1: (0, 8, 14, 8, 0, -5),
-    2: (0, 12, 20, 12, 0, -7),
+SUN_POSITIONS = {0: (95, 14), 1: (95, 14), 2: (95, 14), 3: (60, 14), 4: (25, 14)}
+TIP_OFFSETS = {
+    0: (0, -1, -2, -1, 0, 1),
+    1: (0, -4, -7, -4, 0, 3),
+    2: (0, -6, -10, -6, 0, 4),
+}
+
+
+@dataclass(frozen=True)
+class LeafSpec:
+    box: tuple[int, int, int, int]
+    pivot: tuple[int, int]
+    tip_x: int
+    joint_box: tuple[int, int, int, int]
+
+
+STAGE_LEAVES = {
+    0: (
+        LeafSpec((24, 23, 58, 54), (58, 47), 27, (54, 40, 62, 54)),
+        LeafSpec((62, 23, 98, 54), (62, 47), 95, (58, 40, 66, 54)),
+    ),
+    1: (
+        LeafSpec((42, 22, 59, 41), (58, 39), 43, (54, 35, 62, 44)),
+        LeafSpec((62, 22, 78, 43), (63, 41), 76, (59, 37, 67, 46)),
+        LeafSpec((27, 36, 51, 56), (50, 52), 28, (46, 48, 54, 57)),
+        LeafSpec((71, 40, 96, 59), (72, 55), 94, (68, 51, 76, 60)),
+    ),
 }
 
 
@@ -53,47 +73,83 @@ def _clear_parts(cell: Image.Image, parts: tuple[Image.Image, ...]) -> Image.Ima
     return static
 
 
-def _shift(part: Image.Image, dx: int, dy: int) -> Image.Image:
-    shifted = Image.new("RGBA", part.size, (0, 0, 0, 0))
-    shifted.alpha_composite(part, (dx, dy))
-    return shifted
+def _is_leaf_pixel(pixel: tuple[int, int, int, int]) -> bool:
+    red, green, blue, alpha = pixel
+    return bool(alpha and green > red * 1.15 and green > blue * 1.2)
 
 
-def _rotate_about(part: Image.Image, degrees: float, pivot: tuple[int, int]) -> Image.Image:
-    return part.rotate(
-        degrees,
+def _restore_structure(result: Image.Image, base: Image.Image, stage: int) -> None:
+    mask = Image.new("L", base.size, 0)
+    draw = ImageDraw.Draw(mask)
+    if stage == 0:
+        draw.line(((60, 45), (60, 90)), fill=255, width=10)
+    else:
+        draw.line(((60, 36), (60, 91)), fill=255, width=8)
+        draw.line(((60, 46), (58, 39)), fill=255, width=7)
+        draw.line(((60, 46), (63, 41)), fill=255, width=7)
+        draw.line(((60, 63), (50, 52)), fill=255, width=7)
+        draw.line(((60, 63), (72, 55)), fill=255, width=7)
+    result.paste(base, (0, 0), mask)
+
+    source = base.load()
+    target = result.load()
+    for y in range(base.height):
+        for x in range(base.width):
+            source_pixel = source[x, y]
+            target_pixel = target[x, y]
+            source_is_wood = _is_wood_tone(source_pixel)
+            target_is_wood = _is_wood_tone(target_pixel)
+            if source_is_wood or target_is_wood:
+                target[x, y] = source_pixel
+
+
+def _is_wood_tone(pixel: tuple[int, int, int, int]) -> bool:
+    red, green, blue, alpha = pixel
+    return bool(alpha and 55 <= red <= 115 and 60 <= green <= 125 and 45 <= blue <= 105)
+
+
+def _deform_leaf(part: Image.Image, spec: LeafSpec, tip_dy: int) -> Image.Image:
+    px, py = spec.pivot
+    tip_dx = spec.tip_x - px
+    scale_x = 1 - min(abs(tip_dy) * 0.018, 0.18)
+    scale_y = 0.98
+    shear = tip_dy / tip_dx
+
+    a = 1 / scale_x
+    c = px * (1 - a)
+    e = 1 / scale_y
+    d = -shear * a * e
+    f = py * (1 - e) + shear * px * a * e
+    return part.transform(
+        part.size,
+        Image.Transform.AFFINE,
+        (a, 0, c, d, e, f),
         resample=Image.Resampling.BICUBIC,
-        center=pivot,
     )
 
 
-def _sprout_frame(base: Image.Image, row: int, frame: int) -> Image.Image:
-    left = _masked_part(base, lambda x, y: y < 72 and x < SPROUT_LEFT_PIVOT[0])
-    right = _masked_part(base, lambda x, y: y < 72 and x > SPROUT_RIGHT_PIVOT[0])
-    static = _clear_parts(base, (left, right))
-    angle = SPROUT_ANGLES[row][frame]
+def _young_leaf_frame(base: Image.Image, stage: int, row: int, frame: int) -> Image.Image:
+    specs = STAGE_LEAVES[stage]
+    parts = tuple(
+        _masked_part(
+            base,
+            lambda x, y, box=spec.box: (
+                box[0] <= x < box[2]
+                and box[1] <= y < box[3]
+                and _is_leaf_pixel(base.getpixel((x, y)))
+            ),
+        )
+        for spec in specs
+    )
+    static = _clear_parts(base, parts)
+    tip_dy = TIP_OFFSETS[row][frame]
 
     result = static.copy()
-    result.alpha_composite(_rotate_about(left, -angle, SPROUT_LEFT_PIVOT))
-    result.alpha_composite(_rotate_about(right, angle, SPROUT_RIGHT_PIVOT))
-    result.paste(base.crop(SPROUT_FIXED_CORE_BOX), SPROUT_FIXED_CORE_BOX[:2])
-    return result
-
-
-def _young_frame(base: Image.Image, stage: int, row: int, frame: int) -> Image.Image:
-    moving_ceiling = 78
-    left = _masked_part(base, lambda x, y: y < moving_ceiling and x < 57)
-    right = _masked_part(base, lambda x, y: y < moving_ceiling and x > 63)
-    static = _clear_parts(base, (left, right))
-
-    idle = ((0, 0), (0, -1), (0, -2), (0, -1), (0, 0), (0, 1))
-    working = ((-2, -3), (2, 3), (-2, -4), (2, 4), (-2, -3), (2, 3))
-    alert = ((-3, -5), (3, 5), (-3, -6), (3, 6), (-3, -5), (3, 5))
-    dx, dy = (idle, working, alert)[row][frame]
-
-    result = static.copy()
-    result.alpha_composite(_shift(left, dx, dy))
-    result.alpha_composite(_shift(right, -dx, -dy))
+    for part, spec in zip(parts, specs):
+        result.alpha_composite(_deform_leaf(part, spec, tip_dy))
+    _restore_structure(result, base, stage)
+    for spec in specs:
+        result.paste(base.crop(spec.joint_box), spec.joint_box[:2])
     return result
 
 
@@ -148,15 +204,14 @@ def build_tree_atlas(source_path: Path, output_path: Path, stage: int) -> None:
     atlas = Image.new("RGBA", (COLS * CELL, ROWS * CELL), (0, 0, 0, 0))
     for row in range(ROWS):
         for frame in range(COLS):
-            if stage == 0:
-                cell = _sprout_frame(base, row, frame)
-            elif stage == 1:
-                cell = _young_frame(base, stage, row, frame)
+            if stage in STAGE_LEAVES:
+                cell = _young_leaf_frame(base, stage, row, frame)
             else:
                 cell = base.copy()
-                if stage in SUN_POSITIONS and row > 0:
+            if row > 0:
+                if stage in SUN_POSITIONS:
                     _draw_sun(cell, SUN_POSITIONS[stage], frame, alert=row == 2)
-                elif stage == 5 and row > 0:
+                elif stage == 5:
                     _draw_wind_and_leaves(cell, frame, alert=row == 2)
             atlas.alpha_composite(cell, (frame * CELL, row * CELL))
 
