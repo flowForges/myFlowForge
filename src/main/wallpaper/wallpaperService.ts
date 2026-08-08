@@ -1,4 +1,5 @@
-import { WALLPAPER_CATALOG_URL, WALLPAPER_EXCLUDED_IDS, type WallpaperCatalog, type WallpaperItem } from '../../shared/wallpaper'
+import { wallpaperBlocklist } from './wallpaperBlocklist'
+import { WALLPAPER_CATALOG_URL, type WallpaperCatalog, type WallpaperItem } from '../../shared/wallpaper'
 import { storeBackgroundFromBytes, backgroundImageUrl } from '../appearance/backgroundStore'
 import type { PreviewCache } from '../appearance/previewCache'
 
@@ -27,8 +28,11 @@ export async function wallpaperCatalog(fetchImpl: WallpaperFetch): Promise<Wallp
     const res = await fetchImpl(WALLPAPER_CATALOG_URL)
     if (!res.ok) return { error: `获取壁纸目录失败(${res.status})` }
     const c = (await res.json()) as Partial<WallpaperCatalog>
+    // 下架名单 = 编译进包的基础名单 ∪ 远程名单(见 wallpaperBlocklist)。远程那份让「某张图有版权问题」
+    // 能立刻对所有历史版本生效,不必等发版 —— 而目录本身仍然钉在 tag 上(每批壁纸打新 tag)。
+    const blocked = await wallpaperBlocklist(fetchImpl)
     const wallpapers = Array.isArray(c.wallpapers)
-      ? c.wallpapers.filter(validItem).filter((w) => !WALLPAPER_EXCLUDED_IDS.has(w.id))
+      ? c.wallpapers.filter(validItem).filter((w) => !blocked.has(w.id))
       : []
     return { wallpapers }
   } catch { return { error: '无法连接壁纸服务' } }
