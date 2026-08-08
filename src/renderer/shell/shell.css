@@ -190,9 +190,11 @@
   animation: pulse 1.4s infinite;
 }
 /* Per-workspace status badge (#3): 待输入 > 待确认 > 执行中, highest-priority only. */
+/* 住在 .ws-aside(右侧栏)里,不在名字行 —— 放名字行会把工作区名挤成「f…」,见 Sidebar.tsx 的注释。
+   margin-left 归零:右侧栏是纵向 flex,左外边距只会把它推离右对齐边。 */
 .ws-status-badge {
   position: relative; overflow: hidden;
-  flex: 0 0 auto; margin-left: 6px; font-size: 10px; font-weight: 650;
+  flex: 0 0 auto; font-size: 10px; font-weight: 650;
   border-radius: 99px; padding: 1px 7px; white-space: nowrap;
   animation: wsBadgeBreath 2.1s ease-in-out infinite;
 }

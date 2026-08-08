@@ -185,6 +185,26 @@ afterEach(() => {
 })
 
 describe('registerIpc broadcast wiring', () => {
+  it('★ 一轮结束后重播会话列表 —— 否则侧栏的「最后对话时间」永远停在上次拉列表时的值', async () => {
+    const { registerIpc } = await import('./handlers')
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const { sendTurn } = await import('../chat/chatService') as any
+    // 抓住 registerIpc 传给 sendTurn 的 emit,直接喂一个终态事件。
+    sendTurn.mockReset().mockImplementation((_payload: any, deps: any) => {
+      deps.emit({ workspacePath: '/ws/a', sessionId: 's1', type: 'done', message: { id: 'm', who: 'ai', text: 'hi', ts: '' } })
+      return Promise.resolve({})
+    })
+    const { ipcMain } = await import('electron') as any
+    const handler = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)?.[1]
+    handler({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    const replay = sent.filter(([c, p]) => c === CH.sessionsChanged && (p as any).workspacePath === '/ws/a')
+    expect(replay.length).toBeGreaterThan(0)
+    // 且重播出去的必须是补过 lastMessageAt 的
+    expect((replay[replay.length - 1][1] as any).file.sessions[0]).toHaveProperty('lastMessageAt')
+  })
+
   it('broadcasts settingsChanged and calls onSettings when settings are written', async () => {
     const { registerIpc } = await import('./handlers')
     const { ipcMain } = await import('electron') as any

@@ -243,12 +243,6 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                       <span className="ws-name-txt" onDoubleClick={e => { e.stopPropagation(); if (!item.archived && onRename) beginWsRename(item.id, item.name) }}>{item.name}</span>
                     )}
                     {item.imported && <span className="ws-imp-ico" title="本机导入的工作区">{IMPORT_ICON}</span>}
-                    {item.statusBadge && <span className={`ws-status-badge ${item.statusBadge.kind}`}>
-                      {item.statusBadge.kind === 'run' ? '⚡ 执行中'
-                        : item.statusBadge.kind === 'confirm' ? '❓ 待确认'
-                        : '✏️ 待输入'}
-                      {item.statusBadge.count > 1 ? ` ×${item.statusBadge.count}` : ''}
-                    </span>}
                     {/* unread dot at the workspace level, only while its session list is collapsed */}
                     {!expandedIds?.has(item.id) && workspaceHasUnread(unread, item.id) && <span className="ws-unread" title="有已完成待查看的会话" aria-label="未读" />}
                   </span>
@@ -261,7 +255,19 @@ function GroupSection({ group, activeId, draggable, hideHeader, onReorder, onSel
                       但**必须保留占位** —— 早先写成 `!isOn && …`,于是切换工作区时这枚 ~38px 的角标在
                       旧行"长出来"、新行"消失",两行的 .ws-meta(flex:1) 同时重排,整条列表看着在抖。
                       改成常驻渲染 + 选中时 visibility 隐藏:观感不变,布局零变化。 */}
-                  {(sessionsByWs?.[item.id]?.length ?? 0) > 1 && (
+                  {/* 状态徽章放在右侧这一栏,而不是挤在工作区名字后面 —— 名字是可收缩的(min-width:0 +
+                      省略号),而徽章 flex:0 0 auto 不让步,于是「for-new-0731」被压成「f…」,一整列工作区
+                      名全看不清。挪到这里后名字能吃满整行宽度。
+                      有徽章时占掉会话计数角标的位置(它俩都是 ~40–70px 的右侧小件,同时出现既拥挤又冗余
+                      ——「正在执行」比「有几个会话」重要得多)。 */}
+                  {item.statusBadge ? (
+                    <span className={`ws-status-badge ${item.statusBadge.kind}`}>
+                      {item.statusBadge.kind === 'run' ? '⚡ 执行中'
+                        : item.statusBadge.kind === 'confirm' ? '❓ 待确认'
+                        : '✏️ 待输入'}
+                      {item.statusBadge.count > 1 ? ` ×${item.statusBadge.count}` : ''}
+                    </span>
+                  ) : (sessionsByWs?.[item.id]?.length ?? 0) > 1 && (
                     <span
                       className={`ws-scount${isOn ? ' ghost' : ''}`}
                       aria-hidden={isOn || undefined}

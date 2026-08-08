@@ -312,8 +312,11 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     }
     const finishErr = (err: Error): ChatMessage => {
       finalizeRunning('error')
-      emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message })
       const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
+      // 事件带上落档的 msg。`text` 非空时这一轮其实是「答完了但收尾报错」(provider 先流出了答案,再以非零
+      // 退出/stderr 收尾),app 显示的就是这段正文;不带 msg 的话下游只看得到 err.message,只能一律当彻底
+      // 失败处理 —— 机器人就是这么把一次有答案的回合报成 ❌ 的。
+      emit({ workspacePath: ws, sessionId: sid, type: 'error', id: aid, error: err.message, message: msg })
       appendMessage(ws, sid, msg)
       clearLive(ws, sid, aid)
       scheduleDistill()

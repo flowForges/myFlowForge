@@ -131,7 +131,8 @@ const api = {
   setWorkspacePinned: (path: string, pinned: boolean) => ipcRenderer.invoke(CH.workspacesSetPinned, { path, pinned }),
   setWorkspaceOrder: (order: string[]) => ipcRenderer.invoke(CH.workspacesSetOrder, { order }),
   petSetExpanded: (mode: 'collapsed' | 'bubble' | 'expanded'): Promise<'up' | 'down'> => ipcRenderer.invoke(CH.petSetExpanded, mode),
-  petFocusWorkspace: (path: string) => ipcRenderer.invoke(CH.petFocusWorkspace, path),
+  // sessionId 可选:宠物气泡上的「去 app 处理」要落到发起这次确认的那个会话,只给工作区会跳到当前会话。
+  petFocusWorkspace: (path: string, sessionId?: string) => ipcRenderer.invoke(CH.petFocusWorkspace, path, sessionId),
   petSetPosition: (x: number, y: number) => ipcRenderer.invoke(CH.petSetPosition, { x, y }),
   petSetScale: (scale: number): Promise<'up' | 'down'> => ipcRenderer.invoke(CH.petSetScale, scale),
   petResizeBegin: (): Promise<void> => ipcRenderer.invoke(CH.petResizeBegin),
@@ -204,8 +205,8 @@ const api = {
     ipcRenderer.on(CH.menuAction, listener)
     return () => ipcRenderer.removeListener(CH.menuAction, listener)
   },
-  onNavigateWorkspace: (cb: (p: { path: string }) => void) => {
-    const listener = (_: unknown, p: { path: string }) => cb(p)
+  onNavigateWorkspace: (cb: (p: { path: string; sessionId?: string }) => void) => {
+    const listener = (_: unknown, p: { path: string; sessionId?: string }) => cb(p)
     ipcRenderer.on(CH.navigateWorkspace, listener)
     return () => ipcRenderer.removeListener(CH.navigateWorkspace, listener)
   },

@@ -353,7 +353,14 @@ export function App() {
   }, [settings, wallpaperPalette])
 
   useEffect(() => {
-    const off = window.forge.onNavigateWorkspace(({ path }) => { setActiveId(path); setView('ws') })
+    // 带 sessionId 时同时切到那个会话 —— 宠物气泡的「去 app 处理」是为某个具体会话的确认门弹出来的,
+    // 只切工作区会把用户丢在当前会话上,那扇门还是看不见。走 IPC 而不是 sessions.switchSession:这个
+    // 订阅是空依赖只装一次的,闭包里的 hook 会是启动时那一份(而且目标工作区常常还不是当前活动工作区);
+    // sessionSwitch 会广播 sessionsChanged,useSessions 照常收到并更新。
+    const off = window.forge.onNavigateWorkspace(({ path, sessionId }) => {
+      setActiveId(path); setView('ws')
+      if (sessionId) void window.forge.sessionSwitch?.({ workspacePath: path, sessionId })
+    })
     return () => { off() }
   }, [])
 

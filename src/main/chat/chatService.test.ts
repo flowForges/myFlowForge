@@ -7,6 +7,20 @@ import { readMessages, readSession } from './chatStore'
 import type { AgentProvider, ChatCallbacks, ChatTask } from '../agents/types'
 import type { ChatEvent, ChatSendPayload } from '@shared/types'
 
+// 这个文件里的 prompt 断言(尤其「fast path 不注入任何前言」)必须只取决于代码,不能取决于开发机上
+// ~/.myFlowForge/settings.json 的当前内容。sendTurn 会读 appearance.chatInlineHtml 决定要不要前置格式
+// 指令 —— 不钉死的话,用户在 app 里打开「内嵌 HTML 可视化」,这里就会莫名其妙变红。其余设置走真实值。
+vi.mock('../config/store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/store')>()
+  return {
+    ...actual,
+    readSettings: () => {
+      const s = actual.readSettings()
+      return { ...s, appearance: { ...s.appearance, chatInlineHtml: false } }
+    },
+  }
+})
+
 let ws: string
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'svc-')) })
 afterEach(() => rmSync(ws, { recursive: true, force: true }))

@@ -71,3 +71,19 @@ describe('useUnread —— 订阅缺失时的防御', () => {
     expect(() => renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))).not.toThrow()
   })
 })
+
+describe('★ 以错误收尾的回合也要标未读', () => {
+  const err = (workspacePath: string, sessionId: string): ChatEvent =>
+    ({ workspacePath, sessionId, type: 'error', id: 'a', error: 'boom' }) as ChatEvent
+
+  it('后台会话跑挂了 → 留下未读(这恰恰是最该提醒的情况)', () => {
+    const { result } = renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    act(() => { fire(err('/ws', 'B')) })
+    expect(isSessionUnread(result.current, '/ws', 'B')).toBe(true)
+  })
+  it('正在看的那个会话跑挂了 → 不留未读', () => {
+    const { result } = renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    act(() => { fire(err('/ws', 'A')) })
+    expect(isSessionUnread(result.current, '/ws', 'A')).toBe(false)
+  })
+})

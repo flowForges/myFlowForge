@@ -293,7 +293,14 @@ export function PetApp() {
   useEffect(() => {
     if (simpleKind === 'confirm' || simpleKind === 'input') setSimpleCollapsed(false)
   }, [simpleKind])
-  const onSimpleJump = (path?: string) => window.forge.petFocusWorkspace(path ?? run?.workspacePath ?? currentWs ?? '')
+  // 「去 app 处理」的落点优先用**这次确认自己所在的会话**(chatActivity.confirmAt)。之前回落到
+  // run?.workspacePath ?? currentWs:run 恒空,currentWs 是主窗口当前打开的工作区 —— 而等确认的往往是另一个
+  // 后台会话,于是点了跳到一个跟这次确认无关的地方,那扇门依然要自己翻。显式传 path(点某一行)时以它为准。
+  const onSimpleJump = (path?: string) => {
+    const at = chatActivity.confirmAt
+    if (!path && at?.wsPath) return window.forge.petFocusWorkspace(at.wsPath, at.sessionId)
+    return window.forge.petFocusWorkspace(path ?? run?.workspacePath ?? currentWs ?? '')
+  }
   const runningWorkspaces = data.workspaces.filter(w => w.status === 'run').map(w => ({ name: w.name, path: w.path }))
 
   // The drag hook needs the live popup direction at drop time (the sprite sits at the window top in

@@ -356,7 +356,10 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'delegate-start'; id: string; batch: DelegateBatch }
   | { type: 'delegate-progress'; id: string; agentId: string; status: DelegateBatchAgent['status']; output?: string; activity?: string }
   | { type: 'delegate-done'; id: string }
-  | { type: 'error'; id: string; error: string }
+  // `message` 是这一轮实际落档的回复。错误路径下它常常**是有正文的** —— provider 先流出了答案、再以非零
+  // 退出/stderr 收尾(见 chatService.finishErr 的 `text || 错误: …`)。带上它,消费方才分得清「彻底失败」和
+  // 「答完了但收尾有告警」:app 一直显示的是正文,机器人过去只看 error 就打 ❌,同一轮两种观感。
+  | { type: 'error'; id: string; error: string; message?: ChatMessage }
 )
 
 export type { Settings, Appearance, Pet, PetState, Anim, Accent, PetStateConfig, AgentsConfig, CustomAgent, CustomPetCfg, Terminal, CloseAction, AppIcon, DockIcon, Notifications, Keybindings } from '../main/config/schema'

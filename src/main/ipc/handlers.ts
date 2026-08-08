@@ -381,7 +381,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.workspacesChanged, {})
     return result
   })
-  const chatEmit = (e: ChatEvent) => broadcast(CH.chatEvent, e)
+  const chatEmit = (e: ChatEvent) => {
+    broadcast(CH.chatEvent, e)
+    // 一轮结束后重播一次会话列表。lastMessageAt 是按消息文件 mtime 现算的,而写消息本身不会产生任何
+    // sessions 事件 —— 不补这一下,侧栏那一行的时间会一直停在上次拉取列表时的值(一个刚跑完的会话仍显示
+    // 几天前),直到用户碰巧做了个新建/切换/改名。done 和 error 都是终态,两者互斥。
+    if (e.type === 'done' || e.type === 'error') {
+      try { broadcastSessions(e.workspacePath, readSessions(e.workspacePath)) } catch { /* 会话文件读不到就算了,不能拖累事件广播 */ }
+    }
+  }
   const chatConfirms = new Map<string, (decision: 'allow' | 'deny') => void>()
   let chatConfirmSeq = 0
   // Chat-side ASK (question + optional options, returns a string) — the delegate bridge routes a

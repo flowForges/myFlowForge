@@ -78,3 +78,37 @@ describe('侧栏会话时间', () => {
     expect(timeOf(container, 0)).toContain('天')
   })
 })
+
+describe('执行中徽章的位置', () => {
+  const withBadge = (extra: Record<string, unknown> = {}, sessCount = 3) => render(
+    <Sidebar
+      groups={[{ key: 'g', label: '最近', items: [{
+        id: wsId, name: 'for-new-0731-很长的工作区名', sub: '3 个项目', status: 'run',
+        statusBadge: { kind: 'run', count: 1 }, ...extra,
+      }] }]}
+      activeId="/other" onSelect={() => {}} onNew={() => {}} collapsed={false}
+      sessions={sessions} activeSessionId="s1"
+      onSwitchSession={() => {}} onCloseSession={() => {}} onRenameSession={() => {}} onNewSession={() => {}}
+      expandedIds={new Set()} sessionsByWs={{ [wsId]: Array.from({ length: sessCount }, (_, i) => ({ id: `s${i}`, title: 't', mode: 'chat' as const, createdAt: 0 })) }}
+    />
+  ).container
+
+  it('★ 徽章不在名字行里 —— 在名字行会把工作区名挤成「f…」', () => {
+    const c = withBadge()
+    expect(c.querySelector('.ws-name .ws-status-badge')).toBeNull()
+    expect(c.querySelector('.ws-aside .ws-status-badge')).toBeTruthy()
+  })
+  it('工作区名完整渲染,没有被截断成一两个字', () => {
+    const c = withBadge()
+    expect(c.querySelector('.ws-name-txt')?.textContent).toBe('for-new-0731-很长的工作区名')
+  })
+  it('有徽章时会话计数角标让位', () => {
+    const c = withBadge()
+    expect(c.querySelector('.ws-scount')).toBeNull()
+  })
+  it('没有徽章时会话计数角标照常显示', () => {
+    const c = withBadge({ statusBadge: null })
+    expect(c.querySelector('.ws-status-badge')).toBeNull()
+    expect(c.querySelector('.ws-scount')).toBeTruthy()
+  })
+})

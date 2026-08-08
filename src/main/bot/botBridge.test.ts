@@ -286,3 +286,40 @@ describe('BotBridge — offline safety', () => {
     expect(h.fake.sent).toHaveLength(0)
   })
 })
+
+describe('BotBridge — 以错误收尾但有答案的回合', () => {
+  // 真实场景:provider 先把回答流完,再因为一条 stderr 告警(如新版 claude 的
+  // `--dangerously-bypass-hook-trust` is enabled…)以非零收尾。app 显示的是正文,机器人过去只看
+  // p.error 就打 ❌ —— 同一轮在 app 里成功、在钉钉里失败。
+  it('★ 有正文时发正文 + 告警,不报 ❌ 出错', async () => {
+    const h = await attached()
+    h.bridge.observe('chat:event', {
+      workspacePath: '/ws1', sessionId: 'sess-abc', type: 'error', id: 'e1',
+      error: '`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review.',
+      message: { text: '这是模型真的答出来的内容。' },
+    })
+    const t = h.fake.lastText()
+    expect(t).toContain('这是模型真的答出来的内容。')
+    expect(t).not.toContain('❌ 出错')
+    expect(t).toContain('告警')          // 错误降级成附注,信息没被吞掉
+  })
+
+  it('真的什么都没答出来时,仍然是 ❌ 出错', async () => {
+    const h = await attached()
+    h.bridge.observe('chat:event', {
+      workspacePath: '/ws1', sessionId: 'sess-abc', type: 'error', id: 'e2', error: 'spawn ENOENT',
+    })
+    const t = h.fake.lastText()
+    expect(t).toContain('❌ 出错')
+    expect(t).toContain('spawn ENOENT')
+  })
+
+  it('正文只有空白 → 按彻底失败处理', async () => {
+    const h = await attached()
+    h.bridge.observe('chat:event', {
+      workspacePath: '/ws1', sessionId: 'sess-abc', type: 'error', id: 'e3', error: 'boom',
+      message: { text: '   \n  ' },
+    })
+    expect(h.fake.lastText()).toContain('❌ 出错')
+  })
+})

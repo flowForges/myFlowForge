@@ -463,10 +463,11 @@ app.whenReady().then(() => {
     activeWsPath = path || null
     if (petWin && !petWin.isDestroyed()) petWin.webContents.send(CH.petActiveWorkspace, activeWsPath)
   })
-  ipcMain.handle(CH.petFocusWorkspace, (_e, path: string) => {
+  // sessionId 可选:宠物是因为某个会话在等确认才弹的气泡,只导航到工作区会停在当前会话上,用户还得自己找。
+  ipcMain.handle(CH.petFocusWorkspace, (_e, path: string, sessionId?: string) => {
     if (mainWin.isDestroyed()) return
     mainWin.show(); mainWin.focus()
-    mainWin.webContents.send(CH.navigateWorkspace, { path })
+    mainWin.webContents.send(CH.navigateWorkspace, { path, sessionId })
   })
 
   // Custom traffic-lights drive these (the window is frameless, so there are no
