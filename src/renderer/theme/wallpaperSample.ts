@@ -108,5 +108,12 @@ export function useWallpaperPalette(a: Appearance | undefined, opts?: { always?:
     loadWallpaperPalette(url).then(p => { if (!cancelled) setPalette(p) })
     return () => { cancelled = true }
   }, [url])
-  return url ? palette : null
+  // ★ 同步兜底,不能只靠上面的 useState 初始化器 —— 它只在挂载那一刻求值一次,而那时 settings 还没从 IPC
+  // 回来(a 是 undefined、url 为空),peek 必然是 null。等设置到达时初始化器不会再跑,只能等 effect 里
+  // setPalette,可 applyTheme 已经先用 palette=null 渲染过一帧了:那一帧用的是用户的基础 accent
+  // (自定义强调色可能是任意颜色),于是开屏「先闪一下强调色,再变成壁纸配色」。
+  // 这里直接读同步缓存(内存 Map / localStorage,壁纸 URL 是内容寻址的,命中即正确),让设置到达的**那一帧**
+  // 就已经带着壁纸配色。缓存未命中(第一次见这张壁纸)仍会异步算,那种情况闪一下无法避免。
+  const cachedNow = url ? peekWallpaperPalette(url) : null
+  return url ? (palette ?? cachedNow) : null
 }
