@@ -99,6 +99,26 @@ export function useLogs(): LogsApi {
         return
       }
 
+      // 主代理的工具调用 → 「执行」页签。之前这条线完全没接:对话区的执行块显示着「共 21 步」,而实时日志
+      // 的「执行」页签是空的 —— 日志里只剩一条指令和一条输出,看着像「AI 什么都没干」。
+      // 每个工具一行(按 tool.id 就地更新):start 时建行,done 时补上输出和成败,不为同一次调用刷两行。
+      if (e.type === 'tool-activity') {
+        const lineId = `tool-${e.id}-${e.tool.id}`
+        const done = e.tool.status !== 'run'
+        const body = e.tool.output?.trim()
+        // 输出可能很长(整个文件、整片 rg 结果),日志是滚动流不是阅读器 —— 截断,完整内容在对话区的执行块里。
+        const clipped = body && body.length > 400 ? `${body.slice(0, 400)}…` : body
+        const text = done && clipped ? `${e.tool.title}\n${clipped}` : e.tool.title
+        setLogs(prev => prev.some(l => l.id === lineId)
+          ? prev.map(l => l.id === lineId ? { ...l, text, streaming: !done, level: e.tool.status === 'error' ? 'exec' : l.level } : l)
+          : appendLines(prev, [{
+            id: lineId, t: logStamp(now), level: 'exec' as const, src: '主代理',
+            color: e.tool.status === 'error' ? 'var(--err)' : 'var(--muted)',
+            ws: e.workspacePath, sess: e.sessionId, text, streaming: !done,
+          }]))
+        return
+      }
+
       if (e.type === 'done') {
         setBusy(false)
         const lineId = streamingLines.current.get(e.message.id)
