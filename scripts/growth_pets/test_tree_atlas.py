@@ -17,6 +17,25 @@ def _source(path: Path) -> None:
     image.save(path)
 
 
+def _branched_source(path: Path) -> None:
+    image = Image.new("RGBA", (400, 400), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(image)
+    soil = (95, 58, 35, 255)
+    branch = (85, 90, 75, 255)
+    leaf = (45, 150, 65, 255)
+    draw.ellipse((70, 300, 330, 385), fill=soil)
+    draw.line((200, 315, 200, 95), fill=branch, width=14)
+    draw.line((200, 205, 132, 128), fill=branch, width=10)
+    draw.line((200, 220, 270, 142), fill=branch, width=10)
+    draw.line((200, 120, 168, 78), fill=branch, width=8)
+    draw.line((200, 120, 238, 72), fill=branch, width=8)
+    draw.ellipse((88, 94, 148, 142), fill=leaf)
+    draw.ellipse((258, 108, 326, 158), fill=leaf)
+    draw.ellipse((130, 48, 180, 94), fill=leaf)
+    draw.ellipse((226, 42, 278, 88), fill=leaf)
+    image.save(path)
+
+
 def _cells(atlas: Image.Image) -> list[Image.Image]:
     return [
         atlas.crop((col * 120, row * 120, col * 120 + 120, row * 120 + 120))
@@ -67,8 +86,19 @@ def _changed_pixels(first: Image.Image, second: Image.Image, box: tuple[int, int
     )
 
 
+def _branch_mask(cell: Image.Image) -> bytes:
+    mask = Image.new("1", cell.size, 0)
+    target = mask.load()
+    for y in range(cell.height):
+        for x in range(cell.width):
+            red, green, blue, alpha = cell.getpixel((x, y))
+            if alpha and 55 <= red <= 115 and 60 <= green <= 125 and 45 <= blue <= 105:
+                target[x, y] = 1
+    return mask.tobytes()
+
+
 class TreeAtlasTest(unittest.TestCase):
-    def _build(self, stage: int) -> Image.Image:
+    def _build(self, stage: int, source_builder=_source) -> Image.Image:
         try:
             from scripts.growth_pets.build_tree_atlas import build_tree_atlas
         except ImportError as exc:
@@ -78,7 +108,7 @@ class TreeAtlasTest(unittest.TestCase):
         root = Path(temporary.name)
         source = root / "source.png"
         output = root / "atlas.png"
-        _source(source)
+        source_builder(source)
         build_tree_atlas(source, output, stage)
         return Image.open(output).convert("RGBA")
 
@@ -128,8 +158,14 @@ class TreeAtlasTest(unittest.TestCase):
         self.assertGreater(working, idle)
         self.assertGreater(alert, working)
 
+    def test_branched_stage_never_moves_trunk_or_branches(self) -> None:
+        cells = _cells(self._build(1, _branched_source))
+        for row_start in (0, 6, 12):
+            expected = _branch_mask(cells[row_start])
+            self.assertTrue(all(_branch_mask(cells[row_start + frame]) == expected for frame in range(1, 6)))
+
     def test_single_sun_uses_stage_specific_position(self) -> None:
-        expected = {2: "right", 3: "center", 4: "left"}
+        expected = {0: "right", 1: "right", 2: "right", 3: "center", 4: "left"}
         for stage, position in expected.items():
             cells = _cells(self._build(stage))
             self.assertEqual(_sun_centroid(cells[0])[2], 0, f"stage {stage} idle must not contain a sun")
