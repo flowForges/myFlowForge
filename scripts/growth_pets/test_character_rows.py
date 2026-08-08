@@ -49,6 +49,42 @@ def _pose_source_with_floating_accents(path: Path, widths: list[int], heights: l
     image.save(path)
 
 
+def _tight_pose_source(path: Path, widths: list[int], heights: list[int], gap: int) -> None:
+    image = Image.new("RGBA", (520, 210), CHROMA)
+    draw = ImageDraw.Draw(image)
+    left = 15
+    for width, height in zip(widths, heights):
+        foot_y = 178
+        right = left + width
+        top = foot_y - height
+        draw.rectangle((left, top + 6, right, foot_y - 10), fill=BODY)
+        draw.rectangle((left, foot_y - 10, right, foot_y), fill=SHOE)
+        left += width + gap
+    image.save(path)
+
+
+def _five_pose_with_small_islands(path: Path) -> None:
+    image = Image.new("RGBA", (760, 220), CHROMA)
+    draw = ImageDraw.Draw(image)
+    left = 30
+    widths = [48, 50, 52, 54, 56]
+    heights = [88, 84, 80, 76, 72]
+    for index, (width, height) in enumerate(zip(widths, heights)):
+        foot_y = 184 - (index % 2) * 3
+        right = left + width
+        top = foot_y - height
+        draw.rounded_rectangle((left + 6, top + 12, right - 6, foot_y - 10), radius=7, fill=BODY)
+        draw.rectangle((left + 10, foot_y - 10, right - 10, foot_y), fill=SHOE)
+        ornament_left = left + width // 2 - 6
+        ornament_top = top - 8
+        draw.ellipse((ornament_left, ornament_top, ornament_left + 12, ornament_top + 12), fill=ACCENT)
+        left += width + 58
+    draw.ellipse((680, 18, 688, 26), fill=ACCENT)
+    draw.ellipse((705, 42, 713, 50), fill=ACCENT)
+    draw.ellipse((728, 30, 736, 38), fill=ACCENT)
+    image.save(path)
+
+
 def _alpha_bounds(image: Image.Image) -> tuple[int, int, int, int] | None:
     left = image.width
     top = image.height
@@ -194,6 +230,39 @@ class CharacterRowAssemblerTest(unittest.TestCase):
                             body_pixels += 1
                 self.assertGreater(accent_pixels, 15, f"cell {index} should keep the floating accent island")
                 self.assertGreater(body_pixels, 40, f"cell {index} should keep the main body island")
+
+    def test_assemble_character_row_keeps_tightly_spaced_independent_poses_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "tight.png"
+            output = root / "row.png"
+            _tight_pose_source(source, [38, 40, 42, 44, 46, 48], [84, 82, 80, 78, 76, 74], gap=10)
+
+            assemble_character_row(source, output)
+
+            with Image.open(output) as image:
+                row = image.convert("RGBA")
+
+            self.assertEqual(row.size, ROW_SIZE)
+            for index in range(6):
+                cell = row.crop((index * CELL_SIZE, 0, (index + 1) * CELL_SIZE, CELL_SIZE))
+                bounds = _alpha_bounds(cell)
+                self.assertIsNotNone(bounds, f"cell {index} should contain one pose")
+                left, top, right, bottom = bounds or (0, 0, 0, 0)
+                self.assertGreater(left, 0)
+                self.assertLess(right, CELL_SIZE - 1)
+                self.assertGreater(top, 0)
+                self.assertLess(bottom, CELL_SIZE - 1)
+
+    def test_assemble_character_row_rejects_five_poses_plus_small_islands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "five-plus-islands.png"
+            output = root / "row.png"
+            _five_pose_with_small_islands(source)
+
+            with self.assertRaisesRegex(ValueError, "6"):
+                assemble_character_row(source, output)
 
     def test_cli_writes_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

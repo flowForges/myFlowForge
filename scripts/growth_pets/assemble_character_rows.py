@@ -14,7 +14,7 @@ HORIZONTAL_PADDING = 8
 TOP_PADDING = 8
 BASELINE_Y = 109
 KEY_TOLERANCE = 16
-GROUP_GAP_TOLERANCE = 12
+MIN_PRIMARY_AREA_RATIO = 0.35
 
 
 def _border_key_color(image: Image.Image) -> tuple[int, int, int, int]:
@@ -72,6 +72,27 @@ def _components(image: Image.Image, key: tuple[int, int, int, int]) -> list[tupl
     return boxes
 
 
+def _box_area(box: tuple[int, int, int, int]) -> int:
+    left, top, right, bottom = box
+    return (right - left) * (bottom - top)
+
+
+def _box_center_x(box: tuple[int, int, int, int]) -> float:
+    left, _, right, _ = box
+    return (left + right) / 2
+
+
+def _horizontal_distance(box: tuple[int, int, int, int], anchor: tuple[int, int, int, int]) -> float:
+    left, _, right, _ = box
+    anchor_left, _, anchor_right, _ = anchor
+    overlap = min(right, anchor_right) - max(left, anchor_left)
+    if overlap > 0:
+        return 0.0
+    if right <= anchor_left:
+        return float(anchor_left - right)
+    return float(left - anchor_right)
+
+
 def _sprite_from_box(image: Image.Image, box: tuple[int, int, int, int], key: tuple[int, int, int, int]) -> Image.Image:
     sprite = image.crop(box).convert("RGBA")
     pixels = sprite.load()
@@ -82,22 +103,41 @@ def _sprite_from_box(image: Image.Image, box: tuple[int, int, int, int], key: tu
     return sprite
 
 
-def _merge_pose_groups(boxes: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
-    if not boxes:
-        return []
+def _pose_groups_from_components(boxes: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+    if len(boxes) < CELL_COUNT:
+        raise ValueError(f"expected exactly 6 pose groups, found {len(boxes)}")
 
-    groups: list[list[int]] = [list(boxes[0])]
-    for left, top, right, bottom in boxes[1:]:
-        current = groups[-1]
-        current_left, current_top, current_right, current_bottom = current
-        if left <= current_right + GROUP_GAP_TOLERANCE:
-            current[0] = min(current_left, left)
-            current[1] = min(current_top, top)
-            current[2] = max(current_right, right)
-            current[3] = max(current_bottom, bottom)
+    ranked = sorted(boxes, key=_box_area, reverse=True)
+    primary = ranked[:CELL_COUNT]
+    primary_areas = sorted(_box_area(box) for box in primary)
+    median_area = (primary_areas[2] + primary_areas[3]) / 2
+    if primary_areas[0] < median_area * MIN_PRIMARY_AREA_RATIO:
+        raise ValueError("expected exactly 6 pose groups, found fewer than 6 primary poses")
+
+    anchors = sorted(primary, key=lambda box: _box_center_x(box))
+    assignments: list[list[tuple[int, int, int, int]]] = [[anchor] for anchor in anchors]
+    anchor_ids = {id(anchor) for anchor in anchors}
+
+    for box in boxes:
+        if id(box) in anchor_ids:
             continue
-        groups.append([left, top, right, bottom])
-    return [tuple(group) for group in groups]
+        best_index = min(
+            range(len(anchors)),
+            key=lambda index: (
+                _horizontal_distance(box, anchors[index]),
+                abs(_box_center_x(box) - _box_center_x(anchors[index])),
+            ),
+        )
+        assignments[best_index].append(box)
+
+    pose_groups: list[tuple[int, int, int, int]] = []
+    for group in assignments:
+        left = min(box[0] for box in group)
+        top = min(box[1] for box in group)
+        right = max(box[2] for box in group)
+        bottom = max(box[3] for box in group)
+        pose_groups.append((left, top, right, bottom))
+    return pose_groups
 
 
 def assemble_character_row(source_path: Path, output_path: Path) -> None:
@@ -106,9 +146,7 @@ def assemble_character_row(source_path: Path, output_path: Path) -> None:
 
     key = _border_key_color(source)
     boxes = sorted(_components(source, key), key=lambda box: box[0])
-    pose_groups = _merge_pose_groups(boxes)
-    if len(pose_groups) != CELL_COUNT:
-        raise ValueError(f"expected exactly 6 pose groups, found {len(pose_groups)}")
+    pose_groups = _pose_groups_from_components(boxes)
 
     sprites = [_sprite_from_box(source, box, key) for box in pose_groups]
     max_width = max(sprite.width for sprite in sprites)
