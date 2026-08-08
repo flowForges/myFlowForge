@@ -59,7 +59,12 @@ def _region_bytes(cell: Image.Image, box: tuple[int, int, int, int]) -> bytes:
 def _changed_pixels(first: Image.Image, second: Image.Image, box: tuple[int, int, int, int]) -> int:
     a = first.crop(box)
     b = second.crop(box)
-    return sum(1 for left, right in zip(a.getdata(), b.getdata()) if left != right)
+    return sum(
+        1
+        for y in range(a.height)
+        for x in range(a.width)
+        if a.getpixel((x, y)) != b.getpixel((x, y))
+    )
 
 
 class TreeAtlasTest(unittest.TestCase):
@@ -86,8 +91,8 @@ class TreeAtlasTest(unittest.TestCase):
         cells = _cells(self._build(0))
         self.assertNotEqual(cells[0].crop((0, 0, 120, 75)).tobytes(), cells[1].crop((0, 0, 120, 75)).tobytes())
         self.assertEqual(cells[0].crop((0, 75, 120, 120)).tobytes(), cells[1].crop((0, 75, 120, 120)).tobytes())
-        self.assertGreater(abs(_green_centroid_y(cells[6], True) - _green_centroid_y(cells[0], True)), 1.8)
-        self.assertGreater(abs(_green_centroid_y(cells[12], True) - _green_centroid_y(cells[0], True)), 3.2)
+        self.assertGreater(abs(_green_centroid_y(cells[8], True) - _green_centroid_y(cells[0], True)), 1.8)
+        self.assertGreater(abs(_green_centroid_y(cells[14], True) - _green_centroid_y(cells[0], True)), 3.2)
 
     def test_sprout_flaps_around_fixed_petiole_joints(self) -> None:
         cells = _cells(self._build(0))[6:12]

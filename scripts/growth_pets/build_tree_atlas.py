@@ -12,6 +12,14 @@ from PIL import Image, ImageDraw
 from scripts.growth_pets.build_atlas import CELL, COLS, ROWS, _trim_and_fit
 
 SUN_POSITIONS = {2: (95, 14), 3: (60, 14), 4: (25, 14)}
+SPROUT_LEFT_PIVOT = (58, 47)
+SPROUT_RIGHT_PIVOT = (62, 47)
+SPROUT_FIXED_CORE_BOX = (55, 40, 65, 89)
+SPROUT_ANGLES = {
+    0: (0, 3, 6, 3, 0, -2),
+    1: (0, 8, 14, 8, 0, -5),
+    2: (0, 12, 20, 12, 0, -7),
+}
 
 
 def _normalized_cell(source: Image.Image) -> Image.Image:
@@ -51,19 +59,36 @@ def _shift(part: Image.Image, dx: int, dy: int) -> Image.Image:
     return shifted
 
 
+def _rotate_about(part: Image.Image, degrees: float, pivot: tuple[int, int]) -> Image.Image:
+    return part.rotate(
+        degrees,
+        resample=Image.Resampling.BICUBIC,
+        center=pivot,
+    )
+
+
+def _sprout_frame(base: Image.Image, row: int, frame: int) -> Image.Image:
+    left = _masked_part(base, lambda x, y: y < 72 and x < SPROUT_LEFT_PIVOT[0])
+    right = _masked_part(base, lambda x, y: y < 72 and x > SPROUT_RIGHT_PIVOT[0])
+    static = _clear_parts(base, (left, right))
+    angle = SPROUT_ANGLES[row][frame]
+
+    result = static.copy()
+    result.alpha_composite(_rotate_about(left, -angle, SPROUT_LEFT_PIVOT))
+    result.alpha_composite(_rotate_about(right, angle, SPROUT_RIGHT_PIVOT))
+    result.paste(base.crop(SPROUT_FIXED_CORE_BOX), SPROUT_FIXED_CORE_BOX[:2])
+    return result
+
+
 def _young_frame(base: Image.Image, stage: int, row: int, frame: int) -> Image.Image:
-    moving_ceiling = 72 if stage == 0 else 78
+    moving_ceiling = 78
     left = _masked_part(base, lambda x, y: y < moving_ceiling and x < 57)
     right = _masked_part(base, lambda x, y: y < moving_ceiling and x > 63)
     static = _clear_parts(base, (left, right))
 
     idle = ((0, 0), (0, -1), (0, -2), (0, -1), (0, 0), (0, 1))
-    if stage == 0:
-        working = ((0, -3), (0, 3), (0, -4), (0, 4), (0, -3), (0, 3))
-        alert = ((0, -5), (0, 5), (0, -6), (0, 6), (0, -5), (0, 5))
-    else:
-        working = ((-2, -3), (2, 3), (-2, -4), (2, 4), (-2, -3), (2, 3))
-        alert = ((-3, -5), (3, 5), (-3, -6), (3, 6), (-3, -5), (3, 5))
+    working = ((-2, -3), (2, 3), (-2, -4), (2, 4), (-2, -3), (2, 3))
+    alert = ((-3, -5), (3, 5), (-3, -6), (3, 6), (-3, -5), (3, 5))
     dx, dy = (idle, working, alert)[row][frame]
 
     result = static.copy()
@@ -123,7 +148,9 @@ def build_tree_atlas(source_path: Path, output_path: Path, stage: int) -> None:
     atlas = Image.new("RGBA", (COLS * CELL, ROWS * CELL), (0, 0, 0, 0))
     for row in range(ROWS):
         for frame in range(COLS):
-            if stage in (0, 1):
+            if stage == 0:
+                cell = _sprout_frame(base, row, frame)
+            elif stage == 1:
                 cell = _young_frame(base, stage, row, frame)
             else:
                 cell = base.copy()
