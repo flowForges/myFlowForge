@@ -20,6 +20,18 @@
      mode (was 0.45-0.5) so a bright wallpaper doesn't bleed through and wash the UI out to grey-yellow,
      while still letting a hint of the frosted material read through — especially when inactive. */
   --glass-window: oklch(20% 0.012 250 / 0.85); --glass-panel: oklch(23% 0.013 250 / 0.82); --glass-sidebar: oklch(17% 0.014 255 / 0.82);
+  /* 代码块语法着色(见 chat.css 的 .code-block .t-*)。刻意【不】跟随 --accent:强调色是可变的(12 个预设
+     + 自定义 + 壁纸自动取色),让关键字跟着它跑会出现"关键字和正文同色"这种读不了的组合。这两套是按
+     深/浅底各自定死的,明度都落在正文附近(深色 74–80%、浅色 42–52%),保证在 --surface 上都读得清。 */
+  --syn-kw: oklch(76% .13 305);  /* 关键字 */
+  --syn-st: oklch(76% .13 148);  /* 字符串 */
+  --syn-cm: oklch(58% .02 250);  /* 注释 */
+  --syn-nu: oklch(79% .12 62);   /* 数字 */
+  --syn-fn: oklch(77% .11 238);  /* 函数名 */
+  --syn-ty: oklch(80% .10 192);  /* 类型 */
+  --syn-pr: oklch(80% .09 258);  /* 键 / 属性 */
+  --syn-op: oklch(68% .03 250);  /* 运算符 */
+  --syn-va: oklch(81% .11 85);   /* 变量 */
 }
 [data-theme="light"] {
   --bg: oklch(98% 0.003 250); --bg-2: oklch(96% 0.004 250); --sidebar: oklch(95% 0.005 250);
@@ -33,6 +45,16 @@
   --add: oklch(52% 0.15 150); --del: oklch(56% 0.2 25);
   --shadow: 0 12px 40px rgba(15,23,42,0.14);
   --glass-window: oklch(98% 0.003 250 / 0.55); --glass-panel: oklch(96% 0.004 250 / 0.5); --glass-sidebar: oklch(95% 0.005 250 / 0.5);
+  /* 浅色底(--surface 99%)上的同一套色位:色相不变,明度整体压到 42–58% 才有对比。 */
+  --syn-kw: oklch(47% .19 305);
+  --syn-st: oklch(45% .14 148);
+  --syn-cm: oklch(60% .02 250);
+  --syn-nu: oklch(49% .14 55);
+  --syn-fn: oklch(47% .16 250);
+  --syn-ty: oklch(45% .11 195);
+  --syn-pr: oklch(43% .14 262);
+  --syn-op: oklch(54% .04 250);
+  --syn-va: oklch(48% .13 70);
 }
 
 /* ---- 深色系主题变体:只重定义中性色(背景/表面/文字/边框/毛玻璃),状态色 + 强调色 + 圆角 + 字体

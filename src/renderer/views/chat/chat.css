@@ -778,6 +778,21 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .code-block .cb-copy.done { color: var(--ok); }
 .code-block .cb-copy svg { width: 13px; height: 13px; }
 .code-block pre { margin: 0; border: 0; border-radius: 0; background: none; }
+/* ---- 语法着色 ----------------------------------------------------------------
+   token 由 highlight.ts 的 highlightBlock 分出来,这里只负责上色。颜色一律走 --syn-* 变量
+   (定义在 tokens.css,深/浅两套),所以换主题、换皮肤、壁纸自动配色都跟着走,不会出现某套配色下
+   注释和正文一个颜色。字重刻意不动 —— 代码块里加粗会破坏等宽对齐的观感。 */
+.code-block .t-kw { color: var(--syn-kw); }
+.code-block .t-st { color: var(--syn-st); }
+.code-block .t-cm { color: var(--syn-cm); font-style: italic; }
+.code-block .t-nu { color: var(--syn-nu); }
+.code-block .t-fn { color: var(--syn-fn); }
+.code-block .t-ty { color: var(--syn-ty); }
+.code-block .t-pr { color: var(--syn-pr); }
+.code-block .t-op { color: var(--syn-op); }
+.code-block .t-tg { color: var(--syn-kw); }
+.code-block .t-at { color: var(--syn-pr); }
+.code-block .t-va { color: var(--syn-va); }
 /* Table with a hover-reveal copy button (top-right). The scroll wrapper keeps wide tables from
    overflowing the message body; the button copies TSV for spreadsheet-friendly paste. */
 .table-block { position: relative; margin: 8px 0 12px; }

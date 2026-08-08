@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { highlightBlock } from '../inspector/highlight'
 
 // 对话区的「块级组件」:代码块、表格、引用块。
 //
@@ -41,6 +42,10 @@ export function CopyButton({ text, className, title }: { text: () => string; cla
 export function CodeBlock({ code, lang }: { code: string; lang?: string }): ReactNode {
   const [collapsed, setCollapsed] = useState(false)
   const lineCount = code.split('\n').length
+  // 语法着色:交给 highlight.ts 的整块分词器,拿回来的 token 逐个包成 <span class="t-xx">,颜色全部走
+  // chat.css 里的 --syn-* 变量(跟着主题/皮肤走)。没写语言的围栏 / 超长块会原样返回一个纯文本 token,
+  // 所以这里不需要额外分支。useMemo:同一条消息重渲染(流式追加、切会话)时不重复分词。
+  const tokens = useMemo(() => highlightBlock(code, lang), [code, lang])
   return (
     <div className={`code-block${collapsed ? ' collapsed' : ''}`}>
       <div className="cb-bar">
@@ -57,7 +62,8 @@ export function CodeBlock({ code, lang }: { code: string; lang?: string }): Reac
         </button>
         <CopyButton className="cb-copy" title="复制代码" text={() => code} />
       </div>
-      {collapsed ? null : <pre><code>{code}</code></pre>}
+      {/* <pre> 对空白敏感,token 数组必须紧贴标签写在一行里,不能让 JSX 的换行缩进混进代码正文。 */}
+      {collapsed ? null : <pre><code>{tokens.map((t, idx) => t.cls === null ? t.text : <span key={idx} className={`t-${t.cls}`}>{t.text}</span>)}</code></pre>}
     </div>
   )
 }
