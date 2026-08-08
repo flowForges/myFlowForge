@@ -3,8 +3,13 @@
 // app downloads a pack on demand and stores its frames on disk (forge-pet://), so only ONE pet
 // (white-catgirl) ships bundled and the installer stays ~60MB smaller.
 
+// ★ 用分支(@main)而不是 tag(@v1)。jsDelivr 把带 tag 的 URL 当**不可变**内容:它缓存的是
+// 「tag → commit」这一层解析,把 v1 前移之后既有路径永远发旧字节,purge 文件路径也救不回来
+// (重新解析拿到的还是那个被缓存的旧 SHA)。实测:同一时刻 @main 已是新内容、@v1 还是旧的。
+// 分支路径最多缓存 12 小时,且 purge 真的有效 —— 内容更新不必跟着应用发版走。
+// 代价:没有版本钉死,main 上推错东西会立刻影响所有客户端。内容仓库只有我们自己写,可接受。
 export const PET_PACK_CATALOG_URL =
-  'https://cdn.jsdelivr.net/gh/flowForges/pet-packs@v1/catalog.json'
+  'https://cdn.jsdelivr.net/gh/flowForges/pet-packs@main/catalog.json'
 
 export interface PetPackItem {
   id: string
