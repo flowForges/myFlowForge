@@ -118,7 +118,7 @@ export function WallpaperGallery({ current, onApply, onClear }: WallpaperGallery
         <button className="wf-pick" style={{ fontSize: 11, padding: '2px 8px' }} onClick={load}>刷新</button>
       </div>
       <p className="set-desc">
-        精选壁纸,点一张即下载并设为应用背景(下方可调背景范围与可见度)。<b>再次点击已选中的那张即可取消,恢复无背景图</b>。图片按需从网络下载,不占安装包。
+        精选壁纸,点一张即下载并设为应用背景(上方可调背景范围与可见度)。<b>再次点击已选中的那张即可取消,恢复无背景图</b>。图片按需从网络下载,不占安装包。
         {err && <span style={{ color: 'var(--del)', marginLeft: 6 }}>{err}</span>}
       </p>
       <p className="set-desc" style={{ color: 'var(--faint)', fontSize: 11 }}>

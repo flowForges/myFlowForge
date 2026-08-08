@@ -5,8 +5,13 @@ import { WallpaperGallery } from './WallpaperGallery'
 
 // 「壁纸背景」设置页。把内置壁纸库和所有"背景图"相关控件从「外观」页拆出来单独成页 —— 选内置壁纸、
 // 上传自己的图、背景范围/可见度、首页背景,它们操作的是同一套 bgImage/bgScope/bgOpacity 状态,放在一起
-// 才不至于"选图在一处、调可见度在另一处"。壁纸库放在最上面,数量再多也只挤占本页、不影响外观页其它设置。
+// 才不至于"选图在一处、调可见度在另一处"。
 // (窗口透明度/磨砂度属于窗口合成、不是背景图,留在「外观」。)
+//
+// ★ 顺序:配置在上、壁纸库在下。壁纸库是**无上限增长**的(已经 251 张),放在页首就意味着后面所有控件都
+// 得翻过整个图库才够得着 —— 用户实测「底部的设置划不到」。把行数固定的那几块放前面、把会长大的那块放
+// 页尾,页面无论收录多少张壁纸都不会再把设置项挤出可达范围。(没选折叠:壁纸库是本页的主体内容,默认
+// 折起来等于每次进来都要先展开一次才能看图。)
 
 const BG_SCOPES: { key: NonNullable<Appearance['bgScope']>; label: string }[] = [
   { key: 'app', label: '整个应用' },
@@ -81,7 +86,6 @@ export function BackgroundPane({ appearance, onChange }: BackgroundPaneProps) {
   }
   return (
     <>
-      <WallpaperGallery current={appearance.bgWallpaperId ?? ''} onApply={applyWallpaper} onClear={() => onChange({ bgImage: '', bgScope: 'off', bgWallpaperId: '' })} />
       <div className="set-group">
         <h4>背景图</h4>
         <div className="set-row">
@@ -181,6 +185,7 @@ export function BackgroundPane({ appearance, onChange }: BackgroundPaneProps) {
           <BgPositionRow label="首页背景纵向位置" value={bgPositions[homeBgImage] ?? DEFAULT_BG_POSITION} onChange={v => setBgPos(homeBgImage, v)} />
         )}
       </div>
+      <WallpaperGallery current={appearance.bgWallpaperId ?? ''} onApply={applyWallpaper} onClear={() => onChange({ bgImage: '', bgScope: 'off', bgWallpaperId: '' })} />
     </>
   )
 }

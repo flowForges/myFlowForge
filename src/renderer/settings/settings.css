@@ -318,7 +318,20 @@
 
 /* 分类 chips。壁纸到两三百张后,把所有分类纵向堆着滚要滚很久;chips 让「我要看风景」一步到位。
    带计数是因为分类大小很不均衡,先看到数量能少点几次。 */
-.wp-cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+/* 吸顶:壁纸库排在设置项后面(见 BackgroundPane 顶部注释),翻到图库深处时 chips 早被甩出屏幕,换个
+   分类要先滚回页首。三个偏移量都是量出来的,别按直觉改:
+   · top:-22px —— 实测 sticky 贴的是滚动容器的**内容盒**顶边,也就是 .set-pane 那 22px 上内边距【之下】。
+     用 top:0 会在头顶留一条 22px 的缝,缩略图从缝里穿过去。负掉这 22px 才真正贴住可视区上沿。
+   · padding 上 22 / 左右 26 —— 把负 top 让出的那段和 .set-pane 的左右内边距补成不透明背景,否则贴住
+     时露底、两侧也盖不满。
+   · margin-top:-14px —— 抵掉上面那 22px 内边距,净剩 8px,和吸顶之前的间距一致。
+   吸顶只在 .set-group 这个父盒子内生效 —— 滚过整个壁纸库后自然松开,不会一路跟到页尾。 */
+.wp-cats {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  position: sticky; top: -22px; z-index: 2;
+  margin: -14px -26px 4px; padding: 22px 26px 10px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
 .wp-cat {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 99px;
   font-size: 11.5px; font-weight: 550; color: var(--muted);
