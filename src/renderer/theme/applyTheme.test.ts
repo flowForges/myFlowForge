@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { applyTheme, onAccentFor } from './applyTheme'
+import { applyTheme, onAccentFor, bgSaturation } from './applyTheme'
 import type { Appearance } from '@shared/types'
 
 const base: Appearance = { theme: 'dark', accent: 'blue', autoWallpaperTheme: false, vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
@@ -172,6 +172,29 @@ describe('applyTheme', () => {
   it('有点缀色时,壁纸强调色压过自定义强调色', () => {
     applyTheme({ ...wpBase, accent: 'custom', accentCustom: '#ff0088' }, pal)
     expect(document.documentElement.style.getPropertyValue('--accent')).toBe('oklch(56% 0.16 300)')
+  })
+
+  // 浅色主题下壁纸「发奶白」的补偿系数。只有 [data-theme=light] 的 CSS 规则消费它,所以这里只验数值本身。
+  describe('bgSaturation(壁纸可见度 → 浅色饱和补偿)', () => {
+    it('可见度 100% 时不补偿', () => {
+      expect(bgSaturation(1)).toBe(1)
+    })
+    it('可见度越低补得越多,且单调递减', () => {
+      expect(bgSaturation(0.3)).toBeGreaterThan(bgSaturation(0.6))
+      expect(bgSaturation(0.6)).toBeGreaterThan(bgSaturation(0.9))
+    })
+    it('补偿有上限,不会把壁纸调成霓虹', () => {
+      expect(bgSaturation(0.05)).toBeLessThanOrEqual(1.9)
+      expect(bgSaturation(0)).toBeLessThanOrEqual(1.9)
+    })
+    it('非法输入不产出 NaN', () => {
+      expect(bgSaturation(Number.NaN)).toBeGreaterThan(1)
+      expect(Number.isFinite(bgSaturation(Number.NaN))).toBe(true)
+    })
+    it('applyTheme 把它写进 --app-bg-sat', () => {
+      applyTheme({ ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app', bgOpacity: 0.3 })
+      expect(document.documentElement.style.getPropertyValue('--app-bg-sat')).toBe(String(bgSaturation(0.3)))
+    })
   })
 
   it('resolves auto theme via prefers-color-scheme', () => {

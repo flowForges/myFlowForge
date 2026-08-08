@@ -51,6 +51,14 @@ html[data-vibrancy="on"]:not([data-glass="on"]) .inspector { background: var(--g
   opacity: var(--app-bg-opacity, .35);
   border-radius: 12px; }
 [data-bg-scope="app"] .app-bg-layer { display: block; }
+/* 浅色主题的「奶白」补偿。可见度 = 图层 opacity,而它混的底是 --bg:深色主题 --bg 近黑,混合等于整体压暗,
+   彩度与明度【等比】缩小,眼睛读成"这张图暗了点",颜色还在;浅色主题 --bg 是 98% 的近白,同样的混合是往白
+   色拉——明度几乎不降、彩度却被成比例抹掉,读起来就是隔了一层奶白雾,而且越调越白、怎么调都"不清晰"。
+   所以只给浅色按可见度【反比】补一点饱和度(--app-bg-sat 由 applyTheme 算好,可见度 100% 时为 1 即不动),
+   让浅色下的壁纸淡而不浑。只改图层自身的颜色,不动可见度、不加任何遮罩。 */
+html[data-theme="light"] .app-bg-layer,
+html[data-theme="light"] .home-bg-layer,
+html[data-theme="light"] div.chat::before { filter: saturate(var(--app-bg-sat, 1)); }
 /* With a bright wallpaper behind everything, the opaque dark 1px panel borders (sidebar / inspector
    edges, titlebar / statusbar rules, button outlines) read as harsh BLACK LINES. Swap every border to a
    translucent fg-tinted one so it blends into the image instead of drawing a line. */
@@ -77,11 +85,15 @@ html[data-bg-scope="app"]:not([data-theme="light"]) .titlebar,
 html[data-bg-scope="app"]:not([data-theme="light"]) .statusbar {
   text-shadow: 0 1px 2px rgba(0, 0, 0, .5);
 }
-/* 「整个应用」壁纸 + 深色系:下面这几个小控件仍是不透明的 --surface / --bg 深底,叠在亮壁纸上显成一块块【纯黑】。
-   只把它们换成半透明(壁纸透出来把黑冲淡)。纯深色(无壁纸)时维持原设计不动;浅色主题本就不黑,排除。
-   注意:必须【包含】磨砂(data-glass)模式——用户开了磨砂时这些控件仍是不透明黑底(glass.css 没覆盖它们),
-   之前误加 :not([data-glass=on]) 把这条整段排除掉了,所以一个都没变。 */
-html[data-bg-scope="app"]:not([data-theme="light"]) :is(
+/* 「整个应用」壁纸:下面这几个小控件仍是不透明的 --surface / --bg 实底,压在壁纸上显成一块块实色 ——
+   深色系是【纯黑】块,浅色主题是【纯白】块(浅色的 --surface 是 99% 明度,比面板底还白,所以在壁纸上
+   比深色更扎眼,不是"本就不黑"就没事)。一律换成半透明,让壁纸透上来把实色冲淡。
+   注意:必须【包含】磨砂(data-glass)模式——用户开了磨砂时这些控件仍是不透明底(glass.css 只覆盖了其中
+   一部分),之前误加 :not([data-glass=on]) 把这条整段排除掉了,所以一个都没变。
+   (曾用 :not([data-theme="light"]) 把浅色整段排除 —— 那是照搬下面 text-shadow 那条的门。投影确实只该给
+   深色系加,但"实色块"两个基调都有,门开错了地方:浅色 + 亮壁纸下「全部项目 / 文件名·内容 / 刷新折叠 /
+   项目分组头」就是用户看到的一排纯白硬块。) */
+html[data-bg-scope="app"] :is(
   .ws-scount,           /* 侧栏工作区的会话数徽章 */
   .chg-group-h,         /* 变更面板的项目分组头(go-blog / zgh / go-blog-backend) */
   .insp-proj .ipk-trigger,  /* 「全部项目」下拉触发器(自绘) */
@@ -90,7 +102,7 @@ html[data-bg-scope="app"]:not([data-theme="light"]) :is(
 ) {
   background: color-mix(in srgb, var(--surface) 45%, transparent);
 }
-html[data-bg-scope="app"]:not([data-theme="light"]) :is(
+html[data-bg-scope="app"] :is(
   .wf-glance-head:hover, /* 工作流列表行 hover */
   .ws-sess:hover,        /* 侧栏会话行 hover */
   .ws-item:hover,        /* 侧栏工作区行 hover(example 那种黑块) */
@@ -98,7 +110,7 @@ html[data-bg-scope="app"]:not([data-theme="light"]) :is(
 ) {
   background: color-mix(in srgb, var(--surface) 45%, transparent);
 }
-html[data-bg-scope="app"]:not([data-theme="light"]) :is(
+html[data-bg-scope="app"] :is(
   .search-mode button.on,               /* 文件名 / 内容 选中项 */
   .tree-tool-btn:hover, .tree-tool-btn.on /* 刷新 / 隐藏 / 折叠 按钮本身的 hover / 激活 */
 ) {

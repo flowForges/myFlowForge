@@ -55,6 +55,15 @@
    hole. Tint it to nearly match the sidebar/inspector (.4/.38) so the three columns are tonally
    even — otherwise the tonal step at each seam reads as a thick dark divider. */
 [data-theme="light"][data-glass="on"] .chat { background: oklch(100% 0 0 / .37); }
+/* ……但那条只在【没有壁纸】时成立:壁纸铺满整窗(data-bg-scope=app)时根本不存在"暗洞",
+   .app-bg-layer 就是底。此时那层 37% 白直接压在壁纸上 = 用户说的「浅色主题背景上有一层白蒙层」。
+   深色系从来没有这个病,因为上面第 49 行给深色的 .chat / #view-home 就是 transparent —— 病根是
+   浅色多刷了一层白,不是壁纸本身淡。壁纸模式下与深色对齐:中间视图不刷底,让壁纸原样透上来。
+   侧栏 / 检视区 / 顶栏底栏的轻染保留 —— 用户要的是「app 不要太透,但背景图要看得清」。
+   选择器写 `div.chat` 而不是 `.chat`:后者还会命中「对话模式下的检视区」aside.inspector.chat 和侧栏的
+   会话模式圆点 span.sd.chat(chat.css 开头有同一条踩坑记录),会把检视区的轻染一并抹掉。 */
+html[data-theme="light"][data-glass="on"][data-bg-scope="app"] div.chat,
+html[data-theme="light"][data-glass="on"][data-bg-scope="app"] #view-home { background: transparent; }
 /* 内部各面板(检查器 tab 条、编排卡、变更统计、文件树、输入框)只做轻染,不再各自 backdrop-filter
    —— 整窗只有 .window 一层模糊,内层加自己的 blur 会被窗体的 isolation 隔断,反而再糊一遍变实色 */
 [data-glass="on"] .insp-tabs,
@@ -84,9 +93,14 @@
 [data-theme="light"][data-glass="on"] .tb-seg button.on { background: oklch(100% 0 0 / .30); box-shadow: none; }
 
 /* 中间对话区:思考块 / 交互卡 / 输入·选择控件 — 同样只轻染 */
+/* `.menu` 只是「触发器 + 弹层」的定位壳,在对话区里它恰好与按钮同高同宽,所以给它上底色看起来就是给按钮
+   上底色。但检视区的项目选择器(.insp-proj)复用了 .menu 的定位/展开机制,而它是一整行【布局容器】——
+   还带 padding-bottom:12px 的分隔留白。给它刷底 → 触发器背后多出一个高 40px 的圆角色块,正是用户看到的
+   「下拉框背后还有一个框」。壳不上色,色只上到真正的控件上(.ipk-trigger 自己有 --surface 底)。
+   同类前车之鉴见本文件末尾 .home-stats 那段注释。 */
 [data-glass="on"] .think,
 [data-glass="on"] .msg-req,
-[data-glass="on"] .menu { background: oklch(74% .03 262 / .10); }
+[data-glass="on"] .menu:not(.insp-proj) { background: oklch(74% .03 262 / .10); }
 [data-glass="on"] .req-head { background: oklch(78% .035 262 / .12); }
 [data-glass="on"] .req-opt,
 [data-glass="on"] .req-inrow input,
@@ -97,7 +111,7 @@
 [data-glass="on"] .req-opt:hover { background: oklch(58% .05 262 / .22); }
 [data-theme="light"][data-glass="on"] .think,
 [data-theme="light"][data-glass="on"] .msg-req,
-[data-theme="light"][data-glass="on"] .menu { background: oklch(100% 0 0 / .34); }
+[data-theme="light"][data-glass="on"] .menu:not(.insp-proj) { background: oklch(100% 0 0 / .34); }
 [data-theme="light"][data-glass="on"] .req-head { background: oklch(100% 0 0 / .24); }
 [data-theme="light"][data-glass="on"] .req-opt,
 [data-theme="light"][data-glass="on"] .req-inrow input,
@@ -218,6 +232,22 @@
 [data-theme="light"][data-glass="on"] .sess-ids-btn,
 [data-theme="light"][data-glass="on"] .mm-copy,
 [data-theme="light"][data-glass="on"] .search-mode { background: oklch(100% 0 0 / .38); }
+/* 检视区(变更 / 文件树)剩下的几块实底:项目选择器触发器、项目分组头、右上的刷新·折叠按钮组,以及
+   两个「选中态用 --bg 实色」的分段按钮。glass 之前只扫到 .tree-search / .search-mode 外壳,漏了这几个,
+   于是磨砂下它们仍是实色块 —— 浅色是纯白硬块(--surface 明度 99%),深色是近黑块。
+   (壁纸开着时 global.css 的 [data-bg-scope=app] 那几条也会盖到同样的元素;两条都是半透明,谁赢都对。) */
+[data-glass="on"] .insp-proj .ipk-trigger,
+[data-glass="on"] .chg-group-h,
+[data-glass="on"] .tree-expand-tools { background: oklch(62% .03 262 / .14); }
+[data-glass="on"] .tree-search .search-mode button.on,
+[data-glass="on"] .tree-tool-btn:hover,
+[data-glass="on"] .tree-tool-btn.on { background: oklch(62% .03 262 / .22); }
+[data-theme="light"][data-glass="on"] .insp-proj .ipk-trigger,
+[data-theme="light"][data-glass="on"] .chg-group-h,
+[data-theme="light"][data-glass="on"] .tree-expand-tools { background: oklch(100% 0 0 / .38); }
+[data-theme="light"][data-glass="on"] .tree-search .search-mode button.on,
+[data-theme="light"][data-glass="on"] .tree-tool-btn:hover,
+[data-theme="light"][data-glass="on"] .tree-tool-btn.on { background: oklch(100% 0 0 / .62); }
 
 /* ---- 首页卡片:默认用不透明的 --surface,毛玻璃下必须一并轻染,否则渲染成刺眼的纯白实心块 ---- */
 /* .home-stats is no longer a single panel — it's a bare grid whose .hs-cell cards carry their own

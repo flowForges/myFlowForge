@@ -18,6 +18,14 @@ export function onAccentFor(hex: string): string {
   return lum > 0.5 ? 'oklch(20% 0 0)' : 'oklch(99% 0 0)'
 }
 
+// 壁纸「可见度」→ 浅色主题下的饱和补偿系数。可见度越低,图被白底吃掉的彩度越多,补得越多;
+// 可见度 100% 时不做任何补偿(1)。系数刻意保守(最多 1.9 倍),只为把奶白雾拉回成"淡而有色",
+// 不是把壁纸调成霓虹。非数字 / 越界输入夹到 [0.05, 1] 再算,保证永远产出有限值。
+export function bgSaturation(opacity: number): number {
+  const o = Number.isFinite(opacity) ? Math.min(1, Math.max(0.05, opacity)) : 0.35
+  return Number((1 + 0.9 * (1 - o)).toFixed(3))
+}
+
 export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): void {
   const root = document.documentElement
   // 壁纸自动配色(见 wallpaperPalette.ts):开关打开且已取到调色板时,它接管明暗基调 + 整套中性色,
@@ -90,6 +98,10 @@ export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): vo
   root.setAttribute('data-bg-scope', bgOn ? a.bgScope : 'off')
   root.style.setProperty('--app-bg-image', a.bgImage ? `url("${a.bgImage}")` : 'none')
   root.style.setProperty('--app-bg-opacity', String(a.bgOpacity ?? 0.35))
+  // 浅色主题下壁纸会"发奶白"的补偿系数(只有 global.css 的 [data-theme=light] 规则消费它,深色不受影响)。
+  // 见 global.css .app-bg-layer 下方注释:浅色把图混向近白 → 明度不降、彩度被等比抹掉。按可见度反比补回,
+  // 可见度 100% 时为 1(不动),越淡补得越多,上限 1.9(可见度 5% 时)。
+  root.style.setProperty('--app-bg-sat', String(bgSaturation(a.bgOpacity ?? 0.35)))
   // 壁纸纵向焦点:按当前图片 URL 从 bgPositions 查其记忆的裁剪位置(缺省略偏上),供三处 cover 图层
   // (.app-bg-layer / .chat::before / .home-bg-layer)统一消费。见 schema.ts bgPositions 说明。
   const bgPos = a.bgPositions?.[a.bgImage] ?? DEFAULT_BG_POSITION
