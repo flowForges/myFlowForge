@@ -152,6 +152,7 @@ export const CH = {
   // thumbnail, and download+store a pack's animated frames as a usable custom pet.
   petPackCatalog: 'petpack:catalog',
   petPackPreview: 'petpack:preview',
+  growthPackInstall: 'pet-pack:growth-install',
   petPackInstall: 'petpack:install',
   // Main renderer → main process: the workspace currently open in the main window ('ws' view), or null on
   // the home view. Relayed to the pet so its command input can target "the workspace you're in".

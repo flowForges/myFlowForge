@@ -73,10 +73,10 @@ import { catalogEntry } from '../../shared/fontCatalog'
 import { nsfwValidate, nsfwCatalog, nsfwPreview, nsfwGallery, nsfwInstallPet, nsfwInstallBg } from '../nsfw/nsfwService'
 import { wallpaperCatalog, wallpaperPreview, wallpaperInstall } from '../wallpaper/wallpaperService'
 import type { WallpaperItem } from '../../shared/wallpaper'
-import { petPackCatalog, petPackPreview, petPackInstall } from '../petPack/petPackService'
+import { petPackCatalog, petPackPreview, petPackInstall, growthPackInstall } from '../petPack/petPackService'
 import { codexMarketCatalog, codexMarketPreview, codexMarketInstall } from '../codexPetMarket/service'
 import type { CodexMarketPet } from '@shared/codexPetMarket'
-import type { PetPackItem } from '../../shared/petPack'
+import type { PetPackItem, GrowthPackItem } from '../../shared/petPack'
 import type { NsfwPet, NsfwBg } from '../../shared/nsfw'
 import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
@@ -1312,8 +1312,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // Downloadable pet packs — same public jsDelivr pipeline as wallpapers, no activation code.
   ipcMain.handle(CH.petPackCatalog, () => petPackCatalog(wallpaperFetch()))
-  ipcMain.handle(CH.petPackPreview, (_e, item: PetPackItem) => petPackPreview(item, wallpaperFetch()))
+  ipcMain.handle(CH.petPackPreview, (_e, item: { thumb: string }) => petPackPreview(item, wallpaperFetch()))
   ipcMain.handle(CH.petPackInstall, (_e, petId: string, item: PetPackItem) => petPackInstall(petId, item, wallpaperFetch()))
+  ipcMain.handle(CH.growthPackInstall, (_e, petId: string, item: GrowthPackItem) => growthPackInstall(petId, item, wallpaperFetch()))
 
   // codex-pets.net 宠物市场(第三方社区库,插件 gating)。走同一条 proxy-first fetch 避免 CORS,但**必须带
   // 超时** —— 它是个第三方社区小站,慢/挂是常态,而 undici 的 fetch 自己没有整体超时:不设死线就是用户

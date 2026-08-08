@@ -174,8 +174,9 @@ const api = {
   wallpaperInstall: (item: import('@shared/wallpaper').WallpaperItem): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.wallpaperInstall, item),
   // Downloadable pet packs (no activation code). List the public catalog, preview a pack, install its frames.
   petPackCatalog: (): Promise<import('@shared/petPack').PetPackCatalog | { error: string }> => ipcRenderer.invoke(CH.petPackCatalog),
-  petPackPreview: (item: import('@shared/petPack').PetPackItem): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.petPackPreview, item),
+  petPackPreview: (item: { thumb: string }): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.petPackPreview, item),
   petPackInstall: (petId: string, item: import('@shared/petPack').PetPackItem): Promise<{ name: string; images: Record<string, string> } | { error: string }> => ipcRenderer.invoke(CH.petPackInstall, petId, item),
+  growthPackInstall: (petId: string, item: import('@shared/petPack').GrowthPackItem) => ipcRenderer.invoke(CH.growthPackInstall, petId, item),
   codexMarketCatalog: (page: number): Promise<import('@shared/codexPetMarket').CodexMarketPage | { error: string }> => ipcRenderer.invoke(CH.codexMarketCatalog, page),
   codexMarketPreview: (url: string): Promise<{ url: string } | { error: string }> => ipcRenderer.invoke(CH.codexMarketPreview, url),
   codexMarketInstall: (item: import('@shared/codexPetMarket').CodexMarketPet): Promise<{ ok: true; pet: import('@shared/petCustom').CustomPet } | { ok: false; error: string }> => ipcRenderer.invoke(CH.codexMarketInstall, item),

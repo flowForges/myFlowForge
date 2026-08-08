@@ -15,6 +15,30 @@ export interface PetPackItem {
   thumb: string            // 画廊预览用(通常是 idle.webp)
 }
 
+// 成长宠物包的目录条目。和普通包不是一回事,所以在 catalog 里单列一节:普通包是「每个状态一张图」,
+// 成长包是「一份 pet.json + 每阶段一张 atlas」,安装路径完全不同。
+export interface GrowthPackStageItem {
+  /** 进入该阶段所需的今日 token 绝对值(含);最后一条没有上界。见 shared/growthPet.ts。 */
+  from: number
+  name?: string
+  /** 相对 base 的文件名。 */
+  sheet: string
+}
+export interface GrowthPackItem {
+  kind: 'growth'
+  id: string
+  name: string
+  desc?: string
+  /** 阶段图目录:每阶段图 = `${base}/${stage.sheet}`。 */
+  base: string
+  /** pet.json 的完整 URL —— atlas/actions 这些只在它里面,目录条目不重复一份。 */
+  manifest: string
+  thumb: string
+  stages: GrowthPackStageItem[]
+}
+
 export interface PetPackCatalog {
   pets: PetPackItem[]
+  /** 可选:老 catalog(或临时故障)没有这一节时,宠物库只是不显示成长宠物,不报错。 */
+  growth?: GrowthPackItem[]
 }

@@ -25,15 +25,15 @@ const item: PetPackItem = {
 describe('petPackCatalog', () => {
   it('returns valid pets', async () => {
     const f = fakeFetch(() => ({ ok: true, status: 200, body: { pets: [item] } }))
-    expect(await petPackCatalog(f)).toEqual({ pets: [item] })
+    expect(await petPackCatalog(f)).toEqual({ pets: [item], growth: [] })
   })
   it('filters entries missing required fields (id/name/base/thumb/states)', async () => {
     const f = fakeFetch(() => ({ ok: true, status: 200, body: { pets: [item, { id: 'x' }, { id: 'y', name: 'n', base: 'b', thumb: 't', states: [] }] } }))
-    expect(await petPackCatalog(f)).toEqual({ pets: [item] })
+    expect(await petPackCatalog(f)).toEqual({ pets: [item], growth: [] })
   })
   it('malformed body → empty array', async () => {
     const f = fakeFetch(() => ({ ok: true, status: 200, body: { junk: 1 } }))
-    expect(await petPackCatalog(f)).toEqual({ pets: [] })
+    expect(await petPackCatalog(f)).toEqual({ pets: [], growth: [] })
   })
   it('non-200 → error', async () => {
     const f = fakeFetch(() => ({ ok: false, status: 404 }))

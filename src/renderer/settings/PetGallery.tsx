@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Pet } from '@shared/types'
-import type { PetPackCatalog, PetPackItem } from '@shared/petPack'
+import type { PetPackCatalog, PetPackItem, GrowthPackItem } from '@shared/petPack'
 import { addCustomPet, PET_CUSTOM_MAX } from '@shared/petCustom'
 
 interface PetGalleryProps {
@@ -27,9 +27,10 @@ export function PetGallery({ pet, onChange }: PetGalleryProps) {
       if ('error' in r) { setErr(r.error); setCatalog({ pets: [] }); return }
       setCatalog(r)
       for (const p of r.pets) void loadThumb(p)
+      for (const g of r.growth ?? []) void loadThumb(g)
     }).catch(() => { setErr('加载失败'); setCatalog({ pets: [] }) })
   }
-  const loadThumb = async (p: PetPackItem) => {
+  const loadThumb = async (p: { id: string; thumb: string }) => {
     const r = await window.forge?.petPackPreview?.(p)
     if (r && 'url' in r) setThumbs(prev => ({ ...prev, [p.id]: r.url }))
   }
@@ -53,6 +54,22 @@ export function PetGallery({ pet, onChange }: PetGalleryProps) {
     } finally { setBusy(null) }
   }
 
+  // 成长宠物:下载 pet.json + 每阶段 atlas。与普通包共用「已装则切换、未装则下载」的手感,只是产出的是
+  // 一个带 growth 清单的 CustomPet 而不是 per-state 图。
+  const installGrowth = async (item: GrowthPackItem) => {
+    const id = localId(item.id)
+    const already = customList.some(p => p.id === id)
+    if (already && pet.activeCustomPetId !== id) { activate(item.id); return }
+    if (!already && customList.length >= PET_CUSTOM_MAX) { setErr(`宠物已达上限 ${PET_CUSTOM_MAX} 个`); return }
+    setBusy(item.id); setErr('')
+    try {
+      const r = await window.forge?.growthPackInstall?.(id, item)
+      if (!r || 'error' in r) { setErr(r && 'error' in r ? r.error : '下载失败'); return }
+      const next = already ? customList.map(p => (p.id === id ? r.pet : p)) : addCustomPet(customList, r.pet)
+      onChange({ skin: 'custom', customPets: next, activeCustomPetId: id })
+    } finally { setBusy(null) }
+  }
+
   const card = (item: PetPackItem) => {
     const id = localId(item.id)
     const busyThis = busy === item.id
@@ -70,6 +87,26 @@ export function PetGallery({ pet, onChange }: PetGalleryProps) {
     )
   }
 
+  const growthCard = (item: GrowthPackItem) => {
+    const id = localId(item.id)
+    const busyThis = busy === item.id
+    const installed = customList.some(p => p.id === id)
+    const active = pet.activeCustomPetId === id
+    const thumb = thumbs[item.id]
+    return (
+      <button key={item.id} className={`wp-tile${active ? ' on' : ''}`} disabled={busyThis || !!busy}
+        title={`${item.desc || item.name}(${item.stages.length} 个阶段)`} onClick={() => void installGrowth(item)}>
+        <div className="wp-thumb">
+          {thumb ? <img src={thumb} alt="" /> : <span className="wp-thumb-ph">加载中…</span>}
+          {busyThis && <div className="wp-loading"><span className="wp-spin" />下载中…</div>}
+        </div>
+        <div className="wp-name">{active ? '● ' : installed ? '✓ ' : ''}{item.name}</div>
+      </button>
+    )
+  }
+
+  const growthList = catalog?.growth ?? []
+
   return (
     <div className="set-group">
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -86,6 +123,15 @@ export function PetGallery({ pet, onChange }: PetGalleryProps) {
       {!catalog && <p className="set-desc">加载中…</p>}
       {catalog && catalog.pets.length === 0 && !err && <p className="set-desc">暂无可下载宠物。</p>}
       {catalog && catalog.pets.length > 0 && <div className="wp-grid">{catalog.pets.map(card)}</div>}
+      {growthList.length > 0 && (
+        <>
+          <h4 style={{ marginTop: 18 }}>成长宠物</h4>
+          <p className="set-desc">
+            形态随「今日 token 用量」逐阶段变化。每个包自带阶段门槛 —— 用得多长得快,不需要你配置任何东西。
+          </p>
+          <div className="wp-grid">{growthList.map(growthCard)}</div>
+        </>
+      )}
     </div>
   )
 }
