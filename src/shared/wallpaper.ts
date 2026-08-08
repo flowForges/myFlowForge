@@ -5,7 +5,7 @@
 // uploaded background (forge-bg://), so nothing is bundled into the installer.
 
 export const WALLPAPER_CATALOG_URL =
-  'https://cdn.jsdelivr.net/gh/flowForges/wallpapers@v3/catalog.json'
+  'https://cdn.jsdelivr.net/gh/flowForges/wallpapers@v4/catalog.json'
 
 // 远程下架名单。目录钉在 tag 上(每批壁纸打一个新 tag,老版本 app 看不到新壁纸 —— 这是刻意的),
 // 但「某张图有版权问题要立刻撤下」不能等发版,也不该只对新版本生效。
