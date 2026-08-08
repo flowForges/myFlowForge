@@ -345,6 +345,14 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
     background: active ? 'color-mix(in oklch, var(--accent) 12%, transparent)' : 'var(--surface-2)',
     cursor: 'pointer' as const,
   })
+  // 形象的来源标签(chip 左上角)。原先「Codex 宠物」「成长宠物」是插在列表中间的整行小标题,把一个本来
+  // 连续的画廊切成好几段;而「内置 / 自定义」根本没有标识,只能靠位置猜。改成每个 chip 自带一枚角标:
+  // 列表恢复成一条连续的流(仍按来源聚在一起),要区分时看角标即可。
+  const kindOf = (id: string): string =>
+    id.startsWith('builtin-') ? '内置' : id.startsWith('codex-') ? 'Codex' : id.startsWith('growth-') ? '成长' : '自定义'
+  const chipTag = (label: string) => (
+    <span className="pet-chip-tag" aria-hidden="true">{label}</span>
+  )
   // Built-in SVG skin as a gallery chip — selecting it sets pet.skin (not a custom pet), sitting alongside
   // the image pets in one picker.
   const renderSkinChip = ({ skin, label }: { skin: Pet['skin']; label: string }) => {
@@ -359,8 +367,9 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
         title={active ? `${label}(当前)` : `点选为当前:${label}`}
         onClick={() => onChange({ skin })}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onChange({ skin }) } }}
-        style={chipStyle(active)}
+        style={{ ...chipStyle(active), position: 'relative' }}
       >
+        {chipTag('简约')}
         <span style={{ width: '24px', height: '24px', display: 'grid', placeItems: 'center', flex: '0 0 24px' }}>{SKIN_SVG[skin]}</span>
         <span style={{ fontSize: '12px', maxWidth: '96px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
       </div>
@@ -385,9 +394,10 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
           display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '10px',
           border: `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
           background: active ? 'color-mix(in oklch, var(--accent) 12%, transparent)' : 'var(--surface-2)',
-          cursor: 'pointer',
+          cursor: 'pointer', position: 'relative',
         }}
       >
+        {chipTag(kindOf(p.id))}
         {thumb
           ? <img src={petSrc(thumb)} alt="" style={{ width: '24px', height: '24px', objectFit: 'contain', borderRadius: '4px' }} />
           : growthThumb
@@ -480,27 +490,28 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
       <div className="set-group pet-group-tight">
         <h4>形象</h4>
         <p className="set-desc">桌面宠物的形象。内置简约形象与默认宠物都在这里,点选任意一个即为当前显示;也可上传自定义,或在下方「宠物库」下载更多。</p>
-        <div className="pet-custom-gallery" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
+        {/* 一条连续的画廊:同来源的相邻排在一起(简约 → 内置 → 自定义 → Codex → 成长),来源看每个 chip
+            左上角的角标。row-gap 比 column-gap 大,给角标留出不与上一行相撞的空间。 */}
+        <div className="pet-custom-gallery" style={{ display: 'flex', flexWrap: 'wrap', gap: '16px 8px', marginBottom: '14px' }}>
           {SKIN_CHIPS.map(renderSkinChip)}
           {builtinList.map(renderChip)}
           {userList.map(renderChip)}
-          {codexList.length > 0 && (
-            <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--faint)', marginTop: 2 }}>Codex 宠物</div>
-          )}
           {codexList.map(renderChip)}
-          {growthList.length > 0 && (
-            <div style={{ flexBasis: '100%', fontSize: 11, color: 'var(--faint)', marginTop: 2 }}>成长宠物</div>
-          )}
           {growthList.map(renderChip)}
         </div>
 
+        {/* 一个统一的「添加」入口。原先上传图片 / 宠物包 / Codex 导入 / 成长包分成三段各带小标题散在下面,
+            它们其实是同一件事的四种来源 —— 装完都落进上面那一条画廊。并成一排按钮,来源差异交给按钮文字,
+            后面只保留各自真正需要的附加控件(Codex 的拖拽区与扫描结果)。 */}
         <div className="set-row" style={{ marginBottom: '4px' }}>
           <div className="info">
-            <div className="t">添加自定义形象 · {userList.length}</div>
-            <div className="d">上传后会出现在上面的形象列表里,× 删除。最多 {PET_CUSTOM_MAX} 个(含默认)。</div>
+            {/* 计数和上限同口径:上限管的是整份 customPets(含默认),分开数会让「已有 3 / 上限 16」和
+                实际能不能再装对不上。 */}
+            <div className="t">添加形象 · 已有 {customList.length} / {PET_CUSTOM_MAX}</div>
+            <div className="d">装好的形象都会出现在上面的列表里(左上角标注来源),× 删除。上限含默认宠物。</div>
           </div>
         </div>
-        <div className="set-row" style={{ marginBottom: '10px', gap: '8px' }}>
+        <div className="set-row" style={{ marginBottom: '10px', gap: '8px', flexWrap: 'wrap' }}>
             <button
               className="wf-pick on"
               disabled={atMax}
@@ -517,6 +528,26 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             >
               上传图片
             </button>
+            <button className="wf-pick on" disabled={atMax} aria-label="导入 Codex 宠物文件夹" onClick={async () => addImported(await window.forge.codexPetPick())}>导入 Codex 宠物…</button>
+            <button
+              className="wf-pick on"
+              // 到上限也不禁用:重装同一个文件夹是升级(id 按源文件夹稳定生成),不占新名额,禁用会把
+              // 升级路径一起堵死。而点之前无从得知用户要选哪个文件夹,所以只能装完再判 —— 真是新增
+              // 且已满时 addImported 会拒掉并在下面那行给出明确提示。
+              // Codex 那段也有一个「选择文件夹…」,光看按钮文字两者无法区分(读屏软件尤其如此),
+              // 所以这里给一个说明白的可访问名。
+              aria-label="安装成长宠物包"
+              title={atMax ? `已达上限 ${PET_CUSTOM_MAX} 个,但重装已装过的成长包升级不受限` : undefined}
+              // 兜底 catch:主进程那侧已经把装包异常转成 {ok:false} 了,但 IPC 本身也会失败
+              // (主进程重启/通道未注册)。没有 catch 的话 async onClick 里的 rejection 无人接手,
+              // 红字行不出现 —— 用户看到的是「点了没反应」,这类"无声失败"最难自查。
+              onClick={async () => {
+                try { addImported(await window.forge.growthPetImport(), setGrowthErr) }
+                catch (e) { setGrowthErr(`安装失败:${e instanceof Error ? e.message : String(e)}`) }
+              }}
+            >
+              安装成长宠物包…
+            </button>
             <button className="imp-btn pet-custom-link" disabled={atMax} onClick={openPetImport}>
               {PET_UPLOAD}添加自定义形象 · 可复制示例
             </button>
@@ -525,14 +556,7 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{imgErr}</div>
           )}
 
-          <div className="set-row" style={{ marginBottom: '4px' }}>
-            <div className="info">
-              <div className="t">从 Codex 导入宠物</div>
-              <div className="d">支持 Codex v2 宠物包(含 pet.json + spritesheet.webp 的文件夹)。拖入文件夹、选择文件夹,或从本机 <code>~/.codex/pets</code> 一键启用。</div>
-            </div>
-          </div>
           <div className="set-row" style={{ marginBottom: '8px', gap: '8px', flexWrap: 'wrap' }}>
-            <button className="wf-pick on" disabled={atMax} onClick={async () => addImported(await window.forge.codexPetPick())}>选择文件夹…</button>
             <div
               className="codex-drop"
               onDragOver={e => e.preventDefault()}
@@ -571,34 +595,6 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{codexErr}</div>
           )}
 
-          {/* 成长宠物包:一个文件夹 = pet.json + 每阶段一张 atlas。装进来后宠物的形态跟着今日 token 用量长。 */}
-          <div className="set-row" style={{ marginBottom: '4px' }}>
-            <div className="info">
-              <div className="t">安装成长宠物包</div>
-              <div className="d">会随今日 token 用量逐阶段长大的宠物包(含 <code>pet.json</code>(<code>kind: "growth"</code>)与每阶段一张 atlas 的文件夹)。重装同一个文件夹 = 升级,不会多出一只。</div>
-            </div>
-          </div>
-          <div className="set-row" style={{ marginBottom: '8px', gap: '8px' }}>
-            <button
-              className="wf-pick on"
-              // 到上限也不禁用:重装同一个文件夹是升级(id 按源文件夹稳定生成),不占新名额,禁用会把
-              // 升级路径一起堵死。而点之前无从得知用户要选哪个文件夹,所以只能装完再判 —— 真是新增
-              // 且已满时 addImported 会拒掉并在下面那行给出明确提示。
-              // Codex 那段也有一个「选择文件夹…」,光看按钮文字两者无法区分(读屏软件尤其如此),
-              // 所以这里给一个说明白的可访问名。
-              aria-label="安装成长宠物包"
-              title={atMax ? `已达上限 ${PET_CUSTOM_MAX} 个,但重装已装过的成长包升级不受限` : undefined}
-              // 兜底 catch:主进程那侧已经把装包异常转成 {ok:false} 了,但 IPC 本身也会失败
-              // (主进程重启/通道未注册)。没有 catch 的话 async onClick 里的 rejection 无人接手,
-              // 红字行不出现 —— 用户看到的是「点了没反应」,这类"无声失败"最难自查。
-              onClick={async () => {
-                try { addImported(await window.forge.growthPetImport(), setGrowthErr) }
-                catch (e) { setGrowthErr(`安装失败:${e instanceof Error ? e.message : String(e)}`) }
-              }}
-            >
-              选择文件夹…
-            </button>
-          </div>
           <div className="set-row" style={{ marginBottom: '8px' }}>
             <div className="info">
               <div className="t">每日 token 目标</div>

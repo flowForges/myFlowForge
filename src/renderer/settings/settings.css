@@ -419,6 +419,18 @@
 .seg-wrap .wf-pick { white-space: nowrap; flex: 0 0 auto; }
 /* 宠物设置排版整理:形象画廊与逐状态预览的一致间距,收敛原本散落的行内 margin 造成的参差观感。 */
 .pet-custom-gallery { align-items: center; }
+/* 形象来源角标(内置 / 自定义 / Codex / 成长 / 简约)。压在 chip 左上角边框上 —— 这样一整片画廊仍是一条
+   连续的流(同来源相邻),要分辨来源时扫一眼角标即可,不必再用整行小标题把列表切断。
+   背景取 --bg 而不是透明:它骑在 chip 边框上,透明会让边框线从字里穿过去。
+   画廊的 row-gap 已经放大到 16px(见 PetPane.tsx),给角标留出不撞上一行的空间。 */
+.pet-chip-tag {
+  position: absolute; top: -7px; left: 8px; z-index: 1;
+  padding: 0 5px; border-radius: 99px;
+  font-size: 9px; line-height: 14px; font-weight: 600; letter-spacing: .02em;
+  color: var(--faint); background: var(--bg); border: 1px solid var(--border);
+  white-space: nowrap; pointer-events: none;
+}
+.pet-chip.on .pet-chip-tag { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
 .pet-custom-preview { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .pet-custom-preview .set-row { padding: 6px 0; border-bottom: none; }
 /* 宠物「形象」大组里连续的说明行 + 按钮行:让紧邻的行不画分隔线、间距更紧凑,读起来成组而非零散。 */

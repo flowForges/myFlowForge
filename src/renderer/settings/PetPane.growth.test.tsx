@@ -122,21 +122,39 @@ describe('PetPane 成长宠物包安装', () => {
     expect(screen.queryByText('目录下没有 pet.json')).toBeNull()
   })
 
-  it('growth- 前缀的宠物单独归到「成长宠物」组,不混进自定义那一堆', () => {
+  // 画廊现在是一条连续的流,来源靠每个 chip 左上角的角标区分(不再用整行小标题把列表切断)。
+  const tagsOf = (c: HTMLElement): string[] =>
+    Array.from(c.querySelectorAll('.pet-custom-gallery .pet-chip-tag')).map(e => e.textContent ?? '')
+
+  it('growth- 前缀的宠物挂「成长」角标,普通自定义挂「自定义」', () => {
     const pet: Pet = {
       ...BASE_PET, skin: 'custom',
       customPets: [{ id: 'pet-1', name: '豆豆', emoji: '🐱' }, { id: 'growth-tree-abc', name: '成长树' }],
     }
-    render(<PetPane pet={pet} onChange={vi.fn()} />)
-    expect(screen.getByText('成长宠物')).not.toBeNull()
+    const { container } = render(<PetPane pet={pet} onChange={vi.fn()} />)
     expect(screen.getByText('成长树')).not.toBeNull()
-    // 自定义那一组的计数不该把成长宠物算进去
-    expect(screen.getByText(/添加自定义形象 · 1/)).not.toBeNull()
+    const tags = tagsOf(container)
+    expect(tags).toContain('成长')
+    expect(tags).toContain('自定义')
   })
 
-  it('没有成长宠物时不显示「成长宠物」分组标题', () => {
-    render(<PetPane pet={{ ...BASE_PET, customPets: [{ id: 'pet-1', name: '豆豆', emoji: '🐱' }] }} onChange={vi.fn()} />)
-    expect(screen.queryByText('成长宠物')).toBeNull()
+  it('★ 同来源的相邻排列:自定义在前,成长在后', () => {
+    const pet: Pet = {
+      ...BASE_PET, skin: 'custom',
+      customPets: [
+        { id: 'growth-a', name: '树A' }, { id: 'pet-1', name: '豆豆', emoji: '🐱' },
+        { id: 'growth-b', name: '树B' }, { id: 'pet-2', name: '球球', emoji: '🐶' },
+      ],
+    }
+    const { container } = render(<PetPane pet={pet} onChange={vi.fn()} />)
+    const tags = tagsOf(container).filter(t => t === '自定义' || t === '成长')
+    // 源数组里两类是交错的;渲染后必须先排完自定义再排成长
+    expect(tags).toEqual(['自定义', '自定义', '成长', '成长'])
+  })
+
+  it('没有成长宠物时不出现「成长」角标', () => {
+    const { container } = render(<PetPane pet={{ ...BASE_PET, customPets: [{ id: 'pet-1', name: '豆豆', emoji: '🐱' }] }} onChange={vi.fn()} />)
+    expect(tagsOf(container)).not.toContain('成长')
   })
 })
 
