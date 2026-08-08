@@ -120,8 +120,8 @@ describe('PetWidget custom skin', () => {
     expect(container.querySelector('.pet-emoji')).toBeNull()
   })
 
-  // 少了 .pet 外壳,--pet-size 撑不起来 → .pet-growth 的 width/height:100% 会塌成 0×0。
-  it('keeps the .pet shell (size + anim classes) around the growth sprite', () => {
+  // 成长包的动作完全由 atlas 行表达，宿主不能再给整棵树叠加 float/shake/spin-halo。
+  it('keeps the sized .pet shell but disables whole-pet animations for growth sprites', () => {
     const { container } = render(
       <PetWidget skin="custom" anim="spin-halo" accent="warn" state="idle"
         growth={{
@@ -133,7 +133,8 @@ describe('PetWidget custom skin', () => {
     const wrapper = container.querySelector('.pet') as HTMLElement
     expect(wrapper).toBeTruthy()
     expect(wrapper.dataset.skin).toBe('custom-growth')
-    expect(wrapper.classList.contains('pet-anim-spin-halo')).toBe(true)
+    expect(wrapper.classList.contains('pet-anim-spin-halo')).toBe(false)
+    expect(wrapper.classList.contains('pet-anim-none')).toBe(true)
     expect(wrapper.classList.contains('pet-accent-warn')).toBe(true)
     expect(wrapper.querySelector('.pet-growth')).toBeTruthy()
   })

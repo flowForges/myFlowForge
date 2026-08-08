@@ -398,7 +398,7 @@ export function PetApp() {
       style={{ '--pet-size': `${petSpriteSize(scale)}px` } as React.CSSProperties}
       onMouseEnter={() => { hoveredRef.current = true; setHovered(true); window.forge.petSetIgnoreMouse(false) }}
       onMouseLeave={() => { hoveredRef.current = false; setHovered(false); if (!resizingRef.current && !draggingRef.current) window.forge.petSetIgnoreMouse(true) }}>
-      <button className="pet-hit" aria-label="助手宠物" onPointerDown={onHitPointerDown} onClick={toggle}
+      <button className={`pet-hit${resolvedCustom.growth ? ' pet-hit-growth' : ''}`} aria-label="助手宠物" onPointerDown={onHitPointerDown} onClick={toggle}
         onContextMenu={(e) => { e.preventDefault(); window.forge.petContextMenu() }}>
         <PetWidget skin={skin} anim={cfg.anim} accent={cfg.accent} state={state}
           customImages={resolvedCustom.images} customEmoji={resolvedCustom.emoji}

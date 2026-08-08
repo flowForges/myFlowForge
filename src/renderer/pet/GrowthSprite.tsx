@@ -25,14 +25,11 @@ export function GrowthSprite({ growth, progress, state, reducedMotion }: Props):
   const frame = useAtlasAnimation(pick.action, { reducedMotion, durations: pick.durations })
   const pos = gridBackgroundPosition(Math.min(frame, growth.atlas.cols - 1), pick.row, growth.atlas.cols, rows)
 
-  const style: CSSProperties & Record<'--growth-sub', string> = {
+  const style: CSSProperties = {
     backgroundImage: `url(${petImageUrl(pick.sheet)})`,
     backgroundSize: `${growth.atlas.cols * 100}% ${rows * 100}%`,
     backgroundPosition: `${pos.x} ${pos.y}`,
     backgroundRepeat: 'no-repeat',
-    // 阶段内的子进度。CSS 用它做 scale 0.94→1.0 —— token 是连续量,画面就该连续长,
-    // 而不是一天只跳几次。零素材成本。
-    '--growth-sub': String(pick.subProgress),
   }
 
   return (

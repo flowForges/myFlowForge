@@ -90,6 +90,7 @@ button:disabled { cursor: default; }
 @keyframes pet-flip { 0%,60% { transform: rotateY(0); } 100% { transform: rotateY(360deg); } }
 
 .pet-hit:hover { animation: pet-hover-pop .5s ease; }
+.pet-hit-growth:hover { animation: none; }
 @keyframes pet-hover-pop { 0% { transform: scale(1); } 40% { transform: scale(1.18) rotate(-4deg); } 70% { transform: scale(.96) rotate(3deg); } 100% { transform: scale(1); } }
 
 /* ===== 缩放手柄(hover 显示,按住拖动连续放大/缩小,codex 桌宠样式) ===== */
@@ -421,14 +422,7 @@ button:disabled { cursor: default; }
 .pp-stop:hover { background: oklch(63% .2 25 / .22); }
 
 /* ===== 成长宠物 =====
-   阶段图铺满宠物框,阶段内的子进度驱动一点点缩放 —— token 是连续量,画面就该连续长。
-   --growth-sub 由 GrowthSprite 写入(0~1)。 */
+   动作完全由 atlas 表达。宿主不再缩放整张图，否则固定土壤/平台也会跟着动。 */
 .pet-growth {
   width: 100%; height: 100%;
-  transform: scale(calc(0.94 + 0.06 * var(--growth-sub, 0)));
-  transform-origin: 50% 100%;   /* 从底部长 —— 树是从地里往上长的 */
-  transition: transform .4s cubic-bezier(.22,.61,.36,1);
-}
-@media (prefers-reduced-motion: reduce) {
-  .pet-growth { transform: none; transition: none; }
 }

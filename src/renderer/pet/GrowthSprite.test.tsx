@@ -46,10 +46,9 @@ describe('GrowthSprite', () => {
     expect(el(container).dataset.action).toBe('idle')
   })
 
-  it('把阶段内子进度写成 CSS 变量,供缩放动效用', () => {
+  it('does not scale the whole atlas within a stage', () => {
     const { container } = render(<GrowthSprite growth={PACK} progress={0.25} state="idle" reducedMotion />)
-    // 阶段 0 跨度 0→0.5,进度 0.25 = 0.5
-    expect(el(container).style.getPropertyValue('--growth-sub')).toBe('0.5')
+    expect(el(container).style.getPropertyValue('--growth-sub')).toBe('')
   })
 
   it('预加载所有阶段图,阶段一跳就有图', () => {

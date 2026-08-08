@@ -67,6 +67,27 @@ describe('PetApp P3-4', () => {
     await waitFor(() => expect(container.querySelector('.pet.pet-anim-float.pet-accent-none')).not.toBeNull())
   })
 
+  it('marks the growth-pet hit target so hover cannot transform the whole plant', async () => {
+    const settings = SETTINGS()
+    settings.pet.skin = 'custom'
+    ;(settings.pet as any).customPets = [{
+      id: 'tree',
+      name: 'Tree',
+      growth: {
+        atlas: { cols: 6, cellW: 120, cellH: 120 },
+        actions: { idle: { row: 0, durations: [200] } },
+        stages: [{ at: 0, sheet: 'tree/0.png' }],
+      },
+    }]
+    ;(settings.pet as any).activeCustomPetId = 'tree'
+    ;(window as any).forge.getSettings = async () => settings
+
+    const { container } = render(<PetApp />)
+
+    await waitFor(() => expect(container.querySelector('.pet-growth')).not.toBeNull())
+    expect(container.querySelector('.pet-hit')?.classList.contains('pet-hit-growth')).toBe(true)
+  })
+
   // The run-driven pet animation tests (working anim on run:update run, done→idle revert) were removed
   // with the legacy orchestrator engine bus — the pet no longer receives engine run events. Pet state
   // now derives from chat activity (covered by derivePetState/derivePetAction/useChatActivity tests).

@@ -56,7 +56,10 @@ interface PetWidgetProps {
 }
 
 export function PetWidget({ skin, anim, accent, state, customImages, customEmoji, atlas, growth, growthProgress, action, lookDeg, frozen }: PetWidgetProps) {
-  const cls = `pet pet-anim-${frozen ? 'none' : anim} pet-accent-${accent}`
+  // Growth atlases already encode their complete motion. Applying a host float/shake/pulse here moves
+  // the fixed soil/platform too and hides the local leaf/branch animation.
+  const effectiveAnim = growth || frozen ? 'none' : anim
+  const cls = `pet pet-anim-${effectiveAnim} pet-accent-${accent}`
   const customSrc = customImages?.[state ?? 'idle'] ?? customImages?.idle
   const requestedSrc = petSrc(customSrc)
   const candidates = [...new Set(Object.values(customImages ?? {}).map(value => petSrc(value)).filter((value): value is string => Boolean(value)))]
