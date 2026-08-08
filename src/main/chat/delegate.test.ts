@@ -9,6 +9,21 @@ import { listDelegateAgents } from './delegateRegistry'
 import type { AgentProvider, AgentResult, AgentTask, AgentCallbacks } from '../agents/types'
 import type { Workspace } from '../config/schema'
 
+// 这个文件里的 prompt 断言必须只取决于代码,不能取决于开发机上 ~/.myFlowForge/settings.json 的当前内容。
+// sendTurn 会读 appearance.chatInlineHtml 决定要不要前置「内嵌 HTML」格式指令 —— 不钉死的话,用户在 app
+// 里打开那个开关,这里就会莫名其妙变红(真发生过)。其余设置走真实值。
+vi.mock('../config/store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../config/store')>()
+  return {
+    ...actual,
+    readSettings: () => {
+      const s = actual.readSettings()
+      return { ...s, appearance: { ...s.appearance, chatInlineHtml: false } }
+    },
+  }
+})
+
+
 // A fake provider whose run() reports a handoff (or, optionally, only log output) then completes.
 function fakeProvider(opts: { handoff?: (name: string) => string; output?: (name: string) => string; outputDeltas?: (name: string) => string[] } = {}): AgentProvider {
   return {

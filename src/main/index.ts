@@ -40,7 +40,7 @@ import { previewKeepRels } from './appearance/previewCache'
 import { registerFontScheme, handleFontProtocol } from './appearance/fontProtocol'
 import { join } from 'node:path'
 import { resolveDockIconPath, resolveMenuBarIconPath } from './appIcon'
-import { DEFAULT_BUILTIN_PET_ID, hasAllBuiltinPets, mergeBuiltinPets } from '@shared/builtinPets'
+import { hasAllBuiltinPets, mergeBuiltinPets, isLegacyBundledPet } from '@shared/builtinPets'
 import { perfSpan } from './perf/perfSpans'
 import { EventLoopMonitor } from './perf/eventLoopMonitor'
 import { StallReporter } from './perf/stallReporter'
@@ -110,19 +110,20 @@ app.whenReady().then(() => {
     const builtinsRefreshed = hadBuiltinPets &&
       JSON.stringify(pet.customPets.filter(p => p.id.startsWith('builtin-'))) !==
       JSON.stringify(mergedCustomPets.filter(p => p.id.startsWith('builtin-')))
-    // Pets slimmed to one bundled built-in (white-catgirl); the rest are downloadable. An existing user
-    // whose active pet was a now-removed built-in (e.g. builtin-china-dragon) would point at a pet no
-    // longer in the list → fall back to white-catgirl. They can re-download the old one from the gallery.
-    const wantActive = hadBuiltinPets ? pet.activeCustomPetId : `builtin-${DEFAULT_BUILTIN_PET_ID}`
-    const activeMissing = !mergedCustomPets.some(p => p.id === wantActive)
-    const activeCustomPetId = activeMissing ? `builtin-${DEFAULT_BUILTIN_PET_ID}` : wantActive
+    // 内置图片宠物已全部下架(连最后的 white-catgirl 也不随包发了,5 张 animated webp 共 4.3MB)。
+    // 老配置如果指着某只内置宠物,它的图已经不在包里 —— 不迁移的话用户看到的是一只空白/破图宠物。
+    // 一律回落到内置 SVG「幽灵」(矢量、零字节、断网也在),想要原来那只可以去宠物库重新下载。
+    const activeMissing = !!pet.activeCustomPetId && !mergedCustomPets.some(p => p.id === pet.activeCustomPetId)
+    const droppedBuiltin = isLegacyBundledPet(pet.activeCustomPetId) || activeMissing
+    const activeCustomPetId = droppedBuiltin ? undefined : pet.activeCustomPetId
     const nextPet = {
       ...pet,
-      skin: hadBuiltinPets ? pet.skin : 'custom',
+      // 只有「原本就靠内置宠物显示」的配置才改 skin;用户自己选过幽灵/机器人或自己的包的,一律不动。
+      skin: droppedBuiltin && pet.skin === 'custom' ? 'ghost' as const : pet.skin,
       customPets: mergedCustomPets,
       activeCustomPetId,
     }
-    if (migrated > 0 || !hadBuiltinPets || builtinsRefreshed || activeMissing) {
+    if (migrated > 0 || builtinsRefreshed || droppedBuiltin) {
       writeSettings({ ...s, pet: nextPet })
       if (migrated > 0) logInfo('pet', `已将 ${migrated} 张内联宠物图片迁移到磁盘,精简 settings.json`)
       if (!hadBuiltinPets) logInfo('pet', '已内置桌宠包并默认启用')

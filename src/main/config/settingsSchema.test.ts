@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { SettingsSchema, defaultSettings } from './schema'
-import { BUILTIN_PET_IDS, DEFAULT_BUILTIN_PET_ID } from '@shared/builtinPets'
+
 
 describe('SettingsSchema botBridge', () => {
   it('defaults to per-platform disabled config', () => {
@@ -29,8 +29,7 @@ describe('SettingsSchema skills + pet', () => {
     expect(s.skills['deep-research']).toBe(false)
     expect(s.pet).toMatchObject({
       enabled: true,
-      skin: 'custom',
-      activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`,
+      skin: 'ghost',
       corner: 'right',
       pos: { bottom: 24 },
       followCursor: true,
@@ -38,7 +37,8 @@ describe('SettingsSchema skills + pet', () => {
       notify: { confirm: true, input: true, done: false },
       states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } },
     })
-    expect(s.pet.customPets.map(p => p.id)).toEqual(BUILTIN_PET_IDS.map(id => `builtin-${id}`))
+    expect(s.pet.customPets).toEqual([])          // 不再有随包内置宠物
+    expect(s.pet.skin).toBe('ghost')             // 默认形象 = 内置 SVG 幽灵
   })
   it('pet.scale: 旧配置缺省补 1,合法值透传,越界/非法回落 1', () => {
     const base = defaultSettings()
@@ -54,8 +54,8 @@ describe('SettingsSchema skills + pet', () => {
   it('parses an old settings file (no skills/pet) by filling defaults', () => {
     const parsed = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, termProxy: '' })
     expect(parsed.skills['test-driven']).toBe(true)
-    expect(parsed.pet.skin).toBe('custom')
-    expect(parsed.pet.activeCustomPetId).toBe(`builtin-${DEFAULT_BUILTIN_PET_ID}`)
+    expect(parsed.pet.skin).toBe('ghost')
+    expect(parsed.pet.activeCustomPetId).toBeUndefined()
   })
   it('textWeight: 旧枚举迁移为数值,数值吸附步进,越界/垃圾回落 450', () => {
     const base = defaultSettings()

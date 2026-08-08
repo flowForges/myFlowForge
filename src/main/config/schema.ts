@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { Plugin as SharedPlugin, LibraryHook as SharedLibraryHook } from '../../shared/plugin'
 import { PET_SCALE_MIN, PET_SCALE_MAX } from '../../shared/petGeometry'
-import { DEFAULT_BUILTIN_PET_ID, builtinPets } from '../../shared/builtinPets'
+import { builtinPets } from '../../shared/builtinPets'
 import { PET_CUSTOM_MAX } from '../../shared/petCustom'
 import { GROWTH_ACTIONS } from '@shared/growthPet'
 
@@ -248,7 +248,7 @@ export const PetSchema = z.object({
 })
 export type Pet = z.infer<typeof PetSchema>
 const defaultSkills = (): Record<string, boolean> => ({ 'code-review': true, 'test-driven': true, 'deep-research': false, 'systematic-debugging': true })
-const defaultPet = (): Pet => ({ enabled: true, skin: 'custom', customPets: builtinPets(), activeCustomPetId: `builtin-${DEFAULT_BUILTIN_PET_ID}`, corner: 'right', pos: { bottom: 24 }, followCursor: true, idleAnimation: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: defaultStates() })
+const defaultPet = (): Pet => ({ enabled: true, skin: 'ghost', customPets: builtinPets(), activeCustomPetId: undefined, corner: 'right', pos: { bottom: 24 }, followCursor: true, idleAnimation: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: defaultStates() })
 export const HeartbeatSchema = z.object({
   stallMs: z.number().int().positive().default(90_000),
   killGraceMs: z.number().int().positive().default(60_000),
