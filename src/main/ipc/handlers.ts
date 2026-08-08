@@ -26,7 +26,8 @@ import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
-import { appendMessage, readMessages, sessionLastMessageMtime } from '../chat/chatStore'
+import { appendMessage, readMessages } from '../chat/chatStore'
+import { withLastMessageAt } from '../chat/sessionsView'
 import { mergeLive } from '../chat/liveTurns'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
 import { buildLaunchPlan, buildLaunchProjects, type LaunchStartConfig } from '../run/launch'
@@ -37,7 +38,7 @@ import { agentSessionsForId } from '../chat/agentSessions'
 import { botBridge, genPairing } from '../bot/botBridge'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
-import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage } from '@shared/types'
+import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, SessionsFile } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
@@ -633,41 +634,47 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     drainChatGates(a.workspacePath, sid ? { sessionId: sid } : {})
   })
   // 给每个会话附加派生的 lastMessageAt(消息文件 mtime),供侧栏会话列表显示「最后对话时间」而非首次开始时间。
-  // 仅在此 IPC 出口附加,不写回 sessions.json(保持存储干净;每次读时按文件重新派生)。
-  ipcMain.handle(CH.sessionList, (_e, wsPath: string) => {
-    const f = readSessions(wsPath)
-    return { ...f, sessions: f.sessions.map(s => ({ ...s, lastMessageAt: sessionLastMessageMtime(wsPath, s.id) ?? s.createdAt })) }
-  })
+  // 不写回 sessions.json(保持存储干净;每次读时按文件重新派生)。
+  //
+  // ★ 必须在**每一个**会话出口上都补,不能只补 session:list:侧栏的列表还会被 sessions:changed 广播、以及
+  // sessionNew/Switch/Close/Rename 的返回值**整个替换**(见 useSessions / useSessionsMulti,它们都是直接
+  // setState(payload))。漏掉任一出口,那条路径送出去的会话就没有 lastMessageAt,侧栏回落 createdAt ——
+  // 而切会话是高频操作,于是几乎总是显示创建时间。所以统一走下面这两个出口函数,不要再手写裸 broadcast。
+  const sessionsOut = (wsPath: string, file: SessionsFile): SessionsFile => withLastMessageAt(wsPath, file)
+  const broadcastSessions = (wsPath: string, file: SessionsFile): void => {
+    broadcast(CH.sessionsChanged, { workspacePath: wsPath, file: sessionsOut(wsPath, file) })
+  }
+  ipcMain.handle(CH.sessionList, (_e, wsPath: string) => sessionsOut(wsPath, readSessions(wsPath)))
   ipcMain.handle(CH.sessionNew, (_e, wsPath: string) => {
     if (isArchivedWorkspace(wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
     const file = newSession(wsPath)
-    broadcast(CH.sessionsChanged, { workspacePath: wsPath, file })
-    return file
+    broadcastSessions(wsPath, file)
+    return sessionsOut(wsPath, file)
   })
   ipcMain.handle(CH.sessionSwitch, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = switchSession(a.workspacePath, a.sessionId)
-    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
-    return file
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
   })
   ipcMain.handle(CH.sessionClose, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = closeSession(a.workspacePath, a.sessionId)
-    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
-    return file
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
   })
   ipcMain.handle(CH.sessionRename, (_e, a: { workspacePath: string; sessionId: string; title: string }) => {
     const file = renameSession(a.workspacePath, a.sessionId, a.title)
-    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
-    return file
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
   })
   ipcMain.handle(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
     const file = setSessionPermission(a.workspacePath, a.sessionId, a.mode)
-    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
-    return file
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
   })
   ipcMain.handle(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
     const file = setSessionModel(a.workspacePath, a.sessionId, a.agentId, a.modelId)
-    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
-    return file
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
   })
   // 对话式工作流(2026-07-30):enter=把选定工作流配置固化成 session 上的 WorkflowSessionState(停在阶段0,
   // 不自动跑);advance=推进到下一阶段(跨进扇出阶段时用 run2 的 launchRun 启动执行尾段 run,记下 runId);
@@ -712,7 +719,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // 影响)。在 setSessionWorkflow 之前做,避免被它的写入覆盖;kick 的 "请开始「…」" 消息因此不会再命名它。
     if (p.seed?.trim()) autoNameIfDefault(p.workspacePath, p.sessionId, p.seed)
     const file = setSessionWorkflow(p.workspacePath, p.sessionId, session)
-    broadcast(CH.sessionsChanged, { workspacePath: p.workspacePath, file })
+    broadcastSessions(p.workspacePath, file)
     kickConversationalStage(p.workspacePath, p.sessionId, session)   // 图3:进入阶段0自动起手产出交付物
     return session
   })
@@ -748,14 +755,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       next = { ...next, runId }
     }
     const file = setSessionWorkflow(a.workspacePath, a.sessionId, next)
-    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
+    broadcastSessions(a.workspacePath, file)
     kickConversationalStage(a.workspacePath, a.sessionId, next)   // 图3:推进到新对话阶段也自动起手
     return next
   })
   ipcMain.handle(CH.workflowExit, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = setSessionWorkflow(a.workspacePath, a.sessionId, undefined)
-    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
-    return file
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
   })
   // Change 2(doc-as-contract):进代码开发前读技术方案文档,抽每项目那节预填简报 + 报告文档是否存在。
   ipcMain.handle(CH.workflowPrepareBriefs, (_e, a: { workspacePath: string; stageKey: string; projects: string[] }): { docExists: boolean; docPath: string; sections: Record<string, string> } => {
@@ -772,14 +779,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!s?.workflowSession) return readSessions(a.workspacePath)
     const next: WorkflowSessionState = { ...s.workflowSession, phase: 'done', currentIndex: s.workflowSession.stages.length }
     const file = setSessionWorkflow(a.workspacePath, a.sessionId, next)
-    broadcast(CH.sessionsChanged, { workspacePath: a.workspacePath, file })
-    return file
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
   })
   ipcMain.handle(CH.sessionContinueFrom, (_e, a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => {
     if (isArchivedWorkspace(a.wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
     const file = continueFrom(a.wsPath, a)
-    broadcast(CH.sessionsChanged, { workspacePath: a.wsPath, file })
-    return file
+    broadcastSessions(a.wsPath, file)
+    return sessionsOut(a.wsPath, file)
   })
   ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId, chatQueue.runningProvider(a.workspacePath, a.sessionId)))
   ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
@@ -857,7 +864,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     },
     createSession: (ws, title) => {
       const f = newSession(ws, title)
-      broadcast(CH.sessionsChanged, { workspacePath: ws, file: f })
+      broadcastSessions(ws, f)
       return f.activeSessionId
     },
     stopSession: (ws, sessionId) => { chatQueue.stop(ws, sessionId); cancelWorkspaceDelegates(ws, sessionId) },
@@ -876,11 +883,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     },
     setModel: (ws, sessionId, agent, model) => {
       const file = setSessionModel(ws, sessionId, agent, model)
-      broadcast(CH.sessionsChanged, { workspacePath: ws, file })
+      broadcastSessions(ws, file)
     },
     setPermission: (ws, sessionId, mode) => {
       const file = setSessionPermission(ws, sessionId, mode)
-      broadcast(CH.sessionsChanged, { workspacePath: ws, file })
+      broadcastSessions(ws, file)
     },
     getProxy: () => readSettings().termProxy,
     emitStatus: (platform, st) => broadcast(CH.botStatusEvent, { platform, status: st }),

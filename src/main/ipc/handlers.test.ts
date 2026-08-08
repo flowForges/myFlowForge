@@ -126,6 +126,8 @@ const { appendMessageMock } = vi.hoisted(() => ({ appendMessageMock: vi.fn() }))
 vi.mock('../chat/chatStore', () => ({
   appendMessage: appendMessageMock,
   readMessages: vi.fn(() => []),
+  // 会话出 IPC 前统一补 lastMessageAt(sessionsView),没有消息文件时回落 createdAt。
+  sessionLastMessageMtime: vi.fn(() => undefined),
 }))
 const sessionFile1 = { sessions: [{ id: 's1', title: '新会话', mode: 'chat' as const, createdAt: 0 }], activeSessionId: 's1' }
 const sessionFile2 = { sessions: [{ id: 's1', title: '新会话', mode: 'chat' as const, createdAt: 0 }, { id: 's2', title: '会话2', mode: 'chat' as const, createdAt: 1 }], activeSessionId: 's2' }
@@ -417,11 +419,15 @@ describe('registerIpc broadcast wiring', () => {
       if (!call) throw new Error(`No handler registered for channel: ${channel}`)
       return call[1]({}, ...args)
     }
+    // 广播出去的会话必须已经补过 lastMessageAt —— 侧栏会用广播 payload 整个替换列表,不补就会回落
+    // createdAt,表现为「会话时间显示的是创建时间」。这里的 mtime mock 返回 undefined,所以期望值是
+    // 每个会话的 createdAt。
+    const enriched = (f: typeof sessionFile1) => ({ ...f, sessions: f.sessions.map(x => ({ ...x, lastMessageAt: x.createdAt })) })
     // sessionNew
     await invokeHandler(CH.sessionNew, '/ws/a')
     const newBcast = sent.find(([c, p]) => c === CH.sessionsChanged && (p as any).workspacePath === '/ws/a')
     expect(newBcast).toBeTruthy()
-    expect((newBcast![1] as any).file).toEqual(sessionFile2)
+    expect((newBcast![1] as any).file).toEqual(enriched(sessionFile2))
 
     sent.length = 0
 
@@ -429,7 +435,7 @@ describe('registerIpc broadcast wiring', () => {
     await invokeHandler(CH.sessionSwitch, { workspacePath: '/ws/b', sessionId: 's1' })
     const switchBcast = sent.find(([c, p]) => c === CH.sessionsChanged && (p as any).workspacePath === '/ws/b')
     expect(switchBcast).toBeTruthy()
-    expect((switchBcast![1] as any).file).toEqual(sessionFile1)
+    expect((switchBcast![1] as any).file).toEqual(enriched(sessionFile1))
 
     sent.length = 0
 
@@ -437,7 +443,7 @@ describe('registerIpc broadcast wiring', () => {
     await invokeHandler(CH.sessionClose, { workspacePath: '/ws/c', sessionId: 's2' })
     const closeBcast = sent.find(([c, p]) => c === CH.sessionsChanged && (p as any).workspacePath === '/ws/c')
     expect(closeBcast).toBeTruthy()
-    expect((closeBcast![1] as any).file).toEqual(sessionFile1)
+    expect((closeBcast![1] as any).file).toEqual(enriched(sessionFile1))
 
     sent.length = 0
 
@@ -445,7 +451,7 @@ describe('registerIpc broadcast wiring', () => {
     await invokeHandler(CH.sessionRename, { workspacePath: '/ws/d', sessionId: 's1', title: '新名' })
     const renameBcast = sent.find(([c, p]) => c === CH.sessionsChanged && (p as any).workspacePath === '/ws/d')
     expect(renameBcast).toBeTruthy()
-    expect((renameBcast![1] as any).file).toEqual(sessionFile1)
+    expect((renameBcast![1] as any).file).toEqual(enriched(sessionFile1))
   })
 
   it('chat:stop invokes chatQueue.stop for the given workspacePath', async () => {
