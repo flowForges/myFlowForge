@@ -147,6 +147,34 @@
     radial-gradient(4px 8px at 44% 60%, rgba(111,143,90,.18), transparent);
 }
 
+/* ---------- 青金 Lapis(dark · 群青嵌金)---------- */
+/* 明度阶梯抄 aurora(同为深蓝底、已真机验证过对比层次),只把色相推向青金石的群青、强调色换成金箔。
+   accent 是金色(明度高),所以 --on-accent 用深色底字,和 tokens.css 里 amber/lime 的处理同理。 */
+:root[data-skin="lapis"] {
+  --bg: #0b1430; --bg-2: #101a3c; --sidebar: #080f26;
+  --surface: #1c2b57; --surface-2: #263766;
+  --fg: #eef2ff; --fg-2: #c8d2ee; --muted: #aeb9dc; --faint: #8593bf;
+  --border: #1b2a55; --border-2: #24376b;
+  --accent: #e8b44a; --accent-dim: color-mix(in oklab, #e8b44a 16%, transparent); --on-accent: #1a1305;
+  --run: #f0c469;
+  --glass-window: color-mix(in srgb, #0b1430 86%, transparent);
+  --glass-panel: color-mix(in srgb, #101a3c 84%, transparent);
+  --glass-sidebar: color-mix(in srgb, #080f26 84%, transparent);
+}
+/* motif:底部一片群青矿脉的辉光 + 散落的金箔(黄铁矿)碎点 —— 青金石打磨面的样子。 */
+[data-skin="lapis"] .skin-motif {
+  background:
+    radial-gradient(90% 52% at 22% 112%, rgba(79,127,214,.30), transparent 62%),
+    radial-gradient(70% 44% at 78% 116%, rgba(43,72,158,.34), transparent 62%),
+    radial-gradient(56% 40% at 54% -12%, rgba(79,127,214,.16), transparent 60%),
+    radial-gradient(2px 2px at 26% 66%, rgba(232,180,74,.90), transparent),
+    radial-gradient(1.5px 1.5px at 48% 52%, rgba(240,196,105,.80), transparent),
+    radial-gradient(2px 2px at 72% 70%, rgba(232,180,74,.75), transparent),
+    radial-gradient(1.5px 1.5px at 86% 44%, rgba(240,196,105,.70), transparent),
+    radial-gradient(1.5px 1.5px at 34% 30%, rgba(232,180,74,.50), transparent),
+    radial-gradient(1px 1px at 62% 24%, rgba(240,196,105,.45), transparent);
+}
+
 /* 皮肤生效时统一软化边框:所有 border 换成随该皮肤 --fg 的半透明色(与壁纸模式 global.css:57-60 同法),
    让整窗的分隔线 / 卡片外框 / 顶栏底栏切割不再是硬黑线。放在各皮肤块之后,覆盖它们各自设的 --border。
    这是对「黑色分割线太多」的通盘处理:一次性作用于所有走 var(--border) 的接缝,无需逐个组件改。 */

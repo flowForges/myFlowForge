@@ -26,6 +26,8 @@ export const BUILTIN_SKINS: SkinMeta[] = [
     vibe: '80s 霓虹+透视网格,冲击力最强,社媒好看', swatches: ['#140720', '#2b2536', '#ff4d8d', '#21e6ff'] },
   { id: 'moss',   name: '苔庭',   en: 'Mossgarden', tag: '治愈 · 浅色', base: 'light',
     vibe: '慵懒植物庭院,低饱和温柔,久看不累', swatches: ['#efece2', '#f8f5ec', '#6f8f5a', '#c67b4e'] },
+  { id: 'lapis',  name: '青金',   en: 'Lapis',     tag: '雅致 · 深色', base: 'dark',
+    vibe: '青金石的群青底子里嵌着金箔,沉静里透出一线鎏金', swatches: ['#0b1430', '#1c2b57', '#e8b44a', '#4f7fd6'] },
 ]
 
 export const KNOWN_SKIN_IDS: ReadonlySet<string> = new Set(BUILTIN_SKINS.map(s => s.id))
