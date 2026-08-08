@@ -85,6 +85,30 @@ def _five_pose_with_small_islands(path: Path) -> None:
     image.save(path)
 
 
+def _pose_source_with_green_fringe(path: Path) -> None:
+    image = Image.new("RGBA", (900, 220), (8, 248, 9, 255))
+    draw = ImageDraw.Draw(image)
+    left = 30
+    for index in range(6):
+        width = 54
+        height = 112
+        foot_y = 184
+        right = left + width
+        top = foot_y - height
+        draw.rounded_rectangle(
+            (left + 4, top - 4, right - 4, foot_y + 4),
+            radius=10,
+            fill=(42, 212, 36, 255),
+        )
+        draw.rounded_rectangle(
+            (left + 8, top, right - 8, foot_y),
+            radius=8,
+            fill=BODY,
+        )
+        left += width + 82
+    image.save(path)
+
+
 def _alpha_bounds(image: Image.Image) -> tuple[int, int, int, int] | None:
     left = image.width
     top = image.height
@@ -263,6 +287,30 @@ class CharacterRowAssemblerTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "6"):
                 assemble_character_row(source, output)
+
+    def test_assemble_character_row_removes_green_fringe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "green-fringe.png"
+            output = root / "row.png"
+            _pose_source_with_green_fringe(source)
+
+            assemble_character_row(source, output)
+
+            with Image.open(output) as image:
+                pixels = image.convert("RGBA").getdata()
+                low_alpha_pixels = [pixel for pixel in pixels if 0 < pixel[3] < 24]
+                green_pixels = [
+                    pixel
+                    for pixel in pixels
+                    if pixel[3]
+                    and pixel[1] > 20
+                    and pixel[1] - pixel[0] > 10
+                    and pixel[1] - pixel[2] > 10
+                ]
+
+            self.assertEqual(low_alpha_pixels, [])
+            self.assertEqual(green_pixels, [])
 
     def test_cli_writes_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

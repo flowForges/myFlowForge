@@ -14,7 +14,10 @@ HORIZONTAL_PADDING = 8
 TOP_PADDING = 8
 BASELINE_Y = 109
 KEY_TOLERANCE = 16
+GREEN_KEY_MINIMUM = 20
+GREEN_KEY_DOMINANCE = 10
 MIN_PRIMARY_AREA_RATIO = 0.35
+MIN_OUTPUT_ALPHA = 24
 
 
 def _border_key_color(image: Image.Image) -> tuple[int, int, int, int]:
@@ -29,8 +32,23 @@ def _border_key_color(image: Image.Image) -> tuple[int, int, int, int]:
     return Counter(pixels).most_common(1)[0][0]
 
 
+def _is_chroma(pixel: tuple[int, int, int, int], key: tuple[int, int, int, int]) -> bool:
+    if pixel[3] == 0:
+        return True
+    if all(abs(channel - key_channel) <= KEY_TOLERANCE for channel, key_channel in zip(pixel, key)):
+        return True
+    red, green, blue, _ = pixel
+    key_is_green = key[1] - key[0] > GREEN_KEY_DOMINANCE and key[1] - key[2] > GREEN_KEY_DOMINANCE
+    return (
+        key_is_green
+        and green > GREEN_KEY_MINIMUM
+        and green - red > GREEN_KEY_DOMINANCE
+        and green - blue > GREEN_KEY_DOMINANCE
+    )
+
+
 def _is_foreground(pixel: tuple[int, int, int, int], key: tuple[int, int, int, int]) -> bool:
-    return any(abs(channel - key_channel) > KEY_TOLERANCE for channel, key_channel in zip(pixel, key))
+    return not _is_chroma(pixel, key)
 
 
 def _components(image: Image.Image, key: tuple[int, int, int, int]) -> list[tuple[int, int, int, int]]:
@@ -164,6 +182,12 @@ def assemble_character_row(source_path: Path, output_path: Path) -> None:
         x = index * CELL_SIZE + (CELL_SIZE - scaled_width) // 2
         y = BASELINE_Y - scaled_height + 1
         row.alpha_composite(resized, (x, y))
+
+    pixels = row.load()
+    for y in range(row.height):
+        for x in range(row.width):
+            if pixels[x, y][3] < MIN_OUTPUT_ALPHA:
+                pixels[x, y] = (0, 0, 0, 0)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     row.save(output_path)
