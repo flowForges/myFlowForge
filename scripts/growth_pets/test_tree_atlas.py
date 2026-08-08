@@ -52,6 +52,21 @@ def _green_centroid_y(cell: Image.Image, left: bool) -> float:
     return sum(ys) / len(ys)
 
 
+def _region_bytes(cell: Image.Image, box: tuple[int, int, int, int]) -> bytes:
+    return cell.crop(box).tobytes()
+
+
+def _changed_pixels(first: Image.Image, second: Image.Image, box: tuple[int, int, int, int]) -> int:
+    a = first.crop(box)
+    b = second.crop(box)
+    return sum(
+        1
+        for y in range(a.height)
+        for x in range(a.width)
+        if a.getpixel((x, y)) != b.getpixel((x, y))
+    )
+
+
 class TreeAtlasTest(unittest.TestCase):
     def _build(self, stage: int) -> Image.Image:
         try:
@@ -76,8 +91,42 @@ class TreeAtlasTest(unittest.TestCase):
         cells = _cells(self._build(0))
         self.assertNotEqual(cells[0].crop((0, 0, 120, 75)).tobytes(), cells[1].crop((0, 0, 120, 75)).tobytes())
         self.assertEqual(cells[0].crop((0, 75, 120, 120)).tobytes(), cells[1].crop((0, 75, 120, 120)).tobytes())
-        self.assertGreater(abs(_green_centroid_y(cells[6], True) - _green_centroid_y(cells[0], True)), 1.8)
-        self.assertGreater(abs(_green_centroid_y(cells[12], True) - _green_centroid_y(cells[0], True)), 3.2)
+        self.assertGreater(abs(_green_centroid_y(cells[8], True) - _green_centroid_y(cells[0], True)), 1.8)
+        self.assertGreater(abs(_green_centroid_y(cells[14], True) - _green_centroid_y(cells[0], True)), 3.2)
+
+    def test_sprout_flaps_around_fixed_petiole_joints(self) -> None:
+        cells = _cells(self._build(0))[6:12]
+        fixed_boxes = (
+            (55, 40, 61, 54),
+            (59, 40, 65, 54),
+            (57, 52, 64, 89),
+            (0, 88, 120, 120),
+        )
+        for box in fixed_boxes:
+            expected = _region_bytes(cells[0], box)
+            self.assertTrue(all(_region_bytes(cell, box) == expected for cell in cells[1:]))
+
+        self.assertGreater(_changed_pixels(cells[0], cells[2], (20, 20, 55, 52)), 40)
+        self.assertGreater(_changed_pixels(cells[0], cells[2], (65, 20, 100, 52)), 40)
+
+    def test_sprout_leaves_open_and_close_together(self) -> None:
+        cells = _cells(self._build(0))
+        for row_start in (0, 6, 12):
+            first = cells[row_start]
+            raised = cells[row_start + 2]
+            left_delta = _green_centroid_y(raised, True) - _green_centroid_y(first, True)
+            right_delta = _green_centroid_y(raised, False) - _green_centroid_y(first, False)
+            self.assertNotEqual(left_delta, 0)
+            self.assertNotEqual(right_delta, 0)
+            self.assertEqual(left_delta > 0, right_delta > 0)
+
+    def test_sprout_action_rows_increase_flap_amplitude(self) -> None:
+        cells = _cells(self._build(0))
+        idle = abs(_green_centroid_y(cells[2], True) - _green_centroid_y(cells[0], True))
+        working = abs(_green_centroid_y(cells[8], True) - _green_centroid_y(cells[6], True))
+        alert = abs(_green_centroid_y(cells[14], True) - _green_centroid_y(cells[12], True))
+        self.assertGreater(working, idle)
+        self.assertGreater(alert, working)
 
     def test_single_sun_uses_stage_specific_position(self) -> None:
         expected = {2: "right", 3: "center", 4: "left"}
