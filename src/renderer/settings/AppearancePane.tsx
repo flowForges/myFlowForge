@@ -332,8 +332,14 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
             <div className="t">内嵌 HTML 可视化</div>
             <div className="d">
               开启后会提示 AI 在对比矩阵、流程结构、信息卡片这类场景内嵌 HTML 片段,让回复更紧凑好读;
-              片段配色会自动映射到当前主题皮肤与壁纸配色。<b>会增加输出 token</b>(被 HTML 化的部分约 3–6 倍),
-              各 provider 的配合程度也不同,建议按需开启。
+              片段配色会自动映射到当前主题皮肤与壁纸配色,表格与代码块照常可排序 / 复制 / 折叠。
+              <br />
+              <b>代价:更费 token。</b>每轮会多注入约 1 千 token 的格式指令,被 HTML 化的那部分输出约为
+              纯 Markdown 的 3–6 倍。
+              <br />
+              <b>效果不保证。</b>这只是给模型的建议 —— 各家 CLI 配合度差别很大(Claude 最积极,部分模型
+              基本不理会),可能开了也没任何变化。片段里不被支持的写法(脚本、外链图片、定位、阴影)会被
+              丢弃,复杂排版的呈现可能和模型设想的不完全一致。
             </div>
           </div>
           <button
