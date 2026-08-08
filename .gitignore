@@ -10,3 +10,10 @@ release/
 .superpowers/
 # codex pet-build run artifacts (intermediate frames / 3d-import scratch) — never publish
 .codex-pet-runs/
+
+# 宠物内容全部移到 flowForges/pet-packs(见那边的 README)。应用仓库不再放任何宠物图片:
+# 安装包只带一个内置 SVG 形象,其余按需下载。原稿 + 做包工具也在那边 —— 它们曾占本仓库历史的 85%。
+# (make-growth-placeholder.mjs 是例外:纯脚本无图片,且 growthPlaceholder.integration.test 要跑它。)
+assets/pet-packs/
+scripts/growth_pets/
+deliverables/
