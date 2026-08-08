@@ -692,3 +692,86 @@ process.exit(0)
     expect(errors.length).toBe(1)
   })
 })
+
+describe('★ codex 一轮发多条 agent_message(工具调用前的前言 + 调用后的最终答案)', () => {
+  // 真机实测(codex exec --json,提示词要求先跑 shell 再回答)的事件顺序:
+  //   item.completed/agent_message      「我先按你的要求直接读取 note.txt。」   ← 前言
+  //   item.started/completed command_execution
+  //   item.completed/agent_message      「文件里写的是：hello world」          ← 真正的答案
+  // 一轮里 agent_message 出现两次是常态,不是异常。9887061 给 assistant-final 分支补 sawDelta=true
+  // 修好了「单条 final 被判成无回复」,却让第二条以后的 agent_message 全部撞上 `if (!sawDelta)` 被丢弃 ——
+  // 用户看到的回答停在前言那一句,像是「codex 老是中断」。
+  const twoMessageCli = (d: string): string => {
+    const p = join(d, 'codextwo.js')
+    writeFileSync(p, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ type: 'thread.started', thread_id: 't-1' })
+out({ type: 'item.completed', item: { id: 'i0', type: 'agent_message', text: '我先读一下 note.txt。' } })
+out({ type: 'item.started', item: { id: 'i1', type: 'command_execution', command: ['cat', 'note.txt'] } })
+out({ type: 'item.completed', item: { id: 'i1', type: 'command_execution', command: ['cat', 'note.txt'], aggregated_output: 'hello world', exit_code: 0 } })
+out({ type: 'item.completed', item: { id: 'i2', type: 'agent_message', text: '文件里写的是 hello world。' } })
+process.exit(0)
+`)
+    chmodSync(p, 0o755)
+    return p
+  }
+  const runChat = async (bin: string) => {
+    const provider = makeCodexProvider({ bin: 'node', preArgs: [bin], defaultModels: [] })
+    let text = ''
+    const errors: string[] = []
+    let done = false
+    const s = provider.chat!({ id: 'a1', prompt: 'q', model: 'gpt-5-codex', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: t => { text += t }, onThinkDelta: () => {}, onDone: () => { done = true }, onError: e => { errors.push(e.message) } }, process.env)
+    await s.done
+    return { text, errors, done }
+  }
+
+  it('★ 工具调用之后的最终答案不得丢失', async () => {
+    const { text } = await runChat(twoMessageCli(dir))
+    expect(text).toContain('文件里写的是 hello world。')
+  })
+
+  it('两条消息都保留,并以空行分段(否则两句会粘成一行,还可能撕坏 markdown 代码块)', async () => {
+    const { text } = await runChat(twoMessageCli(dir))
+    expect(text).toBe('我先读一下 note.txt。\n\n文件里写的是 hello world。')
+  })
+
+  it('照常正常收尾(有正文就不是「无回复」)', async () => {
+    const { errors, done } = await runChat(twoMessageCli(dir))
+    expect(errors).toEqual([])
+    expect(done).toBe(true)
+  })
+
+  // 去重仍要成立:app-server 传输会先流增量、再补一条同内容的 final。多消息场景下,每条消息各自
+  // 「增量 → final」,所以去重窗口必须按消息重开,不能一轮只判一次。
+  it('增量 + final 交替出现的多条消息:每条只渲染一次,不重复也不丢', async () => {
+    const p = join(dir, 'codexmix.js')
+    writeFileSync(p, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ msg: { type: 'agent_message_delta', delta: '我先' } })
+out({ msg: { type: 'agent_message_delta', delta: '读一下。' } })
+out({ msg: { type: 'agent_message', message: '我先读一下。' } })
+out({ msg: { type: 'agent_message_delta', delta: '答案是' } })
+out({ msg: { type: 'agent_message_delta', delta: ' 42。' } })
+out({ msg: { type: 'agent_message', message: '答案是 42。' } })
+process.exit(0)
+`)
+    chmodSync(p, 0o755)
+    const { text } = await runChat(p)
+    expect(text).toBe('我先读一下。答案是 42。')
+  })
+
+  it('前一条走增量、后一条只有 final(混合形态):后一条照样交付', async () => {
+    const p = join(dir, 'codexmix2.js')
+    writeFileSync(p, `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ msg: { type: 'agent_message_delta', delta: '我先读一下。' } })
+out({ msg: { type: 'agent_message', message: '我先读一下。' } })
+out({ type: 'item.completed', item: { id: 'i2', type: 'agent_message', text: '答案是 42。' } })
+process.exit(0)
+`)
+    chmodSync(p, 0o755)
+    const { text } = await runChat(p)
+    expect(text).toBe('我先读一下。\n\n答案是 42。')
+  })
+})

@@ -350,7 +350,12 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
       const start = Date.now()
+      // 两个语义必须分开,合成一个变量就必然二选一错一个:
+      //   sawDelta     —— 「当前这条消息」是否已经流过增量。只用来丢弃紧随其后那条同内容的 final
+      //                   (app-server 会先流增量再补一条完整 final)。每收到一条 final 就重开窗口。
+      //   deliveredAny —— 「整轮」是否交付过任何正文。只用来做收尾的「无回复」判定,以及消息间加分隔。
       let sawDelta = false
+      let deliveredAny = false
       let lastErr: string | null = null
       let ctxMaxSeen = 0
       // Per-event handling shared by both transports: exec's processLine (below, fed raw JSONL from
@@ -372,13 +377,20 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         if (toolAct) cb.onToolActivity?.(toolAct)
         for (const a of parseCodexEvent(obj)) {
           if (a.kind === 'session') cb.onSession(a.id)
-          else if (a.kind === 'assistant') { sawDelta = true; cb.onAssistantDelta(a.text) }
-          // ★ assistant-final 也必须置位 sawDelta。codex 经常整轮只发这一个事件(不发增量),此时正文其实
-          // 已经交付给上层了,但 sawDelta 还是 false → 下面的收尾会判成「无回复」,走 cb.onError,而随后的
-          // cb.onDone 又被 chatService 的 settled 守卫丢弃。后果是这一轮明明答得好好的,却:不记 tokens
-          // (用量统计长期为空)、不发 done(侧栏未读圆点永远不亮)、对外是 error(机器人报 ❌ 出错)。
-          // 界面上看不出来 —— 正文是累积在 chatService 的 text 里的,照常显示。
-          else if (a.kind === 'assistant-final') { if (!sawDelta) { sawDelta = true; cb.onAssistantDelta(a.text) } }
+          else if (a.kind === 'assistant') { sawDelta = true; deliveredAny = true; cb.onAssistantDelta(a.text) }
+          // ★ 一轮里 agent_message 出现多次是 codex 的常态,不是异常:工具调用前先发一句前言
+          //   (「我先读一下 note.txt。」),调用完再发真正的答案。所以这里**不能**一轮只收一条 ——
+          //   曾经用一个 sawDelta 同时兼「已交付过正文」和「刚流过增量」,第一条 final 置位之后,后面
+          //   每一条 agent_message 都撞上 `if (!sawDelta)` 被静默丢弃,回答停在前言那句,看着就像
+          //   「codex 老是中断」。
+          // 去重窗口按【消息】重开:只有紧挨着增量的那条 final 才是重复品,丢掉它并复位,下一条消息
+          //   重新判断。而「无回复」判定改看 deliveredAny —— 交付过正文就不是无回复(否则收尾会走
+          //   cb.onError,随后的 cb.onDone 被 chatService 的 settled 守卫丢弃:不记 tokens、不亮未读
+          //   圆点、机器人报 ❌,而界面上完全看不出来,因为正文早已累积在 chatService 的 text 里)。
+          else if (a.kind === 'assistant-final') {
+            if (sawDelta) sawDelta = false                                   // 增量已渲染过 → 丢弃这条重复的完整文本
+            else { cb.onAssistantDelta(deliveredAny ? `\n\n${a.text}` : a.text); deliveredAny = true }
+          }
           else if (a.kind === 'think') { if (a.text.startsWith('调用 shell') || a.text.startsWith('编辑文件')) continue; cb.onThinkDelta(a.text) }
         }
       }
@@ -494,7 +506,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         if (errBuf.trim() && !isCodexInternalLog(errBuf.trim())) { cb.onStatus?.(errBuf.trim()); errBuf = '' }
         // No reply produced → surface the best diagnostic we have so it's never a silent empty bubble:
         // a parsed error event, else the raw stderr/stdout codex emitted, else a bare exit-code note.
-        if (!sawDelta) {
+        if (!deliveredAny) {
           let diag = lastErr ?? ''
           if (!diag && (wd.firedFlag || res.timedOut)) diag = 'codex 长时间无响应（240s 无任何输出）已终止 —— 可尝试拆分过长的输入，或检查网络/实验功能配置'
           if (!diag && rawErr.trim()) diag = `codex stderr:\n${rawErr.trim()}`
