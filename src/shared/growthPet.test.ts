@@ -15,9 +15,9 @@ function base(): Record<string, unknown> {
       alert: { row: 2, durations: [150, 150, 150, 150, 150, 280] },
     },
     stages: [
-      { at: 0, name: '种子', sheet: '0-seed.png' },
-      { at: 0.4, name: '树干', sheet: '3-trunk.png' },
-      { at: 0.9, name: '结果', sheet: '5-fruit.png' },
+      { from: 0, name: '种子', sheet: '0-seed.png' },
+      { from: 80000, name: '树干', sheet: '3-trunk.png' },
+      { from: 180000, name: '结果', sheet: '5-fruit.png' },
     ],
   }
 }
@@ -75,25 +75,37 @@ describe('parseGrowthManifest', () => {
 
   it('拒绝首条 at 不为 0', () => {
     const raw = base()
-    raw.stages = [{ at: 0.1, sheet: 'a.png' }, { at: 0.5, sheet: 'b.png' }]
+    raw.stages = [{ from: 20000, sheet: 'a.png' }, { from: 100000, sheet: 'b.png' }]
     expect(parseGrowthManifest(raw).ok).toBe(false)
   })
 
   it('拒绝 at 乱序', () => {
     const raw = base()
-    raw.stages = [{ at: 0, sheet: 'a.png' }, { at: 0.6, sheet: 'b.png' }, { at: 0.3, sheet: 'c.png' }]
+    raw.stages = [{ from: 0, sheet: 'a.png' }, { from: 120000, sheet: 'b.png' }, { from: 60000, sheet: 'c.png' }]
     expect(parseGrowthManifest(raw).ok).toBe(false)
   })
 
-  it('拒绝 at 越界', () => {
+  // from 是绝对 token,没有上界(最后一档一直到无穷),所以「越界」这条不存在了。取而代之的是:
+  // 必须是整数、不能为负,以及老包的 at 要明确报错而不是被静默当成 0。
+  it('拒绝非整数 / 负数的 from', () => {
+    for (const bad of [0.5, -1, Number.NaN]) {
+      const raw = base()
+      raw.stages = [{ from: 0, sheet: 'a.png' }, { from: bad, sheet: 'b.png' }]
+      expect(parseGrowthManifest(raw).ok).toBe(false)
+    }
+  })
+
+  it('★ 老包的 at(0~1 百分比)明确报错,不静默当 0', () => {
     const raw = base()
-    raw.stages = [{ at: 0, sheet: 'a.png' }, { at: 1.4, sheet: 'b.png' }]
-    expect(parseGrowthManifest(raw).ok).toBe(false)
+    raw.stages = [{ at: 0, sheet: 'a.png' }, { at: 0.5, sheet: 'b.png' }]
+    const r = parseGrowthManifest(raw)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('from')
   })
 
   it.each(['../evil.png', '/abs/evil.png', 'a/../../evil.png'])('拒绝越界路径:%s', (sheet) => {
     const raw = base()
-    raw.stages = [{ at: 0, sheet }]
+    raw.stages = [{ from: 0, sheet }]
     expect(parseGrowthManifest(raw).ok).toBe(false)
   })
 

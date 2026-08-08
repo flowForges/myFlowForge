@@ -10,7 +10,7 @@ import { useAtlasAnimation } from './useAtlasAnimation'
 interface Props {
   growth: GrowthPack
   /** 0~1,来自主进程广播的成长信号。 */
-  progress: number
+  todayTokens: number
   state: PetState
   reducedMotion?: boolean
 }
@@ -18,10 +18,10 @@ interface Props {
 // 成长宠物的渲染。与 codex 的 PetAtlasSprite 刻意分开:那个还要负责 look-at-cursor 的 16 向姿势
 // (第 9/10 行),成长包没有这套;合成一个组件只会多出永远为假的分支,还把 codex 宠物暴露在回归风险里。
 // 共享的只有 gridBackgroundPosition 这点纯网格数学和 useAtlasAnimation 的逐帧驱动。
-export function GrowthSprite({ growth, progress, state, reducedMotion }: Props): ReactElement {
+export function GrowthSprite({ growth, todayTokens, state, reducedMotion }: Props): ReactElement {
   // 网格行数由动作里最大的 row 推出(见 growthRowCount);设置页的缩略图共用同一份计算。
   const rows = growthRowCount(growth.actions)
-  const pick = pickGrowthSprite({ id: '', name: '', ...growth }, progress, state)
+  const pick = pickGrowthSprite({ id: '', name: '', ...growth }, todayTokens, state)
   const frame = useAtlasAnimation(pick.action, { reducedMotion, durations: pick.durations })
   const pos = gridBackgroundPosition(Math.min(frame, growth.atlas.cols - 1), pick.row, growth.atlas.cols, rows)
 

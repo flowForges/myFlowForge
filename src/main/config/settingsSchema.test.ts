@@ -131,7 +131,7 @@ describe('SettingsSchema skills + pet', () => {
     const growth = {
       atlas: { cols: 4, cellW: 100, cellH: 100 },
       actions: { idle: { row: 0, durations: [200, 200] } },
-      stages: [{ at: 0, sheet: 'growth-x/0.png' }],
+      stages: [{ from: 0, sheet: 'growth-x/0.png' }],
     }
     const parsed = SettingsSchema.parse({ ...base, pet: { ...base.pet, customPets: [{ id: 'growth-x', name: '成长树', growth }] } })
     expect(parsed.pet.customPets[0].growth).toEqual(growth)

@@ -61,7 +61,7 @@ function branches(h, dx) {
 // 每个阶段画什么。h 是植物高度(像素),越往后越高。
 const STAGES = [
   {
-    at: 0, name: '种子', file: '0-seed.svg',
+    from: 0, name: '种子', file: '0-seed.svg',
     // 半埋在土里:先画整颗种子,再用土带盖住下半部分 —— 读起来就是"种下去了"。
     draw: () => `
       <ellipse cx="${CELL / 2}" cy="${SOIL + 1}" rx="9" ry="11" fill="${C.seed}"/>
@@ -70,7 +70,7 @@ const STAGES = [
       <ellipse cx="${CELL / 2}" cy="${SOIL + 2}" rx="16" ry="5" fill="${C.mound}"/>`,
   },
   {
-    at: 0.08, name: '破土', file: '1-crack.svg',
+    from: 16000, name: '破土', file: '1-crack.svg',
     // 土丘裂开,一点嫩芽冒头。
     draw: (dx) => g([
       `<path d="M${CELL / 2 - 12} ${SOIL + 3} l 8 -5 M${CELL / 2 + 12} ${SOIL + 3} l -8 -5"
@@ -80,18 +80,18 @@ const STAGES = [
     ]),
   },
   {
-    at: 0.20, name: '发芽', file: '2-sprout.svg',
+    from: 40000, name: '发芽', file: '2-sprout.svg',
     draw: (dx) => g([stem(30, 4.5, dx, C.stem), leaves(30, dx, 0.95, 8)]),
   },
   {
-    at: 0.40, name: '树干', file: '3-trunk.svg',
+    from: 80000, name: '树干', file: '3-trunk.svg',
     draw: (dx) => g([
       stem(52, 8, dx, C.trunk), branches(52, dx),
       `<ellipse cx="${CELL / 2 + dx}" cy="${SOIL - 53}" rx="20" ry="14" fill="${C.canopy}"/>`,
     ]),
   },
   {
-    at: 0.65, name: '开花', file: '4-bloom.svg',
+    from: 130000, name: '开花', file: '4-bloom.svg',
     draw: (dx) => g([
       stem(66, 10, dx, C.trunk), branches(66, dx),
       `<ellipse cx="${CELL / 2 + dx}" cy="${SOIL - 68}" rx="28" ry="19" fill="${C.canopy}"/>`,
@@ -100,7 +100,7 @@ const STAGES = [
     ]),
   },
   {
-    at: 0.90, name: '结果', file: '5-fruit.svg',
+    from: 180000, name: '结果', file: '5-fruit.svg',
     draw: (dx) => g([
       stem(78, 11, dx, C.trunk), branches(78, dx),
       `<ellipse cx="${CELL / 2 + dx}" cy="${SOIL - 80}" rx="33" ry="23" fill="${C.canopy}"/>`,
@@ -125,7 +125,7 @@ function sheet(stage) {
 mkdirSync(out, { recursive: true })
 const stages = STAGES.map(s => {
   writeFileSync(join(out, s.file), sheet(s))
-  return { at: s.at, name: s.name, sheet: s.file }
+  return { from: s.from, name: s.name, sheet: s.file }
 })
 
 writeFileSync(join(out, 'pet.json'), JSON.stringify({

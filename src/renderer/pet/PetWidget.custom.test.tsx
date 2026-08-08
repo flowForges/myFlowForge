@@ -103,11 +103,11 @@ describe('PetWidget custom skin', () => {
   // 成长包优先级最高:growth > codex atlas > 逐状态图 > emoji。
   it('renders the growth sprite (and nothing else) when the custom pet has a growth pack', () => {
     const { container } = render(
-      <PetWidget skin="custom" anim="float" accent="none" state="idle" growthProgress={0.6}
+      <PetWidget skin="custom" anim="float" accent="none" state="idle" growthTokens={120000}
         growth={{
           atlas: { cols: 4, cellW: 100, cellH: 100 },
           actions: { idle: { row: 0, durations: [200, 200] } },
-          stages: [{ at: 0, sheet: 'g1/0.png' }, { at: 0.5, sheet: 'g1/1.png' }],
+          stages: [{ from: 0, sheet: 'g1/0.png' }, { from: 100000, sheet: 'g1/1.png' }],
         }}
         atlas={{ path: 'p1/spritesheet.webp', version: 2 }} action="running"
         customImages={{ idle: 'p2/idle.webp' }} customEmoji={{ name: 'x', emoji: '🐱', color: '' }} />,
@@ -127,7 +127,7 @@ describe('PetWidget custom skin', () => {
         growth={{
           atlas: { cols: 4, cellW: 100, cellH: 100 },
           actions: { idle: { row: 0, durations: [200, 200] } },
-          stages: [{ at: 0, sheet: 'g1/0.png' }],
+          stages: [{ from: 0, sheet: 'g1/0.png' }],
         }} />,
     )
     const wrapper = container.querySelector('.pet') as HTMLElement

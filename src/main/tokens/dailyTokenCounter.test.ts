@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createDailyTokenCounter, scanTokenBaseline, localDayKey, dayKeyMinus } from './dailyTokenCounter'
-import { GROWTH_GOAL_DEFAULT, GROWTH_GOAL_MIN, GROWTH_GOAL_MAX } from '@shared/growthProgress'
 import type { TokenUsageRow } from '../ipc/tokenUsageHandlers'
 
 function row(day: string, input: number, output: number): TokenUsageRow {
@@ -78,21 +77,7 @@ describe('dayKeyMinus', () => {
 })
 
 describe('createDailyTokenCounter', () => {
-  it('用基线开局,goal 由历史中位数推出', () => {
-    const c = createDailyTokenCounter({
-      baseline: { today: 50_000, recentDayTotals: [100_000, 200_000, 300_000] },
-      day: '2026-08-07',
-    })
-    const s = c.signal()
-    expect(s.todayTokens).toBe(50_000)
-    expect(s.goal).toBe(200_000)
-    expect(s.progress).toBeCloseTo(0.25)
-  })
 
-  it('无历史时用默认 goal', () => {
-    const c = createDailyTokenCounter({ baseline: { today: 0, recentDayTotals: [] }, day: '2026-08-07' })
-    expect(c.signal().goal).toBe(GROWTH_GOAL_DEFAULT)
-  })
 
   it('累加并通知', () => {
     const onChange = vi.fn()
@@ -101,7 +86,7 @@ describe('createDailyTokenCounter', () => {
     })
     c.add(20_000)
     expect(c.signal().todayTokens).toBe(20_000)
-    expect(c.signal().progress).toBeCloseTo(0.1)
+    // (progress 已移除) expect(c.signal().progress).toBeCloseTo(0.1)
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ todayTokens: 20_000 }))
   })
 
@@ -131,55 +116,10 @@ describe('createDailyTokenCounter', () => {
     expect(c.signal().todayTokens).toBe(3_000)   // 不是 503,000
   })
 
-  it('goalOverride 覆盖历史推算值', () => {
-    const c = createDailyTokenCounter({
-      baseline: { today: 100_000, recentDayTotals: [1_000_000] },
-      day: '2026-08-07',
-      goalOverride: 400_000,
-    })
-    expect(c.signal().goal).toBe(400_000)
-    expect(c.signal().progress).toBeCloseTo(0.25)
-  })
 
   // ★ 上下限原本只在 computeDailyGoal 里生效,override 一路裸奔到这里。settings.json 是纯文本、
   // 用户改得了,旧版本也可能写下越界值 —— 这一层是所有读取路径的汇合点,必须自己 clamp。
-  it('override 低于下限被抬到 MIN(填 1 不该让进度条恒满)', () => {
-    const c = createDailyTokenCounter({
-      baseline: { today: 100_000, recentDayTotals: [] }, day: '2026-08-07', goalOverride: 1,
-    })
-    expect(c.signal().goal).toBe(GROWTH_GOAL_MIN)
-    // 没 clamp 的话 progress 恒为 1,宠物永远停在最后一档
-    expect(c.signal().progress).toBe(1)   // 100k / 50k > 1 → 封顶 1,但 goal 是 50000 不是 1
-    const c2 = createDailyTokenCounter({
-      baseline: { today: 10_000, recentDayTotals: [] }, day: '2026-08-07', goalOverride: 1,
-    })
-    expect(c2.signal().progress).toBeCloseTo(0.2)   // 10k / 50k;没 clamp 的话是 1
-  })
 
-  it('override 高于上限被压到 MAX', () => {
-    const c = createDailyTokenCounter({
-      baseline: { today: 0, recentDayTotals: [] }, day: '2026-08-07', goalOverride: 1e12,
-    })
-    expect(c.signal().goal).toBe(GROWTH_GOAL_MAX)
-  })
 
-  it('setGoalOverride 同样 clamp(设置面板改一次也走这条路)', () => {
-    const c = createDailyTokenCounter({ baseline: { today: 0, recentDayTotals: [] }, day: '2026-08-07' })
-    c.setGoalOverride(1)
-    expect(c.signal().goal).toBe(GROWTH_GOAL_MIN)
-    c.setGoalOverride(99_000_000)
-    expect(c.signal().goal).toBe(GROWTH_GOAL_MAX)
-  })
 
-  it('setGoalOverride 立即改写 goal 并通知', () => {
-    const onChange = vi.fn()
-    const c = createDailyTokenCounter({
-      baseline: { today: 100_000, recentDayTotals: [] }, day: '2026-08-07', onChange,
-    })
-    c.setGoalOverride(500_000)
-    expect(c.signal().goal).toBe(500_000)
-    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ goal: 500_000 }))
-    c.setGoalOverride(undefined)   // 回到自动
-    expect(c.signal().goal).toBe(GROWTH_GOAL_DEFAULT)
-  })
 })

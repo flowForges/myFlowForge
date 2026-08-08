@@ -33,7 +33,7 @@ function manifest(over: Record<string, unknown> = {}): Record<string, unknown> {
     id: 'growth-tree', name: '成长树', kind: 'growth', signal: 'dailyTokens',
     atlas: { cols: 4, cellW: 100, cellH: 100 },
     actions: { idle: { row: 0, durations: [200, 200] } },
-    stages: [{ at: 0, sheet: '0-seed.png' }, { at: 0.5, sheet: '1-trunk.png' }],
+    stages: [{ from: 0, sheet: '0-seed.png' }, { from: 100000, sheet: '1-trunk.png' }],
     ...over,
   }
 }
@@ -116,7 +116,7 @@ describe('importGrowthPetPack', () => {
   it('shared 层拦截越界路径', () => {
     mkdirSync(join(src, 'sub'), { recursive: true })
     writeFileSync(join(src, 'pet.json'), JSON.stringify(manifest({
-      stages: [{ at: 0, sheet: 'sub/../../escape.png' }],
+      stages: [{ from: 0, sheet: 'sub/../../escape.png' }],
     })))
     const r = importGrowthPetPack(src, dest)
     expect(r.ok).toBe(false)
@@ -134,7 +134,7 @@ describe('importGrowthPetPack', () => {
         id: 'x', name: '越界',
         atlas: { cols: 1, cellW: 1, cellH: 1 },
         actions: { idle: { row: 0, durations: [100] } },
-        stages: [{ at: 0, sheet: `../${basename(outside)}` }],
+        stages: [{ from: 0, sheet: `../${basename(outside)}` }],
       }
       const r = importGrowthPetPack(src, dest)
       expect(r.ok).toBe(false)
@@ -153,7 +153,7 @@ describe('importGrowthPetPack', () => {
     writeFileSync(join(src, 'a', 'sheet.png'), 'aaa')
     writeFileSync(join(src, 'b', 'sheet.png'), 'bbb')
     writeFileSync(join(src, 'pet.json'), JSON.stringify(manifest({
-      stages: [{ at: 0, sheet: 'a/sheet.png' }, { at: 0.5, sheet: 'b/sheet.png' }],
+      stages: [{ from: 0, sheet: 'a/sheet.png' }, { from: 100000, sheet: 'b/sheet.png' }],
     })))
     const r = importGrowthPetPack(src, dest)
     if (!r.ok) throw new Error(r.error)
@@ -180,7 +180,7 @@ describe('importGrowthPetPack 重装时清理旧阶段图', () => {
     rmSync(join(src, '1-trunk.png'))
     writeFileSync(join(src, '0-seed.svg'), '<svg/>')
     writeFileSync(join(src, 'pet.json'), JSON.stringify(manifest({
-      stages: [{ at: 0, sheet: '0-seed.svg' }],
+      stages: [{ from: 0, sheet: '0-seed.svg' }],
     })))
   }
 
@@ -307,7 +307,7 @@ describe('importGrowthPetPack 重装时清理旧阶段图', () => {
     writeFileSync(join(src, '0-seed.svg'), '<svg/>')
     writeFileSync(join(src, '1-trunk.svg'), '<svg/>')
     writeFileSync(join(src, 'pet.json'), JSON.stringify(manifest({
-      stages: [{ at: 0, sheet: '0-seed.svg' }, { at: 0.5, sheet: '1-trunk.svg' }],
+      stages: [{ from: 0, sheet: '0-seed.svg' }, { from: 100000, sheet: '1-trunk.svg' }],
     })))
     // 让第二张图写不进去:目标路径被一个同名目录占着 → writeFileSync 抛 EISDIR。
     mkdirSync(join(dest, id, '1-trunk.svg'), { recursive: true })

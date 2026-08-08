@@ -11,7 +11,7 @@ export function setDailyTokenCounter(c: DailyTokenCounter | null): void { counte
 
 // 宠物的信号是纯装饰性的,任何一步都不值得拖垮它的调用方 —— 尤其 addDailyTokens 跑在
 // chatService.finishOk 里 appendMessage 之后、clearLive/emit('done') 之前:那里抛一次,
-// 消息已落盘但 UI 会永远停在「运行中」。计数器内部的 add/setGoalOverride 会同步走到
+// 消息已落盘但 UI 会永远停在「运行中」。计数器内部的 add 会同步走到
 // onChange → registry.broadcast → webContents.send,链路上任何一环抛异常都在这里被吃掉。
 // (logWarn 自身保证不抛 —— 见 appLog.ts。)
 function guard(what: string, fn: () => void): void {
@@ -25,6 +25,3 @@ export function addDailyTokens(n: number): void { guard('addDailyTokens', () => 
 
 export function currentGrowthSignal(): GrowthSignal | null { return counter?.signal() ?? null }
 
-export function setGrowthGoalOverride(g: number | undefined): void {
-  guard('setGrowthGoalOverride', () => counter?.setGoalOverride(g))
-}

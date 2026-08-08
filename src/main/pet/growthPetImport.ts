@@ -123,7 +123,7 @@ export function importGrowthPetPack(
       growth: {
         atlas: m.atlas,
         actions: m.actions,
-        stages: m.stages.map((s, i) => (s.name ? { at: s.at, name: s.name, sheet: jobs[i].rel } : { at: s.at, sheet: jobs[i].rel })),
+        stages: m.stages.map((s, i) => (s.name ? { from: s.from, name: s.name, sheet: jobs[i].rel } : { from: s.from, sheet: jobs[i].rel })),
       },
     },
   }

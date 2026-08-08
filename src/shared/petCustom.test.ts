@@ -82,7 +82,7 @@ describe('resolveActiveCustomPet — 成长宠物', () => {
   const growth: GrowthPack = {
     atlas: { cols: 8, cellW: 192, cellH: 208 },
     actions: { idle: { row: 0, durations: [200, 200] } },
-    stages: [{ at: 0, sheet: 'growth-tree-abc/0-seed.png' }],
+    stages: [{ from: 0, sheet: 'growth-tree-abc/0-seed.png' }],
   }
 
   it('把 growth 透传给渲染层', () => {

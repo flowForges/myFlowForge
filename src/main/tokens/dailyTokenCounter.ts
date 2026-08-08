@@ -6,23 +6,22 @@
 // 所以:启动时扫一次拿基线,之后每轮对话结束在 chatService.finishOk 里累加。内存态,不落盘 ——
 // 少一个要维护一致性的文件;app 重启由启动扫盘重建,成本只有一次。
 import { aggregateTokenUsage, type TokenUsageRow } from '../ipc/tokenUsageHandlers'
-import { clampDailyGoal, computeDailyGoal, growthProgress } from '@shared/growthProgress'
 
 /** 本地时区的 YYYY-MM-DD。与 tokenUsageHandlers 里的 dayOf 同一套口径(那边入参是 ISO 字符串)。 */
 export function localDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// 只广播「今天累计了多少 token」。以前还带 goal/progress —— 那是阶段门槛用百分比时代的产物,
+// 需要一个全局分母。现在每个成长包用绝对区间自带节奏(GrowthStage.from),分母和进度都不存在了。
 export interface GrowthSignal {
   day: string
   todayTokens: number
-  goal: number
-  progress: number
 }
 
 export interface TokenBaseline {
   today: number
-  /** 过去 GROWTH_BASELINE_DAYS 天(不含今天)里,每一天各自的 token 总量。用来推 goal 的中位数。 */
+  /** 过去 GROWTH_BASELINE_DAYS 天(不含今天)里,每一天各自的 token 总量。目前只用于诊断/展示。 */
   recentDayTotals: number[]
 }
 
@@ -73,24 +72,14 @@ export function scanTokenBaseline(today: string, rows: TokenUsageRow[] = aggrega
 export function createDailyTokenCounter(opts: {
   baseline: TokenBaseline
   day: string
-  /** 用户在设置里手填的每日目标;undefined = 自动按历史中位数。 */
-  goalOverride?: number
   now?: () => Date
   onChange?: (s: GrowthSignal) => void
 }) {
   const now = opts.now ?? (() => new Date())
-  const autoGoal = computeDailyGoal(opts.baseline.recentDayTotals)
-  // ★ override 也要 clamp,而且 clamp 在这一层是最后一道:UI 那侧也 clamp(见 PetPane.commitGoal,
-  // 那是为了当场给用户反馈),但 settings.json 是纯文本、用户手改得了,旧版本写下的值也可能越界。
-  // 这里是所有读取路径的汇合点,不 clamp 的话 goal=1 会让 progress 恒为 1、宠物永远停在最后一档。
-  let override = clampDailyGoal(opts.goalOverride)
   let day = opts.day
   let todayTokens = opts.baseline.today
 
-  const goal = (): number => override ?? autoGoal
-  const signal = (): GrowthSignal => ({
-    day, todayTokens, goal: goal(), progress: growthProgress(todayTokens, goal()),
-  })
+  const signal = (): GrowthSignal => ({ day, todayTokens })
   const notify = () => opts.onChange?.(signal())
 
   return {
@@ -102,10 +91,6 @@ export function createDailyTokenCounter(opts: {
       const key = localDayKey(now())
       if (key !== day) { day = key; todayTokens = 0 }
       todayTokens += tokens
-      notify()
-    },
-    setGoalOverride(g: number | undefined): void {
-      override = clampDailyGoal(g)
       notify()
     },
   }

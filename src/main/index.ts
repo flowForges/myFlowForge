@@ -19,7 +19,7 @@ import { buildProviderRegistry } from './agents/registry'
 import { readSettings, writeSettings, readWorkspaceRegistry } from './config/store'
 import { fixExecPath } from './agents/pathFix'
 import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './tokens/dailyTokenCounter'
-import { setDailyTokenCounter, setGrowthGoalOverride } from './tokens/growthSignalRef'
+import { setDailyTokenCounter } from './tokens/growthSignalRef'
 import type { Settings } from './config/schema'
 import { TerminalManager } from './terminal/terminalManager'
 import { TermBatcher } from './terminal/termBatch'
@@ -504,7 +504,6 @@ app.whenReady().then(() => {
     // Keep the Dock menu's 开关宠物 label in sync with pet.enabled (also when toggled from the UI).
     refreshDockMenu()
     // 每日 token 目标改了要立刻推给计数器(它会重算进度并广播),否则新目标要等下次重启才生效。
-    setGrowthGoalOverride(s.pet?.growthDailyGoal)
   }
 
   // Tray (right-click) + Dock context menu: 新建工作区 / 打开·关闭桌面宠物 / 退出. Rebuilt on each open so the
@@ -587,7 +586,6 @@ app.whenReady().then(() => {
     setDailyTokenCounter(createDailyTokenCounter({
       baseline: scanTokenBaseline(day),
       day,
-      goalOverride: settings.pet?.growthDailyGoal,
       onChange: (s) => registry.broadcast(CH.growthSignal, s),
     }))
   })

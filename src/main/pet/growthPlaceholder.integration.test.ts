@@ -40,7 +40,7 @@ describe('make-growth-placeholder.mjs output', () => {
     if (!parsed.ok) return
     // 6 阶段,SVG 文件都在源目录里(校验器只查字符串安全,不查存在)。
     expect(parsed.manifest.stages).toHaveLength(6)
-    expect(parsed.manifest.stages[0]!.at).toBe(0)
+    expect(parsed.manifest.stages[0]!.from).toBe(0)
 
     const imported = importGrowthPetPack(src, dest)
     expect(imported.ok).toBe(true)

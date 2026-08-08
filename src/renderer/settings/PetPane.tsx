@@ -4,7 +4,6 @@ import { ImportModal, type ImportConfig } from '../components/ImportModal'
 import { PET_SAMPLE, parsePet, type ParsedPet } from '../components/importParsers'
 import { addCustomPet, removeCustomPet, resolveActiveCustomPet, PET_CUSTOM_MAX, type CustomPet } from '@shared/petCustom'
 import { growthRowCount } from '@shared/growthPet'
-import { clampDailyGoal, GROWTH_GOAL_MIN, GROWTH_GOAL_MAX } from '@shared/growthProgress'
 import { gridBackgroundPosition } from '@shared/petAtlas'
 import { PetGallery } from './PetGallery'
 import { petSrc } from '../pet/petSrc'
@@ -226,53 +225,23 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
   useEffect(() => { rescanCodex() }, [])
   // 成长宠物包的报错走自己的一行,别串到 Codex 那一段去。
   const [growthErr, setGrowthErr] = useState('')
-  // 每日目标是「编辑中的草稿 + 失焦/回车提交」,不是每敲一键就写一次盘 —— 与本文件的重命名
-  // (commitRename)、TermProxyPane 的代理地址同一套手感。逐键提交的话输入 100000 会连写 6 次
-  // 设置,中途的 1、10 还会把宠物进度瞬间顶满再跳回来,肉眼可见地抖。
-  const [goalDraft, setGoalDraft] = useState(clampDailyGoal(pet.growthDailyGoal)?.toString() ?? '')
-  // 输入被 clamp 时的说明行。min/max 只是 HTML 属性,程序化赋值和真实浏览器都拦不住,所以真正的
-  // 收敛在 commitGoal 里做;而「改了值却不吭声」比不改更糟(用户以为存的是 1,实际是 50000),
-  // 所以 clamp 一旦改动了用户输入,就明说改成了什么。
-  const [goalNote, setGoalNote] = useState('')
-  useEffect(() => {
-    // 回填也要过 clamp:手改 settings.json 写个 1 之后,不过 clamp 的话输入框显示 1、宠物却按
-    // 50000(计数器那侧的兜底 clamp)跑,还没有任何提示 —— 正是 clamp 想消灭的「看到的 ≠ 生效的」。
-    setGoalDraft(clampDailyGoal(pet.growthDailyGoal)?.toString() ?? '')
-    // 外部改动(切设置 / 别处改了这个值)之后,上一次 commitGoal 留下的提示已经过期了,一起清掉。
-    setGoalNote('')
-  }, [pet.growthDailyGoal])
-  const commitGoal = () => {
-    const t = goalDraft.trim()
-    const n = Number(t)
-    // 空 / 非数字 / 非正数 / 小数一律回落到「自动」—— 与 schema 的 z.number().int().positive().catch(undefined)
-    // 逐条同构,免得设置里存一个之后会被静默丢弃的坏值。不四舍五入:3.5 是敲错了,不是「想要 4」。
-    const raw = t && Number.isInteger(n) && n > 0 ? n : undefined
-    // ★ 再过一道 clamp:上下限原本只在 computeDailyGoal(自动推算)里生效,手填这条路一路裸奔到
-    // 计数器。输入 1 → goal=1 → progress 恒为 1 → 宠物永远停在最后一档,还查不出原因。
-    // 计数器那侧也 clamp(那是兜住手改 settings.json 的最后一道),这里 clamp 是为了当场给反馈:
-    // 存进设置的就是生效的那个数,输入框、设置、进度条三者一致,不留"看到的 ≠ 生效的"。
-    const next = clampDailyGoal(raw)
-    if (next !== pet.growthDailyGoal) onChange({ growthDailyGoal: next })
-    // 被拒/被收敛的输入不能继续留在框里骗人,归一化回真正保存的值。
-    setGoalDraft(next?.toString() ?? '')
-    setGoalNote(raw != null && next != null && raw !== next
-      ? `目标需在 ${GROWTH_GOAL_MIN.toLocaleString('en-US')} – ${GROWTH_GOAL_MAX.toLocaleString('en-US')} 之间,已按 ${next.toLocaleString('en-US')} 生效。`
-      : '')
-  }
   // 成长信号的实时读数(今日 token / 目标 / 当前落在第几档)。订阅主进程广播,与桌宠看到的是同一个数。
   const growth = useGrowthSignal()
   const activeGrowth = (pet.customPets ?? []).find(p => p.id === pet.activeCustomPetId)?.growth
   const growthReadout = !growth ? '' : (() => {
-    const goal = growth.goal.toLocaleString('en-US')
     const today = growth.todayTokens.toLocaleString('en-US')
-    const pct = Math.round(growth.progress * 100)
-    if (!activeGrowth) return `今日 ${today} / 目标 ${goal}(${pct}%)· 当前没有选中成长宠物`
-    // 与 pickGrowthSprite 同一条规则:最后一个 at <= progress 的阶段。
+    if (!activeGrowth) return `今日 ${today} tokens · 当前没有选中成长宠物`
+    // 与 pickGrowthSprite 同一条规则:最后一个 from <= 今日 token 的阶段。
     let i = 0
-    activeGrowth.stages.forEach((s, k) => { if (s.at <= growth.progress) i = k })
+    activeGrowth.stages.forEach((s, k) => { if (s.from <= growth.todayTokens) i = k })
     const st = activeGrowth.stages[i]
-    return `今日 ${today} / 目标 ${goal}(${pct}%)· 当前:${st?.name ?? '第 ' + (i + 1) + ' 档'}(${i + 1}/${activeGrowth.stages.length})`
+    const next = activeGrowth.stages[i + 1]
+    const tail = next
+      ? `,距下一档还差 ${(next.from - growth.todayTokens).toLocaleString('en-US')}`
+      : ',已是最后一档'
+    return `今日 ${today} tokens · 当前:${st?.name ?? '第 ' + (i + 1) + ' 档'}(${i + 1}/${activeGrowth.stages.length})${tail}`
   })()
+
   // 装包结果 → customPets。Codex 包与成长包共用这一段(两边的 id 都按源文件夹稳定生成),
   // 只有「错误显示在哪一行」不同,所以把 setter 作为参数传进来。
   const addImported = (
@@ -595,38 +564,8 @@ export function PetPane({ pet, onChange }: PetPaneProps) {
             <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{codexErr}</div>
           )}
 
-          <div className="set-row" style={{ marginBottom: '8px' }}>
-            <div className="info">
-              <div className="t">每日 token 目标</div>
-              <div className="d">成长进度 = 今日 token ÷ 这个目标。留空 = 按过去 7 天用量的中位数自动推算。可填范围 {GROWTH_GOAL_MIN.toLocaleString('en-US')} – {GROWTH_GOAL_MAX.toLocaleString('en-US')}。</div>
-            </div>
-            <input
-              className="sel"
-              type="number"
-              aria-label="每日 token 目标"
-              placeholder="留空 = 自动"
-              value={goalDraft}
-              // min/max 只是给浏览器的微调按钮/原生提示用的,真正的收敛在 commitGoal 里 —— 取值
-              // 直接引 shared 的常量,免得三处上下限各写各的。
-              min={GROWTH_GOAL_MIN}
-              max={GROWTH_GOAL_MAX}
-              step={1000}
-              onChange={e => setGoalDraft(e.target.value)}
-              onBlur={commitGoal}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commitGoal() } }}
-            />
-          </div>
-          {/* ★实时读数。不是为了好看,是为了可诊断:没有它的时候,「今天没用所以是种子」和「功能坏了」
-              在界面上长得一模一样,只能靠猜。有了这行,一眼就知道卡在哪 —— 是没数据、目标太大,还是真没生效。
-              也是把目标填得很小(比如 5000)去验收时唯一能看懂发生了什么的地方。 */}
-          {/* 刻意不给 role="status":这行随每轮对话变,当成实时区会让读屏软件一直念。
-              真正需要播报的是下面那条 clamp 提示(只在改动了用户输入时才出现)。 */}
-          {growthReadout && (
-            <div className="d" style={{ marginBottom: '8px' }}>{growthReadout}</div>
-          )}
-          {goalNote && (
-            <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }} role="status">{goalNote}</div>
-          )}
+          {/* 「每日 token 目标」已移除:阶段门槛改成每个成长包自带的绝对 token 区间(GrowthStage.from),
+              不再需要一个全局分母,那个输入框也就没有意义了 —— 留着反而是个能把所有包一起改坏的旋钮。 */}
           {growthErr && (
             <div className="d" style={{ color: 'var(--warn, #e5484d)', marginBottom: '8px' }}>{growthErr}</div>
           )}

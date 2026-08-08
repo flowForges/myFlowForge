@@ -403,7 +403,7 @@ export function PetApp() {
         <PetWidget skin={skin} anim={cfg.anim} accent={cfg.accent} state={state}
           customImages={resolvedCustom.images} customEmoji={resolvedCustom.emoji}
           atlas={resolvedCustom.atlas} action={petAction}
-          growth={resolvedCustom.growth} growthProgress={growthSignal?.progress ?? 0}
+          growth={resolvedCustom.growth} growthTokens={growthSignal?.todayTokens ?? 0}
           frozen={docHidden || (!idleAnim && petAction === 'idle')}
           lookDeg={petAction === 'idle' ? lookDeg : undefined} />
         {/* Simple mode surfaces status through the bubble, not a count badge. */}

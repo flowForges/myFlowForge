@@ -179,7 +179,10 @@ const GrowthPackSchema = z.object({
   }),
   actions: z.partialRecord(z.enum(GROWTH_ACTIONS), GrowthActionCfgSchema),
   stages: z.array(z.object({
-    at: z.number().min(0).max(1),
+    // 进入该阶段所需的今日 token 绝对值(含)。区间由相邻两条隐式决定,最后一条没有上界。
+    // 从前是 0~1 的百分比 + 一个全局「每日目标」当分母 —— 那让所有成长包共用一把尺子,也留了个
+    // 摆在设置里、随手能改坏的旋钮。详见 shared/growthPet.ts 的 GrowthStage。
+    from: z.number().int().min(0),
     name: z.string().optional(),
     sheet: z.string(),
   })).min(1),
@@ -235,7 +238,6 @@ export const PetSchema = z.object({
   scale: z.number().min(PET_SCALE_MIN).max(PET_SCALE_MAX).catch(1).default(1),
   // 成长宠物的「每日 token 目标」= 进度的分母。留空 = 自动按过去若干天的用量中位数推算。
   // .catch 让手改坏的 settings.json 退回自动,而不是整份设置解析失败。
-  growthDailyGoal: z.number().int().positive().optional().catch(undefined),
   notify: z.object({ confirm: z.boolean(), input: z.boolean(), done: z.boolean() }),
   // Pet interaction style. 'simple' (default): a light collapsible bubble showing running agents /
   // confirm-input / done — click the pet when idle to focus the app. 'full': the legacy popover with the

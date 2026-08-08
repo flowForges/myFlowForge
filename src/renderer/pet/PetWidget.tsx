@@ -47,7 +47,8 @@ interface PetWidgetProps {
   // 成长宠物包(kind:"growth")。存在时优先级最高:成长包 > codex atlas > 逐状态图 > emoji。
   growth?: GrowthPack
   /** 今日 token 进度 0~1,来自主进程广播的成长信号。 */
-  growthProgress?: number
+  /** 今日累计 token —— 阶段门槛是包自带的绝对区间,不再有 0~1 进度。 */
+  growthTokens?: number
   action?: PetAction
   lookDeg?: number | null
   // Hold still (no float bob, no atlas frame loop): set when idle-animation is off & the pet is idle,
@@ -55,7 +56,7 @@ interface PetWidgetProps {
   frozen?: boolean
 }
 
-export function PetWidget({ skin, anim, accent, state, customImages, customEmoji, atlas, growth, growthProgress, action, lookDeg, frozen }: PetWidgetProps) {
+export function PetWidget({ skin, anim, accent, state, customImages, customEmoji, atlas, growth, growthTokens, action, lookDeg, frozen }: PetWidgetProps) {
   // Growth atlases already encode their complete motion. Applying a host float/shake/pulse here moves
   // the fixed soil/platform too and hides the local leaf/branch animation.
   const effectiveAnim = growth || frozen ? 'none' : anim
@@ -84,7 +85,7 @@ export function PetWidget({ skin, anim, accent, state, customImages, customEmoji
     if (growth) {
       return (
         <div className={cls} data-skin="custom-growth">
-          <GrowthSprite growth={growth} progress={growthProgress ?? 0} state={state ?? 'idle'} reducedMotion={frozen} />
+          <GrowthSprite growth={growth} todayTokens={growthTokens ?? 0} state={state ?? 'idle'} reducedMotion={frozen} />
           {stars}
         </div>
       )

@@ -3,7 +3,6 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import { PetPane } from './PetPane'
 import type { Pet } from '@shared/types'
 import { PET_CUSTOM_MAX } from '@shared/petCustom'
-import { GROWTH_GOAL_MIN, GROWTH_GOAL_MAX } from '@shared/growthProgress'
 
 const BASE_PET: Pet = {
   enabled: true, skin: 'sprite', customPets: [], corner: 'right', pos: { bottom: 24 }, followCursor: false, idleAnimation: true, scale: 1,
@@ -21,7 +20,7 @@ const GROWTH_PET = {
   growth: {
     atlas: { cols: 4, cellW: 100, cellH: 100 },
     actions: { idle: { row: 0, durations: [200, 200] } },
-    stages: [{ at: 0, sheet: 'growth-tree-abc/0-seed.png' }],
+    stages: [{ from: 0, sheet: 'growth-tree-abc/0-seed.png' }],
   },
 }
 
@@ -264,148 +263,3 @@ describe('PetPane 成长宠物缩略图', () => {
   })
 })
 
-describe('PetPane 每日 token 目标', () => {
-  it('合法值失焦后存进 growthDailyGoal', () => {
-    const onChange = vi.fn()
-    render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: '200000' } })
-    fireEvent.blur(goalInput())
-    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: 200000 })
-  })
-
-  it('回车也提交', () => {
-    const onChange = vi.fn()
-    render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: '300000' } })
-    fireEvent.keyDown(goalInput(), { key: 'Enter' })
-    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: 300000 })
-  })
-
-  it('编辑过程中一个字都不写盘(逐键提交会让宠物进度抖)', () => {
-    const onChange = vi.fn()
-    render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    for (const v of ['1', '10', '100', '1000', '10000', '100000']) {
-      fireEvent.change(goalInput(), { target: { value: v } })
-    }
-    expect(onChange).not.toHaveBeenCalled()
-    fireEvent.blur(goalInput())
-    expect(onChange).toHaveBeenCalledTimes(1)
-    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: 100000 })
-  })
-
-  it('清空 = 回到自动(存 undefined)', () => {
-    const onChange = vi.fn()
-    render(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 200000 }} onChange={onChange} />)
-    expect(goalInput().value).toBe('200000')
-    fireEvent.change(goalInput(), { target: { value: '' } })
-    fireEvent.blur(goalInput())
-    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: undefined })
-  })
-
-  it.each([['3.5'], ['-1'], ['   '], ['0']])('非法值 %s 不会被存下', (bad) => {
-    const onChange = vi.fn()
-    render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: bad } })
-    fireEvent.blur(goalInput())
-    // 当前已是「自动」,坏值同样落到「自动」→ 没有任何变化要写
-    expect(onChange).not.toHaveBeenCalled()
-  })
-
-  it('非法值把已存的目标退回自动,并把输入框归一化(不留骗人的残值)', () => {
-    const onChange = vi.fn()
-    render(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 200000 }} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: '3.5' } })
-    fireEvent.blur(goalInput())
-    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: undefined })
-    expect(goalInput().value).toBe('')
-  })
-
-  // ★ min/max 只是 HTML 属性,fireEvent(以及真实浏览器里的直接输入)都不拦。收敛必须在
-  // commitGoal 里做,而且不能静默 —— 存的和用户看到的必须是同一个数,并且明说改过。
-  it('低于下限的输入被抬到 MIN,存的和框里显示的都是 MIN', () => {
-    const onChange = vi.fn()
-    render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: '1' } })
-    fireEvent.blur(goalInput())
-    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: GROWTH_GOAL_MIN })
-    expect(goalInput().value).toBe(String(GROWTH_GOAL_MIN))
-  })
-
-  it('高于上限的输入被压到 MAX', () => {
-    const onChange = vi.fn()
-    render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: '999999999' } })
-    fireEvent.blur(goalInput())
-    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: GROWTH_GOAL_MAX })
-    expect(goalInput().value).toBe(String(GROWTH_GOAL_MAX))
-  })
-
-  // 手填的小目标现在是合法的(填个很小的数正是「我想现在就看它长一遍」的唯一办法),
-  // 所以只有超出上限才会被收敛并提示。
-  it('填了很小的目标不再被收敛,也不提示', () => {
-    const onChange = vi.fn()
-    render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: '5000' } })
-    fireEvent.blur(goalInput())
-    expect(onChange).toHaveBeenCalledWith({ growthDailyGoal: 5000 })
-    expect(screen.queryByRole('status')).toBeNull()
-  })
-
-  it('被收敛时给出可见提示(不静默改用户填的值)', () => {
-    render(<PetPane pet={BASE_PET} onChange={vi.fn()} />)
-    fireEvent.change(goalInput(), { target: { value: '999999999' } })
-    fireEvent.blur(goalInput())
-    const note = screen.getByRole('status')
-    expect(note.textContent).toContain('5,000,000')
-  })
-
-  it('范围内的值不提示(提示只在真的改了用户输入时出现)', () => {
-    render(<PetPane pet={BASE_PET} onChange={vi.fn()} />)
-    fireEvent.change(goalInput(), { target: { value: '200000' } })
-    fireEvent.blur(goalInput())
-    expect(screen.queryByRole('status')).toBeNull()
-  })
-
-  it('改回范围内的值后提示消失', () => {
-    render(<PetPane pet={BASE_PET} onChange={vi.fn()} />)
-    fireEvent.change(goalInput(), { target: { value: '999999999' } })
-    fireEvent.blur(goalInput())
-    expect(screen.queryByRole('status')).not.toBeNull()
-    fireEvent.change(goalInput(), { target: { value: '300000' } })
-    fireEvent.blur(goalInput())
-    expect(screen.queryByRole('status')).toBeNull()
-  })
-
-  it('已保存的值原样回填输入框', () => {
-    render(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 1200000 }} onChange={vi.fn()} />)
-    expect(goalInput().value).toBe('1200000')
-  })
-
-  // ★ Minor #2:回填(初始 state + 外部 prop 变化的 effect)也要过 clampDailyGoal —— 手改
-  // settings.json 写个越界值之后,输入框不能显示一个「看到的 ≠ 生效的」的骗人数字。
-  it('初始 prop 就越界(手改 settings.json)时,回填也按 MIN/MAX 收敛,不是原样显示', () => {
-    render(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 1 }} onChange={vi.fn()} />)
-    expect(goalInput().value).toBe(String(GROWTH_GOAL_MIN))
-  })
-
-  it('外部把 prop 改成越界值(切设置 / 别处写入)时,回填同样收敛', () => {
-    const { rerender } = render(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 200000 }} onChange={vi.fn()} />)
-    expect(goalInput().value).toBe('200000')
-    rerender(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 999999999 }} onChange={vi.fn()} />)
-    expect(goalInput().value).toBe(String(GROWTH_GOAL_MAX))
-  })
-
-  // ★ Minor #3:goalNote 是本地 state,不随 pet.growthDailyGoal 的外部变化自动重算 —— 必须跟着
-  // 回填的 effect 一起清掉,否则会留一条跟当前 prop 对不上的过期提示。
-  it('外部改动 prop 后,上一次 commitGoal 留下的过期提示被清掉', () => {
-    const onChange = vi.fn()
-    const { rerender } = render(<PetPane pet={BASE_PET} onChange={onChange} />)
-    fireEvent.change(goalInput(), { target: { value: '999999999' } })
-    fireEvent.blur(goalInput())
-    expect(screen.queryByRole('status')).not.toBeNull() // 先造出一条提示
-
-    // 外部(非本组件的 commitGoal)把 prop 换成别的值 —— 模拟切设置 / 别处写入
-    rerender(<PetPane pet={{ ...BASE_PET, growthDailyGoal: 300000 }} onChange={onChange} />)
-    expect(screen.queryByRole('status')).toBeNull()
-  })
-})

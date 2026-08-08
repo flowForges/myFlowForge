@@ -10,8 +10,16 @@ export type GrowthAction = typeof GROWTH_ACTIONS[number]
 /** 一个动作占 atlas 的哪一行,以及该行逐帧的显示时长(ms)。数组长度 = 该行帧数。 */
 export interface GrowthActionCfg { row: number; durations: number[] }
 
-/** 一个成长阶段。`at` 是 0~1 的归一化进度门槛,`sheet` 是该阶段的 atlas 文件。 */
-export interface GrowthStage { at: number; name?: string; sheet: string }
+/**
+ * 一个成长阶段。`from` 是进入该阶段所需的**今日 token 绝对值**(含),`sheet` 是该阶段的 atlas。
+ *
+ * ★ 为什么是绝对值而不是 0~1 百分比:百分比要配一个全局「每日目标」当分母,于是所有成长包被迫共用
+ * 同一把尺子 —— 一只「小树」和一只「城市」没法各自定义节奏,而那个分母还摆在设置里、随手就能改坏。
+ * 改成绝对区间后每个包自带节奏:小树可以 1 万就开花,城市可以 50 万才建成,互不干扰,也没有可被误改的旋钮。
+ *
+ * 区间由相邻两条的 `from` 隐式决定:[from_i, from_{i+1}) —— 最后一条没有上界,一直到无穷。
+ */
+export interface GrowthStage { from: number; name?: string; sheet: string }
 
 export interface GrowthPack {
   atlas: { cols: number; cellW: number; cellH: number }
@@ -90,17 +98,24 @@ function parseStages(raw: unknown): { ok: true; stages: GrowthStage[] } | { ok: 
   const out: GrowthStage[] = []
   let prev = -1
   for (let i = 0; i < raw.length; i++) {
-    const s = raw[i] as { at?: unknown; name?: unknown; sheet?: unknown }
+    const s = raw[i] as { from?: unknown; at?: unknown; name?: unknown; sheet?: unknown }
     if (typeof s !== 'object' || s === null) return { ok: false, error: `stages[${i}] 不是对象` }
-    if (typeof s.at !== 'number' || !(s.at >= 0 && s.at <= 1)) return { ok: false, error: `stages[${i}].at 必须在 0~1 之间` }
-    // 首条必须是 0:否则进度低于首档时无图可用。
-    if (i === 0 && s.at !== 0) return { ok: false, error: 'stages[0].at 必须是 0' }
-    if (s.at <= prev) return { ok: false, error: `stages[${i}].at 必须严格大于前一条` }
-    prev = s.at
+    // 老包用的是 0~1 的 at,和绝对区间没法互相翻译(缺分母),所以明确报错而不是静默当 0 处理 ——
+    // 静默的话作者会看到一只永远停在第一阶段的宠物,却完全不知道为什么。
+    if (s.at !== undefined && s.from === undefined) {
+      return { ok: false, error: `stages[${i}] 用的是旧的 at(0~1 百分比);现在要写 from(今日 token 绝对值)` }
+    }
+    if (typeof s.from !== 'number' || !Number.isFinite(s.from) || s.from < 0 || !Number.isInteger(s.from)) {
+      return { ok: false, error: `stages[${i}].from 必须是 >= 0 的整数(今日 token 绝对值)` }
+    }
+    // 首条必须是 0:否则今日 token 低于首档时无图可用。
+    if (i === 0 && s.from !== 0) return { ok: false, error: 'stages[0].from 必须是 0(从零开始的那一档)' }
+    if (s.from <= prev) return { ok: false, error: `stages[${i}].from 必须严格大于前一条` }
+    prev = s.from
     if (!isSafeRelPath(s.sheet)) return { ok: false, error: `stages[${i}].sheet 非法或越出包目录` }
     out.push(typeof s.name === 'string' && s.name
-      ? { at: s.at, name: s.name, sheet: s.sheet }
-      : { at: s.at, sheet: s.sheet })
+      ? { from: s.from, name: s.name, sheet: s.sheet }
+      : { from: s.from, sheet: s.sheet })
   }
   return { ok: true, stages: out }
 }
