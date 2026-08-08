@@ -14,6 +14,7 @@ HORIZONTAL_PADDING = 8
 TOP_PADDING = 8
 BASELINE_Y = 109
 KEY_TOLERANCE = 16
+GROUP_GAP_TOLERANCE = 12
 
 
 def _border_key_color(image: Image.Image) -> tuple[int, int, int, int]:
@@ -29,7 +30,7 @@ def _border_key_color(image: Image.Image) -> tuple[int, int, int, int]:
 
 
 def _is_foreground(pixel: tuple[int, int, int, int], key: tuple[int, int, int, int]) -> bool:
-    return any(abs(channel - key_channel) > KEY_TOLERANCE for channel, key_channel in zip(pixel, key, strict=True))
+    return any(abs(channel - key_channel) > KEY_TOLERANCE for channel, key_channel in zip(pixel, key))
 
 
 def _components(image: Image.Image, key: tuple[int, int, int, int]) -> list[tuple[int, int, int, int]]:
@@ -81,16 +82,35 @@ def _sprite_from_box(image: Image.Image, box: tuple[int, int, int, int], key: tu
     return sprite
 
 
+def _merge_pose_groups(boxes: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+    if not boxes:
+        return []
+
+    groups: list[list[int]] = [list(boxes[0])]
+    for left, top, right, bottom in boxes[1:]:
+        current = groups[-1]
+        current_left, current_top, current_right, current_bottom = current
+        if left <= current_right + GROUP_GAP_TOLERANCE:
+            current[0] = min(current_left, left)
+            current[1] = min(current_top, top)
+            current[2] = max(current_right, right)
+            current[3] = max(current_bottom, bottom)
+            continue
+        groups.append([left, top, right, bottom])
+    return [tuple(group) for group in groups]
+
+
 def assemble_character_row(source_path: Path, output_path: Path) -> None:
     with Image.open(source_path) as source_image:
         source = source_image.convert("RGBA")
 
     key = _border_key_color(source)
     boxes = sorted(_components(source, key), key=lambda box: box[0])
-    if len(boxes) != CELL_COUNT:
-        raise ValueError(f"expected exactly 6 pose groups, found {len(boxes)}")
+    pose_groups = _merge_pose_groups(boxes)
+    if len(pose_groups) != CELL_COUNT:
+        raise ValueError(f"expected exactly 6 pose groups, found {len(pose_groups)}")
 
-    sprites = [_sprite_from_box(source, box, key) for box in boxes]
+    sprites = [_sprite_from_box(source, box, key) for box in pose_groups]
     max_width = max(sprite.width for sprite in sprites)
     max_height = max(sprite.height for sprite in sprites)
     scale = min(

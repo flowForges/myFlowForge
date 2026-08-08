@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,9 +9,6 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from scripts.growth_pets.assemble_character_rows import assemble_character_row
-
-
-PYTHON = Path("/Users/you/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3")
 CELL_SIZE = 120
 ROW_SIZE = (CELL_SIZE * 6, CELL_SIZE)
 CHROMA = (12, 250, 24, 255)
@@ -23,13 +21,30 @@ def _pose_source(path: Path, widths: list[int], heights: list[int]) -> None:
     image = Image.new("RGBA", (900, 200), CHROMA)
     draw = ImageDraw.Draw(image)
     left = 30
-    for index, (width, height) in enumerate(zip(widths, heights, strict=True)):
+    for index, (width, height) in enumerate(zip(widths, heights)):
         foot_y = 170 - (index % 2) * 4
         right = left + width
         top = foot_y - height
         draw.rounded_rectangle((left + 6, top, right - 6, foot_y - 14), radius=8, fill=BODY)
         draw.ellipse((left + width * 0.25, top - 18, left + width * 0.75, top + 18), fill=ACCENT)
         draw.rectangle((left + 10, foot_y - 14, right - 10, foot_y), fill=SHOE)
+        left += width + 26
+    image.save(path)
+
+
+def _pose_source_with_floating_accents(path: Path, widths: list[int], heights: list[int]) -> None:
+    image = Image.new("RGBA", (900, 220), CHROMA)
+    draw = ImageDraw.Draw(image)
+    left = 30
+    for index, (width, height) in enumerate(zip(widths, heights)):
+        foot_y = 182 - (index % 2) * 5
+        right = left + width
+        top = foot_y - height
+        draw.rounded_rectangle((left + 8, top + 16, right - 8, foot_y - 12), radius=8, fill=BODY)
+        draw.rectangle((left + 12, foot_y - 12, right - 12, foot_y), fill=SHOE)
+        ornament_left = left + width // 2 - 9
+        ornament_top = top - 12
+        draw.ellipse((ornament_left, ornament_top, ornament_left + 18, ornament_top + 18), fill=ACCENT)
         left += width + 26
     image.save(path)
 
@@ -135,7 +150,7 @@ class CharacterRowAssemblerTest(unittest.TestCase):
             self.assertTrue(all(bottom == bottoms[0] for bottom in bottoms[1:]))
 
             base_ratio = rendered_heights[0] / source_heights[0]
-            for rendered_height, source_height in zip(rendered_heights[1:], source_heights[1:], strict=True):
+            for rendered_height, source_height in zip(rendered_heights[1:], source_heights[1:]):
                 self.assertAlmostEqual(rendered_height / source_height, base_ratio, delta=0.06)
 
     def test_assemble_character_row_rejects_non_six_pose_input(self) -> None:
@@ -148,6 +163,38 @@ class CharacterRowAssemblerTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "6"):
                 assemble_character_row(source, output)
 
+    def test_assemble_character_row_merges_multi_island_pose_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "floating.png"
+            output = root / "row.png"
+            _pose_source_with_floating_accents(source, [42, 44, 46, 48, 50, 52], [84, 80, 76, 72, 68, 64])
+
+            assemble_character_row(source, output)
+
+            with Image.open(output) as image:
+                row = image.convert("RGBA")
+
+            self.assertEqual(row.size, ROW_SIZE)
+            for index in range(6):
+                cell = row.crop((index * CELL_SIZE, 0, (index + 1) * CELL_SIZE, CELL_SIZE))
+                bounds = _alpha_bounds(cell)
+                self.assertIsNotNone(bounds, f"cell {index} should contain the merged pose")
+                left, top, right, bottom = bounds or (0, 0, 0, 0)
+                self.assertGreater(top, 0)
+                self.assertLess(bottom, CELL_SIZE - 1)
+                accent_pixels = 0
+                body_pixels = 0
+                for y in range(cell.height):
+                    for x in range(cell.width):
+                        pixel = cell.getpixel((x, y))
+                        if pixel[:3] == ACCENT[:3] and pixel[3]:
+                            accent_pixels += 1
+                        if pixel[:3] == BODY[:3] and pixel[3]:
+                            body_pixels += 1
+                self.assertGreater(accent_pixels, 15, f"cell {index} should keep the floating accent island")
+                self.assertGreater(body_pixels, 40, f"cell {index} should keep the main body island")
+
     def test_cli_writes_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -156,7 +203,7 @@ class CharacterRowAssemblerTest(unittest.TestCase):
             _pose_source(source, [40, 42, 44, 46, 48, 50], [82, 80, 78, 76, 74, 72])
 
             result = subprocess.run(
-                [str(PYTHON), "scripts/growth_pets/assemble_character_rows.py", str(source), str(output)],
+                [sys.executable, "scripts/growth_pets/assemble_character_rows.py", str(source), str(output)],
                 cwd=Path(__file__).resolve().parents[2],
                 capture_output=True,
                 text=True,
