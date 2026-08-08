@@ -242,6 +242,14 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   padding: 14px 14px 6px; min-height: calc(1.55em + 20px); max-height: 180px;
 }
 .composer textarea::placeholder { color: var(--faint); }
+/* 排队提示 —— 有字且当前回合未结束时常驻(placeholder 一打字就没了,见 Composer.tsx)。低调、不抢眼,
+   只在真正要按回车的那一刻把「这条会排队」摆在眼前。 */
+.composer-queue-hint {
+  margin: 0 14px; padding: 4px 8px; border-radius: 6px;
+  font-size: 11.5px; line-height: 1.4; color: var(--muted);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 20%, transparent);
+}
 .composer-bar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 10px; flex-wrap: nowrap; }
 /* Keep the control row on ONE line at any pane width. The three text dropdowns (model/version/
    permission) are the only shrinkable items — they truncate their labels with an ellipsis when

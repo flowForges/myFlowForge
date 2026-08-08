@@ -56,6 +56,10 @@
 .window.collapsed .ws-item { justify-content: center; padding: 5px 0; }
 .window.collapsed .ws-meta,
 .window.collapsed .ws-badge,
+/* ⋯ 更多操作:窄轨里没人会去操作某个工作区(名字都看不到),而它平时虽然 opacity:0 却**照样占宽度** ——
+   60px 轨道里被它挤掉一截,34px 头像就居不中(看着整列往左偏);hover 时还会真的冒出来。整块藏掉,
+   居中和「不该出现的按钮」一起解决。展开后照常。 */
+.window.collapsed .ws-actions,
 .window.collapsed .ws-aside { display: none; }
 
 /* avatar initial block (collapsed-only) */

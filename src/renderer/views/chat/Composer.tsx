@@ -457,6 +457,13 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             send()
           }}
         />
+        {/* 排队提示。placeholder 里本来就写了「继续输入将排队」,但 placeholder 只在输入框为空时可见 ——
+            用户一开始打字它就消失,等按下回车那一刻反而什么都看不到,于是「我明明看它答完了,怎么没发出去」。
+            这条在**有字且当前回合仍在进行**时常驻,让「这条会排队」在真正要发送的那一刻仍然在场。
+            (provider 一轮里可能分多次输出,「看起来答完了」并不等于回合结束,所以这个错觉很常见。) */}
+        {busy && !runQueued && !archived && !readOnly && text.trim() !== '' && (
+          <div className="composer-queue-hint">当前回合仍在进行 · 这条会排队,结束后自动发送</div>
+        )}
         <div className="composer-bar">
           {/* 模型选择 */}
           <div className={'menu' + (openMenu === 'agent' ? ' open' : '')} id="agentMenu">
