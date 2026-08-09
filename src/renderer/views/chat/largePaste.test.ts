@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  shouldOffloadPaste, pastedFileName, base64OfUtf8, PASTE_OFFLOAD_THRESHOLD,
+  shouldOffloadPaste, pastedFileName, pastedFileNameForFile, base64OfUtf8, PASTE_OFFLOAD_THRESHOLD,
   pastePlaceholder, insertPastePlaceholder, insertPastedText, resolvePasteSelection,
 } from './largePaste'
 
@@ -91,6 +91,29 @@ describe('pastedFileName', () => {
   })
   it('uses .txt otherwise', () => {
     expect(pastedFileName('just some prose', at)).toBe('pasted-20260803-090507.txt')
+  })
+})
+
+describe('pastedFileNameForFile —— 剪贴板图片改名,有意义的原名保留', () => {
+  const at = new Date(2026, 7, 9, 21, 4, 55) // 21:04:55
+
+  it('剪贴板截图(Chrome 一律给 image.png)改成 img-时分秒', () => {
+    expect(pastedFileNameForFile('image.png', at)).toBe('img-210455.png')
+    expect(pastedFileNameForFile('image.jpeg', at)).toBe('img-210455.jpeg')
+    // 大小写与 Windows/其它浏览器的常见变体
+    expect(pastedFileNameForFile('Image.PNG', at)).toBe('img-210455.PNG')
+    expect(pastedFileNameForFile('屏幕截图.png', at)).toBe('img-210455.png')
+  })
+
+  it('用户自己起的名字原样保留 —— 那比我们生成的更有信息量', () => {
+    expect(pastedFileNameForFile('hook.jpg', at)).toBe('hook.jpg')
+    expect(pastedFileNameForFile('设计稿-v3.png', at)).toBe('设计稿-v3.png')
+    expect(pastedFileNameForFile('report.pdf', at)).toBe('report.pdf')
+  })
+
+  it('没有扩展名 / 空名字的 blob 也得有个能落盘的名字', () => {
+    expect(pastedFileNameForFile('', at)).toBe('img-210455.png')
+    expect(pastedFileNameForFile('image', at)).toBe('img-210455.png')
   })
 })
 

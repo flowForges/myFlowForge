@@ -858,6 +858,50 @@ describe('chat:save-paste handler 的 I/O 失败', () => {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // ★真机 bug:剪贴板图片在 Chrome 里一律叫 image.png,连粘三张 → 三次都写同一个路径,后一张盖掉前一张。
+  // 用户看到的症状是「右侧本次对话引用只列出一个」(按 path 去重塌成一条),但真正的损失是 agent 收到了
+  // 三份同一张图。去重必须在这里做:这是唯一知道盘上已经有什么的地方,渲染层猜不出来。
+  it('重名不覆盖:同名连存三次落成三个文件,三份内容都在', async () => {
+    const os = await import('node:os')
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-savepaste-dup-'))
+    try {
+      const h = await getHandler(CH.chatSavePaste)
+      // 'YQ==' = 'a', 'Yg==' = 'b', 'Yw==' = 'c'
+      const rs = []
+      for (const b64 of ['YQ==', 'Yg==', 'Yw==']) rs.push(await h({}, { workspacePath: dir, name: 'image.png', dataBase64: b64 }))
+      expect(new Set(rs.map((r: any) => r.path)).size).toBe(3)
+      expect(rs.map((r: any) => r.name)).toEqual(['image.png', 'image-2.png', 'image-3.png'])
+      expect(rs.map((r: any) => fs.readFileSync(r.path, 'utf8'))).toEqual(['a', 'b', 'c'])
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('重名去重认得复合扩展名与无扩展名', async () => {
+    const os = await import('node:os')
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-savepaste-ext-'))
+    try {
+      const h = await getHandler(CH.chatSavePaste)
+      const a1 = await h({}, { workspacePath: dir, name: 'log.tar.gz', dataBase64: 'YQ==' })
+      const a2 = await h({}, { workspacePath: dir, name: 'log.tar.gz', dataBase64: 'Yg==' })
+      // 只认最后一个点:'log.tar.gz' → 'log.tar-2.gz'。整块当基名会得到 'log.tar.gz-2',丢掉扩展名语义。
+      expect([a1.name, a2.name]).toEqual(['log.tar.gz', 'log.tar-2.gz'])
+      const b1 = await h({}, { workspacePath: dir, name: 'README', dataBase64: 'YQ==' })
+      const b2 = await h({}, { workspacePath: dir, name: 'README', dataBase64: 'Yg==' })
+      expect([b1.name, b2.name]).toEqual(['README', 'README-2'])
+      // 点开头的隐藏文件没有扩展名,'.env' 不该变成 '-2.env'
+      const c1 = await h({}, { workspacePath: dir, name: '.env', dataBase64: 'YQ==' })
+      const c2 = await h({}, { workspacePath: dir, name: '.env', dataBase64: 'Yg==' })
+      expect([c1.name, c2.name]).toEqual(['.env', '.env-2'])
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 // ★真机 bug:侧栏和宠物一直显示「待确认」,聊天里却没有可点的卡片,那一轮永远挂着。

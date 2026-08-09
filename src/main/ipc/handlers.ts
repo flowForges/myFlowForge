@@ -103,6 +103,24 @@ import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
 import type { DiscoveredSession } from '@shared/types'
 
+/**
+ * 附件落盘时避开重名:`image.png` 已存在就依次试 `image-2.png`、`image-3.png`……返回真正能用的名字。
+ *
+ * 只在**最后一个**点处拆基名与扩展名:`log.tar.gz` → `log.tar-2.gz`(把整块当基名会得到
+ * `log.tar.gz-2`,扩展名语义就丢了)。点开头的隐藏文件(`.env`)没有扩展名,整名当基名 → `.env-2`。
+ */
+export function uniqueAttachmentName(dir: string, name: string): string {
+  if (!existsSync(join(dir, name))) return name
+  const dot = name.lastIndexOf('.')
+  const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+  // 上限只是防病态循环(目录里真有上万个同名文件时别在这儿转到天荒地老),正常永远走不到。
+  for (let n = 2; n < 10_000; n++) {
+    const cand = `${base}-${n}${ext}`
+    if (!existsSync(join(dir, cand))) return cand
+  }
+  return `${base}-${Date.now()}${ext}`
+}
+
 export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void) {
   // Startup heal: the legacy in-memory orchestrator is gone; on a fresh launch nothing is running — any
   // session still stuck in mode:'workflow' (from a completed run before the reset fix, or an app crash
@@ -1068,14 +1086,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // mkdirSync/writeFileSync 抛出 —— 不接住的话异常会穿过 ipcMain.handle 变成渲染层的 unhandled
   // rejection,preventDefault() 已经吃掉的原生粘贴内容就凭空消失了。转成 null,与 Composer 里
   // `att === null` 的既有失败分支同形,由它把原文插回正文兜底。
+  //
+  // 重名去重是这里的**必需品**,不是锦上添花:剪贴板图片在 Chrome 里一律叫 image.png,连粘三张就是
+  // 三次写同一个路径,后一张静默盖掉前一张 —— chip 上三个不同大小都在,盘上只剩最后一个,agent 拿到
+  // 三份同一张图。渲染层猜不出盘上已经有什么,只有这里知道。
   ipcMain.handle(CH.chatSavePaste, (_e, a: { workspacePath: string; name: string; dataBase64: string }): Attachment | null => {
     try {
       const dir = join(a.workspacePath, '.forge', 'attachments')
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-      const dest = join(dir, a.name)
+      const name = uniqueAttachmentName(dir, a.name)
+      const dest = join(dir, name)
       const bytes = Buffer.from(a.dataBase64, 'base64')
       writeFileSync(dest, bytes)
-      return { name: a.name, path: dest, size: bytes.length }
+      return { name, path: dest, size: bytes.length }
     } catch {
       return null
     }

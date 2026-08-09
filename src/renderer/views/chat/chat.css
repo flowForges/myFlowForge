@@ -138,6 +138,9 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .attach-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; font-size: 12px; }
 .attach-chip svg { width: 14px; height: 14px; color: var(--muted); }
 .attach-chip .sz { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
+/* 图片附件用缩略图代替通用文件图标:剪贴板截图全叫 img-时分秒.png,一眼看图比读名字快得多。
+   尺寸与 .attach-chip svg 的 14px 一致,免得有图/无图两种 chip 高度不一。 */
+.attach-chip .attach-thumb { width: 18px; height: 18px; border-radius: 3px; object-fit: cover; flex: 0 0 18px; background: var(--surface-2); }
 
 /* 思考过程块 — 内部推理,视觉上"收起/次要",与最终回答明确区分 */
 .think {

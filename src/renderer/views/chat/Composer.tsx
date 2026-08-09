@@ -4,7 +4,7 @@ import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import { applyListContinuation } from './listContinuation'
-import { shouldOffloadPaste, pastedFileName, base64OfUtf8, insertPastePlaceholder, insertPastedText, resolvePasteSelection } from './largePaste'
+import { shouldOffloadPaste, pastedFileName, pastedFileNameForFile, base64OfUtf8, insertPastePlaceholder, insertPastedText, resolvePasteSelection } from './largePaste'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -121,6 +121,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const dk = draftKey ?? ''
   const [text, setText] = useState(() => (dk ? draftStore[dk]?.text : '') ?? '')
   const [attachments, setAttachments] = useState<Attachment[]>(() => (dk ? draftStore[dk]?.attachments : undefined) ?? [])
+  // 粘贴进来的图片缩略图,按落盘路径索引。只在会话内活着(不进 draftStore):它只是认图用的,丢了不影响
+  // 任何语义,而把几张图的 dataURL 塞进草稿缓存反而是几 MB 的常驻内存。
+  const [thumbs, setThumbs] = useState<Record<string, string>>({})
   useEffect(() => { if (dk) draftStore[dk] = { text, attachments } }, [dk, text, attachments])
   // The last message we sent, so stopping the turn BEFORE the AI produced any output restores it to the
   // box for editing/resending (the user would otherwise retype/copy it back). Once the AI has output —
@@ -345,6 +348,14 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     }
     if (!files || !files.length || !onPaste) return
     e.preventDefault()
+    // 文件/图片粘贴以前只 push 附件、不动正文 —— 于是粘三张图就是三个孤立 chip,正文里没有任何位置标记,
+    // agent 和用户都分不清「这张」「那张」各指哪句话。这里与大文本粘贴走同一套:在粘贴处留 [文件名] 占位。
+    // 选区同样要在 await 之前读(存盘期间用户还在打字),判定逻辑复用 resolvePasteSelection。
+    const ta = taRef.current
+    const selStart = ta?.selectionStart ?? text.length
+    const selEnd = ta?.selectionEnd ?? text.length
+    const textAtPaste = text
+    const saved: Attachment[] = []
     for (const file of Array.from(files)) {
       const dataBase64: string = await new Promise((resolve, reject) => {
         const reader = new FileReader()
@@ -356,8 +367,34 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
         reader.onerror = () => reject(reader.error)
         reader.readAsDataURL(file)
       })
-      const att = await onPaste({ name: file.name, dataBase64 })
-      if (att) setAttachments(prev => [...prev, att])
+      // 剪贴板截图没有真名字(Chrome 一律 image.png),改成 img-时分秒;用户自己起的名字原样保留。
+      let att: Attachment | null = null
+      try {
+        att = await onPaste({ name: pastedFileNameForFile(file.name, new Date()), dataBase64 })
+      } catch {
+        att = null
+      }
+      if (!att) continue
+      // 缩略图:粘贴时字节就在手上,不必再读盘。三张图都叫 img-xxxxxx.png,一眼看图比读名字快得多。
+      if (file.type.startsWith('image/')) setThumbs(prev => ({ ...prev, [att!.path]: `data:${file.type};base64,${dataBase64}` }))
+      saved.push(att)
+      setAttachments(prev => [...prev, att!])
+    }
+    // 占位符一次性插完(而不是每个文件插一次):setText 的 updater 不保证同步执行,循环里插会拿到陈旧的
+    // 光标位置,后面几个占位符就会互相踩。攒齐再插,updater 内部按顺序推进插入点,天然保住粘贴顺序。
+    // 存盘失败的文件不在 saved 里 —— 没有附件的占位符是在骗 agent。
+    if (saved.length) {
+      setText(prev => {
+        const sel = resolvePasteSelection(prev, textAtPaste, selStart, selEnd)
+        let cur = prev, start = sel.start, end = sel.end
+        for (const a of saved) {
+          const r = insertPastePlaceholder(cur, start, end, a.name)
+          cur = r.text
+          start = end = r.caret
+        }
+        pendingCursor.current = start
+        return cur
+      })
     }
   }
 
@@ -369,7 +406,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
         <div className="composer-attach" id="composerAttach">
           {attachments.map((a, i) => (
             <span className="attach-chip" key={a.path + '::' + i}>
-              {FILE_ICON}
+              {thumbs[a.path] ? <img className="attach-thumb" src={thumbs[a.path]} alt="" /> : FILE_ICON}
               {a.name} <span className="sz">{fmtSize(a.size)}</span>
               <button title="移除" onClick={() => removeAttach(i)}>{X_ICON}</button>
             </span>

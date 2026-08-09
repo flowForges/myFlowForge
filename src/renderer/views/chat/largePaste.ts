@@ -74,6 +74,22 @@ export function pastedFileName(text: string, now: Date): string {
   return `pasted-${stamp}.${ext}`
 }
 
+// 剪贴板里的截图没有真名字 —— Chrome 一律给 `image.png`,所以连粘三张就是三个一模一样的 chip,正文里
+// 的 `[image.png]` 占位符也全一样,等于没占位。这类通用名改成 `img-时分秒.扩展名`,三张图立刻能分辨。
+//
+// 反过来,从访达复制一个真文件粘进来时 `hook.jpg` 是用户自己起的名字,比我们生成的时间戳有信息量得多,
+// 必须原样保留。所以只认这一小撮「浏览器兜底名」,其余一律不动。
+const GENERIC_PASTE_NAMES = new Set(['image', 'screenshot', '屏幕截图', 'untitled', 'unnamed', ''])
+
+export function pastedFileNameForFile(name: string, now: Date): string {
+  const dot = name.lastIndexOf('.')
+  const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+  if (!GENERIC_PASTE_NAMES.has(base.toLowerCase())) return name
+  const stamp = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+  // 无扩展名的 blob 落成 .png:剪贴板图片实际就是 PNG,给个扩展名后续按图片预览才认得出来。
+  return `img-${stamp}${ext || '.png'}`
+}
+
 // Base64-encode UTF-8 text for the savePaste IPC (which base64-decodes to bytes). btoa alone breaks on
 // non-Latin1 (CJK), so encode to UTF-8 bytes first. Chunked to avoid a huge apply() arg spread.
 export function base64OfUtf8(text: string): string {
