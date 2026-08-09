@@ -52,6 +52,9 @@ export const CH = {
   chatResolve: 'chat:resolve',
   chatQueueEvent: 'chat:queue-event',
   chatQueueState: 'chat:queue-state',
+  // 当前还挂着、等用户回答的确认/提问门。和 chatQueueState 同一个用途:聊天视图重新挂载(切会话、离开再
+  // 回来、刷新)时,它自己的 React state 是空的,而主进程那些门还阻塞着 —— 必须能把快照拉回来重建卡片。
+  chatGateState: 'chat:gate-state',
   chatCancelQueued: 'chat:cancel-queued',
   chatClearQueue: 'chat:clear-queue',
   chatStop: 'chat:stop',

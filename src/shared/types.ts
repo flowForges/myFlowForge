@@ -313,6 +313,16 @@ export type BotStatus =
   | { state: 'error'; reason: string }
 export interface BotStatusEvent { platform: BotPlatform; status: BotStatus }
 export interface ChatConfirm { id: string; title: string; where?: string; ts?: string }
+/**
+ * 主进程里【还没被回答】的聊天门快照(chat:gate-state)。
+ * 为什么需要:门是主进程的 Promise,一直阻塞着 provider;而卡片是渲染进程 useChat 的 state。切会话 / 离开
+ * 再回来 / 刷新都会把那份 state 清空,门却还在 —— 于是侧栏和宠物一直喊「待确认」,聊天里却没有可点的卡片,
+ * 那一轮就永远挂着。挂载时拉一次这个快照即可把卡片重建出来(与 chat:queue-state 同一套思路)。
+ */
+export interface ChatGateSnapshot {
+  confirms: { id: string; sessionId: string; title: string; where?: string; ts: string }[]
+  asks: { id: string; sessionId: string; title: string; options?: { t: string; d: string }[]; agentName?: string; ts: string }[]
+}
 export interface ChatSendPayload {
   workspacePath: string
   sessionId: string

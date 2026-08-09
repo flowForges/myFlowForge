@@ -58,9 +58,29 @@ export function useChat(
   onModeChangedRef.current = onModeChanged
 
   useEffect(() => {
-    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); return }
-    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null)
+    // asks 一直漏在重置之外 —— 换会话后上一个会话的提问卡还挂在新会话里(卡片本身按 workspace+session
+    // 过滤事件,但已经进了 state 的那张不会自己走)。和 confirms 一起清。
+    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); return }
+    setMessages([]); setStreamingIds(new Set()); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null)
     let live = true
+    // ★ 清空之后必须把主进程【还挂着的门】拉回来重建卡片。门是主进程的一个 Promise,一直阻塞着 provider;
+    // 卡片只是这里的 state。切会话 / 离开再回来 / 刷新都会清掉这份 state,门却还在 —— 于是侧栏徽标和宠物
+    // 一直喊「待确认」(它们各自的 state 不随聊天视图卸载),聊天里却连张能点的卡片都没有,那一轮就永远挂着,
+    // 直到 CLI 超时。和下面 chatQueueState 的重新播种是同一个道理,当初只补了队列、漏了门。
+    void api.current.chatGateState?.({ workspacePath })?.then((g) => {
+      if (!live) return
+      const sid = sessionId
+      setConfirms(c => {
+        const seen = new Set(c.map(x => x.id))
+        return [...c, ...g.confirms.filter(x => x.sessionId === sid && !seen.has(x.id))
+          .map(x => ({ id: x.id, title: x.title, where: x.where, ts: x.ts }))]
+      })
+      setAsks(a => {
+        const seen = new Set(a.map(x => x.id))
+        return [...a, ...g.asks.filter(x => x.sessionId === sid && !seen.has(x.id))
+          .map(x => ({ id: x.id, title: x.title, options: x.options, agentName: x.agentName, ts: x.ts }))]
+      })
+    }).catch(() => { /* 拉不到快照不该拖垮聊天视图,live 事件仍然照常工作 */ })
     // The chat queue lives on the main side and its event only fires when the queue CHANGES. Switching
     // away and back resets this view to empty, so pull the current snapshot to re-seed THIS session's
     // lane — otherwise a message queued behind a running turn silently disappears on switch-back.
@@ -194,9 +214,11 @@ export function useChat(
           : [...m, { ...blankAi(e.id), text: `错误: ${e.error}`, think: undefined, endedAt }])
         setStreamingIds(s => { const n = new Set(s); n.delete(e.id); return n })
       }
-      else if (e.type === 'confirm-request') setConfirms(c => [...c, { id: e.id, title: e.title, where: e.where, ts: new Date().toISOString() }])
+      // 按 id 去重:挂载时的 chatGateState 快照可能已经把同一个门种下了(广播恰好在快照回来之后到达),
+      // 无脑 append 会画出两张一模一样的卡。
+      else if (e.type === 'confirm-request') setConfirms(c => c.some(x => x.id === e.id) ? c : [...c, { id: e.id, title: e.title, where: e.where, ts: new Date().toISOString() }])
       else if (e.type === 'confirm-resolved') setConfirms(c => c.filter(x => x.id !== e.id))
-      else if (e.type === 'ask-request') setAsks(a => [...a, { id: e.id, title: e.title, options: e.options, agentName: e.agentName, ts: new Date().toISOString() }])
+      else if (e.type === 'ask-request') setAsks(a => a.some(x => x.id === e.id) ? a : [...a, { id: e.id, title: e.title, options: e.options, agentName: e.agentName, ts: new Date().toISOString() }])
       else if (e.type === 'ask-resolved') setAsks(a => a.filter(x => x.id !== e.id))
       else if (e.type === 'plan-request') setPlans(p => [...p, { id: e.id, approach: e.approach, stages: e.stages, hooks: e.hooks, allProjects: e.allProjects, task: e.task, workflowId: e.workflowId, workflowName: e.workflowName, workflowOptions: e.workflowOptions, recommendReason: e.recommendReason, ts: new Date().toISOString() }])
       else if (e.type === 'plan-resolved') setPlans(p => p.filter(x => x.id !== e.id))

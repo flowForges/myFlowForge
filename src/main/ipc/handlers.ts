@@ -38,7 +38,7 @@ import { agentSessionsForId } from '../chat/agentSessions'
 import { botBridge, genPairing } from '../bot/botBridge'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
-import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatMessage, SessionsFile } from '@shared/types'
+import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
 import type { AgentProvider } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
@@ -402,7 +402,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // purely by confirm-request→confirm-resolved in useChatActivity) stays stuck forever, because no
   // confirm-resolved is ever emitted for an abandoned gate. (proposeRun already drains this way; chat
   // confirm/ask never did.)
-  const chatGateOwner = new Map<string, { ws: string; sessionId: string; type: 'confirm' | 'ask' }>()
+  // 除了 ws/session/type,还要留下【重建卡片所需的全部内容】(标题、目标、选项、提出时间)——
+  // 见 CH.chatGateState:聊天视图重新挂载后要靠这份快照把卡片画回来,只记住"有一个门"是不够的。
+  // ts 也必须留:卡片在时间线里按 ts 排序,重建时用原始时间才会落回它原来的位置。
+  type GateMeta = {
+    ws: string
+    sessionId: string
+    type: 'confirm' | 'ask'
+    ts: string
+    title: string
+    where?: string
+    options?: { t: string; d: string }[]
+    agentName?: string
+  }
+  const chatGateOwner = new Map<string, GateMeta>()
   const drainChatGates = (wsPath: string, opts: { sessionId?: string; type?: 'confirm' | 'ask' } = {}) => {
     for (const [id, meta] of [...chatGateOwner]) {
       if (meta.ws !== wsPath) continue
@@ -427,7 +440,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const chatAsk = (wsPath: string, sessionId: string, question: string, options?: { t: string; d: string }[], agentName?: string): Promise<string | null> =>
     new Promise((resolve) => {
       const id = `ca-${++chatAskSeq}`
-      chatGateOwner.set(id, { ws: wsPath, sessionId, type: 'ask' })
+      chatGateOwner.set(id, { ws: wsPath, sessionId, type: 'ask', ts: new Date().toISOString(), title: question, options, agentName })
       chatAsks.set(id, (r) => {
         if (r.decision === 'deny') { resolve(null); return }
         // A typed custom answer (value) always wins over a picked option — the user chose to write their
@@ -469,7 +482,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const confirm = (req: { title: string; where?: string }) => new Promise<'allow' | 'deny'>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
       chatConfirms.set(id, resolve)
-      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm' })
+      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where })
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where })
     })
     // Pre-run consent gate: providers with no sandbox dimension (cursor/gemini/opencode/qwen/copilot)
@@ -628,6 +641,21 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     chatQueue.enqueue(payload, source ?? '你')
   })
   ipcMain.handle(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
+  // 还挂着的确认/提问门快照。聊天视图每次挂载都拉一次,把主进程仍在阻塞等待的门重建成卡片。
+  // 不做任何清理:这里只是【读】,门的生命周期仍由回答 / drainChatGates 负责。
+  ipcMain.handle(CH.chatGateState, (_e, a: { workspacePath: string }): ChatGateSnapshot => {
+    // chatGateOwner 就是「还挂着的门」的单一事实源:每条解析路径(chatResolve / resolveChatGateById /
+    // drainChatGates)都把 owner 和 resolver 一起删,而 drain 还会在没有 resolver 时也删 owner ——
+    // 所以 owner 恒是更严格的那一边,不需要再拿 chatConfirms/chatAsks 复核一遍。
+    // (原先写了这么一道复核,变异测试证明它永远为真、删掉全绿 = 不可达的防御分支,已去掉。)
+    const snap: ChatGateSnapshot = { confirms: [], asks: [] }
+    for (const [id, m] of chatGateOwner) {
+      if (m.ws !== a.workspacePath) continue
+      if (m.type === 'confirm') snap.confirms.push({ id, sessionId: m.sessionId, title: m.title, where: m.where, ts: m.ts })
+      else snap.asks.push({ id, sessionId: m.sessionId, title: m.title, options: m.options, agentName: m.agentName, ts: m.ts })
+    }
+    return snap
+  })
   ipcMain.handle(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
   ipcMain.handle(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
   // 「停止」只停当前【会话】的轮次 + 它派发的后台 delegate 子代理 + 它挂起的门(confirm/ask),不动同工作区里

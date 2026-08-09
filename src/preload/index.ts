@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH } from '../main/ipc/channels'
-import type { ChatEvent, ChangesEvent, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
+import type { ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
 
 const api = {
@@ -65,6 +65,8 @@ const api = {
   resolveSetupInteraction: (id: string, answer: { decision?: 'allow' | 'deny'; value?: string }) => ipcRenderer.invoke(CH.workspaceSetupResolve, { id, answer }),
   sendChat: (payload: unknown, source?: string) => ipcRenderer.invoke(CH.chatSend, payload, source),
   chatQueueState: (a: { workspacePath: string }): Promise<ChatQueueEvent> => ipcRenderer.invoke(CH.chatQueueState, a),
+  // 还挂着、等人回答的确认/提问门。聊天视图每次挂载都拉一次 —— 它自己的 state 是空的,门却还在主进程阻塞着。
+  chatGateState: (a: { workspacePath: string }): Promise<ChatGateSnapshot> => ipcRenderer.invoke(CH.chatGateState, a),
   chatCancelQueued: (a: { workspacePath: string; id: string }) => ipcRenderer.invoke(CH.chatCancelQueued, a),
   chatClearQueue: (a: { workspacePath: string }) => ipcRenderer.invoke(CH.chatClearQueue, a),
   chatStop: (a: { workspacePath: string; sessionId?: string }) => ipcRenderer.invoke(CH.chatStop, a),

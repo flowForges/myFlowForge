@@ -1,21 +1,24 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useChat } from './useChat'
-import type { ChatEvent, ChatMessage } from '@shared/types'
+import type { ChatEvent, ChatGateSnapshot, ChatMessage } from '@shared/types'
 
 interface QueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
 let handler: ((e: ChatEvent) => void) | null = null
 let queueHandler: ((e: QueueEvent) => void) | null = null
 const history: ChatMessage[] = [{ id: 'h1', who: 'user', text: 'old', ts: '0' }]
 let queueSnapshot: QueueEvent = { workspacePath: '/ws', busy: false, queue: [], running: null, runningTurns: [], runningSessionId: null, runningSessionIds: [] }
+let gateSnapshot: ChatGateSnapshot = { confirms: [], asks: [] }
 
 beforeEach(() => {
   handler = null
   queueHandler = null
   queueSnapshot = { workspacePath: '/ws', busy: false, queue: [], running: null, runningTurns: [], runningSessionId: null, runningSessionIds: [] }
+  gateSnapshot = { confirms: [], asks: [] }
   ;(window as any).forge = {
     chatHistory: vi.fn(async () => history),
     chatQueueState: vi.fn(async () => queueSnapshot),
+    chatGateState: vi.fn(async () => gateSnapshot),
     sendChat: vi.fn(async () => ({})),
     onChatEvent: (cb: (e: ChatEvent) => void) => { handler = cb; return () => { handler = null } },
     onChatQueueEvent: (cb: (e: QueueEvent) => void) => { queueHandler = cb; return () => { queueHandler = null } },
@@ -264,5 +267,60 @@ describe('useChat', () => {
     expect((window as any).forge.chatCancelQueued).toHaveBeenCalledWith({ workspacePath: '/ws', id: 'q1' })
     act(() => { result.current.clearQueue() })
     expect((window as any).forge.chatClearQueue).toHaveBeenCalledWith({ workspacePath: '/ws' })
+  })
+})
+
+// ★真机 bug:侧栏和宠物一直喊「待确认」,聊天里却没有卡片,那一轮永远挂着。
+// 门是主进程的 Promise(一直阻塞 provider),卡片只是 useChat 的 state —— 切会话/离开再回来会清空 state,
+// 门却还在。当初给队列补了 chatQueueState 重新播种,门被漏掉了。
+describe('useChat — 重新挂载时把主进程还挂着的门拉回来', () => {
+  it('挂载时从 chatGateState 重建本会话的确认卡', async () => {
+    gateSnapshot = { confirms: [{ id: 'cc-7', sessionId: 's1', title: 'Bash 请求执行', where: 'git status', ts: '2026-08-09T05:09:21.477Z' }], asks: [] }
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.confirms).toHaveLength(1))
+    expect(result.current.confirms[0]).toMatchObject({ id: 'cc-7', title: 'Bash 请求执行', where: 'git status' })
+    // ts 必须是门【原本】的时间,卡片才会落回时间线里它原来的位置
+    expect(result.current.confirms[0].ts).toBe('2026-08-09T05:09:21.477Z')
+  })
+
+  it('只重建本会话的门,别的会话的不串过来', async () => {
+    gateSnapshot = { confirms: [{ id: 'cc-1', sessionId: 'other', title: '别的会话', ts: 't' }], asks: [{ id: 'ca-1', sessionId: 'other', title: '别的提问', ts: 't' }] }
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    expect(result.current.confirms).toHaveLength(0)
+    expect(result.current.asks).toHaveLength(0)
+  })
+
+  it('提问门(ask)同样能重建,选项和发起者都带回来', async () => {
+    gateSnapshot = { confirms: [], asks: [{ id: 'ca-3', sessionId: 's1', title: '选哪个?', options: [{ t: 'A', d: '甲' }], agentName: '子代理', ts: 't3' }] }
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.asks).toHaveLength(1))
+    expect(result.current.asks[0]).toMatchObject({ id: 'ca-3', title: '选哪个?', agentName: '子代理' })
+    expect(result.current.asks[0].options).toEqual([{ t: 'A', d: '甲' }])
+  })
+
+  it('快照与 live 事件撞车时不画出两张卡(按 id 去重)', async () => {
+    gateSnapshot = { confirms: [{ id: 'cc-9', sessionId: 's1', title: '同一个门', ts: 't' }], asks: [] }
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.confirms).toHaveLength(1))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'confirm-request', id: 'cc-9', title: '同一个门' }) })
+    expect(result.current.confirms.filter(c => c.id === 'cc-9')).toHaveLength(1)
+  })
+
+  it('换会话时清掉上一个会话的提问卡(asks 之前漏在重置之外)', async () => {
+    const { result, rerender } = renderHook(({ sid }: { sid: string }) => useChat('/ws', sid), { initialProps: { sid: 's1' } })
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'ask-request', id: 'ca-8', title: '留在 s1 的提问' }) })
+    expect(result.current.asks).toHaveLength(1)
+    rerender({ sid: 's2' })
+    await waitFor(() => expect(result.current.asks).toHaveLength(0))
+  })
+
+  it('拿不到快照时不影响聊天视图(live 事件照常)', async () => {
+    ;(window as any).forge.chatGateState = vi.fn(async () => { throw new Error('boom') })
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'confirm-request', id: 'cc-live', title: '仍然可用' }) })
+    expect(result.current.confirms).toHaveLength(1)
   })
 })

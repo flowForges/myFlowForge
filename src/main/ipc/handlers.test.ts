@@ -859,3 +859,61 @@ describe('chat:save-paste handler 的 I/O 失败', () => {
     }
   })
 })
+
+// ★真机 bug:侧栏和宠物一直显示「待确认」,聊天里却没有可点的卡片,那一轮永远挂着。
+// 门是主进程里一个阻塞着 provider 的 Promise,卡片只是渲染进程的 state —— 切会话/离开再回来会清空 state,
+// 门却还在。没有这个快照通道,渲染进程就没有任何办法把它找回来。
+describe('chat:gate-state —— 让重新挂载的聊天视图能把还挂着的门拉回来', () => {
+  const setup = async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    const sent: [string, unknown][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const get = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+    return { sent, get }
+  }
+
+  it('确认门挂起期间,快照能报出它的全部内容(标题/目标/会话/时间)', async () => {
+    const { sent, get } = await setup()
+    const { sendTurn } = await import('../chat/chatService') as any
+    // 让这一轮卡在 confirm 上,正是真机的场景:provider 在等,用户看不到卡片。
+    sendTurn.mockReset().mockImplementation((_p: any, deps: any) => deps.confirm({ title: 'Bash 请求执行', where: 'git status' }))
+    get(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    // live 广播确实发了(侧栏/宠物就是靠它亮起来的)
+    expect(sent.some(([c, p]) => c === CH.chatEvent && (p as any).type === 'confirm-request')).toBe(true)
+    const snap = await get(CH.chatGateState)({}, { workspacePath: '/ws/a' })
+    expect(snap.confirms).toHaveLength(1)
+    expect(snap.confirms[0]).toMatchObject({ sessionId: 's1', title: 'Bash 请求执行', where: 'git status' })
+    expect(Date.parse(snap.confirms[0].ts)).not.toBeNaN()
+  })
+
+  it('只报本工作区的门', async () => {
+    const { get } = await setup()
+    const { sendTurn } = await import('../chat/chatService') as any
+    sendTurn.mockReset().mockImplementation((_p: any, deps: any) => deps.confirm({ title: '别的工作区' }))
+    get(CH.chatSend)({}, { workspacePath: '/ws/b', sessionId: 's9', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    const snap = await get(CH.chatGateState)({}, { workspacePath: '/ws/a' })
+    expect(snap.confirms).toHaveLength(0)
+  })
+
+  it('门被回答之后就不再出现在快照里(否则会画出一张点了没反应的卡)', async () => {
+    const { sent, get } = await setup()
+    const { sendTurn } = await import('../chat/chatService') as any
+    sendTurn.mockReset().mockImplementation((_p: any, deps: any) => deps.confirm({ title: '待回答' }))
+    get(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    const req = sent.find(([c, p]) => c === CH.chatEvent && (p as any).type === 'confirm-request')![1] as any
+    await get(CH.chatResolve)({}, { id: req.id, decision: 'allow' })
+    await new Promise(r => setTimeout(r, 0))
+    const snap = await get(CH.chatGateState)({}, { workspacePath: '/ws/a' })
+    expect(snap.confirms).toHaveLength(0)
+  })
+
+  it('没有任何门时返回空快照,不炸', async () => {
+    const { get } = await setup()
+    const snap = await get(CH.chatGateState)({}, { workspacePath: '/ws/a' })
+    expect(snap).toEqual({ confirms: [], asks: [] })
+  })
+})
