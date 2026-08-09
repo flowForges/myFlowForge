@@ -38,7 +38,7 @@ Jedes KI-Coding-CLI lebt in seinem eigenen Terminal, mit eigenem Sitzungszustand
 
 Darüber liegt ein **leichtgewichtiger Workflow**: kein Fließband, das dir davonläuft, sondern eine dünne Schicht Struktur über demselben Gespräch. Jede Stufe wartet, bis du *Weiter* drückst.
 
-> ⚠️ **Projektstatus:** ein aktiv entwickeltes persönliches Projekt. Zielplattform ist **macOS** (Apple Silicon und Intel). Da es auf Electron basiert, lässt es sich aus dem Quellcode für andere Plattformen bauen, paketiert wird derzeit aber nur macOS. Die meisten Veröffentlichungen sind Betas — dort landen die Neuerungen.
+> ⚠️ **Projektstatus:** ein aktiv entwickeltes persönliches Projekt. Zielplattform ist **macOS** (Apple Silicon und Intel). Da es auf Electron basiert, lässt es sich aus dem Quellcode für andere Plattformen bauen, paketiert wird derzeit aber nur macOS. **1.1.0** ist die aktuelle stabile Version; die Betas zwischen zwei stabilen Versionen sind der Ort, an dem Neuerungen zuerst landen.
 
 ## ✨ Die fünf Dinge, um die es wirklich geht
 
@@ -152,7 +152,7 @@ Drei Wege, einen zu starten, die alle am selben Tor münden:
 ## 🧩 Außerdem mit dabei
 
 - **Import nativer Sitzungen** — schreibgeschützter Scan deines lokalen Verlaufs von Claude / Codex / Cursor / qoder; als Arbeitsbereich importieren und weitermachen.
-- **MCP-Brücke** — ein eingebauter Forge-MCP-Server lässt Agenten in die App zurückrufen: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`. Wird in die acht MCP-fähigen Agenten injiziert; die übrigen fallen auf eine Textanweisung zurück.
+- **MCP-Brücke** — ein eingebauter Forge-MCP-Server lässt Agenten in die App zurückrufen: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. Wird in die acht MCP-fähigen Agenten injiziert; die übrigen fallen auf eine Textanweisung zurück.
 - **Beobachtbarkeit in Echtzeit** — Denken, Werkzeugaufrufe, Dateiänderungen und Rohausgabe im Stream; filterbare Log-Konsole, Laufhistorie und projektübergreifende Änderungsbelege.
 - **Token-Verbrauch und Kontingent** — verbleibendes Kontingent und Reset-Zeitpunkt je Anbieter, dazu der Verbrauch nach Arbeitsbereich × Agent × Tag.
 - **Bot-Brücke** — Tore beantworten, Ergebnisse ansehen, ein Gespräch starten und Workflows steuern, per **DingTalk** am Telefon (Telegram / Feishu sind für später bereits verdrahtet).
@@ -164,7 +164,10 @@ Drei Wege, einen zu starten, die alle am selben Tor münden:
 - **Eingebautes Terminal** — ein echtes pty im Arbeitsbereich verwurzelt, mit Proxy- und Zeitzoneneinstellung je Anbieter.
 - **Desktop-Haustier** — folgt dem fokussierten Bildschirm, zeigt eine Vorschau der Agentenaktivität und blendet Bestätigungskarten ein; stöbere im Haustier-Markt oder bring eigene Bilder mit.
 - **Transparenz und Milchglas** — ein einziger Regler führt das ganze Fenster von vollständig deckend über drei native macOS-*Vibrancy*-Materialien, sodass der Schreibtisch durchscheint.
-- **Personalisierung** — 6 eigene Skins, 12 Akzentfarben, eine Hintergrundbild-Galerie oder dein eigenes Bild, pixelgenaue Schriftgrößen getrennt für App und Chat, Hell und Dunkel jeweils separat auf Kontrast abgestimmt.
+- **Personalisierung** — 6 eigene Skins, 12 Akzentfarben, eine Galerie mit 270 Hintergrundbildern oder dein eigenes Bild, pixelgenaue Schriftgrößen getrennt für App und Chat, Hell und Dunkel jeweils separat auf Kontrast abgestimmt.
+- **Farbschema aus dem Hintergrundbild** — einschalten, und die gesamte Palette leitet sich aus dem gewählten Hintergrundbild ab; ob hell oder dunkel, entscheidet das Bild selbst. Das Bild darf nur zwei Farbtöne beisteuern — jede Helligkeits- und Chroma-Stufe stammt aus den handabgestimmten Skins, sodass auch ein unruhiges Bild keine unlesbare Oberfläche erzeugen kann. Lieber ein eigener Akzent? Einen auswählen, und nur der Akzent folgt nicht mehr.
+- **Wachsendes Haustier** — das Desktop-Haustier wächst beim Arbeiten in Stufen, sodass eine lange Sitzung etwas Sichtbares hinterlässt.
+- **Eingebettete Visualisierungen im Chat** — standardmäßig aus: eingeschaltet werden HTML-Fragmente, die ein Agent mitten in einer Antwort schreibt, als echte Karten, Tabellen und Diagramme dargestellt. Niemals `innerHTML` — das Fragment wird geparst und aus einer konstruktiven Positivliste neu aufgebaut, und Farben dürfen nur aus Theme-Tokens kommen; das Ergebnis folgt also deinem Skin, statt gegen ihn zu arbeiten.
 
 ## 📥 Download und Installation
 

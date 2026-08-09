@@ -1,3 +1,17 @@
+<!--
+停用于 2026-08-10 —— 内容保留,不删除。
+
+为什么停用:工作流现在只能从显式启动器(run2)进,聊天代理不再拿到 forge_propose_plan /
+forge_delegate,所以这个 skill 已经没有读者了(见 src/main/skills/installSkill.ts 里
+removeWorkspaceSkill 的注释,以及三处主动删除工作区内同名 skill 的调用)。
+
+注意:真正在用的那份是**运行时生成**的 —— 正文在 src/main/skills/forgeWorkflowSkill.ts,
+由 ensureWorkspaceSkill() 写进每个工作区容器目录,与本文件无关。本文件停留在 2026-07-16,
+描述的是「主代理经 skill 调 forge_propose_plan 开门」那套旧路径,已经不成立。
+
+整份包在 HTML 注释里 = YAML frontmatter 不在文件开头,Claude Code 不会把它当 skill 发现。
+要恢复:删掉本段注释的首尾两行即可。
+
 ---
 name: forge-workflow
 description: 当用户要成套推进一个开发需求（既要方案又要开发、跨多项目协同、或明说"按工作流/跑工作流/开始执行/给出方案"）时用本技能：调用 forge_propose_plan 打开工作流权限门，用户确认后自动启动。单一动作（读/理解某处代码、小改一处、写个测试）不用本技能，直接调 forge_delegate 派子代理做。纯提问/讨论/查看状态/闲聊直接回答。拿不准先问一句。
@@ -46,3 +60,4 @@ description: 当用户要成套推进一个开发需求（既要方案又要开�
 ## 示例
 - 用户："按这个 workspace 的工作流，开始执行吧" → 路径二，调用 `forge_propose_plan` 打开工作流门，等用户确认。
 - 用户："看看登录逻辑在哪实现的" → 路径一，调用 `forge_delegate({task:"定位并说明登录逻辑的实现", write:false})`。
+-->

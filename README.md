@@ -38,7 +38,7 @@ Every AI coding CLI lives in its own terminal, with its own session state, its o
 
 On top of that sits a **lightweight workflow**: not an assembly line that runs away from you, but a thin layer of structure over the same conversation. Every stage waits for you to press *Next*.
 
-> ⚠️ **Project status:** an actively developed personal project. It targets **macOS** (Apple Silicon & Intel). Being Electron-based it can be built for other platforms from source, but only macOS is packaged today. Most releases are betas — that's where new features land.
+> ⚠️ **Project status:** an actively developed personal project. It targets **macOS** (Apple Silicon & Intel). Being Electron-based it can be built for other platforms from source, but only macOS is packaged today. **1.1.0** is the current stable release; betas between stables are where new features land first.
 
 ## ✨ The five things it's really about
 
@@ -149,7 +149,7 @@ Three ways to start one, all landing on the same gate:
 ## 🧩 Also in the box
 
 - **Native session import** — read-only scan of your local Claude / Codex / Cursor / qoder history; import as a workspace and continue.
-- **MCP bridge** — a built-in Forge MCP server lets agents call back into the app: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`. Injected into the eight agents that support MCP; the rest fall back to a text directive.
+- **MCP bridge** — a built-in Forge MCP server lets agents call back into the app: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. Injected into the eight agents that support MCP; the rest fall back to a text directive.
 - **Real-time observability** — streaming thinking / tool calls / file changes / raw output, a filterable log console, run history, and cross-project change evidence.
 - **Token usage & quota** — remaining quota and reset times per provider, plus spend by workspace × agent × day.
 - **Bot bridge** — answer gates, check results, start a conversation and drive workflows from **DingTalk** on your phone (Telegram / Feishu wired for later).
@@ -161,7 +161,10 @@ Three ways to start one, all landing on the same gate:
 - **Built-in terminal** — a real pty rooted in the workspace, with per-provider proxy and timezone settings.
 - **Desktop pet** — follows your focused screen, previews agent activity, pops confirmation cards; browse the pet market or bring your own images.
 - **Transparency & frosted glass** — one blur slider takes the whole window from fully opaque through three native macOS vibrancy materials, so your desktop shows through.
-- **Personalisation** — 6 original skins, 12 accent colours, a wallpaper gallery or your own image, exact-pixel font sizes for app and chat independently, light and dark contrast-tuned separately.
+- **Personalisation** — 6 original skins, 12 accent colours, a 270-image wallpaper gallery or your own picture, exact-pixel font sizes for app and chat independently, light and dark contrast-tuned separately.
+- **Wallpaper-driven theming** — turn it on and the whole palette is derived from whatever wallpaper you picked, light or dark decided by the image itself. The wallpaper only ever contributes two hues; every lightness and chroma step is copied from the hand-tuned skins, so a busy picture can't produce an unreadable interface. Prefer your own accent? Pick one and only the accent stops following.
+- **Growth pet** — the desktop pet grows through stages as you work, so long sessions leave something visible behind.
+- **Inline visuals in chat** — off by default: when on, HTML fragments an agent writes mid-answer render as real cards, tables and diagrams. Never `innerHTML` — the fragment is parsed and rebuilt from a constructive allow-list, and colours may only come from theme tokens, so rendered content follows your skin instead of fighting it.
 
 ## 📥 Download & install
 

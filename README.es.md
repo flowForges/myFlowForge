@@ -38,7 +38,7 @@ Cada CLI de programación con IA vive en su propia terminal, con su propio estad
 
 Encima de eso se apoya un **flujo de trabajo ligero**: no una cadena de montaje que se te escapa de las manos, sino una fina capa de estructura sobre esa misma conversación. Cada etapa espera a que pulses *Siguiente*.
 
-> ⚠️ **Estado del proyecto:** un proyecto personal en desarrollo activo. Está pensado para **macOS** (Apple Silicon e Intel). Al estar basado en Electron puede compilarse desde el código para otras plataformas, pero hoy solo se empaqueta para macOS. La mayoría de las versiones publicadas son beta: ahí es donde aterrizan las novedades.
+> ⚠️ **Estado del proyecto:** un proyecto personal en desarrollo activo. Está pensado para **macOS** (Apple Silicon e Intel). Al estar basado en Electron puede compilarse desde el código para otras plataformas, pero hoy solo se empaqueta para macOS. **1.1.0** es la versión estable actual; las betas entre estables son donde aterrizan primero las novedades.
 
 ## ✨ Las cinco cosas que de verdad importan
 
@@ -149,7 +149,7 @@ Tres formas de arrancarlo, todas desembocando en la misma compuerta:
 ## 🧩 Y además
 
 - **Importación de sesiones nativas** — escaneo de solo lectura de tu historial local de Claude / Codex / Cursor / qoder; impórtalo como espacio de trabajo y sigue.
-- **Puente MCP** — un servidor Forge MCP integrado deja que los agentes llamen de vuelta a la app: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`. Se inyecta en los ocho agentes que soportan MCP; el resto recurre a una directiva de texto.
+- **Puente MCP** — un servidor Forge MCP integrado deja que los agentes llamen de vuelta a la app: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. Se inyecta en los ocho agentes que soportan MCP; el resto recurre a una directiva de texto.
 - **Observabilidad en tiempo real** — pensamiento, llamadas a herramientas, cambios de archivos y salida en bruto en streaming; consola de registro filtrable, historial de ejecuciones y evidencia de cambios entre proyectos.
 - **Uso de tokens y cuota** — cuota restante y hora de reinicio por proveedor, más el gasto por espacio de trabajo × agente × día.
 - **Puente de bots** — responde compuertas, consulta resultados, inicia una conversación y gobierna flujos desde **DingTalk** en el móvil (Telegram / Feishu ya cableados para más adelante).
@@ -161,7 +161,10 @@ Tres formas de arrancarlo, todas desembocando en la misma compuerta:
 - **Terminal integrada** — un pty de verdad enraizado en el espacio de trabajo, con proxy y zona horaria por proveedor.
 - **Mascota de escritorio** — sigue la pantalla enfocada, previsualiza la actividad de los agentes y saca tarjetas de confirmación; curiosea el mercado de mascotas o trae tus propias imágenes.
 - **Transparencia y cristal esmerilado** — un único deslizador lleva toda la ventana desde totalmente opaca hasta los tres materiales de *vibrancy* nativos de macOS, dejando ver el escritorio.
-- **Personalización** — 6 pieles originales, 12 colores de acento, una galería de fondos o tu propia imagen, tamaños de fuente en píxeles exactos e independientes para la app y para el chat, con contraste ajustado por separado en claro y oscuro.
+- **Personalización** — 6 pieles originales, 12 colores de acento, una galería de 270 fondos o tu propia imagen, tamaños de fuente en píxeles exactos e independientes para la app y para el chat, con contraste ajustado por separado en claro y oscuro.
+- **Tema derivado del fondo** — actívalo y toda la paleta se deriva del fondo que hayas elegido; claro u oscuro lo decide la propia imagen. El fondo solo aporta dos tonos: cada paso de luminosidad y croma se copia de las pieles ajustadas a mano, así que una imagen recargada no puede producir una interfaz ilegible. ¿Prefieres tu propio acento? Elígelo y solo el acento deja de seguir al fondo.
+- **Mascota que crece** — la mascota de escritorio crece por etapas conforme trabajas, así una sesión larga deja algo visible detrás.
+- **Visuales en línea en el chat** — desactivado por defecto: al activarlo, los fragmentos HTML que un agente escribe a mitad de respuesta se renderizan como tarjetas, tablas y diagramas reales. Nunca `innerHTML`: el fragmento se analiza y se reconstruye desde una lista de permitidos constructiva, y los colores solo pueden venir de los tokens del tema, así que lo renderizado sigue tu piel en lugar de pelearse con ella.
 
 ## 📥 Descarga e instalación
 

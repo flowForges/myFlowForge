@@ -38,7 +38,7 @@ Chaque CLI de code IA vit dans son propre terminal, avec son propre état de ses
 
 Par-dessus vient un **workflow léger** : pas une chaîne de montage qui vous échappe, mais une fine couche de structure posée sur cette même conversation. Chaque étape attend que vous appuyiez sur *Suivant*.
 
-> ⚠️ **État du projet :** un projet personnel en développement actif. Il vise **macOS** (Apple Silicon et Intel). Reposant sur Electron, il peut être compilé depuis les sources pour d'autres plateformes, mais seul macOS est empaqueté aujourd'hui. La plupart des versions publiées sont des bêtas — c'est là qu'arrivent les nouveautés.
+> ⚠️ **État du projet :** un projet personnel en développement actif. Il vise **macOS** (Apple Silicon et Intel). Reposant sur Electron, il peut être compilé depuis les sources pour d'autres plateformes, mais seul macOS est empaqueté aujourd'hui. **1.1.0** est la version stable actuelle ; les bêtas publiées entre deux versions stables sont là où les nouveautés arrivent en premier.
 
 ## ✨ Les cinq choses qui comptent vraiment
 
@@ -151,7 +151,7 @@ Trois façons d'en démarrer un, toutes menant à la même barrière :
 ## 🧩 Également fourni
 
 - **Import de sessions natives** — analyse en lecture seule de votre historique local Claude / Codex / Cursor / qoder ; importez-le comme espace de travail et poursuivez.
-- **Pont MCP** — un serveur Forge MCP intégré permet aux agents de rappeler l'application : `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`. Injecté dans les huit agents compatibles MCP ; les autres se rabattent sur une directive textuelle.
+- **Pont MCP** — un serveur Forge MCP intégré permet aux agents de rappeler l'application : `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. Injecté dans les huit agents compatibles MCP ; les autres se rabattent sur une directive textuelle.
 - **Observabilité en temps réel** — réflexion, appels d'outils, modifications de fichiers et sortie brute en flux continu ; console de logs filtrable, historique des exécutions et preuves de changement inter-projets.
 - **Consommation de tokens et quotas** — quota restant et heure de réinitialisation par fournisseur, plus la dépense par espace de travail × agent × jour.
 - **Pont de bots** — répondez aux barrières, consultez les résultats, lancez une conversation et pilotez les workflows depuis **DingTalk** sur votre téléphone (Telegram / Feishu déjà câblés pour plus tard).
@@ -163,7 +163,10 @@ Trois façons d'en démarrer un, toutes menant à la même barrière :
 - **Terminal intégré** — un vrai pty enraciné dans l'espace de travail, avec proxy et fuseau horaire par fournisseur.
 - **Mascotte de bureau** — elle suit l'écran actif, prévisualise l'activité des agents et fait apparaître des cartes de confirmation ; parcourez le marché aux mascottes ou apportez vos propres images.
 - **Transparence et verre dépoli** — un unique curseur fait passer toute la fenêtre de totalement opaque aux trois matériaux de *vibrancy* natifs de macOS, laissant transparaître le bureau.
-- **Personnalisation** — 6 thèmes originaux, 12 couleurs d'accent, une galerie de fonds d'écran ou votre propre image, des tailles de police au pixel près et indépendantes pour l'application et pour la conversation, avec un contraste réglé séparément en clair et en sombre.
+- **Personnalisation** — 6 thèmes originaux, 12 couleurs d'accent, une galerie de 270 fonds d'écran ou votre propre image, des tailles de police au pixel près et indépendantes pour l'application et pour la conversation, avec un contraste réglé séparément en clair et en sombre.
+- **Thème dérivé du fond d'écran** — activez-le et toute la palette découle du fond d'écran choisi ; clair ou sombre, c'est l'image qui décide. Le fond d'écran ne fournit que deux teintes : chaque palier de luminosité et de chroma est repris des thèmes réglés à la main, si bien qu'une image chargée ne peut pas produire une interface illisible. Vous préférez votre propre accent ? Choisissez-le et seul l'accent cesse de suivre.
+- **Compagnon évolutif** — le compagnon de bureau grandit par étapes au fil du travail : une longue session laisse quelque chose de visible derrière elle.
+- **Visuels intégrés à la conversation** — désactivé par défaut : une fois activé, les fragments HTML qu'un agent écrit au milieu d'une réponse s'affichent en véritables cartes, tableaux et schémas. Jamais d'`innerHTML` : le fragment est analysé puis reconstruit à partir d'une liste blanche constructive, et les couleurs ne peuvent venir que des jetons du thème — le rendu suit donc votre thème au lieu de le contrarier.
 
 ## 📥 Téléchargement et installation
 
