@@ -26,21 +26,29 @@ export function bgSaturation(opacity: number): number {
   return Number((1 + 0.9 * (1 - o)).toFixed(3))
 }
 
-// 壁纸「可见度」→ chrome 面板(侧栏/检视区/顶栏/底栏)要额外补多厚一层自身底色,单位是百分比字符串。
+// 「亮壁纸 + 深色主题」的可读性兜底:压在壁纸【之上、内容之下】的一整层 --bg 蒙版的 alpha。
 //
-// 为什么需要:这几个面板是半透明的,可见度越高,它们背后的实际底色就越接近壁纸本身。而壁纸经常大面积是
-// 亮的 —— 实测用户那张(人物插画)【中位亮度就是纯白】—— 深色系的浅灰小字(阶段名、模型名、路径、会话名,
-// 全走 muted/faint)于是变成浅色字压在白底上。算过账:可见度 85% 时 --muted 对比度只有 1.02:1,
-// 等于完全看不见(WCAG 正文要求 4.5:1)。这不是配色没调好,是"半透明面板 + 亮壁纸"的必然结果。
-// 补的是 var(--bg-2)(主题/皮肤自带),所以深色补深、浅色补浅,两个基调都朝"字能读"的方向走。
+// 问题:壁纸经常大面积是亮的 —— 实测用户那张人物插画【中位亮度就是纯白】。深色主题的浅色文字压上去,
+// 算过账,可见度 85% 时正文 --fg-2 只有 1.30:1、侧栏 --muted 只有 1.02:1(WCAG 正文要 4.5:1),等于看不见。
 //
-// 斜率是按对比度反推的,不是拍脑袋:在上述最坏情况(壁纸纯白)下,补到 ~72% 才能让 --muted 回到 4.5:1、
-// --faint 回到 3:1。所以 35% 以下不补(保持原本验证过的通透观感),85% 时给满 78%,再往上封顶。
-// 代价是可见度拉满时侧栏/检视区基本不透壁纸了 —— 中间会话区仍是全透的,壁纸该看还是看得见。
-export function chromeVeil(opacity: number): string {
+// ★为什么是【整窗一层】而不是只压暗四周面板:先试过后者(只给 sidebar/inspector/titlebar/statusbar 补底色),
+// 结果中间会话区仍是纯白、四周变深 —— 整窗裂成三条色带,用户一眼就看出"中间白外层暗"。实测亮度差 0.72。
+// 蒙版做成一整层、跨越所有列之后,面板与会话区的亮度差只有 0.036,接缝消失,而两边都够读。
+//
+// 强度不是拍的:反推自"亮壁纸最多还能贡献多少"。设上限 CAP —— 壁纸的【有效可见度】= bgOpacity×(1−scrim)
+// 不超过 CAP,于是 scrim = 1 − CAP/bgOpacity。CAP=0.30 是解出来的:再高正文就掉到 4.5:1 以下。
+// 所以可见度调得越高,蒙版跟着变厚,净效果是"亮壁纸在深色主题下有个可读性上限"。可见度本来就低于 CAP 时
+// 蒙版为 0,完全不介入。
+//
+// 只在两个条件同时成立时生效:壁纸确实偏亮(取色器的 base==='light' 判定)+ 当前是深色系主题。
+// 深色壁纸或浅色主题都返回 0 —— 浅色主题是深色字,压在亮壁纸上本来就读得清(global.css 里那条 text-shadow
+// 排除浅色,是同一个道理)。
+export const BRIGHT_WALLPAPER_CAP = 0.3
+export function bgScrim(opacity: number, wallpaperIsBright: boolean, themeIsDark: boolean): number {
+  if (!wallpaperIsBright || !themeIsDark) return 0
   const o = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 0.35
-  const t = Math.min(1, Math.max(0, (o - 0.35) / 0.5))
-  return `${Number((t * 78).toFixed(1))}%`
+  if (o <= BRIGHT_WALLPAPER_CAP) return 0
+  return Number((1 - BRIGHT_WALLPAPER_CAP / o).toFixed(3))
 }
 
 export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): void {
@@ -123,8 +131,12 @@ export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): vo
   // 见 global.css .app-bg-layer 下方注释:浅色把图混向近白 → 明度不降、彩度被等比抹掉。按可见度反比补回,
   // 可见度 100% 时为 1(不动),越淡补得越多,上限 1.9(可见度 5% 时)。
   root.style.setProperty('--app-bg-sat', String(bgSaturation(a.bgOpacity ?? 0.35)))
-  // 可见度越高,chrome 面板越要补自身底色,否则小字在亮壁纸上失明(见 chromeVeil 说明)。
-  root.style.setProperty('--chrome-veil', chromeVeil(a.bgOpacity ?? 0.35))
+  // 亮壁纸 + 深色主题的可读性蒙版(见 bgScrim 说明)。palette 只用来判壁纸明暗 —— 就算「跟随壁纸配色」是关的,
+  // App 也会把取色结果传进来,所以这里拿得到明暗判定而不会影响配色。
+  root.style.setProperty(
+    '--app-bg-scrim',
+    String(bgScrim(a.bgOpacity ?? 0.35, palette?.base === 'light', theme !== 'light'))
+  )
   // 壁纸纵向焦点:按当前图片 URL 从 bgPositions 查其记忆的裁剪位置(缺省略偏上),供三处 cover 图层
   // (.app-bg-layer / .chat::before / .home-bg-layer)统一消费。见 schema.ts bgPositions 说明。
   const bgPos = a.bgPositions?.[a.bgImage] ?? DEFAULT_BG_POSITION

@@ -116,17 +116,18 @@ html[data-bg-scope="app"] :is(
 ) {
   background: color-mix(in srgb, var(--bg) 50%, transparent);
 }
-/* 壁纸可见度很高时,给 chrome 面板补一层自身底色 —— 否则侧栏 / 检视区里的小字(阶段名、模型名、路径、
-   会话名,全是 muted/faint)就是【浅色字压在亮壁纸上】,直接失明。补的量由 --chrome-veil 给(applyTheme 按
-   可见度算,35% 以下为 0,不动原观感),补的颜色是 var(--bg-2) —— 主题/皮肤自带,深色补深、浅色补浅。
-   为什么用 background-image 而不是 background:background-image 画在 background-color 之上,于是这层补色
-   是【叠加】在 glass.css / 上面那条已有的面板底色之上,不用去改那些各自调过的 alpha,也不会互相打架。
-   linear-gradient 写两个同色停靠点 = 一块纯色(单参数写法在部分解析器上有歧义,这里写死两个)。 */
-html[data-bg-scope="app"] :is(.sidebar, .inspector, .titlebar, .statusbar) {
-  background-image: linear-gradient(
-    color-mix(in srgb, var(--bg-2) var(--chrome-veil, 0%), transparent),
-    color-mix(in srgb, var(--bg-2) var(--chrome-veil, 0%), transparent)
-  );
+/* 亮壁纸 + 深色主题的可读性蒙版:一整层 var(--bg),铺在壁纸【之上】、所有内容【之下】。
+   alpha 由 applyTheme 的 --app-bg-scrim 给(壁纸不亮或浅色主题时为 0,这层就完全不存在)。
+   ★必须是【整窗一层】:只压暗四周面板试过一版,中间会话区仍是白的,整窗裂成三条色带(实测亮度差 0.72,
+   用户一眼就看出"中间白外层暗")。跨所有列的一层之后亮度差只剩 0.036,接缝消失。详见 applyTheme.bgScrim。
+   与 .app-bg-layer 同为 z-index:-1,靠 DOM 顺序排在它后面 → 画在壁纸之上、内容之下。 */
+.app-bg-scrim { position: absolute; inset: 0; z-index: -1; display: none; pointer-events: none;
+  background: var(--bg); opacity: var(--app-bg-scrim, 0); border-radius: 12px; }
+[data-bg-scope="app"] .app-bg-scrim { display: block; }
+/* 「仅会话区」范围:壁纸画在 div.chat::before,蒙版就得跟到同一个层里去。 */
+[data-bg-scope="chat"] div.chat::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: var(--bg); opacity: var(--app-bg-scrim, 0);
 }
 /* 铃铛红标外圈那道近黑分隔环(border 2px --bg-2,壁纸下成黑圈)→ 换成一圈淡色半透明,红标与壁纸之间干净过渡。 */
 html[data-bg-scope="app"]:not([data-theme="light"]) .tb-bell .nb-badge {

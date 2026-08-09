@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { applyTheme, onAccentFor, bgSaturation, chromeVeil } from './applyTheme'
+import { applyTheme, onAccentFor, bgSaturation, bgScrim, BRIGHT_WALLPAPER_CAP } from './applyTheme'
 import type { Appearance } from '@shared/types'
 
 const base: Appearance = { theme: 'dark', accent: 'blue', autoWallpaperTheme: false, vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
@@ -216,31 +216,43 @@ describe('applyTheme', () => {
     })
   })
 
-  // 壁纸可见度很高时给 chrome 面板补一层自身底色,否则浅色小字压在亮壁纸上失明。
-  describe('chromeVeil(壁纸可见度 → chrome 面板补色)', () => {
-    it('可见度 35% 及以下不补(保持原观感)', () => {
-      expect(chromeVeil(0.35)).toBe('0%')
-      expect(chromeVeil(0.1)).toBe('0%')
+  // 亮壁纸 + 深色主题的整窗可读性蒙版。只压暗四周面板的旧做法会把整窗裂成"中间白外层暗"的色带,
+  // 所以这层必须是整窗一层,且只在"壁纸偏亮 + 深色主题"时才出现。
+  describe('bgScrim(亮壁纸 + 深色主题的可读性蒙版)', () => {
+    it('壁纸不亮时不上蒙版(深色壁纸下高可见度本来就能读)', () => {
+      expect(bgScrim(0.85, false, true)).toBe(0)
     })
-    it('可见度越高补得越多,且单调递增', () => {
-      expect(parseFloat(chromeVeil(0.85))).toBeGreaterThan(parseFloat(chromeVeil(0.6)))
-      expect(parseFloat(chromeVeil(0.6))).toBeGreaterThan(parseFloat(chromeVeil(0.4)))
+    it('浅色主题不上蒙版(深色字压亮壁纸本来就读得清)', () => {
+      expect(bgScrim(0.85, true, false)).toBe(0)
     })
-    it('补色有上限,面板不会变成不透明实色', () => {
-      expect(parseFloat(chromeVeil(1))).toBeLessThanOrEqual(78)
-      expect(parseFloat(chromeVeil(2))).toBeLessThanOrEqual(78)
+    it('可见度本来就低于上限时不介入', () => {
+      expect(bgScrim(BRIGHT_WALLPAPER_CAP, true, true)).toBe(0)
+      expect(bgScrim(0.2, true, true)).toBe(0)
     })
-    // 斜率不是随手定的:壁纸最坏情况(大面积纯白)下,补到 ~72% 才能把 --muted 拉回 WCAG 的 4.5:1。
-    // 用户实际用的就是 85% 可见度 + 一张中位亮度=纯白的插画壁纸,所以这一档必须够厚,否则等于没修。
-    it('可见度 85%(用户实际值)补到 72% 以上,才够把小字拉回可读', () => {
-      expect(parseFloat(chromeVeil(0.85))).toBeGreaterThanOrEqual(72)
+    it('把亮壁纸的【有效可见度】压到上限:bgOpacity×(1−scrim) === CAP', () => {
+      for (const o of [0.5, 0.7, 0.85, 1]) {
+        expect(o * (1 - bgScrim(o, true, true))).toBeCloseTo(BRIGHT_WALLPAPER_CAP, 2)
+      }
+    })
+    it('可见度越高蒙版越厚,但永远不到全不透明', () => {
+      expect(bgScrim(0.85, true, true)).toBeGreaterThan(bgScrim(0.5, true, true))
+      expect(bgScrim(1, true, true)).toBeLessThan(1)
     })
     it('非法输入不产出 NaN', () => {
-      expect(chromeVeil(Number.NaN)).toBe('0%')
+      expect(Number.isFinite(bgScrim(Number.NaN, true, true))).toBe(true)
     })
-    it('applyTheme 把它写进 --chrome-veil', () => {
-      applyTheme({ ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app', bgOpacity: 0.85 })
-      expect(document.documentElement.style.getPropertyValue('--chrome-veil')).toBe(chromeVeil(0.85))
+    it('applyTheme 只把明暗判定用于蒙版,不因此改配色(开关关着时 palette 不接管颜色)', () => {
+      const wp = { ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app' as const, bgOpacity: 0.85, autoWallpaperTheme: false }
+      applyTheme(wp, { base: 'light', hueBg: 200, chromaBg: 0.02, hueAccent: 90 })
+      const r = document.documentElement
+      expect(r.style.getPropertyValue('--app-bg-scrim')).toBe(String(bgScrim(0.85, true, true)))
+      // 开关是关的 → 中性色不该被壁纸接管
+      expect(r.style.getPropertyValue('--bg')).toBe('')
+    })
+    it('壁纸偏暗时 applyTheme 写 0', () => {
+      const wp = { ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app' as const, bgOpacity: 0.85, autoWallpaperTheme: false }
+      applyTheme(wp, { base: 'dark', hueBg: 200, chromaBg: 0.02, hueAccent: 90 })
+      expect(document.documentElement.style.getPropertyValue('--app-bg-scrim')).toBe('0')
     })
   })
 

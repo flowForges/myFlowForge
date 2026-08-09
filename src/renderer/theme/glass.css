@@ -64,6 +64,18 @@
    会话模式圆点 span.sd.chat(chat.css 开头有同一条踩坑记录),会把检视区的轻染一并抹掉。 */
 html[data-theme="light"][data-glass="on"][data-bg-scope="app"] div.chat,
 html[data-theme="light"][data-glass="on"][data-bg-scope="app"] #view-home { background: transparent; }
+/* ★深色系 + 整窗壁纸时,四周 chrome 面板的轻染必须【压深】而不是【提亮】。
+   上面几条给深色的 .sidebar/.inspector/.titlebar/.statusbar 用的是 oklch(54%…) 这种中灰 —— 那是为了在
+   【纯深色底】上把面板从近黑里提出来。可一旦底下是亮壁纸,同一个中灰就变成往上提亮:面板比会话区还白,
+   浅色小字彻底没救(实测 --muted 只有 2.77:1,连蒙版都救不回来)。这里换成 var(--bg-2) 压深,
+   面板与会话区的亮度差只剩 0.036 —— 既读得出"这是 chrome",又不裂成色带。
+   (浅色主题不适用:它是深色字,面板提亮反而更好读,所以 :not([data-theme="light"]) 排除。) */
+html[data-bg-scope="app"][data-glass="on"]:not([data-theme="light"]) :is(.sidebar, .inspector) {
+  background: color-mix(in srgb, var(--bg-2) 30%, transparent);
+}
+html[data-bg-scope="app"][data-glass="on"]:not([data-theme="light"]) :is(.titlebar, .statusbar) {
+  background: color-mix(in srgb, var(--bg-2) 24%, transparent);
+}
 /* 内部各面板(检查器 tab 条、编排卡、变更统计、文件树、输入框)只做轻染,不再各自 backdrop-filter
    —— 整窗只有 .window 一层模糊,内层加自己的 blur 会被窗体的 isolation 隔断,反而再糊一遍变实色 */
 [data-glass="on"] .insp-tabs,

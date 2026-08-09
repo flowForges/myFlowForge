@@ -337,7 +337,9 @@ export function App() {
   // setting only takes effect on the next restart (the toggle copy says so).
   const launchVibrancy = useRef<boolean | null>(null)
   // 壁纸自动配色:开关打开时从当前壁纸取调色板(异步取样 + 缓存),交给 applyTheme 接管整套配色。
-  const wallpaperPalette = useWallpaperPalette(settings?.appearance)
+  // always:true —— 即便「跟随壁纸配色」是关的也算一份。applyTheme 只在开关打开时拿它当配色用,关着时
+  // 仅取其明暗判定(base),用来决定亮壁纸下要不要上可读性蒙版。结果有缓存,代价可忽略。
+  const wallpaperPalette = useWallpaperPalette(settings?.appearance, { always: true })
   useEffect(() => {
     if (!settings) return
     if (launchVibrancy.current === null) launchVibrancy.current = settings.appearance.vibrancy
@@ -587,6 +589,9 @@ export function App() {
       {/* App-wide background image layer (shown only when appearance.bgScope === 'app'; the chat-only
           scope is drawn by .chat::before instead). Fixed, behind all chrome, image + opacity from CSS vars. */}
       <div className="app-bg-layer" aria-hidden="true" />
+      {/* 亮壁纸 + 深色主题的可读性蒙版。必须紧跟在 .app-bg-layer 之后 —— 两者同为 z-index:-1,靠 DOM 顺序
+          决定谁画在上面。整窗一层(不是只压四周面板),否则会裂成"中间白、外层暗"的色带。见 global.css。 */}
+      <div className="app-bg-scrim" aria-hidden="true" />
       {/* 主题皮肤氛围层:与 .app-bg-layer 同层次(--bg 之上、内容之下),仅在 data-skin 激活时由 skins.css
           显示对应 motif。纯装饰、不吃事件。 */}
       <div className="skin-motif" aria-hidden="true" />
