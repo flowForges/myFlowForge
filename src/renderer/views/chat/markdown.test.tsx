@@ -74,7 +74,9 @@ describe('Markdown', () => {
   })
   it('renders a horizontal rule and links', () => {
     expect(html('---')).toContain('<hr>')
-    expect(html('[站点](https://www.iphpt.com)')).toContain('<a href="https://www.iphpt.com"')
+    // 查 DOM 而不是拼 HTML 字符串:<a> 现在还带 class(见 MdLink),按属性顺序硬匹配一改就碎。
+    const { container } = render(<Markdown text={'[站点](https://www.iphpt.com)'} />)
+    expect(container.querySelector('a')?.getAttribute('href')).toBe('https://www.iphpt.com')
   })
   it('separates paragraphs on blank lines', () => {
     const out = html('first\n\nsecond')
@@ -209,5 +211,82 @@ describe('renderMarkdown (pure fn)', () => {
     expect(items[0].textContent).toBe('item one')
     expect(items[1].textContent).toBe('item two')
     expect(container.querySelector('pre > code')?.textContent).toBe('console.log(1)')
+  })
+})
+
+// ---- 链接:可点击跳转 + 可复制 ----------------------------------------------
+// 模型经常直接甩一个裸地址(「可以在本机打开这个地址 review: http://localhost:8766/」),以前那就是一段
+// 普通文字,点不了也没法一键复制。而 [文字](url) 虽然渲染成 <a target=_blank>,主进程从没设过
+// setWindowOpenHandler —— 点了会开一个 Electron 裸窗口,不是用户的浏览器。
+
+describe('Markdown 链接', () => {
+  const setupForge = () => {
+    const openExternal = vi.fn(async () => ({ ok: true }))
+    ;(window as any).forge = { openExternal }
+    return openExternal
+  }
+
+  it('裸 URL 自动变成链接(含 localhost 带端口)', () => {
+    const { container } = render(<Markdown text={'可以在本机打开这个地址 review: http://localhost:8766/'} />)
+    const a = container.querySelector('a')
+    expect(a?.getAttribute('href')).toBe('http://localhost:8766/')
+    expect(a?.textContent).toBe('http://localhost:8766/')
+  })
+
+  it('结尾的收尾标点归正文,不吃进 URL', () => {
+    const one = render(<Markdown text={'见 https://example.com/a。'} />).container
+    expect(one.querySelector('a')?.getAttribute('href')).toBe('https://example.com/a')
+    expect(one.textContent).toContain('。')
+    const two = render(<Markdown text={'见 https://example.com/a, 然后'} />).container
+    expect(two.querySelector('a')?.getAttribute('href')).toBe('https://example.com/a')
+    const three = render(<Markdown text={'(见 https://example.com/a)'} />).container
+    expect(three.querySelector('a')?.getAttribute('href')).toBe('https://example.com/a')
+  })
+
+  it('反引号里的 URL 不链接化 —— 那是代码,不是可点的东西', () => {
+    const { container } = render(<Markdown text={'执行 `curl http://localhost:8766/` 看看'} />)
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.querySelector('code')?.textContent).toBe('curl http://localhost:8766/')
+  })
+
+  it('[文字](url) 不被二次链接化,只出一个 <a>', () => {
+    const { container } = render(<Markdown text={'见 [站点](https://example.com/a) 完'} />)
+    expect(container.querySelectorAll('a').length).toBe(1)
+    expect(container.querySelector('a')?.textContent).toBe('站点')
+  })
+
+  it('★ 点 http 链接走系统浏览器,并且阻止渲染进程自己导航', () => {
+    const openExternal = setupForge()
+    const { container } = render(<Markdown text={'http://localhost:8766/'} />)
+    const a = container.querySelector('a')!
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true })
+    a.dispatchEvent(ev)
+    expect(openExternal).toHaveBeenCalledWith('http://localhost:8766/')
+    // 不 preventDefault 的话 Electron 会开一个裸窗口 / 把整个 SPA 导航走
+    expect(ev.defaultPrevented).toBe(true)
+  })
+
+  it('★ 相对路径链接点了不导航也不调 openExternal —— 否则整个 app 会被导航走白屏', () => {
+    const openExternal = setupForge()
+    const { container } = render(<Markdown text={'改动主要在 [index.html](index.html)'} />)
+    const a = container.querySelector('a')!
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true })
+    a.dispatchEvent(ev)
+    expect(openExternal).not.toHaveBeenCalled()
+    expect(ev.defaultPrevented).toBe(true)
+  })
+
+  it('http 链接带复制按钮,复制的是完整地址;相对路径不带', async () => {
+    setupForge()
+    const writeText = vi.fn(async () => {})
+    Object.assign(navigator, { clipboard: { writeText } })
+    const { container } = render(<Markdown text={'http://localhost:8766/path'} />)
+    const btn = container.querySelector('.md-link-copy') as HTMLButtonElement
+    expect(btn).toBeTruthy()
+    fireEvent.click(btn)
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('http://localhost:8766/path'))
+
+    const rel = render(<Markdown text={'[index.html](index.html)'} />).container
+    expect(rel.querySelector('.md-link-copy')).toBeNull()
   })
 })

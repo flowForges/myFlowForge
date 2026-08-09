@@ -82,6 +82,20 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .msg-body em { font-style: italic; }
 .msg-body a { color: var(--accent); text-decoration: none; }
 .msg-body a:hover { text-decoration: underline; }
+/* 链接 + 复制按钮(见 MdLink)。整块 inline 参与正文排版,长地址跟着断行。 */
+.md-link-wrap { display: inline; }
+/* 复制按钮**常驻占位**、只用 opacity 显隐 —— hover 时才撑开宽度会让整段文字跳一下。
+   宽度按图标 12px + 左边距算死,不随主题字号变(它是个图标,不是文字)。 */
+.md-link-copy {
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: baseline;
+  width: 14px; margin-left: 2px; color: var(--faint); opacity: 0; transition: opacity .13s, color .13s;
+}
+.md-link-wrap:hover .md-link-copy { opacity: 1; }
+.md-link-copy:hover { color: var(--accent); }
+.md-link-copy.done { opacity: 1; color: var(--ok); }
+.md-link-copy svg { width: 12px; height: 12px; }
+/* CopyButton 自带「复制 / 已复制」文字,行内链接这里只要图标 —— 有文字就把句子撑变形了。 */
+.md-link-copy > span { display: none; }
 .msg-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .msg-body blockquote { border-left: 2px solid var(--border-2); padding-left: 12px; margin: 8px 0; color: var(--muted); }
 .msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }

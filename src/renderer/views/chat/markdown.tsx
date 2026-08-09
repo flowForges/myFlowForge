@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CodeBlock, TableBlock, QuoteBlock } from './blocks'
+import { MdLink } from './MdLink'
 import { renderHtmlFragment, newFragmentScan, feedFragment, BLOCK_TAGS } from './htmlFragment'
 
 // Base directory for resolving RELATIVE markdown image paths (e.g. a design doc's `![](./diagram.png)`).
@@ -48,6 +49,13 @@ export const ChatHtmlCtx = createContext<boolean>(false)
 // 用户会看见裸标签,所以行内也走同一套白名单(块级标签不在这里,它们由块级识别接手)。
 const INLINE_HTML = /<(span|strong|b|em|i|code|small|del|sup|sub)\b[^>]*>[\s\S]*?<\/\1>/i
 
+// 裸 URL 自动链接化。地址正文里排除掉空白、尖括号引号、中文标点和汉字 —— 模型写「打开http://x/然后」
+// 时中文紧贴着地址,不排除就会把后半句话吞进链接。最后一个字符另外再排除收尾标点:「见 https://x/a。」
+// 的句号属于句子;代价是真以 `)` 结尾的地址(维基百科那种)会掉一个右括号,换来的是 `(见 https://x/a)`
+// 这种常见写法不吃括号 —— 后者在对话里多得多。
+const URL_BODY = '\\s<>"\'`（）【】「」，。、；：！？\\u4e00-\\u9fff'
+const BARE_URL = new RegExp(`https?://[^${URL_BODY}]*[^${URL_BODY}.,;:!?)\\]}]`)
+
 // Split a run of text into inline tokens. Order matters: code first (it suppresses
 // other markup inside), then links, then bold, then italic.
 export function renderInline(text: string, keyBase = 'i', allowHtml = false): ReactNode[] {
@@ -60,7 +68,13 @@ export function renderInline(text: string, keyBase = 'i', allowHtml = false): Re
     // Image BEFORE link: `![alt](src)` starts one char before the `[…](…)` a link would match, and the
     // earliest-index winner picks it — so it renders as an <img>, not a stray '!' + link.
     { re: /!\[([^\]]*)\]\(([^)\s]+)\)/, make: m => <MdImage key={`${keyBase}-${k++}`} alt={m[1]} src={m[2]} /> },
-    { re: /\[([^\]]+)\]\(([^)\s]+)\)/, make: m => <a key={`${keyBase}-${k++}`} href={m[2]} target="_blank" rel="noreferrer">{m[1]}</a> },
+    { re: /\[([^\]]+)\]\(([^)\s]+)\)/, make: m => <MdLink key={`${keyBase}-${k++}`} href={m[2]}>{m[1]}</MdLink> },
+    // 裸 URL 自动链接化。它与 code / [](…) 的优先级**不由这里的数组顺序决定** —— 下面的循环挑的是
+    // 「m.index 最小」的那条规则:`` `curl http://x` `` 里 code 从反引号处命中(下标更小)所以赢,
+    // `[文字](http://x)` 里链接从 `[` 处命中所以赢。两条各有一条测试钉着;把这条规则挪到数组最前面
+    // 测试依然全绿(变异验证过),所以别指望靠调顺序来改优先级。
+    // 结尾的收尾标点(中英文都算)剥回正文:「见 https://x/a。」里的句号属于句子,不属于地址。
+    { re: BARE_URL, make: m => <MdLink key={`${keyBase}-${k++}`} href={m[0]}>{m[0]}</MdLink> },
     { re: /\*\*([^*]+)\*\*/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`, allowHtml)}</strong> },
     { re: /__([^_]+)__/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`, allowHtml)}</strong> },
     { re: /\*([^*]+)\*/, make: m => <em key={`${keyBase}-${k++}`}>{m[1]}</em> },
