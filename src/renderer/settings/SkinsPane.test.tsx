@@ -14,8 +14,31 @@ const base: Appearance = {
 const first = BUILTIN_SKINS[0]
 const second = BUILTIN_SKINS[1]
 const cardFor = (name: string): HTMLElement => screen.getByTitle(new RegExp(`「${name}」`))
+// 「跟随壁纸配色」现在整块就是一张卡(不再是右侧那个小开关),按可访问名字取。
+const autoCard = (): HTMLElement => screen.getByRole('button', { name: /跟随壁纸配色/ })
 
 describe('SkinsPane — 「跟随壁纸配色」与皮肤卡互斥,而不是一道前置开关', () => {
+  it('「跟随壁纸配色」整块可点(不再需要去够右侧那个开关)', () => {
+    const onChange = vi.fn()
+    render(<SkinsPane appearance={{ ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app' }} onChange={onChange} />)
+    // 面板里除了它自己不该再有一个单独的开关控件
+    expect(screen.queryByLabelText('跟随壁纸配色')).toBeNull()
+    fireEvent.click(autoCard())
+    expect(onChange).toHaveBeenCalledWith({ autoWallpaperTheme: true, activeSkin: null })
+  })
+
+  it('没有壁纸时这张卡不可点(取不到色)', () => {
+    render(<SkinsPane appearance={base} onChange={() => {}} />)
+    expect(autoCard()).toBeDisabled()
+  })
+
+  it('选中态用 aria-pressed 表达,和皮肤卡一致', () => {
+    const { rerender } = render(<SkinsPane appearance={{ ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app' }} onChange={() => {}} />)
+    expect(autoCard()).toHaveAttribute('aria-pressed', 'false')
+    rerender(<SkinsPane appearance={{ ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app', autoWallpaperTheme: true }} onChange={() => {}} />)
+    expect(autoCard()).toHaveAttribute('aria-pressed', 'true')
+  })
+
   it('跟随壁纸开着时,皮肤卡仍可点击(不再 disabled)', () => {
     render(<SkinsPane appearance={{ ...base, autoWallpaperTheme: true }} onChange={() => {}} />)
     expect(cardFor(first.name)).not.toBeDisabled()
@@ -36,14 +59,14 @@ describe('SkinsPane — 「跟随壁纸配色」与皮肤卡互斥,而不是一�
   it('打开跟随壁纸时清掉手选皮肤(否则画廊亮着一张、生效的却是另一套)', () => {
     const onChange = vi.fn()
     render(<SkinsPane appearance={{ ...base, activeSkin: first.id, bgImage: 'forge-bg://x.jpg', bgScope: 'app' }} onChange={onChange} />)
-    fireEvent.click(screen.getByLabelText('跟随壁纸配色'))
+    fireEvent.click(autoCard())
     expect(onChange).toHaveBeenCalledWith({ autoWallpaperTheme: true, activeSkin: null })
   })
 
   it('关掉跟随壁纸不动 activeSkin(它此刻本来就是空的)', () => {
     const onChange = vi.fn()
     render(<SkinsPane appearance={{ ...base, autoWallpaperTheme: true, bgImage: 'forge-bg://x.jpg', bgScope: 'app' }} onChange={onChange} />)
-    fireEvent.click(screen.getByLabelText('跟随壁纸配色'))
+    fireEvent.click(autoCard())
     expect(onChange).toHaveBeenCalledWith({ autoWallpaperTheme: false })
   })
 

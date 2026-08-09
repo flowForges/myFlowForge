@@ -37,8 +37,17 @@ export function SkinsPane({ appearance, onChange }: SkinsPaneProps) {
         >恢复默认外观</button>
       </div>
 
-      {/* 跟随壁纸配色:算出来的「自动皮肤」。壁纸只提供两个色相,明度阶梯照抄已验证的内置主题,故不会失明。 */}
-      <div className={`wp-auto${autoOn ? ' on' : ''}`}>
+      {/* 跟随壁纸配色:算出来的「自动皮肤」。壁纸只提供两个色相,明度阶梯照抄已验证的内置主题,故不会失明。
+          整块就是一张卡 —— 和下面的皮肤卡完全同构:点整块即选中,再点一次取消,选中态是同一圈强调色描边。
+          原先它是「一句说明 + 右侧开关」,和皮肤卡两种交互混在同一组里,用户得先去够那个小开关。 */}
+      <button
+        className={`wp-auto${autoOn ? ' on' : ''}`}
+        aria-pressed={autoOn}
+        disabled={!src}
+        title={!src ? '需要先在「壁纸背景」页设一张壁纸' : autoOn ? '再点一次取消壁纸配色' : '改用壁纸配色'}
+        // 选中时清掉手选皮肤:两者互斥,否则画廊里还亮着一张卡、实际生效的却是壁纸配色。
+        onClick={() => onChange(autoOn ? { autoWallpaperTheme: false } : { autoWallpaperTheme: true, activeSkin: null })}
+      >
         <div className="wp-auto-row">
           <div className="info">
             <div className="t">跟随壁纸配色</div>
@@ -47,14 +56,6 @@ export function SkinsPane({ appearance, onChange }: SkinsPaneProps) {
               {!src && <b style={{ color: 'var(--fg-2)' }}> · 需要先在「壁纸背景」页设一张壁纸</b>}
             </div>
           </div>
-          <button
-            className={`toggle${autoOn ? ' on' : ''}`}
-            aria-label="跟随壁纸配色"
-            aria-pressed={autoOn}
-            disabled={!src}
-            // 打开时清掉手选皮肤:两者互斥,否则画廊里还亮着一张卡、实际生效的却是壁纸配色。
-            onClick={() => onChange(autoOn ? { autoWallpaperTheme: false } : { autoWallpaperTheme: true, activeSkin: null })}
-          />
         </div>
         {src && (
           <div className="wp-auto-prev">
@@ -73,7 +74,7 @@ export function SkinsPane({ appearance, onChange }: SkinsPaneProps) {
               : <span className="wp-auto-meta">正在从壁纸取色…</span>}
           </div>
         )}
-      </div>
+      </button>
 
       {autoOn && (
         <p className="skins-sub" style={{ margin: '14px 0 -2px' }}>

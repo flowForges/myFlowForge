@@ -198,9 +198,14 @@
   background: var(--surface); color: var(--fg-2); font-size: 12.5px; cursor: pointer; white-space: nowrap; }
 .skin-reset:hover:not(:disabled) { border-color: var(--border-2); }
 .skin-reset:disabled { opacity: .45; cursor: default; }
-/* 跟随壁纸配色(算出来的「自动皮肤」),放在画廊之上、和皮肤卡同级 */
-.wp-auto { border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface);
+/* 跟随壁纸配色(算出来的「自动皮肤」),放在画廊之上、和皮肤卡同级 —— 它【本身就是一张卡】:
+   整块可点、选中态与皮肤卡同款(强调色描边)。所以要显式写 width/text-align:<button> 默认是
+   inline-block + 居中,不加这两条整块会缩成一团并居中。 */
+.wp-auto { width: 100%; text-align: left; display: block; cursor: pointer;
+  border: 1.5px solid var(--border); border-radius: 12px; background: var(--surface);
   padding: 12px 14px; margin-bottom: 16px; transition: border-color .14s ease, box-shadow .14s ease; }
+.wp-auto:hover:not(:disabled):not(.on) { border-color: var(--border-2); }
+.wp-auto:disabled { cursor: default; opacity: .55; }
 .wp-auto.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .wp-auto-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .wp-auto-row .info .t { font-size: 13.5px; color: var(--fg); font-weight: 600; }
