@@ -432,6 +432,13 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   padding: 4px 8px; border-radius: 6px; background: var(--accent-dim); cursor: pointer; }
 .req-doc-copy:hover { filter: brightness(1.1); }
 .req-sub code, .req-file { font-family: var(--mono); font-size: 11.5px; background: var(--bg); padding: 1px 6px; border-radius: 5px; color: var(--fg-2); }
+/* 权限确认卡里的 where = 要执行的东西。短的时候是个文件路径(贴身的小胶囊,保持原样);但 Bash 的 where 是
+   整条命令,claude 经常发来几百字符的一行 —— 原样渲染就是一坨挤满整张卡、还得从头读到尾的字墙(真机上
+   一条命令占了 12 行)。这里给它加上:保留原有换行、超长处可断行、最多约 8 行然后自己滚动。
+   inline-block 保证短路径仍是那个贴身胶囊,不会变成一条通栏。 */
+.req-file { display: inline-block; max-width: 100%; vertical-align: top;
+  white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6;
+  max-height: 8.4em; overflow: auto; padding: 4px 7px; }
 .req-note { font-size: 12px; line-height: 1.5; color: var(--accent); background: var(--accent-dim); border-radius: 6px; padding: 5px 8px; margin-bottom: 7px; }
 .req-actions { display: flex; gap: 8px; margin-top: 13px; }
 .req-actions button { height: 32px; padding: 0 15px; border-radius: 8px; font-size: 12.5px; font-weight: 600; transition: .13s; }

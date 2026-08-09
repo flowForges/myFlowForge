@@ -24,7 +24,10 @@ export function ReqCard({ action, onResolve, onOpenDoc, onSupplement }: ReqCardP
       <div className="req-head">
         <span className="req-from">
           <span className={`pdot ${provClass}`} />
-          <span className="who">{action.agentName}</span> 子代理
+          {/* agentName 就是完整称呼,后面不再硬接「子代理」三个字。这条卡片早期只服务真正的子代理,所以把
+              「子代理」写死在这里;后来主代理的权限确认(agentName='主代理')、委派门(agentName='委派子代理')
+              也复用了它,于是渲染成「主代理 子代理」「委派子代理 子代理」这种自相矛盾的抬头。 */}
+          <span className="who">{action.agentName}</span>
           {action.role ? <span className="role"> · {action.role}</span> : null}
         </span>
         <span className="req-kind">

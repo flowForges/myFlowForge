@@ -64,6 +64,17 @@
    会话模式圆点 span.sd.chat(chat.css 开头有同一条踩坑记录),会把检视区的轻染一并抹掉。 */
 html[data-theme="light"][data-glass="on"][data-bg-scope="app"] div.chat,
 html[data-theme="light"][data-glass="on"][data-bg-scope="app"] #view-home { background: transparent; }
+/* 浅色 + 整窗壁纸:四周面板那层 40%/38% 的白直接压在壁纸上 —— 中间会话区是全透的,两边却隔着一层白,
+   于是"两边有蒙层、中间清晰"。这层白原本是为了【没有壁纸】时把三列从桌面材质里托出来,有壁纸时不需要那么厚。
+   算过账:白 40% 时面板与会话区的亮度差是 0.113(肉眼一眼就看得出),降到 16% 只剩 0.044 —— 与深色那轮
+   定的"接缝消失"标准(0.036)同一量级,而浅色是深色字,正文对比度仍有 8.5:1,可读性毫无损失。
+   顶栏/底栏再薄一档,它们本来就窄,厚了更像两条横杠。 */
+html[data-theme="light"][data-glass="on"][data-bg-scope="app"] :is(.sidebar, .inspector) {
+  background: oklch(100% 0 0 / .16);
+}
+html[data-theme="light"][data-glass="on"][data-bg-scope="app"] :is(.titlebar, .statusbar) {
+  background: oklch(100% 0 0 / .13);
+}
 /* ★深色系 + 整窗壁纸时,四周 chrome 面板的轻染必须【压深】而不是【提亮】。
    上面几条给深色的 .sidebar/.inspector/.titlebar/.statusbar 用的是 oklch(54%…) 这种中灰 —— 那是为了在
    【纯深色底】上把面板从近黑里提出来。可一旦底下是亮壁纸,同一个中灰就变成往上提亮:面板比会话区还白,

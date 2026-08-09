@@ -197,3 +197,34 @@ describe('ReqCard', () => {
     expect(file?.textContent).toBe('src/styles/tokens.css')
   })
 })
+
+// ★真机:主代理的权限确认卡抬头渲染成「主代理 子代理」。这张卡最早只服务真正的子代理,于是把「子代理」
+// 三个字硬写在 agentName 后面;后来主代理确认门(agentName='主代理')和委派门(agentName='委派子代理')
+// 也复用了它,抬头就变成自相矛盾的叠词。agentName 应当就是完整称呼。
+describe('ReqCard 抬头 —— agentName 就是完整称呼,不再硬接「子代理」', () => {
+  const render1 = (agentName: string) => {
+    const action: PendingAction = { ...base, agentName, id: 'p9', kind: 'confirm', title: 'Bash 请求执行' }
+    return render(<ReqCard action={action} onResolve={() => {}} />)
+  }
+  it('主代理的确认卡不再显示「主代理 子代理」', () => {
+    const { container } = render1('主代理')
+    expect(container.querySelector('.req-from')!.textContent).not.toMatch(/主代理\s*子代理/)
+    expect(screen.getByText('主代理')).toBeInTheDocument()
+  })
+  it('委派门也不再叠成「委派子代理 子代理」', () => {
+    const { container } = render1('委派子代理')
+    expect(container.querySelector('.req-from')!.textContent).not.toMatch(/委派子代理\s*子代理/)
+  })
+})
+
+// where = 要执行的东西。Bash 的 where 是整条命令,claude 常发来几百字符的一行 —— 必须能滚动/断行,
+// 否则一张卡被字墙撑满(真机上一条命令占了 12 行)。
+describe('ReqCard 的 where 长命令', () => {
+  it('长命令原文一字不改地渲染在 .req-file 里(靠 CSS 断行+滚动,不做截断)', () => {
+    const cmd = 'cd /Users/you/work && ' + 'echo "x" && '.repeat(40) + 'git status'
+    const action: PendingAction = { ...base, id: 'p8', kind: 'confirm', title: 'Bash 请求执行', where: cmd }
+    const { container } = render(<ReqCard action={action} onResolve={() => {}} />)
+    const el = container.querySelector('.req-file')!
+    expect(el.textContent).toBe(cmd)
+  })
+})
