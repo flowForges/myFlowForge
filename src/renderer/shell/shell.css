@@ -348,12 +348,16 @@
 .ws-menu { position: relative; display: inline-flex; }
 .ws-menu-btn svg { width: 15px; height: 15px; }
 .ws-menu.open .ws-menu-btn { background: var(--surface-2); color: var(--fg-2); }
+/* Portal 到 <body>(见 WsMenu):侧栏 .sb-scroll 是 overflow-y:auto 的滚动容器,原来的 absolute
+   弹层排到列表靠下时会被它整块裁掉。改成 fixed + 由 JS 按 ⋯ 按钮的视口矩形定位(下方放不下就翻上去)。 */
 .ws-menu-pop {
-  position: absolute; top: calc(100% + 4px); right: 0; z-index: 80; min-width: 168px;
+  position: fixed; z-index: 200; min-width: 168px; overflow-y: auto;
   padding: 5px; border-radius: 10px; background: var(--surface); border: 1px solid var(--border-2);
   box-shadow: var(--shadow, 0 10px 30px rgba(0,0,0,.11)); display: flex; flex-direction: column; gap: 1px;
   animation: popIn .13s ease;
 }
+/* flex 列里的菜单项默认会被压扁(限高滚动时);钉死高度让它滚而不是挤。 */
+.ws-menu-pop .ws-menu-item { flex: 0 0 auto; }
 .ws-menu-item {
   display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 9px; border-radius: 7px;
   font-size: 12px; color: var(--fg-2); text-align: left; cursor: pointer; transition: background .12s, color .12s;
