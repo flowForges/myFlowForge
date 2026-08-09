@@ -116,6 +116,18 @@ html[data-bg-scope="app"] :is(
 ) {
   background: color-mix(in srgb, var(--bg) 50%, transparent);
 }
+/* 壁纸可见度很高时,给 chrome 面板补一层自身底色 —— 否则侧栏 / 检视区里的小字(阶段名、模型名、路径、
+   会话名,全是 muted/faint)就是【浅色字压在亮壁纸上】,直接失明。补的量由 --chrome-veil 给(applyTheme 按
+   可见度算,35% 以下为 0,不动原观感),补的颜色是 var(--bg-2) —— 主题/皮肤自带,深色补深、浅色补浅。
+   为什么用 background-image 而不是 background:background-image 画在 background-color 之上,于是这层补色
+   是【叠加】在 glass.css / 上面那条已有的面板底色之上,不用去改那些各自调过的 alpha,也不会互相打架。
+   linear-gradient 写两个同色停靠点 = 一块纯色(单参数写法在部分解析器上有歧义,这里写死两个)。 */
+html[data-bg-scope="app"] :is(.sidebar, .inspector, .titlebar, .statusbar) {
+  background-image: linear-gradient(
+    color-mix(in srgb, var(--bg-2) var(--chrome-veil, 0%), transparent),
+    color-mix(in srgb, var(--bg-2) var(--chrome-veil, 0%), transparent)
+  );
+}
 /* 铃铛红标外圈那道近黑分隔环(border 2px --bg-2,壁纸下成黑圈)→ 换成一圈淡色半透明,红标与壁纸之间干净过渡。 */
 html[data-bg-scope="app"]:not([data-theme="light"]) .tb-bell .nb-badge {
   border-color: color-mix(in oklab, var(--fg) 40%, transparent);

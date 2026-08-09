@@ -29,7 +29,7 @@ export const BUILTIN_SKINS: SkinMeta[] = [
   // id 保持 'lapis'(第一版按「青金石=群青+金」做的):用户已经把它存进 activeSkin 了,改 id 会让
   // KNOWN_SKIN_IDS 认不出来、皮肤静默失效。这里只改配色与文案 —— 「青金」取的是【青色+金色】。
   { id: 'lapis',  name: '青金',   en: 'Cyan & Gold', tag: '雅致 · 深色', base: 'dark',
-    vibe: '青瓷般的幽青底子上点鎏金,清而不冷、贵而不艳', swatches: ['#071c22', '#133038', '#edb64a', '#31c6c0'] },
+    vibe: '青瓷般的幽青底子上点鎏金,清而不冷、贵而不艳', swatches: ['#071c22', '#133038', '#f9d040', '#31c6c0'] },
 ]
 
 export const KNOWN_SKIN_IDS: ReadonlySet<string> = new Set(BUILTIN_SKINS.map(s => s.id))

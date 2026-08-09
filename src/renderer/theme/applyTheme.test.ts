@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { applyTheme, onAccentFor, bgSaturation } from './applyTheme'
+import { applyTheme, onAccentFor, bgSaturation, chromeVeil } from './applyTheme'
 import type { Appearance } from '@shared/types'
 
 const base: Appearance = { theme: 'dark', accent: 'blue', autoWallpaperTheme: false, vibrancy: true, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} }
@@ -194,6 +194,53 @@ describe('applyTheme', () => {
     it('applyTheme 把它写进 --app-bg-sat', () => {
       applyTheme({ ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app', bgOpacity: 0.3 })
       expect(document.documentElement.style.getPropertyValue('--app-bg-sat')).toBe(String(bgSaturation(0.3)))
+    })
+  })
+
+  // 皮肤生效时,皮肤自带的 accent 说了算 —— 预设强调色本来就被 skins.css 接管,自定义色走内联会压过皮肤,
+  // 导致「画廊色卡是金色、套上去却是自定义色」。两者行为拉齐。
+  describe('皮肤接管强调色', () => {
+    it('套皮肤时不写自定义强调色的内联值', () => {
+      applyTheme({ ...base, accent: 'custom', accentCustom: '#e60f82', activeSkin: 'lapis' })
+      expect(document.documentElement.style.getPropertyValue('--accent')).toBe('')
+      expect(document.documentElement.getAttribute('data-skin')).toBe('lapis')
+    })
+    it('取消皮肤后自定义强调色自动回来', () => {
+      applyTheme({ ...base, accent: 'custom', accentCustom: '#e60f82', activeSkin: 'lapis' })
+      applyTheme({ ...base, accent: 'custom', accentCustom: '#e60f82', activeSkin: null })
+      expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#e60f82')
+    })
+    it('没有皮肤时自定义强调色照旧生效', () => {
+      applyTheme({ ...base, accent: 'custom', accentCustom: '#123456' })
+      expect(document.documentElement.style.getPropertyValue('--accent')).toBe('#123456')
+    })
+  })
+
+  // 壁纸可见度很高时给 chrome 面板补一层自身底色,否则浅色小字压在亮壁纸上失明。
+  describe('chromeVeil(壁纸可见度 → chrome 面板补色)', () => {
+    it('可见度 35% 及以下不补(保持原观感)', () => {
+      expect(chromeVeil(0.35)).toBe('0%')
+      expect(chromeVeil(0.1)).toBe('0%')
+    })
+    it('可见度越高补得越多,且单调递增', () => {
+      expect(parseFloat(chromeVeil(0.85))).toBeGreaterThan(parseFloat(chromeVeil(0.6)))
+      expect(parseFloat(chromeVeil(0.6))).toBeGreaterThan(parseFloat(chromeVeil(0.4)))
+    })
+    it('补色有上限,面板不会变成不透明实色', () => {
+      expect(parseFloat(chromeVeil(1))).toBeLessThanOrEqual(78)
+      expect(parseFloat(chromeVeil(2))).toBeLessThanOrEqual(78)
+    })
+    // 斜率不是随手定的:壁纸最坏情况(大面积纯白)下,补到 ~72% 才能把 --muted 拉回 WCAG 的 4.5:1。
+    // 用户实际用的就是 85% 可见度 + 一张中位亮度=纯白的插画壁纸,所以这一档必须够厚,否则等于没修。
+    it('可见度 85%(用户实际值)补到 72% 以上,才够把小字拉回可读', () => {
+      expect(parseFloat(chromeVeil(0.85))).toBeGreaterThanOrEqual(72)
+    })
+    it('非法输入不产出 NaN', () => {
+      expect(chromeVeil(Number.NaN)).toBe('0%')
+    })
+    it('applyTheme 把它写进 --chrome-veil', () => {
+      applyTheme({ ...base, bgImage: 'forge-bg://x.jpg', bgScope: 'app', bgOpacity: 0.85 })
+      expect(document.documentElement.style.getPropertyValue('--chrome-veil')).toBe(chromeVeil(0.85))
     })
   })
 

@@ -26,6 +26,23 @@ export function bgSaturation(opacity: number): number {
   return Number((1 + 0.9 * (1 - o)).toFixed(3))
 }
 
+// 壁纸「可见度」→ chrome 面板(侧栏/检视区/顶栏/底栏)要额外补多厚一层自身底色,单位是百分比字符串。
+//
+// 为什么需要:这几个面板是半透明的,可见度越高,它们背后的实际底色就越接近壁纸本身。而壁纸经常大面积是
+// 亮的 —— 实测用户那张(人物插画)【中位亮度就是纯白】—— 深色系的浅灰小字(阶段名、模型名、路径、会话名,
+// 全走 muted/faint)于是变成浅色字压在白底上。算过账:可见度 85% 时 --muted 对比度只有 1.02:1,
+// 等于完全看不见(WCAG 正文要求 4.5:1)。这不是配色没调好,是"半透明面板 + 亮壁纸"的必然结果。
+// 补的是 var(--bg-2)(主题/皮肤自带),所以深色补深、浅色补浅,两个基调都朝"字能读"的方向走。
+//
+// 斜率是按对比度反推的,不是拍脑袋:在上述最坏情况(壁纸纯白)下,补到 ~72% 才能让 --muted 回到 4.5:1、
+// --faint 回到 3:1。所以 35% 以下不补(保持原本验证过的通透观感),85% 时给满 78%,再往上封顶。
+// 代价是可见度拉满时侧栏/检视区基本不透壁纸了 —— 中间会话区仍是全透的,壁纸该看还是看得见。
+export function chromeVeil(opacity: number): string {
+  const o = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 0.35
+  const t = Math.min(1, Math.max(0, (o - 0.35) / 0.5))
+  return `${Number((t * 78).toFixed(1))}%`
+}
+
 export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): void {
   const root = document.documentElement
   // 壁纸自动配色(见 wallpaperPalette.ts):开关打开且已取到调色板时,它接管明暗基调 + 整套中性色,
@@ -59,7 +76,11 @@ export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): vo
     const src = autoAccent ? auto : { ...auto, hueAccent: null }
     for (const [prop, value] of Object.entries(paletteVars(src))) root.style.setProperty(prop, value)
   }
-  const custom = !autoAccent && a.accent === 'custom' ? (a.accentCustom ?? '').trim() : ''
+  // 皮肤生效时不写自定义强调色 —— 皮肤自带 accent。预设强调色早就被皮肤接管了(skins.css 最后引入,同特异性
+  // 靠顺序取胜),唯独「自定义」走内联、优先级最高,于是压过皮肤:画廊色卡上明明是金色,套上去却是用户那抹
+  // 洋红,预览与结果对不上,而且没有任何提示。现在两种强调色在皮肤面前行为一致 = 皮肤说了算。
+  // 取消皮肤后自定义色自动回来(这段每轮重算,上面已无条件清过内联)。
+  const custom = !autoAccent && !skin && a.accent === 'custom' ? (a.accentCustom ?? '').trim() : ''
   if (custom) {
     root.style.setProperty('--accent', custom)
     root.style.setProperty('--accent-dim', `color-mix(in oklab, ${custom} 16%, transparent)`)
@@ -102,6 +123,8 @@ export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): vo
   // 见 global.css .app-bg-layer 下方注释:浅色把图混向近白 → 明度不降、彩度被等比抹掉。按可见度反比补回,
   // 可见度 100% 时为 1(不动),越淡补得越多,上限 1.9(可见度 5% 时)。
   root.style.setProperty('--app-bg-sat', String(bgSaturation(a.bgOpacity ?? 0.35)))
+  // 可见度越高,chrome 面板越要补自身底色,否则小字在亮壁纸上失明(见 chromeVeil 说明)。
+  root.style.setProperty('--chrome-veil', chromeVeil(a.bgOpacity ?? 0.35))
   // 壁纸纵向焦点:按当前图片 URL 从 bgPositions 查其记忆的裁剪位置(缺省略偏上),供三处 cover 图层
   // (.app-bg-layer / .chat::before / .home-bg-layer)统一消费。见 schema.ts bgPositions 说明。
   const bgPos = a.bgPositions?.[a.bgImage] ?? DEFAULT_BG_POSITION

@@ -157,8 +157,11 @@
   --surface: #133038; --surface-2: #1b414a;
   --fg: #e9f8fa; --fg-2: #c2dfe4; --muted: #a3c4ca; --faint: #7fa3aa;
   --border: #123039; --border-2: #1a4450;
-  --accent: #edb64a; --accent-dim: color-mix(in oklab, #edb64a 16%, transparent); --on-accent: #1a1206;
-  --run: #f2c76b;
+  /* 金 = 黄金色,不是琥珀/橘。这两者在 OKLCH 里差的是【色相角】,不是明度:实测 #edb64a 是 81°(橘金一侧),
+     真正的"黄金"落在 90–95°(#ffd700 是 95°)。这里取 92° / L 87% / C 0.16 —— 比纯 #ffd700 略压一点明度,
+     免得大面积按钮刺眼,但色相已经在黄金那一侧。改这个值前先量色相角,别凭肉眼调 hex(见壁纸取色那轮的教训)。 */
+  --accent: #f9d040; --accent-dim: color-mix(in oklab, #f9d040 16%, transparent); --on-accent: #1c1603;
+  --run: #fbd75c;
   --glass-window: color-mix(in srgb, #071c22 86%, transparent);
   --glass-panel: color-mix(in srgb, #0a242b 84%, transparent);
   --glass-sidebar: color-mix(in srgb, #05161b 84%, transparent);
@@ -168,14 +171,14 @@
   background:
     radial-gradient(70% 48% at 18% -8%, rgba(49,198,192,.20), transparent 62%),
     radial-gradient(64% 44% at 88% 26%, rgba(49,198,192,.13), transparent 62%),
-    radial-gradient(96% 46% at 50% 116%, rgba(237,182,74,.26), transparent 62%),
+    radial-gradient(96% 46% at 50% 116%, rgba(249,208,64,.26), transparent 62%),
     radial-gradient(40% 26% at 20% 112%, rgba(49,198,192,.20), transparent 66%),
-    radial-gradient(2px 2px at 26% 66%, rgba(237,182,74,.90), transparent),
-    radial-gradient(1.5px 1.5px at 48% 52%, rgba(242,199,107,.80), transparent),
-    radial-gradient(2px 2px at 72% 70%, rgba(237,182,74,.75), transparent),
-    radial-gradient(1.5px 1.5px at 86% 44%, rgba(242,199,107,.70), transparent),
-    radial-gradient(1.5px 1.5px at 34% 30%, rgba(237,182,74,.50), transparent),
-    radial-gradient(1px 1px at 62% 24%, rgba(242,199,107,.45), transparent);
+    radial-gradient(2px 2px at 26% 66%, rgba(249,208,64,.90), transparent),
+    radial-gradient(1.5px 1.5px at 48% 52%, rgba(251,215,92,.80), transparent),
+    radial-gradient(2px 2px at 72% 70%, rgba(249,208,64,.75), transparent),
+    radial-gradient(1.5px 1.5px at 86% 44%, rgba(251,215,92,.70), transparent),
+    radial-gradient(1.5px 1.5px at 34% 30%, rgba(249,208,64,.50), transparent),
+    radial-gradient(1px 1px at 62% 24%, rgba(251,215,92,.45), transparent);
 }
 
 /* 皮肤生效时统一软化边框:所有 border 换成随该皮肤 --fg 的半透明色(与壁纸模式 global.css:57-60 同法),

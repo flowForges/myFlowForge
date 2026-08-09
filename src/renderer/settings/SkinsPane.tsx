@@ -11,7 +11,9 @@ interface SkinsPaneProps {
 // 主题皮肤画廊。皮肤卡可切换:点一次套用(置 activeSkin,applyTheme 打 data-skin,skins.css 覆盖整套 token +
 // motif),再点同一张即取消(清 activeSkin,回你原本的基础主题)。右上「恢复默认外观」也可一键清掉。皮肤是
 // 叠加层,不改写其它外观设置。
-// 顶部另有「跟随壁纸配色」——从壁纸算出的自动皮肤,打开后接管手选皮肤(下面的画廊变灰)。
+// 顶部的「跟随壁纸配色」是【同一组里的又一个选项】,不是一道前置开关:它和下面的皮肤卡互斥 ——
+// 点任意一张皮肤卡会自动关掉它,打开它会清掉手选皮肤。原先它是开关 + 画廊置灰(disabled),
+// 用户必须先手动关掉才能选皮肤,但两者长得像、又挨在一起,读起来就是"点了没反应"。
 export function SkinsPane({ appearance, onChange }: SkinsPaneProps) {
   const active = appearance.activeSkin ?? null
   const autoOn = !!appearance.autoWallpaperTheme
@@ -25,7 +27,7 @@ export function SkinsPane({ appearance, onChange }: SkinsPaneProps) {
       <div className="skins-head">
         <div>
           <h4>主题皮肤</h4>
-          <p className="skins-sub">一键把整窗换成一套成套设计的配色与氛围 · 即时生效,不改功能与排版。<b style={{ color: 'var(--fg-2)' }}>再点一次已选皮肤即可取消</b>,或点右侧「恢复默认外观」。</p>
+          <p className="skins-sub">一键把整窗换成一套成套设计的配色与氛围 · 即时生效,不改功能与排版。<b style={{ color: 'var(--fg-2)' }}>再点一次已选皮肤即可取消</b>,或点右侧「恢复默认外观」。皮肤会接管强调色。</p>
         </div>
         <button
           className="skin-reset"
@@ -50,7 +52,8 @@ export function SkinsPane({ appearance, onChange }: SkinsPaneProps) {
             aria-label="跟随壁纸配色"
             aria-pressed={autoOn}
             disabled={!src}
-            onClick={() => onChange({ autoWallpaperTheme: !autoOn })}
+            // 打开时清掉手选皮肤:两者互斥,否则画廊里还亮着一张卡、实际生效的却是壁纸配色。
+            onClick={() => onChange(autoOn ? { autoWallpaperTheme: false } : { autoWallpaperTheme: true, activeSkin: null })}
           />
         </div>
         {src && (
@@ -74,18 +77,23 @@ export function SkinsPane({ appearance, onChange }: SkinsPaneProps) {
 
       {autoOn && (
         <p className="skins-sub" style={{ margin: '14px 0 -2px' }}>
-          下面的成套皮肤<b style={{ color: 'var(--fg-2)' }}>已被壁纸配色接管</b> —— 关掉上面的开关后才可选。
+          当前生效的是<b style={{ color: 'var(--fg-2)' }}>壁纸配色</b> —— 直接点下面任意一套皮肤即可改用它。
         </p>
       )}
-      <div className={`skins-grid${autoOn ? ' skins-grid-off' : ''}`}>
+      {/* autoOn 时不给任何一张卡加 .on:此刻生效的是壁纸配色,画廊里亮着一张会让人以为那张在生效。
+          但卡片【可点】—— 点下去 = 换成这套皮肤 + 关掉壁纸配色。 */}
+      <div className="skins-grid">
         {BUILTIN_SKINS.map(s => (
           <button
             key={s.id}
-            className={`skin-card${active === s.id ? ' on' : ''}`}
-            disabled={autoOn}
-            onClick={() => onChange({ activeSkin: active === s.id ? null : s.id })}
-            aria-pressed={active === s.id}
-            title={autoOn ? '已被「跟随壁纸配色」接管' : active === s.id ? `再点一次取消「${s.name}」皮肤` : `套用「${s.name}」皮肤`}
+            className={`skin-card${!autoOn && active === s.id ? ' on' : ''}`}
+            onClick={() => onChange(
+              !autoOn && active === s.id
+                ? { activeSkin: null }
+                : { activeSkin: s.id, autoWallpaperTheme: false }
+            )}
+            aria-pressed={!autoOn && active === s.id}
+            title={autoOn ? `改用「${s.name}」皮肤(会关掉跟随壁纸配色)` : active === s.id ? `再点一次取消「${s.name}」皮肤` : `套用「${s.name}」皮肤`}
           >
             {/* 迷你窗预览:侧栏(panel)+ 主区(bg)+ accent 药丸 + accent2 圆点 */}
             <div className="skin-prev" style={{ background: s.swatches[0] }}>
