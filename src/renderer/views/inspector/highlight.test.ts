@@ -165,6 +165,96 @@ describe('highlightBlock', () => {
     roundTrip(code, 'ts')
   })
 
+
+  // ---- shell:按「词」切,不按字符切 -----------------------------------------
+  // 真机 bug:`git -C go-blog push -u origin feat/for-new-0731` 里,分支名被 `/` 和 `-` 撕成 5 段,
+  // 其中 `for` 撞上 shell 关键字表被染色、`0731` 被当数字染色,而 `git`/`push` 这些真正该亮的反而无色。
+  // 看着"花而无序"的根因就在这儿。
+  const shCls = (code: string, text: string): (string | null)[] =>
+    highlightBlock(code, 'sh').filter(t => t.text === text).map(t => t.cls)
+  // 无色的词会跟相邻空白合并成一个 null 大块(和其它语言一致,少切几百个 span),所以「这个词没被撕开」
+  // 要断言的是:它整个落在**同一个** token 里。
+  const shWhole = (code: string, text: string): (string | null)[] =>
+    highlightBlock(code, 'sh').filter(t => t.text.includes(text)).map(t => t.cls)
+
+  it('★ 分支名/路径是一个整体,不被 / 和 - 撕开染色', () => {
+    const code = 'git -C go-blog push -u origin feat/for-new-0731'
+    roundTrip(code, 'sh')
+    const toks = highlightBlock(code, 'sh')
+    // 整条分支名落在同一个 token 里,且不着色
+    expect(shWhole(code, 'feat/for-new-0731')).toEqual([null])
+    // 里头的 for / new / 0731 不再作为独立 token 出现(那正是被染色的原因)
+    expect(toks.some(t => t.text === 'for')).toBe(false)
+    expect(toks.some(t => t.text === 'new')).toBe(false)
+    expect(toks.some(t => t.text === '0731')).toBe(false)
+  })
+
+  it('★ 路径里恰好是关键字的那一段不能被点亮(cd packages/set/dist 的 set)', () => {
+    const code = 'cd packages/set/dist'
+    roundTrip(code, 'sh')
+    // 整条路径是一个词 → 里头的 set 根本不成为独立 token,自然轮不到关键字表
+    expect(highlightBlock(code, 'sh').some(t => t.text === 'set')).toBe(false)
+    expect(shWhole(code, 'packages/set/dist')).toEqual([null])
+  })
+
+  it('★ 命令名与子命令高亮,中间夹着 flag 也认得出子命令', () => {
+    const code = 'git -C go-blog push -u origin feat/x'
+    expect(shCls(code, 'git')).toEqual(['fn'])
+    expect(shCls(code, 'push')).toEqual(['ty'])
+    // -C 的参数不是子命令,不该被点亮
+    expect(shWhole(code, 'go-blog')).toEqual([null])
+  })
+
+  it('★ flag 整个词一个颜色(横杠不再单独一色)', () => {
+    const code = 'git -C go-blog reset --hard origin/master'
+    roundTrip(code, 'sh')
+    expect(shCls(code, '--hard')).toEqual(['kw'])
+    expect(shCls(code, '-C')).toEqual(['kw'])
+    expect(shCls(code, 'reset')).toEqual(['ty'])
+    expect(shWhole(code, 'origin/master')).toEqual([null])
+    // 横杠不再是独立 token
+    expect(highlightBlock(code, 'sh').some(t => t.text === '-' || t.text === '--')).toBe(false)
+  })
+
+  it('shell 控制结构仍然高亮(词整体匹配关键字表)', () => {
+    const code = 'for i in 1 2 3; do echo $i; done'
+    roundTrip(code, 'sh')
+    expect(shCls(code, 'for')).toEqual(['kw'])
+    expect(shCls(code, 'in')).toEqual(['kw'])
+    expect(shCls(code, 'do')).toEqual(['kw'])
+    expect(shCls(code, 'done')).toEqual(['kw'])
+    expect(shCls(code, '$i')).toEqual(['va'])
+  })
+
+  it('管道 / && 之后的第一个词也是命令', () => {
+    const code = 'cat a.txt | grep foo && curl http://localhost:8766/'
+    roundTrip(code, 'sh')
+    expect(shCls(code, 'grep')).toEqual(['fn'])
+    expect(shCls(code, 'curl')).toEqual(['fn'])
+    // URL 不被拆开
+    expect(shWhole(code, 'http://localhost:8766/')).toEqual([null])
+  })
+
+  it('纯数字是数字,标识符里的数字不单独抠出来', () => {
+    const code = 'kill 14781'
+    roundTrip(code, 'sh')
+    expect(shCls(code, '14781')).toEqual(['nu'])
+    const code2 = 'ls dir2024'
+    expect(shWhole(code2, 'dir2024')).toEqual([null])
+  })
+
+  it('# 只在词首才是注释(URL 里的 # 不是)', () => {
+    const code = 'curl http://x/a#frag  # 真注释'
+    roundTrip(code, 'sh')
+    expect(shWhole(code, 'http://x/a#frag')).toEqual([null])
+    expect(highlightBlock(code, 'sh').some(t => t.cls === 'cm' && t.text === '# 真注释')).toBe(true)
+  })
+
+  it('未闭合的引号不吞掉后面的内容(流式输出里半截命令很常见)', () => {
+    roundTrip('echo "half', 'sh')
+    roundTrip("git commit -m 'wip", 'sh')
+  })
+
   it('空字符串与只有换行的块不炸', () => {
     expect(highlightBlock('', 'ts')).toEqual([])
     roundTrip('\n\n\n', 'ts')

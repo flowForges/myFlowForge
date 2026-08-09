@@ -204,8 +204,12 @@ function peekNonSpace(code: string, from: number): string {
 export function highlightBlock(code: string, lang?: string): Token[] {
   if (!lang || !lang.trim()) return [{ cls: null, text: code }]
   if (code.length > HIGHLIGHT_MAX) return [{ cls: null, text: code }]
-  const cfg = LANGS[resolveLang(lang)] ?? GENERIC
+  const key = resolveLang(lang)
+  const cfg = LANGS[key] ?? GENERIC
   if (cfg.markup) return tokenizeMarkup(code)
+  // shell 走专用分词器(见 tokenizeShell)。只接管整块着色:逐行的 highlight() 那条路只有 kw/st/cm/nu
+  // 四个色位(见 inspector.css),把 fn/ty 送过去反而会掉色,所以文件预览 / diff 维持原样。
+  if (key === 'sh') return tokenizeShell(code)
 
   const out: Token[] = []
   let buf = ''
@@ -301,6 +305,93 @@ export function highlightBlock(code: string, lang?: string): Token[] {
     else if (ch !== ' ' && ch !== '\t') atLineStart = false
     buf += ch
     i++
+  }
+  flush()
+  return out
+}
+
+// ---- shell -----------------------------------------------------------------
+// 通用扫描器按「字符类别」切词,`/` 和 `-` 都算运算符 —— 于是 `feat/for-new-0731` 必然被撕成 5 段,
+// 其中 `for` 撞上 SH_KW 被染成关键字、`0731` 被当数字染色,而 `git`/`push` 这些真该亮的反而无色。
+// 命令行里 `-` 和 `/` 是**词的一部分**(flag、路径、分支名),不是运算符。所以 shell 单独走这一版:
+// 先切成词,再整词分类。关键字也只拿整词去比,`feat/for-new-0731` 里的 `for` 自然就不再是关键字了 ——
+// 这一条就是那个 bug 的根治点,不需要再额外限制「只有命令位的词才算关键字」(那样会把 `for i in …`
+// 里的 `in` 一起弄掉,得不偿失)。
+
+/** 常见 CLI:它们的第一个"子命令"值得点亮(`git push` 的 push)。 */
+const SH_CLIS = new Set(['git', 'npm', 'pnpm', 'yarn', 'npx', 'bun', 'deno', 'docker', 'kubectl', 'cargo', 'go', 'brew', 'pip', 'pip3', 'gh', 'systemctl', 'apt', 'apt-get', 'make', 'terraform', 'helm', 'aws', 'gcloud'])
+/** 常见子命令。只认这张表 —— `git -C go-blog push` 里的 `go-blog` 不在表里,就不会被误当子命令点亮。 */
+const SH_SUBCOMMANDS = new Set([
+  'push', 'pull', 'commit', 'checkout', 'branch', 'reset', 'merge', 'rebase', 'status', 'log', 'add', 'clone',
+  'fetch', 'stash', 'tag', 'diff', 'init', 'remote', 'switch', 'restore', 'revert', 'cherry-pick', 'worktree',
+  'install', 'uninstall', 'run', 'remove', 'build', 'test', 'start', 'publish', 'exec', 'ps', 'images', 'logs',
+  'stop', 'rm', 'up', 'down', 'get', 'apply', 'describe', 'delete', 'mod', 'generate', 'serve', 'dev', 'lint',
+  'format', 'migrate', 'config', 'version', 'help', 'login', 'search', 'update', 'upgrade',
+])
+/** 词的边界。注意 `-` `/` `.` `:` 都**不在**里面 —— 它们是词的一部分。 */
+const SH_BREAK = /[\s|&;<>()"']/
+const SH_NUM = /^\d+$/
+
+function tokenizeShell(code: string): Token[] {
+  const out: Token[] = []
+  let buf = ''
+  const flush = (): void => { if (buf) { out.push({ cls: null, text: buf }); buf = '' } }
+  const push = (cls: TokenClass, text: string): void => { flush(); out.push({ cls, text }) }
+  const n = code.length
+  let i = 0
+  // 每遇到换行 / `|` / `&&` / `;` 就重开一段命令:下一个词回到命令位,子命令资格也重置。
+  let atCommand = true
+  let cli: string | null = null
+  let subTaken = false
+  const newSegment = (): void => { atCommand = true; cli = null; subTaken = false }
+  while (i < n) {
+    const ch = code[i]
+    if (ch === '\n') { buf += ch; i++; newSegment(); continue }
+    if (ch === ' ' || ch === '\t') { buf += ch; i++; continue }
+    // `#` 只有在词首才是注释 —— 走到这里就是词首(词扫描不会在 `#` 处停),所以 URL 里的 `#frag` 安全。
+    if (ch === '#') {
+      const nl = code.indexOf('\n', i)
+      const end = nl < 0 ? n : nl
+      push('cm', code.slice(i, end)); i = end; continue
+    }
+    if (ch === '"' || ch === "'") {
+      let j = i + 1
+      while (j < n && code[j] !== ch) { if (ch === '"' && code[j] === '\\') j++; j++ }
+      // 未闭合(流式输出里的半截命令)时 j 已越界,slice 会一直吃到末尾 —— 内容不丢,不变量成立。
+      push('st', code.slice(i, Math.min(j + 1, n)))
+      i = Math.min(j + 1, n)
+      atCommand = false
+      continue
+    }
+    if (/[|&;<>()]/.test(ch)) {
+      let j = i
+      while (j < n && /[|&;<>()]/.test(code[j])) j++
+      push('op', code.slice(i, j))
+      i = j
+      newSegment()
+      continue
+    }
+    let j = i
+    while (j < n && !SH_BREAK.test(code[j])) j++
+    // 防死循环:走到这里的字符本该都不是词边界(空白/引号/操作符在上面各自的分支里已经吃掉了),
+    // 但只要以后有人往 SH_BREAK 里加一个上面没处理的字符,这里就会扫出空词、i 不前进、渲染进程转死。
+    // 着色错一个词是小事,把界面转死不是 —— 兜底吞掉一个字符继续走。
+    // (今天的 SH_BREAK 下这行走不到,所以没有测试覆盖它;删掉不会变红,但别删。)
+    if (j === i) { buf += code[i]; i++; continue }
+    const word = code.slice(i, j)
+    i = j
+    const isFlag = word.startsWith('-')
+    if (word.startsWith('$')) push('va', word)
+    else if (isFlag) push('kw', word)                                   // `-C` / `--hard` 整词一个色
+    else if (LANGS.sh.keywords.has(word)) push('kw', word)
+    else if (atCommand) { push('fn', word); cli = word }
+    // 子命令:本段命令由已知 CLI 起手时,第一个「非 flag 且在子命令表里」的词点亮。夹在中间的 flag
+    // 参数(`-C go-blog` 的 go-blog)不在表里,自然跳过,不会顶掉真正的子命令。
+    else if (!subTaken && cli && SH_CLIS.has(cli) && SH_SUBCOMMANDS.has(word)) { push('ty', word); subTaken = true }
+    else if (SH_NUM.test(word)) push('nu', word)
+    else buf += word
+    if (!isFlag) atCommand = false
+    else if (atCommand) atCommand = true   // 行首就是 flag(罕见):命令位还没被占掉
   }
   flush()
   return out
