@@ -236,3 +236,7 @@ src/
 ## 🙏 감사의 말
 
 Electron, React, Vite, Model Context Protocol 을 둘러싼 훌륭한 오픈소스 생태계 —— 그리고 이 앱이 오케스트레이션하는 코딩 에이전트들 위에 서 있습니다.
+
+## 🔗 링크
+
+- [LINUX DO](https://linux.do/latest) — 만지작거리기 좋아하는 개발자들의 커뮤니티

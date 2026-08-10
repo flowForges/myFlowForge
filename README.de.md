@@ -240,3 +240,7 @@ Veröffentlicht unter der [MIT-Lizenz](LICENSE) © 2026 zghua.
 ## 🙏 Danksagung
 
 Aufgebaut auf dem Open-Source-Ökosystem rund um Electron, React, Vite und das Model Context Protocol —— und auf den Coding-Agenten, die es orchestriert.
+
+## 🔗 Links
+
+- [LINUX DO](https://linux.do/latest) — eine Community von Entwicklern, die gerne basteln

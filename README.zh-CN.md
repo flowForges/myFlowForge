@@ -236,3 +236,7 @@ src/
 ## 🙏 致谢
 
 建立在 Electron、React、Vite 与 Model Context Protocol 周边优秀的开源生态之上 —— 以及它所编排的那些编码代理。
+
+## 🔗 友情链接
+
+- [LINUX DO](https://linux.do/latest) — 新的理想型社区，一群喜欢折腾的开发者
