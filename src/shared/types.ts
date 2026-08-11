@@ -312,7 +312,22 @@ export type BotStatus =
   | { state: 'online' }
   | { state: 'error'; reason: string }
 export interface BotStatusEvent { platform: BotPlatform; status: BotStatus }
-export interface ChatConfirm { id: string; title: string; where?: string; ts?: string }
+/**
+ * claude 的 AskUserQuestion:模型抛出 1–4 个问题、每题 2–4 个选项让人来选。
+ * 它不是普通的权限请求 —— CLI 把它伪装成 `can_use_tool`(带 requires_user_interaction)发出来,而
+ * 答案必须塞回权限响应的 `updatedInput.answers` 里(见 claudeControl.ts 的 controlAnswerLine)。
+ * 只回一个 allow 而不带 answers,CLI 会拿空 answers 把工具跑完并合成
+ * "The user did not answer the questions.",于是模型当场停在「没等到回复」。
+ */
+export interface AskQuestion {
+  question: string
+  header?: string
+  multiSelect?: boolean
+  options: { label: string; description?: string }[]
+}
+/** 每题选中的 option label(多选题可多个)。key 是问题原文 —— CLI 就是按原文回查答案的。 */
+export type AskAnswers = Record<string, string[]>
+export interface ChatConfirm { id: string; title: string; where?: string; questions?: AskQuestion[]; ts?: string }
 /**
  * 主进程里【还没被回答】的聊天门快照(chat:gate-state)。
  * 为什么需要:门是主进程的 Promise,一直阻塞着 provider;而卡片是渲染进程 useChat 的 state。切会话 / 离开
@@ -320,7 +335,7 @@ export interface ChatConfirm { id: string; title: string; where?: string; ts?: s
  * 那一轮就永远挂着。挂载时拉一次这个快照即可把卡片重建出来(与 chat:queue-state 同一套思路)。
  */
 export interface ChatGateSnapshot {
-  confirms: { id: string; sessionId: string; title: string; where?: string; ts: string }[]
+  confirms: { id: string; sessionId: string; title: string; where?: string; questions?: AskQuestion[]; ts: string }[]
   asks: { id: string; sessionId: string; title: string; options?: { t: string; d: string }[]; agentName?: string; ts: string }[]
 }
 export interface ChatSendPayload {
@@ -342,7 +357,8 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   // Replace (not append) the reply body with an authoritative full text — see ChatCallbacks.onAssistantReplace.
   | { type: 'assistant-replace'; id: string; text: string }
   | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta }
-  | { type: 'confirm-request'; id: string; title: string; where?: string }
+  // questions 非空 = 这不是「批准执行」而是「请回答」(claude AskUserQuestion),渲染成可点的选项卡片。
+  | { type: 'confirm-request'; id: string; title: string; where?: string; questions?: AskQuestion[] }
   | { type: 'confirm-resolved'; id: string }
   // A delegate sub-agent's forge_ask, surfaced as a select (options) / input (no options) card.
   | { type: 'ask-request'; id: string; title: string; options?: { t: string; d: string }[]; agentName?: string }

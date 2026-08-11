@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AgentContextMeta, AgentContextRef, ChatConfirm, ChatEvent, ChatMessage, ChatSendPayload } from '@shared/types'
+import type { AgentContextMeta, AgentContextRef, AskAnswers, ChatConfirm, ChatEvent, ChatMessage, ChatSendPayload } from '@shared/types'
 import type { PlanReq } from '../components/PlanCard'
 
 export interface ChatQueueItem { id: string; text: string; source: string }
@@ -15,7 +15,9 @@ export interface ChatApi {
   queue: ChatQueueItem[]
   running: { id: string; text: string } | null
   send: (payload: Omit<ChatSendPayload, 'workspacePath' | 'sessionId'>) => void
-  resolveConfirm: (payload: { id: string; decision: 'allow' | 'deny'; value?: string }) => void
+  // answers/response 只在「请回答」的门(claude AskUserQuestion)上出现,它们就是用户选的选项 / 自己写的
+  // 答案,必须一路带回 provider —— 光 decision:'allow' 等于没回答。
+  resolveConfirm: (payload: { id: string; decision: 'allow' | 'deny'; value?: string; answers?: AskAnswers; response?: string }) => void
   resolveAsk: (payload: { id: string; decision: 'allow' | 'deny'; value?: string; choice?: number }) => void
   resolvePlan: (payload: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> } }) => void
   cancelQueued: (id: string) => void
@@ -73,7 +75,7 @@ export function useChat(
       setConfirms(c => {
         const seen = new Set(c.map(x => x.id))
         return [...c, ...g.confirms.filter(x => x.sessionId === sid && !seen.has(x.id))
-          .map(x => ({ id: x.id, title: x.title, where: x.where, ts: x.ts }))]
+          .map(x => ({ id: x.id, title: x.title, where: x.where, questions: x.questions, ts: x.ts }))]
       })
       setAsks(a => {
         const seen = new Set(a.map(x => x.id))
@@ -216,7 +218,7 @@ export function useChat(
       }
       // 按 id 去重:挂载时的 chatGateState 快照可能已经把同一个门种下了(广播恰好在快照回来之后到达),
       // 无脑 append 会画出两张一模一样的卡。
-      else if (e.type === 'confirm-request') setConfirms(c => c.some(x => x.id === e.id) ? c : [...c, { id: e.id, title: e.title, where: e.where, ts: new Date().toISOString() }])
+      else if (e.type === 'confirm-request') setConfirms(c => c.some(x => x.id === e.id) ? c : [...c, { id: e.id, title: e.title, where: e.where, questions: e.questions, ts: new Date().toISOString() }])
       else if (e.type === 'confirm-resolved') setConfirms(c => c.filter(x => x.id !== e.id))
       else if (e.type === 'ask-request') setAsks(a => a.some(x => x.id === e.id) ? a : [...a, { id: e.id, title: e.title, options: e.options, agentName: e.agentName, ts: new Date().toISOString() }])
       else if (e.type === 'ask-resolved') setAsks(a => a.filter(x => x.id !== e.id))
@@ -234,7 +236,7 @@ export function useChat(
     void api.current.sendChat({ ...payload, workspacePath, sessionId })
   }, [workspacePath, sessionId])
 
-  const resolveConfirm = useCallback((payload: { id: string; decision: 'allow' | 'deny'; value?: string }) => {
+  const resolveConfirm = useCallback((payload: { id: string; decision: 'allow' | 'deny'; value?: string; answers?: AskAnswers; response?: string }) => {
     if (!workspacePath) return
     setConfirms(c => c.filter(x => x.id !== payload.id))
     void api.current.chatResolve({ ...payload, value: payload.value, workspacePath })

@@ -38,8 +38,8 @@ import { agentSessionsForId } from '../chat/agentSessions'
 import { botBridge, genPairing } from '../bot/botBridge'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
-import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
-import type { AgentProvider } from '../agents/types'
+import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, AskAnswers, AskQuestion, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
+import type { AgentProvider, ConfirmDecision } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti, readBranch } from '../git/changes'
@@ -408,7 +408,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       try { broadcastSessions(e.workspacePath, readSessions(e.workspacePath)) } catch { /* 会话文件读不到就算了,不能拖累事件广播 */ }
     }
   }
-  const chatConfirms = new Map<string, (decision: 'allow' | 'deny') => void>()
+  // ConfirmDecision(而不是光 'allow'|'deny'):带选项的门(claude AskUserQuestion)要把用户选了什么一起送回
+  // provider —— 只回 allow 等于什么都没答,模型会收到「没等到回复」。
+  const chatConfirms = new Map<string, (decision: ConfirmDecision) => void>()
   let chatConfirmSeq = 0
   // Chat-side ASK (question + optional options, returns a string) — the delegate bridge routes a
   // sub-agent's forge_ask here so it surfaces as a select/input ReqCard and the answer flows back.
@@ -431,6 +433,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     title: string
     where?: string
     options?: { t: string; d: string }[]
+    // AskUserQuestion 的问题/选项:重建卡片时必须一起还原,否则重挂后又退回成那张没选项的空确认卡。
+    questions?: AskQuestion[]
     agentName?: string
   }
   const chatGateOwner = new Map<string, GateMeta>()
@@ -497,11 +501,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const runTurn = async (payload: ChatSendPayload) => {
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
-    const confirm = (req: { title: string; where?: string }) => new Promise<'allow' | 'deny'>((resolve) => {
+    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[] }) => new Promise<ConfirmDecision>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
       chatConfirms.set(id, resolve)
-      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where })
-      broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where })
+      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions })
+      broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where, questions: req.questions })
     })
     // Pre-run consent gate: providers with no sandbox dimension (cursor/gemini/opencode/qwen/copilot)
     // ignore the permission档 and run with blanket full access (--force/--allow-all-tools/--yolo). Make
@@ -669,7 +673,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const snap: ChatGateSnapshot = { confirms: [], asks: [] }
     for (const [id, m] of chatGateOwner) {
       if (m.ws !== a.workspacePath) continue
-      if (m.type === 'confirm') snap.confirms.push({ id, sessionId: m.sessionId, title: m.title, where: m.where, ts: m.ts })
+      if (m.type === 'confirm') snap.confirms.push({ id, sessionId: m.sessionId, title: m.title, where: m.where, questions: m.questions, ts: m.ts })
       else snap.asks.push({ id, sessionId: m.sessionId, title: m.title, options: m.options, agentName: m.agentName, ts: m.ts })
     }
     return snap
@@ -843,7 +847,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return sessionsOut(a.wsPath, file)
   })
   ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId, chatQueue.runningProvider(a.workspacePath, a.sessionId)))
-  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
+  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
     const askResolve = chatAsks.get(a.id)
     if (askResolve) {
       chatAsks.delete(a.id)
@@ -856,7 +860,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!resolve) return
     chatConfirms.delete(a.id)
     chatGateOwner.delete(a.id)
-    resolve(a.decision === 'modify' ? 'deny' : a.decision)
+    // 带 answers/response 的放行 = 这是一道「请回答」的门(AskUserQuestion),必须把选择原样送回 provider。
+    const answered = a.decision === 'allow' && (a.answers !== undefined || a.response !== undefined)
+    resolve(answered ? { decision: 'allow', answers: a.answers, response: a.response }
+      : a.decision === 'modify' ? 'deny' : a.decision)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
   })
 

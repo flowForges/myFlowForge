@@ -1,5 +1,7 @@
 import { execa, type ResultPromise } from 'execa'
-import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
+import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks, ConfirmDecision } from '../types'
+import { confirmAllowed } from '../types'
+import type { AskAnswers } from '@shared/types'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
@@ -7,7 +9,7 @@ import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
 import { logError, appLog } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
-import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, type CanUseTool } from './claudeControl'
+import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
 // full name ('claude-opus-4-8'). Our friendly ids ('opus-4.8') are display labels and are
@@ -115,14 +117,16 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const handle = async (obj: any) => {
         const cut = parseCanUseTool(obj)
         if (cut) {
-          let decision: 'allow' | 'deny' = 'deny'
+          let decision: ConfirmDecision = 'deny'
           // A permission prompt is a legitimate human wait, not a wedge — suspend the idle watchdog so
           // it can't SIGTERM the agent mid-decision (finally always resumes).
           wd.pause()
           try { decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName }) }
           catch (e) { respond(cut, false); cb.onError(e instanceof Error ? e : new Error(String(e))); return }
           finally { wd.resume() }
-          respond(cut, decision === 'allow')
+          // The workflow run path has no question-chooser card (only chat does), so a stage agent's
+          // AskUserQuestion still gets a plain allow/deny here.
+          respond(cut, confirmAllowed(decision) === 'allow')
           return
         }
         const used = extractContextTokens(obj)
@@ -231,6 +235,10 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const respond = (req: CanUseTool, allow: boolean) => {
         try { child.stdin?.write((allow ? controlAllowLine(req) : controlDenyLine(req)) + '\n') } catch { /* stdin gone */ }
       }
+      // Answer an AskUserQuestion gate: the picks ride back inside updatedInput (see controlAnswerLine).
+      const respondAnswer = (req: CanUseTool, answers: AskAnswers, response?: string) => {
+        try { child.stdin?.write(controlAnswerLine(req, answers, response) + '\n') } catch { /* stdin gone */ }
+      }
       // Track which tool_use ids are Task sub-agents so their tool_result can be correlated; dedupe the
       // two start sources (empty-input content_block_start, then the full assistant message) — first
       // is 'start', later enrichment is 'update'. A running sub-agent counts as activity (not "no reply").
@@ -255,16 +263,30 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const handle = async (obj: any) => {
         const cut = parseCanUseTool(obj)
         if (cut) {
+          // AskUserQuestion isn't an operation to approve — it's the model ASKING the human, smuggled
+          // through the permission channel. Lift its options out so the gate renders as a chooser
+          // instead of an opaque "AskUserQuestion 请求执行 / 允许 / 拒绝" (where 允许 answered nothing
+          // and the model was told "The user did not answer the questions").
+          const questions = cut.requiresUserInteraction || cut.toolName === 'AskUserQuestion'
+            ? parseAskQuestions(cut.input)
+            : null
           // Fail-closed: no handler OR a thrown/torn-down gate → DENY. Never leave the CLI waiting on
           // a control_response (that hangs the turn). agentId routes the gate to the right lane.
-          let decision: 'allow' | 'deny' = 'deny'
+          let decision: ConfirmDecision = 'deny'
           // Pause the inactivity watchdog while the user decides — a permission prompt is a human wait,
           // not a wedged turn, so it must not be killed by the 240s idle timer (finally always resumes).
           wd.pause()
-          try { if (cb.onConfirm) decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName }) }
+          try {
+            if (cb.onConfirm) decision = await cb.onConfirm({
+              title: questions ? askGateTitle(questions) : `${cut.toolName} 请求执行`,
+              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName,
+              ...(questions ? { questions } : {}),
+            })
+          }
           catch (e) { respond(cut, false); cb.onError(e instanceof Error ? e : new Error(String(e))); return }
           finally { wd.resume() }
-          respond(cut, decision === 'allow')
+          if (typeof decision === 'object') respondAnswer(cut, decision.answers ?? {}, decision.response)
+          else respond(cut, decision === 'allow')
           return
         }
         // A sub-agent's OWN internal event: claude tags it with a top-level parent_tool_use_id = the Task

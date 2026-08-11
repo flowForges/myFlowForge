@@ -1,5 +1,6 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
+import { confirmAllowed } from '../types'
 import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor } from '../chatStream'
 import { forgeCodexConfigArgs } from '../mcpConfig'
@@ -254,7 +255,9 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
             { cwd: task.cwd, prompt: task.prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy },
             {
               onEvent: (e) => { cb.onActivity?.(); handleRunEvent(e) },
-              onApproval: async (r) => cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') }),
+              // codex 的审批只有放行/拒绝两态(没有 claude AskUserQuestion 那种带选项的问题),把可能的
+              // 回答形态收敛回二值。
+              onApproval: async (r) => confirmAllowed(await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') })),
               onSession: (id) => cb.onSession?.(id),
               onError: (m) => { logError('codex', 'app-server run 错误', m) },
             },
@@ -420,7 +423,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               onApproval: async (r) => {
                 if (!cb.onConfirm) return 'deny'
                 wd.pause()
-                try { return await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') }) }
+                try { return confirmAllowed(await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') })) }
                 finally { wd.resume() }
               },
               onSession: (id) => cb.onSession(id),

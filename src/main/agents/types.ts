@@ -1,4 +1,4 @@
-import type { Attachment } from '@shared/types'
+import type { Attachment, AskAnswers, AskQuestion } from '@shared/types'
 
 export interface HandoffPayload { summary: string; artifacts?: { path: string; kind: string }[] }
 
@@ -9,7 +9,15 @@ export interface AgentCapabilities { structuredOutput: boolean; permissionHook: 
 export interface LogLine { ts: string; text: string; level: 'info' | 'ok' | 'accent' | 'run'; kind?: 'think' | 'tool' | 'file' | 'output' }
 // agentId: which sub-agent lane raised this (undefined = main agent). toolName: the gated tool
 // (e.g. Bash/Write) for a clearer gate label. Both optional → existing callers unaffected.
-export interface ConfirmReq { title: string; where?: string; agentId?: string; toolName?: string }
+// questions: 这道门其实是「请回答」而非「批准执行」(claude AskUserQuestion)。带着它的门必须用
+// ConfirmDecision 的对象形态把用户的选择带回来,只回 'allow' 会让模型收到「没等到回复」。
+export interface ConfirmReq { title: string; where?: string; agentId?: string; toolName?: string; questions?: AskQuestion[] }
+// 老形态 'allow'/'deny' 全部保留(绝大多数门只需要放行/拒绝);对象形态是回答通道。
+export type ConfirmDecision = 'allow' | 'deny' | { decision: 'allow'; answers?: AskAnswers; response?: string }
+/** 把任意 ConfirmDecision 收敛回二值,给只关心放行与否的调用方(codex 审批、只读委派等)。 */
+export function confirmAllowed(d: ConfirmDecision): 'allow' | 'deny' {
+  return d === 'deny' ? 'deny' : 'allow'
+}
 export interface InputReq { title: string; placeholder?: string }
 export interface AgentResult { ok: boolean; summary?: string }
 
@@ -41,7 +49,7 @@ export interface AgentCallbacks {
   onUsage?(u: { used: number; window: number }): void
   // 每轮 token 成本(input+output),用于用量汇总账本;仅在有 result 事件用量时触发(见 extractTurnTokens)。
   onTurnTokens?(t: { input: number; output: number }): void
-  onConfirm(req: ConfirmReq): Promise<'allow' | 'deny'>
+  onConfirm(req: ConfirmReq): Promise<ConfirmDecision>
   onInput(req: InputReq): Promise<string>
   onDone(result: AgentResult): void
   onError(err: Error): void
@@ -91,7 +99,7 @@ export interface ChatCallbacks {
   onToolActivity?(ev: { id: string; phase: 'start' | 'done'; name?: string; title?: string; output?: string; isError?: boolean }): void
   onDone(r: { elapsed: number }): void
   onError(err: Error): void
-  onConfirm?(req: ConfirmReq): Promise<'allow' | 'deny'>
+  onConfirm?(req: ConfirmReq): Promise<ConfirmDecision>
 }
 
 export interface AgentProvider {

@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { appendMessage, readMessages, readSession, readWatermark, writeSession, writeWatermark } from './chatStore'
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
-import type { AgentProvider, AgentSession, ConfirmReq } from '../agents/types'
+import type { AgentProvider, AgentSession, ConfirmReq, ConfirmDecision } from '../agents/types'
 import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
 import { inlineHtmlPreamble } from './inlineHtmlDirective'
@@ -28,7 +28,7 @@ export interface SendTurnDeps {
   provider: AgentProvider
   env: NodeJS.ProcessEnv
   emit: (e: ChatEvent) => void
-  confirm?: (req: ConfirmReq) => Promise<'allow' | 'deny'>
+  confirm?: (req: ConfirmReq) => Promise<ConfirmDecision>
   onSessionStart?: (session: AgentSession) => void
 }
 

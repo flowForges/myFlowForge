@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH } from '../main/ipc/channels'
-import type { ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
+import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
 
 const api = {
@@ -107,7 +107,8 @@ const api = {
   workflowPrepareBriefs: (a: { workspacePath: string; stageKey: string; projects: string[] }): Promise<{ docExists: boolean; docPath: string; sections: Record<string, string> }> => ipcRenderer.invoke(CH.workflowPrepareBriefs, a),
   workflowFinish: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.workflowFinish, a),
   agentSessionIds: (workspacePath: string, sessionId: string) => ipcRenderer.invoke(CH.sessionAgentIds, { workspacePath, sessionId }),
-  chatResolve: (a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> }; workspacePath: string }) => ipcRenderer.invoke(CH.chatResolve, a),
+  // answers/response:AskUserQuestion 门上用户选的选项 / 自填答案(见 shared/types 的 AskQuestion)。
+  chatResolve: (a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> }; workspacePath: string }) => ipcRenderer.invoke(CH.chatResolve, a),
   openFiles: () => ipcRenderer.invoke(CH.dialogOpenFiles),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(CH.dialogPickDirectory),
   pickFile: (): Promise<string | null> => ipcRenderer.invoke(CH.dialogPickFile),

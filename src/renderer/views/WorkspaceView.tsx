@@ -11,6 +11,7 @@ import { WorkflowAdvanceCard } from '../components/WorkflowAdvanceCard'
 import { WorkflowExecBlock } from '../components/WorkflowExecBlock'
 import type { Plugin } from '@shared/plugin'
 import { ReqCard } from '../components/ReqCard'
+import { AskQuestionCard } from '../components/AskQuestionCard'
 import { PlanCard } from '../components/PlanCard'
 import { ProviderSwitchDivider } from '../components/ProviderSwitchDivider'
 import { AgentContextMeta } from '../components/AgentContextMeta'
@@ -1466,6 +1467,20 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               }
               if (entry.kind === 'confirm') {
                 const c = entry.confirm
+                // 带 questions = 这不是「批准执行」而是模型在提问(claude AskUserQuestion),画成可点的
+                // 选项卡,并把选择原样带回;走普通确认卡的话「允许」什么也没答,模型只会收到「没等到回复」。
+                if (c.questions?.length) {
+                  return (
+                    <AskQuestionCard
+                      key={c.id}
+                      id={c.id}
+                      questions={c.questions}
+                      agentName="主代理"
+                      provider="claude"
+                      onResolve={(p) => chat.resolveConfirm(p)}
+                    />
+                  )
+                }
                 return (
                   <ReqCard
                     key={c.id}
