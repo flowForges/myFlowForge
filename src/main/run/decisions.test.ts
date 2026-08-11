@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyGateDecision, type LaneDecision } from './decisions'
+import { applyGateDecision, laneDecisionToConfirm, type LaneDecision } from './decisions'
 import { initMachine, markRunning, advance, type RunPlan } from './machine'
 
 const plan: RunPlan = {
@@ -52,5 +52,24 @@ describe('LaneDecision doubt-resolution variants', () => {
     expect(redo).toEqual({ type: 'redo', feedback: '补充说明' })
     expect(jumpBackExplicit.type).toBe('jumpBack')
     expect(jumpBackDefault).toEqual({ type: 'jumpBack' })
+  })
+})
+
+describe('laneDecisionToConfirm', () => {
+  it('把「回答了问题」翻成带 answers 的放行 —— 只回 allow 等于没回答', () => {
+    expect(laneDecisionToConfirm({ type: 'answerQuestions', answers: { '选哪个？': ['TOML'] } }))
+      .toEqual({ decision: 'allow', answers: { '选哪个？': ['TOML'] }, response: undefined })
+  })
+  it('自由输入走 response', () => {
+    expect(laneDecisionToConfirm({ type: 'answerQuestions', response: '都不合适' }))
+      .toEqual({ decision: 'allow', answers: undefined, response: '都不合适' })
+  })
+  it('普通授权仍是二值,不受影响', () => {
+    expect(laneDecisionToConfirm({ type: 'authorize' })).toBe('allow')
+    expect(laneDecisionToConfirm({ type: 'deny' })).toBe('deny')
+    // 其余每一种 lane 决定都不是「放行」—— 别把 abort/retry 之类误判成同意。
+    for (const d of [{ type: 'abort' }, { type: 'retry' }, { type: 'skipLane' }, { type: 'escalate' }] as LaneDecision[]) {
+      expect(laneDecisionToConfirm(d)).toBe('deny')
+    }
   })
 })

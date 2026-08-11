@@ -5,6 +5,7 @@ import type { ArtifactRef } from '../../main/run/runTypes'
 import type { DesignDocRef } from '@shared/types'
 import type { FrozenRunCard } from '../views/chat/runCards'
 import { Markdown } from '../views/chat/markdown'
+import { AskQuestionPicker } from './AskQuestionPicker'
 // Reuses the wfo-act/am/arow/wfo-inp/wfo-btn classes ported straight from the deleted
 // WorkflowOverlay's RunNodeGate action block (see `git show 9c9780e~1:src/renderer/components/
 // WorkflowOverlay.tsx` for the ancestor markup) — same import pattern as LaunchGateCard.tsx/
@@ -247,7 +248,18 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
           </>
         )}
 
-        {event.kind === 'auth' && (
+        {/* 带 questions = 阶段代理在【问人】(claude AskUserQuestion),不是在申请权限:画成可点的选项并把
+            选择带回去。走 批准/拒绝 的话「批准」什么也没答,代理只会收到「用户没有回答」。 */}
+        {event.kind === 'auth' && event.questions?.length ? (
+          <div className="wfo-act">
+            <AskQuestionPicker
+              questions={event.questions}
+              onAnswer={({ answers, response }) => onLane(event.id, { type: 'answerQuestions', answers, response })}
+              onSkip={() => onLane(event.id, { type: 'deny' })}
+              skipLabel="拒绝"
+            />
+          </div>
+        ) : event.kind === 'auth' ? (
           <div className="wfo-act">
             <div className="am">{event.where ? `${event.title} · ${event.where}` : event.title}</div>
             <div className="arow">
@@ -255,7 +267,7 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
               <button className="wfo-btn ghost" onClick={() => onLane(event.id, { type: 'deny' })}>拒绝</button>
             </div>
           </div>
-        )}
+        ) : null}
 
         {event.kind === 'failure' && (
           <div className="wfo-act">

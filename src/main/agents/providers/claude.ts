@@ -1,6 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks, ConfirmDecision } from '../types'
-import { confirmAllowed } from '../types'
 import type { AskAnswers } from '@shared/types'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
@@ -111,22 +110,36 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const respond = (req: CanUseTool, allow: boolean) => {
         try { child.stdin?.write((allow ? controlAllowLine(req) : controlDenyLine(req)) + '\n') } catch { /* stdin gone */ }
       }
+      // Answer an AskUserQuestion gate: the picks ride back inside updatedInput (see controlAnswerLine).
+      const respondAnswer = (req: CanUseTool, answers: AskAnswers, response?: string) => {
+        try { child.stdin?.write(controlAnswerLine(req, answers, response) + '\n') } catch { /* stdin gone */ }
+      }
       let streamed = false
       let ctxMaxSeen = 0
       const KIND_LEVEL = { think: 'info', tool: 'accent', file: 'accent', output: 'accent' } as const
       const handle = async (obj: any) => {
         const cut = parseCanUseTool(obj)
         if (cut) {
+          // A stage agent can ask the human too (AskUserQuestion rides the permission channel) — lift
+          // its options out so the run's 需要授权 card renders a chooser instead of a bare 批准/拒绝.
+          const questions = cut.requiresUserInteraction || cut.toolName === 'AskUserQuestion'
+            ? parseAskQuestions(cut.input)
+            : null
           let decision: ConfirmDecision = 'deny'
           // A permission prompt is a legitimate human wait, not a wedge — suspend the idle watchdog so
           // it can't SIGTERM the agent mid-decision (finally always resumes).
           wd.pause()
-          try { decision = await cb.onConfirm({ title: `${cut.toolName} 请求执行`, where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName }) }
+          try {
+            decision = await cb.onConfirm({
+              title: questions ? askGateTitle(questions) : `${cut.toolName} 请求执行`,
+              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName,
+              ...(questions ? { questions } : {}),
+            })
+          }
           catch (e) { respond(cut, false); cb.onError(e instanceof Error ? e : new Error(String(e))); return }
           finally { wd.resume() }
-          // The workflow run path has no question-chooser card (only chat does), so a stage agent's
-          // AskUserQuestion still gets a plain allow/deny here.
-          respond(cut, confirmAllowed(decision) === 'allow')
+          if (typeof decision === 'object') respondAnswer(cut, decision.answers ?? {}, decision.response)
+          else respond(cut, decision === 'allow')
           return
         }
         const used = extractContextTokens(obj)

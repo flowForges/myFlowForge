@@ -170,6 +170,44 @@ describe('RunEventCard', () => {
     expect(onLane).toHaveBeenCalledWith('a1', { type: 'deny' })
   })
 
+  // 阶段代理也会【问人】(claude AskUserQuestion 借权限通道发出来)。这种 auth 事件带 questions,必须画成
+  // 可点的选项 —— 走 批准/拒绝 的话「批准」什么也没答,代理只会收到「用户没有回答」。
+  it('auth 带 questions:画出选项而不是批准/拒绝,选择随 answerQuestions 回传', () => {
+    const onLane = vi.fn()
+    const event: RunEvent = {
+      id: 'a2', kind: 'auth', laneId: 'l1', stageKey: 'design', title: '配置文件用哪种格式？',
+      questions: [{ question: '配置文件用哪种格式？', header: '配置格式', multiSelect: false, options: [
+        { label: 'JSON', description: '通用性最好' },
+        { label: 'TOML', description: '语法清晰' },
+      ] }],
+    }
+    const { container } = render(<RunEventCard event={event} onGate={vi.fn()} onLane={onLane} />)
+
+    expect(container.querySelectorAll('.req-opt')).toHaveLength(2)
+    expect(screen.getByText('语法清晰')).toBeInTheDocument()
+    // 「批准」不该再出现 —— 它正是那个点了等于没答的按钮。
+    expect(screen.queryByText('批准')).toBeNull()
+
+    fireEvent.click(screen.getByText('TOML'))
+    expect(onLane).toHaveBeenCalledWith('a2', { type: 'answerQuestions', answers: { '配置文件用哪种格式？': ['TOML'] }, response: undefined })
+  })
+
+  it('auth 带 questions:选项都不合适时可以直接打字,「拒绝」仍走 deny', () => {
+    const onLane = vi.fn()
+    const event: RunEvent = {
+      id: 'a3', kind: 'auth', laneId: 'l1', stageKey: 'design', title: '选哪个？',
+      questions: [{ question: '选哪个？', options: [{ label: 'A' }, { label: 'B' }] }],
+    }
+    render(<RunEventCard event={event} onGate={vi.fn()} onLane={onLane} />)
+
+    fireEvent.change(screen.getByPlaceholderText('以上都不合适？直接输入你的回答…'), { target: { value: '都不行' } })
+    fireEvent.click(screen.getByText('提交'))
+    expect(onLane).toHaveBeenCalledWith('a3', { type: 'answerQuestions', answers: {}, response: '都不行' })
+
+    fireEvent.click(screen.getByText('拒绝'))
+    expect(onLane).toHaveBeenCalledWith('a3', { type: 'deny' })
+  })
+
   it('failure: renders error+attempts and 重跑/跳过 route through resolveLane', () => {
     const onLane = vi.fn()
     const event: RunEvent = { id: 'f1', kind: 'failure', laneId: 'l2', stageKey: 'impl', error: '构建失败', attempts: 2 }

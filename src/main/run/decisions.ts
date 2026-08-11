@@ -1,4 +1,6 @@
 import { advance, redo, jumpBack, type MachineState } from './machine'
+import type { AskAnswers } from '@shared/types'
+import type { ConfirmDecision } from '../agents/types'
 
 export type GateDecision =
   | { type: 'advance' }
@@ -23,6 +25,10 @@ export type LaneDecision =
   | { type: 'authorize' }
   | { type: 'deny' }
   | { type: 'answer'; value: string }
+  // 回答一道「模型在问人」的授权(AuthEvent 带 questions,即 claude 的 AskUserQuestion)。
+  // 与 'authorize' 分开是因为放行和回答根本是两件事:只 authorize 会让 CLI 拿空 answers 跑完工具,阶段代理
+  // 收到「用户没有回答」。也与 'answer' 分开 —— 那个回的是 onInput 的一行自由文本,没有按题归属的选项。
+  | { type: 'answerQuestions'; answers?: AskAnswers; response?: string }
   | { type: 'escalate' }
   | { type: 'skipLane' }
   | { type: 'retry' }
@@ -40,6 +46,13 @@ export type LaneDecision =
   | { type: 'dismiss' }
   | { type: 'redo'; feedback?: string }
   | { type: 'jumpBack'; targetKey?: string; feedback?: string }
+
+// 一条 lane 的授权决定 → provider 的 onConfirm 返回值。放行/拒绝照旧走二值;而「回答了问题」必须带着选择
+// 走对象形态,否则 CLI 拿空 answers 跑完 AskUserQuestion,阶段代理只会收到「用户没有回答」。
+export function laneDecisionToConfirm(d: LaneDecision): ConfirmDecision {
+  if (d.type === 'answerQuestions') return { decision: 'allow', answers: d.answers, response: d.response }
+  return d.type === 'authorize' ? 'allow' : 'deny'
+}
 
 export function applyGateDecision(s: MachineState, d: GateDecision): MachineState {
   switch (d.type) {

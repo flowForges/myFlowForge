@@ -317,6 +317,39 @@ describe('RunController', () => {
     expect(auths.sort()).toEqual(['develop:a', 'develop:b'])
   })
 
+  // 阶段代理也会【问人】(claude 的 AskUserQuestion 借权限通道发出来)。整条链必须端到端通:
+  // ConfirmReq.questions → auth 事件(卡片才画得出选项) → answerQuestions 决定 → 带 answers 的放行。
+  // 断成任何一节,代理都只会收到「用户没有回答」,阶段就地卡住。
+  it('lane onConfirm 带 questions:选项进 auth 事件,答案原样回到 provider', async () => {
+    const store = new RunStore(ws, 'r1')
+    const questions = [{ question: '配置文件用哪种格式？', header: '配置格式', multiSelect: false, options: [{ label: 'JSON' }, { label: 'TOML' }] }]
+    let got: unknown
+    const asking: AgentProvider = {
+      id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+      async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+      run(task: AgentTask, cb: AgentCallbacks) {
+        const done = (async () => {
+          got = await cb.onConfirm({ title: '配置文件用哪种格式？', questions })
+          const r = { ok: true, summary: '' }; cb.onDone(r); return r
+        })()
+        return { id: task.agentId, cancel() {}, done }
+      },
+    }
+    const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'root', gate: false }] }
+    const c = new RunController(plan2, { providers: { x: asking }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory() })
+    const seen: RunEvent[] = []
+    c.onEvent((e) => {
+      if (e.kind !== 'auth') return
+      seen.push(e)
+      c.resolveLane(e.id, { type: 'answerQuestions', answers: { '配置文件用哪种格式？': ['TOML'] } })
+    })
+    await c.start()
+    // 卡片拿得到选项(修复前这里是 undefined,于是只能画一张空的「需要授权」)
+    expect(seen[0]?.kind === 'auth' ? seen[0].questions : undefined).toEqual(questions)
+    // 而 provider 拿到的是带答案的放行,不是光秃秃的 'allow'
+    expect(got).toEqual({ decision: 'allow', answers: { '配置文件用哪种格式？': ['TOML'] }, response: undefined })
+  })
+
   it('an abort on one lane force-unblocks concurrently blocked sibling lanes (no deadlock)', async () => {
     const store = new RunStore(ws, 'r1')
     const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
@@ -1193,6 +1226,37 @@ describe('RunController', () => {
         { providers: { x: orderProvider(order) }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
       await c.start()
       expect(order).toEqual(['design:root'])
+    })
+
+    // hook 走的是自己那条 onConfirm(runHookOnce),不是工单那条 —— 两条都得把 questions 送出去、把答案送回来,
+    // 否则织在阶段之间的微代理一问人就卡死在「用户没有回答」上。
+    it('hook 的 onConfirm 带 questions:一样进 auth 事件,答案一样回到 hook', async () => {
+      const store = new RunStore(ws, 'r1')
+      const questions = [{ question: '要用哪套模板？', options: [{ label: '精简' }, { label: '完整' }] }]
+      let got: unknown
+      const askingHook: AgentProvider = {
+        id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+        async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+        run(task: AgentTask, cb: AgentCallbacks) {
+          const done = (async () => {
+            // 只有 hook lane 会问;阶段自己安静跑完。
+            if (task.agentId.startsWith('hook:')) got = await cb.onConfirm({ title: '要用哪套模板？', questions })
+            const r = { ok: true, summary: '' }; cb.onDone(r); return r
+          })()
+          return { id: task.agentId, cancel() {}, done }
+        },
+      }
+      const c = new RunController(planWith([H('q', '__start')]),
+        { providers: { x: askingHook }, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory() })
+      const seen: RunEvent[] = []
+      c.onEvent((e) => {
+        if (e.kind !== 'auth') return
+        seen.push(e)
+        c.resolveLane(e.id, { type: 'answerQuestions', answers: { '要用哪套模板？': ['完整'] } })
+      })
+      await c.start()
+      expect(seen[0]?.kind === 'auth' ? seen[0].questions : undefined).toEqual(questions)
+      expect(got).toEqual({ decision: 'allow', answers: { '要用哪套模板？': ['完整'] }, response: undefined })
     })
 
     it('a failing hook BLOCKS on a failure card; 重跑 re-runs it to success', async () => {

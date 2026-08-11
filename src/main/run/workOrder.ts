@@ -34,7 +34,9 @@ export interface RunWorkOrderDeps {
   backoffMs?: number[]
   sleep?: (ms: number) => Promise<void>
   isTransient?: (err: Error) => boolean
-  onConfirm?: (req: import('../agents/types').ConfirmReq, laneId: string) => Promise<'allow' | 'deny'>
+  // ConfirmDecision(不只是二值):阶段代理也可能是在【问人】(claude AskUserQuestion),那时必须把用户选的
+  // 选项一并带回,否则 CLI 拿空 answers 跑完工具、代理收到「用户没有回答」。
+  onConfirm?: (req: import('../agents/types').ConfirmReq, laneId: string) => Promise<import('../agents/types').ConfirmDecision>
   onInput?: (req: import('../agents/types').InputReq, laneId: string) => Promise<string>
   onProgress?: (ev: { laneId: string; state?: import('../agents/types').AgentState; activity?: string; log?: import('../agents/types').LogLine }) => void
   // Surfaces the CLI-native session id a provider's `run()` emits via `cb.onSession(id)` (same

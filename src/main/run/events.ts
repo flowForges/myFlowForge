@@ -1,6 +1,10 @@
 import type { ArtifactRef } from './runTypes'
+import type { AskQuestion } from '@shared/types'
 
-export interface AuthEvent { id: string; kind: 'auth'; laneId: string; stageKey: string; title: string; where?: string }
+// questions 非空 = 这道授权其实是模型在【问人】(claude AskUserQuestion 借权限通道发出来的),卡片要画成
+// 可点的选项、并用 LaneDecision 的 answerQuestions 把选择带回去。只回 authorize 等于没回答 —— CLI 会拿空
+// answers 把工具跑完,阶段代理收到「The user did not answer the questions.」。见 claudeControl.ts。
+export interface AuthEvent { id: string; kind: 'auth'; laneId: string; stageKey: string; title: string; where?: string; questions?: AskQuestion[] }
 export interface QuestionEvent { id: string; kind: 'question'; laneId: string; stageKey: string; title: string; placeholder?: string }
 export interface DoubtEvent { id: string; kind: 'doubt'; laneId: string; stageKey: string; note: string }
 export interface FailureEvent { id: string; kind: 'failure'; laneId: string; stageKey: string; error: string; attempts: number }

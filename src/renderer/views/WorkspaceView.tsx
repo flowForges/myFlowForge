@@ -109,6 +109,11 @@ function describeLaneDecision(d: LaneDecision): string {
     case 'authorize': return '批准'
     case 'deny': return '拒绝'
     case 'answer': return `回答：${d.value}`
+    // 凝固后的「决定：」那一行 —— 列出选中的选项(多题就都列上),自填的回答接在后面。
+    case 'answerQuestions': {
+      const parts = [...Object.values(d.answers ?? {}).flat(), ...(d.response?.trim() ? [d.response.trim()] : [])]
+      return parts.length ? `回答：${parts.join('、')}` : '回答'
+    }
     case 'escalate': return '升级'
     case 'skipLane': return '跳过'
     case 'retry': return '重跑'

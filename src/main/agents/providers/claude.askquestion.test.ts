@@ -121,6 +121,22 @@ describe('claude chat: AskUserQuestion 门', () => {
     expect(resp.toolUseID).toBe('toolu_ask')
   })
 
+  it('工作流 run() 路径同样拿到选项,并把答案回传(阶段代理也会问人)', async () => {
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [cli], defaultModels: [] })
+    const seen: ConfirmReq[] = []
+    const session = provider.run(
+      { stageKey: 'design', agentId: 'a1', name: 'Designer', prompt: 'x', cwd: dir, model: 'opus-4.8' },
+      {
+        onLog: () => {}, onState: () => {}, onInput: async () => '', onDone: () => {}, onError: () => {},
+        onConfirm: async (req) => { seen.push(req); return { decision: 'allow', answers: { '配置文件用哪种格式？': ['YAML'] } } },
+      },
+      process.env,
+    )
+    await session.done
+    expect(seen[0].questions?.[0].options.map(o => o.label)).toEqual(['JSON', 'YAML', 'TOML'])
+    expect(controlResponse().updatedInput.answers).toEqual({ '配置文件用哪种格式？': 'YAML' })
+  })
+
   it('普通权限请求不受影响:没有 questions,还是那张确认卡', async () => {
     const plain = join(dir, 'plain.js')
     writeFileSync(plain, PLAIN_CLI)

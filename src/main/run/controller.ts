@@ -9,7 +9,7 @@ import type { ArtifactRef } from './runTypes'
 import type { DevelopProject } from './runTypes'
 import type { RunStore } from './runStore'
 import { initMachine, markRunning, currentStage, jumpBack, type RunPlan, type MachineState, type StagePlan } from './machine'
-import { applyGateDecision, type GateDecision, type LaneDecision } from './decisions'
+import { applyGateDecision, laneDecisionToConfirm, type GateDecision, type LaneDecision } from './decisions'
 import { addEvent, removeEvent, findEvent, type RunEvent } from './events'
 import { addFeedback, editFeedback, removeFeedback, drainFeedback, type FeedbackDraft } from './feedback'
 import { ResolverRegistry } from './resolver'
@@ -684,9 +684,9 @@ export class RunController {
         if (this.aborted) return 'deny'
         const id = this.makeId('auth')
         const pp = this.laneR.create(id)
-        this.emitEvent({ id, kind: 'auth', laneId, stageKey: laneId, title: req.title, where: req.where })
+        this.emitEvent({ id, kind: 'auth', laneId, stageKey: laneId, title: req.title, where: req.where, questions: req.questions })
         const dd = await pp; this.drop(id); this.emitUpdate()
-        return dd.type === 'authorize' ? 'allow' : 'deny'
+        return laneDecisionToConfirm(dd)
       },
       onInput: (req) => this.askQuestion(laneId, laneId, req.title, req.placeholder),
     }
@@ -991,10 +991,10 @@ export class RunController {
         // caller resolves the lane right inside the onEvent callback) must find a live resolver
         // waiting, not settle into the void because create() hadn't run yet (would deadlock forever).
         const p = this.laneR.create(id)
-        this.emitEvent({ id, kind: 'auth', laneId, stageKey: order.stageKey, title: req.title, where: req.where })
+        this.emitEvent({ id, kind: 'auth', laneId, stageKey: order.stageKey, title: req.title, where: req.where, questions: req.questions })
         const d = await p
         this.drop(id); this.emitUpdate()
-        return d.type === 'authorize' ? 'allow' : 'deny'
+        return laneDecisionToConfirm(d)
       },
       onInput: (req: InputReq, laneId: string) => this.askQuestion(laneId, order.stageKey, req.title, req.placeholder),
     })
