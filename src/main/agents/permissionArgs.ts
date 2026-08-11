@@ -17,6 +17,12 @@ export function permissionArgs(providerId: string, mode: PermissionMode | undefi
       // Use -c overrides (NOT -s): `codex exec resume` rejects -s/--sandbox but accepts -c config.
       return ['-c', `sandbox_mode="${sandbox}"`, '-c', 'approval_policy="never"']
     }
+    // Antigravity 没有逐操作审批协议(--help 只有 --mode 与 --dangerously-skip-permissions),无头下由策略
+    // 决定:工作区内文件自动放行、shell 默认软拒绝。三档就映射到这两个开关,不去代改它的 settings.json。
+    case 'antigravity':
+      if (mode === 'readonly') return ['--mode', 'plan']
+      if (mode === 'full') return ['--dangerously-skip-permissions']
+      return ['--mode', 'accept-edits']
     case 'qoder':
       if (mode === 'readonly') return ['--permission-mode', 'default']
       if (mode === 'full') return ['--permission-mode', 'bypass_permissions', '--dangerously-skip-permissions']

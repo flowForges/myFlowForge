@@ -3,7 +3,7 @@ import { BUILTIN_PROVIDERS, BUILTIN_IDS, getBuiltinProvider } from './providerCa
 
 describe('BUILTIN_PROVIDERS catalog', () => {
   it('has exactly the 12 expected ids in order', () => {
-    expect(BUILTIN_IDS).toEqual(['claude', 'codex', 'gemini', 'qoder', 'cursor', 'opencode', 'qwen', 'copilot', 'pi', 'kimi', 'reasonix', 'trae'])
+    expect(BUILTIN_IDS).toEqual(['claude', 'codex', 'gemini', 'qoder', 'cursor', 'opencode', 'qwen', 'copilot', 'pi', 'kimi', 'reasonix', 'trae', 'antigravity'])
   })
 
   it('every entry has non-empty metadata fields', () => {

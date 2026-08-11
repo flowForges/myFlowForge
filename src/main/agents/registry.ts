@@ -11,6 +11,7 @@ import { makePiProvider } from './providers/pi'
 import { makeKimiProvider } from './providers/kimi'
 import { makeReasonixProvider } from './providers/reasonix'
 import { makeTraeProvider } from './providers/trae'
+import { makeAntigravityProvider } from './providers/antigravity'
 import { makeSubprocessProvider } from './providers/subprocess'
 import { readAgentsConfig } from '../config/store'
 import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
@@ -35,6 +36,7 @@ const FACTORIES: Record<string, ProviderFactory> = {
   kimi: makeKimiProvider,
   reasonix: makeReasonixProvider,
   trae: makeTraeProvider,
+  antigravity: makeAntigravityProvider,
 }
 
 // Build the live provider registry from agents.json: built-ins (with optional bin overrides)

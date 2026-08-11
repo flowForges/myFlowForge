@@ -36,7 +36,7 @@ export function isPermissionMode(v: unknown): v is PermissionMode {
 
 // Providers whose CLI exposes a real sandbox/permission dimension. Others ignore the mode (their
 // behaviour is fixed), which the UI surfaces so the picker isn't misleading.
-export const PERMISSION_AWARE_PROVIDERS = ['claude', 'codex', 'qoder'] as const
+export const PERMISSION_AWARE_PROVIDERS = ['claude', 'codex', 'qoder', 'antigravity'] as const
 export function providerSupportsPermissions(providerId: string): boolean {
   return (PERMISSION_AWARE_PROVIDERS as readonly string[]).includes(providerId)
 }

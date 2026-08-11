@@ -217,6 +217,24 @@ export const BUILTIN_PROVIDERS: BuiltinProviderMeta[] = [
     authCmd: 'traecli',
     installHelp: '装到 ~/.local/bin（记得把它加进 PATH）。运行 traecli 用企业账号登录；无头/CI 用 TRAECLI_PERSONAL_ACCESS_TOKEN 环境变量。想让它无人值守改文件，traecli config edit 设 permission_mode: bypass_permissions。',
   },
+  {
+    id: 'antigravity',
+    displayName: 'Antigravity',
+    defaultBin: 'agy',
+    glyph: 'A',
+    brandBg: 'oklch(64% .13 265 / .2)',
+    brandColor: 'oklch(70% .13 265)',
+    // Google Antigravity CLI。下载下来的二进制文件名是 antigravity，但它自报的用法是 `agy --print "…"`，
+    // `agy install` 会把它挂进 PATH —— 所以默认 bin 是 agy。无头:`agy -p "<prompt>" --output-format
+    // stream-json`(NDJSON,信封是 {"event":…,"<同名字段>":{…}}),续聊用 --conversation <conversation_id>。
+    // 模型必须登录后由 `agy models` 动态发现,这里只留一条「账号默认」占位，不预置型号。
+    defaultModels: [
+      { id: 'default', label: '账号默认', description: '登录后在设置里刷新，用 agy models 拉取真实列表' },
+    ],
+    installCmd: 'curl -fsSL https://antigravity.google/install.sh | sh',
+    authCmd: 'agy',
+    installHelp: '装好后先跑一次 agy（不带参数）用 Google 账号登录 —— 没登录的话模型列表和任何一轮对话都会直接报 authentication failed。装完若命令找不到，跑 agy install 配置 PATH。',
+  },
 ]
 
 // Lookup helpers
@@ -239,4 +257,5 @@ export const PROVIDER_DEFAULT_WINDOW: Record<string, number> = {
   kimi: 256_000,
   reasonix: 128_000,
   trae: 128_000,
+  antigravity: 1_048_576,   // Gemini 系,与 gemini 同级;真实值以流式 usage 为准
 }
