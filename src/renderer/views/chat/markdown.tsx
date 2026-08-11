@@ -119,7 +119,11 @@ export function renderMarkdown(text: string, allowHtml = false): ReactNode {
     const line = lines[i]
     // 内嵌 HTML 块 —— 整行以一个块级标签起手。和围栏不冲突:围栏行以 ``` 开头、匹配不到这个正则,所以
     // 模型把片段包进 ```html 时仍然走下面的代码块分支(那种写法用户要的是「看代码」)。
-    const htmlOpen = allowHtml ? /^\s*<([a-z][a-z0-9]*)\b/i.exec(line) : null
+    //
+    // ★前导空白最多 3 个:第 4 个空格起在 Markdown 里就是【缩进代码块】,不是 HTML 块(CommonMark 的规矩)。
+    // 原来写 ^\s* 放行任意缩进,于是「让模型读代码」时一段四空格缩进的 JSX 摘录被当成了可视化片段 ——
+    // 代码摘录极少配平,进来就永远等不到闭合标签,把整条回复的后文全吞进「可视化生成中…」的折叠块里。
+    const htmlOpen = allowHtml ? /^ {0,3}<([a-z][a-z0-9]*)\b/i.exec(line) : null
     if (htmlOpen && BLOCK_TAGS.has(htmlOpen[1].toLowerCase())) {
       flushPara()
       // 往后吃行,直到片段闭合。流式输出时最后一段片段是半截的(`<div style="padd`),这时不渲染 ——
@@ -150,17 +154,23 @@ export function renderMarkdown(text: string, allowHtml = false): ReactNode {
     }
     // fenced code block —— 容忍前导缩进(LLM 常把代码块缩进到列表项下,`   ```sql` 之前的正则要求顶格 → 没
     // 识别成围栏,原样漏出反引号)。记住围栏缩进,body 各行去掉同样多的前导空白,代码不被整体右移。
-    const fence = /^(\s*)```(\w*)\s*$/.exec(line)
+    //
+    // ★信息串按 CommonMark 收全(``` 之后除反引号外的任意内容),而不是只认「纯一个词」。原来的 (\w*)\s*$
+    // 让 ```tsx title="App.tsx" / ```tsx:src/a.tsx 这类写法【不算围栏】,于是里面的代码原地漏出来,第一行
+    // <div …> 又被上面的 HTML 分支接走 —— 引用的代码要么被渲染成活卡片,要么(摘录不配平时)把整条回复的
+    // 后文吞进「可视化生成中…」。语言名取信息串的第一个词。
+    const fence = /^(\s*)```([^`]*)$/.exec(line)
     if (fence) {
       flushPara()
       const indent = fence[1].length
       const strip = new RegExp('^\\s{0,' + indent + '}')
+      const lang = /^[a-z0-9_+#-]+/i.exec(fence[2].trim())?.[0]
       const body: string[] = []
       i++
       while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { body.push(lines[i].replace(strip, '')); i++ }
       i++ // skip closing fence
       // 修图10:空代码块(body 全空白)不渲染——LLM 常在结尾多输出一个空围栏,渲染成"1 行"空块很干扰。
-      if (body.join('').trim()) blocks.push(<CodeBlock key={`pre${key++}`} code={body.join('\n')} lang={fence[2] || undefined} />)
+      if (body.join('').trim()) blocks.push(<CodeBlock key={`pre${key++}`} code={body.join('\n')} lang={lang} />)
       continue
     }
     // GFM table: a header row with a pipe, immediately followed by a separator

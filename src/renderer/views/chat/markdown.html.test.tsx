@@ -120,3 +120,55 @@ describe('★ 未闭合片段不吞内容', () => {
     expect(det?.querySelector('pre')?.textContent).toContain('后面还有一段正文')
   })
 })
+
+// ★ 「让 claude 读代码」时,回复里引用的代码绝不能被当成内嵌可视化片段。
+//
+// 真实故障:一轮读代码的回复永久停在「可视化生成中…」,整条回复剩下的内容全被吞进那个折叠块。
+// 根因是这里的分支顺序 —— 内嵌 HTML 块分支跑在代码围栏分支【之前】,而且两道门都太松:
+//   1) 围栏正则只认 ```lang 这种「纯一个词」的信息串,```tsx title="A.tsx" / ```tsx:src/a.tsx 都不认,
+//      于是围栏没被识别,里面第一行 <div …> 直接掉进 HTML 分支;
+//   2) HTML 开标签正则允许任意前导空白,于是四空格缩进的代码摘录也被当成片段。
+// 而代码摘录本来就极少配平,进了 HTML 分支就永远等不到闭合标签 → 吃光后文、永久「生成中」。
+describe('★ 代码引用不能被误当成可视化片段(读代码场景)', () => {
+  const pending = (c: HTMLElement) => c.querySelectorAll('details.md-html-pending')
+
+  it('围栏带额外信息串(```tsx title="…")仍是代码块,不是 HTML', () => {
+    const c = on('这段在 ReqCard.tsx：\n\n```tsx title="ReqCard.tsx"\n<div className="req-opts">\n  {action.options.map((o, i) => (\n```\n\n后面还有解释正文。')
+    expect(pending(c)).toHaveLength(0)
+    expect(c.querySelector('.md-html')).toBeNull()          // 绝不能渲染成活的卡片
+    expect(c.textContent).toContain('后面还有解释正文。')   // 后文不能被吞
+    expect(c.querySelector('pre')?.textContent).toContain('req-opts')
+  })
+
+  it('围栏写成 ```tsx:src/x.tsx 也仍是代码块', () => {
+    const c = on('看：\n\n```tsx:src/renderer/x.tsx\n<div className="a">\n  <span>x\n```\n\n后面还有正文。')
+    expect(pending(c)).toHaveLength(0)
+    expect(c.querySelector('.md-html')).toBeNull()
+    expect(c.textContent).toContain('后面还有正文。')
+  })
+
+  it('四空格缩进的代码摘录不进 HTML 分支(4 空格起是 Markdown 的缩进代码,不是 HTML 块)', () => {
+    const c = on('这段在 ReqCard.tsx：\n\n    <div className="req-opts">\n      {action.options.map((o, i) => (\n\n后面还有解释正文。')
+    expect(pending(c)).toHaveLength(0)
+    expect(c.querySelector('.md-html')).toBeNull()
+    expect(c.textContent).toContain('后面还有解释正文。')
+  })
+
+  it('列表项里缩进的 JSX 摘录不吞掉后面的列表项', () => {
+    const c = on('- 第一处 `ReqCard.tsx`：\n\n    <div className="req-opt">\n\n- 第二处 `Message.tsx`')
+    expect(pending(c)).toHaveLength(0)
+    expect(c.textContent).toContain('第二处')
+  })
+
+  it('回归护栏:模型真正的片段(顶格 + 内联 style)照旧渲染', () => {
+    // 指令里明令禁止 class、要求 100% 内联 style —— 真片段就是顶格这一种形态。
+    const c = on('<div style="display:flex">卡片</div>')
+    expect(c.querySelector('.md-html')).toBeTruthy()
+    expect(pending(c)).toHaveLength(0)
+  })
+
+  it('回归护栏:CommonMark 允许片段有 1–3 个前导空格,这仍算片段', () => {
+    const c = on('  <div style="display:flex">卡片</div>')
+    expect(c.querySelector('.md-html')).toBeTruthy()
+  })
+})
