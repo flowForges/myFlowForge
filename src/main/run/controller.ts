@@ -145,6 +145,10 @@ export interface RunControllerState {
   // for every other terminal path (ok, or a plain abort), so the renderer can distinguish "the
   // merge itself failed, here's why" from a generic failed status with no specific cause.
   error?: string
+  // 收尾(合并/丢弃临时分支)有没有真的做完。true = 这个 run 已经收干净,没有遗留的临时分支要处理;
+  // false/缺省 = 还没走到收尾,或收尾**失败**了(合并冲突等)。Run2Manager.resumable 据此把「所有阶段都跑完、
+  // 只是收尾没成」和「某个阶段没跑完」区分开 —— 前者该提供「重新收尾」,而不是误导地说「从代码CR继续」。
+  finalized?: boolean
   // ①汇总 (end-of-run summary): the synthesized "本次运行总结" (or its deterministic digest fallback)
   // produced ONCE at genuine full-plan completion (start(), before runFinalizeGate) — see
   // buildRunSummary. Absent until then, and never set on abort/failure (the run must reach every
@@ -265,6 +269,8 @@ export class RunController {
   private outcomes: Record<string, WorkOrderOutcome[]> = {}
   private status: RunStatus = 'running'
   private error?: string
+  // 见 RunControllerState.finalized:收尾真的做完了才置 true(合并/丢弃成功,或压根没有临时分支要收)。
+  private finalized = false
   private summary?: string
   // ②多镜头CR:每个 lens-mode 代码CR 阶段完成时,把 composeReviewReport 合成的多视角报告存这里(keyed by
   // stageKey),供渲染层贴一张持久的「代码CR 结果」卡片。对话式工作流删了阶段门→CR 报告过去从没被呈现。
@@ -338,7 +344,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, summary: this.summary, reviewReports: { ...this.reviewReports }, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, finalized: this.finalized, summary: this.summary, reviewReports: { ...this.reviewReports }, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -695,7 +701,8 @@ export class RunController {
 
   private async runFinalizeGate(): Promise<void> {
     const targets = this.finalizeTargets()
-    if (targets.length === 0) return
+    // 没有临时分支要收 → 这个 run 天然就是收干净的,不能让它以「待收尾」的样子留在盘上。
+    if (targets.length === 0) { this.finalized = true; return }
 
     const id = this.makeId('gate')
     this.status = 'awaiting'
@@ -736,6 +743,7 @@ export class RunController {
         failures.push(`${t.name}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+    if (failures.length === 0) this.finalized = true
     if (failures.length > 0) {
       // Recorded on the controller (not just thrown) so the terminal RunControllerState carries
       // the real, readable per-project failure — Run2Manager's `.catch` only overrides `status`
@@ -1427,6 +1435,17 @@ export class RunController {
     this.paused = false
     this.deps.store.setContext('machine', this.machine)
     this.emitUpdate()
+    } catch (err) {
+      // 收尾失败(合并冲突等)会从 runFinalizeGate 抛上来,原本会跳过上面那段终态赋值 + emitUpdate ——
+      // 于是磁盘上永远停在 'running'。下次打开工作区 isTerminalStatus 判它「没跑完」,而 summarizeResumable
+      // 又找不到未完成的阶段、回落到最后一个,用户就看到了那句莫名其妙的「上次有工作流未完成,从代码CR继续?」。
+      // 这里补一次:任何从 start() 抛出的错都要把真实终态(failed + 原因)落盘,再原样抛给调用方。
+      this.status = 'failed'
+      if (!this.error) this.error = err instanceof Error ? err.message : String(err)
+      this.paused = false
+      this.deps.store.setContext('machine', this.machine)
+      this.emitUpdate()
+      throw err
     } finally {
       // Best-effort: a bridge that fails to close cleanly must not turn a finished run into a
       // thrown error (mirrors abortCleanup's best-effort stance above) — and must not mask/replace

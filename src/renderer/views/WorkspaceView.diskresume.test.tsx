@@ -91,6 +91,22 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
     expect(screen.getByText('丢弃')).toBeInTheDocument()
   })
 
+  // 真实事故(2026-08-12):所有阶段跑完、合并临时分支失败,用户看到的却是「上次有工作流未完成,从**代码CR**
+  // 继续?」——代码CR 早跑完了。该重来的是收尾,而且要说清为什么。
+  it('收尾失败时说的是"重新收尾"并带上原因,不说"从某阶段继续"', async () => {
+    resumableMock.mockImplementation(async () => ({
+      runId: 'run-fin', resumeStageKey: '__finalize__', resumeStageName: '收尾（合并临时分支）',
+      totalStages: 4, doneCount: 4, finalizeOnly: true,
+      error: '合并临时分支失败 — web: CONFLICT (content): Merge conflict in src/x.ts',
+    }) as never)
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+
+    await waitFor(() => expect(screen.getByText('继续')).toBeInTheDocument())
+    expect(screen.getByText(/收尾/)).toBeInTheDocument()
+    expect(screen.getByText(/Merge conflict/)).toBeInTheDocument()
+    expect(screen.queryByText(/从「/)).toBeNull()
+  })
+
   it('resumable() 返回 null 时,不显示提示', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(resumableMock).toHaveBeenCalledWith('/ws'))

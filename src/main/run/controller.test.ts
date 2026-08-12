@@ -2162,3 +2162,68 @@ describe('执行依据:技术方案文档 vs 需求原文', () => {
     expect(p).not.toContain('这一节')
   })
 })
+
+// 真实事故(2026-08-12):工作流所有阶段跑完、界面显示"完成",用户把顶部流程条关了,右侧才报「合并临时分支
+// 失败」;紧接着顶部冒出「上次有工作流未完成,从**代码CR**继续?」——而代码CR明明已经跑完了,该重来的是收尾。
+//
+// 链条:runFinalizeGate 合并失败 → throw → 跳过 start() 末尾的 `status='failed'` + emitUpdate,于是**终态
+// 从没落盘**(磁盘上还是 running);Run2Manager 的 .catch 只把 failed 发给渲染层、不写盘。下次开工作区
+// isTerminalStatus('running')=false → 判定"未完成可恢复";而 summarizeResumable 找第一个非 done 阶段找不到,
+// 回落到 stages[last] = 代码CR,于是冒出那句误导的提示。
+describe('收尾失败:状态必须落盘,不能装作没事', () => {
+  const failPlan: RunPlan = { runId: 'r-fin', stages: [{ key: 'develop', name: '代码开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+  const runMergeFailure = async () => {
+    const store = new RunStore(ws, 'r-fin')
+    const c = new RunController(failPlan, {
+      providers: { x: okProvider() }, store, env: {}, projects: [{ name: 'a', cwd: join(ws, 'a') }],
+      sleep: async () => {}, now: () => 0, makeId: idFactory(),
+      projectTargets: { a: 'main' },
+      mergeTempBranch: async () => { throw new Error('CONFLICT (content): Merge conflict in src/x.ts') },
+    })
+    c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, (e as { finalize?: boolean }).finalize ? { type: 'merge' } : { type: 'advance' }) })
+    await expect(c.start()).rejects.toThrow('合并')
+    return loadControllerState(store)!
+  }
+
+  it('落盘的状态是 failed —— 不再停在 running 让下次开区误判成"未完成"', async () => {
+    expect((await runMergeFailure()).status).toBe('failed')
+  })
+
+  it('落盘的状态带着真实失败原因(供界面直接显示,不用猜)', async () => {
+    const saved = await runMergeFailure()
+    expect(saved.error).toContain('合并临时分支失败')
+    expect(saved.error).toContain('Merge conflict')
+  })
+
+  it('阶段本身仍是 done —— 失败的是收尾,不是哪个阶段没跑完', async () => {
+    expect((await runMergeFailure()).machine.stages.every((s) => s.status === 'done')).toBe(true)
+  })
+
+  it('收尾没成功 ⇒ finalized 不为真(可据此提供"重新收尾",而不是重跑最后一个阶段)', async () => {
+    expect((await runMergeFailure()).finalized).toBeFalsy()
+  })
+
+  it('合并成功的运行标记 finalized —— 它才是真的收完尾了', async () => {
+    const store = new RunStore(ws, 'r-ok')
+    const c = new RunController({ ...failPlan, runId: 'r-ok' }, {
+      providers: { x: okProvider() }, store, env: {}, projects: [{ name: 'a', cwd: join(ws, 'a') }],
+      sleep: async () => {}, now: () => 0, makeId: idFactory(),
+      projectTargets: { a: 'main' }, mergeTempBranch: async () => {},
+    })
+    c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, (e as { finalize?: boolean }).finalize ? { type: 'merge' } : { type: 'advance' }) })
+    const final = await c.start()
+    expect(final.status).toBe('ok')
+    expect(loadControllerState(store)!.finalized).toBe(true)
+  })
+
+  it('压根没有临时分支要收尾的运行也算收完尾(不该被当成"待收尾")', async () => {
+    const store = new RunStore(ws, 'r-none')
+    const c = new RunController({ ...failPlan, runId: 'r-none' }, {
+      providers: { x: okProvider() }, store, env: {}, projects: [{ name: 'a', cwd: join(ws, 'a') }],
+      sleep: async () => {}, now: () => 0, makeId: idFactory(),
+    })
+    c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
+    await c.start()
+    expect(loadControllerState(store)!.finalized).toBe(true)
+  })
+})

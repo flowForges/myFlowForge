@@ -417,6 +417,63 @@ describe('Run2Manager', () => {
       saveControllerState(new RunStore(ws, runId), fixtureState(status))
     }
 
+
+    // 真实事故(2026-08-12):所有阶段跑完、合并临时分支失败,用户却被问「上次有工作流未完成,从**代码CR**
+    // 继续?」——代码CR 早跑完了,该重来的是收尾。恢复其实是对的(所有阶段 done 时 controller 直接跳到
+    // 收尾门),错的是这句话:它按「第一个没完成的阶段」找,找不到就回落到最后一个阶段,于是指着代码CR。
+    describe('收尾失败:提示要说"重新收尾",不能指着已经跑完的最后一个阶段', () => {
+      function finishedButUnmerged(): RunControllerState {
+        const st = fixtureState('failed')
+        return {
+          ...st,
+          machine: { ...st.machine, stages: st.machine.stages.map((x) => ({ ...x, status: 'done' as const })), currentIndex: 2 },
+          error: '合并临时分支失败 — a: CONFLICT (content): Merge conflict in src/x.ts',
+          finalized: false,
+        }
+      }
+
+      it('仍然可恢复(不然用户没有重试合并的路,只能自己去 git 里收拾)', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
+        expect(mgr.resumable(ws)).not.toBeNull()
+      })
+
+      it('提示指向收尾,而不是最后一个阶段', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
+        const r = mgr.resumable(ws)!
+        expect(r.finalizeOnly).toBe(true)
+        expect(r.resumeStageName).toContain('收尾')
+        expect(r.resumeStageKey).not.toBe('s3')
+      })
+
+      it('带上失败原因,让提示能说清为什么要重来', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
+        expect(mgr.resumable(ws)!.error).toContain('Merge conflict')
+      })
+
+      it('点「继续」能真的重新收尾:resumeFromDisk 不再把它当作"没有可恢复的运行"拒掉', async () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
+        expect(() => mgr.resumeFromDisk(ws, { projects: [{ name: 'a', cwd: join(ws, 'a') }] })).not.toThrow()
+      })
+
+      it('阶段全 done 且已收尾的运行不再提供恢复(它是真的完事了)', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-done'), { ...finishedButUnmerged(), status: 'ok', finalized: true, error: undefined })
+        expect(mgr.resumable(ws)).toBeNull()
+      })
+
+      it('普通的阶段中断仍按老规矩报「从某阶段继续」,不受影响', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        seed('run-mid', 'running')
+        const r = mgr.resumable(ws)!
+        expect(r.finalizeOnly).toBeFalsy()
+        expect(r.resumeStageKey).toBe('s2')
+      })
+    })
+
     it('resumable() summarizes a non-terminal saved run2-state (resume stage = first non-done, doneCount counts `done` stages)', () => {
       const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
       seed('run-x', 'running')

@@ -49,6 +49,7 @@ import { LaunchGateCard } from '../components/LaunchGateCard'
 import type { LaunchGateConfig, LaunchGateFrozen } from '../components/LaunchGateCard'
 import type { LaunchStartConfig } from '../../main/run/launch'
 import { buildConversationSeed } from './chat/launchSeed'
+import { workflowPhaseNote } from './workflowNote'
 import { RunEventCard } from '../components/RunEventCard'
 import { toRunCardEntries } from './chat/runCards'
 import type { FrozenRunCard } from './chat/runCards'
@@ -1377,7 +1378,16 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             in the workspace. */}
         {run2.resumable && !archived && (!run2.resumable.sessionId || run2.resumable.sessionId === sessions.activeSessionId) && (
           <div className="supplement-banner">
-            <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
+            {/* 所有阶段都跑完、只是收尾(合并临时分支)失败时,说的必须是「重新收尾」——原来它按「第一个未完成
+                阶段」找,找不到就回落到最后一个阶段,于是把合并冲突说成了「从代码CR继续」,指着一个早就跑完的
+                阶段,用户完全无法理解。这一支还把真实原因(哪个项目、哪个文件冲突)直接摆出来。 */}
+            {run2.resumable.finalizeOnly ? (
+              <span>
+                上次的工作流阶段都跑完了，但收尾没成功：{run2.resumable.error ?? '合并临时分支失败'}。要重新收尾吗？
+              </span>
+            ) : (
+              <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
+            )}
             <button className="supplement-ok" onClick={() => { void run2.resumeFromDisk(sessions.activeSessionId ?? undefined) }}>继续</button>
             <button className="supplement-cancel" onClick={() => { void run2.discardResumable() }}>丢弃</button>
           </div>
@@ -1826,11 +1836,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     ? (() => {
                         // 对话阶段:复用 beta.16 的 RunExecPanel(合成只读 state);头部覆盖为"工作流·<名>"、
                         // 隐藏临时分支与运行控制,其余卡片样式与真运行逐字节一致。
-                        const total = activeWorkflow.stages.length
-                        const cur = Math.min(activeWorkflow.currentIndex + 1, total)
-                        const note = activeWorkflow.phase === 'done'
-                          ? '工作流已完成 · 所有阶段已走完'
-                          : `对话阶段 · 第 ${cur}/${total} 步，在左侧会话区与当前 provider 对话推进`
+                        // 见 workflowNote.ts:phase=done 涵盖了 ok 和 failed 两种终态,所以「已完成」这句
+                        // 不能只看 phase —— 合并临时分支失败时它得说实话。
+                        const note = workflowPhaseNote(activeWorkflow, run2.state?.machine?.plan?.runId
+                          ? { status: run2.state.status, runId: run2.state.machine.plan.runId, error: run2.state.error }
+                          : null)
                         // 把左侧会话区当前 AI 的实时输出镜像成当前对话阶段卡的「执行过程」(img20 诉求:执行
                         // 过程也输出、随左侧流式更新)。scanContext 负责真实的 skill/rule/mcp chips。
                         const curStage = activeWorkflow.stages[activeWorkflow.currentIndex]

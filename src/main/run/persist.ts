@@ -59,6 +59,11 @@ export interface SavedControllerState {
   // run2-state loads it as `undefined` (a run that finished before this field existed simply has no
   // stored summary, exactly as before). Only ever set on a run that completed every stage.
   summary?: string
+  // 见 RunControllerState.error / .finalized(controller.ts)。这两个是「所有阶段都跑完、只是收尾(合并临时
+  // 分支)失败了」这种局面的全部线索:没有它们,重启后只知道 status=failed,既说不出为什么失败,也分不清
+  // 该「重跑某个阶段」还是「重新收尾」。可选 ⇒ 老的 run2-state 读出来是 undefined,按「未收尾」保守处理。
+  error?: string
+  finalized?: boolean
 }
 
 const KEY = 'run2-state'
@@ -71,7 +76,7 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
       provider: o.order.provider, model: o.order.model, cwd: o.order.cwd,
     }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects, summary: s.summary })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects, summary: s.summary, error: s.error, finalized: s.finalized })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY) as SavedControllerState | undefined

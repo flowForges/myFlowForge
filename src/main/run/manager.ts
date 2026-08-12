@@ -87,6 +87,12 @@ export interface ResumableSummary {
   resumeStageName: string
   totalStages: number
   doneCount: number
+  // 所有阶段都跑完了、只是**收尾**(合并/丢弃临时分支)没成 —— 恢复它不会重跑任何阶段,直接回到收尾门
+  // (controller 的主循环见到「当前阶段已 done」就 break,径直进 runFinalizeGate)。渲染层据此换一句
+  // 诚实的提示:「上次的收尾没完成,重新收尾?」,而不是误导地说「从代码CR继续」。
+  finalizeOnly?: boolean
+  // 失败原因(SavedControllerState.error),让提示能直接说清为什么要重来(合并冲突在哪个文件)。
+  error?: string
   // N1: the OWNING session (SavedControllerState.sessionId, itself echoed from
   // RunControllerDeps.sessionId — see its doc in controller.ts / persist.ts), so the renderer can
   // scope the "是否继续" resume banner to that session only (same convention as run2StateForTab in
@@ -99,6 +105,9 @@ export interface ResumableSummary {
 function summarizeResumable(runId: string, state: SavedControllerState): ResumableSummary {
   const stages = state.machine.stages
   const idx = stages.findIndex((s) => s.status !== 'done')
+  // 一个未完成的阶段都找不到 ⇒ 差的只有收尾。原来这里回落到 stages[last],于是把「合并临时分支失败」
+  // 说成了「从代码CR继续」——指着一个早就跑完的阶段,用户完全无法理解。
+  const finalizeOnly = idx < 0
   const resumeStage = stages[idx] ?? stages[stages.length - 1]
   const stagePlan = state.machine.plan.stages.find((s) => s.key === resumeStage?.key)
   // Count in FULL-workflow terms, not just this tail run's stages: a conversational workflow's tail run
@@ -110,12 +119,20 @@ function summarizeResumable(runId: string, state: SavedControllerState): Resumab
   const doneCount = leadN + stages.filter((s) => s.status === 'done').length
   return {
     runId,
-    resumeStageKey: resumeStage?.key ?? '',
-    resumeStageName: stagePlan?.name ?? resumeStage?.key ?? '',
+    resumeStageKey: finalizeOnly ? '__finalize__' : (resumeStage?.key ?? ''),
+    resumeStageName: finalizeOnly ? '收尾（合并临时分支）' : (stagePlan?.name ?? resumeStage?.key ?? ''),
     totalStages: leadN + stages.length,
     doneCount,
     sessionId: state.sessionId,
+    ...(finalizeOnly ? { finalizeOnly: true } : {}),
+    ...(state.error ? { error: state.error } : {}),
   }
+}
+
+// 「所有阶段都跑完,只是收尾失败」:状态是 failed、每个阶段都 done、finalized 不为真。老的存档没有
+// finalized 字段(读出来 undefined),按「未收尾」保守处理 —— 顶多多问一次要不要重新收尾,不会丢东西。
+function isUnfinalizedFailure(state: SavedControllerState): boolean {
+  return state.status === 'failed' && !state.finalized && state.machine.stages.every((s) => s.status === 'done')
 }
 
 export class Run2Manager {
@@ -243,7 +260,11 @@ export class Run2Manager {
   resumable(wsPath: string): ResumableSummary | null {
     if (this.controllers.has(wsPath)) return null
     const found = findLatestRun2Run(wsPath)
-    if (!found || isTerminalStatus(found.state.status)) return null
+    if (!found) return null
+    // 老规矩:非终态 = 驱动它的进程没走到终点,可恢复。
+    // 新增:终态 failed、所有阶段都 done、但**收尾没做完**(合并临时分支失败)也要给恢复入口 —— 否则用户
+    // 只剩一条报错信息,得自己去 git 里收拾那条临时分支。恢复它不重跑任何阶段,直接回到收尾门重试合并/丢弃。
+    if (isTerminalStatus(found.state.status) && !isUnfinalizedFailure(found.state)) return null
     return summarizeResumable(found.runId, found.state)
   }
 
@@ -264,7 +285,9 @@ export class Run2Manager {
       throw new Error(`Run2Manager.resumeFromDisk: workspace already has an active run: ${wsPath}`)
     }
     const found = findLatestRun2Run(wsPath)
-    if (!found || isTerminalStatus(found.state.status)) {
+    // 与 resumable() 用同一套判定(两边必须一致,否则横幅显示了却点不动):非终态,或「阶段全跑完但收尾
+    // 失败」。后者恢复后不重跑任何阶段,主循环见当前阶段已 done 就 break,直接回到收尾门重试合并/丢弃。
+    if (!found || (isTerminalStatus(found.state.status) && !isUnfinalizedFailure(found.state))) {
       throw new Error(`Run2Manager.resumeFromDisk: no resumable run for workspace: ${wsPath}`)
     }
     const store = this.deps.makeStore(wsPath, found.runId)
