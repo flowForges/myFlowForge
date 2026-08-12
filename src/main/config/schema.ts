@@ -566,6 +566,10 @@ export const WsStageSchema = z.object({
   projectAgent: z.boolean().optional(),
   producesDoc: z.boolean().optional(),
   permissionMode: z.enum(['readonly', 'auto', 'full']).optional(),  // 每阶段权限档(未设 → 回退运行级)
+  // 阶段级项目代理:本阶段对某个项目单独指定的编码代理。让「按项目 CR」能用与「代码开发」不同的 provider ——
+  // 在这之前所有 per-project 阶段共用项目那一个 provider,开发/CR/写单测被锁死成同一个。
+  // optional ⇒ 老 workspace.json 零迁移;不填 = 跟项目走(旧行为)。
+  projectAgents: z.array(z.object({ name: z.string(), provider: z.string(), model: z.string() })).optional(),
 })
 export type WsStage = z.infer<typeof WsStageSchema>
 

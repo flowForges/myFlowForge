@@ -62,6 +62,8 @@ function stagesOf(wf: WizardWorkflow): CreateWorkspaceStage[] {
         ...(s.summary !== undefined ? { summary: s.summary } : {}),
         ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
         ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+        // 阶段级项目代理(按项目 CR 换 provider):没配过就不带,保持 DTO 与从前逐字节一致。
+        ...(s.projectAgents?.length ? { projectAgents: s.projectAgents } : {}),
       }
     })
 }
@@ -100,6 +102,8 @@ function stagesFor(wfStages: WsStage[], baseStages: Record<string, WizardStage>,
     ...(s.summary !== undefined ? { summary: s.summary } : {}),
     ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
     ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+    // 编辑工作区时把已配好的阶段级项目代理带回向导,否则一保存就被抹掉。
+    ...(s.projectAgents?.length ? { projectAgents: s.projectAgents } : {}),
   }
   return stages
 }

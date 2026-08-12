@@ -134,6 +134,9 @@ export interface StageCustomFields {
   summary?: boolean
   projectAgent?: boolean
   producesDoc?: boolean
+  // 阶段级项目代理:本阶段为某个项目单独指定的编码代理(「按项目 CR」用与「代码开发」不同的 provider)。
+  // 不填 = 该项目跟自己的编码代理走(旧行为)。
+  projectAgents?: { name: string; provider: string; model: string }[]
 }
 export interface CreateWorkspaceStage extends StageCustomFields { key: string; provider: string; model: string; review?: ReviewConfig; prompt?: string }
 export interface CreateWorkspaceWorkflow { id: string; name: string; stages: CreateWorkspaceStage[] }

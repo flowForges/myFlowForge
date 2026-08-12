@@ -54,6 +54,9 @@ export function planFromStages(runId: string, stages: StageSpec[], hooks?: Plugi
       review: s.review,
       // 每阶段权限档,透传给 fanout 做每 lane 解析(项目 > 阶段 > 运行级)。undefined → 回退运行级。
       permissionMode: s.permissionMode,
+      // 阶段级项目代理(按项目 CR 换 provider)。空数组一律收敛成 undefined,让「没配过」在 plan 上只有
+      // 一种形状 —— 否则 `projectAgents: []` 会在快照/对比里冒充「配过了」。
+      ...(s.projectAgents?.length ? { projectAgents: s.projectAgents } : {}),
     }
   })
   // P4-2: every RunPlan gets its run's temp-branch name stamped in (single value shared across all

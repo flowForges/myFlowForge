@@ -1,4 +1,5 @@
 import type { ReviewConfig } from '../config/schema'
+import type { StageProjectAgent } from './machine'
 import type { Plugin } from '../../shared/plugin'
 import type { StageRuntime } from '@shared/types'
 import type { PermissionMode } from '@shared/permissions'
@@ -42,7 +43,7 @@ export type StageScope = 'root' | 'per-project'
 // summary: after per-project runs, append a 汇总 agent (design's cross-project consolidation). projectAgent:
 // use each project's own provider/model (develop). producesDoc: force a markdown deliverable (design). All
 // default (per built-in key) via the config helpers; custom stages set them explicitly.
-export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[]; gate?: boolean; reworkNote?: string; summary?: boolean; projectAgent?: boolean; producesDoc?: boolean; permissionMode?: PermissionMode }
+export interface StageSpec { key: string; name: string; provider: string; model: string; scope?: StageScope; review?: ReviewConfig; prompt?: string; projects?: string[]; gate?: boolean; reworkNote?: string; summary?: boolean; projectAgent?: boolean; producesDoc?: boolean; permissionMode?: PermissionMode; projectAgents?: StageProjectAgent[] }
 
 // Where a stage's agent(s) are spawned:
 //  - 'root'        → one agent in the workspace root

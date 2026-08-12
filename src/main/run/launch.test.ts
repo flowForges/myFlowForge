@@ -273,6 +273,58 @@ describe('review 扇出:多镜头(off) ⇄ 按项目(on)', () => {
   })
 })
 
+// 阶段级项目代理:按项目 CR 用与代码开发不同的 provider。工作区里配过的是默认值,启动门当次改的赢过它。
+describe('阶段级项目代理(按项目 CR 换 provider)', () => {
+  const wsPersisted: Workspace = {
+    name: 'r', path: '/ws/r', workflowId: '', stages: [],
+    workflows: [{ id: 'wf', name: 'wf', stages: [
+      { key: 'develop', provider: 'claude', model: 'opus' },
+      // 工作区里配好的:CR 按项目跑,a 项目用 codex 审
+      { key: 'review', provider: 'claude', model: 'opus', scope: 'per-project',
+        projectAgents: [{ name: 'a', provider: 'codex', model: 'gpt-5-codex' }] },
+    ] }],
+    projects: [{ repoId: 'a', name: 'a', branch: 'main', provider: 'claude', model: 'opus' },
+               { repoId: 'b', name: 'b', branch: 'main', provider: 'claude', model: 'opus' }] as any,
+    status: 'idle', plugins: [], stepPlugins: [],
+  } as any
+  const baseCfg = (stages: LaunchStartConfig['stages']): LaunchStartConfig => ({
+    workspacePath: '/ws/r', workflowId: 'wf',
+    projects: [{ name: 'a', provider: 'claude', model: 'opus' }, { name: 'b', provider: 'claude', model: 'opus' }],
+    supplement: '', seed: '', stages,
+  })
+  const ordersFor = (cfg: LaunchStartConfig, key: string) => {
+    const stage = buildLaunchPlan(cfg, wsPersisted).stages.find((s) => s.key === key)!
+    return buildWorkOrders({ stage, workspacePath: '/ws/r', projects: buildLaunchProjects(cfg, wsPersisted), upstream: [], buildPrompt: () => 'x' })
+  }
+
+  it('工作区里配好的阶段级项目代理会带进 plan(启动门没改时就用它)', () => {
+    const orders = ordersFor(baseCfg([{ key: 'review', enabled: true, perProject: true }]), 'review')
+    expect(orders.map((o) => [o.project, o.provider])).toEqual([['a', 'codex'], ['b', 'claude']])
+  })
+
+  it('同一次启动里代码开发不受影响,仍走项目自己的编码代理', () => {
+    const orders = ordersFor(baseCfg([{ key: 'review', enabled: true, perProject: true }]), 'develop')
+    expect(orders.map((o) => o.provider)).toEqual(['claude', 'claude'])
+  })
+
+  it('启动门当次改的覆盖赢过工作区里配好的', () => {
+    const cfg = baseCfg([{ key: 'review', enabled: true, perProject: true,
+      projects: [{ name: 'a', provider: 'gemini', model: 'gemini-2.5-pro' }] }])
+    const orders = ordersFor(cfg, 'review')
+    expect(orders.map((o) => [o.project, o.provider])).toEqual([['a', 'gemini'], ['b', 'claude']])
+  })
+
+  it('buildLaunchInfo 把工作区里配好的带给启动门做初值', () => {
+    const review = buildLaunchInfo(wsPersisted, [], []).workflows[0].stages.find((s) => s.key === 'review')!
+    expect(review.projectAgents).toEqual([{ name: 'a', provider: 'codex', model: 'gpt-5-codex' }])
+  })
+
+  it('两处都没配的阶段不产生 projectAgents(老工作区零变化)', () => {
+    const plan = buildLaunchPlan(baseCfg([{ key: 'develop', enabled: true }]), wsPersisted)
+    expect(plan.stages.find((s) => s.key === 'develop')!.projectAgents).toBeUndefined()
+  })
+})
+
 // P4-2: at run start, each participating project's worktree must be checked out onto the run's shared
 // temp branch off ITS OWN configured target branch (ws.projects[].branch) — no real git here, createBranch
 // is injected as a fake recorder/failure-simulator per the task's "do not touch real git in tests" rule.

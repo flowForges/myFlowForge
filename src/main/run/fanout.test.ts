@@ -73,6 +73,60 @@ describe('buildWorkOrders', () => {
   })
 })
 
+// 阶段级项目代理:按项目 CR 要能用与代码开发不同的 provider。以前 per-project lane 一律取
+// `p.provider || stage.provider`,而 DevelopProject 只有一个 provider —— 于是开发/CR/写单测三个按项目阶段
+// 被同一个值锁死(用户看到的现象:「代码开发和代码CR的 provider 是同步的」)。现在阶段可以逐项目覆盖。
+describe('buildWorkOrders · 阶段级项目代理 (阶段覆盖 > 项目 > 阶段默认)', () => {
+  const projects = [{ name: 'a', cwd: '/ws/a', provider: 'claude', model: 'opus' }, { name: 'b', cwd: '/ws/b', provider: 'claude', model: 'opus' }]
+
+  it('阶段对某项目的覆盖赢过该项目自己的编码代理', () => {
+    const cr: StagePlan = {
+      key: 'review', name: '代码CR', provider: 'x', model: 'm', scope: 'per-project', gate: true,
+      projectAgents: [{ name: 'a', provider: 'codex', model: 'gpt-5-codex' }],
+    }
+    const orders = buildWorkOrders({ stage: cr, workspacePath: '/ws', projects, upstream: [], buildPrompt })
+    expect(orders[0].provider).toBe('codex')
+    expect(orders[0].model).toBe('gpt-5-codex')
+  })
+
+  it('没被覆盖的项目仍走它自己的编码代理', () => {
+    const cr: StagePlan = {
+      key: 'review', name: '代码CR', provider: 'x', model: 'm', scope: 'per-project', gate: true,
+      projectAgents: [{ name: 'a', provider: 'codex', model: 'gpt-5-codex' }],
+    }
+    const orders = buildWorkOrders({ stage: cr, workspacePath: '/ws', projects, upstream: [], buildPrompt })
+    expect(orders[1].provider).toBe('claude')
+    expect(orders[1].model).toBe('opus')
+  })
+
+  it('覆盖是 provider+model 成对的:model 绝不回落到项目的(那是另一个 provider 的模型 id)', () => {
+    const cr: StagePlan = {
+      key: 'review', name: '代码CR', provider: 'x', model: 'm', scope: 'per-project', gate: true,
+      projectAgents: [{ name: 'a', provider: 'codex', model: '' }],
+    }
+    const orders = buildWorkOrders({ stage: cr, workspacePath: '/ws', projects, upstream: [], buildPrompt })
+    expect(orders[0].provider).toBe('codex')
+    expect(orders[0].model).toBe('')
+  })
+
+  it('没有 provider 的覆盖条目视同没设,不劫持项目的选择', () => {
+    const cr: StagePlan = {
+      key: 'review', name: '代码CR', provider: 'x', model: 'm', scope: 'per-project', gate: true,
+      projectAgents: [{ name: 'a', provider: '', model: 'gpt-5-codex' }],
+    }
+    const orders = buildWorkOrders({ stage: cr, workspacePath: '/ws', projects, upstream: [], buildPrompt })
+    expect(orders[0].provider).toBe('claude')
+    expect(orders[0].model).toBe('opus')
+  })
+
+  it('阶段没有任何覆盖时,行为与从前逐字节一致', () => {
+    const dev: StagePlan = { key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: true }
+    const orders = buildWorkOrders({ stage: dev, workspacePath: '/ws', projects: [...projects, { name: 'c', cwd: '/ws/c' }], upstream: [], buildPrompt })
+    expect(orders.map((o) => o.provider)).toEqual(['claude', 'claude', 'x'])
+    expect(orders.map((o) => o.model)).toEqual(['opus', 'opus', 'm'])
+  })
+})
+
 describe('buildWorkOrders · per-lane permission (项目 > 阶段 > 运行级)', () => {
   it('root: stage.permissionMode wins over the run-wide input.permissionMode', () => {
     const stage: StagePlan = { ...rootStage, permissionMode: 'readonly' }

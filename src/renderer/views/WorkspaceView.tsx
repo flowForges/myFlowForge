@@ -442,14 +442,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const sid = sessions.activeSessionId
     const run2Ipc = (window as any).forge?.run2
     const infoPromise: Promise<{
-      workflows: { id: string; name: string; stages: { key: string; name: string; gate?: boolean; code?: boolean; producesDoc?: boolean; lensCount?: number; provider?: string; model?: string }[] }[]
+      workflows: { id: string; name: string; stages: { key: string; name: string; gate?: boolean; code?: boolean; producesDoc?: boolean; lensCount?: number; provider?: string; model?: string; projectAgents?: { name: string; provider: string; model: string }[] }[] }[]
       projects: { name: string; provider?: string; model?: string }[]
       hooks?: { id: string; name: string; after: string }[]
     }> = run2Ipc?.launchInfo ? run2Ipc.launchInfo(wsPath) : Promise.resolve({ workflows: [], projects: [], hooks: [] })
     void infoPromise.then((info) => {
       const workflows = info.workflows.map((w) => ({
         id: w.id, name: w.name, stageCount: w.stages.length,
-        stages: w.stages.map((s) => ({ key: s.key, name: s.name, gate: !!s.gate, code: !!s.code, producesDoc: !!s.producesDoc, lensCount: s.lensCount ?? 0, provider: s.provider ?? '', model: s.model ?? '' })),
+        stages: w.stages.map((s) => ({ key: s.key, name: s.name, gate: !!s.gate, code: !!s.code, producesDoc: !!s.producesDoc, lensCount: s.lensCount ?? 0, provider: s.provider ?? '', model: s.model ?? '', ...(s.projectAgents?.length ? { projectAgents: s.projectAgents } : {}) })),
       }))
       const selectedWorkflowId = workflowId && workflows.some((w) => w.id === workflowId)
         ? workflowId

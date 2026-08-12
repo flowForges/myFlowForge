@@ -42,12 +42,18 @@ export function buildWorkOrders(input: StageInput): WorkOrder[] {
     }]
   }
   return projects.map((p) => {
+    // 阶段级项目代理 > 项目的编码代理 > 阶段默认。前者让「按项目 CR」能挑一个跟代码开发不同的 agent
+    // (以前所有 per-project 阶段共用项目那一个 provider,只能同步)。覆盖成对生效:认了它的 provider 就
+    // 用它的 model,不与项目的 model 混搭(跨 provider 的模型 id 根本跑不起来)。
+    const ov = stage.projectAgents?.find((o) => o.name === p.name && o.provider)
     const base = buildPrompt({ stageKey: stage.key, project: p.name, cwd: p.cwd, upstream })
     // D4(2026-07-30):进入执行前用户为该项目编辑的"任务简报",作为该 lane 的最高优先指令前置到 prompt。
     const prompt = p.brief && p.brief.trim() ? `【本项目任务简报（以此为准）】\n${p.brief.trim()}\n\n${base}` : base
     return {
       id: `${stage.key}:${p.name}`, stageKey: stage.key, name: stage.name, project: p.name,
-      provider: p.provider || stage.provider, model: p.model || stage.model, cwd: p.cwd,
+      provider: ov ? ov.provider : (p.provider || stage.provider),
+      model: ov ? ov.model : (p.model || stage.model),
+      cwd: p.cwd,
       prompt,
       permissionMode: p.permissionMode ?? stagePerm,
     }

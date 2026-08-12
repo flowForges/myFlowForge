@@ -18,7 +18,7 @@ export interface LaunchGateConfig {
   // per-project/writes code (its provider/model comes from the per-project pickers, not a per-stage one);
   // `gate` = it pauses for confirmation; `provider`/`model` = the stage's default agent (editable in the
   // gate for non-code stages). Empty for rehydrated (frozen) gates — they render a static record.
-  workflows: { id: string; name: string; stageCount: number; stages: { key: string; name: string; gate: boolean; code: boolean; producesDoc?: boolean; lensCount?: number; provider: string; model: string }[] }[]
+  workflows: { id: string; name: string; stageCount: number; stages: { key: string; name: string; gate: boolean; code: boolean; producesDoc?: boolean; lensCount?: number; provider: string; model: string; projectAgents?: { name: string; provider: string; model: string }[] }[] }[]
   selectedWorkflowId: string
   projects: { name: string; selected: boolean; provider: string; model: string }[]
   supplement: string
@@ -27,7 +27,7 @@ export interface LaunchGateConfig {
   // Interactive results the card fills on confirm (like `projects` carries edited selection): which
   // stages/hooks to run + per-stage provider/model overrides. WorkspaceView maps these into the run's
   // LaunchStartConfig.stages/hooks. Absent on rehydrated/old configs → run everything (backward compat).
-  stageChoices?: { key: string; enabled: boolean; provider: string; model: string; perProject?: boolean }[]
+  stageChoices?: { key: string; enabled: boolean; provider: string; model: string; perProject?: boolean; projects?: { name: string; provider: string; model: string }[] }[]
   hookChoices?: { id: string; enabled: boolean }[]
 }
 
@@ -126,6 +126,21 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     Object.fromEntries(stagesOf(wfId).map((s) => [s.key, { enabled: true, provider: s.provider, model: s.model, perProject: false }]))
   const [stageState, setStageState] = useState<Record<string, { enabled: boolean; provider: string; model: string; perProject: boolean }>>(() => initStageState(config.selectedWorkflowId))
   useEffect(() => { setStageState(initStageState(selectedWorkflowId)) }, [selectedWorkflowId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 阶段级项目代理:`stageKey → 项目名 → provider/model`。让「按项目 CR」能挑一个跟「代码开发」不同的 agent。
+  // 在这之前每个按项目阶段渲染的都是同一份全局项目数据,改一边另一边跟着变(用户报的「provider 是同步的」)。
+  //
+  // 只有 develop(写码阶段)例外:它的项目行仍然直接编辑全局项目 —— 项目的编码代理就是「开发用什么」的
+  // 唯一真源,run/尾段/执行面板都读它,不能让开发在这儿分叉出第二份。其余按项目阶段一律走这里的覆盖,
+  // 初值取工作区里配好的 projectAgents,没配就显示项目自己的编码代理(不写进 state ⇒ 不产生覆盖)。
+  const initStageProjects = (wfId: string): Record<string, Record<string, { provider: string; model: string }>> =>
+    Object.fromEntries(stagesOf(wfId)
+      .filter((s) => !s.code && s.projectAgents?.length)
+      .map((s) => [s.key, Object.fromEntries(s.projectAgents!.map((a) => [a.name, { provider: a.provider, model: a.model }]))]))
+  const [stageProjects, setStageProjects] = useState<Record<string, Record<string, { provider: string; model: string }>>>(() => initStageProjects(config.selectedWorkflowId))
+  useEffect(() => { setStageProjects(initStageProjects(selectedWorkflowId)) }, [selectedWorkflowId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 该阶段该项目当前显示的编码代理:阶段覆盖 → 项目自己的。develop 恒等于项目自己的(见上)。
+  const laneAgent = (stageKey: string, p: { name: string; provider: string; model: string }) =>
+    stageProjects[stageKey]?.[p.name] ?? { provider: p.provider, model: p.model }
   // 既然阶段可选,hook 也可选(workspace 级 hooks,不随工作流切换)。默认全开。
   const [hookState, setHookState] = useState<Record<string, boolean>>(() => Object.fromEntries((config.hooks ?? []).map((h) => [h.id, true])))
   // Improvement ⑦: which project's model popup (.wfo-mpop) is open, if any — replaces the old
@@ -223,6 +238,18 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     setProjects((prev) => prev.map((p) => (p.name === name ? { ...p, provider: providerId, model: defaultModel } : p)))
     setProviderPopupFor(null)
   }
+  // 阶段级项目代理的写入口(非 develop 的按项目阶段)。同 chooseProjectProvider,换 provider 必须同时换成
+  // 新 provider 的默认模型 —— 留着旧 model id 会造出「codex 拿 claude 模型」这种跑不起来的组合。
+  const setStageProject = (stageKey: string, name: string, patch: { provider: string; model: string }) =>
+    setStageProjects((prev) => ({ ...prev, [stageKey]: { ...(prev[stageKey] ?? {}), [name]: patch } }))
+  const chooseStageProjectProvider = (stageKey: string, name: string, providerId: string) => {
+    setStageProject(stageKey, name, { provider: providerId, model: providers.find((p) => p.id === providerId)?.models[0]?.id ?? '' })
+    setProviderPopupFor(null)
+  }
+  const chooseStageProjectModel = (stageKey: string, p: { name: string; provider: string; model: string }, modelId: string) => {
+    setStageProject(stageKey, p.name, { provider: laneAgent(stageKey, p).provider, model: modelId })
+    setModelPopupFor(null)
+  }
   const installedProviders = providers.filter((p) => p.installed)
   // #3: switch every provider selector to one provider at once. Applies to ALL projects AND ALL stages.
   // 修图1(2026-07-30):原本 `if (s.code) continue` 跳过代码类阶段(以为它们只从项目选择器取 provider)——
@@ -232,6 +259,8 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   const applyProviderToAll = (providerId: string) => {
     const dm = providers.find((p) => p.id === providerId)?.models[0]?.id ?? ''
     setProjects((prev) => prev.map((p) => ({ ...p, provider: providerId, model: dm })))
+    // 「全部设为」= 推倒重来:阶段级项目代理的覆盖一并清掉,否则它们会盖在上面,让这个「一键全部」名不副实。
+    setStageProjects({})
     setStageState((prev) => {
       const next = { ...prev }
       for (const s of stagesOf(selectedWorkflowId)) {
@@ -261,7 +290,9 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   const doConfirm = () => {
     const stageChoices = stagesOf(selectedWorkflowId).map((s) => {
       const st = stageState[s.key] ?? stageDefault(s.key)
-      const base = { key: s.key, enabled: st.enabled, provider: st.provider, model: st.model }
+      // 阶段级项目代理:只在这个阶段真被改过(或工作区里本来就配了)时才带,空着就让主进程回落到工作区那份。
+      const agents = Object.entries(stageProjects[s.key] ?? {}).map(([name, a]) => ({ name, provider: a.provider, model: a.model }))
+      const base = { key: s.key, enabled: st.enabled, provider: st.provider, model: st.model, ...(agents.length ? { projects: agents } : {}) }
       // Only send perProject for toggle-eligible stages — sending it for develop/design would force their
       // scope and collapse the per-project fan-out they get by default (buildLaunchPlan honors it verbatim).
       return stageAllowsPerProject(s) ? { ...base, perProject: st.perProject } : base
@@ -461,8 +492,14 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
                                 <span className="wfo-ck" dangerouslySetInnerHTML={{ __html: CHECK_SVG }} />
                               </span>
                               <span className="lg-lane-ic" dangerouslySetInnerHTML={{ __html: TERM_SVG }} />
-                              <span className="lg-lane-nm"><b>{p.name}</b><span>{p.provider || 'claude'}</span></span>
-                              {p.selected ? renderChips(`proj:${s.key}:${p.name}`, p.provider, p.model, (id) => chooseProjectProvider(p.name, id), (id) => chooseProjectModel(p.name, id)) : null}
+                              <span className="lg-lane-nm"><b>{p.name}</b><span>{laneAgent(s.key, p).provider || 'claude'}</span></span>
+                              {p.selected ? (s.code
+                                // 写码阶段(代码开发):项目的编码代理就是它用的 agent,这里直接编辑项目本身。
+                                ? renderChips(`proj:${s.key}:${p.name}`, p.provider, p.model, (id) => chooseProjectProvider(p.name, id), (id) => chooseProjectModel(p.name, id))
+                                // 其余按项目阶段(按项目 CR / 写单测):改的是这个阶段自己的覆盖,不动项目。
+                                : renderChips(`proj:${s.key}:${p.name}`, laneAgent(s.key, p).provider, laneAgent(s.key, p).model,
+                                    (id) => chooseStageProjectProvider(s.key, p.name, id), (id) => chooseStageProjectModel(s.key, p, id))
+                              ) : null}
                             </div>
                           ))
                         )

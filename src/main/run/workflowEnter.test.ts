@@ -40,6 +40,36 @@ describe('buildWorkflowSession', () => {
   })
 })
 
+// 阶段级项目代理(按项目 CR 换 provider)必须一路活到执行尾段:对话式工作流先聊需求/方案,点「下一步」
+// 才启动尾段 run —— 中途只要 session 没记住它,用户在启动门里选的 codex 就会在真正开跑时悄悄变回 claude。
+describe('阶段级项目代理:对话式工作流全程不丢', () => {
+  const withAgents: RunPlan = {
+    runId: 'r2',
+    stages: [
+      { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root', gate: true },
+      { key: 'review', name: '代码CR', provider: 'claude', model: 'opus', scope: 'per-project', gate: true,
+        projectAgents: [{ name: 'a', provider: 'codex', model: 'gpt-5-codex' }] },
+    ],
+  }
+
+  it('planToStageViews 把它记进 session 的阶段视图', () => {
+    expect(planToStageViews(withAgents)[1].projectAgents).toEqual([{ name: 'a', provider: 'codex', model: 'gpt-5-codex' }])
+  })
+
+  it('tailLaunchConfig 原样回传给尾段启动配置', () => {
+    const cfg = tailLaunchConfig(
+      { workspacePath: '/ws', flowId: 'wf', projects: [{ name: 'a', provider: 'claude', model: 'opus' }] },
+      planToStageViews(withAgents), 1,
+    )
+    expect(cfg.stages!.find((s) => s.key === 'review')!.projects).toEqual([{ name: 'a', provider: 'codex', model: 'gpt-5-codex' }])
+  })
+
+  it('没配过的阶段不带这个字段', () => {
+    const cfg = tailLaunchConfig({ workspacePath: '/ws', flowId: 'wf', projects: [] }, planToStageViews(plan), 2)
+    expect(cfg.stages!.every((s) => s.projects === undefined)).toBe(true)
+  })
+})
+
 describe('tailLaunchConfig', () => {
   it('enables only stages from fromIndex and restores each stage scope via perProject', () => {
     const views = planToStageViews(plan)

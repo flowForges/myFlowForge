@@ -281,6 +281,67 @@ describe('LaunchGateCard 阶段级 单代理⇄按项目 切换', () => {
   })
 })
 
+// 用户诉求:claude 开发 + codex CR。CR 切「按项目」后,它那几行项目的编码代理必须归这个阶段自己管 ——
+// 在这之前它们渲染的就是代码开发那份项目数据,改一边另一边跟着变(用户报的「provider 是同步的」)。
+describe('LaunchGateCard 按项目阶段的阶段级项目代理', () => {
+  const perProjectReview = () => {
+    const row = document.querySelector('.lg-stg[data-stage="review"]') as HTMLElement
+    fireEvent.click(within(row).getByText('按项目'))
+  }
+  const setProviderIn = (stage: string, project: string, label: string) => {
+    fireEvent.click(projectChip(project, '.lg-provider-chip', stage))
+    const pop = document.querySelector('.wfo-mpop') as HTMLElement
+    fireEvent.click(within(pop).getByText(label))
+  }
+
+  it('改 CR 行某项目的编码代理,只落到该阶段的 projects,不动全局项目', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    perProjectReview()
+    setProviderIn('review', 'go-blog', 'Codex')
+    fireEvent.click(screen.getByText('确认'))
+    const arg = onConfirm.mock.calls[0][0]
+    expect(arg.stageChoices.find((s: { key: string }) => s.key === 'review').projects)
+      .toEqual([{ name: 'go-blog', provider: 'codex', model: 'gpt-5-codex' }])
+    // 全局项目(= 代码开发用的编码代理)纹丝不动
+    expect(arg.projects.find((p: { name: string }) => p.name === 'go-blog').provider).toBe('claude')
+  })
+
+  it('代码开发那行照旧改的是项目本身(它就是项目的编码代理,唯一真源)', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    setProviderIn('develop', 'go-blog', 'Codex')
+    fireEvent.click(screen.getByText('确认'))
+    const arg = onConfirm.mock.calls[0][0]
+    expect(arg.projects.find((p: { name: string }) => p.name === 'go-blog').provider).toBe('codex')
+    expect(arg.stageChoices.find((s: { key: string }) => s.key === 'develop').projects).toBeUndefined()
+  })
+
+  it('没动过的阶段不带 projects 字段(老行为零变化)', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    perProjectReview()
+    fireEvent.click(screen.getByText('确认'))
+    const arg = onConfirm.mock.calls[0][0]
+    expect(arg.stageChoices.find((s: { key: string }) => s.key === 'review').projects).toBeUndefined()
+  })
+
+  it('工作区里配好的 projectAgents 作为该阶段各项目行的初值显示', () => {
+    const withPersisted = {
+      ...base,
+      workflows: base.workflows.map((w) => w.id !== 'std' ? w : {
+        ...w,
+        stages: w.stages.map((s) => s.key !== 'review' ? s : { ...s, projectAgents: [{ name: 'go-blog', provider: 'codex', model: 'gpt-5-codex' }] }),
+      }),
+    }
+    render(<LaunchGateCard config={withPersisted} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
+    perProjectReview()
+    expect(projectChip('go-blog', '.lg-provider-chip', 'review').textContent).toContain('Codex')
+    // 同一个项目在代码开发那行仍显示它自己的编码代理
+    expect(projectChip('go-blog', '.lg-provider-chip', 'develop').textContent).toContain('Claude Code')
+  })
+})
+
 describe('LaunchGateCard 需求(AI 总结 + 可编辑)', () => {
   it('seedLoading 时展示「正在总结」占位，不渲染需求输入框', () => {
     render(<LaunchGateCard config={{ ...base, seed: '' }} seedLoading onConfirm={() => {}} onCancel={() => {}} />)

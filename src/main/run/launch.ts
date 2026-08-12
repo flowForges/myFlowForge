@@ -16,7 +16,7 @@ import { pickWorkspaceWorkflow, resolveWorkflowStages } from '../workspace/resol
 import { planFromStages } from './planFromStages'
 import { reviewLenses } from './reviewFanout'
 import { collectRunHooks } from './hooks'
-import type { RunPlan } from './machine'
+import type { RunPlan, StageProjectAgent } from './machine'
 import type { StageSpec, DevelopProject } from './runTypes'
 import { createTempBranch, discardTempBranch, isCleanTree, stashRun, popRunStash } from './tempBranch'
 
@@ -51,6 +51,9 @@ export interface LaunchStage {
   lensCount?: number
   desc: string
   prompt: string
+  // 阶段级项目代理:工作区里为本阶段逐项目配好的编码代理(「按项目 CR」用与「代码开发」不同的 provider)。
+  // 启动门拿它当各项目行的初值;没配过就没有这个字段。
+  projectAgents?: StageProjectAgent[]
 }
 
 export interface LaunchInfo {
@@ -99,6 +102,7 @@ export function buildLaunchInfo(ws: Workspace, workflows: Workflow[] = [], custo
           lensCount: reviewLenses(s.review)?.length ?? 0,
           desc: STAGE_DESC[s.key] ?? '',
           prompt,
+          ...(s.projectAgents?.length ? { projectAgents: s.projectAgents } : {}),
         }
       }),
     })),
@@ -191,7 +195,10 @@ export interface LaunchStartConfig {
   // for toggle-eligible stages — true → force scope 'per-project' (one agent per project), false → force
   // 'root' (single). Absent (undefined) for every other stage so its own scope default is left untouched
   // (critical: sending false for develop/design would wrongly collapse their per-project fan-out to root).
-  stages?: { key: string; enabled: boolean; provider?: string; model?: string; perProject?: boolean; permissionMode?: PermissionMode }[]
+  // `projects` = 本次启动为该阶段逐项目指定的编码代理(阶段级项目代理)。只对 per-project 阶段有意义,
+  // 让「按项目 CR」这次用与「代码开发」不同的 agent。省略 ⇒ 沿用工作区里配好的 WsStage.projectAgents;
+  // 两处都没有 ⇒ 跟项目走(旧行为)。
+  stages?: { key: string; enabled: boolean; provider?: string; model?: string; perProject?: boolean; permissionMode?: PermissionMode; projects?: StageProjectAgent[] }[]
   // Per-hook on/off from the gate (see LaunchInfo.hooks). Unchecked hooks are dropped from the run.
   // Keyed by plugin id; a hook id absent here defaults to enabled. Omitted → all hooks run (old behavior).
   hooks?: { id: string; enabled: boolean }[]
@@ -271,6 +278,8 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
       // P1.2/P1.3: the gate's per-stage permission choice wins; else the stage's own persisted default;
       // else undefined → fanout falls back to the run-wide permission.
       permissionMode: choice?.permissionMode ?? s.permissionMode,
+      // 阶段级项目代理:启动门这次改的赢过工作区里配好的;都没有 ⇒ undefined,fanout 走项目的编码代理。
+      projectAgents: choice?.projects ?? s.projectAgents,
     }
   })
   // ③stage hooks: thread the workspace's woven hooks (ws.plugins) + run-end (__wf) step hooks — minus any

@@ -187,8 +187,12 @@ function buildFanoutAgents(
     // fall back to the run's PER-PROJECT choice (state.projects) — the qoder the user picked in the
     // launch gate — BEFORE the stage default (sp.provider), else the panel mislabels the lane.
     const meta = projectMeta.get(project)
-    const provider = outcome?.order.provider || meta?.provider || sp.provider
-    const model = outcome?.order.model || meta?.model || sp.model
+    // 阶段级项目代理优先于项目自己的:本阶段(如按项目 CR)为这个项目单独指定过 provider 时,lane 卡在
+    // 出结果之前就得显示它 —— 否则显示的是项目的 claude、真正跑的是 codex,面板和运行对不上。
+    // 与 fanout 同源同序:阶段覆盖 > 项目 > 阶段默认;覆盖成对生效,model 不与项目的混搭。
+    const ov = sp.projectAgents?.find((a) => a.name === project && a.provider)
+    const provider = outcome?.order.provider || ov?.provider || meta?.provider || sp.provider
+    const model = outcome?.order.model || (ov ? ov.model : (meta?.model || sp.model))
     const cwd = live?.cwd || outcome?.order.cwd || prior?.cwd
     const timing = state.laneTimings?.[laneId]
 

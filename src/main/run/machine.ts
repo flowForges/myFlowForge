@@ -23,7 +23,14 @@ export interface StagePlan {
   // 每阶段权限档(agent 能动到什么程度 / 沙箱范围)。fanout 解析每条 lane 的权限时按「项目 > 阶段 > 运行级」
   // 取:project.permissionMode ?? stage.permissionMode ?? run-wide。未设 → 回退运行级(现行为不变)。
   permissionMode?: import('@shared/permissions').PermissionMode
+  // 阶段级项目代理:本阶段对某个项目单独指定的 provider/model。只对 per-project 阶段有意义,让「按项目 CR」
+  // 能用与「代码开发」不同的编码代理 —— 在这之前所有 per-project 阶段共用项目那一个 provider,三个阶段被
+  // 锁死成同一个。空/缺省 = 跟项目走(旧行为)。取值顺序见 fanout.buildWorkOrders。
+  projectAgents?: StageProjectAgent[]
 }
+// 一条阶段级项目代理覆盖。provider 为空视同没设(不劫持项目自己的选择);model 跟着 provider 走,绝不与
+// 项目的 model 混搭 —— 那会造出「codex 拿 claude 的模型 id」这种跑不起来的组合。
+export interface StageProjectAgent { name: string; provider: string; model: string }
 export interface StageState { key: string; status: StageStatus; round: number }
 // tempBranch: the local git branch (`forge/run-<runId>`, see tempBranch.ts) every participating
 // project's worktree is checked out onto before lanes start — same name across all repos in the run,

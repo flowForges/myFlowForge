@@ -30,6 +30,8 @@ export function planToStageViews(plan: RunPlan): WorkflowStageView[] {
     model: s.model,
     permissionMode: s.permissionMode,
     scope: s.scope,
+    // 阶段级项目代理原样带进 session(下一步进尾段时再回传给启动配置)。
+    ...(s.projectAgents?.length ? { projectAgents: s.projectAgents } : {}),
     preamble: s.scope === 'root' && s.prompt ? s.prompt + chatModeNote(s.key) : s.prompt,
   }))
 }
@@ -79,6 +81,8 @@ export function tailLaunchConfig(
       permissionMode: sv.permissionMode,
       // 显式复原每阶段范围:扇出→per-project,对话→root。buildLaunchPlan 对显式 perProject 恒生效。
       perProject: sv.scope === 'per-project',
+      // 阶段级项目代理:没配过就不带这个字段,让 buildLaunchPlan 回落到工作区里那份(而不是用空数组把它盖掉)。
+      ...(sv.projectAgents?.length ? { projects: sv.projectAgents } : {}),
     })),
     // 尾段之前已完成的对话阶段(技术方案设计等)→ 供面板/运行历史按完整工作流显示进度(1/4 而非 0/3)。
     leadStages: stages.slice(0, fromIndex).map((sv) => ({ key: sv.key, name: sv.name, provider: sv.provider, model: sv.model })),

@@ -108,6 +108,31 @@ describe('buildStageRuntimes', () => {
     expect(buildStageRuntimes(baseState(), {}).some((r) => r.hook)).toBe(false)
   })
 
+  // 阶段级项目代理:CR 按项目跑、且这个项目被单独指定了 codex 时,lane 卡在**出结果之前**就得显示 codex。
+  // 否则用户看到的是项目的 claude,而真正跑起来的是 codex —— 面板说的和跑的不是一回事。
+  it('按项目阶段的 lane 在落地前显示该阶段为它指定的编码代理,而不是项目自己的', () => {
+    const st = baseState({
+      machine: {
+        plan: {
+          runId: 'run2-cr',
+          stages: [{
+            key: 'review', name: '代码CR', provider: 'claude', model: 'opus', scope: 'per-project', gate: false, prompt: 'x',
+            projectAgents: [{ name: 'go-blog', provider: 'codex', model: 'gpt-5-codex' }],
+          }],
+        },
+        stages: [{ key: 'review', status: 'running', round: 0 }],
+        currentIndex: 0,
+      },
+      outcomes: {},
+      liveLanes: { 'review:go-blog': { stageKey: 'review', project: 'go-blog', state: 'run', cwd: '/ws/go-blog' } },
+      projects: [{ name: 'go-blog', provider: 'claude', model: 'opus' }, { name: 'zgh', provider: 'claude', model: 'opus' }],
+    })
+    const row = buildStageRuntimes(st, {}).find((r) => r.key === 'review')!
+    const byName = Object.fromEntries(row.agents.map((a) => [a.name, a.provider]))
+    expect(byName['go-blog']).toBe('codex')
+    expect(byName['zgh']).toBe('claude')   // 没被指定的项目照旧
+  })
+
   it('③stage hooks: a hook anchored to a LEAD stage weaves at run start (not silently dropped)', () => {
     // Conversational tail run: design ran in chat and is a leadStage; the tail plan is just [develop].
     // A hook `after: 'design'` points at a key no longer in plan.stages — before the fix it vanished.

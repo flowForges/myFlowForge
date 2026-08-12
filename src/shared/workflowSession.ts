@@ -17,6 +17,10 @@ export interface WorkflowStageView {
   permissionMode?: PermissionMode
   scope: 'root' | 'per-project'
   preamble?: string
+  // 阶段级项目代理:本阶段对某个项目单独指定的编码代理(「按项目 CR」用与「代码开发」不同的 provider)。
+  // 必须记在 session 上 —— 对话式工作流先聊需求/方案、点「下一步」才启动执行尾段,这里丢了,用户在启动门
+  // 选的 codex 会在真正开跑时悄悄变回项目的 claude。缺省 = 跟项目走。
+  projectAgents?: { name: string; provider: string; model: string }[]
 }
 
 // 'chatting' = 停在某个对话阶段,等用户驱动;'executing' = 已进入扇出尾段,交 RunController 跑;

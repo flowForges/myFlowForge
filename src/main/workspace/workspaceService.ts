@@ -24,6 +24,7 @@ function toWsStage(s: CreateWorkspaceStage): WsStage {
     ...(s.summary !== undefined ? { summary: s.summary } : {}),
     ...(s.projectAgent !== undefined ? { projectAgent: s.projectAgent } : {}),
     ...(s.producesDoc !== undefined ? { producesDoc: s.producesDoc } : {}),
+    ...(s.projectAgents?.length ? { projectAgents: s.projectAgents } : {}),
   }
 }
 

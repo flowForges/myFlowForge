@@ -545,6 +545,24 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
     else if (mode === 'lens') setReviewConfig({ mode: 'parallel', scope: 'workspace', reviewers: DEFAULT_LENSES })
     else setReviewConfig(DEFAULT_REVIEW)
   }
+  // 按项目 CR 的逐项目编码代理(阶段级项目代理)。没单独设过的项目回落到它自己的编码代理 —— 也就是代码开发
+  // 用的那个,所以「不动它 = 跟从前一样」;设过的只影响 CR 这一阶段,不会反过来改掉开发。
+  const reviewAgentFor = (name: string): { provider: string; model: string } => {
+    const set = active.stages[REVIEW_KEY]?.projectAgents?.find(a => a.name === name)
+    if (set) return { provider: set.provider, model: set.model }
+    const proj = state.projects.find(p => p.name === name)
+    return unpackModel(proj?.model ?? '')
+  }
+  const setReviewProjectModel = (name: string, v: string) => {
+    const { provider, model } = unpackModel(v)
+    updateActiveWorkflow(wf => {
+      const cur = wf.stages[REVIEW_KEY]?.projectAgents ?? []
+      const next = cur.some(a => a.name === name)
+        ? cur.map(a => (a.name === name ? { name, provider, model } : a))
+        : [...cur, { name, provider, model }]
+      return { ...wf, stages: { ...wf.stages, [REVIEW_KEY]: { ...wf.stages[REVIEW_KEY], projectAgents: next } } }
+    })
+  }
   const toggleReviewLens = (lens: ReviewLens) => updateActiveWorkflow(wf => {
     const cur = wf.stages[REVIEW_KEY]?.review
     const reviewers = Array.isArray(cur?.reviewers) ? cur.reviewers : DEFAULT_LENSES
@@ -1066,6 +1084,27 @@ export function CreateWorkspace({ open, onCancel, onCreate, projects, workflows,
                             <div className="ds">正确性 / 安全 / 性能 / 风格</div>
                           </button>
                         </div>
+                        {/* 按项目 CR:每个项目的 reviewer 可以单独挑编码代理 —— 「claude 开发 + codex CR」
+                            靠的就是这里。不选就跟该项目自己的编码代理走(与代码开发一致),选了只影响 CR。 */}
+                        {reviewMode === 'per-project' && chosen.length > 0 && (
+                          <>
+                            <div className="sp-h" style={{ marginTop: 10 }}>{GIT}每个项目一个 reviewer · 编码代理可与开发不同</div>
+                            {chosen.map(p => (
+                              <div className="stage-proj-row" key={p.repoId}>
+                                <span className="pj-ic">{GIT}</span>
+                                <span className="nm">{p.name}</span>
+                                <select
+                                  className="mini-sel"
+                                  data-strev-pm={p.name}
+                                  value={packModel(...(() => { const a = reviewAgentFor(p.name); return [a.provider, a.model] as const })())}
+                                  onChange={e => setReviewProjectModel(p.name, e.target.value)}
+                                >
+                                  {modelOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                </select>
+                              </div>
+                            ))}
+                          </>
+                        )}
                         {reviewMode === 'lens' && (
                           <div className="wf-templates">
                             {(Object.keys(LENS_LABELS) as ReviewLens[]).map(lens => {
