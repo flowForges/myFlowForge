@@ -73,6 +73,9 @@ export function tailLaunchConfig(
     supplement: base.supplement ?? '',
     seed: base.seed ?? '',
     sessionId: base.sessionId,
+    // session 里这几个阶段就是本次工作流的全部 —— 启动门取消掉的阶段从一开始就不在其中,必须声明成
+    // 完整名单,否则 buildLaunchPlan 会拿工作区的全量阶段把它们补回来(取消掉的需求评估在尾段复活)。
+    stagesExclusive: true,
     stages: stages.map((sv, i) => ({
       key: sv.key,
       enabled: i >= fromIndex,

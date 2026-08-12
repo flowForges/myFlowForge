@@ -202,6 +202,10 @@ export interface LaunchStartConfig {
   // Per-hook on/off from the gate (see LaunchInfo.hooks). Unchecked hooks are dropped from the run.
   // Keyed by plugin id; a hook id absent here defaults to enabled. Omitted → all hooks run (old behavior).
   hooks?: { id: string; enabled: boolean }[]
+  // `stages` 是不是完整名单:true ⇒ 没列进来的阶段一律丢弃(不再走「没提到 = 启用」那条后路)。
+  // 对话式工作流的执行尾段用它 —— 名单来自 session,启动门里被取消的阶段本来就不在里面,不声明的话
+  // 它们会在这里被工作区的全量阶段"补"回来。
+  stagesExclusive?: boolean
   // 对话式工作流尾段:尾段之前已完成的对话阶段(见 RunPlan.leadStages)。透传到 plan 供进度显示按完整工作流算。
   leadStages?: { key: string; name: string; provider: string; model: string }[]
 }
@@ -248,8 +252,15 @@ export function buildLaunchPlan(cfg: LaunchStartConfig, ws: Workspace, workflows
   // Interactive stage choices (gate): drop unchecked stages, apply per-stage provider/model overrides.
   // A stage key absent from cfg.stages defaults to enabled with no override (backward compatible — a
   // caller that passes no stages runs everything as before). Guard against disabling every stage.
+  //
+  // stagesExclusive 反转那条「没提到 = 启用」的后路:cfg.stages 就是完整名单,没列的一律丢弃。对话式工作流
+  // 的执行尾段必须这样 —— 它的名单来自 session(启动门里被取消的阶段从一开始就不在里面),而这里是拿工作区
+  // 的全量阶段重新解析的。不这样,用户取消掉的「需求评估」会在进入尾段时复活并真的跑一遍,还把 ribbon 的
+  // 阶段序号顶偏一格(执行代码开发却显示「3/4 写单测」)。见 workflowEnter.tailLaunchConfig。
   const stageChoice = new Map((cfg.stages ?? []).map((s) => [s.key, s]))
-  const resolved = resolvedAll.filter((s) => stageChoice.get(s.key)?.enabled !== false)
+  const resolved = resolvedAll.filter((s) => cfg.stagesExclusive
+    ? stageChoice.get(s.key)?.enabled === true
+    : stageChoice.get(s.key)?.enabled !== false)
   if (resolved.length === 0) throw new Error('至少要保留一个阶段')
 
   const groundTruth = buildGroundTruth(cfg.supplement, cfg.seed)

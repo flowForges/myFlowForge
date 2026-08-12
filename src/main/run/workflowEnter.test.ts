@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { planToStageViews, buildWorkflowSession, tailLaunchConfig, extractProjectBriefs } from './workflowEnter'
+import { buildLaunchPlan, type LaunchStartConfig } from './launch'
+import type { Workspace } from '../config/schema'
 import type { RunPlan } from './machine'
 
 const plan: RunPlan = {
@@ -67,6 +69,62 @@ describe('阶段级项目代理:对话式工作流全程不丢', () => {
   it('没配过的阶段不带这个字段', () => {
     const cfg = tailLaunchConfig({ workspacePath: '/ws', flowId: 'wf', projects: [] }, planToStageViews(plan), 2)
     expect(cfg.stages!.every((s) => s.projects === undefined)).toBe(true)
+  })
+})
+
+// 真实事故(2026-08-12):用户在启动门里把「需求评估」取消掉,只从技术方案设计开始。方案聊完点「下一步」
+// 进代码开发时,被去掉的需求评估**复活并真的跑了一遍**,右侧显示「一 技术方案设计 / 二 需求评估」,
+// 顶部 ribbon 还因此错位一格(执行代码开发却显示 3/4 写单测)。
+//
+// 根因在这个接缝上:tailLaunchConfig 只认识 session 里那几个阶段(被取消的那个从来就不在里面),
+// 而 buildLaunchPlan 是拿工作区的**全量**阶段重新解析的,对「cfg.stages 里没提到的 key」一律按启用处理
+// (那是给不传 stages 的老调用方留的后路)。于是取消掉的阶段在尾段悄悄回来了。
+describe('对话式工作流:启动门取消掉的阶段不得在执行尾段复活', () => {
+  const ws: Workspace = {
+    name: 'w', path: '/ws', workflowId: '', stages: [],
+    workflows: [{ id: 'wf', name: 'wf', stages: [
+      { key: 'requirement', provider: 'claude', model: 'opus' },
+      { key: 'design', provider: 'claude', model: 'opus' },
+      { key: 'develop', provider: 'claude', model: 'opus' },
+      { key: 'test', provider: 'claude', model: 'opus' },
+      { key: 'review', provider: 'claude', model: 'opus' },
+    ] }],
+    projects: [{ repoId: 'a', name: 'a', branch: 'main' }] as any,
+    status: 'idle', plugins: [], stepPlugins: [],
+  } as any
+
+  // 启动门:需求评估被取消,其余照跑 —— 这一步本来就是对的,session 里因此只有 4 个阶段。
+  const gateCfg: LaunchStartConfig = {
+    workspacePath: '/ws', workflowId: 'wf', projects: [{ name: 'a', provider: 'claude', model: 'opus' }],
+    supplement: '', seed: '',
+    stages: [
+      { key: 'requirement', enabled: false },
+      { key: 'design', enabled: true }, { key: 'develop', enabled: true },
+      { key: 'test', enabled: true }, { key: 'review', enabled: true },
+    ],
+  }
+  const sessionStages = () => planToStageViews(buildLaunchPlan(gateCfg, ws))
+
+  it('启动时就只有 4 个阶段(需求评估已被取消)', () => {
+    expect(sessionStages().map((s) => s.key)).toEqual(['design', 'develop', 'test', 'review'])
+  })
+
+  it('聊完方案点「下一步」进尾段,跑的只有 开发/单测/CR —— 需求评估不复活', () => {
+    const tail = tailLaunchConfig({ workspacePath: '/ws', flowId: 'wf', projects: [{ name: 'a', provider: 'claude', model: 'opus' }] },
+      sessionStages(), 1)
+    const plan = buildLaunchPlan(tail, ws)
+    expect(plan.stages.map((s) => s.key)).toEqual(['develop', 'test', 'review'])
+  })
+
+  it('尾段第一个阶段就是代码开发(ribbon 的 execOffset 叠加因此不会错位)', () => {
+    const tail = tailLaunchConfig({ workspacePath: '/ws', flowId: 'wf', projects: [{ name: 'a', provider: 'claude', model: 'opus' }] },
+      sessionStages(), 1)
+    expect(buildLaunchPlan(tail, ws).stages[0].key).toBe('develop')
+  })
+
+  it('不传 stages 的老调用方仍然跑全部阶段(那条后路没被改掉)', () => {
+    const plan = buildLaunchPlan({ workspacePath: '/ws', workflowId: 'wf', projects: [], supplement: '', seed: '' }, ws)
+    expect(plan.stages.map((s) => s.key)).toEqual(['requirement', 'design', 'develop', 'test', 'review'])
   })
 })
 
