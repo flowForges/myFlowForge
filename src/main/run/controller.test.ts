@@ -1,6 +1,6 @@
 // src/main/run/controller.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../run/runStore'
@@ -2101,5 +2101,64 @@ describe('RunController', () => {
       expect(final.status).toBe('ok')
       expect(closeCalls).toEqual([1])
     })
+  })
+})
+
+// ①② 执行依据的优先级(2026-08-12 用户反馈):启动门里那段「需求原文」是 AI 对整段对话的**简短总结**,
+// 还可能因为超时被截半句。它顶着「以此为准」排在每个 stage prompt 最前面,压过真正的契约——技术方案文档。
+// 用户的判断是对的:总结只该当背景,落了地的技术方案才是执行依据。
+//   ① 有 forge-docs/*.md 时,需求原文降级为「背景摘要」,明确细节以技术方案为准。
+//   ② 技术方案文档过去只发给 per-project lane(`o.project ? … : ''`),root 阶段(多镜头/单 agent CR)
+//      根本收不到——它在工作区根审聚合改动,却不知道方案长什么样,只能凭 diff 猜。
+describe('执行依据:技术方案文档 vs 需求原文', () => {
+  const capture = (prompts: string[]): AgentProvider => ({
+    id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
+    async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
+    run(task: AgentTask, cb: AgentCallbacks) {
+      prompts.push(task.prompt)
+      const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+      return { id: task.agentId, cancel() {}, done }
+    },
+  })
+  const writeDesignDoc = () => {
+    mkdirSync(join(ws, 'forge-docs'), { recursive: true })
+    writeFileSync(join(ws, 'forge-docs', 'design.md'), '# 技术方案\n\n## 各项目任务分工\n\n### a\n改 A 模块', 'utf8')
+  }
+  const runOneStage = async (scope: 'root' | 'per-project') => {
+    const prompts: string[] = []
+    const plan: RunPlan = { runId: 'r-doc', stages: [{ key: 'review', name: '代码CR', provider: 'x', model: 'm', scope, gate: false }] }
+    const c = new RunController(plan, {
+      providers: { x: capture(prompts) }, store: new RunStore(ws, 'r-doc'), env: {},
+      projects: scope === 'per-project' ? [{ name: 'a', cwd: join(ws, 'a') }] : [],
+      sleep: async () => {}, now: () => 0, makeId: idFactory(), task: '把 token 迁到 OKLCH',
+    })
+    await c.start()
+    return prompts[0]
+  }
+
+  it('① 有技术方案文档时,需求原文降级为背景摘要,不再自称「以此为准」', async () => {
+    writeDesignDoc()
+    const p = await runOneStage('per-project')
+    expect(p).toContain('把 token 迁到 OKLCH')      // 需求还在,只是不再是最高权威
+    expect(p).toContain('背景')
+    expect(p).not.toContain('以此为准')
+  })
+
+  it('① 没有技术方案文档时仍是「以此为准」(它是此时唯一的依据)', async () => {
+    const p = await runOneStage('per-project')
+    expect(p).toContain('以此为准')
+  })
+
+  it('② root 阶段(多镜头/单 agent CR)也要收到技术方案文档', async () => {
+    writeDesignDoc()
+    const p = await runOneStage('root')
+    expect(p).toContain('完整技术方案')
+    expect(p).toContain(join(ws, 'forge-docs', 'design.md'))
+  })
+
+  it('② root 阶段不谎称「你负责 ### 某项目那一节」(它没有项目)', async () => {
+    writeDesignDoc()
+    const p = await runOneStage('root')
+    expect(p).not.toContain('这一节')
   })
 })

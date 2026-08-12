@@ -782,26 +782,36 @@ export class RunController {
         + (prior ? `\n【上一轮产物（在此基础上修改）】\n${prior}\n` : '')
         + `\n`
     }
-    // 有返工意见时，需求原文降级为「背景参考」，避免「以此为准」把用户的修改意见顶回去（尤其是 C 改 D 这类修改）。
-    const seed = this.deps.task
-      ? `【需求原文（${dirText ? '背景参考，与上面的修改意见冲突时以修改意见为准' : '以此为准'}）】\n${this.deps.task}\n`
-      : ''
+    // Change 2(doc-as-contract):对话式工作流里,技术方案/关联清单只落到工作区根 forge-docs/*.md(聊天阶段
+    // 没 forge_write_artifact,故上游产物 up 恒空)。给每条 lane 显式指路:读那几份完整文档;per-project 的
+    // lane 还要聚焦本项目那一节、可举报不可重设计。文档不存在(旧 RunController 路径,靠 up 传)→ 空串。
+    //
+    // 2026-08-12:root 阶段(多镜头/单 agent CR)原本被 `o.project ? … : ''` 挡在门外 —— 它在工作区根审
+    // 聚合改动,却看不到方案,只能凭 diff 猜「这改得对不对」。现在一视同仁发文档,只是不编造"你负责哪一节"。
+    const docRead = this.forgeDocsDirective(o.project)
+    // 需求原文的权威等级,从高到低让位:
+    //  - 有返工意见 → 降级为「背景参考」,免得「以此为准」把用户这次的修改意见顶回去(C 改 D 这类);
+    //  - 有技术方案文档 → 降级为「背景摘要」。这段需求本身就是 AI 对整段对话的**简短总结**(还可能因为
+    //    总结超时被截断),而落了地的技术方案才是真契约。让一段猜出来的话压过文档,正是需求跑偏的根源;
+    //  - 都没有 → 它是此时唯一的依据,维持「以此为准」。
+    const seedRole = dirText ? '背景参考，与上面的修改意见冲突时以修改意见为准'
+      : docRead ? '背景摘要，仅用于理解目标；具体做什么以下方技术方案为准'
+      : '以此为准'
+    const seed = this.deps.task ? `【需求原文（${seedRole}）】\n${this.deps.task}\n` : ''
     const fence = `\n完成后，请在回复最后输出一个如下格式的结果块（用于登记产物）：\n\`\`\`forge-result\n{"summary":"一句话说明你做了什么","filesChanged":["改动/产出的文件路径"],"testsRun":{"passed":true},"blockers":[],"doubts":[]}\n\`\`\`\n`
     // §7.4 ③硬阻塞: only meaningful when this run has a live forge bridge (envForOrder), but harmless
     // to always include — if there's no bridge, forge_ask simply isn't an available tool and the
     // agent falls back to `blockers` in the fence above, same as before this line existed.
     const askHint = `\n若卡在只有人类才知道的硬阻塞（缺凭据、该连哪个环境、用哪个 API key 等），调用 forge_ask 直接问用户，不要瞎猜或直接失败。\n`
-    // Change 2(doc-as-contract):对话式工作流里,技术方案/关联清单只落到工作区根 forge-docs/*.md(聊天阶段
-    // 没 forge_write_artifact,故上游产物 up 恒空)。给 per-project 的开发 lane 显式指路:读那几份完整文档、
-    // 聚焦本项目那一节、可举报不可重设计。文档不存在(旧 RunController 路径,靠 up 传)→ 空串,不影响旧路径。
-    const docRead = o.project ? this.forgeDocsDirective(o.project) : ''
     return `${rework}${seed}${instructions}${lens}${scope}${up}${docRead}${askHint}${fence}`
   }
 
   // Change 2(doc-as-contract):列出工作区根 `forge-docs/*.md`(对话式工作流阶段落盘的技术方案/关联清单),
   // 让本项目的开发 lane 读整份完整文档、聚焦自己那一节、并对任务合理性做校验(可举报不可重设计)。没有该目录
   // (旧 RunController 路径)→ 返回空串,老行为不变。用绝对路径,agent 无论 cwd 在哪个项目子目录都读得到。
-  private forgeDocsDirective(project: string): string {
+  // `project` 省略 = root lane(多镜头/单 agent CR、单代理阶段):同样发整份文档,但不指派"你负责哪一节"
+  // ——它没有项目,编一个出来只会误导(以前干脆什么都不给,它只能凭 diff 猜方案是什么)。
+  private forgeDocsDirective(project?: string): string {
     const dir = join(this.workspacePath(), 'forge-docs')
     let files: string[] = []
     try {
@@ -809,7 +819,11 @@ export class RunController {
     } catch { /* best-effort — no directive if we can't read it */ }
     if (!files.length) return ''
     const list = files.map((f) => `- ${join(dir, f)}`).join('\n')
-    return `\n【完整技术方案 / 上游文档（务必先通读）】\n下列文件是本次需求的完整技术方案与关联清单，动手前请**完整读一遍**（用你的文件读取能力按绝对路径打开）：\n${list}\n`
+    const head = `\n【完整技术方案 / 上游文档（务必先通读）】\n下列文件是本次需求的完整技术方案与关联清单，动手前请**完整读一遍**（用你的文件读取能力按绝对路径打开）：\n${list}\n`
+    if (!project) {
+      return head + `这份方案就是本次工作的依据：请据此判断实际改动是否落实了方案、有无偏离或遗漏，而不是只看代码本身推测意图。\n`
+    }
+    return head
       + `你负责其中「## 各项目任务分工」下「### ${project}」这一节；整体方案是共享背景，务必先看全貌再聚焦本节。\n`
       + `【任务校验（可举报不可重设计）】先判断分配给「${project}」的这节任务在本项目实际代码里是否落地合理：若方案与现状冲突/不可行/有明显更优解，先用 forge_ask 或结果块的 doubts/blockers 提出，交回用户裁决，**不要硬写、也不要自行改设计**。无异议再动手实现。\n`
   }

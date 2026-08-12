@@ -342,6 +342,34 @@ describe('LaunchGateCard 按项目阶段的阶段级项目代理', () => {
   })
 })
 
+// 用户反馈(2026-08-12):什么也没聊、什么也没输入就点启动,agent 只拿到一串项目名,自己猜一个需求执行了
+// 一堆东西。门里这道是给人看的提示;真正拦得住「⚡自动」的是主进程那道(launch.hasRequirement)。
+describe('LaunchGateCard 没有需求就不许启动', () => {
+  const blank = { ...base, seed: '' }
+  it('需求和补充说明都空时,确认按钮禁用并说明原因', () => {
+    render(<LaunchGateCard config={blank} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
+    const btn = screen.getByText('确认') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.title).toContain('要做什么')
+  })
+
+  it('在需求框里打一句就能启动', () => {
+    const onConfirm = vi.fn()
+    render(<LaunchGateCard config={blank} providers={providers} onConfirm={onConfirm} onCancel={() => {}} />)
+    fireEvent.change(document.querySelector('.lg-seed-input')!, { target: { value: '把 token 迁到 OKLCH' } })
+    const btn = screen.getByText('确认') as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+    fireEvent.click(btn)
+    expect(onConfirm).toHaveBeenCalled()
+  })
+
+  it('没聊过但只写了补充说明,也放行(这条路要留着)', () => {
+    render(<LaunchGateCard config={blank} providers={providers} onConfirm={() => {}} onCancel={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText('补充说明…（可选）'), { target: { value: '只改前端配色' } })
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
 describe('LaunchGateCard 需求(AI 总结 + 可编辑)', () => {
   it('seedLoading 时展示「正在总结」占位，不渲染需求输入框', () => {
     render(<LaunchGateCard config={{ ...base, seed: '' }} seedLoading onConfirm={() => {}} onCancel={() => {}} />)

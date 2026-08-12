@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, launchTaskSeed, type LaunchStartConfig } from './launch'
+import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, launchTaskSeed, hasRequirement, type LaunchStartConfig } from './launch'
 import { buildWorkOrders } from './fanout'
 import type { Workspace, Workflow } from '../config/schema'
 import { STAGE_PROMPTS } from '../config/schema'
@@ -322,6 +322,25 @@ describe('阶段级项目代理(按项目 CR 换 provider)', () => {
   it('两处都没配的阶段不产生 projectAgents(老工作区零变化)', () => {
     const plan = buildLaunchPlan(baseCfg([{ key: 'develop', enabled: true }]), wsPersisted)
     expect(plan.stages.find((s) => s.key === 'develop')!.projectAgents).toBeUndefined()
+  })
+})
+
+
+// 用户反馈(2026-08-12):什么也没聊、什么也没输入就点了启动工作流,agent 手上只有一串项目名,于是自己
+// 猜一个需求出来、执行了一堆东西。什么都没有时就该什么都不执行。
+describe('hasRequirement:没有需求就不该启动', () => {
+  it('需求和补充说明都空 → 没有需求', () => {
+    expect(hasRequirement({ seed: '', supplement: '' })).toBe(false)
+    expect(hasRequirement({ seed: '   \n ', supplement: '\t' })).toBe(false)
+  })
+  it('只有需求 → 可以启动', () => {
+    expect(hasRequirement({ seed: '把 token 迁到 OKLCH', supplement: '' })).toBe(true)
+  })
+  it('没聊过但在门里手打了补充说明 → 也可以启动(这条路要留着)', () => {
+    expect(hasRequirement({ seed: '', supplement: '只改前端配色' })).toBe(true)
+  })
+  it('字段缺失(老调用方)按空处理,不炸', () => {
+    expect(hasRequirement({} as { seed: string; supplement: string })).toBe(false)
   })
 })
 

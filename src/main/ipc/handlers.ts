@@ -12,12 +12,14 @@ import { checkCliUpdates } from '../agents/cliLatest'
 import { buildAgentEnv } from '../agents/env'
 import { providerTimezone } from '../agents/providerConfig'
 import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
 import { scanRepos } from '../workspace/scanRepos'
 import { resolveSetupInteraction } from '../workspace/setupInteractions'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
+import { summarizeRequirement } from '../chat/requirementSummary'
+import { needsConversationDoc, buildConversationDoc, CONVERSATION_DOC_REL } from '../run/conversationDoc'
 import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
 import { aggregateTokenUsage } from './tokenUsageHandlers'
 import { currentGrowthSignal } from '../tokens/growthSignalRef'
@@ -30,7 +32,7 @@ import { appendMessage, readMessages } from '../chat/chatStore'
 import { withLastMessageAt } from '../chat/sessionsView'
 import { mergeLive } from '../chat/liveTurns'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
-import { buildLaunchPlan, buildLaunchProjects, type LaunchStartConfig } from '../run/launch'
+import { buildLaunchPlan, buildLaunchProjects, hasRequirement, type LaunchStartConfig } from '../run/launch'
 import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProjectBriefs } from '../run/workflowEnter'
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
 import { workflowDisplayName } from '../config/schema'
@@ -759,6 +761,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   }
   ipcMain.handle(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
     if (!p.sessionId) throw new Error('workflow:enter 缺少 sessionId')
+    // 什么都没说就不许启动 —— 否则阶段 agent 只拿到一串项目名,会自己猜一个需求出来跑一堆东西。
+    // 这道必须在主进程:「⚡自动」那条路不经过启动门的按钮。
+    if (!hasRequirement(p)) throw new Error('还不知道这次要做什么:先说一句需求(或在启动卡的补充说明里写一句)再启动工作流。')
     const ws = readWorkspace(p.workspacePath)
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
     const plan = buildLaunchPlan(p, ws, readWorkflows().workflows, readCustomStages().stages)
@@ -775,6 +780,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // 会话自动命名:工作流用 seed(用户的原始需求)命名这个会话(仍是 '新会话' 才改;导入会话有真实标题不受
     // 影响)。在 setSessionWorkflow 之前做,避免被它的写入覆盖;kick 的 "请开始「…」" 消息因此不会再命名它。
     if (p.seed?.trim()) autoNameIfDefault(p.workspacePath, p.sessionId, p.seed)
+    // ④ 对话兜底契约:这条流程里没有任何产出文档的阶段(用户把「技术方案设计」去掉、聊完直接开发)时,
+    // 执行 lane 将拿不到任何上下文——它是全新的 CLI 会话,只读 forge-docs/*.md。把这次对话原文落一份
+    // 进去,让它照走「读整份文档」那条既有的路。有方案阶段时不写:那份产出才是契约。
+    if (needsConversationDoc(plan.stages)) {
+      const md = buildConversationDoc(history(p.workspacePath, p.sessionId).map(m => ({ who: m.who, text: m.text ?? '' })))
+      if (md) {
+        const docPath = join(p.workspacePath, CONVERSATION_DOC_REL)
+        try {
+          mkdirSync(dirname(docPath), { recursive: true })
+          writeFileSync(docPath, md, 'utf8')
+        } catch { /* best-effort:写不进去也不该挡住启动 */ }
+      }
+    }
     const file = setSessionWorkflow(p.workspacePath, p.sessionId, session)
     broadcastSessions(p.workspacePath, file)
     kickConversationalStage(p.workspacePath, p.sessionId, session)   // 图3:进入阶段0自动起手产出交付物
@@ -1020,26 +1038,29 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const env = buildAgentEnv({ proxy: readSettings().termProxy })
     const model = distillModelFor(a.agent) ?? a.model
     const id = `req-sum-${Date.now()}`
-    const transcript = msgs.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${m.text}`).join('\n')
-    const prompt = [
-      '下面是用户与 AI 的完整对话,他们在讨论接下来要开发的一个需求。请把这段对话提炼成一段清晰、准确、可直接执行的中文需求描述,作为即将启动的开发工作流的「需求原文」。',
-      '要求:抓住用户真正想实现的目标与关键约束/决策;把多轮讨论里达成的最终结论合并进来(以最新结论为准,忽略中途被推翻的想法);去掉寒暄和过程细节;直接输出需求正文,控制在几句话内,不要加「以下是」之类的前缀。',
-      '对话:', transcript,
-    ].join('\n')
-    let acc = ''
-    let session: { cancel: () => void } | undefined
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => { try { session?.cancel() } catch { /* best-effort */ } resolve() }, 45_000)
-      const finish = () => { clearTimeout(timer); resolve() }
-      session = provider.chat!({ id, prompt, model, cwd: a.workspacePath }, {
-        onSession: () => {},
-        onAssistantDelta: (t) => { acc += t },
-        onThinkDelta: () => {},
-        onDone: finish,
-        onError: finish,
-      }, env)
+    // 超时/出错 → null(不是「已经流出来的半截」)。半截需求会被当成「需求原文」发给每个阶段的 agent,
+    // 比回退到啰嗦但完整的原始对话摘录糟得多。见 requirementSummary.ts 顶部。
+    return summarizeRequirement(msgs.map(m => ({ who: m.who === 'user' ? '用户' : '助手', text: m.text })), {
+      summarize: (prompt) => new Promise<string | null>((resolve) => {
+        let acc = ''
+        let done = false
+        let session: { cancel: () => void } | undefined
+        const timer = setTimeout(() => { try { session?.cancel() } catch { /* best-effort */ } resolve(null) }, 60_000)
+        const finish = (ok: boolean) => {
+          if (done) return
+          done = true
+          clearTimeout(timer)
+          resolve(ok ? acc : null)
+        }
+        session = provider.chat!({ id, prompt, model, cwd: a.workspacePath }, {
+          onSession: () => {},
+          onAssistantDelta: (t) => { acc += t },
+          onThinkDelta: () => {},
+          onDone: () => finish(true),
+          onError: () => finish(false),
+        }, env)
+      }),
     })
-    return acc.trim()
   })
   // P1-5: persist a confirmed launch-gate's frozen record so it survives reload/session-switch.
   // Reuses the exact appendMessage + broadcast(chatEvent 'done') mechanism every other persisted chat

@@ -329,8 +329,15 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   const anyPerProjectEnabled = selectedStages.some((s) => { const st = stageState[s.key] ?? stageDefault(s.key); return st.enabled && isPerProjectStage(s, st) })
   const noProjectSelected = anyPerProjectEnabled && selectedCount === 0
   const noStageEnabled = selectedStages.length > 0 && enabledStageCount === 0
-  const confirmBlocked = noStageEnabled || noProjectSelected
-  const confirmBlockReason = noStageEnabled ? '至少保留一个阶段' : noProjectSelected ? '至少选择一个代码项目' : undefined
+  // 什么都没说就不许启动:阶段 agent 手上只有一串项目名时会自己猜一个需求出来跑一堆东西(用户实测)。
+  // 门槛压到最低——需求或补充说明任一有内容即可,所以「完全没聊过、直接在这儿手打一句」照样能启动。
+  // 这里只是给人看的提示;真正拦住「⚡自动」那条路的是主进程 workflow:enter 里的同名守卫。
+  const noRequirement = !seed.trim() && !supplement.trim()
+  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement
+  const confirmBlockReason = noStageEnabled ? '至少保留一个阶段'
+    : noProjectSelected ? '至少选择一个代码项目'
+    : noRequirement ? '先说说这次要做什么（上面的需求框里写一句，或写在补充说明里）'
+    : undefined
 
   // Shared provider + model chip pair (used by both per-project rows and per-stage rows). popupKey
   // namespaces the open-popup state so a project and a stage never fight over the same popup.

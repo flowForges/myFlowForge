@@ -229,6 +229,17 @@ function buildGroundTruth(supplement: string, seed: string): string {
 // got an empty seed and depended entirely on the upstream artifact. When a requirement stage then failed
 // or was killed, the downstream stage lost the requirement completely (saw only a "完成" fallback). Empty
 // → '' (the caller passes `|| undefined` so buildPrompt emits no seed block at all).
+/**
+ * 这次启动到底有没有「要做什么」。用户反馈(2026-08-12):什么也没聊、什么也没输入就点了启动,阶段 agent
+ * 手上只有一串项目名,于是自己猜一个需求出来、执行了一堆东西。什么都没有时就该什么都不执行。
+ *
+ * 门槛压到最低:需求(对话总结)和补充说明**任意一个**有内容即可 —— 完全没聊过、但在门里手打一句需求
+ * 就启动,这条路要留着。启动门和 workflow:enter 都用它,UI 挡不住「⚡自动」那条路,主进程那道才是硬的。
+ */
+export function hasRequirement(cfg: { seed?: string; supplement?: string }): boolean {
+  return !!(cfg.seed?.trim() || cfg.supplement?.trim())
+}
+
 export function launchTaskSeed(cfg: { seed: string; supplement: string }): string {
   const seed = (cfg.seed ?? '').trim()
   const supplement = (cfg.supplement ?? '').trim()
