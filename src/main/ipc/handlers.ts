@@ -1,6 +1,6 @@
 import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
-import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setWorkspaceLifecycle, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
+import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions } from '@shared/permissions'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
@@ -60,7 +60,6 @@ import { Run2Manager } from '../run/manager'
 import { registerRun2 } from './run2Handlers'
 import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspace/archiveOps'
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
-import { summarizeWorkspace } from '../workspace/summarizeWorkspace'
 import { makeRunDelegate, cancelWorkspaceDelegates } from '../chat/delegate'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
@@ -1424,11 +1423,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   }
   ipcMain.handle(CH.workspaceArchive, (_e, path: string) => {
     cancelWorkspaceDelegates(path)   // 归档=只读封存,先停掉该工作区后台还在跑的 delegate 子代理
+    // 描述在 archiveWorkspaceLifecycle 里就地取自最后一个聊过的会话标题 —— 归档不再起「摘要 agent」
+    // (那会在刚封存的目录里拉起一个 CLI 进程,被外部 agent 监控看见并推通知)。
     archiveWorkspaceLifecycle(path)
-    void summarizeWorkspace(path, providers, buildAgentEnv({ proxy: readSettings().termProxy })).then(desc => {
-      setWorkspaceLifecycle(path, { description: desc })
-      broadcast(CH.workspacesChanged, {})
-    })
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })

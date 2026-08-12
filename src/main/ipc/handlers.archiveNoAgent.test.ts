@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
 
-// Focused test: CH.workspaceEdit handler must broadcast workspacesChanged on success.
+// 归档 = 只读封存。它自己绝不能起 agent —— 原先归档会在被归档工作区的 cwd 里跑一个一次性 CLI 去生成
+// 那行归档描述,于是外部的 agent 监控插件看见「已归档的工作区里有 claude 在执行」并推了通知(而且那个
+// 一次性会话超时后也没人 cancel)。这条测试盯住的就是「归档不碰 provider」。
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const editWorkspaceMock = vi.fn(async (_a: any) => ({ workspace: { name: 'edited' } } as any))
+const detect = vi.fn(async () => true)
+const chat = vi.fn(() => ({ id: 'x', cancel: vi.fn(), done: Promise.resolve({ ok: true }) }))
 
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() }, dialog: {} }))
 vi.mock('../run/runStore', () => ({
@@ -32,11 +34,8 @@ vi.mock('../config/store', () => ({
   writeWorkspace: vi.fn(),
   readWorkspaceRegistry: () => [],
 }))
-vi.mock('../workspace/workspaceService', () => ({
-  createWorkspace: vi.fn(async () => ({ workspace: { name: 'new' }, workspacePath: '/ws/a', developProjects: [] })),
-  editWorkspace: (args: any) => editWorkspaceMock(args),
-}))
-vi.mock('../workspace/workspaceSetup', () => ({ runWorkspaceSetup: vi.fn(async () => ({ workspace: { name: 'setup' }, workspacePath: '/ws/a', developProjects: [] })) }))
+vi.mock('../workspace/workspaceService', () => ({ createWorkspace: vi.fn(), editWorkspace: vi.fn() }))
+vi.mock('../workspace/workspaceSetup', () => ({ runWorkspaceSetup: vi.fn() }))
 vi.mock('../workspace/archiveOps', () => ({ archiveWorkspaceLifecycle: vi.fn(), restoreWorkspaceLifecycle: vi.fn() }))
 vi.mock('../workspace/archivedGuard', () => ({ isArchivedWorkspace: vi.fn(() => false) }))
 vi.mock('../workspace/deleteWorkspace', () => ({ deleteWorkspace: vi.fn(async () => ({ deleted: true })) }))
@@ -50,27 +49,24 @@ vi.mock('../plugins/pluginSchedulerRef', () => ({
 vi.mock('../plugins/officialCatalog', () => ({ listCatalog: () => [], installOfficial: vi.fn() }))
 vi.mock('../agents/refreshModels', () => ({ refreshProviderModels: vi.fn() }))
 
-async function invoke(channel: string, broadcast: (ch: string, p: unknown) => void, ...args: unknown[]) {
-  const { registerIpc } = await import('./handlers')
-  const { ipcMain } = await import('electron') as any
-  ;(ipcMain.handle as any).mockClear()
-  registerIpc(broadcast, {})
-  const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
-  if (!call) throw new Error(`No handler for channel: ${channel}`)
-  return call[1]({}, ...args)
-}
-
 beforeEach(() => {
   vi.resetModules()
-  editWorkspaceMock.mockReset()
-  editWorkspaceMock.mockResolvedValue({ workspace: { name: 'edited' } })
+  detect.mockClear()
+  chat.mockClear()
 })
 
-describe('CH.workspaceEdit broadcast', () => {
-  it('broadcasts workspacesChanged after a successful edit', async () => {
-    const sent: [string, unknown][] = []
-    const EDIT_ARGS = { path: '/ws/a', opts: { name: 'edited', workflowId: 'standard', stages: [], projects: [] } }
-    await invoke(CH.workspaceEdit, (ch, p) => sent.push([ch, p]), EDIT_ARGS)
-    expect(sent).toContainEqual([CH.workspacesChanged, {}])
+describe('CH.workspaceArchive', () => {
+  it('不起任何 agent(既不 detect 也不 chat)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as unknown as { ipcMain: { handle: { mock: { calls: unknown[][] } } } }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const providers = { claude: { id: 'claude', displayName: 'Claude', detect, chat } } as any
+    registerIpc(() => {}, providers)
+    const call = ipcMain.handle.mock.calls.find(c => c[0] === CH.workspaceArchive) as [string, (e: unknown, p: string) => unknown]
+    call[1]({}, '/ws/archived')
+    await new Promise(r => setTimeout(r, 0))   // 让 fire-and-forget 的后台链路有机会跑起来
+
+    expect(detect).not.toHaveBeenCalled()
+    expect(chat).not.toHaveBeenCalled()
   })
 })
