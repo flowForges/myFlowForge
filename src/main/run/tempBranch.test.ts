@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, restoreSnapshot, type GitRunner } from './tempBranch'
+import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, restoreSnapshot, TempBranchMergeError, type GitRunner } from './tempBranch'
 
 describe('tempBranch', () => {
   it('分支名稳定', () => {
@@ -54,40 +54,72 @@ describe('tempBranch', () => {
     ])
   })
 
-  it('mergeTempBranch 报清晰错误当合并冲突', async () => {
-    const git = async (_cwd: string, args: string[]) => {
-      if (args[0] === 'merge' && args[1] === '--no-ff') throw new Error('CONFLICT (content): Merge conflict')
-      return ''
-    }
-    await expect(mergeTempBranch('/repo', 'main', 'abc', git)).rejects.toThrow(/forge\/run-abc.*main/s)
-  })
-
-  it('mergeTempBranch 冲突时 best-effort 执行 git merge --abort 恢复目标仓库为干净状态，再抛出可读错误', async () => {
-    const calls: Array<{ cwd: string; args: string[] }> = []
-    const git = async (cwd: string, args: string[]) => {
-      calls.push({ cwd, args })
-      if (args[0] === 'merge' && args[1] === '--no-ff') throw new Error('CONFLICT (content): Merge conflict in app.ts')
-      return ''
-    }
-    await expect(mergeTempBranch('/repo', 'main', 'abc', git)).rejects.toThrow(/forge\/run-abc.*main/s)
-    // The abort must be issued, in the SAME cwd as the failed merge, after the merge attempt.
-    const mergeIdx = calls.findIndex((c) => c.args[0] === 'merge' && c.args[1] === '--no-ff')
-    const abortIdx = calls.findIndex((c) => c.args[0] === 'merge' && c.args[1] === '--abort')
-    expect(mergeIdx).toBeGreaterThanOrEqual(0)
-    expect(abortIdx).toBeGreaterThan(mergeIdx)
-    expect(calls[abortIdx].cwd).toBe('/repo')
-    // branch -D must NOT run after a failed merge — the temp branch is left intact for retry/inspection.
-    expect(calls.some((c) => c.args[0] === 'branch')).toBe(false)
-  })
-
   it('mergeTempBranch 当 git merge --abort 本身也失败时，把它折进错误信息而不是吞掉', async () => {
     const git = async (_cwd: string, args: string[]) => {
       if (args[0] === 'merge' && args[1] === '--no-ff') throw new Error('CONFLICT (content): Merge conflict')
       if (args[0] === 'merge' && args[1] === '--abort') throw new Error('fatal: There is no merge to abort')
       return ''
     }
+    await expect(mergeTempBranch('/repo', 'main', 'abc', git)).rejects.toBeInstanceOf(TempBranchMergeError)
     await expect(mergeTempBranch('/repo', 'main', 'abc', git)).rejects.toThrow(/CONFLICT/)
     await expect(mergeTempBranch('/repo', 'main', 'abc', git)).rejects.toThrow(/no merge to abort/)
+  })
+
+  describe('mergeTempBranch 冲突', () => {
+    it('在 abort 之前读冲突文件，abort 后保留分支，抛 TempBranchMergeError', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => {
+        calls.push(a)
+        if (a[0] === 'status') return ' M a.ts\n'
+        if (a[0] === 'merge' && a[1] === '--no-ff') throw new Error('CONFLICT (content): Merge conflict in src/foo.ts')
+        if (a[0] === 'diff') return 'src/foo.ts\nsrc/bar.ts\n'
+        return ''
+      }
+      let caught: unknown
+      try { await mergeTempBranch('/repo', 'branch1', 'r1', run) } catch (e) { caught = e }
+
+      expect(caught).toBeInstanceOf(TempBranchMergeError)
+      const err = caught as TempBranchMergeError
+      expect(err.conflictFiles).toEqual(['src/foo.ts', 'src/bar.ts'])
+      expect(err.tempBranch).toBe('forge/run-r1')
+      expect(err.target).toBe('branch1')
+
+      // 冲突文件必须在 merge --abort 之前读 —— abort 之后 U 状态就没了。
+      const diffAt = calls.findIndex((c) => c[0] === 'diff')
+      const abortAt = calls.findIndex((c) => c[0] === 'merge' && c[1] === '--abort')
+      expect(diffAt).toBeGreaterThan(-1)
+      expect(abortAt).toBeGreaterThan(diffAt)
+      // 分支绝不能删 —— 本次运行的全部改动都在上面。
+      expect(calls.some((c) => c[0] === 'branch' && c[1] === '-D')).toBe(false)
+    })
+
+    it('读冲突文件失败 → 不阻断，conflictFiles 为空但仍照常 abort 并抛错', async () => {
+      const run: GitRunner = async (_c, a) => {
+        if (a[0] === 'status') return ''
+        if (a[0] === 'merge' && a[1] === '--no-ff') throw new Error('CONFLICT')
+        if (a[0] === 'diff') throw new Error('boom')
+        return ''
+      }
+      await expect(mergeTempBranch('/repo', 'branch1', 'r1', run)).rejects.toBeInstanceOf(TempBranchMergeError)
+    })
+
+    it('成功合并 → 提交、切分支、merge、删临时分支', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => {
+        calls.push(a)
+        if (a[0] === 'status') return ' M a.ts\n'
+        return ''
+      }
+      await mergeTempBranch('/repo', 'branch1', 'r1', run)
+      expect(calls).toEqual([
+        ['add', '-A'],
+        ['status', '--porcelain'],
+        ['commit', '-m', 'forge: run r1'],
+        ['checkout', 'branch1'],
+        ['merge', '--no-ff', 'forge/run-r1'],
+        ['branch', '-D', 'forge/run-r1'],
+      ])
+    })
   })
 
   it('discardTempBranch force-checkout target(丢弃未提交改动)+clean -fd(丢弃未跟踪新文件) 后强删 temp 分支', async () => {

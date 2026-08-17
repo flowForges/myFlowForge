@@ -93,6 +93,22 @@ export async function createTempBranch(
   }
 }
 
+/**
+ * 合并临时分支失败（绝大多数是冲突）。带上渲染层拼「可直接粘贴的手工合并命令」所需要的一切，
+ * 免得 UI 去正则抠一句 git 的英文报错。
+ */
+export class TempBranchMergeError extends Error {
+  constructor(
+    message: string,
+    readonly conflictFiles: string[],
+    readonly tempBranch: string,
+    readonly target: string,
+  ) {
+    super(message)
+    this.name = 'TempBranchMergeError'
+  }
+}
+
 /** Checkout `target`, merge the temp branch in with --no-ff, then delete the temp branch. */
 export async function mergeTempBranch(
   cwd: string,
@@ -127,21 +143,23 @@ export async function mergeTempBranch(
   try {
     await run(cwd, ['merge', '--no-ff', branch])
   } catch (err) {
-    // A failed merge (most commonly a conflict) leaves `target`'s working tree mid-merge —
-    // MERGE_HEAD set, conflict markers written into the user's real files. Never leave the
-    // user's project repo in that state: best-effort abort the merge BEFORE surfacing the
-    // error, so `target` is restored to the clean commit it was on pre-merge. If the abort
-    // itself fails (e.g. no merge in progress for some other reason), fold that into the
-    // error message rather than swallowing it — the caller still needs to know the repo may
-    // be in an unexpected state.
-    let detail = err instanceof Error ? err.message : String(err)
+    const detail = err instanceof Error ? err.message : String(err)
+    // 冲突文件必须在 merge --abort **之前**读 —— abort 会把 MERGE_HEAD 和 U(unmerged) 状态一起
+    // 清掉，之后 --diff-filter=U 恒空。读失败不阻断（用户拿不到文件清单也还是要看到那句"没丢"）。
+    let conflictFiles: string[] = []
+    try {
+      const out = await run(cwd, ['diff', '--name-only', '--diff-filter=U'])
+      conflictFiles = out.split('\n').map((l) => l.trim()).filter(Boolean)
+    } catch { /* 拿不到就算了 */ }
+    // 把 target 恢复到合并前那个干净提交：绝不把用户的真实仓库留在「合并进行中」的中间态。
+    let abortNote = ''
     try {
       await run(cwd, ['merge', '--abort'])
     } catch (abortErr) {
-      const abortDetail = abortErr instanceof Error ? abortErr.message : String(abortErr)
-      detail += ` (且 git merge --abort 也失败，目标分支可能仍处于合并中: ${abortDetail})`
+      abortNote = `（且 git merge --abort 也失败，${target} 可能仍处于合并中: ${abortErr instanceof Error ? abortErr.message : String(abortErr)}）`
     }
-    throw readableGitError(`Failed to merge temp branch "${branch}" into target "${target}"`, detail)
+    // 分支绝不删 —— 本次运行的全部改动都在 branch 上，它现在是唯一副本。
+    throw new TempBranchMergeError(`${detail}${abortNote}`, conflictFiles, branch, target)
   }
   try {
     await run(cwd, ['branch', '-D', branch])
