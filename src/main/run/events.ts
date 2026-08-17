@@ -23,7 +23,13 @@ export interface FailureEvent { id: string; kind: 'failure'; laneId: string; sta
 // plan into the frozen card's single-line `.req-title`, mirroring the finalize gate's pre-existing
 // problem/fix). Carried through so the renderer can special-case it the same way it already does for
 // `finalize`.
-export interface GateEvent { id: string; kind: 'gate'; stageKey: string; stageName: string; body: string; docs?: ArtifactRef[]; finalize?: boolean; producesDoc?: boolean }
+// `targetBranch`/`tempBranch`: #6 — only ever set on the finalize gate (`finalize: true`). The real
+// branch names for THIS run, so the card can say "合并到 branch1" / show the temp branch a merge
+// conflict left behind, instead of the user having to guess where their work went. Multi-project runs
+// can in principle have differing per-project targets — the card shows `targetBranch` (the first
+// project's) as a representative name; a merge-failure card lists every project's own target from
+// `FinalizeFailure` (controller.ts) instead.
+export interface GateEvent { id: string; kind: 'gate'; stageKey: string; stageName: string; body: string; docs?: ArtifactRef[]; finalize?: boolean; producesDoc?: boolean; targetBranch?: string; tempBranch?: string }
 // 工作流交互: the answer to a user's gate question (GateDecision `ask`). Purely informational — it carries
 // no resolver (unlike gate/auth/question/doubt); the controller emits it, then re-raises the gate. The
 // renderer (RunEventCard) shows it as a Q&A card so the user sees their question + the AI's reply inline,

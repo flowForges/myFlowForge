@@ -97,9 +97,14 @@ function describeGateDecision(d: GateDecision): string {
     case 'advance': return '通过'
     case 'redo': return d.feedback ? `打回本阶段：${d.feedback}` : '打回本阶段'
     case 'jumpBack': return d.feedback ? `回退到 ${d.targetKey}：${d.feedback}` : `回退到 ${d.targetKey}`
-    // P4-3: resolves the run-completion finalize gate (see RunEventCard's finalize branch).
+    // P4-3/#6: resolves the run-completion finalize gate (see RunEventCard's finalize branch).
     case 'merge': return '合并并完成'
     case 'discard': return '丢弃本次'
+    // #6: labels only — the actual buttons/cards for these two routes are Task 7. Kept here purely
+    // so this switch (exhaustive over GateDecision) stays exhaustive after decisions.ts grew these
+    // two variants.
+    case 'park': return '先不合并'
+    case 'handoff': return '我自己处理'
     // 'ask' never freezes a gate (the gate stays open after answering), so this label is only for
     // exhaustiveness — the frozen "决定：" line never shows it.
     case 'ask': return '向 AI 提问'

@@ -132,7 +132,7 @@ function summarizeResumable(runId: string, state: SavedControllerState): Resumab
 
 // 「所有阶段都跑完,只是收尾失败」:状态是 failed、每个阶段都 done、finalized 不为真。老的存档没有
 // finalized 字段(读出来 undefined),按「未收尾」保守处理 —— 顶多多问一次要不要重新收尾,不会丢东西。
-function isUnfinalizedFailure(state: SavedControllerState): boolean {
+export function isUnfinalizedFailure(state: SavedControllerState): boolean {
   return state.status === 'failed' && !state.finalized && state.machine.stages.every((s) => s.status === 'done')
 }
 

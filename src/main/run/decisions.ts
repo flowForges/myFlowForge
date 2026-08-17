@@ -11,15 +11,25 @@ export type GateDecision =
   // (gateAnswer.ts) and re-raises the SAME gate, WITHOUT re-running the stage. Never routed through
   // applyGateDecision (no machine transform — the stage stays put); handled directly in the gate loop.
   | { type: 'ask'; question: string }
-  // P4-3: resolves the run-completion "收尾确认" gate (a GateEvent with `finalize: true` — see
-  // events.ts). `merge` → mergeTempBranch every participating project onto its target branch;
-  // `discard` → discardTempBranch instead. Never routed through applyGateDecision's per-stage
-  // machine transform (the machine is already all-`done` by the time this gate appears) — the
-  // controller dispatches these directly in runFinalizeGate(). Reusing GateDecision (rather than a
-  // separate decision type) means the existing resolveGate/gateR/IPC/renderer plumbing needs no
-  // new resolve path.
+  // P4-3/#6: resolves the run-completion "收尾确认" gate (a GateEvent with `finalize: true` — see
+  // events.ts) — now a three-way choice (plus `handoff` below, for a failed finalize) instead of the
+  // original two: `merge` → mergeTempBranch every participating project onto its target branch;
+  // `discard` → discardTempBranch (真删，需要 UI 二次确认); `park` → parkTempBranch (keep the branch,
+  // restore the user's pre-run snapshot — the SAFE default way to say "not this one"). Never routed
+  // through applyGateDecision's per-stage machine transform (the machine is already all-`done` by the
+  // time this gate appears) — the controller dispatches these directly in runFinalizeGate(). Reusing
+  // GateDecision (rather than a separate decision type) means the existing resolveGate/gateR/IPC/
+  // renderer plumbing needs no new resolve path.
   | { type: 'merge' }
   | { type: 'discard' }
+  // 「先不合并」：把这次运行的改动留在 forge/run-<id> 上（不删分支），并把用户运行前那些未提交的
+  // 改动原样还原回工作树。这是收尾门上「不要这次结果」的**默认**路径 —— 点错也丢不了东西。
+  // 真正的删除走 'discard'，UI 上需要二次确认。
+  | { type: 'park' }
+  // 合并失败后用户点「知道了，我自己处理」：不再重试合并，把这个 run 标记为已收尾落盘，
+  // 这样 Run2Manager.isUnfinalizedFailure 不再认它，切会话回来不会一次次弹同一个失败。
+  // status 保持 'failed'（收尾确实没自动完成），finalized 表达的是「用户已接管」。
+  | { type: 'handoff' }
 
 export type LaneDecision =
   | { type: 'authorize' }
@@ -59,11 +69,13 @@ export function applyGateDecision(s: MachineState, d: GateDecision): MachineStat
     case 'advance': return advance(s)
     case 'redo': return redo(s)
     case 'jumpBack': return jumpBack(s, d.targetKey)
-    // 'merge'/'discard' resolve the finalize gate (see GateDecision doc above) — the controller
-    // never calls applyGateDecision for these (there's no stage left to transform), so these are
-    // unreachable no-ops kept only so this switch stays exhaustive.
+    // 'merge'/'discard'/'park'/'handoff' resolve the finalize gate (see GateDecision doc above) —
+    // the controller never calls applyGateDecision for these (there's no stage left to transform),
+    // so these are unreachable no-ops kept only so this switch stays exhaustive.
     case 'merge': return s
     case 'discard': return s
+    case 'park': return s
+    case 'handoff': return s
     // 'ask' is answered + re-raised in the gate loop, never applied to the machine — no-op here so the
     // switch stays exhaustive.
     case 'ask': return s
