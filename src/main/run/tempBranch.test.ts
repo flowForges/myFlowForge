@@ -67,9 +67,9 @@ describe('tempBranch', () => {
 
   describe('mergeTempBranch 冲突', () => {
     it('在 abort 之前读冲突文件，abort 后保留分支，抛 TempBranchMergeError', async () => {
-      const calls: string[][] = []
-      const run: GitRunner = async (_c, a) => {
-        calls.push(a)
+      const calls: Array<{ cwd: string; args: string[] }> = []
+      const run: GitRunner = async (c, a) => {
+        calls.push({ cwd: c, args: a })
         if (a[0] === 'status') return ' M a.ts\n'
         if (a[0] === 'merge' && a[1] === '--no-ff') throw new Error('CONFLICT (content): Merge conflict in src/foo.ts')
         if (a[0] === 'diff') return 'src/foo.ts\nsrc/bar.ts\n'
@@ -85,22 +85,36 @@ describe('tempBranch', () => {
       expect(err.target).toBe('branch1')
 
       // 冲突文件必须在 merge --abort 之前读 —— abort 之后 U 状态就没了。
-      const diffAt = calls.findIndex((c) => c[0] === 'diff')
-      const abortAt = calls.findIndex((c) => c[0] === 'merge' && c[1] === '--abort')
+      const diffAt = calls.findIndex((c) => c.args[0] === 'diff')
+      const abortAt = calls.findIndex((c) => c.args[0] === 'merge' && c.args[1] === '--abort')
       expect(diffAt).toBeGreaterThan(-1)
       expect(abortAt).toBeGreaterThan(diffAt)
-      // 分支绝不能删 —— 本次运行的全部改动都在上面。
-      expect(calls.some((c) => c[0] === 'branch' && c[1] === '-D')).toBe(false)
+      // abort 必须发生在跟失败的 merge 同一个 cwd 上，不能串到别的项目的仓库去。
+      expect(calls[abortAt].cwd).toBe('/repo')
+      // 分支绝不能动 —— 不止 -D，任何 branch 子命令都不该在失败路径上出现；本次运行的全部改动都在上面。
+      expect(calls.some((c) => c.args[0] === 'branch')).toBe(false)
     })
 
     it('读冲突文件失败 → 不阻断，conflictFiles 为空但仍照常 abort 并抛错', async () => {
+      const calls: string[][] = []
       const run: GitRunner = async (_c, a) => {
+        calls.push(a)
         if (a[0] === 'status') return ''
         if (a[0] === 'merge' && a[1] === '--no-ff') throw new Error('CONFLICT')
         if (a[0] === 'diff') throw new Error('boom')
         return ''
       }
-      await expect(mergeTempBranch('/repo', 'branch1', 'r1', run)).rejects.toBeInstanceOf(TempBranchMergeError)
+      let caught: unknown
+      try { await mergeTempBranch('/repo', 'branch1', 'r1', run) } catch (e) { caught = e }
+
+      expect(caught).toBeInstanceOf(TempBranchMergeError)
+      const err = caught as TempBranchMergeError
+      // 读冲突文件失败(boom)不该吞掉/覆盖原始的 merge 失败原因(CONFLICT)。
+      expect(err.message).toMatch(/CONFLICT/)
+      // conflictFiles 读取失败时优雅降级为空数组，而不是抛出/中断。
+      expect(err.conflictFiles).toEqual([])
+      // abort 仍然照常执行 —— diff 读取失败不能连带跳过 abort。
+      expect(calls.some((c) => c[0] === 'merge' && c[1] === '--abort')).toBe(true)
     })
 
     it('成功合并 → 提交、切分支、merge、删临时分支', async () => {
