@@ -61,6 +61,10 @@ export interface RunControllerDeps {
   // temp branch to reconcile, so it completes exactly as it did before P4-3 — no extra gate, no
   // test churn for every pre-existing controller test.
   projectTargets?: Record<string, string>
+  // 项目名 → 该项目「运行前快照」提交的 SHA（createRunTempBranches 返回，见 launch.ts）。
+  // 收尾的 discard/park 靠它把用户运行前那些未提交的改动一字不差地还原回工作树。启动时工作树
+  // 本来就干净的项目不出现在这个 map 里（undefined → 还原是 no-op）。
+  snapshots?: Record<string, string>
   // Injectable so tests never touch real git; default to the real tempBranch.ts functions.
   mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
   discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
@@ -145,6 +149,12 @@ export interface RunControllerState {
   // false/缺省 = 还没走到收尾,或收尾**失败**了(合并冲突等)。Run2Manager.resumable 据此把「所有阶段都跑完、
   // 只是收尾没成」和「某个阶段没跑完」区分开 —— 前者该提供「重新收尾」,而不是误导地说「从代码CR继续」。
   finalized?: boolean
+  // 这个 run 实际使用的每个项目的基准/目标分支，以及运行前快照 SHA。**必须随状态落盘**：
+  // 恢复路径（Run2Manager.resumeFromDisk）原本由调用方从 ws.projects[].branch 重新推导，
+  // 而那个字段在用户切分支后从不回写 —— 恢复一次目标分支就飘回 main，等于把 2026-08-17 那个
+  // bug 从第二个入口又放进来一遍。存自己记的，才是唯一可信的。
+  projectTargets?: Record<string, string>
+  snapshots?: Record<string, string>
   // ①汇总 (end-of-run summary): the synthesized "本次运行总结" (or its deterministic digest fallback)
   // produced ONCE at genuine full-plan completion (start(), before runFinalizeGate) — see
   // buildRunSummary. Absent until then, and never set on abort/failure (the run must reach every
@@ -340,7 +350,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, finalized: this.finalized, summary: this.summary, reviewReports: { ...this.reviewReports }, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, finalized: this.finalized, summary: this.summary, reviewReports: { ...this.reviewReports }, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects, projectTargets: this.deps.projectTargets, snapshots: this.deps.snapshots }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }

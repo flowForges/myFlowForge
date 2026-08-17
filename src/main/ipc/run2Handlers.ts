@@ -35,14 +35,20 @@ export function registerRun2(deps: {
   // "checkout target, force-delete the temp branch", so one injected function covers both call sites.
   // 4th param (snapshotSha): Task 4 — rollback and 丢弃本次 both need the project's own pre-run
   // snapshot SHA so discardTempBranch can restore it instead of destroying it (see tempBranch.ts).
-  discardTempBranch?: (cwd: string, target: string, runId: string, snapshotSha: string | null) => Promise<void>
+  // Optional (Task 5 debt cleanup): matches the real tempBranch.ts discardTempBranch's own inferred
+  // type (its `snapshotSha = null` default makes the param optional there too) — required-here made
+  // this field's type strictly NARROWER than the real function it defaults to, which is exactly what
+  // forced Run2StartOpts/Run2ResumeOpts's discardTempBranch (manager.ts) into a cast just to pass this
+  // value through their old 3-arg shape. Optional lets the real type flow through start-to-finish.
+  discardTempBranch?: (cwd: string, target: string, runId: string, snapshotSha?: string | null) => Promise<void>
   // P4-3: injectable so tests can stub real git out of the finalize gate's 合并并完成 action.
   // Production omits it — RunController falls back to the real tempBranch.ts mergeTempBranch.
   mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
   // Finding 4 (Important — abort semantics): injectable so tests can stub real git out of the abort
   // path's park-instead-of-discard action. Production omits it — RunController falls back to the
-  // real tempBranch.ts parkTempBranch. 4th param (snapshotSha): same reason as discardTempBranch above.
-  parkTempBranch?: (cwd: string, target: string, runId: string, snapshotSha: string | null) => Promise<void>
+  // real tempBranch.ts parkTempBranch. 4th param (snapshotSha): same reason as discardTempBranch above
+  // (optional, same rationale).
+  parkTempBranch?: (cwd: string, target: string, runId: string, snapshotSha?: string | null) => Promise<void>
   // Task 4: which branch a project's worktree is ACTUALLY on right now — createRunTempBranches' base
   // for the run's temp branch (see launch.ts). Injectable so tests can stub real git out. Production
   // omits it — falls back to the real tempBranch.ts currentBranch.
@@ -145,21 +151,11 @@ export function registerRun2(deps: {
     // downstream stage (技术方案设计, 开发…) whose upstream requirement stage failed/degraded loses the
     // original ask entirely and sees only a "完成" fallback. `|| undefined` so an empty launch emits no seed.
     //
-    // Run2StartOpts (manager.ts) doesn't declare `snapshots` yet, and its discardTempBranch/
-    // parkTempBranch fields are still the old 3-arg shape — Task 5 owns widening both (and actually
-    // threading `snapshots` through the controller's finalize/abort actions). Building the options as a
-    // `const` first (rather than passing an object literal straight into manager.start) means TS's
-    // excess-property check doesn't fire for `snapshots`; the 3-arg cast below is safe today regardless,
-    // because the real tempBranch.ts implementations default snapshotSha to null when called with only
-    // 3 args — byte-for-byte the same runtime behavior this call site had before Task 4 touched it.
-    const startOpts = {
+    return manager.start({
       workspacePath: p.workspacePath, runId: plan.runId, plan, projects,
       task: launchTaskSeed(p) || undefined, sessionId: p.sessionId, projectTargets, snapshots,
-      mergeTempBranch,
-      discardTempBranch: discardTempBranch as ((cwd: string, target: string, runId: string) => Promise<void>) | undefined,
-      parkTempBranch: parkTempBranch as ((cwd: string, target: string, runId: string) => Promise<void>) | undefined,
-    }
-    return manager.start(startOpts)
+      mergeTempBranch, discardTempBranch, parkTempBranch,
+    })
   }
   onInvoke(CH.run2LaunchStart, (_e, p: LaunchStartConfig) => launchRun(p))
 
@@ -202,6 +198,19 @@ export function registerRun2(deps: {
   // previously meant a still-pending per-project stage would resume against a project the original
   // run never selected (never checked out onto the run's temp branch), and a finalize-gate
   // merge/discard would then run real git directly against that project's REAL branch.
+  //
+  // Task 5 judgment call: the `projectTargets` for-loop below is ALSO now only a legacy fallback —
+  // Run2Manager.resumeFromDisk prefers the saved state's OWN persisted projectTargets/snapshots (see
+  // its doc in manager.ts) whenever present, i.e. for every run launched after this fix shipped. Kept
+  // (rather than deleted) deliberately for a run that's ALREADY sitting interrupted on some user's
+  // disk right now, saved before projectTargets existed at all: `found.state.projectTargets` is then
+  // `undefined`, and if this fallback didn't exist, `finalizeTargets()` (controller.ts) would come back
+  // empty — runFinalizeGate() no-ops silently (`finalized = true`, no gate ever raised), leaving that
+  // run's real work stranded, unmerged, on its temp branch with no prompt to the user at all. Merging
+  // to a possibly-stale `ws.projects[].branch` (same field, same risk this whole bug-fix chain is
+  // about) is the worse-feeling option in isolation, but it's EXACTLY the behavior every run had before
+  // Task 4/5 existed — no regression for an already-interrupted run — and it still surfaces the
+  // finalize gate for the user to look at, instead of silently disappearing the confirmation entirely.
   onInvoke(CH.run2ResumeFromDisk, (_e, p: { workspacePath: string; sessionId?: string }) => {
     if (!readWorkspace) throw new Error('registerRun2: readWorkspace dep missing (required for run2:resume-from-disk)')
     const ws = readWorkspace(p.workspacePath)
@@ -213,11 +222,9 @@ export function registerRun2(deps: {
       const target = ws.projects.find((wp) => wp.name === project.name)?.branch
       if (target) projectTargets[project.name] = target
     }
-    // Same 3-arg cast-back as run2:launch-start above, same reason (Task 5 debt) — see its comment.
     return manager.resumeFromDisk(p.workspacePath, {
       projects, projectTargets, mergeTempBranch,
-      discardTempBranch: discardTempBranch as ((cwd: string, target: string, runId: string) => Promise<void>) | undefined,
-      parkTempBranch: parkTempBranch as ((cwd: string, target: string, runId: string) => Promise<void>) | undefined,
+      discardTempBranch, parkTempBranch,
       sessionId: p.sessionId,
     })
   })

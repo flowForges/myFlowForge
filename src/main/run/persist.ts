@@ -64,6 +64,13 @@ export interface SavedControllerState {
   // 该「重跑某个阶段」还是「重新收尾」。可选 ⇒ 老的 run2-state 读出来是 undefined,按「未收尾」保守处理。
   error?: string
   finalized?: boolean
+  // Task 5: the run's OWN resolved target branch/snapshot per project (RunControllerState.
+  // projectTargets/.snapshots — see controller.ts doc). Optional — same backward-compat rationale as
+  // sessionId/task/projects above: an OLDER saved run2-state (written before Task 4/5) loads these as
+  // `undefined`, and resumeFromDisk (manager.ts) falls back to the resume caller's re-derivation, same
+  // as before this field existed.
+  projectTargets?: RunControllerState['projectTargets']
+  snapshots?: RunControllerState['snapshots']
 }
 
 const KEY = 'run2-state'
@@ -76,7 +83,7 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
       provider: o.order.provider, model: o.order.model, cwd: o.order.cwd,
     }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects, summary: s.summary, error: s.error, finalized: s.finalized })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects, summary: s.summary, error: s.error, finalized: s.finalized, projectTargets: s.projectTargets, snapshots: s.snapshots })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY) as SavedControllerState | undefined
