@@ -320,6 +320,30 @@
   border-color: color-mix(in oklch, var(--err) 38%, var(--border)); }
 .wfo-btn.danger:hover svg { color: var(--err); }
 
+/* #7 收尾门「彻底丢弃」二次确认行 — 警示色但不是一整块红底(那是真出错时 .req-plan 用的调性)，
+   只在文字/边框上给出「这条会真删」的信号，跟 .wfo-act 本身的 warn 底色区分开。 */
+.wfo-danger { color: var(--err); font-size: 12px; }
+.wfo-danger span { flex: 1; line-height: 1.5; }
+/* 「彻底丢弃这次改动」触发按钮 — 故意做成不起眼的纯文字链接（不是 .wfo-btn 那样的实心按钮），
+   与旁边合并/先不合并的分量拉开差距：默认路径显眼，真删的路径要用户自己去点。 */
+.wfo-link-danger { align-self: flex-start; margin-top: 9px; background: none; border: 0; padding: 0;
+  font-size: 11.5px; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.wfo-link-danger:hover { color: var(--err); }
+
+/* #7 合并失败卡（FinalizeFailureCard）：结构上是一张 .msg-req，只加它自己独有的几块。 */
+.ff-card .req-body { display: flex; flex-direction: column; gap: 10px; }
+.ff-proj { display: flex; flex-direction: column; gap: 4px; padding: 9px 11px; border-radius: 9px;
+  background: var(--surface-2); border: 1px solid var(--border); }
+.ff-line { font-size: 12.5px; color: var(--fg-2); line-height: 1.55; }
+.ff-line code { font-family: var(--mono); font-size: 11.5px; background: var(--surface); padding: 1px 6px; border-radius: 5px; color: var(--fg); }
+.ff-detail { color: var(--muted); }
+.ff-files { margin: 4px 0 0; padding-left: 18px; }
+.ff-files li { font-size: 12px; line-height: 1.6; }
+/* 手工合并命令块 — 复用 .req-plan pre 已经在用的 surface/border 配色（见 chat.css），保持代码块
+   观感统一，不另起一套颜色。 */
+.ff-cmd { margin: 2px 0 0; padding: 9px 11px; border-radius: 7px; background: var(--surface);
+  border: 1px solid var(--border); font: 11.5px/1.6 var(--mono); color: var(--fg-2); overflow-x: auto; white-space: pre; }
+
 /* 底部:目标输入 / 运行控制 */
 .wfo-foot { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 13px 17px 15px; background: color-mix(in oklch, var(--surface) 35%, var(--bg-2)); }
 .wfo-goal { display: flex; align-items: flex-end; gap: 9px; margin-top: 13px; }

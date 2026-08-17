@@ -1705,6 +1705,39 @@ describe('RunController', () => {
       expect(final.outcomes['s1']?.[0]?.status).toBe('ok')
     })
 
+    // #7 hard requirement 2: without this, a resumed run whose finalize gate had already failed once
+    // would rehydrate as `{ status:'failed', error: undefined, finalizeFailure: undefined }` — the
+    // resumable banner correctly stops re-pestering (status/finalized round-trip already), but the
+    // failure card has nothing left to render (no branch name, no conflict files). Checked directly
+    // off the freshly-constructed controller (start() never called here) to prove the CONSTRUCTOR
+    // itself does the rehydrating, not some side effect of re-running the finalize gate.
+    it('rehydrates error and finalizeFailure from a saved state, so the failure card survives an app restart', () => {
+      const store = new RunStore(ws, 'r1')
+      const savedMachine: MachineState = {
+        plan,
+        stages: [
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'done', round: 0 },
+        ],
+        currentIndex: 1,
+      }
+      const finalizeFailure = [{
+        project: 'a', target: 'main', tempBranch: 'forge/run-r1',
+        conflictFiles: ['src/x.ts'], detail: 'CONFLICT (content): Merge conflict in src/x.ts',
+      }]
+      const c = new RunController(
+        plan,
+        { providers: {}, store, env: {}, projects },
+        {
+          machine: savedMachine,
+          error: '无法自动合并 — a: CONFLICT (content): Merge conflict in src/x.ts',
+          finalizeFailure,
+        },
+      )
+      expect(c.state.error).toBe('无法自动合并 — a: CONFLICT (content): Merge conflict in src/x.ts')
+      expect(c.state.finalizeFailure).toEqual(finalizeFailure)
+    })
+
     it('a loaded machine that is already fully `done` resumes straight to the finalize check without invoking any provider', async () => {
       const store = new RunStore(ws, 'r1')
       const calls: string[] = []

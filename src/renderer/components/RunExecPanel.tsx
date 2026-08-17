@@ -5,6 +5,7 @@ import type { RunControllerState } from '../../main/run/controller'
 import type { AgentContextMeta, AgentRuntime } from '@shared/types'
 import { AgentNode } from './AgentNode'
 import { HookNode } from './HookNode'
+import { FinalizeFailureCard } from './FinalizeFailureCard'
 import { buildStageRuntimes, type AdaptedAgent, type LaneMemory } from './runExecAdapter'
 
 // P2-1b: right-side run-execution display. Rebuilt to reuse the OLD 代理-tab style (inspector-
@@ -203,6 +204,32 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
     : hasRealStageFailure
       ? '工作流已结束 · 存在失败阶段，请检查后处理'
       : '工作流已结束'
+  // #7: a merge/discard/park failure at the finalize gate carries the STRUCTURED per-project detail
+  // (branch names + conflict files — see FinalizeFailure's doc, controller.ts) the failure card needs;
+  // `failedMessage` above stays as the plain-string fallback for every other failed-run shape (a real
+  // stage failure, or a plain abort) that has no such detail to show.
+  const finalizeFailures = state.finalizeFailure
+  const showFinalizeFailureCard = runStatus === 'failed' && !!finalizeFailures?.length
+  // #7 onHandoff judgment call (see this task's brief): the natural mechanism — resolveGate(gateId,
+  // {type:'handoff'}) — needs the finalize gate's OWN event id, but that id is unreachable here. The
+  // controller drops the finalize gate from `state.inbox` the instant its decision resolves
+  // (controller.ts's runFinalizeGate: `this.drop(id)` runs right after `await p`, BEFORE it even
+  // attempts merge/discard/park) — so by the time `state.finalizeFailure` is populated and this card
+  // can render at all, the gate that failed is already gone from `state.inbox`; there is no live id
+  // left for RunExecPanel to resolve against. `run2.discardResumable()` is what's actually reachable
+  // through this component's own props (no gate id required — it operates on the on-disk resumable
+  // record for this workspace, already bound via useRun2). It's a weaker guarantee than resolveGate's
+  // handoff (it clears the SAVED resume record rather than marking the live run finalized through the
+  // controller — see this task's brief for the distinction), but it achieves the same user-facing
+  // effect here: the "上次收尾没完成，重新收尾？" banner stops re-offering this failure. (Task 7 also
+  // fixed a latent gap in discardResumableRun/persist.ts that made this call a silent no-op for
+  // exactly this terminal-but-unfinalized shape — see its own doc.)
+  const handleHandoff = () => { void run2?.discardResumable() }
+  // 重新收尾: re-run the SAME finalize gate without re-running any stage (the controller's main loop
+  // sees every stage already `done` and drops straight back into runFinalizeGate — see
+  // Run2Manager.resumeFromDisk/isUnfinalizedFailure). No new IPC needed: this is the exact call the
+  // resumable banner's own 继续 button already makes (WorkspaceView.tsx).
+  const handleRetryFinalize = () => { void run2?.resumeFromDisk() }
   // P4-2: machine.plan.tempBranch is now populated by planFromStages (forge/run-<runId>) for every run
   // start path; '—' only ever shows for a plan literal that predates this field (e.g. an older test).
   const tempBranch = state.machine.plan.tempBranch ?? '—'
@@ -258,17 +285,25 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
           </div>
         ) : isReadOnly ? (
           <div className="wfo-runctl done">
-            <span className="rmsg">
-              <span className="rd" />
-              {runDone ? (runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪') : '只读回看 · 此运行未在此进程结束'}
-            </span>
+            {runDone && showFinalizeFailureCard ? (
+              <FinalizeFailureCard failures={finalizeFailures!} onHandoff={handleHandoff} onRetry={run2 ? handleRetryFinalize : undefined} />
+            ) : (
+              <span className="rmsg">
+                <span className="rd" />
+                {runDone ? (runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪') : '只读回看 · 此运行未在此进程结束'}
+              </span>
+            )}
           </div>
         ) : runDone ? (
           <div className="wfo-runctl done">
-            <span className="rmsg">
-              <span className="rd" />
-              {runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪'}
-            </span>
+            {showFinalizeFailureCard ? (
+              <FinalizeFailureCard failures={finalizeFailures!} onHandoff={handleHandoff} onRetry={run2 ? handleRetryFinalize : undefined} />
+            ) : (
+              <span className="rmsg">
+                <span className="rd" />
+                {runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪'}
+              </span>
+            )}
           </div>
         ) : (
           <div className="wfo-runctl">

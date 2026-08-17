@@ -6,7 +6,12 @@ import { RunController, type RunControllerState, type RunLogLine } from './contr
 import type { RunPlan } from './machine'
 import type { GateDecision, LaneDecision } from './decisions'
 import type { RunEvent } from './events'
-import { discardResumableRun, findLatestRun2Run, isTerminalStatus, type SavedControllerState } from './persist'
+import { discardResumableRun, findLatestRun2Run, isTerminalStatus, isUnfinalizedFailure, type SavedControllerState } from './persist'
+// #7: isUnfinalizedFailure now lives in persist.ts (discardResumableRun needs the same predicate
+// resumable() below uses — see persist.ts's doc for why they must share one definition). Re-exported
+// here so the existing `import { isUnfinalizedFailure } from './manager'` call sites (controller.test.ts)
+// keep working unchanged.
+export { isUnfinalizedFailure }
 
 export interface Run2Emit {
   event(wsPath: string, e: RunEvent): void
@@ -128,12 +133,6 @@ function summarizeResumable(runId: string, state: SavedControllerState): Resumab
     ...(finalizeOnly ? { finalizeOnly: true } : {}),
     ...(state.error ? { error: state.error } : {}),
   }
-}
-
-// 「所有阶段都跑完,只是收尾失败」:状态是 failed、每个阶段都 done、finalized 不为真。老的存档没有
-// finalized 字段(读出来 undefined),按「未收尾」保守处理 —— 顶多多问一次要不要重新收尾,不会丢东西。
-export function isUnfinalizedFailure(state: SavedControllerState): boolean {
-  return state.status === 'failed' && !state.finalized && state.machine.stages.every((s) => s.status === 'done')
 }
 
 export class Run2Manager {
@@ -335,6 +334,11 @@ export class Run2Manager {
       stageTimings: found.state.stageTimings,
       laneTimings: found.state.laneTimings,
       laneSessions: found.state.laneSessions,
+      // #7 hard requirement 2: carry the saved finalize-failure record through resume — see
+      // RehydrateState.error/.finalizeFailure doc (controller.ts) for why omitting these would
+      // silently blank the failure card the instant a resumable run gets resumed.
+      error: found.state.error,
+      finalizeFailure: found.state.finalizeFailure,
     })
     return this.registerAndRun(wsPath, controller)
   }

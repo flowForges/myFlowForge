@@ -64,6 +64,15 @@ export interface SavedControllerState {
   // 该「重跑某个阶段」还是「重新收尾」。可选 ⇒ 老的 run2-state 读出来是 undefined,按「未收尾」保守处理。
   error?: string
   finalized?: boolean
+  // #7 (task 7 hard requirement 2): RunControllerState.finalizeFailure (controller.ts) — the
+  // structured per-project detail (target branch/temp branch/conflict files) the failure card
+  // needs to render its "可直接粘贴的手工合并命令". Without this, a resumed run's failure card
+  // has nothing to show: `error` alone survives (see above) but the UI would have to regex the
+  // branch/file names back out of a human sentence — exactly the thing FinalizeFailure exists to
+  // avoid (see its own doc, controller.ts). Optional — same backward-compat rationale as every
+  // other field here: an OLDER saved run2-state (written before this field existed) loads it as
+  // `undefined`, and a resumed failure card just has nothing to show (no worse than before).
+  finalizeFailure?: RunControllerState['finalizeFailure']
   // Task 5: the run's OWN resolved target branch/snapshot per project (RunControllerState.
   // projectTargets/.snapshots — see controller.ts doc). Optional — same backward-compat rationale as
   // sessionId/task/projects above: an OLDER saved run2-state (written before Task 4/5) loads these as
@@ -83,7 +92,7 @@ export function saveControllerState(store: RunStore, s: RunControllerState): voi
       provider: o.order.provider, model: o.order.model, cwd: o.order.cwd,
     }))
   }
-  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects, summary: s.summary, error: s.error, finalized: s.finalized, projectTargets: s.projectTargets, snapshots: s.snapshots })
+  store.setContext(KEY, { machine: s.machine, inbox: s.inbox, feedback: s.feedback, status: s.status, outcomes, pendingDirective: s.pendingDirective, stageTimings: s.stageTimings, laneTimings: s.laneTimings, laneSessions: s.laneSessions, sessionId: s.sessionId, task: s.task, projects: s.projects, summary: s.summary, error: s.error, finalized: s.finalized, finalizeFailure: s.finalizeFailure, projectTargets: s.projectTargets, snapshots: s.snapshots })
 }
 export function loadControllerState(store: RunStore): SavedControllerState | null {
   const got = store.getContext(KEY) as SavedControllerState | undefined
@@ -97,6 +106,19 @@ export function loadControllerState(store: RunStore): SavedControllerState | nul
 // resumeFromDisk() (manager.ts) so both agree on exactly what counts as "still resumable".
 export function isTerminalStatus(status: RunControllerState['status']): boolean {
   return status === 'ok' || status === 'failed'
+}
+
+// 「所有阶段都跑完,只是收尾失败」:状态是 failed、每个阶段都 done、finalized 不为真。老的存档没有
+// finalized 字段(读出来 undefined),按「未收尾」保守处理 —— 顶多多问一次要不要重新收尾,不会丢东西。
+// 移到这里(而不是留在原来的 manager.ts)是 #7 的一个连带修复：discardResumableRun 下面原来只用
+// isTerminalStatus 判「还能不能丢弃」，而 resumable()（manager.ts）判「还能不能恢复」用的是
+// `isTerminalStatus && !isUnfinalizedFailure` 这条更细的规则——两处判定对不上号，导致「收尾失败
+// (status='failed'，但事实上还没真收尾)」这一种状态下，横幅上的「丢弃」按钮悄悄失效（discardResumableRun
+// 一进来就因为 status 是 terminal 直接返回 false，磁盘上的失败记录从未被清掉，横幅每次重开工作区都
+// 弹回来）。两处现在共享同一个判定，不会再走岔。manager.ts 从这里 re-export，`import {
+// isUnfinalizedFailure } from './manager'` 的老用法不用改。
+export function isUnfinalizedFailure(state: SavedControllerState): boolean {
+  return state.status === 'failed' && !state.finalized && state.machine.stages.every((s) => s.status === 'done')
 }
 
 // Shared scan primitive for findLatestRun2Run/listRuns below: every run directory under this
@@ -202,13 +224,20 @@ export function loadRun(wsPath: string, runId: string): SavedControllerState | n
 
 // P-C2/T3: the recovery UI's 丢弃 action — clears the saved run2-state for a workspace's currently
 // resumable interrupted run (see Run2Manager.resumable's doc for exactly what counts) so it stops
-// being offered again on the next workspace open. Re-validates "is this actually resumable" itself
-// (same terminal/none gating findLatestRun2Run + isTerminalStatus already give resumable()) rather
-// than trusting a caller's possibly-stale summary — mirrors resumeFromDisk's own re-validation.
-// Returns false (no-op, nothing discarded) when there's nothing resumable for this workspace.
+// being offered again on the next workspace open. Re-validates "is this actually resumable" itself,
+// using the SAME gating resumable() uses (`isTerminalStatus && !isUnfinalizedFailure` — see #7's fix
+// below) rather than trusting a caller's possibly-stale summary — mirrors resumeFromDisk's own
+// re-validation. Returns false (no-op, nothing discarded) when there's nothing resumable for this
+// workspace.
 export function discardResumableRun(wsPath: string): boolean {
   const found = findLatestRun2Run(wsPath)
-  if (!found || isTerminalStatus(found.state.status)) return false
+  // #7 fix: a terminal-but-unfinalized run (finalize/merge failed — see isUnfinalizedFailure's
+  // doc) IS still something to discard, same as resumable() already treats it as still-offerable.
+  // Without the `!isUnfinalizedFailure` escape hatch here, the "丢弃"/"知道了，我自己处理" button
+  // for exactly that state was a silent no-op: `isTerminalStatus('failed')` alone said "nothing to
+  // discard" and returned before ever touching disk, so the saved failure kept coming back every
+  // time the workspace reopened — the very thing this button exists to stop.
+  if (!found || (isTerminalStatus(found.state.status) && !isUnfinalizedFailure(found.state))) return false
   new RunStore(wsPath, found.runId).deleteContext(KEY)
   return true
 }

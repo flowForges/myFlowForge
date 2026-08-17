@@ -254,6 +254,16 @@ export interface RehydrateState {
   // the rehydrated controller just starts with no captured session ids (same as a fresh run whose
   // stage agents haven't emitted one yet — composeAgentSessions falls back to its placeholder row).
   laneSessions?: Record<string, { provider: string; sessionId: string }>
+  // #7 (task 7 hard requirement 2): see RunControllerState.error/.finalizeFailure doc above. Without
+  // rehydrating these, a resumed run whose finalize gate had already failed once loses BOTH the
+  // human-readable reason and the structured per-project detail the failure card needs — the app
+  // would restart into `{ status:'failed', error: undefined, finalizeFailure: undefined }`, which
+  // stops the resumable banner from re-pestering the user (finalized/status still round-trip) but
+  // leaves the card with nothing to render. Optional/backward-compatible like every other
+  // RehydrateState field: an older saved state (or a rehydrate literal built before this existed)
+  // just omits them, and the resumed controller starts with both undefined — same as a fresh run.
+  error?: string
+  finalizeFailure?: FinalizeFailure[]
 }
 
 // A loaded machine's currentIndex/statuses reflect whatever was on disk at the last emitUpdate()
@@ -364,6 +374,11 @@ export class RunController {
       this.stageTimings = rehydrate.stageTimings ?? {}
       this.laneTimings = rehydrate.laneTimings ?? {}
       this.laneSessions = rehydrate.laneSessions ?? {}
+      // #7 hard requirement 2: rehydrate the finalize-failure record itself, not just status/finalized —
+      // see RehydrateState.error/.finalizeFailure doc for why a resumed run would otherwise have
+      // "stopped asking" but lost "explaining why" in the same breath.
+      this.error = rehydrate.error
+      this.finalizeFailure = rehydrate.finalizeFailure
       for (const [stageKey, list] of Object.entries(rehydrate.outcomes ?? {})) {
         this.outcomes[stageKey] = list.map((o) => placeholderOutcome(stageKey, o))
       }

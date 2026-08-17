@@ -429,6 +429,10 @@ describe('Run2Manager', () => {
           machine: { ...st.machine, stages: st.machine.stages.map((x) => ({ ...x, status: 'done' as const })), currentIndex: 2 },
           error: '合并临时分支失败 — a: CONFLICT (content): Merge conflict in src/x.ts',
           finalized: false,
+          // #7: the structured detail behind the human `error` string above — see FinalizeFailure's
+          // doc (controller.ts). Threaded through resumeFromDisk's rehydrate now (Task 7 hard
+          // requirement 2), same as error/finalized already were.
+          finalizeFailure: [{ project: 'a', target: 'main', tempBranch: 'forge/run-fin', conflictFiles: ['src/x.ts'], detail: 'CONFLICT (content): Merge conflict in src/x.ts' }],
         }
       }
 
@@ -457,6 +461,31 @@ describe('Run2Manager', () => {
         const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
         saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
         expect(() => mgr.resumeFromDisk(ws, { projects: [{ name: 'a', cwd: join(ws, 'a') }] })).not.toThrow()
+      })
+
+      // #7 hard requirement 2: resumeFromDisk's rehydrate literal must thread `error`/`finalizeFailure`
+      // through (controller.ts's RehydrateState) — otherwise the failure card has nothing to show the
+      // instant a resumed run's state is read back, even though this whole resume path exists
+      // specifically to let the user retry/handle THAT failure.
+      it('resumeFromDisk 把 finalizeFailure 也重新灌回新 controller 的 state,失败卡片重启后不丢失', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
+        const state = mgr.resumeFromDisk(ws, { projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+        expect(state.finalizeFailure).toEqual(finishedButUnmerged().finalizeFailure)
+        expect(state.error).toContain('Merge conflict')
+      })
+
+      // #7 fix (discovered wiring FinalizeFailureCard's onHandoff): before this task, discardResumable
+      // was a silent no-op for exactly this state shape (terminal 'failed', but unfinalized) — see
+      // persist.ts's discardResumableRun doc. "知道了，我自己处理" routes through this same call
+      // (RunExecPanel.tsx), so it must actually clear the saved failure, not just return without effect.
+      it('discardResumable(#7 fix)也能真正丢弃"收尾失败但已终态"的存档,不再是静默 no-op', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
+        expect(mgr.resumable(ws)).not.toBeNull()
+
+        expect(mgr.discardResumable(ws)).toBe(true)
+        expect(mgr.resumable(ws)).toBeNull()
       })
 
       it('阶段全 done 且已收尾的运行不再提供恢复(它是真的完事了)', () => {

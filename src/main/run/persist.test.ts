@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../run/runStore'
 import { wsRunDir } from '../config/paths'
-import { saveControllerState, loadControllerState, findLatestRun2Run, findRun2RunForSession, isTerminalStatus, listRuns, loadRun, deleteRun } from './persist'
+import { saveControllerState, loadControllerState, findLatestRun2Run, findRun2RunForSession, isTerminalStatus, isUnfinalizedFailure, listRuns, loadRun, deleteRun, discardResumableRun } from './persist'
 import { initMachine, type RunPlan, type MachineState } from './machine'
 import type { RunControllerState } from './controller'
 
@@ -163,6 +163,40 @@ describe('controller persistence', () => {
     saveControllerState(store, s as any)
     const back = loadControllerState(store)
     expect(back?.outcomes.design[0]).toMatchObject({ provider: 'codex', model: 'gpt-5', cwd: '/ws/go-blog' })
+  })
+
+  // #7 hard requirement 2: finalizeFailure (the structured per-project detail behind `error` — see
+  // FinalizeFailure's doc, controller.ts) must survive a save/load round-trip, or the failure card
+  // has nothing to render after an app restart — it would know a merge failed (`error`/`status`
+  // already round-trip) but not which branch/files, forcing the UI to regex a human sentence, exactly
+  // what FinalizeFailure exists to avoid.
+  it('round-trips finalizeFailure — the failure card still gets its branch name and conflict files after save/load', () => {
+    const store = new RunStore(ws, 'r1')
+    const finalizeFailure = [{
+      project: 'web', target: 'branch1', tempBranch: 'forge/run-r1',
+      conflictFiles: ['src/foo.ts', 'src/bar.ts'], detail: 'CONFLICT (content): Merge conflict in src/foo.ts',
+    }]
+    const s = {
+      machine: initMachine(plan), inbox: [], feedback: [], outcomes: {},
+      status: 'failed' as const, pendingDirective: {},
+      error: '无法自动合并 — web: CONFLICT (content): Merge conflict in src/foo.ts',
+      finalizeFailure,
+    }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.finalizeFailure).toEqual(finalizeFailure)
+    expect(back?.finalizeFailure?.[0].tempBranch).toBe('forge/run-r1')
+    expect(back?.finalizeFailure?.[0].conflictFiles).toEqual(['src/foo.ts', 'src/bar.ts'])
+  })
+
+  // Backward compatibility: an older saved run2-state (written before finalizeFailure existed) must
+  // load with it simply absent — not throw, not default to some sentinel.
+  it('finalizeFailure is absent (not defaulted) for a saved state that never set it', () => {
+    const store = new RunStore(ws, 'r1')
+    const s = { machine: initMachine(plan), inbox: [], feedback: [], outcomes: {}, status: 'running' as const, pendingDirective: {} }
+    saveControllerState(store, s as any)
+    const back = loadControllerState(store)
+    expect(back?.finalizeFailure).toBeUndefined()
   })
 
   // Backward compatibility: a legacy saved outcome (written before provider/model/cwd were
@@ -324,6 +358,50 @@ describe('listRuns / loadRun (run-history, spec §12.7)', () => {
   it('loadRun returns null for an unknown runId (and does not create a directory for it)', () => {
     expect(loadRun(ws, 'nope')).toBeNull()
     expect(existsSync(wsRunDir(ws, 'nope'))).toBe(false)
+  })
+})
+
+// #7 fix (discovered while wiring FinalizeFailureCard's onHandoff — see RunExecPanel.tsx's doc on
+// the judgment call): discardResumableRun's old gating was `isTerminalStatus(status)` alone, which
+// says "nothing to discard" for a 'failed' run WITHOUT the same `!isUnfinalizedFailure` refinement
+// resumable() (manager.ts) already uses to decide "still resumable". A finalize-gate failure is
+// ALWAYS status:'failed' (terminal) — so the "丢弃"/"知道了，我自己处理" button for exactly that
+// state was a silent no-op: it returned before ever touching disk, and the saved failure kept being
+// offered again every time the workspace reopened.
+describe('discardResumableRun (#7: terminal-but-unfinalized is still discardable)', () => {
+  function unmergedFixture(): RunControllerState {
+    const machine: MachineState = { plan, stages: [{ key: 'design', status: 'done', round: 0 }], currentIndex: 0 }
+    return {
+      machine, inbox: [], feedback: [], outcomes: {}, status: 'failed', pendingDirective: {},
+      liveLanes: {}, stageTimings: {}, laneTimings: {}, laneSessions: {}, paused: false,
+      error: '无法自动合并 — web: CONFLICT (content): Merge conflict in src/x.ts',
+      finalizeFailure: [{ project: 'web', target: 'main', tempBranch: 'forge/run-r1', conflictFiles: ['src/x.ts'], detail: 'CONFLICT' }],
+      finalized: false,
+    }
+  }
+
+  it('a finalize-failure (terminal failed, unfinalized) run IS discardable', () => {
+    saveControllerState(new RunStore(ws, 'run-fin'), unmergedFixture())
+    expect(isUnfinalizedFailure(loadRun(ws, 'run-fin')!)).toBe(true)
+
+    expect(discardResumableRun(ws)).toBe(true)
+    expect(loadRun(ws, 'run-fin')).toBeNull()
+  })
+
+  it('a genuinely finalized failed run (or a plain ok run) is still NOT discardable — nothing to discard', () => {
+    saveControllerState(new RunStore(ws, 'run-done'), { ...unmergedFixture(), finalized: true })
+    expect(discardResumableRun(ws)).toBe(false)
+    expect(loadRun(ws, 'run-done')).not.toBeNull()
+  })
+
+  it('a non-terminal (running) run is unaffected by the fix — still discardable exactly as before', () => {
+    const machine: MachineState = { plan, stages: [{ key: 'design', status: 'pending', round: 0 }], currentIndex: 0 }
+    saveControllerState(new RunStore(ws, 'run-mid'), {
+      machine, inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {},
+      liveLanes: {}, stageTimings: {}, laneTimings: {}, laneSessions: {}, paused: false,
+    })
+    expect(discardResumableRun(ws)).toBe(true)
+    expect(loadRun(ws, 'run-mid')).toBeNull()
   })
 })
 

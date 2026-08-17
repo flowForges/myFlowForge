@@ -18,6 +18,10 @@ function makeRun2(state: any = null, laneLogs: Record<string, any[]> = {}): Run2
     pause: vi.fn(),
     resume: vi.fn(),
     jumpBack: vi.fn(),
+    // #7: FinalizeFailureCard's onHandoff/onRetry route through these — see RunExecPanel's own
+    // doc on the judgment call (resolveGate's gate id is unreachable by the time the card renders).
+    discardResumable: vi.fn(async () => {}),
+    resumeFromDisk: vi.fn(async () => {}),
   } as unknown as Run2Api
 }
 
@@ -289,6 +293,62 @@ describe('RunExecPanel', () => {
 
     expect(screen.getByText(/合并临时分支失败.*CONFLICT/)).toBeInTheDocument()
     expect(screen.queryByText('工作流已结束 · 存在失败阶段，请检查后处理')).toBeNull()
+  })
+
+  // #7: once the controller carries the STRUCTURED per-project detail (state.finalizeFailure), the
+  // panel must show the FinalizeFailureCard instead of the bare failedMessage string tested above —
+  // and wire its two buttons to what RunExecPanel can actually reach (see its own doc for why
+  // discardResumable/resumeFromDisk, not resolveGate).
+  describe('#7 finalize-failure card (state.finalizeFailure present)', () => {
+    function finalizeFailedState() {
+      return baseState({
+        status: 'failed',
+        error: '无法自动合并 — zgh: CONFLICT (content): Merge conflict in app.ts',
+        finalizeFailure: [{
+          project: 'zgh', target: 'main', tempBranch: 'forge/run2-1',
+          conflictFiles: ['app.ts'], detail: 'CONFLICT (content): Merge conflict in app.ts',
+        }],
+        machine: {
+          plan: baseState().machine.plan,
+          stages: [
+            { key: 'assess', status: 'done', round: 0 },
+            { key: 'design', status: 'done', round: 0 },
+            { key: 'develop', status: 'done', round: 0 },
+            { key: 'review', status: 'done', round: 0 },
+          ],
+          currentIndex: 4,
+        },
+      })
+    }
+
+    it('renders the FinalizeFailureCard (not the bare failedMessage string) when finalizeFailure is present', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      render(<RunExecPanel run2={run2} />)
+      expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
+      expect(screen.getAllByText(/forge\/run2-1/).length).toBeGreaterThan(0)
+      expect(screen.queryByText(/^无法自动合并 — zgh/)).toBeNull()
+    })
+
+    it('「知道了，我自己处理」calls run2.discardResumable (the gate id is already gone by the time this card exists)', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      render(<RunExecPanel run2={run2} />)
+      fireEvent.click(screen.getByText('知道了，我自己处理'))
+      expect(run2.discardResumable).toHaveBeenCalled()
+      expect(run2.resolveGate).not.toHaveBeenCalled()
+    })
+
+    it('重新收尾 calls run2.resumeFromDisk — the same re-run-the-finalize-gate call the resumable banner\'s 继续 button already makes', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      render(<RunExecPanel run2={run2} />)
+      fireEvent.click(screen.getByText('重新收尾'))
+      expect(run2.resumeFromDisk).toHaveBeenCalled()
+    })
+
+    it('omits 重新收尾 (no live run2 to retry against) in read-only replay, but still shows the card', () => {
+      render(<RunExecPanel staticState={finalizeFailedState() as any} readOnly />)
+      expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
+      expect(screen.queryByText('重新收尾')).toBeNull()
+    })
   })
 
   it('a genuine per-lane stage failure (no state.error) keeps the existing "存在失败阶段" text', () => {
