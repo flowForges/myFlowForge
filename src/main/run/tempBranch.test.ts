@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch } from './tempBranch'
+import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, type GitRunner } from './tempBranch'
 
 describe('tempBranch', () => {
   it('分支名稳定', () => {
@@ -9,8 +9,8 @@ describe('tempBranch', () => {
   it('createTempBranch 从 base 切新分支', async () => {
     const calls: string[][] = []
     const git = async (_cwd: string, args: string[]) => { calls.push(args); return '' }
-    const name = await createTempBranch('/repo', 'feat/x', 'abc', git)
-    expect(name).toBe('forge/run-abc')
+    const got = await createTempBranch('/repo', 'feat/x', 'abc', git)
+    expect(got.branch).toBe('forge/run-abc')
     expect(calls).toContainEqual(['checkout', '-b', 'forge/run-abc', 'feat/x'])
   })
 
@@ -107,7 +107,8 @@ describe('tempBranch', () => {
     await createTempBranch('/repo1', 'main', 'a', git)
     await mergeTempBranch('/repo2', 'main', 'a', git)
     await discardTempBranch('/repo3', 'main', 'a', git)
-    expect(cwds).toEqual(['/repo1', '/repo2', '/repo2', '/repo2', '/repo2', '/repo2', '/repo3', '/repo3', '/repo3'])
+    // createTempBranch now does checkout + add -A + status --porcelain (clean tree here → no commit/rev-parse).
+    expect(cwds).toEqual(['/repo1', '/repo1', '/repo1', '/repo2', '/repo2', '/repo2', '/repo2', '/repo2', '/repo3', '/repo3', '/repo3'])
   })
 
   describe('isCleanTree (Finding 3)', () => {
@@ -178,6 +179,57 @@ describe('tempBranch', () => {
       const git = async (cwd: string) => { cwds.push(cwd); return '' }
       await parkTempBranch('/repo', 'main', 'abc', git)
       expect(cwds).toEqual(['/repo', '/repo', '/repo'])
+    })
+  })
+
+  describe('createTempBranch 运行前快照', () => {
+    it('脏树 → 建分支后立刻提交快照，返回 snapshotSha', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_cwd, args) => {
+        calls.push(args)
+        if (args[0] === 'status') return ' M src/foo.ts\n?? src/new.ts\n'
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'abc1234\n'
+        return ''
+      }
+      const got = await createTempBranch('/repo', 'branch1', 'r1', run)
+
+      expect(got.branch).toBe('forge/run-r1')
+      expect(got.snapshotSha).toBe('abc1234')
+      expect(calls).toEqual([
+        ['checkout', '-b', 'forge/run-r1', 'branch1'],
+        ['add', '-A'],
+        ['status', '--porcelain'],
+        ['commit', '-m', 'forge: 运行前快照'],
+        ['rev-parse', 'HEAD'],
+      ])
+    })
+
+    it('干净树 → 不提交任何东西，snapshotSha 为 null', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_cwd, args) => { calls.push(args); return '' }
+      const got = await createTempBranch('/repo', 'branch1', 'r1', run)
+
+      expect(got.snapshotSha).toBeNull()
+      expect(calls.some((c) => c[0] === 'commit')).toBe(false)
+      expect(calls.some((c) => c[0] === 'rev-parse')).toBe(false)
+    })
+
+    it('checkout 失败 → 抛出带 base 与 branch 的可读错误', async () => {
+      const run: GitRunner = async () => { throw new Error('fatal: invalid reference') }
+      await expect(createTempBranch('/repo', 'gone', 'r1', run)).rejects.toThrow(
+        /Failed to create temp branch "forge\/run-r1" from base "gone"/
+      )
+    })
+
+    it('快照提交失败 → 抛出可读错误，不吞掉', async () => {
+      const run: GitRunner = async (_cwd, args) => {
+        if (args[0] === 'status') return ' M a.ts\n'
+        if (args[0] === 'commit') throw new Error('fatal: no user.email')
+        return ''
+      }
+      await expect(createTempBranch('/repo', 'branch1', 'r1', run)).rejects.toThrow(
+        /Failed to commit pre-run snapshot .*forge\/run-r1/
+      )
     })
   })
 })

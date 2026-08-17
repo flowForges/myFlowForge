@@ -15,9 +15,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git } from '../git/gitRunner'
-import { createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, tempBranchName, stashRun, popRunStash } from './tempBranch'
-import { createRunTempBranches } from './launch'
-import type { Workspace } from '../config/schema'
+import { createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, tempBranchName } from './tempBranch'
 
 // Detected once at collection time (synchronous, so describe.skipIf can use it directly) — if a
 // dev/CI box genuinely has no git binary, skip with a clear reason rather than failing every test
@@ -120,7 +118,7 @@ describe.skipIf(!gitAvailable)('tempBranch (real git integration)', () => {
     // Before the fix: target's working tree was left dirty (leftover.txt carried over uncommitted),
     // so this next checkout -b would throw "error: Your local changes ... would be overwritten" /
     // "本地更改未提交" (see launch.test.ts:220's pre-existing regression coverage for that symptom).
-    await expect(createTempBranch(repo, 'main', 'run-b')).resolves.toBe(tempBranchName('run-b'))
+    await expect(createTempBranch(repo, 'main', 'run-b')).resolves.toEqual({ branch: tempBranchName('run-b'), snapshotSha: null })
     expect(await currentBranch(repo)).toBe(tempBranchName('run-b'))
     expect(await porcelainStatus(repo)).toBe('')
   }, 20000)
@@ -174,128 +172,5 @@ describe.skipIf(!gitAvailable)('tempBranch (real git integration)', () => {
     expect(await isCleanTree(repo)).toBe(true)
     writeFileSync(join(repo, 'untracked.txt'), 'new\n')
     expect(await isCleanTree(repo)).toBe(false)
-  }, 20000)
-})
-
-describe.skipIf(!gitAvailable)('createRunTempBranches dirty-tree stash + restore (real git)', () => {
-  let repoA: string
-  let repoB: string
-  beforeEach(async () => {
-    repoA = await initRepo()
-    repoB = await initRepo()
-  })
-  afterEach(() => {
-    rmSync(repoA, { recursive: true, force: true })
-    rmSync(repoB, { recursive: true, force: true })
-  })
-
-  function fixtureWs(): Workspace {
-    return {
-      name: 'pay', path: '/irrelevant', workflowId: '', stages: [],
-      workflows: [],
-      projects: [
-        { repoId: 'api', name: 'api', branch: 'main' },
-        { repoId: 'web', name: 'web', branch: 'main' },
-      ] as any,
-      status: 'idle', plugins: [], stepPlugins: [],
-    } as any
-  }
-
-  it('a pre-existing UNTRACKED file is STASHED (not rejected): the run proceeds and every project gets its temp branch', async () => {
-    writeFileSync(join(repoB, 'unrelated-untracked.txt'), 'not part of this run\n')
-
-    const res = await createRunTempBranches(
-      fixtureWs(),
-      [{ name: 'api', cwd: repoA }, { name: 'web', cwd: repoB }],
-      'run-dirty',
-    )
-
-    expect(res.stashed).toEqual(['web'])                                    // the dirty project was stashed
-    expect(await branchExists(repoA, tempBranchName('run-dirty'))).toBe(true)
-    expect(await branchExists(repoB, tempBranchName('run-dirty'))).toBe(true)
-    expect(await currentBranch(repoB)).toBe(tempBranchName('run-dirty'))
-    // During the run the user's untracked file is stashed away (clean tree); it's restored at finalize.
-    expect(existsSync(join(repoB, 'unrelated-untracked.txt'))).toBe(false)
-    expect(await porcelainStatus(repoB)).toBe('')
-  }, 20000)
-
-  it('a pre-existing TRACKED-FILE edit is STASHED too: the run proceeds, the edit set aside (restored at finalize)', async () => {
-    writeFileSync(join(repoA, 'existing.txt'), 'hello\nunrelated pending edit\n')
-
-    const res = await createRunTempBranches(
-      fixtureWs(),
-      [{ name: 'api', cwd: repoA }, { name: 'web', cwd: repoB }],
-      'run-dirty2',
-    )
-
-    expect(res.stashed).toEqual(['api'])
-    expect(await branchExists(repoA, tempBranchName('run-dirty2'))).toBe(true)
-    // The edit is stashed → the temp branch's tree is clean; it comes back at finalize (see cycle tests).
-    expect(await porcelainStatus(repoA)).toBe('')
-    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).not.toContain('unrelated pending edit')
-  }, 20000)
-
-  it('when every project IS clean, createRunTempBranches proceeds and checks out the real temp branch in each', async () => {
-    await createRunTempBranches(
-      fixtureWs(),
-      [{ name: 'api', cwd: repoA }, { name: 'web', cwd: repoB }],
-      'run-clean',
-    )
-    expect(await currentBranch(repoA)).toBe(tempBranchName('run-clean'))
-    expect(await currentBranch(repoB)).toBe(tempBranchName('run-clean'))
-  }, 20000)
-
-  // ---- Dirty-tree stash/restore (user decision): start a run with uncommitted changes safely ----
-
-  it('stashRun stashes tracked + untracked changes (tree clean after); popRunStash restores them', async () => {
-    writeFileSync(join(repoA, 'existing.txt'), 'hello\nuser edit\n')   // tracked edit
-    writeFileSync(join(repoA, 'user-new.txt'), 'user untracked\n')     // untracked new file
-    expect(await porcelainStatus(repoA)).not.toBe('')
-
-    expect(await stashRun(repoA, 'run-s')).toBe(true)
-    expect(await porcelainStatus(repoA)).toBe('')                      // clean → temp branch can be created
-    expect(existsSync(join(repoA, 'user-new.txt'))).toBe(false)        // untracked change is stashed away too
-
-    expect(await popRunStash(repoA, 'run-s')).toBe('popped')
-    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).toContain('user edit')
-    expect(existsSync(join(repoA, 'user-new.txt'))).toBe(true)
-    expect(await stashRun(repoA, 'noop')).toBe(true)                   // still dirty → nothing was lost
-  }, 20000)
-
-  it('MERGE cycle: a dirty tree is stashed, the run merges its own work, and the user\'s uncommitted changes come back', async () => {
-    writeFileSync(join(repoA, 'existing.txt'), 'hello\nuser edit\n')
-    writeFileSync(join(repoA, 'user-new.txt'), 'user untracked\n')
-
-    await stashRun(repoA, 'run-m')                                     // stash the user's work
-    await createTempBranch(repoA, 'main', 'run-m')                     // temp branch off a CLEAN tree
-    writeFileSync(join(repoA, 'agent.txt'), 'agent work\n')            // the run writes its own file
-    await mergeTempBranch(repoA, 'main', 'run-m')                      // merge the run into main
-    expect(await popRunStash(repoA, 'run-m')).toBe('popped')           // restore the user's work
-
-    expect(await currentBranch(repoA)).toBe('main')
-    // The run's work is committed & merged onto main …
-    expect(await git(['log', '--oneline'], { cwd: repoA })).toContain('run run-m')
-    expect(existsSync(join(repoA, 'agent.txt'))).toBe(true)
-    // … and the user's uncommitted changes are back, still uncommitted, NOT swallowed by the run.
-    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).toContain('user edit')
-    expect(existsSync(join(repoA, 'user-new.txt'))).toBe(true)
-    expect(await porcelainStatus(repoA)).not.toBe('')                 // user's edits show as uncommitted
-  }, 20000)
-
-  it('DISCARD cycle: the run\'s work is thrown away by clean -fd but the user\'s stashed changes survive (the whole point)', async () => {
-    writeFileSync(join(repoA, 'existing.txt'), 'hello\nuser edit\n')
-    writeFileSync(join(repoA, 'user-new.txt'), 'user untracked\n')
-
-    await stashRun(repoA, 'run-d')
-    await createTempBranch(repoA, 'main', 'run-d')
-    writeFileSync(join(repoA, 'agent.txt'), 'agent work\n')            // run's untracked file
-    await discardTempBranch(repoA, 'main', 'run-d')                   // checkout -f + clean -fd wipes the run
-    expect(await popRunStash(repoA, 'run-d')).toBe('popped')
-
-    expect(await currentBranch(repoA)).toBe('main')
-    expect(existsSync(join(repoA, 'agent.txt'))).toBe(false)          // run's work discarded …
-    // … but the user's uncommitted work is intact (it was stashed BEFORE clean -fd ran).
-    expect(readFileSync(join(repoA, 'existing.txt'), 'utf8')).toContain('user edit')
-    expect(existsSync(join(repoA, 'user-new.txt'))).toBe(true)
   }, 20000)
 })

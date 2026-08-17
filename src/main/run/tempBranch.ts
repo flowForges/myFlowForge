@@ -15,6 +15,13 @@ import { git } from '../git/gitRunner'
  * target is simply checked back out clean, so the work stays recoverable on
  * `forge/run-<runId>` instead of being destroyed (see parkTempBranch below).
  *
+ * A user may start a run with an already-dirty working tree. The temp branch is
+ * created off `base` with `checkout -b` (which carries the dirty tree along —
+ * git only refuses that when it would overwrite work, not when switching to a
+ * brand-new branch), then immediately committed as a "pre-run snapshot" on the
+ * temp branch (see createTempBranch below) so stage agents can actually read the
+ * code the user just wrote, instead of it being stashed away out of sight.
+ *
  * This module is pure git orchestration — no engine wiring here (see P4-2/P4-3).
  */
 
@@ -26,48 +33,6 @@ export function tempBranchName(runId: string): string {
   return `forge/run-${runId}`
 }
 
-const stashLabel = (runId: string) => `forge-prerun-${runId}`
-
-/**
- * Dirty-tree support (user decision): a workflow may be started while the working tree has uncommitted
- * changes. Rather than hard-blocking, we STASH the user's changes (tracked + untracked) so the run's
- * temp branch is created off a CLEAN tree, then restore them at finalize (popRunStash, called after
- * merge/discard/park). The stash is labeled with the runId so popRunStash finds exactly THIS run's
- * stash even if the user has other stashes. Returns true iff something was stashed (clean tree → false).
- */
-export async function stashRun(cwd: string, runId: string, run: GitRunner = defaultGitRunner): Promise<boolean> {
-  const status = await run(cwd, ['status', '--porcelain'])
-  if (status.trim().length === 0) return false
-  try {
-    await run(cwd, ['stash', 'push', '--include-untracked', '-m', stashLabel(runId)])
-  } catch (err) {
-    throw readableGitError(`Failed to stash uncommitted changes before run "${runId}"`, err)
-  }
-  return true
-}
-
-/**
- * Restore this run's pre-run stash (see stashRun) onto the CURRENT branch — called after the run's temp
- * branch has been merged/discarded/parked (target is checked back out and clean). Finds the stash by its
- * runId LABEL (not blindly stash@{0}, which another stash could shadow); a no-op when the run started
- * clean (no stash). BEST-EFFORT by contract — the caller must NOT let a pop failure turn a successful
- * finalize into an error: on a pop CONFLICT (the run touched the same files) git keeps the stash entry +
- * writes markers, so the user's changes are never lost — just left for them to resolve.
- */
-export async function popRunStash(cwd: string, runId: string, run: GitRunner = defaultGitRunner): Promise<'popped' | 'none' | 'conflict'> {
-  let list = ''
-  try { list = await run(cwd, ['stash', 'list']) } catch { return 'none' }
-  const line = list.split('\n').find((l) => l.includes(stashLabel(runId)))
-  if (!line) return 'none'
-  const ref = line.slice(0, line.indexOf(':'))   // "stash@{N}"
-  try {
-    await run(cwd, ['stash', 'pop', ref])
-    return 'popped'
-  } catch {
-    return 'conflict'
-  }
-}
-
 function readableGitError(action: string, err: unknown): Error {
   const detail = err instanceof Error ? err.message : String(err)
   return new Error(`${action}: ${detail}`)
@@ -76,33 +41,56 @@ function readableGitError(action: string, err: unknown): Error {
 /**
  * True iff `cwd`'s working tree is clean — `git status --porcelain` empty output.
  *
- * Finding 3 (Important — data loss): `git checkout -b temp <base>` SUCCEEDS even when the tree is
- * dirty, as long as `base` is the branch already checked out (the normal case for a run's target
- * branch). Every downstream temp-branch operation (mergeTempBranch's `add -A`, discardTempBranch's
- * `checkout -f`/`clean -fd`) then assumes everything sitting in the tree belongs to THIS run — an
- * assumption that's only true if the tree was clean before the temp branch was ever created. This
- * is the precondition check createRunTempBranches (launch.ts) runs over every participating project
- * BEFORE creating any branch.
+ * createRunTempBranches no longer gates on this (a dirty tree is the normal, supported path — see
+ * createTempBranch's pre-run snapshot below). Kept for callers that just want to know: the launch
+ * gate's dirty-tree notice (run2Handlers.ts's run2:check-dirty) uses it read-only, to tell the user
+ * up front which projects have uncommitted changes that are about to ride along into the run.
  */
 export async function isCleanTree(cwd: string, run: GitRunner = defaultGitRunner): Promise<boolean> {
   const status = await run(cwd, ['status', '--porcelain'])
   return status.trim().length === 0
 }
 
-/** Checkout a new temp branch `forge/run-<runId>` off `base`. Returns the branch name. */
+/**
+ * 建 run 的临时分支，并把用户**未提交的改动**原样带进来。
+ *
+ * 旧做法是先 `git stash` 把用户的改动藏走，让 temp 分支从干净树长出来 —— 代价是阶段 agent
+ * 根本读不到用户刚写的逻辑（用户实测反馈的正是这条）。现在改成：脏树天然被 `checkout -b`
+ * 带过来，随即在 temp 分支上提交成一个「运行前快照」。这样 agent 读得到，且这份快照有了
+ * 一个稳定的 commit 副本 —— 后续 discard/park 的 `checkout -f`/`clean -fd` 再怎么清，
+ * 用户的改动都还在 `snapshotSha` 这个提交里，靠 restoreSnapshot 一字不差地还原回去。
+ *
+ * 快照提交的 parent 恒等于 `base` 当时的 HEAD，这是 restoreSnapshot 的 cherry-pick 能干净
+ * 应用的前提。工作树本来就干净时不产生任何提交，snapshotSha 为 null。
+ */
+export interface TempBranchCreated {
+  branch: string
+  /** 运行前快照提交的 SHA；启动时工作树干净则为 null。 */
+  snapshotSha: string | null
+}
+
 export async function createTempBranch(
   cwd: string,
   base: string,
   runId: string,
   run: GitRunner = defaultGitRunner
-): Promise<string> {
+): Promise<TempBranchCreated> {
   const branch = tempBranchName(runId)
   try {
     await run(cwd, ['checkout', '-b', branch, base])
   } catch (err) {
     throw readableGitError(`Failed to create temp branch "${branch}" from base "${base}"`, err)
   }
-  return branch
+  try {
+    await run(cwd, ['add', '-A'])
+    const status = await run(cwd, ['status', '--porcelain'])
+    if (status.trim().length === 0) return { branch, snapshotSha: null }
+    await run(cwd, ['commit', '-m', 'forge: 运行前快照'])
+    const sha = (await run(cwd, ['rev-parse', 'HEAD'])).trim()
+    return { branch, snapshotSha: sha }
+  } catch (err) {
+    throw readableGitError(`Failed to commit pre-run snapshot onto temp branch "${branch}"`, err)
+  }
 }
 
 /** Checkout `target`, merge the temp branch in with --no-ff, then delete the temp branch. */
@@ -168,9 +156,11 @@ export async function mergeTempBranch(
  * Uses `checkout -f` (not a plain `checkout`): the agent(s) left uncommitted edits in the working
  * tree on `branch`, and a plain checkout would carry those edits over onto `target`'s working tree
  * instead of discarding them (the exact "discard doesn't discard" bug this function used to have).
- * Force is safe here — createTempBranch only ever succeeds off a clean tree, so every uncommitted
- * change present now belongs to this run and is exactly what the caller asked to discard. If the
- * run's changes were separately committed onto `branch` (e.g. by mergeTempBranch elsewhere), the
+ * Force is safe here — createTempBranch's own pre-run snapshot commit leaves the temp branch's tree
+ * clean the instant it's created (any pre-existing dirty state is captured in that commit, not left
+ * sitting uncommitted), so every uncommitted change present now belongs to this run's own writes and
+ * is exactly what the caller asked to discard. If the run's changes were separately committed onto
+ * `branch` (e.g. by mergeTempBranch elsewhere), the
  * `branch -D` below drops those commits too since they're never reachable from `target`.
  *
  * `checkout -f` alone is NOT enough, though: it only resets git's modifications to TRACKED files —

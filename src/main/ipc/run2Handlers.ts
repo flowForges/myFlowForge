@@ -29,7 +29,7 @@ export function registerRun2(deps: {
   readCustomStages?: () => CustomStage[]
   // P4-2: injectable so tests can stub real git out of run2:launch-start (production omits both —
   // createRunTempBranches falls back to the real tempBranch.ts functions on its own).
-  createTempBranch?: (cwd: string, base: string, runId: string) => Promise<string>
+  createTempBranch?: (cwd: string, base: string, runId: string) => Promise<{ branch: string; snapshotSha: string | null }>
   // Reused for TWO purposes: (1) createRunTempBranches' rollback-on-create-failure (P4-2, unchanged),
   // and (2) the P4-3 finalize gate's 丢弃本次 action (see run2:launch-start below) — both are exactly
   // "checkout target, force-delete the temp branch", so one injected function covers both call sites.
@@ -41,17 +41,11 @@ export function registerRun2(deps: {
   // path's park-instead-of-discard action. Production omits it — RunController falls back to the
   // real tempBranch.ts parkTempBranch.
   parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
-  // Finding 3 (Important — data loss): injectable so tests can stub real git out of
-  // createRunTempBranches' clean-tree precondition. Production omits it — createRunTempBranches falls
-  // back to the real tempBranch.ts isCleanTree.
+  // Read-only dirty-tree notice for the launch gate (run2:check-dirty below) — injectable so tests can
+  // stub real git out. Production omits it — falls back to the real tempBranch.ts isCleanTree.
   checkClean?: (cwd: string) => Promise<boolean>
-  // Dirty-tree handling: injectable so tests can stub real git out of createRunTempBranches' stash /
-  // restore. Production omits both — createRunTempBranches falls back to the real tempBranch.ts
-  // stashRun / popRunStash (a dirty tree is stashed at start and the controller pops it at finalize).
-  stashRun?: (cwd: string, runId: string) => Promise<boolean>
-  popRunStash?: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'>
 }) {
-  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch, mergeTempBranch, parkTempBranch, checkClean, stashRun, popRunStash } = deps
+  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch, mergeTempBranch, parkTempBranch, checkClean } = deps
   onInvoke(CH.run2Start, (_e, p: { workspacePath: string; runId: string; stages: StageSpec[]; projects: DevelopProject[] }) =>
     manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan: planFromStages(p.runId, p.stages), projects: p.projects }))
   onInvoke(CH.run2ResolveGate, (_e, p: { workspacePath: string; eventId: string; decision: GateDecision }) => manager.resolveGate(p.workspacePath, p.eventId, p.decision))
@@ -118,12 +112,11 @@ export function registerRun2(deps: {
     }
     // Finding 2 (Important — disk-resume review): a workspace can ALSO have an INTERRUPTED run sitting
     // on disk (no live controller — see Run2Manager.resumable's doc) with its participating project(s)
-    // still checked out onto the run's temp branch. Nothing in the checkClean pre-pass below catches
-    // this if that project's tree happens to be clean (checked out onto the temp branch IS a clean
-    // state) — a new launch-start would then create a SECOND temp branch off the same base while the
-    // interrupted run's temp branch/work is still parked there, silently orphaning it. Reject here too,
-    // before touching git or the manager, so the user must resolve the interrupted run (继续/丢弃 in the
-    // recovery banner) before starting a new one.
+    // still checked out onto the run's temp branch. createRunTempBranches below has no precondition
+    // check of its own that would catch this — a new launch-start would happily create a SECOND temp
+    // branch off the same base while the interrupted run's temp branch/work is still parked there,
+    // silently orphaning it. Reject here too, before touching git or the manager, so the user must
+    // resolve the interrupted run (继续/丢弃 in the recovery banner) before starting a new one.
     if (manager.resumable(p.workspacePath)) {
       throw new Error('当前工作区有未完成的工作流，请先在恢复提示里选择「继续」或「丢弃」再启动新的')
     }
@@ -135,7 +128,7 @@ export function registerRun2(deps: {
     // target branch BEFORE the controller starts running any lane — so all code writes land on
     // `plan.tempBranch`, never directly on the target. Throws (aborting the start, run never launches)
     // on any project's checkout failure — see createRunTempBranches for the rollback/error contract.
-    await createRunTempBranches(ws, projects, plan.runId, createTempBranch, discardTempBranch, checkClean, stashRun, popRunStash)
+    await createRunTempBranches(ws, projects, plan.runId, createTempBranch, discardTempBranch)
     // P4-3: same per-project target-branch lookup createRunTempBranches just used to check each
     // project out — threaded through to the controller so its run-completion finalize gate knows
     // what to merge/discard back onto (see RunControllerDeps.projectTargets doc in controller.ts).
@@ -150,13 +143,14 @@ export function registerRun2(deps: {
     // 【需求原文（以此为准）】to EVERY stage — not just the root stage that bakes it in. Otherwise a
     // downstream stage (技术方案设计, 开发…) whose upstream requirement stage failed/degraded loses the
     // original ask entirely and sees only a "完成" fallback. `|| undefined` so an empty launch emits no seed.
-    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, task: launchTaskSeed(p) || undefined, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash })
+    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, task: launchTaskSeed(p) || undefined, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch })
   }
   onInvoke(CH.run2LaunchStart, (_e, p: LaunchStartConfig) => launchRun(p))
 
   // Dirty-tree pre-check for the launch gate: which of the workspace's projects have uncommitted
-  // changes? Read-only. A dirty tree no longer blocks a run (it's stashed + restored), but the gate
-  // warns the user first so they know their changes will be set aside and brought back.
+  // changes? Read-only. A dirty tree no longer blocks a run — its changes ride along onto the temp
+  // branch and land in a pre-run snapshot commit (see tempBranch.ts's createTempBranch) — but the gate
+  // warns the user first so they know their in-progress edits are about to become part of the run.
   onInvoke(CH.run2CheckDirty, async (_e, p: { workspacePath: string }): Promise<string[]> => {
     if (!readWorkspace) return []
     const ws = readWorkspace(p.workspacePath)
@@ -165,7 +159,7 @@ export function registerRun2(deps: {
     const dirty: string[] = []
     for (const proj of ws.projects) {
       const name = proj.name || proj.repoId
-      try { if (!(await clean(path.join(p.workspacePath, name)))) dirty.push(name) } catch { /* not a repo / missing → nothing to stash */ }
+      try { if (!(await clean(path.join(p.workspacePath, name)))) dirty.push(name) } catch { /* not a repo / missing → nothing to check */ }
     }
     return dirty
   })
@@ -204,7 +198,7 @@ export function registerRun2(deps: {
       const target = ws.projects.find((wp) => wp.name === project.name)?.branch
       if (target) projectTargets[project.name] = target
     }
-    return manager.resumeFromDisk(p.workspacePath, { projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, popRunStash, sessionId: p.sessionId })
+    return manager.resumeFromDisk(p.workspacePath, { projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, sessionId: p.sessionId })
   })
 
   // P-C2/T3: 丢弃 — clears the saved state so resumable() stops offering this interrupted run again.

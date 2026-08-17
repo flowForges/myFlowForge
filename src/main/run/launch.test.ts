@@ -348,25 +348,22 @@ describe('hasRequirement:没有需求就不该启动', () => {
 // temp branch off ITS OWN configured target branch (ws.projects[].branch) — no real git here, createBranch
 // is injected as a fake recorder/failure-simulator per the task's "do not touch real git in tests" rule.
 describe('createRunTempBranches (P4-2)', () => {
-  // Every test in this describe block cares about the create/rollback contract, not the Finding 3
-  // clean-tree precondition — pass an always-clean fake so the (real, by default) isCleanTree check
-  // never runs against these fictitious `/ws/pay/*` paths. The precondition itself is covered by its
-  // own describe block below (fake-runner) and by tempBranch.integration.test.ts (real git).
-  const alwaysClean = async () => true
+  // A project's working tree may be dirty when a run starts — createTempBranch's own pre-run snapshot
+  // handles that now (see tempBranch.test.ts), so this fake just reports success as an object matching
+  // the real createTempBranch's TempBranchCreated return shape.
+  const fakeBranch = (runId: string) => ({ branch: `forge/run-${runId}`, snapshotSha: null })
 
   it('creates a branch for each project off its own target branch (cwd/base/runId all correct)', async () => {
     const calls: Array<{ cwd: string; base: string; runId: string }> = []
     const fakeCreate = async (cwd: string, base: string, runId: string) => {
       calls.push({ cwd, base, runId })
-      return `forge/run-${runId}`
+      return fakeBranch(runId)
     }
     await createRunTempBranches(
       ws,
       [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
       'r1',
       fakeCreate,
-      undefined,
-      alwaysClean,
     )
     // fixture ws (top of file): api's own branch = 'main', web's own branch = 'main' too — distinct cwd
     // per project, same runId/branch-name across all of them.
@@ -379,14 +376,14 @@ describe('createRunTempBranches (P4-2)', () => {
   it('uses each project\'s OWN target branch as base, not a shared default', async () => {
     const wsMixedBranches = { ...ws, projects: [{ repoId: 'api', name: 'api', branch: 'feat/api-x' }, { repoId: 'web', name: 'web', branch: 'develop' }] as any } as any
     const calls: Array<{ cwd: string; base: string }> = []
-    const fakeCreate = async (cwd: string, base: string) => { calls.push({ cwd, base }); return 'forge/run-r1' }
-    await createRunTempBranches(wsMixedBranches, [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }], 'r1', fakeCreate, undefined, alwaysClean)
+    const fakeCreate = async (cwd: string, base: string) => { calls.push({ cwd, base }); return fakeBranch('r1') }
+    await createRunTempBranches(wsMixedBranches, [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }], 'r1', fakeCreate)
     expect(calls).toEqual([{ cwd: '/ws/pay/api', base: 'feat/api-x' }, { cwd: '/ws/pay/web', base: 'develop' }])
   })
 
   it('throws a readable error naming the project when its own project entry has no branch configured', async () => {
     const wsNoBranch = { ...ws, projects: [{ repoId: 'api', name: 'api', branch: '' }] as any } as any
-    await expect(createRunTempBranches(wsNoBranch, [{ name: 'api', cwd: '/ws/pay/api' }], 'r1', async () => 'x', undefined, alwaysClean))
+    await expect(createRunTempBranches(wsNoBranch, [{ name: 'api', cwd: '/ws/pay/api' }], 'r1', async () => fakeBranch('r1')))
       .rejects.toThrow(/api/)
   })
 
@@ -396,7 +393,7 @@ describe('createRunTempBranches (P4-2)', () => {
     const fakeCreate = async (cwd: string) => {
       createCalls.push(cwd)
       if (cwd === '/ws/pay/web') throw new Error('本地更改未提交')
-      return 'forge/run-r1'
+      return fakeBranch('r1')
     }
     const fakeRollback = async (cwd: string, target: string) => { rollbackCalls.push({ cwd, target }) }
     await expect(createRunTempBranches(
@@ -405,7 +402,6 @@ describe('createRunTempBranches (P4-2)', () => {
       'r1',
       fakeCreate,
       fakeRollback,
-      alwaysClean,
     )).rejects.toThrow(/web/)
     expect(createCalls).toEqual(['/ws/pay/api', '/ws/pay/web'])
     // api's branch was already created when web failed → rolled back to ITS OWN target ('main')
@@ -415,7 +411,7 @@ describe('createRunTempBranches (P4-2)', () => {
   it('surfaces (not swallows) a rollback failure alongside the original error', async () => {
     const fakeCreate = async (cwd: string) => {
       if (cwd === '/ws/pay/web') throw new Error('checkout failed')
-      return 'forge/run-r1'
+      return fakeBranch('r1')
     }
     const fakeRollback = async () => { throw new Error('rollback also failed') }
     await expect(createRunTempBranches(
@@ -424,7 +420,6 @@ describe('createRunTempBranches (P4-2)', () => {
       'r1',
       fakeCreate,
       fakeRollback,
-      alwaysClean,
     )).rejects.toThrow(/rollback also failed/)
   })
 
@@ -439,70 +434,8 @@ describe('createRunTempBranches (P4-2)', () => {
       [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
       'r1',
       fakeCreate,
-      undefined,
-      alwaysClean,
     )).rejects.toThrow()
     expect(calls).toEqual(['/ws/pay/api'])
-  })
-
-  describe('dirty-tree handling — STASH instead of reject (user decision)', () => {
-    it('stashes a dirty project (not throw) and still creates its branch off the now-clean tree', async () => {
-      const stashCalls: string[] = []
-      const createCalls: string[] = []
-      const fakeCheckClean = async (cwd: string) => cwd !== '/ws/pay/web'   // web is dirty
-      const fakeStash = async (cwd: string) => { stashCalls.push(cwd); return true }
-      const fakeCreate = async (cwd: string) => { createCalls.push(cwd); return 'forge/run-r1' }
-      const res = await createRunTempBranches(
-        ws,
-        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
-        'r1', fakeCreate, undefined, fakeCheckClean, fakeStash,
-      )
-      expect(stashCalls).toEqual(['/ws/pay/web'])                   // only the dirty one stashed
-      expect(createCalls).toEqual(['/ws/pay/api', '/ws/pay/web'])   // both branches still created
-      expect(res.stashed).toEqual(['web'])
-    })
-
-    it('stashes every dirty project and reports them all', async () => {
-      const res = await createRunTempBranches(
-        ws,
-        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
-        'r1', async () => 'forge/run-r1', undefined, async () => false, async () => true,
-      )
-      expect([...res.stashed].sort()).toEqual(['api', 'web'])
-    })
-
-    it('stashes nothing when every project is clean', async () => {
-      const stashCalls: string[] = []
-      const res = await createRunTempBranches(
-        ws,
-        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
-        'r1', async () => 'forge/run-r1', undefined, async () => true, async (cwd: string) => { stashCalls.push(cwd); return true },
-      )
-      expect(stashCalls).toEqual([])
-      expect(res.stashed).toEqual([])
-    })
-
-    it('restores (pops) stashes it made when the run can\'t start (createBranch fails)', async () => {
-      const popCalls: string[] = []
-      await expect(createRunTempBranches(
-        ws,
-        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
-        'r1',
-        async (cwd: string) => { if (cwd === '/ws/pay/web') throw new Error('boom'); return 'forge/run-r1' },
-        async () => {}, async () => false, async () => true,
-        async (cwd: string) => { popCalls.push(cwd); return 'popped' as const },
-      )).rejects.toThrow(/web/)
-      // both projects were dirty → both stashed → both restored when the run aborts before starting
-      expect([...popCalls].sort()).toEqual(['/ws/pay/api', '/ws/pay/web'])
-    })
-
-    it('defaults to the real tempBranch.ts isCleanTree (errors on a bogus repo path, not a silent pass)', async () => {
-      await expect(createRunTempBranches(
-        ws,
-        [{ name: 'api', cwd: '/definitely/not/a/real/git/repo/path-xyz' }],
-        'r1', async () => 'forge/run-r1',
-      )).rejects.toThrow()
-    })
   })
 })
 
