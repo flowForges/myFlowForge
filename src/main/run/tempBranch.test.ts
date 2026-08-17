@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, restoreSnapshot, TempBranchMergeError, type GitRunner } from './tempBranch'
+import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, restoreSnapshot, TempBranchMergeError, currentBranch, type GitRunner } from './tempBranch'
 
 describe('tempBranch', () => {
   it('分支名稳定', () => {
@@ -389,5 +389,25 @@ describe('tempBranch', () => {
         errorSpy.mockRestore()
       }
     })
+  })
+})
+
+describe('currentBranch', () => {
+  it('正常分支 → 返回分支名（去掉换行）', async () => {
+    const run: GitRunner = async (_c, a) => {
+      expect(a).toEqual(['rev-parse', '--abbrev-ref', 'HEAD'])
+      return 'branch1\n'
+    }
+    expect(await currentBranch('/repo', run)).toBe('branch1')
+  })
+
+  it('detached HEAD → git 回 "HEAD"，归一成空串', async () => {
+    const run: GitRunner = async () => 'HEAD\n'
+    expect(await currentBranch('/repo', run)).toBe('')
+  })
+
+  it('git 失败 → 空串，不抛（由调用方统一报错）', async () => {
+    const run: GitRunner = async () => { throw new Error('not a git repo') }
+    expect(await currentBranch('/repo', run)).toBe('')
   })
 })

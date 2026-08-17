@@ -345,15 +345,17 @@ describe('hasRequirement:没有需求就不该启动', () => {
 })
 
 // P4-2: at run start, each participating project's worktree must be checked out onto the run's shared
-// temp branch off ITS OWN configured target branch (ws.projects[].branch) — no real git here, createBranch
-// is injected as a fake recorder/failure-simulator per the task's "do not touch real git in tests" rule.
+// temp branch off ITS OWN currently-checked-out branch (readCurrentBranch — see the "基准分支" describe
+// below for the bug this fixes) — no real git here, createBranch/readCurrentBranch are injected fakes
+// per the task's "do not touch real git in tests" rule.
 describe('createRunTempBranches (P4-2)', () => {
   // A project's working tree may be dirty when a run starts — createTempBranch's own pre-run snapshot
   // handles that now (see tempBranch.test.ts), so this fake just reports success as an object matching
   // the real createTempBranch's TempBranchCreated return shape.
   const fakeBranch = (runId: string) => ({ branch: `forge/run-${runId}`, snapshotSha: null })
+  const readMain = async () => 'main'
 
-  it('creates a branch for each project off its own target branch (cwd/base/runId all correct)', async () => {
+  it('creates a branch for each project off its own currently-checked-out branch (cwd/base/runId all correct)', async () => {
     const calls: Array<{ cwd: string; base: string; runId: string }> = []
     const fakeCreate = async (cwd: string, base: string, runId: string) => {
       calls.push({ cwd, base, runId })
@@ -364,48 +366,46 @@ describe('createRunTempBranches (P4-2)', () => {
       [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
       'r1',
       fakeCreate,
+      undefined,
+      readMain,
     )
-    // fixture ws (top of file): api's own branch = 'main', web's own branch = 'main' too — distinct cwd
-    // per project, same runId/branch-name across all of them.
+    // both projects report 'main' as their currently-checked-out branch — distinct cwd per project,
+    // same runId/branch-name across all of them.
     expect(calls).toEqual([
       { cwd: '/ws/pay/api', base: 'main', runId: 'r1' },
       { cwd: '/ws/pay/web', base: 'main', runId: 'r1' },
     ])
   })
 
-  it('uses each project\'s OWN target branch as base, not a shared default', async () => {
-    const wsMixedBranches = { ...ws, projects: [{ repoId: 'api', name: 'api', branch: 'feat/api-x' }, { repoId: 'web', name: 'web', branch: 'develop' }] as any } as any
+  it('uses each project\'s OWN currently-checked-out branch as base, not a shared default', async () => {
     const calls: Array<{ cwd: string; base: string }> = []
     const fakeCreate = async (cwd: string, base: string) => { calls.push({ cwd, base }); return fakeBranch('r1') }
-    await createRunTempBranches(wsMixedBranches, [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }], 'r1', fakeCreate)
+    const readCurrent = async (cwd: string) => (cwd.endsWith('api') ? 'feat/api-x' : 'develop')
+    await createRunTempBranches(ws, [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }], 'r1', fakeCreate, undefined, readCurrent)
     expect(calls).toEqual([{ cwd: '/ws/pay/api', base: 'feat/api-x' }, { cwd: '/ws/pay/web', base: 'develop' }])
   })
 
-  it('throws a readable error naming the project when its own project entry has no branch configured', async () => {
-    const wsNoBranch = { ...ws, projects: [{ repoId: 'api', name: 'api', branch: '' }] as any } as any
-    await expect(createRunTempBranches(wsNoBranch, [{ name: 'api', cwd: '/ws/pay/api' }], 'r1', async () => fakeBranch('r1')))
-      .rejects.toThrow(/api/)
-  })
-
-  it('on a later project\'s checkout failure, rolls back every branch already created and throws naming the failing project', async () => {
+  it('on a later project\'s checkout failure, rolls back every branch already created (with its own snapshot SHA) and throws naming the failing project', async () => {
     const createCalls: string[] = []
-    const rollbackCalls: Array<{ cwd: string; target: string }> = []
+    const rollbackCalls: Array<{ cwd: string; target: string; sha: string | null }> = []
     const fakeCreate = async (cwd: string) => {
       createCalls.push(cwd)
       if (cwd === '/ws/pay/web') throw new Error('本地更改未提交')
-      return fakeBranch('r1')
+      return { branch: 'forge/run-r1', snapshotSha: 'sha-api' }
     }
-    const fakeRollback = async (cwd: string, target: string) => { rollbackCalls.push({ cwd, target }) }
+    const fakeRollback = async (cwd: string, target: string, _runId: string, sha: string | null) => { rollbackCalls.push({ cwd, target, sha }) }
     await expect(createRunTempBranches(
       ws,
       [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
       'r1',
       fakeCreate,
       fakeRollback,
+      readMain,
     )).rejects.toThrow(/web/)
     expect(createCalls).toEqual(['/ws/pay/api', '/ws/pay/web'])
-    // api's branch was already created when web failed → rolled back to ITS OWN target ('main')
-    expect(rollbackCalls).toEqual([{ cwd: '/ws/pay/api', target: 'main' }])
+    // api's branch was already created when web failed → rolled back to ITS OWN target ('main'),
+    // carrying api's own snapshot SHA (not null, not web's) so its uncommitted work isn't destroyed.
+    expect(rollbackCalls).toEqual([{ cwd: '/ws/pay/api', target: 'main', sha: 'sha-api' }])
   })
 
   it('surfaces (not swallows) a rollback failure alongside the original error', async () => {
@@ -420,6 +420,7 @@ describe('createRunTempBranches (P4-2)', () => {
       'r1',
       fakeCreate,
       fakeRollback,
+      readMain,
     )).rejects.toThrow(/rollback also failed/)
   })
 
@@ -434,8 +435,61 @@ describe('createRunTempBranches (P4-2)', () => {
       [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
       'r1',
       fakeCreate,
+      undefined,
+      readMain,
     )).rejects.toThrow()
     expect(calls).toEqual(['/ws/pay/api'])
+  })
+})
+
+describe('createRunTempBranches 基准分支', () => {
+  const ws = { path: '/ws', projects: [{ name: 'web', branch: 'main' }] } as unknown as Workspace
+  const projects = [{ name: 'web', cwd: '/ws/web' }]
+
+  it('用实测 HEAD 当基准，而不是工作区存盘的 branch 字段', async () => {
+    const bases: string[] = []
+    const createBranch = async (_cwd: string, base: string) => { bases.push(base); return { branch: 'forge/run-r1', snapshotSha: null } }
+    const rollback = async () => {}
+    const readCurrent = async () => 'branch1'   // 存盘是 main，实际在 branch1
+
+    const got = await createRunTempBranches(ws, projects, 'r1', createBranch, rollback, readCurrent)
+
+    expect(bases).toEqual(['branch1'])
+    expect(got.targets).toEqual({ web: 'branch1' })
+  })
+
+  it('返回每个项目的快照 SHA；干净树的项目不出现在 snapshots 里', async () => {
+    const ws2 = { path: '/ws', projects: [{ name: 'web', branch: 'main' }, { name: 'api', branch: 'main' }] } as unknown as Workspace
+    const projs = [{ name: 'web', cwd: '/ws/web' }, { name: 'api', cwd: '/ws/api' }]
+    const createBranch = async (cwd: string) => ({ branch: 'forge/run-r1', snapshotSha: cwd.endsWith('web') ? 'sha-web' : null })
+    const got = await createRunTempBranches(ws2, projs, 'r1', createBranch, async () => {}, async () => 'branch1')
+
+    expect(got.snapshots).toEqual({ web: 'sha-web' })
+  })
+
+  it('detached HEAD → 抛可读错误，且一个分支都不建', async () => {
+    let created = 0
+    const createBranch = async () => { created++; return { branch: 'x', snapshotSha: null } }
+    await expect(
+      createRunTempBranches(ws, projects, 'r1', createBranch, async () => {}, async () => '')
+    ).rejects.toThrow(/项目「web」当前处于 detached HEAD/)
+    expect(created).toBe(0)
+  })
+
+  it('某项目建分支失败 → 回滚已建的，回滚时带上它自己的快照 SHA', async () => {
+    const ws2 = { path: '/ws', projects: [{ name: 'web', branch: 'main' }, { name: 'api', branch: 'main' }] } as unknown as Workspace
+    const projs = [{ name: 'web', cwd: '/ws/web' }, { name: 'api', cwd: '/ws/api' }]
+    const rolledBack: Array<[string, string, string | null]> = []
+    const createBranch = async (cwd: string) => {
+      if (cwd.endsWith('api')) throw new Error('fatal: boom')
+      return { branch: 'forge/run-r1', snapshotSha: 'sha-web' }
+    }
+    const rollback = async (cwd: string, target: string, _runId: string, sha: string | null) => { rolledBack.push([cwd, target, sha]) }
+
+    await expect(
+      createRunTempBranches(ws2, projs, 'r1', createBranch, rollback, async () => 'branch1')
+    ).rejects.toThrow(/项目「api」创建运行分支失败/)
+    expect(rolledBack).toEqual([['/ws/web', 'branch1', 'sha-web']])
   })
 })
 

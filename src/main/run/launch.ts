@@ -18,7 +18,7 @@ import { reviewLenses } from './reviewFanout'
 import { collectRunHooks } from './hooks'
 import type { RunPlan, StageProjectAgent } from './machine'
 import type { StageSpec, DevelopProject } from './runTypes'
-import { createTempBranch, discardTempBranch, type TempBranchCreated } from './tempBranch'
+import { createTempBranch, discardTempBranch, currentBranch, type TempBranchCreated } from './tempBranch'
 
 // P5-UI Task 1: short stage blurb for the config-preview overlay, by builtin key. Custom/unknown keys
 // fall back to '' (the overlay just omits the line rather than showing anything misleading).
@@ -326,46 +326,62 @@ export function buildLaunchProjects(cfg: LaunchStartConfig, ws: Workspace): Deve
 
 // P4-2: at run START (before any lane executes), every participating project's worktree gets checked
 // out onto the run's shared temp branch (`forge/run-<runId>`, see tempBranch.ts) off THAT project's own
-// configured target branch (`ws.projects[].branch` — the branch already checked out in its worktree,
-// same field WorkspaceView's project inspector shows as the "git 分支" tag). This is what makes the
-// run's code writes land on a throwaway branch instead of the target directly.
+// CURRENTLY CHECKED-OUT branch. This is what makes the run's code writes land on a throwaway branch
+// instead of the target directly.
 //
-// `projects` is the already gate-selected DevelopProject[] (from buildLaunchProjects) — just needs each
-// one's own target branch looked up by name from `ws.projects`.
+// 基准分支怎么定 (2026-08-17 bug 修法): 曾经从 ws.projects[].branch —— 建工作区那一刻存盘的字段 ——
+// 取基准。用户后来在项目里 `git switch` 到别的分支，这个字段从不回写，于是「在 branch1 上开发」的用户
+// 被静默地从 main 切出去、跑完又合回 main，天天冲突。现在改成实测：每个项目的基准 = currentBranch(cwd)
+// 此刻真实的 HEAD，不看、也不信任何存盘字段。
 //
-// A project's working tree may be dirty when a run starts — that's the normal, supported case now
-// (createTempBranch's own pre-run snapshot commit captures it onto the temp branch, see tempBranch.ts).
-// This function no longer gates on tree cleanliness at all: it just checks each participating project
-// out onto `forge/run-<runId>` off ITS OWN configured target branch (ws.projects[].branch).
+// 前置的 detached HEAD 拒绝: currentBranch 对 detached HEAD 归一返回 ''，这里在动任何 git 之前先把
+// EVERY project 都探测一遍——只要有一个 detached，直接抛错、一个分支都不建（不留半状态）。等真正建分支
+// 的循环开始时，target 已经全部确定合法，不会中途因为基准缺失而失败。
 //
-// Real git — a missing/renamed base branch, or any other checkout failure, throws from createBranch. On
-// failure we do NOT leave some projects on the temp branch and others not in a confusing half-state: we
-// best-effort roll back (discardTempBranch) every project whose branch we already created before
-// re-throwing a single readable error naming which project failed and why (plus whether rollback of the
-// earlier ones succeeded). `createBranch`/`rollback` are injected (default to the real tempBranch.ts
-// functions) purely so callers can stub real git out in tests.
+// 用户的脏树不再是问题: createTempBranch 自己的运行前快照 commit 把它原样带过去（见 tempBranch.ts），
+// 这里只把每个项目的快照 SHA 收集起来一并返回，好让调用方（run2Handlers.ts）转手交给 controller，回滚/
+// 丢弃/终止时都能把这份快照还原回去。
+//
+// `projects` 是已经过关卡筛选的 DevelopProject[]（来自 buildLaunchProjects）。
+//
+// Real git — 任何 checkout 失败都从 createBranch 抛出。失败时绝不留下「部分项目已切到临时分支、部分还
+// 停在原地」的半状态：尽力回滚（rollback）每一个已经建好的项目分支，再重新抛出一个可读的错误，点名是哪个
+// 项目失败、为什么（以及更早那些项目的回滚是否成功）。回滚要带上该项目自己的快照 SHA —— 否则回滚会把
+// 这份快照代表的、用户原本未提交的改动一并销毁。`createBranch`/`rollback`/`readCurrentBranch` 全部可注入
+// （默认落到 tempBranch.ts 的真实实现），纯粹是为了让测试把真实 git 换成假的。
 export async function createRunTempBranches(
   ws: Workspace,
   projects: { name: string; cwd: string }[],
   runId: string,
   createBranch: (cwd: string, base: string, runId: string) => Promise<TempBranchCreated> = createTempBranch,
-  rollback: (cwd: string, target: string, runId: string) => Promise<void> = discardTempBranch,
-): Promise<void> {
+  rollback: (cwd: string, target: string, runId: string, snapshotSha: string | null) => Promise<void> = discardTempBranch,
+  readCurrentBranch: (cwd: string) => Promise<string> = currentBranch,
+): Promise<{ targets: Record<string, string>; snapshots: Record<string, string> }> {
+  // 前置全扫：任何一个项目处于 detached HEAD 都在这里挡掉，一个分支都别建（不留半状态）。
+  // 不回落到 ws.projects[].branch —— 那个字段正是本次要修掉的错误来源。
+  const targets: Record<string, string> = {}
+  for (const project of projects) {
+    const base = await readCurrentBranch(project.cwd)
+    if (!base) {
+      throw new Error(`项目「${project.name}」当前处于 detached HEAD（未在任何分支上），请先 git switch 到一个分支再启动工作流`)
+    }
+    targets[project.name] = base
+  }
+
+  const snapshots: Record<string, string> = {}
   const created: { name: string; cwd: string; target: string }[] = []
   for (const project of projects) {
-    const target = ws.projects.find((p) => p.name === project.name)?.branch
-    if (!target) {
-      throw new Error(`项目「${project.name}」缺少目标分支配置(工作区projects未设置branch),无法创建运行分支`)
-    }
+    const target = targets[project.name]
     try {
-      await createBranch(project.cwd, target, runId)   // snapshotSha discarded here — Task 4 starts using it
+      const { snapshotSha } = await createBranch(project.cwd, target, runId)
+      if (snapshotSha) snapshots[project.name] = snapshotSha
       created.push({ name: project.name, cwd: project.cwd, target })
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
       const rollbackFailures: string[] = []
       for (const c of created) {
         try {
-          await rollback(c.cwd, c.target, runId)
+          await rollback(c.cwd, c.target, runId, snapshots[c.name] ?? null)
         } catch (rollbackErr) {
           rollbackFailures.push(`${c.name}(${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)})`)
         }
@@ -378,4 +394,5 @@ export async function createRunTempBranches(
       throw new Error(`项目「${project.name}」创建运行分支失败: ${detail}${rollbackNote}`)
     }
   }
+  return { targets, snapshots }
 }

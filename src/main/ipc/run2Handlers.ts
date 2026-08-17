@@ -33,19 +33,22 @@ export function registerRun2(deps: {
   // Reused for TWO purposes: (1) createRunTempBranches' rollback-on-create-failure (P4-2, unchanged),
   // and (2) the P4-3 finalize gate's 丢弃本次 action (see run2:launch-start below) — both are exactly
   // "checkout target, force-delete the temp branch", so one injected function covers both call sites.
-  discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  // 4th param (snapshotSha): Task 4 — rollback and 丢弃本次 both need the project's own pre-run
+  // snapshot SHA so discardTempBranch can restore it instead of destroying it (see tempBranch.ts).
+  discardTempBranch?: (cwd: string, target: string, runId: string, snapshotSha: string | null) => Promise<void>
   // P4-3: injectable so tests can stub real git out of the finalize gate's 合并并完成 action.
   // Production omits it — RunController falls back to the real tempBranch.ts mergeTempBranch.
   mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
   // Finding 4 (Important — abort semantics): injectable so tests can stub real git out of the abort
   // path's park-instead-of-discard action. Production omits it — RunController falls back to the
-  // real tempBranch.ts parkTempBranch.
-  parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
-  // Read-only dirty-tree notice for the launch gate (run2:check-dirty below) — injectable so tests can
-  // stub real git out. Production omits it — falls back to the real tempBranch.ts isCleanTree.
-  checkClean?: (cwd: string) => Promise<boolean>
+  // real tempBranch.ts parkTempBranch. 4th param (snapshotSha): same reason as discardTempBranch above.
+  parkTempBranch?: (cwd: string, target: string, runId: string, snapshotSha: string | null) => Promise<void>
+  // Task 4: which branch a project's worktree is ACTUALLY on right now — createRunTempBranches' base
+  // for the run's temp branch (see launch.ts). Injectable so tests can stub real git out. Production
+  // omits it — falls back to the real tempBranch.ts currentBranch.
+  readCurrentBranch?: (cwd: string) => Promise<string>
 }) {
-  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch, mergeTempBranch, parkTempBranch, checkClean } = deps
+  const { manager, onInvoke, readWorkspace, readWorkflows, readCustomStages, createTempBranch, discardTempBranch, mergeTempBranch, parkTempBranch, readCurrentBranch } = deps
   onInvoke(CH.run2Start, (_e, p: { workspacePath: string; runId: string; stages: StageSpec[]; projects: DevelopProject[] }) =>
     manager.start({ workspacePath: p.workspacePath, runId: p.runId, plan: planFromStages(p.runId, p.stages), projects: p.projects }))
   onInvoke(CH.run2ResolveGate, (_e, p: { workspacePath: string; eventId: string; decision: GateDecision }) => manager.resolveGate(p.workspacePath, p.eventId, p.decision))
@@ -124,26 +127,39 @@ export function registerRun2(deps: {
     if (!ws) throw new Error(`工作区不存在: ${p.workspacePath}`)
     const plan = buildLaunchPlan(p, ws, readWorkflows?.() ?? [], readCustomStages?.() ?? [])
     const projects = buildLaunchProjects(p, ws)
-    // P4-2: every participating project gets checked out onto the run's shared temp branch off ITS OWN
-    // target branch BEFORE the controller starts running any lane — so all code writes land on
-    // `plan.tempBranch`, never directly on the target. Throws (aborting the start, run never launches)
-    // on any project's checkout failure — see createRunTempBranches for the rollback/error contract.
-    await createRunTempBranches(ws, projects, plan.runId, createTempBranch, discardTempBranch)
-    // P4-3: same per-project target-branch lookup createRunTempBranches just used to check each
-    // project out — threaded through to the controller so its run-completion finalize gate knows
-    // what to merge/discard back onto (see RunControllerDeps.projectTargets doc in controller.ts).
-    // createRunTempBranches already guarantees every entry in `projects` has a `ws.projects[].branch`
-    // (it throws above otherwise), so this lookup is total — never silently drops a project.
-    const projectTargets: Record<string, string> = {}
-    for (const project of projects) {
-      const target = ws.projects.find((wp) => wp.name === project.name)?.branch
-      if (target) projectTargets[project.name] = target
-    }
+    // P4-2/Task 4: every participating project gets checked out onto the run's shared temp branch off
+    // ITS OWN CURRENTLY CHECKED-OUT branch (not the stale ws.projects[].branch config field — that was
+    // the 2026-08-17 bug: a user who'd switched branches after workspace creation got silently branched
+    // off/merged back onto the wrong one) BEFORE the controller starts running any lane — so all code
+    // writes land on `plan.tempBranch`, never directly on the target. Throws (aborting the start, run
+    // never launches) on any project's checkout failure OR any project sitting on a detached HEAD — see
+    // createRunTempBranches for the rollback/error contract. `targets` is this run's resolved per-project
+    // base/target branch (replaces the old projectTargets for-loop that re-read the same stale field);
+    // `snapshots` is each project's pre-run snapshot SHA, threaded through so the controller can restore
+    // it on discard/park (see RunControllerDeps.projectTargets doc in controller.ts).
+    const { targets: projectTargets, snapshots } = await createRunTempBranches(
+      ws, projects, plan.runId, createTempBranch, discardTempBranch, readCurrentBranch
+    )
     // Carry the requirement (seed + supplement) as `task` so RunController.buildPrompt prepends
     // 【需求原文（以此为准）】to EVERY stage — not just the root stage that bakes it in. Otherwise a
     // downstream stage (技术方案设计, 开发…) whose upstream requirement stage failed/degraded loses the
     // original ask entirely and sees only a "完成" fallback. `|| undefined` so an empty launch emits no seed.
-    return manager.start({ workspacePath: p.workspacePath, runId: plan.runId, plan, projects, task: launchTaskSeed(p) || undefined, sessionId: p.sessionId, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch })
+    //
+    // Run2StartOpts (manager.ts) doesn't declare `snapshots` yet, and its discardTempBranch/
+    // parkTempBranch fields are still the old 3-arg shape — Task 5 owns widening both (and actually
+    // threading `snapshots` through the controller's finalize/abort actions). Building the options as a
+    // `const` first (rather than passing an object literal straight into manager.start) means TS's
+    // excess-property check doesn't fire for `snapshots`; the 3-arg cast below is safe today regardless,
+    // because the real tempBranch.ts implementations default snapshotSha to null when called with only
+    // 3 args — byte-for-byte the same runtime behavior this call site had before Task 4 touched it.
+    const startOpts = {
+      workspacePath: p.workspacePath, runId: plan.runId, plan, projects,
+      task: launchTaskSeed(p) || undefined, sessionId: p.sessionId, projectTargets, snapshots,
+      mergeTempBranch,
+      discardTempBranch: discardTempBranch as ((cwd: string, target: string, runId: string) => Promise<void>) | undefined,
+      parkTempBranch: parkTempBranch as ((cwd: string, target: string, runId: string) => Promise<void>) | undefined,
+    }
+    return manager.start(startOpts)
   }
   onInvoke(CH.run2LaunchStart, (_e, p: LaunchStartConfig) => launchRun(p))
 
@@ -155,11 +171,10 @@ export function registerRun2(deps: {
     if (!readWorkspace) return []
     const ws = readWorkspace(p.workspacePath)
     if (!ws) return []
-    const clean = checkClean ?? isCleanTree
     const dirty: string[] = []
     for (const proj of ws.projects) {
       const name = proj.name || proj.repoId
-      try { if (!(await clean(path.join(p.workspacePath, name)))) dirty.push(name) } catch { /* not a repo / missing → nothing to check */ }
+      try { if (!(await isCleanTree(path.join(p.workspacePath, name)))) dirty.push(name) } catch { /* not a repo / missing → nothing to check */ }
     }
     return dirty
   })
@@ -198,7 +213,13 @@ export function registerRun2(deps: {
       const target = ws.projects.find((wp) => wp.name === project.name)?.branch
       if (target) projectTargets[project.name] = target
     }
-    return manager.resumeFromDisk(p.workspacePath, { projects, projectTargets, mergeTempBranch, discardTempBranch, parkTempBranch, sessionId: p.sessionId })
+    // Same 3-arg cast-back as run2:launch-start above, same reason (Task 5 debt) — see its comment.
+    return manager.resumeFromDisk(p.workspacePath, {
+      projects, projectTargets, mergeTempBranch,
+      discardTempBranch: discardTempBranch as ((cwd: string, target: string, runId: string) => Promise<void>) | undefined,
+      parkTempBranch: parkTempBranch as ((cwd: string, target: string, runId: string) => Promise<void>) | undefined,
+      sessionId: p.sessionId,
+    })
   })
 
   // P-C2/T3: 丢弃 — clears the saved state so resumable() stops offering this interrupted run again.

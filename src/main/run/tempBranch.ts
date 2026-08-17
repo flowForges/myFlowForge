@@ -52,6 +52,22 @@ export async function isCleanTree(cwd: string, run: GitRunner = defaultGitRunner
 }
 
 /**
+ * 该工作树**当前实际所在**的分支名。detached HEAD（git 回字面量 "HEAD"）与任何失败一律归一成 ''，
+ * 由调用方统一决定怎么报 —— 这个函数不猜、不回落到任何存盘的分支字段。
+ *
+ * 这正是 2026-08-17 那个 bug 的修法：运行分支原先以工作区创建时存下的 ws.projects[].branch 为基准，
+ * 而那个字段在用户切分支后从不回写，于是「在 branch1 上开发」的用户被从 main 切出去、又被合回 main。
+ */
+export async function currentBranch(cwd: string, run: GitRunner = defaultGitRunner): Promise<string> {
+  try {
+    const out = (await run(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+    return out === 'HEAD' ? '' : out
+  } catch {
+    return ''
+  }
+}
+
+/**
  * 建 run 的临时分支，并把用户**未提交的改动**原样带进来。
  *
  * 旧做法是先 `git stash` 把用户的改动藏走，让 temp 分支从干净树长出来 —— 代价是阶段 agent
