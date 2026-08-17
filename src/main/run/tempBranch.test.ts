@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, restoreSnapshot, type GitRunner } from './tempBranch'
 
 describe('tempBranch', () => {
@@ -323,6 +323,25 @@ describe('tempBranch', () => {
         ['reset'],
       ])
       expect(calls.some((c) => c[0] === 'branch' && c[1] === '-D')).toBe(false)
+    })
+
+    it('还原冲突 → 只警告不抛错，temp 分支保留', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => {
+        calls.push(a)
+        if (a[0] === 'cherry-pick' && a[1] === '-n') throw new Error('CONFLICT')
+        return ''
+      }
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        await expect(parkTempBranch('/repo', 'branch1', 'r1', 'abc1234', run)).resolves.toBeUndefined()
+        expect(warnSpy).toHaveBeenCalled()
+        expect(calls.some((c) => c[0] === 'branch' && c[1] === '-D')).toBe(false)
+      } finally {
+        warnSpy.mockRestore()
+        errorSpy.mockRestore()
+      }
     })
   })
 })

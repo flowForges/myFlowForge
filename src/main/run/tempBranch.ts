@@ -157,23 +157,41 @@ export async function mergeTempBranch(
  * `cherry-pick -n` 只应用不提交，随后 `git reset` 取消暂存 —— 新文件回到未跟踪、改动回到未暂存，
  * 这就是运行前的外观。已知精度损失：运行前**已 staged** 的改动会变成未 staged，内容一字不丢。
  *
- * 快照的 parent 恒等于 target 当时的 HEAD，所以正常情况必然干净应用。只有运行期间 target 上
- * 又有了新提交才可能冲突 —— 那时 abort 掉、返回 'conflict'，由调用方决定怎么办（务必别删分支）。
+ * 快照的 parent 恒等于 target 当时的 HEAD，所以正常情况必然干净应用。cherry-pick 失败的原因不止
+ * 「运行期间 target 上有新提交」一种——快照 sha 被 gc 掉、权限、磁盘满、git 本身缺失都会走到这里，
+ * 所以失败原因由 restoreSnapshotDetailed 如实带出，不在此处替用户猜测/断言成因。
  */
+async function restoreSnapshotDetailed(
+  cwd: string,
+  snapshotSha: string | null,
+  run: GitRunner
+): Promise<{ result: 'restored' | 'none' | 'conflict'; detail?: string }> {
+  if (!snapshotSha) return { result: 'none' }
+  try {
+    await run(cwd, ['cherry-pick', '-n', snapshotSha])
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    console.error(`[run2] 还原运行前快照失败 (cherry-pick -n ${snapshotSha}): ${detail}`)
+    try {
+      await run(cwd, ['cherry-pick', '--abort'])
+    } catch (abortErr) {
+      const abortDetail = abortErr instanceof Error ? abortErr.message : String(abortErr)
+      console.warn(`[run2] cherry-pick --abort 也失败（还原快照 ${snapshotSha} 之后）: ${abortDetail}`)
+    }
+    return { result: 'conflict', detail }
+  }
+  await run(cwd, ['reset'])
+  return { result: 'restored' }
+}
+
+/** 对外契约固定为三态字符串（Task 6 也依赖这个形状）；需要具体错误原因的调用方用上面的 detailed 版本。 */
 export async function restoreSnapshot(
   cwd: string,
   snapshotSha: string | null,
   run: GitRunner = defaultGitRunner
 ): Promise<'restored' | 'none' | 'conflict'> {
-  if (!snapshotSha) return 'none'
-  try {
-    await run(cwd, ['cherry-pick', '-n', snapshotSha])
-  } catch {
-    try { await run(cwd, ['cherry-pick', '--abort']) } catch { /* best-effort */ }
-    return 'conflict'
-  }
-  await run(cwd, ['reset'])
-  return 'restored'
+  const { result } = await restoreSnapshotDetailed(cwd, snapshotSha, run)
+  return result
 }
 
 /**
@@ -212,10 +230,12 @@ export async function discardTempBranch(
   // 顺序不变式：快照是用户未提交改动的**唯一副本**，它只存在于 branch 上的那个提交里。
   // 还原没成功就把 branch 删了 = 用户的改动被永久销毁。所以 branch -D 必须排在还原之后，
   // 且还原失败时直接抛错、分支原地留着，让用户能手工把它捞回来。
-  const restored = await restoreSnapshot(cwd, snapshotSha, run)
+  const { result: restored, detail } = await restoreSnapshotDetailed(cwd, snapshotSha, run)
   if (restored === 'conflict') {
     throw new Error(
-      `已放弃本次运行的改动，但你运行前那些未提交的改动没能自动还原（运行期间 ${target} 上有新提交）。`
+      // 具体原因不止「运行期间 target 上有新提交」一种，别替用户断言成因——把 restoreSnapshotDetailed
+      // 如实带出的 git 报错原样放在通用说明旁边，用户和后续排查都看得到真实原因。
+      `已放弃本次运行的改动，但你运行前那些未提交的改动没能自动还原：${detail}。`
       + `它们完整保存在分支 ${branch} 的提交 ${snapshotSha} 里，没有丢失。`
       + `该分支已为你保留，可执行：git cherry-pick -n ${snapshotSha}`
     )
@@ -260,8 +280,8 @@ export async function parkTempBranch(
   }
   // park 从不删分支，所以这里的还原失败不致命：快照就在保留着的 branch 上。只警告，不让一次
   // 终止变成一个带堆栈的失败。
-  const restored = await restoreSnapshot(cwd, snapshotSha, run)
+  const { result: restored, detail } = await restoreSnapshotDetailed(cwd, snapshotSha, run)
   if (restored === 'conflict') {
-    console.warn(`[run2] ${target}: 运行前快照未能自动还原，改动保留在 ${branch} 的 ${snapshotSha}（分支已保留）`)
+    console.warn(`[run2] ${target}: 运行前快照未能自动还原（${detail}），改动保留在 ${branch} 的 ${snapshotSha}（分支已保留）`)
   }
 }
