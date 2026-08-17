@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, type GitRunner } from './tempBranch'
+import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, restoreSnapshot, type GitRunner } from './tempBranch'
 
 describe('tempBranch', () => {
   it('分支名稳定', () => {
@@ -93,7 +93,7 @@ describe('tempBranch', () => {
   it('discardTempBranch force-checkout target(丢弃未提交改动)+clean -fd(丢弃未跟踪新文件) 后强删 temp 分支', async () => {
     const calls: string[][] = []
     const git = async (_cwd: string, args: string[]) => { calls.push(args); return '' }
-    await discardTempBranch('/repo', 'main', 'abc', git)
+    await discardTempBranch('/repo', 'main', 'abc', null, git)
     expect(calls).toEqual([
       ['checkout', '-f', 'main'],
       ['clean', '-fd'],
@@ -106,7 +106,7 @@ describe('tempBranch', () => {
     const git = async (cwd: string, _args: string[]) => { cwds.push(cwd); return '' }
     await createTempBranch('/repo1', 'main', 'a', git)
     await mergeTempBranch('/repo2', 'main', 'a', git)
-    await discardTempBranch('/repo3', 'main', 'a', git)
+    await discardTempBranch('/repo3', 'main', 'a', null, git)
     // createTempBranch now does checkout + add -A + status --porcelain (clean tree here → no commit/rev-parse).
     expect(cwds).toEqual(['/repo1', '/repo1', '/repo1', '/repo2', '/repo2', '/repo2', '/repo2', '/repo2', '/repo3', '/repo3', '/repo3'])
   })
@@ -138,7 +138,7 @@ describe('tempBranch', () => {
         if (args[0] === 'status' && args[1] === '--porcelain') return 'A  new.txt\n M existing.txt\n'
         return ''
       }
-      await parkTempBranch('/repo', 'main', 'abc', git)
+      await parkTempBranch('/repo', 'main', 'abc', null, git)
       expect(calls).toEqual([
         ['add', '-A'],
         ['status', '--porcelain'],
@@ -154,7 +154,7 @@ describe('tempBranch', () => {
         if (args[0] === 'status' && args[1] === '--porcelain') return ''
         return ''
       }
-      await parkTempBranch('/repo', 'main', 'abc', git)
+      await parkTempBranch('/repo', 'main', 'abc', null, git)
       expect(calls).toEqual([
         ['add', '-A'],
         ['status', '--porcelain'],
@@ -169,7 +169,7 @@ describe('tempBranch', () => {
         if (args[0] === 'status' && args[1] === '--porcelain') return 'A  new.txt\n'
         return ''
       }
-      await parkTempBranch('/repo', 'main', 'abc', git)
+      await parkTempBranch('/repo', 'main', 'abc', null, git)
       expect(calls.some((c) => c[0] === 'branch')).toBe(false)
       expect(calls.some((c) => c[0] === 'clean')).toBe(false)
     })
@@ -177,7 +177,7 @@ describe('tempBranch', () => {
     it('把 cwd 传给 git runner', async () => {
       const cwds: string[] = []
       const git = async (cwd: string) => { cwds.push(cwd); return '' }
-      await parkTempBranch('/repo', 'main', 'abc', git)
+      await parkTempBranch('/repo', 'main', 'abc', null, git)
       expect(cwds).toEqual(['/repo', '/repo', '/repo'])
     })
   })
@@ -230,6 +230,99 @@ describe('tempBranch', () => {
       await expect(createTempBranch('/repo', 'branch1', 'r1', run)).rejects.toThrow(
         /Failed to commit pre-run snapshot .*forge\/run-r1/
       )
+    })
+  })
+
+  describe('restoreSnapshot', () => {
+    it('snapshotSha 为 null → 什么都不做', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => { calls.push(a); return '' }
+      expect(await restoreSnapshot('/repo', null, run)).toBe('none')
+      expect(calls).toEqual([])
+    })
+
+    it('成功 → cherry-pick -n 后 reset，改动回到未提交状态', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => { calls.push(a); return '' }
+      expect(await restoreSnapshot('/repo', 'abc1234', run)).toBe('restored')
+      expect(calls).toEqual([
+        ['cherry-pick', '-n', 'abc1234'],
+        ['reset'],
+      ])
+    })
+
+    it('cherry-pick 冲突 → abort 并返回 conflict', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => {
+        calls.push(a)
+        if (a[0] === 'cherry-pick' && a[1] === '-n') throw new Error('CONFLICT (content): a.ts')
+        return ''
+      }
+      expect(await restoreSnapshot('/repo', 'abc1234', run)).toBe('conflict')
+      expect(calls).toEqual([
+        ['cherry-pick', '-n', 'abc1234'],
+        ['cherry-pick', '--abort'],
+      ])
+    })
+  })
+
+  describe('discardTempBranch 顺序不变式', () => {
+    it('还原成功 → 才删分支', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => { calls.push(a); return '' }
+      await discardTempBranch('/repo', 'branch1', 'r1', 'abc1234', run)
+      expect(calls).toEqual([
+        ['checkout', '-f', 'branch1'],
+        ['clean', '-fd'],
+        ['cherry-pick', '-n', 'abc1234'],
+        ['reset'],
+        ['branch', '-D', 'forge/run-r1'],
+      ])
+    })
+
+    it('还原冲突 → 绝不删分支，并抛出带分支名和 sha 的可读错误', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => {
+        calls.push(a)
+        if (a[0] === 'cherry-pick' && a[1] === '-n') throw new Error('CONFLICT')
+        return ''
+      }
+      await expect(discardTempBranch('/repo', 'branch1', 'r1', 'abc1234', run)).rejects.toThrow(
+        /forge\/run-r1[\s\S]*abc1234/
+      )
+      expect(calls.some((c) => c[0] === 'branch' && c[1] === '-D')).toBe(false)
+    })
+
+    it('无快照 → 行为与改动前一致', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => { calls.push(a); return '' }
+      await discardTempBranch('/repo', 'branch1', 'r1', null, run)
+      expect(calls).toEqual([
+        ['checkout', '-f', 'branch1'],
+        ['clean', '-fd'],
+        ['branch', '-D', 'forge/run-r1'],
+      ])
+    })
+  })
+
+  describe('parkTempBranch 还原快照但保留分支', () => {
+    it('提交在制品 → 切回目标 → 还原快照 → 不删分支', async () => {
+      const calls: string[][] = []
+      const run: GitRunner = async (_c, a) => {
+        calls.push(a)
+        if (a[0] === 'status') return ' M a.ts\n'
+        return ''
+      }
+      await parkTempBranch('/repo', 'branch1', 'r1', 'abc1234', run)
+      expect(calls).toEqual([
+        ['add', '-A'],
+        ['status', '--porcelain'],
+        ['commit', '-m', 'forge: run r1 (aborted)'],
+        ['checkout', 'branch1'],
+        ['cherry-pick', '-n', 'abc1234'],
+        ['reset'],
+      ])
+      expect(calls.some((c) => c[0] === 'branch' && c[1] === '-D')).toBe(false)
     })
   })
 })

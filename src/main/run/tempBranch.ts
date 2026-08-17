@@ -151,6 +151,32 @@ export async function mergeTempBranch(
 }
 
 /**
+ * 把「运行前快照」还原成 target 分支上的**未提交改动**（用户交出去时是什么样，还回来就是什么样）。
+ *
+ * 调用前提：工作树已经干净（discard 走 `checkout -f` + `clean -fd`，park 走 commit + checkout）。
+ * `cherry-pick -n` 只应用不提交，随后 `git reset` 取消暂存 —— 新文件回到未跟踪、改动回到未暂存，
+ * 这就是运行前的外观。已知精度损失：运行前**已 staged** 的改动会变成未 staged，内容一字不丢。
+ *
+ * 快照的 parent 恒等于 target 当时的 HEAD，所以正常情况必然干净应用。只有运行期间 target 上
+ * 又有了新提交才可能冲突 —— 那时 abort 掉、返回 'conflict'，由调用方决定怎么办（务必别删分支）。
+ */
+export async function restoreSnapshot(
+  cwd: string,
+  snapshotSha: string | null,
+  run: GitRunner = defaultGitRunner
+): Promise<'restored' | 'none' | 'conflict'> {
+  if (!snapshotSha) return 'none'
+  try {
+    await run(cwd, ['cherry-pick', '-n', snapshotSha])
+  } catch {
+    try { await run(cwd, ['cherry-pick', '--abort']) } catch { /* best-effort */ }
+    return 'conflict'
+  }
+  await run(cwd, ['reset'])
+  return 'restored'
+}
+
+/**
  * Checkout `target` and force-delete the temp branch, discarding all run changes.
  *
  * Uses `checkout -f` (not a plain `checkout`): the agent(s) left uncommitted edits in the working
@@ -173,15 +199,31 @@ export async function discardTempBranch(
   cwd: string,
   target: string,
   runId: string,
+  snapshotSha: string | null = null,
   run: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
   try {
     await run(cwd, ['checkout', '-f', target])
     await run(cwd, ['clean', '-fd'])
-    await run(cwd, ['branch', '-D', branch])
   } catch (err) {
     throw readableGitError(`Failed to discard temp branch "${branch}" (target "${target}")`, err)
+  }
+  // 顺序不变式：快照是用户未提交改动的**唯一副本**，它只存在于 branch 上的那个提交里。
+  // 还原没成功就把 branch 删了 = 用户的改动被永久销毁。所以 branch -D 必须排在还原之后，
+  // 且还原失败时直接抛错、分支原地留着，让用户能手工把它捞回来。
+  const restored = await restoreSnapshot(cwd, snapshotSha, run)
+  if (restored === 'conflict') {
+    throw new Error(
+      `已放弃本次运行的改动，但你运行前那些未提交的改动没能自动还原（运行期间 ${target} 上有新提交）。`
+      + `它们完整保存在分支 ${branch} 的提交 ${snapshotSha} 里，没有丢失。`
+      + `该分支已为你保留，可执行：git cherry-pick -n ${snapshotSha}`
+    )
+  }
+  try {
+    await run(cwd, ['branch', '-D', branch])
+  } catch (err) {
+    throw readableGitError(`Failed to delete temp branch "${branch}" (target "${target}")`, err)
   }
 }
 
@@ -198,6 +240,7 @@ export async function parkTempBranch(
   cwd: string,
   target: string,
   runId: string,
+  snapshotSha: string | null = null,
   run: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
@@ -214,5 +257,11 @@ export async function parkTempBranch(
     await run(cwd, ['checkout', target])
   } catch (err) {
     throw readableGitError(`Failed to checkout target "${target}" while parking temp branch "${branch}"`, err)
+  }
+  // park 从不删分支，所以这里的还原失败不致命：快照就在保留着的 branch 上。只警告，不让一次
+  // 终止变成一个带堆栈的失败。
+  const restored = await restoreSnapshot(cwd, snapshotSha, run)
+  if (restored === 'conflict') {
+    console.warn(`[run2] ${target}: 运行前快照未能自动还原，改动保留在 ${branch} 的 ${snapshotSha}（分支已保留）`)
   }
 }
