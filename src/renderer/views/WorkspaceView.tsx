@@ -1894,9 +1894,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         // `error` 在 controller.ts 里有两个赋值点(收尾失败 + start() 最外层 catch 的
                         // 兜底,后者对阶段循环里任何一处抛错都会置),不能用来判断"阶段是否真的都跑完、
                         // 只是收尾没成";只有 `finalizeFailure` 才是(见 workflowNote.ts 的类型注释)。
+                        // Task 8 fix round 3 (I4):重启之后 run2.state 是空的(manager.get() 和
+                        // lastStateFor() 都没有),而盘上的 wf.phase 还是 'done' —— 这句话于是说
+                        // 「已完成」,几像素之外的恢复横幅同时在说「收尾没能自动完成」。把盘上那条
+                        // resumable 记录一并传进去,重启后它才是唯一的事实源。
                         const note = workflowPhaseNote(activeWorkflow, run2.state?.machine?.plan?.runId
                           ? { status: run2.state.status, runId: run2.state.machine.plan.runId, finalizeFailure: run2.state.finalizeFailure }
-                          : null)
+                          : null, run2.resumable)
                         // 把左侧会话区当前 AI 的实时输出镜像成当前对话阶段卡的「执行过程」(img20 诉求:执行
                         // 过程也输出、随左侧流式更新)。scanContext 负责真实的 skill/rule/mcp chips。
                         const curStage = activeWorkflow.stages[activeWorkflow.currentIndex]

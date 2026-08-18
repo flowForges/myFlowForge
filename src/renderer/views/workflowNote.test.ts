@@ -39,8 +39,43 @@ describe('workflowPhaseNote', () => {
     expect(workflowPhaseNote(wf('done'), { status: 'failed', runId: '别的run', finalizeFailure: mkFinalizeFailure() })).toContain('已完成')
   })
 
-  it('拿不到 run 状态(重启后没有活 run)时按已完成显示,不凭空报错', () => {
+  it('拿不到 run 状态(重启后没有活 run)、盘上也没有未收尾记录时按已完成显示,不凭空报错', () => {
     expect(workflowPhaseNote(wf('done'), null)).toContain('已完成')
+  })
+})
+
+// I4(2026-08-17 全分支终审):重启之后内存里的 run 没了(manager.get() 和 lastStateFor() 都空),
+// WorkspaceView 传进来的 run 恒为 null,而盘上的 wf.phase 还是 'done' —— 这句话于是说「工作流已完成 ·
+// 所有阶段已走完」,而几像素之外的恢复横幅同时在说「上次的工作流阶段都跑完了,但收尾没能自动完成」。
+// 重启恰恰是用户撞得最多的那种情况。盘上那条 resumable 记录(summarizeResumable 的 finalizeOnly)是
+// 那一刻唯一的事实源。
+describe('I4:重启后只剩盘上的 resumable 记录', () => {
+  it('resumable.finalizeOnly 且 runId 对得上 → 说收尾没成,不说已完成', () => {
+    const note = workflowPhaseNote(wf('done'), null, { runId: 'r1', finalizeOnly: true })
+    expect(note).not.toContain('已完成')
+    expect(note).toContain('forge/run-r1')
+    // 和活 run 那条分支必须一字不差(同一件事,不能两处说法)。
+    expect(note).toBe(workflowPhaseNote(wf('done'), { status: 'failed', runId: 'r1', finalizeFailure: mkFinalizeFailure() }))
+  })
+
+  it('resumable 是**别的** run(runId 对不上)→ 不污染这条工作流的结论', () => {
+    expect(workflowPhaseNote(wf('done'), null, { runId: '别的run', finalizeOnly: true })).toContain('已完成')
+  })
+
+  it('resumable 存在但不是 finalizeOnly(某阶段没跑完)→ 这句话不认领它,由恢复横幅自己说', () => {
+    expect(workflowPhaseNote(wf('done'), null, { runId: 'r1' })).toContain('已完成')
+  })
+
+  it('这条 run 有活状态且说 ok 时,盘上的旧记录不许把它拽回失败(内存里的更新)', () => {
+    // 现实里两者不会同时出现(有活 controller 时 Run2Manager.resumable 恒返回 null),钉住优先级
+    // 免得将来被改反:同一个 run,内存状态 > 重启前落的盘。
+    expect(workflowPhaseNote(wf('done'), { status: 'ok', runId: 'r1' }, { runId: 'r1', finalizeOnly: true }))
+      .toContain('已完成')
+  })
+
+  it('活状态属于**别的** run 时,这条工作流仍然认自己盘上的记录', () => {
+    const note = workflowPhaseNote(wf('done'), { status: 'ok', runId: '别的run' }, { runId: 'r1', finalizeOnly: true })
+    expect(note).toContain('收尾没能自动完成')
   })
 })
 
