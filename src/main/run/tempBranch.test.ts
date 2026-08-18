@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, restoreSnapshot, TempBranchMergeError, currentBranch, type GitRunner } from './tempBranch'
+import { tempBranchName, createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, TempBranchMergeError, currentBranch, type GitRunner } from './tempBranch'
 
 describe('tempBranch', () => {
   it('分支名稳定', () => {
@@ -276,39 +276,6 @@ describe('tempBranch', () => {
       await expect(createTempBranch('/repo', 'branch1', 'r1', run)).rejects.toThrow(
         /Failed to commit pre-run snapshot .*forge\/run-r1/
       )
-    })
-  })
-
-  describe('restoreSnapshot', () => {
-    it('snapshotSha 为 null → 什么都不做', async () => {
-      const calls: string[][] = []
-      const run: GitRunner = async (_c, a) => { calls.push(a); return '' }
-      expect(await restoreSnapshot('/repo', null, run)).toBe('none')
-      expect(calls).toEqual([])
-    })
-
-    it('成功 → cherry-pick -n 后 reset，改动回到未提交状态', async () => {
-      const calls: string[][] = []
-      const run: GitRunner = async (_c, a) => { calls.push(a); return '' }
-      expect(await restoreSnapshot('/repo', 'abc1234', run)).toBe('restored')
-      expect(calls).toEqual([
-        ['cherry-pick', '-n', 'abc1234'],
-        ['reset'],
-      ])
-    })
-
-    it('cherry-pick 冲突 → abort 并返回 conflict', async () => {
-      const calls: string[][] = []
-      const run: GitRunner = async (_c, a) => {
-        calls.push(a)
-        if (a[0] === 'cherry-pick' && a[1] === '-n') throw new Error('CONFLICT (content): a.ts')
-        return ''
-      }
-      expect(await restoreSnapshot('/repo', 'abc1234', run)).toBe('conflict')
-      expect(calls).toEqual([
-        ['cherry-pick', '-n', 'abc1234'],
-        ['cherry-pick', '--abort'],
-      ])
     })
   })
 

@@ -77,9 +77,9 @@ export async function currentBranch(cwd: string, run: GitRunner = defaultGitRunn
  * 根本读不到用户刚写的逻辑（用户实测反馈的正是这条）。现在改成：脏树天然被 `checkout -b`
  * 带过来，随即在 temp 分支上提交成一个「运行前快照」。这样 agent 读得到，且这份快照有了
  * 一个稳定的 commit 副本 —— 后续 discard/park 的 `checkout -f`/`clean -fd` 再怎么清，
- * 用户的改动都还在 `snapshotSha` 这个提交里，靠 restoreSnapshot 一字不差地还原回去。
+ * 用户的改动都还在 `snapshotSha` 这个提交里，靠 restoreSnapshotDetailed 一字不差地还原回去。
  *
- * 快照提交的 parent 恒等于 `base` 当时的 HEAD，这是 restoreSnapshot 的 cherry-pick 能干净
+ * 快照提交的 parent 恒等于 `base` 当时的 HEAD，这是 restoreSnapshotDetailed 的 cherry-pick 能干净
  * 应用的前提。工作树本来就干净时不产生任何提交，snapshotSha 为 null。
  */
 export interface TempBranchCreated {
@@ -219,16 +219,6 @@ async function restoreSnapshotDetailed(
   }
   await run(cwd, ['reset'])
   return { result: 'restored' }
-}
-
-/** 对外契约固定为三态字符串（Task 6 也依赖这个形状）；需要具体错误原因的调用方用上面的 detailed 版本。 */
-export async function restoreSnapshot(
-  cwd: string,
-  snapshotSha: string | null,
-  run: GitRunner = defaultGitRunner
-): Promise<'restored' | 'none' | 'conflict'> {
-  const { result } = await restoreSnapshotDetailed(cwd, snapshotSha, run)
-  return result
 }
 
 /**
