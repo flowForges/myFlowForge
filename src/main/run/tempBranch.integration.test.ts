@@ -9,7 +9,7 @@
 // dirties a working tree or asks real git what state the repo ended up in. This file does: a
 // throwaway temp repo, the REAL default GitRunner (no injection), real file edits, and assertions
 // against real `git status`/`git log`/the real filesystem.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { execSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -305,11 +305,180 @@ describe.skipIf(!gitAvailable)('真 git · 从当前分支切出并保住未提�
     expect(got.targets).toEqual({ proj: 'branch1' })
   }, 20000)
 
+  // ——————————————————————————————————————————————————————————————————————————————————————
+  // 2026-08-17 全分支终审 C1(Critical,评审者用真 git 复现过):快照提交会跑用户仓库的钩子和签名配置
+  // (gitRunner 原样传用户环境、不加 --no-verify),一个 pre-commit 钩子挂掉,createTempBranch 就在
+  // 第二段抛错,而 HEAD 此刻已经停在临时分支上、回滚循环又不含正在失败的这个项目 —— 下一次启动实测
+  // HEAD 拿到 forge/run-<旧 id>,整轮工作最后合进一条没人要的分支。假 GitRunner 证不了这条(它既不
+  // 真跑钩子,也不真移动 HEAD),所以这里写一个真的、退出码非零的 pre-commit 钩子进临时仓库。
+  // ——————————————————————————————————————————————————————————————————————————————————————
+  function installFailingPreCommitHook(repoDir: string): void {
+    const hook = join(repoDir, '.git', 'hooks', 'pre-commit')
+    writeFileSync(hook, '#!/bin/sh\necho "lint failed" >&2\nexit 1\n', { mode: 0o755 })
+  }
+
+  it('C1c:pre-commit 钩子挂掉时,运行前快照照样提交得上去(--no-verify)', async () => {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    writeFileSync(join(repo, 'tracked.txt'), 'user edit\n')
+    installFailingPreCommitHook(repo)
+
+    const { snapshotSha } = await createTempBranch(repo, 'branch1', 'r9')
+
+    expect(snapshotSha).toBeTruthy()
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim()).toBe('forge/run-r9')
+    expect(execSync('git log --oneline -1', { cwd: repo }).toString()).toMatch(/运行前快照/)
+    // 用户的改动确实进了那个提交,不是被跳过了。
+    expect(execSync('git show --stat --oneline HEAD', { cwd: repo }).toString()).toMatch(/tracked\.txt/)
+  }, 20000)
+
+  it('C1b:快照提交仍然失败时(签名配置坏掉),HEAD 不许被留在临时分支上', async () => {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    writeFileSync(join(repo, 'tracked.txt'), 'user edit\n')
+    writeFileSync(join(repo, 'brand-new.txt'), 'user new file\n')
+    const before = execSync('git status --porcelain', { cwd: repo }).toString()
+    // 让提交注定失败,而且**不是**靠钩子 —— C1c 的 --no-verify 已经把钩子那条路绕过去了,这里要的是
+    // 另一类真实失败:用户开了 commit.gpgsign 而签名程序跑不起来(签名故意没被 --no-gpg-sign 关掉,
+    // 见 createTempBranch 的注释)。这正是「快照提交失败」在现实里剩下的那一半。
+    await git(['config', 'commit.gpgsign', 'true'], { cwd: repo })
+    await git(['config', 'gpg.program', '/bin/false'], { cwd: repo })
+    const ws = { path: wsRoot, projects: [{ name: 'proj', branch: 'main' }] } as unknown as Workspace
+
+    await expect(createRunTempBranches(ws, [{ name: 'proj', cwd: repo }], 'r9')).rejects.toThrow(/proj/)
+
+    // 核心断言(评审者复现的那两条):HEAD 回到 branch1,废弃的临时分支不存在。
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim()).toBe('branch1')
+    expect(execSync('git branch --list forge/run-r9', { cwd: repo }).toString().trim()).toBe('')
+    // 且撤回没有顺手销毁用户那些未提交的改动 —— 快照没提交成,它们此刻没有任何副本。
+    expect(readFileSync(join(repo, 'tracked.txt'), 'utf8')).toBe('user edit\n')
+    expect(readFileSync(join(repo, 'brand-new.txt'), 'utf8')).toBe('user new file\n')
+    expect(execSync('git status --porcelain', { cwd: repo }).toString()).toBe(before)
+  }, 20000)
+
+  it('C1a:工作树停在上一次运行的临时分支上时,下一次启动被挡下(而不是把它当成基准)', async () => {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    // 模拟「上一次运行留下的废弃临时分支」——不管它是怎么留下的(快照失败、用户自己切过去、收尾崩在半路)。
+    execSync('git switch -c forge/run-r9', { cwd: repo, stdio: 'ignore' })
+    const ws = { path: wsRoot, projects: [{ name: 'proj', branch: 'main' }] } as unknown as Workspace
+
+    await expect(createRunTempBranches(ws, [{ name: 'proj', cwd: repo }], 'r10'))
+      .rejects.toThrow(/forge\/run-r9/)
+
+    // 一个分支都没建,也没动 HEAD —— 用户拿着这句报错自己 git switch 回去即可。
+    expect(execSync('git branch --list forge/run-r10', { cwd: repo }).toString().trim()).toBe('')
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim()).toBe('forge/run-r9')
+  }, 20000)
+
   it('detached HEAD → 抛错且不建任何分支', async () => {
     const head = execSync('git rev-parse HEAD', { cwd: repo }).toString().trim()
     execSync(`git checkout ${head}`, { cwd: repo, stdio: 'ignore' })
     const ws = { path: wsRoot, projects: [{ name: 'proj', branch: 'main' }] } as unknown as Workspace
     await expect(createRunTempBranches(ws, [{ name: 'proj', cwd: repo }], 'r1')).rejects.toThrow(/detached HEAD/)
     expect(execSync('git branch --list forge/run-r1', { cwd: repo }).toString().trim()).toBe('')
+  }, 20000)
+})
+
+// ————————————————————————————————————————————————————————————————————————————————————————————
+// 2026-08-17 全分支终审 C2(Critical,评审者用真 git 复现过):合并失败之后仓库已经被切回用户自己的
+// 分支(mergeTempBranch 里的 `checkout target` + `merge --abort`),失败卡还明说「已恢复到合并前的
+// 干净状态」并给出可粘贴的命令 —— 等于邀请用户接着在那儿干活。用户实测反馈的原话:「我自己解决了
+// 冲突，并且自己继续开发」。此时点「重新收尾」,runFinalizeGate 会原样再调一遍 merge/park/discard,
+// 而它们从前一个都不查自己在哪条分支上。
+//
+// 这一组每条用例都先真的制造出那个状态(真分叉 → 真冲突 → 真 abort),再模拟用户在自己的分支上继续
+// 写代码,然后调重试。假 GitRunner 永远复现不了这个:它不移动 HEAD,也没有工作树可以被误伤。
+// ————————————————————————————————————————————————————————————————————————————————————————————
+describe.skipIf(!gitAvailable)('真 git · C2 收尾重试不许动用户自己分支上的东西', () => {
+  let repo: string
+  beforeEach(async () => { repo = await initRepoWithTrackedFile() })
+  afterEach(() => rmSync(repo, { recursive: true, force: true }))
+
+  // 把仓库带到「合并失败之后」那个状态:branch1 与 forge/run-r1 在同一个文件上各自有提交,
+  // mergeTempBranch 冲突、abort、停在 branch1。返回时工作树干净,HEAD 在 branch1。
+  async function reachFailedMergeState(): Promise<void> {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    await createTempBranch(repo, 'branch1', 'r1')
+    writeFileSync(join(repo, 'tracked.txt'), 'agent version\n')
+    execSync('git add -A', { cwd: repo, stdio: 'ignore' })
+    execSync('git commit -m agent', { cwd: repo, stdio: 'ignore' })
+    execSync('git switch branch1', { cwd: repo, stdio: 'ignore' })
+    writeFileSync(join(repo, 'tracked.txt'), 'user diverged version\n')
+    execSync('git add -A', { cwd: repo, stdio: 'ignore' })
+    execSync('git commit -m "user diverges"', { cwd: repo, stdio: 'ignore' })
+    execSync(`git switch ${tempBranchName('r1')}`, { cwd: repo, stdio: 'ignore' })
+
+    let err: unknown
+    try { await mergeTempBranch(repo, 'branch1', 'r1') } catch (e) { err = e }
+    expect(err).toBeInstanceOf(TempBranchMergeError)
+    // 前提核实:失败卡说的「已恢复到合并前的干净状态」确实成立 —— 用户就是在这个状态下继续开发的。
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim()).toBe('branch1')
+    expect(execSync('git status --porcelain', { cwd: repo }).toString().trim()).toBe('')
+  }
+
+  it('重新收尾选「合并」:不把用户失败后写的 WIP 提交成 forge: run r1', async () => {
+    await reachFailedMergeState()
+    // 用户自己解冲突、继续开发(未提交)。
+    writeFileSync(join(repo, 'userwip.txt'), 'my own work after the failure\n')
+
+    const logBefore = execSync('git log --oneline', { cwd: repo }).toString()
+    let err: unknown
+    try { await mergeTempBranch(repo, 'branch1', 'r1') } catch (e) { err = e }
+
+    // 合并本身照样冲突(用户还没真解决分叉)——重点是它**没有**顺手替用户提交。
+    expect(err).toBeInstanceOf(TempBranchMergeError)
+    expect(execSync('git log --oneline', { cwd: repo }).toString()).toBe(logBefore)
+    expect(execSync('git log --oneline -5', { cwd: repo }).toString()).not.toMatch(/forge: run r1/)
+    // 用户的 WIP 原样留在工作树里,没被提交、也没被清掉。
+    expect(existsSync(join(repo, 'userwip.txt'))).toBe(true)
+    expect(execSync('git status --porcelain', { cwd: repo }).toString()).toMatch(/userwip\.txt/)
+  }, 20000)
+
+  it('重新收尾选「先不合并」:是一次成功的空操作,不提交用户的 WIP、临时分支照旧保留', async () => {
+    await reachFailedMergeState()
+    writeFileSync(join(repo, 'tracked.txt'), 'user keeps editing\n')
+    writeFileSync(join(repo, 'userwip.txt'), 'my own work after the failure\n')
+    const before = execSync('git status --porcelain', { cwd: repo }).toString()
+    const logBefore = execSync('git log --oneline', { cwd: repo }).toString()
+
+    // park 跳过时会 console.warn 一句(说明为什么无事可做);测试输出保持干净。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(parkTempBranch(repo, 'branch1', 'r1', null)).resolves.toBeUndefined()
+      expect(warnSpy).toHaveBeenCalled()
+    } finally { warnSpy.mockRestore() }
+
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim()).toBe('branch1')
+    expect(execSync('git log --oneline', { cwd: repo }).toString()).toBe(logBefore)
+    expect(execSync('git status --porcelain', { cwd: repo }).toString()).toBe(before)
+    expect(readFileSync(join(repo, 'tracked.txt'), 'utf8')).toBe('user keeps editing\n')
+    // park 的语义(保留分支)本来就已经是事实了。
+    expect(execSync('git branch --list forge/run-r1', { cwd: repo }).toString().trim()).not.toBe('')
+  }, 20000)
+
+  it('重新收尾选「丢弃」:拒绝执行,用户失败后写的改动与未跟踪新文件一个都不许被删', async () => {
+    await reachFailedMergeState()
+    writeFileSync(join(repo, 'tracked.txt'), 'user keeps editing\n')
+    writeFileSync(join(repo, 'newwip.txt'), 'untracked, created after the failure card\n')
+
+    await expect(discardTempBranch(repo, 'branch1', 'r1', null)).rejects.toThrow(/forge\/run-r1/)
+
+    // 评审者复现的正是这两条:tracked 的编辑被 checkout -f 抹掉、untracked 的新文件被 clean -fd 删掉。
+    expect(readFileSync(join(repo, 'tracked.txt'), 'utf8')).toBe('user keeps editing\n')
+    expect(existsSync(join(repo, 'newwip.txt'))).toBe(true)
+    // 拒绝 ≠ 假装成功:临时分支必须还在(它才是本次运行成果的唯一副本),报错里带着该敲的命令。
+    expect(execSync('git branch --list forge/run-r1', { cwd: repo }).toString().trim()).not.toBe('')
+  }, 20000)
+
+  it('正常路径不受守卫影响:还在临时分支上时,三个动作照旧完整执行', async () => {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    const { snapshotSha } = await createTempBranch(repo, 'branch1', 'r2')
+    expect(snapshotSha).toBeNull()
+    writeFileSync(join(repo, 'agent.txt'), 'agent output\n')
+
+    await mergeTempBranch(repo, 'branch1', 'r2')
+
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim()).toBe('branch1')
+    expect(readFileSync(join(repo, 'agent.txt'), 'utf8')).toBe('agent output\n')
+    expect(execSync('git log --oneline -5', { cwd: repo }).toString()).toMatch(/run r2/)
+    expect(execSync('git branch --list forge/run-r2', { cwd: repo }).toString().trim()).toBe('')
   }, 20000)
 })

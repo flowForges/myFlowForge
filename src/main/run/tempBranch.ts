@@ -22,6 +22,10 @@ import { git } from '../git/gitRunner'
  * temp branch (see createTempBranch below) so stage agents can actually read the
  * code the user just wrote, instead of it being stashed away out of sight.
  *
+ * 本模块替用户做的三次记账提交（运行前快照 / `forge: run <id>` / `forge: run <id> (aborted)`）一律
+ * 走 `--no-verify`，理由见 createTempBranch 的注释；用户意志下的那次提交（`merge --no-ff`）不动。
+ * 三个收尾动作（merge/park/discard）在动手之前都先确认自己还在临时分支上，理由见 onTempBranch。
+ *
  * This module is pure git orchestration — no engine wiring here (see P4-2/P4-3).
  */
 
@@ -71,6 +75,30 @@ export async function currentBranch(cwd: string, run: GitRunner = defaultGitRunn
 }
 
 /**
+ * 这个工作树此刻**是不是**还停在本次运行的临时分支上。
+ *
+ * 为什么每个收尾动作(merge/park/discard)都必须先问这一句(2026-08-17 审查 C2,真 git 复现):
+ * 一次合并失败后 mergeTempBranch 已经 `checkout target` + `merge --abort`,仓库停在用户自己的
+ * 分支上,失败卡还明说「已恢复到合并前的干净状态」——用户于是接着在那儿改代码、解冲突。此时点
+ * 「重新收尾」,runFinalizeGate 会原样再调一遍这三个函数,而它们原本一个都不查自己在哪条分支上:
+ *   - merge/park 的 `add -A` + commit 会把用户失败后写的东西提交到**用户自己的分支**上,
+ *     还盖上 `forge: run <runId>` 的名字;
+ *   - discard 的 `checkout -f` + `clean -fd` 会把用户失败后新建的未跟踪文件直接删掉(不可恢复)。
+ * 所以工作树不在临时分支上时,那里的一切脏东西都是**用户的**,不是这次运行的,谁都不许动。
+ *
+ * 读不出当前分支(目录没了/不是仓库/git 缺失)一律抛出可读错误,不静默按「不在」处理 —— 那会让一次
+ * 环境故障看起来像一次成功的空收尾。
+ */
+async function onTempBranch(cwd: string, runId: string, run: GitRunner): Promise<boolean> {
+  const branch = tempBranchName(runId)
+  try {
+    return (await currentBranch(cwd, run)) === branch
+  } catch (err) {
+    throw readableGitError(`读不出当前所在分支，无法确认是否仍在临时分支 "${branch}" 上`, err)
+  }
+}
+
+/**
  * 建 run 的临时分支，并把用户**未提交的改动**原样带进来。
  *
  * 旧做法是先 `git stash` 把用户的改动藏走，让 temp 分支从干净树长出来 —— 代价是阶段 agent
@@ -81,6 +109,12 @@ export async function currentBranch(cwd: string, run: GitRunner = defaultGitRunn
  *
  * 快照提交的 parent 恒等于 `base` 当时的 HEAD，这是 restoreSnapshotDetailed 的 cherry-pick 能干净
  * 应用的前提。工作树本来就干净时不产生任何提交，snapshotSha 为 null。
+ *
+ * `--no-verify`(2026-08-17 审查 C1c，真 git 复现)：这是 app 替用户在一条一次性分支上做的**记账**
+ * 提交，不是用户自己按下的那次提交。跑用户的 pre-commit(lint-staged/husky 之类，本 app 面向的仓库
+ * 里几乎人手一个)本身就说不通——它审的是「半成品脏树」，注定挂——挂了还会把整次启动带进 C1 那条
+ * 「HEAD 被留在临时分支上」的连锁。签名(`commit.gpgsign`)则**故意不关**：钩子是内容质检，签名是
+ * 用户对「什么能进历史」的策略，而这条快照提交在合并那条收尾路径上是真的会进用户分支历史的。
  */
 export interface TempBranchCreated {
   branch: string
@@ -104,11 +138,58 @@ export async function createTempBranch(
     await run(cwd, ['add', '-A'])
     const status = await run(cwd, ['status', '--porcelain'])
     if (status.trim().length === 0) return { branch, snapshotSha: null }
-    await run(cwd, ['commit', '-m', 'forge: 运行前快照'])
+    await run(cwd, ['commit', '--no-verify', '-m', 'forge: 运行前快照'])
     const sha = (await run(cwd, ['rev-parse', 'HEAD'])).trim()
     return { branch, snapshotSha: sha }
   } catch (err) {
     throw readableGitError(`Failed to commit pre-run snapshot onto temp branch "${branch}"`, err)
+  }
+}
+
+/**
+ * 建分支途中失败时的「就地撤回」：切回 base，并删掉刚刚建出来的临时分支。
+ *
+ * 为什么不能复用 discardTempBranch(2026-08-17 审查 C1b):走到这里意味着**快照提交没成**(pre-commit
+ * 钩子拒绝、user.email 没配、commit.gpgsign 失败……),用户那些未提交的改动此刻在世界上没有任何副本。
+ * discardTempBranch 的 `checkout -f` + `clean -fd` 会把它们连同未跟踪的新文件一起销毁。这里只用普通
+ * `checkout base`:临时分支此刻和 base 指向同一个提交(没有任何新提交要丢),脏树被原样带回 base,正是
+ * 运行前的样子。
+ *
+ * 两步都尽力而为:`checkout -b` 自己就失败时临时分支压根不存在,`branch -D` 注定失败,不该因此把撤回
+ * 判成失败(切回 base 才是要紧的那一步)。切回 base 失败则抛出——那才是「HEAD 被留在废弃临时分支上」
+ * 这个真正危险状态的信号,调用方要把它报给用户。
+ */
+export async function abandonTempBranch(
+  cwd: string,
+  base: string,
+  runId: string,
+  run: GitRunner = defaultGitRunner
+): Promise<void> {
+  const branch = tempBranchName(runId)
+  // HEAD 已经在临时分支上 ⟺ createTempBranch 过了 `checkout -b` 那一步,也就一定跑过 `add -A` ——
+  // 只有这种情况才需要下面那次 `reset`。`checkout -b` 自己就失败时(重名等)我们什么都没暂存过,
+  // 这时候 reset 反而会把用户**自己 staged** 的东西给退出去。读不出来就按最坏情况(在)办。
+  let staged = true
+  try { staged = (await currentBranch(cwd, run)) === branch } catch { /* 读不出来就按最坏情况办 */ }
+  try {
+    await run(cwd, ['checkout', base])
+  } catch (err) {
+    throw readableGitError(`Failed to check "${cwd}" back out onto base "${base}" after temp branch "${branch}" creation failed`, err)
+  }
+  if (staged) {
+    try {
+      // createTempBranch 失败前已经跑过 `add -A`,不撤销的话用户的改动会以「全部已暂存」的样子留下来。
+      // `git reset`(mixed,不动工作树)把它们退回未暂存/未跟踪 —— 这就是运行前的外观。已知精度损失与
+      // restoreSnapshotDetailed 那边完全一样:运行前**已 staged** 的改动会变成未 staged,内容一字不丢。
+      await run(cwd, ['reset'])
+    } catch (err) {
+      console.warn(`[run2] ${cwd}: 撤回 ${branch} 后取消暂存失败(改动仍在,只是处于已暂存状态): ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  try {
+    await run(cwd, ['branch', '-D', branch])
+  } catch {
+    // 分支可能压根没建成 —— 不是错误。
   }
 }
 
@@ -128,7 +209,21 @@ export class TempBranchMergeError extends Error {
   }
 }
 
-/** Checkout `target`, merge the temp branch in with --no-ff, then delete the temp branch. */
+/**
+ * Checkout `target`, merge the temp branch in with --no-ff, then delete the temp branch.
+ *
+ * 重试安全(2026-08-17 审查 C2)：上一次合并失败后仓库已经被切回 `target`（下面的 `checkout target`
+ * + `merge --abort`），用户可能已经在那儿继续写代码了。此时点「重新收尾」会原样再调一次本函数——
+ * 所以下面那步「把在制品提交到临时分支上」必须先确认自己**真的还在临时分支上**，否则提交的是用户
+ * 自己的改动、还盖上 `forge: run <runId>` 的名字（真 git 复现过：branch1 上凭空多出一条 forge 提交，
+ * 而且合并照样冲突，每重试一次就再多一条）。不在临时分支上时那一步直接跳过——那里没有本次运行的
+ * 东西要提交（在制品早在第一次尝试里就提交进临时分支了），脏的都是用户的。合并本身照常重试。
+ *
+ * 在制品提交同样走 `--no-verify`（理由见 createTempBranch 的注释）：它和运行前快照一样是 app 替用户
+ * 在一次性分支上做的记账提交，跑用户的 pre-commit 只会让一个挂掉的钩子把**整次运行**锁死在「收不了
+ * 尾」——连「先不合并」这条安全出口都走不了。真正属于用户意志的那次提交是下面的 `merge --no-ff`
+ * （它跑的是 pre-merge-commit 钩子），那个一个字都不动。
+ */
 export async function mergeTempBranch(
   cwd: string,
   target: string,
@@ -136,6 +231,7 @@ export async function mergeTempBranch(
   run: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
+  const onBranch = await onTempBranch(cwd, runId, run)
   // The agent(s) wrote their changes into the working tree while checked out on `branch` —
   // nothing has committed them yet (createTempBranch/agents only ever `checkout -b`/edit files).
   // Commit them onto the temp branch HERE, BEFORE switching away, or the switch to `target` below
@@ -143,16 +239,18 @@ export async function mergeTempBranch(
   // history (the exact bug this function used to have: `checkout target` on a dirty tree "moves"
   // the edits, then `merge` finds temp and target identical → "Already up to date", no merge
   // commit, and the target's working tree is left dirty with the run's changes).
-  try {
-    await run(cwd, ['add', '-A'])
-    // `git status --porcelain` (not diff --cached --quiet's exit-code trick) so this is trivial to
-    // drive with a fake GitRunner in unit tests: empty output = clean, anything else = staged work.
-    const status = await run(cwd, ['status', '--porcelain'])
-    if (status.trim().length > 0) {
-      await run(cwd, ['commit', '-m', `forge: run ${runId}`])
+  if (onBranch) {
+    try {
+      await run(cwd, ['add', '-A'])
+      // `git status --porcelain` (not diff --cached --quiet's exit-code trick) so this is trivial to
+      // drive with a fake GitRunner in unit tests: empty output = clean, anything else = staged work.
+      const status = await run(cwd, ['status', '--porcelain'])
+      if (status.trim().length > 0) {
+        await run(cwd, ['commit', '--no-verify', '-m', `forge: run ${runId}`])
+      }
+    } catch (err) {
+      throw readableGitError(`Failed to commit run "${runId}" changes onto temp branch "${branch}"`, err)
     }
-  } catch (err) {
-    throw readableGitError(`Failed to commit run "${runId}" changes onto temp branch "${branch}"`, err)
   }
   try {
     await run(cwd, ['checkout', target])
@@ -239,6 +337,14 @@ async function restoreSnapshotDetailed(
  * untracked files sitting in the working tree untouched (confirmed empirically against real git —
  * see tempBranch.integration.test.ts). `git clean -fd` after the checkout removes exactly those
  * leftover untracked files/dirs, so a NEW file the agent created doesn't survive a discard.
+ *
+ * 这套「强制 + 清理」的前提只在**工作树还停在临时分支上**时成立，所以本函数现在先查一句，不在就
+ * 直接拒绝执行（2026-08-17 审查 C2，真 git 复现）：一次合并失败后仓库已经被切回 target、失败卡还
+ * 明说「已恢复到合并前的干净状态」，用户于是接着在那儿写代码；此时点「重新收尾」再选丢弃，
+ * `checkout -f` + `clean -fd` 删掉的是**用户失败之后自己写的**改动和未跟踪新文件——不可恢复。
+ * 三个收尾动作里只有它选择「报错」而不是「跳过」：跳过等于假装丢弃成功、临时分支却还在，用户下次
+ * 启动就会撞上 launch.ts 那道 `forge/run-` 基准守卫；而报错会走到收尾失败卡，那里能把该敲的命令
+ * 原样给出来。删除未跟踪文件是这三者里唯一不可逆的动作，宁可什么都不做。
  */
 export async function discardTempBranch(
   cwd: string,
@@ -248,6 +354,14 @@ export async function discardTempBranch(
   run: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
+  if (!(await onTempBranch(cwd, runId, run))) {
+    const here = await currentBranch(cwd, run)
+    throw new Error(
+      `没有丢弃 ${branch}：这个仓库当前在分支 ${here || '（detached HEAD）'} 上，不在本次运行的临时分支上，`
+      + `工作树里的改动看起来是你自己的，已原样留着没动。`
+      + `确认要丢弃本次运行请手动执行：git branch -D ${branch}`
+    )
+  }
   try {
     await run(cwd, ['checkout', '-f', target])
     await run(cwd, ['clean', '-fd'])
@@ -282,6 +396,16 @@ export async function discardTempBranch(
  * `target` back out. UNLIKE mergeTempBranch/discardTempBranch, this never merges, never deletes the
  * temp branch, and never runs `clean -fd` — the temp branch (with its commit, if any) is left exactly
  * as-is so the work stays recoverable on `forge/run-<runId>` after the abort.
+ *
+ * 2026-08-17 审查 C2:工作树**不在**临时分支上时,park 整个变成一次成功的空操作。
+ *
+ * 走到这一步只有一种现实路径:上一次收尾选的是「合并」且失败了(mergeTempBranch 已经 `checkout
+ * target` + `merge --abort`,在制品也早在它自己那步里提交进了临时分支),用户看完失败卡改选了
+ * 「先不合并」。park 想要的三件事此刻都**已经是事实**:在制品在临时分支上、分支保留着、工作树在
+ * target 上。剩下的两个动作反而都是错的 —— `add -A` + commit 会把用户失败后写的东西提交到他自己
+ * 的分支上并盖上 forge 的名字(真 git 复现过),cherry-pick 快照会把用户运行前那份改动**第二次**
+ * 盖到一棵他已经继续改过的工作树上(快照本体安全地待在临时分支的提交里,不需要在这儿抢救)。
+ * 所以什么都不做、如实返回成功,让这个 run 收干净。
  */
 export async function parkTempBranch(
   cwd: string,
@@ -291,11 +415,15 @@ export async function parkTempBranch(
   run: GitRunner = defaultGitRunner
 ): Promise<void> {
   const branch = tempBranchName(runId)
+  if (!(await onTempBranch(cwd, runId, run))) {
+    console.warn(`[run2] ${cwd}: 已不在 ${branch} 上(多半是上一次合并失败后已切回 ${target}),保留分支这步无事可做,跳过`)
+    return
+  }
   try {
     await run(cwd, ['add', '-A'])
     const status = await run(cwd, ['status', '--porcelain'])
     if (status.trim().length > 0) {
-      await run(cwd, ['commit', '-m', `forge: run ${runId} (aborted)`])
+      await run(cwd, ['commit', '--no-verify', '-m', `forge: run ${runId} (aborted)`])
     }
   } catch (err) {
     throw readableGitError(`Failed to commit run "${runId}" changes onto temp branch "${branch}" before parking`, err)

@@ -401,11 +401,53 @@ describe('createRunTempBranches (P4-2)', () => {
       fakeCreate,
       fakeRollback,
       readMain,
+      async () => {},
     )).rejects.toThrow(/web/)
     expect(createCalls).toEqual(['/ws/pay/api', '/ws/pay/web'])
     // api's branch was already created when web failed → rolled back to ITS OWN target ('main'),
     // carrying api's own snapshot SHA (not null, not web's) so its uncommitted work isn't destroyed.
     expect(rollbackCalls).toEqual([{ cwd: '/ws/pay/api', target: 'main', sha: 'sha-api' }])
+  })
+
+  // 2026-08-17 审查 C1b(真 git 复现):createTempBranch 分两段 —— `checkout -b` 一段、`add -A` + 快照
+  // 提交另一段。失败在第二段(pre-commit 钩子拒绝、user.email 没配……)时 HEAD 已经停在临时分支上了,
+  // 而原来的回滚循环只走 `created`(不含正在失败的这个),于是它被永久留在 forge/run-<id> 上 —— 下一次
+  // 启动实测 HEAD 就把这条废弃分支当成了运行基准,整轮工作最后合进一条没人要的分支。
+  it('C1b:正在失败的那个项目自己也要撤回(abandon),不能只回滚 created 里的', async () => {
+    const abandonCalls: Array<{ cwd: string; base: string; runId: string }> = []
+    const fakeCreate = async (cwd: string) => {
+      if (cwd === '/ws/pay/web') throw new Error('pre-commit hook failed')
+      return { branch: 'forge/run-r1', snapshotSha: null }
+    }
+    const fakeAbandon = async (cwd: string, base: string, runId: string) => { abandonCalls.push({ cwd, base, runId }) }
+    await expect(createRunTempBranches(
+      ws,
+      [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
+      'r1',
+      fakeCreate,
+      async () => {},
+      readMain,
+      fakeAbandon,
+    )).rejects.toThrow(/web/)
+    expect(abandonCalls).toEqual([{ cwd: '/ws/pay/web', base: 'main', runId: 'r1' }])
+  })
+
+  it('C1b:错误信息如实报出到底撤回了哪些项目(不再说"已回滚已建的 N 个"却漏掉失败的那个)', async () => {
+    const fakeCreate = async (cwd: string) => {
+      if (cwd === '/ws/pay/web') throw new Error('pre-commit hook failed')
+      return { branch: 'forge/run-r1', snapshotSha: null }
+    }
+    let message = ''
+    try {
+      await createRunTempBranches(
+        ws,
+        [{ name: 'api', cwd: '/ws/pay/api' }, { name: 'web', cwd: '/ws/pay/web' }],
+        'r1', fakeCreate, async () => {}, readMain, async () => {},
+      )
+    } catch (err) { message = err instanceof Error ? err.message : String(err) }
+    expect(message).toMatch(/已回滚 2 个项目的分支/)
+    expect(message).toMatch(/web/)
+    expect(message).toMatch(/api/)
   })
 
   it('surfaces (not swallows) a rollback failure alongside the original error', async () => {
@@ -421,7 +463,18 @@ describe('createRunTempBranches (P4-2)', () => {
       fakeCreate,
       fakeRollback,
       readMain,
+      async () => {},
     )).rejects.toThrow(/rollback also failed/)
+  })
+
+  it('撤回失败的那个项目自己也要被点名(它才是 HEAD 可能被留在临时分支上的那个)', async () => {
+    const fakeCreate = async () => { throw new Error('pre-commit hook failed') }
+    const fakeAbandon = async () => { throw new Error('checkout back failed') }
+    await expect(createRunTempBranches(
+      ws,
+      [{ name: 'api', cwd: '/ws/pay/api' }],
+      'r1', fakeCreate, async () => {}, readMain, fakeAbandon,
+    )).rejects.toThrow(/api\(checkout back failed\)/)
   })
 
   it('never calls createBranch for later projects once an earlier one fails (no partial fan-out beyond the failure point)', async () => {
@@ -437,8 +490,45 @@ describe('createRunTempBranches (P4-2)', () => {
       fakeCreate,
       undefined,
       readMain,
+      async () => {},
     )).rejects.toThrow()
     expect(calls).toEqual(['/ws/pay/api'])
+  })
+
+  // 2026-08-17 审查 C1a:实测 HEAD 修好了「基准取自过期存盘字段」,但也开了第二个门 —— 只要有任何一条
+  // 路把工作树留在上一次运行的 forge/run-<id> 上,下一次启动就会拿它当基准,整轮工作最后合进一条没人
+  // 要的分支。一道守卫同时堵住 C1 的两个入口。
+  it('C1a:基准实测出来是上一次运行的临时分支 → 拒绝启动,一个分支都不建', async () => {
+    const created: string[] = []
+    const fakeCreate = async (cwd: string) => { created.push(cwd); return fakeBranch('r10') }
+    await expect(createRunTempBranches(
+      ws,
+      [{ name: 'api', cwd: '/ws/pay/api' }],
+      'r10',
+      fakeCreate,
+      async () => {},
+      async () => 'forge/run-r9',
+      async () => {},
+    )).rejects.toThrow(/forge\/run-r9/)
+    expect(created).toEqual([])
+  })
+
+  it('C1a:拒绝时告诉用户该怎么办(切回自己的分支 / 别删那条分支)', async () => {
+    let message = ''
+    try {
+      await createRunTempBranches(ws, [{ name: 'api', cwd: '/ws/pay/api' }], 'r10',
+        async () => fakeBranch('r10'), async () => {}, async () => 'forge/run-r9', async () => {})
+    } catch (err) { message = err instanceof Error ? err.message : String(err) }
+    expect(message).toMatch(/git switch/)
+    expect(message).toMatch(/别删/)
+  })
+
+  it('C1a:正常分支名里含 forge 字样(如 feature/forge-run-x)不受影响,只挡 forge/run- 前缀', async () => {
+    const bases: string[] = []
+    await createRunTempBranches(ws, [{ name: 'api', cwd: '/ws/pay/api' }], 'r10',
+      async (_cwd, base) => { bases.push(base); return fakeBranch('r10') },
+      async () => {}, async () => 'feature/forge-run-x', async () => {})
+    expect(bases).toEqual(['feature/forge-run-x'])
   })
 })
 
