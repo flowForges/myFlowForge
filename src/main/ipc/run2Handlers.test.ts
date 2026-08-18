@@ -9,6 +9,9 @@ import { tmpdir } from 'node:os'
 import * as CH from './channels'
 import type { Workspace } from '../config/schema'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
+// run2:base-info's `stranded` field (R5 below) goes through the REAL `git` runner — gitStatusPorcelain
+// isn't injectable — so that test needs an actual repo, same reasoning as tempBranch.integration.test.ts.
+import { git } from '../git/gitRunner'
 
 function okProvider(): AgentProvider {
   return {
@@ -438,6 +441,69 @@ describe('registerRun2', () => {
         // the interrupted run must still be sitting there to resume/discard — launch-start must not
         // have clobbered or consumed it.
         expect(manager.resumable(ws)).not.toBeNull()
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+  })
+
+  // Task 8 residual fix (R5): run2:base-info reports `stranded: true` for a project parked on a
+  // leftover forge/run-* branch — same regex createRunTempBranches (launch.ts) already refuses a
+  // launch on, computed here so the launch-gate row (LaunchGateCard.test.tsx has the renderer half)
+  // can disable 确认 before the click, not after. Uses a REAL git repo — gitStatusPorcelain (the other
+  // half of the handler, alongside readCurrentBranch) isn't injectable, so a fake readCurrentBranch
+  // alone can't drive this without a real `.git` behind it to answer `git status --porcelain`.
+  describe('run2:base-info', () => {
+    it('flags a project parked on a leftover forge/run-* branch as stranded, without treating it as an error', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-baseinfo-'))
+      try {
+        const proj = join(ws, 'api')
+        mkdirSync(proj, { recursive: true })
+        await git(['init', '-b', 'main'], { cwd: proj })
+        await git(['config', 'user.email', 'forge-test@example.com'], { cwd: proj })
+        await git(['config', 'user.name', 'Forge Test'], { cwd: proj })
+        await git(['config', 'commit.gpgsign', 'false'], { cwd: proj })
+        writeFileSync(join(proj, 'f.txt'), 'x\n')
+        await git(['add', '-A'], { cwd: proj })
+        await git(['commit', '-m', 'init'], { cwd: proj })
+        await git(['switch', '-c', 'forge/run-r9'], { cwd: proj })
+
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        const wsConfig: Workspace = {
+          name: 'pay', path: ws, workflowId: '', stages: [], workflows: [],
+          projects: [{ repoId: 'api', name: 'api', branch: 'main' }] as any,
+          status: 'idle', plugins: [], stepPlugins: [],
+        } as any
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig })
+        const baseInfo = handlers.get(CH.run2BaseInfo)!
+        const result = await baseInfo({}, { workspacePath: ws })
+        expect(result).toEqual([{ name: 'api', branch: 'forge/run-r9', dirtyCount: 0, stranded: true }])
+      } finally { rmSync(ws, { recursive: true, force: true }) }
+    })
+
+    it('a normal branch is not flagged stranded (no field at all, not even `stranded: false`)', async () => {
+      const ws = mkdtempSync(join(tmpdir(), 'r2h-baseinfo-'))
+      try {
+        const proj = join(ws, 'api')
+        mkdirSync(proj, { recursive: true })
+        await git(['init', '-b', 'main'], { cwd: proj })
+        await git(['config', 'user.email', 'forge-test@example.com'], { cwd: proj })
+        await git(['config', 'user.name', 'Forge Test'], { cwd: proj })
+        await git(['config', 'commit.gpgsign', 'false'], { cwd: proj })
+        writeFileSync(join(proj, 'f.txt'), 'x\n')
+        await git(['add', '-A'], { cwd: proj })
+        await git(['commit', '-m', 'init'], { cwd: proj })
+
+        const handlers = new Map<string, (...a: any[]) => any>()
+        const manager = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        const wsConfig: Workspace = {
+          name: 'pay', path: ws, workflowId: '', stages: [], workflows: [],
+          projects: [{ repoId: 'api', name: 'api', branch: 'main' }] as any,
+          status: 'idle', plugins: [], stepPlugins: [],
+        } as any
+        registerRun2({ manager, onInvoke: (ch, h) => handlers.set(ch, h), readWorkspace: () => wsConfig })
+        const baseInfo = handlers.get(CH.run2BaseInfo)!
+        const result = await baseInfo({}, { workspacePath: ws })
+        expect(result).toEqual([{ name: 'api', branch: 'main', dirtyCount: 0 }])
       } finally { rmSync(ws, { recursive: true, force: true }) }
     })
   })

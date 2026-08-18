@@ -19,8 +19,10 @@ const DECISION_VERB: Record<'merge' | 'discard' | 'park', string> = {
   park: '保留分支',
 }
 
-// 每种收尾动作失败后，用户真正需要敲的那几行。合并 = 手工合一遍；丢弃 = 确认后手工删分支；
-// 保留 = 什么都不用做，只要回到自己的分支（本次改动本来就在临时分支上待着）。
+// 每种收尾动作失败后，用户真正需要敲的那几行。合并 = 手工合一遍；丢弃 = 先回到自己的分支，删不删
+// 临时分支交给「原因」那行的具体说明（R2：分支到底能不能安全删，只有那次失败的具体报错知道，这里
+// 不能替它下断言）；保留 = 先用 git status 摸清现状，改动是否已经落在临时分支上以它的结果为准（R4：
+// 保留最常见的失败恰恰是提交这步没成功，此时改动根本不在临时分支上）。
 function recoveryCommands(f: FinalizeFailure, decision: 'merge' | 'discard' | 'park'): string[] {
   if (decision === 'merge') {
     return [
@@ -30,14 +32,22 @@ function recoveryCommands(f: FinalizeFailure, decision: 'merge' | 'discard' | 'p
     ]
   }
   if (decision === 'discard') {
-    return [
-      `git switch ${f.target}`,
-      `git branch -D ${f.tempBranch}     # 确认真的不要了再删`,
-    ]
+    // Task 8 residual fix (R2)：丢弃失败最常见的原因是「运行前快照」没能自动还原
+    // （tempBranch.ts's restoreSnapshotDetailed 冲突）——那种情况下上面的「原因」行会明说分支被保留、
+    // 快照还没取回，并且它自己就带着 cherry-pick 命令。这里若还固定甩出一行 `git branch -D`，读到底
+    // 的用户会撞见卡片自相矛盾：先说「你的改动只在这条分支上」，三行之后又说「删了它」。丢弃到底有没有
+    // 推进到能安全删分支，只有「原因」那行的具体报错知道（还有几种失败根本没走到还原这步），所以这里
+    // 只给最不会错的一步——回到自己的分支；删不删分支、删之前要不要先 cherry-pick，交给「原因」的原样
+    // 说明去讲（它需要时会自带可粘贴的命令，见 tempBranch.ts 的 discardTempBranch）。
+    return [`git switch ${f.target}`]
   }
+  // Task 8 residual fix (R4)：park 失败最常见的原因恰恰是「提交在制品到临时分支」这一步本身没成功
+  // （tempBranch.ts:429 的 add -A + commit），也就是说本次运行的改动这时并不在 tempBranch 上——跟旧版
+  // 这里固定断言「改动留在 tempBranch 上」正相反。改成不替用户断言：git status 的结果才是真相，
+  // 下一行的注释改成从它推出结论，而不是抢在它前面就下定论。
   return [
-    `git status                       # 看看当前在哪条分支、有什么没提交`,
-    `git switch ${f.target}            # 本次运行的改动留在 ${f.tempBranch} 上`,
+    `git status                       # 看看当前在哪条分支、有什么没提交——保留失败最常见的原因就是这步提交本身没成功`,
+    `git switch ${f.target}            # 提交成功的话，改动会在 ${f.tempBranch} 上；以上面 git status 的结果为准`,
   ]
 }
 export function FinalizeFailureCard({ failures, onHandoff, onRetry, handoffWarning }: {
@@ -86,7 +96,15 @@ export function FinalizeFailureCard({ failures, onHandoff, onRetry, handoffWarni
               </div>
             ) : null}
             <div className="ff-line ff-detail">原因：{f.detail}</div>
-            <div className="ff-line">{decision === 'merge' ? '手工合并（可直接粘贴）：' : '接下来你可以（可直接粘贴）：'}</div>
+            <div className="ff-line">
+              {decision === 'merge'
+                ? '手工合并（可直接粘贴）：'
+                // R2：分支删不删、删之前要不要先 cherry-pick，上面「原因」那行已经按实际失败原因给出了
+                // 具体说明（有时甚至带着自己的命令）——这里不重复下结论，只给最不会错的一步。
+                : decision === 'discard'
+                ? '先回到自己的分支（可直接粘贴）；临时分支删不删、怎么删，按上面「原因」的说明来：'
+                : '接下来你可以（可直接粘贴）：'}
+            </div>
             <pre className="ff-cmd">{recoveryCommands(f, decision).join('\n')}</pre>
           </div>
         ))}

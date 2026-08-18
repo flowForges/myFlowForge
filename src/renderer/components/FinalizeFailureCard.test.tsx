@@ -48,12 +48,19 @@ describe('FinalizeFailureCard', () => {
       expect(container.textContent).toMatch(/git switch branch1/)
     })
 
-    it('丢弃失败:标题说丢弃,命令给的是手工删分支', () => {
+    // Task 8 residual fix (R2): the card used to hand out an unconditional `git branch -D` here, which
+    // directly contradicted the 原因 line's own recovery instructions whenever the failure was the
+    // snapshot restore conflicting (that reason text says the branch was KEPT and gives its own
+    // cherry-pick command — see tempBranch.ts's discardTempBranch). The card can't tell from `f.detail`
+    // alone whether deleting is safe, so it no longer asserts it either way — it points back at 原因.
+    it('丢弃失败:标题说丢弃,命令只给回到自己分支这一步,删不删分支交给上面「原因」说明', () => {
       const { container } = render(<FinalizeFailureCard failures={withDecision('discard')} />)
       expect(container.textContent).not.toMatch(/无法自动合并/)
       expect(container.textContent).not.toMatch(/git merge/)
       expect(container.textContent).toMatch(/无法丢弃/)
-      expect(container.textContent).toMatch(/git branch -D forge\/run-a1b2/)
+      expect(container.textContent).toMatch(/git switch branch1/)
+      expect(container.textContent).not.toMatch(/git branch -D/)
+      expect(container.textContent).toMatch(/按上面「原因」的说明来/)
     })
 
     it('合并失败:与改动前一字不差', () => {

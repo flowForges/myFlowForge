@@ -373,18 +373,25 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // the wrong reason text ("有项目处于 detached HEAD" for a directory that isn't even there).
   const detachedSelected = (base ?? []).some((b) => !b.branch && !b.error && projects.some((p) => p.name === b.name && p.selected))
   const unreadableSelected = (base ?? []).some((b) => b.error && projects.some((p) => p.name === b.name && p.selected))
+  // Task 8 residual fix (R5): a selected project's measured base is a leftover `forge/run-*` temp
+  // branch from some earlier run — launch.ts's createRunTempBranches already refuses to start on one
+  // of these (same regex, see its own guard), but that refusal only fires AFTER 确认 is clicked. Block
+  // here too, same treatment as detachedSelected/unreadableSelected right above, so the row's own 确认
+  // state matches what a click would actually do instead of the user finding out only after clicking.
+  const strandedSelected = (base ?? []).some((b) => b.stranded && projects.some((p) => p.name === b.name && p.selected))
   // Task 8 fix round 2 (cheap fix): the IPC call ITSELF failing (baseFetchFailed) is stronger than any
   // single project's `b.error` — it means we know NOTHING about ANY project's branch, not just one.
   // Same treatment as detached HEAD / a single unreadable project: block launch rather than let the
   // user hit an unverified state, but only once `baseInfo` was actually offered (never blocks a caller
   // that doesn't wire this prop at all).
-  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement || detachedSelected || unreadableSelected || baseFetchFailed
+  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement || detachedSelected || unreadableSelected || strandedSelected || baseFetchFailed
   const confirmBlockReason = noStageEnabled ? '至少保留一个阶段'
     : noProjectSelected ? '至少选择一个代码项目'
     : noRequirement ? '先说说这次要做什么（上面的需求框里写一句，或写在补充说明里）'
     : baseFetchFailed ? '读不出运行基准，请重试或联系开发者'
     : detachedSelected ? '有项目处于 detached HEAD'
     : unreadableSelected ? '有项目读不出当前分支'
+    : strandedSelected ? '有项目停在上一次运行的临时分支上'
     : undefined
 
   // Shared provider + model chip pair (used by both per-project rows and per-stage rows). popupKey
@@ -610,10 +617,16 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
               <div className="wfo-sec-h" style={{ marginTop: 12 }}>运行基准</div>
               <div className="lg-base">
                 {baseRows.map((b) => (
-                  <div key={b.name} className={`lg-base-row${b.branch && !b.error ? '' : ' bad'}`}>
+                  <div key={b.name} className={`lg-base-row${b.branch && !b.error && !b.stranded ? '' : ' bad'}`}>
                     <b>{b.name}</b>
                     {b.error
                       ? <span>读不出当前分支（{b.error}）</span>
+                      // Task 8 residual fix (R5)：branch 本身读得清清楚楚(不是 error、不是 detached
+                      // HEAD)，但它是上一次运行遗留的 forge/run-* 临时分支——不能拿它当这次的基准
+                      // (launch.ts 的 createRunTempBranches 会在点了确认之后才拒绝，这里提前说清楚，
+                      // 免得用户点完才知道)。标红且不可启动，同 detached HEAD/读不出分支的处理一致。
+                      : b.stranded
+                      ? <span>基准 {b.branch}（上一次工作流留下的临时分支，不能当基准；请先 git switch 回自己的开发分支，若是上一次运行还没收尾，去恢复提示里选「继续」或「丢弃」）</span>
                       : b.branch
                       // Task 8 fix round 3 (I1):未提交改动那句必须说清它们的去向。合并基线(bb41798)那版
                       // 写的是「会自动 git stash 保存…结束后恢复」,Task 8 把它换成了一个光秃秃的计数,

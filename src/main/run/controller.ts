@@ -179,10 +179,11 @@ export interface RunControllerState {
   //      run had written (RehydrateState.error), not a new judgement of its own.
   // So `error` truthy is NOT a reliable "the finalize ran and failed" signal on its own — a consumer
   // that needs exactly that (e.g. workflowNote, deciding whether it's safe to say "阶段都跑完了、改动在
-  // forge/run-<runId> 分支上") must key off `finalizeFailure` below instead (assigned ONLY at
-  // runFinalizeGate's failure branch, cleared on a successful retry — see its own doc), not off this
-  // field's mere presence. Kept as a human-readable summary for consumers that just want a plain
-  // string to display (e.g. FinalizeFailureCard's detail line), not as a boolean discriminator.
+  // forge/run-<runId> 分支上") must key off `finalizeFailure` below instead — see ITS doc for what it's
+  // actually assigned from (it's not as simple as "one site", which is the exact overstatement this
+  // parenthetical used to make redundantly, nine lines below its own correction) — not off this field's
+  // mere presence. Kept as a human-readable summary for consumers that just want a plain string to
+  // display (e.g. FinalizeFailureCard's detail line), not as a boolean discriminator.
   error?: string
   // #6: the structured per-project detail behind `error` above — one entry per project whose
   // merge/discard/park actually failed (a lane that succeeded is simply absent). See

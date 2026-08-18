@@ -26,7 +26,15 @@ const READ_FILE_MAX_BYTES = 512 * 1024
 // doesn't exist would be shown "未在任何分支上，无法启动（请先 git switch 到一个分支）", which is the
 // wrong instruction for a directory that isn't there. `error` present means "couldn't determine
 // anything about this project" — the renderer shows a distinct row, not a manufactured "HEAD" claim.
-export interface ProjectBaseInfo { name: string; branch: string; dirtyCount: number; error?: string }
+//
+// Task 8 residual fix (R5): `stranded` is a THIRD failure shape, distinct from both of the above —
+// the branch reads back FINE (`branch` is a real, non-empty value, `error` is absent), it's just that
+// the value is a leftover `forge/run-*` temp branch from a run that never got cleaned up. launch.ts's
+// createRunTempBranches already refuses to start a run based on one of these (see its own `forge/run-`
+// guard), but that refusal only fires once the user clicks 确认 — this field lets the renderer disable
+// 确认 for the same reason up front, matching how detachedSelected/unreadableSelected already do,
+// instead of letting the click-then-fail round trip be the first the user hears of it.
+export interface ProjectBaseInfo { name: string; branch: string; dirtyCount: number; error?: string; stranded?: boolean }
 
 // `git status --porcelain` line count = number of changed paths. No existing helper returns exactly
 // this shape (isCleanTree in tempBranch.ts only returns a boolean), so a tiny local wrapper here.
@@ -196,7 +204,10 @@ export function registerRun2(deps: {
       try {
         const branch = await readCurrent(cwd)
         const status = await gitStatusPorcelain(cwd)
-        out.push({ name, branch, dirtyCount: status.split('\n').filter((l) => l.trim()).length })
+        // R5: same `forge/run-` test createRunTempBranches (launch.ts) refuses a launch on — computed
+        // here so the launch-gate row can disable 确认 before the user ever clicks it.
+        const stranded = /^forge\/run-/.test(branch)
+        out.push({ name, branch, dirtyCount: status.split('\n').filter((l) => l.trim()).length, ...(stranded ? { stranded: true as const } : {}) })
       } catch (err) {
         // Task 8 fix round 1:原来这里直接跳过、这个项目在运行基准里干脆不出现——但「运行基准」这个
         // 区块的职责就是列出每个项目的起始分支，一声不响地漏掉一个,用户只会在真正点「确认」启动失败

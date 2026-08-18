@@ -359,6 +359,15 @@ export async function discardTempBranch(
     throw new Error(
       `没有丢弃 ${branch}：这个仓库当前在分支 ${here || '（detached HEAD）'} 上，不在本次运行的临时分支上，`
       + `工作树里的改动看起来是你自己的，已原样留着没动。`
+      // Task 8 residual fix (R3)：这句只交代了「当前工作树」是安全的，只字未提运行前那些未提交改动
+      // 的下落——它们不在这棵工作树里，只存在于 branch 上的「运行前快照」提交里（见 createTempBranch）。
+      // 启动门现在已经明说了「未提交改动会提交成运行前快照」（I1），用户认得这个词、也会以为它已经被
+      // 处理好了；这里若不提，用户会照着后面那句 `git branch -D` 原样执行，把这份唯一副本连快照一起
+      // 删掉——git reflog 还能捞回来，但没人会知道要去捞。只在真有快照时才提（工作树当时干净时
+      // snapshotSha 是 null，没有这回事）。
+      + (snapshotSha
+        ? `另外，你运行前那些未提交的改动只保存在 ${branch} 的「运行前快照」提交 ${snapshotSha} 里——这条命令会把它们一起删掉。`
+        : '')
       + `确认要丢弃本次运行请手动执行：git branch -D ${branch}`
     )
   }

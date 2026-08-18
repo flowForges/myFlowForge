@@ -537,6 +537,16 @@ describe('启动门基准分支', () => {
     expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  // Task 8 residual fix (R5)：branch 读得清清楚楚(非 error、非 detached HEAD)但值本身是一条上一次运行
+  // 遗留的 forge/run-* 临时分支——launch.ts 的 createRunTempBranches 会在点了确认之后才拒绝，这里要在
+  // 点确认之前就标红、挡住启动，跟 detached HEAD/读不出分支同样的处理。
+  it('停在上一次运行的临时分支上(stranded)→ 红字提示且不可启动', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: 'forge/run-r9', dirtyCount: 0, stranded: true }]
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/上一次工作流留下的临时分支/)).toBeTruthy()
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
+  })
+
   // 零项目工作区，或本次选中的项目都不在 baseInfo 返回的列表里 —— 不该露出一个光秃秃的「运行基准」
   // 标题、下面一行都没有。
   it('baseInfo 返回空数组时不渲染光秃秃的「运行基准」标题', async () => {
