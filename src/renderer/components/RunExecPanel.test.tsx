@@ -371,19 +371,28 @@ describe('RunExecPanel', () => {
       expect(screen.getByText(/清除这条运行记录/)).toBeInTheDocument()
     })
 
-    // #7 fix round 2 (N2): the warning must not fire once discardResumable would genuinely be a
-    // no-op — persist.ts's discardResumableRun refuses to delete anything once the saved run is
-    // already `finalized` (its own guard: `isTerminalStatus && !isUnfinalizedFailure` → refuse).
-    // This is what a RE-RENDER after a PRIOR resolveGate handoff already succeeded looks like: no
-    // pending gate (already resolved+dropped), finalizeFailure still lingering (handoff never
-    // clears it), but `finalized` now true.
-    it('suppresses the erase-record warning once the run is already finalized (discardResumable would be a no-op)', () => {
+    // #7 fix round 2 (N2) / round 3: the warning must not fire once discardResumable would
+    // genuinely be a no-op — persist.ts's discardResumableRun refuses to delete anything once the
+    // saved run is already `finalized` (its own guard: `isTerminalStatus && !isUnfinalizedFailure`
+    // → refuse). This is what a RE-RENDER after a PRIOR resolveGate handoff already succeeded looks
+    // like: no pending gate (already resolved+dropped), finalizeFailure still lingering (handoff
+    // never clears it), but `finalized` now true.
+    // #7 fix round 3: round 2 only suppressed the WARNING here and left the button itself showing
+    // (asserted below, prior to this round) — but the same reasoning that kills the warning (a
+    // click here can act on neither route: no pending gate to resolveGate against, and
+    // discardResumable's own guard refuses because `finalized` is true) means the button is exactly
+    // as unqualified as the retry-pre-gate window's. `isDiscardableShape` requires `!state.finalized`
+    // for precisely this reason, so `pendingFinalizeGate || isDiscardableShape` now correctly omits
+    // it here too — nothing is lost: the record already IS handed-off (finalized/finalizeHandedOff
+    // set by the resolveGate call that already happened), so there is genuinely nothing left to do.
+    it('omits 知道了，我自己处理 once the run is already finalized (discardResumable would be a no-op, same as the retry pre-gate window)', () => {
       const alreadyHandedOff = { ...finalizeFailedState(), finalized: true }
       const run2 = makeRun2(alreadyHandedOff)
       render(<RunExecPanel run2={run2} />)
       expect(screen.queryByText(/清除这条运行记录/)).toBeNull()
-      // The button itself is still present (run2 is bound) — only the now-inaccurate warning is gone.
-      expect(screen.getByText('知道了，我自己处理')).toBeInTheDocument()
+      expect(screen.queryByText('知道了，我自己处理')).toBeNull()
+      // The card itself (and its detail) is still shown — only the unqualified button is gone.
+      expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
     })
 
     // #7 fix round 2 (N3): F6 only stops NEW `{status:'ok', finalizeFailure:[…]}` states from being
@@ -449,6 +458,42 @@ describe('RunExecPanel', () => {
         render(<RunExecPanel run2={run2} />)
         fireEvent.click(screen.getByText('知道了，我自己处理'))
         expect(screen.getByText(/已记录/)).toBeInTheDocument()
+      })
+    })
+
+    // #7 fix round 3: the window BETWEEN clicking 重新收尾 and the fresh finalize gate landing in
+    // state.inbox. resumeFromDisk() re-enters the controller synchronously, but runFinalizeGate()
+    // (which raises the new gate — see F1/F2's retryPendingState above) is only reached after
+    // runHooksAfter('__wf') + buildRunSummary() — a real provider call, seconds to a minute wide.
+    // During that window: run2 is bound, finalizeFailure still lingers (rehydrated from the prior
+    // attempt), but state.inbox has NO pending finalize gate yet (pendingFinalizeGate null) AND
+    // status is 'running' (RunController's default field initializer — see controller.ts's
+    // constructor doc — never overwritten until the loop reaches a stage boundary or
+    // runFinalizeGate itself), so isDiscardableShape (which requires status==='failed') is also
+    // false. Both routes handleHandoff can take are structurally unreachable here:
+    // resolveGate(pendingFinalizeGate.id, ...) has no id, and discardResumable()'s own guard
+    // (persist.ts's isUnfinalizedFailure) refuses because a live controller already owns the
+    // workspace. Before this fix the button rendered anyway (gated only on `run2 ?`) and a click
+    // there fired setHandoffAckedRunId unconditionally — permanently swapping the card to "已记录"
+    // with NOTHING actually recorded anywhere, taking the failure detail and 重新收尾 down with it.
+    describe('#7 fix round 3: retry pre-gate window (click can act on neither route yet)', () => {
+      function retryPreGateState() {
+        const base = finalizeFailedState()
+        return { ...base, status: 'running', inbox: [] }
+      }
+
+      it('omits 知道了，我自己处理 (neither resolveGate nor discardResumable can do anything here)', () => {
+        const run2 = makeRun2(retryPreGateState())
+        render(<RunExecPanel run2={run2} />)
+        expect(screen.queryByText('知道了，我自己处理')).toBeNull()
+      })
+
+      it('still shows the failure detail and the 重新收尾 retry control', () => {
+        const run2 = makeRun2(retryPreGateState())
+        render(<RunExecPanel run2={run2} />)
+        expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
+        expect(screen.getAllByText(/forge\/run2-1/).length).toBeGreaterThan(0)
+        expect(screen.getByText('重新收尾')).toBeInTheDocument()
       })
     })
   })

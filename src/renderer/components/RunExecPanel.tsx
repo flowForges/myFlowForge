@@ -302,7 +302,18 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
       // "已记录 · 交给你自己处理" — a straight false claim on a page whose entire premise is not
       // lying about the state of the user's run. FinalizeFailureCard hides the button whenever
       // `onHandoff` is undefined (see its own doc).
-      onHandoff={run2 ? handleHandoff : undefined}
+      // #7 fix round 3: `run2 ?` alone isn't enough — it's true throughout the retry pre-gate
+      // window too (between clicking 重新收尾 and the fresh finalize gate landing in state.inbox,
+      // seconds to a minute wide: resumeFromDisk() re-enters the controller synchronously, but
+      // runFinalizeGate() is only reached after runHooksAfter('__wf') + buildRunSummary(), a real
+      // provider call). In that window neither route handleHandoff can take actually does anything:
+      // resolveGate has no pending gate id yet (pendingFinalizeGate null), and discardResumable's
+      // own guard (persist.ts's isUnfinalizedFailure) refuses because a live controller already
+      // owns the workspace (isDiscardableShape false — status is still 'running', not 'failed').
+      // Only offer the button when a click can actually land: a live gate to resolve against, OR
+      // the terminal discardable-failure shape discardResumableRun's own guard requires. The card
+      // itself (and 重新收尾) stays visible either way — only this button disappears.
+      onHandoff={run2 && (pendingFinalizeGate || isDiscardableShape) ? handleHandoff : undefined}
       onRetry={!pendingFinalizeGate && run2 ? handleRetryFinalize : undefined}
       // Only true when a click here will ACTUALLY erase the record: run2 bound, no live gate to
       // resolve against instead (else it's a no-op in pure read-only replay — dishonest to warn
