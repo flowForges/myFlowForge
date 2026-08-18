@@ -15,7 +15,9 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git } from '../git/gitRunner'
-import { createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, tempBranchName } from './tempBranch'
+import { createTempBranch, mergeTempBranch, discardTempBranch, isCleanTree, parkTempBranch, tempBranchName, TempBranchMergeError } from './tempBranch'
+import { createRunTempBranches } from './launch'
+import type { Workspace } from '../config/schema'
 
 // Detected once at collection time (synchronous, so describe.skipIf can use it directly) — if a
 // dev/CI box genuinely has no git binary, skip with a clear reason rather than failing every test
@@ -172,5 +174,142 @@ describe.skipIf(!gitAvailable)('tempBranch (real git integration)', () => {
     expect(await isCleanTree(repo)).toBe(true)
     writeFileSync(join(repo, 'untracked.txt'), 'new\n')
     expect(await isCleanTree(repo)).toBe(false)
+  }, 20000)
+})
+
+// 【Task 1 审查转交 · 用户裁决 2026-08-17】Task 1 删掉了 6 个真 git 的 stash 集成测试；快照机制
+// （createTempBranch 的"运行前快照"提交取代 git stash，见 tempBranch.ts 顶部注释）此前只有假
+// GitRunner 覆盖过八轮评审。这组补的正是这个缺口：真实分支切换、真实脏树、真实合并冲突。
+async function initRepoWithTrackedFile(): Promise<string> {
+  // 这组用例都要"改一个已跟踪文件"这个前提（模拟用户已经在项目里工作过，不是刚 init 的空仓库）；
+  // 顶层 initRepo() 只提交了 existing.txt，这里额外提交一份 tracked.txt 给这组测试专用，不动
+  // 上面那组既有用例的初始状态。
+  const repo = await initRepo()
+  writeFileSync(join(repo, 'tracked.txt'), 'original\n')
+  await git(['add', '-A'], { cwd: repo })
+  await git(['commit', '-m', 'add tracked.txt'], { cwd: repo })
+  return repo
+}
+
+describe.skipIf(!gitAvailable)('真 git · 从当前分支切出并保住未提交改动', () => {
+  let repo: string
+  let wsRoot: string
+  beforeEach(async () => {
+    repo = await initRepoWithTrackedFile()
+    // createRunTempBranches 不读 ws.path（cwd 全部来自显式传入的 projects 数组），占位即可。
+    wsRoot = repo
+  })
+  afterEach(() => rmSync(repo, { recursive: true, force: true }))
+
+  it('脏树 → 启动 → park：未提交改动逐字节还原，工作树与运行前一致', async () => {
+    // 起点：branch1，一个已跟踪文件被改、一个新文件未跟踪
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    writeFileSync(join(repo, 'tracked.txt'), 'user edit\n')
+    writeFileSync(join(repo, 'brand-new.txt'), 'user new file\n')
+    const before = execSync('git status --porcelain', { cwd: repo }).toString()
+
+    const { snapshotSha } = await createTempBranch(repo, 'branch1', 'r1')
+    expect(snapshotSha).toBeTruthy()
+    // agent 在临时分支上写点东西
+    writeFileSync(join(repo, 'agent.txt'), 'agent output\n')
+
+    await parkTempBranch(repo, 'branch1', 'r1', snapshotSha)
+
+    expect(execSync('git rev-parse --abbrev-ref HEAD', { cwd: repo }).toString().trim()).toBe('branch1')
+    expect(readFileSync(join(repo, 'tracked.txt'), 'utf8')).toBe('user edit\n')
+    expect(readFileSync(join(repo, 'brand-new.txt'), 'utf8')).toBe('user new file\n')
+    expect(execSync('git status --porcelain', { cwd: repo }).toString()).toBe(before)
+    // agent 的改动留在临时分支上，没有跟到 branch1
+    expect(existsSync(join(repo, 'agent.txt'))).toBe(false)
+    expect(execSync('git branch --list forge/run-r1', { cwd: repo }).toString().trim()).not.toBe('')
+  }, 20000)
+
+  it('脏树 → 启动 → 合并：branch1 拿到快照提交与 run 提交，工作树干净', async () => {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    writeFileSync(join(repo, 'tracked.txt'), 'user edit\n')
+
+    const { snapshotSha } = await createTempBranch(repo, 'branch1', 'r1')
+    expect(snapshotSha).toBeTruthy()
+    writeFileSync(join(repo, 'agent.txt'), 'agent output\n')
+
+    await mergeTempBranch(repo, 'branch1', 'r1')
+
+    const log = execSync('git log --oneline -5', { cwd: repo }).toString()
+    expect(log).toMatch(/运行前快照/)
+    expect(log).toMatch(/run r1/)
+    expect(execSync('git status --porcelain', { cwd: repo }).toString().trim()).toBe('')
+    expect(readFileSync(join(repo, 'agent.txt'), 'utf8')).toBe('agent output\n')
+  }, 20000)
+
+  it('运行期间 branch1 上另有提交 → 合并冲突：branch1 干净、临时分支仍在、改动可手工合', async () => {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    const { snapshotSha } = await createTempBranch(repo, 'branch1', 'r1')
+    expect(snapshotSha).toBeNull()
+    writeFileSync(join(repo, 'tracked.txt'), 'agent version\n')
+
+    // 制造真实分叉：先把 agent 在临时分支上的改动提交掉（mergeTempBranch 内部本来也会做这步
+    // add -A && commit，这里提前手工做一遍，是为了在调用它之前就让两边各自往前走一步，而不是
+    // 靠 mergeTempBranch 自己那步 —— 否则 branch1 上没有新提交，不会有真正的冲突）。
+    execSync('git add -A', { cwd: repo, stdio: 'ignore' })
+    execSync('git commit -m agent', { cwd: repo, stdio: 'ignore' })
+
+    // 用户在自己的分支上，对同一个文件另提交一版。
+    execSync('git switch branch1', { cwd: repo, stdio: 'ignore' })
+    writeFileSync(join(repo, 'tracked.txt'), 'user diverged version\n')
+    execSync('git add -A', { cwd: repo, stdio: 'ignore' })
+    execSync('git commit -m "user diverges"', { cwd: repo, stdio: 'ignore' })
+
+    execSync(`git switch ${tempBranchName('r1')}`, { cwd: repo, stdio: 'ignore' })
+
+    let err: unknown
+    try { await mergeTempBranch(repo, 'branch1', 'r1') } catch (e) { err = e }
+
+    expect(err).toBeInstanceOf(TempBranchMergeError)
+    expect((err as TempBranchMergeError).conflictFiles).toContain('tracked.txt')
+    // branch1 必须干净：绝不留在「合并进行中」
+    expect(existsSync(join(repo, '.git', 'MERGE_HEAD'))).toBe(false)
+    expect(execSync('git status --porcelain', { cwd: repo }).toString().trim()).toBe('')
+    // 临时分支必须还在 —— 本次运行的改动全在上面
+    expect(execSync('git branch --list forge/run-r1', { cwd: repo }).toString().trim()).not.toBe('')
+  }, 20000)
+
+  // 【Task 1 审查转交 · 用户裁决 2026-08-17】Task 1 删掉了 6 个真 git 的 stash 集成测试，新的
+  // 快照机制一度只有假 GitRunner 覆盖。上面两条已补回"脏树带过去"和"快照活过合并"，这条补的是
+  // 审查点名的第三个缺口：临时分支现在**总是**带着一个真实的、未合并的提交，`branch -D` 是否
+  // 真的能强删掉它（普通 `branch -d` 会拒绝，假 GitRunner 永远发现不了这个区别）。
+  it('discard：强删一条含真实未合并提交的临时分支，且用户改动完好回到工作树', async () => {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    writeFileSync(join(repo, 'tracked.txt'), 'user edit\n')
+    writeFileSync(join(repo, 'brand-new.txt'), 'user new file\n')
+    const before = execSync('git status --porcelain', { cwd: repo }).toString()
+
+    const { snapshotSha } = await createTempBranch(repo, 'branch1', 'r1')
+    expect(snapshotSha).toBeTruthy()
+    // 快照此刻是 forge/run-r1 上一个真实的、branch1 完全够不着的提交
+    expect(execSync('git branch --contains ' + snapshotSha, { cwd: repo }).toString()).not.toMatch(/branch1/)
+    writeFileSync(join(repo, 'agent.txt'), 'agent output\n')
+
+    await discardTempBranch(repo, 'branch1', 'r1', snapshotSha)
+
+    expect(execSync('git branch --list forge/run-r1', { cwd: repo }).toString().trim()).toBe('')
+    expect(readFileSync(join(repo, 'tracked.txt'), 'utf8')).toBe('user edit\n')
+    expect(readFileSync(join(repo, 'brand-new.txt'), 'utf8')).toBe('user new file\n')
+    expect(execSync('git status --porcelain', { cwd: repo }).toString()).toBe(before)
+    expect(existsSync(join(repo, 'agent.txt'))).toBe(false)
+  }, 20000)
+
+  it('createRunTempBranches 在真仓库里用实测 HEAD，不用工作区存盘的分支', async () => {
+    execSync('git switch -c branch1', { cwd: repo, stdio: 'ignore' })
+    const ws = { path: wsRoot, projects: [{ name: 'proj', branch: 'main' }] } as unknown as Workspace
+    const got = await createRunTempBranches(ws, [{ name: 'proj', cwd: repo }], 'r1')
+    expect(got.targets).toEqual({ proj: 'branch1' })
+  }, 20000)
+
+  it('detached HEAD → 抛错且不建任何分支', async () => {
+    const head = execSync('git rev-parse HEAD', { cwd: repo }).toString().trim()
+    execSync(`git checkout ${head}`, { cwd: repo, stdio: 'ignore' })
+    const ws = { path: wsRoot, projects: [{ name: 'proj', branch: 'main' }] } as unknown as Workspace
+    await expect(createRunTempBranches(ws, [{ name: 'proj', cwd: repo }], 'r1')).rejects.toThrow(/detached HEAD/)
+    expect(execSync('git branch --list forge/run-r1', { cwd: repo }).toString().trim()).toBe('')
   }, 20000)
 })
