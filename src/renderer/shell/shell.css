@@ -467,12 +467,26 @@
 .confirm-ok:hover { filter: brightness(1.08); }
 
 /* ---- ResizeHandle ---- */
-.resize-handle { flex: 0 0 6px; align-self: stretch; cursor: col-resize; position: relative; z-index: 6; }
-/* Wider invisible grab zone so the thin strip is easy to hit even without pixel-precise aim. */
-.resize-handle::before { content: ""; position: absolute; inset: 0 -4px; }
+/* 用户实测(2026-08-18):三栏之间的竖缝看着「有双层,而且明显比顶栏底栏那条粗」。根因是那里有两条线各画
+   各的 —— 面板自己的 border(1px)+ 这个手柄在 6px 宽度里居中画的一条 2px 条(旧写法 inset: 0 2px),
+   中间还隔着 2px 透明,于是读作「细线 + 空隙 + 粗线」,总共占 7px。顶栏底栏只有单独一条 1px,自然不协调。
+   现在把两条并成一条:手柄【本身就是】那条分隔线 —— 宽度收到 1px、::after 铺满,用的还是同一个
+   var(--border),所以静止时四条边完全一致;紧邻它的那条面板 border 由下面两条规则撤掉(左右 DOM 顺序
+   不同,见各自注释)。悬停/拖拽时这 1px 变主题色,拖拽提示不丢。 */
+.resize-handle { flex: 0 0 1px; align-self: stretch; cursor: col-resize; position: relative; z-index: 6; }
+/* Wider invisible grab zone so the thin strip is easy to hit even without pixel-precise aim.
+   手柄从 6px 收到 1px,可抓取宽度靠这层往外扩补回来:1 + 5×2 = 11px(原先是 6 + 4×2 = 14px)。 */
+.resize-handle::before { content: ""; position: absolute; inset: 0 -5px; }
 /* A faint always-visible divider (so users can SEE the handle), brighter on hover / while resizing. */
-.resize-handle::after { content: ""; position: absolute; inset: 0 2px; border-radius: 2px; background: var(--border); transition: background .14s; }
+.resize-handle::after { content: ""; position: absolute; inset: 0; background: var(--border); transition: background .14s; }
 .resize-handle:hover::after, [data-resizing] .resize-handle::after { background: var(--accent); }
+/* 手柄在场时撤掉紧邻它的那条面板边框,否则又变回两条线。左右写法不同是因为 DOM 顺序相反:
+   侧栏在手柄【前面】(App.tsx:671 把 ResizeHandle 渲染在 Sidebar 之后),所以用 :has(+ …) 前向匹配;
+   检视区在手柄【后面】(WorkspaceView.tsx:1796 把 insp-resize 渲染在 aside.inspector 之前),普通兄弟
+   选择器就够。手柄本身只在 !collapsed && view!=='home' 时挂载,所以折叠态/首页仍保留面板边框 —— 这
+   正是 :has() 相比「照抄渲染条件写 .window:not(.collapsed):not(.home-mode)」的好处:条件变了不会走岔。 */
+.sidebar:has(+ .resize-handle) { border-right-color: transparent; }
+.resize-handle.insp-resize + .inspector { border-left-color: transparent; }
 /* Inspector handle is always mounted; hide it only when the inspector is collapsed. */
 .window.insp-collapsed .insp-resize { display: none; }
 [data-resizing] { cursor: col-resize; user-select: none; }
