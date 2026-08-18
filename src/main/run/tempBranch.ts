@@ -42,9 +42,11 @@ function readableGitError(action: string, err: unknown): Error {
  * True iff `cwd`'s working tree is clean — `git status --porcelain` empty output.
  *
  * createRunTempBranches no longer gates on this (a dirty tree is the normal, supported path — see
- * createTempBranch's pre-run snapshot below). Kept for callers that just want to know: the launch
- * gate's dirty-tree notice (run2Handlers.ts's run2:check-dirty) uses it read-only, to tell the user
- * up front which projects have uncommitted changes that are about to ride along into the run.
+ * createTempBranch's pre-run snapshot below). Kept for callers that just want to know, read-only —
+ * currently unused in production (Task 8 replaced the launch gate's dirty-tree notice with
+ * run2Handlers.ts's run2:base-info, which counts dirty lines itself via `git status --porcelain`
+ * rather than calling this); left exported since it's still exercised directly in tests and is a
+ * reasonable public primitive for future callers.
  */
 export async function isCleanTree(cwd: string, run: GitRunner = defaultGitRunner): Promise<boolean> {
   const status = await run(cwd, ['status', '--porcelain'])
@@ -52,19 +54,20 @@ export async function isCleanTree(cwd: string, run: GitRunner = defaultGitRunner
 }
 
 /**
- * 该工作树**当前实际所在**的分支名。detached HEAD（git 回字面量 "HEAD"）与任何失败一律归一成 ''，
- * 由调用方统一决定怎么报 —— 这个函数不猜、不回落到任何存盘的分支字段。
+ * 该工作树**当前实际所在**的分支名。不猜、不回落到任何存盘的分支字段。
  *
  * 这正是 2026-08-17 那个 bug 的修法：运行分支原先以工作区创建时存下的 ws.projects[].branch 为基准，
  * 而那个字段在用户切分支后从不回写，于是「在 branch1 上开发」的用户被从 main 切出去、又被合回 main。
+ *
+ * Task 8 审查修正：以前这里 try/catch 把「detached HEAD」和「读不出来」两种完全不同的情况一起归一成
+ * ''，调用方（createRunTempBranches）没法分辨，只能一律说「detached HEAD，请 git switch」——对一个
+ * 项目目录压根不存在、或不是 git 仓库的用户，这是指错了的指令。现在只有 detached HEAD（git 回字面量
+ * "HEAD"）才归一成 ''；其它一切失败（目录不存在、不是仓库、git 未装、权限不足……）原样往外抛，让调用
+ * 方拿到真实的 git 报错自己措辞，而不是被这个函数的归一动作提前抹平。
  */
 export async function currentBranch(cwd: string, run: GitRunner = defaultGitRunner): Promise<string> {
-  try {
-    const out = (await run(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
-    return out === 'HEAD' ? '' : out
-  } catch {
-    return ''
-  }
+  const out = (await run(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+  return out === 'HEAD' ? '' : out
 }
 
 /**

@@ -476,6 +476,26 @@ describe('createRunTempBranches 基准分支', () => {
     expect(created).toBe(0)
   })
 
+  // Task 8 审查修正：readCurrentBranch 读取失败(目录不存在/不是仓库/……)是与 detached HEAD 完全不同的
+  // 情况 —— 前者该指示用户检查目录，后者该指示 git switch。以前 currentBranch 把两者都归一成 ''，这里
+  // 就只能把两者说成同一句话；现在 readCurrentBranch 对"读取失败"改为抛出，这里必须原样接住并换一句
+  // 措辞，钉死不能把"目录不存在"说成"detached HEAD"。
+  it('读取分支失败（目录不存在等）→ 报"读取失败"，绝不说成 detached HEAD，且一个分支都不建', async () => {
+    let created = 0
+    const createBranch = async () => { created++; return { branch: 'x', snapshotSha: null } }
+    const readCurrent = async () => { throw new Error('ENOENT: no such file or directory') }
+    await expect(
+      createRunTempBranches(ws, projects, 'r1', createBranch, async () => {}, readCurrent)
+    ).rejects.toThrow(/项目「web」读取当前分支失败/)
+    let message = ''
+    try {
+      await createRunTempBranches(ws, projects, 'r1', createBranch, async () => {}, readCurrent)
+    } catch (err) { message = err instanceof Error ? err.message : String(err) }
+    expect(message).not.toMatch(/detached HEAD/)
+    expect(message).toMatch(/ENOENT/)
+    expect(created).toBe(0)
+  })
+
   it('某项目建分支失败 → 回滚已建的，回滚时带上它自己的快照 SHA', async () => {
     const ws2 = { path: '/ws', projects: [{ name: 'web', branch: 'main' }, { name: 'api', branch: 'main' }] } as unknown as Workspace
     const projs = [{ name: 'web', cwd: '/ws/web' }, { name: 'api', cwd: '/ws/api' }]

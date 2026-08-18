@@ -16,10 +16,12 @@ describe('workflowPhaseNote', () => {
     expect(workflowPhaseNote(wf('done'), { status: 'ok', runId: 'r1' })).toContain('已完成')
   })
 
-  it('收尾失败:不许说"已完成",要说失败并带上原因', () => {
+  // Task 8:这句改为不再复述原始 git 报错(那是 FinalizeFailureCard 的活),只负责不让人以为"已完成"、
+  // 并点名改动保留在哪个分支——具体冲突原因见下面「收尾失败文案」那组测试。
+  it('收尾失败:不许说"已完成"，要点名改动保留的分支', () => {
     const note = workflowPhaseNote(wf('done'), { status: 'failed', runId: 'r1', error: '合并临时分支失败 — web: CONFLICT in src/x.ts' })
     expect(note).not.toContain('已完成')
-    expect(note).toContain('CONFLICT in src/x.ts')
+    expect(note).toContain('forge/run-r1')
   })
 
   it('失败但没给原因时也不能装作完成', () => {
@@ -32,5 +34,25 @@ describe('workflowPhaseNote', () => {
 
   it('拿不到 run 状态(重启后没有活 run)时按已完成显示,不凭空报错', () => {
     expect(workflowPhaseNote(wf('done'), null)).toContain('已完成')
+  })
+})
+
+describe('收尾失败文案', () => {
+  it('说清改动没丢并点名分支，且不出现「未正常收尾」这种让人以为白跑了的说法', () => {
+    const note = workflowPhaseNote(
+      { phase: 'done', currentIndex: 2, stages: [{}, {}, {}] as never[], runId: 'a1b2' },
+      { status: 'failed', runId: 'a1b2', error: 'CONFLICT' },
+    )
+    expect(note).toMatch(/forge\/run-a1b2/)
+    expect(note).toMatch(/未丢失|没丢/)
+    expect(note).not.toMatch(/未正常收尾/)
+  })
+
+  it('成功时文案不变', () => {
+    const note = workflowPhaseNote(
+      { phase: 'done', currentIndex: 2, stages: [{}, {}, {}] as never[], runId: 'a1b2' },
+      { status: 'ok', runId: 'a1b2' },
+    )
+    expect(note).toBe('工作流已完成 · 所有阶段已走完')
   })
 })

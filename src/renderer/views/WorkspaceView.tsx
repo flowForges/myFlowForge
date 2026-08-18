@@ -1393,17 +1393,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           <div className="supplement-banner">
             {/* 所有阶段都跑完、只是收尾(合并临时分支)失败时,说的必须是「重新收尾」——原来它按「第一个未完成
                 阶段」找,找不到就回落到最后一个阶段,于是把合并冲突说成了「从代码CR继续」,指着一个早就跑完的
-                阶段,用户完全无法理解。这一支还把真实原因(哪个项目、哪个文件冲突)直接摆出来。
-                #7 fix round 1 (F4):这也是「我的工作没了」恐慌感最重的一刻 —— 补一句诚实的安心话(Task 8 会
-                再打磨这段文案)。#7 fix round 2 (N4): 原文案「不会丢」是无条件断言,但收尾失败可能来自
-                部分成功的 discard —— controller.ts 的 runFinalizeGate 逐项目收集失败、不因一个项目
-                失败就停手,所以已经成功丢弃的项目其临时分支是真的没了。这里没有(也不该现造)每个项目的
-                真实结果——ResumableSummary 只有一句 error——所以只能诚实地说「通常」而不是「一定」，
-                真实结果留给点「继续」重新收尾时的详情去说。 */}
+                阶段,用户完全无法理解。
+                #7 fix round 1 (F4):这也是「我的工作没了」恐慌感最重的一刻 —— 补一句诚实的安心话。
+                Task 8:原文案曾把 run2.resumable.error 的原始 git 报错(冲突文件路径……)直接嵌进这句安心
+                话里,读起来又长又吓人。原始报错交给点「继续」重新收尾时弹出的 FinalizeFailureCard(Tasks
+                1-7)去展开——这里只负责一件事,点名分支、说清没丢。这句话在这个分支能成立是因为它只在
+                *还没做出丢弃决定*的 resumable 态下渲染:真做过丢弃,discardResumableRun 早把这条记录从
+                磁盘清掉,根本不会走到这里——所以"完整保留"在这里是无条件成立的事实,不是需要再打折扣的
+                猜测(下面丢弃确认那句「通常」，说的是丢弃之后的事，两处不矛盾)。 */}
             {run2.resumable.finalizeOnly ? (
               <span>
-                上次的工作流阶段都跑完了，但收尾没成功：{run2.resumable.error ?? '合并临时分支失败'}。
-                改动通常还在 forge/run-{run2.resumable.runId} 分支上（除非当时选的是「丢弃」且已经生效）。要重新收尾吗？
+                上次的工作流阶段都跑完了，改动完整保留在 <code>forge/run-{run2.resumable.runId}</code>，只是没能自动合并。要重新收尾吗？
               </span>
             ) : (
               <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
@@ -1430,7 +1430,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 <button className="supplement-cancel" onClick={() => setConfirmDiscardResumable(null)}>取消</button>
               </>
             ) : (
-              <button className="supplement-cancel" onClick={() => setConfirmDiscardResumable(run2.resumable!.runId)}>丢弃</button>
+              // Task 8:「丢弃」这两个字对一个"代码全在、只是没能自动合并"的状态来说太吓人了——这个按钮
+              // 实际做的事只是清掉磁盘上那条 resumable 记录(discardResumableRun),从不碰 git、从不碰
+              // forge/run-<runId> 分支本身。改名 + 补一句 title 把这点说清楚,免得用户以为点了就丢代码。
+              <button
+                className="supplement-cancel"
+                title="只关掉这条提示，不会删除任何代码"
+                onClick={() => setConfirmDiscardResumable(run2.resumable!.runId)}
+              >不用管了</button>
             )}
           </div>
         )}
@@ -1560,7 +1567,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     providers={providers}
                     onConfirm={(c) => confirmLaunchGate(gate.id, c)}
                     onCancel={() => cancelLaunchGate(gate.id)}
-                    checkDirty={(window as any).forge?.run2?.checkDirty ? () => (window as any).forge.run2.checkDirty(wsPath) : undefined}
+                    baseInfo={(window as any).forge?.run2?.baseInfo ? () => (window as any).forge.run2.baseInfo(wsPath) : undefined}
                   />
                 )
               }

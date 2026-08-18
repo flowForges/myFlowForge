@@ -467,26 +467,43 @@ describe('LaunchGateCard hook 可选', () => {
     }))
   })
 
-  it("dirty selected project → first 确认 warns (no launch); 仍要启动 then launches", async () => {
-    const onConfirm = vi.fn()
-    const checkDirty = vi.fn(async () => ["go-blog"])   // go-blog is selected + dirty
-    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} checkDirty={checkDirty} />)
-    fireEvent.click(screen.getByText("确认"))
-    await screen.findByText("仍要启动")
-    expect(onConfirm).not.toHaveBeenCalled()
-    expect(screen.getByText(/有未提交的改动/)).toBeInTheDocument()
-    fireEvent.click(screen.getByText("仍要启动"))
-    expect(onConfirm).toHaveBeenCalledTimes(1)
+})
+
+// Task 8:旧的 checkDirty(→ 弹「仍要启动」二次确认警告)被 baseInfo(→ 集中的「运行基准」区块)取代 ——
+// 未提交改动不再是需要拦一下的例外,它现在是被完整带进临时分支快照的正常路径(见 tempBranch.ts 的
+// createTempBranch)。运行基准区块只列「已选中」的项目,项目名要能和 baseInfo 返回的条目对上,所以这里
+// 用 web/api(与 run2Handlers.test.ts 的 basline 项目命名一致)而不是复用 base 的 go-blog/zgh。
+const baseInfoConfig: LaunchGateConfig = {
+  ...base,
+  projects: [
+    { name: 'web', selected: true, provider: 'claude', model: 'claude-opus-4-8' },
+    { name: 'api', selected: true, provider: 'claude', model: 'claude-opus-4-8' },
+  ],
+}
+const baseProps = { config: baseInfoConfig, providers, onConfirm: vi.fn(), onCancel: () => {} }
+
+describe('启动门基准分支', () => {
+  it('每个项目显示实测基准分支与未提交改动数', async () => {
+    const baseInfo = async () => [
+      { name: 'web', branch: 'branch1', dirtyCount: 7 },
+      { name: 'api', branch: 'main', dirtyCount: 0 },
+    ]
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/基准 branch1 · 含 7 项未提交改动/)).toBeTruthy()
+    expect(await screen.findByText(/基准 main · 工作树干净/)).toBeTruthy()
   })
 
-  it("a dirty but UNSELECTED project does not warn — launches immediately", async () => {
-    const onConfirm = vi.fn()
-    const checkDirty = vi.fn(async () => ["zgh"])       // zgh is dirty
-    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} checkDirty={checkDirty} />)
-    clickProjectCheckbox("zgh")   // deselect zgh so it's dirty-but-excluded (go-blog stays selected)
-    fireEvent.click(screen.getByText("确认"))
-    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
-    expect(screen.queryByText("仍要启动")).toBeNull()
+  it('detached HEAD → 红字提示且不可启动', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: '', dirtyCount: 3 }]
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/未在任何分支上，无法启动/)).toBeTruthy()
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('文案不再承诺 git stash（已改为快照提交）', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: 'branch1', dirtyCount: 7 }]
+    const { container } = render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    await screen.findByText(/基准 branch1/)
+    expect(container.textContent).not.toMatch(/stash/i)
+  })
 })

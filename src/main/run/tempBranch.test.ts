@@ -406,8 +406,16 @@ describe('currentBranch', () => {
     expect(await currentBranch('/repo', run)).toBe('')
   })
 
-  it('git 失败 → 空串，不抛（由调用方统一报错）', async () => {
+  it('git 失败（非 detached）→ 原样抛出，不归一成空串（Task 8：detached 与"读取失败"要分开措辞，前提是失败会抛出而不是被这里吞掉）', async () => {
     const run: GitRunner = async () => { throw new Error('not a git repo') }
-    expect(await currentBranch('/repo', run)).toBe('')
+    await expect(currentBranch('/repo', run)).rejects.toThrow(/not a git repo/)
+  })
+
+  it('目录不存在等失败 → 抛出的错误里不含 detached HEAD 那句话（调用方据此分辨该说哪种话）', async () => {
+    const run: GitRunner = async () => { throw new Error('ENOENT: no such file or directory, chdir') }
+    let message = ''
+    try { await currentBranch('/missing', run) } catch (err) { message = err instanceof Error ? err.message : String(err) }
+    expect(message).not.toMatch(/detached HEAD/)
+    expect(message).toMatch(/ENOENT/)
   })
 })

@@ -265,9 +265,12 @@ export const CH = {
   // (workflowId + gate-selected per-project provider/model + supplement/seed) and resolves it
   // server-side via launch.ts's buildLaunchPlan/buildLaunchProjects, same pattern as run2StartWorkflow.
   run2LaunchStart: 'run2:launch-start',
-  // Dirty-tree pre-check: which of the workspace's projects have uncommitted changes? Used by the launch
-  // gate to warn (and confirm) before starting — a dirty tree is now stashed+restored, not blocked.
-  run2CheckDirty: 'run2:check-dirty',
+  // Task 8: the launch gate's 运行基准 section — each selected project's REAL currently-checked-out
+  // branch (currentBranch, the exact same measurement createRunTempBranches uses to pick the run's
+  // base — never ws.projects[].branch, the stale field the 2026-08-17 bug came from) + how many
+  // uncommitted lines it's carrying. Replaces run2CheckDirty (deleted — its only caller, this same
+  // gate's dirty-tree notice, is what this channel now serves; dirtyCount below is a strict superset).
+  run2BaseInfo: 'run2:base-info',
   // P5-UI Task 2: read a changed file's content on demand (renderer file viewer) — read-only.
   run2ReadFile: 'run2:read-file',
   // P-C2/T3 (disk-resume): checked on workspace open — is there an interrupted (non-terminal) run2
@@ -307,7 +310,7 @@ export const run2Queue = CH.run2Queue
 export const run2LaunchInfo = CH.run2LaunchInfo
 export const run2StartWorkflow = CH.run2StartWorkflow
 export const run2LaunchStart = CH.run2LaunchStart
-export const run2CheckDirty = CH.run2CheckDirty
+export const run2BaseInfo = CH.run2BaseInfo
 export const run2ReadFile = CH.run2ReadFile
 export const run2Resumable = CH.run2Resumable
 export const run2ResumeFromDisk = CH.run2ResumeFromDisk

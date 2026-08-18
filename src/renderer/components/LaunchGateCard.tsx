@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import type { ProviderInfo } from '@shared/types'
+import type { ProjectBaseInfo } from '../../main/ipc/run2Handlers'
 // Reuses the wfo-tab / wfo-proj / wfo-model / wfo-mpop / wfo-sec(-h) / wfo-goal classes — and their
 // exact wrapper markup — straight from the launch-config region of WorkflowOverlay.tsx — port only,
 // no import of that component (it is slated for deletion once run2's chat-inline cards replace it,
@@ -63,10 +64,13 @@ export interface LaunchGateCardProps {
   seedLoading?: boolean
   onConfirm: (c: LaunchGateConfig) => void
   onCancel: () => void
-  // Returns the names of the workspace's projects with uncommitted changes. When provided, the first
-  // 确认 with a dirty selected project shows a "会自动 stash 保存并在结束后恢复" warning + a 仍要启动
-  // button instead of launching immediately — so the user knows their changes are set aside safely.
-  checkDirty?: () => Promise<string[]>
+  // Task 8: each workspace project's REAL currently-checked-out branch + uncommitted-change count —
+  // the exact same measurement (currentBranch) createRunTempBranches uses to pick the run's base, so
+  // this card never shows a branch different from the one the run will actually start from (that would
+  // just be the original 2026-08-17 bug wearing a different hat). Rendered once in a dedicated 运行基准
+  // section (see below) — NOT as a per-row suffix, since a project's row here is a per-STAGE lane
+  // (rendered once per stage) and a suffix there would repeat the same line N times.
+  baseInfo?: () => Promise<ProjectBaseInfo[]>
 }
 
 function findProvider(providers: ProviderInfo[], providerId: string): ProviderInfo | undefined {
@@ -100,7 +104,7 @@ const TERM_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 // a hook reads as the SAME thing in the launch preview and in the running execution timeline.
 const PUZZLE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.6 2.6 0 0 1 0 5.2H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.6 2.6 0 0 1 5.2 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg>'
 
-export function LaunchGateCard({ config, frozen, error, pending, seedLoading, providers = [], onConfirm, onCancel, checkDirty }: LaunchGateCardProps) {
+export function LaunchGateCard({ config, frozen, error, pending, seedLoading, providers = [], onConfirm, onCancel, baseInfo }: LaunchGateCardProps) {
   // Pure presentational: mirror the incoming config into local state so checkboxes/model chip/
   // supplement are editable in this card without the caller re-rendering it on every keystroke.
   // onConfirm reports back the (possibly edited) mirror; config.seed/workflows pass through as-is.
@@ -153,10 +157,17 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // stages + all projects) to one provider in a single click, instead of editing ~7 chips by hand.
   const [bulkPopupOpen, setBulkPopupOpen] = useState(false)
   const [customModelDraft, setCustomModelDraft] = useState('')
-  // Dirty-tree warning: null = not checked yet; [] = checked, all clean; [names] = dirty selected
-  // projects, first 确认 shows the warning and the button becomes 仍要启动 (a second click launches).
-  // Declared with the other hooks (before any `frozen` early return) so hook order stays stable.
-  const [dirtyWarn, setDirtyWarn] = useState<string[] | null>(null)
+  // Task 8: 运行基准 — each project's real HEAD + dirty-line count, fetched once on mount (not
+  // polled: it's a snapshot of "what would happen if you confirmed right now", same spirit as the
+  // rest of this card's config). null = not loaded yet (section hidden). Declared with the other
+  // hooks (before any `frozen` early return) so hook order stays stable.
+  const [base, setBase] = useState<ProjectBaseInfo[] | null>(null)
+  useEffect(() => {
+    if (!baseInfo) return
+    let cancelled = false
+    baseInfo().then((b) => { if (!cancelled) setBase(b) }).catch(() => { if (!cancelled) setBase([]) })
+    return () => { cancelled = true }
+  }, [baseInfo])
   const cardRef = useRef<HTMLDivElement | null>(null)
 
   // Close whichever popup is open on any click outside it (or outside the chip that opened it) —
@@ -300,16 +311,11 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     const hookChoices = (config.hooks ?? []).map((h) => ({ id: h.id, enabled: hookState[h.id] !== false }))
     onConfirm({ seed, workflows: config.workflows, selectedWorkflowId, projects, supplement, hooks: config.hooks, stageChoices, hookChoices })
   }
-  const confirm = async () => {
-    if (checkDirty && dirtyWarn === null) {
-      let dirty: string[] = []
-      try { dirty = await checkDirty() } catch { dirty = [] }
-      const selectedDirty = dirty.filter((name) => projects.some((p) => p.selected && p.name === name))
-      setDirtyWarn(selectedDirty)
-      if (selectedDirty.length > 0) return   // warn first; the next 仍要启动 click launches
-    }
-    doConfirm()
-  }
+  // Task 8: uncommitted changes are no longer an exception that needs a warn-then-confirm dance —
+  // they ride along into the run's pre-run snapshot commit (tempBranch.ts's createTempBranch) same as
+  // committed code, so 确认 (doConfirm, wired directly below) launches straight away. What DOES still
+  // block: detached HEAD (see confirmBlocked below), because there's no branch to check the temp
+  // branch out from.
 
   const allHooks = config.hooks ?? []
   const hooksFor = (afterKey: string) => allHooks.filter((h) => h.after === afterKey)
@@ -333,10 +339,15 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // 门槛压到最低——需求或补充说明任一有内容即可,所以「完全没聊过、直接在这儿手打一句」照样能启动。
   // 这里只是给人看的提示;真正拦住「⚡自动」那条路的是主进程 workflow:enter 里的同名守卫。
   const noRequirement = !seed.trim() && !supplement.trim()
-  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement
+  // Task 8: a selected project sitting on detached HEAD has no branch for createRunTempBranches to
+  // check the temp branch out from (see launch.ts's createRunTempBranches) — block 启动 here too,
+  // rather than letting the user hit a server-side rejection after already committing to launch.
+  const detachedSelected = (base ?? []).some((b) => !b.branch && projects.some((p) => p.name === b.name && p.selected))
+  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement || detachedSelected
   const confirmBlockReason = noStageEnabled ? '至少保留一个阶段'
     : noProjectSelected ? '至少选择一个代码项目'
     : noRequirement ? '先说说这次要做什么（上面的需求框里写一句，或写在补充说明里）'
+    : detachedSelected ? '有项目处于 detached HEAD'
     : undefined
 
   // Shared provider + model chip pair (used by both per-project rows and per-stage rows). popupKey
@@ -529,6 +540,26 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
           </div>
         ) : null}
 
+        {/* Task 8: 运行基准 — spec 的 mockup 画的是每个项目行下面挂一句副文本，但这里的项目行是按阶段
+            重复渲染的 lane（同一个项目在「代码开发」「写单测」……每个按项目阶段各出现一次），逐 lane 挂
+            副文本会把同一句话重复 N 遍。改成一个独立区块，集中列出每个「已选中」项目一次，信息等价、
+            不重复。branch 为空串 = detached HEAD（currentBranch 的哨兵），标红且不可启动。 */}
+        {base ? (
+          <>
+            <div className="wfo-sec-h" style={{ marginTop: 12 }}>运行基准</div>
+            <div className="lg-base">
+              {base.filter((b) => projects.some((p) => p.name === b.name && p.selected)).map((b) => (
+                <div key={b.name} className={`lg-base-row${b.branch ? '' : ' bad'}`}>
+                  <b>{b.name}</b>
+                  {b.branch
+                    ? <span>基准 {b.branch} · {b.dirtyCount > 0 ? `含 ${b.dirtyCount} 项未提交改动` : '工作树干净'}</span>
+                    : <span>未在任何分支上，无法启动（请先 git switch 到一个分支）</span>}
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
+
         <div className="wfo-sec-h" style={{ marginTop: 14 }}>原始需求{seedLoading ? '' : '（AI 总结，可编辑）'}</div>
         {seedLoading ? (
           <div className="lg-seed-loading"><span className="lg-seed-spin" />正在根据对话总结需求…</div>
@@ -554,15 +585,9 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
 
         {error ? <div className="req-sub lg-error">{error}</div> : null}
 
-        {dirtyWarn && dirtyWarn.length > 0 ? (
-          <div className="lg-dirty-warn">
-            <b>{dirtyWarn.join('、')}</b> 有未提交的改动。启动后会自动 <b>git stash</b> 保存这些改动(不会删除),工作流在临时分支上执行,结束后合并回你的分支并<b>恢复</b>你的改动。确认继续?
-          </div>
-        ) : null}
-
         <div className="req-actions">
           <button className="req-no" onClick={onCancel}>取消</button>
-          <button className="req-ok" onClick={confirm} disabled={confirmBlocked} title={confirmBlockReason}>{dirtyWarn && dirtyWarn.length > 0 ? '仍要启动' : '确认'}</button>
+          <button className="req-ok" onClick={doConfirm} disabled={confirmBlocked} title={confirmBlockReason}>确认</button>
         </div>
       </div>
     </div>

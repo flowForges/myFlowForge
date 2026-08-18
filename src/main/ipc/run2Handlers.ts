@@ -3,7 +3,8 @@ import * as path from 'node:path'
 import * as CH from './channels'
 import { planFromStages } from '../run/planFromStages'
 import { buildLaunchInfo, resolveStartPlan, buildLaunchPlan, buildLaunchProjects, createRunTempBranches, launchTaskSeed, type StartWorkflowOpts, type LaunchStartConfig } from '../run/launch'
-import { isCleanTree } from '../run/tempBranch'
+import { currentBranch } from '../run/tempBranch'
+import { git } from '../git/gitRunner'
 import { listRuns, loadRun, deleteRun } from '../run/persist'
 import type { Run2Manager } from '../run/manager'
 import type { StageSpec, DevelopProject } from '../run/runTypes'
@@ -12,6 +13,18 @@ import type { Workspace, Workflow, CustomStage } from '../config/schema'
 
 // P5-UI Task 2: cap read size so the file viewer never loads a huge file into the renderer.
 const READ_FILE_MAX_BYTES = 512 * 1024
+
+// Task 8: the launch gate's 运行基准 section — one entry per project, reporting the SAME thing
+// createRunTempBranches will actually use as the run's base (branch) plus how dirty its tree is right
+// now. `branch: ''` means detached HEAD (currentBranch's sentinel — see tempBranch.ts); the renderer
+// disables launch for that project rather than guessing a fix.
+export interface ProjectBaseInfo { name: string; branch: string; dirtyCount: number }
+
+// `git status --porcelain` line count = number of changed paths. No existing helper returns exactly
+// this shape (isCleanTree in tempBranch.ts only returns a boolean), so a tiny local wrapper here.
+async function gitStatusPorcelain(cwd: string): Promise<string> {
+  return git(['status', '--porcelain'], { cwd })
+}
 
 // Additive P3-A IPC binder: wires the run2:* invoke channels (see channels.ts) to a Run2Manager. Coexists
 // with the existing engine* orchestrator handlers registered in handlers.ts's registerIpc — nothing here
@@ -159,20 +172,28 @@ export function registerRun2(deps: {
   }
   onInvoke(CH.run2LaunchStart, (_e, p: LaunchStartConfig) => launchRun(p))
 
-  // Dirty-tree pre-check for the launch gate: which of the workspace's projects have uncommitted
-  // changes? Read-only. A dirty tree no longer blocks a run — its changes ride along onto the temp
-  // branch and land in a pre-run snapshot commit (see tempBranch.ts's createTempBranch) — but the gate
-  // warns the user first so they know their in-progress edits are about to become part of the run.
-  onInvoke(CH.run2CheckDirty, async (_e, p: { workspacePath: string }): Promise<string[]> => {
+  // 启动门要显示的每个项目的「运行基准」：实测所在分支 + 未提交改动条数。基准分支不再取工作区
+  // 存盘的 branch 字段（那正是 2026-08-17 那个 bug 的来源），而是 currentBranch 实测 HEAD——
+  // 显示的必须和 createRunTempBranches 真正会用的是同一个来源，否则 UI 又变成第二个谎言源。
+  // branch 为空串 = detached HEAD，渲染层据此禁用该项目。
+  onInvoke(CH.run2BaseInfo, async (_e, p: { workspacePath: string }): Promise<ProjectBaseInfo[]> => {
     if (!readWorkspace) return []
     const ws = readWorkspace(p.workspacePath)
     if (!ws) return []
-    const dirty: string[] = []
+    const readCurrent = readCurrentBranch ?? currentBranch
+    const out: ProjectBaseInfo[] = []
     for (const proj of ws.projects) {
       const name = proj.name || proj.repoId
-      try { if (!(await isCleanTree(path.join(p.workspacePath, name)))) dirty.push(name) } catch { /* not a repo / missing → nothing to check */ }
+      const cwd = path.join(p.workspacePath, name)
+      try {
+        const branch = await readCurrent(cwd)
+        const status = await gitStatusPorcelain(cwd)
+        out.push({ name, branch, dirtyCount: status.split('\n').filter((l) => l.trim()).length })
+      } catch {
+        // 不是 git 仓库 / 目录不在 —— 跳过，不要让启动门整个空掉
+      }
     }
-    return dirty
+    return out
   })
 
   // P-C2/T3 (disk-resume): checked by the renderer when a workspace opens — is there an interrupted

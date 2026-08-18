@@ -357,11 +357,22 @@ export async function createRunTempBranches(
   rollback: (cwd: string, target: string, runId: string, snapshotSha: string | null) => Promise<void> = discardTempBranch,
   readCurrentBranch: (cwd: string) => Promise<string> = currentBranch,
 ): Promise<{ targets: Record<string, string>; snapshots: Record<string, string> }> {
-  // 前置全扫：任何一个项目处于 detached HEAD 都在这里挡掉，一个分支都别建（不留半状态）。
-  // 不回落到 ws.projects[].branch —— 那个字段正是本次要修掉的错误来源。
+  // 前置全扫：任何一个项目处于 detached HEAD、或压根读不出当前分支，都在这里挡掉，一个分支都别建
+  // （不留半状态）。不回落到 ws.projects[].branch —— 那个字段正是本次要修掉的错误来源。
+  //
+  // Task 8 审查修正：readCurrentBranch（tempBranch.ts 的 currentBranch）现在只对 detached HEAD 归一
+  // 返回 ''，其它失败（项目目录不存在、不是 git 仓库、git 未装……）一律原样抛出 —— 这里必须分开接住，
+  // 否则两种性质完全不同的失败会被一句「请 git switch」统一打发，而 git switch 对一个目录都不存在的
+  // 项目毫无意义。抛出的信息把 git 的原始报错带出来，不替用户瞎猜成因。
   const targets: Record<string, string> = {}
   for (const project of projects) {
-    const base = await readCurrentBranch(project.cwd)
+    let base: string
+    try {
+      base = await readCurrentBranch(project.cwd)
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new Error(`项目「${project.name}」读取当前分支失败，无法确定运行基准：${detail}`)
+    }
     if (!base) {
       throw new Error(`项目「${project.name}」当前处于 detached HEAD（未在任何分支上），请先 git switch 到一个分支再启动工作流`)
     }

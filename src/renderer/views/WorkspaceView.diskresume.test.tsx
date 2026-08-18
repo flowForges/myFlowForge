@@ -88,12 +88,17 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
     await waitFor(() => expect(screen.getByText('继续')).toBeInTheDocument())
     expect(screen.getByText(/上次有工作流未完成/)).toBeInTheDocument()
     expect(screen.getByText(/开发/)).toBeInTheDocument()
-    expect(screen.getByText('丢弃')).toBeInTheDocument()
+    // Task 8:「丢弃」在这个上下文里读起来像"扔掉代码",但这个按钮实际只清一条磁盘记录,从不碰
+    // forge/run-<runId> 分支——改名「不用管了」并附一句 title 说清楚(见 WorkspaceView.tsx)。
+    expect(screen.getByText('不用管了')).toBeInTheDocument()
   })
 
   // 真实事故(2026-08-12):所有阶段跑完、合并临时分支失败,用户看到的却是「上次有工作流未完成,从**代码CR**
-  // 继续?」——代码CR 早跑完了。该重来的是收尾,而且要说清为什么。
-  it('收尾失败时说的是"重新收尾"并带上原因,不说"从某阶段继续"', async () => {
+  // 继续?」——代码CR 早跑完了。该重来的是收尾。
+  // Task 8:原始 git 报错(哪个项目、哪个文件冲突)不再嵌进这句安心话——那是点「继续」重新收尾时弹出的
+  // FinalizeFailureCard(Tasks 1-7)的活;这句只负责点名分支、说清楚代码没丢,所以断言改成了检查
+  // "没有"原始报错文本、以及说清分支名与"未丢失"这两件事。
+  it('收尾失败时说的是"重新收尾"并点名分支,不说"从某阶段继续",也不在这句里复述原始 git 报错', async () => {
     resumableMock.mockImplementation(async () => ({
       runId: 'run-fin', resumeStageKey: '__finalize__', resumeStageName: '收尾（合并临时分支）',
       totalStages: 4, doneCount: 4, finalizeOnly: true,
@@ -103,31 +108,30 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
 
     await waitFor(() => expect(screen.getByText('继续')).toBeInTheDocument())
     expect(screen.getByText(/收尾/)).toBeInTheDocument()
-    expect(screen.getByText(/Merge conflict/)).toBeInTheDocument()
     expect(screen.queryByText(/从「/)).toBeNull()
+    // 原始 git 报错(冲突文件路径等)不再出现在这条安心话里 —— 那句话现在完全不引用 run2.resumable.error。
+    expect(screen.queryByText(/Merge conflict/)).toBeNull()
     // #7 fix round 1 (F4): the honest reassurance — the branch survives, only the record is at risk.
-    // #7 fix round 2 (N4): hedged — a finalize failure can also come from a PARTIALLY-successful
-    // discard (controller.ts's runFinalizeGate collects per-project failures and keeps going, so a
-    // project that succeeded really did lose its temp branch), so this can never be an unconditional
-    // "不会丢" claim.
+    // Task 8:这句话只在"还没做出丢弃决定"的 resumable 态下渲染(真丢弃过,这条记录早被清掉、根本不会
+    // 显示这条横幅),所以"完整保留"在这里是无条件成立的事实,不需要再打折扣的"通常"/"不会丢"式措辞。
     expect(screen.getByText(/forge\/run-run-fin/)).toBeInTheDocument()
-    expect(screen.getByText(/通常还在/)).toBeInTheDocument()
-    expect(screen.queryByText(/不会丢/)).toBeNull()
+    expect(screen.getByText(/完整保留/)).toBeInTheDocument()
   })
 
-  // #7 fix round 1 (F4): the finalizeOnly banner's 丢弃 confirm must say the SAME thing the copy above
-  // it already says — deleting the record, not the work — not the generic "无法恢复到当前进度" wording
-  // the ordinary mid-run-interrupted case uses (that one really would lose in-flight progress).
-  it('finalizeOnly 的丢弃确认文案说的是"记录"不是"进度"，且不无条件断言改动不受影响', async () => {
+  // #7 fix round 1 (F4): the finalizeOnly banner's 不用管了(原「丢弃」)confirm must say the SAME thing
+  // the copy above it already says — deleting the record, not the work — not the generic
+  // "无法恢复到当前进度" wording the ordinary mid-run-interrupted case uses (that one really would lose
+  // in-flight progress).
+  it('finalizeOnly 的确认文案说的是"记录"不是"进度"，且不无条件断言改动不受影响', async () => {
     resumableMock.mockImplementation(async () => ({
       runId: 'run-fin', resumeStageKey: '__finalize__', resumeStageName: '收尾（合并临时分支）',
       totalStages: 4, doneCount: 4, finalizeOnly: true,
       error: '合并临时分支失败 — web: CONFLICT (content): Merge conflict in src/x.ts',
     }) as never)
     const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('丢弃')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('不用管了')).toBeInTheDocument())
 
-    fireEvent.click(screen.getByText('丢弃'))
+    fireEvent.click(screen.getByText('不用管了'))
 
     expect(screen.getByText(/这条运行记录/)).toBeInTheDocument()
     // #7 fix round 2 (N4): both the banner and this confirm line say the SAME hedged thing — never
@@ -156,16 +160,16 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
     expect(discardResumableMock).not.toHaveBeenCalled()
   })
 
-  // #7 fix round 1 (F4): 丢弃 now genuinely deletes the saved run record (persist.ts's
-  // discardResumableRun fix, same task), so a bare click no longer fires it directly — it takes a
-  // second, explicit 确认丢弃 click first (same two-click pattern as RunEventCard.tsx's finalize-gate
-  // 彻底丢弃这次改动).
-  it('点击丢弃 → 确认丢弃 调用 run2.discardResumable 并隐藏提示；第一次点击只展开确认', async () => {
+  // #7 fix round 1 (F4): 丢弃(Task 8 改名「不用管了」) now genuinely deletes the saved run record
+  // (persist.ts's discardResumableRun fix, same task), so a bare click no longer fires it directly —
+  // it takes a second, explicit 确认丢弃 click first (same two-click pattern as RunEventCard.tsx's
+  // finalize-gate 彻底丢弃这次改动).
+  it('点击不用管了 → 确认丢弃 调用 run2.discardResumable 并隐藏提示；第一次点击只展开确认', async () => {
     resumableMock.mockImplementation(async () => resumableSummary)
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
-    await waitFor(() => expect(screen.getByText('丢弃')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('不用管了')).toBeInTheDocument())
 
-    fireEvent.click(screen.getByText('丢弃'))
+    fireEvent.click(screen.getByText('不用管了'))
     expect(discardResumableMock).not.toHaveBeenCalled()
     expect(screen.getByText('确认丢弃')).toBeInTheDocument()
 
