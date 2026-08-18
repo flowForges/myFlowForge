@@ -337,7 +337,7 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 
 /* —— 补充中 banner(方案卡/阶段门卡"修改方向…"回流主输入框,Task 15/16) —— */
 .supplement-banner {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
   width: 100%; max-width: clamp(720px, 90%, 1180px); margin: 0 auto 8px;
   padding: 8px 12px; border-radius: 9px;
   background: var(--accent-dim); border: 1px solid var(--accent);
@@ -345,8 +345,23 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 }
 .supplement-banner span { flex: 1; min-width: 0; }
 /* #7 fix round 1 (F4): the 丢弃 button's two-click confirm warning — same warn/danger tone as
-   RunEventCard.tsx's .wfo-danger row (real, irreversible action ahead). */
+   RunEventCard.tsx's .wfo-danger row (real, irreversible action ahead).
+   Task 8 fix round 3 (minor):这是这个 banner 里的**第二个** span,而上面那条 `span { flex: 1 }` 一视同
+   仁 —— 于是确认态下两段正文平分一行、各自被压到半宽,旁边还挤着两个按钮。`flex-basis: 100%` 让它
+   在(同时新加的)flex-wrap 下单独占一行:警告是这一刻最该读全的一句话,不该跟别的东西抢宽度。
+   非确认态没有这个 span,依旧是单行,布局一字不变。
+   ★选择器必须带上 `.supplement-banner` 前缀:`.supplement-banner span` 是 (0,1,1),光写
+   `.supplement-discard-warn` 只有 (0,1,0),会被它压回 flex-basis:0 —— 真 Chrome 量出来两段正文
+   仍然各占 301px 平分一行,改了等于没改(jsdom 量不出这个,只能用真浏览器量 getBoundingClientRect)。 */
 .supplement-discard-warn { color: var(--err); }
+.supplement-banner .supplement-discard-warn { flex-basis: 100%; }
+/* Task 8 fix round 3 (minor):真正会删东西的那个按钮不能和它旁边的「取消」长得一模一样。对齐
+   RunEventCard.tsx 里同类二次确认用的 `wfo-btn danger`(红字 + 红调底),而不是 .supplement-cancel
+   的灰字。用现成 token,不引入新颜色。 */
+.supplement-danger { flex: 0 0 auto; height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600;
+  color: var(--err); background: color-mix(in oklch, var(--err) 14%, transparent);
+  border: 1px solid color-mix(in oklch, var(--err) 32%, transparent); transition: .13s; }
+.supplement-danger:hover { background: color-mix(in oklch, var(--err) 22%, transparent); }
 /* User feedback (2026-07-21): Context bar like Claude Code's statusline — real reported tokens ÷ real
    model window (see WorkspaceView latestUsage). Label + bar + %, right-aligned above the composer. */
 .ctx-real {

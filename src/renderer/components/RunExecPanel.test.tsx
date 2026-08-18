@@ -329,6 +329,30 @@ describe('RunExecPanel', () => {
       expect(screen.queryByText(/^无法自动合并 — zgh/)).toBeNull()
     })
 
+    // 2026-08-17 全分支终审(minor):这张卡曾被塞进 `.wfo-runctl` —— 一条 `display:flex;
+    // align-items:center` 的状态条,`.done` 时整条染成 --ok 的绿色。于是「无法收尾」这张 .msg-req 大卡
+    // 长在了一枚绿色的成功药丸里,活跑分支里它还会变成 flex 项跟 `.rmsg{flex:1}` 抢宽度而自己没有 basis。
+    it('失败卡不许长在 .wfo-runctl(绿色成功状态条)里', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      const { container } = render(<RunExecPanel run2={run2} />)
+      const card = container.querySelector('.ff-card')
+      expect(card).toBeTruthy()
+      expect(card!.closest('.wfo-runctl')).toBeNull()
+      // 终态下有卡就不该再同时渲染那条状态条(它只会重复一遍同一件事,还带着绿色语义)。
+      expect(container.querySelector('.wfo-runctl')).toBeNull()
+    })
+
+    it('活跑(重新收尾进行中)时,失败卡是运行控制条的兄弟而不是它的 flex 子项', () => {
+      const state = finalizeFailedState()
+      const run2 = makeRun2({ ...state, status: 'awaiting' })
+      const { container } = render(<RunExecPanel run2={run2} />)
+      const card = container.querySelector('.ff-card')
+      expect(card).toBeTruthy()
+      expect(card!.closest('.wfo-runctl')).toBeNull()
+      // 运行控制条本身还在(暂停/终止仍然可用)——这条修的是嵌套关系,不是把控制条删掉。
+      expect(container.querySelector('.wfo-runctl')).toBeTruthy()
+    })
+
     it('「知道了，我自己处理」calls run2.discardResumable (the gate id is already gone by the time this card exists)', () => {
       const run2 = makeRun2(finalizeFailedState())
       render(<RunExecPanel run2={run2} />)

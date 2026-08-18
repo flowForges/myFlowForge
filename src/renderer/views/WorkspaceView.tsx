@@ -1429,7 +1429,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     ? '确定丢弃这条运行记录吗？这条记录不会再出现在运行历史里；改动本身通常不受影响（除非当时选的是「丢弃」且已经生效）。'
                     : '确定丢弃这次未完成的运行吗？丢弃后无法恢复到当前进度。'}
                 </span>
-                <button className="supplement-cancel" onClick={() => { setConfirmDiscardResumable(null); void run2.discardResumable() }}>确认丢弃</button>
+                {/* Task 8 fix round 3 (minor):这颗按钮真的会删掉这条运行记录,不能跟旁边的「取消」
+                    共用同一套灰字样式(RunEventCard.tsx 的同类二次确认用的是 `wfo-btn danger`)。 */}
+                <button className="supplement-danger" onClick={() => { setConfirmDiscardResumable(null); void run2.discardResumable() }}>确认丢弃</button>
                 <button className="supplement-cancel" onClick={() => setConfirmDiscardResumable(null)}>取消</button>
               </>
             ) : (

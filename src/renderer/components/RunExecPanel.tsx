@@ -378,31 +378,37 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
             </span>
           </div>
         ) : isReadOnly ? (
-          <div className="wfo-runctl done">
-            {runDone && showFinalizeFailureCard ? finalizeFailureBlock : (
+          /* Task 8 fix round 3 (minor):失败卡是一张 .msg-req 大卡，绝不能塞进 .wfo-runctl —— 那是一条
+             `display:flex; align-items:center` 的状态条，`.done` 时还整条染成 --ok 的绿色，于是"无法
+             收尾"这张卡长在了一枚绿色的成功药丸里；下面那条活跑分支里它还会变成 flex 项，跟 `.rmsg
+             {flex:1}` 和按钮组抢宽度而自己没有 basis。有卡就直接替掉整条状态条(终态)/挂在它前面(活跑)。 */
+          runDone && showFinalizeFailureCard ? finalizeFailureBlock : (
+            <div className="wfo-runctl done">
               <span className="rmsg">
                 <span className="rd" />
                 {runDone ? (runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪') : '只读回看 · 此运行未在此进程结束'}
               </span>
-            )}
-          </div>
+            </div>
+          )
         ) : runDone ? (
-          <div className="wfo-runctl done">
-            {showFinalizeFailureCard ? finalizeFailureBlock : (
+          showFinalizeFailureCard ? finalizeFailureBlock : (
+            <div className="wfo-runctl done">
               <span className="rmsg">
                 <span className="rd" />
                 {runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪'}
               </span>
-            )}
-          </div>
+            </div>
+          )
         ) : (
+          <>
+          {/* #7 fix round 1 (F2): additive, not a replacement — during a 重新收尾 retry the run is
+              genuinely still live/awaiting a decision (the pause/abort row below is correct as-is),
+              this just surfaces the still-relevant PREVIOUS failure detail + a handoff escape hatch
+              alongside it. `null` (via finalizeFailureBlock) in the overwhelming majority of live
+              runs, which never touch state.finalizeFailure at all. 卡片是 .wfo-runctl 的**兄弟**而
+              不是子元素,理由见上一条注释。 */}
+          {finalizeFailureBlock}
           <div className="wfo-runctl">
-            {/* #7 fix round 1 (F2): additive, not a replacement — during a 重新收尾 retry the run is
-                genuinely still live/awaiting a decision (the pause/abort row below is correct as-is),
-                this just surfaces the still-relevant PREVIOUS failure detail + a handoff escape hatch
-                alongside it. `null` (via finalizeFailureBlock) in the overwhelming majority of live
-                runs, which never touch state.finalizeFailure at all. */}
-            {finalizeFailureBlock}
             <span className="rmsg">
               <span className="rd" />
               {/* Fix 1 (honest pause): pause() only takes effect at the next STAGE BOUNDARY — an
@@ -433,6 +439,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
               </button>
             </span>
           </div>
+          </>
         )}
       </div>
 

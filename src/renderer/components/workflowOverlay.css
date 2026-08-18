@@ -334,7 +334,10 @@
   font-size: 11.5px; color: var(--muted); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .wfo-link-danger:hover { color: var(--err); }
 
-/* #7 合并失败卡（FinalizeFailureCard）：结构上是一张 .msg-req，只加它自己独有的几块。 */
+/* #7 合并失败卡（FinalizeFailureCard）：结构上是一张 .msg-req，只加它自己独有的几块。
+   Task 8 fix round 3 (minor)：它现在是 .wfo-head 的直接子元素（以前被塞在 .wfo-runctl 那条状态条
+   里，绿色成功药丸套着一张"收尾失败"的卡）——补上和 .wfo-runctl 同样的上间距，别贴着进度条。 */
+.wfo-head > .ff-card { margin-top: 12px; }
 .ff-card .req-body { display: flex; flex-direction: column; gap: 10px; }
 .ff-proj { display: flex; flex-direction: column; gap: 4px; padding: 9px 11px; border-radius: 9px;
   background: var(--surface-2); border: 1px solid var(--border); }
