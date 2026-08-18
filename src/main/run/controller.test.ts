@@ -1586,6 +1586,59 @@ describe('RunController', () => {
       expect(parkCalls).toEqual(['/ws/a', '/ws/b']) // still attempted for BOTH projects
     })
 
+    // 2026-08-17 全分支终审 C1「第二入口」:stage 循环里任何一处抛错(这里用零工单那条),原本直接落盘
+    // failed 就走了 —— 每个项目都还停在 forge/run-<id> 上,而 Run2Manager.resumable 又不认这种状态
+    // (isUnfinalizedFailure 要求阶段全 done),于是没有横幅、没有清理、没有痕迹;下一次启动实测 HEAD
+    // 拿到的就是这条被遗弃的临时分支。现在最外层 catch 先 park 一次再落盘。
+    it('C1:stage 循环里抛错(零工单)时也要 park,不能把项目留在临时分支上', async () => {
+      const store = new RunStore(ws, 'r1')
+      const parkCalls: Array<{ cwd: string; target: string }> = []
+      // scope 'per-project' + 一个项目都不参与 → buildWorkOrders 返回 [] → 守卫在循环里抛错。
+      // projectTargets 仍然有值:分支是在 launch 阶段建的,和「这个阶段有没有工单」无关。
+      const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const c = new RunController(plan2, {
+        providers: {}, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main' },
+        parkTempBranch: async (cwd, target) => { parkCalls.push({ cwd, target }) },
+      })
+      await expect(c.start()).rejects.toThrow(/no work orders/)
+      // finalizeTargets 交叉 deps.projects,这个 run 一个项目都没参与 → 没有分支要收,park 不该被调。
+      expect(parkCalls).toEqual([])
+      expect(c.state.status).toBe('failed')
+    })
+
+    it('C1:stage 循环里抛错时,参与运行的项目会被 park(工作树切回基准分支、临时分支保留)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const parkCalls: Array<{ cwd: string; target: string }> = []
+      // 用一个会抛错的 emitUpdate 订阅者制造「阶段跑到一半从循环里抛出来」——这正是最外层 catch 存在
+      // 的理由之一(见 RunControllerState.error 的注释),而它此前不做任何 git 清理。
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        parkTempBranch: async (cwd, target) => { parkCalls.push({ cwd, target }) },
+        mergeTempBranch: async () => { throw new Error('不该走到收尾') },
+      })
+      c.onUpdate(() => { throw new Error('subscriber boom') })
+      await expect(c.start()).rejects.toThrow(/subscriber boom/)
+      expect(parkCalls).toEqual([{ cwd: '/ws/a', target: 'main' }, { cwd: '/ws/b', target: 'main' }])
+    })
+
+    // 反面:收尾自己失败那条路径**不能**再 park —— 合并失败时 mergeTempBranch 已经把工作树切回
+    // target 了,再 park 一次就是 C2 那个 bug(把用户的改动提交到他自己的分支上)。
+    it('C1:收尾失败抛上来时不追加 park(那会把用户的改动提交到他自己的分支上)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const parkCalls: string[] = []
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd) => { if (cwd === '/ws/b') throw new Error('CONFLICT (content): app.ts') },
+        parkTempBranch: async (cwd) => { parkCalls.push(cwd) },
+      })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, (e as any).finalize ? { type: 'merge' } : { type: 'advance' }) })
+      await expect(c.start()).rejects.toThrow(/CONFLICT/)
+      expect(parkCalls).toEqual([])
+    })
+
     it('a merge failure for one project surfaces a readable per-project error — start() rejects rather than silently dropping it', async () => {
       const store = new RunStore(ws, 'r1')
       const c = new RunController(plan, {

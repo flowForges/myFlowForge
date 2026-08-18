@@ -1531,6 +1531,21 @@ export class RunController {
       // 于是磁盘上永远停在 'running'。下次打开工作区 isTerminalStatus 判它「没跑完」,而 summarizeResumable
       // 又找不到未完成的阶段、回落到最后一个,用户就看到了那句莫名其妙的「上次有工作流未完成,从代码CR继续?」。
       // 这里补一次:任何从 start() 抛出的错都要把真实终态(failed + 原因)落盘,再原样抛给调用方。
+      //
+      // Task 8 fix round 3 (C1 第二入口):落盘之前还得把 git 收干净。stage 循环里任何一处抛错(某阶段
+      // buildWorkOrders 返回 []、store 写盘失败、emitUpdate 的订阅者抛错……)原本直接就走了,每个参与
+      // 项目都还停在 forge/run-<id> 上、工作树还是脏的;而 Run2Manager.resumable 又不认这种状态
+      // (isUnfinalizedFailure 要求「阶段全 done」,这里显然不满足),于是没有横幅、没有清理、没有任何
+      // 痕迹 —— 下一次启动实测 HEAD,拿到的就是这条被遗弃的临时分支(见 launch.ts 那道 forge/run- 守卫
+      // 挡的正是它)。park 一下:在制品提交到临时分支上留着(分支不删,工作可恢复),工作树切回各自的基准
+      // 分支,和「中途终止」完全一样的语义。
+      //
+      // 唯独收尾自己失败那条路径要排除:它已经按项目做过 merge/discard/park 了,而合并失败时
+      // mergeTempBranch 早把工作树切回了 target —— 再 park 一次就是 C2 那个 bug(把用户的改动提交到他
+      // 自己的分支上)。`finalizeFailure` 有值 = 这个 run 的收尾**曾经**跑过且失败过(含 rehydrate replay,
+      // 见其字段注释)——replay 那种情况同样该排除:上一次收尾失败时工作树就已经不在临时分支上了。
+      // (park 本身现在也自带分支守卫,这里是第二道,不是唯一那道。)
+      if (!this.finalizeFailure) await this.abortCleanup()
       this.status = 'failed'
       if (!this.error) this.error = err instanceof Error ? err.message : String(err)
       this.paused = false
