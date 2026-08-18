@@ -33,6 +33,47 @@ describe('FinalizeFailureCard', () => {
     expect(container.textContent).not.toMatch(/丢弃/)
   })
 
+  // I2(2026-08-17 全分支终审):收尾门有三个出口(合并/先不合并/彻底丢弃),三种失败走的是同一条记录
+  // 路径,可这张卡此前把合并那套叙事写死了 —— 一个点了「先不合并」的用户,保留失败之后会被这张卡劝去
+  // `git merge --no-ff` 合并他刚刚拒绝的东西。标题和命令块现在按 decision 分岔。
+  describe('I2:按用户真正选的那个动作说话', () => {
+    const withDecision = (decision: 'merge' | 'discard' | 'park') =>
+      [{ ...failures[0], decision }]
+
+    it('保留分支失败:不说"无法自动合并",也不给出合并命令', () => {
+      const { container } = render(<FinalizeFailureCard failures={withDecision('park')} />)
+      expect(container.textContent).not.toMatch(/无法自动合并/)
+      expect(container.textContent).not.toMatch(/git merge/)
+      expect(container.textContent).toMatch(/无法保留分支/)
+      expect(container.textContent).toMatch(/git switch branch1/)
+    })
+
+    it('丢弃失败:标题说丢弃,命令给的是手工删分支', () => {
+      const { container } = render(<FinalizeFailureCard failures={withDecision('discard')} />)
+      expect(container.textContent).not.toMatch(/无法自动合并/)
+      expect(container.textContent).not.toMatch(/git merge/)
+      expect(container.textContent).toMatch(/无法丢弃/)
+      expect(container.textContent).toMatch(/git branch -D forge\/run-a1b2/)
+    })
+
+    it('合并失败:与改动前一字不差', () => {
+      const { container } = render(<FinalizeFailureCard failures={withDecision('merge')} />)
+      expect(container.textContent).toMatch(/无法自动合并/)
+      expect(container.textContent).toMatch(/git merge --no-ff forge\/run-a1b2/)
+    })
+
+    it('老的落盘状态没有 decision 字段 → 按合并兜底(那是它们当时唯一能显示的文案)', () => {
+      const { container } = render(<FinalizeFailureCard failures={failures} />)
+      expect(container.textContent).toMatch(/无法自动合并/)
+      expect(container.textContent).toMatch(/git merge --no-ff/)
+    })
+
+    it('非合并失败时不再宣称目标分支"已恢复到合并前的干净状态"(压根没尝试过合并)', () => {
+      const { container } = render(<FinalizeFailureCard failures={withDecision('park')} />)
+      expect(container.textContent).not.toMatch(/已恢复到合并前的干净状态/)
+    })
+  })
+
   it('「知道了，我自己处理」触发 onHandoff', () => {
     const onHandoff = vi.fn()
     render(<FinalizeFailureCard failures={failures} onHandoff={onHandoff} />)

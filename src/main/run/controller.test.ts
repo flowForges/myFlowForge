@@ -2464,9 +2464,27 @@ describe('合并失败 → 结构化 finalizeFailure + handoff 收尾', () => {
     })
     await expect(resolveFinalize(c, { type: 'merge' })).rejects.toThrow()
     expect(c.state.finalizeFailure).toEqual([
-      { project: 'web', target: 'branch1', tempBranch: 'forge/run-r1', conflictFiles: ['src/foo.ts'], detail: 'CONFLICT' },
+      // I2(2026-08-17 终审):记录里带上用户当时选的是哪个动作 —— 失败卡的标题和可粘贴命令按它分岔,
+      // 否则一个选了「先不合并」的用户会被劝去合并他刚刚拒绝的东西。
+      { project: 'web', target: 'branch1', tempBranch: 'forge/run-r1', conflictFiles: ['src/foo.ts'], detail: 'CONFLICT', decision: 'merge' },
     ])
     expect(c.state.finalized).toBeFalsy()
+  })
+
+  it('I2:丢弃/保留失败时记录的 decision 是用户真正选的那个动作,不是恒定的 merge', async () => {
+    const discardFailed = makeFinalizableController({
+      projectTargets: { web: 'branch1' },
+      discardTempBranch: async () => { throw new Error('没有丢弃 forge/run-r1') },
+    })
+    await expect(resolveFinalize(discardFailed, { type: 'discard' })).rejects.toThrow()
+    expect(discardFailed.state.finalizeFailure?.[0].decision).toBe('discard')
+
+    const parkFailed = makeFinalizableController({
+      projectTargets: { web: 'branch1' },
+      parkTempBranch: async () => { throw new Error('checkout failed') },
+    })
+    await expect(resolveFinalize(parkFailed, { type: 'park' })).rejects.toThrow()
+    expect(parkFailed.state.finalizeFailure?.[0].decision).toBe('park')
   })
 
   it('handoff → 置 finalized，isUnfinalizedFailure 不再认它（切会话回来不再反复弹）', async () => {

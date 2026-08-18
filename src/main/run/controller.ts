@@ -125,6 +125,11 @@ export interface FinalizeFailure {
   tempBranch: string
   conflictFiles: string[]
   detail: string
+  // Task 8 fix round 3 (I2):用户在收尾门上选的是哪一个动作。三个动作(合并/丢弃/保留)失败时走的都是
+  // 同一条记录路径,而失败卡此前写死了合并那套叙事——选了「先不合并」却保留失败的用户,被劝去合并他
+  // 刚刚拒绝的东西。可选:老的落盘状态(persist.ts 直接存这个结构)里没有这个字段,渲染层按 'merge'
+  // 兜底,与它们当时唯一能显示的文案一致。
+  decision?: 'merge' | 'discard' | 'park'
 }
 export interface RunControllerState {
   machine: MachineState
@@ -821,6 +826,7 @@ export class RunController {
         failures.push({
           project: t.name,
           target: t.target,
+          decision: d.type,
           tempBranch: err instanceof TempBranchMergeError ? err.tempBranch : tempBranchName(this.plan.runId),
           conflictFiles: err instanceof TempBranchMergeError ? err.conflictFiles : [],
           detail: err instanceof Error ? err.message : String(err),
