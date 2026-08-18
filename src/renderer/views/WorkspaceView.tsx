@@ -1890,8 +1890,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         // 隐藏临时分支与运行控制,其余卡片样式与真运行逐字节一致。
                         // 见 workflowNote.ts:phase=done 涵盖了 ok 和 failed 两种终态,所以「已完成」这句
                         // 不能只看 phase —— 合并临时分支失败时它得说实话。
+                        // Task 8 fix round 2 (C1):传 `run2.state.finalizeFailure` 而不是 `.error` ——
+                        // `error` 在 controller.ts 里有两个赋值点(收尾失败 + start() 最外层 catch 的
+                        // 兜底,后者对阶段循环里任何一处抛错都会置),不能用来判断"阶段是否真的都跑完、
+                        // 只是收尾没成";只有 `finalizeFailure` 才是(见 workflowNote.ts 的类型注释)。
                         const note = workflowPhaseNote(activeWorkflow, run2.state?.machine?.plan?.runId
-                          ? { status: run2.state.status, runId: run2.state.machine.plan.runId, error: run2.state.error }
+                          ? { status: run2.state.status, runId: run2.state.machine.plan.runId, finalizeFailure: run2.state.finalizeFailure }
                           : null)
                         // 把左侧会话区当前 AI 的实时输出镜像成当前对话阶段卡的「执行过程」(img20 诉求:执行
                         // 过程也输出、随左侧流式更新)。scanContext 负责真实的 skill/rule/mcp chips。

@@ -174,6 +174,14 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // times the effect body re-executes, and the guard skips it entirely once `frozen`/`pending` are known
   // (checked INSIDE the effect body, not by conditionally calling the hook — hooks can't be conditional).
   const [base, setBase] = useState<ProjectBaseInfo[] | null>(null)
+  // Task 8 fix round 2 (cheap fix): a REJECTED baseInfo() call — the IPC round trip itself throwing,
+  // not any individual project's `error` field (see run2Handlers.ts's ProjectBaseInfo.error) — used to
+  // get folded into `setBase([])`, which the zero-row guard below then rendered as "nothing to show",
+  // identical to a workspace with genuinely zero selected projects. That's silent: the measurement
+  // failed outright and the launch gate gave no indication and no launch block, only a section that
+  // just isn't there. Tracked separately so the render below can tell "measured: zero rows" apart from
+  // "couldn't measure at all".
+  const [baseFetchFailed, setBaseFetchFailed] = useState(false)
   const fetchedBaseRef = useRef(false)
   useEffect(() => {
     // Mirrors the two early `return`s below EXACTLY (`if (frozen)` / `if (pending && !error)`) — those
@@ -182,7 +190,7 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     if (!baseInfo || frozen || (pending && !error) || fetchedBaseRef.current) return
     fetchedBaseRef.current = true
     let cancelled = false
-    baseInfo().then((b) => { if (!cancelled) setBase(b) }).catch(() => { if (!cancelled) setBase([]) })
+    baseInfo().then((b) => { if (!cancelled) setBase(b) }).catch(() => { if (!cancelled) setBaseFetchFailed(true) })
     return () => { cancelled = true }
   }, [baseInfo, frozen, pending, error])
   const cardRef = useRef<HTMLDivElement | null>(null)
@@ -365,10 +373,16 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // the wrong reason text ("有项目处于 detached HEAD" for a directory that isn't even there).
   const detachedSelected = (base ?? []).some((b) => !b.branch && !b.error && projects.some((p) => p.name === b.name && p.selected))
   const unreadableSelected = (base ?? []).some((b) => b.error && projects.some((p) => p.name === b.name && p.selected))
-  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement || detachedSelected || unreadableSelected
+  // Task 8 fix round 2 (cheap fix): the IPC call ITSELF failing (baseFetchFailed) is stronger than any
+  // single project's `b.error` — it means we know NOTHING about ANY project's branch, not just one.
+  // Same treatment as detached HEAD / a single unreadable project: block launch rather than let the
+  // user hit an unverified state, but only once `baseInfo` was actually offered (never blocks a caller
+  // that doesn't wire this prop at all).
+  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement || detachedSelected || unreadableSelected || baseFetchFailed
   const confirmBlockReason = noStageEnabled ? '至少保留一个阶段'
     : noProjectSelected ? '至少选择一个代码项目'
     : noRequirement ? '先说说这次要做什么（上面的需求框里写一句，或写在补充说明里）'
+    : baseFetchFailed ? '读不出运行基准，请重试或联系开发者'
     : detachedSelected ? '有项目处于 detached HEAD'
     : unreadableSelected ? '有项目读不出当前分支'
     : undefined
@@ -572,8 +586,22 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
             都没有。改成先算出真正会渲染的行,标题跟着这份行数据一起有无判断,不再单独看 `base` 是否非 null。
             `b.error` 是另一种失败(目录不存在/不是仓库/git 缺失……)，跟 detached HEAD 分开显示——两者
             都渲染成 `.bad`(标红)但文案不同，别把"读不出来"说成"detached HEAD"(见 run2Handlers.ts 的
-            ProjectBaseInfo.error 注释)。 */}
-        {(() => {
+            ProjectBaseInfo.error 注释)。
+            Task 8 fix round 2 (cheap fix)：`baseFetchFailed` 是 IPC 调用本身失败(不是某个项目自己的
+            `error`)——之前这种情况落进 `setBase([])`，跟"零项目/全部取消勾选"混成同一种"没有行可显示"，
+            于是这里整块消失、用户毫无提示，直到点确认才在别处炸。现在单独判断、单独给一行红字提示,并且
+            (见上面 confirmBlocked)一并挡住启动。 */}
+        {baseFetchFailed ? (
+          <>
+            <div className="wfo-sec-h" style={{ marginTop: 12 }}>运行基准</div>
+            <div className="lg-base">
+              <div className="lg-base-row bad">
+                <b>—</b>
+                <span>读不出运行基准（IPC 调用失败），无法确认各项目的起始分支，请重试</span>
+              </div>
+            </div>
+          </>
+        ) : (() => {
           if (!base) return null
           const baseRows = base.filter((b) => projects.some((p) => p.name === b.name && p.selected))
           if (baseRows.length === 0) return null

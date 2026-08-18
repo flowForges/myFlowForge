@@ -155,17 +155,31 @@ export interface RunControllerState {
   // its stage agents' ids, same as the legacy orchestrator's run store).
   laneSessions: Record<string, { provider: string; sessionId: string }>
   paused: boolean
-  // Set only on a finalize-gate merge/discard/park failure (see runFinalizeGate) — the readable,
-  // per-project error message naming what actually failed (e.g. a merge conflict + file). Absent
-  // for every other terminal path (ok, or a plain abort), so the renderer can distinguish "the
-  // merge itself failed, here's why" from a generic failed status with no specific cause. Kept
-  // alongside the structured `finalizeFailure` below for consumers that only read a plain string
-  // (e.g. workflowNote) — see runFinalizeGate's doc for why both exist.
+  // Task 8 fix round 2 (C1 — this doc used to claim "set only on a finalize-gate merge/discard/park
+  // failure … absent for every other terminal path", which is FALSE and misled a consumer into
+  // building a predicate on that false premise): `error` has TWO assignment sites, not one.
+  //   1. runFinalizeGate's failure path (below `finalizeFailure`'s doc) — set only when the finalize
+  //      action (merge/discard/park) fails for ≥1 project, i.e. only reachable when every stage is
+  //      already done and the run was not aborted (see start()'s call site of runFinalizeGate).
+  //   2. start()'s outer `catch` (see the very end of this file, the `if (!this.error) this.error =
+  //      err …` line) — a catch-all for ANY throw out of the whole stage loop, at ANY point in the
+  //      run: a stage producing zero work orders, a store write failure, a throwing emitUpdate
+  //      subscriber, etc. This one fires with stages NOT all done and (for some throws, e.g. the
+  //      zero-work-orders case) with no temp branch ever created.
+  // So `error` truthy is NOT a reliable "the finalize ran and failed" signal on its own — a consumer
+  // that needs exactly that (e.g. workflowNote, deciding whether it's safe to say "阶段都跑完了、改动在
+  // forge/run-<runId> 分支上") must key off `finalizeFailure` below instead (assigned ONLY at
+  // runFinalizeGate's failure branch, cleared on a successful retry — see its own doc), not off this
+  // field's mere presence. Kept as a human-readable summary for consumers that just want a plain
+  // string to display (e.g. FinalizeFailureCard's detail line), not as a boolean discriminator.
   error?: string
   // #6: the structured per-project detail behind `error` above — one entry per project whose
   // merge/discard/park actually failed (a lane that succeeded is simply absent). See
   // FinalizeFailure's own doc for why this is structured rather than folded into `error`. Absent
-  // whenever finalize hasn't failed (including the common case: it never failed at all).
+  // whenever finalize hasn't failed (including the common case: it never failed at all) — UNLIKE
+  // `error` above, this field has exactly ONE assignment site (runFinalizeGate's failure branch), so
+  // it — not `error` — is the reliable "the finalize ran and failed" signal (see `error`'s doc above,
+  // Task 8 fix round 2).
   finalizeFailure?: FinalizeFailure[]
   // 收尾(合并/丢弃临时分支)有没有真的做完。true = 这个 run 已经收干净,没有遗留的临时分支要处理;
   // false/缺省 = 还没走到收尾,或收尾**失败**了(合并冲突等)。Run2Manager.resumable 据此把「所有阶段都跑完、

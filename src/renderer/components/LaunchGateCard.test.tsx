@@ -527,4 +527,14 @@ describe('启动门基准分支', () => {
     // 等 baseInfo() 那个 promise 真正 resolve、state 落地(不是只等它被调用),再确认标题没有出现。
     await waitFor(() => expect(screen.queryByText('运行基准')).toBeNull())
   })
+
+  // Task 8 fix round 2 (cheap fix)：IPC 调用本身失败(不是某个项目自己的 `error`)之前会落进
+  // `setBase([])`,跟"零项目/全部取消勾选"混成同一种"没有行"的沉默——用户毫无提示,直到点了确认才在
+  // 别处炸。现在要单独提示、并且挡住启动。
+  it('baseInfo() 本身 reject(IPC 调用失败)→ 显示专门的提示,不是悄悄消失,且不可启动', async () => {
+    const baseInfo = async () => { throw new Error('ipc invoke failed') }
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/读不出运行基准/)).toBeTruthy()
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
+  })
 })
