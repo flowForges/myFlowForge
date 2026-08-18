@@ -126,6 +126,8 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
   const [showJumpForm, setShowJumpForm] = useState(false)
   const [jumpTarget, setJumpTarget] = useState('')
   const [answer, setAnswer] = useState('')
+  // #7: 收尾门「彻底丢弃」的二次确认 — 真删分支前必须多点一次，见下方 wfo-act 分支的注释。
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
 
   // 回退 (jumpBack) may ONLY target stages that run BEFORE the current one — offering a later stage is a
   // skip-forward, not a rollback (the reported bug: at 技术方案设计 the dropdown listed 代码开发/写单测/
@@ -182,16 +184,39 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
       </div>
       <div className="req-body">
         {event.kind === 'gate' && event.finalize && (
-          // P4-3: run-completion "收尾确认" gate — 合并并完成 merges the run's temp branch onto every
-          // participating project's target branch (mergeTempBranch); 丢弃本次 deletes it instead
-          // (discardTempBranch). Both route through onGate → resolveGate, same as the ordinary gate
-          // buttons below — just a different GateDecision.type ('merge'/'discard').
+          // 收尾门。三条路：合并 / 先不合并（park，保留 forge/run-<id>，默认的「不要」）/ 彻底丢弃
+          // （discard，真删分支，必须二次确认）。之所以把「不要」的默认路径改成不删分支：用户看到
+          // 「丢弃」会以为跑了半天的结果没了，而 park 让点错也丢不了东西。
           <div className="wfo-act">
             {event.body ? <div className="req-plan"><Markdown text={event.body} /></div> : null}
+            {/* #7 fix round 1 (F5, user-ruled): targetBranch is only targets[0] — a multi-project run
+                can genuinely have DIFFERING per-project targets (controller.ts's runFinalizeGate now
+                emits the full list). One project keeps the exact "合并到 branch1" wording; more than
+                one names every project's own target instead of implying one branch covers all of them. */}
+            {event.targets && event.targets.length > 1 ? (
+              <ul className="wfo-targets">
+                {event.targets.map((t) => (
+                  <li key={t.project}>项目 {t.project} → <code>{t.target}</code></li>
+                ))}
+              </ul>
+            ) : null}
             <div className="arow">
-              <button className="wfo-btn pri" onClick={() => onGate(event.id, { type: 'merge' })}>合并并完成</button>
-              <button className="wfo-btn ghost" onClick={() => onGate(event.id, { type: 'discard' })}>丢弃本次</button>
+              <button className="wfo-btn pri" onClick={() => onGate(event.id, { type: 'merge' })}>
+                {event.targets && event.targets.length > 1 ? '合并到各自的目标分支' : (event.targetBranch ? `合并到 ${event.targetBranch}` : '合并并完成')}
+              </button>
+              <button className="wfo-btn ghost" onClick={() => onGate(event.id, { type: 'park' })}>
+                {event.tempBranch ? `先不合并（保留在 ${event.tempBranch}）` : '先不合并（保留分支）'}
+              </button>
             </div>
+            {confirmDiscard ? (
+              <div className="arow wfo-danger">
+                <span>确定要把这次工作流的改动全部删除吗？删除后无法恢复。</span>
+                <button className="wfo-btn danger" onClick={() => onGate(event.id, { type: 'discard' })}>确认丢弃</button>
+                <button className="wfo-btn ghost" onClick={() => setConfirmDiscard(false)}>取消</button>
+              </div>
+            ) : (
+              <button className="wfo-link-danger" onClick={() => setConfirmDiscard(true)}>彻底丢弃这次改动</button>
+            )}
           </div>
         )}
 

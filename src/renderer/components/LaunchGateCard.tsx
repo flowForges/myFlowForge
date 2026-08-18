@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import type { ProviderInfo } from '@shared/types'
+import type { ProjectBaseInfo } from '../../main/ipc/run2Handlers'
 // Reuses the wfo-tab / wfo-proj / wfo-model / wfo-mpop / wfo-sec(-h) / wfo-goal classes — and their
 // exact wrapper markup — straight from the launch-config region of WorkflowOverlay.tsx — port only,
 // no import of that component (it is slated for deletion once run2's chat-inline cards replace it,
@@ -63,10 +64,13 @@ export interface LaunchGateCardProps {
   seedLoading?: boolean
   onConfirm: (c: LaunchGateConfig) => void
   onCancel: () => void
-  // Returns the names of the workspace's projects with uncommitted changes. When provided, the first
-  // 确认 with a dirty selected project shows a "会自动 stash 保存并在结束后恢复" warning + a 仍要启动
-  // button instead of launching immediately — so the user knows their changes are set aside safely.
-  checkDirty?: () => Promise<string[]>
+  // Task 8: each workspace project's REAL currently-checked-out branch + uncommitted-change count —
+  // the exact same measurement (currentBranch) createRunTempBranches uses to pick the run's base, so
+  // this card never shows a branch different from the one the run will actually start from (that would
+  // just be the original 2026-08-17 bug wearing a different hat). Rendered once in a dedicated 运行基准
+  // section (see below) — NOT as a per-row suffix, since a project's row here is a per-STAGE lane
+  // (rendered once per stage) and a suffix there would repeat the same line N times.
+  baseInfo?: () => Promise<ProjectBaseInfo[]>
 }
 
 function findProvider(providers: ProviderInfo[], providerId: string): ProviderInfo | undefined {
@@ -100,7 +104,7 @@ const TERM_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 // a hook reads as the SAME thing in the launch preview and in the running execution timeline.
 const PUZZLE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.6 2.6 0 0 1 0 5.2H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.6 2.6 0 0 1 5.2 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg>'
 
-export function LaunchGateCard({ config, frozen, error, pending, seedLoading, providers = [], onConfirm, onCancel, checkDirty }: LaunchGateCardProps) {
+export function LaunchGateCard({ config, frozen, error, pending, seedLoading, providers = [], onConfirm, onCancel, baseInfo }: LaunchGateCardProps) {
   // Pure presentational: mirror the incoming config into local state so checkboxes/model chip/
   // supplement are editable in this card without the caller re-rendering it on every keystroke.
   // onConfirm reports back the (possibly edited) mirror; config.seed/workflows pass through as-is.
@@ -153,10 +157,42 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // stages + all projects) to one provider in a single click, instead of editing ~7 chips by hand.
   const [bulkPopupOpen, setBulkPopupOpen] = useState(false)
   const [customModelDraft, setCustomModelDraft] = useState('')
-  // Dirty-tree warning: null = not checked yet; [] = checked, all clean; [names] = dirty selected
-  // projects, first 确认 shows the warning and the button becomes 仍要启动 (a second click launches).
-  // Declared with the other hooks (before any `frozen` early return) so hook order stays stable.
-  const [dirtyWarn, setDirtyWarn] = useState<string[] | null>(null)
+  // Task 8: 运行基准 — each project's real HEAD + dirty-line count, meant to be fetched exactly once
+  // (a snapshot of "what would happen if you confirmed right now", same spirit as the rest of this
+  // card's config — never polled). null = not loaded yet (section hidden). Declared with the other
+  // hooks (before any `frozen` early return) so hook order stays stable.
+  //
+  // Task 8 fix round 1 (I3): the ORIGINAL version here depended on `baseInfo` alone and re-ran on
+  // every prop change — but WorkspaceView.tsx builds a fresh `() => window.forge.run2.baseInfo(wsPath)`
+  // arrow inline in JSX on every render (it's the chat host, re-rendering per streaming delta), so this
+  // effect fired on nearly every render: an IPC round trip spawning `git rev-parse` + `git status
+  // --porcelain` per project, discarded and refetched over and over. Worse, this section never even
+  // renders once `frozen` (or the auto-launch `pending` placeholder) is showing — see the early
+  // `return`s below — so every already-launched card left sitting in the chat transcript kept paying
+  // this cost for the rest of the session for a section it would never draw. A ref-backed latch fixes
+  // both: `fetchedBaseRef` makes the actual fetch run at most once per mount regardless of how many
+  // times the effect body re-executes, and the guard skips it entirely once `frozen`/`pending` are known
+  // (checked INSIDE the effect body, not by conditionally calling the hook — hooks can't be conditional).
+  const [base, setBase] = useState<ProjectBaseInfo[] | null>(null)
+  // Task 8 fix round 2 (cheap fix): a REJECTED baseInfo() call — the IPC round trip itself throwing,
+  // not any individual project's `error` field (see run2Handlers.ts's ProjectBaseInfo.error) — used to
+  // get folded into `setBase([])`, which the zero-row guard below then rendered as "nothing to show",
+  // identical to a workspace with genuinely zero selected projects. That's silent: the measurement
+  // failed outright and the launch gate gave no indication and no launch block, only a section that
+  // just isn't there. Tracked separately so the render below can tell "measured: zero rows" apart from
+  // "couldn't measure at all".
+  const [baseFetchFailed, setBaseFetchFailed] = useState(false)
+  const fetchedBaseRef = useRef(false)
+  useEffect(() => {
+    // Mirrors the two early `return`s below EXACTLY (`if (frozen)` / `if (pending && !error)`) — those
+    // are the only states in which the 运行基准 section never renders, so those are the only states in
+    // which fetching for it would be wasted work.
+    if (!baseInfo || frozen || (pending && !error) || fetchedBaseRef.current) return
+    fetchedBaseRef.current = true
+    let cancelled = false
+    baseInfo().then((b) => { if (!cancelled) setBase(b) }).catch(() => { if (!cancelled) setBaseFetchFailed(true) })
+    return () => { cancelled = true }
+  }, [baseInfo, frozen, pending, error])
   const cardRef = useRef<HTMLDivElement | null>(null)
 
   // Close whichever popup is open on any click outside it (or outside the chip that opened it) —
@@ -300,16 +336,11 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
     const hookChoices = (config.hooks ?? []).map((h) => ({ id: h.id, enabled: hookState[h.id] !== false }))
     onConfirm({ seed, workflows: config.workflows, selectedWorkflowId, projects, supplement, hooks: config.hooks, stageChoices, hookChoices })
   }
-  const confirm = async () => {
-    if (checkDirty && dirtyWarn === null) {
-      let dirty: string[] = []
-      try { dirty = await checkDirty() } catch { dirty = [] }
-      const selectedDirty = dirty.filter((name) => projects.some((p) => p.selected && p.name === name))
-      setDirtyWarn(selectedDirty)
-      if (selectedDirty.length > 0) return   // warn first; the next 仍要启动 click launches
-    }
-    doConfirm()
-  }
+  // Task 8: uncommitted changes are no longer an exception that needs a warn-then-confirm dance —
+  // they ride along into the run's pre-run snapshot commit (tempBranch.ts's createTempBranch) same as
+  // committed code, so 确认 (doConfirm, wired directly below) launches straight away. What DOES still
+  // block: detached HEAD (see confirmBlocked below), because there's no branch to check the temp
+  // branch out from.
 
   const allHooks = config.hooks ?? []
   const hooksFor = (afterKey: string) => allHooks.filter((h) => h.after === afterKey)
@@ -333,10 +364,34 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // 门槛压到最低——需求或补充说明任一有内容即可,所以「完全没聊过、直接在这儿手打一句」照样能启动。
   // 这里只是给人看的提示;真正拦住「⚡自动」那条路的是主进程 workflow:enter 里的同名守卫。
   const noRequirement = !seed.trim() && !supplement.trim()
-  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement
+  // Task 8: a selected project sitting on detached HEAD has no branch for createRunTempBranches to
+  // check the temp branch out from (see launch.ts's createRunTempBranches) — block 启动 here too,
+  // rather than letting the user hit a server-side rejection after already committing to launch.
+  // Task 8 fix round 1 (cheap fix): a project run2:base-info couldn't read at all (`b.error` — missing
+  // directory, not a repo, git absent…) is a DIFFERENT failure from detached HEAD, and must be checked
+  // separately — otherwise it silently falls into the `!b.branch` detached-HEAD check below and gets
+  // the wrong reason text ("有项目处于 detached HEAD" for a directory that isn't even there).
+  const detachedSelected = (base ?? []).some((b) => !b.branch && !b.error && projects.some((p) => p.name === b.name && p.selected))
+  const unreadableSelected = (base ?? []).some((b) => b.error && projects.some((p) => p.name === b.name && p.selected))
+  // Task 8 residual fix (R5): a selected project's measured base is a leftover `forge/run-*` temp
+  // branch from some earlier run — launch.ts's createRunTempBranches already refuses to start on one
+  // of these (same regex, see its own guard), but that refusal only fires AFTER 确认 is clicked. Block
+  // here too, same treatment as detachedSelected/unreadableSelected right above, so the row's own 确认
+  // state matches what a click would actually do instead of the user finding out only after clicking.
+  const strandedSelected = (base ?? []).some((b) => b.stranded && projects.some((p) => p.name === b.name && p.selected))
+  // Task 8 fix round 2 (cheap fix): the IPC call ITSELF failing (baseFetchFailed) is stronger than any
+  // single project's `b.error` — it means we know NOTHING about ANY project's branch, not just one.
+  // Same treatment as detached HEAD / a single unreadable project: block launch rather than let the
+  // user hit an unverified state, but only once `baseInfo` was actually offered (never blocks a caller
+  // that doesn't wire this prop at all).
+  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement || detachedSelected || unreadableSelected || strandedSelected || baseFetchFailed
   const confirmBlockReason = noStageEnabled ? '至少保留一个阶段'
     : noProjectSelected ? '至少选择一个代码项目'
     : noRequirement ? '先说说这次要做什么（上面的需求框里写一句，或写在补充说明里）'
+    : baseFetchFailed ? '读不出运行基准，请重试或联系开发者'
+    : detachedSelected ? '有项目处于 detached HEAD'
+    : unreadableSelected ? '有项目读不出当前分支'
+    : strandedSelected ? '有项目停在上一次运行的临时分支上'
     : undefined
 
   // Shared provider + model chip pair (used by both per-project rows and per-stage rows). popupKey
@@ -529,6 +584,64 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
           </div>
         ) : null}
 
+        {/* Task 8: 运行基准 — spec 的 mockup 画的是每个项目行下面挂一句副文本，但这里的项目行是按阶段
+            重复渲染的 lane（同一个项目在「代码开发」「写单测」……每个按项目阶段各出现一次），逐 lane 挂
+            副文本会把同一句话重复 N 遍。改成一个独立区块，集中列出每个「已选中」项目一次，信息等价、
+            不重复。branch 为空串 = detached HEAD（currentBranch 的哨兵），标红且不可启动。
+            Task 8 fix round 1 (cheap fix)：`base`（数组）在拿到 `[]` 时也是 truthy——零项目的工作区,
+            或用户把 baseInfo 覆盖到的项目全部取消勾选,原来会露出一个光秃秃的「运行基准」标题、下面一行
+            都没有。改成先算出真正会渲染的行,标题跟着这份行数据一起有无判断,不再单独看 `base` 是否非 null。
+            `b.error` 是另一种失败(目录不存在/不是仓库/git 缺失……)，跟 detached HEAD 分开显示——两者
+            都渲染成 `.bad`(标红)但文案不同，别把"读不出来"说成"detached HEAD"(见 run2Handlers.ts 的
+            ProjectBaseInfo.error 注释)。
+            Task 8 fix round 2 (cheap fix)：`baseFetchFailed` 是 IPC 调用本身失败(不是某个项目自己的
+            `error`)——之前这种情况落进 `setBase([])`，跟"零项目/全部取消勾选"混成同一种"没有行可显示"，
+            于是这里整块消失、用户毫无提示，直到点确认才在别处炸。现在单独判断、单独给一行红字提示,并且
+            (见上面 confirmBlocked)一并挡住启动。 */}
+        {baseFetchFailed ? (
+          <>
+            <div className="wfo-sec-h" style={{ marginTop: 12 }}>运行基准</div>
+            <div className="lg-base">
+              <div className="lg-base-row bad">
+                <b>—</b>
+                <span>读不出运行基准（IPC 调用失败），无法确认各项目的起始分支，请重试</span>
+              </div>
+            </div>
+          </>
+        ) : (() => {
+          if (!base) return null
+          const baseRows = base.filter((b) => projects.some((p) => p.name === b.name && p.selected))
+          if (baseRows.length === 0) return null
+          return (
+            <>
+              <div className="wfo-sec-h" style={{ marginTop: 12 }}>运行基准</div>
+              <div className="lg-base">
+                {baseRows.map((b) => (
+                  <div key={b.name} className={`lg-base-row${b.branch && !b.error && !b.stranded ? '' : ' bad'}`}>
+                    <b>{b.name}</b>
+                    {b.error
+                      ? <span>读不出当前分支（{b.error}）</span>
+                      // Task 8 residual fix (R5)：branch 本身读得清清楚楚(不是 error、不是 detached
+                      // HEAD)，但它是上一次运行遗留的 forge/run-* 临时分支——不能拿它当这次的基准
+                      // (launch.ts 的 createRunTempBranches 会在点了确认之后才拒绝，这里提前说清楚，
+                      // 免得用户点完才知道)。标红且不可启动，同 detached HEAD/读不出分支的处理一致。
+                      : b.stranded
+                      ? <span>基准 {b.branch}（上一次工作流留下的临时分支，不能当基准；请先 git switch 回自己的开发分支，若是上一次运行还没收尾，去恢复提示里选「继续」或「丢弃」）</span>
+                      : b.branch
+                      // Task 8 fix round 3 (I1):未提交改动那句必须说清它们的去向。合并基线(bb41798)那版
+                      // 写的是「会自动 git stash 保存…结束后恢复」,Task 8 把它换成了一个光秃秃的计数,
+                      // 而 Task 2 同时把语义改成了「提交成一次运行前快照」—— 走合并那条收尾路径时,这 N 项
+                      // 改动会跟着并进 b.branch 成为永久历史,那是唯一没有撤销键的一条路。整个渲染层此前
+                      // 没有一处字符串提到过「快照」或这些改动会怎样。
+                      ? <span>基准 {b.branch} · {b.dirtyCount > 0 ? `含 ${b.dirtyCount} 项未提交改动（会提交成「运行前快照」带进运行分支；选择合并收尾时一并并入 ${b.branch}）` : '工作树干净'}</span>
+                      : <span>未在任何分支上，无法启动（请先 git switch 到一个分支）</span>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )
+        })()}
+
         <div className="wfo-sec-h" style={{ marginTop: 14 }}>原始需求{seedLoading ? '' : '（AI 总结，可编辑）'}</div>
         {seedLoading ? (
           <div className="lg-seed-loading"><span className="lg-seed-spin" />正在根据对话总结需求…</div>
@@ -554,15 +667,9 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
 
         {error ? <div className="req-sub lg-error">{error}</div> : null}
 
-        {dirtyWarn && dirtyWarn.length > 0 ? (
-          <div className="lg-dirty-warn">
-            <b>{dirtyWarn.join('、')}</b> 有未提交的改动。启动后会自动 <b>git stash</b> 保存这些改动(不会删除),工作流在临时分支上执行,结束后合并回你的分支并<b>恢复</b>你的改动。确认继续?
-          </div>
-        ) : null}
-
         <div className="req-actions">
           <button className="req-no" onClick={onCancel}>取消</button>
-          <button className="req-ok" onClick={confirm} disabled={confirmBlocked} title={confirmBlockReason}>{dirtyWarn && dirtyWarn.length > 0 ? '仍要启动' : '确认'}</button>
+          <button className="req-ok" onClick={doConfirm} disabled={confirmBlocked} title={confirmBlockReason}>确认</button>
         </div>
       </div>
     </div>

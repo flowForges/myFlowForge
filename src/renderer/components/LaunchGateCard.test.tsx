@@ -467,26 +467,103 @@ describe('LaunchGateCard hook 可选', () => {
     }))
   })
 
-  it("dirty selected project → first 确认 warns (no launch); 仍要启动 then launches", async () => {
-    const onConfirm = vi.fn()
-    const checkDirty = vi.fn(async () => ["go-blog"])   // go-blog is selected + dirty
-    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} checkDirty={checkDirty} />)
-    fireEvent.click(screen.getByText("确认"))
-    await screen.findByText("仍要启动")
-    expect(onConfirm).not.toHaveBeenCalled()
-    expect(screen.getByText(/有未提交的改动/)).toBeInTheDocument()
-    fireEvent.click(screen.getByText("仍要启动"))
-    expect(onConfirm).toHaveBeenCalledTimes(1)
+})
+
+// Task 8:旧的 checkDirty(→ 弹「仍要启动」二次确认警告)被 baseInfo(→ 集中的「运行基准」区块)取代 ——
+// 未提交改动不再是需要拦一下的例外,它现在是被完整带进临时分支快照的正常路径(见 tempBranch.ts 的
+// createTempBranch)。运行基准区块只列「已选中」的项目,项目名要能和 baseInfo 返回的条目对上,所以这里
+// 用 web/api(与 run2Handlers.test.ts 的 basline 项目命名一致)而不是复用 base 的 go-blog/zgh。
+const baseInfoConfig: LaunchGateConfig = {
+  ...base,
+  projects: [
+    { name: 'web', selected: true, provider: 'claude', model: 'claude-opus-4-8' },
+    { name: 'api', selected: true, provider: 'claude', model: 'claude-opus-4-8' },
+  ],
+}
+const baseProps = { config: baseInfoConfig, providers, onConfirm: vi.fn(), onCancel: () => {} }
+
+describe('启动门基准分支', () => {
+  it('每个项目显示实测基准分支与未提交改动数', async () => {
+    const baseInfo = async () => [
+      { name: 'web', branch: 'branch1', dirtyCount: 7 },
+      { name: 'api', branch: 'main', dirtyCount: 0 },
+    ]
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/基准 branch1 · 含 7 项未提交改动/)).toBeTruthy()
+    expect(await screen.findByText(/基准 main · 工作树干净/)).toBeTruthy()
   })
 
-  it("a dirty but UNSELECTED project does not warn — launches immediately", async () => {
-    const onConfirm = vi.fn()
-    const checkDirty = vi.fn(async () => ["zgh"])       // zgh is dirty
-    render(<LaunchGateCard config={base} providers={providers} onConfirm={onConfirm} onCancel={() => {}} checkDirty={checkDirty} />)
-    clickProjectCheckbox("zgh")   // deselect zgh so it's dirty-but-excluded (go-blog stays selected)
-    fireEvent.click(screen.getByText("确认"))
-    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1))
-    expect(screen.queryByText("仍要启动")).toBeNull()
+  it('detached HEAD → 红字提示且不可启动', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: '', dirtyCount: 3 }]
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/未在任何分支上，无法启动/)).toBeTruthy()
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  it('文案不再承诺 git stash（已改为快照提交）', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: 'branch1', dirtyCount: 7 }]
+    const { container } = render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    await screen.findByText(/基准 branch1/)
+    expect(container.textContent).not.toMatch(/stash/i)
+  })
+
+  // I1(2026-08-17 全分支终审):合并基线那版明说「会自动 git stash 保存这些改动…结束后…恢复你的改动」。
+  // Task 8 把那句删了、只留一个计数,而 Task 2 同时把语义改成了「提交成运行前快照」—— 走合并那条收尾
+  // 路径时这些改动会永久并进基准分支,而那是唯一没有撤销键的一条路。整个渲染层此前没有一处字符串提到
+  // 过「快照」或这些改动会怎样。
+  it('有未提交改动时,说清它们会变成运行前快照、并在合并时并入基准分支', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: 'branch1', dirtyCount: 7 }]
+    const { container } = render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    await screen.findByText(/基准 branch1/)
+    expect(container.textContent).toMatch(/运行前快照/)
+    expect(container.textContent).toMatch(/合并.*并入 branch1/)
+  })
+
+  it('工作树干净的项目不加这句(没有未提交改动可谈)', async () => {
+    const baseInfo = async () => [{ name: 'api', branch: 'main', dirtyCount: 0 }]
+    const { container } = render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    await screen.findByText(/基准 main/)
+    expect(container.textContent).not.toMatch(/运行前快照/)
+  })
+
+  // Task 8 fix round 1 (cheap fix)：读不出当前分支(目录不存在/不是仓库……)是跟 detached HEAD 完全不同
+  // 的失败，run2Handlers.ts 用 `error` 字段区分。渲染层必须显示这个项目(而不是像旧版本那样悄悄跳过，
+  // 用户只有在真按下确认才发现)，且不能把它误说成 detached HEAD。
+  it('读不出当前分支(error)→ 显示专门的提示,不说成 detached HEAD,且不可启动', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: '', dirtyCount: 0, error: 'ENOENT: no such file or directory' }]
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/读不出当前分支/)).toBeTruthy()
+    expect(screen.queryByText(/未在任何分支上，无法启动/)).toBeNull()
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // Task 8 residual fix (R5)：branch 读得清清楚楚(非 error、非 detached HEAD)但值本身是一条上一次运行
+  // 遗留的 forge/run-* 临时分支——launch.ts 的 createRunTempBranches 会在点了确认之后才拒绝，这里要在
+  // 点确认之前就标红、挡住启动，跟 detached HEAD/读不出分支同样的处理。
+  it('停在上一次运行的临时分支上(stranded)→ 红字提示且不可启动', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: 'forge/run-r9', dirtyCount: 0, stranded: true }]
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/上一次工作流留下的临时分支/)).toBeTruthy()
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // 零项目工作区，或本次选中的项目都不在 baseInfo 返回的列表里 —— 不该露出一个光秃秃的「运行基准」
+  // 标题、下面一行都没有。
+  it('baseInfo 返回空数组时不渲染光秃秃的「运行基准」标题', async () => {
+    const baseInfo = vi.fn(async () => [])
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    await waitFor(() => expect(baseInfo).toHaveBeenCalled())
+    // 等 baseInfo() 那个 promise 真正 resolve、state 落地(不是只等它被调用),再确认标题没有出现。
+    await waitFor(() => expect(screen.queryByText('运行基准')).toBeNull())
+  })
+
+  // Task 8 fix round 2 (cheap fix)：IPC 调用本身失败(不是某个项目自己的 `error`)之前会落进
+  // `setBase([])`,跟"零项目/全部取消勾选"混成同一种"没有行"的沉默——用户毫无提示,直到点了确认才在
+  // 别处炸。现在要单独提示、并且挡住启动。
+  it('baseInfo() 本身 reject(IPC 调用失败)→ 显示专门的提示,不是悄悄消失,且不可启动', async () => {
+    const baseInfo = async () => { throw new Error('ipc invoke failed') }
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/读不出运行基准/)).toBeTruthy()
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
+  })
 })

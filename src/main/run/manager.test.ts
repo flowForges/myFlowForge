@@ -6,11 +6,12 @@ import { RunStore } from '../run/runStore'
 import { Run2Manager } from './manager'
 import { planFromStages } from './planFromStages'
 import { saveControllerState } from './persist'
-import type { StageSpec } from '../run/runTypes'
+import type { StageSpec, DevelopProject } from '../run/runTypes'
 import type { RunEvent } from './events'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
 import type { RunControllerState, RunLogLine } from './controller'
 import type { MachineState, RunPlan } from './machine'
+import type { GateDecision } from './decisions'
 
 let ws: string
 beforeEach(() => { ws = mkdtempSync(join(tmpdir(), 'mgr-')) })
@@ -340,7 +341,6 @@ describe('Run2Manager', () => {
         workspacePath: ws, runId: 'run-git-merge', plan, projects,
         projectTargets: { a: 'main', b: 'main' },
         mergeTempBranch: async (cwd, target, runId) => { mergeCalls.push({ cwd, target, runId }) },
-        popRunStash: async () => 'none',   // stub the post-finalize stash restore so it never touches real git
       })
       await new Promise((r) => setTimeout(r, 50))
       expect(mgr.lastStateFor(ws)?.status).toBe('ok')
@@ -429,6 +429,10 @@ describe('Run2Manager', () => {
           machine: { ...st.machine, stages: st.machine.stages.map((x) => ({ ...x, status: 'done' as const })), currentIndex: 2 },
           error: '合并临时分支失败 — a: CONFLICT (content): Merge conflict in src/x.ts',
           finalized: false,
+          // #7: the structured detail behind the human `error` string above — see FinalizeFailure's
+          // doc (controller.ts). Threaded through resumeFromDisk's rehydrate now (Task 7 hard
+          // requirement 2), same as error/finalized already were.
+          finalizeFailure: [{ project: 'a', target: 'main', tempBranch: 'forge/run-fin', conflictFiles: ['src/x.ts'], detail: 'CONFLICT (content): Merge conflict in src/x.ts' }],
         }
       }
 
@@ -457,6 +461,31 @@ describe('Run2Manager', () => {
         const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
         saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
         expect(() => mgr.resumeFromDisk(ws, { projects: [{ name: 'a', cwd: join(ws, 'a') }] })).not.toThrow()
+      })
+
+      // #7 hard requirement 2: resumeFromDisk's rehydrate literal must thread `error`/`finalizeFailure`
+      // through (controller.ts's RehydrateState) — otherwise the failure card has nothing to show the
+      // instant a resumed run's state is read back, even though this whole resume path exists
+      // specifically to let the user retry/handle THAT failure.
+      it('resumeFromDisk 把 finalizeFailure 也重新灌回新 controller 的 state,失败卡片重启后不丢失', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
+        const state = mgr.resumeFromDisk(ws, { projects: [{ name: 'a', cwd: join(ws, 'a') }] })
+        expect(state.finalizeFailure).toEqual(finishedButUnmerged().finalizeFailure)
+        expect(state.error).toContain('Merge conflict')
+      })
+
+      // #7 fix (discovered wiring FinalizeFailureCard's onHandoff): before this task, discardResumable
+      // was a silent no-op for exactly this state shape (terminal 'failed', but unfinalized) — see
+      // persist.ts's discardResumableRun doc. "知道了，我自己处理" routes through this same call
+      // (RunExecPanel.tsx), so it must actually clear the saved failure, not just return without effect.
+      it('discardResumable(#7 fix)也能真正丢弃"收尾失败但已终态"的存档,不再是静默 no-op', () => {
+        const mgr = new Run2Manager({ providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r), emit: { event: () => {}, update: () => {} } })
+        saveControllerState(new RunStore(ws, 'run-fin'), finishedButUnmerged())
+        expect(mgr.resumable(ws)).not.toBeNull()
+
+        expect(mgr.discardResumable(ws)).toBe(true)
+        expect(mgr.resumable(ws)).toBeNull()
       })
 
       it('阶段全 done 且已收尾的运行不再提供恢复(它是真的完事了)', () => {
@@ -713,5 +742,102 @@ describe('Run2Manager', () => {
       // launched it (spec §8: interaction cards scope to the owning session).
       expect(mgr2.lastStateFor(ws)?.sessionId).toBe('sess-e2e')
     })
+  })
+})
+
+// Task 5: the on-disk run2-state now carries its OWN projectTargets/snapshots (the branch/SHA
+// createRunTempBranches actually measured at launch — see controller.ts's RunControllerState doc).
+// resumeFromDisk must prefer THOSE over whatever the resume caller (run2Handlers.ts) re-derives from
+// ws.projects[].branch — otherwise a resumed run's merge target flips back to the stale config value,
+// letting the 2026-08-17 bug back in through the resume entrance. Mirrors the `projects` subset fix
+// (P-C2/T3 review Finding 1) above — same precedence, same reasoning, one field over.
+describe('resumeFromDisk 目标分支来源', () => {
+  // A single already-`done` root stage: sanitizeForResume finds nothing left to run, so start()'s
+  // main loop breaks immediately and goes straight to runFinalizeGate() — exactly what these tests
+  // want to observe (which projectTargets/snapshots the finalize gate acts on), without needing to
+  // drive any lane/provider through the resumed stage first.
+  function makeSavedState(overrides: Partial<RunControllerState> & { projects: DevelopProject[] }): RunControllerState {
+    const plan: RunPlan = { runId: 'r1', stages: [
+      { key: 's1', name: 'S1', provider: 'x', model: 'm', scope: 'root', gate: false },
+    ] }
+    const machine: MachineState = { plan, stages: [{ key: 's1', status: 'done', round: 0 }], currentIndex: 0 }
+    return {
+      machine, inbox: [], feedback: [], outcomes: {}, status: 'failed', pendingDirective: {},
+      liveLanes: {}, stageTimings: {}, laneTimings: {}, laneSessions: {}, paused: false,
+      finalized: false,
+      ...overrides,
+    }
+  }
+  function writeSavedState(wsPath: string, runId: string, state: RunControllerState) {
+    saveControllerState(new RunStore(wsPath, runId), state)
+  }
+  // Captures every finalize-gate event this manager's controller(s) raise, keyed by nothing more
+  // than emission order — these tests only ever have one live run at a time, so "the next one
+  // raised" is unambiguous. Reset per-test via the closure below (a fresh array each makeManager()).
+  function makeManager(): { mgr: Run2Manager; finalizeGates: Array<{ wsPath: string; eventId: string }> } {
+    const finalizeGates: Array<{ wsPath: string; eventId: string }> = []
+    const mgr = new Run2Manager({
+      providers: {}, env: {}, makeStore: (w, r) => new RunStore(w, r),
+      emit: {
+        event: (wsPath, e) => { if (e.kind === 'gate' && (e as { finalize?: boolean }).finalize) finalizeGates.push({ wsPath, eventId: e.id }) },
+        update: () => {},
+      },
+    })
+    return { mgr, finalizeGates }
+  }
+  // Waits for the finalize gate raised by a resumed (all-stages-done) run, then resolves it with
+  // `decision` and lets the resulting merge/discard settle — the gate fires asynchronously, inside
+  // start()'s fire-and-forget promise chain kicked off by resumeFromDisk(), so there's nothing to
+  // directly await; polling `finalizeGates` (populated by makeManager()'s event hook) is the only way in.
+  async function settleFinalizeGate(mgr: Run2Manager, finalizeGates: Array<{ wsPath: string; eventId: string }>, wsPath: string, decision: GateDecision): Promise<void> {
+    for (let i = 0; i < 40 && finalizeGates.length === 0; i++) await new Promise((r) => setTimeout(r, 5))
+    const gate = finalizeGates.find((g) => g.wsPath === wsPath)
+    if (!gate) throw new Error('settleFinalizeGate: no finalize gate event was raised')
+    mgr.resolveGate(gate.wsPath, gate.eventId, decision)
+    await new Promise((r) => setTimeout(r, 20))
+  }
+
+  it('盘上存的 projectTargets 优先于调用方推导的', async () => {
+    // 盘上这个 run 当初跑在 branch1；调用方（run2Handlers）按 ws.projects[].branch 推导出 main。
+    // 必须用 branch1 —— 否则恢复一次就把改动合到错误的分支上。
+    const saved = makeSavedState({
+      status: 'failed',
+      projects: [{ name: 'web', cwd: join(ws, 'web') }],
+      projectTargets: { web: 'branch1' },
+      snapshots: { web: 'sha-web' },
+    })
+    writeSavedState(ws, 'r1', saved)
+
+    const merged: Array<[string, string]> = []
+    const { mgr, finalizeGates } = makeManager()
+    const state = mgr.resumeFromDisk(ws, {
+      projects: [{ name: 'web', cwd: join(ws, 'web') }],
+      projectTargets: { web: 'main' },          // 调用方的推导，必须被忽略
+      mergeTempBranch: async (cwd, target) => { merged.push([cwd, target]) },
+    })
+
+    await settleFinalizeGate(mgr, finalizeGates, ws, { type: 'merge' })
+    expect(merged).toEqual([[join(ws, 'web'), 'branch1']])
+    expect(state).toBeTruthy()
+  })
+
+  it('旧盘上状态没有 projectTargets → 回落到调用方推导（向后兼容）', async () => {
+    const saved = makeSavedState({ status: 'failed', projects: [{ name: 'web', cwd: join(ws, 'web') }] })
+    // makeSavedState never sets projectTargets unless an override supplies it, so this is already
+    // absent — the delete is defensive documentation of intent (mirrors the brief's literal test),
+    // not load-bearing. Cast through `unknown` since RunControllerState has no index signature.
+    delete (saved as unknown as Record<string, unknown>).projectTargets
+    writeSavedState(ws, 'r1', saved)
+
+    const merged: Array<[string, string]> = []
+    const { mgr, finalizeGates } = makeManager()
+    mgr.resumeFromDisk(ws, {
+      projects: [{ name: 'web', cwd: join(ws, 'web') }],
+      projectTargets: { web: 'main' },
+      mergeTempBranch: async (cwd, target) => { merged.push([cwd, target]) },
+    })
+
+    await settleFinalizeGate(mgr, finalizeGates, ws, { type: 'merge' })
+    expect(merged).toEqual([[join(ws, 'web'), 'main']])
   })
 })

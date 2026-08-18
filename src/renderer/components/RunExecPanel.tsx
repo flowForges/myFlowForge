@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import './workflowOverlay.css'
 import type { Run2Api } from '../state/useRun2'
 import type { RunControllerState } from '../../main/run/controller'
+import type { GateEvent } from '../../main/run/events'
 import type { AgentContextMeta, AgentRuntime } from '@shared/types'
 import { AgentNode } from './AgentNode'
 import { HookNode } from './HookNode'
+import { FinalizeFailureCard } from './FinalizeFailureCard'
 import { buildStageRuntimes, type AdaptedAgent, type LaneMemory } from './runExecAdapter'
 
 // P2-1b: right-side run-execution display. Rebuilt to reuse the OLD 代理-tab style (inspector-
@@ -127,6 +129,11 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
   // User feedback (2026-07-20): the temp-branch line is truncated with an ellipsis — let the user
   // click it to copy the FULL branch name, with a brief "已复制" confirmation.
   const [branchCopied, setBranchCopied] = useState(false)
+  // #7 fix round 1 (F3): must be declared here (with the panel's other useState calls), NOT down by
+  // its point of use below — that point sits after the `if (!state) return` early-return guard, and a
+  // hook can never be conditional on that (Rules of Hooks). See its point-of-use comment for why it
+  // exists.
+  const [handoffAckedRunId, setHandoffAckedRunId] = useState<string | null>(null)
   const liveRunId = state?.machine.plan.runId ?? null
   if (liveRunId !== lastRunIdRef.current) {
     lastRunIdRef.current = liveRunId
@@ -203,6 +210,120 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
     : hasRealStageFailure
       ? '工作流已结束 · 存在失败阶段，请检查后处理'
       : '工作流已结束'
+  // #7: a merge/discard/park failure at the finalize gate carries the STRUCTURED per-project detail
+  // (branch names + conflict files — see FinalizeFailure's doc, controller.ts) the failure card needs;
+  // `failedMessage` above stays as the plain-string fallback for every other failed-run shape (a real
+  // stage failure, or a plain abort) that has no such detail to show.
+  //
+  // #7 fix round 1 (F1/F2, review): NOT gated on `runStatus === 'failed'` alone — `state.finalizeFailure`
+  // legitimately outlives that status across a 重新收尾 retry. `resumeFromDisk` rebuilds a brand-new
+  // controller that rehydrates the PREVIOUS attempt's `finalizeFailure` (see controller.ts's
+  // RehydrateState) and immediately re-raises a FRESH finalize gate (status flips to 'awaiting') —
+  // this card must stay visible through that window too, both to keep showing the branch/conflict
+  // detail and because that fresh gate's live id is exactly what makes `resolveGate`-based handoff
+  // reachable (see `pendingFinalizeGate` below). A clean retry clears both fields (F6, this task) so
+  // this naturally goes away the moment the run actually finishes.
+  // #7 fix round 2 (N3): `runStatus !== 'ok'` guard added back — F6 only stops NEW `{status:'ok',
+  // finalizeFailure:[…]}` states from being written; it does not migrate whatever's ALREADY sitting
+  // on a real user's disk from before this task. Without this guard, an old saved 'ok' run replayed
+  // in 运行历史 (RunHistoryPanel → staticState) would show 无法自动合并 in place of the correct
+  // 工作流已完成 message. 'awaiting' (the retry-pending window F2 needs) and 'failed' both still pass.
+  const finalizeFailures = state.finalizeFailure
+  const showFinalizeFailureCard = !!finalizeFailures?.length && runStatus !== 'ok'
+  // #7 fix round 1 (F1/F2): the finalize gate currently sitting live in `state.inbox`, if any — this
+  // is what makes `resolveGate(id, {type:'handoff'})` reachable. It's null for the FIRST failed
+  // attempt (runFinalizeGate drops the gate from `state.inbox` — `this.drop(id)` — the instant its
+  // decision resolves, BEFORE it even attempts merge/discard/park, so the id is already gone by the
+  // time a failure and this card can exist at all) but LIVE again once 重新收尾 re-raises a fresh gate
+  // (controller.ts's runFinalizeGate, re-entered via Run2Manager.resumeFromDisk). Task 7 round 0's
+  // original call — always falling back to `discardResumable()` — missed this second case entirely,
+  // permanently erasing the run record (see F1) even when a resolvable gate existed.
+  const pendingFinalizeGate = state.inbox.find(
+    (e): e is GateEvent => e.kind === 'gate' && !!e.finalize,
+  )
+  // #7 fix round 1 (F3): local, run-scoped "the click landed" flag (declared up with the panel's
+  // other useState calls, before the `if (!state) return` guard — see there). Both routes below are
+  // otherwise invisible to this card: `discardResumable()` only touches ON-DISK state (`useRun2`'s
+  // `resumable` is already null in the same session the failure just happened in, so even the
+  // optimistic `setResumable(null)` it does is a no-op here — see useRun2.ts), and `resolveGate`'s
+  // real effect arrives asynchronously via the next `state` update. Keyed to `liveRunId` (not a plain
+  // boolean) so a LATER run in the same mounted panel doesn't inherit a stale "acked" flag.
+  const handoffAcked = handoffAckedRunId !== null && handoffAckedRunId === liveRunId
+  // #7 fix round 1 (F1/F2) onHandoff routing: prefer resolveGate against a LIVE pending finalize gate
+  // (keeps the saved run record — controller.ts's handoff branch sets `finalized/finalizeHandedOff`
+  // but never touches `finalizeFailure`/history) and fall back to discardResumable (F1: this ERASES
+  // the record — persist.ts's discardResumableRun deletes the whole saved context.json) only when no
+  // such gate exists to resolve against.
+  const handleHandoff = () => {
+    if (pendingFinalizeGate) {
+      run2?.resolveGate(pendingFinalizeGate.id, { type: 'handoff' })
+    } else {
+      void run2?.discardResumable()
+    }
+    setHandoffAckedRunId(liveRunId)
+  }
+  // #7 fix round 1 (F2): the fallback route DELETES the saved run record — say so before the click,
+  // not after. Only shown when that's actually what will happen (no live gate to resolve against).
+  const HANDOFF_ERASES_RECORD_WARNING = '没有可继续的收尾确认了，点击将清除这条运行记录（不会再出现在运行历史里）——上面列出的分支和改动不受影响，仍然完整保留，可以随时手工合并。'
+  // #7 fix round 2 (N2): mirrors persist.ts's isUnfinalizedFailure predicate exactly — the SAME
+  // shape discardResumableRun's own guard (`isTerminalStatus && !isUnfinalizedFailure` → refuse)
+  // requires before it will actually delete anything. Without this, the erase-record warning could
+  // fire (and threaten a deletion) for a run that's already `finalized` (e.g. re-rendered after a
+  // resolveGate handoff already succeeded) — discardResumable would be a harmless no-op there, so
+  // warning about a deletion is simply false in that state.
+  const isDiscardableShape = runStatus === 'failed' && !state.finalized && state.machine.stages.every((s) => s.status === 'done')
+  // 重新收尾: re-run the SAME finalize gate without re-running any stage (the controller's main loop
+  // sees every stage already `done` and drops straight back into runFinalizeGate — see
+  // Run2Manager.resumeFromDisk/isUnfinalizedFailure). No new IPC needed: this is the exact call the
+  // resumable banner's own 继续 button already makes (WorkspaceView.tsx). Withheld while a finalize
+  // gate is already pending (retrying AGAIN would just throw — Run2Manager.resumeFromDisk refuses a
+  // workspace that already has a live controller).
+  const handleRetryFinalize = () => { void run2?.resumeFromDisk() }
+  // #7 fix round 1 (F1-F3): the single render for this whole block, reused across the terminal-failed
+  // case (replaces the plain failedMessage text below, unchanged from round 0) AND the 重新收尾-pending
+  // 'awaiting' case (F2, additive — the pause/resume/abort row it's not replacing anything wrong).
+  // `null` whenever there's nothing to show, so every call site below can just splice it in.
+  const finalizeFailureBlock = !showFinalizeFailureCard ? null : handoffAcked ? (
+    <div className="msg-req k-gate ff-card ff-acked">
+      <div className="req-head"><span className="req-kind">已记录 · 交给你自己处理</span></div>
+      <div className="req-body">
+        <div className="ff-line">
+          改动仍完整保留在上面列出的分支上，不受影响 —— 按给出的命令手工合并即可。
+        </div>
+      </div>
+    </div>
+  ) : (
+    <FinalizeFailureCard
+      failures={finalizeFailures!}
+      // #7 fix round 2 (N1): omit entirely with no live run2 — RunHistoryPanel.tsx renders
+      // <RunExecPanel staticState readOnly> with NO run2 for a saved run whose finalizeFailure is
+      // still on disk. Without this, the button's click was already a no-op (both `resolveGate` and
+      // `discardResumable` no-op on `run2?.`), but round 1's F3 fix made THAT no-op swap the card to
+      // "已记录 · 交给你自己处理" — a straight false claim on a page whose entire premise is not
+      // lying about the state of the user's run. FinalizeFailureCard hides the button whenever
+      // `onHandoff` is undefined (see its own doc).
+      // #7 fix round 3: `run2 ?` alone isn't enough — it's true throughout the retry pre-gate
+      // window too (between clicking 重新收尾 and the fresh finalize gate landing in state.inbox,
+      // seconds to a minute wide: resumeFromDisk() re-enters the controller synchronously, but
+      // runFinalizeGate() is only reached after runHooksAfter('__wf') + buildRunSummary(), a real
+      // provider call). In that window neither route handleHandoff can take actually does anything:
+      // resolveGate has no pending gate id yet (pendingFinalizeGate null), and discardResumable's
+      // own guard (persist.ts's isUnfinalizedFailure) refuses because a live controller already
+      // owns the workspace (isDiscardableShape false — status is still 'running', not 'failed').
+      // Only offer the button when a click can actually land: a live gate to resolve against, OR
+      // the terminal discardable-failure shape discardResumableRun's own guard requires. The card
+      // itself (and 重新收尾) stays visible either way — only this button disappears.
+      onHandoff={run2 && (pendingFinalizeGate || isDiscardableShape) ? handleHandoff : undefined}
+      onRetry={!pendingFinalizeGate && run2 ? handleRetryFinalize : undefined}
+      // Only true when a click here will ACTUALLY erase the record: run2 bound, no live gate to
+      // resolve against instead (else it's a no-op in pure read-only replay — dishonest to warn
+      // about a deletion that can't happen), AND the run is still in the shape discardResumableRun's
+      // own guard requires before it deletes anything (#7 fix round 2, N2) — once already
+      // `finalized` (e.g. re-rendered after a PRIOR resolveGate handoff already succeeded),
+      // discardResumable is a harmless no-op and warning about erasure would be false.
+      handoffWarning={!pendingFinalizeGate && run2 && isDiscardableShape ? HANDOFF_ERASES_RECORD_WARNING : undefined}
+    />
+  )
   // P4-2: machine.plan.tempBranch is now populated by planFromStages (forge/run-<runId>) for every run
   // start path; '—' only ever shows for a plan literal that predates this field (e.g. an older test).
   const tempBranch = state.machine.plan.tempBranch ?? '—'
@@ -257,20 +378,36 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
             </span>
           </div>
         ) : isReadOnly ? (
-          <div className="wfo-runctl done">
-            <span className="rmsg">
-              <span className="rd" />
-              {runDone ? (runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪') : '只读回看 · 此运行未在此进程结束'}
-            </span>
-          </div>
+          /* Task 8 fix round 3 (minor):失败卡是一张 .msg-req 大卡，绝不能塞进 .wfo-runctl —— 那是一条
+             `display:flex; align-items:center` 的状态条，`.done` 时还整条染成 --ok 的绿色，于是"无法
+             收尾"这张卡长在了一枚绿色的成功药丸里；下面那条活跑分支里它还会变成 flex 项，跟 `.rmsg
+             {flex:1}` 和按钮组抢宽度而自己没有 basis。有卡就直接替掉整条状态条(终态)/挂在它前面(活跑)。 */
+          runDone && showFinalizeFailureCard ? finalizeFailureBlock : (
+            <div className="wfo-runctl done">
+              <span className="rmsg">
+                <span className="rd" />
+                {runDone ? (runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪') : '只读回看 · 此运行未在此进程结束'}
+              </span>
+            </div>
+          )
         ) : runDone ? (
-          <div className="wfo-runctl done">
-            <span className="rmsg">
-              <span className="rd" />
-              {runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪'}
-            </span>
-          </div>
+          showFinalizeFailureCard ? finalizeFailureBlock : (
+            <div className="wfo-runctl done">
+              <span className="rmsg">
+                <span className="rd" />
+                {runStatus === 'failed' ? failedMessage : '工作流已完成 · 所有阶段通过，变更已就绪'}
+              </span>
+            </div>
+          )
         ) : (
+          <>
+          {/* #7 fix round 1 (F2): additive, not a replacement — during a 重新收尾 retry the run is
+              genuinely still live/awaiting a decision (the pause/abort row below is correct as-is),
+              this just surfaces the still-relevant PREVIOUS failure detail + a handoff escape hatch
+              alongside it. `null` (via finalizeFailureBlock) in the overwhelming majority of live
+              runs, which never touch state.finalizeFailure at all. 卡片是 .wfo-runctl 的**兄弟**而
+              不是子元素,理由见上一条注释。 */}
+          {finalizeFailureBlock}
           <div className="wfo-runctl">
             <span className="rmsg">
               <span className="rd" />
@@ -302,6 +439,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
               </button>
             </span>
           </div>
+          </>
         )}
       </div>
 

@@ -16,7 +16,7 @@ import { ResolverRegistry } from './resolver'
 import { buildWorkOrders, type StageInput } from './fanout'
 import { runWorkOrder, type WorkOrder, type WorkOrderOutcome } from './workOrder'
 import { saveControllerState } from './persist'
-import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault, parkTempBranch as parkTempBranchDefault, popRunStash as popRunStashDefault } from './tempBranch'
+import { mergeTempBranch as mergeTempBranchDefault, discardTempBranch as discardTempBranchDefault, parkTempBranch as parkTempBranchDefault, tempBranchName, TempBranchMergeError } from './tempBranch'
 import { startBridge as startBridgeDefault, type BridgeRunCtx, type ForgeBridge } from '../mcp/forgeBridge'
 import { composeRunDigest, runRunSummary } from './runSummary'
 import { runGateAnswer } from './gateAnswer'
@@ -61,18 +61,21 @@ export interface RunControllerDeps {
   // temp branch to reconcile, so it completes exactly as it did before P4-3 — no extra gate, no
   // test churn for every pre-existing controller test.
   projectTargets?: Record<string, string>
+  // 项目名 → 该项目「运行前快照」提交的 SHA（createRunTempBranches 返回，见 launch.ts）。
+  // 收尾的 discard/park 靠它把用户运行前那些未提交的改动一字不差地还原回工作树。启动时工作树
+  // 本来就干净的项目不出现在这个 map 里（undefined → 还原是 no-op）。
+  snapshots?: Record<string, string>
   // Injectable so tests never touch real git; default to the real tempBranch.ts functions.
   mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
-  discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  // 4th 参数 snapshotSha:运行前快照的 SHA（deps.snapshots[project] — 见其字段注释），discard/park
+  // 靠它把用户运行前未提交的改动原样还原回工作树。可选是因为 tempBranch.ts 的真实实现自己也默认
+  // null（工作树启动时本来就干净）——测试注入的桩函数不必都接这第 4 个参数。
+  discardTempBranch?: (cwd: string, target: string, runId: string, snapshotSha?: string | null) => Promise<void>
   // Finding 4 (Important — abort semantics), USER DECISION option B: an ABORTED run (mid-run 终止, or
   // 终止 while parked at the finalize gate) PARKS instead of discarding — see abortCleanup's doc.
   // Injectable for the same reason as merge/discardTempBranch above; defaults to the real
-  // tempBranch.ts parkTempBranch.
-  parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
-  // Dirty-tree support: restore the user's pre-run stash (stashRun, keyed by runId) after a project's
-  // temp branch is merged/discarded/parked, so uncommitted changes started with come back onto their
-  // branch. No-op when the run started clean. Injectable for tests; defaults to tempBranch.popRunStash.
-  popRunStash?: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'>
+  // tempBranch.ts parkTempBranch. 同上 4th 参数 snapshotSha。
+  parkTempBranch?: (cwd: string, target: string, runId: string, snapshotSha?: string | null) => Promise<void>
   // §7.4 ③硬阻塞: path to the forge MCP server entry script (handlers.ts's `join(__dirname,
   // 'forgeMcp.js')`, threaded through from Run2ManagerDeps.mcpEntry). When present, start() opens a
   // per-run forge bridge (setupBridge) and provisions its socket into every work order's env
@@ -111,6 +114,23 @@ export interface LiveLane { stageKey: string; project?: string; state?: string; 
 // state would bloat every emitUpdate() snapshot and (via saveControllerState) write O(logs)
 // times to disk. Consumers that want history must buffer onLog() themselves.
 export interface RunLogLine { laneId: string; stageKey: string; project?: string; agentName: string; line: import('../agents/types').LogLine }
+/**
+ * 收尾合并失败时，渲染层拼「可直接粘贴的手工合并命令」需要的全部信息。之所以是结构化的而不是
+ * 一句 error 字符串：UI 必须能明确告诉用户改动在哪条分支上、哪几个文件冲突了 —— 让 UI 去正则
+ * 抠 git 的英文报错，是把「用户以为跑了半天的结果没了」这种恐慌制度化。
+ */
+export interface FinalizeFailure {
+  project: string
+  target: string
+  tempBranch: string
+  conflictFiles: string[]
+  detail: string
+  // Task 8 fix round 3 (I2):用户在收尾门上选的是哪一个动作。三个动作(合并/丢弃/保留)失败时走的都是
+  // 同一条记录路径,而失败卡此前写死了合并那套叙事——选了「先不合并」却保留失败的用户,被劝去合并他
+  // 刚刚拒绝的东西。可选:老的落盘状态(persist.ts 直接存这个结构)里没有这个字段,渲染层按 'merge'
+  // 兜底,与它们当时唯一能显示的文案一致。
+  decision?: 'merge' | 'discard' | 'park'
+}
 export interface RunControllerState {
   machine: MachineState
   inbox: RunEvent[]
@@ -140,15 +160,54 @@ export interface RunControllerState {
   // its stage agents' ids, same as the legacy orchestrator's run store).
   laneSessions: Record<string, { provider: string; sessionId: string }>
   paused: boolean
-  // Set only on a finalize-gate merge/discard failure (see runFinalizeGate) — the readable,
-  // per-project error message naming what actually failed (e.g. a merge conflict + file). Absent
-  // for every other terminal path (ok, or a plain abort), so the renderer can distinguish "the
-  // merge itself failed, here's why" from a generic failed status with no specific cause.
+  // Task 8 fix round 2 (C1 — this doc used to claim "set only on a finalize-gate merge/discard/park
+  // failure … absent for every other terminal path", which is FALSE and misled a consumer into
+  // building a predicate on that false premise): `error` is written from more than one KIND of
+  // place, and they mean very different things. (Round 3 / I3: this doc used to state an exact
+  // count of assignment sites; grep already contradicted it — a rehydrate replay and a clear were
+  // never counted. Counts rot; the kinds below are what a reader actually needs.)
+  //   1. runFinalizeGate's failure path (below `finalizeFailure`'s doc) — set only when the finalize
+  //      action (merge/discard/park) fails for ≥1 project, i.e. only reachable when every stage is
+  //      already done and the run was not aborted (see start()'s call site of runFinalizeGate).
+  //      A retry that succeeds CLEARS it again (same method, success branch).
+  //   2. start()'s outer `catch` (see the very end of this file, the `if (!this.error) this.error =
+  //      err …` line) — a catch-all for ANY throw out of the whole stage loop, at ANY point in the
+  //      run: a stage producing zero work orders, a store write failure, a throwing emitUpdate
+  //      subscriber, etc. This one fires with stages NOT all done and (for some throws, e.g. the
+  //      zero-work-orders case) with no temp branch ever created.
+  //   3. the constructor's rehydrate path — a REPLAY of whatever a previous controller for this same
+  //      run had written (RehydrateState.error), not a new judgement of its own.
+  // So `error` truthy is NOT a reliable "the finalize ran and failed" signal on its own — a consumer
+  // that needs exactly that (e.g. workflowNote, deciding whether it's safe to say "阶段都跑完了、改动在
+  // forge/run-<runId> 分支上") must key off `finalizeFailure` below instead — see ITS doc for what it's
+  // actually assigned from (it's not as simple as "one site", which is the exact overstatement this
+  // parenthetical used to make redundantly, nine lines below its own correction) — not off this field's
+  // mere presence. Kept as a human-readable summary for consumers that just want a plain string to
+  // display (e.g. FinalizeFailureCard's detail line), not as a boolean discriminator.
   error?: string
+  // #6: the structured per-project detail behind `error` above — one entry per project whose
+  // merge/discard/park actually failed (a lane that succeeded is simply absent). See
+  // FinalizeFailure's own doc for why this is structured rather than folded into `error`. Absent
+  // whenever finalize hasn't failed (including the common case: it never failed at all) — UNLIKE
+  // `error` above, this field has ONE site that PRODUCES a value (runFinalizeGate's failure branch),
+  // plus a rehydrate replay of that value (the constructor's RehydrateState path) and a clear
+  // (runFinalizeGate's success branch). So it — not `error` — is the reliable signal, but read it as
+  // "a finalize failed for this run at some point", NOT as "this controller ran a finalize and it
+  // failed": the rehydrate replay is exactly what RunExecPanel.tsx depends on to keep the failure
+  // card (and its branch/conflict detail) on screen through a 重新收尾 retry. (Round 3 / I3: this doc
+  // used to say "exactly ONE assignment site" and count them; the count was wrong, and worse, it hid
+  // the replay — the one property a consumer actually has to know about.)
+  finalizeFailure?: FinalizeFailure[]
   // 收尾(合并/丢弃临时分支)有没有真的做完。true = 这个 run 已经收干净,没有遗留的临时分支要处理;
   // false/缺省 = 还没走到收尾,或收尾**失败**了(合并冲突等)。Run2Manager.resumable 据此把「所有阶段都跑完、
   // 只是收尾没成」和「某个阶段没跑完」区分开 —— 前者该提供「重新收尾」,而不是误导地说「从代码CR继续」。
   finalized?: boolean
+  // 这个 run 实际使用的每个项目的基准/目标分支，以及运行前快照 SHA。**必须随状态落盘**：
+  // 恢复路径（Run2Manager.resumeFromDisk）原本由调用方从 ws.projects[].branch 重新推导，
+  // 而那个字段在用户切分支后从不回写 —— 恢复一次目标分支就飘回 main，等于把 2026-08-17 那个
+  // bug 从第二个入口又放进来一遍。存自己记的，才是唯一可信的。
+  projectTargets?: Record<string, string>
+  snapshots?: Record<string, string>
   // ①汇总 (end-of-run summary): the synthesized "本次运行总结" (or its deterministic digest fallback)
   // produced ONCE at genuine full-plan completion (start(), before runFinalizeGate) — see
   // buildRunSummary. Absent until then, and never set on abort/failure (the run must reach every
@@ -226,6 +285,16 @@ export interface RehydrateState {
   // the rehydrated controller just starts with no captured session ids (same as a fresh run whose
   // stage agents haven't emitted one yet — composeAgentSessions falls back to its placeholder row).
   laneSessions?: Record<string, { provider: string; sessionId: string }>
+  // #7 (task 7 hard requirement 2): see RunControllerState.error/.finalizeFailure doc above. Without
+  // rehydrating these, a resumed run whose finalize gate had already failed once loses BOTH the
+  // human-readable reason and the structured per-project detail the failure card needs — the app
+  // would restart into `{ status:'failed', error: undefined, finalizeFailure: undefined }`, which
+  // stops the resumable banner from re-pestering the user (finalized/status still round-trip) but
+  // leaves the card with nothing to render. Optional/backward-compatible like every other
+  // RehydrateState field: an older saved state (or a rehydrate literal built before this existed)
+  // just omits them, and the resumed controller starts with both undefined — same as a fresh run.
+  error?: string
+  finalizeFailure?: FinalizeFailure[]
 }
 
 // A loaded machine's currentIndex/statuses reflect whatever was on disk at the last emitUpdate()
@@ -269,6 +338,14 @@ export class RunController {
   private outcomes: Record<string, WorkOrderOutcome[]> = {}
   private status: RunStatus = 'running'
   private error?: string
+  // 见 RunControllerState.finalizeFailure:收尾(merge/discard/park)真的失败了才有值,keyed 到每个
+  // 具体失败的项目——供渲染层拼「可直接粘贴的手工合并命令」,不用去正则抠 error 那句人话摘要。
+  private finalizeFailure?: FinalizeFailure[]
+  // #6 handoff:「知道了，我自己处理」不代表收尾真的做完了——它只是让 Run2Manager.isUnfinalizedFailure
+  // 别再把同一个失败反复弹给用户。真实终态必须诚实地留在 'failed'（收尾确实没自动完成），不能被
+  // start() 结尾那句「每个阶段都 done ⇒ ok」的通用判定盖过去（一个 resume 出来的全新 controller
+  // 实例走到 handoff 分支时，machine 上每个阶段本来就都是 done，那句通用判定天然会把它算成 'ok'）。
+  private finalizeHandedOff = false
   // 见 RunControllerState.finalized:收尾真的做完了才置 true(合并/丢弃成功,或压根没有临时分支要收)。
   private finalized = false
   private summary?: string
@@ -328,6 +405,11 @@ export class RunController {
       this.stageTimings = rehydrate.stageTimings ?? {}
       this.laneTimings = rehydrate.laneTimings ?? {}
       this.laneSessions = rehydrate.laneSessions ?? {}
+      // #7 hard requirement 2: rehydrate the finalize-failure record itself, not just status/finalized —
+      // see RehydrateState.error/.finalizeFailure doc for why a resumed run would otherwise have
+      // "stopped asking" but lost "explaining why" in the same breath.
+      this.error = rehydrate.error
+      this.finalizeFailure = rehydrate.finalizeFailure
       for (const [stageKey, list] of Object.entries(rehydrate.outcomes ?? {})) {
         this.outcomes[stageKey] = list.map((o) => placeholderOutcome(stageKey, o))
       }
@@ -344,7 +426,7 @@ export class RunController {
   // `state` and never persisted (see RunLogLine / emitLog below).
   onLog(fn: (l: RunLogLine) => void) { this.logSubs.push(fn); return () => { this.logSubs = this.logSubs.filter((f) => f !== fn) } }
   get state(): RunControllerState {
-    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, finalized: this.finalized, summary: this.summary, reviewReports: { ...this.reviewReports }, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects }
+    return { machine: this.machine, inbox: [...this.inbox], feedback: [...this.feedback], outcomes: this.outcomes, status: this.status, pendingDirective: { ...this.pendingDirective }, liveLanes: { ...this.liveLanes }, stageTimings: { ...this.stageTimings }, laneTimings: { ...this.laneTimings }, laneSessions: { ...this.laneSessions }, paused: this.paused, error: this.error, finalized: this.finalized, finalizeFailure: this.finalizeFailure, summary: this.summary, reviewReports: { ...this.reviewReports }, sessionId: this.deps.sessionId, task: this.deps.task, projects: this.deps.projects, projectTargets: this.deps.projectTargets, snapshots: this.deps.snapshots }
   }
   private emitEvent(e: RunEvent) { this.inbox = addEvent(this.inbox, e); for (const f of this.eventSubs) f(e); this.emitUpdate() }
   private drop(id: string) { this.inbox = removeEvent(this.inbox, id) }
@@ -466,12 +548,12 @@ export class RunController {
   }
 
   /**
-   * P4-3 收尾确认: called once, right after the main stage loop breaks with EVERY stage `done` (never
-   * on abort — see start()'s call site, which only reaches this when `!this.aborted`). jumpBack never
-   * touches git at all — a mid-run jump back to an earlier stage just re-runs stages, still on the
-   * same temp branch, nothing to reconcile yet. abort() PARKS (see abortCleanup's doc) rather than
-   * merging or discarding; this finalize gate remains the ONE place a run's temp branch gets merged
-   * or discarded (Finding 5).
+   * P4-3/#6 收尾确认: called once, right after the main stage loop breaks with EVERY stage `done`
+   * (never on abort — see start()'s call site, which only reaches this when `!this.aborted`).
+   * jumpBack never touches git at all — a mid-run jump back to an earlier stage just re-runs stages,
+   * still on the same temp branch, nothing to reconcile yet. abort() PARKS (see abortCleanup's doc)
+   * rather than merging or discarding; this finalize gate remains the ONE place a run's temp branch
+   * gets merged/discarded/parked, or the run gets handed off (Finding 5).
    *
    * No-ops entirely (returns immediately) when `deps.projectTargets` has no entries matching
    * `deps.projects` — i.e. this run was never checked out onto a real temp branch (see
@@ -479,19 +561,33 @@ export class RunController {
    * exactly as it did before this gate existed.
    *
    * Otherwise emits a GateEvent with `finalize: true` (reusing the 'gate' kind/resolveGate/gateR
-   * machinery — see events.ts/decisions.ts) and awaits its decision:
-   *   - `merge`   → mergeTempBranch(cwd, target, runId) for every participating project.
-   *   - `discard` → discardTempBranch(cwd, target, runId) for every participating project.
+   * machinery — see events.ts/decisions.ts) and awaits its decision — now a THREE-way route plus a
+   * fourth escape hatch for a run that already failed to finalize once:
+   *   - `merge`   → mergeTempBranch(cwd, target, runId, sha) for every participating project.
+   *   - `discard` → discardTempBranch(cwd, target, runId, sha) instead — the real, destructive
+   *     delete (UI must confirm this one separately).
+   *   - `park`    → parkTempBranch(cwd, target, runId, sha) instead — keep the branch, restore the
+   *     user's pre-run snapshot, delete nothing. This is the SAFE default "not this one" route (see
+   *     GateDecision's doc) — merge/discard/park all reuse the exact same per-project loop below,
+   *     they only differ in which git-orchestration function runs.
+   *   - `handoff` → the user is taking over manually after a merge/discard/park already failed once
+   *     (see the failure branch below). Never touches git — just marks the run finalized so
+   *     Run2Manager.isUnfinalizedFailure stops re-offering the SAME failure every time the user
+   *     switches back into this session. `status` is left as-is ('failed' — the finalize genuinely
+   *     didn't complete); `finalized` here means "the user has acknowledged/taken over", not
+   *     "git actually reconciled".
    *   - anything else (only reachable via abort()'s settleAll force-resolving every pending
    *     gate/lane with `{type:'advance'}` — see resolveLane/abort) → PARKS instead (abortCleanup),
    *     same as any other abort; the run ends failed, but the work is preserved on the temp branch.
    *
-   * Per-project failures are collected (not stopped at the first one, so one bad repo doesn't block
-   * the rest from finishing) and re-thrown together as a single readable Error naming every failed
-   * project — this propagates out of start() and is caught by Run2Manager's existing
-   * `.catch(...) → status 'failed'` handling (the same path a zero-work-orders throw already takes),
-   * so a merge conflict surfaces as a clear failure instead of silently vanishing or crashing the
-   * manager.
+   * Per-project failures (merge/discard/park) are collected — not stopped at the first one, so one
+   * bad repo doesn't block the rest from finishing — into `this.finalizeFailure` (structured, see
+   * FinalizeFailure's doc) AND folded into a single readable `this.error` string for consumers that
+   * only read a plain message. Then re-thrown as one Error — this propagates out of start() and is
+   * caught by Run2Manager's existing `.catch(...) → status 'failed'` handling (the same path a
+   * zero-work-orders throw already takes), so a merge conflict surfaces as a clear failure instead of
+   * silently vanishing or crashing the manager. The user's way out of that failed state, next time
+   * they open this run, is either to retry finalize or resolve it with `handoff` above.
    */
   /**
    * The `{ name, cwd, target }` list every project actually checked out onto this run's temp
@@ -521,27 +617,12 @@ export class RunController {
     const targets = this.finalizeTargets()
     if (targets.length === 0) return
     const park = this.deps.parkTempBranch ?? parkTempBranchDefault
-    const popStash = this.deps.popRunStash ?? popRunStashDefault
     for (const t of targets) {
       try {
-        await park(t.cwd, t.target, this.plan.runId)
-        // Even on abort, give the user their pre-run stashed changes back (the run's work is parked on
-        // forge/run-<id>; their uncommitted changes belong back on their branch).
-        await this.restoreStash(popStash, t.cwd, t.name)
+        await park(t.cwd, t.target, this.plan.runId, this.deps.snapshots?.[t.name] ?? null)
       } catch (err) {
         console.error(`[run2] abort cleanup failed for project "${t.name}" (target "${t.target}"):`, err)
       }
-    }
-  }
-
-  // Restore a project's pre-run stash (best-effort). A pop CONFLICT keeps the stash + writes markers —
-  // the user's changes are never lost — so only log it, never fail the finalize.
-  private async restoreStash(popStash: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'>, cwd: string, name: string): Promise<void> {
-    try {
-      const r = await popStash(cwd, this.plan.runId)
-      if (r === 'conflict') console.warn(`[run2] project "${name}" pre-run stash pop conflicted — user's changes preserved in git stash for manual pop`)
-    } catch (err) {
-      console.error(`[run2] failed to restore pre-run stash for project "${name}":`, err)
     }
   }
 
@@ -709,10 +790,20 @@ export class RunController {
     const p = this.gateR.create(id)
     // ①汇总: the finalize gate's body IS the run summary (rendered as Markdown by RunEventCard's
     // finalize branch) so the user sees "本次改动：项目A改X，项目B改Y…" right where they decide
-    // 合并并完成 / 丢弃本次. Falls back to the plain prompt only when no summary was produced (e.g. a
-    // run with zero recorded outcomes) — this.summary is set in start() just before this is called.
+    // 合并并完成 / 先不合并 / 丢弃本次. Falls back to the plain prompt only when no summary was
+    // produced (e.g. a run with zero recorded outcomes) — this.summary is set in start() just
+    // before this is called.
     const body = this.summary ? `**本次运行总结**\n\n${this.summary}` : '全部完成，合并到目标分支？'
-    this.emitEvent({ id, kind: 'gate', stageKey: '__finalize__', stageName: '收尾确认', body, finalize: true })
+    // 真实分支名一并发出去 —— 卡片要显示「合并到 branch1」而不是让用户猜。#7 fix round 1 (F5,
+    // user-ruled): targetBranch alone is only targets[0] — kept for the common single-project case
+    // and for old frozen-card consumers — but a multi-project run's targets CAN genuinely differ per
+    // project, so `targets` below carries the full list and the renderer must use it once there's
+    // more than one, rather than implying targetBranch covers every project.
+    this.emitEvent({
+      id, kind: 'gate', stageKey: '__finalize__', stageName: '收尾确认', body, finalize: true,
+      targetBranch: targets[0]?.target, tempBranch: tempBranchName(this.plan.runId),
+      targets: targets.map((t) => ({ project: t.name, target: t.target })),
+    })
     const d = await p
     this.drop(id)
     this.emitUpdate()
@@ -724,35 +815,53 @@ export class RunController {
       await this.abortCleanup()
       return
     }
-    if (d.type !== 'merge' && d.type !== 'discard') return
 
-    const merge = d.type === 'merge'
-    const action = merge
-      ? (this.deps.mergeTempBranch ?? mergeTempBranchDefault)
-      : (this.deps.discardTempBranch ?? discardTempBranchDefault)
-    const popStash = this.deps.popRunStash ?? popRunStashDefault
-    const failures: string[] = []
+    // 「知道了，我自己处理」：合并/丢弃/保留失败后用户接管。不再碰 git，只把这个 run 收掉，免得恢复
+    // 横幅每次切回会话都把同一个失败重新弹一遍（用户实测反馈的正是这条）。status 仍然诚实地留在
+    // 'failed'（见 finalizeHandedOff 字段注释）。
+    if (d.type === 'handoff') { this.finalized = true; this.finalizeHandedOff = true; return }
+
+    if (d.type !== 'merge' && d.type !== 'discard' && d.type !== 'park') return
+
+    const sha = (name: string) => this.deps.snapshots?.[name] ?? null
+    const act = async (t: { name: string; cwd: string; target: string }): Promise<void> => {
+      if (d.type === 'merge') return (this.deps.mergeTempBranch ?? mergeTempBranchDefault)(t.cwd, t.target, this.plan.runId)
+      if (d.type === 'discard') return (this.deps.discardTempBranch ?? discardTempBranchDefault)(t.cwd, t.target, this.plan.runId, sha(t.name))
+      return (this.deps.parkTempBranch ?? parkTempBranchDefault)(t.cwd, t.target, this.plan.runId, sha(t.name))
+    }
+
+    const failures: FinalizeFailure[] = []
     for (const t of targets) {
       try {
-        await action(t.cwd, t.target, this.plan.runId)
-        // Restore the user's pre-run stash (if any) onto their branch now that the temp branch is
-        // merged/discarded away. Best-effort — a pop conflict keeps the stash (changes never lost), so
-        // it must not fail an otherwise-successful finalize.
-        await this.restoreStash(popStash, t.cwd, t.name)
+        await act(t)
       } catch (err) {
-        failures.push(`${t.name}: ${err instanceof Error ? err.message : String(err)}`)
+        failures.push({
+          project: t.name,
+          target: t.target,
+          decision: d.type,
+          tempBranch: err instanceof TempBranchMergeError ? err.tempBranch : tempBranchName(this.plan.runId),
+          conflictFiles: err instanceof TempBranchMergeError ? err.conflictFiles : [],
+          detail: err instanceof Error ? err.message : String(err),
+        })
       }
     }
-    if (failures.length === 0) this.finalized = true
-    if (failures.length > 0) {
-      // Recorded on the controller (not just thrown) so the terminal RunControllerState carries
-      // the real, readable per-project failure — Run2Manager's `.catch` only overrides `status`
-      // to 'failed', it never had a way to surface *why*; the renderer must show this instead of
-      // guessing at a generic "failed stage" message (see RunExecPanel).
-      const message = `${merge ? '合并' : '丢弃'}临时分支失败 — ${failures.join('; ')}`
-      this.error = message
-      throw new Error(message)
-    }
+    // #7 fix round 1 (F6): a retry that now SUCCEEDS must clear the PREVIOUS attempt's failure
+    // record — otherwise the terminal saved state after a clean retry is the self-contradictory
+    // `{status:'ok', finalized:true, error:'无法自动合并 — …', finalizeFailure:[…]}`. Every current
+    // consumer happens to gate on status/finalized first, so this was latent rather than visibly
+    // broken — but any future reader of `error`/`finalizeFailure` alone (or the failure card's own
+    // `showFinalizeFailureCard`, now checked independently of status — see RunExecPanel.tsx) would
+    // wrongly re-show a resolved failure forever.
+    if (failures.length === 0) { this.finalized = true; this.error = undefined; this.finalizeFailure = undefined; return }
+    // Recorded on the controller (not just thrown) so the terminal RunControllerState carries the
+    // real, structured per-project failure — Run2Manager's `.catch` only overrides `status` to
+    // 'failed', it never had a way to surface *why*; the renderer must show this instead of guessing
+    // at a generic "failed stage" message (see RunExecPanel).
+    this.finalizeFailure = failures
+    // error 仍然写一句人话摘要，给那些只读 state.error 的老消费者（workflowNote 等）兜底。
+    const verb = d.type === 'merge' ? '自动合并' : d.type === 'discard' ? '丢弃' : '保留'
+    this.error = `无法${verb} — ${failures.map((f) => `${f.project}: ${f.detail}`).join('; ')}`
+    throw new Error(this.error)
   }
 
   private workspacePath(): string { return this.deps.store.runDir.replace(/\/\.forge\/runs\/[^/]+$/, '') }
@@ -1427,7 +1536,7 @@ export class RunController {
       await this.abortCleanup()
     }
 
-    this.status = this.aborted ? 'failed' : (this.machine.stages.every((s) => s.status === 'done') ? 'ok' : 'failed')
+    this.status = (this.aborted || this.finalizeHandedOff) ? 'failed' : (this.machine.stages.every((s) => s.status === 'done') ? 'ok' : 'failed')
     // Clear paused on terminal: a run can leave the loop while `paused` is still true (abort while
     // parked at the pause gate — abort() releases the gate but deliberately doesn't clear the flag).
     // A finished run must never surface as "paused" to the UI, so normalize it before the final
@@ -1440,6 +1549,21 @@ export class RunController {
       // 于是磁盘上永远停在 'running'。下次打开工作区 isTerminalStatus 判它「没跑完」,而 summarizeResumable
       // 又找不到未完成的阶段、回落到最后一个,用户就看到了那句莫名其妙的「上次有工作流未完成,从代码CR继续?」。
       // 这里补一次:任何从 start() 抛出的错都要把真实终态(failed + 原因)落盘,再原样抛给调用方。
+      //
+      // Task 8 fix round 3 (C1 第二入口):落盘之前还得把 git 收干净。stage 循环里任何一处抛错(某阶段
+      // buildWorkOrders 返回 []、store 写盘失败、emitUpdate 的订阅者抛错……)原本直接就走了,每个参与
+      // 项目都还停在 forge/run-<id> 上、工作树还是脏的;而 Run2Manager.resumable 又不认这种状态
+      // (isUnfinalizedFailure 要求「阶段全 done」,这里显然不满足),于是没有横幅、没有清理、没有任何
+      // 痕迹 —— 下一次启动实测 HEAD,拿到的就是这条被遗弃的临时分支(见 launch.ts 那道 forge/run- 守卫
+      // 挡的正是它)。park 一下:在制品提交到临时分支上留着(分支不删,工作可恢复),工作树切回各自的基准
+      // 分支,和「中途终止」完全一样的语义。
+      //
+      // 唯独收尾自己失败那条路径要排除:它已经按项目做过 merge/discard/park 了,而合并失败时
+      // mergeTempBranch 早把工作树切回了 target —— 再 park 一次就是 C2 那个 bug(把用户的改动提交到他
+      // 自己的分支上)。`finalizeFailure` 有值 = 这个 run 的收尾**曾经**跑过且失败过(含 rehydrate replay,
+      // 见其字段注释)——replay 那种情况同样该排除:上一次收尾失败时工作树就已经不在临时分支上了。
+      // (park 本身现在也自带分支守卫,这里是第二道,不是唯一那道。)
+      if (!this.finalizeFailure) await this.abortCleanup()
       this.status = 'failed'
       if (!this.error) this.error = err instanceof Error ? err.message : String(err)
       this.paused = false

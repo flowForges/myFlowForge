@@ -4,6 +4,10 @@ import { RunEventCard } from './RunEventCard'
 import type { RunEvent } from '../../main/run/events'
 import type { FrozenRunCard } from '../views/chat/runCards'
 
+// #7: shorthand for the ordinary-gate props these finalize-gate-only tests never exercise
+// (onLane) — mirrors how every other test in this file passes vi.fn() for it, just spread once.
+const noopHandlers = { onLane: vi.fn() }
+
 describe('RunEventCard', () => {
   it('renders null when neither event nor frozen is given', () => {
     const { container } = render(<RunEventCard onGate={vi.fn()} onLane={vi.fn()} />)
@@ -266,7 +270,11 @@ describe('RunEventCard', () => {
     expect(onLane).toHaveBeenCalledWith('q1', { type: 'answer', value: 'src/bar' })
   })
 
-  it('finalize gate: renders 收尾确认 body + 合并并完成/丢弃本次, both route through onGate with merge/discard', () => {
+  // #7: no targetBranch/tempBranch on this event (an older/looser one) — the merge button falls
+  // back to its generic '合并并完成' label (see RunEventCard's `event.targetBranch ? … : '合并并完成'`),
+  // and 彻底丢弃 now needs its two-click confirm (see the dedicated 收尾门三按钮 describe below for the
+  // real-branch-name path).
+  it('finalize gate: renders 收尾确认 body + 合并并完成/彻底丢弃, both route through onGate with merge/discard', () => {
     const onGate = vi.fn()
     const event: RunEvent = { id: 'fz1', kind: 'gate', stageKey: '__finalize__', stageName: '收尾确认', body: '全部完成，合并到目标分支？', finalize: true }
     render(<RunEventCard event={event} onGate={onGate} onLane={vi.fn()} />)
@@ -277,10 +285,16 @@ describe('RunEventCard', () => {
     // the ordinary gate's actions must NOT be present on a finalize card
     expect(screen.queryByText('通过')).not.toBeInTheDocument()
     expect(screen.queryByText('打回本阶段')).not.toBeInTheDocument()
+    // #7 fix round 1 (F8, hard requirement 1): 我自己处理 must never appear on an ORDINARY finalize
+    // gate — only on the merge-failure card (FinalizeFailureCard). Locked by assertion, not just by
+    // the two components staying structurally separate.
+    expect(screen.queryByText('知道了，我自己处理')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByText('合并并完成'))
     expect(onGate).toHaveBeenCalledWith('fz1', { type: 'merge' })
-    fireEvent.click(screen.getByText('丢弃本次'))
+    fireEvent.click(screen.getByText(/彻底丢弃这次改动/))
+    expect(onGate).not.toHaveBeenCalledWith('fz1', { type: 'discard' })
+    fireEvent.click(screen.getByText('确认丢弃'))
     expect(onGate).toHaveBeenCalledWith('fz1', { type: 'discard' })
   })
 
@@ -336,5 +350,58 @@ describe('RunEventCard', () => {
     const card = container.querySelector('.msg-req')
     expect(card?.classList.contains('k-gate')).toBe(true)
     expect(card?.classList.contains('done')).toBe(true)
+  })
+})
+
+describe('收尾门三按钮', () => {
+  const gate = {
+    id: 'g1', kind: 'gate' as const, stageKey: '__finalize__', stageName: '收尾确认',
+    body: '总结', finalize: true, targetBranch: 'branch1', tempBranch: 'forge/run-a1b2',
+  }
+
+  it('主按钮显示真实目标分支名', () => {
+    render(<RunEventCard event={gate} onGate={() => {}} {...noopHandlers} />)
+    expect(screen.getByText('合并到 branch1')).toBeTruthy()
+  })
+
+  it('「先不合并」发 park，且文案点名保留的分支', () => {
+    const onGate = vi.fn()
+    render(<RunEventCard event={gate} onGate={onGate} {...noopHandlers} />)
+    fireEvent.click(screen.getByText(/先不合并/))
+    expect(onGate).toHaveBeenCalledWith('g1', { type: 'park' })
+  })
+
+  it('「彻底丢弃」第一次点击只展开确认，不发 discard', () => {
+    const onGate = vi.fn()
+    render(<RunEventCard event={gate} onGate={onGate} {...noopHandlers} />)
+    fireEvent.click(screen.getByText(/彻底丢弃这次改动/))
+    expect(onGate).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('确认丢弃'))
+    expect(onGate).toHaveBeenCalledWith('g1', { type: 'discard' })
+  })
+
+  // #7 fix round 1 (F5, user-ruled): targetBranch alone is only targets[0] — a multi-project run's
+  // targets can genuinely differ per project (controller.ts's own comment used to concede this and
+  // stop there). More than one target must NOT imply one branch name covers every project.
+  describe('F5: 多项目目标分支各不相同', () => {
+    it('单项目仍显示「合并到 branch1」（不受 targets 字段影响）', () => {
+      const single = { ...gate, targets: [{ project: 'web', target: 'branch1' }] }
+      render(<RunEventCard event={single} onGate={() => {}} {...noopHandlers} />)
+      expect(screen.getByText('合并到 branch1')).toBeTruthy()
+    })
+
+    it('多项目显示「合并到各自的目标分支」+ 逐项目列出真实分支名', () => {
+      const multi = {
+        ...gate,
+        targets: [{ project: 'web', target: 'branch1' }, { project: 'api', target: 'main' }],
+      }
+      render(<RunEventCard event={multi} onGate={() => {}} {...noopHandlers} />)
+      expect(screen.getByText('合并到各自的目标分支')).toBeTruthy()
+      expect(screen.queryByText('合并到 branch1')).toBeNull()
+      expect(screen.getByText(/项目 web/)).toBeInTheDocument()
+      expect(screen.getByText('branch1')).toBeInTheDocument()
+      expect(screen.getByText(/项目 api/)).toBeInTheDocument()
+      expect(screen.getByText('main')).toBeInTheDocument()
+    })
   })
 })

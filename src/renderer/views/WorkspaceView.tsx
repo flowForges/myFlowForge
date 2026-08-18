@@ -97,9 +97,14 @@ function describeGateDecision(d: GateDecision): string {
     case 'advance': return '通过'
     case 'redo': return d.feedback ? `打回本阶段：${d.feedback}` : '打回本阶段'
     case 'jumpBack': return d.feedback ? `回退到 ${d.targetKey}：${d.feedback}` : `回退到 ${d.targetKey}`
-    // P4-3: resolves the run-completion finalize gate (see RunEventCard's finalize branch).
+    // P4-3/#6: resolves the run-completion finalize gate (see RunEventCard's finalize branch).
     case 'merge': return '合并并完成'
     case 'discard': return '丢弃本次'
+    // #6: labels only — the actual buttons/cards for these two routes are Task 7. Kept here purely
+    // so this switch (exhaustive over GateDecision) stays exhaustive after decisions.ts grew these
+    // two variants.
+    case 'park': return '先不合并'
+    case 'handoff': return '我自己处理'
     // 'ask' never freezes a gate (the gate stays open after answering), so this label is only for
     // exhaustiveness — the frozen "决定：" line never shows it.
     case 'ask': return '向 AI 提问'
@@ -256,6 +261,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // 与下方 onSend)。用户点横幅「取消」把这个门 id 记进 dismissedGateId → 该门恢复普通聊天;换一个新门(不同
   // id)会重新进入补充态。用 state 而非 ref,以便取消能立刻触发重渲染隐藏横幅。
   const [dismissedGateId, setDismissedGateId] = useState<string | null>(null)
+  // #7 fix round 1 (F4, review): the disk-resume banner's 丢弃 button now genuinely deletes the saved
+  // run record (persist.ts's discardResumableRun fix, Task 7) — for the finalizeOnly case that record
+  // is the only in-app trace of a run whose temp branch is still sitting there with real work on it.
+  // A bare, unconfirmed click at "上次的工作流阶段都跑完了，但收尾没成功" — the exact moment of maximum
+  // "my work is gone" fear — is no longer acceptable now that it actually does something. Two-click
+  // confirm, same pattern as RunEventCard.tsx's confirmDiscard. Reset whenever a DIFFERENT resumable
+  // run is offered (keyed by runId) so a stale confirm state never carries over to a new banner.
+  const [confirmDiscardResumable, setConfirmDiscardResumable] = useState<string | null>(null)
   const [selection, setSelection] = useState<{ agentId: string; modelId: string; permissionMode?: import('@shared/permissions').PermissionMode }>()
   // 本机扫描到的当前 provider 的自定义命令/prompt + skills(进 "/" 菜单)。随 provider/workspace 变化拉取。
   const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
@@ -1380,16 +1393,57 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           <div className="supplement-banner">
             {/* 所有阶段都跑完、只是收尾(合并临时分支)失败时,说的必须是「重新收尾」——原来它按「第一个未完成
                 阶段」找,找不到就回落到最后一个阶段,于是把合并冲突说成了「从代码CR继续」,指着一个早就跑完的
-                阶段,用户完全无法理解。这一支还把真实原因(哪个项目、哪个文件冲突)直接摆出来。 */}
+                阶段,用户完全无法理解。
+                #7 fix round 1 (F4):这也是「我的工作没了」恐慌感最重的一刻 —— 补一句诚实的安心话。
+                Task 8:原文案曾把 run2.resumable.error 的原始 git 报错(冲突文件路径……)直接嵌进这句安心
+                话里,读起来又长又吓人。原始报错交给点「继续」重新收尾时弹出的 FinalizeFailureCard(Tasks
+                1-7)去展开——这里只负责一件事,点名分支、说清收尾没成。
+                Task 8 fix round 1 (I1 — 上一版这里断言"改动完整保留"是无条件的,错了):`finalizeOnly` 只看
+                "阶段是否都跑完"(manager.ts 的 summarizeResumable),不管收尾当时选的是合并/丢弃/保留 ——
+                一次「丢弃」在项目 A 上成功、在项目 B 上失败,同样会落到这个 finalizeOnly 分支,而 A 的临时
+                分支这时是真的已经没了。把这里错认成"discardResumableRun 还没执行"(那是清磁盘记录的按钮,
+                跟收尾门自己的丢弃动作是两回事)才写出了无条件断言——这里必须和下面丢弃确认那句「通常」
+                打同一个折扣,两句话不能互相矛盾。 */}
             {run2.resumable.finalizeOnly ? (
               <span>
-                上次的工作流阶段都跑完了，但收尾没成功：{run2.resumable.error ?? '合并临时分支失败'}。要重新收尾吗？
+                上次的工作流阶段都跑完了，但收尾没能自动完成。改动通常还在 <code>forge/run-{run2.resumable.runId}</code> 分支上（除非当时选的是「丢弃」且已经生效）。要重新收尾吗？
               </span>
             ) : (
               <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
             )}
             <button className="supplement-ok" onClick={() => { void run2.resumeFromDisk(sessions.activeSessionId ?? undefined) }}>继续</button>
-            <button className="supplement-cancel" onClick={() => { void run2.discardResumable() }}>丢弃</button>
+            {/* #7 fix round 1 (F4): 丢弃 now genuinely deletes the saved run record (persist.ts's
+                discardResumableRun fix, same task) — no longer safe to fire on a single bare click,
+                same two-click pattern RunEventCard.tsx's finalize-gate 彻底丢弃 already uses. Keyed to
+                THIS resumable's runId so switching to a different offered run never inherits a stale
+                confirm state. */}
+            {confirmDiscardResumable === run2.resumable.runId ? (
+              <>
+                <span className="supplement-discard-warn">
+                  {/* #7 fix round 2 (N4): applied the same hedge here as the banner's own copy above
+                      — this line was making the identical unconditional "不受影响，仍完整保留"
+                      claim, in the SAME banner, one line down. A partially-successful discard really
+                      does delete some projects' temp branches; leaving this one overstated while
+                      fixing the banner above it would still be lying in the same interaction. */}
+                  {run2.resumable.finalizeOnly
+                    ? '确定丢弃这条运行记录吗？这条记录不会再出现在运行历史里；改动本身通常不受影响（除非当时选的是「丢弃」且已经生效）。'
+                    : '确定丢弃这次未完成的运行吗？丢弃后无法恢复到当前进度。'}
+                </span>
+                {/* Task 8 fix round 3 (minor):这颗按钮真的会删掉这条运行记录,不能跟旁边的「取消」
+                    共用同一套灰字样式(RunEventCard.tsx 的同类二次确认用的是 `wfo-btn danger`)。 */}
+                <button className="supplement-danger" onClick={() => { setConfirmDiscardResumable(null); void run2.discardResumable() }}>确认丢弃</button>
+                <button className="supplement-cancel" onClick={() => setConfirmDiscardResumable(null)}>取消</button>
+              </>
+            ) : (
+              // Task 8:「丢弃」这两个字对一个"代码全在、只是没能自动合并"的状态来说太吓人了——这个按钮
+              // 实际做的事只是清掉磁盘上那条 resumable 记录(discardResumableRun),从不碰 git、从不碰
+              // forge/run-<runId> 分支本身。改名 + 补一句 title 把这点说清楚,免得用户以为点了就丢代码。
+              <button
+                className="supplement-cancel"
+                title="只关掉这条提示，不会删除任何代码"
+                onClick={() => setConfirmDiscardResumable(run2.resumable!.runId)}
+              >不用管了</button>
+            )}
           </div>
         )}
         {/* 只读会话: 基于此历史继续 */}
@@ -1518,7 +1572,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                     providers={providers}
                     onConfirm={(c) => confirmLaunchGate(gate.id, c)}
                     onCancel={() => cancelLaunchGate(gate.id)}
-                    checkDirty={(window as any).forge?.run2?.checkDirty ? () => (window as any).forge.run2.checkDirty(wsPath) : undefined}
+                    baseInfo={(window as any).forge?.run2?.baseInfo ? () => (window as any).forge.run2.baseInfo(wsPath) : undefined}
                   />
                 )
               }
@@ -1838,9 +1892,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                         // 隐藏临时分支与运行控制,其余卡片样式与真运行逐字节一致。
                         // 见 workflowNote.ts:phase=done 涵盖了 ok 和 failed 两种终态,所以「已完成」这句
                         // 不能只看 phase —— 合并临时分支失败时它得说实话。
+                        // Task 8 fix round 2 (C1):传 `run2.state.finalizeFailure` 而不是 `.error` ——
+                        // `error` 在 controller.ts 里有两个赋值点(收尾失败 + start() 最外层 catch 的
+                        // 兜底,后者对阶段循环里任何一处抛错都会置),不能用来判断"阶段是否真的都跑完、
+                        // 只是收尾没成";只有 `finalizeFailure` 才是(见 workflowNote.ts 的类型注释)。
+                        // Task 8 fix round 3 (I4):重启之后 run2.state 是空的(manager.get() 和
+                        // lastStateFor() 都没有),而盘上的 wf.phase 还是 'done' —— 这句话于是说
+                        // 「已完成」,几像素之外的恢复横幅同时在说「收尾没能自动完成」。把盘上那条
+                        // resumable 记录一并传进去,重启后它才是唯一的事实源。
                         const note = workflowPhaseNote(activeWorkflow, run2.state?.machine?.plan?.runId
-                          ? { status: run2.state.status, runId: run2.state.machine.plan.runId, error: run2.state.error }
-                          : null)
+                          ? { status: run2.state.status, runId: run2.state.machine.plan.runId, finalizeFailure: run2.state.finalizeFailure }
+                          : null, run2.resumable)
                         // 把左侧会话区当前 AI 的实时输出镜像成当前对话阶段卡的「执行过程」(img20 诉求:执行
                         // 过程也输出、随左侧流式更新)。scanContext 负责真实的 skill/rule/mcp chips。
                         const curStage = activeWorkflow.stages[activeWorkflow.currentIndex]

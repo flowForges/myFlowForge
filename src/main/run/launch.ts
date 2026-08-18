@@ -18,7 +18,7 @@ import { reviewLenses } from './reviewFanout'
 import { collectRunHooks } from './hooks'
 import type { RunPlan, StageProjectAgent } from './machine'
 import type { StageSpec, DevelopProject } from './runTypes'
-import { createTempBranch, discardTempBranch, isCleanTree, stashRun, popRunStash } from './tempBranch'
+import { createTempBranch, discardTempBranch, abandonTempBranch, currentBranch, type TempBranchCreated } from './tempBranch'
 
 // P5-UI Task 1: short stage blurb for the config-preview overlay, by builtin key. Custom/unknown keys
 // fall back to '' (the overlay just omits the line rather than showing anything misleading).
@@ -326,83 +326,114 @@ export function buildLaunchProjects(cfg: LaunchStartConfig, ws: Workspace): Deve
 
 // P4-2: at run START (before any lane executes), every participating project's worktree gets checked
 // out onto the run's shared temp branch (`forge/run-<runId>`, see tempBranch.ts) off THAT project's own
-// configured target branch (`ws.projects[].branch` — the branch already checked out in its worktree,
-// same field WorkspaceView's project inspector shows as the "git 分支" tag). This is what makes the
-// run's code writes land on a throwaway branch instead of the target directly.
+// CURRENTLY CHECKED-OUT branch. This is what makes the run's code writes land on a throwaway branch
+// instead of the target directly.
 //
-// `projects` is the already gate-selected DevelopProject[] (from buildLaunchProjects) — just needs each
-// one's own target branch looked up by name from `ws.projects`.
+// 基准分支怎么定 (2026-08-17 bug 修法): 曾经从 ws.projects[].branch —— 建工作区那一刻存盘的字段 ——
+// 取基准。用户后来在项目里 `git switch` 到别的分支，这个字段从不回写，于是「在 branch1 上开发」的用户
+// 被静默地从 main 切出去、跑完又合回 main，天天冲突。现在改成实测：每个项目的基准 = currentBranch(cwd)
+// 此刻真实的 HEAD，不看、也不信任何存盘字段。
 //
-// Finding 3 (Important — data loss), USER DECISION reject-if-dirty: `git checkout -b temp <base>`
-// succeeds even on a DIRTY tree when `base` is the branch already checked out (the normal case) — so
-// pre-existing untracked files / uncommitted edits UNRELATED to this run could silently be wiped by a
-// later discard's `checkout -f`/`clean -fd`, or absorbed into history by a merge's `add -A`. Guarded
-// here as a PRE-PASS over EVERY participating project, run BEFORE creating any branch at all: if any
-// project's tree isn't clean, throw naming all of them and create NO branches (no half-state). Only
-// once every project is provably clean do we proceed — which is what makes the later `add -A`/
-// `checkout -f`/`clean -fd` in tempBranch.ts safe (everything left in the tree after createBranch is
-// provably this run's own writes, never a pre-existing unrelated change).
+// 前置的 detached HEAD 拒绝: currentBranch 对 detached HEAD 归一返回 ''，这里在动任何 git 之前先把
+// EVERY project 都探测一遍——只要有一个 detached，直接抛错、一个分支都不建（不留半状态）。等真正建分支
+// 的循环开始时，target 已经全部确定合法，不会中途因为基准缺失而失败。
 //
-// Real git — a dirty tree, a missing/renamed base branch, or any other checkout failure throws from
-// createBranch. On failure we do NOT leave some projects on the temp branch and others not in a
-// confusing half-state: we best-effort roll back (discardTempBranch) every project whose branch we
-// already created before re-throwing a single readable error naming which project failed and why (plus
-// whether rollback of the earlier ones succeeded). `createBranch`/`rollback`/`checkClean` are injected
-// (default to the real tempBranch.ts functions) purely so callers can stub real git out in tests.
-// Returns the names of projects whose dirty working tree was stashed at start (for a user-facing
-// notice). The stash itself is keyed by runId and restored by the controller's finalize (popRunStash)
-// after merge/discard/park — see stashRun/popRunStash in tempBranch.ts.
+// 前置的「基准不能是上一次运行的临时分支」拒绝 (2026-08-17 审查 C1a): 实测 HEAD 修好了「基准取自过期
+// 存盘字段」那个 bug，但也给了它第二个入口 —— 只要有任何一条路把工作树留在 forge/run-<id> 上（快照提交
+// 失败后没回滚干净、用户自己 git switch 过去看了一眼没切回来、上一次收尾崩在半路……），下一次启动实测
+// 到的 HEAD 就是那条被遗弃的临时分支，projectTargets 于是变成 forge/run-<旧 id>，整轮工作最后被合进一条
+// 没人要的分支里，用户真正的分支一行都收不到 —— 正是 #1/#3 换个门再进来一次。这里一律拒绝，并明说该
+// 怎么办（切回自己的分支；那条分支上留着上一次运行的成果，别顺手删）。
+//
+// 用户的脏树不再是问题: createTempBranch 自己的运行前快照 commit 把它原样带过去（见 tempBranch.ts），
+// 这里只把每个项目的快照 SHA 收集起来一并返回，好让调用方（run2Handlers.ts）转手交给 controller，回滚/
+// 丢弃/终止时都能把这份快照还原回去。
+//
+// 失败时的回滚是**全量**的 (2026-08-17 审查 C1b): 包括正在失败的那个项目自己 —— createTempBranch 分两
+// 段（`checkout -b` 一段、`add -A`+快照提交另一段），失败在第二段时 HEAD 已经停在临时分支上了。原来只回
+// 滚 `created`（不含它），于是它被留在 forge/run-<id> 上，而错误信息还敢说「已回滚已建的 N 个项目分支」。
+// 它用的是 abandonTempBranch 而不是 discardTempBranch：快照没提交成时用户那些未提交改动没有任何副本，
+// `checkout -f` + `clean -fd` 会当场销毁它们（见 abandonTempBranch 的注释）。
+//
+// `projects` 是已经过关卡筛选的 DevelopProject[]（来自 buildLaunchProjects）。
+//
+// Real git — 任何 checkout 失败都从 createBranch 抛出。失败时绝不留下「部分项目已切到临时分支、部分还
+// 停在原地」的半状态：尽力回滚（rollback）每一个已经建好的项目分支**以及正在失败的那一个**（见上方 C1b），
+// 再重新抛出一个可读的错误，点名是哪个项目失败、为什么（以及这些回滚是否成功）。回滚要带上该项目自己
+// 的快照 SHA —— 否则回滚会把这份快照代表的、用户原本未提交的改动一并销毁。
+// `createBranch`/`rollback`/`readCurrentBranch`/`abandon` 全部可注入（默认落到 tempBranch.ts 的真实
+// 实现），纯粹是为了让测试把真实 git 换成假的。
 export async function createRunTempBranches(
   ws: Workspace,
   projects: { name: string; cwd: string }[],
   runId: string,
-  createBranch: (cwd: string, base: string, runId: string) => Promise<string> = createTempBranch,
-  rollback: (cwd: string, target: string, runId: string) => Promise<void> = discardTempBranch,
-  checkClean: (cwd: string) => Promise<boolean> = isCleanTree,
-  stash: (cwd: string, runId: string) => Promise<boolean> = stashRun,
-  popStash: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'> = popRunStash,
-): Promise<{ stashed: string[] }> {
-  // Dirty tree (user decision): instead of hard-blocking, STASH the uncommitted changes so the temp
-  // branch is created off a clean tree. The controller pops the stash back after the run finalizes, so
-  // the user's changes are never lost and end up back on their branch. (Was: throw "请先提交或清理".)
-  const stashed: { name: string; cwd: string }[] = []
+  createBranch: (cwd: string, base: string, runId: string) => Promise<TempBranchCreated> = createTempBranch,
+  rollback: (cwd: string, target: string, runId: string, snapshotSha: string | null) => Promise<void> = discardTempBranch,
+  readCurrentBranch: (cwd: string) => Promise<string> = currentBranch,
+  abandon: (cwd: string, base: string, runId: string) => Promise<void> = abandonTempBranch,
+): Promise<{ targets: Record<string, string>; snapshots: Record<string, string> }> {
+  // 前置全扫：任何一个项目处于 detached HEAD、或压根读不出当前分支，都在这里挡掉，一个分支都别建
+  // （不留半状态）。不回落到 ws.projects[].branch —— 那个字段正是本次要修掉的错误来源。
+  //
+  // Task 8 审查修正：readCurrentBranch（tempBranch.ts 的 currentBranch）现在只对 detached HEAD 归一
+  // 返回 ''，其它失败（项目目录不存在、不是 git 仓库、git 未装……）一律原样抛出 —— 这里必须分开接住，
+  // 否则两种性质完全不同的失败会被一句「请 git switch」统一打发，而 git switch 对一个目录都不存在的
+  // 项目毫无意义。抛出的信息把 git 的原始报错带出来，不替用户瞎猜成因。
+  const targets: Record<string, string> = {}
   for (const project of projects) {
-    if (!(await checkClean(project.cwd))) {
-      if (await stash(project.cwd, runId)) stashed.push({ name: project.name, cwd: project.cwd })
+    let base: string
+    try {
+      base = await readCurrentBranch(project.cwd)
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new Error(`项目「${project.name}」读取当前分支失败，无法确定运行基准：${detail}`)
     }
+    if (!base) {
+      throw new Error(`项目「${project.name}」当前处于 detached HEAD（未在任何分支上），请先 git switch 到一个分支再启动工作流`)
+    }
+    if (/^forge\/run-/.test(base)) {
+      throw new Error(
+        `项目「${project.name}」当前停在上一次工作流的运行分支 ${base} 上，不能拿它当这次的运行基准`
+        + `（否则这次的成果会被合进那条分支，你自己的分支一行都收不到）。`
+        + `请先 git switch 回你自己的开发分支再启动；${base} 上留着上一次运行的成果，确认处理完之前别删。`
+        // Task 8 residual fix (R5)：停在这条分支上最常见的原因不是「手滑切过去看了一眼」，是上一次
+        // 运行压根没收尾——而那种情况下 git switch 不是出路：run2Handlers.ts:150-152 已经在
+        // run2:launch-start 里用「当前工作区有未完成的工作流」原样挡住了重新启动，真正的出路是恢复
+        // 提示（resumable 横幅）里的「继续」或「丢弃」。原来这条报错只字未提这个可能性，会把人指向一条
+        // 走不通的路（切完分支照样被上面那句拦下）。
+        + `如果是因为上一次运行还没收尾才停在这里，出路是恢复提示里的「继续」或「丢弃」，不是在这儿手动切分支。`
+      )
+    }
+    targets[project.name] = base
   }
-  // If we can't even start the run, restore every stash we just made (the changes belong back on the
-  // user's tree, not marooned in a stash for a run that never ran).
-  const unstashAll = async () => { for (const s of stashed) { try { await popStash(s.cwd, runId) } catch { /* best-effort */ } } }
 
+  const snapshots: Record<string, string> = {}
   const created: { name: string; cwd: string; target: string }[] = []
   for (const project of projects) {
-    const target = ws.projects.find((p) => p.name === project.name)?.branch
-    if (!target) {
-      await unstashAll()
-      throw new Error(`项目「${project.name}」缺少目标分支配置(工作区projects未设置branch),无法创建运行分支`)
-    }
+    const target = targets[project.name]
     try {
-      await createBranch(project.cwd, target, runId)
+      const { snapshotSha } = await createBranch(project.cwd, target, runId)
+      if (snapshotSha) snapshots[project.name] = snapshotSha
       created.push({ name: project.name, cwd: project.cwd, target })
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
+      const rolledBack: string[] = []
       const rollbackFailures: string[] = []
-      for (const c of created) {
-        try {
-          await rollback(c.cwd, c.target, runId)
-        } catch (rollbackErr) {
-          rollbackFailures.push(`${c.name}(${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)})`)
+      const undo = async (name: string, act: () => Promise<void>): Promise<void> => {
+        try { await act(); rolledBack.push(name) } catch (e) {
+          rollbackFailures.push(`${name}(${e instanceof Error ? e.message : String(e)})`)
         }
       }
-      await unstashAll()   // run isn't starting → give the user their stashed changes back
+      // 失败的这个项目排在最前面撤 —— 它才是「HEAD 被留在临时分支上」的那个(见上方 C1b 注释)。
+      await undo(project.name, () => abandon(project.cwd, target, runId))
+      for (const c of created) {
+        await undo(c.name, () => rollback(c.cwd, c.target, runId, snapshots[c.name] ?? null))
+      }
       const rollbackNote = rollbackFailures.length
         ? ` — 回滚也失败,请手动检查这些项目的分支状态: ${rollbackFailures.join(', ')}`
-        : created.length
-          ? ` (已回滚已建的 ${created.length} 个项目分支: ${created.map((c) => c.name).join(', ')})`
-          : ''
+        : ` (已回滚 ${rolledBack.length} 个项目的分支: ${rolledBack.join(', ')})`
       throw new Error(`项目「${project.name}」创建运行分支失败: ${detail}${rollbackNote}`)
     }
   }
-  return { stashed: stashed.map((s) => s.name) }
+  return { targets, snapshots }
 }

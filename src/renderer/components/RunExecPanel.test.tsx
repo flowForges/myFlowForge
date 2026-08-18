@@ -18,6 +18,10 @@ function makeRun2(state: any = null, laneLogs: Record<string, any[]> = {}): Run2
     pause: vi.fn(),
     resume: vi.fn(),
     jumpBack: vi.fn(),
+    // #7: FinalizeFailureCard's onHandoff/onRetry route through these — see RunExecPanel's own
+    // doc on the judgment call (resolveGate's gate id is unreachable by the time the card renders).
+    discardResumable: vi.fn(async () => {}),
+    resumeFromDisk: vi.fn(async () => {}),
   } as unknown as Run2Api
 }
 
@@ -289,6 +293,233 @@ describe('RunExecPanel', () => {
 
     expect(screen.getByText(/合并临时分支失败.*CONFLICT/)).toBeInTheDocument()
     expect(screen.queryByText('工作流已结束 · 存在失败阶段，请检查后处理')).toBeNull()
+  })
+
+  // #7: once the controller carries the STRUCTURED per-project detail (state.finalizeFailure), the
+  // panel must show the FinalizeFailureCard instead of the bare failedMessage string tested above —
+  // and wire its two buttons to what RunExecPanel can actually reach (see its own doc for why
+  // discardResumable/resumeFromDisk, not resolveGate).
+  describe('#7 finalize-failure card (state.finalizeFailure present)', () => {
+    function finalizeFailedState() {
+      return baseState({
+        status: 'failed',
+        error: '无法自动合并 — zgh: CONFLICT (content): Merge conflict in app.ts',
+        finalizeFailure: [{
+          project: 'zgh', target: 'main', tempBranch: 'forge/run2-1',
+          conflictFiles: ['app.ts'], detail: 'CONFLICT (content): Merge conflict in app.ts',
+        }],
+        machine: {
+          plan: baseState().machine.plan,
+          stages: [
+            { key: 'assess', status: 'done', round: 0 },
+            { key: 'design', status: 'done', round: 0 },
+            { key: 'develop', status: 'done', round: 0 },
+            { key: 'review', status: 'done', round: 0 },
+          ],
+          currentIndex: 4,
+        },
+      })
+    }
+
+    it('renders the FinalizeFailureCard (not the bare failedMessage string) when finalizeFailure is present', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      render(<RunExecPanel run2={run2} />)
+      expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
+      expect(screen.getAllByText(/forge\/run2-1/).length).toBeGreaterThan(0)
+      expect(screen.queryByText(/^无法自动合并 — zgh/)).toBeNull()
+    })
+
+    // 2026-08-17 全分支终审(minor):这张卡曾被塞进 `.wfo-runctl` —— 一条 `display:flex;
+    // align-items:center` 的状态条,`.done` 时整条染成 --ok 的绿色。于是「无法收尾」这张 .msg-req 大卡
+    // 长在了一枚绿色的成功药丸里,活跑分支里它还会变成 flex 项跟 `.rmsg{flex:1}` 抢宽度而自己没有 basis。
+    it('失败卡不许长在 .wfo-runctl(绿色成功状态条)里', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      const { container } = render(<RunExecPanel run2={run2} />)
+      const card = container.querySelector('.ff-card')
+      expect(card).toBeTruthy()
+      expect(card!.closest('.wfo-runctl')).toBeNull()
+      // 终态下有卡就不该再同时渲染那条状态条(它只会重复一遍同一件事,还带着绿色语义)。
+      expect(container.querySelector('.wfo-runctl')).toBeNull()
+    })
+
+    it('活跑(重新收尾进行中)时,失败卡是运行控制条的兄弟而不是它的 flex 子项', () => {
+      const state = finalizeFailedState()
+      const run2 = makeRun2({ ...state, status: 'awaiting' })
+      const { container } = render(<RunExecPanel run2={run2} />)
+      const card = container.querySelector('.ff-card')
+      expect(card).toBeTruthy()
+      expect(card!.closest('.wfo-runctl')).toBeNull()
+      // 运行控制条本身还在(暂停/终止仍然可用)——这条修的是嵌套关系,不是把控制条删掉。
+      expect(container.querySelector('.wfo-runctl')).toBeTruthy()
+    })
+
+    it('「知道了，我自己处理」calls run2.discardResumable (the gate id is already gone by the time this card exists)', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      render(<RunExecPanel run2={run2} />)
+      fireEvent.click(screen.getByText('知道了，我自己处理'))
+      expect(run2.discardResumable).toHaveBeenCalled()
+      expect(run2.resolveGate).not.toHaveBeenCalled()
+    })
+
+    it('重新收尾 calls run2.resumeFromDisk — the same re-run-the-finalize-gate call the resumable banner\'s 继续 button already makes', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      render(<RunExecPanel run2={run2} />)
+      fireEvent.click(screen.getByText('重新收尾'))
+      expect(run2.resumeFromDisk).toHaveBeenCalled()
+    })
+
+    // #7 fix round 2 (N1): a read-only replay has no run2 to act on AT ALL — both 重新收尾 (already
+    // fixed round 1) and 知道了，我自己处理 must be absent. Before this fix the button rendered and,
+    // per round 1's own F3 fix, clicking it swapped the card to "已记录 · 交给你自己处理" even though
+    // nothing was recorded anywhere — a live gate id doesn't exist, discardResumable no-ops, and
+    // there's no run2 to no-op against in the first place. RunHistoryPanel.tsx renders exactly this
+    // shape: <RunExecPanel staticState readOnly> with no run2, for any saved run whose
+    // finalizeFailure is still on disk.
+    it('omits BOTH 重新收尾 and 知道了，我自己处理 (no live run2 at all) in read-only replay, but still shows the informational card', () => {
+      render(<RunExecPanel staticState={finalizeFailedState() as any} readOnly />)
+      expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
+      expect(screen.queryByText('重新收尾')).toBeNull()
+      expect(screen.queryByText('知道了，我自己处理')).toBeNull()
+      // Not just the button — the warning that would refer to a click nothing can act on must also
+      // be gone (a click that's a genuine no-op still, arguably, has "nothing to warn about", but
+      // the button itself not existing at all is the actual fix N1 asked for).
+      expect(screen.queryByText(/清除这条运行记录/)).toBeNull()
+    })
+
+    // #7 fix round 1 (F2): the fallback route (discardResumable) ERASES the saved run record — the
+    // warning saying so must appear before the click, and ONLY when that fallback is actually what
+    // will happen (no live gate to resolve against instead).
+    it('shows the "this erases the record" warning only in the no-pending-gate fallback path', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      render(<RunExecPanel run2={run2} />)
+      expect(screen.getByText(/清除这条运行记录/)).toBeInTheDocument()
+    })
+
+    // #7 fix round 2 (N2) / round 3: the warning must not fire once discardResumable would
+    // genuinely be a no-op — persist.ts's discardResumableRun refuses to delete anything once the
+    // saved run is already `finalized` (its own guard: `isTerminalStatus && !isUnfinalizedFailure`
+    // → refuse). This is what a RE-RENDER after a PRIOR resolveGate handoff already succeeded looks
+    // like: no pending gate (already resolved+dropped), finalizeFailure still lingering (handoff
+    // never clears it), but `finalized` now true.
+    // #7 fix round 3: round 2 only suppressed the WARNING here and left the button itself showing
+    // (asserted below, prior to this round) — but the same reasoning that kills the warning (a
+    // click here can act on neither route: no pending gate to resolveGate against, and
+    // discardResumable's own guard refuses because `finalized` is true) means the button is exactly
+    // as unqualified as the retry-pre-gate window's. `isDiscardableShape` requires `!state.finalized`
+    // for precisely this reason, so `pendingFinalizeGate || isDiscardableShape` now correctly omits
+    // it here too — nothing is lost: the record already IS handed-off (finalized/finalizeHandedOff
+    // set by the resolveGate call that already happened), so there is genuinely nothing left to do.
+    it('omits 知道了，我自己处理 once the run is already finalized (discardResumable would be a no-op, same as the retry pre-gate window)', () => {
+      const alreadyHandedOff = { ...finalizeFailedState(), finalized: true }
+      const run2 = makeRun2(alreadyHandedOff)
+      render(<RunExecPanel run2={run2} />)
+      expect(screen.queryByText(/清除这条运行记录/)).toBeNull()
+      expect(screen.queryByText('知道了，我自己处理')).toBeNull()
+      // The card itself (and its detail) is still shown — only the unqualified button is gone.
+      expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
+    })
+
+    // #7 fix round 2 (N3): F6 only stops NEW `{status:'ok', finalizeFailure:[…]}` states from being
+    // written going forward — it does not migrate whatever's ALREADY sitting on a real user's disk
+    // from before this task existed. Without a status guard, replaying such an old saved 'ok' run in
+    // 运行历史 would show 无法自动合并 in place of the correct 工作流已完成 message.
+    it('does NOT render the failure card for a legacy/pre-F6 saved state whose status is already "ok"', () => {
+      const legacyOkWithStaleFailure = { ...finalizeFailedState(), status: 'ok' }
+      render(<RunExecPanel staticState={legacyOkWithStaleFailure as any} readOnly />)
+      expect(screen.queryByText(/本次改动一个都没丢/)).toBeNull()
+      expect(screen.getByText('工作流已完成 · 所有阶段通过，变更已就绪')).toBeInTheDocument()
+    })
+
+    // #7 fix round 1 (F3): the click must produce a VISIBLE result — discardResumable only touches
+    // on-disk state, never `state.finalizeFailure` itself (see RunExecPanel's own doc), so without
+    // this the card just sat there unchanged after the only button on it was clicked.
+    it('clicking 知道了，我自己处理 swaps the card for a visible confirmation', () => {
+      const run2 = makeRun2(finalizeFailedState())
+      render(<RunExecPanel run2={run2} />)
+      fireEvent.click(screen.getByText('知道了，我自己处理'))
+      expect(screen.getByText(/已记录/)).toBeInTheDocument()
+      expect(screen.queryByText('知道了，我自己处理')).toBeNull()
+    })
+
+    // #7 fix round 1 (F1/F2, the reviewer's actual fix): 重新收尾 re-enters runFinalizeGate() and
+    // re-raises a FRESH finalize gate with a LIVE id into state.inbox — status flips 'failed' →
+    // 'awaiting' while state.finalizeFailure still carries the PREVIOUS attempt's failure (cleared
+    // only on a clean retry — see controller.ts's F6 fix). That live id is what makes
+    // resolveGate-based handoff reachable at all; round 0's `discardResumable`-only call missed this
+    // window entirely and would have erased the record even when a resolvable gate existed.
+    describe('F1/F2: a LIVE finalize gate is pending (重新收尾 in flight)', () => {
+      function retryPendingState() {
+        const base = finalizeFailedState()
+        return { ...base, status: 'awaiting', inbox: [{
+          id: 'gate-retry-1', kind: 'gate', stageKey: '__finalize__', stageName: '收尾确认',
+          body: '全部完成，合并到目标分支？', finalize: true, targetBranch: 'main', tempBranch: 'forge/run2-1',
+        }] }
+      }
+
+      it('the card still renders (finalizeFailure lingers) even though status is "awaiting", not "failed"', () => {
+        const run2 = makeRun2(retryPendingState())
+        render(<RunExecPanel run2={run2} />)
+        expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
+      })
+
+      it('知道了，我自己处理 calls resolveGate(gateId, {type:"handoff"}) on the pending gate, NOT discardResumable', () => {
+        const run2 = makeRun2(retryPendingState())
+        render(<RunExecPanel run2={run2} />)
+        fireEvent.click(screen.getByText('知道了，我自己处理'))
+        expect(run2.resolveGate).toHaveBeenCalledWith('gate-retry-1', { type: 'handoff' })
+        expect(run2.discardResumable).not.toHaveBeenCalled()
+      })
+
+      it('omits both the erase-record warning and 重新收尾 (retrying again would just throw — a live controller already owns this workspace)', () => {
+        const run2 = makeRun2(retryPendingState())
+        render(<RunExecPanel run2={run2} />)
+        expect(screen.queryByText(/清除这条运行记录/)).toBeNull()
+        expect(screen.queryByText('重新收尾')).toBeNull()
+      })
+
+      it('still gives visible feedback (F3) on click, via the same confirmation swap', () => {
+        const run2 = makeRun2(retryPendingState())
+        render(<RunExecPanel run2={run2} />)
+        fireEvent.click(screen.getByText('知道了，我自己处理'))
+        expect(screen.getByText(/已记录/)).toBeInTheDocument()
+      })
+    })
+
+    // #7 fix round 3: the window BETWEEN clicking 重新收尾 and the fresh finalize gate landing in
+    // state.inbox. resumeFromDisk() re-enters the controller synchronously, but runFinalizeGate()
+    // (which raises the new gate — see F1/F2's retryPendingState above) is only reached after
+    // runHooksAfter('__wf') + buildRunSummary() — a real provider call, seconds to a minute wide.
+    // During that window: run2 is bound, finalizeFailure still lingers (rehydrated from the prior
+    // attempt), but state.inbox has NO pending finalize gate yet (pendingFinalizeGate null) AND
+    // status is 'running' (RunController's default field initializer — see controller.ts's
+    // constructor doc — never overwritten until the loop reaches a stage boundary or
+    // runFinalizeGate itself), so isDiscardableShape (which requires status==='failed') is also
+    // false. Both routes handleHandoff can take are structurally unreachable here:
+    // resolveGate(pendingFinalizeGate.id, ...) has no id, and discardResumable()'s own guard
+    // (persist.ts's isUnfinalizedFailure) refuses because a live controller already owns the
+    // workspace. Before this fix the button rendered anyway (gated only on `run2 ?`) and a click
+    // there fired setHandoffAckedRunId unconditionally — permanently swapping the card to "已记录"
+    // with NOTHING actually recorded anywhere, taking the failure detail and 重新收尾 down with it.
+    describe('#7 fix round 3: retry pre-gate window (click can act on neither route yet)', () => {
+      function retryPreGateState() {
+        const base = finalizeFailedState()
+        return { ...base, status: 'running', inbox: [] }
+      }
+
+      it('omits 知道了，我自己处理 (neither resolveGate nor discardResumable can do anything here)', () => {
+        const run2 = makeRun2(retryPreGateState())
+        render(<RunExecPanel run2={run2} />)
+        expect(screen.queryByText('知道了，我自己处理')).toBeNull()
+      })
+
+      it('still shows the failure detail and the 重新收尾 retry control', () => {
+        const run2 = makeRun2(retryPreGateState())
+        render(<RunExecPanel run2={run2} />)
+        expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
+        expect(screen.getAllByText(/forge\/run2-1/).length).toBeGreaterThan(0)
+        expect(screen.getByText('重新收尾')).toBeInTheDocument()
+      })
+    })
   })
 
   it('a genuine per-lane stage failure (no state.error) keeps the existing "存在失败阶段" text', () => {

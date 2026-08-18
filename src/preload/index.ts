@@ -345,7 +345,8 @@ const api = {
   // onEngineEvent above — none of those are touched.
   run2: {
     start: (opts: { workspacePath: string; runId: string; stages: unknown[]; projects: unknown[] }) => ipcRenderer.invoke(CH.run2Start, opts),
-    checkDirty: (workspacePath: string): Promise<string[]> => ipcRenderer.invoke(CH.run2CheckDirty, { workspacePath }),
+    // Task 8: the launch gate's 运行基准 section — see run2Handlers.ts's ProjectBaseInfo/run2BaseInfo doc.
+    baseInfo: (workspacePath: string): Promise<import('../main/ipc/run2Handlers').ProjectBaseInfo[]> => ipcRenderer.invoke(CH.run2BaseInfo, { workspacePath }),
     resolveGate: (a: { workspacePath: string; eventId: string; decision: unknown }) => ipcRenderer.invoke(CH.run2ResolveGate, a),
     resolveLane: (a: { workspacePath: string; eventId: string; decision: unknown }) => ipcRenderer.invoke(CH.run2ResolveLane, a),
     addFeedback: (a: { workspacePath: string; text: string }) => ipcRenderer.invoke(CH.run2AddFeedback, a),

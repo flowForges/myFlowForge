@@ -4,10 +4,13 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { RunStore } from '../run/runStore'
-import { RunController, type RunControllerState, type RunLogLine } from './controller'
-import { loadControllerState } from './persist'
+import { RunController, type RunControllerState, type RunControllerDeps, type RunLogLine } from './controller'
+import { loadControllerState, type SavedControllerState } from './persist'
+import { TempBranchMergeError } from './tempBranch'
+import { isUnfinalizedFailure } from './manager'
 import type { RunPlan, MachineState } from './machine'
-import type { RunEvent } from './events'
+import type { RunEvent, GateEvent } from './events'
+import type { GateDecision } from './decisions'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
 import type { BridgeRunCtx, ForgeBridge } from '../mcp/forgeBridge'
 
@@ -1583,6 +1586,59 @@ describe('RunController', () => {
       expect(parkCalls).toEqual(['/ws/a', '/ws/b']) // still attempted for BOTH projects
     })
 
+    // 2026-08-17 全分支终审 C1「第二入口」:stage 循环里任何一处抛错(这里用零工单那条),原本直接落盘
+    // failed 就走了 —— 每个项目都还停在 forge/run-<id> 上,而 Run2Manager.resumable 又不认这种状态
+    // (isUnfinalizedFailure 要求阶段全 done),于是没有横幅、没有清理、没有痕迹;下一次启动实测 HEAD
+    // 拿到的就是这条被遗弃的临时分支。现在最外层 catch 先 park 一次再落盘。
+    it('C1:stage 循环里抛错(零工单)时也要 park,不能把项目留在临时分支上', async () => {
+      const store = new RunStore(ws, 'r1')
+      const parkCalls: Array<{ cwd: string; target: string }> = []
+      // scope 'per-project' + 一个项目都不参与 → buildWorkOrders 返回 [] → 守卫在循环里抛错。
+      // projectTargets 仍然有值:分支是在 launch 阶段建的,和「这个阶段有没有工单」无关。
+      const plan2: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+      const c = new RunController(plan2, {
+        providers: {}, store, env: {}, projects: [], sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main' },
+        parkTempBranch: async (cwd, target) => { parkCalls.push({ cwd, target }) },
+      })
+      await expect(c.start()).rejects.toThrow(/no work orders/)
+      // finalizeTargets 交叉 deps.projects,这个 run 一个项目都没参与 → 没有分支要收,park 不该被调。
+      expect(parkCalls).toEqual([])
+      expect(c.state.status).toBe('failed')
+    })
+
+    it('C1:stage 循环里抛错时,参与运行的项目会被 park(工作树切回基准分支、临时分支保留)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const parkCalls: Array<{ cwd: string; target: string }> = []
+      // 用一个会抛错的 emitUpdate 订阅者制造「阶段跑到一半从循环里抛出来」——这正是最外层 catch 存在
+      // 的理由之一(见 RunControllerState.error 的注释),而它此前不做任何 git 清理。
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        parkTempBranch: async (cwd, target) => { parkCalls.push({ cwd, target }) },
+        mergeTempBranch: async () => { throw new Error('不该走到收尾') },
+      })
+      c.onUpdate(() => { throw new Error('subscriber boom') })
+      await expect(c.start()).rejects.toThrow(/subscriber boom/)
+      expect(parkCalls).toEqual([{ cwd: '/ws/a', target: 'main' }, { cwd: '/ws/b', target: 'main' }])
+    })
+
+    // 反面:收尾自己失败那条路径**不能**再 park —— 合并失败时 mergeTempBranch 已经把工作树切回
+    // target 了,再 park 一次就是 C2 那个 bug(把用户的改动提交到他自己的分支上)。
+    it('C1:收尾失败抛上来时不追加 park(那会把用户的改动提交到他自己的分支上)', async () => {
+      const store = new RunStore(ws, 'r1')
+      const parkCalls: string[] = []
+      const c = new RunController(plan, {
+        providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { a: 'main', b: 'main' },
+        mergeTempBranch: async (cwd) => { if (cwd === '/ws/b') throw new Error('CONFLICT (content): app.ts') },
+        parkTempBranch: async (cwd) => { parkCalls.push(cwd) },
+      })
+      c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, (e as any).finalize ? { type: 'merge' } : { type: 'advance' }) })
+      await expect(c.start()).rejects.toThrow(/CONFLICT/)
+      expect(parkCalls).toEqual([])
+    })
+
     it('a merge failure for one project surfaces a readable per-project error — start() rejects rather than silently dropping it', async () => {
       const store = new RunStore(ws, 'r1')
       const c = new RunController(plan, {
@@ -1700,6 +1756,39 @@ describe('RunController', () => {
       // outcomes reconstructed for display continuity only (see RehydrateState's doc) — s1 shows up
       // even though its providers never ran in THIS process instance.
       expect(final.outcomes['s1']?.[0]?.status).toBe('ok')
+    })
+
+    // #7 hard requirement 2: without this, a resumed run whose finalize gate had already failed once
+    // would rehydrate as `{ status:'failed', error: undefined, finalizeFailure: undefined }` — the
+    // resumable banner correctly stops re-pestering (status/finalized round-trip already), but the
+    // failure card has nothing left to render (no branch name, no conflict files). Checked directly
+    // off the freshly-constructed controller (start() never called here) to prove the CONSTRUCTOR
+    // itself does the rehydrating, not some side effect of re-running the finalize gate.
+    it('rehydrates error and finalizeFailure from a saved state, so the failure card survives an app restart', () => {
+      const store = new RunStore(ws, 'r1')
+      const savedMachine: MachineState = {
+        plan,
+        stages: [
+          { key: 'design', status: 'done', round: 0 },
+          { key: 'develop', status: 'done', round: 0 },
+        ],
+        currentIndex: 1,
+      }
+      const finalizeFailure = [{
+        project: 'a', target: 'main', tempBranch: 'forge/run-r1',
+        conflictFiles: ['src/x.ts'], detail: 'CONFLICT (content): Merge conflict in src/x.ts',
+      }]
+      const c = new RunController(
+        plan,
+        { providers: {}, store, env: {}, projects },
+        {
+          machine: savedMachine,
+          error: '无法自动合并 — a: CONFLICT (content): Merge conflict in src/x.ts',
+          finalizeFailure,
+        },
+      )
+      expect(c.state.error).toBe('无法自动合并 — a: CONFLICT (content): Merge conflict in src/x.ts')
+      expect(c.state.finalizeFailure).toEqual(finalizeFailure)
     })
 
     it('a loaded machine that is already fully `done` resumes straight to the finalize check without invoking any provider', async () => {
@@ -2190,8 +2279,11 @@ describe('收尾失败:状态必须落盘,不能装作没事', () => {
   })
 
   it('落盘的状态带着真实失败原因(供界面直接显示,不用猜)', async () => {
+    // Task 6: runFinalizeGate 的失败摘要从「一句话字符串」改成了结构化 finalizeFailure（渲染层可以
+    // 拼「可直接粘贴的手工合并命令」），error 这句人话摘要的措辞也跟着变了（`无法自动合并 — ...`），
+    // 但它仍然是给「只读 error 字段」的老消费者兜底的一句人话——具体失败原因必须还在。
     const saved = await runMergeFailure()
-    expect(saved.error).toContain('合并临时分支失败')
+    expect(saved.error).toContain('无法自动合并')
     expect(saved.error).toContain('Merge conflict')
   })
 
@@ -2225,5 +2317,219 @@ describe('收尾失败:状态必须落盘,不能装作没事', () => {
     c.onEvent((e) => { if (e.kind === 'gate') c.resolveGate(e.id, { type: 'advance' }) })
     await c.start()
     expect(loadControllerState(store)!.finalized).toBe(true)
+  })
+})
+
+// Task 6: 收尾门三路决策(merge/discard/park) + handoff 收掉失败的 run。这组测试只关心"决定落到
+// state 上的效果"，不关心阶段怎么跑——直接从一个「每个阶段都已 done」的 machine 状态起步
+// (rehydrate)，让 start() 一进 while 循环就 break，径直进 runFinalizeGate()，同 Finding 3 那条
+// resume-while-parked 测试(above)的手法。
+const finalizablePlan: RunPlan = { runId: 'r1', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+function finalizableMachine(): MachineState {
+  return { plan: finalizablePlan, stages: [{ key: 'develop', status: 'done', round: 0 }], currentIndex: 0 }
+}
+
+interface FinalizableController {
+  plan: RunPlan
+  deps: RunControllerDeps
+  // 最近一次 openFinalizeGate 落地的 controller.state 快照 —— resolveFinalize/captureFinalizeGate
+  // 每次调用后都会刷新它,供测试断言用(见下方两个 helper)。
+  state: RunControllerState
+}
+
+function makeFinalizableController(overrides: Partial<RunControllerDeps> = {}): FinalizableController {
+  const store = new RunStore(ws, finalizablePlan.runId)
+  const deps: RunControllerDeps = {
+    providers: { x: okProvider() }, store, env: {},
+    projects: [{ name: 'web', cwd: '/ws/web' }],
+    sleep: async () => {}, now: () => 0, makeId: idFactory(),
+    ...overrides,
+  }
+  return { plan: finalizablePlan, deps, state: { machine: finalizableMachine(), inbox: [], feedback: [], outcomes: {}, status: 'running', pendingDirective: {}, liveLanes: {}, stageTimings: {}, laneTimings: {}, laneSessions: {}, paused: false } }
+}
+
+// 每次都新建一个 controller、从「全部阶段已 done」的状态起步、订阅先于 start()——模拟
+// Run2Manager.resumeFromDisk 每次重开会话都重建 controller 这件事:handoff 测试要验的正是「第一次
+// merge 失败、start() 已经 reject 掉之后，第二次(模拟重开会话)还能再走到收尾门」，这不可能靠复用
+// 同一个已经跑完的 controller 实例做到。
+async function openFinalizeGate(c: FinalizableController): Promise<{ controller: RunController; event: GateEvent; startPromise: Promise<RunControllerState> }> {
+  const controller = new RunController(c.plan, c.deps, { machine: finalizableMachine() })
+  const eventPromise = new Promise<GateEvent>((resolve) => {
+    const off = controller.onEvent((e) => {
+      if (e.kind === 'gate' && e.finalize) { off(); resolve(e) }
+    })
+  })
+  const startPromise = controller.start()
+  const event = await eventPromise
+  return { controller, event, startPromise }
+}
+
+// 打开收尾门、读一眼卡片内容，故意不resolve——调用方(测试)自己决定要不要继续。
+async function captureFinalizeGate(c: FinalizableController): Promise<GateEvent> {
+  const { controller, event } = await openFinalizeGate(c)
+  c.state = controller.state
+  return event
+}
+
+// 打开收尾门并立刻用给定决定resolve掉，等到这一次 start() 落地(成功或抛错)为止，把最终 state
+// 同步回 c.state。抛错时原样往外抛，让调用方能 `await expect(...).rejects.toThrow()`。
+async function resolveFinalize(c: FinalizableController, d: GateDecision): Promise<RunControllerState> {
+  const { controller, event, startPromise } = await openFinalizeGate(c)
+  controller.resolveGate(event.id, d)
+  try {
+    const final = await startPromise
+    c.state = final
+    return final
+  } catch (err) {
+    c.state = controller.state
+    throw err
+  }
+}
+
+// 把 RunControllerState 摆成 isUnfinalizedFailure(manager.ts) 要的 SavedControllerState 形状——
+// 只借用它读的那三个字段(status/finalized/machine.stages),其余字段(outcomes 的 slim 形状等)
+// 测试用不上,直接结构性 cast。
+function toSaved(s: RunControllerState): SavedControllerState {
+  return s as unknown as SavedControllerState
+}
+
+describe('收尾门三路决策', () => {
+  it('park → 调 parkTempBranch 并带上快照 SHA，不调 discard/merge', async () => {
+    const parked: Array<[string, string, string, string | null]> = []
+    const c = makeFinalizableController({
+      projectTargets: { web: 'branch1' },
+      snapshots: { web: 'sha-web' },
+      parkTempBranch: async (cwd, target, runId, sha) => { parked.push([cwd, target, runId, sha ?? null]) },
+      discardTempBranch: async () => { throw new Error('不该被调用') },
+      mergeTempBranch: async () => { throw new Error('不该被调用') },
+    })
+    await resolveFinalize(c, { type: 'park' })
+    expect(parked).toEqual([['/ws/web', 'branch1', c.plan.runId, 'sha-web']])
+    expect(c.state.finalized).toBe(true)
+  })
+
+  it('discard → 带上快照 SHA', async () => {
+    const discarded: Array<string | null> = []
+    const c = makeFinalizableController({
+      projectTargets: { web: 'branch1' },
+      snapshots: { web: 'sha-web' },
+      discardTempBranch: async (_cwd, _t, _r, sha) => { discarded.push(sha ?? null) },
+    })
+    await resolveFinalize(c, { type: 'discard' })
+    expect(discarded).toEqual(['sha-web'])
+  })
+
+  it('收尾门事件带上真实的目标分支与临时分支名', async () => {
+    const c = makeFinalizableController({ projectTargets: { web: 'branch1' } })
+    const gate = await captureFinalizeGate(c)
+    expect(gate.targetBranch).toBe('branch1')
+    expect(gate.tempBranch).toBe(`forge/run-${c.plan.runId}`)
+    // #7 fix round 1 (F5, user-ruled): `targets` (every participating project's OWN target) rides
+    // alongside `targetBranch` — single-project here, so it's a one-entry list matching targetBranch.
+    expect(gate.targets).toEqual([{ project: 'web', target: 'branch1' }])
+  })
+
+  // #7 fix round 1 (F5, user-ruled): targetBranch alone is only targets[0] — a real multi-project run
+  // can have genuinely DIFFERENT per-project targets. `targets` must carry every one of them, not just
+  // the first, so the renderer can be honest about it instead of implying one branch covers everyone.
+  it('多项目目标分支不同时，收尾门事件的 targets 逐项目列出真实分支名', async () => {
+    const multiPlan: RunPlan = { runId: 'r-multi', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const store = new RunStore(ws, multiPlan.runId)
+    const controller = new RunController(
+      multiPlan,
+      {
+        providers: { x: okProvider() }, store, env: {}, projects: [{ name: 'web', cwd: '/ws/web' }, { name: 'api', cwd: '/ws/api' }],
+        sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { web: 'branch1', api: 'main' },
+      },
+      { machine: { plan: multiPlan, stages: [{ key: 'develop', status: 'done', round: 0 }], currentIndex: 0 } },
+    )
+    const gate = await new Promise<GateEvent>((resolve) => {
+      const off = controller.onEvent((e) => { if (e.kind === 'gate' && e.finalize) { off(); resolve(e) } })
+      void controller.start()
+    })
+    expect(gate.targets).toEqual([{ project: 'web', target: 'branch1' }, { project: 'api', target: 'main' }])
+    // targetBranch keeps its existing single-string fallback semantics (targets[0]) for old consumers.
+    expect(gate.targetBranch).toBe('branch1')
+  })
+})
+
+describe('合并失败 → 结构化 finalizeFailure + handoff 收尾', () => {
+  it('TempBranchMergeError 被拆成 finalizeFailure，而不是只留一句字符串', async () => {
+    const c = makeFinalizableController({
+      projectTargets: { web: 'branch1' },
+      mergeTempBranch: async () => {
+        throw new TempBranchMergeError('CONFLICT', ['src/foo.ts'], 'forge/run-r1', 'branch1')
+      },
+    })
+    await expect(resolveFinalize(c, { type: 'merge' })).rejects.toThrow()
+    expect(c.state.finalizeFailure).toEqual([
+      // I2(2026-08-17 终审):记录里带上用户当时选的是哪个动作 —— 失败卡的标题和可粘贴命令按它分岔,
+      // 否则一个选了「先不合并」的用户会被劝去合并他刚刚拒绝的东西。
+      { project: 'web', target: 'branch1', tempBranch: 'forge/run-r1', conflictFiles: ['src/foo.ts'], detail: 'CONFLICT', decision: 'merge' },
+    ])
+    expect(c.state.finalized).toBeFalsy()
+  })
+
+  it('I2:丢弃/保留失败时记录的 decision 是用户真正选的那个动作,不是恒定的 merge', async () => {
+    const discardFailed = makeFinalizableController({
+      projectTargets: { web: 'branch1' },
+      discardTempBranch: async () => { throw new Error('没有丢弃 forge/run-r1') },
+    })
+    await expect(resolveFinalize(discardFailed, { type: 'discard' })).rejects.toThrow()
+    expect(discardFailed.state.finalizeFailure?.[0].decision).toBe('discard')
+
+    const parkFailed = makeFinalizableController({
+      projectTargets: { web: 'branch1' },
+      parkTempBranch: async () => { throw new Error('checkout failed') },
+    })
+    await expect(resolveFinalize(parkFailed, { type: 'park' })).rejects.toThrow()
+    expect(parkFailed.state.finalizeFailure?.[0].decision).toBe('park')
+  })
+
+  it('handoff → 置 finalized，isUnfinalizedFailure 不再认它（切会话回来不再反复弹）', async () => {
+    const c = makeFinalizableController({
+      projectTargets: { web: 'branch1' },
+      mergeTempBranch: async () => { throw new TempBranchMergeError('CONFLICT', [], 'forge/run-r1', 'branch1') },
+    })
+    await expect(resolveFinalize(c, { type: 'merge' })).rejects.toThrow()
+    await resolveFinalize(c, { type: 'handoff' })
+
+    expect(c.state.finalized).toBe(true)
+    expect(c.state.status).toBe('failed')   // 诚实：收尾确实没自动完成
+    expect(isUnfinalizedFailure(toSaved(c.state))).toBe(false)
+  })
+
+  // #7 fix round 1 (F6): a RETRY that now SUCCEEDS must clear the PREVIOUS attempt's failure
+  // record — otherwise a clean 'ok' run's terminal saved state is the self-contradictory
+  // `{status:'ok', finalized:true, error:'无法自动合并 — …', finalizeFailure:[…]}`. Simulates exactly
+  // what Run2Manager.resumeFromDisk now does (Task 7 round 1's manager.ts fix): rehydrate a NEW
+  // controller with the PREVIOUS attempt's error/finalizeFailure still on it, then resolve its
+  // freshly re-raised gate with a merge that succeeds this time.
+  it('一次成功的重试会清掉上一次失败留下的 error/finalizeFailure', async () => {
+    const store = new RunStore(ws, finalizablePlan.runId)
+    const staleFinalizeFailure = [{ project: 'web', target: 'branch1', tempBranch: 'forge/run-r1', conflictFiles: ['src/foo.ts'], detail: 'CONFLICT' }]
+    const controller = new RunController(
+      finalizablePlan,
+      { providers: { x: okProvider() }, store, env: {}, projects: [{ name: 'web', cwd: '/ws/web' }], sleep: async () => {}, now: () => 0, makeId: idFactory(), projectTargets: { web: 'branch1' }, mergeTempBranch: async () => {} },
+      { machine: finalizableMachine(), error: '无法自动合并 — web: CONFLICT', finalizeFailure: staleFinalizeFailure },
+    )
+    // Sanity: the stale failure really is present before the retry resolves — otherwise this test
+    // would trivially pass without exercising the clear-on-success path at all.
+    expect(controller.state.error).toBeTruthy()
+    expect(controller.state.finalizeFailure).toEqual(staleFinalizeFailure)
+
+    const eventPromise = new Promise<GateEvent>((resolve) => {
+      const off = controller.onEvent((e) => { if (e.kind === 'gate' && e.finalize) { off(); resolve(e) } })
+    })
+    const startPromise = controller.start()
+    const event = await eventPromise
+    controller.resolveGate(event.id, { type: 'merge' })
+    const final = await startPromise
+
+    expect(final.status).toBe('ok')
+    expect(final.finalized).toBe(true)
+    expect(final.error).toBeUndefined()
+    expect(final.finalizeFailure).toBeUndefined()
   })
 })

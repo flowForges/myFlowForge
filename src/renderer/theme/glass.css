@@ -28,16 +28,30 @@
    global.css) so the real desktop vibrancy material shows through the whole window. */
 [data-glass="on"], [data-glass="on"] body, [data-glass="on"] #root { background: transparent; }
 /* soften the structural panel seams to faint hairlines so they don't read as hard white lines
-   cutting between the sidebar / chat / inspector on glass. */
+   cutting between the sidebar / chat / inspector on glass.
+   2026-08-18:竖缝已经从「面板 border + 手柄自己那条 2px 条」两条线并成【一条】—— 就是手柄本身
+   (shell.css 的 ResizeHandle 段)。所以这里要染的对象跟着换成手柄那条线;继续染面板 border 的话,
+   这几条的特异性(0,3,1)会压过 shell.css 里撤边框的 .sidebar:has(+ .resize-handle)(:has() 取参数
+   里最高的那个,只有 0,2,0),磨砂下双层线就会原样回来 —— 实测量到过。
+   面板 border 在【没有手柄】的场合(侧栏折叠态、首页)仍然是那条缝,所以下面照旧保留一条给它们。 */
+[data-glass="on"] .resize-handle::after { background: oklch(100% 0 0 / .08); }
+[data-theme="light"][data-glass="on"] .resize-handle::after { background: oklch(0% 0 0 / .06); }
 [data-glass="on"] .sidebar { border-right-color: oklch(100% 0 0 / .08); }
 [data-glass="on"] .inspector { border-left-color: oklch(100% 0 0 / .08); }
 [data-theme="light"][data-glass="on"] .sidebar { border-right-color: oklch(0% 0 0 / .06); }
 [data-theme="light"][data-glass="on"] .inspector { border-left-color: oklch(0% 0 0 / .055); }
-/* The 5px drag-to-resize handle sits transparent between the frosted panels, so on glass it
-   showed the dark base through as a thick grey band on both sides of the chat. Tint it to match
-   the panels so it blends — the actual seam is just the faint sidebar/inspector hairline. */
-[data-glass="on"] .resize-handle { background: oklch(52% .028 262 / .3); }
-[data-theme="light"][data-glass="on"] .resize-handle { background: oklch(100% 0 0 / .38); }
+/* …但手柄在场时那条 border 必须让位,否则又是两条。写在这几条【之后】+ 同等特异性,后来者胜。 */
+[data-glass="on"] .sidebar:has(+ .resize-handle) { border-right-color: transparent; }
+[data-glass="on"] .resize-handle.insp-resize + .inspector { border-left-color: transparent; }
+[data-theme="light"][data-glass="on"] .sidebar:has(+ .resize-handle) { border-right-color: transparent; }
+[data-theme="light"][data-glass="on"] .resize-handle.insp-resize + .inspector { border-left-color: transparent; }
+/* 悬停/拖拽的主题色高亮必须压过上面那两条磨砂染色,否则磨砂下拖拽反馈就没了。 */
+[data-glass="on"] .resize-handle:hover::after,
+[data-glass="on"][data-resizing] .resize-handle::after,
+[data-resizing] [data-glass="on"] .resize-handle::after { background: var(--accent); }
+/* 这里原来给手柄刷了一层底色,是为了盖住「6px 宽的手柄夹在两块磨砂面板中间、把底色透成一条灰带」。
+   2026-08-18 手柄已经收到 1px 并自己充当那条分隔线(shell.css 的 ResizeHandle 段),6px 灰带不存在了 ——
+   再刷底色反而会在那 1px 上叠一层,和 ::after 的 var(--border) 打架,把好不容易调细的缝又染回去。故删除。 */
 /* 内层一并半透明 —— 标题栏 / 侧栏 / 底栏 / 右侧检查器 / 内容区,毛玻璃覆盖整窗而非某一块 */
 [data-glass="on"] .titlebar,
 [data-glass="on"] .statusbar { background: oklch(55% .03 262 / .08); }

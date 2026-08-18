@@ -6,7 +6,12 @@ import { RunController, type RunControllerState, type RunLogLine } from './contr
 import type { RunPlan } from './machine'
 import type { GateDecision, LaneDecision } from './decisions'
 import type { RunEvent } from './events'
-import { discardResumableRun, findLatestRun2Run, isTerminalStatus, type SavedControllerState } from './persist'
+import { discardResumableRun, findLatestRun2Run, isTerminalStatus, isUnfinalizedFailure, type SavedControllerState } from './persist'
+// #7: isUnfinalizedFailure now lives in persist.ts (discardResumableRun needs the same predicate
+// resumable() below uses — see persist.ts's doc for why they must share one definition). Re-exported
+// here so the existing `import { isUnfinalizedFailure } from './manager'` call sites (controller.test.ts)
+// keep working unchanged.
+export { isUnfinalizedFailure }
 
 export interface Run2Emit {
   event(wsPath: string, e: RunEvent): void
@@ -27,14 +32,15 @@ export interface Run2StartOpts {
   // run2:launch-start (the one channel that actually checks projects out onto a real temp branch,
   // P4-2) populates these; every other caller omits them and the finalize gate stays off.
   projectTargets?: Record<string, string>
+  // Task 5: threaded straight through into RunControllerDeps.snapshots — see its doc in
+  // controller.ts. Populated by the same run2:launch-start call that populates projectTargets above
+  // (createRunTempBranches' `snapshots` return); every other caller omits it, same as projectTargets.
+  snapshots?: Record<string, string>
   mergeTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
-  discardTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
+  discardTempBranch?: (cwd: string, target: string, runId: string, snapshotSha?: string | null) => Promise<void>
   // Finding 4 (Important — abort semantics): the abort path parks instead of discarding — see its
   // doc in controller.ts. Threaded through the same way as merge/discardTempBranch above.
-  parkTempBranch?: (cwd: string, target: string, runId: string) => Promise<void>
-  // Dirty-tree: restore the user's pre-run stash after finalize — threaded through the same way; tests
-  // inject a stub so they never touch real git. Production omits it → controller uses the real one.
-  popRunStash?: (cwd: string, runId: string) => Promise<'popped' | 'none' | 'conflict'>
+  parkTempBranch?: (cwd: string, target: string, runId: string, snapshotSha?: string | null) => Promise<void>
 }
 export interface Run2ManagerDeps {
   providers: Record<string, AgentProvider>
@@ -129,12 +135,6 @@ function summarizeResumable(runId: string, state: SavedControllerState): Resumab
   }
 }
 
-// 「所有阶段都跑完,只是收尾失败」:状态是 failed、每个阶段都 done、finalized 不为真。老的存档没有
-// finalized 字段(读出来 undefined),按「未收尾」保守处理 —— 顶多多问一次要不要重新收尾,不会丢东西。
-function isUnfinalizedFailure(state: SavedControllerState): boolean {
-  return state.status === 'failed' && !state.finalized && state.machine.stages.every((s) => s.status === 'done')
-}
-
 export class Run2Manager {
   private controllers = new Map<string, RunController>()
   // Additive: retains the terminal state of the most recently *completed* run per workspace, so the
@@ -198,10 +198,10 @@ export class Run2Manager {
       permissionMode: opts.permissionMode ?? 'full',
       sessionId: opts.sessionId,
       projectTargets: opts.projectTargets,
+      snapshots: opts.snapshots,
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,
       parkTempBranch: opts.parkTempBranch,
-      popRunStash: opts.popRunStash,
       mcpEntry: this.deps.mcpEntry,
     })
     return this.registerAndRun(opts.workspacePath, controller)
@@ -317,11 +317,14 @@ export class Run2Manager {
       // guard (WorkspaceView) would hide it everywhere. (Precedence flipped from opts-wins: a resume now
       // always passes the current session, so opts-wins would wrongly re-home a correctly-owned run.)
       sessionId: found.state.sessionId ?? opts.sessionId,
-      projectTargets: opts.projectTargets,
+      // Task 5: 与 `projects` 完全同一套优先级（见上方 Finding 1 注释）：盘上这个 run 自己记的目标分支/快照
+      // 胜过调用方的推导。调用方（run2Handlers 的 resume-from-disk）是按 ws.projects[].branch 拼的，
+      // 而那个字段不跟随用户切分支，只配当旧状态的兜底。
+      projectTargets: found.state.projectTargets ?? opts.projectTargets,
+      snapshots: found.state.snapshots ?? opts.snapshots,
       mergeTempBranch: opts.mergeTempBranch,
       discardTempBranch: opts.discardTempBranch,
       parkTempBranch: opts.parkTempBranch,
-      popRunStash: opts.popRunStash,
       mcpEntry: this.deps.mcpEntry,
     }, {
       machine: found.state.machine,
@@ -331,6 +334,11 @@ export class Run2Manager {
       stageTimings: found.state.stageTimings,
       laneTimings: found.state.laneTimings,
       laneSessions: found.state.laneSessions,
+      // #7 hard requirement 2: carry the saved finalize-failure record through resume — see
+      // RehydrateState.error/.finalizeFailure doc (controller.ts) for why omitting these would
+      // silently blank the failure card the instant a resumable run gets resumed.
+      error: found.state.error,
+      finalizeFailure: found.state.finalizeFailure,
     })
     return this.registerAndRun(wsPath, controller)
   }
