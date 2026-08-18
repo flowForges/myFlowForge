@@ -344,10 +344,22 @@ describe('RunExecPanel', () => {
       expect(run2.resumeFromDisk).toHaveBeenCalled()
     })
 
-    it('omits 重新收尾 (no live run2 to retry against) in read-only replay, but still shows the card', () => {
+    // #7 fix round 2 (N1): a read-only replay has no run2 to act on AT ALL — both 重新收尾 (already
+    // fixed round 1) and 知道了，我自己处理 must be absent. Before this fix the button rendered and,
+    // per round 1's own F3 fix, clicking it swapped the card to "已记录 · 交给你自己处理" even though
+    // nothing was recorded anywhere — a live gate id doesn't exist, discardResumable no-ops, and
+    // there's no run2 to no-op against in the first place. RunHistoryPanel.tsx renders exactly this
+    // shape: <RunExecPanel staticState readOnly> with no run2, for any saved run whose
+    // finalizeFailure is still on disk.
+    it('omits BOTH 重新收尾 and 知道了，我自己处理 (no live run2 at all) in read-only replay, but still shows the informational card', () => {
       render(<RunExecPanel staticState={finalizeFailedState() as any} readOnly />)
       expect(screen.getByText(/本次改动一个都没丢/)).toBeInTheDocument()
       expect(screen.queryByText('重新收尾')).toBeNull()
+      expect(screen.queryByText('知道了，我自己处理')).toBeNull()
+      // Not just the button — the warning that would refer to a click nothing can act on must also
+      // be gone (a click that's a genuine no-op still, arguably, has "nothing to warn about", but
+      // the button itself not existing at all is the actual fix N1 asked for).
+      expect(screen.queryByText(/清除这条运行记录/)).toBeNull()
     })
 
     // #7 fix round 1 (F2): the fallback route (discardResumable) ERASES the saved run record — the
@@ -357,6 +369,32 @@ describe('RunExecPanel', () => {
       const run2 = makeRun2(finalizeFailedState())
       render(<RunExecPanel run2={run2} />)
       expect(screen.getByText(/清除这条运行记录/)).toBeInTheDocument()
+    })
+
+    // #7 fix round 2 (N2): the warning must not fire once discardResumable would genuinely be a
+    // no-op — persist.ts's discardResumableRun refuses to delete anything once the saved run is
+    // already `finalized` (its own guard: `isTerminalStatus && !isUnfinalizedFailure` → refuse).
+    // This is what a RE-RENDER after a PRIOR resolveGate handoff already succeeded looks like: no
+    // pending gate (already resolved+dropped), finalizeFailure still lingering (handoff never
+    // clears it), but `finalized` now true.
+    it('suppresses the erase-record warning once the run is already finalized (discardResumable would be a no-op)', () => {
+      const alreadyHandedOff = { ...finalizeFailedState(), finalized: true }
+      const run2 = makeRun2(alreadyHandedOff)
+      render(<RunExecPanel run2={run2} />)
+      expect(screen.queryByText(/清除这条运行记录/)).toBeNull()
+      // The button itself is still present (run2 is bound) — only the now-inaccurate warning is gone.
+      expect(screen.getByText('知道了，我自己处理')).toBeInTheDocument()
+    })
+
+    // #7 fix round 2 (N3): F6 only stops NEW `{status:'ok', finalizeFailure:[…]}` states from being
+    // written going forward — it does not migrate whatever's ALREADY sitting on a real user's disk
+    // from before this task existed. Without a status guard, replaying such an old saved 'ok' run in
+    // 运行历史 would show 无法自动合并 in place of the correct 工作流已完成 message.
+    it('does NOT render the failure card for a legacy/pre-F6 saved state whose status is already "ok"', () => {
+      const legacyOkWithStaleFailure = { ...finalizeFailedState(), status: 'ok' }
+      render(<RunExecPanel staticState={legacyOkWithStaleFailure as any} readOnly />)
+      expect(screen.queryByText(/本次改动一个都没丢/)).toBeNull()
+      expect(screen.getByText('工作流已完成 · 所有阶段通过，变更已就绪')).toBeInTheDocument()
     })
 
     // #7 fix round 1 (F3): the click must produce a VISIBLE result — discardResumable only touches

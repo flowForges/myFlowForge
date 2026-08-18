@@ -10,7 +10,11 @@ import type { FinalizeFailure } from '../../main/run/controller'
  */
 export function FinalizeFailureCard({ failures, onHandoff, onRetry, handoffWarning }: {
   failures: FinalizeFailure[]
-  onHandoff: () => void
+  // #7 fix round 2 (N1): optional — a caller with no live run to act on (read-only historical
+  // replay, RunHistoryPanel.tsx renders <RunExecPanel staticState readOnly> with NO run2) has
+  // nothing this button could actually do. Omitting `onHandoff` hides the button entirely (see
+  // below) rather than wiring it to a no-op that still LOOKS like it did something.
+  onHandoff?: () => void
   onRetry?: () => void
   // #7 fix round 1 (F1/F2): resolveGate(gateId, {type:'handoff'}) and discardResumable() are NOT
   // equivalent — resolveGate keeps this run's saved record (marks it finalized-by-handoff, status
@@ -51,10 +55,15 @@ export function FinalizeFailureCard({ failures, onHandoff, onRetry, handoffWarni
           </div>
         ))}
         {handoffWarning ? <div className="ff-line ff-warn">{handoffWarning}</div> : null}
-        <div className="arow">
-          {onRetry ? <button className="wfo-btn ghost" onClick={onRetry}>重新收尾</button> : null}
-          <button className="wfo-btn pri" onClick={onHandoff}>知道了，我自己处理</button>
-        </div>
+        {(onRetry || onHandoff) && (
+          <div className="arow">
+            {onRetry ? <button className="wfo-btn ghost" onClick={onRetry}>重新收尾</button> : null}
+            {/* #7 fix round 2 (N1): must not render with no handler — round 1's fix made a click here
+                produce a VISIBLE "已记录" confirmation (see RunExecPanel.tsx's handoffAcked), which
+                would be a straight-up LIE with no run2 behind it: nothing gets recorded anywhere. */}
+            {onHandoff ? <button className="wfo-btn pri" onClick={onHandoff}>知道了，我自己处理</button> : null}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -1394,12 +1394,16 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             {/* 所有阶段都跑完、只是收尾(合并临时分支)失败时,说的必须是「重新收尾」——原来它按「第一个未完成
                 阶段」找,找不到就回落到最后一个阶段,于是把合并冲突说成了「从代码CR继续」,指着一个早就跑完的
                 阶段,用户完全无法理解。这一支还把真实原因(哪个项目、哪个文件冲突)直接摆出来。
-                #7 fix round 1 (F4):这也是「我的工作没了」恐慌感最重的一刻 —— 补一句诚实的安心话:改动仍在
-                forge/run-<runId> 分支上,不会因为下面任何一个按钮丢失(Task 8 会再打磨这段文案)。 */}
+                #7 fix round 1 (F4):这也是「我的工作没了」恐慌感最重的一刻 —— 补一句诚实的安心话(Task 8 会
+                再打磨这段文案)。#7 fix round 2 (N4): 原文案「不会丢」是无条件断言,但收尾失败可能来自
+                部分成功的 discard —— controller.ts 的 runFinalizeGate 逐项目收集失败、不因一个项目
+                失败就停手,所以已经成功丢弃的项目其临时分支是真的没了。这里没有(也不该现造)每个项目的
+                真实结果——ResumableSummary 只有一句 error——所以只能诚实地说「通常」而不是「一定」，
+                真实结果留给点「继续」重新收尾时的详情去说。 */}
             {run2.resumable.finalizeOnly ? (
               <span>
                 上次的工作流阶段都跑完了，但收尾没成功：{run2.resumable.error ?? '合并临时分支失败'}。
-                改动仍完整保留在 forge/run-{run2.resumable.runId} 分支上，不会丢。要重新收尾吗？
+                改动通常还在 forge/run-{run2.resumable.runId} 分支上（除非当时选的是「丢弃」且已经生效）。要重新收尾吗？
               </span>
             ) : (
               <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
@@ -1413,8 +1417,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             {confirmDiscardResumable === run2.resumable.runId ? (
               <>
                 <span className="supplement-discard-warn">
+                  {/* #7 fix round 2 (N4): applied the same hedge here as the banner's own copy above
+                      — this line was making the identical unconditional "不受影响，仍完整保留"
+                      claim, in the SAME banner, one line down. A partially-successful discard really
+                      does delete some projects' temp branches; leaving this one overstated while
+                      fixing the banner above it would still be lying in the same interaction. */}
                   {run2.resumable.finalizeOnly
-                    ? '确定丢弃这条运行记录吗？分支和改动不受影响，仍完整保留，只是这条记录不会再出现在运行历史里。'
+                    ? '确定丢弃这条运行记录吗？这条记录不会再出现在运行历史里；改动本身通常不受影响（除非当时选的是「丢弃」且已经生效）。'
                     : '确定丢弃这次未完成的运行吗？丢弃后无法恢复到当前进度。'}
                 </span>
                 <button className="supplement-cancel" onClick={() => { setConfirmDiscardResumable(null); void run2.discardResumable() }}>确认丢弃</button>

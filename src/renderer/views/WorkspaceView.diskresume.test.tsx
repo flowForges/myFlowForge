@@ -106,28 +106,35 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
     expect(screen.getByText(/Merge conflict/)).toBeInTheDocument()
     expect(screen.queryByText(/从「/)).toBeNull()
     // #7 fix round 1 (F4): the honest reassurance — the branch survives, only the record is at risk.
+    // #7 fix round 2 (N4): hedged — a finalize failure can also come from a PARTIALLY-successful
+    // discard (controller.ts's runFinalizeGate collects per-project failures and keeps going, so a
+    // project that succeeded really did lose its temp branch), so this can never be an unconditional
+    // "不会丢" claim.
     expect(screen.getByText(/forge\/run-run-fin/)).toBeInTheDocument()
+    expect(screen.getByText(/通常还在/)).toBeInTheDocument()
+    expect(screen.queryByText(/不会丢/)).toBeNull()
   })
 
   // #7 fix round 1 (F4): the finalizeOnly banner's 丢弃 confirm must say the SAME thing the copy above
   // it already says — deleting the record, not the work — not the generic "无法恢复到当前进度" wording
   // the ordinary mid-run-interrupted case uses (that one really would lose in-flight progress).
-  it('finalizeOnly 的丢弃确认文案说的是"记录"不是"进度"，改动不受影响', async () => {
+  it('finalizeOnly 的丢弃确认文案说的是"记录"不是"进度"，且不无条件断言改动不受影响', async () => {
     resumableMock.mockImplementation(async () => ({
       runId: 'run-fin', resumeStageKey: '__finalize__', resumeStageName: '收尾（合并临时分支）',
       totalStages: 4, doneCount: 4, finalizeOnly: true,
       error: '合并临时分支失败 — web: CONFLICT (content): Merge conflict in src/x.ts',
     }) as never)
-    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(screen.getByText('丢弃')).toBeInTheDocument())
 
     fireEvent.click(screen.getByText('丢弃'))
 
     expect(screen.getByText(/这条运行记录/)).toBeInTheDocument()
-    // "仍完整保留" appears in BOTH the banner's own reassurance and the confirm warning below it —
-    // that's intentional (both places say the same true thing), just assert it's said at all.
-    expect(screen.getAllByText(/仍完整保留/).length).toBeGreaterThan(0)
+    // #7 fix round 2 (N4): both the banner and this confirm line say the SAME hedged thing — never
+    // an unconditional "仍完整保留"/"不受影响" without the "除非当时选的是丢弃" caveat.
+    expect(screen.getAllByText(/通常/).length).toBeGreaterThan(0)
     expect(screen.queryByText(/无法恢复到当前进度/)).toBeNull()
+    expect(container.textContent).not.toMatch(/不受影响，仍完整保留/)
   })
 
   it('resumable() 返回 null 时,不显示提示', async () => {

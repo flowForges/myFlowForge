@@ -215,7 +215,7 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
   // `failedMessage` above stays as the plain-string fallback for every other failed-run shape (a real
   // stage failure, or a plain abort) that has no such detail to show.
   //
-  // #7 fix round 1 (F1/F2, review): NOT gated on `runStatus === 'failed'` — `state.finalizeFailure`
+  // #7 fix round 1 (F1/F2, review): NOT gated on `runStatus === 'failed'` alone — `state.finalizeFailure`
   // legitimately outlives that status across a 重新收尾 retry. `resumeFromDisk` rebuilds a brand-new
   // controller that rehydrates the PREVIOUS attempt's `finalizeFailure` (see controller.ts's
   // RehydrateState) and immediately re-raises a FRESH finalize gate (status flips to 'awaiting') —
@@ -223,8 +223,13 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
   // detail and because that fresh gate's live id is exactly what makes `resolveGate`-based handoff
   // reachable (see `pendingFinalizeGate` below). A clean retry clears both fields (F6, this task) so
   // this naturally goes away the moment the run actually finishes.
+  // #7 fix round 2 (N3): `runStatus !== 'ok'` guard added back — F6 only stops NEW `{status:'ok',
+  // finalizeFailure:[…]}` states from being written; it does not migrate whatever's ALREADY sitting
+  // on a real user's disk from before this task. Without this guard, an old saved 'ok' run replayed
+  // in 运行历史 (RunHistoryPanel → staticState) would show 无法自动合并 in place of the correct
+  // 工作流已完成 message. 'awaiting' (the retry-pending window F2 needs) and 'failed' both still pass.
   const finalizeFailures = state.finalizeFailure
-  const showFinalizeFailureCard = !!finalizeFailures?.length
+  const showFinalizeFailureCard = !!finalizeFailures?.length && runStatus !== 'ok'
   // #7 fix round 1 (F1/F2): the finalize gate currently sitting live in `state.inbox`, if any — this
   // is what makes `resolveGate(id, {type:'handoff'})` reachable. It's null for the FIRST failed
   // attempt (runFinalizeGate drops the gate from `state.inbox` — `this.drop(id)` — the instant its
@@ -260,6 +265,13 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
   // #7 fix round 1 (F2): the fallback route DELETES the saved run record — say so before the click,
   // not after. Only shown when that's actually what will happen (no live gate to resolve against).
   const HANDOFF_ERASES_RECORD_WARNING = '没有可继续的收尾确认了，点击将清除这条运行记录（不会再出现在运行历史里）——上面列出的分支和改动不受影响，仍然完整保留，可以随时手工合并。'
+  // #7 fix round 2 (N2): mirrors persist.ts's isUnfinalizedFailure predicate exactly — the SAME
+  // shape discardResumableRun's own guard (`isTerminalStatus && !isUnfinalizedFailure` → refuse)
+  // requires before it will actually delete anything. Without this, the erase-record warning could
+  // fire (and threaten a deletion) for a run that's already `finalized` (e.g. re-rendered after a
+  // resolveGate handoff already succeeded) — discardResumable would be a harmless no-op there, so
+  // warning about a deletion is simply false in that state.
+  const isDiscardableShape = runStatus === 'failed' && !state.finalized && state.machine.stages.every((s) => s.status === 'done')
   // 重新收尾: re-run the SAME finalize gate without re-running any stage (the controller's main loop
   // sees every stage already `done` and drops straight back into runFinalizeGate — see
   // Run2Manager.resumeFromDisk/isUnfinalizedFailure). No new IPC needed: this is the exact call the
@@ -283,12 +295,22 @@ export function RunExecPanel({ run2, onAbort, staticState, readOnly, onViewLog, 
   ) : (
     <FinalizeFailureCard
       failures={finalizeFailures!}
-      onHandoff={handleHandoff}
+      // #7 fix round 2 (N1): omit entirely with no live run2 — RunHistoryPanel.tsx renders
+      // <RunExecPanel staticState readOnly> with NO run2 for a saved run whose finalizeFailure is
+      // still on disk. Without this, the button's click was already a no-op (both `resolveGate` and
+      // `discardResumable` no-op on `run2?.`), but round 1's F3 fix made THAT no-op swap the card to
+      // "已记录 · 交给你自己处理" — a straight false claim on a page whose entire premise is not
+      // lying about the state of the user's run. FinalizeFailureCard hides the button whenever
+      // `onHandoff` is undefined (see its own doc).
+      onHandoff={run2 ? handleHandoff : undefined}
       onRetry={!pendingFinalizeGate && run2 ? handleRetryFinalize : undefined}
-      // Only true when a click here will ACTUALLY erase the record (run2 bound + no live gate to
-      // resolve against instead) — in pure read-only/historical replay (no run2) the click is a
-      // no-op, and claiming it deletes anything would itself be dishonest.
-      handoffWarning={!pendingFinalizeGate && run2 ? HANDOFF_ERASES_RECORD_WARNING : undefined}
+      // Only true when a click here will ACTUALLY erase the record: run2 bound, no live gate to
+      // resolve against instead (else it's a no-op in pure read-only replay — dishonest to warn
+      // about a deletion that can't happen), AND the run is still in the shape discardResumableRun's
+      // own guard requires before it deletes anything (#7 fix round 2, N2) — once already
+      // `finalized` (e.g. re-rendered after a PRIOR resolveGate handoff already succeeded),
+      // discardResumable is a harmless no-op and warning about erasure would be false.
+      handoffWarning={!pendingFinalizeGate && run2 && isDiscardableShape ? HANDOFF_ERASES_RECORD_WARNING : undefined}
     />
   )
   // P4-2: machine.plan.tempBranch is now populated by planFromStages (forge/run-<runId>) for every run
