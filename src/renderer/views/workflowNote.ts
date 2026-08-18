@@ -26,9 +26,10 @@ export interface RunStatusView {
   // 这条路径完全不要求阶段跑完、甚至可能连临时分支都没建过。所以 `error` truthy 不能当作"收尾真的失败
   // 过"的信号——fix round 1 就是被 controller.ts 当时那条(已修正的)错误文档注释误导,拿它当了信号。
   //
-  // `finalizeFailure`(controller.ts 的 RunControllerState.finalizeFailure)只有一个赋值点——收尾
-  // (runFinalizeGate)真正执行 merge/discard/park 且至少一个项目失败,一次成功的重试还会把它清空——
-  // 这才是"阶段都跑完了、只是收尾没成"唯一可靠的信号,所以这里改用它而不是 `error`。
+  // `finalizeFailure`(controller.ts 的 RunControllerState.finalizeFailure)只有收尾(runFinalizeGate)
+  // 真正执行 merge/discard/park 且至少一个项目失败那一处会**产出**值(另有一次 rehydrate 回放和一次
+  // 成功重试后的清空,见该字段注释)——这才是"阶段都跑完了、只是收尾没成"唯一可靠的信号,所以这里改用
+  // 它而不是 `error`。
   finalizeFailure?: FinalizeFailure[]
 }
 

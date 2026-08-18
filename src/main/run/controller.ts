@@ -162,15 +162,21 @@ export interface RunControllerState {
   paused: boolean
   // Task 8 fix round 2 (C1 — this doc used to claim "set only on a finalize-gate merge/discard/park
   // failure … absent for every other terminal path", which is FALSE and misled a consumer into
-  // building a predicate on that false premise): `error` has TWO assignment sites, not one.
+  // building a predicate on that false premise): `error` is written from more than one KIND of
+  // place, and they mean very different things. (Round 3 / I3: this doc used to state an exact
+  // count of assignment sites; grep already contradicted it — a rehydrate replay and a clear were
+  // never counted. Counts rot; the kinds below are what a reader actually needs.)
   //   1. runFinalizeGate's failure path (below `finalizeFailure`'s doc) — set only when the finalize
   //      action (merge/discard/park) fails for ≥1 project, i.e. only reachable when every stage is
   //      already done and the run was not aborted (see start()'s call site of runFinalizeGate).
+  //      A retry that succeeds CLEARS it again (same method, success branch).
   //   2. start()'s outer `catch` (see the very end of this file, the `if (!this.error) this.error =
   //      err …` line) — a catch-all for ANY throw out of the whole stage loop, at ANY point in the
   //      run: a stage producing zero work orders, a store write failure, a throwing emitUpdate
   //      subscriber, etc. This one fires with stages NOT all done and (for some throws, e.g. the
   //      zero-work-orders case) with no temp branch ever created.
+  //   3. the constructor's rehydrate path — a REPLAY of whatever a previous controller for this same
+  //      run had written (RehydrateState.error), not a new judgement of its own.
   // So `error` truthy is NOT a reliable "the finalize ran and failed" signal on its own — a consumer
   // that needs exactly that (e.g. workflowNote, deciding whether it's safe to say "阶段都跑完了、改动在
   // forge/run-<runId> 分支上") must key off `finalizeFailure` below instead (assigned ONLY at
@@ -182,9 +188,14 @@ export interface RunControllerState {
   // merge/discard/park actually failed (a lane that succeeded is simply absent). See
   // FinalizeFailure's own doc for why this is structured rather than folded into `error`. Absent
   // whenever finalize hasn't failed (including the common case: it never failed at all) — UNLIKE
-  // `error` above, this field has exactly ONE assignment site (runFinalizeGate's failure branch), so
-  // it — not `error` — is the reliable "the finalize ran and failed" signal (see `error`'s doc above,
-  // Task 8 fix round 2).
+  // `error` above, this field has ONE site that PRODUCES a value (runFinalizeGate's failure branch),
+  // plus a rehydrate replay of that value (the constructor's RehydrateState path) and a clear
+  // (runFinalizeGate's success branch). So it — not `error` — is the reliable signal, but read it as
+  // "a finalize failed for this run at some point", NOT as "this controller ran a finalize and it
+  // failed": the rehydrate replay is exactly what RunExecPanel.tsx depends on to keep the failure
+  // card (and its branch/conflict detail) on screen through a 重新收尾 retry. (Round 3 / I3: this doc
+  // used to say "exactly ONE assignment site" and count them; the count was wrong, and worse, it hid
+  // the replay — the one property a consumer actually has to know about.)
   finalizeFailure?: FinalizeFailure[]
   // 收尾(合并/丢弃临时分支)有没有真的做完。true = 这个 run 已经收干净,没有遗留的临时分支要处理;
   // false/缺省 = 还没走到收尾,或收尾**失败**了(合并冲突等)。Run2Manager.resumable 据此把「所有阶段都跑完、
