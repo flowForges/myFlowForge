@@ -507,6 +507,25 @@ describe('启动门基准分支', () => {
     expect(container.textContent).not.toMatch(/stash/i)
   })
 
+  // I1(2026-08-17 全分支终审):合并基线那版明说「会自动 git stash 保存这些改动…结束后…恢复你的改动」。
+  // Task 8 把那句删了、只留一个计数,而 Task 2 同时把语义改成了「提交成运行前快照」—— 走合并那条收尾
+  // 路径时这些改动会永久并进基准分支,而那是唯一没有撤销键的一条路。整个渲染层此前没有一处字符串提到
+  // 过「快照」或这些改动会怎样。
+  it('有未提交改动时,说清它们会变成运行前快照、并在合并时并入基准分支', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: 'branch1', dirtyCount: 7 }]
+    const { container } = render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    await screen.findByText(/基准 branch1/)
+    expect(container.textContent).toMatch(/运行前快照/)
+    expect(container.textContent).toMatch(/合并.*并入 branch1/)
+  })
+
+  it('工作树干净的项目不加这句(没有未提交改动可谈)', async () => {
+    const baseInfo = async () => [{ name: 'api', branch: 'main', dirtyCount: 0 }]
+    const { container } = render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    await screen.findByText(/基准 main/)
+    expect(container.textContent).not.toMatch(/运行前快照/)
+  })
+
   // Task 8 fix round 1 (cheap fix)：读不出当前分支(目录不存在/不是仓库……)是跟 detached HEAD 完全不同
   // 的失败，run2Handlers.ts 用 `error` 字段区分。渲染层必须显示这个项目(而不是像旧版本那样悄悄跳过，
   // 用户只有在真按下确认才发现)，且不能把它误说成 detached HEAD。

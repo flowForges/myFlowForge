@@ -615,7 +615,12 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
                     {b.error
                       ? <span>读不出当前分支（{b.error}）</span>
                       : b.branch
-                      ? <span>基准 {b.branch} · {b.dirtyCount > 0 ? `含 ${b.dirtyCount} 项未提交改动` : '工作树干净'}</span>
+                      // Task 8 fix round 3 (I1):未提交改动那句必须说清它们的去向。合并基线(bb41798)那版
+                      // 写的是「会自动 git stash 保存…结束后恢复」,Task 8 把它换成了一个光秃秃的计数,
+                      // 而 Task 2 同时把语义改成了「提交成一次运行前快照」—— 走合并那条收尾路径时,这 N 项
+                      // 改动会跟着并进 b.branch 成为永久历史,那是唯一没有撤销键的一条路。整个渲染层此前
+                      // 没有一处字符串提到过「快照」或这些改动会怎样。
+                      ? <span>基准 {b.branch} · {b.dirtyCount > 0 ? `含 ${b.dirtyCount} 项未提交改动（会提交成「运行前快照」带进运行分支；选择合并收尾时一并并入 ${b.branch}）` : '工作树干净'}</span>
                       : <span>未在任何分支上，无法启动（请先 git switch 到一个分支）</span>}
                   </div>
                 ))}
