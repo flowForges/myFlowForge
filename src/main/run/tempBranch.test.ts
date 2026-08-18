@@ -423,6 +423,22 @@ describe('C2 · 收尾动作先确认自己在哪条分支上', () => {
     expect(calls.some((c) => c[0] === 'branch')).toBe(false)
   })
 
+  // Task 8 residual fix (R3): the refusal above told the user their WORKING TREE was safe but said
+  // nothing about their pre-run uncommitted changes — those live only in the snapshot commit on the
+  // branch it's telling them to `git branch -D`. A user following that instruction verbatim would
+  // destroy the one copy. Now named explicitly whenever a snapshot actually exists.
+  it('discard 拒绝时,有快照就点名它只在这条分支上(免得用户照着后面那句 branch -D 把它一起删了)', async () => {
+    const calls: string[][] = []
+    await expect(discardTempBranch('/repo', 'branch1', 'r1', 'snap123', onUserBranch(calls)))
+      .rejects.toThrow(/运行前快照.*snap123|snap123.*一起删/)
+  })
+
+  it('discard 拒绝时,树本来就干净(没有快照)就不瞎编一句', async () => {
+    const calls: string[][] = []
+    await expect(discardTempBranch('/repo', 'branch1', 'r1', null, onUserBranch(calls)))
+      .rejects.not.toThrow(/快照/)
+  })
+
   it('读不出当前分支 → 抛可读错误,不静默当成"不在"(那会让环境故障看起来像一次成功的空收尾)', async () => {
     const run: GitRunner = async (_c, a) => {
       if (a[0] === 'rev-parse' && a[1] === '--abbrev-ref') throw new Error('not a git repository')
