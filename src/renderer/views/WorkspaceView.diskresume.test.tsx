@@ -96,9 +96,13 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
   // 真实事故(2026-08-12):所有阶段跑完、合并临时分支失败,用户看到的却是「上次有工作流未完成,从**代码CR**
   // 继续?」——代码CR 早跑完了。该重来的是收尾。
   // Task 8:原始 git 报错(哪个项目、哪个文件冲突)不再嵌进这句安心话——那是点「继续」重新收尾时弹出的
-  // FinalizeFailureCard(Tasks 1-7)的活;这句只负责点名分支、说清楚代码没丢,所以断言改成了检查
-  // "没有"原始报错文本、以及说清分支名与"未丢失"这两件事。
-  it('收尾失败时说的是"重新收尾"并点名分支,不说"从某阶段继续",也不在这句里复述原始 git 报错', async () => {
+  // FinalizeFailureCard(Tasks 1-7)的活;这句只负责点名分支、说清收尾没成。
+  // Task 8 fix round 1 (I2):上一轮把 `expect(queryByText(/不会丢/)).toBeNull()` 删了,理由是"这句话
+  // 只在还没丢弃过的状态下渲染,所以能无条件断言完整保留"——那个理由是错的(见 WorkspaceView.tsx 的
+  // I1 修复注释:`finalizeOnly` 不管收尾当时选的是合并/丢弃/保留,一次部分成功的「丢弃」同样会落到
+  // 这个分支,这时已经丢弃成功的项目其临时分支是真的没了)。恢复这条断言,并加一条正面断言钉住新的
+  // 打折扣措辞("通常…除非当时选的是丢弃"),这样"退回无条件断言"这个回归以后会被这两条一起拦住。
+  it('收尾失败时说的是"重新收尾"并点名分支,不说"从某阶段继续",不复述原始 git 报错,也不无条件断言改动没丢', async () => {
     resumableMock.mockImplementation(async () => ({
       runId: 'run-fin', resumeStageKey: '__finalize__', resumeStageName: '收尾（合并临时分支）',
       totalStages: 4, doneCount: 4, finalizeOnly: true,
@@ -111,11 +115,12 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
     expect(screen.queryByText(/从「/)).toBeNull()
     // 原始 git 报错(冲突文件路径等)不再出现在这条安心话里 —— 那句话现在完全不引用 run2.resumable.error。
     expect(screen.queryByText(/Merge conflict/)).toBeNull()
-    // #7 fix round 1 (F4): the honest reassurance — the branch survives, only the record is at risk.
-    // Task 8:这句话只在"还没做出丢弃决定"的 resumable 态下渲染(真丢弃过,这条记录早被清掉、根本不会
-    // 显示这条横幅),所以"完整保留"在这里是无条件成立的事实,不需要再打折扣的"通常"/"不会丢"式措辞。
     expect(screen.getByText(/forge\/run-run-fin/)).toBeInTheDocument()
-    expect(screen.getByText(/完整保留/)).toBeInTheDocument()
+    // 正面断言:打了折扣的措辞("通常…还在…除非当时选的是丢弃"),跟下面丢弃确认那句用同一个 hedge。
+    expect(screen.getByText(/通常/)).toBeInTheDocument()
+    expect(screen.getByText(/除非当时选的是「丢弃」/)).toBeInTheDocument()
+    // 唯一的自动化刹车,防止"改动完整保留/不会丢"这种无条件断言重新回来。
+    expect(screen.queryByText(/不会丢/)).toBeNull()
   })
 
   // #7 fix round 1 (F4): the finalizeOnly banner's 不用管了(原「丢弃」)confirm must say the SAME thing

@@ -38,14 +38,32 @@ describe('workflowPhaseNote', () => {
 })
 
 describe('收尾失败文案', () => {
-  it('说清改动没丢并点名分支，且不出现「未正常收尾」这种让人以为白跑了的说法', () => {
+  // Task 8 fix round 1 (C1 — 之前这条断言"未丢失/没丢"是无条件的,但收尾按项目分别执行、分别失败,
+  // 已经成功丢弃的项目其临时分支是真的没了——所以这里不能再断言无条件的"未丢失",只能断言这句话打了
+  // 折扣(呼应 WorkspaceView 收尾横幅确认文案已经在用的"通常…除非当时选的是丢弃"这句hedge)。
+  it('阶段全部跑完、只是收尾没能自动完成(error 有值)时:点名分支，不出现「未正常收尾」，但不无条件断言改动完整保留/未丢失', () => {
     const note = workflowPhaseNote(
       { phase: 'done', currentIndex: 2, stages: [{}, {}, {}] as never[], runId: 'a1b2' },
       { status: 'failed', runId: 'a1b2', error: 'CONFLICT' },
     )
     expect(note).toMatch(/forge\/run-a1b2/)
-    expect(note).toMatch(/未丢失|没丢/)
     expect(note).not.toMatch(/未正常收尾/)
+    expect(note).toMatch(/通常|除非/)
+    // 唯一的自动化刹车:不能出现无条件的"改动完整保留…未丢失"式断言(fix round 1 之前的版本就是这样,
+    // 对中途终止/阶段失败也无条件成立,但那两种情形下是假的——见下一条用例)。
+    expect(note).not.toMatch(/改动完整保留在 forge\/run-a1b2（未丢失）/)
+  })
+
+  // C1 的核心场景:中途终止(还没跑到收尾那一步)时,既不能说"已完成",也不能说"已跑完 · 收尾需手工合并"
+  // ——没有跑完、也没有东西要手工合并。error 缺失是这种情形(以及阶段失败/无失败记录的 handoff)的信号。
+  it('中途终止/阶段失败(error 没有值)时:不说"已完成"，也不假装"已跑完"或无条件断言改动都还在', () => {
+    const note = workflowPhaseNote(
+      { phase: 'done', currentIndex: 2, stages: [{}, {}, {}] as never[], runId: 'a1b2' },
+      { status: 'failed', runId: 'a1b2' },
+    )
+    expect(note).not.toMatch(/已完成/)
+    expect(note).not.toMatch(/已跑完/)
+    expect(note).toMatch(/forge\/run-a1b2/)
   })
 
   it('成功时文案不变', () => {

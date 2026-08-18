@@ -18,7 +18,15 @@ const READ_FILE_MAX_BYTES = 512 * 1024
 // createRunTempBranches will actually use as the run's base (branch) plus how dirty its tree is right
 // now. `branch: ''` means detached HEAD (currentBranch's sentinel — see tempBranch.ts); the renderer
 // disables launch for that project rather than guessing a fix.
-export interface ProjectBaseInfo { name: string; branch: string; dirtyCount: number }
+//
+// Task 8 fix round 1 (cheap fix): `error` is a SEPARATE signal from `branch: ''` — conflating "could
+// not read this project at all" (missing directory, not a repo, git absent, permission error) into the
+// same `branch: ''` the renderer reads as "detached HEAD" would reproduce, one layer up, the exact bug
+// Task 4's currentBranch split (tempBranch.ts) exists to prevent: a user whose project directory
+// doesn't exist would be shown "未在任何分支上，无法启动（请先 git switch 到一个分支）", which is the
+// wrong instruction for a directory that isn't there. `error` present means "couldn't determine
+// anything about this project" — the renderer shows a distinct row, not a manufactured "HEAD" claim.
+export interface ProjectBaseInfo { name: string; branch: string; dirtyCount: number; error?: string }
 
 // `git status --porcelain` line count = number of changed paths. No existing helper returns exactly
 // this shape (isCleanTree in tempBranch.ts only returns a boolean), so a tiny local wrapper here.
@@ -189,8 +197,14 @@ export function registerRun2(deps: {
         const branch = await readCurrent(cwd)
         const status = await gitStatusPorcelain(cwd)
         out.push({ name, branch, dirtyCount: status.split('\n').filter((l) => l.trim()).length })
-      } catch {
-        // 不是 git 仓库 / 目录不在 —— 跳过，不要让启动门整个空掉
+      } catch (err) {
+        // Task 8 fix round 1:原来这里直接跳过、这个项目在运行基准里干脆不出现——但「运行基准」这个
+        // 区块的职责就是列出每个项目的起始分支，一声不响地漏掉一个,用户只会在真正点「确认」启动失败
+        // 时才发现。改成把这个项目也推进去，带上 `error`（不是 `branch: ''`——那个值是 detached HEAD
+        // 的专用信号，混进"读不出来"会让渲染层把"目录不存在"误说成"detached HEAD"，正是 Task 4 那个
+        // 分支拆分想避免的那类指错指令的错误）。
+        const detail = err instanceof Error ? err.message : String(err)
+        out.push({ name, branch: '', dirtyCount: 0, error: detail })
       }
     }
     return out

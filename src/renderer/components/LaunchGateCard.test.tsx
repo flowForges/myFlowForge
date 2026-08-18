@@ -506,4 +506,25 @@ describe('启动门基准分支', () => {
     await screen.findByText(/基准 branch1/)
     expect(container.textContent).not.toMatch(/stash/i)
   })
+
+  // Task 8 fix round 1 (cheap fix)：读不出当前分支(目录不存在/不是仓库……)是跟 detached HEAD 完全不同
+  // 的失败，run2Handlers.ts 用 `error` 字段区分。渲染层必须显示这个项目(而不是像旧版本那样悄悄跳过，
+  // 用户只有在真按下确认才发现)，且不能把它误说成 detached HEAD。
+  it('读不出当前分支(error)→ 显示专门的提示,不说成 detached HEAD,且不可启动', async () => {
+    const baseInfo = async () => [{ name: 'web', branch: '', dirtyCount: 0, error: 'ENOENT: no such file or directory' }]
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    expect(await screen.findByText(/读不出当前分支/)).toBeTruthy()
+    expect(screen.queryByText(/未在任何分支上，无法启动/)).toBeNull()
+    expect((screen.getByText('确认') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // 零项目工作区，或本次选中的项目都不在 baseInfo 返回的列表里 —— 不该露出一个光秃秃的「运行基准」
+  // 标题、下面一行都没有。
+  it('baseInfo 返回空数组时不渲染光秃秃的「运行基准」标题', async () => {
+    const baseInfo = vi.fn(async () => [])
+    render(<LaunchGateCard {...baseProps} baseInfo={baseInfo} />)
+    await waitFor(() => expect(baseInfo).toHaveBeenCalled())
+    // 等 baseInfo() 那个 promise 真正 resolve、state 落地(不是只等它被调用),再确认标题没有出现。
+    await waitFor(() => expect(screen.queryByText('运行基准')).toBeNull())
+  })
 })

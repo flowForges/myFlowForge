@@ -157,17 +157,34 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // stages + all projects) to one provider in a single click, instead of editing ~7 chips by hand.
   const [bulkPopupOpen, setBulkPopupOpen] = useState(false)
   const [customModelDraft, setCustomModelDraft] = useState('')
-  // Task 8: 运行基准 — each project's real HEAD + dirty-line count, fetched once on mount (not
-  // polled: it's a snapshot of "what would happen if you confirmed right now", same spirit as the
-  // rest of this card's config). null = not loaded yet (section hidden). Declared with the other
+  // Task 8: 运行基准 — each project's real HEAD + dirty-line count, meant to be fetched exactly once
+  // (a snapshot of "what would happen if you confirmed right now", same spirit as the rest of this
+  // card's config — never polled). null = not loaded yet (section hidden). Declared with the other
   // hooks (before any `frozen` early return) so hook order stays stable.
+  //
+  // Task 8 fix round 1 (I3): the ORIGINAL version here depended on `baseInfo` alone and re-ran on
+  // every prop change — but WorkspaceView.tsx builds a fresh `() => window.forge.run2.baseInfo(wsPath)`
+  // arrow inline in JSX on every render (it's the chat host, re-rendering per streaming delta), so this
+  // effect fired on nearly every render: an IPC round trip spawning `git rev-parse` + `git status
+  // --porcelain` per project, discarded and refetched over and over. Worse, this section never even
+  // renders once `frozen` (or the auto-launch `pending` placeholder) is showing — see the early
+  // `return`s below — so every already-launched card left sitting in the chat transcript kept paying
+  // this cost for the rest of the session for a section it would never draw. A ref-backed latch fixes
+  // both: `fetchedBaseRef` makes the actual fetch run at most once per mount regardless of how many
+  // times the effect body re-executes, and the guard skips it entirely once `frozen`/`pending` are known
+  // (checked INSIDE the effect body, not by conditionally calling the hook — hooks can't be conditional).
   const [base, setBase] = useState<ProjectBaseInfo[] | null>(null)
+  const fetchedBaseRef = useRef(false)
   useEffect(() => {
-    if (!baseInfo) return
+    // Mirrors the two early `return`s below EXACTLY (`if (frozen)` / `if (pending && !error)`) — those
+    // are the only states in which the 运行基准 section never renders, so those are the only states in
+    // which fetching for it would be wasted work.
+    if (!baseInfo || frozen || (pending && !error) || fetchedBaseRef.current) return
+    fetchedBaseRef.current = true
     let cancelled = false
     baseInfo().then((b) => { if (!cancelled) setBase(b) }).catch(() => { if (!cancelled) setBase([]) })
     return () => { cancelled = true }
-  }, [baseInfo])
+  }, [baseInfo, frozen, pending, error])
   const cardRef = useRef<HTMLDivElement | null>(null)
 
   // Close whichever popup is open on any click outside it (or outside the chip that opened it) —
@@ -342,12 +359,18 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // Task 8: a selected project sitting on detached HEAD has no branch for createRunTempBranches to
   // check the temp branch out from (see launch.ts's createRunTempBranches) — block 启动 here too,
   // rather than letting the user hit a server-side rejection after already committing to launch.
-  const detachedSelected = (base ?? []).some((b) => !b.branch && projects.some((p) => p.name === b.name && p.selected))
-  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement || detachedSelected
+  // Task 8 fix round 1 (cheap fix): a project run2:base-info couldn't read at all (`b.error` — missing
+  // directory, not a repo, git absent…) is a DIFFERENT failure from detached HEAD, and must be checked
+  // separately — otherwise it silently falls into the `!b.branch` detached-HEAD check below and gets
+  // the wrong reason text ("有项目处于 detached HEAD" for a directory that isn't even there).
+  const detachedSelected = (base ?? []).some((b) => !b.branch && !b.error && projects.some((p) => p.name === b.name && p.selected))
+  const unreadableSelected = (base ?? []).some((b) => b.error && projects.some((p) => p.name === b.name && p.selected))
+  const confirmBlocked = noStageEnabled || noProjectSelected || noRequirement || detachedSelected || unreadableSelected
   const confirmBlockReason = noStageEnabled ? '至少保留一个阶段'
     : noProjectSelected ? '至少选择一个代码项目'
     : noRequirement ? '先说说这次要做什么（上面的需求框里写一句，或写在补充说明里）'
     : detachedSelected ? '有项目处于 detached HEAD'
+    : unreadableSelected ? '有项目读不出当前分支'
     : undefined
 
   // Shared provider + model chip pair (used by both per-project rows and per-stage rows). popupKey
@@ -543,22 +566,35 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
         {/* Task 8: 运行基准 — spec 的 mockup 画的是每个项目行下面挂一句副文本，但这里的项目行是按阶段
             重复渲染的 lane（同一个项目在「代码开发」「写单测」……每个按项目阶段各出现一次），逐 lane 挂
             副文本会把同一句话重复 N 遍。改成一个独立区块，集中列出每个「已选中」项目一次，信息等价、
-            不重复。branch 为空串 = detached HEAD（currentBranch 的哨兵），标红且不可启动。 */}
-        {base ? (
-          <>
-            <div className="wfo-sec-h" style={{ marginTop: 12 }}>运行基准</div>
-            <div className="lg-base">
-              {base.filter((b) => projects.some((p) => p.name === b.name && p.selected)).map((b) => (
-                <div key={b.name} className={`lg-base-row${b.branch ? '' : ' bad'}`}>
-                  <b>{b.name}</b>
-                  {b.branch
-                    ? <span>基准 {b.branch} · {b.dirtyCount > 0 ? `含 ${b.dirtyCount} 项未提交改动` : '工作树干净'}</span>
-                    : <span>未在任何分支上，无法启动（请先 git switch 到一个分支）</span>}
-                </div>
-              ))}
-            </div>
-          </>
-        ) : null}
+            不重复。branch 为空串 = detached HEAD（currentBranch 的哨兵），标红且不可启动。
+            Task 8 fix round 1 (cheap fix)：`base`（数组）在拿到 `[]` 时也是 truthy——零项目的工作区,
+            或用户把 baseInfo 覆盖到的项目全部取消勾选,原来会露出一个光秃秃的「运行基准」标题、下面一行
+            都没有。改成先算出真正会渲染的行,标题跟着这份行数据一起有无判断,不再单独看 `base` 是否非 null。
+            `b.error` 是另一种失败(目录不存在/不是仓库/git 缺失……)，跟 detached HEAD 分开显示——两者
+            都渲染成 `.bad`(标红)但文案不同，别把"读不出来"说成"detached HEAD"(见 run2Handlers.ts 的
+            ProjectBaseInfo.error 注释)。 */}
+        {(() => {
+          if (!base) return null
+          const baseRows = base.filter((b) => projects.some((p) => p.name === b.name && p.selected))
+          if (baseRows.length === 0) return null
+          return (
+            <>
+              <div className="wfo-sec-h" style={{ marginTop: 12 }}>运行基准</div>
+              <div className="lg-base">
+                {baseRows.map((b) => (
+                  <div key={b.name} className={`lg-base-row${b.branch && !b.error ? '' : ' bad'}`}>
+                    <b>{b.name}</b>
+                    {b.error
+                      ? <span>读不出当前分支（{b.error}）</span>
+                      : b.branch
+                      ? <span>基准 {b.branch} · {b.dirtyCount > 0 ? `含 ${b.dirtyCount} 项未提交改动` : '工作树干净'}</span>
+                      : <span>未在任何分支上，无法启动（请先 git switch 到一个分支）</span>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )
+        })()}
 
         <div className="wfo-sec-h" style={{ marginTop: 14 }}>原始需求{seedLoading ? '' : '（AI 总结，可编辑）'}</div>
         {seedLoading ? (

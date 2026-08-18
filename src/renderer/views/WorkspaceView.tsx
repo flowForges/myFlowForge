@@ -1397,13 +1397,16 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                 #7 fix round 1 (F4):这也是「我的工作没了」恐慌感最重的一刻 —— 补一句诚实的安心话。
                 Task 8:原文案曾把 run2.resumable.error 的原始 git 报错(冲突文件路径……)直接嵌进这句安心
                 话里,读起来又长又吓人。原始报错交给点「继续」重新收尾时弹出的 FinalizeFailureCard(Tasks
-                1-7)去展开——这里只负责一件事,点名分支、说清没丢。这句话在这个分支能成立是因为它只在
-                *还没做出丢弃决定*的 resumable 态下渲染:真做过丢弃,discardResumableRun 早把这条记录从
-                磁盘清掉,根本不会走到这里——所以"完整保留"在这里是无条件成立的事实,不是需要再打折扣的
-                猜测(下面丢弃确认那句「通常」，说的是丢弃之后的事，两处不矛盾)。 */}
+                1-7)去展开——这里只负责一件事,点名分支、说清收尾没成。
+                Task 8 fix round 1 (I1 — 上一版这里断言"改动完整保留"是无条件的,错了):`finalizeOnly` 只看
+                "阶段是否都跑完"(manager.ts 的 summarizeResumable),不管收尾当时选的是合并/丢弃/保留 ——
+                一次「丢弃」在项目 A 上成功、在项目 B 上失败,同样会落到这个 finalizeOnly 分支,而 A 的临时
+                分支这时是真的已经没了。把这里错认成"discardResumableRun 还没执行"(那是清磁盘记录的按钮,
+                跟收尾门自己的丢弃动作是两回事)才写出了无条件断言——这里必须和下面丢弃确认那句「通常」
+                打同一个折扣,两句话不能互相矛盾。 */}
             {run2.resumable.finalizeOnly ? (
               <span>
-                上次的工作流阶段都跑完了，改动完整保留在 <code>forge/run-{run2.resumable.runId}</code>，只是没能自动合并。要重新收尾吗？
+                上次的工作流阶段都跑完了，但收尾没能自动完成。改动通常还在 <code>forge/run-{run2.resumable.runId}</code> 分支上（除非当时选的是「丢弃」且已经生效）。要重新收尾吗？
               </span>
             ) : (
               <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
