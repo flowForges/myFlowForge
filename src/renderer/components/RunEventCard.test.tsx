@@ -285,6 +285,10 @@ describe('RunEventCard', () => {
     // the ordinary gate's actions must NOT be present on a finalize card
     expect(screen.queryByText('通过')).not.toBeInTheDocument()
     expect(screen.queryByText('打回本阶段')).not.toBeInTheDocument()
+    // #7 fix round 1 (F8, hard requirement 1): 我自己处理 must never appear on an ORDINARY finalize
+    // gate — only on the merge-failure card (FinalizeFailureCard). Locked by assertion, not just by
+    // the two components staying structurally separate.
+    expect(screen.queryByText('知道了，我自己处理')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByText('合并并完成'))
     expect(onGate).toHaveBeenCalledWith('fz1', { type: 'merge' })
@@ -374,5 +378,30 @@ describe('收尾门三按钮', () => {
     expect(onGate).not.toHaveBeenCalled()
     fireEvent.click(screen.getByText('确认丢弃'))
     expect(onGate).toHaveBeenCalledWith('g1', { type: 'discard' })
+  })
+
+  // #7 fix round 1 (F5, user-ruled): targetBranch alone is only targets[0] — a multi-project run's
+  // targets can genuinely differ per project (controller.ts's own comment used to concede this and
+  // stop there). More than one target must NOT imply one branch name covers every project.
+  describe('F5: 多项目目标分支各不相同', () => {
+    it('单项目仍显示「合并到 branch1」（不受 targets 字段影响）', () => {
+      const single = { ...gate, targets: [{ project: 'web', target: 'branch1' }] }
+      render(<RunEventCard event={single} onGate={() => {}} {...noopHandlers} />)
+      expect(screen.getByText('合并到 branch1')).toBeTruthy()
+    })
+
+    it('多项目显示「合并到各自的目标分支」+ 逐项目列出真实分支名', () => {
+      const multi = {
+        ...gate,
+        targets: [{ project: 'web', target: 'branch1' }, { project: 'api', target: 'main' }],
+      }
+      render(<RunEventCard event={multi} onGate={() => {}} {...noopHandlers} />)
+      expect(screen.getByText('合并到各自的目标分支')).toBeTruthy()
+      expect(screen.queryByText('合并到 branch1')).toBeNull()
+      expect(screen.getByText(/项目 web/)).toBeInTheDocument()
+      expect(screen.getByText('branch1')).toBeInTheDocument()
+      expect(screen.getByText(/项目 api/)).toBeInTheDocument()
+      expect(screen.getByText('main')).toBeInTheDocument()
+    })
   })
 })

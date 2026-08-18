@@ -25,9 +25,12 @@ describe('FinalizeFailureCard', () => {
     expect(screen.getByText(/git merge --no-ff forge\/run-a1b2/)).toBeTruthy()
   })
 
+  // #7 fix round 1 (F7): the test name promised BOTH words are never said — only 回滚 was actually
+  // asserted. A test whose name overstates its coverage is worse than no test.
   it('绝不对用户说「回滚」或用「丢弃」描述工作流产出', () => {
     const { container } = render(<FinalizeFailureCard failures={failures} onHandoff={() => {}} />)
     expect(container.textContent).not.toMatch(/回滚/)
+    expect(container.textContent).not.toMatch(/丢弃/)
   })
 
   it('「知道了，我自己处理」触发 onHandoff', () => {

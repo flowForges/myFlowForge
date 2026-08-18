@@ -25,11 +25,14 @@ export interface FailureEvent { id: string; kind: 'failure'; laneId: string; sta
 // `finalize`.
 // `targetBranch`/`tempBranch`: #6 — only ever set on the finalize gate (`finalize: true`). The real
 // branch names for THIS run, so the card can say "合并到 branch1" / show the temp branch a merge
-// conflict left behind, instead of the user having to guess where their work went. Multi-project runs
-// can in principle have differing per-project targets — the card shows `targetBranch` (the first
-// project's) as a representative name; a merge-failure card lists every project's own target from
-// `FinalizeFailure` (controller.ts) instead.
-export interface GateEvent { id: string; kind: 'gate'; stageKey: string; stageName: string; body: string; docs?: ArtifactRef[]; finalize?: boolean; producesDoc?: boolean; targetBranch?: string; tempBranch?: string }
+// conflict left behind, instead of the user having to guess where their work went.
+// `targets`: #7 fix round 1 (F5, user-ruled) — `targetBranch` alone is only ONE project's target
+// (`runFinalizeGate` emits `targets[0]?.target`), but a multi-project run can genuinely have
+// DIFFERING per-project targets (its own doc used to concede this and stop there). This carries
+// every participating project's own target so the card can render the full, honest list instead of
+// implying one branch name covers every project. Renderer: a single-project run still shows "合并到
+// branch1" (unchanged); more than one renders "合并到各自的目标分支" plus a per-project list.
+export interface GateEvent { id: string; kind: 'gate'; stageKey: string; stageName: string; body: string; docs?: ArtifactRef[]; finalize?: boolean; producesDoc?: boolean; targetBranch?: string; tempBranch?: string; targets?: Array<{ project: string; target: string }> }
 // 工作流交互: the answer to a user's gate question (GateDecision `ask`). Purely informational — it carries
 // no resolver (unlike gate/auth/question/doubt); the controller emits it, then re-raises the gate. The
 // renderer (RunEventCard) shows it as a Q&A card so the user sees their question + the AI's reply inline,

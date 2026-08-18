@@ -261,6 +261,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // 与下方 onSend)。用户点横幅「取消」把这个门 id 记进 dismissedGateId → 该门恢复普通聊天;换一个新门(不同
   // id)会重新进入补充态。用 state 而非 ref,以便取消能立刻触发重渲染隐藏横幅。
   const [dismissedGateId, setDismissedGateId] = useState<string | null>(null)
+  // #7 fix round 1 (F4, review): the disk-resume banner's 丢弃 button now genuinely deletes the saved
+  // run record (persist.ts's discardResumableRun fix, Task 7) — for the finalizeOnly case that record
+  // is the only in-app trace of a run whose temp branch is still sitting there with real work on it.
+  // A bare, unconfirmed click at "上次的工作流阶段都跑完了，但收尾没成功" — the exact moment of maximum
+  // "my work is gone" fear — is no longer acceptable now that it actually does something. Two-click
+  // confirm, same pattern as RunEventCard.tsx's confirmDiscard. Reset whenever a DIFFERENT resumable
+  // run is offered (keyed by runId) so a stale confirm state never carries over to a new banner.
+  const [confirmDiscardResumable, setConfirmDiscardResumable] = useState<string | null>(null)
   const [selection, setSelection] = useState<{ agentId: string; modelId: string; permissionMode?: import('@shared/permissions').PermissionMode }>()
   // 本机扫描到的当前 provider 的自定义命令/prompt + skills(进 "/" 菜单)。随 provider/workspace 变化拉取。
   const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
@@ -1385,16 +1393,36 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           <div className="supplement-banner">
             {/* 所有阶段都跑完、只是收尾(合并临时分支)失败时,说的必须是「重新收尾」——原来它按「第一个未完成
                 阶段」找,找不到就回落到最后一个阶段,于是把合并冲突说成了「从代码CR继续」,指着一个早就跑完的
-                阶段,用户完全无法理解。这一支还把真实原因(哪个项目、哪个文件冲突)直接摆出来。 */}
+                阶段,用户完全无法理解。这一支还把真实原因(哪个项目、哪个文件冲突)直接摆出来。
+                #7 fix round 1 (F4):这也是「我的工作没了」恐慌感最重的一刻 —— 补一句诚实的安心话:改动仍在
+                forge/run-<runId> 分支上,不会因为下面任何一个按钮丢失(Task 8 会再打磨这段文案)。 */}
             {run2.resumable.finalizeOnly ? (
               <span>
-                上次的工作流阶段都跑完了，但收尾没成功：{run2.resumable.error ?? '合并临时分支失败'}。要重新收尾吗？
+                上次的工作流阶段都跑完了，但收尾没成功：{run2.resumable.error ?? '合并临时分支失败'}。
+                改动仍完整保留在 forge/run-{run2.resumable.runId} 分支上，不会丢。要重新收尾吗？
               </span>
             ) : (
               <span>上次有工作流未完成，从「{run2.resumable.resumeStageName}」继续？（已完成 {run2.resumable.doneCount}/{run2.resumable.totalStages} 个阶段）</span>
             )}
             <button className="supplement-ok" onClick={() => { void run2.resumeFromDisk(sessions.activeSessionId ?? undefined) }}>继续</button>
-            <button className="supplement-cancel" onClick={() => { void run2.discardResumable() }}>丢弃</button>
+            {/* #7 fix round 1 (F4): 丢弃 now genuinely deletes the saved run record (persist.ts's
+                discardResumableRun fix, same task) — no longer safe to fire on a single bare click,
+                same two-click pattern RunEventCard.tsx's finalize-gate 彻底丢弃 already uses. Keyed to
+                THIS resumable's runId so switching to a different offered run never inherits a stale
+                confirm state. */}
+            {confirmDiscardResumable === run2.resumable.runId ? (
+              <>
+                <span className="supplement-discard-warn">
+                  {run2.resumable.finalizeOnly
+                    ? '确定丢弃这条运行记录吗？分支和改动不受影响，仍完整保留，只是这条记录不会再出现在运行历史里。'
+                    : '确定丢弃这次未完成的运行吗？丢弃后无法恢复到当前进度。'}
+                </span>
+                <button className="supplement-cancel" onClick={() => { setConfirmDiscardResumable(null); void run2.discardResumable() }}>确认丢弃</button>
+                <button className="supplement-cancel" onClick={() => setConfirmDiscardResumable(null)}>取消</button>
+              </>
+            ) : (
+              <button className="supplement-cancel" onClick={() => setConfirmDiscardResumable(run2.resumable!.runId)}>丢弃</button>
+            )}
           </div>
         )}
         {/* 只读会话: 基于此历史继续 */}

@@ -2371,6 +2371,33 @@ describe('收尾门三路决策', () => {
     const gate = await captureFinalizeGate(c)
     expect(gate.targetBranch).toBe('branch1')
     expect(gate.tempBranch).toBe(`forge/run-${c.plan.runId}`)
+    // #7 fix round 1 (F5, user-ruled): `targets` (every participating project's OWN target) rides
+    // alongside `targetBranch` — single-project here, so it's a one-entry list matching targetBranch.
+    expect(gate.targets).toEqual([{ project: 'web', target: 'branch1' }])
+  })
+
+  // #7 fix round 1 (F5, user-ruled): targetBranch alone is only targets[0] — a real multi-project run
+  // can have genuinely DIFFERENT per-project targets. `targets` must carry every one of them, not just
+  // the first, so the renderer can be honest about it instead of implying one branch covers everyone.
+  it('多项目目标分支不同时，收尾门事件的 targets 逐项目列出真实分支名', async () => {
+    const multiPlan: RunPlan = { runId: 'r-multi', stages: [{ key: 'develop', name: '开发', provider: 'x', model: 'm', scope: 'per-project', gate: false }] }
+    const store = new RunStore(ws, multiPlan.runId)
+    const controller = new RunController(
+      multiPlan,
+      {
+        providers: { x: okProvider() }, store, env: {}, projects: [{ name: 'web', cwd: '/ws/web' }, { name: 'api', cwd: '/ws/api' }],
+        sleep: async () => {}, now: () => 0, makeId: idFactory(),
+        projectTargets: { web: 'branch1', api: 'main' },
+      },
+      { machine: { plan: multiPlan, stages: [{ key: 'develop', status: 'done', round: 0 }], currentIndex: 0 } },
+    )
+    const gate = await new Promise<GateEvent>((resolve) => {
+      const off = controller.onEvent((e) => { if (e.kind === 'gate' && e.finalize) { off(); resolve(e) } })
+      void controller.start()
+    })
+    expect(gate.targets).toEqual([{ project: 'web', target: 'branch1' }, { project: 'api', target: 'main' }])
+    // targetBranch keeps its existing single-string fallback semantics (targets[0]) for old consumers.
+    expect(gate.targetBranch).toBe('branch1')
   })
 })
 
@@ -2400,5 +2427,38 @@ describe('合并失败 → 结构化 finalizeFailure + handoff 收尾', () => {
     expect(c.state.finalized).toBe(true)
     expect(c.state.status).toBe('failed')   // 诚实：收尾确实没自动完成
     expect(isUnfinalizedFailure(toSaved(c.state))).toBe(false)
+  })
+
+  // #7 fix round 1 (F6): a RETRY that now SUCCEEDS must clear the PREVIOUS attempt's failure
+  // record — otherwise a clean 'ok' run's terminal saved state is the self-contradictory
+  // `{status:'ok', finalized:true, error:'无法自动合并 — …', finalizeFailure:[…]}`. Simulates exactly
+  // what Run2Manager.resumeFromDisk now does (Task 7 round 1's manager.ts fix): rehydrate a NEW
+  // controller with the PREVIOUS attempt's error/finalizeFailure still on it, then resolve its
+  // freshly re-raised gate with a merge that succeeds this time.
+  it('一次成功的重试会清掉上一次失败留下的 error/finalizeFailure', async () => {
+    const store = new RunStore(ws, finalizablePlan.runId)
+    const staleFinalizeFailure = [{ project: 'web', target: 'branch1', tempBranch: 'forge/run-r1', conflictFiles: ['src/foo.ts'], detail: 'CONFLICT' }]
+    const controller = new RunController(
+      finalizablePlan,
+      { providers: { x: okProvider() }, store, env: {}, projects: [{ name: 'web', cwd: '/ws/web' }], sleep: async () => {}, now: () => 0, makeId: idFactory(), projectTargets: { web: 'branch1' }, mergeTempBranch: async () => {} },
+      { machine: finalizableMachine(), error: '无法自动合并 — web: CONFLICT', finalizeFailure: staleFinalizeFailure },
+    )
+    // Sanity: the stale failure really is present before the retry resolves — otherwise this test
+    // would trivially pass without exercising the clear-on-success path at all.
+    expect(controller.state.error).toBeTruthy()
+    expect(controller.state.finalizeFailure).toEqual(staleFinalizeFailure)
+
+    const eventPromise = new Promise<GateEvent>((resolve) => {
+      const off = controller.onEvent((e) => { if (e.kind === 'gate' && e.finalize) { off(); resolve(e) } })
+    })
+    const startPromise = controller.start()
+    const event = await eventPromise
+    controller.resolveGate(event.id, { type: 'merge' })
+    const final = await startPromise
+
+    expect(final.status).toBe('ok')
+    expect(final.finalized).toBe(true)
+    expect(final.error).toBeUndefined()
+    expect(final.finalizeFailure).toBeUndefined()
   })
 })

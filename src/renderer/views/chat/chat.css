@@ -344,6 +344,9 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   color: var(--fg-2); font-size: 12.5px; animation: tqIn .18s ease;
 }
 .supplement-banner span { flex: 1; min-width: 0; }
+/* #7 fix round 1 (F4): the 丢弃 button's two-click confirm warning — same warn/danger tone as
+   RunEventCard.tsx's .wfo-danger row (real, irreversible action ahead). */
+.supplement-discard-warn { color: var(--err); }
 /* User feedback (2026-07-21): Context bar like Claude Code's statusline — real reported tokens ÷ real
    model window (see WorkspaceView latestUsage). Label + bar + %, right-aligned above the composer. */
 .ctx-real {

@@ -8,10 +8,18 @@ import type { FinalizeFailure } from '../../main/run/controller'
  * 结果没了」。事实恰恰相反 —— 改动一行没丢，全在 forge/run-<id> 上。所以这张卡的第一句必须先
  * 把这件事说死，然后才是原因、冲突文件、和可直接粘贴的命令。
  */
-export function FinalizeFailureCard({ failures, onHandoff, onRetry }: {
+export function FinalizeFailureCard({ failures, onHandoff, onRetry, handoffWarning }: {
   failures: FinalizeFailure[]
   onHandoff: () => void
   onRetry?: () => void
+  // #7 fix round 1 (F1/F2): resolveGate(gateId, {type:'handoff'}) and discardResumable() are NOT
+  // equivalent — resolveGate keeps this run's saved record (marks it finalized-by-handoff, status
+  // stays an honest 'failed'); discardResumable ERASES the record entirely (see RunExecPanel.tsx's
+  // routing doc for exactly when each applies). The caller passes this ONLY when the fallback
+  // (record-erasing) route is what 知道了，我自己处理 will actually do here — the button's own label
+  // never changes (existing callers/tests rely on the exact text), so the warning is the only place
+  // that says "this deletes the record" before the click happens.
+  handoffWarning?: string
 }): ReactElement {
   return (
     <div className="msg-req k-gate ff-card">
@@ -42,6 +50,7 @@ export function FinalizeFailureCard({ failures, onHandoff, onRetry }: {
             ].join('\n')}</pre>
           </div>
         ))}
+        {handoffWarning ? <div className="ff-line ff-warn">{handoffWarning}</div> : null}
         <div className="arow">
           {onRetry ? <button className="wfo-btn ghost" onClick={onRetry}>重新收尾</button> : null}
           <button className="wfo-btn pri" onClick={onHandoff}>知道了，我自己处理</button>

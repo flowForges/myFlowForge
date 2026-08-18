@@ -763,12 +763,15 @@ export class RunController {
     // produced (e.g. a run with zero recorded outcomes) — this.summary is set in start() just
     // before this is called.
     const body = this.summary ? `**本次运行总结**\n\n${this.summary}` : '全部完成，合并到目标分支？'
-    // 真实分支名一并发出去 —— 卡片要显示「合并到 branch1」而不是让用户猜。多项目时目标分支
-    // 理论上可以各不相同，卡片只展示第一个（同一工作区的项目通常同名分支），命令行文案里
-    // 每个项目会各自列出。
+    // 真实分支名一并发出去 —— 卡片要显示「合并到 branch1」而不是让用户猜。#7 fix round 1 (F5,
+    // user-ruled): targetBranch alone is only targets[0] — kept for the common single-project case
+    // and for old frozen-card consumers — but a multi-project run's targets CAN genuinely differ per
+    // project, so `targets` below carries the full list and the renderer must use it once there's
+    // more than one, rather than implying targetBranch covers every project.
     this.emitEvent({
       id, kind: 'gate', stageKey: '__finalize__', stageName: '收尾确认', body, finalize: true,
       targetBranch: targets[0]?.target, tempBranch: tempBranchName(this.plan.runId),
+      targets: targets.map((t) => ({ project: t.name, target: t.target })),
     })
     const d = await p
     this.drop(id)
@@ -810,7 +813,14 @@ export class RunController {
         })
       }
     }
-    if (failures.length === 0) { this.finalized = true; return }
+    // #7 fix round 1 (F6): a retry that now SUCCEEDS must clear the PREVIOUS attempt's failure
+    // record — otherwise the terminal saved state after a clean retry is the self-contradictory
+    // `{status:'ok', finalized:true, error:'无法自动合并 — …', finalizeFailure:[…]}`. Every current
+    // consumer happens to gate on status/finalized first, so this was latent rather than visibly
+    // broken — but any future reader of `error`/`finalizeFailure` alone (or the failure card's own
+    // `showFinalizeFailureCard`, now checked independently of status — see RunExecPanel.tsx) would
+    // wrongly re-show a resolved failure forever.
+    if (failures.length === 0) { this.finalized = true; this.error = undefined; this.finalizeFailure = undefined; return }
     // Recorded on the controller (not just thrown) so the terminal RunControllerState carries the
     // real, structured per-project failure — Run2Manager's `.catch` only overrides `status` to
     // 'failed', it never had a way to surface *why*; the renderer must show this instead of guessing

@@ -297,6 +297,10 @@
 .wfo-act { margin-top: 13px; padding: 11px 12px; border-radius: 10px; background: color-mix(in oklch, var(--warn) 9%, var(--bg)); border: 1px solid color-mix(in oklch, var(--warn) 30%, var(--border)); }
 .wfo-act .am { font-size: 11.5px; color: var(--warn); line-height: 1.5; margin-bottom: 9px; }
 .wfo-act .arow { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+/* #7 fix round 1 (F5): the finalize gate's per-project target list — shown only when a run's
+   projects have differing target branches (see RunEventCard's `event.targets.length > 1` branch). */
+.wfo-targets { margin: 8px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.7; color: var(--fg-2); }
+.wfo-targets code { font-family: var(--mono); font-size: 11.5px; background: var(--surface); padding: 1px 6px; border-radius: 5px; color: var(--fg); }
 .wfo-inp { flex: 1; min-width: 0; height: 32px; border-radius: 8px; border: 1px solid var(--border-2); background: var(--surface); color: var(--fg); padding: 0 10px; font-size: 12.5px; font-family: var(--font); }
 .wfo-inp:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .wfo-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 13px;
@@ -343,6 +347,12 @@
    观感统一，不另起一套颜色。 */
 .ff-cmd { margin: 2px 0 0; padding: 9px 11px; border-radius: 7px; background: var(--surface);
   border: 1px solid var(--border); font: 11.5px/1.6 var(--mono); color: var(--fg-2); overflow-x: auto; white-space: pre; }
+/* #7 fix round 1 (F2): shown only when 知道了，我自己处理 will fall back to erasing the saved run
+   record (no live gate left to resolve against) — same warning color as .wfo-danger's real-delete row. */
+.ff-warn { color: var(--err); font-size: 11.5px; line-height: 1.5; }
+/* #7 fix round 1 (F3): the short confirmation swapped in after 知道了，我自己处理 is clicked, so the
+   click always produces a visible change — see RunExecPanel.tsx's handoffAcked. */
+.ff-acked .req-kind { color: var(--muted); }
 
 /* 底部:目标输入 / 运行控制 */
 .wfo-foot { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 13px 17px 15px; background: color-mix(in oklch, var(--surface) 35%, var(--bg-2)); }

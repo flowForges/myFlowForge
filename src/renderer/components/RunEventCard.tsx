@@ -189,9 +189,20 @@ export function RunEventCard({ event, frozen, onGate, onLane, onOpenDoc, stages 
           // 「丢弃」会以为跑了半天的结果没了，而 park 让点错也丢不了东西。
           <div className="wfo-act">
             {event.body ? <div className="req-plan"><Markdown text={event.body} /></div> : null}
+            {/* #7 fix round 1 (F5, user-ruled): targetBranch is only targets[0] — a multi-project run
+                can genuinely have DIFFERING per-project targets (controller.ts's runFinalizeGate now
+                emits the full list). One project keeps the exact "合并到 branch1" wording; more than
+                one names every project's own target instead of implying one branch covers all of them. */}
+            {event.targets && event.targets.length > 1 ? (
+              <ul className="wfo-targets">
+                {event.targets.map((t) => (
+                  <li key={t.project}>项目 {t.project} → <code>{t.target}</code></li>
+                ))}
+              </ul>
+            ) : null}
             <div className="arow">
               <button className="wfo-btn pri" onClick={() => onGate(event.id, { type: 'merge' })}>
-                {event.targetBranch ? `合并到 ${event.targetBranch}` : '合并并完成'}
+                {event.targets && event.targets.length > 1 ? '合并到各自的目标分支' : (event.targetBranch ? `合并到 ${event.targetBranch}` : '合并并完成')}
               </button>
               <button className="wfo-btn ghost" onClick={() => onGate(event.id, { type: 'park' })}>
                 {event.tempBranch ? `先不合并（保留在 ${event.tempBranch}）` : '先不合并（保留分支）'}

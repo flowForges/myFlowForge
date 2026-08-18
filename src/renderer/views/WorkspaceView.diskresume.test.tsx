@@ -105,6 +105,29 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
     expect(screen.getByText(/收尾/)).toBeInTheDocument()
     expect(screen.getByText(/Merge conflict/)).toBeInTheDocument()
     expect(screen.queryByText(/从「/)).toBeNull()
+    // #7 fix round 1 (F4): the honest reassurance — the branch survives, only the record is at risk.
+    expect(screen.getByText(/forge\/run-run-fin/)).toBeInTheDocument()
+  })
+
+  // #7 fix round 1 (F4): the finalizeOnly banner's 丢弃 confirm must say the SAME thing the copy above
+  // it already says — deleting the record, not the work — not the generic "无法恢复到当前进度" wording
+  // the ordinary mid-run-interrupted case uses (that one really would lose in-flight progress).
+  it('finalizeOnly 的丢弃确认文案说的是"记录"不是"进度"，改动不受影响', async () => {
+    resumableMock.mockImplementation(async () => ({
+      runId: 'run-fin', resumeStageKey: '__finalize__', resumeStageName: '收尾（合并临时分支）',
+      totalStages: 4, doneCount: 4, finalizeOnly: true,
+      error: '合并临时分支失败 — web: CONFLICT (content): Merge conflict in src/x.ts',
+    }) as never)
+    render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
+    await waitFor(() => expect(screen.getByText('丢弃')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('丢弃'))
+
+    expect(screen.getByText(/这条运行记录/)).toBeInTheDocument()
+    // "仍完整保留" appears in BOTH the banner's own reassurance and the confirm warning below it —
+    // that's intentional (both places say the same true thing), just assert it's said at all.
+    expect(screen.getAllByText(/仍完整保留/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/无法恢复到当前进度/)).toBeNull()
   })
 
   it('resumable() 返回 null 时,不显示提示', async () => {
@@ -126,12 +149,20 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
     expect(discardResumableMock).not.toHaveBeenCalled()
   })
 
-  it('点击丢弃调用 run2.discardResumable 并隐藏提示', async () => {
+  // #7 fix round 1 (F4): 丢弃 now genuinely deletes the saved run record (persist.ts's
+  // discardResumableRun fix, same task), so a bare click no longer fires it directly — it takes a
+  // second, explicit 确认丢弃 click first (same two-click pattern as RunEventCard.tsx's finalize-gate
+  // 彻底丢弃这次改动).
+  it('点击丢弃 → 确认丢弃 调用 run2.discardResumable 并隐藏提示；第一次点击只展开确认', async () => {
     resumableMock.mockImplementation(async () => resumableSummary)
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(screen.getByText('丢弃')).toBeInTheDocument())
 
     fireEvent.click(screen.getByText('丢弃'))
+    expect(discardResumableMock).not.toHaveBeenCalled()
+    expect(screen.getByText('确认丢弃')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByText('确认丢弃'))
 
     await waitFor(() => expect(discardResumableMock).toHaveBeenCalledWith('/ws'))
     await waitFor(() => expect(screen.queryByText(/上次有工作流未完成/)).toBeNull())
