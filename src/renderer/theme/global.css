@@ -155,6 +155,20 @@ html[data-bg-scope="app"]:not([data-theme="light"]) .tb-bell .nb-badge {
 .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .view { display: none; flex: 1; min-height: 0; }
 .view.on { display: flex; }
+/* 滚动条自动隐藏(用户实测 2026-08-18):这条规则是全局的,凡内容溢出的容器都常驻画一条滑块 ——
+   侧栏会话列表一长,那条深色竖条就永远贴在侧栏右缘,比刚调细的分栏接缝还显眼。改成 macOS overlay
+   那种:平时不见,鼠标进到那一栏显示,滚动时显示,停下约 1.2s 后淡出。
+   槽位宽度【不动】(仍占 10px 布局):滑块只是变透明,出现/消失时内容不会左右跳。
+   `*:hover::-webkit-scrollbar-thumb` 里的 :hover 落在【拥有滚动条的那个元素】上,而鼠标停在它内部
+   任意子元素时它都算 hover,所以效果就是"鼠标进到这一栏"。
+   `[data-scrolling]` 由 shell/autoHideScrollbars.ts 在滚动时挂、空闲后摘 —— CSS 没有"滚动停止"这个
+   状态,只有那一件事需要 JS。两个条件各管各的:鼠标还在上面时即便计时器到点也仍然显示。 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb {
+  background: transparent; border-radius: 99px; border: 3px solid transparent; background-clip: content-box;
+  transition: background .18s linear;
+}
+*:hover::-webkit-scrollbar-thumb,
+[data-scrolling]::-webkit-scrollbar-thumb { background: var(--border-2); background-clip: content-box; }
+/* 直接把鼠标压在滑块上再提亮一档。必须排在上面两条【之后】—— 特异性相同,靠顺序取胜。 */
 ::-webkit-scrollbar-thumb:hover { background: var(--faint); background-clip: content-box; }
