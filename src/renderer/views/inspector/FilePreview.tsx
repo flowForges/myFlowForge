@@ -3,6 +3,8 @@ import type { ChangeType, DiffLine, FilePreview as FilePreviewData } from '@shar
 import { highlight } from './highlight'
 import { FileIc } from './fileIcon'
 import { Markdown } from '../chat/markdown'
+import { Lightbox } from '../../components/Lightbox'
+import { isHtmlFile } from '@shared/fileRef'
 
 // Markdown files render as formatted markdown in 全文 mode rather than through the
 // per-line code highlighter (which would show raw '#'/'*' syntax). Diff stays line-based.
@@ -43,11 +45,13 @@ export function FilePreview({
   const img = isImage(file)
   const [imgUrl, setImgUrl] = useState<string | null>(null)
   const [imgErr, setImgErr] = useState('')
+  const [zoom, setZoom] = useState(false)
 
   useEffect(() => {
     if (!open || !file) return
     setMode(initialMode ?? 'diff')
     setFull(null)
+    setZoom(false)
     // Image files: gitDiff/gitFile return text (binary garbage); read the bytes as a data URL instead.
     if (isImage(file)) {
       setImgUrl(null); setImgErr('')
@@ -82,6 +86,17 @@ export function FilePreview({
         <span className="pv-path">{file}</span>
         {!img && (
           <div className="pv-actions">
+            {/* .html 产物在预览里只能看源码;想看渲染效果就丢给系统浏览器(app 内嵌 iframe 会把产物里的
+                脚本/外链跑在 app 里,不做)。走 file:open-path,主进程会再校验一次越界。 */}
+            {isHtmlFile(file) && (
+              <button
+                className="pv-openbrowser"
+                title="用系统浏览器打开"
+                onClick={() => { void window.forge.openFilePath?.([cwd], file) }}
+              >
+                用浏览器打开
+              </button>
+            )}
             <div className="pv-toggle">
               <button
                 className={mode === 'diff' ? 'on' : undefined}
@@ -103,9 +118,16 @@ export function FilePreview({
       </div>
       {img ? (
         <div className="pv-img-wrap">
-          {imgUrl ? <img className="pv-img" src={imgUrl} alt={file} />
-            : imgErr ? <div className="pv-img-msg">{imgErr}</div>
+          {imgUrl ? (
+            <img
+              className="pv-img" src={imgUrl} alt={file}
+              role="button" tabIndex={0} title="点击查看大图"
+              onClick={() => setZoom(true)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setZoom(true) } }}
+            />
+          ) : imgErr ? <div className="pv-img-msg">{imgErr}</div>
             : <div className="pv-img-msg">加载中…</div>}
+          {zoom && imgUrl ? <Lightbox src={imgUrl} alt={file} onClose={() => setZoom(false)} /> : null}
         </div>
       ) : mode === 'full' && full !== null && isMarkdown(file, full.lang) ? (
         <div className="pv-md">

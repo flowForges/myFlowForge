@@ -33,6 +33,7 @@ import { ChangesPane } from './inspector/ChangesPane'
 import { FileTreePane } from './inspector/FileTreePane'
 import { pickPreviewCwd } from './inspector/previewTarget'
 import { FilePreview } from './inspector/FilePreview'
+import { OpenFileCtx, makeOpenFileApi } from './chat/openFile'
 import { FileBrowser } from './inspector/FileBrowser'
 import { ProjectPicker, ALL_PROJECTS } from './inspector/ProjectPicker'
 import { FileIc } from './inspector/fileIcon'
@@ -1214,6 +1215,19 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // mode (a freshly-written doc has no diff). The doc's own cwd (its worktree/workspace root) wins.
   const openDoc = (doc: DesignDocRef) => openBrowse(doc.path, 'M', doc.cwd, 'full')
 
+  // 对话正文里 [设计文档](docs/design.md) 这类链接的落点。以前点了完全没反应(MdLink 只放行 http)。
+  // bases 按优先级:当前会话的 worktree → 工作区根 —— 模型写的相对路径通常相对前者,但聚合模式下没有
+  // 单一 cwd,只能靠工作区根兜底。存在性/是不是目录/有没有越界都由主进程判(renderer 没有 fs)。
+  const openFileBases = useMemo(() => [cwd, wsPath].filter(Boolean) as string[], [cwd, wsPath])
+  // 只依赖 openFileBases:openBrowse 除了 setState 就只闭包了 cwd/wsPath,而它俩一变 openFileBases
+  // 也跟着变,所以这里不会拿到过期的 cwd。
+  const openFileApi = useMemo(() => makeOpenFileApi(openFileBases, {
+    resolveFileRef: window.forge.resolveFileRef,
+    openFilePath: window.forge.openFilePath,
+    openInViewer: (file, fileCwd) => openBrowse(file, 'M', fileCwd, 'full'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [openFileBases])
+
   // Collect all agent ids
   const allAgentIds = useMemo(() => {
     if (!run) return []
@@ -1318,6 +1332,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     : undefined
 
   return (
+    <OpenFileCtx.Provider value={openFileApi}>
     <div className="view on" id="view-ws">
       {/* 对话主列 — always mounted (P2-4 removed the floating run-mode overlay that used to replace
           this column while a run was active; a live run now only renders in the right 执行 tab). */}
@@ -2184,5 +2199,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         />
       )}
     </div>
+    </OpenFileCtx.Provider>
   )
 }

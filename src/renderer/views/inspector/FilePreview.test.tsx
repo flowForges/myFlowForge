@@ -51,3 +51,27 @@ describe('FilePreview', () => {
     expect(el?.className.includes('on')).toBe(false)
   })
 })
+
+describe('FilePreview — .html 与图片', () => {
+  it('.html 给「用浏览器打开」,并把 cwd 一起交给主进程校验', async () => {
+    ;(window as any).forge.gitFile = vi.fn(async () => ({ text: '<h1>x</h1>', lang: 'html' }))
+    ;(window as any).forge.openFilePath = vi.fn(async () => ({ ok: true }))
+    render(<FilePreview open cwd="/w" file="out/index.html" type="A" onClose={() => {}} />)
+    fireEvent.click(screen.getByText('用浏览器打开'))
+    expect((window as any).forge.openFilePath).toHaveBeenCalledWith(['/w'], 'out/index.html')
+  })
+  it('非 html 不给这个按钮', () => {
+    render(<FilePreview open cwd="/w" file="src/a.ts" type="M" onClose={() => {}} />)
+    expect(screen.queryByText('用浏览器打开')).not.toBeInTheDocument()
+  })
+  it('图片点击开灯箱', async () => {
+    ;(window as any).forge.imageFile = vi.fn(async () => ({ dataUrl: 'data:image/png;base64,AAA' }))
+    const { container } = render(<FilePreview open cwd="/w" file="docs/shot.png" type="A" onClose={() => {}} />)
+    await waitFor(() => expect(container.querySelector('.pv-img')).toBeInTheDocument())
+    fireEvent.click(container.querySelector('.pv-img')!)
+    expect(document.body.querySelector('.lightbox-img')?.getAttribute('src')).toBe('data:image/png;base64,AAA')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(document.body.querySelector('.lightbox')).toBeNull()
+  })
+})
+

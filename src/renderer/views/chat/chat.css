@@ -921,3 +921,13 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   background: color-mix(in oklab, var(--run) 12%, transparent);
   border: 1px solid color-mix(in oklab, var(--run) 34%, transparent);
 }
+
+/* 指向工作区内文件的链接:与外链同样的样式,只是 hover 时提示它会开进预览而不是浏览器 */
+.md-link-file { cursor: pointer; }
+/* 打不开时的短暂提示(主窗口没有 toast,就近挂在链接后面,2 秒后自己消失) */
+.md-link-err {
+  margin-left: 6px; padding: 0 5px;
+  font-size: 11px; color: var(--danger, #e5534b);
+  border: 1px solid color-mix(in srgb, var(--danger, #e5534b) 40%, transparent);
+  border-radius: 4px;
+}

@@ -123,6 +123,13 @@ const api = {
   gitDiff: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitDiff, { cwd, file }),
   gitFile: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitFile, { cwd, file }),
   imageFile: (cwd: string, file: string): Promise<{ dataUrl: string } | { error: string }> => ipcRenderer.invoke(CH.imageFile, { cwd, file }),
+  // 对话正文里的文件链接:点击时才解析(渲染时不探测,否则每条消息都要打一批 IPC 且会闪)。
+  resolveFileRef: (bases: string[], href: string): Promise<
+    { ok: true; cwd: string; file: string; abs: string } | { ok: false; reason: 'missing' | 'outside' | 'dir' | 'bad' }
+  > => ipcRenderer.invoke(CH.resolveFileRef, { bases, href }),
+  // 用系统默认程序打开(pdf/xlsx/… 与 .html 的「用浏览器打开」)。
+  openFilePath: (bases: string[], href: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(CH.openFilePath, { bases, href }),
   fsTree: (cwd: string) => ipcRenderer.invoke(CH.fsTree, cwd),
   gitBranch: (cwd: string) => ipcRenderer.invoke(CH.gitBranch, cwd),
   searchContent: (a: { root: string; query: string; files?: string[] }): Promise<import('@shared/types').ContentSearchResult> => ipcRenderer.invoke(CH.fileSearchContent, a),

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { CodeBlock, TableBlock, QuoteBlock } from './blocks'
 import { MdLink } from './MdLink'
 import { renderHtmlFragment, newFragmentScan, feedFragment, BLOCK_TAGS } from './htmlFragment'
+import { Lightbox } from '../../components/Lightbox'
 
 // Base directory for resolving RELATIVE markdown image paths (e.g. a design doc's `![](./diagram.png)`).
 // Provided by whoever renders a doc that lives on disk (FilePreview); absent in chat bubbles → relative
@@ -16,6 +17,7 @@ function MdImage({ src, alt }: { src: string; alt: string }): ReactNode {
   const base = useContext(MdImageBaseCtx)
   const [url, setUrl] = useState<string | null>(() => (ABS_SRC.test(src) ? src : null))
   const [err, setErr] = useState(false)
+  const [zoom, setZoom] = useState(false)
   useEffect(() => {
     if (ABS_SRC.test(src)) { setUrl(src); setErr(false); return }
     if (!base) { setErr(true); return }
@@ -28,7 +30,19 @@ function MdImage({ src, alt }: { src: string; alt: string }): ReactNode {
   }, [src, base])
   if (err) return <span className="md-img-err" title={src}>🖼 {alt || src}</span>
   if (!url) return <span className="md-img-loading">加载图片…</span>
-  return <img className="md-img" src={url} alt={alt} />
+  // 正文里的图按栏宽缩得很小(文档里的示意图尤其看不清),点一下开灯箱看原尺寸。
+  // 这一个组件同时服务对话气泡和文件预览里的 markdown,所以改这里两处都生效。
+  return (
+    <>
+      <img
+        className="md-img" src={url} alt={alt}
+        role="button" tabIndex={0} title="点击查看大图"
+        onClick={() => setZoom(true)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setZoom(true) } }}
+      />
+      {zoom ? <Lightbox src={url} alt={alt} onClose={() => setZoom(false)} /> : null}
+    </>
+  )
 }
 
 // Minimal, dependency-free Markdown → React renderer for chat messages.
