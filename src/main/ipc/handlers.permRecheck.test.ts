@@ -53,6 +53,10 @@ vi.mock('../config/store', () => ({
   writeWorkspace: vi.fn(),
   readWorkspaceRegistry: () => [],
   readAgentsConfig: () => ({ providers: [], custom: [] }),
+  // ★ 少了这两个,cursor 这类无沙箱 provider 的「预授权门」会在 runTurn 里抛 TypeError,轮次当场夭折、
+  //   lane.running 被清掉 —— 于是「不该提示」的用例变成【假绿】(不是因为过滤生效,而是因为压根没在跑)。
+  isFullAccessAcked: () => false,
+  ackFullAccess: vi.fn(),
 }))
 vi.mock('../workspace/workspaceService', () => ({ createWorkspace: vi.fn(), editWorkspace: vi.fn() }))
 vi.mock('../workspace/workspaceSetup', () => ({ runWorkspaceSetup: vi.fn() }))
@@ -73,7 +77,7 @@ type Confirm = (req: { title: string; where?: string; questions?: unknown[] }) =
  * 起一轮真实的 chat turn,把 registerIpc 交给 sendTurn 的 `confirm` 抓出来 —— 这就是 CLI 升门用的那个出口。
  * sendTurn 停在一个永不 resolve 的 promise 上,让门保持挂起(轮次一结束 drainChatGates 会把门 deny 掉)。
  */
-async function startTurn() {
+async function startTurn(agent = 'claude', requireConfirm = true) {
   vi.resetModules()
   sendTurnMock.mockReset()
   const { registerIpc } = await import('./handlers')
@@ -88,10 +92,11 @@ async function startTurn() {
   }
   let confirm: Confirm | null = null
   sendTurnMock.mockImplementation((_p: any, deps: any) => { confirm = deps.confirm; return new Promise(() => {}) })
-  call(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [], permissionMode: sessionState.permissionMode })
+  call(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent, agentLabel: agent, model: 'm', text: 'x', attachments: [], permissionMode: sessionState.permissionMode })
   await new Promise(r => setTimeout(r, 0))
-  if (!confirm) throw new Error('sendTurn never ran — confirm not captured')
-  return { confirm: confirm as Confirm, sent, call }
+  // cursor 这类无沙箱 provider 会先卡在「预授权门」上,sendTurn 压根没跑到 —— 那种用例不需要 confirm。
+  if (requireConfirm && !confirm) throw new Error('sendTurn never ran — confirm not captured')
+  return { confirm: confirm as unknown as Confirm, sent, call }
 }
 
 const requests = (sent: [string, any][]) => sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'confirm-request')
@@ -202,5 +207,55 @@ describe('切到完全访问时排空已挂起的确认门', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(a).toBe('allow')
     expect(b).toBeUndefined()
+  })
+})
+
+// ── 运行中改档「本轮不生效」的提示 ──────────────────────────────────────────────────────────
+// codex/qoder/antigravity 的权限档就是启动时的沙箱参数(agents/permissionArgs.ts),进程一起来就钉死,
+// 而且它们压根不升确认门(codex 的 approval_policy 恒 never,qoder 连 onConfirm 都没有)—— 所以运行中
+// 切档对当前这轮零影响。不说一声,用户只会以为「我切了但没反应 = 这功能坏了」。
+describe('运行中改档:本轮不生效时要说一声', () => {
+  const notes = (sent: [string, any][]) =>
+    sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+        .map(([, p]) => p.message.text as string)
+
+  it('★ codex 正在跑时切档 → 提示「下一条消息才生效」,并说清本轮仍按旧档跑', async () => {
+    const { sent, call } = await startTurn('codex')
+    await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    const hint = notes(sent).find(t => t.includes('下一条消息'))
+    expect(hint).toBeTruthy()
+    expect(hint).toContain('完全访问')       // 切到了什么
+    expect(hint).toContain('自动(工作区)')   // 本轮仍按什么跑
+  })
+
+  it('★ claude 正在跑时切到完全访问 → 不提示(它当场就兑现了)', async () => {
+    const { sent, call } = await startTurn('claude')
+    await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)
+  })
+
+  it('★ claude 正在跑时切到只读 → 仍要提示(收紧管不了已经起来的进程)', async () => {
+    const { sent, call } = await startTurn('claude')
+    await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'readonly' })
+    expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(true)
+  })
+
+  it('没有轮次在跑的时候切档 → 不提示(本来就是下一轮的事,不用啰嗦)', async () => {
+    vi.resetModules()
+    const { registerIpc } = await import('./handlers')
+    const { ipcMain } = await import('electron') as any
+    ;(ipcMain.handle as any).mockClear()
+    const sent: [string, any][] = []
+    registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {})
+    const h = (ipcMain.handle as any).mock.calls.find((x: any[]) => x[0] === CH.sessionSetPermission)[1]
+    await h({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)
+  })
+
+  it('★ 不吃权限档的 provider(cursor)不提示 —— 说「下一条消息生效」是骗人的,它永远不生效', async () => {
+    const { sent, call } = await startTurn('cursor', false)
+    await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    console.log('DBG cursor notes:', JSON.stringify(notes(sent)))
+    expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)
   })
 })

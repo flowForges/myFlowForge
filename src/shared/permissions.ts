@@ -40,3 +40,21 @@ export const PERMISSION_AWARE_PROVIDERS = ['claude', 'codex', 'qoder', 'antigrav
 export function providerSupportsPermissions(providerId: string): boolean {
   return (PERMISSION_AWARE_PROVIDERS as readonly string[]).includes(providerId)
 }
+
+// 哪些 provider 会为每个操作升起确认门。只有它们能在【运行中】兑现权限档的【提升】—— 门是 app 答的,
+// 所以门升起来时重读一次档、答 allow,就等于半途提权(见 ipc/handlers.ts 的 toolConfirm)。
+// 其余 provider 的档位纯粹是启动时的沙箱参数,进程一起来就钉死:codex 的 approval_policy 恒 "never"
+// (交互策略会死锁),qoder/antigravity 连逐操作协议都没有。
+// codex 的 app-server transport 其实也有门,但默认关、且不是每个操作都升门 —— 这里保守地不算进来:
+// 多提示一句「下一条消息生效」顶多是啰嗦,漏提示才会让用户以为功能坏了。
+export const OPERATION_GATED_PROVIDERS = ['claude'] as const
+export function providerGatesEachOperation(providerId: string): boolean {
+  return (OPERATION_GATED_PROVIDERS as readonly string[]).includes(providerId)
+}
+
+// 在一轮【正在跑】的时候切档,这次切换能不能当场兑现?
+// 只有「会升门的 provider」+「切到完全访问」这一种组合可以。收紧(切到只读/自动)一律不行:
+// 已经起来的那个进程的沙箱改不了,而门只能用来【放行】,没法反过来收回已经授予的范围。
+export function permissionAppliesMidRun(providerId: string, mode: PermissionMode): boolean {
+  return mode === 'full' && providerGatesEachOperation(providerId)
+}

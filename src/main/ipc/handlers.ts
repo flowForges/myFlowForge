@@ -1,7 +1,7 @@
 import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
-import { providerSupportsPermissions } from '@shared/permissions'
+import { providerSupportsPermissions, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -510,11 +510,22 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       emitNote(wsPath, sessionId, `🛡 已切到「完全访问」，自动放行：${gateWhere(meta)}`)
     }
   }
-  // 权限档的唯一写入口(IPC 与机器人桥共用):落盘 + 广播 + 若切到 full 就排空挂起的门。
+  // 权限档的唯一写入口(IPC 与机器人桥共用):落盘 + 广播 + 若切到 full 就排空挂起的门 + 该说的说清楚。
   const applyPermission = (wsPath: string, sessionId: string, mode: import('@shared/permissions').PermissionMode) => {
+    const prev = getSession(wsPath, sessionId)?.permissionMode ?? DEFAULT_PERMISSION_MODE
     const file = setSessionPermission(wsPath, sessionId, mode)
     broadcastSessions(wsPath, file)
     if (mode === 'full') allowPendingConfirms(wsPath, sessionId)
+    // 运行中改档,但这个 provider 的沙箱是启动参数、进程起来就钉死了(见 agents/permissionArgs.ts)——
+    // 不说一声,用户只会以为「我切了但没反应 = 这功能坏了」。
+    // 不提示的两种情况:① claude 切到完全访问,门重读后当场就兑现了;② cursor 这类压根不吃权限档的
+    // provider —— 对它们说「下一条消息生效」是骗人的,它永远不生效(picker 上已经标了"不支持")。
+    const running = chatQueue.runningProvider(wsPath, sessionId)
+    if (running && providerSupportsPermissions(running) && !permissionAppliesMidRun(running, mode)) {
+      const who = providers[running]?.displayName ?? running
+      emitNote(wsPath, sessionId,
+        `🛡 已切到「${permissionModeLabel(mode)}」· ${who} 不支持运行中改档，当前这一轮仍按「${permissionModeLabel(prev)}」跑完，下一条消息才生效。`)
+    }
     return file
   }
 
