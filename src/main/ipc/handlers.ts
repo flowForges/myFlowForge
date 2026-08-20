@@ -476,12 +476,46 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'ask-request', id, title: question, options, agentName })
     })
 
+  // ── 权限档在【运行中】切换的即时兑现 ────────────────────────────────────────────────────────
+  // permissionMode 只在进程启动那一刻被翻译成 CLI 沙箱参数(agents/permissionArgs.ts),进程起来后沙箱就
+  // 钉死了 —— 所以运行中切换默认只能等【下一轮】。唯一还能半途兑现的通道是 CLI 主动升起的确认门:门是
+  // 我们答的,我们答 allow,CLI 就照做。于是权限档在门上要被【重新读一次】,而不是沿用起跑时的那个值。
+  //
+  // ★ 但带 questions 的门必须排除:那不是权限请求,是模型在【问人】(AskUserQuestion 借 can_use_tool 通道
+  //   伪装成权限请求发出来)。自动 allow 会带着空 answers 回去,CLI 转头告诉模型「用户没有回答」——
+  //   正是 3c899d3 修掉的那个 bug。
+  const autoAllowable = (g: { questions?: AskQuestion[] }) => !g.questions?.length
+  const gateWhere = (g: { title: string; where?: string }) => `${g.title}${g.where ? ` · ${g.where}` : ''}`
+
   const emitNote = (wsPath: string, sessionId: string, noteText: string) => {
     const id = `sys-${Date.now()}`
     broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'assistant-start', id, model: '系统' })
     const note: ChatMessage = { id, who: 'ai', text: noteText, model: '系统', ts: new Date().toISOString().slice(11, 19) }
     appendMessage(wsPath, sessionId, note)
     broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'done', message: note })
+  }
+
+  // 用户在门【已经挂在屏幕上】的时候才切到「完全访问」(被问烦了才去切,这才是真实场景)——把该会话所有
+  // 挂起的确认门就地放行,卡片当场消失。只碰 confirm 门:ask 门是子代理在问人,与权限档无关。
+  const allowPendingConfirms = (wsPath: string, sessionId: string) => {
+    for (const [id, meta] of [...chatGateOwner]) {
+      if (meta.ws !== wsPath || meta.sessionId !== sessionId || meta.type !== 'confirm') continue
+      if (!autoAllowable(meta)) continue
+      const r = chatConfirms.get(id)
+      if (!r) continue
+      chatGateOwner.delete(id)
+      chatConfirms.delete(id)
+      r('allow')
+      broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'confirm-resolved', id })
+      emitNote(wsPath, sessionId, `🛡 已切到「完全访问」，自动放行：${gateWhere(meta)}`)
+    }
+  }
+  // 权限档的唯一写入口(IPC 与机器人桥共用):落盘 + 广播 + 若切到 full 就排空挂起的门。
+  const applyPermission = (wsPath: string, sessionId: string, mode: import('@shared/permissions').PermissionMode) => {
+    const file = setSessionPermission(wsPath, sessionId, mode)
+    broadcastSessions(wsPath, file)
+    if (mode === 'full') allowPendingConfirms(wsPath, sessionId)
+    return file
   }
 
   // Per-(workspace, session) count of in-flight fire-and-forget delegate batches. The chat turn ends
@@ -509,6 +543,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions })
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where, questions: req.questions })
     })
+    // CLI 的逐操作确认门专用出口:升门【之前】先读一次会话当前的权限档,已经是「完全访问」就直接放行,
+    // 卡片根本不弹(用户切到 full 的意思就是「别再问我」)。留一行审计痕迹,不做无声放行。
+    //
+    // ★ 只给 provider 的逐操作门用,不能给下面那个「无沙箱 provider 预授权门」用:那个门已经自己按
+    //   payload.permissionMode !== 'full' 守过了,再叠一层等于替用户默默写下 fullAccessAck ——
+    //   那是另一件事的授权,不是同一件。
+    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[] }): Promise<ConfirmDecision> => {
+      if (autoAllowable(req) && getSession(payload.workspacePath, payload.sessionId)?.permissionMode === 'full') {
+        emitNote(payload.workspacePath, payload.sessionId, `🛡 已按当前权限档「完全访问」自动放行：${gateWhere(req)}`)
+        return Promise.resolve('allow')
+      }
+      return confirm(req)
+    }
     // Pre-run consent gate: providers with no sandbox dimension (cursor/gemini/opencode/qwen/copilot)
     // ignore the permission档 and run with blanket full access (--force/--allow-all-tools/--yolo). Make
     // that explicit — ask ONCE per (workspace, provider), remember an allow. 'full' mode = the user
@@ -634,7 +681,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         provider,
         env,
         emit: chatEmit,
-        confirm,
+        confirm: toolConfirm,
         onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel()),
       })
       // Chat NEVER triggers a workflow (this was the user's #1 complaint — "聊着聊着突然启动工作流").
@@ -727,9 +774,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return sessionsOut(a.workspacePath, file)
   })
   ipcMain.handle(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
-    const file = setSessionPermission(a.workspacePath, a.sessionId, a.mode)
-    broadcastSessions(a.workspacePath, file)
-    return sessionsOut(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, applyPermission(a.workspacePath, a.sessionId, a.mode))
   })
   ipcMain.handle(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
     const file = setSessionModel(a.workspacePath, a.sessionId, a.agentId, a.modelId)
@@ -964,10 +1009,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       const file = setSessionModel(ws, sessionId, agent, model)
       broadcastSessions(ws, file)
     },
-    setPermission: (ws, sessionId, mode) => {
-      const file = setSessionPermission(ws, sessionId, mode)
-      broadcastSessions(ws, file)
-    },
+    setPermission: (ws, sessionId, mode) => { applyPermission(ws, sessionId, mode) },
     getProxy: () => readSettings().termProxy,
     emitStatus: (platform, st) => broadcast(CH.botStatusEvent, { platform, status: st }),
   })

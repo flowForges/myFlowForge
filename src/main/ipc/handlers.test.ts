@@ -134,6 +134,10 @@ const sessionFile2 = { sessions: [{ id: 's1', title: '新会话', mode: 'chat' a
 
 vi.mock('../chat/sessionStore', () => ({
   readSessions: vi.fn(() => sessionFile1),
+  // 确认门升起前要读会话【当前】的权限档(见 handlers.ts 的 toolConfirm),漏掉这个 mock 会让每一个
+  // 走 confirm 的用例都炸在 TypeError 上,看着像门本身坏了。
+  getSession: vi.fn((_ws: string, id: string) => sessionFile1.sessions.find(s => s.id === id)),
+  setSessionPermission: vi.fn(() => sessionFile1),
   newSession: vi.fn(() => sessionFile2),
   switchSession: vi.fn(() => sessionFile1),
   closeSession: vi.fn(() => sessionFile1),
