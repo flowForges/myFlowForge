@@ -1,0 +1,27 @@
+.lightbox {
+  position: fixed; inset: 0; z-index: 9000;
+  display: grid; place-items: center;
+  background: rgba(0, 0, 0, .68);
+  backdrop-filter: blur(2px);
+  animation: lightbox-in .12s ease-out;
+}
+@keyframes lightbox-in { from { opacity: 0 } to { opacity: 1 } }
+.lightbox-img {
+  max-width: 90vw; max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, .45);
+  cursor: default;
+}
+.lightbox-close {
+  position: absolute; top: 18px; right: 20px;
+  width: 32px; height: 32px; padding: 6px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 8px;
+  color: #fff; background: rgba(255, 255, 255, .14);
+  cursor: pointer;
+}
+.lightbox-close:hover { background: rgba(255, 255, 255, .26); }
+.lightbox-close svg { width: 18px; height: 18px; }
+/* 可点开大图的图片:光标给出可点信号 */
+.md-img, .pv-img { cursor: zoom-in; }

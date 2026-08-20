@@ -94,6 +94,10 @@ export const CH = {
   gitDiff: 'git:diff',
   gitFile: 'git:file',
   imageFile: 'file:image', // read an image file's bytes → data URL (for the inspector image preview)
+  // 对话正文里的 [名字](路径) 点击:解析成「哪个 cwd 下的哪个文件」(存在性 + 越界校验都在主进程)
+  resolveFileRef: 'file:resolve-ref',
+  // 预览打不开的类型(pdf/xlsx/…)与 .html 的「用浏览器打开」:交给系统默认程序
+  openFilePath: 'file:open-path',
   fsTree: 'fs:tree',
   gitBranch: 'git:branch',
   fileSearchContent: 'file:search-content',

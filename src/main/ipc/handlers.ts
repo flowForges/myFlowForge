@@ -103,6 +103,7 @@ import { probeGitRepo } from '../sessionImport/gitProbe'
 import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
 import type { DiscoveredSession } from '@shared/types'
+import { resolveFileRef } from '../fs/fileRef'
 
 /**
  * 附件落盘时避开重名:`image.png` 已存在就依次试 `image-2.png`、`image-3.png`……返回真正能用的名字。
@@ -1153,6 +1154,19 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       if (buf.length > 25_000_000) return { error: '图片过大(>25MB)' }
       return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` }
     } catch { return { error: '读取失败' } }
+  })
+  // ── 对话产物可点开 ────────────────────────────────────────────────────────────
+  // 聊天正文里的 [设计文档](docs/design.md) 点击后走这里:renderer 只知道一串 href,存在性、是不是目录、
+  // 有没有越出工作区,全部在主进程判(renderer 没有 fs)。bases 按优先级给:当前会话 worktree → 工作区根。
+  ipcMain.handle(CH.resolveFileRef, (_e, a: { bases: string[]; href: string }) =>
+    resolveFileRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? '')))
+  // 预览显示不了的类型(pdf/xlsx/zip)和 .html 的「用浏览器打开」。只放行 bases 之内的真实文件 ——
+  // 这是个能拉起任意本地程序的口子,越界必须拒。
+  ipcMain.handle(CH.openFilePath, async (_e, a: { bases: string[]; href: string }) => {
+    const r = resolveFileRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? ''))
+    if (!r.ok) return { ok: false as const, error: r.reason }
+    const err = await shell.openPath(r.abs)
+    return err ? { ok: false as const, error: err } : { ok: true as const }
   })
   ipcMain.handle(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
   ipcMain.handle(CH.gitBranch, (_e, cwd: string) => readBranch(cwd, proxy()))
