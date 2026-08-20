@@ -133,7 +133,21 @@ export function renderMarkdown(text: string, allowHtml = false): ReactNode {
   // 有序项连续编号(遇标题重置);显式从 >1 开始的列表(如 3. 4.)仍尊重其起始号。
   let olSeq = 0
   while (i < lines.length) {
-    const line = lines[i]
+    let line = lines[i]
+    // 块级标签开在【行中】——模型很爱写「…结论。<div style="…">」,把信息卡片紧跟在一句话后面。
+    // 块级识别只认行首(下面那条 ^ {0,3}< ),而行内 HTML 的白名单又刻意不含块级标签,于是这种写法
+    // 两边都不接,标签原样漏成文本(用户报的「输出里出现 html 标签」)。这里把这一行切开:前半句照常
+    // 进段落,从开标签起交给下面的块级分支。
+    // 只认「开标签正好收在行尾」这一种:那是模型起一个块的写法。句子中间夹一个开标签又立刻接正文的,
+    // 交给行内路径,不在这里抢。反引号计数是防止 `<div>` 这种【在讲代码】的写法被当真。
+    if (allowHtml && !/^ {0,3}</.test(line)) {
+      const mid = /^(.*[^\s])(<([a-z][a-z0-9]*)\b[^>]*>)[ \t]*$/i.exec(line)
+      if (mid && BLOCK_TAGS.has(mid[3].toLowerCase()) && (mid[1].match(/`/g)?.length ?? 0) % 2 === 0) {
+        para.push(mid[1])
+        line = mid[2]
+        lines[i] = line
+      }
+    }
     // 内嵌 HTML 块 —— 整行以一个块级标签起手。和围栏不冲突:围栏行以 ``` 开头、匹配不到这个正则,所以
     // 模型把片段包进 ```html 时仍然走下面的代码块分支(那种写法用户要的是「看代码」)。
     //
@@ -157,7 +171,7 @@ export function renderMarkdown(text: string, allowHtml = false): ReactNode {
       const k = key++
       const raw = buf.join('\n')
       blocks.push(closed
-        ? <div className="md-html" key={`html${k}`}>{renderHtmlFragment(raw, `h${k}`)}</div>
+        ? <div className="md-html" key={`html${k}`}>{renderHtmlFragment(raw, `h${k}`, t => renderMarkdown(t, allowHtml))}</div>
         // 未闭合:绝大多数情况是「还在流式输出中」,但也可能是模型忘了写闭合标签 —— 后者如果只显示占位,
         // 这条消息剩下的内容就永远看不到了。所以做成可展开的:平时是一行不打扰的占位,点开能看到原文,
         // 内容在任何情况下都不会丢。

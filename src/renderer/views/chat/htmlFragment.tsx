@@ -1,7 +1,11 @@
-import { createElement } from 'react'
+import { createElement, Fragment } from 'react'
 import type { ReactNode } from 'react'
+
 import { mapInlineStyle } from './htmlStyle'
 import { CodeBlock, TableBlock } from './blocks'
+
+// 把一段文本交回 Markdown 渲染。由 markdown.tsx 注入 —— 反过来 import 会成环。
+export type MdRenderer = (text: string) => ReactNode
 
 // 内嵌 HTML 片段 → React 元素。
 //
@@ -87,11 +91,20 @@ function plainTableData(el: Element): { header: string[]; body: string[][] } | n
 
 // ---- 节点 → React -----------------------------------------------------------
 
-function renderNode(node: Node, key: string, depth: number): ReactNode {
+// 允许「内容交回 Markdown 重新解析」的容器。只挑嵌块级元素合法的那几个:往 <p> 里塞 <p>/<pre> 会造出
+// 非法嵌套。CommonMark 的规矩是 HTML 块遇空行就结束、之后重新按 Markdown 解析,GitHub 渲染 <details>
+// 里的正文正是这样 —— 模型也正是冲着这条规矩才在 <summary> 后面空一行。
+const MD_REENTRY = new Set(['div', 'details', 'li', 'td', 'th'])
+
+function renderNode(node: Node, key: string, depth: number, md: MdRenderer | undefined, mdHere: boolean): ReactNode {
   if (depth > MAX_DEPTH) return null
   if (node.nodeType === 3 /* TEXT_NODE */) {
     const t = node.nodeValue ?? ''
-    return t ? t : null
+    if (!t) return null
+    // 空行 = 这段 raw HTML 到此为止,后面是 Markdown。不含空行的文本段(卡片里的一句话)保持原样,
+    // 免得把纯 HTML 卡片拆成一堆 <p>。
+    if (mdHere && md && /\n[ \t]*\n/.test(t)) return <Fragment key={key}>{md(t)}</Fragment>
+    return t
   }
   if (node.nodeType !== 1 /* ELEMENT_NODE */) return null   // 注释、CDATA 等一律丢
 
@@ -100,7 +113,9 @@ function renderNode(node: Node, key: string, depth: number): ReactNode {
   if (DROP_SUBTREE.has(tag)) return null
 
   const kids = (): ReactNode[] =>
-    Array.from(el.childNodes).map((c, i) => renderNode(c, `${key}-${i}`, depth + 1)).filter(c => c !== null)
+    Array.from(el.childNodes)
+      .map((c, i) => renderNode(c, `${key}-${i}`, depth + 1, md, MD_REENTRY.has(tag)))
+      .filter(c => c !== null)
 
   // 未知标签:拆掉标签本身,保留子节点 —— 内容不该因为一个没见过的容器就整段消失。
   if (!TAGS.has(tag)) return kids()
@@ -126,7 +141,7 @@ function renderNode(node: Node, key: string, depth: number): ReactNode {
  * 把一段 HTML 片段渲染成 React 节点。解析用 DOMParser(惰性,不执行脚本、不加载子资源),
  * 重建只走标签/属性白名单。任何情况下都不会 dangerouslySetInnerHTML。
  */
-export function renderHtmlFragment(html: string, keyBase = 'h'): ReactNode {
+export function renderHtmlFragment(html: string, keyBase = 'h', md?: MdRenderer): ReactNode {
   let doc: Document
   try {
     doc = new DOMParser().parseFromString(html, 'text/html')
@@ -134,7 +149,7 @@ export function renderHtmlFragment(html: string, keyBase = 'h'): ReactNode {
     return html   // 解析不了就当纯文本,总好过白屏
   }
   const out = Array.from(doc.body.childNodes)
-    .map((n, i) => renderNode(n, `${keyBase}-${i}`, 0))
+    .map((n, i) => renderNode(n, `${keyBase}-${i}`, 0, md, true))
     .filter(n => n !== null)
   return <>{out}</>
 }
