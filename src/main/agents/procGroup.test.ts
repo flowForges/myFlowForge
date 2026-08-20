@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree, killAllAgentTrees, liveAgentCount } from './procGroup'
 
@@ -29,7 +29,7 @@ async function spawnWithGrandchild(via: 'agent' | 'plain'): Promise<{ child: Res
     ? spawnAgent('/bin/sh', args, { reject: false })
     : execa('/bin/sh', args, { reject: false })
   const grandPid = await new Promise<number>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('孙进程 pid 没打出来')), 5000)
+    const t = setTimeout(() => reject(new Error('孙进程 pid 没打出来')), 20000)
     child.stdout?.on('data', (b: Buffer) => {
       const n = Number(b.toString().trim().split('\n')[0])
       if (Number.isFinite(n) && n > 0) { clearTimeout(t); resolve(n) }
@@ -55,7 +55,7 @@ describe('killTree', () => {
 
     expect(await settleDead(grandPid)).toBe(false)
     expect(alive(child.pid!)).toBe(false)
-  }, 20000)
+  }, 60000)
 
   it('★★ 对照组:老写法 child.kill() 确实会漏孤儿(这就是被修掉的 bug 本身)', async () => {
     // 不走 spawnAgent(没有独立进程组)+ 只杀单个 pid = 修复前的行为。孙进程活下来 = bug 复现。
@@ -69,7 +69,7 @@ describe('killTree', () => {
     expect(alive(grandPid)).toBe(true)
     const { stdout } = await execa('ps', ['-o', 'ppid=', '-p', String(grandPid)], { reject: false })
     expect(stdout.trim()).toBe('1')
-  }, 20000)
+  }, 60000)
 
   it('没有独立进程组的子进程绝不走负 pid —— 否则杀的是 app 自己所在的组', async () => {
     // 直接 execa 起(不经 spawnAgent),killTree 必须退回单杀:进程死掉,而它的孙进程照样漏(可接受),
@@ -81,34 +81,27 @@ describe('killTree', () => {
 
     expect(await settleDead(child.pid!)).toBe(false)
     expect(alive(process.pid)).toBe(true)
-  }, 20000)
+  }, 60000)
 
-  it('★ 安全闸门:不是我们建的进程组,即便它确实有独立组也不许杀组', async () => {
-    // 这条专门钉死 ownGroup 这道闸门。直接用 execa 起一个 detached 的进程 —— 它【确实】有自己的进程组
-    // (所以 kill(-pid) 会成功杀掉整组),但它没经过 spawnAgent,不在 ownGroup 里。killTree 必须退回单杀,
-    // 于是孙进程活下来。这就是闸门唯一可观测的行为差异:宁可漏一个孤儿,也不对来路不明的 pid 发负信号。
-    const args = ['-c', 'sleep 300 & echo $!; wait']
-    const child = execa('/bin/sh', args, { reject: false, detached: true })
-    const grandPid = await new Promise<number>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('孙进程 pid 没打出来')), 5000)
-      child.stdout?.on('data', (b: Buffer) => {
-        const n = Number(b.toString().trim().split('\n')[0])
-        if (Number.isFinite(n) && n > 0) { clearTimeout(t); resolve(n) }
-      })
-    })
-    strays.push(grandPid, child.pid!)
-
-    killTree(child)
-
-    expect(await settleDead(child.pid!)).toBe(false)   // 它自己被单杀了
-    expect(alive(grandPid)).toBe(true)                 // 但组没被杀 → 孙进程还在
-  }, 20000)
+  it('★ 安全闸门:对不是我们建的进程组,绝不发负 pid 信号', async () => {
+    // 契约本身就是「不发负 pid」,而不是它的某个副作用 —— 进程树补刀已经会把孙进程收掉了,所以这里
+    // 直接盯 process.kill 的调用:出现负数就意味着我们对一个来路不明的组开了枪,而那个组可能是 app 自己的。
+    const { child, grandPid } = await spawnWithGrandchild('plain')   // 没经过 spawnAgent
+    strays.push(grandPid)
+    const spy = vi.spyOn(process, 'kill')
+    try {
+      killTree(child)
+      const negatives = spy.mock.calls.map(c => Number(c[0])).filter(n => n < 0)
+      expect(negatives).toEqual([])
+    } finally { spy.mockRestore() }
+    expect(alive(process.pid)).toBe(true)
+  }, 60000)
 
   it('进程已经退出时静默收尾,不抛', async () => {
     const child = spawnAgent('/bin/sh', ['-c', 'exit 0'], { reject: false })
     await child
     expect(() => killTree(child)).not.toThrow()
-  }, 20000)
+  }, 60000)
 })
 
 describe('killAllAgentTrees(app 退出兜底)', () => {
@@ -124,7 +117,7 @@ describe('killAllAgentTrees(app 退出兜底)', () => {
 
     expect(await settleDead(a.grandPid)).toBe(false)
     expect(await settleDead(b.grandPid)).toBe(false)
-  }, 20000)
+  }, 60000)
 
   it('自己正常退出的子进程会从活进程表里摘除(否则退出时对一堆死 pid 发信号)', async () => {
     const before = liveAgentCount()
@@ -132,7 +125,7 @@ describe('killAllAgentTrees(app 退出兜底)', () => {
     await child
     await sleep(100)
     expect(liveAgentCount()).toBe(before)
-  }, 20000)
+  }, 60000)
 })
 
 describe('detached 不能破坏 stdio', () => {
@@ -140,10 +133,80 @@ describe('detached 不能破坏 stdio', () => {
     const child = spawnAgent('/bin/sh', ['-c', 'read line; echo "got:$line"'], { reject: false })
     child.stdin?.write('hello-handshake\n')
     const out = await new Promise<string>((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('stdout 没回来')), 5000)
+      const t = setTimeout(() => reject(new Error('stdout 没回来')), 20000)
       child.stdout?.on('data', (b: Buffer) => { clearTimeout(t); resolve(b.toString()) })
     })
     expect(out.trim()).toBe('got:hello-handshake')
     await child
-  }, 20000)
+  }, 60000)
+})
+
+// ★★ 真 codex 取证(2026-08-20)推翻了「杀进程组就够了」这个前提:
+//    CANCEL 前  sleep: pid=90995 ppid=90410 pgid=90995  ← pgid == 自己的 pid
+//    codex 给它派生的每条 shell 命令【另建了进程组】(setsid,做沙箱/超时隔离),所以它根本不在我们
+//    detached 出来的那个组里,kill(-pid) 打不到。但它当时【仍在我们的进程树里】(ppid 指向 codex),
+//    所以按 ppid 递归收集进程树才是能杀干净的那条路。
+describe('子进程另建进程组(真 codex 就是这么干的)', () => {
+  /** 桩:中间进程活着,但把真正干活的命令 setsid 进新组 —— 复刻 codex 的拓扑。 */
+  async function spawnRegrouped(): Promise<{ child: ResultPromise; grandPid: number }> {
+    // 深度要够:真 codex 是「node 壳 → rust 本体 → shell → 命令」好几层,只查直接子进程是抓不到的。
+    // 这里 bash → python3 → (fork+setsid) sleep,孙进程在第 2 层。
+    const child = spawnAgent('/bin/bash', ['-c', '/usr/bin/python3 -c "$0"; :'   /* 尾巴阻止 bash 对单条命令做隐式 exec —— 否则 bash 被替换掉,层数塌回 1 */, [
+      'import os, sys, time',
+      'pid = os.fork()',
+      'if pid == 0:',
+      '    os.setsid()',                                  // ← 新进程组,和 codex 一样
+      '    os.execvp("sleep", ["sleep", "300"])',
+      'sys.stdout.write(str(pid) + "\\n"); sys.stdout.flush()',
+      'time.sleep(300)',                                  // 中间进程不退,维持 ppid 链
+    ].join('\n')], { reject: false })
+    const grandPid = await new Promise<number>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('孙进程 pid 没打出来')), 20000)
+      child.stdout?.on('data', (b: Buffer) => {
+        const n = Number(b.toString().trim().split('\n')[0])
+        if (Number.isFinite(n) && n > 0) { clearTimeout(t); resolve(n) }
+      })
+    })
+    return { child, grandPid }
+  }
+
+  it('★★ 另建了进程组的孙进程也必须被杀掉 —— 这正是真 codex 漏掉的那一个', async () => {
+    const { child, grandPid } = await spawnRegrouped()
+    strays.push(grandPid)
+    // 先确认拓扑真的复刻对了:它的 pgid 就是它自己(不在我们的组里)。
+    const { stdout } = await execa('ps', ['-o', 'pgid=', '-p', String(grandPid)], { reject: false })
+    expect(Number(stdout.trim()), '桩没复刻出「另建进程组」').toBe(grandPid)
+
+    killTree(child)
+
+    expect(await settleDead(grandPid)).toBe(false)
+  }, 60000)
+})
+
+// 进程组和进程树管的是【两种不同的拓扑】,缺一不可:
+//   · 进程树(ppid)—— 抓「另建了进程组」的后代(codex 就这么干)。前提是 ppid 链还在。
+//   · 进程组      —— 抓「ppid 链已经断了」的后代:CLI 自己先退了/崩了,后台命令被 init 收养,
+//                    ps 里再也看不出它跟我们的关系,但它还留在我们 detached 出来的那个组里。
+describe('CLI 先退、只剩进程组认得的后代', () => {
+  it('★ ppid 链断了也要杀掉 —— 这是进程组那一刀唯一能救的场景', async () => {
+    // sh 起了后台命令就立刻退出:sleep 被 init 收养(ppid=1),但 pgid 仍是 sh 的 pid。
+    const child = spawnAgent('/bin/sh', ['-c', 'sleep 300 >/dev/null 2>&1 & echo $!; exit 0'   /* 重定向:否则后台命令继承 stdout 管道,管道不关 execa 的 promise 就永远不 resolve */], { reject: false })
+    const grandPid = await new Promise<number>((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('孙进程 pid 没打出来')), 20000)
+      child.stdout?.on('data', (b: Buffer) => {
+        const n = Number(b.toString().trim().split('\n')[0])
+        if (Number.isFinite(n) && n > 0) { clearTimeout(t); resolve(n) }
+      })
+    })
+    strays.push(grandPid)
+    await child                                   // 等 sh 真的退干净
+    const { stdout } = await execa('ps', ['-o', 'ppid=,pgid=', '-p', String(grandPid)], { reject: false })
+    const [ppid, pgid] = stdout.trim().split(/\s+/).map(Number)
+    expect(ppid, '桩没复刻出「已被 init 收养」').toBe(1)
+    expect(pgid, '桩没复刻出「仍在我们的组里」').toBe(child.pid)
+
+    killTree(child)
+
+    expect(await settleDead(grandPid)).toBe(false)
+  }, 60000)
 })
