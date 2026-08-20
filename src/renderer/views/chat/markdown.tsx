@@ -111,6 +111,9 @@ export function renderInline(text: string, keyBase = 'i', allowHtml = false): Re
 
 // ---- block -----------------------------------------------------------------
 
+// GFM 表格的分隔行(`|---|---:|`)。模块级是因为围栏分支也要用它 —— 见下面「没闭合的围栏」那段。
+const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
+
 export function renderMarkdown(text: string, allowHtml = false): ReactNode {
   const lines = text.replace(/\r\n/g, '\n').split('\n')
   const blocks: ReactNode[] = []
@@ -173,23 +176,40 @@ export function renderMarkdown(text: string, allowHtml = false): ReactNode {
     // 让 ```tsx title="App.tsx" / ```tsx:src/a.tsx 这类写法【不算围栏】,于是里面的代码原地漏出来,第一行
     // <div …> 又被上面的 HTML 分支接走 —— 引用的代码要么被渲染成活卡片,要么(摘录不配平时)把整条回复的
     // 后文吞进「可视化生成中…」。语言名取信息串的第一个词。
-    const fence = /^(\s*)```([^`]*)$/.exec(line)
+    //
+    // ★围栏长度按 CommonMark 数反引号(3 个以上都算),闭合围栏要**不少于**开围栏那么多。原来开闭都写死
+    // 恰好三个,于是模型引用「含 ``` 的 markdown」时惯用的 ```` 围栏根本不算围栏,里面那对 ``` 反过来
+    // 被当成开/闭 —— 配对一错位,后文(表格首当其冲)就整段被吞进一个折叠代码块。
+    const fence = /^(\s*)(`{3,})([^`]*)$/.exec(line)
     if (fence) {
       flushPara()
       const indent = fence[1].length
       const strip = new RegExp('^\\s{0,' + indent + '}')
-      const lang = /^[a-z0-9_+#-]+/i.exec(fence[2].trim())?.[0]
+      const closeRe = new RegExp('^\\s*`{' + fence[2].length + ',}\\s*$')
+      const lang = /^[a-z0-9_+#-]+/i.exec(fence[3].trim())?.[0]
       const body: string[] = []
+      const fenceLine = i
       i++
-      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { body.push(lines[i].replace(strip, '')); i++ }
-      i++ // skip closing fence
+      while (i < lines.length && !closeRe.test(lines[i])) { body.push(lines[i].replace(strip, '')); i++ }
+      if (i >= lines.length) {
+        // 一直读到消息末尾都没等到闭合围栏。CommonMark 说这就该吃到底,但在对话里代价是「后半条回复
+        // 连同表格一起消失进折叠块」—— 而这恰恰是模型漏写收尾围栏、或正文里孤零零出现一行 ``` 时的常态。
+        //
+        // 兜底只在**已经出错**的这条路上生效,且只认一个信号:被吞的内容里出现了 GFM 表格(前一行有 |、
+        // 后一行是分隔行且也带 |)。真代码里几乎不会出现 `|---|---|`(ASCII 表格画的是 +---+),所以
+        // 不会误伤被截断的代码;已经正常闭合的围栏更完全不走这里(引用文档里的表格照样是代码)。
+        const t = body.findIndex((l, k) =>
+          l.includes('|') && k + 1 < body.length && body[k + 1].includes('|') && SEP.test(body[k + 1]))
+        if (t >= 0) { body.length = t; i = fenceLine + 1 + t }
+      } else {
+        i++ // skip closing fence
+      }
       // 修图10:空代码块(body 全空白)不渲染——LLM 常在结尾多输出一个空围栏,渲染成"1 行"空块很干扰。
       if (body.join('').trim()) blocks.push(<CodeBlock key={`pre${key++}`} code={body.join('\n')} lang={lang} />)
       continue
     }
     // GFM table: a header row with a pipe, immediately followed by a separator
     // row of dashes/colons. Body = consecutive following lines containing a pipe.
-    const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
     if (line.includes('|') && i + 1 < lines.length && SEP.test(lines[i + 1])) {
       flushPara()
       // Split a table row into cells on the '|' that are REAL column boundaries —
