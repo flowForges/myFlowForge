@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { createFenceScanner } from '../handoffFence'
 import { provisionForgeMcp } from '../forgeMcpProvision'
@@ -36,7 +37,7 @@ export function makeQwenProvider(spec: QwenSpec): AgentProvider {
         cb.onLog({ ts: now(), text: `已为 qwen 写入 ${prov.gitignoreHint}，建议加入 .gitignore`, level: 'info' })
       }
       const args = ['-m', task.model, '-p', prompt, ...prov.extraArgs]
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       const processLine = (raw: string) => {
         const line = raw.trim()
@@ -63,7 +64,7 @@ export function makeQwenProvider(spec: QwenSpec): AgentProvider {
         const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
         cb.onDone(result); return result
       }).catch((err) => { cb.onState('err'); cb.onError(err as Error); return { ok: false } })
-      return { id: task.agentId, cancel: () => child.kill('SIGTERM'), done }
+      return { id: task.agentId, cancel: () => killTree(child), done }
     }
   }
 }

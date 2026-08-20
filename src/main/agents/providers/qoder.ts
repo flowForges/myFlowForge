@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
 import { createFenceScanner } from '../handoffFence'
@@ -72,7 +73,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
           ...forgeMcpArgs(env),
         ]
       }
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       let rawErr = ''
       let ctxMaxSeen = 0
@@ -164,7 +165,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         cb.onDone(result); return result
       }).catch((err) => { cb.onState('err'); cb.onError(err as Error); return { ok: false } })
 
-      return { id: task.agentId, cancel: () => { child.kill('SIGTERM') }, done }
+      return { id: task.agentId, cancel: () => { killTree(child) }, done }
     },
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
       const start = Date.now()
@@ -209,7 +210,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
       const attempt = (useResume: boolean): Promise<{ ok: boolean }> => {
         const args = baseArgs()
         if (!spec.preArgs && useResume && task.sessionId) args.push('--resume', task.sessionId)
-        const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+        const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
         activeChild = child
         let buf = ''
         let streamed = false

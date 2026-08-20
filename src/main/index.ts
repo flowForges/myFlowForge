@@ -10,6 +10,7 @@ import { relocatePetToRegion, PET_EXPANDED, PET_BUBBLE, petCollapsedSize, petPop
 import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
 import { registerIpc } from './ipc/handlers'
+import { killAllAgentTrees } from './agents/procGroup'
 import { botBridge } from './bot/botBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
@@ -726,7 +727,10 @@ app.whenReady().then(() => {
     termManager.kill(p.termId)
   })
 
-  app.on('before-quit', () => { quitting = true; termManager.killAll(); scheduler.stop(); unregisterGlobalShortcuts() })
+  // killAllAgentTrees:agent CLI 现在是 detached 的独立进程组(见 agents/procGroup.ts),而 execa 自带的
+  // 「父进程退出时杀子进程」在 detached 下直接 return —— 不在这里补一刀,退出 app 就会把正在跑的 CLI
+  // 连同它派生的 shell 命令一起留在后台。
+  app.on('before-quit', () => { quitting = true; termManager.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts() })
   mainWin.on('closed', () => termManager.killAll())
   // ── End terminal PTY bridge ─────────────────────────────────────────────────
 

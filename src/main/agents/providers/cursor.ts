@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { parseCursorEvent, cursorSessionId } from '../cursorStream'
 import { createFenceScanner } from '../handoffFence'
@@ -53,7 +54,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
           ...prov.extraArgs,
         ]
       }
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       let rawErr = ''
       let sessionSent: string | undefined
@@ -117,7 +118,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
         cb.onDone(result); return result
       }).catch((err) => { cb.onState('err'); cb.onError(err as Error); return { ok: false } })
 
-      return { id: task.agentId, cancel: () => { child.kill('SIGTERM') }, done }
+      return { id: task.agentId, cancel: () => { killTree(child) }, done }
     },
 
     // (B) cursor chat() — mirrors qoder.chat() structure but uses parseCursorEvent.
@@ -148,7 +149,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
             ...prov.extraArgs,
           ]
       if (prov.gitignoreHint) cb.onStatus?.(`已为 cursor 写入 ${prov.gitignoreHint}，建议加入 .gitignore`)
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       const start = Date.now()
       let buf = ''
       let gotText = false
@@ -209,7 +210,7 @@ export function makeCursorProvider(spec: CursorSpec): AgentProvider {
         cb.onDone({ elapsed })
         return { ok: res.exitCode === 0, summary: res.exitCode === 0 ? '完成' : `退出码 ${res.exitCode}` }
       }).catch((err) => { cb.onError(err instanceof Error ? err : new Error(String(err))); return { ok: false } })
-      return { id: task.id, cancel: () => child.kill('SIGTERM'), done }
+      return { id: task.id, cancel: () => killTree(child), done }
     }
   }
 }

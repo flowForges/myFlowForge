@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { createFenceScanner } from '../handoffFence'
 import { forgeChatDirective } from '../forgeChatDirective'
@@ -32,7 +33,7 @@ export function makeReasonixProvider(spec: ReasonixSpec): AgentProvider {
       const args = ['run', '-y']
       if (task.model && task.model !== 'default') args.push('--model', task.model)
       args.push(prompt)
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       const processLine = (raw: string) => {
         const line = raw.trim()
@@ -59,7 +60,7 @@ export function makeReasonixProvider(spec: ReasonixSpec): AgentProvider {
         const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
         cb.onDone(result); return result
       }).catch((err) => { cb.onState('err'); cb.onError(err as Error); return { ok: false } })
-      return { id: task.agentId, cancel: () => child.kill('SIGTERM'), done }
+      return { id: task.agentId, cancel: () => killTree(child), done }
     }
   }
 }

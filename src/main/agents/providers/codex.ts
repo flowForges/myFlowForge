@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { confirmAllowed } from '../types'
 import { createFenceScanner } from '../handoffFence'
@@ -292,7 +293,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         ? [...spec.preArgs]
         : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
       // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
       let buf = ''
       const processLine = (raw: string) => {
         const line = raw.trim()
@@ -339,7 +340,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         logError('codex', 'run 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}`)
         cb.onState('err'); cb.onError(err as Error); return { ok: false }
       })
-      return { id: task.agentId, cancel: () => { child.kill('SIGTERM') }, done }
+      return { id: task.agentId, cancel: () => { killTree(child) }, done }
     },
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
       // Non-interactive: --skip-git-repo-check (a workspace root may not be a git repo) and
@@ -476,8 +477,8 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       // stdin: 'ignore' so codex doesn't block reading stdin. A wedged turn is reclaimed by an
       // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
       let buf = ''
       let rawOut = ''   // raw stdout we couldn't turn into assistant/think output
       let rawErr = ''   // raw stderr (codex logs/errors)
@@ -528,7 +529,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         logError('codex', 'chat 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}\ncwd: ${task.cwd}`)
         cb.onError(err as Error); return { ok: false }
       })
-      return { id: task.id, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
+      return { id: task.id, cancel: () => { wd.clear(); killTree(child) }, done }
     }
   }
 }

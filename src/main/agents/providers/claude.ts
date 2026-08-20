@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks, ConfirmDecision } from '../types'
 import type { AskAnswers } from '@shared/types'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
@@ -89,7 +90,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // stays interactive.
         args = buildClaudeArgs(task, env)
       }
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       try {
         child.stdin?.write(controlInitLine() + '\n')
         child.stdin?.write(userMessageLine(task.prompt) + '\n')
@@ -100,7 +101,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       // the child immediately; (2) this inactivity watchdog is the safety net for a genuinely wedged
       // agent that never even emits `result` — without it workOrder's `await session.done` (process
       // exit) would hang the whole workflow lane forever (the 0/N-for-40min wedge). Mirrors chat().
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
       // Set from the `result` event; overrides the SIGTERM exit code we then raise so a clean turn
       // reports ok:true rather than `退出码 143`.
       let turnOk: boolean | null = null
@@ -156,7 +157,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
             // lane hangs forever on `await session.done` after the agent already handed off. Capture
             // success from the raw result so the SIGTERM exit code (143) isn't misread as a failure.
             turnOk = (obj as { subtype?: string; is_error?: boolean })?.subtype === 'success' && (obj as { is_error?: boolean })?.is_error !== true
-            try { child.kill('SIGTERM') } catch { /* already gone */ }
+            try { killTree(child) } catch { /* already gone */ }
             continue
           }
           // A stage agent's own built-in Task sub-agents: surface as log lines (the run path has no
@@ -200,7 +201,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
         cb.onDone(result); return result
       }).catch((err) => { wd.clear(); cb.onState('err'); cb.onError(err as Error); return { ok: false } })
-      return { id: task.agentId, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
+      return { id: task.agentId, cancel: () => { wd.clear(); killTree(child) }, done }
     },
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
       // claude 主代理靠自动发现的 .claude/skills/forge-workflow 学工作流规则,但那依赖它自行按 frontmatter
@@ -222,7 +223,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         ? [...spec.preArgs]
         : ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...CLAUDE_CONTROL_FLAGS, ...permissionArgs('claude', task.permissionMode ?? 'auto'), ...allowArgs, '--model', cliModel(task.model), ...forgeMcpArgs(env)]
       if (!spec.preArgs && task.sessionId) args.push('--resume', task.sessionId)
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       // Control-protocol handshake + prompt delivery (must come before we await output).
       try {
         child.stdin?.write(controlInitLine() + '\n')
@@ -230,7 +231,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       } catch { /* stdin gone — the turn will error out and be reported normally */ }
       // Inactivity watchdog: reclaim a genuinely wedged turn (240s of total silence) instead of an
       // endless 思考中 spinner — but never kill a long, still-streaming turn.
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
       const start = Date.now()
       let buf = ''
       let streamed = false
@@ -338,7 +339,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // pending gate short. Success comes from the raw result so the SIGTERM exit (143) isn't misread.
         if (obj?.type === 'result') {
           turnOk = (obj as { subtype?: string; is_error?: boolean }).subtype === 'success' && (obj as { is_error?: boolean }).is_error !== true
-          try { child.kill('SIGTERM') } catch { /* already gone */ }
+          try { killTree(child) } catch { /* already gone */ }
           return
         }
         for (const action of parseChatStreamActions(obj)) {
@@ -412,7 +413,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         const ok = turnOk ?? (res.exitCode === 0)
         return { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
       }).catch((err) => { wd.clear(); cb.onError(err as Error); return { ok: false } })
-      return { id: task.id, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
+      return { id: task.id, cancel: () => { wd.clear(); killTree(child) }, done }
     }
   }
 }

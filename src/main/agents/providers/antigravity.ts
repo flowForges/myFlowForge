@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { buildChatPrompt, contextWindowFor } from '../chatStream'
 import { createFenceScanner } from '../handoffFence'
@@ -62,8 +63,8 @@ export function makeAntigravityProvider(spec: AntigravitySpec): AgentProvider {
       const directive = forgeChatDirective(env)
       const prompt = directive ? `${directive}\n\n${task.prompt}` : task.prompt
       const args = spec.preArgs ? [...spec.preArgs] : ['-p', prompt, ...baseArgs(task.model, task.permissionMode)]
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
       let turnOk: boolean | null = null
       let buf = ''
 
@@ -104,7 +105,7 @@ export function makeAntigravityProvider(spec: AntigravitySpec): AgentProvider {
         const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
         cb.onDone(result); return result
       }).catch((err) => { wd.clear(); cb.onState('err'); cb.onError(err as Error); return { ok: false } })
-      return { id: task.agentId, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
+      return { id: task.agentId, cancel: () => { wd.clear(); killTree(child) }, done }
     },
 
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
@@ -114,8 +115,8 @@ export function makeAntigravityProvider(spec: AntigravitySpec): AgentProvider {
         ? [...spec.preArgs]
         : ['-p', chatPrompt, ...baseArgs(task.model, task.permissionMode),
            ...(task.sessionId ? ['--conversation', task.sessionId] : [])]
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
       const start = Date.now()
       let buf = ''
       let errBuf = ''
@@ -191,7 +192,7 @@ export function makeAntigravityProvider(spec: AntigravitySpec): AgentProvider {
         const ok = turnOk ?? (res.exitCode === 0)
         return { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
       }).catch((err) => { wd.clear(); cb.onError(err as Error); return { ok: false } })
-      return { id: task.id, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
+      return { id: task.id, cancel: () => { wd.clear(); killTree(child) }, done }
     },
   }
 }

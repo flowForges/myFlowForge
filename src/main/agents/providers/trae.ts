@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { createFenceScanner } from '../handoffFence'
 import { forgeChatDirective } from '../forgeChatDirective'
@@ -29,7 +30,7 @@ export function makeTraeProvider(spec: TraeSpec): AgentProvider {
       const prompt = directive ? `${directive}\n\n${task.prompt}` : task.prompt
       // No --model: traecli picks the model from /model or trae_cli.yaml, not the command line.
       const args = ['-p', prompt]
-      const child: ResultPromise = execa(bin, args, { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       const processLine = (raw: string) => {
         const line = raw.trim()
@@ -56,7 +57,7 @@ export function makeTraeProvider(spec: TraeSpec): AgentProvider {
         const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
         cb.onDone(result); return result
       }).catch((err) => { cb.onState('err'); cb.onError(err as Error); return { ok: false } })
-      return { id: task.agentId, cancel: () => child.kill('SIGTERM'), done }
+      return { id: task.agentId, cancel: () => killTree(child), done }
     }
   }
 }

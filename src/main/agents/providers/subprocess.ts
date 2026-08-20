@@ -1,4 +1,5 @@
 import { execa, type ResultPromise } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { createFenceScanner } from '../handoffFence'
 
@@ -45,7 +46,7 @@ export function makeSubprocessProvider(spec: SubprocessSpec): AgentProvider {
       // custom agent assigned to a workflow stage silently drops its handoff (upstream context/design
       // docs never reach downstream stages or the review gate).
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      const child: ResultPromise = execa(spec.bin, spec.buildArgs(task), { cwd: task.cwd, env, reject: false })
+      const child: ResultPromise = spawnAgent(spec.bin, spec.buildArgs(task), { cwd: task.cwd, env, reject: false })
       const log = (text: string) => cb.onLog({ ts: now(), text, level: 'info' })
       const outEmitter = lineEmitter(line => { for (const out of scanner.feedLine(line)) log(out) })
       const errEmitter = lineEmitter(log)
@@ -64,7 +65,7 @@ export function makeSubprocessProvider(spec: SubprocessSpec): AgentProvider {
       }).catch((err) => {
         cb.onState('err'); cb.onError(err as Error); return { ok: false, summary: String(err) }
       })
-      return { id: task.agentId, cancel: () => child.kill('SIGTERM'), done }
+      return { id: task.agentId, cancel: () => killTree(child), done }
     }
   }
 }

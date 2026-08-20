@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn } from 'node:child_process'
+import { agentSpawnOptions, trackAgentChild, killTree } from '../procGroup'
 import { adaptCodexEvent } from './codexEventAdapter'
 import { codexDecision } from './codexApproval'
 
@@ -51,7 +52,7 @@ const APPROVAL_METHODS = new Set([
 // routes approval server-requests through cb.onApproval. Mirrors the framing
 // skeleton in usage/codexRpc.ts and adds the thread/turn drive on top.
 export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps: CodexAppServerDeps = {}): CodexTurnHandle {
-  const spawn = deps.spawn ?? ((cmd, args) => nodeSpawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }))
+  const spawn = deps.spawn ?? ((cmd, args) => trackAgentChild(nodeSpawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...agentSpawnOptions() })))
   const args = [...opts.configArgs, ...opts.modelArgs, 'app-server']
   const child = spawn('codex', args)
 
@@ -65,7 +66,7 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   function settle(ok: boolean): void {
     if (settled) return
     settled = true
-    try { child.kill() } catch { /* best-effort: child may already be gone */ }
+    killTree(child)   // 杀整棵树:app-server 也会派生 shell 命令,单杀只会留孤儿
     resolveDone({ ok })
   }
 

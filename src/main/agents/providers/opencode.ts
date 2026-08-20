@@ -1,4 +1,5 @@
 import { execa } from 'execa'
+import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, contextWindowFor } from '../chatStream'
@@ -92,7 +93,7 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
       const prov = provisionForgeMcp('opencode', env, task.cwd)
       const args = [...baseArgs(task.model, task.cwd), ...prov.extraArgs, task.prompt]
-      const child = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
+      const child = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
       let buf = ''
       let ctxMax = 0
       // part.text is cumulative (see opencodeDelta) — track per stream and feed only the growth to the
@@ -128,7 +129,7 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
         logError('opencode', 'run 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}`)
         cb.onState('err'); cb.onError(err as Error); return { ok: false }
       })
-      return { id: task.agentId, cancel: () => { child.kill('SIGTERM') }, done }
+      return { id: task.agentId, cancel: () => { killTree(child) }, done }
     },
 
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
@@ -143,8 +144,8 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       // Inactivity watchdog (not a hard wall-clock timeout): a long input that's actively streaming
       // must not be killed just for taking >180s. Fires only after real silence → no more spurious
       // "chat 无回复" on big prompts.
-      const child = execa(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { child.kill('SIGTERM') } catch { /* already gone */ } })
+      const child = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
       const start = Date.now()
       let buf = ''
       let sawDelta = false
@@ -189,7 +190,7 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
         logError('opencode', 'chat 异常', `${(err as Error)?.message ?? err}\ncmd: ${clipArgs(bin, args)}`)
         cb.onError(err as Error); return { ok: false }
       })
-      return { id: task.id, cancel: () => { wd.clear(); child.kill('SIGTERM') }, done }
+      return { id: task.id, cancel: () => { wd.clear(); killTree(child) }, done }
     },
   }
 }
