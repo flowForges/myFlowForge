@@ -16,15 +16,34 @@ export type ExecRun = (
   extraEnv: Record<string, string>,
 ) => Promise<{ stdout: string; failed: boolean }>
 
-const defaultExec: ExecRun = async (entryAbs, cwd, extraEnv) => {
-  // Only pass a minimal, explicit allowlist to untrusted plugin subprocesses.
-  // Never forward process.env which contains secrets (ANTHROPIC_API_KEY, etc.).
-  const safeEnv: Record<string, string> = {
-    PATH: String(process.env.PATH ?? ''),
-    HOME: String(process.env.HOME ?? ''),
-    TMPDIR: String(process.env.TMPDIR ?? process.env.TEMP ?? ''),
-    ...extraEnv,
+// Only a minimal, explicit allowlist reaches an untrusted plugin subprocess. Never process.env,
+// which carries secrets (ANTHROPIC_API_KEY and friends).
+//
+// The list is platform-specific because a bare-minimum environment is a classic Windows trap: a
+// process started WITHOUT SystemRoot cannot initialise Winsock, so every network call inside the
+// plugin fails with an error that points nowhere near the cause. PATHEXT is what lets a .cmd/.bat
+// entry be resolved at all, and Windows sets USERPROFILE / TEMP rather than HOME / TMPDIR.
+const ALLOWED_ENV: Record<'posix' | 'win32', string[]> = {
+  posix: ['PATH', 'HOME', 'TMPDIR'],
+  win32: ['PATH', 'PATHEXT', 'SystemRoot', 'windir', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'TEMP', 'TMP', 'APPDATA', 'LOCALAPPDATA', 'COMSPEC', 'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE'],
+}
+
+export function pluginEnv(parent: NodeJS.ProcessEnv, platform: NodeJS.Platform = process.platform): Record<string, string> {
+  const win = platform === 'win32'
+  const out: Record<string, string> = {}
+  for (const key of ALLOWED_ENV[win ? 'win32' : 'posix']) {
+    const v = parent[key]
+    // Omit rather than set empty: an empty HOME/TMPDIR is worse than none — code that checks for
+    // presence takes it as configured and then resolves paths against ''.
+    if (v !== undefined && v !== '') out[key] = v
   }
+  // Plugins are written cross-platform and reach for HOME; mirror USERPROFILE into it on Windows.
+  if (win && !out.HOME && out.USERPROFILE) out.HOME = out.USERPROFILE
+  return out
+}
+
+const defaultExec: ExecRun = async (entryAbs, cwd, extraEnv) => {
+  const safeEnv: Record<string, string> = { ...pluginEnv(process.env), ...extraEnv }
   const r = await execa(entryAbs, [], {
     cwd,
     env: safeEnv,

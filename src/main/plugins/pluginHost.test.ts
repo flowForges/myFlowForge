@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { runPlugin, type ExecRun } from './pluginHost'
+import { runPlugin, pluginEnv, type ExecRun } from './pluginHost'
 import { EXTENSION_POINTS } from './extensionPoints'
 import type { InstalledPlugin } from './pluginSchema'
 
@@ -114,5 +114,48 @@ describe('runPlugin', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toContain('越界')
     expect(execSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('pluginEnv — the allowlist handed to untrusted plugin subprocesses', () => {
+  it('never forwards secrets from the parent environment', () => {
+    const env = pluginEnv({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-secret', OPENAI_API_KEY: 'x' }, 'darwin')
+    expect(env).not.toHaveProperty('ANTHROPIC_API_KEY')
+    expect(env).not.toHaveProperty('OPENAI_API_KEY')
+    expect(env.PATH).toBe('/usr/bin')
+  })
+
+  it('POSIX: carries HOME and TMPDIR', () => {
+    const env = pluginEnv({ PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/var/t' }, 'darwin')
+    expect(env.HOME).toBe('/Users/me')
+    expect(env.TMPDIR).toBe('/var/t')
+  })
+
+  // A Windows process started without SystemRoot cannot initialise Winsock — every network call in
+  // the plugin fails with an unrelated-looking error. This is the classic minimal-env trap.
+  it('Windows: carries SystemRoot, or the plugin cannot use the network at all', () => {
+    const env = pluginEnv({ PATH: 'C:\\bin', SystemRoot: 'C:\\Windows' }, 'win32')
+    expect(env.SystemRoot).toBe('C:\\Windows')
+  })
+
+  it('Windows: carries PATHEXT so a .cmd/.bat entry can be resolved', () => {
+    const env = pluginEnv({ PATH: 'C:\\bin', PATHEXT: '.COM;.EXE;.BAT;.CMD' }, 'win32')
+    expect(env.PATHEXT).toBe('.COM;.EXE;.BAT;.CMD')
+  })
+
+  it('Windows: USERPROFILE stands in for HOME, which Windows does not set', () => {
+    const env = pluginEnv({ PATH: 'C:\\bin', USERPROFILE: 'C:\\Users\\me' }, 'win32')
+    expect(env.USERPROFILE).toBe('C:\\Users\\me')
+    expect(env.HOME).toBe('C:\\Users\\me')
+  })
+
+  it('Windows: TEMP/TMP stand in for TMPDIR', () => {
+    const env = pluginEnv({ PATH: 'C:\\bin', TEMP: 'C:\\T', TMP: 'C:\\T' }, 'win32')
+    expect(env.TEMP).toBe('C:\\T')
+    expect(env.TMP).toBe('C:\\T')
+  })
+
+  it('omits variables the parent does not have, rather than setting them empty', () => {
+    expect(pluginEnv({ PATH: '/usr/bin' }, 'darwin')).not.toHaveProperty('HOME')
   })
 })
