@@ -4,6 +4,7 @@ import type { PopupData } from './derivePopupData'
 import { PendingActionCard } from './PendingActionCard'
 import { WorkspaceRow } from './WorkspaceRow'
 import { sessLabel } from './petTarget'
+import { baseName } from '@shared/pathName'
 
 const AV: ReactElement = (
   <svg className="av" viewBox="0 0 64 64" aria-hidden="true">
@@ -118,8 +119,8 @@ export function PetPopup({ open, corner, data, onResolve, onGo, onClose, queue, 
             const wsMeta = workspaces?.find(m => m.path === wsPath)
             const wsStatus = isThisTgtWs ? (tgt?.ws?.status ?? wsMeta?.status ?? 'idle') : (wsMeta?.status ?? 'idle')
             const wsName = isThisTgtWs
-              ? (tgt?.ws?.name ?? wsMeta?.name ?? wsPath.split('/').filter(Boolean).at(-1) ?? wsPath)
-              : (wsMeta?.name ?? wsPath.split('/').filter(Boolean).at(-1) ?? wsPath)
+              ? (tgt?.ws?.name ?? wsMeta?.name ?? baseName(wsPath) ?? wsPath)
+              : (wsMeta?.name ?? baseName(wsPath) ?? wsPath)
             const wsRunning = isThisTgtWs ? !!tgtWsRunning : false
             const activeSessionId = isThisTgtWs ? tgt?.ws?.activeSessionId : sf.activeSessionId
             return (
@@ -239,7 +240,7 @@ export function PetPopup({ open, corner, data, onResolve, onGo, onClose, queue, 
             <button className="tg-pick" onClick={onOpenPicker}>
               <span className="tg-l">发往</span>
               <span className={`pd ${dotClass(tgt!.ws?.status)}`}></span>
-              <span className="tg-ws">{tgt!.ws ? tgt!.ws.name : (tgt!.wsPath.split('/').filter(Boolean).at(-1) ?? tgt!.wsPath)}</span>
+              <span className="tg-ws">{tgt!.ws ? tgt!.ws.name : (baseName(tgt!.wsPath) || tgt!.wsPath)}</span>
               <span className="tg-sep">›</span>
               <span className="tg-sess">
                 {tgt!.sess

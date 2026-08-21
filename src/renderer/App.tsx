@@ -38,6 +38,7 @@ import { NotificationsPane } from './settings/NotificationsPane'
 import { AppIconPane } from './settings/AppIconPane'
 import { TermProxyPane } from './settings/TermProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
+import { baseName } from '@shared/pathName'
 import { WorkflowPane } from './settings/WorkflowPane'
 import { CustomStagesPane } from './settings/CustomStagesPane'
 import { HookLibraryPane } from './settings/HookLibraryPane'
@@ -516,7 +517,7 @@ export function App() {
     if (!dir) return
     setCreating(true)
     try {
-      const name = dir.split('/').filter(Boolean).pop() || '工作区'
+      const name = baseName(dir) || '工作区'
       const { workspacePath: wsPath } = await window.forge.createWorkspace({
         name, path: dir, workflows: [], projects: [],
       })

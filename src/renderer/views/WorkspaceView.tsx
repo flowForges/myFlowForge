@@ -38,6 +38,7 @@ import { FileBrowser } from './inspector/FileBrowser'
 import { ProjectPicker, ALL_PROJECTS } from './inspector/ProjectPicker'
 import { FileIc } from './inspector/fileIcon'
 import type { Attachment, MultiChanges } from '@shared/types'
+import { baseName } from '@shared/pathName'
 import { canContinue } from './chat/canContinue'
 import { providerSupportsResume } from '@shared/nativeResumeProviders'
 import { deriveOpenTarget } from '../shell/deriveOpenTarget'
@@ -370,7 +371,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const chat = useChat(wsPath, sessions.activeSessionId, (mode) => {
     if (mode === 'workflow') setForceChat(false)
   })
-  const wsName = run?.workspaceName ?? wsPath?.split('/').filter(Boolean).pop() ?? ''
+  const wsName = run?.workspaceName ?? (wsPath ? baseName(wsPath) : '') ?? ''
 
   // Inspector mode: forceChat overrides to chat mode; reset when a run for this ws goes live
   const [forceChat, setForceChat] = useState(false)

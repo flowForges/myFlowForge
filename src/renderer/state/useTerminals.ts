@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { baseName } from '@shared/pathName'
 
 export interface TermTab { id: string; title: string; cwd: string; wsCwd: string; exited: boolean; error?: string }
 export interface TerminalsApi {
@@ -10,7 +11,7 @@ export interface TerminalsApi {
 }
 
 let counter = 0
-const titleFromCwd = (cwd: string) => cwd.split('/').filter(Boolean).pop() || cwd || 'shell'
+const titleFromCwd = (cwd: string) => baseName(cwd) || cwd || 'shell'
 
 export function useTerminals(defaultCwd: () => string | undefined): TerminalsApi {
   const [tabs, setTabs] = useState<TermTab[]>([])
