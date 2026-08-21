@@ -77,10 +77,18 @@ app.on('second-instance', () => {
   if (mainWinRef && !mainWinRef.isDestroyed()) { mainWinRef.show(); mainWinRef.focus() }
 })
 
+// Windows ties notifications and taskbar/tray identity to the AppUserModelID, and it must match the
+// one the installer stamps on the Start-menu shortcut (electron-builder derives that from appId).
+// Without this, toasts are silently dropped — the app looks like it simply never notifies.
+if (process.platform === 'win32') app.setAppUserModelId('com.zghua.myflowforge')
+
 app.whenReady().then(() => {
   if (!gotInstanceLock) return // a second instance is already quitting — don't build any windows
   const iconPathEnv = () => ({ resourcesPath: process.resourcesPath, appPath: app.getAppPath(), isPackaged: app.isPackaged })
   const applyDockIcon = (iconId: Settings['appIcon']['dockIcon']) => {
+    // Windows has no Dock. The picked icon is still meaningful there — it's what the tray shows —
+    // so the setting isn't dead, it just lands somewhere else (see applyStatusIcon).
+    if (process.platform === 'win32') { refreshTrayImage(); return }
     if (process.platform !== 'darwin') return
     const image = nativeImage.createFromPath(resolveDockIconPath(iconPathEnv(), iconId))
     if (!image.isEmpty()) app.dock?.setIcon(image)
@@ -173,27 +181,52 @@ app.whenReady().then(() => {
     mainWinRef.focus()
     app.focus({ steal: true })
   }
-  const applyMenuBarIcon = (show: boolean) => {
-    if (process.platform !== 'darwin') return
+  // The tray image, per platform:
+  //   macOS  — the menu bar wants a MONOCHROME template image; the OS recolours it for light/dark and
+  //            for the highlighted state. A colourful icon there looks broken.
+  //   Windows — the notification area wants a normal colour icon, and 16px is the slot size. It uses
+  //            the icon the user picked in 设置→应用图标 (the Dock picker has nothing else to drive
+  //            on Windows), so that setting stays meaningful instead of doing nothing.
+  const buildTrayImage = (): Electron.NativeImage | null => {
+    const win = process.platform === 'win32'
+    const path = win
+      ? resolveDockIconPath(iconPathEnv(), (() => { try { return readSettings().appIcon.dockIcon } catch { return 'ember-violet' } })())
+      : resolveMenuBarIconPath(iconPathEnv())
+    const image = nativeImage.createFromPath(path)
+    if (image.isEmpty()) return null
+    const sized = image.resize(win ? { width: 16, height: 16 } : { width: 18, height: 18 })
+    if (!win) sized.setTemplateImage(true)
+    return sized
+  }
+  const refreshTrayImage = () => {
+    if (!menuBarTray) return
+    const image = buildTrayImage()
+    if (image) menuBarTray.setImage(image)
+  }
+  // The status icon: macOS menu bar / Windows notification area. Same toggle, same menu, different
+  // click conventions — Windows expects right-click (and the keyboard menu key) to open a context
+  // menu owned by the tray, which is what setContextMenu gives; on macOS that would also hijack
+  // LEFT-click into opening the menu, so there the menu is popped up by hand.
+  const applyStatusIcon = (show: boolean) => {
+    if (process.platform !== 'darwin' && process.platform !== 'win32') return
     if (!show) {
       menuBarTray?.destroy()
       menuBarTray = null
       return
     }
-    if (menuBarTray) return
-    const image = nativeImage.createFromPath(resolveMenuBarIconPath(iconPathEnv()))
-    if (image.isEmpty()) return
-    const trayImage = image.resize({ width: 18, height: 18 })
-    trayImage.setTemplateImage(true)
-    menuBarTray = new Tray(trayImage)
-    menuBarTray.setToolTip('FlowForge')
+    if (menuBarTray) { refreshTrayImage(); return }
+    const image = buildTrayImage()
+    if (!image) return
+    menuBarTray = new Tray(image)
+    menuBarTray.setToolTip('myFlowForge')
     // Left-click opens the app; right-click drops the context menu (新建工作区 / 开关宠物 / 退出).
     menuBarTray.on('click', showMainWindow)
-    menuBarTray.on('right-click', () => menuBarTray?.popUpContextMenu(buildAppMenu()))
+    if (process.platform === 'win32') menuBarTray.setContextMenu(buildAppMenu())
+    else menuBarTray.on('right-click', () => menuBarTray?.popUpContextMenu(buildAppMenu()))
   }
   const applyAppIconSettings = (settings: Settings) => {
+    applyStatusIcon(settings.appIcon.showMenuBar)
     applyDockIcon(settings.appIcon.dockIcon)
-    applyMenuBarIcon(settings.appIcon.showMenuBar)
   }
   applyAppIconSettings(readSettings())
   // Once the window is up, make sure the app is the foreground one (owns the menu bar) AND that the
@@ -213,7 +246,7 @@ app.whenReady().then(() => {
       const action = resolveCloseAction(readSettings().closeAction, quitting)
       if (action === 'pass') return
       e.preventDefault() // hide + ask both keep the window alive ('closed' never fires)
-      if (action === 'hide') { parkWindowInDock(win); return }
+      if (action === 'hide') { parkWindowInDock(win, process.platform, !!menuBarTray); return }
       void dialog.showMessageBox(win, {
         type: 'question',
         message: '关闭 myFlowForge？',
@@ -230,7 +263,7 @@ app.whenReady().then(() => {
           // write) doesn't clobber the remembered choice with a stale value (same guard as petSetScale).
           registry.broadcast(CH.settingsChanged, readSettings())
         }
-        if (response === 0) { parkWindowInDock(win); return }
+        if (response === 0) { parkWindowInDock(win, process.platform, !!menuBarTray); return }
         quitting = true
         app.quit()
       })
@@ -533,6 +566,9 @@ app.whenReady().then(() => {
   }
   function refreshDockMenu(): void {
     if (process.platform === 'darwin') { try { app.dock?.setMenu(buildAppMenu()) } catch { /* dock unavailable */ } }
+    // Windows' tray menu is owned by the Tray (setContextMenu), so it has to be rebuilt too —
+    // otherwise the 打开/关闭桌面宠物 item keeps the label it had when the tray was created.
+    if (process.platform === 'win32' && menuBarTray) { try { menuBarTray.setContextMenu(buildAppMenu()) } catch { /* tray gone */ } }
   }
   refreshDockMenu()  // initial Dock menu
 
@@ -758,7 +794,7 @@ app.whenReady().then(() => {
       focused: appFocused,
     })
     if (action === 'minimize' && mainWinRef && !mainWinRef.isDestroyed()) {
-      parkWindowInDock(mainWinRef)
+      parkWindowInDock(mainWinRef, process.platform, !!menuBarTray)
       return
     }
     if (action === 'restore' || action === 'show') {

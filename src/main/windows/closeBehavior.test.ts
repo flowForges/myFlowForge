@@ -37,9 +37,31 @@ describe('parkWindowInDock', () => {
     expect(win.hide).toHaveBeenCalledTimes(1)
   })
 
+  // ★ Windows 上 hide() 会让窗口从任务栏也消失。macOS 有 Dock 图标兜底,Windows 只有托盘 ——
+  // 托盘图标关着的时候再 hide,这个 app 就【彻底找不回来了】,只能去任务管理器杀进程。
+  it('Windows: 有托盘才敢 hide(托盘图标是唯一的回来的路)', () => {
+    const win = { minimize: vi.fn(), hide: vi.fn(), isMinimizable: vi.fn(() => true) }
+    parkWindowInDock(win, 'win32', true)
+    expect(win.hide).toHaveBeenCalledTimes(1)
+    expect(win.minimize).not.toHaveBeenCalled()
+  })
+
+  it('★ Windows: 没有托盘就只许最小化 —— hide 掉就再也呼不出来了', () => {
+    const win = { minimize: vi.fn(), hide: vi.fn(), isMinimizable: vi.fn(() => true) }
+    parkWindowInDock(win, 'win32', false)
+    expect(win.minimize).toHaveBeenCalledTimes(1)
+    expect(win.hide).not.toHaveBeenCalled()
+  })
+
+  it('Windows: 没有托盘且窗口不可最小化时,只能 hide(没有别的选择)', () => {
+    const win = { minimize: vi.fn(), hide: vi.fn(), isMinimizable: vi.fn(() => false) }
+    parkWindowInDock(win, 'win32', false)
+    expect(win.hide).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the existing hide behavior off macOS', () => {
     const win = { minimize: vi.fn(), hide: vi.fn(), isMinimizable: vi.fn(() => true) }
-    parkWindowInDock(win, 'win32')
+    parkWindowInDock(win, 'linux')
     expect(win.minimize).not.toHaveBeenCalled()
     expect(win.hide).toHaveBeenCalledTimes(1)
   })

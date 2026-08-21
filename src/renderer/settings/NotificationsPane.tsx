@@ -20,13 +20,16 @@ const NOTIFY_TYPES: { key: 'confirm' | 'input' | 'done'; t: string; d: string }[
   { key: 'done', t: '执行完成时', d: '工作流整体执行完成' },
 ]
 
-const CLOSE_ACTIONS: { key: CloseAction; label: string }[] = [
+// 「收起来」在两个平台是两件事:macOS 收进 Dock(图标永远在),Windows 收进托盘 —— 而托盘图标是关得掉的,
+// 关着的时候只会最小化到任务栏(否则窗口就再也呼不出来了,见 closeBehavior.parkWindowInDock)。
+const closeActions = (isWindows: boolean): { key: CloseAction; label: string }[] => [
   { key: 'ask', label: '询问' },
-  { key: 'hide', label: '缩小到 Dock' },
+  { key: 'hide', label: isWindows ? '最小化到托盘' : '缩小到 Dock' },
   { key: 'quit', label: '退出应用' },
 ]
 
 export function NotificationsPane({ notifications, onNotificationsChange, closeAction, onCloseActionChange, onTest }: NotificationsPaneProps) {
+  const isWindows = (window.forge?.platform ?? 'darwin') === 'win32'
   const [testMsg, setTestMsg] = useState<string>('')
   const runTest = async () => {
     if (!onTest) return
@@ -82,10 +85,12 @@ export function NotificationsPane({ notifications, onNotificationsChange, closeA
         <div className="set-row">
           <div className="info">
             <div className="t">关闭窗口时</div>
-            <div className="d">缩小到 Dock 后应用继续在后台运行,可随时从 Dock 图标回来</div>
+            <div className="d">{isWindows
+              ? '收起后应用继续在后台运行,点托盘图标回来;没开托盘图标时只会最小化到任务栏'
+              : '缩小到 Dock 后应用继续在后台运行,可随时从 Dock 图标回来'}</div>
           </div>
           <div className="seg" id="closeAction">
-            {CLOSE_ACTIONS.map(({ key, label }) => (
+            {closeActions(isWindows).map(({ key, label }) => (
               <button
                 key={key}
                 className={`wf-pick${closeAction === key ? ' on' : ''}`}
