@@ -46,6 +46,14 @@ export function createMainWindow(): BrowserWindow {
   const notifyMaximized = () => { if (!win.isDestroyed()) win.webContents.send(CH.windowMaximizedChanged, win.isMaximized()) }
   win.on('maximize', notifyMaximized)
   win.on('unmaximize', notifyMaximized)
+  // Windows drops Electron's default menu (see index.ts) — which also drops its Ctrl+Shift+I devtools
+  // accelerator. Keep F12 as the escape hatch: an unsigned build in the wild needs SOME way to open a
+  // console when a user reports something. macOS keeps its menu, so it keeps the standard shortcut.
+  if (process.platform === 'win32') {
+    win.webContents.on('before-input-event', (_e, input) => {
+      if (input.type === 'keyDown' && input.key === 'F12') win.webContents.toggleDevTools()
+    })
+  }
   win.once('ready-to-show', () => win.show())
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   else win.loadFile(join(__dirname, '../renderer/index.html'))

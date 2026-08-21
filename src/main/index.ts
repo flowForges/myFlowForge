@@ -80,7 +80,15 @@ app.on('second-instance', () => {
 // Windows ties notifications and taskbar/tray identity to the AppUserModelID, and it must match the
 // one the installer stamps on the Start-menu shortcut (electron-builder derives that from appId).
 // Without this, toasts are silently dropped — the app looks like it simply never notifies.
-if (process.platform === 'win32') app.setAppUserModelId('com.zghua.myflowforge')
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.zghua.myflowforge')
+  // The window is frameless, so Electron's default menu is never DRAWN on Windows — but its
+  // accelerators stay registered. Ctrl+R would reload the renderer out from under a running
+  // workflow, and Ctrl+W would close the window, neither of which this app ever asked for. Drop the
+  // menu entirely. (macOS must keep it: the menu bar is real there, and Cmd+Q / Cmd+C / Cmd+V are
+  // menu roles — removing it would break editing shortcuts.)
+  Menu.setApplicationMenu(null)
+}
 
 app.whenReady().then(() => {
   if (!gotInstanceLock) return // a second instance is already quitting — don't build any windows

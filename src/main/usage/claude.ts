@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { posix, win32 } from 'node:path'
 import type { HttpClient, StatusbarUsage } from './types'
 import { normalizeWindow } from './normalize'
 
@@ -9,16 +12,33 @@ export function normalizeClaude(raw: unknown, nowMs: number): StatusbarUsage {
   return { ...(window5h ? { window5h } : {}), ...(weekly ? { weekly } : {}), label: 'Claude' }
 }
 
-interface TokenDeps { runSecurity?: () => string; platform?: string }
+interface TokenDeps {
+  runSecurity?: () => string
+  readCredFile?: (path: string) => string
+  platform?: string
+  home?: string
+  env?: NodeJS.ProcessEnv
+}
 
+/**
+ * Claude Code's login token, read from wherever that platform keeps it.
+ *
+ * macOS      — the Keychain (`Claude Code-credentials`); first read prompts for authorisation.
+ * Windows    — `%USERPROFILE%\.claude\.credentials.json`
+ * Linux      — `~/.claude/.credentials.json` (mode 0600)
+ *
+ * Off macOS there is no Keychain, so Claude Code writes a plain file — with the SAME JSON payload
+ * the Keychain entry holds, which is why one parser covers both. `CLAUDE_CONFIG_DIR` moves that
+ * file, and it is honoured on exactly the platforms that use the file.
+ *
+ * Every failure collapses to 「Claude 未登录」on purpose: the raw value must never reach the UI or
+ * the logs, since it IS the credential.
+ */
 export function readClaudeToken(deps: TokenDeps = {}): string {
   const platform = deps.platform ?? process.platform
-  if (platform !== 'darwin') throw new Error('Claude 仅支持 macOS 钥匙串读取')
-  const run = deps.runSecurity ?? (() =>
-    execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' }))
   let raw: string
   try {
-    raw = run()
+    raw = platform === 'darwin' ? readFromKeychain(deps) : readFromCredentialsFile(deps, platform)
   } catch {
     throw new Error('Claude 未登录')
   }
@@ -31,6 +51,22 @@ export function readClaudeToken(deps: TokenDeps = {}): string {
   const token = j.claudeAiOauth?.accessToken
   if (!token) throw new Error('Claude 未登录')
   return token
+}
+
+function readFromKeychain(deps: TokenDeps): string {
+  const run = deps.runSecurity ?? (() =>
+    execFileSync('security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { encoding: 'utf8' }))
+  return run()
+}
+
+function readFromCredentialsFile(deps: TokenDeps, platform: string): string {
+  // Join with the TARGET platform's rules rather than the host's, so the path is right whichever
+  // machine computes it — the same reason every other platform seam here takes `platform` explicitly.
+  const path = platform === 'win32' ? win32 : posix
+  const env = deps.env ?? process.env
+  const dir = env.CLAUDE_CONFIG_DIR || path.join(deps.home ?? homedir(), '.claude')
+  const read = deps.readCredFile ?? ((p: string) => readFileSync(p, 'utf8'))
+  return read(path.join(dir, '.credentials.json'))
 }
 
 export async function fetchClaudeUsage(http: HttpClient, deps?: TokenDeps, cred?: string): Promise<StatusbarUsage> {
