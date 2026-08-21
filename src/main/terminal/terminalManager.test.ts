@@ -24,6 +24,17 @@ describe('TerminalManager', () => {
     }))
     expect(m.size()).toBe(1); expect(m.has('t1')).toBe(true); expect(m.pidOf('t1')).toBe(4242)
   })
+  // Regression: the manager used to default `exists` to `() => true`, so resolveShell accepted the
+  // FIRST candidate unconditionally. Harmless on macOS ($SHELL is always a real binary), fatal on
+  // Windows — it would hand node-pty a pwsh.exe path on machines without PowerShell 7 installed.
+  it('probes the real filesystem when no exists() is injected, so a dead $SHELL is skipped', () => {
+    let spawned = ''
+    const spawn = vi.fn((shell: string) => { spawned = shell; return fakePty() })
+    const m = new TerminalManager({ spawn, onData: vi.fn(), onExit: vi.fn(), env: { SHELL: '/no/such/shell' } })
+    m.create({ termId: 't1', cwd: '/x', cols: 80, rows: 24 })
+    expect(spawned).not.toBe('/no/such/shell')
+  })
+
   it('forwards pty data/exit to callbacks with the termId', () => {
     const { m, spawn, onData, onExit } = mk()
     m.create({ termId:'t1', cwd:'/x', cols:80, rows:24 })

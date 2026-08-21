@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { resolveShell } from './resolveShell'
 
 export interface PtyLike {
@@ -25,7 +26,10 @@ export class TerminalManager {
   create(opts: { termId: string; cwd: string; cols: number; rows: number }): void {
     if (this.ptys.size >= this.cap) throw new Error('TERM_CAP')
     const env = this.deps.env ?? process.env
-    const { shell, args } = resolveShell(env, this.deps.exists ?? (() => true))
+    // Default to a REAL filesystem probe: resolveShell picks the first candidate that exists, so a
+    // stub that always says yes would accept a shell that isn't installed (on Windows the pwsh 7
+    // path is only present when PowerShell 7 was installed separately).
+    const { shell, args } = resolveShell(env, this.deps.exists ?? existsSync)
     const ptyEnv: NodeJS.ProcessEnv = { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor', FORGE_TERMINAL: '1' }
     const pty = this.deps.spawn(shell, args, { cwd: opts.cwd, env: ptyEnv, cols: opts.cols, rows: opts.rows })
     pty.onData(d => this.deps.onData(opts.termId, d))
