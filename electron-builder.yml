@@ -9,6 +9,11 @@ asar: false
 # Use the already-installed, working Electron from node_modules instead of letting
 # electron-builder re-download the framework (the GitHub-release download corrupts behind a
 # proxy — "extra bytes at beginning of zipfile"). This dist matches the devDep version (42.4.0).
+#
+# NOTE this pins the dist to the BUILD HOST's platform+arch: `npm install` on Windows puts a win32
+# Electron here, on macOS a darwin one. So each platform's package must be built on that platform —
+# `npm run dist:win` belongs on the Windows machine. (The mac dual-arch build is the exception:
+# scripts/build-mac-all.sh overrides this per arch.)
 electronDist: node_modules/electron/dist
 # Skip @electron/rebuild entirely. Our ONLY native dep is node-pty, an N-API (node-addon-api) addon
 # that ships prebuilt binaries in prebuilds/<platform>-<arch>/. N-API is ABI-stable across
@@ -30,6 +35,10 @@ files:
       - out/**/*
       - package.json
       - node_modules/**/*
+      # node-pty's win32 prebuilds ship ~28MB of .pdb debug symbols PER ARCH next to the .node files.
+      # They are never loaded at runtime — only by a debugger attached to a crash dump — so they are
+      # pure installer weight (on macOS too, since every platform's prebuilds are bundled).
+      - "!node_modules/**/*.pdb"
 extraResources:
   - from: resources/example-plugins
     to: example-plugins
@@ -57,6 +66,35 @@ mac:
   # it (unidentified developer) — open via right-click → Open, or `xattr -dr com.apple.quarantine`.
   identity: null
   category: public.app-category.developer-tools
+win:
+  icon: build/icon.ico
+  # DELIBERATELY no `arch:` list. `electronDist` above pins the Electron binaries to the build host's
+  # architecture, so asking for two arches in one run would emit a second installer NAMED for the other
+  # arch but CONTAINING the host's binaries. (That exact mistake shipped a broken arm64 mac build once.)
+  # The arch comes from the CLI — `npm run dist:win` — and defaults to the host's.
+  target:
+    - nsis
+  # The updater picks a release asset by matching the arch in its FILENAME, so this pattern is part
+  # of the update contract, not cosmetic — see pickAsset() in src/main/update/githubSource.ts.
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  # No code-signing certificate (same position as macOS). SmartScreen will warn on first run until
+  # the download builds reputation; signing is a separate purchase decision.
+  signAndEditExecutable: true
+nsis:
+  # A real installer, not one-click: the user picks the directory, and per-user install means no UAC
+  # prompt — which matters because the app has no signature to show in that prompt.
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: myFlowForge
+  # Keep %APPDATA%\\myFlowForge (workspaces registry, settings, sessions) across an uninstall. Wiping a
+  # user's workspace list because they reinstalled would be unrecoverable.
+  deleteAppDataOnUninstall: false
+  # Close a running instance before overwriting its files, instead of failing with a locked-file error.
+  runAfterFinish: true
 dmg:
   title: myFlowForge ${version}
   # Dark installer background so the app icon's transparent rounded corners blend (same as it looks in

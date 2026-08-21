@@ -13,9 +13,12 @@
     "dist:arm64": "electron-vite build && electron-builder --mac --arm64",
     "dist:universal": "electron-vite build && electron-builder --mac --universal",
     "dist:mac-all": "bash scripts/build-mac-all.sh",
+    "dist:win": "electron-vite build && electron-builder --win --x64",
+    "dist:win-arm64": "electron-vite build && electron-builder --win --arm64",
+    "make-win-icon": "node scripts/make-win-icon.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "keywords": [
     "ai",
