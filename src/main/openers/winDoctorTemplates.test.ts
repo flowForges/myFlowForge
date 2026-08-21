@@ -9,6 +9,7 @@ import { openerTemplates } from '../../../scripts/openerTemplates.mjs'
 // 漏掉了 jetbrains()/vscodeLike() 用反引号写的那些,67 条里只抠出 10 条,JetBrains 全家和 VS Code
 // 系的主路径一个没验。这组测试就是拴住那个正则的。
 const CATALOG = readFileSync(join(__dirname, 'catalog.ts'), 'utf8')
+const PS1 = readFileSync(join(__dirname, '..', '..', '..', 'scripts', 'win-doctor.ps1'), 'utf8')
 
 describe('win-doctor 的路径模板提取', () => {
   const templates: string[] = openerTemplates(CATALOG)
@@ -42,5 +43,21 @@ describe('win-doctor 的路径模板提取', () => {
     for (const exe of new Set(exes)) {
       expect(templates.some(t => t.endsWith(exe)), `没有一条模板指向 ${exe}`).toBe(true)
     }
+  })
+
+  // win-doctor.ps1 是零安装版(只用 Windows 自带的 PowerShell,不需要 Node)。它没法读 catalog.ts —— 用户
+  // 拿到的就是这一个文件,仓库都还没克隆 —— 所以模板是【生成进去】的。生成命令:
+  //   node --input-type=module -e "import{readFileSync,writeFileSync}from'node:fs';..." (见 git 历史)
+  // 这组断言就是那份拷贝的看门狗:改了 catalog 却没重新生成 ps1,体检报告会漏验软件而不报错。
+  it('★ win-doctor.ps1 里生成的模板和 catalog 一致(改了 catalog 要重新生成 ps1)', () => {
+    for (const t of templates) {
+      // PowerShell 单引号字符串里,单引号自身要写成两个
+      expect(PS1, `ps1 里缺这条模板:${t}`).toContain(t.replace(/'/g, "''"))
+    }
+  })
+
+  it('win-doctor.ps1 是 UTF-8 BOM 开头 —— 没有 BOM 的话 PS 5.1 会把中文读成乱码', () => {
+    const bytes = readFileSync(join(__dirname, '..', '..', '..', 'scripts', 'win-doctor.ps1'))
+    expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf])
   })
 })
