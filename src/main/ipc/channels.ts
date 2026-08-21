@@ -187,6 +187,11 @@ export const CH = {
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggle-maximize',
   windowClose: 'window:close',
+  // Frameless windows draw their own caption buttons, so the renderer has no native chrome to read
+  // the maximised state from — the main process has to tell it, or the Windows maximise/restore glyph
+  // never changes.
+  windowIsMaximized: 'window:is-maximized',
+  windowMaximizedChanged: 'window:maximized-changed',
   appRelaunch: 'app:relaunch',
   appVibrancyBaseline: 'app:vibrancy-baseline',
   appIconOptions: 'app-icon:options',

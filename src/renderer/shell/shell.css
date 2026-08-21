@@ -11,6 +11,22 @@
 .traffic .y { background: #febc2e; }
 .traffic .g { background: #28c840; }
 
+/* Windows caption buttons. Win11 metrics: 46px wide, full titlebar height, flush with the window's
+   top-right corner — hence the negative margin cancelling .titlebar's 14px right padding. Anything
+   inset from the corner breaks the "throw the pointer at the corner to close" muscle memory, and
+   Windows' own snap-layouts flyout expects the maximise button to sit exactly there. */
+.win-controls { display: flex; align-self: stretch; margin-right: -14px; -webkit-app-region: no-drag; }
+.win-controls button {
+  width: 46px; border-radius: 0; color: var(--fg-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .12s, color .12s;
+}
+.win-controls button svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; }
+.win-controls button:hover { background: var(--surface); color: var(--fg); }
+/* Close is the one control Windows tints rather than greys. The literal system red reads correctly
+   in both themes, so it is not tokenised. */
+.win-controls button.close:hover { background: #c42b1c; color: #fff; }
+
 .tb-title {
   font-size: 13px; font-weight: 600; color: var(--fg-2);
   letter-spacing: .01em; display: flex; align-items: center; gap: 8px;

@@ -26,6 +26,8 @@ export interface TitlebarProps {
   openTarget?: OpenTarget | null
   defaultOpenerId?: string
   onSetDefaultOpener?: (id: string) => void
+  // Windows only: drives the maximise/restore glyph. Ignored by the macOS dots.
+  maximized?: boolean
 }
 
 export function Titlebar({
@@ -49,15 +51,21 @@ export function Titlebar({
   openTarget,
   defaultOpenerId,
   onSetDefaultOpener,
+  maximized,
 }: TitlebarProps) {
+  // The window is frameless everywhere, so we draw the controls. Where they go is platform identity,
+  // not decoration: macOS puts coloured dots top-LEFT, Windows square glyphs top-RIGHT. Unknown
+  // platform (unit tests, preload not injected) falls back to the macOS layout.
+  const isWindows = (window.forge?.platform ?? 'darwin') === 'win32'
   return (
     <div className="titlebar">
-      {/* macOS traffic-light dots — wired to real window controls (frameless window) */}
-      <div className="traffic">
-        <i className="r" role="button" aria-label="关闭" title="关闭" onClick={() => window.forge?.windowClose?.()} />
-        <i className="y" role="button" aria-label="最小化" title="最小化" onClick={() => window.forge?.windowMinimize?.()} />
-        <i className="g" role="button" aria-label="最大化" title="最大化" onClick={() => window.forge?.windowToggleMaximize?.()} />
-      </div>
+      {!isWindows && (
+        <div className="traffic">
+          <i className="r" role="button" aria-label="关闭" title="关闭" onClick={() => window.forge?.windowClose?.()} />
+          <i className="y" role="button" aria-label="最小化" title="最小化" onClick={() => window.forge?.windowMinimize?.()} />
+          <i className="g" role="button" aria-label="最大化" title="最大化" onClick={() => window.forge?.windowToggleMaximize?.()} />
+        </div>
+      )}
 
       {/* Sidebar-collapse toggle — hidden on home (launchpad has no sidebar) */}
       {view !== 'home' && (
@@ -160,6 +168,33 @@ export function Titlebar({
           <circle cx="12" cy="12" r="3" />
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
         </svg>
+      </button>
+
+      {isWindows && <WindowsControls maximized={!!maximized} />}
+    </div>
+  )
+}
+
+// Windows 11 caption buttons: 46×32 hit targets in minimise / maximise / close order, close turning
+// red on hover. Glyphs are inline SVG rather than the Segoe MDL2 Assets font — that font is missing
+// on Windows Server and on trimmed installs, which would render the controls as tofu boxes.
+function WindowsControls({ maximized }: { maximized: boolean }) {
+  return (
+    <div className="win-controls">
+      <button aria-label="最小化" title="最小化" onClick={() => window.forge?.windowMinimize?.()}>
+        <svg viewBox="0 0 10 10"><path d="M0 5h10" /></svg>
+      </button>
+      <button
+        aria-label={maximized ? '向下还原' : '最大化'}
+        title={maximized ? '向下还原' : '最大化'}
+        onClick={() => window.forge?.windowToggleMaximize?.()}
+      >
+        {maximized
+          ? <svg viewBox="0 0 10 10"><path d="M2.5 2.5V.5h7v7h-2" /><rect x="0.5" y="2.5" width="7" height="7" /></svg>
+          : <svg viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" /></svg>}
+      </button>
+      <button className="close" aria-label="关闭" title="关闭" onClick={() => window.forge?.windowClose?.()}>
+        <svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" /></svg>
       </button>
     </div>
   )

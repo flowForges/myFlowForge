@@ -92,6 +92,13 @@ export function App() {
   // No mock seed, so the bell shows a badge only when something real is unread.
   const [notifs, setNotifs] = useState<Notif[]>([])
   const [notifOpen, setNotifOpen] = useState(false)
+  // 窗口最大化状态 —— 只给 Windows 的标题栏按钮换「最大化/向下还原」图标用。无边框窗口渲染层读不到系统
+  // 标题栏,只能由主进程告知;初值单独拉一次(启动时就已最大化的场景不会有 maximize 事件)。
+  const [maximized, setMaximized] = useState(false)
+  useEffect(() => {
+    window.forge?.windowIsMaximized?.().then(setMaximized).catch(() => {})
+    return window.forge?.onWindowMaximized?.(setMaximized)
+  }, [])
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const updateCtx = useUpdate()
   // Auto-surface the upgrade modal when a (possibly backgrounded) download finishes, so the user is
@@ -596,6 +603,7 @@ export function App() {
           显示对应 motif。纯装饰、不吃事件。 */}
       <div className="skin-motif" aria-hidden="true" />
       <Titlebar
+        maximized={maximized}
         collapsed={collapsed}
         onToggleSidebar={() => setCollapsed(c => !c)}
         onToggleInspector={() => setInspCollapsed(c => !c)}

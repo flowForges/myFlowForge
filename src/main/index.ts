@@ -481,6 +481,9 @@ app.whenReady().then(() => {
     w.isMaximized() ? w.unmaximize() : w.maximize()
   })
   ipcMain.handle(CH.windowClose, (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+  // Initial state for the caption buttons: the window can already be maximised when the renderer
+  // mounts (restored session, launched maximised), and no maximize event fires for that.
+  ipcMain.handle(CH.windowIsMaximized, (e) => !!BrowserWindow.fromWebContents(e.sender)?.isMaximized())
   // transparent/vibrancy are construction-time only, so toggling 毛玻璃 needs a full restart to
   // rebuild the window. Let the settings UI trigger it directly. Force-quit past the close-action
   // guard (set quitting) so the app actually exits and relaunches instead of parking in the Dock.

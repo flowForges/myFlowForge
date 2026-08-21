@@ -266,6 +266,13 @@ const api = {
   windowMinimize: () => ipcRenderer.invoke(CH.windowMinimize),
   windowToggleMaximize: () => ipcRenderer.invoke(CH.windowToggleMaximize),
   windowClose: () => ipcRenderer.invoke(CH.windowClose),
+  windowIsMaximized: (): Promise<boolean> => ipcRenderer.invoke(CH.windowIsMaximized),
+  onWindowMaximized: (cb: (maximized: boolean) => void) => {
+    const listener = (_: unknown, maximized: boolean) => cb(maximized)
+    ipcRenderer.on(CH.windowMaximizedChanged, listener)
+    // Braces matter: removeListener returns the IpcRenderer, and a React effect cleanup must return void.
+    return () => { ipcRenderer.removeListener(CH.windowMaximizedChanged, listener) }
+  },
   appRelaunch: () => ipcRenderer.invoke(CH.appRelaunch),
   appVibrancyBaseline: (): Promise<number> => ipcRenderer.invoke(CH.appVibrancyBaseline),
   getAppIconOptions: (): Promise<Array<{ id: import('@shared/types').DockIcon; label: string; filename: string; src: string }>> => ipcRenderer.invoke(CH.appIconOptions),

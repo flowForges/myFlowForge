@@ -1,6 +1,7 @@
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 import { readSettings } from '../config/store'
+import { CH } from '../ipc/channels'
 import { vibrancyMaterial, windowEffect, type VibrancyMaterial, type WinBackgroundMaterial } from '@shared/vibrancy'
 
 export { vibrancyMaterial }
@@ -39,6 +40,12 @@ export function createMainWindow(): BrowserWindow {
   // frosted blur) rather than being cancelled by any 磨砂度>0. opacity=1 is a no-op, so pure-frosted
   // windows are unaffected. Clamp defensively.
   try { win.setOpacity(Math.min(1, Math.max(0.3, opacity))) } catch { /* platform without opacity support */ }
+  // Tell the renderer when the OS maximises/restores us — including paths we never initiate ourselves
+  // (double-clicking the drag region, Win+Up, the Windows 11 snap-layouts flyout), which is why this
+  // listens to the window instead of echoing from the toggle handler.
+  const notifyMaximized = () => { if (!win.isDestroyed()) win.webContents.send(CH.windowMaximizedChanged, win.isMaximized()) }
+  win.on('maximize', notifyMaximized)
+  win.on('unmaximize', notifyMaximized)
   win.once('ready-to-show', () => win.show())
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   else win.loadFile(join(__dirname, '../renderer/index.html'))
