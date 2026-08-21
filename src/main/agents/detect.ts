@@ -7,6 +7,7 @@ import { BUILTIN_IDS as CATALOG_BUILTIN_IDS, getBuiltinProvider } from '@shared/
 import { readAgentsConfig, writeAgentsConfig } from '../config/store'
 import { refreshProviderModels } from './refreshModels'
 import { probeCli, type CliProbe } from './cliVersion'
+import { lookupBin } from './lookupBin'
 
 // Agent CLIs (claude/codex) are Node wrappers whose FIRST `--version` after a cold boot can take
 // several seconds (Gatekeeper check + node startup). 5s used to time out → a working CLI got marked
@@ -16,11 +17,11 @@ const STALE_TTL_MS = 7 * 24 * 3600 * 1000   // 7 days
 const BUILTIN_IDS = new Set(CATALOG_BUILTIN_IDS)
 
 // Resolve a bin name to its absolute path (so the UI can show *where* it was found).
-// Already-absolute paths pass through; bare names are looked up on PATH via `which`.
+// Already-absolute paths pass through; bare names are looked up on PATH (which/where per platform).
 async function resolveBinPath(bin: string | undefined, env: NodeJS.ProcessEnv): Promise<string> {
   if (!bin) return ''
   if (isAbsolute(bin)) return bin
-  try { const r = await execa('which', [bin], { env }); return r.stdout.trim() || bin } catch { return bin }
+  return (await lookupBin(bin, env)) ?? bin
 }
 
 // Resolve to `fallback` if the promise neither resolves nor rejects within `ms`.
@@ -40,7 +41,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
 async function defaultBinPresent(bin: string | undefined, env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!bin) return false
   if (isAbsolute(bin)) return existsSync(bin)
-  try { const r = await execa('which', [bin], { env }); return r.exitCode === 0 && r.stdout.trim().length > 0 } catch { return false }
+  return (await lookupBin(bin, env)) !== null
 }
 
 export interface DetectOptions {

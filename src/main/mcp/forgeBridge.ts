@@ -1,7 +1,7 @@
 import * as net from 'node:net'
 import { rmSync, readdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join } from 'node:path'
+import { bridgeAddress } from './bridgeAddress'
 import type { RunStore } from '../run/runStore'
 import type { AgentMessage } from '../run/runTypes'
 import { pickDocArtifact } from '../run/docArtifact'
@@ -24,6 +24,9 @@ export interface BridgeRunCtx {
 
 export interface ForgeBridge {
   socketPath: string
+  /** A real writable directory for per-agent MCP config files. NOT dirname(socketPath): on Windows
+   *  socketPath is a named pipe, whose "directory" (`\\.\pipe`) cannot hold files. */
+  configDir: string
   close(): Promise<void>
 }
 
@@ -42,14 +45,11 @@ function isoTs(): string {
 
 export function startBridge(runDir: string, ctx: BridgeRunCtx): Promise<ForgeBridge> {
   return new Promise((resolve, reject) => {
-    // Determine socket path with darwin sun_path limit fallback (100 char threshold)
-    const candidate = join(runDir, 'forge.sock')
-    const socketPath = candidate.length > 100
-      ? join(tmpdir(), `forge-${ctx.runId}.sock`)
-      : candidate
+    const { socketPath, configDir, isPipe } = bridgeAddress(runDir, ctx.runId)
 
-    // Remove stale socket file before listening
-    rmSync(socketPath, { force: true })
+    // Remove a stale socket file before listening. A Windows named pipe has no filesystem entry —
+    // it disappears with the process that created it — and rmSync on `\\.\pipe\…` is meaningless.
+    if (!isPipe) rmSync(socketPath, { force: true })
 
     const allSockets = new Set<net.Socket>()
     const server = net.createServer((socket) => {
@@ -61,6 +61,7 @@ export function startBridge(runDir: string, ctx: BridgeRunCtx): Promise<ForgeBri
     server.listen(socketPath, () => {
       resolve({
         socketPath,
+        configDir,
         close(): Promise<void> {
           return new Promise((res, rej) => {
             // Destroy all open sockets immediately
@@ -68,13 +69,12 @@ export function startBridge(runDir: string, ctx: BridgeRunCtx): Promise<ForgeBri
               try { s.destroy() } catch { /* ignore */ }
             }
             server.close((err) => {
-              rmSync(socketPath, { force: true })
-              // Remove per-agent MCP config files written next to the socket (esp. on the
-              // tmpdir fallback path, where nothing else would ever clean them up).
+              if (!isPipe) rmSync(socketPath, { force: true })
+              // Remove per-agent MCP config files written into configDir (esp. on the tmpdir
+              // fallback path, where nothing else would ever clean them up).
               try {
-                const dir = dirname(socketPath)
-                for (const f of readdirSync(dir)) {
-                  if (/^mcp\..*\.json$/.test(f)) { try { rmSync(join(dir, f), { force: true }) } catch { /* ignore */ } }
+                for (const f of readdirSync(configDir)) {
+                  if (/^mcp\..*\.json$/.test(f)) { try { rmSync(join(configDir, f), { force: true }) } catch { /* ignore */ } }
                 }
               } catch { /* dir gone — ignore */ }
               if (err) rej(err)

@@ -2021,7 +2021,7 @@ describe('RunController', () => {
     function fakeBridgeStarter(capture: { ctx?: BridgeRunCtx }, socketPath = '/fake/forge.sock') {
       return async (_runDir: string, ctx: BridgeRunCtx): Promise<ForgeBridge> => {
         capture.ctx = ctx
-        return { socketPath, close: async () => {} }
+        return { socketPath, configDir: '/fake', close: async () => {} }
       }
     }
     // A provider whose stage agent doesn't finish until the test releases it — lets the test drive
@@ -2145,7 +2145,7 @@ describe('RunController', () => {
       const store = new RunStore(ws, 'r1')
       const closeCalls: number[] = []
       const bridgeStarter = async (): Promise<ForgeBridge> => ({
-        socketPath: '/fake/forge.sock', close: async () => { closeCalls.push(1) },
+        socketPath: '/fake/forge.sock', configDir: '/fake', close: async () => { closeCalls.push(1) },
       })
       // scope 'per-project' with zero projects → buildWorkOrders() returns [] → the guard throws
       // inside the loop, before any lane ever starts.
@@ -2162,7 +2162,7 @@ describe('RunController', () => {
       const store = new RunStore(ws, 'r1')
       const closeCalls: number[] = []
       const bridgeStarter = async (): Promise<ForgeBridge> => ({
-        socketPath: '/fake/forge.sock', close: async () => { closeCalls.push(1) },
+        socketPath: '/fake/forge.sock', configDir: '/fake', close: async () => { closeCalls.push(1) },
       })
       const c = new RunController(plan, {
         providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),
@@ -2179,7 +2179,7 @@ describe('RunController', () => {
       const store = new RunStore(ws, 'r1')
       const closeCalls: number[] = []
       const bridgeStarter = async (): Promise<ForgeBridge> => ({
-        socketPath: '/fake/forge.sock', close: async () => { closeCalls.push(1) },
+        socketPath: '/fake/forge.sock', configDir: '/fake', close: async () => { closeCalls.push(1) },
       })
       const c = new RunController(plan, {
         providers: { x: okProvider() }, store, env: {}, projects, sleep: async () => {}, now: () => 0, makeId: idFactory(),

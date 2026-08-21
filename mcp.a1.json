@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "forge": {
+      "command": "/usr/local/Cellar/node/25.7.0/bin/node",
+      "args": [
+        "/x/forgeMcp.js"
+      ],
+      "env": {
+        "ELECTRON_RUN_AS_NODE": "1",
+        "FORGE_SOCKET": "\\\\.\\pipe\\forge-r1",
+        "FORGE_AGENT_ID": "a1"
+      }
+    }
+  }
+}

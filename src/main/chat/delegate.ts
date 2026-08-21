@@ -216,6 +216,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
         timezone: providerTimezone(t.provider),
         overrides: (bridge && forgeUsable) ? {
           FORGE_SOCKET: bridge.socketPath,
+          FORGE_MCP_DIR: bridge.configDir,
           FORGE_AGENT_ID: t.id,
           ...(deps.mcpEntry ? { FORGE_MCP_ENTRY: deps.mcpEntry } : {}),
           FORGE_TOOLS: STAGE_FORGE_TOOLS,
