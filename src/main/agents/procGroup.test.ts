@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { execa, type ResultPromise } from 'execa'
-import { spawnAgent, killTree, killAllAgentTrees, liveAgentCount } from './procGroup'
+import { spawnAgent, killTree, killAllAgentTrees, liveAgentCount, killTreeWindows } from './procGroup'
 
 // ★ 这里【必须】用真进程,不能用假 runner:要证明的正是「SIGTERM 之后孙进程还活不活着」,这是内核层面的
 //   父子/进程组行为,任何 mock 都只会复述我们自己的假设。(教训见 2026-07-19 那次假 GitRunner 漏掉致命
@@ -209,4 +209,33 @@ describe('CLI 先退、只剩进程组认得的后代', () => {
 
     expect(await settleDead(grandPid)).toBe(false)
   }, 60000)
+})
+
+// ── Windows 分支 ────────────────────────────────────────────────────────────────────────────────
+// 真机上从没跑过(没有 Windows 机器),所以这里只钉死【调用形状和顺序】—— 顺序正是 POSIX 分支踩过的坑:
+// 必须先把树处理完,才能碰父进程。
+describe('killTreeWindows', () => {
+  it('用 taskkill /T /F 杀整棵树', () => {
+    const calls: string[][] = []
+    killTreeWindows(4242, () => {}, (args) => { calls.push(args) })
+    expect(calls).toEqual([['/pid', '4242', '/T', '/F']])
+  })
+
+  it('★ taskkill 跑完之前绝不动父进程 —— 先杀父进程会让后代被系统改认爹,/T 就再也找不到它们', () => {
+    const order: string[] = []
+    killTreeWindows(4242, () => order.push('single'), () => { order.push('taskkill') })
+    expect(order[0]).toBe('taskkill')
+  })
+
+  it('taskkill 成功后不再单杀一次(父进程已经被 /F 带走了)', () => {
+    const single = vi.fn()
+    killTreeWindows(4242, single, () => {})
+    expect(single).not.toHaveBeenCalled()
+  })
+
+  it('taskkill 不在 / 进程已退出(非零退出会抛)→ 退回单杀,不让停止流程炸掉', () => {
+    const single = vi.fn()
+    expect(() => killTreeWindows(4242, single, () => { throw new Error('not found') })).not.toThrow()
+    expect(single).toHaveBeenCalledTimes(1)
+  })
 })

@@ -93,12 +93,7 @@ export function killTree(child: KillableChild, signal: NodeJS.Signals = 'SIGTERM
   const single = () => { try { child.kill(signal) } catch { /* 已经没了 */ } }
   const pid = child.pid
   if (!pid) { single(); return }
-  if (WIN) {
-    // /T = 连同子进程树,/F = 强制。best-effort:taskkill 不在或进程已退出都不该让停止流程炸掉。
-    try { void execa('taskkill', ['/pid', String(pid), '/T', '/F'], { reject: false }) } catch { /* ignore */ }
-    single()
-    return
-  }
+  if (WIN) { killTreeWindows(pid, single); return }
   // 先拍快照,再动手 —— 顺序不能反(见 descendants 的注释)。
   const tree = descendants(pid)
   // ★ 只有确实建过独立进程组的才允许负 pid;否则退回单杀(见 ownGroup 的注释)。
@@ -108,6 +103,24 @@ export function killTree(child: KillableChild, signal: NodeJS.Signals = 'SIGTERM
   } else single()
   // 另建了进程组、因而躲过上面那一刀的后代,按进程树补掉。
   for (const p of tree) { try { process.kill(p, signal) } catch { /* 已经跟着组一起死了 */ } }
+}
+
+/** 真正跑 taskkill 的那一下。可注入,好让「调用形状 + 顺序」在没有 Windows 机器的情况下也能测。 */
+export type WinKillRun = (args: string[]) => void
+const defaultWinKill: WinKillRun = (args) => { execFileSync('taskkill', args, { stdio: 'ignore', timeout: 5000 }) }
+
+/**
+ * Windows 上杀整棵树。`/T` 靠的是【当下还连着的】父子关系,`/F` 是强制。
+ *
+ * ★ 必须【同步跑完再碰父进程】—— 这就是 POSIX 分支那条「先拍快照再动手」在 Windows 上的样子:父进程一死,
+ *   它的后代立刻被系统改认了爹,`/T` 就再也顺不到它们。旧写法是 `void execa(...)` 之后【立刻】single(),
+ *   taskkill 甚至还没启动,父进程就先没了 —— 漏孤儿的写法原样搬到了 Windows。
+ *
+ * taskkill 成功 = 父进程已被 /F 带走,不必再单杀。失败(taskkill 不在 / 进程早退出,非零退出会抛)才退回单杀。
+ */
+export function killTreeWindows(pid: number, single: () => void, run: WinKillRun = defaultWinKill): void {
+  try { run(['/pid', String(pid), '/T', '/F']) }
+  catch { single() }
 }
 
 /** app 退出时的兜底:detached 关掉了 execa 自带的 cleanup,这里替它把还活着的 agent 树全杀掉。 */
