@@ -4,9 +4,9 @@ export interface UpdateInstaller {
   run(info: UpdateInfo, onProgress: (p: InstallProgress) => void): Promise<void>
 }
 
-// Streams the download to a temp file so the whole DMG never sits in memory (buffering a 170MB dmg +
-// its final copy spiked ~340MB and made the machine lag), and supports RESUME: a partial `.part` file
-// is continued with a Range request instead of restarting from zero.
+// Streams the download to a temp file so the whole installer never sits in memory (buffering a 170MB
+// dmg + its final copy spiked ~340MB and made the machine lag), and supports RESUME: a partial
+// `.part` file is continued with a Range request instead of restarting from zero.
 export interface DownloadWriter {
   write(chunk: Uint8Array): Promise<void>
   close(): Promise<void>
@@ -28,27 +28,30 @@ export interface InstallerDeps {
   discard: (path: string) => Promise<void>                       // delete a stale/corrupt .part
 }
 
-export class ManualDmgInstaller implements UpdateInstaller {
+// Downloads the release artifact and hands it to the OS: on macOS that mounts the .dmg (the user
+// drags the app across), on Windows it runs the NSIS installer. Either way we also reveal the file,
+// so a failed hand-off still leaves the user one double-click away from installing.
+export class ManualDownloadInstaller implements UpdateInstaller {
   constructor(private deps: InstallerDeps) {}
 
   async run(info: UpdateInfo, onProgress: (p: InstallProgress) => void): Promise<void> {
-    const dest = this.deps.join(this.deps.tmpDir, info.dmgName)
+    const dest = this.deps.join(this.deps.tmpDir, info.assetName)
     const part = `${dest}.part`
-    const total = info.dmgSize || 0
+    const total = info.assetSize || 0
 
     // How many bytes we already have from a previous interrupted attempt.
     let received = await this.deps.partSize(part).catch(() => 0)
     if (total > 0 && received >= total) { received = 0; await this.deps.discard(part).catch(() => {}) }
 
     const init = received > 0 ? { headers: { Range: `bytes=${received}-` } } : undefined
-    const res = await this.deps.fetch(info.dmgUrl, init)
+    const res = await this.deps.fetch(info.assetUrl, init)
     if (!res.ok) throw new Error('下载失败:服务器返回错误')
     // Asked to resume but the server ignored Range (200, not 206) → start clean from 0.
     const resuming = received > 0 && res.status === 206
     if (received > 0 && !resuming) { received = 0; await this.deps.discard(part).catch(() => {}) }
 
     const pctOf = (n: number) => (total > 0 ? Math.min(90, Math.floor((n / total) * 90)) : 0)
-    onProgress({ stage: resuming ? '继续下载更新包…' : '正在下载更新包…', pct: pctOf(received), log: `拉取 ${info.dmgName}` })
+    onProgress({ stage: resuming ? '继续下载更新包…' : '正在下载更新包…', pct: pctOf(received), log: `拉取 ${info.assetName}` })
 
     // A 170MB dmg yields thousands of chunks; only emit when the integer percent changes (≤91 updates).
     const writer = this.deps.openWriter(part, resuming)
@@ -80,5 +83,5 @@ export class ManualDmgInstaller implements UpdateInstaller {
 
 export function pickInstaller(deps: InstallerDeps): UpdateInstaller {
   // option 3（签名后）在此按 app.isPackaged && isSigned() 返回 AutoUpdater；现恒为手动。
-  return new ManualDmgInstaller(deps)
+  return new ManualDownloadInstaller(deps)
 }

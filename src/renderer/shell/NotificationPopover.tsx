@@ -71,7 +71,7 @@ export function NotificationPopover({
               <div className="nu-tag">新版本可用</div>
               <h4>
                 {info?.version ? `Forge v${info.version}` : '有可用更新'}
-                {info && info.dmgSize > 0 ? <span> · {formatBytes(info.dmgSize)}</span> : null}
+                {info && info.assetSize > 0 ? <span> · {formatBytes(info.assetSize)}</span> : null}
               </h4>
               <p>{(info && releaseSummary(info.notes)) || '点击查看详情并升级到最新版本。'}</p>
               <button className="nu-btn" onClick={onOpenUpgrade}>

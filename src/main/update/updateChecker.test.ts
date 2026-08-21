@@ -3,7 +3,7 @@ import { createUpdateChecker } from './updateChecker'
 import type { CheckerDeps } from './updateChecker'
 import type { UpdateInfo } from '@shared/types'
 
-const INFO: UpdateInfo = { version: '2.4.0', notes: 'n', dmgUrl: 'u', dmgSize: 10, dmgName: 'a.dmg' }
+const INFO: UpdateInfo = { version: '2.4.0', notes: 'n', assetUrl: 'u', assetSize: 10, assetName: 'a.dmg' }
 
 function deps(o: Partial<CheckerDeps> = {}): CheckerDeps {
   return {

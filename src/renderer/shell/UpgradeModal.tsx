@@ -72,7 +72,7 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
           </div>
           <div>
             <h2>有可用更新</h2>
-            <div className="vers">当前 v{currentVersion} → 最新 <b>v{info?.version ?? '—'}</b>{info ? ` · ${formatBytes(info.dmgSize)}` : ''}</div>
+            <div className="vers">当前 v{currentVersion} → 最新 <b>v{info?.version ?? '—'}</b>{info ? ` · ${formatBytes(info.assetSize)}` : ''}</div>
           </div>
         </div>
         <div className="upd-body">

@@ -437,7 +437,9 @@ export interface Workspace {
   purpose?: string            // 建区目的(可选) — seeds the workspace memory `## 建区目的` section
 }
 
-export interface UpdateInfo { version: string; notes: string; dmgUrl: string; dmgSize: number; dmgName: string }
+// The release artifact this machine should download: a .dmg on macOS, an NSIS .exe on Windows.
+// (Named `asset*`, not `dmg*`, since 1.1.2 — the field is platform-neutral.)
+export interface UpdateInfo { version: string; notes: string; assetUrl: string; assetSize: number; assetName: string }
 export interface InstallProgress { stage: string; pct: number; log?: string }
 export type UpdateEvent =
   | { type: 'available'; info: UpdateInfo }
