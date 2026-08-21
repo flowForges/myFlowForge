@@ -4,6 +4,10 @@ import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEv
 import type { PluginSnapshot } from '@shared/plugins'
 
 const api = {
+  // Which OS this window is drawn on. A plain constant, not an IPC call: the renderer needs it during
+  // the FIRST paint (window-control layout, native material buckets) and an await would flash the
+  // wrong chrome. Note this is the CLIENT's platform — the machine showing the pixels.
+  platform: process.platform,
   getSettings: () => ipcRenderer.invoke(CH.configGetSettings),
   setSettings: (s: unknown) => ipcRenderer.invoke(CH.configSetSettings, s),
   listProjects: () => ipcRenderer.invoke(CH.configListProjects),

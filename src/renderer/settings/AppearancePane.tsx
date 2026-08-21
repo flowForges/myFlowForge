@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { Appearance, Terminal } from '@shared/types'
-import { vibrancyMaterial } from '@shared/vibrancy'
+import { windowEffect } from '@shared/vibrancy'
 import { FontPicker } from './FontPicker'
 import { SkinsPane } from './SkinsPane'
 import { useWallpaperPalette } from '../theme/wallpaperSample'
@@ -77,7 +77,10 @@ export function AppearancePane({ appearance, onChange, terminal, onTerminalChang
   // ——同档位内拖动、或压根没改,都不提示,避免那颗一直挂着的「没用的重启按钮」。
   const [baselineBlur, setBaselineBlur] = useState<number | null>(null)
   useEffect(() => { window.forge?.appVibrancyBaseline?.().then(setBaselineBlur).catch(() => {}) }, [])
-  const restartPending = baselineBlur != null && vibrancyMaterial(baselineBlur) !== vibrancyMaterial(blur)
+  // 按【本机平台】的材质档位比较:macOS 三档 vibrancy,Windows 两档 mica/acrylic。用错平台的档位会在
+  // 同一档内瞎提示重启(或该提示时不提示)。
+  const uiPlatform = window.forge?.platform ?? 'darwin'
+  const restartPending = baselineBlur != null && windowEffect(baselineBlur, uiPlatform) !== windowEffect(blur, uiPlatform)
   const appFont = appearance.fontFamily ?? ''
   const textWeight = appearance.textWeight ?? WEIGHT_SUGGESTED
   const chatLineHeight = appearance.chatLineHeight ?? CHAT_LH_SUGGESTED
