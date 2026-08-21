@@ -35,10 +35,6 @@ files:
       - out/**/*
       - package.json
       - node_modules/**/*
-      # node-pty's win32 prebuilds ship ~28MB of .pdb debug symbols PER ARCH next to the .node files.
-      # They are never loaded at runtime — only by a debugger attached to a crash dump — so they are
-      # pure installer weight (on macOS too, since every platform's prebuilds are bundled).
-      - "!node_modules/**/*.pdb"
 extraResources:
   - from: resources/example-plugins
     to: example-plugins
