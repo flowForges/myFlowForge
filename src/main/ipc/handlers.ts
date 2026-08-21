@@ -47,9 +47,9 @@ import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti, readBranch } from '../git/changes'
 import { perfSpan } from '../perf/perfSpans'
 import { execFile } from 'node:child_process'
-import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile } from '../openers/detect'
+import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile, OPENERS_CACHE_VERSION } from '../openers/detect'
 import { readMacAppIcon } from '../openers/appIcon'
-import { buildOpenCommand } from '../openers/buildOpenCommand'
+import { buildOpenCommand, type LaunchCommand } from '../openers/buildOpenCommand'
 import { writeJsonAtomic } from '../util/atomicWrite'
 import { providerCommands } from '../commands/providerCommands'
 import type { DetectedOpener } from '../../shared/openers'
@@ -173,7 +173,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // proxy-THEN-direct: the update check must survive a down/misrouted/socks proxy (settings.termProxy).
     // makeProxyFetch had no direct fallback, so any proxy hiccup → throw → 永久「检查失败」even when GitHub
     // is directly reachable. makeContentFetch tries the proxy then falls back to a direct fetch.
-    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().termProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, arch: process.arch }),
+    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().termProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, platform: process.platform, arch: process.arch }),
     emit: broadcast,
     setTimeout: (fn, ms) => { setTimeout(fn, ms) },
     setInterval: (fn, ms) => { setInterval(fn, ms) },
@@ -1557,6 +1557,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // (an identical blank icon for every app) on some macOS builds. getFileIcon stays as the fallback
   // for apps without a standalone .icns (Assets.car system apps) and for non-macOS platforms.
   const openerIcon = async (appPath: string): Promise<string | undefined> => {
+    // macOS: read the bundle's own .icns first (see readMacAppIcon). Windows: getFileIcon extracts
+    // the icon embedded in the .exe, which is the real per-app icon — no special case needed.
     if (process.platform === 'darwin') {
       const real = await readMacAppIcon(appPath)
       if (real) return real
@@ -1564,8 +1566,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     try { const img = await app.getFileIcon(appPath, { size: 'normal' }); return img.isEmpty() ? undefined : img.toDataURL() }
     catch { return undefined }
   }
-  const runOpen = (args: string[]) => new Promise<void>((res, rej) => {
-    execFile('open', args, (err) => (err ? rej(err) : res()))
+  // Launch one command from buildOpenCommand. macOS routes through the `open` helper; Windows
+  // launches the app's .exe directly (there is no `open` there) — the shape is identical either way.
+  const runOpen = (cmd: LaunchCommand) => new Promise<void>((res, rej) => {
+    execFile(cmd.exe, cmd.args, (err) => (err ? rej(err) : res()))
   })
   let openersCache: DetectedOpener[] = []
   ipcMain.handle(CH.openersDetect, async (_e, refresh?: boolean) => {
@@ -1581,7 +1585,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // the renderer to remove it too (removedId), instead of forcing a full rescan.
     if (!existsSync(op.appPath)) {
       openersCache = withoutOpener(openersCache, op.id)
-      try { writeJsonAtomic(openersCacheFile(), { apps: openersCache }) } catch { /* best-effort */ }
+      try { writeJsonAtomic(openersCacheFile(), { v: OPENERS_CACHE_VERSION, apps: openersCache }) } catch { /* best-effort */ }
       return { ok: false as const, error: `${op.name} 已不存在,已从列表移除`, removedId: op.id }
     }
     // Guard the TARGET path: on a fresh install a workspace is navigable before its per-project repos
@@ -1594,8 +1598,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!existsSync(arg.folder)) {
       return { ok: false as const, error: '该位置尚不存在 —— 项目仓库还未拉取完成或克隆失败,请稍候或检查工作区状态' }
     }
-    const argvs = buildOpenCommand(op.openMode, op.appPath, { folder: arg.folder, file: arg.file })
-    try { for (const args of argvs) await runOpen(args); return { ok: true as const } }
+    const cmds = buildOpenCommand(process.platform, op.openMode, op.appPath, { folder: arg.folder, file: arg.file }, op.argStyle)
+    try { for (const cmd of cmds) await runOpen(cmd); return { ok: true as const } }
     catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
   ipcMain.handle(CH.workspacesOpenDir, async () => {
