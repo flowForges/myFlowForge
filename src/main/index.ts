@@ -9,6 +9,7 @@ import { parkWindowInDock, resolveCloseAction, resolveDockActivationAction } fro
 import { relocatePetToRegion, PET_EXPANDED, PET_BUBBLE, petCollapsedSize, petPopupSize, clampPetScale, petMaxSize, petResizeFootprint } from '@shared/petGeometry'
 import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
+import { createBroadcastHub } from './ipc/broadcastHub'
 import { registerIpc } from './ipc/handlers'
 import { killAllAgentTrees } from './agents/procGroup'
 import { botBridge } from './bot/botBridge'
@@ -186,8 +187,16 @@ app.whenReady().then(() => {
   } catch (e) { logError('appearance', `本机字体权限授予失败: ${String(e)}`) }
 
   const registry = new WindowRegistry()
+  // 所有事件外推的唯一出口。本机窗口是它的第一路 sink;第二期起,每个连上来的远程客户端
+  // 各自 addSink 一路,互不知道对方存在。
+  //
+  // ★ 注意下面所有 `hub.broadcast(...)` 原本写的是 `hub.broadcast(...)` —— 那样写等于
+  // 绕过总线直连窗口,settingsChanged / shortcutsStatus / menuAction / appLogEvent / growthSignal
+  // 这五类事件就永远到不了远程客户端,而且是静默到不了。
+  const hub = createBroadcastHub()
+  hub.addSink(registry.broadcast)
   // Live-stream debug log entries to any open renderer (the Settings · 调试日志 pane).
-  setAppLogEventSink((e) => registry.broadcast(CH.appLogEvent, e))
+  setAppLogEventSink((e) => hub.broadcast(CH.appLogEvent, e))
   logInfo('app', '协议与会话准备完毕,开始建主窗口')
   const mainWin = createMainWindow()
   logInfo('app', '主窗口已创建,等待 ready-to-show')
@@ -281,7 +290,7 @@ app.whenReady().then(() => {
           writeSettings({ ...readSettings(), closeAction: response === 0 ? 'hide' : 'quit' })
           // Keep every window's settings snapshot fresh so a later config:set-settings (whole-object
           // write) doesn't clobber the remembered choice with a stale value (same guard as petSetScale).
-          registry.broadcast(CH.settingsChanged, readSettings())
+          hub.broadcast(CH.settingsChanged, readSettings())
         }
         if (response === 0) { parkWindowInDock(win, process.platform, !!menuBarTray); return }
         quitting = true
@@ -457,7 +466,7 @@ app.whenReady().then(() => {
       'toggle-pet': togglePet,
     })
     globalShortcutFailed = failed
-    registry.broadcast(CH.shortcutsStatus, { failed })
+    hub.broadcast(CH.shortcutsStatus, { failed })
   }
   applyGlobalShortcuts()
   ipcMain.handle(CH.shortcutsGetStatus, () => ({ failed: globalShortcutFailed }))
@@ -499,7 +508,7 @@ app.whenReady().then(() => {
     writeSettings({ ...s, pet: { ...s.pet, scale: next } })
     // Keep every window's settings snapshot fresh so a later config:set-settings (whole-object write)
     // doesn't clobber the new scale/free with a stale value (same guard as workspacesSetOrder).
-    registry.broadcast(CH.settingsChanged, readSettings())
+    hub.broadcast(CH.settingsChanged, readSettings())
     return dockPet(petMode)
   })
   ipcMain.handle(CH.petSetIgnoreMouse, (_e, ignore: boolean) => {
@@ -573,12 +582,12 @@ app.whenReady().then(() => {
     const next = { ...s, pet: { ...s.pet, enabled: !s.pet.enabled } }
     writeSettings(next)
     onSettings(next)                                 // create/close the pet window per the new flag
-    registry.broadcast(CH.settingsChanged, next)     // reflect the change in the open settings UI
+    hub.broadcast(CH.settingsChanged, next)     // reflect the change in the open settings UI
   }
   function buildAppMenu(): Menu {
     const petEnabled = (() => { try { return readSettings().pet.enabled } catch { return true } })()
     return Menu.buildFromTemplate([
-      { label: '新建工作区', click: () => { showMainWindow(); registry.broadcast(CH.menuAction, 'new-workspace') } },
+      { label: '新建工作区', click: () => { showMainWindow(); hub.broadcast(CH.menuAction, 'new-workspace') } },
       { label: petEnabled ? '关闭桌面宠物' : '打开桌面宠物', click: () => togglePetEnabled() },
       { type: 'separator' },
       { label: '退出 myFlowForge', click: () => { quitting = true; app.quit() } },
@@ -620,7 +629,7 @@ app.whenReady().then(() => {
     routeAndFire(buildNotification({ type: 'done', workspaceName: wsName, workspacePath: payload.workspacePath, sessionId: payload.sessionId, text: '会话已回复,点击查看' }))
   }
   const broadcastWithNotify = (channel: string, payload: unknown) => {
-    registry.broadcast(channel, payload)
+    hub.broadcast(channel, payload)
     if (channel === CH.chatEvent) notifyChatDone(payload)
     botBridge.observe(channel, payload)   // mirror gate/ask/done/run2 events to the phone
   }
@@ -655,7 +664,7 @@ app.whenReady().then(() => {
     setDailyTokenCounter(createDailyTokenCounter({
       baseline: scanTokenBaseline(day),
       day,
-      onChange: (s) => registry.broadcast(CH.growthSignal, s),
+      onChange: (s) => hub.broadcast(CH.growthSignal, s),
     }))
   })
 
@@ -663,7 +672,7 @@ app.whenReady().then(() => {
   const scheduler = new PluginScheduler({
     run: makeRun({ runHost: (p) => runPlugin(p) }),
     readPlugins,
-    broadcast: (snap) => registry.broadcast(CH.pluginsChanged, snap),
+    broadcast: (snap) => hub.broadcast(CH.pluginsChanged, snap),
   })
   setPluginScheduler(scheduler)
   scheduler.start()
