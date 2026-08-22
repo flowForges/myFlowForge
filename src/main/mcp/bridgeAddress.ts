@@ -1,5 +1,5 @@
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { posix } from 'node:path'
 
 // Where a run's forge bridge listens, and where its per-agent MCP config files go.
 //
@@ -27,7 +27,9 @@ export function bridgeAddress(runDir: string, runId: string, platform: NodeJS.Pl
     const safeId = runId.replace(/[\\/:*?"<>|]/g, '_')
     return { socketPath: `\\\\.\\pipe\\forge-${safeId}`, configDir: runDir, isPipe: true }
   }
-  const candidate = join(runDir, 'forge.sock')
+  // 用【目标平台】的规则拼,不用宿主的 —— 否则在 Windows 上给 POSIX 分支拼路径会拼出反斜杠。
+  // (和 usage/claude.ts 里读凭据文件是同一条规则。)
+  const candidate = posix.join(runDir, 'forge.sock')
   if (candidate.length <= SUN_PATH_LIMIT) return { socketPath: candidate, configDir: runDir, isPipe: false }
-  return { socketPath: join(tmpdir(), `forge-${runId}.sock`), configDir: tmpdir(), isPipe: false }
+  return { socketPath: posix.join(tmpdir(), `forge-${runId}.sock`), configDir: tmpdir(), isPipe: false }
 }

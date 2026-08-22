@@ -12,7 +12,7 @@ describe('TerminalManager', () => {
   const mk = (over:any={}) => {
     const spawn = vi.fn(() => fakePty())
     const onData = vi.fn(); const onExit = vi.fn()
-    const m = new TerminalManager({ spawn, onData, onExit, env: { SHELL:'/bin/zsh' }, exists:()=>true, ...over })
+    const m = new TerminalManager({ spawn, onData, onExit, env: { SHELL:'/bin/zsh' }, exists:()=>true, platform: 'darwin', ...over })
     return { m, spawn, onData, onExit }
   }
   it('spawns the resolved login shell with TERM/COLORTERM env on create', () => {
@@ -30,7 +30,7 @@ describe('TerminalManager', () => {
   it('probes the real filesystem when no exists() is injected, so a dead $SHELL is skipped', () => {
     let spawned = ''
     const spawn = vi.fn((shell: string) => { spawned = shell; return fakePty() })
-    const m = new TerminalManager({ spawn, onData: vi.fn(), onExit: vi.fn(), env: { SHELL: '/no/such/shell' } })
+    const m = new TerminalManager({ spawn, onData: vi.fn(), onExit: vi.fn(), env: { SHELL: '/no/such/shell' }, platform: 'darwin' })
     m.create({ termId: 't1', cwd: '/x', cols: 80, rows: 24 })
     expect(spawned).not.toBe('/no/such/shell')
   })

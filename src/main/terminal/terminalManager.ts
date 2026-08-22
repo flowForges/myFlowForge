@@ -15,6 +15,9 @@ export interface TermManagerDeps {
   onExit: (termId: string, e: { exitCode: number; signal?: number }) => void
   env?: NodeJS.ProcessEnv
   exists?: (p: string) => boolean
+  // 可注入,好让这个类在任何宿主上都能测(默认取真实平台)。第二期 daemon 也会用到:
+  // 决定起哪个 shell 的是【host 的平台】,不是客户端的。
+  platform?: NodeJS.Platform
   cap?: number
 }
 
@@ -29,7 +32,7 @@ export class TerminalManager {
     // Default to a REAL filesystem probe: resolveShell picks the first candidate that exists, so a
     // stub that always says yes would accept a shell that isn't installed (on Windows the pwsh 7
     // path is only present when PowerShell 7 was installed separately).
-    const { shell, args } = resolveShell(env, this.deps.exists ?? existsSync)
+    const { shell, args } = resolveShell(env, this.deps.exists ?? existsSync, this.deps.platform)
     const ptyEnv: NodeJS.ProcessEnv = { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor', FORGE_TERMINAL: '1' }
     const pty = this.deps.spawn(shell, args, { cwd: opts.cwd, env: ptyEnv, cols: opts.cols, rows: opts.rows })
     pty.onData(d => this.deps.onData(opts.termId, d))
