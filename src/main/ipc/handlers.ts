@@ -1,6 +1,6 @@
-import { dialog, app, shell } from 'electron'
 import { CH } from './channels'
 import { type InvokeCtx, type InvokeEventLike, type MethodTable } from './invokeCtx'
+import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { expandTilde } from '../config/paths'
@@ -84,7 +84,7 @@ import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
 import { pickInstaller } from '../update/installer'
 import { makeProxyFetch, makeContentFetch } from '../update/proxyFetch'
-import { writeFile, stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
+import { stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
 import { removeWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
@@ -124,7 +124,7 @@ export function uniqueAttachmentName(dir: string, name: string): string {
   return `${base}-${Date.now()}${ext}`
 }
 
-export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void): MethodTable {
+export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, caps: HostCapabilities, onSettings?: (s: Settings) => void): MethodTable {
   const table: MethodTable = {}
   /**
    * 原地替代 `ipcMain.handle`。既有 handler 写的是 `(_e, arg) => …`,这里把 InvokeCtx 包成一个
@@ -182,7 +182,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const UPDATE_REPO = 'flowForges/myFlowForge'
   const updateChecker = createUpdateChecker({
     repo: UPDATE_REPO,
-    currentVersion: () => app.getVersion(),
+    currentVersion: () => caps.version(),
     // proxy-THEN-direct: the update check must survive a down/misrouted/socks proxy (settings.termProxy).
     // makeProxyFetch had no direct fallback, so any proxy hiccup → throw → 永久「检查失败」even when GitHub
     // is directly reachable. makeContentFetch tries the proxy then falls back to a direct fetch.
@@ -193,17 +193,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   updateChecker.start()
 
-  on(CH.updateGet, () => ({ currentVersion: app.getVersion(), info: updateChecker.current() }))
+  on(CH.updateGet, () => ({ currentVersion: caps.version(), info: updateChecker.current() }))
   on(CH.updateCheck, () => { void updateChecker.check(true) })
   on(CH.updateStart, async () => {
     const info = updateChecker.current()
     if (!info) return
     const installer = pickInstaller({
       fetch: (url, init) => makeContentFetch(readSettings().termProxy)(url, init as any) as any,
-      openPath: shell.openPath,
-      showItemInFolder: shell.showItemInFolder,
+      openPath: caps.openPath,
+      showItemInFolder: caps.revealInFileManager,
       join,
-      tmpDir: app.getPath('temp'),
+      tmpDir: caps.tempDir(),
       // Stream to a .part file (no 340MB in-memory buffer) + resume from a partial download.
       partSize: async (p) => { try { return (await fsStat(p)).size } catch { return 0 } },
       openWriter: (p, append) => {
@@ -238,8 +238,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   on(CH.appIconOptions, () => resolveAppIconOptions({
     resourcesPath: process.resourcesPath,
-    appPath: app.getAppPath(),
-    isPackaged: app.isPackaged,
+    appPath: caps.appPath() ?? '',
+    isPackaged: caps.isPackaged(),
   }))
   on(CH.configListProjects, () => readProjects().projects)
   on(CH.configAddProject, (_e, input: { repoUrl: string; branch: string; alias?: string }) => upsertProject(input))
@@ -1173,8 +1173,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // persisted until the turn's terminal state).
   on(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId)))
   on(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
-    const r = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] })
-    return r.filePaths.map(p => ({ name: basename(p), path: p, size: statSync(p).size }))
+    const paths = await caps.pickPaths({ kind: 'file', multi: true })
+    return paths.map(p => ({ name: basename(p), path: p, size: statSync(p).size }))
   })
   // 大段粘贴转文件走这里(见 Composer.handlePaste)。盘满 ENOSPC、无权限 EPERM、只读工作树都会让
   // mkdirSync/writeFileSync 抛出 —— 不接住的话异常会穿过 ipcMain.handle 变成渲染层的 unhandled
@@ -1231,7 +1231,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.openFilePath, async (_e, a: { bases: string[]; href: string }) => {
     const r = resolveFileRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? ''))
     if (!r.ok) return { ok: false as const, error: r.reason }
-    const err = await shell.openPath(r.abs)
+    const err = await caps.openPath(r.abs)
     return err ? { ok: false as const, error: err } : { ok: true as const }
   })
   on(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
@@ -1291,12 +1291,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // ── End Plugin IPC ──────────────────────────────────────────────────────────
 
   on(CH.dialogPickDirectory, async (): Promise<string | null> => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-    return r.canceled ? null : (r.filePaths[0] ?? null)
+    const paths = await caps.pickPaths({ kind: 'directory', createDirectory: true })
+    return paths[0] ?? null
   })
   on(CH.dialogPickFile, async (): Promise<string | null> => {
-    const r = await dialog.showOpenDialog({ properties: ['openFile'] })
-    return r.canceled ? null : (r.filePaths[0] ?? null)
+    const paths = await caps.pickPaths({ kind: 'file' })
+    return paths[0] ?? null
   })
 
   // ── Session Import IPC ──────────────────────────────────────────────────────
@@ -1327,13 +1327,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // ── End Session Import IPC ──────────────────────────────────────────────────
 
   on(CH.petPickPack, async (_e, petId: string) => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return null
+    const [dir] = await caps.pickPaths({ kind: 'directory' })
+    if (!dir) return null
     // Persist each state image to disk under the pet's folder; return { images: { state: relPath } }
     // (no data URLs) plus the folder name so the pet gets a sensible default name (authoring nicety —
     // drop a folder of state-named images and it's ready). Only idle is required; missing states fall
     // back to idle at render time.
-    const dir = r.filePaths[0]
     const packed = readPetPack(dir)
     const images: Record<string, string> = {}
     for (const [state, dataUrl] of Object.entries(packed)) {
@@ -1345,12 +1344,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
 
   on(CH.petPickImage, async (_e, petId: string, state: string = 'idle') => {
-    const r = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['png', 'gif', 'svg', 'webp'] }],
-    })
-    if (r.canceled || !r.filePaths[0]) return null
-    const read = readPetImage(r.filePaths[0])
+    const [file] = await caps.pickPaths({ kind: 'file', filters: [{ name: '图片', extensions: ['png', 'gif', 'svg', 'webp'] }] })
+    if (!file) return null
+    const read = readPetImage(file)
     if ('error' in read) return { error: read.error }
     // Write to ~/.myFlowForge/pet-images/<petId>/<state>.<ext> and return the relative path only.
     const rel = writePetImageFromDataUrl(petId, state, read.dataUrl)
@@ -1364,23 +1360,23 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.codexPetImport, (_e, dir: string) => importCodexPetPack(dir))
   on(CH.codexPetList, () => discoverCodexPets())
   on(CH.codexPetPick, async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return null
-    return importCodexPetPack(r.filePaths[0])
+    const [dir] = await caps.pickPaths({ kind: 'directory' })
+    if (!dir) return null
+    return importCodexPetPack(dir)
   })
 
   // 成长宠物包:同样是「选一个目录 → 校验 → 拷进宠物图库 → 返回 CustomPet」,只是包里带的是
   // 每阶段一张 atlas(kind:"growth")。取消时返回 null,与 codexPetPick 一致 —— 用户主动取消不是错误,
   // 渲染层不该把它当成红字报错弹出来。
   on(CH.growthPetImport, async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择成长宠物包目录' })
-    if (r.canceled || !r.filePaths[0]) return null
+    const [dir] = await caps.pickPaths({ kind: 'directory', title: '选择成长宠物包目录' })
+    if (!dir) return null
     // importGrowthPetPack 只把「包本身不合格」变成 {ok:false},写盘的 I/O 异常照抛(ENOSPC 盘满、
     // EPERM 无权、EISDIR 目标名被目录占住 —— 最后这个在 growthPetImport.test.ts 里就是真实用例)。
     // 不在这里接住的话,异常会穿过 ipcMain.handle 变成渲染层的未处理 rejection:红字行不出现,
     // 用户看到的是「点了没反应」。转成与既有失败同形的 {ok:false,error},渲染层原路显示。
     try {
-      return importGrowthPetPack(r.filePaths[0])
+      return importGrowthPetPack(dir)
     } catch (e) {
       return { ok: false, error: `安装失败:${e instanceof Error ? e.message : String(e)}` }
     }
@@ -1391,12 +1387,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // tiny cap needed anymore — storeBackgroundFromPath guards against pathological files. After a
   // successful pick, GC any background file no longer referenced by settings (old image on replace).
   on(CH.appearancePickBgImage, async () => {
-    const r = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
-    })
-    if (r.canceled || !r.filePaths[0]) return null
-    const stored = storeBackgroundFromPath(r.filePaths[0])
+    const [file] = await caps.pickPaths({ kind: 'file', filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }] })
+    if (!file) return null
+    const stored = storeBackgroundFromPath(file)
     if ('error' in stored) return { error: stored.error }
     try {
       const a = readSettings().appearance
@@ -1547,9 +1540,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })
-  // 在 Finder / 资源管理器 / 文件管理器中打开该目录(跨平台:shell.openPath)。
+  // 在 Finder / 资源管理器 / 文件管理器中打开该目录。走宿主能力 —— 远程时「打开」这件事
+  // 只在客户端那台机器上才有意义,daemon 那台没人看着屏幕。
   on(CH.revealPath, async (_e, path: string) => {
-    const err = await shell.openPath(path)   // '' on success; non-empty error string otherwise
+    const err = await caps.openPath(path)   // '' on success; non-empty error string otherwise
     return err ? { ok: false as const, error: err } : { ok: true as const }
   })
   // 用系统默认浏览器打开一个 http(s) 链接(仅放行 http/https,拒绝其它协议以免被当作命令/文件执行)。
@@ -1557,7 +1551,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     try {
       const u = new URL(String(url))
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false as const, error: 'unsupported protocol' }
-      await shell.openExternal(u.toString())
+      await caps.openExternal(u.toString())
       return { ok: true as const }
     } catch (e) {
       return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
@@ -1566,9 +1560,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // ── 用外部软件打开(「打开位置」下拉) ─────────────────────────────────────────
   // Extract an app's real icon → dataURL for the dropdown (best-effort; falls back to a glyph).
-  // On macOS we read the bundle's own .icns first: app.getFileIcon returns a generic placeholder
-  // (an identical blank icon for every app) on some macOS builds. getFileIcon stays as the fallback
-  // for apps without a standalone .icns (Assets.car system apps) and for non-macOS platforms.
+  // On macOS we read the bundle's own .icns first: the host's getFileIcon returns a generic
+  // placeholder (an identical blank icon for every app) on some macOS builds. caps.fileIcon stays as
+  // the fallback for apps without a standalone .icns (Assets.car system apps) and for other platforms.
   const openerIcon = async (appPath: string): Promise<string | undefined> => {
     // macOS: read the bundle's own .icns first (see readMacAppIcon). Windows: getFileIcon extracts
     // the icon embedded in the .exe, which is the real per-app icon — no special case needed.
@@ -1576,8 +1570,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       const real = await readMacAppIcon(appPath)
       if (real) return real
     }
-    try { const img = await app.getFileIcon(appPath, { size: 'normal' }); return img.isEmpty() ? undefined : img.toDataURL() }
-    catch { return undefined }
+    return caps.fileIcon(appPath)
   }
   // Launch one command from buildOpenCommand. macOS routes through the `open` helper; Windows
   // launches the app's .exe directly (there is no `open` there) — the shape is identical either way.
@@ -1616,8 +1609,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
   on(CH.workspacesOpenDir, async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-    const dir = r.filePaths[0]
+    const [dir] = await caps.pickPaths({ kind: 'directory' })
     if (dir) {
       const wsJson = join(dir, '.forge', 'workspace.json')
       if (existsSync(wsJson)) {
@@ -1631,10 +1623,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   on(CH.configExportProjects, async () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const r = await dialog.showSaveDialog({ title: '导出项目配置', defaultPath: `myFlowForge-projects-${stamp}.json` })
-    if (r.canceled || !r.filePath) return { ok: false as const, canceled: true }
-    try { await writeFile(r.filePath, JSON.stringify(readProjects(), null, 2), 'utf8'); return { ok: true as const, path: r.filePath } }
-    catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
+    return caps.saveFile(`myFlowForge-projects-${stamp}.json`, JSON.stringify(readProjects(), null, 2), '导出项目配置')
   })
 
   // ── App debug log ───────────────────────────────────────────────────────────
@@ -1642,10 +1631,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.appLogClear, () => { clearAppLog(); return getAppLog() })
   on(CH.appLogExport, async () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const r = await dialog.showSaveDialog({ title: '导出调试日志', defaultPath: `myFlowForge-debug-${stamp}.log` })
-    if (r.canceled || !r.filePath) return { ok: false as const, canceled: true }
-    try { await writeFile(r.filePath, formatAppLog(), 'utf8'); return { ok: true as const, path: r.filePath } }
-    catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
+    return caps.saveFile(`myFlowForge-debug-${stamp}.log`, formatAppLog(), '导出调试日志')
   })
 
   // Memory management (记忆面板): read/write/clear the three tiers directly. Decoupled from the

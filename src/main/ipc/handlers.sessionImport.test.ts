@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
+import { fakeHost } from '../host/fakeHost'
 import { tableCalls } from './testTable'
 
 // registerIpc 现在返回方法表,不再往 ipcMain 上挂。tableCalls 把它摊成旧 mock.calls 的形状,
@@ -26,14 +27,14 @@ describe('session import IPC', () => {
   beforeEach(() => { imported.length = 0; calls = [] })
   it('scan returns grouped result; unmatched cwd → own group', async () => {
     const { registerIpc } = await import('./handlers')
-    calls = tableCalls(registerIpc(() => {}, {}))
+    calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const res = await invoke(CH.sessionImportScan)
     expect(res.groups[0].wsPath).toBe('/other')
     expect(res.groups[0].matched).toBe(false)
   })
   it('run upserts + registers lightweight ws for unmatched cwd', async () => {
     const { registerIpc } = await import('./handlers')
-    calls = tableCalls(registerIpc(() => {}, {}))
+    calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const session = { source: 'claude', externalId: 'a', cwd: '/other', title: 't', startedAt: 1, lastTs: 1, messageCount: 2, filePaths: ['/f'], hasBody: true }
     await invoke(CH.sessionImportRun, [session])
     expect(imported).toEqual(['/other'])
@@ -41,14 +42,14 @@ describe('session import IPC', () => {
   it('run broadcasts workspacesChanged so the sidebar refreshes live', async () => {
     const { registerIpc } = await import('./handlers')
     const broadcast = vi.fn()
-    calls = tableCalls(registerIpc(broadcast, {}))
+    calls = tableCalls(registerIpc(broadcast, {}, fakeHost()))
     const session = { source: 'claude', externalId: 'a', cwd: '/other', title: 't', startedAt: 1, lastTs: 1, messageCount: 2, filePaths: ['/f'], hasBody: true }
     await invoke(CH.sessionImportRun, [session])
     expect(broadcast).toHaveBeenCalledWith(CH.workspacesChanged, {})
   })
   it('read dispatches to adapter', async () => {
     const { registerIpc } = await import('./handlers')
-    calls = tableCalls(registerIpc(() => {}, {}))
+    calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const msgs = await invoke(CH.sessionImportRead, { source: 'claude', filePaths: ['/f'] })
     expect(msgs[0].text).toBe('hi')
   })

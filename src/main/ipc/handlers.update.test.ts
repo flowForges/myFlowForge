@@ -14,6 +14,7 @@ vi.mock('../update/githubSource', () => ({
 
 import { registerIpc } from './handlers'
 import { CH } from './channels'
+import { fakeHost } from '../host/fakeHost'
 import { tableCalls } from './testTable'
 
 // registerIpc 不再往 ipcMain 上挂,而是返回方法表;这里摊平后填进原来的 handlers 表,
@@ -27,14 +28,14 @@ beforeEach(() => { for (const k of Object.keys(handlers)) delete handlers[k] })
 
 describe('update IPC', () => {
   it('update:get returns current version and (initially) no info', async () => {
-    install(() => {}, {})
+    install(() => {}, {}, fakeHost({ version: () => '1.0.0' }))
     const res = await handlers[CH.updateGet]()
     expect(res.currentVersion).toBe('1.0.0')
     expect(res.info).toBeNull()
   })
   it('update:check broadcasts update:available after a manual check', async () => {
     const broadcast = vi.fn()
-    install(broadcast, {})
+    install(broadcast, {}, fakeHost({ version: () => '1.0.0' }))
     await handlers[CH.updateCheck]()
     // check 是异步触发的，await 一个微任务循环
     await new Promise(r => setTimeout(r, 0))

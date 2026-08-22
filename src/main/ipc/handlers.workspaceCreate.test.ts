@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
+import { fakeHost } from '../host/fakeHost'
 import { tableCalls } from './testTable'
 
 // Focused routing test for CH.workspaceCreate: always routes through runWorkspaceSetup (observable
@@ -47,7 +48,7 @@ const BASE_OPTS = {
 
 async function invoke(channel: string, broadcast: (ch: string, p: unknown) => void, providers: any, ...args: unknown[]) {
   const { registerIpc } = await import('./handlers')
-  const calls = tableCalls(registerIpc(broadcast, providers))
+  const calls = tableCalls(registerIpc(broadcast, providers, fakeHost()))
   const call = calls.find((c: any[]) => c[0] === channel)
   if (!call) throw new Error(`no handler for channel: ${channel}`)
   return call[1]({}, ...args)

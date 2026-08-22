@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
+import { fakeHost } from '../host/fakeHost'
 import { tableCalls } from './testTable'
 
 // 权限档在【运行中】切换的即时兑现(2026-08-20)。
@@ -83,7 +84,7 @@ async function startTurn(agent = 'claude', requireConfirm = true) {
   sendTurnMock.mockReset()
   const { registerIpc } = await import('./handlers')
   const sent: [string, any][] = []
-  const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}))
+  const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}, fakeHost()))
   const call = (ch: string) => {
     const c = calls.find((x: any[]) => x[0] === ch)
     if (!c) throw new Error(`No handler for channel: ${ch}`)
@@ -243,7 +244,7 @@ describe('运行中改档:本轮不生效时要说一声', () => {
     vi.resetModules()
     const { registerIpc } = await import('./handlers')
     const sent: [string, any][] = []
-    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}))
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}, fakeHost()))
     const h = calls.find((x: any[]) => x[0] === CH.sessionSetPermission)![1]
     await h({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
     expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)

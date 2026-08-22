@@ -10,6 +10,7 @@ import { relocatePetToRegion, PET_EXPANDED, PET_BUBBLE, petCollapsedSize, petPop
 import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
 import { createBroadcastHub } from './ipc/broadcastHub'
+import { createElectronHost } from './host/electronHost'
 import { registerIpc } from './ipc/handlers'
 import { killAllAgentTrees } from './agents/procGroup'
 import { botBridge } from './bot/botBridge'
@@ -635,7 +636,7 @@ app.whenReady().then(() => {
   }
   // 唯一一处把方法表接到 Electron 上的地方。第二期 B 的 WS 网关会遍历**同一张表** ——
   // 方法只有一份,所以不存在「本机一条路径、远程另一条路径」的漂移。
-  const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings)
+  const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), createElectronHost(), onSettings)
   for (const [channel, fn] of Object.entries(methodTable)) {
     ipcMain.handle(channel, (e, ...args) => fn({
       // ctx.emit = 「回给发起这次调用的那个窗口」,不是广播。窗口可能在异步 handler 跑到一半时
