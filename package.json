@@ -54,6 +54,7 @@
     "react-dom": "^19.2.7",
     "undici": "^7.27.2",
     "vite": "^7.3.5",
+    "ws": "^8.21.3",
     "zod": "^4.4.3"
   },
   "comment:overrides": "Force node-gyp 10.x — electron-builder→@electron/rebuild pulls node-gyp 9.x, which fails on Python 3.12+ (distutils removed). 10.x supports Python 3.12/3.13 so `npm run dist` rebuilds node-pty on any machine's Python.",
@@ -66,6 +67,7 @@
     "@types/node": "^25.9.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.1.4",
     "electron": "^42.4.0",
     "electron-builder": "^25.1.8",
