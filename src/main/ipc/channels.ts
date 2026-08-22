@@ -1,4 +1,15 @@
 export const CH = {
+  // ── 多主机(第二期 B)。全部是**客户端自己的**事:这台设备认识哪些机器、现在连着谁。
+  //    所以它们注册在 index.ts 而不是方法表里,天然不会被路由到远程。
+  hostsList: 'hosts:list',
+  hostsUpsert: 'hosts:upsert',
+  hostsRemove: 'hosts:remove',
+  hostsConnect: 'hosts:connect',
+  hostsDisconnect: 'hosts:disconnect',
+  hostsStatus: 'hosts:status',
+  hostsExport: 'hosts:export',
+  hostsImport: 'hosts:import',
+  hostsStatusEvent: 'hosts:status-event',
   configGetSettings: 'config:get-settings',
   configSetSettings: 'config:set-settings',
   configListProjects: 'config:list-projects',

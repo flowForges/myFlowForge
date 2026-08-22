@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { CH } from '../main/ipc/channels'
 import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
+import type { HostInput, HostStatusView, RemoteHostView } from '@shared/remote/hostView'
 
 const api = {
   // Which OS this window is drawn on. A plain constant, not an IPC call: the renderer needs it during
@@ -317,6 +318,24 @@ const api = {
   deleteWorkspace: (path: string) => ipcRenderer.invoke(CH.workspaceDelete, path),
   removeWorkspaceFromList: (path: string) => ipcRenderer.invoke(CH.workspaceRemove, path),
   revealPath: (path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(CH.revealPath, path),
+
+  // ── 多主机(第二期 B)。★注意这里没有第二套传输:渲染层永远走 IPC 找主进程,
+  //    「这一刀由本机接还是转发给远程」是主进程里路由器的判断,preload 一行都不用改。
+  hostsList: (): Promise<RemoteHostView[]> => ipcRenderer.invoke(CH.hostsList),
+  hostsUpsert: (h: HostInput): Promise<RemoteHostView[]> => ipcRenderer.invoke(CH.hostsUpsert, h),
+  hostsRemove: (id: string): Promise<RemoteHostView[]> => ipcRenderer.invoke(CH.hostsRemove, id),
+  hostsConnect: (id: string | null): Promise<HostStatusView> => ipcRenderer.invoke(CH.hostsConnect, id),
+  hostsDisconnect: (): Promise<HostStatusView> => ipcRenderer.invoke(CH.hostsDisconnect),
+  hostsStatus: (): Promise<HostStatusView> => ipcRenderer.invoke(CH.hostsStatus),
+  hostsExport: (includeTokens: boolean): Promise<string> => ipcRenderer.invoke(CH.hostsExport, includeTokens),
+  hostsImport: (text: string): Promise<{ ok: true; added: number } | { ok: false; error: string }> => ipcRenderer.invoke(CH.hostsImport, text),
+  onHostStatus: (cb: (s: HostStatusView) => void) => {
+    const listener = (_: unknown, s: HostStatusView) => cb(s)
+    ipcRenderer.on(CH.hostsStatusEvent, listener)
+    // 花括号包住:removeListener 会返回 ipcRenderer 本身,直接返回它的话
+    // React 的 useEffect 会把它当成一个「不是清理函数」的返回值而报类型错。
+    return () => { ipcRenderer.removeListener(CH.hostsStatusEvent, listener) }
+  },
   openExternal: (url: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(CH.openExternal, url),
   detectOpeners: (refresh?: boolean): Promise<import('@shared/openers').DetectedOpener[]> => ipcRenderer.invoke(CH.openersDetect, refresh),
   openWith: (arg: { openerId: string; folder: string; file?: string }): Promise<{ ok: boolean; error?: string; removedId?: string }> => ipcRenderer.invoke(CH.openersOpen, arg),

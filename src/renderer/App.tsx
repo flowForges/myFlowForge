@@ -38,6 +38,8 @@ import { NotificationsPane } from './settings/NotificationsPane'
 import { AppIconPane } from './settings/AppIconPane'
 import { TermProxyPane } from './settings/TermProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
+import { HostsPane } from './settings/HostsPane'
+import { RemoteBar } from './components/RemoteBar'
 import { baseName } from '@shared/pathName'
 import { WorkflowPane } from './settings/WorkflowPane'
 import { CustomStagesPane } from './settings/CustomStagesPane'
@@ -603,6 +605,8 @@ export function App() {
       {/* 主题皮肤氛围层:与 .app-bg-layer 同层次(--bg 之上、内容之下),仅在 data-skin 激活时由 skins.css
           显示对应 motif。纯装饰、不吃事件。 */}
       <div className="skin-motif" aria-hidden="true" />
+      {/* 只在连着远程主机时出现的状态条。本机状态下它返回 null,界面与以前完全一致。 */}
+      <RemoteBar onOpenHosts={() => { setSettingsPane('hosts'); setSettingsOpen(true) }} />
       <Titlebar
         maximized={maximized}
         collapsed={collapsed}
@@ -842,6 +846,7 @@ export function App() {
           case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} onEditAlias={updateProjectAlias} />
+          case 'hosts': return <HostsPane />
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
           case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} customStages={customStages} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} onUpsertCustomStage={upsertCustomStage} />

@@ -134,6 +134,18 @@ const NAV: NavEntry[] = [
     ),
   },
   {
+    key: 'hosts',
+    label: '主机',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3" y="4" width="18" height="7" rx="1.6" />
+        <rect x="3" y="13" width="18" height="7" rx="1.6" />
+        <circle cx="7" cy="7.5" r="1" fill="currentColor" stroke="none" />
+        <circle cx="7" cy="16.5" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    ),
+  },
+  {
     key: 'providers',
     label: '编码代理',
     icon: (

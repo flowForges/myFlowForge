@@ -11,6 +11,9 @@ import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
 import { createBroadcastHub } from './ipc/broadcastHub'
 import { createElectronHost } from './host/electronHost'
+import { createHostRouter } from './remote/router'
+import { openSshTunnel } from './remote/sshTunnel'
+import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHosts, type RemoteHost } from './remote/hostStore'
 import { registerIpc } from './ipc/handlers'
 import { killAllAgentTrees } from './agents/procGroup'
 import { botBridge } from './bot/botBridge'
@@ -195,7 +198,11 @@ app.whenReady().then(() => {
   // 绕过总线直连窗口,settingsChanged / shortcutsStatus / menuAction / appLogEvent / growthSignal
   // 这五类事件就永远到不了远程客户端,而且是静默到不了。
   const hub = createBroadcastHub()
-  hub.addSink(registry.broadcast)
+  // 先挂一路直通,让**路由器就位之前**发生的广播(早期日志、快捷键状态)照样能到界面;
+  // 路由器建好后会把这一路换掉 —— 见下面的 detachDirectSink。
+  // ★不能两路都挂着:那样每个事件会送到界面两遍,流式输出直接重影。
+  const detachDirectSink = hub.addSink(registry.broadcast)
+
   // Live-stream debug log entries to any open renderer (the Settings · 调试日志 pane).
   setAppLogEventSink((e) => hub.broadcast(CH.appLogEvent, e))
   logInfo('app', '协议与会话准备完毕,开始建主窗口')
@@ -634,16 +641,58 @@ app.whenReady().then(() => {
     if (channel === CH.chatEvent) notifyChatDone(payload)
     botBridge.observe(channel, payload)   // mirror gate/ask/done/run2 events to the phone
   }
-  // 唯一一处把方法表接到 Electron 上的地方。第二期 B 的 WS 网关会遍历**同一张表** ——
+  // 唯一一处把方法表接到 Electron 上的地方。daemon 侧的 WS 网关遍历的是**同一张表** ——
   // 方法只有一份,所以不存在「本机一条路径、远程另一条路径」的漂移。
   const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), createElectronHost(), onSettings)
-  for (const [channel, fn] of Object.entries(methodTable)) {
-    ipcMain.handle(channel, (e, ...args) => fn({
+
+  // 路由器坐在方法表前面:每一刀由本机接还是转发给远程 host,由它决定(第二期 B)。
+  // ★渲染层和 preload 完全不知道有这回事 —— 它们永远只跟主进程说话。
+  const router = createHostRouter({
+    localTable: methodTable,
+    toWindows: registry.broadcast,
+    clientVersion: app.getVersion(),
+    onStatus: (s) => registry.broadcast(CH.hostsStatusEvent, s),
+    onLog: (m) => logInfo('remote', m),
+    resolveUrl: async (h) => {
+      if (h.kind !== 'ssh') return { url: h.address }
+      const { host, port } = { host: '127.0.0.1', port: Number(h.address) || 6767 }
+      const t = await openSshTunnel({ target: h.sshTarget, remoteHost: host, remotePort: port, onLog: (m) => logInfo('remote', m) })
+      return { url: `ws://127.0.0.1:${t.localPort}`, cleanup: () => t.close() }
+    },
+  })
+  // ★本机核心的广播改从路由器过一道:连着远程时,本机 agent 的事件不许漏进界面(决策 2)。
+  // 先摘掉启动期那路直通,否则每个事件会走两遍。
+  detachDirectSink()
+  hub.addSink(router.localEvent)
+
+  for (const channel of Object.keys(methodTable)) {
+    ipcMain.handle(channel, (e, ...args) => router.invoke(channel, {
       // ctx.emit = 「回给发起这次调用的那个窗口」,不是广播。窗口可能在异步 handler 跑到一半时
       // 被关掉,send 会抛;吞掉即可 —— 原先那两处 e.sender.send 本来就各自套着 try/catch。
       emit: (c, p) => { try { e.sender.send(c, p) } catch { /* window closed */ } },
-    }, ...args))
+    }, args))
   }
+
+  // ── 多主机管理。这些是**客户端自己的**事(这台设备认识哪些机器、现在连着谁),
+  //    所以注册在这儿而不是方法表里 —— 天然不会被路由到远程。
+  ipcMain.handle(CH.hostsList, () => readHosts().hosts)
+  ipcMain.handle(CH.hostsUpsert, (_e, h: Parameters<typeof upsertHost>[0]) => { upsertHost(h); return readHosts().hosts })
+  ipcMain.handle(CH.hostsRemove, async (_e, id: string) => {
+    if (router.current()?.id === id) await router.disconnect()
+    return removeHost(id).hosts
+  })
+  ipcMain.handle(CH.hostsConnect, async (_e, id: string | null) => {
+    if (!id) { await router.disconnect(); return router.status() }
+    const h = readHosts().hosts.find((x: RemoteHost) => x.id === id)
+    if (!h) throw new Error('没有这台主机')
+    await router.connect(h)
+    markConnected(id, Date.now())
+    return router.status()
+  })
+  ipcMain.handle(CH.hostsDisconnect, async () => { await router.disconnect(); return router.status() })
+  ipcMain.handle(CH.hostsStatus, () => router.status())
+  ipcMain.handle(CH.hostsExport, (_e, includeTokens: boolean) => exportHosts({ includeTokens: !!includeTokens }))
+  ipcMain.handle(CH.hostsImport, (_e, text: string) => importHosts(String(text ?? '')))
 
   // 成长宠物的今日 token 基线。全量扫盘只在这里跑这一次,之后靠 chatService 每轮累加。
   //
