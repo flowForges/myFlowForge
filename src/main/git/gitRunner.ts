@@ -18,6 +18,12 @@ export function buildGitEnv(proxy: string): NodeJS.ProcessEnv {
     const existingNoProxy = env.NO_PROXY || env.no_proxy || ''
     const noProxy = existingNoProxy ? `${existingNoProxy},localhost,127.0.0.1` : 'localhost,127.0.0.1'
     env.NO_PROXY = noProxy; env.no_proxy = noProxy
+  } else {
+    // 「留空 = 直连」必须是字面的,和 agents/env.ts 的 buildAgentEnv 保持同一套语义。app 继承整个
+    // 启动环境,上面很可能已经带着一个用户在「终端代理」里看不见、也清不掉的 HTTP(S)_PROXY。不剥掉的话
+    // 就会出现:清空设置后 agent 确实直连了,而 git clone/fetch 仍在走那个看不见的代理 —— 同一个坑
+    // 只补了一半,而且 git 的失败(超时/证书错)比 agent 的 403 更难联想到代理头上。
+    for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[k]
   }
   return env
 }
