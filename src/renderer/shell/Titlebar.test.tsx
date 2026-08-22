@@ -116,3 +116,78 @@ describe('Titlebar – window controls', () => {
     })
   })
 })
+
+// ── 导航分组的位置 ──────────────────────────────────────────────────────────────────────────────
+// mac 把左上角让给了红绿灯,所以所有东西都往右排。Windows 释放了左上角,如果布局照抄 mac,就会
+// 左边空一块、右边 5 组控件加 3 个系统键挤成一团(齿轮紧挨最小化键,很容易点错)。
+// 所以 Windows 上「首页/工作区」跟着面包屑走 —— 它们都是在回答"我在哪",本来就是一类。
+describe('Titlebar – 导航分组在哪一侧', () => {
+  const order = (container: HTMLElement) => {
+    const bar = container.querySelector('.titlebar')!
+    return [...bar.children].map(el => el.className.split(' ')[0])
+  }
+
+  it('macOS:导航在弹簧【之后】(靠右,和动作按钮一起)', () => {
+    withPlatform('darwin', () => {
+      const { container } = render(<Titlebar {...base} view="ws" />)
+      const o = order(container)
+      expect(o.indexOf('tb-seg')).toBeGreaterThan(o.indexOf('tb-spacer'))
+    })
+  })
+
+  it('★ Windows:导航在弹簧【之前】(靠左,紧跟面包屑)', () => {
+    withPlatform('win32', () => {
+      const { container } = render(<Titlebar {...base} view="ws" />)
+      const o = order(container)
+      expect(o.indexOf('tb-seg')).toBeGreaterThan(-1)
+      expect(o.indexOf('tb-seg')).toBeLessThan(o.indexOf('tb-spacer'))
+      // 且紧跟在标题之后,中间不夹别的
+      expect(o.indexOf('tb-seg')).toBe(o.indexOf('tb-title') + 1)
+    })
+  })
+
+  it('★ Windows:设置是最左边第一个', () => {
+    withPlatform('win32', () => {
+      const { container } = render(<Titlebar {...base} view="ws" />)
+      const first = container.querySelector('.titlebar')!.firstElementChild!
+      expect(first.getAttribute('aria-label')).toBe('设置')
+    })
+  })
+
+  // 折叠按钮要贴住它控制的那一侧,否则「点了半天不知道折的是哪个面板」。
+  it('★ Windows:侧栏折叠贴左(仅次于设置)、面板折叠贴右(系统键前最后一个)', () => {
+    withPlatform('win32', () => {
+      const { container } = render(<Titlebar {...base} view="ws" />)
+      const kids = [...container.querySelector('.titlebar')!.children]
+      expect(kids[1].getAttribute('title')).toBe('折叠侧栏')
+      expect(kids[kids.length - 2].getAttribute('title')).toBe('折叠面板')
+      expect(kids[kids.length - 1].className).toContain('win-controls')
+    })
+  })
+
+  it('macOS 顺序不变:红绿灯最左,设置最右', () => {
+    withPlatform('darwin', () => {
+      const { container } = render(<Titlebar {...base} view="ws" />)
+      const kids = [...container.querySelector('.titlebar')!.children]
+      expect(kids[0].className).toContain('traffic')
+      expect(kids[kids.length - 1].getAttribute('aria-label')).toBe('设置')
+    })
+  })
+
+  it('两个平台都只渲染一份导航,不会重复', () => {
+    for (const p of ['darwin', 'win32']) {
+      withPlatform(p, () => {
+        const { container } = render(<Titlebar {...base} view="ws" />)
+        expect(container.querySelectorAll('.tb-seg')).toHaveLength(1)
+      })
+    }
+  })
+
+  it('Windows:系统三键仍在最末尾,动作按钮不会跑到它后面', () => {
+    withPlatform('win32', () => {
+      const { container } = render(<Titlebar {...base} view="ws" />)
+      const o = order(container)
+      expect(o[o.length - 1]).toBe('win-controls')
+    })
+  })
+})
