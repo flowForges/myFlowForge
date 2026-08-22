@@ -624,7 +624,16 @@ app.whenReady().then(() => {
     if (channel === CH.chatEvent) notifyChatDone(payload)
     botBridge.observe(channel, payload)   // mirror gate/ask/done/run2 events to the phone
   }
-  registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings)
+  // 唯一一处把方法表接到 Electron 上的地方。第二期 B 的 WS 网关会遍历**同一张表** ——
+  // 方法只有一份,所以不存在「本机一条路径、远程另一条路径」的漂移。
+  const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings)
+  for (const [channel, fn] of Object.entries(methodTable)) {
+    ipcMain.handle(channel, (e, ...args) => fn({
+      // ctx.emit = 「回给发起这次调用的那个窗口」,不是广播。窗口可能在异步 handler 跑到一半时
+      // 被关掉,send 会抛;吞掉即可 —— 原先那两处 e.sender.send 本来就各自套着 try/catch。
+      emit: (c, p) => { try { e.sender.send(c, p) } catch { /* window closed */ } },
+    }, ...args))
+  }
 
   // 成长宠物的今日 token 基线。全量扫盘只在这里跑这一次,之后靠 chatService 每轮累加。
   //

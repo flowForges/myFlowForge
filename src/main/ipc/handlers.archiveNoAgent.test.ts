@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
+import { tableCalls } from './testTable'
 
 // 归档 = 只读封存。它自己绝不能起 agent —— 原先归档会在被归档工作区的 cwd 里跑一个一次性 CLI 去生成
 // 那行归档描述,于是外部的 agent 监控插件看见「已归档的工作区里有 claude 在执行」并推了通知(而且那个
@@ -58,11 +59,10 @@ beforeEach(() => {
 describe('CH.workspaceArchive', () => {
   it('不起任何 agent(既不 detect 也不 chat)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as unknown as { ipcMain: { handle: { mock: { calls: unknown[][] } } } }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const providers = { claude: { id: 'claude', displayName: 'Claude', detect, chat } } as any
-    registerIpc(() => {}, providers)
-    const call = ipcMain.handle.mock.calls.find(c => c[0] === CH.workspaceArchive) as [string, (e: unknown, p: string) => unknown]
+    const calls = tableCalls(registerIpc(() => {}, providers))
+    const call = calls.find(c => c[0] === CH.workspaceArchive) as [string, (e: unknown, p: string) => unknown]
     call[1]({}, '/ws/archived')
     await new Promise(r => setTimeout(r, 0))   // 让 fire-and-forget 的后台链路有机会跑起来
 

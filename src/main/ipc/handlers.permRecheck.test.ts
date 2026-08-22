@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
+import { tableCalls } from './testTable'
 
 // 权限档在【运行中】切换的即时兑现(2026-08-20)。
 //
@@ -81,12 +82,10 @@ async function startTurn(agent = 'claude', requireConfirm = true) {
   vi.resetModules()
   sendTurnMock.mockReset()
   const { registerIpc } = await import('./handlers')
-  const { ipcMain } = await import('electron') as any
-  ;(ipcMain.handle as any).mockClear()
   const sent: [string, any][] = []
-  registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {})
+  const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}))
   const call = (ch: string) => {
-    const c = (ipcMain.handle as any).mock.calls.find((x: any[]) => x[0] === ch)
+    const c = calls.find((x: any[]) => x[0] === ch)
     if (!c) throw new Error(`No handler for channel: ${ch}`)
     return c[1]
   }
@@ -243,11 +242,9 @@ describe('运行中改档:本轮不生效时要说一声', () => {
   it('没有轮次在跑的时候切档 → 不提示(本来就是下一轮的事,不用啰嗦)', async () => {
     vi.resetModules()
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    ;(ipcMain.handle as any).mockClear()
     const sent: [string, any][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {})
-    const h = (ipcMain.handle as any).mock.calls.find((x: any[]) => x[0] === CH.sessionSetPermission)[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}))
+    const h = calls.find((x: any[]) => x[0] === CH.sessionSetPermission)![1]
     await h({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
     expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)
   })

@@ -1,5 +1,6 @@
-import { ipcMain, dialog, app, shell } from 'electron'
+import { dialog, app, shell } from 'electron'
 import { CH } from './channels'
+import { type InvokeCtx, type InvokeEventLike, type MethodTable } from './invokeCtx'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { expandTilde } from '../config/paths'
@@ -123,7 +124,19 @@ export function uniqueAttachmentName(dir: string, name: string): string {
   return `${base}-${Date.now()}${ext}`
 }
 
-export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void) {
+export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void): MethodTable {
+  const table: MethodTable = {}
+  /**
+   * 原地替代 `ipcMain.handle`。既有 handler 写的是 `(_e, arg) => …`,这里把 InvokeCtx 包成一个
+   * 只有 `sender.send` 的假 event 喂回去 —— 于是 159 个 handler 的签名一行不用改。
+   *
+   * 重复注册同一个 channel 直接抛:`ipcMain.handle` 遇到重复也是抛,保持一致,
+   * 而且这正是搬运期最容易犯的错(复制一段忘了改 channel 常量)。
+   */
+  const on = (ch: string, fn: (e: InvokeEventLike, ...args: any[]) => unknown) => {
+    if (table[ch]) throw new Error(`duplicate ipc channel: ${ch}`)
+    table[ch] = (ctx: InvokeCtx, ...args: unknown[]) => fn({ sender: { send: ctx.emit } }, ...args)
+  }
   // Startup heal: the legacy in-memory orchestrator is gone; on a fresh launch nothing is running — any
   // session still stuck in mode:'workflow' (from a completed run before the reset fix, or an app crash
   // mid-run) is stale. Reset them to chat so their sidebar dot doesn't imply a live agent.
@@ -162,7 +175,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     onRunDone: (w) => chatQueue.runDone(w),
   })
   const run2 = registerRun2({
-    manager: run2Manager, onInvoke: (ch, h) => ipcMain.handle(ch, h),
+    manager: run2Manager, onInvoke: (ch, h) => on(ch, h as never),
     readWorkspace, readWorkflows: () => readWorkflows().workflows, readCustomStages: () => readCustomStages().stages,
   })
 
@@ -180,9 +193,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   updateChecker.start()
 
-  ipcMain.handle(CH.updateGet, () => ({ currentVersion: app.getVersion(), info: updateChecker.current() }))
-  ipcMain.handle(CH.updateCheck, () => { void updateChecker.check(true) })
-  ipcMain.handle(CH.updateStart, async () => {
+  on(CH.updateGet, () => ({ currentVersion: app.getVersion(), info: updateChecker.current() }))
+  on(CH.updateCheck, () => { void updateChecker.check(true) })
+  on(CH.updateStart, async () => {
     const info = updateChecker.current()
     if (!info) return
     const installer = pickInstaller({
@@ -212,32 +225,32 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
 
   // #13: the user answered a setup hook's confirm/input card (SetupProgress) — unblock the hook.
-  ipcMain.handle(CH.workspaceSetupResolve, (_e, a: { id: string; answer: { decision?: 'allow' | 'deny'; value?: string } }) => {
+  on(CH.workspaceSetupResolve, (_e, a: { id: string; answer: { decision?: 'allow' | 'deny'; value?: string } }) => {
     resolveSetupInteraction(a.id, a.answer)
   })
-  ipcMain.handle(CH.configGetSettings, () => readSettings())
-  ipcMain.handle(CH.configSetSettings, (_e, settings) => {
+  on(CH.configGetSettings, () => readSettings())
+  on(CH.configSetSettings, (_e, settings) => {
     writeSettings(settings)
     const s = readSettings()
     broadcast(CH.settingsChanged, s)
     onSettings?.(s)
     return s
   })
-  ipcMain.handle(CH.appIconOptions, () => resolveAppIconOptions({
+  on(CH.appIconOptions, () => resolveAppIconOptions({
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath(),
     isPackaged: app.isPackaged,
   }))
-  ipcMain.handle(CH.configListProjects, () => readProjects().projects)
-  ipcMain.handle(CH.configAddProject, (_e, input: { repoUrl: string; branch: string; alias?: string }) => upsertProject(input))
-  ipcMain.handle(CH.configDeleteProject, (_e, id: string) => {
+  on(CH.configListProjects, () => readProjects().projects)
+  on(CH.configAddProject, (_e, input: { repoUrl: string; branch: string; alias?: string }) => upsertProject(input))
+  on(CH.configDeleteProject, (_e, id: string) => {
     writeProjects({ projects: readProjects().projects.filter(p => p.id !== id) })
     return readProjects().projects
   })
-  ipcMain.handle(CH.configUpdateProjectBranch, (_e, input: { id: string; branch: string }) => setProjectDefaultBranch(input.id, input.branch))
-  ipcMain.handle(CH.configUpdateProjectAlias, (_e, input: { id: string; alias: string }) => setProjectAlias(input.id, input.alias))
-  ipcMain.handle(CH.configListWorkflows, () => readWorkflows().workflows)
-  ipcMain.handle(CH.configAddWorkflow, (_e, input: { name: string; stages: import('../config/buildWorkflow').StageSeed[] }) => {
+  on(CH.configUpdateProjectBranch, (_e, input: { id: string; branch: string }) => setProjectDefaultBranch(input.id, input.branch))
+  on(CH.configUpdateProjectAlias, (_e, input: { id: string; alias: string }) => setProjectAlias(input.id, input.alias))
+  on(CH.configListWorkflows, () => readWorkflows().workflows)
+  on(CH.configAddWorkflow, (_e, input: { name: string; stages: import('../config/buildWorkflow').StageSeed[] }) => {
     const list = readWorkflows().workflows
     // Enforce unique display names (the UI blocks this too; this is the safety net). Duplicate =
     // no-op returning the current list, so a bypassed UI can't silently create a confusing twin.
@@ -246,11 +259,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     writeWorkflows({ workflows: [...list, wf] })
     return readWorkflows().workflows
   })
-  ipcMain.handle(CH.configDeleteWorkflow, (_e, id: string) => {
+  on(CH.configDeleteWorkflow, (_e, id: string) => {
     writeWorkflows({ workflows: readWorkflows().workflows.filter(w => w.id !== id) })
     return readWorkflows().workflows
   })
-  ipcMain.handle(CH.configUpdateWorkflow, (_e, input: { id: string; plugins?: import('../config/schema').Plugin[]; stagePrompts?: Record<string, string>; stages?: import('../config/schema').Workflow['stages'] }) => {
+  on(CH.configUpdateWorkflow, (_e, input: { id: string; plugins?: import('../config/schema').Plugin[]; stagePrompts?: Record<string, string>; stages?: import('../config/schema').Workflow['stages'] }) => {
     const list = readWorkflows().workflows
     writeWorkflows({ workflows: list.map(w => w.id === input.id ? {
       ...w,
@@ -263,29 +276,29 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return readWorkflows().workflows
   })
   // --- Reusable hook library (slot-agnostic; snapshot-copied into workspaces at create time) ---
-  ipcMain.handle(CH.hookLibraryList, () => readHookLibrary().hooks)
-  ipcMain.handle(CH.hookLibrarySave, (_e, hook: import('../config/schema').LibraryHook) => {
+  on(CH.hookLibraryList, () => readHookLibrary().hooks)
+  on(CH.hookLibrarySave, (_e, hook: import('../config/schema').LibraryHook) => {
     const list = readHookLibrary().hooks
     const next = list.some(h => h.id === hook.id) ? list.map(h => h.id === hook.id ? hook : h) : [...list, hook]
     writeHookLibrary({ hooks: next })
     return readHookLibrary().hooks
   })
-  ipcMain.handle(CH.hookLibraryDelete, (_e, id: string) => {
+  on(CH.hookLibraryDelete, (_e, id: string) => {
     writeHookLibrary({ hooks: readHookLibrary().hooks.filter(h => h.id !== id) })
     return readHookLibrary().hooks
   })
-  ipcMain.handle(CH.hookLibrarySetAll, (_e, hooks: import('../config/schema').LibraryHook[]) => {
+  on(CH.hookLibrarySetAll, (_e, hooks: import('../config/schema').LibraryHook[]) => {
     writeHookLibrary({ hooks })
     return readHookLibrary().hooks
   })
   // --- Global custom-stage library (定义一次,被多个工作流模版按 libId 引用,编辑一次处处生效) ---
-  ipcMain.handle(CH.customStagesList, () => readCustomStages().stages)
-  ipcMain.handle(CH.customStagesUpsert, (_e, def: Partial<import('../config/schema').CustomStage> & { name: string }) => {
+  on(CH.customStagesList, () => readCustomStages().stages)
+  on(CH.customStagesUpsert, (_e, def: Partial<import('../config/schema').CustomStage> & { name: string }) => {
     const list = upsertCustomStage(def)
     broadcast(CH.customStagesChanged, list)
     return list
   })
-  ipcMain.handle(CH.customStagesDelete, (_e, id: string) => {
+  on(CH.customStagesDelete, (_e, id: string) => {
     const list = deleteCustomStage(id)
     broadcast(CH.customStagesChanged, list)
     return list
@@ -293,17 +306,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Cached: concurrent callers share one probe, results live 60s. `force` (重新检测) re-probes AND
   // honors the result (trustPersisted:false) so it can clear a genuinely-gone CLI; a normal detect keeps
   // last-known-good agents sticky so a slow cold-start probe never makes them vanish.
-  ipcMain.handle(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>
+  on(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>
     cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true }))
   // "有新版" 提示(只提示):安装版本由 detect 探测,这里查各 CLI 的 npm latest 并比对。走 termProxy(undici
   // 不认 HTTP_PROXY 环境变量),失败/未知包静默略过 —— 提示是锦上添花,绝不能拖垮或报错阻塞设置页。
-  ipcMain.handle(CH.agentsCliUpdates, (_e, installed: { id: string; version?: string }[]) =>
+  on(CH.agentsCliUpdates, (_e, installed: { id: string; version?: string }[]) =>
     checkCliUpdates(installed ?? [], makeProxyFetch(readSettings().termProxy), Date.now()))
   // Registry just changed (bin override / custom agent add-remove) — bypass the cache but stay sticky
   // (trustPersisted) so a transient probe failure during the rebuild doesn't wipe known-good agents.
   const redetect = () => cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: true, trustPersisted: true })
-  ipcMain.handle(CH.agentsGetConfig, () => readAgentsConfig())
-  ipcMain.handle(CH.agentsSetBin, (_e, a: { id: string; bin: string }) => {
+  on(CH.agentsGetConfig, () => readAgentsConfig())
+  on(CH.agentsSetBin, (_e, a: { id: string; bin: string }) => {
     const cfg = readAgentsConfig()
     const existing = cfg.providers.find(p => p.id === a.id)
     const providersCfg = [
@@ -314,41 +327,41 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     rebuildProviderRegistry(providers)   // mutate in place so orchestrator/handlers see new bins
     return redetect()
   })
-  ipcMain.handle(CH.agentsAddCustom, (_e, c: CustomAgent) => {
+  on(CH.agentsAddCustom, (_e, c: CustomAgent) => {
     const cfg = readAgentsConfig()
     writeAgentsConfig({ ...cfg, custom: [...cfg.custom.filter(x => x.id !== c.id), c] })
     rebuildProviderRegistry(providers)
     return redetect()
   })
-  ipcMain.handle(CH.agentsRemoveCustom, (_e, id: string) => {
+  on(CH.agentsRemoveCustom, (_e, id: string) => {
     const cfg = readAgentsConfig()
     writeAgentsConfig({ ...cfg, custom: cfg.custom.filter(x => x.id !== id) })
     rebuildProviderRegistry(providers)
     return redetect()
   })
-  ipcMain.handle(CH.agentsRefreshModels, async (_e, providerId: string) => {
+  on(CH.agentsRefreshModels, async (_e, providerId: string) => {
     const r = await refreshProviderModels(providerId, providers, buildAgentEnv({ proxy: readSettings().termProxy }))
     invalidateDetectCache()   // models cache changed on disk — cached ProviderInfo[] is stale
     return r
   })
-  ipcMain.handle(CH.agentsSetModels, (_e, a: { id: string; models: { id: string; label: string; description?: string }[] }) => {
+  on(CH.agentsSetModels, (_e, a: { id: string; models: { id: string; label: string; description?: string }[] }) => {
     const r = setProviderModels(a.id, a.models)
     invalidateDetectCache()   // ditto: edited model list must show up on the next detect
     return r
   })
-  ipcMain.handle(CH.agentsSetTimezone, (_e, a: { id: string; timezone: string }) => {
+  on(CH.agentsSetTimezone, (_e, a: { id: string; timezone: string }) => {
     setProviderTimezone(a.id, a.timezone)
     invalidateDetectCache()   // detect surfaces provCfg.timezone → refresh so the UI reflects the change
   })
-  ipcMain.handle(CH.netCheckExitIp, () => checkExitIp(readSettings().termProxy))
-  ipcMain.handle(CH.contextScan, (_e, workspacePath?: string) => {
+  on(CH.netCheckExitIp, () => checkExitIp(readSettings().termProxy))
+  on(CH.contextScan, (_e, workspacePath?: string) => {
     if (workspacePath && existsSync(workspacePath)) return scanWorkspaceContext(workspacePath, true)
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }
   })
-  ipcMain.handle(CH.contextScanGlobal, () => scanGlobalContext())
-  ipcMain.handle(CH.skillsList, () => readInstalledSkills())
-  ipcMain.handle(CH.commandsList, (_e, providerId: string, wsPath?: string) => providerCommands(providerId, wsPath))
-  ipcMain.handle(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
+  on(CH.contextScanGlobal, () => scanGlobalContext())
+  on(CH.skillsList, () => readInstalledSkills())
+  on(CH.commandsList, (_e, providerId: string, wsPath?: string) => providerCommands(providerId, wsPath))
+  on(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
     const knownProjects = readProjects().projects
     const proxy = readSettings().termProxy
     // One creation at a time — hold its AbortController so CH.workspaceCancelSetup can kill the in-flight
@@ -373,16 +386,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       setupAbort = null
     }
   })
-  ipcMain.handle(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
-  ipcMain.handle(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
-  ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
-  ipcMain.handle(CH.workspaceScanRepos, (_e, path: string) => scanRepos(path))
+  on(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
+  on(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
+  on(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
+  on(CH.workspaceScanRepos, (_e, path: string) => scanRepos(path))
   // P4.1(2026-07-30):wsSetAutoDecide 已删除(autoDecide 随提案门一并废除)。
-  ipcMain.handle(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
+  on(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
     setStageModel(a.path, a.stageKey, a.provider, a.model)
   })
   // Quick alias rename — just the display name (registry + workspace.json), no re-provisioning.
-  ipcMain.handle(CH.workspaceRename, (_e, a: { path: string; name: string }) => {
+  on(CH.workspaceRename, (_e, a: { path: string; name: string }) => {
     const name = a.name.trim()
     if (!name) return
     const path = expandTilde(a.path)
@@ -391,7 +404,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (ws) writeWorkspace({ ...ws, name })
     broadcast(CH.workspacesChanged, {})
   })
-  ipcMain.handle(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts; runProjHooks?: boolean }) => {
+  on(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts; runProjHooks?: boolean }) => {
     if (isArchivedWorkspace(a.path)) throw new Error('工作区已归档，恢复后才能继续。')
     const result = await editWorkspace({
       path: a.path, opts: a.opts, knownProjects: readProjects().projects, proxy: readSettings().termProxy,
@@ -718,14 +731,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
   }
   const chatQueue = new ChatQueue(runTurn, broadcast)
-  ipcMain.handle(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
+  on(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
     chatQueue.enqueue(payload, source ?? '你')
   })
-  ipcMain.handle(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
+  on(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
   // 还挂着的确认/提问门快照。聊天视图每次挂载都拉一次,把主进程仍在阻塞等待的门重建成卡片。
   // 不做任何清理:这里只是【读】,门的生命周期仍由回答 / drainChatGates 负责。
-  ipcMain.handle(CH.chatGateState, (_e, a: { workspacePath: string }): ChatGateSnapshot => {
+  on(CH.chatGateState, (_e, a: { workspacePath: string }): ChatGateSnapshot => {
     // chatGateOwner 就是「还挂着的门」的单一事实源:每条解析路径(chatResolve / resolveChatGateById /
     // drainChatGates)都把 owner 和 resolver 一起删,而 drain 还会在没有 resolver 时也删 owner ——
     // 所以 owner 恒是更严格的那一边,不需要再拿 chatConfirms/chatAsks 复核一遍。
@@ -738,12 +751,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     return snap
   })
-  ipcMain.handle(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
-  ipcMain.handle(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
+  on(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
+  on(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
   // 「停止」只停当前【会话】的轮次 + 它派发的后台 delegate 子代理 + 它挂起的门(confirm/ask),不动同工作区里
   // 并发跑着的另一个会话(fire-and-forget 的子代理已脱离 chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮
   // 取消表才杀得掉,否则会留成孤儿)。省略 sessionId(如宠物的工作区级停止)仍是「取消这个工作区的全部」。
-  ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string; sessionId?: string }) => {
+  on(CH.chatStop, (_e, a: { workspacePath: string; sessionId?: string }) => {
     // Normalize once so all three stop ops treat "no session" identically — an empty-string sessionId
     // (should never reach here, real ids are non-empty) would otherwise be "defined" to stop()/delegates
     // but falsy to drainChatGates, diverging their scope.
@@ -762,32 +775,32 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const broadcastSessions = (wsPath: string, file: SessionsFile): void => {
     broadcast(CH.sessionsChanged, { workspacePath: wsPath, file: sessionsOut(wsPath, file) })
   }
-  ipcMain.handle(CH.sessionList, (_e, wsPath: string) => sessionsOut(wsPath, readSessions(wsPath)))
-  ipcMain.handle(CH.sessionNew, (_e, wsPath: string) => {
+  on(CH.sessionList, (_e, wsPath: string) => sessionsOut(wsPath, readSessions(wsPath)))
+  on(CH.sessionNew, (_e, wsPath: string) => {
     if (isArchivedWorkspace(wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
     const file = newSession(wsPath)
     broadcastSessions(wsPath, file)
     return sessionsOut(wsPath, file)
   })
-  ipcMain.handle(CH.sessionSwitch, (_e, a: { workspacePath: string; sessionId: string }) => {
+  on(CH.sessionSwitch, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = switchSession(a.workspacePath, a.sessionId)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
-  ipcMain.handle(CH.sessionClose, (_e, a: { workspacePath: string; sessionId: string }) => {
+  on(CH.sessionClose, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = closeSession(a.workspacePath, a.sessionId)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
-  ipcMain.handle(CH.sessionRename, (_e, a: { workspacePath: string; sessionId: string; title: string }) => {
+  on(CH.sessionRename, (_e, a: { workspacePath: string; sessionId: string; title: string }) => {
     const file = renameSession(a.workspacePath, a.sessionId, a.title)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
-  ipcMain.handle(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
+  on(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
     return sessionsOut(a.workspacePath, applyPermission(a.workspacePath, a.sessionId, a.mode))
   })
-  ipcMain.handle(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
+  on(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
     const file = setSessionModel(a.workspacePath, a.sessionId, a.agentId, a.modelId)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
@@ -816,7 +829,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       permissionMode: stage.permissionMode ?? 'auto',
     }, '工作流')
   }
-  ipcMain.handle(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
+  on(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
     if (!p.sessionId) throw new Error('workflow:enter 缺少 sessionId')
     // 什么都没说就不许启动 —— 否则阶段 agent 只拿到一串项目名,会自己猜一个需求出来跑一堆东西。
     // 这道必须在主进程:「⚡自动」那条路不经过启动门的按钮。
@@ -855,7 +868,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     kickConversationalStage(p.workspacePath, p.sessionId, session)   // 图3:进入阶段0自动起手产出交付物
     return session
   })
-  ipcMain.handle(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string>; skip?: string[] }) => {
+  on(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string>; skip?: string[] }) => {
     const s = getSession(a.workspacePath, a.sessionId)
     if (!s?.workflowSession) throw new Error('该会话不在工作流中')
     let next: WorkflowSessionState = advanceWorkflow(s.workflowSession)
@@ -891,13 +904,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     kickConversationalStage(a.workspacePath, a.sessionId, next)   // 图3:推进到新对话阶段也自动起手
     return next
   })
-  ipcMain.handle(CH.workflowExit, (_e, a: { workspacePath: string; sessionId: string }) => {
+  on(CH.workflowExit, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = setSessionWorkflow(a.workspacePath, a.sessionId, undefined)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
   // Change 2(doc-as-contract):进代码开发前读技术方案文档,抽每项目那节预填简报 + 报告文档是否存在。
-  ipcMain.handle(CH.workflowPrepareBriefs, (_e, a: { workspacePath: string; stageKey: string; projects: string[] }): { docExists: boolean; docPath: string; sections: Record<string, string> } => {
+  on(CH.workflowPrepareBriefs, (_e, a: { workspacePath: string; stageKey: string; projects: string[] }): { docExists: boolean; docPath: string; sections: Record<string, string> } => {
     const rel = stageDocRelPath(a.stageKey)
     const docPath = join(a.workspacePath, rel)
     let md = ''
@@ -906,7 +919,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const { sections } = docExists ? extractProjectBriefs(md, a.projects) : { sections: {} as Record<string, string> }
     return { docExists, docPath, sections }
   })
-  ipcMain.handle(CH.workflowFinish, (_e, a: { workspacePath: string; sessionId: string }) => {
+  on(CH.workflowFinish, (_e, a: { workspacePath: string; sessionId: string }) => {
     const s = getSession(a.workspacePath, a.sessionId)
     if (!s?.workflowSession) return readSessions(a.workspacePath)
     const next: WorkflowSessionState = { ...s.workflowSession, phase: 'done', currentIndex: s.workflowSession.stages.length }
@@ -914,14 +927,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
-  ipcMain.handle(CH.sessionContinueFrom, (_e, a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => {
+  on(CH.sessionContinueFrom, (_e, a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => {
     if (isArchivedWorkspace(a.wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
     const file = continueFrom(a.wsPath, a)
     broadcastSessions(a.wsPath, file)
     return sessionsOut(a.wsPath, file)
   })
-  ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId, chatQueue.runningProvider(a.workspacePath, a.sessionId)))
-  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
+  on(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId, chatQueue.runningProvider(a.workspacePath, a.sessionId)))
+  on(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
     const askResolve = chatAsks.get(a.id)
     if (askResolve) {
       chatAsks.delete(a.id)
@@ -1024,23 +1037,23 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     getProxy: () => readSettings().termProxy,
     emitStatus: (platform, st) => broadcast(CH.botStatusEvent, { platform, status: st }),
   })
-  ipcMain.handle(CH.botConnect, async (_e, a: { platform: BotPlatform }) => {
+  on(CH.botConnect, async (_e, a: { platform: BotPlatform }) => {
     const bb = readSettings().botBridge as BotBridgeConfig
     persistBotConfig({ ...bb, [a.platform]: { ...bb[a.platform], enabled: true } })
     await botBridge.connect(a.platform); return botBridge.getStatuses()
   })
-  ipcMain.handle(CH.botDisconnect, async (_e, a: { platform: BotPlatform }) => {
+  on(CH.botDisconnect, async (_e, a: { platform: BotPlatform }) => {
     const bb = readSettings().botBridge as BotBridgeConfig
     persistBotConfig({ ...bb, [a.platform]: { ...bb[a.platform], enabled: false } })
     await botBridge.disconnect(a.platform); return botBridge.getStatuses()
   })
-  ipcMain.handle(CH.botGetStatus, () => botBridge.getStatuses())
-  ipcMain.handle(CH.botRegenPairing, () => {
+  on(CH.botGetStatus, () => botBridge.getStatuses())
+  on(CH.botRegenPairing, () => {
     const code = genPairing()
     persistBotConfig({ ...(readSettings().botBridge as BotBridgeConfig), pairingCode: code })
     return code
   })
-  ipcMain.handle(CH.botUnbind, (_e, a: { chatId: string }) => {
+  on(CH.botUnbind, (_e, a: { chatId: string }) => {
     const bb = readSettings().botBridge as BotBridgeConfig
     persistBotConfig({ ...bb, bindings: bb.bindings.filter(b => b.chatId !== a.chatId) })
     return (readSettings().botBridge as BotBridgeConfig).bindings
@@ -1048,7 +1061,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Provider-switch context summary: after the user confirms switching agent mid-session, the NEW
   // provider reads the prior conversation and produces a visible summary message (provider = toAgent,
   // so the timeline auto-inserts a provider-switch divider above it: old agent's msgs → summary).
-  ipcMain.handle(CH.chatSwitchSummary, async (_e, a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => {
+  on(CH.chatSwitchSummary, async (_e, a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => {
     const provider = providers[a.toAgent] ?? providers['claude']
     if (!provider?.chat) return
     const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
@@ -1084,7 +1097,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // as the distiller: cheap distill model when available, else the session's own model. Fail-open with
   // a hard timeout so a hung provider never leaves the gate spinning — the renderer falls back to the
   // raw last-N transcript when this returns ''.
-  ipcMain.handle(CH.chatSummarizeRequirement, async (_e, a: { workspacePath: string; sessionId: string; agent: string; model: string }): Promise<string> => {
+  on(CH.chatSummarizeRequirement, async (_e, a: { workspacePath: string; sessionId: string; agent: string; model: string }): Promise<string> => {
     const provider = providers[a.agent] ?? providers['claude']
     if (!provider?.chat) return ''
     const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
@@ -1122,7 +1135,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // a synthetic system ChatMessage (blank text, `launchGate` field carries the record) with the SAME id
   // as the renderer's in-chat LaunchGateCard, so when this broadcast round-trips back into chat.messages
   // WorkspaceView can dedupe it against its own local (already-frozen) entry by id.
-  ipcMain.handle(CH.chatAppendLaunchGate, (_e, a: {
+  on(CH.chatAppendLaunchGate, (_e, a: {
     workspacePath: string; sessionId: string; id: string; ts: string
     workflowName: string; projects: string[]; supplement: string; decidedAt: number; seed: string
   }) => {
@@ -1139,7 +1152,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // synthetic system ChatMessage (blank text, `runCard` field carries the frozen decision) with the
   // SAME id as the in-chat RunEventCard's event id, so it round-trips back into chat.messages and
   // WorkspaceView can dedupe against its own local resolved-cards state by id.
-  ipcMain.handle(CH.chatAppendRunCard, (_e, a: { workspacePath: string; sessionId: string; ts: string; runCard: NonNullable<ChatMessage['runCard']> }) => {
+  on(CH.chatAppendRunCard, (_e, a: { workspacePath: string; sessionId: string; ts: string; runCard: NonNullable<ChatMessage['runCard']> }) => {
     // Idempotent by id: every run-card id is write-once (an event id, `abort-<runId>`, or
     // `summary-<runId>`) — never re-appended with different content. Persisting the same id twice must
     // be a no-op, because appendMessage (chatStore.ts) writes the jsonl with a blind appendFileSync (no
@@ -1158,8 +1171,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Fold any in-flight (still-streaming) assistant message into the returned history so switching to the
   // home view / another session mid-stream and back restores the already-produced output (it isn't
   // persisted until the turn's terminal state).
-  ipcMain.handle(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId)))
-  ipcMain.handle(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
+  on(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId)))
+  on(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
     const r = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] })
     return r.filePaths.map(p => ({ name: basename(p), path: p, size: statSync(p).size }))
   })
@@ -1171,7 +1184,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 重名去重是这里的**必需品**,不是锦上添花:剪贴板图片在 Chrome 里一律叫 image.png,连粘三张就是
   // 三次写同一个路径,后一张静默盖掉前一张 —— chip 上三个不同大小都在,盘上只剩最后一个,agent 拿到
   // 三份同一张图。渲染层猜不出盘上已经有什么,只有这里知道。
-  ipcMain.handle(CH.chatSavePaste, (_e, a: { workspacePath: string; name: string; dataBase64: string }): Attachment | null => {
+  on(CH.chatSavePaste, (_e, a: { workspacePath: string; name: string; dataBase64: string }): Attachment | null => {
     try {
       const dir = join(a.workspacePath, '.forge', 'attachments')
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -1189,13 +1202,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const proxy = () => readSettings().termProxy
   const changesEmit = (e: ChangesEvent) => broadcast(CH.changesEvent, e)
 
-  ipcMain.handle(CH.gitChanges, (_e, cwd: string) => perfSpan('git', 'readChanges', () => readChanges(cwd, proxy())))
-  ipcMain.handle(CH.changesMulti, (_e, cwds: string[]) => perfSpan('git', 'changesMulti', () => readChangesMulti(cwds, proxy())))
-  ipcMain.handle(CH.gitDiff, (_e, a: { cwd: string; file: string }) => readDiff(a.cwd, a.file, proxy()))
-  ipcMain.handle(CH.gitFile, (_e, a: { cwd: string; file: string }) => readFile(a.cwd, a.file, proxy()))
+  on(CH.gitChanges, (_e, cwd: string) => perfSpan('git', 'readChanges', () => readChanges(cwd, proxy())))
+  on(CH.changesMulti, (_e, cwds: string[]) => perfSpan('git', 'changesMulti', () => readChangesMulti(cwds, proxy())))
+  on(CH.gitDiff, (_e, a: { cwd: string; file: string }) => readDiff(a.cwd, a.file, proxy()))
+  on(CH.gitFile, (_e, a: { cwd: string; file: string }) => readFile(a.cwd, a.file, proxy()))
   // Read an image file's bytes → data URL for the inspector's image preview (gitFile returns text, which
   // renders binary images as garbage). Guards: known image ext, stays within cwd, size cap.
-  ipcMain.handle(CH.imageFile, (_e, a: { cwd: string; file: string }): { dataUrl: string } | { error: string } => {
+  on(CH.imageFile, (_e, a: { cwd: string; file: string }): { dataUrl: string } | { error: string } => {
     try {
       const IMG_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' }
       const mime = IMG_MIME[(a.file.split('.').pop() || '').toLowerCase()]
@@ -1211,31 +1224,31 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // ── 对话产物可点开 ────────────────────────────────────────────────────────────
   // 聊天正文里的 [设计文档](docs/design.md) 点击后走这里:renderer 只知道一串 href,存在性、是不是目录、
   // 有没有越出工作区,全部在主进程判(renderer 没有 fs)。bases 按优先级给:当前会话 worktree → 工作区根。
-  ipcMain.handle(CH.resolveFileRef, (_e, a: { bases: string[]; href: string }) =>
+  on(CH.resolveFileRef, (_e, a: { bases: string[]; href: string }) =>
     resolveFileRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? '')))
   // 预览显示不了的类型(pdf/xlsx/zip)和 .html 的「用浏览器打开」。只放行 bases 之内的真实文件 ——
   // 这是个能拉起任意本地程序的口子,越界必须拒。
-  ipcMain.handle(CH.openFilePath, async (_e, a: { bases: string[]; href: string }) => {
+  on(CH.openFilePath, async (_e, a: { bases: string[]; href: string }) => {
     const r = resolveFileRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? ''))
     if (!r.ok) return { ok: false as const, error: r.reason }
     const err = await shell.openPath(r.abs)
     return err ? { ok: false as const, error: err } : { ok: true as const }
   })
-  ipcMain.handle(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
-  ipcMain.handle(CH.gitBranch, (_e, cwd: string) => readBranch(cwd, proxy()))
-  ipcMain.handle(CH.fileSearchContent, (_e, a: { root: string; query: string; files?: string[] }) =>
+  on(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
+  on(CH.gitBranch, (_e, cwd: string) => readBranch(cwd, proxy()))
+  on(CH.fileSearchContent, (_e, a: { root: string; query: string; files?: string[] }) =>
     searchContent({ root: a.root, query: a.query, files: a.files }))
-  ipcMain.handle(CH.watchChanges, (_e, cwd: string) => {
+  on(CH.watchChanges, (_e, cwd: string) => {
     watcher.start(cwd, () => { void perfSpan('watcher', 'onChange', () => readChanges(cwd, proxy()).then(changes => changesEmit({ cwd, changes }))) })
     return readChanges(cwd, proxy())
   })
-  ipcMain.handle(CH.watchStop, () => { watcher.stop() })
+  on(CH.watchStop, () => { watcher.stop() })
 
   // ── Plugin IPC ──────────────────────────────────────────────────────────────
-  ipcMain.handle(CH.pluginsList, () =>
+  on(CH.pluginsList, () =>
     getPluginScheduler()?.snapshot() ?? { plugins: [], results: {} }
   )
-  ipcMain.handle(CH.pluginsInstall, (_e, dir: string) => {
+  on(CH.pluginsInstall, (_e, dir: string) => {
     const r = installPlugin(dir)
     if (r.ok) {
       // reconcile() already runs the new plugin; no need to also call refresh()
@@ -1243,20 +1256,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     return r
   })
-  ipcMain.handle(CH.pluginsUninstall, (_e, id: string) => {
+  on(CH.pluginsUninstall, (_e, id: string) => {
     uninstallPlugin(id)
     getPluginScheduler()?.reconcile()
   })
-  ipcMain.handle(CH.pluginsSetEnabled, (_e, a: { id: string; enabled: boolean }) => {
+  on(CH.pluginsSetEnabled, (_e, a: { id: string; enabled: boolean }) => {
     setPluginEnabled(a.id, a.enabled)
     getPluginScheduler()?.reconcile()
   })
-  ipcMain.handle(CH.pluginsRefresh, (_e, id?: string) => {
+  on(CH.pluginsRefresh, (_e, id?: string) => {
     // 带 id = 用户在某张插件卡上点了「刷新」,是明确意图 → 绕过最小间隔。不带 id 的全量刷新走节流。
     void getPluginScheduler()?.refresh(id, id !== undefined)
   })
-  ipcMain.handle(CH.pluginsGetCreds, () => readSettings().pluginCreds ?? {})
-  ipcMain.handle(CH.pluginsSetCred, (_e, a: { provider: string; value: string }) => {
+  on(CH.pluginsGetCreds, () => readSettings().pluginCreds ?? {})
+  on(CH.pluginsSetCred, (_e, a: { provider: string; value: string }) => {
     const s = readSettings()
     const creds = { ...(s.pluginCreds ?? {}) }
     if (a.value.trim()) creds[a.provider] = a.value.trim()
@@ -1269,25 +1282,25 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return creds
   })
   // 走用户代理拉远程「下架名单」(与 nsfw/wallpaper 同一条 makeContentFetch 通道);fail-open,拉不到就显示全部。
-  ipcMain.handle(CH.pluginsCatalog, () => listCatalog(makeContentFetch(readSettings().termProxy)))
-  ipcMain.handle(CH.pluginsInstallExample, (_e, id: string) => {
+  on(CH.pluginsCatalog, () => listCatalog(makeContentFetch(readSettings().termProxy)))
+  on(CH.pluginsInstallExample, (_e, id: string) => {
     const r = installOfficial(id)
     if (r.ok) getPluginScheduler()?.reconcile()
     return r
   })
   // ── End Plugin IPC ──────────────────────────────────────────────────────────
 
-  ipcMain.handle(CH.dialogPickDirectory, async (): Promise<string | null> => {
+  on(CH.dialogPickDirectory, async (): Promise<string | null> => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
     return r.canceled ? null : (r.filePaths[0] ?? null)
   })
-  ipcMain.handle(CH.dialogPickFile, async (): Promise<string | null> => {
+  on(CH.dialogPickFile, async (): Promise<string | null> => {
     const r = await dialog.showOpenDialog({ properties: ['openFile'] })
     return r.canceled ? null : (r.filePaths[0] ?? null)
   })
 
   // ── Session Import IPC ──────────────────────────────────────────────────────
-  ipcMain.handle(CH.sessionImportScan, () => {
+  on(CH.sessionImportScan, () => {
     const sessions = scanAll()
     const wsPaths = readWorkspaceRegistry().map(w => w.path)
     const groups = groupByCwd(sessions, wsPaths)
@@ -1295,8 +1308,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     writeScanCache(groups, scannedAt)
     return { scannedAt, groups }
   })
-  ipcMain.handle(CH.sessionImportLastScan, () => readScanCache())
-  ipcMain.handle(CH.sessionImportRun, (_e, sessions: DiscoveredSession[]): import('@shared/types').ImportResult => {
+  on(CH.sessionImportLastScan, () => readScanCache())
+  on(CH.sessionImportRun, (_e, sessions: DiscoveredSession[]): import('@shared/types').ImportResult => {
     const wsPaths = new Set(readWorkspaceRegistry().map(w => w.path))
     const cwds = [...new Set(sessions.map(s => s.cwd))].filter(c => c && c !== 'unknown')
     let added = 0
@@ -1308,12 +1321,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (added > 0) broadcast(CH.workspacesChanged, {})
     return { index, gitRepos }
   })
-  ipcMain.handle(CH.sessionImportRead, (_e, s: DiscoveredSession) => readSession(s))
-  ipcMain.handle(CH.sessionImportList, () => readIndex())
-  ipcMain.handle(CH.sessionImportCoverage, () => sessionImportCoverage())
+  on(CH.sessionImportRead, (_e, s: DiscoveredSession) => readSession(s))
+  on(CH.sessionImportList, () => readIndex())
+  on(CH.sessionImportCoverage, () => sessionImportCoverage())
   // ── End Session Import IPC ──────────────────────────────────────────────────
 
-  ipcMain.handle(CH.petPickPack, async (_e, petId: string) => {
+  on(CH.petPickPack, async (_e, petId: string) => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return null
     // Persist each state image to disk under the pet's folder; return { images: { state: relPath } }
@@ -1331,7 +1344,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return { name: basename(dir), images }
   })
 
-  ipcMain.handle(CH.petPickImage, async (_e, petId: string, state: string = 'idle') => {
+  on(CH.petPickImage, async (_e, petId: string, state: string = 'idle') => {
     const r = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [{ name: '图片', extensions: ['png', 'gif', 'svg', 'webp'] }],
@@ -1348,9 +1361,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Codex v2 pet packs: validate + copy a pack directory into the pet store (returns a CustomPet the
   // renderer adds to customPets, mirroring petPickImage), list auto-discovered packs under ~/.codex/pets,
   // and pick-a-folder → import. Directory input only (no zip dependency).
-  ipcMain.handle(CH.codexPetImport, (_e, dir: string) => importCodexPetPack(dir))
-  ipcMain.handle(CH.codexPetList, () => discoverCodexPets())
-  ipcMain.handle(CH.codexPetPick, async () => {
+  on(CH.codexPetImport, (_e, dir: string) => importCodexPetPack(dir))
+  on(CH.codexPetList, () => discoverCodexPets())
+  on(CH.codexPetPick, async () => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return null
     return importCodexPetPack(r.filePaths[0])
@@ -1359,7 +1372,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 成长宠物包:同样是「选一个目录 → 校验 → 拷进宠物图库 → 返回 CustomPet」,只是包里带的是
   // 每阶段一张 atlas(kind:"growth")。取消时返回 null,与 codexPetPick 一致 —— 用户主动取消不是错误,
   // 渲染层不该把它当成红字报错弹出来。
-  ipcMain.handle(CH.growthPetImport, async () => {
+  on(CH.growthPetImport, async () => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择成长宠物包目录' })
     if (r.canceled || !r.filePaths[0]) return null
     // importGrowthPetPack 只把「包本身不合格」变成 {ok:false},写盘的 I/O 异常照抛(ENOSPC 盘满、
@@ -1377,7 +1390,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // and return its forge-bg:// URL (settings.json keeps only the small URL, not multi-MB base64). No
   // tiny cap needed anymore — storeBackgroundFromPath guards against pathological files. After a
   // successful pick, GC any background file no longer referenced by settings (old image on replace).
-  ipcMain.handle(CH.appearancePickBgImage, async () => {
+  on(CH.appearancePickBgImage, async () => {
     const r = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
@@ -1396,8 +1409,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Downloadable fonts: list what's on disk (each entry carries its rewritten @font-face CSS so the
   // renderer can inject it), download a catalog font (streaming per-file progress to the caller), and
   // delete one. Downloads honour the user's configured proxy via makeProxyFetch.
-  ipcMain.handle(CH.fontsListDownloaded, () => listDownloadedFonts())
-  ipcMain.handle(CH.fontsDownload, async (e, id: string) => {
+  on(CH.fontsListDownloaded, () => listDownloadedFonts())
+  on(CH.fontsDownload, async (e, id: string) => {
     const entry = catalogEntry(id)
     if (!entry) return { error: '未知字体' }
     const pf = makeProxyFetch(readSettings().termProxy)
@@ -1412,7 +1425,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return { error: err instanceof Error ? err.message : '字体下载失败' }
     }
   })
-  ipcMain.handle(CH.fontsDelete, (_e, id: string) => ({ ok: deleteDownloadedFont(id) }))
+  on(CH.fontsDelete, (_e, id: string) => ({ ok: deleteDownloadedFont(id) }))
 
   // License-gated extra content. All requests go through the user's configured proxy and carry the
   // locally-stored activation code (settings.nsfwCode); the Worker holds the real keys + image bytes.
@@ -1429,20 +1442,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // already-downloaded thumbnails with NO network — the fix for "every open re-hits the Cloudflare Worker
   // per thumbnail". Shared across NSFW + built-in wallpaper previews (both store under backgrounds/).
   const previewCache = makeDiskPreviewCache()
-  ipcMain.handle(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
-  ipcMain.handle(CH.nsfwCatalog, () => nsfwCatalog(nsfwKey(), nsfwFetch()))
-  ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, nsfwKey(), nsfwFetch(), previewCache))
+  on(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
+  on(CH.nsfwCatalog, () => nsfwCatalog(nsfwKey(), nsfwFetch()))
+  on(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, nsfwKey(), nsfwFetch(), previewCache))
   // Gallery (design E): returns catalog + already-cached thumbnails immediately; the missing ones stream
   // in and arrive one-by-one as CH.nsfwPreviewEvent {key,url} on the SAME window.
-  ipcMain.handle(CH.nsfwGallery, (e, force?: boolean) => {
+  on(CH.nsfwGallery, (e, force?: boolean) => {
     const emit = (key: string, url: string) => { try { e.sender.send(CH.nsfwPreviewEvent, { key, url }) } catch { /* window closed */ } }
     return nsfwGallery(nsfwKey(), nsfwFetch(), previewCache, emit, { force: !!force })
   })
-  ipcMain.handle(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, nsfwKey(), nsfwFetch()))
-  ipcMain.handle(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, nsfwKey(), nsfwFetch()))
+  on(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, nsfwKey(), nsfwFetch()))
+  on(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, nsfwKey(), nsfwFetch()))
   // Does the local file behind a forge-bg:// URL still exist? (An installed extra bg may have been
   // GC'd; if gone, the renderer re-downloads instead of pointing at a missing file.)
-  ipcMain.handle(CH.nsfwBgExists, (_e, url: string) => {
+  on(CH.nsfwBgExists, (_e, url: string) => {
     const rel = bgRelFromUrl(url)
     const abs = rel ? resolveBackgroundAbs(rel) : null
     return { exists: !!abs && existsSync(abs) }
@@ -1451,34 +1464,34 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Built-in wallpapers: public jsDelivr catalog + images, downloaded on demand through the user's proxy
   // and stored on disk like any uploaded background. No activation code, no Worker (so no Worker quota).
   const wallpaperFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback (also used by pet packs)
-  ipcMain.handle(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
-  ipcMain.handle(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch(), previewCache))
-  ipcMain.handle(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
+  on(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
+  on(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch(), previewCache))
+  on(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
 
   // Downloadable pet packs — same public jsDelivr pipeline as wallpapers, no activation code.
-  ipcMain.handle(CH.petPackCatalog, () => petPackCatalog(wallpaperFetch()))
-  ipcMain.handle(CH.petPackPreview, (_e, item: { thumb: string }) => petPackPreview(item, wallpaperFetch()))
-  ipcMain.handle(CH.petPackInstall, (_e, petId: string, item: PetPackItem) => petPackInstall(petId, item, wallpaperFetch()))
-  ipcMain.handle(CH.growthPackInstall, (_e, petId: string, item: GrowthPackItem) => growthPackInstall(petId, item, wallpaperFetch()))
+  on(CH.petPackCatalog, () => petPackCatalog(wallpaperFetch()))
+  on(CH.petPackPreview, (_e, item: { thumb: string }) => petPackPreview(item, wallpaperFetch()))
+  on(CH.petPackInstall, (_e, petId: string, item: PetPackItem) => petPackInstall(petId, item, wallpaperFetch()))
+  on(CH.growthPackInstall, (_e, petId: string, item: GrowthPackItem) => growthPackInstall(petId, item, wallpaperFetch()))
 
   // codex-pets.net 宠物市场(第三方社区库,插件 gating)。走同一条 proxy-first fetch 避免 CORS,但**必须带
   // 超时** —— 它是个第三方社区小站,慢/挂是常态,而 undici 的 fetch 自己没有整体超时:不设死线就是用户
   // 盯着转圈直到天荒地老。代理那一跳给更短的死线,超时即回退直连(以前只有代理"抛异常"才回退,挂起不回退)。
   const marketFetch = (timeoutMs: number) =>
     makeContentFetch(readSettings().termProxy, undefined, { timeoutMs, proxyTimeoutMs: 5_000 })
-  ipcMain.handle(CH.codexMarketCatalog, (_e, page: number) => codexMarketCatalog(page, marketFetch(8_000)))
-  ipcMain.handle(CH.codexMarketPreview, (_e, url: string) => codexMarketPreview(url, marketFetch(15_000)))
-  ipcMain.handle(CH.codexMarketInstall, (_e, item: CodexMarketPet) => codexMarketInstall(item, marketFetch(60_000)))
+  on(CH.codexMarketCatalog, (_e, page: number) => codexMarketCatalog(page, marketFetch(8_000)))
+  on(CH.codexMarketPreview, (_e, url: string) => codexMarketPreview(url, marketFetch(15_000)))
+  on(CH.codexMarketInstall, (_e, item: CodexMarketPet) => codexMarketInstall(item, marketFetch(60_000)))
 
   const MAX_PINNED = 5
-  ipcMain.handle(CH.workspacesList, () => {
+  on(CH.workspacesList, () => {
     const s = readSettings()
     // The legacy in-memory orchestrator run is gone; run2 runs don't surface a "live path" here.
     const livePath = undefined
     return listWorkspaces(livePath, s.pinnedWorkspaces, s.workspaceOrder)
   })
-  ipcMain.handle(CH.workspacesHomeStats, () => readHomeStats(readSettings().termProxy))
-  ipcMain.handle(CH.workspacesSetPinned, (_e, a: { path: string; pinned: boolean }) => {
+  on(CH.workspacesHomeStats, () => readHomeStats(readSettings().termProxy))
+  on(CH.workspacesSetPinned, (_e, a: { path: string; pinned: boolean }) => {
     const s = readSettings()
     let pinned = s.pinnedWorkspaces.filter(p => p !== a.path)
     if (a.pinned) {
@@ -1493,7 +1506,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const livePath = undefined
     return listWorkspaces(livePath, pinned, s.workspaceOrder)
   })
-  ipcMain.handle(CH.workspacesSetOrder, (_e, a: { order: string[] }) => {
+  on(CH.workspacesSetOrder, (_e, a: { order: string[] }) => {
     const s = readSettings()
     writeSettings({ ...s, workspaceOrder: a.order })
     // Keep every window's settings snapshot fresh so a later config:set-settings (which writes the
@@ -1509,7 +1522,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const livePath = undefined
     return listWorkspaces(livePath, s.pinnedWorkspaces, s.workspaceOrder)
   }
-  ipcMain.handle(CH.workspaceArchive, (_e, path: string) => {
+  on(CH.workspaceArchive, (_e, path: string) => {
     cancelWorkspaceDelegates(path)   // 归档=只读封存,先停掉该工作区后台还在跑的 delegate 子代理
     // 描述在 archiveWorkspaceLifecycle 里就地取自最后一个聊过的会话标题 —— 归档不再起「摘要 agent」
     // (那会在刚封存的目录里拉起一个 CLI 进程,被外部 agent 监控看见并推通知)。
@@ -1517,30 +1530,30 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })
-  ipcMain.handle(CH.workspaceRestore, (_e, path: string) => {
+  on(CH.workspaceRestore, (_e, path: string) => {
     restoreWorkspaceLifecycle(path)
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })
-  ipcMain.handle(CH.workspaceDelete, async (_e, path: string) => {
+  on(CH.workspaceDelete, async (_e, path: string) => {
     cancelWorkspaceDelegates(path)   // 删除前先停掉后台 delegate 子代理,避免孤儿进程仍在读/写将被删的目录
     const r = await deleteWorkspace(path)
     broadcast(CH.workspacesChanged, {})
     return { ...r, list: wsList() }
   })
   // 移除:仅从列表移除,保留磁盘文件(可重新添加目录恢复)。
-  ipcMain.handle(CH.workspaceRemove, (_e, path: string) => {
+  on(CH.workspaceRemove, (_e, path: string) => {
     removeWorkspaceFromList(path)
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })
   // 在 Finder / 资源管理器 / 文件管理器中打开该目录(跨平台:shell.openPath)。
-  ipcMain.handle(CH.revealPath, async (_e, path: string) => {
+  on(CH.revealPath, async (_e, path: string) => {
     const err = await shell.openPath(path)   // '' on success; non-empty error string otherwise
     return err ? { ok: false as const, error: err } : { ok: true as const }
   })
   // 用系统默认浏览器打开一个 http(s) 链接(仅放行 http/https,拒绝其它协议以免被当作命令/文件执行)。
-  ipcMain.handle(CH.openExternal, async (_e, url: string) => {
+  on(CH.openExternal, async (_e, url: string) => {
     try {
       const u = new URL(String(url))
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false as const, error: 'unsupported protocol' }
@@ -1572,11 +1585,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     execFile(cmd.exe, cmd.args, (err) => (err ? rej(err) : res()))
   })
   let openersCache: DetectedOpener[] = []
-  ipcMain.handle(CH.openersDetect, async (_e, refresh?: boolean) => {
+  on(CH.openersDetect, async (_e, refresh?: boolean) => {
     openersCache = await detectOpeners(openerIcon, !!refresh)
     return openersCache
   })
-  ipcMain.handle(CH.openersOpen, async (_e, arg: { openerId: string; folder: string; file?: string }) => {
+  on(CH.openersOpen, async (_e, arg: { openerId: string; folder: string; file?: string }) => {
     let op = resolveOpener(arg.openerId, openersCache)
     // Cold cache (renderer never called detect this session) — populate once, then retry.
     if (!op) { openersCache = await detectOpeners(openerIcon, false); op = resolveOpener(arg.openerId, openersCache) }
@@ -1602,7 +1615,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     try { for (const cmd of cmds) await runOpen(cmd); return { ok: true as const } }
     catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
-  ipcMain.handle(CH.workspacesOpenDir, async () => {
+  on(CH.workspacesOpenDir, async () => {
     const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
     const dir = r.filePaths[0]
     if (dir) {
@@ -1616,7 +1629,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return listWorkspaces(livePath, readSettings().pinnedWorkspaces)
   })
 
-  ipcMain.handle(CH.configExportProjects, async () => {
+  on(CH.configExportProjects, async () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     const r = await dialog.showSaveDialog({ title: '导出项目配置', defaultPath: `myFlowForge-projects-${stamp}.json` })
     if (r.canceled || !r.filePath) return { ok: false as const, canceled: true }
@@ -1625,9 +1638,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
 
   // ── App debug log ───────────────────────────────────────────────────────────
-  ipcMain.handle(CH.appLogGet, () => getAppLog())
-  ipcMain.handle(CH.appLogClear, () => { clearAppLog(); return getAppLog() })
-  ipcMain.handle(CH.appLogExport, async () => {
+  on(CH.appLogGet, () => getAppLog())
+  on(CH.appLogClear, () => { clearAppLog(); return getAppLog() })
+  on(CH.appLogExport, async () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     const r = await dialog.showSaveDialog({ title: '导出调试日志', defaultPath: `myFlowForge-debug-${stamp}.log` })
     if (r.canceled || !r.filePath) return { ok: false as const, canceled: true }
@@ -1637,9 +1650,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // Memory management (记忆面板): read/write/clear the three tiers directly. Decoupled from the
   // memory.enabled toggle — the user can always view/edit/clear stored memory regardless of the switch.
-  ipcMain.handle(CH.memoryRead, (_e, a: MemoryArg) => memoryRead(a))
-  ipcMain.handle(CH.tokenUsageAggregate, () => aggregateTokenUsage())
-  ipcMain.handle(CH.growthSignalGet, () => currentGrowthSignal())
-  ipcMain.handle(CH.memoryWrite, (_e, a: MemoryArg) => memoryWrite(a))
-  ipcMain.handle(CH.memoryClear, (_e, a: MemoryArg) => memoryClear(a))
+  on(CH.memoryRead, (_e, a: MemoryArg) => memoryRead(a))
+  on(CH.tokenUsageAggregate, () => aggregateTokenUsage())
+  on(CH.growthSignalGet, () => currentGrowthSignal())
+  on(CH.memoryWrite, (_e, a: MemoryArg) => memoryWrite(a))
+  on(CH.memoryClear, (_e, a: MemoryArg) => memoryClear(a))
+
+  return table
 }

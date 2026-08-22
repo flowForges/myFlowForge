@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
+import { tableCalls } from './testTable'
 
 // Focused test: CH.workspaceEdit handler must broadcast workspacesChanged on success.
 
@@ -52,10 +53,8 @@ vi.mock('../agents/refreshModels', () => ({ refreshProviderModels: vi.fn() }))
 
 async function invoke(channel: string, broadcast: (ch: string, p: unknown) => void, ...args: unknown[]) {
   const { registerIpc } = await import('./handlers')
-  const { ipcMain } = await import('electron') as any
-  ;(ipcMain.handle as any).mockClear()
-  registerIpc(broadcast, {})
-  const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+  const calls = tableCalls(registerIpc(broadcast, {}))
+  const call = calls.find((c: any[]) => c[0] === channel)
   if (!call) throw new Error(`No handler for channel: ${channel}`)
   return call[1]({}, ...args)
 }
