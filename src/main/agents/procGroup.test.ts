@@ -214,6 +214,55 @@ describe('CLI 先退、只剩进程组认得的后代', () => {
 // ── Windows 分支 ────────────────────────────────────────────────────────────────────────────────
 // 真机上从没跑过(没有 Windows 机器),所以这里只钉死【调用形状和顺序】—— 顺序正是 POSIX 分支踩过的坑:
 // 必须先把树处理完,才能碰父进程。
+// 真机行为(只在 Windows 上跑):killTreeWindows 打的是【真进程树】。
+// 上面那组只钉住调用形状和顺序,这一组回答"到底杀不杀得干净"。
+// ★必须带对照组:只杀根 pid 要能【复现】漏孤儿,否则这个测试可能恒绿而毫无意义
+// (POSIX 那边就是这么踩过来的)。
+describe.runIf(process.platform === 'win32')('killTreeWindows · 真进程树', () => {
+  const { execFileSync } = require('node:child_process') as typeof import('node:child_process')
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+  const descendantsOf = (root: number): number[] => {
+    const out = execFileSync('powershell', ['-NoProfile', '-Command',
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress'],
+      { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
+    const kids = new Map<number, number[]>()
+    for (const r of JSON.parse(out) as { ProcessId: number; ParentProcessId: number }[]) {
+      const arr = kids.get(r.ParentProcessId); if (arr) arr.push(r.ProcessId); else kids.set(r.ParentProcessId, [r.ProcessId])
+    }
+    const seen = new Set<number>(), stack = [root], found: number[] = []
+    while (stack.length) for (const c of kids.get(stack.pop()!) ?? []) { if (!seen.has(c)) { seen.add(c); found.push(c); stack.push(c) } }
+    return found
+  }
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true } catch { return false } }
+  // 三层树:cmd → cmd → ping(最里面那个会一直跑)
+  const spawnTree = () => spawnAgent('cmd', ['/c', 'cmd /c ping -n 600 127.0.0.1 > nul'], { windowsHide: true, reject: false })
+  const cleanup = (pids: number[]) => { for (const p of pids) { try { execFileSync('taskkill', ['/pid', String(p), '/T', '/F'], { stdio: 'ignore' }) } catch { /* 已经没了 */ } } }
+
+  it('★★ 对照组:只杀根 pid 确实会留下孤儿(证明本测试有效)', async () => {
+    const child = spawnTree()
+    await sleep(2500)
+    const tree = descendantsOf(child.pid!)
+    expect(tree.length).toBeGreaterThan(0)
+    try { child.kill() } catch { /* 已经没了 */ }
+    await sleep(2500)
+    const survivors = tree.filter(alive)
+    expect(survivors.length).toBeGreaterThan(0)
+    cleanup(survivors)
+  }, 30_000)
+
+  it('★★ killTree 把整棵树杀干净', async () => {
+    const child = spawnTree()
+    await sleep(2500)
+    const tree = descendantsOf(child.pid!)
+    expect(tree.length).toBeGreaterThan(0)
+    killTree(child)
+    await sleep(2500)
+    const survivors = tree.filter(alive)
+    cleanup(survivors)
+    expect(survivors).toEqual([])
+  }, 30_000)
+})
+
 describe('killTreeWindows', () => {
   it('用 taskkill /T /F 杀整棵树', () => {
     const calls: string[][] = []
