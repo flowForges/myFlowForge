@@ -1,6 +1,7 @@
 import { BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 import { readSettings } from '../config/store'
+import { logError } from '../log/appLog'
 import { CH } from '../ipc/channels'
 import { vibrancyMaterial, windowEffect, type VibrancyMaterial, type WinBackgroundMaterial } from '@shared/vibrancy'
 
@@ -54,6 +55,13 @@ export function createMainWindow(): BrowserWindow {
       if (input.type === 'keyDown' && input.key === 'F12') win.webContents.toggleDevTools()
     })
   }
+  // ★ 窗口是 show:false 建的,只有 ready-to-show 会让它显示 —— 渲染层加载失败时这个事件【永远不来】,
+  // 表现是「进程在、窗口在、但一直不可见」,而且不留任何痕迹。所以加载失败要记一笔,并且照样把窗口显示
+  // 出来:一个白窗口配一条日志,远比一个查不到的隐形窗口好。
+  win.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    logError('window', `主窗口渲染层加载失败 ${code} ${desc} — ${url}`)
+    if (!win.isDestroyed() && !win.isVisible()) win.show()
+  })
   win.once('ready-to-show', () => win.show())
   if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
   else win.loadFile(join(__dirname, '../renderer/index.html'))

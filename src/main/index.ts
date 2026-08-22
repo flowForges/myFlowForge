@@ -90,6 +90,16 @@ if (process.platform === 'win32') {
   Menu.setApplicationMenu(null)
 }
 
+// 启动期的失败必须留痕。whenReady 的回调里任何一处抛异常,后面的建窗代码就全不执行 —— 而 promise
+// 的 rejection 没人接,于是表现为「进程活着、一个窗口都没有、app.log 只停在最初两行」。真机上就是这样。
+// 这三个 handler 让那种失败至少写下一行。
+process.on('unhandledRejection', (reason) => {
+  try { logError('app', `未处理的 promise rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`) } catch { /* 日志本身绝不能再抛 */ }
+})
+process.on('uncaughtException', (err) => {
+  try { logError('app', `未捕获异常: ${err.stack ?? err.message}`) } catch { /* 同上 */ }
+})
+
 app.whenReady().then(() => {
   if (!gotInstanceLock) return // a second instance is already quitting — don't build any windows
   const iconPathEnv = () => ({ resourcesPath: process.resourcesPath, appPath: app.getAppPath(), isPackaged: app.isPackaged })
@@ -178,7 +188,9 @@ app.whenReady().then(() => {
   const registry = new WindowRegistry()
   // Live-stream debug log entries to any open renderer (the Settings · 调试日志 pane).
   setAppLogEventSink((e) => registry.broadcast(CH.appLogEvent, e))
+  logInfo('app', '协议与会话准备完毕,开始建主窗口')
   const mainWin = createMainWindow()
+  logInfo('app', '主窗口已创建,等待 ready-to-show')
   mainWinRef = mainWin
   registry.add(mainWin.webContents)
 
