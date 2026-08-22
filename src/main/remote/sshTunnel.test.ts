@@ -90,3 +90,30 @@ describe('openSshTunnel', () => {
     expect(proc.killed).toContain('SIGTERM')
   })
 })
+
+describe('close 必须真的杀掉进程(真子进程,不是 mock)', () => {
+  it('★close 之后那个进程在系统里不存在了 —— 否则每连一次留一个孤儿', async () => {
+    // 这一类坑在 agent 进程上栽过两次(0f23482 / eb87863)。隧道是我们自己 spawn 的子进程,
+    // 用 mock 断言「调了 kill」不算数 —— 要证明进程真的没了。
+    const { execa } = await import('execa')
+    let pid = 0
+    const t = await openSshTunnel({
+      target: 'a@b', remotePort: 1,
+      spawnProc: (_cmd, _args) => {
+        // 拿一个真的、不会自己退出的子进程冒充 ssh
+        const p = execa(process.execPath, ['-e', 'setInterval(() => {}, 1000)'])
+        pid = p.pid ?? 0
+        return p
+      },
+      probe: async () => true,
+    })
+    expect(pid).toBeGreaterThan(0)
+    expect(() => process.kill(pid, 0)).not.toThrow()   // 活着
+
+    await t.close()
+
+    // 等它真的消失(SIGTERM 到进程消失之间有一小段)
+    const gone = async () => { try { process.kill(pid, 0); return false } catch { return true } }
+    await expect.poll(gone, { timeout: 5000 }).toBe(true)
+  })
+})

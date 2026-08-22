@@ -857,7 +857,13 @@ app.whenReady().then(() => {
   // killAllAgentTrees:agent CLI 现在是 detached 的独立进程组(见 agents/procGroup.ts),而 execa 自带的
   // 「父进程退出时杀子进程」在 detached 下直接 return —— 不在这里补一刀,退出 app 就会把正在跑的 CLI
   // 连同它派生的 shell 命令一起留在后台。
-  app.on('before-quit', () => { quitting = true; termManager.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts() })
+  app.on('before-quit', () => {
+    quitting = true; termManager.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts()
+    // ★远程连接也要收:SSH 隧道是我们自己 spawn 的子进程,不杀就变成孤儿留在系统里
+    //   (每连一次留一个)。同一类坑在 agent 进程上已经栽过两次,不能在这儿再来一遍。
+    //   before-quit 是同步的,所以只发出关闭指令,不 await —— 隧道进程收到 SIGTERM 就够了。
+    void router.disconnect()
+  })
   mainWin.on('closed', () => termManager.killAll())
   // ── End terminal PTY bridge ─────────────────────────────────────────────────
 
