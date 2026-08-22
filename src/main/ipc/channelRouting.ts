@@ -50,6 +50,23 @@ export const DAEMON_UNSUPPORTED: ReadonlySet<string> = new Set([
   'workspaces:open-dir',
 ])
 
+import type { MethodTable } from './invokeCtx'
+
+/**
+ * daemon 对外提供的那张表:剔掉「跟设备走」的,再剔掉无头环境做不了的。
+ *
+ * 剔掉而不是「留着但会失败」是有意的 —— 这张表的 key 就是握手时发给客户端的方法清单,
+ * 客户端据此置灰(决策 B-2)。**一个说明了原因的灰按钮,好过一个点了没反应的亮按钮。**
+ */
+export function daemonTable(table: MethodTable): MethodTable {
+  const out: MethodTable = {}
+  for (const [ch, fn] of Object.entries(table)) {
+    if (CLIENT_ONLY.has(ch) || DAEMON_UNSUPPORTED.has(ch)) continue
+    out[ch] = fn
+  }
+  return out
+}
+
 export type Route = 'client' | 'host'
 
 export const routeOf = (channel: string): Route => (CLIENT_ONLY.has(channel) ? 'client' : 'host')

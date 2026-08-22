@@ -10,6 +10,8 @@ export default defineConfig({
         input: {
           index: resolve('src/main/index.ts'),
           forgeMcp: resolve('src/main/mcp/forgeMcp.ts'),
+          // 无头 daemon 入口(第二期 B)。跟 index 装载同一份核心,只是宿主能力换成无头实现。
+          daemon: resolve('src/main/daemon/index.ts'),
         },
       },
     },
