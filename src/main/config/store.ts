@@ -17,7 +17,12 @@ import { randomUUID } from 'node:crypto'
 export function readJson<T>(file: string, schema: z.ZodType<T>, fallback: () => T): T {
   try {
     if (!existsSync(file)) return fallback()
-    return schema.parse(JSON.parse(readFileSync(file, 'utf8')))
+    // 剥掉 UTF-8 BOM 再解析。Node 的 readFileSync('utf8') 不剥,JSON.parse 遇到 BOM 直接抛,
+    // 然后被下面的 catch 吞成「回落默认值」——【用户全部设置被静默重置】,而不是一次读失败。
+    // Windows 上太容易触发:PowerShell 5.1 的 `Set-Content -Encoding UTF8` 就写 BOM,老记事本
+    // 和不少编辑器也是。用户拿记事本改一下 settings.json,主题/壁纸/凭据就全没了;要是
+    // workspaces.json 中招,整个工作区列表都会消失。
+    return schema.parse(JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')))
   } catch { return fallback() }
 }
 export function writeJson(file: string, data: unknown) {
