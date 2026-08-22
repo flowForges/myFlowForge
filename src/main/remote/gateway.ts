@@ -48,6 +48,7 @@ export async function startGateway(opts: GatewayOpts) {
   })
 
   const conns = new Set<WebSocket>()
+  let closed = false
 
   wss.on('connection', (ws) => {
     conns.add(ws)
@@ -128,6 +129,9 @@ export async function startGateway(opts: GatewayOpts) {
     host,
     clientCount: () => conns.size,
     async close() {
+      // ★幂等:WebSocketServer.close() 被调用第二次时回调不保证再触发,await 会永远挂着。
+      if (closed) return
+      closed = true
       for (const ws of [...conns]) { try { ws.close(1001, 'going away') } catch { /* 已关 */ } }
       await new Promise<void>((res) => wss.close(() => res()))
     },

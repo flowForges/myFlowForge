@@ -53,3 +53,23 @@ export const DAEMON_UNSUPPORTED: ReadonlySet<string> = new Set([
 export type Route = 'client' | 'host'
 
 export const routeOf = (channel: string): Route => (CLIENT_ONLY.has(channel) ? 'client' : 'host')
+
+/**
+ * 广播事件里,**永远来自本机**的那几条。
+ *
+ * 连着远程 host 时,界面只该看到那台机器的内容(决策 2)—— 本机 agent 还在跑,它的
+ * `chat:event` 要是漏进界面,你会看到一条不属于当前 host 的回复凭空冒出来,而且完全
+ * 无从判断它是哪儿来的。所以:**本机事件默认丢弃,只有这张表里的放行。**
+ *
+ * 判断标准是「这条事件描述的是这台设备本身,还是那台机器上的活」:
+ * 调试日志、菜单、快捷键、app 自身更新、设置(B 阶段设置跟设备)—— 是前者。
+ */
+export const CLIENT_EVENT_CHANNELS: ReadonlySet<string> = new Set([
+  'app-log:event',
+  'menu:action',
+  'settings:changed',
+  'shortcuts:status',
+  'update:done', 'update:error', 'update:progress',
+])
+
+export const isClientEvent = (channel: string): boolean => CLIENT_EVENT_CHANNELS.has(channel)
