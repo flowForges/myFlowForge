@@ -36,6 +36,17 @@ describe('pickBinPath (Windows)', () => {
     const out = 'C:\\tools\\x\\gh.cmd\r\nC:\\Program Files\\GitHub CLI\\gh.exe\r\n'
     expect(pickBinPath(out, 'win32')).toBe('C:\\Program Files\\GitHub CLI\\gh.exe')
   })
+  // 真机取证(2026-08-22,Win11 虚拟机,`npm i -g @openai/codex` 之后跑 `where codex`):
+  //   C:\Users\zghua\AppData\Roaming\npm\codex
+  //   C:\Users\zghua\AppData\Roaming\npm\codex.cmd
+  // 第一行就是那个【Windows 执行不了】的无扩展名 shell 脚本 —— 取第一行的朴素实现会把它存成 binPath。
+  it('★ 真机取证:npm 装的 codex,where 的第一行是执行不了的那个', () => {
+    const REAL = 'C:\\Users\\zghua\\AppData\\Roaming\\npm\\codex\r\nC:\\Users\\zghua\\AppData\\Roaming\\npm\\codex.cmd\r\n'
+    expect(pickBinPath(REAL, 'win32')).toBe('C:\\Users\\zghua\\AppData\\Roaming\\npm\\codex.cmd')
+    // 明确钉住"不是第一行"
+    expect(pickBinPath(REAL, 'win32')).not.toBe(REAL.split(/\r?\n/)[0])
+  })
+
   it('accepts a .bat shim when that is all there is', () => {
     expect(pickBinPath('C:\\tools\\thing.bat\r\n', 'win32')).toBe('C:\\tools\\thing.bat')
   })

@@ -1,5 +1,4 @@
-import { spawn as nodeSpawn } from 'node:child_process'
-import { agentSpawnOptions, trackAgentChild, killTree } from '../procGroup'
+import { spawnAgent, killTree } from '../procGroup'
 import { adaptCodexEvent } from './codexEventAdapter'
 import { codexDecision } from './codexApproval'
 
@@ -52,7 +51,12 @@ const APPROVAL_METHODS = new Set([
 // routes approval server-requests through cb.onApproval. Mirrors the framing
 // skeleton in usage/codexRpc.ts and adds the thread/turn drive on top.
 export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps: CodexAppServerDeps = {}): CodexTurnHandle {
-  const spawn = deps.spawn ?? ((cmd, args) => trackAgentChild(nodeSpawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, ...agentSpawnOptions() })))
+  // ★ 必须走 spawnAgent(execa),不能用 node 原生 spawn:Windows 上 codex 是 npm 装的 `codex.cmd` 包装,
+  // 原生 spawn 拿裸名会直接 ENOENT(2026-08-22 真机实测:execFileSync/spawnSync 都失败,execa 成功)。
+  // execa 内部走 cross-spawn,会解析 .cmd 并正确转义参数。spawnAgent 顺带给了进程组语义 + 退出兜底登记,
+  // 和这里原来手写的 agentSpawnOptions()+trackAgentChild 完全等价。
+  // reject:false —— 我们从不 await 这个 promise(只用它的 stdio 流),非零退出不该变成未处理的 rejection。
+  const spawn = deps.spawn ?? ((cmd, args) => spawnAgent(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, reject: false }) as unknown as CodexChild)
   const args = [...opts.configArgs, ...opts.modelArgs, 'app-server']
   const child = spawn('codex', args)
 
