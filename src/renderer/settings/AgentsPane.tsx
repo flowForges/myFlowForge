@@ -3,6 +3,7 @@ import type { ProviderInfo, AgentsConfig, CustomAgent, ModelInfo } from '@shared
 import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
 import { TIMEZONE_OPTIONS } from '@shared/timezones'
 import { useSettings } from '../state/useSettings'
+import { usePathPicker } from '../state/PathPicker'
 
 // Built-in providers whose bin path can be overridden — derived from the shared catalog.
 const BUILTINS = BUILTIN_PROVIDERS.map(p => ({ id: p.id, name: p.displayName, defaultBin: p.defaultBin }))
@@ -61,6 +62,8 @@ function EnableToggle({ id, disabled, onToggle }: { id: string; disabled: boolea
 
 export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   const { settings, update } = useSettings()
+  // CLI 装在**那台机器**上,连着远程时要浏览的是它的文件系统。
+  const { pick: pickPath } = usePathPicker()
   const disabledProviders = settings?.disabledProviders ?? []
   const isDisabled = (id: string) => disabledProviders.includes(id)
   const toggleDisabled = useCallback((id: string, currentlyDisabled: boolean) => {
@@ -159,7 +162,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     ? <span className="agent-badge off">检测中…</span>
     : <span className={`agent-badge ${installed(id) ? 'ok' : 'off'}`}>{installed(id) ? '已检测' : '未检测'}</span>
   const browse = async (id: string) => {
-    const p = await window.forge.pickFile()
+    const p = await pickPath('file', '选择 CLI 可执行文件')
     if (p) setBinDrafts(d => ({ ...d, [id]: p }))
   }
   /**
@@ -393,7 +396,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
         <input placeholder="id (如 my-agent)" value={nc.id} onChange={e => setNc({ ...nc, id: e.target.value })} />
         <input placeholder="显示名" value={nc.displayName} onChange={e => setNc({ ...nc, displayName: e.target.value })} />
         <input placeholder="bin 绝对路径" value={nc.bin} onChange={e => setNc({ ...nc, bin: e.target.value })} />
-        <button className="ghost" disabled={busy} onClick={async () => { const p = await window.forge.pickFile(); if (p) setNc(s => ({ ...s, bin: p })) }}>选择…</button>
+        <button className="ghost" disabled={busy} onClick={async () => { const p = await pickPath('file', '选择 CLI 可执行文件'); if (p) setNc(s => ({ ...s, bin: p })) }}>选择…</button>
         <input placeholder="参数模板，如 chat --json {prompt}" value={nc.argsTemplate} onChange={e => setNc({ ...nc, argsTemplate: e.target.value })} />
         <button
           disabled={busy || !nc.id.trim() || !nc.bin.trim()}

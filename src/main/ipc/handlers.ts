@@ -105,6 +105,7 @@ import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
 import type { DiscoveredSession } from '@shared/types'
 import { resolveFileRef } from '../fs/fileRef'
+import { listDir, defaultRoots } from '../fs/browse'
 
 /**
  * 附件落盘时避开重名:`image.png` 已存在就依次试 `image-2.png`、`image-3.png`……返回真正能用的名字。
@@ -1303,6 +1304,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const err = await caps.openPath(r.abs)
     return err ? { ok: false as const, error: err } : { ok: true as const }
   })
+  // 服务端目录选择器的两个只读端点(第二期 D)。★只读:列目录、看上一层。没有写、没有删、没有改名 ——
+  // 多一个能写的口子,就多一条从网络直达文件系统的路径。
+  on(CH.fsBrowse, (_e, a: { path?: string; showHidden?: boolean; filesToo?: boolean }) =>
+    listDir(String(a?.path ?? ''), { showHidden: !!a?.showHidden, filesToo: !!a?.filesToo }))
+  on(CH.fsBrowseRoots, () => defaultRoots())
   on(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
   on(CH.gitBranch, (_e, cwd: string) => readBranch(cwd, proxy()))
   on(CH.fileSearchContent, (_e, a: { root: string; query: string; files?: string[] }) =>
@@ -1677,8 +1683,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     try { for (const cmd of cmds) await runOpen(cmd); return { ok: true as const } }
     catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
-  on(CH.workspacesOpenDir, async () => {
-    const [dir] = await caps.pickPaths({ kind: 'directory' })
+  on(CH.workspacesOpenDir, async (_e, explicitPath?: string) => {
+    // 带路径 = 客户端已经用服务端目录选择器选好了(远程场景),不需要再弹本地对话框 ——
+    // 也正因为如此,这个 handler 在无头 daemon 上照样能用。
+    const [dir] = explicitPath ? [explicitPath] : await caps.pickPaths({ kind: 'directory' })
     if (dir) {
       const wsJson = join(dir, '.forge', 'workspace.json')
       if (existsSync(wsJson)) {

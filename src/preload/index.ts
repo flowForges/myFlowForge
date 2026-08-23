@@ -142,7 +142,11 @@ const api = {
   watchStop: () => ipcRenderer.invoke(CH.watchStop),
   listWorkspaces: () => ipcRenderer.invoke(CH.workspacesList),
   homeStats: (): Promise<import('@shared/types').HomeStats> => ipcRenderer.invoke(CH.workspacesHomeStats),
-  openWorkspaceDir: () => ipcRenderer.invoke(CH.workspacesOpenDir),
+  // 服务端目录浏览(第二期 D)。★跟机器走 —— 连着远程时列的是那台机器的目录。
+  fsBrowse: (a: { path?: string; showHidden?: boolean; filesToo?: boolean }): Promise<import('../main/fs/browse').BrowseResult> => ipcRenderer.invoke(CH.fsBrowse, a),
+  fsBrowseRoots: (): Promise<import('../main/fs/browse').BrowseEntry[]> => ipcRenderer.invoke(CH.fsBrowseRoots),
+  // 带路径 = 已经用服务端选择器选好了(远程场景);不带 = 弹本机对话框(本机场景)。
+  openWorkspaceDir: (path?: string) => ipcRenderer.invoke(CH.workspacesOpenDir, path),
   setWorkspacePinned: (path: string, pinned: boolean) => ipcRenderer.invoke(CH.workspacesSetPinned, { path, pinned }),
   setWorkspaceOrder: (order: string[]) => ipcRenderer.invoke(CH.workspacesSetOrder, { order }),
   petSetExpanded: (mode: 'collapsed' | 'bubble' | 'expanded'): Promise<'up' | 'down'> => ipcRenderer.invoke(CH.petSetExpanded, mode),

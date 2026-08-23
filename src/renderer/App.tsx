@@ -13,6 +13,7 @@ import { useConfig } from './state/useConfig'
 import { useHookLibrary } from './state/useHookLibrary'
 import { useSettings } from './state/useSettings'
 import { useHost } from './state/useHostKey'
+import { usePathPicker } from './state/PathPicker'
 import type { OpenTarget } from '@shared/openers'
 import { useLogs } from './state/useLogs'
 import { useResizable } from './state/useResizable'
@@ -235,6 +236,7 @@ export function App() {
   const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
   const { key: hostKey, label: hostLabel } = useHost()
+  const { pick: pickPath } = usePathPicker()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
     const items = home.workspaces.map(w => {
@@ -521,7 +523,7 @@ export function App() {
   async function handleQuickFolder() {
     if (creating) return
     let dir: string | null = null
-    try { dir = await window.forge.pickDirectory() } catch { dir = null }
+    try { dir = await pickPath('directory', '选择工作区目录') } catch { dir = null }
     if (!dir) return
     setCreating(true)
     try {
@@ -796,7 +798,7 @@ export function App() {
         onNewWorkflow={() => { setWizardOpen(false); setSettingsPane('workflow'); setSettingsOpen(true) }}
         onAddProject={addProject}
         onAddWorkflow={addWorkflow}
-        onPickPath={() => window.forge.pickDirectory()}
+        onPickPath={() => pickPath('directory', '选择目录')}
         hookLibrary={hookLib.hooks}
         onSaveHookToLibrary={hookLib.save}
         onProbeWorkspace={(p) => window.forge.getWorkspace(p)}

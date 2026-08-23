@@ -116,6 +116,10 @@ export const CH = {
   // 预览打不开的类型(pdf/xlsx/…)与 .html 的「用浏览器打开」:交给系统默认程序
   openFilePath: 'file:open-path',
   fsTree: 'fs:tree',
+  // 服务端只读目录浏览(第二期 D)。「手机上怎么选目录」的落地 —— 跟机器走:
+  // 你要定位的目录在那台机器上,只有它列得出来。
+  fsBrowse: 'fs:browse',
+  fsBrowseRoots: 'fs:browse-roots',
   gitBranch: 'git:branch',
   fileSearchContent: 'file:search-content',
   watchChanges: 'watch:changes',

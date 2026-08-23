@@ -46,9 +46,11 @@ export const CLIENT_ONLY: ReadonlySet<string> = new Set([
  * 那是 D 阶段的事。B 阶段与其让用户点了没反应,不如**明确置灰并说明原因**。
  */
 export const DAEMON_UNSUPPORTED: ReadonlySet<string> = new Set([
+  // 这两个本质就是「弹一个系统对话框」,无头机器上不存在这回事。远程时客户端改用服务端目录
+  // 选择器(fs:browse)选好路径,再走带路径的入口 —— 所以 workspaces:open-dir 不再列在这里:
+  // 它现在接受一个显式路径,无头机器上照样能用。
   'dialog:pick-directory',
   'dialog:pick-file',
-  'workspaces:open-dir',
 ])
 
 import type { MethodTable } from './invokeCtx'

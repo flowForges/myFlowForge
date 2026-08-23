@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useHost } from './useHostKey'
+import { usePathPicker } from './PathPicker'
 import type { WorkspaceMeta, HomeStats } from '@shared/types'
 
 // 首页工作区排序按 stats 里的「最近对话时间」(lastMessageAt)降序。stats 走 git-status 扫描,启动后要几秒才回来
@@ -28,6 +30,8 @@ export interface HomeApi {
 }
 
 export function useHome(): HomeApi {
+  const { key: hostKey } = useHost()
+  const { pick: pickPath } = usePathPicker()
   const [workspaces, setWorkspaces] = useState<WorkspaceMeta[]>([])
   // 用上次缓存的 stats 作初始值:首屏排序即最终顺序,不会等 stats 回来才「A 跳成 B」。
   const [stats, setStats] = useState<HomeStats>(loadCachedStats)
@@ -42,7 +46,14 @@ export function useHome(): HomeApi {
   }, [])
   useEffect(() => { reload() }, [reload])
 
-  const openDir = useCallback(async () => { setWorkspaces(await api.current.openWorkspaceDir()) }, [])
+  // 「打开已有工作区」选的是**那台机器**上的目录。本机时 openWorkspaceDir 自己弹原生对话框;
+  // 连着远程时先用服务端目录选择器选好,再把路径传进去 —— 无头机器上没有对话框这回事。
+  const openDir = useCallback(async () => {
+    if (hostKey === 'local') { setWorkspaces(await api.current.openWorkspaceDir()); return }
+    const dir = await pickPath('directory', '选择已有工作区目录')
+    if (!dir) return
+    setWorkspaces(await api.current.openWorkspaceDir(dir))
+  }, [hostKey, pickPath])
 
   const setPinned = useCallback(async (path: string, pinned: boolean) => {
     setWorkspaces(await api.current.setWorkspacePinned(path, pinned))

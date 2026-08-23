@@ -34,7 +34,7 @@ describe('频道分类', () => {
     const client = keys.filter((c) => routeOf(c) === 'client')
     const host = keys.filter((c) => routeOf(c) === 'host')
     expect(client.length).toBe(44)
-    expect(host.length).toBe(138)
+    expect(host.length).toBe(140)
     expect(client.length + host.length).toBe(keys.length)
   })
 
