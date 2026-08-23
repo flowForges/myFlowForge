@@ -118,6 +118,19 @@ export function createHostRouter(deps: HostRouterDeps) {
 
     current: () => current,
 
+    /**
+     * 主机配置被改了(改名、换标识、换显示方式)。
+     *
+     * ★`current` 是 connect 那一刻的**快照** —— 不同步的话,你在设置里把「只显示标识」存下去,
+     * 标题栏那枚芯片纹丝不动,看起来就是「保存了但没生效」。真机验收就卡在这儿。
+     * 只有改的正是当前这台才需要动;连接本身不受影响,不用重连。
+     */
+    hostUpdated(h: RemoteHost) {
+      if (!current || current.id !== h.id) return
+      current = { ...h }
+      pushStatus()
+    },
+
     async connect(host: RemoteHost) {
       await teardown()
       current = host

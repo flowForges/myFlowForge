@@ -695,7 +695,13 @@ app.whenReady().then(() => {
   // ── 多主机管理。这些是**客户端自己的**事(这台设备认识哪些机器、现在连着谁),
   //    所以注册在这儿而不是方法表里 —— 天然不会被路由到远程。
   ipcMain.handle(CH.hostsList, () => readHosts().hosts)
-  ipcMain.handle(CH.hostsUpsert, (_e, h: Parameters<typeof upsertHost>[0]) => { upsertHost(h); return readHosts().hosts })
+  ipcMain.handle(CH.hostsUpsert, (_e, h: Parameters<typeof upsertHost>[0]) => {
+    const next = upsertHost(h)
+    // ★改的如果正是当前连着的这台,要把路由器里那份快照一起换掉 —— 否则标题栏上的
+    //   名字/标识/显示方式不会变,看起来就是「保存了但没生效」。
+    router.hostUpdated(next)
+    return readHosts().hosts
+  })
   ipcMain.handle(CH.hostsRemove, async (_e, id: string) => {
     if (router.current()?.id === id) await router.disconnect()
     return removeHost(id).hosts

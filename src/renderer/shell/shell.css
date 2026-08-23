@@ -740,25 +740,26 @@
 .tb-hostcenter > * { pointer-events: auto; }
 .host-switch { position: relative; -webkit-app-region: no-drag; }
 
+/* ★逐条照抄左邻居 .tb-edit-ws(「编辑工作区」)——同样的高度、圆角、边框、背景和字色。
+   之前我自己发明了一套 color-mix 的半透明,结果在每个主题下都比周围深一截,非常突兀。
+   标题栏上的东西应该长得像兄弟,而不是像后贴的贴纸;跟着现有 token 走,换主题/换壁纸时
+   它就自动跟着变,不需要为每个主题各调一次。 */
 .hs-chip {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 24px; padding: 0 8px 0 10px;
-  border-radius: 999px; border: 1px solid var(--border-2);
-  /* ★半透明,让壁纸/主题透上来。用不透明的 var(--surface) 会在标题栏正中糊出一块白斑,
-     和周围的 chrome 完全不搭 —— 真机截图里就是这个样子。 */
-  background: color-mix(in oklch, var(--surface) 68%, transparent);
-  color: var(--fg-2);
+  height: 24px; padding: 0 9px 0 8px;
+  border-radius: 7px; border: 1px solid var(--border-2);
+  background: var(--surface); color: var(--muted);
   font-size: 11.5px; font-weight: 550; line-height: 1; cursor: pointer;
   /* ★固定一个最小宽度:芯片是居中的,内容一变宽窄就会左右重新居中 —— 切主机时看起来像在抖。
      状态文字那一格也常驻(见 .st),于是「已连接 / 连接中 / 已断开」之间切换不会改变宽度。 */
   min-width: 128px; max-width: 260px;
-  transition: border-color .12s, background .12s;
+  transition: .14s;
 }
-.hs-chip:hover { border-color: color-mix(in oklch, var(--accent) 45%, var(--border-2));
-  background: color-mix(in oklch, var(--surface) 88%, transparent); }
+/* hover 也跟着左邻居走 */
+.hs-chip:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 .hs-chip.busy { opacity: .6; }
 .hs-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
-.hs-chip .nm { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hs-chip .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hs-chip .st { opacity: .85; white-space: nowrap; }
 /* 状态那一格常驻(空的时候也占位),这样 已连接/连接中/已断开 之间切换不会改变芯片宽度 ——
    芯片是居中的,宽度一变就会左右重新居中,看起来就是在抖。 */

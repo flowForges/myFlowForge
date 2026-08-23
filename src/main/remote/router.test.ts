@@ -226,4 +226,37 @@ describe('host 路由', () => {
     hub.broadcast('chat:event', { type: 'done' })
     await expect.poll(() => remoteSeen.length, { timeout: 2000 }).toBe(1)
   })
+
+  it('★改了当前这台主机的配置(改名/换标识/换显示方式)要当场生效,不用重连', async () => {
+    // router.current 是 connect 那一刻的快照。不同步的话,你在设置里把「只显示标识」存下去,
+    // 标题栏那枚芯片纹丝不动 —— 看起来就是「保存了但没生效」。真机验收就卡在这儿。
+    const seen: string[] = []
+    const hub2 = createBroadcastHub()
+    const gw = await startGateway({ table: { 'a:b': () => 1 }, addSink: hub2.addSink, version: '1.1.2', port: 0 })
+    closers.push(() => gw.close())
+    const router = createHostRouter({
+      localTable: { 'a:b': () => 1 }, toWindows: vi.fn(), clientVersion: '1.1.2',
+      onStatus: (s) => seen.push(`${s.label}/${s.display ?? ''}/${s.icon ?? ''}`),
+      resolveUrl: async (h) => ({ url: h.address }),
+    })
+    closers.push(() => router.disconnect())
+    const h = { ...host(`ws://127.0.0.1:${gw.port}`), icon: '🌩', display: 'both' as const }
+    await router.connect(h)
+    await expect.poll(() => router.status().state.status, { timeout: 3000 }).toBe('ready')
+    expect(router.status().display).toBe('both')
+
+    router.hostUpdated({ ...h, label: '改了名', icon: '🏠', display: 'icon' })
+    expect(router.status().display).toBe('icon')
+    expect(router.status().icon).toBe('🏠')
+    expect(router.status().label).toBe('改了名')
+    expect(seen[seen.length - 1]).toBe('改了名/icon/🏠')      // 而且要广播出去,界面才会跟着变
+  })
+
+  it('改的是别的主机时不动当前这台', async () => {
+    const s = await setup({ 'a:b': () => 1 }, { 'a:b': () => 1 })
+    await s.router.connect(host(s.url))
+    await untilReady(s.router)
+    s.router.hostUpdated({ ...host('ws://x'), id: '别的', label: '别的主机' })
+    expect(s.router.status().label).toBe('云服务器')
+  })
 })
