@@ -5,7 +5,8 @@ import { sysFile, wsConfigFile, wsForgeDir, expandTilde } from './paths'
 import { deriveProjectName, deriveProjectId } from './projectId'
 import { writeJsonAtomic } from '../util/atomicWrite'
 import {
-  SettingsSchema, defaultSettings, ProjectsSchema, defaultProjects,
+  SettingsSchema, defaultSettings, ClientSettingsSchema, HostSettingsSchema,
+  pickClient, pickHost, migrateLegacySettings, ProjectsSchema, defaultProjects,
   WorkflowsSchema, defaultWorkflows, AgentsConfigSchema, defaultAgentsConfig,
   HookLibrarySchema, defaultHookLibrary,
   CustomStagesFileSchema, defaultCustomStages,
@@ -30,8 +31,86 @@ export function writeJson(file: string, data: unknown) {
   writeJsonAtomic(file, data)
 }
 
-export const readSettings = () => readJson(sysFile('settings.json'), SettingsSchema, defaultSettings)
-export const writeSettings = (s: Settings) => writeJson(sysFile('settings.json'), SettingsSchema.parse(s))
+// ── 设置一分为二(第二期 C · 决策 8 + Q1–Q7)────────────────────────────────────
+//
+// 对外仍然只有一个 `Settings`:main 里几百处 readSettings() 和渲染层的 settings.X 一行没改。
+// 变的只是**落盘位置**:
+//   ~/.myFlowForge/settings.json  跟机器走(daemon 那台也有它自己的一份)
+//   ~/.myFlowForge/client.json    跟设备走(新文件)
+//
+// ★升级路径是这里最危险的地方。老版本的 settings.json 装着全部字段;如果直接按新规则去读,
+//   客户端那半边会读不到而回落默认值 —— 用户的主题/壁纸/宠物在一次升级里**静默消失**,
+//   而且不会有任何报错(readJson 的 catch 把读失败变成回落默认值)。
+//   所以:client.json 不存在时,一律从老的 settings.json 里迁移出来,并当场把两份都落盘。
+const clientFile = () => sysFile('client.json')
+const hostFile = () => sysFile('settings.json')
+
+function readRaw(file: string): unknown {
+  try {
+    if (!existsSync(file)) return null
+    return JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+  } catch { return null }
+}
+
+export function readSettings(): Settings {
+  const d = defaultSettings()
+  const hostRaw = readRaw(hostFile())
+  const clientRaw = readRaw(clientFile())
+  // client.json 不在 = 还没迁移过(或用户删了)。两半都从老文件里拆。
+  const split = migrateLegacySettings(hostRaw ?? {})
+  const clientSrc = clientRaw ?? split.client
+  const hostSrc = split.host
+
+  // 每半边都以 defaults 打底再覆盖 —— 单个字段坏掉只该丢那一个字段(靠 schema 里的 .catch),
+  // 而不是让整份设置回落默认值。
+  const client = safeParse(ClientSettingsSchema, overlay(pickClient(d) as never, clientSrc), () => pickClient(d))
+  const host = safeParse(HostSettingsSchema, overlay(pickHost(d) as never, hostSrc), () => pickHost(d))
+  return { ...d, ...host, ...client }
+}
+
+function safeParse<T>(schema: z.ZodType<T>, value: unknown, fallback: () => T): T {
+  try { return schema.parse(value) } catch { return fallback() }
+}
+
+/**
+ * 以 defaults 打底,把磁盘上的值覆盖上去 —— **对象字段合并一层,不是整个替换**。
+ *
+ * ★为什么必须合并:磁盘上的 `appearance` 可能是老版本写的、字段更少的那一份。整个替换掉之后
+ *   缺的字段没人补,schema 校验失败,于是回落默认值 —— 用户的主题/壁纸**静默消失**。
+ *   合并一层的话,缺什么补什么,只有真正坏掉的那个字段才会被 schema 的 .catch() 兜走。
+ *   数组照旧整个替换(用户清空一个列表就该是空的,不该被默认值填回去)。
+ */
+/** 导出给测试:它验的正是「磁盘上是残缺对象」这个真实场景。 */
+export const overlayForTest = (b: Record<string, unknown>, o: unknown) => overlay(b, o)
+
+function overlay(base: Record<string, unknown>, over: unknown): Record<string, unknown> {
+  const o = (over && typeof over === 'object' && !Array.isArray(over) ? over : {}) as Record<string, unknown>
+  const out: Record<string, unknown> = { ...base }
+  for (const [k, v] of Object.entries(o)) {
+    const b = base[k]
+    const bothPlainObjects = b && typeof b === 'object' && !Array.isArray(b)
+      && v && typeof v === 'object' && !Array.isArray(v)
+    out[k] = bothPlainObjects ? { ...(b as object), ...(v as object) } : v
+  }
+  return out
+}
+
+export function writeSettings(s: Settings) {
+  const parsed = SettingsSchema.parse(s)
+  writeJson(hostFile(), pickHost(parsed))
+  writeJson(clientFile(), pickClient(parsed))
+}
+
+/**
+ * 老 settings.json → 两份新文件,只在第一次启动时跑一次。
+ * 幂等:client.json 已存在就什么都不做。返回是否真的迁移了(给日志用)。
+ */
+export function migrateSettingsIfNeeded(): boolean {
+  if (existsSync(clientFile())) return false
+  const s = readSettings()          // 内部已经走了迁移逻辑
+  writeSettings(s)                  // 落成两份,顺便把老文件里的客户端字段清掉
+  return true
+}
 
 // One-time per-(workspace, provider) full-access consent (see runTurn's pre-run gate). Providers that
 // ignore the permission档 (no sandbox dimension) run unrestricted; we ask once per workspace, then remember.

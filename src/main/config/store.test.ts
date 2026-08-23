@@ -17,8 +17,8 @@ describe('config store', () => {
     const { readSettings, writeSettings } = await import('./store')
     const s = readSettings()
     expect(s.appearance.theme).toBe('light')
-    writeSettings({ ...s, termProxy: 'http://127.0.0.1:7897' })
-    expect(readSettings().termProxy).toBe('http://127.0.0.1:7897')
+    writeSettings({ ...s, agentProxy: 'http://127.0.0.1:7897' })
+    expect(readSettings().agentProxy).toBe('http://127.0.0.1:7897')
   })
   it('repairs an invalid file by falling back to defaults', async () => {
     const { writeFileSync, mkdirSync } = await import('node:fs')

@@ -5,15 +5,17 @@ import { builtinPets } from '@shared/builtinPets'
 const DEFAULTS: Settings = {
   appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
   notifications: { enabled: true, confirm: true, input: true, done: true },
+  notifyEvents: { confirm: true, input: true, done: true },
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
-  termProxy: '',
+  agentProxy: '',
+  appProxy: '',
   skills: { 'code-review': true, 'test-driven': true, 'deep-research': false, 'systematic-debugging': true },
   pet: { enabled: true, skin: 'ghost', customPets: builtinPets(), activeCustomPetId: undefined, corner: 'right', pos: { bottom: 24 }, followCursor: true, idleAnimation: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } } },
   heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
   pinnedWorkspaces: [],
   workspaceOrder: [],
-  lastActiveWorkspace: '',
+  lastActiveWorkspace: {},
   pluginCreds: {},
   disabledProviders: [],
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
@@ -36,12 +38,14 @@ export interface SettingsUpdate {
   notifications?: Partial<Notifications>
   closeAction?: CloseAction
   appIcon?: Partial<AppIcon>
-  termProxy?: string
+  agentProxy?: string
+  appProxy?: string
+  notifyEvents?: Settings['notifyEvents']
   skills?: Record<string, boolean>
   pet?: Partial<Pet>
   heartbeat?: Settings['heartbeat']
   terminal?: Partial<Terminal>
-  lastActiveWorkspace?: string
+  lastActiveWorkspace?: Record<string, string>
   defaultOpenerId?: string
   keybindings?: Keybindings
   perfStallToast?: boolean
@@ -59,9 +63,11 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
   return {
     appearance: { ...base.appearance, ...(partial.appearance ?? {}) },
     notifications: { ...base.notifications, ...(partial.notifications ?? {}) },
+    notifyEvents: { ...base.notifyEvents, ...(partial.notifyEvents ?? {}) },
     closeAction: partial.closeAction ?? base.closeAction,
     appIcon: { ...base.appIcon, ...(partial.appIcon ?? {}) },
-    termProxy: partial.termProxy ?? base.termProxy,
+    agentProxy: partial.agentProxy ?? base.agentProxy,
+    appProxy: partial.appProxy ?? base.appProxy,
     skills: { ...base.skills, ...(partial.skills ?? {}) },
     pet: { ...base.pet, ...(partial.pet ?? {}) },
     heartbeat: partial.heartbeat ?? base.heartbeat,

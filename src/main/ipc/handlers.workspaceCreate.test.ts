@@ -23,7 +23,8 @@ vi.mock('../chat/sessionStore', () => ({
   newSession: vi.fn(), switchSession: vi.fn(), closeSession: vi.fn(), renameSession: vi.fn(),
 }))
 vi.mock('../config/store', () => ({
-  readSettings: () => ({ termProxy: 'px', pinnedWorkspaces: [] }),
+  // 第二期 C(Q4):代理拆成两份 —— 建工作区要 clone/fetch,走的是 agent 那一侧的出口。
+  readSettings: () => ({ agentProxy: 'px', appProxy: '', pinnedWorkspaces: [] }),
   writeSettings: vi.fn(),
   readProjects: () => ({ projects: [{ id: 'proj', name: 'proj', repoUrl: '', defaultBranch: 'main' }] }),
   writeProjects: vi.fn(), readWorkflows: () => ({ workflows: [] }), writeWorkflows: vi.fn(),

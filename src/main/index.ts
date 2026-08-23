@@ -22,7 +22,7 @@ import { shouldNotify, buildNotification } from './notify/notifier'
 import { gazeAngle } from '@shared/petGaze'
 import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
-import { readSettings, writeSettings, readWorkspaceRegistry } from './config/store'
+import { readSettings, migrateSettingsIfNeeded, writeSettings, readWorkspaceRegistry } from './config/store'
 import { fixExecPath } from './agents/pathFix'
 import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './tokens/dailyTokenCounter'
 import { setDailyTokenCounter } from './tokens/growthSignalRef'
@@ -205,6 +205,11 @@ app.whenReady().then(() => {
 
   // Live-stream debug log entries to any open renderer (the Settings · 调试日志 pane).
   setAppLogEventSink((e) => hub.broadcast(CH.appLogEvent, e))
+  // 设置一分为二的落盘迁移(第二期 C)。readSettings() 本来就能在 client.json 缺席时
+  // 透明地从老文件里拆,这一步只是把结果**落成两份**,顺便把老 settings.json 里的客户端字段清掉。
+  // 幂等:client.json 已存在就什么都不做。
+  try { if (migrateSettingsIfNeeded()) logInfo('config', '设置已拆分为 settings.json(跟机器)+ client.json(跟设备)') }
+  catch (e) { logError('config', `设置拆分失败(不影响使用,仍按合并视图读): ${String(e)}`) }
   logInfo('app', '协议与会话准备完毕,开始建主窗口')
   const mainWin = createMainWindow()
   logInfo('app', '主窗口已创建,等待 ready-to-show')

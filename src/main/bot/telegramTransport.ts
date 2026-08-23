@@ -6,7 +6,7 @@ import type {
 } from './botTypes'
 import { makeProxyFetch } from '../update/proxyFetch'
 
-// api.telegram.org is often only reachable via the user's proxy (settings.termProxy). In-process
+// api.telegram.org is often only reachable via the user's proxy (settings.agentProxy). In-process
 // undici fetch ignores HTTP_PROXY env, so route through an explicit ProxyAgent when a proxy is set.
 function buildFetch(proxy?: string): typeof fetch {
   const p = proxy?.trim()

@@ -52,7 +52,7 @@ describe('SettingsSchema skills + pet', () => {
     expect(SettingsSchema.parse({ ...base, pet: { ...base.pet, scale: 'huge' } }).pet.scale).toBe(1)
   })
   it('parses an old settings file (no skills/pet) by filling defaults', () => {
-    const parsed = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, termProxy: '' })
+    const parsed = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, agentProxy: '' })
     expect(parsed.skills['test-driven']).toBe(true)
     expect(parsed.pet.skin).toBe('ghost')
     expect(parsed.pet.activeCustomPetId).toBeUndefined()
@@ -77,13 +77,13 @@ describe('SettingsSchema skills + pet', () => {
     // 垃圾值不让整份 settings 解析失败,回落 ask
     expect(SettingsSchema.parse({ ...base, closeAction: 'banana' }).closeAction).toBe('ask')
     // 旧 on-disk 配置没有 closeAction → 默认 ask
-    const old = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, termProxy: '' })
+    const old = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, agentProxy: '' })
     expect(old.closeAction).toBe('ask')
   })
   it('defaults include terminal font + parses old settings without terminal', () => {
     const s = defaultSettings()
     expect(s.terminal).toEqual({ fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 })
-    const parsed = SettingsSchema.parse({ appearance: { theme:'dark', accent:'blue', vibrancy:true, glass:false, density:'comfortable', fontSize:'medium' }, termProxy:'' })
+    const parsed = SettingsSchema.parse({ appearance: { theme:'dark', accent:'blue', vibrancy:true, glass:false, density:'comfortable', fontSize:'medium' }, agentProxy:'' })
     expect(parsed.terminal.fontSize).toBe(12.5)
   })
   it('memory defaults to DISABLED (opt-in; distillation costs tokens); respects explicit on; old files without memory default off', () => {
@@ -91,7 +91,7 @@ describe('SettingsSchema skills + pet', () => {
     expect(base.memory).toEqual({ enabled: false })
     expect(SettingsSchema.parse({ ...base }).memory.enabled).toBe(false)
     expect(SettingsSchema.parse({ ...base, memory: { enabled: true } }).memory.enabled).toBe(true)
-    const old = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, termProxy: '' })
+    const old = SettingsSchema.parse({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, agentProxy: '' })
     expect(old.memory.enabled).toBe(false)
   })
   // ★ 终审实测出来的爆炸半径:customPets[].growth 上没有 .catch 时,一个坏成长包会让整份
@@ -105,9 +105,10 @@ describe('SettingsSchema skills + pet', () => {
       pet: { ...base.pet, customPets: [{ id: 'growth-x', name: '成长树', growth: { atlas: { cols: 0 }, actions: {}, stages: [] } }] },
       // 下面这些是「其余设置」的取样,必须原封不动地活下来 —— 它们才是「没被重置」的证据。
       appearance: { ...base.appearance, theme: 'dark' as const, fontSize: 17 },
-      termProxy: 'http://127.0.0.1:7890',
+      agentProxy: 'http://127.0.0.1:7890',
       pinnedWorkspaces: ['/a/b'],
-      lastActiveWorkspace: '/a/b',
+      // 第二期 C(Q3)起是按 hostId 分键的对象;老的字符串形状由 migrateLegacySettings 负责换。
+      lastActiveWorkspace: { local: '/a/b' },
       keybindings: { overrides: { 'new-workspace': 'Cmd+Shift+N' } },
       closeAction: 'quit' as const,
     }
@@ -120,9 +121,9 @@ describe('SettingsSchema skills + pet', () => {
     // ★ 其余设置逐条完好 —— 这条才是「用户没被重置」的证据
     expect(parsed.appearance.theme).toBe('dark')
     expect(parsed.appearance.fontSize).toBe(17)
-    expect(parsed.termProxy).toBe('http://127.0.0.1:7890')
+    expect(parsed.agentProxy).toBe('http://127.0.0.1:7890')
     expect(parsed.pinnedWorkspaces).toEqual(['/a/b'])
-    expect(parsed.lastActiveWorkspace).toBe('/a/b')
+    expect(parsed.lastActiveWorkspace).toEqual({ local: '/a/b' })
     expect(parsed.keybindings.overrides).toEqual({ 'new-workspace': 'Cmd+Shift+N' })
     expect(parsed.closeAction).toBe('quit')
   })
@@ -140,7 +141,7 @@ describe('SettingsSchema skills + pet', () => {
     const s = defaultSettings()
     expect(s.appIcon.dockIcon).toBe('ember-violet')
     expect(s.appIcon.showMenuBar).toBe(false)
-    const parsed = SettingsSchema.parse({ appearance: { theme:'dark', accent:'blue', vibrancy:true, glass:false, density:'comfortable', fontSize:'medium' }, termProxy:'' })
+    const parsed = SettingsSchema.parse({ appearance: { theme:'dark', accent:'blue', vibrancy:true, glass:false, density:'comfortable', fontSize:'medium' }, agentProxy:'' })
     expect(parsed.appIcon.dockIcon).toBe('ember-violet')
     expect(parsed.appIcon.showMenuBar).toBe(false)
   })

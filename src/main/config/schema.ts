@@ -285,6 +285,15 @@ export const NotificationsSchema = z.object({
   done: z.boolean(),
 })
 export type Notifications = z.infer<typeof NotificationsSchema>
+
+/** 跟机器走的那一半(Q1):这台机器上哪些事件值得产生一条通知。 */
+export const NotifyEventsSchema = z.object({
+  confirm: z.boolean().catch(true),
+  input: z.boolean().catch(true),
+  done: z.boolean().catch(true),
+})
+export type NotifyEvents = z.infer<typeof NotifyEventsSchema>
+export const defaultNotifyEvents = (): NotifyEvents => ({ confirm: true, input: true, done: true })
 const defaultNotifications = (): Notifications => ({ enabled: true, confirm: true, input: true, done: true })
 
 // Keyboard shortcuts. We store ONLY user overrides keyed by action id (the default binding for each
@@ -358,10 +367,18 @@ export const defaultBotBridge = (): z.infer<typeof BotBridgeSchema> => ({
 
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
+  // ★Q1:原本一个对象塞了两件事。
+  //   `notifications` = 「**这台设备**要不要弹、收哪些」—— 手机只想收要我答门的,电脑什么都想收。
+  //   `notifyEvents`  = 「**那台机器**上哪些事件值得产生通知」—— 只有 daemon 知道事件何时发生。
   notifications: NotificationsSchema.default(defaultNotifications),
+  notifyEvents: NotifyEventsSchema.default(defaultNotifyEvents),
   closeAction: CloseActionSchema,
   appIcon: AppIconSchema,
-  termProxy: z.string(),
+  // ★Q4:一个值原本被两拨人用 —— agent 的出口代理(跑在 host 上)和 app 自身的网络
+  //   (检查更新、拉壁纸、拉插件目录,跑在客户端)。远程时这俩必然不同(云服务器不需要代理,
+  //   你的笔记本需要),所以拆成两份。
+  agentProxy: z.string().catch('').default(''),
+  appProxy: z.string().catch('').default(''),
   skills: SkillsSchema.default(defaultSkills),
   pet: PetSchema.default(defaultPet),
   heartbeat: HeartbeatSchema,
@@ -372,7 +389,9 @@ export const SettingsSchema = z.object({
   workspaceOrder: z.array(z.string()).default(() => []),
   // Last workspace the user was in — the titlebar's 工作区 tab restores it (its per-workspace
   // activeSessionId then restores the last session for free).
-  lastActiveWorkspace: z.string().catch('').default(''),
+  // ★Q3:一定不能跟 host —— 手机上次看的和电脑上次看的必然不同,互相覆盖会很烦。
+  //   跟设备,但**按 hostId 分键**:切回某台机器时恢复「我在这台上次看的」。本机的键是 'local'。
+  lastActiveWorkspace: z.record(z.string(), z.string()).catch({}).default(() => ({})),
   // User-pasted usage-plugin credentials, keyed by provider id (e.g. qoder/cursor cookie/token).
   // Overrides the adapter's auto-read source. Stored locally only.
   pluginCreds: z.record(z.string(), z.string()).default(() => ({})),
@@ -416,15 +435,17 @@ export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
   appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
   notifications: defaultNotifications(),
+  notifyEvents: defaultNotifyEvents(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
-  termProxy: '',
+  agentProxy: '',
+  appProxy: '',
   skills: defaultSkills(),
   pet: defaultPet(),
   heartbeat: defaultHeartbeat(),
   pinnedWorkspaces: [],
   workspaceOrder: [],
-  lastActiveWorkspace: '',
+  lastActiveWorkspace: {},
   pluginCreds: {},
   disabledProviders: [],
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
@@ -642,3 +663,83 @@ export const WorkspaceRegistryEntrySchema = z.object({
 export type WorkspaceRegistryEntry = z.infer<typeof WorkspaceRegistryEntrySchema>
 export const WorkspaceRegistrySchema = z.object({ workspaces: z.array(WorkspaceRegistryEntrySchema) })
 export const defaultWorkspaceRegistry = () => ({ workspaces: [] as WorkspaceRegistryEntry[] })
+
+
+// ── 设置一分为二(第二期 C · 决策 8 + Q1–Q7)────────────────────────────────────
+//
+// 「跟设备走」的留在客户端(client.json),「跟机器走」的留在那台机器(settings.json)。
+// ★这两张表加起来必须**正好**覆盖 SettingsSchema 的全部字段,由 settingsSplit.test.ts 钉死 ——
+//   新加一个设置项会让那条断言挂,逼你当场决定它归谁,而不是默默继承一个可能错的默认。
+
+/** 跟设备走:换一台机器看,这些不该变。 */
+export const CLIENT_SETTING_KEYS = [
+  'appearance', 'terminal', 'keybindings', 'closeAction', 'appIcon', 'pet',
+  'nsfwUnlocked', 'nsfwCode', 'nsfwCodes', 'nsfwInstalled',
+  'notifications',        // Q1:这台设备收哪些
+  'appProxy',             // Q4:app 自身的网络
+  'lastActiveWorkspace',  // Q3:按 hostId 分键
+  'defaultOpenerId',      // Q5
+  'perfStallToast', 'perfDiagnostics',   // Q6:第二期只做客户端这份,daemon 侧留空实现
+] as const
+
+/** 跟机器走:你操作的是哪台机器,这些就该是哪台的。 */
+export const HOST_SETTING_KEYS = [
+  'skills', 'heartbeat', 'pluginCreds', 'disabledProviders', 'fullAccessAck',
+  'memory', 'botBridge', 'codexTransport',
+  'notifyEvents',                          // Q1:哪些事件值得产生通知
+  'agentProxy',                            // Q4:agent 的出口代理
+  'pinnedWorkspaces', 'workspaceOrder',    // Q2
+] as const
+
+export type ClientSettingKey = typeof CLIENT_SETTING_KEYS[number]
+export type HostSettingKey = typeof HOST_SETTING_KEYS[number]
+export type ClientSettings = Pick<Settings, ClientSettingKey>
+export type HostSettings = Pick<Settings, HostSettingKey>
+
+const pickShape = <K extends readonly string[]>(keys: K) =>
+  Object.fromEntries(keys.map((k) => [k, true])) as Record<K[number], true>
+
+export const ClientSettingsSchema = SettingsSchema.pick(pickShape(CLIENT_SETTING_KEYS))
+export const HostSettingsSchema = SettingsSchema.pick(pickShape(HOST_SETTING_KEYS))
+
+export const pickClient = (s: Settings): ClientSettings =>
+  Object.fromEntries(CLIENT_SETTING_KEYS.map((k) => [k, s[k]])) as ClientSettings
+export const pickHost = (s: Settings): HostSettings =>
+  Object.fromEntries(HOST_SETTING_KEYS.map((k) => [k, s[k]])) as HostSettings
+
+/**
+ * 把「老版本那份什么都装在一起的 settings.json」拆成两半。
+ *
+ * ★纯函数,单独钉死。这是整个第二期最容易把用户设置弄丢的一步:
+ *   拆错一个字段,用户的主题/壁纸/凭据就在一次升级里凭空消失,而且**不会有任何报错**
+ *   —— `readJson` 的 catch 会把它变成「回落默认值」。
+ *
+ * 三处字段形状同时在变(Q1 通知、Q3 上次工作区、Q4 代理),迁移必须让**升级后行为不变**:
+ * - `termProxy` 同时抄进 agentProxy 和 appProxy(升级前两者本来就是同一个值)
+ * - 老的 `notifications` 的三个开关同时抄进 notifyEvents(升级前「产生」和「接收」本来是一件事)
+ * - 老的 `lastActiveWorkspace` 是个字符串,归到本机这台的键下
+ */
+export function migrateLegacySettings(raw: unknown): { client: unknown; host: unknown } {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const legacyProxy = typeof o.termProxy === 'string' ? o.termProxy : undefined
+  const legacyNotif = (o.notifications && typeof o.notifications === 'object' ? o.notifications : {}) as Record<string, unknown>
+  const legacyLast = o.lastActiveWorkspace
+
+  const client: Record<string, unknown> = {}
+  for (const k of CLIENT_SETTING_KEYS) if (k in o) client[k] = o[k]
+  if (client.appProxy === undefined && legacyProxy !== undefined) client.appProxy = legacyProxy
+  // 老的是字符串;新的是 { [hostId]: path }。空串不建键,否则会造出一个指向空路径的「上次」。
+  if (typeof legacyLast === 'string') client.lastActiveWorkspace = legacyLast ? { local: legacyLast } : {}
+
+  const host: Record<string, unknown> = {}
+  for (const k of HOST_SETTING_KEYS) if (k in o) host[k] = o[k]
+  if (host.agentProxy === undefined && legacyProxy !== undefined) host.agentProxy = legacyProxy
+  if (host.notifyEvents === undefined) {
+    host.notifyEvents = {
+      confirm: legacyNotif.confirm ?? true,
+      input: legacyNotif.input ?? true,
+      done: legacyNotif.done ?? true,
+    }
+  }
+  return { client, host }
+}

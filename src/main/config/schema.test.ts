@@ -58,7 +58,8 @@ describe('config schema', () => {
     expect(() => SettingsSchema.parse(defaultSettings())).not.toThrow()
     // 新用户默认亮色主题(2026-07-02 起);已有 settings.json 的用户不受影响。
     expect(defaultSettings().appearance.theme).toBe('light')
-    expect(defaultSettings().termProxy).toBe('')
+    expect(defaultSettings().agentProxy).toBe('')
+    expect(defaultSettings().appProxy).toBe('')
   })
   it('rejects an unknown theme', () => {
     expect(() => SettingsSchema.parse({ ...defaultSettings(), appearance: { ...defaultSettings().appearance, theme: 'neon' } })).toThrow()

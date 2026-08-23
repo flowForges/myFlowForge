@@ -156,7 +156,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // Robustness: process.env has no proxy — networks where the CLI can't reach the API directly
     // (proxied corp networks etc.) would silently fail every run2 agent. buildAgentEnv(termProxy)
     // matches the narrator/detect/refreshModels usages elsewhere in this file (e.g. line ~105).
-    env: buildAgentEnv({ proxy: readSettings().termProxy }),
+    env: buildAgentEnv({ proxy: readSettings().agentProxy }),
     makeStore: (w, r) => new RunStore(w, r),
     // §7.4 ③硬阻塞: same forge MCP entry the legacy Orchestrator + chat/delegate.ts already use —
     // lets each run open its own live forge bridge (RunController.setupBridge) so a stage agent can
@@ -183,10 +183,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const updateChecker = createUpdateChecker({
     repo: UPDATE_REPO,
     currentVersion: () => caps.version(),
-    // proxy-THEN-direct: the update check must survive a down/misrouted/socks proxy (settings.termProxy).
+    // proxy-THEN-direct: the update check must survive a down/misrouted/socks proxy (settings.agentProxy).
     // makeProxyFetch had no direct fallback, so any proxy hiccup → throw → 永久「检查失败」even when GitHub
     // is directly reachable. makeContentFetch tries the proxy then falls back to a direct fetch.
-    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().termProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, platform: process.platform, arch: process.arch }),
+    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().agentProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, platform: process.platform, arch: process.arch }),
     emit: broadcast,
     setTimeout: (fn, ms) => { setTimeout(fn, ms) },
     setInterval: (fn, ms) => { setInterval(fn, ms) },
@@ -199,7 +199,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const info = updateChecker.current()
     if (!info) return
     const installer = pickInstaller({
-      fetch: (url, init) => makeContentFetch(readSettings().termProxy)(url, init as any) as any,
+      fetch: (url, init) => makeContentFetch(readSettings().agentProxy)(url, init as any) as any,
       openPath: caps.openPath,
       showItemInFolder: caps.revealInFileManager,
       join,
@@ -307,14 +307,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // honors the result (trustPersisted:false) so it can clear a genuinely-gone CLI; a normal detect keeps
   // last-known-good agents sticky so a slow cold-start probe never makes them vanish.
   on(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>
-    cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true }))
+    cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true }))
   // "有新版" 提示(只提示):安装版本由 detect 探测,这里查各 CLI 的 npm latest 并比对。走 termProxy(undici
   // 不认 HTTP_PROXY 环境变量),失败/未知包静默略过 —— 提示是锦上添花,绝不能拖垮或报错阻塞设置页。
   on(CH.agentsCliUpdates, (_e, installed: { id: string; version?: string }[]) =>
-    checkCliUpdates(installed ?? [], makeProxyFetch(readSettings().termProxy), Date.now()))
+    checkCliUpdates(installed ?? [], makeProxyFetch(readSettings().agentProxy), Date.now()))
   // Registry just changed (bin override / custom agent add-remove) — bypass the cache but stay sticky
   // (trustPersisted) so a transient probe failure during the rebuild doesn't wipe known-good agents.
-  const redetect = () => cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: true, trustPersisted: true })
+  const redetect = () => cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { force: true, trustPersisted: true })
   on(CH.agentsGetConfig, () => readAgentsConfig())
   on(CH.agentsSetBin, (_e, a: { id: string; bin: string }) => {
     const cfg = readAgentsConfig()
@@ -340,7 +340,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return redetect()
   })
   on(CH.agentsRefreshModels, async (_e, providerId: string) => {
-    const r = await refreshProviderModels(providerId, providers, buildAgentEnv({ proxy: readSettings().termProxy }))
+    const r = await refreshProviderModels(providerId, providers, buildAgentEnv({ proxy: readSettings().agentProxy }))
     invalidateDetectCache()   // models cache changed on disk — cached ProviderInfo[] is stale
     return r
   })
@@ -353,7 +353,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     setProviderTimezone(a.id, a.timezone)
     invalidateDetectCache()   // detect surfaces provCfg.timezone → refresh so the UI reflects the change
   })
-  on(CH.netCheckExitIp, () => checkExitIp(readSettings().termProxy))
+  on(CH.netCheckExitIp, () => checkExitIp(readSettings().agentProxy))
   on(CH.contextScan, (_e, workspacePath?: string) => {
     if (workspacePath && existsSync(workspacePath)) return scanWorkspaceContext(workspacePath, true)
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }
@@ -363,7 +363,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.commandsList, (_e, providerId: string, wsPath?: string) => providerCommands(providerId, wsPath))
   on(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
     const knownProjects = readProjects().projects
-    const proxy = readSettings().termProxy
+    const proxy = readSettings().agentProxy
     // One creation at a time — hold its AbortController so CH.workspaceCancelSetup can kill the in-flight
     // git clone/fetch. Cleared in finally so a later create isn't cancelled by a stale controller.
     setupAbort = new AbortController()
@@ -407,7 +407,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts; runProjHooks?: boolean }) => {
     if (isArchivedWorkspace(a.path)) throw new Error('工作区已归档，恢复后才能继续。')
     const result = await editWorkspace({
-      path: a.path, opts: a.opts, knownProjects: readProjects().projects, proxy: readSettings().termProxy,
+      path: a.path, opts: a.opts, knownProjects: readProjects().projects, proxy: readSettings().agentProxy,
       emit: (ev) => broadcast(CH.workspaceSetup, ev),
       runProjHooks: a.runProjHooks, providers,
     })
@@ -557,7 +557,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Lightweight delegation (path A): the chat agent dispatches sub-agents into projects without the
   // workflow gate. Runs are ephemeral (no run slot). The legacy orchestrator + its chat-triggered
   // proposeRun gate are gone — the only workflow-run entry point is now the run2 「工作流运行」launcher.
-  const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().termProxy, mcpEntry, readWorkspace })
+  const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().agentProxy, mcpEntry, readWorkspace })
   const runTurn = async (payload: ChatSendPayload) => {
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
@@ -699,7 +699,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // FORGE_WORKFLOWS — so it has no forge MCP tools (forge_propose_plan/forge_delegate) for ANY
     // provider, and forgeChatDirective(env) (gated on env.FORGE_TOOLS containing forge_propose_plan)
     // returns '' automatically. Workflows only launch via the explicit run2 "工作流运行" launcher now.
-    const env = buildAgentEnv({ proxy: readSettings().termProxy, timezone: providerTimezone(payload.agent) })
+    const env = buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(payload.agent) })
     try {
       const msg = await sendTurn(payload, {
         provider,
@@ -1003,7 +1003,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       let model = s?.modelId || ''
       if (!model) {   // a brand-new session has no model yet; empty model 400s the chat API
         try {
-          const env = buildAgentEnv({ proxy: readSettings().termProxy })
+          const env = buildAgentEnv({ proxy: readSettings().agentProxy })
           const models = await (providers[agent] ?? providers['claude'])?.listModels(env)
           model = models?.[0]?.id || ''
         } catch { /* leave empty — a clear API error beats a crash */ }
@@ -1024,7 +1024,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     },
     listModels: async (agent) => {
       try {
-        const env = buildAgentEnv({ proxy: readSettings().termProxy })
+        const env = buildAgentEnv({ proxy: readSettings().agentProxy })
         const models = await (providers[agent] ?? providers['claude'])?.listModels(env)
         return (models ?? []).map(mm => ({ id: mm.id, label: mm.label }))
       } catch { return [] }
@@ -1034,7 +1034,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       broadcastSessions(ws, file)
     },
     setPermission: (ws, sessionId, mode) => { applyPermission(ws, sessionId, mode) },
-    getProxy: () => readSettings().termProxy,
+    getProxy: () => readSettings().agentProxy,
     emitStatus: (platform, st) => broadcast(CH.botStatusEvent, { platform, status: st }),
   })
   on(CH.botConnect, async (_e, a: { platform: BotPlatform }) => {
@@ -1066,7 +1066,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!provider?.chat) return
     const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
     if (!msgs.length) return
-    const env = buildAgentEnv({ proxy: readSettings().termProxy })
+    const env = buildAgentEnv({ proxy: readSettings().agentProxy })
     const model = distillModelFor(a.toAgent) ?? a.model
     const id = `switch-sum-${Date.now()}`
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-start', id, model: '上下文总结' })
@@ -1102,7 +1102,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!provider?.chat) return ''
     const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
     if (!msgs.length) return ''
-    const env = buildAgentEnv({ proxy: readSettings().termProxy })
+    const env = buildAgentEnv({ proxy: readSettings().agentProxy })
     const model = distillModelFor(a.agent) ?? a.model
     const id = `req-sum-${Date.now()}`
     // 超时/出错 → null(不是「已经流出来的半截」)。半截需求会被当成「需求原文」发给每个阶段的 agent,
@@ -1199,7 +1199,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
 
   const watcher = new WorktreeWatcher((p, opts) => chokidarWatch(p, opts as object) as unknown as import('../watcher/worktreeWatcher').FsWatcherLike)
-  const proxy = () => readSettings().termProxy
+  const proxy = () => readSettings().agentProxy
   const changesEmit = (e: ChangesEvent) => broadcast(CH.changesEvent, e)
 
   on(CH.gitChanges, (_e, cwd: string) => perfSpan('git', 'readChanges', () => readChanges(cwd, proxy())))
@@ -1282,7 +1282,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return creds
   })
   // 走用户代理拉远程「下架名单」(与 nsfw/wallpaper 同一条 makeContentFetch 通道);fail-open,拉不到就显示全部。
-  on(CH.pluginsCatalog, () => listCatalog(makeContentFetch(readSettings().termProxy)))
+  on(CH.pluginsCatalog, () => listCatalog(makeContentFetch(readSettings().agentProxy)))
   on(CH.pluginsInstallExample, (_e, id: string) => {
     const r = installOfficial(id)
     if (r.ok) getPluginScheduler()?.reconcile()
@@ -1406,7 +1406,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.fontsDownload, async (e, id: string) => {
     const entry = catalogEntry(id)
     if (!entry) return { error: '未知字体' }
-    const pf = makeProxyFetch(readSettings().termProxy)
+    const pf = makeProxyFetch(readSettings().appProxy)   // 字体是客户端的事(Q4)
     try {
       const font = await downloadCatalogFont(
         entry,
@@ -1422,7 +1422,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // License-gated extra content. All requests go through the user's configured proxy and carry the
   // locally-stored activation code (settings.nsfwCode); the Worker holds the real keys + image bytes.
-  const nsfwFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback
+  const nsfwFetch = () => makeContentFetch(readSettings().appProxy) // 客户端专属内容(Q4);proxy-first, direct fallback
   // The activation key sent to the Worker: ALL activated codes joined by comma (multi-code additive →
   // Worker returns the deduped union of their subsets). Falls back to the legacy single nsfwCode so an
   // install that predates nsfwCodes keeps working. encodeURIComponent in nsfwService escapes the commas.
@@ -1456,7 +1456,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // Built-in wallpapers: public jsDelivr catalog + images, downloaded on demand through the user's proxy
   // and stored on disk like any uploaded background. No activation code, no Worker (so no Worker quota).
-  const wallpaperFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback (also used by pet packs)
+  const wallpaperFetch = () => makeContentFetch(readSettings().appProxy) // 壁纸/宠物包跟设备走(Q4);proxy-first, direct fallback
   on(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
   on(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch(), previewCache))
   on(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
@@ -1471,7 +1471,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 超时** —— 它是个第三方社区小站,慢/挂是常态,而 undici 的 fetch 自己没有整体超时:不设死线就是用户
   // 盯着转圈直到天荒地老。代理那一跳给更短的死线,超时即回退直连(以前只有代理"抛异常"才回退,挂起不回退)。
   const marketFetch = (timeoutMs: number) =>
-    makeContentFetch(readSettings().termProxy, undefined, { timeoutMs, proxyTimeoutMs: 5_000 })
+    makeContentFetch(readSettings().appProxy, undefined, { timeoutMs, proxyTimeoutMs: 5_000 })   // 宠物市场跟设备走(Q4)
   on(CH.codexMarketCatalog, (_e, page: number) => codexMarketCatalog(page, marketFetch(8_000)))
   on(CH.codexMarketPreview, (_e, url: string) => codexMarketPreview(url, marketFetch(15_000)))
   on(CH.codexMarketInstall, (_e, item: CodexMarketPet) => codexMarketInstall(item, marketFetch(60_000)))
@@ -1483,7 +1483,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const livePath = undefined
     return listWorkspaces(livePath, s.pinnedWorkspaces, s.workspaceOrder)
   })
-  on(CH.workspacesHomeStats, () => readHomeStats(readSettings().termProxy))
+  on(CH.workspacesHomeStats, () => readHomeStats(readSettings().agentProxy))
   on(CH.workspacesSetPinned, (_e, a: { path: string; pinned: boolean }) => {
     const s = readSettings()
     let pinned = s.pinnedWorkspaces.filter(p => p !== a.path)

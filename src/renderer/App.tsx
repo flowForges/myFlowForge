@@ -12,6 +12,7 @@ import { useEngine } from './state/useEngine'
 import { useConfig } from './state/useConfig'
 import { useHookLibrary } from './state/useHookLibrary'
 import { useSettings } from './state/useSettings'
+import { useHostKey } from './state/useHostKey'
 import type { OpenTarget } from '@shared/openers'
 import { useLogs } from './state/useLogs'
 import { useResizable } from './state/useResizable'
@@ -36,7 +37,7 @@ import { AppearancePane } from './settings/AppearancePane'
 import { BackgroundPane } from './settings/BackgroundPane'
 import { NotificationsPane } from './settings/NotificationsPane'
 import { AppIconPane } from './settings/AppIconPane'
-import { TermProxyPane } from './settings/TermProxyPane'
+import { ProxyPane } from './settings/ProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
 import { HostsPane } from './settings/HostsPane'
 import { RemoteBar } from './components/RemoteBar'
@@ -233,6 +234,7 @@ export function App() {
   const { projects, workflows, customStages, providers, addProject, deleteProject, updateProjectBranch, updateProjectAlias, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, upsertCustomStage, deleteCustomStage, redetect } = useConfig()
   const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
+  const hostKey = useHostKey()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
     const items = home.workspaces.map(w => {
@@ -338,7 +340,11 @@ export function App() {
   useEffect(() => {
     if (!activeWsId || !settings || lastWrittenWs.current === activeWsId) return
     lastWrittenWs.current = activeWsId
-    if (settings.lastActiveWorkspace !== activeWsId) update({ lastActiveWorkspace: activeWsId })
+    // Q3:「上次看的工作区」按 hostId 分键 —— 手机和电脑的「上次」必然不同,
+    // 存成一个值会互相覆盖。本机这台的键是 'local'。
+    if (settings.lastActiveWorkspace[hostKey] !== activeWsId) {
+      update({ lastActiveWorkspace: { ...settings.lastActiveWorkspace, [hostKey]: activeWsId } })
+    }
   }, [activeWsId, settings])
 
   // vibrancy maps to the window's transparent/under-window material, which is fixed at WINDOW
@@ -548,7 +554,7 @@ export function App() {
     if (v === 'ws' && !activeWsId) {
       const live = home.workspaces.filter(w => !w.archived)
       if (!live.length) return
-      const last = settings?.lastActiveWorkspace
+      const last = settings?.lastActiveWorkspace?.[hostKey]
       const recency = (p: string) => Math.max(home.stats[p]?.lastMessageAt ?? 0, recentActivity.get(p) ?? 0)
       const pick = last && live.some(w => w.path === last)
         ? last
@@ -848,7 +854,7 @@ export function App() {
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} onEditAlias={updateProjectAlias} />
           case 'hosts': return <HostsPane />
           case 'providers': return <AgentsPane onChanged={redetect} />
-          case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
+          case 'agents': return <ProxyPane agentProxy={settings?.agentProxy ?? ''} appProxy={settings?.appProxy ?? ''} onChange={(p) => update(p)} />
           case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} customStages={customStages} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} onUpsertCustomStage={upsertCustomStage} />
           case 'customStages': return <CustomStagesPane customStages={customStages} workflows={workflows} providers={providers} onUpsert={upsertCustomStage} onDelete={deleteCustomStage} />
           case 'hookLibrary': return <HookLibraryPane hooks={hookLib.hooks} onSave={hookLib.save} onDelete={hookLib.remove} onSetAll={hookLib.setAll} />
