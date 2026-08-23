@@ -30,6 +30,10 @@ await new Promise((r) => setTimeout(r, 5000))
 let t = await p.text()
 ok('门在', t.includes('rm -rf build/'))
 
+// 自报家门:电脑那边的「🛡 「XX」允许了这道门」就是靠这一帧填名字的。
+const ident = (() => { try { return fs.readFileSync(path.join(S, 'last-identify.txt'), 'utf8') } catch { return '' } })()
+ok('连上时自报了家门', ident.length > 0 && ident !== '本机', 'label=' + JSON.stringify(ident))
+
 const stopOpacity = await p.eval(`(() => {
   const b=[...document.querySelectorAll('*')].filter(e=>e.textContent.trim()==='■'&&e.children.length===0).pop()
   if(!b) return 'no-btn'

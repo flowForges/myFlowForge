@@ -8,6 +8,13 @@ const require_ = createRequire(import.meta.url)
 const pkg = require_('../../node_modules/ws')
 const { WebSocketServer } = pkg
 
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+const IDENTIFY_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '.out', 'last-identify.txt')
+try { fs.mkdirSync(path.dirname(IDENTIFY_FILE), { recursive: true }) } catch { /* 已存在 */ }
+try { fs.rmSync(IDENTIFY_FILE, { force: true }) } catch { /* 没有就算了 */ }
+
 const PORT = Number(process.argv[2] || 6799)
 const SCRIPT = process.argv[3] || 'gate-confirm'
 
@@ -130,6 +137,12 @@ wss.on('connection', (ws) => {
   send(ws, { t: 'ready', methods: Object.keys(table) })
   ws.on('message', (raw) => {
     const f = JSON.parse(String(raw))
+    if (f.t === 'identify') {
+      // 「是谁答的门」靠的就是这一帧。落到文件里,让测试能断言它真的发了、内容对不对 ——
+      // 少了它,电脑那边的系统提示会写成「本机」,而实际是手机答的。
+      try { fs.writeFileSync(IDENTIFY_FILE, String(f.label ?? '')) } catch { /* 测试辅助,失败无所谓 */ }
+      return
+    }
     if (f.t !== 'req') return
     try {
       const fn = table[f.ch]
