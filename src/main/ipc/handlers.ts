@@ -1702,6 +1702,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
     return caps.saveFile(`myFlowForge-projects-${stamp}.json`, JSON.stringify(readProjects(), null, 2), '导出项目配置')
   })
+  // 只出内容,不落盘 —— 连着远程时由路由器接上客户端的 client:save-file(见 router.ts)。
+  on(CH.configExportProjectsData, () => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    return { name: `myFlowForge-projects-${stamp}.json`, content: JSON.stringify(readProjects(), null, 2), title: '导出项目配置' }
+  })
+  // 只落盘,不管内容从哪儿来。永远在**客户端**执行:保存对话框要弹在有人看着的那块屏幕上。
+  on(CH.clientSaveFile, (_e, a: { name: string; content: string; title?: string }) =>
+    caps.saveFile(String(a?.name ?? 'export.txt'), String(a?.content ?? ''), a?.title))
 
   // ── App debug log ───────────────────────────────────────────────────────────
   on(CH.appLogGet, () => getAppLog())

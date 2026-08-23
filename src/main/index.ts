@@ -656,6 +656,14 @@ app.whenReady().then(() => {
   const router = createHostRouter({
     localTable: methodTable,
     toWindows: registry.broadcast,
+    // ★远程主机推来的事件要单独补一次通知嗅探:本机那条挂在 broadcastWithNotify 上,
+    //   远程事件不经过它 —— 于是「远程跑完了」这一声本来是**发不出来的**,
+    //   而远程恰恰是最需要它的场景:人根本不在那台机器前面。
+    //   分成两个出口是必须的:并进 toWindows 的话本机事件会各触发一次,变成每条回复弹两个通知。
+    onRemoteEvent: (channel, payload) => {
+      registry.broadcast(channel, payload)
+      if (channel === CH.chatEvent) notifyChatDone(payload)
+    },
     clientVersion: app.getVersion(),
     // 远程那台在系统提示里就显示这个名字。用机器名 —— 用户一眼认得出是哪台。
     clientLabel: hostname(),

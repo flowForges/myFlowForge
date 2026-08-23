@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useTerminals } from '../../state/useTerminals'
+import { useHost } from '../../state/useHostKey'
 import { XtermView } from './XtermView'
 import './terminal.css'
 
@@ -18,6 +19,7 @@ export function TerminalPanel({ open, dual, focused, onHandleDown, workspaceCwd,
   font: { fontFamily: string; fontSize: number }
   onRequestClose: () => void
 }) {
+  const { key: hostKey, label: hostLabel } = useHost()
   const term = useTerminals(() => workspaceCwd)
 
   // When the panel is opened, target the CURRENT workspace: focus its existing tab or spawn one
@@ -37,6 +39,15 @@ export function TerminalPanel({ open, dual, focused, onHandleDown, workspaceCwd,
       {onHandleDown && <div className="panel-resizer" data-resize-panel="term" onPointerDown={onHandleDown} role="separator" aria-orientation="horizontal" title="拖动调整高度" />}
       <div className="term-head">
         <span className="tt">{ICON_TERM}终端</span>
+        {/* ★连着远程主机时,这里开的仍然是**本机**的终端(term:* 注册在 Electron 外壳里,
+            没有跟着 host 走)。远程终端要先解决限速和 node-pty 在目标 Linux 上能不能编,
+            见第二期 D 的说明。在那之前,界面必须说清楚 —— 让人对着一个自以为是服务器的
+            终端敲 `rm -rf`,后果不是「功能缺失」而是事故。 */}
+        {hostKey !== 'local' && (
+          <span className="term-localtag" title={`你正在看「${hostLabel}」,但这个终端是本机的 —— 远程终端尚未支持`}>
+            本机 · 非「{hostLabel}」
+          </span>
+        )}
         <div className="term-tabs">
           {term.tabs.map(t => (
             <span key={t.id} className={`term-tab${t.id === term.activeId ? ' on' : ''}`} onClick={() => term.selectTab(t.id)}>

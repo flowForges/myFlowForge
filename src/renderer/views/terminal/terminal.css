@@ -22,3 +22,13 @@
 .term-body { flex: 1; position: relative; overflow: hidden; padding: 6px 8px 4px; }
 .xterm-host { width: 100%; height: 100%; }
 .term-error { position: absolute; bottom: 8px; left: 12px; right: 12px; padding: 8px 12px; border-radius: 6px; background: oklch(40% .15 18 / .15); color: oklch(72% .17 18); font-family: var(--mono); font-size: 11px; border: 1px solid oklch(64% .19 18 / .3); }
+
+/* 「这个终端是本机的,不是你正在看的那台机器的」。只在连着远程主机时出现 —— 本机状态下
+   界面与以前完全一致。让人对着一个自以为是服务器的终端敲命令,后果不是功能缺失而是事故。 */
+.term-localtag {
+  margin-left: 8px; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 500; letter-spacing: .01em;
+  color: oklch(72% .13 60); border: 1px solid color-mix(in oklch, oklch(72% .13 60) 45%, transparent);
+  background: color-mix(in oklch, oklch(72% .13 60) 12%, transparent);
+  white-space: nowrap; flex: 0 0 auto;
+}

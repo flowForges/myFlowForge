@@ -14,7 +14,7 @@ describe('daemonTable', () => {
   it('剔掉跟设备走的和无头做不了的,剩下的就是握手时发出去的方法清单', () => {
     const t = daemonTable(full())
     const keys = Object.keys(t)
-    expect(keys.length).toBe(184 - 44 - 2)
+    expect(keys.length).toBe(186 - 45 - 2)
     for (const c of CLIENT_ONLY) expect(keys).not.toContain(c)
     for (const c of DAEMON_UNSUPPORTED) expect(keys).not.toContain(c)
   })

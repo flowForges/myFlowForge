@@ -39,6 +39,6 @@ describe('方法表', () => {
     // ★这两个数是数出来的,不是抄文档的:`grep -c 'ipcMain\.handle'`(不带括号)会把两行提到它的
     // 注释、以及 run2 那行注入本身也算进去,于是得到 159 —— 文档里那些偏大的计数就是这么来的。
     // 改这个数就要在 commit message 里说清楚加/删了哪个 channel。
-    expect(Object.keys(table).length).toBe(184)
+    expect(Object.keys(table).length).toBe(186)
   })
 })

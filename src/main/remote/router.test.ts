@@ -177,4 +177,53 @@ describe('host 路由', () => {
     expect(router.status().hostId).toBeNull()
     expect(await router.invoke('a:b', NOOP_CTX, [])).toBe('本机')
   })
+
+  it('★导出:内容来自那台机器,文件落在你面前这台(第二期 D)', async () => {
+    // 无头机器上没有「保存到哪儿」这回事 —— 直接路由过去只会得到「这台主机没有桌面环境」。
+    const saved: unknown[] = []
+    const s = await setup(
+      { 'client:save-file': (_c: unknown, a: any) => { saved.push(a); return { ok: true, path: '/本机/下载/x.json' } } },
+      { 'config:export-projects-data': () => ({ name: 'x.json', content: '{"远程":"内容"}', title: '导出' }) },
+    )
+    await s.router.connect(host(s.url))
+    await untilReady(s.router)
+    const r = await s.router.invoke('config:export-projects', NOOP_CTX, [])
+    expect(saved).toEqual([{ name: 'x.json', content: '{"远程":"内容"}', title: '导出' }])
+    expect(r).toEqual({ ok: true, path: '/本机/下载/x.json' })
+  })
+
+  it('没连远程时导出照旧走本机那一条(行为与以前一致)', async () => {
+    const s = await setup(
+      { 'config:export-projects': () => ({ ok: true, path: '/本机/x.json' }), 'client:save-file': () => { throw new Error('不该走到这儿') } },
+      { 'config:export-projects-data': () => ({ name: 'x.json', content: '', title: '' }) },
+    )
+    expect(await s.router.invoke('config:export-projects', NOOP_CTX, [])).toEqual({ ok: true, path: '/本机/x.json' })
+  })
+
+  it('★远程事件走单独的出口 —— 本机事件不能从两条路各触发一次(否则每条回复弹两个通知)', async () => {
+    const remoteSeen: string[] = []
+    const hub = createBroadcastHub()
+    const gw = await startGateway({ table: { 'a:b': () => 1 }, addSink: hub.addSink, version: '1.1.2', port: 0 })
+    closers.push(() => gw.close())
+    const toWindows = vi.fn()
+    const localHub = createBroadcastHub()
+    const router = createHostRouter({
+      localTable: { 'a:b': () => 1 }, toWindows, clientVersion: '1.1.2', onStatus: () => {},
+      onRemoteEvent: (ch, p) => { remoteSeen.push(ch); toWindows(ch, p) },
+      resolveUrl: async (h) => ({ url: h.address }),
+    })
+    localHub.addSink(router.localEvent)
+    closers.push(() => router.disconnect())
+    await router.connect(host(`ws://127.0.0.1:${gw.port}`))
+    await expect.poll(() => router.status().state.status, { timeout: 3000 }).toBe('ready')
+
+    // 本机事件:只走 toWindows,不许经过远程那条出口
+    toWindows.mockClear()
+    localHub.broadcast('settings:changed', {})
+    expect(remoteSeen).toEqual([])
+
+    // 远程事件:走远程出口(通知就是在那儿补的)
+    hub.broadcast('chat:event', { type: 'done' })
+    await expect.poll(() => remoteSeen.length, { timeout: 2000 }).toBe(1)
+  })
 })

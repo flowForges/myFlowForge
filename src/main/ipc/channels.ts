@@ -24,6 +24,10 @@ export const CH = {
   configUpdateProjectBranch: 'config:update-project-branch',
   configUpdateProjectAlias: 'config:update-project-alias',
   configExportProjects: 'config:export-projects',
+  // 「daemon 出内容 → 客户端落盘」(第二期 D)。导出的**内容**是那台机器的,**文件**得落在你面前
+  // 这台设备上 —— 无头机器上没有「保存到哪儿」这回事。路由器把这两步组合成原来那一个调用。
+  configExportProjectsData: 'config:export-projects-data',
+  clientSaveFile: 'client:save-file',
   configListWorkflows: 'config:list-workflows',
   configAddWorkflow: 'config:add-workflow',
   configDeleteWorkflow: 'config:delete-workflow',

@@ -37,6 +37,8 @@ export const CLIENT_ONLY: ReadonlySet<string> = new Set([
   'file:open-path', 'shell:open-external', 'shell:reveal-path',
   // 聊天附件选的是**客户端**上的文件(手机上该是相册)
   'dialog:open-files',
+  // 落盘永远在客户端:保存对话框要弹在有人看着的那块屏幕上(内容由 host 出,见 router.ts)
+  'client:save-file',
 ])
 
 /**

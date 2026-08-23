@@ -17,6 +17,14 @@ export type HostRouterDeps = {
   localTable: MethodTable
   /** 事件真正送到渲染层的出口 */
   toWindows: (channel: string, payload: unknown) => void
+  /**
+   * **远程主机**推来的事件走这个出口(不给就等同 toWindows)。
+   *
+   * ★为什么要和 toWindows 分开:本机事件的通知嗅探挂在 registerIpc 收到的那个 broadcast 上,
+   * 远程事件不经过它。要给远程补上通知,就只能在这儿补 —— 而如果把它并进 toWindows,
+   * 本机事件会从两条路各触发一次通知(它们也走 toWindows),变成**每条本机回复弹两个通知**。
+   */
+  onRemoteEvent?: (channel: string, payload: unknown) => void
   clientVersion: string
   /** 本设备自报的名字,远程那台在「是谁答的门」里显示 */
   clientLabel?: string
@@ -69,6 +77,13 @@ export function createHostRouter(deps: HostRouterDeps) {
       const client = await invoke(CH.configSetClientSettings, ctx, [patch])
       return { ...(host as object), ...(client as object) }
     }
+    // 导出:内容归那台机器,文件归你面前这台。没连远程时下面那条 localFn 分支就够了 ——
+    // 本机的 config:export-projects 自己会弹保存对话框。
+    if (channel === CH.configExportProjects && remote) {
+      const data = await invoke(CH.configExportProjectsData, ctx, []) as { name: string; content: string; title?: string }
+      return invoke(CH.clientSaveFile, ctx, [data])
+    }
+
     const localFn = deps.localTable[channel]
     if (routeOf(channel) === 'client' || !remote) {
       if (!localFn) throw new Error(`没有这个方法: ${channel}`)
@@ -119,7 +134,7 @@ export function createHostRouter(deps: HostRouterDeps) {
         token: host.token || undefined,
         clientVersion: deps.clientVersion,
         clientLabel: deps.clientLabel,
-        onEvent: (ch, payload) => deps.toWindows(ch, payload),
+        onEvent: (ch, payload) => (deps.onRemoteEvent ?? deps.toWindows)(ch, payload),
         onState: (s) => { remoteState = s; pushStatus() },
         onLog: log,
       })
