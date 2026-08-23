@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { hostname } from 'node:os'
+import { hostname, networkInterfaces } from 'node:os'
 import { registerIpc } from '../ipc/handlers'
 import { createBroadcastHub } from '../ipc/broadcastHub'
 import { daemonTable } from '../ipc/channelRouting'
@@ -33,6 +33,24 @@ function appVersion(): string {
 }
 
 const log = (m: string) => console.log(`[daemon] ${m}`)
+
+/**
+ * 这台机器上别人连得到的 IPv4 地址。
+ * ★打印真实地址而不是 `<这台机器的地址>` 这种占位符 —— 占位符等于把「去哪儿查自己的 IP」
+ * 这道题甩回给用户,而这一步本来就是他最容易卡住的地方。
+ */
+function lanAddresses(): string[] {
+  const out: string[] = []
+  for (const list of Object.values(networkInterfaces())) {
+    for (const n of list ?? []) {
+      if (n.family === 'IPv4' && !n.internal) out.push(n.address)
+    }
+  }
+  return out
+}
+
+/** 当前这个 daemon 实际是怎么被启动的 —— 打印给用户照抄。目前没有打包好的可执行文件。 */
+const selfCmd = () => `node ${process.argv[1] ?? 'out/main/daemon.js'}`
 
 export type DaemonHandle = { port: number; host: string; close(): Promise<void> }
 
@@ -54,7 +72,7 @@ export async function startDaemon(opts: { listen?: string; version?: string } = 
 
   log(`myFlowForge daemon ${version} · ${hostname()}`)
   log(`监听 ${gw.host}:${gw.port} · 对外提供 ${Object.keys(table).length} 个方法(共 ${Object.keys(full).length} 个,其余跟设备走)`)
-  log(token ? '★已绑到非回环地址,连接需要访问令牌(myflowforge daemon pair 查看)' : '只绑回环 —— 从别的机器连请用 SSH 隧道')
+  log(token ? `★已绑到非回环地址,连接需要访问令牌 —— 查看:${selfCmd()} pair --listen ${host}:${gw.port}` : '只绑回环 —— 从别的机器连请用 SSH 隧道')
   return { port: gw.port, host: gw.host, close: () => gw.close() }
 }
 
@@ -69,10 +87,16 @@ function pair(listen?: string) {
     console.log(`  SSH 目标 <你的用户名>@<这台机器的地址>`)
     console.log(`  远端端口 ${port}`)
     console.log('')
-    console.log('（daemon 只绑回环,所以走 SSH 隧道。前提是你那台机器能免密登录到这里。）')
+    console.log('(daemon 只绑回环,所以走 SSH 隧道。前提是你那台机器能免密登录到这里。)')
+    console.log(`启动 daemon:${selfCmd()} --listen 127.0.0.1:${port}`)
   } else {
+    const addrs = lanAddresses()
     console.log('  连接方式 直接连接')
-    console.log(`  地址     ws://<这台机器的地址>:${port}`)
+    if (addrs.length === 1) console.log(`  地址     ws://${addrs[0]}:${port}`)
+    else if (addrs.length > 1) {
+      console.log(`  地址     ws://${addrs[0]}:${port}`)
+      console.log(`           (这台机器还有别的地址:${addrs.slice(1).map((a) => `ws://${a}:${port}`).join(' ')} —— 用和对方在同一个网段的那个)`)
+    } else console.log(`  地址     ws://<这台机器的地址>:${port}(当前没检测到对外网卡)`)
     console.log(`  访问令牌 ${token}`)
     console.log('')
     console.log('★令牌等于这台机器的控制权,别贴进聊天记录或截图。')
