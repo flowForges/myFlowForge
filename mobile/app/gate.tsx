@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useC } from '../src/theme/theme'
-import { Btn, Empty, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
+import { Btn, Empty, Field, IconBtn, List, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useWaited } from '../src/ui/GateCard'
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
@@ -213,9 +213,7 @@ export default function GateScreen() {
               style={{ minHeight: 68 }}
             />
           </List>
-          {multiQuestion ? (
-            <Note>每道题都要选一个才能提交;补充说明可留可不留。</Note>
-          ) : null}
+
         </ScrollView>
 
         <View style={[st.foot, { backgroundColor: c.surface, borderTopColor: c.border }]}>
