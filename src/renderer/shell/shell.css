@@ -731,26 +731,38 @@
    既不属于左边的面包屑,也不属于右边的工具按钮。和 macOS 把窗口标题放正中是同一个道理。
    绝对定位所以完全不影响左右两侧原有的排布;一台主机都没配过时组件根本不渲染。 */
 .tb-hostcenter {
-  position: absolute; left: 50%; top: 0; height: 100%;
+  /* ★fixed + 标题栏高度,不是 absolute + 100% —— .titlebar 自己没有 position,
+     absolute 会相对 .window(fixed; inset:0)算,于是被垂直居中到整个 app 正中间。 */
+  position: fixed; left: 50%; top: 0; height: var(--titlebar-h, 46px);
   transform: translateX(-50%);
-  display: flex; align-items: center; pointer-events: none; z-index: 2;
+  display: flex; align-items: center; pointer-events: none; z-index: 20;
 }
 .tb-hostcenter > * { pointer-events: auto; }
 .host-switch { position: relative; -webkit-app-region: no-drag; }
 
 .hs-chip {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 24px; padding: 0 8px 0 10px;
   border-radius: 999px; border: 1px solid var(--border-2);
-  background: var(--surface); color: var(--fg-2);
+  /* ★半透明,让壁纸/主题透上来。用不透明的 var(--surface) 会在标题栏正中糊出一块白斑,
+     和周围的 chrome 完全不搭 —— 真机截图里就是这个样子。 */
+  background: color-mix(in oklch, var(--surface) 68%, transparent);
+  color: var(--fg-2);
   font-size: 11.5px; font-weight: 550; line-height: 1; cursor: pointer;
-  max-width: 300px; transition: border-color .12s, background .12s;
+  /* ★固定一个最小宽度:芯片是居中的,内容一变宽窄就会左右重新居中 —— 切主机时看起来像在抖。
+     状态文字那一格也常驻(见 .st),于是「已连接 / 连接中 / 已断开」之间切换不会改变宽度。 */
+  min-width: 128px; max-width: 260px;
+  transition: border-color .12s, background .12s;
 }
-.hs-chip:hover { border-color: color-mix(in oklch, var(--accent) 45%, var(--border-2)); }
+.hs-chip:hover { border-color: color-mix(in oklch, var(--accent) 45%, var(--border-2));
+  background: color-mix(in oklch, var(--surface) 88%, transparent); }
 .hs-chip.busy { opacity: .6; }
 .hs-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
 .hs-chip .nm { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hs-chip .st { opacity: .85; white-space: nowrap; }
+/* 状态那一格常驻(空的时候也占位),这样 已连接/连接中/已断开 之间切换不会改变芯片宽度 ——
+   芯片是居中的,宽度一变就会左右重新居中,看起来就是在抖。 */
+.hs-chip .st { min-width: 3.2em; text-align: left; }
 .hs-chip .cv { width: 12px; height: 12px; opacity: .55; flex: 0 0 auto; }
 .hs-chip.ok .dot { background: oklch(72% .17 150); box-shadow: 0 0 0 2.5px oklch(72% .17 150 / .18); }
 .hs-chip.warn .dot { background: oklch(78% .15 85); }
@@ -790,3 +802,33 @@
 .hs-item.on .nm { font-weight: 600; }
 .hs-item.plain .nm { color: var(--fg-2); }
 .hs-sep { height: 1px; margin: 5px 7px; background: var(--border); }
+
+/* 标识(emoji)。只显示标识时芯片缩成一枚圆的,状态用光圈呼吸表达 —— 像主机/显示器的指示灯。
+   标题栏正中挂一串文字太抢眼;一个会呼吸的表情既认得出是哪台,也看得出连没连上。 */
+.hs-chip .ico { font-size: 13px; line-height: 1; flex: 0 0 auto; }
+.hs-chip.iconly {
+  /* 只显示标识时反过来:固定成一枚圆的,更不会有宽度变化。 */
+  width: 26px; height: 26px; min-width: 0; padding: 0;
+  border-radius: 50%; gap: 0;
+}
+.hs-chip.iconly .ico { font-size: 15px; }
+
+/* 呼吸光圈:ok 绿、warn 琥珀、bad 红。用 box-shadow 做,不占布局也不会撑开标题栏。 */
+@keyframes hs-breathe {
+  0%, 100% { box-shadow: 0 0 0 1.5px var(--hs-glow), 0 0 9px 1px var(--hs-glow); }
+  50%      { box-shadow: 0 0 0 1.5px var(--hs-glow-dim), 0 0 15px 4px var(--hs-glow-dim); }
+}
+.hs-chip.iconly.ok   { --hs-glow: oklch(72% .17 150 / .60); --hs-glow-dim: oklch(72% .17 150 / .22); }
+.hs-chip.iconly.warn { --hs-glow: oklch(78% .15 85 / .60);  --hs-glow-dim: oklch(78% .15 85 / .22); }
+.hs-chip.iconly.bad  { --hs-glow: oklch(66% .18 25 / .70);  --hs-glow-dim: oklch(66% .18 25 / .28); }
+.hs-chip.iconly.idle { --hs-glow: oklch(60% 0 0 / .35);     --hs-glow-dim: oklch(60% 0 0 / .12); }
+.hs-chip.iconly { animation: hs-breathe 2.6s ease-in-out infinite; }
+/* 断线时呼吸得快一点 —— 和「已断开」这件事的紧迫程度对上。 */
+.hs-chip.iconly.bad { animation-duration: 1.1s; }
+
+/* 会一直动的东西必须尊重系统的「减少动态效果」。关掉动画后靠静态光圈仍然分得出状态。 */
+@media (prefers-reduced-motion: reduce) {
+  .hs-chip.iconly { animation: none; box-shadow: 0 0 0 1.5px var(--hs-glow), 0 0 9px 1px var(--hs-glow); }
+}
+
+.hs-item .ico { width: 16px; flex: 0 0 auto; font-size: 13px; line-height: 1; text-align: center; }

@@ -11,6 +11,9 @@ export type HostStatus = {
   state: RemoteState | { status: 'local' }
   /** 当前这台机器提供的方法。渲染层据此把对不上的入口置灰(决策 B-2) */
   methods: string[]
+  /** 标识与显示方式(本机时不给) */
+  icon?: string
+  display?: 'icon' | 'name' | 'both'
 }
 
 export type HostRouterDeps = {
@@ -47,7 +50,11 @@ export function createHostRouter(deps: HostRouterDeps) {
   const localMethods = Object.keys(deps.localTable)
 
   const status = (): HostStatus => current
-    ? { hostId: current.id, label: current.label, state: remoteState, methods: remoteState.status === 'ready' ? [...remoteState.methods] : [] }
+    ? {
+        hostId: current.id, label: current.label, state: remoteState,
+        methods: remoteState.status === 'ready' ? [...remoteState.methods] : [],
+        icon: current.icon, display: current.display,
+      }
     : { hostId: null, label: '本机', state: { status: 'local' }, methods: localMethods }
 
   const pushStatus = () => deps.onStatus(status())

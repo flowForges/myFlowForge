@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { describeHostState, type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
 
-const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', token: '' }
+const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', icon: '', display: 'both', token: '' }
 
 /**
  * 保存前的校验。★**返回一句话,而不是把按钮置灰。**
@@ -149,6 +149,28 @@ export function HostsPane() {
               <span>名称</span>
               <input value={draft.label} placeholder="云服务器" onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
             </label>
+
+            <label className="proj-field">
+              <span>标识(一个表情)</span>
+              <input
+                value={draft.icon}
+                placeholder="🖥️ / 🌩 / 🏠 …"
+                maxLength={8}
+                onChange={(e) => setDraft({ ...draft, icon: e.target.value })}
+              />
+            </label>
+            <label className="proj-field">
+              <span>标题栏上显示</span>
+              <select className="sce-select" value={draft.display} onChange={(e) => setDraft({ ...draft, display: e.target.value as HostInput['display'] })}>
+                <option value="both">标识 + 名称</option>
+                <option value="icon">只显示标识</option>
+                <option value="name">只显示名称</option>
+              </select>
+            </label>
+            <p className="set-desc full" style={{ marginTop: -6 }}>
+              标题栏正中那枚就按这个显示。只显示标识时,连接状态用<b>光圈呼吸</b>表示(像主机/显示器的指示灯);
+              显示名称时用前面那个圆点。挂一串主机名在正中太抢眼,一个你自己认得的表情通常就够了。
+            </p>
 
             <label className="proj-field full">
               <span>连接方式</span>

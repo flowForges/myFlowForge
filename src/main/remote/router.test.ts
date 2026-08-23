@@ -9,7 +9,7 @@ const closers: (() => Promise<void>)[] = []
 afterEach(async () => { for (const c of closers.splice(0)) await c() })
 
 const host = (address: string): RemoteHost => ({
-  id: 'h1', label: '云服务器', kind: 'direct', address, sshTarget: '', token: '', lastConnectedAt: 0,
+  id: 'h1', label: '云服务器', kind: 'direct', address, sshTarget: '', icon: '', display: 'both', token: '', lastConnectedAt: 0,
 })
 
 async function setup(localTable: MethodTable, remoteTable: MethodTable) {

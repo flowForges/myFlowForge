@@ -1,13 +1,22 @@
 /** 渲染层看到的一台远程主机。★不含 token —— 凭据没有任何理由进渲染进程。 */
+export type HostDisplay = 'icon' | 'name' | 'both'
+
 export type RemoteHostView = {
   id: string
   label: string
   kind: 'direct' | 'ssh'
   address: string
   sshTarget: string
+  /** 一个 emoji;空 = 用默认 */
+  icon: string
+  display: HostDisplay
   token: string
   lastConnectedAt: number
 }
+
+/** 没设标识时的默认。本机用另一个,好一眼分开。 */
+export const DEFAULT_HOST_ICON = '🖥️'
+export const LOCAL_ICON = '💻'
 
 export type HostInput = {
   id?: string
@@ -15,6 +24,8 @@ export type HostInput = {
   kind: 'direct' | 'ssh'
   address: string
   sshTarget: string
+  icon: string
+  display: HostDisplay
   token: string
 }
 
@@ -31,6 +42,9 @@ export type HostStatusView = {
   label: string
   state: HostConnState
   methods: string[]
+  /** 当前这台主机的标识与显示方式(本机时为默认值) */
+  icon?: string
+  display?: HostDisplay
 }
 
 /** 一句人话的连接状态 —— 断线态必须是**显式**的,不能拿缓存假装在线(设计文档十·UI 约束)。 */

@@ -135,7 +135,10 @@ html[data-bg-scope="app"]:not([data-theme="light"]) .tb-bell .nb-badge {
 }
 
 .body { flex: 1; display: flex; min-height: 0; }
-.titlebar { flex: 0 0 46px; display: flex; align-items: center; gap: 14px; padding: 0 14px;
+/* 标题栏高度抽成变量:主机切换器要按它定位。★.titlebar 自己没有 position,所以
+   `absolute; top:0; height:100%` 会相对 .window(fixed; inset:0)算 —— 真机上就是这么
+   被垂直居中到整个 app 正中间的。 */
+.titlebar { --titlebar-h: 46px; flex: 0 0 var(--titlebar-h); display: flex; align-items: center; gap: 14px; padding: 0 14px;
   border-bottom: 1px solid var(--border); background: var(--bg-2);
   -webkit-user-select: none; -webkit-app-region: drag; }
 .titlebar button, .titlebar .tb-seg { -webkit-app-region: no-drag; }

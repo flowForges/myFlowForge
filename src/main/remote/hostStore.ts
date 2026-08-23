@@ -19,6 +19,14 @@ export const RemoteHostSchema = z.object({
   address: z.string().catch(''),
   /** ssh 专用:`user@host`(可带 `:port`) */
   sshTarget: z.string().catch(''),
+  /**
+   * 这台主机的标识:一个 emoji(或留空用默认)。
+   * ★为什么要有:标题栏正中挂一串主机名太抢眼了。一个你自己认得的表情就够了 ——
+   * 这个位置需要的是「一眼认出是哪台」,不是「读完一个名字」。
+   */
+  icon: z.string().max(8).catch(''),
+  /** 芯片上显示什么:只显示标识 / 只显示名字 / 两个都显示。 */
+  display: z.enum(['icon', 'name', 'both']).catch('both'),
   token: z.string().catch(''),
   lastConnectedAt: z.number().catch(0),
 })
@@ -46,6 +54,8 @@ export function upsertHost(input: Omit<RemoteHost, 'id' | 'lastConnectedAt'> & {
     kind: input.kind,
     address: input.address,
     sshTarget: input.sshTarget,
+    icon: input.icon,
+    display: input.display,
     token: input.token,
     lastConnectedAt: existing?.lastConnectedAt ?? 0,
   }
@@ -75,6 +85,7 @@ export function exportHosts(opts: { includeTokens: boolean }): string {
     version: 1,
     hosts: f.hosts.map((h) => ({
       label: h.label, kind: h.kind, address: h.address, sshTarget: h.sshTarget,
+      icon: h.icon, display: h.display,
       token: opts.includeTokens ? h.token : '',
     })),
   }, null, 2)

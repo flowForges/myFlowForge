@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { describeHostState, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
+import { describeHostState, DEFAULT_HOST_ICON, LOCAL_ICON, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 
 /**
  * 标题栏正中的主机切换器。
@@ -61,6 +61,12 @@ export function HostSwitcher({ onOpenHosts }: { onOpenHosts: () => void }) {
 
   const d = describeHostState(status.state)
   const currentId = status.hostId
+  // 本机固定用名字 + 圆点(它本来就不该抢眼);远程按这台主机自己的设置来。
+  const display = currentId === null ? 'name' : (status.display ?? 'both')
+  const icon = currentId === null ? LOCAL_ICON : (status.icon?.trim() || DEFAULT_HOST_ICON)
+  // ★只显示标识时,状态用**光圈呼吸**表达 —— 像主机/显示器的指示灯。
+  //   这个位置放在标题栏正中,一串文字太抢眼;一个会呼吸的表情既认得出是哪台,也看得出连没连上。
+  const iconOnly = display === 'icon'
 
   const toggle = () => {
     if (!open) {
@@ -74,6 +80,9 @@ export function HostSwitcher({ onOpenHosts }: { onOpenHosts: () => void }) {
 
   const go = async (id: string | null) => {
     setOpen(false)
+    // ★点的就是当前这台 → 什么都不做。重连一次既没意义,还会让界面白闪一轮
+    //   (断开 → 连接中 → 已连接),看起来像是点坏了。
+    if (id === currentId) return
     setBusy(true)
     setErr('')
     try {
@@ -86,9 +95,10 @@ export function HostSwitcher({ onOpenHosts }: { onOpenHosts: () => void }) {
     } finally { setBusy(false) }
   }
 
-  const row = (key: string, label: string, active: boolean, note: string, onClick: () => void) => (
+  const row = (key: string, label: string, glyph: string, active: boolean, note: string, onClick: () => void) => (
     <button key={key} type="button" className={`hs-item${active ? ' on' : ''}`} role="menuitemradio" aria-checked={active} onClick={onClick}>
       <span className="tick">{active ? '✓' : ''}</span>
+      <span className="ico" aria-hidden="true">{glyph}</span>
       <span className="nm">{label}</span>
       {note && <span className="note">{note}</span>}
     </button>
@@ -98,27 +108,32 @@ export function HostSwitcher({ onOpenHosts }: { onOpenHosts: () => void }) {
     <div className="host-switch" ref={ref}>
       <button
         type="button"
-        className={`hs-chip ${d.tone}${busy ? ' busy' : ''}`}
+        className={`hs-chip ${d.tone}${busy ? ' busy' : ''}${iconOnly ? ' iconly' : ''}`}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={toggle}
+        aria-label={`${status.label} · ${d.text}`}
         title={`${status.label} · ${d.text}`}
       >
-        <span className="dot" />
-        <span className="nm">{status.label}</span>
-        {d.short && <span className="st">{d.short}</span>}
-        {changedBy && <span className="st">「{changedBy}」改了设置</span>}
-        <svg className="cv" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="6 9 12 15 18 9" /></svg>
+        {display !== 'name' && <span className="ico" aria-hidden="true">{icon}</span>}
+        {/* 只显示标识时不再给圆点 —— 状态由光圈表达,再挂个点就是两套说同一件事。 */}
+        {!iconOnly && <span className="dot" />}
+        {display !== 'icon' && <span className="nm">{status.label}</span>}
+        {/* 空的时候也渲染 —— 那一格常驻,状态切换才不会改变芯片宽度(见 .hs-chip .st)。 */}
+        {!iconOnly && <span className="st">{d.short}</span>}
+        {!iconOnly && changedBy && <span className="st">「{changedBy}」改了设置</span>}
+        {!iconOnly && <svg className="cv" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="6 9 12 15 18 9" /></svg>}
       </button>
 
       {err && <div className="hs-err" role="alert">{err}</div>}
 
       {open && pos && createPortal(
         <div className="hs-pop" style={{ top: pos.top, left: pos.left }} role="menu" onClick={(e) => e.stopPropagation()}>
-          {row('local', '本机', currentId === null, currentId === null ? d.short : '', () => void go(null))}
+          {row('local', '本机', LOCAL_ICON, currentId === null, currentId === null ? d.short : '', () => void go(null))}
           {hosts.map((h) => row(
             h.id,
             h.label || '(未命名)',
+            h.icon?.trim() || DEFAULT_HOST_ICON,
             currentId === h.id,
             currentId === h.id ? d.short || '已连接' : (h.kind === 'ssh' ? 'SSH' : '直连'),
             () => void go(h.id),
@@ -126,7 +141,7 @@ export function HostSwitcher({ onOpenHosts }: { onOpenHosts: () => void }) {
           {/* ★分割线:下面这条不是「切到哪台」,是「去配置」。混在一起会让人误点。 */}
           <div className="hs-sep" />
           <button type="button" className="hs-item plain" role="menuitem" onClick={() => { setOpen(false); onOpenHosts() }}>
-            <span className="tick" /><span className="nm">主机设置…</span>
+            <span className="tick" /><span className="ico" aria-hidden="true">⚙︎</span><span className="nm">主机设置…</span>
           </button>
         </div>,
         document.body,

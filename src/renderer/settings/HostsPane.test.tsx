@@ -96,7 +96,7 @@ describe('HostsPane 保存校验', () => {
     fireEvent.change(screen.getByText('连接方式').parentElement!.querySelector('select')!, { target: { value: 'direct' } })
     type('地址', 'ws://127.0.0.1:6789')
     await save()
-    expect(hostsUpsert).toHaveBeenCalledWith(expect.objectContaining({ label: '本机 daemon', kind: 'direct', address: 'ws://127.0.0.1:6789' }))
+    expect(hostsUpsert).toHaveBeenCalledWith(expect.objectContaining({ label: '本机 daemon', kind: 'direct', address: 'ws://127.0.0.1:6789', display: 'both' }))
   })
 
   it('★不带 ws:// 的地址自动补上 —— 很多人就是直接写 127.0.0.1:6789', async () => {
@@ -148,5 +148,26 @@ describe('校验提示的位置', () => {
     await act(async () => { fireEvent.click(screen.getByText('取消')) })
     await act(async () => { fireEvent.click(screen.getAllByText('添加主机')[0]!) })
     expect(screen.queryByText(/起个名字/)).toBeNull()
+  })
+
+  it('标识可以留空(有默认),不该当成必填拦住', async () => {
+    // 标识只是个方便认的东西,强制填反而多一道门槛。
+    await openForm()
+    type('名称', 'x')
+    fireEvent.change(screen.getByText('连接方式').parentElement!.querySelector('select')!, { target: { value: 'direct' } })
+    type('地址', 'ws://127.0.0.1:1')
+    await save()
+    expect(hostsUpsert).toHaveBeenCalledWith(expect.objectContaining({ icon: '' }))
+  })
+
+  it('填了标识和显示方式就存下去', async () => {
+    await openForm()
+    type('名称', '云服务器')
+    type('标识(一个表情)', '🌩')
+    fireEvent.change(screen.getByText('标题栏上显示').parentElement!.querySelector('select')!, { target: { value: 'icon' } })
+    fireEvent.change(screen.getByText('连接方式').parentElement!.querySelector('select')!, { target: { value: 'direct' } })
+    type('地址', 'ws://1.2.3.4:6767')
+    await save()
+    expect(hostsUpsert).toHaveBeenCalledWith(expect.objectContaining({ icon: '🌩', display: 'icon' }))
   })
 })
