@@ -126,3 +126,27 @@ describe('normalizeAddress', () => {
     ['', ''],
   ])('%s → %s', (a, b) => { expect(normalizeAddress(a)).toBe(b) })
 })
+
+describe('校验提示的位置', () => {
+  it('★提示要挨着「保存」按钮,不能只出现在面板顶部', async () => {
+    // 真机验收在这儿卡了两轮:用户滚到表单点保存,提示渲染在面板顶部、在视野之外,
+    // 看到的现象就是「点了没反应」。
+    await openForm()
+    await save()
+    const msg = screen.getByText(/起个名字/)
+    const btn = screen.getByText('保存')
+    // 二者必须在同一个表单块里,且提示紧贴按钮那一行的上方
+    const group = btn.closest('.set-group')!
+    expect(group.contains(msg)).toBe(true)
+    expect(msg.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('重新打开表单时旧提示要清掉', async () => {
+    await openForm()
+    await save()
+    expect(screen.getByText(/起个名字/)).toBeInTheDocument()
+    await act(async () => { fireEvent.click(screen.getByText('取消')) })
+    await act(async () => { fireEvent.click(screen.getAllByText('添加主机')[0]!) })
+    expect(screen.queryByText(/起个名字/)).toBeNull()
+  })
+})

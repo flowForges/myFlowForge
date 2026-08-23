@@ -41,7 +41,6 @@ import { AppIconPane } from './settings/AppIconPane'
 import { ProxyPane } from './settings/ProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
 import { HostsPane } from './settings/HostsPane'
-import { RemoteBar } from './components/RemoteBar'
 import { baseName } from '@shared/pathName'
 import { WorkflowPane } from './settings/WorkflowPane'
 import { CustomStagesPane } from './settings/CustomStagesPane'
@@ -236,6 +235,16 @@ export function App() {
   const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
   const { key: hostKey, label: hostLabel } = useHost()
+  // ★切换主机 = 断开 → 换管子 → **重新挂载**(决策 2)。
+  //   不重置的话你会停在上一台机器的工作区和会话上 —— 那条路径在新主机上通常根本不存在,
+  //   而界面看起来一切正常(自测时两台是同一台机器,更是完全分不出来)。
+  const prevHost = useRef(hostKey)
+  useEffect(() => {
+    if (prevHost.current === hostKey) return
+    prevHost.current = hostKey
+    setActiveId('')
+    setView('home')
+  }, [hostKey])
   const { pick: pickPath } = usePathPicker()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
@@ -613,8 +622,6 @@ export function App() {
       {/* 主题皮肤氛围层:与 .app-bg-layer 同层次(--bg 之上、内容之下),仅在 data-skin 激活时由 skins.css
           显示对应 motif。纯装饰、不吃事件。 */}
       <div className="skin-motif" aria-hidden="true" />
-      {/* 只在连着远程主机时出现的状态条。本机状态下它返回 null,界面与以前完全一致。 */}
-      <RemoteBar onOpenHosts={() => { setSettingsPane('hosts'); setSettingsOpen(true) }} />
       <Titlebar
         maximized={maximized}
         collapsed={collapsed}
@@ -624,6 +631,7 @@ export function App() {
         onView={handleView}
         crumb={crumb}
         onOpenSettings={() => { setSettingsPane('appearance'); setSettingsOpen(true) }}
+        onOpenHosts={() => { setSettingsPane('hosts'); setSettingsOpen(true) }}
         notifs={notifs}
         updateAvailable={!!updateCtx.info}
         updateInfo={updateCtx.info}

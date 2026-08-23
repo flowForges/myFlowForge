@@ -26,12 +26,18 @@ describe('describeHostState', () => {
 
   it('连上了要带对方版本号(版本不一致时的置灰要有个解释)', () => {
     const d = describeHostState({ status: 'ready', version: '1.1.2', methods: [] })
-    expect(d).toEqual({ text: '已连接 · 1.1.2', tone: 'ok' })
+    expect(d).toEqual({ text: '已连接 · 1.1.2', short: '', tone: 'ok' })
   })
 
   it('失败要原样带上原因,别吞成一句「失败」', () => {
     const d = describeHostState({ status: 'failed', error: '主版本不兼容(对方 2.0.0,本机 1.1.2)' })
     expect(d.tone).toBe('bad')
     expect(d.text).toContain('主版本不兼容')
+  })
+
+  it('★本机的 short 必须为空 —— 芯片上已经写着「本机」,再补一个就是「本机 本机」', () => {
+    expect(describeHostState({ status: 'local' }).short).toBe('')
+    expect(describeHostState({ status: 'ready', version: '1', methods: [] }).short).toBe('')
+    expect(describeHostState({ status: 'retrying', attempt: 1, error: 'x', nextInMs: 1000 }).short).toBe('已断开')
   })
 })

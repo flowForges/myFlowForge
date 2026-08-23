@@ -41,3 +41,12 @@
   background: var(--surface); border: 1px solid var(--border); color: var(--fg);
   white-space: normal; word-break: break-all;
 }
+
+/* 表单里的校验提示。★必须紧挨着「保存」按钮 —— 第一版放在面板顶部,用户滚到表单这儿点保存时
+   提示出现在视野之外,看到的现象就是「点了没反应」,真机验收时在这儿卡了两轮。 */
+.hosts-formerr {
+  margin: 4px 0 0; padding: 8px 11px; border-radius: 9px;
+  font-size: 12.5px; line-height: 1.5; color: var(--err);
+  background: color-mix(in oklch, var(--err) 9%, transparent);
+  border: 1px solid color-mix(in oklch, var(--err) 35%, transparent);
+}

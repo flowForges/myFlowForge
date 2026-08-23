@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { Titlebar } from './Titlebar'
 
 const base = {
+  onOpenHosts: () => {},
   collapsed: false, onToggleSidebar: () => {}, onView: () => {}, crumb: 'ws-a',
   notifs: [], updateAvailable: false, notifOpen: false, onToggleNotif: () => {},
   onOpenUpgrade: () => {}, onMarkAllRead: () => {}, onClearAllNotif: () => {},

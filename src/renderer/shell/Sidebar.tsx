@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useHost } from '../state/useHostKey'
 import type { AgentState, ChatSession } from '@shared/types'
 import { fmtRelTime } from '@shared/relTime'
 import { sessionBadge } from './sessionBadge'
@@ -430,6 +431,7 @@ function ArchiveDock({ items, activeId, onSelect, onRestore, onDelete }: Archive
 }
 
 export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onEdit, onRename, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, runningSessionIds, onToggleExpand, unread }: SidebarProps) {
+  const { key: hostKey, label: hostLabel } = useHost()
   const sidebarStyle = (!collapsed && width !== undefined)
     ? { flex: `0 0 ${width}px`, width }
     : undefined
@@ -438,6 +440,9 @@ export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew,
       {/* Header */}
       <div className="sb-head">
         <h2>工作区</h2>
+        {/* ★这一列工作区/会话属于哪台机器。连着远程时,内容可能和本机长得一模一样
+            (自测时甚至就是同一台机器),没有这个标签就完全分不清自己在跟谁说话。 */}
+        {hostKey !== 'local' && <span className="sb-host" title={`这些工作区来自「${hostLabel}」`}>{hostLabel}</span>}
         <button className="sb-new" onClick={onNew} title="新建工作区" aria-label="新建工作区">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <line x1="12" y1="5" x2="12" y2="19" />

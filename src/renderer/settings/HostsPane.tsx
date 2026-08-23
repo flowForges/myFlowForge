@@ -56,6 +56,7 @@ export function HostsPane() {
   const [draft, setDraft] = useState<HostInput | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  const [formErr, setFormErr] = useState('')
   const [ioText, setIoText] = useState('')
   const [ioOpen, setIoOpen] = useState(false)
 
@@ -111,7 +112,7 @@ export function HostsPane() {
             <div className="hosts-empty">
               还没有添加任何远程主机
               <div style={{ marginTop: 10 }}>
-                <button className="set-btn primary" onClick={() => setDraft({ ...EMPTY })}>添加主机</button>
+                <button className="set-btn primary" onClick={() => { setFormErr(''); setDraft({ ...EMPTY }) }}>添加主机</button>
               </div>
             </div>
           )}
@@ -131,13 +132,13 @@ export function HostsPane() {
                 {connectedId === h.id
                   ? <button className="set-btn" disabled={busy} onClick={() => run(() => window.forge.hostsDisconnect())}>断开</button>
                   : <button className="set-btn primary" disabled={busy} onClick={() => run(() => window.forge.hostsConnect(h.id))}>连接</button>}
-                <button className="set-btn" disabled={busy} onClick={() => setDraft({ ...h })}>编辑</button>
+                <button className="set-btn" disabled={busy} onClick={() => { setFormErr(''); setDraft({ ...h }) }}>编辑</button>
                 <button className="set-btn danger" disabled={busy} onClick={() => run(() => window.forge.hostsRemove(h.id))}>删除</button>
               </div>
             </div>
           ))}
         </div>
-        {!draft && <div className="bot-actions"><button className="set-btn" onClick={() => setDraft({ ...EMPTY })}>添加主机</button></div>}
+        {!draft && <div className="bot-actions"><button className="set-btn" onClick={() => { setFormErr(''); setDraft({ ...EMPTY }) }}>添加主机</button></div>}
       </div>
 
       {draft && (
@@ -151,7 +152,7 @@ export function HostsPane() {
 
             <label className="proj-field full">
               <span>连接方式</span>
-              <select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as 'ssh' | 'direct', address: e.target.value === 'ssh' ? '6767' : '' })}>
+              <select className="sce-select" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as 'ssh' | 'direct', address: e.target.value === 'ssh' ? '6767' : '' })}>
                 <option value="ssh">通过 SSH 连接(推荐)</option>
                 <option value="direct">直接连接(局域网 / Tailscale / 本机自测)</option>
               </select>
@@ -199,16 +200,20 @@ export function HostsPane() {
               </>
             )}
           </div>
+          {formErr && <p className="hosts-formerr">{formErr}</p>}
           <div className="bot-actions">
             <button className="set-btn primary" disabled={busy} onClick={() => {
+              // ★提示必须显示在**按钮旁边**。第一版把它写进面板顶部那个 err —— 用户滚到表单
+              //   这儿点保存,提示出现在视野之外,看到的现象就是「点了没反应」。
               const bad = validate(draft)
-              if (bad) { setErr(bad); return }
+              if (bad) { setFormErr(bad); return }
+              setFormErr('')
               void run(async () => {
                 await window.forge.hostsUpsert({ ...draft, address: draft.kind === 'direct' ? normalizeAddress(draft.address) : draft.address.trim() })
                 setDraft(null)
               })
             }}>保存</button>
-            <button className="set-btn" disabled={busy} onClick={() => setDraft(null)}>取消</button>
+            <button className="set-btn" disabled={busy} onClick={() => { setFormErr(''); setDraft(null) }}>取消</button>
           </div>
         </div>
       )}

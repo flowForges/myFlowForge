@@ -694,3 +694,99 @@
 @media (prefers-reduced-motion: reduce) {
   .ws-item, .ws-sess, .ws-item .ws-name, .ws-sess .ws-sess-name, .ws-ava { transition: none; }
 }
+
+/* 主机芯片 —— 只在连着远程主机时出现,本机状态下组件根本不渲染,布局与以前完全一致。
+   放在面包屑前面是因为主机在语义上是「你现在看的是哪台机器」,是面包屑的前缀。
+   (它取代了早先横在窗口最顶上的整宽横幅:那条把整个窗口往下推了一截,像后贴上去的。) */
+.host-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  height: 22px; padding: 0 9px; margin-right: 8px;
+  border-radius: 999px; border: 1px solid var(--border-2);
+  background: var(--surface); color: var(--fg-2);
+  font-size: 11.5px; font-weight: 550; line-height: 1; cursor: pointer;
+  -webkit-app-region: no-drag; max-width: 240px;
+}
+.host-chip:hover { border-color: color-mix(in oklch, var(--accent) 45%, var(--border-2)); }
+.host-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.host-chip .nm { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-chip .st { opacity: .85; white-space: nowrap; }
+.host-chip.ok .dot { background: oklch(72% .17 150); box-shadow: 0 0 0 2.5px oklch(72% .17 150 / .18); }
+.host-chip.warn .dot { background: oklch(78% .15 85); }
+/* 断线必须一眼看见 —— 整枚芯片变红,不只是那个点。 */
+.host-chip.bad { color: var(--err); border-color: color-mix(in oklch, var(--err) 45%, var(--border-2));
+  background: color-mix(in oklch, var(--err) 10%, var(--surface)); }
+.host-chip.bad .nm { color: var(--err); }
+.host-chip.bad .dot { background: oklch(66% .18 25); box-shadow: 0 0 0 2.5px oklch(66% .18 25 / .16); }
+
+/* 侧栏标题上的主机名:这一列工作区属于哪台机器。远程时才出现。 */
+.sb-head .sb-host {
+  font-size: 11px; font-weight: 550; color: var(--fg-2);
+  padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface);
+  max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── 主机切换器(标题栏正中)───────────────────────────────────────────────────
+   居中是有意的:主机是「你现在看的是哪台机器」,它统辖整个窗口的内容(工作区/会话/运行),
+   既不属于左边的面包屑,也不属于右边的工具按钮。和 macOS 把窗口标题放正中是同一个道理。
+   绝对定位所以完全不影响左右两侧原有的排布;一台主机都没配过时组件根本不渲染。 */
+.tb-hostcenter {
+  position: absolute; left: 50%; top: 0; height: 100%;
+  transform: translateX(-50%);
+  display: flex; align-items: center; pointer-events: none; z-index: 2;
+}
+.tb-hostcenter > * { pointer-events: auto; }
+.host-switch { position: relative; -webkit-app-region: no-drag; }
+
+.hs-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 8px 0 10px;
+  border-radius: 999px; border: 1px solid var(--border-2);
+  background: var(--surface); color: var(--fg-2);
+  font-size: 11.5px; font-weight: 550; line-height: 1; cursor: pointer;
+  max-width: 300px; transition: border-color .12s, background .12s;
+}
+.hs-chip:hover { border-color: color-mix(in oklch, var(--accent) 45%, var(--border-2)); }
+.hs-chip.busy { opacity: .6; }
+.hs-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.hs-chip .nm { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hs-chip .st { opacity: .85; white-space: nowrap; }
+.hs-chip .cv { width: 12px; height: 12px; opacity: .55; flex: 0 0 auto; }
+.hs-chip.ok .dot { background: oklch(72% .17 150); box-shadow: 0 0 0 2.5px oklch(72% .17 150 / .18); }
+.hs-chip.warn .dot { background: oklch(78% .15 85); }
+/* 断线必须一眼看见 —— 整枚变红,不只是那个点。 */
+.hs-chip.bad { color: var(--err); border-color: color-mix(in oklch, var(--err) 45%, var(--border-2));
+  background: color-mix(in oklch, var(--err) 10%, var(--surface)); }
+.hs-chip.bad .nm { color: var(--err); }
+.hs-chip.bad .dot { background: oklch(66% .18 25); box-shadow: 0 0 0 2.5px oklch(66% .18 25 / .16); }
+
+/* 切换失败当面说 —— 切主机是用户主动发起的动作,失败不能只留在控制台里。 */
+.hs-err {
+  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  max-width: 420px; padding: 7px 11px; border-radius: 9px; z-index: 40;
+  font-size: 12px; line-height: 1.5; color: var(--err);
+  background: color-mix(in oklch, var(--err) 12%, var(--bg));
+  border: 1px solid color-mix(in oklch, var(--err) 40%, transparent);
+  box-shadow: 0 8px 24px oklch(0% 0 0 / .18);
+}
+
+/* 菜单 portal 到 body:标题栏在壁纸模式下有 backdrop-filter,会造出层叠上下文把弹层压到
+   右侧面板后面(「打开位置」那个下拉栽过一次)。 */
+.hs-pop {
+  position: fixed; transform: translateX(-50%); min-width: 220px; max-width: 320px;
+  padding: 5px; border-radius: 11px; z-index: 50;
+  background: var(--bg); border: 1px solid var(--border);
+  box-shadow: 0 14px 40px oklch(0% 0 0 / .22);
+}
+.hs-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 9px; border: 0; border-radius: 8px; background: none; cursor: pointer;
+  font-size: 12.5px; color: var(--fg); text-align: left;
+}
+.hs-item:hover { background: color-mix(in oklch, var(--fg) 8%, transparent); }
+.hs-item .tick { width: 12px; flex: 0 0 auto; color: var(--accent); font-weight: 700; }
+.hs-item .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hs-item .note { flex: 0 0 auto; font-size: 11px; color: var(--fg-2); }
+.hs-item.on .nm { font-weight: 600; }
+.hs-item.plain .nm { color: var(--fg-2); }
+.hs-sep { height: 1px; margin: 5px 7px; background: var(--border); }
