@@ -2,6 +2,10 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    // ★只影响类型检查,不影响打包。`@shared/types` 里的类型 re-export 会把 src/main 下几个
+    // 用了 node:fs / node:path 的文件拖进类型图,没有 node 类型 tsc 就报一片红。
+    // Metro 那边永远解析不到这些文件(全是 `import type`,babel 直接抹掉)。
+    "types": ["node"],
     "paths": {
       "@/*": [
         "./src/*"

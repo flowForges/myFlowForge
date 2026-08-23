@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { ThemeProvider, useTheme } from '../src/theme/theme'
 import { ConnProvider } from '../src/net/conn'
+import { StoreProvider } from '../src/data/store'
 
 function Nav() {
   const { c, name } = useTheme()
@@ -21,7 +22,9 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ThemeProvider>
         <ConnProvider>
-          <Nav />
+          <StoreProvider>
+            <Nav />
+          </StoreProvider>
         </ConnProvider>
       </ThemeProvider>
     </SafeAreaProvider>
