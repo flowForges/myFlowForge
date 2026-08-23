@@ -38,6 +38,8 @@ const agents = [
   { id: 'codex', displayName: 'Codex', installed: true, models: [{ id: 'default', label: '账号默认' }] },
 ]
 const gateState = { [WS_A]: { confirms: [], asks: [] }, [WS_B]: { confirms: [], asks: [] } }
+// 哪些会话「正在跑」。手机是半路加入的,它只能靠问 chat:queue-state 才知道停止键该不该亮。
+const RUNNING = []
 
 // 变更:假的但结构是真的(ChangeItem / MultiChanges / DiffLine 三个 shared 类型)
 const projects = { [WS_A]: ['forge', 'site'], [WS_B]: ['api'] }
@@ -75,7 +77,19 @@ const table = {
   'git:diff': (a) => diffs[a.file] ?? [],
   'chat:send': () => undefined,
   'chat:stop': () => undefined,
-  'chat:resolve': (a) => { resolveGate(a.id); return undefined },
+  'chat:resolve': (a) => {
+    // 脚本 `resolve-fails`:模拟「答门这一刀没送到」。手机上乐观摘掉的卡片必须自己回来。
+    if (SCRIPT === 'resolve-fails') throw new Error('这台主机拒绝了这次答门(测试用)')
+    resolveGate(a.id)
+    return undefined
+  },
+  'chat:queue-state': (a) => ({
+    workspacePath: a.workspacePath,
+    busy: RUNNING.length > 0,
+    queue: [], running: null, runningTurns: [],
+    runningSessionId: RUNNING[0] ?? null,
+    runningSessionIds: RUNNING.slice(),
+  }),
   'session:new': (p) => {
     const id = 's-new-' + Date.now()
     sessions[p].sessions.unshift({ id, title: '新会话', mode: 'chat', createdAt: Date.now(), lastMessageAt: Date.now() })
@@ -129,6 +143,12 @@ wss.on('connection', (ws) => {
 // 脚本:按名字预置门。连上之前就放好,这样快照那条路也被覆盖到。
 if (SCRIPT === 'gate-confirm' || SCRIPT === 'both') {
   gateState[WS_A].confirms.push({ id: 'g-confirm-1', sessionId: 's-a1', title: 'Bash 请求执行', where: 'npm run build && npm run test -- ipc', ts: new Date().toISOString() })
+}
+if (SCRIPT === 'running' || SCRIPT === 'resolve-fails') {
+  RUNNING.push('s-a1')
+}
+if (SCRIPT === 'resolve-fails') {
+  gateState[WS_A].confirms.push({ id: 'g-confirm-1', sessionId: 's-a1', title: 'Bash 请求执行', where: 'rm -rf build/', ts: new Date().toISOString() })
 }
 if (SCRIPT === 'gate-questions' || SCRIPT === 'both') {
   gateState[WS_B].confirms.push({

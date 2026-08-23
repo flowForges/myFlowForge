@@ -267,16 +267,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // 先摘本地再发请求:门的响应在服务端要等 provider 回过神来,中间那一两秒卡片还杵在那里
       // 会让人以为没点上,于是再点一次。
       dropGate(g.id)
-      await invoke(CH.chatResolve, [
-        {
-          id: g.id,
-          decision: a.decision,
-          answers: a.answers,
-          response: a.response,
-          choice: a.choice,
-          workspacePath: g.wsPath,
-        },
-      ])
+      try {
+        await invoke(CH.chatResolve, [
+          {
+            id: g.id,
+            decision: a.decision,
+            answers: a.answers,
+            response: a.response,
+            choice: a.choice,
+            workspacePath: g.wsPath,
+          },
+        ])
+      } catch (e) {
+        // ★请求没送到(断网、超时),门在服务端**还挂着**。乐观摘掉的卡片必须放回来 ——
+        //  不放回来的话,人以为自己答完了,实际那条命令还卡在那里等着,而他已经把手机锁上了。
+        resolved.current.delete(g.id)
+        setGateMap((m) => {
+          const n = new Map(m)
+          n.set(g.id, g)
+          return n
+        })
+        throw e
+      }
     },
     [invoke, dropGate],
   )

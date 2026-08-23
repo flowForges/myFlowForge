@@ -52,6 +52,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
+
   // 订阅要盯着「当前是哪个会话」,而回调本身不该因为换会话而重建订阅之外的东西。
   const keyRef = useRef({ wsPath, sessionId })
   keyRef.current = { wsPath, sessionId }
@@ -167,11 +168,36 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
         setError(e instanceof Error ? e.message : String(e))
         setLoading(false)
       }
+      try {
+        // ★停止键的初值必须问服务端要。手机是**半路加入**的:连上的时候那一轮多半已经在跑了,
+        //  而 busy 只有收到 assistant-start 才会变真 —— 那条事件早在我们连上之前就播完了。
+        //  不问的话,停止键一直是灰的:代理在跑飞,而你按不动。
+        const q = (await invoke(CH.chatQueueState, [{ workspacePath: wsPath }])) as {
+          runningSessionIds?: string[]
+          runningSessionId?: string | null
+        }
+        if (!alive) return
+        const running = q?.runningSessionIds ?? (q?.runningSessionId ? [q.runningSessionId] : [])
+        setBusy(running.includes(sessionId))
+      } catch {
+        // 拿不到就算了 —— 停止键灰着比整屏报错好。
+      }
     })()
     return () => {
       alive = false
     }
   }, [wsPath, sessionId, online, invoke])
+
+  // 队列事件是全工作区广播的,顺带把 busy 校准回来(比如别的设备停了这一轮)。
+  useEffect(() => {
+    const off = on(CH.chatQueueEvent, (payload) => {
+      const q = payload as { workspacePath?: string; runningSessionIds?: string[] }
+      const k = keyRef.current
+      if (!q || q.workspacePath !== k.wsPath || !k.sessionId) return
+      setBusy((q.runningSessionIds ?? []).includes(k.sessionId))
+    })
+    return off
+  }, [on])
 
   const send = useCallback(
     async (p: { text: string; agent: string; agentLabel: string; model: string; permissionMode?: string }) => {
