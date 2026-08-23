@@ -142,11 +142,15 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
     return off
   }, [on, upsert])
 
+  // 换会话就清空。**断线不清空** —— 已经拉下来的内容照样能读,这不是「拿缓存假装在线」:
+  // 顶部有明确的断线横幅,发送 / 答门 / 停止全部禁用。清掉反而更糟:人打开手机就为了看
+  // 代理刚才说了什么,结果一断网屏幕就白了。
   useEffect(() => {
-    if (!wsPath || !sessionId || !online) {
-      setMsgs([])
-      return
-    }
+    setMsgs([])
+  }, [wsPath, sessionId])
+
+  useEffect(() => {
+    if (!wsPath || !sessionId || !online) return
     let alive = true
     setLoading(true)
     setError(null)

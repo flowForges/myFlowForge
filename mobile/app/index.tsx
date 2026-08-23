@@ -48,9 +48,11 @@ export default function Chat() {
 
   const myGates = selected ? gatesFor(selected.wsPath, selected.sessionId) : []
   // 本会话没门,但别处有,就把别处那道拿过来钉着 —— 门比「我正在看哪个会话」重要。
-  const shownGates = myGates.length ? myGates : gates
-  const gate = shownGates[0] ?? null
+  const gate = myGates[0] ?? gates[0] ?? null
   const gateElsewhere = gate != null && myGates.length === 0
+  // ★编号按**所有**挂着的门算,不是按本会话算。只按本会话算,两道门时会显示「门 1 / 1」,
+  //  等于把另一台还在等的机器藏起来了。
+  const gateIndex = gate ? gates.findIndex((g) => g.id === gate.id) : -1
 
   useEffect(() => {
     if (!msgs.length) return
@@ -161,14 +163,20 @@ export default function Chat() {
       {state?.status === 'connecting' ? <Banner tone="wait">正在连接 {activeHost?.label ?? ''}…</Banner> : null}
 
       <ScrollView ref={flow} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 10 }}>
-        {!online ? null : storeLoading || chatLoading ? (
+        {msgs.length === 0 && (storeLoading || chatLoading) ? (
           <Empty title="正在读取…" />
         ) : !selected ? (
           <Empty title="选一个会话" desc="点顶部的会话名,或者去「全部会话」按工作区找。" />
         ) : msgs.length === 0 ? (
-          <Empty title="这个会话还没有消息" desc="在下面给代理下达任务。" />
+          online ? (
+            <Empty title="这个会话还没有消息" desc="在下面给代理下达任务。" />
+          ) : (
+            // 断线且这个会话一条都没拉到过。这里必须说清是「没连上」而不是「真的没消息」。
+            <Empty title="未连接" desc={'还没读到这个会话的内容。\n第一版不做离线缓存,连上就有了。'} />
+          )
         ) : (
-          msgs.map((m) =>
+          <>
+            {msgs.map((m) =>
             m.who === 'user' ? (
               <View key={m.id} style={[st.you, { backgroundColor: c.accentDim, borderColor: c.youBorder }]}>
                 <T style={{ fontSize: 15, lineHeight: 23, color: c.fg }}>{m.text}</T>
@@ -197,7 +205,17 @@ export default function Chat() {
                 ) : null}
               </View>
             ),
-          )
+            )}
+            {/* 门挂着时在流的末尾留一行。不留的话,消息流看上去就是「代理说到一半不说了」。 */}
+          {myGates.length > 0 ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, paddingLeft: 26 }}>
+              <View style={[st.paused, { borderColor: c.pillGateBorder }]}>
+                <T style={{ fontSize: 11, fontWeight: '600', color: c.gate }}>已暂停</T>
+              </View>
+              <T style={{ fontSize: 12.5, color: c.muted }}>代理停在门上,回答后从这里继续</T>
+            </View>
+          ) : null}
+          </>
         )}
       </ScrollView>
 
@@ -216,10 +234,11 @@ export default function Chat() {
           ) : null}
           <GateCard
             gate={gate}
-            index={0}
-            total={shownGates.length}
+            index={gateIndex < 0 ? 0 : gateIndex}
+            total={gates.length}
             online={online}
             where={`${wsName(gate.wsPath)} · ${sessionTitle(gate.wsPath, gate.sessionId)}`}
+            perm={permissionModeLabel(perm)}
             onAllow={() => void answer('allow')}
             onDeny={() => void answer('deny')}
             onOpen={() => router.push({ pathname: '/gate', params: { id: gate.id } })}
@@ -377,4 +396,5 @@ const st = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 12, paddingBottom: 10 },
+  paused: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth },
 })

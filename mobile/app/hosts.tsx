@@ -88,7 +88,13 @@ export default function Hosts() {
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
                         {active && <LiveDot tone={st.tone === 'idle' ? 'off' : st.tone} />}
                         <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, flexShrink: 1 }}>
-                          {active ? st.text : h.url.replace(/^wss?:\/\//, '')}
+                          {/* 连上了就报地址和对面版本;没连上就报**为什么没连上** ——
+                              那时「已连接」右边那枚 pill 已经不在了,这一行才是唯一的信息。 */}
+                          {active && st.tone === 'ok'
+                            ? `${h.url.replace(/^wss?:\/\//, '')} · ${state?.status === 'ready' ? state.version : ''}`
+                            : active
+                              ? st.text
+                              : h.url.replace(/^wss?:\/\//, '')}
                         </T>
                       </View>
                     </View>

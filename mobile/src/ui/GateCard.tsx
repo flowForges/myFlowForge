@@ -32,6 +32,7 @@ export function GateCard({
   total,
   online,
   where,
+  perm,
   onAllow,
   onDeny,
   onOpen,
@@ -42,6 +43,8 @@ export function GateCard({
   online: boolean
   /** 「位置」那一行:工作区 · 会话 */
   where: string
+  /** 「权限档」那一行。这是本机的当前选择,不是服务端给的 —— 它决定了「允许」之后代理能动多少。 */
+  perm?: string
   onAllow: () => void
   onDeny: () => void
   onOpen: () => void
@@ -76,7 +79,10 @@ export function GateCard({
                 <T style={{ fontFamily: MONO, fontSize: 12.5, lineHeight: 19, color: c.onGate }}>{gate.where}</T>
               </View>
             ) : null}
-            <T style={[st.meta, { color: c.onGate }]}>位置 {where}</T>
+            <T style={[st.meta, { color: c.onGate }]}>
+              位置 {where}
+              {perm ? `\n权限档 ${perm}` : ''}
+            </T>
           </View>
           <View style={st.acts}>
             <Pressable

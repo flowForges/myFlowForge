@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# e2e 跑出来的截图与 Chrome 档案
+e2e/.out/

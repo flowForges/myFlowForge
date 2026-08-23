@@ -1,9 +1,12 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
+import { CH } from '../../src/main/ipc/channels'
+import type { SessionsFile } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
 import { Empty, IconBtn, List, LiveDot, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
+import { Sheet } from '../src/ui/Sheet'
 import { useConn } from '../src/net/conn'
 import { useStore, type WsGroup } from '../src/data/store'
 
@@ -16,9 +19,26 @@ import { useStore, type WsGroup } from '../src/data/store'
  */
 export default function Sessions() {
   const c = useC()
-  const { activeHost, online, state } = useConn()
-  const { groups, gates, gatesFor, loading, select, wsName } = useStore()
+  const { activeHost, online, state, invoke } = useConn()
+  const { groups, gates, gatesFor, loading, select, wsName, refresh } = useStore()
   const now = Date.now()
+  const [newSheet, setNewSheet] = useState(false)
+  const [creating, setCreating] = useState(false)
+
+  // 新建会话:手机上能做。新建**工作区**不做 —— 那要选目录、要克隆仓库,留在电脑端。
+  const newSession = async (wsPath: string) => {
+    setCreating(true)
+    try {
+      const file = (await invoke(CH.sessionNew, [wsPath])) as SessionsFile
+      const created = file.sessions.find((s) => s.id === file.activeSessionId) ?? file.sessions[0]
+      if (created) select({ wsPath, sessionId: created.id })
+      refresh()
+      setNewSheet(false)
+      router.back()
+    } finally {
+      setCreating(false)
+    }
+  }
 
   const ordered = useMemo(() => {
     const gateWs = new Set(gates.map((g) => g.wsPath))
@@ -36,7 +56,14 @@ export default function Sessions() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar left={<IconBtn onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>‹</IconBtn>}>
+      <TopBar
+        left={<IconBtn onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>‹</IconBtn>}
+        right={
+          <IconBtn onPress={online ? () => setNewSheet(true) : undefined} disabled={!online}>
+            ＋
+          </IconBtn>
+        }
+      >
         <TopTitle
           title="全部会话"
           sub={
@@ -125,6 +152,19 @@ export default function Sessions() {
           </View>
         )}
       </ScrollView>
+
+      <Sheet open={newSheet} onClose={() => setNewSheet(false)} title="新建会话" sub="选一个工作区。新建工作区留在电脑端。">
+        {groups.map((g) => (
+          <Row key={g.ws.path} disabled={creating} onPress={() => void newSession(g.ws.path)}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <T style={{ fontSize: 14.5, fontWeight: '600', color: c.fg }}>{g.ws.name}</T>
+              <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
+                {g.ws.path}
+              </T>
+            </View>
+          </Row>
+        ))}
+      </Sheet>
     </View>
   )
 }
