@@ -1,11 +1,21 @@
 import { useState } from 'react'
-import type { Notifications, CloseAction } from '@shared/types'
+import type { Notifications, CloseAction, NotifyEvents } from '@shared/types'
 
 // Split out of AppearancePane (was 外观和通知 combined) so 外观 is purely visual and 通知/窗口 behavior
 // lives in its own pane. Same markup/handlers, just relocated.
 interface NotificationsPaneProps {
   notifications: Notifications
   onNotificationsChange: (partial: Partial<Notifications>) => void
+  /**
+   * ★Q1:通知原本是一个对象塞了两件事,拆成两半。
+   * `notifications` = 「**这台设备**收哪些」;`notifyEvents` = 「**那台机器**上哪些事件值得产生通知」。
+   * 手机可能只想收「要我答门」的,电脑什么都想收 —— 那是设备偏好;
+   * 而「这台机器上一轮跑完了算不算一件值得通知的事」只有那台机器知道。
+   */
+  notifyEvents: NotifyEvents
+  onNotifyEventsChange: (partial: Partial<NotifyEvents>) => void
+  /** 当前连着的主机名(本机时为 null),用来在标题里说清「哪台机器」。 */
+  hostLabel?: string | null
   closeAction: CloseAction
   onCloseActionChange: (v: CloseAction) => void
   // Fires a native notification right now, bypassing the focus gate + per-type switches. Lets the user
@@ -28,7 +38,7 @@ const closeActions = (isWindows: boolean): { key: CloseAction; label: string }[]
   { key: 'quit', label: '退出应用' },
 ]
 
-export function NotificationsPane({ notifications, onNotificationsChange, closeAction, onCloseActionChange, onTest }: NotificationsPaneProps) {
+export function NotificationsPane({ notifications, onNotificationsChange, notifyEvents, onNotifyEventsChange, hostLabel, closeAction, onCloseActionChange, onTest }: NotificationsPaneProps) {
   const isWindows = (window.forge?.platform ?? 'darwin') === 'win32'
   const [testMsg, setTestMsg] = useState<string>('')
   const runTest = async () => {
@@ -46,7 +56,7 @@ export function NotificationsPane({ notifications, onNotificationsChange, closeA
   return (
     <>
       <div className="set-group">
-        <h4>通知</h4>
+        <h4>这台设备收哪些 · 跟设备走</h4>
         <div className="set-row">
           <div className="info">
             <div className="t">系统通知</div>
@@ -76,6 +86,26 @@ export function NotificationsPane({ notifications, onNotificationsChange, closeA
               aria-label={t}
               disabled={!notifications.enabled}
               onClick={() => onNotificationsChange({ [key]: !notifications[key] })}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="set-group">
+        <h4>哪些事件值得通知 · 跟机器走{hostLabel ? ` · ${hostLabel}` : ''}</h4>
+        <p className="set-desc">
+          上面那组管的是「**这台设备**要不要弹」;这一组管的是「**{hostLabel ?? '这台机器'}**上哪类事件
+          值得产生一条通知」。关掉之后,连着这台机器的所有设备(包括以后的手机)都不会再收到该类通知。
+        </p>
+        {NOTIFY_TYPES.map(({ key, t, d }) => (
+          <div className="set-row" key={`ev-${key}`}>
+            <div className="info">
+              <div className="t">{t}</div>
+              <div className="d">{d}</div>
+            </div>
+            <button
+              className={`toggle${notifyEvents[key] ? ' on' : ''}`}
+              aria-label={`${t}(事件)`}
+              onClick={() => onNotifyEventsChange({ [key]: !notifyEvents[key] })}
             />
           </div>
         ))}

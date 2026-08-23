@@ -11,6 +11,12 @@ export const CH = {
   hostsImport: 'hosts:import',
   hostsStatusEvent: 'hosts:status-event',
   configGetSettings: 'config:get-settings',
+  // 设置一分为二之后的两个半边(第二期 C)。`config:get/set-settings` 由路由器**组合**这两个:
+  // 跟设备的那半边永远本机答,跟机器的那半边跟着当前 host 走。
+  configGetHostSettings: 'config:get-host-settings',
+  configSetHostSettings: 'config:set-host-settings',
+  configGetClientSettings: 'config:get-client-settings',
+  configSetClientSettings: 'config:set-client-settings',
   configSetSettings: 'config:set-settings',
   configListProjects: 'config:list-projects',
   configAddProject: 'config:add-project',
@@ -178,6 +184,10 @@ export const CH = {
   // Main process → pet window: the current active workspace path (or null).
   petActiveWorkspace: 'pet:active-workspace',
   settingsChanged: 'settings:changed',
+  // ★Q7:设置的并发冲突走「后写的赢」(和权限门的「先回先算」是同一套规则,用户只需要理解一套)。
+  //   后写的赢本身没问题,问题是**另一端不知道刚才发生了什么** —— 值变了、界面跟着变了,
+  //   看起来像是自己点错了。这条事件只在「改动来自别的设备」时发,专门用来说清是谁改的。
+  settingsChangedBy: 'settings:changed-by',
   sessionsChanged: 'sessions:changed',
   // Bot bridge (钉钉): renderer settings pane ⇄ main.
   botConnect: 'bot:connect',

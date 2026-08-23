@@ -391,7 +391,7 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'error'; id: string; error: string; message?: ChatMessage }
 )
 
-export type { Settings, Appearance, Pet, PetState, Anim, Accent, PetStateConfig, AgentsConfig, CustomAgent, CustomPetCfg, Terminal, CloseAction, AppIcon, DockIcon, Notifications, Keybindings } from '../main/config/schema'
+export type { Settings, Appearance, Pet, PetState, Anim, Accent, PetStateConfig, AgentsConfig, CustomAgent, CustomPetCfg, Terminal, CloseAction, AppIcon, DockIcon, Notifications, NotifyEvents, Keybindings } from '../main/config/schema'
 export type { AppLogEntry, LogLevel } from '../main/log/appLog'
 export type { DetectedRepo } from '../main/workspace/scanRepos'
 

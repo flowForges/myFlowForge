@@ -34,10 +34,11 @@ describe('方法表', () => {
 
   it('表里方法数与今日实测一致 —— 少一个就是搬运时漏了', () => {
     const table = registerIpc(() => {}, {}, fakeHost())
-    // 156(handlers.ts 里的 on(CH.x, …)) + 22(run2Handlers.ts,经注入的 onInvoke 写进同一张表)。
+    // 160(handlers.ts 里的 on(CH.x, …);第二期 C 加了设置两个半边的 4 个)
+    // + 22(run2Handlers.ts,经注入的 onInvoke 写进同一张表)。
     // ★这两个数是数出来的,不是抄文档的:`grep -c 'ipcMain\.handle'`(不带括号)会把两行提到它的
     // 注释、以及 run2 那行注入本身也算进去,于是得到 159 —— 文档里那些偏大的计数就是这么来的。
     // 改这个数就要在 commit message 里说清楚加/删了哪个 channel。
-    expect(Object.keys(table).length).toBe(178)
+    expect(Object.keys(table).length).toBe(182)
   })
 })

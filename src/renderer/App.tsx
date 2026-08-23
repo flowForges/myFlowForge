@@ -12,7 +12,7 @@ import { useEngine } from './state/useEngine'
 import { useConfig } from './state/useConfig'
 import { useHookLibrary } from './state/useHookLibrary'
 import { useSettings } from './state/useSettings'
-import { useHostKey } from './state/useHostKey'
+import { useHost } from './state/useHostKey'
 import type { OpenTarget } from '@shared/openers'
 import { useLogs } from './state/useLogs'
 import { useResizable } from './state/useResizable'
@@ -234,7 +234,7 @@ export function App() {
   const { projects, workflows, customStages, providers, addProject, deleteProject, updateProjectBranch, updateProjectAlias, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, upsertCustomStage, deleteCustomStage, redetect } = useConfig()
   const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
-  const hostKey = useHostKey()
+  const { key: hostKey, label: hostLabel } = useHost()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
     const items = home.workspaces.map(w => {
@@ -849,7 +849,7 @@ export function App() {
         switch (key) {
           case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} /> : null
           case 'wallpaper': return settings ? <BackgroundPane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} /> : null
-          case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
+          case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} notifyEvents={settings.notifyEvents} onNotifyEventsChange={(p) => update({ notifyEvents: { ...settings.notifyEvents, ...p } })} hostLabel={hostKey === 'local' ? null : hostLabel} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} onEditAlias={updateProjectAlias} />
           case 'hosts': return <HostsPane />

@@ -49,13 +49,53 @@ describe('host 路由', () => {
 
   it('★跟设备走的方法即使连着远程也留在本机 —— 连过去不该换掉你的壁纸', async () => {
     const s = await setup(
-      { 'wallpaper:catalog': () => '本机壁纸', 'config:get-settings': () => ({ theme: '本机主题' }) },
-      { 'wallpaper:catalog': () => '远程壁纸', 'config:get-settings': () => ({ theme: '远程主题' }) },
+      { 'wallpaper:catalog': () => '本机壁纸', 'update:check': () => '本机更新' },
+      { 'wallpaper:catalog': () => '远程壁纸', 'update:check': () => '远程更新' },
     )
     await s.router.connect(host(s.url))
     await untilReady(s.router)
     expect(await s.router.invoke('wallpaper:catalog', NOOP_CTX, [])).toBe('本机壁纸')
-    expect(await s.router.invoke('config:get-settings', NOOP_CTX, [])).toEqual({ theme: '本机主题' })
+    expect(await s.router.invoke('update:check', NOOP_CTX, [])).toBe('本机更新')
+  })
+
+  describe('设置是组合出来的(第二期 C)', () => {
+    const halves = (who: string) => ({
+      'config:get-client-settings': () => ({ appearance: `${who}的主题`, appProxy: `${who}的app代理` }),
+      'config:get-host-settings': () => ({ disabledProviders: [`${who}禁用的`], agentProxy: `${who}的agent代理` }),
+      'config:set-client-settings': (_c: unknown, p: any) => ({ saved: 'client', got: p }),
+      'config:set-host-settings': (_c: unknown, p: any) => ({ saved: 'host', got: p }),
+    })
+
+    it('★跟设备的那半边来自本机,跟机器的那半边来自远程', async () => {
+      // 不这么做的话:连着云服务器时你看到并编辑的 disabledProviders / pluginCreds 其实是本机的,
+      // 你以为在配那台机器,配的是自己 —— 而且界面上没有任何迹象。
+      const s = await setup(halves('本机'), halves('远程'))
+      await s.router.connect(host(s.url))
+      await untilReady(s.router)
+      expect(await s.router.invoke('config:get-settings', NOOP_CTX, [])).toEqual({
+        appearance: '本机的主题', appProxy: '本机的app代理',
+        disabledProviders: ['远程禁用的'], agentProxy: '远程的agent代理',
+      })
+    })
+
+    it('没连远程时组合出来的就是纯本机那份(行为与拆分前一致)', async () => {
+      const s = await setup(halves('本机'), halves('远程'))
+      expect(await s.router.invoke('config:get-settings', NOOP_CTX, [])).toEqual({
+        appearance: '本机的主题', appProxy: '本机的app代理',
+        disabledProviders: ['本机禁用的'], agentProxy: '本机的agent代理',
+      })
+    })
+
+    it('写设置时两半分别落到各自那一端', async () => {
+      const seen: string[] = []
+      const local = { ...halves('本机'), 'config:set-client-settings': (_c: unknown, p: any) => { seen.push('client'); return p } }
+      const s = await setup(local, { ...halves('远程'), 'config:set-host-settings': (_c: unknown, p: any) => ({ ...p, wroteOn: '远程' }) })
+      await s.router.connect(host(s.url))
+      await untilReady(s.router)
+      const r = await s.router.invoke('config:set-settings', NOOP_CTX, [{ appearance: 'x' }]) as any
+      expect(seen).toEqual(['client'])          // 客户端那半边写在本机
+      expect(r.wroteOn).toBe('远程')             // 机器那半边写去了远程
+    })
   })
 
   it('★对方没有这个方法时报错,绝不悄悄回落到本机', async () => {

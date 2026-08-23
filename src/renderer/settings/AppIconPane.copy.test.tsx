@@ -48,6 +48,9 @@ describe('NotificationsPane 关闭行为文案', () => {
     onNotificationsChange: () => {},
     closeAction: 'ask' as const,
     onCloseActionChange: () => {},
+    // Q1 拆分后的第二段(跟机器走)。
+    notifyEvents: { confirm: true, input: true, done: true },
+    onNotifyEventsChange: () => {},
   }
 
   it('macOS:「缩小到 Dock」', () => {

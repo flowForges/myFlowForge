@@ -54,6 +54,7 @@ export async function startGateway(opts: GatewayOpts) {
     conns.add(ws)
     let authed = !opts.token
     let offSink: (() => void) | null = null
+    let clientLabel = '远程客户端'   // 对方没自报名字时的兜底
 
     const send = (o: unknown) => {
       // 对面随时可能断。写失败只该丢这一条,不该炸掉整个网关。
@@ -95,6 +96,7 @@ export async function startGateway(opts: GatewayOpts) {
         return
       }
 
+      if (f.t === 'identify') { clientLabel = f.label.trim() || clientLabel; return }
       if (f.t === 'ping') { send({ t: 'pong' }); return }
       if (f.t !== 'req') return                       // res/evt/hello/ready 是服务端发的,客户端发来就无视
 
@@ -104,7 +106,10 @@ export async function startGateway(opts: GatewayOpts) {
         send({ t: 'res', id: f.id, ok: false, error: `这台机器没有这个方法: ${f.ch}` })
         return
       }
-      const ctx: InvokeCtx = { emit: (ch, payload) => send({ t: 'evt', ch, payload }) }
+      const ctx: InvokeCtx = {
+        emit: (ch, payload) => send({ t: 'evt', ch, payload }),
+        client: { id: 'remote', label: clientLabel },
+      }
       // 同步抛和异步 reject 都要接住,而且都必须变成一条 res —— 少回一条 res,
       // 对面那个 promise 就永远不 settle。
       void (async () => {

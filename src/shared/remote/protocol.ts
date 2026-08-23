@@ -23,6 +23,13 @@ export const HelloFrame = z.object({
 export const AuthFrame = z.object({ t: z.literal('auth'), token: z.string() })
 
 /**
+ * client → daemon,自报家门。
+ * 服务端把它记在这条连接上,答权限门时用来说清「是谁答的」(见 InvokeCtx.client)。
+ * ★纯展示用,**不是身份凭证** —— 谁都能自称任何名字。真正的准入靠 token / SSH 隧道。
+ */
+export const IdentifyFrame = z.object({ t: z.literal('identify'), label: z.string().max(64) })
+
+/**
  * daemon → client,鉴权通过后才发。
  * methods 就是 A 阶段那张方法表的 key 列表 —— 客户端据此把对不上的功能置灰(决策 B-2)。
  */
@@ -51,7 +58,7 @@ export const EvtFrame = z.object({ t: z.literal('evt'), ch: z.string(), payload:
 export const PingFrame = z.object({ t: z.literal('ping') })
 export const PongFrame = z.object({ t: z.literal('pong') })
 
-export const Frame = z.union([HelloFrame, AuthFrame, ReadyFrame, ReqFrame, ResFrame, EvtFrame, PingFrame, PongFrame])
+export const Frame = z.union([HelloFrame, AuthFrame, IdentifyFrame, ReadyFrame, ReqFrame, ResFrame, EvtFrame, PingFrame, PongFrame])
 
 export type Frame = z.infer<typeof Frame>
 export type HelloFrame = z.infer<typeof HelloFrame>

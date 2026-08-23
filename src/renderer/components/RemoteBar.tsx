@@ -11,16 +11,27 @@ import './remotebar.css'
  */
 export function RemoteBar({ onOpenHosts }: { onOpenHosts: () => void }) {
   const [status, setStatus] = useState<HostStatusView | null>(null)
+  // Q7:设置的并发是「后写的赢」。赢本身没问题,问题是另一端会看到值凭空变了、
+  // 界面跟着变了,像是自己点错了。这里把「是谁改的」说出来,几秒后自己消失。
+  const [changedBy, setChangedBy] = useState('')
 
   useEffect(() => {
     // ★先订阅、再拉快照,而且**快照到得晚就丢掉**。
     // 反过来写会有竞态:初始 hostsStatus() 的 promise 可能在一条实时状态之后才 resolve,
     // 用一个更旧的快照把新状态盖回去 —— 表现为「连上远程后状态条闪一下就没了」。
+    const forge = window.forge as typeof window.forge | undefined
+    if (!forge?.onHostStatus) return
     let pushed = false
-    const off = window.forge.onHostStatus?.((s) => { pushed = true; setStatus(s) })
-    void window.forge.hostsStatus?.().then((s) => { if (!pushed) setStatus(s) })
+    const off = forge.onHostStatus((s) => { pushed = true; setStatus(s) })
+    void forge.hostsStatus?.().then((s) => { if (!pushed) setStatus(s) }).catch(() => { /* 按本机处理 */ })
     return off
   }, [])
+
+  useEffect(() => (window.forge as typeof window.forge | undefined)?.onSettingsChangedBy?.((p) => {
+    setChangedBy(p.by)
+    const t = setTimeout(() => setChangedBy(''), 6000)
+    return () => clearTimeout(t)
+  }), [])
 
   if (!status || status.hostId === null) return null
   const d = describeHostState(status.state)
@@ -30,7 +41,7 @@ export function RemoteBar({ onOpenHosts }: { onOpenHosts: () => void }) {
       <span className="dot" />
       <span className="who">{status.label}</span>
       <span className="sep">·</span>
-      <span className="sub">{d.text}</span>
+      <span className="sub">{changedBy ? `「${changedBy}」刚改了这台机器的设置` : d.text}</span>
       <button type="button" className="act" onClick={onOpenHosts}>切换</button>
       <button type="button" className="act" onClick={() => { void window.forge.hostsDisconnect?.() }}>回到本机</button>
     </div>

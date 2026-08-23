@@ -329,6 +329,11 @@ const api = {
   hostsStatus: (): Promise<HostStatusView> => ipcRenderer.invoke(CH.hostsStatus),
   hostsExport: (includeTokens: boolean): Promise<string> => ipcRenderer.invoke(CH.hostsExport, includeTokens),
   hostsImport: (text: string): Promise<{ ok: true; added: number } | { ok: false; error: string }> => ipcRenderer.invoke(CH.hostsImport, text),
+  onSettingsChangedBy: (cb: (p: { by: string }) => void) => {
+    const listener = (_: unknown, p: { by: string }) => cb(p)
+    ipcRenderer.on(CH.settingsChangedBy, listener)
+    return () => { ipcRenderer.removeListener(CH.settingsChangedBy, listener) }
+  },
   onHostStatus: (cb: (s: HostStatusView) => void) => {
     const listener = (_: unknown, s: HostStatusView) => cb(s)
     ipcRenderer.on(CH.hostsStatusEvent, listener)

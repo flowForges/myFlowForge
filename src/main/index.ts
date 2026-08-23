@@ -11,6 +11,7 @@ import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
 import { createBroadcastHub } from './ipc/broadcastHub'
 import { createElectronHost } from './host/electronHost'
+import { hostname } from 'node:os'
 import { createHostRouter } from './remote/router'
 import { openSshTunnel } from './remote/sshTunnel'
 import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHosts, type RemoteHost } from './remote/hostStore'
@@ -656,6 +657,8 @@ app.whenReady().then(() => {
     localTable: methodTable,
     toWindows: registry.broadcast,
     clientVersion: app.getVersion(),
+    // 远程那台在系统提示里就显示这个名字。用机器名 —— 用户一眼认得出是哪台。
+    clientLabel: hostname(),
     onStatus: (s) => registry.broadcast(CH.hostsStatusEvent, s),
     onLog: (m) => logInfo('remote', m),
     resolveUrl: async (h) => {
@@ -675,6 +678,9 @@ app.whenReady().then(() => {
       // ctx.emit = 「回给发起这次调用的那个窗口」,不是广播。窗口可能在异步 handler 跑到一半时
       // 被关掉,send 会抛;吞掉即可 —— 原先那两处 e.sender.send 本来就各自套着 try/catch。
       emit: (c, p) => { try { e.sender.send(c, p) } catch { /* window closed */ } },
+      // 本机窗口发起的调用。权限门用它区分「我自己答的」和「别的设备答的」——
+      // 前者不该在对话里加噪音,后者必须说清楚。
+      client: { id: 'local', label: '本机' },
     }, args))
   }
 

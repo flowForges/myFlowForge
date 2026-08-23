@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useHostReadySeq } from './useHostKey'
 import type { AgentContextMeta, AgentContextRef, AskAnswers, ChatConfirm, ChatEvent, ChatMessage, ChatSendPayload } from '@shared/types'
 import type { PlanReq } from '../components/PlanCard'
 
@@ -59,6 +60,10 @@ export function useChat(
   const onModeChangedRef = useRef(onModeChanged)
   onModeChangedRef.current = onModeChanged
 
+  // 重连后强制重跑下面那个 effect:它开头就把 confirms/asks 清空再从服务端拉一遍,
+  // 正好就是「以服务端为准,不信本地缓存」。断线期间那边可能已经有人答了门,也可能新升了门。
+  const hostReadySeq = useHostReadySeq()
+
   useEffect(() => {
     // asks 一直漏在重置之外 —— 换会话后上一个会话的提问卡还挂在新会话里(卡片本身按 workspace+session
     // 过滤事件,但已经进了 state 的那张不会自己走)。和 confirms 一起清。
@@ -104,7 +109,7 @@ export function useChat(
       if (inflight.length) setStreamingIds(new Set(inflight))
     })
     return () => { live = false }
-  }, [workspacePath, sessionId])
+  }, [workspacePath, sessionId, hostReadySeq])
 
   useEffect(() => {
     const off = api.current.onChatQueueEvent(e => {

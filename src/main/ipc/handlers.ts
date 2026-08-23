@@ -36,7 +36,7 @@ import { readSessions, newSession, switchSession, closeSession, renameSession, s
 import { buildLaunchPlan, buildLaunchProjects, hasRequirement, type LaunchStartConfig } from '../run/launch'
 import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProjectBriefs } from '../run/workflowEnter'
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
-import { workflowDisplayName } from '../config/schema'
+import { workflowDisplayName, pickClient, pickHost } from '../config/schema'
 import { agentSessionsForId } from '../chat/agentSessions'
 import { botBridge, genPairing } from '../bot/botBridge'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
@@ -135,7 +135,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
    */
   const on = (ch: string, fn: (e: InvokeEventLike, ...args: any[]) => unknown) => {
     if (table[ch]) throw new Error(`duplicate ipc channel: ${ch}`)
-    table[ch] = (ctx: InvokeCtx, ...args: unknown[]) => fn({ sender: { send: ctx.emit } }, ...args)
+    table[ch] = (ctx: InvokeCtx, ...args: unknown[]) => fn({ sender: { send: ctx.emit }, client: ctx.client }, ...args)
   }
   // Startup heal: the legacy in-memory orchestrator is gone; on a fresh launch nothing is running — any
   // session still stuck in mode:'workflow' (from a completed run before the reset fix, or an app crash
@@ -235,6 +235,34 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.settingsChanged, s)
     onSettings?.(s)
     return s
+  })
+
+  // ── 设置的两个半边(第二期 C)。路由器用它们组合出上面那对:
+  //    跟设备的永远本机答,跟机器的跟着当前 host 走。
+  on(CH.configGetHostSettings, () => pickHost(readSettings()))
+  // Q7:后写的赢 + 广播 + 说清是谁改的。只有「不是本机改的」才发 —— 自己改自己的不用告诉自己。
+  const noteSettingsWriter = (e: { client?: { id: string; label: string } } | undefined) => {
+    if (e?.client && e.client.id !== 'local') broadcast(CH.settingsChangedBy, { by: e.client.label })
+  }
+  on(CH.configSetHostSettings, (_e, patch: Partial<Settings>) => {
+    // 只写这一半。★不能整份写回去 —— 远程客户端手里那份「跟设备」的字段是**它自己**的
+    // (它的主题、它的壁纸),整份写会把这台机器的客户端设置覆盖成远程那台设备的。
+    const next = { ...readSettings(), ...pickHost(patch as Settings) }
+    writeSettings(next)
+    const s = readSettings()
+    broadcast(CH.settingsChanged, s)
+    noteSettingsWriter(_e)
+    onSettings?.(s)
+    return pickHost(s)
+  })
+  on(CH.configGetClientSettings, () => pickClient(readSettings()))
+  on(CH.configSetClientSettings, (_e, patch: Partial<Settings>) => {
+    const next = { ...readSettings(), ...pickClient(patch as Settings) }
+    writeSettings(next)
+    const s = readSettings()
+    broadcast(CH.settingsChanged, s)
+    onSettings?.(s)
+    return pickClient(s)
   })
   on(CH.appIconOptions, () => resolveAppIconOptions({
     resourcesPath: process.resourcesPath,
@@ -426,6 +454,24 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // ConfirmDecision(而不是光 'allow'|'deny'):带选项的门(claude AskUserQuestion)要把用户选了什么一起送回
   // provider —— 只回 allow 等于什么都没答,模型会收到「没等到回复」。
   const chatConfirms = new Map<string, (decision: ConfirmDecision) => void>()
+  /**
+   * 最近被答掉的门:id → 谁答的、答了什么、在哪个会话。
+   *
+   * ★这是「先回先算」在多客户端下唯一会骗人的地方(设计文档 7.2 第 1 条)。
+   * 手机点了「允许」,电脑上的卡片消失前有几百毫秒 —— 电脑前的人完全可能在这期间点了「拒绝」。
+   * 现在的代码拿不到 resolver 就直接 return,**他会以为自己拦住了那条 `rm -rf`,其实已经放行了**。
+   * 记下来,好在第二个答案落空时**当面告诉他**。
+   */
+  const recentlyResolved = new Map<string, { by: string; decision: string; ws: string; sessionId: string; ts: number }>()
+  const rememberResolved = (id: string, by: string, decision: string, ws: string, sessionId: string) => {
+    recentlyResolved.set(id, { by, decision, ws, sessionId, ts: Date.now() })
+    // 只留最近 50 条 —— 迟到的答案都是几百毫秒级的,留久了没意义,还白占内存。
+    if (recentlyResolved.size > 50) {
+      const oldest = [...recentlyResolved.entries()].sort((a, b) => a[1].ts - b[1].ts)[0]
+      if (oldest) recentlyResolved.delete(oldest[0])
+    }
+  }
+  const DECISION_CN: Record<string, string> = { allow: '允许', deny: '拒绝', modify: '修改' }
   let chatConfirmSeq = 0
   // Chat-side ASK (question + optional options, returns a string) — the delegate bridge routes a
   // sub-agent's forge_ask here so it surfaces as a select/input ReqCard and the answer flows back.
@@ -510,7 +556,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // 用户在门【已经挂在屏幕上】的时候才切到「完全访问」(被问烦了才去切,这才是真实场景)——把该会话所有
   // 挂起的确认门就地放行,卡片当场消失。只碰 confirm 门:ask 门是子代理在问人,与权限档无关。
-  const allowPendingConfirms = (wsPath: string, sessionId: string) => {
+  const allowPendingConfirms = (wsPath: string, sessionId: string, by = '本机') => {
     for (const [id, meta] of [...chatGateOwner]) {
       if (meta.ws !== wsPath || meta.sessionId !== sessionId || meta.type !== 'confirm') continue
       if (!autoAllowable(meta)) continue
@@ -520,15 +566,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       chatConfirms.delete(id)
       r('allow')
       broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'confirm-resolved', id })
-      emitNote(wsPath, sessionId, `🛡 已切到「完全访问」，自动放行：${gateWhere(meta)}`)
+      rememberResolved(id, by, 'allow', wsPath, sessionId)
+      // ★把「是谁切的」写进去。别的设备切了完全访问,这台机器上挂着的门会**当场凭空消失** ——
+      //   不说清楚的话,电脑前的人只会觉得界面出了鬼。
+      emitNote(wsPath, sessionId, by === '本机'
+        ? `🛡 已切到「完全访问」，自动放行：${gateWhere(meta)}`
+        : `🛡 「${by}」切到了「完全访问」，自动放行：${gateWhere(meta)}`)
     }
   }
   // 权限档的唯一写入口(IPC 与机器人桥共用):落盘 + 广播 + 若切到 full 就排空挂起的门 + 该说的说清楚。
-  const applyPermission = (wsPath: string, sessionId: string, mode: import('@shared/permissions').PermissionMode) => {
+  const applyPermission = (wsPath: string, sessionId: string, mode: import('@shared/permissions').PermissionMode, by = '本机') => {
     const prev = getSession(wsPath, sessionId)?.permissionMode ?? DEFAULT_PERMISSION_MODE
     const file = setSessionPermission(wsPath, sessionId, mode)
     broadcastSessions(wsPath, file)
-    if (mode === 'full') allowPendingConfirms(wsPath, sessionId)
+    if (mode === 'full') allowPendingConfirms(wsPath, sessionId, by)
     // 运行中改档,但这个 provider 的沙箱是启动参数、进程起来就钉死了(见 agents/permissionArgs.ts)——
     // 不说一声,用户只会以为「我切了但没反应 = 这功能坏了」。
     // 不提示的两种情况:① claude 切到完全访问,门重读后当场就兑现了;② cursor 这类压根不吃权限档的
@@ -798,7 +849,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return sessionsOut(a.workspacePath, file)
   })
   on(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
-    return sessionsOut(a.workspacePath, applyPermission(a.workspacePath, a.sessionId, a.mode))
+    return sessionsOut(a.workspacePath, applyPermission(a.workspacePath, a.sessionId, a.mode, _e?.client?.label ?? '本机'))
   })
   on(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
     const file = setSessionModel(a.workspacePath, a.sessionId, a.agentId, a.modelId)
@@ -944,14 +995,32 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return
     }
     const resolve = chatConfirms.get(a.id)
-    if (!resolve) return
+    if (!resolve) {
+      // ★门已经被别人答掉了。原来这里直接 return —— 那正是「你以为自己拦住了」的来源。
+      //   只有**答案不一样**时才提示:同一台设备手抖点两下是常事,不该为此加噪音;
+      //   而「一个说允许、一个说拒绝」是安全问题,必须让落空的那个人看见。
+      const prev = recentlyResolved.get(a.id)
+      if (prev && prev.decision !== a.decision) {
+        emitNote(prev.ws, prev.sessionId,
+          `⚠️ 你的「${DECISION_CN[a.decision] ?? a.decision}」没有生效 —— 这道门已由「${prev.by}」抢先答为「${DECISION_CN[prev.decision] ?? prev.decision}」。`)
+      }
+      return
+    }
+    const by = _e?.client?.label ?? '本机'
     chatConfirms.delete(a.id)
     chatGateOwner.delete(a.id)
+    rememberResolved(a.id, by, a.decision, a.workspacePath, readSessions(a.workspacePath).activeSessionId ?? '')
     // 带 answers/response 的放行 = 这是一道「请回答」的门(AskUserQuestion),必须把选择原样送回 provider。
     const answered = a.decision === 'allow' && (a.answers !== undefined || a.response !== undefined)
     resolve(answered ? { decision: 'allow', answers: a.answers, response: a.response }
       : a.decision === 'modify' ? 'deny' : a.decision)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
+    // 别的设备答的门,要在对话里留个痕 —— 否则电脑前的人只看到卡片凭空消失,不知道发生了什么。
+    // 本机自己答的不提示:那会给单机用户的每一次确认都加一条噪音。
+    if (_e?.client && _e.client.id !== 'local') {
+      const sid = readSessions(a.workspacePath).activeSessionId ?? ''
+      if (sid) emitNote(a.workspacePath, sid, `🛡 「${by}」${DECISION_CN[a.decision] ?? a.decision}了这道门。`)
+    }
   })
 
   // ---- Bot bridge (钉钉) ----
@@ -1033,7 +1102,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       const file = setSessionModel(ws, sessionId, agent, model)
       broadcastSessions(ws, file)
     },
-    setPermission: (ws, sessionId, mode) => { applyPermission(ws, sessionId, mode) },
+    setPermission: (ws, sessionId, mode) => { applyPermission(ws, sessionId, mode, '机器人桥') },
     getProxy: () => readSettings().agentProxy,
     emitStatus: (platform, st) => broadcast(CH.botStatusEvent, { platform, status: st }),
   })

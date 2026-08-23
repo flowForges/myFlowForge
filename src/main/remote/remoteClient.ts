@@ -21,6 +21,8 @@ export type ConnectOpts = {
   token?: string
   /** 本客户端的版本,用来跟 daemon 比主版本号(决策 B-2) */
   clientVersion: string
+  /** 自报的名字,对面在「是谁答的门」里显示。纯展示,不是凭证。 */
+  clientLabel?: string
   onEvent: (channel: string, payload: unknown) => void
   onState?: (s: RemoteState) => void
   onLog?: (msg: string) => void
@@ -110,6 +112,8 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
       }
 
       if (f.t === 'ready') {
+        // 自报家门:让对面在系统提示里说得出「是哪台设备答的门」。
+        if (opts.clientLabel) { try { sock.send(encodeFrame({ t: 'identify', label: opts.clientLabel })) } catch { /* 已断 */ } }
         attempt = 1
         setState({ status: 'ready', version: peerVersion, methods: new Set(f.methods) })
         return

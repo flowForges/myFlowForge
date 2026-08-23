@@ -41,7 +41,7 @@ vi.mock('../chat/sessionStore', () => ({
   autoNameIfDefault: vi.fn(),
 }))
 vi.mock('../config/store', () => ({
-  readSettings: () => ({ termProxy: '', pinnedWorkspaces: [], fullAccessAck: {} }),
+  readSettings: () => ({ agentProxy: '', appProxy: '', pinnedWorkspaces: [], fullAccessAck: {} }),
   writeSettings: vi.fn(),
   readProjects: () => ({ projects: [] }),
   writeProjects: vi.fn(),
@@ -84,7 +84,8 @@ async function startTurn(agent = 'claude', requireConfirm = true) {
   sendTurnMock.mockReset()
   const { registerIpc } = await import('./handlers')
   const sent: [string, any][] = []
-  const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}, fakeHost()))
+  const table = registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}, fakeHost())
+  const calls = tableCalls(table)
   const call = (ch: string) => {
     const c = calls.find((x: any[]) => x[0] === ch)
     if (!c) throw new Error(`No handler for channel: ${ch}`)
@@ -96,7 +97,7 @@ async function startTurn(agent = 'claude', requireConfirm = true) {
   await new Promise(r => setTimeout(r, 0))
   // cursor 这类无沙箱 provider 会先卡在「预授权门」上,sendTurn 压根没跑到 —— 那种用例不需要 confirm。
   if (requireConfirm && !confirm) throw new Error('sendTurn never ran — confirm not captured')
-  return { confirm: confirm as unknown as Confirm, sent, call }
+  return { confirm: confirm as unknown as Confirm, sent, call, table }
 }
 
 const requests = (sent: [string, any][]) => sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'confirm-request')
@@ -255,5 +256,85 @@ describe('运行中改档:本轮不生效时要说一声', () => {
     await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
     console.log('DBG cursor notes:', JSON.stringify(notes(sent)))
     expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)
+  })
+})
+
+// ── 多客户端下的权限门(第二期 C · 设计文档 7.2)────────────────────────────────
+//
+// 现有结构本来就是「先回先算」(状态和 resolver 全在服务端),但它在多客户端下会**骗人**:
+// 手机点了「允许」,电脑上的卡片消失前有几百毫秒 —— 电脑前的人完全可能在这期间点了「拒绝」。
+// 原来的代码拿不到 resolver 就直接 return,于是**他会以为自己拦住了那条 `rm -rf`,其实已经放行了**。
+const REMOTE = { emit: () => {}, client: { id: 'remote', label: 'iPhone' } }
+const LOCAL = { emit: () => {}, client: { id: 'local', label: '本机' } }
+const notes = (sent: [string, any][]) => sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done').map(([, p]) => String(p.message?.text ?? ''))
+
+describe('多客户端下的权限门', () => {
+  it('★迟到的【相反】答案不许静默丢弃 —— 必须当面告诉那个人他没拦住', async () => {
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash 请求执行', where: 'rm -rf /tmp/x' })
+    await new Promise(r => setTimeout(r, 0))
+    const id = requests(sent)[0]![1].id
+
+    // 手机先答「允许」
+    await table[CH.chatResolve]!(REMOTE, { id, decision: 'allow', workspacePath: '/ws/a' })
+    // 电脑上的人几百毫秒后按了「拒绝」—— 门已经没了
+    await table[CH.chatResolve]!(LOCAL, { id, decision: 'deny', workspacePath: '/ws/a' })
+
+    const text = notes(sent).join('\n')
+    expect(text).toContain('没有生效')
+    expect(text).toContain('iPhone')
+    expect(text).toContain('允许')
+  })
+
+  it('同一个答案迟到(手抖点两下)不加噪音', async () => {
+    // 危险的是「一个说允许、一个说拒绝」。同设备重复点同一个按钮是常事,为它加系统提示纯属打扰。
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'ls' })
+    await new Promise(r => setTimeout(r, 0))
+    const id = requests(sent)[0]![1].id
+    await table[CH.chatResolve]!(LOCAL, { id, decision: 'allow', workspacePath: '/ws/a' })
+    const before = notes(sent).length
+    await table[CH.chatResolve]!(LOCAL, { id, decision: 'allow', workspacePath: '/ws/a' })
+    expect(notes(sent).length).toBe(before)
+  })
+
+  it('★别的设备答的门,要在对话里留个痕 —— 否则卡片凭空消失没人知道为什么', async () => {
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'git status' })
+    await new Promise(r => setTimeout(r, 0))
+    const id = requests(sent)[0]![1].id
+    await table[CH.chatResolve]!(REMOTE, { id, decision: 'allow', workspacePath: '/ws/a' })
+    expect(notes(sent).join('\n')).toContain('「iPhone」允许了这道门')
+  })
+
+  it('本机自己答的门不留痕 —— 单机用户的每次确认都加一条提示是纯噪音', async () => {
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'git status' })
+    await new Promise(r => setTimeout(r, 0))
+    const id = requests(sent)[0]![1].id
+    const before = notes(sent).length
+    await table[CH.chatResolve]!(LOCAL, { id, decision: 'allow', workspacePath: '/ws/a' })
+    expect(notes(sent).length).toBe(before)
+  })
+
+  it('★别的设备切到「完全访问」导致的自动放行,要说清是谁切的', async () => {
+    // 不说的话:这台机器上挂着的门会**当场凭空消失**,电脑前的人只会觉得界面出了鬼。
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'rm -rf /tmp/x' })
+    await new Promise(r => setTimeout(r, 0))
+    await table[CH.sessionSetPermission]!(REMOTE, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    const text = notes(sent).join('\n')
+    expect(text).toContain('「iPhone」切到了「完全访问」')
+    expect(resolved(sent).length).toBeGreaterThan(0)
+  })
+
+  it('本机自己切完全访问,提示里不带设备名(和以前一模一样)', async () => {
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'rm -rf /tmp/x' })
+    await new Promise(r => setTimeout(r, 0))
+    await table[CH.sessionSetPermission]!(LOCAL, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    const text = notes(sent).join('\n')
+    expect(text).toContain('已切到「完全访问」')
+    expect(text).not.toContain('「本机」切到了')
   })
 })

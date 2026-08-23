@@ -22,6 +22,7 @@ export const CLIENT_ONLY: ReadonlySet<string> = new Set([
   // ★B 阶段设置暂不拆:路由到远程会让你一连过去主题/壁纸/字号全变成那台机器的。
   //   C 阶段(Q1–Q7)再把 host 那一半正式切过去。
   'config:get-settings', 'config:set-settings',
+  'config:get-client-settings', 'config:set-client-settings',   // 跟设备那半边,永远本机答
   // 宠物整块是桌面外壳(决策 12:手机不做;Linux 也不需要)
   'pet:pick-image', 'pet:pick-pack', 'pet-pack:growth-install', 'growth:pet-import',
   'petpack:catalog', 'petpack:install', 'petpack:preview',
