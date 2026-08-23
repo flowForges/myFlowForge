@@ -52,6 +52,10 @@ export async function attach() {
   return {
     send, events,
     close: () => ws.close(),
+    /** 深浅两套都要验。RN 的 useColorScheme 在 web 上读的就是 prefers-color-scheme。 */
+    async setScheme(scheme) {
+      await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: scheme }] })
+    },
     async setViewport(width, height) {
       await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: true })
     },

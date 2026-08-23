@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type PermissionMode } from '../../src/shared/permissions'
 import { useC } from '../src/theme/theme'
-import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Row, T, TopBar } from '../src/ui/kit'
+import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TopBar } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
 import { Sheet } from '../src/ui/Sheet'
 import { useConn } from '../src/net/conn'
@@ -18,6 +18,24 @@ import { useAgents } from '../src/data/useAgents'
  * 版式照原型设计层 D:顶栏(主机 / 会话切换 / 停止)→ 状态条 → 消息流 → **钉住的门** → 输入区。
  * 门在输入区正上方且不参与滚动 —— 那是这一屏唯一的实底彩色块。
  */
+/** 思考过程默认折叠。展开了它会把回答本身挤出屏幕 —— 手机上一屏就那么点地方。 */
+function Think({ text }: { text: string }) {
+  const c = useC()
+  const [open, setOpen] = useState(false)
+  const head = text.split('\n')[0] || '思考过程'
+  return (
+    <View style={{ paddingLeft: 26, marginBottom: 6 }}>
+      <Pressable onPress={() => setOpen((v) => !v)} hitSlop={6}>
+        <T style={{ fontSize: 12.5, color: c.faint }}>
+          {open ? '▾ ' : '▸ '}
+          {head}
+        </T>
+      </Pressable>
+      {open ? <T style={[st.think, { color: c.muted, borderLeftColor: c.border2 }]}>{text}</T> : null}
+    </View>
+  )
+}
+
 export default function Chat() {
   const c = useC()
   const insets = useSafeAreaInsets()
@@ -119,13 +137,18 @@ export default function Chat() {
       <TopBar
         left={<IconBtn onPress={() => router.push('/hosts')}>🖥</IconBtn>}
         right={
-          <IconBtn
-            onPress={busy ? () => void stop() : undefined}
-            tone={busy ? c.err : c.faint}
-            disabled={!busy || !online}
-          >
-            ■
-          </IconBtn>
+          <View style={{ flexDirection: 'row' }}>
+            <IconBtn onPress={selected ? () => router.push('/exec') : undefined} disabled={!selected || !online}>
+              ≣
+            </IconBtn>
+            <IconBtn
+              onPress={busy ? () => void stop() : undefined}
+              tone={busy ? c.err : c.faint}
+              disabled={!busy || !online}
+            >
+              ■
+            </IconBtn>
+          </View>
         }
       >
         <Pressable onPress={() => router.push('/sessions')} style={{ paddingHorizontal: 2, paddingVertical: 2 }}>
@@ -193,9 +216,7 @@ export default function Chat() {
                     {m.model ?? '代理'}
                   </T>
                 </View>
-                {m.think ? (
-                  <T style={[st.think, { color: c.muted, borderLeftColor: c.border2 }]}>{m.think.slice(-400)}</T>
-                ) : null}
+                {m.think ? <Think text={m.think} /> : null}
                 <T style={{ fontSize: 15, lineHeight: 25, color: c.fg2, paddingLeft: 26 }}>
                   {m.text}
                   {m.streaming ? <T style={{ color: c.accent }}>▍</T> : null}
@@ -207,14 +228,12 @@ export default function Chat() {
             ),
             )}
             {/* 门挂着时在流的末尾留一行。不留的话,消息流看上去就是「代理说到一半不说了」。 */}
-          {myGates.length > 0 ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, paddingLeft: 26 }}>
-              <View style={[st.paused, { borderColor: c.pillGateBorder }]}>
-                <T style={{ fontSize: 11, fontWeight: '600', color: c.gate }}>已暂停</T>
+            {myGates.length > 0 ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, paddingLeft: 26 }}>
+                <Pill tone="gate">已暂停</Pill>
+                <T style={{ fontSize: 12.5, color: c.muted }}>代理停在门上,回答后从这里继续</T>
               </View>
-              <T style={{ fontSize: 12.5, color: c.muted }}>代理停在门上,回答后从这里继续</T>
-            </View>
-          ) : null}
+            ) : null}
           </>
         )}
       </ScrollView>
@@ -384,7 +403,7 @@ const st = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   av: { width: 19, height: 19, borderRadius: 6, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
-  think: { marginLeft: 26, marginBottom: 6, paddingLeft: 10, borderLeftWidth: 2, fontSize: 12.5, lineHeight: 20 },
+  think: { marginTop: 6, paddingLeft: 10, borderLeftWidth: 2, fontSize: 12.5, lineHeight: 20 },
   foot: { borderTopWidth: StyleSheet.hairlineWidth },
   entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 7 },
   send: {
@@ -396,5 +415,4 @@ const st = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 12, paddingBottom: 10 },
-  paused: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth },
 })

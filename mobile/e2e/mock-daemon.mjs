@@ -39,12 +39,40 @@ const agents = [
 ]
 const gateState = { [WS_A]: { confirms: [], asks: [] }, [WS_B]: { confirms: [], asks: [] } }
 
+// 变更:假的但结构是真的(ChangeItem / MultiChanges / DiffLine 三个 shared 类型)
+const projects = { [WS_A]: ['forge', 'site'], [WS_B]: ['api'] }
+const changes = {
+  [WS_A + '/forge']: [
+    { path: 'src/main/ipc/handlers.ts', type: 'edit', add: 12, del: 4 },
+    { path: 'src/main/ipc/handlers.test.ts', type: 'add', add: 46, del: 0 },
+  ],
+  [WS_A + '/site']: [{ path: 'index.html', type: 'edit', add: 2, del: 2 }],
+  [WS_B + '/api']: [],
+}
+const diffs = {
+  'src/main/ipc/handlers.ts': [
+    { kind: 'ctx', ln: 477, text: '  const drainGates = (ws: string) => {' },
+    { kind: 'del', ln: 478, text: '    emitNote(ws, sid, `已按新权限档放行 ${n} 道门`)' },
+    { kind: 'add', ln: 478, text: '    for (const g of pending) {' },
+    { kind: 'add', ln: 479, text: '      emitNote(ws, sid, `🛡 自动放行:${g.where}`)' },
+    { kind: 'add', ln: 480, text: '    }' },
+    { kind: 'ctx', ln: 481, text: '  }' },
+  ],
+}
+
 const table = {
   'workspaces:list': () => workspaces,
   'session:list': (p) => sessions[p] ?? { sessions: [], activeSessionId: '' },
   'chat:history': (a) => history[a.sessionId] ?? [],
   'chat:gate-state': (a) => gateState[a.workspacePath] ?? { confirms: [], asks: [] },
   'agents:detect': () => agents,
+  'workspaces:get': (p) => ({ path: p, projects: (projects[p] ?? []).map((name) => ({ name })) }),
+  'changes:multi': (cwds) => {
+    const byProject = cwds.map((cwd) => ({ cwd, changes: changes[cwd] ?? [] }))
+    const all = byProject.flatMap((b) => b.changes)
+    return { total: all.length, add: all.reduce((n, c) => n + c.add, 0), del: all.reduce((n, c) => n + c.del, 0), byProject }
+  },
+  'git:diff': (a) => diffs[a.file] ?? [],
   'chat:send': () => undefined,
   'chat:stop': () => undefined,
   'chat:resolve': (a) => { resolveGate(a.id); return undefined },
