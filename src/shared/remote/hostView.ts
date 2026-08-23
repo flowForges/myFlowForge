@@ -36,7 +36,8 @@ export type HostStatusView = {
 /** 一句人话的连接状态 —— 断线态必须是**显式**的,不能拿缓存假装在线(设计文档十·UI 约束)。 */
 export function describeHostState(s: HostConnState): { text: string; tone: 'ok' | 'warn' | 'bad' | 'idle' } {
   switch (s.status) {
-    case 'local': return { text: '本机', tone: 'idle' }
+    // 卡片标题已经写着「本机」了,副标题再写一遍等于没说。说点有用的:你现在没连任何远程主机。
+    case 'local': return { text: '未连接任何远程主机 —— 当前看到的都是这台电脑上的内容', tone: 'idle' }
     case 'connecting': return { text: s.attempt > 1 ? `连接中(第 ${s.attempt} 次)` : '连接中…', tone: 'warn' }
     case 'ready': return { text: `已连接 · ${s.version}`, tone: 'ok' }
     case 'retrying': return { text: `已断开,${Math.round(s.nextInMs / 1000)} 秒后重连 — ${s.error}`, tone: 'bad' }

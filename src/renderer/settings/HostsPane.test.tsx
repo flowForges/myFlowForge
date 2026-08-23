@@ -45,6 +45,35 @@ describe('HostsPane 保存校验', () => {
     expect(hostsUpsert).not.toHaveBeenCalled()
   })
 
+  it('★把 ws:// 填进 SSH 目标要当场拦住并指出填错了框', async () => {
+    // 真机验收就栽在这儿:ssh 真的去连了一台叫「ws://127.0.0.1」的机器,
+    // 报错是一长串 ssh 命令行 —— 完全指不到「你填错框了」这个真实原因。
+    await openForm()
+    type('名称', '云服务器')
+    type('SSH 目标', 'ws://127.0.0.1')
+    await save()
+    expect(screen.getByText(/不要写 ws:\/\//)).toBeInTheDocument()
+    expect(hostsUpsert).not.toHaveBeenCalled()
+  })
+
+  it('SSH 的远端端口只收数字', async () => {
+    await openForm()
+    type('名称', 'x')
+    type('SSH 目标', 'me@1.2.3.4')
+    type('远端 daemon 端口', 'ws://x')
+    await save()
+    expect(screen.getByText(/只填数字/)).toBeInTheDocument()
+  })
+
+  it('直连模式下填了 user@host 要提示他选错了方式', async () => {
+    await openForm()
+    type('名称', 'x')
+    fireEvent.change(screen.getByText('连接方式').parentElement!.querySelector('select')!, { target: { value: 'direct' } })
+    type('地址', 'me@1.2.3.4')
+    await save()
+    expect(screen.getByText(/看起来是 SSH 目标/)).toBeInTheDocument()
+  })
+
   it('SSH 模式:目标为空要点出来', async () => {
     await openForm()
     type('名称', '云服务器')

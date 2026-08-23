@@ -14,11 +14,23 @@ const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '
 function validate(d: HostInput): string {
   if (!d.label.trim()) return '给这台主机起个名字(随便什么,你自己认得就行)'
   if (d.kind === 'ssh') {
-    if (!d.sshTarget.trim()) return 'SSH 目标不能为空,形如 用户名@1.2.3.4'
+    const t = d.sshTarget.trim()
+    if (!t) return 'SSH 目标不能为空,形如 用户名@1.2.3.4'
+    // ★真机验收就栽在这儿:把 ws://127.0.0.1 填进了 SSH 目标,ssh 真的去连了一台叫
+    //   「ws://127.0.0.1」的机器。只查非空是不够的 —— 这个值一眼就能看出填错了框。
+    if (/:\/\//.test(t)) return 'SSH 目标不要写 ws:// —— 那是「直接连接」用的。把上面的连接方式改成「直接连接」,或者这里填 用户名@1.2.3.4'
+    if (t.includes('/')) return 'SSH 目标里不该有斜杠,形如 用户名@1.2.3.4'
     if (!d.address.trim()) return '远端 daemon 端口不能为空,默认是 6767'
-  } else if (!d.address.trim()) {
-    return '地址不能为空,形如 ws://192.168.1.20:6767'
+    if (!/^\d+$/.test(d.address.trim())) return '远端 daemon 端口只填数字(daemon 在它自己机器上监听的那个端口)'
+    return ''
   }
+  const a = d.address.trim()
+  if (!a) return '地址不能为空,形如 ws://192.168.1.20:6767'
+  if (a.includes('@')) return '这看起来是 SSH 目标 —— 把上面的连接方式改成「通过 SSH 连接」,或者这里填 ws://主机:端口'
+  try {
+    const u = new URL(normalizeAddress(a))
+    if (!u.hostname) return '地址里没有主机名,形如 ws://192.168.1.20:6767'
+  } catch { return '地址看不懂,形如 ws://192.168.1.20:6767' }
   return ''
 }
 
@@ -139,11 +151,16 @@ export function HostsPane() {
 
             <label className="proj-field full">
               <span>连接方式</span>
-              <select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as 'ssh' | 'direct' })}>
+              <select value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as 'ssh' | 'direct', address: e.target.value === 'ssh' ? '6767' : '' })}>
                 <option value="ssh">通过 SSH 连接(推荐)</option>
-                <option value="direct">直接连接(局域网 / Tailscale)</option>
+                <option value="direct">直接连接(局域网 / Tailscale / 本机自测)</option>
               </select>
             </label>
+            <p className="set-desc full" style={{ marginTop: -6 }}>
+              {draft.kind === 'ssh'
+                ? '那台机器上的 daemon 只绑回环(公网上不存在那个端口),所以走 SSH 隧道过去。下面填的是 SSH 登录目标,不是网址。'
+                : '直接填一个能连到的地址。局域网、Tailscale,以及「在这台电脑上自己跑一个 daemon 试试」都走这条。'}
+            </p>
 
             {draft.kind === 'ssh' ? (
               <>
@@ -157,8 +174,8 @@ export function HostsPane() {
                 </label>
                 <p className="set-desc full">
                   隧道由 app 自己拉起来,用的就是你平时 ssh 登这台服务器的凭据 —— 没有新密码要记。
-                  <b>前提是能免密登录(密钥认证)</b>:没有终端可以输入密码。
-                  在服务器上先跑 <code className="bot-code">myflowforge daemon --listen 127.0.0.1:6767</code>。
+                  <b>前提是能免密登录(密钥认证)</b>:这里没有终端可以输入密码。
+                  另外要先在那台机器上把 daemon 跑起来,让它监听上面填的那个端口。
                 </p>
               </>
             ) : (
@@ -172,8 +189,12 @@ export function HostsPane() {
                   <input type="password" value={draft.token} placeholder="daemon pair 里那串" onChange={(e) => setDraft({ ...draft, token: e.target.value })} />
                 </label>
                 <p className="set-desc full">
-                  daemon 绑到非回环地址时**必须**要令牌 —— 那个端口能起 agent、答权限门、开终端,
-                  等于整台机器的控制权。在那台机器上跑 <code className="bot-code">myflowforge daemon pair</code> 拿令牌。
+                  daemon 绑到非回环地址时<b>必须</b>要令牌 —— 那个端口能起 agent、答权限门、开终端,
+                  等于整台机器的控制权。绑回环(比如本机自测)则不需要,令牌留空即可。
+                </p>
+                <p className="set-desc full">
+                  本机自测:<code className="hosts-cmd">node out/main/daemon.js --listen 127.0.0.1:6789</code>
+                  ,然后这里填 <code className="hosts-cmd">ws://127.0.0.1:6789</code>。
                 </p>
               </>
             )}

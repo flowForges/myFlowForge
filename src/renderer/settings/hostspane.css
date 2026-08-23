@@ -32,3 +32,12 @@
 .hosts-io { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .hosts-io textarea { width: 100%; min-height: 92px; font-family: var(--mono, ui-monospace, monospace); font-size: 12px;
   border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); padding: 10px; }
+
+/* 命令/地址的行内代码。★不要复用 botpane 的 .bot-code —— 那个是给**配对码**用的:
+   22px、字间距 6px。拿它排一行命令会撑破布局并盖住上面的说明文字(真机验收时就是这么崩的)。 */
+.hosts-cmd {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px; padding: 1px 6px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--fg);
+  white-space: normal; word-break: break-all;
+}

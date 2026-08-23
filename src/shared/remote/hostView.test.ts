@@ -5,8 +5,10 @@ describe('describeHostState', () => {
   it('本机和未连接是两回事,不能显示成同一句', () => {
     // 「本机」= 你就在用这台;「未连接」= 你选了一台远程但它没连上。混成一句话
     // 会让人以为自己在看远程,其实看的是本机的数据。
-    expect(describeHostState({ status: 'local' }).text).toBe('本机')
+    // 卡片标题已经写着「本机」,副标题不该再写一遍(真机截图里就是「本机 / 本机」两行)。
+    expect(describeHostState({ status: 'local' }).text).toContain('当前看到的都是这台电脑')
     expect(describeHostState({ status: 'closed' }).text).toBe('未连接')
+    expect(describeHostState({ status: 'local' }).text).not.toBe(describeHostState({ status: 'closed' }).text)
   })
 
   it('断线中必须说出来还要多久重连 —— 不能拿缓存假装在线', () => {
