@@ -5,6 +5,31 @@ import './hostspane.css'
 const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', token: '' }
 
 /**
+ * 保存前的校验。★**返回一句话,而不是把按钮置灰。**
+ *
+ * 第一版是「名称为空就 disabled」——用户填完地址点保存,按钮毫无反应也没有任何解释,
+ * 看起来就是按钮坏了。真机验收时正是卡在这一步:主机一台都没存进去,后面全部步骤都白做,
+ * 而现象却是「没有状态条」,完全指不到原因。
+ */
+function validate(d: HostInput): string {
+  if (!d.label.trim()) return '给这台主机起个名字(随便什么,你自己认得就行)'
+  if (d.kind === 'ssh') {
+    if (!d.sshTarget.trim()) return 'SSH 目标不能为空,形如 用户名@1.2.3.4'
+    if (!d.address.trim()) return '远端 daemon 端口不能为空,默认是 6767'
+  } else if (!d.address.trim()) {
+    return '地址不能为空,形如 ws://192.168.1.20:6767'
+  }
+  return ''
+}
+
+/** 直连地址容错:很多人会直接写 `127.0.0.1:6789`,不带 scheme 的话 WebSocket 会当场抛。 */
+export function normalizeAddress(a: string): string {
+  const v = a.trim()
+  if (!v || /^wss?:\/\//i.test(v)) return v
+  return `ws://${v}`
+}
+
+/**
  * 多主机(第二期 B)。
  *
  * 两条硬约束来自设计文档:
@@ -70,7 +95,14 @@ export function HostsPane() {
           外观、宠物、字体这些跟着你这台设备走,不会因为切换而改变。
         </p>
         <div className="hosts-list">
-          {hosts.length === 0 && <div className="hosts-empty">还没有添加任何远程主机</div>}
+          {hosts.length === 0 && (
+            <div className="hosts-empty">
+              还没有添加任何远程主机
+              <div style={{ marginTop: 10 }}>
+                <button className="set-btn primary" onClick={() => setDraft({ ...EMPTY })}>添加主机</button>
+              </div>
+            </div>
+          )}
           {hosts.map((h) => (
             <div key={h.id} className={`host-row ${connectedId === h.id ? 'active' : ''}`}>
               <div className="info">
@@ -147,9 +179,14 @@ export function HostsPane() {
             )}
           </div>
           <div className="bot-actions">
-            <button className="set-btn primary" disabled={busy || !draft.label.trim()} onClick={() => run(async () => {
-              await window.forge.hostsUpsert(draft); setDraft(null)
-            })}>保存</button>
+            <button className="set-btn primary" disabled={busy} onClick={() => {
+              const bad = validate(draft)
+              if (bad) { setErr(bad); return }
+              void run(async () => {
+                await window.forge.hostsUpsert({ ...draft, address: draft.kind === 'direct' ? normalizeAddress(draft.address) : draft.address.trim() })
+                setDraft(null)
+              })
+            }}>保存</button>
             <button className="set-btn" disabled={busy} onClick={() => setDraft(null)}>取消</button>
           </div>
         </div>
