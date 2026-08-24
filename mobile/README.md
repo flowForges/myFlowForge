@@ -107,6 +107,25 @@ Metro 靠 `metro.config.js` 里的 `watchFolders` 看到仓库根的 `src/`,
 不锁的话 `../src/**` 里的 `import 'zod'` 会命中**仓库根**的 node_modules,
 连带把那边的 react 也拽进来,两份 react 同时进 bundle 是 RN 里最经典的白屏。
 
+## 怎么造一道门来验
+
+门是这个 app 存在的唯一理由,但**它比你想的稀疏**。实测(真 CLI 数事件):
+
+| 让 claude 干的事 | 自动(工作区) | 结果 |
+|---|---|---|
+| `date` / `ls` 这类 | 是 | **不升门** |
+| `rm -rf /tmp/xxx` | 是 | **升门** |
+
+原因是 Claude Code 自己会放行明显无害的操作(`~/.claude/settings.json` 的 `defaultMode`)。
+所以拿 `date` 试会得出「门坏了」的错误结论 —— 要用真有副作用的:
+
+```
+用 Bash 执行:rm -rf /tmp/forge-gate-probe-dir
+```
+
+门集中在两类:**真有破坏性的操作**,以及 **选择题门**(claude 主动问你拿主意)。
+codex 那边 `approval_policy` 恒 `never`,根本不弹门 —— 验门只能用 claude。
+
 ## 有意偏离设计文档的地方
 
 **没有「三屏互斥 + 单滑动轴」。** 设计文档第十节和 `docs/mobile-design-prompt.md` 都把它写成硬约束,
