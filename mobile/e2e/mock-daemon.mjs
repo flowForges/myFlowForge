@@ -50,6 +50,29 @@ const RUNNING = []
 
 // 变更:假的但结构是真的(ChangeItem / MultiChanges / DiffLine 三个 shared 类型)
 const projects = { [WS_A]: ['forge', 'site'], [WS_B]: ['api'] }
+// 工作流:阶段形状照 WorkflowStageView(key/name/provider/model/scope)。
+// per-project = 扇出阶段,推进到它就是真开跑 —— 手机上要先弹一句确认。
+const WORKFLOWS = [
+  { id: 'standard', name: '标准流' },
+  { id: 'quick', name: '快速修复' },
+]
+const STAGES = {
+  standard: [
+    { key: 'require', name: '需求评估', provider: 'claude', model: 'opus', scope: 'root' },
+    { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', scope: 'root' },
+    { key: 'develop', name: '代码开发', provider: 'codex', model: 'default', scope: 'per-project' },
+    { key: 'test', name: '写单测', provider: 'codex', model: 'default', scope: 'per-project' },
+  ],
+  quick: [
+    { key: 'develop', name: '代码开发', provider: 'codex', model: 'default', scope: 'per-project' },
+  ],
+}
+const FEEDBACK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '.out', 'last-feedback.txt')
+try { fs.rmSync(FEEDBACK_FILE, { force: true }) } catch { /* 没有就算了 */ }
+
+function findSession(wsPath, sessionId) {
+  return (sessions[wsPath]?.sessions ?? []).find((x) => x.id === sessionId)
+}
 const changes = {
   [WS_A + '/forge']: [
     { path: 'src/main/ipc/handlers.ts', type: 'edit', add: 12, del: 4 },
@@ -75,13 +98,56 @@ const table = {
   'chat:history': (a) => history[a.sessionId] ?? [],
   'chat:gate-state': (a) => gateState[a.workspacePath] ?? { confirms: [], asks: [] },
   'agents:detect': () => agents,
-  'workspaces:get': (p) => ({ path: p, projects: (projects[p] ?? []).map((name) => ({ name })) }),
+  'workspaces:get': (p) => ({
+    path: p,
+    workflows: WORKFLOWS,
+    projects: (projects[p] ?? []).map((name) => ({ name, provider: 'codex', model: 'default' })),
+  }),
   'changes:multi': (cwds) => {
     const byProject = cwds.map((cwd) => ({ cwd, changes: changes[cwd] ?? [] }))
     const all = byProject.flatMap((b) => b.changes)
     return { total: all.length, add: all.reduce((n, c) => n + c.add, 0), del: all.reduce((n, c) => n + c.del, 0), byProject }
   },
   'git:diff': (a) => diffs[a.file] ?? [],
+  'workflow:enter': (p) => {
+    // 服务端那道硬门槛照抄过来,否则手机端的必填校验等于没验过。
+    if (!p.sessionId) throw new Error('workflow:enter 缺少 sessionId')
+    if (!(p.seed || '').trim() && !(p.supplement || '').trim())
+      throw new Error('还不知道这次要做什么:先说一句需求(或在启动卡的补充说明里写一句)再启动工作流。')
+    if (!(p.projects || []).length) throw new Error('至少要选一个项目')
+    const stages = STAGES[p.workflowId]
+    if (!stages) throw new Error(`不认识的工作流: ${p.workflowId}`)
+    const session = {
+      flowId: p.workflowId,
+      flowName: WORKFLOWS.find((w) => w.id === p.workflowId)?.name ?? p.workflowId,
+      stages, currentIndex: 0, phase: 'chatting',
+      projects: p.projects, supplement: p.supplement, seed: p.seed,
+    }
+    const s = findSession(p.workspacePath, p.sessionId)
+    if (s) { s.workflowSession = session; s.mode = 'workflow' }
+    broadcast('sessions:changed', { workspacePath: p.workspacePath, file: sessions[p.workspacePath] })
+    return session
+  },
+  'workflow:advance': (a) => {
+    const s = findSession(a.workspacePath, a.sessionId)
+    if (!s?.workflowSession) throw new Error('该会话不在工作流中')
+    const wf = s.workflowSession
+    const i = wf.currentIndex + 1
+    if (i >= wf.stages.length) { wf.phase = 'done'; wf.currentIndex = wf.stages.length }
+    else { wf.currentIndex = i; wf.phase = wf.stages[i].scope === 'per-project' ? 'executing' : 'chatting' }
+    broadcast('sessions:changed', { workspacePath: a.workspacePath, file: sessions[a.workspacePath] })
+    return wf
+  },
+  'workflow:exit': (a) => {
+    const s = findSession(a.workspacePath, a.sessionId)
+    if (s) { delete s.workflowSession; s.mode = 'chat' }
+    broadcast('sessions:changed', { workspacePath: a.workspacePath, file: sessions[a.workspacePath] })
+    return sessions[a.workspacePath]
+  },
+  'run2:add-feedback': (p) => {
+    try { fs.writeFileSync(FEEDBACK_FILE, String(p.text ?? '')) } catch { /* 测试辅助 */ }
+    return undefined
+  },
   'chat:send': () => undefined,
   'chat:stop': () => undefined,
   'chat:resolve': (a) => {

@@ -31,7 +31,8 @@
     "e2e:flow": "node e2e/flow.mjs",
     "e2e:offline": "node e2e/offline.mjs",
     "e2e:changes": "node e2e/changes.mjs",
-    "e2e:resilience": "node e2e/resilience.mjs"
+    "e2e:resilience": "node e2e/resilience.mjs",
+    "e2e:workflow": "node e2e/workflow.mjs"
   },
   "private": true
 }

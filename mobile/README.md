@@ -42,6 +42,7 @@ app/                  expo-router 路由 = 屏
   add-host.tsx        手填地址 + 令牌(扫码留到第三期)
   gate.tsx            选择题门:单选 / 多选 / 多题 + 自由输入兜底
   exec.tsx            变更 + 行级 diff
+  workflow.tsx        启动工作流(选流程 / 选项目 / 写需求)
 src/
   net/hostClient.ts   线协议客户端,语义照搬 src/main/remote/remoteClient.ts
   net/conn.tsx        连接与主机的 React context
@@ -49,6 +50,7 @@ src/
   data/store.tsx      工作区 / 会话 / **门** 的统一状态
   data/useChat.ts     一个会话的消息流(历史 + chat:event)
   data/useChanges.ts  变更与 diff
+  data/useWorkflow.ts 工作流状态、推进、退出、补充说明
   theme/tokens.ts     配色令牌(从原型 d.css 的 oklch 换算而来)
   ui/                 通用件,对着 d.css 的 class 一比一抄
 e2e/                  无头 Chrome 界面验收,见 e2e/README.md
@@ -76,12 +78,13 @@ Metro 靠 `metro.config.js` 里的 `watchFolders` 看到仓库根的 `src/`,
 
 ## 还没做
 
-- 启动工作流 / 阶段进度 / 补充说明
 - 推送通知(要 Expo Push + daemon 直发,和第三期绑在一起)
 - 终端(只读 + 降采样)、文件浏览
 - 语音输入、拍照上传(要原生模块,web 上验不了)
 - 扫码配对(要电脑端先能生成配对码)
 - 消息流里的工具卡 / 委派批次 —— 现在只画正文和思考
+- 工作流的**交接稿**与**逐项目任务简报**(桌面端在跨 provider / 进执行前会让你编辑这两样)。
+  手机上直接推进,用默认的自动蒸馏 —— 那是两张编辑型表单,不适合手机
 - 会话内嵌 HTML 可视化现在按原文显示
 
 ## 已知的坑

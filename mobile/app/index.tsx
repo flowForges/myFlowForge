@@ -11,6 +11,8 @@ import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
 import { useChat } from '../src/data/useChat'
 import { useAgents } from '../src/data/useAgents'
+import { useWorkflow } from '../src/data/useWorkflow'
+import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 
 /**
  * 根视图 · 对话。
@@ -43,6 +45,7 @@ export default function Chat() {
   const { selected, gates, gatesFor, answerGate, wsName, sessionTitle, loading: storeLoading } = useStore()
   const { msgs, busy, send, stop, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
   const { agents } = useAgents()
+  const { wf, stage, advanceLabel, nextIsExecution, advance, exit, addFeedback } = useWorkflow()
 
   const [text, setText] = useState('')
   const [agentSheet, setAgentSheet] = useState(false)
@@ -52,6 +55,10 @@ export default function Chat() {
   const [perm, setPerm] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE)
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [advanceSheet, setAdvanceSheet] = useState(false)
+  const [suppSheet, setSuppSheet] = useState(false)
+  const [supp, setSupp] = useState('')
+  const [wfBusy, setWfBusy] = useState(false)
   const flow = useRef<ScrollView | null>(null)
 
   // 代理探测回来之前不知道选谁,回来之后落到第一个装了的。用户改过就不再动它。
@@ -96,6 +103,25 @@ export default function Chat() {
     } finally {
       setSending(false)
     }
+  }
+
+  const runWf = async (fn: () => Promise<void>, okMsg: string) => {
+    setWfBusy(true)
+    try {
+      await fn()
+      setNotice(okMsg)
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWfBusy(false)
+    }
+  }
+
+  const onAdvance = () => {
+    // ★下一步是扇出阶段 = 每个项目各起一个代理,真花钱、真改代码。这一步必须先问一句,
+    //  不能和「聊下一轮」用同一个无声的点击。对话阶段之间的推进没有这个成本,直接走。
+    if (nextIsExecution) setAdvanceSheet(true)
+    else void runWf(advance, '已推进')
   }
 
   const answer = async (decision: 'allow' | 'deny') => {
@@ -184,6 +210,22 @@ export default function Chat() {
         </Banner>
       ) : null}
       {state?.status === 'connecting' ? <Banner tone="wait">正在连接 {activeHost?.label ?? ''}…</Banner> : null}
+
+      {wf ? (
+        <WorkflowRibbon
+          flowName={wf.flowName}
+          stageIndex={wf.currentIndex}
+          stageCount={wf.stages.length}
+          stageName={stage?.name ?? ''}
+          provider={stage?.provider ?? ''}
+          phase={wf.phase}
+          advanceLabel={advanceLabel}
+          advanceDisabled={!online || busy || wfBusy}
+          onAdvance={onAdvance}
+          onExit={() => void runWf(exit, '已退出工作流')}
+          onSupplement={() => setSuppSheet(true)}
+        />
+      ) : null}
 
       <ScrollView ref={flow} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 10 }}>
         {msgs.length === 0 && (storeLoading || chatLoading) ? (
@@ -312,6 +354,12 @@ export default function Chat() {
             >
               {permissionModeLabel(perm)}
             </Chip>
+            {/* 已经在工作流里就不再给启动入口 —— 一个会话同时只能在一条流上。 */}
+            {!wf ? (
+              <Chip onPress={online && selected ? () => router.push('/workflow') : undefined} disabled={!online || !selected}>
+                / 工作流
+              </Chip>
+            ) : null}
           </View>
         </View>
       </KeyboardAvoidingView>
@@ -352,6 +400,56 @@ export default function Chat() {
             </View>
           ))
         )}
+      </Sheet>
+
+      <Sheet
+        open={advanceSheet}
+        onClose={() => setAdvanceSheet(false)}
+        title="下一步会开始执行"
+        sub="接下来这一步是扇出阶段:每个选中的项目各起一个代理,在临时分支上真的改代码。"
+      >
+        <Btn
+          kind="pri"
+          block
+          disabled={wfBusy}
+          onPress={() => {
+            setAdvanceSheet(false)
+            void runWf(advance, '已开始执行')
+          }}
+        >
+          {advanceLabel || '开始执行'}
+        </Btn>
+        <Btn kind="ghost" block onPress={() => setAdvanceSheet(false)}>
+          再想想
+        </Btn>
+      </Sheet>
+
+      <Sheet
+        open={suppSheet}
+        onClose={() => setSuppSheet(false)}
+        title="补充说明"
+        sub="追加一段话给正在跑的这条流。它会进下一个阶段的提示词,由代理自己消化 —— 不改工作流本身的配置。"
+      >
+        <Field
+          value={supp}
+          onChangeText={setSupp}
+          placeholder="比如:别动 migrations/,先跑一遍测试再说。"
+          multiline
+          style={{ minHeight: 80 }}
+        />
+        <Btn
+          kind="pri"
+          block
+          disabled={!supp.trim() || wfBusy}
+          onPress={() => {
+            const t = supp.trim()
+            setSuppSheet(false)
+            setSupp('')
+            void runWf(() => addFeedback(t), '已记下,下一个阶段会带上')
+          }}
+        >
+          提交
+        </Btn>
       </Sheet>
 
       <Sheet
