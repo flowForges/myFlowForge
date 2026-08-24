@@ -4,6 +4,7 @@ import { HostsPane, normalizeAddress } from './HostsPane'
 import type { HostStatusView, RemoteHostView } from '@shared/remote/hostView'
 
 const LOCAL: HostStatusView = { hostId: null, label: '本机', state: { status: 'local' }, methods: [] }
+const MOBILE_OFF = { running: false, host: '0.0.0.0', port: 6789, token: '', addresses: [], clients: 0, error: '' }
 let hosts: RemoteHostView[] = []
 const hostsUpsert = vi.fn(async (h: unknown) => { void h; return hosts })
 
@@ -20,6 +21,11 @@ beforeEach(() => {
     hostsDisconnect: vi.fn(async () => LOCAL),
     hostsExport: vi.fn(async () => '{}'),
     hostsImport: vi.fn(async () => ({ ok: true, added: 1 })),
+    // 「手机端」那一节现在也在这一屏里(它是同一件事的反向:别的设备连进来)。
+    mobileStatus: vi.fn(async () => MOBILE_OFF),
+    mobileApply: vi.fn(async () => MOBILE_OFF),
+    mobileRegenToken: vi.fn(async () => MOBILE_OFF),
+    onMobileStatus: () => () => {},
   }
 })
 

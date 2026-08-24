@@ -31,6 +31,7 @@ const DEFAULTS: Settings = {
   memory: { enabled: true },
   botBridge: { dingtalk: { enabled: false, clientId: '', clientSecret: '' }, telegram: { enabled: false, botToken: '' }, feishu: { enabled: false, appId: '', appSecret: '' }, verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} } },
   codexTransport: 'exec',
+  mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
 }
 
 export interface SettingsUpdate {
@@ -99,6 +100,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // this update path — preserve from the loaded settings on load (cast), else base, like pluginCreds.
     botBridge: (partial as Partial<Settings>).botBridge ?? base.botBridge,
     codexTransport: (partial as Partial<Settings>).codexTransport ?? base.codexTransport,
+    mobileGateway: { ...base.mobileGateway, ...((partial as Partial<Settings>).mobileGateway ?? {}) },
   }
 }
 

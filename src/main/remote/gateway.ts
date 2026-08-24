@@ -17,6 +17,15 @@ export type GatewayOpts = {
   /** 客户端连上后多久内必须完成鉴权,超时踢掉 */
   authTimeoutMs?: number
   onLog?: (msg: string) => void
+  /** 连上 / 断开时叫一声。设置里那句「当前有 N 台设备连着」靠它才不会是个死数字。 */
+  onClientsChanged?: () => void
+}
+
+export type GatewayHandle = {
+  port: number
+  host: string
+  clientCount: () => number
+  close: () => Promise<void>
 }
 
 /** 定长时间比较,避免用「第几个字符开始不一样」把 token 一个字符一个字符试出来。 */
@@ -35,7 +44,7 @@ function tokenMatches(expected: string, got: string): boolean {
  * 「同一张」是关键:Electron 侧走 IPC 遍历它,这里走 WS 遍历它 —— 方法只有一份,
  * 所以不存在「本机一条路径、远程另一条路径」的漂移(设计文档第三节)。
  */
-export async function startGateway(opts: GatewayOpts) {
+export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
   const host = opts.host ?? '127.0.0.1'
   const authTimeoutMs = opts.authTimeoutMs ?? 15_000
   const log = opts.onLog ?? (() => {})
@@ -52,6 +61,7 @@ export async function startGateway(opts: GatewayOpts) {
 
   wss.on('connection', (ws) => {
     conns.add(ws)
+    opts.onClientsChanged?.()
     let authed = !opts.token
     let offSink: (() => void) | null = null
     let clientLabel = '远程客户端'   // 对方没自报名字时的兜底
@@ -122,6 +132,7 @@ export async function startGateway(opts: GatewayOpts) {
       if (authTimer) clearTimeout(authTimer)
       offSink?.()
       conns.delete(ws)
+      opts.onClientsChanged?.()
     })
     ws.on('error', () => { /* 'close' 会跟着来,清理在那儿做 */ })
   })

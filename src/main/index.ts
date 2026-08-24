@@ -13,6 +13,7 @@ import { createBroadcastHub } from './ipc/broadcastHub'
 import { createElectronHost } from './host/electronHost'
 import { hostname } from 'node:os'
 import { createHostRouter } from './remote/router'
+import { createAppGateway } from './host/appGateway'
 import { openSshTunnel } from './remote/sshTunnel'
 import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHosts, type RemoteHost } from './remote/hostStore'
 import { registerIpc } from './ipc/handlers'
@@ -716,6 +717,28 @@ app.whenReady().then(() => {
   })
   ipcMain.handle(CH.hostsDisconnect, async () => { await router.disconnect(); return router.status() })
   ipcMain.handle(CH.hostsStatus, () => router.status())
+  // ── 手机端网关(决策 3:与 app 同生共死)。
+  //    ★端在**这个进程里**,用的就是上面那张 methodTable 和同一条广播总线 hub ——
+  //    所以手机和本机窗口面对的是**同一份核心**:同一张权限门表、同一份会话状态。
+  //    另起一个 daemon.js 也能让手机连上,但那是第二个独立核心,两边互相看不见对方做了什么。
+  //    这些 channel 跟 hosts:* 一样注册在这儿而不是方法表里 —— 它描述的是这台设备自己的服务,
+  //    连去别的机器时不该被转发过去。
+  const mobileGw = createAppGateway({
+    table: methodTable,
+    addSink: hub.addSink,
+    version: app.getVersion(),
+    onLog: (m) => logInfo('mobile', m),
+    onStatus: (st) => registry.broadcast(CH.mobileStatusEvent, st),
+  })
+  void mobileGw.apply(readSettings().mobileGateway)
+  ipcMain.handle(CH.mobileStatus, () => mobileGw.status())
+  ipcMain.handle(CH.mobileApply, async (_e, cfg: Settings['mobileGateway']) => {
+    // 先落盘再起 —— 起失败时开关要能弹回去,而那要靠 status().error,不是靠设置里的 enabled。
+    writeSettings({ ...readSettings(), mobileGateway: cfg })
+    return mobileGw.apply(cfg)
+  })
+  ipcMain.handle(CH.mobileRegenToken, () => mobileGw.regenToken())
+
   ipcMain.handle(CH.hostsExport, (_e, includeTokens: boolean) => exportHosts({ includeTokens: !!includeTokens }))
   ipcMain.handle(CH.hostsImport, (_e, text: string) => importHosts(String(text ?? '')))
 
@@ -888,6 +911,9 @@ app.whenReady().then(() => {
     //   (每连一次留一个)。同一类坑在 agent 进程上已经栽过两次,不能在这儿再来一遍。
     //   before-quit 是同步的,所以只发出关闭指令,不 await —— 隧道进程收到 SIGTERM 就够了。
     void router.disconnect()
+    // 网关也一起收:决策 3 说的「同生共死」不是修辞 —— 留一个还在听的端口给一个已经退出的
+    // app,连上去只会是一堆永远不 settle 的调用。
+    void mobileGw.close()
   })
   mainWin.on('closed', () => termManager.killAll())
   // ── End terminal PTY bridge ─────────────────────────────────────────────────

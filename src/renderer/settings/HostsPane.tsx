@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { describeHostState, type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
+import { MobileSection } from './MobileSection'
 
 const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', icon: '', display: 'both', token: '' }
 
@@ -100,6 +101,13 @@ export function HostsPane() {
       </div>
 
       {err && <p className="set-desc" style={{ color: 'var(--err)' }}>{err}</p>}
+
+      {/* 这一屏的另一半:上面是「这台机器连出去」,这里是「别的设备连进来」。放一起是因为
+          两者共用同一套概念(地址 / 令牌 / 谁连着谁),分开只会让人两处找。 */}
+      <div className="set-group">
+        <h4>手机端</h4>
+        <MobileSection />
+      </div>
 
       <div className="set-group">
         <h4>主机</h4>
