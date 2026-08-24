@@ -145,10 +145,10 @@ function findSession(wsPath, sessionId) {
 }
 const changes = {
   [WS_A + '/forge']: [
-    { path: 'src/main/ipc/handlers.ts', type: 'edit', add: 12, del: 4 },
-    { path: 'src/main/ipc/handlers.test.ts', type: 'add', add: 46, del: 0 },
+    { path: 'src/main/ipc/handlers.ts', type: 'M', add: 12, del: 4 },
+    { path: 'src/main/ipc/handlers.test.ts', type: 'A', add: 46, del: 0 },
   ],
-  [WS_A + '/site']: [{ path: 'index.html', type: 'edit', add: 2, del: 2 }],
+  [WS_A + '/site']: [{ path: 'index.html', type: 'M', add: 2, del: 2 }],
   [WS_B + '/api']: [],
 }
 const diffs = {
@@ -160,6 +160,64 @@ const diffs = {
     { kind: 'add', ln: 480, text: '    }' },
     { kind: 'ctx', ln: 481, text: '  }' },
   ],
+}
+
+// 文件树。形状照 `TreeNode`(src/shared/types.ts):嵌套 dir/file,path 相对 cwd,
+// 改动过的文件带 chg(**git 的 A/M/D,不是自造的字符串**),git 仓库目录带 branch。
+// ★故意让服务端给的顺序是**乱的**:真实的 `git ls-files` 就不按「目录在前、文件在后」排,
+//  排序是手机端自己该做的事。这里排好了,那条断言就等于没验。
+const TREES = {
+  [WS_A + '/forge']: [
+    { type: 'file', name: 'README.md', path: 'README.md' },
+    {
+      type: 'dir', name: 'src', path: 'src', children: [
+        {
+          type: 'dir', name: 'main', path: 'src/main', children: [
+            { type: 'file', name: 'index.ts', path: 'src/main/index.ts' },
+            { type: 'file', name: 'handlers.ts', path: 'src/main/handlers.ts', chg: 'M' },
+            { type: 'file', name: 'handlers.test.ts', path: 'src/main/handlers.test.ts', chg: 'A' },
+            { type: 'dir', name: 'ipc', path: 'src/main/ipc', children: [
+              { type: 'file', name: 'channels.ts', path: 'src/main/ipc/channels.ts' },
+            ] },
+          ],
+        },
+        { type: 'file', name: 'app.ts', path: 'src/app.ts' },
+      ],
+    },
+    { type: 'dir', name: 'assets', path: 'assets', children: [], branch: 'feat/x' },
+  ],
+  [WS_A + '/site']: [{ type: 'file', name: 'index.html', path: 'index.html', chg: 'M' }],
+  [WS_B + '/api']: [],
+}
+// 文件正文。`git:file` 返回的是 `FilePreview { text, lang }`。
+// ★那个 1000 行的:用来验「超过 800 行要截断,并且如实说截了多少」。
+const FILES = {
+  'README.md': { text: '# forge\n\n一个本地跑的多代理工作台。\n', lang: 'markdown' },
+  // 变更列表里那个文件走的是这个路径 —— 「点变更里的文件再切全文」那条入口靠它。
+  'src/main/ipc/handlers.ts': {
+    text: [
+      "import { CH } from './channels'",
+      '',
+      'export function registerIpc() {',
+      '  // 权限档切到完全访问时逐条放行',
+      '  for (const g of pending) emitNote(g.where)',
+      '}',
+    ].join('\n'),
+    lang: 'typescript',
+  },
+  'src/main/handlers.ts': {
+    text: [
+      "import { CH } from './channels'",
+      '',
+      'export function registerIpc() {',
+      '  // 权限档切到完全访问时逐条放行',
+      '  for (const g of pending) emitNote(g.where)',
+      '}',
+    ].join('\n'),
+    lang: 'typescript',
+  },
+  'src/app.ts': { text: Array.from({ length: 1000 }, (_, i) => `const l${i} = ${i}`).join('\n'), lang: 'typescript' },
+  'src/main/index.ts': { text: '', lang: 'typescript' },
 }
 
 const table = {
@@ -179,6 +237,9 @@ const table = {
     return { total: all.length, add: all.reduce((n, c) => n + c.add, 0), del: all.reduce((n, c) => n + c.del, 0), byProject }
   },
   'git:diff': (a) => diffs[a.file] ?? [],
+  // ★这两条真网关本来就提供(既不在 CLIENT_ONLY 也不在 DAEMON_UNSUPPORTED),所以假的这里也要有。
+  'fs:tree': (cwd) => TREES[cwd] ?? [],
+  'git:file': (a) => FILES[a.file] ?? { text: '', lang: '' },
   'workflow:enter': (p) => {
     // 服务端那道硬门槛照抄过来,否则手机端的必填校验等于没验过。
     if (!p.sessionId) throw new Error('workflow:enter 缺少 sessionId')

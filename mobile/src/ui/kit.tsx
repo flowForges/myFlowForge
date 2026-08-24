@@ -62,6 +62,42 @@ export function TimeSep({ children }: { children: React.ReactNode }) {
   )
 }
 
+/**
+ * 执行面板顶部那排 tab —— 原型 `d.css` 的 `.tabs`(等分、9px 圆角、选中态是 `--surface-2` 的底)。
+ * 桌面端那一排是 阶段 / 变更 / 文件 / 终端;手机端只做得起其中两个,所以这个件按传进来的项数等分。
+ */
+export function Tabs<K extends string>({
+  items,
+  value,
+  onChange,
+}: {
+  items: { key: K; label: string }[]
+  value: K
+  onChange: (k: K) => void
+}) {
+  const c = useC()
+  return (
+    <View style={[s.tabs, { borderBottomColor: c.border }]}>
+      {items.map((it) => {
+        const on = it.key === value
+        return (
+          <Pressable
+            key={it.key}
+            onPress={() => onChange(it.key)}
+            style={({ pressed }) => [
+              s.tab,
+              on && { backgroundColor: c.surface2 },
+              pressed && !on && { backgroundColor: c.surface },
+            ]}
+          >
+            <T style={{ fontSize: 13, fontWeight: '600', color: on ? c.fg : c.muted }}>{it.label}</T>
+          </Pressable>
+        )
+      })}
+    </View>
+  )
+}
+
 export function Note({ children }: { children: React.ReactNode }) {
   const c = useC()
   return <T style={{ fontSize: 11.5, lineHeight: 19, color: c.faint, paddingHorizontal: 15, paddingTop: 10 }}>{children}</T>
@@ -361,6 +397,10 @@ export function makeStyles(c: Palette) {
 }
 
 const s = StyleSheet.create({
+  // .tabs { display:flex; gap:4px; padding:7px 12px 8px; border-bottom:1px }
+  tabs: { flexDirection: 'row', gap: 4, paddingHorizontal: 12, paddingTop: 7, paddingBottom: 8, borderBottomWidth: StyleSheet.hairlineWidth },
+  // .tabs button { flex:1; min-height:34px; border-radius:9px }
+  tab: { flex: 1, minHeight: 34, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   // .tsep { display:flex; gap:10px; margin:6px 0 14px }  ·  ::before/::after 是两条 1px 的线
   tsep: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6, marginBottom: 14 },
   tsepLine: { flex: 1, height: 1 },

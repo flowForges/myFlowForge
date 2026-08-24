@@ -155,6 +155,20 @@ export async function attach() {
         await new Promise(r => setTimeout(r, step))
       }
     },
+    /**
+     * 清空一个输入框。
+     * ★`typeInto(sel, '')` **不会清空** —— 它只是逐字符敲,空串就是一个字符都不敲,原来的字还在。
+     *  这一点让「清掉过滤词再点文件」那一步静默失效了一轮。
+     */
+    async clearField(sel) {
+      await this.click(sel)
+      const n = await this.eval(`(document.querySelector(${JSON.stringify(sel)})||{value:''}).value.length`)
+      for (let i = 0; i < n; i++) {
+        await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 })
+        await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8, nativeVirtualKeyCode: 8 })
+      }
+      await new Promise(r => setTimeout(r, 150))
+    },
     async text() { return this.eval('document.body.innerText') },
   }
 }
