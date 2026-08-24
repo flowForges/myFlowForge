@@ -299,20 +299,22 @@ export default function Exec() {
             ) : !shown ? (
               <Empty title="这个目录不在了" desc="文件树是进来那一刻读的,代理可能已经把它删了。" />
             ) : (
-              <List>
+              // 原型的 `.tree`:行更矮、无边框,一屏才装得下一列文件名。
+              <List style={{ gap: 2 }}>
                 {up != null ? (
-                  <Row onPress={() => setDir(up)}>
+                  <Row tree onPress={() => setDir(up)}>
                     <T mono style={{ fontSize: 12.5, color: c.muted }}>‹ ..</T>
                   </Row>
                 ) : null}
                 {shown.length === 0 ? (
-                  <Row>
+                  <Row tree>
                     <T style={{ fontSize: 12.5, color: c.faint }}>{q.trim() ? '这一层没有匹配的名字' : '这个目录是空的'}</T>
                   </Row>
                 ) : null}
                 {shown.map((e) => (
                   <Row
                     key={e.path}
+                    tree
                     onPress={() => (e.type === 'dir' ? (setDir(e.path), setQ('')) : openFile(proj!, e.path, 'code'))}
                   >
                     <T style={{ fontSize: 12, color: c.faint, width: 14 }}>{e.type === 'dir' ? '▸' : '·'}</T>

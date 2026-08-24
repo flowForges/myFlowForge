@@ -58,7 +58,8 @@ function Card({
             </T>
           ) : null}
         </View>
-        {right ? <T style={[st.right, { color: c.muted }]}>{right}</T> : null}
+        {/* ✗ 要和工具卡上的那个同色 —— 一个红一个灰,看起来像两种不同的失败。 */}
+        {right ? <T style={[st.right, { color: tone === 'err' ? c.err : c.ok }]}>{right}</T> : null}
       </Pressable>
       {open ? (
         <T style={[st.body, { color: c.fg2, borderTopColor: c.border, backgroundColor: c.bg2 }]}>{body}</T>

@@ -112,12 +112,18 @@ export function Row({
   children,
   onPress,
   gate,
+  tree,
   disabled,
   style,
 }: {
   children: React.ReactNode
   onPress?: () => void
   gate?: boolean
+  /**
+   * 文件树那一种行 —— 原型 `d.css` 的 `.tree .frow`:**更矮、没有边框、底是透明的**。
+   * 普通 `.frow` 是一张卡(54px 高 + 边框),一屏放不下几个文件;树是要一眼扫一列名字的。
+   */
+  tree?: boolean
   disabled?: boolean
   style?: StyleProp<ViewStyle>
 }) {
@@ -128,8 +134,10 @@ export function Row({
       disabled={disabled || !onPress}
       style={({ pressed }) => [
         s.row,
-        { borderColor: gate ? c.gateBorder : c.border, backgroundColor: gate ? c.gateRowBg : c.surface },
-        pressed && { backgroundColor: c.surface2, borderColor: c.border2 },
+        tree
+          ? s.rowTree
+          : { borderColor: gate ? c.gateBorder : c.border, backgroundColor: gate ? c.gateRowBg : c.surface },
+        pressed && (tree ? { backgroundColor: c.surface } : { backgroundColor: c.surface2, borderColor: c.border2 }),
         disabled && { opacity: 0.42 },
         style,
       ]}
@@ -441,6 +449,8 @@ const s = StyleSheet.create({
     paddingBottom: 8,
   },
   list: { paddingHorizontal: 12, gap: 8 },
+  // .tree .frow { min-height: 40px; padding: 8px 10px; border: 0; background: transparent; border-radius: 8px }
+  rowTree: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, borderWidth: 0, backgroundColor: 'transparent' },
   row: {
     width: '100%',
     flexDirection: 'row',
