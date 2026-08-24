@@ -10,6 +10,11 @@ export const CH = {
   hostsExport: 'hosts:export',
   hostsImport: 'hosts:import',
   hostsStatusEvent: 'hosts:status-event',
+  // 手机端网关。跟 hosts:* 同类:描述的是**这台设备自己**对外提供什么,永远本机答。
+  mobileStatus: 'mobile:status',
+  mobileApply: 'mobile:apply',
+  mobileRegenToken: 'mobile:regen-token',
+  mobileStatusEvent: 'mobile:status-event',
   configGetSettings: 'config:get-settings',
   // 设置一分为二之后的两个半边(第二期 C)。`config:get/set-settings` 由路由器**组合**这两个:
   // 跟设备的那半边永远本机答,跟机器的那半边跟着当前 host 走。

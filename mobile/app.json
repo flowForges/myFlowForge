@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "myFlowForge",
+    "slug": "myflowforge-mobile",
+    "scheme": "myflowforge",
+    "version": "1.2.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.flowforges.myflowforge"
+    },
+    "android": {
+      "package": "com.flowforges.myflowforge",
+      "adaptiveIcon": {
+        "backgroundColor": "#12161C",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["expo-router"],
+    "experiments": { "typedRoutes": false }
+  }
+}

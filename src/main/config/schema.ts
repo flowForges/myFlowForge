@@ -365,6 +365,26 @@ export const defaultBotBridge = (): z.infer<typeof BotBridgeSchema> => ({
   verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} },
 })
 
+/**
+ * 手机端网关:**这台 app 自己**把第二期那套 WS 网关端起来,让手机直接连进来。
+ *
+ * ★为什么不是让用户另起一个 `daemon.js`:那是**两个各自独立的核心** —— 两份会话缓存、两张门表、
+ *  两条广播总线,读写同一批文件却互不通气。手机上答掉的门,电脑上那张卡不会消失;
+ *  手机发的消息,电脑上的 app 也看不见。真机上第一次两边同开就撞上了。
+ *  开在 app 进程里 = 同一份核心、同一张门表,「谁先答谁算数」才真正成立(决策 3:同生共死)。
+ *
+ * 归**客户端**设置(跟设备走):它描述的是「这台电脑对外开不开这扇门」。连去别的机器操作时,
+ * 那台机器的网关是它自己的事。
+ */
+export const MobileGatewaySchema = z.object({
+  enabled: z.boolean().catch(false).default(false),
+  /** '0.0.0.0' = 局域网可见(**强制令牌**);'127.0.0.1' = 只本机,给 SSH 隧道用 */
+  host: z.string().catch('0.0.0.0').default('0.0.0.0'),
+  port: z.number().int().min(1).max(65535).catch(6789).default(6789),
+})
+export type MobileGateway = z.infer<typeof MobileGatewaySchema>
+export const defaultMobileGateway = (): MobileGateway => ({ enabled: false, host: '0.0.0.0', port: 6789 })
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
   // ★Q1:原本一个对象塞了两件事。
@@ -430,6 +450,7 @@ export const SettingsSchema = z.object({
   // codex 驱动通路:'exec' = 现有的一次性 CLI 子进程调用(默认,稳定);'app-server' = 新的常驻
   // JSON-RPC app-server 传输(见 codexRpc.ts),支持权限交互等更细粒度控制。先落地开关,接线在后续任务。
   codexTransport: z.enum(['exec', 'app-server']).catch('exec').default('exec'),
+  mobileGateway: MobileGatewaySchema.default(defaultMobileGateway),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -461,6 +482,7 @@ export const defaultSettings = (): Settings => ({
   memory: { enabled: false },
   botBridge: defaultBotBridge(),
   codexTransport: 'exec',
+  mobileGateway: defaultMobileGateway(),
 })
 
 export const ProjectSchema = z.object({
@@ -680,6 +702,7 @@ export const CLIENT_SETTING_KEYS = [
   'lastActiveWorkspace',  // Q3:按 hostId 分键
   'defaultOpenerId',      // Q5
   'perfStallToast', 'perfDiagnostics',   // Q6:第二期只做客户端这份,daemon 侧留空实现
+  'mobileGateway',        // 这台电脑对手机开不开门 —— 跟设备走,不跟你正在操作哪台机器走
 ] as const
 
 /** 跟机器走:你操作的是哪台机器,这些就该是哪台的。 */

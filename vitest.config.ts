@@ -17,6 +17,9 @@ export default defineConfig({
     projects: [
       { extends: true, test: { name: 'renderer', environment: 'jsdom', include: ['src/renderer/**/*.test.{ts,tsx}'] } },
       { extends: true, test: { name: 'main', environment: 'node', include: ['src/main/**/*.test.ts', 'src/shared/**/*.test.ts'] } },
+      // 手机端里**不 import React Native** 的那部分纯逻辑。带 RN 的组件跑不了(要 RN 的 jest preset),
+      // 所以只收 src/ui/*.ts 这类纯文件 —— 它们决定「哪一段内容被折起来看不见」,值得钉住。
+      { extends: true, test: { name: 'mobile', environment: 'node', include: ['mobile/src/**/*.test.ts'] } },
     ],
   }
 })

@@ -333,6 +333,17 @@ const api = {
   hostsStatus: (): Promise<HostStatusView> => ipcRenderer.invoke(CH.hostsStatus),
   hostsExport: (includeTokens: boolean): Promise<string> => ipcRenderer.invoke(CH.hostsExport, includeTokens),
   hostsImport: (text: string): Promise<{ ok: true; added: number } | { ok: false; error: string }> => ipcRenderer.invoke(CH.hostsImport, text),
+  // ── 手机端网关(第四期)。app 自己把网关端起来,手机连的就是**这份核心**,
+  //    不再需要另起一个 daemon.js —— 那是第二个独立核心,两边互相看不见。
+  mobileStatus: (): Promise<import('../main/host/appGateway').MobileStatus> => ipcRenderer.invoke(CH.mobileStatus),
+  mobileApply: (cfg: import('@shared/types').Settings['mobileGateway']): Promise<import('../main/host/appGateway').MobileStatus> =>
+    ipcRenderer.invoke(CH.mobileApply, cfg),
+  mobileRegenToken: (): Promise<import('../main/host/appGateway').MobileStatus> => ipcRenderer.invoke(CH.mobileRegenToken),
+  onMobileStatus: (cb: (s: import('../main/host/appGateway').MobileStatus) => void) => {
+    const listener = (_: unknown, s: import('../main/host/appGateway').MobileStatus) => cb(s)
+    ipcRenderer.on(CH.mobileStatusEvent, listener)
+    return () => { ipcRenderer.removeListener(CH.mobileStatusEvent, listener) }
+  },
   onSettingsChangedBy: (cb: (p: { by: string }) => void) => {
     const listener = (_: unknown, p: { by: string }) => cb(p)
     ipcRenderer.on(CH.settingsChangedBy, listener)

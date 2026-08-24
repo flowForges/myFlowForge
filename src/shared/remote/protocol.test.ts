@@ -68,3 +68,29 @@ describe('线协议', () => {
     expect(() => errorText(circular)).not.toThrow()
   })
 })
+
+describe('void handler 的响应', () => {
+  // ★这条钉的是一个真机上才暴露出来的 bug:大量 handler 是 void 的,网关发 `value: undefined`,
+  //  而 JSON.stringify 会把这个键整个删掉。zod 4 里 `z.unknown()` 缺键即报错(zod 3 不报),
+  //  于是响应被当坏帧丢掉、调用方 promise 永远不 settle —— 表现是「发送键点了没反应,
+  //  输入框也不清空」,而服务端其实已经执行了。
+  it('value 是 undefined 时,序列化后那个键根本不存在,但仍要能解回来', () => {
+    const wire = encodeFrame({ t: 'res', id: 7, ok: true, value: undefined })
+    expect(wire).toBe('{"t":"res","id":7,"ok":true}')   // 没有 value 这个键
+    const d = decodeFrame(wire)
+    expect(d.ok).toBe(true)
+    if (d.ok) {
+      expect(d.frame.t).toBe('res')
+      if (d.frame.t === 'res' && d.frame.ok) expect(d.frame.value).toBeUndefined()
+    }
+  })
+
+  it('事件的 payload 也可能是 undefined(有些广播不带负载)', () => {
+    const d = decodeFrame(encodeFrame({ t: 'evt', ch: 'settings:changed', payload: undefined }))
+    expect(d.ok).toBe(true)
+  })
+
+  it('ok:false 那一支仍然必须带 error —— 不能因为放松了 value 就把报错也放过去', () => {
+    expect(decodeFrame('{"t":"res","id":1,"ok":false}').ok).toBe(false)
+  })
+})
