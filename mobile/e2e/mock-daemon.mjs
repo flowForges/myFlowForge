@@ -76,6 +76,15 @@ const TOOLS_A1 = [
   { id: 't5', name: 'Bash', status: 'error', title: '调用 Bash: npm run typecheck', output: 'error TS2345: 类型对不上' },
 ]
 
+// 内置子代理(claude 的 Task)。**落档**在消息上,所以从历史里就能拿到。
+// ★留一个 running 的:`finalizeRunning` 只在主轮次结束时收尾,而手机常常是半路加入的,
+//  历史里躺着一个还在跑的子代理是真会发生的。
+const SUBAGENTS_A1 = [
+  { id: 'sa1', state: 'done', subagentType: 'Explore', description: '找出所有权限门的入口', result: '三处:handlers.ts:479、gate.ts:88、run2.ts:210', steps: ['调用 Grep: confirm-request', '调用 Read src/main/ipc/handlers.ts'] },
+  { id: 'sa2', state: 'running', subagentType: 'general-purpose', description: '补 handlers 的单测', steps: ['调用 Read src/main/ipc/handlers.test.ts', '调用 Bash: npm test -- ipc'] },
+  { id: 'sa3', state: 'error', subagentType: 'Explore', description: '查 codex 那条分支', result: '已取消' },
+]
+
 // 分隔线要能被**确定地**断言,所以两条回复的 startedAt 锚在「今天 23:50 / 23:55」。
 // 用户那条只有 `23:04` 这种没有日期的时刻(真数据就是这样),手机端靠同一轮回复的日期把它补全。
 const todayAt = (h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime() }
@@ -83,7 +92,7 @@ const todayAt = (h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); return
 const history = {
   's-a1': [
     { id: 'm1', who: 'user', text: 'handlers.ts 里权限档切到完全访问会把挂起的门全放行,但日志只打了一条。帮我改成逐条打,并补个单测。', ts: '23:04' },
-    { id: 'm2', who: 'ai', model: 'Claude Code · Opus', text: '先看现在的放行逻辑。emitNote 只在循环外调了一次,所以 3 个门只会留下 1 行记录 —— 事后查不出哪条命令被自动放行了。', think: { label: '思考 8 秒', steps: ['读取 src/main/ipc/handlers.ts', '编辑 src/main/ipc/handlers.ts'] }, ts: '23:05', startedAt: todayAt(23, 50), tools: TOOLS_A1 },
+    { id: 'm2', who: 'ai', model: 'Claude Code · Opus', text: '先看现在的放行逻辑。emitNote 只在循环外调了一次,所以 3 个门只会留下 1 行记录 —— 事后查不出哪条命令被自动放行了。', think: { label: '思考 8 秒', steps: ['读取 src/main/ipc/handlers.ts', '编辑 src/main/ipc/handlers.ts'] }, ts: '23:05', startedAt: todayAt(23, 50), tools: TOOLS_A1, subagents: SUBAGENTS_A1 },
     // 第二轮:用来验分隔线**只在轮次之间**来一根,而不是每条消息都来。
     { id: 'm3', who: 'user', text: '顺手把 typecheck 也跑一下。', ts: '23:41' },
     { id: 'm4', who: 'ai', model: 'Claude Code · Opus', text: '跑了,有一处类型对不上。', ts: '23:42', startedAt: todayAt(23, 55) },
@@ -408,6 +417,57 @@ process.stdin.on('data', (b) => {
           tool: { id: 'live-1', name: 'Bash', title: '调用 Bash: npm run build', status: 'ok', output: 'built in 4.2s' },
         })
       }, 1500)
+      return
+    }
+    // 委派批次:**服务端根本不落档**(主轮次结束后它们还在跑)。所以只能从实时流里造。
+    // ★时序照真的来:主轮次**先 done**,子代理**之后**才陆续回报 —— fire-and-forget 就是这样。
+    //  这个顺序是关键:done 那一刀如果把实时攒的委派卡冲掉,后面所有进度就都无处可去了。
+    if (cmd === 'delegate') {
+      const id = 'r-deleg'
+      const ev = (o) => broadcast('chat:event', { workspacePath: WS_A, sessionId: 's-a1', ...o })
+      ev({ type: 'assistant-start', id, model: 'Claude Code · Opus' })
+      ev({ type: 'assistant-delta', id, text: '我把这三个项目分给三个子代理了,跑完汇总给你。' })
+      ev({
+        type: 'delegate-start', id,
+        batch: {
+          runId: 'run-1', done: false, task: '把三个项目的登录都换成新的 token 校验',
+          agents: [
+            { agentId: 'd1', name: 'go-blog', provider: 'codex', status: 'run' },
+            { agentId: 'd2', name: 'zgh', provider: 'codex', status: 'run' },
+            { agentId: 'd3', name: 'website', provider: 'claude', status: 'run' },
+          ],
+        },
+      })
+      // 主轮次到此为止。子代理还在后台跑。
+      ev({ type: 'done', message: { id, who: 'ai', model: 'Claude Code · Opus', text: '我把这三个项目分给三个子代理了,跑完汇总给你。', ts: '23:58', startedAt: todayAt(23, 58) } })
+      // 一条 progress 只翻一个子代理。分几拍发,整批替换的写法会在后一拍把前一拍盖回去。
+      ev({ type: 'delegate-progress', id, agentId: 'd1', status: 'ok', output: 'go-blog 改完,3 个文件' })
+      // ★★同一个子代理的**第二条** progress,**只带 activity 不带 output**。
+      //  真的 delegate-progress 大多长这样。照单全收(把 undefined 也写进去)就会
+      //  把上一条刚送到的 output 抹掉 —— 而只发一条的话,这个 bug 永远照不出来。
+      ev({ type: 'delegate-progress', id, agentId: 'd1', activity: '在收尾' })
+      ev({ type: 'delegate-progress', id, agentId: 'd2', activity: '正在改 service/auth.go' })
+      // ★收尾**另起一条命令**,不用 setTimeout。用定时器的话,断言就是在和它赛跑:
+      //  中间截个图、多跑两个 eval,批次已经结束了,于是「还在跑的那个显示什么」永远看不到。
+      //  红了却不代表实现坏了 —— 那种断言比没有还糟。
+      return
+    }
+    if (cmd === 'delegate-finish') {
+      const id = 'r-deleg'
+      const ev = (o) => broadcast('chat:event', { workspacePath: WS_A, sessionId: 's-a1', ...o })
+      ev({ type: 'delegate-progress', id, agentId: 'd2', status: 'ok', output: 'zgh 改完,1 个文件' })
+      ev({ type: 'delegate-progress', id, agentId: 'd3', status: 'idle' })
+      ev({ type: 'delegate-done', id })
+      return
+    }
+    // 内置子代理的**实时**那一路(历史里那三张走的是落档那一路,两条路要分开验)。
+    if (cmd === 'subagent') {
+      const id = 'r-sub'
+      const ev = (o) => broadcast('chat:event', { workspacePath: WS_A, sessionId: 's-a1', ...o })
+      ev({ type: 'assistant-start', id, model: 'Claude Code · Opus' })
+      ev({ type: 'subagent', id, sub: { id: 'live-sa', state: 'running', subagentType: 'Explore', description: '实时起的子代理' } })
+      setTimeout(() => ev({ type: 'subagent', id, sub: { id: 'live-sa', state: 'running', subagentType: 'Explore', description: '实时起的子代理', steps: ['调用 Grep: registerIpc'] } }), 700)
+      setTimeout(() => ev({ type: 'subagent', id, sub: { id: 'live-sa', state: 'done', subagentType: 'Explore', description: '实时起的子代理', steps: ['调用 Grep: registerIpc'], result: '只有一处' } }), 1400)
       return
     }
     if (cmd === 'stream') {

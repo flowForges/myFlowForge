@@ -41,7 +41,8 @@
     "e2e:files": "node e2e/files.mjs",
     "native:ios": "expo run:ios",
     "native:android": "expo run:android",
-    "prebuild:check": "expo prebuild --no-install"
+    "prebuild:check": "expo prebuild --no-install",
+    "e2e:agents": "node e2e/agents.mjs"
   },
   "private": true
 }

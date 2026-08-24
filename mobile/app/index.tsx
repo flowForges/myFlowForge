@@ -8,6 +8,7 @@ import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TimeSe
 import { GateCard } from '../src/ui/GateCard'
 import { MessageBody } from '../src/ui/MessageBody'
 import { ToolCards } from '../src/ui/ToolCard'
+import { DelegateCards, SubagentCards } from '../src/ui/AgentCards'
 import { sepsFor } from '../src/ui/timeSep'
 import { Sheet } from '../src/ui/Sheet'
 import { useConn } from '../src/net/conn'
@@ -269,9 +270,12 @@ export default function Chat() {
                       </T>
                     </View>
                     {m.think ? <Think text={m.think} /> : null}
-                    {/* 思考 → 工具 → 正文。和桌面端 Message.tsx 的次序一致,别两边各排各的。 */}
+                    {/* 思考 → 工具 → 子代理 → 正文。和桌面端 Message.tsx 的次序一致,别两边各排各的。 */}
                     <ToolCards tools={m.tools} />
+                    <SubagentCards cards={m.subagents} />
                     <MessageBody text={m.text} streaming={m.streaming} />
+                    {/* 委派批次挂在正文**下面**:主轮次已经答完了,它们还在后台跑。 */}
+                    <DelegateCards batches={m.delegates} />
                     {m.error ? (
                       <T style={{ fontSize: 12.5, color: c.err, paddingLeft: 26, marginTop: 6 }}>{m.error}</T>
                     ) : null}

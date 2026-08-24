@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CH } from '../../../src/main/ipc/channels'
-import type { ChatMessage, ToolActivity } from '../../../src/shared/types'
+import type { ChatMessage, DelegateBatch, SubagentCard, ToolActivity } from '../../../src/shared/types'
 import { useConn } from '../net/conn'
 
 /**
  * 一个会话的消息流:先拉历史,再跟着 `chat:event` 往下长。
  *
- * 手机端**有意只认一小撮事件**(user / assistant-start / delta / replace / think / **tool-activity** /
- * done / error)。委派批次、run2 那一大套先不画 —— 不是忘了,是分批做。
+ * 手机端**有意只认一小撮事件**(user / assistant-start / delta / replace / think / tool-activity /
+ * subagent / delegate-* / done / error)。run2 那一大套先不画 —— 不是忘了,是分批做。
  * 没认的事件一律忽略,绝不当成错误。
  */
 
@@ -20,6 +20,14 @@ export type Msg = {
   ts?: string
   /** 这一轮代理自己跑过的工具(读文件 / 改文件 / 跑命令)。桌面端的「执行」块拿的是同一份数据。 */
   tools?: ToolActivity[]
+  /** 这一轮主代理用 Task 起的内置子代理。落档在消息上,刷新还在。 */
+  subagents?: SubagentCard[]
+  /**
+   * `forge_delegate` 发出去的后台委派批次。**只在实时流里有** —— 服务端根本不落档
+   * (主轮次结束后它们还在跑,汇总结果之后会作为另一条消息回来)。
+   * 所以刷新一下这些卡就没了,这是设计如此,不是丢数据。
+   */
+  delegates?: DelegateBatch[]
   /** 这一轮开始的 epoch 毫秒。轮次分隔线优先用它 —— `ts` 只有 `HH:MM:SS`,不知道是哪一天。 */
   startedAt?: number
   /** 还在流式吐字。用来画光标,也用来决定停止键亮不亮。 */
@@ -37,6 +45,7 @@ const fromHistory = (m: ChatMessage): Msg => ({
   model: m.model,
   ts: m.ts,
   tools: m.tools,
+  subagents: m.subagents,
   startedAt: m.startedAt,
 })
 
@@ -50,6 +59,12 @@ type Evt = {
   message?: ChatMessage
   error?: string
   tool?: ToolActivity
+  sub?: SubagentCard
+  batch?: DelegateBatch
+  agentId?: string
+  status?: 'run' | 'ok' | 'idle'
+  output?: string
+  activity?: string
 }
 
 export function useChat(wsPath: string | null, sessionId: string | null) {
@@ -114,6 +129,64 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
           )
           break
         }
+        // 内置子代理(Task)。和工具卡一样按自己的 id 原地替换:start 只有类型和描述,
+        // 之后的 update 补它自己的工具步,done 才带结果。
+        case 'subagent': {
+          const sub = e.sub
+          if (!e.id || !sub?.id) break
+          upsert(
+            e.id,
+            (m) => {
+              const list = m.subagents ?? []
+              const i = list.findIndex((x) => x.id === sub.id)
+              if (i < 0) return { ...m, subagents: [...list, sub] }
+              const n = list.slice()
+              n[i] = sub
+              return { ...m, subagents: n }
+            },
+            { id: e.id, who: 'ai', text: '', think: '', streaming: true, startedAt: Date.now() },
+          )
+          break
+        }
+        case 'delegate-start': {
+          const batch = e.batch
+          if (!e.id || !batch?.runId) break
+          upsert(
+            e.id,
+            (m) => {
+              const list = m.delegates ?? []
+              return list.some((b) => b.runId === batch.runId) ? m : { ...m, delegates: [...list, batch] }
+            },
+            { id: e.id, who: 'ai', text: '', think: '', streaming: true, startedAt: Date.now() },
+          )
+          break
+        }
+        case 'delegate-progress': {
+          // 一条 progress 只翻**一个**子代理的状态。整批替换会把别的子代理刚更新的进度盖回去。
+          if (!e.id || !e.agentId) break
+          upsert(e.id, (m) => ({
+            ...m,
+            delegates: (m.delegates ?? []).map((b) => ({
+              ...b,
+              agents: b.agents.map((a) =>
+                a.agentId !== e.agentId
+                  ? a
+                  : {
+                      ...a,
+                      status: e.status ?? a.status,
+                      // ★`undefined` 不能覆盖已有的值:progress 常常只带 activity 不带 output,
+                      //  照单全收会把上一条刚送到的输出抹掉。
+                      output: e.output ?? a.output,
+                      activity: e.activity ?? a.activity,
+                    },
+              ),
+            })),
+          }))
+          break
+        }
+        case 'delegate-done':
+          if (e.id) upsert(e.id, (m) => ({ ...m, delegates: (m.delegates ?? []).map((b) => ({ ...b, done: true })) }))
+          break
         case 'assistant-delta':
           if (e.id)
             upsert(e.id, (m) => ({ ...m, text: m.text + (e.text ?? ''), streaming: true }), {
@@ -147,7 +220,15 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
               const n = p.slice()
               // ★落档那份没带 tools 时,别把流式期间攒的那些卡片抹掉。已经看了十几秒的执行过程
               //  在最后一刻整段消失,比一开始就没有更像出了问题。
-              n[i] = { ...done, tools: done.tools ?? n[i].tools, startedAt: done.startedAt ?? n[i].startedAt }
+              // ★委派批次**服务端不落档**,所以 done 那份里永远没有 —— 必须从流式那份接过来,
+              //  否则主轮次一结束,还在跑的那几个子代理就整块消失了。
+              n[i] = {
+                ...done,
+                tools: done.tools ?? n[i].tools,
+                subagents: done.subagents ?? n[i].subagents,
+                delegates: n[i].delegates,
+                startedAt: done.startedAt ?? n[i].startedAt,
+              }
               return n
             })
           }
