@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
+import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
@@ -50,8 +51,7 @@ export default function AddHost() {
       await selectHost(h.id)
       // 回对话根视图。`dismissAll()` 是给模态用的,这一层是普通推入层 —— 用它会静默什么也不做,
       // 表现就是按钮永远停在「连接中…」。
-      if (router.canGoBack()) router.back()
-      else router.replace('/')
+      goBack()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       setSaving(false)
@@ -60,7 +60,7 @@ export default function AddHost() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar left={<IconBtn onPress={() => router.back()}>‹</IconBtn>}>
+      <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
         <TopTitle title="添加主机" sub="电脑上运行 daemon,把它打印的地址填进来" />
       </TopBar>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -132,7 +132,7 @@ export default function AddHost() {
             <Btn kind="pri" block onPress={save} disabled={saving}>
               {saving ? '连接中…' : '保存并连接'}
             </Btn>
-            <Pressable onPress={() => router.back()} style={{ alignItems: 'center', paddingVertical: 12 }}>
+            <Pressable onPress={() => goBack()} style={{ alignItems: 'center', paddingVertical: 12 }}>
               <T style={{ fontSize: 13.5, color: c.muted }}>取消</T>
             </Pressable>
           </List>

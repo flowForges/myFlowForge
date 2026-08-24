@@ -1,5 +1,6 @@
 import { Alert, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
+import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, IconBtn, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
@@ -47,7 +48,7 @@ export default function Hosts() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar left={<IconBtn onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>‹</IconBtn>}>
+      <TopBar left={<IconBtn onPress={() => (goBack())}>‹</IconBtn>}>
         <TopTitle title="主机" sub="同一时间只连一台" />
       </TopBar>
 

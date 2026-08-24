@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
+import { goBack } from '../src/nav'
 import type { DiffLine } from '../../src/shared/types'
 import { MONO, useC } from '../src/theme/theme'
 import { Empty, IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
@@ -76,7 +77,7 @@ export default function Exec() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar left={<IconBtn onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>‹</IconBtn>}>
+      <TopBar left={<IconBtn onPress={() => (goBack())}>‹</IconBtn>}>
         <TopTitle
           title="变更"
           sub={selected ? `${wsName(selected.wsPath)} · ${total.total} 个文件 +${total.add} −${total.del}` : '未选会话'}

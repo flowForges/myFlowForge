@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
+import { goBack } from '../src/nav'
 import { CH } from '../../src/main/ipc/channels'
 import type { SessionsFile } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
@@ -24,17 +25,26 @@ export default function Sessions() {
   const now = Date.now()
   const [newSheet, setNewSheet] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [newErr, setNewErr] = useState<string | null>(null)
 
   // 新建会话:手机上能做。新建**工作区**不做 —— 那要选目录、要克隆仓库,留在电脑端。
   const newSession = async (wsPath: string) => {
     setCreating(true)
+    setNewErr(null)
     try {
       const file = (await invoke(CH.sessionNew, [wsPath])) as SessionsFile
       const created = file.sessions.find((s) => s.id === file.activeSessionId) ?? file.sessions[0]
-      if (created) select({ wsPath, sessionId: created.id })
+      if (!created) throw new Error('对面建好了会话,但没告诉我是哪一个')
+      select({ wsPath, sessionId: created.id })
       refresh()
       setNewSheet(false)
-      router.back()
+      // ★不能光写 goBack()。这一屏可能是直接进来的(浏览器里刷新过、从推送落进来),
+      //  那时返回栈是空的,back() **静默什么也不做** —— 现象就是「点了没反应」,而会话其实已经建好了。
+      goBack()
+    } catch (e) {
+      // ★原来这里只有 try/finally,没有 catch:建失败就是**彻底无声**。
+      //  真机上报的「无法新增会话」如果是服务端拒绝(比如工作区已归档),你一个字都看不到。
+      setNewErr(e instanceof Error ? e.message : String(e))
     } finally {
       setCreating(false)
     }
@@ -57,7 +67,7 @@ export default function Sessions() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar
-        left={<IconBtn onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>‹</IconBtn>}
+        left={<IconBtn onPress={() => (goBack())}>‹</IconBtn>}
         right={
           <IconBtn onPress={online ? () => setNewSheet(true) : undefined} disabled={!online}>
             ＋
@@ -116,7 +126,7 @@ export default function Sessions() {
                           gate={sg.length > 0}
                           onPress={() => {
                             select({ wsPath: g.ws.path, sessionId: s.id })
-                            router.back()
+                            goBack()
                           }}
                         >
                           <View style={{ flex: 1, minWidth: 0 }}>
@@ -154,6 +164,12 @@ export default function Sessions() {
       </ScrollView>
 
       <Sheet open={newSheet} onClose={() => setNewSheet(false)} title="新建会话" sub="选一个工作区。新建工作区留在电脑端。">
+        {newErr ? (
+          <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
+            <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{newErr}</T>
+          </View>
+        ) : null}
+        {groups.length === 0 ? <Empty title="没有可用的工作区" desc="连上主机之后这里才有内容。" /> : null}
         {groups.map((g) => (
           <Row key={g.ws.path} disabled={creating} onPress={() => void newSession(g.ws.path)}>
             <View style={{ flex: 1, minWidth: 0 }}>

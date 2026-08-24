@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
+import { goBack } from '../src/nav'
 import { CH } from '../../src/main/ipc/channels'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, Field, IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
@@ -70,8 +71,7 @@ export default function WorkflowLaunch() {
         },
       ])
       refresh()
-      if (router.canGoBack()) router.back()
-      else router.replace('/')
+      goBack()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       setBusy(false)
@@ -80,7 +80,7 @@ export default function WorkflowLaunch() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar left={<IconBtn onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}>‹</IconBtn>}>
+      <TopBar left={<IconBtn onPress={() => (goBack())}>‹</IconBtn>}>
         <TopTitle title="启动工作流" sub={selected ? wsName(selected.wsPath) : '未选会话'} />
       </TopBar>
 
@@ -196,7 +196,7 @@ export default function WorkflowLaunch() {
                 <Btn kind="pri" block onPress={launch} disabled={!ready || busy}>
                   {busy ? '启动中…' : `启动${flow ? `「${flow.name}」` : ''}`}
                 </Btn>
-                <Pressable onPress={() => router.back()} style={{ alignItems: 'center', paddingVertical: 12 }}>
+                <Pressable onPress={() => goBack()} style={{ alignItems: 'center', paddingVertical: 12 }}>
                   <T style={{ fontSize: 13.5, color: c.muted }}>取消</T>
                 </Pressable>
               </List>

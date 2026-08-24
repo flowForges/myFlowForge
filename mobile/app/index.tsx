@@ -6,6 +6,7 @@ import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type Pe
 import { useC } from '../src/theme/theme'
 import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TopBar } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
+import { MessageBody } from '../src/ui/MessageBody'
 import { Sheet } from '../src/ui/Sheet'
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
@@ -259,10 +260,7 @@ export default function Chat() {
                   </T>
                 </View>
                 {m.think ? <Think text={m.think} /> : null}
-                <T style={{ fontSize: 15, lineHeight: 25, color: c.fg2, paddingLeft: 26 }}>
-                  {m.text}
-                  {m.streaming ? <T style={{ color: c.accent }}>▍</T> : null}
-                </T>
+                <MessageBody text={m.text} streaming={m.streaming} />
                 {m.error ? (
                   <T style={{ fontSize: 12.5, color: c.err, paddingLeft: 26, marginTop: 6 }}>{m.error}</T>
                 ) : null}

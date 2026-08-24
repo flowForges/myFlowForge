@@ -42,8 +42,23 @@ export const ReqFrame = z.object({
   args: z.array(z.unknown()),
 })
 
+/**
+ * ★`value` 必须是 `.optional()`,不能只写 `z.unknown()`。
+ *
+ * 大量 handler 是 void 的(`chat:send`、`chat:stop`、`chat:resolve`、`run2:*` …),网关那边发的是
+ * `{ t:'res', id, ok:true, value: undefined }` —— 而 `JSON.stringify` **会把值为 undefined 的键整个删掉**,
+ * 线上真正的字节是 `{"t":"res","id":1,"ok":true}`,根本没有 value 这个键。
+ *
+ * zod 3 里 `z.unknown()` 在对象里是隐式可选的,这么写能过;**zod 4 改了**,缺键即报
+ * `expected nonoptional`。于是每一个 void handler 的响应都校验不过 → 被当坏帧丢掉 →
+ * 调用方那个 promise **永远不 settle**。界面上不是报错,是发送键按下去什么也没发生、
+ * 输入框里的字也不清 —— 而服务端其实**已经执行了**。真机上就是这么暴露的。
+ *
+ * 同一份文件在 `errorText` 那儿已经为「JSON.stringify(undefined) 返回 undefined」栽过一次,
+ * 那次修的是 `error`,漏了 `value`。两个坑是同一个。
+ */
 export const ResFrame = z.union([
-  z.object({ t: z.literal('res'), id: z.number().int().nonnegative(), ok: z.literal(true), value: z.unknown() }),
+  z.object({ t: z.literal('res'), id: z.number().int().nonnegative(), ok: z.literal(true), value: z.unknown().optional() }),
   z.object({ t: z.literal('res'), id: z.number().int().nonnegative(), ok: z.literal(false), error: z.string() }),
 ])
 
@@ -53,7 +68,7 @@ export const ResFrame = z.union([
  * 也不需要分,渲染层本来就是同一个 `window.forge.on(...)` 收。区别只在服务端:emit 只往这一条
  * socket 写,broadcast 往所有 socket 写。
  */
-export const EvtFrame = z.object({ t: z.literal('evt'), ch: z.string(), payload: z.unknown() })
+export const EvtFrame = z.object({ t: z.literal('evt'), ch: z.string(), payload: z.unknown().optional() })
 
 export const PingFrame = z.object({ t: z.literal('ping') })
 export const PongFrame = z.object({ t: z.literal('pong') })

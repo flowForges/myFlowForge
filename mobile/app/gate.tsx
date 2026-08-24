@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
+import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, Field, IconBtn, List, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useWaited } from '../src/ui/GateCard'
@@ -38,7 +39,7 @@ export default function GateScreen() {
   if (!gate) {
     return (
       <View style={{ flex: 1, backgroundColor: c.bg }}>
-        <TopBar left={<IconBtn onPress={() => router.back()}>‹</IconBtn>}>
+        <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
           <TopTitle title="这道门已经没了" />
         </TopBar>
         <Empty
@@ -46,7 +47,7 @@ export default function GateScreen() {
           desc={'可能是电脑上的人先答了,也可能代理自己撤回了这次请求。\n谁先答谁算数 —— 你这一票没有生效。'}
         />
         <View style={{ paddingHorizontal: 30 }}>
-          <Btn block onPress={() => router.back()}>
+          <Btn block onPress={() => goBack()}>
             回对话
           </Btn>
         </View>
@@ -88,7 +89,7 @@ export default function GateScreen() {
           response: free.trim() || undefined,
         })
       }
-      router.back()
+      goBack()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       setBusy(false)
@@ -99,7 +100,7 @@ export default function GateScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar tint={c.gateDim} left={<IconBtn onPress={() => router.back()}>‹</IconBtn>}>
+      <TopBar tint={c.gateDim} left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
         <TopTitle
           tint={c.gate}
           title="代理在问你"
@@ -230,7 +231,7 @@ export default function GateScreen() {
             </T>
           ) : null}
           <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 12, paddingBottom: 12 }}>
-            <Btn kind="ghost" onPress={() => router.back()}>
+            <Btn kind="ghost" onPress={() => goBack()}>
               稍后
             </Btn>
             <Btn kind="pri" style={{ flex: 1 }} onPress={submit} disabled={!canSubmit}>

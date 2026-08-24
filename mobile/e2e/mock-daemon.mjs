@@ -38,7 +38,27 @@ const history = {
     { id: 'm1', who: 'user', text: 'handlers.ts 里权限档切到完全访问会把挂起的门全放行,但日志只打了一条。帮我改成逐条打,并补个单测。', ts: '23:04' },
     { id: 'm2', who: 'ai', model: 'Claude Code · Opus', text: '先看现在的放行逻辑。emitNote 只在循环外调了一次,所以 3 个门只会留下 1 行记录 —— 事后查不出哪条命令被自动放行了。', think: { label: '思考 8 秒', steps: ['读取 src/main/ipc/handlers.ts', '编辑 src/main/ipc/handlers.ts'] }, ts: '23:05' },
   ],
-  's-a2': [], 's-b1': [],
+  // 真机上撞见的那一段:代理在回答中间吐了一坨卡片布局的 HTML,把正文推出去四五屏。
+  's-a2': [
+    { id: 'h1', who: 'user', text: '把刚才那几条约定复述一遍', ts: '17:02' },
+    { id: 'h2', who: 'ai', model: 'Codex · GPT-5.6-Sol', ts: '17:03', text: [
+      '要点如下:',
+      '',
+      '<div style="display:flex; gap:8px; margin:8px 0;">',
+      '  <div style="flex:1; border:1px solid #999; border-radius:6px; padding:8px;">',
+      '    <div style="font-weight:700;">已确认</div>',
+      '    <div style="margin-top:4px;">复杂结构用内嵌 HTML 片段;仅内联 style;简单回答保持纯文本。</div>',
+      '  </div>',
+      '  <div style="flex:1; border:1px solid #999; border-radius:6px; padding:8px;">',
+      '    <div style="font-weight:700;">待你提供</div>',
+      '    <div style="margin-top:4px;">具体要做的事:看代码、改功能、修 bug、写方案,或别的。</div>',
+      '  </div>',
+      '</div>',
+      '',
+      '工作目录是 `/Users/zghua/work/workspace/for-test-0823`。你想让我做什么?',
+    ].join('\n') },
+  ],
+  's-b1': [],
 }
 const agents = [
   { id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus', label: 'Opus', description: 'opus → claude-opus-5' }, { id: 'sonnet', label: 'Sonnet' }] },
@@ -213,7 +233,11 @@ wss.on('connection', (ws) => {
     try {
       const fn = table[f.ch]
       if (!fn) return send(ws, { t: 'res', id: f.id, ok: false, error: `这台主机不提供 ${f.ch}` })
-      send(ws, { t: 'res', id: f.id, ok: true, value: fn(...f.args) ?? null })
+      // ★这里**绝不能**写 `?? null`。真网关发的就是 `value: await fn(...)`,void handler 那就是
+      //  undefined,而 JSON.stringify 会把这个键整个删掉。加个 `?? null` 就等于假 daemon 比真
+      //  daemon 更「规矩」,于是「void handler 的响应被当坏帧丢掉」这一整类 bug 在这里永远照不出来
+      //  —— 真机上第一次发消息就撞上了(发送键点了没反应、输入框不清空)。假的要在**这一点上**跟真的一样。
+      send(ws, { t: 'res', id: f.id, ok: true, value: fn(...f.args) })
     } catch (e) { send(ws, { t: 'res', id: f.id, ok: false, error: String(e && e.message || e) }) }
   })
   ws.on('close', () => clients.delete(ws))
