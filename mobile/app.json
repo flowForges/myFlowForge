@@ -10,7 +10,10 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.flowforges.myflowforge"
+      "bundleIdentifier": "com.flowforges.myflowforge",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "myFlowForge 要连接你电脑上那台 Forge —— 它跑在同一个 wifi 里的局域网地址上。不允许的话,手机端就找不到任何主机。"
+      }
     },
     "android": {
       "package": "com.flowforges.myflowforge",
@@ -29,7 +32,16 @@
     },
     "plugins": [
       "expo-router",
-      "expo-asset"
+      "expo-asset",
+      "expo-system-ui",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": false

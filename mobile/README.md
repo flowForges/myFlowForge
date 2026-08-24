@@ -136,13 +136,44 @@ codex 那边 `approval_policy` 恒 `never`,根本不弹门 —— 验门只能�
 ## 还没做
 
 - 推送通知(要 Expo Push + daemon 直发,和第三期绑在一起)
-- 终端(只读 + 降采样)、文件浏览
+- 终端(只读 + 降采样)—— `term:*` 还没进方法表,是跨桌面端的改动
 - 语音输入、拍照上传(要原生模块,web 上验不了)
 - 扫码配对(要电脑端先能生成配对码)
-- 消息流里的工具卡 / 委派批次 —— 现在只画正文和思考
+- 消息流里的**委派批次**(`delegate-*`)—— 工具卡已经有了,委派还没画
 - 工作流的**交接稿**与**逐项目任务简报**(桌面端在跨 provider / 进执行前会让你编辑这两样)。
   手机上直接推进,用默认的自动蒸馏 —— 那是两张编辑型表单,不适合手机
 - 会话内嵌 HTML 可视化现在按原文显示
+
+## 原生(iOS / Android)
+
+`mobile/` **就是**那两个 app —— Expo/RN 一套代码出双端,浏览器里跑的是 `react-native-web`
+这条**测试通道**。所以:**浏览器里全绿 ≠ 真机上能用**。已经因此揪出过四个真机才犯的错:
+
+| 症状(只在真机上) | 根因 |
+| --- | --- |
+| 第一台主机永远加不进来 | RN 自带的 `URL`,`hostname` getter 正则写死 `^https?://`,对 `ws://` 返回空串 |
+| iOS/Android 根本打不出包 | `expo-asset` 没装 —— 只有原生那条入口 import 它,web 走的是另一条 |
+| **release 版 Android 连不上任何主机** | `usesCleartextTraffic` 只在 **debug** manifest 里开着;API 28 起 release 默认禁明文,而我们连的是 `ws://<内网IP>` |
+| iOS 连局域网被系统拒 | iOS 14 起访问局域网要 `NSLocalNetworkUsageDescription`,没有这个键系统直接拒,而且不给提示 |
+
+前两个已修;后两个靠 `app.json` 里的 `expo-build-properties`(Android 明文)和
+`ios.infoPlist`(局域网用途说明)修掉了。ATS 那半边 Expo 默认就给了 `NSAllowsLocalNetworking`。
+
+**验这些不需要任何原生工具链**:
+
+```bash
+npm run --prefix mobile prebuild:check   # 生成 ios/ 和 android/,去里面核对 Info.plist / AndroidManifest
+npx expo export --platform ios --platform android   # 让打包器真的过一遍原生目标
+```
+
+★`ios/` 和 `android/` 是 gitignore 的,看完删掉即可。
+★★**`expo prebuild` 每跑一次都会把 `package.json` 里的 `ios` / `android` 两条脚本改写成
+`expo run:*`** —— 那两条要 CocoaPods / JDK + Android SDK,这台机器上都没装。跑完记得
+`git diff mobile/package.json` 看一眼。真要装原生走 `npm run native:ios`(需要用户在场:
+CocoaPods + 签名)。
+
+现状:Xcode ✓ / CocoaPods ✗ / Java ✗ / Android SDK ✗ —— 所以**从没在真机上装过**,
+上面这些都是「照着生成出来的原生工程核对过」,不是「装到手机上跑过」。
 
 ## 已知的坑
 

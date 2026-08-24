@@ -7,8 +7,10 @@
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~57.0.15",
     "expo-asset": "~57.0.14",
+    "expo-build-properties": "~57.0.14",
     "expo-router": "~57.0.15",
     "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-native": "0.86.2",
@@ -36,7 +38,10 @@
     "e2e:workflow": "node e2e/workflow.mjs",
     "link": "node scripts/link.mjs",
     "e2e:tools": "node e2e/tools.mjs",
-    "e2e:files": "node e2e/files.mjs"
+    "e2e:files": "node e2e/files.mjs",
+    "native:ios": "expo run:ios",
+    "native:android": "expo run:android",
+    "prebuild:check": "expo prebuild --no-install"
   },
   "private": true
 }
