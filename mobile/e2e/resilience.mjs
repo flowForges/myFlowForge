@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { launch, attach } from './cdp.mjs'
+import { startMock } from './harness.mjs'
 
 /**
  * 两个「看起来对了其实没有」的场景。都是自动化才照得出来的那一类。
@@ -15,8 +16,7 @@ const S = path.join(here, '.out')
 fs.mkdirSync(S + '/shots', { recursive: true })
 const ok = (l, c, e = '') => console.log(`${c ? 'PASS' : 'FAIL'}  ${l}${e ? ' — ' + e : ''}`)
 
-const mock = spawn('node', [path.join(here, 'mock-daemon.mjs'), '6804', 'resolve-fails'], { stdio: 'ignore' })
-await new Promise((r) => setTimeout(r, 1200))
+const mock = await startMock(6804, 'resolve-fails')
 
 const chrome = await launch(S + '/chrome-res')
 const p = await attach()

@@ -49,6 +49,8 @@ export type Palette = {
   youBorder: string
   bannerOffBg: string
   scrim: string
+  /** `.tool.running` 的边框 —— d.css 的 `color-mix(in oklab, var(--accent) 38%, var(--border))`。 */
+  toolRunBorder: string
 }
 
 /** 深色。数值由 d.css 的 oklch 换算而来(oklch→oklab→sRGB),不是手调的近似值。 */
@@ -95,6 +97,7 @@ export const DARK: Palette = {
   youBorder: 'rgba(109, 157, 245, 0.34)',
   bannerOffBg: '#312224',
   scrim: 'rgba(0, 0, 0, 0.44)',
+  toolRunBorder: '#405373',
 }
 
 /** 浅色。 */
@@ -141,6 +144,7 @@ export const LIGHT: Palette = {
   youBorder: 'rgba(44, 88, 191, 0.34)',
   bannerOffBg: '#f1d9d9',
   scrim: 'rgba(0, 0, 0, 0.44)',
+  toolRunBorder: '#96acd8',
 }
 
 export type ThemeName = 'dark' | 'light'

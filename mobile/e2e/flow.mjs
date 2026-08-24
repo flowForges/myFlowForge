@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import { launch, attach } from './cdp.mjs'
+import { startMock } from './harness.mjs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 // 截图和 Chrome 档案落在这里;git 忽略。
@@ -9,8 +10,7 @@ const ok = (label, cond, extra = '') => console.log(`${cond ? 'PASS' : 'FAIL'}  
 
 import { spawn } from 'node:child_process'
 const here = path.dirname(fileURLToPath(import.meta.url))
-const mock = spawn('node', [path.join(here, 'mock-daemon.mjs'), '6799', 'both'], { stdio: 'ignore' })
-await new Promise((r) => setTimeout(r, 1200))
+const mock = await startMock(6799, 'both')
 
 const chrome = await launch(S + '/chrome-flow')
 const p = await attach()

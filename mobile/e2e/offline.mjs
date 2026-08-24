@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import { launch, attach } from './cdp.mjs'
+import { startMock } from './harness.mjs'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -8,8 +9,7 @@ const S = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.out')
 fs.mkdirSync(S + '/shots', { recursive: true })
 const ok = (l, c, e = '') => console.log(`${c ? 'PASS' : 'FAIL'}  ${l}${e ? ' — ' + e : ''}`)
 
-const mock = spawn('node', [path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'mock-daemon.mjs'), '6801', 'gate-confirm'], { stdio: 'ignore' })
-await new Promise(r => setTimeout(r, 1200))
+const mock = await startMock(6801, 'gate-confirm')
 
 const chrome = await launch(S + '/chrome-off')
 const p = await attach()

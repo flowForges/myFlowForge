@@ -43,6 +43,25 @@ export function Sec({ children, right }: { children: React.ReactNode; right?: Re
   )
 }
 
+/**
+ * 轮次时间分隔线 —— 原型 `d.css` 的 `.tsep`:两条 1px 细线中间一个时刻。
+ *
+ * ★**只在轮次之间**来一根(哪一条该有,由 `timeSep.ts` 的 `sepsFor` 决定)。方向 C 曾经给每条消息
+ *  配一条时间轴,390px 上每条多吃 46px,一屏只剩两条消息 —— 定 D 版时就是因为这个把它退成了分隔线。
+ */
+export function TimeSep({ children }: { children: React.ReactNode }) {
+  const c = useC()
+  return (
+    <View style={s.tsep}>
+      <View style={[s.tsepLine, { backgroundColor: c.border }]} />
+      <T mono style={{ fontSize: 10.5, letterSpacing: 0.63, color: c.faint }}>
+        {children}
+      </T>
+      <View style={[s.tsepLine, { backgroundColor: c.border }]} />
+    </View>
+  )
+}
+
 export function Note({ children }: { children: React.ReactNode }) {
   const c = useC()
   return <T style={{ fontSize: 11.5, lineHeight: 19, color: c.faint, paddingHorizontal: 15, paddingTop: 10 }}>{children}</T>
@@ -342,6 +361,9 @@ export function makeStyles(c: Palette) {
 }
 
 const s = StyleSheet.create({
+  // .tsep { display:flex; gap:10px; margin:6px 0 14px }  ·  ::before/::after 是两条 1px 的线
+  tsep: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6, marginBottom: 14 },
+  tsepLine: { flex: 1, height: 1 },
   top: {
     flexDirection: 'row',
     alignItems: 'center',

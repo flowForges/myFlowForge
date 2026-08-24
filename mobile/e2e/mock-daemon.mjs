@@ -33,10 +33,60 @@ const sessions = {
     { id: 's-b1', title: '迁移评论表到 v2', mode: 'chat', createdAt: 1, lastMessageAt: Date.now() - 420000, agentId: 'codex' },
   ], activeSessionId: 's-b1' },
 }
+// 工具卡的原料。**形状抄真数据**(本机各工作区 .forge/sessions 下 762 条落档的 ToolActivity):
+//  · claude 给 `调用 Read <路径>` + name,输出是 `1\t文本` 的带行号片段
+//  · codex 给 `调用 shell: /bin/zsh -lc '<命令>'`,**没有 name**,输出是自由文本
+//  · codex 的 `编辑文件: <绝对路径>` **一个字的 output 都没有**
+// ★最后这一条尤其要留着:它正是「provider 什么都没给」的那一类,手机端必须如实说没有,不能编个 diff。
+const TOOLS_A1 = [
+  {
+    id: 't1', name: 'Read', status: 'ok',
+    title: '调用 Read src/main/ipc/handlers.ts',
+    output: [
+      '477\t  const drainGates = (ws: string) => {',
+      '478\t    emitNote(ws, sid, `已按新权限档放行 ${n} 道门`)',
+      '479\t  }',
+      '480\t',
+      '481\t  const onPermissionChange = (mode: PermissionMode) => {',
+    ].join('\n'),
+  },
+  {
+    id: 't2', name: 'Edit', status: 'ok',
+    title: '调用 Edit src/main/ipc/handlers.ts',
+    output: [
+      '--- a/src/main/ipc/handlers.ts',
+      '+++ b/src/main/ipc/handlers.ts',
+      '@@ -477,4 +477,6 @@',
+      '   const drainGates = (ws: string) => {',
+      '-    emitNote(ws, sid, `已按新权限档放行 ${n} 道门`)',
+      '+    for (const g of pending) {',
+      '+      emitNote(ws, sid, `自动放行:${g.where}`)',
+      '+    }',
+      '   }',
+    ].join('\n'),
+  },
+  {
+    id: 't3', status: 'ok',
+    title: "调用 shell: /bin/zsh -lc 'npm test -- ipc'",
+    // 300 行 —— 故意超过 BODY_LINE_CAP(200),用来验「截断要说出来」。
+    output: Array.from({ length: 300 }, (_, i) => `  ok ipc/handlers 第 ${i + 1} 项`).join('\n'),
+  },
+  // ★codex 的补丁行:没有 output。手机端展开只该说「这个工具没有回传输出」。
+  { id: 't4', status: 'ok', title: '编辑文件: /Users/zghua/work/mock/alpha/forge/src/main/ipc/handlers.test.ts' },
+  { id: 't5', name: 'Bash', status: 'error', title: '调用 Bash: npm run typecheck', output: 'error TS2345: 类型对不上' },
+]
+
+// 分隔线要能被**确定地**断言,所以两条回复的 startedAt 锚在「今天 23:50 / 23:55」。
+// 用户那条只有 `23:04` 这种没有日期的时刻(真数据就是这样),手机端靠同一轮回复的日期把它补全。
+const todayAt = (h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime() }
+
 const history = {
   's-a1': [
     { id: 'm1', who: 'user', text: 'handlers.ts 里权限档切到完全访问会把挂起的门全放行,但日志只打了一条。帮我改成逐条打,并补个单测。', ts: '23:04' },
-    { id: 'm2', who: 'ai', model: 'Claude Code · Opus', text: '先看现在的放行逻辑。emitNote 只在循环外调了一次,所以 3 个门只会留下 1 行记录 —— 事后查不出哪条命令被自动放行了。', think: { label: '思考 8 秒', steps: ['读取 src/main/ipc/handlers.ts', '编辑 src/main/ipc/handlers.ts'] }, ts: '23:05' },
+    { id: 'm2', who: 'ai', model: 'Claude Code · Opus', text: '先看现在的放行逻辑。emitNote 只在循环外调了一次,所以 3 个门只会留下 1 行记录 —— 事后查不出哪条命令被自动放行了。', think: { label: '思考 8 秒', steps: ['读取 src/main/ipc/handlers.ts', '编辑 src/main/ipc/handlers.ts'] }, ts: '23:05', startedAt: todayAt(23, 50), tools: TOOLS_A1 },
+    // 第二轮:用来验分隔线**只在轮次之间**来一根,而不是每条消息都来。
+    { id: 'm3', who: 'user', text: '顺手把 typecheck 也跑一下。', ts: '23:41' },
+    { id: 'm4', who: 'ai', model: 'Claude Code · Opus', text: '跑了,有一处类型对不上。', ts: '23:42', startedAt: todayAt(23, 55) },
   ],
   // 真机上撞见的那一段:代理在回答中间吐了一坨卡片布局的 HTML,把正文推出去四五屏。
   's-a2': [
@@ -217,6 +267,13 @@ function raiseQuestions({ wsPath, sessionId, id, questions }) {
 }
 
 const wss = new WebSocketServer({ host: '127.0.0.1', port: PORT })
+// ★端口被占就**大声死**。以前这里什么都不做,于是撞 EADDRINUSE 时进程静静退出,
+//  而测试脚本(stderr 是 ignore 的)照样往下跑,连上的是上一轮残留的那个 daemon。
+wss.on('error', (e) => {
+  console.error(`假 daemon 起不来(端口 ${PORT}):${e && e.message ? e.message : e}`)
+  console.error('多半是上一次跑挂在半路没收拾。先 `pkill -f mock-daemon.mjs` 再来。')
+  process.exit(1)
+})
 wss.on('connection', (ws) => {
   clients.add(ws)
   send(ws, { t: 'hello', protocol: 1, version: '1.2.0', authRequired: false })
@@ -275,6 +332,23 @@ process.stdin.on('data', (b) => {
     const [cmd, ...rest] = line.trim().split(' ')
     if (cmd === 'confirm') raiseConfirm({ wsPath: WS_A, sessionId: 's-a1', id: 'g-' + Date.now(), title: 'Bash 请求执行', where: rest.join(' ') || 'rm -rf build/' })
     if (cmd === 'resolve') resolveGate(rest[0])
+    // 工具卡的**实时**那一路:先 start(只有标题,status 'run'),再 done(带 output 和结果)。
+    // 两帧的 tool.id 相同 —— 手机端必须原地替换,不能追加成两张卡。
+    if (cmd === 'tools') {
+      const id = 'r-tools'
+      broadcast('chat:event', { workspacePath: WS_A, sessionId: 's-a1', type: 'assistant-start', id, model: 'Claude Code · Opus' })
+      broadcast('chat:event', {
+        workspacePath: WS_A, sessionId: 's-a1', type: 'tool-activity', id,
+        tool: { id: 'live-1', name: 'Bash', title: '调用 Bash: npm run build', status: 'run' },
+      })
+      setTimeout(() => {
+        broadcast('chat:event', {
+          workspacePath: WS_A, sessionId: 's-a1', type: 'tool-activity', id,
+          tool: { id: 'live-1', name: 'Bash', title: '调用 Bash: npm run build', status: 'ok', output: 'built in 4.2s' },
+        })
+      }, 1500)
+      return
+    }
     if (cmd === 'stream') {
       const id = 'r-' + Date.now()
       broadcast('chat:event', { workspacePath: WS_A, sessionId: 's-a1', type: 'assistant-start', id, model: 'Claude Code · Opus' })

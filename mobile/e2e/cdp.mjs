@@ -20,6 +20,16 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const PORT = 9333
 
 export async function launch(profile) {
+  // ★先确认 9333 是空的。上一次跑挂在半路(比如 clickText 抛了)时,Chrome 不会自己退 ——
+  //  下一次 attach() 会连上**那个残留的浏览器**,于是页面连着的是上一轮已经死掉的假 daemon,
+  //  断言开始莫名其妙地红,而实现根本没坏。宁可在这里直接报出来,也不要那种查半天的假红。
+  try {
+    const r = await fetch(`http://127.0.0.1:${PORT}/json/version`)
+    if (r.ok) throw new Error(`9333 端口上已经有一个 Chrome 在跑(多半是上次跑挂了没收拾)。先 \`pkill -f remote-debugging-port=${PORT}\` 再来。`)
+  } catch (e) {
+    if (e instanceof Error && e.message.includes('端口上已经有')) throw e
+    // 连不上 = 端口是空的,正是我们要的
+  }
   const p = spawn(CHROME, [
     '--headless=new', `--remote-debugging-port=${PORT}`, '--disable-gpu', '--no-first-run',
     '--hide-scrollbars', `--user-data-dir=${profile}`, 'about:blank',
@@ -93,6 +103,36 @@ export async function attach() {
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x, y: box.y, button: 'left', clickCount: 1 })
       await new Promise(r => setTimeout(r, 300))
     },
+    /**
+     * 按「文本包含若干片段」点**最内层**的那个元素。
+     *
+     * 为什么需要它:RN-web 里一张工具卡的表头是一个 Pressable,textContent 是所有子 span 拼起来的
+     * (`▸编辑src/main/ipc/handlers.ts+3 −1✓`),精确匹配的 clickText 点不中;而只按 `编辑` 点,
+     * 页面上有两张「编辑」卡,clickText 取的是最后一个 —— 于是断言在验的根本不是我以为的那张卡。
+     */
+    async clickContaining(...subs) {
+      const box = await this.eval(`(() => {
+        const subs=${JSON.stringify(JSON.stringify(subs))}
+        const want=JSON.parse(subs)
+        const hits=[...document.querySelectorAll('*')].filter(e=>{
+          const t=e.textContent||''
+          const r=e.getBoundingClientRect()
+          return r.width>0 && r.height>0 && want.every(w=>t.includes(w))
+        })
+        if(!hits.length) return null
+        // 最内层 = 面积最小的那个
+        const e=hits.sort((a,b)=>{
+          const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect()
+          return ra.width*ra.height - rb.width*rb.height
+        })[0]
+        const r=e.getBoundingClientRect()
+        return {x:r.x+Math.min(r.width/2,40),y:r.y+r.height/2}
+      })()`)
+      if (!box) throw new Error('找不到含有这些片段的元素: ' + subs.join(' | '))
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box.x, y: box.y, button: 'left', clickCount: 1 })
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x, y: box.y, button: 'left', clickCount: 1 })
+      await new Promise(r => setTimeout(r, 300))
+    },
     async typeInto(sel, text) {
       await this.click(sel)
       for (const ch of text) {
@@ -100,6 +140,20 @@ export async function attach() {
         await send('Input.dispatchKeyEvent', { type: 'keyUp', text: ch })
       }
       await new Promise(r => setTimeout(r, 150))
+    },
+    /**
+     * 轮询等一个条件成立(表达式要返回真值),超时就返回 false。
+     *
+     * ★别用固定 `sleep`。机器一忙(比如 Metro 正在重打包),固定等待就会**间歇性变红**,
+     *  于是「断言红了」不再等于「实现坏了」—— 变异测试也就跟着失去意义。
+     */
+    async waitFor(expr, timeoutMs = 6000, step = 150) {
+      const until = Date.now() + timeoutMs
+      for (;;) {
+        try { if (await this.eval(expr)) return true } catch { /* 页面正在刷,再试 */ }
+        if (Date.now() > until) return false
+        await new Promise(r => setTimeout(r, step))
+      }
     },
     async text() { return this.eval('document.body.innerText') },
   }

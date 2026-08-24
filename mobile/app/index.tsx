@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type PermissionMode } from '../../src/shared/permissions'
 import { useC } from '../src/theme/theme'
-import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TopBar } from '../src/ui/kit'
+import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TimeSep, TopBar } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
 import { MessageBody } from '../src/ui/MessageBody'
+import { ToolCards } from '../src/ui/ToolCard'
+import { sepsFor } from '../src/ui/timeSep'
 import { Sheet } from '../src/ui/Sheet'
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
@@ -71,6 +73,11 @@ export default function Chat() {
 
   const agent = useMemo(() => agents.find((a) => a.id === agentId) ?? null, [agents, agentId])
   const model = useMemo(() => agent?.models.find((m) => m.id === modelId) ?? agent?.models[0] ?? null, [agent, modelId])
+
+  // 轮次分隔线:哪一条消息前面该来一根,由纯逻辑算(见 timeSep.ts)。
+  // `now` 只在消息数变化时取一次 —— 每次渲染都取的话,「今天/昨天」会在午夜那一刻抖动,
+  // 而且会让整份 Map 每帧都是新的。
+  const seps = useMemo(() => sepsFor(msgs, Date.now()), [msgs])
 
   const myGates = selected ? gatesFor(selected.wsPath, selected.sessionId) : []
   // 本会话没门,但别处有,就把别处那道拿过来钉着 —— 门比「我正在看哪个会话」重要。
@@ -242,31 +249,36 @@ export default function Chat() {
           )
         ) : (
           <>
-            {msgs.map((m) =>
-            m.who === 'user' ? (
-              <View key={m.id} style={[st.you, { backgroundColor: c.accentDim, borderColor: c.youBorder }]}>
-                <T style={{ fontSize: 15, lineHeight: 23, color: c.fg }}>{m.text}</T>
-              </View>
-            ) : (
-              <View key={m.id} style={{ marginTop: 14 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 6 }}>
-                  <View style={[st.av, { backgroundColor: c.surface2, borderColor: c.border2 }]}>
-                    <T style={{ fontSize: 10, fontWeight: '700', color: c.fg2 }}>
-                      {(m.model ?? 'A').slice(0, 1).toUpperCase()}
-                    </T>
+            {msgs.map((m) => (
+              <React.Fragment key={m.id}>
+                {seps.has(m.id) ? <TimeSep>{seps.get(m.id)}</TimeSep> : null}
+                {m.who === 'user' ? (
+                  <View style={[st.you, { backgroundColor: c.accentDim, borderColor: c.youBorder }]}>
+                    <T style={{ fontSize: 15, lineHeight: 23, color: c.fg }}>{m.text}</T>
                   </View>
-                  <T mono style={{ fontSize: 11, letterSpacing: 0.4, color: c.faint }}>
-                    {m.model ?? '代理'}
-                  </T>
-                </View>
-                {m.think ? <Think text={m.think} /> : null}
-                <MessageBody text={m.text} streaming={m.streaming} />
-                {m.error ? (
-                  <T style={{ fontSize: 12.5, color: c.err, paddingLeft: 26, marginTop: 6 }}>{m.error}</T>
-                ) : null}
-              </View>
-            ),
-            )}
+                ) : (
+                  <View style={{ marginTop: 14 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+                      <View style={[st.av, { backgroundColor: c.surface2, borderColor: c.border2 }]}>
+                        <T style={{ fontSize: 10, fontWeight: '700', color: c.fg2 }}>
+                          {(m.model ?? 'A').slice(0, 1).toUpperCase()}
+                        </T>
+                      </View>
+                      <T mono style={{ fontSize: 11, letterSpacing: 0.4, color: c.faint }}>
+                        {m.model ?? '代理'}
+                      </T>
+                    </View>
+                    {m.think ? <Think text={m.think} /> : null}
+                    {/* 思考 → 工具 → 正文。和桌面端 Message.tsx 的次序一致,别两边各排各的。 */}
+                    <ToolCards tools={m.tools} />
+                    <MessageBody text={m.text} streaming={m.streaming} />
+                    {m.error ? (
+                      <T style={{ fontSize: 12.5, color: c.err, paddingLeft: 26, marginTop: 6 }}>{m.error}</T>
+                    ) : null}
+                  </View>
+                )}
+              </React.Fragment>
+            ))}
             {/* 门挂着时在流的末尾留一行。不留的话,消息流看上去就是「代理说到一半不说了」。 */}
             {myGates.length > 0 ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, paddingLeft: 26 }}>

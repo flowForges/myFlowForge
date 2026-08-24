@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CH } from '../../../src/main/ipc/channels'
-import type { ChatMessage } from '../../../src/shared/types'
+import type { ChatMessage, ToolActivity } from '../../../src/shared/types'
 import { useConn } from '../net/conn'
 
 /**
  * 一个会话的消息流:先拉历史,再跟着 `chat:event` 往下长。
  *
- * 手机端**有意只认一小撮事件**(user / assistant-start / delta / replace / think / done / error)。
- * 工具卡、委派批次、run2 那一大套先不画 —— 不是忘了,是先把「看得见代理在说什么」做对。
+ * 手机端**有意只认一小撮事件**(user / assistant-start / delta / replace / think / **tool-activity** /
+ * done / error)。委派批次、run2 那一大套先不画 —— 不是忘了,是分批做。
  * 没认的事件一律忽略,绝不当成错误。
  */
 
@@ -18,6 +18,10 @@ export type Msg = {
   think: string
   model?: string
   ts?: string
+  /** 这一轮代理自己跑过的工具(读文件 / 改文件 / 跑命令)。桌面端的「执行」块拿的是同一份数据。 */
+  tools?: ToolActivity[]
+  /** 这一轮开始的 epoch 毫秒。轮次分隔线优先用它 —— `ts` 只有 `HH:MM:SS`,不知道是哪一天。 */
+  startedAt?: number
   /** 还在流式吐字。用来画光标,也用来决定停止键亮不亮。 */
   streaming?: boolean
   error?: string
@@ -32,6 +36,8 @@ const fromHistory = (m: ChatMessage): Msg => ({
   think: m.think ? [m.think.label, ...(m.think.steps ?? [])].filter(Boolean).join('\n') : '',
   model: m.model,
   ts: m.ts,
+  tools: m.tools,
+  startedAt: m.startedAt,
 })
 
 type Evt = {
@@ -43,6 +49,7 @@ type Evt = {
   model?: string
   message?: ChatMessage
   error?: string
+  tool?: ToolActivity
 }
 
 export function useChat(wsPath: string | null, sessionId: string | null) {
@@ -83,10 +90,30 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
             setMsgs((p) =>
               p.some((m) => m.id === e.id)
                 ? p
-                : [...p, { id: e.id!, who: 'ai', text: '', think: '', model: e.model, streaming: true }],
+                : [...p, { id: e.id!, who: 'ai', text: '', think: '', model: e.model, streaming: true, startedAt: Date.now() }],
             )
           setBusy(true)
           break
+        // 工具卡。`e.id` 是**这条回复**的 id,`e.tool.id` 才是具体那次调用 —— 按后者原地替换,
+        // 因为同一次调用会来两趟:phase 'start' 只有标题(status 'run'),phase 'done' 才带输出和结果。
+        // 追加而不是替换的话,一次调用会在卡片列表里出现两张。
+        case 'tool-activity': {
+          const t = e.tool
+          if (!e.id || !t?.id) break
+          upsert(
+            e.id,
+            (m) => {
+              const tools = m.tools ?? []
+              const i = tools.findIndex((x) => x.id === t.id)
+              if (i < 0) return { ...m, tools: [...tools, t] }
+              const n = tools.slice()
+              n[i] = t
+              return { ...m, tools: n }
+            },
+            { id: e.id, who: 'ai', text: '', think: '', streaming: true, startedAt: Date.now() },
+          )
+          break
+        }
         case 'assistant-delta':
           if (e.id)
             upsert(e.id, (m) => ({ ...m, text: m.text + (e.text ?? ''), streaming: true }), {
@@ -118,7 +145,9 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
               const i = p.findIndex((m) => m.id === done.id)
               if (i < 0) return [...p, done]
               const n = p.slice()
-              n[i] = done
+              // ★落档那份没带 tools 时,别把流式期间攒的那些卡片抹掉。已经看了十几秒的执行过程
+              //  在最后一刻整段消失,比一开始就没有更像出了问题。
+              n[i] = { ...done, tools: done.tools ?? n[i].tools, startedAt: done.startedAt ?? n[i].startedAt }
               return n
             })
           }

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { launch, attach } from './cdp.mjs'
+import { startMock } from './harness.mjs'
 
 /**
  * 启动工作流 → 推进 → 进执行尾段(带确认)→ 补充说明 → 退出。
@@ -15,8 +16,7 @@ const S = path.join(here, '.out')
 fs.mkdirSync(S + '/shots', { recursive: true })
 const ok = (l, c, e = '') => console.log(`${c ? 'PASS' : 'FAIL'}  ${l}${e ? ' — ' + e : ''}`)
 
-const mock = spawn('node', [path.join(here, 'mock-daemon.mjs'), '6807', 'plain'], { stdio: 'ignore' })
-await new Promise((r) => setTimeout(r, 1200))
+const mock = await startMock(6807, 'plain')
 
 const chrome = await launch(S + '/chrome-wf')
 const p = await attach()

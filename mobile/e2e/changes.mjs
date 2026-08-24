@@ -3,14 +3,14 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { launch, attach } from './cdp.mjs'
+import { startMock } from './harness.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const S = path.join(here, '.out')
 fs.mkdirSync(S + '/shots', { recursive: true })
 const ok = (l, c, e = '') => console.log(`${c ? 'PASS' : 'FAIL'}  ${l}${e ? ' — ' + e : ''}`)
 
-const mock = spawn('node', [path.join(here, 'mock-daemon.mjs'), '6803', 'both'], { stdio: 'ignore' })
-await new Promise((r) => setTimeout(r, 1200))
+const mock = await startMock(6803, 'both')
 
 const chrome = await launch(S + '/chrome-changes')
 const p = await attach()
