@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { isLoopbackHost, parseWsUrl } from './wsUrl'
 
 /**
  * 手机上记住的主机。
@@ -39,31 +40,20 @@ export function parseAddress(raw: string): ParsedAddress {
   if (/^https?:\/\//i.test(s)) return { ok: false, error: '这是网页地址。要 ws:// 开头(或者只填 主机:端口)' }
   // 只填了 host:port 是最常见的输入,补上 ws:// 而不是报错。
   const withScheme = /^wss?:\/\//i.test(s) ? s : `ws://${s}`
-  let u: URL
-  try {
-    u = new URL(withScheme)
-  } catch {
-    return { ok: false, error: '地址看不懂,应该长这样:192.168.1.10:6789' }
-  }
-  if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return { ok: false, error: '只支持 ws:// 或 wss://' }
+  // ★用自己写的解析器,不用 `new URL()` —— RN 的 URL 对 ws:// 返回空 hostname,
+  //   那会让真机上每一个合法地址都被判成「缺主机名」。见 wsUrl.ts 的注释。
+  const u = parseWsUrl(withScheme)
+  if (!u) return { ok: false, error: '地址看不懂,应该长这样:192.168.1.10:6789' }
   if (!u.hostname) return { ok: false, error: '缺主机名或 IP' }
   if (!u.port) return { ok: false, error: '缺端口 —— daemon 默认监听 6789' }
-  if (!/^\d+$/.test(u.port) || +u.port < 1 || +u.port > 65535) return { ok: false, error: `端口 ${u.port} 不是有效端口` }
-  return { ok: true, url: `${u.protocol}//${u.host}` }
+  if (+u.port < 1 || +u.port > 65535) return { ok: false, error: `端口 ${u.port} 不是有效端口` }
+  return { ok: true, url: `${u.protocol}//${u.hostname}:${u.port}` }
 }
 
-/** 严格四段 IPv4 的回环判定。`startsWith('127.')` 会把 `127.0.0.1.evil.com` 判成回环。 */
+/** 这个地址是不是只有本机连得到 —— 决定要不要强制令牌。 */
 export function isLoopbackUrl(url: string): boolean {
-  let h: string
-  try {
-    h = new URL(url).hostname
-  } catch {
-    return false
-  }
-  if (h === 'localhost' || h === '::1' || h === '[::1]') return true
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h)
-  if (!m) return false
-  return m.slice(1).every((n) => +n <= 255) && m[1] === '127'
+  const u = parseWsUrl(url)
+  return !!u && isLoopbackHost(u.hostname)
 }
 
 export async function loadHosts(): Promise<MobileHost[]> {
