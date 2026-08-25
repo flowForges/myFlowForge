@@ -20,6 +20,9 @@ export default defineConfig({
       // 手机端里**不 import React Native** 的那部分纯逻辑。带 RN 的组件跑不了(要 RN 的 jest preset),
       // 所以只收 src/ui/*.ts 这类纯文件 —— 它们决定「哪一段内容被折起来看不见」,值得钉住。
       { extends: true, test: { name: 'mobile', environment: 'node', include: ['mobile/src/**/*.test.ts'] } },
+      // 中转。撮合核心是纯逻辑(没有 I/O、没有定时器、没有全局状态),所以在这里就能测透 ——
+      // 它在 Node 和 Cloudflare Durable Object 里跑的是同一份代码,行为必须一致。
+      { extends: true, test: { name: 'relay', environment: 'node', include: ['relay/src/**/*.test.ts'] } },
     ],
   }
 })
