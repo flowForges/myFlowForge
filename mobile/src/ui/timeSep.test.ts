@@ -139,6 +139,29 @@ describe('sepsFor —— 只在轮次之间来一根', () => {
     expect(m.get('u2')).toBe('今天 16:02')
   })
 
+  it('★自己就带日期的那条,不去借(借了反而可能借错)', () => {
+    // `label && !hasDate(m)` 那个守卫:自己有 startedAt 就该直接用,
+    // 守卫写错成 `||` 的话,带日期的也会去借下一条的,而那条可能是别的日子。
+    // ★这条消息**两样都有**:权威的 startedAt(8月20日 09:00)和只有时刻的 ts(23:04)。
+    //  落档的消息就长这样。守卫在,就该直接用 startedAt;守卫写错成 `||`,
+    //  它会转头去借下一条回复的日期,借出一个完全不同的日子来。
+    const m = sepsFor(
+      [
+        { id: 'u1', who: 'user' as const, startedAt: at(2026, 7, 20, 9, 0), ts: '23:04' },
+        { id: 'a1', who: 'ai' as const, startedAt: at(2026, 7, 25, 23, 0) },
+      ],
+      NOW,
+    )
+    expect(m.get('u1')).toBe('8月20日')   // at() 的月份是 0-based,7 就是八月
+  })
+
+  it('★最后一条就是用户发言(还没回复)时,不能越界', () => {
+    // nextEpoch 的循环边界写错一个字符就会去读 msgs[length] —— 那是 undefined,
+    // 紧接着的 .who 直接 TypeError,整屏白。而「发完还没回复」是最常见的一刻。
+    expect(() => sepsFor([{ id: 'u1', who: 'user' as const, ts: '15:01:17' }], NOW)).not.toThrow()
+    expect(sepsFor([{ id: 'u1', who: 'user' as const, ts: '15:01:17' }], NOW).get('u1')).toBe('15:01')
+  })
+
   it('拿不到时间的那条被跳过,不影响后面的', () => {
     const m = sepsFor([{ id: 'u0', who: 'user' as const }, u('u1', at(2026, 7, 25, 23, 4))], NOW)
     expect([...m.keys()]).toEqual(['u1'])

@@ -84,6 +84,24 @@ describe('toolHead —— 折叠态那一行', () => {
     expect(toolHead(t({ name: 'Read', title: '调用 Read a.ts' }), { ...faked, kind: 'numbered' }).stat).toBe('479–513')
   })
 
+  it('★★散文 + 行号混着时,区间只算真有行号的那些', () => {
+    // 这正是 claude 的 Edit 回显:第一行是一句说明(没有行号),后面才是 cat -n 片段。
+    // 没行号那行的 ln 是空串,而 `Number('')` 是 **0** —— 守卫少写一个 `> 0`,
+    // 区间就会显示成 `0–481`,凭空多出一个不存在的第 0 行。
+    const body = parseToolBody(["The file a.ts has been updated. Here's the result:", '479\ta', '480\tb', '481\tc'].join('\n'))
+    expect(body.kind).toBe('numbered')
+    expect(toolHead(t({ name: 'Edit', title: '调用 Edit a.ts' }), body).stat).toBe('479–481')
+  })
+
+  it('★恰好一半的行带行号时,不算「带行号的输出」', () => {
+    // 判据是「**超过**一半」。改成「达到一半」的话,一条输出里随便夹两个数字开头的行
+    // 就会被当成 cat -n 片段,于是正文被当行号切掉。
+    const half = parseToolBody('1\ta\n2\tb\nplain one\nplain two')
+    expect(half.kind).toBe('plain')
+    const more = parseToolBody('1\ta\n2\tb\n3\tc\nplain one')
+    expect(more.kind).toBe('numbered')
+  })
+
   it('★纯文本输出不假装有统计', () => {
     // codex 的 `编辑文件` 根本不带 output;shell 的输出是自由文本。
     // 这里编一个 `+12 −4` 出来,人在手机上就会以为自己看到了改动量。
@@ -103,6 +121,14 @@ describe('stripShellWrapper —— 剥掉 codex 的登录 shell', () => {
   it('没套壳就原样返回', () => {
     expect(stripShellWrapper('npm run build')).toBe('npm run build')
   })
+  it('★只有一对空引号 / 单个引号时不能切出空命令', () => {
+    // `body.length >= 2` 那个守卫管的就是这里:少了它,`'` 这种残缺输入会被 slice 成空串,
+    // 卡片上的命令那一栏直接变空 —— 而人正是靠它判断代理要跑什么。
+    expect(stripShellWrapper(`/bin/zsh -lc ''`)).toBe('')
+    expect(stripShellWrapper(`/bin/zsh -lc '`)).toBe("'")
+    expect(stripShellWrapper(`/bin/zsh -lc "`)).toBe('"')
+  })
+
   it('★不能把 `-c` 之后的内容切断:命令里自己带引号也要留住', () => {
     expect(stripShellWrapper(`/bin/zsh -lc 'echo "a b" && ls'`)).toBe('echo "a b" && ls')
   })
