@@ -154,16 +154,25 @@ codex 那边 `approval_policy` 恒 `never`,根本不弹门 —— 验门只能�
 | iOS/Android 根本打不出包 | `expo-asset` 没装 —— 只有原生那条入口 import 它,web 走的是另一条 |
 | **release 版 Android 连不上任何主机** | `usesCleartextTraffic` 只在 **debug** manifest 里开着;API 28 起 release 默认禁明文,而我们连的是 `ws://<内网IP>` |
 | iOS 连局域网被系统拒 | iOS 14 起访问局域网要 `NSLocalNetworkUsageDescription`,没有这个键系统直接拒,而且不给提示 |
+| **iOS 编译直接失败** | `expo-router` 把 `react-native-reanimated` 的 peer 写成 `"*"` ⇒ npm 装最新的 4.6.0 ⇒ 它要 `worklets 0.12.x` ⇒ 而 `expo-modules-core` 的 C++ 还在调 0.10 才有的 `executeSync` |
+| 手势可能不工作 | 同上一条:`react-native-gesture-handler` 漂到 3.2.1,而 Expo SDK 57 钉的是 2.32.0(跨大版本) |
+| 首次打开红屏 `No script URL` | 不是构建问题。RN 在真机上构造 bundle URL 前会先探 `http://<ip>:8081/status`,**探不到就返回 null** —— 当时 app 里嵌的是够不到的地址 |
 
-前两个已修;后两个靠 `app.json` 里的 `expo-build-properties`(Android 明文)和
-`ios.infoPlist`(局域网用途说明)修掉了。ATS 那半边 Expo 默认就给了 `NSAllowsLocalNetworking`。
+全部已修。版本漂移那两条的治法是**把 Expo 钉的版本显式写进 `package.json`** —— 传递依赖不写进去,
+npm 就会一直装最新的。
 
-**验这些不需要任何原生工具链**:
+**★一条命令全查完,不需要任何原生工具链**(不用 CocoaPods / JDK / Android SDK):
 
 ```bash
-npm run --prefix mobile prebuild:check   # 生成 ios/ 和 android/,去里面核对 Info.plist / AndroidManifest
-npx expo export --platform ios --platform android   # 让打包器真的过一遍原生目标
+npm run --prefix mobile native:check
 ```
+
+它做四件事:① 比对所有原生模块和 Expo 为这个 SDK 钉的版本 ② `expo export` 让打包器真过一遍
+双原生目标 ③ `expo prebuild` 生成原生工程,直接读**合并后的** Info.plist / AndroidManifest
+④ 收拾干净(删掉生成的 `ios/` `android/`,并复原被 prebuild 改掉的 package.json)。
+
+★★**为什么必须读「合并后的」manifest**:`usesCleartextTraffic` 只写在 **debug** manifest 里 ——
+debug 包一切正常,release 包连不上任何主机。不生成原生工程就永远看不见这个差别。
 
 ★`ios/` 和 `android/` 是 gitignore 的,看完删掉即可。
 ★★**`expo prebuild` 每跑一次都会把 `package.json` 里的 `ios` / `android` 两条脚本改写成
