@@ -118,6 +118,19 @@ describe('pastedFileNameForFile —— 剪贴板图片改名,有意义的原名�
 })
 
 describe('base64OfUtf8', () => {
+  // ★这一条钉的是「手机上到底能不能跑」。原来那版用 `btoa` + `TextEncoder`,在 jsdom / 浏览器里
+  //  怎么测都是绿的,而 Hermes 上这两个全局对象都不保证有 —— 也就是「测得绿、跑不了」。
+  //  所以这里**逐字节比对写死的期望值**,不拿 `atob` / `Buffer` 反解:那正是我们不能依赖的东西,
+  //  用它反解等于让被测实现自己给自己判卷。期望值是 `Buffer.from(s).toString('base64')` 事先算好的。
+  it('★扛得住 CJK 和代理对 —— 不依赖 btoa/Buffer/TextEncoder', () => {
+    expect(base64OfUtf8('中文 abc')).toBe('5Lit5paHIGFiYw==')
+    expect(base64OfUtf8('')).toBe('')
+    // 🙂 是 4 字节的星文平面字符(JS 里是一对代理),手写 UTF-8 编码器最容易在这儿裂开:
+    // 按两个 UTF-16 码元各编 3 字节的话会得到 6 字节的 CESU-8,落盘就是一坨乱码。
+    expect(base64OfUtf8('🙂')).toBe('8J+Zgg==')
+    expect(base64OfUtf8('中文 abc 🙂 x')).toBe('5Lit5paHIGFiYyDwn5mCIHg=')
+  })
+
   it('round-trips CJK text through UTF-8 (btoa alone would throw)', () => {
     const s = '上下文消耗 { "键": "值" }'
     const b64 = base64OfUtf8(s)

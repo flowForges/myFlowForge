@@ -3,7 +3,18 @@ import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useFocusEffect } from 'expo-router'
 import { goBack } from '../src/nav'
+import { CH } from '../../src/main/ipc/channels'
+import type { Attachment } from '../../src/shared/types'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type PermissionMode } from '../../src/shared/permissions'
+import {
+  base64OfUtf8,
+  insertPastePlaceholder,
+  pastedFileName,
+  pastePlaceholder,
+  resolvePasteSelection,
+  shouldOffloadPaste,
+} from '../../src/shared/chat/largePaste'
+import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
 import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TimeSep, TopBar } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
@@ -49,7 +60,7 @@ function Think({ text }: { text: string }) {
 export default function Chat() {
   const c = useC()
   const insets = useSafeAreaInsets()
-  const { activeHost, state, online, reconnect } = useConn()
+  const { activeHost, state, online, reconnect, invoke } = useConn()
   const { selected, gates, gatesFor, answerGate, wsName, sessionTitle, setViewing, loading: storeLoading } = useStore()
   const { msgs, busy, send, stop, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
   const { agents } = useAgents()
@@ -68,6 +79,9 @@ export default function Chat() {
   const [supp, setSupp] = useState('')
   const [bigEditor, setBigEditor] = useState(false)
   const [wfBusy, setWfBusy] = useState(false)
+  /** 已经转成附件的那几坨。发出去之后清空 —— 附件是跟着这一条消息走的,不是这个会话的常驻物。 */
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [offloadBusy, setOffloadBusy] = useState(false)
   const flow = useRef<ScrollView | null>(null)
 
   /**
@@ -133,6 +147,48 @@ export default function Chat() {
     return () => clearTimeout(t)
   }, [msgs.length])
 
+  /**
+   * 把输入框里这一大坨转成工作区里的附件,正文里留一个 `[文件名]` 占位符。
+   *
+   * ★为什么是「点一下」而不是像电脑端那样粘进来就自动转:**RN 的 `TextInput` 根本没有 `onPaste`**
+   *  (SDK 57 零命中),手机上拦不到粘贴这件事。而且**绝不能**拿「字数突然暴涨」去猜是粘贴 ——
+   *  语音听写也是一次塞进一大段:你说了段话,它给你转成文件,比什么都不做更糟。
+   *  所以宁可多要人一下点击,也不去猜他刚才干了什么。
+   */
+  const offload = async () => {
+    if (!selected) return
+    const raw = text
+    const name = pastedFileName(raw, new Date())
+    setOffloadBusy(true)
+    try {
+      const att = (await invoke(CH.chatSavePaste, [
+        { workspacePath: selected.wsPath, name, dataBase64: base64OfUtf8(raw) },
+      ])) as Attachment | null
+      // ★服务端写不进去的时候返回的是 **null**(它不抛)。照单全收的话后面就是一个 undefined 的附件:
+      //  chip 上是空白,发出去 agent 也读不到任何东西,而人以为存好了。
+      if (!att) throw new Error('存不进工作区的附件目录(盘满 / 没权限?)')
+      setAttachments((a) => [...a, att])
+      // ★存盘是异步的,这几百毫秒里人还能接着打字 —— 插入前拿**最新的正文**重新判定一次选区。
+      //  手机上没有可靠的选区 API,所以固定按「整段被替换掉」处理:raw 就是发起那一刻的全文。
+      const sel = resolvePasteSelection(text, raw, 0, raw.length)
+      setText(insertPastePlaceholder(text, sel.start, sel.end, att.name).text)
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e))
+    } finally {
+      setOffloadBusy(false)
+    }
+  }
+
+  /**
+   * 删掉一个附件 chip。
+   * ★**不去动正文里的占位符**:那行字是人自己写的,我们没资格替他改。只说一声发生了什么,
+   *  要删让他自己删 —— 静默地从他的话里抠掉一段,比留着一个多余的方括号糟糕得多。
+   */
+  const dropAttachment = (a: Attachment) => {
+    setAttachments((list) => list.filter((x) => x.path !== a.path))
+    setNotice(`已移除附件 ${a.name} · 正文里的 ${pastePlaceholder(a.name)} 还留着,要的话自己删`)
+  }
+
   const doSend = async () => {
     const t = text.trim()
     if (!t || !selected || !agent) return
@@ -144,8 +200,10 @@ export default function Chat() {
         agentLabel: agent.displayName,
         model: model?.id ?? '',
         permissionMode: perm,
+        attachments,
       })
       setText('')
+      setAttachments([])
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e))
     } finally {
@@ -364,6 +422,28 @@ export default function Chat() {
             { backgroundColor: c.surface, borderTopColor: c.border, paddingBottom: Math.max(6, insets.bottom) },
           ]}
         >
+          {/* ★「这段有 N 字 · 转成附件?」——**显式一按**,理由见 offload() 上面那段注释:
+              手机上拦不到粘贴,而拿字数暴涨去猜会把语音听写的一段话变成一个文件。
+              低对比度一条,排在 chip 行**上面**:它是对输入框内容的评论,不是一个操作档位。 */}
+          {shouldOffloadPaste(text) && online && !!selected ? (
+            <Pressable
+              onPress={offloadBusy ? undefined : () => void offload()}
+              disabled={offloadBusy}
+              style={({ pressed }) => [
+                st.offload,
+                { backgroundColor: c.bg2, borderColor: c.border2 },
+                pressed && { backgroundColor: c.surface2 },
+                offloadBusy && { opacity: 0.5 },
+              ]}
+            >
+              <T style={{ fontSize: 12, lineHeight: 18, color: c.muted }}>
+                {offloadBusy
+                  ? '正在存进工作区…'
+                  : `这段有 ${text.length} 字 · 转成附件?正文里会留一个占位符,代理照样读得到。`}
+              </T>
+            </Pressable>
+          ) : null}
+
           {/* ★chip 行放输入框上方,跟着键盘一起顶上去 —— 正要在什么权限档下发消息,
               不该是那种随手一滑就滚出视野的东西。 */}
           <View style={st.chips}>
@@ -383,6 +463,12 @@ export default function Chat() {
                 / 工作流
               </Chip>
             ) : null}
+            {/* 已转成附件的那几坨,排在 `/ 工作流` 后面。点一下删掉它(正文里的占位符不动)。 */}
+            {attachments.map((a) => (
+              <Chip key={a.path} onPress={() => dropAttachment(a)}>
+                {`📎 ${a.name}`}
+              </Chip>
+            ))}
           </View>
           <View style={st.entry}>
             <Field
@@ -589,4 +675,13 @@ const st = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 7 },
+  // 「转成附件?」那一条。整条可点,所以纵向留够 —— 两行文案时高度自然到 44 上下。
+  offload: {
+    marginHorizontal: 12,
+    marginTop: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: RADIUS.chip,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
 })

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CH } from '../../../src/main/ipc/channels'
-import type { ChatMessage, DelegateBatch, SubagentCard, ToolActivity } from '../../../src/shared/types'
+import type { Attachment, ChatMessage, DelegateBatch, SubagentCard, ToolActivity } from '../../../src/shared/types'
 import { useConn } from '../net/conn'
 
 /**
@@ -314,7 +314,16 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
   }, [on])
 
   const send = useCallback(
-    async (p: { text: string; agent: string; agentLabel: string; model: string; permissionMode?: string }) => {
+    async (p: {
+      text: string
+      agent: string
+      agentLabel: string
+      model: string
+      permissionMode?: string
+      /** 转成附件的那几坨内容(见 `@shared/chat/largePaste`)。正文里留着它们的 `[名字]` 占位符,
+       *  两边合起来 agent 才知道哪句话在说哪个文件。不传就是没有附件。 */
+      attachments?: Attachment[]
+    }) => {
       if (!wsPath || !sessionId) throw new Error('没有选中会话')
       await invoke(CH.chatSend, [
         {
@@ -324,7 +333,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
           agentLabel: p.agentLabel,
           model: p.model,
           text: p.text,
-          attachments: [],
+          attachments: p.attachments ?? [],
           source: '手机',
           permissionMode: p.permissionMode,
         },
