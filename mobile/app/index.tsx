@@ -9,13 +9,17 @@ import { Btn, Empty, IconBtn, List, LiveDot, Pill, Row, Sec, T, TopBar, TopTitle
 import { Sheet } from '../src/ui/Sheet'
 import { useConn } from '../src/net/conn'
 import { useStore, type WsGroup } from '../src/data/store'
+import { isSessionUnread } from '@shared/chat/unread'
+import { tierOf, countTiers, type SessionTier } from '../src/data/sessionStatus'
+import { StatusBadge } from '../src/ui/StatusBadge'
 
 /**
  * 根屏 · 全部会话,按工作区分组。
  *
  * ★这一屏最重要的一件事不是「列出会话」,是**一眼看出哪条挂着门**。
- *   挂着门的工作区整组顶到最上面,那条会话本身染成琥珀底 + 琥珀边。
- *   其余一律中性 —— 屏幕上同时出现两种彩色,门就不再是唯一的那个了。
+ *   每条会话和每个工作区分组头都挂着四档阶梯的徽章(见 `ordered` 上的注释:
+ *   排序不再按门/运行/未读把东西顶到最上面 —— 那是气泡的活,不是排序的活)。
+ *   挂着门的那一条本身仍然染成琥珀底 + 琥珀边,方便扫视时一眼定位。
  *
  * 因为是根屏,零主机的首跑引导也落在这里:一个刚装上的新用户没有会话可点,
  * 只会落在这儿,所以「先连一台电脑」必须是这一屏自己的分支,不能指望对话屏兜底。
@@ -23,11 +27,18 @@ import { useStore, type WsGroup } from '../src/data/store'
 export default function Home() {
   const c = useC()
   const { activeHost, hosts, loading: hostsLoading, online, state, invoke } = useConn()
-  const { groups, gates, gatesFor, loading, select, wsName, refresh } = useStore()
+  const { groups, gates, gatesFor, loading, select, wsName, refresh, unread, running } = useStore()
   const now = Date.now()
   const [newSheet, setNewSheet] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newErr, setNewErr] = useState<string | null>(null)
+
+  const tierFor = (wsPath: string, sessionId: string): SessionTier =>
+    tierOf({
+      hasGate: gatesFor(wsPath, sessionId).length > 0,
+      running: running.has(sessionId),
+      unread: isSessionUnread(unread, wsPath, sessionId),
+    })
 
   // 新建会话:手机上能做。新建**工作区**不做 —— 那要选目录、要克隆仓库,留在电脑端。
   const newSession = async (wsPath: string) => {
@@ -51,17 +62,26 @@ export default function Home() {
     }
   }
 
+  /**
+   * ★**排序与运行/门/未读状态无关。**
+   *
+   * 上一版把「有门的工作区」顶到最前。那样有事的永远在顶上,于是「指向下方的定位气泡」
+   * 就没有东西可指 —— 而气泡正是用来解决「工作区多 + 会话多、一屏放不下」的。
+   * 取舍是:**位置稳定**(不会因为状态变化就重排,老是跳位比找不到更烦)
+   * 换取「有事的可能在下面」,后者交给气泡。
+   *
+   * 唯一凌驾于时间之上的是 `pinned` —— 那是你手动钉的,不是状态。
+   * (置顶的操作入口在二期做;这里先把读的那一半接上,已经钉过的立刻生效。)
+   */
   const ordered = useMemo(() => {
-    const gateWs = new Set(gates.map((g) => g.wsPath))
-    const score = (g: WsGroup) => (gateWs.has(g.ws.path) ? 0 : 1)
+    const recency = (g: WsGroup) =>
+      Math.max(0, ...g.sessions.map((s) => s.lastMessageAt ?? s.createdAt))
     return [...groups].sort((a, b) => {
-      const d = score(a) - score(b)
-      if (d) return d
-      const at = Math.max(0, ...a.sessions.map((s) => s.lastMessageAt ?? s.createdAt))
-      const bt = Math.max(0, ...b.sessions.map((s) => s.lastMessageAt ?? s.createdAt))
-      return bt - at
+      const p = Number(!!b.ws.pinned) - Number(!!a.ws.pinned)
+      if (p) return p
+      return recency(b) - recency(a)
     })
-  }, [groups, gates])
+  }, [groups])
 
   // ── 还没配主机:这一屏没有任何东西可画,直接把人送去配 ────────────────────────
   if (!hostsLoading && hosts.length === 0) {
@@ -122,20 +142,23 @@ export default function Home() {
         ) : (
           ordered.map((g) => {
             const wsGates = gatesFor(g.ws.path)
-            const sessions = [...g.sessions].sort((a, b) => {
-              const ag = wsGates.some((x) => x.sessionId === a.id) ? 0 : 1
-              const bg = wsGates.some((x) => x.sessionId === b.id) ? 0 : 1
-              if (ag !== bg) return ag - bg
-              return (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt)
-            })
+            const sessions = [...g.sessions].sort(
+              (a, b) => (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt),
+            )
             return (
               <View key={g.ws.path}>
                 <Sec
-                  right={
-                    <T mono style={{ fontSize: 10.5, color: c.faint }}>
-                      {g.ws.projectCount} 个项目
-                    </T>
-                  }
+                  right={(() => {
+                    const counts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
+                    if (counts.gate) return <StatusBadge tier="gate" count={counts.gate} />
+                    if (counts.running) return <StatusBadge tier="running" count={counts.running} />
+                    if (counts.unread) return <StatusBadge tier="unread" count={counts.unread} />
+                    return (
+                      <T mono style={{ fontSize: 10.5, color: c.faint }}>
+                        {g.ws.projectCount} 个项目
+                      </T>
+                    )
+                  })()}
                 >
                   {g.ws.name}
                 </Sec>
@@ -169,6 +192,7 @@ export default function Home() {
                               {sg.length > 0 && <Pill tone="gate">待确认 {sg.length}</Pill>}
                             </View>
                           </View>
+                          <StatusBadge tier={tierFor(g.ws.path, s.id)} />
                           <T style={{ fontSize: 15, color: c.faint }}>›</T>
                         </Row>
                       )
