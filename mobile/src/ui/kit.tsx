@@ -71,7 +71,19 @@ export function Sec({
       {expanded !== undefined ? (
         <T style={{ fontSize: 10, color: c.faint, marginRight: 1 }}>{expanded ? '▾' : '▸'}</T>
       ) : null}
-      <T mono style={{ fontSize: 10.5, letterSpacing: 0.85, color: c.faint, textTransform: 'uppercase' }}>
+      {/* ★★`flexShrink: 1` + `numberOfLines` 不是排版洁癖:RN 的 flexShrink 默认是 **0**,
+          而这一行现在挤着三样东西(标题 + 分支名 `note` + 右边的 `right`)。
+          右边那个 slot 在会话列表上就是**门徽章** —— 全屏最重要的那一个。
+          标题不肯让的话,一个长工作区名(再叠上「大」字号那一档)会把徽章整个顶出屏幕边缘,
+          现象是「有门却看不见」。让标题先扁,徽章绝不让。 */}
+      <T
+        mono
+        numberOfLines={1}
+        style={{
+          fontSize: 10.5, letterSpacing: 0.85, color: c.faint, textTransform: 'uppercase',
+          flexShrink: 1, minWidth: 0,
+        }}
+      >
         {children}
       </T>
       {note ? (
@@ -452,6 +464,7 @@ export function IconBtn({
   badge,
   badgeGate,
   label,
+  hitSlop,
 }: {
   onPress?: () => void
   children: React.ReactNode
@@ -460,12 +473,22 @@ export function IconBtn({
   badge?: string
   badgeGate?: boolean
   label?: string
+  /**
+   * 往四周多撑出去这么多点的可点区域(不影响布局占位)。
+   *
+   * ★为什么值得有这个 prop:按钮本体是 40×40,离 44 的最小触达还差一点,而在挤得下不下
+   *  两颗键的地方(`app/chat.tsx` 输入行里那颗 ⤢)又没有多余的宽度可给。
+   *  没有这个 prop 的时候调用方只能在外面**再套一个** `<Pressable hitSlop>`,
+   *  于是同一颗按钮有两个 onPress、两份 disabled —— 漏改一处就是「灰着却点得动」。
+   */
+  hitSlop?: number
 }) {
   const c = useC()
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled || !onPress}
+      hitSlop={hitSlop}
       style={({ pressed }) => [s.ico, pressed && { backgroundColor: c.surface }, disabled && { opacity: 0.35 }]}
     >
       {label ? (
