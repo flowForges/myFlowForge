@@ -121,7 +121,7 @@ try {
   ok('iOS 相册权限用的是我们自己写的中文文案(不是 expo-image-picker 的英文默认)',
     /NSPhotoLibraryUsageDescription<\/key>\s*<string>myFlowForge [^<]*相册/.test(plist),
     plist.includes('access your photos') ? 'app.json 里 expo-image-picker 那条插件配置没生效' : '')
-  const pbx =fs.readFileSync(path.join(ROOT, 'ios/myFlowForge.xcodeproj/project.pbxproj'), 'utf8')
+  const pbx = fs.readFileSync(path.join(ROOT, 'ios/myFlowForge.xcodeproj/project.pbxproj'), 'utf8')
   ok('iOS 工程里带着 Team(否则每次重建都要手点一次)', /DEVELOPMENT_TEAM = \w+;/.test(pbx))
 } catch (e) {
   ok('iOS 原生工程生成 + 配置核对', false, String(e.message).slice(0, 120))

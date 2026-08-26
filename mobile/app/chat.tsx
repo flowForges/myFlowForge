@@ -189,6 +189,25 @@ export default function Chat() {
   }, [msgs.length])
 
   /**
+   * 把一段字节存成这个工作区的附件,并挂进 chip 行。**「转成附件」和「从相册发图」共用这一段。**
+   *
+   * ★为什么必须共用而不是各写一份:两条路本来是逐字重复的同一段(同一个 channel、同一个
+   *  `as Attachment | null`、同一句失败文案)。重复的错误文案迟早会飘 —— 改一边忘一边,
+   *  于是同一件事在两个入口说两句不一样的话。更要命的是 `att === null` 这一条:服务端写不进去时
+   *  返回的是 **null(它不抛)**,只要有一边忘了处理,那边就是静默存进一个 undefined 附件 ——
+   *  chip 上一片空白,发出去 agent 什么都读不到,而人以为存好了。
+   */
+  const saveAttachment = async (name: string, dataBase64: string): Promise<Attachment> => {
+    if (!selected) throw new Error('没有正在看的会话')
+    const att = (await invoke(CH.chatSavePaste, [
+      { workspacePath: selected.wsPath, name, dataBase64 },
+    ])) as Attachment | null
+    if (!att) throw new Error('存不进工作区的附件目录(盘满 / 没权限?)')
+    setAttachments((a) => [...a, att])
+    return att
+  }
+
+  /**
    * 把输入框里这一大坨转成工作区里的附件,正文里留一个 `[文件名]` 占位符。
    *
    * ★为什么是「点一下」而不是像电脑端那样粘进来就自动转:**RN 的 `TextInput` 根本没有 `onPaste`**
@@ -202,13 +221,7 @@ export default function Chat() {
     const name = pastedFileName(raw, new Date())
     setOffloadBusy(true)
     try {
-      const att = (await invoke(CH.chatSavePaste, [
-        { workspacePath: selected.wsPath, name, dataBase64: base64OfUtf8(raw) },
-      ])) as Attachment | null
-      // ★服务端写不进去的时候返回的是 **null**(它不抛)。照单全收的话后面就是一个 undefined 的附件:
-      //  chip 上是空白,发出去 agent 也读不到任何东西,而人以为存好了。
-      if (!att) throw new Error('存不进工作区的附件目录(盘满 / 没权限?)')
-      setAttachments((a) => [...a, att])
+      const att = await saveAttachment(name, base64OfUtf8(raw))
       // ★存盘是异步的,这几百毫秒里人还能接着打字。所以**必须**走函数式更新:`latest` 是写回
       //  那一刻输入框里真实的正文,而 `text` 是 await 之前那份快照。拿快照去比,等于拿 raw
       //  和它自己比 —— 判据恒真,「退到末尾」那条兜底分支永远进不去,而且这一下 setText 会
@@ -245,12 +258,7 @@ export default function Chat() {
       if (r.canceled) return
       const plan = planPickedImage(r.assets[0] ?? {}, new Date())
       if (!plan.ok) throw new Error(plan.why)
-      const att = (await invoke(CH.chatSavePaste, [
-        { workspacePath: selected.wsPath, name: plan.name, dataBase64: plan.dataBase64 },
-      ])) as Attachment | null
-      // 服务端写不进去时返回的是 **null**(它不抛)—— 同 offload() 里那条注释。
-      if (!att) throw new Error('存不进工作区的附件目录(盘满 / 没权限?)')
-      setAttachments((a) => [...a, att])
+      const att = await saveAttachment(plan.name, plan.dataBase64)
       // ★函数式更新:选图 + 存盘是好几秒的事,这中间人完全可能已经在打字了。拿 await 之前的
       //  `text` 快照写回去,就是把他这几秒里打的字整段吃掉(offload 那边刚踩过这个坑)。
       setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)

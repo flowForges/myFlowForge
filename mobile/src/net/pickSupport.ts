@@ -11,6 +11,16 @@ import { requireOptionalNativeModule } from 'expo-modules-core'
  *
  * ★web 上直接 false:`expo-image-picker` 在 web 上走的是 `<input type=file>` 那一套,
  *  而手机端 web 通道只是开发时用的,不值得为它多养一条分支。
+ *
+ * ★★★注册名是 `ExponentImagePicker`,**不是** `ExpoImagePicker` —— 别「顺手改正」它。
+ *  `ExpoImagePicker` 只是 CocoaPods / SPM 的**包名**;原生模块**注册**用的仍是老名字,两端都是:
+ *    - `node_modules/expo-image-picker/src/ExponentImagePicker.ts:2` → `requireNativeModule('ExponentImagePicker')`
+ *    - `node_modules/expo-image-picker/ios/ImagePickerModule.swift:26` → `Name("ExponentImagePicker")`
+ *    - Android 那份同名,而且两边原生源码里都还挂着 `// TODO: rename to "ExpoImagePicker"`(还没改)。
+ *  ★教训:原生模块的注册名**只能从这个模块自己的源码里读出来**,不能照包名猜。猜错了
+ *   `requireOptionalNativeModule` 恒返回 null → 探测永远说「没有」→ 入口一辈子不摆,
+ *   而且是**朝着「看起来像这功能本来就没做」的方向静默失败**:typecheck 绿、全量测试绿、
+ *   native:check 也绿,连新打的包上都是空的,没有任何一处会喊。第一版就是这么错的。
  */
 export const canPickImage = (): boolean =>
-  Platform.OS !== 'web' && !!requireOptionalNativeModule('ExpoImagePicker')
+  Platform.OS !== 'web' && !!requireOptionalNativeModule('ExponentImagePicker')
