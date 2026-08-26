@@ -85,9 +85,37 @@ export default function Home() {
   }, [groups])
 
   const scrollRef = useRef<ScrollView>(null)
+  // 三段 y,拼起来才是一行会话在滚动内容里的**绝对**位置 —— 见下面 `absY()` 的注释
+  // 和 JSX 里三处 onLayout(工作区分组 View / 包 List 的裸 View / 每行 wrapper)。
+  const groupY = useRef<Record<string, number>>({})
+  const listY = useRef<Record<string, number>>({})
   const rowY = useRef<Record<string, number>>({})
   const scrollY = useRef(0)
   const viewH = useRef(0)
+
+  /**
+   * 一行会话在滚动内容里的**绝对** y。
+   *
+   * ★`onLayout` 给的 y 只相对**直接父容器**,不是相对整个滚动内容 —— 而这条渲染链条
+   *  有三层:工作区分组 View(直接挂在 ScrollView 内容下,`groupY`)
+   *  → 包住 `<List>` 的裸 View(相对分组 View,`listY`)
+   *  → 每行外面的 wrapper(相对 List,`rowY`)。三段全测到才能拼出真实位置,
+   *  少一段这里就返回 undefined —— 调用方按「还没测到」处理,不会拼出一个错的数字。
+   *  ★这个方案的脆弱之处:谁把这条渲染链条重新套一层、或者拿掉中间某一层,
+   *  三段 y 就会对不上,症状是气泡**悄悄**滚到错的那一行,不会有任何测试报错
+   *  (jsdom/node 环境测不了真实布局)。
+   *  ★没有用 `measureLayout`/`getInnerViewNode`/`findNodeHandle`:`mobile/app.json`
+   *  开着 `newArchEnabled`(Fabric),这几个 API 在 Fabric 下的行为这个环境没法验证 ——
+   *  选错了是运行时才炸;`onLayout` 在新旧架构下都确定支持,代价换成了「重新嵌套要
+   *  记得改三处」这种可见、可写注释提醒的脆弱,不是那种运行时才炸的脆弱。
+   */
+  const absY = (wsPath: string, key: string): number | undefined => {
+    const gy = groupY.current[wsPath]
+    const ly = listY.current[wsPath]
+    const ry = rowY.current[key]
+    if (gy === undefined || ly === undefined || ry === undefined) return undefined
+    return gy + ly + ry
+  }
 
   // 所有非 idle 的会话,按它们在列表里的先后排好 —— 气泡要跳的就是这一串。
   // key 用 NUL(`\0`)分隔而不是空格/逗号:两者都是 POSIX 路径的合法字符,
@@ -95,27 +123,34 @@ export default function Home() {
   // 症状是气泡滚到错的那一行。@shared/chat/unread 的 key() 用的是同一个理由。
   const pending = ordered.flatMap((g) =>
     g.sessions
-      .map((s) => ({ key: `${g.ws.path}\0${s.id}`, tier: tierFor(g.ws.path, s.id) }))
+      .map((s) => ({ key: `${g.ws.path}\0${s.id}`, wsPath: g.ws.path, tier: tierFor(g.ws.path, s.id) }))
       .filter((x) => x.tier !== 'idle'),
   )
   const counts = countTiers(pending.map((p) => p.tier))
   const top = topTier(counts)
   // 只在最高那一档里挑目标 —— 气泡说「1 条等你答话」就该跳到门那条,不是跳到别的。
-  const targets = top ? pending.filter((p) => p.tier === top).map((p) => p.key) : []
+  const targets = top
+    ? pending.filter((p) => p.tier === top).map((p) => ({ key: p.key, wsPath: p.wsPath }))
+    : []
   // 第一个**不在视口内**的目标。全在视口里就不显示气泡:它指的东西你已经看见了。
-  const nextTarget = targets.find((k) => {
-    const y = rowY.current[k]
+  // 三段 y 没测全(absY 返回 undefined)也当作「不在视口内」处理 —— 宁可气泡多等一帧
+  // 首屏布局跑完,不能拿 undefined 当 0 用,那会把没测到的目标误判成「就在顶上」。
+  const nextTarget = targets.find((t) => {
+    const y = absY(t.wsPath, t.key)
     return y === undefined || y < scrollY.current || y > scrollY.current + viewH.current
   })
   const direction: 'up' | 'down' =
-    nextTarget !== undefined && (rowY.current[nextTarget] ?? 0) < scrollY.current ? 'up' : 'down'
+    nextTarget !== undefined && (absY(nextTarget.wsPath, nextTarget.key) ?? 0) < scrollY.current
+      ? 'up'
+      : 'down'
 
   const jump = useCallback(() => {
     if (nextTarget === undefined) return
-    const y = rowY.current[nextTarget]
+    const y = absY(nextTarget.wsPath, nextTarget.key)
     if (y === undefined) return
     // 往上留 24px,让目标不要正好贴在顶栏下沿。
     scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- absY 读 ref,不是响应式依赖
   }, [nextTarget])
 
   // ── 还没配主机:这一屏没有任何东西可画,直接把人送去配 ────────────────────────
@@ -187,7 +222,16 @@ export default function Home() {
               (a, b) => (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt),
             )
             return (
-              <View key={g.ws.path}>
+              // 定位气泡 absY() 三段 y 的第①段:这层 View 是 ScrollView 内容的直接子节点,
+              // 所以 onLayout 给的 y 就是相对整个滚动内容的绝对值,记进 groupY[wsPath]。
+              // 另外两段:下面包住 <List> 的裸 View(第②段,listY)、每行外面的 View(第③段,rowY,
+              // 在 sessions.map 里)。三段的 key/wsPath 必须对得上,少一段 absY() 就返回 undefined ——
+              // 缺了不会报错,只会让气泡悄悄指错方向或不出现。没用 measureLayout 等原生测量 API:
+              // 新架构(Fabric,见 app.json 的 newArchEnabled)下的行为这个环境没法验证。
+              <View
+                key={g.ws.path}
+                onLayout={(e) => { groupY.current[g.ws.path] = e.nativeEvent.layout.y }}
+              >
                 <Sec
                   right={(() => {
                     const counts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
@@ -206,43 +250,56 @@ export default function Home() {
                 {sessions.length === 0 ? (
                   <Empty title="还没有人在这个工作区开过会话" desc="新建会话这类操作手机上也能做,但新建工作区留在电脑端。" />
                 ) : (
-                  <List>
-                    {sessions.map((s) => {
-                      const sg = wsGates.filter((x) => x.sessionId === s.id)
-                      return (
-                        <View
-                          key={s.id}
-                          onLayout={(e) => { rowY.current[`${g.ws.path}\0${s.id}`] = e.nativeEvent.layout.y }}
-                        >
-                          <Row
-                            gate={sg.length > 0}
-                            onPress={() => {
-                              select({ wsPath: g.ws.path, sessionId: s.id })
-                              router.push('/chat')
-                            }}
+                  // 定位气泡 absY() 三段 y 的第②段:这层裸 View(**不能加 style**,否则会在
+                  // List 原本的纵向 flex 列里插进一段意外的间距/内边距)只用来测 List 相对上面
+                  // 分组 View(第①段,groupY)的偏移,记进 listY[wsPath]。第③段是下面每行外面
+                  // 的 View(rowY)。三段缺一个,absY() 就返回 undefined —— 气泡不会报错,
+                  // 只会悄悄滚到错的位置。没用 measureLayout 等原生测量 API:新架构(Fabric)
+                  // 下的行为这个环境没法验证,onLayout 在新旧架构都确定支持。
+                  <View onLayout={(e) => { listY.current[g.ws.path] = e.nativeEvent.layout.y }}>
+                    <List>
+                      {sessions.map((s) => {
+                        const sg = wsGates.filter((x) => x.sessionId === s.id)
+                        return (
+                          // 定位气泡 absY() 三段 y 的第③段:这层 View 相对上面的 List(第②段,
+                          // listY)记这一行自己的偏移,记进 rowY[key]。第①段是工作区分组 View
+                          // (groupY)。三段缺一个,absY() 就返回 undefined —— 不会报错,只会让
+                          // 气泡悄悄滚到错的位置。没用 measureLayout 等原生测量 API:新架构
+                          // (Fabric)下的行为这个环境没法验证,onLayout 在新旧架构都确定支持。
+                          <View
+                            key={s.id}
+                            onLayout={(e) => { rowY.current[`${g.ws.path}\0${s.id}`] = e.nativeEvent.layout.y }}
                           >
-                            <View style={{ flex: 1, minWidth: 0 }}>
-                              <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
-                                {s.title || '新会话'}
-                              </T>
-                              <View
-                                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' }}
-                              >
-                                <T mono style={{ fontSize: 11.5, color: c.muted }}>
-                                  {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
-                                  {' · '}
-                                  {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
+                            <Row
+                              gate={sg.length > 0}
+                              onPress={() => {
+                                select({ wsPath: g.ws.path, sessionId: s.id })
+                                router.push('/chat')
+                              }}
+                            >
+                              <View style={{ flex: 1, minWidth: 0 }}>
+                                <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
+                                  {s.title || '新会话'}
                                 </T>
-                                {sg.length > 0 && <Pill tone="gate">待确认 {sg.length}</Pill>}
+                                <View
+                                  style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' }}
+                                >
+                                  <T mono style={{ fontSize: 11.5, color: c.muted }}>
+                                    {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
+                                    {' · '}
+                                    {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
+                                  </T>
+                                  {sg.length > 0 && <Pill tone="gate">待确认 {sg.length}</Pill>}
+                                </View>
                               </View>
-                            </View>
-                            <StatusBadge tier={tierFor(g.ws.path, s.id)} />
-                            <T style={{ fontSize: 15, color: c.faint }}>›</T>
-                          </Row>
-                        </View>
-                      )
-                    })}
-                  </List>
+                              <StatusBadge tier={tierFor(g.ws.path, s.id)} />
+                              <T style={{ fontSize: 15, color: c.faint }}>›</T>
+                            </Row>
+                          </View>
+                        )
+                      })}
+                    </List>
+                  </View>
                 )}
               </View>
             )
