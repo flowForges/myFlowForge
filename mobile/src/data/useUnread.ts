@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { CH } from '../../../src/main/ipc/channels'
-import { markUnread, clearUnread, type Viewing } from '@shared/chat/unread'
+import { markUnread, clearUnread, isViewingSession, type Viewing } from '@shared/chat/unread'
 import { useConn } from '../net/conn'
 import { shouldReportSeen } from './reportSeen'
 
@@ -28,11 +28,35 @@ export function useUnreadSet(viewing: Viewing | null): ReadonlySet<string> {
   const vref = useRef<Viewing>(viewing ?? NOWHERE)
   vref.current = viewing ?? NOWHERE
 
+  /**
+   * 「这条会话我看过了」——**唯一**的上报出口。下面两处都走它:切到一条会话时,以及
+   * 正开着的这条**跑完**时。
+   *
+   * ★放在 ref 里而不是直接闭进订阅:订阅那个 effect 的依赖只有 `[on]`(它必须只装一次,
+   *  重装一次就会漏掉重装那一瞬的事件),而 `methods` / `invoke` 每次重连都是新的。
+   *  闭进去的话查的是**连上那一刻**的方法表,重连之后就是一份过期快照。
+   */
+  const report = useRef<(v: Viewing) => void>(() => {})
+  report.current = (v) => {
+    // 上报与否的三条判断(空 id / 查方法表)抽在 ./reportSeen 里单测 —— 这个 hook 依赖 useConn(),
+    // 一路 import 到 react-native,vitest 的 mobile project(node 环境)渲染不了它。
+    if (!shouldReportSeen(v, methods, CH.chatMarkSeen)) return
+    void invoke(CH.chatMarkSeen, [{ workspacePath: v.wsPath, sessionId: v.sessionId }]).catch(() => {
+      // 上报失败无所谓 —— 顶多是别的设备那颗圆点晚一点灭。绝不因此弹错。
+    })
+  }
+
   useEffect(() => {
     const off = on(CH.chatEvent, (payload) => {
       const e = payload as { type?: string; workspacePath?: string; sessionId?: string }
       if (!e || (e.type !== 'done' && e.type !== 'error')) return
       if (!e.workspacePath || !e.sessionId) return
+      // ★★这一轮是在**你已经开着这条会话**时跑完的 → 本机不标未读(markUnread 自己会跳过),
+      //  但**必须照样吭一声**。原来只在 viewing **变化**时上报,于是「开着对话页看它跑完」
+      //  这条路一次都不上报 —— 而那正是手机的主要姿势。现象:手机上盯着跑完、走到桌前,
+      //  电脑端那颗圆点亮着,而且**永远不会灭**(它在等一个不会再来的 viewing 变化)。
+      //  这是用户报的那个 bug 的**反向**,设计文档 §4.5 量的是同一件事。
+      if (isViewingSession(vref.current, e.workspacePath, e.sessionId)) report.current(vref.current)
       setUnread((s) => markUnread(s, e.workspacePath!, e.sessionId!, vref.current))
     })
     return off
@@ -53,13 +77,7 @@ export function useUnreadSet(viewing: Viewing | null): ReadonlySet<string> {
     const v = viewing
     if (!v) return
     setUnread((s) => (s.size ? clearUnread(s, v.wsPath, v.sessionId) : s))
-    // 上报与否的三条判断(空 id / 查方法表)抽在 ./reportSeen 里单测 —— 这个 hook 依赖 useConn(),
-    // 一路 import 到 react-native,vitest 的 mobile project(node 环境)渲染不了它。
-    if (shouldReportSeen(v, methods, CH.chatMarkSeen)) {
-      void invoke(CH.chatMarkSeen, [{ workspacePath: v.wsPath, sessionId: v.sessionId }]).catch(() => {
-        // 上报失败无所谓 —— 顶多是别的设备那颗圆点晚一点灭。绝不因此弹错。
-      })
-    }
+    report.current(v)
   }, [viewing?.wsPath, viewing?.sessionId, invoke, methods])
 
   return unread

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { markUnread, clearUnread, isSessionUnread, workspaceHasUnread } from './unread'
+import { markUnread, clearUnread, isSessionUnread, isViewingSession, workspaceHasUnread } from './unread'
 
 const viewing = (wsPath: string, sessionId: string) => ({ wsPath, sessionId })
 
@@ -37,5 +37,23 @@ describe('unread session tracking', () => {
   it('does not confuse workspaces whose paths share a prefix', () => {
     const s = markUnread(new Set(), '/w/app', 's1', viewing('/x', 'z'))
     expect(workspaceHasUnread(s, '/w/ap')).toBe(false)
+  })
+})
+
+// 「此刻屏幕上是不是正是这条」现在有**两个**用处:markUnread 用它跳过标记,两端的 hook 用它
+// 决定要不要广播 chat:mark-seen(一轮在你开着页面时跑完,本机不标未读,但必须告诉别的设备)。
+// 两处共用一份,是为了不让「你在看」这件事在两个地方给出两个答案。
+describe('isViewingSession', () => {
+  it('两个字段都对上才算「正在看」', () => {
+    expect(isViewingSession(viewing('/w/a', 's1'), '/w/a', 's1')).toBe(true)
+  })
+  it('同一个区、另一条会话 → 不算', () => {
+    expect(isViewingSession(viewing('/w/a', 's2'), '/w/a', 's1')).toBe(false)
+  })
+  it('同一个会话 id、另一个区 → 不算(sessionId 在不同区里会重名)', () => {
+    expect(isViewingSession(viewing('/w/b', 's1'), '/w/a', 's1')).toBe(false)
+  })
+  it('首页(两个空串)→ 不算在看任何东西', () => {
+    expect(isViewingSession(viewing('', ''), '/w/a', 's1')).toBe(false)
   })
 })

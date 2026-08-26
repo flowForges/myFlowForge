@@ -126,6 +126,50 @@ describe('★ 跨设备未读', () => {
     expect(catchSpy).toHaveBeenCalled()
   })
 
+  it('★★正开着这条会话、它在你眼皮底下跑完 → 也要上报(否则另一台设备那颗圆点永远不灭)', () => {
+    // 这是手机的**主要姿势**:开着对话页看一轮跑完。本机正确地不标未读,但原来一声不吭 ——
+    // 上报只挂在「viewing 变化」上,而这条路上 viewing 从头到尾没变过。
+    // 于是手机上盯着跑完、走到桌前,电脑端亮着一颗**再也不会灭**的圆点(见设计文档 §4.5)。
+    const { result } = renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    markChatSeen.mockClear()
+    act(() => { fire(done('/ws', 'A')) })
+    expect(markChatSeen).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 'A' })
+    // 顺带把「本机不标未读」也钉住:这两件事必须同时成立,只做一半就是另一种坏法。
+    expect(isSessionUnread(result.current, '/ws', 'A')).toBe(false)
+  })
+
+  it('★以错误收尾的那一轮同样要上报 —— error 和 done 一样是终态', () => {
+    renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    markChatSeen.mockClear()
+    act(() => { fire({ workspacePath: '/ws', sessionId: 'A', type: 'error', id: 'a', error: 'boom' } as unknown as ChatEvent) })
+    expect(markChatSeen).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 'A' })
+  })
+
+  it('★别的会话跑完**不**上报 —— 那条你没在看,报「看过了」是撒谎', () => {
+    renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    markChatSeen.mockClear()
+    act(() => { fire(done('/ws', 'B')) })
+    expect(markChatSeen).not.toHaveBeenCalled()
+  })
+
+  it('★跑完时的上报也必须接住 rejection(和切会话那条同一个远程老主机问题)', () => {
+    const rejected = Promise.reject(new Error('「远程主机」不提供这个功能(chat:mark-seen)'))
+    const catchSpy = vi.spyOn(rejected, 'catch')
+    renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    // 挂载那一次的上报先走掉,再换成会拒的返回值,单独验「跑完」这条路。
+    markChatSeen.mockReturnValue(rejected)
+    catchSpy.mockClear()
+    act(() => { fire(done('/ws', 'A')) })
+    expect(catchSpy).toHaveBeenCalled()
+  })
+
+  it('★收到别的设备的 chat:seen **绝不**回报一次 —— 两台设备会就此互相点炮点到天亮', () => {
+    renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    markChatSeen.mockClear()
+    act(() => { seenCb({ workspacePath: '/ws', sessionId: 'A' }) })
+    expect(markChatSeen).not.toHaveBeenCalled()
+  })
+
   it('没在看任何会话(首页)时不上报 —— 空 id 广播出去是纯噪音', () => {
     const { rerender } = renderHook(
       ({ v }) => useUnread(v),
