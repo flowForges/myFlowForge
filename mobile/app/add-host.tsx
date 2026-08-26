@@ -1,14 +1,26 @@
 import { useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
 import { isLoopbackUrl, parseAddress } from '../src/net/hosts'
 
+/** `useLocalSearchParams()` 的值可能是数组(同名参数出现两次)。取第一个就够。 */
+const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''))
+
 /**
- * 添加主机。第一版**手填地址 + 令牌**;扫二维码留到有配对码通道之后再接。
+ * 添加主机。手填地址 + 令牌,或者**从二维码填进来**。
+ *
+ * ★两条扫码路径落到的是**同一个地方**:
+ *   ① 用手机自带的相机扫 → 系统按 `myflowforge://add-host?a=…&t=…&n=…` 深链把 app 拉起来,
+ *     直接落到这一屏(app 没开着也行);
+ *   ② app 里点「扫一扫」→ `scan.tsx` 解完之后 `router.replace` 到这一屏,带同样的参数。
+ *  参数名 `a/t/n` 和链接格式由 `@shared/remote/pairingLink` 一处定义,桌面端 import 的是同一份文件。
+ *
+ * ★扫完**不自动连**。地址和令牌是填好的,但那一下要人自己按 —— 一枚码扫进来就把整台电脑的
+ *  控制权接上,和「扫个码就付款」是一回事。而且填好之后人能先核对一眼扫到的是不是自己那台。
  *
  * ★这一屏是照着桌面端上一轮真机点验的教训写的:
  *   - 只有一种连法(直连 ws),所以不存在「把地址填进错的框」这回事;
@@ -19,9 +31,13 @@ import { isLoopbackUrl, parseAddress } from '../src/net/hosts'
 export default function AddHost() {
   const c = useC()
   const { addHost, selectHost } = useConn()
-  const [label, setLabel] = useState('')
-  const [addr, setAddr] = useState('')
-  const [token, setToken] = useState('')
+  // ★用 useState 的**初值**读参数,不要写进 effect 里回填 —— effect 每次参数对象换新引用都会跑一遍,
+  //  会把人已经改过的地址悄悄推回二维码里那个值。
+  const q = useLocalSearchParams<{ a?: string; t?: string; n?: string }>()
+  const [scanned] = useState(() => !!one(q.a))
+  const [label, setLabel] = useState(() => one(q.n))
+  const [addr, setAddr] = useState(() => one(q.a))
+  const [token, setToken] = useState(() => one(q.t))
   const [err, setErr] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -61,10 +77,32 @@ export default function AddHost() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
-        <TopTitle title="添加主机" sub="电脑上运行 daemon,把它打印的地址填进来" />
+        <TopTitle title="添加主机" sub={scanned ? '已从二维码填好,核对一下就能连' : '扫电脑上那枚码,或者手填地址'} />
       </TopBar>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 40 }}>
+          {scanned ? (
+            <Note>
+              {/* ★`Note` 是纯文本,不认 markdown —— 写 **粗体** 会原样显示两个星号。加粗要套一层 T。 */}
+              下面这些是从二维码里读出来的。确认一眼这是
+              <T style={{ fontWeight: '700', color: c.fg }}>你自己那台电脑</T>
+              {' '}—— 连上去等于把起 agent、答权限门、开终端的权力交出去。
+            </Note>
+          ) : Platform.OS === 'web' ? (
+            // ★web 上不摆这个按钮。react-native-web 的相机能开,但条码识别靠浏览器的
+            //  BarcodeDetector,Safari 根本没有 —— 摆上去就是一个开着摄像头、永远扫不出东西的屏,
+            //  比没有这个入口更糟。真机 app 里才有。
+            <Note>在电脑上「设置 → 主机」里复制地址和令牌填到下面。扫码要用手机 app,网页版没有相机。</Note>
+          ) : (
+            <List>
+              {/* ★快的那条路放最上面。二维码在电脑的「设置 → 主机 → 显示配对二维码」里。 */}
+              <Btn kind="pri" block onPress={() => router.push('/scan')}>扫一扫</Btn>
+              <T style={{ fontSize: 11.5, color: c.faint, textAlign: 'center', paddingTop: 2 }}>
+                电脑上:设置 → 主机 → 显示配对二维码
+              </T>
+            </List>
+          )}
+
           <Sec>名称</Sec>
           <List>
             <Field value={label} onChangeText={setLabel} placeholder="书房的 Mac(不填就用地址)" autoCapitalize="none" />
@@ -137,8 +175,6 @@ export default function AddHost() {
             </Pressable>
           </List>
 
-          <Sec>扫码配对</Sec>
-          <Note>还没做。电脑端要先能生成配对码,那是第三期(中转 + 配对)的事。</Note>
         </ScrollView>
       </KeyboardAvoidingView>
     </View>

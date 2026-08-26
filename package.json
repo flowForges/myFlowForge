@@ -50,6 +50,7 @@
     "electron-vite": "^5.0.0",
     "execa": "^9.6.1",
     "node-pty": "^1.1.0",
+    "qrcode-generator": "^2.0.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tweetnacl": "^1.0.3",

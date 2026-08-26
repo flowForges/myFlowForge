@@ -79,3 +79,11 @@
 /* 表单里的 select 要和 input 一样宽、一样高,否则一行 input 一行矮 select 参差不齐 */
 .hosts-form .proj-field { margin-bottom: 0; }
 .hosts-form .sce-select { width: 100%; height: 36px; font-size: 13px; }
+
+/* 配对二维码。★码本身是固定白底黑块(见 QrCode.tsx 的注释),所以给它一个白色的托底 +
+   圆角,让「不跟皮肤走」看起来是有意为之,而不是一块漏出来的白。 */
+.hosts-qr { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-top: 14px;
+  padding-top: 14px; border-top: 1px solid var(--border); }
+.hosts-qr .qr { flex: 0 0 auto; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px var(--border); }
+.hosts-qr-say { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.hosts-qr-say .set-desc { margin-top: 0; }

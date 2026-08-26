@@ -107,6 +107,14 @@ try {
   ok('iOS 允许局域网明文(NSAllowsLocalNetworking)', /NSAllowsLocalNetworking<\/key>\s*<true\/>/.test(plist))
   ok('iOS 没有把 ATS 整个放开(NSAllowsArbitraryLoads 应为 false)',
     /NSAllowsArbitraryLoads<\/key>\s*<false\/>/.test(plist))
+  // ★缺这条 iOS 是**当场崩**,不是弹个框说不给用 —— 而且只在人点「扫一扫」那一下才崩,
+  //  日常在 web 上点来点去一辈子撞不到。
+  //  ★★查的是**我们自己那句话**,不是这个键存不存在:expo-camera 装上之后,自动链接会替你
+  //   补一条英文默认文案(`Allow $(PRODUCT_NAME) to access your camera`),所以只查键名的话,
+  //   app.json 里那条插件配置被删掉也照样绿 —— 而现象是中文 app 弹一句英文要权限。
+  ok('iOS 相机权限用的是我们自己写的中文文案(不是 expo-camera 的英文默认)',
+    /NSCameraUsageDescription<\/key>\s*<string>myFlowForge [^<]*扫一扫/.test(plist),
+    plist.includes('access your camera') ? 'app.json 里 expo-camera 那条插件配置没生效' : '')
   const pbx = fs.readFileSync(path.join(ROOT, 'ios/myFlowForge.xcodeproj/project.pbxproj'), 'utf8')
   ok('iOS 工程里带着 Team(否则每次重建都要手点一次)', /DEVELOPMENT_TEAM = \w+;/.test(pbx))
 } catch (e) {
@@ -121,6 +129,9 @@ try {
   ok('★Android 主 manifest 里有 usesCleartextTraffic(release 包才连得上 ws://)',
     /android:usesCleartextTraffic="true"/.test(manifest),
     manifest.includes('usesCleartextTraffic') ? '' : '只在 debug manifest 里 = release 包连不上任何主机')
+  // 这一条只挡得住「expo-camera 被整个删掉」——自动链接会自己补 CAMERA 权限,
+  // 所以 app.json 里那条插件配置没了它照样绿(iOS 那条查的是文案,能挡住)。
+  ok('Android 有 CAMERA 权限(扫一扫用)', manifest.includes('android.permission.CAMERA'))
   ok('Android 有 INTERNET 权限', manifest.includes('android.permission.INTERNET'))
 } catch (e) {
   ok('Android 原生工程生成 + manifest 核对', false, String(e.message).slice(0, 120))

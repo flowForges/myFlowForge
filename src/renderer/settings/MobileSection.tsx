@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MobileStatus } from '../../main/host/appGateway'
+import { buildPairingLink } from '@shared/remote/pairingLink'
+import { QrCode } from './QrCode'
 
 /**
  * 「让手机连进来」。
@@ -20,6 +22,8 @@ export function MobileSection() {
   const [port, setPort] = useState('6789')
   const [lan, setLan] = useState(true)
   const [showToken, setShowToken] = useState(false)
+  // ★码里带着令牌 —— 那等于把机器钥匙画在屏幕上。默认折起来,别在共享屏幕/录屏时替人做主。
+  const [showQr, setShowQr] = useState(false)
   const [copied, setCopied] = useState('')
   const [busy, setBusy] = useState(false)
   const seeded = useRef(false)
@@ -55,6 +59,9 @@ export function MobileSection() {
   // 手机要照抄的地址。虚拟网卡(Parallels / Docker)已经在主进程那边排到后面了 —— 手机连不上那些。
   const first = st.addresses[0] ?? '<这台机器的地址>'
   const addr = `${first}:${st.port}`
+  // ★`?? ''` 不是多余的防御:这份 status 是**跨进程**来的,连着一台跑旧版本的主机时
+  //  就是少几个字段。少一个字段不该让整屏设置炸成白板(旧 preload 那次已经教过一遍)。
+  const pairing = buildPairingLink({ address: addr, token: st.token ?? '', label: st.name ?? '' })
 
   return (
     <>
@@ -140,6 +147,27 @@ export function MobileSection() {
               </div>
             </div>
           )}
+
+          <div className="hosts-qr">
+            {showQr ? (
+              <>
+                <QrCode text={pairing} alt={`配对二维码 · ${addr}`} />
+                <div className="hosts-qr-say">
+                  <p className="set-desc">
+                    用<b>手机自带的相机</b>对着它扫一下(不用先打开 app),点弹出来的横幅 ——
+                    myFlowForge 会打开,地址和令牌都已经填好了。app 里「添加主机 → 扫一扫」也扫这枚。
+                  </p>
+                  <p className="set-desc">
+                    ★<b>这枚码里带着上面那把令牌</b>,谁扫到谁就拿到这台机器的控制权。
+                    共享屏幕、录屏、发截图之前先把它收起来。
+                  </p>
+                  <button className="set-btn" onClick={() => setShowQr(false)}>收起二维码</button>
+                </div>
+              </>
+            ) : (
+              <button className="set-btn" onClick={() => setShowQr(true)}>显示配对二维码</button>
+            )}
+          </div>
 
           <div className="hosts-conn-foot">
             <span className="set-desc">当前连着 <b>{st.clients}</b> 台设备</span>

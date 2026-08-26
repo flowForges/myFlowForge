@@ -1,4 +1,4 @@
-import { networkInterfaces } from 'node:os'
+import { hostname, networkInterfaces } from 'node:os'
 import { startGateway, type GatewayHandle } from '../remote/gateway'
 import { daemonTable } from '../ipc/channelRouting'
 import type { MethodTable } from '../ipc/invokeCtx'
@@ -29,6 +29,13 @@ export type MobileStatus = {
   clients: number
   /** 起不来时的原因(端口被占之类)。★不能静默失败:开关拨过去了却没起来,是最难查的一类。 */
   error: string
+  /** 这台机器叫什么。手机扫码存下来当主机名用 —— 一串 IP 认不出是哪台。 */
+  name: string
+}
+
+/** `zghua-MacBook-Pro.local` → `zghua-MacBook-Pro`。那个后缀对人没有信息量。 */
+export function machineName(): string {
+  return hostname().replace(/\.local$/i, '')
 }
 
 /** 这台机器上别人连得到的 IPv4。虚拟网卡排后面 —— 手机永远连不上那些。 */
@@ -78,6 +85,7 @@ export function createAppGateway(deps: AppGatewayDeps): AppGateway {
     addresses: lanAddresses(),
     clients: gw?.clientCount() ?? 0,
     error,
+    name: machineName(),
   })
 
   const announce = () => deps.onStatus?.(status())

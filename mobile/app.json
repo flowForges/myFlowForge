@@ -36,6 +36,13 @@
       "expo-asset",
       "expo-system-ui",
       [
+        "expo-camera",
+        {
+          "cameraPermission": "myFlowForge 只在你点「扫一扫」时用一次相机,读电脑屏幕上那枚配对二维码 —— 不拍照、不上传,扫完就关。",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {
