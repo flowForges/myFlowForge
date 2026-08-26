@@ -31,15 +31,36 @@ export function T({
   return <Text {...rest} style={[mono && { fontFamily: MONO }, style]} />
 }
 
-export function Sec({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
+export function Sec({
+  children, right, onPress, onLongPress, expanded,
+}: {
+  children: React.ReactNode
+  right?: React.ReactNode
+  onPress?: () => void
+  /** 长按呼出操作单(置顶 / 归档)。手机上没有右键。 */
+  onLongPress?: () => void
+  /** 给了就画一个展开箭头(▾ 展开 / ▸ 收起)。不给就是老样子,一个纯标题。 */
+  expanded?: boolean
+}) {
   const c = useC()
-  return (
+  const body = (
     <View style={s.sec}>
+      {expanded !== undefined ? (
+        <T style={{ fontSize: 10, color: c.faint, marginRight: 1 }}>{expanded ? '▾' : '▸'}</T>
+      ) : null}
       <T mono style={{ fontSize: 10.5, letterSpacing: 0.85, color: c.faint, textTransform: 'uppercase' }}>
         {children}
       </T>
       {right != null && <View style={{ marginLeft: 'auto' }}>{right}</View>}
     </View>
+  )
+  if (!onPress && !onLongPress) return body
+  // ★整条都是热区。分组头本来就是一行字,只让那几个字可点的话,手指多半点在旁边的空白上,
+  //  现象是「点了没反应」—— 本轮已经在别处栽过一次同样的事。
+  return (
+    <Pressable onPress={onPress} onLongPress={onLongPress} delayLongPress={400}>
+      {({ pressed }) => <View style={pressed ? { opacity: 0.6 } : undefined}>{body}</View>}
+    </Pressable>
   )
 }
 

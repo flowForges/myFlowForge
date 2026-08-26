@@ -10,6 +10,7 @@ import { Sheet } from '../src/ui/Sheet'
 import { JumpBubble } from '../src/ui/JumpBubble'
 import { useConn } from '../src/net/conn'
 import { useStore, type WsGroup } from '../src/data/store'
+import { useBranches } from '../src/data/useBranches'
 import { isSessionUnread } from '@shared/chat/unread'
 import { tierOf, countTiers, topTier, type SessionTier, type TierCounts } from '../src/data/sessionStatus'
 import { runningKey } from '../src/data/runningMerge'
@@ -29,7 +30,8 @@ import { StatusBadge } from '../src/ui/StatusBadge'
 export default function Home() {
   const c = useC()
   const { activeHost, hosts, loading: hostsLoading, online, state, invoke } = useConn()
-  const { groups, gates, gatesFor, loading, select, wsName, refresh, unread, running } = useStore()
+  const { groups, gates, gatesFor, loading, select, wsName, refresh, unread, running, expanded, toggleWs, ensureWs } =
+    useStore()
   const now = Date.now()
   const [newSheet, setNewSheet] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -52,6 +54,9 @@ export default function Home() {
       const created = file.sessions.find((s) => s.id === file.activeSessionId) ?? file.sessions[0]
       if (!created) throw new Error('对面建好了会话,但没告诉我是哪一个')
       select({ wsPath, sessionId: created.id })
+      // 建完直接进对话,回来时那个区该是开着的 —— 不然新建的那条会话藏在一个收起的分组里,
+      // 看起来像「建了但没建上」。
+      ensureWs(wsPath)
       refresh()
       setNewSheet(false)
       // 建好就直接进去 —— 建会话的意图就是「我要在这儿说点什么」。
@@ -86,6 +91,9 @@ export default function Home() {
     })
   }, [groups])
 
+  // 分组头上的分支名。`ordered` 每次渲染都是新数组,所以路径串单独 memo 一层。
+  const branches = useBranches(useMemo(() => ordered.map((g) => g.ws.path), [ordered]))
+
   /**
    * ★**列表主体这一刻画的是不是真会话行。**主体的三个空态分支(未连接 / 正在读取 / 没有工作区)
    *  和定位气泡必须共用这**同一个**判断,不能各写一遍。
@@ -106,6 +114,9 @@ export default function Home() {
   const rowY = useRef<Record<string, number>>({})
   const scrollY = useRef(0)
   const viewH = useRef(0)
+  // absY 是 useCallback([]) 的(它的消费者靠它 identity 稳定),所以展开状态要走 ref 进来。
+  const expandedRef = useRef(expanded)
+  expandedRef.current = expanded
 
   /**
    * 一行会话在滚动内容里的**绝对** y。
@@ -125,9 +136,15 @@ export default function Home() {
    */
   const absY = useCallback((wsPath: string, key: string): number | undefined => {
     const gy = groupY.current[wsPath]
+    if (gy === undefined) return undefined
+    // ★这个工作区**收起着**:它的会话行根本没渲染,`rowY` 里剩的是上一次展开时的旧值。
+    //  拿那个旧值拼出来的位置是错的,而且错得**一声不响**(布局这类东西 node/jsdom 测不了)。
+    //  收起时目标就是**分组头自己** —— 气泡指过去、点一下滚到它并把它展开(见 jump()),
+    //  正好是人想要的:要找的那条就在刚展开的这一组里。
+    if (!expandedRef.current.has(wsPath)) return gy
     const ly = listY.current[wsPath]
     const ry = rowY.current[key]
-    if (gy === undefined || ly === undefined || ry === undefined) return undefined
+    if (ly === undefined || ry === undefined) return undefined
     return gy + ly + ry
   }, [])
 
@@ -241,17 +258,29 @@ export default function Home() {
   // 依赖项用原始值而非 `targets` 数组本身(每次渲染都是新引用),这样内容真没变时
   // effect 不会白跑。
   const targetKeysSig = targets.map((t) => t.key).join(',')
+  // ★`expanded` 也在依赖里:折叠/展开会改变后面所有内容的高度,目标会因此进出视口
+  //  (收起时 absY 返回的还换成了分组头自己的 y),不补这一次 syncBubble,气泡会停在
+  //  折叠前的那份答案上。
   useEffect(() => {
     syncBubble()
-  }, [top, counts.gate, counts.running, counts.unread, targetKeysSig, syncBubble])
+  }, [top, counts.gate, counts.running, counts.unread, targetKeysSig, expanded, syncBubble])
 
   const jump = useCallback(() => {
     if (!bubble) return
-    const y = absY(bubble.targetWsPath, bubble.targetKey)
-    if (y === undefined) return
-    // 往上留 24px,让目标不要正好贴在顶栏下沿。
-    scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true })
-  }, [bubble, absY])
+    // 收起着的话先展开 —— 不然滚过去只看得到一个分组头,那条会话还是没露面。
+    // 展开这一下会改变后面所有内容的高度,所以滚动放在下一帧(setTimeout 0),
+    // 让 onLayout 先把新的三段 y 量出来。
+    const wasCollapsed = !expanded.has(bubble.targetWsPath)
+    if (wasCollapsed) ensureWs(bubble.targetWsPath)
+    const go = () => {
+      const y = absY(bubble.targetWsPath, bubble.targetKey)
+      if (y === undefined) return
+      // 往上留 24px,让目标不要正好贴在顶栏下沿。
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true })
+    }
+    if (wasCollapsed) setTimeout(go, 0)
+    else go()
+  }, [bubble, absY, expanded, ensureWs])
 
   // ── 还没配主机:这一屏没有任何东西可画,直接把人送去配 ────────────────────────
   if (!hostsLoading && hosts.length === 0) {
@@ -333,13 +362,18 @@ export default function Home() {
                 onLayout={(e) => { groupY.current[g.ws.path] = e.nativeEvent.layout.y }}
               >
                 <Sec
+                  expanded={expanded.has(g.ws.path)}
+                  onPress={() => toggleWs(g.ws.path)}
                   right={(() => {
                     // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
                     // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
                     const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
+                    const open = expanded.has(g.ws.path)
+                    // ★展开时会话自己带徽章了,分组头上再来一个是重复(电脑端 Sidebar.tsx:248 同一条规矩)。
+                    //  但**门那一档例外**:门是「代理停在那儿等你」,收起展开都该看得见。
                     if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
-                    if (wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
-                    if (wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
+                    if (!open && wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
+                    if (!open && wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
                     return (
                       <T mono style={{ fontSize: 10.5, color: c.faint }}>
                         {g.ws.projectCount} 个项目
@@ -347,9 +381,12 @@ export default function Home() {
                     )
                   })()}
                 >
+                  {/* ★分支名跟在区名后面、同一行、同样是 faint 的等宽小字 —— 它是**辨认用的补充**,
+                      不是第二个标题,不该和区名抢重量。 */}
                   {g.ws.name}
+                  {branches.get(g.ws.path) ? `  ${branches.get(g.ws.path)}` : ''}
                 </Sec>
-                {sessions.length === 0 ? (
+                {!expanded.has(g.ws.path) ? null : sessions.length === 0 ? (
                   <Empty title="还没有人在这个工作区开过会话" desc="新建会话这类操作手机上也能做,但新建工作区留在电脑端。" />
                 ) : (
                   // 定位气泡 absY() 三段 y 的第②段:这层裸 View(**不能加 style**,否则会在
@@ -376,6 +413,10 @@ export default function Home() {
                               gate={sg.length > 0}
                               onPress={() => {
                                 select({ wsPath: g.ws.path, sessionId: s.id })
+                                // 进过的区保持展开 —— 从对话屏退回来时它该还开着。
+                                // (点得到这一行说明它此刻就是展开的,ensureWs 在这种情况下
+                                //  返回同一个引用、连存盘都跳过,不白费事。)
+                                ensureWs(g.ws.path)
                                 router.push('/chat')
                               }}
                             >

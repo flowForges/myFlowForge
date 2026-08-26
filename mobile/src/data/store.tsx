@@ -4,6 +4,8 @@ import type { AskQuestion, ChatSession, SessionsFile, WorkspaceMeta } from '../.
 import { useConn } from '../net/conn'
 import { useRunningSet } from './useRunning'
 import { useUnreadSet } from './useUnread'
+import { toggleExpanded, ensureExpanded } from '@shared/ui/expanded'
+import { loadExpanded, saveExpanded } from './expanded'
 
 /**
  * 一台主机上的「有什么」:工作区 → 会话 → 挂着的门。
@@ -78,6 +80,14 @@ export type Store = {
   unread: ReadonlySet<string>
   /** 哪些会话正在跑。key 由 `runningKey(wsPath, sessionId)` 生成,别拿裸 sessionId 查。 */
   running: ReadonlySet<string>
+  /**
+   * 哪些工作区分组是展开的。★交互**照抄电脑端左侧栏**(见 @shared/ui/expanded):
+   * 点一下切换、能同时展开多个、存盘、进一个区时自动展开。
+   */
+  expanded: ReadonlySet<string>
+  toggleWs: (path: string) => void
+  /** 进入某个区(点它下面的会话 / 在它里面新建会话)时自动展开,不用点第二下。 */
+  ensureWs: (path: string) => void
 }
 
 const StoreCtx = createContext<Store | null>(null)
@@ -105,6 +115,30 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   // ★和 `selected` 是两回事,别合并:`selected` 是「进去会打开哪条」,这个是「此刻屏幕上是哪条」。
   //  默认 null = 「谁都没在看」,所以根屏(会话列表)上任何会话跑完都算未读。
   const [viewing, setViewing] = useState<Selection | null>(null)
+
+  // 哪些工作区分组展开着。★切主机时**不清空**:存的是路径,新主机上的路径多半根本对不上,
+  //  于是那台机器的工作区自然全是收起的 —— 而切回来时你原来展开的那几个还在。
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  // 开机读一次存盘。★读回来之后**合并**而不是替换:读盘是异步的,这几百毫秒里用户
+  //  完全可能已经点开了一个区(或者点进了一条会话触发 ensureWs),整体替换会把它又收回去。
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const ids = await loadExpanded()
+      if (!alive || !ids.length) return
+      setExpanded((s) => new Set([...s, ...ids]))
+    })()
+    return () => { alive = false }
+  }, [])
+
+  const toggleWs = useCallback((path: string) => {
+    setExpanded((s) => { const n = toggleExpanded(s, path); void saveExpanded([...n]); return n })
+  }, [])
+  const ensureWs = useCallback((path: string) => {
+    // 已经展开着就返回同一个引用(见 @shared/ui/expanded),据此跳过一次白存盘 ——
+    // 点每一条会话都会调它,不跳的话等于每次点击都写一遍 AsyncStorage。
+    setExpanded((s) => { const n = ensureExpanded(s, path); if (n !== s) void saveExpanded([...n]); return n })
+  }, [])
 
   // ★答掉/收到 resolved 的门 id。初始快照要拿它过滤:
   //  快照那个 promise 完全可能在实时 `confirm-resolved` **之后**才 resolve,
@@ -342,8 +376,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setViewing,
       unread,
       running,
+      expanded,
+      toggleWs,
+      ensureWs,
     }
-  }, [groups, gates, loading, error, answerGate, selected, viewing, unread, running])
+    // ★新加字段必须同时加进这个依赖数组 —— 漏了的话 value 不会重建,
+    //  界面拿着上一份 `expanded` 静默不更新(点了分组头什么都不动)。
+  }, [groups, gates, loading, error, answerGate, selected, viewing, unread, running, expanded, toggleWs, ensureWs])
 
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>
 }
