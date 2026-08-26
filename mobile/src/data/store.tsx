@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { CH } from '../../../src/main/ipc/channels'
 import type { AskQuestion, ChatSession, SessionsFile, WorkspaceMeta } from '../../../src/shared/types'
 import { useConn } from '../net/conn'
+import { useRunningSet } from './useRunning'
 import { useUnreadSet } from './useUnread'
 
 /**
@@ -61,6 +62,8 @@ export type Store = {
   select: (sel: Selection | null) => void
   /** 哪些会话「跑完了但你没看」。key 由 @shared/chat/unread 的 key() 生成,别自己拼。 */
   unread: ReadonlySet<string>
+  /** 哪些会话正在跑(sessionId 的集合)。 */
+  running: ReadonlySet<string>
 }
 
 const StoreCtx = createContext<Store | null>(null)
@@ -297,6 +300,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   )
 
   const unread = useUnreadSet(selected)
+  const wsPaths = useMemo(() => groups.map((g) => g.ws.path), [groups])
+  const running = useRunningSet(wsPaths)
 
   const value = useMemo<Store>(() => {
     const nameOf = new Map(groups.map((g) => [g.ws.path, g.ws.name]))
@@ -315,8 +320,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       selected,
       select: setSelected,
       unread,
+      running,
     }
-  }, [groups, gates, loading, error, answerGate, selected, unread])
+  }, [groups, gates, loading, error, answerGate, selected, unread, running])
 
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>
 }
