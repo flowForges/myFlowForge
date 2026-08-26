@@ -103,6 +103,20 @@ export function Note({ children }: { children: React.ReactNode }) {
   return <T style={{ fontSize: 11.5, lineHeight: 19, color: c.faint, paddingHorizontal: 15, paddingTop: 10 }}>{children}</T>
 }
 
+/**
+ * 一列卡片。只有左右内边距和行间距。
+ *
+ * ★★**改这一层的盒模型之前,先去读 `mobile/app/index.tsx` 里 `absY()` 的注释。**
+ *  根屏的定位气泡靠三段 onLayout 相加(工作区分组 View + 包住这个 List 的裸 View + 每一行的
+ *  wrapper)拼出「某一行在滚动内容里的绝对 y」。中间那一段量的是**包着 List 的裸 View**,
+ *  第三段量的是**行相对本 View 的偏移** —— 也就是说这个加法默认「本 View 的上沿 = 那层裸 View
+ *  的上沿」。所以:
+ *  - **纵向 margin / transform 一加就错位**:它把本 View 整体挪开,而挪开的这一段谁都没量。
+ *  - 纵向 padding、border 目前是安全的(RN 给子节点的 y 相对父节点的 **border box**,这两样
+ *    会被每一行自己的 y 一并算进去),但它们把「这一层到底怎么摆」变得更绕,而这条链条错了
+ *    **不会有任何测试报错** —— node/jsdom 环境测不了真实布局,症状只是气泡悄悄滚到错的一行。
+ *  一句话:这个共享件的纵向几何是有远程消费者的,别当它只是个列表容器。
+ */
 export function List({ children, style }: { children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
   return <View style={[s.list, style]}>{children}</View>
 }
@@ -458,6 +472,7 @@ const s = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 8,
   },
+  // ★纵向几何被 `app/index.tsx` 的 absY() 消费,见 List 组件上的注释:别加纵向 margin。
   list: { paddingHorizontal: 12, gap: 8 },
   // .tree .frow { min-height: 40px; padding: 8px 10px; border: 0; background: transparent; border-radius: 8px }
   rowTree: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, borderWidth: 0, backgroundColor: 'transparent' },

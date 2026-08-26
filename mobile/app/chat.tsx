@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { router } from 'expo-router'
+import { router, useFocusEffect } from 'expo-router'
 import { goBack } from '../src/nav'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type PermissionMode } from '../../src/shared/permissions'
 import { useC } from '../src/theme/theme'
@@ -47,7 +47,7 @@ export default function Chat() {
   const c = useC()
   const insets = useSafeAreaInsets()
   const { activeHost, state, online, reconnect } = useConn()
-  const { selected, gates, gatesFor, answerGate, wsName, sessionTitle, loading: storeLoading } = useStore()
+  const { selected, gates, gatesFor, answerGate, wsName, sessionTitle, setViewing, loading: storeLoading } = useStore()
   const { msgs, busy, send, stop, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
   const { agents } = useAgents()
   const { wf, stage, advanceLabel, nextIsExecution, advance, exit, addFeedback } = useWorkflow()
@@ -65,6 +65,26 @@ export default function Chat() {
   const [supp, setSupp] = useState('')
   const [wfBusy, setWfBusy] = useState(false)
   const flow = useRef<ScrollView | null>(null)
+
+  /**
+   * ★**「你正在看这条会话」的唯一事实来源。**未读全靠它:store 的 `selected` 只是
+   *  「进对话屏会打开哪一条」,冷启动就会自动选中一条(`store.tsx` 的默认选中 effect),
+   *  而那一刻人在列表屏,一个字都没读 —— 拿 `selected` 当「在看」会让那条会话
+   *  **永远**标不上未读(它在后台跑挂了,列表上也一点提示都没有)。
+   *
+   *  用 `useFocusEffect` 而不是「组件挂载/卸载」:对话屏是被 push 上去的一层,
+   *  再往上推 `/exec`、`/gate` 时它**还挂在栈里没卸载**,但已经看不见了 ——
+   *  那种时候本会话跑完就该算未读,回到这一屏(重新聚焦)时下面的 clear 再把它抹掉。
+   *  `useFocusEffect` 的清理函数在**失焦和卸载**两种情况下都会跑(读过 expo-router 57
+   *  的实现确认:blur 监听里调一次,useEffect 的 return 里也调一次),所以直接返回
+   *  「写回 null」就够,不用另外补一个卸载分支。
+   */
+  useFocusEffect(
+    useCallback(() => {
+      setViewing(selected)
+      return () => setViewing(null)
+    }, [selected, setViewing]),
+  )
 
   // 代理探测回来之前不知道选谁,回来之后落到第一个装了的。用户改过就不再动它。
   useEffect(() => {
@@ -158,7 +178,9 @@ export default function Chat() {
       >
         <View style={{ paddingHorizontal: 2, paddingVertical: 2 }}>
           <T numberOfLines={1} style={{ fontSize: 15.5, fontWeight: '600', letterSpacing: -0.3, color: c.fg }}>
-            {selected ? sessionTitle(selected.wsPath, selected.sessionId) : '选一个会话'}
+            {/* 没选中时用 `未选会话` —— 和 exec/workflow 两屏的同一处措辞对齐,
+                也别再喊「选一个会话」:这个标题不可点,这一屏没有挑会话的入口。 */}
+            {selected ? sessionTitle(selected.wsPath, selected.sessionId) : '未选会话'}
           </T>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 }}>
             <LiveDot tone={tone} />
@@ -209,7 +231,9 @@ export default function Chat() {
         {msgs.length === 0 && (storeLoading || chatLoading) ? (
           <Empty title="正在读取…" />
         ) : !selected ? (
-          <Empty title="选一个会话" desc="点顶部的会话名,或者去「全部会话」按工作区找。" />
+          // 换主机会把选中清空(store.tsx),而这一屏还在栈里 —— 于是就落到这儿。
+          // 这一屏自己没有「挑一条」的入口,所以只能指回上一层,别再许诺点不到的东西。
+          <Empty title="没有正在看的会话" desc={'刚换过主机的话,原来选中的那条已经不在了。\n点左上角 ‹ 回会话列表,挑一条进来。'} />
         ) : msgs.length === 0 ? (
           online ? (
             <Empty title="这个会话还没有消息" desc="在下面给代理下达任务。" />
@@ -268,7 +292,10 @@ export default function Chat() {
         <View style={{ paddingHorizontal: 10, paddingBottom: 6, backgroundColor: c.bg }}>
           {gateElsewhere ? (
             <Pressable
-              onPress={() => router.push('/')}
+              // ★`goBack()` 而不是 `router.push('/')`:push 永远是**追加**,会在
+              //  `[/, /chat]` 上再压一个全新的根屏,栈变成 `[/, /chat, /]` ——
+              //  列表屏没有 ‹,Android 的物理返回于是退回对话屏而不是退出,来回一趟栈就长一截。
+              onPress={() => goBack()}
               style={{ paddingBottom: 6, flexDirection: 'row', alignItems: 'center', gap: 6 }}
             >
               <T style={{ fontSize: 11.5, color: c.gate }}>

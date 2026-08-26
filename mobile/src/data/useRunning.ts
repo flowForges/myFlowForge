@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CH } from '../../../src/main/ipc/channels'
 import { useConn } from '../net/conn'
-import { applyEvent, mergeSnapshot, type RunningByWs } from './runningMerge'
+import { applyEvent, mergeSnapshot, runningKey, type RunningByWs } from './runningMerge'
 
 type QueuePayload = { workspacePath?: string; runningSessionIds?: string[]; runningSessionId?: string | null }
 
 /**
- * 哪些会话正在跑。按 `sessionId` 收(会话 id 在一台主机上唯一,不需要再拼工作区)。
+ * 哪些会话正在跑。对外是一个扁平集合,key 一律走 `runningKey(wsPath, sessionId)`。
+ *
+ * ★key **必须**带工作区。这里原来写的是「会话 id 在一台主机上唯一,不需要再拼工作区」——
+ *  那句话是错的:id 是 `s-${Date.now()}-${++seq}`(`src/main/chat/sessionStore.ts`),
+ *  `seq` 每次起进程都从 0 数,跨两次运行的同一毫秒就能撞。详见 `runningMerge.ts` 的 `runningKey`。
  *
  * ★★**必须主动拉快照,不能只订阅事件。**
  *  手机是**半路加入**的:连上的时候那一轮多半已经在跑了,而 `chat:queue-event`
@@ -68,7 +72,9 @@ export function useRunningSet(wsPaths: string[]): ReadonlySet<string> {
 
   const flat = useMemo(() => {
     const s = new Set<string>()
-    for (const ids of Object.values(byWs)) for (const id of ids) s.add(id)
+    // 分桶的 key 就是工作区路径,拼进来即可 —— 事件和快照两条路径都是按工作区落桶的,
+    // 所以这里不需要任何额外信息就能造出带工作区的 key。
+    for (const [wsPath, ids] of Object.entries(byWs)) for (const id of ids) s.add(runningKey(wsPath, id))
     return s
   }, [byWs])
   return flat

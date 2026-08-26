@@ -5,13 +5,14 @@ import { CH } from '../../src/main/ipc/channels'
 import type { SessionsFile } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
-import { Btn, Empty, IconBtn, List, LiveDot, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
+import { Btn, Empty, IconBtn, List, LiveDot, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
 import { JumpBubble } from '../src/ui/JumpBubble'
 import { useConn } from '../src/net/conn'
 import { useStore, type WsGroup } from '../src/data/store'
 import { isSessionUnread } from '@shared/chat/unread'
 import { tierOf, countTiers, topTier, type SessionTier, type TierCounts } from '../src/data/sessionStatus'
+import { runningKey } from '../src/data/runningMerge'
 import { StatusBadge } from '../src/ui/StatusBadge'
 
 /**
@@ -37,7 +38,8 @@ export default function Home() {
   const tierFor = (wsPath: string, sessionId: string): SessionTier =>
     tierOf({
       hasGate: gatesFor(wsPath, sessionId).length > 0,
-      running: running.has(sessionId),
+      // 带工作区的 key —— 裸 sessionId 会串台(见 runningMerge.ts 的 runningKey)。
+      running: running.has(runningKey(wsPath, sessionId)),
       unread: isSessionUnread(unread, wsPath, sessionId),
     })
 
@@ -83,6 +85,18 @@ export default function Home() {
       return recency(b) - recency(a)
     })
   }, [groups])
+
+  /**
+   * ★**列表主体这一刻画的是不是真会话行。**主体的三个空态分支(未连接 / 正在读取 / 没有工作区)
+   *  和定位气泡必须共用这**同一个**判断,不能各写一遍。
+   *
+   *  各写一遍的后果实测过一次:掉个 WiFi 并不会推进 `epoch`,`groups`/门都还在内存里,
+   *  于是主体已经换成「未连接 —— 第一版不缓存,所以这里不会拿旧内容假装在线」,
+   *  屏幕底下却还浮着一颗「❓ 2 条等你答话 ↓」的琥珀气泡 —— 数据来源正是那份缓存,
+   *  点下去还只会滚一个空的 ScrollView。设计文档 §3 第三条原则(断线态显式,
+   *  绝不拿缓存假装在线)不允许这样,所以这个值同时是气泡的开关。
+   */
+  const showsRows = online && !loading && ordered.length > 0
 
   const scrollRef = useRef<ScrollView>(null)
   // 三段 y,拼起来才是一行会话在滚动内容里的**绝对**位置 —— 见下面 `absY()` 的注释
@@ -164,14 +178,38 @@ export default function Home() {
   const computeBubble = useCallback((): BubbleState => {
     const { top: t, targets: ts, counts: cs } = pendingRef.current
     if (!t) return null
-    // 第一个**不在视口内**的目标。全在视口里就不显示气泡:它指的东西你已经看见了。
+    // **不在视口内**的目标。全在视口里就不显示气泡:它指的东西你已经看见了。
     // 三段 y 没测全(absY 返回 undefined)也当作「不在视口内」处理 —— 宁可气泡多等一帧
     // 首屏布局跑完,不能拿 undefined 当 0 用,那会把没测到的目标误判成「就在顶上」。
-    const found = ts.find((x) => {
+    const off = ts.filter((x) => {
       const y = absY(x.wsPath, x.key)
       return y === undefined || y < scrollY.current || y > scrollY.current + viewH.current
     })
-    if (!found) return null
+    if (!off.length) return null
+    /**
+     * ★在这些候选里挑**离当前视口最近**的那一条,不是列表顺序上的第一条。
+     *
+     * 设计文档 §4.4 定的是「箭头方向 = 最近那条目标相对当前视口的方向」。按顺序取第一条会这样错:
+     * 你滑到列表底部,第 1 行挂着一道门、视口下沿刚过去一点也有一道 —— 取第一条就给你一个 ↑,
+     * 一点直接甩回列表最顶上,而真正近在咫尺的那道门被跳过了。
+     *
+     * 距离 = 目标到视口最近那条边的距离(在上面就是到上沿,在下面就是到下沿),并列取靠前的。
+     * 还没量到的候选(y === undefined)没有距离可比,所以只在**一个都没量到**时才兜底取
+     * 列表顺序第一条 —— 与老行为一致:气泡照样出现,jump() 这一帧不滚,等量到了下一次
+     * syncBubble 再纠正。
+     */
+    let found: { key: string; wsPath: string } | undefined
+    let best = Infinity
+    for (const x of off) {
+      const y = absY(x.wsPath, x.key)
+      if (y === undefined) continue
+      const d = y < scrollY.current ? scrollY.current - y : y - (scrollY.current + viewH.current)
+      if (d < best) {
+        best = d
+        found = x
+      }
+    }
+    if (!found) found = off[0]
     const y = absY(found.wsPath, found.key)
     // absY() 的三处消费者(这里的方向、上面的候选判定、下面 jump() 的滚动目标)统一口径:
     // y 是 undefined(还没测到)时,候选判定当「还没进视口」处理(仍是候选),方向缺省
@@ -275,7 +313,7 @@ export default function Home() {
           <Empty title="未连接" desc={'连上才有数据 —— 第一版不缓存,\n所以这里不会拿旧内容假装在线。'} />
         ) : loading ? (
           <Empty title="正在读取…" />
-        ) : ordered.length === 0 ? (
+        ) : !showsRows ? (
           <Empty title="这台机器上还没有工作区" desc="新建工作区留在电脑端。" />
         ) : (
           ordered.map((g) => {
@@ -296,10 +334,12 @@ export default function Home() {
               >
                 <Sec
                   right={(() => {
-                    const counts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
-                    if (counts.gate) return <StatusBadge tier="gate" count={counts.gate} />
-                    if (counts.running) return <StatusBadge tier="running" count={counts.running} />
-                    if (counts.unread) return <StatusBadge tier="unread" count={counts.unread} />
+                    // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
+                    // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
+                    const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
+                    if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
+                    if (wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
+                    if (wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
                     return (
                       <T mono style={{ fontSize: 10.5, color: c.faint }}>
                         {g.ws.projectCount} 个项目
@@ -343,16 +383,16 @@ export default function Home() {
                                 <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
                                   {s.title || '新会话'}
                                 </T>
-                                <View
-                                  style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' }}
-                                >
-                                  <T mono style={{ fontSize: 11.5, color: c.muted }}>
-                                    {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
-                                    {' · '}
-                                    {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
-                                  </T>
-                                  {sg.length > 0 && <Pill tone="gate">待确认 {sg.length}</Pill>}
-                                </View>
+                                {/* ★第二行只剩「代理 · 时间」。这里曾经还并排挂一个
+                                    `<Pill tone="gate">待确认 N</Pill>`,和右边的 StatusBadge 凑成
+                                    一行两个琥珀胶囊、还各说各的话(「待确认」是四档合并**之前**的旧说法,
+                                    见设计文档 §4.2/§4.3;§4.3 的表定的是一行一个徽章)。
+                                    「这条在等你」由整行的琥珀底 + 右边那一个徽章负责,别再加第二个。 */}
+                                <T mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
+                                  {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
+                                  {' · '}
+                                  {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
+                                </T>
                               </View>
                               <StatusBadge tier={tierFor(g.ws.path, s.id)} />
                               <T style={{ fontSize: 15, color: c.faint }}>›</T>
@@ -376,7 +416,8 @@ export default function Home() {
         )}
       </ScrollView>
 
-      {bubble ? (
+      {/* 主体没在画真行的时候,气泡一并不出现 —— 同一个 `showsRows`,见它上面的注释。 */}
+      {bubble && showsRows ? (
         <JumpBubble tier={bubble.tier} count={bubble.count} direction={bubble.direction} onPress={jump} />
       ) : null}
 

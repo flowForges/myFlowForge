@@ -13,6 +13,21 @@
 export type RunningByWs = Record<string, string[]>
 
 /**
+ * 「哪些会话在跑」这个扁平集合的 key。
+ *
+ * ★**必须带上工作区**,不能拿裸 sessionId 当 key。会话 id 是 `s-${Date.now()}-${++seq}`
+ *  (`src/main/chat/sessionStore.ts`),`seq` 是**进程级**的、每次开 app 从头数 ——
+ *  所以两个不同工作区、在两次运行里同一毫秒建出来的会话完全可能拿到同一个 id。
+ *  撞了的症状是某条毫不相干的会话上亮起「⚡ 执行中」,而且不会有任何报错。
+ *
+ * 分隔符用 NUL(`\0`):空格、逗号、冒号都是 POSIX 路径里的合法字符,拿它们做分隔
+ * 会让两个不同的 (工作区, 会话) 拼出同一个 key。`app/index.tsx` 的气泡 key 用的是同一个理由。
+ */
+export function runningKey(wsPath: string, sessionId: string): string {
+  return `${wsPath}\0${sessionId}`
+}
+
+/**
  * 快照落地。`wsPath` 已经在 `prev` 里(哪怕值是空数组)就原样返回 `prev`——
  * 必须是**同一个对象**,不能是内容相同的新对象:调用方拿它当 React state,
  * identity 不变才不会触发无谓的重渲染/重算。

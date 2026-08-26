@@ -57,12 +57,26 @@ export type Store = {
   ) => Promise<void>
   wsName: (path: string) => string
   sessionTitle: (wsPath: string, sessionId: string) => string
-  /** 当前在看哪个会话。切主机会清空(路径在新主机上不存在)。 */
+  /**
+   * 当前**选中**哪个会话 = 「进对话屏会打开哪一条」。切主机会清空(路径在新主机上不存在)。
+   *
+   * ★它**不等于**「你正看着哪一条」。根屏换成会话列表之后,冷启动就会自动选中一条
+   *  (见下面那个 effect),而那一刻你看的是列表,一个字都没读。判断未读要用 `viewing`。
+   */
   selected: Selection | null
   select: (sel: Selection | null) => void
+  /**
+   * 对话屏**正在前台显示**的那个会话;不在对话屏上就是 null。
+   *
+   * ★只有对话屏该写它(`app/chat.tsx` 的 useFocusEffect:聚焦时写、失焦/卸载时写回 null)。
+   *  未读逻辑吃的是这个值 —— 拿 `selected` 喂进去的话,自动选中的那条会话**永远不会**变未读:
+   *  它在后台跑挂了你也看不见任何徽章,而那正是手机端最该告诉你的一件事(设计文档 §4.5)。
+   */
+  viewing: Selection | null
+  setViewing: (sel: Selection | null) => void
   /** 哪些会话「跑完了但你没看」。key 由 @shared/chat/unread 的 key() 生成,别自己拼。 */
   unread: ReadonlySet<string>
-  /** 哪些会话正在跑(sessionId 的集合)。 */
+  /** 哪些会话正在跑。key 由 `runningKey(wsPath, sessionId)` 生成,别拿裸 sessionId 查。 */
   running: ReadonlySet<string>
 }
 
@@ -88,6 +102,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
   const [selected, setSelected] = useState<Selection | null>(null)
+  // ★和 `selected` 是两回事,别合并:`selected` 是「进去会打开哪条」,这个是「此刻屏幕上是哪条」。
+  //  默认 null = 「谁都没在看」,所以根屏(会话列表)上任何会话跑完都算未读。
+  const [viewing, setViewing] = useState<Selection | null>(null)
 
   // ★答掉/收到 resolved 的门 id。初始快照要拿它过滤:
   //  快照那个 promise 完全可能在实时 `confirm-resolved` **之后**才 resolve,
@@ -101,6 +118,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     setLoading(true)
     setError(null)
     setSelected(null)
+    setViewing(null)
     resolved.current = new Set()
   }, [epoch])
 
@@ -299,7 +317,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [invoke, dropGate],
   )
 
-  const unread = useUnreadSet(selected)
+  // ★喂给未读的是 `viewing` 不是 `selected` —— 见 Store 类型上这两个字段的注释。
+  const unread = useUnreadSet(viewing)
   const wsPaths = useMemo(() => groups.map((g) => g.ws.path), [groups])
   const running = useRunningSet(wsPaths)
 
@@ -319,10 +338,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         groups.find((g) => g.ws.path === wsPath)?.sessions.find((s) => s.id === sessionId)?.title ?? '会话',
       selected,
       select: setSelected,
+      viewing,
+      setViewing,
       unread,
       running,
     }
-  }, [groups, gates, loading, error, answerGate, selected, unread, running])
+  }, [groups, gates, loading, error, answerGate, selected, viewing, unread, running])
 
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>
 }

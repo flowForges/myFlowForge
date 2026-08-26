@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { applyEvent, mergeSnapshot, type RunningByWs } from './runningMerge'
+import { applyEvent, mergeSnapshot, runningKey, type RunningByWs } from './runningMerge'
+
+describe('runningKey', () => {
+  it('keeps the same session id in two workspaces apart', () => {
+    // 会话 id 会撞:`s-${Date.now()}-${++seq}`,seq 每次起进程从 0 数(sessionStore.ts)。
+    expect(runningKey('/a', 's-1-1')).not.toBe(runningKey('/b', 's-1-1'))
+  })
+
+  it('cannot be forged by a workspace path that ends with the separator-ish text', () => {
+    // NUL 不可能出现在 POSIX 路径里,所以 (ws, id) → key 是单射;换成空格/冒号就不是了。
+    expect(runningKey('/a b', 'c')).not.toBe(runningKey('/a', 'b c'))
+    expect(runningKey('/a', 'b')).toBe('/a\0b')
+  })
+})
 
 describe('mergeSnapshot', () => {
   it('fills an absent bucket', () => {
