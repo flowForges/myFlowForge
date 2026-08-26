@@ -180,6 +180,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  // ★拆成一个稳定的 useCallback,而不是留在 `value` 那个 useMemo 里就地拼 —— setPinned/archive
+  //  两个动作、以及下面 `workspaces:changed` 的订阅都要在成功/收到广播之后拉一遍新列表,
+  //  不能只有 UI 手边那个 `store.refresh()` 能调它。定义提到这个文件前面,好让下面这个订阅
+  //  effect 能直接引用,不用另开一个 effect。
+  const refresh = useCallback(() => setTick((t) => t + 1), [])
+
   // ★先订阅,再拉快照。反过来写就会漏掉两者之间到达的事件 ——
   //  那段空窗正好是「连上的一瞬间」,而代理往往就是在那时候还挂着门。
   useEffect(() => {
@@ -226,11 +232,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ),
       )
     })
+    // ★工作区**列表本身**变了(改名/编辑/导入/归档/恢复/删除/移除 —— 见 `src/main/ipc/handlers.ts`
+    //  逐个 `broadcast(CH.workspacesChanged, {})` 的调用点),不是某个工作区里的会话变了,
+    //  所以走 `refresh()` 重拉一份全量快照,不是像上面 `sessionsChanged` 那样就地 patch。
+    //  这七个调用点全是「人手动做了一件结构性的事」,不是随消息高频触发的事件,重拉的代价可以接受。
+    //  ★不订阅这条的后果:归档/恢复/改名如果发生在**另一台设备**(电脑端窗口、另一部手机)上,
+    //  这台手机的列表永远不会跟上,直到 `tick`/`epoch` 被别的事顺带碰一下才纠正过来。
+    //  老主机没有这条广播 —— 收不到就什么也不做,退化成「等下一次别的原因触发的 refresh」,不会报错。
+    const offWorkspaces = on(CH.workspacesChanged, () => refresh())
     return () => {
       offChat()
       offSessions()
+      offWorkspaces()
     }
-  }, [on, addGate, dropGate])
+  }, [on, addGate, dropGate, refresh])
 
   useEffect(() => {
     if (!online) return
@@ -360,10 +375,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const unread = useUnreadSet(viewing)
   const wsPaths = useMemo(() => groups.map((g) => g.ws.path), [groups])
   const running = useRunningSet(wsPaths)
-
-  // ★拆成一个稳定的 useCallback,而不是留在 `value` 那个 useMemo 里就地拼 —— setPinned/archive
-  //  两个动作也要在成功之后拉一遍新列表,不能只有 UI 手边那个 `store.refresh()` 能调它。
-  const refresh = useCallback(() => setTick((t) => t + 1), [])
 
   const setPinned = useCallback<Store['setPinned']>(
     async (wsPath, pinned) => {

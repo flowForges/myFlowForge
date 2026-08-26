@@ -8,6 +8,7 @@ import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, IconBtn, List, Row, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
+import { useStore } from '../src/data/store'
 
 /**
  * 已归档的工作区 —— 归档后从根屏的会话列表消失,这里是**唯一看得见的回去的路**
@@ -19,6 +20,11 @@ import { useConn } from '../src/net/conn'
 export default function Archived() {
   const c = useC()
   const { online, invoke } = useConn()
+  // ★恢复成功之后不能只重拉**这一屏自己**那份全量列表 —— 根屏读的是 `useStore()` 那份 `groups`
+  //  (已经把归档的过滤掉),它只在 `[online, invoke, epoch, tick]` 变化时重拉一次快照。
+  //  这一屏和它是两份完全独立的状态,不调 `store.refresh()` 去 bump 那个 `tick`,
+  //  这一屏看着「已经恢复」,回到会话列表那台工作区却还是不在 —— 这正是 §7.6 要防的「回不来」。
+  const { refresh: refreshStore } = useStore()
   // null = 还没拉到过;拉到之后哪怕是空数组也不再是 null —— 用来区分「正在读取」和「读到了但是空」。
   const [all, setAll] = useState<WorkspaceMeta[] | null>(null)
   const [err, setErr] = useState<string | null>(null)
@@ -46,9 +52,14 @@ export default function Archived() {
     setErr(null)
     try {
       await invoke(CH.workspaceRestore, [path])
-      // 恢复成功后留在原地、重拉一遍列表 —— 这一行从列表里消失就是看得见的反馈,
+      // 恢复成功后留在原地、重拉一遍**这一屏自己**的列表 —— 这一行从列表里消失就是看得见的反馈,
       // 不用另外弹一句「已恢复」。
       await load()
+      // ★同时把根屏那份 `store` 也捅一下(见上面 `refreshStore` 的注释)——
+      //  不然「回去的路」走到一半又断在半路:归档列表里是消失了,会话列表里却没回来。
+      //  (`store.tsx` 现在也订阅了 `workspaces:changed` 广播,服务端 restore handler 会广播它,
+      //  这一行调用严格说起来是双保险 —— 广播万一因为竞态或老主机而没跟上,这里仍然兜底。)
+      refreshStore()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
