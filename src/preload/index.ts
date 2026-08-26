@@ -123,6 +123,14 @@ const api = {
     ipcRenderer.on(CH.chatEvent, listener)
     return () => ipcRenderer.removeListener(CH.chatEvent, listener)
   },
+  // 跨设备未读:打开一条会话时说一声,主进程广播给所有客户端(含连着的手机)。
+  markChatSeen: (a: { workspacePath: string; sessionId: string }): Promise<void> =>
+    ipcRenderer.invoke(CH.chatMarkSeen, a),
+  onChatSeen: (cb: (e: { workspacePath: string; sessionId: string }) => void) => {
+    const listener = (_: unknown, e: { workspacePath: string; sessionId: string }) => cb(e)
+    ipcRenderer.on(CH.chatSeen, listener)
+    return () => ipcRenderer.removeListener(CH.chatSeen, listener)
+  },
   gitChanges: (cwd: string) => ipcRenderer.invoke(CH.gitChanges, cwd),
   changesMulti: (cwds: string[]) => ipcRenderer.invoke(CH.changesMulti, cwds),
   gitDiff: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitDiff, { cwd, file }),

@@ -81,6 +81,12 @@ export const CH = {
   // 当前还挂着、等用户回答的确认/提问门。和 chatQueueState 同一个用途:聊天视图重新挂载(切会话、离开再
   // 回来、刷新)时,它自己的 React state 是空的,而主进程那些门还阻塞着 —— 必须能把快照拉回来重建卡片。
   chatGateState: 'chat:gate-state',
+  // 跨设备未读(手机端二期)。**无状态、不落盘**:谁打开一条会话就 `chat:mark-seen` 说一声,
+  // 主进程原样广播 `chat:seen`,每个客户端(本机窗口 + 连着的手机)各自清掉自己那份未读。
+  // ★为什么不在服务端记未读:未读的语义是「**你**没在看」,而「你」是每台设备各自的 ——
+  //  服务端要存这个就得先回答「哪台设备算你」,还要落盘、过期。广播这版只说事实、不存状态。
+  chatMarkSeen: 'chat:mark-seen',
+  chatSeen: 'chat:seen',
   chatCancelQueued: 'chat:cancel-queued',
   chatClearQueue: 'chat:clear-queue',
   chatStop: 'chat:stop',

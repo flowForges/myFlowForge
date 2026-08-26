@@ -290,6 +290,11 @@ const table = {
   },
   'chat:send': () => undefined,
   'chat:stop': () => undefined,
+  // 跨设备未读:原样广播回去。真实主进程就是这么做的(handlers.ts 的 chat:mark-seen)。
+  'chat:mark-seen': (a) => {
+    if (!a?.workspacePath || !a?.sessionId) return
+    broadcast('chat:seen', { workspacePath: a.workspacePath, sessionId: a.sessionId })
+  },
   'chat:resolve': (a) => {
     // 脚本 `resolve-fails`:模拟「答门这一刀没送到」。手机上乐观摘掉的卡片必须自己回来。
     if (SCRIPT === 'resolve-fails') throw new Error('这台主机拒绝了这次答门(测试用)')

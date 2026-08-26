@@ -25,7 +25,22 @@ export function useUnread(viewing: Viewing): ReadonlySet<string> {
   }, [])
 
   useEffect(() => {
+    // 跨设备未读:别的设备(手机)打开了某条会话 → 主机广播 chat:seen → 这边也把它清掉。
+    // `?.` 和上面那条同一个理由:preload 换代/测试环境里这个方法可能不存在,而未读只是锦上添花。
+    const off = window.forge.onChatSeen?.((e) => {
+      setUnread(s => (s.size ? clearUnread(s, e.workspacePath, e.sessionId) : s))
+    })
+    return () => { off?.() }
+  }, [])
+
+  useEffect(() => {
     setUnread(s => (s.size ? clearUnread(s, viewing.wsPath, viewing.sessionId) : s))
+    // 反过来也要说一声:本机切到这条会话了 —— 否则手机上那条未读永远不灭。
+    // 首页(两个 id 都空)不上报:那不是「在看某条会话」。
+    // ★载荷是 channel 的形状 {workspacePath,…},Viewing 那边叫 wsPath,不能直接把 viewing 丢进去。
+    if (viewing.wsPath && viewing.sessionId) {
+      void window.forge.markChatSeen?.({ workspacePath: viewing.wsPath, sessionId: viewing.sessionId })
+    }
   }, [viewing.wsPath, viewing.sessionId])
 
   return unread

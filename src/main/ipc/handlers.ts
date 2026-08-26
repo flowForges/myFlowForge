@@ -803,6 +803,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     return snap
   })
+  // 跨设备未读:某个客户端打开了一条会话 → 告诉所有别的客户端「这条被看过了」。
+  // ★纯转发,不留状态:这条 channel 存在的全部理由就是「手机上读了,电脑上那颗圆点也该灭」。
+  //  空 workspacePath / sessionId 直接丢掉 —— 切主机那一瞬客户端的 viewing 就是两个空串,
+  //  广播出去每台设备都会拿空 key 去 clearUnread,虽然无害但是一条纯噪音。
+  on(CH.chatMarkSeen, (_e, a: { workspacePath: string; sessionId: string }) => {
+    if (!a?.workspacePath || !a?.sessionId) return
+    broadcast(CH.chatSeen, { workspacePath: a.workspacePath, sessionId: a.sessionId })
+  })
   on(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
   on(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
   // 「停止」只停当前【会话】的轮次 + 它派发的后台 delegate 子代理 + 它挂起的门(confirm/ask),不动同工作区里

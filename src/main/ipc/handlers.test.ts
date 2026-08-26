@@ -208,6 +208,26 @@ describe('registerIpc broadcast wiring', () => {
     expect((replay[replay.length - 1][1] as any).file.sessions[0]).toHaveProperty('lastMessageAt')
   })
 
+  it('chat:mark-seen 原样广播成 chat:seen(无状态,不落盘)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const sent: [string, unknown][] = []
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = calls.find((c: any[]) => c[0] === CH.chatMarkSeen)![1]
+    handler({}, { workspacePath: '/w/a', sessionId: 's1' })
+    expect(sent).toEqual([[CH.chatSeen, { workspacePath: '/w/a', sessionId: 's1' }]])
+  })
+
+  it('chat:mark-seen 缺工作区或会话时什么也不广播(别把一条空的「已读」发给所有人)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const sent: [string, unknown][] = []
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = calls.find((c: any[]) => c[0] === CH.chatMarkSeen)![1]
+    // 手机端的 viewing 在换主机那一瞬就是 {wsPath:'', sessionId:''},这条用例是真会发生的。
+    handler({}, { workspacePath: '', sessionId: 's1' })
+    handler({}, { workspacePath: '/w/a', sessionId: '' })
+    expect(sent).toEqual([])
+  })
+
   it('broadcasts settingsChanged and calls onSettings when settings are written', async () => {
     const { registerIpc } = await import('./handlers')
     const sent: [string, unknown][] = []
