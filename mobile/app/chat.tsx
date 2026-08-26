@@ -334,6 +334,16 @@ export default function Chat() {
             onAllow={() => void answer('allow')}
             onDeny={() => void answer('deny')}
             onOpen={() => router.push({ pathname: '/gate', params: { id: gate.id } })}
+            // ★「按允许之前你想看的就是它改了什么」—— 变更页带着门 id 推进去,那一屏会把这道门
+            //  原样钉在底下,看完就地答,不用再退回这里找。选择题门不摆:那种门问的是「选哪个方案」,
+            //  diff 帮不上忙。
+            onPeek={
+              gate.kind === 'confirm'
+                ? () => router.push({ pathname: '/exec', params: { gate: gate.id } })
+                : undefined
+            }
+            // ★`goBack()` 而不是 `router.push('/')`,理由同上面那条注释:push 永远是追加。
+            onList={() => goBack()}
           />
         </View>
       ) : null}

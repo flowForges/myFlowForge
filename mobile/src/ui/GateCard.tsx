@@ -36,6 +36,8 @@ export function GateCard({
   onAllow,
   onDeny,
   onOpen,
+  onPeek,
+  onList,
 }: {
   gate: Gate
   index: number
@@ -48,6 +50,17 @@ export function GateCard({
   onAllow: () => void
   onDeny: () => void
   onOpen: () => void
+  /**
+   * 去看这道门要放行的**变更**。不给就不摆这颗按钮(选择题门那一支不摆 —— 那种门问的是
+   * 「选哪个方案」,不是「敢不敢让它动文件」,diff 帮不上忙;变更页自己钉住这道门时也不给,
+   * 人已经在变更页上了)。
+   *
+   * ★为什么必须有这颗:`exec.tsx` 的文件头写着「变更是『敢不敢让它继续』的唯一依据」,
+   *  可从门到变更页原本**没有路** —— 要看得先记住这道门、退出去、点顶栏 📄、再找回来。
+   */
+  onPeek?: () => void
+  /** 回会话列表。`门 1 / 3` 那个编号本身翻不了页,列表是最省事的翻页方式(见下面那条窄条)。 */
+  onList?: () => void
 }) {
   const c = useC()
   const waited = useWaited(gate.since)
@@ -85,6 +98,24 @@ export function GateCard({
             </T>
           </View>
           <View style={st.acts}>
+            {onPeek ? (
+              <Pressable
+                onPress={onPeek}
+                // 断线时变更是读不回来的(变更页现读服务端),所以这颗跟着一起禁 ——
+                // 让它亮着等于承诺一屏点开是空的。顶栏那颗 📄 也是同一个门槛。
+                disabled={!online}
+                style={({ pressed }) => [
+                  st.btn,
+                  // ★次要样式,和「拒绝」同级:这颗不能和「允许执行」争视觉重量。
+                  st.peek,
+                  { backgroundColor: c.onGate14 },
+                  pressed && { opacity: 0.75 },
+                  !online && { opacity: 0.4 },
+                ]}
+              >
+                <T style={[st.btnText, { color: c.onGate }]}>👁 看看</T>
+              </Pressable>
+            ) : null}
             <Pressable
               onPress={onDeny}
               disabled={!online}
@@ -133,6 +164,15 @@ export function GateCard({
           </View>
         </Pressable>
       )}
+      {/* ★`门 1 / 3` 那个编号**跳不过去** —— 它只是个数字,点不动也翻不了页。
+          回列表是最省事的翻页方式:列表本来就把所有挂着的门全列着,而且带工作区上下文。
+          低对比度窄条,排在断线横幅**上面**(横幅永远是卡片最后一行)。 */}
+      {total > 1 && onList ? (
+        <Pressable onPress={onList} style={[st.more, { backgroundColor: c.onGate12 }]}>
+          <T style={{ fontSize: 11.5, color: c.onGate }}>还有 {total - 1} 道门在等</T>
+          <T style={{ fontSize: 11.5, color: c.onGate, marginLeft: 'auto' }}>回列表 ›</T>
+        </Pressable>
+      ) : null}
       {!online ? (
         <View style={[st.offline, { backgroundColor: c.onGate12 }]}>
           <T style={{ fontSize: 11.5, color: c.onGate }}>未连接 · 答不了。恢复连接后这道门还在。</T>
@@ -152,6 +192,11 @@ const st = StyleSheet.create({
   meta: { marginTop: 7, fontSize: 11.5, lineHeight: 18, opacity: 0.82 },
   acts: { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingBottom: 10 },
   btn: { flex: 1, minHeight: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  // ★三颗按钮各占 `flex: 1` 时,390px 上「允许执行」会被挤到只剩两个字宽 —— 主动作反而最窄。
+  //  所以「看看」退出等分:`flex: 0` 在 Yoga 里就是 `0 0 auto`(按内容宽),剩下的宽度
+  //  仍旧由「拒绝」和「允许执行」两颗对半分。
+  peek: { flex: 0, paddingHorizontal: 14 },
   btnText: { fontSize: 15, fontWeight: '700' },
+  more: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 8 },
   offline: { paddingHorizontal: 13, paddingVertical: 7 },
 })

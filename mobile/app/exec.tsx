@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
+import { useLocalSearchParams } from 'expo-router'
 import { goBack } from '../src/nav'
 import type { DiffLine } from '../../src/shared/types'
 import { MONO, useC } from '../src/theme/theme'
 import { Empty, Field, IconBtn, List, Note, Row, Sec, T, Tabs, TopBar, TopTitle } from '../src/ui/kit'
+import { GateCard } from '../src/ui/GateCard'
 import { crumbs, filterEntries, listDir, numberLines, parentOf, type Entry } from '../src/ui/fileTree'
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
@@ -21,6 +23,9 @@ import { useFiles } from '../src/data/useFiles'
  * ★整屏推入(右上角进,左上角返回),不是底部上滑 —— 原型 B 版被否掉的正是那个看不见的手势。
  * ★**只读**。手机上不提交、不回滚、不写文件。
  */
+
+/** `useLocalSearchParams()` 的值可能是数组(同名参数出现两次)。取第一个就够。 */
+const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''))
 
 type Pane = 'changes' | 'files'
 /** 打开的那个文件,以及现在看的是全文还是变更。原型 `v-file` 右上角那个图标就是切这个的。 */
@@ -54,10 +59,28 @@ function CodeLines({
 export default function Exec() {
   const c = useC()
   const { online } = useConn()
-  const { selected, wsName } = useStore()
+  const { selected, wsName, sessionTitle, gates, answerGate } = useStore()
   const { groups, total, loading, error, diff } = useChanges(selected?.wsPath ?? null)
   const [pane, setPane] = useState<Pane>('changes')
   const [open, setOpen] = useState<Open | null>(null)
+
+  // ── 从门上「👁 看看」推进来的那道门 ─────────────────────────────────────
+  // 带 `?gate=<id>` 进来就把那道门原样钉在这一屏底下:人是为了「按允许之前先看看它改了什么」
+  // 才来的,看完就地答,不用再退回对话屏把门找一遍。
+  const { gate: gateParam } = useLocalSearchParams<{ gate?: string }>()
+  const gateId = one(gateParam)
+  const pinned = useMemo(() => (gateId ? (gates.find((g) => g.id === gateId) ?? null) : null), [gates, gateId])
+  const [gateErr, setGateErr] = useState<string | null>(null)
+
+  const answerPinned = async (decision: 'allow' | 'deny') => {
+    if (!pinned) return
+    try {
+      await answerGate(pinned, { decision })
+      goBack()
+    } catch (e) {
+      setGateErr(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   // 打开的那个文件的两种内容。切 tab 时**各自缓存**,来回切不重新请求。
   const [lines, setLines] = useState<DiffLine[] | null>(null)
@@ -118,6 +141,9 @@ export default function Exec() {
   }, [open])
 
   // ── 打开了一个文件:全文 / 变更两屏 ───────────────────────────────────
+  // ★这一支**不画钉住的门**:整屏都是代码,门是全屏唯一的实底彩色块,两个挤一起只会互相打架
+  //  (而且这一屏横竖两层 ScrollView,底下再压一条会把可读的行数吃掉一截)。
+  //  左上角 ‹ 退回文件列表,门就又在了。
   if (open) {
     const view = numberLines(code?.text ?? '')
     return (
@@ -344,6 +370,36 @@ export default function Exec() {
           </ScrollView>
         </View>
       )}
+
+      {/* ── 钉住的门:和对话屏同一个位置(整屏最底下、ScrollView 外面) ────────── */}
+      {/* ★也**不参与滚动**。它是全屏唯一的实底彩色块,滚走了这颗「看看」就白点了。 */}
+      {gateId ? (
+        // ★`marginTop: 'auto'` 是因为这一屏的几个空态(未连接 / 先选一个会话 / 工作树是干净的)
+        //  都不撑满高度 —— 不推到底,门会吊在半空中跟着空态文案走。ScrollView 自带 flexGrow,
+        //  有内容那几支照旧被撑到底,这行不生效。
+        <View style={{ marginTop: 'auto', paddingHorizontal: 10, paddingBottom: 10, backgroundColor: c.bg }}>
+          {pinned ? (
+            <>
+              {gateErr ? <T style={{ fontSize: 12, color: c.err, paddingBottom: 6 }}>{gateErr}</T> : null}
+              <GateCard
+                gate={pinned}
+                index={Math.max(0, gates.findIndex((g) => g.id === pinned.id))}
+                total={gates.length}
+                online={online}
+                where={`${wsName(pinned.wsPath)} · ${sessionTitle(pinned.wsPath, pinned.sessionId)}`}
+                onAllow={() => void answerPinned('allow')}
+                onDeny={() => void answerPinned('deny')}
+                // 已经在变更页上了,没有「再去看看」这回事。
+                onOpen={() => goBack()}
+              />
+            </>
+          ) : (
+            // ★门在你看 diff 的这会儿被别的设备答掉了 —— 这不是错误,但也不能就这么让卡片消失:
+            //  原地什么都不留,人会以为是自己点错了、或者以为这一屏本来就没门。
+            <Note>那道门已经被答掉了(可能是在电脑上)。</Note>
+          )}
+        </View>
+      ) : null}
     </View>
   )
 }
