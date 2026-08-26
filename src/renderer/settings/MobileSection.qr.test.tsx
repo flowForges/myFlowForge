@@ -64,3 +64,28 @@ describe('配对二维码', () => {
     expect(screen.queryByText('显示配对二维码')).toBeNull()
   })
 })
+
+describe('「我手机连上没有」', () => {
+  it('★答案在开关旁边,不在二维码底下 —— 而且是**没展开二维码时**就看得见', async () => {
+    await mount({ ...RUNNING, clients: 1 })
+    // 二维码还折着
+    expect(document.querySelector('svg.qr')).toBeNull()
+    const live = document.querySelector('.hosts-live')!
+    expect(live.textContent).toContain('现在连着')
+    expect(live.textContent).toContain('1')
+    expect(live.className).toContain('on')
+  })
+
+  it('没有设备连着时说的是「在哪个地址上等着」,不是干巴巴一个 0', async () => {
+    await mount({ ...RUNNING, clients: 0 })
+    const live = document.querySelector('.hosts-live')!
+    expect(live.textContent).toContain('192.168.110.133:6789')
+    expect(live.textContent).toContain('还没有设备连上来')
+    expect(live.className).not.toContain('on')
+  })
+
+  it('网关关着就没有这条 —— 关着的时候「0 台设备」是废话', async () => {
+    await mount({ ...RUNNING, running: false })
+    expect(document.querySelector('.hosts-live')).toBeNull()
+  })
+})

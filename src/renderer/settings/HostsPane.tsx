@@ -87,30 +87,47 @@ export function HostsPane() {
 
   return (
     <div className="hosts-pane">
-      <div className={`hosts-status ${desc.tone}`}>
-        <span className="dot" />
-        <div className="grow">
-          <div className="who">{status?.label ?? '本机'}</div>
-          <div className="sub">{desc.text}</div>
+      {/* ★这一屏里装着**方向相反**的两件事,而且两件都叫「连接」:
+          ①「你在哪台机器上干活」(这张卡 + 下面的主机列表)—— 这台电脑**连出去**;
+          ②「谁能连到这台电脑」(手机端那一节)—— 别的设备**连进来**。
+          放一起是因为两者共用同一套概念(地址 / 令牌 / 谁连着谁),分开只会让人两处找。
+          ★但**必须把话说出来**:第一版三节并排、只有「手机端」三个字贴在状态卡屁股底下,
+          用户第一句话就是「本机是灰的,底下这个手机端是什么意思」。 */}
+      <div className="set-group">
+        <h4>你在哪台机器上干活</h4>
+        <div className={`hosts-status ${desc.tone}`}>
+          <span className="dot" />
+          <div className="grow">
+            <div className="who">{status?.label ?? '本机'}</div>
+            <div className="sub">{desc.text}</div>
+          </div>
+          {connectedId && (
+            <button className="set-btn" disabled={busy} onClick={() => run(() => window.forge.hostsDisconnect())}>
+              回到本机
+            </button>
+          )}
         </div>
-        {connectedId && (
-          <button className="set-btn" disabled={busy} onClick={() => run(() => window.forge.hostsDisconnect())}>
-            回到本机
-          </button>
-        )}
+        {/* ★灰着**不是**出问题了。而且手机连进来也不会让它变色 —— 那是反方向的事,
+            说不清楚的话,人会以为手机没连上。 */}
+        <p className="set-desc">
+          灰的就是正常的:你没有切到任何远程主机,看到的会话、工作区、运行都是这台电脑上的。
+          手机连进来<b>不会</b>让这里变色 —— 那是反方向的事,看下面那一节。
+        </p>
       </div>
 
       {err && <p className="set-desc" style={{ color: 'var(--err)' }}>{err}</p>}
 
-      {/* 这一屏的另一半:上面是「这台机器连出去」,这里是「别的设备连进来」。放一起是因为
-          两者共用同一套概念(地址 / 令牌 / 谁连着谁),分开只会让人两处找。 */}
       <div className="set-group">
-        <h4>手机端</h4>
+        <h4>手机端 · 别的设备连进来</h4>
+        <p className="set-desc">
+          让手机上的 myFlowForge 连到<b>这台电脑</b>,在手机上看这里的会话、答这里的权限门。
+          和上面那一节是反的:那边是你连出去,这边是别人连进来。
+        </p>
         <MobileSection />
       </div>
 
       <div className="set-group">
-        <h4>主机</h4>
+        <h4>远程主机 · 这台电脑连出去</h4>
         <p className="set-desc">
           每台跑着 myFlowForge 的机器就是一台主机。切到哪台,就只看到哪台的会话、工作区和运行。
           外观、宠物、字体这些跟着你这台设备走,不会因为切换而改变。

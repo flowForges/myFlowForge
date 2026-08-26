@@ -103,6 +103,20 @@ export function MobileSection() {
       {/* ★起失败要说出来。开关拨过去了却什么也没在听,是最难查的一类 —— 端口被占最常见。 */}
       {st.error && <p className="hosts-formerr">没能启动:{st.error}</p>}
 
+      {/* ★「我手机到底连上没有」的答案必须在**开关旁边**。
+          第一版这句话埋在二维码下面,用户手机连上了、翻到这一屏,看见的是一张灰的「本机」卡,
+          于是问「本机是灰的,这是什么意思」—— 唯一的证据滚在视野之外。 */}
+      {st.running && (
+        <div className={`hosts-live ${st.clients > 0 ? 'on' : ''}`}>
+          <span className="dot" />
+          <span>
+            {st.clients > 0
+              ? <>现在连着 <b>{st.clients}</b> 台设备</>
+              : <>在 <b>{addr}</b> 上等着,还没有设备连上来</>}
+          </span>
+        </div>
+      )}
+
       <div className="proj-field hosts-port">
         <label htmlFor="mobPort">端口</label>
         <input
@@ -169,15 +183,14 @@ export function MobileSection() {
             )}
           </div>
 
-          <div className="hosts-conn-foot">
-            <span className="set-desc">当前连着 <b>{st.clients}</b> 台设备</span>
-            {st.token && (
+          {st.token && (
+            <div className="hosts-conn-foot">
               <button className="set-btn danger" disabled={busy} onClick={() => void window.forge.mobileRegenToken().then(setSt)}>
                 换一把令牌
               </button>
-            )}
-          </div>
-          {st.token && <p className="set-desc">令牌泄了就换一把 —— 换完已配好的手机要重新填一次。</p>}
+              <span className="set-desc">令牌泄了就换 —— 换完已配好的手机要重新填一次。</span>
+            </div>
+          )}
 
           <p className="set-desc">
             手机和这台电脑要在<b>同一个网络</b>里。公司 guest 网基本都开客户端隔离,连不通;

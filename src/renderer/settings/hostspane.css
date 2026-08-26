@@ -87,3 +87,17 @@
 .hosts-qr .qr { flex: 0 0 auto; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px var(--border); }
 .hosts-qr-say { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .hosts-qr-say .set-desc { margin-top: 0; }
+
+/* 「现在有没有设备连着」。★这条不是装饰:它是「我手机连上没有」的唯一答案,
+   所以必须在开关旁边,而不是在二维码底下。灰=在等,绿=真的有人连着。 */
+.hosts-live { display: flex; align-items: center; gap: 8px; margin: 14px 0 16px;
+  padding: 8px 11px; border-radius: 9px; font-size: 12.5px; color: var(--fg-2);
+  border: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 40%, transparent); }
+.hosts-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.hosts-live b { color: var(--fg); font-family: var(--mono); }
+.hosts-live.on { color: var(--fg); border-color: color-mix(in oklch, var(--ok) 40%, transparent); }
+.hosts-live.on .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in oklch, var(--ok) 20%, transparent); }
+
+/* 状态卡和它的说明之间要留一口气 —— 不然「手机端」那个小标题贴在卡屁股底下,
+   看起来像卡片的说明文字(用户第一句话问的就是这个)。 */
+.hosts-pane .hosts-status + .set-desc { margin-top: 10px; }
