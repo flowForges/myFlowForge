@@ -14,6 +14,11 @@ import { fileURLToPath } from 'node:url'
 const IDENTIFY_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '.out', 'last-identify.txt')
 try { fs.mkdirSync(path.dirname(IDENTIFY_FILE), { recursive: true }) } catch { /* 已存在 */ }
 try { fs.rmSync(IDENTIFY_FILE, { force: true }) } catch { /* 没有就算了 */ }
+/* 手机每报一次「这条会话我看过了」就往这儿追加一行。
+   ★为什么要落成文件:上报是**发出去**的东西,浏览器里一点痕迹都不留 ——
+   不记下来的话,「一轮在你开着页面时跑完,手机有没有吭声」这件事在 e2e 里根本观测不到。 */
+const SEEN_LOG = path.join(path.dirname(IDENTIFY_FILE), 'mark-seen.log')
+try { fs.rmSync(SEEN_LOG, { force: true }) } catch { /* 没有就算了 */ }
 
 const PORT = Number(process.argv[2] || 6799)
 const SCRIPT = process.argv[3] || 'gate-confirm'
@@ -293,6 +298,8 @@ const table = {
   // 跨设备未读:原样广播回去。真实主进程就是这么做的(handlers.ts 的 chat:mark-seen)。
   'chat:mark-seen': (a) => {
     if (!a?.workspacePath || !a?.sessionId) return
+    // 落一行档,`e2e/unread.mjs` 靠它验「手机到底吭没吭声」。
+    try { fs.appendFileSync(SEEN_LOG, `${a.workspacePath} ${a.sessionId}\n`) } catch { /* 测试辅助 */ }
     broadcast('chat:seen', { workspacePath: a.workspacePath, sessionId: a.sessionId })
   },
   'chat:resolve': (a) => {
@@ -407,6 +414,18 @@ process.stdin.on('data', (b) => {
     const [cmd, ...rest] = line.trim().split(' ')
     if (cmd === 'confirm') raiseConfirm({ wsPath: WS_A, sessionId: 's-a1', id: 'g-' + Date.now(), title: 'Bash 请求执行', where: rest.join(' ') || 'rm -rf build/' })
     if (cmd === 'resolve') resolveGate(rest[0])
+    // 一轮跑完(`finish <sessionId>`)。未读**只在终态那一刻**产生,所以要能按需造一个终态。
+    if (cmd === 'finish') {
+      const sid = rest[0] || 's-a2'
+      broadcast('chat:event', {
+        workspacePath: WS_A, sessionId: sid, type: 'done',
+        message: { id: 'fin-' + Date.now(), who: 'ai', text: '跑完了。', ts: '00:00' },
+      })
+    }
+    // ★**别的设备**说「这条看过了」(`seen <sessionId>`)。
+    //  这条是手动播的、不经过 `chat:mark-seen` —— 必须如此:走那条路的话广播是手机自己
+    //  触发的回声,验不出「收到别人的通知会不会清」这件事,而那正是跨设备未读的另一半。
+    if (cmd === 'seen') broadcast('chat:seen', { workspacePath: WS_A, sessionId: rest[0] || 's-a2' })
     // 工具卡的**实时**那一路:先 start(只有标题,status 'run'),再 done(带 output 和结果)。
     // 两帧的 tool.id 相同 —— 手机端必须原地替换,不能追加成两张卡。
     if (cmd === 'tools') {
