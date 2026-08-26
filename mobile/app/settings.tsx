@@ -6,10 +6,10 @@ import { useC, useTheme } from '../src/theme/theme'
 import { Btn, IconBtn, List, LiveDot, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
 import { CLIENT_VERSION, useConn } from '../src/net/conn'
-import { DEFAULT_HOST_ICON } from '../src/net/hosts'
-// 一句人话的连接状态。★和 `app/hosts.tsx` 共用同一份 —— 两屏说同一台机器的状态,
+// 状态那句话和主机行下面那行小字都和 `app/hosts.tsx` 共用同一份 —— 两屏说同一台机器,
 // 说法必须一个字都不差,否则人只会觉得其中一屏在骗他。
-import { describeHostState } from '../src/net/hostStatusText'
+import { describeHostState, hostSubtitle } from '../src/net/hostStatusText'
+import { HostIcon } from '../src/ui/HostIcon'
 import { clearLocalData } from '../src/data/localData'
 import type { TextSize, ThemePref } from '../src/data/prefs'
 
@@ -40,20 +40,31 @@ const TEXTS: { id: TextSize; label: string; desc: string }[] = [
 export default function Settings() {
   const c = useC()
   const { pref, setPref, text, setText } = useTheme()
-  const { hosts, activeHost, state, selectHost } = useConn()
+  const { hosts, activeHost, state, selectHost, forgetAll } = useConn()
   const [themeSheet, setThemeSheet] = useState(false)
   const [textSheet, setTextSheet] = useState(false)
+  const [wipeErr, setWipeErr] = useState<string | null>(null)
 
   const d = describeHostState(state)
   const others = hosts.filter((h) => h.id !== activeHost?.id)
 
   const clear = () => {
     const go = async () => {
-      await clearLocalData()
-      // 内存里那份也得跟着空掉,不然界面上还挂着一台已经没有令牌的主机。
-      await selectHost(null)
-      // 回根屏:这一屏说的每一样东西都不存在了,留在原地看着的是一屏幻觉。
-      router.replace('/')
+      setWipeErr(null)
+      try {
+        await clearLocalData()
+        // ★内存里那份也必须一起忘掉,**不能**只 `selectHost(null)`:那个只置空 activeId,
+        //  `hosts`(连令牌)还在 state 里 —— 「其他主机」照样列着每一台、点一下就连上去了,
+        //  而下一次 addHost 会把这份「已经清掉」的清单原样写回磁盘。
+        forgetAll()
+        // 回根屏:这一屏说的每一样东西都不存在了,留在原地看着的是一屏幻觉。
+        router.replace('/')
+      } catch (e) {
+        // ★这是整屏最有后果的一个动作,失败必须说出来。原来是个光秃秃的 `void go()`:
+        //  存储抛了就什么都不发生 —— 对话框关掉、界面不动、令牌还在,而人以为清干净了,
+        //  然后把手机借出去。宁可留一句刺眼的红字,也不能让它无声失败。
+        setWipeErr(`没能清干净:${e instanceof Error ? e.message : String(e)}。令牌可能还留在这台手机上,再试一次。`)
+      }
     }
     const msg = '主机清单和令牌都存在这台手机上。清掉之后要重新扫码配对。'
     if (Platform.OS === 'web') {
@@ -87,11 +98,8 @@ export default function Settings() {
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
                   <LiveDot tone={d.tone === 'idle' ? 'off' : d.tone} />
                   <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, flexShrink: 1 }}>
-                    {/* 连上了报地址和对面版本;没连上就报**为什么** —— 这一行是断线时
-                        屏幕上唯一说明原因的地方,写成一句「未连接」等于什么也没说。 */}
-                    {d.tone === 'ok'
-                      ? `${activeHost.url.replace(/^wss?:\/\//, '')} · ${state?.status === 'ready' ? state.version : ''}`
-                      : d.text}
+                    {/* 连上了报地址和对面版本;没连上就报**为什么**。★和主机屏同一份实现。 */}
+                    {hostSubtitle(activeHost.url, state, true)}
                   </T>
                 </View>
               </View>
@@ -113,9 +121,11 @@ export default function Settings() {
           )}
         </List>
 
+        {/* ★其他主机**不另起一个 `<Sec>`**:设计文档 §7.2 只有三组,而分组头是这一屏唯一的
+            结构信号 —— 多一个头就是屏幕上有四组,人会去数「哪三组才是那三组」。
+            这些行接着上面那张卡往下排,靠 LiveDot / 断开 / `›` 自己区分当前和其他。 */}
         {others.length > 0 ? (
           <>
-            <Sec>其他主机</Sec>
             <List>
               {others.map((h) => (
                 // 点即切。★不弹确认:切主机是可逆的(再点回来就行),而多一步确认会让
@@ -127,7 +137,7 @@ export default function Settings() {
                       {h.label}
                     </T>
                     <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
-                      {h.url.replace(/^wss?:\/\//, '')}
+                      {hostSubtitle(h.url, null, false)}
                     </T>
                   </View>
                   <T style={{ fontSize: 16, color: c.faint }}>›</T>
@@ -176,6 +186,21 @@ export default function Settings() {
             上面最近的一个可点的东西是「版本号」那一行(它根本不可点)。 */}
         <View style={{ height: 24 }} />
         <List>
+          {/* ★提示就在按钮上面一行(和 add-host 同一个位置)。挪到页顶去的话,
+              点完按钮什么都没变、而唯一的说明在视野外 —— 那就是「点了没反应」。 */}
+          {wipeErr ? (
+            <View
+              style={{
+                padding: 11,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: c.permFullBorder,
+                backgroundColor: c.bg2,
+              }}
+            >
+              <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{wipeErr}</T>
+            </View>
+          ) : null}
           <Btn kind="danger" block onPress={clear}>
             清除本地数据
           </Btn>
@@ -225,26 +250,6 @@ export default function Settings() {
   )
 }
 
-function HostIcon({ icon }: { icon: string }) {
-  const c = useC()
-  return (
-    <View
-      style={{
-        width: 34,
-        height: 34,
-        borderRadius: 10,
-        backgroundColor: c.bg2,
-        borderWidth: 1,
-        borderColor: c.border2,
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <T style={{ fontSize: 16 }}>{icon || DEFAULT_HOST_ICON}</T>
-    </View>
-  )
-}
-
 /** 一行「名字 —— 当前值 ›」,点开一个 sheet 选。 */
 function Pick({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
   const c = useC()
@@ -278,7 +283,9 @@ function Opt({
           {desc}
         </T>
       </View>
-      {on ? <T style={{ color: c.accent }}>✓</T> : null}
+      {/* ★把字号写出来:裸 `<T>` 会落到 RN 的默认 14,于是「小」和「大」两档下
+          全屏只有这个勾一动不动 —— 缩放要么整屏一起,要么就是坏的。 */}
+      {on ? <T style={{ fontSize: 15, color: c.accent }}>✓</T> : null}
     </Row>
   )
 }

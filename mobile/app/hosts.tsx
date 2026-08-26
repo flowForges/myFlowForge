@@ -4,10 +4,11 @@ import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, IconBtn, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
-import { DEFAULT_HOST_ICON, type MobileHost } from '../src/net/hosts'
+import { type MobileHost } from '../src/net/hosts'
 import { useStore } from '../src/data/store'
 // 一句人话的连接状态。★这一份和设置屏共用同一个实现,别在任何一边抄第二遍 —— 见该文件注释。
-import { describeHostState } from '../src/net/hostStatusText'
+import { describeHostState, hostSubtitle } from '../src/net/hostStatusText'
+import { HostIcon } from '../src/ui/HostIcon'
 
 export default function Hosts() {
   const c = useC()
@@ -52,20 +53,7 @@ export default function Hosts() {
                 const gateN = active ? gates.length : 0
                 return (
                   <Row key={h.id} onPress={() => void selectHost(h.id)}>
-                    <View
-                      style={{
-                        width: 34,
-                        height: 34,
-                        borderRadius: 10,
-                        backgroundColor: c.bg2,
-                        borderWidth: 1,
-                        borderColor: c.border2,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <T style={{ fontSize: 16 }}>{h.icon || DEFAULT_HOST_ICON}</T>
-                    </View>
+                    <HostIcon icon={h.icon} />
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
                         {h.label}
@@ -73,13 +61,8 @@ export default function Hosts() {
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
                         {active && <LiveDot tone={st.tone === 'idle' ? 'off' : st.tone} />}
                         <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, flexShrink: 1 }}>
-                          {/* 连上了就报地址和对面版本;没连上就报**为什么没连上** ——
-                              那时「已连接」右边那枚 pill 已经不在了,这一行才是唯一的信息。 */}
-                          {active && st.tone === 'ok'
-                            ? `${h.url.replace(/^wss?:\/\//, '')} · ${state?.status === 'ready' ? state.version : ''}`
-                            : active
-                              ? st.text
-                              : h.url.replace(/^wss?:\/\//, '')}
+                          {/* 连上了报地址和对面版本;没连上报**为什么**。★和设置屏同一份实现。 */}
+                          {hostSubtitle(h.url, state, active)}
                         </T>
                       </View>
                     </View>

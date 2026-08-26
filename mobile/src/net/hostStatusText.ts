@@ -28,3 +28,19 @@ export function describeHostState(s: HostState | null): HostStatusText {
       return { text: '未连接', tone: 'idle' }
   }
 }
+
+/**
+ * 主机行下面那一行小字。**两屏共用同一句**(`app/hosts.tsx` / `app/settings.tsx`)。
+ *
+ * 三种情况,刻意分开:
+ *  - **不是当前这台**:只报地址。它根本没有连接状态,写「未连接」会让人以为它刚断线。
+ *  - **当前这台 · 连上了**:地址 · 对面版本。版本对不上是「功能突然置灰」最常见的原因。
+ *  - **当前这台 · 没连上**:报**为什么**。那时右边那枚「已连接」pill 已经不在了,
+ *    这一行是屏幕上唯一说明原因的地方,写成一句「未连接」等于什么也没说。
+ */
+export function hostSubtitle(url: string, s: HostState | null, active: boolean): string {
+  const addr = url.replace(/^wss?:\/\//, '')
+  if (!active) return addr
+  if (s?.status === 'ready') return `${addr} · ${s.version}`
+  return describeHostState(s).text
+}

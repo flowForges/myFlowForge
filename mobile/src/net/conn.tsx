@@ -43,6 +43,15 @@ export type Conn = {
   selectHost: (id: string | null) => Promise<void>
   /** 手动重连(failed 之后不会自动重试) */
   reconnect: () => void
+  /**
+   * 把内存里记着的主机**全部**忘掉。「清除本地数据」专用。
+   *
+   * ★为什么不是 `selectHost(null)` 就够:那个只把 `activeId` 置空,`hosts`(**连令牌一起**)
+   *  还原封不动躺在 state 里。于是清完之后设置屏的「其他主机」照样列着每一台,点一下就用
+   *  内存里的令牌连上去了;更糟的是接下来任何一次 `addHost` 会走
+   *  `saveHosts([...hosts, 新的])` —— 把那份「已经清掉」的清单连令牌一起**写回磁盘**。
+   */
+  forgetAll: () => void
   /** 切主机时递增。视图拿它当 key,强制把上一台机器的工作区/会话全部丢掉。 */
   epoch: number
 }
@@ -165,6 +174,20 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
 
   const reconnect = useCallback(() => setAttemptKey((k) => k + 1), [])
 
+  const forgetAll = useCallback(() => {
+    // ★**只动内存,一个字节都不写盘。** 磁盘那份由 `clearLocalData()` 负责清;
+    //  这里再调一次 saveHosts/saveActiveHostId 是危险的 —— 中间只要有一次是拿旧 state
+    //  拼出来的,写回去的就是那份本该消失的清单(带令牌)。少写一次永远比写错一次安全。
+    setHosts([])
+    setActiveId(null)
+    // 连接的 effect 会因为 activeHost 变 null 自己把状态收干净;这里先置空是为了这一帧就别再
+    // 显示「已连接」——「清除」之后界面上还挂着一枚绿点,那是最难解释的一种残留。
+    setState(null)
+    // ★epoch 必须跟着跳:所有拿它当 key 的视图(会话、变更、终端)得整个丢掉重来,
+    //  否则上一台机器的内容会留在屏幕上,看着像是没清干净。
+    setEpoch((e) => e + 1)
+  }, [])
+
   const value = useMemo<Conn>(
     () => ({
       hosts,
@@ -179,9 +202,10 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       removeHost,
       selectHost,
       reconnect,
+      forgetAll,
       epoch,
     }),
-    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, selectHost, reconnect, epoch],
+    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, selectHost, reconnect, forgetAll, epoch],
   )
 
   return <ConnCtx.Provider value={value}>{children}</ConnCtx.Provider>

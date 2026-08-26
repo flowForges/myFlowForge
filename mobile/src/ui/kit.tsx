@@ -317,7 +317,25 @@ export function Chip({
 
 export function Field(props: React.ComponentProps<typeof TextInput> & { invalid?: boolean }) {
   const c = useC()
+  const { scale } = useTheme()
   const { style, invalid, ...rest } = props
+  // ★`TextInput` 不是 `Text`,走不到 `T` 那一层,而它的字号写死在 `s.field` 里(15)。
+  //  不在这儿补一刀的话,「大」档下**你正在打的那行字**是全 app 唯一没变大的文字 ——
+  //  一个只放大别人不放大你自己输入的字号设置,看着就像是坏的。
+  //
+  //  ★算的是**最终生效的那个** fontSize:先把 `s.field` 和调用方传进来的 style 一起拍平
+  //  (`exec.tsx` 的文件过滤框自己写了 `fontSize: 14`,`chat.tsx` 的输入框写了
+  //  `minHeight: 44 / maxHeight: 108`),再把拍平后的值乘上去,并且**放在数组最后**覆盖回去。
+  //  这样调用方的 14 仍然赢过默认的 15,只是跟着一起缩放;高度那些约束一个字没动。
+  // 显式标成 TextStyle:不标的话 flatten 推成「s.field 的字面量类型 | TextStyle」的联合,
+  // 而字面量那一半没有 lineHeight 字段,读它 TS 直接报错。
+  const flat: TextStyle | null = scale === 1 ? null : StyleSheet.flatten([s.field, style])
+  const scaled = flat
+    ? {
+        ...(typeof flat.fontSize === 'number' ? { fontSize: flat.fontSize * scale } : null),
+        ...(typeof flat.lineHeight === 'number' ? { lineHeight: flat.lineHeight * scale } : null),
+      }
+    : null
   return (
     <TextInput
       placeholderTextColor={c.faint}
@@ -326,6 +344,7 @@ export function Field(props: React.ComponentProps<typeof TextInput> & { invalid?
         s.field,
         { backgroundColor: c.bg2, borderColor: invalid ? c.err : c.border2, color: c.fg },
         style,
+        scaled,
       ]}
     />
   )
