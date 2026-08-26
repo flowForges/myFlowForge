@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../src/main/ipc/channels'
@@ -7,10 +7,11 @@ import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, IconBtn, List, LiveDot, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
+import { JumpBubble } from '../src/ui/JumpBubble'
 import { useConn } from '../src/net/conn'
 import { useStore, type WsGroup } from '../src/data/store'
 import { isSessionUnread } from '@shared/chat/unread'
-import { tierOf, countTiers, type SessionTier } from '../src/data/sessionStatus'
+import { tierOf, countTiers, topTier, type SessionTier } from '../src/data/sessionStatus'
 import { StatusBadge } from '../src/ui/StatusBadge'
 
 /**
@@ -83,6 +84,40 @@ export default function Home() {
     })
   }, [groups])
 
+  const scrollRef = useRef<ScrollView>(null)
+  const rowY = useRef<Record<string, number>>({})
+  const scrollY = useRef(0)
+  const viewH = useRef(0)
+
+  // 所有非 idle 的会话,按它们在列表里的先后排好 —— 气泡要跳的就是这一串。
+  // key 用 NUL(`\0`)分隔而不是空格/逗号:两者都是 POSIX 路径的合法字符,
+  // 用它们做分隔符会让两个不同的 (workspacePath, sessionId) 撞成同一个 key,
+  // 症状是气泡滚到错的那一行。@shared/chat/unread 的 key() 用的是同一个理由。
+  const pending = ordered.flatMap((g) =>
+    g.sessions
+      .map((s) => ({ key: `${g.ws.path}\0${s.id}`, tier: tierFor(g.ws.path, s.id) }))
+      .filter((x) => x.tier !== 'idle'),
+  )
+  const counts = countTiers(pending.map((p) => p.tier))
+  const top = topTier(counts)
+  // 只在最高那一档里挑目标 —— 气泡说「1 条等你答话」就该跳到门那条,不是跳到别的。
+  const targets = top ? pending.filter((p) => p.tier === top).map((p) => p.key) : []
+  // 第一个**不在视口内**的目标。全在视口里就不显示气泡:它指的东西你已经看见了。
+  const nextTarget = targets.find((k) => {
+    const y = rowY.current[k]
+    return y === undefined || y < scrollY.current || y > scrollY.current + viewH.current
+  })
+  const direction: 'up' | 'down' =
+    nextTarget !== undefined && (rowY.current[nextTarget] ?? 0) < scrollY.current ? 'up' : 'down'
+
+  const jump = useCallback(() => {
+    if (nextTarget === undefined) return
+    const y = rowY.current[nextTarget]
+    if (y === undefined) return
+    // 往上留 24px,让目标不要正好贴在顶栏下沿。
+    scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true })
+  }, [nextTarget])
+
   // ── 还没配主机:这一屏没有任何东西可画,直接把人送去配 ────────────────────────
   if (!hostsLoading && hosts.length === 0) {
     return (
@@ -132,7 +167,13 @@ export default function Home() {
         />
       </TopBar>
 
-      <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+      <ScrollView
+        ref={scrollRef}
+        scrollEventThrottle={64}
+        onScroll={(e) => { scrollY.current = e.nativeEvent.contentOffset.y }}
+        onLayout={(e) => { viewH.current = e.nativeEvent.layout.height }}
+        contentContainerStyle={{ paddingBottom: 96 }}
+      >
         {!online ? (
           <Empty title="未连接" desc={'连上才有数据 —— 第一版不缓存,\n所以这里不会拿旧内容假装在线。'} />
         ) : loading ? (
@@ -169,32 +210,36 @@ export default function Home() {
                     {sessions.map((s) => {
                       const sg = wsGates.filter((x) => x.sessionId === s.id)
                       return (
-                        <Row
+                        <View
                           key={s.id}
-                          gate={sg.length > 0}
-                          onPress={() => {
-                            select({ wsPath: g.ws.path, sessionId: s.id })
-                            router.push('/chat')
-                          }}
+                          onLayout={(e) => { rowY.current[`${g.ws.path}\0${s.id}`] = e.nativeEvent.layout.y }}
                         >
-                          <View style={{ flex: 1, minWidth: 0 }}>
-                            <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
-                              {s.title || '新会话'}
-                            </T>
-                            <View
-                              style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' }}
-                            >
-                              <T mono style={{ fontSize: 11.5, color: c.muted }}>
-                                {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
-                                {' · '}
-                                {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
+                          <Row
+                            gate={sg.length > 0}
+                            onPress={() => {
+                              select({ wsPath: g.ws.path, sessionId: s.id })
+                              router.push('/chat')
+                            }}
+                          >
+                            <View style={{ flex: 1, minWidth: 0 }}>
+                              <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
+                                {s.title || '新会话'}
                               </T>
-                              {sg.length > 0 && <Pill tone="gate">待确认 {sg.length}</Pill>}
+                              <View
+                                style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' }}
+                              >
+                                <T mono style={{ fontSize: 11.5, color: c.muted }}>
+                                  {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
+                                  {' · '}
+                                  {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
+                                </T>
+                                {sg.length > 0 && <Pill tone="gate">待确认 {sg.length}</Pill>}
+                              </View>
                             </View>
-                          </View>
-                          <StatusBadge tier={tierFor(g.ws.path, s.id)} />
-                          <T style={{ fontSize: 15, color: c.faint }}>›</T>
-                        </Row>
+                            <StatusBadge tier={tierFor(g.ws.path, s.id)} />
+                            <T style={{ fontSize: 15, color: c.faint }}>›</T>
+                          </Row>
+                        </View>
                       )
                     })}
                   </List>
@@ -211,6 +256,10 @@ export default function Home() {
           </View>
         )}
       </ScrollView>
+
+      {top && nextTarget !== undefined ? (
+        <JumpBubble tier={top} count={counts[top]} direction={direction} onPress={jump} />
+      ) : null}
 
       <Sheet open={newSheet} onClose={() => setNewSheet(false)} title="新建会话" sub="选一个工作区。新建工作区留在电脑端。">
         {newErr ? (
