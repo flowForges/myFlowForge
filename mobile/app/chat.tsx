@@ -30,6 +30,7 @@ import { Sheet } from '../src/ui/Sheet'
 import { BigEditor } from '../src/ui/BigEditor'
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
+import { canPeekGate } from '../src/data/gatePeek'
 import { useChat } from '../src/data/useChat'
 import { useAgents } from '../src/data/useAgents'
 import { useWorkflow } from '../src/data/useWorkflow'
@@ -492,10 +493,12 @@ export default function Chat() {
             onDeny={() => void answer('deny')}
             onOpen={() => router.push({ pathname: '/gate', params: { id: gate.id } })}
             // ★「按允许之前你想看的就是它改了什么」—— 变更页带着门 id 推进去,那一屏会把这道门
-            //  原样钉在底下,看完就地答,不用再退回这里找。选择题门不摆:那种门问的是「选哪个方案」,
-            //  diff 帮不上忙。
+            //  原样钉在底下,看完就地答,不用再退回这里找。
+            //  ★★**摆不摆这颗按钮的判断在 `canPeekGate` 里,连同它为什么不许被放宽的理由**
+            //  (一句话:借来的门 + 本会话的 diff = 拿 W1 的 diff 给 W2 的门当依据)。
+            //  下一个人看着「借来的门上少了个按钮」想加回来之前,先去读那段注释。
             onPeek={
-              gate.kind === 'confirm'
+              canPeekGate(gate, selected?.wsPath)
                 ? () => router.push({ pathname: '/exec', params: { gate: gate.id } })
                 : undefined
             }
