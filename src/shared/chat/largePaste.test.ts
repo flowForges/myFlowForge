@@ -138,8 +138,17 @@ describe('base64OfUtf8', () => {
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))
     expect(new TextDecoder().decode(bytes)).toBe(s)
   })
-  it('handles large input without overflowing apply()', () => {
+  // 原来这条叫「handles large input without overflowing apply()」,断言是 `not.toThrow()`。
+  // 新实现根本不做参数展开,那个失败理由已经不存在了 —— 名字承诺的东西比断言多,等于没测。
+  // 改成真去查大输入的**结果**:长度按 base64 的 4/3 规则精确算得出来,首尾也钉住,
+  // 分块处理写错(丢一块、多一块、块边界对不齐)在这里都躲不掉。
+  it('十万个 CJK 字符:长度和首尾都精确对得上(分块写错会在这里露馅)', () => {
     const big = '数'.repeat(100_000)
-    expect(() => base64OfUtf8(big)).not.toThrow()
+    const b64 = base64OfUtf8(big)
+    // 「数」是 3 字节 UTF-8 → 300000 字节,正好被 3 整除 → 400000 个 base64 字符,无 '=' 填充。
+    expect(b64.length).toBe(400_000)
+    expect(b64.endsWith('=')).toBe(false)
+    // 3 字节整齐对齐,所以每个「数」编出来的 4 个字符完全相同,整串就是它重复十万遍。
+    expect(b64).toBe(base64OfUtf8('数').repeat(100_000))
   })
 })

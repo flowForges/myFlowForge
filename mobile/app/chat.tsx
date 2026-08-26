@@ -6,14 +6,8 @@ import { goBack } from '../src/nav'
 import { CH } from '../../src/main/ipc/channels'
 import type { Attachment } from '../../src/shared/types'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type PermissionMode } from '../../src/shared/permissions'
-import {
-  base64OfUtf8,
-  insertPastePlaceholder,
-  pastedFileName,
-  pastePlaceholder,
-  resolvePasteSelection,
-  shouldOffloadPaste,
-} from '../../src/shared/chat/largePaste'
+import { base64OfUtf8, pastedFileName, pastePlaceholder, shouldOffloadPaste } from '../../src/shared/chat/largePaste'
+import { textAfterOffload } from '../src/ui/pasteOffload'
 import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
 import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TimeSep, TopBar } from '../src/ui/kit'
@@ -168,10 +162,12 @@ export default function Chat() {
       //  chip 上是空白,发出去 agent 也读不到任何东西,而人以为存好了。
       if (!att) throw new Error('存不进工作区的附件目录(盘满 / 没权限?)')
       setAttachments((a) => [...a, att])
-      // ★存盘是异步的,这几百毫秒里人还能接着打字 —— 插入前拿**最新的正文**重新判定一次选区。
-      //  手机上没有可靠的选区 API,所以固定按「整段被替换掉」处理:raw 就是发起那一刻的全文。
-      const sel = resolvePasteSelection(text, raw, 0, raw.length)
-      setText(insertPastePlaceholder(text, sel.start, sel.end, att.name).text)
+      // ★存盘是异步的,这几百毫秒里人还能接着打字。所以**必须**走函数式更新:`latest` 是写回
+      //  那一刻输入框里真实的正文,而 `text` 是 await 之前那份快照。拿快照去比,等于拿 raw
+      //  和它自己比 —— 判据恒真,「退到末尾」那条兜底分支永远进不去,而且这一下 setText 会
+      //  把等待期间打的字整段盖掉(粘 3000 字 → 点转 → 打「先看这个」→ 那四个字凭空消失)。
+      //  判据本身在 `pasteOffload.ts`,那里有单测钉着。
+      setText((latest) => textAfterOffload(latest, raw, att.name))
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e))
     } finally {
