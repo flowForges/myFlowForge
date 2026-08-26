@@ -6,6 +6,10 @@ import { useC } from '../src/theme/theme'
 import { Btn, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
 import { isLoopbackUrl, parseAddress } from '../src/net/hosts'
+import { scanSupport } from '../src/net/scanSupport'
+
+/** ★这个包里到底有没有相机。模块作用域算一次就够,它一辈子不会变。 */
+const CAN_SCAN = scanSupport() === 'ok'
 
 /** `useLocalSearchParams()` 的值可能是数组(同名参数出现两次)。取第一个就够。 */
 const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''))
@@ -88,11 +92,15 @@ export default function AddHost() {
               <T style={{ fontWeight: '700', color: c.fg }}>你自己那台电脑</T>
               {' '}—— 连上去等于把起 agent、答权限门、开终端的权力交出去。
             </Note>
-          ) : Platform.OS === 'web' ? (
-            // ★web 上不摆这个按钮。react-native-web 的相机能开,但条码识别靠浏览器的
-            //  BarcodeDetector,Safari 根本没有 —— 摆上去就是一个开着摄像头、永远扫不出东西的屏,
-            //  比没有这个入口更糟。真机 app 里才有。
-            <Note>在电脑上「设置 → 主机」里复制地址和令牌填到下面。扫码要用手机 app,网页版没有相机。</Note>
+          ) : !CAN_SCAN ? (
+            // ★扫不了就**不摆这个按钮**。
+            //  真机上崩过一次:手机上装的包是加相机之前打的,按钮照常显示、点下去 app 当场崩。
+            //  网页版是另一个原因(Safari 没有 BarcodeDetector),但对人来说是同一件事:这条路走不通。
+            //  ★仍然给一条**现在就走得通**的路 —— 手机自带的相机扫那枚码不需要新包。
+            <Note>
+              这个版本没有 app 内扫码。不过用<T style={{ fontWeight: '700', color: c.fg }}>手机自带的相机</T>
+              扫电脑上那枚二维码(设置 → 主机 → 显示配对二维码)照样会跳回这一屏并填好,或者在下面手填。
+            </Note>
           ) : (
             <List>
               {/* ★快的那条路放最上面。二维码在电脑的「设置 → 主机 → 显示配对二维码」里。 */}
