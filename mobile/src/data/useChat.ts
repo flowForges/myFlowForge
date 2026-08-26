@@ -17,6 +17,9 @@ export type Msg = {
   text: string
   think: string
   model?: string
+  /** 产出这条回复的代理 id(claude / codex / …)。用来推「换代理」提示,和 `model` 不是一回事:
+   *  `model` 是显示名(「Claude Code · Opus」),换个模型不算换代理。 */
+  provider?: string
   ts?: string
   /** 这一轮代理自己跑过的工具(读文件 / 改文件 / 跑命令)。桌面端的「执行」块拿的是同一份数据。 */
   tools?: ToolActivity[]
@@ -43,6 +46,7 @@ const fromHistory = (m: ChatMessage): Msg => ({
   // 手机端只画一段文本,所以落档那份在这里压平。
   think: m.think ? [m.think.label, ...(m.think.steps ?? [])].filter(Boolean).join('\n') : '',
   model: m.model,
+  provider: m.provider,
   ts: m.ts,
   tools: m.tools,
   subagents: m.subagents,

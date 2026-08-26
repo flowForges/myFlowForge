@@ -11,6 +11,7 @@ import { MessageBody } from '../src/ui/MessageBody'
 import { ToolCards } from '../src/ui/ToolCard'
 import { DelegateCards, SubagentCards } from '../src/ui/AgentCards'
 import { sepsFor } from '../src/ui/timeSep'
+import { providerSwitches } from '../src/ui/providerSwitch'
 import { Sheet } from '../src/ui/Sheet'
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
@@ -101,6 +102,8 @@ export default function Chat() {
   // `now` 只在消息数变化时取一次 —— 每次渲染都取的话,「今天/昨天」会在午夜那一刻抖动,
   // 而且会让整份 Map 每帧都是新的。
   const seps = useMemo(() => sepsFor(msgs, Date.now()), [msgs])
+  // 换代理提示:哪一条消息前面该来一条。规则见 providerSwitch.ts(和电脑端同一套)。
+  const switches = useMemo(() => providerSwitches(msgs), [msgs])
 
   const myGates = selected ? gatesFor(selected.wsPath, selected.sessionId) : []
   // 本会话没门,但别处有,就把别处那道拿过来钉着 —— 门比「我正在看哪个会话」重要。
@@ -259,6 +262,11 @@ export default function Chat() {
             {msgs.map((m) => (
               <React.Fragment key={m.id}>
                 {seps.has(m.id) ? <TimeSep>{seps.get(m.id)}</TimeSep> : null}
+                {switches.has(m.id) ? (
+                  <TimeSep>
+                    {`切换编码代理 ${switches.get(m.id)!.from} → ${switches.get(m.id)!.to} · 新代理基于历史重建上下文,可能有损`}
+                  </TimeSep>
+                ) : null}
                 {m.who === 'user' ? (
                   <View style={[st.you, { backgroundColor: c.accentDim, borderColor: c.youBorder }]}>
                     <T style={{ fontSize: 15, lineHeight: 23, color: c.fg }}>{m.text}</T>
