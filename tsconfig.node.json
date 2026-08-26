@@ -7,5 +7,5 @@
     "ignoreDeprecations": "6.0"
   },
   "include": ["src/main", "src/preload", "src/shared", "**/*.test.ts"],
-  "exclude": ["release", "dist", "node_modules"]
+  "exclude": ["release", "dist", "node_modules", "mobile"]
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
-import { goBack } from '../src/nav'
+import { goBack, goToHosts } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
@@ -69,9 +69,10 @@ export default function AddHost() {
         icon: '',
       })
       await selectHost(h.id)
-      // 回对话根视图。`dismissAll()` 是给模态用的,这一层是普通推入层 —— 用它会静默什么也不做,
-      // 表现就是按钮永远停在「连接中…」。
-      goBack()
+      // ★回**主机列表**,不是 goBack()。见 nav.ts 的 goToHosts:扫码那条路会在栈里留下两个
+      //  add-host,goBack() 会落回下面那个空的(真机验收报的「加完停在空白页」)。
+      //  落在主机列表上还有一个好处:刚加的那台就在列表里,连接状态当场看得见。
+      goToHosts()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       setSaving(false)
