@@ -18,6 +18,7 @@ import { useChat } from '../src/data/useChat'
 import { useAgents } from '../src/data/useAgents'
 import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
+import { initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
 
 /**
  * 对话屏,从会话列表(根屏)推入的下一层,总是带着一个已选会话进来。
@@ -109,9 +110,16 @@ export default function Chat() {
   //  等于把另一台还在等的机器藏起来了。
   const gateIndex = gate ? gates.findIndex((g) => g.id === gate.id) : -1
 
+  // ★落底:进屏那一次**瞬间到位**,之后的新消息才带动画。规则本身在 `autoScroll.ts`(有单测)。
+  //  真机验收当场报的「进会话时历史哗哗刷一遍」就是这里原来无条件 `animated: true` 造成的。
+  const autoScroll = useRef<AutoScrollState>(initialAutoScroll())
   useEffect(() => {
-    if (!msgs.length) return
-    const t = setTimeout(() => flow.current?.scrollToEnd({ animated: true }), 30)
+    const r = nextScroll(autoScroll.current, msgs.length)
+    autoScroll.current = r.state
+    if (!r.scroll) return
+    const animated = r.scroll.animated
+    // 30ms 是等这一帧的布局落地 —— 立刻滚会滚到「还没算进新消息高度」的那个位置。
+    const t = setTimeout(() => flow.current?.scrollToEnd({ animated }), 30)
     return () => clearTimeout(t)
   }, [msgs.length])
 
