@@ -13,6 +13,9 @@ let seenCb: (e: { workspacePath: string; sessionId: string }) => void = () => {}
 let markChatSeen = vi.fn()
 beforeEach(() => {
   markChatSeen = vi.fn()
+  // ★seenCb 必须在这里显式归零。不归零的话它只是「碰巧」干净(靠 RTL 的自动 cleanup 卸载了上一个
+  // hook,退订才把它置空)—— 那样一条变异是红是绿就取决于 cleanup 的时序,而不取决于 harness。
+  seenCb = () => {}
   const forge = {
     onChatEvent: (cb: (e: ChatEvent) => void) => { fire = cb; return () => { fire = () => {} } },
     onChatSeen: (cb: (e: { workspacePath: string; sessionId: string }) => void) => {
@@ -93,6 +96,15 @@ describe('★ 跨设备未读', () => {
     expect(isSessionUnread(result.current, '/ws', 'B')).toBe(true)
   })
 
+  it('别的设备报来一条空 id 的「已读」→ 直接忽略,连 state 都不动(和手机端同一份契约)', () => {
+    const { result } = renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    act(() => { fire(done('/ws', 'B')) })
+    const before = result.current
+    act(() => { seenCb({ workspacePath: '', sessionId: '' }) })
+    // 没有守卫的话 clearUnread 会造一个全新的 Set(内容一样、身份不同)→ 白白重渲染每个用未读的组件。
+    expect(result.current).toBe(before)
+  })
+
   it('★切到一条会话时要告诉主机(否则手机那头的未读永远不灭)', () => {
     const { rerender } = renderHook(
       ({ v }) => useUnread(v),
@@ -102,6 +114,16 @@ describe('★ 跨设备未读', () => {
     rerender({ v: { wsPath: '/ws', sessionId: 'B' } })
     // ★传出去的是 channel 的载荷形状 {workspacePath,…},不是 Viewing 的 {wsPath,…} —— 两者字段名不同。
     expect(markChatSeen).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 'B' })
+  })
+
+  it('★远程老主机拒绝这条上报时必须被接住 —— 否则每切一次会话就是一条 unhandledrejection', () => {
+    // 电脑端连远程主机时这条 invoke 走 remote/router.ts:老 daemon 方法表里没有 chat:mark-seen,
+    // router 会直接抛「不提供这个功能(chat:mark-seen)」。`void` 不吞 rejection,必须挂 .catch。
+    const rejected = Promise.reject(new Error('「远程主机」不提供这个功能(chat:mark-seen)'))
+    const catchSpy = vi.spyOn(rejected, 'catch')
+    markChatSeen.mockReturnValue(rejected)
+    renderHook(() => useUnread({ wsPath: '/ws', sessionId: 'A' }))
+    expect(catchSpy).toHaveBeenCalled()
   })
 
   it('没在看任何会话(首页)时不上报 —— 空 id 广播出去是纯噪音', () => {

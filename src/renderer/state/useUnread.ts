@@ -28,6 +28,10 @@ export function useUnread(viewing: Viewing): ReadonlySet<string> {
     // 跨设备未读:别的设备(手机)打开了某条会话 → 主机广播 chat:seen → 这边也把它清掉。
     // `?.` 和上面那条同一个理由:preload 换代/测试环境里这个方法可能不存在,而未读只是锦上添花。
     const off = window.forge.onChatSeen?.((e) => {
+      // 空 id 直接丢掉。主进程那头已经挡过一道了,这里再挡一次是为了让**两个客户端读同一份契约**
+      // ——手机端 mobile/src/data/useUnread.ts 也是这么写的。少了这道,两端对「什么算一条有效的
+      // 已读通知」的判断就不一致,以后谁绕过主机直接发这条广播(比如中转/测试桩)就只有一边挡得住。
+      if (!e?.workspacePath || !e?.sessionId) return
       setUnread(s => (s.size ? clearUnread(s, e.workspacePath, e.sessionId) : s))
     })
     return () => { off?.() }
@@ -39,7 +43,13 @@ export function useUnread(viewing: Viewing): ReadonlySet<string> {
     // 首页(两个 id 都空)不上报:那不是「在看某条会话」。
     // ★载荷是 channel 的形状 {workspacePath,…},Viewing 那边叫 wsPath,不能直接把 viewing 丢进去。
     if (viewing.wsPath && viewing.sessionId) {
-      void window.forge.markChatSeen?.({ workspacePath: viewing.wsPath, sessionId: viewing.sessionId })
+      // ★`.catch` 不是可有可无的:电脑端连**远程主机**时,这条 invoke 会被 remote/router.ts 路由出去,
+      //  而老 daemon(二期以前)的方法表里没有 chat:mark-seen —— router 会直接抛
+      //  「「主机名」不提供这个功能(chat:mark-seen)」。`void` 不吞 rejection,不接住的话
+      //  每切一次会话就在渲染进程里留一条 unhandledrejection。手机端那侧是靠查方法表跳过的
+      //  (那边拿得到 methods),电脑端这里拿不到方法表,所以改成「发了就发了,失败当没发生」。
+      //  失败的代价只是别的设备那颗圆点晚一点灭,绝不该为它弹错。
+      void window.forge.markChatSeen?.({ workspacePath: viewing.wsPath, sessionId: viewing.sessionId })?.catch(() => {})
     }
   }, [viewing.wsPath, viewing.sessionId])
 

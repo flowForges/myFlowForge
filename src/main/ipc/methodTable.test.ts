@@ -34,12 +34,14 @@ describe('方法表', () => {
 
   it('表里方法数与今日实测一致 —— 少一个就是搬运时漏了', () => {
     const table = registerIpc(() => {}, {}, fakeHost())
-    // 162(handlers.ts 里的 on(CH.x, …);C 加了设置两个半边的 4 个,D 加了目录浏览的 2 个)
-    // + 22(run2Handlers.ts,经注入的 onInvoke 写进同一张表)。
+    // 165(handlers.ts 里的 `on(CH.x, …)`,`grep -c 'on(CH\.' src/main/ipc/handlers.ts`)
+    // + 22(run2Handlers.ts 里的 `onInvoke(CH.x, …)`,经注入写进同一张表)= 187。
     // ★这两个数是数出来的,不是抄文档的:`grep -c 'ipcMain\.handle'`(不带括号)会把两行提到它的
-    // 注释、以及 run2 那行注入本身也算进去,于是得到 159 —— 文档里那些偏大的计数就是这么来的。
-    // 改这个数就要在 commit message 里说清楚加/删了哪个 channel。
+    // 注释、以及 run2 那行注入本身也算进去 —— 文档里那些对不上的计数就是这么来的。
+    // ★这行加数以前写的是 162+22(=184),对不上断言里的 186:那是历史上加 channel 时只改了总数、
+    // 没跟着改分解,已按今日实测重新数过。改这个数就要在 commit message 里说清楚加/删了哪个 channel。
     // 186 → 187:手机端二期的跨设备未读加了 `chat:mark-seen`(`chat:seen` 是纯广播,没有 handler,不进表)。
+    // 另外两处计数互为佐证:187 = 45(CLIENT_ONLY)+ 142(host),daemonTable = 187 - 45 - 2。
     expect(Object.keys(table).length).toBe(187)
   })
 })

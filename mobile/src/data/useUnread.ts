@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CH } from '../../../src/main/ipc/channels'
 import { markUnread, clearUnread, type Viewing } from '@shared/chat/unread'
 import { useConn } from '../net/conn'
+import { shouldReportSeen } from './reportSeen'
 
 const NOWHERE: Viewing = { wsPath: '', sessionId: '' }
 
@@ -52,9 +53,9 @@ export function useUnreadSet(viewing: Viewing | null): ReadonlySet<string> {
     const v = viewing
     if (!v) return
     setUnread((s) => (s.size ? clearUnread(s, v.wsPath, v.sessionId) : s))
-    // ★上报之前必须查方法表(决策 B-2):老主机没有 `chat:mark-seen`,不查的话每打开一条
-    //  会话就多一个被拒的 promise —— 功能上无害,但那是一条会一直刷屏的假错误。
-    if (v.wsPath && v.sessionId && methods.has(CH.chatMarkSeen)) {
+    // 上报与否的三条判断(空 id / 查方法表)抽在 ./reportSeen 里单测 —— 这个 hook 依赖 useConn(),
+    // 一路 import 到 react-native,vitest 的 mobile project(node 环境)渲染不了它。
+    if (shouldReportSeen(v, methods, CH.chatMarkSeen)) {
       void invoke(CH.chatMarkSeen, [{ workspacePath: v.wsPath, sessionId: v.sessionId }]).catch(() => {
         // 上报失败无所谓 —— 顶多是别的设备那颗圆点晚一点灭。绝不因此弹错。
       })
