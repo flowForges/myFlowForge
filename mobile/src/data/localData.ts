@@ -1,6 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
 
-/** 手机上存的所有东西都用这个前缀。见 `hosts.ts` / `expanded.ts` / `prefs.ts`。 */
+/**
+ * 手机上存的所有东西都用这个前缀。见 `hosts.ts` / `expanded.ts` / `prefs.ts`。
+ *
+ * ★★「所有」这两个字**有东西在兑现**:`storageKeys.test.ts` 会把手机端源码里
+ *  真正交给 AsyncStorage 的 key 全捞出来逐个验前缀(不读名单,读源码)。
+ *  没有那条守卫的话,哪天谁写下 `const KEY = 'forge.foo'`,那份数据就会
+ *  **安安静静地活过**下面这次声称「已清除」的清除 —— 而不会有任何测试变红。
+ */
 export const LOCAL_PREFIX = 'mff.'
 
 /**
