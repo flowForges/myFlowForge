@@ -21,7 +21,7 @@ describe('相机只能在确认装得上之后才碰', () => {
    *  这条断言钉住的就是「别再静态 import 回去」—— 那是个一行改动就能复发、
    *  而且**只有在旧包的真机上**才看得见的回归。
    */
-  for (const f of ['app/scan.tsx', 'app/add-host.tsx', 'app/hosts.tsx', 'app/index.tsx', 'app/_layout.tsx']) {
+  for (const f of ['app/scan.tsx', 'app/add-host.tsx', 'app/hosts.tsx', 'app/index.tsx', 'app/chat.tsx', 'app/_layout.tsx']) {
     it(`${f} 不静态 import expo-camera`, () => {
       expect(staticImports(read(f))).not.toContain('expo-camera')
     })

@@ -5,21 +5,24 @@ import { CH } from '../../src/main/ipc/channels'
 import type { SessionsFile } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
-import { Empty, IconBtn, List, LiveDot, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
+import { Btn, Empty, IconBtn, List, LiveDot, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
 import { useConn } from '../src/net/conn'
 import { useStore, type WsGroup } from '../src/data/store'
 
 /**
- * 全部会话,按工作区分组。
+ * 根屏 · 全部会话,按工作区分组。
  *
  * ★这一屏最重要的一件事不是「列出会话」,是**一眼看出哪条挂着门**。
  *   挂着门的工作区整组顶到最上面,那条会话本身染成琥珀底 + 琥珀边。
  *   其余一律中性 —— 屏幕上同时出现两种彩色,门就不再是唯一的那个了。
+ *
+ * 因为是根屏,零主机的首跑引导也落在这里:一个刚装上的新用户没有会话可点,
+ * 只会落在这儿,所以「先连一台电脑」必须是这一屏自己的分支,不能指望对话屏兜底。
  */
-export default function Sessions() {
+export default function Home() {
   const c = useC()
-  const { activeHost, online, state, invoke } = useConn()
+  const { activeHost, hosts, loading: hostsLoading, online, state, invoke } = useConn()
   const { groups, gates, gatesFor, loading, select, wsName, refresh } = useStore()
   const now = Date.now()
   const [newSheet, setNewSheet] = useState(false)
@@ -59,6 +62,28 @@ export default function Sessions() {
       return bt - at
     })
   }, [groups, gates])
+
+  // ── 还没配主机:这一屏没有任何东西可画,直接把人送去配 ────────────────────────
+  if (!hostsLoading && hosts.length === 0) {
+    return (
+      <View style={{ flex: 1, backgroundColor: c.bg }}>
+        <TopBar>
+          <T style={{ fontSize: 15.5, fontWeight: '600', color: c.fg, paddingHorizontal: 2 }}>myFlowForge</T>
+        </TopBar>
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          <Empty
+            title="先连一台电脑"
+            desc={'手机端不在本地跑代理 —— 它是你电脑上那台 Forge 的遥控器。\n在电脑上跑起 daemon,把它打印的地址填进来。'}
+          />
+          <View style={{ paddingHorizontal: 30 }}>
+            <Btn kind="pri" block onPress={() => router.push('/add-host')}>
+              添加主机
+            </Btn>
+          </View>
+        </View>
+      </View>
+    )
+  }
 
   const tone = state?.status === 'ready' ? 'ok' : state?.status === 'connecting' ? 'wait' : 'off'
 

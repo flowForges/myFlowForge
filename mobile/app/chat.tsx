@@ -20,9 +20,9 @@ import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 
 /**
- * 根视图 · 对话。
+ * 对话屏,从会话列表(根屏)推入的下一层,总是带着一个已选会话进来。
  *
- * 版式照原型设计层 D:顶栏(主机 / 会话切换 / 停止)→ 状态条 → 消息流 → **钉住的门** → 输入区。
+ * 版式照原型设计层 D:顶栏(返回 / 执行面板 / 停止)→ 状态条 → 消息流 → **钉住的门** → 输入区。
  * 门在输入区正上方且不参与滚动 —— 那是这一屏唯一的实底彩色块。
  */
 /** 思考过程默认折叠。展开了它会把回答本身挤出屏幕 —— 手机上一屏就那么点地方。 */
@@ -46,7 +46,7 @@ function Think({ text }: { text: string }) {
 export default function Chat() {
   const c = useC()
   const insets = useSafeAreaInsets()
-  const { activeHost, hosts, loading: hostsLoading, state, online, reconnect } = useConn()
+  const { activeHost, state, online, reconnect } = useConn()
   const { selected, gates, gatesFor, answerGate, wsName, sessionTitle, loading: storeLoading } = useStore()
   const { msgs, busy, send, stop, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
   const { agents } = useAgents()
@@ -142,28 +142,6 @@ export default function Chat() {
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e))
     }
-  }
-
-  // ── 还没配主机:这一屏没有任何东西可画,直接把人送去配 ────────────────────────
-  if (!hostsLoading && hosts.length === 0) {
-    return (
-      <View style={{ flex: 1, backgroundColor: c.bg }}>
-        <TopBar>
-          <T style={{ fontSize: 15.5, fontWeight: '600', color: c.fg, paddingHorizontal: 2 }}>myFlowForge</T>
-        </TopBar>
-        <View style={{ flex: 1, justifyContent: 'center' }}>
-          <Empty
-            title="先连一台电脑"
-            desc={'手机端不在本地跑代理 —— 它是你电脑上那台 Forge 的遥控器。\n在电脑上跑起 daemon,把它打印的地址填进来。'}
-          />
-          <View style={{ paddingHorizontal: 30 }}>
-            <Btn kind="pri" block onPress={() => router.push('/add-host')}>
-              添加主机
-            </Btn>
-          </View>
-        </View>
-      </View>
-    )
   }
 
   const tone = state?.status === 'ready' ? 'ok' : state?.status === 'connecting' ? 'wait' : 'off'
