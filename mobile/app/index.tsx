@@ -244,8 +244,8 @@ export default function Home() {
       <TopBar
         right={
           <View style={{ flexDirection: 'row' }}>
-            <IconBtn onPress={() => router.push('/hosts')}>🖥</IconBtn>
-            <IconBtn onPress={online ? () => setNewSheet(true) : undefined} disabled={!online}>
+            <IconBtn label="主机" onPress={() => router.push('/hosts')}>🖥</IconBtn>
+            <IconBtn label="新建" onPress={online ? () => setNewSheet(true) : undefined} disabled={!online}>
               ＋
             </IconBtn>
           </View>

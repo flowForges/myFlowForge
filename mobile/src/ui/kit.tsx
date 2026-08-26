@@ -368,6 +368,7 @@ export function IconBtn({
   disabled,
   badge,
   badgeGate,
+  label,
 }: {
   onPress?: () => void
   children: React.ReactNode
@@ -375,6 +376,7 @@ export function IconBtn({
   disabled?: boolean
   badge?: string
   badgeGate?: boolean
+  label?: string
 }) {
   const c = useC()
   return (
@@ -383,7 +385,15 @@ export function IconBtn({
       disabled={disabled || !onPress}
       style={({ pressed }) => [s.ico, pressed && { backgroundColor: c.surface }, disabled && { opacity: 0.35 }]}
     >
-      <T style={{ fontSize: 17, color: tone ?? c.fg2, lineHeight: 22 }}>{children}</T>
+      {label ? (
+        <View style={{ alignItems: 'center', gap: 1 }}>
+          <T style={{ fontSize: 15, lineHeight: 17, color: tone ?? c.fg2 }}>{children}</T>
+          {/* ★图标一律配文字。原来顶栏是 🖥 ≣ ■ 三个裸字符,谁也猜不出来是什么。 */}
+          <T style={{ fontSize: 8.5, color: c.muted }}>{label}</T>
+        </View>
+      ) : (
+        <T style={{ fontSize: 17, color: tone ?? c.fg2, lineHeight: 22 }}>{children}</T>
+      )}
       {badge ? (
         <View
           style={[
