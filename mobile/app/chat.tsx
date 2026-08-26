@@ -13,6 +13,7 @@ import { DelegateCards, SubagentCards } from '../src/ui/AgentCards'
 import { sepsFor } from '../src/ui/timeSep'
 import { providerSwitches } from '../src/ui/providerSwitch'
 import { Sheet } from '../src/ui/Sheet'
+import { BigEditor } from '../src/ui/BigEditor'
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
 import { useChat } from '../src/data/useChat'
@@ -65,6 +66,7 @@ export default function Chat() {
   const [advanceSheet, setAdvanceSheet] = useState(false)
   const [suppSheet, setSuppSheet] = useState(false)
   const [supp, setSupp] = useState('')
+  const [bigEditor, setBigEditor] = useState(false)
   const [wfBusy, setWfBusy] = useState(false)
   const flow = useRef<ScrollView | null>(null)
 
@@ -391,6 +393,19 @@ export default function Chat() {
               editable={online && !!selected}
               style={{ flex: 1, minHeight: 44, maxHeight: 108 }}
             />
+            {/* ★全屏编辑入口。就一颗 ⤢,挤在输入框和发送/停止键中间 —— 这里位置太紧,
+                容不下再配一个字。外层套一个带 hitSlop 的裸 Pressable 把可点区域撑到 44×44,
+                IconBtn 本身不支持 hitSlop(这一轮不改 kit.tsx,见任务交接)。
+                ★不自动弹出:字数超阈值就抢焦点,会在人正在打字时把光标薅走。只认这一下点击。 */}
+            <Pressable
+              onPress={online && selected ? () => setBigEditor(true) : undefined}
+              disabled={!online || !selected}
+              hitSlop={4}
+            >
+              <IconBtn onPress={online && selected ? () => setBigEditor(true) : undefined} disabled={!online || !selected}>
+                ⤢
+              </IconBtn>
+            </Pressable>
             {/* ★忙的时候,这颗键**就地**变成停止 —— 位置、尺寸都不动。
                 停止是这一屏最紧急的动作,而它原来待在顶栏右上角,是单手最够不到的地方。 */}
             <Pressable
@@ -412,6 +427,16 @@ export default function Chat() {
           </View>
         </View>
       </KeyboardAvoidingView>
+
+      <BigEditor
+        open={bigEditor}
+        value={text}
+        onCancel={() => setBigEditor(false)}
+        onDone={(t) => {
+          setText(t)
+          setBigEditor(false)
+        }}
+      />
 
       <Sheet open={agentSheet} onClose={() => setAgentSheet(false)} title="编码代理" sub="这台主机上真实装了的">
         {agents.length === 0 ? (
