@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Modal, Platform, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useC } from '../theme/theme'
+import { shouldReseed } from './bigEditorReseed'
 import { Btn, Field, IconBtn, T, TopBar, TopTitle } from './kit'
 
 /**
@@ -30,9 +31,10 @@ export function BigEditor({
   const prevOpen = useRef(open)
 
   useEffect(() => {
-    // 只认 false→true 这一次跳变去重新取值。`open` 保持 true 期间外面的组件因为别的
-    // state 重渲染,`value` 引用可能跟着变,但那不该盖掉正在编辑的草稿。
-    if (open && !prevOpen.current) setDraft(value)
+    // 判据本身抽成 bigEditorReseed.ts 的 shouldReseed 单测过了:只认 false→true 这一次
+    // 跳变去重新取值,`open` 保持 true 期间外面的组件因为别的 state 重渲染、`value` 引用
+    // 跟着变,不该盖掉正在编辑的草稿。
+    if (shouldReseed(open, prevOpen.current)) setDraft(value)
     prevOpen.current = open
   }, [open, value])
 
