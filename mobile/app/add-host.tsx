@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { goBack, goToHosts } from '../src/nav'
+import { one } from '../src/routeParams'
 import { useC } from '../src/theme/theme'
 import { Btn, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
@@ -10,9 +11,6 @@ import { scanSupport } from '../src/net/scanSupport'
 
 /** ★这个包里到底有没有相机。模块作用域算一次就够,它一辈子不会变。 */
 const CAN_SCAN = scanSupport() === 'ok'
-
-/** `useLocalSearchParams()` 的值可能是数组(同名参数出现两次)。取第一个就够。 */
-const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''))
 
 /**
  * 添加主机。手填地址 + 令牌,或者**从二维码填进来**。

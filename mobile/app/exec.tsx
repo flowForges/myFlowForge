@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { ScrollView, StyleSheet, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
 import { goBack } from '../src/nav'
+import { one } from '../src/routeParams'
 import type { DiffLine } from '../../src/shared/types'
 import { MONO, useC } from '../src/theme/theme'
+import { RADIUS } from '../src/theme/tokens'
 import { Empty, Field, IconBtn, List, Note, Row, Sec, T, Tabs, TopBar, TopTitle } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
 import { crumbs, filterEntries, listDir, numberLines, parentOf, type Entry } from '../src/ui/fileTree'
@@ -23,9 +25,6 @@ import { useFiles } from '../src/data/useFiles'
  * ★整屏推入(右上角进,左上角返回),不是底部上滑 —— 原型 B 版被否掉的正是那个看不见的手势。
  * ★**只读**。手机上不提交、不回滚、不写文件。
  */
-
-/** `useLocalSearchParams()` 的值可能是数组(同名参数出现两次)。取第一个就够。 */
-const one = (v: string | string[] | undefined): string => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''))
 
 type Pane = 'changes' | 'files'
 /** 打开的那个文件,以及现在看的是全文还是变更。原型 `v-file` 右上角那个图标就是切这个的。 */
@@ -71,13 +70,32 @@ export default function Exec() {
   const gateId = one(gateParam)
   const pinned = useMemo(() => (gateId ? (gates.find((g) => g.id === gateId) ?? null) : null), [gates, gateId])
   const [gateErr, setGateErr] = useState<string | null>(null)
+  /**
+   * ★**「这道门是我自己正在答的」**,不是别人抢答的。
+   *
+   *  `answerGate`(`store.tsx`)是**乐观**的:它在发请求之前就先 `dropGate(g.id)` 把门从
+   *  store 里摘掉了 —— 那是故意的,卡片在往返那一两秒里杵着不动会让人以为没点上、再点一次。
+   *  可代价是 `pinned`(`gates.find(...)` 推出来的)在**下一帧**就变成 null,比 `goBack()` 早。
+   *  底下那行「那道门已经被答掉了(可能是在电脑上)」于是会对着**刚按完允许的本人**显示一整个
+   *  往返 —— 链路一慢就是好几秒。那句话本来是为了防张冠李戴,这么一来冤枉的成了用户自己。
+   *
+   *  记下正在答的那个 id,只压住**这一个**。别的门(比如你在看 B 的 diff,电脑上把 A 答了)
+   *  那句话仍旧是对的,照常显示。
+   */
+  const [answering, setAnswering] = useState<string | null>(null)
 
   const answerPinned = async (decision: 'allow' | 'deny') => {
     if (!pinned) return
+    setGateErr(null)
+    setAnswering(pinned.id)
     try {
       await answerGate(pinned, { decision })
       goBack()
     } catch (e) {
+      // ★请求没送到时 `answerGate` 会把门**放回** store 并重新抛出(见 store.tsx 的 catch)。
+      //  这里必须把标记一并清掉 —— 不清的话,这道门之后真被别的设备答掉时,那句提示
+      //  永远不会再出现,而门是真的没了。
+      setAnswering(null)
       setGateErr(e instanceof Error ? e.message : String(e))
     }
   }
@@ -393,10 +411,22 @@ export default function Exec() {
                 onOpen={() => goBack()}
               />
             </>
+          ) : answering === gateId ? (
+            // 是你自己刚按的,门已经乐观摘掉、请求还在路上。这时候只能说「正在提交」——
+            // 说「被答掉了」就是在冤枉本人(见上面 `answering` 那段注释)。
+            <T style={{ fontSize: 12.5, color: c.muted, paddingHorizontal: 5, paddingVertical: 10 }}>正在提交…</T>
           ) : (
-            // ★门在你看 diff 的这会儿被别的设备答掉了 —— 这不是错误,但也不能就这么让卡片消失:
+            // ★门在你看 diff 的这会儿被**别的设备**答掉了 —— 这不是错误,但也不能就这么让卡片消失:
             //  原地什么都不留,人会以为是自己点错了、或者以为这一屏本来就没门。
-            <Note>那道门已经被答掉了(可能是在电脑上)。</Note>
+            //
+            //  ★分量:这行字要接住的是「你专程点『看看』过来要答的那个东西没了」,拿 `Note`
+            //   那种 11.5pt 的 `c.faint` 灰字托不住 —— 眼睛正奔着底下那块琥珀去,落空了得有东西接住。
+            //   所以给它一个**淡琥珀描边块**(`gateDim` 底 + `gateBorder` 边):占着门原来的位置和形状,
+            //   视线落点不变。但它**不是实底** —— 全屏唯一的实底彩色块必须继续只有门那一个,
+            //   门没了就没有实底块,这条正是「门在不在」的读法本身。
+            <View style={[st.gone, { backgroundColor: c.gateDim, borderColor: c.gateBorder }]}>
+              <T style={{ fontSize: 13.5, lineHeight: 20, color: c.fg2 }}>那道门已经被答掉了(可能是在电脑上)。</T>
+            </View>
           )}
         </View>
       ) : null}
@@ -411,4 +441,11 @@ const st = StyleSheet.create({
   projs: { flexDirection: 'row', gap: 7, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 2 },
   proj: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9, minHeight: 0 },
   crumb: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 8 },
+  // 门没了之后占它位置的那块。半径抄门的(`RADIUS.gate`),这样它接的是同一个视线落点。
+  gone: {
+    borderRadius: RADIUS.gate,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 13,
+    paddingVertical: 13,
+  },
 })
