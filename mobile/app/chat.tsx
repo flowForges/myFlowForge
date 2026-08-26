@@ -590,18 +590,19 @@ export default function Chat() {
               style={{ flex: 1, minHeight: 44, maxHeight: 108 }}
             />
             {/* ★全屏编辑入口。就一颗 ⤢,挤在输入框和发送/停止键中间 —— 这里位置太紧,
-                容不下再配一个字。外层套一个带 hitSlop 的裸 Pressable 把可点区域撑到 44×44,
-                IconBtn 本身不支持 hitSlop(这一轮不改 kit.tsx,见任务交接)。
+                容不下再配一个字。`IconBtn` 本体是 40×40,`hitSlop={4}` 把可点区域撑到 **48×48**
+                (四周各多 4),超过 44 的最小触达,而**布局占位一点没变** —— 这里挤不出更多宽度。
+                ★这颗 hitSlop 原来是靠外面再套一个裸 `<Pressable>` 实现的(那时 kit.tsx 不许动)。
+                现在 `IconBtn` 自己收 `hitSlop`,套层去掉了:两层各有一份 onPress / disabled,
+                漏改一处就是「灰着却点得动」。
                 ★不自动弹出:字数超阈值就抢焦点,会在人正在打字时把光标薅走。只认这一下点击。 */}
-            <Pressable
+            <IconBtn
               onPress={online && selected ? () => setBigEditor(true) : undefined}
               disabled={!online || !selected}
               hitSlop={4}
             >
-              <IconBtn onPress={online && selected ? () => setBigEditor(true) : undefined} disabled={!online || !selected}>
-                ⤢
-              </IconBtn>
-            </Pressable>
+              ⤢
+            </IconBtn>
             {/* ★忙的时候,这颗键**就地**变成停止 —— 位置、尺寸都不动。
                 停止是这一屏最紧急的动作,而它原来待在顶栏右上角,是单手最够不到的地方。 */}
             <Pressable
