@@ -71,11 +71,20 @@ export function Sec({
       {expanded !== undefined ? (
         <T style={{ fontSize: 10, color: c.faint, marginRight: 1 }}>{expanded ? '▾' : '▸'}</T>
       ) : null}
-      {/* ★★`flexShrink: 1` + `numberOfLines` 不是排版洁癖:RN 的 flexShrink 默认是 **0**,
-          而这一行现在挤着三样东西(标题 + 分支名 `note` + 右边的 `right`)。
+      {/* ★★`flexShrink: 1` + `minWidth: 0` + `numberOfLines` 不是排版洁癖:RN 的 flexShrink
+          默认是 **0**,而这一行现在挤着三样东西(标题 + 分支名 `note` + 右边的 `right`)。
           右边那个 slot 在会话列表上就是**门徽章** —— 全屏最重要的那一个。
           标题不肯让的话,一个长工作区名(再叠上「大」字号那一档)会把徽章整个顶出屏幕边缘,
-          现象是「有门却看不见」。让标题先扁,徽章绝不让。 */}
+          现象是「有门却看不见」。让标题先扁,徽章绝不让。
+
+          实测(无头 Chrome、390 宽、区名 `myFlowForgeRemoteMultihostMobileWorkspaceAlpha`):
+            改之前 —— 徽章右沿 **437.5**,视口只有 390:那颗「❓ 等你答话」整个在屏幕外。
+            改之后 —— 标题省略号截断,徽章 304.3–**376**,完整可见。
+          ★`minWidth: 0` 是**必需**的、不是陪衬:flex 子项的 `min-width` 默认 `auto`,
+           光有 `flexShrink: 1` 也缩不到内容宽度以下(上面那次「改之前」量到的 flex-shrink
+           其实就已经是 1 了,拦住它的正是 `min-width: auto`)。
+          ★带连字符的名字在 web 上会**换行**而不是溢出,量不出这个 bug —— 复现要用一个
+           没有断词机会的长名字。 */}
       <T
         mono
         numberOfLines={1}
