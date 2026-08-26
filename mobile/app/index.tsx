@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ScrollView, View } from 'react-native'
+import { Alert, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../src/main/ipc/channels'
-import type { SessionsFile } from '../../src/shared/types'
+import type { SessionsFile, WorkspaceMeta } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, IconBtn, List, LiveDot, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
@@ -30,12 +30,64 @@ import { StatusBadge } from '../src/ui/StatusBadge'
 export default function Home() {
   const c = useC()
   const { activeHost, hosts, loading: hostsLoading, online, state, invoke } = useConn()
-  const { groups, gates, gatesFor, loading, select, wsName, refresh, unread, running, expanded, toggleWs, ensureWs } =
-    useStore()
+  const {
+    groups, gates, gatesFor, loading, select, wsName, refresh, unread, running, expanded, toggleWs, ensureWs,
+    setPinned, archive,
+  } = useStore()
   const now = Date.now()
   const [newSheet, setNewSheet] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newErr, setNewErr] = useState<string | null>(null)
+
+  // 分组头长按呼出的操作单(置顶 / 归档)。放的是那一个工作区的 meta,不是路径 ——
+  // sheet 里要读 `pinned` 决定按钮显示「置顶」还是「取消置顶」。
+  const [wsSheet, setWsSheet] = useState<WorkspaceMeta | null>(null)
+  const [wsBusy, setWsBusy] = useState(false)
+  const [wsErr, setWsErr] = useState<string | null>(null)
+
+  const togglePinned = async () => {
+    if (!wsSheet) return
+    setWsBusy(true)
+    setWsErr(null)
+    try {
+      await setPinned(wsSheet.path, !wsSheet.pinned)
+      setWsSheet(null)
+    } catch (e) {
+      // ★`workspaces:set-pinned` 到了上限会 throw(`最多只能置顶 N 个工作区`),
+      //  这句话必须原样落在这个红框里 —— 吞掉的话人只会觉得点了没反应。
+      setWsErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWsBusy(false)
+    }
+  }
+
+  const archiveWs = () => {
+    if (!wsSheet) return
+    const ws = wsSheet
+    const go = async () => {
+      setWsBusy(true)
+      setWsErr(null)
+      try {
+        await archive(ws.path)
+        setWsSheet(null)
+      } catch (e) {
+        setWsErr(e instanceof Error ? e.message : String(e))
+      } finally {
+        setWsBusy(false)
+      }
+    }
+    const msg = `归档「${ws.name}」?归档后从会话列表消失,在 设置 → 已归档的工作区 里恢复。`
+    if (Platform.OS === 'web') {
+      // RN-web 的 Alert 只有一个按钮,确认框走 window.confirm 才是真能选的(见 hosts.tsx 的 remove())。
+      // eslint-disable-next-line no-alert
+      if (typeof window !== 'undefined' && window.confirm(msg)) void go()
+      return
+    }
+    Alert.alert('归档工作区', msg, [
+      { text: '取消', style: 'cancel' },
+      { text: '归档', style: 'destructive', onPress: () => void go() },
+    ])
+  }
 
   const tierFor = (wsPath: string, sessionId: string): SessionTier =>
     tierOf({
@@ -380,6 +432,7 @@ export default function Home() {
                 <Sec
                   expanded={open}
                   onPress={() => toggleWs(g.ws.path)}
+                  onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
                   note={branches.get(g.ws.path)}
                   right={(() => {
                     // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
@@ -495,6 +548,34 @@ export default function Home() {
             </View>
           </Row>
         ))}
+      </Sheet>
+
+      {/* 分组头长按呼出的操作单。★长按是发现不了的手势,副标题把它说出来 —— 否则人答完这道单子
+          关掉之后再也想不起来是怎么叫出来的。 */}
+      <Sheet
+        open={!!wsSheet}
+        onClose={() => setWsSheet(null)}
+        title={wsSheet?.name ?? ''}
+        sub="长按分组头随时叫出这张单子"
+      >
+        {wsErr ? (
+          <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
+            <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{wsErr}</T>
+          </View>
+        ) : null}
+        <Btn block disabled={wsBusy} onPress={() => void togglePinned()}>
+          {wsSheet?.pinned ? '取消置顶' : '置顶'}
+        </Btn>
+        {/* ★danger 不与主动作相邻(设计文档 §7.6)——这段空隙就是唯一目的。 */}
+        <View style={{ height: 20 }} />
+        <View>
+          <Btn kind="danger" block disabled={wsBusy} onPress={archiveWs}>
+            归档
+          </Btn>
+          <T style={{ fontSize: 11.5, lineHeight: 17, color: c.muted, marginTop: 6 }}>
+            归档后从列表消失,在 设置 → 已归档的工作区 里恢复
+          </T>
+        </View>
       </Sheet>
     </View>
   )

@@ -145,8 +145,14 @@ export default function Settings() {
           <Btn kind="ghost" block onPress={() => router.push('/hosts')}>
             管理主机
           </Btn>
+          {/* 归档的入口。★不放进「管理主机」——归档的是工作区,不是主机,搁一块儿会让人
+              以为归档跟主机绑定。放这儿是设计文档 §7.2/§7.6 定的位置:主机组下面。 */}
+          <Btn kind="ghost" block onPress={() => router.push('/archived')}>
+            已归档的工作区
+          </Btn>
         </List>
         <Note>删除主机、手动重连都在「管理主机」那一屏里。切过去之后,会话、变更、终端全部换成那台机器的。</Note>
+        <Note>归档是在会话列表长按分组头做的;归档的工作区在「已归档的工作区」里恢复。</Note>
 
         <Sec>外观 · 跟着这台手机走</Sec>
         <List>

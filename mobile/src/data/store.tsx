@@ -88,6 +88,11 @@ export type Store = {
   toggleWs: (path: string) => void
   /** 进入某个区(点它下面的会话 / 在它里面新建会话)时自动展开,不用点第二下。 */
   ensureWs: (path: string) => void
+  /** 置顶 / 取消置顶。置顶的排在最前(见 index.tsx 的 ordered) —— 那是你手动钉的,不是状态。
+   *  ★服务端有上限,超了会 throw(`最多只能置顶 N 个工作区`)——那句话原样往上抛,不吞。 */
+  setPinned: (wsPath: string, pinned: boolean) => Promise<void>
+  /** 归档 = 只读封存。归档后从列表消失,回去的路在 设置 → 已归档的工作区。 */
+  archive: (wsPath: string) => Promise<void>
 }
 
 const StoreCtx = createContext<Store | null>(null)
@@ -356,6 +361,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const wsPaths = useMemo(() => groups.map((g) => g.ws.path), [groups])
   const running = useRunningSet(wsPaths)
 
+  // ★拆成一个稳定的 useCallback,而不是留在 `value` 那个 useMemo 里就地拼 —— setPinned/archive
+  //  两个动作也要在成功之后拉一遍新列表,不能只有 UI 手边那个 `store.refresh()` 能调它。
+  const refresh = useCallback(() => setTick((t) => t + 1), [])
+
+  const setPinned = useCallback<Store['setPinned']>(
+    async (wsPath, pinned) => {
+      // ★这里不 try/catch —— 抛出去让调用方(index.tsx)接住,那句「最多只能置顶 N 个」
+      //  要原样显示给人看,吞在这一层等于永远没人看得见。
+      await invoke(CH.workspacesSetPinned, [{ path: wsPath, pinned }])
+      refresh()
+    },
+    [invoke, refresh],
+  )
+
+  const archive = useCallback<Store['archive']>(
+    async (wsPath) => {
+      await invoke(CH.workspaceArchive, [wsPath])
+      refresh()
+    },
+    [invoke, refresh],
+  )
+
   const value = useMemo<Store>(() => {
     const nameOf = new Map(groups.map((g) => [g.ws.path, g.ws.name]))
     return {
@@ -363,7 +390,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       gates,
       loading,
       error,
-      refresh: () => setTick((t) => t + 1),
+      refresh,
       gatesFor: (wsPath, sessionId) =>
         gates.filter((g) => g.wsPath === wsPath && (sessionId === undefined || g.sessionId === sessionId)),
       answerGate,
@@ -379,10 +406,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       expanded,
       toggleWs,
       ensureWs,
+      setPinned,
+      archive,
     }
     // ★新加字段必须同时加进这个依赖数组 —— 漏了的话 value 不会重建,
     //  界面拿着上一份 `expanded` 静默不更新(点了分组头什么都不动)。
-  }, [groups, gates, loading, error, answerGate, selected, viewing, unread, running, expanded, toggleWs, ensureWs])
+  }, [
+    groups, gates, loading, error, refresh, answerGate, selected, viewing, unread, running, expanded, toggleWs,
+    ensureWs, setPinned, archive,
+  ])
 
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>
 }
