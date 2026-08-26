@@ -11,7 +11,7 @@ import {
   type ViewStyle,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { MONO, useC } from '../theme/theme'
+import { MONO, useC, useTheme } from '../theme/theme'
 import { RADIUS } from '../theme/tokens'
 import type { Palette } from '../theme/tokens'
 
@@ -28,7 +28,21 @@ export function T({
   mono,
   ...rest
 }: React.ComponentProps<typeof Text> & { mono?: boolean }) {
-  return <Text {...rest} style={[mono && { fontFamily: MONO }, style]} />
+  const { scale } = useTheme()
+  // ★字号是**每一处都写死数字**的(照原型 d.css 抄的),没有一个统一的 base 可以调。
+  //  所以「正文字号」那三档的倍率在这里落地:把已经算好的 style 拍平,乘 fontSize 和 lineHeight。
+  //  lineHeight 必须一起乘 —— 只放大字号不放大行距,大号那一档会挤成一坨。
+  //  scale === 1(标准档,默认)时**原样返回**,不做任何 flatten:这是绝大多数人的路径,
+  //  而 `T` 是每一段文字都要过的地方,不该为了一个没人开的功能给每一段都加一次 flatten。
+  const flat = scale === 1 ? null : StyleSheet.flatten(style)
+  const scaled = flat
+    ? {
+        ...flat,
+        ...(typeof flat.fontSize === 'number' ? { fontSize: flat.fontSize * scale } : null),
+        ...(typeof flat.lineHeight === 'number' ? { lineHeight: flat.lineHeight * scale } : null),
+      }
+    : style
+  return <Text {...rest} style={[mono && { fontFamily: MONO }, scaled]} />
 }
 
 export function Sec({

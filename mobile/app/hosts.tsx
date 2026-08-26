@@ -6,24 +6,8 @@ import { Btn, Empty, IconBtn, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, To
 import { useConn } from '../src/net/conn'
 import { DEFAULT_HOST_ICON, type MobileHost } from '../src/net/hosts'
 import { useStore } from '../src/data/store'
-import type { HostState } from '../src/net/hostClient'
-
-/** 一句人话的连接状态。断线态必须**显式**,不能拿缓存假装在线。 */
-function describe(s: HostState | null): { text: string; tone: 'ok' | 'wait' | 'off' | 'idle' } {
-  if (!s) return { text: '未连接', tone: 'idle' }
-  switch (s.status) {
-    case 'connecting':
-      return { text: s.attempt > 1 ? `连接中(第 ${s.attempt} 次)` : '连接中…', tone: 'wait' }
-    case 'ready':
-      return { text: `已连接 · ${s.version}`, tone: 'ok' }
-    case 'retrying':
-      return { text: `已断开,${Math.round(s.nextInMs / 1000)} 秒后重连 — ${s.error}`, tone: 'off' }
-    case 'failed':
-      return { text: `连接失败:${s.error}`, tone: 'off' }
-    case 'closed':
-      return { text: '未连接', tone: 'idle' }
-  }
-}
+// 一句人话的连接状态。★这一份和设置屏共用同一个实现,别在任何一边抄第二遍 —— 见该文件注释。
+import { describeHostState } from '../src/net/hostStatusText'
 
 export default function Hosts() {
   const c = useC()
@@ -44,7 +28,7 @@ export default function Hosts() {
     ])
   }
 
-  const d = describe(state)
+  const d = describeHostState(state)
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>

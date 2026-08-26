@@ -317,7 +317,9 @@ export default function Home() {
       <TopBar
         right={
           <View style={{ flexDirection: 'row' }}>
-            <IconBtn label="主机" onPress={() => router.push('/hosts')}>🖥</IconBtn>
+            {/* ★设置是全局的,不属于任何一条会话;主机现在是设置里的第一组(设计文档 §7.2)。
+                原来这里是 🖥 直通主机屏 —— 那时「加主机」和「清本地数据」各在一屏,谁也找不到。 */}
+            <IconBtn label="设置" onPress={() => router.push('/settings')}>⚙</IconBtn>
             <IconBtn label="新建" onPress={online ? () => setNewSheet(true) : undefined} disabled={!online}>
               ＋
             </IconBtn>
