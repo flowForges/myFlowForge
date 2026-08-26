@@ -7,5 +7,10 @@
     "ignoreDeprecations": "6.0"
   },
   "include": ["src/main", "src/preload", "src/shared", "**/*.test.ts"],
+  // ★`mobile` 排除在外别删。mobile 有自己的 tsconfig(`npm run --prefix mobile typecheck`),
+  // 而上面 `**/*.test.ts` 这个 glob 没圈目录,会把 `mobile/src/**/*.test.ts` 也卷进来 ——
+  // 其中 `nav.test.ts` 经 `expo-router` 拖进 RN 那套和本项目冲突的 `@types/node`,
+  // 结果是一堆**不相干**的 `src/main/**` 文件报 ProcessEnv/NODE_ENV 错。类型检查没有丢,
+  // 只是回到它该在的那个 project 里。
   "exclude": ["release", "dist", "node_modules", "mobile"]
 }

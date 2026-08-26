@@ -115,11 +115,16 @@ export default function Chat() {
   const autoScroll = useRef<AutoScrollState>(initialAutoScroll())
   useEffect(() => {
     const r = nextScroll(autoScroll.current, msgs.length)
-    autoScroll.current = r.state
     if (!r.scroll) return
     const animated = r.scroll.animated
     // 30ms 是等这一帧的布局落地 —— 立刻滚会滚到「还没算进新消息高度」的那个位置。
-    const t = setTimeout(() => flow.current?.scrollToEnd({ animated }), 30)
+    const t = setTimeout(() => {
+      // ★状态推进放在**真的滚了之后**,不是 effect 一进来就推进。清理函数会取消这个定时器
+      //  (StrictMode 的双次调用,或者 30ms 内消息数又变了),那种情况下这一次滚动**根本没发生** ——
+      //  状态要是已经推进过,「首帧瞬间到位」那一次就被悄悄吃掉了,现象要么又变回哗哗刷、要么干脆不落底。
+      autoScroll.current = r.state
+      flow.current?.scrollToEnd({ animated })
+    }, 30)
     return () => clearTimeout(t)
   }, [msgs.length])
 
