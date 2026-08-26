@@ -6,7 +6,7 @@
 .hosts-status.ok .dot { background: oklch(72% .17 150); box-shadow: 0 0 0 3px oklch(72% .17 150 / .18); }
 .hosts-status.warn .dot { background: oklch(78% .15 85); }
 .hosts-status.bad .dot { background: oklch(66% .18 25); box-shadow: 0 0 0 3px oklch(66% .18 25 / .16); }
-.hosts-status .who { font-weight: 600; color: var(--fg); }
+.hosts-status .who { font-size: 13.5px; font-weight: 600; color: var(--fg); }
 .hosts-status .sub { font-size: 12.5px; color: var(--fg-2); }
 .hosts-status.bad .sub { color: var(--err); }
 .hosts-status .grow { flex: 1 1 auto; }
@@ -30,7 +30,7 @@
 @media (max-width: 560px) { .hosts-form { grid-template-columns: 1fr; } }
 
 .hosts-io { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.hosts-io textarea { width: 100%; min-height: 92px; font-family: var(--mono, ui-monospace, monospace); font-size: 12px;
+.hosts-pane textarea { width: 100%; min-height: 92px; font-family: var(--mono, ui-monospace, monospace); font-size: 12px;
   border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); padding: 10px; }
 
 /* 命令/地址的行内代码。★不要复用 botpane 的 .bot-code —— 那个是给**配对码**用的:
@@ -50,3 +50,32 @@
   background: color-mix(in oklch, var(--err) 9%, transparent);
   border: 1px solid color-mix(in oklch, var(--err) 35%, transparent);
 }
+
+/* ------------------------------------------------------------------
+   ★这一屏的表单一律复用设置面板已有的 .proj-field(<div> 包 <label>+<input>),
+   不要自造 .set-label / .set-switch —— 那两个 class 在整个项目里都不存在,
+   写了等于没写:标签掉回根字号(比邻居大一号)、开关退化成系统原生复选框。
+   ------------------------------------------------------------------ */
+
+/* 输入框 + 右侧按钮同排。.proj-field input 是 width:100%,不包一层会把按钮挤到下一行
+   (这正是「地址」那行看起来乱换行的原因)。 */
+.hosts-inline { display: flex; align-items: center; gap: 8px; }
+.hosts-inline input { flex: 1 1 auto; min-width: 0; }
+/* ★36 不是 34:.proj-field input 是 content-box(34 + 上下各 1px 边框 = 36),
+   而 button / select 在 Chrome 里默认 border-box。写同一个数字反而会差 2px。 */
+.hosts-inline .set-btn { flex: 0 0 auto; height: 36px; }
+
+/* 端口是个四位数,不该占满整行 */
+.hosts-port { max-width: 168px; }
+
+/* 「在手机上填这两样」那一块 */
+.hosts-conn { margin-top: 16px; padding: 14px; border-radius: 12px;
+  border: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 35%, transparent); }
+.hosts-conn > .set-desc:first-child { margin-top: 0; margin-bottom: 10px; }
+.hosts-conn .proj-field:last-of-type { margin-bottom: 0; }
+.hosts-conn-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.hosts-conn-foot .set-desc { margin-top: 0; }
+
+/* 表单里的 select 要和 input 一样宽、一样高,否则一行 input 一行矮 select 参差不齐 */
+.hosts-form .proj-field { margin-bottom: 0; }
+.hosts-form .sce-select { width: 100%; height: 36px; font-size: 13px; }

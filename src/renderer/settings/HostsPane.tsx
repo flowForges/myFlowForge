@@ -153,40 +153,40 @@ export function HostsPane() {
         <div className="set-group">
           <h4>{draft.id ? '编辑主机' : '添加主机'}</h4>
           <div className="hosts-form">
-            <label className="proj-field full">
-              <span>名称</span>
+            <div className="proj-field full">
+              <label>名称</label>
               <input value={draft.label} placeholder="云服务器" onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
-            </label>
+            </div>
 
-            <label className="proj-field">
-              <span>标识(一个表情)</span>
+            <div className="proj-field">
+              <label>标识(一个表情)</label>
               <input
                 value={draft.icon}
                 placeholder="🖥️ / 🌩 / 🏠 …"
                 maxLength={8}
                 onChange={(e) => setDraft({ ...draft, icon: e.target.value })}
               />
-            </label>
-            <label className="proj-field">
-              <span>标题栏上显示</span>
+            </div>
+            <div className="proj-field">
+              <label>标题栏上显示</label>
               <select className="sce-select" value={draft.display} onChange={(e) => setDraft({ ...draft, display: e.target.value as HostInput['display'] })}>
                 <option value="both">标识 + 名称</option>
                 <option value="icon">只显示标识</option>
                 <option value="name">只显示名称</option>
               </select>
-            </label>
+            </div>
             <p className="set-desc full" style={{ marginTop: -6 }}>
               标题栏正中那枚就按这个显示。只显示标识时,连接状态用<b>光圈呼吸</b>表示(像主机/显示器的指示灯);
               显示名称时用前面那个圆点。挂一串主机名在正中太抢眼,一个你自己认得的表情通常就够了。
             </p>
 
-            <label className="proj-field full">
-              <span>连接方式</span>
+            <div className="proj-field full">
+              <label>连接方式</label>
               <select className="sce-select" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as 'ssh' | 'direct', address: e.target.value === 'ssh' ? '6767' : '' })}>
                 <option value="ssh">通过 SSH 连接(推荐)</option>
                 <option value="direct">直接连接(局域网 / Tailscale / 本机自测)</option>
               </select>
-            </label>
+            </div>
             <p className="set-desc full" style={{ marginTop: -6 }}>
               {draft.kind === 'ssh'
                 ? '那台机器上的 daemon 只绑回环(公网上不存在那个端口),所以走 SSH 隧道过去。下面填的是 SSH 登录目标,不是网址。'
@@ -195,14 +195,14 @@ export function HostsPane() {
 
             {draft.kind === 'ssh' ? (
               <>
-                <label className="proj-field">
-                  <span>SSH 目标</span>
+                <div className="proj-field">
+                  <label>SSH 目标</label>
                   <input value={draft.sshTarget} placeholder="用户名@1.2.3.4" onChange={(e) => setDraft({ ...draft, sshTarget: e.target.value })} />
-                </label>
-                <label className="proj-field">
-                  <span>远端 daemon 端口</span>
+                </div>
+                <div className="proj-field">
+                  <label>远端 daemon 端口</label>
                   <input value={draft.address} placeholder="6767" onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
-                </label>
+                </div>
                 <p className="set-desc full">
                   隧道由 app 自己拉起来,用的就是你平时 ssh 登这台服务器的凭据 —— 没有新密码要记。
                   <b>前提是能免密登录(密钥认证)</b>:这里没有终端可以输入密码。
@@ -211,14 +211,14 @@ export function HostsPane() {
               </>
             ) : (
               <>
-                <label className="proj-field">
-                  <span>地址</span>
+                <div className="proj-field">
+                  <label>地址</label>
                   <input value={draft.address} placeholder="ws://192.168.1.20:6767" onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
-                </label>
-                <label className="proj-field">
-                  <span>访问令牌</span>
+                </div>
+                <div className="proj-field">
+                  <label>访问令牌</label>
                   <input type="password" value={draft.token} placeholder="daemon pair 里那串" onChange={(e) => setDraft({ ...draft, token: e.target.value })} />
-                </label>
+                </div>
                 <p className="set-desc full">
                   daemon 绑到非回环地址时<b>必须</b>要令牌 —— 那个端口能起 agent、答权限门、开终端,
                   等于整台机器的控制权。绑回环(比如本机自测)则不需要,令牌留空即可。
