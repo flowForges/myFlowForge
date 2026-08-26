@@ -51,6 +51,8 @@ export type Palette = {
   scrim: string
   /** `.tool.running` 的边框 —— d.css 的 `color-mix(in oklab, var(--accent) 38%, var(--border))`。 */
   toolRunBorder: string
+  /** 阴影颜色(贴底浮起元素——比如定位气泡——的投影用,不是 surface 色)。不透明,配合 RN 的 shadowOpacity 单独控制透明度。 */
+  shadow: string
 }
 
 /** 深色。数值由 d.css 的 oklch 换算而来(oklch→oklab→sRGB),不是手调的近似值。 */
@@ -98,6 +100,7 @@ export const DARK: Palette = {
   bannerOffBg: '#312224',
   scrim: 'rgba(0, 0, 0, 0.44)',
   toolRunBorder: '#405373',
+  shadow: '#000000',
 }
 
 /** 浅色。 */
@@ -145,6 +148,7 @@ export const LIGHT: Palette = {
   bannerOffBg: '#f1d9d9',
   scrim: 'rgba(0, 0, 0, 0.44)',
   toolRunBorder: '#96acd8',
+  shadow: '#242e3d',
 }
 
 export type ThemeName = 'dark' | 'light'

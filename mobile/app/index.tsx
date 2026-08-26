@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../src/main/ipc/channels'
@@ -11,7 +11,7 @@ import { JumpBubble } from '../src/ui/JumpBubble'
 import { useConn } from '../src/net/conn'
 import { useStore, type WsGroup } from '../src/data/store'
 import { isSessionUnread } from '@shared/chat/unread'
-import { tierOf, countTiers, topTier, type SessionTier } from '../src/data/sessionStatus'
+import { tierOf, countTiers, topTier, type SessionTier, type TierCounts } from '../src/data/sessionStatus'
 import { StatusBadge } from '../src/ui/StatusBadge'
 
 /**
@@ -109,13 +109,13 @@ export default function Home() {
    *  选错了是运行时才炸;`onLayout` 在新旧架构下都确定支持,代价换成了「重新嵌套要
    *  记得改三处」这种可见、可写注释提醒的脆弱,不是那种运行时才炸的脆弱。
    */
-  const absY = (wsPath: string, key: string): number | undefined => {
+  const absY = useCallback((wsPath: string, key: string): number | undefined => {
     const gy = groupY.current[wsPath]
     const ly = listY.current[wsPath]
     const ry = rowY.current[key]
     if (gy === undefined || ly === undefined || ry === undefined) return undefined
     return gy + ly + ry
-  }
+  }, [])
 
   // 所有非 idle 的会话,按它们在列表里的先后排好 —— 气泡要跳的就是这一串。
   // key 用 NUL(`\0`)分隔而不是空格/逗号:两者都是 POSIX 路径的合法字符,
@@ -132,26 +132,88 @@ export default function Home() {
   const targets = top
     ? pending.filter((p) => p.tier === top).map((p) => ({ key: p.key, wsPath: p.wsPath }))
     : []
-  // 第一个**不在视口内**的目标。全在视口里就不显示气泡:它指的东西你已经看见了。
-  // 三段 y 没测全(absY 返回 undefined)也当作「不在视口内」处理 —— 宁可气泡多等一帧
-  // 首屏布局跑完,不能拿 undefined 当 0 用,那会把没测到的目标误判成「就在顶上」。
-  const nextTarget = targets.find((t) => {
-    const y = absY(t.wsPath, t.key)
-    return y === undefined || y < scrollY.current || y > scrollY.current + viewH.current
-  })
-  const direction: 'up' | 'down' =
-    nextTarget !== undefined && (absY(nextTarget.wsPath, nextTarget.key) ?? 0) < scrollY.current
-      ? 'up'
-      : 'down'
+
+  /**
+   * ★气泡该显示什么,是**状态**不是「渲染时顺手算出来的值」。
+   *
+   * `scrollY`/`viewH`/三段 y 全是 ref —— onScroll/onLayout 只改 ref,不触发重渲染。
+   * 如果气泡内容在渲染期间直接从这些 ref 读,画面就会停在「上一次真正重渲染时」的
+   * 快照上:手动把门那行滑进视口,组件不会因为滑动本身而重渲染,气泡会继续挂在那,
+   * 指着一条你已经看在眼里的行 —— 正是这一屏要禁止的「指着看得见的东西」。
+   * 所以改成:算出一个 `bubble` 描述对象放进 state,`syncBubble()` 是唯一入口,
+   * 由 onScroll / ScrollView 的 onLayout / 下面这个按 pending 数据触发的 effect 调用,
+   * 状态确实变了才 setState(见 `syncBubble` 里的逐字段比较),没变就不触发重渲染。
+   */
+  const pendingRef = useRef<{
+    top: Exclude<SessionTier, 'idle'> | null
+    targets: { key: string; wsPath: string }[]
+    counts: TierCounts
+  }>({ top: null, targets: [], counts: { gate: 0, running: 0, unread: 0 } })
+  pendingRef.current = { top, targets, counts }
+
+  type BubbleState = {
+    tier: Exclude<SessionTier, 'idle'>
+    count: number
+    direction: 'up' | 'down'
+    targetKey: string
+    targetWsPath: string
+  } | null
+
+  const [bubble, setBubble] = useState<BubbleState>(null)
+
+  const computeBubble = useCallback((): BubbleState => {
+    const { top: t, targets: ts, counts: cs } = pendingRef.current
+    if (!t) return null
+    // 第一个**不在视口内**的目标。全在视口里就不显示气泡:它指的东西你已经看见了。
+    // 三段 y 没测全(absY 返回 undefined)也当作「不在视口内」处理 —— 宁可气泡多等一帧
+    // 首屏布局跑完,不能拿 undefined 当 0 用,那会把没测到的目标误判成「就在顶上」。
+    const found = ts.find((x) => {
+      const y = absY(x.wsPath, x.key)
+      return y === undefined || y < scrollY.current || y > scrollY.current + viewH.current
+    })
+    if (!found) return null
+    const y = absY(found.wsPath, found.key)
+    // absY() 的三处消费者(这里的方向、上面的候选判定、下面 jump() 的滚动目标)统一口径:
+    // y 是 undefined(还没测到)时,候选判定当「还没进视口」处理(仍是候选),方向缺省
+    // 猜「在下面」(还没量到的行多半是还没被滑过去看到的),jump() 干脆不滚。
+    const direction: 'up' | 'down' = y !== undefined && y < scrollY.current ? 'up' : 'down'
+    return { tier: t, count: cs[t], direction, targetKey: found.key, targetWsPath: found.wsPath }
+  }, [absY])
+
+  const syncBubble = useCallback(() => {
+    const next = computeBubble()
+    setBubble((prev) => {
+      if (prev === next) return prev // 两边都是 null
+      if (prev === null || next === null) return next
+      if (
+        prev.tier === next.tier &&
+        prev.count === next.count &&
+        prev.direction === next.direction &&
+        prev.targetKey === next.targetKey &&
+        prev.targetWsPath === next.targetWsPath
+      ) {
+        return prev // 内容没变,保持同一个引用,不触发重渲染
+      }
+      return next
+    })
+  }, [computeBubble])
+
+  // 会话数据变了(门挂上/被答掉、有新未读……)时补一次 —— 哪怕这一刻用户没在滑动、
+  // ScrollView 也没重新布局,气泡该不该出现/该显示哪一档也可能已经变了。
+  // 依赖项用原始值而非 `targets` 数组本身(每次渲染都是新引用),这样内容真没变时
+  // effect 不会白跑。
+  const targetKeysSig = targets.map((t) => t.key).join(',')
+  useEffect(() => {
+    syncBubble()
+  }, [top, counts.gate, counts.running, counts.unread, targetKeysSig, syncBubble])
 
   const jump = useCallback(() => {
-    if (nextTarget === undefined) return
-    const y = absY(nextTarget.wsPath, nextTarget.key)
+    if (!bubble) return
+    const y = absY(bubble.targetWsPath, bubble.targetKey)
     if (y === undefined) return
     // 往上留 24px,让目标不要正好贴在顶栏下沿。
     scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- absY 读 ref,不是响应式依赖
-  }, [nextTarget])
+  }, [bubble, absY])
 
   // ── 还没配主机:这一屏没有任何东西可画,直接把人送去配 ────────────────────────
   if (!hostsLoading && hosts.length === 0) {
@@ -205,8 +267,8 @@ export default function Home() {
       <ScrollView
         ref={scrollRef}
         scrollEventThrottle={64}
-        onScroll={(e) => { scrollY.current = e.nativeEvent.contentOffset.y }}
-        onLayout={(e) => { viewH.current = e.nativeEvent.layout.height }}
+        onScroll={(e) => { scrollY.current = e.nativeEvent.contentOffset.y; syncBubble() }}
+        onLayout={(e) => { viewH.current = e.nativeEvent.layout.height; syncBubble() }}
         contentContainerStyle={{ paddingBottom: 96 }}
       >
         {!online ? (
@@ -314,8 +376,8 @@ export default function Home() {
         )}
       </ScrollView>
 
-      {top && nextTarget !== undefined ? (
-        <JumpBubble tier={top} count={counts[top]} direction={direction} onPress={jump} />
+      {bubble ? (
+        <JumpBubble tier={bubble.tier} count={bubble.count} direction={bubble.direction} onPress={jump} />
       ) : null}
 
       <Sheet open={newSheet} onClose={() => setNewSheet(false)} title="新建会话" sub="选一个工作区。新建工作区留在电脑端。">

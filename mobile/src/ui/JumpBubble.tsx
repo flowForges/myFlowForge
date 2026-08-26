@@ -32,7 +32,7 @@ export function JumpBubble({
         style={({ pressed }) => [{
           flexDirection: 'row', alignItems: 'center', gap: 8,
           paddingHorizontal: 15, paddingVertical: 9, borderRadius: 999,
-          backgroundColor: bg, shadowColor: '#000', shadowOpacity: 0.4,
+          backgroundColor: bg, shadowColor: c.shadow, shadowOpacity: 0.4,
           shadowRadius: 12, shadowOffset: { width: 0, height: 5 }, elevation: 6,
         }, pressed && { opacity: 0.85 }]}
       >
