@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useUnread } from './useUnread'
-import { isSessionUnread } from './unread'
+import { isSessionUnread } from '@shared/chat/unread'
 import type { ChatEvent } from '@shared/types'
 
 // 订阅侧的契约:另一个会话跑完时要留下未读标记,自己正在看的那个不留。纯 mark/clear 逻辑在 unread.test.ts

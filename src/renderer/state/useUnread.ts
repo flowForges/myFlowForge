@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChatEvent } from '@shared/types'
-import { markUnread, clearUnread, type Viewing } from './unread'
+import { markUnread, clearUnread, type Viewing } from '@shared/chat/unread'
 
 // Global unread tracker: listens to EVERY workspace's chat stream (not just the active one) and
 // marks a session unread when it finishes while the user is looking elsewhere. The session the user

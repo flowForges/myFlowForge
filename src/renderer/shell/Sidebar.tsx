@@ -5,7 +5,7 @@ import { fmtRelTime } from '@shared/relTime'
 import { sessionBadge } from './sessionBadge'
 import { reorder } from './reorder'
 import { WsMenu, type WsMenuItem } from './WsMenu'
-import { workspaceHasUnread, isSessionUnread } from '../state/unread'
+import { workspaceHasUnread, isSessionUnread } from '@shared/chat/unread'
 import { type WsBadge } from './wsBadge'
 import './shell.css'
 
