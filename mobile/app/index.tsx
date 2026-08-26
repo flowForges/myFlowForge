@@ -131,7 +131,7 @@ export default function Home() {
    * 换取「有事的可能在下面」,后者交给气泡。
    *
    * 唯一凌驾于时间之上的是 `pinned` —— 那是你手动钉的,不是状态。
-   * (置顶的操作入口在二期做;这里先把读的那一半接上,已经钉过的立刻生效。)
+   * (钉的入口就在这个文件上方几十行:长按分组头 → `wsSheet` 那张操作单。)
    */
   const ordered = useMemo(() => {
     const recency = (g: WsGroup) =>
@@ -542,8 +542,12 @@ export default function Home() {
           <Row key={g.ws.path} disabled={creating} onPress={() => void newSession(g.ws.path)}>
             <View style={{ flex: 1, minWidth: 0 }}>
               <T style={{ fontSize: 14.5, fontWeight: '600', color: c.fg }}>{g.ws.name}</T>
+              {/* ★设计文档 §7.3 要的是「N 个会话 · M 个项目」,不是原来那行绝对路径。
+                  路径在这儿帮不上忙:选哪个区靠的是「哪个区我在干活」,而
+                  `/Users/…/work/…` 那一长串在 390 宽的屏上还会被截掉尾巴,
+                  剩下的前缀每个区都一模一样 —— 一行字占了位置却零信息量。 */}
               <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
-                {g.ws.path}
+                {g.sessions.length} 个会话 · {g.ws.projectCount} 个项目
               </T>
             </View>
           </Row>
