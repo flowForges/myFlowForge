@@ -32,9 +32,18 @@ export function T({
 }
 
 export function Sec({
-  children, right, onPress, onLongPress, expanded,
+  children, note, right, onPress, onLongPress, expanded,
 }: {
   children: React.ReactNode
+  /**
+   * 跟在标题后面的一小段**辨认用补充**(会话列表分组头上的当前分支名就是走这里)。
+   *
+   * ★为什么单开一个 prop 而不是拼进 `children`:标题那个 `<T>` 带 `textTransform: 'uppercase'`,
+   *  拼进去的分支名会被大写成 `FEAT/RMH-DAEMON` —— git 的 ref **区分大小写**,那是个根本不存在的
+   *  分支名,分组头等于在报一个假的。区名被大写没问题(它只是个显示名),分支名不行。
+   *  所以这一段单独一个不大写的 `<T>`,并且刻意比标题轻:它是补充,不是第二个标题。
+   */
+  note?: string
   right?: React.ReactNode
   onPress?: () => void
   /** 长按呼出操作单(置顶 / 归档)。手机上没有右键。 */
@@ -51,6 +60,12 @@ export function Sec({
       <T mono style={{ fontSize: 10.5, letterSpacing: 0.85, color: c.faint, textTransform: 'uppercase' }}>
         {children}
       </T>
+      {note ? (
+        // 原样显示(不大写),并且可以被挤扁 —— 分支名再长也不许把右边的徽章顶出屏幕。
+        <T mono numberOfLines={1} style={{ fontSize: 10.5, color: c.faint, flexShrink: 1, minWidth: 0 }}>
+          {note}
+        </T>
+      ) : null}
       {right != null && <View style={{ marginLeft: 'auto' }}>{right}</View>}
     </View>
   )

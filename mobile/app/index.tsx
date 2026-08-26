@@ -273,7 +273,13 @@ export default function Home() {
     const wasCollapsed = !expanded.has(bubble.targetWsPath)
     if (wasCollapsed) ensureWs(bubble.targetWsPath)
     const go = () => {
-      const y = absY(bubble.targetWsPath, bubble.targetKey)
+      // ★三段 y 拼不出来时**退回分组头自己的 y**,不要一走了之。
+      //  刚展开的那一组,它的会话行是这一帧才挂上去的,Fabric 下它们的 onLayout 多半还没跑,
+      //  `listY`/`rowY` 里一个数都没有 —— 不兜这一下 absY 就是 undefined,go() 直接 return,
+      //  屏幕**一动不动**:那一组在屏幕外悄悄展开了,人看到的是「点了没反应」(这套代码
+      //  已经在别处栽过同一件事)。退到分组头正是设计承诺的那句「滚到它并把它展开」,
+      //  下一次 syncBubble 会拿量到的真实位置再纠正。★别当冗余删掉。
+      const y = absY(bubble.targetWsPath, bubble.targetKey) ?? groupY.current[bubble.targetWsPath]
       if (y === undefined) return
       // 往上留 24px,让目标不要正好贴在顶栏下沿。
       scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true })
@@ -350,6 +356,7 @@ export default function Home() {
             const sessions = [...g.sessions].sort(
               (a, b) => (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt),
             )
+            const open = expanded.has(g.ws.path)
             return (
               // 定位气泡 absY() 三段 y 的第①段:这层 View 是 ScrollView 内容的直接子节点,
               // 所以 onLayout 给的 y 就是相对整个滚动内容的绝对值,记进 groupY[wsPath]。
@@ -359,16 +366,23 @@ export default function Home() {
               // 新架构(Fabric,见 app.json 的 newArchEnabled)下的行为这个环境没法验证。
               <View
                 key={g.ws.path}
-                onLayout={(e) => { groupY.current[g.ws.path] = e.nativeEvent.layout.y }}
+                onLayout={(e) => {
+                  groupY.current[g.ws.path] = e.nativeEvent.layout.y
+                  // ★量到之后补一次 syncBubble。收起/展开**上面**某一组会把下面所有组整体挪位,
+                  //  而这些 onLayout 只写 ref、本身不触发重渲染 —— 不补这一下,气泡会拿着折叠前
+                  //  的那份 y 继续显示旧的方向/目标,直到你随手滑一下才纠正。
+                  //  不怕 setState 风暴:syncBubble 逐字段比过,没变就原样返回 prev,React 直接跳过。
+                  syncBubble()
+                }}
               >
                 <Sec
-                  expanded={expanded.has(g.ws.path)}
+                  expanded={open}
                   onPress={() => toggleWs(g.ws.path)}
+                  note={branches.get(g.ws.path)}
                   right={(() => {
                     // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
                     // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
                     const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
-                    const open = expanded.has(g.ws.path)
                     // ★展开时会话自己带徽章了,分组头上再来一个是重复(电脑端 Sidebar.tsx:248 同一条规矩)。
                     //  但**门那一档例外**:门是「代理停在那儿等你」,收起展开都该看得见。
                     if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
@@ -381,12 +395,12 @@ export default function Home() {
                     )
                   })()}
                 >
-                  {/* ★分支名跟在区名后面、同一行、同样是 faint 的等宽小字 —— 它是**辨认用的补充**,
-                      不是第二个标题,不该和区名抢重量。 */}
+                  {/* 分支名走 `note` 而**不是**拼进这里 —— 标题这个 <T> 带 textTransform:'uppercase',
+                      拼进来的 `feat/rmh-daemon` 会显示成 `FEAT/RMH-DAEMON`,而 git 的 ref 区分大小写,
+                      那是个**不存在**的分支名。区名大写是设计要的(它只是显示名),分支名不是。 */}
                   {g.ws.name}
-                  {branches.get(g.ws.path) ? `  ${branches.get(g.ws.path)}` : ''}
                 </Sec>
-                {!expanded.has(g.ws.path) ? null : sessions.length === 0 ? (
+                {!open ? null : sessions.length === 0 ? (
                   <Empty title="还没有人在这个工作区开过会话" desc="新建会话这类操作手机上也能做,但新建工作区留在电脑端。" />
                 ) : (
                   // 定位气泡 absY() 三段 y 的第②段:这层裸 View(**不能加 style**,否则会在
