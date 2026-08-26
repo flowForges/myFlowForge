@@ -9,6 +9,8 @@
     "expo-asset": "~57.0.14",
     "expo-build-properties": "~57.0.14",
     "expo-camera": "~57.0.4",
+    "expo-clipboard": "~57.0.1",
+    "expo-image-picker": "~57.0.13",
     "expo-router": "~57.0.15",
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.2",

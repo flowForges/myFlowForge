@@ -6,8 +6,17 @@ import { goBack } from '../src/nav'
 import { CH } from '../../src/main/ipc/channels'
 import type { Attachment } from '../../src/shared/types'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type PermissionMode } from '../../src/shared/permissions'
-import { base64OfUtf8, pastedFileName, pastePlaceholder, shouldOffloadPaste } from '../../src/shared/chat/largePaste'
+import {
+  base64OfUtf8,
+  insertPastePlaceholder,
+  pastedFileName,
+  pastePlaceholder,
+  shouldOffloadPaste,
+} from '../../src/shared/chat/largePaste'
 import { textAfterOffload } from '../src/ui/pasteOffload'
+import { planPickedImage } from '../src/ui/pickedImage'
+import { canCopy, copyText } from '../src/ui/copy'
+import { canPickImage } from '../src/net/pickSupport'
 import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
 import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TimeSep, TopBar } from '../src/ui/kit'
@@ -33,6 +42,43 @@ import { initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/a
  * 版式照原型设计层 D:顶栏(返回 / 执行面板 / 停止)→ 状态条 → 消息流 → **钉住的门** → 输入区。
  * 门在输入区正上方且不参与滚动 —— 那是这一屏唯一的实底彩色块。
  */
+/**
+ * ★这两个探测在**模块作用域只跑一次**,一辈子不会变(装在这台手机上的那个包里有没有这个原生模块,
+ *  是编译期就定死的事)。为假时下面**根本不渲染那个入口** —— 不是灰的、不是点了弹一句,是没有。
+ *  理由见 `src/ui/copy.ts` / `src/net/pickSupport.ts` 顶部:上一次「按钮照常显示、点下去当场崩」。
+ */
+const CAN_COPY = canCopy()
+const CAN_PICK = canPickImage()
+
+/**
+ * 复制这一条回复的正文。
+ *
+ * ★手机上**没有 toast**。复制成功却一点动静都没有,读起来就是「我点了,没反应」,然后人会再点三次
+ *  还是不确定。所以反馈就在原地:那两个字自己变成「已复制」,1.5 秒后变回来。失败也要说
+ *  (web 上明文 http 里根本没有 `navigator.clipboard`),别让人以为剪贴板里已经有东西了。
+ */
+function CopyBtn({ text }: { text: string }) {
+  const c = useC()
+  const [phase, setPhase] = useState<'idle' | 'ok' | 'fail'>('idle')
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 复制完 1.5 秒才变回去,而这中间人完全可能已经退出这一屏 —— 定时器不清掉就是往已经卸载的组件上写。
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+  const press = async () => {
+    const ok = await copyText(text)
+    setPhase(ok ? 'ok' : 'fail')
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => setPhase('idle'), 1500)
+  }
+  return (
+    // hitSlop 撑到手指够得着的大小:这行字只有 11px,按原样大小是点不中的。
+    <Pressable onPress={() => void press()} hitSlop={12}>
+      <T style={{ fontSize: 11, color: phase === 'fail' ? c.err : phase === 'ok' ? c.ok : c.faint }}>
+        {phase === 'ok' ? '已复制' : phase === 'fail' ? '复制不了' : '复制'}
+      </T>
+    </Pressable>
+  )
+}
+
 /** 思考过程默认折叠。展开了它会把回答本身挤出屏幕 —— 手机上一屏就那么点地方。 */
 function Think({ text }: { text: string }) {
   const c = useC()
@@ -76,6 +122,7 @@ export default function Chat() {
   /** 已经转成附件的那几坨。发出去之后清空 —— 附件是跟着这一条消息走的,不是这个会话的常驻物。 */
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [offloadBusy, setOffloadBusy] = useState(false)
+  const [pickBusy, setPickBusy] = useState(false)
   const flow = useRef<ScrollView | null>(null)
 
   /**
@@ -172,6 +219,45 @@ export default function Chat() {
       setNotice(e instanceof Error ? e.message : String(e))
     } finally {
       setOffloadBusy(false)
+    }
+  }
+
+  /**
+   * 从相册挑一张图,存进这个工作区的附件目录,正文末尾留一个占位符。
+   *
+   * ★**零新 channel**:`chat:save-paste` 本来就在手机拿得到的方法表里,图片和「粘的一大坨文本」
+   *  在服务端那头是同一件事(一段字节 + 一个文件名 → 写进 `.forge/attachments/`)。
+   * ★占位符落在**正文末尾**,不像 offload 那样替换选区:图不是从输入框里来的,没有「它原来占哪一段」
+   *  这回事。但占位符本身一样不能省 —— 连发三张图而正文里没有任何位置标记,agent 就分不清
+   *  哪句话在说哪张图(理由见 largePaste.ts)。
+   */
+  const pickImage = async () => {
+    if (!selected) return
+    setPickBusy(true)
+    try {
+      // ★**运行时 require,绝不能静态 import**:metro 会把静态 import 提到最前面无条件执行,
+      //  那样上面 `CAN_PICK` 那句探测就白做了 —— 旧包照样崩在 import 那一行(同 `app/scan.tsx`)。
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const ip = require('expo-image-picker') as typeof import('expo-image-picker')
+      // ★`quality: 0.8` 且**不改尺寸**是有意的:代理要看的是截图上的字,压糊了等于白传。
+      //  代价是原图多大发多大,所以下面 planPickedImage 那条大小闸门是必需的,不是保险。
+      const r = await ip.launchImageLibraryAsync({ mediaTypes: ['images'], base64: true, quality: 0.8 })
+      if (r.canceled) return
+      const plan = planPickedImage(r.assets[0] ?? {}, new Date())
+      if (!plan.ok) throw new Error(plan.why)
+      const att = (await invoke(CH.chatSavePaste, [
+        { workspacePath: selected.wsPath, name: plan.name, dataBase64: plan.dataBase64 },
+      ])) as Attachment | null
+      // 服务端写不进去时返回的是 **null**(它不抛)—— 同 offload() 里那条注释。
+      if (!att) throw new Error('存不进工作区的附件目录(盘满 / 没权限?)')
+      setAttachments((a) => [...a, att])
+      // ★函数式更新:选图 + 存盘是好几秒的事,这中间人完全可能已经在打字了。拿 await 之前的
+      //  `text` 快照写回去,就是把他这几秒里打的字整段吃掉(offload 那边刚踩过这个坑)。
+      setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPickBusy(false)
     }
   }
 
@@ -335,9 +421,16 @@ export default function Chat() {
                           {(m.model ?? 'A').slice(0, 1).toUpperCase()}
                         </T>
                       </View>
-                      <T mono style={{ fontSize: 11, letterSpacing: 0.4, color: c.faint }}>
+                      <T mono numberOfLines={1} style={{ fontSize: 11, letterSpacing: 0.4, color: c.faint, flexShrink: 1 }}>
                         {m.model ?? '代理'}
                       </T>
+                      {/* 复制排在这一行的最右边:头一行本来就是「这条是谁说的」,复制的是这条,位置对得上。
+                          ★正文空的时候不摆 —— 那种消息只有工具卡,复制过去是一个空字符串。 */}
+                      {CAN_COPY && m.text.trim() ? (
+                        <View style={{ marginLeft: 'auto' }}>
+                          <CopyBtn text={m.text} />
+                        </View>
+                      ) : null}
                     </View>
                     {m.think ? <Think text={m.think} /> : null}
                     {/* 思考 → 工具 → 子代理 → 正文。和桌面端 Message.tsx 的次序一致,别两边各排各的。 */}
@@ -453,6 +546,16 @@ export default function Chat() {
             >
               {permissionModeLabel(perm)}
             </Chip>
+            {/* ★从相册发图。`CAN_PICK` 为假(这个包里没有 expo-image-picker)时**整颗不摆** ——
+                摆一个灰的等于说「这里有东西,只是现在不能点」,而真相是要重装一次新包才有。 */}
+            {CAN_PICK ? (
+              <Chip
+                onPress={online && selected && !pickBusy ? () => void pickImage() : undefined}
+                disabled={!online || !selected || pickBusy}
+              >
+                {pickBusy ? '🖼 正在存…' : '🖼 图片'}
+              </Chip>
+            ) : null}
             {/* 已经在工作流里就不再给启动入口 —— 一个会话同时只能在一条流上。 */}
             {!wf ? (
               <Chip onPress={online && selected ? () => router.push('/workflow') : undefined} disabled={!online || !selected}>

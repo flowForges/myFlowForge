@@ -115,7 +115,13 @@ try {
   ok('iOS 相机权限用的是我们自己写的中文文案(不是 expo-camera 的英文默认)',
     /NSCameraUsageDescription<\/key>\s*<string>myFlowForge [^<]*扫一扫/.test(plist),
     plist.includes('access your camera') ? 'app.json 里 expo-camera 那条插件配置没生效' : '')
-  const pbx = fs.readFileSync(path.join(ROOT, 'ios/myFlowForge.xcodeproj/project.pbxproj'), 'utf8')
+  // ★★和相机那条同一个理由:查的是**我们自己那句中文**,不是键名。
+  //  expo-image-picker 的自动链接会替你补一条英文默认(`Allow $(PRODUCT_NAME) to access your photos`),
+  //  只查键名的话,app.json 里那条插件配置被删掉也照样绿 —— 现象是中文 app 弹一句英文要权限。
+  ok('iOS 相册权限用的是我们自己写的中文文案(不是 expo-image-picker 的英文默认)',
+    /NSPhotoLibraryUsageDescription<\/key>\s*<string>myFlowForge [^<]*相册/.test(plist),
+    plist.includes('access your photos') ? 'app.json 里 expo-image-picker 那条插件配置没生效' : '')
+  const pbx =fs.readFileSync(path.join(ROOT, 'ios/myFlowForge.xcodeproj/project.pbxproj'), 'utf8')
   ok('iOS 工程里带着 Team(否则每次重建都要手点一次)', /DEVELOPMENT_TEAM = \w+;/.test(pbx))
 } catch (e) {
   ok('iOS 原生工程生成 + 配置核对', false, String(e.message).slice(0, 120))

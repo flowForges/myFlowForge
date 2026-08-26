@@ -43,6 +43,12 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "myFlowForge 只在你点「加图片」时读一次相册,把选中的图片存进这个工作区的附件目录交给代理 —— 不上传到别处。"
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {
