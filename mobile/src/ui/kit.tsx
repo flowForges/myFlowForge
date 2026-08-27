@@ -225,10 +225,13 @@ export function Note({ children }: { children: React.ReactNode }) {
  *  一句话:这个共享件的纵向几何是有远程消费者的,别当它只是个列表容器。
  *
  *  ★**横向的量是安全的,而且现在真有人在用**:根屏展开后的会话抽屉给这一层加了
- *   `marginLeft` + `borderLeftWidth` + `paddingLeft`,画的就是电脑端左侧栏
- *   `.ws-sess-list` 那条竖线(「这几条从属于上面那一行」)。看到那几个属性别顺手
- *   「统一」成 `margin` 简写或者挪到外层去 —— 简写会把纵向那一半一起带进来,
- *   而挪到外层就等于在测量链条里多插一层没人量的偏移。
+ *   `marginLeft` / `paddingLeft` / `paddingRight`,把内容让开一条给树用的位置
+ *   (那棵树 —— 主干 + 每行一个 `├─`、最后一行 `└─` —— 画在**每一行自己**头上,
+ *   见 `TreeConnector.tsx`;这一层身上曾经有过一条 `borderLeft`,那是被真机否掉的老做法)。
+ *   看到那几个属性别顺手「统一」成 `margin` 简写或者挪到外层去 —— 简写会把纵向那一半
+ *   一起带进来,而挪到外层就等于在测量链条里多插一层没人量的偏移。
+ *  ★同一个抽屉还把这一层的 `gap` 关成了 0:行间距改由**每一行自己**的 `TreeGap` 撑
+ *   (那一小段同时把主干接上)。别好心把 gap 加回去 —— 会变成双份间距,而且主干接不上。
  */
 export function List({ children, style }: { children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
   return <View style={[s.list, style]}>{children}</View>

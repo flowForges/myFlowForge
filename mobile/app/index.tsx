@@ -21,6 +21,8 @@ import { runningKey } from '../src/data/runningMerge'
 import { StatusBadge } from '../src/ui/StatusBadge'
 import { WsRow } from '../src/ui/WsRow'
 import { NeedsYou, type NeedItem } from '../src/ui/NeedsYou'
+import { TreeConnector, TreeGap } from '../src/ui/TreeConnector'
+import { indentFor } from '../src/ui/tree'
 
 /**
  * 根屏 · 全部会话,按工作区分组。
@@ -33,6 +35,12 @@ import { NeedsYou, type NeedItem } from '../src/ui/NeedsYou'
  * 因为是根屏,零主机的首跑引导也落在这里:一个刚装上的新用户没有会话可点,
  * 只会落在这儿,所以「先连一台电脑」必须是这一屏自己的分支,不能指望对话屏兜底。
  */
+
+/**
+ * 抽屉里**不上树**的那几样(空态那句话、「＋ 新建会话」、建失败那句红字)要缩进多少 ——
+ * 正好是连接列的宽度,这样它们和会话卡的左沿对齐。见 `tree.ts` 的 `indentFor`。
+ */
+const ASIDE = indentFor('aside')
 
 /** 门等了多久,`mm:ss`。和 `GateCard` 的 `useWaited` 同一个口径。 */
 function waited(since: number, now: number): string {
@@ -489,7 +497,14 @@ export default function Home() {
         ) : (
           <>
           {/* ★这一块就是这一屏存在的理由:代理停在门上而你不在电脑前。
-              没事的时候整块不渲染 —— 「没有这一块 = 没你的事」。 */}
+              没事的时候整块不渲染 —— 「没有这一块 = 没你的事」。
+              ★它现在能折(折的只有列表,头和头上那个数永远在,见 NeedsYou.tsx)。
+               折叠会改变它的高度 = **下面每一个工作区分组整体挪位**,而定位气泡吃的第①段 y
+               (groupY)正是这些分组的 y —— 靠每个分组 View 自己的 onLayout 补 syncBubble
+               把它纠正过来,和折叠工作区那条路是同一个机制(见下面 groupY 的 onLayout)。
+               ★折叠状态是 NeedsYou **自己**存的,没有走 store:store 的 value 是带依赖数组的
+               useMemo,加字段漏加依赖会静默不更新(见 store.tsx 末尾那条注释),
+               而这个状态只有这一个消费者,没有理由去趟那道坎。 */}
           <NeedsYou
             items={needItems}
             gateCount={counts.gate}
@@ -586,24 +601,31 @@ export default function Home() {
                   >
                     {/* ★★展开后那几条会话原来是**飘着**的:一段缩进的卡片,和上面那一行工作区之间
                         除了底色深一档之外没有任何东西把它们连起来,读起来像另一份列表插了进来。
-                        用户直接指了电脑端左侧栏的做法,照抄的就是那一条规矩(`shell.css` 的
-                        `.ws-sess-list { margin: 2px 0 2px 17px; padding-left: 9px; border-left: 1px solid var(--border) }`):
-                        **一条竖线**画在容器上,而不是给每一行加装饰。一条线就说清了「这几条从属于上面那一行」。
-                        ★★竖线只能加在**这一层(List)自己**身上,而且只准动横向的量:
-                        `marginLeft` / `paddingLeft` / `borderLeftWidth` 都不改 List 相对上面那层裸 View 的 y。
-                        纵向 margin 一加就把定位气泡的三段 y 拆散了(见 kit.tsx 里 `List` 上的注释),
-                        所以电脑端那份 `margin: 2px 0` 的**纵向那一半刻意没抄**,靠现成的 paddingVertical 顶替。 */}
+                        第一版照电脑端左侧栏抄了 `.ws-sess-list` 那条规矩(`shell.css`:
+                        `margin: 2px 0 2px 17px; padding-left: 9px; border-left: 1px solid var(--border)`)——
+                        **一条画在容器上的竖线**。真机上用户当场否了:「这是一根竖线,应该跟会话有连线,
+                        现在太low了」。他是对的:那条线只说了「这几条是一伙的」,没说**每一条**从属于
+                        上面那一行,而且没有终点 —— 一路划到抽屉底,末尾悬着。
+                        ★★现在是一棵真的树:主干 + 每一条会话一个 `├─`、最后一条 `└─` 收住。
+                        树画在**每一行自己**头上(`TreeConnector`),容器这一层不再有 `borderLeft`;
+                        主干的绝对位置没变(`marginLeft: 10` + 连接列里的 `TREE.trunk: 7` = 老那条线的 17)。
+                        ★★这一层只准动**横向**的量:`marginLeft` / `paddingLeft` / `paddingRight` 都不改
+                        List 相对上面那层裸 View 的 y。纵向 margin 一加就把定位气泡的三段 y 拆散了
+                        (见 kit.tsx 里 `List` 上的注释)。
+                        ★`gap: 0` + `paddingTop: 0` 是树要求的:行与行之间那道缝由**每一行自己**的
+                        `TreeGap` 撑出来(顺便把主干接上),第一行的那一段也必须在,主干才是从抽屉上沿
+                        紧贴着工作区那一行长下来的。缝交给 List 的 gap 去撑的话,主干每隔一张卡就断一次。 */}
                     <List
                       style={{
-                        marginLeft: 17,
-                        paddingLeft: 9,
-                        borderLeftWidth: 1,
-                        borderLeftColor: c.border,
+                        marginLeft: 10,
+                        paddingLeft: 0,
                         paddingRight: 10,
-                        paddingVertical: 8,
+                        paddingTop: 0,
+                        paddingBottom: 10,
+                        gap: 0,
                       }}
                     >
-                      {sessions.map((s) => {
+                      {sessions.map((s, si) => {
                         const sg = wsGates.filter((x) => x.sessionId === s.id)
                         return (
                           // 定位气泡 absY() 三段 y 的第③段:这层 View 相对上面的 List(第②段,
@@ -611,11 +633,31 @@ export default function Home() {
                           // (groupY)。三段缺一个,absY() 就返回 undefined —— 不会报错,只会让
                           // 气泡悄悄滚到错的位置。没用 measureLayout 等原生测量 API:新架构
                           // (Fabric)下的行为这个环境没法验证,onLayout 在新旧架构都确定支持。
+                          //
+                          // ★★加树的时候**没有动这条链条**:量的还是这一层、还是相对 List、还是同一个
+                          //  `rowY[key]`。树是**长在这一层里面**的(上面一段 TreeGap + 下面一横排
+                          //  连接列和卡片),不是在这一层**外面**又套了一层 —— 外面套一层的话,
+                          //  三段 y 就少算了新那一层的偏移,症状是气泡稳定地滚偏一截,
+                          //  而且一条测试都不会红(布局在 node/jsdom 里量不了)。
+                          // ★这一层自己**仍然没有纵向 margin/padding**:行与行之间那道缝是
+                          //  TreeGap 这个**孩子**撑出来的,它算在本层的高度里,不改本层的 y。
                           <View
                             key={s.id}
                             onLayout={(e) => { rowY.current[`${g.ws.path}\0${s.id}`] = e.nativeEvent.layout.y }}
                           >
+                            <TreeGap />
+                            {/* ★横排:左边是树枝,右边是卡片。`alignItems: 'stretch'`(默认值,
+                                写出来是因为它承重)让连接列长到和卡片一样高 —— 横杠的 `50%`
+                                因此正好落在这一行的垂直中点,不需要知道这一行有多高。 */}
+                            <View style={{ flexDirection: 'row', alignItems: 'stretch' }}>
+                              <TreeConnector index={si} total={sessions.length} />
                             <Row
+                              // 卡片吃掉连接列之外的全部宽度。
+                              // ★`Row` 自己写死了 `width: '100%'`(它本来是独占一行的),这里**不用**去覆盖它:
+                              //  `flex: 1` 在 RN 里同时把 flexBasis 设成 0,主轴尺寸按 basis 算,width 不再参与。
+                              //  (试过加 `width: 'auto'`,浏览器里量下来一模一样 —— 变异验证过,
+                              //   加不加都不影响任何一条断言,所以不留这行看着像在防什么的死代码。)
+                              style={{ flex: 1, minWidth: 0 }}
                               gate={sg.length > 0}
                               onPress={() => {
                                 select({ wsPath: g.ws.path, sessionId: s.id })
@@ -664,11 +706,14 @@ export default function Home() {
                                 <T style={{ fontSize: 15, color: c.faint }}>›</T>
                               </View>
                             </Row>
+                            </View>
                           </View>
                         )
                       })}
+                      {/* 一条会话都没有 = **没有树**(没有东西可连),只剩这句话和底下那颗按钮。
+                          左边照样缩到卡片左沿(`indentFor('aside')`),否则它比上面那几张卡凸出去一截。 */}
                       {sessions.length === 0 ? (
-                        <T style={{ fontSize: 12.5, lineHeight: 19, color: c.faint, paddingVertical: 4 }}>
+                        <T style={{ fontSize: 12.5, lineHeight: 19, color: c.faint, paddingLeft: ASIDE, paddingTop: 10, paddingBottom: 4 }}>
                           还没有人在这个工作区开过会话。
                         </T>
                       ) : null}
@@ -683,24 +728,31 @@ export default function Home() {
                           ★★**承重的是 ghost 那一档(透明底),不是虚线**:RN 的 `borderStyle: 'dashed'`
                            在 Android 上一旦有圆角就退回实线,iOS 上在 hairline 宽度下也画不出虚。
                            所以这里把 `borderWidth` 顶到 1 让 iOS 画得出,同时**不依赖它** ——
-                           虚线画不出来的时候,透明底 + 左对齐的 ＋ 仍然和上面那几张实底的卡分得开。 */}
-                      <Btn
-                        kind="ghost"
-                        size="sm"
-                        block
-                        disabled={creating || !online}
-                        onPress={() => void newSession(g.ws.path)}
-                        style={{ borderWidth: 1, borderStyle: 'dashed', justifyContent: 'flex-start' }}
-                      >
-                        ＋ 新建会话
-                      </Btn>
+                           虚线画不出来的时候,透明底 + 左对齐的 ＋ 仍然和上面那几张实底的卡分得开。
+                          ★★**它不上树。** 树说的是「这几条从属于上面那个工作区」—— 一个包含关系,
+                           连的是**已经存在**的东西;而这一颗是「造一个还不存在的」。真要接上去,
+                           收尾那个 `└─` 就会落在一颗按钮上,等于说「这个工作区里最后一样东西是个按钮」。
+                           主干由**最后一条会话**收住(`trunkAt`),两件事必须一致。理由在 `tree.ts`。
+                           所以它只是**缩进到和卡片左沿对齐**(`indentFor('aside')`),身上没有任何线。 */}
+                      <View style={{ paddingLeft: ASIDE, paddingTop: 10 }}>
+                        <Btn
+                          kind="ghost"
+                          size="sm"
+                          block
+                          disabled={creating || !online}
+                          onPress={() => void newSession(g.ws.path)}
+                          style={{ borderWidth: 1, borderStyle: 'dashed', justifyContent: 'flex-start' }}
+                        >
+                          ＋ 新建会话
+                        </Btn>
+                      </View>
                       {/* ★建会话失败时那句话就落在**这个工作区**里,紧挨着刚才按的那颗按钮。
                           原来它在那张单子里;单子没了,而错误还是必须看得见 —— 见 `newSession()`
                           里那段注释:这条路径曾经是彻底无声的。
                           错误按工作区分开记(`newErr.wsPath`),否则在 A 区失败一次,B 区展开时
                           底下也挂着一句红字,说的是一件根本没在这儿发生过的事。 */}
                       {newErr?.wsPath === g.ws.path ? (
-                        <View style={{ padding: 11, borderRadius: RADIUS.ctl, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
+                        <View style={{ marginLeft: ASIDE, marginTop: 8, padding: 11, borderRadius: RADIUS.ctl, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
                           <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{newErr.msg}</T>
                         </View>
                       ) : null}
