@@ -5,7 +5,7 @@ import { CH } from '../../src/main/ipc/channels'
 import type { SessionsFile, WorkspaceMeta } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
-import { Btn, Empty, IconBtn, List, LiveDot, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
+import { Btn, Empty, IconBtn, List, LiveDot, Row, T, TopBar, TopTitle } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
 import { JumpBubble } from '../src/ui/JumpBubble'
 import { useConn } from '../src/net/conn'
@@ -15,6 +15,7 @@ import { isSessionUnread } from '@shared/chat/unread'
 import { tierOf, countTiers, topTier, type SessionTier, type TierCounts } from '../src/data/sessionStatus'
 import { runningKey } from '../src/data/runningMerge'
 import { StatusBadge } from '../src/ui/StatusBadge'
+import { WsRow } from '../src/ui/WsRow'
 
 /**
  * 根屏 · 全部会话,按工作区分组。
@@ -429,32 +430,33 @@ export default function Home() {
                   syncBubble()
                 }}
               >
-                <Sec
-                  expanded={open}
-                  onPress={() => toggleWs(g.ws.path)}
-                  onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
-                  note={branches.get(g.ws.path)}
-                  right={(() => {
-                    // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
-                    // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
-                    const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
-                    // ★展开时会话自己带徽章了,分组头上再来一个是重复(电脑端 Sidebar.tsx:248 同一条规矩)。
-                    //  但**门那一档例外**:门是「代理停在那儿等你」,收起展开都该看得见。
-                    if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
-                    if (!open && wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
-                    if (!open && wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
-                    return (
-                      <T mono style={{ fontSize: 10.5, color: c.faint }}>
-                        {g.ws.projectCount} 个项目
-                      </T>
-                    )
-                  })()}
-                >
-                  {/* 分支名走 `note` 而**不是**拼进这里 —— 标题这个 <T> 带 textTransform:'uppercase',
-                      拼进来的 `feat/rmh-daemon` 会显示成 `FEAT/RMH-DAEMON`,而 git 的 ref 区分大小写,
-                      那是个**不存在**的分支名。区名大写是设计要的(它只是显示名),分支名不是。 */}
-                  {g.ws.name}
-                </Sec>
+                {/* ★工作区分组头是**一张卡**,不是一个小标题 —— 见 WsRow 的注释。
+                    原来这里用的是 `Sec`(原型 d.css 的 `.sec`:10.5px 浅灰等宽小标签),
+                    而 `.sec` 在原型里永远只是「一行标签 + 底下一串卡片」里的那行标签。
+                    加了折叠之后它成了**可点的主体**、还默认收起,于是整屏只剩十几行浅灰小字。
+                    `Sec` 本身没动 —— 另外 6 个屏还在拿它当真正的分节标签用。 */}
+                <View style={{ paddingHorizontal: 12, paddingTop: 8 }}>
+                  <WsRow
+                    name={g.ws.name}
+                    note={branches.get(g.ws.path)}
+                    meta={`${g.ws.projectCount} 个项目`}
+                    expanded={open}
+                    gate={wsGates.length > 0}
+                    onPress={() => toggleWs(g.ws.path)}
+                    onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
+                    right={(() => {
+                      // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
+                      // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
+                      const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
+                      // ★展开时会话自己带徽章了,分组头上再来一个是重复(电脑端 Sidebar.tsx:248 同一条规矩)。
+                      //  但**门那一档例外**:门是「代理停在那儿等你」,收起展开都该看得见。
+                      if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
+                      if (!open && wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
+                      if (!open && wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
+                      return null
+                    })()}
+                  />
+                </View>
                 {!open ? null : sessions.length === 0 ? (
                   <Empty title="还没有人在这个工作区开过会话" desc="新建会话这类操作手机上也能做,但新建工作区留在电脑端。" />
                 ) : (
@@ -465,7 +467,11 @@ export default function Home() {
                   // 只会悄悄滚到错的位置。没用 measureLayout 等原生测量 API:新架构(Fabric)
                   // 下的行为这个环境没法验证,onLayout 在新旧架构都确定支持。
                   <View onLayout={(e) => { listY.current[g.ws.path] = e.nativeEvent.layout.y }}>
-                    <List>
+                    {/* ★往右缩一格:工作区行现在也是卡片了,不缩的话父子两级长得一模一样,
+                        读起来是一列平的卡,而不是「这几条会话属于上面那个区」。
+                        缩进加在 List 的 style 上,**不加在外面那层测量用的裸 View 上** ——
+                        那一层的几何被气泡的 absY() 消费(见上面的注释)。 */}
+                    <List style={{ paddingLeft: 26 }}>
                       {sessions.map((s) => {
                         const sg = wsGates.filter((x) => x.sessionId === s.id)
                         return (

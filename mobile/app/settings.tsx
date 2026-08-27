@@ -161,23 +161,17 @@ export default function Settings() {
             已归档的工作区
           </Btn>
         </List>
-        <Note>删除主机、手动重连都在「管理主机」那一屏里。切过去之后,会话、变更、终端全部换成那台机器的。</Note>
-        <Note>归档是在会话列表长按分组头做的;归档的工作区在「已归档的工作区」里恢复。</Note>
 
         <Sec>外观 · 跟着这台手机走</Sec>
         <List>
           <Pick label="主题" value={THEMES.find((t) => t.id === pref)?.label ?? ''} onPress={() => setThemeSheet(true)} />
           <Pick label="正文字号" value={TEXTS.find((t) => t.id === text)?.label ?? ''} onPress={() => setTextSheet(true)} />
         </List>
-        <Note>切主机不会改这两样 —— 它们属于你手上这台设备,不属于那台电脑。</Note>
         {/* ★设计文档 §5.5.4:语音**不写代码**,系统键盘自带的听写现在就能用。
             但「能用」和「知道能用」是两回事 —— app 里没有麦克风按钮,人只会以为手机端不能说话,
             然后在通勤路上一个字一个字地戳。这一句话就是这条功能的**全部实现**,
             所以它必须真的出现在界面上,不能只留在文档里。
             放在「外观」下面而不是另起一组:设计文档 §7.2 钉死只有三组。 */}
-        <Note>
-          想说话代替打字?直接用系统键盘上那颗麦克风键听写 —— app 不另做录音,系统自带的更准、也不用多给一个权限。
-        </Note>
 
         <Sec>这台手机</Sec>
         <List>
