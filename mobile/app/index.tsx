@@ -48,9 +48,10 @@ export default function Home() {
     setPinned, archive,
   } = useStore()
   const now = Date.now()
-  const [newSheet, setNewSheet] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [newErr, setNewErr] = useState<string | null>(null)
+  // 建会话失败时那句话,**连同它属于哪个工作区**一起记 —— 那颗按钮现在每个展开的工作区里各有一颗,
+  // 只记一句 string 的话,在 A 区失败会让 B 区底下也挂着同一句红字。
+  const [newErr, setNewErr] = useState<{ wsPath: string; msg: string } | null>(null)
   // 顶部主机条点开的那张换主机单子。
   const [hostSheet, setHostSheet] = useState(false)
 
@@ -112,7 +113,11 @@ export default function Home() {
       unread: isSessionUnread(unread, wsPath, sessionId),
     })
 
-  // 新建会话:手机上能做。新建**工作区**不做 —— 那要选目录、要克隆仓库,留在电脑端。
+  /**
+   * 新建会话。★入口现在是**每个展开的工作区底下那一行**,不再是顶栏那颗 ＋ ——
+   * 你点开抽屉的时候人已经在这个工作区里了,再弹一张单子问「哪个工作区」是多此一问。
+   * (新建**工作区**是另一条路:列表最底下那颗按钮 → `/new-workspace`。)
+   */
   const newSession = async (wsPath: string) => {
     setCreating(true)
     setNewErr(null)
@@ -125,13 +130,14 @@ export default function Home() {
       // 看起来像「建了但没建上」。
       ensureWs(wsPath)
       refresh()
-      setNewSheet(false)
       // 建好就直接进去 —— 建会话的意图就是「我要在这儿说点什么」。
       router.push('/chat')
     } catch (e) {
       // ★原来这里只有 try/finally,没有 catch:建失败就是**彻底无声**。
       //  真机上报的「无法新增会话」如果是服务端拒绝(比如工作区已归档),你一个字都看不到。
-      setNewErr(e instanceof Error ? e.message : String(e))
+      //  ★这条错误路径连同它那句原话一起留着 —— 装它的地方从那张单子换成了工作区抽屉,
+      //   但「必须看得见」这一条没变。
+      setNewErr({ wsPath, msg: e instanceof Error ? e.message : String(e) })
     } finally {
       setCreating(false)
     }
@@ -469,7 +475,17 @@ export default function Home() {
         ) : loading ? (
           <Empty title="正在读取…" />
         ) : !showsRows ? (
-          <Empty title="这台机器上还没有工作区" desc="新建工作区留在电脑端。" />
+          // ★这里原来写着「新建工作区留在电脑端」。那句话已经不成立了(设计文档 §7.4 明确纠正过:
+          //  `workspace:create` / `fs:browse` 这些手机全拿得到,「留在电脑端」是抄自一句过时的注释),
+          //  而且对着一个**空**列表说「你在这儿什么都做不了」是最糟的一种空态。
+          <>
+            <Empty title="这台机器上还没有工作区" desc="工作区是一堆项目 + 一条工作流。先建一个,才有地方开会话。" />
+            <View style={{ paddingHorizontal: 30 }}>
+              <Btn kind="pri" block onPress={() => router.push('/new-workspace')}>
+                ＋ 新建工作区
+              </Btn>
+            </View>
+          </>
         ) : (
           <>
           {/* ★这一块就是这一屏存在的理由:代理停在门上而你不在电脑前。
@@ -539,11 +555,11 @@ export default function Home() {
                     })()}
                   />
                 </View>
-                {!open ? null : sessions.length === 0 ? (
-                  <View style={{ marginHorizontal: 12, backgroundColor: c.bg2, borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, borderColor: c.border, paddingVertical: 4 }}>
-                    <Empty title="还没有人在这个工作区开过会话" desc="新建会话这类操作手机上也能做,但新建工作区留在电脑端。" />
-                  </View>
-                ) : (
+                {/* ★★展开区**只有一个分支**了。原来这里是「没会话 → 一个不带 onLayout 的空态盒子 /
+                    有会话 → 抽屉」两条,于是空工作区那一档根本不写 `listY`,而现在它里面也有了一颗
+                    可点的东西(「＋ 新建会话」)。合成一条之后,只要展开,第②段 y 就一定量得到 ——
+                    定位气泡那条三段链条少一种缺口。 */}
+                {!open ? null : (
                   // 定位气泡 absY() 三段 y 的第②段:这一层测的是 `<List>` 相对上面分组 View
                   // (第①段,groupY)的偏移,记进 listY[wsPath];第③段是每行外面的 View(rowY)。
                   // 三段缺一个,absY() 就返回 undefined —— 不会报错,只会让气泡悄悄滚到错的位置。
@@ -651,12 +667,60 @@ export default function Home() {
                           </View>
                         )
                       })}
+                      {sessions.length === 0 ? (
+                        <T style={{ fontSize: 12.5, lineHeight: 19, color: c.faint, paddingVertical: 4 }}>
+                          还没有人在这个工作区开过会话。
+                        </T>
+                      ) : null}
+                      {/* ★★「新建会话」现在**在工作区里面**,不在顶栏。
+                          原来是右上角一颗 ＋ → 弹一张单子问「哪个工作区」。而你点开这个抽屉的时候
+                          已经**站在**这个工作区里了 —— 那张单子问的是一个你刚刚已经回答过的问题。
+                          ★它必须读起来是**动作**,不是又一条会话:所以是一颗虚线描边的按钮
+                          (`borderStyle: 'dashed'`),不是一张和上面几条一模一样的卡。
+                          虚线这一档是「造一个还不存在的东西」的统一说法 —— 列表最底下那颗
+                          「＋ 新建工作区」用的是同一套,两处一眼看得出是同一类事。
+                          ★不上实心色:原型 d.css 第三条原则钉死了全屏唯一的实底彩色块是门。 */}
+                      <Btn
+                        kind="ghost"
+                        size="sm"
+                        block
+                        disabled={creating || !online}
+                        onPress={() => void newSession(g.ws.path)}
+                        style={{ borderStyle: 'dashed', justifyContent: 'flex-start' }}
+                      >
+                        ＋ 新建会话
+                      </Btn>
+                      {/* ★建会话失败时那句话就落在**这个工作区**里,紧挨着刚才按的那颗按钮。
+                          原来它在那张单子里;单子没了,而错误还是必须看得见 —— 见 `newSession()`
+                          里那段注释:这条路径曾经是彻底无声的。
+                          错误按工作区分开记(`newErr.wsPath`),否则在 A 区失败一次,B 区展开时
+                          底下也挂着一句红字,说的是一件根本没在这儿发生过的事。 */}
+                      {newErr?.wsPath === g.ws.path ? (
+                        <View style={{ padding: 11, borderRadius: RADIUS.ctl, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
+                          <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{newErr.msg}</T>
+                        </View>
+                      ) : null}
                     </List>
                   </View>
                 )}
               </View>
             )
           })}
+          {/* ★★列表的**收尾动作**,不是列表的又一行 —— 所以刻意长得和上面那张分组表不一样:
+              虚线、透明底、和表格之间隔着一整段空白。上面那张表是「已经有的东西」,
+              这一颗是「造一个新的」,它们不该看起来是同一种东西。
+              ★注意它落在所有工作区分组 View 的**外面**:定位气泡的第①段 y(groupY)量的是
+              每个分组 View 相对滚动内容的偏移,这一颗排在它们后面,不改任何一段 y。 */}
+          <View style={{ paddingHorizontal: 12, paddingTop: 18 }}>
+            <Btn
+              kind="ghost"
+              block
+              onPress={() => router.push('/new-workspace')}
+              style={{ borderStyle: 'dashed' }}
+            >
+              ＋ 新建工作区
+            </Btn>
+          </View>
           </>
         )}
         {gates.length > 0 && (
@@ -688,29 +752,6 @@ export default function Home() {
           router.push('/add-host')
         }}
       />
-
-      <Sheet open={newSheet} onClose={() => setNewSheet(false)} title="新建会话" sub="选一个工作区。新建工作区留在电脑端。">
-        {newErr ? (
-          <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
-            <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{newErr}</T>
-          </View>
-        ) : null}
-        {groups.length === 0 ? <Empty title="没有可用的工作区" desc="连上主机之后这里才有内容。" /> : null}
-        {groups.map((g) => (
-          <Row key={g.ws.path} disabled={creating} onPress={() => void newSession(g.ws.path)}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <T style={{ fontSize: 14.5, fontWeight: '600', color: c.fg }}>{g.ws.name}</T>
-              {/* ★设计文档 §7.3 要的是「N 个会话 · M 个项目」,不是原来那行绝对路径。
-                  路径在这儿帮不上忙:选哪个区靠的是「哪个区我在干活」,而
-                  `/Users/…/work/…` 那一长串在 390 宽的屏上还会被截掉尾巴,
-                  剩下的前缀每个区都一模一样 —— 一行字占了位置却零信息量。 */}
-              <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
-                {g.sessions.length} 个会话 · {g.ws.projectCount} 个项目
-              </T>
-            </View>
-          </Row>
-        ))}
-      </Sheet>
 
       {/* 分组头长按呼出的操作单。★长按是发现不了的手势,副标题把它说出来 —— 否则人答完这道单子
           关掉之后再也想不起来是怎么叫出来的。 */}
