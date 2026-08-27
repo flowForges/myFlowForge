@@ -36,7 +36,7 @@ import { useChat } from '../src/data/useChat'
 import { useAgents } from '../src/data/useAgents'
 import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
-import { initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
+import { atBottom, initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
 
 /**
  * 对话屏,从会话列表(根屏)推入的下一层,总是带着一个已选会话进来。
@@ -177,23 +177,58 @@ export default function Chat() {
   //  等于把另一台还在等的机器藏起来了。
   const gateIndex = gate ? gates.findIndex((g) => g.id === gate.id) : -1
 
-  // ★落底:进屏那一次**瞬间到位**,之后的新消息才带动画。规则本身在 `autoScroll.ts`(有单测)。
-  //  真机验收当场报的「进会话时历史哗哗刷一遍」就是这里原来无条件 `animated: true` 造成的。
+  /**
+   * ★落底:进屏那一次**瞬间到位**,之后跟着新内容走;**人一往上翻就立刻停手**。
+   *  规则本身在 `autoScroll.ts`(有单测 + 变异验证),这里只负责喂它三个数、并把结果落地。
+   *
+   * ★★判据是「条数 + **最后一条正文的长度**」,不是只看条数:一轮回答从头到尾就是**一条**消息,
+   *  流式吐字只把它越接越长。只看条数的那一版,整轮输出期间一次都不会滚 —— 就是用户报的
+   *  「LLM 在一直输出,页面应该一直滚动」。
+   *
+   * ★★`atBottomRef` **只写 ref、不进 state**:`onScroll` 每秒来十几次,进 state 就是每秒十几次
+   *  重渲染整条消息流(和 `app/index.tsx` 的定位气泡同一条规矩)。它只被下面这个 effect 读,
+   *  而 effect 是由消息内容变化触发的 —— 不需要靠它自己触发渲染。
+   */
   const autoScroll = useRef<AutoScrollState>(initialAutoScroll())
+  const atBottomRef = useRef(true)
+  const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 定时器到期时要滚成什么样 / 状态该推进到哪。只有真的滚了才作数(见下)。 */
+  const pending = useRef<{ animated: boolean; state: AutoScrollState } | null>(null)
+  // 末条正文长度。放进依赖数组,流式吐字才有东西触发这个 effect。
+  const tailLen = msgs.length ? msgs[msgs.length - 1].text.length : 0
   useEffect(() => {
-    const r = nextScroll(autoScroll.current, msgs.length)
-    if (!r.scroll) return
-    const animated = r.scroll.animated
-    // 30ms 是等这一帧的布局落地 —— 立刻滚会滚到「还没算进新消息高度」的那个位置。
-    const t = setTimeout(() => {
-      // ★状态推进放在**真的滚了之后**,不是 effect 一进来就推进。清理函数会取消这个定时器
-      //  (StrictMode 的双次调用,或者 30ms 内消息数又变了),那种情况下这一次滚动**根本没发生** ——
-      //  状态要是已经推进过,「首帧瞬间到位」那一次就被悄悄吃掉了,现象要么又变回哗哗刷、要么干脆不落底。
+    const r = nextScroll(autoScroll.current, { count: msgs.length, tail: tailLen, atBottom: atBottomRef.current })
+    if (!r.scroll) {
+      // 不该滚:状态就地推进,并且**撤掉已经排上的那一次** —— 人这一刻可能刚好翻上去了,
+      // 让上一拍排的滚动照常执行,就是「他划走的同时被拽回底部」。
+      if (scrollTimer.current) {
+        clearTimeout(scrollTimer.current)
+        scrollTimer.current = null
+        pending.current = null
+      }
       autoScroll.current = r.state
-      flow.current?.scrollToEnd({ animated })
+      return
+    }
+    pending.current = { animated: r.scroll.animated, state: r.state }
+    // ★★**已经排了一次就让它照原计划打,不要重排。**30ms 是等这一帧的布局落地(立刻滚会滚到
+    //  「还没算进新内容高度」的那个位置)。但流式吐字时 30ms 内经常来好几片:每来一片就
+    //  clearTimeout 再重排的话,这个定时器**永远等不到到期**,画面反而一动不动 —— 正是要治的病。
+    //  不重排 ⇒ 最多 30ms 内必滚一次,滚的是**那一刻**的最新内容(`pending` 一直被覆盖成最新)。
+    if (scrollTimer.current) return
+    scrollTimer.current = setTimeout(() => {
+      scrollTimer.current = null
+      const p = pending.current
+      pending.current = null
+      if (!p) return
+      // ★状态推进放在**真的滚了之后**,不是 effect 一进来就推进:上面那条「撤掉」的路径会让
+      //  这一次滚动根本不发生,状态要是已经推进过,「首帧瞬间到位」那一次就被悄悄吃掉了
+      //  (现象要么又变回哗哗刷、要么干脆不落底)。
+      autoScroll.current = p.state
+      flow.current?.scrollToEnd({ animated: p.animated })
     }, 30)
-    return () => clearTimeout(t)
-  }, [msgs.length])
+  }, [msgs.length, tailLen])
+  // 卸载时收尾。★**只在卸载时清**:每次依赖变化都清的话就是上面说的「永远等不到到期」。
+  useEffect(() => () => { if (scrollTimer.current) clearTimeout(scrollTimer.current) }, [])
 
   /**
    * 把一段字节存成这个工作区的附件,并挂进 chip 行。**「转成附件」和「从相册发图」共用这一段。**
@@ -400,7 +435,23 @@ export default function Chat() {
         />
       ) : null}
 
-      <ScrollView ref={flow} style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 10 }}>
+      <ScrollView
+        ref={flow}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: 14, paddingBottom: 10 }}
+        // ★64ms 和 `app/index.tsx` 的定位气泡取同一个值:这只是「人现在在不在底下」这一个布尔量,
+        //  不需要每一帧都问。回调里只写 ref,而且**值没变就一个字都不写** —— 和那边一样的规矩。
+        scrollEventThrottle={64}
+        onScroll={(e) => {
+          const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent
+          const next = atBottom({
+            contentH: contentSize.height,
+            offsetY: contentOffset.y,
+            viewH: layoutMeasurement.height,
+          })
+          if (next !== atBottomRef.current) atBottomRef.current = next
+        }}
+      >
         {msgs.length === 0 && (storeLoading || chatLoading) ? (
           <Empty title="正在读取…" />
         ) : !selected ? (
