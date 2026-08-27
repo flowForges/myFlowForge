@@ -154,6 +154,61 @@ const STAGES = {
 const FEEDBACK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '.out', 'last-feedback.txt')
 try { fs.rmSync(FEEDBACK_FILE, { force: true }) } catch { /* 没有就算了 */ }
 
+/* ───── 新建工作区(设计文档 §7.4)的原料 ─────────────────────────────────────
+   ★这一段的形状**照真的抄**,不是随手编的:
+    · `config:list-workflows` 回的是 `readWorkflows().workflows` —— 阶段字段叫
+      `defaultAgent` / `defaultModel`(**不是** provider/model,上面 STAGES 那份是另一回事),
+      而且其中一条可以是 `libId` 引用,它的提示词只在全局阶段库里。
+    · `fs:browse` **失败不抛**,回一个带 `error` 的对象(见 src/main/fs/browse.ts)——
+      「没权限的目录」是常态。假的要在这一点上跟真的一样,否则手机端「只 catch 不看 error」
+      的 bug 在这里永远照不出来。 */
+const HOME = '/Users/zghua'
+// value = 子条目;`null` = 有这个目录但读不了(没权限);缺 key = 这个目录不存在。
+const DIRS = {
+  '/': [{ name: 'Users', dir: true }, { name: 'root', dir: true }],
+  [HOME]: [
+    { name: 'work', dir: true },
+    { name: 'Desktop', dir: true },
+    // ★留一个文件在这儿:手机端必须把它丢掉(工作区不可能建在一个文件里)。
+    { name: 'notes.md', dir: false },
+  ],
+  '/Users': [{ name: 'zghua', dir: true }],
+  '/Users/zghua/work': [{ name: 'ai_self', dir: true }, { name: '已经有这个了', dir: true }],
+  '/Users/zghua/work/ai_self': [],
+  '/Users/zghua/Desktop': [],
+  '/root': null,
+}
+const parentOf = (p) => (p === '/' ? null : p.slice(0, p.lastIndexOf('/')) || '/')
+const PROJECTS = [
+  { id: 'p-forge', name: 'forge', repoUrl: 'git@github.com:me/forge.git', defaultBranch: 'main', alias: '主仓库' },
+  { id: 'p-site', name: 'site', repoUrl: 'git@github.com:me/site.git', defaultBranch: 'main', alias: '' },
+  { id: 'p-api', name: 'api', repoUrl: 'git@github.com:me/api.git', defaultBranch: 'develop', alias: '后端' },
+]
+const CUSTOM_STAGES = [
+  { id: 'lib-doc', key: 'lib-doc', name: '补文档', defaultAgent: 'claude', defaultModel: 'opus', prompt: '把这次改动写进 README', scope: 'root' },
+]
+const WF_TEMPLATES = [
+  {
+    id: 'standard', name: '标准流', plugins: [], stagePrompts: {},
+    stages: [
+      { key: 'requirement', defaultAgent: 'claude', defaultModel: 'opus-4.8' },
+      { key: 'develop', defaultAgent: 'codex', defaultModel: 'gpt-5', scope: 'per-project' },
+    ],
+  },
+  {
+    id: 'quick', name: '快速修复', plugins: [], stagePrompts: {},
+    stages: [
+      { key: 'develop', defaultAgent: 'codex', defaultModel: 'gpt-5', scope: 'per-project' },
+      // ★库引用:模板里只冗余缓存了 key/name(而且是**过期的**名字),真身在 CUSTOM_STAGES。
+      //  手机端不解引用就会把「补文档」这一阶段的提示词整个丢掉,而且**一句报错都没有**。
+      { key: 'lib-doc', libId: 'lib-doc', name: '缓存的旧名字' },
+    ],
+  },
+]
+/** 手机发过来的 workspace:create 入参原样落档 —— 「到底发了什么」在浏览器里一点痕迹都不留。 */
+const CREATE_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '.out', 'last-create.json')
+try { fs.rmSync(CREATE_FILE, { force: true }) } catch { /* 没有就算了 */ }
+
 function findSession(wsPath, sessionId) {
   return (sessions[wsPath]?.sessions ?? []).find((x) => x.id === sessionId)
 }
@@ -315,6 +370,42 @@ const table = {
     runningSessionId: RUNNING[0] ?? null,
     runningSessionIds: RUNNING.slice(),
   }),
+  // —— 新建工作区(§7.4)。这六条真网关本来就提供,既不在 CLIENT_ONLY 也不在 DAEMON_UNSUPPORTED。
+  'fs:browse-roots': () => [
+    { name: '主目录', path: HOME, dir: true },
+    { name: '根目录', path: '/', dir: true },
+  ],
+  'fs:browse': (a) => {
+    const p = (a && a.path) || HOME
+    const parent = parentOf(p)
+    if (!(p in DIRS)) return { path: p, parent, entries: [], isWorkspace: false, error: '这个目录不存在' }
+    const kids = DIRS[p]
+    // ★没权限**回错误对象、不抛**(照 fs/browse.ts)。抛出去在远程那头是红字报错,而这只是「你看不了」。
+    if (kids === null) return { path: p, parent, entries: [], isWorkspace: false, error: 'EACCES: permission denied, scandir ' + p }
+    return { path: p, parent, entries: kids.map((k) => ({ ...k, path: (p === '/' ? '' : p) + '/' + k.name })), isWorkspace: false }
+  },
+  'config:list-projects': () => PROJECTS,
+  'config:list-workflows': () => WF_TEMPLATES,
+  'custom-stages:list': () => CUSTOM_STAGES,
+  'workspace:create': (opts) => {
+    try { fs.writeFileSync(CREATE_FILE, JSON.stringify(opts, null, 2)) } catch { /* 测试辅助 */ }
+    // 脚本 `create-fails`:真 clone 会中途失败,而「建失败了但界面什么也没说」是这一屏最坏的结局。
+    if (SCRIPT === 'create-fails') throw new Error('fatal: repository \'git@github.com:me/forge.git\' not found')
+    broadcast('workspace:setup', { type: 'setup:start', workspacePath: opts.path, hooks: { basic: 0, proj: 0 } })
+    opts.projects.forEach((sel, i) => {
+      broadcast('workspace:setup', { type: 'provision:start', project: sel.repoId, index: i, total: opts.projects.length })
+      broadcast('workspace:setup', { type: 'provision', project: sel.repoId, index: i, total: opts.projects.length })
+    })
+    broadcast('workspace:setup', { type: 'setup:done', workspacePath: opts.path })
+    workspaces.push({ name: opts.name, path: opts.path, projectCount: opts.projects.length, workflowId: opts.workflows[0]?.id ?? '', status: 'idle', pinned: false, archived: false, archivedAt: null, createdAt: Date.now(), description: '' })
+    sessions[opts.path] = { sessions: [], activeSessionId: '' }
+    projects[opts.path] = opts.projects.map((p) => p.repoId)
+    gateState[opts.path] = { confirms: [], asks: [] }
+    broadcast('workspaces:changed', {})
+    return { workspace: { name: opts.name, path: opts.path }, workspacePath: opts.path, developProjects: [] }
+  },
+  'workspace:cancel-setup': () => undefined,
+  'workspace:discard-partial': () => undefined,
   'session:new': (p) => {
     const id = 's-new-' + Date.now()
     sessions[p].sessions.unshift({ id, title: '新会话', mode: 'chat', createdAt: Date.now(), lastMessageAt: Date.now() })
