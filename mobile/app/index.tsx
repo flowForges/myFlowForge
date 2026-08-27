@@ -568,7 +568,25 @@ export default function Home() {
                     }}
                     onLayout={(e) => { listY.current[g.ws.path] = e.nativeEvent.layout.y }}
                   >
-                    <List style={{ paddingLeft: 14, paddingRight: 10, paddingVertical: 8 }}>
+                    {/* ★★展开后那几条会话原来是**飘着**的:一段缩进的卡片,和上面那一行工作区之间
+                        除了底色深一档之外没有任何东西把它们连起来,读起来像另一份列表插了进来。
+                        用户直接指了电脑端左侧栏的做法,照抄的就是那一条规矩(`shell.css` 的
+                        `.ws-sess-list { margin: 2px 0 2px 17px; padding-left: 9px; border-left: 1px solid var(--border) }`):
+                        **一条竖线**画在容器上,而不是给每一行加装饰。一条线就说清了「这几条从属于上面那一行」。
+                        ★★竖线只能加在**这一层(List)自己**身上,而且只准动横向的量:
+                        `marginLeft` / `paddingLeft` / `borderLeftWidth` 都不改 List 相对上面那层裸 View 的 y。
+                        纵向 margin 一加就把定位气泡的三段 y 拆散了(见 kit.tsx 里 `List` 上的注释),
+                        所以电脑端那份 `margin: 2px 0` 的**纵向那一半刻意没抄**,靠现成的 paddingVertical 顶替。 */}
+                    <List
+                      style={{
+                        marginLeft: 17,
+                        paddingLeft: 9,
+                        borderLeftWidth: 1,
+                        borderLeftColor: c.border,
+                        paddingRight: 10,
+                        paddingVertical: 8,
+                      }}
+                    >
                       {sessions.map((s) => {
                         const sg = wsGates.filter((x) => x.sessionId === s.id)
                         return (
@@ -596,19 +614,39 @@ export default function Home() {
                                 <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
                                   {s.title || '新会话'}
                                 </T>
-                                {/* ★第二行只剩「代理 · 时间」。这里曾经还并排挂一个
-                                    `<Pill tone="gate">待确认 N</Pill>`,和右边的 StatusBadge 凑成
-                                    一行两个琥珀胶囊、还各说各的话(「待确认」是四档合并**之前**的旧说法,
-                                    见设计文档 §4.2/§4.3;§4.3 的表定的是一行一个徽章)。
+                                {/* ★第二行只剩**代理**。时间已经挪到右边(见下面那个 `<T>`)。
+                                    这里曾经还并排挂一个 `<Pill tone="gate">待确认 N</Pill>`,和右边的
+                                    StatusBadge 凑成一行两个琥珀胶囊、还各说各的话(「待确认」是四档合并
+                                    **之前**的旧说法,见设计文档 §4.2/§4.3;§4.3 的表定的是一行一个徽章)。
                                     「这条在等你」由整行的琥珀底 + 右边那一个徽章负责,别再加第二个。 */}
                                 <T mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
                                   {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
-                                  {' · '}
-                                  {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
                                 </T>
                               </View>
-                              <StatusBadge tier={tierFor(g.ws.path, s.id)} />
-                              <T style={{ fontSize: 15, color: c.faint }}>›</T>
+                              {/* ★★时间**在右边**,不在标题底下 —— 又是照电脑端左侧栏抄的
+                                  (`shell.css` 的 `.ws-sess-time`:9.5px 等宽、`--faint`、不换行,
+                                  配上 `flex: 1` 的名字,于是**名字先省略号、时间永远完整**)。
+                                  挂在标题底下的时候它和代理名连成一串灰字,扫一列会话时每一行都要读一遍
+                                  才知道哪条是刚才在跑的;摞成一列之后眼睛只沿着右边扫下去就行。
+                                  ★和电脑端的一处**故意的偏差**:那边是 `flex: 0 0 auto`(时间绝不缩),
+                                  这里给了 `flexShrink: 1` —— 侧栏宽度固定,而这块屏只有 390pt 还要再乘
+                                  「大」字号那一档。挤爆时的让位顺序必须是 名字 → 时间 → **徽章永不让**,
+                                  徽章被顶出屏幕就是「有门却看不见」,那是这一屏存在的理由本身。 */}
+                              {/* 右边这一坨自己包一层,是为了把间距收紧到 7:`Row` 的 gap 是 11,
+                                  时间只有 9.5px 高,隔 11 个点看着像和徽章各归各的。
+                                  ★这一层是**横向**的,不参与定位气泡那条纵向 y 链(链上量的是
+                                  `Row` 外面那个 wrapper,不是它的孩子)。 */}
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, flexShrink: 1, minWidth: 0 }}>
+                                <T
+                                  mono
+                                  numberOfLines={1}
+                                  style={{ fontSize: 9.5, color: c.faint, flexShrink: 1, minWidth: 0 }}
+                                >
+                                  {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
+                                </T>
+                                <StatusBadge tier={tierFor(g.ws.path, s.id)} />
+                                <T style={{ fontSize: 15, color: c.faint }}>›</T>
+                              </View>
                             </Row>
                           </View>
                         )
