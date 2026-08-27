@@ -487,16 +487,20 @@ export default function Chat() {
                         而人要拿回去的多半正是里头那一行路径、一条命令。
                         ★摆在气泡**下面**、右对齐:气泡是右侧来的,复制跟着它那一侧;
                         放进气泡里会挤掉正文宽度(这一屏本来就只有 390)。
-                        ★`CAN_COPY` 为假(旧包里没有 expo-clipboard)时整颗不摆 —— 同代理那一侧的规矩。 */}
+                        ★`CAN_COPY` 为假(旧包里没有 expo-clipboard)时整颗不摆 —— 同代理那一侧的规矩。
+                        ★原来这里还外挂了 `paddingRight: 3` / `marginTop: 3`,现在去掉了:按钮自己带了
+                        11/10 的内边距(见 `CopyBtn.tsx` —— 可点区域只能这么长出来),再叠一层就是双份间距。 */}
                     {CAN_COPY && m.text.trim() ? (
-                      <View style={{ alignItems: 'flex-end', paddingRight: 3, marginTop: 3 }}>
+                      <View style={{ alignItems: 'flex-end' }}>
                         <CopyBtn text={m.text} />
                       </View>
                     ) : null}
                   </View>
                 ) : (
                   <View style={{ marginTop: 14 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 6 }}>
+                    {/* ★`marginBottom` 从 6 收到 1:这一行现在由复制按钮的 padding 撑到 33pt 高
+                        (原来 19pt,理由见 `CopyBtn.tsx`),多出来的高度已经够当间距了。 */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 1 }}>
                       <View style={[st.av, { backgroundColor: c.surface2, borderColor: c.border2 }]}>
                         <T style={{ fontSize: 10, fontWeight: '700', color: c.fg2 }}>
                           {(m.model ?? 'A').slice(0, 1).toUpperCase()}

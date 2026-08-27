@@ -12,6 +12,20 @@ import { requireOptionalNativeModule } from 'expo-modules-core'
  *
  * ★RN 0.86 已经把内置的 `Clipboard` **移除**了,所以这件事非 `expo-clipboard` 不可 ——
  *  不是我们多引了一个包。
+ *
+ * ★★**下面这一段整个链路已经在真机同级环境上实测过一遍,别再从这里开始怀疑。**
+ *  用户报「复制好像不是真的复制,没有到粘贴板里」时,第一反应都是怀疑这个文件。查下来全是好的:
+ *   - 注册名对得上:原生 `ios/ClipboardModule.swift` 是 `Name("ExpoClipboard")`,JS 侧
+ *     `build/ExpoClipboard.js` 是 `requireNativeModule('ExpoClipboard')`,和上面这句探测**同名**。
+ *     (`expo-image-picker` 那种「注册名 `ExponentImagePicker` ≠ 包名」的坑,这个包**没有**。)
+ *   - `require('expo-clipboard')` 拿到的就是命名空间本身:实测 `Object.keys(mod)` 头几个是
+ *     `ClipboardPasteButton,getStringAsync,setStringAsync,…`,`typeof mod.setStringAsync === 'function'`,
+ *     `mod.default === undefined` —— **没有藏在 `.default` 后面**。
+ *   - 不传 options 是对的:原生 `SetStringOptions` 是个 `Record`,`@Field var inputFormat = .plainText`,
+ *     空对象 `{}` 落到默认值。
+ *   - 端到端:`copyText()` 回 true,紧接着 `getStringAsync()` 读回来一字不差,连 app 外面
+ *     `xcrun simctl pbpaste` 都拿得到同一串。**写进去了。**
+ *  真正的毛病在**按钮点不中**(22×13pt 的可点区域),已修在 `CopyBtn.tsx` —— 理由写在那里。
  */
 export const canCopy = (): boolean =>
   Platform.OS === 'web' || !!requireOptionalNativeModule('ExpoClipboard')

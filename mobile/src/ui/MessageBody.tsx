@@ -102,7 +102,11 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   }, [code, lang])
   return (
     <View style={[st.box, { borderColor: c.border, backgroundColor: c.bg2 }]}>
-      <View style={[st.head, open && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border }]}>
+      {/* ★这一行的高度现在由复制按钮自己撑(它带 33pt 高的 padding,见 `CopyBtn.tsx`:hitSlop 在
+          紧贴着它的祖先里是死的,可点区域只能靠 padding 长出来)。所以这里把 `st.head` 自己那
+          9pt 上下内边距和右内边距去掉 —— 不去掉就是 9+33+9=51pt 的一条大帽子。折叠占位那边
+          (`HtmlFallback`)没有这颗按钮,仍旧用原样的 `st.head`,别把它一起改了。 */}
+      <View style={[st.head, st.headCode, open && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border }]}>
         <Pressable
           onPress={() => setOpen((v) => !v)}
           hitSlop={6}
@@ -167,6 +171,9 @@ export function MessageBody({ text, streaming }: { text: string; streaming?: boo
 const st = StyleSheet.create({
   box: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 11, marginVertical: 6, overflow: 'hidden' },
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 11, paddingVertical: 9 },
+  // 代码块那一行专用:高度让给复制按钮自己的 padding(见上面那段注释)。左边 11 留着,
+  // 右边交给按钮 —— 它自己就带 11pt 右内边距,再叠一层字就离边框太远了。
+  headCode: { paddingVertical: 0, paddingRight: 0 },
   // 代码本体。`padding` 走 contentContainer 而不是 ScrollView 自己 —— 不然横向滚到底时右边那圈
   // 内边距会跟着滚走,最后一列字贴着边框。
   codeBody: { paddingHorizontal: 11, paddingTop: 8, paddingBottom: 10 },
