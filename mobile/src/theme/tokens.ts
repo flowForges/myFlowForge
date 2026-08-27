@@ -26,11 +26,26 @@ export type Palette = {
   err: string
   add: string
   del: string
+  /**
+   * 语法着色的 9 个色位。★数值来自电脑端 `src/renderer/theme/tokens.css` 的 `--syn-*`(那边是权威的
+   * oklch 串),按同一套 oklch→sRGB 公式换算,**不是肉眼凑的近似值** —— 同一段代码在两块屏幕上
+   * 该是同一个颜色,凑出来的必然漂移。
+   * 类名(kw/st/cm/nu/fn/ty/pr/op/tg/at/va)由 `@shared/highlight` 分出来,
+   * 类名→色位的映射只有 `mobile/src/ui/synStyle.ts` 一处,别在组件里各写一份。
+   */
   synKw: string
   synSt: string
   synCm: string
   synFn: string
   synTy: string
+  /** 数字。`--syn-nu`:深 `oklch(79% .12 62)` / 浅 `oklch(49% .14 55)`。 */
+  synNu: string
+  /** 键 / 属性(JSON 的 key、YAML/CSS 的 property,以及 HTML 的属性名)。`--syn-pr`。 */
+  synPr: string
+  /** 运算符。`--syn-op`。 */
+  synOp: string
+  /** 变量($VAR、CSS 自定义属性)。`--syn-va`。 */
+  synVa: string
   accentDim: string
   gateDim: string
   gateBorder: string
@@ -81,6 +96,10 @@ export const DARK: Palette = {
   synCm: '#737b86',
   synFn: '#6bbef2',
   synTy: '#66d2ce',
+  synNu: '#f2a866',
+  synPr: '#9ac0f8',
+  synOp: '#8b9aab',
+  synVa: '#e2bb6a',
   accentDim: 'rgba(109, 157, 245, 0.16)',
   gateDim: 'rgba(250, 176, 72, 0.14)',
   gateBorder: 'rgba(250, 176, 72, 0.58)',
@@ -129,6 +148,10 @@ export const LIGHT: Palette = {
   synCm: '#79818c',
   synFn: '#005baf',
   synTy: '#006768',
+  synNu: '#9a4400',
+  synPr: '#214a9b',
+  synOp: '#5d7186',
+  synVa: '#8a4c00',
   accentDim: 'rgba(44, 88, 191, 0.1)',
   gateDim: 'rgba(196, 109, 0, 0.12)',
   gateBorder: 'rgba(196, 109, 0, 0.58)',
