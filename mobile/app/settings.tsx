@@ -5,7 +5,7 @@ import { goBack } from '../src/nav'
 import { useC, useTheme } from '../src/theme/theme'
 import { Btn, IconBtn, List, LiveDot, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
-import { CLIENT_VERSION, useConn } from '../src/net/conn'
+import { useConn } from '../src/net/conn'
 // 状态那句话和主机行下面那行小字都和 `app/hosts.tsx` 共用同一份 —— 两屏说同一台机器,
 // 说法必须一个字都不差,否则人只会觉得其中一屏在骗他。
 import { describeHostState, hostSubtitle } from '../src/net/hostStatusText'
@@ -30,8 +30,8 @@ import type { TextSize, ThemePref } from '../src/data/prefs'
  *
  * ★**这一屏在没连主机时也必须能用**:它是「添加主机」和「清除本地数据」的唯一入口。
  *  顶上绝不能写 `if (!online) return <Empty/>` —— 那会把断线的人锁在外面,
- *  而断线恰恰是最需要进来改主机的时候。同理「关于」那一组里凡是**对面**的数
- *  (主机版本、方法数)断着的时候一律如实写「连上才知道」,不留上一次的旧值。
+ *  而断线恰恰是最需要进来改主机的时候。它推出去的那几屏(`/host`、`/about`)同理:
+ *  凡是**对面**的数(主机版本、方法数)断着的时候一律如实写「连上才知道」,不留上一次的旧值。
  */
 
 const THEMES: { id: ThemePref; label: string; desc: string }[] = [
@@ -49,14 +49,12 @@ const TEXTS: { id: TextSize; label: string; desc: string }[] = [
 export default function Settings() {
   const c = useC()
   const { pref, setPref, text, setText } = useTheme()
-  const { hosts, activeHost, state, methods, selectHost, forgetAll } = useConn()
+  const { hosts, activeHost, state, selectHost, forgetAll } = useConn()
   const [themeSheet, setThemeSheet] = useState(false)
   const [textSheet, setTextSheet] = useState(false)
   const [wipeErr, setWipeErr] = useState<string | null>(null)
 
   const d = describeHostState(state)
-  // 「关于」那两行**对面**的数只在 ready 时才有值 —— 断着的时候留上一次的旧值就是在骗人。
-  const ready = state?.status === 'ready'
   const others = hosts.filter((h) => h.id !== activeHost?.id)
 
   const clear = () => {
@@ -205,38 +203,25 @@ export default function Settings() {
              那条数量约束已经作废,见文件顶上的注释。) */}
         <Note>想说话就说 —— 系统键盘上那颗 🎤 在任何输入框里都能用,不用切到别的 app。</Note>
 
-        {/* ★★「关于」这一组里**没有一个字是新数据**,三行全是已经在跑的东西,只是从来没被摆出来过:
-            手机端版本(原来孤零零挂在「这台手机」组里,叫「版本号」—— 哪个的版本号?没说)、
-            主机版本(只在主机副行那一小行灰字里一闪而过)、方法数(埋在 `/hosts` 最底下)。
-            ★它们值得凑在一起,是因为**排查连接问题时要的正是这三个数**:两端版本对不上 → 连都连不上
-            (`hostClient` 直接按主版本号拒);版本对得上但方法少 → 某个功能整个置灰。
-            三个数分散在三屏的时候,没有人能把这条因果串起来。
-            ★不编任何东西:没有官网、没有更新日志、没有开源许可页 —— 这个 app 里都不存在,
-            摆一条点了没反应的链接比不摆糟得多。 */}
+        {/* ★★「关于」是**一行,点进去是一屏**(`app/about.tsx`)—— 和上面主机那一行推 `/host`
+            同一条路数。它原来是这儿的一组内联行:手机端版本 / 主机版本 / 方法数,三行死数据
+            夹在「外观」和「这台手机」这两组**能改的东西**中间。分组头是这一屏唯一的结构信号,
+            这么摆等于说「这三样也是设置」,可它们一个都点不动。
+            ★这一行**不在这儿顺手报版本号**:报了就等于那一屏白开(人看一眼就走),
+            而真正要一起看的是三个数 —— 两端版本对不上 → 连都连不上;版本对得上但方法少 →
+            某个功能整个置灰。这条因果只有三个数摆在一起才串得起来,所以副行说的是「进去看什么」。 */}
         <Sec>关于</Sec>
         <List>
-          <Row>
-            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>手机端版本</T>
-            {/* ★`CLIENT_VERSION` 来自 `app.json`,是**和 daemon 比主版本号的那一个**,
-                不是另抄一份常量 —— 抄一份的话,界面上写着 1.2 而握手时报的是 1.1。 */}
-            <T mono style={{ fontSize: 13, color: c.muted }}>
-              {CLIENT_VERSION}
-            </T>
-          </Row>
-          <Row>
-            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>主机版本</T>
-            <T mono style={{ fontSize: 13, color: ready ? c.muted : c.faint }}>
-              {ready ? state.version : '连上才知道'}
-            </T>
-          </Row>
-          <Row>
-            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>主机提供的方法</T>
-            <T mono style={{ fontSize: 13, color: ready ? c.muted : c.faint }}>
-              {ready ? `${methods.size} 个` : '连上才知道'}
-            </T>
+          <Row onPress={() => router.push('/about')}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <T style={{ fontSize: 15, color: c.fg }}>关于</T>
+              <T style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>
+                两端版本和方法数 —— 连不上的时候先看这三个数
+              </T>
+            </View>
+            <T style={{ fontSize: 16, color: c.faint }}>›</T>
           </Row>
         </List>
-        <Note>两端主版本号必须一致才连得上;方法对不上的功能会在界面上置灰,而不是点下去报一句看不懂的错。</Note>
 
         {/* 「版本号」那一行已经挪进上面的「关于」了 —— 这一组现在只剩一件事:
             **这台手机上存着什么、怎么擦掉**。 */}
@@ -244,7 +229,7 @@ export default function Settings() {
         <Note>主机清单和令牌都存在这台手机上。清掉之后要重新扫码配对。</Note>
 
         {/* ★设计文档 §7.2:danger 不与主动作相邻。这一段空白就是为了让手指够不着 ——
-            上面最近的一个可点的东西是「版本号」那一行(它根本不可点)。 */}
+            上面最近的一个可点的东西是「关于」那一行,中间还隔着一个分组头和一整段说明。 */}
         <View style={{ height: 24 }} />
         <List>
           {/* ★提示就在按钮上面一行(和 add-host 同一个位置)。挪到页顶去的话,
