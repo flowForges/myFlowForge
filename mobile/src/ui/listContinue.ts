@@ -34,7 +34,7 @@ function nextMarker(line: string): { marker: string; content: string } | null {
   // 编号 +1。`- [x]` 那种续下去一律是**未勾选**的空盒子:替人把新任务标成已完成是撒谎。
   if (m) return { marker: `${m[1]}${Number(m[2]) + 1}${m[3]}${m[4]}`, content: m[5] }
   m = UNORDERED.exec(line)
-  if (m) return { marker: `${m[2]}${m[3]}`, content: m[4] }
+  if (m) return { marker: `${m[1]}${m[2]}${m[3]}`, content: m[4] }
   return null
 }
 
