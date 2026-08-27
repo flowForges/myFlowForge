@@ -545,8 +545,24 @@ export default function Chat() {
           ) : null}
 
           {/* ★chip 行放输入框上方,跟着键盘一起顶上去 —— 正要在什么权限档下发消息,
-              不该是那种随手一滑就滚出视野的东西。 */}
-          <View style={st.chips}>
+              不该是那种随手一滑就滚出视野的东西。
+              ★★**横向滚动,不换行**:真机上 390pt 只放得下「代理 · 模型」「自动 (工作区)」「🖼 图片」三颗,
+                `/ 工作流` 已经被挤到第二行,再挂两个附件 chip 就是三行 —— 输入区跟着长高,键盘一顶,
+                正文只剩两行可见。换成一条横向滚动的轨道后**行高恒定**:第一颗(代理和模型,也就是
+                「这条消息要发给谁」)永远在原位,多出来的往右滑就是。
+              ★`flexGrow: 0` 是必需的:`ScrollView` 自带 flexGrow,在这个竖排容器里会去抢剩余高度。
+                高度改由 `contentContainerStyle`(chip 自己的 minHeight 32 + 上下 padding)撑出来 ——
+                所以那份样式里**不能**只剩 flexDirection,否则整条轨道塌成 0 高、chip 全部看不见。
+              ★`keyboardShouldPersistTaps="handled"`:这一行的全部意义就是「键盘顶着的时候也能改档」。
+                不给这个值,ScrollView 会把键盘弹起时的第一下点击吃掉去收键盘 —— 现象是「点权限档没反应,
+                要点两下」。 */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            style={{ flexGrow: 0 }}
+            contentContainerStyle={st.chips}
+          >
             <Chip tone="on" onPress={online ? () => setAgentSheet(true) : undefined} disabled={!online}>
               {agent ? `${agent.displayName}${model ? ' · ' + model.label : ''}` : '选代理'}
             </Chip>
@@ -579,7 +595,7 @@ export default function Chat() {
                 {`📎 ${a.name}`}
               </Chip>
             ))}
-          </View>
+          </ScrollView>
           <View style={st.entry}>
             <Field
               value={text}
@@ -785,7 +801,10 @@ const st = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
   },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 7 },
+  // ★不带 `flexWrap`:这一行现在是一条横向滚动的轨道(见上面那段注释),换行会让它变回原来那个
+  //  「多一个 chip 就多一行、输入区跟着长高」的东西。`alignItems: 'center'` 让高矮不一的 chip
+  //  居中对齐而不是各自拉满 —— 这里也是**整条轨道高度的来源**,别把这份样式清空。
+  chips: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 7 },
   // 「转成附件?」那一条。整条可点,所以纵向留够 —— 两行文案时高度自然到 44 上下。
   offload: {
     marginHorizontal: 12,
