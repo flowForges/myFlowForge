@@ -5,21 +5,26 @@ import { T } from './kit'
 import { CAN_COPY, CopyBtn } from './CopyBtn'
 import { splitHtmlChunks, type Chunk } from './htmlChunks'
 import { splitCodeChunks, type CodeChunk } from './codeChunks'
+import { HIGHLIGHT_MAX, highlightBlock } from '@shared/highlight'
+import { synStyle } from './synStyle'
+import { parseHtmlSubset } from './htmlParse'
+import { HtmlRender } from './HtmlRender'
 
 /** 正文最终渲染成的三种块:代码 / 内嵌 HTML / 普通文字。 */
 type Block = Chunk | Extract<CodeChunk, { kind: 'code' }>
 
 /**
- * 代理正文的渲染。手机端只做一件事:**把内嵌 HTML 片段折起来**。
+ * 代理正文的渲染。内嵌 HTML 片段走**两条路**:能忠实画的就画,画不了的折起来。
  *
- * 背景:桌面端有「对话区内嵌 HTML 可视化」(默认关),代理被告知复杂结构可以吐一小段自包含 HTML。
- * 那功能没开、或者手机端这边没实现时,这些 `<div style="…">` 会被**按原文打印**。
- * 27 寸屏上只是难看;390px 宽的手机上,一段卡片布局的 HTML 能吃掉四五屏,把真正的回答推到看不见的地方
- * —— 真机上第一次连上就撞见了。
+ * 背景:桌面端有「对话区内嵌 HTML 可视化」,代理被告知复杂结构可以吐一小段自包含 HTML。
+ * 手机端一开始一律折叠 + 标「手机端不渲染」—— 诚实,但用户原话是「html不渲染」,他要的是看见。
+ * 他同时否掉了 WebView(不想再多一个原生依赖),所以现在的做法是:
+ *  ① `parseHtmlSubset`(零 import 的纯解析,`htmlParse.ts`)先判这段能不能**忠实**画出来;
+ *  ② 能 → `HtmlRender` 用纯 RN 原语画(表格 / 列表 / 标题 / 粗斜体 / 链接 / 代码 / 段落);
+ *  ③ 不能(带任意 CSS、未知标签、嵌套太深、标签没闭合)→ **原样退回底下这个折叠占位**。
  *
- * 为什么不干脆渲染出来:桌面那套是 `DOMParser` + 构造性白名单(绝不 innerHTML),而 React Native
- * 里没有 DOMParser。把它搬过来是另一个工程。**折叠是诚实的**:内容一个字没丢,点开就是原文,
- * 而且明说了「手机端不渲染」,不会让人以为自己看到的就是全部。
+ * ★③ 不是「还没做完」,是设计。画出半个表格、丢掉一半单元格,而人以为自己看到的就是全部 ——
+ *  那比不画危险得多。折叠占位内容一个字没丢,点开就是原文,而且明说了「手机端不渲染」。
  */
 
 /** 给折叠条一句人话的标题:说清是几行、大概是什么。 */
@@ -30,7 +35,20 @@ function describe(html: string): string {
   return `${name} · ${lines} 行 HTML`
 }
 
+/**
+ * 一段内嵌 HTML。先试着真画,画不忠实就退回折叠占位。
+ *
+ * ★`useMemo`:流式吐字时整条消息每来一片就重渲染一次,而这段片段在闭合之前每一帧都是
+ *  「没闭合 → 退回占位」。解析本身不贵,但没必要每帧重跑一遍。
+ */
 function HtmlBlock({ html }: { html: string }) {
+  const parsed = useMemo(() => parseHtmlSubset(html), [html])
+  if (parsed.ok) return <HtmlRender nodes={parsed.nodes} />
+  return <HtmlFallback html={html} />
+}
+
+/** 画不了时的折叠占位 —— 手机端一期就是这个,原样留着,它是「诚实」那一半。 */
+function HtmlFallback({ html }: { html: string }) {
   const c = useC()
   const [open, setOpen] = useState(false)
   return (
@@ -66,6 +84,22 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   const c = useC()
   const [open, setOpen] = useState(true)
   const n = code.split('\n').length
+  /**
+   * ★语法着色。用户原话:「像各种格式的文件,应该支持不同的渲染,比如编程语言渲染」。
+   *  走的是 `@shared/highlight` 的**整块**入口,和电脑端 `views/chat/blocks.tsx` 的 `CodeBlock`
+   *  同一份语法表 —— 整块那条路才认得跨行的块注释和多行字符串(逐行的那条看不到上下文,
+   *  会把 `/*` 之后的半个块漏掉)。
+   * ★`highlightBlock` 自己会在**没写语言**时原样返回不着色:那种块多半是日志 / 纯文本输出,
+   *  乱上色反而干扰。超过 `HIGHLIGHT_MAX` 也一样退回 —— 一个几万字符的块切成上万个 `<Text>`,
+   *  在 RN 里就是一次几秒的卡顿。
+   * ★`useMemo`:流式吐字时这个组件每来一片就重渲染一次,分词不该每帧重跑。
+   */
+  const toks = useMemo(() => {
+    if (!lang.trim() || code.length > HIGHLIGHT_MAX) return null
+    const out = highlightBlock(code, lang)
+    // 全是无色 token 的话不如整块一个 `<T>`:少几百个嵌套 Text。
+    return out.some((t) => t.cls) ? out : null
+  }, [code, lang])
   return (
     <View style={[st.box, { borderColor: c.border, backgroundColor: c.bg2 }]}>
       <View style={[st.head, open && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border }]}>
@@ -92,7 +126,7 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
       {open ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.codeBody}>
           <T mono style={{ fontSize: 11.5, lineHeight: 18, color: c.fg2 }}>
-            {code}
+            {toks ? toks.map((t, i) => (t.cls ? <T key={i} style={[st.tok, synStyle(t.cls, c)]}>{t.text}</T> : t.text)) : code}
           </T>
         </ScrollView>
       ) : null}
@@ -136,4 +170,7 @@ const st = StyleSheet.create({
   // 代码本体。`padding` 走 contentContainer 而不是 ScrollView 自己 —— 不然横向滚到底时右边那圈
   // 内边距会跟着滚走,最后一列字贴着边框。
   codeBody: { paddingHorizontal: 11, paddingTop: 8, paddingBottom: 10 },
+  // 一个语法 token。★**故意不带 lineHeight**:嵌套 `<Text>` 各自带行高在 Android 上会让同一行忽高忽低。
+  // 行高由外层那个 `<T>` 一处定;里面的只管字体和字号(`T` 要靠 fontSize 落「正文字号」那三档)。
+  tok: { fontFamily: MONO, fontSize: 11.5 },
 })
