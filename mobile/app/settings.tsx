@@ -14,15 +14,24 @@ import { clearLocalData } from '../src/data/localData'
 import type { TextSize, ThemePref } from '../src/data/prefs'
 
 /**
- * 设置。**故意只有三组**,比电脑端简单一个量级(设计文档 §7.2):
- * 主机 / 外观(跟着这台手机走)/ 这台手机。
+ * 设置。比电脑端简单一个量级 —— 没有工作流、阶段、插件、宠物、壁纸,那些留在电脑端。
+ * 手机是用来盯梢和答门的,不是用来配置的;把电脑端那一整面墙搬过来只会让
+ * 「加个主机」这件事变得找不到。
  *
- * 没有工作流、阶段、插件、宠物、壁纸 —— 那些留在电脑端。手机是用来盯梢和答门的,
- * 不是用来配置的;把电脑端那一整面墙搬过来只会让「加个主机」这件事变得找不到。
+ * **分组按「这条设置属于谁」切,一共五组**:
+ *   主机 / 工作区 / 外观(跟着这台手机走)/ 关于 / 这台手机。
+ *
+ * ★这里原来写着「**故意只有三组**(设计文档 §7.2)」,并且据此把「已归档的工作区」
+ *  硬塞进了主机那一组。真机上用户当场指出来了:归档的是**工作区**,不是主机 ——
+ *  而这一屏的分组头是全屏唯一的结构信号,把一件东西塞进语义不对的组里,
+ *  等于用那个唯一的信号说了一句假话。「三组」是个数量约束,而它约束的对象
+ *  (别把电脑端那面墙搬过来)靠的是**内容**少,不是靠把不同类的东西挤在一起。
+ *  所以约束保留、数字作废:宁可多两个头,也不要一个头底下挂着不属于它的东西。
  *
  * ★**这一屏在没连主机时也必须能用**:它是「添加主机」和「清除本地数据」的唯一入口。
  *  顶上绝不能写 `if (!online) return <Empty/>` —— 那会把断线的人锁在外面,
- *  而断线恰恰是最需要进来改主机的时候。
+ *  而断线恰恰是最需要进来改主机的时候。同理「关于」那一组里凡是**对面**的数
+ *  (主机版本、方法数)断着的时候一律如实写「连上才知道」,不留上一次的旧值。
  */
 
 const THEMES: { id: ThemePref; label: string; desc: string }[] = [
@@ -40,12 +49,14 @@ const TEXTS: { id: TextSize; label: string; desc: string }[] = [
 export default function Settings() {
   const c = useC()
   const { pref, setPref, text, setText } = useTheme()
-  const { hosts, activeHost, state, selectHost, forgetAll } = useConn()
+  const { hosts, activeHost, state, methods, selectHost, forgetAll } = useConn()
   const [themeSheet, setThemeSheet] = useState(false)
   const [textSheet, setTextSheet] = useState(false)
   const [wipeErr, setWipeErr] = useState<string | null>(null)
 
   const d = describeHostState(state)
+  // 「关于」那两行**对面**的数只在 ready 时才有值 —— 断着的时候留上一次的旧值就是在骗人。
+  const ready = state?.status === 'ready'
   const others = hosts.filter((h) => h.id !== activeHost?.id)
 
   const clear = () => {
@@ -123,9 +134,9 @@ export default function Settings() {
           )}
         </List>
 
-        {/* ★其他主机**不另起一个 `<Sec>`**:设计文档 §7.2 只有三组,而分组头是这一屏唯一的
-            结构信号 —— 多一个头就是屏幕上有四组,人会去数「哪三组才是那三组」。
-            这些行接着上面那张卡往下排,靠 LiveDot / 断开 / `›` 自己区分当前和其他。 */}
+        {/* ★其他主机**不另起一个 `<Sec>`**:它们和上面那台是同一类东西(主机),
+            分一个头出来会让人以为「当前主机」和「其他主机」是两件要分别去设的事。
+            这些行接着上面那张卡往下排,靠 LiveDot 和副行自己区分当前和其他。 */}
         {others.length > 0 ? (
           <>
             <List>
@@ -157,11 +168,26 @@ export default function Settings() {
           <Btn kind="ghost" block onPress={() => router.push('/hosts')}>
             管理主机
           </Btn>
-          {/* 归档的入口。★不放进「管理主机」——归档的是工作区,不是主机,搁一块儿会让人
-              以为归档跟主机绑定。放这儿是设计文档 §7.2/§7.6 定的位置:主机组下面。 */}
-          <Btn kind="ghost" block onPress={() => router.push('/archived')}>
-            已归档的工作区
-          </Btn>
+        </List>
+
+        {/* ★★归档的入口**自己一组**。它原来贴在「添加主机 / 管理主机」下面,和它们排成一列 ——
+            读起来就是「主机的第三件事」,而归档的是**工作区**。这一屏的分组头是全屏唯一的
+            结构信号,拿它把一件东西归到不对的类里,比不分组更糟:人会照着那个头去推断,
+            于是「归档跟主机绑定吗?换台主机归档的还在吗?」这种问题凭空冒出来。
+            答案是不:归档是工作区自己的属性,存在那台电脑上、跟着工作区走。 */}
+        <Sec>工作区</Sec>
+        <List>
+          <Row onPress={() => router.push('/archived')}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <T style={{ fontSize: 15, color: c.fg }}>已归档的工作区</T>
+              {/* 归档后从会话列表消失,所以这条路必须**看得见** —— 否则归档等于弄丢
+                  (设计文档 §7.6)。这行小字就是「怎么回来」那句话。 */}
+              <T style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>
+                归档后从会话列表消失,在这里恢复
+              </T>
+            </View>
+            <T style={{ fontSize: 16, color: c.faint }}>›</T>
+          </Row>
         </List>
 
         <Sec>外观 · 跟着这台手机走</Sec>
@@ -169,21 +195,52 @@ export default function Settings() {
           <Pick label="主题" value={THEMES.find((t) => t.id === pref)?.label ?? ''} onPress={() => setThemeSheet(true)} />
           <Pick label="正文字号" value={TEXTS.find((t) => t.id === text)?.label ?? ''} onPress={() => setTextSheet(true)} />
         </List>
-        {/* ★设计文档 §5.5.4:语音**不写代码**,系统键盘自带的听写现在就能用。
+        {/* ★★设计文档 §5.5.4:语音**不写代码**,系统键盘自带的听写现在就能用。
             但「能用」和「知道能用」是两回事 —— app 里没有麦克风按钮,人只会以为手机端不能说话,
-            然后在通勤路上一个字一个字地戳。这一句话就是这条功能的**全部实现**,
-            所以它必须真的出现在界面上,不能只留在文档里。
-            放在「外观」下面而不是另起一组:设计文档 §7.2 钉死只有三组。 */}
+            然后在通勤路上一个字一个字地戳。**这一句话就是这条功能的全部实现。**
+            ★这条注释原来就在这里,后面却什么也没有渲染 —— 它写着「必须真的出现在界面上,
+             不能只留在文档里」,而那句话恰恰就只留在了这条注释里。现在补上了。
+            ★为什么归在「外观 · 跟着这台手机走」下面:听写是**你手上这台设备**自带的本事,
+             和主题、字号一样不跟着主机走。(原来的理由写的是「§7.2 钉死只有三组」,
+             那条数量约束已经作废,见文件顶上的注释。) */}
+        <Note>想说话就说 —— 系统键盘上那颗 🎤 在任何输入框里都能用,不用切到别的 app。</Note>
 
-        <Sec>这台手机</Sec>
+        {/* ★★「关于」这一组里**没有一个字是新数据**,三行全是已经在跑的东西,只是从来没被摆出来过:
+            手机端版本(原来孤零零挂在「这台手机」组里,叫「版本号」—— 哪个的版本号?没说)、
+            主机版本(只在主机副行那一小行灰字里一闪而过)、方法数(埋在 `/hosts` 最底下)。
+            ★它们值得凑在一起,是因为**排查连接问题时要的正是这三个数**:两端版本对不上 → 连都连不上
+            (`hostClient` 直接按主版本号拒);版本对得上但方法少 → 某个功能整个置灰。
+            三个数分散在三屏的时候,没有人能把这条因果串起来。
+            ★不编任何东西:没有官网、没有更新日志、没有开源许可页 —— 这个 app 里都不存在,
+            摆一条点了没反应的链接比不摆糟得多。 */}
+        <Sec>关于</Sec>
         <List>
           <Row>
-            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>版本号</T>
+            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>手机端版本</T>
+            {/* ★`CLIENT_VERSION` 来自 `app.json`,是**和 daemon 比主版本号的那一个**,
+                不是另抄一份常量 —— 抄一份的话,界面上写着 1.2 而握手时报的是 1.1。 */}
             <T mono style={{ fontSize: 13, color: c.muted }}>
               {CLIENT_VERSION}
             </T>
           </Row>
+          <Row>
+            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>主机版本</T>
+            <T mono style={{ fontSize: 13, color: ready ? c.muted : c.faint }}>
+              {ready ? state.version : '连上才知道'}
+            </T>
+          </Row>
+          <Row>
+            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>主机提供的方法</T>
+            <T mono style={{ fontSize: 13, color: ready ? c.muted : c.faint }}>
+              {ready ? `${methods.size} 个` : '连上才知道'}
+            </T>
+          </Row>
         </List>
+        <Note>两端主版本号必须一致才连得上;方法对不上的功能会在界面上置灰,而不是点下去报一句看不懂的错。</Note>
+
+        {/* 「版本号」那一行已经挪进上面的「关于」了 —— 这一组现在只剩一件事:
+            **这台手机上存着什么、怎么擦掉**。 */}
+        <Sec>这台手机</Sec>
         <Note>主机清单和令牌都存在这台手机上。清掉之后要重新扫码配对。</Note>
 
         {/* ★设计文档 §7.2:danger 不与主动作相邻。这一段空白就是为了让手指够不着 ——
