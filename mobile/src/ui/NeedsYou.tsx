@@ -77,10 +77,13 @@ export function NeedsYou({ items, gateCount, onPick }: {
           实底琥珀上,现象是「点了没反应」—— 这套代码已经在别处栽过好几次同一件事。 */}
       <Pressable
         onPress={toggle}
-        // ★这一条排版上只有 ~34pt 高(9pt 内边距 + 一行 12pt 字),低于 44 的最小触达。
-        //  横向它本来就横跨整块,所以缺的只有上下 —— 各补 6pt 撑到 46,**布局一点没变**。
-        //  收起之后这一条就是整块的全部:点不准它,就等于把这块东西锁死了。
-        hitSlop={{ top: 6, bottom: 6 }}
+        // ★★这里**不能靠 hitSlop**,必须是真的内边距(见 st.head 的 paddingVertical)。
+        //  第一版写的是 `hitSlop={{top:6,bottom:6}}` 并注释「撑到 46,布局一点没变」——
+        //  那句话是假的:外面 `st.wrap` 带 `overflow:'hidden'`,而这一条是它的第一个子节点,
+        //  多出来的 6pt 全落在容器外面,被裁掉。更根本的是 Fabric 的命中测试:祖先紧贴子节点时
+        //  (`overflowInset == {}`)边界外的点会被直接拒掉,而 **hitSlop 不写进 overflowInset**。
+        //  同一条把「复制」按钮变成了 22×13pt 的死区,人以为剪贴板坏了 —— 其实是根本没点中。
+        //  ★结论:hitSlop 只在**祖先宽裕**的地方成立(比如输入区里那颗 ⤢);祖先紧的地方只能加 padding。
         accessibilityRole="button"
         accessibilityLabel={foldA11yLabel(folded, items.length, gateCount)}
         style={({ pressed }) => [st.head, { backgroundColor: c.gate }, pressed && { opacity: 0.82 }]}
@@ -131,7 +134,9 @@ const st = StyleSheet.create({
     overflow: 'hidden',
   },
   // ★收起时这一条就是整块的全部,所以它得自己站得住:横排、三角在最右。
-  head: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 13, paddingVertical: 9 },
+  // ★收起时这一条就是整块的全部,所以它得自己站得住;paddingVertical 14 = 一行 ~17pt 字撑到 45pt,
+  //  压过 44 的最小触达。★这 14 是**触达要求**,不是留白品味 —— 别「顺手收紧」回 9。
+  head: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 13, paddingVertical: 14 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 13, paddingVertical: 11 },
   pip: { width: 7, height: 7, borderRadius: 4 },
 })
