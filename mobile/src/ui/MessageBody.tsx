@@ -1,8 +1,13 @@
-import { useState } from 'react'
-import { Pressable, StyleSheet, View } from 'react-native'
+import { useMemo, useState } from 'react'
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { MONO, useC } from '../theme/theme'
 import { T } from './kit'
-import { splitHtmlChunks } from './htmlChunks'
+import { CAN_COPY, CopyBtn } from './CopyBtn'
+import { splitHtmlChunks, type Chunk } from './htmlChunks'
+import { splitCodeChunks, type CodeChunk } from './codeChunks'
+
+/** 正文最终渲染成的三种块:代码 / 内嵌 HTML / 普通文字。 */
+type Block = Chunk | Extract<CodeChunk, { kind: 'code' }>
 
 /**
  * 代理正文的渲染。手机端只做一件事:**把内嵌 HTML 片段折起来**。
@@ -46,13 +51,73 @@ function HtmlBlock({ html }: { html: string }) {
   )
 }
 
+/**
+ * 一个 ``` 代码块 —— 电脑端 `views/chat/blocks.tsx` 的 `CodeBlock` 在手机上的样子。
+ *
+ * ★**每一块自己配一颗复制**,这是用户当场提的:整条消息一个复制按钮,拿回去的是一大坨掺着
+ *  解说的文字,而人真正要粘出去的就是这一条命令。电脑端一样是按块配的(那边是 hover 显形,
+ *  手机上没有 hover,所以常驻)。
+ * ★代码**不换行**,改成横向滚动:命令和缩进一折行就读不出结构了(390pt 上一折就是三行)。
+ *  代价是要横着划一下 —— 但复制按钮就在旁边,多数时候人根本不用划。
+ * ★可折叠,和 `HtmlBlock` 同一个手势:一段两百行的代码会把回答本身推到看不见的地方。
+ *  默认**展开** —— 折起来的代码是「藏起来的内容」,只有长到碍事时才该由人自己收。
+ */
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const c = useC()
+  const [open, setOpen] = useState(true)
+  const n = code.split('\n').length
+  return (
+    <View style={[st.box, { borderColor: c.border, backgroundColor: c.bg2 }]}>
+      <View style={[st.head, open && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.border }]}>
+        <Pressable
+          onPress={() => setOpen((v) => !v)}
+          hitSlop={6}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}
+        >
+          <T style={{ fontSize: 12.5, color: c.muted }}>{open ? '▾' : '▸'}</T>
+          {lang ? (
+            <T mono numberOfLines={1} style={{ fontSize: 10.5, letterSpacing: 0.4, color: c.faint }}>
+              {lang}
+            </T>
+          ) : null}
+          <T style={{ fontSize: 10.5, color: c.faint }}>{n} 行</T>
+        </Pressable>
+        {/* ★`CAN_COPY` 为假(旧包里没有 expo-clipboard)时整颗不摆 —— 同对话屏那两处的规矩。 */}
+        {CAN_COPY ? (
+          <View style={{ marginLeft: 'auto' }}>
+            <CopyBtn text={code} label="⧉ 复制" />
+          </View>
+        ) : null}
+      </View>
+      {open ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.codeBody}>
+          <T mono style={{ fontSize: 11.5, lineHeight: 18, color: c.fg2 }}>
+            {code}
+          </T>
+        </ScrollView>
+      ) : null}
+    </View>
+  )
+}
+
 export function MessageBody({ text, streaming }: { text: string; streaming?: boolean }) {
   const c = useC()
-  const chunks = splitHtmlChunks(text)
+  /**
+   * ★**先切围栏、再在剩下的文字里找内嵌 HTML**,顺序不能反:HTML 那一支是按「行首是不是块级标签」
+   *  判的,反过来的话 ```html 围栏里的 `<div>` 会被它整段折起来、还扣上「手机端不渲染」——
+   *  那明明是一段要人读、要人复制的代码。
+   * ★`useMemo`:流式吐字时这个组件每来一片就重渲染一次,两趟切块不该每帧都跑一遍。
+   */
+  const blocks = useMemo<Block[]>(
+    () => splitCodeChunks(text).flatMap((ch): Block[] => (ch.kind === 'code' ? [ch] : splitHtmlChunks(ch.text))),
+    [text],
+  )
   return (
     <View style={{ paddingLeft: 26 }}>
-      {chunks.map((ch, i) =>
-        ch.kind === 'html' ? (
+      {blocks.map((ch, i) =>
+        ch.kind === 'code' ? (
+          <CodeBlock key={i} code={ch.text} lang={ch.lang} />
+        ) : ch.kind === 'html' ? (
           <HtmlBlock key={i} html={ch.text} />
         ) : (
           <T key={i} style={{ fontSize: 15, lineHeight: 25, color: c.fg2 }}>
@@ -68,4 +133,7 @@ export function MessageBody({ text, streaming }: { text: string; streaming?: boo
 const st = StyleSheet.create({
   box: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 11, marginVertical: 6, overflow: 'hidden' },
   head: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 11, paddingVertical: 9 },
+  // 代码本体。`padding` 走 contentContainer 而不是 ScrollView 自己 —— 不然横向滚到底时右边那圈
+  // 内边距会跟着滚走,最后一列字贴着边框。
+  codeBody: { paddingHorizontal: 11, paddingTop: 8, paddingBottom: 10 },
 })
