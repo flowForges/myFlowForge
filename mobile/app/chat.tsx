@@ -34,6 +34,8 @@ import { useStore } from '../src/data/store'
 import { canPeekGate } from '../src/data/gatePeek'
 import { useChat } from '../src/data/useChat'
 import { useAgents } from '../src/data/useAgents'
+import { useCommands } from '../src/data/useCommands'
+import { isSlashQuery, slashRows } from '../src/ui/slashPick'
 import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 import { atBottom, initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
@@ -91,6 +93,14 @@ export default function Chat() {
   const [suppSheet, setSuppSheet] = useState(false)
   const [supp, setSupp] = useState('')
   const [bigEditor, setBigEditor] = useState(false)
+  /**
+   * 选中一条斜杠命令之后把面板收起来。
+   * ★多数模板末尾自带一个空格(`/analyst `),下一拍 `isSlashQuery` 自己就变假了 ——
+   *  但技能那种模板是一段中文,而万一哪条模板正好是个光秃秃的 `/foo`,没有这个闸门面板会当场
+   *  又弹回来。电脑端 `Composer.tsx` 的 `slashDismissed` 就是为这个存在的,规则照抄:
+   *  **正文一旦不再是斜杠查询就自动解除**(见 `onType`),这样重新打一个 `/` 还能再开。
+   */
+  const [slashDismissed, setSlashDismissed] = useState(false)
   const [wfBusy, setWfBusy] = useState(false)
   /** 已经转成附件的那几坨。发出去之后清空 —— 附件是跟着这一条消息走的,不是这个会话的常驻物。 */
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -121,6 +131,9 @@ export default function Chat() {
    *  让回车发送就等于**没法打多行** —— 而给代理下达任务本来就是多行的事。
    */
   const onType = (next: string) => {
+    // 正文已经不是「在挑命令」了(打了空格、或者把斜杠删了)就把闸门放掉,
+    // 这样重新打一个 `/` 面板还能再开。和电脑端 `Composer.tsx` 的 onChange 一处一样。
+    if (!isSlashQuery(next)) setSlashDismissed(false)
     const edit = continueList(text, next, caretRef.current)
     if (!edit) {
       setText(next)
@@ -161,6 +174,14 @@ export default function Chat() {
 
   const agent = useMemo(() => agents.find((a) => a.id === agentId) ?? null, [agents, agentId])
   const model = useMemo(() => agent?.models.find((m) => m.id === modelId) ?? agent?.models[0] ?? null, [agent, modelId])
+
+  /**
+   * 斜杠命令。用户原话「输入框,输入 / 好像加载不到支持的命令」—— 手机端在这之前一条都没接。
+   * ★清单**按代理 + 按工作区**现问(见 `useCommands.ts`),哪几条该显示由 `slashPick.ts`
+   *  这个零 import 的纯模块决定(有单测 + 变异验证),这里只管画。
+   */
+  const { commands, supported: cmdsSupported } = useCommands(agentId, selected?.wsPath ?? null)
+  const slash = slashRows(commands, text, { supported: cmdsSupported, dismissed: slashDismissed })
 
   // 轮次分隔线:哪一条消息前面该来一根,由纯逻辑算(见 timeSep.ts)。
   // `now` 只在消息数变化时取一次 —— 每次渲染都取的话,「今天/昨天」会在午夜那一刻抖动,
@@ -598,6 +619,53 @@ export default function Chat() {
             { backgroundColor: c.surface, borderTopColor: c.border, paddingBottom: Math.max(6, insets.bottom) },
           ]}
         >
+          {/* ── 斜杠命令面板 ──────────────────────────────────────────────────
+              ★摆在输入区**最上面**,跟着键盘一起顶上去:人正在打的那个 `/` 就在下面一行,
+                面板离得越近越不用把视线甩来甩去。
+              ★**一条都没有就整个不摆**(`slash.length`),包括「这台主机根本没有 commands:list」
+                那种情况(判据在 `slashPick.ts` 的 `slashRows`)—— 空面板等于告诉人「你一条命令
+                都没有」,而真相可能是这台主机的版本里压根没有这个方法。
+              ★★`keyboardShouldPersistTaps="handled"`:这个面板**只在键盘弹着的时候存在**。
+                不给这个值,ScrollView 会把第一下点击吃掉去收键盘 —— 现象是「点了没反应,要点两下」,
+                而点第二下时键盘已经收了、面板也跟着没了(chip 那一行踩过同一个坑)。
+              ★`maxHeight`:命令多的机器上一口气几十条,不封顶就把整个对话流顶出屏幕。 */}
+          {slash.length ? (
+            <View style={[st.slash, { backgroundColor: c.bg2, borderColor: c.border2 }]}>
+              <T style={{ fontSize: 10.5, letterSpacing: 0.6, color: c.faint, paddingHorizontal: 11, paddingTop: 8 }}>
+                命令 · {agent?.displayName ?? agentId ?? ''}
+              </T>
+              <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 168 }}>
+                {slash.map((cmd) => (
+                  <Pressable
+                    key={cmd.cmd}
+                    onPress={() => {
+                      // 电脑端 `chooseSlash` 就是这么做的:模板**替换**整段正文,不是插在光标处。
+                      // 斜杠命令只在开头成立,所以此刻正文里除了这段 `/xxx` 本来也没别的东西。
+                      setText(cmd.template)
+                      setSel(undefined)
+                      setSlashDismissed(true)
+                    }}
+                    style={({ pressed }) => [st.slashRow, pressed && { backgroundColor: c.surface2 }]}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+                      <T mono style={{ fontSize: 12.5, color: c.accent }}>
+                        {cmd.cmd}
+                      </T>
+                      {/* 「技能」和「本机自定义命令」是两种东西:前者是代理自己会挑着用的,
+                          后者是用户写在磁盘上的一段提示词。标出来,别混成一堆。 */}
+                      <T style={{ fontSize: 10, color: c.faint }}>{cmd.kind === 'skill' ? '技能' : '本机'}</T>
+                    </View>
+                    {cmd.desc ? (
+                      <T numberOfLines={1} style={{ fontSize: 11.5, color: c.muted, marginTop: 2 }}>
+                        {cmd.desc}
+                      </T>
+                    ) : null}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          ) : null}
+
           {/* ★「这段有 N 字 · 转成附件?」——**显式一按**,理由见 offload() 上面那段注释:
               手机上拦不到粘贴,而拿字数暴涨去猜会把语音听写的一段话变成一个文件。
               低对比度一条,排在 chip 行**上面**:它是对输入框内容的评论,不是一个操作档位。 */}
@@ -910,6 +978,12 @@ const st = StyleSheet.create({
   //  「多一个 chip 就多一行、输入区跟着长高」的东西。`alignItems: 'center'` 让高矮不一的 chip
   //  居中对齐而不是各自拉满 —— 这里也是**整条轨道高度的来源**,别把这份样式清空。
   chips: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 7 },
+  // 斜杠命令面板。和「转成附件?」那一条同一套外框(bg2 + border2 + chip 圆角),
+  // 好让输入区上方这一叠附加信息看起来是同一类东西,而不是各画各的。
+  slash: { marginHorizontal: 12, marginTop: 9, borderRadius: RADIUS.chip, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  // 一条命令。纵向 9+9 加上两行文字 ≈ 48pt —— 这是个要用拇指点的列表,
+  // 别再退回「一行小字」那种点不中的东西(`CopyBtn.tsx` 顶部那段就是为这个写的)。
+  slashRow: { paddingHorizontal: 11, paddingVertical: 9 },
   // 「转成附件?」那一条。整条可点,所以纵向留够 —— 两行文案时高度自然到 44 上下。
   offload: {
     marginHorizontal: 12,
