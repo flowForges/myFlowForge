@@ -223,6 +223,12 @@ export function Note({ children }: { children: React.ReactNode }) {
  *    会被每一行自己的 y 一并算进去),但它们把「这一层到底怎么摆」变得更绕,而这条链条错了
  *    **不会有任何测试报错** —— node/jsdom 环境测不了真实布局,症状只是气泡悄悄滚到错的一行。
  *  一句话:这个共享件的纵向几何是有远程消费者的,别当它只是个列表容器。
+ *
+ *  ★**横向的量是安全的,而且现在真有人在用**:根屏展开后的会话抽屉给这一层加了
+ *   `marginLeft` + `borderLeftWidth` + `paddingLeft`,画的就是电脑端左侧栏
+ *   `.ws-sess-list` 那条竖线(「这几条从属于上面那一行」)。看到那几个属性别顺手
+ *   「统一」成 `margin` 简写或者挪到外层去 —— 简写会把纵向那一半一起带进来,
+ *   而挪到外层就等于在测量链条里多插一层没人量的偏移。
  */
 export function List({ children, style }: { children: React.ReactNode; style?: StyleProp<ViewStyle> }) {
   return <View style={[s.list, style]}>{children}</View>

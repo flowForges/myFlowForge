@@ -679,14 +679,18 @@ export default function Home() {
                           (`borderStyle: 'dashed'`),不是一张和上面几条一模一样的卡。
                           虚线这一档是「造一个还不存在的东西」的统一说法 —— 列表最底下那颗
                           「＋ 新建工作区」用的是同一套,两处一眼看得出是同一类事。
-                          ★不上实心色:原型 d.css 第三条原则钉死了全屏唯一的实底彩色块是门。 */}
+                          ★不上实心色:原型 d.css 第三条原则钉死了全屏唯一的实底彩色块是门。
+                          ★★**承重的是 ghost 那一档(透明底),不是虚线**:RN 的 `borderStyle: 'dashed'`
+                           在 Android 上一旦有圆角就退回实线,iOS 上在 hairline 宽度下也画不出虚。
+                           所以这里把 `borderWidth` 顶到 1 让 iOS 画得出,同时**不依赖它** ——
+                           虚线画不出来的时候,透明底 + 左对齐的 ＋ 仍然和上面那几张实底的卡分得开。 */}
                       <Btn
                         kind="ghost"
                         size="sm"
                         block
                         disabled={creating || !online}
                         onPress={() => void newSession(g.ws.path)}
-                        style={{ borderStyle: 'dashed', justifyContent: 'flex-start' }}
+                        style={{ borderWidth: 1, borderStyle: 'dashed', justifyContent: 'flex-start' }}
                       >
                         ＋ 新建会话
                       </Btn>
@@ -716,7 +720,9 @@ export default function Home() {
               kind="ghost"
               block
               onPress={() => router.push('/new-workspace')}
-              style={{ borderStyle: 'dashed' }}
+              // 虚线同上:iOS 要 borderWidth ≥ 1 才画得出,Android 有圆角时会退回实线 ——
+              // 所以承重的是 ghost 的透明底和这一整段留白,虚线只是加分项。
+              style={{ borderWidth: 1, borderStyle: 'dashed' }}
             >
               ＋ 新建工作区
             </Btn>
