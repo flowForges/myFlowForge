@@ -16,7 +16,9 @@
  *
  * ★**画不忠实就整段不画**(`ok: false`),交回给原来那个折叠占位。这条比什么都重要:
  *  画出半个表格、丢掉一半单元格,而人以为自己看到的就是全部 —— 那比不画危险得多。
- *  所以任意 CSS(`style=`)、未知标签、太深的嵌套、没闭合的标签,一律整段退回,不做局部丢弃。
+ *  未知标签、太深的嵌套、没闭合的标签、纯 CSS 画出来的东西,一律整段退回,不做局部丢弃。
+ * ★但**装饰不算「不忠实」**:`style` / `class` / `on*` 这些丢掉照画(见 `decorative` 那段注释)。
+ *  标签全在白名单里,结构和每一个字都在,丢的只有配色间距 —— 而整段退回是**一个字都不给**。
  *
  * ★这个文件**零 import**(同 `codeChunks.ts` / `htmlChunks.ts`):它决定「哪一段内容被当成可渲染的」,
  *  判错就是把内容画错或藏起来,必须有测试钉着 —— 而仓库根那个 `mobile` vitest project 是 node 环境,
@@ -54,11 +56,7 @@ const TAGS: ReadonlySet<string> = new Set<HTag>([
 const VOID: ReadonlySet<string> = new Set(['br', 'hr'])
 
 /**
- * 每个标签**唯一**放行的属性。空 = 一个属性都不许带。
- *
- * ★`style` / `class` / `id` 一概不在名单上,于是带它们的片段整段退回折叠占位 —— 这是故意的:
- *  内联 CSS 携带的往往正是这段片段的**全部意思**(两栏、配色、卡片边框)。忽略掉照画不误,
- *  等于把一张卡片画成一堆没头没尾的句子,而人以为自己看到的就是模型想表达的。
+ * 每个标签**唯一**放行的属性 —— 只有这些会被读出来带进树里。
  */
 const ATTRS: Record<string, ReadonlySet<string>> = {
   a: new Set(['href']),
@@ -66,6 +64,27 @@ const ATTRS: Record<string, ReadonlySet<string>> = {
   td: new Set(['colspan', 'rowspan']),
 }
 const NO_ATTRS: ReadonlySet<string> = new Set()
+
+/**
+ * **纯装饰**属性:一律丢掉,继续画。
+ *
+ * ★这条policy改过一次,原因值得记下来。第一版是「不认识的属性 ⇒ 整段退回折叠占位」,
+ *  理由是「内联 CSS 往往就是这段片段的全部意思」。拿真实片段一跑就知道那是纸上谈兵:
+ *  代理写的 HTML **几乎每一段都带 `style=` 或 `class=`**,于是用户看到的还是那个
+ *  「手机端不渲染」—— 而他的原话就是「html不渲染」。等于什么都没改。
+ * ★**丢装饰 ≠ 画一半**,这是两种完全不同的失败:标签全在白名单里,结构和每一个字都照画不误,
+ *  丢的只有配色和间距。一张没有 CSS 的表格仍然是一张正确的表格;一张被换成
+ *  「手机端不渲染」的表格什么都不是。
+ * ★`on*` 也在这里丢而不是退回:RN 的树里没有任何东西会被执行,`onclick` 的值就是一串字符,
+ *  而它周围那段正文人是要读的。白名单仍然是**构造性**的 —— 输出树里没有承载事件处理器的字段,
+ *  所以「不会执行」不是因为我信任下游,而是因为**解析器根本产不出来**(有测试钉着)。
+ */
+function decorative(name: string): boolean {
+  return (
+    name === 'style' || name === 'class' || name === 'id' || name === 'title' || name === 'role' ||
+    name.startsWith('data-') || name.startsWith('aria-') || name.startsWith('on')
+  )
+}
 
 /** 链接只放行这三种 scheme。`javascript:` / `data:` / 站内锚点全部退回 —— 我们点不开,也不该假装能点。 */
 const SAFE_HREF = /^(https?:\/\/|mailto:)/i
@@ -202,9 +221,10 @@ export function parseHtmlSubset(src: string): HtmlParse {
     while ((a = ATTR_RE.exec(attrs)) !== null) {
       const name = a[1].toLowerCase()
       const value = a[2] ?? a[3] ?? a[4] ?? ''
-      // ★`on*` 单列一句不是因为白名单不够 —— 名单已经拦住它了。这里只是让退回原因说人话,
-      //  真机上看日志时一眼知道是「模型吐了个带事件处理器的片段」。
-      if (name.startsWith('on')) return bad(`event-attr:${name}`)
+      // 装饰(style / class / id / data-* / aria-* / title / role / on*):丢掉,接着画。见 `decorative`。
+      if (decorative(name)) continue
+      // 剩下的仍然是**构造性白名单**:名单外的属性说明这个标签在这段片段里承担的作用我们读不懂
+      //  (`<div href=…>`、`<p colspan=…>`),那种退回折叠占位。
       if (!allow.has(name)) return bad(`attr:${t}.${name}`)
       if (name === 'href') {
         const h = decodeEntities(value).trim()
@@ -232,6 +252,38 @@ export function parseHtmlSubset(src: string): HtmlParse {
   // 比不画更容易骗人。
   if (stack.length) return bad('unclosed-tag')
   if (!root.length) return bad('empty')
+  // ★丢掉 `style=` 之后多出来的一个新失败面:**纯 CSS 画出来的东西**(用一排 `<div>` 加宽度
+  //  拼成的柱状图、色块图例)。它的意思**全部**在样式里,文字一个都没有 —— 丢了样式再画,
+  //  出来的是一叠没有尺寸的空 View,屏幕上**什么都看不见**。那正是「让人以为自己看到了全部」
+  //  的那种谎,比不画危险。所以这两条单独拦下来,退回折叠占位(点开还能看原文):
+  //  ★两条的顺序:`css-only` 在前。柱状图两条都命中,而「某个 div 装着一堆元素却一个字都没有」
+  //   是更具体的诊断 —— 真机上看日志时它直接指向「模型画了个纯 CSS 的东西」。
+  if (scaffolding(root)) return bad('css-only')           // 某个 div 装着元素却整棵子树无文字
+  if (!root.some(renders)) return bad('no-text')          // 整段一个字都渲染不出来
   return { ok: true, nodes: root }
 
+}
+
+/** 这个节点**在屏幕上留得下痕迹**吗:有非空白文字,或者是一条真会画出来的分隔线。 */
+function renders(n: HNode): boolean {
+  if (n.t === 'text') return !!n.text.trim()
+  if (n.tag === 'hr') return true
+  return n.kids.some(renders)
+}
+
+/**
+ * 「纯 CSS 脚手架」判定:某个 `<div>` **装着别的元素**,可整棵子树一个字都渲染不出来。
+ *
+ * ★只查 `div`,不查 `table` / `ul` / `p`:那几个自带结构,没文字的表格是空表格(还画得出格子),
+ *  而 `div` 丢了样式之后就真的什么都不剩。柱状图的形状恰好就是这个 ——
+ *  `<div class="row"><div style="width:60%"></div></div>`:外层有元素子节点、整棵无文字。
+ * ★带 `<hr>` 的子树不算(`renders` 认它),`<div><hr></div>` 是一条真分隔线,该画。
+ */
+function scaffolding(nodes: HNode[]): boolean {
+  for (const n of nodes) {
+    if (n.t !== 'el') continue
+    if (n.tag === 'div' && n.kids.some((k) => k.t === 'el') && !renders(n)) return true
+    if (scaffolding(n.kids)) return true
+  }
+  return false
 }

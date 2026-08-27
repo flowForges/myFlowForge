@@ -146,6 +146,120 @@ describe('decodeEntities', () => {
   })
 })
 
+describe('parseHtmlSubset · 装饰属性:丢掉,接着画', () => {
+  /**
+   * ★这条 policy 是**改过的**。第一版是「不认识的属性 ⇒ 整段退回」,拿真实片段一跑就发现
+   *  代理写的 HTML 几乎每段都带 `style=` / `class=`,于是用户看到的还是「手机端不渲染」——
+   *  而他的原话就是「html不渲染」,等于什么都没改。
+   *  丢装饰 ≠ 画一半:标签全在白名单里,结构和每一个字都照画,丢的只有配色间距。
+   */
+  it('★带 style 的表格照画,结构和文字一个不少', () => {
+    const n = ok('<table style="width:100%;border-collapse:collapse"><tr><th style="color:red">A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>')
+    expect(tags(n)).toEqual(['table', 'tr', 'th', 'th', 'tr', 'td', 'td'])
+    expect(flat(n)).toBe('AB12')
+  })
+
+  it('★带 class 的列表照画', () => {
+    const n = ok('<ul class="checks"><li class="done">a</li><li>b</li></ul>')
+    expect(tags(n)).toEqual(['ul', 'li', 'li'])
+    expect(flat(n)).toBe('ab')
+  })
+
+  it('★style 的 div 包着表格照画(代理最常写的形状)', () => {
+    const n = ok('<div style="padding:12px;background:#111"><h3>对比</h3><table><tr><td>x</td></tr></table></div>')
+    expect(tags(n)).toEqual(['div', 'h3', 'table', 'tr', 'td'])
+    expect(flat(n)).toBe('对比x')
+  })
+
+  it('id / title / role / data-* / aria-* 都丢掉', () => {
+    expect(flat(ok('<p id="a" title="t" role="note" data-x="1" aria-label="L">hi</p>'))).toBe('hi')
+    expect(tags(ok('<div data-testid="k"><p>hi</p></div>'))).toEqual(['div', 'p'])
+  })
+
+  it('★装饰属性丢掉,但真属性照旧读出来', () => {
+    const n = ok('<table class="t"><tr><td class="c" colspan="2">x</td></tr></table>')
+    const td = ((n[0] as Extract<HNode, { t: 'el' }>).kids[0] as Extract<HNode, { t: 'el' }>).kids[0] as Extract<HNode, { t: 'el' }>
+    expect(td.colSpan).toBe(2)
+    const a = ok('<p><a class="lnk" href="https://e.com">go</a></p>')
+    const el = (a[0] as Extract<HNode, { t: 'el' }>).kids[0] as Extract<HNode, { t: 'el' }>
+    expect(el.href).toBe('https://e.com')
+  })
+
+  it('★★on* 丢掉照画,而且**永远进不了输出树** —— 白名单是构造性的,不是「信任没人去调」', () => {
+    const n = ok('<div onclick="steal()"><p onmouseover="x()">hi</p></div>')
+    expect(tags(n)).toEqual(['div', 'p'])
+    expect(flat(n)).toBe('hi')
+    // 整棵树序列化之后一个字符都不该带上事件处理器的名字或它的值。
+    const json = JSON.stringify(n)
+    expect(json).not.toContain('onclick')
+    expect(json).not.toContain('onmouseover')
+    expect(json).not.toContain('steal')
+    expect(json).not.toContain('x()')
+  })
+
+  it('★on* 大小写混写、以及跟真属性同框时也一样', () => {
+    const n = ok('<p><a href="https://a.com" ONERROR="bad()">y</a></p>')
+    const el = (n[0] as Extract<HNode, { t: 'el' }>).kids[0] as Extract<HNode, { t: 'el' }>
+    expect(el.href).toBe('https://a.com')
+    expect(JSON.stringify(n)).not.toContain('bad')
+  })
+
+  it('★on* 在**未知标签**上仍然整段退回 —— 拦它的是标签那一关', () => {
+    expect(reason('<img src="x" onerror="steal()">')).toBe('unknown-tag:img')
+  })
+})
+
+describe('parseHtmlSubset · 纯 CSS 画出来的东西', () => {
+  /**
+   * ★丢掉 `style=` 之后多出来的**新失败面**:柱状图 / 色块图例这种东西的意思全在样式里,
+   *  文字一个都没有。丢了样式再画 = 一叠没有尺寸的空 View,屏幕上什么都看不见 ——
+   *  那正是「让人以为自己看到了全部」的那种谎。所以单独拦下来退回折叠占位(点开还有原文)。
+   */
+  it('★用 div 拼的柱状图退回,不画成一片空白', () => {
+    expect(reason('<div style="width:200px"><div style="width:60%;background:#4a9"></div><div style="width:30%;background:#a94"></div></div>')).toBe('css-only')
+  })
+
+  it('★色块图例(div 里套 span,全无文字)退回', () => {
+    expect(reason('<div><div><span class="dot"></span></div></div>')).toBe('css-only')
+  })
+
+  it('★★图表有标题、只有柱子没文字 —— 这条只有脚手架那一关拦得住', () => {
+    // 整段是有文字的(标题),所以 `no-text` 那一关放行;拦下它的必须是 `scaffolding`。
+    // 少了这条,把 `scaffolding` 整个删掉,上面两个用例仍然会被 `no-text` 兜住而全绿(假绿)。
+    expect(reason('<div><h3>本月销量</h3><div><div style="width:60%"></div><div style="width:30%"></div></div></div>')).toBe('css-only')
+  })
+
+  it('整段一个字都渲染不出来的退回', () => {
+    expect(reason('<p></p>')).toBe('no-text')
+    expect(reason('<p>   </p>')).toBe('no-text')
+  })
+
+  it('★有文字的 div 照画 —— 别把正常卡片一起拦了', () => {
+    expect(tags(ok('<div style="border:1px solid"><p>一句话</p></div>'))).toEqual(['div', 'p'])
+    // 带标签的柱状图(每根柱子旁边有数字)是有意义的,照画。
+    expect(tags(ok('<div><div>60%</div><div>30%</div></div>'))).toEqual(['div', 'div', 'div'])
+  })
+
+  it('★<div><hr></div> 不算脚手架 —— 分隔线是真会画出来的', () => {
+    expect(tags(ok('<div><hr></div>'))).toEqual(['div', 'hr'])
+  })
+
+  it('★没有文字的表格 / 列表不拦 —— 只查 div,别的标签自带结构', () => {
+    // 空表格至少还画得出格子、空列表还有圆点;而丢了样式的 div 是真的什么都不剩。
+    // ★这两条**必须让别处有文字**,否则整段会先被 `no-text` 拦掉,判定范围那一关就测不到了
+    //  (变异测试抓到的假绿:把判定从「只查 div」扩到「查所有标签」,原来那条用例照样全绿)。
+    expect(tags(ok('<div><p>说明</p><table><tr><td></td></tr></table></div>'))).toEqual(['div', 'p', 'table', 'tr', 'td'])
+    expect(tags(ok('<div><p>说明</p><ul><li></li></ul></div>'))).toEqual(['div', 'p', 'ul', 'li'])
+  })
+
+  it('★空的 div 挨着正文不算脚手架 —— 模型很爱吐 `<div style="clear:both"></div>` 这种垫片', () => {
+    // ★同样是变异测试抓到的假绿:去掉「装着别的元素」这个前提之后,一个**叶子**空 div 就足以
+    //  把整段正常内容一起拖去折叠占位。脚手架的形状是「套着一层元素却一个字都没有」,不是「空」。
+    expect(tags(ok('<p>一句话</p><div style="clear:both"></div>'))).toEqual(['p', 'div'])
+    expect(tags(ok('<div><p>一句话</p><div class="spacer"></div></div>'))).toEqual(['div', 'p', 'div'])
+  })
+})
+
 describe('parseHtmlSubset · 必须整段退回的', () => {
   it('★★<script> 永远进不了输出树', () => {
     expect(reason('<div><script>alert(1)</script></div>')).toBe('unknown-tag:script')
@@ -154,23 +268,17 @@ describe('parseHtmlSubset · 必须整段退回的', () => {
     expect(reason('<div><ScRiPt>x</ScRiPt></div>')).toBe('unknown-tag:script')
   })
 
-  it('★★on* 事件属性永远进不了输出树', () => {
-    expect(reason('<div onclick="steal()">x</div>')).toBe('event-attr:onclick')
-    expect(reason('<p ONLOAD=x>y</p>')).toBe('event-attr:onload')
-    expect(reason('<a href="https://a.com" onmouseover="x">y</a>')).toBe('event-attr:onmouseover')
-  })
-
   it('★javascript: / data: 的 href 退回', () => {
     expect(reason('<a href="javascript:alert(1)">x</a>')).toBe('unsafe-href')
     expect(reason('<a href="data:text/html,<b>x">y</a>')).toBe('unsafe-href')
   })
 
-  it('★任意 CSS(style=)退回 —— 那段样式往往就是片段的全部意思', () => {
-    expect(reason('<div style="display:flex;gap:8px">x</div>')).toBe('attr:div.style')
-    expect(reason('<span class="badge">x</span>')).toBe('attr:span.class')
+  it('★名单外的**非装饰**属性仍然退回 —— 那个标签在这段里干嘛我们读不懂', () => {
+    expect(reason('<div href="https://x">y</div>')).toBe('attr:div.href')
+    expect(reason('<p colspan="2">y</p>')).toBe('attr:p.colspan')
   })
 
-  it('未知标签退回', () => {
+  it('未知标签退回(这一关没松,松的只有属性)', () => {
     expect(reason('<iframe src="https://x"></iframe>')).toBe('unknown-tag:iframe')
     expect(reason('<svg><circle/></svg>')).toBe('unknown-tag:svg')
     expect(reason('<div><img src="https://tracker/p.gif"></div>')).toBe('unknown-tag:img')
