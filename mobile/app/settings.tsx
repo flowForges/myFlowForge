@@ -89,7 +89,12 @@ export default function Settings() {
         <Sec>主机</Sec>
         <List>
           {activeHost ? (
-            <Row>
+            // ★★这一行**可点**,点进去是这台主机的配置(`app/host.tsx`:地址、令牌、对面版本、方法数)。
+            //  在这之前它是一行死的文字,而它长得和这一屏其他每一行可点的东西一模一样 ——
+            //  于是它是全屏唯一一个「看着能点、点了没反应」的地方。
+            //  ★「断开」那颗键也一并挪进去了:它和这一行挤在一起的时候,想点进详情的手指
+            //  正好落在断开上,而那一下的后果是整屏数据消失。现在这一行只做一件事 —— 进去。
+            <Row onPress={() => router.push('/host')}>
               <HostIcon icon={activeHost.icon} />
               <View style={{ flex: 1, minWidth: 0 }}>
                 <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
@@ -103,10 +108,7 @@ export default function Settings() {
                   </T>
                 </View>
               </View>
-              {/* 断开是破坏性的,用 danger;它待在这一行的右边,和下面那两个主动作隔着一整段。 */}
-              <Btn kind="danger" size="sm" onPress={() => void selectHost(null)}>
-                断开
-              </Btn>
+              <T style={{ fontSize: 16, color: c.faint }}>›</T>
             </Row>
           ) : (
             <Row onPress={() => router.push('/add-host')}>

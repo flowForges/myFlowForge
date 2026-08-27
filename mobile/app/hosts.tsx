@@ -12,7 +12,7 @@ import { HostIcon } from '../src/ui/HostIcon'
 
 export default function Hosts() {
   const c = useC()
-  const { hosts, activeHost, state, selectHost, removeHost, reconnect, methods } = useConn()
+  const { hosts, activeHost, state, selectHost, removeHost, reconnect } = useConn()
   const { gates } = useStore()
 
   const remove = (h: MobileHost) => {
@@ -93,15 +93,10 @@ export default function Hosts() {
           ) : null}
         </List>
 
-        {activeHost && state?.status === 'ready' ? (
-          <>
-            <Sec>这台机器提供</Sec>
-            <Note>
-              {methods.size} 个方法。对不上的功能会在界面上置灰,而不是点下去报一句看不懂的错。
-            </Note>
-          </>
-        ) : null}
-
+        {/* ★「这台机器提供 N 个方法」原来在这儿,已经搬走了 —— 它是**一台机器的底细**,
+            和这一屏(清单:有哪几台、切哪台、删哪台)不是一件事,而且埋在列表最底下
+            没人会滚到。现在它在两个真会去看的地方:设置 → 关于,以及 `app/host.tsx`。
+            这里不留第三份 —— 同一个数字抄三遍,迟早有一遍说的是另一台机器的。 */}
         <Note>切过去之后,会话、变更、终端全部换成那台机器的。不做同屏对比。</Note>
       </ScrollView>
     </View>
