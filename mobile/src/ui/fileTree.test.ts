@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { TreeNode } from '../../../src/shared/types'
-import { FILE_LINE_CAP, crumbs, filterEntries, listDir, numberLines, parentOf } from './fileTree'
+import { FILE_LINE_CAP, crumbs, extBadge, extOf, fileKind, filterEntries, langOf, listDir, numberLines, parentOf } from './fileTree'
 
 // `fs:tree` 真实返回的形状(见 src/main/fs/fileTree.ts 的 buildTree):嵌套的 dir/file,
 // path 是相对 cwd 的,改动过的文件带 chg,git 仓库目录带 branch。
@@ -130,5 +130,58 @@ describe('numberLines', () => {
 
   it('空文件是零行,不是一行空的', () => {
     expect(numberLines('')).toEqual({ lines: [], total: 0, dropped: 0 })
+  })
+})
+
+describe('extOf / fileKind / extBadge', () => {
+  it('取最后一段扩展名并转小写', () => {
+    expect(extOf('App.TSX')).toBe('tsx')
+    expect(extOf('a/b/c.min.js')).toBe('js')
+  })
+
+  it('★点开头的整名不是扩展名', () => {
+    // `.gitignore` 切出 `gitignore` 会显示成一枚 8 个字母的怪徽章,把名字那一列挤没。
+    expect(extOf('.gitignore')).toBe('')
+    expect(extBadge('.gitignore')).toBe('·')
+    expect(extOf('Makefile')).toBe('')
+  })
+
+  it('★带非字母数字的尾段不算扩展名', () => {
+    expect(extOf('v1.2.3-notes')).toBe('')
+  })
+
+  it('分类覆盖六大类', () => {
+    expect(fileKind('a.ts')).toBe('code')
+    expect(fileKind('a.scss')).toBe('markup')
+    expect(fileKind('a.yml')).toBe('data')
+    expect(fileKind('a.md')).toBe('doc')
+    expect(fileKind('a.woff2')).toBe('media')
+    expect(fileKind('a.bak')).toBe('other')
+    expect(fileKind('Makefile')).toBe('other')
+  })
+
+  it('★长扩展名截到 4 个字符,不然名字那一列被挤窄', () => {
+    expect(extBadge('a.woff2')).toBe('woff')
+    expect(extBadge('a.markdown')).toBe('mark')
+  })
+})
+
+describe('langOf', () => {
+  it('服务端说得出来的就听它的', () => {
+    expect(langOf('a.tsx', 'tsx')).toBe('tsx')
+  })
+
+  it("★服务端给 'text' 时退回按扩展名再试 —— 那张表只认十来种,着色表认得多得多", () => {
+    // `git:file` 的 EXT_LANG 里没有 rs/toml/rb,回的是 'text';而 @shared/highlight 三个都认。
+    expect(langOf('main.rs', 'text')).toBe('rs')
+    expect(langOf('Cargo.toml', 'text')).toBe('toml')
+  })
+
+  it('两边都不认才是真的不着色', () => {
+    expect(langOf('notes', 'text')).toBe('')
+  })
+
+  it('★diff 那半屏拿不到 lang,只传文件名也要work', () => {
+    expect(langOf('src/a.py')).toBe('py')
   })
 })

@@ -81,6 +81,70 @@ export function filterEntries(entries: Entry[], q: string): Entry[] {
   return entries.filter((e) => e.name.toLowerCase().includes(t))
 }
 
+// ── 文件类型 ────────────────────────────────────────────────────────────────
+// 用户看着文件列表说「感觉很素」:一屏几十行,前面全是同一个 `·`,名字全是同一个颜色同一个字重,
+// 要找 `package.json` 只能一行一行读过去。电脑端(`views/inspector/fileIcon.tsx`)的解法是按扩展名
+// 给一枚彩色徽章 —— 但手机端有一条更硬的规矩:**实底彩色块全屏只留给权限门**(原型 d.css 第三条原则)。
+// 所以这里只做分类,颜色由界面按「淡色文字 + 字重」落地,不画色块。
+
+/** 文件的大类。只有 6 类 —— 分得再细,390px 宽的一列上人也读不出差别。 */
+export type FileKind = 'code' | 'markup' | 'data' | 'doc' | 'media' | 'other'
+
+/** 小写扩展名(不含点)。没有扩展名返回 ''。 */
+export function extOf(name: string): string {
+  // ★只认**最后一段**,而且必须是字母数字:`.gitignore` 这种整名就是个「点开头」的文件,
+  //  切出来的 `gitignore` 当扩展名会让它显示成一枚 8 个字母的怪徽章;`v1.2.3-notes` 同理。
+  const m = /[^.\/]\.([a-z0-9]+)$/i.exec(name || '')
+  return m ? m[1].toLowerCase() : ''
+}
+
+const KIND: Record<string, FileKind> = {
+  ts: 'code', tsx: 'code', js: 'code', jsx: 'code', mjs: 'code', cjs: 'code', py: 'code', go: 'code',
+  rs: 'code', java: 'code', kt: 'code', swift: 'code', c: 'code', h: 'code', cpp: 'code', hpp: 'code',
+  cs: 'code', rb: 'code', php: 'code', sh: 'code', bash: 'code', zsh: 'code', sql: 'code', lua: 'code',
+  dart: 'code', scala: 'code', ex: 'code', exs: 'code', mm: 'code', m: 'code',
+  html: 'markup', htm: 'markup', xml: 'markup', vue: 'markup', svelte: 'markup', css: 'markup',
+  scss: 'markup', sass: 'markup', less: 'markup',
+  json: 'data', yaml: 'data', yml: 'data', toml: 'data', ini: 'data', cfg: 'data', conf: 'data',
+  env: 'data', lock: 'data', csv: 'data', tsv: 'data', plist: 'data',
+  md: 'doc', markdown: 'doc', txt: 'doc', rst: 'doc', pdf: 'doc', adoc: 'doc', log: 'doc',
+  png: 'media', jpg: 'media', jpeg: 'media', gif: 'media', webp: 'media', svg: 'media', ico: 'media',
+  bmp: 'media', mp3: 'media', mp4: 'media', mov: 'media', wav: 'media', ttf: 'media', otf: 'media',
+  woff: 'media', woff2: 'media',
+}
+
+/** 按名字判大类。认不出的一律 'other' —— 宁可不上色,也别把 `.bak` 说成代码。 */
+export function fileKind(name: string): FileKind {
+  return KIND[extOf(name)] ?? 'other'
+}
+
+/**
+ * 列表里那一枚扩展名小标签的文字。
+ *
+ * ★截到 4 个字符:`woff2` / `markdown` 这种长扩展名会把名字那一列挤窄,而这一列的**主角是文件名**。
+ * ★没有扩展名的(README、Makefile、.gitignore)给一个 `·` 占位 —— 留空的话这一列会忽宽忽窄,
+ *  一屏扫下去名字左边缘对不齐,比没有徽章还乱。
+ */
+export function extBadge(name: string): string {
+  const e = extOf(name)
+  return e ? e.slice(0, 4) : '·'
+}
+
+/**
+ * 这个文件该按哪种语言着色。
+ *
+ * ★服务端 `git:file` 返回的 `lang` 只认十来种扩展名(见 `src/main/git/diff.ts` 的 `EXT_LANG`),
+ *  认不出时给的是字符串 `'text'` —— 而 `'text'` 在 `@shared/highlight` 的语言表里**不存在**,
+ *  照着传过去就是整屏一个色。可 `@shared/highlight` 自己认得的语言(rs / java / rb / toml / dockerfile…)
+ *  比那张表多得多。所以:服务端说得出来的就听它的,说 'text' 的**退回按扩展名再试一次**,
+ *  两边都不认才是真的不着色。
+ * ★diff 那半屏根本拿不到 `lang`(`git:diff` 只回行),走的就是扩展名这条路。
+ */
+export function langOf(file: string, serverLang?: string): string {
+  if (serverLang && serverLang !== 'text') return serverLang
+  return extOf(file)
+}
+
 /** 一个文件最多显示多少行。超过就截断,**并且说出来**。 */
 export const FILE_LINE_CAP = 800
 

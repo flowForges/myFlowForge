@@ -5,10 +5,23 @@ import { goBack } from '../src/nav'
 import { one } from '../src/routeParams'
 import type { DiffLine } from '../../src/shared/types'
 import { MONO, useC } from '../src/theme/theme'
-import { RADIUS } from '../src/theme/tokens'
+import { RADIUS, type Palette } from '../src/theme/tokens'
 import { Chip, Empty, Field, IconBtn, List, Note, Row, Sec, T, Tabs, TopBar, TopTitle } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
-import { crumbs, filterEntries, listDir, numberLines, parentOf, type Entry } from '../src/ui/fileTree'
+import { HIGHLIGHT_MAX, highlight } from '@shared/highlight'
+import { synStyle } from '../src/ui/synStyle'
+import {
+  crumbs,
+  extBadge,
+  fileKind,
+  filterEntries,
+  langOf,
+  listDir,
+  numberLines,
+  parentOf,
+  type Entry,
+  type FileKind,
+} from '../src/ui/fileTree'
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
 import { useChanges } from '../src/data/useChanges'
@@ -30,11 +43,42 @@ type Pane = 'changes' | 'files'
 /** 打开的那个文件,以及现在看的是全文还是变更。原型 `v-file` 右上角那个图标就是切这个的。 */
 type Open = { cwd: string; file: string; view: 'diff' | 'code' }
 
-/** 带行号的代码/差异行。变更和全文两屏共用这一段版式(原型的 `.code`)。 */
+/**
+ * 文件大类 → 那枚扩展名小字的颜色。
+ *
+ * ★色值一律借**语法着色**那一组(`syn*`):它们本来就是「同一屏里区分种类、但都不抢戏」的一组,
+ *  互相之间的色相拉得够开,亮度又都压在正文之下。另配一组新颜色只会多出四个没人维护的令牌。
+ * ★认不出类型的用 `faint`,和原来那个 `·` 一样安静 —— 不认识就别装作认识。
+ */
+function kindColor(k: FileKind, c: Palette): string {
+  switch (k) {
+    case 'code': return c.synFn
+    case 'markup': return c.synKw
+    case 'data': return c.synPr
+    case 'doc': return c.synCm
+    case 'media': return c.synVa
+    case 'other': return c.faint
+  }
+}
+
+/**
+ * 带行号的代码/差异行。变更和全文两屏共用这一段版式(原型的 `.code`)。
+ *
+ * ★用户原话:「打开文件后没有渲染,感觉就普通文本一样」。所以这里逐行过 `@shared/highlight` 的
+ *  `highlight()` —— **和电脑端是同一份语法表**(见 `FilePreview.tsx`),同一个文件在两块屏幕上
+ *  认出的关键字一样多。逐行那条路只产出 kw/st/cm/nu 四个色位(行内看不到跨行的块注释和多行字符串,
+ *  猜的话会把半个文件染成注释),这是刻意的。
+ */
 function CodeLines({
   lines,
+  lang,
+  colorize,
 }: {
-  lines: { ln: string; text: string; kind: 'ctx' | 'add' | 'del' }[]
+  /** `prefix` 是 diff 的 `+` / `-` / 空格。它**不是代码**,单独渲染。 */
+  lines: { ln: string; prefix?: string; text: string; kind: 'ctx' | 'add' | 'del' }[]
+  lang: string
+  /** 关掉着色(超长文件 / 认不出语言)时整行走一个 `<T>`,不切 token。 */
+  colorize: boolean
 }) {
   const c = useC()
   return (
@@ -48,7 +92,28 @@ function CodeLines({
           ]}
         >
           <T style={[st.ln, { color: c.faint }]}>{l.ln}</T>
-          <T style={[st.code, { color: c.fg2 }]}>{l.text || ' '}</T>
+          <T style={[st.code, { color: c.fg2 }]}>
+            {/* ★`+` / `-` 用 `c.faint` 单独出:它是 diff 的记号,不是这一行代码的一部分。
+                跟着进 `highlight()` 的话 `-x` 会被当成运算符、`+1` 会被当成数字 —— 一列本该
+                安静的记号忽然五颜六色,而整行的底色本来已经把增删说清楚了。 */}
+            {l.prefix ? <T style={[st.tok, { color: c.faint }]}>{l.prefix}</T> : null}
+            {!colorize
+              ? l.text || (l.prefix ? '' : ' ')
+              : l.text
+                ? highlight(l.text, lang).map((t, j) =>
+                    t.cls ? (
+                      <T key={j} style={[st.tok, synStyle(t.cls, c)]}>
+                        {t.text}
+                      </T>
+                    ) : (
+                      t.text
+                    ),
+                  )
+                : // 空行也要占一行高度,不然一屏代码里的空行全被压扁,缩进结构就读不出来了。
+                  l.prefix
+                  ? ''
+                  : ' '}
+          </T>
         </View>
       ))}
     </>
@@ -164,6 +229,18 @@ export default function Exec() {
   //  左上角 ‹ 退回文件列表,门就又在了。
   if (open) {
     const view = numberLines(code?.text ?? '')
+    // 这一屏按哪种语言着色。服务端只在 `git:file` 里给 lang,而且认不出时给的是 'text' ——
+    // 见 `langOf` 的注释。diff 那一半根本没有 lang,只能按文件名推。
+    const lang = langOf(open.file, code?.lang)
+    /**
+     * ★`HIGHLIGHT_MAX` 是着色器自己定的闸(60k 字符):一个几万字符的文件切成上万个 `<T>`,
+     *  在 RN 里就是一次几秒的卡顿 —— 手机上比电脑端更疼。超了就整行一个 `<T>` 打印,
+     *  内容一个字不少,只是没颜色。
+     * ★注意这跟 `FILE_LINE_CAP`(800 行)是**两条不同的闸**:那条是「只显示前 N 行」并且
+     *  界面上如实说了;这条只关掉颜色,不藏任何内容,所以不需要另写一句提示。
+     */
+    const codeLen = code?.text.length ?? 0
+    const diffLen = lines ? lines.reduce((n, l) => n + l.text.length + 1, 0) : 0
     return (
       <View style={{ flex: 1, backgroundColor: c.bg }}>
         <TopBar
@@ -194,7 +271,9 @@ export default function Exec() {
                 <Empty title="没有可显示的差异" desc="这个文件和 HEAD 一样。右上角可以切到全文。" />
               ) : (
                 <CodeLines
-                  lines={lines.map((l) => ({ ln: String(l.ln || ''), text: (l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : ' ') + l.text, kind: l.kind === 'add' ? 'add' : l.kind === 'del' ? 'del' : 'ctx' }))}
+                  lang={lang}
+                  colorize={diffLen <= HIGHLIGHT_MAX}
+                  lines={lines.map((l) => ({ ln: String(l.ln || ''), prefix: l.kind === 'add' ? '+' : l.kind === 'del' ? '-' : ' ', text: l.text, kind: l.kind === 'add' ? 'add' : l.kind === 'del' ? 'del' : 'ctx' }))}
                 />
               )
             ) : codeErr ? (
@@ -205,7 +284,11 @@ export default function Exec() {
               <Empty title="这个文件是空的" />
             ) : (
               <>
-                <CodeLines lines={view.lines.map((l) => ({ ln: String(l.ln), text: l.text, kind: 'ctx' as const }))} />
+                <CodeLines
+                  lang={lang}
+                  colorize={codeLen <= HIGHLIGHT_MAX}
+                  lines={view.lines.map((l) => ({ ln: String(l.ln), text: l.text, kind: 'ctx' as const }))}
+                />
                 {/* ★截断必须说出来。人正是拿这一屏判断「敢不敢让它继续」。 */}
                 {view.dropped > 0 ? (
                   <T style={{ fontSize: 11.5, color: c.faint, paddingHorizontal: 12, paddingTop: 8 }}>
@@ -368,9 +451,27 @@ export default function Exec() {
                     tree
                     onPress={() => (e.type === 'dir' ? (setDir(e.path), setQ('')) : openFile(proj!, e.path, 'code'))}
                   >
-                    <T style={{ fontSize: 12, color: c.faint, width: 14 }}>{e.type === 'dir' ? '▸' : '·'}</T>
+                    {/* ── 「文件列表感觉很素」的解法 ──────────────────────────────────
+                        原来每一行左边都是同一个 `·`、名字同一个颜色同一个字重,一屏几十行没有任何
+                        落点,找 `package.json` 只能一行行读过去。
+                        ★电脑端(`inspector/fileIcon.tsx`)的做法是一枚实底彩色徽章 —— 手机端**不能抄**:
+                         全屏唯一的实底彩色块必须继续只有权限门那一个(原型 d.css 第三条原则),
+                         列表里铺几十个小色块,门就不再是一眼能认出的那个东西了。
+                        ★所以只动三样**不占实底**的:①左边一枚淡色扩展名小字(类型),
+                         ②目录名加粗、文件名常规(层级),③目录的 `▸` 用 accent(可进入 vs 可打开)。 */}
+                    {e.type === 'dir' ? (
+                      <T style={{ fontSize: 12, color: c.accent, width: 30 }}>▸</T>
+                    ) : (
+                      <T style={[st.badge, { color: kindColor(fileKind(e.name), c) }]} numberOfLines={1}>
+                        {extBadge(e.name)}
+                      </T>
+                    )}
                     <View style={{ flex: 1, minWidth: 0 }}>
-                      <T numberOfLines={1} mono style={{ fontSize: 12.5, color: c.fg }}>
+                      <T
+                        numberOfLines={1}
+                        mono
+                        style={{ fontSize: 12.5, color: e.type === 'dir' ? c.fg : c.fg2, fontWeight: e.type === 'dir' ? '600' : '400' }}
+                      >
                         {e.name}
                         {e.type === 'dir' ? '/' : ''}
                       </T>
@@ -445,6 +546,11 @@ const st = StyleSheet.create({
   line: { flexDirection: 'row', paddingHorizontal: 4 },
   ln: { width: 44, textAlign: 'right', paddingRight: 9, fontFamily: MONO, fontSize: 11.5, lineHeight: 20 },
   code: { fontFamily: MONO, fontSize: 11.5, lineHeight: 20, paddingRight: 12 },
+  // 一个语法 token。★**故意不带 lineHeight**:嵌套 `<Text>` 各自带行高在 Android 上会让同一行
+  // 忽高忽低。行高由外层那个 `st.code` 一处定,里面的只管字体和字号(`T` 要靠 fontSize 落字号档)。
+  tok: { fontFamily: MONO, fontSize: 11.5 },
+  // 文件列表左边那一列。宽度**写死**,不然扩展名一长一短会让文件名的左边缘一行一个位置。
+  badge: { width: 30, fontFamily: MONO, fontSize: 9.5, letterSpacing: 0.3 },
   // `alignItems: 'center'` 而不是默认的拉伸:chip 自己有 32 的 minHeight,拉伸会让它跟着
   // 这一条轨道的高度变形。paddingBottom 从 2 抬到 6 —— 原来贴着面包屑,现在两条各自站得开。
   projs: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
