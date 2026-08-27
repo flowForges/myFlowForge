@@ -77,6 +77,10 @@ export function NeedsYou({ items, gateCount, onPick }: {
           实底琥珀上,现象是「点了没反应」—— 这套代码已经在别处栽过好几次同一件事。 */}
       <Pressable
         onPress={toggle}
+        // ★这一条排版上只有 ~34pt 高(9pt 内边距 + 一行 12pt 字),低于 44 的最小触达。
+        //  横向它本来就横跨整块,所以缺的只有上下 —— 各补 6pt 撑到 46,**布局一点没变**。
+        //  收起之后这一条就是整块的全部:点不准它,就等于把这块东西锁死了。
+        hitSlop={{ top: 6, bottom: 6 }}
         accessibilityRole="button"
         accessibilityLabel={foldA11yLabel(folded, items.length, gateCount)}
         style={({ pressed }) => [st.head, { backgroundColor: c.gate }, pressed && { opacity: 0.82 }]}
