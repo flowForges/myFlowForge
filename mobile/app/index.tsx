@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Platform, ScrollView, View } from 'react-native'
+import { Alert, Platform, ScrollView, StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../src/main/ipc/channels'
 import type { SessionsFile, WorkspaceMeta } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
+import { RADIUS } from '../src/theme/tokens'
 import { Btn, Empty, IconBtn, List, LiveDot, Row, T, TopBar, TopTitle } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
 import { JumpBubble } from '../src/ui/JumpBubble'
@@ -16,6 +17,7 @@ import { tierOf, countTiers, topTier, type SessionTier, type TierCounts } from '
 import { runningKey } from '../src/data/runningMerge'
 import { StatusBadge } from '../src/ui/StatusBadge'
 import { WsRow } from '../src/ui/WsRow'
+import { NeedsYou, type NeedItem } from '../src/ui/NeedsYou'
 
 /**
  * 根屏 · 全部会话,按工作区分组。
@@ -28,6 +30,13 @@ import { WsRow } from '../src/ui/WsRow'
  * 因为是根屏,零主机的首跑引导也落在这里:一个刚装上的新用户没有会话可点,
  * 只会落在这儿,所以「先连一台电脑」必须是这一屏自己的分支,不能指望对话屏兜底。
  */
+
+/** 门等了多久,`mm:ss`。和 `GateCard` 的 `useWaited` 同一个口径。 */
+function waited(since: number, now: number): string {
+  const sec = Math.max(0, Math.floor((now - since) / 1000))
+  return `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`
+}
+
 export default function Home() {
   const c = useC()
   const { activeHost, hosts, loading: hostsLoading, online, state, invoke } = useConn()
@@ -207,9 +216,40 @@ export default function Home() {
   // 症状是气泡滚到错的那一行。@shared/chat/unread 的 key() 用的是同一个理由。
   const pending = ordered.flatMap((g) =>
     g.sessions
-      .map((s) => ({ key: `${g.ws.path}\0${s.id}`, wsPath: g.ws.path, tier: tierFor(g.ws.path, s.id) }))
+      .map((s) => ({
+        key: `${g.ws.path}\0${s.id}`, wsPath: g.ws.path, sessionId: s.id,
+        wsName: g.ws.name, title: s.title, agentId: s.agentId, mode: s.mode,
+        at: s.lastMessageAt ?? s.createdAt,
+        tier: tierFor(g.ws.path, s.id),
+      }))
       .filter((x) => x.tier !== 'idle'),
   )
+  /**
+   * 顶部「需要你」那一块的条目。**直接复用 `pending`** —— 它已经是「所有非 idle 的会话,
+   * 按列表顺序排好」,定位气泡吃的也是同一份。两处各推一遍的话,迟早出现
+   * 「气泡说有 2 条、上面那块列了 3 条」这种自己打自己脸的画面。
+   *
+   * 排序:门 > 执行中 > 未读,同档按最近活动倒序 —— 等你答话的永远在最上面。
+   */
+  const needItems: NeedItem[] = useMemo(() => {
+    const rank = { gate: 0, running: 1, unread: 2 } as const
+    return [...pending]
+      .sort((a, b) => (rank[a.tier as keyof typeof rank] - rank[b.tier as keyof typeof rank]) || (b.at - a.at))
+      .map((p) => {
+        const g = gatesFor(p.wsPath, p.sessionId)[0]
+        const agent = (p.agentId ?? '').trim() || (p.mode === 'workflow' ? '工作流' : '对话')
+        return {
+          key: p.key, wsPath: p.wsPath, sessionId: p.sessionId,
+          title: p.title || '新会话',
+          // 门那一档报「等了多久」——门等得越久越该显眼;其余报最近活动时间。
+          sub: [p.wsName, agent, g ? `等了 ${waited(g.since, now)}` : fmtRelTime(p.at, now) || '—']
+            .filter(Boolean).join(' · '),
+          tier: p.tier as NeedItem['tier'],
+        }
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending.map((p) => p.key + p.tier).join(','), now])
+
   const counts = countTiers(pending.map((p) => p.tier))
   const top = topTier(counts)
   // 只在最高那一档里挑目标 —— 气泡说「1 条等你答话」就该跳到门那条,不是跳到别的。
@@ -406,7 +446,22 @@ export default function Home() {
         ) : !showsRows ? (
           <Empty title="这台机器上还没有工作区" desc="新建工作区留在电脑端。" />
         ) : (
-          ordered.map((g) => {
+          <>
+          {/* ★这一块就是这一屏存在的理由:代理停在门上而你不在电脑前。
+              没事的时候整块不渲染 —— 「没有这一块 = 没你的事」。 */}
+          <NeedsYou
+            items={needItems}
+            gateCount={counts.gate}
+            onPick={(it) => {
+              select({ wsPath: it.wsPath, sessionId: it.sessionId })
+              ensureWs(it.wsPath)
+              router.push('/chat')
+            }}
+          />
+          <T style={{ fontSize: 11, color: c.faint, paddingHorizontal: 16, paddingTop: 20, paddingBottom: 6 }}>
+            全部工作区
+          </T>
+          {ordered.map((g, gi) => {
             const wsGates = gatesFor(g.ws.path)
             const sessions = [...g.sessions].sort(
               (a, b) => (b.lastMessageAt ?? b.createdAt) - (a.lastMessageAt ?? a.createdAt),
@@ -435,13 +490,15 @@ export default function Home() {
                     而 `.sec` 在原型里永远只是「一行标签 + 底下一串卡片」里的那行标签。
                     加了折叠之后它成了**可点的主体**、还默认收起,于是整屏只剩十几行浅灰小字。
                     `Sec` 本身没动 —— 另外 6 个屏还在拿它当真正的分节标签用。 */}
-                <View style={{ paddingHorizontal: 12, paddingTop: 8 }}>
+                <View style={{ paddingHorizontal: 12 }}>
                   <WsRow
                     name={g.ws.name}
                     note={branches.get(g.ws.path)}
                     meta={`${g.ws.projectCount} 个项目`}
                     expanded={open}
                     gate={wsGates.length > 0}
+                    first={gi === 0}
+                    last={gi === ordered.length - 1 && !open}
                     onPress={() => toggleWs(g.ws.path)}
                     onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
                     right={(() => {
@@ -458,20 +515,35 @@ export default function Home() {
                   />
                 </View>
                 {!open ? null : sessions.length === 0 ? (
-                  <Empty title="还没有人在这个工作区开过会话" desc="新建会话这类操作手机上也能做,但新建工作区留在电脑端。" />
+                  <View style={{ marginHorizontal: 12, backgroundColor: c.bg2, borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, borderColor: c.border, paddingVertical: 4 }}>
+                    <Empty title="还没有人在这个工作区开过会话" desc="新建会话这类操作手机上也能做,但新建工作区留在电脑端。" />
+                  </View>
                 ) : (
-                  // 定位气泡 absY() 三段 y 的第②段:这层裸 View(**不能加 style**,否则会在
-                  // List 原本的纵向 flex 列里插进一段意外的间距/内边距)只用来测 List 相对上面
-                  // 分组 View(第①段,groupY)的偏移,记进 listY[wsPath]。第③段是下面每行外面
-                  // 的 View(rowY)。三段缺一个,absY() 就返回 undefined —— 气泡不会报错,
-                  // 只会悄悄滚到错的位置。没用 measureLayout 等原生测量 API:新架构(Fabric)
-                  // 下的行为这个环境没法验证,onLayout 在新旧架构都确定支持。
-                  <View onLayout={(e) => { listY.current[g.ws.path] = e.nativeEvent.layout.y }}>
-                    {/* ★往右缩一格:工作区行现在也是卡片了,不缩的话父子两级长得一模一样,
-                        读起来是一列平的卡,而不是「这几条会话属于上面那个区」。
-                        缩进加在 List 的 style 上,**不加在外面那层测量用的裸 View 上** ——
-                        那一层的几何被气泡的 absY() 消费(见上面的注释)。 */}
-                    <List style={{ paddingLeft: 26 }}>
+                  // 定位气泡 absY() 三段 y 的第②段:这一层测的是 `<List>` 相对上面分组 View
+                  // (第①段,groupY)的偏移,记进 listY[wsPath];第③段是每行外面的 View(rowY)。
+                  // 三段缺一个,absY() 就返回 undefined —— 不会报错,只会让气泡悄悄滚到错的位置。
+                  //
+                  // ★展开区做成「抽屉」:比表格底一档的底色 + 左右描边,接着上面那一行往下长 ——
+                  //  不这么做的话,整齐的分组表中间会插进一段带间距的浮卡,像两个设计打架。
+                  // ★★背景和描边可以加在这一层(它们不改变这一层自己的 y),但**内边距只能加在
+                  //  下面的 `<List>` 上**:给这一层加 padding 会把 List 整体推下去,而 rowY 是相对
+                  //  List 量的、listY 是这一层自己的 y —— 那段 padding 没有任何人算回去,
+                  //  症状是气泡稳定地滚偏一截,且测不出来(布局在 node/jsdom 里量不了)。
+                  // 没用 measureLayout 等原生测量 API:新架构(Fabric)下的行为这个环境没法验证。
+                  <View
+                    style={{
+                      marginHorizontal: 12,
+                      backgroundColor: c.bg2,
+                      borderLeftWidth: StyleSheet.hairlineWidth,
+                      borderRightWidth: StyleSheet.hairlineWidth,
+                      borderBottomWidth: gi === ordered.length - 1 ? StyleSheet.hairlineWidth : 0,
+                      borderColor: c.border,
+                      borderBottomLeftRadius: gi === ordered.length - 1 ? RADIUS.panel : 0,
+                      borderBottomRightRadius: gi === ordered.length - 1 ? RADIUS.panel : 0,
+                    }}
+                    onLayout={(e) => { listY.current[g.ws.path] = e.nativeEvent.layout.y }}
+                  >
+                    <List style={{ paddingLeft: 14, paddingRight: 10, paddingVertical: 8 }}>
                       {sessions.map((s) => {
                         const sg = wsGates.filter((x) => x.sessionId === s.id)
                         return (
@@ -521,7 +593,8 @@ export default function Home() {
                 )}
               </View>
             )
-          })
+          })}
+          </>
         )}
         {gates.length > 0 && (
           <View style={{ paddingHorizontal: 15, paddingTop: 18 }}>
