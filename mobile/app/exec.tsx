@@ -6,7 +6,7 @@ import { one } from '../src/routeParams'
 import type { DiffLine } from '../../src/shared/types'
 import { MONO, useC } from '../src/theme/theme'
 import { RADIUS } from '../src/theme/tokens'
-import { Empty, Field, IconBtn, List, Note, Row, Sec, T, Tabs, TopBar, TopTitle } from '../src/ui/kit'
+import { Chip, Empty, Field, IconBtn, List, Note, Row, Sec, T, Tabs, TopBar, TopTitle } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
 import { crumbs, filterEntries, listDir, numberLines, parentOf, type Entry } from '../src/ui/fileTree'
 import { useConn } from '../src/net/conn'
@@ -290,21 +290,28 @@ export default function Exec() {
         // ── 文件 ────────────────────────────────────────────────────────
         <View style={{ flex: 1 }}>
           {projects.length > 1 ? (
+            // ★用 `Chip` 而不是 `Row`:`Row` 是**整宽的列表卡**(`width: '100%'` + `minHeight: 54`),
+            //  塞进横向 ScrollView 里就是一个撑满屏宽、又被上面那点高度切掉一半的方框,还压在
+            //  底下的面包屑上 —— 真机截图里 `go-blog` 出现两次、上面那个被削平,就是这个。
+            //  这一排本来要的就是 chip:32 高、内容宽、`RADIUS.chip` 的圆角。
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.projs}>
               {projects.map((g) => {
                 const on = g.cwd === proj
                 return (
-                  <Row
+                  <Chip
                     key={g.cwd}
+                    // 选中态照旧是 accent 边 + accentDim 底(和代理/权限那两张 Sheet 里的选中行同一套),
+                    // 文字跟着从 muted 抬到 fg —— 只换边框的话,余光扫过去分不出选的是哪一个。
+                    tone={on ? 'on' : 'plain'}
                     onPress={() => {
                       setProj(g.cwd)
                       setDir('')
                       setQ('')
                     }}
-                    style={[st.proj, on ? { borderColor: c.accent, backgroundColor: c.accentDim } : undefined]}
+                    style={on ? { borderColor: c.accent, backgroundColor: c.accentDim } : undefined}
                   >
-                    <T style={{ fontSize: 12.5, color: on ? c.fg : c.muted }}>{g.name}</T>
-                  </Row>
+                    {g.name}
+                  </Chip>
                 )
               })}
             </ScrollView>
@@ -438,8 +445,9 @@ const st = StyleSheet.create({
   line: { flexDirection: 'row', paddingHorizontal: 4 },
   ln: { width: 44, textAlign: 'right', paddingRight: 9, fontFamily: MONO, fontSize: 11.5, lineHeight: 20 },
   code: { fontFamily: MONO, fontSize: 11.5, lineHeight: 20, paddingRight: 12 },
-  projs: { flexDirection: 'row', gap: 7, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 2 },
-  proj: { paddingHorizontal: 11, paddingVertical: 7, borderRadius: 9, minHeight: 0 },
+  // `alignItems: 'center'` 而不是默认的拉伸:chip 自己有 32 的 minHeight,拉伸会让它跟着
+  // 这一条轨道的高度变形。paddingBottom 从 2 抬到 6 —— 原来贴着面包屑,现在两条各自站得开。
+  projs: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 6 },
   crumb: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 8 },
   // 门没了之后占它位置的那块。半径抄门的(`RADIUS.gate`),这样它接的是同一个视线落点。
   gone: {

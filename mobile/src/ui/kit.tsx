@@ -303,11 +303,18 @@ export function Chip({
   onPress,
   tone = 'plain',
   disabled,
+  style,
 }: {
   children: React.ReactNode
   onPress?: () => void
   tone?: 'plain' | 'on' | 'auto' | 'readonly' | 'full'
   disabled?: boolean
+  /**
+   * 覆盖底色/边框用(和 `Row`、`Btn` 一样收这个口子)。
+   * ★`exec.tsx` 的项目选择器靠它画选中态(accent 边 + accentDim 底)—— 那一档不属于
+   *  `tone` 那五个语义档(它们说的是权限和开关),硬塞进去会让 tone 变成一个没有含义的调色板。
+   */
+  style?: StyleProp<ViewStyle>
 }) {
   const c = useC()
   const map = {
@@ -327,6 +334,7 @@ export function Chip({
         { borderColor: t.border, backgroundColor: c.bg2 },
         pressed && { backgroundColor: c.surface2 },
         disabled && { opacity: 0.42 },
+        style,
       ]}
     >
       <T numberOfLines={1} style={{ fontSize: 12.5, fontWeight: '500', color: t.fg }}>
