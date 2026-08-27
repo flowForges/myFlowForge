@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Platform, ScrollView, StyleSheet, View } from 'react-native'
+import { Alert, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../src/main/ipc/channels'
 import type { SessionsFile, WorkspaceMeta } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
 import { RADIUS } from '../src/theme/tokens'
-import { Btn, Empty, IconBtn, List, LiveDot, Row, T, TopBar, TopTitle } from '../src/ui/kit'
+import { Btn, Empty, IconBtn, List, LiveDot, Row, T, TopBar } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
 import { JumpBubble } from '../src/ui/JumpBubble'
 import { useConn } from '../src/net/conn'
+import { hostPickRows } from '../src/net/hostPicker'
+import { hostSubtitle } from '../src/net/hostStatusText'
+import { HostSwitchSheet } from '../src/ui/HostSwitchSheet'
 import { useStore, type WsGroup } from '../src/data/store'
 import { useBranches } from '../src/data/useBranches'
 import { isSessionUnread } from '@shared/chat/unread'
@@ -39,7 +42,7 @@ function waited(since: number, now: number): string {
 
 export default function Home() {
   const c = useC()
-  const { activeHost, hosts, loading: hostsLoading, online, state, invoke } = useConn()
+  const { activeHost, hosts, loading: hostsLoading, online, state, invoke, selectHost } = useConn()
   const {
     groups, gates, gatesFor, loading, select, wsName, refresh, unread, running, expanded, toggleWs, ensureWs,
     setPinned, archive,
@@ -48,6 +51,8 @@ export default function Home() {
   const [newSheet, setNewSheet] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newErr, setNewErr] = useState<string | null>(null)
+  // 顶部主机条点开的那张换主机单子。
+  const [hostSheet, setHostSheet] = useState(false)
 
   // 分组头长按呼出的操作单(置顶 / 归档)。放的是那一个工作区的 meta,不是路径 ——
   // sheet 里要读 `pinned` 决定按钮显示「置顶」还是「取消置顶」。
@@ -407,29 +412,49 @@ export default function Home() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
+      {/* ★★顶部一整条是**主机条**,不是 app 的名字(设计文档 §4.4b)。
+          原来这里写着「myFlowForge」+ 一行主机名 —— app 的名字每一屏都一样,它不告诉你任何东西,
+          却占着全屏最显眼的那一行。这一屏真正需要常驻回答的问题是「我现在遥控的是哪台电脑」,
+          因为这上面每一条会话、每一道门都属于某一台电脑。
+          ★**整条可点**,点开就换主机:切主机是个真会做的动作,不该埋在「设置 → 主机 → 点一台」底下。 */}
       <TopBar
         right={
-          <View style={{ flexDirection: 'row' }}>
-            {/* ★设置是全局的,不属于任何一条会话;主机现在是设置里的第一组(设计文档 §7.2)。
-                原来这里是 🖥 直通主机屏 —— 那时「加主机」和「清本地数据」各在一屏,谁也找不到。 */}
-            <IconBtn label="设置" onPress={() => router.push('/settings')}>⚙</IconBtn>
-            <IconBtn label="新建" onPress={online ? () => setNewSheet(true) : undefined} disabled={!online}>
-              ＋
-            </IconBtn>
-          </View>
+          // ★设置是全局的,不属于任何一条会话。
+          //  原来它旁边还有一颗 ＋(新建会话,弹单子问「哪个工作区」)—— 已经拆散挪进了
+          //  每个工作区展开后的那一行「＋ 新建会话」和列表底部的「＋ 新建工作区」:
+          //  在工作区里面点的时候,「哪个工作区」这个问题本身就是多余的。
+          <IconBtn label="设置" onPress={() => router.push('/settings')}>⚙</IconBtn>
         }
       >
-        <TopTitle
-          title="myFlowForge"
-          sub={
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <LiveDot tone={tone} />
-              <T numberOfLines={1} style={{ fontSize: 11.5, color: c.muted }}>
-                {activeHost?.label ?? '未选主机'}
-              </T>
-            </View>
-          }
-        />
+        <Pressable
+          onPress={() => setHostSheet(true)}
+          // 整条都是热区(顶栏里 TopTitle 那块本来就横跨到底),而不是只有那几个字可点 ——
+          // 这套代码已经在别处栽过「点了没反应,其实点在旁边的空白上」。
+          style={({ pressed }) => [{ paddingHorizontal: 2 }, pressed && { opacity: 0.6 }]}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <LiveDot tone={tone} />
+            <T numberOfLines={1} style={{ fontSize: 15.5, fontWeight: '600', letterSpacing: -0.3, color: c.fg, flexShrink: 1, minWidth: 0 }}>
+              {activeHost?.label ?? '未选主机'}
+            </T>
+            {/* ▾ 是「这儿能点开」的唯一信号。手机上没有 hover,不画它就没人知道这条是活的。 */}
+            <T style={{ fontSize: 10, color: c.faint }}>▾</T>
+            {/* 这台机器上挂着的门,常驻在最显眼的一行。★不是装饰:整个 app 存在的理由就是
+                「代理停在门上而你不在电脑前」,滚到哪儿都该看得见还有几道。 */}
+            {gates.length > 0 ? (
+              <View style={{ marginLeft: 'auto' }}>
+                <StatusBadge tier="gate" count={gates.length} />
+              </View>
+            ) : null}
+          </View>
+          {/* 副行仍然报地址 —— ★连上时报「地址 · 对面版本」,断线时报**为什么**,
+              和设置屏 / 主机屏共用同一份 `hostSubtitle`。断线态必须显式,不能只剩一颗红点。 */}
+          {activeHost ? (
+            <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, marginTop: 1 }}>
+              {hostSubtitle(activeHost.url, state, true)}
+            </T>
+          ) : null}
+        </Pressable>
       </TopBar>
 
       <ScrollView
@@ -609,6 +634,22 @@ export default function Home() {
       {bubble && showsRows ? (
         <JumpBubble tier={bubble.tier} count={bubble.count} direction={bubble.direction} onPress={jump} />
       ) : null}
+
+      {/* 顶部主机条点开的换主机单子。★门数只报得出当前这台的(`gates.length`)——
+          别的主机上有没有门,不连上去是不知道的,所以那几台一个字都不写(见 hostPicker.ts)。 */}
+      <HostSwitchSheet
+        open={hostSheet}
+        rows={hostPickRows(hosts, activeHost?.id ?? null, state, gates.length)}
+        onClose={() => setHostSheet(false)}
+        onPick={(id) => {
+          setHostSheet(false)
+          void selectHost(id)
+        }}
+        onAddHost={() => {
+          setHostSheet(false)
+          router.push('/add-host')
+        }}
+      />
 
       <Sheet open={newSheet} onClose={() => setNewSheet(false)} title="新建会话" sub="选一个工作区。新建工作区留在电脑端。">
         {newErr ? (
