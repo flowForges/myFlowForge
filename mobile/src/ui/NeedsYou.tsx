@@ -1,9 +1,12 @@
+import { useEffect, useState } from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
 import { MONO, useC } from '../theme/theme'
 import { RADIUS } from '../theme/tokens'
 import { T } from './kit'
 import { StatusBadge } from './StatusBadge'
 import type { SessionTier } from '../data/sessionStatus'
+import { foldA11yLabel, foldCaret, needsYouView } from './needsYouView'
+import { loadNeedsYouFolded, saveNeedsYouFolded } from '../data/needsYouFold'
 
 export type NeedItem = {
   key: string
@@ -30,6 +33,15 @@ export type NeedItem = {
  *
  * ★和下面工作区行上的徽章**是重复的** —— 这是有意的取舍,用户在五个方案里选的就是这一版:
  *  上面回答「有没有我的事」,下面回答「这个区是什么状况」,两个问题都要答。
+ *
+ * ★★**可以折叠,但折的只有列表,头永远在。**(用户在几个折法里点的名就是这一版。)
+ *  事多的时候这一块能顶掉大半屏,把下面「全部工作区」整个挤出视野;但**它绝不能整块消失** ——
+ *  头上那句「4 条等你 · 2 道门」是上面那条承诺的落点:折起来之后你仍然看得见**有事**、
+ *  有**几件**、其中**几道门**,只是看不见分别是哪几条。一个能把挂着的门整个藏起来的折叠,
+ *  会把「没有这一块 = 没你的事」直接变成谎话 —— 那是这个 app 唯一不能出的错。
+ *  这条规矩落在 `needsYouView.ts`(node 下有单测),不是靠这里的 JSX 自觉。
+ * ★折叠状态存盘(`mff.needsYouFolded.v1`,和工作区展开态同一套存法):折叠是**姿态**,
+ *  每次冷启动都替人重新展开一遍,等于这个开关根本没做完。
  */
 export function NeedsYou({ items, gateCount, onPick }: {
   items: NeedItem[]
@@ -38,16 +50,44 @@ export function NeedsYou({ items, gateCount, onPick }: {
   onPick: (it: NeedItem) => void
 }) {
   const c = useC()
-  if (!items.length) return null
-  const head = gateCount > 0
-    ? `${items.length} 条等你 · ${gateCount} 道门`
-    : `${items.length} 条等你`
+  // ★默认展开。读盘是异步的,这几百毫秒里先按展开画 —— 反过来(先按折叠画)会让
+  //  冷启动那一下把门闪没,而这一块就是给门用的。存储读不出来也一律展开(见 needsYouFold.ts)。
+  const [folded, setFolded] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const v = await loadNeedsYouFolded()
+      if (alive && v) setFolded(true)
+    })()
+    return () => { alive = false }
+  }, [])
+
+  const v = needsYouView(items.length, gateCount, folded)
+  if (!v.render) return null
+  const toggle = () => {
+    setFolded((f) => {
+      const n = !f
+      void saveNeedsYouFolded(n)
+      return n
+    })
+  }
   return (
     <View style={[st.wrap, { backgroundColor: c.surface, borderColor: c.gateBorder }]}>
-      <View style={[st.head, { backgroundColor: c.gate }]}>
-        <T style={{ fontSize: 12, fontWeight: '700', color: c.onGate }}>❓ {head}</T>
-      </View>
-      {items.map((it, i) => (
+      {/* ★★整条头都是开关(热区横跨整块宽度)。只让那个三角可点的话,手指多半落在旁边的
+          实底琥珀上,现象是「点了没反应」—— 这套代码已经在别处栽过好几次同一件事。 */}
+      <Pressable
+        onPress={toggle}
+        accessibilityRole="button"
+        accessibilityLabel={foldA11yLabel(folded, items.length, gateCount)}
+        style={({ pressed }) => [st.head, { backgroundColor: c.gate }, pressed && { opacity: 0.82 }]}
+      >
+        {/* ★数在**头**上,所以折起来也还在。别把它挪进下面那个列表里。 */}
+        <T style={{ flex: 1, fontSize: 12, fontWeight: '700', color: c.onGate }}>❓ {v.head}</T>
+        {/* ▾ / ▸ 和工作区分组头是同一套字形(见 kit.tsx 的 `Sec`),别在这儿另发明一套。
+            颜色用 onGate:这一条底是实心琥珀,普通 faint 灰在上面根本看不见。 */}
+        <T style={{ fontSize: 11, color: c.onGate }}>{foldCaret(folded)}</T>
+      </Pressable>
+      {items.slice(0, v.rows).map((it, i) => (
         <Pressable
           key={it.key}
           onPress={() => onPick(it)}
@@ -86,7 +126,8 @@ const st = StyleSheet.create({
     borderWidth: 1,
     overflow: 'hidden',
   },
-  head: { paddingHorizontal: 13, paddingVertical: 9 },
+  // ★收起时这一条就是整块的全部,所以它得自己站得住:横排、三角在最右。
+  head: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 13, paddingVertical: 9 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 13, paddingVertical: 11 },
   pip: { width: 7, height: 7, borderRadius: 4 },
 })
