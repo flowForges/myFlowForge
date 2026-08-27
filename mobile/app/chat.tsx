@@ -14,6 +14,7 @@ import {
   shouldOffloadPaste,
 } from '../../src/shared/chat/largePaste'
 import { textAfterOffload } from '../src/ui/pasteOffload'
+import { continueList } from '../src/ui/listContinue'
 import { planPickedImage } from '../src/ui/pickedImage'
 import { CAN_COPY, CopyBtn } from '../src/ui/CopyBtn'
 import { canPickImage } from '../src/net/pickSupport'
@@ -96,6 +97,40 @@ export default function Chat() {
   const [offloadBusy, setOffloadBusy] = useState(false)
   const [pickBusy, setPickBusy] = useState(false)
   const flow = useRef<ScrollView | null>(null)
+  /**
+   * 输入框**这次改动之前**的光标位置,以及「要不要把光标摆回某处」。
+   *
+   * ★两样都只为「回车续列表」服务(见 `src/ui/listContinue.ts`):
+   *  - `caretRef`:RN 上 `onSelectionChange` 报的是改动前那一拍的位置,而分辨「换行插在连续换行的
+   *    哪一个位置」只能靠它 —— 光看正文是分不出来的。用 ref 不用 state:每敲一个字都要更新,
+   *    进 state 就是每个键一次多余的重渲染。
+   *  - `sel`:**一次性**的受控光标。补上 `2. ` 之后光标必须落在标记后面,否则会掉到正文末尾
+   *    (在一段话中间续列表时,接着打的字就跑到最后一行去了)。用完立刻清回 `undefined`
+   *    交还给原生 —— 一直受控的话,每个键都会把光标拽回同一个位置。
+   *    ★清理有**两条**路(选区变了、或者又改了字),一条都不能少:少了它就可能一直卡在受控态。
+   */
+  const caretRef = useRef(0)
+  const [sel, setSel] = useState<{ start: number; end: number } | undefined>(undefined)
+
+  /**
+   * 输入框里每一次正文变化。绝大多数时候就是原样写回去;只有当这一下**恰好是插入了一个换行**、
+   * 而且光标那一行是个列表项时,才改写成「续上下一个标记」或者「结束列表」。
+   * 判据全在 `listContinue.ts`(有单测 + 变异验证),这里只负责把结果落到 state 上。
+   *
+   * ★不碰发送:回车永远只是换行,发送只有右边那颗键一条路。手机上没有「Shift+回车」可用,
+   *  让回车发送就等于**没法打多行** —— 而给代理下达任务本来就是多行的事。
+   */
+  const onType = (next: string) => {
+    const edit = continueList(text, next, caretRef.current)
+    if (!edit) {
+      setText(next)
+      setSel(undefined)
+      return
+    }
+    setText(edit.text)
+    caretRef.current = edit.caret
+    setSel({ start: edit.caret, end: edit.caret })
+  }
 
   /**
    * ★**「你正在看这条会话」的唯一事实来源。**未读全靠它:store 的 `selected` 只是
@@ -592,7 +627,13 @@ export default function Chat() {
             <View style={{ flex: 1, minWidth: 0 }}>
               <Field
                 value={text}
-                onChangeText={setText}
+                onChangeText={onType}
+                selection={sel}
+                onSelectionChange={(e) => {
+                  caretRef.current = e.nativeEvent.selection.start
+                  // 受控只维持到原生真的把光标挪过去为止,立刻交还(理由见 `sel` 的声明处)。
+                  if (sel) setSel(undefined)
+                }}
                 placeholder={online ? '给代理下达任务…' : '未连接 · 发不出去'}
                 multiline
                 editable={online && !!selected}
