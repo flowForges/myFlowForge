@@ -597,28 +597,39 @@ export default function Chat() {
             ))}
           </ScrollView>
           <View style={st.entry}>
-            <Field
-              value={text}
-              onChangeText={setText}
-              placeholder={online ? '给代理下达任务…' : '未连接 · 发不出去'}
-              multiline
-              editable={online && !!selected}
-              style={{ flex: 1, minHeight: 44, maxHeight: 108 }}
-            />
-            {/* ★全屏编辑入口。就一颗 ⤢,挤在输入框和发送/停止键中间 —— 这里位置太紧,
-                容不下再配一个字。`IconBtn` 本体是 40×40,`hitSlop={4}` 把可点区域撑到 **48×48**
-                (四周各多 4),超过 44 的最小触达,而**布局占位一点没变** —— 这里挤不出更多宽度。
-                ★这颗 hitSlop 原来是靠外面再套一个裸 `<Pressable>` 实现的(那时 kit.tsx 不许动)。
-                现在 `IconBtn` 自己收 `hitSlop`,套层去掉了:两层各有一份 onPress / disabled,
-                漏改一处就是「灰着却点得动」。
-                ★不自动弹出:字数超阈值就抢焦点,会在人正在打字时把光标薅走。只认这一下点击。 */}
-            <IconBtn
-              onPress={online && selected ? () => setBigEditor(true) : undefined}
-              disabled={!online || !selected}
-              hitSlop={4}
-            >
-              ⤢
-            </IconBtn>
+            {/* ★输入框和它右下角那颗 ⤢ 是**一个整体**,不是并排的两件东西。
+                原来 ⤢ 是一颗 40×40 的 `IconBtn`,和输入框、发送键三个平摊这一行:
+                连 gap 一起吃掉 48pt,390 宽的屏上输入框只剩 ~270,一行装不下几个字。
+                挪进输入框自己的地盘后这 48pt 全还给了正文,而**发送/停止键一点没动** ——
+                它忙时就地变成停止,是这一屏最紧急的动作,位置和尺寸都不许改。
+                ★`paddingRight: 38` 是配套的、不是装饰:不留出这一段,长文本会从按钮**底下**穿过去。 */}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Field
+                value={text}
+                onChangeText={setText}
+                placeholder={online ? '给代理下达任务…' : '未连接 · 发不出去'}
+                multiline
+                editable={online && !!selected}
+                style={{ minHeight: 44, maxHeight: 108, paddingRight: 38 }}
+              />
+              {/* ★全屏编辑入口。本体 28×28 + `hitSlop={8}` = **44×44** 的可点区域,正好压到最小触达,
+                  而多出去的 8pt 刚好贴着按钮边缘 —— 再撑大就会从输入框右下角把「点这儿放光标」的
+                  点击抢走(那一带正是长文本落笔的地方)。
+                  ★不自动弹出:字数超阈值就抢焦点,会在人正在打字时把光标薅走。只认这一下点击。 */}
+              <Pressable
+                onPress={online && selected ? () => setBigEditor(true) : undefined}
+                disabled={!online || !selected}
+                hitSlop={8}
+                style={({ pressed }) => [
+                  st.expand,
+                  { borderColor: c.border2, backgroundColor: c.bg2 },
+                  pressed && { backgroundColor: c.surface2 },
+                  (!online || !selected) && { opacity: 0.35 },
+                ]}
+              >
+                <T style={{ fontSize: 13, lineHeight: 16, color: c.muted }}>⤢</T>
+              </Pressable>
+            </View>
             {/* ★忙的时候,这颗键**就地**变成停止 —— 位置、尺寸都不动。
                 停止是这一屏最紧急的动作,而它原来待在顶栏右上角,是单手最够不到的地方。 */}
             <Pressable
@@ -793,6 +804,18 @@ const st = StyleSheet.create({
   // ★chip 行现在排在输入框上面(见 Step 4),所以「贴容器顶边的间距」和「两行之间的间距」
   // 从 entry 挪到了 chips 头上;entry 掉到最后,接手原来 chips 尾部那段「离安全区还有多远」的间距。
   entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingBottom: 10 },
+  // ⤢:贴在输入框右下角(而不是排在行里),右下是因为多行输入时光标就在那一带,手指不用跑。
+  expand: {
+    position: 'absolute',
+    right: 5,
+    bottom: 5,
+    width: 28,
+    height: 28,
+    borderRadius: RADIUS.chip,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   send: {
     width: 44,
     height: 44,
