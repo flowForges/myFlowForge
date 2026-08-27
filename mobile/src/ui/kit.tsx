@@ -134,6 +134,42 @@ export function TimeSep({ children }: { children: React.ReactNode }) {
 }
 
 /**
+ * 换编码代理的提示 —— 电脑端 `components/ProviderSwitchDivider.tsx` + `chat.css` 的
+ * `.provider-switch-sep` / `.psw-*` 那一套的手机版。
+ *
+ * ★为什么不能继续用 `TimeSep`(它原来就是被塞进那里的):`TimeSep` 是**一行**居中小字,
+ *  和「12:04」「昨天」长一个样。而这条提示要说的是「从这里往下换了个代理答话,**上下文是重建的、
+ *  可能有损**」—— 那是回答忽然变了口径、忘了前面说过什么时,唯一能解释原因的东西。
+ *  混在时间戳里等于没说:一样的灰、一样的字号、一样的两条细线,眼睛直接滑过去了。
+ * ★所以照电脑端的形状来:**一个描边小块**(而不是裸字)+ 图标 + **两行** ——
+ *  主行说换成了谁(两个代理名加重),副行就是那句「可能有损」。
+ *  副行不许省:提示存在的全部理由就是它,只留主行的话,它退回成一条「换了个代理」的日志。
+ * ★图标是字形 `⇄` 而不是电脑端那个 SVG:RN 里没有 SVG 依赖(全 app 的图形都是字形/几何拼的)。
+ * ★390pt 的宽度上:两条线 `flex: 1` 只吃剩余宽度,小块 `flexShrink: 1` + `minWidth: 0`,
+ *  代理名再长也是小块内部换行,不会把线挤成负数(RN 的 flexShrink 默认 0,不写就会溢出屏幕)。
+ */
+export function ProviderSwitchSep({ from, to }: { from: string; to: string }) {
+  const c = useC()
+  return (
+    <View style={s.psw}>
+      <View style={[s.tsepLine, { backgroundColor: c.border }]} />
+      <View style={[s.pswBox, { borderColor: c.border, backgroundColor: c.bg2 }]}>
+        <T style={{ fontSize: 11, lineHeight: 16, color: c.faint }}>⇄</T>
+        <View style={{ flexShrink: 1, minWidth: 0 }}>
+          <T style={{ fontSize: 11.5, lineHeight: 16, color: c.muted }}>
+            切换编码代理 <T style={{ fontSize: 11.5, fontWeight: '600', color: c.fg2 }}>{from}</T>
+            <T style={{ fontSize: 11.5, color: c.faint }}> → </T>
+            <T style={{ fontSize: 11.5, fontWeight: '600', color: c.fg2 }}>{to}</T>
+          </T>
+          <T style={{ fontSize: 10.5, lineHeight: 15, color: c.faint }}>新代理将基于历史重建上下文继续,可能有损</T>
+        </View>
+      </View>
+      <View style={[s.tsepLine, { backgroundColor: c.border }]} />
+    </View>
+  )
+}
+
+/**
  * 执行面板顶部那排 tab —— 原型 `d.css` 的 `.tabs`(等分、9px 圆角、选中态是 `--surface-2` 的底)。
  * 桌面端那一排是 阶段 / 变更 / 文件 / 终端;手机端只做得起其中两个,所以这个件按传进来的项数等分。
  */
@@ -546,6 +582,21 @@ const s = StyleSheet.create({
   // .tsep { display:flex; gap:10px; margin:6px 0 14px }  ·  ::before/::after 是两条 1px 的线
   tsep: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6, marginBottom: 14 },
   tsepLine: { flex: 1, height: 1 },
+  // .provider-switch-sep { display:flex; align-items:center; gap:12px; margin:18px 0 14px }
+  psw: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, marginBottom: 14 },
+  // .provider-switch-sep .lbl { gap:9px; padding:6px 12px; border:1px; border-radius:10px }
+  // ★`alignItems: 'flex-start'`:图标要对齐**主行**,不是两行的中间(电脑端那边是 margin-top: 2px 干的)。
+  pswBox: {
+    flexShrink: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: RADIUS.ctl,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   top: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -19,7 +19,7 @@ import { canCopy, copyText } from '../src/ui/copy'
 import { canPickImage } from '../src/net/pickSupport'
 import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
-import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, Row, T, TimeSep, TopBar } from '../src/ui/kit'
+import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, ProviderSwitchSep, Row, T, TimeSep, TopBar } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
 import { MessageBody } from '../src/ui/MessageBody'
 import { ToolCards } from '../src/ui/ToolCard'
@@ -413,10 +413,12 @@ export default function Chat() {
             {msgs.map((m) => (
               <React.Fragment key={m.id}>
                 {seps.has(m.id) ? <TimeSep>{seps.get(m.id)}</TimeSep> : null}
+                {/* ★换代理提示照电脑端的形状走(见 kit.tsx 的 `ProviderSwitchSep`):
+                    原来它挤在 `TimeSep` 里,和「昨天 14:02」一个字号一个灰度,人根本不会注意到 ——
+                    而这条恰恰是「后面的回答为什么忽然变了口径」的唯一解释。
+                    ★**哪一条前面该有**由 `providerSwitch.ts` 决定(和电脑端同一套规则),这里只管画。 */}
                 {switches.has(m.id) ? (
-                  <TimeSep>
-                    {`切换编码代理 ${switches.get(m.id)!.from} → ${switches.get(m.id)!.to} · 新代理基于历史重建上下文,可能有损`}
-                  </TimeSep>
+                  <ProviderSwitchSep from={switches.get(m.id)!.from} to={switches.get(m.id)!.to} />
                 ) : null}
                 {m.who === 'user' ? (
                   <View style={[st.you, { backgroundColor: c.accentDim, borderColor: c.youBorder }]}>
