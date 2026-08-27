@@ -15,7 +15,7 @@ import {
 } from '../../src/shared/chat/largePaste'
 import { textAfterOffload } from '../src/ui/pasteOffload'
 import { planPickedImage } from '../src/ui/pickedImage'
-import { canCopy, copyText } from '../src/ui/copy'
+import { CAN_COPY, CopyBtn } from '../src/ui/CopyBtn'
 import { canPickImage } from '../src/net/pickSupport'
 import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
@@ -44,41 +44,12 @@ import { initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/a
  * 门在输入区正上方且不参与滚动 —— 那是这一屏唯一的实底彩色块。
  */
 /**
- * ★这两个探测在**模块作用域只跑一次**,一辈子不会变(装在这台手机上的那个包里有没有这个原生模块,
+ * ★这个探测在**模块作用域只跑一次**,一辈子不会变(装在这台手机上的那个包里有没有这个原生模块,
  *  是编译期就定死的事)。为假时下面**根本不渲染那个入口** —— 不是灰的、不是点了弹一句,是没有。
- *  理由见 `src/ui/copy.ts` / `src/net/pickSupport.ts` 顶部:上一次「按钮照常显示、点下去当场崩」。
+ *  理由见 `src/net/pickSupport.ts` 顶部:上一次「按钮照常显示、点下去当场崩」。
+ *  (剪贴板那一个是同样的道理,现在和按钮本体一起住在 `src/ui/CopyBtn.tsx`。)
  */
-const CAN_COPY = canCopy()
 const CAN_PICK = canPickImage()
-
-/**
- * 复制这一条回复的正文。
- *
- * ★手机上**没有 toast**。复制成功却一点动静都没有,读起来就是「我点了,没反应」,然后人会再点三次
- *  还是不确定。所以反馈就在原地:那两个字自己变成「已复制」,1.5 秒后变回来。失败也要说
- *  (web 上明文 http 里根本没有 `navigator.clipboard`),别让人以为剪贴板里已经有东西了。
- */
-function CopyBtn({ text }: { text: string }) {
-  const c = useC()
-  const [phase, setPhase] = useState<'idle' | 'ok' | 'fail'>('idle')
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // 复制完 1.5 秒才变回去,而这中间人完全可能已经退出这一屏 —— 定时器不清掉就是往已经卸载的组件上写。
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
-  const press = async () => {
-    const ok = await copyText(text)
-    setPhase(ok ? 'ok' : 'fail')
-    if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(() => setPhase('idle'), 1500)
-  }
-  return (
-    // hitSlop 撑到手指够得着的大小:这行字只有 11px,按原样大小是点不中的。
-    <Pressable onPress={() => void press()} hitSlop={12}>
-      <T style={{ fontSize: 11, color: phase === 'fail' ? c.err : phase === 'ok' ? c.ok : c.faint }}>
-        {phase === 'ok' ? '已复制' : phase === 'fail' ? '复制不了' : '复制'}
-      </T>
-    </Pressable>
-  )
-}
 
 /** 思考过程默认折叠。展开了它会把回答本身挤出屏幕 —— 手机上一屏就那么点地方。 */
 function Think({ text }: { text: string }) {
@@ -421,8 +392,21 @@ export default function Chat() {
                   <ProviderSwitchSep from={switches.get(m.id)!.from} to={switches.get(m.id)!.to} />
                 ) : null}
                 {m.who === 'user' ? (
-                  <View style={[st.you, { backgroundColor: c.accentDim, borderColor: c.youBorder }]}>
-                    <T style={{ fontSize: 15, lineHeight: 23, color: c.fg }}>{m.text}</T>
+                  <View>
+                    <View style={[st.you, { backgroundColor: c.accentDim, borderColor: c.youBorder }]}>
+                      <T style={{ fontSize: 15, lineHeight: 23, color: c.fg }}>{m.text}</T>
+                    </View>
+                    {/* ★自己说过的话也要能复制,而且**只能**是个看得见的入口:
+                        长按整条是苹果自己的选字手势,抢过来等于把「只复制其中一段」也一起没收了 ——
+                        而人要拿回去的多半正是里头那一行路径、一条命令。
+                        ★摆在气泡**下面**、右对齐:气泡是右侧来的,复制跟着它那一侧;
+                        放进气泡里会挤掉正文宽度(这一屏本来就只有 390)。
+                        ★`CAN_COPY` 为假(旧包里没有 expo-clipboard)时整颗不摆 —— 同代理那一侧的规矩。 */}
+                    {CAN_COPY && m.text.trim() ? (
+                      <View style={{ alignItems: 'flex-end', paddingRight: 3, marginTop: 3 }}>
+                        <CopyBtn text={m.text} />
+                      </View>
+                    ) : null}
                   </View>
                 ) : (
                   <View style={{ marginTop: 14 }}>
