@@ -40,7 +40,7 @@ import { isSlashQuery, slashRows } from '../src/ui/slashPick'
 import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 import { atBottom, initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
-import { pickSessionAgent } from '../src/ui/sessionAgent'
+import { pickSessionAgent, shouldRederive, type DeriveState } from '../src/ui/sessionAgent'
 
 /**
  * 对话屏,从会话列表(根屏)推入的下一层,总是带着一个已选会话进来。
@@ -183,11 +183,34 @@ export default function Chat() {
         : null,
     [groups, selected],
   )
+  /**
+   * ★★2026-08-29 review 抓到的竞态:上面 `currentSession` 每次都是**新对象**——`store.tsx`
+   *  的 `sessionsChanged` 处理器是**整份数组替换**,不是按 id 打补丁。哪怕只是**隔壁**一条
+   *  会话跑完一轮广播了一次,这个工作区下所有会话(包括正显示在顶栏上的这条)都会换成新对象。
+   *  如果直接拿 `currentSession` 当 `useEffect` 依赖,effect 就会在这种时候也重触发一次——
+   *  而那次广播的快照如果比用户刚点的 `session:set-model` 写回还旧,`pickSessionAgent`
+   *  就会拿旧值把用户刚选的模型悄悄判掉,正是写回那句注释在防的「选了又变回去」,
+   *  只是从**读**的一侧发生。
+   *
+   *  真正该触发重判的是**切会话本身**,不是「会话列表这份快照又换了个对象」——
+   *  `selKey` 就是这个 identity。但只按 `selKey` 门控又会撞上另一条竞态:`agents` 和
+   *  `groups` 不是同时到的,`shouldRederive`(sessionAgent.ts,有单测 + 变异验证)
+   *  把这两条都管了,细节见那个文件顶上的注释。
+   *
+   *  ★接受的代价:这样一来,如果电脑端在这一屏开着的时候把这条会话的模型**从别处**改了,
+   *  顶栏不会再实时跟着变——只有下次切换会话或者重进这一屏才会看到新值。两害相权:
+   *  比起「用户自己刚选的模型被静默判掉」,这条代价小得多,是有意接受的取舍。
+   */
+  const selKey = selected ? `${selected.wsPath}::${selected.sessionId}` : null
+  const deriveState = useRef<DeriveState | null>(null)
   useEffect(() => {
+    const next = { key: selKey, hasSession: currentSession != null, hasAgents: agents.length > 0 }
+    if (!shouldRederive(deriveState.current, next)) return
     const p = pickSessionAgent(currentSession, agents)
     setAgentId(p.agentId)
     setModelId(p.modelId)
-  }, [currentSession, agents])
+    deriveState.current = { key: next.key, settled: next.hasSession && next.hasAgents }
+  }, [selKey, currentSession, agents])
 
   const agent = useMemo(() => agents.find((a) => a.id === agentId) ?? null, [agents, agentId])
   const model = useMemo(() => agent?.models.find((m) => m.id === modelId) ?? agent?.models[0] ?? null, [agent, modelId])
@@ -435,18 +458,24 @@ export default function Chat() {
           <Pressable
             onPress={online ? () => setAgentSheet(true) : undefined}
             disabled={!online}
-            // ★整行热区,而且用 padding 撑不用 hitSlop —— hitSlop 在祖先紧贴子节点时是死的。
+            // ★整行热区,而且用 `minHeight` 撑到 44pt(和 `HostBanner.tsx` 的主机横幅同一个手法),
+            //  不用 hitSlop —— hitSlop 在祖先紧贴子节点时是死的(见「复制」按钮那次教训)。
+            //  ★`flexDirection` 留默认(column):`justifyContent: 'center'` 靠的正是这个才是在
+            //  **竖直**方向把内容摆进撑高的 44pt 里居中,不是横向居中——真正的横排在下面
+            //  这个内层 `View` 里,套一层是为了让两条轴分别归两个容器管,别互相打架。
             style={({ pressed }) => [
-              { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1, paddingVertical: 3 },
+              { minHeight: 44, justifyContent: 'center' },
               pressed && { opacity: 0.6 },
             ]}
           >
-            <LiveDot tone={tone} />
-            <T numberOfLines={1} style={{ fontSize: 11.5, color: c.muted, flexShrink: 1, minWidth: 0 }}>
-              {agent ? `${agent.displayName}${model ? ' · ' + model.label : ''}` : '选代理'}
-            </T>
-            {/* ▾ 是「这儿能点开」的唯一信号 —— 手机上没有 hover。 */}
-            <Icon name="chevronDown" size={9} color={c.faint} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <LiveDot tone={tone} />
+              <T numberOfLines={1} style={{ fontSize: 11.5, color: c.muted, flexShrink: 1, minWidth: 0 }}>
+                {agent ? `${agent.displayName}${model ? ' · ' + model.label : ''}` : '选代理'}
+              </T>
+              {/* ▾ 是「这儿能点开」的唯一信号 —— 手机上没有 hover。 */}
+              <Icon name="chevronDown" size={9} color={c.faint} />
+            </View>
           </Pressable>
         </View>
       </TopBar>
@@ -720,12 +749,13 @@ export default function Chat() {
 
           {/* ★chip 行放输入框上方,跟着键盘一起顶上去 —— 正要在什么权限档下发消息,
               不该是那种随手一滑就滚出视野的东西。
-              ★★**横向滚动,不换行**:真机上 390pt 只放得下「自动 (工作区)」「🖼 图片」两颗,
+              ★★**横向滚动,不换行**:真机上 390pt 只放得下「权限档」「自动 (工作区)」「🖼 图片」几颗,
                 `/ 工作流` 已经被挤到第二行,再挂两个附件 chip 就是三行 —— 输入区跟着长高,键盘一顶,
                 正文只剩两行可见。换成一条横向滚动的轨道后**行高恒定**:多出来的往右滑就是。
-              ★★2026-08-28:「代理 · 模型」那一颗已经上顶栏了(它不会一直切换,不该占着输入区的位置),
-                权限那一颗挪到了输入框左侧(见 Task 7)。这条轨道现在只剩**附件 chip**。
-              ★`flexGrow: 0` 是必需的:`ScrollView` 自带 flexGrow,在这个竖排容器里会去抢剩余高度。
+              ★★2026-08-28:「代理 · 模型」那一颗已经上顶栏了(它不会一直切换,不该占着输入区的位置)。
+                权限那一颗**眼下还在这条轨道里**——它会在后续一步挪到输入框左侧,那一步做完之前
+                这里如实写着它还在,别提前把还没发生的事写成既成事实。 */}
+          {/* ★`flexGrow: 0` 是必需的:`ScrollView` 自带 flexGrow,在这个竖排容器里会去抢剩余高度。
                 高度改由 `contentContainerStyle`(chip 自己的 minHeight 32 + 上下 padding)撑出来 ——
                 所以那份样式里**不能**只剩 flexDirection,否则整条轨道塌成 0 高、chip 全部看不见。
               ★`keyboardShouldPersistTaps="handled"`:这一行的全部意义就是「键盘顶着的时候也能改档」。
@@ -858,6 +888,12 @@ export default function Chat() {
                       setAgentId(a.id)
                       setModelId(mm.id)
                       setAgentSheet(false)
+                      // ★这是用户**自己**选的,立刻把上面那个 effect 的「判过」旗子插上——
+                      //  哪怕这条会话当时还没被判定为 `settled`(比如会话数据比 agents 到得晚,
+                      //  用户手快在那个窗口期就点了)。不插的话,session 数据随后一到,effect
+                      //  会拿服务端此刻还没来得及写回的旧值,把这次手选**判掉**。
+                      //  旗子插的是 `selKey`,不影响别的会话。
+                      deriveState.current = { key: selKey, settled: true }
                       // ★写回**这条会话**。不写的话,退出对话屏再进来就被上面那个 effect
                       //  按服务端的旧值盖回去 —— 现象是「选了模型,回来又变回去了」。
                       //  失败不弹窗但要留痕:这是个偏好,丢了不致命,但静默失败会让人以为存上了。

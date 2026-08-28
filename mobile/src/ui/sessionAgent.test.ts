@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pickSessionAgent } from './sessionAgent'
+import { pickSessionAgent, shouldRederive } from './sessionAgent'
 
 const AGENTS = [
   { id: 'claude', models: [{ id: 'sonnet' }, { id: 'opus' }] },
@@ -38,5 +38,33 @@ describe('这条会话该用哪个代理和模型', () => {
   it('★代理一个模型都没有 → 代理留着,模型是 null(别硬造一个模型 id 发出去)', () => {
     expect(pickSessionAgent({}, [{ id: 'bare', models: [] }]))
       .toEqual({ agentId: 'bare', modelId: null })
+  })
+})
+
+describe('要不要把顶栏重新判一遍(防「隔壁会话广播了一次,把我刚选的模型判掉」)', () => {
+  it('从来没判过 → 必须判一次', () => {
+    expect(shouldRederive(null, { key: 'a', hasSession: true, hasAgents: true })).toBe(true)
+  })
+
+  it('切了会话(key 变了)→ 不管上次判没判过、判没判完,都要重判', () => {
+    expect(shouldRederive({ key: 'a', settled: true }, { key: 'b', hasSession: true, hasAgents: true })).toBe(true)
+  })
+
+  it('★同一条会话,上次判的时候数据还没到齐(没 settled),这次到齐了 → 必须补判一次', () => {
+    // 这是「agents 和会话数据不是同时到」那条竞态:上次拿着还没读到的会话数据判过一次
+    // (落到了默认代理),这次数据真的到了,不能当成「已经判过,不用管」——
+    // 那样顶栏会永远停在启动时的默认代理上。
+    expect(shouldRederive({ key: 'a', settled: false }, { key: 'a', hasSession: true, hasAgents: true })).toBe(true)
+  })
+
+  it('★同一条会话,已经拿完整数据判过一次(settled)→ 后面随便什么原因重渲染都不再判', () => {
+    // 这正是要挡的竞态:隔壁会话跑完一轮广播了整份会话数组(store.tsx 的 sessionsChanged
+    // 是整份替换,不是按 id 补丁),currentSession 换了个新对象,但这条会话本身没变——
+    // 不能借着这次「顺便」重判,把用户刚选的模型用一份可能还没写回落地的旧快照判掉。
+    expect(shouldRederive({ key: 'a', settled: true }, { key: 'a', hasSession: true, hasAgents: true })).toBe(false)
+  })
+
+  it('同一条会话数据一直没到(hasSession 恒 false)→ 不重复判,不会一直空转', () => {
+    expect(shouldRederive({ key: 'a', settled: false }, { key: 'a', hasSession: false, hasAgents: true })).toBe(false)
   })
 })

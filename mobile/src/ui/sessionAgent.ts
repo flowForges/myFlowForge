@@ -32,3 +32,39 @@ export function pickSessionAgent(
   const model = agent.models.find((m) => m.id === session?.modelId) ?? agent.models[0]
   return { agentId: agent.id, modelId: model?.id ?? null }
 }
+
+/**
+ * 「顶栏这次要不要重新判一遍代理/模型」的守卫。
+ *
+ * ★为什么需要它:2026-08-29 review 抓到的竞态 —— `chat.tsx` 原来拿 `currentSession`(从
+ *  `groups` 里按 id 查出来的那个会话对象)的**对象身份**当 `useEffect` 依赖。而
+ *  `store.tsx` 的 `sessionsChanged` 处理器是**整份数组替换**,不是按 id 打补丁:哪怕只是
+ *  **隔壁**一条会话跑完一轮广播了一次,这个工作区下所有会话(包括正显示在顶栏上的这条)
+ *  都会换成新对象,identity 变了,effect 就重触发一次。如果那次广播的快照
+ *  比用户刚点的 `session:set-model` 写回还旧,`pickSessionAgent` 就会拿着旧值把用户刚选的
+ *  模型悄悄判掉 —— 正是写回那句注释在防的「选了又变回去」,只是从**读**的一侧发生。
+ *
+ * ★真正该触发重判的是**切会话本身**,不是「会话列表这份快照又换了个对象」。但只按会话
+ *  identity(`key`)门控又会撞上另一条竞态:`agents`(`agents:detect`)和 `groups`
+ *  (`workspaces:list` + 逐个 `session:list`)不是同时到的。如果这条会话的真实数据
+ *  (`hasSession`)还没读到就先落了一次默认值、并把这次当成「判过了」,那么真实数据到了之后
+ *  就再也不会补判 —— 顶栏永远停在启动时的默认代理上。
+ *
+ * ★两条都管:
+ *  · 同一条会话,上次判的时候数据没到齐(`!prev.settled`)→ 这次到齐了照样要判一次。
+ *  · 同一条会话,已经拿着完整数据判过一次(`prev.settled`)→ 后面随便什么原因重渲染
+ *    (隔壁会话的广播、或者自己这次写回自己的回声)都不再判 —— 这是刻意接受的取舍:
+ *    换来的代价是「电脑端在这一屏开着的时候把这条会话的模型从别处改了,顶栏不会实时跟着变」,
+ *    比「用户自己刚选的模型被静默判掉」轻得多。
+ */
+export type DeriveState = { key: string | null; settled: boolean }
+
+export function shouldRederive(
+  prev: DeriveState | null,
+  next: { key: string | null; hasSession: boolean; hasAgents: boolean },
+): boolean {
+  if (!prev) return true
+  if (prev.key !== next.key) return true
+  const nowSettled = next.hasSession && next.hasAgents
+  return !prev.settled && nowSettled
+}
