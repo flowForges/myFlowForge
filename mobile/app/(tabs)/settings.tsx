@@ -67,7 +67,7 @@ export default function Settings() {
     }
     const msg = '主机清单和令牌都存在这台手机上。清掉之后要重新扫码配对。'
     if (Platform.OS === 'web') {
-      // RN-web 的 Alert 只有一个按钮,确认框走 window.confirm 才是真能选的。
+      // RN-web 的 Alert 什么都不画(0/1/2 个按钮一律不渲染),确认框走 window.confirm 才是真能选的。
       // eslint-disable-next-line no-alert
       if (typeof window !== 'undefined' && window.confirm(`清除本地数据?\n${msg}`)) void go()
       return

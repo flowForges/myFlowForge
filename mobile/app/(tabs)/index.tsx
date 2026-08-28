@@ -74,17 +74,25 @@ export default function Home() {
   const [wsBusy, setWsBusy] = useState(false)
   const [wsErr, setWsErr] = useState<string | null>(null)
 
-  const togglePinned = async () => {
-    if (!wsSheet) return
+  /**
+   * 置顶/取消置顶 —— 长按分组头的操作单(wsSheet)和左滑露出的动作格现在共用这**同一份实现**,
+   * 只是传入的 ws 来源不同(前者读 wsSheet 那份 state,后者是那一行自己的 g.ws)。
+   *
+   * ★错误怎么显示按入口分:这个工作区当下正被操作单开着(`wsSheet?.path === ws.path`)就走
+   *  单子里原有的红框(`wsErr`);左滑没有单子可摆红框,走 `notify()`。
+   *  ★★`workspaces:set-pinned` 到了上限会 throw(`最多只能置顶 N 个工作区`),这句话必须
+   *   原样显示出来 —— 两条路都不许吞掉,吞掉的话人只会觉得点了没反应。
+   */
+  const togglePinnedFor = async (ws: WorkspaceMeta) => {
     setWsBusy(true)
     setWsErr(null)
     try {
-      await setPinned(wsSheet.path, !wsSheet.pinned)
-      setWsSheet(null)
+      await setPinned(ws.path, !ws.pinned)
+      if (wsSheet?.path === ws.path) setWsSheet(null)
     } catch (e) {
-      // ★`workspaces:set-pinned` 到了上限会 throw(`最多只能置顶 N 个工作区`),
-      //  这句话必须原样落在这个红框里 —— 吞掉的话人只会觉得点了没反应。
-      setWsErr(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      if (wsSheet?.path === ws.path) setWsErr(msg)
+      else notify('没能置顶', msg)
     } finally {
       setWsBusy(false)
     }
@@ -92,9 +100,8 @@ export default function Home() {
 
   // ★两条确认框(这一颗 + 下面 confirmDeleteSession)都走 confirmDestructive ——
   //  别再各写一遍 web/native 分支,原因见 confirmDestructive.ts 的 JSDoc。
-  const archiveWs = () => {
-    if (!wsSheet) return
-    const ws = wsSheet
+  // ★同上:长按/左滑共用这份实现,错误按入口分显示(红框 vs notify)。
+  const archiveWs = (ws: WorkspaceMeta) => {
     const msg = `归档「${ws.name}」?归档后从会话列表消失,在 设置 → 已归档的工作区 里恢复。`
     void confirmDestructive({ title: '归档工作区', message: msg, confirmLabel: '归档' }).then(async (yes) => {
       if (!yes) return
@@ -102,14 +109,60 @@ export default function Home() {
       setWsErr(null)
       try {
         await archive(ws.path)
-        setWsSheet(null)
+        if (wsSheet?.path === ws.path) setWsSheet(null)
       } catch (e) {
-        setWsErr(e instanceof Error ? e.message : String(e))
+        const errMsg = e instanceof Error ? e.message : String(e)
+        if (wsSheet?.path === ws.path) setWsErr(errMsg)
+        else notify('没能归档', errMsg)
       } finally {
         setWsBusy(false)
       }
     })
   }
+
+  // 工作区左滑「重命名」/长按单子「重命名」共用的那张 Sheet。记的是打开那一刻的
+  // { path, name } —— name 就是正在编辑的值(Field 直接绑它),和下面会话重命名
+  // (renameSession)同一套写法。
+  const [renameWs, setRenameWs] = useState<{ path: string; name: string } | null>(null)
+  const [renameWsBusy, setRenameWsBusy] = useState(false)
+  const [renameWsErr, setRenameWsErr] = useState<string | null>(null)
+
+  const submitRenameWs = async () => {
+    if (!renameWs) return
+    const name = renameWs.name.trim()
+    // ★空名不提交:`workspaces:rename` 服务端不校验,提交上去会得到一个没名字的工作区。
+    if (!name) return
+    setRenameWsBusy(true)
+    setRenameWsErr(null)
+    try {
+      await invoke(CH.workspaceRename, [{ path: renameWs.path, name }])
+      setRenameWs(null)
+      refresh()
+    } catch (e) {
+      setRenameWsErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRenameWsBusy(false)
+    }
+  }
+
+  /**
+   * 一个工作区分组左滑露出的动作格。
+   *
+   * ★★数组顺序 = 从左到右,而左滑时最先露出、离手指最近的是**最右边**那一格。
+   *  所以破坏性的「归档」放在数组第一个(屏幕上最左、离手指最远),先露出来的是无害的「置顶」。
+   *  ★和下面会话左滑(`sessionActions`,那边是 [删除, 重命名])**同一条规矩** ——
+   *   同一个手势在两种行上炸不同的雷是最坏的一种设计。
+   */
+  const wsActions = (ws: WorkspaceMeta): SwipeAction[] => [
+    { key: 'archive', label: '归档', tone: 'danger', onPress: () => archiveWs(ws) },
+    {
+      key: 'rename',
+      label: '重命名',
+      tone: 'plain',
+      onPress: () => { setRenameWsErr(null); setRenameWs({ path: ws.path, name: ws.name }) },
+    },
+    { key: 'pin', label: ws.pinned ? '取消置顶' : '置顶', tone: 'plain', onPress: () => void togglePinnedFor(ws) },
+  ]
 
   /**
    * 会话左滑「删除」弹出的确认框,然后关会话。
@@ -606,27 +659,31 @@ export default function Home() {
                     原来这里用的是 `Sec`(原型 d.css 的 `.sec`:10.5px 浅灰等宽小标签),
                     而 `.sec` 在原型里永远只是「一行标签 + 底下一串卡片」里的那行标签。
                     加了折叠之后它成了**可点的主体**、还默认收起,于是整屏只剩十几行浅灰小字。
-                    `Sec` 本身没动 —— 另外 6 个屏还在拿它当真正的分节标签用。 */}
-                <WsRow
-                  name={g.ws.name}
-                  note={branches.get(g.ws.path)}
-                  meta={`${g.ws.projectCount} 个项目`}
-                  expanded={open}
-                  gate={wsGates.length > 0}
-                  onPress={() => toggleWs(g.ws.path)}
-                  onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
-                  right={(() => {
-                    // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
-                    // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
-                    const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
-                    // ★展开时会话自己带徽章了,分组头上再来一个是重复(电脑端 Sidebar.tsx:248 同一条规矩)。
-                    //  但**门那一档例外**:门是「代理停在那儿等你」,收起展开都该看得见。
-                    if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
-                    if (!open && wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
-                    if (!open && wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
-                    return null
-                  })()}
-                />
+                    `Sec` 本身没动 —— 另外 6 个屏还在拿它当真正的分节标签用。
+                    ★★`SwipeRow` 在这层 `onLayout` **里面**,不是外面 —— 套外面就少算一层偏移,
+                    定位气泡会滚偏,而且一条测试都不会红(见 SwipeRow.tsx 的 JSDoc,同一条规矩)。 */}
+                <SwipeRow actions={wsActions(g.ws)}>
+                  <WsRow
+                    name={g.ws.name}
+                    note={branches.get(g.ws.path)}
+                    meta={`${g.ws.projectCount} 个项目`}
+                    expanded={open}
+                    gate={wsGates.length > 0}
+                    onPress={() => toggleWs(g.ws.path)}
+                    onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
+                    right={(() => {
+                      // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
+                      // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
+                      const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
+                      // ★展开时会话自己带徽章了,分组头上再来一个是重复(电脑端 Sidebar.tsx:248 同一条规矩)。
+                      //  但**门那一档例外**:门是「代理停在那儿等你」,收起展开都该看得见。
+                      if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
+                      if (!open && wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
+                      if (!open && wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
+                      return null
+                    })()}
+                  />
+                </SwipeRow>
                 {/* ★★展开区**只有一个分支**了。原来这里是「没会话 → 一个不带 onLayout 的空态盒子 /
                     有会话 → 抽屉」两条,于是空工作区那一档根本不写 `listY`,而现在它里面也有了一颗
                     可点的东西(「＋ 新建会话」)。合成一条之后,只要展开,第②段 y 就一定量得到 ——
@@ -783,32 +840,72 @@ export default function Home() {
         }}
       />
 
-      {/* 分组头长按呼出的操作单。★长按是发现不了的手势,副标题把它说出来 —— 否则人答完这道单子
-          关掉之后再也想不起来是怎么叫出来的。 */}
+      {/* 分组头长按呼出的操作单。★左滑是主入口,长按是备份 + 无障碍路径 —— 副标题两样都提,
+          否则人答完这道单子关掉之后再也想不起来是怎么叫出来的。 */}
       <Sheet
         open={!!wsSheet}
         onClose={() => setWsSheet(null)}
         title={wsSheet?.name ?? ''}
-        sub="长按分组头随时叫出这张单子"
+        sub="左滑工作区行,或长按分组头随时叫出这张单子"
       >
         {wsErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
             <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{wsErr}</T>
           </View>
         ) : null}
-        <Btn block disabled={wsBusy} onPress={() => void togglePinned()}>
+        <Btn block disabled={wsBusy} onPress={() => { if (wsSheet) void togglePinnedFor(wsSheet) }}>
           {wsSheet?.pinned ? '取消置顶' : '置顶'}
+        </Btn>
+        <View style={{ height: 12 }} />
+        <Btn
+          block
+          disabled={wsBusy}
+          onPress={() => {
+            const ws = wsSheet
+            if (!ws) return
+            setWsSheet(null)
+            setRenameWsErr(null)
+            setRenameWs({ path: ws.path, name: ws.name })
+          }}
+        >
+          重命名
         </Btn>
         {/* ★danger 不与主动作相邻(设计文档 §7.6)——这段空隙就是唯一目的。 */}
         <View style={{ height: 20 }} />
         <View>
-          <Btn kind="danger" block disabled={wsBusy} onPress={archiveWs}>
+          <Btn kind="danger" block disabled={wsBusy} onPress={() => { if (wsSheet) archiveWs(wsSheet) }}>
             归档
           </Btn>
           <T style={{ fontSize: 11.5, lineHeight: 17, color: c.muted, marginTop: 6 }}>
             归档后从列表消失,在 设置 → 已归档的工作区 里恢复
           </T>
         </View>
+      </Sheet>
+
+      {/* 工作区左滑「重命名」/长按单子「重命名」共用的那张 Sheet。 */}
+      <Sheet
+        open={!!renameWs}
+        onClose={() => setRenameWs(null)}
+        title="重命名工作区"
+        sub="改完点保存,列表和分组头都会跟着变"
+      >
+        {renameWsErr ? (
+          <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
+            <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{renameWsErr}</T>
+          </View>
+        ) : null}
+        <Field
+          value={renameWs?.name ?? ''}
+          onChangeText={(t) => setRenameWs((prev) => (prev ? { ...prev, name: t } : prev))}
+          placeholder="工作区名称"
+          autoFocus
+          onSubmitEditing={() => void submitRenameWs()}
+        />
+        {/* ★空名不提交(submitRenameWs 里 trim 后判空):这颗按钮同时用 disabled 挡一遍,
+            两道拦截同一个理由 —— 服务端不校验空名,提交上去会得到一个没名字的工作区。 */}
+        <Btn kind="pri" block disabled={renameWsBusy || !renameWs?.name.trim()} onPress={() => void submitRenameWs()}>
+          保存
+        </Btn>
       </Sheet>
 
       {/* 会话左滑「重命名」弹出的单子。 */}
