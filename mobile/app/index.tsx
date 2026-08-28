@@ -606,7 +606,11 @@ export default function Home() {
                             {/* ★★这一层(带 onLayout 的 wrapper)是定位气泡三段 y 的第③段。
                                 `SessionRow` 长在它**里面**,不是在它**外面**又套了一层 ——
                                 外面套一层的话三段 y 就少算了新那一层的偏移,症状是气泡稳定地
-                                滚偏一截,而且一条测试都不会红。Task 8 往里塞左滑时也是同一条规矩。 */}
+                                滚偏一截,而且一条测试都不会红。Task 8 往里塞左滑时也是同一条规矩。
+                                ★这一层自己**绝不许有纵向 margin/padding**。给它加 paddingTop 不会改变
+                                rowY.current[key](padding 不移动盒子自身相对父容器的位置),却会把可见内容
+                                整体下推 —— 于是气泡的算术仍然「正确」,滚到的却是错的行,而且**一条测试
+                                都不会红**。行齐平之后这里没有缝要撑,这一层的高度就是 SessionRow 的高度。 */}
                             <SessionRow
                               index={si}
                               total={sessions.length}
