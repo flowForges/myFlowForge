@@ -13,6 +13,10 @@ import { TREE, elbowWidth, trunkAt } from './tree'
  *  横杠挂在 `top:'50%'` —— 拐角自然落在这一行的垂直中点上,行有多高完全不影响对齐。
  *  ★连接列本身不设高度,靠 flex 的 `stretch` 长到和卡片一样高;
  *   千万别给它加纵向 margin/padding,那会让 `50%` 不再是卡片的中点。
+ *
+ * ★★行齐平之后主干**天然连续**:每一行的连接列都是 `top:0 → bottom:0`,首尾相接。
+ *  原来卡片之间隔着 `rowGap`,主干每隔一张卡就断一次,靠一个叫 `TreeGap` 的小组件去补 ——
+ *  那个补丁已经随 `rowGap` 一起删掉了。**别把它加回来**:加回来就等于又把行分开了。
  */
 export function TreeConnector({ index, total }: { index: number; total: number }) {
   const c = useC()
@@ -28,20 +32,6 @@ export function TreeConnector({ index, total }: { index: number; total: number }
   )
 }
 
-/**
- * 两张会话卡之间那道缝里的一小段主干。
- *
- * ★没有它,主干就是**虚的**:卡片之间隔着 `TREE.rowGap`,而每一行的连接列只有卡片那么高,
- *  于是竖线每隔一张卡就断一次,看着像一条画坏了的虚线。这一段把它接上。
- * ★它画在**每一行 wrapper 的最上面**(包括第一行)—— 第一行也画,主干才是从抽屉的上沿、
- *  也就是紧贴着工作区那一行往下长出来的。第一行不画的话,工作区和树之间会空一截,
- *  「连不上」这个毛病就又回来了。
- */
-export function TreeGap() {
-  const c = useC()
-  return <View style={[st.gap, { backgroundColor: c.border2 }]} />
-}
-
 const st = StyleSheet.create({
   col: { width: TREE.col },
   trunk: { position: 'absolute', left: TREE.trunk, top: 0, width: TREE.line },
@@ -49,5 +39,4 @@ const st = StyleSheet.create({
   /** 最后一条:主干只画到中点,和横杠交汇处收住 —— 这就是 `└`。 */
   trunkStop: { height: '50%' },
   elbow: { position: 'absolute', left: TREE.trunk, top: '50%', width: elbowWidth(), height: TREE.line },
-  gap: { height: TREE.rowGap, width: TREE.line, marginLeft: TREE.trunk },
 })

@@ -23,7 +23,7 @@
 export type TreeGeom = {
   /** 连接列的宽度。会话卡的左沿就落在这儿 —— 树画在卡片**外面**,不占卡片自己的内边距。 */
   col: number
-  /** 主干在连接列里的 x。★配上抽屉给 `List` 的 `marginLeft`,主干的绝对位置和电脑端左侧栏那条线一致。 */
+  /** 主干在连接列里的 x。★全出血下连接列自己就贴着屏幕左沿,所以这个数就是主干的**绝对**位置。 */
   trunk: number
   /** 线宽。1 而不是 hairline:hairline 在高密度屏上是 0.33px,细到这棵树看着像没画。 */
   line: number
@@ -33,11 +33,25 @@ export type TreeGeom = {
    *  —— 多压那一格是为了把拐角那个像素填上,不然 `└` 的转角会缺一个点。
    */
   gap: number
-  /** 两张会话卡之间的空档。★主干必须在这一段里**接上**,否则整条主干是虚的(见 index.tsx 的行 wrapper)。 */
-  rowGap: number
 }
 
-export const TREE: TreeGeom = { col: 22, trunk: 7, line: 1, gap: 4, rowGap: 8 }
+/**
+ * ★2026-08-28 全出血改造:col 22→44、trunk 7→26、rowGap 删除。
+ *
+ * 旧值属于「卡片式」时代:抽屉有 `marginHorizontal: 12`、`<List>` 又有 `marginLeft: 10`,
+ * 于是主干的**绝对**位置是 10 + 7 = 17 —— 刻意对齐电脑端侧栏的那条 `border-left`。
+ * 全出血之后那两段边距都没了(行直接贴屏幕左沿),主干必须自己站到 iOS 的二级缩进上:
+ * 内容左沿 44、主干 26。
+ *
+ * ★★`rowGap` 删掉了,连同 `TreeGap` 那个组件。它原本是用来补上「两张会话卡之间那道缝里
+ *  断掉的一小段主干」的。全出血之后行是**齐平**的,每一行的连接列 `top:0 → bottom:0`
+ *  首尾相接 —— 主干天然连续,补丁没有存在理由了。
+ *
+ * ★44 同时是**会话行内容区的左沿**,也就是那条分隔线的起点(见 homeGeom.ts 的
+ *  `separatorInset`)。两者必须相等,否则分隔线的起点和会话标题的左沿差一截 ——
+ *  那是「一眼说不上哪儿不对」的典型来源。homeGeom.test.ts 钉住了这条跨文件约束。
+ */
+export const TREE: TreeGeom = { col: 44, trunk: 26, line: 1, gap: 4 }
 
 /**
  * 横杠的长度:从主干右侧画到卡片左沿前那个气口。

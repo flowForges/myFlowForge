@@ -21,7 +21,7 @@ import { runningKey } from '../src/data/runningMerge'
 import { StatusBadge } from '../src/ui/StatusBadge'
 import { WsRow } from '../src/ui/WsRow'
 import { NeedsYou, type NeedItem } from '../src/ui/NeedsYou'
-import { TreeConnector, TreeGap } from '../src/ui/TreeConnector'
+import { TreeConnector } from '../src/ui/TreeConnector'
 import { indentFor } from '../src/ui/tree'
 
 /**
@@ -645,7 +645,6 @@ export default function Home() {
                             key={s.id}
                             onLayout={(e) => { rowY.current[`${g.ws.path}\0${s.id}`] = e.nativeEvent.layout.y }}
                           >
-                            <TreeGap />
                             {/* ★横排:左边是树枝,右边是卡片。`alignItems: 'stretch'`(默认值,
                                 写出来是因为它承重)让连接列长到和卡片一样高 —— 横杠的 `50%`
                                 因此正好落在这一行的垂直中点,不需要知道这一行有多高。 */}
