@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import { Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useFocusEffect } from 'expo-router'
 import { goBack } from '../src/nav'
+import { ROUTES } from '../src/nav/routes'
 import { CH } from '../../src/main/ipc/channels'
 import type { Attachment } from '../../src/shared/types'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type PermissionMode } from '../../src/shared/permissions'
@@ -41,6 +42,9 @@ import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 import { atBottom, initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
 import { pickSessionAgent, shouldRederive, type DeriveState } from '../src/ui/sessionAgent'
+import { nextInputMode, PANEL_H, type InputEvent, type InputMode } from '../src/ui/inputPanel'
+import { PermKey } from '../src/ui/PermKey'
+import { PlusPanel, type PlusItem } from '../src/ui/PlusPanel'
 
 /**
  * 对话屏,从会话列表(根屏)推入的下一层,总是带着一个已选会话进来。
@@ -108,6 +112,21 @@ export default function Chat() {
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [offloadBusy, setOffloadBusy] = useState(false)
   const [pickBusy, setPickBusy] = useState(false)
+  /**
+   * 输入区底下那块地方(什么都没有 / 键盘 / ＋ 面板)。判据在 `inputPanel.ts`(有单测)——
+   * ★★别在这儿凭直觉改状态转移,那个文件的存在理由就是「盯着代码看不出来的先后关系」。
+   */
+  const [inputMode, setInputMode] = useState<InputMode>('idle')
+  const fire = useCallback((ev: InputEvent) => setInputMode((m) => nextInputMode(m, ev)), [])
+  // ★系统键盘事件喂进同一个状态机。★★不能在 `tapPlus` 的处理里直接 setInputMode('panel')
+  //  之后就不管 keyboardHidden —— dismiss 会立刻触发它,而状态机正是为这一下写的。
+  useEffect(() => {
+    const a = Keyboard.addListener('keyboardDidShow', () => fire('keyboardShown'))
+    const b = Keyboard.addListener('keyboardDidHide', () => fire('keyboardHidden'))
+    return () => { a.remove(); b.remove() }
+  }, [fire])
+  // 离开这一屏清零(和下面 setViewing 那个 useFocusEffect 同一类收尾,分开写是因为依赖不同)。
+  useFocusEffect(useCallback(() => () => fire('leave'), [fire]))
   const flow = useRef<ScrollView | null>(null)
   /**
    * 输入框**这次改动之前**的光标位置,以及「要不要把光标摆回某处」。
@@ -373,6 +392,36 @@ export default function Chat() {
   }
 
   /**
+   * 拍一张发出去。★和 `pickImage()` 走**完全同一条**下游:planPickedImage → saveAttachment →
+   *  insertPastePlaceholder。判据(读不出内容 / 6MB 上限 / basename 防 `../` / 撞名去重)
+   *  一条都不许另写 —— 相机给的文件名比相册更常撞(一堆 `image.jpg`)。
+   */
+  const takePhoto = async () => {
+    if (!selected) return
+    setPickBusy(true)
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const ip = require('expo-image-picker') as typeof import('expo-image-picker')
+      // ★相机权限要单独求(相册那条求的是另一个)。拒绝时说人话,别静默返回 ——
+      //  静默返回就是「点了拍摄没反应」。Info.plist 的 NSCameraUsageDescription 已经有了
+      //  (扫码那一屏在用 expo-camera),所以这里不需要重打包。
+      const perm = await ip.requestCameraPermissionsAsync()
+      if (!perm.granted) throw new Error('没有相机权限。到 设置 → 隐私 → 相机 里打开,再回来试。')
+      const r = await ip.launchCameraAsync({ base64: true, quality: 0.8 })
+      if (r.canceled) return
+      const plan = planPickedImage(r.assets[0] ?? {}, new Date())
+      if (!plan.ok) throw new Error(plan.why)
+      const att = await saveAttachment(plan.name, plan.dataBase64)
+      // ★函数式更新:拍照 + 存盘是好几秒的事,这中间人完全可能已经在打字了。
+      setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPickBusy(false)
+    }
+  }
+
+  /**
    * 删掉一个附件 chip。
    * ★**不去动正文里的占位符**:那行字是人自己写的,我们没资格替他改。只说一声发生了什么,
    *  要删让他自己删 —— 静默地从他的话里抠掉一段,比留着一个多余的方括号糟糕得多。
@@ -434,6 +483,27 @@ export default function Chat() {
   }
 
   const tone = state?.status === 'ready' ? 'ok' : state?.status === 'connecting' ? 'wait' : 'off'
+
+  /**
+   * ＋ 面板里摆哪几格。「文件」那一格留到 Task 12(要装新原生依赖)。
+   */
+  const plusItems: PlusItem[] = [
+    // ★「照片」和「拍摄」都归 CAN_PICK 管:它们是**同一个原生模块**(expo-image-picker)的两个入口,
+    //  旧包里探测不到就两格都不摆。摆一个灰的等于说「这里有东西只是现在不能点」,
+    //  而真相是要装新包才有。
+    ...(CAN_PICK
+      ? [
+          { key: 'photo', icon: 'photo' as const, label: '照片',
+            onPress: () => void pickImage(), disabled: !online || !selected || pickBusy },
+          { key: 'camera', icon: 'camera' as const, label: '拍摄',
+            onPress: () => void takePhoto(), disabled: !online || !selected || pickBusy },
+        ]
+      : []),
+    ...(wf ? [] : [{ key: 'workflow', icon: 'workflow' as const, label: '工作流',
+                    onPress: () => router.push(ROUTES.workflow), disabled: !online || !selected }]),
+    { key: 'expand', icon: 'expand', label: '全屏编辑',
+      onPress: () => setBigEditor(true), disabled: !online || !selected },
+  ]
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
@@ -747,97 +817,64 @@ export default function Chat() {
             </Pressable>
           ) : null}
 
-          {/* ★chip 行放输入框上方,跟着键盘一起顶上去 —— 正要在什么权限档下发消息,
-              不该是那种随手一滑就滚出视野的东西。
-              ★★**横向滚动,不换行**:真机上 390pt 只放得下「权限档」「自动 (工作区)」「🖼 图片」几颗,
-                `/ 工作流` 已经被挤到第二行,再挂两个附件 chip 就是三行 —— 输入区跟着长高,键盘一顶,
-                正文只剩两行可见。换成一条横向滚动的轨道后**行高恒定**:多出来的往右滑就是。
-              ★★2026-08-28:「代理 · 模型」那一颗已经上顶栏了(它不会一直切换,不该占着输入区的位置)。
-                权限那一颗**眼下还在这条轨道里**——它会在后续一步挪到输入框左侧,那一步做完之前
-                这里如实写着它还在,别提前把还没发生的事写成既成事实。 */}
-          {/* ★`flexGrow: 0` 是必需的:`ScrollView` 自带 flexGrow,在这个竖排容器里会去抢剩余高度。
-                高度改由 `contentContainerStyle`(chip 自己的 minHeight 32 + 上下 padding)撑出来 ——
-                所以那份样式里**不能**只剩 flexDirection,否则整条轨道塌成 0 高、chip 全部看不见。
-              ★`keyboardShouldPersistTaps="handled"`:这一行的全部意义就是「键盘顶着的时候也能改档」。
-                不给这个值,ScrollView 会把键盘弹起时的第一下点击吃掉去收键盘 —— 现象是「点权限档没反应,
-                要点两下」。 */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            style={{ flexGrow: 0 }}
-            contentContainerStyle={st.chips}
-          >
-            <Chip
-              tone={perm === 'full' ? 'full' : perm === 'readonly' ? 'readonly' : 'auto'}
-              onPress={online ? () => setPermSheet(true) : undefined}
-              disabled={!online}
+          {/* ★chip 行现在**只装附件**。权限已经挪到输入行左边常驻(见下面 `PermKey`),
+              图片/拍摄/工作流/全屏编辑都收进了 ＋ 面板 —— 这条轨道上不再有「档位」性质的东西,
+              剩下的只是「这条消息要带的附件」。
+              ★★没有附件时整条**不渲染**(连同它的上下 padding 一起),把 ~48pt 还给正文;
+              加一张图之后它才出现。 */}
+          {attachments.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={{ flexGrow: 0 }}
+              contentContainerStyle={st.chips}
             >
-              {permissionModeLabel(perm)}
-            </Chip>
-            {/* ★从相册发图。`CAN_PICK` 为假(这个包里没有 expo-image-picker)时**整颗不摆** ——
-                摆一个灰的等于说「这里有东西,只是现在不能点」,而真相是要重装一次新包才有。 */}
-            {CAN_PICK ? (
-              <Chip
-                onPress={online && selected && !pickBusy ? () => void pickImage() : undefined}
-                disabled={!online || !selected || pickBusy}
-              >
-                {pickBusy ? '🖼 正在存…' : '🖼 图片'}
-              </Chip>
-            ) : null}
-            {/* 已经在工作流里就不再给启动入口 —— 一个会话同时只能在一条流上。 */}
-            {!wf ? (
-              <Chip onPress={online && selected ? () => router.push('/workflow') : undefined} disabled={!online || !selected}>
-                / 工作流
-              </Chip>
-            ) : null}
-            {/* 已转成附件的那几坨,排在 `/ 工作流` 后面。点一下删掉它(正文里的占位符不动)。 */}
-            {attachments.map((a) => (
-              <Chip key={a.path} onPress={() => dropAttachment(a)}>
-                {`📎 ${a.name}`}
-              </Chip>
-            ))}
-          </ScrollView>
+              {attachments.map((a) => (
+                <Chip key={a.path} onPress={() => dropAttachment(a)}>
+                  {`📎 ${a.name}`}
+                </Chip>
+              ))}
+            </ScrollView>
+          ) : null}
           <View style={st.entry}>
-            {/* ★输入框和它右下角那颗 ⤢ 是**一个整体**,不是并排的两件东西。
-                原来 ⤢ 是一颗 40×40 的 `IconBtn`,和输入框、发送键三个平摊这一行:
-                连 gap 一起吃掉 48pt,390 宽的屏上输入框只剩 ~270,一行装不下几个字。
-                挪进输入框自己的地盘后这 48pt 全还给了正文,而**发送/停止键一点没动** ——
-                它忙时就地变成停止,是这一屏最紧急的动作,位置和尺寸都不许改。
-                ★`paddingRight: 38` 是配套的、不是装饰:不留出这一段,长文本会从按钮**底下**穿过去。 */}
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Field
-                value={text}
-                onChangeText={onType}
-                selection={sel}
-                onSelectionChange={(e) => {
-                  caretRef.current = e.nativeEvent.selection.start
-                  // 受控只维持到原生真的把光标挪过去为止,立刻交还(理由见 `sel` 的声明处)。
-                  if (sel) setSel(undefined)
-                }}
-                placeholder={online ? '给代理下达任务…' : '未连接 · 发不出去'}
-                multiline
-                editable={online && !!selected}
-                style={{ minHeight: 44, maxHeight: 108, paddingRight: 38 }}
-              />
-              {/* ★全屏编辑入口。本体 28×28 + `hitSlop={8}` = **44×44** 的可点区域,正好压到最小触达,
-                  而多出去的 8pt 刚好贴着按钮边缘 —— 再撑大就会从输入框右下角把「点这儿放光标」的
-                  点击抢走(那一带正是长文本落笔的地方)。
-                  ★不自动弹出:字数超阈值就抢焦点,会在人正在打字时把光标薅走。只认这一下点击。 */}
-              <Pressable
-                onPress={online && selected ? () => setBigEditor(true) : undefined}
-                disabled={!online || !selected}
-                hitSlop={8}
-                style={({ pressed }) => [
-                  st.expand,
-                  { borderColor: c.border2, backgroundColor: c.bg2 },
-                  pressed && { backgroundColor: c.surface2 },
-                  (!online || !selected) && { opacity: 0.35 },
-                ]}
-              >
-                <T style={{ fontSize: 13, lineHeight: 16, color: c.muted }}>⤢</T>
-              </Pressable>
-            </View>
+            {/* ★权限外放到最左边。微信那个位置放的是语音/键盘切换 ——「这条消息以什么方式发出去」,
+                权限档语义上正对得上,而且常驻可见对安全是正确的。它原来是这条轨道里的一颗 chip,
+                轨道一挤就滚出视野。 */}
+            <PermKey mode={perm} onPress={() => setPermSheet(true)} disabled={!online} />
+            {/* ★★⤢ 已经从输入框里撤走,收进了 ＋ 面板 —— 它是「我要写长文」,低频、多点一下无所谓;
+                而左边那颗权限键是每条消息都要确认的状态。让出来的 38pt 全还给了正文
+                (390pt 屏上正文可见宽 172 → 210,一行中文从 12 字回到 15 字)。
+                ★所以 `paddingRight: 38` 也一并去掉了 —— 它当初就是给那颗 ⤢ 让位的。 */}
+            <Field
+              value={text}
+              onChangeText={onType}
+              selection={sel}
+              onSelectionChange={(e) => {
+                caretRef.current = e.nativeEvent.selection.start
+                // 受控只维持到原生真的把光标挪过去为止,立刻交还(理由见 `sel` 的声明处)。
+                if (sel) setSel(undefined)
+              }}
+              onFocus={() => fire('tapField')}
+              placeholder={online ? '给代理下达任务…' : '未连接 · 发不出去'}
+              multiline
+              editable={online && !!selected}
+              style={{ flex: 1, minWidth: 0, minHeight: 44, maxHeight: 108 }}
+            />
+            {/* ＋:开关。★它**不随有没有字消失** —— 微信有字时把 ＋ 换成发送键,
+                但我们「先打字再配图」是常态(正文里要留占位符),把 ＋ 藏起来是倒退。 */}
+            <Pressable
+              onPress={online && selected ? () => { Keyboard.dismiss(); fire('tapPlus') } : undefined}
+              disabled={!online || !selected}
+              style={({ pressed }) => [
+                st.plus,
+                { borderColor: c.border2, backgroundColor: c.bg2 },
+                pressed && { backgroundColor: c.surface2 },
+                (!online || !selected) && { opacity: 0.4 },
+              ]}
+            >
+              <Icon name="add" size={19} color={c.muted} />
+            </Pressable>
             {/* ★忙的时候,这颗键**就地**变成停止 —— 位置、尺寸都不动。
                 停止是这一屏最紧急的动作,而它原来待在顶栏右上角,是单手最够不到的地方。 */}
             <Pressable
@@ -857,6 +894,8 @@ export default function Chat() {
               </T>
             </Pressable>
           </View>
+          {/* ＋ 面板紧跟输入行,占掉键盘让出来的那块地方 —— 微信那块格子面板顶掉键盘,不吃正文高度。 */}
+          <PlusPanel open={inputMode === 'panel'} items={plusItems} />
         </View>
       </KeyboardAvoidingView>
 
@@ -1028,15 +1067,12 @@ const st = StyleSheet.create({
   foot: { borderTopWidth: StyleSheet.hairlineWidth },
   // ★chip 行现在排在输入框上面(见 Step 4),所以「贴容器顶边的间距」和「两行之间的间距」
   // 从 entry 挪到了 chips 头上;entry 掉到最后,接手原来 chips 尾部那段「离安全区还有多远」的间距。
-  entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, paddingHorizontal: 12, paddingBottom: 10 },
-  // ⤢:贴在输入框右下角(而不是排在行里),右下是因为多行输入时光标就在那一带,手指不用跑。
-  expand: {
-    position: 'absolute',
-    right: 5,
-    bottom: 5,
-    width: 28,
-    height: 28,
-    borderRadius: RADIUS.chip,
+  // ★四颗东西一行(权限 / 输入框 / ＋ / 发送),gap 从 8 收到 6 —— 8 会再吃掉正文 6pt。
+  entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingHorizontal: 12, paddingBottom: 10 },
+  plus: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
