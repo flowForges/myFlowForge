@@ -2,6 +2,7 @@ import { Tabs } from 'expo-router'
 import { useC } from '../../src/theme/theme'
 import { Icon } from '../../src/ui/Icon'
 import { useStore } from '../../src/data/store'
+import { useConn } from '../../src/net/conn'
 
 /**
  * 底部三格。
@@ -19,12 +20,17 @@ import { useStore } from '../../src/data/store'
  *  两处各算各的话,迟早出现「顶上说 3 道门、底下角标写 2」这种自己打自己脸的画面。
  *  不算未读:未读是「跑完了你没看」,门是「代理停在那儿等你」—— 后者才值得占一个角标。
  *
+ * ★★没连上时角标也要跟着收起来:`gates` 是断线前留在内存里的旧数据(第一版不缓存正文,
+ *  但没专门清这个数组),不判 `online` 的话断线那一刻会一边显示「未连接」一边挂着一枚门角标,
+ *  两处同时说反话。和 `app/(tabs)/index.tsx` 里 `HostBanner` 的 `gateCount` 同一条件。
+ *
  * ★次级屏(对话/变更/工作流/新建工作区/添加主机/扫码…)全在**根栈**里,推出去时天然盖住
  *  这条 tab bar,不需要一屏一屏去关 —— 见 `app/_layout.tsx`。
  */
 export default function TabLayout() {
   const c = useC()
   const { gates } = useStore()
+  const { online } = useConn()
   return (
     <Tabs
       screenOptions={{
@@ -42,7 +48,7 @@ export default function TabLayout() {
         options={{
           title: '会话',
           tabBarIcon: ({ color }) => <Icon name="chat" size={20} color={color as string} />,
-          tabBarBadge: gates.length > 0 ? gates.length : undefined,
+          tabBarBadge: online && gates.length > 0 ? gates.length : undefined,
         }}
       />
       <Tabs.Screen

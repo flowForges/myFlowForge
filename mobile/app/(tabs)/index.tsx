@@ -428,10 +428,14 @@ export default function Home() {
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       {/* ★★顶栏一整条是**主机横幅**。原来右边那颗 ⚙ 已经挪到底部第三格 tab 了,
           空出来的位置给「＋ 新建工作区」—— 微信的「发起群聊 / 添加朋友」也在右上角的 ＋ 里,
-          从来不在底栏。tab 的每一格必须是能停留的页面,而「新建」是个动作。 */}
+          从来不在底栏。tab 的每一格必须是能停留的页面,而「新建」是个动作。
+          ★真机反馈:caption 写全名「新建工作区」在 40pt 的按钮里换行,两行 caption 把
+          顶栏重新撑高——这一整个 task 存在的目的就是把顶栏压成一行,不能在旁边这颗按钮上
+          悄悄长回来。缩成「工作区」(三个字,一行装得下):＋ 图标担着动词,caption 担名词,
+          和抽屉里「＋ 新建会话」那种写全名的 ActionRow 不会认错——那些本来就在别的层级上。 */}
       <TopBar
         right={
-          <IconBtn label="新建工作区" onPress={() => router.push(ROUTES.newWorkspace)} disabled={!online}>
+          <IconBtn label="工作区" onPress={() => router.push(ROUTES.newWorkspace)} disabled={!online}>
             <Icon name="add" size={20} color={online ? c.accent : c.faint} />
           </IconBtn>
         }
@@ -440,7 +444,12 @@ export default function Home() {
           label={activeHost?.label ?? ''}
           url={activeHost?.url ?? ''}
           state={state}
-          gateCount={gates.length}
+          // ★★没连上的时候 `gates` 是断线前留在内存里的旧数据(第一版不缓存正文,
+          //  但没有专门清这个数组)——不跟着 `online` 收起来的话,断线态的横幅会一边说
+          //  「连不上」一边挂着一枚「等你答话」,而列表主体已经换成了诚实的「未连接」空态。
+          //  同一条规矩已经在 `showsRows`/定位气泡上用过一次(见下面 `showsRows` 的注释),
+          //  这里只是把它补给两枚门徽章(还有 `app/(tabs)/_layout.tsx` 那枚 tab 角标,同源同条件)。
+          gateCount={online ? gates.length : 0}
           onPress={() => setHostSheet(true)}
         />
       </TopBar>
