@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../../src/main/ipc/channels'
-import type { SessionsFile, WorkspaceMeta } from '../../../src/shared/types'
+import type { ChatSession, SessionsFile, WorkspaceMeta } from '../../../src/shared/types'
 import { fmtRelTime } from '../../../src/shared/relTime'
 import { useC } from '../../src/theme/theme'
 import { RADIUS } from '../../src/theme/tokens'
-import { Btn, Empty, IconBtn, List, T, TopBar } from '../../src/ui/kit'
+import { Btn, Empty, Field, IconBtn, List, T, TopBar } from '../../src/ui/kit'
 import { Sheet } from '../../src/ui/Sheet'
+import { SwipeRow, type SwipeAction } from '../../src/ui/SwipeRow'
+import { sessionCanDelete } from '../../src/data/sessionOps'
 import { JumpBubble } from '../../src/ui/JumpBubble'
 import { useConn } from '../../src/net/conn'
 import { hostPickRows } from '../../src/net/hostPicker'
@@ -113,6 +115,88 @@ export default function Home() {
       { text: '取消', style: 'cancel' },
       { text: '归档', style: 'destructive', onPress: () => void go() },
     ])
+  }
+
+  // 会话左滑「删除」弹出的确认框,然后关会话。★走的是**和 archiveWs 完全一样**的两条路:
+  // web 用 window.confirm(RN-web 的 Alert 只有一个按钮,已经在 hosts.tsx 的 remove() 栽过)。
+  // ★这里能摆出「删除」这一格,前提是调用方(sessionActions)已经用 sessionCanDelete 判过
+  //  ok:true —— 服务端在「只剩最后一条可写会话」时会静默原样返回、什么都不做也不报错,
+  //  UI 侧不拦的话就是又一个「点了没反应」。
+  const confirmDeleteSession = (wsPath: string, s: ChatSession) => {
+    const go = () => {
+      void (async () => {
+        try {
+          await invoke(CH.sessionClose, [{ workspacePath: wsPath, sessionId: s.id }])
+          refresh()
+        } catch {
+          // ★这条路极少失败(能摆出删除格,前提是服务端不会静默拒绝;剩下的只有网络故障),
+          //  和 hosts.tsx 的 remove() 同一套宽松度——本任务要治的是「按下去无声无息」的
+          //  那个删除按钮本身,不是这里的网络异常兜底。
+        }
+      })()
+    }
+    const msg = `删除「${s.title || '新会话'}」?这条会话的记录会被删掉。`
+    if (Platform.OS === 'web') {
+      // eslint-disable-next-line no-alert
+      if (typeof window !== 'undefined' && window.confirm(msg)) go()
+      return
+    }
+    Alert.alert('删除会话', msg, [
+      { text: '取消', style: 'cancel' },
+      { text: '删除', style: 'destructive', onPress: go },
+    ])
+  }
+
+  // 会话左滑「重命名」弹出的单子。记的是打开那一刻的 { wsPath, id, title } ——
+  // title 就是正在编辑的值(Field 直接绑它),不另开一份 renameTitle。
+  const [renameSession, setRenameSession] = useState<{ wsPath: string; id: string; title: string } | null>(null)
+  const [renameBusy, setRenameBusy] = useState(false)
+  const [renameErr, setRenameErr] = useState<string | null>(null)
+
+  const submitRename = async () => {
+    if (!renameSession) return
+    const title = renameSession.title.trim()
+    // ★空标题不提交:服务端不校验,提交上去会得到一条没名字的会话。
+    if (!title) return
+    setRenameBusy(true)
+    setRenameErr(null)
+    try {
+      await invoke(CH.sessionRename, [{ workspacePath: renameSession.wsPath, sessionId: renameSession.id, title }])
+      setRenameSession(null)
+      refresh()
+    } catch (e) {
+      setRenameErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRenameBusy(false)
+    }
+  }
+
+  /**
+   * 一行会话左滑露出的动作格。
+   *
+   * ★★数组顺序 = 从左到右,而左滑时最先露出、离手指最近的是**最右边**那一格。
+   *  所以破坏性的「删除」放在数组第一个(屏幕上最左、离手指最远),先露出来的是无害的
+   *  「重命名」。手指停在右边缘那一带最容易误触,最危险的那个必须离它最远。
+   *  ★Task 9 的工作区左滑用**同一条规矩**,两处不许不一致 —— 同一个手势在两种行上
+   *  炸不同的雷是最坏的一种设计。
+   *
+   * ★★删不掉的时候**整格不摆**,不是摆一个灰的:摆灰的等于说「这里有个删除,只是现在点不了」,
+   *  而真相是「这个工作区只剩这一条了」。★★绝不能摆一颗按下去无声无息的红按钮 ——
+   *  服务端在这种情况下会静默原样返回,连个错都不报(见 sessionOps.ts)。
+   */
+  const sessionActions = (g: WsGroup, s: ChatSession): SwipeAction[] => {
+    const del = sessionCanDelete(g.sessions, s.id)
+    return [
+      ...(del.ok
+        ? [{ key: 'del', label: '删除', tone: 'danger' as const, onPress: () => confirmDeleteSession(g.ws.path, s) }]
+        : []),
+      {
+        key: 'rename',
+        label: '重命名',
+        tone: 'plain' as const,
+        onPress: () => { setRenameErr(null); setRenameSession({ wsPath: g.ws.path, id: s.id, title: s.title }) },
+      },
+    ]
   }
 
   const tierFor = (wsPath: string, sessionId: string): SessionTier =>
@@ -586,43 +670,45 @@ export default function Home() {
                             onLayout={(e) => { rowY.current[`${g.ws.path}\0${s.id}`] = e.nativeEvent.layout.y }}
                           >
                             {/* ★★这一层(带 onLayout 的 wrapper)是定位气泡三段 y 的第③段。
-                                `SessionRow` 长在它**里面**,不是在它**外面**又套了一层 ——
+                                `SwipeRow` 和 `SessionRow` 都长在它**里面**,不是在它**外面**又套了一层 ——
                                 外面套一层的话三段 y 就少算了新那一层的偏移,症状是气泡稳定地
-                                滚偏一截,而且一条测试都不会红。Task 8 往里塞左滑时也是同一条规矩。
+                                滚偏一截,而且一条测试都不会红。见 SwipeRow.tsx 的 JSDoc,同一条规矩。
                                 ★这一层自己**绝不许有纵向 margin/padding**。给它加 paddingTop 不会改变
                                 rowY.current[key](padding 不移动盒子自身相对父容器的位置),却会把可见内容
                                 整体下推 —— 于是气泡的算术仍然「正确」,滚到的却是错的行,而且**一条测试
                                 都不会红**。行齐平之后这里没有缝要撑,这一层的高度就是 SessionRow 的高度。 */}
-                            <SessionRow
-                              index={si}
-                              total={sessions.length}
-                              gate={sg.length > 0}
-                              onPress={() => {
-                                select({ wsPath: g.ws.path, sessionId: s.id })
-                                ensureWs(g.ws.path)
-                                router.push('/chat')
-                              }}
-                            >
-                              <View style={{ flex: 1, minWidth: 0 }}>
-                                <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
-                                  {s.title || '新会话'}
-                                </T>
-                                <T mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
-                                  {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
-                                </T>
-                              </View>
-                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, flexShrink: 1, minWidth: 0 }}>
-                                <T
-                                  mono
-                                  numberOfLines={1}
-                                  style={{ fontSize: 9.5, color: c.faint, flexShrink: 1, minWidth: 0 }}
-                                >
-                                  {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
-                                </T>
-                                <StatusBadge tier={tierFor(g.ws.path, s.id)} />
-                                <Icon name="chevron" size={13} color={c.faint} />
-                              </View>
-                            </SessionRow>
+                            <SwipeRow actions={sessionActions(g, s)}>
+                              <SessionRow
+                                index={si}
+                                total={sessions.length}
+                                gate={sg.length > 0}
+                                onPress={() => {
+                                  select({ wsPath: g.ws.path, sessionId: s.id })
+                                  ensureWs(g.ws.path)
+                                  router.push('/chat')
+                                }}
+                              >
+                                <View style={{ flex: 1, minWidth: 0 }}>
+                                  <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
+                                    {s.title || '新会话'}
+                                  </T>
+                                  <T mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
+                                    {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
+                                  </T>
+                                </View>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, flexShrink: 1, minWidth: 0 }}>
+                                  <T
+                                    mono
+                                    numberOfLines={1}
+                                    style={{ fontSize: 9.5, color: c.faint, flexShrink: 1, minWidth: 0 }}
+                                  >
+                                    {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
+                                  </T>
+                                  <StatusBadge tier={tierFor(g.ws.path, s.id)} />
+                                  <Icon name="chevron" size={13} color={c.faint} />
+                                </View>
+                              </SessionRow>
+                            </SwipeRow>
                           </View>
                         )
                       })}
@@ -729,6 +815,32 @@ export default function Home() {
             归档后从列表消失,在 设置 → 已归档的工作区 里恢复
           </T>
         </View>
+      </Sheet>
+
+      {/* 会话左滑「重命名」弹出的单子。 */}
+      <Sheet
+        open={!!renameSession}
+        onClose={() => setRenameSession(null)}
+        title="重命名会话"
+        sub="改完点保存,列表和对话屏顶栏都会跟着变"
+      >
+        {renameErr ? (
+          <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
+            <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{renameErr}</T>
+          </View>
+        ) : null}
+        <Field
+          value={renameSession?.title ?? ''}
+          onChangeText={(t) => setRenameSession((prev) => (prev ? { ...prev, title: t } : prev))}
+          placeholder="会话名称"
+          autoFocus
+          onSubmitEditing={() => void submitRename()}
+        />
+        {/* ★空标题不提交(submitRename 里 trim 后判空):这颗按钮同时用 disabled 挡一遍,
+            两道拦截同一个理由 —— 服务端不校验空标题,提交上去会得到一条没名字的会话。 */}
+        <Btn kind="pri" block disabled={renameBusy || !renameSession?.title.trim()} onPress={() => void submitRename()}>
+          保存
+        </Btn>
       </Sheet>
     </View>
   )
