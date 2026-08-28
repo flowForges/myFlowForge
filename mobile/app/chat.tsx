@@ -17,6 +17,7 @@ import { textAfterOffload } from '../src/ui/pasteOffload'
 import { continueList } from '../src/ui/listContinue'
 import { planPickedImage } from '../src/ui/pickedImage'
 import { CAN_COPY, CopyBtn } from '../src/ui/CopyBtn'
+import { Icon } from '../src/ui/Icon'
 import { canPickImage } from '../src/net/pickSupport'
 import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
@@ -39,6 +40,7 @@ import { isSlashQuery, slashRows } from '../src/ui/slashPick'
 import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 import { atBottom, initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
+import { pickSessionAgent } from '../src/ui/sessionAgent'
 
 /**
  * 对话屏,从会话列表(根屏)推入的下一层,总是带着一个已选会话进来。
@@ -76,7 +78,7 @@ export default function Chat() {
   const c = useC()
   const insets = useSafeAreaInsets()
   const { activeHost, state, online, reconnect, invoke } = useConn()
-  const { selected, gates, gatesFor, answerGate, wsName, sessionTitle, setViewing, loading: storeLoading } = useStore()
+  const { groups, selected, gates, gatesFor, answerGate, wsName, sessionTitle, setViewing, loading: storeLoading } = useStore()
   const { msgs, busy, send, stop, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
   const { agents } = useAgents()
   const { wf, stage, advanceLabel, nextIsExecution, advance, exit, addFeedback } = useWorkflow()
@@ -165,12 +167,27 @@ export default function Chat() {
     }, [selected, setViewing]),
   )
 
-  // 代理探测回来之前不知道选谁,回来之后落到第一个装了的。用户改过就不再动它。
+  /**
+   * 代理和模型**跟着会话走**。
+   *
+   * ★原来这里是「探测回来之后落到第一个装了的,用户改过就不再动它」—— 一份纯本地 state,
+   *  切会话不复位、也不写回服务端。而 `ChatSession` 上早就有 `agentId` / `modelId` 两个字段,
+   *  服务端每条会话各存一份。挪到顶栏常驻显示之后,这个偏差会被一眼看见。
+   * ★判据全在 `sessionAgent.ts`(有单测 + 变异验证):代理被卸载 / 模型改名 时各退各的。
+   * ★依赖里带上 `selected` 的两段 —— 换了会话就要重新挑。
+   */
+  const currentSession = useMemo(
+    () =>
+      selected
+        ? (groups.find((g) => g.ws.path === selected.wsPath)?.sessions.find((s) => s.id === selected.sessionId) ?? null)
+        : null,
+    [groups, selected],
+  )
   useEffect(() => {
-    if (agentId || !agents.length) return
-    setAgentId(agents[0].id)
-    setModelId(agents[0].models[0]?.id ?? null)
-  }, [agents, agentId])
+    const p = pickSessionAgent(currentSession, agents)
+    setAgentId(p.agentId)
+    setModelId(p.modelId)
+  }, [currentSession, agents])
 
   const agent = useMemo(() => agents.find((a) => a.id === agentId) ?? null, [agents, agentId])
   const model = useMemo(() => agent?.models.find((m) => m.id === modelId) ?? agent?.models[0] ?? null, [agent, modelId])
@@ -401,23 +418,36 @@ export default function Chat() {
         left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}
         right={
           <IconBtn label="变更" onPress={selected ? () => router.push('/exec') : undefined} disabled={!selected || !online}>
-            📄
+            <Icon name="changes" size={19} color={c.muted} />
           </IconBtn>
         }
       >
-        <View style={{ paddingHorizontal: 2, paddingVertical: 2 }}>
+        {/* ★★第一行是**会话标题**,第二行是**代理 · 模型**,整行可点开下拉。
+            原来第二行是「主机名 · 工作区名」—— 主机已经由首页顶栏那条横幅常驻回答了,
+            进了对话屏再报一遍是重复;而「这条消息要发给谁」才是这一屏每一次发送前都要确认的事。
+            ★那颗连接状态圆点留着:断线态必须显式,这条不许动。 */}
+        <View style={{ paddingHorizontal: 2 }}>
           <T numberOfLines={1} style={{ fontSize: 15.5, fontWeight: '600', letterSpacing: -0.3, color: c.fg }}>
             {/* 没选中时用 `未选会话` —— 和 exec/workflow 两屏的同一处措辞对齐,
                 也别再喊「选一个会话」:这个标题不可点,这一屏没有挑会话的入口。 */}
             {selected ? sessionTitle(selected.wsPath, selected.sessionId) : '未选会话'}
           </T>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1 }}>
+          <Pressable
+            onPress={online ? () => setAgentSheet(true) : undefined}
+            disabled={!online}
+            // ★整行热区,而且用 padding 撑不用 hitSlop —— hitSlop 在祖先紧贴子节点时是死的。
+            style={({ pressed }) => [
+              { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 1, paddingVertical: 3 },
+              pressed && { opacity: 0.6 },
+            ]}
+          >
             <LiveDot tone={tone} />
-            <T numberOfLines={1} style={{ fontSize: 11.5, color: c.muted, flexShrink: 1 }}>
-              {activeHost?.label ?? '未选主机'}
-              {selected ? ` · ${wsName(selected.wsPath)}` : ''}
+            <T numberOfLines={1} style={{ fontSize: 11.5, color: c.muted, flexShrink: 1, minWidth: 0 }}>
+              {agent ? `${agent.displayName}${model ? ' · ' + model.label : ''}` : '选代理'}
             </T>
-          </View>
+            {/* ▾ 是「这儿能点开」的唯一信号 —— 手机上没有 hover。 */}
+            <Icon name="chevronDown" size={9} color={c.faint} />
+          </Pressable>
         </View>
       </TopBar>
 
@@ -690,10 +720,11 @@ export default function Chat() {
 
           {/* ★chip 行放输入框上方,跟着键盘一起顶上去 —— 正要在什么权限档下发消息,
               不该是那种随手一滑就滚出视野的东西。
-              ★★**横向滚动,不换行**:真机上 390pt 只放得下「代理 · 模型」「自动 (工作区)」「🖼 图片」三颗,
+              ★★**横向滚动,不换行**:真机上 390pt 只放得下「自动 (工作区)」「🖼 图片」两颗,
                 `/ 工作流` 已经被挤到第二行,再挂两个附件 chip 就是三行 —— 输入区跟着长高,键盘一顶,
-                正文只剩两行可见。换成一条横向滚动的轨道后**行高恒定**:第一颗(代理和模型,也就是
-                「这条消息要发给谁」)永远在原位,多出来的往右滑就是。
+                正文只剩两行可见。换成一条横向滚动的轨道后**行高恒定**:多出来的往右滑就是。
+              ★★2026-08-28:「代理 · 模型」那一颗已经上顶栏了(它不会一直切换,不该占着输入区的位置),
+                权限那一颗挪到了输入框左侧(见 Task 7)。这条轨道现在只剩**附件 chip**。
               ★`flexGrow: 0` 是必需的:`ScrollView` 自带 flexGrow,在这个竖排容器里会去抢剩余高度。
                 高度改由 `contentContainerStyle`(chip 自己的 minHeight 32 + 上下 padding)撑出来 ——
                 所以那份样式里**不能**只剩 flexDirection,否则整条轨道塌成 0 高、chip 全部看不见。
@@ -707,9 +738,6 @@ export default function Chat() {
             style={{ flexGrow: 0 }}
             contentContainerStyle={st.chips}
           >
-            <Chip tone="on" onPress={online ? () => setAgentSheet(true) : undefined} disabled={!online}>
-              {agent ? `${agent.displayName}${model ? ' · ' + model.label : ''}` : '选代理'}
-            </Chip>
             <Chip
               tone={perm === 'full' ? 'full' : perm === 'readonly' ? 'readonly' : 'auto'}
               onPress={online ? () => setPermSheet(true) : undefined}
@@ -830,6 +858,17 @@ export default function Chat() {
                       setAgentId(a.id)
                       setModelId(mm.id)
                       setAgentSheet(false)
+                      // ★写回**这条会话**。不写的话,退出对话屏再进来就被上面那个 effect
+                      //  按服务端的旧值盖回去 —— 现象是「选了模型,回来又变回去了」。
+                      //  失败不弹窗但要留痕:这是个偏好,丢了不致命,但静默失败会让人以为存上了。
+                      if (selected) {
+                        void invoke(CH.sessionSetModel, [{
+                          workspacePath: selected.wsPath,
+                          sessionId: selected.sessionId,
+                          agentId: a.id,
+                          modelId: mm.id,
+                        }]).catch((e: unknown) => setNotice(e instanceof Error ? e.message : String(e)))
+                      }
                     }}
                     style={on ? { borderColor: c.accent, backgroundColor: c.accentDim } : undefined}
                   >
