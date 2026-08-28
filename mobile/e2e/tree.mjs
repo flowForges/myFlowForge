@@ -172,7 +172,94 @@ ok('★只有一条会话时,主干从上沿一路到它的中点为止', vb.len
   `主干底 ${bBottom.toFixed(1)} / 中点 ${cb.mid.toFixed(1)}`)
 await p.shot(S + '/shots/tree-02-beta.png')
 
-// ── ② 「需要你」折叠 ─────────────────────────────────────────────────────
+// ── ② 定位气泡:真的滚到目标,不是只测「气泡出现了」 ──────────────────────────
+// ★这里补的是①完全没盖到的一类回归。①量的是树形连接线的几何(横竖线段的像素坐标),
+//  那套断言一条像素都不会因为 `SwipeRow` 套错层(套在 `groupY` 的 onLayout **外面**
+//  而不是里面)而移动 —— 套错层腐蚀的是 `groupY.current[wsPath]` 这个内部 ref,
+//  而这个 ref 只有气泡的滚动算术(`app/(tabs)/index.tsx` 的 `absY`)会用到。
+//  ①的断言全绿,气泡也完全可能已经滚偏了,没有任何一条测试会红 ——
+//  这正是这一段存在的理由:把视口压矮到 400,滚过挂着门的那一行让它离开视口,
+//  断言气泡出现,点它,再量一次那一行是不是真的回到了视口里。
+//  这条「点完真的滚对了」的断言只有 `groupY`/`listY`/`rowY` 三段全部量对、加对了才会过 ——
+//  任何一段算错(不管是套错层,还是有人在中间插了一层不测 onLayout 的 padding/margin),
+//  这行就会停在别的地方,断言会红。
+await p.setViewport(390, 400)
+await p.goto('http://localhost:8081/')
+await p.waitFor(visible('alpha'), 30000)
+await new Promise((r) => setTimeout(r, 500))
+// ★expanded 状态是存盘的(见下面②的断言),①已经点开过 alpha 和 beta —— 这次 reload
+//  它们多半已经是展开的。**不能无脑再点一次**:如果已经展开,再点 'alpha' 会把它点收起来,
+//  这一段就测不到东西了。所以先看它在不在,不在才点。
+if (!(await p.eval(visible('修 gate 重复放行')))) {
+  await p.clickText('alpha')
+  await p.waitFor(visible('修 gate 重复放行'), 10000)
+}
+await new Promise((r) => setTimeout(r, 300))
+
+const gatedRowRect = async () => JSON.parse(await p.eval(`(() => {
+  const t=[...document.querySelectorAll('*')].filter(e=>e.textContent&&e.textContent.trim()===${JSON.stringify('修 gate 重复放行')}&&e.getBoundingClientRect().width>0).pop()
+  if(!t) return 'null'
+  let e=t
+  while(e && e.getBoundingClientRect().height < 44) e=e.parentElement
+  const r=e.getBoundingClientRect()
+  return JSON.stringify({top:r.top,bottom:r.bottom})
+})()`))
+
+// 找真正在滚的那个容器(RN-web 的 ScrollView 落地成一个 overflow 的 div),
+// 直接把它的 scrollTop 顶到底 —— 程序化设置 scrollTop 照样会触发真正的原生
+// 'scroll' DOM 事件,ScrollView 的 onScroll 挂的就是它,和 `newws.mjs` 里
+// `scrollIntoView` 那手法是同一个道理(不是自造的、这个仓库自己的 e2e 已经在用)。
+const foundScroller = await p.eval(`(() => {
+  const all=[...document.querySelectorAll('div')]
+  const sc=all.find(e=>e.scrollHeight>e.clientHeight+20)
+  if(!sc) return false
+  sc.scrollTop = sc.scrollHeight
+  return true
+})()`)
+ok('找到了 ScrollView 落地的那个真正在滚的 div(下面几条断言的前提)', foundScroller)
+await new Promise((r) => setTimeout(r, 400))
+
+const before = await gatedRowRect()
+ok('★定位气泡这条断言自己的前提:挂门的那一行已经滚出了 400px 高的视口',
+  !!before && (before.bottom < 0 || before.top > 400), JSON.stringify(before))
+
+// ★★独立量出 ScrollView 自己可见区域的顶(和滚动位置无关 —— 它是那个滚动 div 自己的
+//  屏幕位置,TopBar 占掉的高度是固定的),用来给下面「滚没滚对」算一个**字面量期望值**,
+//  不是从 groupY/listY/rowY 这些被测的内部 ref 里读出来再拿来验自己(那样测的是「和自己
+//  一致」,不是「和真实几何一致」)。`index.tsx` 的 `jump()` 明确写着「往上留 24px」——
+//  这里独立验的正是那句注释,不是抄它。
+const scrollerTop = await p.eval(`(() => {
+  const all=[...document.querySelectorAll('div')]
+  const sc=all.find(e=>e.scrollHeight>e.clientHeight+20)
+  return sc ? sc.getBoundingClientRect().top : null
+})()`)
+ok('量到了 ScrollView 自己可见区域的顶(下面「滚对了」那条断言的字面量基准)', scrollerTop != null, `${scrollerTop}`)
+
+const hasBubble = await p.eval(
+  `[...document.querySelectorAll('*')].some(e=>e.textContent&&e.textContent.includes('条等你答话')` +
+  `&&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0)`)
+ok('★★目标滚出视口之后,定位气泡出现了', hasBubble)
+
+if (hasBubble && scrollerTop != null) {
+  await p.clickContaining('条等你答话')
+  // scrollTo({animated:true}) 要跑完动画,给够时间。
+  await new Promise((r) => setTimeout(r, 800))
+  const after = await gatedRowRect()
+  // ★★这条不是「落在视口某处就算数」的宽松判定(那种宽松判定实测抓不住 groupY 套错层 ——
+  //  套错层之后目标照样落在视口**里**,只是不在 jump() 承诺的位置上,宽松判定看不出来)。
+  //  这里钉的是**紧的**期望值:滚动条自己的可见顶 + 24px(`jump()` 的「往上留 24px」)。
+  //  这条断言只有 groupY/listY/rownY 三段全部加对才会落在容差以内 —— `SwipeRow` 套错层
+  //  不会挪动①里量的任何一个像素,腐蚀的只是这几个内部 ref,而这条断言直接钉的就是它们的和。
+  const expectTop = scrollerTop + 24
+  ok('★★★点了气泡之后,挂门的那一行真的滚到了 jump() 承诺的位置(可见顶 + 24px)',
+    !!after && near(after.top, expectTop, 3),
+    `期望顶 ${expectTop.toFixed(1)} / 实际顶 ${after ? after.top.toFixed(1) : 'null'} — ${JSON.stringify({ before, after })}`)
+}
+
+// 还原视口,别影响下面②③两段。
+await p.setViewport(390, 844)
+
+// ── ③ 「需要你」折叠 ─────────────────────────────────────────────────────
 await p.goto('http://localhost:8081/')
 await p.waitFor(visible('alpha'), 30000)
 await new Promise((r) => setTimeout(r, 800))
@@ -206,7 +293,7 @@ await new Promise((r) => setTimeout(r, 400))
 t = await p.text()
 ok('再点一下又展开', ROWS.test(t))
 
-// ── ③ 关于:自己一屏 ─────────────────────────────────────────────────────
+// ── ④ 关于:自己一屏 ─────────────────────────────────────────────────────
 const appJson = JSON.parse(fs.readFileSync(path.join(here, '..', 'app.json'), 'utf8'))
 await p.goto('http://localhost:8081/settings')
 await p.waitFor(`document.body.innerText.includes('外观')`, 30000)
