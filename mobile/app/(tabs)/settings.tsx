@@ -1,25 +1,20 @@
 import { useState } from 'react'
 import { Alert, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
-import { goBack } from '../src/nav'
-import { useC, useTheme } from '../src/theme/theme'
-import { Btn, IconBtn, List, LiveDot, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
-import { Sheet } from '../src/ui/Sheet'
-import { useConn } from '../src/net/conn'
-// 状态那句话和主机行下面那行小字都和 `app/hosts.tsx` 共用同一份 —— 两屏说同一台机器,
-// 说法必须一个字都不差,否则人只会觉得其中一屏在骗他。
-import { describeHostState, hostSubtitle } from '../src/net/hostStatusText'
-import { HostIcon } from '../src/ui/HostIcon'
-import { clearLocalData } from '../src/data/localData'
-import type { TextSize, ThemePref } from '../src/data/prefs'
+import { goBack } from '../../src/nav'
+import { useC, useTheme } from '../../src/theme/theme'
+import { Btn, IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
+import { Sheet } from '../../src/ui/Sheet'
+import { useConn } from '../../src/net/conn'
+import { clearLocalData } from '../../src/data/localData'
+import type { TextSize, ThemePref } from '../../src/data/prefs'
 
 /**
  * 设置。比电脑端简单一个量级 —— 没有工作流、阶段、插件、宠物、壁纸,那些留在电脑端。
  * 手机是用来盯梢和答门的,不是用来配置的;把电脑端那一整面墙搬过来只会让
  * 「加个主机」这件事变得找不到。
  *
- * **分组按「这条设置属于谁」切,一共五组**:
- *   主机 / 工作区 / 外观(跟着这台手机走)/ 关于 / 这台手机。
+ * **分组按「这条设置属于谁」切**:工作区 / 外观(跟着这台手机走)/ 关于 / 这台手机。
  *
  * ★这里原来写着「**故意只有三组**(设计文档 §7.2)」,并且据此把「已归档的工作区」
  *  硬塞进了主机那一组。真机上用户当场指出来了:归档的是**工作区**,不是主机 ——
@@ -28,10 +23,9 @@ import type { TextSize, ThemePref } from '../src/data/prefs'
  *  (别把电脑端那面墙搬过来)靠的是**内容**少,不是靠把不同类的东西挤在一起。
  *  所以约束保留、数字作废:宁可多两个头,也不要一个头底下挂着不属于它的东西。
  *
- * ★**这一屏在没连主机时也必须能用**:它是「添加主机」和「清除本地数据」的唯一入口。
- *  顶上绝不能写 `if (!online) return <Empty/>` —— 那会把断线的人锁在外面,
- *  而断线恰恰是最需要进来改主机的时候。它推出去的那几屏(`/host`、`/about`)同理:
- *  凡是**对面**的数(主机版本、方法数)断着的时候一律如实写「连上才知道」,不留上一次的旧值。
+ * ★★2026-08-28:主机那一整组**搬走了**,成了底部第二格 tab(`app/(tabs)/hosts.tsx`)。
+ *  这一屏不许再留任何通往主机的入口 —— 两个入口通向同一屏,迟早只改其中一个。
+ *  ★但「这一屏在没连主机时也必须能用」这条**仍然成立**:它还是「清除本地数据」的唯一入口。
  */
 
 const THEMES: { id: ThemePref; label: string; desc: string }[] = [
@@ -49,13 +43,10 @@ const TEXTS: { id: TextSize; label: string; desc: string }[] = [
 export default function Settings() {
   const c = useC()
   const { pref, setPref, text, setText } = useTheme()
-  const { hosts, activeHost, state, selectHost, forgetAll } = useConn()
+  const { forgetAll } = useConn()
   const [themeSheet, setThemeSheet] = useState(false)
   const [textSheet, setTextSheet] = useState(false)
   const [wipeErr, setWipeErr] = useState<string | null>(null)
-
-  const d = describeHostState(state)
-  const others = hosts.filter((h) => h.id !== activeHost?.id)
 
   const clear = () => {
     const go = async () => {
@@ -91,83 +82,10 @@ export default function Settings() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
-        <TopTitle title="设置" sub="主机跟着那台电脑,外观跟着这台手机" />
+        <TopTitle title="设置" sub="外观和通知跟着这台手机" />
       </TopBar>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 44 }}>
-        <Sec>主机</Sec>
-        <List>
-          {activeHost ? (
-            // ★★这一行**可点**,点进去是这台主机的配置(`app/host.tsx`:地址、令牌、对面版本、方法数)。
-            //  在这之前它是一行死的文字,而它长得和这一屏其他每一行可点的东西一模一样 ——
-            //  于是它是全屏唯一一个「看着能点、点了没反应」的地方。
-            //  ★「断开」那颗键也一并挪进去了:它和这一行挤在一起的时候,想点进详情的手指
-            //  正好落在断开上,而那一下的后果是整屏数据消失。现在这一行只做一件事 —— 进去。
-            <Row onPress={() => router.push('/host')}>
-              <HostIcon icon={activeHost.icon} />
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
-                  {activeHost.label}
-                </T>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
-                  <LiveDot tone={d.tone === 'idle' ? 'off' : d.tone} />
-                  <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, flexShrink: 1 }}>
-                    {/* 连上了报地址和对面版本;没连上就报**为什么**。★和主机屏同一份实现。 */}
-                    {hostSubtitle(activeHost.url, state, true)}
-                  </T>
-                </View>
-              </View>
-              <T style={{ fontSize: 16, color: c.faint }}>›</T>
-            </Row>
-          ) : (
-            <Row onPress={() => router.push('/add-host')}>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <T style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>还没连主机</T>
-                <T style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>
-                  在电脑上跑起 daemon,把它打印的地址填进来
-                </T>
-              </View>
-              <T style={{ fontSize: 16, color: c.faint }}>›</T>
-            </Row>
-          )}
-        </List>
-
-        {/* ★其他主机**不另起一个 `<Sec>`**:它们和上面那台是同一类东西(主机),
-            分一个头出来会让人以为「当前主机」和「其他主机」是两件要分别去设的事。
-            这些行接着上面那张卡往下排,靠 LiveDot 和副行自己区分当前和其他。 */}
-        {others.length > 0 ? (
-          <>
-            <List>
-              {others.map((h) => (
-                // 点即切。★不弹确认:切主机是可逆的(再点回来就行),而多一步确认会让
-                //  「我到底连的哪台」这件事更难当场试出来。
-                <Row key={h.id} onPress={() => void selectHost(h.id)}>
-                  <HostIcon icon={h.icon} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
-                      {h.label}
-                    </T>
-                    <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
-                      {hostSubtitle(h.url, null, false)}
-                    </T>
-                  </View>
-                  <T style={{ fontSize: 16, color: c.faint }}>›</T>
-                </Row>
-              ))}
-            </List>
-          </>
-        ) : null}
-
-        <View style={{ height: 12 }} />
-        <List>
-          <Btn kind="ghost" block onPress={() => router.push('/add-host')}>
-            ＋ 添加主机
-          </Btn>
-          <Btn kind="ghost" block onPress={() => router.push('/hosts')}>
-            管理主机
-          </Btn>
-        </List>
-
         {/* ★★归档的入口**自己一组**。它原来贴在「添加主机 / 管理主机」下面,和它们排成一列 ——
             读起来就是「主机的第三件事」,而归档的是**工作区**。这一屏的分组头是全屏唯一的
             结构信号,拿它把一件东西归到不对的类里,比不分组更糟:人会照着那个头去推断,
@@ -203,8 +121,8 @@ export default function Settings() {
              那条数量约束已经作废,见文件顶上的注释。) */}
         <Note>想说话就说 —— 系统键盘上那颗 🎤 在任何输入框里都能用,不用切到别的 app。</Note>
 
-        {/* ★★「关于」是**一行,点进去是一屏**(`app/about.tsx`)—— 和上面主机那一行推 `/host`
-            同一条路数。它原来是这儿的一组内联行:手机端版本 / 主机版本 / 方法数,三行死数据
+        {/* ★★「关于」是**一行,点进去是一屏**(`app/about.tsx`)—— 和「主机」tab 里那一行推
+            `/host` 同一条路数。它原来是这儿的一组内联行:手机端版本 / 主机版本 / 方法数,三行死数据
             夹在「外观」和「这台手机」这两组**能改的东西**中间。分组头是这一屏唯一的结构信号,
             这么摆等于说「这三样也是设置」,可它们一个都点不动。
             ★这一行**不在这儿顺手报版本号**:报了就等于那一屏白开(人看一眼就走),

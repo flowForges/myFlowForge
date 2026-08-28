@@ -1,14 +1,14 @@
 import { Alert, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
-import { goBack } from '../src/nav'
-import { useC } from '../src/theme/theme'
-import { Btn, Empty, IconBtn, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
-import { useConn } from '../src/net/conn'
-import { type MobileHost } from '../src/net/hosts'
-import { useStore } from '../src/data/store'
+import { goBack } from '../../src/nav'
+import { useC } from '../../src/theme/theme'
+import { Btn, Empty, IconBtn, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
+import { useConn } from '../../src/net/conn'
+import { type MobileHost } from '../../src/net/hosts'
+import { useStore } from '../../src/data/store'
 // 一句人话的连接状态。★这一份和设置屏共用同一个实现,别在任何一边抄第二遍 —— 见该文件注释。
-import { describeHostState, hostSubtitle } from '../src/net/hostStatusText'
-import { HostIcon } from '../src/ui/HostIcon'
+import { describeHostState, hostSubtitle } from '../../src/net/hostStatusText'
+import { HostIcon } from '../../src/ui/HostIcon'
 
 export default function Hosts() {
   const c = useC()
