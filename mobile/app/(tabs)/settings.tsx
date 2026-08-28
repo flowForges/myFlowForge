@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import { Alert, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
-import { goBack } from '../../src/nav'
 import { useC, useTheme } from '../../src/theme/theme'
-import { Btn, IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
+import { Btn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
 import { Sheet } from '../../src/ui/Sheet'
 import { useConn } from '../../src/net/conn'
 import { clearLocalData } from '../../src/data/localData'
@@ -81,7 +80,9 @@ export default function Settings() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
+      {/* ★2026-08-29:没有 `‹` 了 —— 这一屏现在是底部 tab 的一格,不是被推进来的次级屏。
+          tab 没有「上一层」,留着箭头会变成一颗「点了会跳到别的 tab」的假返回键。 */}
+      <TopBar>
         <TopTitle title="设置" sub="外观和通知跟着这台手机" />
       </TopBar>
 

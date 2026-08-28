@@ -49,7 +49,9 @@ await p.waitFor(`!!document.querySelector('input[placeholder*="192.168"]')`, 150
 await p.typeInto('input[placeholder*="192.168"]', '127.0.0.1:6813')
 await p.clickText('保存并连接')
 await p.waitFor(`document.body.innerText.includes('已配对')`, 25000)
-await p.clickText('‹')
+// ★2026-08-29:保存完落在【主机】tab,不再是被推进来的次级屏 —— 没有 `‹` 了(tab 没有
+//  「上一层」)。回会话列表现在是切 tab,不是退栈。
+await p.clickText('会话')
 await p.waitFor(visible('alpha'), 20000)
 
 // ── ① 树 ────────────────────────────────────────────────────────────────

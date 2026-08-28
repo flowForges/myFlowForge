@@ -48,7 +48,8 @@ await p.waitFor(`!!document.querySelector('input[placeholder*="192.168"]')`, 150
 await p.typeInto('input[placeholder*="192.168"]', '127.0.0.1:6806')
 await p.clickText('保存并连接')
 await p.waitFor(`document.body.innerText.includes('已配对')`, 25000)
-await p.clickText('‹')
+// ★2026-08-29:主机屏是底部 tab 的一格,没有 `‹` 了 —— 回会话列表是切 tab。
+await p.clickText('会话')
 await p.waitFor(visible('alpha'), 20000)
 
 // ── ① 门就在你正看的这个区里 → 「看看」必须在 ─────────────────────────────

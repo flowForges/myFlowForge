@@ -54,7 +54,8 @@ await p.waitFor(`!!document.querySelector('input[placeholder*="192.168"]')`, 150
 await p.typeInto('input[placeholder*="192.168"]', '127.0.0.1:6805')
 await p.clickText('保存并连接')
 await p.waitFor(`document.body.innerText.includes('已配对')`, 25000)
-await p.clickText('‹')
+// ★2026-08-29:主机屏是底部 tab 的一格,没有 `‹` 了 —— 回会话列表是切 tab。
+await p.clickText('会话')
 /**
  * ★分组头带 `textTransform: 'uppercase'`,而 **`innerText` 返回的是渲染后的文本** ——
  *  屏幕上是 `ALPHA`,`innerText.includes('alpha')` 于是永远为假(这条一开始就把我坑了 20 秒)。

@@ -1,8 +1,7 @@
 import { Alert, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
-import { goBack } from '../../src/nav'
 import { useC } from '../../src/theme/theme'
-import { Btn, Empty, IconBtn, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
+import { Btn, Empty, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
 import { useConn } from '../../src/net/conn'
 import { type MobileHost } from '../../src/net/hosts'
 import { useStore } from '../../src/data/store'
@@ -33,7 +32,9 @@ export default function Hosts() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar left={<IconBtn onPress={() => (goBack())}>‹</IconBtn>}>
+      {/* ★2026-08-29:没有 `‹` 了 —— 这一屏现在是底部 tab 的一格,不是被推进来的次级屏。
+          tab 没有「上一层」,留着箭头会变成一颗「点了会跳到别的 tab」的假返回键。 */}
+      <TopBar>
         <TopTitle title="主机" sub="同一时间只连一台" />
       </TopBar>
 
