@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import { Alert, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../src/main/ipc/channels'
 import type { SessionsFile, WorkspaceMeta } from '../../src/shared/types'
 import { fmtRelTime } from '../../src/shared/relTime'
 import { useC } from '../src/theme/theme'
 import { RADIUS } from '../src/theme/tokens'
-import { Btn, Empty, IconBtn, List, LiveDot, Row, T, TopBar } from '../src/ui/kit'
+import { Btn, Empty, IconBtn, List, LiveDot, T, TopBar } from '../src/ui/kit'
 import { Sheet } from '../src/ui/Sheet'
 import { JumpBubble } from '../src/ui/JumpBubble'
 import { useConn } from '../src/net/conn'
@@ -20,8 +20,9 @@ import { tierOf, countTiers, topTier, type SessionTier, type TierCounts } from '
 import { runningKey } from '../src/data/runningMerge'
 import { StatusBadge } from '../src/ui/StatusBadge'
 import { WsRow } from '../src/ui/WsRow'
+import { SessionRow, ActionRow } from '../src/ui/SessionRow'
+import { Icon } from '../src/ui/Icon'
 import { NeedsYou, type NeedItem } from '../src/ui/NeedsYou'
-import { TreeConnector } from '../src/ui/TreeConnector'
 import { indentFor } from '../src/ui/tree'
 
 /**
@@ -546,30 +547,26 @@ export default function Home() {
                     而 `.sec` 在原型里永远只是「一行标签 + 底下一串卡片」里的那行标签。
                     加了折叠之后它成了**可点的主体**、还默认收起,于是整屏只剩十几行浅灰小字。
                     `Sec` 本身没动 —— 另外 6 个屏还在拿它当真正的分节标签用。 */}
-                <View style={{ paddingHorizontal: 12 }}>
-                  <WsRow
-                    name={g.ws.name}
-                    note={branches.get(g.ws.path)}
-                    meta={`${g.ws.projectCount} 个项目`}
-                    expanded={open}
-                    gate={wsGates.length > 0}
-                    first={gi === 0}
-                    last={gi === ordered.length - 1 && !open}
-                    onPress={() => toggleWs(g.ws.path)}
-                    onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
-                    right={(() => {
-                      // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
-                      // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
-                      const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
-                      // ★展开时会话自己带徽章了,分组头上再来一个是重复(电脑端 Sidebar.tsx:248 同一条规矩)。
-                      //  但**门那一档例外**:门是「代理停在那儿等你」,收起展开都该看得见。
-                      if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
-                      if (!open && wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
-                      if (!open && wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
-                      return null
-                    })()}
-                  />
-                </View>
+                <WsRow
+                  name={g.ws.name}
+                  note={branches.get(g.ws.path)}
+                  meta={`${g.ws.projectCount} 个项目`}
+                  expanded={open}
+                  gate={wsGates.length > 0}
+                  onPress={() => toggleWs(g.ws.path)}
+                  onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
+                  right={(() => {
+                    // `wsCounts` 是**这一个工作区**的;组件级还有个全屏范围的 `counts`(气泡用的)。
+                    // 名字必须分开 —— 同名遮蔽两个都对的时候没人看得出来,哪天错用了也一样没人看得出来。
+                    const wsCounts = countTiers(g.sessions.map((s) => tierFor(g.ws.path, s.id)))
+                    // ★展开时会话自己带徽章了,分组头上再来一个是重复(电脑端 Sidebar.tsx:248 同一条规矩)。
+                    //  但**门那一档例外**:门是「代理停在那儿等你」,收起展开都该看得见。
+                    if (wsCounts.gate) return <StatusBadge tier="gate" count={wsCounts.gate} />
+                    if (!open && wsCounts.running) return <StatusBadge tier="running" count={wsCounts.running} />
+                    if (!open && wsCounts.unread) return <StatusBadge tier="unread" count={wsCounts.unread} />
+                    return null
+                  })()}
+                />
                 {/* ★★展开区**只有一个分支**了。原来这里是「没会话 → 一个不带 onLayout 的空态盒子 /
                     有会话 → 抽屉」两条,于是空工作区那一档根本不写 `listY`,而现在它里面也有了一颗
                     可点的东西(「＋ 新建会话」)。合成一条之后,只要展开,第②段 y 就一定量得到 ——
@@ -579,52 +576,21 @@ export default function Home() {
                   // (第①段,groupY)的偏移,记进 listY[wsPath];第③段是每行外面的 View(rowY)。
                   // 三段缺一个,absY() 就返回 undefined —— 不会报错,只会让气泡悄悄滚到错的位置。
                   //
-                  // ★展开区做成「抽屉」:比表格底一档的底色 + 左右描边,接着上面那一行往下长 ——
-                  //  不这么做的话,整齐的分组表中间会插进一段带间距的浮卡,像两个设计打架。
-                  // ★★背景和描边可以加在这一层(它们不改变这一层自己的 y),但**内边距只能加在
-                  //  下面的 `<List>` 上**:给这一层加 padding 会把 List 整体推下去,而 rowY 是相对
-                  //  List 量的、listY 是这一层自己的 y —— 那段 padding 没有任何人算回去,
-                  //  症状是气泡稳定地滚偏一截,且测不出来(布局在 node/jsdom 里量不了)。
-                  // 没用 measureLayout 等原生测量 API:新架构(Fabric)下的行为这个环境没法验证。
-                  <View
-                    style={{
-                      marginHorizontal: 12,
-                      backgroundColor: c.bg2,
-                      borderLeftWidth: StyleSheet.hairlineWidth,
-                      borderRightWidth: StyleSheet.hairlineWidth,
-                      borderBottomWidth: gi === ordered.length - 1 ? StyleSheet.hairlineWidth : 0,
-                      borderColor: c.border,
-                      borderBottomLeftRadius: gi === ordered.length - 1 ? RADIUS.panel : 0,
-                      borderBottomRightRadius: gi === ordered.length - 1 ? RADIUS.panel : 0,
-                    }}
-                    onLayout={(e) => { listY.current[g.ws.path] = e.nativeEvent.layout.y }}
-                  >
-                    {/* ★★展开后那几条会话原来是**飘着**的:一段缩进的卡片,和上面那一行工作区之间
-                        除了底色深一档之外没有任何东西把它们连起来,读起来像另一份列表插了进来。
-                        第一版照电脑端左侧栏抄了 `.ws-sess-list` 那条规矩(`shell.css`:
-                        `margin: 2px 0 2px 17px; padding-left: 9px; border-left: 1px solid var(--border)`)——
-                        **一条画在容器上的竖线**。真机上用户当场否了:「这是一根竖线,应该跟会话有连线,
-                        现在太low了」。他是对的:那条线只说了「这几条是一伙的」,没说**每一条**从属于
-                        上面那一行,而且没有终点 —— 一路划到抽屉底,末尾悬着。
-                        ★★现在是一棵真的树:主干 + 每一条会话一个 `├─`、最后一条 `└─` 收住。
-                        树画在**每一行自己**头上(`TreeConnector`),容器这一层不再有 `borderLeft`;
-                        主干的绝对位置没变(`marginLeft: 10` + 连接列里的 `TREE.trunk: 7` = 老那条线的 17)。
-                        ★★这一层只准动**横向**的量:`marginLeft` / `paddingLeft` / `paddingRight` 都不改
-                        List 相对上面那层裸 View 的 y。纵向 margin 一加就把定位气泡的三段 y 拆散了
-                        (见 kit.tsx 里 `List` 上的注释)。
-                        ★`gap: 0` + `paddingTop: 0` 是树要求的:行与行之间那道缝由**每一行自己**的
-                        `TreeGap` 撑出来(顺便把主干接上),第一行的那一段也必须在,主干才是从抽屉上沿
-                        紧贴着工作区那一行长下来的。缝交给 List 的 gap 去撑的话,主干每隔一张卡就断一次。 */}
-                    <List
-                      style={{
-                        marginLeft: 10,
-                        paddingLeft: 0,
-                        paddingRight: 10,
-                        paddingTop: 0,
-                        paddingBottom: 10,
-                        gap: 0,
-                      }}
-                    >
+                  // ★★这一层原来有 bg2 底色 + 左右描边 + 12pt 外边距,把抽屉画成「一个盒子」。
+                  //  全出血之后**全部去掉**:从属关系原来被表达了四遍(缩进 + 树 + 换底色 + 描边),
+                  //  现在只留前两遍。多出来的两遍是噪音,而且那块 bg2 正是用户说的
+                  //  「工作区是明显的白色,显得这是一个页面」里那层多余的分层。
+                  // ★★这一层**永远不许加 padding**:给它加 padding 会把 List 整体推下去,
+                  //  而 rowY 是相对 List 量的、listY 是这一层自己的 y —— 那段 padding 没有任何人
+                  //  算回去,症状是气泡稳定地滚偏一截,且测不出来。
+                  <View onLayout={(e) => { listY.current[g.ws.path] = e.nativeEvent.layout.y }}>
+                    {/* ★`List` 自带 `paddingHorizontal: 12` 和 `gap: 8` —— 全出血要把这两样都盖掉。
+                        gap 归零是关键:行与行之间**不留缝**,连接列才首尾相接、主干才连续
+                        (原来那道缝靠一个叫 `TreeGap` 的小组件去补,那个补丁已经随 rowGap 一起删了)。
+                        ★`paddingTop` 必须是 0:它会把所有行整体推下去,而 rowY 是相对 List 量的 ——
+                        推下去的那一段没有任何人算回去。`paddingBottom` 不影响任何一行的 y,可以有。
+                        ★这一层仍然**只准动横向的量**加上 paddingBottom,别加 marginTop/marginBottom。 */}
+                    <List style={{ paddingHorizontal: 0, paddingTop: 0, paddingBottom: 0, gap: 0 }}>
                       {sessions.map((s, si) => {
                         const sg = wsGates.filter((x) => x.sessionId === s.id)
                         return (
@@ -633,36 +599,20 @@ export default function Home() {
                           // (groupY)。三段缺一个,absY() 就返回 undefined —— 不会报错,只会让
                           // 气泡悄悄滚到错的位置。没用 measureLayout 等原生测量 API:新架构
                           // (Fabric)下的行为这个环境没法验证,onLayout 在新旧架构都确定支持。
-                          //
-                          // ★★加树的时候**没有动这条链条**:量的还是这一层、还是相对 List、还是同一个
-                          //  `rowY[key]`。树是**长在这一层里面**的(上面一段 TreeGap + 下面一横排
-                          //  连接列和卡片),不是在这一层**外面**又套了一层 —— 外面套一层的话,
-                          //  三段 y 就少算了新那一层的偏移,症状是气泡稳定地滚偏一截,
-                          //  而且一条测试都不会红(布局在 node/jsdom 里量不了)。
-                          // ★这一层自己**仍然没有纵向 margin/padding**:行与行之间那道缝是
-                          //  TreeGap 这个**孩子**撑出来的,它算在本层的高度里,不改本层的 y。
                           <View
                             key={s.id}
                             onLayout={(e) => { rowY.current[`${g.ws.path}\0${s.id}`] = e.nativeEvent.layout.y }}
                           >
-                            {/* ★横排:左边是树枝,右边是卡片。`alignItems: 'stretch'`(默认值,
-                                写出来是因为它承重)让连接列长到和卡片一样高 —— 横杠的 `50%`
-                                因此正好落在这一行的垂直中点,不需要知道这一行有多高。 */}
-                            <View style={{ flexDirection: 'row', alignItems: 'stretch' }}>
-                              <TreeConnector index={si} total={sessions.length} />
-                            <Row
-                              // 卡片吃掉连接列之外的全部宽度。
-                              // ★`Row` 自己写死了 `width: '100%'`(它本来是独占一行的),这里**不用**去覆盖它:
-                              //  `flex: 1` 在 RN 里同时把 flexBasis 设成 0,主轴尺寸按 basis 算,width 不再参与。
-                              //  (试过加 `width: 'auto'`,浏览器里量下来一模一样 —— 变异验证过,
-                              //   加不加都不影响任何一条断言,所以不留这行看着像在防什么的死代码。)
-                              style={{ flex: 1, minWidth: 0 }}
+                            {/* ★★这一层(带 onLayout 的 wrapper)是定位气泡三段 y 的第③段。
+                                `SessionRow` 长在它**里面**,不是在它**外面**又套了一层 ——
+                                外面套一层的话三段 y 就少算了新那一层的偏移,症状是气泡稳定地
+                                滚偏一截,而且一条测试都不会红。Task 8 往里塞左滑时也是同一条规矩。 */}
+                            <SessionRow
+                              index={si}
+                              total={sessions.length}
                               gate={sg.length > 0}
                               onPress={() => {
                                 select({ wsPath: g.ws.path, sessionId: s.id })
-                                // 进过的区保持展开 —— 从对话屏退回来时它该还开着。
-                                // (点得到这一行说明它此刻就是展开的,ensureWs 在这种情况下
-                                //  返回同一个引用、连存盘都跳过,不白费事。)
                                 ensureWs(g.ws.path)
                                 router.push('/chat')
                               }}
@@ -671,28 +621,10 @@ export default function Home() {
                                 <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
                                   {s.title || '新会话'}
                                 </T>
-                                {/* ★第二行只剩**代理**。时间已经挪到右边(见下面那个 `<T>`)。
-                                    这里曾经还并排挂一个 `<Pill tone="gate">待确认 N</Pill>`,和右边的
-                                    StatusBadge 凑成一行两个琥珀胶囊、还各说各的话(「待确认」是四档合并
-                                    **之前**的旧说法,见设计文档 §4.2/§4.3;§4.3 的表定的是一行一个徽章)。
-                                    「这条在等你」由整行的琥珀底 + 右边那一个徽章负责,别再加第二个。 */}
                                 <T mono style={{ fontSize: 11.5, color: c.muted, marginTop: 3 }}>
                                   {(s.agentId ?? '').trim() || (s.mode === 'workflow' ? '工作流' : '对话')}
                                 </T>
                               </View>
-                              {/* ★★时间**在右边**,不在标题底下 —— 又是照电脑端左侧栏抄的
-                                  (`shell.css` 的 `.ws-sess-time`:9.5px 等宽、`--faint`、不换行,
-                                  配上 `flex: 1` 的名字,于是**名字先省略号、时间永远完整**)。
-                                  挂在标题底下的时候它和代理名连成一串灰字,扫一列会话时每一行都要读一遍
-                                  才知道哪条是刚才在跑的;摞成一列之后眼睛只沿着右边扫下去就行。
-                                  ★和电脑端的一处**故意的偏差**:那边是 `flex: 0 0 auto`(时间绝不缩),
-                                  这里给了 `flexShrink: 1` —— 侧栏宽度固定,而这块屏只有 390pt 还要再乘
-                                  「大」字号那一档。挤爆时的让位顺序必须是 名字 → 时间 → **徽章永不让**,
-                                  徽章被顶出屏幕就是「有门却看不见」,那是这一屏存在的理由本身。 */}
-                              {/* 右边这一坨自己包一层,是为了把间距收紧到 7:`Row` 的 gap 是 11,
-                                  时间只有 9.5px 高,隔 11 个点看着像和徽章各归各的。
-                                  ★这一层是**横向**的,不参与定位气泡那条纵向 y 链(链上量的是
-                                  `Row` 外面那个 wrapper,不是它的孩子)。 */}
                               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, flexShrink: 1, minWidth: 0 }}>
                                 <T
                                   mono
@@ -702,10 +634,9 @@ export default function Home() {
                                   {fmtRelTime(s.lastMessageAt ?? s.createdAt, now) || '—'}
                                 </T>
                                 <StatusBadge tier={tierFor(g.ws.path, s.id)} />
-                                <T style={{ fontSize: 15, color: c.faint }}>›</T>
+                                <Icon name="chevron" size={13} color={c.faint} />
                               </View>
-                            </Row>
-                            </View>
+                            </SessionRow>
                           </View>
                         )
                       })}
@@ -719,32 +650,18 @@ export default function Home() {
                       {/* ★★「新建会话」现在**在工作区里面**,不在顶栏。
                           原来是右上角一颗 ＋ → 弹一张单子问「哪个工作区」。而你点开这个抽屉的时候
                           已经**站在**这个工作区里了 —— 那张单子问的是一个你刚刚已经回答过的问题。
-                          ★它必须读起来是**动作**,不是又一条会话:所以是一颗虚线描边的按钮
-                          (`borderStyle: 'dashed'`),不是一张和上面几条一模一样的卡。
-                          虚线这一档是「造一个还不存在的东西」的统一说法 —— 列表最底下那颗
-                          「＋ 新建工作区」用的是同一套,两处一眼看得出是同一类事。
-                          ★不上实心色:原型 d.css 第三条原则钉死了全屏唯一的实底彩色块是门。
-                          ★★**承重的是 ghost 那一档(透明底),不是虚线**:RN 的 `borderStyle: 'dashed'`
-                           在 Android 上一旦有圆角就退回实线,iOS 上在 hairline 宽度下也画不出虚。
-                           所以这里把 `borderWidth` 顶到 1 让 iOS 画得出,同时**不依赖它** ——
-                           虚线画不出来的时候,透明底 + 左对齐的 ＋ 仍然和上面那几张实底的卡分得开。
-                          ★★**它不上树。** 树说的是「这几条从属于上面那个工作区」—— 一个包含关系,
-                           连的是**已经存在**的东西;而这一颗是「造一个还不存在的」。真要接上去,
-                           收尾那个 `└─` 就会落在一颗按钮上,等于说「这个工作区里最后一样东西是个按钮」。
-                           主干由**最后一条会话**收住(`trunkAt`),两件事必须一致。理由在 `tree.ts`。
-                           所以它只是**缩进到和卡片左沿对齐**(`indentFor('aside')`),身上没有任何线。 */}
-                      <View style={{ paddingLeft: ASIDE, paddingTop: 10 }}>
-                        <Btn
-                          kind="ghost"
-                          size="sm"
-                          block
-                          disabled={creating || !online}
-                          onPress={() => void newSession(g.ws.path)}
-                          style={{ borderWidth: 1, borderStyle: 'dashed', justifyContent: 'flex-start' }}
-                        >
-                          ＋ 新建会话
-                        </Btn>
-                      </View>
+                          ★★全出血之后它是一颗 iOS 蓝字动作行(`ActionRow`),不再是虚线描边的
+                          ghost 按钮 —— 那条「造一个还不存在的东西 = 虚线」的规矩已经作废,理由和
+                          「它不上树」的完整说法见 `SessionRow.tsx` 里 `ActionRow` 的 JSDoc。 */}
+                      <ActionRow
+                        icon="add"
+                        deep
+                        last
+                        disabled={creating || !online}
+                        onPress={() => void newSession(g.ws.path)}
+                      >
+                        新建会话
+                      </ActionRow>
                       {/* ★建会话失败时那句话就落在**这个工作区**里,紧挨着刚才按的那颗按钮。
                           原来它在那张单子里;单子没了,而错误还是必须看得见 —— 见 `newSession()`
                           里那段注释:这条路径曾经是彻底无声的。
@@ -761,23 +678,14 @@ export default function Home() {
               </View>
             )
           })}
-          {/* ★★列表的**收尾动作**,不是列表的又一行 —— 所以刻意长得和上面那张分组表不一样:
-              虚线、透明底、和表格之间隔着一整段空白。上面那张表是「已经有的东西」,
-              这一颗是「造一个新的」,它们不该看起来是同一种东西。
+          {/* ★★列表的**收尾动作**,不是列表的又一行。
               ★注意它落在所有工作区分组 View 的**外面**:定位气泡的第①段 y(groupY)量的是
-              每个分组 View 相对滚动内容的偏移,这一颗排在它们后面,不改任何一段 y。 */}
-          <View style={{ paddingHorizontal: 12, paddingTop: 18 }}>
-            <Btn
-              kind="ghost"
-              block
-              onPress={() => router.push('/new-workspace')}
-              // 虚线同上:iOS 要 borderWidth ≥ 1 才画得出,Android 有圆角时会退回实线 ——
-              // 所以承重的是 ghost 的透明底和这一整段留白,虚线只是加分项。
-              style={{ borderWidth: 1, borderStyle: 'dashed' }}
-            >
-              ＋ 新建工作区
-            </Btn>
-          </View>
+              每个分组 View 相对滚动内容的偏移,这一颗排在它们后面,不改任何一段 y。
+              ★★它会在 Task 5 里被删掉(顶栏右上角那颗 ＋ 取代它)—— 这一版先留着,
+              是为了不产生「这一版没法建工作区」的中间状态。 */}
+          <ActionRow icon="add" onPress={() => router.push('/new-workspace')}>
+            新建工作区
+          </ActionRow>
           </>
         )}
         {gates.length > 0 && (

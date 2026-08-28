@@ -1,30 +1,30 @@
 import React from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
 import { MONO, useC } from '../theme/theme'
-import { RADIUS } from '../theme/tokens'
 import { T } from './kit'
+import { Icon } from './Icon'
+import { HOME, separatorInset } from './homeGeom'
 import { tileColor, tileLabel } from './wsTile'
 
 /**
- * 工作区一行。**它是一张分组表里的一行,不是一个小标题。**
+ * 工作区一行。**全出血** —— 贴着屏幕左右边缘,没有边距、没有圆角、没有左右描边。
  *
- * ★★为什么不用 `Sec`:`Sec`(原型 `d.css` 的 `.sec`)是 10.5px 的浅灰等宽小标签,
- *  原型里它永远只是「一行标签 + 底下一串 `.row` 卡片」里的那行标签 —— **从属标签,自己不可点**。
- *  二期给工作区加折叠时把这个标签变成了可点的主体、还默认收起,于是整屏只剩十几行浅灰小字。
- *  用户在真机上的原话是「非常简陋,非常丑」,根因不是配色,是**把标签当成了主体**。
- *  `Sec` 本身没动 —— 另外 6 个屏还在拿它当真正的分节标签用。
+ * ★★2026-08-28 从「卡片」改成「全出血行」的理由,是用户在真机上的原话:
+ *  「总感觉 app 是一个网页的感觉……顶部有顶栏,底部又是空的,工作区列表外包括顶栏是一样的颜色,
+ *   而工作区是明显的白色,显得这是一个页面」。核实下来是字面事实:页面底 #f5f7f9、
+ *  这一行 #ffffff,再加 12pt 边距和 13pt 圆角 —— 一块白板浮在灰框里,那是 web 的分层语言。
+ *  微信的会话列表是全出血的:行的白就是这一屏的白。
  *
- * ★版式是拿真数据渲染出五版让用户选的结果(V5 顶部「需要你」+ V4 分组表 + V3 色块):
- *  整组工作区收在**一个**圆角容器里、行与行之间用分隔线,而不是十张各自飘着的卡 ——
- *  「不素」靠的是结构,不是上色。原型第三条原则写死了「屏幕上唯一的实底彩色块是门」,
- *  色块是用户知情后**特批**的唯一例外,而且只承载身份(见 `wsTile.ts`),不承载状态。
+ * ★所以 `first` / `last` 两个 prop 删掉了:它们是用来画圆角、把一组行拼成「一个容器」的,
+ *  而全出血之后**这一屏本身**就是那个容器,不需要再拼一个出来。
  *
- * ★圆角靠 `first`/`last` 两个 prop 画在**行**上,而不是给整组套一个 `overflow:hidden` 的容器 ——
- *  容器会在渲染链条里多插一层,而 `app/index.tsx` 的定位气泡靠三段 `onLayout` 的 y 相加定位,
- *  多一层就得多测一段(那个文件里写着「重新嵌套要记得改三处」)。视觉一样,测量链条不动。
+ * ★★分隔线**绝对定位在行的底部**,不是当兄弟节点插在两行之间 —— 见 homeGeom.ts 的
+ *  `separatorInset` 注释:插在中间会在下一层的树主干上每行切一个口子。这里虽然没有树,
+ *  但两处必须用同一个做法,否则改一处忘一处。绝对定位还有一个好处:它不占纵向空间,
+ *  不会去动首页那三段 onLayout 的 y。
  */
 export function WsRow({
-  name, note, meta, expanded, gate, first, last, right, onPress, onLongPress,
+  name, note, meta, expanded, gate, right, onPress, onLongPress,
 }: {
   name: string
   /** 当前分支。★**不大写** —— git 的 ref 区分大小写,`FEAT/RMH-DAEMON` 是个不存在的分支名。 */
@@ -32,13 +32,11 @@ export function WsRow({
   /** 副行右半段:`N 个项目` 之类。 */
   meta?: string
   expanded: boolean
-  /** 这个工作区里有门在等 —— 整行染琥珀。收起时也必须一眼看见,那是这一屏存在的理由。 */
+  /** 这个工作区里有门在等 —— 整行染琥珀。★全出血之后它横贯整屏,比原来更抢眼,这是有意的。 */
   gate?: boolean
-  first?: boolean
-  last?: boolean
   right?: React.ReactNode
   onPress: () => void
-  /** 长按呼出操作单(置顶 / 归档)。手机上没有右键。 */
+  /** 长按呼出操作单(置顶 / 归档 / 重命名)。★左滑是主入口,长按是备份 + 无障碍路径,两条都留。 */
   onLongPress?: () => void
 }) {
   const c = useC()
@@ -51,17 +49,7 @@ export function WsRow({
       delayLongPress={400}
       style={({ pressed }) => [
         st.row,
-        {
-          backgroundColor: gate ? c.gateRowBg : c.surface,
-          borderColor: c.border,
-          // 只有第一行画上边框、最后一行画下边框,中间靠各自的上边框当分隔线 —— 拼出「一个容器」。
-          borderTopWidth: first ? StyleSheet.hairlineWidth : StyleSheet.hairlineWidth,
-          borderBottomWidth: last ? StyleSheet.hairlineWidth : 0,
-          borderTopLeftRadius: first ? RADIUS.panel : 0,
-          borderTopRightRadius: first ? RADIUS.panel : 0,
-          borderBottomLeftRadius: last ? RADIUS.panel : 0,
-          borderBottomRightRadius: last ? RADIUS.panel : 0,
-        },
+        { backgroundColor: gate ? c.gateRowBg : c.surface },
         pressed && { backgroundColor: c.surface2 },
       ]}
     >
@@ -84,7 +72,10 @@ export function WsRow({
       {/* ★徽章绝不让位:标题和副行都 numberOfLines={1} + minWidth:0 先缩,
           否则一个长区名(再叠上「大」字号)会把「❓ 等你答话」整个顶出屏幕。 */}
       {right}
-      <T style={{ fontSize: 11, color: c.faint }}>{expanded ? '▾' : '›'}</T>
+      <Icon name={expanded ? 'chevronDown' : 'chevron'} size={13} color={c.faint} />
+      {/* ★绝对定位,零布局影响。left 用 separatorInset('ws') 而不是写死 16 —— 那个数和
+          会话行那一档是**一对**,改一处必须一起改,写死就等于把它们拆开了。 */}
+      <View style={[st.sep, { left: separatorInset('ws'), backgroundColor: c.border }]} />
     </Pressable>
   )
 }
@@ -94,11 +85,10 @@ const st = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 11,
-    minHeight: 58,
-    paddingVertical: 9,
-    paddingHorizontal: 13,
-    borderLeftWidth: StyleSheet.hairlineWidth,
-    borderRightWidth: StyleSheet.hairlineWidth,
+    minHeight: HOME.minRowH,
+    paddingVertical: 12,
+    paddingHorizontal: HOME.rowInsetX,
   },
   tile: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  sep: { position: 'absolute', right: 0, bottom: 0, height: StyleSheet.hairlineWidth },
 })

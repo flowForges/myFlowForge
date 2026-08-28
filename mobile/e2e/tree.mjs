@@ -106,8 +106,8 @@ ok('★★主干是连的,不是一截一截的(卡片之间那道缝也补上�
 
 const trunkTop = Math.min(...v.map((s) => s.top))
 const trunkBottom = Math.max(...v.map((s) => s.bottom))
-ok('★主干从抽屉上沿(第一张卡再往上 rowGap)长下来,不是从第一张卡才开始',
-  near(trunkTop, c1.top - 8, 1.5), `主干顶 ${trunkTop.toFixed(1)} / 第一张卡顶 ${c1.top.toFixed(1)}`)
+ok('★主干从第一条会话的上沿长下来(行齐平了,不再有 rowGap 那 8px)',
+  near(trunkTop, c1.top, 1.5), `主干顶 ${trunkTop.toFixed(1)} / 第一张卡顶 ${c1.top.toFixed(1)}`)
 
 const last = c1.bottom > c2.bottom ? c1 : c2
 const first = last === c1 ? c2 : c1
@@ -125,21 +125,21 @@ if (hFirst && hLast) {
     `气口 ${(first.left - hFirst.right).toFixed(1)} / ${(last.left - hLast.right).toFixed(1)}`)
 }
 
-// 卡片吃掉连接列之外的全部宽度,而且没有溢出屏幕。
-// ★变异验证:去掉 `Row` 上的 `flex: 1` → 这条红(卡片缩成内容宽)。
-//  而 `width: 'auto'` 加不加**都不影响**这条 —— `flex:1` 已经把 flexBasis 设成 0 了,
-//  所以那行没留(留着会像是在防一个根本不存在的东西)。
-// ★不能只判「小于 390」:去掉 flex:1 之后卡片按 `width:100%` 算,右沿是 389 —— 照样小于 390,
-//  这条会假绿(实测过)。真正的界线是**抽屉自己的右内边距**:卡片右沿必须停在 372 之前。
-ok('★★卡片撑满连接列右边的整条宽度,又没顶穿抽屉的右内边距',
-  near(c1.right, c2.right, 0.6) && c1.right > 340 && c1.right < 372,
+// ★全出血:内容区从连接列右侧(44)一直铺到屏幕右沿(390)。
+//  旧断言是 `> 340 && < 372` —— 那是「抽屉有 12pt 外边距 + List 有 10pt 右内边距」时代的界线。
+//  ★仍然不能只判「小于等于 390」:去掉 `flex: 1` 之后盒子会缩成内容宽,那也小于 390(实测假绿过)。
+//  真正的界线是**必须真的顶到 390**。
+ok('★★内容区从连接列右侧一直铺到屏幕右沿',
+  near(c1.right, c2.right, 0.6) && near(c1.right, 390, 1.2),
   `右沿 ${c1.right.toFixed(1)} / ${c2.right.toFixed(1)}`)
 
 // ＋ 新建会话:和卡片左沿对齐,但**不在树上**。
-// ★往上走到那颗**按钮**本身(`btnSm` 的 minHeight 是 36)。停在文字那一层的话量到的是
-//  文字左沿 = 按钮左沿 + 它自己的 12px 内边距,于是「对齐」这条断言永远差 13px。
+// ★`ActionRow` 里的 ＋ 是一个独立的 `<Icon>` 元素,不再和文字同属一个 `<T>`,所以按
+//  `textContent === '＋ 新建会话'` 去找会一个元素都找不到。改成只匹配 `新建会话`。
+// ★往上走到高度 ≥32 的祖先,量到的是 `ActionRow` 的 `actionBody`(`minHeight: 46`,
+//  左沿正好是 44)—— 这就是为什么那 44pt 必须是一个真的空 `View` 而不是 `paddingLeft`。
 const plus = JSON.parse(await p.eval(`(() => {
-  const t=[...document.querySelectorAll('*')].filter(x=>x.textContent&&x.textContent.trim()==='＋ 新建会话'&&x.getBoundingClientRect().width>0).pop()
+  const t=[...document.querySelectorAll('*')].filter(x=>x.textContent&&x.textContent.trim()==='新建会话'&&x.getBoundingClientRect().width>0).pop()
   if(!t) return 'null'
   let e=t
   while(e && e.getBoundingClientRect().height < 32) e=e.parentElement
