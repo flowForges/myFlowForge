@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { describeHostState, hostSubtitle } from './hostStatusText'
+import { describeHostState, hostBannerDetail, hostBannerTitle, hostSubtitle } from './hostStatusText'
 
 describe('describeHostState', () => {
   it('★没连上的三种状态语气必须是 off/idle —— 拿缓存假装在线是本轮最贵的一类 bug', () => {
@@ -52,5 +52,48 @@ describe('hostSubtitle', () => {
   it('ws:// 和 wss:// 都要剥掉,只留 主机:端口', () => {
     expect(hostSubtitle('wss://box:6789', null, false)).toBe('box:6789')
     expect(hostSubtitle('ws://box:6789', null, false)).toBe('box:6789')
+  })
+})
+
+describe('顶栏那条主机横幅', () => {
+  const READY = { status: 'ready', version: '1.2.0', methods: new Set<string>() } as const
+  const URL = 'ws://192.168.1.7:7777'
+
+  it('连上了就一句人话,跟微信「Mac 微信已登录」一个调调', () => {
+    expect(hostBannerTitle('MacBook Pro', READY)).toBe('MacBook Pro 已连接')
+  })
+
+  it('★★连上了**不摆**地址和版本 —— 那串 mono 字是这条横幅存在的反面', () => {
+    // 横幅的全部意义就是「正常的时候只说一句人话」。返回一个字符串(哪怕是空串)都会让
+    // 调用方渲染出一个高度不为 0 的空行,顶栏白高一截 —— 必须是 null。
+    expect(hostBannerDetail(URL, READY)).toBeNull()
+  })
+
+  it('★连不上时把**原因**抖出来,而且带上地址', () => {
+    const d = hostBannerDetail(URL, { status: 'failed', error: '网络不可达' })
+    expect(d).toContain('192.168.1.7:7777')
+    expect(d).toContain('网络不可达')
+    expect(d).not.toContain('ws://')   // 协议前缀是噪音,和 hostSubtitle 一个口径
+  })
+
+  it('★退避重连时也要说原因 —— 那时候人最想知道为什么', () => {
+    const d = hostBannerDetail(URL, { status: 'retrying', attempt: 1, nextInMs: 3000, error: '连接被拒绝' })
+    expect(d).toContain('连接被拒绝')
+  })
+
+  it('连接中:标题说连接中,细节只报地址(还没有原因可说)', () => {
+    expect(hostBannerTitle('mini', { status: 'connecting', attempt: 1 })).toBe('mini 连接中…')
+    expect(hostBannerDetail(URL, { status: 'connecting', attempt: 1 })).toBe('192.168.1.7:7777')
+  })
+
+  it('压根没选主机', () => {
+    expect(hostBannerTitle('', null)).toBe('未选主机')
+    expect(hostBannerDetail(URL, null)).toBe('192.168.1.7:7777')
+  })
+
+  it('★标题永远带得上主机名 —— 横幅回答的问题就是「我在遥控哪台电脑」', () => {
+    for (const s of [READY, { status: 'connecting', attempt: 2 }, { status: 'failed', error: 'x' }] as const) {
+      expect(hostBannerTitle('阿土伯的电脑', s)).toContain('阿土伯的电脑')
+    }
   })
 })

@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Platform, Pressable, ScrollView, View } from 'react-native'
+import { Alert, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../../src/main/ipc/channels'
 import type { SessionsFile, WorkspaceMeta } from '../../../src/shared/types'
 import { fmtRelTime } from '../../../src/shared/relTime'
 import { useC } from '../../src/theme/theme'
 import { RADIUS } from '../../src/theme/tokens'
-import { Btn, Empty, IconBtn, List, LiveDot, T, TopBar } from '../../src/ui/kit'
+import { Btn, Empty, IconBtn, List, T, TopBar } from '../../src/ui/kit'
 import { Sheet } from '../../src/ui/Sheet'
 import { JumpBubble } from '../../src/ui/JumpBubble'
 import { useConn } from '../../src/net/conn'
 import { hostPickRows } from '../../src/net/hostPicker'
-import { hostSubtitle } from '../../src/net/hostStatusText'
 import { HostSwitchSheet } from '../../src/ui/HostSwitchSheet'
+import { HostBanner } from '../../src/ui/HostBanner'
+import { ROUTES } from '../../src/nav/routes'
 import { useStore, type WsGroup } from '../../src/data/store'
 import { useBranches } from '../../src/data/useBranches'
 import { isSessionUnread } from '@shared/chat/unread'
@@ -423,53 +424,25 @@ export default function Home() {
     )
   }
 
-  const tone = state?.status === 'ready' ? 'ok' : state?.status === 'connecting' ? 'wait' : 'off'
-
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      {/* ★★顶部一整条是**主机条**,不是 app 的名字(设计文档 §4.4b)。
-          原来这里写着「myFlowForge」+ 一行主机名 —— app 的名字每一屏都一样,它不告诉你任何东西,
-          却占着全屏最显眼的那一行。这一屏真正需要常驻回答的问题是「我现在遥控的是哪台电脑」,
-          因为这上面每一条会话、每一道门都属于某一台电脑。
-          ★**整条可点**,点开就换主机:切主机是个真会做的动作,不该埋在「设置 → 主机 → 点一台」底下。 */}
+      {/* ★★顶栏一整条是**主机横幅**。原来右边那颗 ⚙ 已经挪到底部第三格 tab 了,
+          空出来的位置给「＋ 新建工作区」—— 微信的「发起群聊 / 添加朋友」也在右上角的 ＋ 里,
+          从来不在底栏。tab 的每一格必须是能停留的页面,而「新建」是个动作。 */}
       <TopBar
         right={
-          // ★设置是全局的,不属于任何一条会话。
-          //  原来它旁边还有一颗 ＋(新建会话,弹单子问「哪个工作区」)—— 已经拆散挪进了
-          //  每个工作区展开后的那一行「＋ 新建会话」和列表底部的「＋ 新建工作区」:
-          //  在工作区里面点的时候,「哪个工作区」这个问题本身就是多余的。
-          <IconBtn label="设置" onPress={() => router.push('/settings')}>⚙</IconBtn>
+          <IconBtn label="新建工作区" onPress={() => router.push(ROUTES.newWorkspace)} disabled={!online}>
+            <Icon name="add" size={20} color={online ? c.accent : c.faint} />
+          </IconBtn>
         }
       >
-        <Pressable
+        <HostBanner
+          label={activeHost?.label ?? ''}
+          url={activeHost?.url ?? ''}
+          state={state}
+          gateCount={gates.length}
           onPress={() => setHostSheet(true)}
-          // 整条都是热区(顶栏里 TopTitle 那块本来就横跨到底),而不是只有那几个字可点 ——
-          // 这套代码已经在别处栽过「点了没反应,其实点在旁边的空白上」。
-          style={({ pressed }) => [{ paddingHorizontal: 2 }, pressed && { opacity: 0.6 }]}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <LiveDot tone={tone} />
-            <T numberOfLines={1} style={{ fontSize: 15.5, fontWeight: '600', letterSpacing: -0.3, color: c.fg, flexShrink: 1, minWidth: 0 }}>
-              {activeHost?.label ?? '未选主机'}
-            </T>
-            {/* ▾ 是「这儿能点开」的唯一信号。手机上没有 hover,不画它就没人知道这条是活的。 */}
-            <T style={{ fontSize: 10, color: c.faint }}>▾</T>
-            {/* 这台机器上挂着的门,常驻在最显眼的一行。★不是装饰:整个 app 存在的理由就是
-                「代理停在门上而你不在电脑前」,滚到哪儿都该看得见还有几道。 */}
-            {gates.length > 0 ? (
-              <View style={{ marginLeft: 'auto' }}>
-                <StatusBadge tier="gate" count={gates.length} />
-              </View>
-            ) : null}
-          </View>
-          {/* 副行仍然报地址 —— ★连上时报「地址 · 对面版本」,断线时报**为什么**,
-              和设置屏 / 主机屏共用同一份 `hostSubtitle`。断线态必须显式,不能只剩一颗红点。 */}
-          {activeHost ? (
-            <T numberOfLines={1} mono style={{ fontSize: 11.5, color: c.muted, marginTop: 1 }}>
-              {hostSubtitle(activeHost.url, state, true)}
-            </T>
-          ) : null}
-        </Pressable>
+        />
       </TopBar>
 
       <ScrollView
@@ -682,14 +655,6 @@ export default function Home() {
               </View>
             )
           })}
-          {/* ★★列表的**收尾动作**,不是列表的又一行。
-              ★注意它落在所有工作区分组 View 的**外面**:定位气泡的第①段 y(groupY)量的是
-              每个分组 View 相对滚动内容的偏移,这一颗排在它们后面,不改任何一段 y。
-              ★★它会在 Task 5 里被删掉(顶栏右上角那颗 ＋ 取代它)—— 这一版先留着,
-              是为了不产生「这一版没法建工作区」的中间状态。 */}
-          <ActionRow icon="add" onPress={() => router.push('/new-workspace')}>
-            新建工作区
-          </ActionRow>
           </>
         )}
         {gates.length > 0 && (

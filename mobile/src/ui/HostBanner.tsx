@@ -1,0 +1,72 @@
+import { Pressable, View } from 'react-native'
+import { useC } from '../theme/theme'
+import { T } from './kit'
+import { Icon } from './Icon'
+import { StatusBadge } from './StatusBadge'
+import { hostBannerDetail, hostBannerTitle } from '../net/hostStatusText'
+import type { HostState } from '../net/hostClient'
+
+/**
+ * 顶栏那条主机横幅。**整条可点 —— 点开就换主机。**
+ *
+ * ★★2026-08-28 从两行压成一行。原来是「主机名」+「192.168.1.7:7777 · v1.2.0」两行;
+ *  用户指着微信那条「Mac 微信已登录」说这块可以照着做。他是对的 —— 一切正常的时候,
+ *  地址和版本一个字都不解决问题。所以第二行只在**出事**时出现(见 `hostBannerDetail`)。
+ *
+ * ★它**不只是状态,它是切换器**。这也是当初把主机放进顶栏、而不是做成微信那种
+ *  「跟着列表滚走的横幅」的理由:切主机是个真会做的动作,不该埋在两层菜单底下;
+ *  而且「滚到哪儿都看得见还有几道门」是这一屏的硬原则,跟着滚走的横幅做不到。
+ *
+ * ★门徽章常驻,而且**绝不让位**:主机名 `numberOfLines={1}` + `flexShrink` 先缩。
+ *  一个长主机名叠上「大」字号把徽章顶出屏幕,就是「有门却看不见」——
+ *  那是整个 app 存在的理由本身。
+ */
+export function HostBanner({
+  label, url, state, gateCount, onPress,
+}: {
+  label: string
+  url: string
+  state: HostState | null
+  /** 当前这台主机上挂着的门数。★和底部「会话」那格的角标**同源**,两处不许各算各的。 */
+  gateCount: number
+  onPress: () => void
+}) {
+  const c = useC()
+  const ok = state?.status === 'ready'
+  const wait = state?.status === 'connecting'
+  const tint = ok ? c.fg : wait ? c.warn : c.err
+  const detail = hostBannerDetail(url, state)
+  return (
+    <Pressable
+      onPress={onPress}
+      // 整条都是热区,而不是只有那几个字可点 —— 这套代码已经在别处栽过
+      // 「点了没反应,其实点在旁边的空白上」。★用 padding 撑,不用 hitSlop:
+      // hitSlop 在祖先紧贴子节点时是死的(Fabric 的 overflowInset)。
+      style={({ pressed }) => [{ paddingHorizontal: 2, paddingVertical: 4 }, pressed && { opacity: 0.6 }]}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+        <Icon name="host" size={16} color={tint} />
+        <T
+          numberOfLines={1}
+          style={{ fontSize: 15.5, fontWeight: '600', letterSpacing: -0.3, color: c.fg, flexShrink: 1, minWidth: 0 }}
+        >
+          {hostBannerTitle(label, state)}
+        </T>
+        {/* ▾ 是「这儿能点开」的唯一信号。手机上没有 hover,不画它就没人知道这条是活的。 */}
+        <Icon name="chevronDown" size={10} color={c.faint} />
+        {gateCount > 0 ? (
+          <View style={{ marginLeft: 'auto' }}>
+            <StatusBadge tier="gate" count={gateCount} />
+          </View>
+        ) : null}
+      </View>
+      {/* ★★判 null 才渲染。`hostBannerDetail` 连上时返回 null 正是为了这一行 ——
+          返回空串的话这里会渲染出一个高度不为 0 的空 `<T>`,顶栏平白高一截。 */}
+      {detail !== null ? (
+        <T numberOfLines={1} mono style={{ fontSize: 11.5, color: ok ? c.muted : c.err, marginTop: 1 }}>
+          {detail}
+        </T>
+      ) : null}
+    </Pressable>
+  )
+}
