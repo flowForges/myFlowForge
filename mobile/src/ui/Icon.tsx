@@ -48,6 +48,7 @@ export function Icon({
       />
     )
   }
-  // ★emoji 退路不吃 `color`:emoji 是彩色位图,染色染不动,硬染只会得到一个奇怪的方块。
-  return <T style={{ fontSize: size }}>{EMOJI[name]}</T>
+  // ★color 路被所有字形认可:彩色位图(emoji)会忽略它,纯文本字形(›▾＋)会应用它。
+  //  让每一个字形做它自己的事——不用维护「哪些是 emoji」的第二份真相。
+  return <T style={{ fontSize: size, color: tint }}>{EMOJI[name]}</T>
 }

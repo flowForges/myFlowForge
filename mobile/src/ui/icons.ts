@@ -11,10 +11,13 @@
  *
  * ★这个文件刻意零 import(同 wsTile.ts / tree.ts):根 vitest.config.ts 里 `mobile`
  *  那个 project 跑在 node 上,带 React Native 的东西在那儿 import 不动。
+ *  —— 例外:SFSymbol 是 import type,编译时擦除,无运行时代价。
  *
  * ★调用方**只准认 IconName**。别处出现 SF 符号名或 emoji 字面量,就等于这一层白做了 ——
  *  以后想整体换一套图标,得满仓库去找。
  */
+
+import type { SFSymbol } from 'sf-symbols-typescript'
 
 export const ICON_NAMES = [
   'chat', 'host', 'settings', 'add', 'changes', 'photo', 'camera',
@@ -24,7 +27,7 @@ export const ICON_NAMES = [
 export type IconName = (typeof ICON_NAMES)[number]
 
 /** iOS。名字必须是真实存在的 SF Symbol —— 不存在的名字在 iOS 上渲染成一个看不见的洞,不报错。 */
-export const SF: Record<IconName, string> = {
+export const SF: Record<IconName, SFSymbol> = {
   chat: 'bubble.left.and.bubble.right',
   host: 'desktopcomputer',
   settings: 'gearshape',
