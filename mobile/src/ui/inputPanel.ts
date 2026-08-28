@@ -56,3 +56,55 @@ export function nextInputMode(mode: InputMode, ev: InputEvent): InputMode {
  *  差这一点看不出来。
  */
 export const PANEL_H = 268
+
+/**
+ * 谁「认领」了下一次真正到达的 keyboardHidden。
+ *
+ * ★★2026-08-29 复审抓到:`Keyboard` 是**设备级全局**的,不是这一屏自己的。上面那台状态机
+ *  原来对每一次 `keyboardShown`/`keyboardHidden` 都无条件当真,隐含的假设是「设备上任何时候
+ *  弹起/收起的键盘都是这一屏自己的输入框弹的」—— 只要屏幕上还有**别的**输入框,这条假设就不成立。
+ *  复现路径:点 ＋ 开面板 → 点面板里的「全屏编辑」→ 那个编辑框自己 `autoFocus` 弹出键盘 →
+ *  关掉编辑框、它的键盘收起 → 这两次事件全局广播,原来的写法照单全收,面板在用户**既没碰 ＋
+ *  也没碰输入框**的情况下被自己关掉了。跟 ★★ 那条「dismiss 触发的 keyboardHidden 不准关面板」
+ *  是**同一类**问题的第二个入口:上一次挡的是「自己的 dismiss」,这一次要挡的是「别人的键盘」。
+ *
+ *  修法不是给 BigEditor 或以后的改名框(见 Task 8/9)各开一个特例 —— 那样每加一个带 Field
+ *  的弹层就得回来再补一次,而且没人会想到要补。真正要变的是那条隐含假设本身:
+ *  一次键盘事件**只有在这一屏自己的输入框认领着的时候才作数**,没认领的一律原样吃掉、
+ *  `mode` 一个字都不碰。认领规则只有两条,谁的输入框都不需要知道这件事:
+ *   - 这一屏自己的 `Field` 拿到焦点(`tapField`)→ 认领。
+ *   - 处理完一次**真正认领到的** `keyboardHidden` → 放手。
+ *  ★★不在失焦时放手:点 ＋ 会先 `Keyboard.dismiss()` 让输入框失焦,再 `fire('tapPlus')` ——
+ *  状态机要的正是紧随失焦之后那次 `keyboardHidden` 事件被正确认领、走到下面 `mode === 'panel'`
+ *  那条 ★★ 分支。失焦和「这次收起事件该不该处理」是两件事,前者不该提前交出认领权。
+ */
+export type KeyboardOwner = 'chat' | null
+
+export interface InputState {
+  mode: InputMode
+  keyboardOwner: KeyboardOwner
+}
+
+export const initialInputState: InputState = { mode: 'idle', keyboardOwner: null }
+
+/**
+ * 和 `nextInputMode` 是同一件事,多带了一层「这次键盘事件是不是我们认领的」。
+ * ★`mode` 的转移规则完全委托给 `nextInputMode`(那份已经有单测 + 变异测试钉住,原样复用,
+ *  不重复一份逻辑),这里只加认领/放手这一层闸门。
+ */
+export function nextInputState(state: InputState, ev: InputEvent): InputState {
+  const { mode, keyboardOwner } = state
+  if (ev === 'keyboardShown' || ev === 'keyboardHidden') {
+    // ★★没认领 = 这次键盘事件是别的输入框弹的/收的,跟这一屏的状态机没关系,原样吃掉。
+    if (keyboardOwner !== 'chat') return state
+    return {
+      mode: nextInputMode(mode, ev),
+      // 认领到的 keyboardHidden 处理完就放手;keyboardShown 不改变认领状态。
+      keyboardOwner: ev === 'keyboardHidden' ? null : keyboardOwner,
+    }
+  }
+  return {
+    mode: nextInputMode(mode, ev),
+    keyboardOwner: ev === 'tapField' ? 'chat' : ev === 'leave' ? null : keyboardOwner,
+  }
+}

@@ -42,7 +42,7 @@ import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 import { atBottom, initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
 import { pickSessionAgent, shouldRederive, type DeriveState } from '../src/ui/sessionAgent'
-import { nextInputMode, PANEL_H, type InputEvent, type InputMode } from '../src/ui/inputPanel'
+import { initialInputState, nextInputState, PANEL_H, type InputEvent, type InputState } from '../src/ui/inputPanel'
 import { PermKey } from '../src/ui/PermKey'
 import { PlusPanel, type PlusItem } from '../src/ui/PlusPanel'
 
@@ -113,13 +113,17 @@ export default function Chat() {
   const [offloadBusy, setOffloadBusy] = useState(false)
   const [pickBusy, setPickBusy] = useState(false)
   /**
-   * 输入区底下那块地方(什么都没有 / 键盘 / ＋ 面板)。判据在 `inputPanel.ts`(有单测)——
-   * ★★别在这儿凭直觉改状态转移,那个文件的存在理由就是「盯着代码看不出来的先后关系」。
+   * 输入区底下那块地方(什么都没有 / 键盘 / ＋ 面板)+ 谁认领着当前的键盘事件。
+   * 判据在 `inputPanel.ts`(有单测 + 变异测试)——
+   * ★★别在这儿凭直觉改状态转移,那个文件的存在理由就是「盯着代码看不出来的先后关系」:
+   *  一条是「点 ＋ 自己 dismiss 出来的 keyboardHidden 不准关面板」,另一条是
+   *  「BigEditor / 以后的改名框自己弹起收起的键盘,不该动这一屏的状态」——
+   *  后一条是 2026-08-29 复审抓到的:键盘事件是**设备级全局**的,不是这一屏私有的。
    */
-  const [inputMode, setInputMode] = useState<InputMode>('idle')
-  const fire = useCallback((ev: InputEvent) => setInputMode((m) => nextInputMode(m, ev)), [])
-  // ★系统键盘事件喂进同一个状态机。★★不能在 `tapPlus` 的处理里直接 setInputMode('panel')
-  //  之后就不管 keyboardHidden —— dismiss 会立刻触发它,而状态机正是为这一下写的。
+  const [inputState, setInputState] = useState<InputState>(initialInputState)
+  const fire = useCallback((ev: InputEvent) => setInputState((s) => nextInputState(s, ev)), [])
+  // ★系统键盘事件喂进同一个状态机 —— 是不是「我们自己的输入框」这一层闸门,
+  //  已经收在 `nextInputState` 里了,这儿不用(也不该)再判一次。
   useEffect(() => {
     const a = Keyboard.addListener('keyboardDidShow', () => fire('keyboardShown'))
     const b = Keyboard.addListener('keyboardDidHide', () => fire('keyboardHidden'))
@@ -895,7 +899,7 @@ export default function Chat() {
             </Pressable>
           </View>
           {/* ＋ 面板紧跟输入行,占掉键盘让出来的那块地方 —— 微信那块格子面板顶掉键盘,不吃正文高度。 */}
-          <PlusPanel open={inputMode === 'panel'} items={plusItems} />
+          <PlusPanel open={inputState.mode === 'panel'} items={plusItems} />
         </View>
       </KeyboardAvoidingView>
 

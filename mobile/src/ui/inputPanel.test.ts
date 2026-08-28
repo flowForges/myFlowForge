@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nextInputMode, PANEL_H } from './inputPanel'
+import { nextInputMode, nextInputState, type InputState, PANEL_H } from './inputPanel'
 
 describe('输入区三态机', () => {
   it('点输入框 → 键盘', () => {
@@ -46,5 +46,49 @@ describe('输入区三态机', () => {
   it('面板高度接近一块键盘 —— 太矮会在收键盘时露出一截正文再被盖住,画面抖一下', () => {
     expect(PANEL_H).toBeGreaterThan(220)
     expect(PANEL_H).toBeLessThan(320)
+  })
+})
+
+describe('键盘事件的认领(设备级全局 Keyboard vs 这一屏自己的输入框)', () => {
+  it('★★2026-08-29 复审抓到的洞:面板开着时,别的输入框(BigEditor/改名框…)自己弹起又收起的键盘,不准把面板关掉', () => {
+    // 场景:点 ＋ 开了面板,面板里的「全屏编辑」打开一个带自己 Field 的编辑框——
+    // 这个编辑框的 autoFocus 弹出键盘、关掉编辑框时它又收起键盘。这两次事件是全局广播的,
+    // 但这一屏自己的输入框从头到尾没被碰过(keyboardOwner 仍是 null,没人认领)。
+    let s: InputState = { mode: 'panel', keyboardOwner: null }
+    s = nextInputState(s, 'keyboardShown') // 别的输入框弹起键盘
+    expect(s.mode).toBe('panel')
+    s = nextInputState(s, 'keyboardHidden') // 别的输入框收起键盘
+    expect(s.mode).toBe('panel')
+  })
+
+  it('没认领的 keyboardShown 也不该把 idle 拽成 keyboard', () => {
+    const s = nextInputState({ mode: 'idle', keyboardOwner: null }, 'keyboardShown')
+    expect(s.mode).toBe('idle')
+  })
+
+  it('原有的 tapPlus → dismiss 序列必须还是原来那样:自己的输入框认领到的 keyboardHidden 照样不关面板', () => {
+    let s: InputState = { mode: 'idle', keyboardOwner: null }
+    s = nextInputState(s, 'tapField') // 用户点输入框
+    expect(s).toEqual({ mode: 'keyboard', keyboardOwner: 'chat' })
+    s = nextInputState(s, 'keyboardShown') // 真键盘弹起
+    expect(s.mode).toBe('keyboard')
+    s = nextInputState(s, 'tapPlus') // 用户点 ＋(真实组件里这一下之前会先 Keyboard.dismiss())
+    expect(s.mode).toBe('panel')
+    s = nextInputState(s, 'keyboardHidden') // dismiss 触发的那次 keyboardHidden 随后到达
+    expect(s.mode).toBe('panel') // ★★没有被自己关掉
+    expect(s.keyboardOwner).toBe(null) // 认领到的那次处理完就放手了
+  })
+
+  it('正常路数没坏:点输入框、弹键盘、点别处收起键盘 → 回到 idle', () => {
+    let s: InputState = { mode: 'idle', keyboardOwner: null }
+    s = nextInputState(s, 'tapField')
+    s = nextInputState(s, 'keyboardShown')
+    s = nextInputState(s, 'keyboardHidden') // 用户点了空白处,不是走 ＋
+    expect(s.mode).toBe('idle')
+  })
+
+  it('离开这一屏连认领权一起清零', () => {
+    const s = nextInputState({ mode: 'keyboard', keyboardOwner: 'chat' }, 'leave')
+    expect(s).toEqual({ mode: 'idle', keyboardOwner: null })
   })
 })
