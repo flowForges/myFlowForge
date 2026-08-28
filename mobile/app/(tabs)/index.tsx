@@ -666,7 +666,11 @@ export default function Home() {
           })}
           </>
         )}
-        {gates.length > 0 && (
+        {/* ★★同一条 online 门:disconnected 时这句「N 道门挂着」和上面的旧 gates 一样是
+            断线前留在内存里的旧数据,不判 online 会在「未连接」空态下面又说一遍反话——
+            这是同一个缺陷的第三处,和 HostBanner 的 gateCount、_layout.tsx 的 tabBarBadge
+            同一条件。 */}
+        {online && gates.length > 0 && (
           <View style={{ paddingHorizontal: 15, paddingTop: 18 }}>
             <T style={{ fontSize: 11.5, color: c.faint, lineHeight: 19 }}>
               {gates.length} 道门挂在 {new Set(gates.map((x) => wsName(x.wsPath))).size} 个工作区上,代理在等你回答。
