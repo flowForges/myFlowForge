@@ -93,7 +93,12 @@ const all = await segs()
 const v = all.v.filter((s) => s.bottom > drawerTop && s.top < drawerBottom)
 const h = all.h.filter((s) => s.y > drawerTop && s.y < drawerBottom && s.right < c1.left + 2)
 
-ok('★主干真的画出来了(不是一段都没有)', v.length >= 3, JSON.stringify(v))
+// ★一行一段主干:行齐平之后(rowGap 和 TreeGap 都没了)每一行的连接列就是 top:0→bottom:0
+//  的**一段**,alpha 这个 fixture 固定两条会话 ⇒ 恒为 2。
+//  ★★用**精确计数**而不是 `>= 1`:旁边那条「每张卡各有一根横杠」本来就是精确的,
+//   而且精确计数还能抓住反方向的回归 —— 有人把某种行间隙补丁加回来,段数就会变多,
+//   `>=` 那种写法对此完全无感。真正保证「主干是一条线」的是下面两条(同一个 x、连续)。
+ok('★一行一段主干,而且一段都不少', v.length === 2, JSON.stringify(v))
 ok('★每张卡各有一根横杠', h.length === 2, JSON.stringify(h))
 
 const xs = [...new Set(v.map((s) => s.x.toFixed(1)))]
