@@ -1,4 +1,4 @@
-import { Alert, Platform, Pressable, ScrollView, View } from 'react-native'
+import { Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { useC } from '../../src/theme/theme'
 import { Btn, Empty, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
@@ -8,6 +8,9 @@ import { useStore } from '../../src/data/store'
 // 一句人话的连接状态。★这一份和设置屏共用同一个实现,别在任何一边抄第二遍 —— 见该文件注释。
 import { describeHostState, hostSubtitle } from '../../src/net/hostStatusText'
 import { HostIcon } from '../../src/ui/HostIcon'
+// ★web/native 那条确认框分支收在这一个函数里,原地各写一遍的历史(这里 + archiveWs +
+//  confirmDeleteSession)已经收掉了,见它的 JSDoc。
+import { confirmDestructive } from '../../src/ui/confirmDestructive'
 
 export default function Hosts() {
   const c = useC()
@@ -15,17 +18,11 @@ export default function Hosts() {
   const { gates } = useStore()
 
   const remove = (h: MobileHost) => {
-    const go = () => void removeHost(h.id)
-    if (Platform.OS === 'web') {
-      // RN-web 的 Alert 只有一个按钮,确认框走 window.confirm 才是真能选的。
-      // eslint-disable-next-line no-alert
-      if (typeof window !== 'undefined' && window.confirm(`删除主机「${h.label}」?`)) go()
-      return
-    }
-    Alert.alert('删除主机', `删除「${h.label}」?手机上不再记住它的地址和令牌。`, [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: go },
-    ])
+    void confirmDestructive({
+      title: '删除主机',
+      message: `删除「${h.label}」?手机上不再记住它的地址和令牌。`,
+      confirmLabel: '删除',
+    }).then((yes) => { if (yes) void removeHost(h.id) })
   }
 
   const d = describeHostState(state)

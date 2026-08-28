@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Platform, ScrollView, View } from 'react-native'
+import { ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../../src/main/ipc/channels'
 import type { ChatSession, SessionsFile, WorkspaceMeta } from '../../../src/shared/types'
@@ -9,7 +9,8 @@ import { RADIUS } from '../../src/theme/tokens'
 import { Btn, Empty, Field, IconBtn, List, T, TopBar } from '../../src/ui/kit'
 import { Sheet } from '../../src/ui/Sheet'
 import { SwipeRow, type SwipeAction } from '../../src/ui/SwipeRow'
-import { sessionCanDelete } from '../../src/data/sessionOps'
+import { sessionCanDelete, sessionCloseWasRefused, LAST_SESSION_WHY } from '../../src/data/sessionOps'
+import { confirmDestructive, notify } from '../../src/ui/confirmDestructive'
 import { JumpBubble } from '../../src/ui/JumpBubble'
 import { useConn } from '../../src/net/conn'
 import { hostPickRows } from '../../src/net/hostPicker'
@@ -89,10 +90,14 @@ export default function Home() {
     }
   }
 
+  // ★两条确认框(这一颗 + 下面 confirmDeleteSession)都走 confirmDestructive ——
+  //  别再各写一遍 web/native 分支,原因见 confirmDestructive.ts 的 JSDoc。
   const archiveWs = () => {
     if (!wsSheet) return
     const ws = wsSheet
-    const go = async () => {
+    const msg = `归档「${ws.name}」?归档后从会话列表消失,在 设置 → 已归档的工作区 里恢复。`
+    void confirmDestructive({ title: '归档工作区', message: msg, confirmLabel: '归档' }).then(async (yes) => {
+      if (!yes) return
       setWsBusy(true)
       setWsErr(null)
       try {
@@ -103,48 +108,37 @@ export default function Home() {
       } finally {
         setWsBusy(false)
       }
-    }
-    const msg = `归档「${ws.name}」?归档后从会话列表消失,在 设置 → 已归档的工作区 里恢复。`
-    if (Platform.OS === 'web') {
-      // RN-web 的 Alert 只有一个按钮,确认框走 window.confirm 才是真能选的(见 hosts.tsx 的 remove())。
-      // eslint-disable-next-line no-alert
-      if (typeof window !== 'undefined' && window.confirm(msg)) void go()
-      return
-    }
-    Alert.alert('归档工作区', msg, [
-      { text: '取消', style: 'cancel' },
-      { text: '归档', style: 'destructive', onPress: () => void go() },
-    ])
+    })
   }
 
-  // 会话左滑「删除」弹出的确认框,然后关会话。★走的是**和 archiveWs 完全一样**的两条路:
-  // web 用 window.confirm(RN-web 的 Alert 只有一个按钮,已经在 hosts.tsx 的 remove() 栽过)。
-  // ★这里能摆出「删除」这一格,前提是调用方(sessionActions)已经用 sessionCanDelete 判过
-  //  ok:true —— 服务端在「只剩最后一条可写会话」时会静默原样返回、什么都不做也不报错,
-  //  UI 侧不拦的话就是又一个「点了没反应」。
-  const confirmDeleteSession = (wsPath: string, s: ChatSession) => {
-    const go = () => {
-      void (async () => {
-        try {
-          await invoke(CH.sessionClose, [{ workspacePath: wsPath, sessionId: s.id }])
-          refresh()
-        } catch {
-          // ★这条路极少失败(能摆出删除格,前提是服务端不会静默拒绝;剩下的只有网络故障),
-          //  和 hosts.tsx 的 remove() 同一套宽松度——本任务要治的是「按下去无声无息」的
-          //  那个删除按钮本身,不是这里的网络异常兜底。
-        }
-      })()
-    }
+  /**
+   * 会话左滑「删除」弹出的确认框,然后关会话。
+   *
+   * ★这里能摆出「删除」这一格,前提是调用方(sessionActions)已经用 sessionCanDelete 判过
+   *  ok:true。但那是**渲染那一刻**的判断——真正按下去、`session:close` 打到服务端之间
+   *  还有一条更窄的缝:两个客户端连着同一台机器,这行打开着的时候,另一端刚把它的
+   *  兄弟会话删掉,这一端的「删除」格还没来得及消失。服务端的 `closeSession` 在
+   *  「只剩最后一条可写会话」时**原样返回、不报错**——不管窗口有多窄,不看响应就无从知道
+   *  它到底删没删。★★所以 invoke 之后必须看响应里这条 id 还在不在:还在,就是没删掉。
+   */
+  const confirmDeleteSession = async (wsPath: string, s: ChatSession) => {
     const msg = `删除「${s.title || '新会话'}」?这条会话的记录会被删掉。`
-    if (Platform.OS === 'web') {
-      // eslint-disable-next-line no-alert
-      if (typeof window !== 'undefined' && window.confirm(msg)) go()
-      return
+    const yes = await confirmDestructive({ title: '删除会话', message: msg, confirmLabel: '删除' })
+    if (!yes) return
+    try {
+      const file = (await invoke(CH.sessionClose, [{ workspacePath: wsPath, sessionId: s.id }])) as SessionsFile
+      refresh()
+      if (sessionCloseWasRefused(file.sessions, s.id)) {
+        // ★不去猜服务端拒绝的是哪一条(「找不到」还是「只剩最后一条」)——sessionCanDelete
+        //  已经在按下之前排除了「找不到」,这里唯一还够得着的就是竞态版的「只剩最后一条」,
+        //  所以原样引用同一句话,不新编一句意思相同的话。
+        notify('没能删除', LAST_SESSION_WHY)
+      }
+    } catch {
+      // ★这条路极少失败(能摆出删除格,前提是服务端不会静默拒绝;剩下的只有网络故障),
+      //  和 hosts.tsx 的 remove() 同一套宽松度——本任务要治的是「按下去无声无息」的
+      //  那个删除按钮本身,不是这里的网络异常兜底。
     }
-    Alert.alert('删除会话', msg, [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: go },
-    ])
   }
 
   // 会话左滑「重命名」弹出的单子。记的是打开那一刻的 { wsPath, id, title } ——
@@ -188,7 +182,7 @@ export default function Home() {
     const del = sessionCanDelete(g.sessions, s.id)
     return [
       ...(del.ok
-        ? [{ key: 'del', label: '删除', tone: 'danger' as const, onPress: () => confirmDeleteSession(g.ws.path, s) }]
+        ? [{ key: 'del', label: '删除', tone: 'danger' as const, onPress: () => { void confirmDeleteSession(g.ws.path, s) } }]
         : []),
       {
         key: 'rename',

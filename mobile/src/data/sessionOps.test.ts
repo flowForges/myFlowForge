@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sessionCanDelete } from './sessionOps'
+import { sessionCanDelete, sessionCloseWasRefused } from './sessionOps'
 
 const S = (id: string, readonly?: true) => ({ id, readonly })
 
@@ -35,5 +35,19 @@ describe('这条会话能不能删', () => {
   it('找不到这条会话 → 不给删(而不是崩,也不是假装删了)', () => {
     const r = sessionCanDelete([S('a')], 'nope')
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('session:close 响应回来之后,这条会话到底删没删', () => {
+  // ★这不是 sessionCanDelete 的活——sessionCanDelete 判的是按下之前那一刻的快照,
+  //  这里判的是 invoke 真正打过去、服务端回了响应**之后**的事实:传去的那条 id
+  //  是不是还在响应的 sessions 里。还在,就是被静默拒绝了(见 LAST_SESSION_WHY)。
+
+  it('★★响应里这条 id 已经不在了 —— 真删掉了', () => {
+    expect(sessionCloseWasRefused([S('b')], 'a')).toBe(false)
+  })
+
+  it('★★响应里这条 id 还在 —— 服务端静默拒绝了(竞态版的「只剩最后一条」)', () => {
+    expect(sessionCloseWasRefused([S('a'), S('b')], 'a')).toBe(true)
   })
 })
