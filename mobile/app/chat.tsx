@@ -1069,10 +1069,13 @@ const st = StyleSheet.create({
   // 从 entry 挪到了 chips 头上;entry 掉到最后,接手原来 chips 尾部那段「离安全区还有多远」的间距。
   // ★四颗东西一行(权限 / 输入框 / ＋ / 发送),gap 从 8 收到 6 —— 8 会再吃掉正文 6pt。
   entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingHorizontal: 12, paddingBottom: 10 },
+  // ★44×44,不是任务纪要草稿里的 40×40 —— 这一行四颗控件(权限/输入框/＋/发送)全部要过
+  //  44pt 硬下限这一条,而这颗**不许**靠 hitSlop 去补(祖先紧贴子节点时 hitSlop 是死的,
+  //  「复制」那次 22×13pt 死区就是这么栽的),所以尺寸本身就得是 44。
   plus: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
