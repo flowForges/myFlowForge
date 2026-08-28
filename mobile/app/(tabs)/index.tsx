@@ -685,10 +685,13 @@ export default function Home() {
       ) : null}
 
       {/* 顶部主机条点开的换主机单子。★门数只报得出当前这台的(`gates.length`)——
-          别的主机上有没有门,不连上去是不知道的,所以那几台一个字都不写(见 hostPicker.ts)。 */}
+          别的主机上有没有门,不连上去是不知道的,所以那几台一个字都不写(见 hostPicker.ts)。
+          ★★第四处同一条 online 门:`hostPicker.ts` 的 `active` 只判「是不是当前选中那台」,
+          跟「连没连上」是两件事——断线时不判 online,这张单子上「当前这台」还是会顶着一枚
+          上一次连上时留下的旧门徽章,和 HostBanner/tab 角标/门汇总句是同一个缺陷。 */}
       <HostSwitchSheet
         open={hostSheet}
-        rows={hostPickRows(hosts, activeHost?.id ?? null, state, gates.length)}
+        rows={hostPickRows(hosts, activeHost?.id ?? null, state, online ? gates.length : 0)}
         onClose={() => setHostSheet(false)}
         onPick={(id) => {
           setHostSheet(false)

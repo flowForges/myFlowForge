@@ -42,7 +42,15 @@ export function HostBanner({
       // 整条都是热区,而不是只有那几个字可点 —— 这套代码已经在别处栽过
       // 「点了没反应,其实点在旁边的空白上」。★用 padding 撑,不用 hitSlop:
       // hitSlop 在祖先紧贴子节点时是死的(Fabric 的 overflowInset)。
-      style={({ pressed }) => [{ paddingHorizontal: 2, paddingVertical: 4 }, pressed && { opacity: 0.6 }]}
+      // ★★★`minHeight: 44`:连上时(最常见的那个状态)`hostBannerDetail` 返回 null,
+      // 只剩一行文字 + 8px padding ≈ 28pt —— 够不上这份计划定死的 44pt 最小热区。
+      // 这条计划里 hitSlop 被明令禁止(祖先紧贴子节点时它是死的,Fabric 的 overflowInset,
+      // 这个仓库已经栽过一次:一颗「复制」按钮缩成 22×13pt 死区,被当成剪贴板坏了整整一轮测试)。
+      // 断线时 detail 那一行会把内容撑得比 44 更高,minHeight 那时候不起作用,不冲突。
+      style={({ pressed }) => [
+        { paddingHorizontal: 2, paddingVertical: 4, minHeight: 44, justifyContent: 'center' as const },
+        pressed && { opacity: 0.6 },
+      ]}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
         <Icon name="host" size={16} color={tint} />

@@ -51,7 +51,12 @@ export default function Hosts() {
               {hosts.map((h) => {
                 const active = h.id === activeHost?.id
                 const st = active ? d : { text: '未连接', tone: 'idle' as const }
-                const gateN = active ? gates.length : 0
+                // ★★同一条 online 门,第五处:`active` 只判「是不是当前选中那台」,跟
+                //  「连没连上」是两件事 —— 断线时这里原来还是照报 `gates.length`,主机屏上
+                //  「当前这台」会顶着一枚上一次连上时留下的旧门徽章,和 HostBanner/tab 角标/
+                //  门汇总句/换主机单是同一个缺陷。`st.tone === 'ok'` 就是「这台连着」——
+                //  它和 `active && st.tone === 'ok'` 那颗「已连接」pill(下面)用的是同一个判断。
+                const gateN = active && st.tone === 'ok' ? gates.length : 0
                 return (
                   <Row key={h.id} onPress={() => void selectHost(h.id)}>
                     <HostIcon icon={h.icon} />
