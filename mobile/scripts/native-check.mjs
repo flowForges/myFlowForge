@@ -165,6 +165,29 @@ try {
   //   把 colorPrimary 和透明状态栏一起丢了)。
   ok('★Android styles.xml 里没有重名的 AppTheme',
     (styles.match(/<style name="AppTheme"/g) ?? []).length === 1)
+
+  // ★★2026-08-30:装上 expo-notifications 之后 iOS 直接编不过 ——
+  //   「Provisioning Profile … does not support the Push Notifications capability」。
+  //   它自带的 config plugin **装了就自动生效**(不需要写进 plugins 数组),会无条件往
+  //   entitlements 里塞 `aps-environment`,而这个 App ID 在苹果后台没开推送能力。
+  //   `plugins/withPushEntitlement.js` 按「有没有 extra.eas.projectId」决定留不留它。
+  // ★这条断言钉的是那个**双向**的不变式:
+  //   没配 projectId → 必须没有 aps-environment(否则又签不了名);
+  //   配了 projectId → 必须有(否则远程推送在 iOS 上静默注册不了,而那**没有任何报错**)。
+  const entPath = path.join(ROOT, 'ios/myFlowForge/myFlowForge.entitlements')
+  const ent = fs.existsSync(entPath) ? fs.readFileSync(entPath, 'utf8') : ''
+  const hasAps = ent.includes('aps-environment')
+  const appCfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'app.json'), 'utf8'))
+  const projectId = String(appCfg?.expo?.extra?.eas?.projectId ?? '').trim()
+  ok(
+    projectId
+      ? '★iOS 配了 Expo 项目,entitlements 里有 aps-environment'
+      : '★★iOS 没配 Expo 项目 → entitlements 里不许有 aps-environment(否则签不了名)',
+    projectId ? hasAps : !hasAps,
+    projectId
+      ? (hasAps ? '' : 'withPushEntitlement 应该放行,但没有 —— 远程推送会静默注册不了')
+      : (hasAps ? 'plugins/withPushEntitlement.js 没生效,Release 包会签名失败' : ''),
+  )
 } catch (e) {
   ok('Android 原生工程生成 + manifest 核对', false, String(e.message).slice(0, 120))
 }

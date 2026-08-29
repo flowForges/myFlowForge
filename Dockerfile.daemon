@@ -1,0 +1,44 @@
+# 无头 daemon 的 Linux 镜像。
+#
+# ★★这个文件的目的**不是发布**,是把「第二期的代码在 Linux 上到底能不能跑」这件事
+#  从"写完了"变成"跑过了"。设计文档把 Windows 和 Linux 两期都标成「代码写完 · 真机零验证」,
+#  而 iOS 那次的教训是:六个坑**全部**只有真机撞得到,当时 npm test 全绿、e2e 全绿、web 上一切正常。
+#
+# ★能验的:daemon 起不起得来、协议通不通、handler 跑不跑、**node-pty 编不编得过**
+#  (设计文档把最后这条单独标成待验)。
+# ★★验不了的:**provider CLI 的登录**。而那恰恰是设计文档列的第二期最大待验项
+#  (第九节:claude 的凭据在钥匙串里,根本拷不过来)。所以跑通这个镜像**不等于**
+#  「Linux 那期验完了」,别这么写进任何地方。
+#
+# 用法(在仓库根):
+#   npm run build                                   # 先在宿主机把 out/main 打出来
+#   docker build -f Dockerfile.daemon -t mff-daemon .
+#   docker run --rm -p 6767:6767 -e FORGE_DAEMON_TOKEN=<令牌> mff-daemon
+#
+FROM node:22-bookworm-slim
+
+# node-pty 要现编(它没有 linux 的 prebuild 覆盖所有 abi)。★这三个就是它的全部构建依赖;
+# git 是 daemon 自己要用的(工作区、变更、分支全靠它)。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 make g++ git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ★只装运行时依赖。`electron` 在 devDependencies 里 —— 无头这条路一行 electron 都不该碰到
+#  (决策 1:同一份核心,两个宿主),`--omit=dev` 顺便把这条约束变成了可执行的检查:
+#  真要是有谁在核心里 import 了 electron,这个镜像会在启动时当场炸。
+COPY package.json package-lock.json ./
+COPY scripts/postinstall.mjs ./scripts/
+RUN npm ci --omit=dev
+
+# 宿主机 electron-vite 打出来的产物。★不在镜像里重编:那要装 devDependencies(含 electron),
+#  镜像会大一个量级,而且和用户真正会跑的那份产物就不是同一个东西了。
+COPY out/main ./out/main
+
+ENV NODE_ENV=production
+EXPOSE 6767
+
+# ★默认绑 0.0.0.0 —— 在容器里绑回环等于谁都连不上(端口映射到的是容器的网络栈)。
+#  ★★所以**必须**有令牌:`config.ts` 里非回环地址强制要令牌,不给它会拒绝启动。
+CMD ["node", "out/main/daemon.js", "--listen", "0.0.0.0:6767"]
