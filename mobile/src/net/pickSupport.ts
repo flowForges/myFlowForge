@@ -39,3 +39,28 @@ export const canPickImage = (): boolean =>
  */
 export const canPickFile = (): boolean =>
   Platform.OS !== 'web' && !!requireOptionalNativeModule('ExpoDocumentPicker')
+
+/**
+ * 这台设备上触感反馈到不到得了。同一套道理,第三个模块:`expo-haptics`。
+ *
+ * ★注册名两端都核实过,这次和包名一致(不是 `ExponentImagePicker` 那种历史包袱):
+ *    - `node_modules/expo-haptics/src/ExpoHaptics.ts:3` → `requireOptionalNativeModule('ExpoHaptics')`
+ *    - `node_modules/expo-haptics/ios/HapticsModule.swift:5` → `Name("ExpoHaptics")`
+ *    - `node_modules/expo-haptics/android/.../HapticsModule.kt:30` → `Name("ExpoHaptics")`
+ *
+ * ★★这道闸是**主闸门**,不是 `haptics.ts` 里那个 `.catch()` 的替补:`impactAsync` /
+ *  `notificationAsync` / `selectionAsync` 都是 `async function`,原生模块没链接时它们内部
+ *  `throw` 出的是一个 **rejected promise**,不是同步抛出 —— 套在调用外面的 `try/catch` 抓不住。
+ *  这道闸在**调用之前**用 `requireOptionalNativeModule`(它自己不抛)先问一句「原生模块在不在」,
+ *  为假时 `haptics.ts` 根本不会走到 `impactAsync` 那几个调用,那个异步失败模式也就压根不会发生。
+ *  `haptics.ts` 里仍然留着 `.catch()` 兜底,是防**这道闸都没料到**的失败(比如 JS 包本身缺失),
+ *  不是因为这道闸不够用。
+ *
+ * ★web 上直接 false,和另外两个探测同一个理由(手机端 web 通道只是开发时用的验证壳,不是发布目标)——
+ *  但这次有一点没有验证过,如实记录:`expo-haptics` 自己在 web 上有一份 `ExpoHaptics.web.ts`
+ *  (走 `navigator.vibrate`,不经过任何原生模块,理论上不会抛)。`Platform.OS !== 'web'` 这道闸
+ *  会让 web 目标上的触感**整体关掉**,哪怕那份 web 影子实现本来能用。没有在浏览器里跑过验证它,
+ *  所以按现有两个探测的既定写法处理(web 一律 false),没有另开一条「web 也放行」的分支。
+ */
+export const canHaptics = (): boolean =>
+  Platform.OS !== 'web' && !!requireOptionalNativeModule('ExpoHaptics')

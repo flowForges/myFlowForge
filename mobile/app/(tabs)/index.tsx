@@ -108,14 +108,19 @@ export default function Home() {
       if (!yes) return
       setWsBusy(true)
       setWsErr(null)
-      // ★确认框点完之后、真正发出请求那一刻才震 —— 不是点「归档」呼出确认框那一下
-      //  (那一下只是打开一个对话框,还没有任何事真的发生)。warning 不是 success:
-      //  见 haptics.ts 里 hapticKindFor('destructive') 的注释。
-      tap('destructive')
       try {
         await archive(ws.path)
+        // ★★震动必须等 `await` 真的成功才打 —— haptics.ts 对 `destructive` 的定义是
+        //  「确认之后真的执行了」,不是「确认之后打算执行」。放在 `await` 前面(旧版本的写法)
+        //  会让 daemon 断线、归档失败、错误横幅弹出的**同一瞬间**,手上还在震「搞定了」——
+        //  这正是 `destructive` 用 warning 不用 success 那条设计想防的误导,只是从
+        //  「确认时」搬到了「发请求时」,没有真的解决。
+        tap('destructive')
         if (wsSheet?.path === ws.path) setWsSheet(null)
       } catch (e) {
+        // ★失败照实说:blocked 这一档就是给「被拦住/没做成」用的,手上的反馈要和屏幕上的
+        //  错误横幅说同一句话,不能一边震"完成"一边弹"没能归档"。
+        tap('blocked')
         const errMsg = e instanceof Error ? e.message : String(e)
         if (wsSheet?.path === ws.path) setWsErr(errMsg)
         else notify('没能归档', errMsg)
@@ -183,8 +188,6 @@ export default function Home() {
     const msg = `删除「${s.title || '新会话'}」?这条会话的记录会被删掉。`
     const yes = await confirmDestructive({ title: '删除会话', message: msg, confirmLabel: '删除' })
     if (!yes) return
-    // 真正发出请求那一刻才震,同 archiveWs 那一处的理由。
-    tap('destructive')
     try {
       const file = (await invoke(CH.sessionClose, [{ workspacePath: wsPath, sessionId: s.id }])) as SessionsFile
       refresh()
@@ -192,12 +195,21 @@ export default function Home() {
         // ★不去猜服务端拒绝的是哪一条(「找不到」还是「只剩最后一条」)——sessionCanDelete
         //  已经在按下之前排除了「找不到」,这里唯一还够得着的就是竞态版的「只剩最后一条」,
         //  所以原样引用同一句话,不新编一句意思相同的话。
+        // ★★服务端原样返回、根本没删掉 —— 这不是「确认之后真的执行了」,是被拦住了,
+        //  用 blocked 不是 destructive,和下面 archiveWs 同一条道理(见那边的注释)。
+        tap('blocked')
         notify('没能删除', LAST_SESSION_WHY)
+      } else {
+        // ★★震动必须等 invoke 真的回来、而且确认没被拒绝才打。见 archiveWs 那边的注释:
+        //  `destructive` 的定义是「确认之后真的执行了」,不是「确认之后打算执行」。
+        tap('destructive')
       }
     } catch {
       // ★这条路极少失败(能摆出删除格,前提是服务端不会静默拒绝;剩下的只有网络故障),
       //  和 hosts.tsx 的 remove() 同一套宽松度——本任务要治的是「按下去无声无息」的
       //  那个删除按钮本身,不是这里的网络异常兜底。
+      // ★但手上的反馈不能装作什么都没发生:没删成,就是被拦住了。
+      tap('blocked')
     }
   }
 

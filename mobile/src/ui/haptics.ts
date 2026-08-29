@@ -12,14 +12,31 @@
  *  旧包里探测不到就什么都不做。绝不能让一个锦上添花的东西炸掉一条真功能路径
  *  (「左滑到位」「切 tab」都在这条路上)。
  *
- * ★★这里和 brief 给的样例代码有一处必须改掉,不是随手抄:`expo-haptics` 的
- *  `impactAsync` / `notificationAsync` / `selectionAsync` 全是 **async function**。
- *  它们的 JS 包装本身在任何情况下都 `require` 得到(纯 JS,不含原生代码),真正会
- *  炸的是**原生模块没链接**那一刻 —— 包内部 `if (!ExpoHaptics?.xxx) throw new
- *  UnavailabilityError(...)`,而这行 throw 在 async function 里**不是同步抛出**,
- *  它变成一个 **rejected promise**。套在调用外面的 `try/catch` 只抓同步抛出,
- *  抓不住这个 —— 那正是 Task 12 撞过的同一类坑(类型检查过、运行时炸)的异步版本。
- *  所以下面必须显式 `.catch()` 掉这个 promise,不能只在外面包 try/catch 就当完事。
+ * ★★主闸门是 `pickSupport.ts` 的 `canHaptics()`(和 `canPickImage`/`canPickFile` 同一排):
+ *  `requireOptionalNativeModule('ExpoHaptics')` 自己不抛,原生模块没链接时同步返回 `null`。
+ *  为假时下面**根本不 require `expo-haptics` 那个 JS 包**,也就根本不会走到
+ *  `impactAsync`/`notificationAsync`/`selectionAsync` 那几个调用 —— 下一段说的那个异步坑
+ *  在这道闸后面**压根不会发生**,不是靠 `.catch()` 兜住的。
+ *
+ * ★★但 `.catch()` 留着,不是防御性多写的废话:这道闸挡的是「原生模块没链接」,挡不住
+ *  更极端的情况 —— 比如 JS 包本身没打进这个包、或者原生模块链接了但运行时另有原因失败。
+ *  `expo-haptics` 的 `impactAsync` / `notificationAsync` / `selectionAsync` 全是
+ *  **async function**:包内部 `if (!ExpoHaptics?.xxx) throw new UnavailabilityError(...)`
+ *  这行 throw 在 async function 里**不是同步抛出**,它变成一个 **rejected promise**。
+ *  套在调用外面的 `try/catch` 只抓同步抛出,抓不住这个 —— 那正是 Task 12 撞过的同一类坑
+ *  (类型检查过、运行时炸)的异步版本,只是这道闸让它在正常路径上不可达而已,不是「不存在」。
+ *  一个可选的震动不许在这类闸门没料到的角落留一个没接住的 rejection,所以 `.catch()` 不删。
+ *
+ * ★★为什么这里不能像 `app/chat.tsx` 那样直接 `import { canHaptics } from '../net/pickSupport'`:
+ *  `pickSupport.ts` 顶部静态 `import`了 `expo-modules-core`,它又静态 `import` 了 `react-native`。
+ *  这个文件会被 `haptics.test.ts` 在 vitest 的 `mobile` node 项目里加载,而 `react-native` 那份包
+ *  用的是 Flow 语法 —— vitest 的 rollup 在**静态分析**阶段就直接崩(`Parse failure`),
+ *  不是运行时抛错,连 try/catch 都救不了(炸的是「这段代码在被解析」,不是「这段代码在跑」)。
+ *  所以下面和 `require('expo-haptics')` 同一个写法:**动态** `require()`,vitest 对动态 require
+ *  走的是运行时 Node 解析,失败是一个能 catch 的异常,不是解析期崩溃。实测过:vitest 里这两个
+ *  动态 require 都会落进 catch(前者是"Cannot find module",后者是类型剥离报错),`canHaptics`
+ *  在测试环境里恒为 false —— 这就是为什么下面的 `H.mod` 在 vitest 里永远是 `null`,
+ *  mutation 3 钉的还是 `tap()` 自己那层 `if (!m) return`。
  */
 
 export const HAPTIC_EVENTS = [
@@ -61,15 +78,33 @@ export function hapticKindFor(ev: HapticEvent): HapticKind {
   }
 }
 
-/** 探测一次就够。★require 不到(旧包 / web)就永远是 null,后面每次调用直接返回。 */
-const H: { mod: Record<string, unknown> | null } = (() => {
+/**
+ * 主闸门:原生模块有没有链接。★动态 require——理由见文件头那段「为什么这里不能像
+ *  app/chat.tsx 那样直接 import」。vitest 里这一步恒失败(catch 到,返回 false),
+ *  和真机上「旧包探测不到」走的是同一条静默降级路径。
+ */
+const HAS_HAPTICS: boolean = (() => {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return { mod: require('expo-haptics') as Record<string, unknown> }
+    const mod = require('../net/pickSupport') as { canHaptics: () => boolean }
+    return mod.canHaptics()
   } catch {
-    return { mod: null }
+    return false
   }
 })()
+
+/** 只有主闸门放行了才去 require `expo-haptics` 这个 JS 包本体(拿 API 用)。
+ *  ★探测一次就够,后面每次调用直接返回同一个结果。 */
+const H: { mod: Record<string, unknown> | null } = HAS_HAPTICS
+  ? (() => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        return { mod: require('expo-haptics') as Record<string, unknown> }
+      } catch {
+        return { mod: null }
+      }
+    })()
+  : { mod: null }
 
 /**
  * 震一下。★★**永远不抛。** 模块不在、平台不支持、原生模块没链接(旧包)、调用失败,
