@@ -22,6 +22,8 @@ import { killAllAgentTrees } from './agents/procGroup'
 import { botBridge } from './bot/botBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
+import { createGateNotifier } from './notify/notifyBridge'
+import { pushService } from './push/pushService'
 import { gazeAngle } from '@shared/petGaze'
 import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
@@ -644,9 +646,23 @@ app.whenReady().then(() => {
     const wsName = readWorkspaceRegistry().find(w => w.path === payload.workspacePath)?.name ?? ''
     routeAndFire(buildNotification({ type: 'done', workspaceName: wsName, workspacePath: payload.workspacePath, sessionId: payload.sessionId, text: '会话已回复,点击查看' }))
   }
+  // ★「有一道门等着你」那条通知。**2026-08-30 之前它根本不存在** —— 老的 notifyBridge 挂在
+  //   已删掉的 orchestrator 的 `pending:add` 上,全仓库零引用,而设置里那两个开关一直摆着。
+  //   现在它看的是和 botBridge / pushService 完全同一批活信号。
+  const gateNotifier = createGateNotifier({
+    getCfg: () => readSettings().notifications,
+    isFocused: isMainFocused,
+    notify: routeAndFire,
+    workspaceName: (p) => readWorkspaceRegistry().find(w => w.path === p)?.name ?? '',
+  })
   const broadcastWithNotify = (channel: string, payload: unknown) => {
     hub.broadcast(channel, payload)
     if (channel === CH.chatEvent) notifyChatDone(payload)
+    gateNotifier(channel, payload)        // 门 → 本机系统通知(正文可以带内容,不经第三方)
+    // 门 / 跑完了 → 已登记的手机(决策 7:daemon 直发 Expo,不经中转)。
+    // ★只挂本机这一路:连着远程 host 时,推送该由**那台机器**发 —— 它才知道自己的设备表,
+    //   而且人此刻正对着这台电脑,再往他手机上推一条纯属噪音。
+    pushService.observe(channel, payload)
     botBridge.observe(channel, payload)   // mirror gate/ask/done/run2 events to the phone
   }
   // 唯一一处把方法表接到 Electron 上的地方。daemon 侧的 WS 网关遍历的是**同一张表** ——
@@ -665,6 +681,9 @@ app.whenReady().then(() => {
     onRemoteEvent: (channel, payload) => {
       registry.broadcast(channel, payload)
       if (channel === CH.chatEvent) notifyChatDone(payload)
+      // 远程那台升起来的门同样要在这块屏幕上弹一声 —— 而且远程恰恰是最需要的场景。
+      // ★推送不挂这儿:那台机器有它自己的设备表,由它直发(否则同一道门会推两遍)。
+      gateNotifier(channel, payload)
     },
     clientVersion: app.getVersion(),
     // 远程那台在系统提示里就显示这个名字。用机器名 —— 用户一眼认得出是哪台。

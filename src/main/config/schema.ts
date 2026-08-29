@@ -408,6 +408,27 @@ export const RelaySchema = z.object({
 export type RelayConfig = z.infer<typeof RelaySchema>
 export const defaultRelay = (): RelayConfig => ({ enabled: false, url: '' })
 
+/**
+ * 推送(第三期收尾)。**这台机器**要不要在门升起/跑完时往已登记的手机上发一条推送。
+ *
+ * ★跟机器走,和 `relay`、`notifyEvents` 同侧:发推送的是跑 agent 的那台机器,
+ *  它上面才知道门什么时候升起来;设备表(`push-devices.json`)也存在它那儿。
+ *
+ * ★★推送**只在手机不在跟前时**才发。手机开着的时候事件本来就通过 socket 到了,
+ *  由手机自己弹一条本地通知 —— 判据是同一个 `attentionOf`,两边互斥,不会弹两条。
+ *
+ * ★`done` 默认关:跑完了属于"回头看看"级别,而门是"没你就卡在那儿"。
+ *  半夜被一条"跑完了"吵醒一次,这个功能就会被整个关掉。
+ */
+export const PushSchema = z.object({
+  enabled: z.boolean().catch(false).default(false),
+  /** 门(权限门 / 代理提问 / 工作流门)—— 推送存在的理由就是这一档。 */
+  gate: z.boolean().catch(true).default(true),
+  done: z.boolean().catch(false).default(false),
+})
+export type PushConfig = z.infer<typeof PushSchema>
+export const defaultPush = (): PushConfig => ({ enabled: false, gate: true, done: false })
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
   // ★Q1:原本一个对象塞了两件事。
@@ -475,6 +496,7 @@ export const SettingsSchema = z.object({
   codexTransport: z.enum(['exec', 'app-server']).catch('exec').default('exec'),
   mobileGateway: MobileGatewaySchema.default(defaultMobileGateway),
   relay: RelaySchema.default(defaultRelay),
+  push: PushSchema.default(defaultPush),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -508,6 +530,7 @@ export const defaultSettings = (): Settings => ({
   codexTransport: 'exec',
   mobileGateway: defaultMobileGateway(),
   relay: defaultRelay(),
+  push: defaultPush(),
 })
 
 export const ProjectSchema = z.object({
@@ -741,6 +764,8 @@ export const HOST_SETTING_KEYS = [
   // ★和 `mobileGateway` 正好相反(那个说的是"这台电脑对手机开不开门",跟设备走),
   //   理由完整版在 RelaySchema 上面。
   'relay',
+  // 推送同理:发推送的是跑 agent 的那台机器,设备表也存在它那儿。
+  'push',
 ] as const
 
 export type ClientSettingKey = typeof CLIENT_SETTING_KEYS[number]

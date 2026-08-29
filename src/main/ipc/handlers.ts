@@ -39,6 +39,7 @@ import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflo
 import { workflowDisplayName, pickClient, pickHost } from '../config/schema'
 import { agentSessionsForId } from '../chat/agentSessions'
 import { botBridge, genPairing } from '../bot/botBridge'
+import { pushService } from '../push/pushService'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, AskAnswers, AskQuestion, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
@@ -1136,6 +1137,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     persistBotConfig({ ...bb, bindings: bb.bindings.filter(b => b.chatId !== a.chatId) })
     return (readSettings().botBridge as BotBridgeConfig).bindings
   })
+
+  // ── 推送。手机把自己的 Expo 推送令牌登记到**这台机器**上,并持续上报在场状态;
+  //    门升起 / 一轮跑完时,这台机器直接 POST 给 Expo(决策 7:不经中转、不自建后端)。
+  //    ★桌面端设置里也能看这张表和发测试推送,所以它们在方法表里而不是只给手机用。
+  on(CH.pushRegister, (_e, a: { token: string; label?: string; platform?: 'ios' | 'android' | 'web' }) =>
+    pushService.register({ token: String(a?.token ?? ''), label: a?.label, platform: a?.platform }))
+  on(CH.pushUnregister, (_e, a: { token: string }) => pushService.unregister(String(a?.token ?? '')))
+  on(CH.pushDevices, () => pushService.devices())
+  // ★在场上报是**高频**的(切前后台、换会话都会发一次),所以它什么都不返回 ——
+  //  一次往返里少一个响应体,手机上少一次序列化。
+  on(CH.pushPresence, (_e, a: { token: string; visible: boolean; at: { workspacePath: string; sessionId?: string | null } | null }) => {
+    pushService.presence(String(a?.token ?? ''), { visible: !!a?.visible, at: a?.at ?? null })
+  })
+  on(CH.pushTest, () => pushService.sendTest())
   // Provider-switch context summary: after the user confirms switching agent mid-session, the NEW
   // provider reads the prior conversation and produces a visible summary message (provider = toAgent,
   // so the timeline auto-inserts a provider-switch divider above it: old agent's msgs → summary).

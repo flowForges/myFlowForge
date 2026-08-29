@@ -22,6 +22,14 @@ export const CH = {
   relayStatusEvent: 'relay:status-event',
   /** 这台机器的长期身份公钥(base64)。配对二维码要用它。 */
   relayIdentity: 'relay:identity',
+  // ── 推送(第三期收尾)。★这几个**在方法表里**,和 mobile:*/relay:* 不同:
+  //    调用方是**手机**,它要把自己的推送令牌登记到**那台机器**上,并持续上报「我在不在」。
+  //    所以它必须跟着当前 host 走,不能是「这台设备自己的事」。
+  pushRegister: 'push:register',
+  pushUnregister: 'push:unregister',
+  pushDevices: 'push:devices',
+  pushPresence: 'push:presence',
+  pushTest: 'push:test',
   configGetSettings: 'config:get-settings',
   // 设置一分为二之后的两个半边(第二期 C)。`config:get/set-settings` 由路由器**组合**这两个:
   // 跟设备的那半边永远本机答,跟机器的那半边跟着当前 host 走。

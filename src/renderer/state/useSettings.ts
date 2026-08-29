@@ -33,6 +33,7 @@ const DEFAULTS: Settings = {
   codexTransport: 'exec',
   mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
   relay: { enabled: false, url: '' },
+  push: { enabled: false, gate: true, done: false },
 }
 
 export interface SettingsUpdate {
@@ -105,6 +106,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // ★浅展开一层。整份替换会让一个只带 `enabled` 的补丁把 `url` 抹掉 ——
     //  外观那边正是这么丢过一次的(见本文件里 appearance 那条)。
     relay: { ...base.relay, ...((partial as Partial<Settings>).relay ?? {}) },
+    push: { ...base.push, ...((partial as Partial<Settings>).push ?? {}) },
   }
 }
 

@@ -41,7 +41,9 @@ describe('方法表', () => {
     // ★这行加数以前写的是 162+22(=184),对不上断言里的 186:那是历史上加 channel 时只改了总数、
     // 没跟着改分解,已按今日实测重新数过。改这个数就要在 commit message 里说清楚加/删了哪个 channel。
     // 186 → 187:手机端二期的跨设备未读加了 `chat:mark-seen`(`chat:seen` 是纯广播,没有 handler,不进表)。
-    // 另外两处计数互为佐证:187 = 45(CLIENT_ONLY)+ 142(host),daemonTable = 187 - 45 - 2。
-    expect(Object.keys(table).length).toBe(187)
+    // 187 → 192:推送(第三期收尾)加了五个 —— push:register / unregister / devices / presence / test。
+    //   ★它们全走 host:调用方是手机,要把令牌登记到**那台机器**上,并由那台机器发推送。
+    // 另外两处计数互为佐证:192 = 45(CLIENT_ONLY)+ 147(host),daemonTable = 192 - 45 - 2。
+    expect(Object.keys(table).length).toBe(192)
   })
 })
