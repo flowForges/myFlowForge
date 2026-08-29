@@ -89,7 +89,20 @@ export default function Hosts() {
                     ) : isCurrent ? (
                       <Pill tone="run">已连接</Pill>
                     ) : null}
-                    <Pressable onPress={() => remove(h)} hitSlop={10} style={{ paddingHorizontal: 4 }}>
+                    {/* ★★这颗原来是 `hitSlop={10}` + 4pt 内边距 —— 实际热区约 **23×20pt**,
+                        而它是这一屏唯一的**破坏性**控件(删掉主机 = 忘掉地址和令牌)。
+                        `hitSlop` 在祖先紧贴子节点时是**死的**(Fabric 的 `overflowInset`),
+                        而这一行的外层 Pressable 正好紧贴着它 —— 旁边那颗 › 早就是这么修的,
+                        它俩挨着,却一个 44×44 一个 23×20。真长出来的只有 `width`/`height`。
+                        ★按下态是必须的:热区变大之后,「点没点到」的唯一反馈就是它。 */}
+                    <Pressable
+                      onPress={() => remove(h)}
+                      accessibilityLabel={`删除 ${h.label}`}
+                      style={({ pressed }) => [
+                        { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
+                        pressed && { backgroundColor: c.surface2 },
+                      ]}
+                    >
                       <T style={{ fontSize: 15, color: c.faint }}>✕</T>
                     </Pressable>
                     {/* ★★这是 `/host` 唯一的入口了(见文件顶上 I1 的说明)—— iOS 那种「行尾 › 详情」

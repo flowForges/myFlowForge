@@ -113,7 +113,7 @@ export function GateCard({
                   !online && { opacity: 0.4 },
                 ]}
               >
-                <T style={[st.btnText, { color: c.onGate }]}>👁 看看</T>
+                <T numberOfLines={1} style={[st.btnText, { color: c.onGate }]}>👁 看看</T>
               </Pressable>
             ) : null}
             <Pressable
@@ -126,7 +126,7 @@ export function GateCard({
                 !online && { opacity: 0.4 },
               ]}
             >
-              <T style={[st.btnText, { color: c.onGate }]}>拒绝</T>
+              <T numberOfLines={1} style={[st.btnText, { color: c.onGate }]}>拒绝</T>
             </Pressable>
             <Pressable
               onPress={onAllow}
@@ -138,7 +138,7 @@ export function GateCard({
                 !online && { opacity: 0.4 },
               ]}
             >
-              <T style={[st.btnText, { color: c.gate }]}>允许执行</T>
+              <T numberOfLines={1} style={[st.btnText, { color: c.gate }]}>允许执行</T>
             </Pressable>
           </View>
         </>
@@ -159,7 +159,7 @@ export function GateCard({
           </View>
           <View style={st.acts}>
             <View style={[st.btn, { backgroundColor: c.onGate }, !online && { opacity: 0.4 }]}>
-              <T style={[st.btnText, { color: c.gate }]}>去回答</T>
+              <T numberOfLines={1} style={[st.btnText, { color: c.gate }]}>去回答</T>
             </View>
           </View>
         </Pressable>
@@ -193,9 +193,18 @@ const st = StyleSheet.create({
   acts: { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingBottom: 10 },
   btn: { flex: 1, minHeight: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   // ★三颗按钮各占 `flex: 1` 时,390px 上「允许执行」会被挤到只剩两个字宽 —— 主动作反而最窄。
-  //  所以「看看」退出等分:`flex: 0` 在 Yoga 里就是 `0 0 auto`(按内容宽),剩下的宽度
-  //  仍旧由「拒绝」和「允许执行」两颗对半分。
-  peek: { flex: 0, paddingHorizontal: 14 },
+  //  所以「看看」退出等分,按内容宽。
+  //
+  // ★★2026-08-30:真机上「看看」两个字**竖排**了。原来这里写的是 `flex: 0` ——
+  //  简写在 Yoga 里展开成 `flexGrow:0 / flexShrink:0 / flexBasis:auto` 这件事**只在
+  //  RN 自己的文档里成立**,而 `btn` 上已经有一个 `flex: 1`,两条规则在同一个数组里合并时
+  //  展开顺序是实现细节。合出 `flexShrink: 1` 的那一刻,这颗按钮就会被两个 flex:1 的兄弟
+  //  挤窄 —— 而 Yoga **没有** web 那条 `min-width: auto`(它默认是 0),所以它可以一路缩到
+  //  比内容还窄,里面的文字于是逐字换行。**别再用 flex 简写去覆盖另一个 flex 简写。**
+  //  三个字段各写各的,合并出什么一目了然。
+  //  ★配套:四颗按钮的文字都加了 `numberOfLines={1}` —— 万一哪天真的宽度不够,
+  //   结果是省略号(还看得出是什么),不是竖排(读都读不出来)。
+  peek: { flexGrow: 0, flexShrink: 0, flexBasis: 'auto', paddingHorizontal: 14 },
   btnText: { fontSize: 15, fontWeight: '700' },
   more: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 8 },
   offline: { paddingHorizontal: 13, paddingVertical: 7 },
