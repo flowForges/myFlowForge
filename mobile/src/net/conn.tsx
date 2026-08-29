@@ -95,6 +95,9 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
     const c = connectHost({
       url: activeHost.url,
       token: activeHost.token || undefined,
+      // 有公钥就加密,再有中转地址就走中转。三档的判据全在 `hostClient.ts` 里,这儿只是传下去。
+      pubKey: activeHost.pubKey || undefined,
+      relayUrl: activeHost.relay || undefined,
       clientVersion: CLIENT_VERSION,
       clientLabel: CLIENT_LABEL,
       onState: (s) => setState(s),
@@ -111,7 +114,9 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       clientRef.current = null
       c.close()
     }
-  }, [activeHost?.id, activeHost?.url, activeHost?.token, attemptKey, listeners])
+    // ★依赖里必须带上 pubKey / relay:它们变了就是**换了一条链路**(明文↔加密、直连↔中转),
+    //  不重连的话新配置要等到下一次手动重连才生效 —— 而用户刚重扫过码,会以为没保存上。
+  }, [activeHost?.id, activeHost?.url, activeHost?.token, activeHost?.pubKey, activeHost?.relay, attemptKey, listeners])
 
   const invoke = useCallback(async (ch: string, args: unknown[] = []) => {
     const c = clientRef.current

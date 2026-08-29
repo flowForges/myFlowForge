@@ -5,6 +5,13 @@ import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { ThemeProvider, useTheme } from '../src/theme/theme'
 import { ConnProvider } from '../src/net/conn'
 import { StoreProvider } from '../src/data/store'
+import { installPRNG } from '../src/net/prng'
+
+// ★★在**任何东西**加载之前接上随机数源。tweetnacl 拿不到 `crypto.getRandomValues` 时
+//  它的 randombytes 是一个 `throw new Error('no PRNG')` —— 而 RN 上确实没有这个全局。
+//  放在模块顶层(不是某个 effect 里)是有意的:握手可能发生在任何一屏,
+//  而"哪一屏先渲染"是会变的。理由完整版见 `src/net/prng.ts`。
+installPRNG()
 
 function Nav() {
   const { c, name } = useTheme()

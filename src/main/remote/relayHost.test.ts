@@ -4,8 +4,8 @@ import { clientHandshakeInit, generateIdentity } from '@shared/remote/e2e'
 import { joinFrame, roomFor } from '@shared/remote/relayWire'
 import { startRelay, type RelayHandle } from '../../../relay/src/node'
 import { startRelayHost, type RelayHostHandle } from './relayHost'
-import { clientE2ELink } from './e2eChannel'
-import type { Channel } from './serveConnection'
+import { clientE2ELink } from '@shared/remote/e2eChannel'
+import type { Channel } from '@shared/remote/channel'
 import type { MethodTable } from '../ipc/invokeCtx'
 
 /**

@@ -18,6 +18,17 @@ export type MobileHost = {
   /** 一个 emoji,空=用默认 */
   icon: string
   lastConnectedAt: number
+  /**
+   * daemon 的长期公钥(base64,来自配对码里的 `k`)。**有它就走端到端加密。**
+   * ★可选:老配对码没有它,那些主机继续按明文直连工作 —— 一次升级不该让已经配好的主机失效。
+   */
+  pubKey?: string
+  /**
+   * 中转地址(配对码里的 `r`)。有它就不直连,拨号到中转进 daemon 的房间。
+   * ★必须配 `pubKey`。没有身份验证的中转 = 把令牌和全部内容交给第三方,
+   *  `pairingLink.ts` 和 `hostClient.ts` 两处都挡了这种组合。
+   */
+  relay?: string
 }
 
 export const DEFAULT_HOST_ICON = '🖥️'

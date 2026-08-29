@@ -35,11 +35,18 @@ export default function AddHost() {
   const { addHost, selectHost } = useConn()
   // ★用 useState 的**初值**读参数,不要写进 effect 里回填 —— effect 每次参数对象换新引用都会跑一遍,
   //  会把人已经改过的地址悄悄推回二维码里那个值。
-  const q = useLocalSearchParams<{ a?: string; t?: string; n?: string }>()
+  const q = useLocalSearchParams<{ a?: string; t?: string; n?: string; k?: string; r?: string }>()
   const [scanned] = useState(() => !!one(q.a))
   const [label, setLabel] = useState(() => one(q.n))
   const [addr, setAddr] = useState(() => one(q.a))
   const [token, setToken] = useState(() => one(q.t))
+  /**
+   * 身份公钥和中转地址。★**只读,不给人改** —— 它们不是"设置",是配对码搬过来的事实。
+   *  手输一把公钥没有任何意义(错一个字符就连不上,而且没人核对得了),
+   *  所以这两样没有输入框,只在下面显示一行"这台会加密 / 走中转"。
+   */
+  const [pubKey] = useState(() => one(q.k))
+  const [relay] = useState(() => one(q.r))
   const [err, setErr] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -53,7 +60,9 @@ export default function AddHost() {
       return
     }
     // 非回环地址,daemon 一定强制令牌。这里先说清楚,免得连上去只看到一句「鉴权失败」。
-    if (!isLoopbackUrl(p.url) && !token.trim()) {
+    // ★走中转时也必须有令牌:那条路上 daemon 一样开着 token 校验(两条路共用同一个)。
+    //  只按地址判的话,一个填了回环地址 + 中转的记录会被放过,然后在握手后被 4403 断掉。
+    if ((!isLoopbackUrl(p.url) || relay.trim()) && !token.trim()) {
       setErr('这不是本机回环地址,daemon 会强制要令牌。在电脑上运行 daemon 时会打印它。')
       return
     }
@@ -65,6 +74,9 @@ export default function AddHost() {
         url: p.url,
         token: token.trim(),
         icon: '',
+        // 空串一律存 undefined —— 下游只判「有没有」,不用再各写一遍 `x && x !== ''`。
+        pubKey: pubKey.trim() || undefined,
+        relay: relay.trim() || undefined,
       })
       await selectHost(h.id)
       // ★回**主机列表**,不是 goBack()。见 nav.ts 的 goToHosts:扫码那条路会在栈里留下两个

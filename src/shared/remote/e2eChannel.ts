@@ -6,15 +6,20 @@ import {
   seal,
   type Identity,
   type Session,
-} from '@shared/remote/e2e'
-import type { Channel } from './serveConnection'
+} from './e2e'
+import type { Channel } from './channel'
 
 /**
  * 把一条**明文的**双工信道,变成一条端到端加密的双工信道。
  *
+ * ★★放在 `src/shared` 而不是 `src/main`:**手机端也要用客户端那一半**。
+ *  原来它在 `src/main/remote/` 下,而那儿的 `serveConnection.ts` import 了 `node:crypto` ——
+ *  手机 import 过来会把整条链拖进 RN 的 bundle。现在这个文件只依赖 `./e2e`(纯 tweetnacl)
+ *  和 `./channel`(零 import 的类型)。
+ *
  * ## 为什么要单独一层
  *
- * `serveConnection` 只认「发一行文本、收一行文本」(见那边的 `Channel`)。加密不该渗进它 ——
+ * `serveConnection` 只认「发一行文本、收一行文本」(见 `channel.ts` 的 `Channel`)。加密不该渗进它 ——
  * 局域网直连那条路根本不套加密(那条链路上没有第三方),而中转那条路每一个字节都必须封起来。
  * 两条路要跑**同一套** hello/auth/ready/req/res,所以差异必须收在一层里,就是这一层。
  *

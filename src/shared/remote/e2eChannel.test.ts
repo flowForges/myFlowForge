@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { generateIdentity, seal, type Session } from '@shared/remote/e2e'
+import { generateIdentity, seal, type Session } from './e2e'
 import { clientE2ELink, hostE2ELink } from './e2eChannel'
-import type { Channel } from './serveConnection'
+import type { Channel } from './channel'
 
 /** 一条假线路:记下发出去的原始文本和关闭码。 */
 function wire() {

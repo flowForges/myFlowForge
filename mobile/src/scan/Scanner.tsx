@@ -41,7 +41,15 @@ export default function Scanner() {
     //  会退回一个还开着的摄像头,它立刻又扫到同一枚码,把人弹回去 —— 一个退不出去的环。
     router.replace({
       pathname: '/add-host',
-      params: { a: r.value.address, t: r.value.token, n: r.value.label },
+      // ★`k`/`r` 缺省时传空串而不是不传:`useLocalSearchParams` 对"没有这个键"和
+      //  "值是空串"给出的都是 undefined/'',下游 `one()` 已经统一处理,传空串更省一层判断。
+      params: {
+        a: r.value.address,
+        t: r.value.token,
+        n: r.value.label,
+        k: r.value.pubKey ?? '',
+        r: r.value.relay ?? '',
+      },
     })
   }
 

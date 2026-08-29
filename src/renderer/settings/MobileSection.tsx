@@ -19,6 +19,14 @@ import { QrCode } from './QrCode'
  */
 export function MobileSection() {
   const [st, setSt] = useState<MobileStatus | null>(null)
+  /**
+   * 这台机器的长期身份公钥 + 中转地址 —— 二维码里的 `k` 和 `r`。
+   *
+   * ★★为什么要单独拉一次而不是从 `MobileStatus` 里拿:身份和中转是**这台机器**的属性,
+   *  而 `MobileStatus` 说的是"局域网网关现在什么样"。塞进去的话,一个只开中转、
+   *  没开局域网网关的人就拿不到公钥了 —— 而他恰恰是最需要那个二维码的人。
+   */
+  const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean } | null>(null)
   const [port, setPort] = useState('6789')
   const [lan, setLan] = useState(true)
   const [showToken, setShowToken] = useState(false)
@@ -47,6 +55,19 @@ export function MobileSection() {
     try { setSt(await window.forge.mobileApply(next)) } finally { setBusy(false) }
   }
 
+  // 身份和中转状态跟着走。★`?.` 防御:旧 preload 里没有这几个方法(见下面 `?? ''` 那条同理)。
+  useEffect(() => {
+    const pull = () => {
+      void window.forge.relayStatus?.().then((r) =>
+        setRelay(r ? { publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled } : null),
+      )
+    }
+    pull()
+    return window.forge.onRelayStatus?.((r) =>
+      setRelay(r ? { publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled } : null),
+    )
+  }, [])
+
   const copy = (what: string, text: string) => {
     void navigator.clipboard?.writeText(text)
     setCopied(what)
@@ -61,7 +82,17 @@ export function MobileSection() {
   const addr = `${first}:${st.port}`
   // ★`?? ''` 不是多余的防御:这份 status 是**跨进程**来的,连着一台跑旧版本的主机时
   //  就是少几个字段。少一个字段不该让整屏设置炸成白板(旧 preload 那次已经教过一遍)。
-  const pairing = buildPairingLink({ address: addr, token: st.token ?? '', label: st.name ?? '' })
+  const pairing = buildPairingLink({
+    address: addr,
+    token: st.token ?? '',
+    label: st.name ?? '',
+    // ★★公钥**只要有就带上**,不看中转开没开:带上它的意思是"这条链路可以端到端加密",
+    //  而那对直连一样成立(而且直连也该加密 —— 同一套代码,少一跳)。
+    pubKey: relay?.publicKey || undefined,
+    // ★中转地址只在**真的开着**的时候带。关着还带的话,手机会拨一个没人应答的地方,
+    //  然后停在"连接中"—— 比直接走局域网糟得多。
+    relay: relay?.enabled && relay.url ? relay.url : undefined,
+  })
 
   return (
     <>

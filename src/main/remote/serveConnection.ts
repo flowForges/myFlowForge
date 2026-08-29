@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto'
 import { encodeFrame, decodeFrame, errorText, PROTOCOL_VERSION } from '@shared/remote/protocol'
 import type { InvokeCtx, MethodTable } from '../ipc/invokeCtx'
+import type { Channel } from '@shared/remote/channel'
 
 /**
  * 「一条连接上,我们怎么说话」—— 从 `gateway.ts` 里原样抽出来的那一段。
@@ -18,17 +19,10 @@ import type { InvokeCtx, MethodTable } from '../ipc/invokeCtx'
  * ★**这次抽取是纯搬运,一行行为都不许变**。`gateway.test.ts` 那一整套是它的回归网。
  */
 
-/** 最小双工信道。发的和收的都是**一行文本**(既有协议本来就是 JSON 文本帧)。 */
-export type Channel = {
-  /** 发一帧。★实现方自己吞掉「已经关了」的写失败 —— 一条写不出去不该炸掉整个网关。 */
-  send: (text: string) => void
-  /** 收到一帧。只会被调用一次来注册。 */
-  onMessage: (cb: (text: string) => void) => void
-  /** 主动关掉。`code`/`reason` 对 ws 有意义,对别的实现可以忽略。 */
-  close: (code: number, reason: string) => void
-  /** 关掉了(不论谁关的)。只会被调用一次来注册。 */
-  onClose: (cb: () => void) => void
-}
+// ★`Channel` 搬到了 `@shared/remote/channel` —— 手机端也要用加密层,而这个文件
+//  import 了 `node:crypto`,从这儿拿类型会把整条链拖进 RN 的 bundle。
+//  这里原样再导出,既有调用方一行不用改。
+export type { Channel }
 
 export type ServeOpts = {
   /** 已经筛过的方法表 —— 只包含这台 host 该对外提供的方法(见 channelRouting.daemonTable) */

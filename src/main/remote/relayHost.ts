@@ -3,7 +3,7 @@ import type { Identity } from '@shared/remote/e2e'
 import { hostClose, hostData, joinFrame, parseHostEnvelope, roomFor, asRelayStatus } from '@shared/remote/relayWire'
 import type { MethodTable } from '../ipc/invokeCtx'
 import { serveConnection, type Channel } from './serveConnection'
-import { hostE2ELink, type E2ELink } from './e2eChannel'
+import { hostE2ELink, type E2ELink } from '@shared/remote/e2eChannel'
 
 /**
  * daemon 通过**中转**对外服务。
