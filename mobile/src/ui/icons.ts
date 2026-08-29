@@ -6,7 +6,10 @@
  *  SF Symbols 是 iOS 系统自带的那套,每一个原生 app 用的都是它。
  *
  * ★为什么不装 @expo/vector-icons:`expo-symbols` 已经在包里(`expo-router` 的传递依赖,
- *  见 ios/Podfile.lock 的 ExpoSymbols 57.0.2)—— 零新依赖、零重打包,当前这个包就能验。
+ *  用 `npx expo-modules-autolinking resolve -p ios` 能看到 ExpoSymbols 会被链入 ——
+ *  2026-08-28 Task 11 复审纠正过:`ios/Podfile.lock` 是 pod install 的下游产物,
+ *  prebuild 会把它连同 `ios/Pods` 一起删掉,那份证据引用的是一个可能根本不存在的文件)
+ *  —— 零新依赖、零重打包,当前这个包就能验。
  *  而 Ionicons 那套长得不像 iOS 系统图标,在 iPhone 上跟周围的原生 app 对不上号。
  *
  * ★这个文件刻意零 import(同 wsTile.ts / tree.ts):根 vitest.config.ts 里 `mobile`

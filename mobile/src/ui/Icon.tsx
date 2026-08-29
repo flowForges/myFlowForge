@@ -7,7 +7,9 @@ import { EMOJI, SF, type IconName } from './icons'
  * 全 app 唯一画图标的地方。
  *
  * ★`expo-symbols` 走**运行时 require**,不是静态 import。它虽然已经编进当前这个包
- *  (ios/Podfile.lock 的 ExpoSymbols),但 web 端(`npm run --prefix mobile web`,真机验收
+ *  (`npx expo-modules-autolinking resolve -p ios` 能看到 ExpoSymbols 会被链入 ——
+ *  不是 `ios/Podfile.lock`:那份文件是 pod install 的下游产物,prebuild 会把它删掉,
+ *  见 `icons.ts` 顶上同一条纠正),但 web 端(`npm run --prefix mobile web`,真机验收
  *  一直在用的那条路)根本没有这个原生模块 —— 静态 import 会被 metro 提到最前无条件执行,
  *  整个 app 崩在那一行。同 `app/scan.tsx` / `chat.tsx` 的 CAN_PICK。
  *

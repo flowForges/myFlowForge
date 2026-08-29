@@ -276,7 +276,9 @@ export default function Home() {
   /**
    * 新建会话。★入口现在是**每个展开的工作区底下那一行**,不再是顶栏那颗 ＋ ——
    * 你点开抽屉的时候人已经在这个工作区里了,再弹一张单子问「哪个工作区」是多此一问。
-   * (新建**工作区**是另一条路:列表最底下那颗按钮 → `/new-workspace`。)
+   * (新建**工作区**是另一条路:顶栏右上角那颗 ＋(`ROUTES.newWorkspace`,见下面 `TopBar`)。
+   *  「列表最底下那颗按钮」已经不是常驻入口了 —— 那颗按钮现在只在**一个工作区都没有**的
+   *  空态里出现,是那句「先建一个」的附带动作,不是并列的第二个入口。)
    */
   const newSession = async (wsPath: string) => {
     setCreating(true)
@@ -622,7 +624,7 @@ export default function Home() {
           <>
             <Empty title="这台机器上还没有工作区" desc="工作区是一堆项目 + 一条工作流。先建一个,才有地方开会话。" />
             <View style={{ paddingHorizontal: 30 }}>
-              <Btn kind="pri" block onPress={() => router.push('/new-workspace')}>
+              <Btn kind="pri" block onPress={() => router.push(ROUTES.newWorkspace)}>
                 ＋ 新建工作区
               </Btn>
             </View>
