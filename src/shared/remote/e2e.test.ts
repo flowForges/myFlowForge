@@ -11,13 +11,12 @@ import {
   generateIdentity,
   hostHandshakeReply,
   open,
-  pairingLink,
-  parsePairingLink,
   seal,
   toBase64,
   utf8ToBytes,
   type Session,
 } from './e2e'
+import { buildPairingLink, parsePairingLink } from './pairingLink'
 
 /**
  * ★这一层的断言不是照着实现写的,是照着**攻击者会做什么**写的:
@@ -68,37 +67,37 @@ describe('utf8 —— 同样不依赖 TextEncoder', () => {
   })
 })
 
-describe('配对链接 —— 唯一的信任锚点', () => {
-  it('往返', () => {
+describe('配对链接搬的就是这把公钥', () => {
+  // ★配对链接本身的解析规则在 `pairingLink.test.ts` 里钉(那份是电脑端和手机端**真正**在用的)。
+  //  这里只钉一件那边钉不到的事:**一把真的 Ed25519 公钥,搬一趟回来必须一个字节都不差**。
+  //  那边用的是合成的 base64 串,而真钥匙里会出现 `+` `/` `=` —— 它们恰好是 query 里的特殊字符。
+  it('★★真公钥往返:字节级相等', () => {
+    for (let i = 0; i < 200; i++) {
+      const id = generateIdentity()
+      const link = buildPairingLink({
+        address: '192.168.1.10:6789',
+        token: 'tok',
+        label: '我的 MacBook',
+        pubKey: toBase64(id.publicKey),
+      })
+      const r = parsePairingLink(link)
+      expect(r.ok, link).toBe(true)
+      if (!r.ok) return
+      const back = fromBase64(r.value.pubKey!)
+      expect(back, link).not.toBeNull()
+      expect(Array.from(back!), link).toEqual(Array.from(id.publicKey))
+    }
+  })
+
+  it('★★搬回来的公钥要真能用来验签 —— 往返"看起来对"不等于"能验"', () => {
     const id = generateIdentity()
-    const link = pairingLink(id.publicKey, '192.168.1.10:6789', '我的 MacBook')
-    const p = parsePairingLink(link)!
-    expect(Array.from(p.publicKey)).toEqual(Array.from(id.publicKey))
-    expect(p.addr).toBe('192.168.1.10:6789')
-    expect(p.name).toBe('我的 MacBook')
-  })
-
-  it('地址里的特殊字符不能把链接拆坏', () => {
-    const id = generateIdentity()
-    const p = parsePairingLink(pairingLink(id.publicKey, 'wss://a.b/c?x=1&y=2'))!
-    expect(p.addr).toBe('wss://a.b/c?x=1&y=2')
-  })
-
-  it('★公钥长度不对就整条拒绝 —— 这不是一把公钥', () => {
-    expect(parsePairingLink('myflowforge://pair?k=AAAA&a=x')).toBeNull()
-  })
-
-  it('★坏的百分号转义不能让它抛,要返回 null', () => {
-    expect(parsePairingLink('myflowforge://pair?k=AAAA&a=%ZZ')).toBeNull()
-  })
-
-  it('缺字段 / 协议头不对一律 null', () => {
-    const id = generateIdentity()
-    const k = encodeURIComponent(toBase64(id.publicKey))
-    expect(parsePairingLink(`myflowforge://pair?k=${k}`)).toBeNull()
-    expect(parsePairingLink(`myflowforge://pair?a=x`)).toBeNull()
-    expect(parsePairingLink(`https://evil.com/pair?k=${k}&a=x`)).toBeNull()
-    expect(parsePairingLink('')).toBeNull()
+    const r = parsePairingLink(buildPairingLink({ address: 'x:1', token: '', label: '', pubKey: toBase64(id.publicKey) }))
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const trusted = fromBase64(r.value.pubKey!)!
+    const { pending, frame: init } = clientHandshakeInit()
+    const hostSide = hostHandshakeReply(id, init)!
+    expect(clientHandshakeFinish(pending, hostSide.frame, trusted)).not.toBeNull()
   })
 })
 

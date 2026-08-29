@@ -6,12 +6,12 @@ import {
   generateIdentity,
   hostHandshakeReply,
   open,
-  pairingLink,
-  parsePairingLink,
   seal,
   toBase64,
   type Session,
 } from '../../src/shared/remote/e2e'
+import { buildPairingLink, parsePairingLink } from '../../src/shared/remote/pairingLink'
+import { fromBase64 } from '../../src/shared/remote/base64'
 import { startRelay, type RelayHandle } from './node'
 
 /**
@@ -123,8 +123,17 @@ describe('通过不可信中转的端到端加密链路', () => {
     relay = await startRelay({ port: 0, host: '127.0.0.1' })
 
     // 人把配对链接从电脑屏幕搬到手机上 —— 这是唯一不经过网络的一步
-    const link = pairingLink(identity.publicKey, `ws://127.0.0.1:${relay.port}`, '我的 MacBook')
-    const paired = parsePairingLink(link)!
+    const link = buildPairingLink({
+      address: `127.0.0.1:${relay.port}`,
+      token: '',
+      label: '我的 MacBook',
+      pubKey: toBase64(identity.publicKey),
+      relay: `ws://127.0.0.1:${relay.port}`,
+    })
+    const parsed = parsePairingLink(link)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const paired = { publicKey: fromBase64(parsed.value.pubKey!)! }
 
     // ── daemon 连上中转,占住自己的房间 ──────────────────────────────────
     const hostWs = await connect(relay.port)

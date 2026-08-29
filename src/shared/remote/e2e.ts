@@ -78,45 +78,17 @@ export function generateIdentity(): Identity {
 }
 
 /**
- * 配对链接。**它只承载「这台 daemon 是谁」,不承载「怎么连上它」**——
- * 地址可以变(换中转、换 IP),身份不变。
+ * ★★配对链接**不在这个文件里**。
  *
- * 形如 `myflowforge://pair?k=<base64 公钥>&a=<地址>&n=<显示名>`。
+ * 这里原来有一份自带的 `pairingLink` / `parsePairingLink`(`myflowforge://pair?k=&a=&n=`),
+ * 从写下那天起**一行没被 import 过**,而与此同时 `./pairingLink.ts` 里另有一份**格式完全不同**的
+ * (`myflowforge://add-host?v=1&a=&t=&n=`)正在被电脑端和手机端真正使用。两份并存的唯一结局是
+ * 哪天有人照着这份实现去改电脑端、照着那份去改手机端,然后「扫了没反应」——
+ * 而相机那一侧根本不会告诉你它解出了什么。
+ *
+ * 已经合并到 `./pairingLink.ts`(那份加了 `k` = 这里的公钥、`r` = 中转地址)。
+ * ★这个文件只管密码学,不管怎么把公钥搬到手机上。
  */
-export function pairingLink(pub: Uint8Array, addr: string, name?: string): string {
-  const q = [`k=${encodeURIComponent(toBase64(pub))}`, `a=${encodeURIComponent(addr)}`]
-  if (name) q.push(`n=${encodeURIComponent(name)}`)
-  return `myflowforge://pair?${q.join('&')}`
-}
-
-export type Pairing = { publicKey: Uint8Array; addr: string; name?: string }
-
-/**
- * 解配对链接。**任何一处不对就整条拒绝** —— 这是信任锚点,
- * 「大概能解出来」在这里等于「接受了一个来路不明的公钥」。
- */
-export function parsePairingLink(link: string): Pairing | null {
-  const m = /^myflowforge:\/\/pair\?(.+)$/.exec(link.trim())
-  if (!m) return null
-  const params = new Map<string, string>()
-  for (const kv of m[1].split('&')) {
-    const i = kv.indexOf('=')
-    if (i < 0) continue
-    try {
-      params.set(kv.slice(0, i), decodeURIComponent(kv.slice(i + 1)))
-    } catch {
-      return null // 坏的百分号转义
-    }
-  }
-  const k = params.get('k')
-  const a = params.get('a')
-  if (!k || !a) return null
-  const pub = fromBase64(k)
-  // Ed25519 公钥就是 32 字节。长度不对说明这根本不是一把公钥,别往下走。
-  if (!pub || pub.length !== nacl.sign.publicKeyLength) return null
-  const name = params.get('n')
-  return { publicKey: pub, addr: a, name: name || undefined }
-}
 
 // ── 握手 ─────────────────────────────────────────────────────────────────────
 
