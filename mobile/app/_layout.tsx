@@ -5,6 +5,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { ThemeProvider, useTheme } from '../src/theme/theme'
 import { ConnProvider } from '../src/net/conn'
 import { StoreProvider } from '../src/data/store'
+import { PushProvider } from '../src/push/PushProvider'
 import { installPRNG } from '../src/net/prng'
 
 // ★★在**任何东西**加载之前接上随机数源。tweetnacl 拿不到 `crypto.getRandomValues` 时
@@ -42,7 +43,12 @@ export default function RootLayout() {
         <ThemeProvider>
           <ConnProvider>
             <StoreProvider>
-              <Nav />
+              {/* ★必须在 StoreProvider **里面**:提醒要知道「你正看着哪条会话」(store.viewing),
+                  那是判断「这条该不该弹」的全部依据。在外面的话它只能拿到 null,
+                  于是你正盯着的那道门也会弹你一下。 */}
+              <PushProvider>
+                <Nav />
+              </PushProvider>
             </StoreProvider>
           </ConnProvider>
         </ThemeProvider>

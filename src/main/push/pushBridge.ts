@@ -1,5 +1,6 @@
 import { attentionOf, type Presence, type PushTarget } from '@shared/push/attention'
 import { buildPush, pushKey, NEEDS_YOU, type PushEvent, type PushKind } from '@shared/push/message'
+import { pushEventFrom } from '@shared/push/fromEvent'
 import type { ExpoMessage, SendResult } from './expoPush'
 import type { PushDevice } from './pushStore'
 
@@ -42,16 +43,6 @@ export type PushBridgeDeps = {
   now: () => number
   onLog?: (msg: string) => void
 }
-
-type ChatEventLike = {
-  workspacePath?: string
-  sessionId?: string | null
-  type?: string
-  id?: string
-}
-type Run2EventLike = { workspacePath?: string; event?: { id?: string; kind?: string } }
-
-const LANE_KINDS = new Set(['question', 'auth', 'doubt', 'failure'])
 
 export type PushBridge = {
   observe(channel: string, payload: unknown): void
@@ -109,29 +100,14 @@ export function createPushBridge(deps: PushBridgeDeps): PushBridge {
       .catch((err) => log(`推送发送异常: ${err instanceof Error ? err.message : String(err)}`))
   }
 
-  const onChat = (p: ChatEventLike) => {
-    const target: PushTarget = { workspacePath: p.workspacePath ?? '', sessionId: p.sessionId ?? null }
-    if (p.type === 'confirm-request') fire('confirm', target, p.id)
-    else if (p.type === 'ask-request') fire('ask', target, p.id)
-    else if (p.type === 'done') fire('done', target)
-  }
-
-  const onRun2 = (p: Run2EventLike) => {
-    const e = p.event
-    if (!e) return
-    // ★工作流的门挂在**工作区**上,没有会话。sessionId 必须是 null 而不是 undefined ——
-    //  在场判定拿它跟手机上报的位置比,两边得是同一种空。
-    const target: PushTarget = { workspacePath: p.workspacePath ?? '', sessionId: null }
-    if (e.kind === 'gate') fire('gate', target, e.id)
-    else if (e.kind && LANE_KINDS.has(e.kind)) fire('question', target, e.id)
-  }
-
   return {
     observe(channel, payload) {
       // 一条畸形 payload 绝不能把广播总线带崩 —— 它上面挂着整个界面的事件流。
       try {
-        if (channel === 'chat:event') onChat((payload ?? {}) as ChatEventLike)
-        else if (channel === 'run2:event') onRun2((payload ?? {}) as Run2EventLike)
+        // ★映射是**两端共用**的那一份(`@shared/push/fromEvent`):手机拿同一份决定弹不弹
+        //  本地通知。各写一套的话某一路信号会在一端漏掉,而症状只是「有时候有提醒」。
+        const src = pushEventFrom(channel, payload)
+        if (src) fire(src.kind, src.target, src.eventId)
       } catch (e) {
         log(`推送观察者吞掉一个异常: ${e instanceof Error ? e.message : String(e)}`)
       }

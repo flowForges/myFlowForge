@@ -365,6 +365,13 @@ const api = {
     ipcRenderer.on(CH.relayStatusEvent, listener)
     return () => { ipcRenderer.removeListener(CH.relayStatusEvent, listener) }
   },
+
+  // ── 推送。★这几个走的是**方法表**(不像 mobile:*/relay:* 那样只在本机注册),
+  //    所以连着远程 host 时它们问的是**那台机器**的设备表 —— 那才是发推送的人。
+  pushDevices: (): Promise<import('../main/push/pushStore').PushDevice[]> => ipcRenderer.invoke(CH.pushDevices),
+  pushUnregister: (token: string): Promise<import('../main/push/pushStore').PushDevice[]> =>
+    ipcRenderer.invoke(CH.pushUnregister, { token }),
+  pushTest: (): Promise<import('../main/push/expoPush').SendResult> => ipcRenderer.invoke(CH.pushTest),
   onSettingsChangedBy: (cb: (p: { by: string }) => void) => {
     const listener = (_: unknown, p: { by: string }) => cb(p)
     ipcRenderer.on(CH.settingsChangedBy, listener)

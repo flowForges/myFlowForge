@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { MobileStatus } from '../../main/host/appGateway'
 import { buildPairingLink } from '@shared/remote/pairingLink'
 import { QrCode } from './QrCode'
+import type { PushDevice } from '../../main/push/pushStore'
+import type { Settings } from '@shared/types'
 
 /**
  * 「让手机连进来」。
@@ -39,6 +41,10 @@ export function MobileSection() {
   const [copied, setCopied] = useState('')
   const [busy, setBusy] = useState(false)
   const seeded = useRef(false)
+  /** 已经登记要收推送的手机。★这张表存在**当前连着的那台机器**上 —— 发推送的是它。 */
+  const [devices, setDevices] = useState<PushDevice[] | null>(null)
+  const [pushCfg, setPushCfg] = useState<Settings['push'] | null>(null)
+  const [pushMsg, setPushMsg] = useState('')
 
   useEffect(() => {
     // 先订阅再拉快照(同 HostsPane):否则刚开完开关,一个更旧的快照会把「已启动」盖回去。
@@ -53,6 +59,24 @@ export function MobileSection() {
     })
     return off
   }, [])
+
+  // 推送:设备表 + 那台机器上的开关。★两样都可能不存在(老 daemon / 老 preload),
+  //  少一个 API 不该把整屏设置炸成白板 —— 安静地不显示就好。
+  const loadPush = () => {
+    if (typeof window.forge?.pushDevices !== 'function') return
+    void window.forge.pushDevices().then(setDevices).catch(() => setDevices([]))
+    void window.forge.getSettings().then((raw) => {
+      const p = (raw as Settings | null)?.push
+      if (p) setPushCfg(p)
+    }).catch(() => {})
+  }
+  useEffect(loadPush, [])
+
+  const savePush = async (next: Settings['push']) => {
+    setPushCfg(next)
+    const cur = (await window.forge.getSettings()) as Settings
+    await window.forge.setSettings({ ...cur, push: next })
+  }
 
   const apply = async (next: { enabled: boolean; host: string; port: number }) => {
     setBusy(true)
@@ -298,6 +322,121 @@ export function MobileSection() {
             最省事的办法是<b>手机开个人热点、这台电脑连手机</b>(那样两边的流量走本地链路,不吃流量)。
           </p>
         </div>
+      )}
+
+      {/* ── 推送 ────────────────────────────────────────────────────────────
+          ★★手机端存在的意义有一半在这儿:**你不在电脑前,一道门升起来卡在那儿**。
+           「能答门」早就做完了,「你怎么知道有门」一直是空的。
+          ★★这块**不放在 `st.running` 里面**:推送和局域网网关开没开完全无关 ——
+           走中转连进来的手机同样要收推送,而那种人的局域网网关多半是关着的。
+          ★决策 7:这台机器直接 POST 给 Expo,不经中转、不用自建后端。
+           代价是正文明文过 Expo/APNs,所以推送里**只有工作区名和一句固定的话**,
+           一个字的对话内容都没有。 */}
+      {pushCfg && (
+        <>
+          <div className="set-row">
+            <div className="info">
+              <div className="t">手机不在跟前时推送给它</div>
+              <div className="d">
+                门升起来 / 一轮跑完时,这台机器直接推到你手机上。
+                <b>手机 app 开着的时候不推</b> —— 那种情况它自己会弹一条,不会响两遍。
+              </div>
+            </div>
+            <button
+              className={`toggle${pushCfg.enabled ? ' on' : ''}`}
+              aria-label="推送到手机"
+              onClick={() => void savePush({ ...pushCfg, enabled: !pushCfg.enabled })}
+            />
+          </div>
+
+          <div className="set-row" style={{ opacity: pushCfg.enabled ? 1 : 0.45 }}>
+            <div className="info">
+              <div className="t">需要你答的门</div>
+              <div className="d">权限门、代理提问、工作流卡住 —— 没你就一直停在那儿的那些</div>
+            </div>
+            <button
+              className={`toggle${pushCfg.gate ? ' on' : ''}`}
+              aria-label="推送门"
+              disabled={!pushCfg.enabled}
+              onClick={() => void savePush({ ...pushCfg, gate: !pushCfg.gate })}
+            />
+          </div>
+
+          <div className="set-row" style={{ opacity: pushCfg.enabled ? 1 : 0.45 }}>
+            <div className="info">
+              <div className="t">跑完了</div>
+              <div className="d">默认关 —— 半夜被一条「跑完了」吵醒一次,这个功能就会被整个关掉</div>
+            </div>
+            <button
+              className={`toggle${pushCfg.done ? ' on' : ''}`}
+              aria-label="推送完成"
+              disabled={!pushCfg.enabled}
+              onClick={() => void savePush({ ...pushCfg, done: !pushCfg.done })}
+            />
+          </div>
+
+          {/* ★设备表 = 「到底有没有手机真的登记上」的唯一证据。空表和「推送开着」并存
+              是最容易被误读成"已经在用了"的状态,所以空态要**说下一步该做什么**。 */}
+          <div className="hosts-conn">
+            {devices && devices.length > 0 ? (
+              <>
+                <p className="set-desc">已经登记的手机:</p>
+                {devices.map((d) => (
+                  <div className="set-row" key={d.token}>
+                    <div className="info">
+                      <div className="t">{d.label || (d.platform === 'android' ? 'Android 手机' : 'iPhone')}</div>
+                      <div className="d">
+                        最近一次连上:{d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : '还没有'}
+                      </div>
+                    </div>
+                    <button
+                      className="set-btn danger"
+                      onClick={() => void window.forge.pushUnregister(d.token).then(setDevices)}
+                    >
+                      不再推送
+                    </button>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <p className="set-desc">
+                还没有手机登记过推送。在手机上打开 <b>设置 → 提醒 → 有事就提醒我</b>,
+                它会把自己登记到这台机器上。
+              </p>
+            )}
+
+            <div className="hosts-conn-foot">
+              <button
+                className="set-btn"
+                onClick={() => {
+                  setPushMsg('发送中…')
+                  void window.forge.pushTest()
+                    .then((r) => setPushMsg(
+                      r.sent > 0
+                        ? `发出去 ${r.sent} 条。手机上没看到的话,多半是通知权限没给。`
+                        : `一条都没发出去:${r.errors[0] ?? '不知道为什么'}`))
+                    .catch((e: unknown) => setPushMsg(`发不出去:${e instanceof Error ? e.message : String(e)}`))
+                    .finally(loadPush)
+                }}
+              >
+                发一条测试推送
+              </button>
+              <button className="set-btn" onClick={loadPush}>刷新</button>
+              {pushMsg && <span className="set-desc">{pushMsg}</span>}
+            </div>
+
+            {/* ★★这一句是「远程推送到底能不能用」的诚实交代。
+                Expo 的推送令牌要一个 Expo 项目 + 上传好的 APNs/FCM 凭据,而那要用**你自己的**
+                Expo 账号 —— 我配不了。没配的时候手机端仍然有一半提醒可用(app 开着那一半),
+                所以这里说的是「差哪一步」,不是「不支持」。 */}
+            <p className="set-desc">
+              ★手机在<b>后台</b>时收到的那条,走的是 Expo 的推送服务:要先
+              <code>npx eas init</code> 建一个 Expo 项目、把 projectId 写进 <code>mobile/app.json</code>,
+              再用 <code>npx eas credentials</code> 传一次 APNs 密钥(安卓传 FCM)。
+              这一步之前,手机 app <b>开着</b>的时候提醒照常有,切走之后收不到。
+            </p>
+          </div>
+        </>
       )}
     </>
   )
