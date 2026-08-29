@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import type { TextInput } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useFocusEffect } from 'expo-router'
 import { goBack } from '../src/nav'
@@ -17,7 +18,7 @@ import {
 import { textAfterOffload } from '../src/ui/pasteOffload'
 import { continueList } from '../src/ui/listContinue'
 import { planPickedImage } from '../src/ui/pickedImage'
-import { planPickedFile } from '../src/ui/pickedFile'
+import { planPickedFile, tooLargeBySize } from '../src/ui/pickedFile'
 import { CAN_COPY, CopyBtn } from '../src/ui/CopyBtn'
 import { Icon } from '../src/ui/Icon'
 import { canPickImage, canPickFile } from '../src/net/pickSupport'
@@ -43,7 +44,14 @@ import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 import { atBottom, initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
 import { pickSessionAgent, shouldRederive, type DeriveState } from '../src/ui/sessionAgent'
-import { initialInputState, nextInputState, PANEL_H, type InputEvent, type InputState } from '../src/ui/inputPanel'
+import {
+  initialInputState,
+  nextInputState,
+  tapPlusNeedsRefocus,
+  PANEL_H,
+  type InputEvent,
+  type InputState,
+} from '../src/ui/inputPanel'
 import { PermKey } from '../src/ui/PermKey'
 import { PlusPanel, type PlusItem } from '../src/ui/PlusPanel'
 import { tap } from '../src/ui/haptics'
@@ -131,6 +139,14 @@ export default function Chat() {
    */
   const [inputState, setInputState] = useState<InputState>(initialInputState)
   const fire = useCallback((ev: InputEvent) => setInputState((s) => nextInputState(s, ev)), [])
+  /**
+   * ★★2026-08-29 复审抓到的洞:第二次点 ＋ 把 `mode` 从 `'panel'` 打回 `'keyboard'`,
+   *  但那只是个字符串 —— 面板卸载了,`Field` 没被点过,没有任何东西会让系统真的弹出键盘。
+   *  人以为「再点一下就能接着打字」,实际要再点一次输入框才行。
+   *  `Field` 现在转发了 ref(见 `kit.tsx`),这颗 ref 就是拿来在 `tapPlusNeedsRefocus`
+   *  说「该」的那一刻手动 `.focus()` 补上这一步的 —— 见下面 ＋ 那颗键的 onPress。
+   */
+  const fieldRef = useRef<TextInput>(null)
   // ★系统键盘事件喂进同一个状态机 —— 是不是「我们自己的输入框」这一层闸门,
   //  已经收在 `nextInputState` 里了,这儿不用(也不该)再判一次。
   useEffect(() => {
@@ -475,6 +491,14 @@ export default function Chat() {
       if (r.canceled) return
       const a = r.assets?.[0]
       if (!a) return
+      // ★★读之前先按 `size`(字节,文件选择器自己知道,不用碰内容)拦一次 —— 不然一个几百 MB
+      //  的视频会先被原样拷进缓存目录,再靠下面这行摊开成一个几百 MB 的 JS 字符串,app 被系统
+      //  直接杀掉,没有任何报错,草稿也没了。这正是下面 `planPickedFile` 里那道门存在的理由,
+      //  但那道门长在 `dataBase64` 已经读出来**之后**,对这种体量的文件永远跑不到。
+      //  `size` 是可选字段,某些 provider(iCloud 里还没下载到本地的文件;某些 Android
+      //  content:// provider)给不出来 —— 给不出来就不拦,靠读后的 `planPickedFile` 兜底。
+      const tooBig = tooLargeBySize(a.size)
+      if (tooBig) throw new Error(tooBig)
       const dataBase64 = await fs.readAsStringAsync(a.uri, { encoding: 'base64' })
       // ★撞名去重靠这份「已经用过的名字」—— `attachments` 本来就是随会话/随发送清空的
       //  state,天然就是「这次会话里已经发出去的附件名」,不用另开一份状态去记它。
@@ -925,6 +949,7 @@ export default function Chat() {
                 (390pt 屏上正文可见宽 172 → 210,一行中文从 12 字回到 15 字)。
                 ★所以 `paddingRight: 38` 也一并去掉了 —— 它当初就是给那颗 ⤢ 让位的。 */}
             <Field
+              ref={fieldRef}
               value={text}
               onChangeText={onType}
               selection={sel}
@@ -940,9 +965,25 @@ export default function Chat() {
               style={{ flex: 1, minWidth: 0, minHeight: 44, maxHeight: 108 }}
             />
             {/* ＋:开关。★它**不随有没有字消失** —— 微信有字时把 ＋ 换成发送键,
-                但我们「先打字再配图」是常态(正文里要留占位符),把 ＋ 藏起来是倒退。 */}
+                但我们「先打字再配图」是常态(正文里要留占位符),把 ＋ 藏起来是倒退。
+                ★★第二次点(面板收回键盘)必须手动 `.focus()` 一下 `Field` ——`fire('tapPlus')`
+                只是把 `mode` 改成 `'keyboard'` 这个字符串,没有它系统键盘不会自己回来
+                (`tapPlusNeedsRefocus` 就是判「这一次算不算」,见 `inputPanel.ts`)。
+                在 `Keyboard.dismiss()` / `fire()` **之前**先读 `inputState.mode`——
+                两者都不会同步改掉这个闭包里的值,但读的时机得在它们「即将变成什么」
+                之前才对得上「变化前」这个语义。 */}
             <Pressable
-              onPress={online && selected ? () => { Keyboard.dismiss(); fire('tapPlus') } : undefined}
+              accessibilityLabel="更多"
+              onPress={
+                online && selected
+                  ? () => {
+                      const refocus = tapPlusNeedsRefocus(inputState.mode)
+                      Keyboard.dismiss()
+                      fire('tapPlus')
+                      if (refocus) fieldRef.current?.focus()
+                    }
+                  : undefined
+              }
               disabled={!online || !selected}
               style={({ pressed }) => [
                 st.plus,
@@ -956,6 +997,7 @@ export default function Chat() {
             {/* ★忙的时候,这颗键**就地**变成停止 —— 位置、尺寸都不动。
                 停止是这一屏最紧急的动作,而它原来待在顶栏右上角,是单手最够不到的地方。 */}
             <Pressable
+              accessibilityLabel={busy ? '停止' : '发送'}
               onPress={busy ? () => void stop() : doSend}
               disabled={busy ? !online : !online || !selected || !text.trim() || sending}
               style={({ pressed }) => [
@@ -1143,10 +1185,11 @@ const st = StyleSheet.create({
   av: { width: 19, height: 19, borderRadius: 6, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
   think: { marginTop: 6, paddingLeft: 10, borderLeftWidth: 2, fontSize: 12.5, lineHeight: 20 },
   foot: { borderTopWidth: StyleSheet.hairlineWidth },
-  // ★chip 行现在排在输入框上面(见 Step 4),所以「贴容器顶边的间距」和「两行之间的间距」
-  // 从 entry 挪到了 chips 头上;entry 掉到最后,接手原来 chips 尾部那段「离安全区还有多远」的间距。
-  // ★四颗东西一行(权限 / 输入框 / ＋ / 发送),gap 从 8 收到 6 —— 8 会再吃掉正文 6pt。
-  entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingHorizontal: 12, paddingBottom: 10 },
+  // ★chip 行(见下面 st.chips)只在**有附件时**才渲染(Task 7)—— 大多数时候它根本不存在,
+  // entry 不能指望靠它带来的顶边间距。原来的写法是「间距挪给 chips 头上顶,entry 自己不留」,
+  // 那只在附件行真的在场时成立;没有附件的每一次对话,entry 这四颗 44pt 控件就贴着上面
+  // `st.foot` 的发丝线(`borderTopColor`)—— 这是复审抓到的洞,补一个自己的 `paddingTop`。
+  entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 10 },
   // ★44×44,不是任务纪要草稿里的 40×40 —— 这一行四颗控件(权限/输入框/＋/发送)全部要过
   //  44pt 硬下限这一条,而这颗**不许**靠 hitSlop 去补(祖先紧贴子节点时 hitSlop 是死的,
   //  「复制」那次 22×13pt 死区就是这么栽的),所以尺寸本身就得是 44。

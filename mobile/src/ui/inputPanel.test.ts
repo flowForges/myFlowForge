@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nextInputMode, nextInputState, type InputState, PANEL_H } from './inputPanel'
+import { nextInputMode, nextInputState, tapPlusNeedsRefocus, type InputState, PANEL_H } from './inputPanel'
 
 describe('输入区三态机', () => {
   it('点输入框 → 键盘', () => {
@@ -46,6 +46,20 @@ describe('输入区三态机', () => {
   it('面板高度接近一块键盘 —— 太矮会在收键盘时露出一截正文再被盖住,画面抖一下', () => {
     expect(PANEL_H).toBeGreaterThan(220)
     expect(PANEL_H).toBeLessThan(320)
+  })
+
+  /**
+   * ★★这条测的是「mode 变成 'keyboard' 这件事本身不会让键盘出现」这条**决定**——
+   *  不是测键盘真的弹起来了(那是 `chat.tsx` 里 `fieldRef.current?.focus()` 的活,
+   *  这个 node 环境的 vitest project 加载不动 `.tsx`,组件级别的这一半测不到,
+   *  只能靠人真机点)。上面「面板开着再点 ＋ → 回到键盘」那条测的是 `nextInputMode` 的返回值,
+   *  这条测的是**该不该采取行动**——两者看着像,但后者曾经是缺失的一环:
+   *  mode 值算对了、真机上键盘照样不出来,这条测试就是为了让那个缺口有名字。
+   */
+  it('★★面板收回键盘(且只有这一种情况)需要手动重新 focus 输入框', () => {
+    expect(tapPlusNeedsRefocus('panel')).toBe(true)
+    expect(tapPlusNeedsRefocus('idle')).toBe(false)
+    expect(tapPlusNeedsRefocus('keyboard')).toBe(false)
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planPickedFile } from './pickedFile'
+import { planPickedFile, tooLargeBySize, MAX_FILE_BYTES } from './pickedFile'
 import { MAX_IMAGE_BASE64 } from './pickedImage'
 
 const NOW = new Date('2026-08-28T10:00:00Z')
@@ -71,5 +71,30 @@ describe('挑出来这个文件能不能发', () => {
     const r = planPickedFile({ name: '', dataBase64: 'eA==' }, NOW)
     expect(r.ok).toBe(true)
     if (r.ok) expect(r.name.length).toBeGreaterThan(0)
+  })
+})
+
+describe('★★读文件之前的那道门(按 size 字节数,不用先把内容读进内存)', () => {
+  it('超过上限 → 拦住,而且要报**实际多大**和**上限多少**', () => {
+    const why = tooLargeBySize(MAX_FILE_BYTES + 1)
+    expect(why).toMatch(/MB/)
+    expect(why).toMatch(/6MB|上限/)
+  })
+
+  it('刚好卡在上限上 → 放行(和读后那道门的边界一致)', () => {
+    expect(tooLargeBySize(MAX_FILE_BYTES)).toBeNull()
+  })
+
+  it('size 缺失(iCloud 未下载 / 某些 provider 给不出来)→ 不拦,交给读后那道门兜底', () => {
+    expect(tooLargeBySize(undefined)).toBeNull()
+    expect(tooLargeBySize(null)).toBeNull()
+  })
+
+  it('★★两道门的措辞必须一字不差 —— 人分不出是哪道门拦的', () => {
+    const beforeRead = tooLargeBySize(MAX_FILE_BYTES + 1)
+    const big = 'A'.repeat(MAX_IMAGE_BASE64 + 1)
+    const afterRead = planPickedFile({ name: 'dump.bin', dataBase64: big }, NOW)
+    expect(afterRead.ok).toBe(false)
+    if (!afterRead.ok) expect(beforeRead).toBe(afterRead.why)
   })
 })

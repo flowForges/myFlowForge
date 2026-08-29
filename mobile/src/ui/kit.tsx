@@ -390,40 +390,49 @@ export function Chip({
   )
 }
 
-export function Field(props: React.ComponentProps<typeof TextInput> & { invalid?: boolean }) {
-  const c = useC()
-  const { scale } = useTheme()
-  const { style, invalid, ...rest } = props
-  // ★`TextInput` 不是 `Text`,走不到 `T` 那一层,而它的字号写死在 `s.field` 里(15)。
-  //  不在这儿补一刀的话,「大」档下**你正在打的那行字**是全 app 唯一没变大的文字 ——
-  //  一个只放大别人不放大你自己输入的字号设置,看着就像是坏的。
-  //
-  //  ★算的是**最终生效的那个** fontSize:先把 `s.field` 和调用方传进来的 style 一起拍平
-  //  (`exec.tsx` 的文件过滤框自己写了 `fontSize: 14`,`chat.tsx` 的输入框写了
-  //  `minHeight: 44 / maxHeight: 108`),再把拍平后的值乘上去,并且**放在数组最后**覆盖回去。
-  //  这样调用方的 14 仍然赢过默认的 15,只是跟着一起缩放;高度那些约束一个字没动。
-  // 显式标成 TextStyle:不标的话 flatten 推成「s.field 的字面量类型 | TextStyle」的联合,
-  // 而字面量那一半没有 lineHeight 字段,读它 TS 直接报错。
-  const flat: TextStyle | null = scale === 1 ? null : StyleSheet.flatten([s.field, style])
-  const scaled = flat
-    ? {
-        ...(typeof flat.fontSize === 'number' ? { fontSize: flat.fontSize * scale } : null),
-        ...(typeof flat.lineHeight === 'number' ? { lineHeight: flat.lineHeight * scale } : null),
-      }
-    : null
-  return (
-    <TextInput
-      placeholderTextColor={c.faint}
-      {...rest}
-      style={[
-        s.field,
-        { backgroundColor: c.bg2, borderColor: invalid ? c.err : c.border2, color: c.fg },
-        style,
-        scaled,
-      ]}
-    />
-  )
-}
+/**
+ * ★`forwardRef`:2026-08-29 补的 —— 在这之前这是个裸函数组件,谁都拿不到底下真正的
+ *  `TextInput` 实例,`chat.tsx` 想在「面板收回键盘」那一刻手动 `.focus()` 找不到东西可调
+ *  (见 `app/chat.tsx` 里 ＋ 那颗键 onPress 的注释)。**纯加法**:不传 ref 的调用方
+ *  (目前多数)一个字不用改,`React.forwardRef` 对没传 ref 的用法是透明的。
+ */
+export const Field = React.forwardRef<TextInput, React.ComponentProps<typeof TextInput> & { invalid?: boolean }>(
+  function Field(props, ref) {
+    const c = useC()
+    const { scale } = useTheme()
+    const { style, invalid, ...rest } = props
+    // ★`TextInput` 不是 `Text`,走不到 `T` 那一层,而它的字号写死在 `s.field` 里(15)。
+    //  不在这儿补一刀的话,「大」档下**你正在打的那行字**是全 app 唯一没变大的文字 ——
+    //  一个只放大别人不放大你自己输入的字号设置,看着就像是坏的。
+    //
+    //  ★算的是**最终生效的那个** fontSize:先把 `s.field` 和调用方传进来的 style 一起拍平
+    //  (`exec.tsx` 的文件过滤框自己写了 `fontSize: 14`,`chat.tsx` 的输入框写了
+    //  `minHeight: 44 / maxHeight: 108`),再把拍平后的值乘上去,并且**放在数组最后**覆盖回去。
+    //  这样调用方的 14 仍然赢过默认的 15,只是跟着一起缩放;高度那些约束一个字没动。
+    // 显式标成 TextStyle:不标的话 flatten 推成「s.field 的字面量类型 | TextStyle」的联合,
+    // 而字面量那一半没有 lineHeight 字段,读它 TS 直接报错。
+    const flat: TextStyle | null = scale === 1 ? null : StyleSheet.flatten([s.field, style])
+    const scaled = flat
+      ? {
+          ...(typeof flat.fontSize === 'number' ? { fontSize: flat.fontSize * scale } : null),
+          ...(typeof flat.lineHeight === 'number' ? { lineHeight: flat.lineHeight * scale } : null),
+        }
+      : null
+    return (
+      <TextInput
+        ref={ref}
+        placeholderTextColor={c.faint}
+        {...rest}
+        style={[
+          s.field,
+          { backgroundColor: c.bg2, borderColor: invalid ? c.err : c.border2, color: c.fg },
+          style,
+          scaled,
+        ]}
+      />
+    )
+  },
+)
 
 /** 连接状态小圆点。`wait` 会呼吸,`off` 是红的 —— 断线必须是**显式**的。 */
 export function LiveDot({ tone }: { tone: 'ok' | 'wait' | 'off' }) {

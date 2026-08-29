@@ -48,6 +48,22 @@ export function nextInputMode(mode: InputMode, ev: InputEvent): InputMode {
 }
 
 /**
+ * ★★2026-08-29 复审抓到的洞:`nextInputMode('panel', 'tapPlus')` 算出 `'keyboard'`,但那只是
+ *  一个字符串 —— 屏幕上**没有任何东西**会因为这个值变了就真的弹出键盘。面板卸载是「收起了什么」,
+ *  不是「唤起了什么」;要让键盘真的回来,必须有人拿着 `Field` 的 ref 手动 `.focus()`
+ *  (见 `app/chat.tsx` ＋ 那颗键的 onPress)。这个函数就是那颗「该不该去 focus()」的开关,
+ *  判据从 `nextInputMode` 本身**推导**出来,不是重复抄一份 `mode === 'panel'` —— `nextInputMode`
+ *  的 `tapPlus` 分支以后要是改了(比如面板加了第三态),这里跟着改,不用两处一起记。
+ *
+ * ★这颗函数只回答「该不该」,真正调 `.focus()` 的是 `chat.tsx`(只有它有 ref)——
+ *  那一步是 RN 组件行为,这个 node 环境的 vitest project 加载不动 `.tsx`,测不到。
+ *  见 `inputPanel.test.ts` 里这条测试上面的说明。
+ */
+export function tapPlusNeedsRefocus(modeBefore: InputMode): boolean {
+  return modeBefore === 'panel' && nextInputMode(modeBefore, 'tapPlus') === 'keyboard'
+}
+
+/**
  * ＋ 面板的高度。
  *
  * ★写死而不是去记「上一次键盘多高」:键盘高度随输入法、随是否有候选栏、随横竖屏变,
