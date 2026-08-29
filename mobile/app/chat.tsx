@@ -695,6 +695,17 @@ export default function Chat() {
         ref={flow}
         style={{ flex: 1 }}
         contentContainerStyle={{ padding: 14, paddingBottom: 10 }}
+        // ★★点对话流的任意一处 = 收起 ＋ 面板(见 `inputPanel.ts` 的 `tapOutside`)。
+        //  ★用 `onTouchStart` 而不是在上面盖一层 `Pressable`:盖一层的话面板开着时整个对话流
+        //   **滑不动了**(Pressable 会吃掉拖拽,而拖拽不构成一次 press,于是什么都不发生)。
+        //   `onTouchStart` 是原始触摸事件,不抢响应者 —— 点也好、开始拖也好都能收到,
+        //   而 ScrollView 自己的滚动一点不受影响。
+        //  ★`onScrollBeginDrag` 是同一件事的第二道保险:惯性滑动接着又拖一次这类路径上,
+        //   触摸事件的时序在两套架构下未必一致,而「滚动开始了」是 ScrollView 自己的回调,稳。
+        //  ★只在面板开着时才发。键盘那一档 RN 自己收(`keyboardShouldPersistTaps` 默认 never),
+        //   在这儿也发一遍的话,打字时滑一下对话流会把 mode 打成 idle,而键盘其实还立着。
+        onTouchStart={inputState.mode === 'panel' ? () => fire('tapOutside') : undefined}
+        onScrollBeginDrag={inputState.mode === 'panel' ? () => fire('tapOutside') : undefined}
         // ★64ms 和 `app/index.tsx` 的定位气泡取同一个值:这只是「人现在在不在底下」这一个布尔量,
         //  不需要每一帧都问。回调里只写 ref,而且**值没变就一个字都不写** —— 和那边一样的规矩。
         scrollEventThrottle={64}

@@ -24,6 +24,16 @@ export type InputEvent =
   | 'keyboardHidden'
   /** 发出去了一条 */
   | 'send'
+  /**
+   * 点了输入区**外面**(对话流里的任意一处)。
+   *
+   * ★★2026-08-29 真机第六轮:＋ 面板原来只有「再点一次 ＋」一条关法。用户原话:
+   *  「点 + 号后会打开面板,这时候正常交互是点击屏幕,这个输入框应该收起来,包括 + 也应该
+   *   收起来,现在不是的,现在必须是再次点 + 才能收起来」。键盘那一档 RN 自己就管了
+   *  (`ScrollView` 的 `keyboardShouldPersistTaps` 默认 `'never'`,点一下就收键盘并吃掉这次点击),
+   *  但 ＋ 面板不是键盘,没有任何系统行为会去收它 —— 于是面板一开,整个对话流就成了死区。
+   */
+  | 'tapOutside'
   /** 离开这一屏 */
   | 'leave'
 
@@ -42,6 +52,10 @@ export function nextInputMode(mode: InputMode, ev: InputEvent): InputMode {
       return mode === 'panel' ? 'panel' : 'idle'
     case 'send':
       return mode
+    // 点外面 = 「什么都收起来」。★和 `leave` 归到同一个结果但**不合并成一个事件**:
+    //  一个是还在这一屏、只是收起面板,另一个是整屏都不在了,以后要分开处理时不用再拆。
+    case 'tapOutside':
+      return 'idle'
     case 'leave':
       return 'idle'
   }
@@ -121,6 +135,9 @@ export function nextInputState(state: InputState, ev: InputEvent): InputState {
   }
   return {
     mode: nextInputMode(mode, ev),
-    keyboardOwner: ev === 'tapField' ? 'chat' : ev === 'leave' ? null : keyboardOwner,
+    // ★`tapOutside` 也要放手:它把 mode 打回 idle,而认领权是「这一屏的输入框正牵着键盘」的
+    //  意思 —— 收干净了还攥着认领权,下一次别的弹层(全屏编辑、重命名)弹起的键盘就会被
+    //  当成自己的,面板/状态会被那次事件带着乱走。和 `leave` 同一条理由。
+    keyboardOwner: ev === 'tapField' ? 'chat' : ev === 'leave' || ev === 'tapOutside' ? null : keyboardOwner,
   }
 }

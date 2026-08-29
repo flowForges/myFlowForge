@@ -105,4 +105,33 @@ describe('键盘事件的认领(设备级全局 Keyboard vs 这一屏自己的�
     const s = nextInputState({ mode: 'keyboard', keyboardOwner: 'chat' }, 'leave')
     expect(s).toEqual({ mode: 'idle', keyboardOwner: null })
   })
+
+  // ── tapOutside(2026-08-29 真机第六轮)──────────────────────────────────────
+  // 用户原话:「点 + 号后会打开面板,这时候正常交互是点击屏幕,这个输入框应该收起来,
+  // 包括 + 也应该收起来,现在不是的,现在必须是再次点 + 才能收起来」。
+
+  it('★面板开着时点对话流 → 面板收起', () => {
+    const s = nextInputState({ mode: 'panel', keyboardOwner: null }, 'tapOutside')
+    expect(s.mode).toBe('idle')
+  })
+
+  it('★tapOutside 连认领权一起放手 —— 否则收干净之后还攥着,别的弹层弹的键盘会被当成自己的', () => {
+    const s = nextInputState({ mode: 'keyboard', keyboardOwner: 'chat' }, 'tapOutside')
+    expect(s).toEqual({ mode: 'idle', keyboardOwner: null })
+  })
+
+  it('★收起之后紧跟着到达的 keyboardHidden 不会再把状态带跑(认领权已经放了)', () => {
+    let s: InputState = { mode: 'panel', keyboardOwner: 'chat' }
+    s = nextInputState(s, 'tapOutside')
+    expect(s.mode).toBe('idle')
+    s = nextInputState(s, 'keyboardHidden')
+    expect(s).toEqual({ mode: 'idle', keyboardOwner: null })
+  })
+
+  it('tapOutside 之后点 ＋ 仍然开面板(状态机没被卡住)', () => {
+    let s: InputState = { mode: 'panel', keyboardOwner: null }
+    s = nextInputState(s, 'tapOutside')
+    s = nextInputState(s, 'tapPlus')
+    expect(s.mode).toBe('panel')
+  })
 })
