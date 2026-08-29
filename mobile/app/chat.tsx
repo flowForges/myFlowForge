@@ -17,9 +17,10 @@ import {
 import { textAfterOffload } from '../src/ui/pasteOffload'
 import { continueList } from '../src/ui/listContinue'
 import { planPickedImage } from '../src/ui/pickedImage'
+import { planPickedFile } from '../src/ui/pickedFile'
 import { CAN_COPY, CopyBtn } from '../src/ui/CopyBtn'
 import { Icon } from '../src/ui/Icon'
-import { canPickImage } from '../src/net/pickSupport'
+import { canPickImage, canPickFile } from '../src/net/pickSupport'
 import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
 import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, ProviderSwitchSep, Row, T, TimeSep, TopBar } from '../src/ui/kit'
@@ -59,6 +60,13 @@ import { PlusPanel, type PlusItem } from '../src/ui/PlusPanel'
  *  (剪贴板那一个是同样的道理,现在和按钮本体一起住在 `src/ui/CopyBtn.tsx`。)
  */
 const CAN_PICK = canPickImage()
+
+/**
+ * ★这个探测和 `CAN_PICK` 是同一套道理,不同一个原生模块:见 `src/net/pickSupport.ts` 里
+ *  `canPickFile()` 的注释(注册名是 `ExpoDocumentPicker`,和 `ExponentImagePicker` 不是一回事)。
+ *  为假时「文件」那一格**根本不摆**,不是灰的。
+ */
+const CAN_PICK_FILE = canPickFile()
 
 /** 思考过程默认折叠。展开了它会把回答本身挤出屏幕 —— 手机上一屏就那么点地方。 */
 function Think({ text }: { text: string }) {
@@ -426,6 +434,46 @@ export default function Chat() {
   }
 
   /**
+   * 挑一个文件发出去。★走**完全同一条**下游:planPickedFile → saveAttachment →
+   *  insertPastePlaceholder,和图片、拍照三条路共用一个出口。
+   *
+   * ★用户拍板:什么文件都放,不按扩展名过滤 —— 代理读不懂就让它自己说,总比拦掉一堆
+   *  本来能用的东西(`.conf`、无后缀的 `Dockerfile`)强。
+   */
+  const pickFile = async () => {
+    if (!selected) return
+    setPickBusy(true)
+    try {
+      // ★**运行时 require,绝不能静态 import**:metro 会把静态 import 提到最前面无条件执行,
+      //  那样上面 `CAN_PICK_FILE` 那句探测就白做了 —— 旧包照样崩在 import 那一行(同 `app/scan.tsx`)。
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const dp = require('expo-document-picker') as typeof import('expo-document-picker')
+      // ★★必须是 `expo-file-system/legacy`,不是 `expo-file-system`:SDK 57 把
+      //  `readAsStringAsync` 从主入口挪走了,主入口里同名的那个**编译能过、一调用就抛**
+      //  (`build/legacyWarnings.d.ts`:"This method will throw in runtime.")。
+      //  真正能读文件的那个签名没变,还在 `expo-file-system/legacy`。
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const fs = require('expo-file-system/legacy') as typeof import('expo-file-system/legacy')
+      // ★`copyToCacheDirectory: true` 是必需的:iCloud / 第三方 provider 给的 uri
+      //  直接读会失败(没权限、或者根本还没落到本地)。
+      const r = await dp.getDocumentAsync({ copyToCacheDirectory: true })
+      if (r.canceled) return
+      const a = r.assets?.[0]
+      if (!a) return
+      const dataBase64 = await fs.readAsStringAsync(a.uri, { encoding: 'base64' })
+      const plan = planPickedFile({ name: a.name, dataBase64 }, new Date())
+      if (!plan.ok) throw new Error(plan.why)
+      const att = await saveAttachment(plan.name, plan.dataBase64)
+      // ★函数式更新:挑文件 + 读盘是好几秒的事,这中间人完全可能已经在打字了。
+      setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
+    } catch (e) {
+      setNotice(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPickBusy(false)
+    }
+  }
+
+  /**
    * 删掉一个附件 chip。
    * ★**不去动正文里的占位符**:那行字是人自己写的,我们没资格替他改。只说一声发生了什么,
    *  要删让他自己删 —— 静默地从他的话里抠掉一段,比留着一个多余的方括号糟糕得多。
@@ -489,7 +537,7 @@ export default function Chat() {
   const tone = state?.status === 'ready' ? 'ok' : state?.status === 'connecting' ? 'wait' : 'off'
 
   /**
-   * ＋ 面板里摆哪几格。「文件」那一格留到 Task 12(要装新原生依赖)。
+   * ＋ 面板里摆哪几格。
    */
   const plusItems: PlusItem[] = [
     // ★「照片」和「拍摄」都归 CAN_PICK 管:它们是**同一个原生模块**(expo-image-picker)的两个入口,
@@ -502,6 +550,11 @@ export default function Chat() {
           { key: 'camera', icon: 'camera' as const, label: '拍摄',
             onPress: () => void takePhoto(), disabled: !online || !selected || pickBusy },
         ]
+      : []),
+    // ★「文件」归 CAN_PICK_FILE 单独管(不同一个原生模块),同一个理由:探测为假就整个不摆。
+    ...(CAN_PICK_FILE
+      ? [{ key: 'file', icon: 'file' as const, label: '文件',
+           onPress: () => void pickFile(), disabled: !online || !selected || pickBusy }]
       : []),
     ...(wf ? [] : [{ key: 'workflow', icon: 'workflow' as const, label: '工作流',
                     onPress: () => router.push(ROUTES.workflow), disabled: !online || !selected }]),

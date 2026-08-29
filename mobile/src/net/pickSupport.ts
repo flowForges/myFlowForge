@@ -24,3 +24,18 @@ import { requireOptionalNativeModule } from 'expo-modules-core'
  */
 export const canPickImage = (): boolean =>
   Platform.OS !== 'web' && !!requireOptionalNativeModule('ExponentImagePicker')
+
+/**
+ * 这台设备上「从文件选择器发文件」到底能不能用。同一套理由,不同一个模块:
+ *
+ * ★★注册名是 `ExpoDocumentPicker`(和这次的包名一致 —— 与 `expo-image-picker` 那个历史包袱
+ *  `ExponentImagePicker` 不同,别顺手照抄那边的名字)。核实过两端:
+ *    - `node_modules/expo-document-picker/src/ExpoDocumentPicker.ts:2` → `requireNativeModule('ExpoDocumentPicker')`
+ *    - `node_modules/expo-document-picker/ios/DocumentPickerModule.swift:15` → `Name("ExpoDocumentPicker")`
+ *    - Android 同名(`android/.../DocumentPickerModule.kt:29`)。
+ *
+ * ★web 上直接 false,和 `canPickImage` 一样的理由:手机端 web 通道只是开发时用的,
+ *  不值得为它多养一条分支。
+ */
+export const canPickFile = (): boolean =>
+  Platform.OS !== 'web' && !!requireOptionalNativeModule('ExpoDocumentPicker')

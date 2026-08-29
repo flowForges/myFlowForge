@@ -1,0 +1,63 @@
+import { describe, it, expect } from 'vitest'
+import { planPickedFile } from './pickedFile'
+import { MAX_IMAGE_BASE64 } from './pickedImage'
+
+const NOW = new Date('2026-08-28T10:00:00Z')
+const big = 'A'.repeat(MAX_IMAGE_BASE64 + 1)
+
+describe('挑出来这个文件能不能发', () => {
+  it('普通文件放行,名字原样留着', () => {
+    const r = planPickedFile({ name: '部署说明.md', dataBase64: 'aGVsbG8=' }, NOW)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.name).toContain('部署说明')
+  })
+
+  it('★读不出内容 → 拦住并说人话(不能存一个 0 字节的附件)', () => {
+    // 不拦的话:chip 照常显示,代理打开是空的 —— 而人以为发过去了。
+    const r = planPickedFile({ name: 'a.log', dataBase64: '' }, NOW)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.why.length).toBeGreaterThan(8)
+  })
+
+  it('★超过上限 → 拦住,而且要报**实际多大**和**上限多少**', () => {
+    const r = planPickedFile({ name: 'dump.bin', dataBase64: big }, NOW)
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.why).toMatch(/MB/)
+      expect(r.why).toMatch(/6MB|上限/)
+    }
+  })
+
+  it('★★上限和图片是**同一条线** —— 它管的是一条 WebSocket 帧能塞多少,跟内容是不是图片无关', () => {
+    // 两条线的话,迟早出现「同样大的东西,当图片发得出去、当文件发不出去」。
+    const justUnder = 'A'.repeat(MAX_IMAGE_BASE64)
+    expect(planPickedFile({ name: 'x.bin', dataBase64: justUnder }, NOW).ok).toBe(true)
+  })
+
+  it('★★文件名里的路径必须被剥掉 —— 服务端是 join(dir, name),带一个 ../ 就写到工作区外面去了', () => {
+    const r = planPickedFile({ name: '../../../etc/passwd', dataBase64: 'eA==' }, NOW)
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.name).not.toContain('/')
+      expect(r.name).not.toContain('..')
+      expect(r.name).toContain('passwd')
+    }
+  })
+
+  it('★反斜杠也要剥(文件选择器在别的平台给的是 Windows 风格的路径)', () => {
+    const r = planPickedFile({ name: 'C:\\\\tmp\\\\a.txt', dataBase64: 'eA==' }, NOW)
+    if (r.ok) expect(r.name).not.toContain('\\\\')
+  })
+
+  it('★撞名要去重 —— 连发两个 `log.txt`,正文里两个占位符一模一样,代理分不清哪句说哪个', () => {
+    const a = planPickedFile({ name: 'log.txt', dataBase64: 'eA==' }, NOW)
+    const b = planPickedFile({ name: 'log.txt', dataBase64: 'eQ==' }, new Date(NOW.getTime() + 61_000))
+    if (a.ok && b.ok) expect(a.name).not.toBe(b.name)
+  })
+
+  it('一个名字都没有 → 兜一个,不能得到一个空文件名', () => {
+    const r = planPickedFile({ name: '', dataBase64: 'eA==' }, NOW)
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.name.length).toBeGreaterThan(0)
+  })
+})
