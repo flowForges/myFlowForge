@@ -1,7 +1,6 @@
 import { WebSocketServer, type WebSocket } from 'ws'
-import { timingSafeEqual } from 'node:crypto'
-import { encodeFrame, decodeFrame, errorText, PROTOCOL_VERSION } from '@shared/remote/protocol'
-import type { InvokeCtx, MethodTable } from '../ipc/invokeCtx'
+import type { MethodTable } from '../ipc/invokeCtx'
+import { serveConnection, type Channel } from './serveConnection'
 
 export type GatewayOpts = {
   /** 已经筛过的方法表 —— 只包含这台 host 该对外提供的方法(见 channelRouting.daemonTable) */
@@ -28,14 +27,16 @@ export type GatewayHandle = {
   close: () => Promise<void>
 }
 
-/** 定长时间比较,避免用「第几个字符开始不一样」把 token 一个字符一个字符试出来。 */
-function tokenMatches(expected: string, got: string): boolean {
-  const a = Buffer.from(expected, 'utf8')
-  const b = Buffer.from(got, 'utf8')
-  // 长度不同直接不匹配;但仍然跑一次比较,免得「长度对不对」本身变成一个旁路。
-  const same = a.length === b.length
-  const probe = same ? b : a
-  try { return timingSafeEqual(a, probe) && same } catch { return false }
+/** `ws` 的一条连接 → `serveConnection` 认的那个最小信道。 */
+function wsChannel(ws: WebSocket): Channel {
+  return {
+    send: (text) => { try { ws.send(text) } catch { /* socket 已关 */ } },
+    // ★`isBinary` 那一路要转成文本再给上层:协议本来就是 JSON 文本,
+    //  而 `ws` 会按对面发的是 text 还是 binary 帧给出不同的东西。
+    onMessage: (cb) => ws.on('message', (raw, isBinary) => cb(isBinary ? (raw as Buffer).toString('utf8') : String(raw))),
+    close: (code, reason) => { try { ws.close(code, reason) } catch { /* 已关 */ } },
+    onClose: (cb) => ws.on('close', cb),
+  }
 }
 
 /**
@@ -43,10 +44,13 @@ function tokenMatches(expected: string, got: string): boolean {
  *
  * 「同一张」是关键:Electron 侧走 IPC 遍历它,这里走 WS 遍历它 —— 方法只有一份,
  * 所以不存在「本机一条路径、远程另一条路径」的漂移(设计文档第三节)。
+ *
+ * ★★2026-08-29:这个文件**只剩「监听端口 + 数连接数」**。每条连接上到底怎么说话
+ *  (hello/auth/ready/req/res/evt)搬到了 `serveConnection.ts` —— 因为第三期的中转那条路
+ *  上没有 `ws` 对象可用,而那套对话必须是**同一份**。理由完整版在那个文件顶上。
  */
 export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
   const host = opts.host ?? '127.0.0.1'
-  const authTimeoutMs = opts.authTimeoutMs ?? 15_000
   const log = opts.onLog ?? (() => {})
   const methods = Object.keys(opts.table)
 
@@ -62,79 +66,21 @@ export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
   wss.on('connection', (ws) => {
     conns.add(ws)
     opts.onClientsChanged?.()
-    let authed = !opts.token
-    let offSink: (() => void) | null = null
-    let clientLabel = '远程客户端'   // 对方没自报名字时的兜底
-
-    const send = (o: unknown) => {
-      // 对面随时可能断。写失败只该丢这一条,不该炸掉整个网关。
-      try { ws.send(encodeFrame(o as never)) } catch { /* socket 已关 */ }
-    }
-
-    const becomeReady = () => {
-      authed = true
-      // ★ sink 在【鉴权之后】才挂:没通过鉴权的连接不该收到任何事件。
-      offSink = opts.addSink((ch, payload) => send({ t: 'evt', ch, payload }))
-      send({ t: 'ready', methods })
-    }
-
-    send({ t: 'hello', protocol: PROTOCOL_VERSION, version: opts.version, authRequired: !!opts.token })
-    if (!opts.token) becomeReady()
-
-    const authTimer = opts.token
-      ? setTimeout(() => { if (!authed) { log('鉴权超时,断开'); ws.close(4401, 'auth timeout') } }, authTimeoutMs)
-      : null
-
-    ws.on('message', (raw, isBinary) => {
-      const d = decodeFrame(isBinary ? (raw as Buffer) : String(raw))
-      if (!d.ok) { log(`丢弃一条坏帧: ${d.error}`); return }
-      const f = d.frame
-
-      if (f.t === 'auth') {
-        if (!opts.token) return                       // 不需要鉴权时收到 auth:无视,别当错误
-        if (authed) return                            // 重复 auth:无视
-        if (!tokenMatches(opts.token, f.token)) { log('token 不对,断开'); ws.close(4403, 'bad token'); return }
-        if (authTimer) clearTimeout(authTimer)
-        becomeReady()
-        return
-      }
-
-      if (!authed) {
-        // ★没鉴权就发命令 —— 直接断。不回错误码,不给试探的余地。
-        log('鉴权前发来命令,断开')
-        ws.close(4401, 'unauthenticated')
-        return
-      }
-
-      if (f.t === 'identify') { clientLabel = f.label.trim() || clientLabel; return }
-      if (f.t === 'ping') { send({ t: 'pong' }); return }
-      if (f.t !== 'req') return                       // res/evt/hello/ready 是服务端发的,客户端发来就无视
-
-      const fn = opts.table[f.ch]
-      if (!fn) {
-        // 版本不一致时会走到这儿。回一个能看见的错误,别静默丢 —— 静默丢等于对面永远挂着。
-        send({ t: 'res', id: f.id, ok: false, error: `这台机器没有这个方法: ${f.ch}` })
-        return
-      }
-      const ctx: InvokeCtx = {
-        emit: (ch, payload) => send({ t: 'evt', ch, payload }),
-        client: { id: 'remote', label: clientLabel },
-      }
-      // 同步抛和异步 reject 都要接住,而且都必须变成一条 res —— 少回一条 res,
-      // 对面那个 promise 就永远不 settle。
-      void (async () => {
-        try { send({ t: 'res', id: f.id, ok: true, value: await fn(ctx, ...f.args) }) }
-        catch (e) { send({ t: 'res', id: f.id, ok: false, error: errorText(e) }) }
-      })()
-    })
-
     ws.on('close', () => {
-      if (authTimer) clearTimeout(authTimer)
-      offSink?.()
       conns.delete(ws)
       opts.onClientsChanged?.()
     })
     ws.on('error', () => { /* 'close' 会跟着来,清理在那儿做 */ })
+
+    serveConnection(wsChannel(ws), {
+      table: opts.table,
+      methods,
+      addSink: opts.addSink,
+      version: opts.version,
+      token: opts.token,
+      authTimeoutMs: opts.authTimeoutMs,
+      onLog: log,
+    })
   })
 
   const address = wss.address()
