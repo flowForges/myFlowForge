@@ -105,7 +105,7 @@ export interface ModelInfo { id: string; label: string; description?: string; co
  *  判据见 `src/main/agents/credProbe.ts`(每一条都在真机上跑过)。
  */
 export type ProviderAuth = 'ok' | 'missing' | 'unknown'
-export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; authCmd?: string; installHelp?: string; timezone?: string; auth?: ProviderAuth }
+export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; installAltCmd?: string; authCmd?: string; installHelp?: string; timezone?: string; auth?: ProviderAuth }
 
 export type ReviewLens = 'correctness' | 'security' | 'performance' | 'style'
 export interface ReviewConfig {

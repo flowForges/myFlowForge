@@ -154,7 +154,7 @@ export async function detectProviders(
     return {
       id: p.id, displayName: p.displayName, installed, models, bin: p.bin ?? '', binPath,
       custom: !BUILTIN_IDS.has(p.id), liveModels: p.capabilities.liveModels,
-      installCmd: meta?.installCmd, authCmd: meta?.authCmd, installHelp: meta?.installHelp,
+      installCmd: meta?.installCmd, installAltCmd: meta?.installAltCmd, authCmd: meta?.authCmd, installHelp: meta?.installHelp,
       auth,
       ...(version ? { version } : {}),
       ...(provCfg?.timezone ? { timezone: provCfg.timezone } : {}),

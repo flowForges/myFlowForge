@@ -13,7 +13,20 @@
 # 用法(在仓库根):
 #   npm run build                                   # 先在宿主机把 out/main 打出来
 #   docker build -f Dockerfile.daemon -t mff-daemon .
-#   docker run --rm -p 6767:6767 -e FORGE_DAEMON_TOKEN=<令牌> mff-daemon
+#   docker run -d --name d -p 16767:6767 mff-daemon
+#   docker exec d node /app/out/main/daemon.js pair --listen 0.0.0.0:6767   # 拿令牌
+#   node scripts/daemon-probe.mjs ws://127.0.0.1:16767 <令牌>               # 端到端探针
+#
+# 2026-08-30 实测结果(x86_64 / node:22-bookworm-slim):
+#   · daemon 起得来,报出 145 个方法(= 192 - 45 跟设备走 - 2 无头做不了),协议全通
+#   · handler 真的执行:workspaces:list / agents:detect / config:get-host-settings 都回了真数据
+#   · ★★**node-pty 在 Linux 上编得过而且能用** —— 这是设计文档单独标出来的待验项。
+#     验法(不是靠协议探针,`term:*` 根本不在 daemon 的方法表里):
+#       docker exec d node -e "const p=require('node-pty').spawn('/bin/sh',['-c','echo OK'],{cols:80,rows:24});p.onData(d=>process.stdout.write(d))"
+#     实测输出 `OK`,退出码 0。
+#   · ★查明的另一件事:**无头 daemon 没有终端**。`term:*` 是 index.ts 里直接 ipcMain.handle
+#     注册的,没进方法表 —— 所以「手机端终端」那个 P1 目前在 daemon 这条路上是不通的,
+#     不是坏了,是压根没接。
 #
 FROM node:22-bookworm-slim
 

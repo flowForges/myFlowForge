@@ -32,6 +32,16 @@ function CliGuide({ info }: { info?: ProviderInfo }) {
         <span className="cli-guide-note">用户自行安装并登录后，回到这里重新检测。</span>
       </div>
       <div className="cli-cmd-row"><code>{info.installCmd || '请按官方文档安装'}</code><CliCopyBtn text={info.installCmd || ''} label="复制安装命令" /></div>
+      {/* ★★备选安装命令。用户报过「引导里那些命令不一定好使」——
+          实测下来最可能的原因是那几条 `curl | bash` 指向 claude.ai / chatgpt.com,
+          国内不挂代理连不上,而 npm(或它的镜像)那条路通得多。
+          ★只在**真的有官方 npm 包**的那几个上出现;没有的一个都不编(见 providerCatalog)。 */}
+      {info.installAltCmd && (
+        <div className="cli-cmd-row">
+          <code>{info.installAltCmd}</code>
+          <CliCopyBtn text={info.installAltCmd} label="复制备选命令" />
+        </div>
+      )}
       <div className="cli-cmd-row"><code>{info.authCmd || info.displayName}</code><CliCopyBtn text={info.authCmd || ''} label="复制登录命令" /></div>
       {info.installHelp && <div className="cli-guide-note" style={{ marginTop: 8 }}>{info.installHelp}</div>}
     </div>

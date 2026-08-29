@@ -129,3 +129,47 @@ describe('providerCatalog install metadata', () => {
     expect(getBuiltinProvider('gemini')!.installCmd).toBe('npm install -g @google/gemini-cli')
   })
 })
+
+describe('安装引导 · 2026-08-30 逐条实测过', () => {
+  // 起因:用户报「首次安装引导给的 provider 安装命令不一定好使」。当晚把每一条都真的跑了一遍
+  // (URL 发 HEAD、npm 包 `npm view`),下面这些断言钉的是那次核对的结论。
+  it('每个内置 provider 都有安装命令、登录命令和一句说明 —— 三样缺一,引导就断在那儿', () => {
+    for (const p of BUILTIN_PROVIDERS) {
+      expect(p.installCmd.trim(), p.id).not.toBe('')
+      expect(p.authCmd.trim(), p.id).not.toBe('')
+      expect(p.installHelp.trim(), p.id).not.toBe('')
+    }
+  })
+
+  it('★antigravity 不许再指向那个 404 的安装脚本', () => {
+    const agy = BUILTIN_PROVIDERS.find((p) => p.id === 'antigravity')!
+    // `https://antigravity.google/install.sh` 实测回 404 —— 那条命令从来就跑不通。
+    expect(agy.installCmd).not.toContain('install.sh')
+  })
+
+  it('★★备选命令只能是 npm,而且只给真的有官方包的那几个', () => {
+    // npm 上的 `agy` / `antigravity` 是 0.0.0 的占位包。把它们写进引导 = 教用户全局装一个
+    // 来路不明的东西,所以这条断言把「备选命令」限死在一份核过的名单里。
+    const VERIFIED: Record<string, string> = {
+      claude: 'npm install -g @anthropic-ai/claude-code',
+      codex: 'npm install -g @openai/codex',
+      opencode: 'npm install -g opencode-ai',
+    }
+    for (const p of BUILTIN_PROVIDERS) {
+      if (!p.installAltCmd) continue
+      expect(p.installAltCmd, p.id).toBe(VERIFIED[p.id])
+    }
+    // 名单里的那几个必须真的带上了 —— 否则这条断言会随着字段被删掉而静默变成空转
+    for (const id of Object.keys(VERIFIED)) {
+      expect(BUILTIN_PROVIDERS.find((p) => p.id === id)?.installAltCmd, id).toBe(VERIFIED[id])
+    }
+  })
+
+  it('★指向 claude.ai / chatgpt.com 的那几条必须有备选 —— 国内不挂代理连不上', () => {
+    for (const p of BUILTIN_PROVIDERS) {
+      if (/claude\.ai|chatgpt\.com/.test(p.installCmd)) {
+        expect(p.installAltCmd, `${p.id} 的安装命令要翻墙,必须给一条 npm 备选`).toBeTruthy()
+      }
+    }
+  })
+})

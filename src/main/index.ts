@@ -127,11 +127,22 @@ app.whenReady().then(() => {
   // previously-focused app keeps the menu bar). setActivationPolicy('regular') alone is NOT enough
   // once the runtime has registered as UIElement — app.dock.show() explicitly restores the Dock
   // icon. Do both, up front.
-  if (process.platform === 'darwin') {
+  //
+  // ★★2026-08-30:**`dock.show()` 会把自定义 Dock 图标扔掉。**
+  //  它在 macOS 上落到 `TransformProcessType(…, kProcessTransformToForegroundApplication)`,
+  //  而那一步是**按 app bundle 重建 dock tile** —— 之前 `app.dock.setIcon()` 设的那张就没了。
+  //  这三句因此必须是**捆在一起**的一件事,不能分开写:
+  //    setActivationPolicy → dock.show → **重新贴一次图标**
+  //  漏掉最后一句的地方就是「用户报的『切了图标 Dock 不跟着换』」:图标其实换过了,
+  //  然后他点了一下 Dock(或者切走再切回来),`app.on('activate')` 里那两句把它刷回默认。
+  //  ★重贴是幂等的、也很便宜(一次 nativeImage 读盘),别为了省这一次而把三句拆开。
+  const reassertDock = () => {
+    if (process.platform !== 'darwin') return
     app.setActivationPolicy('regular')
     app.dock?.show().catch(() => { /* dock unavailable — nothing to do */ })
     try { applyDockIcon(readSettings().appIcon.dockIcon) } catch { /* settings/icon unavailable — bundle icon remains */ }
   }
+  reassertDock()
 
   // Serve on-disk pet images via forge-pet://, and one-time migrate any legacy inline data-URL pet
   // images out of settings.json onto disk (older builds stored multi-MB base64 inline, bloating it).
@@ -281,7 +292,9 @@ app.whenReady().then(() => {
   // UIElement after the initial call.
   mainWin.once('ready-to-show', () => {
     app.focus({ steal: true })
-    if (process.platform === 'darwin') app.dock?.show().catch(() => {})
+    // ★走 reassertDock 而不是裸 `dock.show()` —— 裸的那句会把上面
+    //  `applyAppIconSettings(readSettings())` 刚贴好的图标又刷回 bundle 默认。
+    reassertDock()
   })
   // Close behavior per settings.closeAction: hide (缩小到 Dock — the pet window keeps the process
   // alive, the existing activate handler restores the window), quit, or ask via a dialog. When the
@@ -962,10 +975,9 @@ app.whenReady().then(() => {
   // behind-other-apps main window stranded (clicking the Dock icon did nothing). Bring the existing
   // window forward, and re-assert foreground because the pet can flip the runtime back to UIElement.
   app.on('activate', () => {
-    if (process.platform === 'darwin') {
-      app.setActivationPolicy('regular')
-      app.dock?.show().catch(() => {})
-    }
+    // ★★这里是那个 bug 最常现形的地方:每次点 Dock 图标 / 从别的 app 切回来都会跑一遍,
+    //  而裸的 `dock.show()` 会把自定义图标刷回默认(理由见 reassertDock 上面那段)。
+    reassertDock()
     // 「点击前是否在焦点」:macOS 在触发 activate 之前就已把窗口聚焦,isFocused() 恒 true 不可用;而 activate
     // 又在窗口 focus 事件【之前】触发,所以此刻 appFocused 标志仍是【点击前】的真实状态(切走别的 app 时主窗口
     // blur 已把它设 false)。点击前不在焦点(false)→ 显示并获焦、不收起;点击前在焦点(true)→ visible 时 toggle 收起。
