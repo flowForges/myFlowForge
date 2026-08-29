@@ -26,6 +26,13 @@ export type RelayOptions = {
    *  0 = 关掉(测试里用)。
    */
   pingMs?: number
+  /**
+   * 挂到一个已有的 http server 上,而不是自己 listen。
+   * ★可执行入口(`main.ts`)用它,好让 `/healthz` 和 WebSocket 共用一个端口 ——
+   *  分两个端口只会让 Docker / 反代的配置多一行,换不来任何东西。
+   * ★给了 `server` 就**不要**再传 `port`/`host` 去 listen:由调用方去 listen。
+   */
+  server?: import('node:http').Server
   onLog?: (msg: string) => void
 }
 
@@ -44,11 +51,16 @@ export async function startRelay(opts: RelayOptions): Promise<RelayHandle> {
   /** 上一轮 ping 之后有没有收到过 pong。挂在 socket 上,免得再开一张表。 */
   const alive = new WeakMap<WebSocket, boolean>()
 
-  const wss = new WebSocketServer({ host: opts.host ?? '0.0.0.0', port: opts.port, maxPayload: maxFrameBytes })
-  await new Promise<void>((res, rej) => {
-    wss.once('listening', res)
-    wss.once('error', rej)
-  })
+  const wss = opts.server
+    ? new WebSocketServer({ server: opts.server, maxPayload: maxFrameBytes })
+    : new WebSocketServer({ host: opts.host ?? '0.0.0.0', port: opts.port, maxPayload: maxFrameBytes })
+  // ★挂在别人的 server 上时不会有 'listening' —— 那是调用方 listen 之后的事。
+  if (!opts.server) {
+    await new Promise<void>((res, rej) => {
+      wss.once('listening', res)
+      wss.once('error', rej)
+    })
+  }
 
   wss.on('connection', (ws: WebSocket) => {
     const sock: RelaySocket = {
@@ -134,8 +146,10 @@ export async function startRelay(opts: RelayOptions): Promise<RelayHandle> {
       }, pingMs).unref()
     : null
 
-  const port = (wss.address() as { port: number }).port
-  log(`中转在 ws://${opts.host ?? '0.0.0.0'}:${port}`)
+  // 挂在别人的 server 上时 `wss.address()` 是 null(还没 listen),回落到传进来的端口。
+  const addr = wss.address() as { port: number } | null
+  const port = addr?.port ?? opts.port
+  if (!opts.server) log(`中转在 ws://${opts.host ?? '0.0.0.0'}:${port}`)
 
   return {
     port,
@@ -150,6 +164,7 @@ export async function startRelay(opts: RelayOptions): Promise<RelayHandle> {
             /* 无所谓 */
           }
         }
+        // ★挂在别人的 server 上时,关掉的只是 WebSocket 那一层;http server 归调用方关。
         wss.close(() => res())
       }),
   }
