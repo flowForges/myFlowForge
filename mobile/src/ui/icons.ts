@@ -24,7 +24,7 @@ import type { SFSymbol } from 'sf-symbols-typescript'
 
 export const ICON_NAMES = [
   'chat', 'host', 'settings', 'add', 'changes', 'photo', 'camera',
-  'workflow', 'file', 'expand', 'chevron', 'chevronDown',
+  'workflow', 'file', 'folder', 'expand', 'chevron', 'chevronDown',
 ] as const
 
 export type IconName = (typeof ICON_NAMES)[number]
@@ -41,13 +41,48 @@ export const SF: Record<IconName, SFSymbol> = {
   camera: 'camera',
   workflow: 'arrow.triangle.turn.up.right.diamond',
   file: 'doc',
+  // ★用实心那个(`folder.fill`)而不是描边的 `folder`:文件树里目录行是**可以进去**的那一档,
+  //  而同一列里文件那一档是一枚淡色扩展名小字。实心 vs 淡字的对比,比描边 vs 淡字看得清得多。
+  folder: 'folder.fill',
   expand: 'arrow.up.left.and.arrow.down.right',
   chevron: 'chevron.right',
   chevronDown: 'chevron.down',
 }
 
 /**
- * 其余平台的退路。★键集必须和 SF 完全一致,漏一个就是安卓上一个空白格(icons.test.ts 钉住)。
+ * ★★安卓那一侧用 **Material Icons**(`@expo/vector-icons`)。
+ *
+ * 2026-08-29 真机反馈:安卓上这几个图标退到了下面那张 emoji 表,用户原话「太丑了」——
+ * 而那是准的:🖼 和 📷 在安卓上是**彩色位图**,📄 和 ⧉ 是单色字形,⤢ 是个数学符号。
+ * 五个图标三种画风、两种颜色模式,摆成一排就是一堆贴纸。
+ *
+ * ★为什么不是把 iOS 那套也换成 Material:SF Symbols 是 iOS 的原生图标语言,
+ *  它跟系统字重、动态字号、深色模式全部联动。两边各用各的母语,比强行统一成一套更像原生 ——
+ *  这也是整个手机端一直在走的路子(见 `Icon.tsx`)。
+ *
+ * ★★**名字写错不报错,只渲染成一个看不见的洞** —— 和 SF Symbols 完全一样的失败方式。
+ *  所以 `icons.test.ts` 拿真正的 glyphmap 逐个核对过,别改成"看起来对"的名字。
+ */
+export const MATERIAL: Record<IconName, string> = {
+  chat: 'forum',
+  host: 'desktop-windows',
+  settings: 'settings',
+  add: 'add',
+  // ★不是 'timeline':那一屏说的是「这次改了什么」,和 SF 那边选 `arrow.triangle.branch` 同一个理由。
+  changes: 'call-split',
+  photo: 'image',
+  camera: 'photo-camera',
+  workflow: 'account-tree',
+  file: 'insert-drive-file',
+  folder: 'folder',
+  expand: 'open-in-full',
+  chevron: 'chevron-right',
+  chevronDown: 'expand-more',
+}
+
+/**
+ * 最后的退路:**两套矢量图标都拿不到**的时候(web 端跑 `npm run --prefix mobile web`,
+ * 或者哪天字体没加载上)。★键集必须和 SF 完全一致,漏一个就是一个空白格(icons.test.ts 钉住)。
  * ★★这张表**只放真的有人用的**。曾经想顺手把 `shield`(权限)、`back`(返回)、
  *  `plus`(输入行那颗 ＋)也列进来 —— 但权限键最后做成了「两个字 + 颜色」不用图标,
  *  返回键仍是那个 `‹` 字形,而输入行那颗 ＋ 用的就是 `add`。三个都是没人调的死条目。
@@ -62,6 +97,7 @@ export const EMOJI: Record<IconName, string> = {
   camera: '📷',
   workflow: '⧉',
   file: '📄',
+  folder: '📁',
   expand: '⤢',
   chevron: '›',
   chevronDown: '▾',

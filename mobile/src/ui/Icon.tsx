@@ -1,7 +1,7 @@
 import { Platform } from 'react-native'
 import { useC } from '../theme/theme'
 import { T } from './kit'
-import { EMOJI, SF, type IconName } from './icons'
+import { EMOJI, MATERIAL, SF, type IconName } from './icons'
 
 /**
  * 全 app 唯一画图标的地方。
@@ -13,7 +13,12 @@ import { EMOJI, SF, type IconName } from './icons'
  *  一直在用的那条路)根本没有这个原生模块 —— 静态 import 会被 metro 提到最前无条件执行,
  *  整个 app 崩在那一行。同 `app/scan.tsx` / `chat.tsx` 的 CAN_PICK。
  *
- * ★探测失败就退 emoji,**不留空**:一个看不见的洞比一个不那么好看的 emoji 糟糕得多。
+ * ★★安卓走 **Material Icons**(`@expo/vector-icons`),不再退 emoji。
+ *  2026-08-29 真机反馈:安卓的 ＋ 面板上五个图标是「彩色 emoji + 单色字形 + 数学符号」三种画风混在一排,
+ *  用户原话「太丑了」。emoji 那张表现在只是**最后的退路**(web,或者字体没加载上),
+ *  真机上两个平台各走各的母语图标集。
+ *
+ * ★探测全失败才退 emoji,**不留空**:一个看不见的洞比一个不那么好看的 emoji 糟糕得多。
  */
 const SYMBOLS: { SymbolView?: React.ComponentType<Record<string, unknown>> } = (() => {
   if (Platform.OS !== 'ios') return {}
@@ -22,6 +27,21 @@ const SYMBOLS: { SymbolView?: React.ComponentType<Record<string, unknown>> } = (
     return require('expo-symbols') as { SymbolView?: React.ComponentType<Record<string, unknown>> }
   } catch {
     return {}
+  }
+})()
+
+/**
+ * 安卓(以及任何拿不到 SF Symbols 的原生平台)那一套。
+ * ★同样走**运行时 require**,理由和上面那段一模一样:web 端没有这套字体,
+ *  静态 import 会被 metro 提到最前无条件执行。
+ */
+const MaterialIcons: React.ComponentType<{ name: never; size: number; color: string; allowFontScaling?: boolean }> | null = (() => {
+  if (Platform.OS === 'web') return null
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return require('@expo/vector-icons/MaterialIcons').default ?? null
+  } catch {
+    return null
   }
 })()
 
@@ -37,6 +57,11 @@ export function Icon({
   const c = useC()
   const tint = color ?? c.fg
   const SymbolView = SYMBOLS.SymbolView
+  if (!SymbolView && MaterialIcons) {
+    // ★`allowFontScaling={false}`:图标不该跟着系统字号一起变大 —— 它是在一个定死尺寸的
+    //  方格里(＋ 面板那几格、行尾那颗 ›),跟着放大只会被裁掉一角。
+    return <MaterialIcons name={MATERIAL[name] as never} size={size} color={tint} allowFontScaling={false} />
+  }
   if (SymbolView) {
     return (
       <SymbolView

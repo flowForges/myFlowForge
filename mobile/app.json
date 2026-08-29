@@ -55,7 +55,8 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "./plugins/withNoForceDark"
     ],
     "experiments": {
       "typedRoutes": false

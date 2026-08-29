@@ -274,6 +274,12 @@ export function Row({
       ]}
     >
       {children}
+      {/* ★★树那一档的分隔线。2026-08-29 真机反馈:「文件+文件夹列表感觉很空洞,
+          整体颜色一致,看不到分别」—— 那一列原来只靠 2px 的间隙分行,而 2px 什么也分不出来。
+          ★**绝对定位**,零布局影响:插成兄弟节点的话会改变行高,而 `exec.tsx` 那一屏的
+          高度是刚被 flex 那条 bug 咬过的地方(见那边 `flex: 1` 的注释),不该再动它。
+          ★left 用 `rowTree` 自己的左内边距 —— 分隔线从内容开始的地方起,不贴到圆角上。 */}
+      {tree ? <View style={[s.rowTreeSep, { backgroundColor: c.border }]} /> : null}
     </Pressable>
   )
 }
@@ -656,6 +662,7 @@ const s = StyleSheet.create({
   list: { paddingHorizontal: 12, gap: 8 },
   // .tree .frow { min-height: 40px; padding: 8px 10px; border: 0; background: transparent; border-radius: 8px }
   rowTree: { minHeight: 40, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, borderWidth: 0, backgroundColor: 'transparent' },
+  rowTreeSep: { position: 'absolute', left: 10, right: 0, bottom: 0, height: StyleSheet.hairlineWidth },
   row: {
     width: '100%',
     flexDirection: 'row',

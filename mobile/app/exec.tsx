@@ -7,6 +7,7 @@ import type { DiffLine } from '../../src/shared/types'
 import { MONO, useC } from '../src/theme/theme'
 import { RADIUS, type Palette } from '../src/theme/tokens'
 import { Chip, Empty, Field, IconBtn, List, Note, Row, Sec, T, Tabs, TopBar, TopTitle } from '../src/ui/kit'
+import { Icon } from '../src/ui/Icon'
 import { GateCard } from '../src/ui/GateCard'
 import { HIGHLIGHT_MAX, highlight } from '@shared/highlight'
 import { synStyle } from '../src/ui/synStyle'
@@ -377,7 +378,13 @@ export default function Exec() {
             //  塞进横向 ScrollView 里就是一个撑满屏宽、又被上面那点高度切掉一半的方框,还压在
             //  底下的面包屑上 —— 真机截图里 `go-blog` 出现两次、上面那个被削平,就是这个。
             //  这一排本来要的就是 chip:32 高、内容宽、`RADIUS.chip` 的圆角。
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.projs}>
+            //
+            // ★★`flexShrink: 0` 不是可加可不加。RN 的 ScrollView 基础样式是
+            //  `{ flexGrow: 1, flexShrink: 1 }` —— 这里只覆盖了 `flexGrow`,**`flexShrink` 还是 1**。
+            //  于是文件一多(下面那个列表的内容高度撑起来),Yoga 会按比例把这一条和面包屑
+            //  一起**压扁**:真机上看到的就是「文件夹名被切掉半截」。见下面那个列表的 `flex: 1`,
+            //  两处是同一个毛病的两半,少改一处都不算修好。
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={st.projs}>
               {projects.map((g) => {
                 const on = g.cwd === proj
                 return (
@@ -400,8 +407,10 @@ export default function Exec() {
             </ScrollView>
           ) : null}
 
-          {/* 面包屑:每一段都能点回去。原型 files.html 的 `.crumb`。 */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0 }} contentContainerStyle={st.crumb}>
+          {/* 面包屑:每一段都能点回去。原型 files.html 的 `.crumb`。
+              ★`flexShrink: 0` 的理由同上面那条轨道 —— 被压扁的就是它,用户报的
+              「文件条数过多时这个文件夹的名字会被覆盖」说的正是这一行。 */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={st.crumb}>
             {crumbs(projName || '项目', dir).map((cr, i, all) => (
               <View key={cr.path + i} style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <T
@@ -419,11 +428,16 @@ export default function Exec() {
             ))}
           </ScrollView>
 
-          <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
+          {/* ★同上:这一层也不许被压。它被压扁的表现是过滤框整个变矮、然后盖住上面的面包屑。 */}
+          <View style={{ paddingHorizontal: 12, paddingBottom: 8, flexShrink: 0 }}>
             <Field value={q} onChangeText={setQ} placeholder="按文件名过滤…" style={{ minHeight: 38, paddingVertical: 8, fontSize: 14 }} />
           </View>
 
-          <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+          {/* ★★**这才是根因**。没有 `flex: 1` 的话,这个 ScrollView 的高度是**它内容的高度** ——
+              文件越多它越高,而它和上面那三层是同一个纵向 flex 容器里的兄弟。
+              总高超过屏幕时 Yoga 去找可以收缩的项(`flexShrink` 默认……在 RN 的 ScrollView 上是 1),
+              于是上面那三层被按比例压扁。给它 `flex: 1` 之后它只占「剩下的」,内容再多也是自己内部滚动。 */}
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
             {treeLoading ? (
               <Empty title="正在读取文件树…" />
             ) : treeErr ? (
@@ -434,7 +448,10 @@ export default function Exec() {
               <Empty title="这个目录不在了" desc="文件树是进来那一刻读的,代理可能已经把它删了。" />
             ) : (
               // 原型的 `.tree`:行更矮、无边框,一屏才装得下一列文件名。
-              <List style={{ gap: 2 }}>
+              // ★★`gap` 从 2 改成 0:行与行之间的那点空隙原来是唯一的分隔手段,而它太弱了 ——
+              //  用户原话「感觉很空洞,整体颜色一致,看不到分别」。改成行贴行 + 每行底下一条
+              //  发丝分隔线(在 `Row` 里画),和首页那套是同一个语言。
+              <List style={{ gap: 0 }}>
                 {up != null ? (
                   <Row tree onPress={() => setDir(up)}>
                     <T mono style={{ fontSize: 12.5, color: c.muted }}>‹ ..</T>
@@ -459,8 +476,14 @@ export default function Exec() {
                          列表里铺几十个小色块,门就不再是一眼能认出的那个东西了。
                         ★所以只动三样**不占实底**的:①左边一枚淡色扩展名小字(类型),
                          ②目录名加粗、文件名常规(层级),③目录的 `▸` 用 accent(可进入 vs 可打开)。 */}
+                    {/* ★★左边那一列:目录一枚实心文件夹图标,文件一枚淡色扩展名小字。
+                        原来目录是个 `▸`(12px 的三角),和文件那枚小字在**同一个视觉重量级**上,
+                        一屏几十行扫下去分不出哪些能进去。图标 vs 文字是两种东西,余光就能分。
+                        ★宽度仍然写死 30 —— 扩展名一长一短会让文件名的左边缘一行一个位置。 */}
                     {e.type === 'dir' ? (
-                      <T style={{ fontSize: 12, color: c.accent, width: 30 }}>▸</T>
+                      <View style={{ width: 30, alignItems: 'flex-start' }}>
+                        <Icon name="folder" size={14} color={c.accent} />
+                      </View>
                     ) : (
                       <T style={[st.badge, { color: kindColor(fileKind(e.name), c) }]} numberOfLines={1}>
                         {extBadge(e.name)}
@@ -488,6 +511,9 @@ export default function Exec() {
                     {e.count != null ? (
                       <T mono style={{ fontSize: 10.5, color: c.faint }}>{e.count} 项</T>
                     ) : null}
+                    {/* ★目录行尾一枚 › ——「这一行点下去会进去」的那个信号。文件没有,
+                        因为点文件是**打开预览**,不是往下走一层。两种动作不该长一个样。 */}
+                    {e.type === 'dir' ? <Icon name="chevron" size={11} color={c.faint} /> : null}
                   </Row>
                 ))}
               </List>

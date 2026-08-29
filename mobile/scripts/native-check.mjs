@@ -139,6 +139,23 @@ try {
   // 所以 app.json 里那条插件配置没了它照样绿(iOS 那条查的是文案,能挡住)。
   ok('Android 有 CAMERA 权限(扫一扫用)', manifest.includes('android.permission.CAMERA'))
   ok('Android 有 INTERNET 权限', manifest.includes('android.permission.INTERNET'))
+  // ★★2026-08-29 真机:安卓上「设置里选浅色没反应」。根因不在 JS —— `forceDarkAllowed`
+  //   在 API 29+ 默认为 true,系统开深色模式时会在**原生层**把我们画好的浅色又反色回去。
+  //   国产 ROM 的深色开关尤其激进。iOS 上没有这个机制,所以这个 bug 只在安卓上现形。
+  //   `plugins/withNoForceDark.js` 负责关掉它;这条断言保证它**真的落到了 styles.xml 里** ——
+  //   plugin 静默不生效(比如 Expo 改了主题名字)是这里唯一防得住的失败方式。
+  const styles = fs.readFileSync(path.join(ROOT, 'android/app/src/main/res/values/styles.xml'), 'utf8')
+  const noForceDark = /<item name="android:forceDarkAllowed">false<\/item>/.test(styles)
+  // ★提示语要**条件给**:`ok()` 是无条件打印第三个参数的(见上面 usesCleartextTraffic 那条
+  //  的写法),常量传进去的话每一次 PASS 后面都跟着一句失败提示,读起来像没过。
+  ok('★★Android 关掉了强制深色(否则设置里的浅色会被系统反色回去)',
+    noForceDark,
+    noForceDark ? '' : 'plugins/withNoForceDark.js 没生效')
+  // ★同名 style 出现两次 = 后一个整个顶掉前一个(那正是这个 plugin 第一版干的事:
+  //   用 assignStylesValue 传了个对不上的 parent,于是新建了第二个 AppTheme,
+  //   把 colorPrimary 和透明状态栏一起丢了)。
+  ok('★Android styles.xml 里没有重名的 AppTheme',
+    (styles.match(/<style name="AppTheme"/g) ?? []).length === 1)
 } catch (e) {
   ok('Android 原生工程生成 + manifest 核对', false, String(e.message).slice(0, 120))
 }
