@@ -6,6 +6,7 @@ import { Icon } from './Icon'
 import { HOME, separatorInset } from './homeGeom'
 import { tileColor, tileLabel } from './wsTile'
 import { tap } from './haptics'
+import { closeOpenSwipe } from './swipeRegistry'
 
 /**
  * 工作区一行。**全出血** —— 贴着屏幕左右边缘,没有边距、没有圆角、没有左右描边。
@@ -56,10 +57,13 @@ export function WsRow({
   const label = tileLabel(name)
   return (
     <Pressable
-      onPress={onPress}
+      // ★★左滑开着别的行(或这一行自己)时,这一下点击的语义是「算了,收起来」,不是
+      //  「展开这个工作区」。判据和收起动作都在 `swipeRegistry.ts`(带单测)。
+      onPress={() => { if (closeOpenSwipe()) return; onPress() }}
       // 长按呼出操作单是「有分量」的动作,普通 onPress 不震。只在真有菜单可呼出时才接线,
       // 没有 onLongPress 的行不该悄悄多出一个不做事的长按响应。
-      onLongPress={onLongPress ? () => { tap('longPress'); onLongPress() } : undefined}
+      // ★长按同样先收:开着动作格的时候再叠一张操作单,两套一样的动作同屏,谁也说不清点哪个算数。
+      onLongPress={onLongPress ? () => { if (closeOpenSwipe()) return; tap('longPress'); onLongPress() } : undefined}
       delayLongPress={400}
       style={({ pressed }) => [
         st.row,

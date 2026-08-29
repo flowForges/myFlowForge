@@ -1,5 +1,6 @@
 import React from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
+import { closeOpenSwipe } from './swipeRegistry'
 import { useC } from '../theme/theme'
 import { T } from './kit'
 import { Icon } from './Icon'
@@ -34,7 +35,9 @@ export function SessionRow({
   const c = useC()
   return (
     <Pressable
-      onPress={onPress}
+      // ★★左滑开着别的行时,这一下点击的语义是「算了,收起来」,不是「进这一行」。
+      //  判据和收起动作都在 `swipeRegistry.ts`(带单测)。不吃掉的话,人想取消却进了另一条会话。
+      onPress={() => { if (closeOpenSwipe()) return; onPress() }}
       style={({ pressed }) => [
         st.row,
         { backgroundColor: gate ? c.gateRowBg : c.surface },
@@ -83,7 +86,8 @@ export function ActionRow({
   const c = useC()
   return (
     <Pressable
-      onPress={disabled ? undefined : onPress}
+      // 同会话行:左滑开着的时候,第一下点击先收起(见 swipeRegistry.ts)。
+      onPress={disabled ? undefined : () => { if (closeOpenSwipe()) return; onPress() }}
       disabled={disabled}
       style={({ pressed }) => [
         st.action,

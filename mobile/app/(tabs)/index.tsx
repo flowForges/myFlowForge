@@ -9,6 +9,7 @@ import { RADIUS } from '../../src/theme/tokens'
 import { Btn, Empty, Field, IconBtn, List, T, TopBar } from '../../src/ui/kit'
 import { Sheet } from '../../src/ui/Sheet'
 import { SwipeRow, type SwipeAction } from '../../src/ui/SwipeRow'
+import { closeOpenSwipe } from '../../src/ui/swipeRegistry'
 import { sessionCanDelete, sessionCloseWasRefused, LAST_SESSION_WHY } from '../../src/data/sessionOps'
 import { confirmDestructive, notify } from '../../src/ui/confirmDestructive'
 import { JumpBubble } from '../../src/ui/JumpBubble'
@@ -613,6 +614,9 @@ export default function Home() {
         ref={scrollRef}
         scrollEventThrottle={64}
         onScroll={(e) => { scrollY.current = e.nativeEvent.contentOffset.y; syncBubble() }}
+        // ★开始滑列表 = 那排左滑出来的动作格收回去。行的 onPress 只管「点」这一路,
+        //  滑走是另一路 —— 两路都不接的话,滑开的那一行会跟着列表滚上去,一直摊在那儿。
+        onScrollBeginDrag={() => closeOpenSwipe()}
         onLayout={(e) => { viewH.current = e.nativeEvent.layout.height; syncBubble() }}
         contentContainerStyle={{ paddingBottom: 96 }}
       >
