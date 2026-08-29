@@ -27,6 +27,10 @@ export function MobileSection() {
    *  没开局域网网关的人就拿不到公钥了 —— 而他恰恰是最需要那个二维码的人。
    */
   const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean } | null>(null)
+  /** 中转连接现在什么样(连上了 / 在重试 / 起不来)。★开关拨过去却什么都没发生,是最难查的一类。 */
+  const [relayDetail, setRelayDetail] = useState<{ status: string; error?: string; peers?: number } | null>(null)
+  const [relayUrl, setRelayUrl] = useState('')
+  const relaySeeded = useRef(false)
   const [port, setPort] = useState('6789')
   const [lan, setLan] = useState(true)
   const [showToken, setShowToken] = useState(false)
@@ -57,15 +61,16 @@ export function MobileSection() {
 
   // 身份和中转状态跟着走。★`?.` 防御:旧 preload 里没有这几个方法(见下面 `?? ''` 那条同理)。
   useEffect(() => {
-    const pull = () => {
-      void window.forge.relayStatus?.().then((r) =>
-        setRelay(r ? { publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled } : null),
-      )
+    const take = (r: Awaited<ReturnType<NonNullable<typeof window.forge.relayStatus>>> | null) => {
+      if (!r) return
+      setRelay({ publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled })
+      setRelayDetail((r.detail ?? null) as { status: string; error?: string; peers?: number } | null)
+      // ★只在**第一次**回填输入框。之后每一次状态广播都回填的话,人正打到一半的地址会被推回去
+      //  —— 和上面那个 `seeded` 是同一条规矩(端口输入框栽过一次)。
+      if (!relaySeeded.current) { relaySeeded.current = true; setRelayUrl(r.url ?? '') }
     }
-    pull()
-    return window.forge.onRelayStatus?.((r) =>
-      setRelay(r ? { publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled } : null),
-    )
+    void window.forge.relayStatus?.().then(take)
+    return window.forge.onRelayStatus?.(take)
   }, [])
 
   const copy = (what: string, text: string) => {
@@ -158,6 +163,71 @@ export function MobileSection() {
           onBlur={() => { if (st.running) void apply({ enabled: true, host, port: portNum }) }}
         />
       </div>
+
+      {/* ── 中转 ────────────────────────────────────────────────────────────
+          ★★和上面那个开关**不是二选一**,所以它就摆在旁边、同一个层级,不藏进"高级"。
+           设计文档决策 6 说得很明确:直连(公网 IP / Tailscale / frp / 端口转发)
+           和中转是**平级**的两条路 —— 两条走同一套端到端加密,直连还少一跳。
+           把直连藏起来会让人以为"必须先部署一台中转才能出门用",而那不是真的。 */}
+      <div className="set-row">
+        <div className="info">
+          <div className="t">出门也能连(中转)</div>
+          <div className="d">
+            不在同一个 wifi 时走一台<b>你自己部署的</b>中转服务器。
+            它是个<b>哑管道</b> —— 整条链路端到端加密,它读不到任何内容,也冒充不了这台电脑。
+            <br />
+            有公网 IP、Tailscale 或者内网穿透的话<b>根本不需要它</b>:直连走同一套加密,还少一跳。
+          </div>
+        </div>
+        <button
+          className={`toggle${relay?.enabled ? ' on' : ''}`}
+          aria-label="出门也能连"
+          disabled={busy}
+          onClick={() => void window.forge.relayApply?.({ enabled: !relay?.enabled, url: relayUrl.trim() })}
+        />
+      </div>
+
+      <div className="proj-field">
+        <label htmlFor="relayUrl">中转地址</label>
+        <div className="hosts-inline">
+          <input
+            id="relayUrl"
+            value={relayUrl}
+            placeholder="wss://relay.你的域名/"
+            onChange={(e) => setRelayUrl(e.target.value)}
+            onBlur={() => {
+              if (relay?.enabled && relayUrl.trim() !== relay.url) {
+                void window.forge.relayApply?.({ enabled: true, url: relayUrl.trim() })
+              }
+            }}
+          />
+        </div>
+      </div>
+      <p className="set-desc">
+        中转要自己部署 —— 代码在仓库的 <code>relay/</code> 里,Docker 一条命令。
+        <b>不提供官方中转</b>:那样所有人的流量都要经过我们,哪怕读不到内容也不该那样。
+      </p>
+
+      {/* ★起失败 / 在重试都要说出来,而且要说人话。 */}
+      {relay?.enabled && relayDetail && relayDetail.status !== 'online' && (
+        <p className="hosts-formerr">
+          {relayDetail.status === 'failed'
+            ? `中转连不上:${relayDetail.error ?? '不知道为什么'}`
+            : relayDetail.status === 'retrying'
+              ? `中转断了,正在重连:${relayDetail.error ?? ''}`
+              : '正在连中转…'}
+        </p>
+      )}
+      {relay?.enabled && relayDetail?.status === 'online' && (
+        <div className={`hosts-live ${(relayDetail.peers ?? 0) > 0 ? 'on' : ''}`}>
+          <span className="dot" />
+          <span>
+            {(relayDetail.peers ?? 0) > 0
+              ? <>通过中转连着 <b>{relayDetail.peers}</b> 台设备</>
+              : <>已挂在中转上,等设备连过来</>}
+          </span>
+        </div>
+      )}
 
       {st.running && (
         <div className="hosts-conn">

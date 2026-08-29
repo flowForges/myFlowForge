@@ -53,6 +53,10 @@
 
 /* 终端代理设置 */
 .set-desc { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+/* ★`<code>` 在这儿必须有自己的规则。没有的话它退回浏览器默认的等宽字体 —— 不报错，
+   只是比周围大一号、字体也不是这一套的 —— 那正是「幽灵 class」那一类静默降级。
+   数值照抄 .proxy-current code（同一种用途：一小段路径/命令嵌在说明文字里）。 */
+.set-desc code { font-family: var(--mono); font-size: 12px; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .proxy-current { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 6px 11px; border-radius: 8px; font-size: 12.5px; border: 1px solid var(--border); background: var(--surface); }
 .proxy-current .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .proxy-current code { font-size: 12px; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
