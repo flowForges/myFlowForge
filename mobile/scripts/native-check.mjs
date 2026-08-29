@@ -123,6 +123,15 @@ try {
     plist.includes('access your photos') ? 'app.json 里 expo-image-picker 那条插件配置没生效' : '')
   const pbx = fs.readFileSync(path.join(ROOT, 'ios/myFlowForge.xcodeproj/project.pbxproj'), 'utf8')
   ok('iOS 工程里带着 Team(否则每次重建都要手点一次)', /DEVELOPMENT_TEAM = \w+;/.test(pbx))
+  // ★★App 图标**不许带 alpha**:App Store 提交会直接被拒,而且真机上透明的那部分会变成黑块。
+  //  这条挡的是「哪天有人拿一张带透明角的图直接覆盖过来」——那种图看起来完全正常,
+  //  在模拟器上也正常,只有在真机桌面和上架时才现形。
+  //  PNG 的颜色类型在 IHDR 第 10 个字节:2=RGB,6=RGBA。只认 2(和 0=灰度)。
+  const iconBuf = fs.readFileSync(path.join(ROOT, 'assets/icon.png'))
+  const colorType = iconBuf[25]
+  ok('★★App 图标是不透明的(带 alpha 会被 App Store 拒,真机上透明处变黑)',
+    colorType === 2 || colorType === 0,
+    colorType === 6 || colorType === 4 ? 'assets/icon.png 带 alpha 通道' : '')
 } catch (e) {
   ok('iOS 原生工程生成 + 配置核对', false, String(e.message).slice(0, 120))
 }
