@@ -3,6 +3,7 @@ import { useC } from '../../src/theme/theme'
 import { Icon } from '../../src/ui/Icon'
 import { useStore } from '../../src/data/store'
 import { useConn } from '../../src/net/conn'
+import { tap } from '../../src/ui/haptics'
 
 /**
  * 底部三格。
@@ -50,6 +51,9 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Icon name="chat" size={20} color={color as string} />,
           tabBarBadge: online && gates.length > 0 ? gates.length : undefined,
         }}
+        // 切 tab 是「有分量」的切换动作(selection 档),不是普通点击。三格都接同一条,
+        // 免得漏一格 —— 漏的那格摸起来会跟另外两格不一致。
+        listeners={{ tabPress: () => tap('switchTab') }}
       />
       <Tabs.Screen
         name="hosts"
@@ -57,6 +61,7 @@ export default function TabLayout() {
           title: '主机',
           tabBarIcon: ({ color }) => <Icon name="host" size={20} color={color as string} />,
         }}
+        listeners={{ tabPress: () => tap('switchTab') }}
       />
       <Tabs.Screen
         name="settings"
@@ -64,6 +69,7 @@ export default function TabLayout() {
           title: '设置',
           tabBarIcon: ({ color }) => <Icon name="settings" size={20} color={color as string} />,
         }}
+        listeners={{ tabPress: () => tap('switchTab') }}
       />
     </Tabs>
   )

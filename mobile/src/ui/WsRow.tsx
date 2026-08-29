@@ -5,6 +5,7 @@ import { T } from './kit'
 import { Icon } from './Icon'
 import { HOME, separatorInset } from './homeGeom'
 import { tileColor, tileLabel } from './wsTile'
+import { tap } from './haptics'
 
 /**
  * 工作区一行。**全出血** —— 贴着屏幕左右边缘,没有边距、没有圆角、没有左右描边。
@@ -45,7 +46,9 @@ export function WsRow({
   return (
     <Pressable
       onPress={onPress}
-      onLongPress={onLongPress}
+      // 长按呼出操作单是「有分量」的动作,普通 onPress 不震。只在真有菜单可呼出时才接线,
+      // 没有 onLongPress 的行不该悄悄多出一个不做事的长按响应。
+      onLongPress={onLongPress ? () => { tap('longPress'); onLongPress() } : undefined}
       delayLongPress={400}
       style={({ pressed }) => [
         st.row,

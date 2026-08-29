@@ -28,6 +28,7 @@ import { SessionRow, ActionRow } from '../../src/ui/SessionRow'
 import { Icon } from '../../src/ui/Icon'
 import { NeedsYou, type NeedItem } from '../../src/ui/NeedsYou'
 import { indentFor } from '../../src/ui/tree'
+import { tap } from '../../src/ui/haptics'
 
 /**
  * 根屏 · 全部会话,按工作区分组。
@@ -107,6 +108,10 @@ export default function Home() {
       if (!yes) return
       setWsBusy(true)
       setWsErr(null)
+      // ★确认框点完之后、真正发出请求那一刻才震 —— 不是点「归档」呼出确认框那一下
+      //  (那一下只是打开一个对话框,还没有任何事真的发生)。warning 不是 success:
+      //  见 haptics.ts 里 hapticKindFor('destructive') 的注释。
+      tap('destructive')
       try {
         await archive(ws.path)
         if (wsSheet?.path === ws.path) setWsSheet(null)
@@ -178,6 +183,8 @@ export default function Home() {
     const msg = `删除「${s.title || '新会话'}」?这条会话的记录会被删掉。`
     const yes = await confirmDestructive({ title: '删除会话', message: msg, confirmLabel: '删除' })
     if (!yes) return
+    // 真正发出请求那一刻才震,同 archiveWs 那一处的理由。
+    tap('destructive')
     try {
       const file = (await invoke(CH.sessionClose, [{ workspacePath: wsPath, sessionId: s.id }])) as SessionsFile
       refresh()

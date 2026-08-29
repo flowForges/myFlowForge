@@ -46,6 +46,7 @@ import { pickSessionAgent, shouldRederive, type DeriveState } from '../src/ui/se
 import { initialInputState, nextInputState, PANEL_H, type InputEvent, type InputState } from '../src/ui/inputPanel'
 import { PermKey } from '../src/ui/PermKey'
 import { PlusPanel, type PlusItem } from '../src/ui/PlusPanel'
+import { tap } from '../src/ui/haptics'
 
 /**
  * 对话屏,从会话列表(根屏)推入的下一层,总是带着一个已选会话进来。
@@ -323,6 +324,17 @@ export default function Chat() {
   useEffect(() => () => { if (scrollTimer.current) clearTimeout(scrollTimer.current) }, [])
 
   /**
+   * 一轮跑完震一下。★★只认 **true → false** 这一次跳变,不是「busy 是 false 就震」——
+   *  否则挂载那一刻(busy 天然是 false)、以及每次因为别的依赖重渲染都会白震一次。
+   *  用 ref 存上一拍的值,不进 state:这不该触发额外渲染。
+   */
+  const prevBusy = useRef(busy)
+  useEffect(() => {
+    if (prevBusy.current && !busy) tap('done')
+    prevBusy.current = busy
+  }, [busy])
+
+  /**
    * 把一段字节存成这个工作区的附件,并挂进 chip 行。**「转成附件」和「从相册发图」共用这一段。**
    *
    * ★为什么必须共用而不是各写一份:两条路本来是逐字重复的同一段(同一个 channel、同一个
@@ -363,6 +375,7 @@ export default function Chat() {
       //  判据本身在 `pasteOffload.ts`,那里有单测钉着。
       setText((latest) => textAfterOffload(latest, raw, att.name))
     } catch (e) {
+      tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))
     } finally {
       setOffloadBusy(false)
@@ -397,6 +410,7 @@ export default function Chat() {
       //  `text` 快照写回去,就是把他这几秒里打的字整段吃掉(offload 那边刚踩过这个坑)。
       setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
     } catch (e) {
+      tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))
     } finally {
       setPickBusy(false)
@@ -427,6 +441,7 @@ export default function Chat() {
       // ★函数式更新:拍照 + 存盘是好几秒的事,这中间人完全可能已经在打字了。
       setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
     } catch (e) {
+      tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))
     } finally {
       setPickBusy(false)
@@ -469,6 +484,7 @@ export default function Chat() {
       // ★函数式更新:挑文件 + 读盘是好几秒的事,这中间人完全可能已经在打字了。
       setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
     } catch (e) {
+      tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))
     } finally {
       setPickBusy(false)
@@ -501,6 +517,7 @@ export default function Chat() {
       setText('')
       setAttachments([])
     } catch (e) {
+      tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))
     } finally {
       setSending(false)
@@ -530,6 +547,8 @@ export default function Chat() {
     if (!gate) return
     try {
       await answerGate(gate, { decision })
+      // 门被答掉 —— 表里「门被答掉 / 一轮跑完」共用 done 这一档,这里是前一半。
+      tap('done')
       setNotice(decision === 'allow' ? '已允许 · 代理继续' : '已拒绝 · 代理换方案')
     } catch (e) {
       setNotice(e instanceof Error ? e.message : String(e))

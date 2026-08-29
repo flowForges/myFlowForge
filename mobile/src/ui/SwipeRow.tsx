@@ -2,6 +2,7 @@ import { StyleSheet, Pressable, View } from 'react-native'
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable'
 import { useC } from '../theme/theme'
 import { T } from './kit'
+import { tap } from './haptics'
 
 export type SwipeAction = {
   key: string
@@ -41,6 +42,8 @@ export function SwipeRow({ actions, children }: { actions: SwipeAction[]; childr
       // 拖过这么多就算「要开」。默认值偏大,在一行 54pt 高的会话上手感是「滑不动」。
       rightThreshold={40}
       overshootRight={false}
+      // 动作格推到位那一下轻震 —— 手势到位这类「有分量」的动作之一,不是普通点击。
+      onSwipeableWillOpen={() => tap('swipeOpen')}
       renderRightActions={(_progress, _translation, methods) => (
         <View style={st.actions}>
           {actions.map((a) => (
