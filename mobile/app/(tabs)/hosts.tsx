@@ -56,8 +56,21 @@ export default function Hosts() {
                 //  门汇总句/换主机单是同一个缺陷。`st.tone === 'ok'` 就是「这台连着」——
                 //  它和 `active && st.tone === 'ok'` 那颗「已连接」pill(下面)用的是同一个判断。
                 const gateN = active && st.tone === 'ok' ? gates.length : 0
+                // 「这一行就是当前连着的那台」。下面三处(› 附件、「已连接」pill、整行点击的去向)
+                // 用的是同一个判断,别各写一份。
+                const isCurrent = active && st.tone === 'ok'
                 return (
-                  <Row key={h.id} onPress={() => void selectHost(h.id)}>
+                  <Row
+                    key={h.id}
+                    // ★★2026-08-29 真机第六轮:原来整行永远是「切到这台」,详情只挂在行尾那颗 ›
+                    //  上。用户的原话是「点击列表,无法进入到详情,只能点 > 才能进入」—— iOS 上
+                    //  一行右端画着 › 就意味着「点这一行会进去」,把它降级成一颗独立小按钮是在跟
+                    //  系统习惯对着干,而且那颗按钮只有 44pt 宽,行的其余部分全是另一个意思。
+                    //  ★当前连着的那一行,「切到这台」本来就是空操作 —— 所以整行让给详情,
+                    //   一点损失都没有。别的行没有 ›,整行仍然是「切过去」,那是它们唯一诚实的动作
+                    //   (`/host` 讲的只有当前连着的那一台,见下面那段 ★★)。
+                    onPress={isCurrent ? () => router.push(ROUTES.host) : () => void selectHost(h.id)}
+                  >
                     <HostIcon icon={h.icon} />
                     <View style={{ flex: 1, minWidth: 0 }}>
                       <T numberOfLines={1} style={{ fontSize: 15, fontWeight: '600', color: c.fg }}>
@@ -73,7 +86,7 @@ export default function Hosts() {
                     </View>
                     {gateN > 0 ? (
                       <Pill tone="gate">{gateN} 个门</Pill>
-                    ) : active && st.tone === 'ok' ? (
+                    ) : isCurrent ? (
                       <Pill tone="run">已连接</Pill>
                     ) : null}
                     <Pressable onPress={() => remove(h)} hitSlop={10} style={{ paddingHorizontal: 4 }}>
@@ -90,7 +103,7 @@ export default function Hosts() {
                         的行也画一颗 ›,点下去落地的却是**别的**行的底细(还带断开键、带令牌),
                         那是一颗说谎的控件,标题栏事后能认出走错了地方不算数。别的行没有这颗键
                         不是漏了,是它们目前没有能诚实指向自己的地方——要看,先切过去。 */}
-                    {active && st.tone === 'ok' ? (
+                    {isCurrent ? (
                       <Pressable
                         onPress={() => router.push(ROUTES.host)}
                         accessibilityLabel={`${h.label} 详情`}
