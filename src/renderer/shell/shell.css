@@ -30,9 +30,30 @@
 .tb-title {
   font-size: 13px; font-weight: 600; color: var(--fg-2);
   letter-spacing: .01em; display: flex; align-items: center; gap: 8px;
+  /* ★min-width:0 是这一行的全部理由。flex item 的默认 min-width 是 auto = 内容的
+     min-content 宽度,而一个没有空格的长工作区名(for-test-0823ajsjshsh…)的 min-content
+     就是它自己那么长 —— 于是 .tb-title 拒绝收缩,右边的「编辑工作区」被挤成一列竖排的字。
+     真机上看到的就是这个。 */
+  min-width: 0;
+  /* ★★还有第二个约束:窗口正中那颗主机芯片(.tb-hostcenter)是 position:fixed + z-index:20
+     + 实底,它**盖**在标题栏上。只给面包屑加省略号还不够 —— 面包屑一长,「编辑工作区」就被
+     推到芯片底下、点不到(窄窗口尤其明显)。所以整个 .tb-title 停在芯片左边界之前:
+     50vw 是芯片中心,减去它的半宽(max-width:260 ⇒ 130)、一点间距、以及标题栏左边那截
+     (红绿灯 + 侧栏开关 ≈ 120)。 */
+  max-width: calc(50vw - 260px);
 }
-.tb-title .crumb { color: var(--muted); font-weight: 500; }
+/* ★面包屑自己也要 min-width:0(它是 .tb-title 里的 flex item,同一条规矩),再加省略号。
+   max-width 是为了别让长名一路铺到窗口正中 —— 那儿有绝对定位的主机芯片(.tb-hostcenter,
+   z-index:20 + 实底),铺过去的字会直接被它盖掉,看起来像被截断在一个莫名其妙的位置。
+   22vw 跟着窗口宽度走,340px 封顶:窄窗口时先于芯片停下,宽窗口时也不无限长。 */
+.tb-title .crumb {
+  color: var(--muted); font-weight: 500;
+  min-width: 0; max-width: min(340px, 22vw);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .tb-title .crumb b { color: var(--fg); font-weight: 600; }
+/* ★按钮永不参与收缩:它是固定文案的操作入口,宁可面包屑短一点,也不能把它压变形。 */
+.tb-edit-ws { flex: 0 0 auto; white-space: nowrap; }
 
 .tb-spacer { flex: 1; }
 

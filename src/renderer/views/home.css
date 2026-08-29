@@ -152,12 +152,16 @@ html:is([data-bg-scope="app"], [data-home-bg="on"]) .wl-row:hover { background: 
 }
 .focus-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 16px 46px color-mix(in oklab, var(--accent) 22%, transparent), 0 0 0 1px color-mix(in oklab, var(--accent) 26%, transparent); }
 @media (prefers-reduced-motion: reduce) { .focus-card:hover { transform: none; } }
-.fc-top { display: flex; align-items: center; gap: 10px; }
-.fc-name { font-size: 16px; font-weight: 660; letter-spacing: -.01em; }
+.fc-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* ★和标题栏的 .tb-title .crumb 同一条毛病、同一个修法:flex item 的默认 min-width 是 auto
+   = min-content,一个不带空格的长工作区名的 min-content 就是它自己那么长 —— 于是这一行
+   撑破卡片,长名直接印到卡片右边框外面去。min-width:0 让它肯收缩,省略号收尾。 */
+.fc-name { font-size: 16px; font-weight: 660; letter-spacing: -.01em; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fc-path { font-family: var(--mono); font-size: 11px; color: var(--faint); }
-.fc-branch { font-family: var(--mono); font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+/* ★分支和状态药丸不收缩:它们是短的、定长的,该让位的是名字。 */
+.fc-branch { font-family: var(--mono); font-size: 11px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; }
 .fc-branch svg { width: 12px; height: 12px; opacity: .7; }
-.fc-pill { margin-left: auto; font-size: 10.5px; font-weight: 600; font-family: var(--mono); letter-spacing: .04em; padding: 4px 10px; border-radius: 99px; color: var(--run); background: var(--accent-dim); }
+.fc-pill { flex: 0 0 auto; margin-left: auto; font-size: 10.5px; font-weight: 600; font-family: var(--mono); letter-spacing: .04em; padding: 4px 10px; border-radius: 99px; color: var(--run); background: var(--accent-dim); }
 .fc-sep { height: 1px; background: var(--border); margin: 16px 0; }
 
 /* 编排流:阶段链 */
@@ -196,7 +200,10 @@ html:is([data-bg-scope="app"], [data-home-bg="on"]) .wl-row:hover { background: 
 /* accent left-edge marker slides in on hover — a small "designed" cue tying rows to the accent system */
 .wl-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 2.5px; background: var(--accent); transform: scaleY(0); transition: transform .16s ease; }
 .wl-row:hover::before { transform: scaleY(1); }
-.wl-name { font-size: 13.5px; font-weight: 580; flex: 0 0 auto; transition: color .14s; }
+/* ★同一条毛病的第三处(前两处是标题栏面包屑和 .fc-name):原来是 flex:0 0 auto —— 名字
+   一长就把改动数、时间、状态标签整排顶出 .home-list(它是 overflow:hidden,所以是**看不见**
+   而不是溢出来),右半行凭空消失。改成可收缩 + 省略号,并给一个上限别把路径挤没。 */
+.wl-name { font-size: 13.5px; font-weight: 580; flex: 0 1 auto; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .14s; }
 .wl-row:hover .wl-name { color: var(--accent); }
 .wl-path { font-family: var(--mono); font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 0; }
 .wl-changes { font-family: var(--mono); font-size: 11px; color: var(--muted); flex: 0 0 auto; }
