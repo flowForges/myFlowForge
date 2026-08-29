@@ -84,20 +84,24 @@ export default function Hosts() {
                         (令牌、对面版本、方法数、断开)。必须是自己的一颗 Pressable、自己的 ≥44pt
                         方框,不是 `hitSlop`——祖先(这一行的外层 Pressable)紧贴着它,hitSlop 在
                         Fabric 下是死的(`overflowInset`),真长出来的只有 `width`/`height`。
-                        ★`/host` 只讲**当前连着的那一台**(见 `app/host.tsx` 顶部 JSDoc,「令牌、
-                        对面版本、方法数、断开」四样都在那一屏)—— 点一台没连着的主机的这颗键,
-                        落地是当前连着那台的详情,不是它自己的;
-                        标题栏会显出是哪一台,不会悄悄认错机器。要看这一台的底细,先切过去。 */}
-                    <Pressable
-                      onPress={() => router.push(ROUTES.host)}
-                      accessibilityLabel={`${h.label} 详情`}
-                      style={({ pressed }) => [
-                        { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
-                        pressed && { backgroundColor: c.surface2 },
-                      ]}
-                    >
-                      <Icon name="chevron" size={15} color={c.faint} />
-                    </Pressable>
+                        ★★只在**当前连着**这一行画它(`active && st.tone === 'ok'`,和上面
+                        「已连接」pill 同一个判断)—— `/host` 讲的是当前连着的那一台
+                        (见 `app/host.tsx` 顶部 JSDoc),不是「点了哪一行就讲哪一台」。给没连着
+                        的行也画一颗 ›,点下去落地的却是**别的**行的底细(还带断开键、带令牌),
+                        那是一颗说谎的控件,标题栏事后能认出走错了地方不算数。别的行没有这颗键
+                        不是漏了,是它们目前没有能诚实指向自己的地方——要看,先切过去。 */}
+                    {active && st.tone === 'ok' ? (
+                      <Pressable
+                        onPress={() => router.push(ROUTES.host)}
+                        accessibilityLabel={`${h.label} 详情`}
+                        style={({ pressed }) => [
+                          { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
+                          pressed && { backgroundColor: c.surface2 },
+                        ]}
+                      >
+                        <Icon name="chevron" size={15} color={c.faint} />
+                      </Pressable>
+                    ) : null}
                   </Row>
                 )
               })}
