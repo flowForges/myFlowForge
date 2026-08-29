@@ -96,7 +96,16 @@ export type EngineEvent =
 export interface ResolvePayload { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }
 
 export interface ModelInfo { id: string; label: string; description?: string; contextWindow?: number }
-export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; authCmd?: string; installHelp?: string; timezone?: string }
+/**
+ * `auth`:这台机器上这个 provider **登录了没有**(第三期:远程/无头场景)。
+ *
+ * ★★三态。`'unknown'` 不是「大概没登录」,是**我们没有判断依据** —— 界面上必须什么都不说。
+ *  只查 bin 在不在的年代,流程是「建会话 → 发消息 → 等半天 → 才发现没登录」;
+ *  而把「不知道」画成「没登录」会让人去重登一个本来好好的 provider,同样是浪费时间。
+ *  判据见 `src/main/agents/credProbe.ts`(每一条都在真机上跑过)。
+ */
+export type ProviderAuth = 'ok' | 'missing' | 'unknown'
+export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; authCmd?: string; installHelp?: string; timezone?: string; auth?: ProviderAuth }
 
 export type ReviewLens = 'correctness' | 'security' | 'performance' | 'style'
 export interface ReviewConfig {

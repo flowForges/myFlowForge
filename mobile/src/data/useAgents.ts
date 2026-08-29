@@ -14,6 +14,15 @@ export type AgentInfo = {
   displayName: string
   installed: boolean
   models: AgentModel[]
+  /**
+   * 那台机器上这个代理**登录了没有**。
+   *
+   * ★★三态,而且 `'unknown'`(以及字段缺失 —— 老版本主机不回这个字段)时**界面上什么都不说**。
+   *  这一条正是远程场景里最容易白等的地方:装了 CLI ≠ 登录过。但把「不知道」画成「没登录」
+   *  会把人支去重登一个本来好好的代理,那和白等一样浪费时间。判据在
+   *  `src/main/agents/credProbe.ts`,每一条都在真机上跑过。
+   */
+  auth?: 'ok' | 'missing' | 'unknown'
 }
 
 /** `settings:changed` 广播和 `config:get-host-settings` 的返回里,我们只关心这一个字段。 */

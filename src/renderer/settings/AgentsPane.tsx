@@ -158,9 +158,16 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   const installed = (id: string) => info(id)?.installed ?? false
   // While the first detection round-trip is pending show a lightweight placeholder
   // instead of prematurely stamping 未检测.
-  const badge = (id: string) => detecting && !info(id)
-    ? <span className="agent-badge off">检测中…</span>
-    : <span className={`agent-badge ${installed(id) ? 'ok' : 'off'}`}>{installed(id) ? '已检测' : '未检测'}</span>
+  const badge = (id: string) => {
+    if (detecting && !info(id)) return <span className="agent-badge off">检测中…</span>
+    if (!installed(id)) return <span className="agent-badge off">未检测</span>
+    // ★★「装了」不等于「登录了」。远程/无头那台机器你看不见,不说的话流程是
+    //  「建会话 → 发消息 → 等半天 → 才发现没登录」(设计文档第九节)。
+    // ★只有拿到**否定证据**(auth === 'missing')才画这一枚;`unknown` 照旧画「已检测」——
+    //  一半 CLI 我们根本没有判断依据,把不知道说成没登录同样是在浪费人的时间。
+    if (info(id)?.auth === 'missing') return <span className="agent-badge warn">没登录</span>
+    return <span className="agent-badge ok">已检测</span>
+  }
   const browse = async (id: string) => {
     const p = await pickPath('file', '选择 CLI 可执行文件')
     if (p) setBinDrafts(d => ({ ...d, [id]: p }))

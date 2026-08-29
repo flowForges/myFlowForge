@@ -56,7 +56,9 @@ describe('detectProviders', () => {
       listModels: async () => [], run: () => ({ id: 'x', cancel: () => {}, done: Promise.resolve({ ok: true }) }),
     }
     const out = await detectProviders({ slow: hang }, process.env, 50)
-    expect(out).toEqual([{ id: 'slow', displayName: 'Slow', installed: false, models: [], bin: '', binPath: '', custom: true }])
+    // `auth: 'unknown'` —— 没装上的 provider 不去问它登录没有(见 credProbe:三态里
+    // 「不知道」是默认,只有拿到否定证据才说没登录)。
+    expect(out).toEqual([{ id: 'slow', displayName: 'Slow', installed: false, models: [], bin: '', binPath: '', custom: true, auth: 'unknown' }])
   })
 
   it('reports an absolute bin path as-is and flags built-in vs custom', async () => {
@@ -78,7 +80,49 @@ describe('detectProviders', () => {
       run: () => ({ id: 'x', cancel: () => {}, done: Promise.resolve({ ok: true }) }),
     }
     const out = await detectProviders({ fast: ok }, process.env, 1000)
-    expect(out[0]).toEqual({ id: 'fast', displayName: 'Fast', installed: true, models: [{ id: 'm', label: 'm' }], bin: '', binPath: '', custom: true })
+    // 这个假 provider 没有 bin,`probeAuth` 因此不跑任何东西,直接 unknown。
+    expect(out[0]).toEqual({ id: 'fast', displayName: 'Fast', installed: true, models: [{ id: 'm', label: 'm' }], bin: '', binPath: '', custom: true, auth: 'unknown' })
+  })
+})
+
+describe('detectProviders — 登录状态', () => {
+  const mk = (id: string, installed: boolean): AgentProvider => ({
+    id, displayName: id, bin: id,
+    capabilities: { structuredOutput: false, permissionHook: false, pty: false },
+    detect: async () => installed, listModels: async () => [],
+    run: () => ({ id: 'x', cancel: () => {}, done: Promise.resolve({ ok: true }) }),
+  })
+
+  it('把探测结果原样带出来', async () => {
+    const out = await detectProviders({ a: mk('a', true) }, {}, {
+      probeAuthState: async () => 'missing',
+      binPresent: async () => true,
+      persist: () => {},
+    })
+    expect(out[0].auth).toBe('missing')
+  })
+
+  it('★没装上的 provider 不去问它登录没有 —— 白花一次 spawn,而且问了也没意义', async () => {
+    const probe = vi.fn(async () => 'ok' as const)
+    const out = await detectProviders({ a: mk('a', false) }, {}, {
+      probeAuthState: probe,
+      binPresent: async () => false,
+      trustPersisted: false,
+      persist: () => {},
+    })
+    expect(probe).not.toHaveBeenCalled()
+    expect(out[0].auth).toBe('unknown')
+  })
+
+  it('★探测卡住时退回 unknown,而不是把整排 agent 拖没', async () => {
+    const out = await detectProviders({ a: mk('a', true) }, {}, {
+      timeoutMs: 30,
+      probeAuthState: () => new Promise(() => {}),   // 永不 resolve
+      binPresent: async () => true,
+      persist: () => {},
+    })
+    expect(out[0].installed).toBe(true)
+    expect(out[0].auth).toBe('unknown')
   })
 })
 

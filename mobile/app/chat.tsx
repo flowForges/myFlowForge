@@ -1070,6 +1070,11 @@ export default function Chat() {
                 <T mono style={{ fontSize: 10.5, letterSpacing: 0.8, color: c.faint, textTransform: 'uppercase' }}>
                   {a.displayName}
                 </T>
+                {/* ★★「装了」和「登录了」是两件事,而在手机上你**看不见那台机器** ——
+                    没有这一枚的话,流程是「选它 → 发消息 → 等半天 → 才发现没登录」。
+                    ★只在拿到**否定证据**时画(`'missing'`)。`'unknown'` 和老主机不回这个字段时
+                     一个字都不说 —— 把不知道画成没登录,会让人去重登一个本来好好的代理。 */}
+                {a.auth === 'missing' ? <Pill tone="err">没登录</Pill> : null}
               </View>
               {a.models.map((mm) => {
                 const on = a.id === agentId && mm.id === (model?.id ?? '')

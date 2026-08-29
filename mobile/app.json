@@ -56,7 +56,8 @@
           }
         }
       ],
-      "./plugins/withNoForceDark"
+      "./plugins/withNoForceDark",
+      "./plugins/withPushEntitlement"
     ],
     "experiments": {
       "typedRoutes": false
