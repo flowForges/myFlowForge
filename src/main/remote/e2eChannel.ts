@@ -75,19 +75,24 @@ function sealedChannel(session: Session, wire: Wire, hooks: { msg?: (t: string) 
  */
 export function hostE2ELink(identity: Identity, wire: Wire, onReady: (ch: Channel) => void): E2ELink {
   let session: Session | null = null
+  // ★★握手失败是**终态**。不置这个旗子的话,失败之后紧跟着到达的在途帧会再走一遍
+  //  握手分支,把失败原因覆盖成一句无关的「形状不对」—— 排查时看到的是最后那一条,
+  //  而真正的原因(签名验不过)已经没了。`closeRaw` 只是发出关闭意图,在途的帧照样会来。
+  let dead = false
   const hooks: { msg?: (t: string) => void; close?: () => void } = {}
 
   return {
     receive(raw) {
+      if (dead) return
       if (!session) {
         let init: unknown
-        try { init = JSON.parse(raw) } catch { return wire.closeRaw(4400, 'bad handshake') }
+        try { init = JSON.parse(raw) } catch { return die(4400, 'bad handshake') }
         const f = init as { t?: unknown; epk?: unknown }
         // ★第一帧必须是 hs-init,别的一律断。这是这条连接上唯一一次"我们知道该收到什么"的时刻,
         //  放宽等于给了对面一个在加密之前跟我们说话的机会。
-        if (f?.t !== 'hs-init' || typeof f.epk !== 'string') return wire.closeRaw(4400, 'expected hs-init')
+        if (f?.t !== 'hs-init' || typeof f.epk !== 'string') return die(4400, 'expected hs-init')
         const r = hostHandshakeReply(identity, { t: 'hs-init', epk: f.epk })
-        if (!r) return wire.closeRaw(4400, 'bad ephemeral key')
+        if (!r) return die(4400, 'bad ephemeral key')
         session = r.session
         // ★先把回复发出去,再交出 Channel。反过来的话 `serveConnection` 的 hello 会排在
         //  hs-reply 前面 —— 对面还没有会话密钥,那一帧它解不开,直接丢,然后永远等 hello。
@@ -108,6 +113,11 @@ export function hostE2ELink(identity: Identity, wire: Wire, onReady: (ch: Channe
       hooks.close?.()
     },
   }
+
+  function die(code: number, reason: string) {
+    dead = true
+    wire.closeRaw(code, reason)
+  }
 }
 
 /**
@@ -124,6 +134,10 @@ export function clientE2ELink(
 ): E2ELink {
   const { pending, frame } = clientHandshakeInit()
   let session: Session | null = null
+  // ★★同 host 那一侧:握手失败是终态。见那边的注释 —— 这条不加的话,验签失败之后
+  //  紧跟着到达的第一帧业务数据(对面已经在发 hello 了)会把 `onFail` 的原因覆盖成
+  //  「形状不对」,而那是**症状**不是**原因**。
+  let dead = false
   const hooks: { msg?: (t: string) => void; close?: () => void } = {}
   // ★造出来就把 hs-init 放到线上。客户端是发起方,没有"等对面先说"这一档 ——
   //  多一个"要不要现在发"的开关,只会多一条"忘了发,于是永远连不上"的路径。
@@ -131,6 +145,7 @@ export function clientE2ELink(
 
   return {
     receive(raw) {
+      if (dead) return
       if (!session) {
         let reply: unknown
         try { reply = JSON.parse(raw) } catch { return fail('对面的握手回复不是 JSON') }
@@ -160,6 +175,7 @@ export function clientE2ELink(
   }
 
   function fail(why: string) {
+    dead = true
     wire.onLog?.(why)
     onFail?.(why)
     wire.closeRaw(4401, 'handshake failed')
