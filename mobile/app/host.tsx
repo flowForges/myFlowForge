@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { ScrollView, View } from 'react-native'
-import { router } from 'expo-router'
-import { goBack } from '../src/nav'
+import { goBack, goToHosts } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, IconBtn, List, LiveDot, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
@@ -38,7 +37,10 @@ export default function Host() {
         </TopBar>
         <Empty title="现在没连着任何主机" desc="这一屏讲的是当前这台机器的底细,先连上一台。" />
         <View style={{ paddingHorizontal: 30 }}>
-          <Btn kind="ghost" block onPress={() => router.push('/hosts')}>
+          {/* ★不是 `router.push('/hosts')`:`/hosts` 现在是 `(tabs)` 里的一格,不是根栈的一层 ——
+              直接 push 会把整个 `(tabs)` 分组再压一份进根栈,和 `goToHosts()` 当初要避免的
+              那类栈损坏是同一个错法(见 `src/nav.ts` 的 JSDoc)。 */}
+          <Btn kind="ghost" block onPress={() => goToHosts()}>
             管理主机
           </Btn>
         </View>

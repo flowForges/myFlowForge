@@ -2,6 +2,7 @@ import { Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { useC } from '../../src/theme/theme'
 import { Btn, Empty, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
+import { Icon } from '../../src/ui/Icon'
 import { useConn } from '../../src/net/conn'
 import { type MobileHost } from '../../src/net/hosts'
 import { useStore } from '../../src/data/store'
@@ -11,6 +12,7 @@ import { HostIcon } from '../../src/ui/HostIcon'
 // ★web/native 那条确认框分支收在这一个函数里,原地各写一遍的历史(这里 + archiveWs +
 //  confirmDeleteSession)已经收掉了,见它的 JSDoc。
 import { confirmDestructive } from '../../src/ui/confirmDestructive'
+import { ROUTES } from '../../src/nav/routes'
 
 export default function Hosts() {
   const c = useC()
@@ -77,6 +79,25 @@ export default function Hosts() {
                     <Pressable onPress={() => remove(h)} hitSlop={10} style={{ paddingHorizontal: 4 }}>
                       <T style={{ fontSize: 15, color: c.faint }}>✕</T>
                     </Pressable>
+                    {/* ★★这是 `/host` 唯一的入口了(见文件顶上 I1 的说明)—— iOS 那种「行尾 › 详情」
+                        附件:行本身的点击**保留**给「切到这台」,这一颗单独负责「看这台的底细」
+                        (令牌、对面版本、方法数、断开)。必须是自己的一颗 Pressable、自己的 ≥44pt
+                        方框,不是 `hitSlop`——祖先(这一行的外层 Pressable)紧贴着它,hitSlop 在
+                        Fabric 下是死的(`overflowInset`),真长出来的只有 `width`/`height`。
+                        ★`/host` 只讲**当前连着的那一台**(见 `app/host.tsx` 顶部 JSDoc,「令牌、
+                        对面版本、方法数、断开」四样都在那一屏)—— 点一台没连着的主机的这颗键,
+                        落地是当前连着那台的详情,不是它自己的;
+                        标题栏会显出是哪一台,不会悄悄认错机器。要看这一台的底细,先切过去。 */}
+                    <Pressable
+                      onPress={() => router.push(ROUTES.host)}
+                      accessibilityLabel={`${h.label} 详情`}
+                      style={({ pressed }) => [
+                        { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22 },
+                        pressed && { backgroundColor: c.surface2 },
+                      ]}
+                    >
+                      <Icon name="chevron" size={15} color={c.faint} />
+                    </Pressable>
                   </Row>
                 )
               })}
@@ -98,7 +119,11 @@ export default function Hosts() {
 
         {/* ★「这台机器提供 N 个方法」原来在这儿,已经搬走了 —— 它是**一台机器的底细**,
             和这一屏(清单:有哪几台、切哪台、删哪台)不是一件事,而且埋在列表最底下
-            没人会滚到。现在它在两个真会去看的地方:设置 → 关于,以及 `app/host.tsx`。
+            没人会滚到。现在它在两个真会去看的地方:设置 → 关于,以及 `app/host.tsx`
+            (上面每一行末尾那颗 › 详情键推过去的那一屏)。
+            ★★这条路一度断过:设置屏里那个「点当前主机进详情」的入口被这次改造删掉了,
+            而它是当年**唯一**推 `/host` 的地方 —— 全仓库 grep 一遍 `/host` 只剩路由常量本身。
+            现在的入口就是上面那颗 › 键,不是设置屏。
             这里不留第三份 —— 同一个数字抄三遍,迟早有一遍说的是另一台机器的。 */}
         <Note>切过去之后,会话、变更、终端全部换成那台机器的。不做同屏对比。</Note>
       </ScrollView>
