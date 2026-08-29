@@ -50,9 +50,21 @@ describe('挑出来这个文件能不能发', () => {
   })
 
   it('★撞名要去重 —— 连发两个 `log.txt`,正文里两个占位符一模一样,代理分不清哪句说哪个', () => {
+    // ★去重靠的是调用方传进来的「已经用过的名字」,不是这个模块自己记的 —— 见下一条「换一批」。
     const a = planPickedFile({ name: 'log.txt', dataBase64: 'eA==' }, NOW)
-    const b = planPickedFile({ name: 'log.txt', dataBase64: 'eQ==' }, new Date(NOW.getTime() + 61_000))
+    const taken = new Set(a.ok ? [a.name] : [])
+    const b = planPickedFile({ name: 'log.txt', dataBase64: 'eQ==' }, new Date(NOW.getTime() + 61_000), taken)
     if (a.ok && b.ok) expect(a.name).not.toBe(b.name)
+  })
+
+  it('★★★换一批 takenNames(比如切到了别的会话)→ 不能被上一次调用的残留状态影响,两次都该拿到原名', () => {
+    // 这条专门钉「去重状态不许活在模块里」:如果实现内部还留着一个模块级 Set(记住了
+    // 上一条用例的 'log.txt'/'log-*.txt'),这里换一个全新名字、每次都传一个全新的空
+    // Set,理应两次都拿到原名 —— 一旦这条红了,说明有状态从调用之间偷偷漏出来了。
+    const a = planPickedFile({ name: 'notes.txt', dataBase64: 'eA==' }, NOW, new Set())
+    const b = planPickedFile({ name: 'notes.txt', dataBase64: 'eQ==' }, new Date(NOW.getTime() + 61_000), new Set())
+    expect(a.ok && a.name).toBe('notes.txt')
+    expect(b.ok && b.name).toBe('notes.txt')
   })
 
   it('一个名字都没有 → 兜一个,不能得到一个空文件名', () => {

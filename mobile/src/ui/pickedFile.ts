@@ -12,6 +12,15 @@ import { MAX_IMAGE_BASE64 } from './pickedImage'
  * ★★撞名去重这一条**没有**直接复用 `planPickedImage` 的做法 —— 见下面 `dedupeName` 的注释,
  *  文件选择器上「同名」比相册常见得多,`pastedFileNameForFile` 单独那一层不够用。
  *
+ * ★★★去重靠的是**调用方传进来的「已经用过的名字」**,这个模块自己**不留任何状态**——
+ *  之前这里放过一个模块级 `Set`,审查抓到了它是真 bug,不只是「不够纯」:模块级状态活
+ *  一整个 JS 进程的生命周期,没人在切会话、没人在发送之后清它,于是在会话 A 挑过的
+ *  `log.txt` 会让会话 B 第一次挑同名文件时就被**平白**加上时间戳 —— 跟 A 毫无关系,
+ *  纯粹是「这个进程之前发生过什么」在污染现在这次判断,而 `planPickedFile(picked, now)`
+ *  的签名看着像纯函数。调用方(`chat.tsx`)本来就天然持有正确的作用域:`attachments`
+ *  这个 state 是随会话/随发送清空的,拿它算出「已经用过的名字」传进来,这个模块就真的
+ *  是纯的了 —— 同样的输入(含 `takenNames`)永远同样的输出,可以直接单测。
+ *
  * ★★上限直接用 `MAX_IMAGE_BASE64`,**不另立一个常数**。那个名字是历史的(它先给图片用),
  *  但它管的其实是**一条 WebSocket 帧能塞多少**,跟内容是不是图片毫无关系。
  *  另立一个的话,迟早出现「同样大的东西,当图片发得出去、当文件发不出去」。
@@ -36,38 +45,30 @@ const baseName = (name: string): string => name.split(/[/\\]/).pop() ?? ''
 const pad = (n: number): string => String(n).padStart(2, '0')
 
 /**
- * ★这一次 app 会话里已经发出去过的文件名。
- *
- * ★★和图片不一样:`pastedFileNameForFile` 只改**通用兜底名**(`image`/`screenshot`/…),
- *  真实文件名(`log.txt`)一律原样放行 —— 这对图片是对的(相册重名极少见,`IMG_0421.HEIC`
- *  这种自带序号),但文件选择器上「连续导出两次同名日志」是家常便饭。不去重的话:
- *  两个附件都叫 `log.txt`,`saveAttachment` 按名字落盘,第二个直接**覆盖**第一个;
- *  就算没覆盖,正文里两个占位符一模一样,代理分不清哪句话说的是哪个文件。
- *  所以在 `pastedFileNameForFile` 之上再加一层会话级去重,不动 `largePaste.ts` 本身
- *  (那样会连带改了图片的行为,而「人自己命名的名字必须原样保留」是图片那边已经钉住的判据)。
+ * 和 `pastedFileNameForFile` 的结果撞了(它只改 `image`/`screenshot`/… 这几个通用兜底名,
+ * 真实文件名 `log.txt` 一律原样放行)就加一段时间戳;`taken` 里已经有的名字**不由这个函数
+ * 记住** —— 记不记得住是调用方的事,这里只回答「给定这一份已用名单,这个名字该叫什么」。
  */
-const seenNames = new Set<string>()
-
-function dedupeName(name: string, now: Date): string {
-  if (!seenNames.has(name)) {
-    seenNames.add(name)
-    return name
-  }
+function dedupeName(name: string, now: Date, taken: ReadonlySet<string>): string {
+  if (!taken.has(name)) return name
   const dot = name.lastIndexOf('.')
   const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
   const stamp = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
   let candidate = `${base}-${stamp}${ext}`
   let n = 2
   // 极小概率同一秒内又撞了(比如两次都是 61 秒边界内的批量选取),继续加序号兜底。
-  while (seenNames.has(candidate)) {
+  while (taken.has(candidate)) {
     candidate = `${base}-${stamp}-${n}${ext}`
     n += 1
   }
-  seenNames.add(candidate)
   return candidate
 }
 
-export function planPickedFile(picked: PickedFile, now: Date): FilePlan {
+/**
+ * @param takenNames 这次会话里**已经**发出去的附件名(调用方传 —— 一般是当前 `attachments`
+ *  列表的 `.name` 集合)。不传就当作还没发过任何文件,和「刚打开一个新会话」是一回事。
+ */
+export function planPickedFile(picked: PickedFile, now: Date, takenNames: ReadonlySet<string> = new Set()): FilePlan {
   const dataBase64 = picked.dataBase64 ?? ''
   // 拿不到字节的情况真实存在:iCloud Drive 里没下下来的文件、或者一个读不出来的 provider。
   // 不拦的话就是存进去一个 0 字节的附件,chip 照常显示,代理打开是空的。
@@ -82,5 +83,5 @@ export function planPickedFile(picked: PickedFile, now: Date): FilePlan {
     }
   }
   const raw = baseName(picked.name ?? '') || 'file'
-  return { ok: true, name: dedupeName(pastedFileNameForFile(raw, now), now), dataBase64 }
+  return { ok: true, name: dedupeName(pastedFileNameForFile(raw, now), now, takenNames), dataBase64 }
 }

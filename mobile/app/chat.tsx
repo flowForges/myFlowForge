@@ -461,7 +461,9 @@ export default function Chat() {
       const a = r.assets?.[0]
       if (!a) return
       const dataBase64 = await fs.readAsStringAsync(a.uri, { encoding: 'base64' })
-      const plan = planPickedFile({ name: a.name, dataBase64 }, new Date())
+      // ★撞名去重靠这份「已经用过的名字」—— `attachments` 本来就是随会话/随发送清空的
+      //  state,天然就是「这次会话里已经发出去的附件名」,不用另开一份状态去记它。
+      const plan = planPickedFile({ name: a.name, dataBase64 }, new Date(), new Set(attachments.map((x) => x.name)))
       if (!plan.ok) throw new Error(plan.why)
       const att = await saveAttachment(plan.name, plan.dataBase64)
       // ★函数式更新:挑文件 + 读盘是好几秒的事,这中间人完全可能已经在打字了。
