@@ -387,3 +387,85 @@ describe('断开', () => {
     expect(() => core.leave(h, ROOM, 'host')).not.toThrow()
   })
 })
+
+describe('restore · Durable Object 从 hibernation 醒来时重建房间', () => {
+  const mk = () => {
+    const sent: string[] = []
+    const closed: number[] = []
+    const sock: RelaySocket = { send: (d) => sent.push(d), close: (c) => closed.push(c ?? 0) }
+    return { sock, sent, closed }
+  }
+
+  it('★重建不发任何帧 —— join 会发一串 peer-online,对面会看到一堆莫名其妙的状态', () => {
+    const core = createRelayCore()
+    const h = mk(); const c = mk()
+    core.restore(h.sock, ROOM, 'host')
+    core.restore(c.sock, ROOM, 'client', '7')
+    expect(h.sent).toEqual([])
+    expect(c.sent).toEqual([])
+  })
+
+  it('★重建之后转发照常走,而且用的是原来那个 cid', () => {
+    const core = createRelayCore()
+    const h = mk(); const c = mk()
+    core.restore(h.sock, ROOM, 'host')
+    core.restore(c.sock, ROOM, 'client', '7')
+    core.relay(c.sock, ROOM, 'client', '密文', '7')
+    expect(h.sent).toEqual([JSON.stringify({ t: 'data', cid: '7', d: '密文' })])
+    core.relay(h.sock, ROOM, 'host', JSON.stringify({ t: 'data', cid: '7', d: '回来的密文' }))
+    expect(c.sent).toEqual(['回来的密文'])
+  })
+
+  it('★★nextCid 要推到已恢复的 cid 之后 —— 否则新客户端拿到一个还在用的编号,两条连接串了', () => {
+    const core = createRelayCore()
+    const h = mk(); const old = mk(); const fresh = mk()
+    core.restore(h.sock, ROOM, 'host')
+    core.restore(old.sock, ROOM, 'client', '7')
+    const r = core.join(fresh.sock, { t: 'join', role: 'client', room: ROOM })
+    expect(r.ok).toBe(true)
+    expect(r.ok && r.cid).toBe('8')
+    // 发给新连接的帧不许落到老连接上
+    core.relay(h.sock, ROOM, 'host', JSON.stringify({ t: 'data', cid: '8', d: '给新的' }))
+    expect(fresh.sent.at(-1)).toBe('给新的')
+    expect(old.sent).toEqual([])
+  })
+
+  it('★恢复期也只准一个 host —— 第二个不许把第一个顶掉', () => {
+    const core = createRelayCore()
+    const a = mk(); const b = mk(); const c = mk()
+    core.restore(a.sock, ROOM, 'host')
+    core.restore(b.sock, ROOM, 'host')
+    core.restore(c.sock, ROOM, 'client', '1')
+    core.relay(c.sock, ROOM, 'client', 'x', '1')
+    expect(a.sent).toHaveLength(1)
+    expect(b.sent).toEqual([])
+  })
+
+  it('没有 cid 的客户端不恢复(那条连接已经没法投递了,留着只会占位)', () => {
+    const core = createRelayCore()
+    const c = mk()
+    core.restore(c.sock, ROOM, 'client')
+    expect(core.stats().connections).toBe(0)
+  })
+
+  it('房间号不合法一律不恢复 —— 它来自持久化的附件,同样是不可信输入', () => {
+    const core = createRelayCore()
+    const h = mk()
+    core.restore(h.sock, '短', 'host')
+    expect(core.stats()).toEqual({ rooms: 0, connections: 0 })
+  })
+
+  it('恢复之后 leave 照常清理', () => {
+    const core = createRelayCore()
+    const h = mk(); const c = mk()
+    core.restore(h.sock, ROOM, 'host')
+    core.restore(c.sock, ROOM, 'client', '3')
+    core.leave(c.sock, ROOM, 'client', '3')
+    expect(h.sent).toEqual([
+      JSON.stringify({ t: 'close', cid: '3' }),
+      JSON.stringify({ t: 'relay', status: 'peer-offline' }),
+    ])
+    core.leave(h.sock, ROOM, 'host')
+    expect(core.stats()).toEqual({ rooms: 0, connections: 0 })
+  })
+})

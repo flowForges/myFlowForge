@@ -148,6 +148,35 @@ export function createRelayCore() {
     }),
 
     /**
+     * **重建**一条已经存在的连接,不发任何帧、不分配新 cid。
+     *
+     * ★★这是给 Cloudflare 的 Durable Object 用的:开了 hibernation 之后,DO 在空闲时会被
+     *  整个卸载,**内存里的 `rooms` 全没了**,而 WebSocket 连接**还活着** —— 下一帧到达时
+     *  DO 被唤醒,拿到的是一个全新的 `createRelayCore()`。不重建的话,那一帧会落进一个
+     *  空房间里被静默丢掉,**症状是「挂了一晚上之后手机再也收不到东西,而两边都显示连着」**。
+     *
+     * ★为什么不能直接调 `join()` 重建:它会发状态帧(对面会收到一串莫名其妙的 `peer-online`)、
+     *  会给客户端**分配新的 cid**(host 那边记的还是旧的,于是每一帧都投递不到)。
+     *  重建要的是「原样放回去」,和加入是两件事。
+     *
+     * ★`nextCid` 要推到所有已恢复 cid 之后 —— 否则下一个新客户端会拿到一个仍在用的编号,
+     *  两条逻辑连接的数据就串了。
+     */
+    restore(sock: RelaySocket, roomId: string, role: Role, cid?: string): void {
+      if (!isValidRoom(roomId)) return
+      const room = roomOf(roomId)
+      if (role === 'host') {
+        // ★已经有 host 了就不覆盖:同一个房间只准一个,恢复期也不例外。
+        if (!room.host) room.host = sock
+        return
+      }
+      if (!cid) return
+      room.clients.set(cid, sock)
+      const n = Number(cid)
+      if (Number.isFinite(n) && n >= room.nextCid) room.nextCid = n + 1
+    },
+
+    /**
      * 一条连接声明自己要加入哪个房间。
      *
      * 拒绝时返回 `{ ok: false }`(适配器应当关掉它)。客户端接受时**带回一个 cid** ——

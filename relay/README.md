@@ -48,10 +48,26 @@ npm install && npm run build && npm start
 
 环境变量：`PORT`（默认 8787）、`HOST`（默认 0.0.0.0）。没有别的。
 
-### Cloudflare Workers
+### Cloudflare Workers（不想管服务器就选这个）
 
-`src/core.ts` 是和 Node 版**共用的同一份**撮合逻辑，Durable Object 适配器（`worker.ts`）
-还没写 —— 见主仓 `docs/superpowers/plans/2026-08-29-phase3-relay.md`。
+```bash
+npm install
+npx wrangler deploy
+```
+
+然后在 app 里填 `wss://myflowforge-relay.<你的账号>.workers.dev/`。
+
+**为什么推荐它**：中转是全流量转发，而这里的带宽是 Cloudflare 出的；你那台 VPS 应该留着跑 daemon。
+
+★**一个 Worker 只有一个 Durable Object 实例**，所有房间都在它里面（和 Node 版完全一样，
+撮合核心本来就是多房间的）。按房间分实例需要在 WebSocket 升级**之前**就知道房间号，
+也就只能放进 URL —— 而房间号是 daemon 的公钥，**放进 URL 等于写进 Cloudflare 的日志**。
+这份东西连 `/healthz` 都不报房间号，不会为了扩展性把它交出去。
+代价是单实例的吞吐上限：自建（自己那几台设备）远远够用，要做公共服务请另想办法。
+
+★★**Worker 那条路没有自动化测试**：跑它要 miniflare / wrangler 的运行时。
+能测的部分（撮合、hibernation 醒来后的重建、cid 分配）都在 `core.ts` 里，那边是全覆盖的；
+`worker.ts` 只剩「把 Cloudflare 的 API 接上去」这一层，**必须真部署一次才算验过**。
 
 ## ⚠️ 别把自己的小带宽 VPS 当公共中转
 
@@ -70,6 +86,8 @@ daemon 直接监听端口，手机和笔记本**直连**就行 —— 走的是�
 |---|---|
 | `src/core.ts` | 撮合逻辑。**两个适配器共用这一份。** 没有一行密码学代码，也永远不该有 |
 | `src/node.ts` | Node / Docker 适配器（`ws`） |
+| `src/worker.ts` | Cloudflare Workers + Durable Object 适配器。★开了 hibernation，所以醒来时要靠 `core.restore()` 把房间重建回去 —— 不重建的症状是「挂了一晚上之后再也收不到东西，而两边都显示连着」 |
+| `wrangler.toml` | Worker 部署配置。★必须用 `new_sqlite_classes` 迁移，否则 hibernation 走不通 |
 | `src/main.ts` | 可执行入口 |
 | `src/core.test.ts` | 撮合逻辑的单测 |
 | `src/e2e.integration.test.ts` | **真 WebSocket + 真加密 + 真中转**，证明中转全程只见到密文 |

@@ -1,0 +1,17 @@
+# Cloudflare Workers 部署配置。`cd relay && npm i && npx wrangler deploy`
+#
+# ★部署完在 app 的 设置 → 手机 里填 `wss://<下面这个 name>.<你的账号>.workers.dev/`
+#  (绑了自定义域就填那个)。
+name = "myflowforge-relay"
+main = "src/worker.ts"
+compatibility_date = "2026-01-01"
+
+[[durable_objects.bindings]]
+name = "RELAY"
+class_name = "RelayRoom"
+
+# ★★SQLite 存储后端是 hibernation 的前提。用旧的 `new_classes` 迁移的话
+#  `acceptWebSocket` 那条路走不通,DO 会一直醒着计费。
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayRoom"]
