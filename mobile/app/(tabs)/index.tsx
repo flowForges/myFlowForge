@@ -693,6 +693,7 @@ export default function Home() {
                     meta={`${g.ws.projectCount} 个项目`}
                     expanded={open}
                     gate={wsGates.length > 0}
+                    pinned={!!g.ws.pinned}
                     onPress={() => toggleWs(g.ws.path)}
                     onLongPress={() => { setWsErr(null); setWsSheet(g.ws) }}
                     right={(() => {
