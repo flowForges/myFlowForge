@@ -167,7 +167,9 @@ export default function Settings() {
             disabled={!push.prefs.enabled}
             onChange={(v) => push.setPrefs({ ...push.prefs, done: v })}
           />
-          <Row onPress={() => void push.testLocal()}>
+          {/* ★没权限时 `presentLocal` 是静默失败的,所以这颗按钮必须把原因接回来显示 ——
+              否则它就是一颗「点了没反应」的按钮,而它正是用来判断提醒通没通的那颗。 */}
+          <Row onPress={() => void push.testLocal().then(setPermErr)}>
             <T style={{ flex: 1, fontSize: 15, color: c.fg }}>弹一条试试</T>
             <T style={{ fontSize: 13.5, color: c.muted }}>本地通知</T>
           </Row>

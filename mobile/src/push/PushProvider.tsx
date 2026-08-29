@@ -41,8 +41,11 @@ export type PushApi = {
   tokenReason: string
   /** 这台机器认不认 push:* 那几个方法(老 daemon 不认,设置里要置灰)。 */
   hostSupports: boolean
-  /** 设置里那颗「弹一条试试」。走的是本地通知,不需要任何凭据。 */
-  testLocal: () => Promise<void>
+  /**
+   * 设置里那颗「弹一条试试」。走的是本地通知,不需要任何服务器配置。
+   * ★返回一句错误原因(没权限时);成功就是 null —— **绝不静默失败**。
+   */
+  testLocal: () => Promise<string | null>
 }
 
 const Ctx = createContext<PushApi | null>(null)
@@ -181,13 +184,28 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
     })
   }, [store])
 
-  const testLocal = useCallback(async () => {
+  /**
+   * ★★没有通知权限时,`presentLocal` 是**静默失败**的 —— 系统不弹,也不报错。
+   *  那就是一颗「点了没反应」的按钮,而它恰恰是用来判断「提醒到底通没通」的那颗。
+   *  所以这里先自己要一次权限,拿不到就**回一句人话**,由调用方显示出来。
+   */
+  const testLocal = useCallback(async (): Promise<string | null> => {
+    let st = permission
+    if (st !== 'granted') {
+      st = await askPermission()
+      if (st !== 'granted') {
+        return st === 'denied'
+          ? '系统里关掉了 myFlowForge 的通知,所以这条发不出去。去「设置 → 通知 → myFlowForge」打开。'
+          : '没拿到通知权限,这条发不出去。'
+      }
+    }
     await presentLocal({
       title: 'myFlowForge · 试一下',
       body: '看到这条就说明手机上的提醒是通的。',
       data: { wsPath: '', sessionId: null, kind: 'done' },
     })
-  }, [])
+    return null
+  }, [permission, askPermission])
 
   const value = useMemo<PushApi>(() => ({
     prefs, setPrefs, permission, askPermission, token, tokenReason, hostSupports, testLocal,
