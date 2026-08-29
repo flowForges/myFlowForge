@@ -131,9 +131,11 @@ export default function Home() {
   }
 
   // 工作区左滑「重命名」/长按单子「重命名」共用的那张 Sheet。记的是打开那一刻的
-  // { path, name } —— name 就是正在编辑的值(Field 直接绑它),和下面会话重命名
+  // { path, name, orig } —— name 就是正在编辑的值(Field 直接绑它),和下面会话重命名
   // (renameSession)同一套写法。
-  const [renameWs, setRenameWs] = useState<{ path: string; name: string } | null>(null)
+  // ★`orig` 是打开那一刻的原名,**只读不改**。它是给副标题用的:输入框里的值一开始改就
+  //  不再回答「我现在改的是哪一个」了,而左滑呼出这张单子的时候,人未必记得刚才滑的是哪行。
+  const [renameWs, setRenameWs] = useState<{ path: string; name: string; orig: string } | null>(null)
   const [renameWsBusy, setRenameWsBusy] = useState(false)
   const [renameWsErr, setRenameWsErr] = useState<string | null>(null)
 
@@ -169,7 +171,7 @@ export default function Home() {
       key: 'rename',
       label: '重命名',
       tone: 'plain',
-      onPress: () => { setRenameWsErr(null); setRenameWs({ path: ws.path, name: ws.name }) },
+      onPress: () => { setRenameWsErr(null); setRenameWs({ path: ws.path, name: ws.name, orig: ws.name }) },
     },
     { key: 'pin', label: ws.pinned ? '取消置顶' : '置顶', tone: 'plain', onPress: () => void togglePinnedFor(ws) },
   ]
@@ -213,9 +215,10 @@ export default function Home() {
     }
   }
 
-  // 会话左滑「重命名」弹出的单子。记的是打开那一刻的 { wsPath, id, title } ——
-  // title 就是正在编辑的值(Field 直接绑它),不另开一份 renameTitle。
-  const [renameSession, setRenameSession] = useState<{ wsPath: string; id: string; title: string } | null>(null)
+  // 会话左滑「重命名」弹出的单子。记的是打开那一刻的 { wsPath, id, title, orig } ——
+  // title 就是正在编辑的值(Field 直接绑它),不另开一份 renameTitle;`orig` 只读,给副标题用
+  // (理由同上面的 renameWs)。
+  const [renameSession, setRenameSession] = useState<{ wsPath: string; id: string; title: string; orig: string } | null>(null)
   const [renameBusy, setRenameBusy] = useState(false)
   const [renameErr, setRenameErr] = useState<string | null>(null)
 
@@ -260,7 +263,7 @@ export default function Home() {
         key: 'rename',
         label: '重命名',
         tone: 'plain' as const,
-        onPress: () => { setRenameErr(null); setRenameSession({ wsPath: g.ws.path, id: s.id, title: s.title }) },
+        onPress: () => { setRenameErr(null); setRenameSession({ wsPath: g.ws.path, id: s.id, title: s.title, orig: s.title }) },
       },
     ]
   }
@@ -886,7 +889,7 @@ export default function Home() {
             if (!ws) return
             setWsSheet(null)
             setRenameWsErr(null)
-            setRenameWs({ path: ws.path, name: ws.name })
+            setRenameWs({ path: ws.path, name: ws.name, orig: ws.name })
           }}
         >
           重命名
@@ -908,7 +911,7 @@ export default function Home() {
         open={!!renameWs}
         onClose={() => setRenameWs(null)}
         title="重命名工作区"
-        sub="改完点保存,列表和分组头都会跟着变"
+        sub={`原名 ${renameWs?.orig ?? ''}\n改完点保存,列表和分组头都会跟着变`}
       >
         {renameWsErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
@@ -934,7 +937,7 @@ export default function Home() {
         open={!!renameSession}
         onClose={() => setRenameSession(null)}
         title="重命名会话"
-        sub="改完点保存,列表和对话屏顶栏都会跟着变"
+        sub={`原名 ${renameSession?.orig ?? ''}\n改完点保存,列表和对话屏顶栏都会跟着变`}
       >
         {renameErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>

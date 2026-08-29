@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react'
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { Keyboard, Modal, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler'
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -36,6 +36,19 @@ import { T } from './kit'
  *  注释——原来那版会在拖着关掉的瞬间先跳回全展开状态一帧,再滑出去。②手势条(把手+标题)
  *  补了 `minHeight: 44`——不带 `sub` 时原来只有 ~42px,是个静默的、只在没传 `sub` 的下一个
  *  调用方身上才会现形的死区。
+ *
+ * ★★2026-08-29 真机第六轮:**面板不躲键盘**。这个面板是 `position:absolute; bottom:0`,
+ *  而键盘是盖在最上面的一层原生视图 —— 于是任何一张带输入框的单子(重命名工作区、重命名会话)
+ *  一打开、`autoFocus` 把键盘唤起来,整张面板连同标题、原名、输入框、保存键**全部**在键盘底下,
+ *  屏幕上只剩一个键盘和后面那张列表。用户原话:「看不到到底在重命名什么,当前什么样」。
+ *  ★为什么不是 `KeyboardAvoidingView`:那个东西靠给**自己**加 padding/height 把子节点顶上去,
+ *   对一个 `position:absolute; bottom:0` 的子节点无效(绝对定位不参与父节点的内容盒排布)。
+ *   直接抬 `bottom` 才是对症的。
+ *  ★`maxHeight` 必须跟着一起减,而且不能再用百分比:百分比量的是 `Modal` 那棵全屏视图树,
+ *   键盘顶上来之后 `bottom + 86%` 会超过屏幕高度,超出去的是**顶部** —— 把手和标题被推出屏幕外,
+ *   于是「拖着关」也一起没了。所以改成按窗口高度算的绝对值。
+ *  ★iOS 用 `keyboardWillShow`(和键盘动画同帧起步,面板跟着一起上来);Android 没有 will 系列,
+ *   退 `keyboardDidShow`。
  */
 export function Sheet({
   open,
@@ -52,8 +65,26 @@ export function Sheet({
 }) {
   const c = useC()
   const insets = useSafeAreaInsets()
+  const { height: winH } = useWindowDimensions()
   const y = useSharedValue(0)
   const panelHeight = useSharedValue(0)
+  // 键盘现在有多高。0 = 没有键盘。★只在这张单子**开着**的时候订阅:RN 的 `Modal` 在
+  // `visible={false}` 时返回 null,所以同屏那一堆没打开的单子根本不在树上,不会有 N 份监听。
+  const [kb, setKb] = useState(0)
+  useEffect(() => {
+    if (!open) {
+      setKb(0)
+      return
+    }
+    const showEv = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
+    const hideEv = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
+    const on = Keyboard.addListener(showEv, (e) => setKb(e.endCoordinates?.height ?? 0))
+    const off = Keyboard.addListener(hideEv, () => setKb(0))
+    return () => {
+      on.remove()
+      off.remove()
+    }
+  }, [open])
 
   // ★`open` 变 true(重新打开)时把 y 归零 —— 注意不是变 false 时归零。
   //  拖着关的那一刻 `y.value` 还停在拖到的位置,`onEnd` 直接 `runOnJS(onClose)()`,
@@ -95,7 +126,15 @@ export function Sheet({
           }}
           style={[
             st.sheet,
-            { backgroundColor: c.surface, borderTopColor: c.border2, paddingBottom: Math.max(14, insets.bottom) },
+            {
+              backgroundColor: c.surface,
+              borderTopColor: c.border2,
+              // 键盘顶着的时候面板坐在键盘上沿 —— 这时候底部安全区已经被键盘占了,
+              // 再留一份就是凭空多出一条空白。
+              bottom: kb,
+              paddingBottom: kb > 0 ? 14 : Math.max(14, insets.bottom),
+              maxHeight: Math.max(180, winH * 0.86 - kb),
+            },
             panelStyle,
           ]}
         >
@@ -105,8 +144,10 @@ export function Sheet({
               <T style={{ marginHorizontal: 16, marginTop: 6, fontSize: 16.5, fontWeight: '600', color: c.fg }}>
                 {title}
               </T>
+              {/* ★3 行封顶:副标题现在会带上「原名 …」(见重命名那两张单子),而工作区名可以任意长
+                  —— 不封的话手势条会被撑到半屏高,把手和正文一起被挤下去。 */}
               {sub ? (
-                <T style={{ marginHorizontal: 16, marginTop: 2, fontSize: 12.5, lineHeight: 19, color: c.muted }}>
+                <T numberOfLines={3} style={{ marginHorizontal: 16, marginTop: 2, fontSize: 12.5, lineHeight: 19, color: c.muted }}>
                   {sub}
                 </T>
               ) : null}
@@ -125,8 +166,8 @@ const st = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
-    maxHeight: '86%',
+    // ★`bottom` 和 `maxHeight` 都在行内按键盘高度算(见上面),这里不写死 —— 写死会和
+    //  行内那份形成两个事实来源,而 RN 的样式数组是后者赢,读代码的人会以为这里生效。
     borderTopLeftRadius: RADIUS.sheet,
     borderTopRightRadius: RADIUS.sheet,
     borderTopWidth: StyleSheet.hairlineWidth,
