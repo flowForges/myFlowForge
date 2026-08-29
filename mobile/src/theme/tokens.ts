@@ -50,6 +50,22 @@ export type Palette = {
   gateDim: string
   gateBorder: string
   gateRowBg: string
+  /**
+   * 置顶工作区那一行的底色,以及它按下去的底色。
+   *
+   * ★★2026-08-29 真机第一版把它做成了 `bg2`,浅色下没问题、**深色下用户说看不出来** ——
+   *  核实是字面事实:深色的 `surface`(#1e2125)和 `bg2`(#181b1f)的 **CIE L\* 只差 3.0**,
+   *  而浅色那一档(#ffffff → #eceff2)是 **5.7**。同一个令牌在两套皮肤下的对比度差了一倍。
+   *
+   * ★所以这两个值是**算出来的**:以浅色那一步(ΔL\* = 5.70)为准,深色也走同样的一步,
+   *  方向各自跟着本套皮肤的「强调」方向(浅色往暗、深色往亮 —— 和 surface→surface2 一致)。
+   *  按下态再走一步(ΔL\* ≈ 11.4)。换算全程 sRGB→线性→Y→L\*,保留原色的色调,不是肉眼凑的。
+   *
+   * ★为什么不复用现成的:浅色下 `surface2`(按下态)**夹在** surface 和 bg2 中间,
+   *  置顶行按下去只变亮 3/255,等于按了没反应。这两档必须各自有自己的值。
+   */
+  pinRowBg: string
+  pinRowPress: string
   pillGateBorder: string
   pillRunBorder: string
   pillErrBorder: string
@@ -104,6 +120,9 @@ export const DARK: Palette = {
   gateDim: 'rgba(250, 176, 72, 0.14)',
   gateBorder: 'rgba(250, 176, 72, 0.58)',
   gateRowBg: '#2b2a2a',
+  // ΔL* = +5.7 / +11.4(深色往亮走),色调取自 surface2
+  pinRowBg: '#292d32',
+  pinRowPress: '#353a40',
   pillGateBorder: 'rgba(250, 176, 72, 0.48)',
   pillRunBorder: 'rgba(102, 193, 137, 0.42)',
   pillErrBorder: 'rgba(242, 113, 106, 0.45)',
@@ -156,6 +175,9 @@ export const LIGHT: Palette = {
   gateDim: 'rgba(196, 109, 0, 0.12)',
   gateBorder: 'rgba(196, 109, 0, 0.58)',
   gateRowBg: '#fcf5ef',
+  // ΔL* = −5.7 / −11.4(浅色往暗走),色调取自 bg2
+  pinRowBg: '#eceff2',
+  pinRowPress: '#dcdfe2',
   pillGateBorder: 'rgba(196, 109, 0, 0.48)',
   pillRunBorder: 'rgba(0, 126, 70, 0.42)',
   pillErrBorder: 'rgba(193, 50, 52, 0.45)',

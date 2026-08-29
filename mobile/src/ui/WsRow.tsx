@@ -40,10 +40,10 @@ export function WsRow({
    * 手动置顶的。★★2026-08-29 真机第六轮:置顶在这之前**只影响排序**,行本身长得一模一样 ——
    *  用户原话「置顶的看不出置顶,没有什么区别,可以参考微信的置顶」。微信就是给置顶的会话换一层
    *  更沉的底色,没有角标也没有图钉,只有底色。这里照同一条路子走。
-   *  ★用 `bg2` 而不是新调一个颜色:`bg2` 就是这套色板里「比 surface 沉一档」的那一档
-   *  (浅色 #ffffff → #eceff2,差 ~19/255,和微信 #ffffff → #ededed 是同一个量级),
-   *  深浅两套都现成、跟着皮肤走,不用为每个主题各凑一次。
-   *  ★按下态(`surface2`)在两套皮肤下都仍然和它拉得开,所以置顶行按下去照样有反馈。
+   *  ★★第一版用的是 `bg2`,浅色下对、**深色下用户说看不出来**。核实是字面事实:
+   *  深色 `surface`→`bg2` 的 CIE L* 只差 **3.0**,而浅色那一档是 **5.7** —— 同一个令牌
+   *  在两套皮肤下的对比度差了一倍。所以现在用专门算出来的 `pinRowBg` / `pinRowPress`
+   *  (推导过程见 `tokens.ts` 上那段):两套皮肤各自走同样的 ΔL*,方向跟着本套的强调方向。
    *  ★门优先:一个又有门又置顶的工作区染琥珀 —— 门是「代理停在那儿等你」,比「我钉的」要紧。
    */
   pinned?: boolean
@@ -67,15 +67,12 @@ export function WsRow({
       delayLongPress={400}
       style={({ pressed }) => [
         st.row,
-        { backgroundColor: gate ? c.gateRowBg : pinned ? c.bg2 : c.surface },
+        { backgroundColor: gate ? c.gateRowBg : pinned ? c.pinRowBg : c.surface },
         // ★★置顶行的按下态**不能**也用 `surface2`。浅色下这套色板是
         //  surface #ffffff > surface2 #eff2f6 > bg2 #eceff2 —— 也就是说 `surface2` 夹在
         //  白和置顶底色**中间**,置顶行按下去只变亮 3/255,等于按了没反应。
-        //  再往下走一档用 `border`(浅 #dbdee2 / 深 #26292d):两套皮肤下相对置顶底色都是
-        //  十几个色阶的实打实变化,方向也各自正确(浅色变暗、深色变亮)。
-        //  ★这里是把 `border` 当**填充**用,不是它平时的线条身份 —— 之所以不新造一个令牌,
-        //   是因为这套色板本来就是一条明度阶梯,而这里要的正好就是「比 bg2 再走一档」那一格。
-        pressed && { backgroundColor: pinned && !gate ? c.border : c.surface2 },
+        //  `pinRowPress` 是从 `pinRowBg` 再走同样一步算出来的,两套皮肤下都是实打实的变化。
+        pressed && { backgroundColor: pinned && !gate ? c.pinRowPress : c.surface2 },
       ]}
     >
       <View style={[st.tile, { backgroundColor: tileColor(name) }]}>
