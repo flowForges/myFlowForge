@@ -101,7 +101,7 @@ export default function Chat() {
   const { activeHost, state, online, reconnect, invoke } = useConn()
   const { groups, selected, gates, gatesFor, answerGate, wsName, sessionTitle, setViewing, loading: storeLoading } = useStore()
   const { msgs, busy, send, stop, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
-  const { agents } = useAgents()
+  const { agents, refresh: refreshAgents, hiddenCount: agentsHidden } = useAgents()
   const { wf, stage, advanceLabel, nextIsExecution, advance, exit, addFeedback } = useWorkflow()
 
   const [text, setText] = useState('')
@@ -628,7 +628,11 @@ export default function Chat() {
             {selected ? sessionTitle(selected.wsPath, selected.sessionId) : '未选会话'}
           </T>
           <Pressable
-            onPress={online ? () => setAgentSheet(true) : undefined}
+            // ★打开的同时**重问一遍**这台主机现在有哪些代理可用。装了什么、开着什么都是那台
+            //  机器的当下事实,而这一屏可能已经开了很久(甚至跨过一次重连)。`settings:changed`
+            //  的实时通道也在(见 useAgents),这一下是它的兜底 —— 广播丢了/没连上的那一段时间里
+            //  改的,靠这一下补回来。
+            onPress={online ? () => { refreshAgents(); setAgentSheet(true) } : undefined}
             disabled={!online}
             // ★整行热区,而且用 `minHeight` 撑到 44pt(和 `HostBanner.tsx` 的主机横幅同一个手法),
             //  不用 hitSlop —— hitSlop 在祖先紧贴子节点时是死的(见「复制」按钮那次教训)。
@@ -1029,9 +1033,18 @@ export default function Chat() {
         }}
       />
 
-      <Sheet open={agentSheet} onClose={() => setAgentSheet(false)} title="编码代理" sub="这台主机上真实装了的">
+      {/* ★副标题从「真实装了的」改成「装了、而且开着的」:这两件事以前在手机端是一回事,
+          现在不是了 —— 电脑端设置里关掉的代理不再出现在这张单子上。 */}
+      <Sheet open={agentSheet} onClose={() => setAgentSheet(false)} title="编码代理" sub="这台主机上装了、而且开着的">
         {agents.length === 0 ? (
-          <Empty title="这台机器上没探测到代理" desc="在电脑端的设置里检查 CLI 是否装好。" />
+          agentsHidden > 0 ? (
+            <Empty
+              title={`${agentsHidden} 个代理都被关掉了`}
+              desc="在电脑端的 设置 → 代理 里把要用的那个重新启用。"
+            />
+          ) : (
+            <Empty title="这台机器上没探测到代理" desc="在电脑端的设置里检查 CLI 是否装好。" />
+          )
         ) : (
           agents.map((a) => (
             <View key={a.id} style={{ gap: 8 }}>
