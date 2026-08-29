@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { Keyboard, Modal, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler'
-import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useC } from '../theme/theme'
 import { RADIUS } from '../theme/tokens'
@@ -70,21 +70,38 @@ export function Sheet({
   const panelHeight = useSharedValue(0)
   // 键盘现在有多高。0 = 没有键盘。★只在这张单子**开着**的时候订阅:RN 的 `Modal` 在
   // `visible={false}` 时返回 null,所以同屏那一堆没打开的单子根本不在树上,不会有 N 份监听。
+  //
+  // 两份:`kb`(JS state)只给 `maxHeight` / `paddingBottom` 这类要走布局的属性用;
+  // `kbLift`(shared value)负责真正把面板抬起来。★分开是因为**抬起来必须跟着键盘的动画走**:
+  // iOS 的 `keyboardWillShow` 是在键盘动画**开始**的那一刻发的,直接改布局的话面板瞬移到位、
+  // 键盘还在底下慢慢升,中间会露出一条越缩越小的缝。用 `withTiming` 借键盘自己报的 `duration`
+  // 走同一条曲线,两者就贴在一起。
   const [kb, setKb] = useState(0)
+  const kbLift = useSharedValue(0)
   useEffect(() => {
     if (!open) {
       setKb(0)
+      kbLift.value = 0
       return
     }
     const showEv = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
     const hideEv = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
-    const on = Keyboard.addListener(showEv, (e) => setKb(e.endCoordinates?.height ?? 0))
-    const off = Keyboard.addListener(hideEv, () => setKb(0))
+    // ★`duration` 只有 iOS 的 will 系列会给;Android 的 did 系列是键盘**已经**在那儿了,
+    //  此时再走一段动画只会慢半拍,所以退成 0(瞬间到位)。
+    const on = Keyboard.addListener(showEv, (e) => {
+      const h = e.endCoordinates?.height ?? 0
+      setKb(h)
+      kbLift.value = withTiming(h, { duration: e.duration ?? 0 })
+    })
+    const off = Keyboard.addListener(hideEv, (e) => {
+      setKb(0)
+      kbLift.value = withTiming(0, { duration: e.duration ?? 0 })
+    })
     return () => {
       on.remove()
       off.remove()
     }
-  }, [open])
+  }, [open, kbLift])
 
   // ★`open` 变 true(重新打开)时把 y 归零 —— 注意不是变 false 时归零。
   //  拖着关的那一刻 `y.value` 还停在拖到的位置,`onEnd` 直接 `runOnJS(onClose)()`,
@@ -111,8 +128,9 @@ export function Sheet({
       }
     })
 
+  // `y` 是往下拖的位移(正数),`kbLift` 是被键盘顶起的高度 —— 一个往下一个往上,合成一条。
   const panelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: y.value }],
+    transform: [{ translateY: y.value - kbLift.value }],
   }))
 
   return (
@@ -129,9 +147,9 @@ export function Sheet({
             {
               backgroundColor: c.surface,
               borderTopColor: c.border2,
-              // 键盘顶着的时候面板坐在键盘上沿 —— 这时候底部安全区已经被键盘占了,
-              // 再留一份就是凭空多出一条空白。
-              bottom: kb,
+              // ★抬起来那一下走的是上面的 `kbLift`(transform),不是 `bottom` —— transform 不触发
+              //  布局,和键盘的动画能贴在一条曲线上。这里只留跟着走的两个布局属性。
+              // 键盘顶着的时候底部安全区已经被键盘占了,再留一份就是凭空多出一条空白。
               paddingBottom: kb > 0 ? 14 : Math.max(14, insets.bottom),
               maxHeight: Math.max(180, winH * 0.86 - kb),
             },
@@ -166,8 +184,9 @@ const st = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    // ★`bottom` 和 `maxHeight` 都在行内按键盘高度算(见上面),这里不写死 —— 写死会和
-    //  行内那份形成两个事实来源,而 RN 的样式数组是后者赢,读代码的人会以为这里生效。
+    bottom: 0,
+    // ★`maxHeight` 在行内按键盘高度算(见上面),这里不写死 —— 写死会和行内那份形成两个
+    //  事实来源,而 RN 的样式数组是后者赢,读代码的人会以为这里生效。
     borderTopLeftRadius: RADIUS.sheet,
     borderTopRightRadius: RADIUS.sheet,
     borderTopWidth: StyleSheet.hairlineWidth,
