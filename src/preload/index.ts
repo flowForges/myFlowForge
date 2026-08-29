@@ -352,6 +352,19 @@ const api = {
     ipcRenderer.on(CH.mobileStatusEvent, listener)
     return () => { ipcRenderer.removeListener(CH.mobileStatusEvent, listener) }
   },
+
+  // ── 中转(第三期)。和上面那个不是二选一:局域网网关 =「同一个 wifi 里连得上」,
+  //    中转 =「NAT 后面也连得上」。同时开着是正常的,同一个二维码两条路都能用。
+  relayStatus: (): Promise<import('../main/host/relayController').RelayStatusView> => ipcRenderer.invoke(CH.relayStatus),
+  relayApply: (cfg: import('@shared/types').Settings['relay']): Promise<import('../main/host/relayController').RelayStatusView> =>
+    ipcRenderer.invoke(CH.relayApply, cfg),
+  /** 这台机器的长期身份公钥(base64)。★二维码里那个 `k`。 */
+  relayIdentity: (): Promise<string> => ipcRenderer.invoke(CH.relayIdentity),
+  onRelayStatus: (cb: (s: import('../main/host/relayController').RelayStatusView) => void) => {
+    const listener = (_: unknown, s: import('../main/host/relayController').RelayStatusView) => cb(s)
+    ipcRenderer.on(CH.relayStatusEvent, listener)
+    return () => { ipcRenderer.removeListener(CH.relayStatusEvent, listener) }
+  },
   onSettingsChangedBy: (cb: (p: { by: string }) => void) => {
     const listener = (_: unknown, p: { by: string }) => cb(p)
     ipcRenderer.on(CH.settingsChangedBy, listener)

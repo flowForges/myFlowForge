@@ -15,6 +15,13 @@ export const CH = {
   mobileApply: 'mobile:apply',
   mobileRegenToken: 'mobile:regen-token',
   mobileStatusEvent: 'mobile:status-event',
+  // 中转(第三期)。★和 mobile:* 一样注册在 index.ts 而不是方法表里 ——
+  //  它描述的是**这台设备自己的服务**,连去别的机器时不该被转发过去。
+  relayStatus: 'relay:status',
+  relayApply: 'relay:apply',
+  relayStatusEvent: 'relay:status-event',
+  /** 这台机器的长期身份公钥(base64)。配对二维码要用它。 */
+  relayIdentity: 'relay:identity',
   configGetSettings: 'config:get-settings',
   // 设置一分为二之后的两个半边(第二期 C)。`config:get/set-settings` 由路由器**组合**这两个:
   // 跟设备的那半边永远本机答,跟机器的那半边跟着当前 host 走。

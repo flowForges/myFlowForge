@@ -385,6 +385,29 @@ export const MobileGatewaySchema = z.object({
 export type MobileGateway = z.infer<typeof MobileGatewaySchema>
 export const defaultMobileGateway = (): MobileGateway => ({ enabled: false, host: '0.0.0.0', port: 6789 })
 
+/**
+ * 中转(第三期)。**这台机器**要不要通过一台第三方服务器对外可达。
+ *
+ * ★★为什么它是**跟机器走**而不是跟设备走(和 `mobileGateway` 相反):
+ *  `mobileGateway` 说的是"这台电脑对手机开不开门",那是这台设备自己的事;
+ *  而中转说的是"**这台 daemon** 从哪儿能被找到" —— 你从手机上连过去,连的是那台机器,
+ *  它挂在哪个中转上是那台机器的属性。所以 `HOST_SETTING_KEYS` 里有它,`CLIENT` 里没有。
+ *
+ * ★★**没有官方中转**(设计文档决策 4):`url` 由用户自己填,代码开源、自己部署。
+ *  所以这里没有默认地址,空 = 不用中转。填一个第三方地址进来也无所谓 ——
+ *  链路是端到端加密的,中转读不到任何东西(见 `src/shared/remote/e2e.ts`)。
+ *
+ * ★直连那条路(公网 IP / Tailscale / frp / 端口转发)和这条**平级**,不是降级方案:
+ *  两条路走的是同一套加密,安全性等同,直连还少一跳。界面上别把直连藏进高级设置。
+ */
+export const RelaySchema = z.object({
+  enabled: z.boolean().catch(false).default(false),
+  /** `ws://` 或 `wss://`。★生产上该用 wss —— 不是为了内容(内容本来就是密文),是别让沿途的人知道你在跟谁通信。 */
+  url: z.string().catch('').default(''),
+})
+export type RelayConfig = z.infer<typeof RelaySchema>
+export const defaultRelay = (): RelayConfig => ({ enabled: false, url: '' })
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
   // ★Q1:原本一个对象塞了两件事。
@@ -451,6 +474,7 @@ export const SettingsSchema = z.object({
   // JSON-RPC app-server 传输(见 codexRpc.ts),支持权限交互等更细粒度控制。先落地开关,接线在后续任务。
   codexTransport: z.enum(['exec', 'app-server']).catch('exec').default('exec'),
   mobileGateway: MobileGatewaySchema.default(defaultMobileGateway),
+  relay: RelaySchema.default(defaultRelay),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
@@ -483,6 +507,7 @@ export const defaultSettings = (): Settings => ({
   botBridge: defaultBotBridge(),
   codexTransport: 'exec',
   mobileGateway: defaultMobileGateway(),
+  relay: defaultRelay(),
 })
 
 export const ProjectSchema = z.object({
@@ -712,6 +737,10 @@ export const HOST_SETTING_KEYS = [
   'notifyEvents',                          // Q1:哪些事件值得产生通知
   'agentProxy',                            // Q4:agent 的出口代理
   'pinnedWorkspaces', 'workspaceOrder',    // Q2
+  // 第三期:「**这台机器**从哪儿能被找到」是那台机器的属性,不是你手上这台设备的。
+  // ★和 `mobileGateway` 正好相反(那个说的是"这台电脑对手机开不开门",跟设备走),
+  //   理由完整版在 RelaySchema 上面。
+  'relay',
 ] as const
 
 export type ClientSettingKey = typeof CLIENT_SETTING_KEYS[number]

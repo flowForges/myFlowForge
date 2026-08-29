@@ -14,6 +14,7 @@ import { createElectronHost } from './host/electronHost'
 import { hostname } from 'node:os'
 import { createHostRouter } from './remote/router'
 import { createAppGateway } from './host/appGateway'
+import { createRelayController } from './host/relayController'
 import { openSshTunnel } from './remote/sshTunnel'
 import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHosts, type RemoteHost } from './remote/hostStore'
 import { registerIpc } from './ipc/handlers'
@@ -738,6 +739,25 @@ app.whenReady().then(() => {
     return mobileGw.apply(cfg)
   })
   ipcMain.handle(CH.mobileRegenToken, () => mobileGw.regenToken())
+
+  // ── 中转(第三期)。和上面那个手机端网关**不是二选一**:
+  //    局域网网关 = 「同一个 wifi 里连得上」;中转 = 「NAT 后面也连得上」。
+  //    在家走局域网(快、少一跳),出门走中转,同一个二维码。
+  const relayCtl = createRelayController({
+    table: methodTable,
+    addSink: hub.addSink,
+    version: app.getVersion(),
+    onLog: (m) => logInfo('relay', m),
+    onStatus: (st) => registry.broadcast(CH.relayStatusEvent, st),
+  })
+  void relayCtl.apply(readSettings().relay)
+  ipcMain.handle(CH.relayStatus, () => relayCtl.status())
+  ipcMain.handle(CH.relayIdentity, () => relayCtl.publicKey())
+  ipcMain.handle(CH.relayApply, async (_e, cfg: Settings['relay']) => {
+    // 先落盘再起 —— 起失败时开关要能弹回去,而那要靠 status().detail,不是靠设置里的 enabled。
+    writeSettings({ ...readSettings(), relay: cfg })
+    return relayCtl.apply(cfg)
+  })
 
   ipcMain.handle(CH.hostsExport, (_e, includeTokens: boolean) => exportHosts({ includeTokens: !!includeTokens }))
   ipcMain.handle(CH.hostsImport, (_e, text: string) => importHosts(String(text ?? '')))

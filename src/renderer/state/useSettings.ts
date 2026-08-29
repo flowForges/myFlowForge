@@ -32,6 +32,7 @@ const DEFAULTS: Settings = {
   botBridge: { dingtalk: { enabled: false, clientId: '', clientSecret: '' }, telegram: { enabled: false, botToken: '' }, feishu: { enabled: false, appId: '', appSecret: '' }, verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} } },
   codexTransport: 'exec',
   mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
+  relay: { enabled: false, url: '' },
 }
 
 export interface SettingsUpdate {
@@ -101,6 +102,9 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     botBridge: (partial as Partial<Settings>).botBridge ?? base.botBridge,
     codexTransport: (partial as Partial<Settings>).codexTransport ?? base.codexTransport,
     mobileGateway: { ...base.mobileGateway, ...((partial as Partial<Settings>).mobileGateway ?? {}) },
+    // ★浅展开一层。整份替换会让一个只带 `enabled` 的补丁把 `url` 抹掉 ——
+    //  外观那边正是这么丢过一次的(见本文件里 appearance 那条)。
+    relay: { ...base.relay, ...((partial as Partial<Settings>).relay ?? {}) },
   }
 }
 
