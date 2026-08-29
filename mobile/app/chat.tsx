@@ -24,7 +24,7 @@ import { Icon } from '../src/ui/Icon'
 import { canPickImage, canPickFile } from '../src/net/pickSupport'
 import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
-import { Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, ProviderSwitchSep, Row, T, TimeSep, TopBar } from '../src/ui/kit'
+import { AgentBadge, Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, ProviderSwitchSep, Row, T, TimeSep, TopBar } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
 import { MessageBody } from '../src/ui/MessageBody'
 import { ToolCards } from '../src/ui/ToolCard'
@@ -646,6 +646,10 @@ export default function Chat() {
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
               <LiveDot tone={tone} />
+              {/* ★★品牌徽章。用户原话「手机端切换 provider 没有 mac 的那个提示和效果」——
+                  「提示」(切换分割线)手机端早就有,缺的是这个:电脑端 composer 上当前代理
+                  带着一枚品牌色字形,余光扫过去就知道是谁在答。纯文字换几个字是看不出来的。 */}
+              {agent ? <AgentBadge id={agent.id} size={15} /> : null}
               <T numberOfLines={1} style={{ fontSize: 11.5, color: c.muted, flexShrink: 1, minWidth: 0 }}>
                 {agent ? `${agent.displayName}${model ? ' · ' + model.label : ''}` : '选代理'}
               </T>
@@ -1059,9 +1063,14 @@ export default function Chat() {
         ) : (
           agents.map((a) => (
             <View key={a.id} style={{ gap: 8 }}>
-              <T mono style={{ fontSize: 10.5, letterSpacing: 0.8, color: c.faint, textTransform: 'uppercase' }}>
-                {a.displayName}
-              </T>
+              {/* 单子里每一组也带同一枚徽章 —— 和电脑端菜单每一项都带 logo 是同一个道理:
+                  选的时候看得见,选完在顶栏上还是它,两处对得上。 */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+                <AgentBadge id={a.id} size={16} />
+                <T mono style={{ fontSize: 10.5, letterSpacing: 0.8, color: c.faint, textTransform: 'uppercase' }}>
+                  {a.displayName}
+                </T>
+              </View>
               {a.models.map((mm) => {
                 const on = a.id === agentId && mm.id === (model?.id ?? '')
                 return (

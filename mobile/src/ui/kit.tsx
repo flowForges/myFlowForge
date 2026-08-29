@@ -12,6 +12,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { MONO, useC, useTheme } from '../theme/theme'
+import { brandFor } from './providerBrand'
 import { RADIUS } from '../theme/tokens'
 import type { Palette } from '../theme/tokens'
 
@@ -156,11 +157,19 @@ export function ProviderSwitchSep({ from, to }: { from: string; to: string }) {
       <View style={[s.pswBox, { borderColor: c.border, backgroundColor: c.bg2 }]}>
         <T style={{ fontSize: 11, lineHeight: 16, color: c.faint }}>⇄</T>
         <View style={{ flexShrink: 1, minWidth: 0 }}>
-          <T style={{ fontSize: 11.5, lineHeight: 16, color: c.muted }}>
-            切换编码代理 <T style={{ fontSize: 11.5, fontWeight: '600', color: c.fg2 }}>{from}</T>
-            <T style={{ fontSize: 11.5, color: c.faint }}> → </T>
+          {/* ★两头各一枚品牌徽章。原来这一行是「切换编码代理 codex → claude」纯文字,
+              而下面每一条回复的顶栏上现在都有徽章 —— 分割线不带的话,这条提示和它前后的
+              内容对不上号,人得靠读字去连。 */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+            {/* ★「切换编码代理」这几个字不能省。只剩两枚徽章和一个箭头的话,读者不知道
+                发生了什么 —— 徽章是**认人**用的,不是**说事**用的。 */}
+            <T style={{ fontSize: 11.5, lineHeight: 16, color: c.muted }}>切换编码代理</T>
+            <AgentBadge id={from} size={14} />
+            <T style={{ fontSize: 11.5, fontWeight: '600', color: c.fg2 }}>{from}</T>
+            <T style={{ fontSize: 11.5, color: c.faint }}>→</T>
+            <AgentBadge id={to} size={14} />
             <T style={{ fontSize: 11.5, fontWeight: '600', color: c.fg2 }}>{to}</T>
-          </T>
+          </View>
           <T style={{ fontSize: 10.5, lineHeight: 15, color: c.faint }}>新代理将基于历史重建上下文继续,可能有损</T>
         </View>
       </View>
@@ -723,3 +732,38 @@ const s = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
 })
+
+/**
+ * 代理徽章:一枚品牌色字形压在一层淡底上。
+ *
+ * ★★2026-08-29 真机反馈「手机端切换 provider 没有 mac 的那个效果」说的就是它。
+ *  电脑端的 composer 上,当前代理和菜单每一项都带着这个(`Composer.tsx` 的 `mc-logo-sm`),
+ *  余光扫过去就知道现在是谁在答;手机端原来只有一行纯文字。
+ *
+ * ★**不是实底彩色块**:底色是 0.18~0.28 的半透明(和电脑端同一个分量)。
+ *  全屏唯一的实底彩色块必须继续只有权限门那一个(原型 d.css 第三条原则)——
+ *  这一枚是"有颜色的字",不是"一块颜色"。
+ */
+export function AgentBadge({ id, size = 18 }: { id: string; size?: number }) {
+  const c = useC()
+  const b = brandFor(id)
+  return (
+    <View
+      style={{
+        width: size,
+        height: size,
+        borderRadius: Math.round(size * 0.32),
+        backgroundColor: b.bg,
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      {/* ★`fg === null` = 电脑端那边写的是 `var(--accent)`,跟着皮肤走 —— 这里也跟着。
+          ★字号取 62%:字形是几何符号(◇⬡✦),不是字母,按字面高度撑满会顶到圆角上。
+          ★`allowFontScaling` 走 `T` 的默认(跟随正文字号)会把这个定尺寸的方格撑破,所以用裸 Text。 */}
+      <Text style={{ fontSize: Math.round(size * 0.62), lineHeight: size, color: b.fg ?? c.accent }}>
+        {b.glyph}
+      </Text>
+    </View>
+  )
+}
