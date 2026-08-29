@@ -24,8 +24,17 @@ function sock(): RelaySocket & { sent: string[]; closed: boolean } {
 
 const ROOM = 'kZ8vQ2mN4pR7sT1uW3xY5zA6bC8dE0fG'
 const last = (s: { sent: string[] }) => (s.sent.length ? JSON.parse(s.sent[s.sent.length - 1]) : null)
+/** join 并回「成不成」。cid 要另外拿的地方用 joinClient。 */
 const join = (core: ReturnType<typeof createRelayCore>, s: RelaySocket, role: 'host' | 'client', room = ROOM) =>
-  core.join(s, { t: 'join', role, room })
+  core.join(s, { t: 'join', role, room }).ok
+/** join 一个客户端并把中转分配的 cid 拿出来。 */
+const joinClient = (core: ReturnType<typeof createRelayCore>, s: RelaySocket, room = ROOM) => {
+  const r = core.join(s, { t: 'join', role: 'client', room })
+  if (!r.ok) throw new Error('join 被拒了')
+  return r.cid!
+}
+/** host 要发给某个客户端时套的那层信封。 */
+const env = (cid: string, d: string) => JSON.stringify({ t: 'data', cid, d })
 
 describe('parseJoin —— 中转唯一会解析的东西', () => {
   it('好的 join 帧', () => {
@@ -82,9 +91,13 @@ describe('撮合', () => {
     const h = sock()
     const c = sock()
     join(core, h, 'host')
-    join(core, c, 'client')
+    const cid = joinClient(core, c)
     expect(last(c)).toEqual({ t: 'relay', status: 'peer-online' })
-    expect(last(h)).toEqual({ t: 'relay', status: 'peer-online' })
+    // ★host 那一侧**最后一帧是 open,不是状态帧** —— 加了 cid 之后它收到的是
+    //  「对端上线」+「这条逻辑连接的编号是 N」两帧。断言要找那一帧,不能只看最后一帧,
+    //  否则这条测试钉的其实是「两帧的先后顺序」,而那个顺序没有任何意义。
+    expect(h.sent.map((x) => JSON.parse(x))).toContainEqual({ t: 'relay', status: 'peer-online' })
+    expect(h.sent.map((x) => JSON.parse(x))).toContainEqual({ t: 'open', cid })
   })
 
   it('client 先到:等着,host 上线时被通知', () => {
@@ -108,10 +121,10 @@ describe('撮合', () => {
     expect(last(h2).status).toBe('error')
     // 第一个还好好地在
     const c = sock()
-    join(core, c, 'client')
-    core.relay(c, ROOM, 'client', 'ping')
-    expect(h1.sent).toContain('ping')
-    expect(h2.sent).not.toContain('ping')
+    const cid = joinClient(core, c)
+    core.relay(c, ROOM, 'client', 'ping', cid)
+    expect(h1.sent).toContain(JSON.stringify({ t: 'data', cid, d: 'ping' }))
+    expect(h2.sent.some((x) => x.includes('ping'))).toBe(false)
   })
 
   it('客户端数有上限', () => {
@@ -131,10 +144,10 @@ describe('撮合', () => {
     const ROOM2 = 'AAAAbbbbCCCCddddEEEEffffGGGGhhhh'
     join(core, h1, 'host', ROOM)
     join(core, h2, 'host', ROOM2)
-    join(core, c1, 'client', ROOM)
-    core.relay(c1, ROOM, 'client', 'only-for-h1')
-    expect(h1.sent).toContain('only-for-h1')
-    expect(h2.sent).not.toContain('only-for-h1')
+    const cid = joinClient(core, c1, ROOM)
+    core.relay(c1, ROOM, 'client', 'only-for-h1', cid)
+    expect(h1.sent.some((x) => x.includes('only-for-h1'))).toBe(true)
+    expect(h2.sent.some((x) => x.includes('only-for-h1'))).toBe(false)
   })
 })
 
@@ -149,9 +162,10 @@ describe('转发', () => {
     const h = sock()
     const c = sock()
     join(core, h, 'host')
-    join(core, c, 'client')
-    core.relay(c, ROOM, 'client', NASTY)
-    expect(h.sent[h.sent.length - 1]).toBe(NASTY)
+    const cid = joinClient(core, c)
+    core.relay(c, ROOM, 'client', NASTY, cid)
+    // ★信封是中转加的,`d` 必须原封不动 —— 这里就是那一条断言
+    expect(JSON.parse(h.sent[h.sent.length - 1]).d).toBe(NASTY)
   })
 
   it('★★原样搬,一个字节都不改(host → client)', () => {
@@ -159,8 +173,9 @@ describe('转发', () => {
     const h = sock()
     const c = sock()
     join(core, h, 'host')
-    join(core, c, 'client')
-    core.relay(h, ROOM, 'host', NASTY)
+    const cid = joinClient(core, c)
+    core.relay(h, ROOM, 'host', env(cid, NASTY))
+    // ★到客户端那一侧信封被拆掉,回到原样的字节 —— 客户端不知道中转存在
     expect(c.sent[c.sent.length - 1]).toBe(NASTY)
   })
 
@@ -169,24 +184,107 @@ describe('转发', () => {
     const h = sock()
     const c = sock()
     join(core, h, 'host')
-    join(core, c, 'client')
+    const cid = joinClient(core, c)
     const before = h.sent.length
-    core.relay(c, ROOM, 'client', '')
+    core.relay(c, ROOM, 'client', '', cid)
     expect(h.sent.length).toBe(before + 1)
-    expect(h.sent[h.sent.length - 1]).toBe('')
+    expect(JSON.parse(h.sent[h.sent.length - 1]).d).toBe('')
   })
 
-  it('host 发的广播给所有客户端(手机和电脑可能同时连着)', () => {
+  it('★★host 点名回给某一个客户端,另一个收不到 —— 这就是加 cid 的全部理由', () => {
+    // 这一层原来是广播。只有一个客户端时看起来是对的,多一个就**静默地**坏掉:
+    // daemon 跟中转只有一条 socket,手机和笔记本的 hs-init 前后脚到达同一条流上,
+    // daemon 无从分辨 —— 两把会话密钥串在一起,现象是「第二台设备连上就一直转圈」。
     const core = createRelayCore()
     const h = sock()
     const a = sock()
     const b = sock()
     join(core, h, 'host')
-    join(core, a, 'client')
-    join(core, b, 'client')
-    core.relay(h, ROOM, 'host', 'evt')
-    expect(a.sent).toContain('evt')
-    expect(b.sent).toContain('evt')
+    const ca = joinClient(core, a)
+    const cb = joinClient(core, b)
+    expect(ca).not.toBe(cb)
+    core.relay(h, ROOM, 'host', env(ca, 'only-a'))
+    expect(a.sent).toContain('only-a')
+    expect(b.sent).not.toContain('only-a')
+  })
+
+  it('★两个客户端各自发的,host 能分辨是谁发的', () => {
+    const core = createRelayCore()
+    const h = sock()
+    const a = sock()
+    const b = sock()
+    join(core, h, 'host')
+    const ca = joinClient(core, a)
+    const cb = joinClient(core, b)
+    core.relay(a, ROOM, 'client', 'from-a', ca)
+    core.relay(b, ROOM, 'client', 'from-b', cb)
+    const seen = h.sent.map((x) => JSON.parse(x)).filter((f) => f.t === 'data')
+    expect(seen).toEqual([{ t: 'data', cid: ca, d: 'from-a' }, { t: 'data', cid: cb, d: 'from-b' }])
+  })
+
+  it('★客户端进来时 host 收到 open,走的时候收到 close —— 它靠这两条维护自己那侧的会话表', () => {
+    const core = createRelayCore()
+    const h = sock()
+    const c = sock()
+    join(core, h, 'host')
+    const cid = joinClient(core, c)
+    expect(h.sent.map((x) => JSON.parse(x))).toContainEqual({ t: 'open', cid })
+    core.leave(c, ROOM, 'client', cid)
+    expect(h.sent.map((x) => JSON.parse(x))).toContainEqual({ t: 'close', cid })
+  })
+
+  it('★已经在等的客户端,要在 host 上线时逐个报到 —— 否则 host 手上没有它们的 cid', () => {
+    const core = createRelayCore()
+    const c = sock()
+    const cid = joinClient(core, c)
+    const h = sock()
+    join(core, h, 'host')
+    expect(h.sent.map((x) => JSON.parse(x))).toContainEqual({ t: 'open', cid })
+  })
+
+  it('★cid 只增不减 —— 复用编号会让一条刚断的连接的迟到数据落到新连接上', () => {
+    const core = createRelayCore()
+    join(core, sock(), 'host')
+    const a = sock()
+    const ca = joinClient(core, a)
+    core.leave(a, ROOM, 'client', ca)
+    const b = sock()
+    expect(joinClient(core, b)).not.toBe(ca)
+  })
+
+  it('★host 的信封坏了只丢这一帧,不断 host —— 它驮着这个房间所有客户端', () => {
+    const core = createRelayCore()
+    const h = sock()
+    const c = sock()
+    join(core, h, 'host')
+    joinClient(core, c)
+    const before = c.sent.length
+    for (const bad of ['{', 'null', '{"t":"data"}', '{"t":"data","cid":"1"}', '{"t":"data","cid":"../x","d":"y"}', '{"t":"nope","cid":"1"}']) {
+      expect(() => core.relay(h, ROOM, 'host', bad)).not.toThrow()
+    }
+    expect(h.closed).toBe(false)
+    expect(c.sent.length).toBe(before)
+  })
+
+  it('★host 发给一个已经走了的 cid:静默丢。客户端刚断、响应还在路上是正常时序', () => {
+    const core = createRelayCore()
+    const h = sock()
+    const c = sock()
+    join(core, h, 'host')
+    const cid = joinClient(core, c)
+    core.leave(c, ROOM, 'client', cid)
+    expect(() => core.relay(h, ROOM, 'host', env(cid, 'late'))).not.toThrow()
+    expect(h.closed).toBe(false)
+  })
+
+  it('host 可以主动关掉某一条逻辑连接', () => {
+    const core = createRelayCore()
+    const h = sock()
+    const c = sock()
+    join(core, h, 'host')
+    const cid = joinClient(core, c)
+    core.relay(h, ROOM, 'host', JSON.stringify({ t: 'close', cid }))
+    expect(c.closed).toBe(true)
   })
 
   it('★★客户端之间绝不互相转发', () => {
@@ -196,16 +294,16 @@ describe('转发', () => {
     const a = sock()
     const b = sock()
     join(core, h, 'host')
-    join(core, a, 'client')
-    join(core, b, 'client')
-    core.relay(a, ROOM, 'client', 'from-a')
-    expect(h.sent).toContain('from-a')
-    expect(b.sent).not.toContain('from-a')
+    const ca = joinClient(core, a)
+    joinClient(core, b)
+    core.relay(a, ROOM, 'client', 'from-a', ca)
+    expect(h.sent.some((x) => x.includes('from-a'))).toBe(true)
+    expect(b.sent.some((x) => x.includes('from-a'))).toBe(false)
   })
 
   it('房间不存在时转发是空操作,不抛', () => {
     const core = createRelayCore()
-    expect(() => core.relay(sock(), 'nosuchroomnosuchroomnosuch', 'client', 'x')).not.toThrow()
+    expect(() => core.relay(sock(), 'nosuchroomnosuchroomnosuch', 'client', 'x', '1')).not.toThrow()
   })
 })
 
@@ -215,7 +313,7 @@ describe('断开', () => {
     const h = sock()
     const c = sock()
     join(core, h, 'host')
-    join(core, c, 'client')
+    joinClient(core, c)
     core.leave(h, ROOM, 'host')
     expect(last(c)).toEqual({ t: 'relay', status: 'peer-offline' })
   })
@@ -235,12 +333,12 @@ describe('断开', () => {
     const a = sock()
     const b = sock()
     join(core, h, 'host')
-    join(core, a, 'client')
-    join(core, b, 'client')
+    const ca = joinClient(core, a)
+    const cb = joinClient(core, b)
     const before = h.sent.length
-    core.leave(a, ROOM, 'client')
+    core.leave(a, ROOM, 'client', ca)
     expect(h.sent.slice(before).map((x) => JSON.parse(x).status)).not.toContain('peer-offline')
-    core.leave(b, ROOM, 'client')
+    core.leave(b, ROOM, 'client', cb)
     expect(last(h).status).toBe('peer-offline')
   })
 
@@ -251,8 +349,8 @@ describe('断开', () => {
     join(core, h1, 'host')
     core.leave(ghost, ROOM, 'host')
     const c = sock()
-    join(core, c, 'client')
-    expect(last(c).status).toBe('peer-online')
+    joinClient(core, c)
+    expect(JSON.parse(c.sent[0]).status).toBe('peer-online')
   })
 
   it('★人走光了房间要回收 —— 否则公网中转跑几个月会攒一堆空壳', () => {
@@ -260,9 +358,9 @@ describe('断开', () => {
     const h = sock()
     const c = sock()
     join(core, h, 'host')
-    join(core, c, 'client')
+    const cid = joinClient(core, c)
     expect(core.stats().rooms).toBe(1)
-    core.leave(c, ROOM, 'client')
+    core.leave(c, ROOM, 'client', cid)
     core.leave(h, ROOM, 'host')
     expect(core.stats().rooms).toBe(0)
   })
@@ -277,7 +375,7 @@ describe('断开', () => {
     const core2 = createRelayCore()
     const extra = sock()
     core2.join(extra, { t: 'join', role: 'client', room: ROOM })
-    core2.leave(extra, ROOM, 'client')
+    core2.leave(extra, ROOM, 'client', '1')
     expect(core2.stats().rooms).toBe(0)
   })
 
