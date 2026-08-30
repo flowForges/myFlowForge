@@ -14,23 +14,32 @@ const { withEntitlementsPlist } = require('expo/config-plugins')
  *  它无条件往 entitlements 里塞 `aps-environment: development`,于是 Xcode 的自动签名
  *  要求这个 App ID 在苹果开发者后台开了 Push Notifications 能力 —— 没开就整个编译失败。
  *
- * ★★关键判断:**没有 `extra.eas.projectId` 的时候,远程推送本来就不可能工作**
- *  (`getExpoPushTokenAsync` 拿不到令牌),那条 entitlement 纯粹是个让人编不过的摆设。
- *  而**本地通知一条 entitlement 都不需要** —— 手机端那一半提醒照常可用。
+ * ★★判据是 `extra.iosPush`,**不是** `extra.eas.projectId`。
  *
- * 所以这个插件按 projectId 有没有来决定:
- *  - 没有 → 删掉 `aps-environment`,包能签、能装、本地通知能用。
- *  - 有   → 原样留着,交给 Expo 那条正常路径。
+ *  第一版拿 projectId 当判据,那是错的 —— 它把两件独立的事绑在了一起:
+ *    · 有没有 Expo 项目(`eas init` 建的)—— **安卓推送只要这个**,和苹果毫无关系;
+ *    · 这个**苹果账号**能不能开推送 —— Push Notifications 是**付费会员**才有的能力。
+ *  免费 Apple ID(描述文件 7 天过期的那种)**根本开不了**。于是「跑一次 eas init 想让安卓
+ *  能收推送」会顺手把 iOS 构建**签名搞挂**,而报错说的是 provisioning profile,
+ *  跟你刚做的那件事看起来毫不相干。2026-08-30 差点就这么咬到人。
  *
- * ★要真正打开远程推送,三件事缺一不可(顺序就是下面这个):
- *  1. 在**苹果开发者后台**给 App ID `com.flowforges.myflowforge` 勾上 Push Notifications;
- *  2. `npx eas init` 建 Expo 项目,把 projectId 写进 `app.json` 的 `extra.eas.projectId`;
- *  3. `npx eas credentials` 传一次 APNs 密钥(安卓传 FCM)。
- *  做完第 2 步这个插件就自动闭嘴了,不用改代码。
+ * 所以:
+ *  - 默认(没有 `extra.iosPush`)→ 删掉 `aps-environment`。包能签、能装,
+ *    **本地通知照常可用**(它一条 entitlement 都不要),安卓远程推送也照常可用。
+ *  - `"iosPush": true` → 留着。**这是你在声明「我这个苹果账号真的开了推送能力」** ——
+ *    没开的话构建会挂,而那正是这个开关该保护你不撞上的事。
+ *
+ * ★iOS 远程推送要三件事(缺一不可):
+ *  1. **付费**的 Apple Developer Program($99/年)—— 免费账号到这一步就走不下去了;
+ *  2. 苹果后台(或 Xcode 的 Signing & Capabilities)给 App ID 勾上 Push Notifications;
+ *  3. `npx eas-cli credentials` 传一次 APNs 密钥。
+ *  然后在 `app.json` 的 `extra` 里加 `"iosPush": true`。
+ *
+ * ★安卓那条路**不需要上面任何一条**:`eas init` + 传一次 FCM 就行。
  */
 module.exports = function withPushEntitlement(config) {
-  const projectId = config?.extra?.eas?.projectId
-  if (projectId) return config
+  // ★显式声明才放行。默认删掉 —— 默认值要站在「构建不会挂」那一边。
+  if (config?.extra?.iosPush === true) return config
 
   return withEntitlementsPlist(config, (cfg) => {
     // ★这个 mod 必须**排在** expo-notifications 那个后面才有效(后注册的后跑)。

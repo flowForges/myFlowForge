@@ -178,14 +178,17 @@ try {
   const ent = fs.existsSync(entPath) ? fs.readFileSync(entPath, 'utf8') : ''
   const hasAps = ent.includes('aps-environment')
   const appCfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'app.json'), 'utf8'))
-  const projectId = String(appCfg?.expo?.extra?.eas?.projectId ?? '').trim()
+  // ★判据是 `extra.iosPush`,**不是** projectId —— 后者是「有没有 Expo 项目」(安卓推送要它,
+  //  和苹果无关),前者才是「这个苹果账号真的开了推送能力」。绑在一起的话,
+  //  跑一次 `eas init` 就会把 iOS 构建签名搞挂。理由完整版在 plugins/withPushEntitlement.js。
+  const iosPush = appCfg?.expo?.extra?.iosPush === true
   ok(
-    projectId
-      ? '★iOS 配了 Expo 项目,entitlements 里有 aps-environment'
-      : '★★iOS 没配 Expo 项目 → entitlements 里不许有 aps-environment(否则签不了名)',
-    projectId ? hasAps : !hasAps,
-    projectId
-      ? (hasAps ? '' : 'withPushEntitlement 应该放行,但没有 —— 远程推送会静默注册不了')
+    iosPush
+      ? '★声明了 iosPush,entitlements 里有 aps-environment'
+      : '★★没声明 iosPush → entitlements 里不许有 aps-environment(否则签不了名)',
+    iosPush ? hasAps : !hasAps,
+    iosPush
+      ? (hasAps ? '' : 'withPushEntitlement 应该放行,但没有 —— iOS 远程推送会静默注册不了')
       : (hasAps ? 'plugins/withPushEntitlement.js 没生效,Release 包会签名失败' : ''),
   )
 } catch (e) {

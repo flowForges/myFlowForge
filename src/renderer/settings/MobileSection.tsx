@@ -430,9 +430,20 @@ export function MobileSection() {
                 Expo 账号 —— 我配不了。没配的时候手机端仍然有一半提醒可用(app 开着那一半),
                 所以这里说的是「差哪一步」,不是「不支持」。 */}
             <p className="set-desc">
-              ★手机在<b>后台</b>时收到的那条,走的是 Expo 的推送服务:要先
-              <code>npx eas init</code> 建一个 Expo 项目、把 projectId 写进 <code>mobile/app.json</code>,
-              再用 <code>npx eas credentials</code> 传一次 APNs 密钥(安卓传 FCM)。
+              ★手机在<b>后台</b>时收到的那条,走的是 Expo 的推送服务,要先
+              <code>npx eas-cli init</code> 建一个 Expo 项目,再
+              <code>npx eas-cli credentials</code> 传一次凭据。
+              <b>安卓只要这两步</b>(传 FCM),和苹果账号无关。
+            </p>
+            <p className="set-desc">
+              ★★<b>iOS 还要一个付费的 Apple Developer Program($99/年)</b> ——
+              Push Notifications 是付费会员才有的能力,免费 Apple ID(描述文件 7 天过期的那种)
+              开不了。齐了之后在 <code>mobile/app.json</code> 的 <code>extra</code> 里加
+              <code>"iosPush": true</code>。
+              ★<b>在这之前不要手动去动 entitlements</b>:没有那个能力却带着
+              <code>aps-environment</code>,Release 包会直接签名失败。
+            </p>
+            <p className="set-desc">
               这一步之前,手机 app <b>开着</b>的时候提醒照常有,切走之后收不到。
             </p>
           </div>
