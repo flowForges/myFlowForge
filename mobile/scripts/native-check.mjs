@@ -16,8 +16,15 @@
  *  `expo export` 让打包器真的过一遍原生目标;`expo prebuild` 生成原生工程好让我们直接读
  *  合并后的 plist / manifest。两者都只是生成文件。
  *
- * ★★副作用警告:`expo prebuild` **每次都会把 package.json 里的 ios/android 脚本改写成
+ * ★★副作用警告一:`expo prebuild` **每次都会把 package.json 里的 ios/android 脚本改写成
  *  `expo run:*`**。本脚本跑完会自己改回去,并在改动时明确告诉你。
+ *
+ * ★★★副作用警告二(2026-08-30 栽的):`expo prebuild` 会**重新生成整个 `android/`**,
+ *  连带把 `android/app/build/` 里**已经编好的 APK 一起冲掉**。当时刚花 14 分钟编出来的
+ *  release 包就是这么没的 —— 而报出来的现象是用户 `adb push` 时
+ *  「No such file or directory」,跟"我刚跑了个自检"看起来毫无关系。
+ *  ★所以:**跑这个脚本之前先确认没有你还要用的构建产物**。下面那段会在真的冲掉东西时
+ *  当场喊一声,别让它再变成一个"事后才发现"的损失。
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -137,6 +144,17 @@ try {
 }
 
 try {
+  // ★★先看一眼有没有编好的产物会被 prebuild 冲掉,有就**当场说出来** ——
+  //  事后才发现「包没了」的代价是重编一次(安卓 14 分钟),而那时你早就忘了跑过自检。
+  const apkDir = path.join(ROOT, 'android/app/build/outputs/apk')
+  const doomed = fs.existsSync(apkDir)
+    ? fs.readdirSync(apkDir, { recursive: true }).filter((f) => String(f).endsWith('.apk'))
+    : []
+  if (doomed.length) {
+    console.log(`\n⚠️  expo prebuild 会重新生成 android/,下面这 ${doomed.length} 个已编好的包会被冲掉:`)
+    for (const f of doomed) console.log(`      android/app/build/outputs/apk/${f}`)
+    console.log('      要留着的话先拷走,再重跑本脚本。\n')
+  }
   run('npx', ['expo', 'prebuild', '--no-install', '--platform', 'android'], { stdio: ['ignore', 'ignore', 'pipe'] })
   const manifest = fs.readFileSync(path.join(ROOT, 'android/app/src/main/AndroidManifest.xml'), 'utf8')
   // ★★这一条是今天最值钱的:usesCleartextTraffic 只写在 debug manifest 里的话,
