@@ -51,6 +51,7 @@ import {
   PANEL_H,
   type InputEvent,
   type InputState,
+  footPadding,
 } from '../src/ui/inputPanel'
 import { PermKey } from '../src/ui/PermKey'
 import { PlusPanel, type PlusItem } from '../src/ui/PlusPanel'
@@ -149,11 +150,30 @@ export default function Chat() {
   const fieldRef = useRef<TextInput>(null)
   // ★系统键盘事件喂进同一个状态机 —— 是不是「我们自己的输入框」这一层闸门,
   //  已经收在 `nextInputState` 里了,这儿不用(也不该)再判一次。
+  /**
+   * 安卓键盘现在有多高。0 = 没有键盘。**iOS 上恒为 0** —— 那边 `KeyboardAvoidingView`
+   * 的 `behavior="padding"` 是真的在工作,再抬一次就是抬两倍。
+   *
+   * ★★2026-08-30 真机:安卓上点输入框,键盘把输入框**整个盖住**。根因是
+   *  `edgeToEdgeEnabled=true`(Expo SDK 54+ 默认)让 manifest 里那句 `adjustResize` 失效 ——
+   *  窗口不再为输入法收缩,而安卓这一侧的 KAV(`behavior={undefined}`)一直是靠它兜着的。
+   *  完整推理在 `src/ui/inputPanel.ts` 的 `footPadding`。
+   */
+  const [kbHeight, setKbHeight] = useState(0)
   useEffect(() => {
-    const a = Keyboard.addListener('keyboardDidShow', () => fire('keyboardShown'))
-    const b = Keyboard.addListener('keyboardDidHide', () => fire('keyboardHidden'))
+    const a = Keyboard.addListener('keyboardDidShow', (e) => {
+      fire('keyboardShown')
+      // ★安卓没有 `keyboardWillShow`,只有 did 系列(`Sheet.tsx` 也是这么退的)。
+      if (Platform.OS === 'android') setKbHeight(e?.endCoordinates?.height ?? 0)
+    })
+    const b = Keyboard.addListener('keyboardDidHide', () => {
+      fire('keyboardHidden')
+      if (Platform.OS === 'android') setKbHeight(0)
+    })
     return () => { a.remove(); b.remove() }
   }, [fire])
+  // 键盘顶上来时输入区怎么摆。★iOS 上 `kbHeight` 恒为 0,所以这儿等价于原来的 `max(6, insets.bottom)`。
+  const foot = footPadding(kbHeight, insets.bottom)
   // 离开这一屏清零(和下面 setViewing 那个 useFocusEffect 同一类收尾,分开写是因为依赖不同)。
   useFocusEffect(useCallback(() => () => fire('leave'), [fire]))
   const flow = useRef<ScrollView | null>(null)
@@ -862,11 +882,17 @@ export default function Chat() {
       ) : null}
 
       {/* ── 输入区 ─────────────────────────────────────────────────────────── */}
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* ★安卓这一侧 `behavior` 是 undefined(等于一个普通 View),原本靠 manifest 的
+          `adjustResize` 兜着 —— 而 edge-to-edge 打开之后那句不再生效,于是输入区被键盘盖住。
+          现在自己按键盘高度垫。iOS 不动:那边 `behavior="padding"` 本来就在工作,再垫一次是两倍。 */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ paddingBottom: foot.lift }}
+      >
         <View
           style={[
             st.foot,
-            { backgroundColor: c.surface, borderTopColor: c.border, paddingBottom: Math.max(6, insets.bottom) },
+            { backgroundColor: c.surface, borderTopColor: c.border, paddingBottom: foot.padBottom },
           ]}
         >
           {/* ── 斜杠命令面板 ──────────────────────────────────────────────────

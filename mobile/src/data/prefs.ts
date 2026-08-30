@@ -55,3 +55,28 @@ export async function loadPrefs(): Promise<Prefs> {
 export async function savePrefs(p: Prefs): Promise<void> {
   try { await AsyncStorage.setItem(KEY, JSON.stringify(p)) } catch { /* 存不上就算了,本次会话仍然生效 */ }
 }
+
+/**
+ * 用户选的档 → 要告诉**原生层**的那个值。
+ *
+ * ★★2026-08-30 真机:安卓上「设置里选浅色」不生效,一直是深的。
+ *  上一轮以为是 `android:forceDarkAllowed`(那条确实也要关,已经在 `plugins/withNoForceDark.js` 里),
+ *  但那只挡住了「系统把我们画好的浅色反色回去」。**真正缺的是另一半:我们从来没告诉过安卓
+ *  用户选了浅色。** 换调色板只发生在 JS 里 —— 原生 window 仍然停在 night 模式,
+ *  `Theme.AppCompat.DayNight` 继续解析成深色那一套,`values-night/colors.xml` 继续生效,
+ *  ROM 也就一直把这个 app 当成「深色 app」在处理。
+ *
+ * `Appearance.setColorScheme()` 就是补这一半的:安卓上它落到
+ * `AppCompatDelegate.setDefaultNightMode(MODE_NIGHT_NO / YES / FOLLOW_SYSTEM)`。
+ * ★`MainActivity` 的 `configChanges` 里有 `uiMode`,所以这一下**不会重建 activity**(不闪)。
+ *
+ * ★★「跟随系统」要传**字面量 `'unspecified'`** —— RN 的 `ColorSchemeName` 就是
+ *  `'light' | 'dark' | 'unspecified'` 这三个值。**传 `null` / `undefined` 是个静默的坑**:
+ *  原生那边是 `when (style) { "dark"->… "light"->… "unspecified"->… }`,**没有 else** ——
+ *  给一个对不上的值就是什么都不做,于是「切回跟随系统」会永远卡在上一次那一档,
+ *  而且不报任何错。
+ * ★也不能给「当前系统是什么」的具体值:那等于把「跟随系统」钉死成那一刻的样子,之后系统再切就不跟了。
+ */
+export function nativeColorScheme(pref: ThemePref): 'light' | 'dark' | 'unspecified' {
+  return pref === 'system' ? 'unspecified' : pref
+}

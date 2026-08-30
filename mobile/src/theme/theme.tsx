@@ -1,10 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { Platform, useColorScheme } from 'react-native'
+import { Appearance, Platform, useColorScheme } from 'react-native'
 import { DARK, LIGHT, type Palette, type ThemeName } from './tokens'
 import {
   DEFAULT_PREFS,
   TEXT_SCALE,
   loadPrefs,
+  nativeColorScheme,
   savePrefs,
   type TextSize,
   type ThemePref,
@@ -61,6 +62,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     })
     return () => { alive = false }
   }, [])
+
+  /**
+   * ★★把用户选的档同步给**原生层**。只换 JS 调色板是不够的 —— 理由完整版在
+   *  `prefs.ts` 的 `nativeColorScheme`(一句话:原生 window 不改的话仍停在 night 模式,
+   *  ROM 会一直把这个 app 当深色 app 处理,安卓上「选了浅色还是深的」就是这么来的)。
+   * ★放在 effect 里跟着 `pref` 走,而不是塞进 `setPref` —— 冷启动从磁盘读回来的那一次
+   *  也必须同步过去,而那一次不经过 `setPref`。
+   */
+  useEffect(() => { Appearance.setColorScheme(nativeColorScheme(pref)) }, [pref])
 
   const setPref = useCallback((p: ThemePref) => {
     setPrefState(p)          // 先落到界面上,别等写盘 —— 点一下要立刻看见变化

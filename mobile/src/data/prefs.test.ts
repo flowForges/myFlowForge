@@ -8,7 +8,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
     setItem: async (k: string, v: string) => { store.set(k, v) },
   },
 }))
-import { TEXT_SCALE, loadPrefs, parseTextSize, parseThemePref, savePrefs } from './prefs'
+import { TEXT_SCALE, loadPrefs, nativeColorScheme, parseTextSize, parseThemePref, savePrefs } from './prefs'
 
 beforeEach(() => store.clear())
 
@@ -61,5 +61,21 @@ describe('外观偏好', () => {
     expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md' })
     store.set('mff.prefs.v1', 'null')
     expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md' })
+  })
+})
+
+describe('nativeColorScheme · 告诉原生层用户选了哪一档', () => {
+  it('明确选了浅/深就原样传下去', () => {
+    expect(nativeColorScheme('light')).toBe('light')
+    expect(nativeColorScheme('dark')).toBe('dark')
+  })
+
+  it('★★「跟随系统」必须是字面量 unspecified —— 传 null 会静默什么都不做', () => {
+    // 原生那边是 `when (style) { "dark"->… "light"->… "unspecified"->… }`,**没有 else**。
+    // 给对不上的值不报错、也不生效 ⇒「切回跟随系统」永远卡在上一次那一档。
+    expect(nativeColorScheme('system')).toBe('unspecified')
+    // 也不能给「当前系统是什么」的具体值:那等于把跟随系统钉死成那一刻的样子。
+    expect(nativeColorScheme('system')).not.toBe('light')
+    expect(nativeColorScheme('system')).not.toBe('dark')
   })
 })

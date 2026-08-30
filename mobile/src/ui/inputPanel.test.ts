@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nextInputMode, nextInputState, tapPlusNeedsRefocus, type InputState, PANEL_H } from './inputPanel'
+import { nextInputMode, nextInputState, tapPlusNeedsRefocus, footPadding, FOOT_MIN_PAD, type InputState, PANEL_H } from './inputPanel'
 
 describe('输入区三态机', () => {
   it('点输入框 → 键盘', () => {
@@ -133,5 +133,29 @@ describe('键盘事件的认领(设备级全局 Keyboard vs 这一屏自己的�
     s = nextInputState(s, 'tapOutside')
     s = nextInputState(s, 'tapPlus')
     expect(s.mode).toBe('panel')
+  })
+})
+
+describe('footPadding · 安卓键盘顶上来时输入区怎么摆', () => {
+  it('没有键盘时:不抬,底部留安全区', () => {
+    expect(footPadding(0, 34)).toEqual({ lift: 0, padBottom: 34 })
+  })
+
+  it('没有键盘、也没有安全区时,至少留一点 —— 不然控件贴着屏幕下沿', () => {
+    expect(footPadding(0, 0)).toEqual({ lift: 0, padBottom: FOOT_MIN_PAD })
+    expect(footPadding(0, 2)).toEqual({ lift: 0, padBottom: FOOT_MIN_PAD })
+  })
+
+  it('★键盘弹起来时按键盘高度抬 —— edge-to-edge 下 adjustResize 不再收缩窗口', () => {
+    expect(footPadding(320, 34)).toEqual({ lift: 320, padBottom: FOOT_MIN_PAD })
+  })
+
+  it('★键盘盖住了导航栏,底部安全区就不该再留(留着是悬在键盘上方的一条空白)', () => {
+    expect(footPadding(320, 34).padBottom).toBe(FOOT_MIN_PAD)
+  })
+
+  it('系统给回负数 / NaN 时当没有键盘,绝不抬出一个负的内边距', () => {
+    expect(footPadding(-1, 34)).toEqual({ lift: 0, padBottom: 34 })
+    expect(footPadding(Number.NaN, 34)).toEqual({ lift: 0, padBottom: 34 })
   })
 })

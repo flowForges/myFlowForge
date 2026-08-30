@@ -141,3 +141,30 @@ export function nextInputState(state: InputState, ev: InputEvent): InputState {
     keyboardOwner: ev === 'tapField' ? 'chat' : ev === 'leave' || ev === 'tapOutside' ? null : keyboardOwner,
   }
 }
+
+/** 输入区底部至少留这么多,不然那四颗 44pt 的控件会贴着屏幕下沿。 */
+export const FOOT_MIN_PAD = 6
+
+/**
+ * 安卓上键盘弹起来时,输入区该垫多高、底部安全区还留不留。
+ *
+ * ★★2026-08-30 真机:安卓上点输入框,键盘弹出来**把输入框整个盖住了**。
+ *
+ *  根因不在这一屏的布局,在 `android/gradle.properties` 的 **`edgeToEdgeEnabled=true`**
+ *  (Expo SDK 54+ 起是默认)。开了 edge-to-edge 之后,窗口铺满整个屏幕、画到系统栏底下,
+ *  于是 manifest 里那句 `android:windowSoftInputMode="adjustResize"` **不再起作用** ——
+ *  系统不会再为输入法把窗口收缩一截。而 `chat.tsx` 的 `KeyboardAvoidingView` 在安卓上
+ *  `behavior={undefined}`(等于一个普通 View),它一直是**靠 adjustResize 兜着的**。
+ *  两件事叠起来:输入区留在满高窗口的最底下,键盘盖在它上面。
+ *
+ *  ★iOS 没有这个问题:那边 `behavior="padding"` 是真的在工作。
+ *  ★`Sheet.tsx` 早就撞过同一类(它是 `position:absolute` 所以 KAV 本来就无效),
+ *   解法也一样:**自己抬**。安卓没有 `keyboardWillShow`,只能听 `keyboardDidShow`。
+ *
+ * ★键盘盖住了导航栏,底部安全区那一段就不该再留 —— 留着是一条悬在键盘上方的空白。
+ */
+export function footPadding(kbHeight: number, bottomInset: number): { lift: number; padBottom: number } {
+  // 负数/NaN 一律当没有键盘。这个值来自系统事件,不是我们自己算的。
+  if (!(kbHeight > 0)) return { lift: 0, padBottom: Math.max(FOOT_MIN_PAD, bottomInset) }
+  return { lift: kbHeight, padBottom: FOOT_MIN_PAD }
+}
