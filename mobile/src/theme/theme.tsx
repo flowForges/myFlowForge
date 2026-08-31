@@ -70,7 +70,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
    * ★放在 effect 里跟着 `pref` 走,而不是塞进 `setPref` —— 冷启动从磁盘读回来的那一次
    *  也必须同步过去,而那一次不经过 `setPref`。
    */
-  useEffect(() => { Appearance.setColorScheme(nativeColorScheme(pref)) }, [pref])
+  // ★★`?.`不是多余的防御:**react-native-web 的 `Appearance` 没有 `setColorScheme`**
+  //  (它只读系统的 prefers-color-scheme,改不了)。裸调是一个 TypeError,而它就在
+  //  `ThemeProvider` 的 effect 里 —— 于是**整个网页版当场红屏**,连设置屏都打不开,
+  //  e2e 那一套(全部跑在 react-native-web 上)也一条都跑不了。
+  //  原生两端有这个方法,所以它要修的那个现象(安卓 ROM 把 app 当深色 app)一点没受影响。
+  useEffect(() => { Appearance.setColorScheme?.(nativeColorScheme(pref)) }, [pref])
 
   const setPref = useCallback((p: ThemePref) => {
     setPrefState(p)          // 先落到界面上,别等写盘 —— 点一下要立刻看见变化
