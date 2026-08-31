@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import { Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { useC } from '../../src/theme/theme'
-import { Btn, Empty, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
+import { Btn, Empty, Field, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
+import { Sheet } from '../../src/ui/Sheet'
 import { Icon } from '../../src/ui/Icon'
 import { useConn } from '../../src/net/conn'
 import { type MobileHost } from '../../src/net/hosts'
@@ -16,8 +18,21 @@ import { ROUTES } from '../../src/nav/routes'
 
 export default function Hosts() {
   const c = useC()
-  const { hosts, activeHost, state, selectHost, removeHost, reconnect } = useConn()
+  const { hosts, activeHost, state, selectHost, removeHost, renameHost, reconnect } = useConn()
   const { gates } = useStore()
+
+  /**
+   * 正在改名的那一台。记的是 `{ id, name, orig }` —— `name` 是输入框里正在编的值,
+   * `orig` 是打开那一刻的原名、**只读**:输入框一开始改就不再回答「我改的是哪一台」了,
+   * 而长按呼出这张单子的时候,人未必记得刚才按的是哪行。和首页重命名工作区同一套写法。
+   */
+  const [rename, setRename] = useState<{ id: string; name: string; orig: string } | null>(null)
+
+  const submitRename = async () => {
+    if (!rename) return
+    await renameHost(rename.id, rename.name)
+    setRename(null)
+  }
 
   const remove = (h: MobileHost) => {
     void confirmDestructive({
@@ -70,6 +85,11 @@ export default function Hosts() {
                     //   一点损失都没有。别的行没有 ›,整行仍然是「切过去」,那是它们唯一诚实的动作
                     //   (`/host` 讲的只有当前连着的那一台,见下面那段 ★★)。
                     onPress={isCurrent ? () => router.push(ROUTES.host) : () => void selectHost(h.id)}
+                    // ★★改名走长按,不再多摆一颗按钮:这一行右端已经有「删除」和「详情」两颗
+                    //  44×44 的键,第三颗会把名字那一栏挤到只剩几个字(而名字正是这一行的主角)。
+                    //  ★长按是**每一行**都能用的,包括没连着的那些 —— 名字纯存在这台手机上,
+                    //   改它不需要连上那台机器。
+                    onLongPress={() => setRename({ id: h.id, name: h.label, orig: h.label })}
                   >
                     <HostIcon icon={h.icon} />
                     <View style={{ flex: 1, minWidth: 0 }}>
@@ -155,8 +175,33 @@ export default function Hosts() {
             而它是当年**唯一**推 `/host` 的地方 —— 全仓库 grep 一遍 `/host` 只剩路由常量本身。
             现在的入口就是上面那颗 › 键,不是设置屏。
             这里不留第三份 —— 同一个数字抄三遍,迟早有一遍说的是另一台机器的。 */}
-        <Note>切过去之后,会话、变更、终端全部换成那台机器的。不做同屏对比。</Note>
+        {/* ★★「长按改名」必须写出来:长按是**看不见**的手势,不说的话这条功能等于没做。
+            和上面那句合成一条,不另起一段 —— 这一屏的小字已经够多了。 */}
+        <Note>切过去之后,会话、变更、终端全部换成那台机器的。不做同屏对比。长按一行可以改名字。</Note>
       </ScrollView>
+
+      {/* 长按一行呼出的改名单子。★名字**只存在这台手机上**,不发给那台电脑 ——
+          所以没连着的主机照样能改,改完也不会把正在跑的连接踢掉。 */}
+      <Sheet
+        open={!!rename}
+        onClose={() => setRename(null)}
+        title="给这台主机起个名字"
+        sub={`原名 ${rename?.orig ?? ''}\n名字只存在这台手机上,不会发给那台电脑`}
+      >
+        <Field
+          value={rename?.name ?? ''}
+          onChangeText={(t) => setRename((prev) => (prev ? { ...prev, name: t } : prev))}
+          placeholder="书房的 Mac(不填就用地址)"
+          autoFocus
+          autoCapitalize="none"
+          onSubmitEditing={() => void submitRename()}
+        />
+        {/* ★这里**不**像重命名工作区那样 `disabled={!name.trim()}`:那边空名会在服务端落成一个
+            没名字的工作区,这边空名有明确含义 —— 回落成地址(`hostLabel`),那是一个合法的选择。 */}
+        <Btn kind="pri" block onPress={() => void submitRename()}>
+          保存
+        </Btn>
+      </Sheet>
     </View>
   )
 }

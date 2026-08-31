@@ -6,7 +6,7 @@ import { one } from '../src/routeParams'
 import { useC } from '../src/theme/theme'
 import { Btn, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
-import { isLoopbackUrl, parseAddress } from '../src/net/hosts'
+import { hostLabel, isLoopbackUrl, parseAddress } from '../src/net/hosts'
 import { scanSupport } from '../src/net/scanSupport'
 
 /** ★这个包里到底有没有相机。模块作用域算一次就够,它一辈子不会变。 */
@@ -70,7 +70,8 @@ export default function AddHost() {
     setSaving(true)
     try {
       const h = await addHost({
-        label: label.trim() || p.url.replace(/^wss?:\/\//, ''),
+        // ★空名回落成地址这条规矩收在 `hostLabel` 一处 —— 重命名和读盘兜底用的是同一份。
+        label: hostLabel(label, p.url),
         url: p.url,
         token: token.trim(),
         icon: '',

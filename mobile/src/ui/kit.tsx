@@ -251,6 +251,7 @@ export function List({ children, style }: { children: React.ReactNode; style?: S
 export function Row({
   children,
   onPress,
+  onLongPress,
   gate,
   tree,
   disabled,
@@ -258,6 +259,12 @@ export function Row({
 }: {
   children: React.ReactNode
   onPress?: () => void
+  /**
+   * 长按呼出这一行的操作单。
+   * ★只有 `onLongPress` 没有 `onPress` 时这一行**照样可按**(下面 `disabled` 那个判断把它算进去了)
+   *  —— 不算的话 Pressable 会被 disable 掉,长按连带着一起失效,而且是静默的。
+   */
+  onLongPress?: () => void
   gate?: boolean
   /**
    * 文件树那一种行 —— 原型 `d.css` 的 `.tree .frow`:**更矮、没有边框、底是透明的**。
@@ -271,7 +278,10 @@ export function Row({
   return (
     <Pressable
       onPress={onPress}
-      disabled={disabled || !onPress}
+      onLongPress={onLongPress}
+      // 长按也算「这一行能按」—— 只传 onLongPress 时不算的话,Pressable 整个被 disable,
+      // 长按跟着静默失效。
+      disabled={disabled || (!onPress && !onLongPress)}
       style={({ pressed }) => [
         s.row,
         tree

@@ -33,6 +33,18 @@ export type MobileHost = {
 
 export const DEFAULT_HOST_ICON = '🖥️'
 
+/**
+ * 一台主机在清单里显示的名字。
+ *
+ * ★空名回落成地址,不留空:清单是「切哪台」唯一的依据,一行没有名字的主机在上面认不出来。
+ * ★地址去掉 `ws://` / `wss://` —— 那个前缀每一行都一模一样,占的正是最值钱的开头几个字。
+ * ★同一份实现被三处用:添加主机、重命名、读盘时的字段兜底。原来是各写一遍的,
+ *  于是读盘那份带着 scheme、另外两份不带 —— 同一台机器在不同路径下显示成两个名字。
+ */
+export function hostLabel(raw: string, url: string): string {
+  return raw.trim() || url.replace(/^wss?:\/\//, '')
+}
+
 const HOSTS_KEY = 'mff.hosts.v1'
 const ACTIVE_KEY = 'mff.activeHost.v1'
 
@@ -79,7 +91,7 @@ export async function loadHosts(): Promise<MobileHost[]> {
       .filter((h) => h && typeof h.id === 'string' && typeof h.url === 'string')
       .map((h): MobileHost => ({
         id: h.id,
-        label: typeof h.label === 'string' && h.label ? h.label : h.url,
+        label: hostLabel(typeof h.label === 'string' ? h.label : '', h.url),
         url: h.url,
         token: typeof h.token === 'string' ? h.token : '',
         icon: typeof h.icon === 'string' ? h.icon : '',

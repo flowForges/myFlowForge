@@ -10,6 +10,7 @@ import React, {
 import { Platform } from 'react-native'
 import { connectHost, type HostClient, type HostState } from './hostClient'
 import {
+  hostLabel,
   loadActiveHostId,
   loadHosts,
   newHostId,
@@ -40,6 +41,16 @@ export type Conn = {
   on: (channel: string, cb: EventCb) => () => void
   addHost: (h: Omit<MobileHost, 'id' | 'lastConnectedAt'>) => Promise<MobileHost>
   removeHost: (id: string) => Promise<void>
+  /**
+   * 改一台主机的显示名。
+   *
+   * ★**纯本地**:名字存在这台手机上,不发给那台电脑。配对码里那个 `n` 只是个初值(通常是机器名),
+   *  两台手机完全可以把同一台电脑叫成不同的名字 —— 这一屏要回答的是「我该切到哪台」,
+   *  而那个答案本来就因人而异(「书房那台」「公司那台」)。
+   * ★不用重连:`activeHost` 的 id/url/token/pubKey/relay 一个都没动,连接那个 effect 的依赖里
+   *  也没有 label,所以改名不会把正在跑的连接踢掉。
+   */
+  renameHost: (id: string, label: string) => Promise<void>
   selectHost: (id: string | null) => Promise<void>
   /** 手动重连(failed 之后不会自动重试) */
   reconnect: () => void
@@ -165,6 +176,18 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
     [hosts, activeId],
   )
 
+  const renameHost = useCallback(
+    async (id: string, label: string) => {
+      const target = hosts.find((h) => h.id === id)
+      if (!target) return
+      // ★空名回落成地址,和「添加主机」那一屏同一份实现 —— 一行没有名字的主机在清单里认不出来。
+      const next = hosts.map((h) => (h.id === id ? { ...h, label: hostLabel(label, h.url) } : h))
+      setHosts(next)
+      await saveHosts(next)
+    },
+    [hosts],
+  )
+
   const selectHost = useCallback(
     async (id: string | null) => {
       if (id === activeId) return
@@ -205,12 +228,13 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       on,
       addHost,
       removeHost,
+      renameHost,
       selectHost,
       reconnect,
       forgetAll,
       epoch,
     }),
-    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, selectHost, reconnect, forgetAll, epoch],
+    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, renameHost, selectHost, reconnect, forgetAll, epoch],
   )
 
   return <ConnCtx.Provider value={value}>{children}</ConnCtx.Provider>

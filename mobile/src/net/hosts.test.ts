@@ -8,7 +8,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
     removeItem: async (k: string) => { store.delete(k) },
   },
 }))
-import { loadHosts, saveHosts, type MobileHost } from './hosts'
+import { hostLabel, loadHosts, saveHosts, type MobileHost } from './hosts'
 
 const HOSTS_KEY = 'mff.hosts.v1'
 
@@ -24,6 +24,25 @@ const FULL: MobileHost = {
 }
 
 beforeEach(() => store.clear())
+
+/**
+ * 主机改名(`conn.renameHost` → `hostLabel`)。名字**纯本地**:存在这台手机上,不发给那台电脑。
+ * 配对码里的 `n` 只是个初值(通常是机器名),而「我该切到哪台」这个问题的答案本来就因人而异。
+ */
+describe('主机的显示名', () => {
+  it('填了什么就是什么,首尾空白去掉', () => {
+    expect(hostLabel('  书房的 Mac  ', 'ws://1.2.3.4:6789')).toBe('书房的 Mac')
+  })
+
+  it('★改成空的不是「没名字」,是回落成地址 —— 这是一个合法的选择,不该被拦下来', () => {
+    expect(hostLabel('', 'ws://1.2.3.4:6789')).toBe('1.2.3.4:6789')
+    expect(hostLabel('   ', 'ws://1.2.3.4:6789')).toBe('1.2.3.4:6789')
+  })
+
+  it('★回落的地址不带 scheme —— `ws://` 每一行都一样,占的是最值钱的开头几个字', () => {
+    expect(hostLabel('', 'wss://relay.example.com:443')).toBe('relay.example.com:443')
+  })
+})
 
 describe('主机存盘', () => {
   /**
@@ -71,7 +90,7 @@ describe('主机存盘', () => {
 
   it('label 缺了就用地址顶上 —— 一行没有名字的主机在列表里认不出来', async () => {
     store.set(HOSTS_KEY, JSON.stringify([{ id: 'h1', url: 'ws://1.2.3.4:6789' }]))
-    expect((await loadHosts())[0].label).toBe('ws://1.2.3.4:6789')
+    expect((await loadHosts())[0].label).toBe('1.2.3.4:6789')
   })
 
   it('盘上是一团乱码就当没有主机,不要把整个 app 炸掉', async () => {
