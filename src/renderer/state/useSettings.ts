@@ -60,6 +60,9 @@ export interface SettingsUpdate {
   nsfwInstalled?: Record<string, string>
   memory?: { enabled: boolean }
   botBridge?: Settings['botBridge']
+  // codex 的驱动通路。★'app-server' 才有逐 token 流式('exec' 只在整条消息写完后发一次)——
+  //  见 AgentsPane 里那个开关和 providers/codex.ts 的注释。
+  codexTransport?: Settings['codexTransport']
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {

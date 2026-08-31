@@ -83,6 +83,26 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     update({ disabledProviders: next })
   }, [disabledProviders, update])
 
+  /**
+   * codex 的驱动通路。
+   *
+   * ★★2026-08-31 用户报「codex 输出是一次性倾泻,一直在思考然后突然一大堆」——
+   *  根因在协议层,不在渲染:`codex exec --json`(`'exec'` 这一档)**只发 item.completed,
+   *  从不发 delta**(见 `providers/codex.ts` 里那段注释)。只有 app-server 那条会发
+   *  `item/agentMessage/delta`,也就是真正的逐 token 流式。
+   *  伪流式节拍器(`paceDeltas.ts`)最多把整坨摊在 1.2 秒里,治不了这个,只能让它软一点。
+   *
+   * ★这个开关**一直存在于设置文件里,却从来没有界面入口** —— 全仓库只有 schema 和
+   *  useSettings 提到它。也就是说在这之前用户没有任何办法打开流式。
+   * ★默认仍是 exec:老版本 codex 二进制不支持 app-server 时是**异步**握手失败,
+   *  那一轮直接报错、**不会自动退回 exec**(codex.ts 里明写这个回退「太复杂」故意没做)。
+   *  所以只能做成一个说清代价的开关,不能悄悄翻默认值。
+   */
+  const codexTransport = settings?.codexTransport ?? 'exec'
+  const toggleCodexTransport = useCallback(() => {
+    update({ codexTransport: codexTransport === 'app-server' ? 'exec' : 'app-server' })
+  }, [codexTransport, update])
+
   const [config, setConfig] = useState<AgentsConfig | null>(null)
   const [detected, setDetected] = useState<ProviderInfo[]>([])
   // True until the first detectProviders() round-trip lands — rows show 检测中… meanwhile.
@@ -390,6 +410,28 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
             </div>
           </div>
           <CliGuide info={info(b.id)} />
+          {/* ★★codex 专属:驱动通路。放在这一行里(而不是设置的某个角落)是因为
+              它只影响 codex,而人是在这一行判断「codex 现在什么状况」的。 */}
+          {b.id === 'codex' && (
+            <div className="set-row">
+              <div className="info">
+                <div className="t">逐字输出(app-server 通路)</div>
+                <div className="d">
+                  关着的时候用 <code>codex exec --json</code>,它<b>只在整条消息写完后发一次</b> ——
+                  界面上就是「想很久,然后几千字一下子全出来」。打开后走常驻的 app-server,
+                  codex 会边写边发。
+                  <br />
+                  ★代价:<b>老版本的 codex 二进制不支持它</b>,而且握手失败时那一轮会直接报错、
+                  不会自动退回原来的通路。跑不通就把它关回去。
+                </div>
+              </div>
+              <button
+                className={`toggle${codexTransport === 'app-server' ? ' on' : ''}`}
+                aria-label="codex 逐字输出"
+                onClick={toggleCodexTransport}
+              />
+            </div>
+          )}
         </div>
       ))}
 
