@@ -84,6 +84,14 @@ export async function loadHosts(): Promise<MobileHost[]> {
         token: typeof h.token === 'string' ? h.token : '',
         icon: typeof h.icon === 'string' ? h.icon : '',
         lastConnectedAt: typeof h.lastConnectedAt === 'number' ? h.lastConnectedAt : 0,
+        // ★★这两行原来**不在**这儿。它俩是第三期(端到端加密 + 中转)加的字段,运行时一直在用
+        //  (`conn.tsx` 拿它们决定走明文直连还是加密中转),但这趟逐字段兜底把它们丢了 ——
+        //  于是配好的中转主机**杀进程重开之后退回直连、然后连不上**,而界面上只写着「连接失败」。
+        //  中转刚在真机上验通,验的却是**同一次运行**里的内存;重启这一路从来没人走过。
+        // ★空串一律落成 undefined:下游判的是「有没有」,一个空串的 relay 会让它以为该走中转,
+        //  然后去拨一个空地址。
+        pubKey: typeof h.pubKey === 'string' && h.pubKey ? h.pubKey : undefined,
+        relay: typeof h.relay === 'string' && h.relay ? h.relay : undefined,
       }))
   } catch {
     return []
