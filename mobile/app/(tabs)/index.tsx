@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ScrollView, View } from 'react-native'
+import { RefreshControl, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { CH } from '../../../src/main/ipc/channels'
 import type { ChatSession, SessionsFile, WorkspaceMeta } from '../../../src/shared/types'
@@ -64,6 +64,14 @@ export default function Home() {
   } = useStore()
   const now = Date.now()
   const [creating, setCreating] = useState(false)
+  /**
+   * 下拉刷新那颗转圈现在转着没有。
+   *
+   * ★和 `store.loading` 是**两件事**,别合并:`loading` 是「首帧还没有数据」,它为真时整屏是
+   *  「正在读取…」的空态;下拉是在**已经有内容**的列表上做的,内容要留在原地,只有顶上那颗圈转。
+   *  拿 `loading` 当转圈条件的话,每次下拉整张列表会闪成空态再长回来。
+   */
+  const [pulling, setPulling] = useState(false)
   // 建会话失败时那句话,**连同它属于哪个工作区**一起记 —— 那颗按钮现在每个展开的工作区里各有一颗,
   // 只记一句 string 的话,在 A 区失败会让 B 区底下也挂着同一句红字。
   const [newErr, setNewErr] = useState<{ wsPath: string; msg: string } | null>(null)
@@ -612,6 +620,31 @@ export default function Home() {
 
       <ScrollView
         ref={scrollRef}
+        /**
+         * ★★下拉刷新。真机上撞到的:在电脑上新建了一个工作区,手机这一屏**看不到**它。
+         *  服务端其实有 `workspaces:changed` 广播(下面 store 里订着),但那条路要求当时正连着、
+         *  而且那台电脑的版本够新 —— 任何一条不成立,这一屏就只能干等。下拉是那条广播的兜底,
+         *  也是这块屏幕上人最先会试的那个动作。
+         * ★没连主机时**不给拉**:那时拉了也没数据可拉,一颗转两圈然后什么都不变的圈,
+         *  比没有更让人以为是坏了。要连接的入口在顶栏那颗主机键上。
+         * ★`refresh()` 返回的 promise 在这一趟真的拉完之后才 resolve(见 store 里那段注释),
+         *  转圈跟着它停 —— 不是拍一个定时器瞎猜。
+         */
+        refreshControl={
+          <RefreshControl
+            refreshing={pulling}
+            enabled={online}
+            onRefresh={() => {
+              setPulling(true)
+              void refresh().finally(() => setPulling(false))
+            }}
+            // 跟皮肤走。★iOS 认 tintColor,Android 认 colors(数组),两个都要给,
+            //  少哪个哪个平台就落回系统默认的那一抹灰/蓝。
+            tintColor={c.muted}
+            colors={[c.accent]}
+            progressBackgroundColor={c.surface}
+          />
+        }
         scrollEventThrottle={64}
         onScroll={(e) => { scrollY.current = e.nativeEvent.contentOffset.y; syncBubble() }}
         // ★开始滑列表 = 那排左滑出来的动作格收回去。行的 onPress 只管「点」这一路,

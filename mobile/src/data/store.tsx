@@ -6,6 +6,7 @@ import { useRunningSet } from './useRunning'
 import { useUnreadSet } from './useUnread'
 import { toggleExpanded, ensureExpanded } from '@shared/ui/expanded'
 import { loadExpanded, saveExpanded } from './expanded'
+import { createRefreshGate } from './refreshGate'
 
 /**
  * 一台主机上的「有什么」:工作区 → 会话 → 挂着的门。
@@ -50,7 +51,15 @@ export type Store = {
   /** 首帧还没拉到数据。空态和「加载中」必须分得开,否则会闪一下「什么都没有」。 */
   loading: boolean
   error: string | null
-  refresh: () => void
+  /**
+   * 重拉一份全量快照(工作区 → 会话 → 门)。
+   *
+   * ★返回的 promise 在这一趟**真的拉完**(成功或失败)之后才 resolve —— 下拉刷新那颗转圈
+   *  要靠它才停得下来。原来它只是个 `setTick`,拿不到「拉完了没有」这件事,于是转圈只能
+   *  按时间瞎猜,或者干脆一直转。
+   * ★没连主机时**立刻**兑现:那种情况下面那趟 effect 直接 return,不兑的话一拉就永久转圈。
+   */
+  refresh: () => Promise<void>
   gatesFor: (wsPath: string, sessionId?: string) => Gate[]
   /** 答一道门。答完不等广播,本地先摘掉 —— 但摘的是 id,重复答同一个 id 不会出事。 */
   answerGate: (
@@ -184,7 +193,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   //  两个动作、以及下面 `workspaces:changed` 的订阅都要在成功/收到广播之后拉一遍新列表,
   //  不能只有 UI 手边那个 `store.refresh()` 能调它。定义提到这个文件前面,好让下面这个订阅
   //  effect 能直接引用,不用另开一个 effect。
-  const refresh = useCallback(() => setTick((t) => t + 1), [])
+  /**
+   * 等着这一趟拉完的人。★下拉刷新那颗转圈必须知道「拉完了没有」——
+   * `setTick` 本身是同步的,拿它没法回答这个问题。逻辑收在 `refreshGate.ts`(纯的、能测)。
+   */
+  const gate = useRef(createRefreshGate()).current
+  const settle = useCallback(() => gate.settle(), [gate])
+  const refresh = useCallback(() => {
+    setTick((t) => t + 1)
+    return gate.wait()
+  }, [gate])
 
   // ★先订阅,再拉快照。反过来写就会漏掉两者之间到达的事件 ——
   //  那段空窗正好是「连上的一瞬间」,而代理往往就是在那时候还挂着门。
@@ -248,7 +266,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [on, addGate, dropGate, refresh])
 
   useEffect(() => {
-    if (!online) return
+    // ★没连主机时**立刻**兑现等着的人。不兑的话下拉刷新会永久转圈 —— 而「未连接」正是
+    //  最容易被下拉的那一屏(人看见空态,第一反应就是拉一下)。
+    if (!online) {
+      settle()
+      return
+    }
     let alive = true
     setError(null)
     void (async () => {
@@ -309,16 +332,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           return n
         })
         setLoading(false)
+        // ★成功和失败**两条路**都要兑现。只在成功那条兑的话,一次拉失败就把转圈永远留在屏幕上,
+        //  而拉失败恰恰是最想再拉一次的时候。
+        settle()
       } catch (e) {
         if (!alive) return
         setError(e instanceof Error ? e.message : String(e))
         setLoading(false)
+        settle()
       }
     })()
     return () => {
       alive = false
     }
-  }, [online, invoke, epoch, tick])
+  }, [online, invoke, epoch, tick, settle])
 
   const gates = useMemo(() => [...gateMap.values()].sort((a, b) => a.since - b.since), [gateMap])
 
