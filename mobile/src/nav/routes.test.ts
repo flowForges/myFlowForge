@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import { ROUTES } from './routes'
+
+const APP = resolve(dirname(fileURLToPath(import.meta.url)), '../../app')
 
 describe('路由字符串', () => {
   it('每一条都是绝对路径', () => {
@@ -20,6 +25,21 @@ describe('路由字符串', () => {
   it('三个 tab 都在,且互不相同', () => {
     const tabs = [ROUTES.home, ROUTES.hosts, ROUTES.settings]
     expect(new Set(tabs).size).toBe(3)
+  })
+
+  /**
+   * ★★每一条路由都得**真有一个屏文件**。
+   *  这是这个文件里唯一能抓住「打错字」的一条:`router.push('/notification')`(少个 s)
+   *  在 expo-router 下**不报错、不跳转、不打日志** —— 屏幕一动不动,和「按钮没接线」
+   *  一模一样。上面那几条只看字符串长得对不对,拼错的字符串照样全绿。
+   */
+  it('★每条路由都有对应的屏文件 —— 打错字的路由是静默失效的', () => {
+    for (const [k, v] of Object.entries(ROUTES)) {
+      const name = v.replace(/^\//, '') || 'index'
+      // 底部 tab 那三格在 `app/(tabs)/` 里(圆括号是分组,不进 URL);其余都在 `app/` 根下。
+      const found = existsSync(`${APP}/${name}.tsx`) || existsSync(`${APP}/(tabs)/${name}.tsx`)
+      expect(found, `ROUTES.${k} = ${v} 找不到对应的屏文件`).toBe(true)
+    }
   })
 
   it('没有重复的目标 —— 两个名字指同一个屏,迟早有人只改其中一个', () => {
