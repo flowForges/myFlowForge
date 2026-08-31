@@ -28,7 +28,7 @@ export function MobileSection() {
    *  而 `MobileStatus` 说的是"局域网网关现在什么样"。塞进去的话,一个只开中转、
    *  没开局域网网关的人就拿不到公钥了 —— 而他恰恰是最需要那个二维码的人。
    */
-  const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean } | null>(null)
+  const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean; token: string } | null>(null)
   /** 中转连接现在什么样(连上了 / 在重试 / 起不来)。★开关拨过去却什么都没发生,是最难查的一类。 */
   const [relayDetail, setRelayDetail] = useState<{ status: string; error?: string; peers?: number } | null>(null)
   const [relayUrl, setRelayUrl] = useState('')
@@ -87,7 +87,9 @@ export function MobileSection() {
   useEffect(() => {
     const take = (r: Awaited<ReturnType<NonNullable<typeof window.forge.relayStatus>>> | null) => {
       if (!r) return
-      setRelay({ publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled })
+      // ★`token` 是中转那条路上用的那把(`relayController.ts` 里就是 `ensureToken()`)。
+      //  它和局域网非回环时是**同一把** —— 一枚码要在两条路上都能用,见下面 `qrToken`。
+      setRelay({ publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled, token: r.token ?? '' })
       setRelayDetail((r.detail ?? null) as { status: string; error?: string; peers?: number } | null)
       // ★只在**第一次**回填输入框。之后每一次状态广播都回填的话,人正打到一半的地址会被推回去
       //  —— 和上面那个 `seeded` 是同一条规矩(端口输入框栽过一次)。
@@ -107,20 +109,49 @@ export function MobileSection() {
   const host = lan ? '0.0.0.0' : '127.0.0.1'
   const portNum = Number(port) || 6789
   // 手机要照抄的地址。虚拟网卡(Parallels / Docker)已经在主进程那边排到后面了 —— 手机连不上那些。
-  const first = st.addresses[0] ?? '<这台机器的地址>'
-  const addr = `${first}:${st.port}`
+  const lanAddr = st.addresses[0] ?? ''
+  const addr = `${lanAddr || '<这台机器的地址>'}:${st.port}`
+
+  /**
+   * 中转**真的**开着 —— 开关和地址两样都要。
+   * ★只拨了开关没填地址时,`relayController` 停在「没有填中转地址」,它连不上任何地方;
+   *  那种状态下出码,只会让人扫进一个死胡同。
+   */
+  const relayOn = !!relay?.enabled && !!relay.url
+  /**
+   * ★★出码那一整块的条件。原来是光秃秃一个 `st.running` —— 于是在第二台电脑上**只开中转**的人
+   *  整屏找不到「显示配对二维码」,手机根本没法配对(2026-08-31 真机撞到)。
+   *  而设计文档决策 6 写得很明确:直连和中转是**平级**的两条路。
+   *  只开中转的那个人,恰恰是最需要这枚码的 —— 他没有第二条路可走(公钥手打不出来)。
+   */
+  const pairable = st.running || relayOn
+  /**
+   * 码里那个地址。★**不能**是 `<这台机器的地址>` 那串占位符:手机端 `add-host` 保存前一律走
+   *  `parseAddress`(走中转也要过那道校验),占位符过不去,现象是「扫进去了,但按不动保存」。
+   * ★一个局域网地址都没有时填回环:走中转的手机根本不看这个字段(它按 `r` 拨号),
+   *  而以后局域网网关真开起来时,这个地址正好是对的。
+   */
+  const qrAddr = lanAddr ? `${lanAddr}:${st.port}` : `127.0.0.1:${st.port}`
+  /**
+   * 码里那把令牌。
+   * ★网关绑回环时 `st.token` 是空串 —— 那条路本来就不要令牌(`appGateway.ts:84`)。
+   *  但**中转那条路一定要**:`relayController` 起 relayHost 时传的是 `ensureToken()`。
+   *  不把它顶上来的话,手机走中转会在握手之后被 4403 断掉,而界面上只写着「连接失败」。
+   * ★中转关着时**不顶** —— 那时候多带一把没人校验的令牌,等于白白把钥匙画进码里。
+   */
+  const qrToken = st.token || (relayOn ? relay?.token ?? '' : '')
   // ★`?? ''` 不是多余的防御:这份 status 是**跨进程**来的,连着一台跑旧版本的主机时
   //  就是少几个字段。少一个字段不该让整屏设置炸成白板(旧 preload 那次已经教过一遍)。
   const pairing = buildPairingLink({
-    address: addr,
-    token: st.token ?? '',
+    address: qrAddr,
+    token: qrToken,
     label: st.name ?? '',
     // ★★公钥**只要有就带上**,不看中转开没开:带上它的意思是"这条链路可以端到端加密",
     //  而那对直连一样成立(而且直连也该加密 —— 同一套代码,少一跳)。
     pubKey: relay?.publicKey || undefined,
     // ★中转地址只在**真的开着**的时候带。关着还带的话,手机会拨一个没人应答的地方,
     //  然后停在"连接中"—— 比直接走局域网糟得多。
-    relay: relay?.enabled && relay.url ? relay.url : undefined,
+    relay: relayOn ? relay?.url : undefined,
   })
 
   return (
@@ -253,8 +284,15 @@ export function MobileSection() {
         </div>
       )}
 
-      {st.running && (
+      {pairable && (
         <div className="hosts-conn">
+          {/* ★★手填用的那两个框只在**局域网网关开着**时摆。
+              纯中转时手填是走不通的:配对码里的公钥(`k`)是整条链路唯一的信任锚点,而它
+              **没有输入框**(见 `mobile/app/add-host.tsx`:公钥和中转地址只读、不给人改)——
+              手打一把 44 字符的 base64 既没人核对得了,错一个字符也只会静默连不上。
+              照旧摆出来的话,人会照着填,然后得到一条**直连**记录、去连一个根本没开的网关。 */}
+          {st.running && (
+          <>
           <p className="set-desc">在手机上「添加主机」填这两样:</p>
 
           <div className="proj-field">
@@ -286,19 +324,33 @@ export function MobileSection() {
               </div>
             </div>
           )}
+          </>
+          )}
+
+          {/* 纯中转时,「怎么配对」只有一条路,得说出来 —— 否则人会去找那两个不见了的输入框。 */}
+          {!st.running && (
+            <p className="set-desc">
+              现在只开着中转,所以配对<b>只能扫码</b> —— 码里那把身份公钥没有输入框(手打一把
+              44 个字符的 base64,错一个字符只会静默连不上)。手填出来的记录是<b>直连</b>,
+              会去连一个没开着的网关。
+            </p>
+          )}
 
           <div className="hosts-qr">
             {showQr ? (
               <>
-                <QrCode text={pairing} alt={`配对二维码 · ${addr}`} />
+                {/* alt 报的是**码里真的那个地址**(`qrAddr`),不是上面那个给人抄的 `addr` ——
+                    没有局域网地址时那一个是占位符,而占位符从来没进过码。 */}
+                <QrCode text={pairing} alt={`配对二维码 · ${qrAddr}`} />
                 <div className="hosts-qr-say">
                   <p className="set-desc">
                     用<b>手机自带的相机</b>对着它扫一下(不用先打开 app),点弹出来的横幅 ——
                     myFlowForge 会打开,地址和令牌都已经填好了。app 里「添加主机 → 扫一扫」也扫这枚。
                   </p>
+                  {/* ★「上面那把」只有在上面**真的摆着**令牌框时才说得通(纯中转时那个框不在)。 */}
                   <p className="set-desc">
-                    ★<b>这枚码里带着上面那把令牌</b>,谁扫到谁就拿到这台机器的控制权。
-                    共享屏幕、录屏、发截图之前先把它收起来。
+                    ★<b>这枚码里带着{st.running && st.token ? '上面那把' : '这台机器的'}令牌</b>,
+                    谁扫到谁就拿到这台机器的控制权。共享屏幕、录屏、发截图之前先把它收起来。
                   </p>
                   <button className="set-btn" onClick={() => setShowQr(false)}>收起二维码</button>
                 </div>
@@ -308,7 +360,11 @@ export function MobileSection() {
             )}
           </div>
 
-          {st.token && (
+          {/* ★仍然挂在 `st.running` 上,**不是**疏漏:`mobileRegenToken` 换的是这台机器那把
+              共用令牌,而中转那条连接是**起的时候**就把旧令牌捧在手里的(`relayController` 把
+              `ensureToken()` 传给了 `startRelayHost`)—— 换完之后中转那头仍旧认旧的,
+              直到中转重连一次。做成「点了要么没生效、要么把手机踢下线」的按钮不如先不摆。 */}
+          {st.running && st.token && (
             <div className="hosts-conn-foot">
               <button className="set-btn danger" disabled={busy} onClick={() => void window.forge.mobileRegenToken().then(setSt)}>
                 换一把令牌
@@ -317,10 +373,19 @@ export function MobileSection() {
             </div>
           )}
 
-          <p className="set-desc">
-            手机和这台电脑要在<b>同一个网络</b>里。公司 guest 网基本都开客户端隔离,连不通;
-            最省事的办法是<b>手机开个人热点、这台电脑连手机</b>(那样两边的流量走本地链路,不吃流量)。
-          </p>
+          {/* ★★这句话按中转开没开分岔。原来只有下面那一句「要在同一个网络里」,而中转开着时
+              它是**错的** —— 中转存在的全部意义就是两边不在一个网络里也能连。 */}
+          {relayOn ? (
+            <p className="set-desc">
+              走中转时手机和电脑<b>可以各在各的网</b> —— 手机用蜂窝网也连得上。
+              {st.running && ' 两边在一个 wifi 里时会走局域网直连(快、少一跳),同一枚码两条路都认。'}
+            </p>
+          ) : (
+            <p className="set-desc">
+              手机和这台电脑要在<b>同一个网络</b>里。公司 guest 网基本都开客户端隔离,连不通;
+              最省事的办法是<b>手机开个人热点、这台电脑连手机</b>(那样两边的流量走本地链路,不吃流量)。
+            </p>
+          )}
         </div>
       )}
 
