@@ -1,4 +1,6 @@
 import { WebSocket } from 'ws'
+import { HttpsProxyAgent } from 'https-proxy-agent'
+import { pickProxy, proxyUsable } from './wsProxy'
 import type { Identity } from '@shared/remote/e2e'
 import { hostClose, hostData, joinFrame, parseHostEnvelope, roomFor, asRelayStatus } from '@shared/remote/relayWire'
 import type { MethodTable } from '../ipc/invokeCtx'
@@ -60,6 +62,14 @@ export type RelayHostOpts = {
    *  换身份太重(所有设备都要重扫)。
    */
   token?: string
+  /**
+   * 「app 自身的网络」那个代理(设置 → 网络 的 appProxy)。空着就退到 `https_proxy` 等环境变量。
+   *
+   * ★★2026-08-31:漏了它的后果是**永远转圈**。`ws` 不认环境变量,不给 agent 就直连;
+   *  而直连一个够不着的地址不会报错、不会关闭,就是不回 —— 界面上只能显示「正在连中转」,
+   *  和「地址写错」「服务没起来」长得一模一样。理由完整版在 `wsProxy.ts`。
+   */
+  proxy?: string
   onLog?: (msg: string) => void
   onStatus?: (s: RelayHostStatus) => void
   /** 退避参数;false = 不自动重连(测试用) */
@@ -175,12 +185,32 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
     setState({ status: 'failed', error: why })
   }
 
+  /**
+   * 拨号选项。**只在这一处决定要不要套代理**,而且不管走不走都留一行日志 ——
+   * 「有没有过代理」是这条链路最容易猜错、也最难从现象反推的一件事。
+   */
+  function wsOptions(): { agent?: HttpsProxyAgent<string> } {
+    const pick = pickProxy(opts.proxy, process.env)
+    if (!pick.use) { log(`直连中转(${pick.why})`); return {} }
+    const usable = proxyUsable(opts.relayUrl, pick.url)
+    if (!usable.ok) { log(usable.why); return {} }
+    log(`经代理连中转:${pick.url}(来自${pick.from === 'setting' ? '设置' : '环境变量'})`)
+    try {
+      return { agent: new HttpsProxyAgent(pick.url) }
+    } catch (e) {
+      // 代理地址畸形是同步抛的。★不能让它把整条中转打死 —— 退回直连并说清楚,
+      //  总好过连 retrying 都进不去。
+      log(`代理地址用不了(${e instanceof Error ? e.message : String(e)}),改直连`)
+      return {}
+    }
+  }
+
   function connect() {
     if (disposed) return
     setState({ status: 'connecting', attempt })
     let sock: WebSocket
     try {
-      sock = new WebSocket(opts.relayUrl)
+      sock = new WebSocket(opts.relayUrl, wsOptions())
     } catch (e) {
       // 畸形 URL 是**同步抛**的。不接住的话整个 start 当场炸,连一次 retrying 都进不去,
       // 界面永远停在「连接中」。

@@ -3,6 +3,7 @@ import type { MethodTable } from '../ipc/invokeCtx'
 import { daemonTable } from '../ipc/channelRouting'
 import { ensureToken } from '../daemon/config'
 import { readIdentity } from '../remote/identity'
+import { readSettings } from '../config/store'
 import { startRelayHost, type RelayHostHandle, type RelayHostStatus } from '../remote/relayHost'
 import type { RelayConfig } from '../config/schema'
 
@@ -107,6 +108,12 @@ export function createRelayController(deps: {
         // ★中转这条路上仍然要令牌,而且和局域网那条**共用同一个**:
         //  加密回答"谁能听",令牌回答"谁能用"。共用是为了一个二维码两条路都能用。
         token: ensureToken(),
+        // ★★「app 自身的网络」那个代理。漏了它的现象是**永远「正在连中转」**:
+        //  `ws` 不认 `https_proxy` 环境变量,不给它 agent 就直连,而直连一个够不着的地址
+        //  既不报错也不关闭,就是不回。2026-08-31 真机上就是这么卡住的。
+        //  ★用 appProxy 不用 agentProxy:拨中转是**这个 app 自己**在上网(和字体、壁纸、
+        //   更新检查同一类),不是 coding agent 的出口。
+        proxy: readSettings().appProxy,
         onLog: log,
         onStatus: () => announce(),
       })
