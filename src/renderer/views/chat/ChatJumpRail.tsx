@@ -3,7 +3,7 @@ import { useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
 import type { RefObject } from 'react'
 import type { ChatMessage } from '@shared/types'
 import { fmtMsgTime } from '@shared/relTime'
-import { computeRailLayout } from './jumpRailLayout'
+import { computeRailLayout, bucketGroups, railCapacity, MIN_DOTS } from './jumpRailLayout'
 
 interface ChatJumpRailProps {
   messages: ChatMessage[]
@@ -39,21 +39,35 @@ export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
   // per-dot `tops` are computed for parity but not applied to style.
   const [, setTops] = useState<number[]>([])
   const [active, setActive] = useState(-1)
+  /**
+   * 轨道装得下几个锚点。★从对话区的**可见**高度算,所以拖窗口会跟着变。
+   *
+   * ★★这个值必须在**绘制之前**量到(下面用 useLayoutEffect 同步量)。
+   *  第一版把它和 offsetTop 一起放在 `requestAnimationFrame` 里,于是首帧按初值
+   *  `MIN_DOTS` 只画 6 个锚点、下一帧再弹到 20 —— 肉眼就是闪一下。
+   *  量高度只是读一次 `clientHeight`,很便宜;真正贵的是逐条读 `offsetTop`(强制重排),
+   *  那个才需要等布局稳定,继续留在 rAF 里。
+   */
+  const [capacity, setCapacity] = useState(MIN_DOTS)
+  /**
+   * ★★对话很多时把相邻的几条并成一个锚点 —— 否则 N 条 = `10N-4` px,
+   *  超出可视区的那些会被推到屏幕外面,**根本点不到**(见 jumpRailLayout 里那段)。
+   *  没超上限时这里是严格 1:1,日常对话一个像素都不变。
+   */
+  const groups = useMemo(() => bucketGroups(items.length, capacity), [items.length, capacity])
 
   const sync = useCallback(() => {
     const sc = scrollRef.current
     const rail = railRef.current
     if (!sc || !rail || items.length <= 1) return
-    // Guard: skip per-message offsetTop reflow when the list is very large (>120
-    // user messages). Forced reflow on hundreds of elements causes noticeable
-    // jank; the rail stays invisible until the list shrinks to a manageable size.
-    if (items.length > 120) {
-      setTops([])
-      setActive(-1)
-      return
-    }
-    const offsets = items.map(it => {
-      const el = sc.querySelector<HTMLElement>(`[data-user-msg="${it.index}"]`)
+    // ★★这里原来有一个「超过 120 条就放弃」的守卫,理由是「对几百个元素读 offsetTop 会强制重排」。
+    //  那个理由是真的,但守卫本身**没做到它注释说的事**:它只清空 tops/active,而渲染条件是
+    //  `items.length > 1` —— 121 条时那一长条照样全画出来,只是连高亮都没了。
+    // ★现在不需要它了:只读**每组第一条**的 offsetTop,次数被 capacity 封顶(~80 次),
+    //  跟对话有多长无关。合并锚点顺带把这个性能问题也解决了。
+    const offsets = groups.map(g => {
+      const it = items[g.start]
+      const el = it ? sc.querySelector<HTMLElement>(`[data-user-msg="${it.index}"]`) : null
       return el ? el.offsetTop : 0
     })
     const layout = computeRailLayout({
@@ -64,23 +78,36 @@ export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
     })
     setTops(layout.tops)
     setActive(layout.activeIndex)
-  }, [items, scrollRef])
+  }, [items, groups, scrollRef])
+
+  /** 只量可见高度 → 容量。便宜(一次 clientHeight),所以绘制前同步做,避免锚点数闪一下。 */
+  const measureCapacity = useCallback(() => {
+    // ★量的是**轨道的定位容器**(.chat 那一列),因为 CSS 那句 max-height 里的 100% 指的是它。
+    //  拿 .chat-scroll 的高度算会偏大 —— 那正是第一版算出 80 而实测只能放 63 的原因。
+    //  ★不能量轨道自己:它的高度由子节点撑出来,而子节点数量又由容量决定 —— 会锁死在初值上。
+    const host = railRef.current?.offsetParent as HTMLElement | null
+    const h = host?.clientHeight ?? scrollRef.current?.clientHeight ?? 0
+    if (h > 0) setCapacity(railCapacity(h))
+  }, [scrollRef])
 
   // Keep the latest sync in a ref so the scroll/resize subscription stays stable.
   const syncRef = useRef(sync)
   syncRef.current = sync
+  const capRef = useRef(measureCapacity)
+  capRef.current = measureCapacity
 
   // Re-measure whenever the message list changes (offsets shift as content grows).
   useLayoutEffect(() => {
     if (!on) return
-    const id = requestAnimationFrame(() => syncRef.current())
+    capRef.current()                                     // 同步:绘制前就知道能放几个
+    const id = requestAnimationFrame(() => syncRef.current())   // 异步:等布局稳了再读 offsetTop
     return () => cancelAnimationFrame(id)
   }, [items, on])
 
   // Subscribe once to scroll + resize.
   useLayoutEffect(() => {
     const sc = scrollRef.current
-    const h = () => syncRef.current()
+    const h = () => { capRef.current(); syncRef.current() }
     sc?.addEventListener('scroll', h, { passive: true })
     window.addEventListener('resize', h)
     return () => {
@@ -102,21 +129,29 @@ export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
 
   return (
     <div className={`chat-jump-rail${on ? ' on' : ''}`} ref={railRef} aria-label="用户输入导航">
-      {on && items.map((it, n) => (
-        <button
-          key={it.index}
-          type="button"
-          className={`chat-jump-dot${n === active ? ' active' : ''}`}
-          data-jump-msg={it.index}
-          aria-label={`跳到第 ${n + 1} 条用户输入`}
-          onClick={() => jump(it.index)}
-        >
-          <span className="chat-jump-preview">
-            <span className="jp-k">{it.label || `#${n + 1}`}</span>
-            <span className="jp-t">{it.text}</span>
-          </span>
-        </button>
-      ))}
+      {on && groups.map((g, n) => {
+        const it = items[g.start]
+        if (!it) return null
+        // ★合并了才说「N 条」。单条的组和以前长得一模一样 —— 多一个「1 条」是纯噪音。
+        const head = g.size > 1 ? `${it.label || `#${g.start + 1}`} · ${g.size} 条` : (it.label || `#${g.start + 1}`)
+        return (
+          <button
+            key={it.index}
+            type="button"
+            className={`chat-jump-dot${n === active ? ' active' : ''}`}
+            data-jump-msg={it.index}
+            aria-label={g.size > 1
+              ? `跳到第 ${g.start + 1} 到 ${g.start + g.size} 条用户输入`
+              : `跳到第 ${g.start + 1} 条用户输入`}
+            onClick={() => jump(it.index)}
+          >
+            <span className="chat-jump-preview">
+              <span className="jp-k">{head}</span>
+              <span className="jp-t">{it.text}</span>
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }
