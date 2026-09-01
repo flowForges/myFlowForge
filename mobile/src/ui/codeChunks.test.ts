@@ -82,4 +82,47 @@ describe('splitCodeChunks', () => {
   it('空正文切出空数组(流式的第一帧就是空的)', () => {
     expect(splitCodeChunks('')).toEqual([])
   })
+
+  /**
+   * ★★没闭合的围栏「吃到结尾」在流式吐字时是对的(见实现里那段注释),但代理**漏写收尾围栏**时
+   *  它会把整条回复的后半段(表格首当其冲)全吞进一个代码块。电脑端早就有这条兜底
+   *  (`views/chat/markdown.tsx`),手机端一直没有 —— 2026-09-01 做 markdown 渲染时发现的。
+   *
+   * 兜底只认**一个**信号:被吞的内容里出现了 GFM 表格(某一行带 `|`,下一行是带 `|` 的分隔行)。
+   * 真代码里几乎不会出现 `|---|---|`(ASCII 表格画的是 `+---+`),所以不会误伤被截断的代码;
+   * 已经正常闭合的围栏**完全不走这条路**(引用文档里的表格照样是代码)。
+   */
+  describe('没闭合的围栏 · 表格兜底', () => {
+    it('★后面跟着一张表格时,围栏在表格前面截断', () => {
+      const src = '看这个:\n```sh\nnpm run dev\n\n| 位置 | 行为 |\n|---|---|\n| a.go | 建单 |'
+      expect(splitCodeChunks(src)).toEqual([
+        { kind: 'text', text: '看这个:' },
+        { kind: 'code', text: 'npm run dev\n', lang: 'sh' },
+        { kind: 'text', text: '| 位置 | 行为 |\n|---|---|\n| a.go | 建单 |' },
+      ])
+    })
+
+    it('里面没有表格就照旧吃到结尾 —— 流式吐到一半的那一帧全靠这个', () => {
+      expect(splitCodeChunks('```sh\nnpm run dev\nnpm test')).toEqual([
+        { kind: 'code', text: 'npm run dev\nnpm test', lang: 'sh' },
+      ])
+    })
+
+    it('★正常闭合的围栏里含表格,一个字都不许动 —— 那是「在讲 markdown」', () => {
+      const src = '```md\n| 甲 | 乙 |\n|---|---|\n| 1 | 2 |\n```'
+      expect(splitCodeChunks(src)).toEqual([
+        { kind: 'code', text: '| 甲 | 乙 |\n|---|---|\n| 1 | 2 |', lang: 'md' },
+      ])
+    })
+
+    it('★ASCII 表格(`+---+`)不是信号,不许拿它截断真代码', () => {
+      const src = '```\n+-----+\n| a   |\n+-----+'
+      expect(splitCodeChunks(src)).toEqual([{ kind: 'code', text: '+-----+\n| a   |\n+-----+', lang: '' }])
+    })
+
+    it('★分隔行必须**紧跟**带竖线的那一行,隔一行不算', () => {
+      const src = '```\n| 甲 |\n还有一句\n|---|'
+      expect(splitCodeChunks(src)).toEqual([{ kind: 'code', text: '| 甲 |\n还有一句\n|---|', lang: '' }])
+    })
+  })
 })
