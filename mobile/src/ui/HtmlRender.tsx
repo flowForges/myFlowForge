@@ -54,9 +54,14 @@ function renderInline(n: HNode, c: Palette, key: string): ReactNode {
       return <T key={key} style={{ fontSize: 12.5, color: c.muted }}>{inlineKids(n.kids, c, key)}</T>
     case 'code':
       // 行内代码。底色用 `surface2`(中性面),不是彩色 —— 全屏唯一的实底彩色块留给权限门。
+      // ★两侧那对空格是**内边距**:嵌套 `<Text>` 的 padding 在 Android 上直接被忽略,只能拿空格顶。
+      // ★★但必须是**不换行空格**(`\u00A0`)。普通空格是一个换行点:折行正好落在那儿时,
+      //  那个带底色的空格会被留在**上一行末尾** —— 屏幕上就是一个孤零零的灰色小方块,
+      //  而真正的代码跑到了下一行。2026-09-01 markdown 上线后满屏都是(正文里行内代码密度高得多)。
+      //  用 \u00A0 之后整块和左右的字粘在一起走,断不开。
       return (
         <T key={key} mono style={{ fontSize: 13, color: c.fg, backgroundColor: c.surface2 }}>
-          {' '}{inlineKids(n.kids, c, key)}{' '}
+          {'\u00A0'}{inlineKids(n.kids, c, key)}{'\u00A0'}
         </T>
       )
     case 'a':
@@ -160,8 +165,22 @@ function renderBlock(n: El, c: Palette, key: string): ReactNode {
         <View key={key} style={{ marginBottom: 6 }}>
           {items.map((li, i) => (
             <View key={i} style={st.li}>
-              {/* 记号列宽度写死:序号从 9 变 10 时,内容那一列不该跟着往右跳。 */}
-              <T mono style={[st.marker, { color: c.muted }]}>{n.tag === 'ol' ? `${i + 1}.` : '•'}</T>
+              {/* 记号列宽度写死:序号从 9 变 10 时,内容那一列不该跟着往右跳。
+                  ★`start`:markdown 那条路上,被段落打断的「懒编号」列表要接着数(见 `mdParse.ts`)。
+                   HTML 那条路不带这个字段,`?? 1` 就是原来的行为。
+                  ★★有序列表的记号列**单独加宽**:原来 ul/ol 共用 22pt(减 7pt 右内边距 = 15pt 可用),
+                   而 `1.` 两个等宽字符在 13px 下要 ~15.6pt —— **放不下就折行**,句点掉到第二行,
+                   看起来像是每一项下面凭空多了一个小圆点。真 Chrome 量出来:`•` 高 24,`1.` 高 **48**。
+                   只加宽 ol 那一档,`•` 那些列表的像素一个不动。
+                  ★`numberOfLines={1}`是兜底:真出现 `100.` 这种也只会被截断,不会再折出一行 ——
+                   少半个记号远比多一行幽灵圆点好认。 */}
+              <T
+                mono
+                numberOfLines={1}
+                style={[st.marker, n.tag === 'ol' && st.markerNum, { color: c.muted }]}
+              >
+                {n.tag === 'ol' ? `${(n.start ?? 1) + i}.` : '•'}
+              </T>
               <View style={{ flex: 1, minWidth: 0 }}>{renderFlow(li.kids, c, `${key}-${i}`)}</View>
             </View>
           ))}
@@ -218,6 +237,8 @@ const st = StyleSheet.create({
   preBody: { paddingHorizontal: 11, paddingVertical: 9 },
   li: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 2 },
   marker: { width: 22, fontSize: 13, lineHeight: 24, textAlign: 'right', paddingRight: 7 },
+  // 见上面那段:`1.` 在 22pt 里放不下。32 - 6 = 26pt 可用,`10.` 也进得去。
+  markerNum: { width: 32, paddingRight: 6 },
   table: { borderWidth: StyleSheet.hairlineWidth, borderRadius: RADIUS.chip, overflow: 'hidden', marginBottom: 8 },
   tr: { flexDirection: 'row', alignItems: 'stretch' },
   td: { paddingHorizontal: 9, paddingVertical: 7 },

@@ -36,7 +36,21 @@ export type HTag =
 
 export type HNode =
   | { t: 'text'; text: string }
-  | { t: 'el'; tag: HTag; kids: HNode[]; href?: string; colSpan?: number; rowSpan?: number }
+  | {
+      t: 'el'
+      tag: HTag
+      kids: HNode[]
+      href?: string
+      colSpan?: number
+      rowSpan?: number
+      /**
+       * `<ol>` 从几开始数。★这个文件**不产出**它(HTML 那边 `start` 不在白名单属性里),
+       * 它是给 `mdParse.ts` 用的:markdown 里代理常把每一项都写成 `1.`,被段落打断之后
+       * 每个 `<ol>` 都从 1 开始 ⇒ 用户看到一串「1.」。两边共用同一个渲染器,
+       * 所以这个字段挂在共用的树上。
+       */
+      start?: number
+    }
 
 /** 解析结果。`ok: false` 时**没有树**可用 —— 调用方必须退回折叠占位,不能画一半。 */
 export type HtmlParse =

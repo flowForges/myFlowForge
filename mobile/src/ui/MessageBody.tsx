@@ -8,6 +8,7 @@ import { splitCodeChunks, type CodeChunk } from './codeChunks'
 import { HIGHLIGHT_MAX, highlightBlock } from '@shared/highlight'
 import { synStyle } from './synStyle'
 import { parseHtmlSubset } from './htmlParse'
+import { parseMarkdown } from './mdParse'
 import { HtmlRender } from './HtmlRender'
 
 /** 正文最终渲染成的三种块:代码 / 内嵌 HTML / 普通文字。 */
@@ -45,6 +46,17 @@ function HtmlBlock({ html }: { html: string }) {
   const parsed = useMemo(() => parseHtmlSubset(html), [html])
   if (parsed.ok) return <HtmlRender nodes={parsed.nodes} />
   return <HtmlFallback html={html} />
+}
+
+/**
+ * 一段 markdown 正文。
+ *
+ * ★`useMemo`:流式吐字时整条消息每来一片就重渲染一次,而**每一片都会让这一段的文本变长** ——
+ *  不缓存的话每帧都要把整段重新解析一遍,越到后面越贵(和上面 `HtmlBlock` 同一条理由)。
+ */
+function MdBlock({ text }: { text: string }) {
+  const nodes = useMemo(() => parseMarkdown(text), [text])
+  return <HtmlRender nodes={nodes} />
 }
 
 /** 画不了时的折叠占位 —— 手机端一期就是这个,原样留着,它是「诚实」那一半。 */
@@ -158,9 +170,14 @@ export function MessageBody({ text, streaming }: { text: string; streaming?: boo
         ) : ch.kind === 'html' ? (
           <HtmlBlock key={i} html={ch.text} />
         ) : (
-          <T key={i} style={{ fontSize: 15, lineHeight: 25, color: c.fg2 }}>
-            {ch.text}
-          </T>
+          /* ★★2026-09-01:这里原来是 `<T>{ch.text}</T>` —— **手机端从来就没有 markdown 渲染**。
+              于是表格是原始竖线 `|---|---|`、`**` 和反引号原样露出、标题和列表全是平的
+              (用户发截图报的就是这个)。
+             ★渲染器用的是**内嵌 HTML 那一个**(`HtmlRender`),不是另写一套:markdown 要画的东西
+              (标题/表格/列表/引用/粗斜体/行内代码/链接)和它完全重合。共用一个 ⇒ 同一段内容
+              不管模型吐的是 HTML 还是 markdown,长出来必然一样;各写一套迟早分叉,而分叉那天
+              没有任何测试会红。 */
+          <MdBlock key={i} text={ch.text} />
         ),
       )}
       {streaming ? <T style={{ color: c.accent, fontSize: 15 }}>▍</T> : null}

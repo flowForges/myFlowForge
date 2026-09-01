@@ -102,6 +102,7 @@ const history = {
     { id: 'm3', who: 'user', text: '顺手把 typecheck 也跑一下。', ts: '23:41' },
     { id: 'm4', who: 'ai', model: 'Claude Code · Opus', text: '跑了,有一处类型对不上。', ts: '23:42', startedAt: todayAt(23, 55) },
   ],
+  // ★`md` 脚本会把这一条整个换掉,见文件下方 `if (SCRIPT === 'md')`。
   // 真机上撞见的那一段:代理在回答中间吐了一坨卡片布局的 HTML,把正文推出去四五屏。
   's-a2': [
     { id: 'h1', who: 'user', text: '把刚才那几条约定复述一遍', ts: '17:02' },
@@ -260,6 +261,50 @@ const TREES = {
 }
 // 文件正文。`git:file` 返回的是 `FilePreview { text, lang }`。
 // ★那个 1000 行的:用来验「超过 800 行要截断,并且如实说截了多少」。
+
+/**
+ * ★`md` 脚本:一条**真实回答形状**的 markdown 正文,专门用来肉眼验渲染。
+ *  内容照着 2026-09-01 用户发的那两张截图写 —— 他报的就是这一段被画成了一堆原始竖线和星号。
+ *  这不是断言脚本用的数据,是 `shots-markdown.mjs` 拿去截图的。
+ */
+if (SCRIPT === 'md') {
+  history['s-a1'] = [
+    { id: 'm1', who: 'user', text: '现在招商里,有个问题:报名单生效后活动结束,收尾节点一直报错,重试也无效。', ts: '21:10' },
+    { id: 'm2', who: 'ai', model: 'Claude Code · Opus', ts: '21:19', startedAt: todayAt(21, 19), text: [
+      '每轮卡在同一节点 —— 这就是「**重试无效**」。',
+      '',
+      '## 关键代码三处',
+      '',
+      '| 位置 | 行为 |',
+      '|---|---|',
+      '| `tool_worker_activity_end.go:160-166` | 建单时快照 `apply_status = EFFECTIVE`,EFFECTING 的漏掉 |',
+      '| `activity_end_status_handler.go:72-76` | 收尾节点实时查 `effectiveCount > 0` 就报错,**没有和快照对齐** |',
+      '| `end_check_service.go:207` | 巡检 `effective+finished != total` → 只发钉钉告警,不自愈 |',
+      '',
+      '所以「快照口径」和「校验口径」不一致:建单按快照,校验按实时全量。任何在活动结束**之后**才进入',
+      'EFFECTIVE 的报名单,都会让收尾节点永远过不去。',
+      '',
+      '### A. 止血:存量捞回',
+      '',
+      '给「活动已结束 + apply_status 仍 EFFECTIVE + 无 ACTIVITY_END worker」的报名单补建 worker 并跑逆向链。',
+      '',
+      '- 补建前必须把同 domain 残留的非终态 `APPLY_PASS` worker 置 `CANCEL`,否则撞正逆向冲突守卫',
+      '- 解决「已经卡住的活动」,*不解决复发*',
+      '',
+      '### B. 根治:口径对齐',
+      '',
+      '1. 建单时把 `EFFECTING`(及生效失败态)一并纳入快照,或',
+      '1. 收尾节点 `ACTIVITY_END_STATUS` 改成**只校验快照内的报名单**,而不是实时全量 `effectiveCount>0`',
+      '',
+      '> 另需在 `APPLY_PASS` 成功回写 EFFECTIVE 时,检查活动是否已结束。',
+      '',
+      '---',
+      '',
+      '参考实现见 https://github.com/flowForges/myFlowForge 里的 `relay/` 那一版。',
+    ].join('\n') },
+  ]
+}
+
 const FILES = {
   'README.md': { text: '# forge\n\n一个本地跑的多代理工作台。\n', lang: 'markdown' },
   // 变更列表里那个文件走的是这个路径 —— 「点变更里的文件再切全文」那条入口靠它。
