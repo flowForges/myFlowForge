@@ -18,6 +18,7 @@ import {
 import { textAfterOffload } from '../src/ui/pasteOffload'
 import { continueList } from '../src/ui/listContinue'
 import { planPickedImage } from '../src/ui/pickedImage'
+import { pendingLabel, settlePending } from '../src/ui/pendingAttachment'
 import { planPickedFile, tooLargeBySize } from '../src/ui/pickedFile'
 import { CAN_COPY, CopyBtn } from '../src/ui/CopyBtn'
 import { Icon } from '../src/ui/Icon'
@@ -390,6 +391,31 @@ export default function Chat() {
   }
 
   /**
+   * 存一个附件,**整个等待期间**在正文里留一个「正在保存 …」的占位符。
+   * 选图 / 拍照 / 选文件三条路共用 —— 别再各写一份。
+   *
+   * ★★为什么必须有它:`await saveAttachment(...)` 是**好几秒**(走中转 + 代理更久),而 `pickBusy`
+   *  只禁用 ＋ 面板上的按钮,那个面板这时候**已经关了** ⇒ 整段等待**零反馈**,人以为刚才那下没点上。
+   *  用户 2026-08-31 报的就是这个(「拍照后输入框空一会才显示名字」)。
+   * ★占位符立刻插进去还有个好处:附件在正文里的**位置**第一秒就定下来了,人能接着往下打字,
+   *  不用等它落地才知道该在哪句话后面接着说。
+   * ★收尾一律走 `settlePending`(纯逻辑,有测试):它**只认自己那一段**,找不到就什么都不做 ——
+   *  这几秒里人完全可能已经把它删了,或者在它前面插了一大段字。
+   */
+  const saveWithPlaceholder = async (name: string, dataBase64: string): Promise<void> => {
+    setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, pendingLabel(name)).text)
+    try {
+      const att = await saveAttachment(name, dataBase64)
+      // ★换成**服务端回的**名字:它撞名时会改名,拿送上去的那个顶就对不上真文件了。
+      setText((latest) => settlePending(latest, name, att.name))
+    } catch (e) {
+      // ★失败要把占位符收掉。留一句「正在保存」挂在那儿是在撒谎,而错误只在下面那条横幅上闪一下。
+      setText((latest) => settlePending(latest, name, null))
+      throw e
+    }
+  }
+
+  /**
    * 把输入框里这一大坨转成工作区里的附件,正文里留一个 `[文件名]` 占位符。
    *
    * ★为什么是「点一下」而不是像电脑端那样粘进来就自动转:**RN 的 `TextInput` 根本没有 `onPaste`**
@@ -441,10 +467,8 @@ export default function Chat() {
       if (r.canceled) return
       const plan = planPickedImage(r.assets[0] ?? {}, new Date())
       if (!plan.ok) throw new Error(plan.why)
-      const att = await saveAttachment(plan.name, plan.dataBase64)
-      // ★函数式更新:选图 + 存盘是好几秒的事,这中间人完全可能已经在打字了。拿 await 之前的
-      //  `text` 快照写回去,就是把他这几秒里打的字整段吃掉(offload 那边刚踩过这个坑)。
-      setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
+      // 占位符先落地、传完再换真名字,见 `saveWithPlaceholder`。
+      await saveWithPlaceholder(plan.name, plan.dataBase64)
     } catch (e) {
       tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))
@@ -473,9 +497,7 @@ export default function Chat() {
       if (r.canceled) return
       const plan = planPickedImage(r.assets[0] ?? {}, new Date())
       if (!plan.ok) throw new Error(plan.why)
-      const att = await saveAttachment(plan.name, plan.dataBase64)
-      // ★函数式更新:拍照 + 存盘是好几秒的事,这中间人完全可能已经在打字了。
-      setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
+      await saveWithPlaceholder(plan.name, plan.dataBase64)
     } catch (e) {
       tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))
@@ -524,9 +546,7 @@ export default function Chat() {
       //  state,天然就是「这次会话里已经发出去的附件名」,不用另开一份状态去记它。
       const plan = planPickedFile({ name: a.name, dataBase64 }, new Date(), new Set(attachments.map((x) => x.name)))
       if (!plan.ok) throw new Error(plan.why)
-      const att = await saveAttachment(plan.name, plan.dataBase64)
-      // ★函数式更新:挑文件 + 读盘是好几秒的事,这中间人完全可能已经在打字了。
-      setText((latest) => insertPastePlaceholder(latest, latest.length, latest.length, att.name).text)
+      await saveWithPlaceholder(plan.name, plan.dataBase64)
     } catch (e) {
       tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))
