@@ -44,7 +44,7 @@ import { isSlashQuery, slashRows } from '../src/ui/slashPick'
 import { useWorkflow } from '../src/data/useWorkflow'
 import { WorkflowRibbon } from '../src/ui/WorkflowRibbon'
 import { atBottom, initialAutoScroll, nextScroll, type AutoScrollState } from '../src/ui/autoScroll'
-import { pickSessionAgent, shouldRederive, type DeriveState } from '../src/ui/sessionAgent'
+import { pickModel, pickSessionAgent, shouldRederive, type DeriveState } from '../src/ui/sessionAgent'
 import {
   initialInputState,
   nextInputState,
@@ -282,7 +282,8 @@ export default function Chat() {
   }, [selKey, currentSession, agents])
 
   const agent = useMemo(() => agents.find((a) => a.id === agentId) ?? null, [agents, agentId])
-  const model = useMemo(() => agent?.models.find((m) => m.id === modelId) ?? agent?.models[0] ?? null, [agent, modelId])
+  // ★挑模型的规则只有一份(`pickModel`)—— 顶栏显示的和真正发出去的必须是同一条。
+  const model = useMemo(() => pickModel(agent?.models, modelId), [agent, modelId])
 
   /**
    * 斜杠命令。用户原话「输入框,输入 / 好像加载不到支持的命令」—— 手机端在这之前一条都没接。
@@ -652,7 +653,7 @@ export default function Chat() {
       <TopBar
         left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}
         right={
-          <IconBtn label="变更" onPress={selected ? () => router.push('/exec') : undefined} disabled={!selected || !online}>
+          <IconBtn label="变更" onPress={selected ? () => router.push(ROUTES.exec) : undefined} disabled={!selected || !online}>
             <Icon name="changes" size={19} color={c.muted} />
           </IconBtn>
         }
@@ -858,7 +859,7 @@ export default function Chat() {
         <View style={{ paddingHorizontal: 10, paddingBottom: 6, backgroundColor: c.bg }}>
           {gateElsewhere ? (
             <Pressable
-              // ★`goBack()` 而不是 `router.push('/')`:push 永远是**追加**,会在
+              // ★`goBack()` 而不是 `router.push(ROUTES.home)`:push 永远是**追加**,会在
               //  `[/, /chat]` 上再压一个全新的根屏,栈变成 `[/, /chat, /]` ——
               //  列表屏没有 ‹,Android 的物理返回于是退回对话屏而不是退出,来回一趟栈就长一截。
               onPress={() => goBack()}
@@ -889,7 +890,7 @@ export default function Chat() {
                 ? () => router.push({ pathname: '/exec', params: { gate: gate.id } })
                 : undefined
             }
-            // ★`goBack()` 而不是 `router.push('/')`,理由同上面那条注释:push 永远是追加。
+            // ★`goBack()` 而不是 `router.push(ROUTES.home)`,理由同上面那条注释:push 永远是追加。
             onList={() => goBack()}
           />
         </View>

@@ -1,10 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { ROUTES } from './routes'
 
-const APP = resolve(dirname(fileURLToPath(import.meta.url)), '../../app')
+const HERE = dirname(fileURLToPath(import.meta.url))
+const APP = resolve(HERE, '../../app')
+const SRC = resolve(HERE, '../../src')
+
+/** 递归收集 .ts / .tsx(跳过测试文件和这张表自己)。 */
+function sources(dir: string, out: string[] = []): string[] {
+  for (const n of readdirSync(dir)) {
+    const p = resolve(dir, n)
+    if (statSync(p).isDirectory()) { sources(p, out); continue }
+    if (!/\.tsx?$/.test(n) || n.includes('.test.')) continue
+    if (p === resolve(HERE, 'routes.ts')) continue
+    out.push(p)
+  }
+  return out
+}
 
 describe('路由字符串', () => {
   it('每一条都是绝对路径', () => {
@@ -45,5 +59,22 @@ describe('路由字符串', () => {
   it('没有重复的目标 —— 两个名字指同一个屏,迟早有人只改其中一个', () => {
     const vals = Object.values(ROUTES)
     expect(new Set(vals).size).toBe(vals.length)
+  })
+})
+
+describe('★★这张表是唯一来源 —— 扫全仓', () => {
+  it('没有任何一处再直接写字面量路径', () => {
+    // 2026-09-02 之前:十几处 `router.push('/hosts')` 和这张表并存,`(tabs)/index.tsx` 里
+    // 同一颗按钮甚至两种写法都有。写错一个字面量**不会报错** —— expo-router 只是静默不动,
+    // 表现是「点了没反应」。所以迁完之后必须有一条扫全仓的断言钉住,不然它会慢慢长回来。
+    const bad: string[] = []
+    for (const f of [...sources(APP), ...sources(SRC)]) {
+      const text = readFileSync(f, 'utf8')
+      for (const m of text.matchAll(/router\.(?:push|replace|navigate)\(\s*['"`]\//g)) {
+        const line = text.slice(0, m.index).split('\n').length
+        bad.push(`${f.split('/mobile/')[1]}:${line}`)
+      }
+    }
+    expect(bad, `这几处该改成 ROUTES.*:\n${bad.join('\n')}`).toEqual([])
   })
 })

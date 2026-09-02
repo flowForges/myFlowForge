@@ -66,7 +66,7 @@ export default function Settings() {
         //  而下一次 addHost 会把这份「已经清掉」的清单原样写回磁盘。
         forgetAll()
         // 回根屏:这一屏说的每一样东西都不存在了,留在原地看着的是一屏幻觉。
-        router.replace('/')
+        router.replace(ROUTES.home)
       } catch (e) {
         // ★这是整屏最有后果的一个动作,失败必须说出来。原来是个光秃秃的 `void go()`:
         //  存储抛了就什么都不发生 —— 对话框关掉、界面不动、令牌还在,而人以为清干净了,

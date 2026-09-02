@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ROUTES } from '../src/nav/routes'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { goBack, goToHosts } from '../src/nav'
@@ -116,7 +117,7 @@ export default function AddHost() {
           ) : (
             <List>
               {/* ★快的那条路放最上面。二维码在电脑的「设置 → 主机 → 显示配对二维码」里。 */}
-              <Btn kind="pri" block onPress={() => router.push('/scan')}>扫一扫</Btn>
+              <Btn kind="pri" block onPress={() => router.push(ROUTES.scan)}>扫一扫</Btn>
               <T style={{ fontSize: 11.5, color: c.faint, textAlign: 'center', paddingTop: 2 }}>
                 电脑上:设置 → 主机 → 显示配对二维码
               </T>

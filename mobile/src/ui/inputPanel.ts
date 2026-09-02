@@ -22,8 +22,6 @@ export type InputEvent =
   | 'keyboardShown'
   /** 系统报:键盘收了 */
   | 'keyboardHidden'
-  /** 发出去了一条 */
-  | 'send'
   /**
    * 点了输入区**外面**(对话流里的任意一处)。
    *
@@ -50,8 +48,6 @@ export function nextInputMode(mode: InputMode, ev: InputEvent): InputMode {
     // ★★面板开着的时候,收键盘是**打开面板的必经步骤**,不是「用户想关掉一切」。见上面那段。
     case 'keyboardHidden':
       return mode === 'panel' ? 'panel' : 'idle'
-    case 'send':
-      return mode
     // 点外面 = 「什么都收起来」。★和 `leave` 归到同一个结果但**不合并成一个事件**:
     //  一个是还在这一屏、只是收起面板,另一个是整屏都不在了,以后要分开处理时不用再拆。
     case 'tapOutside':

@@ -305,7 +305,7 @@ export default function Home() {
       ensureWs(wsPath)
       refresh()
       // 建好就直接进去 —— 建会话的意图就是「我要在这儿说点什么」。
-      router.push('/chat')
+      router.push(ROUTES.chat)
     } catch (e) {
       // ★原来这里只有 try/finally,没有 catch:建失败就是**彻底无声**。
       //  真机上报的「无法新增会话」如果是服务端拒绝(比如工作区已归档),你一个字都看不到。
@@ -352,6 +352,19 @@ export default function Home() {
    *  绝不拿缓存假装在线)不允许这样,所以这个值同时是气泡的开关。
    */
   const showsRows = online && !loading && ordered.length > 0
+
+  /**
+   * 现在真的挂着几道门。**全屏只算这一次。**
+   *
+   * ★★`gates` 在断线之后仍是断线前留在内存里的旧数据(第一版不缓存正文,但没专门清这个数组)——
+   *  所以每一处显示门数的地方都要先过 `online` 这道闸,否则「未连接」空态底下会同时挂着
+   *  「2 条等你答话」,屏幕上两处自己打自己的脸。
+   * ★★这里原来是**三处各写一遍**,而且写法还有两种(`online ? gates.length : 0` 和
+   *  `online && gates.length > 0 &&`)—— 功能等价,但读的人要认两次,加第四处时也没有一个
+   *  明摆着可以抄的东西。收成一个值:横幅徽章、下面那句「N 道门挂着」、主机单子都读它。
+   *  (`app/(tabs)/_layout.tsx` 那枚 tab 角标是另一棵树上的,同源同条件,注释里互相指着。)
+   */
+  const gateCount = online ? gates.length : 0
 
   const scrollRef = useRef<ScrollView>(null)
   // 三段 y,拼起来才是一行会话在滚动内容里的**绝对**位置 —— 见下面 `absY()` 的注释
@@ -579,7 +592,7 @@ export default function Home() {
             desc={'手机端不在本地跑代理 —— 它是你电脑上那台 Forge 的遥控器。\n在电脑上跑起 daemon,把它打印的地址填进来。'}
           />
           <View style={{ paddingHorizontal: 30 }}>
-            <Btn kind="pri" block onPress={() => router.push('/add-host')}>
+            <Btn kind="pri" block onPress={() => router.push(ROUTES.addHost)}>
               添加主机
             </Btn>
           </View>
@@ -611,9 +624,8 @@ export default function Home() {
           // ★★没连上的时候 `gates` 是断线前留在内存里的旧数据(第一版不缓存正文,
           //  但没有专门清这个数组)——不跟着 `online` 收起来的话,断线态的横幅会一边说
           //  「连不上」一边挂着一枚「等你答话」,而列表主体已经换成了诚实的「未连接」空态。
-          //  同一条规矩已经在 `showsRows`/定位气泡上用过一次(见下面 `showsRows` 的注释),
-          //  这里只是把它补给两枚门徽章(还有 `app/(tabs)/_layout.tsx` 那枚 tab 角标,同源同条件)。
-          gateCount={online ? gates.length : 0}
+          //  这条闸收在 `gateCount` 一个值里(见它上面那段),这里只是读它。
+          gateCount={gateCount}
           onPress={() => setHostSheet(true)}
         />
       </TopBar>
@@ -686,7 +698,7 @@ export default function Home() {
             onPick={(it) => {
               select({ wsPath: it.wsPath, sessionId: it.sessionId })
               ensureWs(it.wsPath)
-              router.push('/chat')
+              router.push(ROUTES.chat)
             }}
           />
           <T style={{ fontSize: 11, color: c.faint, paddingHorizontal: 16, paddingTop: 20, paddingBottom: 6 }}>
@@ -798,7 +810,7 @@ export default function Home() {
                                 onPress={() => {
                                   select({ wsPath: g.ws.path, sessionId: s.id })
                                   ensureWs(g.ws.path)
-                                  router.push('/chat')
+                                  router.push(ROUTES.chat)
                                 }}
                               >
                                 <View style={{ flex: 1, minWidth: 0 }}>
@@ -865,14 +877,11 @@ export default function Home() {
           })}
           </>
         )}
-        {/* ★★同一条 online 门:disconnected 时这句「N 道门挂着」和上面的旧 gates 一样是
-            断线前留在内存里的旧数据,不判 online 会在「未连接」空态下面又说一遍反话——
-            这是同一个缺陷的第三处,和 HostBanner 的 gateCount、_layout.tsx 的 tabBarBadge
-            同一条件。 */}
-        {online && gates.length > 0 && (
+        {/* ★同一个 `gateCount`:和横幅那枚徽章、主机单子读的是同一个值(见它的定义)。 */}
+        {gateCount > 0 && (
           <View style={{ paddingHorizontal: 15, paddingTop: 18 }}>
             <T style={{ fontSize: 11.5, color: c.faint, lineHeight: 19 }}>
-              {gates.length} 道门挂在 {new Set(gates.map((x) => wsName(x.wsPath))).size} 个工作区上,代理在等你回答。
+              {gateCount} 道门挂在 {new Set(gates.map((x) => wsName(x.wsPath))).size} 个工作区上,代理在等你回答。
             </T>
           </View>
         )}
@@ -890,7 +899,7 @@ export default function Home() {
           上一次连上时留下的旧门徽章,和 HostBanner/tab 角标/门汇总句是同一个缺陷。 */}
       <HostSwitchSheet
         open={hostSheet}
-        rows={hostPickRows(hosts, activeHost?.id ?? null, state, online ? gates.length : 0)}
+        rows={hostPickRows(hosts, activeHost?.id ?? null, state, gateCount)}
         onClose={() => setHostSheet(false)}
         onPick={(id) => {
           setHostSheet(false)
@@ -898,7 +907,7 @@ export default function Home() {
         }}
         onAddHost={() => {
           setHostSheet(false)
-          router.push('/add-host')
+          router.push(ROUTES.addHost)
         }}
       />
 

@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { ROUTES } from '../nav/routes'
 import { Pressable, View } from 'react-native'
 import { router } from 'expo-router'
 import { CameraView, useCameraPermissions } from 'expo-camera'
@@ -75,7 +76,7 @@ export default function Scanner() {
           ) : null}
           <List>
             {/* ★永远留一条不用相机的路。权限被拒之后只剩一个死胡同,是最让人恼火的设计。 */}
-            <Btn block onPress={() => router.replace('/add-host')}>改成手填地址</Btn>
+            <Btn block onPress={() => router.replace(ROUTES.addHost)}>改成手填地址</Btn>
           </List>
         </View>
       ) : (
@@ -94,7 +95,7 @@ export default function Scanner() {
             ) : (
               <Note>在电脑上打开「设置 → 主机 → 显示配对二维码」。</Note>
             )}
-            <Pressable onPress={() => router.replace('/add-host')} style={{ alignItems: 'center', paddingVertical: 8 }}>
+            <Pressable onPress={() => router.replace(ROUTES.addHost)} style={{ alignItems: 'center', paddingVertical: 8 }}>
               <T style={{ fontSize: 13.5, color: c.muted }}>改成手填地址</T>
             </Pressable>
           </View>

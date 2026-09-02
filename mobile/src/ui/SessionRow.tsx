@@ -122,7 +122,7 @@ const st = StyleSheet.create({
   actionBody: {
     flex: 1,
     minWidth: 0,
-    minHeight: 46,
+    minHeight: HOME.minActionRowH,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,

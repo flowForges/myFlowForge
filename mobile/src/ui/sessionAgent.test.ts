@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pickSessionAgent, shouldRederive } from './sessionAgent'
+import { pickModel, pickSessionAgent, shouldRederive } from './sessionAgent'
 
 const AGENTS = [
   { id: 'claude', models: [{ id: 'sonnet' }, { id: 'opus' }] },
@@ -66,5 +66,24 @@ describe('要不要把顶栏重新判一遍(防「隔壁会话广播了一次,�
 
   it('同一条会话数据一直没到(hasSession 恒 false)→ 不重复判,不会一直空转', () => {
     expect(shouldRederive({ key: 'a', settled: false }, { key: 'a', hasSession: false, hasAgents: true })).toBe(false)
+  })
+})
+
+describe('挑模型(顶栏和判据共用的那一份)', () => {
+  const models = [{ id: 'opus', label: '大' }, { id: 'sonnet', label: '中' }]
+
+  it('记着的那个还在就用它', () => {
+    expect(pickModel(models, 'sonnet')?.label).toBe('中')
+  })
+
+  it('★记着的那个没了(升级换了名字)退到第一个 —— 不是变成 null', () => {
+    // 变 null 的话顶栏那一格空着,而发送键看着还是活的,一发才炸。
+    expect(pickModel(models, 'opus-4.8')?.id).toBe('opus')
+    expect(pickModel(models, null)?.id).toBe('opus')
+  })
+
+  it('一个模型都没有 / 没有代理 → null', () => {
+    expect(pickModel([], 'opus')).toBe(null)
+    expect(pickModel(undefined, 'opus')).toBe(null)
   })
 })

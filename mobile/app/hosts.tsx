@@ -167,7 +167,7 @@ export default function Hosts() {
 
         <View style={{ height: 16 }} />
         <List>
-          <Btn kind="ghost" block onPress={() => router.push('/add-host')}>
+          <Btn kind="ghost" block onPress={() => router.push(ROUTES.addHost)}>
             添加主机
           </Btn>
           {state?.status === 'failed' || state?.status === 'retrying' ? (

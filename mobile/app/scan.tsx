@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react'
+import { ROUTES } from '../src/nav/routes'
 import { View } from 'react-native'
 import { router } from 'expo-router'
 import { goBack } from '../src/nav'
@@ -45,7 +46,7 @@ export default function Scan() {
       </Note>
       <View style={{ height: 16 }} />
       <List>
-        <Btn kind="pri" block onPress={() => router.replace('/add-host')}>手填地址</Btn>
+        <Btn kind="pri" block onPress={() => router.replace(ROUTES.addHost)}>手填地址</Btn>
       </List>
     </View>
   )

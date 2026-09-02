@@ -20,11 +20,24 @@ import { EMOJI, MATERIAL, SF, type IconName } from './icons'
  *
  * ★探测全失败才退 emoji,**不留空**:一个看不见的洞比一个不那么好看的 emoji 糟糕得多。
  */
-const SYMBOLS: { SymbolView?: React.ComponentType<Record<string, unknown>> } = (() => {
+/**
+ * `expo-symbols` 的 `SymbolView` 我们**真正用到**的那几个 prop。
+ * ★写成 `Record<string, unknown>` 的话,拼错一个 prop 名(`tintColour`)不会报错,
+ *  只会静默变成「图标没有颜色」—— 而那是运行时才看得见的。这里把形状写实,交给 tsc 管。
+ */
+type SymbolViewProps = {
+  name: string
+  size: number
+  tintColor: string
+  resizeMode?: 'scaleAspectFit' | 'scaleAspectFill' | 'scaleToFill' | 'center'
+  style?: { width: number; height: number }
+}
+
+const SYMBOLS: { SymbolView?: React.ComponentType<SymbolViewProps> } = (() => {
   if (Platform.OS !== 'ios') return {}
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return require('expo-symbols') as { SymbolView?: React.ComponentType<Record<string, unknown>> }
+    return require('expo-symbols') as { SymbolView?: React.ComponentType<SymbolViewProps> }
   } catch {
     return {}
   }
@@ -35,7 +48,7 @@ const SYMBOLS: { SymbolView?: React.ComponentType<Record<string, unknown>> } = (
  * ★同样走**运行时 require**,理由和上面那段一模一样:web 端没有这套字体,
  *  静态 import 会被 metro 提到最前无条件执行。
  */
-const MaterialIcons: React.ComponentType<{ name: never; size: number; color: string; allowFontScaling?: boolean }> | null = (() => {
+const MaterialIcons: React.ComponentType<{ name: string; size: number; color: string; allowFontScaling?: boolean }> | null = (() => {
   if (Platform.OS === 'web') return null
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -60,7 +73,7 @@ export function Icon({
   if (!SymbolView && MaterialIcons) {
     // ★`allowFontScaling={false}`:图标不该跟着系统字号一起变大 —— 它是在一个定死尺寸的
     //  方格里(＋ 面板那几格、行尾那颗 ›),跟着放大只会被裁掉一角。
-    return <MaterialIcons name={MATERIAL[name] as never} size={size} color={tint} allowFontScaling={false} />
+    return <MaterialIcons name={MATERIAL[name]} size={size} color={tint} allowFontScaling={false} />
   }
   if (SymbolView) {
     return (

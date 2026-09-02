@@ -19,6 +19,21 @@ export type AgentLite = { id: string; models: { id: string }[] }
 
 export type AgentPick = { agentId: string | null; modelId: string | null }
 
+/**
+ * 在一个代理的模型清单里挑一个:记着的那个还在就用它,否则退到它自己的**第一个**。
+ *
+ * ★★两处在用同一条规则 —— 这里的 `pickSessionAgent`(算「该用哪个」)和 `chat.tsx` 顶栏
+ *  (把 id 换回那条模型对象拿去显示)。各写一份的话,漂移出来的样子是**顶栏显示的模型
+ *  和真正发出去的那个不是同一个** —— 屏幕上一切正常,没有任何一条报错。
+ * ★泛型是为了让调用方拿回自己那份完整的模型对象(顶栏要 `label`),不被这里的最小类型截断。
+ */
+export function pickModel<M extends { id: string }>(
+  models: readonly M[] | undefined | null,
+  modelId: string | null | undefined,
+): M | null {
+  return models?.find((m) => m.id === modelId) ?? models?.[0] ?? null
+}
+
 export function pickSessionAgent(
   session: { agentId?: string; modelId?: string } | null,
   agents: readonly AgentLite[],
@@ -29,7 +44,7 @@ export function pickSessionAgent(
   const agent = agents.find((a) => a.id === session?.agentId) ?? agents[0]
   // ★同理:代理还在但模型名变了(升级换了名字),保住代理、模型退到它自己的第一个。
   //  两级各退各的,别因为模型没了就把代理也一起换掉。
-  const model = agent.models.find((m) => m.id === session?.modelId) ?? agent.models[0]
+  const model = pickModel(agent.models, session?.modelId)
   return { agentId: agent.id, modelId: model?.id ?? null }
 }
 

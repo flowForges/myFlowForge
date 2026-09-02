@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Keyboard, Modal, Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native'
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler'
 import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated'
@@ -114,19 +114,28 @@ export function Sheet({
     if (open) y.value = 0
   }, [open, y])
 
-  const pan = Gesture.Pan()
-    .onUpdate((e) => {
-      y.value = Math.max(0, e.translationY)
-    })
-    .onEnd((e) => {
-      const pastQuarter = panelHeight.value > 0 && y.value > panelHeight.value / 4
-      const flicked = e.velocityY > 800
-      if (pastQuarter || flicked) {
-        runOnJS(onClose)()
-      } else {
-        y.value = withSpring(0)
-      }
-    })
+  // ★`.enabled(open)`:`Modal` 的滑出动画还在跑的那一小段里,面板仍在树上、手势仍然活着 ——
+  //  那期间再拖一下就是**第二次** `onClose`。今天的调用方全是幂等的 `setState`,所以看不出问题,
+  //  但那是运气,不是设计。关掉的那一刻手势就该失效。
+  // ★`useMemo`:`Gesture.Pan()` 每次渲染都重建一个新手势对象,而这个组件跟着键盘高度重渲染
+  //  (`kb` 是 state)—— 拖到一半时重建手势是 RNGH 里「拖着拖着突然不跟手」的经典来源。
+  const pan = useMemo(
+    () => Gesture.Pan()
+      .enabled(open)
+      .onUpdate((e) => {
+        y.value = Math.max(0, e.translationY)
+      })
+      .onEnd((e) => {
+        const pastQuarter = panelHeight.value > 0 && y.value > panelHeight.value / 4
+        const flicked = e.velocityY > 800
+        if (pastQuarter || flicked) {
+          runOnJS(onClose)()
+        } else {
+          y.value = withSpring(0)
+        }
+      }),
+    [open, onClose, y, panelHeight],
+  )
 
   // `y` 是往下拖的位移(正数),`kbLift` 是被键盘顶起的高度 —— 一个往下一个往上,合成一条。
   const panelStyle = useAnimatedStyle(() => ({

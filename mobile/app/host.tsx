@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { ROUTES } from '../src/nav/routes'
 import { ScrollView, View } from 'react-native'
 import { goBack, goToHosts } from '../src/nav'
 import { useC } from '../src/theme/theme'
@@ -38,7 +39,7 @@ export default function Host() {
         </TopBar>
         <Empty title="现在没连着任何主机" desc="这一屏讲的是当前这台机器的底细,先连上一台。" />
         <View style={{ paddingHorizontal: 30 }}>
-          {/* ★不是 `router.push('/hosts')`:`/hosts` 现在是 `(tabs)` 里的一格,不是根栈的一层 ——
+          {/* ★不是 `router.push(ROUTES.hosts)`:`/hosts` 现在是 `(tabs)` 里的一格,不是根栈的一层 ——
               直接 push 会把整个 `(tabs)` 分组再压一份进根栈,和 `goToHosts()` 当初要避免的
               那类栈损坏是同一个错法(见 `src/nav.ts` 的 JSDoc)。 */}
           <Btn kind="ghost" block onPress={() => goToHosts()}>

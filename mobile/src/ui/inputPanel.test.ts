@@ -33,11 +33,6 @@ describe('输入区三态机', () => {
     expect(nextInputMode('idle', 'keyboardShown')).toBe('keyboard')
   })
 
-  it('发出去之后保持原样 —— 连着发几条不该每条都要重新点开键盘', () => {
-    expect(nextInputMode('keyboard', 'send')).toBe('keyboard')
-    expect(nextInputMode('panel', 'send')).toBe('panel')
-  })
-
   it('★离开这一屏一律清零', () => {
     expect(nextInputMode('panel', 'leave')).toBe('idle')
     expect(nextInputMode('keyboard', 'leave')).toBe('idle')

@@ -45,8 +45,10 @@ describe('挑出来这个文件能不能发', () => {
   })
 
   it('★反斜杠也要剥(文件选择器在别的平台给的是 Windows 风格的路径)', () => {
-    const r = planPickedFile({ name: 'C:\\\\tmp\\\\a.txt', dataBase64: 'eA==' }, NOW)
-    if (r.ok) expect(r.name).not.toContain('\\\\')
+    // ★字面量里是**一个**反斜杠(`\\` 在 TS 源码里就是一个字符)。上一版写成了 `\\\\`,
+    //  测的是「两个反斜杠」这种现实中不存在的路径 —— 单反斜杠那条真实路径一直没被覆盖。
+    const r = planPickedFile({ name: 'C:\\tmp\\a.txt', dataBase64: 'eA==' }, NOW)
+    expect(r.ok && r.name).toBe('a.txt')
   })
 
   it('★撞名要去重 —— 连发两个 `log.txt`,正文里两个占位符一模一样,代理分不清哪句说哪个', () => {

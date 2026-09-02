@@ -187,7 +187,8 @@ await p.setViewport(390, 400)
 await p.goto('http://localhost:8081/')
 await p.waitFor(visible('alpha'), 30000)
 await new Promise((r) => setTimeout(r, 500))
-// ★expanded 状态是存盘的(见下面③的断言),①已经点开过 alpha 和 beta —— 这次 reload
+// ★expanded 状态是存盘的(和③钉的「折叠是姿态,得存盘」同一类,但那条钉的是另一个开关),
+//  ①已经点开过 alpha 和 beta —— 这次 reload
 //  它们多半已经是展开的。**不能无脑再点一次**:如果已经展开,再点 'alpha' 会把它点收起来,
 //  这一段就测不到东西了。所以先看它在不在,不在才点。
 if (!(await p.eval(visible('修 gate 重复放行')))) {
@@ -256,7 +257,7 @@ if (hasBubble && scrollerTop != null) {
     `期望顶 ${expectTop.toFixed(1)} / 实际顶 ${after ? after.top.toFixed(1) : 'null'} — ${JSON.stringify({ before, after })}`)
 }
 
-// 还原视口,别影响下面②③两段。
+// 还原视口,别影响下面③④两段。
 await p.setViewport(390, 844)
 
 // ── ③ 「需要你」折叠 ─────────────────────────────────────────────────────

@@ -88,6 +88,9 @@ describe('顶栏那条主机横幅', () => {
 
   it('压根没选主机', () => {
     expect(hostBannerTitle('', null)).toBe('未选主机')
+    // ★closed 和「没有 state」说的是同一件事,措辞必须一致 —— 主动断开和从没连过,
+    //  在顶栏上没有区别,而两种写法会让人以为它们不一样。
+    expect(hostBannerTitle('mini', { status: 'closed' })).toBe('mini 未连接')
     expect(hostBannerDetail(URL, null)).toBe('192.168.1.7:7777')
   })
 

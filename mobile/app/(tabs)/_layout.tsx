@@ -27,6 +27,17 @@ import { tap } from '../../src/ui/haptics'
  * ★次级屏(对话/变更/工作流/新建工作区/添加主机/扫码…)全在**根栈**里,推出去时天然盖住
  *  这条 tab bar,不需要一屏一屏去关 —— 见 `app/_layout.tsx`。
  */
+/**
+ * 切 tab 是「有分量」的切换动作(selection 档),不是普通点击。
+ *
+ * ★★**已经站在这一格上再点一下不震**。`tabPress` 在当前格上照样会触发,而那一下
+ *  什么都没发生 —— 手上有反应而屏幕上没有,比不震更奇怪。三格共用这一份,
+ *  免得漏一格:漏的那格摸起来会跟另外两格不一致。
+ */
+const tabHaptics = ({ navigation }: { navigation: { isFocused: () => boolean } }) => ({
+  tabPress: () => { if (!navigation.isFocused()) tap('switchTab') },
+})
+
 export default function TabLayout() {
   const c = useC()
   const { gates } = useStore()
@@ -50,9 +61,7 @@ export default function TabLayout() {
           tabBarIcon: ({ color }) => <Icon name="chat" size={20} color={color as string} />,
           tabBarBadge: online && gates.length > 0 ? gates.length : undefined,
         }}
-        // 切 tab 是「有分量」的切换动作(selection 档),不是普通点击。三格都接同一条,
-        // 免得漏一格 —— 漏的那格摸起来会跟另外两格不一致。
-        listeners={{ tabPress: () => tap('switchTab') }}
+        listeners={tabHaptics}
       />
       {/* ★★2026-09-02:这一格原来是「主机」。用户原话「感觉有点浪费」—— 确实:那一屏全是
           配对时用一次就再不碰的事(列表/添加/删除/改名),而「现在连着哪台 + 快切」
@@ -65,7 +74,7 @@ export default function TabLayout() {
           title: '工作区',
           tabBarIcon: ({ color }) => <Icon name="folder" size={20} color={color as string} />,
         }}
-        listeners={{ tabPress: () => tap('switchTab') }}
+        listeners={tabHaptics}
       />
       <Tabs.Screen
         name="settings"
@@ -73,7 +82,7 @@ export default function TabLayout() {
           title: '设置',
           tabBarIcon: ({ color }) => <Icon name="settings" size={20} color={color as string} />,
         }}
-        listeners={{ tabPress: () => tap('switchTab') }}
+        listeners={tabHaptics}
       />
     </Tabs>
   )

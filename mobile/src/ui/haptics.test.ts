@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { HAPTIC_EVENTS, hapticKindFor, tap } from './haptics'
 
 describe('触感', () => {
