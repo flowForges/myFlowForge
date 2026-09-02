@@ -17,6 +17,7 @@
     "dist:win-arm64": "electron-vite build && electron-builder --win --arm64",
     "make-win-icon": "node scripts/make-win-icon.mjs",
     "test": "vitest run",
+    "check:daemon": "FORGE_DAEMON_CHECK=1 vitest run src/main/daemon/daemonProcess.test.ts",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "postinstall": "node scripts/postinstall.mjs"
   },

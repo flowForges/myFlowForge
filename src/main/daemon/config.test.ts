@@ -31,13 +31,21 @@ describe('isLoopback', () => {
 // 「不认识的命令: 127.0.0.1:6789」。这一组钉死那个形状。
 import { parseArgs } from './args'
 describe('CLI 参数', () => {
+  const base = { listen: undefined, address: undefined, relay: undefined }
   it.each([
-    [[], { cmd: 'start', listen: undefined }],
-    [['--listen', '127.0.0.1:6789'], { cmd: 'start', listen: '127.0.0.1:6789' }],
-    [['--listen=0.0.0.0:9000'], { cmd: 'start', listen: '0.0.0.0:9000' }],
-    [['pair'], { cmd: 'pair', listen: undefined }],
-    [['pair', '--listen', '0.0.0.0:9000'], { cmd: 'pair', listen: '0.0.0.0:9000' }],
-    [['--listen', '127.0.0.1:1', 'status'], { cmd: 'status', listen: '127.0.0.1:1' }],
-    [['daemon', 'status'], { cmd: 'status', listen: undefined }],
+    [[], { cmd: 'start', ...base }],
+    [['--listen', '127.0.0.1:6789'], { cmd: 'start', ...base, listen: '127.0.0.1:6789' }],
+    [['--listen=0.0.0.0:9000'], { cmd: 'start', ...base, listen: '0.0.0.0:9000' }],
+    [['pair'], { cmd: 'pair', ...base }],
+    [['pair', '--listen', '0.0.0.0:9000'], { cmd: 'pair', ...base, listen: '0.0.0.0:9000' }],
+    [['--listen', '127.0.0.1:1', 'status'], { cmd: 'status', ...base, listen: '127.0.0.1:1' }],
+    [['daemon', 'status'], { cmd: 'status', ...base }],
+    // ★云服务器:网卡上是内网地址,配对码里要印的是公网那个
+    [['pair', '--address', '1.2.3.4:6767'], { cmd: 'pair', ...base, address: '1.2.3.4:6767' }],
+    [['--relay=wss://r.example/', '--listen', '127.0.0.1:6767'],
+      { cmd: 'start', ...base, listen: '127.0.0.1:6767', relay: 'wss://r.example/' }],
+    // ★★两个带值选项挨着写时,后一个的**值**不能被当成命令名(第一版就栽在这条上)
+    [['--listen', '0.0.0.0:1', '--address', '5.6.7.8:1', 'pair'],
+      { cmd: 'pair', ...base, listen: '0.0.0.0:1', address: '5.6.7.8:1' }],
   ])('%j', (argv, want) => { expect(parseArgs(argv as string[])).toEqual(want) })
 })
