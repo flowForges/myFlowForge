@@ -5,7 +5,7 @@ import {
   isValidRoom,
   parseJoin,
   type RelaySocket,
-} from './core'
+} from './core.js'
 
 /** 一条假连接,把收到的东西记下来。 */
 function sock(): RelaySocket & { sent: string[]; closed: boolean } {

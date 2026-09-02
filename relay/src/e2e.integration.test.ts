@@ -12,7 +12,7 @@ import {
 } from '../../src/shared/remote/e2e'
 import { buildPairingLink, parsePairingLink } from '../../src/shared/remote/pairingLink'
 import { fromBase64 } from '../../src/shared/remote/base64'
-import { startRelay, type RelayHandle } from './node'
+import { startRelay, type RelayHandle } from './node.js'
 
 /**
  * 端到端:**真 WebSocket + 真加密 + 真中转**,不是 mock。

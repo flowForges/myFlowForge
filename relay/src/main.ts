@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { startRelay } from './node'
+import { startRelay } from './node.js'
 
 /**
  * 可执行入口。`node relay.js` / `docker run` 跑的就是它。

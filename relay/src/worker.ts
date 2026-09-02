@@ -1,4 +1,4 @@
-import { createRelayCore, parseJoin, type RelaySocket, type Role } from './core'
+import { createRelayCore, parseJoin, type RelaySocket, type Role } from './core.js'
 
 /**
  * Cloudflare Workers + Durable Object 适配器(设计文档第八节的 `worker.ts`)。

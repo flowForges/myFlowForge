@@ -1,5 +1,5 @@
 import { WebSocketServer, type WebSocket } from 'ws'
-import { createRelayCore, parseJoin, type RelaySocket, type Role } from './core'
+import { createRelayCore, parseJoin, type RelaySocket, type Role } from './core.js'
 
 /**
  * Node / Docker 适配器(设计文档第八节的 `node.ts`)。
