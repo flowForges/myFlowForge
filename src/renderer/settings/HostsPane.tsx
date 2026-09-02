@@ -1,10 +1,21 @@
 import { useCallback, useEffect, useState } from 'react'
 import { type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
-import { MobileSection } from './MobileSection'
 
 const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', icon: '', display: 'both', token: '' }
 
+/**
+ * 远程主机 —— **这台电脑连出去**。
+ *
+ * ★★2026-09-02:手机那一整节(让手机连进来 / 二维码 / 中转)**搬到了 `PhonePane`**。
+ *  用户原话:「一部分是本机 daemon 启动让手机来连,还有一部分是本机去连别的 daemon,
+ *  这部分要分开,不然看起来很乱」。对的,而且不只是「加个隔断」的事:
+ *  这两件事**除了「主机」这个词之外毫无关系** —— 不共用数据、不共用状态、不共用代码路径
+ *  (一个是 `daemon/config` + `relayController`,一个是 `hostStore`)。
+ *  原来那句「两者共用同一套概念(地址/令牌/谁连着谁)」的注释是不成立的。
+ *  ★而且设置面板的惯例本来就是**一个话题一页**(23 个分页里连「Hook 库」「Skill」都各占一页),
+ *   「主机」是唯一一个扛着两个不相干话题的页。
+ */
 /**
  * 保存前的校验。★**返回一句话,而不是把按钮置灰。**
  *
@@ -96,19 +107,9 @@ export function HostsPane() {
       {err && <p className="set-desc" style={{ color: 'var(--err)' }}>{err}</p>}
 
       <div className="set-group">
-        <h4>手机端 · 别的设备连进来</h4>
+        <h4>已配的机器</h4>
         <p className="set-desc">
-          让手机上的 myFlowForge 连到<b>这台电脑</b>,在手机上看这里的会话、答这里的权限门。
-          和上面那一节是反的:那边是你连出去,这边是别人连进来。
-        </p>
-        <MobileSection />
-      </div>
-
-      <div className="set-group">
-        <h4>远程主机 · 这台电脑连出去</h4>
-        <p className="set-desc">
-          每台跑着 myFlowForge 的机器就是一台主机。切到哪台,就只看到哪台的会话、工作区和运行。
-          外观、宠物、字体这些跟着你这台设备走,不会因为切换而改变。
+          切到哪台,就只看到哪台的会话、工作区和运行。外观、宠物、字体跟着你这台设备走,不会变。
         </p>
         <div className="hosts-list">
           {hosts.length === 0 && (

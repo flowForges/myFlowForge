@@ -41,6 +41,7 @@ import { AppIconPane } from './settings/AppIconPane'
 import { ProxyPane } from './settings/ProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
 import { HostsPane } from './settings/HostsPane'
+import { PhonePane } from './settings/PhonePane'
 import { baseName } from '@shared/pathName'
 import { WorkflowPane } from './settings/WorkflowPane'
 import { CustomStagesPane } from './settings/CustomStagesPane'
@@ -863,6 +864,7 @@ export function App() {
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} onEditAlias={updateProjectAlias} />
           case 'hosts': return <HostsPane />
+          case 'phone': return <PhonePane />
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <ProxyPane agentProxy={settings?.agentProxy ?? ''} appProxy={settings?.appProxy ?? ''} onChange={(p) => update(p)} />
           case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} customStages={customStages} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} onUpsertCustomStage={upsertCustomStage} />

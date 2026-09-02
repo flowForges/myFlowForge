@@ -134,8 +134,20 @@ const NAV: NavEntry[] = [
     ),
   },
   {
+    // ★★2026-09-02:从「主机」页拆出来的另一半 —— 让手机连进来(网关 / 二维码 / 中转)。
+    //  它和「远程主机」除了「主机」这个词之外毫无关系,见 `PhonePane.tsx` 顶部那段。
+    key: 'phone',
+    label: '手机',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="7" y="2.5" width="10" height="19" rx="2.2" />
+        <path d="M10.8 18.6h2.4" />
+      </svg>
+    ),
+  },
+  {
     key: 'hosts',
-    label: '主机',
+    label: '远程主机',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="3" y="4" width="18" height="7" rx="1.6" />

@@ -56,14 +56,22 @@ describe('这一屏默认摆出来多少东西', () => {
   })
 
   /**
-   * ★推送的两个子开关(门 / 跑完了)不算「摊开的配置」:它们挂在推送主开关下面,
-   *  关着的时候是灰的。所以顶层开关就是三个:连进来 / 中转 / 推送。
+   * ★★2026-09-02:**推送搬去通知页了**,所以这一屏只剩两个开关。
+   *  理由:通知页本来就按「跟设备走 / 跟机器走」分组,而且它第二组的说明原文写着
+   *  「连着这台机器的所有设备(**包括以后的手机**)都不会再收到该类通知」——
+   *  它早就把手机算进去了,而那三个开关却待在主机页。同一件事被拆在两页,
+   *  其中一页还在替另一页做承诺。
    */
-  it('★顶层开关只有三个:连进来 / 中转 / 推送', async () => {
+  it('★这一屏只管「连进来」这件事:两个开关,推送不在这儿', async () => {
     await mount()
     const toggles = [...document.querySelectorAll('button.toggle')].filter((e) => !e.closest('details'))
-    const labels = toggles.map((e) => e.getAttribute('aria-label'))
-    expect(labels).toEqual(['让手机连进来', '出门也能连', '推送到手机', '推送门', '推送完成'])
+    expect(toggles.map((e) => e.getAttribute('aria-label'))).toEqual(['让手机连进来', '出门也能连'])
+  })
+
+  it('★推送的任何痕迹都不许留在这一屏 —— 留一半比整块留着更难找', async () => {
+    await mount()
+    const all = document.body.textContent ?? ''
+    for (const gone of ['推送', 'Expo', '已登记']) expect(all, gone).not.toContain(gone)
   })
 
   it('★★「配错了才来动」的那些**全在折叠里**:端口 / 局域网可见 / 令牌 / 手填地址', async () => {
