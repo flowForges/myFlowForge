@@ -42,15 +42,17 @@ export type Conn = {
   addHost: (h: Omit<MobileHost, 'id' | 'lastConnectedAt'>) => Promise<MobileHost>
   removeHost: (id: string) => Promise<void>
   /**
-   * 改一台主机的显示名。
+   * 改一台主机的**外观**(显示名 / 图标)。
    *
-   * ★**纯本地**:名字存在这台手机上,不发给那台电脑。配对码里那个 `n` 只是个初值(通常是机器名),
-   *  两台手机完全可以把同一台电脑叫成不同的名字 —— 这一屏要回答的是「我该切到哪台」,
+   * ★**纯本地**:这两样存在这台手机上,不发给那台电脑。配对码里那个 `n` 只是个初值(通常是机器名),
+   *  两台手机完全可以把同一台电脑叫成不同的名字、配不同的图标 —— 这一屏要回答的是「我该切到哪台」,
    *  而那个答案本来就因人而异(「书房那台」「公司那台」)。
    * ★不用重连:`activeHost` 的 id/url/token/pubKey/relay 一个都没动,连接那个 effect 的依赖里
-   *  也没有 label,所以改名不会把正在跑的连接踢掉。
+   *  也没有 label/icon,所以改这两样不会把正在跑的连接踢掉。
+   * ★只改传进来的那几个字段(`patch`),没传的原样留着 —— 单子上只动了图标没动名字时,
+   *  不该把名字一起写回一遍。
    */
-  renameHost: (id: string, label: string) => Promise<void>
+  updateHost: (id: string, patch: { label?: string; icon?: string }) => Promise<void>
   selectHost: (id: string | null) => Promise<void>
   /** 手动重连(failed 之后不会自动重试) */
   reconnect: () => void
@@ -176,12 +178,19 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
     [hosts, activeId],
   )
 
-  const renameHost = useCallback(
-    async (id: string, label: string) => {
+  const updateHost = useCallback(
+    async (id: string, patch: { label?: string; icon?: string }) => {
       const target = hosts.find((h) => h.id === id)
       if (!target) return
-      // ★空名回落成地址,和「添加主机」那一屏同一份实现 —— 一行没有名字的主机在清单里认不出来。
-      const next = hosts.map((h) => (h.id === id ? { ...h, label: hostLabel(label, h.url) } : h))
+      const next = hosts.map((h) => {
+        if (h.id !== id) return h
+        return {
+          ...h,
+          // ★空名回落成地址,和「添加主机」那一屏同一份实现 —— 一行没有名字的主机在清单里认不出来。
+          label: patch.label === undefined ? h.label : hostLabel(patch.label, h.url),
+          icon: patch.icon === undefined ? h.icon : patch.icon,
+        }
+      })
       setHosts(next)
       await saveHosts(next)
     },
@@ -228,13 +237,13 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       on,
       addHost,
       removeHost,
-      renameHost,
+      updateHost,
       selectHost,
       reconnect,
       forgetAll,
       epoch,
     }),
-    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, renameHost, selectHost, reconnect, forgetAll, epoch],
+    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, updateHost, selectHost, reconnect, forgetAll, epoch],
   )
 
   return <ConnCtx.Provider value={value}>{children}</ConnCtx.Provider>

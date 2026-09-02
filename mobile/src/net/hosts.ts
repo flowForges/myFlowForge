@@ -31,7 +31,10 @@ export type MobileHost = {
   relay?: string
 }
 
-export const DEFAULT_HOST_ICON = '🖥️'
+// ★图标名单和默认值都在 `hostIcons.ts` 里(唯一来源)。这里 re-export 只是为了不动
+//  已经 import 它的那几处 —— 两个文件各写一份 '🖥️' 的话,改了其中一个,
+//  「新建的主机」在选择器里会一格都不高亮,而两边看起来都对。
+export { DEFAULT_HOST_ICON } from './hostIcons'
 
 /**
  * 一台主机在清单里显示的名字。

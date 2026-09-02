@@ -50,6 +50,11 @@ await longPressText('书房的 Mac')
 console.log(await p.eval('document.body.innerText'))
 await p.shot(`${S}/shots/hosts-rename.png`)
 
+// 浅色也看一眼(这张单子上有选中态,浅色下描边/底色最容易糊在一起)。
+await p.setScheme('light')
+await new Promise((r) => setTimeout(r, 600))
+await p.shot(`${S}/shots/hosts-rename-light.png`)
+
 console.log('截图在', S + '/shots')
 chrome.kill()
 await mock.close?.()

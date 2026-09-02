@@ -11,6 +11,7 @@ import { useStore } from '../../src/data/store'
 // 一句人话的连接状态。★这一份和设置屏共用同一个实现,别在任何一边抄第二遍 —— 见该文件注释。
 import { describeHostState, hostSubtitle } from '../../src/net/hostStatusText'
 import { HostIcon } from '../../src/ui/HostIcon'
+import { HOST_ICONS, currentHostIcon } from '../../src/net/hostIcons'
 // ★web/native 那条确认框分支收在这一个函数里,原地各写一遍的历史(这里 + archiveWs +
 //  confirmDeleteSession)已经收掉了,见它的 JSDoc。
 import { confirmDestructive } from '../../src/ui/confirmDestructive'
@@ -18,20 +19,24 @@ import { ROUTES } from '../../src/nav/routes'
 
 export default function Hosts() {
   const c = useC()
-  const { hosts, activeHost, state, selectHost, removeHost, renameHost, reconnect } = useConn()
+  const { hosts, activeHost, state, selectHost, removeHost, updateHost, reconnect } = useConn()
   const { gates } = useStore()
 
   /**
-   * 正在改名的那一台。记的是 `{ id, name, orig }` —— `name` 是输入框里正在编的值,
+   * 正在编辑的那一台。记的是 `{ id, name, icon, orig }` —— `name`/`icon` 是单子上正在编的值,
    * `orig` 是打开那一刻的原名、**只读**:输入框一开始改就不再回答「我改的是哪一台」了,
    * 而长按呼出这张单子的时候,人未必记得刚才按的是哪行。和首页重命名工作区同一套写法。
    */
-  const [rename, setRename] = useState<{ id: string; name: string; orig: string } | null>(null)
+  const [edit, setEdit] = useState<{ id: string; name: string; icon: string; orig: string } | null>(null)
 
-  const submitRename = async () => {
-    if (!rename) return
-    await renameHost(rename.id, rename.name)
-    setRename(null)
+  /**
+   * ★图标和名字**一起提交**(一次写盘),不是点一下图标就存一次:那样「取消」就没有意义了,
+   *  而且连点几下会连写几次 AsyncStorage。
+   */
+  const submitEdit = async () => {
+    if (!edit) return
+    await updateHost(edit.id, { label: edit.name, icon: edit.icon })
+    setEdit(null)
   }
 
   const remove = (h: MobileHost) => {
@@ -89,7 +94,7 @@ export default function Hosts() {
                     //  44×44 的键,第三颗会把名字那一栏挤到只剩几个字(而名字正是这一行的主角)。
                     //  ★长按是**每一行**都能用的,包括没连着的那些 —— 名字纯存在这台手机上,
                     //   改它不需要连上那台机器。
-                    onLongPress={() => setRename({ id: h.id, name: h.label, orig: h.label })}
+                    onLongPress={() => setEdit({ id: h.id, name: h.label, icon: currentHostIcon(h.icon), orig: h.label })}
                   >
                     <HostIcon icon={h.icon} />
                     <View style={{ flex: 1, minWidth: 0 }}>
@@ -177,28 +182,63 @@ export default function Hosts() {
             这里不留第三份 —— 同一个数字抄三遍,迟早有一遍说的是另一台机器的。 */}
         {/* ★★「长按改名」必须写出来:长按是**看不见**的手势,不说的话这条功能等于没做。
             和上面那句合成一条,不另起一段 —— 这一屏的小字已经够多了。 */}
-        <Note>切过去之后,会话、变更、终端全部换成那台机器的。不做同屏对比。长按一行可以改名字。</Note>
+        <Note>切过去之后,会话、变更、终端全部换成那台机器的。不做同屏对比。长按一行可以改名字和图标。</Note>
       </ScrollView>
 
-      {/* 长按一行呼出的改名单子。★名字**只存在这台手机上**,不发给那台电脑 ——
+      {/* 长按一行呼出的编辑单子。★名字和图标**只存在这台手机上**,不发给那台电脑 ——
           所以没连着的主机照样能改,改完也不会把正在跑的连接踢掉。 */}
       <Sheet
-        open={!!rename}
-        onClose={() => setRename(null)}
-        title="给这台主机起个名字"
-        sub={`原名 ${rename?.orig ?? ''}\n名字只存在这台手机上,不会发给那台电脑`}
+        open={!!edit}
+        onClose={() => setEdit(null)}
+        title="编辑主机"
+        sub={`${edit?.orig ?? ''}\n名字和图标只存在这台手机上,不会发给那台电脑`}
       >
+        {/* ★★图标在名字**上面**:它是一眼能点完的事(六选一),而名字要唤起键盘 ——
+            反过来摆的话,键盘一升起来正好把图标那一行盖掉。 */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 2 }}>
+          {HOST_ICONS.map((o) => {
+            const on = o.icon === edit?.icon
+            return (
+              <Pressable
+                key={o.icon}
+                onPress={() => setEdit((prev) => (prev ? { ...prev, icon: o.icon } : prev))}
+                accessibilityLabel={o.label}
+                accessibilityState={{ selected: on }}
+                style={{ alignItems: 'center', gap: 4, paddingVertical: 6, width: 50 }}
+              >
+                <View
+                  style={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: 12,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    // 选中态和权限档那个 sheet 同一套写法:描边换成强调色 + 底色提亮。
+                    borderWidth: on ? 2 : 1,
+                    borderColor: on ? c.accent : c.border2,
+                    backgroundColor: on ? c.accentDim : c.bg2,
+                  }}
+                >
+                  <T style={{ fontSize: 20 }}>{o.icon}</T>
+                </View>
+                <T numberOfLines={1} style={{ fontSize: 10.5, color: on ? c.accent : c.faint }}>
+                  {o.label}
+                </T>
+              </Pressable>
+            )
+          })}
+        </View>
+
         <Field
-          value={rename?.name ?? ''}
-          onChangeText={(t) => setRename((prev) => (prev ? { ...prev, name: t } : prev))}
+          value={edit?.name ?? ''}
+          onChangeText={(t) => setEdit((prev) => (prev ? { ...prev, name: t } : prev))}
           placeholder="书房的 Mac(不填就用地址)"
-          autoFocus
           autoCapitalize="none"
-          onSubmitEditing={() => void submitRename()}
+          onSubmitEditing={() => void submitEdit()}
         />
         {/* ★这里**不**像重命名工作区那样 `disabled={!name.trim()}`:那边空名会在服务端落成一个
             没名字的工作区,这边空名有明确含义 —— 回落成地址(`hostLabel`),那是一个合法的选择。 */}
-        <Btn kind="pri" block onPress={() => void submitRename()}>
+        <Btn kind="pri" block onPress={() => void submitEdit()}>
           保存
         </Btn>
       </Sheet>
