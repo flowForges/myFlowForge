@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
+import { parsePairingLink } from '@shared/remote/pairingLink'
 
-const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', icon: '', display: 'both', token: '' }
+const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', icon: '', display: 'both', token: '', pubKey: '', relay: '' }
 
 /**
  * 远程主机 —— **这台电脑连出去**。
@@ -69,6 +70,9 @@ export function HostsPane() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const [formErr, setFormErr] = useState('')
+  /** 粘贴配对码那个框,和它下面那句反馈。★只在表单里活着,不进 draft。 */
+  const [pairText, setPairText] = useState('')
+  const [pairMsg, setPairMsg] = useState('')
   const [ioText, setIoText] = useState('')
   const [ioOpen, setIoOpen] = useState(false)
 
@@ -148,6 +152,54 @@ export function HostsPane() {
       {draft && (
         <div className="set-group">
           <h4>{draft.id ? '编辑主机' : '添加主机'}</h4>
+          {/* ★★2026-09-02:粘贴配对码 —— **走中转连另一台电脑唯一的入口**。
+              手机是扫码,电脑之间没法扫,所以那台机器的「手机」页里同一枚码多了一颗「复制配对码」。
+              ★为什么不给公钥/中转地址各摆一个手填框:公钥是 44 个字符的 base64,**没人核对得了**,
+               错一个字符只会静默连不上;中转地址错了则会拨到一个没人应答的地方然后一直转。
+               这两样只从码里来 —— 和手机端 `add-host.tsx` 是同一条规矩(那边它们也只读、不给改)。
+              ★★解析用的是 `@shared/remote/pairingLink`,**和生成那枚码的是同一份文件**
+               (两边 import 同一个模块)。各写一份的话,漂移的表现是「粘了没反应」—— 最难查的一类。 */}
+          <div className="proj-field full" style={{ marginBottom: 10 }}>
+            <label>粘贴配对码(可选)</label>
+            <div className="hosts-inline">
+              <input
+                value={pairText}
+                placeholder="myflowforge://add-host?…  在那台电脑的「设置 → 手机」里复制"
+                onChange={(e) => { setPairText(e.target.value); setPairMsg('') }}
+              />
+              <button
+                className="set-btn"
+                onClick={() => {
+                  const r = parsePairingLink(pairText)
+                  if (!r.ok) { setPairMsg(r.error); return }
+                  const v = r.value
+                  // ★地址原样进 `address`:走中转时它只是个记录(拨的是中转),但以后那台机器
+                  //  真在局域网里出现时,这个地址正好是对的 —— 和手机端同一条。
+                  setDraft({
+                    ...draft,
+                    label: draft.label || v.label || v.address,
+                    kind: 'direct',
+                    address: v.address.startsWith('ws') ? v.address : `ws://${v.address}`,
+                    token: v.token,
+                    pubKey: v.pubKey ?? '',
+                    relay: v.relay ?? '',
+                  })
+                  setPairMsg(v.relay ? '已填好 —— 这台走中转,端到端加密' : v.pubKey ? '已填好 —— 直连,端到端加密' : '已填好 —— 直连(这枚码没带公钥,不加密)')
+                }}
+              >
+                填进表单
+              </button>
+            </div>
+          </div>
+          {pairMsg && <p className="set-desc full" style={{ marginTop: -4 }}>{pairMsg}</p>}
+          {/* ★把「这条连接是什么性质」摆出来:加密和中转都是**看不见**的属性,
+              不说的话人无从知道自己配出来的是明文还是密文。 */}
+          {(draft.pubKey || draft.relay) && (
+            <p className="set-desc full" style={{ marginTop: -4 }}>
+              {draft.relay ? <>这台走<b>中转</b>({draft.relay}),</> : null}
+              {draft.pubKey ? <>已带身份公钥 —— <b>端到端加密</b>,中转读不到内容。</> : null}
+            </p>
+          )}
           <div className="hosts-form">
             <div className="proj-field full">
               <label>名称</label>

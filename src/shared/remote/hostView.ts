@@ -11,6 +11,10 @@ export type RemoteHostView = {
   icon: string
   display: HostDisplay
   token: string
+  /** 有它 = 这条连接端到端加密。界面上据此标一枚「加密」。 */
+  pubKey: string
+  /** 有它 = 这条连接走中转。界面上据此标一枚「中转」。 */
+  relay: string
   lastConnectedAt: number
 }
 
@@ -27,6 +31,13 @@ export type HostInput = {
   icon: string
   display: HostDisplay
   token: string
+  /**
+   * 对面 daemon 的长期公钥(base64)。有它就端到端加密。
+   * ★**只从配对码里来**,界面上不给手填框 —— 44 个字符的 base64 没人核对得了。
+   */
+  pubKey: string
+  /** 中转地址。有它就走中转(必须同时有 `pubKey`)。同样只从配对码里来。 */
+  relay: string
 }
 
 export type HostConnState =

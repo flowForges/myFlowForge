@@ -122,9 +122,23 @@ export function MobileSection() {
     address: qrAddr,
     token: qrToken,
     label: st.name ?? '',
-    // ★★公钥**只要有就带上**,不看中转开没开:带上它的意思是"这条链路可以端到端加密",
-    //  而那对直连一样成立(而且直连也该加密 —— 同一套代码,少一跳)。
-    pubKey: relay?.publicKey || undefined,
+    // ★★★公钥**只在中转真的开着时才带**。
+    //
+    //  这里原来写着「只要有就带上,不看中转开没开 —— 直连也该加密」。那句话是个**意图**,
+    //  而服务端从来没实现它:`hostE2ELink`(daemon 侧的握手)**只在 `relayHost.ts` 里用**,
+    //  局域网网关 `gateway.ts` 里 E2E 一个字都没有。
+    //
+    //  后果是实打实的:客户端(手机和电脑用同一套三档判据)看到 pubKey 而没有中转地址,
+    //  就走「直连 + 端到端加密」—— 发出 hs-init,而网关回的是明文 hello,
+    //  客户端当场判「对面的握手回复形状不对」然后关掉。**扫了新码的手机走局域网直连连不上。**
+    //  (2026-09-02 做桌面端中转时探针跑出来的:状态 closed,日志就是那一句。)
+    //
+    //  ★所以这里跟着**服务端真正实现了的**走:中转开着 → 带公钥(relayHost 会握手);
+    //   只有局域网 → 不带(网关不会握手)。宁可不加密,也不能出一个连不上的码。
+    //  ★★要让直连也加密,得先给 `gateway.ts` 加服务端握手(首帧嗅探 hs-init,
+    //   否则退回明文,老客户端不能断)。那是**手机每天在走的那条路**,要单独一局、单独验。
+    //   到那天把这里改回 `relay?.publicKey || undefined` 就行,客户端一个字都不用动。
+    pubKey: relayOn ? relay?.publicKey || undefined : undefined,
     // ★中转地址只在**真的开着**的时候带。关着还带的话,手机会拨一个没人应答的地方,
     //  然后停在"连接中"—— 比直接走局域网糟得多。
     relay: relayOn ? relay?.url : undefined,
@@ -242,6 +256,15 @@ export function MobileSection() {
               </>
             ) : (
               <button className="set-btn" onClick={() => setShowQr(true)}>显示配对二维码</button>
+            )}
+            {/* ★★2026-09-02:**另一台电脑**也能连进来了(设置 → 远程主机 → 粘贴配对码),
+                而电脑之间没法扫码。所以同一枚码要能以**文本**形式拿走。
+                ★和二维码同一条安全规矩:这串里带着令牌,复制之后别贴进聊天记录。
+                ★只在码展开时摆 —— 折着的时候摆一颗「复制」,等于遮罩根本不存在。 */}
+            {showQr && (
+              <button className="set-btn" onClick={() => copy('pair', pairing)}>
+                {copied === 'pair' ? '已复制(含令牌)' : '复制配对码'}
+              </button>
             )}
           </div>
 

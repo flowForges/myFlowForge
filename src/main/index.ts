@@ -704,6 +704,10 @@ app.whenReady().then(() => {
     onStatus: (s) => registry.broadcast(CH.hostsStatusEvent, s),
     onLog: (m) => logInfo('remote', m),
     resolveUrl: async (h) => {
+      // ★★配了中转就不拉隧道:走中转时 `remoteClient` 拨的是**中转**,`url` 只是个记录,
+      //  连不到也不会去连。不挡的话「kind=ssh + 有中转」这种组合会白开一条 SSH 隧道
+      //  (慢、可能失败、还要 cleanup),而那条隧道从头到尾没人用。
+      if (h.relay) return { url: h.address }
       if (h.kind !== 'ssh') return { url: h.address }
       const { host, port } = { host: '127.0.0.1', port: Number(h.address) || 6767 }
       const t = await openSshTunnel({ target: h.sshTarget, remoteHost: host, remotePort: port, onLog: (m) => logInfo('remote', m) })

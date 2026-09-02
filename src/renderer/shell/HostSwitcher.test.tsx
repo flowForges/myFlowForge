@@ -11,8 +11,8 @@ const ICON_ONLY: HostStatusView = { ...ON_CLOUD, display: 'icon' }
 const ICON_ONLY_DOWN: HostStatusView = { ...DOWN, display: 'icon' }
 
 const HOSTS: RemoteHostView[] = [
-  { id: 'h1', label: '云服务器', kind: 'ssh', address: '6767', sshTarget: 'me@1.2.3.4', icon: '🌩', display: 'both', token: '', lastConnectedAt: 0 },
-  { id: 'h2', label: '家里的Windows', kind: 'direct', address: 'ws://192.168.1.20:6767', sshTarget: '', icon: '🏠', display: 'icon', token: '', lastConnectedAt: 0 },
+  { id: 'h1', label: '云服务器', kind: 'ssh', address: '6767', sshTarget: 'me@1.2.3.4', icon: '🌩', display: 'both', token: '', pubKey: '', relay: '', lastConnectedAt: 0 },
+  { id: 'h2', label: '家里的Windows', kind: 'direct', address: 'ws://192.168.1.20:6767', sshTarget: '', icon: '🏠', display: 'icon', token: '', pubKey: '', relay: '', lastConnectedAt: 0 },
 ]
 
 const hostsConnect = vi.fn(async () => ON_CLOUD)

@@ -3,6 +3,7 @@ import { CH } from '../ipc/channels'
 import { connectRemote, type RemoteClient, type RemoteState } from './remoteClient'
 import type { InvokeCtx, MethodTable } from '../ipc/invokeCtx'
 import type { RemoteHost } from './hostStore'
+import { readSettings } from '../config/store'
 
 export type HostStatus = {
   /** null = 正在看本机 */
@@ -152,6 +153,14 @@ export function createHostRouter(deps: HostRouterDeps) {
       remote = connectRemote({
         url,
         token: host.token || undefined,
+        // ★空串一律落 undefined —— 下游只判「有没有」,不用再各写一遍 `x && x !== ''`
+        //  (和手机端 `conn.tsx` 同一条规矩)。
+        pubKey: host.pubKey || undefined,
+        relayUrl: host.relay || undefined,
+        // ★「app 自身的网络」那个代理。★★漏了它的现象是**永远「正在连」**:`ws` 不认
+        //  `https_proxy` 环境变量,不给 agent 就直连,而直连一个够不着的地址既不报错也不关闭。
+        //  daemon 那一侧(`relayController`)早就这么传了,客户端这侧是同一个坑。
+        proxy: readSettings().appProxy,
         clientVersion: deps.clientVersion,
         clientLabel: deps.clientLabel,
         onEvent: (ch, payload) => (deps.onRemoteEvent ?? deps.toWindows)(ch, payload),
