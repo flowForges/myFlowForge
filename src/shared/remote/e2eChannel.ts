@@ -156,7 +156,14 @@ export function clientE2ELink(
         try { reply = JSON.parse(raw) } catch { return fail('对面的握手回复不是 JSON') }
         const f = reply as { t?: unknown; epk?: unknown; sig?: unknown }
         if (f?.t !== 'hs-reply' || typeof f.epk !== 'string' || typeof f.sig !== 'string') {
-          return fail('对面的握手回复形状不对')
+          // ★这句话要**指着最可能的那个原因**说。走到这儿最常见的一种是:对面版本太老,
+          //  它的局域网网关根本不会握手(2026-09-02 之前 E2E 只在中转那条路上有),
+          //  于是回过来的是一帧明文 `hello`。「形状不对」是症状,升级才是解法。
+          return fail(
+            (f as { t?: unknown })?.t === 'hello'
+              ? '对面这台电脑的版本太老,还不支持直连加密 —— 把它升到同一版本,或者在它那边打开中转'
+              : '对面的握手回复形状不对',
+          )
         }
         const s = clientHandshakeFinish(pending, { t: 'hs-reply', epk: f.epk, sig: f.sig }, trustedPub)
         // ★★验不过就是**验不过**,不重试、不降级。这一步是整条链路的信任锚点:

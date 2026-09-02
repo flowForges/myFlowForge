@@ -3,6 +3,7 @@ import { startGateway, type GatewayHandle } from '../remote/gateway'
 import { daemonTable } from '../ipc/channelRouting'
 import type { MethodTable } from '../ipc/invokeCtx'
 import { ensureToken, isLoopback, resetToken } from '../daemon/config'
+import { readIdentity } from '../remote/identity'
 import type { MobileGateway } from '../config/schema'
 
 /**
@@ -121,6 +122,9 @@ export function createAppGateway(deps: AppGatewayDeps): AppGateway {
           table, addSink: deps.addSink, version: deps.version,
           host: cfg.host, port: cfg.port, token, onLog: log,
           onClientsChanged: announce,
+          // ★★和二维码里那把公钥**必须是同一把** —— 码里带 `k` 而网关不会握手,
+          //  手机就连不上(它看到 `k` 就走加密)。`readIdentity()` 是两边共同的来源。
+          identity: readIdentity(),
         })
         log(`手机端网关已启动 ${gw.host}:${gw.port} · ${Object.keys(table).length} 个方法${token ? ' · 需要令牌' : ' · 仅本机'}`)
       } catch (e) {

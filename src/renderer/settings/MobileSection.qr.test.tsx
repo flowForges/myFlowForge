@@ -79,6 +79,17 @@ describe('配对二维码', () => {
     expect(document.querySelector('svg.qr')?.getAttribute('aria-label')).toBe('配对二维码 · 192.168.110.133:6789')
   })
 
+  it('★局域网直连的码也带公钥 —— 直连那条路现在也走端到端加密', async () => {
+    // ★★这条钉的是 2026-09-02 那个补丁**被删掉**这件事。在 `gateway.ts` 会握手之前,
+    //  带公钥的码在局域网上是连不上的(客户端发 hs-init,网关回明文 hello),
+    //  所以码里一度只在开中转时才带公钥。现在服务端两条路都会握手,直连也必须带 ——
+    //  不带 = 手机在自家 wifi 上跑明文,令牌和全部对话内容都在网线上。
+    await mount(RUNNING, { enabled: false })
+    const v = await openAndParse()
+    expect(v.pubKey).toBe(PUBKEY)
+    expect(v.relay).toBeUndefined()
+  })
+
   it('能收回去', async () => {
     await mount(RUNNING)
     await act(async () => { fireEvent.click(screen.getByText('显示配对二维码')) })

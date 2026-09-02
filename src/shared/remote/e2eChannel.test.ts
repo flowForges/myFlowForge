@@ -125,6 +125,17 @@ describe('e2eChannel · 握手', () => {
     expect(cw.closes).toHaveLength(1)
   })
 
+  it('★对面回的是明文 hello(旧版本的网关)时,说的是「版本太老」而不是「形状不对」', () => {
+    // 走到这儿最常见的一种就是它:2026-09-02 之前的局域网网关不会握手,只会回明文 hello。
+    // 「形状不对」是症状,「把那台升级一下」才是用户能照做的事。
+    const cw = wire()
+    const failures: string[] = []
+    const link = clientE2ELink(generateIdentity().publicKey, cw.w, () => {}, (w) => failures.push(w))
+    link.receive(JSON.stringify({ t: 'hello', protocol: 1, version: '1.2.0', authRequired: false }))
+    expect(failures[0]).toContain('版本太老')
+    void link
+  })
+
   it('host 的第一帧不是 hs-init 就断 —— 加密之前不给对面说话的机会', () => {
     for (const first of ['{"t":"req","id":1}', '{', 'null', '{"t":"hs-init"}', '{"t":"enc","c":"AAAA"}']) {
       const hw = wire()

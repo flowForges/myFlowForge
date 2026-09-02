@@ -21,6 +21,7 @@ import { createHeadlessHost } from '../host/headlessHost'
 import { buildProviderRegistry } from '../agents/registry'
 import { startGateway } from '../remote/gateway'
 import { ensureToken, isLoopback, parseListen, readDaemonConfig } from './config'
+import { readIdentity } from '../remote/identity'
 import { sysFile } from '../config/paths'
 import { parseArgs } from './args'
 
@@ -68,6 +69,10 @@ export async function startDaemon(opts: { listen?: string; version?: string } = 
 
   const gw = await startGateway({
     table, addSink: hub.addSink, version, host, port, token, onLog: log,
+    // ★★没有它,`daemon pair` 印出来的码里那把公钥就是个摆设:客户端看到公钥就发 hs-init,
+    //  而不会握手的网关只会回明文 hello,对面直接判「形状不对」断开。
+    //  云服务器那条路(绑 0.0.0.0、走公网)尤其不能少 —— 那上面明文等于把令牌摊在路上。
+    identity: readIdentity(),
   })
 
   log(`myFlowForge daemon ${version} · ${hostname()}`)
