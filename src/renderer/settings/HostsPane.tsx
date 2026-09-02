@@ -175,16 +175,30 @@ export function HostsPane() {
                   const v = r.value
                   // ★地址原样进 `address`:走中转时它只是个记录(拨的是中转),但以后那台机器
                   //  真在局域网里出现时,这个地址正好是对的 —— 和手机端同一条。
+                  // ★★**没有中转地址时把公钥丢掉。**
+                  //  加密的服务端那一半只有 `relayHost` 实现了 —— 局域网网关 `gateway.ts` 里
+                  //  E2E 一个字都没有。存下一个「有公钥、没中转」的记录,连接时会走「直连+加密」,
+                  //  发出 hs-init 而对面回明文 hello,当场断在「对面的握手回复形状不对」。
+                  //  ★这个防护**必须在客户端这一侧**:源机器上的同一条修复(码里只在开中转时带公钥)
+                  //   只有新版才有,而你要连的那台很可能跑着 beta.2 —— 它出的码照样带公钥。
+                  //  ★等 `gateway.ts` 支持了握手,把这一段删掉即可(那时 pubKey 原样存)。
+                  const usablePub = v.relay ? v.pubKey ?? '' : ''
                   setDraft({
                     ...draft,
                     label: draft.label || v.label || v.address,
                     kind: 'direct',
                     address: v.address.startsWith('ws') ? v.address : `ws://${v.address}`,
                     token: v.token,
-                    pubKey: v.pubKey ?? '',
+                    pubKey: usablePub,
                     relay: v.relay ?? '',
                   })
-                  setPairMsg(v.relay ? '已填好 —— 这台走中转,端到端加密' : v.pubKey ? '已填好 —— 直连,端到端加密' : '已填好 —— 直连(这枚码没带公钥,不加密)')
+                  setPairMsg(
+                    v.relay
+                      ? '已填好 —— 这台走中转,端到端加密'
+                      : v.pubKey
+                        ? '已填好 —— 直连(不加密)。这枚码带了身份公钥,但加密目前只在中转那条路上可用,已忽略。'
+                        : '已填好 —— 直连(不加密)',
+                  )
                 }}
               >
                 填进表单
