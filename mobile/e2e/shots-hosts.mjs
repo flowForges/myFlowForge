@@ -28,6 +28,21 @@ await p.waitFor(`document.body.innerText.includes('保存并连接')`, 30000)
 await p.clickText('保存并连接')
 await new Promise((r) => setTimeout(r, 1500))
 
+// ★2026-09-02:底部第二格现在是「工作区」,主机退回次级屏(设置 → 主机)。
+await p.goto('http://localhost:8081/workspaces')
+await p.waitFor(`document.body.innerText.includes('工作区')`, 30000)
+await new Promise((r) => setTimeout(r, 800))
+await p.shot(`${S}/shots/ws-tab.png`)
+await p.setScheme('light')
+await new Promise((r) => setTimeout(r, 600))
+await p.shot(`${S}/shots/ws-tab-light.png`)
+await p.setScheme('dark')
+
+await p.goto('http://localhost:8081/settings')
+await p.waitFor(`document.body.innerText.includes('设置')`, 20000)
+await new Promise((r) => setTimeout(r, 600))
+await p.shot(`${S}/shots/settings-after.png`)
+
 await p.goto('http://localhost:8081/hosts')
 await p.waitFor(`document.body.innerText.includes('已配对')`, 30000)
 await p.shot(`${S}/shots/hosts.png`)

@@ -1,21 +1,22 @@
 import { useState } from 'react'
 import { Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
-import { useC } from '../../src/theme/theme'
-import { Btn, Empty, Field, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
-import { Sheet } from '../../src/ui/Sheet'
-import { Icon } from '../../src/ui/Icon'
-import { useConn } from '../../src/net/conn'
-import { type MobileHost } from '../../src/net/hosts'
-import { useStore } from '../../src/data/store'
+import { goBack } from '../src/nav'
+import { useC } from '../src/theme/theme'
+import { Btn, Empty, Field, IconBtn, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
+import { Sheet } from '../src/ui/Sheet'
+import { Icon } from '../src/ui/Icon'
+import { useConn } from '../src/net/conn'
+import { type MobileHost } from '../src/net/hosts'
+import { useStore } from '../src/data/store'
 // 一句人话的连接状态。★这一份和设置屏共用同一个实现,别在任何一边抄第二遍 —— 见该文件注释。
-import { describeHostState, hostSubtitle } from '../../src/net/hostStatusText'
-import { HostIcon } from '../../src/ui/HostIcon'
-import { HOST_ICONS, currentHostIcon } from '../../src/net/hostIcons'
+import { describeHostState, hostSubtitle } from '../src/net/hostStatusText'
+import { HostIcon } from '../src/ui/HostIcon'
+import { HOST_ICONS, currentHostIcon } from '../src/net/hostIcons'
 // ★web/native 那条确认框分支收在这一个函数里,原地各写一遍的历史(这里 + archiveWs +
 //  confirmDeleteSession)已经收掉了,见它的 JSDoc。
-import { confirmDestructive } from '../../src/ui/confirmDestructive'
-import { ROUTES } from '../../src/nav/routes'
+import { confirmDestructive } from '../src/ui/confirmDestructive'
+import { ROUTES } from '../src/nav/routes'
 
 export default function Hosts() {
   const c = useC()
@@ -51,9 +52,13 @@ export default function Hosts() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      {/* ★2026-08-29:没有 `‹` 了 —— 这一屏现在是底部 tab 的一格,不是被推进来的次级屏。
-          tab 没有「上一层」,留着箭头会变成一颗「点了会跳到别的 tab」的假返回键。 */}
-      <TopBar>
+      {/* ★★2026-09-02:`‹` 回来了 —— 这一屏**又变回次级屏**了(底部第二格让给了「工作区」)。
+          用户原话:「app 里中间的菜单,现在是主机,感觉有点浪费」—— 确实:列表/添加/删除/改名
+          全是配对时用一次、之后再不碰的事,而「现在连着哪台 + 快切」首页顶栏的 HostBanner
+          早就在做了。所以它退回设置里的一行,而那一格给了真正每天要碰的东西。
+          ★这也意味着 2026-08-28「主机不许再出现在设置里」那条作废 —— 当时搬出来是因为
+          设置屏很长、埋太深;现在设置屏只剩五行,埋不住了。 */}
+      <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
         <TopTitle title="主机" sub="同一时间只连一台" />
       </TopBar>
 

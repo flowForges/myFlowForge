@@ -24,7 +24,8 @@ describe('相机只能在确认装得上之后才碰', () => {
   for (const f of [
     'app/scan.tsx',
     'app/add-host.tsx',
-    'app/(tabs)/hosts.tsx',
+    // ★2026-09-02:主机从 `(tabs)/` 挪回了 `app/` 根(底部第二格让给了「工作区」)。
+    'app/hosts.tsx',
     'app/(tabs)/index.tsx',
     'app/chat.tsx',
     'app/_layout.tsx',

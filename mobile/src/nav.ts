@@ -37,6 +37,9 @@ export function goBack(): void {
  * ★★这条路径**单测覆盖不到**,必须真机重走一遍完整的扫码流程(见 Step 13)。
  */
 export function goToHosts(): void {
+  // ★★2026-09-02:`/hosts` **不再是 tab 的一格**了(那一格给了「工作区」),它现在是根栈里的
+  //  一层次级屏。所以先 `dismissAll()` 把扫码那条路上堆起来的层清干净,再 `navigate` ——
+  //  `dismissAll` 那一半的理由没变(见下面),变的只是终点的性质。
   if (router.canDismiss()) router.dismissAll()
   router.navigate(ROUTES.hosts)
 }
