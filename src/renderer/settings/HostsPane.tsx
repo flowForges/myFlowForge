@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { describeHostState, type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
+import { type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
 import { MobileSection } from './MobileSection'
 
@@ -82,39 +82,17 @@ export function HostsPane() {
     finally { setBusy(false); await reload() }
   }
 
-  const desc = status ? describeHostState(status.state) : { text: '读取中…', tone: 'idle' as const }
   const connectedId = status?.hostId ?? null
 
   return (
     <div className="hosts-pane">
-      {/* ★这一屏里装着**方向相反**的两件事,而且两件都叫「连接」:
-          ①「你在哪台机器上干活」(这张卡 + 下面的主机列表)—— 这台电脑**连出去**;
-          ②「谁能连到这台电脑」(手机端那一节)—— 别的设备**连进来**。
-          放一起是因为两者共用同一套概念(地址 / 令牌 / 谁连着谁),分开只会让人两处找。
-          ★但**必须把话说出来**:第一版三节并排、只有「手机端」三个字贴在状态卡屁股底下,
-          用户第一句话就是「本机是灰的,底下这个手机端是什么意思」。 */}
-      <div className="set-group">
-        <h4>你在哪台机器上干活</h4>
-        <div className={`hosts-status ${desc.tone}`}>
-          <span className="dot" />
-          <div className="grow">
-            <div className="who">{status?.label ?? '本机'}</div>
-            <div className="sub">{desc.text}</div>
-          </div>
-          {connectedId && (
-            <button className="set-btn" disabled={busy} onClick={() => run(() => window.forge.hostsDisconnect())}>
-              回到本机
-            </button>
-          )}
-        </div>
-        {/* ★灰着**不是**出问题了。而且手机连进来也不会让它变色 —— 那是反方向的事,
-            说不清楚的话,人会以为手机没连上。 */}
-        <p className="set-desc">
-          灰的就是正常的:你没有切到任何远程主机,看到的会话、工作区、运行都是这台电脑上的。
-          手机连进来<b>不会</b>让这里变色 —— 那是反方向的事,看下面那一节。
-        </p>
-      </div>
-
+      {/* ★★2026-09-02:这里原来有一张「你在哪台机器上干活」的状态卡(本机 / 灰点 / 回到本机),
+          **已删**。用户原话:「特别是顶部的本机,这个有展示的必要么?」——没有。
+          `shell/Titlebar.tsx` 正中已经挂着 `HostSwitcher`,它做的是同一件事而且做得更好:
+          **一直在视野里**(不用打开设置)、点开就是切换菜单、而且**没配过远程主机的人根本看不到它**。
+          设置里再摆一张,是同一件事说第二遍;更糟的是它得配三句话解释「灰的是正常的」
+          「手机连进来不会让它变色」—— 那三句话本身就是这张卡不该在这儿的证据:
+          它在解释一个自己制造的困惑。 */}
       {err && <p className="set-desc" style={{ color: 'var(--err)' }}>{err}</p>}
 
       <div className="set-group">

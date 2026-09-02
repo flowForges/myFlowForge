@@ -159,35 +159,13 @@ export function MobileSection() {
       <div className="set-row">
         <div className="info">
           <div className="t">让手机连进来</div>
-          <div className="d">
-            手机 app 直接连这个 app —— <b>同一份核心</b>,所以手机上答掉的门,这边的卡片当场消失。
-          </div>
+          <div className="d">手机上答掉的门,这边的卡片当场消失 —— 同一份核心。</div>
         </div>
         <button
           className={`toggle${st.running ? ' on' : ''}`}
           aria-label="让手机连进来"
           disabled={busy}
           onClick={() => void apply({ enabled: !st.running, host, port: portNum })}
-        />
-      </div>
-
-      <div className="set-row">
-        <div className="info">
-          <div className="t">局域网可见</div>
-          <div className="d">
-            关掉就只绑回环,手机连不上(留给 SSH 隧道)。开着<b>强制令牌</b> ——
-            这个端口能起 agent、替你答权限门、开终端,等于整台机器的控制权。
-          </div>
-        </div>
-        <button
-          className={`toggle${lan ? ' on' : ''}`}
-          aria-label="局域网可见"
-          disabled={busy}
-          onClick={() => {
-            const next = !lan
-            setLan(next)
-            if (st.running) void apply({ enabled: true, host: next ? '0.0.0.0' : '127.0.0.1', port: portNum })
-          }}
         />
       </div>
 
@@ -208,17 +186,6 @@ export function MobileSection() {
         </div>
       )}
 
-      <div className="proj-field hosts-port">
-        <label htmlFor="mobPort">端口</label>
-        <input
-          id="mobPort"
-          value={port}
-          inputMode="numeric"
-          onChange={(e) => setPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
-          onBlur={() => { if (st.running) void apply({ enabled: true, host, port: portNum }) }}
-        />
-      </div>
-
       {/* ── 中转 ────────────────────────────────────────────────────────────
           ★★和上面那个开关**不是二选一**,所以它就摆在旁边、同一个层级,不藏进"高级"。
            设计文档决策 6 说得很明确:直连(公网 IP / Tailscale / frp / 端口转发)
@@ -228,10 +195,8 @@ export function MobileSection() {
         <div className="info">
           <div className="t">出门也能连(中转)</div>
           <div className="d">
-            不在同一个 wifi 时走一台<b>你自己部署的</b>中转服务器。
-            它是个<b>哑管道</b> —— 整条链路端到端加密,它读不到任何内容,也冒充不了这台电脑。
-            <br />
-            有公网 IP、Tailscale 或者内网穿透的话<b>根本不需要它</b>:直连走同一套加密,还少一跳。
+            不在同一个 wifi 时走中转。端到端加密,它读不到内容。要<b>你自己部署</b>
+            (仓库 <code>relay/</code>)。
           </div>
         </div>
         <button
@@ -242,6 +207,7 @@ export function MobileSection() {
         />
       </div>
 
+      {relay?.enabled && (
       <div className="proj-field">
         <label htmlFor="relayUrl">中转地址</label>
         <div className="hosts-inline">
@@ -258,10 +224,7 @@ export function MobileSection() {
           />
         </div>
       </div>
-      <p className="set-desc">
-        中转要自己部署 —— 代码在仓库的 <code>relay/</code> 里,Docker 一条命令。
-        <b>不提供官方中转</b>:那样所有人的流量都要经过我们,哪怕读不到内容也不该那样。
-      </p>
+      )}
 
       {/* ★起失败 / 在重试都要说出来,而且要说人话。 */}
       {relay?.enabled && relayDetail && relayDetail.status !== 'online' && (
@@ -286,55 +249,6 @@ export function MobileSection() {
 
       {pairable && (
         <div className="hosts-conn">
-          {/* ★★手填用的那两个框只在**局域网网关开着**时摆。
-              纯中转时手填是走不通的:配对码里的公钥(`k`)是整条链路唯一的信任锚点,而它
-              **没有输入框**(见 `mobile/app/add-host.tsx`:公钥和中转地址只读、不给人改)——
-              手打一把 44 字符的 base64 既没人核对得了,错一个字符也只会静默连不上。
-              照旧摆出来的话,人会照着填,然后得到一条**直连**记录、去连一个根本没开的网关。 */}
-          {st.running && (
-          <>
-          <p className="set-desc">在手机上「添加主机」填这两样:</p>
-
-          <div className="proj-field">
-            <label htmlFor="mobAddr">地址</label>
-            <div className="hosts-inline">
-              <input id="mobAddr" readOnly value={addr} onFocus={(e) => e.currentTarget.select()} />
-              <button className="set-btn" onClick={() => copy('addr', addr)}>
-                {copied === 'addr' ? '已复制' : '复制'}
-              </button>
-            </div>
-          </div>
-
-          {st.addresses.length > 1 && (
-            <p className="set-desc">
-              这台机器还有别的地址:{st.addresses.slice(1).map((a) => `${a}:${st.port}`).join('  ')}
-              {' '}—— 用和手机<b>在同一个网段</b>的那个。
-            </p>
-          )}
-
-          {st.token && (
-            <div className="proj-field">
-              <label htmlFor="mobToken">访问令牌</label>
-              <div className="hosts-inline">
-                <input id="mobToken" readOnly type={showToken ? 'text' : 'password'} value={st.token} onFocus={(e) => e.currentTarget.select()} />
-                <button className="set-btn" onClick={() => setShowToken((v) => !v)}>{showToken ? '隐藏' : '显示'}</button>
-                <button className="set-btn" onClick={() => copy('token', st.token)}>
-                  {copied === 'token' ? '已复制' : '复制'}
-                </button>
-              </div>
-            </div>
-          )}
-          </>
-          )}
-
-          {/* 纯中转时,「怎么配对」只有一条路,得说出来 —— 否则人会去找那两个不见了的输入框。 */}
-          {!st.running && (
-            <p className="set-desc">
-              现在只开着中转,所以配对<b>只能扫码</b> —— 码里那把身份公钥没有输入框(手打一把
-              44 个字符的 base64,错一个字符只会静默连不上)。手填出来的记录是<b>直连</b>,
-              会去连一个没开着的网关。
-            </p>
-          )}
 
           <div className="hosts-qr">
             {showQr ? (
@@ -344,13 +258,8 @@ export function MobileSection() {
                 <QrCode text={pairing} alt={`配对二维码 · ${qrAddr}`} />
                 <div className="hosts-qr-say">
                   <p className="set-desc">
-                    用<b>手机自带的相机</b>对着它扫一下(不用先打开 app),点弹出来的横幅 ——
-                    myFlowForge 会打开,地址和令牌都已经填好了。app 里「添加主机 → 扫一扫」也扫这枚。
-                  </p>
-                  {/* ★「上面那把」只有在上面**真的摆着**令牌框时才说得通(纯中转时那个框不在)。 */}
-                  <p className="set-desc">
-                    ★<b>这枚码里带着{st.running && st.token ? '上面那把' : '这台机器的'}令牌</b>,
-                    谁扫到谁就拿到这台机器的控制权。共享屏幕、录屏、发截图之前先把它收起来。
+                    用<b>手机自带的相机</b>扫一下就行(不用先打开 app)。
+                    ★<b>码里带着这台机器的令牌</b> —— 共享屏幕、录屏、发截图之前先收起来。
                   </p>
                   <button className="set-btn" onClick={() => setShowQr(false)}>收起二维码</button>
                 </div>
@@ -360,34 +269,111 @@ export function MobileSection() {
             )}
           </div>
 
-          {/* ★仍然挂在 `st.running` 上,**不是**疏漏:`mobileRegenToken` 换的是这台机器那把
-              共用令牌,而中转那条连接是**起的时候**就把旧令牌捧在手里的(`relayController` 把
-              `ensureToken()` 传给了 `startRelayHost`)—— 换完之后中转那头仍旧认旧的,
-              直到中转重连一次。做成「点了要么没生效、要么把手机踢下线」的按钮不如先不摆。 */}
-          {st.running && st.token && (
-            <div className="hosts-conn-foot">
-              <button className="set-btn danger" disabled={busy} onClick={() => void window.forge.mobileRegenToken().then(setSt)}>
-                换一把令牌
-              </button>
-              <span className="set-desc">令牌泄了就换 —— 换完已配好的手机要重新填一次。</span>
-            </div>
-          )}
-
           {/* ★★这句话按中转开没开分岔。原来只有下面那一句「要在同一个网络里」,而中转开着时
               它是**错的** —— 中转存在的全部意义就是两边不在一个网络里也能连。 */}
           {relayOn ? (
             <p className="set-desc">
-              走中转时手机和电脑<b>可以各在各的网</b> —— 手机用蜂窝网也连得上。
-              {st.running && ' 两边在一个 wifi 里时会走局域网直连(快、少一跳),同一枚码两条路都认。'}
+              走中转时两边<b>可以各在各的网</b>{st.running && ',在一个 wifi 里时自动走局域网直连'}。
             </p>
           ) : (
             <p className="set-desc">
-              手机和这台电脑要在<b>同一个网络</b>里。公司 guest 网基本都开客户端隔离,连不通;
-              最省事的办法是<b>手机开个人热点、这台电脑连手机</b>(那样两边的流量走本地链路,不吃流量)。
+              要在<b>同一个网络</b>里(公司 guest 网多半不通,开个人热点最省事)。出门连走中转。
             </p>
           )}
         </div>
       )}
+
+
+      {/* ── 高级 ──────────────────────────────────────────────────────────
+          ★★2026-09-02 用户原话:「又乱又杂,还有很多文案,都不知道怎么配置了」。
+           这一节原来是**平铺**的:主开关、局域网可见、端口、中转、地址、令牌、二维码、
+           推送……七个开关四个输入框二十多段说明排成一列,而其中真正要**每次**碰的只有两样:
+           打开那个开关、扫那枚码。剩下的全是「配错了或者出问题时才来动」的东西。
+          ★所以它们收进这里,**一个都没删** —— 端口被占、只想绑回环、令牌泄了要换、
+           相机坏了要手填,这些路都还在,只是不再挡在正常人的路上。
+          ★`<details>` 而不是自己写折叠:它自带键盘可达和无障碍语义,而且**默认收起**
+           这件事由浏览器保证,不靠我们的初始 state 写对。 */}
+      <details className="hosts-adv">
+        <summary>高级 —— 端口、绑定、令牌、手填地址</summary>
+
+        <div className="set-row">
+          <div className="info">
+            <div className="t">局域网可见</div>
+            <div className="d">关掉就只绑回环(手机连不上,留给 SSH 隧道)。开着<b>强制令牌</b>。</div>
+          </div>
+          <button
+            className={`toggle${lan ? ' on' : ''}`}
+            aria-label="局域网可见"
+            disabled={busy}
+            onClick={() => {
+              const next = !lan
+              setLan(next)
+              if (st.running) void apply({ enabled: true, host: next ? '0.0.0.0' : '127.0.0.1', port: portNum })
+            }}
+          />
+        </div>
+
+        <div className="proj-field hosts-port">
+          <label htmlFor="mobPort">端口</label>
+          <input
+            id="mobPort"
+            value={port}
+            inputMode="numeric"
+            onChange={(e) => setPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
+            onBlur={() => { if (st.running) void apply({ enabled: true, host, port: portNum }) }}
+          />
+        </div>
+
+        {st.running && (
+        <>
+        <p className="set-desc">在手机上「添加主机」填这两样:</p>
+
+        <div className="proj-field">
+          <label htmlFor="mobAddr">地址</label>
+          <div className="hosts-inline">
+            <input id="mobAddr" readOnly value={addr} onFocus={(e) => e.currentTarget.select()} />
+            <button className="set-btn" onClick={() => copy('addr', addr)}>
+              {copied === 'addr' ? '已复制' : '复制'}
+            </button>
+          </div>
+        </div>
+
+        {st.addresses.length > 1 && (
+          <p className="set-desc">
+            这台机器还有别的地址:{st.addresses.slice(1).map((a) => `${a}:${st.port}`).join('  ')}
+            {' '}—— 用和手机<b>在同一个网段</b>的那个。
+          </p>
+        )}
+
+        {st.token && (
+          <div className="proj-field">
+            <label htmlFor="mobToken">访问令牌</label>
+            <div className="hosts-inline">
+              <input id="mobToken" readOnly type={showToken ? 'text' : 'password'} value={st.token} onFocus={(e) => e.currentTarget.select()} />
+              <button className="set-btn" onClick={() => setShowToken((v) => !v)}>{showToken ? '隐藏' : '显示'}</button>
+              <button className="set-btn" onClick={() => copy('token', st.token)}>
+                {copied === 'token' ? '已复制' : '复制'}
+              </button>
+            </div>
+          </div>
+        )}
+        </>
+        )}
+
+        {/* ★这颗和「局域网可见」放一起:换令牌之后,已经配好的手机全部要重新扫码。 */}
+        {/* ★仍然挂在 `st.running` 上,**不是**疏漏:`mobileRegenToken` 换的是这台机器那把
+            共用令牌,而中转那条连接是**起的时候**就把旧令牌捧在手里的(`relayController` 把
+            `ensureToken()` 传给了 `startRelayHost`)—— 换完之后中转那头仍旧认旧的,
+            直到中转重连一次。做成「点了要么没生效、要么把手机踢下线」的按钮不如先不摆。 */}
+        {st.running && st.token && (
+          <div className="hosts-conn-foot">
+            <button className="set-btn danger" disabled={busy} onClick={() => void window.forge.mobileRegenToken().then(setSt)}>
+              换一把令牌
+            </button>
+            <span className="set-desc">令牌泄了就换 —— 换完已配好的手机要重新填一次。</span>
+          </div>
+        )}
+      </details>
 
       {/* ── 推送 ────────────────────────────────────────────────────────────
           ★★手机端存在的意义有一半在这儿:**你不在电脑前,一道门升起来卡在那儿**。
@@ -403,8 +389,7 @@ export function MobileSection() {
             <div className="info">
               <div className="t">手机不在跟前时推送给它</div>
               <div className="d">
-                门升起来 / 一轮跑完时,这台机器直接推到你手机上。
-                <b>手机 app 开着的时候不推</b> —— 那种情况它自己会弹一条,不会响两遍。
+                门升起来 / 跑完时推到你手机上。<b>app 开着时不推</b>(那时它自己会弹)。
               </div>
             </div>
             <button
@@ -430,7 +415,7 @@ export function MobileSection() {
           <div className="set-row" style={{ opacity: pushCfg.enabled ? 1 : 0.45 }}>
             <div className="info">
               <div className="t">跑完了</div>
-              <div className="d">默认关 —— 半夜被一条「跑完了」吵醒一次,这个功能就会被整个关掉</div>
+              <div className="d">默认关 —— 半夜被吵醒一次,这个功能就会被整个关掉</div>
             </div>
             <button
               className={`toggle${pushCfg.done ? ' on' : ''}`}
@@ -490,27 +475,28 @@ export function MobileSection() {
               {pushMsg && <span className="set-desc">{pushMsg}</span>}
             </div>
 
-            {/* ★★这一句是「远程推送到底能不能用」的诚实交代。
-                Expo 的推送令牌要一个 Expo 项目 + 上传好的 APNs/FCM 凭据,而那要用**你自己的**
-                Expo 账号 —— 我配不了。没配的时候手机端仍然有一半提醒可用(app 开着那一半),
-                所以这里说的是「差哪一步」,不是「不支持」。 */}
+            {/* ★★远程推送到底能不能用,要看**你自己的** Expo/Apple 账号配没配 —— 我配不了。
+                但这几段是「怎么配」而不是「现在什么状况」:状况在上面那条 hosts-live 里,
+                这里收进折叠。★一个字都没删:没配通的时候,这三段就是唯一能照着做的东西。 */}
             <p className="set-desc">
-              ★手机在<b>后台</b>时收到的那条,走的是 Expo 的推送服务,要先
-              <code>npx eas-cli init</code> 建一个 Expo 项目,再
-              <code>npx eas-cli credentials</code> 传一次凭据。
-              <b>安卓只要这两步</b>(传 FCM),和苹果账号无关。
+              app <b>开着</b>时提醒照常有;<b>切走之后</b>要收到,得配一次 Expo 推送凭据。
             </p>
-            <p className="set-desc">
-              ★★<b>iOS 还要一个付费的 Apple Developer Program($99/年)</b> ——
-              Push Notifications 是付费会员才有的能力,免费 Apple ID(描述文件 7 天过期的那种)
-              开不了。齐了之后在 <code>mobile/app.json</code> 的 <code>extra</code> 里加
-              <code>"iosPush": true</code>。
-              ★<b>在这之前不要手动去动 entitlements</b>:没有那个能力却带着
-              <code>aps-environment</code>,Release 包会直接签名失败。
-            </p>
-            <p className="set-desc">
-              这一步之前,手机 app <b>开着</b>的时候提醒照常有,切走之后收不到。
-            </p>
+            <details className="hosts-adv">
+              <summary>怎么配后台推送(要你自己的 Expo / Apple 账号)</summary>
+              <p className="set-desc">
+                ★先 <code>npx eas-cli init</code> 建一个 Expo 项目,再
+                <code>npx eas-cli credentials</code> 传一次凭据。
+                <b>安卓只要这两步</b>(传 FCM),和苹果账号无关。
+              </p>
+              <p className="set-desc">
+                ★★<b>iOS 还要一个付费的 Apple Developer Program($99/年)</b> ——
+                Push Notifications 是付费会员才有的能力,免费 Apple ID(描述文件 7 天过期的那种)
+                开不了。齐了之后在 <code>mobile/app.json</code> 的 <code>extra</code> 里加
+                <code>"iosPush": true</code>。
+                ★<b>在这之前不要手动去动 entitlements</b>:没有那个能力却带着
+                <code>aps-environment</code>,Release 包会直接签名失败。
+              </p>
+            </details>
           </div>
         </>
       )}

@@ -101,3 +101,16 @@
 /* 状态卡和它的说明之间要留一口气 —— 不然「手机端」那个小标题贴在卡屁股底下,
    看起来像卡片的说明文字(用户第一句话问的就是这个)。 */
 .hosts-pane .hosts-status + .set-desc { margin-top: 10px; }
+
+/* 「高级」折叠 —— 手机那一节里那些「配错了才来动」的东西(端口、绑定、令牌、手填地址)。
+   ★默认收起由 <details> 自己保证,不靠 JS 初始 state 写对。
+   ★summary 的三角自己画(list-style:none + ::before),不然 Safari/Chrome 各画一个不一样的。 */
+.hosts-adv { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.hosts-adv > summary {
+  cursor: pointer; list-style: none; user-select: none;
+  color: var(--muted); font-size: 12.5px; padding: 4px 0;
+}
+.hosts-adv > summary::-webkit-details-marker { display: none; }
+.hosts-adv > summary::before { content: '▸ '; color: var(--faint); }
+.hosts-adv[open] > summary::before { content: '▾ '; }
+.hosts-adv[open] > summary { margin-bottom: 6px; }
