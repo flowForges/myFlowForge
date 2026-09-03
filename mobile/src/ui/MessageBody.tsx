@@ -7,7 +7,7 @@ import { splitHtmlChunks, type Chunk } from './htmlChunks'
 import { splitCodeChunks, type CodeChunk } from './codeChunks'
 import { HIGHLIGHT_MAX, highlightBlock } from '@shared/highlight'
 import { synStyle } from './synStyle'
-import { parseHtmlSubset } from './htmlParse'
+import { htmlFallbackNote, parseHtmlSubset } from './htmlParse'
 import { parseMarkdown } from './mdParse'
 import { HtmlRender } from './HtmlRender'
 
@@ -45,7 +45,7 @@ function describe(html: string): string {
 function HtmlBlock({ html }: { html: string }) {
   const parsed = useMemo(() => parseHtmlSubset(html), [html])
   if (parsed.ok) return <HtmlRender nodes={parsed.nodes} />
-  return <HtmlFallback html={html} />
+  return <HtmlFallback html={html} note={htmlFallbackNote(parsed.reason)} />
 }
 
 /**
@@ -59,8 +59,13 @@ function MdBlock({ text }: { text: string }) {
   return <HtmlRender nodes={nodes} />
 }
 
-/** 画不了时的折叠占位 —— 手机端一期就是这个,原样留着,它是「诚实」那一半。 */
-function HtmlFallback({ html }: { html: string }) {
+/**
+ * 画不了时的折叠占位 —— 手机端一期就是这个,原样留着,它是「诚实」那一半。
+ *
+ * ★`note` 是**那一关的名字**,不再是一句笼统的「手机端不渲染」。后者在流式吐字的时候
+ *  是**假话**(片段只是还没闭合),用户为此报过一次「看的时候不渲染,退出重进又有了」。
+ */
+function HtmlFallback({ html, note }: { html: string; note: string }) {
   const c = useC()
   const [open, setOpen] = useState(false)
   return (
@@ -70,7 +75,7 @@ function HtmlFallback({ html }: { html: string }) {
           {open ? '▾ ' : '▸ '}
           {describe(html)}
         </T>
-        <T style={{ fontSize: 11, color: c.faint, marginLeft: 'auto' }}>手机端不渲染</T>
+        <T style={{ fontSize: 11, color: c.faint, marginLeft: 'auto' }}>{note}</T>
       </Pressable>
       {open ? (
         <T style={{ fontFamily: MONO, fontSize: 11, lineHeight: 17, color: c.fg2, padding: 10, paddingTop: 0 }}>

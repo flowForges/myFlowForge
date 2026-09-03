@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { splitHtmlChunks } from './htmlChunks'
+import { splitHtmlChunks, BLOCK_OPEN_TAGS } from './htmlChunks'
+import { parseHtmlSubset } from './htmlParse'
 
 const kinds = (s: string) => splitHtmlChunks(s).map((c) => c.kind).join(',')
 
@@ -58,5 +59,36 @@ describe('splitHtmlChunks', () => {
 
   it('空字符串不炸', () => {
     expect(splitHtmlChunks('')).toEqual([])
+  })
+})
+
+describe('切块和解析必须对得上', () => {
+  /**
+   * ★★这条断言存在的理由,是一个真实烂了很久的 bug。
+   *
+   * `BLOCK_OPEN`(这个文件)决定「哪一行开始算一段 HTML 片段」,`htmlParse.ts` 的白名单决定
+   * 「这段片段画不画得出来」。两份名单各写各的、谁也没钉住谁 —— 于是
+   * `section` / `figure` / `details` / `dl` 在这儿是片段起点,在那儿一个都不认:
+   * **每次都被切出来、每次都画不了、每次都折成「手机端不渲染」**。用户的原话是
+   * 「很多内容看不到」,根因就是这个。
+   *
+   * 所以这里不比名单(比名单还是两份东西),而是**逐个跑一遍真的解析**。
+   */
+  it('BLOCK_OPEN 里的每个标签,切出来之后都画得动', () => {
+    for (const tag of BLOCK_OPEN_TAGS) {
+      if (tag === 'svg') continue      // 见下面单独那条
+      const src = `<${tag}>能看见的字</${tag}>`
+      const chunks = splitHtmlChunks(src)
+      expect(chunks, tag).toEqual([{ kind: 'html', text: src }])
+      const parsed = parseHtmlSubset(src)
+      expect(parsed.ok, `${tag} 被切成 HTML 片段,却画不出来 ⇒ 必然折成「手机端不渲染」`).toBe(true)
+    }
+  })
+
+  it('svg 是**有意**画不出来的那一个 —— 折叠占位会诚实地说「图形」', () => {
+    // 矢量图我们确实画不了(整棵丢掉,理由见 htmlParse 的 DROP_SUBTREE)。
+    // 它留在 BLOCK_OPEN 里是为了让它走折叠占位那条路,而不是把一堆 path 数据当正文吐出来。
+    expect(splitHtmlChunks('<svg><circle/></svg>')).toEqual([{ kind: 'html', text: '<svg><circle/></svg>' }])
+    expect(parseHtmlSubset('<svg><circle/></svg>').ok).toBe(false)
   })
 })

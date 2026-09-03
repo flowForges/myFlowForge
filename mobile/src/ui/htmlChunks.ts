@@ -7,8 +7,21 @@
 /** 一段正文切成「普通文字」和「HTML 片段」两种块。 */
 export type Chunk = { kind: 'text'; text: string } | { kind: 'html'; text: string }
 
-/** 顶层块级标签开头 = 一段片段的起点。行内标签(b/i/code…)不算,那些混在文字里很正常。 */
-const BLOCK_OPEN = /^[ \t]{0,3}<(div|table|section|ul|ol|figure|details|svg|dl|blockquote)\b/i
+/**
+ * 顶层块级标签开头 = 一段片段的起点。行内标签(b/i/code…)不算,那些混在文字里很正常。
+ *
+ * ★★这份名单和 `htmlParse.ts` 画得出来的东西**必须对得上**,`htmlChunks.test.ts` 里有一条
+ *  断言逐个跑一遍。2026-09-03 之前它俩是打架的:`section` / `figure` / `details` / `dl`
+ *  在这儿是「片段起点」,而解析那边白名单里一个都没有 ⇒ 这四种**每次都被折起来**,
+ *  100% 触发「手机端不渲染」。两处各写一份名单、谁都没钉住对方,就是这么烂掉的。
+ *
+ * ★`svg` 留着是**有意的**:它在解析那边是「整棵丢掉」,于是一段纯 svg 会解析成空 ⇒ 退回折叠
+ *  占位,标题写着「图形 · N 行 HTML」。那句话是诚实的 —— 我们确实画不了矢量图。
+ * ★`p` / `h1..h6` / `pre` 是 2026-09-03 补的:代理经常直接从 `<p>` 或 `<h2>` 起手,
+ *  而这些行原来会掉进 markdown 那条路、把标签原样显示成文字。
+ */
+const BLOCK_OPEN =
+  /^[ \t]{0,3}<(div|table|section|article|ul|ol|figure|details|dl|blockquote|p|pre|h[1-6]|html|main|header|footer|aside|nav|svg)\b/i
 
 /**
  * 把正文切块。
@@ -16,6 +29,12 @@ const BLOCK_OPEN = /^[ \t]{0,3}<(div|table|section|ul|ol|figure|details|svg|dl|b
  * 判定刻意**保守**:必须是「某一行以块级开标签起头」才开始吃,而且一路吃到标签配平为止。
  * 宁可漏折(顶多还是现在这样),也不能把一段正常的回答误判成 HTML 折起来 —— 那是把内容藏起来。
  */
+/** 只给测试用:把上面那条正则里的标签名摊出来,好逐个验「切出来的块解析器画得动」。 */
+export const BLOCK_OPEN_TAGS: readonly string[] = [
+  'div', 'table', 'section', 'article', 'ul', 'ol', 'figure', 'details', 'dl', 'blockquote',
+  'p', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'html', 'main', 'header', 'footer', 'aside', 'nav', 'svg',
+]
+
 export function splitHtmlChunks(src: string): Chunk[] {
   const lines = src.split('\n')
   const out: Chunk[] = []

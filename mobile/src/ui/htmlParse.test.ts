@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { HTML_MAX_DEPTH, HTML_MAX_LEN, decodeEntities, parseHtmlSubset, type HNode } from './htmlParse'
+import { HTML_MAX_DEPTH, HTML_MAX_LEN, decodeEntities, htmlFallbackNote, parseHtmlSubset, type HNode } from './htmlParse'
 
 /**
  * 这份测试守的是**两件事**,它们方向相反、都必须成立:
@@ -70,7 +70,11 @@ describe('parseHtmlSubset · 能画的', () => {
     const a = (n[0] as Extract<HNode, { t: 'el' }>).kids[0] as Extract<HNode, { t: 'el' }>
     expect(a.tag).toBe('a')
     expect(a.href).toBe('https://example.com/x')
-    expect(reason('<a href="/local">x</a>')).toBe('unsafe-href')
+    // ★相对地址 / 站内锚点:**降级成普通文字**,不再整段退回。链接点不开是装饰层面的损失,
+    //  整段退回是一个字都不给。★但树里不许留下 `a` 节点 —— 画一个点不开的链接是骗人。
+    const rel = ok('<a href="/local">x</a>')
+    expect(flat(rel)).toBe('x')
+    expect(tags(rel)).not.toContain('a')
   })
 
   it('br / hr 是自闭合,不入栈', () => {
@@ -204,8 +208,14 @@ describe('parseHtmlSubset · 装饰属性:丢掉,接着画', () => {
     expect(JSON.stringify(n)).not.toContain('bad')
   })
 
-  it('★on* 在**未知标签**上仍然整段退回 —— 拦它的是标签那一关', () => {
-    expect(reason('<img src="x" onerror="steal()">')).toBe('unknown-tag:img')
+  it('★★`<img onerror=…>` 整个消失 —— 树里既没有 img 也没有那串 onerror', () => {
+    // img 在 DROP_SUBTREE 里(远程 src = 追踪信标 + 出口 IP 泄露),所以连同属性一起没了。
+    // ★这条不是「过滤掉了」:输出树里**没有任何字段**能承载 src 或事件处理器,构造不出来。
+    const n = ok('<p>前<img src="x" onerror="steal()">后</p>')
+    expect(tags(n)).not.toContain('img')
+    expect(JSON.stringify(n)).not.toContain('onerror')
+    expect(JSON.stringify(n)).not.toContain('steal')
+    expect(flat(n)).toBe('前后')            // 正文一个字没丢
   })
 })
 
@@ -261,16 +271,35 @@ describe('parseHtmlSubset · 纯 CSS 画出来的东西', () => {
 })
 
 describe('parseHtmlSubset · 必须整段退回的', () => {
-  it('★★<script> 永远进不了输出树', () => {
-    expect(reason('<div><script>alert(1)</script></div>')).toBe('unknown-tag:script')
-    expect(reason('<script src="https://evil/x.js"></script>')).toBe('unknown-tag:script')
-    // 大小写混写也一样
-    expect(reason('<div><ScRiPt>x</ScRiPt></div>')).toBe('unknown-tag:script')
+  it('★★<script> 整棵子树丢掉 —— 内容一个字都不许漏进输出树', () => {
+    // ★策略 2026-09-03 变了:原来是整段退回,现在是**整棵子树丢掉、其余照画**。
+    //  安全性没有变松,反而更紧:以前只是「这一段不画」,现在是「脚本内容根本不进树」。
+    const n = ok('<div><p>正文</p><script>alert(1)</script></div>')
+    expect(flat(n)).toBe('正文')
+    expect(JSON.stringify(n)).not.toContain('alert')
+    expect(tags(n)).not.toContain('script')
+
+    // 大小写混写、以及带 src 的外链脚本,都一样
+    expect(flat(ok('<div>a<ScRiPt>steal()</ScRiPt>b</div>'))).toBe('ab')
+    expect(JSON.stringify(ok('<div>x<script src="https://evil/x.js"></script></div>'))).not.toContain('evil')
+
+    // ★★脚本里带 HTML 字符串:必须按**字面**跳过。当成 HTML 解析的话,那个 `<div>`
+    //  会入栈且永不闭合 ⇒ 整段 unclosed-tag 退回(而正文其实是好的)。
+    const tricky = ok('<div><p>正文</p><script>var s = "<div>" + x;</script></div>')
+    expect(flat(tricky)).toBe('正文')
   })
 
-  it('★javascript: / data: 的 href 退回', () => {
-    expect(reason('<a href="javascript:alert(1)">x</a>')).toBe('unsafe-href')
-    expect(reason('<a href="data:text/html,<b>x">y</a>')).toBe('unsafe-href')
+  it('★★javascript: / data: 的链接降级成文字 —— href 绝不进树', () => {
+    // 降级不是放松:危险的 href **仍然一个字都进不了输出树**,只是不再连累整段。
+    const js = ok('<p><a href="javascript:alert(1)">点我</a></p>')
+    expect(flat(js)).toBe('点我')
+    expect(tags(js)).not.toContain('a')
+    expect(JSON.stringify(js)).not.toContain('javascript')
+    expect(JSON.stringify(js)).not.toContain('alert')
+
+    const data = ok('<p><a href="data:text/html,x">y</a></p>')
+    expect(tags(data)).not.toContain('a')
+    expect(JSON.stringify(data)).not.toContain('data:')
   })
 
   it('★名单外的**非装饰**属性仍然退回 —— 那个标签在这段里干嘛我们读不懂', () => {
@@ -278,12 +307,59 @@ describe('parseHtmlSubset · 必须整段退回的', () => {
     expect(reason('<p colspan="2">y</p>')).toBe('attr:p.colspan')
   })
 
-  it('未知标签退回(这一关没松,松的只有属性)', () => {
-    expect(reason('<iframe src="https://x"></iframe>')).toBe('unknown-tag:iframe')
-    expect(reason('<svg><circle/></svg>')).toBe('unknown-tag:svg')
-    expect(reason('<div><img src="https://tracker/p.gif"></div>')).toBe('unknown-tag:img')
-    expect(reason('<form><input></form>')).toBe('unknown-tag:form')
-    expect(reason('<style>body{}</style>')).toBe('unknown-tag:style')
+  it('★危险标签整棵丢掉,而不是把整段拖下水', () => {
+    // iframe / form / input / style / svg 全在 DROP_SUBTREE 里:它们的内容是代码或元数据,
+    // 不是给人读的正文。★丢的是它们自己,周围的正文照画。
+    for (const [src, gone] of [
+      ['<p>甲<iframe src="https://x"></iframe>乙</p>', 'iframe'],
+      ['<p>甲<form><input></form>乙</p>', 'form'],
+      ['<p>甲<style>body{color:red}</style>乙</p>', 'style'],
+      ['<p>甲<svg><circle/></svg>乙</p>', 'svg'],
+      ['<p>甲<img src="https://tracker/p.gif">乙</p>', 'img'],
+    ] as const) {
+      const n = ok(src)
+      expect(flat(n), src).toBe('甲乙')
+      expect(tags(n), src).not.toContain(gone)
+    }
+    // ★★丢的是**整棵子树**,不是「拆掉外壳留下孩子」。表单/选择器里那些文字是界面零件,
+    //  不是正文 —— 漏进正文里就是一堆没有上下文的碎词。(这条同时钉住 drop ≠ skip。)
+    expect(flat(ok('<p>甲<form>提交表单<input></form>乙</p>'))).toBe('甲乙')
+    expect(flat(ok('<p>甲<select><option>选项一</option></select>乙</p>'))).toBe('甲乙')
+    expect(flat(ok('<p>甲<iframe>浏览器不支持</iframe>乙</p>'))).toBe('甲乙')
+
+    // 整段只有一个危险标签 ⇒ 一个字都渲染不出来 ⇒ 照旧退回(这条没松)
+    expect(reason('<svg><circle/></svg>')).toBe('empty')
+    expect(JSON.stringify(ok('<p>x<img src="https://tracker/p.gif"></p>'))).not.toContain('tracker')
+  })
+
+  it('★★未知的**容器**标签:拆掉外壳,内容一个字不丢', () => {
+    // 这是这次改动的核心。代理写的 HTML 里 <section>/<figure>/<article>/<custom-card>
+    // 随处可见,原来一个没见过的外壳就能让整段内容消失。
+    for (const src of [
+      '<section><p>内容</p></section>',
+      '<article><p>内容</p></article>',
+      '<figure><p>内容</p></figure>',
+      '<my-card><p>内容</p></my-card>',
+      '<div><wrapper><span>内</span><span>容</span></wrapper></div>',
+    ]) {
+      expect(flat(ok(src)), src).toBe('内容')
+    }
+    // 一整份 HTML 文档也画得出来 —— 代理很爱吐这个
+    const doc = ok('<!DOCTYPE html><html><head><title>T</title></head><body><p>正文</p></body></html>')
+    expect(flat(doc)).toBe('正文')
+    expect(JSON.stringify(doc)).not.toContain('T')      // <title> 是元数据,整棵丢掉
+  })
+
+  it('★块边界的标签映射到块级,不会挤成一行', () => {
+    // <dt>/<dd>/<summary> 自己就是那个块边界 —— 一律拆掉的话「术语」和「解释」会连成一片。
+    const dl = ok('<dl><dt>术语</dt><dd>解释</dd></dl>')
+    expect(flat(dl)).toBe('术语解释')
+    const t = tags(dl)
+    expect(t).toContain('h5')     // dt
+    expect(t).toContain('p')      // dd
+    const det = ok('<details><summary>标题</summary><p>正文</p></details>')
+    expect(tags(det)).toContain('h4')
+    expect(flat(det)).toBe('标题正文')
   })
 
   it('★没闭合的标签退回(流式吐到一半的片段就是这样)', () => {
@@ -300,8 +376,11 @@ describe('parseHtmlSubset · 必须整段退回的', () => {
     expect(reason('<p>a<!-- 没写完')).toBe('unclosed-comment')
   })
 
-  it('doctype / 处理指令退回(那不是「一小段片段」)', () => {
-    expect(reason('<!DOCTYPE html><p>x</p>')).toBe('unsupported-directive')
+  it('★doctype / 处理指令跳过就行,别为了开头一行把整段折起来', () => {
+    expect(flat(ok('<!DOCTYPE html><p>x</p>'))).toBe('x')
+    expect(flat(ok('<?xml version="1.0"?><p>x</p>'))).toBe('x')
+    // 但没闭合的指令仍然退回 —— 后面到底是指令还是正文说不准
+    expect(reason('<p>x</p><!DOCTYPE html')).toBe('unclosed-directive')
   })
 
   it(`★嵌套超过 ${HTML_MAX_DEPTH} 层退回`, () => {
@@ -310,8 +389,14 @@ describe('parseHtmlSubset · 必须整段退回的', () => {
     expect(reason(deep(HTML_MAX_DEPTH + 1))).toBe('too-deep')
     // ★★上面两行**只用常量表达**,所以把常量本身改成 100 它们照样全绿(变异测试当场抓到的假绿)。
     //  两条闸都必须再钉一个**写死的数**:一个是常量的值,一个是这个值下的真实行为。
-    expect(HTML_MAX_DEPTH).toBe(8)
-    expect(reason(deep(20))).toBe('too-deep')
+    // ★2026-09-03 从 8 提到 24(和电脑端同一个数)。8 拦掉的是**正常表格**:
+    //  table→tbody→tr→td→p→strong 已经 6 层,外面再包一层卡片就整段退回。
+    expect(HTML_MAX_DEPTH).toBe(24)
+    expect(reason(deep(40))).toBe('too-deep')
+    // 一个包在卡片里的表格必须画得出来 —— 这是「8 太紧」的真实形状
+    expect(parseHtmlSubset(
+      '<div><div><table><tbody><tr><td><p><strong>x</strong></p></td></tr></tbody></table></div></div>',
+    ).ok).toBe(true)
   })
 
   it('★整段太长退回 —— 几十 KB 的表格在手机上就是几秒白屏', () => {
@@ -326,12 +411,51 @@ describe('parseHtmlSubset · 必须整段退回的', () => {
     expect(reason('<table><tr><td colspan="999">x</td></tr></table>')).toBe('span:colspan')
   })
 
-  it('<a> 没有 href 退回(我们不该画一个点不开的链接)', () => {
-    expect(reason('<p><a>x</a></p>')).toBe('a-without-href')
+  it('<a> 没有 href:降级成文字 —— 不画点不开的链接,也不吞掉那几个字', () => {
+    const n = ok('<p><a>x</a></p>')
+    expect(flat(n)).toBe('x')
+    expect(tags(n)).not.toContain('a')
   })
 
   it('空片段退回', () => {
     expect(reason('')).toBe('empty')
     expect(reason('   \n  ')).toBe('empty')
+  })
+})
+
+describe('折叠占位那句话', () => {
+  /**
+   * ★★这条是为用户报的一个「诡异」现象加的:看的时候写着「手机端不渲染」,退出重进就画出来了。
+   *  根因是代理还在流式吐字、标签没闭合,而那一刻占位条却说「手机端不渲染」—— **那是句假话**。
+   */
+  it('流式吐到一半:说「正在输出」,不许说画不了', () => {
+    for (const half of ['<div><p>写了一半', '<table><tr><td>还在吐', '<p>x</p><!-- 注释没写完']) {
+      const r = parseHtmlSubset(half)
+      expect(r.ok, half).toBe(false)
+      if (r.ok) continue
+      expect(htmlFallbackNote(r.reason), half).toBe('正在输出…')
+    }
+  })
+
+  it('真画不了的,说清是哪一种', () => {
+    const note = (src: string) => {
+      const r = parseHtmlSubset(src)
+      if (r.ok) throw new Error(`本该退回:${src}`)
+      return htmlFallbackNote(r.reason)
+    }
+    // 纯 CSS 柱状图:意思全在样式里,丢了样式就是一叠看不见的空 View
+    expect(note('<div><div style="width:80%"></div><div style="width:40%"></div></div>')).toBe('这段是用样式画的')
+    // 矢量图:整棵丢掉之后一个字都不剩
+    expect(note('<svg><circle/></svg>')).toBe('这段没有文字')
+    expect(note('<p>' + 'x'.repeat(HTML_MAX_LEN) + '</p>')).toBe('太长了')
+    expect(note('<div>'.repeat(40) + 'x' + '</div>'.repeat(40))).toBe('嵌套太深')
+    // 结构真的坏了(闭标签对不上)
+    expect(note('<div><p>x</div></p>')).toBe('结构读不懂')
+  })
+
+  it('★这句话每一种都不是「手机端不渲染」—— 那句话现在一个字都不该再出现', () => {
+    for (const r of ['unclosed-tag', 'css-only', 'no-text', 'empty', 'too-long', 'too-deep', 'mismatched-close', '什么怪东西']) {
+      expect(htmlFallbackNote(r)).not.toContain('不渲染')
+    }
   })
 })

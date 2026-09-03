@@ -122,6 +122,19 @@ function rowsOf(table: El): El[] {
   return out
 }
 
+/**
+ * `<table>` 底下**不是行**的那些孩子(表格标题 `<caption>` 最常见,解析那边把它映射成 `<p>`)。
+ *
+ * ★没有这一段的话它们会被 `rowsOf` 默默滤掉 —— 表格照常画出来,标题**无声无息地没了**。
+ *  这个渲染器整套设计就是冲着「不许悄悄丢内容」去的(画不忠实宁可整段退回),
+ *  在这儿留一个静默丢弃的口子等于自己拆自己的台。
+ */
+function strayOf(table: El): El[] {
+  return table.kids.filter(
+    (k): k is El => k.t === 'el' && k.tag !== 'tr' && k.tag !== 'thead' && k.tag !== 'tbody',
+  )
+}
+
 function renderBlock(n: El, c: Palette, key: string): ReactNode {
   switch (n.tag) {
     case 'hr':
@@ -189,8 +202,10 @@ function renderBlock(n: El, c: Palette, key: string): ReactNode {
     }
     case 'table': {
       const rows = rowsOf(n)
-      return (
-        <View key={key} style={[st.table, { borderColor: c.border }]}>
+      const stray = strayOf(n)
+      // 表格标题这类「不是行」的孩子画在表格**上面** —— 它本来就在那个位置。
+      const grid = (
+        <View key={`${key}-grid`} style={[st.table, { borderColor: c.border }]}>
           {rows.map((r, ri) => {
             const cells = r.kids.filter((k): k is El => k.t === 'el' && (k.tag === 'th' || k.tag === 'td'))
             const head = cells.some((x) => x.tag === 'th')
@@ -212,6 +227,8 @@ function renderBlock(n: El, c: Palette, key: string): ReactNode {
           })}
         </View>
       )
+      if (!stray.length) return grid
+      return <View key={key}>{[...stray.map((sn, si) => renderBlock(sn, c, `${key}-s${si}`)), grid]}</View>
     }
     // div / li(直接出现在顶层时):纯容器,只管把里面的流排下去。
     default:
