@@ -46,6 +46,14 @@ export const HAPTIC_EVENTS = [
   'longPress',
   /** 切 tab */
   'switchTab',
+  /**
+   * 下拉刷新**拉到位、松手触发**的那一下。
+   *
+   * ★和 `swipeOpen` 是同一类事(手势越过阈值),所以强度也一样,不是又开了一档。
+   * ★用户原话:「点击底部菜单有震动反馈,那首页的下拉刷新为啥没有反馈?」——
+   *  这条规则本来就是「手势到位要震」,漏的是接线,不是判断。
+   */
+  'pullRefresh',
   /** 门被答掉 / 一轮跑完 */
   'done',
   /** 破坏性动作确认之后真的执行了 */
@@ -62,6 +70,8 @@ export type HapticKind = 'light' | 'medium' | 'selection' | 'success' | 'warning
 export function hapticKindFor(ev: HapticEvent): HapticKind {
   switch (ev) {
     case 'swipeOpen':
+    // 下拉刷新和左滑到位是同一类:手势越过阈值,轻轻一下确认「收到了」。
+    case 'pullRefresh':
       return 'light'
     case 'longPress':
       return 'medium'
