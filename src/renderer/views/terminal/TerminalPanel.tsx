@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { useTerminals } from '../../state/useTerminals'
-import { useHost } from '../../state/useHostKey'
+import { useHost, useHostReadySeq } from '../../state/useHostKey'
 import { XtermView } from './XtermView'
 import './terminal.css'
 
@@ -20,7 +20,9 @@ export function TerminalPanel({ open, dual, focused, onHandleDown, workspaceCwd,
   onRequestClose: () => void
 }) {
   const { key: hostKey, label: hostLabel } = useHost()
-  const term = useTerminals(() => workspaceCwd)
+  // ★`seq` 一起传进去:断线重连之后 host 上那些 pty 已经被收掉了,标签页要跟着变成「已退出」。
+  const readySeq = useHostReadySeq()
+  const term = useTerminals(() => workspaceCwd, { key: hostKey, seq: readySeq })
 
   // When the panel is opened, target the CURRENT workspace: focus its existing tab or spawn one
   // rooted there. Fires on the open edge (not on every workspace switch) so a terminal in workspace
@@ -39,13 +41,12 @@ export function TerminalPanel({ open, dual, focused, onHandleDown, workspaceCwd,
       {onHandleDown && <div className="panel-resizer" data-resize-panel="term" onPointerDown={onHandleDown} role="separator" aria-orientation="horizontal" title="拖动调整高度" />}
       <div className="term-head">
         <span className="tt">{ICON_TERM}终端</span>
-        {/* ★连着远程主机时,这里开的仍然是**本机**的终端(term:* 注册在 Electron 外壳里,
-            没有跟着 host 走)。远程终端要先解决限速和 node-pty 在目标 Linux 上能不能编,
-            见第二期 D 的说明。在那之前,界面必须说清楚 —— 让人对着一个自以为是服务器的
-            终端敲 `rm -rf`,后果不是「功能缺失」而是事故。 */}
+        {/* ★终端现在**跟着 host 走**(term:* 进了方法表):连哪台,开的就是哪台的 shell。
+            这枚芯片因此从警告变成了标识 —— 但它一个字都不能省:一个看起来一模一样的黑框里
+            敲 `rm -rf`,「这是哪台机器」是屏幕上唯一能回答这个问题的东西。 */}
         {hostKey !== 'local' && (
-          <span className="term-localtag" title={`你正在看「${hostLabel}」,但这个终端是本机的 —— 远程终端尚未支持`}>
-            本机 · 非「{hostLabel}」
+          <span className="term-localtag" title={`这个终端跑在「${hostLabel}」上,不是本机`}>
+            {hostLabel}
           </span>
         )}
         <div className="term-tabs">
@@ -68,8 +69,10 @@ export function TerminalPanel({ open, dual, focused, onHandleDown, workspaceCwd,
           <button className="lg-btn" title="关闭 (⌃`)" onClick={onRequestClose}>{ICON_CLOSE}</button>
         </div>
       </div>
+      {/* ★遍历的是 allTabs 而不是 tabs:切到别的主机时,那台的 xterm 实例必须**留着**(只是不显示)。
+          卸载 = term.dispose() = 回滚缓冲全没,切回来是一块空屏。 */}
       <div className="term-body">
-        {term.tabs.map(t => (
+        {term.allTabs.map(t => (
           <XtermView key={t.id} termId={t.id} active={t.id === term.activeId} font={font} />
         ))}
         {active?.error && (

@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { hostname, networkInterfaces } from 'node:os'
 import { registerIpc } from '../ipc/handlers'
+import { createTerminalService } from '../terminal/terminalService'
 import { createBroadcastHub } from '../ipc/broadcastHub'
 import { daemonTable } from '../ipc/channelRouting'
 import { createHeadlessHost } from '../host/headlessHost'
@@ -78,7 +79,11 @@ export async function startDaemon(
 
   const hub = createBroadcastHub()
   const caps = createHeadlessHost({ version, onLog: log })
-  const full = registerIpc(hub.broadcast, buildProviderRegistry(), caps)
+  // 终端。★无头机器上这才是它真正的用武之地:你在 mac 上用 app 连过来,开的是**这台**的 shell。
+  //  拿着句柄是为了退出时把 pty 收干净 —— 客户端断线那一路由 `InvokeCtx.onClose` 管,
+  //  而 daemon 自己被 systemd 停掉时没人替它收。
+  const term = createTerminalService()
+  const full = registerIpc(hub.broadcast, buildProviderRegistry(), caps, undefined, term)
   const table = daemonTable(full)
 
   const gw = await startGateway({
@@ -124,6 +129,7 @@ export async function startDaemon(
     async close() {
       await relay?.close()
       await gw.close()
+      term.killAll()
     },
   }
 }

@@ -25,10 +25,14 @@
 
 /* 「这个终端是本机的,不是你正在看的那台机器的」。只在连着远程主机时出现 —— 本机状态下
    界面与以前完全一致。让人对着一个自以为是服务器的终端敲命令,后果不是功能缺失而是事故。 */
+/* 「这个终端跑在哪台机器上」。★以前它是琥珀色的**警告**(那时终端连着远程也只会开本机的
+   shell,必须提醒);现在终端跟着 host 走了,它降级成一枚**标识**,所以配色改成和侧栏那枚
+   `.sb-host` 一致 —— 同一件事(你现在在看哪台机器)在界面上不该有两种长相。
+   ★不能删:两个黑框长得一模一样,这是屏幕上唯一能回答「我这行 `rm -rf` 敲在哪」的东西。 */
 .term-localtag {
-  margin-left: 8px; padding: 1px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 500; letter-spacing: .01em;
-  color: oklch(72% .13 60); border: 1px solid color-mix(in oklch, oklch(72% .13 60) 45%, transparent);
-  background: color-mix(in oklch, oklch(72% .13 60) 12%, transparent);
+  margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 550; color: var(--fg-2);
+  border: 1px solid var(--border); background: var(--surface);
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; flex: 0 0 auto;
 }

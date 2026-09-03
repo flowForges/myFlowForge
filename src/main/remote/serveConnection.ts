@@ -39,6 +39,9 @@ export type ServeOpts = {
   onLog?: (msg: string) => void
 }
 
+/** 连接序号。只要求「同一个进程里不重复」,所以一个自增数就够,不必上 UUID。 */
+let connSeq = 0
+
 /** 定长时间比较,避免用「第几个字符开始不一样」把 token 一个字符一个字符试出来。 */
 export function tokenMatches(expected: string, got: string): boolean {
   const a = Buffer.from(expected, 'utf8')
@@ -60,6 +63,11 @@ export function serveConnection(ch: Channel, opts: ServeOpts): void {
   let authed = !opts.token
   let offSink: (() => void) | null = null
   let clientLabel = '远程客户端'   // 对方没自报名字时的兜底
+  // ★**每条连接一个 id**,不是所有远程共用一个 `'remote'`。终端拿它认「这个 pty 归谁」——
+  //  共用一个 id 的话,手机断线会把电脑上开着的那个终端一起收掉。
+  const clientId = `remote-${++connSeq}`
+  // 这条连接断掉时要跑的清理。方法自己经 `ctx.onClose` 登记(目前只有终端用得着)。
+  const closers: (() => void)[] = []
 
   const send = (o: unknown) => {
     // 对面随时可能断。写失败只该丢这一条,不该炸掉整个网关。
@@ -113,7 +121,8 @@ export function serveConnection(ch: Channel, opts: ServeOpts): void {
     }
     const ctx: InvokeCtx = {
       emit: (c, payload) => send({ t: 'evt', ch: c, payload }),
-      client: { id: 'remote', label: clientLabel },
+      client: { id: clientId, label: clientLabel },
+      onClose: (cb) => { closers.push(cb) },
     }
     // 同步抛和异步 reject 都要接住,而且都必须变成一条 res —— 少回一条 res,
     // 对面那个 promise 就永远不 settle。
@@ -126,5 +135,7 @@ export function serveConnection(ch: Channel, opts: ServeOpts): void {
   ch.onClose(() => {
     if (authTimer) clearTimeout(authTimer)
     offSink?.()
+    // 一个清理抛异常不该让后面的都不跑 —— 它们各自握着的资源是不相干的。
+    for (const cb of closers.splice(0)) { try { cb() } catch { /* 清理失败就算了,别连累其余 */ } }
   })
 }

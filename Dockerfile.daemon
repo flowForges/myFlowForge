@@ -21,12 +21,15 @@
 #   · daemon 起得来,报出 145 个方法(= 192 - 45 跟设备走 - 2 无头做不了),协议全通
 #   · handler 真的执行:workspaces:list / agents:detect / config:get-host-settings 都回了真数据
 #   · ★★**node-pty 在 Linux 上编得过而且能用** —— 这是设计文档单独标出来的待验项。
-#     验法(不是靠协议探针,`term:*` 根本不在 daemon 的方法表里):
-#       docker exec d node -e "const p=require('node-pty').spawn('/bin/sh',['-c','echo OK'],{cols:80,rows:24});p.onData(d=>process.stdout.write(d))"
-#     实测输出 `OK`,退出码 0。
-#   · ★查明的另一件事:**无头 daemon 没有终端**。`term:*` 是 index.ts 里直接 ipcMain.handle
-#     注册的,没进方法表 —— 所以「手机端终端」那个 P1 目前在 daemon 这条路上是不通的,
-#     不是坏了,是压根没接。
+#
+# 2026-09-03 复验(同一镜像,149 个方法):
+#   · ★★**终端进方法表了**,`daemon-probe.mjs` 现在整条路都走:开 pty → 写命令 → 从
+#     WebSocket 上读回输出。实测回读到 `42-PTYOK`(命令写的是 `echo "$((6*7))-PTYOK"` ——
+#     故意让命令和输出长得不一样,免得 shell 的回显就把断言喂绿了)。
+#     所以「在 mac 上用 app 连这台 Linux,开个终端跑一下测试」现在是通的。
+#   · ★★**断线会把 pty 收掉**,实测:连接前 0 个 bash → 开两个终端 2 个 → `ws.terminate()`
+#     硬断(不发关闭帧、也不 term:kill)之后回到 0 个。没有这一刀,每断一次线就攒一个
+#     永不退出的 shell,几周后表现成「终端打不开了」。
 #
 FROM node:22-bookworm-slim
 

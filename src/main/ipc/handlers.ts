@@ -1,5 +1,6 @@
 import { CH } from './channels'
 import { type InvokeCtx, type InvokeEventLike, type MethodTable } from './invokeCtx'
+import { createTerminalService, type TerminalService } from '../terminal/terminalService'
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
@@ -126,7 +127,7 @@ export function uniqueAttachmentName(dir: string, name: string): string {
   return `${base}-${Date.now()}${ext}`
 }
 
-export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, caps: HostCapabilities, onSettings?: (s: Settings) => void): MethodTable {
+export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, caps: HostCapabilities, onSettings?: (s: Settings) => void, terminal?: TerminalService): MethodTable {
   const table: MethodTable = {}
   /**
    * 原地替代 `ipcMain.handle`。既有 handler 写的是 `(_e, arg) => …`,这里把 InvokeCtx 包成一个
@@ -1749,6 +1750,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.growthSignalGet, () => currentGrowthSignal())
   on(CH.memoryWrite, (_e, a: MemoryArg) => memoryWrite(a))
   on(CH.memoryClear, (_e, a: MemoryArg) => memoryClear(a))
+
+  // 终端(PTY)。★挂在**这里**而不是宿主各自注册,是为了让它和别的方法共享同一条不变式:
+  //  「方法只有一份」。它单独走 `register` 是因为要拿到完整的 `InvokeCtx`(出口 + 是谁 + 断线钩子),
+  //  而上面那个 `on()` 兼容层只喂得出一个假 event。宿主想在退出时收拾 pty 就自己传一个进来。
+  ;(terminal ?? createTerminalService()).register(table)
 
   return table
 }

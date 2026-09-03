@@ -34,7 +34,9 @@ describe('频道分类', () => {
     const client = keys.filter((c) => routeOf(c) === 'client')
     const host = keys.filter((c) => routeOf(c) === 'host')
     expect(client.length).toBe(45)
-    expect(host.length).toBe(147)
+    // 147 → 151:终端(term:create / write / resize / kill)。**shell 跑在 host 上** ——
+    // 这是它们必须走 host 的全部理由,也正是这次改动要修的那个 bug。
+    expect(host.length).toBe(151)
     expect(client.length + host.length).toBe(keys.length)
   })
 

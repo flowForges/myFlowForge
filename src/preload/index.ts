@@ -290,9 +290,14 @@ const api = {
   appVibrancyBaseline: (): Promise<number> => ipcRenderer.invoke(CH.appVibrancyBaseline),
   getAppIconOptions: (): Promise<Array<{ id: import('@shared/types').DockIcon; label: string; filename: string; src: string }>> => ipcRenderer.invoke(CH.appIconOptions),
   termCreate: (opts: { termId: string; cwd?: string; cols: number; rows: number }) => ipcRenderer.invoke(CH.termCreate, opts),
-  termWrite: (termId: string, data: string) => ipcRenderer.send(CH.termWrite, { termId, data }),
-  termResize: (termId: string, cols: number, rows: number) => ipcRenderer.send(CH.termResize, { termId, cols, rows }),
-  termKill: (termId: string) => ipcRenderer.send(CH.termKill, { termId }),
+  // ★★这三条以前是 `ipcRenderer.send`(单向)。单向消息**不经过主机路由器** —— 那正是
+  //  「连着远程主机,敲进去的字却写进了本机 shell」的另一半原因。改成 invoke 之后它们和
+  //  `term:create` 走同一条路,连哪台就写哪台。
+  //  返回值没人要,但 promise 必须接住:对面版本对不上时会 reject,漏了就是一条
+  //  unhandledRejection(而它每敲一个键就可能来一次)。
+  termWrite: (termId: string, data: string) => { void ipcRenderer.invoke(CH.termWrite, { termId, data }).catch(() => {}) },
+  termResize: (termId: string, cols: number, rows: number) => { void ipcRenderer.invoke(CH.termResize, { termId, cols, rows }).catch(() => {}) },
+  termKill: (termId: string) => { void ipcRenderer.invoke(CH.termKill, { termId }).catch(() => {}) },
   onTermData: (cb: (p: { termId: string; data: string }) => void) => {
     const l = (_: unknown, p: { termId: string; data: string }) => cb(p)
     ipcRenderer.on(CH.termData, l); return () => ipcRenderer.removeListener(CH.termData, l)

@@ -14,14 +14,17 @@ describe('daemonTable', () => {
   it('剔掉跟设备走的和无头做不了的,剩下的就是握手时发出去的方法清单', () => {
     const t = daemonTable(full())
     const keys = Object.keys(t)
-    expect(keys.length).toBe(192 - 45 - 2)
+    expect(keys.length).toBe(196 - 45 - 2)
     for (const c of CLIENT_ONLY) expect(keys).not.toContain(c)
     for (const c of DAEMON_UNSUPPORTED) expect(keys).not.toContain(c)
   })
 
   it('会话、工作区、agent 这些核心能力都还在', () => {
     const keys = new Set(Object.keys(daemonTable(full())))
-    for (const c of ['chat:send', 'chat:history', 'workspaces:list', 'session:list', 'agents:detect', 'run2:start', 'git:changes']) {
+    // ★`term:create` 在这条清单里是有分量的一条:无头机器上没有界面,但**有 shell**,
+    //   而那正是「用 app 连上我的 Linux 盒子跑个测试」唯一能走的路。
+    //   它以前不在表里 ⇒ daemon 对外不提供终端,客户端点开的是自己那台的 shell。
+    for (const c of ['chat:send', 'chat:history', 'workspaces:list', 'session:list', 'agents:detect', 'run2:start', 'git:changes', 'term:create']) {
       expect(keys.has(c), `${c} 应该由 daemon 提供`).toBe(true)
     }
   })

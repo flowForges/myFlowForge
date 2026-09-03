@@ -1,8 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, Tray } from 'electron'
 import { registerGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts/globalShortcuts'
-import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { createMainWindow, builtWindowBlurAmount } from './windows/mainWindow'
 import { createPetWindow, resolvePetLayout, MARGIN, clampPetSprite, petClampRegion } from './windows/petWindow'
 import { parkWindowInDock, resolveCloseAction, resolveDockActivationAction } from './windows/closeBehavior'
@@ -32,10 +29,7 @@ import { fixExecPath } from './agents/pathFix'
 import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './tokens/dailyTokenCounter'
 import { setDailyTokenCounter } from './tokens/growthSignalRef'
 import type { Settings } from './config/schema'
-import { TerminalManager } from './terminal/terminalManager'
-import { TermBatcher } from './terminal/termBatch'
-import { makeCwdProbe } from './terminal/cwdProbe'
-import { parseOsc7, abbreviateHome } from './terminal/cwdTrack'
+import { createTerminalService } from './terminal/terminalService'
 import { PluginScheduler } from './plugins/pluginScheduler'
 import { readPlugins } from './plugins/pluginStore'
 import { runPlugin } from './plugins/pluginHost'
@@ -678,9 +672,16 @@ app.whenReady().then(() => {
     pushService.observe(channel, payload)
     botBridge.observe(channel, payload)   // mirror gate/ask/done/run2 events to the phone
   }
+  // 终端(PTY)。★注册本身在 `registerIpc` 里,和别的方法一处 —— 传一个进去只是为了
+  //  拿住句柄,好在退出/关窗时把 pty 收干净。`fallbackCwd` 只有桌面外壳答得上来:
+  //  daemon 上没有「当前工作区」这回事。
+  const termService = createTerminalService({
+    fallbackCwd: () => activeWsPath,
+    span: (name, fn) => perfSpan('term', name, fn),
+  })
   // 唯一一处把方法表接到 Electron 上的地方。daemon 侧的 WS 网关遍历的是**同一张表** ——
   // 方法只有一份,所以不存在「本机一条路径、远程另一条路径」的漂移。
-  const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), createElectronHost(), onSettings)
+  const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), createElectronHost(), onSettings, termService)
 
   // 路由器坐在方法表前面:每一刀由本机接还是转发给远程 host,由它决定(第二期 B)。
   // ★渲染层和 preload 完全不知道有这回事 —— 它们永远只跟主进程说话。
@@ -832,21 +833,9 @@ app.whenReady().then(() => {
   scheduler.start()
   // ── End Plugin Scheduler ────────────────────────────────────────────────────
 
-  // ── Terminal PTY bridge ─────────────────────────────────────────────────────
-  const lsofExec = (pid: number) => new Promise<string>((res, rej) =>
-    execFile('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], (e, out) => e ? rej(e) : res(out)))
-
-  const cwdProbes = new Map<string, (pid: number) => Promise<void>>()
-  const cwdTimers = new Map<string, NodeJS.Timeout>()
-  const lastOscCwd = new Map<string, string>()
-  const termHome = homedir()
-
-  // node-pty is a native module — import lazily to avoid load-time crash in test env
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodePty = require('node-pty') as typeof import('node-pty')
-
-  // Send only to the current main window (original or rebuilt-after-close). Used for high-frequency
-  // terminal events so they don't get needlessly serialized to the pet / other windows.
+  // ── 卡顿监控 ────────────────────────────────────────────────────────────────
+  // 只发给当前那个主窗口(原来的、或者关掉之后重建的那个),不经广播 ——
+  // 卡顿提示是给正在看着屏幕的人的,序列化给宠物窗和别的窗口没有意义。
   const sendMain = (channel: string, payload: unknown) => {
     if (mainWinRef && !mainWinRef.isDestroyed()) mainWinRef.webContents.send(channel, payload)
   }
@@ -865,104 +854,11 @@ app.whenReady().then(() => {
   const perfMonitor = new EventLoopMonitor()
   if (readSettings().perfDiagnostics) perfMonitor.start((ms, active) => stallReporter.report(ms, active))
 
-  // Assigned just below (after scheduleCwd is defined). The pty onData closure references it, but that
-  // only fires asynchronously once a terminal is spawned, long after this synchronous setup completes.
-  let termBatcher: TermBatcher
-  const termManager = new TerminalManager({
-    spawn: (shell, args, o) =>
-      nodePty.spawn(shell, args, {
-        name: 'xterm-256color',
-        cwd: o.cwd,
-        env: o.env as Record<string, string>,
-        cols: o.cols,
-        rows: o.rows,
-      }),
-    onData: (termId, data) => {
-      // Terminal data is high-frequency (keystroke echo + prompt redraw, and thousands of chunks/sec
-      // under a build/log flood). Coalesce chunks in a short window before crossing IPC — one send
-      // per chunk saturated the main event loop, janking heavy output AND delaying keystroke echo
-      // (it waited behind the flood). Batching also lets us parse OSC7/cwd once per blob, not per chunk.
-      termBatcher.push(termId, data)
-    },
-    onExit: (termId, e) => {
-      termBatcher.flush(termId)   // emit any buffered trailing output before the exit event
-      cwdProbes.delete(termId)
-      const t = cwdTimers.get(termId)
-      if (t !== undefined) { clearTimeout(t); cwdTimers.delete(termId) }
-      lastOscCwd.delete(termId)
-      sendMain(CH.termExit, { termId, ...e })
-    },
-    exists: existsSync,
-  })
-
-  const scheduleCwd = (termId: string) => {
-    const probe = cwdProbes.get(termId)
-    const pid = termManager.pidOf(termId)
-    if (!probe || pid === undefined) return
-    clearTimeout(cwdTimers.get(termId))
-    cwdTimers.set(termId, setTimeout(() => void probe(pid), 150))
-  }
-
-  // Coalesce PTY output → one IPC send per short window (instead of one per chunk), and parse the
-  // cwd OSC once per coalesced blob. A full OSC7 sequence is more likely intact in a coalesced blob
-  // than split across raw chunks, so cwd tracking gets slightly more reliable too.
-  termBatcher = new TermBatcher({
-    flush: (termId, data) => perfSpan('term', 'flush', () => {
-      sendMain(CH.termData, { termId, data })
-      const osc = parseOsc7(data)
-      if (osc) {
-        const abbr = abbreviateHome(osc, termHome)
-        if (abbr !== lastOscCwd.get(termId)) { lastOscCwd.set(termId, abbr); sendMain(CH.termCwd, { termId, cwd: abbr }) }
-      } else {
-        scheduleCwd(termId)
-      }
-    }),
-  })
-
-  ipcMain.handle(CH.termCreate, (_e, opts: { termId: string; cwd?: string; cols: number; rows: number }) => {
-    try {
-      // Prefer the requested cwd; else fall back to the active workspace (so a terminal opened while
-      // a workspace is focused lands there, not at ~); else home.
-      const cwd = opts.cwd && existsSync(opts.cwd) ? opts.cwd
-        : activeWsPath && existsSync(activeWsPath) ? activeWsPath
-        : homedir()
-      termManager.create({ termId: opts.termId, cwd, cols: opts.cols || 80, rows: opts.rows || 24 })
-      cwdProbes.set(
-        opts.termId,
-        makeCwdProbe({
-          exec: lsofExec,
-          home: homedir(),
-          onCwd: c => sendMain(CH.termCwd, { termId: opts.termId, cwd: c }),
-        }),
-      )
-      scheduleCwd(opts.termId)
-      return { ok: true as const }
-    } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.on(CH.termWrite, (_e, p: { termId: string; data: string }) => {
-    termManager.write(p.termId, p.data)
-  })
-
-  ipcMain.on(CH.termResize, (_e, p: { termId: string; cols: number; rows: number }) => {
-    termManager.resize(p.termId, p.cols, p.rows)
-  })
-
-  ipcMain.on(CH.termKill, (_e, p: { termId: string }) => {
-    cwdProbes.delete(p.termId)
-    const t = cwdTimers.get(p.termId)
-    if (t !== undefined) { clearTimeout(t); cwdTimers.delete(p.termId) }
-    lastOscCwd.delete(p.termId)
-    termManager.kill(p.termId)
-  })
-
   // killAllAgentTrees:agent CLI 现在是 detached 的独立进程组(见 agents/procGroup.ts),而 execa 自带的
   // 「父进程退出时杀子进程」在 detached 下直接 return —— 不在这里补一刀,退出 app 就会把正在跑的 CLI
   // 连同它派生的 shell 命令一起留在后台。
   app.on('before-quit', () => {
-    quitting = true; termManager.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts()
+    quitting = true; termService.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts()
     // ★远程连接也要收:SSH 隧道是我们自己 spawn 的子进程,不杀就变成孤儿留在系统里
     //   (每连一次留一个)。同一类坑在 agent 进程上已经栽过两次,不能在这儿再来一遍。
     //   before-quit 是同步的,所以只发出关闭指令,不 await —— 隧道进程收到 SIGTERM 就够了。
@@ -971,8 +867,10 @@ app.whenReady().then(() => {
     // app,连上去只会是一堆永远不 settle 的调用。
     void mobileGw.close()
   })
-  mainWin.on('closed', () => termManager.killAll())
-  // ── End terminal PTY bridge ─────────────────────────────────────────────────
+  // 主窗口关掉(mac 上 app 还活着)→ 只收**本机窗口开的**那些终端。
+  // ★不能用 killAll:这台机器同时也是别人的 host,连上来的客户端开的终端归它们自己,
+  //   由它们那条连接断开时收(见 InvokeCtx.onClose)。
+  mainWin.on('closed', () => termService.killOwner('local'))
 
   // Dock-icon click / re-activation. The pet window keeps the process alive, so getAllWindows()
   // is never empty — the old "create only when 0 windows" check never fired, leaving a hidden or

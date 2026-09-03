@@ -43,7 +43,12 @@ describe('方法表', () => {
     // 186 → 187:手机端二期的跨设备未读加了 `chat:mark-seen`(`chat:seen` 是纯广播,没有 handler,不进表)。
     // 187 → 192:推送(第三期收尾)加了五个 —— push:register / unregister / devices / presence / test。
     //   ★它们全走 host:调用方是手机,要把令牌登记到**那台机器**上,并由那台机器发推送。
-    // 另外两处计数互为佐证:192 = 45(CLIENT_ONLY)+ 147(host),daemonTable = 192 - 45 - 2。
-    expect(Object.keys(table).length).toBe(192)
+    // 192 → 196:终端搬进方法表 —— term:create / write / resize / kill。
+    //   ★以前它们是 `src/main/index.ts` 里直接 ipcMain 注册的,**不在表里** ⇒ 连着远程主机时
+    //   开出来的是本机的 shell。这四条全走 host:shell 长在那台机器上。
+    //   注册点在 `terminal/terminalService.ts`,不是 handlers.ts 里的 `on(CH.…)`,所以上面
+    //   那个 grep 加数不包含它们:196 = 165 + 22 + 5(push,同样不在 grep 里)+ 4。
+    // 另外两处计数互为佐证:196 = 45(CLIENT_ONLY)+ 151(host),daemonTable = 196 - 45 - 2。
+    expect(Object.keys(table).length).toBe(196)
   })
 })
