@@ -852,3 +852,15 @@
 }
 .set-icon:hover { border-color: color-mix(in oklch, var(--accent) 40%, var(--border-2)); }
 .set-icon.on { border-color: var(--accent); background: var(--accent-dim); border-width: 1.5px; }
+
+/* 「连接方式」在走中转时是**只读**的一行:中转地址和身份公钥只能从配对码来,不给手填
+   (公钥是 44 个字符的 base64,没人核对得了,错一个字符只会静默连不上)。
+   ★所以它长得要像「一条事实」,不像「一个能改的控件」—— 底色用 surface-2、不给描边高亮。 */
+.host-locked {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 32px; padding: 0 8px 0 10px;
+  border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2);
+  font-size: 12.5px; color: var(--fg-2);
+}
+.host-locked-v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-locked .set-btn { flex: 0 0 auto; }

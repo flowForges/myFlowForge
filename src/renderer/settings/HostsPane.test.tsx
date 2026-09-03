@@ -261,3 +261,62 @@ describe('自绘下拉框', () => {
     expect(btn.textContent).toContain('标识 + 名称')
   })
 })
+
+describe('★★表单里「连接方式」也不许把中转说成直连', () => {
+  /**
+   * 用户第二次问的是同一件事的上一层:「连接方式 哪有中转啊?」
+   *
+   * 他去那个框里找是完全对的 —— 到达一台主机就是三条路(SSH 隧道 / 直连 / 中转),而这个框
+   * 自称「连接方式」却只列两条。更糟的是:粘完带中转的配对码之后 `kind` 被设成 `direct`,
+   * 于是这个框**明明白白显示「直接连接」**。这和列表里那枚标签是同一个错,只是我上一轮
+   * 只修了列表那一层。
+   */
+  const RELAY_LINK =
+    'myflowforge://add-host?v=1&a=192.168.1.20%3A6789&t=tok123&n=%E4%B9%A6%E6%88%BF%E7%9A%84Mac' +
+    '&k=' + encodeURIComponent('A'.repeat(43) + '=') +
+    '&r=' + encodeURIComponent('wss://relay.example.workers.dev')
+
+  const pasteRelayCode = async () => {
+    await openForm()
+    const box = screen.getByPlaceholderText(/myflowforge:\/\/add-host/)
+    fireEvent.change(box, { target: { value: RELAY_LINK } })
+    await act(async () => { fireEvent.click(screen.getByText('填进表单')) })
+  }
+
+  it('粘完带中转的码:连接方式显示「经中转」+ 中转地址,而不是「直接连接」', async () => {
+    await pasteRelayCode()
+    expect(screen.getByText(/经中转 · wss:\/\/relay\.example\.workers\.dev/)).toBeTruthy()
+    expect(screen.queryByText(/直接连接\(局域网/)).toBeNull()
+  })
+
+  it('★这时候它是**只读**的 —— 中转地址和公钥只能从码里来,不给手填', async () => {
+    await pasteRelayCode()
+    // 那个可点开的下拉框没了(它只在没有中转时出现)
+    expect(screen.queryByRole('button', { name: '连接方式' })).toBeNull()
+  })
+
+  it('★令牌不许跟着藏掉 —— 走中转那条路**一定要**令牌', async () => {
+    // 藏了的话人没法确认它填上没有,而它没填上的现象是「握手之后被 4403 断开」,
+    // 界面上只写着「连接失败」。
+    await pasteRelayCode()
+    const token = screen.getByText('访问令牌').parentElement!.querySelector('input')!
+    expect((token as HTMLInputElement).value).toBe('tok123')
+  })
+
+  it('地址那一栏改口说清它现在**不是**连接目标', async () => {
+    await pasteRelayCode()
+    expect(screen.getByText('局域网地址(备用,现在不走它)')).toBeTruthy()
+  })
+
+  it('「改用直连」清掉中转,下拉框回来', async () => {
+    await pasteRelayCode()
+    await act(async () => { fireEvent.click(screen.getByText('改用直连')) })
+    expect(screen.getByRole('button', { name: '连接方式' })).toBeTruthy()
+  })
+
+  it('★没有中转时,那两个选项旁边要说清「不在一个网络该怎么办」', async () => {
+    // 不说的话,人只会在 SSH 和直连之间来回猜 —— 而正确答案是「哪个都不选,去粘配对码」。
+    await openForm()
+    expect(screen.getByText(/不在同一个网络/)).toBeTruthy()
+  })
+})

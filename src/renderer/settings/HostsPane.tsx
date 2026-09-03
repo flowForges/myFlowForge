@@ -268,25 +268,62 @@ export function HostsPane() {
               显示名称时用前面那个圆点。挂一串主机名在正中太抢眼,一个你自己认得的表情通常就够了。
             </p>
 
-            <div className="proj-field full">
-              <label>连接方式</label>
-              <Select
-                ariaLabel="连接方式"
-                value={draft.kind}
-                onChange={(v) => setDraft({ ...draft, kind: v, address: v === 'ssh' ? '6767' : '' })}
-                options={[
-                  { value: 'ssh', label: '通过 SSH 连接(推荐)' },
-                  { value: 'direct', label: '直接连接(局域网 / Tailscale / 本机自测)' },
-                ]}
-              />
-            </div>
+            {/* ★★中转**不是**这个下拉框里的一项,它跟着配对码一起来 —— 而这件事必须
+                **在框里说出来**。用户原话:「连接方式 哪有中转啊?」
+                他去那儿找是完全对的:到达一台主机就是三条路(SSH 隧道 / 直连 / 中转),
+                而这个框自称「连接方式」却只列两条。
+                ★★更糟的是原来那版:粘完带中转的配对码之后,`kind` 被设成 `direct`,
+                于是这个框**显示「直接连接」** —— 和列表里那枚标签犯的是同一个错
+                (说了一件不成立的事),只是我上一轮只修了列表那一层。
+                ★为什么不给中转做成可选的一项:选了它就得手填中转地址**和身份公钥**,
+                而公钥是 44 个字符的 base64,没人核对得了,错一个字符只会静默连不上。
+                这两样只能从码里来 —— 和手机端 `add-host.tsx` 同一条规矩。 */}
+            {draft.relay ? (
+              <div className="proj-field full">
+                <label>连接方式</label>
+                <div className="host-locked">
+                  <span className="host-locked-v">经中转 · {draft.relay}</span>
+                  <button
+                    className="set-btn"
+                    onClick={() => setDraft({ ...draft, relay: '' })}
+                    title="清掉中转地址,改回直连或 SSH"
+                  >
+                    改用直连
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="proj-field full">
+                <label>连接方式</label>
+                <Select
+                  ariaLabel="连接方式"
+                  value={draft.kind}
+                  onChange={(v) => setDraft({ ...draft, kind: v, address: v === 'ssh' ? '6767' : '' })}
+                  options={[
+                    { value: 'ssh', label: '通过 SSH 连接(推荐)' },
+                    { value: 'direct', label: '直接连接(局域网 / Tailscale / 本机自测)' },
+                  ]}
+                />
+              </div>
+            )}
             <p className="set-desc full" style={{ marginTop: -6 }}>
-              {draft.kind === 'ssh'
-                ? '那台机器上的 daemon 只绑回环(公网上不存在那个端口),所以走 SSH 隧道过去。下面填的是 SSH 登录目标,不是网址。'
-                : '直接填一个能连到的地址。局域网、Tailscale,以及「在这台电脑上自己跑一个 daemon 试试」都走这条。'}
+              {draft.relay
+                ? '两边各在各的网时走这条 —— 拨的是中转,不是那台机器的地址。中转读不到内容(端到端加密),它只转发。中转地址不在这儿填,它跟着配对码一起来。'
+                : draft.kind === 'ssh'
+                  ? '那台机器上的 daemon 只绑回环(公网上不存在那个端口),所以走 SSH 隧道过去。下面填的是 SSH 登录目标,不是网址。'
+                  : '直接填一个能连到的地址。局域网、Tailscale,以及「在这台电脑上自己跑一个 daemon 试试」都走这条。'}
             </p>
+            {/* ★这句话摆在**没有中转的时候** —— 它回答的正是「我要连一台不在同一个网里的机器,
+                该选哪一项?」而答案是「哪一项都不选,去粘那枚码」。不说的话,人只会在
+                两个选项之间来回猜。 */}
+            {!draft.relay && (
+              <p className="set-desc full" style={{ marginTop: -8 }}>
+                两台机器<b>不在同一个网络</b>里?那两项都不对 —— 去上面粘那台机器的<b>配对码</b>
+                (它的「设置 → 手机」里复制),中转地址和身份公钥都在码里,粘完这儿会变成「经中转」。
+              </p>
+            )}
 
-            {draft.kind === 'ssh' ? (
+            {!draft.relay && draft.kind === 'ssh' ? (
               <>
                 <div className="proj-field">
                   <label>SSH 目标</label>
@@ -305,7 +342,10 @@ export function HostsPane() {
             ) : (
               <>
                 <div className="proj-field">
-                  <label>地址</label>
+                  {/* ★走中转时这个地址**不是连接目标**(拨的是中转),它只是「这台机器以后出现在
+                      局域网里时的地址」的一份记录。标签跟着改,不然人会盯着它问「为什么连的是
+                      127.0.0.1」—— 那正是这一轮的起点。 */}
+                  <label>{draft.relay ? '局域网地址(备用,现在不走它)' : '地址'}</label>
                   <input value={draft.address} placeholder="ws://192.168.1.20:6767" onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
                 </div>
                 <div className="proj-field">
