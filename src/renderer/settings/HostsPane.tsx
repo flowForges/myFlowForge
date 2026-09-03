@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
 import { parsePairingLink } from '@shared/remote/pairingLink'
+import { HOST_ICONS, currentHostIcon } from '@shared/hostIcons'
+import { Select } from './Select'
 
 const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', icon: '', display: 'both', token: '', pubKey: '', relay: '' }
 
@@ -129,11 +131,19 @@ export function HostsPane() {
               <div className="info">
                 <div className="name">
                   {h.label || '(未命名)'}
-                  <span className="host-tag">{h.kind === 'ssh' ? 'SSH 隧道' : '直接连接'}</span>
+                  {/* ★★中转必须排在最前面判。原来这儿只有 ssh / direct 两种,于是**一台走中转的
+                      主机被标成「直接连接」** —— 用户当场问的「它这种是不是没走中转?我那边好像
+                      还是本地」就是这么来的:配对码里明明带了中转地址,界面上却一个字都不提。
+                      连接方式是**看不见**的属性,界面不说就没有第二个地方能说。 */}
+                  <span className="host-tag">{h.relay ? '经中转' : h.kind === 'ssh' ? 'SSH 隧道' : '直接连接'}</span>
                   {connectedId === h.id && <span className="host-tag">当前</span>}
                 </div>
                 <div className="addr">
-                  {h.kind === 'ssh' ? `${h.sshTarget || '未填 SSH 目标'} · 远端端口 ${h.address || '6767'}` : (h.address || '未填地址')}
+                  {h.relay
+                    // 走中转时**拨的是中转**,`address` 只是「这台机器以后出现在局域网里时的地址」
+                    // 的一份记录 —— 把它当成连接目标显示出来,就是在说一件不成立的事。
+                    ? h.relay
+                    : h.kind === 'ssh' ? `${h.sshTarget || '未填 SSH 目标'} · 远端端口 ${h.address || '6767'}` : (h.address || '未填地址')}
                 </div>
               </div>
               <div className="acts">
@@ -213,22 +223,45 @@ export function HostsPane() {
               <input value={draft.label} placeholder="云服务器" onChange={(e) => setDraft({ ...draft, label: e.target.value })} />
             </div>
 
+            {/* ★★原来这是个**手打表情**的输入框。用户原话「图标不能下拉选择么」——
+                他是对的:手打一个表情在 mac 上意味着按 ⌃⌘空格 翻表情面板,为一件纯装饰的事
+                付这个代价太荒谬。★候选名单和手机端**是同一份**(`@shared/hostIcons`),
+                不是这儿又抄一份:同一台主机在两块屏上长得不一样,没人会当 bug 报,
+                只会觉得这个 app 做得糙。 */}
             <div className="proj-field">
-              <label>标识(一个表情)</label>
-              <input
-                value={draft.icon}
-                placeholder="🖥️ / 🌩 / 🏠 …"
-                maxLength={8}
-                onChange={(e) => setDraft({ ...draft, icon: e.target.value })}
-              />
+              <label>标识</label>
+              <div className="set-icons" role="radiogroup" aria-label="主机标识">
+                {HOST_ICONS.map((o) => {
+                  const on = currentHostIcon(draft.icon) === o.icon
+                  return (
+                    <button
+                      type="button"
+                      key={o.icon}
+                      role="radio"
+                      aria-checked={on}
+                      aria-label={o.label}
+                      title={o.label}
+                      className={`set-icon${on ? ' on' : ''}`}
+                      onClick={() => setDraft({ ...draft, icon: o.icon })}
+                    >
+                      {o.icon}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
             <div className="proj-field">
               <label>标题栏上显示</label>
-              <select className="sce-select" value={draft.display} onChange={(e) => setDraft({ ...draft, display: e.target.value as HostInput['display'] })}>
-                <option value="both">标识 + 名称</option>
-                <option value="icon">只显示标识</option>
-                <option value="name">只显示名称</option>
-              </select>
+              <Select
+                ariaLabel="标题栏上显示"
+                value={draft.display}
+                onChange={(v) => setDraft({ ...draft, display: v })}
+                options={[
+                  { value: 'both', label: '标识 + 名称' },
+                  { value: 'icon', label: '只显示标识' },
+                  { value: 'name', label: '只显示名称' },
+                ]}
+              />
             </div>
             <p className="set-desc full" style={{ marginTop: -6 }}>
               标题栏正中那枚就按这个显示。只显示标识时,连接状态用<b>光圈呼吸</b>表示(像主机/显示器的指示灯);
@@ -237,10 +270,15 @@ export function HostsPane() {
 
             <div className="proj-field full">
               <label>连接方式</label>
-              <select className="sce-select" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as 'ssh' | 'direct', address: e.target.value === 'ssh' ? '6767' : '' })}>
-                <option value="ssh">通过 SSH 连接(推荐)</option>
-                <option value="direct">直接连接(局域网 / Tailscale / 本机自测)</option>
-              </select>
+              <Select
+                ariaLabel="连接方式"
+                value={draft.kind}
+                onChange={(v) => setDraft({ ...draft, kind: v, address: v === 'ssh' ? '6767' : '' })}
+                options={[
+                  { value: 'ssh', label: '通过 SSH 连接(推荐)' },
+                  { value: 'direct', label: '直接连接(局域网 / Tailscale / 本机自测)' },
+                ]}
+              />
             </div>
             <p className="set-desc full" style={{ marginTop: -6 }}>
               {draft.kind === 'ssh'

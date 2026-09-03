@@ -802,3 +802,53 @@
 .about-name { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
 .about-ver { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 2px; }
 .about-desc { font-size: 12.5px; color: var(--muted); margin-top: 7px; line-height: 1.5; max-width: 440px; }
+
+/* ── 自绘下拉框(`Select.tsx`)────────────────────────────────────────────────
+   ★★换掉原生 `<select>` 的原因只有一个:它展开的那张单子是**系统画的**,CSS 管不着。
+   三套皮肤 + 壁纸取色的界面里,那张按系统主题画的菜单是唯一一处对不上的东西。
+   ★闭合态刻意和 `.sce-input` 一模一样(同样的高度/圆角/描边/底色)——
+   它俩在同一行里并排出现,长得不一样才是真的乱。 */
+.set-sel { position: relative; }
+.set-sel-btn {
+  width: 100%; height: 32px; border-radius: 7px;
+  border: 1px solid var(--border-2); background: var(--bg); color: var(--fg);
+  padding: 0 8px 0 10px; font-size: 12.5px;
+  display: flex; align-items: center; gap: 8px; text-align: left;
+}
+.set-sel-btn:hover { border-color: color-mix(in oklch, var(--accent) 40%, var(--border-2)); }
+.set-sel-btn.open, .set-sel-btn:focus-visible { outline: none; border-color: var(--accent); }
+.set-sel-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-sel-chev { width: 14px; height: 14px; flex: 0 0 auto; color: var(--faint); transition: transform .13s; }
+.set-sel-btn.open .set-sel-chev { transform: rotate(180deg); }
+
+/* 视觉语言抄聊天区的 `.menu-pop`(模型选择器)—— 同一个 app 里挑一项只该有一种长相。
+   ★往下弹:设置页是自上而下读的,而聊天区那个在最底下所以往上弹。 */
+.set-sel-pop {
+  position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 60;
+  background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 5px;
+  max-height: min(46vh, 320px); overflow-y: auto; overscroll-behavior: contain;
+}
+.set-sel-item {
+  width: 100%; display: flex; align-items: center; gap: 9px;
+  padding: 7px 8px; border-radius: 7px; font-size: 12.5px; text-align: left; color: var(--fg-2);
+}
+/* 鼠标悬停和键盘光标是**同一个**高亮:两套高亮同时亮着,人会不知道回车会选中哪一个。 */
+.set-sel-item.cur { background: var(--surface); }
+.set-sel-item.on { color: var(--fg); font-weight: 550; }
+.set-sel-check { width: 14px; height: 14px; margin-left: auto; flex: 0 0 auto; color: var(--accent); opacity: 0; }
+.set-sel-item.on .set-sel-check { opacity: 1; }
+
+/* ── 主机标识选择器 ──────────────────────────────────────────────────────────
+   ★★原来这儿是个**手打表情的输入框**(占位符写着「🖥️ / ☁️ / 🏠 …」)。用户的原话是
+   「图标不能下拉选择么」—— 手打一个表情在 mac 上意味着按 ⌃⌘空格 翻表情面板,
+   为一件纯装饰的事付这个代价是荒谬的。手机端一直是六选一(`hostIcons.ts`),
+   这里跟它对齐,连那六个候选都是同一份名单。 */
+.set-icons { display: flex; gap: 6px; flex-wrap: wrap; }
+.set-icon {
+  width: 36px; height: 32px; border-radius: 7px; font-size: 16px; line-height: 1;
+  border: 1px solid var(--border-2); background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.set-icon:hover { border-color: color-mix(in oklch, var(--accent) 40%, var(--border-2)); }
+.set-icon.on { border-color: var(--accent); background: var(--accent-dim); border-width: 1.5px; }
