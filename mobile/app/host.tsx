@@ -5,6 +5,8 @@ import { goBack, goToHosts } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, IconBtn, List, LiveDot, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
+import { HostEditSheet, type HostEditTarget } from '../src/ui/HostEditSheet'
+import { Icon } from '../src/ui/Icon'
 import { describeHostState } from '../src/net/hostStatusText'
 import { maskToken } from '../src/net/tokenMask'
 import { HostIcon } from '../src/ui/HostIcon'
@@ -27,7 +29,13 @@ import { CAN_COPY, CopyBtn } from '../src/ui/CopyBtn'
  */
 export default function Host() {
   const c = useC()
-  const { activeHost, state, methods, selectHost, reconnect } = useConn()
+  const { activeHost, state, methods, selectHost, reconnect, updateHost } = useConn()
+  /**
+   * 正在改名字/图标的那一台。★这一行是**看得见的**入口 —— 在此之前改名只有
+   * 「设置 → 主机 → 长按一行」一条路,而长按是看不见的手势。用户当场问的就是
+   * 「点击进去为什么不支持修改名称和图标」。
+   */
+  const [edit, setEdit] = useState<HostEditTarget | null>(null)
   // 令牌默认遮住。★不是防偷看,是防**截图和投屏** —— 排查连接问题的时候人最爱干的就是截个图发出来。
   const [showToken, setShowToken] = useState(false)
 
@@ -61,10 +69,25 @@ export default function Host() {
       </TopBar>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 44 }}>
+        <Sec>这台主机</Sec>
+        <List>
+          {/* ★★改名字和图标的**看得见的**入口。名字和图标只存在这台手机上 ——
+              所以这一行和「连没连上」无关,断着也能改。 */}
+          <Row onPress={() => setEdit({ id: activeHost.id, label: activeHost.label, icon: activeHost.icon })}>
+            <HostIcon icon={activeHost.icon} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <T style={{ fontSize: 12, color: c.muted }}>名称与图标</T>
+              <T numberOfLines={1} style={{ fontSize: 15, color: c.fg, marginTop: 3 }}>
+                {activeHost.label}
+              </T>
+            </View>
+            <Icon name="chevron" size={15} color={c.faint} />
+          </Row>
+        </List>
+
         <Sec>连接</Sec>
         <List>
           <Row>
-            <HostIcon icon={activeHost.icon} />
             <View style={{ flex: 1, minWidth: 0 }}>
               <T style={{ fontSize: 12, color: c.muted }}>状态</T>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
@@ -150,6 +173,12 @@ export default function Host() {
           </Btn>
         </List>
       </ScrollView>
+
+      <HostEditSheet
+        target={edit}
+        onClose={() => setEdit(null)}
+        onSave={(id, patch) => updateHost(id, patch)}
+      />
     </View>
   )
 }

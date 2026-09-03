@@ -16,6 +16,7 @@ import { JumpBubble } from '../../src/ui/JumpBubble'
 import { useConn } from '../../src/net/conn'
 import { hostPickRows } from '../../src/net/hostPicker'
 import { HostSwitchSheet } from '../../src/ui/HostSwitchSheet'
+import { HostEditSheet, type HostEditTarget } from '../../src/ui/HostEditSheet'
 import { HostBanner } from '../../src/ui/HostBanner'
 import { ROUTES } from '../../src/nav/routes'
 import { useStore, type WsGroup } from '../../src/data/store'
@@ -57,7 +58,7 @@ function waited(since: number, now: number): string {
 
 export default function Home() {
   const c = useC()
-  const { activeHost, hosts, loading: hostsLoading, online, state, invoke, selectHost } = useConn()
+  const { activeHost, hosts, loading: hostsLoading, online, state, invoke, selectHost, updateHost } = useConn()
   const {
     groups, gates, gatesFor, loading, select, wsName, refresh, unread, running, expanded, toggleWs, ensureWs,
     setPinned, archive,
@@ -77,6 +78,8 @@ export default function Home() {
   const [newErr, setNewErr] = useState<{ wsPath: string; msg: string } | null>(null)
   // 顶部主机条点开的那张换主机单子。
   const [hostSheet, setHostSheet] = useState(false)
+  /** 正在改名字/图标的那一台(切换单里长按呼出)。★单子本身是三处共用的那一个。 */
+  const [hostEdit, setHostEdit] = useState<HostEditTarget | null>(null)
 
   // 分组头长按呼出的操作单(置顶 / 归档)。放的是那一个工作区的 meta,不是路径 ——
   // sheet 里要读 `pinned` 决定按钮显示「置顶」还是「取消置顶」。
@@ -619,6 +622,7 @@ export default function Home() {
       >
         <HostBanner
           label={activeHost?.label ?? ''}
+          icon={activeHost?.icon ?? ''}
           url={activeHost?.url ?? ''}
           state={state}
           // ★★没连上的时候 `gates` 是断线前留在内存里的旧数据(第一版不缓存正文,
@@ -647,6 +651,9 @@ export default function Home() {
             refreshing={pulling}
             enabled={online}
             onRefresh={() => {
+              // ★拉到位松手 = 手势越过阈值,和左滑到位同一类,轻轻一下确认「收到了」。
+              //  没有它的话,这个 app 里唯一没有手感的手势就是它(用户当场问出来的)。
+              tap('pullRefresh')
               setPulling(true)
               void refresh().finally(() => setPulling(false))
             }}
@@ -905,10 +912,25 @@ export default function Home() {
           setHostSheet(false)
           void selectHost(id)
         }}
+        onEdit={(id) => {
+          // 先收起切换单再开编辑单 —— 两张 Sheet 叠着的话,关掉上面那张会把下面那张一起带走
+          // (RN 的 Modal 是同一层),而人以为自己只是取消了编辑。
+          const h = hosts.find((x) => x.id === id)
+          if (!h) return
+          setHostSheet(false)
+          setHostEdit({ id: h.id, label: h.label, icon: h.icon })
+        }}
         onAddHost={() => {
           setHostSheet(false)
           router.push(ROUTES.addHost)
         }}
+      />
+
+      {/* 首页左上角 → 换主机单子 → 长按一行,改的就是这个。 */}
+      <HostEditSheet
+        target={hostEdit}
+        onClose={() => setHostEdit(null)}
+        onSave={(id, patch) => updateHost(id, patch)}
       />
 
       {/* 分组头长按呼出的操作单。★左滑是主入口,长按是备份 + 无障碍路径 —— 副标题两样都提,

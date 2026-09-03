@@ -2,6 +2,7 @@ import { Pressable, View } from 'react-native'
 import { useC } from '../theme/theme'
 import { T } from './kit'
 import { Icon } from './Icon'
+import { DEFAULT_HOST_ICON } from '../net/hosts'
 import { StatusBadge } from './StatusBadge'
 import { hostBannerDetail, hostBannerTitle } from '../net/hostStatusText'
 import type { HostState } from '../net/hostClient'
@@ -22,9 +23,17 @@ import type { HostState } from '../net/hostClient'
  *  那是整个 app 存在的理由本身。
  */
 export function HostBanner({
-  label, url, state, gateCount, onPress,
+  label, icon, url, state, gateCount, onPress,
 }: {
   label: string
+  /**
+   * 这台主机的图标(一个 emoji)。★空串 = 用默认那枚。
+   *
+   * ★★2026-09-03 之前这儿画的是一枚**写死的**通用主机字形,所以用户改了图标之后
+   *  「名字变了、图标没变」—— 而真相是这儿从来就没有过他那枚图标。同一枚图标在
+   *  主机列表、主机详情、换主机单子三处都是对的,唯独最显眼的这条横幅漏了。
+   */
+  icon: string
   url: string
   state: HostState | null
   /** 当前这台主机上挂着的门数。★和底部「会话」那格的角标**同源**,两处不许各算各的。 */
@@ -34,6 +43,10 @@ export function HostBanner({
   const c = useC()
   const ok = state?.status === 'ready'
   const wait = state?.status === 'connecting'
+  // ★连上时不给标题上色 —— 一切正常的时候,那行字不该在视觉上叫人。
+  //  出事时才染色:横幅的标题本来就直说「连不上 / 连接中…」,颜色是同一句话的第二遍。
+  //  ★这条以前挂在图标上,现在图标换成了用户自己选的 emoji(emoji 染不了色),
+  //   所以信号移到文字上。信息没丢,只是换了个载体。
   const tint = ok ? c.fg : wait ? c.warn : c.err
   const detail = hostBannerDetail(url, state)
   return (
@@ -53,10 +66,13 @@ export function HostBanner({
       ]}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
-        <Icon name="host" size={16} color={tint} />
+        {/* 用户自己选的那枚图标。★和主机列表/详情/切换单子用的是同一个字段,
+            不是这儿另画一个 —— 「同一台机器在两屏上长得不一样」没人会当 bug 报,
+            只会觉得这个 app 做得糙。 */}
+        <T style={{ fontSize: 15 }}>{icon || DEFAULT_HOST_ICON}</T>
         <T
           numberOfLines={1}
-          style={{ fontSize: 15.5, fontWeight: '600', letterSpacing: -0.3, color: c.fg, flexShrink: 1, minWidth: 0 }}
+          style={{ fontSize: 15.5, fontWeight: '600', letterSpacing: -0.3, color: tint, flexShrink: 1, minWidth: 0 }}
         >
           {hostBannerTitle(label, state)}
         </T>

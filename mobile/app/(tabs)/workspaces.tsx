@@ -117,6 +117,9 @@ export default function Workspaces() {
             refreshing={pulling}
             enabled={online}
             onRefresh={() => {
+              // ★拉到位松手 = 手势越过阈值,和左滑到位同一类,轻轻一下确认「收到了」。
+              //  没有它的话,这个 app 里唯一没有手感的手势就是它(用户当场问出来的)。
+              tap('pullRefresh')
               setPulling(true)
               void refresh().finally(() => setPulling(false))
             }}

@@ -29,12 +29,20 @@ export function HostSwitchSheet({
   onClose,
   onPick,
   onAddHost,
+  onEdit,
 }: {
   open: boolean
   rows: HostPickRow[]
   onClose: () => void
   onPick: (id: string) => void
   onAddHost: () => void
+  /**
+   * 长按一行 = 改它的名字和图标。★用户当场问的:「点击首页左上角的主机连接,会弹出一个
+   * 主机列表和添加主机,为什么这里面不能修改主机名称和图标?」—— 这张单子的正业是**切换**,
+   * 给每一行都摆一颗编辑键会把它的正业挤掉;长按零视觉成本,而且和设置里那份列表是同一个手势。
+   * ★但长按是**看不见**的,所以底下那句 Note 必须写出来。这个仓库在这上面栽过一次。
+   */
+  onEdit: (id: string) => void
 }) {
   const c = useC()
   return (
@@ -51,6 +59,7 @@ export function HostSwitchSheet({
         <Row
           key={r.id}
           onPress={() => onPick(r.id)}
+          onLongPress={() => onEdit(r.id)}
           style={r.active ? { borderColor: c.accent, backgroundColor: c.accentDim } : undefined}
         >
           <HostIcon icon={r.icon} />
@@ -71,7 +80,7 @@ export function HostSwitchSheet({
       ))}
       {/* ★这句话是上面「没连上的一律不画门徽章」的**说明**,不是客套话。
           没有它,一排干干净净的主机看起来就是「那几台都没事」—— 恰恰是我们没资格说的那句。 */}
-      <Note>别的主机上有没有门在等,只有连上去才知道 —— 这里不猜。</Note>
+      <Note>别的主机上有没有门在等,只有连上去才知道 —— 这里不猜。长按一行可以改它的名字和图标。</Note>
       <View style={{ height: 4 }} />
       <Btn kind="ghost" block onPress={onAddHost}>
         ＋ 添加主机
