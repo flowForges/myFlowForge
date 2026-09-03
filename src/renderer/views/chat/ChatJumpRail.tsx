@@ -3,7 +3,7 @@ import { useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
 import type { RefObject } from 'react'
 import type { ChatMessage } from '@shared/types'
 import { fmtMsgTime } from '@shared/relTime'
-import { computeRailLayout, bucketGroups, railCapacity, MIN_DOTS } from './jumpRailLayout'
+import { computeRailLayout, bucketGroups, railCapacity, MIN_DOTS, RAIL_PAD } from './jumpRailLayout'
 
 interface ChatJumpRailProps {
   messages: ChatMessage[]
@@ -50,6 +50,16 @@ export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
    */
   const [capacity, setCapacity] = useState(MIN_DOTS)
   /**
+   * 轨道摆在哪、最高多高 —— **量出来的,不是 CSS 里拍的常量**。
+   *
+   * ★★轨道是绝对定位在 `.chat`(整列)里的,而整列 = 对话滚动区 + **输入框**。
+   *  原来 CSS 写死 `top:50%` + `max-height: calc(100% - 210px)`,等于假设输入框只有 105px 高;
+   *  带附件条/模式条时它轻松 160~180,整窗缩放调大字号还要再涨 —— 于是轨道下半截压进输入框。
+   * ★现在按**滚动区那个盒子**摆:中心对它的中心,高度按它的可见高度。输入框天然在它外面,
+   *  多高都不会被压到,而且窗口、字号、附件条怎么变都自动跟上。
+   */
+  const [box, setBox] = useState<{ top: number; maxH: number } | null>(null)
+  /**
    * ★★对话很多时把相邻的几条并成一个锚点 —— 否则 N 条 = `10N-4` px,
    *  超出可视区的那些会被推到屏幕外面,**根本点不到**(见 jumpRailLayout 里那段)。
    *  没超上限时这里是严格 1:1,日常对话一个像素都不变。
@@ -80,14 +90,20 @@ export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
     setActive(layout.activeIndex)
   }, [items, groups, scrollRef])
 
-  /** 只量可见高度 → 容量。便宜(一次 clientHeight),所以绘制前同步做,避免锚点数闪一下。 */
+  /**
+   * 量滚动区那个盒子 → 轨道的位置、高度、容量。
+   * 便宜(读两个已缓存的布局属性),所以绘制前同步做,避免锚点数闪一下。
+   *
+   * ★量的是 `.chat-scroll`,不是轨道的定位容器 `.chat` —— 后者含输入框(见上面 `box`)。
+   * ★`offsetTop` 也是相对 `.chat` 的(它俩是同一个 offsetParent),所以能直接当 `top` 用。
+   * ★不能量轨道自己:它的高度由子节点撑出来,而子节点数量又由容量决定 —— 会锁死在初值上。
+   */
   const measureCapacity = useCallback(() => {
-    // ★量的是**轨道的定位容器**(.chat 那一列),因为 CSS 那句 max-height 里的 100% 指的是它。
-    //  拿 .chat-scroll 的高度算会偏大 —— 那正是第一版算出 80 而实测只能放 63 的原因。
-    //  ★不能量轨道自己:它的高度由子节点撑出来,而子节点数量又由容量决定 —— 会锁死在初值上。
-    const host = railRef.current?.offsetParent as HTMLElement | null
-    const h = host?.clientHeight ?? scrollRef.current?.clientHeight ?? 0
-    if (h > 0) setCapacity(railCapacity(h))
+    const sc = scrollRef.current
+    const h = sc?.clientHeight ?? 0
+    if (!(h > 0)) return
+    setCapacity(railCapacity(h))
+    setBox({ top: (sc?.offsetTop ?? 0) + h / 2, maxH: Math.max(0, h - RAIL_PAD * 2) })
   }, [scrollRef])
 
   // Keep the latest sync in a ref so the scroll/resize subscription stays stable.
@@ -128,7 +144,14 @@ export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
   }
 
   return (
-    <div className={`chat-jump-rail${on ? ' on' : ''}`} ref={railRef} aria-label="用户输入导航">
+    <div
+      className={`chat-jump-rail${on ? ' on' : ''}`}
+      ref={railRef}
+      aria-label="用户输入导航"
+      // ★位置和高度都由上面量出来(见 `box`)。CSS 里不再写死 `top:50%` / `max-height` ——
+      //  那两句拍的是「输入框有多高」,而那是个会变的量。
+      style={box ? { top: box.top, maxHeight: box.maxH } : undefined}
+    >
       {on && groups.map((g, n) => {
         const it = items[g.start]
         if (!it) return null

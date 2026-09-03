@@ -646,6 +646,12 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
      padding next to the text — the column's own padding (clamp 32–72px) then buffers the dashes
      from the AI text so the rail doesn't hug the reply. */
   left: max(8px, calc((100% - clamp(720px, 90%, 1180px)) / 2 - 6px));
+  /* ★★`top` 和 `max-height` 由 `ChatJumpRail.tsx` **量出来**后内联写进来,这里不再拍数。
+     原来是 `top:50%` + `max-height: calc(100% - 210px)`:轨道绝对定位在整列(.chat)里,
+     而整列 = 滚动区 + 输入框,居中再减 210 等于假设输入框只有 105px 高。它没有那么矮
+     (带附件条时 160~180,整窗缩放调大字号还会再涨),于是轨道下半截压进输入框 ——
+     用户报的「锚点列表底部都已经到输入框这块了」。现在按滚动区那个盒子摆,输入框天然在它外面。
+     ★兜底 top 留着:量到之前(首帧)总得有个位置,不然会从 0 跳到中间。 */
   top: 50%;
   transform: translateY(-50%);
   z-index: 8;
@@ -653,7 +659,6 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  max-height: calc(100% - 210px);
   /* NOT overflow:hidden — the hover preview opens to the RIGHT of a dash (left: calc(100% + 8px)),
      far outside the rail's ~20px-wide box, so clipping here swallowed the whole preview card (the
      reported "预览没有"). Visible lets the preview escape; dashes for very long threads may extend

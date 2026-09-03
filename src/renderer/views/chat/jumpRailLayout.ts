@@ -44,10 +44,20 @@ export const DOT_H = 6
 export const DOT_GAP = 4
 
 /**
- * 轨道的高度预算。**必须和 chat.css 里 `.chat-jump-rail` 的 `max-height: calc(100% - 210px)` 一致** ——
- * 改一边就要改另一边(下面 `railCapacity` 的测试钉着这个数)。
+ * 轨道上下各留多少呼吸空间。
+ *
+ * ★★2026-09-03 换掉了原来那个 `RAIL_MAX_OFFSET = 210`。那个常量的含义是「整列高度里
+ *  减掉 210 就是轨道能用的」,而轨道是 `top:50%` **垂直居中**的 —— 210 等于假设
+ *  「上面 105、下面 105」。**输入框比 105 高得多**(带附件/模式条时轻松 160~180,
+ *  而整窗缩放调大字号还会再涨)。于是算出来的容量偏大,轨道的下半截直接压进输入框 ——
+ *  用户报的「锚点列表底部都已经到输入框这块了」就是它,而不是「那台电脑没装上修复」
+ *  (那个修复确实在 beta.3 里,是它自己算错了)。
+ *
+ * ★现在这个数只是「留白」,不再兼职表示障碍物有多高:障碍物的真实高度由调用方
+ *  **量出来**(量对话滚动区那个盒子,输入框天然就在它外面),而不是在这里拍一个常量。
+ *  一个会随字号、窗口、附件条变化的量,写成常量就一定会在某台机器上是错的。
  */
-export const RAIL_MAX_OFFSET = 210
+export const RAIL_PAD = 24
 
 /**
  * 再挤也要留这么多个锚点。
@@ -67,10 +77,13 @@ export const MIN_DOTS = 6
  *  所以容量要按「不被压扁」算,不是按「不溢出」算。
  *
  * n 个锚点占 `n*DOT_H + (n-1)*DOT_GAP`,要 ≤ 预算 ⇒ `n ≤ (预算 + DOT_GAP) / (DOT_H + DOT_GAP)`。
+ *
+ * @param scrollerH **对话滚动区**的可见高度(`.chat-scroll` 的 clientHeight),
+ *   不是整列的高度。★这个区分就是这次修的东西:整列包含输入框,拿它算必然偏大。
  */
-export function railCapacity(containerH: number): number {
-  if (!(containerH > 0)) return MIN_DOTS
-  const budget = containerH - RAIL_MAX_OFFSET
+export function railCapacity(scrollerH: number): number {
+  if (!(scrollerH > 0)) return MIN_DOTS
+  const budget = scrollerH - RAIL_PAD * 2
   return Math.max(MIN_DOTS, Math.floor((budget + DOT_GAP) / (DOT_H + DOT_GAP)))
 }
 
