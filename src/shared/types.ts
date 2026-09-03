@@ -201,6 +201,14 @@ export interface ToolActivity {
   title: string              // human label, e.g. "调用 Read package.json" / "调用 Bash: npm test"
   name?: string              // raw tool name (Read/Bash/Edit/…) when known
   output?: string            // the tool's result/stdout (on done), where the provider streams it
+  /**
+   * `output` 被服务端截断过时,这里是**原始**行数(见 `main/chat/toolOutputCap.ts`)。
+   *
+   * ★没有它的话,截断之后界面会理直气壮地说「共 200 行」,而真相可能是五千行 ——
+   *  静默截断是这套渲染最不能犯的错。有它,工具卡那句「还有 N 行没显示」数字仍然是真的。
+   * ★只在**真的截过**时出现:没截断的消息一个字节都不多带。
+   */
+  outputLines?: number
   status: 'run' | 'ok' | 'error'
 }
 
@@ -230,6 +238,17 @@ export interface ChatMessage {
   id: string
   who: 'user' | 'ai'
   text: string
+  /**
+   * 这条**用户消息**是从哪台设备发过来的(`iPhone` / `Android 手机` / 另一台电脑的机器名)。
+   *
+   * ★★**只在不是本机窗口发的时候才有**。本机发的一律不带这个字段 —— 于是「没有标记 = 就在
+   *  这台机器上敲的」,常见情况下一个字节、一个像素都不多。
+   * ★★★**纯展示,绝不进上下文**。它是 `ChatMessage` 上一个独立字段,而喂给 agent 的地方
+   *  (`contextRebuild.ts` 的 `${who}：${m.text}`、`estimateContextTokens(m.text)`)读的
+   *  **只有 `text`** —— 所以它进不了提示词,不是靠谁记得去删。复制按钮复制的也是 `text`。
+   *  这条约束有测试钉着(见 `chatVia.test.ts`),别改成拼进 text 里。
+   */
+  via?: string
   model?: string
   // Agent id (claude/codex/cursor/...) that produced this ai message. Used to detect provider
   // switches (timeline divider) and to attribute per-provider watermark progress.
@@ -359,6 +378,11 @@ export interface ChatSendPayload {
   text: string
   attachments: Attachment[]
   source?: string      // who sent it, default '你'
+  /**
+   * 发起这一轮的设备名。★**由主进程从 `InvokeCtx.client` 填**,不信客户端在 payload 里自报 ——
+   * 自报的话任何一个连上来的客户端都能把自己写成别人。
+   */
+  via?: string
   permissionMode?: import('./permissions').PermissionMode   // agent sandbox scope (readonly/auto/full)
 }
 export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }

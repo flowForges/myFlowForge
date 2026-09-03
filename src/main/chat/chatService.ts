@@ -135,7 +135,10 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
 
     const userMsg: ChatMessage = {
       id: mkId('u'), who: 'user', text: payload.text,
-      files: payload.attachments.length ? payload.attachments : undefined, ts: now()
+      files: payload.attachments.length ? payload.attachments : undefined, ts: now(),
+      // ★从别的设备发来的才带这一项(见 ChatMessage.via)。★★注意它**没有**混进上面那个
+      //  `promptText` —— 那是它「绝不污染上下文」这条承诺的实现方式:两个字段,从不相加。
+      ...(payload.via ? { via: payload.via } : null),
     }
     appendMessage(ws, sid, userMsg)
     // 会话自动命名:普通聊天用首条用户消息命名(仍是 '新会话' 才改,导入会话有真实标题不受影响)。工作流

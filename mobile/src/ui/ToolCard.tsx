@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import type { ToolActivity } from '../../../src/shared/types'
 import { MONO, useC } from '../theme/theme'
 import { T } from './kit'
-import { parseToolBody, statusMark, toolHead, type ToolBody } from './toolParse'
+import { BODY_LINE_CAP, parseToolBody, statusMark, toolHead, type ToolBody } from './toolParse'
 
 /**
  * 工具卡 —— 原型 `d.css` 的 `.tool` / `.tool .th` / `.code`。
@@ -56,7 +56,11 @@ function CodeBody({ body }: { body: ToolBody }) {
 export function ToolCard({ tool }: { tool: ToolActivity }) {
   const c = useC()
   const [open, setOpen] = useState(false)
-  const body = useMemo(() => (tool.output ? parseToolBody(tool.output) : null), [tool.output])
+  // ★`outputLines` = 服务端截断前的原始行数。传下去,「还有 N 行没显示」才是真数字。
+  const body = useMemo(
+    () => (tool.output ? parseToolBody(tool.output, BODY_LINE_CAP, tool.outputLines) : null),
+    [tool.output, tool.outputLines],
+  )
   const head = useMemo(() => toolHead(tool, body), [tool, body])
   const mark = statusMark(tool.status)
   const running = tool.status === 'run'

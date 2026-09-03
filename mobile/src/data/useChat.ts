@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { BODY_LINE_CAP } from '../ui/toolParse'
 import { CH } from '../../../src/main/ipc/channels'
 import type { Attachment, ChatMessage, DelegateBatch, SubagentCard, ToolActivity } from '../../../src/shared/types'
 import { useConn } from '../net/conn'
@@ -35,6 +36,11 @@ export type Msg = {
   startedAt?: number
   /** 还在流式吐字。用来画光标,也用来决定停止键亮不亮。 */
   streaming?: boolean
+  /**
+   * 这条用户消息是从**哪台设备**发的。★只有从别的设备发来的才有 ——
+   * 没有就是「在那台电脑上敲的」。纯展示,不复制、不进上下文(见 `ChatMessage.via`)。
+   */
+  via?: string
   error?: string
 }
 
@@ -51,6 +57,7 @@ const fromHistory = (m: ChatMessage): Msg => ({
   tools: m.tools,
   subagents: m.subagents,
   startedAt: m.startedAt,
+  via: m.via,
 })
 
 type Evt = {
@@ -271,7 +278,22 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
     setError(null)
     void (async () => {
       try {
-        const hist = (await invoke(CH.chatHistory, [{ workspacePath: wsPath, sessionId }])) as ChatMessage[]
+        /**
+         * ★★`toolOutputLines` 是这一屏「打开慢」的主药。
+         *
+         * 一份历史 99% 的字节是工具输出(shell stdout / 读文件回显),而这一屏**最多画
+         * `BODY_LINE_CAP` 行** —— 剩下的下载下来就是为了立刻丢掉。走中转时那是十秒和一秒的差别。
+         * ★要多少画多少:传的就是 `BODY_LINE_CAP` 本身,不是另拍一个数。两处对不上的话,
+         *  要么白下载(传多了)、要么画不满(传少了),而后者屏幕上看不出来。
+         * ★字节那道闸挡的是「一行五万字」(minified JS / base64):只按行数截的话,
+         *  一行就能把整份历史撑回原样。
+         */
+        const hist = (await invoke(CH.chatHistory, [{
+          workspacePath: wsPath,
+          sessionId,
+          toolOutputLines: BODY_LINE_CAP,
+          toolOutputBytes: 16 * 1024,
+        }])) as ChatMessage[]
         if (!alive) return
         const seen = new Set(hist.map((m) => m.id))
         // 历史落地时把「加载期间流进来的新消息」接在后面,而不是整份替换。

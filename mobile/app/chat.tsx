@@ -25,7 +25,7 @@ import { Icon } from '../src/ui/Icon'
 import { canPickImage, canPickFile } from '../src/net/pickSupport'
 import { RADIUS } from '../src/theme/tokens'
 import { useC } from '../src/theme/theme'
-import { AgentBadge, Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Pill, ProviderSwitchSep, Row, T, TimeSep, TopBar } from '../src/ui/kit'
+import { AgentBadge, Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Loading, Pill, ProviderSwitchSep, Row, T, TimeSep, TopBar } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
 import { MessageBody } from '../src/ui/MessageBody'
 import { ToolCards } from '../src/ui/ToolCard'
@@ -166,6 +166,17 @@ export default function Chat() {
       fire('keyboardShown')
       // ★安卓没有 `keyboardWillShow`,只有 did 系列(`Sheet.tsx` 也是这么退的)。
       if (Platform.OS === 'android') setKbHeight(e?.endCoordinates?.height ?? 0)
+      /**
+       * ★★键盘顶上来 = 可视区一下子矮了一大截,而 ScrollView 的**滚动偏移不会跟着变** ——
+       *  于是刚才贴在底部的那几条消息,现在压在键盘后面。用户的原话是「呼起输入法,
+       *  会话的内容下部分被遮挡了」。
+       * ★只在**本来就在底部**的时候补这一下。人翻上去看旧消息、顺手点了输入框,
+       *  这时候把他拽回底部比遮住更糟 —— 他正在看的东西没了。
+       * ★延一拍:这一刻 KAV 的内边距(以及安卓那边的 `kbHeight`)还没落进布局,
+       *  立刻滚会滚到「按旧高度算出来」的位置,等于没滚。
+       */
+      if (!atBottomRef.current) return
+      setTimeout(() => flow.current?.scrollToEnd({ animated: true }), 60)
     })
     const b = Keyboard.addListener('keyboardDidHide', () => {
       fire('keyboardHidden')
@@ -765,7 +776,12 @@ export default function Chat() {
         }}
       >
         {msgs.length === 0 && (storeLoading || chatLoading) ? (
-          <Empty title="正在读取…" />
+          // ★会转的圈,不是一行静止的字 —— 见 `Loading` 上面那段。
+          //  慢的时候才补那句解释:一上来就说「可能有点慢」是自证预言。
+          <Loading
+            title="正在读这个会话"
+            slowHint={`内容比较多,正在从${activeHost?.label ?? '那台电脑'}上取。\n工具输出只取这一屏画得下的部分。`}
+          />
         ) : !selected ? (
           // 换主机会把选中清空(store.tsx),而这一屏还在栈里 —— 于是就落到这儿。
           // 这一屏自己没有「挑一条」的入口,所以只能指回上一层,别再许诺点不到的东西。
@@ -802,6 +818,18 @@ export default function Chat() {
                         ★`CAN_COPY` 为假(旧包里没有 expo-clipboard)时整颗不摆 —— 同代理那一侧的规矩。
                         ★原来这里还外挂了 `paddingRight: 3` / `marginTop: 3`,现在去掉了:按钮自己带了
                         11/10 的内边距(见 `CopyBtn.tsx` —— 可点区域只能这么长出来),再叠一层就是双份间距。 */}
+                    {/* ★★「这条是从别处发来的」。**只有从别的设备发来的才有** —— 没有标记就是
+                        「在那台电脑上敲的」。所以一个人一台设备用的时候,这一行一个像素都不出现。
+                        ★不进复制:`CopyBtn` 复制的是 `m.text`,这一行是另一个字段,天然不在里面。
+                        ★不进上下文:`via` 是 `ChatMessage` 上的独立字段,喂给模型的那几处只读 `text`。 */}
+                    {m.via ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, paddingTop: 3 }}>
+                        <T style={{ fontSize: 10.5, color: c.faint }}>▪</T>
+                        <T numberOfLines={1} style={{ fontSize: 11, color: c.faint, flexShrink: 1 }}>
+                          {m.via}
+                        </T>
+                      </View>
+                    ) : null}
                     {CAN_COPY && m.text.trim() ? (
                       <View style={{ alignItems: 'flex-end' }}>
                         <CopyBtn text={m.text} />

@@ -114,6 +114,19 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
           </button>
         </div>
       )}
+      {/* ★★「这条是从别处发来的」。**只有从别的设备发来的用户消息才有** —— 没有标记就是
+          「就在这台机器上敲的」,所以一台电脑自己用的时候,这一行一个像素都不出现。
+          ★这一行**不参与复制**(CSS `user-select:none`),也**不进 agent 的上下文**
+          (`via` 是 ChatMessage 上的独立字段,喂给模型的那几处只读 `text`,见它的 JSDoc)。 */}
+      {isUser && msg.via ? (
+        <div className="msg-via" aria-label={`来自 ${msg.via}`}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
+            <rect x="6" y="3" width="12" height="18" rx="2.5" />
+            <line x1="10.5" y1="18" x2="13.5" y2="18" />
+          </svg>
+          {msg.via}
+        </div>
+      ) : null}
       {msg.files?.length ? (
         <div className="msg-files">
           {msg.files.map((f, i) => (

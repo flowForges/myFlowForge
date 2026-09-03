@@ -113,9 +113,15 @@ export const BODY_LINE_CAP = 200
  *  ② 带行号 —— `1\t…`(claude Read)或 `   479→…`(claude Edit 回显的 cat -n 片段)。
  *  ③ 其它 —— 纯文本,不着色不画行号。
  */
-export function parseToolBody(output: string, cap = BODY_LINE_CAP): ToolBody {
+/**
+ * @param trueTotal 服务端截断前的**原始**行数(`ToolActivity.outputLines`)。
+ *   ★★没有它的话,服务端截过的输出会被这里当成「全部」—— 卡片说「共 200 行」,
+ *    而真相可能是五千行。静默截断是这套渲染最不能犯的错,所以这个参数不是可有可无的装饰:
+ *    它是「服务端也能截」这件事成立的前提。
+ */
+export function parseToolBody(output: string, cap = BODY_LINE_CAP, trueTotal?: number): ToolBody {
   const raw = output.replace(/\n+$/, '').split('\n')
-  const total = raw.length
+  const total = Math.max(trueTotal ?? raw.length, raw.length)
   const kept = raw.slice(0, cap)
   const dropped = total - kept.length
 

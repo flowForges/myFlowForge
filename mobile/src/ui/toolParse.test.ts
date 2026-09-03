@@ -192,3 +192,31 @@ describe('statusMark', () => {
     expect(statusMark('error')).toBe('✗')
   })
 })
+
+describe('服务端截过的输出', () => {
+  /**
+   * ★★服务端现在会把工具输出截到这一屏画得下的行数(`main/chat/toolOutputCap.ts`),
+   *  为的是别让手机下载一堆它立刻要丢掉的东西(实测长会话小 6~14 倍)。
+   *  代价是:**这一层再也不能从手上这段字符串推出原始行数**。推错的后果是
+   *  卡片理直气壮地说「共 200 行」而真相是五千行 —— 静默截断,这套渲染最不能犯的错。
+   */
+  it('给了真实行数就用真实的,「还有 N 行」是真数字', () => {
+    const kept = Array.from({ length: 200 }, (_, i) => `L${i}`).join('\n')
+    const b = parseToolBody(kept, 200, 5291)
+    expect(b.total).toBe(5291)
+    expect(b.dropped).toBe(5091)
+    expect(b.lines).toHaveLength(200)
+  })
+
+  it('没给就按手上这段算 —— 本机那条路一个字没变', () => {
+    const b = parseToolBody(Array.from({ length: 30 }, (_, i) => `L${i}`).join('\n'))
+    expect(b.total).toBe(30)
+    expect(b.dropped).toBe(0)
+  })
+
+  it('★真实行数比手上这段还小(不该发生)时按手上这段算 —— 绝不报出负数的「还有 -N 行」', () => {
+    const b = parseToolBody('a\nb\nc', 200, 1)
+    expect(b.total).toBe(3)
+    expect(b.dropped).toBe(0)
+  })
+})

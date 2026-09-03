@@ -1,5 +1,6 @@
 import { CH } from './channels'
 import { type InvokeCtx, type InvokeEventLike, type MethodTable } from './invokeCtx'
+import { capToolOutputs, readCap } from '../chat/toolOutputCap'
 import { createTerminalService, type TerminalService } from '../terminal/terminalService'
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
@@ -787,7 +788,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const chatQueue = new ChatQueue(runTurn, broadcast)
   on(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
-    chatQueue.enqueue(payload, source ?? '你')
+    /**
+     * 这一轮是从哪台设备发的。
+     *
+     * ★★**由这里填,不读 payload 里客户端自报的那个**:自报等于任何一个连上来的客户端
+     *  都能把自己写成别人,而这条标记的全部价值就是「可信地说清是谁发的」。
+     * ★本机窗口(`id === 'local'`)**不填** —— 没有标记就是「在这台机器上敲的」。
+     *  常见情况下一个字节都不多存,界面上也一个像素都不多画。
+     */
+    const via = _e?.client && _e.client.id !== 'local' ? _e.client.label : undefined
+    chatQueue.enqueue({ ...payload, via }, source ?? '你')
   })
   on(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
   // 还挂着的确认/提问门快照。聊天视图每次挂载都拉一次,把主进程仍在阻塞等待的门重建成卡片。
@@ -1265,7 +1275,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Fold any in-flight (still-streaming) assistant message into the returned history so switching to the
   // home view / another session mid-stream and back restores the already-produced output (it isn't
   // persisted until the turn's terminal state).
-  on(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId)))
+  /**
+   * 一个会话的全部历史。
+   *
+   * ★★`toolOutputLines` / `toolOutputBytes` 是**给带宽小的客户端**的:工具输出(shell stdout、
+   *  读文件回显)占一份历史 99% 的字节,而手机最多画 200 行。手机走中转打开长会话要十秒,
+   *  九成时间花在下载它立刻就要丢掉的东西上。给了上限就在这儿截,并带上原始行数
+   *  (界面照旧如实说「还有 N 行没显示」)。详见 `toolOutputCap.ts`。
+   * ★不给 = 一个字不截。电脑端本机那条路行为逐字不变。
+   */
+  on(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string; toolOutputLines?: number; toolOutputBytes?: number }) => {
+    const msgs = mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId))
+    const cap = readCap(a)
+    return cap ? capToolOutputs(msgs, cap) : msgs
+  })
   on(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
     const paths = await caps.pickPaths({ kind: 'file', multi: true })
     return paths.map(p => ({ name: basename(p), path: p, size: statSync(p).size }))

@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { AccessibilityInfo, Animated, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { MONO, useC } from '../theme/theme'
 import { T } from './kit'
 import { CAN_COPY, CopyBtn } from './CopyBtn'
@@ -155,6 +155,42 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
   )
 }
 
+/**
+ * 生成中那个末尾光标。**它会闪。**
+ *
+ * ★★原来是一个静止的 `▍`。一个不动的光标传达的信息恰好是反的 —— 光标之所以是「还在写」的
+ *  标志,全靠它在闪;不闪的那个更像**画面卡住了**。电脑端从来是闪的
+ *  (`chat.css` 的 `caret-blink 1s steps(2) infinite`),手机端漏了。
+ * ★`steps(2)` 的硬闪,不是渐隐渐现:两边节奏必须一样,不然同一个东西在两块屏上是两种性格。
+ * ★`useNativeDriver`:透明度动画交给 UI 线程,JS 线程正忙着解析流式吐进来的 markdown ——
+ *  放在 JS 线程上的话,恰恰在最需要它动的时候它最卡。
+ * ★★关掉动画偏好(系统设置里的「减弱动态效果」)时**不闪,但仍然显示**:光标是状态指示,
+ *  不是装饰,不能因为不闪就不画。
+ */
+function Caret() {
+  const c = useC()
+  const op = useRef(new Animated.Value(1)).current
+  const [reduce, setReduce] = useState(false)
+  useEffect(() => {
+    let alive = true
+    void AccessibilityInfo.isReduceMotionEnabled().then((v) => { if (alive) setReduce(v) })
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', (v) => setReduce(v))
+    return () => { alive = false; sub.remove() }
+  }, [])
+  useEffect(() => {
+    if (reduce) { op.setValue(1); return }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(op, { toValue: 0, duration: 0, delay: 530, useNativeDriver: true }),
+        Animated.timing(op, { toValue: 1, duration: 0, delay: 530, useNativeDriver: true }),
+      ]),
+    )
+    loop.start()
+    return () => { loop.stop(); op.setValue(1) }
+  }, [reduce, op])
+  return <Animated.Text style={{ color: c.accent, fontSize: 15, opacity: op }}>▍</Animated.Text>
+}
+
 export function MessageBody({ text, streaming }: { text: string; streaming?: boolean }) {
   const c = useC()
   /**
@@ -185,7 +221,7 @@ export function MessageBody({ text, streaming }: { text: string; streaming?: boo
           <MdBlock key={i} text={ch.text} />
         ),
       )}
-      {streaming ? <T style={{ color: c.accent, fontSize: 15 }}>▍</T> : null}
+      {streaming ? <Caret /> : null}
     </View>
   )
 }

@@ -490,6 +490,45 @@ export function Banner({
   )
 }
 
+/**
+ * 「正在读」的占位。**和 `Empty` 的区别只有一件事:它在动。**
+ *
+ * ★★为什么值得单独做一个:原来这儿是 `<Empty title="正在读取…" />` —— 一行**静止**的字。
+ *  用户的原话是「每次点进去都会正在连接..,这个文案我感觉不是很好,能否再加个加载动效」。
+ *  他说的是对的:一屏静止的字挂十秒,和卡死长得一模一样,人分不出「在跑」和「挂了」。
+ *  一个转着的圈是唯一能说明「它还活着」的东西。
+ *
+ * ★`ActivityIndicator` 是 RN 自带的,不引任何依赖。
+ * ★`slowHint`:超过 `slowAfterMs` 还没好才出现。**一上来就说「可能有点慢」是自证预言** ——
+ *  正常情况下这一屏一秒内就没了,那句话只会让人觉得这 app 慢。
+ */
+export function Loading({
+  title,
+  slowHint,
+  slowAfterMs = 4000,
+}: {
+  title: string
+  slowHint?: string
+  slowAfterMs?: number
+}) {
+  const c = useC()
+  const [slow, setSlow] = React.useState(false)
+  React.useEffect(() => {
+    if (!slowHint) return
+    const t = setTimeout(() => setSlow(true), slowAfterMs)
+    return () => clearTimeout(t)
+  }, [slowHint, slowAfterMs])
+  return (
+    <View style={{ paddingVertical: 46, paddingHorizontal: 30, alignItems: 'center', gap: 12 }}>
+      <ActivityIndicator size="small" color={c.accent} />
+      <T style={{ fontSize: 15.5, fontWeight: '600', color: c.fg2, textAlign: 'center' }}>{title}</T>
+      {slow && slowHint ? (
+        <T style={{ fontSize: 13, lineHeight: 21, color: c.muted, textAlign: 'center' }}>{slowHint}</T>
+      ) : null}
+    </View>
+  )
+}
+
 export function Empty({ title, desc }: { title: string; desc?: string }) {
   const c = useC()
   return (

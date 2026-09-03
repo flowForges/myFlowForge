@@ -956,3 +956,51 @@ describe('chat:gate-state —— 让重新挂载的聊天视图能把还挂着�
     expect(snap).toEqual({ confirms: [], asks: [] })
   })
 })
+
+describe('★这条是谁发的(ChatMessage.via)', () => {
+  /**
+   * 用户要的是:同一个会话里能一眼看出哪句是手机发的、哪句是另一台电脑发的。
+   * 而他同时定了两条硬边界 —— **不能被复制走,也不能进 agent 的上下文**。
+   * 这里守的是最靠上游的那一条:这个值**从哪儿来**。
+   */
+  const send = async () => {
+    const { registerIpc } = await import('./handlers')
+    const table = registerIpc(() => {}, {}, fakeHost())
+    const { sendTurn } = await import('../chat/chatService') as any
+    const seen: any[] = []
+    sendTurn.mockReset().mockImplementation((payload: any) => { seen.push(payload); return Promise.resolve({}) })
+    return { fn: table[CH.chatSend], seen }
+  }
+  const payload = { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [] }
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+
+  it('远程客户端发来的:记下它自报的设备名', async () => {
+    const { fn, seen } = await send()
+    fn({ emit: () => {}, client: { id: 'remote-1', label: 'iPhone' } }, payload)
+    await tick()
+    expect(seen[0].via).toBe('iPhone')
+  })
+
+  it('★本机窗口发的**不记** —— 没有标记就是「就在这台机器上敲的」', async () => {
+    // 常见情况(一个人一台电脑)因此一个字节都不多存、界面上一个像素都不多画。
+    const { fn, seen } = await send()
+    fn({ emit: () => {}, client: { id: 'local', label: '本机' } }, payload)
+    await tick()
+    expect(seen[0].via).toBeUndefined()
+  })
+
+  it('★★客户端在 payload 里自报的 via 一律被覆盖 —— 否则谁都能把自己写成别人', async () => {
+    // 这条标记的全部价值就是「可信地说清是谁发的」。信客户端自报等于这个价值归零。
+    const { fn, seen } = await send()
+    fn({ emit: () => {}, client: { id: 'remote-9', label: '书房的 Mac' } }, { ...payload, via: '你的 iPhone' })
+    await tick()
+    expect(seen[0].via).toBe('书房的 Mac')
+  })
+
+  it('没有 client 信息时(内部调用 / 老 preload)也不记', async () => {
+    const { fn, seen } = await send()
+    fn({ emit: () => {} }, payload)
+    await tick()
+    expect(seen[0].via).toBeUndefined()
+  })
+})

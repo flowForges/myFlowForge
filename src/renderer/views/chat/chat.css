@@ -149,6 +149,21 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   text-shadow: none;
 }
 .msg.user .msg-files { padding-left: 0; padding-right: 0; justify-content: flex-end; width: min(620px, calc(100% - 33px)); }
+
+/* 「这条是从别处发来的」。跟着气泡右对齐,压在它下面一行。
+   ★★`user-select: none` 不是可有可无的:用户明确要求这个标记**不能被复制走**。
+   复制按钮本来就只拿 `msg.text`,但**拖选整段对话**会把它一起框进去 —— 那正是
+   「不该进上下文」这条要求最容易破的口子(人复制一段对话粘给模型)。
+   ★字号 11 / `--faint`:它是署名,不是内容。要能看见,但不该在扫视时把眼睛拽过去。 */
+.msg.user .msg-via {
+  width: min(620px, calc(100% - 33px));
+  margin-left: auto;
+  display: flex; align-items: center; justify-content: flex-end; gap: 4px;
+  padding-top: 4px;
+  font-size: 11px; line-height: 1.4; color: var(--faint);
+  user-select: none; -webkit-user-select: none;
+}
+.msg.user .msg-via svg { width: 11px; height: 11px; flex: 0 0 auto; opacity: .8; }
 .attach-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; font-size: 12px; }
 .attach-chip svg { width: 14px; height: 14px; color: var(--muted); }
 .attach-chip .sz { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
