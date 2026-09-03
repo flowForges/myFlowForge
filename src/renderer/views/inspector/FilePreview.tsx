@@ -46,6 +46,8 @@ export function FilePreview({
   const [imgUrl, setImgUrl] = useState<string | null>(null)
   const [imgErr, setImgErr] = useState('')
   const [zoom, setZoom] = useState(false)
+  /** 复制按钮的反馈:'' / 'ok' / 'err'。★复制是**看不见**的动作,不给回执人不知道成没成功。 */
+  const [copied, setCopied] = useState<'' | 'ok' | 'err'>('')
 
   useEffect(() => {
     if (!open || !file) return
@@ -69,6 +71,32 @@ export function FilePreview({
       void window.forge.gitFile(cwd, file).then(setFull)
     }
   }, [mode, full, open, cwd, file])
+
+  // 换文件就把回执清掉 —— 不清的话上一份的「已复制」会挂在新文件的按钮上。
+  useEffect(() => { setCopied('') }, [cwd, file])
+
+  /**
+   * 复制**这个文件的内容**。
+   *
+   * ★★复制的永远是文件正文,**不是当前看到的那一屏** —— 在 Diff 模式下按它,拿到的也是整份
+   *  文件,而不是带 `+`/`-` 前缀的 diff 片段。用户要的是「复制当前文件内的内容」,而一份
+   *  带着 diff 标记的文本粘到哪儿都是坏的(粘进编辑器编译不过,粘给模型是噪音)。
+   * ★所以 Diff 模式下 `full` 可能还没拉过 —— 点的时候现拉一次,不预取:大部分人打开预览
+   *  只是看一眼,为一颗可能不点的按钮多读一次文件不值当。
+   */
+  const copyFile = async () => {
+    try {
+      const data = full ?? await window.forge.gitFile(cwd, file)
+      if (!full) setFull(data)
+      await navigator.clipboard.writeText(data?.text ?? '')
+      setCopied('ok')
+    } catch {
+      // 剪贴板不可用 / 文件读不到。★说出来,不要静默 —— 「点了没反应」会让人以为按钮是坏的,
+      //  然后反复点。
+      setCopied('err')
+    }
+    window.setTimeout(() => setCopied(''), 1800)
+  }
 
   return (
     <div className={`preview${open ? ' on' : ''}`}>
@@ -97,6 +125,15 @@ export function FilePreview({
                 用浏览器打开
               </button>
             )}
+            {/* ★★复制排在 Diff/全文 前面:它是对**这个文件**的操作,而那个开关是「怎么看」。
+                两者不是一类,挨着摆但不进同一个胶囊。 */}
+            <button
+              className={`pv-copy${copied ? ' ' + copied : ''}`}
+              title="复制这个文件的全部内容"
+              onClick={() => void copyFile()}
+            >
+              {copied === 'ok' ? '已复制' : copied === 'err' ? '复制失败' : '复制'}
+            </button>
             <div className="pv-toggle">
               <button
                 className={mode === 'diff' ? 'on' : undefined}
