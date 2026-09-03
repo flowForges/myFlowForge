@@ -31,9 +31,12 @@ async function boot(table: MethodTable, extra: Extra = {}) {
   const hub = createBroadcastHub()
   const gw = await startGateway({
     table, addSink: hub.addSink, version: '9.9.9', port: 0,
-    // ★测试里把嗅探窗口调小 —— 明文那条路要等这个窗口过完才发 hello,
-    //  用默认 500ms 会让每条明文用例都白等半秒。窗口本身另有一条用例单独钉。
-    e2eGraceMs: 30,
+    // ★★窗口默认给**大**的。它是「窗口内没等到 hs-init 就断定对面是明文」——
+    //  全量并行跑时 CPU 饱和,hs-init 完全可能晚于一个 30ms 的窗口到达,于是加密用例
+    //  随机报「对面这台电脑的版本太老」。**那是机器慢,不是代码错**,但它长得和真 bug
+    //  一模一样。加密那条路窗口开多大都不影响速度(hs-init 一到就立刻决定,零延迟);
+    //  只有真要等窗口过完的那两条才调小,各自在用例里写明。
+    e2eGraceMs: 1500,
     ...extra,
   })
   cleanup.push(() => gw.close())
@@ -133,7 +136,8 @@ describe('局域网直连的端到端加密握手', () => {
 
   it('★★老客户端(不带公钥、等对面先说话)照旧明文能连能 invoke', async () => {
     const identity = generateIdentity()
-    const { gw } = await boot({ 'a:b': () => '明文' }, { identity })
+    // ★这条是**唯一**真的要等窗口过完的:明文客户端连上什么都不发,等对面先说 hello。
+    const { gw } = await boot({ 'a:b': () => '明文' }, { identity, e2eGraceMs: 30 })
     const c = plainClient(gw.port)
 
     expect(await c.next((f) => f.t === 'hello')).toMatchObject({ t: 'hello', protocol: 1 })

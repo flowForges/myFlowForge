@@ -21,10 +21,25 @@ import type { MethodTable } from '../ipc/invokeCtx'
 const closers: (() => Promise<void> | void)[] = []
 afterEach(async () => { for (const c of closers.splice(0)) await c() })
 
-async function serve(table: MethodTable, identity?: Parameters<typeof startGateway>[0]['identity']) {
+/**
+ * ★`e2eGraceMs` 默认给**大**的。
+ *
+ * 嗅探窗口是「窗口内没等到 hs-init 就断定对面是明文客户端」。全量并行跑时 CPU 是饱和的,
+ * 客户端的 hs-init 完全可能晚于一个 60ms 的窗口到达 —— 于是网关回明文 hello,
+ * 而客户端报「对面这台电脑的版本太老」。**那是测试机器慢,不是代码错**,
+ * 但它长得和真 bug 一模一样,查起来会先怀疑加密那条路。
+ *
+ * 所以:要验**加密**的用例把窗口调大(等多久都无所谓,hs-init 一到就立刻决定,零延迟);
+ * 只有要验**明文**的那条才需要小窗口 —— 它是唯一真的要等窗口过完的。
+ */
+async function serve(
+  table: MethodTable,
+  identity?: Parameters<typeof startGateway>[0]['identity'],
+  e2eGraceMs = 2000,
+) {
   const hub = createBroadcastHub()
   const gw = await startGateway({
-    table, addSink: hub.addSink, version: '1.2.0', port: 0, identity, e2eGraceMs: 60,
+    table, addSink: hub.addSink, version: '1.2.0', port: 0, identity, e2eGraceMs,
   })
   closers.push(() => gw.close())
   return { gw, hub }
@@ -101,7 +116,8 @@ for (const CLIENT of [DESKTOP, MOBILE]) {
 
     it('★不带公钥 = 明文直连(老配对码),照旧能 ready、能 invoke', async () => {
       const identity = generateIdentity()
-      const { gw } = await serve({ 'a:b': () => '明文' }, identity)
+      // ★这条是唯一真的要等窗口过完的 —— 小窗口,别让它白等两秒
+      const { gw } = await serve({ 'a:b': () => '明文' }, identity, 60)
       const c = CLIENT.connect(gw.port)
       await c.ready()
       expect(await c.invoke('a:b', [])).toBe('明文')
