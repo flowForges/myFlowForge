@@ -11,7 +11,17 @@ export interface LogLine { ts: string; text: string; level: 'info' | 'ok' | 'acc
 // (e.g. Bash/Write) for a clearer gate label. Both optional → existing callers unaffected.
 // questions: 这道门其实是「请回答」而非「批准执行」(claude AskUserQuestion)。带着它的门必须用
 // ConfirmDecision 的对象形态把用户的选择带回来,只回 'allow' 会让模型收到「没等到回复」。
-export interface ConfirmReq { title: string; where?: string; agentId?: string; toolName?: string; questions?: AskQuestion[] }
+export interface ConfirmReq {
+  title: string; where?: string; agentId?: string; toolName?: string; questions?: AskQuestion[]
+  /** 这道门问的是哪一次工具调用(claude 的 `can_use_tool.tool_use_id`)。和 `ToolActivity.id` 是同一个值。 */
+  toolUseId?: string
+  /**
+   * 门被「完全访问」自动放行时调这个,**代替**往对话里发一条审计消息 ——
+   * 由 chatService 提供,把「自动放行」记在对应那张工具卡上(见 `ToolActivity.autoAllowed`)。
+   * ★没有它(或者没有 `toolUseId`)的调用方仍然回落成发消息:悄悄放行是不允许的。
+   */
+  onAutoAllow?: () => void
+}
 // 老形态 'allow'/'deny' 全部保留(绝大多数门只需要放行/拒绝);对象形态是回答通道。
 export type ConfirmDecision = 'allow' | 'deny' | { decision: 'allow'; answers?: AskAnswers; response?: string }
 /** 把任意 ConfirmDecision 收敛回二值,给只关心放行与否的调用方(codex 审批、只读委派等)。 */

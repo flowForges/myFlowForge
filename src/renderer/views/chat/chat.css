@@ -561,6 +561,10 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .tool-mark { font-size: 11px; flex: 0 0 auto; }
 .tool-mark.m-ok { color: var(--ok, #3fb950); }
 .tool-mark.m-error { color: var(--err); }
+/* 「这次是自动放行的」。★做得比状态标记还淡:它是背景信息,不是这一行的重点(重点是跑了什么、成没成)。
+   一轮十几次调用都会带它,再显眼一点整块就成了一列 emoji。 */
+.tool-auto { font-size: 10.5px; line-height: 1; opacity: .5; flex: 0 0 auto; cursor: help; }
+.tool-row:hover .tool-auto { opacity: .85; }
 .tool-caret { font-size: 10px; color: var(--faint); transition: transform .12s; flex: 0 0 auto; }
 .tool-caret.open { transform: rotate(90deg); }
 .tool-output { margin: 0; padding: 8px 11px 10px 25px; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: color-mix(in oklab, var(--surface-2) 50%, transparent); }

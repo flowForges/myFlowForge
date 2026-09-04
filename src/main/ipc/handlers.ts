@@ -629,9 +629,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // ★ 只给 provider 的逐操作门用,不能给下面那个「无沙箱 provider 预授权门」用:那个门已经自己按
     //   payload.permissionMode !== 'full' 守过了,再叠一层等于替用户默默写下 fullAccessAck ——
     //   那是另一件事的授权,不是同一件。
-    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[] }): Promise<ConfirmDecision> => {
+    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolUseId?: string; onAutoAllow?: () => void }): Promise<ConfirmDecision> => {
       if (autoAllowable(req) && getSession(payload.workspacePath, payload.sessionId)?.permissionMode === 'full') {
-        emitNote(payload.workspacePath, payload.sessionId, `🛡 已按当前权限档「完全访问」自动放行：${gateWhere(req)}`)
+        // ★★优先记在**那次调用自己的工具卡**上(`ToolActivity.autoAllowed`),不往对话流里插消息。
+        //   原来每放行一次就发一条 `who:'ai'` 的消息,顶着「系统」头像 +「回答」标签,长得和模型的
+        //   回答一模一样,还夹在工具卡和真正的回答中间。用户原话:「bash 的结果应该在 bash 的那个
+        //   折叠里,不应该出现在 LLM 输出的内容界面啊」。它是那次调用的属性,不是一句回答。
+        // ★拿不到工具卡(别的 provider 不给 tool_use_id)才回落成发消息 —— **不能悄悄放行**,
+        //   「留一行审计痕迹」这条约束一步都不让。
+        if (req.onAutoAllow) req.onAutoAllow()
+        else emitNote(payload.workspacePath, payload.sessionId, `🛡 已按当前权限档「完全访问」自动放行：${gateWhere(req)}`)
         return Promise.resolve('allow')
       }
       return confirm(req)

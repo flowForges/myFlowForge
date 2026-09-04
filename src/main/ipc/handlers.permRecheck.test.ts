@@ -73,7 +73,12 @@ vi.mock('../plugins/pluginSchedulerRef', () => ({
 vi.mock('../plugins/officialCatalog', () => ({ listCatalog: () => [], installOfficial: vi.fn() }))
 vi.mock('../agents/refreshModels', () => ({ refreshProviderModels: vi.fn() }))
 
-type Confirm = (req: { title: string; where?: string; questions?: unknown[] }) => Promise<unknown>
+type Confirm = (req: {
+  title: string; where?: string; questions?: unknown[]
+  // ★这两个是 2026-09-04 加的:自动放行改成记在**那次调用的工具卡**上,不再往对话里插消息。
+  //   chatService 只在拿得到 tool_use_id 时才给 onAutoAllow,拿不到就必须回落成发消息。
+  toolUseId?: string; onAutoAllow?: () => void
+}) => Promise<unknown>
 
 /**
  * 起一轮真实的 chat turn,把 registerIpc 交给 sendTurn 的 `confirm` 抓出来 —— 这就是 CLI 升门用的那个出口。
@@ -122,7 +127,26 @@ describe('确认门升起时重新检查权限档', () => {
     expect(requests(sent)).toHaveLength(0)
   })
 
-  it('★ full 档:自动放行要在对话里留一行审计痕迹,不能悄悄放行', async () => {
+  /**
+   * 审计痕迹留在**哪儿**,2026-09-04 改过一次。
+   *
+   * 原来一律往对话流里发一条 `who:'ai'` 的消息 —— 于是它顶着「系统」头像和「回答」标签,
+   * **长得和模型的回答一模一样**,还夹在工具卡和真正的回答中间。用户原话:
+   * 「bash 的结果应该在 bash 的那个折叠里,不应该出现在 LLM 输出的内容界面啊」。
+   * 现在:拿得到那次调用的工具卡就记在卡上(`onAutoAllow`),拿不到才回落成发消息。
+   * ★两条路都必须留痕 —— 「不能悄悄放行」这条一步不让,所以下面两条用例是一对,缺一不可。
+   */
+  it('★ full 档 + 挂得上工具卡:记在卡上,**不再往对话里插消息**', async () => {
+    sessionState.permissionMode = 'full'
+    const { confirm, sent } = await startTurn()
+    let marked = 0
+    await confirm({ title: 'Bash 请求执行', where: 'ls -la', toolUseId: 'toolu_1', onAutoAllow: () => { marked++ } })
+    expect(marked).toBe(1)
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+    expect(notes.some(([, p]) => p.message.text.includes('完全访问')), '还在往对话流里发消息').toBe(false)
+  })
+
+  it('★★ full 档 + 挂不上工具卡(provider 不给 tool_use_id):回落成发消息 —— 绝不悄悄放行', async () => {
     sessionState.permissionMode = 'full'
     const { confirm, sent } = await startTurn()
     await confirm({ title: 'Bash 请求执行', where: 'ls -la' })

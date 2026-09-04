@@ -14,6 +14,16 @@ function statusMark(s: ToolActivity['status']): string {
   return s === 'run' ? '' : s === 'error' ? '✗' : '✓'
 }
 
+/**
+ * 一次工具调用。
+ *
+ * ★★那枚 🛡:这次调用是被「完全访问」档自动放行的。
+ *  它以前是**对话流里一条独立消息**(`who:'ai'` + 「系统」头像 +「回答」标签),于是长得和模型的
+ *  回答一模一样,还夹在这张卡和真正的回答中间。用户原话:「bash 的结果应该在 bash 的那个折叠里,
+ *  不应该出现在 LLM 输出的内容界面啊」。它是**这次调用的属性**,所以就该在这一行上。
+ * ★做成一枚安静的标记而不是一行字:一轮里十几次调用都会带它,写成句子就是十几句重复的话。
+ *  完整措辞放在 title 里,鼠标停上去看得到。
+ */
 function Row({ tool }: { tool: ToolActivity }) {
   const [open, setOpen] = useState(false)
   const hasOutput = !!tool.output
@@ -22,6 +32,9 @@ function Row({ tool }: { tool: ToolActivity }) {
       <button className="tool-head" onClick={() => hasOutput && setOpen(o => !o)} aria-expanded={open} disabled={!hasOutput}>
         <span className={`tool-dot d-${tool.status}`} aria-hidden="true" />
         <span className="tool-title" title={tool.title}>{tool.title}</span>
+        {tool.autoAllowed && (
+          <span className="tool-auto" title="当前权限档是「完全访问」，这次调用没有弹确认门，已自动放行">🛡</span>
+        )}
         {tool.status !== 'run' && <span className={`tool-mark m-${tool.status}`} aria-hidden="true">{statusMark(tool.status)}</span>}
         {hasOutput && <span className={`tool-caret${open ? ' open' : ''}`} aria-hidden="true">▸</span>}
       </button>

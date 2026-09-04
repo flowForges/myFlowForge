@@ -195,6 +195,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       think: { label: '主代理思考中…', steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
       context, usage: lastUsage, subagents: subagentList(), tools: toolList(),
     })
+    /**
+     * 被「完全访问」自动放行的那些工具调用的 id。
+     * ★★用一个**独立的集合**而不是直接改 `tools`:门可能在这次调用的 `tool_use` 事件**之前**就到了
+     *  (顺序由 CLI 决定,不归我们管),那时 `tools` 里还没有这一条。集合先记着,`onToolActivity`
+     *  建行时再合进去 —— 两种到达顺序都对。
+     */
+    const autoAllowedIds = new Set<string>()
     // Main-agent tool call → the 执行 block. 'start' registers the row (title); 'done' fills output/status.
     const onToolActivity = (ev: { id: string; phase: 'start' | 'done'; name?: string; title?: string; output?: string; isError?: boolean }) => {
       const prev = tools.get(ev.id) ?? { id: ev.id, title: ev.title ?? ev.name ?? '调用工具', status: 'run' as const }
@@ -204,11 +211,36 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         name: ev.name ?? prev.name,
         output: ev.output ?? prev.output,
         status: ev.phase === 'done' ? (ev.isError ? 'error' : 'ok') : prev.status,
+        ...(autoAllowedIds.has(ev.id) || prev.autoAllowed ? { autoAllowed: true } : {}),
       }
       tools.set(ev.id, next)
       publishLive()
       emit({ workspacePath: ws, sessionId: sid, type: 'tool-activity', id: aid, tool: next })
     }
+
+    /**
+     * 「这次调用被自动放行了」——记在**那张工具卡**上,而不是往对话流里插一条消息。
+     * 由 `deps.confirm` 的实现(handlers 的 toolConfirm)在自动放行时回调。
+     */
+    const markAutoAllowed = (id: string) => {
+      autoAllowedIds.add(id)
+      const t = tools.get(id)
+      if (!t || t.autoAllowed) return
+      const next: ToolActivity = { ...t, autoAllowed: true }
+      tools.set(id, next)
+      publishLive()
+      emit({ workspacePath: ws, sessionId: sid, type: 'tool-activity', id: aid, tool: next })
+    }
+
+    /**
+     * ★把 `onAutoAllow` 塞进请求里再交给上层。上层据此知道「这道门可以不发消息,挂卡上就行」;
+     *  ★只在**拿得到 toolUseId** 时给 —— 给不出去的时候上层必须回落成发消息,不能悄悄放行。
+     */
+    const confirmWithGateNote = deps.confirm
+      ? (req: ConfirmReq) => deps.confirm!(req.toolUseId
+          ? { ...req, onAutoAllow: () => markAutoAllowed(req.toolUseId!) }
+          : req)
+      : undefined
     publishLive()
     const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean; step?: string }) => {
       const prev = subagents.get(ev.id) ?? { id: ev.id, state: 'running' as const }
@@ -377,7 +409,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           // ephemeral liveness (visible while the turn runs, replaced by the final message on done), so
           // the persisted reasoning stays clean while the spawn/handshake gap no longer looks frozen.
           onStatus: (t) => emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t }),
-          onConfirm: deps.confirm,
+          onConfirm: confirmWithGateNote,
           onUsage: (u) => { lastUsage = u; publishLive() },
           onTurnTokens: (t) => { turnTokens = { input: (turnTokens?.input ?? 0) + t.input, output: (turnTokens?.output ?? 0) + t.output } },
           onSubagent,
@@ -397,7 +429,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         {
           onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { dbgDelta('run', l.text); text += (text ? '\n' : '') + l.text; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
           onState: () => {},
-          onConfirm: deps.confirm ?? (async () => 'deny'),
+          onConfirm: confirmWithGateNote ?? (async () => 'deny'),
           onInput: async () => '',
           onDone: () => {},
           onError: (err) => resolve(aborted ? finishAborted() : finishErr(err))

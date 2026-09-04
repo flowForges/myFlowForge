@@ -88,6 +88,17 @@ export function ToolCard({ tool }: { tool: ToolActivity }) {
             <T style={[st.s, { color: c.muted }]}>{head.stat}</T>
           )
         ) : null}
+        {/* ★这次调用被「完全访问」自动放行了。电脑端同一枚标记(`views/chat/ToolBlock.tsx`)——
+            它以前是对话流里一条独立消息,长得和模型的回答一样,现在归位到它真正属于的这一行。
+            ★手机上更要克制:一屏本来就窄,一轮十几次调用,写成句子会把工具卡挤没。 */}
+        {tool.autoAllowed ? (
+          <T
+            accessibilityLabel="已按「完全访问」自动放行"
+            style={[st.auto, { color: c.faint }]}
+          >
+            🛡
+          </T>
+        ) : null}
         {mark ? <T style={[st.mark, { color: tool.status === 'error' ? c.err : c.ok }]}>{mark}</T> : null}
       </Pressable>
       {open ? (
@@ -125,6 +136,8 @@ const st = StyleSheet.create({
   p: { fontFamily: MONO, fontSize: 11.5, flex: 1, minWidth: 0 },
   s: { fontFamily: MONO, fontSize: 11.5 },
   mark: { fontSize: 11.5, fontWeight: '700' },
+  // 比状态标记还淡:它是背景信息,不是这一行的重点。
+  auto: { fontSize: 10.5, opacity: 0.55, marginLeft: 2 },
   // .code { font: mono 11.5 / 1.8; padding: 8px 0 }  ·  .tool .code { border-top; background: --bg-2 }
   code: { borderTopWidth: StyleSheet.hairlineWidth, paddingVertical: 8 },
   cl: { flexDirection: 'row' },

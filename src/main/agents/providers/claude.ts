@@ -133,7 +133,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           try {
             decision = await cb.onConfirm({
               title: questions ? askGateTitle(questions) : `${cut.toolName} 请求执行`,
-              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName,
+              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName, toolUseId: cut.toolUseId,
               ...(questions ? { questions } : {}),
             })
           }

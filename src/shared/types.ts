@@ -210,6 +210,18 @@ export interface ToolActivity {
    */
   outputLines?: number
   status: 'run' | 'ok' | 'error'
+  /**
+   * 这次调用是被「完全访问」档**自动放行**的(没有弹门问人)。
+   *
+   * ★★为什么挂在工具卡上而不是往对话里发一条消息:原来是 `emitNote` 发一条 `who:'ai'` 的
+   *  ChatMessage,于是它顶着「系统」头像和「回答」标签,长得**和模型的回答一模一样**,还夹在
+   *  工具卡和真正的回答中间。用户原话:「bash 的结果应该在 bash 的那个折叠里,不应该出现在
+   *  LLM 输出的内容界面啊」。对的 —— 它是那次工具调用的属性,不是一句回答。
+   * ★能精确对上是因为两边是**同一个 id**:权限门收到的 `can_use_tool` 带 `tool_use_id`
+   *  (`claudeControl.ts`),而工具卡的 id 就是那个 `tool_use` 块的 id(`chatStream.ts`)。
+   *  不是靠命令文本猜的。
+   */
+  autoAllowed?: boolean
 }
 
 // One background sub-agent in a lightweight-delegation batch, surfaced live in the chat stream so the
