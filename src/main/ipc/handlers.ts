@@ -1,4 +1,5 @@
 import { CH } from './channels'
+import { gateNoteBody } from './gateNote'
 import { type InvokeCtx, type InvokeEventLike, type MethodTable } from './invokeCtx'
 import { capToolOutputs, readCap } from '../chat/toolOutputCap'
 import { createTerminalService, type TerminalService } from '../terminal/terminalService'
@@ -548,7 +549,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   //   伪装成权限请求发出来)。自动 allow 会带着空 answers 回去,CLI 转头告诉模型「用户没有回答」——
   //   正是 3c899d3 修掉的那个 bug。
   const autoAllowable = (g: { questions?: AskQuestion[] }) => !g.questions?.length
-  const gateWhere = (g: { title: string; where?: string }) => `${g.title}${g.where ? ` · ${g.where}` : ''}`
+  const gateWhere = gateNoteBody
 
   const emitNote = (wsPath: string, sessionId: string, noteText: string) => {
     const id = `sys-${Date.now()}`
