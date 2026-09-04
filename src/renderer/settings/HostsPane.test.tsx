@@ -1,7 +1,8 @@
+import { useState } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { HostsPane, normalizeAddress } from './HostsPane'
-import type { HostStatusView, RemoteHostView } from '@shared/remote/hostView'
+import type { HostDisplay, HostStatusView, RemoteHostView } from '@shared/remote/hostView'
 
 const LOCAL: HostStatusView = { hostId: null, label: '本机', state: { status: 'local' }, methods: [] }
 const MOBILE_OFF = { running: false, host: '0.0.0.0', port: 6789, token: '', addresses: [], clients: 0, error: '' }
@@ -29,8 +30,20 @@ beforeEach(() => {
   }
 })
 
+/**
+ * 页面级那条设置(底部主机按钮显示成什么样)的两个 prop。
+ * ★包一层**真有 state** 的壳:它是受控组件,拿 `vi.fn()` 当 onChange 的话选完值不会变,
+ *  于是「挑一项」这类用例会假绿(按钮上的字永远是初始值)。
+ */
+const chipChange = vi.fn()
+function Harness() {
+  const [chip, setChip] = useState<HostDisplay>('both')
+  return <HostsPane hostChip={chip} onHostChipChange={(v) => { chipChange(v); setChip(v) }} />
+}
+const renderPane = () => render(<Harness />)
+
 const openForm = async () => {
-  render(<HostsPane />)
+  renderPane()
   await waitFor(() => expect(screen.getAllByText('添加主机').length).toBeGreaterThan(0))
   await act(async () => { fireEvent.click(screen.getAllByText('添加主机')[0]!) })
 }
@@ -128,7 +141,7 @@ describe('HostsPane 保存校验', () => {
   })
 
   it('空态里就能直接添加,不用先找按钮', async () => {
-    render(<HostsPane />)
+    renderPane()
     await waitFor(() => expect(screen.getByText('还没有添加任何远程主机')).toBeInTheDocument())
     expect(screen.getAllByText('添加主机').length).toBeGreaterThan(0)
   })
@@ -178,15 +191,36 @@ describe('校验提示的位置', () => {
     expect(hostsUpsert).toHaveBeenCalledWith(expect.objectContaining({ icon: '' }))
   })
 
-  it('填了标识和显示方式就存下去', async () => {
+  it('挑了图标就存下去', async () => {
     await openForm()
     type('名称', '云服务器')
     pickIcon('服务器')
-    choose('标题栏上显示', '只显示标识')
     choose('连接方式', '直接连接(局域网 / Tailscale / 本机自测)')
     type('地址', 'ws://1.2.3.4:6767')
     await save()
-    expect(hostsUpsert).toHaveBeenCalledWith(expect.objectContaining({ icon: '☁️', display: 'icon' }))
+    expect(hostsUpsert).toHaveBeenCalledWith(expect.objectContaining({ icon: '☁️' }))
+  })
+
+  it('★「显示图标还是名称」不再是每台主机自己的事 —— 表单里不该再有那个框', async () => {
+    // 它是**那枚按钮**的设置,一份、全局。留在表单里就会出现「同一枚按钮切台主机换副长相」。
+    await openForm()
+    expect(screen.queryByRole('button', { name: '标题栏上显示' })).toBeNull()
+  })
+})
+
+describe('★底部那枚主机按钮的显示方式 = 页面级、一份', () => {
+  it('挑一项就报上去', async () => {
+    renderPane()
+    await waitFor(() => expect(screen.getByRole('button', { name: '主机按钮显示' })).toBeTruthy())
+    choose('主机按钮显示', '只显示图标')
+    expect(chipChange).toHaveBeenCalledWith('icon')
+  })
+
+  it('★一台主机都没配也在 —— 它管的是那枚按钮,不是某台主机', async () => {
+    // 主机列表为空(beforeEach 的默认),这条设置照样要能改:没配主机时按钮仍然画着。
+    hosts = []
+    renderPane()
+    await waitFor(() => expect(screen.getByRole('button', { name: '主机按钮显示' })).toBeTruthy())
   })
 })
 
@@ -204,7 +238,7 @@ describe('★★走中转的主机必须一眼看得出来', () => {
 
   it('标的是「经中转」,不是「直接连接」', async () => {
     hosts = [relayed]
-    render(<HostsPane />)
+    renderPane()
     await waitFor(() => expect(screen.getByText('书房的 Mac')).toBeTruthy())
     expect(screen.getByText('经中转')).toBeTruthy()
     expect(screen.queryByText('直接连接')).toBeNull()
@@ -215,7 +249,7 @@ describe('★★走中转的主机必须一眼看得出来', () => {
     // 把它当成连接目标显示出来,就是在说一件不成立的事 —— 而人正是照着这一行判断
     // 「我到底连的是哪条路」。
     hosts = [relayed]
-    render(<HostsPane />)
+    renderPane()
     await waitFor(() => expect(screen.getByText('书房的 Mac')).toBeTruthy())
     expect(screen.getByText('wss://relay.example.workers.dev')).toBeTruthy()
     expect(screen.queryByText('ws://192.168.1.20:6789')).toBeNull()
@@ -223,7 +257,7 @@ describe('★★走中转的主机必须一眼看得出来', () => {
 
   it('没有中转的照旧 —— 别把普通直连也改了', async () => {
     hosts = [{ ...relayed, relay: '' } as RemoteHostView]
-    render(<HostsPane />)
+    renderPane()
     await waitFor(() => expect(screen.getByText('书房的 Mac')).toBeTruthy())
     expect(screen.getByText('直接连接')).toBeTruthy()
     expect(screen.getByText('ws://192.168.1.20:6789')).toBeTruthy()
@@ -243,22 +277,22 @@ describe('自绘下拉框', () => {
 
   it('★键盘也能用 —— 原生 select 白送的这些,自绘就得自己补', async () => {
     await openForm()
-    const btn = screen.getByRole('button', { name: '标题栏上显示' })
+    const btn = screen.getByRole('button', { name: '主机按钮显示' })
     fireEvent.keyDown(btn, { key: 'ArrowDown' })          // 打开
     expect(screen.getAllByRole('option').length).toBe(3)
-    fireEvent.keyDown(btn, { key: 'ArrowDown' })          // 移到「只显示标识」
+    fireEvent.keyDown(btn, { key: 'ArrowDown' })          // 移到「只显示图标」
     fireEvent.keyDown(btn, { key: 'Enter' })
-    expect(btn.textContent).toContain('只显示标识')
+    expect(btn.textContent).toContain('只显示图标')
   })
 
   it('Esc 关掉,并且**不改值**', async () => {
     await openForm()
-    const btn = screen.getByRole('button', { name: '标题栏上显示' })
+    const btn = screen.getByRole('button', { name: '主机按钮显示' })
     fireEvent.keyDown(btn, { key: 'ArrowDown' })
     fireEvent.keyDown(btn, { key: 'ArrowDown' })
     fireEvent.keyDown(btn, { key: 'Escape' })
     expect(screen.queryAllByRole('option').length).toBe(0)
-    expect(btn.textContent).toContain('标识 + 名称')
+    expect(btn.textContent).toContain('图标 + 名称')
   })
 })
 

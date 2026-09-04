@@ -632,7 +632,6 @@ export function App() {
         onView={handleView}
         crumb={crumb}
         onOpenSettings={() => { setSettingsPane('appearance'); setSettingsOpen(true) }}
-        onOpenHosts={() => { setSettingsPane('hosts'); setSettingsOpen(true) }}
         notifs={notifs}
         updateAvailable={!!updateCtx.info}
         updateInfo={updateCtx.info}
@@ -781,6 +780,10 @@ export function App() {
           onToggle: () => setLogOpen(o => !o),
         }}
         sbTerm={{ open: termOpen, onToggle: () => setTermOpen(o => !o) }}
+        sbHost={{
+          display: settings?.appearance.hostChip ?? 'both',
+          onOpenHosts: () => { setSettingsPane('hosts'); setSettingsOpen(true) },
+        }}
         update={{
           currentVersion: updateCtx.currentVersion,
           hasUpdate: !!updateCtx.info,
@@ -863,7 +866,7 @@ export function App() {
           case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} notifyEvents={settings.notifyEvents} onNotifyEventsChange={(p) => update({ notifyEvents: { ...settings.notifyEvents, ...p } })} hostLabel={hostKey === 'local' ? null : hostLabel} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} onEditAlias={updateProjectAlias} />
-          case 'hosts': return <HostsPane />
+          case 'hosts': return settings ? <HostsPane hostChip={settings.appearance.hostChip} onHostChipChange={(v) => update({ appearance: { hostChip: v } })} /> : null
           case 'phone': return <PhonePane />
           case 'providers': return <AgentsPane onChanged={redetect} />
           case 'agents': return <ProxyPane agentProxy={settings?.agentProxy ?? ''} appProxy={settings?.appProxy ?? ''} onChange={(p) => update(p)} />

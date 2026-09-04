@@ -35,17 +35,12 @@
      就是它自己那么长 —— 于是 .tb-title 拒绝收缩,右边的「编辑工作区」被挤成一列竖排的字。
      真机上看到的就是这个。 */
   min-width: 0;
-  /* ★★还有第二个约束:窗口正中那颗主机芯片(.tb-hostcenter)是 position:fixed + z-index:20
-     + 实底,它**盖**在标题栏上。只给面包屑加省略号还不够 —— 面包屑一长,「编辑工作区」就被
-     推到芯片底下、点不到(窄窗口尤其明显)。所以整个 .tb-title 停在芯片左边界之前:
-     50vw 是芯片中心,减去它的半宽(max-width:260 ⇒ 130)、一点间距、以及标题栏左边那截
-     (红绿灯 + 侧栏开关 ≈ 120)。 */
-  max-width: calc(50vw - 260px);
+  /* ★2026-09-04:主机芯片搬到了底部状态栏,正中这块地不再被占。上限放宽到半个窗口 ——
+     留一个上限是因为右边还有导航/铃铛/系统键,面包屑不该一路铺过去把它们挤没。 */
+  max-width: 50vw;
 }
 /* ★面包屑自己也要 min-width:0(它是 .tb-title 里的 flex item,同一条规矩),再加省略号。
-   max-width 是为了别让长名一路铺到窗口正中 —— 那儿有绝对定位的主机芯片(.tb-hostcenter,
-   z-index:20 + 实底),铺过去的字会直接被它盖掉,看起来像被截断在一个莫名其妙的位置。
-   22vw 跟着窗口宽度走,340px 封顶:窄窗口时先于芯片停下,宽窗口时也不无限长。 */
+   max-width 是为了别让长名一路铺过去把右边的东西挤没:22vw 跟着窗口宽度走,340px 封顶。 */
 .tb-title .crumb {
   color: var(--muted); font-weight: 500;
   min-width: 0; max-width: min(340px, 22vw);
@@ -747,56 +742,33 @@
   max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* ── 主机切换器(标题栏正中)───────────────────────────────────────────────────
-   居中是有意的:主机是「你现在看的是哪台机器」,它统辖整个窗口的内容(工作区/会话/运行),
-   既不属于左边的面包屑,也不属于右边的工具按钮。和 macOS 把窗口标题放正中是同一个道理。
-   绝对定位所以完全不影响左右两侧原有的排布;一台主机都没配过时组件根本不渲染。 */
-.tb-hostcenter {
-  /* ★fixed + 标题栏高度,不是 absolute + 100% —— .titlebar 自己没有 position,
-     absolute 会相对 .window(fixed; inset:0)算,于是被垂直居中到整个 app 正中间。 */
-  position: fixed; left: 50%; top: 0; height: var(--titlebar-h, 46px);
-  transform: translateX(-50%);
-  display: flex; align-items: center; pointer-events: none; z-index: 20;
-}
-.tb-hostcenter > * { pointer-events: auto; }
-.host-switch { position: relative; -webkit-app-region: no-drag; }
+/* ── 主机按钮(底部状态栏最左)────────────────────────────────────────────────
+   ★★2026-09-04 从标题栏正中搬下来。原因不是审美:标题栏正中在 mac 和 Windows 上根本不是
+   同一块地方(红绿灯在左上 vs 系统键在右上,Windows 上整条工具栏还要重排),那枚芯片只能
+   靠 position:fixed + 50vw 硬挤,还逼着面包屑写死 max-width 给它让路。底部状态栏两个平台
+   完全一样、一个系统按钮都没有,这个位置一劳永逸。
+   长相**逐条复用 .sb-log**(「终端」「实时日志」那两枚)——同一条栏里的东西应该是兄弟,
+   而不是从楼上搬下来的家具。这里只补三样:图标、名字的省略号、圆点的四种颜色。 */
+.host-switch { position: relative; }
+.sb-host { cursor: pointer; max-width: 260px; }
+.sb-host .ico { font-size: 12.5px; line-height: 1; flex: 0 0 auto; }
+.sb-host .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-host .st { opacity: .8; white-space: nowrap; }
+.sb-host .cv { width: 11px; height: 11px; opacity: .5; flex: 0 0 auto; }
+/* 圆点=连接状态。绿 连上了 / 黄 连接中 / 红 连不上 / 灰 没连。
+   ★本机永远走 .ok —— 「本机」这台从定义上就在线,拿个灰点说它没连是错的。 */
+.sb-host.ok   .lg-dot { background: var(--ok); }
+.sb-host.warn .lg-dot { background: oklch(78% .15 85); animation: pulse 1.4s infinite; }
+.sb-host.idle .lg-dot { background: var(--faint); }
+/* 断线一眼看得见:红点之外整枚字也变红(状态栏字本来就淡,只换一个 6px 的点太容易漏掉)。 */
+.sb-host.bad, .sb-host.bad:hover { color: var(--err); }
+.sb-host.bad .lg-dot { background: oklch(66% .18 25); box-shadow: 0 0 0 2.5px oklch(66% .18 25 / .16); }
+.sb-host.busy { opacity: .6; }
 
-/* ★逐条照抄左邻居 .tb-edit-ws(「编辑工作区」)——同样的高度、圆角、边框、背景和字色。
-   之前我自己发明了一套 color-mix 的半透明,结果在每个主题下都比周围深一截,非常突兀。
-   标题栏上的东西应该长得像兄弟,而不是像后贴的贴纸;跟着现有 token 走,换主题/换壁纸时
-   它就自动跟着变,不需要为每个主题各调一次。 */
-.hs-chip {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 24px; padding: 0 9px 0 8px;
-  border-radius: 7px; border: 1px solid var(--border-2);
-  background: var(--surface); color: var(--muted);
-  font-size: 11.5px; font-weight: 550; line-height: 1; cursor: pointer;
-  /* ★固定一个最小宽度:芯片是居中的,内容一变宽窄就会左右重新居中 —— 切主机时看起来像在抖。
-     状态文字那一格也常驻(见 .st),于是「已连接 / 连接中 / 已断开」之间切换不会改变宽度。 */
-  min-width: 128px; max-width: 260px;
-  transition: .14s;
-}
-/* hover 也跟着左邻居走 */
-.hs-chip:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
-.hs-chip.busy { opacity: .6; }
-.hs-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
-.hs-chip .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hs-chip .st { opacity: .85; white-space: nowrap; }
-/* 状态那一格常驻(空的时候也占位),这样 已连接/连接中/已断开 之间切换不会改变芯片宽度 ——
-   芯片是居中的,宽度一变就会左右重新居中,看起来就是在抖。 */
-.hs-chip .st { min-width: 3.2em; text-align: left; }
-.hs-chip .cv { width: 12px; height: 12px; opacity: .55; flex: 0 0 auto; }
-.hs-chip.ok .dot { background: oklch(72% .17 150); box-shadow: 0 0 0 2.5px oklch(72% .17 150 / .18); }
-.hs-chip.warn .dot { background: oklch(78% .15 85); }
-/* 断线必须一眼看见 —— 整枚变红,不只是那个点。 */
-.hs-chip.bad { color: var(--err); border-color: color-mix(in oklch, var(--err) 45%, var(--border-2));
-  background: color-mix(in oklch, var(--err) 10%, var(--surface)); }
-.hs-chip.bad .nm { color: var(--err); }
-.hs-chip.bad .dot { background: oklch(66% .18 25); box-shadow: 0 0 0 2.5px oklch(66% .18 25 / .16); }
-
-/* 切换失败当面说 —— 切主机是用户主动发起的动作,失败不能只留在控制台里。 */
+/* 切换失败当面说 —— 切主机是用户主动发起的动作,失败不能只留在控制台里。
+   ★往上弹:按钮贴着窗口底边。 */
 .hs-err {
-  position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
   max-width: 420px; padding: 7px 11px; border-radius: 9px; z-index: 40;
   font-size: 12px; line-height: 1.5; color: var(--err);
   background: color-mix(in oklch, var(--err) 12%, var(--bg));
@@ -804,14 +776,16 @@
   box-shadow: 0 8px 24px oklch(0% 0 0 / .18);
 }
 
-/* 菜单 portal 到 body:标题栏在壁纸模式下有 backdrop-filter,会造出层叠上下文把弹层压到
-   右侧面板后面(「打开位置」那个下拉栽过一次)。 */
+/* 菜单 portal 到 body:状态栏在壁纸模式下有 backdrop-filter,会造出层叠上下文把弹层压到
+   右侧面板后面(「打开位置」那个下拉栽过一次)。
+   ★.up = 锚 bottom 往上弹(位置由内联样式给)。菜单条数不定,锚 bottom 才不用反算高度。 */
 .hs-pop {
   position: fixed; transform: translateX(-50%); min-width: 220px; max-width: 320px;
   padding: 5px; border-radius: 11px; z-index: 50;
   background: var(--bg); border: 1px solid var(--border);
   box-shadow: 0 14px 40px oklch(0% 0 0 / .22);
 }
+.hs-pop.up { box-shadow: 0 -14px 40px oklch(0% 0 0 / .22); }
 .hs-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 7px 9px; border: 0; border-radius: 8px; background: none; cursor: pointer;
@@ -824,33 +798,4 @@
 .hs-item.on .nm { font-weight: 600; }
 .hs-item.plain .nm { color: var(--fg-2); }
 .hs-sep { height: 1px; margin: 5px 7px; background: var(--border); }
-
-/* 标识(emoji)。只显示标识时芯片缩成一枚圆的,状态用光圈呼吸表达 —— 像主机/显示器的指示灯。
-   标题栏正中挂一串文字太抢眼;一个会呼吸的表情既认得出是哪台,也看得出连没连上。 */
-.hs-chip .ico { font-size: 13px; line-height: 1; flex: 0 0 auto; }
-.hs-chip.iconly {
-  /* 只显示标识时反过来:固定成一枚圆的,更不会有宽度变化。 */
-  width: 26px; height: 26px; min-width: 0; padding: 0;
-  border-radius: 50%; gap: 0;
-}
-.hs-chip.iconly .ico { font-size: 15px; }
-
-/* 呼吸光圈:ok 绿、warn 琥珀、bad 红。用 box-shadow 做,不占布局也不会撑开标题栏。 */
-@keyframes hs-breathe {
-  0%, 100% { box-shadow: 0 0 0 1.5px var(--hs-glow), 0 0 9px 1px var(--hs-glow); }
-  50%      { box-shadow: 0 0 0 1.5px var(--hs-glow-dim), 0 0 15px 4px var(--hs-glow-dim); }
-}
-.hs-chip.iconly.ok   { --hs-glow: oklch(72% .17 150 / .60); --hs-glow-dim: oklch(72% .17 150 / .22); }
-.hs-chip.iconly.warn { --hs-glow: oklch(78% .15 85 / .60);  --hs-glow-dim: oklch(78% .15 85 / .22); }
-.hs-chip.iconly.bad  { --hs-glow: oklch(66% .18 25 / .70);  --hs-glow-dim: oklch(66% .18 25 / .28); }
-.hs-chip.iconly.idle { --hs-glow: oklch(60% 0 0 / .35);     --hs-glow-dim: oklch(60% 0 0 / .12); }
-.hs-chip.iconly { animation: hs-breathe 2.6s ease-in-out infinite; }
-/* 断线时呼吸得快一点 —— 和「已断开」这件事的紧迫程度对上。 */
-.hs-chip.iconly.bad { animation-duration: 1.1s; }
-
-/* 会一直动的东西必须尊重系统的「减少动态效果」。关掉动画后靠静态光圈仍然分得出状态。 */
-@media (prefers-reduced-motion: reduce) {
-  .hs-chip.iconly { animation: none; box-shadow: 0 0 0 1.5px var(--hs-glow), 0 0 9px 1px var(--hs-glow); }
-}
-
 .hs-item .ico { width: 16px; flex: 0 0 auto; font-size: 13px; line-height: 1; text-align: center; }

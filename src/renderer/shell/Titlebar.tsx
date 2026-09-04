@@ -1,5 +1,4 @@
 import './shell.css'
-import { HostSwitcher } from './HostSwitcher'
 import { NotificationPopover } from './NotificationPopover'
 import { OpenLocationMenu } from './OpenLocationMenu'
 import type { Notif } from './notifications'
@@ -12,7 +11,6 @@ export interface TitlebarProps {
   onView: (v: 'home' | 'ws') => void
   crumb: string
   /** 点主机芯片时打开「设置 → 主机」 */
-  onOpenHosts: () => void
   onToggleInspector?: () => void
   onOpenSettings?: () => void
   notifs: Notif[]
@@ -38,7 +36,6 @@ export function Titlebar({
   view,
   onView,
   crumb,
-  onOpenHosts,
   onToggleInspector,
   onOpenSettings,
   notifs,
@@ -88,10 +85,6 @@ export function Titlebar({
       </svg>
     </button>
   ) : null
-  const hostCenter = (
-    // 绝对居中,不参与左右两侧的排布 —— 主机统辖整个窗口的内容,不属于面包屑也不属于工具按钮。
-    <div className="tb-hostcenter"><HostSwitcher onOpenHosts={onOpenHosts} /></div>
-  )
   const title = (
     <div className="tb-title">
       <span className="crumb">
@@ -146,10 +139,6 @@ export function Titlebar({
         {sidebarToggle}
         {title}
         {nav}
-        {/* 绝对定位居中。★既不能放第一个也不能放最后一个(两端的顺序被 Windows 那批断言钉死),
-            也不能夹在面包屑和导航之间(「导航紧跟面包屑,中间不夹别的」)。它不参与布局,
-            所以放这儿视觉位置一样。 */}
-        {hostCenter}
         <div className="tb-spacer" />
         {opener}
         {bell}
@@ -169,8 +158,6 @@ export function Titlebar({
       </div>
       {sidebarToggle}
       {title}
-      {/* 同上:绝对定位居中,放中间以免动到两端的顺序断言。 */}
-      {hostCenter}
       <div className="tb-spacer" />
       {nav}
       {opener}

@@ -5,6 +5,8 @@ import type { ProviderInfo } from '@shared/types'
 import type { StatusbarUsage } from '@shared/plugins'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { UsagePopover } from './UsagePopover'
+import { HostSwitcher } from './HostSwitcher'
+import type { HostDisplay } from '@shared/remote/hostView'
 
 // SVG icon overrides for the 5 built-in providers — geometric originals tracking each vendor's
 // official mark (Anthropic starburst / OpenAI knot / Gemini sparkle / Cursor prism), drawn with
@@ -31,10 +33,17 @@ export interface SbTermProps {
   onToggle: () => void
 }
 
+export interface SbHostProps {
+  /** 这枚按钮显示成什么样。★是**按钮**的设置,不是某台主机的 —— 切主机不改变它。 */
+  display: HostDisplay
+  onOpenHosts: () => void
+}
+
 export interface StatusBarProps {
   providers: ProviderInfo[]
   sbLog?: SbLogProps
   sbTerm?: SbTermProps
+  sbHost?: SbHostProps
   usageByProvider?: Record<string, StatusbarUsage>
   update?: {
     currentVersion: string
@@ -49,7 +58,7 @@ export interface StatusBarProps {
   }
 }
 
-export function StatusBar({ providers, sbLog, sbTerm, usageByProvider, update }: StatusBarProps) {
+export function StatusBar({ providers, sbLog, sbTerm, sbHost, usageByProvider, update }: StatusBarProps) {
   return (
     <div className="statusbar">
       {/* Model indicators — only providers actually detected on this machine */}
@@ -85,7 +94,10 @@ export function StatusBar({ providers, sbLog, sbTerm, usageByProvider, update }:
 
       {/* Right side: log button + branch + context */}
       <div className="sb-right">
-        {/* Terminal toggle button — first child of .sb-right per prototype */}
+        {/* ★主机排在最左 —— 它是「这些东西属于哪台机器」,统辖右边所有的东西(终端开在哪台、
+            日志是谁的、版本是谁的)。读的顺序就是包含关系的顺序。 */}
+        {sbHost && <HostSwitcher display={sbHost.display} onOpenHosts={sbHost.onOpenHosts} />}
+        {/* Terminal toggle button */}
         {sbTerm && (
           <button className={`sb-log${sbTerm.open ? ' on' : ''}`} title="终端 (⌃`)" onClick={sbTerm.onToggle}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 7 9 12 4 17"/><line x1="12" y1="17" x2="20" y2="17"/></svg>

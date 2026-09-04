@@ -148,7 +148,13 @@ export const AppearanceSchema = z.object({
   // 壁纸纵向焦点(0–100,%):`background-size:cover` 把图铺满窗口后要裁掉溢出部分,这个值决定纵向从哪里裁 ——
   // 0=顶部对齐(保住画面上部/人物头部,裁底)、50=居中、100=底部对齐。按【图片 URL】分别记忆,故换壁纸各调各的
   // (解决"有些竖构图壁纸被削头")。缺省 = DEFAULT_BG_POSITION(略偏上)。app/会话区背景与首页背景都查这张表。
-  bgPositions: z.record(z.string(), z.number().min(0).max(100)).catch({}).default({})
+  bgPositions: z.record(z.string(), z.number().min(0).max(100)).catch({}).default({}),
+  // 底部栏那枚主机按钮显示成什么样:只图标 / 只名称 / 图标 + 名称。
+  // ★★这是**那枚按钮的设置**,不是某一台主机的设置。旧版把它存在每台主机里(hostStore 的 `display`),
+  //  于是同一枚按钮会因为切了主机而换一副长相 —— 而本机根本没地方存,只能写死成「只显示名称」。
+  //  用户的原话:「我设置了只显示图标,但是本机还是显示一个大按钮」。一个控件只该有一种长相,
+  //  所以它归到外观里、全局一份。
+  hostChip: z.enum(['icon', 'name', 'both']).catch('both').default('both')
 })
 export type Appearance = z.infer<typeof AppearanceSchema>
 export const SkillsSchema = z.record(z.string(), z.boolean())
@@ -500,7 +506,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
+  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {}, hostChip: 'both' },
   notifications: defaultNotifications(),
   notifyEvents: defaultNotifyEvents(),
   closeAction: 'ask',

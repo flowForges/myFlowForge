@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
+import { type HostDisplay, type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
 import { parsePairingLink } from '@shared/remote/pairingLink'
 import { HOST_ICONS, currentHostIcon } from '@shared/hostIcons'
@@ -65,7 +65,11 @@ export function normalizeAddress(a: string): string {
  * ② 默认推荐 **SSH 隧道**:daemon 只绑回环,公网上不存在那个端口。直接填地址那条留给
  *    局域网 / Tailscale,并且必须配访问令牌。
  */
-export function HostsPane() {
+export function HostsPane({ hostChip, onHostChipChange }: {
+  /** 底部栏那枚主机按钮的显示方式。★**一份、全局** —— 见下面那个 set-group 里的注释。 */
+  hostChip: HostDisplay
+  onHostChipChange: (v: HostDisplay) => void
+}) {
   const [hosts, setHosts] = useState<RemoteHostView[]>([])
   const [status, setStatus] = useState<HostStatusView | null>(null)
   const [draft, setDraft] = useState<HostInput | null>(null)
@@ -111,6 +115,37 @@ export function HostsPane() {
           「手机连进来不会让它变色」—— 那三句话本身就是这张卡不该在这儿的证据:
           它在解释一个自己制造的困惑。 */}
       {err && <p className="set-desc" style={{ color: 'var(--err)' }}>{err}</p>}
+
+      {/* ★★这是**那枚按钮**的设置,不是某一台主机的设置。
+          旧版把它放在每台主机的编辑表单里(「标题栏上显示」),后果有两个,都是用户当场撞上的:
+          ① 同一枚按钮切一台主机就换一副长相 —— 一个控件长成两副样子,人只会觉得它坏了;
+          ② 本机没有那张表单,于是它的显示方式被写死成「只显示名称」。用户原话:
+             「我设置了只显示图标,但是本机还是显示一个大按钮」。
+          所以它归到这儿:一份、全局、本机也照办。 */}
+      <div className="set-group">
+        <h4>底部那枚主机按钮</h4>
+        <p className="set-desc">
+          在底部状态栏「终端」的左边。左边那个圆点就是连接状态:绿=已连接、黄=连接中、红=连不上、灰=未连接。
+          这里选的是**这枚按钮**怎么显示,所有主机(包括本机)都照这一条办。
+        </p>
+        <div className="proj-field">
+          <label>显示</label>
+          <Select
+            ariaLabel="主机按钮显示"
+            value={hostChip}
+            onChange={onHostChipChange}
+            options={[
+              { value: 'both', label: '图标 + 名称' },
+              { value: 'icon', label: '只显示图标' },
+              { value: 'name', label: '只显示名称' },
+            ]}
+          />
+        </div>
+        <p className="set-desc full" style={{ marginTop: -6 }}>
+          一台远程主机都没配过时,按钮只画一枚图标、不写字 —— 那时候「本机」两个字是废话,
+          但那枚图标是添加主机唯一的入口,不能一起省掉。
+        </p>
+      </div>
 
       <div className="set-group">
         <h4>已配的机器</h4>
@@ -229,8 +264,8 @@ export function HostsPane() {
                 不是这儿又抄一份:同一台主机在两块屏上长得不一样,没人会当 bug 报,
                 只会觉得这个 app 做得糙。 */}
             <div className="proj-field">
-              <label>标识</label>
-              <div className="set-icons" role="radiogroup" aria-label="主机标识">
+              <label>图标</label>
+              <div className="set-icons" role="radiogroup" aria-label="主机图标">
                 {HOST_ICONS.map((o) => {
                   const on = currentHostIcon(draft.icon) === o.icon
                   return (
@@ -250,22 +285,9 @@ export function HostsPane() {
                 })}
               </div>
             </div>
-            <div className="proj-field">
-              <label>标题栏上显示</label>
-              <Select
-                ariaLabel="标题栏上显示"
-                value={draft.display}
-                onChange={(v) => setDraft({ ...draft, display: v })}
-                options={[
-                  { value: 'both', label: '标识 + 名称' },
-                  { value: 'icon', label: '只显示标识' },
-                  { value: 'name', label: '只显示名称' },
-                ]}
-              />
-            </div>
             <p className="set-desc full" style={{ marginTop: -6 }}>
-              标题栏正中那枚就按这个显示。只显示标识时,连接状态用<b>光圈呼吸</b>表示(像主机/显示器的指示灯);
-              显示名称时用前面那个圆点。挂一串主机名在正中太抢眼,一个你自己认得的表情通常就够了。
+              图标只是给你自己认的,底部那枚按钮和切换菜单里都用它。
+              <b>显示成图标还是名称是这一页最上面那一条</b>,对所有主机统一生效。
             </p>
 
             {/* ★★中转**不是**这个下拉框里的一项,它跟着配对码一起来 —— 而这件事必须
