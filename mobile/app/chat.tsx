@@ -16,6 +16,7 @@ import {
   shouldOffloadPaste,
 } from '../../src/shared/chat/largePaste'
 import { textAfterOffload } from '../src/ui/pasteOffload'
+import { BODY_LINE_CAP } from '../src/ui/toolParse'
 import { continueList } from '../src/ui/listContinue'
 import { planPickedImage } from '../src/ui/pickedImage'
 import { pendingLabel, settlePending } from '../src/ui/pendingAttachment'
@@ -312,6 +313,32 @@ export default function Chat() {
   const switches = useMemo(() => providerSwitches(msgs), [msgs])
 
   const myGates = selected ? gatesFor(selected.wsPath, selected.sessionId) : []
+
+  /**
+   * 取某条消息里某次工具调用的完整输出。
+   *
+   * ★★历史里大于 1KB 的工具输出是**故意没下发**的(`useChat.ts` 的 `toolOutputOmitOver`):
+   *  这一屏的工具卡默认全折叠,而一条消息能有 54 次调用 —— 全下发等于下载下来只为了藏起来。
+   *  实测最大会话 389KB → 85KB,而且不再随调用次数增长。真正点开的那一条才走这里。
+   * ★按 `messageId` 现绑一个:卡片自己不该知道它长在哪条消息上,也不该知道当前是哪个会话。
+   * ★`useCallback` 依赖里带上会话 —— 切了会话还拿旧的 wsPath 去取,取回来的是**另一个会话**
+   *  的输出,而屏幕上完全看不出来。
+   */
+  const makeFetchOutput = useCallback(
+    (messageId: string) => async (toolId: string) => {
+      if (!selected) throw new Error('没有选中的会话')
+      const r = (await invoke(CH.chatToolOutput, [{
+        workspacePath: selected.wsPath,
+        sessionId: selected.sessionId,
+        messageId,
+        toolId,
+        toolOutputLines: BODY_LINE_CAP,
+        toolOutputBytes: 16 * 1024,
+      }])) as { output?: string; outputLines?: number }
+      return { output: r?.output ?? '', outputLines: r?.outputLines }
+    },
+    [invoke, selected?.wsPath, selected?.sessionId],
+  )
   // 本会话没门,但别处有,就把别处那道拿过来钉着 —— 门比「我正在看哪个会话」重要。
   const gate = myGates[0] ?? gates[0] ?? null
   const gateElsewhere = gate != null && myGates.length === 0
@@ -859,7 +886,7 @@ export default function Chat() {
                     </View>
                     {m.think ? <Think text={m.think} /> : null}
                     {/* 思考 → 工具 → 子代理 → 正文。和桌面端 Message.tsx 的次序一致,别两边各排各的。 */}
-                    <ToolCards tools={m.tools} />
+                    <ToolCards tools={m.tools} fetchOutput={makeFetchOutput(m.id)} />
                     <SubagentCards cards={m.subagents} />
                     <MessageBody text={m.text} streaming={m.streaming} />
                     {/* 委派批次挂在正文**下面**:主轮次已经答完了,它们还在后台跑。 */}

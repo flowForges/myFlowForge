@@ -48,7 +48,10 @@ describe('方法表', () => {
     //   开出来的是本机的 shell。这四条全走 host:shell 长在那台机器上。
     //   注册点在 `terminal/terminalService.ts`,不是 handlers.ts 里的 `on(CH.…)`,所以上面
     //   那个 grep 加数不包含它们:196 = 165 + 22 + 5(push,同样不在 grep 里)+ 4。
-    // 另外两处计数互为佐证:196 = 45(CLIENT_ONLY)+ 151(host),daemonTable = 196 - 45 - 2。
-    expect(Object.keys(table).length).toBe(196)
+    // 196 → 197:`chat:tool-output` —— 历史里大于 1KB 的工具输出不再下发,点开那张卡才来取这一条
+    //   (见 chat/toolOutputCap.ts:实测最大会话 389KB → 67KB)。它读的是**主机上**的会话文件,
+    //   所以是 host 方法,跟着 CLIENT_ONLY 之外那一半走。
+    // 另外两处计数互为佐证:197 = 45(CLIENT_ONLY)+ 152(host),daemonTable = 197 - 45 - 2。
+    expect(Object.keys(table).length).toBe(197)
   })
 })

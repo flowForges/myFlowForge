@@ -89,6 +89,12 @@ export const CH = {
   // has been removed entirely. run2 (run2LaunchStart below) is the only workflow-run path now.
   chatSend: 'chat:send',
   chatHistory: 'chat:history',
+  /**
+   * 取**一条**工具调用的输出。历史里被 `toolOutputOmitOver` 摘掉的那些,点开卡片时来这儿拿。
+   * ★存在的理由见 `chat/toolOutputCap.ts`:手机上工具卡默认折叠,而一条消息能有 54 次调用 ——
+   *  整份下发等于「下载下来只为了藏起来」。实测最大会话 389KB → 85KB。
+   */
+  chatToolOutput: 'chat:tool-output',
   chatEvent: 'chat:event',
   chatResolve: 'chat:resolve',
   chatQueueEvent: 'chat:queue-event',

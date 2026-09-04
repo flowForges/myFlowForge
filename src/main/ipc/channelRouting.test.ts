@@ -36,7 +36,9 @@ describe('频道分类', () => {
     expect(client.length).toBe(45)
     // 147 → 151:终端(term:create / write / resize / kill)。**shell 跑在 host 上** ——
     // 这是它们必须走 host 的全部理由,也正是这次改动要修的那个 bug。
-    expect(host.length).toBe(151)
+    // 151 → 152:`chat:tool-output`。它按 (workspacePath, sessionId, messageId, toolId)
+    //   去读主机上的会话文件,只有那台机器答得了 —— 所以是 host,不是 client。
+    expect(host.length).toBe(152)
     expect(client.length + host.length).toBe(keys.length)
   })
 

@@ -27,6 +27,18 @@ export type ToolOutputCap = {
   lines: number
   /** 最多留多少字节。防「一行特别长」。 */
   bytes: number
+  /**
+   * 超过这么多字节的输出**整段不下发**,留个标记等点开时单独取(`chat:tool-output`)。
+   *
+   * ★★为什么还要这一道(截断已经做过了):截断管的是「单条多大」,管不了「有多少条」。
+   *  实测一条消息里能有 54 次工具调用,二十几次顶到 16KB 上限 ⇒ 光工具输出就 324KB,
+   *  而手机上这些卡**默认全是折叠的** —— 下载下来只为了藏起来。
+   * ★实测(2026-09-04,22 个真会话):最大的那个会话 389KB → **85KB**,
+   *  而且不再随调用次数增长。阈值取 1KB:最大会话和「全部按需」持平,
+   *  但三分之一的小输出照旧内联,点开不用等往返。
+   * ★没给 = 不做这件事(老客户端行为逐字不变)。
+   */
+  omitOver?: number
 }
 
 /** 单个工具输出的截断。没超就**原样返回同一个对象**(不复制,让上层的引用相等仍然成立)。 */
@@ -34,6 +46,13 @@ export function capToolOutput(t: ToolActivity, cap: ToolOutputCap): ToolActivity
   const out = t.output
   if (!out) return t
   const all = out.split('\n')
+  // ★整段不下发的那条路要**先判**,而且判的是**原始**大小:先截到 16KB 再比 1KB 的话,
+  //   一段 3MB 的输出会变成「16KB,没超阈值」照样下发 —— 那正是这一条要省掉的东西。
+  if (cap.omitOver != null && Buffer.byteLength(out, 'utf8') > cap.omitOver) {
+    // `output` 拿掉,但**行数留着**:卡片上「共 N 行」照旧说真话,不会因为没下载就变成 0。
+    const { output: _drop, ...rest } = t
+    return { ...rest, outputLines: all.length, outputOmitted: true }
+  }
   let kept = all.length > cap.lines ? all.slice(0, cap.lines).join('\n') : out
   if (Buffer.byteLength(kept, 'utf8') > cap.bytes) {
     // ★按字节切会切在 UTF-8 字符中间。`toString('utf8')` 会把那半个字变成 U+FFFD,
@@ -58,11 +77,17 @@ export function capToolOutputs(msgs: ChatMessage[], cap: ToolOutputCap): ChatMes
 }
 
 /** 调用方给的上限:没给、或者给了不合法的数,就当没要求截断。 */
-export function readCap(a: { toolOutputLines?: number; toolOutputBytes?: number }): ToolOutputCap | null {
+export function readCap(a: { toolOutputLines?: number; toolOutputBytes?: number; toolOutputOmitOver?: number }): ToolOutputCap | null {
   const lines = a.toolOutputLines
   if (typeof lines !== 'number' || !Number.isFinite(lines) || lines < 1) return null
   const bytes = typeof a.toolOutputBytes === 'number' && Number.isFinite(a.toolOutputBytes) && a.toolOutputBytes >= 1
     ? a.toolOutputBytes
     : 64 * 1024
-  return { lines: Math.floor(lines), bytes: Math.floor(bytes) }
+  const omit = a.toolOutputOmitOver
+  return {
+    lines: Math.floor(lines),
+    bytes: Math.floor(bytes),
+    // ★脏值一律当「不要按需取」——**全量下发**是那个安全的方向:慢总比缺一段看不见强。
+    ...(typeof omit === 'number' && Number.isFinite(omit) && omit >= 0 ? { omitOver: Math.floor(omit) } : {}),
+  }
 }

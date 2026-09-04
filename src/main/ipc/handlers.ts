@@ -1,7 +1,7 @@
 import { CH } from './channels'
 import { gateNoteBody } from './gateNote'
 import { type InvokeCtx, type InvokeEventLike, type MethodTable } from './invokeCtx'
-import { capToolOutputs, readCap } from '../chat/toolOutputCap'
+import { capToolOutput, capToolOutputs, readCap } from '../chat/toolOutputCap'
 import { createTerminalService, type TerminalService } from '../terminal/terminalService'
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
@@ -1296,6 +1296,23 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const msgs = mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId))
     const cap = readCap(a)
     return cap ? capToolOutputs(msgs, cap) : msgs
+  })
+  /**
+   * 一条工具调用的完整输出(仍按调用方给的上限截断)。
+   *
+   * ★★为什么不是「把历史再拉一遍然后挑一条」:那正是要省掉的那几百 KB。这里只回**一个字符串**。
+   * ★`mergeLive` 要带上:正在跑的那一轮还没落盘,而用户最想点开的恰恰是刚跑完的那几条。
+   * ★找不到就回空串而不是抛:卡片点开拿到空,显示「这个工具没有回传输出」——
+   *  比在手机上弹一个红条要合适(消息可能已经被清理,而那不是错误)。
+   */
+  on(CH.chatToolOutput, (_e, a: { workspacePath: string; sessionId: string; messageId: string; toolId: string; toolOutputLines?: number; toolOutputBytes?: number }) => {
+    const msgs = mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId))
+    const tool = msgs.find(m => m.id === a.messageId)?.tools?.find(t => t.id === a.toolId)
+    if (!tool?.output) return { output: '', outputLines: tool?.outputLines }
+    // ★这里**不能**把 omitOver 传下去 —— 那会把刚要的这一条又摘掉,点开永远是空的。
+    const cap = readCap({ toolOutputLines: a.toolOutputLines, toolOutputBytes: a.toolOutputBytes })
+    const capped = cap ? capToolOutput(tool, cap) : tool
+    return { output: capped.output ?? '', outputLines: capped.outputLines ?? tool.output.split('\n').length }
   })
   on(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
     const paths = await caps.pickPaths({ kind: 'file', multi: true })

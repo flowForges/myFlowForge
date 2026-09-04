@@ -222,6 +222,18 @@ export interface ToolActivity {
    *  不是靠命令文本猜的。
    */
   autoAllowed?: boolean
+  /**
+   * 这条的 `output` **没跟着历史一起下发**,要点开时单独去取(`chat:tool-output`)。
+   *
+   * ★★2026-09-04 实测的浪费:手机上工具卡**默认是折叠的**,而一条消息里能有 **54 次**工具调用。
+   *  也就是说整份输出下载下来**只为了立刻藏起来**。截断(上一轮)之后最大的会话仍有 389KB,
+   *  其中 324KB 是工具输出 —— 因为二十几次调用每次都顶到 16KB 的上限。
+   *  改成按需取之后同一个会话 **85KB**,而且**不再随工具调用次数增长**。
+   * ★`outputLines` 仍然是**原始行数**,所以卡片上「共 N 行」照旧说真话,不会因为没下载就变成 0。
+   * ★小输出不走这条路(默认 1KB 以内照旧内联):实测那样最大会话一样是 85KB,
+   *  但三分之一的工具点开就有、不用等一次往返。
+   */
+  outputOmitted?: boolean
 }
 
 // One background sub-agent in a lightweight-delegation batch, surfaced live in the chat stream so the

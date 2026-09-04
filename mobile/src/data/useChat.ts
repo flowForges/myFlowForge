@@ -293,6 +293,17 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
           sessionId,
           toolOutputLines: BODY_LINE_CAP,
           toolOutputBytes: 16 * 1024,
+          /**
+           * ★★大于 1KB 的工具输出**整段不下发**,点开那张卡时再单独取(`chat:tool-output`)。
+           *
+           * 上面那两道闸管的是「单条多大」,管不了「有多少条」——实测一条消息里有 54 次工具调用,
+           * 二十几次顶到 16KB 上限,光工具输出就 324KB。而这一屏的工具卡**默认全是折叠的**,
+           * 也就是说这几百 KB 下载下来只为了立刻藏起来。
+           * ★实测(22 个真会话):最大的那个 389KB → **85KB**,而且不再随调用次数增长。
+           * ★阈值取 1KB 不是拍的:0 和 1KB 的最大会话都是 85KB(剩下的字节是正文和标题,
+           *  跟阈值无关),但 1KB 能让三分之一的小输出照旧内联 —— 点开就有,不用等一次往返。
+           */
+          toolOutputOmitOver: 1024,
         }])) as ChatMessage[]
         if (!alive) return
         const seen = new Set(hist.map((m) => m.id))

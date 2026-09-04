@@ -110,3 +110,95 @@ describe('★这么做到底省了多少 —— 照着真会话的形状量', ()
     expect(capToolOutputs(msgs, CAP)[0].tools!.slice(0, 80).every((t, i) => t === tools[i])).toBe(true)
   })
 })
+
+/**
+ * 「大输出整段不下发,点开再取」——`omitOver`。
+ *
+ * ★★为什么截断之后还要这一道:截断管的是**单条多大**,管不了**有多少条**。
+ *  2026-09-04 实测:一条消息里能有 54 次工具调用,二十几次顶到 16KB 上限 ⇒ 光工具输出 324KB;
+ *  而手机上这些卡**默认全是折叠的** —— 那几百 KB 下载下来只为了立刻藏起来。
+ *  22 个真会话:最大的那个 389KB → **85KB**,并且不再随调用次数增长。
+ */
+describe('大输出按需取(omitOver)', () => {
+  const OMIT = { lines: 200, bytes: 16 * 1024, omitOver: 1024 }
+
+  it('超阈值的整段拿掉,并标记出来', () => {
+    const t = tool('x'.repeat(5000))
+    const c = capToolOutput(t, OMIT)
+    expect(c.output).toBeUndefined()
+    expect(c.outputOmitted).toBe(true)
+  })
+
+  it('★行数留的是**原始**行数 —— 卡片上「共 N 行」不能因为没下载就变成 0', () => {
+    const t = tool(Array.from({ length: 900 }, (_, i) => `第 ${i} 行`).join('\n'))
+    expect(capToolOutput(t, OMIT).outputLines).toBe(900)
+  })
+
+  it('★★判的是**原始**大小,不是截断后的', () => {
+    /**
+     * ★这条用例的数据形状是**特意挑的**,不能随便换:
+     *  5000 行、每行 1 个字符 ⇒ **原始** ~10KB(超 1KB 阈值),但截到 200 行只剩 ~400B(不超)。
+     *  先截后判的实现会因此**照常下发**,正确实现会摘掉 —— 只有这个形状分得开两者。
+     * ★第一版这条用的是「5000 行 × 600 字」,截断后仍有 16KB > 1KB,
+     *  两种实现结果完全一样,于是把 bug 变异跑成了绿的(变异测试当场抓到)。
+     */
+    const t = tool(Array.from({ length: 5000 }, () => 'x').join('\n'))
+    expect(Buffer.byteLength(t.output!, 'utf8')).toBeGreaterThan(OMIT.omitOver)
+    const truncated = Array.from({ length: 200 }, () => 'x').join('\n')
+    expect(Buffer.byteLength(truncated, 'utf8')).toBeLessThan(OMIT.omitOver)   // 截断后不超阈值
+
+    const c = capToolOutput(t, OMIT)
+    expect(c.output, '被先截后判了 —— 大输出还是发出去了').toBeUndefined()
+    expect(c.outputOmitted).toBe(true)
+    expect(c.outputLines).toBe(5000)
+  })
+
+  it('阈值以内的照旧内联 —— 小输出点开就有,不用等一次往返', () => {
+    const t = tool('短短一行')
+    expect(capToolOutput(t, OMIT)).toBe(t)
+    expect(capToolOutput(t, OMIT).outputOmitted).toBeUndefined()
+  })
+
+  it('没有 output 的工具不会被标成「按需取」—— 那会让空输出显示成「还没下载」', () => {
+    const t: ToolActivity = { id: 't', title: '编辑文件', status: 'ok' }
+    const c = capToolOutput(t, OMIT)
+    expect(c.outputOmitted).toBeUndefined()
+  })
+
+  it('不给 omitOver 就完全不做这件事(老客户端逐字不变)', () => {
+    const t = tool('x'.repeat(5000))
+    const c = capToolOutput(t, CAP)
+    expect(c.output).toBeDefined()
+    expect(c.outputOmitted).toBeUndefined()
+  })
+
+  it('readCap:脏值一律当「不要按需取」—— 全量下发才是安全的方向', () => {
+    expect(readCap({ toolOutputLines: 200 })!.omitOver).toBeUndefined()
+    expect(readCap({ toolOutputLines: 200, toolOutputOmitOver: -1 })!.omitOver).toBeUndefined()
+    expect(readCap({ toolOutputLines: 200, toolOutputOmitOver: NaN })!.omitOver).toBeUndefined()
+    expect(readCap({ toolOutputLines: 200, toolOutputOmitOver: '1024' as unknown as number })!.omitOver).toBeUndefined()
+    expect(readCap({ toolOutputLines: 200, toolOutputOmitOver: 1024 })!.omitOver).toBe(1024)
+    expect(readCap({ toolOutputLines: 200, toolOutputOmitOver: 0 })!.omitOver).toBe(0)
+  })
+
+  it('★照着真会话的形状量:这一步在截断**之上**再小一个数量级', () => {
+    const big = (n: number) => Array.from({ length: n }, (_, i) => `2026-09-04 12:00:00 [info] 第 ${i} 行`).join('\n')
+    // 实测形状:一条消息几十次调用,大多数几十行,少数几千行
+    const tools: ToolActivity[] = [
+      ...Array.from({ length: 40 }, (_, i) => tool(big(76), { id: `s${i}` })),
+      ...Array.from({ length: 14 }, (_, i) => tool(big(3000), { id: `b${i}` })),
+    ]
+    const msgs = [msg(tools)]
+    const capped = JSON.stringify(capToolOutputs(msgs, CAP)).length
+    const lazy = JSON.stringify(capToolOutputs(msgs, OMIT)).length
+    expect(capped / lazy).toBeGreaterThan(4)
+  })
+
+  it('★★不改原数据 —— 摘掉输出更不能就地改,磁盘那份的解析结果是共用的', () => {
+    const long = 'x'.repeat(5000)
+    const t = tool(long)
+    capToolOutputs([msg([t])], OMIT)
+    expect(t.output).toBe(long)
+    expect(t.outputOmitted).toBeUndefined()
+  })
+})

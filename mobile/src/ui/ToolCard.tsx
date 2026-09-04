@@ -53,13 +53,42 @@ function CodeBody({ body }: { body: ToolBody }) {
   )
 }
 
-export function ToolCard({ tool }: { tool: ToolActivity }) {
+export function ToolCard({ tool, fetchOutput }: { tool: ToolActivity; fetchOutput?: FetchOutput }) {
   const c = useC()
   const [open, setOpen] = useState(false)
+  /**
+   * 按需取回来的输出。
+   *
+   * ★★历史里大于 1KB 的工具输出**整段没下发**(`toolOutputCap.ts` 的 `omitOver`)——
+   *  这一屏的卡默认全是折叠的,而一条消息能有 54 次调用,全下发等于「下载下来只为了藏起来」。
+   *  实测最大会话 389KB → 85KB。所以真正点开的那一条,到这里才去取。
+   * ★只取一次:取到就存在这儿,反复折叠展开不会反复发请求。
+   */
+  const [lazy, setLazy] = useState<{ output: string; outputLines?: number } | null>(null)
+  const [fetching, setFetching] = useState(false)
+  const [fetchErr, setFetchErr] = useState<string | null>(null)
+
+  const shown = lazy?.output ?? tool.output
+  const shownLines = lazy?.outputLines ?? tool.outputLines
+  /** 有输出、但还没下载 —— 和「这个工具压根没回传输出」是两回事,屏幕上也得是两句话。 */
+  const pending = !!tool.outputOmitted && !lazy
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (!next || !pending || fetching || !fetchOutput) return
+    setFetching(true)
+    setFetchErr(null)
+    void fetchOutput(tool.id)
+      .then((r) => setLazy(r))
+      .catch((e) => setFetchErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setFetching(false))
+  }
+
   // ★`outputLines` = 服务端截断前的原始行数。传下去,「还有 N 行没显示」才是真数字。
   const body = useMemo(
-    () => (tool.output ? parseToolBody(tool.output, BODY_LINE_CAP, tool.outputLines) : null),
-    [tool.output, tool.outputLines],
+    () => (shown ? parseToolBody(shown, BODY_LINE_CAP, shownLines) : null),
+    [shown, shownLines],
   )
   const head = useMemo(() => toolHead(tool, body), [tool, body])
   const mark = statusMark(tool.status)
@@ -72,7 +101,7 @@ export function ToolCard({ tool }: { tool: ToolActivity }) {
         { backgroundColor: c.surface, borderColor: running ? c.toolRunBorder : c.border },
       ]}
     >
-      <Pressable onPress={() => setOpen((v) => !v)} style={st.th} hitSlop={4}>
+      <Pressable onPress={toggle} style={st.th} hitSlop={4}>
         <T style={[st.cv, { color: c.muted }]}>{open ? '▾' : '▸'}</T>
         <T style={[st.k, { color: c.fg2 }]}>{head.verb}</T>
         <T numberOfLines={1} style={[st.p, { color: c.muted }]}>
@@ -106,7 +135,17 @@ export function ToolCard({ tool }: { tool: ToolActivity }) {
           <CodeBody body={body} />
         ) : (
           <T style={[st.none, { color: c.faint, borderTopColor: c.border, backgroundColor: c.bg2 }]}>
-            {running ? '还在跑,输出要等它结束' : '这个工具没有回传输出'}
+            {/* ★★四句话对应四种**不同**的情况。合并任何两句都是在说一件不成立的事:
+                「没回传输出」和「还没下载」在屏幕上长得一样的话,人会以为这条命令没输出。 */}
+            {fetchErr
+              ? `输出没取到:${fetchErr}`
+              : fetching
+                ? '正在取这一条的输出…'
+                : pending
+                  ? `${shownLines ? `共 ${shownLines} 行,` : ''}点开时才下载(还没连上?)`
+                  : running
+                    ? '还在跑,输出要等它结束'
+                    : '这个工具没有回传输出'}
           </T>
         )
       ) : null}
@@ -114,13 +153,19 @@ export function ToolCard({ tool }: { tool: ToolActivity }) {
   )
 }
 
+/**
+ * 按 `toolId` 取回这一条的完整输出。由上层(chat 屏)绑好 workspace/session/message 再传下来 ——
+ * 卡片自己不该知道自己长在哪条消息上。
+ */
+export type FetchOutput = (toolId: string) => Promise<{ output: string; outputLines?: number }>
+
 /** 一条回复这一轮自己跑过的所有工具。空数组不占位。 */
-export function ToolCards({ tools }: { tools?: ToolActivity[] }) {
+export function ToolCards({ tools, fetchOutput }: { tools?: ToolActivity[]; fetchOutput?: FetchOutput }) {
   if (!tools?.length) return null
   return (
     <View style={{ gap: 6, marginBottom: 6 }}>
       {tools.map((t) => (
-        <ToolCard key={t.id} tool={t} />
+        <ToolCard key={t.id} tool={t} fetchOutput={fetchOutput} />
       ))}
     </View>
   )
