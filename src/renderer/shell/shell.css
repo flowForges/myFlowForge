@@ -575,6 +575,18 @@
 .sb-right .it svg { width: 12px; height: 12px; }
 
 .sb-ver { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+/* ★窗口窄到连右边这组自己都放不下时,先丢版本号。
+   实测(Electron 42 / Chromium 148):右边这组固定 389px,所以窗口 ≥500px 时一切完好;
+   到 360px 就装不下了,那时**必须有人先走**。走的只能是版本号 —— 这一组里它是唯一
+   一个「看一眼就行」的东西,主机 / 终端 / 实时日志三个都是要点的。
+   ★不靠 overflow:hidden 碰巧切在版本号上:那是运气,不是设计,而且切一半的字比没有更难看。
+   新版本那枚气泡跟着一起走 —— 它旁边就是铃铛和标题栏的更新入口,不会因此漏掉。 */
+@media (max-width: 520px) {
+  /* ★选择器必须带上 .sb-right:版本号那个 span 的 class 是 `it sb-ver`,而 `.sb-right .it`
+     (0,2,0)压过光秃秃的 `.sb-ver`(0,1,0)—— **媒体查询不加权重**。写成 `.sb-ver` 的话
+     这条规则会安静地不生效(第一版就是这样,靠 Electron 里量出来才发现)。 */
+  .sb-right .sb-ver, .sb-right .sb-update { display: none; }
+}
 .sb-ver.failed { color: var(--err); }
 .sb-update {
   display: none; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 99px; font-family: var(--mono);

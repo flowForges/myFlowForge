@@ -74,6 +74,45 @@ describe('★状态栏:装再多编码 CLI 也不许把右边的控件顶出屏�
   it('状态栏自己兜底 overflow:hidden —— 里面装什么都不许溢出到窗口外', () => {
     expect(ruleOf(global, '.statusbar')).toMatch(/overflow:\s*hidden/)
   })
+
+  /**
+   * 窗口窄到连右边这组自己都放不下时(实测右组固定 389px,所以 <520px),必须有人先走,
+   * 走的只能是版本号 —— 其余三个都是要点的控件。
+   * ★★选择器必须写成 `.sb-right .sb-ver`:版本号那个 span 的 class 是 `it sb-ver`,而
+   *  `.sb-right .it`(0,2,0)压过光秃秃的 `.sb-ver`(0,1,0)——**媒体查询不加权重**。
+   *  第一版就写成了 `.sb-ver`,规则安静地没生效(右组仍是 389px),是在 Electron 里量出来才发现的。
+   *  这条断言钉的就是那个坑。
+   */
+  describe('★窄窗口:先丢版本号,不丢控件', () => {
+    /** ★取块的动作放在函数里、每条用例各调一次:写在 describe 体里的话,媒体查询一旦被改没,
+     *  抛出的是**收集期**错误(整份文件报 "no tests"),而不是某条断言变红 —— 那种红看不出是哪条约束破了。 */
+    const mq = () => {
+      const src = strip(shell)
+      const i = src.indexOf('@media (max-width: 520px)')
+      if (i < 0) return ''
+      return src.slice(i, src.indexOf('}', src.indexOf('}', i) + 1) + 1)
+    }
+
+    it('那条媒体查询还在 —— 断点是 520px(右组自己就要 389px)', () => {
+      expect(mq(), '窄窗口那条媒体查询没了或断点被改').not.toBe('')
+    })
+
+    it('把版本号和更新气泡藏起来', () => {
+      expect(mq()).toMatch(/display:\s*none/)
+      expect(mq()).toMatch(/\.sb-update/)
+    })
+
+    it('★★选择器带 .sb-right 限定 —— 光写 .sb-ver 会被 `.sb-right .it` 压过去,静默失效', () => {
+      expect(mq()).toMatch(/\.sb-right\s+\.sb-ver/)
+      expect(mq()).toMatch(/\.sb-right\s+\.sb-update/)
+    })
+
+    it('★不许把主机/终端/日志也藏掉 —— 它们是这一组存在的理由', () => {
+      for (const c of ['sb-host', 'host-switch', 'sb-log']) {
+        expect(mq(), `窄窗口下不该藏 .${c}`).not.toMatch(new RegExp(`\\.${c}\\b`))
+      }
+    })
+  })
 })
 
 describe('★主机按钮用的 class 在 CSS 里真的存在', () => {
