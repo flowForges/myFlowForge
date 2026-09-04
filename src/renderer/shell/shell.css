@@ -526,10 +526,30 @@
 
 /* ---- StatusBar component rules ---- */
 
-.sb-models { display: flex; align-items: center; gap: 4px; }
+/* ★★左右两组抢地方时,**一定是左边让**。
+   左边那串是「这台机器上装了哪些编码 CLI」——只读的指示器;右边那串全是控件(切主机 /
+   终端 / 实时日志 / 检查更新)。挤掉一个指示器只是少看见一条信息,挤掉一个控件是**点不到**。
+   ★★实测(2026-09-04,13 个 provider 全装 + 900px 窗口):不加这几条的话右边那组从 x=1191 起画,
+   也就是窗口右边界外 291px,整组 554px 在屏幕外;而且状态栏从 30px 撑到 67px —— 因为 pill 里的
+   「Claude Code」被挤成了两行。两个症状同一个根因:flex item 默认 min-width:auto,左边这组
+   拒绝收缩到内容宽度以下,于是把右边整个推出去。 */
+.sb-models {
+  display: flex; align-items: center; gap: 4px;
+  /* 拿走所有剩余空间(右边那组因此自然贴右),但**允许缩到 0** —— min-width:0 是这一行的全部理由。 */
+  flex: 1 1 auto; min-width: 0;
+  /* 装得太多就横向滚动,而不是把右边顶出去。滚动条藏起来:30px 高的栏里挂一根滚动条比溢出还难看,
+     触控板/滚轮照样能推。overflow-y 必须显式 hidden,否则 overflow-x:auto 会把 y 也变成 auto。 */
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  /* 右端淡出:被切掉的边缘要看起来像「后面还有」,而不是像画崩了。没溢出时淡的是空白,无副作用。 */
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.sb-models::-webkit-scrollbar { display: none; }
 .sb-model {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 9px; border-radius: 6px; font-weight: 500; transition: .14s;
+  /* ★nowrap + 不收缩:少了它,「Claude Code」「Cursor Agent」这些带空格的名字会折成两行,
+     把整条 30px 的栏撑高。这是上面那次实测里 67px 的来源。 */
+  flex: 0 0 auto; white-space: nowrap;
 }
 .sb-model:hover { background: var(--surface); }
 .sb-model .mc-logo-sm {
@@ -543,8 +563,12 @@
 
 .sb-div { width: 1px; height: 14px; background: var(--border); margin: 0 8px; }
 
+/* ★不参与收缩:这一组是控件,宁可左边滚动也不能让它被挤扁或挤出屏幕。
+   ★原来靠 `margin-left:auto` 贴右,现在由 .sb-models 的 flex-grow 顶到右边 —— 两者不能同时用:
+   auto 外边距会**先于** flex-grow 吃掉剩余空间,那样 .sb-models 永远长不起来,淡出蒙版就会
+   盖在最后一个 pill 上。 */
 .sb-right {
-  margin-left: auto; display: flex; align-items: center; gap: 14px;
+  flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
 }
 .sb-right .it { display: inline-flex; align-items: center; gap: 5px; }

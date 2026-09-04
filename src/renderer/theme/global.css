@@ -147,7 +147,9 @@ html[data-bg-scope="app"]:not([data-theme="light"]) .tb-bell .nb-badge {
    clicks on the panel body for window-dragging ("bell has a badge but won't open"). Opt the whole
    panel subtree back out so every row/item inside is interactive. */
 .notif-pop { -webkit-app-region: no-drag; }
-.statusbar { flex: 0 0 30px; display: flex; align-items: center; padding: 0 12px;
+/* ★overflow:hidden 是兜底的最后一道:里面装了什么都不许溢出到窗口外面去
+   (真正的收缩规则在 shell.css 的 .sb-models / .sb-right)。 */
+.statusbar { flex: 0 0 30px; display: flex; align-items: center; padding: 0 12px; overflow: hidden;
   border-top: 1px solid var(--border); background: var(--bg-2); font-size: 11px; color: var(--muted); }
 .sidebar { flex: 0 0 248px; background: var(--sidebar); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; overflow: hidden;
