@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
 import { router } from 'expo-router'
 import { goBack } from '../src/nav'
@@ -8,12 +8,22 @@ import { Btn, Empty, Field, IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle }
 import { useConn } from '../src/net/conn'
 import { useStore } from '../src/data/store'
 import { useLaunchOptions } from '../src/data/useWorkflow'
+import { useAgents } from '../src/data/useAgents'
+import { StageList } from '../src/ui/StageList'
+import { Sheet } from '../src/ui/Sheet'
+import {
+  initDrafts, launchBlocker, patchDraft, setStageProjectAgent, toStageChoices, type StageDrafts,
+} from '../src/data/stageChoices'
 
 /**
  * 启动工作流。
  *
- * 手机上只能**选择并启动已有工作流** —— 不做编辑器(阶段 / 每阶段提示词 / hooks / provider 覆盖,
- * 在电脑上就是一张复杂表单;搬到手机成本极高、频率极低、编错后果严重)。
+ * ★★2026-09-04:加了「流程」那一节 —— 看得见每个阶段,并且能**为这一次**改(开关 / 阶段代理 /
+ *  单代理⇄按项目 / 逐项目代理)。用户原话:「工作流应该有流程,然后每个阶段设计哪些代码项目,
+ *  然后每个流程里用什么模型,都是可以选择的,现在好像都没有对吧」。是,都没有 —— 而服务端
+ *  (`LaunchStartConfig.stages`)一直支持,缺的只是手机不发。所以这不是新造能力,是接出来。
+ * ★**只改这一次**。工作流模板本身(阶段增删、提示词、hooks)仍然留在电脑端:
+ *  那是一张会写回配置的表单,改坏了下次每一轮都受影响 —— 和「这一次这么跑」完全是两件事。
  *
  * ★服务端有一道硬门槛:`hasRequirement` —— 需求和补充说明**至少要有一句**,否则拒绝启动。
  *  理由是阶段代理只拿到一串项目名会自己猜一个需求出来跑一堆东西。所以这一屏把「这次要做什么」
@@ -25,8 +35,17 @@ export default function WorkflowLaunch() {
   const { selected, wsName, refresh } = useStore()
   const { workflows, projects, loading, error } = useLaunchOptions(selected?.wsPath ?? null)
 
+  const { agents } = useAgents()
   const [flowId, setFlowId] = useState<string | null>(null)
   const [picked, setPicked] = useState<Set<string>>(() => new Set())
+  /**
+   * 逐阶段的临时草稿。★按**工作流 id** 重建 —— 切了工作流,上一条的阶段 key 一个都不适用了。
+   *  不重建的话会出现「选了 B 工作流,发出去的却带着 A 的阶段选择」,而服务端只会安静地忽略,
+   *  屏幕上完全看不出来。
+   */
+  const [drafts, setDrafts] = useState<StageDrafts>({})
+  /** 正在给谁挑代理:阶段级(project 为空)还是某个阶段的某个项目。 */
+  const [pick, setPick] = useState<{ stage: string; project?: string } | null>(null)
   const [seed, setSeed] = useState('')
   const [supplement, setSupplement] = useState('')
   const [busy, setBusy] = useState(false)
@@ -50,8 +69,15 @@ export default function WorkflowLaunch() {
     })
 
   const flow = workflows.find((w) => w.id === flowId) ?? null
+  const stages = useMemo(() => flow?.stages ?? [], [flow])
   const chosen = projects.filter((p) => picked.has(p.name))
-  const ready = !!selected && !!flow && chosen.length > 0 && (seed.trim() || supplement.trim())
+
+  // 换工作流 → 草稿整份重建成那条流程的默认值。
+  useEffect(() => { setDrafts(initDrafts(stages)) }, [stages])
+
+  const requirement = `${seed} ${supplement}`
+  const blocker = launchBlocker(stages, drafts, chosen.map((p) => p.name), requirement)
+  const ready = !!selected && !!flow && !blocker
 
   const launch = async () => {
     if (!selected || !flow) return
@@ -66,8 +92,10 @@ export default function WorkflowLaunch() {
           supplement: supplement.trim(),
           seed: seed.trim(),
           sessionId: selected.sessionId,
-          // stages / hooks 一律不传 = 这个工作流的每个阶段都按它自己的默认代理跑。
-          // 手机上没有勾选阶段的界面,传一个半成品的选择反而会静默丢掉阶段。
+          // ★「流程」那一节的逐阶段选择。结构和电脑端启动门发的**完全一样**
+          //   (两边都走 `@shared/launchStages` 的 `buildStageChoice`),所以不可能各发各的。
+          // ★hooks 仍然不传 = 全跑。手机上没有那一节,传半份等于静默关掉一些 hook。
+          stages: toStageChoices(stages, drafts, chosen.map((p) => p.name)),
         },
       ])
       refresh()
@@ -120,6 +148,8 @@ export default function WorkflowLaunch() {
               <Sec right={<T mono style={{ fontSize: 10.5, color: c.faint }}>{chosen.length}/{projects.length}</T>}>
                 在哪些项目上跑
               </Sec>
+              {/* ★项目这一节在流程**上面**:逐项目那几行要按选中的项目来列,先选完项目再往下看
+                  才不会看到一堆待会儿要消失的行。 */}
               {projects.length === 0 ? (
                 <Note>这个工作区里没有项目。工作流没有可以开工的地方。</Note>
               ) : (
@@ -154,6 +184,21 @@ export default function WorkflowLaunch() {
                 </List>
               )}
 
+              <StageList
+                stages={stages}
+                drafts={drafts}
+                projects={chosen}
+                onToggle={(k) => setDrafts((d) => patchDraft(d, k, { enabled: !(d[k]?.enabled ?? true) }))}
+                onPerProject={(k, v) => setDrafts((d) => patchDraft(d, k, { perProject: v }))}
+                onPickAgent={(k) => setPick({ stage: k })}
+                onPickProjectAgent={(k, project) => setPick({ stage: k, project })}
+                onAll={(enabled) => setDrafts((d) => {
+                  let next = d
+                  for (const st of stages) next = patchDraft(next, st.key, { enabled })
+                  return next
+                })}
+              />
+
               <Sec>这次要做什么</Sec>
               <List>
                 <Field
@@ -186,11 +231,13 @@ export default function WorkflowLaunch() {
                   <View style={[st.errBox, { borderColor: c.permFullBorder, backgroundColor: c.bg2 }]}>
                     <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{err}</T>
                   </View>
-                ) : !ready ? (
+                ) : blocker ? (
+                  // ★拦的理由由 `launchBlocker` 一处给出 —— 界面上这句话和「按钮灰不灰」
+                  //   是同一个判断,不会出现「按钮灰着但没说为什么」。
                   <T style={{ fontSize: 12, color: c.faint, paddingHorizontal: 2 }}>
-                    {chosen.length === 0
-                      ? '至少选一个项目'
-                      : '先写一句「这次要做什么」—— 不说的话,阶段代理会自己猜一个需求出来跑。'}
+                    {blocker === '先说一句这次要做什么'
+                      ? '先写一句「这次要做什么」—— 不说的话,阶段代理会自己猜一个需求出来跑。'
+                      : blocker}
                   </T>
                 ) : null}
                 <Btn kind="pri" block onPress={launch} disabled={!ready || busy}>
@@ -209,6 +256,57 @@ export default function WorkflowLaunch() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/*
+        挑代理。★一张单子两用(阶段级 / 某阶段的某个项目)——两处要挑的是同一件东西
+        (这台主机上装了哪个 CLI、哪个模型),做成两张只会各自跑偏。
+        ★「跟项目」那一项只在逐项目那条路上出现:阶段级没有「跟项目」这个概念。
+      */}
+      <Sheet
+        open={!!pick}
+        onClose={() => setPick(null)}
+        title={pick?.project ? `「${pick.project}」在这个阶段用什么` : '这个阶段用什么'}
+        sub="这台主机上装了的。只影响这一次运行。"
+      >
+        {pick?.project ? (
+          <Pressable
+            onPress={() => {
+              setDrafts((d) => setStageProjectAgent(d, pick.stage, pick.project!, null))
+              setPick(null)
+            }}
+            style={{ paddingVertical: 10 }}
+          >
+            <T style={{ fontSize: 14, color: c.muted }}>跟项目走(用这个项目自己配的代理)</T>
+          </Pressable>
+        ) : null}
+        {agents.length === 0 ? (
+          <Empty title="这台机器上没探测到代理" desc="在电脑端的设置里检查 CLI 是否装好。" />
+        ) : (
+          agents.map((a) => (
+            <View key={a.id} style={{ gap: 6, marginBottom: 10 }}>
+              <T mono style={{ fontSize: 10.5, letterSpacing: 0.8, color: c.faint, textTransform: 'uppercase' }}>
+                {a.displayName}
+              </T>
+              {a.models.map((mm) => (
+                <Row
+                  key={a.id + mm.id}
+                  onPress={() => {
+                    if (!pick) return
+                    setDrafts((d) =>
+                      pick.project
+                        ? setStageProjectAgent(d, pick.stage, pick.project, { provider: a.id, model: mm.id })
+                        : patchDraft(d, pick.stage, { provider: a.id, model: mm.id }),
+                    )
+                    setPick(null)
+                  }}
+                >
+                  <T style={{ fontSize: 14, color: c.fg }}>{mm.label}</T>
+                </Row>
+              ))}
+            </View>
+          ))
+        )}
+      </Sheet>
     </View>
   )
 }

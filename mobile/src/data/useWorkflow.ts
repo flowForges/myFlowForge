@@ -15,7 +15,27 @@ import { useStore } from './store'
  * 编辑工作流一律不做(阶段 / 提示词 / hooks 在手机上是一张巨型表单,编错了后果还很严重)。
  */
 
-export type WorkflowInfo = { id: string; name: string }
+/**
+ * 一个阶段,**服务端已经解析好的**(`run2:launch-info` → `buildLaunchInfo`)。
+ *
+ * ★★手机端**不自己解析** `ws.workflows[].stages`:那需要再实现一遍「全局模板回退 + libId 引用
+ *  自定义阶段库」这两条路,而两边一旦走偏,手机上预览到的流程和真跑起来的流程就不是一回事 ——
+ *  这种错在屏幕上完全看不出来。电脑端启动门(`LaunchGateCard`)吃的就是这个通道,两边同一份数据。
+ * ★`code` = 这个阶段天生按项目扇出/写代码;`producesDoc` = 必须产出唯一一份方案文件。
+ *  能不能改代理、能不能切「按项目」由这两个字段决定 —— 判定在 `@shared/launchStages`,两端共用。
+ */
+export type StageInfo = {
+  key: string
+  name: string
+  provider: string
+  model: string
+  gate: boolean
+  code: boolean
+  producesDoc?: boolean
+  desc?: string
+  projectAgents?: { name: string; provider: string; model: string }[]
+}
+export type WorkflowInfo = { id: string; name: string; stages: StageInfo[] }
 export type ProjectInfo = { name: string; provider: string; model: string }
 
 /** 当前会话所在的工作流状态。没在工作流里就是 null。 */
@@ -90,15 +110,24 @@ export function useLaunchOptions(wsPath: string | null) {
     setError(null)
     void (async () => {
       try {
-        const ws = (await invoke(CH.workspaceGet, [wsPath])) as {
-          workflows?: { id: string; name: string }[]
-          projects?: { name?: string; repoId?: string; provider?: string; model?: string }[]
+        /**
+         * ★★2026-09-04 从 `workspace:get` 换成 `run2:launch-info`。
+         *  原来拿的是工作区原始结构,而且**只留了 `{id, name}`,阶段整个丢掉** ——
+         *  于是手机上连「这条流程有哪几步」都看不见。`run2:launch-info` 回的是服务端解析完的
+         *  `LaunchInfo`:阶段名、默认代理、按不按项目、逐项目代理全在里面,而且**和电脑端启动门
+         *  是同一个通道** —— 两边不可能对不上。
+         */
+        const info = (await invoke(CH.run2LaunchInfo, [{ workspacePath: wsPath }])) as {
+          workflows?: (WorkflowInfo & { stages?: StageInfo[] })[]
+          projects?: { name?: string; provider?: string; model?: string }[]
         }
         if (!alive) return
-        setWorkflows((ws?.workflows ?? []).map((w) => ({ id: w.id, name: w.name })))
+        setWorkflows(
+          (info?.workflows ?? []).map((w) => ({ id: w.id, name: w.name, stages: w.stages ?? [] })),
+        )
         setProjects(
-          (ws?.projects ?? [])
-            .map((p) => ({ name: p.name || p.repoId || '', provider: p.provider ?? '', model: p.model ?? '' }))
+          (info?.projects ?? [])
+            .map((p) => ({ name: p.name ?? '', provider: p.provider ?? '', model: p.model ?? '' }))
             .filter((p) => p.name),
         )
         setLoading(false)
