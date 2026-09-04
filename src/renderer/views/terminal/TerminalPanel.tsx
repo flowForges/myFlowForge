@@ -73,7 +73,7 @@ export function TerminalPanel({ open, dual, focused, onHandleDown, workspaceCwd,
           卸载 = term.dispose() = 回滚缓冲全没,切回来是一块空屏。 */}
       <div className="term-body">
         {term.allTabs.map(t => (
-          <XtermView key={t.id} termId={t.id} active={t.id === term.activeId} font={font} />
+          <XtermView key={t.id} termId={t.id} active={t.id === term.activeId} visible={open && t.id === term.activeId} font={font} />
         ))}
         {active?.error && (
           <div className="term-error">{active.error}</div>
