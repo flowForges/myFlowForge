@@ -45,7 +45,8 @@ describe('频道分类', () => {
     //   于是「手机上点授权、手机浏览器打开、凭据落在主机」这条链才成立。
     // 161 → 162:加载项两条(addons:scan / addons:remove)进来、skills:list 出去。
     //   扫的是**主机**磁盘上的技能/规则/MCP,删的也是主机上的东西 ⇒ host。
-    expect(host.length).toBe(162)
+    // 162 → 165:技能 / 插件市场三条。装到**主机**的 CLI 上 ⇒ host。
+    expect(host.length).toBe(165)
     expect(client.length + host.length).toBe(keys.length)
   })
 

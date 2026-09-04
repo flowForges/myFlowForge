@@ -58,7 +58,9 @@ describe('方法表', () => {
     // 206 → 207:加载项重做 —— 加了 addons:scan / addons:remove(+2),删了 skills:list(-1)。
     //   `skills:list` 的唯一使用者是设置里的「Skill」页,而那一页已经并进「加载项」了
     //   (用户原话:「加载项里好像有 skill,所以 skill 是不是多余?」)。
-    // 另外两处计数互为佐证:207 = 45(CLIENT_ONLY)+ 162(host),daemonTable = 207 - 45 - 2。
-    expect(Object.keys(table).length).toBe(207)
+    // 207 → 210:技能 / 插件市场三条(cli-plugins:list / install / uninstall)。装的是**主机上**
+    //   那个 CLI 的插件,所以是 host 方法。
+    // 另外两处计数互为佐证:210 = 45(CLIENT_ONLY)+ 165(host),daemonTable = 210 - 45 - 2。
+    expect(Object.keys(table).length).toBe(210)
   })
 })

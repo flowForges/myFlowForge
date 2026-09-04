@@ -124,6 +124,17 @@ const NAV: NavEntry[] = [
     ),
   },
   {
+    // 2026-09-05:CLI 自己的插件市场(claude 302 个 / codex 76 个可装)。★和下面那个「插件」
+    // (这个 app 自己的定时任务插件)不是一回事,所以标签叫「技能市场」。
+    key: 'market',
+    label: '技能市场',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M3 9l1.5-5h15L21 9M3 9h18M3 9v10a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9M9 13h6" />
+      </svg>
+    ),
+  },
+  {
     key: 'loads',
     label: '加载项',
     icon: (

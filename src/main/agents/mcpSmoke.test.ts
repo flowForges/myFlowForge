@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { execa } from 'execa'
 import { McpService } from './mcpService'
 import { scanAddons } from './addons'
+import { PluginMarket } from './pluginMarket'
 import { lookupBin } from './lookupBin'
 
 /**
@@ -67,4 +68,33 @@ describe.runIf(ON)('真机器:加载项扫描', () => {
       expect(a.id.includes(a.name)).toBe(true)
     }
   }, 60_000)
+})
+
+describe.runIf(ON)('真 CLI:插件市场', () => {
+  const market = new PluginMarket({
+    binFor: async (id) => await lookupBin(id, process.env),
+    envFor: () => ({ ...process.env }),
+    run: async (bin, args, cwd, env) => {
+      const r = await execa(bin, args, { cwd, env, reject: false, timeout: 90_000, all: true })
+      return { stdout: String(r.all ?? r.stdout ?? ''), code: typeof r.exitCode === 'number' ? r.exitCode : 1 }
+    },
+  })
+
+  it('★claude:动词是 install/uninstall,列得出市场里的插件', async () => {
+    const caps = await market.capsFor('claude')
+    expect(caps).toMatchObject({ plugin: true, list: true, json: true, installVerb: 'install', removeVerb: 'uninstall' })
+    const list = await market.list('claude')
+    console.log(`  claude 插件:共 ${list.length},已装 ${list.filter(p => p.installed).length}`)
+    for (const p of list.slice(0, 5)) console.log(`   ${p.installed ? '✓' : ' '} ${p.name}  (${p.marketplace}${p.installs ? `, ${p.installs} 装` : ''})`)
+    expect(list.length).toBeGreaterThan(0)
+    for (const p of list) expect(p.id).toContain(p.name)
+  }, 120_000)
+
+  it('★★codex:动词是 add/remove —— 和 claude 不一样,写死一个必错一个', async () => {
+    const caps = await market.capsFor('codex')
+    expect(caps).toMatchObject({ plugin: true, list: true, json: true, installVerb: 'add', removeVerb: 'remove' })
+    const list = await market.list('codex')
+    console.log(`  codex 插件:共 ${list.length},已装 ${list.filter(p => p.installed).length}`)
+    expect(list.length).toBeGreaterThan(0)
+  }, 120_000)
 })

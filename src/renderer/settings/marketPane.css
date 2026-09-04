@@ -1,0 +1,22 @@
+/* 技能市场。筛选栏复用 loadPane.css 的 .load-filters/.load-chip(同一种语言),这里只加条目本身。 */
+.market-pane .mk-item {
+  display: flex; align-items: center; gap: 12px; padding: 9px 11px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface);
+}
+.market-pane .mk-item + .mk-item { margin-top: 6px; }
+/* ★min-width:0:说明可能很长,不给的话整行被撑开、右边那颗按钮被挤出容器。 */
+.market-pane .mk-meta { flex: 1; min-width: 0; }
+.market-pane .mk-meta .t { font-size: 12.5px; font-weight: 600; color: var(--fg); display: flex; align-items: center; gap: 7px; }
+.market-pane .mk-meta .d {
+  font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.market-pane .mk-meta .s { font: 10.5px/1.4 var(--mono); color: var(--faint); margin-top: 4px; }
+.mk-on { font-size: 10px; font-weight: 600; color: var(--ok); border: 1px solid color-mix(in oklch, var(--ok) 45%, transparent); border-radius: 5px; padding: 1px 5px; }
+.mk-ver { font: 10px var(--mono); color: var(--faint); font-weight: 400; }
+.mk-install {
+  flex: 0 0 auto; height: 28px; padding: 0 14px; border-radius: 8px; font-size: 12px; font-weight: 600;
+  background: var(--accent); color: var(--on-accent); border: 1px solid var(--accent);
+}
+.mk-install:hover { filter: brightness(1.08); }
+.mk-install:disabled { opacity: .5; filter: none; }

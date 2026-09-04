@@ -353,6 +353,12 @@ export const CH = {
   addonsScan: 'addons:scan',
   addonsRemove: 'addons:remove',
 
+  // 2026-09-05(技能 / 插件市场):claude 和 codex 都有 `plugin` 子命令(装、卸、列市场里有什么)。
+  // ★名字带 `cli-` 前缀,和这个 app **自己**的插件(plugins:* 那一套)分开 —— 两者毫无关系。
+  cliPluginsList: 'cli-plugins:list',
+  cliPluginsInstall: 'cli-plugins:install',
+  cliPluginsUninstall: 'cli-plugins:uninstall',
+
   // P1-4: the in-chat launch gate's 确认 button. Distinct from `run2Start` (the raw
   // stages+projects channel, unused by any renderer UI — see run2Handlers.ts) because that name is
   // already taken with a different (lower-level) payload shape; this one takes a `LaunchStartConfig`

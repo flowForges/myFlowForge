@@ -24,6 +24,8 @@ import { scanRepos } from '../workspace/scanRepos'
 import { resolveSetupInteraction } from '../workspace/setupInteractions'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
 import { McpService } from '../agents/mcpService'
+import { PluginMarket } from '../agents/pluginMarket'
+import { NO_PLUGIN_CAPS } from '@shared/cliPlugins'
 import { resolveRemovable, scanAddons } from '../agents/addons'
 import { NO_MCP } from '../agents/mcpCli'
 import { spawnAgent } from '../agents/procGroup'
@@ -441,6 +443,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (ws) writeWorkspace({ ...ws, name })
     broadcast(CH.workspacesChanged, {})
   })
+
   // —— 加载项(2026-09-05 重做)——
   // 用户原话:「加载项里好像有 skill,所以 skill 是不是多余?」「能不能根据当前支持的 provider 扫描出来
   // 全局的 skill mcp rule?然后进行筛选」「我们加个操作,能不能删除?」——所以设置里的「Skill」页删了,
@@ -469,19 +472,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 做法见 agents/mcpCli.ts:不模拟那一屏,而是调各 CLI 自己的 `mcp` 子命令。
   // ★授权**必须在 pty 里**跑(实测:管道 stdin 会被 CLI 当场拒),所以这里懒加载 node-pty ——
   //   和终端面板同一个模块、同一套失败说明。
-  const mcp = new McpService({
-    binFor: async (id) => {
+  // MCP 面板和插件市场用的是同一套「怎么起这个 CLI」(找可执行文件、给什么环境、怎么跑一条命令)。
+  const cliDeps = {
+    binFor: async (id: string) => {
       const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
       const p = list.find(x => x.id === id)
       return p?.installed ? (p.binPath || p.bin || null) : null
     },
-    envFor: (id) => buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(id) }),
-    run: async (bin, args, cwd, env) => {
+    envFor: (id: string) => buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(id) }),
+    run: async (bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => {
       // ★不抛:list/help 失败是常态(没配、版本老、网络差),上层要拿到 stdout 自己判断。
       const r = await spawnAgent(bin, args, { cwd, env, reject: false, timeout: 60_000, all: true })
       return { stdout: String(r.all ?? r.stdout ?? ''), code: typeof r.exitCode === 'number' ? r.exitCode : 1 }
     },
-    spawnPty: (bin, args, cwd, env) => {
+    spawnPty: (bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => {
       let nodePty: typeof import('node-pty')
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -491,7 +495,27 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       }
       return nodePty.spawn(bin, args, { name: 'xterm-256color', cwd, env: env as Record<string, string>, cols: 120, rows: 30 })
     },
+  }
+  const mcp = new McpService(cliDeps)
+
+  // —— 技能 / 插件市场(2026-09-05)——
+  // 用户原话:「我们能不能接入技能市场?codex 的 app 里,有技能和插件,它的这些我们能不能支持点击安装?」
+  // 探究结论见 agents/pluginMarket.ts:claude 和 codex 都有 `plugin` 子命令,连 --json 的形状都一样,
+  // 只是**动词不同**(install/add、uninstall/remove)—— 所以动词也是探出来的。
+  const market = new PluginMarket(cliDeps)
+  on(CH.cliPluginsList, async () => {
+    const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+    return Promise.all(list.filter(p => p.installed).map(async (p) => {
+      try {
+        const caps = await market.capsFor(p.id)
+        return { providerId: p.id, displayName: p.displayName, caps, plugins: caps.plugin ? await market.list(p.id) : [], error: null }
+      } catch (e) {
+        return { providerId: p.id, displayName: p.displayName, caps: NO_PLUGIN_CAPS, plugins: [], error: e instanceof Error ? e.message : String(e) }
+      }
+    }))
   })
+  on(CH.cliPluginsInstall, (_e, a: { providerId: string; id: string }) => market.install(a.providerId, a.id))
+  on(CH.cliPluginsUninstall, (_e, a: { providerId: string; id: string }) => market.uninstall(a.providerId, a.id))
   /**
    * 一次问全:每个装了的 provider 认不认得 mcp、它下面有哪些服务器。
    * ★逐个 provider 各自容错:claude 的健康检查要走网络,一台超时不该把整块面板变成一句报错。

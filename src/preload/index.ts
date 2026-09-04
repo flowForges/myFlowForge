@@ -407,6 +407,10 @@ const api = {
   addonsScan: (): Promise<import('@shared/addons').AddonScan> => ipcRenderer.invoke(CH.addonsScan),
   addonsRemove: (id: string): Promise<{ ok: boolean; trashed: boolean; via: 'cli' | 'file' }> =>
     ipcRenderer.invoke(CH.addonsRemove, { id }),
+  // —— 技能 / 插件市场(CLI 自己的 plugin 子命令,和这个 app 的插件无关)——
+  cliPluginsList: (): Promise<import('@shared/cliPlugins').CliPluginView[]> => ipcRenderer.invoke(CH.cliPluginsList),
+  cliPluginsInstall: (a: { providerId: string; id: string }): Promise<string> => ipcRenderer.invoke(CH.cliPluginsInstall, a),
+  cliPluginsUninstall: (a: { providerId: string; id: string }): Promise<string> => ipcRenderer.invoke(CH.cliPluginsUninstall, a),
 
   detectOpeners: (refresh?: boolean): Promise<import('@shared/openers').DetectedOpener[]> => ipcRenderer.invoke(CH.openersDetect, refresh),
   openWith: (arg: { openerId: string; folder: string; file?: string }): Promise<{ ok: boolean; error?: string; removedId?: string }> => ipcRenderer.invoke(CH.openersOpen, arg),
