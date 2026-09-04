@@ -40,6 +40,8 @@ export const ROUTES = {
    * 别把两个名字看成一个屏 —— 一个跑完就没了,一个存回主机、以后每次都这么跑。
    */
   flowEdit: '/flow-edit',
+  /** MCP 服务器(只读)。授权留在电脑端 —— 见 app/mcp.tsx 顶上的注释。 */
+  mcp: '/mcp',
   gate: '/gate',
   newWorkspace: '/new-workspace',
   addHost: '/add-host',

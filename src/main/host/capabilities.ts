@@ -41,6 +41,14 @@ export interface HostCapabilities {
   openPath(path: string): Promise<string>
   /** 在 Finder / 资源管理器里定位到它 */
   revealInFileManager(path: string): void
+  /**
+   * 删一个文件 / 目录。
+   *
+   * ★★桌面端走**废纸篓**(`shell.trashItem`)——「删除加载项」删的是用户自己装的技能和规则文档,
+   *  删错了得能捞回来。无头主机(Linux daemon)没有废纸篓,只能真删,所以返回值里**明说是哪一种**
+   *  (`trashed`),界面据此改确认文案。悄悄降级成真删是不能接受的。
+   */
+  trashItem(path: string): Promise<{ trashed: boolean; error?: string }>
   /** 弹选择器。★**用户取消时返回 `[]`,不是 undefined** —— 调用方全都在取 `[0]` */
   pickPaths(opts: PickOptions): Promise<string[]>
   /**

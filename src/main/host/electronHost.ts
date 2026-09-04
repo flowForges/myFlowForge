@@ -22,6 +22,10 @@ export function createElectronHost(): HostCapabilities {
     // 原样透出 shell.openPath 的「失败返回字符串」契约,见接口注释。
     openPath: (p) => shell.openPath(p),
     revealInFileManager: (p) => shell.showItemInFolder(p),
+    trashItem: async (p) => {
+      try { await shell.trashItem(p); return { trashed: true } }
+      catch (e) { return { trashed: false, error: e instanceof Error ? e.message : String(e) } }
+    },
 
     async pickPaths(o) {
       const r = await dialog.showOpenDialog({

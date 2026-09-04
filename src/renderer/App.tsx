@@ -46,7 +46,7 @@ import { baseName } from '@shared/pathName'
 import { WorkflowPane } from './settings/WorkflowPane'
 import { CustomStagesPane } from './settings/CustomStagesPane'
 import { HookLibraryPane } from './settings/HookLibraryPane'
-import { SkillPane } from './settings/SkillPane'
+import { McpPane } from './settings/McpPane'
 import { PetPane } from './settings/PetPane'
 import { PetMarketPane } from './settings/PetMarketPane'
 import { PET_MARKET_PLUGIN_ID } from '@shared/codexPetMarket'
@@ -873,7 +873,7 @@ export function App() {
           case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} customStages={customStages} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} onUpsertCustomStage={upsertCustomStage} />
           case 'customStages': return <CustomStagesPane customStages={customStages} workflows={workflows} providers={providers} onUpsert={upsertCustomStage} onDelete={deleteCustomStage} />
           case 'hookLibrary': return <HookLibraryPane hooks={hookLib.hooks} onSave={hookLib.save} onDelete={hookLib.remove} onSetAll={hookLib.setAll} />
-          case 'skills': return <SkillPane />
+          case 'mcp': return <McpPane />
           case 'loads': return <LoadPane />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
           case 'petMarket': return settings ? <PetMarketPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null

@@ -407,6 +407,33 @@ const table = {
     hooks: [],
   }),
   'workflow:stage-catalog': () => STAGE_CATALOG,
+  /**
+   * MCP 面板(手机上是只读的)。形状照 `@shared/mcp` 的 McpProviderView:
+   * 两个 provider,一个有待授权的、一个全是 stdio(无需授权),再加一个压根没有 mcp 子命令的。
+   */
+  'mcp:overview': () => [
+    {
+      providerId: 'claude', displayName: 'Claude Code',
+      caps: { mcp: true, list: true, login: true, logout: true, json: false, noBrowser: true },
+      servers: [
+        { name: 'claude.ai Google Drive', target: 'https://drivemcp.googleapis.com/mcp/v1', auth: 'connected', detail: '✔ Connected' },
+        { name: 'probe-sentry', target: 'https://mcp.sentry.dev/mcp (HTTP)', auth: 'needs-auth', detail: '! Needs authentication' },
+      ],
+      error: null,
+    },
+    {
+      providerId: 'codex', displayName: 'Codex',
+      caps: { mcp: true, list: true, login: true, logout: true, json: true, noBrowser: false },
+      servers: [{ name: 'omx_wiki', target: 'node wiki-server.js', auth: 'unsupported', detail: 'unsupported' }],
+      error: null,
+    },
+    {
+      providerId: 'cursor', displayName: 'Cursor',
+      caps: { mcp: false, list: false, login: false, logout: false, json: false, noBrowser: false },
+      servers: [], error: null,
+    },
+  ],
+
   'workspace:save-workflow': (a) => {
     const e = a.workflow
     const name = String(e.name ?? '').trim()

@@ -53,7 +53,12 @@ describe('方法表', () => {
     //   所以是 host 方法,跟着 CLIENT_ONLY 之外那一半走。
     // 197 → 200:手机端工作流编辑器 —— workflow:stage-catalog / workspace:save-workflow /
     //   workspace:delete-workflow。改的是**主机上**那个工作区的 workspace.json,三条全走 host。
-    // 另外两处计数互为佐证:200 = 45(CLIENT_ONLY)+ 155(host),daemonTable = 200 - 45 - 2。
-    expect(Object.keys(table).length).toBe(200)
+    // 200 → 206:MCP 面板六条(mcp:overview / login-start / login-paste / login-wait /
+    //   login-cancel / logout)。MCP 服务器配在**主机**上、凭据也落在主机上,所以全是 host 方法。
+    // 206 → 207:加载项重做 —— 加了 addons:scan / addons:remove(+2),删了 skills:list(-1)。
+    //   `skills:list` 的唯一使用者是设置里的「Skill」页,而那一页已经并进「加载项」了
+    //   (用户原话:「加载项里好像有 skill,所以 skill 是不是多余?」)。
+    // 另外两处计数互为佐证:207 = 45(CLIENT_ONLY)+ 162(host),daemonTable = 207 - 45 - 2。
+    expect(Object.keys(table).length).toBe(207)
   })
 })

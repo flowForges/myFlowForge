@@ -48,7 +48,6 @@ const api = {
   checkCliUpdates: (installed: { id: string; version?: string }[]): Promise<import('../main/agents/cliLatest').CliUpdateInfo[]> => ipcRenderer.invoke(CH.agentsCliUpdates, installed),
   scanContext: (workspacePath?: string) => ipcRenderer.invoke(CH.contextScan, workspacePath),
   scanGlobalContext: (): Promise<import('@shared/types').AgentContextMeta> => ipcRenderer.invoke(CH.contextScanGlobal),
-  listSkills: (): Promise<import('@shared/types').InstalledSkill[]> => ipcRenderer.invoke(CH.skillsList),
   createWorkspace: (opts: unknown) => ipcRenderer.invoke(CH.workspaceCreate, opts),
   cancelSetup: (): Promise<void> => ipcRenderer.invoke(CH.workspaceCancelSetup),
   discardPartialWorkspace: (path: string): Promise<void> => ipcRenderer.invoke(CH.workspaceDiscardPartial, path),
@@ -390,6 +389,25 @@ const api = {
     return () => { ipcRenderer.removeListener(CH.hostsStatusEvent, listener) }
   },
   openExternal: (url: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(CH.openExternal, url),
+  // —— MCP 面板(2026-09-05)——
+  // ★授权地址用上面那个 `openExternal` 打开:它走 CLIENT_ONLY,永远在**有人看着的那块屏幕**上开,
+  //   而 login 进程跑在主机上。连远程主机时这条分工才成立(否则浏览器开在那台没人看的机器上)。
+  mcpOverview: (workspacePath?: string): Promise<import('@shared/mcp').McpProviderView[]> =>
+    ipcRenderer.invoke(CH.mcpOverview, { workspacePath }),
+  mcpLoginStart: (a: { providerId: string; workspacePath?: string; name: string }): Promise<import('@shared/mcp').McpLoginStarted> =>
+    ipcRenderer.invoke(CH.mcpLoginStart, a),
+  mcpLoginPaste: (a: { id: string; redirectUrl: string }): Promise<{ outcome: 'ok' | 'fail'; text: string }> =>
+    ipcRenderer.invoke(CH.mcpLoginPaste, a),
+  mcpLoginWait: (a: { id: string; ms?: number }): Promise<{ outcome: 'ok' | 'fail' | null; text: string }> =>
+    ipcRenderer.invoke(CH.mcpLoginWait, a),
+  mcpLoginCancel: (id: string): Promise<void> => ipcRenderer.invoke(CH.mcpLoginCancel, { id }),
+  mcpLogout: (a: { providerId: string; workspacePath?: string; name: string }): Promise<{ stdout: string; code: number }> =>
+    ipcRenderer.invoke(CH.mcpLogout, a),
+  // —— 加载项(skill / rule / MCP 的全局清单 + 删除)——
+  addonsScan: (): Promise<import('@shared/addons').AddonScan> => ipcRenderer.invoke(CH.addonsScan),
+  addonsRemove: (id: string): Promise<{ ok: boolean; trashed: boolean; via: 'cli' | 'file' }> =>
+    ipcRenderer.invoke(CH.addonsRemove, { id }),
+
   detectOpeners: (refresh?: boolean): Promise<import('@shared/openers').DetectedOpener[]> => ipcRenderer.invoke(CH.openersDetect, refresh),
   openWith: (arg: { openerId: string; folder: string; file?: string }): Promise<{ ok: boolean; error?: string; removedId?: string }> => ipcRenderer.invoke(CH.openersOpen, arg),
   commandsList: (providerId: string, wsPath?: string): Promise<{ cmd: string; title: string; desc: string; template: string; kind: 'command' | 'skill' }[]> => ipcRenderer.invoke(CH.commandsList, providerId, wsPath),

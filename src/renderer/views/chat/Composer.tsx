@@ -94,6 +94,8 @@ interface Props {
       built-in /工作流 command (MenuCommand.openLauncher) is picked: open the launcher with no
       preselected workflow (defaults to the first one) instead of seeding a chat trigger phrase. */
   onPickWorkflow?: (workflowId?: string) => void
+  /** `/mcp`:打开 MCP 面板(不是发给模型的消息 —— 它是 app 自己的命令)。 */
+  onOpenMcp?: () => void
   /** Identifies the current chat (e.g. `${wsPath}::${sessionId}`). The unsent draft (text + attachments)
       is kept PER key, so switching session/workspace hides this draft there and restores it on return —
       instead of one shared draft leaking across every session. */
@@ -105,7 +107,7 @@ interface Props {
   lockedReason?: string
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, draftKey, lockedReason }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -275,6 +277,8 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     // The built-in /工作流 command: open the run2 launcher with no preselection instead of seeding a
     // chat message (chat is pure chat — a seeded trigger phrase never auto-starts a workflow).
     else if (c.openLauncher) { setText(''); onPickWorkflow?.(undefined) }
+    // `/mcp`:开面板,不往输入框里塞字 —— 它不是一句要发给模型的话。
+    else if (c.openMcp) { setText(''); onOpenMcp?.() }
     else setText(c.template)
     setSlashDismissed(true)
     const ta = taRef.current

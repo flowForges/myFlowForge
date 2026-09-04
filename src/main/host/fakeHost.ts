@@ -15,6 +15,7 @@ export function fakeHost(over: Partial<HostCapabilities> = {}): HostCapabilities
     openExternal: async () => {},
     openPath: async () => '',
     revealInFileManager: () => {},
+    trashItem: async () => ({ trashed: true }),
     pickPaths: async () => [],
     saveFile: async () => ({ ok: false, canceled: true }),
     notify: () => {},

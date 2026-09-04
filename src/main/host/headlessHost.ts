@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import type { HostCapabilities } from './capabilities'
 
@@ -28,6 +29,12 @@ export function createHeadlessHost(opts: { version: string; onLog?: (m: string) 
     openExternal: async (url) => { cannot(`打开链接 ${url}`) },
     openPath: async (p) => cannot(`打开 ${p}`),
     revealInFileManager: (p) => { cannot(`在文件管理器中显示 ${p}`) },
+    // ★无头机器上没有废纸篓,只能真删 —— 但**如实报告** `trashed: false`,让界面把确认文案换成
+    //  「直接删除,删了捞不回来」。悄悄降级是这类操作里最不能干的事。
+    trashItem: async (p) => {
+      try { await rm(p, { recursive: true, force: true }); return { trashed: false } }
+      catch (e) { return { trashed: false, error: e instanceof Error ? e.message : String(e) } }
+    },
     pickPaths: async () => { cannot('选择文件/目录'); return [] },
     saveFile: async (name) => ({ ok: false, error: cannot(`保存 ${name}`) }),
     notify: (n) => log(`[通知] ${n.title} — ${n.body}`),

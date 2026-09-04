@@ -4,6 +4,7 @@ import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
 import { TIMEZONE_OPTIONS } from '@shared/timezones'
 import { useSettings } from '../state/useSettings'
 import { usePathPicker } from '../state/PathPicker'
+import { McpPanel } from '../components/McpPanel'
 
 // Built-in providers whose bin path can be overridden — derived from the shared catalog.
 const BUILTINS = BUILTIN_PROVIDERS.map(p => ({ id: p.id, name: p.displayName, defaultBin: p.defaultBin }))
@@ -109,6 +110,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   const [detecting, setDetecting] = useState(true)
   const [binDrafts, setBinDrafts] = useState<Record<string, string>>({})
   const [nc, setNc] = useState(EMPTY_CUSTOM)
+  const [mcpOpen, setMcpOpen] = useState(false)
   // 全局忙(只给「重新检测」这类真·全局操作用)。单个 provider 的保存/删除走下面的 rowBusy。
   const [busy, setBusy] = useState(false)
   // Per-provider busy + 「已保存」闪现,让一行的操作只影响那一行(见 apply 的注释)。
@@ -304,6 +306,14 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
         <div className="info"><div className="t">编码代理</div><div className="d">检测本机安装的代理；可覆盖各自的 bin 路径</div></div>
         <button className="set-btn" disabled={busy || detecting} onClick={() => apply(() => window.forge.detectProviders({ force: true }))}>{detecting ? '检测中…' : '重新检测'}</button>
       </div>
+
+      {/* MCP:一个 CLI 现在什么状态,天然该在这一栏 —— 和「装没装」「有哪些模型」放一起。
+          聊天里打 `/mcp` 是同一个面板,只是从另一头进来。 */}
+      <div className="set-row">
+        <div className="info"><div className="t">MCP 服务器</div><div className="d">看各 CLI 配了哪些 MCP、授权或取消授权；聊天里打 <code>/mcp</code> 也能开</div></div>
+        <button className="set-btn" onClick={() => setMcpOpen(true)}>打开</button>
+      </div>
+      {mcpOpen && <McpPanel onClose={() => setMcpOpen(false)} />}
 
       {BUILTINS.map(b => (
         <div className="agent-row" key={b.id}>

@@ -113,11 +113,13 @@ const NAV: NavEntry[] = [
     ),
   },
   {
-    key: 'skills',
-    label: 'Skill',
+    // ★2026-09-05:这一格原来是「Skill」。它和「加载项」重复(那边扫的就是全局 skill/rule/MCP,
+    //  而且更全),而 MCP **需要一个能点的地方**(授权)。所以位置给了 MCP,Skill 那页删掉。
+    key: 'mcp',
+    label: 'MCP',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+        <path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0V8zM12 18v4" />
       </svg>
     ),
   },

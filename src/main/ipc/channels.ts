@@ -72,7 +72,6 @@ export const CH = {
   netCheckExitIp: 'net:check-exit-ip',
   contextScan: 'context:scan',
   contextScanGlobal: 'context:scan-global',
-  skillsList: 'skills:list',
   commandsList: 'commands:list',
   workspaceCreate: 'workspace:create',
   workspaceCancelSetup: 'workspace:cancel-setup',
@@ -335,6 +334,24 @@ export const CH = {
   workflowStageCatalog: 'workflow:stage-catalog',
   workspaceSaveWorkflow: 'workspace:save-workflow',
   workspaceDeleteWorkflow: 'workspace:delete-workflow',
+
+  // 2026-09-05(MCP 面板):调各个 CLI 自己的 `mcp` 子命令 —— 列出服务器、授权、取消授权。
+  // ★不是「支持 /mcp 这个斜杠命令」:那是 claude 交互式界面里的一屏,我们跑的是 stream-json
+  //   非交互模式,那一屏不存在。用户要的是「能授权」,见 agents/mcpCli.ts 顶上的注释。
+  // ★六条全走 host:MCP 服务器配在**那台机器**上,凭据也落在那台机器上。
+  //   授权时要开的浏览器另说 —— 那一步走客户端的 shell:open-external(CLIENT_ONLY)。
+  mcpOverview: 'mcp:overview',
+  mcpLoginStart: 'mcp:login-start',
+  mcpLoginPaste: 'mcp:login-paste',
+  mcpLoginWait: 'mcp:login-wait',
+  mcpLoginCancel: 'mcp:login-cancel',
+  mcpLogout: 'mcp:logout',
+
+  // 2026-09-05(加载项重做):扫这台主机上各 CLI 全局装的 skill / rule / MCP,并且能删。
+  // ★删除**只认扫描结果里的 id**,路径由主机侧给 —— 见 agents/addons.ts:直接删客户端传来的路径,
+  //   等于给每个连上来的设备开了一个「删任意路径」的接口。
+  addonsScan: 'addons:scan',
+  addonsRemove: 'addons:remove',
 
   // P1-4: the in-chat launch gate's 确认 button. Distinct from `run2Start` (the raw
   // stages+projects channel, unused by any renderer UI — see run2Handlers.ts) because that name is

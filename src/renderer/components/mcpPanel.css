@@ -1,0 +1,51 @@
+/* MCP 面板。外壳复用 importModal.css 的 .imp-overlay / .imp-sheet(同一套弹层语言),
+   这里只加 MCP 自己的那几行。 */
+.mcp-sheet { width: 640px; }
+
+.mcp-block + .mcp-block { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.mcp-caps { font-size: 11px; color: var(--faint); }
+
+.mcp-row { padding: 8px 0; }
+.mcp-row + .mcp-row { border-top: 1px solid var(--border); }
+.mcp-row-h { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.mcp-name { font-size: 12.5px; font-weight: 600; color: var(--fg); flex: 0 0 auto; }
+/* ★地址那一段是唯一会长到没边的东西:给它 min-width:0 + 省略号,
+   不给的话 flex item 默认 min-width:auto,整行会被它撑出容器,右边那两颗按钮直接被挤出去。 */
+.mcp-target {
+  font: 11px/1.4 var(--mono); color: var(--faint);
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mcp-state { font-size: 11px; color: var(--muted); flex: 0 0 auto; }
+/* ★按钮必须钉死不收缩:地址那一段是可伸缩的,而 flex 默认允许收缩 ——
+   长地址一挤,「授权」两个字会被压成竖排(截图里当场看到的)。 */
+.mcp-row-h .imp-tool { flex: 0 0 auto; white-space: nowrap; }
+.mcp-state.connected { color: var(--ok); }
+.mcp-state.needs-auth { color: var(--warn); }
+.mcp-state.failed { color: var(--err); }
+
+.mcp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 7px; }
+.mcp-dot.connected { background: var(--ok); }
+.mcp-dot.needs-auth { background: var(--warn); }
+.mcp-dot.failed { background: var(--err); }
+.mcp-dot.unsupported, .mcp-dot.unknown, .mcp-dot.pending { background: var(--faint); }
+
+.mcp-login { margin: 9px 0 4px; padding: 11px 12px; border: 1px solid var(--border-2); border-radius: 10px; background: var(--surface); }
+.mcp-step { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+.mcp-step + .mcp-step { margin-top: 9px; }
+.mcp-step b { color: var(--fg-2); }
+.mcp-url { display: flex; align-items: center; gap: 8px; margin: 7px 0; min-width: 0; }
+.mcp-url code {
+  flex: 1; min-width: 0; font: 11px/1.5 var(--mono); color: var(--fg-2);
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 7px; padding: 6px 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mcp-paste { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.mcp-paste input {
+  flex: 1; min-width: 0; height: 30px; padding: 0 9px; border-radius: 7px;
+  background: var(--bg-2); border: 1px solid var(--border); color: var(--fg); font: 11.5px var(--mono); outline: none;
+}
+.mcp-paste input:focus { border-color: var(--accent); }
+.mcp-paste input::placeholder { color: var(--faint); }
+
+.mcp-nomcp { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 11.5px; color: var(--faint); line-height: 1.8; }
+.mcp-nomcp b { color: var(--muted); }

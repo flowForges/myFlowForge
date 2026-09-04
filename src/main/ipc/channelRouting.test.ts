@@ -40,7 +40,12 @@ describe('频道分类', () => {
     //   去读主机上的会话文件,只有那台机器答得了 —— 所以是 host,不是 client。
     // 152 → 155:手机端工作流编辑器三条(workflow:stage-catalog / workspace:save-workflow /
     //   workspace:delete-workflow)。改的是主机上那个工作区的 workspace.json ⇒ host。
-    expect(host.length).toBe(155)
+    // 155 → 161:MCP 面板六条。MCP 服务器和 OAuth 凭据都在主机上 ⇒ host。
+    //   ★授权时要开的那个浏览器**不在这六条里** —— 那一步走 shell:open-external(CLIENT_ONLY),
+    //   于是「手机上点授权、手机浏览器打开、凭据落在主机」这条链才成立。
+    // 161 → 162:加载项两条(addons:scan / addons:remove)进来、skills:list 出去。
+    //   扫的是**主机**磁盘上的技能/规则/MCP,删的也是主机上的东西 ⇒ host。
+    expect(host.length).toBe(162)
     expect(client.length + host.length).toBe(keys.length)
   })
 

@@ -16,12 +16,17 @@ import { checkCliUpdates } from '../agents/cliLatest'
 import { buildAgentEnv } from '../agents/env'
 import { providerTimezone } from '../agents/providerConfig'
 import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
 import { scanRepos } from '../workspace/scanRepos'
 import { resolveSetupInteraction } from '../workspace/setupInteractions'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
+import { McpService } from '../agents/mcpService'
+import { resolveRemovable, scanAddons } from '../agents/addons'
+import { NO_MCP } from '../agents/mcpCli'
+import { spawnAgent } from '../agents/procGroup'
 import { buildStageCatalog, upsertWorkflow, removeWorkflow, type WorkflowEdit } from '../workspace/editWorkflows'
 import { summarizeRequirement } from '../chat/requirementSummary'
 import { needsConversationDoc, buildConversationDoc, CONVERSATION_DOC_REL } from '../run/conversationDoc'
@@ -94,7 +99,6 @@ import { startBridge } from '../mcp/forgeBridge'
 import { removeWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
 import { scanGlobalContext } from '../agents/globalContext'
-import { readInstalledSkills } from '../skills/installedSkills'
 import { getAppLog, clearAppLog, formatAppLog } from '../log/appLog'
 import { resolveAppIconOptions } from '../appIcon'
 import { installPlugin, uninstallPlugin, setPluginEnabled, readPlugins } from '../plugins/pluginStore'
@@ -393,7 +397,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }
   })
   on(CH.contextScanGlobal, () => scanGlobalContext())
-  on(CH.skillsList, () => readInstalledSkills())
   on(CH.commandsList, (_e, providerId: string, wsPath?: string) => providerCommands(providerId, wsPath))
   on(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
     const knownProjects = readProjects().projects
@@ -438,6 +441,85 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (ws) writeWorkspace({ ...ws, name })
     broadcast(CH.workspacesChanged, {})
   })
+  // —— 加载项(2026-09-05 重做)——
+  // 用户原话:「加载项里好像有 skill,所以 skill 是不是多余?」「能不能根据当前支持的 provider 扫描出来
+  // 全局的 skill mcp rule?然后进行筛选」「我们加个操作,能不能删除?」——所以设置里的「Skill」页删了,
+  // 这一条成了唯一入口,并且带上了删除。
+  const addonScan = async () => {
+    const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+    return scanAddons(homedir(), new Set(list.filter(p => p.installed).map(p => p.id)))
+  }
+  on(CH.addonsScan, () => addonScan())
+  on(CH.addonsRemove, async (_e, a: { id: string }) => {
+    // ★★每次删之前**重新扫一遍**,再按 id 去里面找。客户端传来的路径一个字都不信 ——
+    //   见 agents/addons.ts 顶上的注释(这个 app 是能被手机和另一台电脑连上的)。
+    const item = resolveRemovable(await addonScan(), a.id)
+    if (!item) throw new Error('这一条现在删不了 —— 可能刚被别处改过,或者它属于插件包。刷新一下再看。')
+    if (item.removeVia === 'cli') {
+      await mcp.remove(item.provider, homedir(), item.name)
+      return { ok: true, trashed: false, via: 'cli' as const }
+    }
+    const r = await caps.trashItem(item.path)
+    if (r.error) throw new Error(r.error)
+    return { ok: true, trashed: r.trashed, via: 'file' as const }
+  })
+
+  // —— MCP 面板(2026-09-05)——
+  // 用户原话:「provider 是否支持 /mcp 这个命令,咱们得支持,因为我发现我想 mcp 授权,授权不了」。
+  // 做法见 agents/mcpCli.ts:不模拟那一屏,而是调各 CLI 自己的 `mcp` 子命令。
+  // ★授权**必须在 pty 里**跑(实测:管道 stdin 会被 CLI 当场拒),所以这里懒加载 node-pty ——
+  //   和终端面板同一个模块、同一套失败说明。
+  const mcp = new McpService({
+    binFor: async (id) => {
+      const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+      const p = list.find(x => x.id === id)
+      return p?.installed ? (p.binPath || p.bin || null) : null
+    },
+    envFor: (id) => buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(id) }),
+    run: async (bin, args, cwd, env) => {
+      // ★不抛:list/help 失败是常态(没配、版本老、网络差),上层要拿到 stdout 自己判断。
+      const r = await spawnAgent(bin, args, { cwd, env, reject: false, timeout: 60_000, all: true })
+      return { stdout: String(r.all ?? r.stdout ?? ''), code: typeof r.exitCode === 'number' ? r.exitCode : 1 }
+    },
+    spawnPty: (bin, args, cwd, env) => {
+      let nodePty: typeof import('node-pty')
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        nodePty = require('node-pty') as typeof import('node-pty')
+      } catch (e) {
+        throw new Error(`这台主机上的终端组件(node-pty)没装好,没法完成 MCP 授权:${e instanceof Error ? e.message : String(e)}`)
+      }
+      return nodePty.spawn(bin, args, { name: 'xterm-256color', cwd, env: env as Record<string, string>, cols: 120, rows: 30 })
+    },
+  })
+  /**
+   * 一次问全:每个装了的 provider 认不认得 mcp、它下面有哪些服务器。
+   * ★逐个 provider 各自容错:claude 的健康检查要走网络,一台超时不该把整块面板变成一句报错。
+   * ★**在工作区目录里跑** —— 项目级(.mcp.json)的服务器只在那儿看得见。
+   */
+  on(CH.mcpOverview, async (_e, a: { workspacePath?: string }) => {
+    const cwd = a?.workspacePath && existsSync(a.workspacePath) ? a.workspacePath : homedir()
+    const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+    const installed = list.filter(p => p.installed)
+    return Promise.all(installed.map(async (p) => {
+      try {
+        const caps = await mcp.capsFor(p.id)
+        if (!caps.mcp) return { providerId: p.id, displayName: p.displayName, caps, servers: [], error: null }
+        const servers = await mcp.list(p.id, cwd)
+        return { providerId: p.id, displayName: p.displayName, caps, servers, error: null }
+      } catch (e) {
+        return { providerId: p.id, displayName: p.displayName, caps: NO_MCP, servers: [], error: e instanceof Error ? e.message : String(e) }
+      }
+    }))
+  })
+  on(CH.mcpLoginStart, (_e, a: { providerId: string; workspacePath?: string; name: string }) =>
+    mcp.loginStart(a.providerId, a.workspacePath && existsSync(a.workspacePath) ? a.workspacePath : homedir(), a.name))
+  on(CH.mcpLoginPaste, (_e, a: { id: string; redirectUrl: string }) => mcp.paste(a.id, a.redirectUrl))
+  on(CH.mcpLoginWait, (_e, a: { id: string; ms?: number }) => mcp.waitResult(a.id, a.ms))
+  on(CH.mcpLoginCancel, (_e, a: { id: string }) => { mcp.cancel(a.id) })
+  on(CH.mcpLogout, (_e, a: { providerId: string; workspacePath?: string; name: string }) =>
+    mcp.logout(a.providerId, a.workspacePath && existsSync(a.workspacePath) ? a.workspacePath : homedir(), a.name))
+
   // —— 手机端工作流编辑器(2026-09-04)——
   // 三条都很窄:列出能加哪些阶段、写回一条工作流、删一条。**故意不复用 workspaces:edit** ——
   // 那条会跑整套 editWorkspace(克隆项目、跑 hooks、重建 worktree),而这里要改的只是

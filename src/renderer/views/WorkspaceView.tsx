@@ -53,6 +53,7 @@ import type { LaunchStartConfig } from '../../main/run/launch'
 import { buildConversationSeed } from './chat/launchSeed'
 import { workflowPhaseNote } from './workflowNote'
 import { RunEventCard } from '../components/RunEventCard'
+import { McpPanel } from '../components/McpPanel'
 import { toRunCardEntries } from './chat/runCards'
 import type { FrozenRunCard } from './chat/runCards'
 import type { RunEvent } from '../../main/run/events'
@@ -451,6 +452,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // timeline (the floating run-launcher overlay this replaced was removed entirely in P2-4). Reuses
   // the same run2:launch-info path (buildLaunchInfo server-side) for the workflow list + resolved
   // project defaults — no separate data source invented here.
+  // `/mcp`:MCP 面板。★它是**这台主机上各 CLI 的配置**,不是会话内容 —— 所以做成一个弹层,
+  //  不往消息流里塞任何东西。
+  const [mcpOpen, setMcpOpen] = useState(false)
+
   const onPickWorkflow = useCallback((workflowId?: string) => {
     if (!wsPath) return
     // P1-6: capture the session this gate belongs to right now (at trigger time), not once the async
@@ -1745,6 +1750,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           selection={selection}
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
+          onOpenMcp={() => setMcpOpen(true)}
           onSelectionChange={(s) => {
             // Provider switch guard: agent changed AND the old provider already ran this session → don't
             // switch yet; raise a confirm banner (switch loses native context; the new provider will
@@ -2199,6 +2205,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           onRefresh={refreshInspector}
         />
       )}
+      {/* `/mcp` 开的那个面板。★它问的是**主机**上各 CLI 的 mcp 配置,所以带上当前工作区目录:
+          项目级(.mcp.json)的服务器只有在那个目录里跑命令才看得见。 */}
+      {mcpOpen && <McpPanel workspacePath={wsPath} onClose={() => setMcpOpen(false)} />}
     </div>
     </OpenFileCtx.Provider>
   )

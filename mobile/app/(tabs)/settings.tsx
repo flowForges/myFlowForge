@@ -132,6 +132,7 @@ export default function Settings() {
         <Sec>提醒</Sec>
         <List>
           <Nav label="通知" sub="门升起来、跑完了" onPress={() => router.push(ROUTES.notifications)} />
+          <Nav label="MCP 服务器" sub="主机上各 CLI 配了哪些、连上没有" onPress={() => router.push(ROUTES.mcp)} />
         </List>
 
         {/* ★★「关于」是**一行,点进去是一屏**(`app/about.tsx`)。它原来是这儿的一组内联行:
