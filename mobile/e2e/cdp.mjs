@@ -84,7 +84,10 @@ export async function attach() {
       return path
     },
     async click(sel) {
-      const box = await this.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)}); if(!e) return null; const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2} })()`)
+      // ★★先 scrollIntoView 再量。滚出屏幕的元素 `getBoundingClientRect()` 给的 y 可能在视口之外,
+      //  而 `Input.dispatchMouseEvent` 是按**视口坐标**投递的 —— 于是那一下点在别的东西上,或者谁也没点到,
+      //  表现是「点了没反应」,和真的按钮坏了长得一模一样。屏一变长(比如某一屏加了一节)就会撞上。
+      const box = await this.eval(`(() => { const e=document.querySelector(${JSON.stringify(sel)}); if(!e) return null; e.scrollIntoView({block:'center',inline:'nearest'}); const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2} })()`)
       if (!box) throw new Error('找不到元素: ' + sel)
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box.x, y: box.y, button: 'left', clickCount: 1 })
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x, y: box.y, button: 'left', clickCount: 1 })
@@ -96,6 +99,7 @@ export async function attach() {
         const all=[...document.querySelectorAll(${JSON.stringify(tag)})]
         const hits=all.filter(e=>e.textContent&&e.textContent.trim()===${JSON.stringify(text)}&&e.getBoundingClientRect().width>0)
         const e=hits[hits.length-1]; if(!e) return null
+        e.scrollIntoView({block:'center',inline:'nearest'})   // 见 click() 里那段:不滚进视口,坐标是白给的
         const r=e.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}
       })()`)
       if (!box) throw new Error('找不到文本: ' + text)
@@ -125,6 +129,7 @@ export async function attach() {
           const ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect()
           return ra.width*ra.height - rb.width*rb.height
         })[0]
+        e.scrollIntoView({block:'center',inline:'nearest'})   // 同上
         const r=e.getBoundingClientRect()
         return {x:r.x+Math.min(r.width/2,40),y:r.y+r.height/2}
       })()`)

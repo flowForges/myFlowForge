@@ -329,6 +329,13 @@ export const CH = {
   // ws.stages) into a RunPlan before starting run2 (run2StartWorkflow).
   run2LaunchInfo: 'run2:launch-info',
   run2StartWorkflow: 'run2:start-workflow',
+  // 2026-09-04(手机端工作流编辑器):在手机上改这个工作区的工作流 —— 加 / 改 / 删一条,
+  // 以及「能加哪些阶段」那张单子。改的是 ws.workflows(启动屏列的、真跑起来用的那一份),
+  // 所以电脑端立刻同步。**一次只动一条**,不整份覆盖 —— 见 workspace/editWorkflows.ts 顶注释。
+  workflowStageCatalog: 'workflow:stage-catalog',
+  workspaceSaveWorkflow: 'workspace:save-workflow',
+  workspaceDeleteWorkflow: 'workspace:delete-workflow',
+
   // P1-4: the in-chat launch gate's 确认 button. Distinct from `run2Start` (the raw
   // stages+projects channel, unused by any renderer UI — see run2Handlers.ts) because that name is
   // already taken with a different (lower-level) payload shape; this one takes a `LaunchStartConfig`

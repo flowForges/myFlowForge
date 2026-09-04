@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native'
-import { router } from 'expo-router'
+import { router, useFocusEffect } from 'expo-router'
 import { goBack } from '../src/nav'
+import { ROUTES } from '../src/nav/routes'
 import { CH } from '../../src/main/ipc/channels'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, Field, IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
@@ -22,8 +23,10 @@ import {
  *  单代理⇄按项目 / 逐项目代理)。用户原话:「工作流应该有流程,然后每个阶段设计哪些代码项目,
  *  然后每个流程里用什么模型,都是可以选择的,现在好像都没有对吧」。是,都没有 —— 而服务端
  *  (`LaunchStartConfig.stages`)一直支持,缺的只是手机不发。所以这不是新造能力,是接出来。
- * ★**只改这一次**。工作流模板本身(阶段增删、提示词、hooks)仍然留在电脑端:
- *  那是一张会写回配置的表单,改坏了下次每一轮都受影响 —— 和「这一次这么跑」完全是两件事。
+ * ★**这一屏只改这一次**。要改工作流本身(改名、加删阶段、调顺序、换默认代理)走每一行末尾的
+ *  ✎ —— 那是另一屏(`flow-edit.tsx`),存回主机、电脑端同步生效、以后每次都这么跑。
+ *  两件事必须一眼分得开:一个跑完就没了,一个改了每一轮都受影响。
+ *  提示词、CR 视角、hooks 仍然只在电脑端 —— 手机上一屏塞不下,也不是能顺手改对的东西。
  *
  * ★服务端有一道硬门槛:`hasRequirement` —— 需求和补充说明**至少要有一句**,否则拒绝启动。
  *  理由是阶段代理只拿到一串项目名会自己猜一个需求出来跑一堆东西。所以这一屏把「这次要做什么」
@@ -31,9 +34,9 @@ import {
  */
 export default function WorkflowLaunch() {
   const c = useC()
-  const { invoke, online } = useConn()
+  const { invoke, online, methods } = useConn()
   const { selected, wsName, refresh } = useStore()
-  const { workflows, projects, loading, error } = useLaunchOptions(selected?.wsPath ?? null)
+  const { workflows, projects, loading, error, reload } = useLaunchOptions(selected?.wsPath ?? null)
 
   const { agents } = useAgents()
   const [flowId, setFlowId] = useState<string | null>(null)
@@ -51,9 +54,25 @@ export default function WorkflowLaunch() {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
+  /**
+   * 从编辑屏返回时重新拉一次。★编辑屏是**推上去的一层**,返回时这一屏并没有重新挂载 ——
+   *  不主动拉的话,刚改完的流程在这儿还是老样子,而且看不出来是旧的。
+   * ★第一次聚焦跳过:那一刻 `useLaunchOptions` 自己的首次加载正在跑,再拉一次是白跑一趟。
+   */
+  const firstFocus = useRef(true)
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) { firstFocus.current = false; return }
+      reload()
+    }, [reload]),
+  )
+
   // 默认:第一个工作流 + 全部项目。用户改过就不再动。
+  // ★选中的那条如果没了(刚在编辑屏里删掉的),回到第一条 —— 否则下面 `flow` 是 null,
+  //  整屏静默变成「选了一条不存在的工作流」,按钮灰着而不说为什么。
   useEffect(() => {
-    if (!flowId && workflows.length) setFlowId(workflows[0].id)
+    if (!workflows.length) return
+    if (!flowId || !workflows.some((w) => w.id === flowId)) setFlowId(workflows[0].id)
   }, [workflows, flowId])
   useEffect(() => {
     if (projects.length && picked.size === 0) setPicked(new Set(projects.map((p) => p.name)))
@@ -67,6 +86,13 @@ export default function WorkflowLaunch() {
       else n.add(name)
       return n
     })
+
+  /**
+   * 这台主机认不认得「改工作流」那两条方法。★老版本的主机(还没升级的那台)没有它们 ——
+   *  不判的话,✎ 点进去、改半天、按保存才吃一句「未知方法」。决策 B-2:**明确不给入口并说明原因**,
+   *  好过一个点了会失败的亮按钮。
+   */
+  const canEditFlows = methods.has(CH.workspaceSaveWorkflow)
 
   const flow = workflows.find((w) => w.id === flowId) ?? null
   const stages = useMemo(() => flow?.stages ?? [], [flow])
@@ -123,10 +149,31 @@ export default function WorkflowLaunch() {
           ) : error ? (
             <Empty title="读不到这个工作区" desc={error} />
           ) : workflows.length === 0 ? (
-            <Empty title="这个工作区还没有工作流" desc="新建和编辑工作流留在电脑端。" />
+            <View>
+              <Empty title="这个工作区还没有工作流" desc="新建一条,电脑端也会同步生效。" />
+              {canEditFlows ? (
+                <List>
+                  <Btn kind="pri" block onPress={() => router.push({ pathname: ROUTES.flowEdit, params: { flow: '' } })}>
+                    新建工作流
+                  </Btn>
+                </List>
+              ) : (
+                <Note>这台主机的版本还不支持在手机上新建工作流。去电脑端建一条,或者升级那台机器。</Note>
+              )}
+            </View>
           ) : (
             <>
-              <Sec>选一个工作流</Sec>
+              <Sec
+                right={
+                  canEditFlows ? (
+                    <Pressable onPress={() => router.push({ pathname: ROUTES.flowEdit, params: { flow: '' } })} hitSlop={8}>
+                      <T style={{ fontSize: 12, color: c.accent }}>新建</T>
+                    </Pressable>
+                  ) : null
+                }
+              >
+                选一个工作流
+              </Sec>
               <List>
                 {workflows.map((w) => {
                   const on = w.id === flowId
@@ -138,12 +185,24 @@ export default function WorkflowLaunch() {
                     >
                       <View style={{ flex: 1, minWidth: 0 }}>
                         <T style={{ fontSize: 14.5, fontWeight: '600', color: c.fg }}>{w.name}</T>
+                        <T mono style={{ fontSize: 11, color: c.muted, marginTop: 3 }}>
+                          {w.stages.length} 个阶段
+                        </T>
                       </View>
                       {on ? <T style={{ color: c.accent }}>✓</T> : null}
+                      {/* ★改**工作流本身**的入口,和下面「流程」那一节(只改这一次)是两件事。
+                          放在每一行末尾而不是做成一个全局按钮:改的永远是某一条,不是「工作流」这个概念。 */}
+                      {canEditFlows ? (
+                        <IconBtn label="编辑" onPress={() => router.push({ pathname: ROUTES.flowEdit, params: { flow: w.id } })}>✎</IconBtn>
+                      ) : null}
                     </Row>
                   )
                 })}
               </List>
+
+              {!canEditFlows ? (
+                <Note>这台主机的版本还不支持在手机上改工作流。升级那台机器上的 myFlowForge 就有了。</Note>
+              ) : null}
 
               <Sec right={<T mono style={{ fontSize: 10.5, color: c.faint }}>{chosen.length}/{projects.length}</T>}>
                 在哪些项目上跑

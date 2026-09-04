@@ -35,6 +35,11 @@ export const ROUTES = {
   chat: '/chat',
   exec: '/exec',
   workflow: '/workflow',
+  /**
+   * 改工作流本身(新建 / 加删阶段 / 换代理)。★和 `workflow`(启动屏,只改这一次)是两件事,
+   * 别把两个名字看成一个屏 —— 一个跑完就没了,一个存回主机、以后每次都这么跑。
+   */
+  flowEdit: '/flow-edit',
   gate: '/gate',
   newWorkspace: '/new-workspace',
   addHost: '/add-host',

@@ -38,3 +38,49 @@ export function startMock(port, script) {
     })
   })
 }
+
+/**
+ * 连上假 daemon,一路点到某个会话的对话屏。
+ *
+ * ★★抽出来的直接原因:这段路**变过三次**,而每个脚本各抄了一份自己的版本 ——
+ *  ① 2026-08-29 底部 tab 化之后,「保存并连接」落的是**主机列表**,不再是对话屏;
+ *  ② 2026-09-02 主机屏退回根栈的次级屏(第二格给了「工作区」),它盖住 tab bar ⇒ 得先退栈;
+ *  ③ 会话列表的工作区分组**默认收起**,不点开就没有会话可点。
+ *  抄旧版的脚本不会报「路走错了」,只会在几步之后抛一句「找不到文本 XXX」,
+ *  看着像功能坏了 —— `e2e:workflow` 就是这么红了一阵没人发现的。
+ * ★顺手清 localStorage:Chrome 档案目录是复用的,上一趟存的主机会带到这一趟来。
+ */
+export async function openChat(p, port, opts = {}) {
+  const { group = 'alpha', session = '修 gate 重复放行' } = opts
+  const visible = (text) =>
+    `[...document.querySelectorAll('*')].some(e=>e.textContent&&e.textContent.trim()===${JSON.stringify(text)}&&e.getBoundingClientRect().width>0)`
+  await p.goto('http://localhost:8081/')
+  if (!(await p.waitFor(`!!document.querySelector('#root') && document.body.innerText.length > 0`, 120000)))
+    throw new Error('页面没起来(Metro 在打包?先 `npm run web`)')
+  await p.eval('localStorage.clear()')
+  await p.goto('http://localhost:8081/')
+  if (!(await p.waitFor(`document.body.innerText.includes('先连一台电脑')`, 60000)))
+    throw new Error('没落在首跑引导屏:' + (await p.text()).split('\n').slice(0, 4).join(' / '))
+  await p.clickText('添加主机')
+  await p.waitFor(`!!document.querySelector('input[placeholder*="192.168"]')`, 15000)
+  await p.typeInto('input[placeholder*="192.168"]', `127.0.0.1:${port}`)
+  await p.clickText('保存并连接')
+  if (!(await p.waitFor(`document.body.innerText.includes('已配对')`, 25000)))
+    throw new Error('没连上:' + (await p.text()).split('\n').slice(0, 4).join(' / '))
+  // ★★2026-09-02 之后主机屏是**根栈里的次级屏**(底部第二格让给了「工作区」),它盖在 tab bar
+  //  上面 —— 所以这里要先退回去,而不是点「会话」那一格(那时候 tab bar 根本没露出来)。
+  await p.clickText('‹')
+  await p.waitFor(visible(group), 20000)
+  await p.clickText(group)          // 分组默认收起
+  await p.waitFor(visible(session), 10000)
+  await p.clickText(session)
+  if (!(await p.waitFor(`!!document.querySelector('[aria-label="更多"]')`, 15000)))
+    throw new Error('没进对话屏:' + (await p.text()).split('\n').slice(0, 4).join(' / '))
+}
+
+/** 对话屏的 ＋ 面板里点一项(工作流 / 全屏编辑 / 照片…)。 */
+export async function plusMenu(p, label) {
+  await p.click('[aria-label="更多"]')
+  await p.waitFor(`[...document.querySelectorAll('*')].some(e=>e.textContent&&e.textContent.trim()===${JSON.stringify(label)})`, 5000)
+  await p.clickText(label)
+}

@@ -22,6 +22,7 @@ import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSe
 import { scanRepos } from '../workspace/scanRepos'
 import { resolveSetupInteraction } from '../workspace/setupInteractions'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
+import { buildStageCatalog, upsertWorkflow, removeWorkflow, type WorkflowEdit } from '../workspace/editWorkflows'
 import { summarizeRequirement } from '../chat/requirementSummary'
 import { needsConversationDoc, buildConversationDoc, CONVERSATION_DOC_REL } from '../run/conversationDoc'
 import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
@@ -435,6 +436,29 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     registerWorkspace(name, path)
     const ws = readWorkspace(path)
     if (ws) writeWorkspace({ ...ws, name })
+    broadcast(CH.workspacesChanged, {})
+  })
+  // —— 手机端工作流编辑器(2026-09-04)——
+  // 三条都很窄:列出能加哪些阶段、写回一条工作流、删一条。**故意不复用 workspaces:edit** ——
+  // 那条会跑整套 editWorkspace(克隆项目、跑 hooks、重建 worktree),而这里要改的只是
+  // workspace.json 里的一段配置。合并规则(为什么不是直接覆盖)见 workspace/editWorkflows.ts。
+  on(CH.workflowStageCatalog, () => buildStageCatalog(readWorkflows().workflows, readCustomStages().stages))
+  on(CH.workspaceSaveWorkflow, (_e, a: { workspacePath: string; workflow: WorkflowEdit }) => {
+    if (isArchivedWorkspace(a.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
+    const ws = readWorkspace(a.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${a.workspacePath}`)
+    const workflows = upsertWorkflow(ws, a.workflow, readWorkflows().workflows, readCustomStages().stages)
+    writeWorkspace({ ...ws, workflows })
+    broadcast(CH.workspacesChanged, {})
+    // 新建那条的 id 是服务端生成的,回传给手机端好让它存完就选中它。
+    const before = new Set(ws.workflows.map(w => w.id))
+    return { id: workflows.find(w => !before.has(w.id))?.id ?? a.workflow.id }
+  })
+  on(CH.workspaceDeleteWorkflow, (_e, a: { workspacePath: string; workflowId: string }) => {
+    if (isArchivedWorkspace(a.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
+    const ws = readWorkspace(a.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${a.workspacePath}`)
+    writeWorkspace({ ...ws, workflows: removeWorkflow(ws, a.workflowId) })
     broadcast(CH.workspacesChanged, {})
   })
   on(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts; runProjHooks?: boolean }) => {

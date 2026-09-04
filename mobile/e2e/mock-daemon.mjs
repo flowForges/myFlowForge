@@ -152,6 +152,48 @@ const STAGES = {
     { key: 'develop', name: '代码开发', provider: 'codex', model: 'default', scope: 'per-project' },
   ],
 }
+/**
+ * 启动屏 / 编辑屏看到的那份(`run2:launch-info` 回的 `LaunchInfo.workflows`)。
+ *
+ * ★★和上面 `STAGES` 是**两种形状**,别合并:`STAGES` 是会话上挂着的工作流状态
+ *  (WorkflowStageView:scope),这一份是启动信息(LaunchStage:code / producesDoc / gate)。
+ *  真服务端也是两条不同的路,合成一份只会让 e2e 验不到「手机端拿错字段」这一类错。
+ * ★**可变**:`workspace:save-workflow` 直接改它,于是「在手机上改完 → 返回启动屏能看见」
+ *  这条往返在 e2e 里是真的往返。
+ * ★每个阶段留了一个 `prompt`(手机上看不见的字段),用来验主机那边的**合并**语义:
+ *  手机只发 key/provider/model/gate,存完 prompt 必须还在。
+ */
+const LAUNCH_FLOWS = [
+  {
+    id: 'standard', name: '标准流',
+    stages: [
+      { key: 'requirement', name: '需求评估', provider: 'claude', model: 'opus', gate: false, code: false, producesDoc: true, desc: '梳理与确认本次需求边界', prompt: '别改数据库' },
+      { key: 'design', name: '技术方案设计', provider: 'claude', model: 'opus', gate: true, code: false, producesDoc: true, desc: '设计技术方案与阶段计划' },
+      { key: 'develop', name: '代码开发', provider: 'codex', model: 'default', gate: false, code: true, producesDoc: false, desc: '按项目并行开发' },
+      { key: 'test', name: '写单测', provider: 'codex', model: 'default', gate: false, code: false, producesDoc: false, desc: '补充与运行测试' },
+    ],
+  },
+  {
+    id: 'quick', name: '快速修复',
+    stages: [
+      { key: 'develop', name: '代码开发', provider: 'codex', model: 'default', gate: false, code: true, producesDoc: false, desc: '按项目并行开发' },
+    ],
+  },
+]
+/** 「加一个阶段」那张单子。内置五个 + 阶段库那一条,形状照 `buildStageCatalog`。 */
+const STAGE_CATALOG = {
+  builtin: [
+    { key: 'requirement', name: '需求评估', desc: '梳理与确认本次需求边界', provider: 'claude', model: 'opus', code: false, producesDoc: true, gate: false },
+    { key: 'design', name: '技术方案设计', desc: '设计技术方案与阶段计划', provider: 'claude', model: 'opus', code: false, producesDoc: true, gate: false },
+    { key: 'develop', name: '代码开发', desc: '按项目并行开发', provider: 'codex', model: 'default', code: true, producesDoc: false, gate: false },
+    { key: 'test', name: '写单测', desc: '补充与运行测试', provider: 'codex', model: 'default', code: false, producesDoc: false, gate: false },
+    { key: 'review', name: '代码 CR', desc: '多视角代码评审', provider: 'claude', model: 'opus', code: false, producesDoc: false, gate: false },
+  ],
+  custom: [
+    { libId: 'lib-doc', key: 'lib-doc', name: '补文档', desc: '', provider: 'claude', model: 'opus', code: false, producesDoc: false, gate: false },
+  ],
+}
+
 const FEEDBACK_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '.out', 'last-feedback.txt')
 try { fs.rmSync(FEEDBACK_FILE, { force: true }) } catch { /* 没有就算了 */ }
 
@@ -354,17 +396,59 @@ const table = {
   // ★这两条真网关本来就提供(既不在 CLIENT_ONLY 也不在 DAEMON_UNSUPPORTED),所以假的这里也要有。
   'fs:tree': (cwd) => TREES[cwd] ?? [],
   'git:file': (a) => FILES[a.file] ?? { text: '', lang: '' },
+  /**
+   * 启动屏和编辑屏都吃这一条(真服务端里它也是电脑端启动门吃的那一条)。
+   * ★2026-09-04 补上 —— 手机端从 `workspaces:get` 换过来之后,假 daemon 这边一直没跟上,
+   *  于是 `e2e:workflow` 跑起来是「读不到这个工作区」。
+   */
+  'run2:launch-info': (p) => ({
+    workflows: LAUNCH_FLOWS.map((w) => ({ id: w.id, name: w.name, stages: w.stages })),
+    projects: (projects[p.workspacePath] ?? []).map((name) => ({ name, cwd: `${p.workspacePath}/${name}`, provider: 'codex', model: 'default' })),
+    hooks: [],
+  }),
+  'workflow:stage-catalog': () => STAGE_CATALOG,
+  'workspace:save-workflow': (a) => {
+    const e = a.workflow
+    const name = String(e.name ?? '').trim()
+    if (!name) throw new Error('工作流得有个名字')
+    if (!(e.stages ?? []).length) throw new Error('至少留一个阶段')
+    const prev = e.id ? LAUNCH_FLOWS.find((w) => w.id === e.id) : null
+    if (LAUNCH_FLOWS.some((w) => w !== prev && w.name === name)) throw new Error(`已经有一条叫「${name}」的工作流了`)
+    // ★**合并**,和真服务端同一条语义:手机只发得起 key/provider/model/gate,
+    //  没发的字段(prompt、desc、code…)必须原样留着,不能被这次保存抹掉。
+    const byKey = new Map((prev?.stages ?? []).map((s) => [s.key, s]))
+    const cat = [...STAGE_CATALOG.builtin, ...STAGE_CATALOG.custom]
+    const stages = e.stages.map((se) => {
+      const seed = byKey.get(se.key) ?? cat.find((c) => (se.libId ? c.libId === se.libId : c.key === se.key)) ?? { key: se.key, name: se.key }
+      return { ...seed, key: se.key, provider: se.provider || seed.provider, model: se.model || seed.model, gate: se.gate ?? seed.gate ?? false }
+    })
+    if (prev) { prev.name = name; prev.stages = stages; return { id: prev.id } }
+    const id = `wf-${LAUNCH_FLOWS.length + 1}`
+    LAUNCH_FLOWS.push({ id, name, stages })
+    return { id }
+  },
+  'workspace:delete-workflow': (a) => {
+    const i = LAUNCH_FLOWS.findIndex((w) => w.id === a.workflowId)
+    if (i < 0) throw new Error(`未知工作流: ${a.workflowId}`)
+    if (LAUNCH_FLOWS.length <= 1) throw new Error('至少留一条工作流')
+    LAUNCH_FLOWS.splice(i, 1)
+    return undefined
+  },
   'workflow:enter': (p) => {
     // 服务端那道硬门槛照抄过来,否则手机端的必填校验等于没验过。
     if (!p.sessionId) throw new Error('workflow:enter 缺少 sessionId')
     if (!(p.seed || '').trim() && !(p.supplement || '').trim())
       throw new Error('还不知道这次要做什么:先说一句需求(或在启动卡的补充说明里写一句)再启动工作流。')
     if (!(p.projects || []).length) throw new Error('至少要选一个项目')
-    const stages = STAGES[p.workflowId]
+    // 手机上新建 / 改过的工作流也得能启动 —— 没有的话「新建完立刻跑一把」在 e2e 里走不通,
+    // 而那正是这个功能存在的理由。阶段形状要转成会话状态那一种(scope)。
+    const stages = STAGES[p.workflowId] ?? LAUNCH_FLOWS.find((w) => w.id === p.workflowId)?.stages.map((s) => ({
+      key: s.key, name: s.name, provider: s.provider, model: s.model, scope: s.code ? 'per-project' : 'root',
+    }))
     if (!stages) throw new Error(`不认识的工作流: ${p.workflowId}`)
     const session = {
       flowId: p.workflowId,
-      flowName: WORKFLOWS.find((w) => w.id === p.workflowId)?.name ?? p.workflowId,
+      flowName: LAUNCH_FLOWS.find((w) => w.id === p.workflowId)?.name ?? WORKFLOWS.find((w) => w.id === p.workflowId)?.name ?? p.workflowId,
       stages, currentIndex: 0, phase: 'chatting',
       projects: p.projects, supplement: p.supplement, seed: p.seed,
     }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CH } from '../../../src/main/ipc/channels'
 import type { WorkflowSessionState } from '../../../src/shared/workflowSession'
+import type { CatalogStage } from './flowDraft'
 import { useConn } from '../net/conn'
 import { useStore } from './store'
 
@@ -12,7 +13,9 @@ import { useStore } from './store'
  * 只有推进到扇出阶段(每个项目各起一个代理)时,才交给 run2 真正开跑。
  *
  * 手机端能做的三件事:**选一个已有工作流启动**、**推进**、**退出**。
- * 编辑工作流一律不做(阶段 / 提示词 / hooks 在手机上是一张巨型表单,编错了后果还很严重)。
+ * ★2026-09-04 补了第四件:**改工作流本身**(`app/flow-edit.tsx` —— 改名、加删阶段、调顺序、
+ *  换默认代理、开关确认门),存回主机的 workspace.json,电脑端同步生效。
+ *  提示词 / CR 视角 / hooks 仍然不做:一屏塞不下,也不是能在手机上顺手改对的东西。
  */
 
 /**
@@ -100,8 +103,19 @@ export function useLaunchOptions(wsPath: string | null) {
   const { invoke, online } = useConn()
   const [workflows, setWorkflows] = useState<WorkflowInfo[]>([])
   const [projects, setProjects] = useState<ProjectInfo[]>([])
-  const [loading, setLoading] = useState(false)
+  /**
+   * ★初值就是 true(只要有工作区、又连着)。`false` 的话第一帧是「加载完了、什么都没有」——
+   *  启动屏闪一下「这个工作区还没有工作流」,编辑屏闪一下「这条工作流不在了」。
+   *  下面那个 effect 在**首帧画完之后**才跑,补不回这一帧。
+   */
+  const [loading, setLoading] = useState(!!wsPath && !!online)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * 重新拉一次。★2026-09-04 加的:编辑屏是**推上去的一层**,从它返回时启动屏并没有重新挂载 ——
+   *  不主动拉,刚在编辑屏里改完的流程在启动屏上还是老样子(而且看不出来是旧的)。
+   */
+  const [nonce, setNonce] = useState(0)
+  const reload = useCallback(() => setNonce((n) => n + 1), [])
 
   useEffect(() => {
     if (!wsPath || !online) return
@@ -140,7 +154,41 @@ export function useLaunchOptions(wsPath: string | null) {
     return () => {
       alive = false
     }
-  }, [wsPath, online, invoke])
+  }, [wsPath, online, invoke, nonce])
 
-  return { workflows, projects, loading, error }
+  return { workflows, projects, loading, error, reload }
+}
+
+/**
+ * 「加一个阶段」那张单子:内置阶段 + 全局自定义阶段库。
+ *
+ * ★★同样是**主机算好了给**(`workflow:stage-catalog`),手机不自己拼:每个阶段的默认代理来自
+ *  用户在电脑端配的全局模板,天生按项目 / 必须产出文档这两个标记也来自主机的默认表。
+ *  在手机上写一份等价的常量表,只要哪天电脑端改了默认,两边就开始各说各的 —— 而这种偏差
+ *  在屏幕上完全看不出来(加进去的阶段看着一模一样,跑起来用的是另一个模型)。
+ */
+export function useStageCatalog() {
+  const { invoke, online } = useConn()
+  const [builtin, setBuiltin] = useState<CatalogStage[]>([])
+  const [custom, setCustom] = useState<CatalogStage[]>([])
+
+  useEffect(() => {
+    if (!online) return
+    let alive = true
+    void (async () => {
+      try {
+        const cat = (await invoke(CH.workflowStageCatalog, [])) as { builtin?: CatalogStage[]; custom?: CatalogStage[] }
+        if (!alive) return
+        setBuiltin(cat?.builtin ?? [])
+        setCustom(cat?.custom ?? [])
+      } catch {
+        // 拉不到就是空单子 —— 编辑屏会说「加不了阶段」,不该把整屏顶掉。
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [online, invoke])
+
+  return { builtin, custom }
 }

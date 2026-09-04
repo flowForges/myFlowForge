@@ -55,6 +55,16 @@ export const STAGE_PROMPTS: Record<StageKey, string> = {
   review: '审查改动 diff:正确性、安全性、规范与可维护性;区分「必须修复」与「建议项」,并明确是否可以合并。',
 }
 
+// 每个阶段一句话干什么。原来是 `run/launch.ts` 里的一个模块私有常量,启动门用它显示副标题;
+// 手机端的「加一个阶段」也要用同一句话,再抄一份就会两边各说各的 —— 挪到这里当唯一一份。
+export const STAGE_DESC: Record<string, string> = {
+  requirement: '梳理与确认本次需求边界',
+  design: '设计技术方案与阶段计划',
+  develop: '按项目并行开发',
+  test: '补充与运行测试',
+  review: '多视角代码评审',
+}
+
 // —— 自定义阶段支持(#3)——
 // 阶段词汇表不再是闭合枚举:阶段 key 是任意字符串,name/prompt/行为开关挂在阶段对象上。上面三个
 // 常量降级为「内置默认回退表」——内置 key 的 name/prompt/行为缺省时回退到它们,自定义 key 走对象自带数据。

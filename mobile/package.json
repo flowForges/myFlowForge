@@ -60,7 +60,8 @@
     "e2e:unread": "node e2e/unread.mjs",
     "e2e:gatepeek": "node e2e/gatepeek.mjs",
     "e2e:newws": "node e2e/newws.mjs",
-    "e2e:tree": "node e2e/tree.mjs"
+    "e2e:tree": "node e2e/tree.mjs",
+    "e2e:flowedit": "node e2e/flowedit.mjs"
   },
   "private": true
 }

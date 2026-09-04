@@ -51,7 +51,9 @@ describe('方法表', () => {
     // 196 → 197:`chat:tool-output` —— 历史里大于 1KB 的工具输出不再下发,点开那张卡才来取这一条
     //   (见 chat/toolOutputCap.ts:实测最大会话 389KB → 67KB)。它读的是**主机上**的会话文件,
     //   所以是 host 方法,跟着 CLIENT_ONLY 之外那一半走。
-    // 另外两处计数互为佐证:197 = 45(CLIENT_ONLY)+ 152(host),daemonTable = 197 - 45 - 2。
-    expect(Object.keys(table).length).toBe(197)
+    // 197 → 200:手机端工作流编辑器 —— workflow:stage-catalog / workspace:save-workflow /
+    //   workspace:delete-workflow。改的是**主机上**那个工作区的 workspace.json,三条全走 host。
+    // 另外两处计数互为佐证:200 = 45(CLIENT_ONLY)+ 155(host),daemonTable = 200 - 45 - 2。
+    expect(Object.keys(table).length).toBe(200)
   })
 })

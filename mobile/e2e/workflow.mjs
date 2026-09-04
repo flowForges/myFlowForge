@@ -3,7 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 import { launch, attach } from './cdp.mjs'
-import { startMock } from './harness.mjs'
+import { openChat, plusMenu, startMock } from './harness.mjs'
 
 /**
  * 启动工作流 → 推进 → 进执行尾段(带确认)→ 补充说明 → 退出。
@@ -21,17 +21,14 @@ const mock = await startMock(6807, 'plain')
 const chrome = await launch(S + '/chrome-wf')
 const p = await attach()
 await p.setViewport(390, 844)
-await p.goto('http://localhost:8081/add-host')
-await new Promise((r) => setTimeout(r, 5000))
-await p.typeInto('input[placeholder*="192.168"]', '127.0.0.1:6807')
-await p.clickText('保存并连接')
-await new Promise((r) => setTimeout(r, 5000))
-
+// ★★2026-09-04:这一段原来是「打开 /add-host → 保存 → 直接断言对话屏」,而那条路
+//  在底部 tab 化(2026-08-29)和主机屏退回次级屏(2026-09-02)之后就不成立了 ——
+//  于是这个脚本一直红在第一句 clickText 上。走法统一收进 `harness.openChat`,别再各抄一份。
+// ★启动入口也从对话屏正文挪进了 ＋ 面板(标签就叫「工作流」,不是「/ 工作流」)。
+await openChat(p, 6807)
+await plusMenu(p, '工作流')
+await p.waitFor(`document.body.innerText.includes('选一个工作流')`, 10000)
 let t = await p.text()
-ok('对话屏有 / 工作流 入口', t.includes('/ 工作流'))
-await p.clickText('/ 工作流')
-await new Promise((r) => setTimeout(r, 3000))
-t = await p.text()
 ok('列出了这台机器上的工作流', t.includes('标准流') && t.includes('快速修复'))
 ok('项目默认全选', /2\/2/.test(t), t.split('\n').filter((l) => l.includes('/')).slice(0, 3).join(' / '))
 ok('没写需求时按钮旁说明了原因', t.includes('阶段代理会自己猜一个需求'))
@@ -56,7 +53,12 @@ t = await p.text()
 ok('启动后回到对话并出现状态条', t.includes('标准流') && t.includes('需求评估'))
 ok('状态条显示 1/4', /1\/4/.test(t), t.split('\n').filter((l) => l.includes('/4')).join(' / '))
 ok('推进按钮点名了下一阶段', t.includes('下一步 · 技术方案设计'))
-ok('进了工作流就不再给启动入口', !t.includes('/ 工作流'))
+// 入口现在在 ＋ 面板里(见 chat.tsx 的 plusItems:`wf ? [] : [...]`),所以判的是面板里有没有那一项。
+await p.click('[aria-label="更多"]')
+await new Promise((r) => setTimeout(r, 600))
+ok('进了工作流就不再给启动入口', !(await p.text()).includes('工作流\n'))
+await p.click('[aria-label="更多"]')
+await new Promise((r) => setTimeout(r, 400))
 await p.shot(S + '/shots/w-02-ribbon.png')
 
 // 对话阶段之间推进:不该弹确认
@@ -98,7 +100,9 @@ ok('补充说明真的送到了服务端', fb === '别动 migrations/', JSON.str
 await p.clickText('✕')
 await new Promise((r) => setTimeout(r, 2000))
 t = await p.text()
-ok('退出后状态条消失、入口回来', !t.includes('执行中…') && t.includes('/ 工作流'))
+await p.click('[aria-label="更多"]')
+await new Promise((r) => setTimeout(r, 600))
+ok('退出后状态条消失、入口回来', !t.includes('执行中…') && (await p.text()).includes('工作流'))
 
 await p.close()
 chrome.kill()
