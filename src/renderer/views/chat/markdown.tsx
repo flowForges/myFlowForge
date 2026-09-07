@@ -70,6 +70,23 @@ const INLINE_HTML = /<(span|strong|b|em|i|code|small|del|sup|sub)\b[^>]*>[\s\S]*
 const URL_BODY = '\\s<>"\'`（）【】「」，。、；：！？\\u4e00-\\u9fff'
 const BARE_URL = new RegExp(`https?://[^${URL_BODY}]*[^${URL_BODY}.,;:!?)\\]}]`)
 
+/**
+ * `_` 斜体 —— 但**不能在词中**。
+ *
+ * ★★这条守卫不是讲究,是修一个用户在真机上拍到的 bug:原来的 `/_([^_]+)_/` 让 `APPLY_PASS` 的
+ *  下划线成了合法开标记,而 renderInline 挑的是「m.index 最小者」,它比句子后面的反引号先命中,
+ *  一口吞到下一个下划线为止。三个后果一起来:标识符里的下划线被**吃掉**(APPLYPASS);
+ *  斜体跨过了开反引号,代码 span 配对被打断、反引号**原样漏成字面量**;`[文字](路径)` 被拆散
+ *  (路径里带下划线是常态)。snake_case 是这个 app 输出里最高频的东西之一,所以这条必须收住。
+ *
+ * CommonMark 老早就规定了:`*` 可以在词中强调、**`_` 不可以**,理由正是标识符 —— 所以上面那条
+ * `*` 的规则保持原样,别顺手一起改。
+ *
+ * 判据(比 CommonMark 简化,但方向一致):开/闭标记的**外侧**不能紧挨着字母或数字,内侧不能是空白。
+ * `\p{L}` 覆盖所有文字,中文也算 —— 「参数_x_的值」按 CommonMark 同样不成立(外侧不是空白也不是标点)。
+ */
+const EM_UNDERSCORE = /(?<![\p{L}\p{N}_])_(?=\S)([^_]+)(?<=\S)_(?![\p{L}\p{N}_])/u
+
 // Split a run of text into inline tokens. Order matters: code first (it suppresses
 // other markup inside), then links, then bold, then italic.
 export function renderInline(text: string, keyBase = 'i', allowHtml = false): ReactNode[] {
@@ -92,7 +109,7 @@ export function renderInline(text: string, keyBase = 'i', allowHtml = false): Re
     { re: /\*\*([^*]+)\*\*/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`, allowHtml)}</strong> },
     { re: /__([^_]+)__/, make: m => <strong key={`${keyBase}-${k++}`}>{renderInline(m[1], `${keyBase}b${k}`, allowHtml)}</strong> },
     { re: /\*([^*]+)\*/, make: m => <em key={`${keyBase}-${k++}`}>{m[1]}</em> },
-    { re: /_([^_]+)_/, make: m => <em key={`${keyBase}-${k++}`}>{m[1]}</em> },
+    { re: EM_UNDERSCORE, make: m => <em key={`${keyBase}-${k++}`}>{m[1]}</em> },
   ]
   if (allowHtml) PATTERNS.push({ re: INLINE_HTML, make: m => renderHtmlFragment(m[0], `${keyBase}h${k++}`) })
   while (rest) {

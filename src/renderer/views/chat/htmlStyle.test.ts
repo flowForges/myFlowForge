@@ -81,8 +81,10 @@ describe('mapInlineStyle —— 属性白名单', () => {
     expect(mapInlineStyle('display: flex; gap: 12px; padding: 8px 12px')).toEqual({
       display: 'flex', gap: '12px', padding: '8px 12px',
     })
+    // ★圆角/边宽/间距/字号现在会被吸附到阶梯上(9px → 10px),理由和阶梯本身见 htmlGeometry.test.ts。
+    //   宽高不吸附 —— 它们是布局意图,不是间距节奏。
     expect(mapInlineStyle('border-radius:9px;max-width:100%;text-align:center')).toEqual({
-      borderRadius: '9px', maxWidth: '100%', textAlign: 'center',
+      borderRadius: '10px', maxWidth: '100%', textAlign: 'center',
     })
   })
 
@@ -138,7 +140,8 @@ describe('mapInlineStyle —— 危险值', () => {
 describe('mapInlineStyle —— 简写', () => {
   it('border 简写拆开,颜色段换成 var()', () => {
     expect(mapInlineStyle('border: 1px solid #e5e5e5')).toEqual({ border: '1px solid var(--border)' })
-    expect(mapInlineStyle('border-left: 3px solid #d97706')).toEqual({ borderLeft: '3px solid var(--warn)' })
+    // 边宽一律压成 1px(粗细不一是「框乱」最直接的来源);颜色段照旧换成 token。
+    expect(mapInlineStyle('border-left: 3px solid #d97706')).toEqual({ borderLeft: '1px solid var(--warn)' })
   })
   it('border 简写里认不出的段 → 整条丢弃', () => {
     expect(mapInlineStyle('border: 1px solid color-mix(in srgb, red, blue)')).toEqual({})
@@ -153,9 +156,10 @@ describe('mapInlineStyle —— 简写', () => {
 })
 
 describe('mapInlineStyle —— 数值收窄', () => {
-  it('font-size 夹住上限,避免撑爆消息流', () => {
-    expect(mapInlineStyle('font-size: 14px')).toEqual({ fontSize: '14px' })
-    expect(mapInlineStyle('font-size: 200px')).toEqual({ fontSize: '32px' })
+  it('font-size 吸附到字阶并改用 em(仍夹住上限,避免撑爆消息流)', () => {
+    // ★输出 em 而不是 px:写死 px 的话,用户在设置里调「会话区字号」时 HTML 卡片纹丝不动。
+    expect(mapInlineStyle('font-size: 14px')).toEqual({ fontSize: '1em' })
+    expect(mapInlineStyle('font-size: 200px')).toEqual({ fontSize: '2.3em' })   // 先夹到 32px,再吸附
   })
   it('长度属性拒绝非法值', () => {
     expect(mapInlineStyle('padding: 8px 12px 4px 2px')).toEqual({ padding: '8px 12px 4px 2px' })

@@ -1,4 +1,5 @@
 import type { Appearance } from '@shared/types'
+import { CHAT_LINE_HEIGHT_DEFAULT } from '@shared/chatTypography'
 import { DEFAULT_BG_POSITION } from '@shared/wallpaper'
 import { KNOWN_SKIN_IDS, SKIN_BASE } from '@shared/skins'
 import { PALETTE_PROPS, paletteVars, type WallpaperPalette } from './wallpaperPalette'
@@ -110,7 +111,7 @@ export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): vo
   const chatPx = typeof a.chatFontSize === 'number' ? a.chatFontSize : (LEGACY_CHAT[a.chatFontSize as unknown as string] ?? 14)
   root.style.setProperty('--chat-font-scale', String(chatPx / 14))
   // 会话区行距/字间距:独立于字号,chat.css 的 .msg-body 消费这两个变量。非数字兜底到舒展的默认。
-  root.style.setProperty('--chat-line-height', String(typeof a.chatLineHeight === 'number' ? a.chatLineHeight : 1.7))
+  root.style.setProperty('--chat-line-height', String(typeof a.chatLineHeight === 'number' ? a.chatLineHeight : CHAT_LINE_HEIGHT_DEFAULT))
   root.style.setProperty('--chat-letter-spacing', `${typeof a.chatLetterSpacing === 'number' ? a.chatLetterSpacing : 0}em`)
   // 应用字体族:非空则覆盖 --font(带系统栈兜底);空则清除,回落到 tokens.css 里的系统字体栈。
   if (a.fontFamily && a.fontFamily.trim()) {

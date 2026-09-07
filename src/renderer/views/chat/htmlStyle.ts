@@ -171,6 +171,73 @@ const camel = (prop: string): string => prop.replace(/-([a-z])/g, (_, c: string)
 // font-size 允许 px,但夹住上限 —— 一个 200px 的标题会把消息流撑得没法看。
 const FONT_SIZE_MAX_PX = 32
 
+// ---- 几何量化 ---------------------------------------------------------------
+//
+// ★★颜色早就一律映射成 var(--token) 了,几何却一直原样放行 —— 这就是「框有时候有点乱」
+//  (用户 2026-09-07 原话)的机械原因:模型这次写 6px 圆角、下次 14px,这张卡 1px 边、那张 3px,
+//  内边距 10 / 16 / 24,同一段对话里两张卡对不齐,而且都跟 app 自己的框对不上。
+//  所以这里用**和颜色一模一样的招**:吸附到阶梯,绝不原样输出模型算出来的值。
+// ★理由也一模一样(见文件顶上第 2 条):markdown.tsx 的 PARSE_CACHE 按原文缓存 ReactNode,
+//  输出算好的值会被永久缓存住,换皮肤/换字号都刷不掉。
+// ★代价是模型精心排的 13px 内边距会变成 12px。这正是要的 —— 一致性比模型的即兴品味值钱。
+//
+// 只量化**节奏类**的量(圆角/边宽/间距/字号)。宽高**不动**:那是布局意图(一个 37px 的图标位、
+// 一个 50% 的两栏),吸附它只会把版排坏。
+
+/** 圆角四档:无 / 小 / 卡片 / 药丸。 */
+const RADIUS_LADDER = [0, 6, 10, 999]
+/** 间距按 8pt 阶梯。 */
+const SPACE_LADDER = [0, 2, 4, 8, 12, 16, 24, 32, 48]   // 2 这一档是给行内小标签留的(padding:2px 6px)
+/** 字号阶梯,和会话区正文那套对齐。单位是 em(相对正文),所以会跟着「会话区字号」设置走。 */
+const FONT_EM_LADDER = [0.78, 0.86, 1, 1.18, 1.36, 1.7, 2.3]
+/** 卡片里的 1em = 会话区正文字号。模型写的 px 先按这个换算成 em,再吸附。 */
+const BASE_FONT_PX = 14
+
+/** 取阶梯上离 n 最近的一档。★正好卡在两档中间时取**小**的那档(比较用严格 <,先到先得):
+ *  规则单一、没有例外,而且往小走只会让版面更紧,不会把卡片撑开。 */
+function snap(n: number, ladder: number[]): number {
+  let best = ladder[0]
+  for (const step of ladder) if (Math.abs(step - n) < Math.abs(best - n)) best = step
+  return best
+}
+
+/** 一个长度值 → 量化后的长度值。只动 px 和无单位 0;em/rem/% 本来就跟着排版走,原样放行。 */
+function snapLength(v: string, ladder: number[]): string {
+  const t = v.trim()
+  if (t === '0') return '0'
+  const m = /^([\d.]+)px$/i.exec(t)
+  if (!m) return t
+  const snapped = snap(parseFloat(m[1]), ladder)
+  return snapped === 0 ? '0' : `${snapped}px`
+}
+
+/** 多值(`padding: 10px 14px`)逐段量化 —— 上下和左右各有各的节奏,不能只看第一段。 */
+const snapLengthList = (v: string, ladder: number[]): string =>
+  v.trim().split(/\s+/).filter(Boolean).map(p => snapLength(p, ladder)).join(' ')
+
+/** 属性 → 该用哪把尺子。不在表里的长度属性(width/height/flex-basis…)不量化。 */
+function ladderFor(p: string): number[] | null {
+  if (p === 'border-radius') return RADIUS_LADDER
+  if (p === 'border-width' || p.endsWith('-width') && p.startsWith('border-')) return [0, 1]
+  if (/^(padding|margin|gap|row-gap|column-gap)(-|$)/.test(p)) return SPACE_LADDER
+  return null
+}
+
+/** 百分比圆角(`border-radius: 50%` 画圆)按药丸处理 —— 它表达的就是「最圆」。 */
+function snapRadius(v: string): string {
+  return /%$/.test(v.trim()) ? '999px' : snapLengthList(v, RADIUS_LADDER)
+}
+
+/** px 字号 → 吸附后的 em。★输出 em 是关键:写死 px 的话,用户调「会话区字号」时卡片纹丝不动。 */
+function snapFontSize(v: string): string {
+  const t = v.trim()
+  const m = /^([\d.]+)px$/i.exec(t)
+  if (!m) return t
+  const em = Math.min(parseFloat(m[1]), FONT_SIZE_MAX_PX) / BASE_FONT_PX
+  return `${snap(em, FONT_EM_LADDER)}em`
+}
+
+
 function mapDeclaration(prop: string, value: string): [string, string] | null {
   const p = prop.trim().toLowerCase()
   const v = value.trim()
@@ -194,7 +261,8 @@ function mapDeclaration(prop: string, value: string): [string, string] | null {
     if (v.toLowerCase() === 'none' || v === '0') return [camel(p), 'none']
     const out: string[] = []
     for (const part of parts) {
-      if (LENGTH.test(part)) { out.push(part); continue }
+      // ★宽度段一律压成 1px(0/none 除外) —— 粗细不一是「框乱」最直接的来源。
+      if (LENGTH.test(part)) { out.push(snapLength(part, [0, 1])); continue }
       if (BORDER_STYLE.has(part.toLowerCase())) { out.push(part.toLowerCase()); continue }
       const mapped = mapColor(part, 'border')
       if (!mapped) return null   // 认不出的段 = 整条丢弃,不猜
@@ -205,12 +273,15 @@ function mapDeclaration(prop: string, value: string): [string, string] | null {
 
   if (p === 'font-size') {
     if (!LENGTH.test(v)) return null
-    const px = /^([\d.]+)px$/i.exec(v)
-    if (px && parseFloat(px[1]) > FONT_SIZE_MAX_PX) return ['fontSize', `${FONT_SIZE_MAX_PX}px`]
-    return ['fontSize', v]
+    return ['fontSize', snapFontSize(v)]
   }
 
-  if (LENGTH_PROPS.has(p)) return isLengthList(v) ? [camel(p), v] : null
+  if (p === 'border-radius') return isLengthList(v) || /%$/.test(v.trim()) ? ['borderRadius', snapRadius(v)] : null
+  if (LENGTH_PROPS.has(p)) {
+    if (!isLengthList(v)) return null
+    const ladder = ladderFor(p)
+    return [camel(p), ladder ? snapLengthList(v, ladder) : v]
+  }
 
   const kw = KEYWORDS[p]
   if (kw) return kw.has(v.toLowerCase()) ? [camel(p), v.toLowerCase()] : null

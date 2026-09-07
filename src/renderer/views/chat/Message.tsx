@@ -79,14 +79,12 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
         </div>
       ) : (
         <div className={`answer-block${showAnswer ? ' show' : ''}`}>
-          {showAnswer && (
-            // `live` (only while streaming) animates the pill — the star twinkles + a sheen sweeps —
-            // so生成中 feels alive instead of枯燥. Settled messages stay static (no idle-GPU cost; only
-            // the single in-flight message ever animates).
-            <div className={`ans-eyebrow${streaming ? ' live' : ''}`}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3"><path d="M12 3l2.2 5.6L20 9.8l-4.4 3.6L17 19l-5-3.2L7 19l1.4-5.6L4 9.8l5.8-1.2z" /></svg>
-              {streaming ? '回答中' : '回答'}
-            </div>
+          {/* ★★结论落地之后这枚标记整个消失。它原来是一枚 accent 色 + 底色 + 边框 + 药丸圆角 +
+              两条动画的东西,全部信息量只有「下面是回答」—— 而这件事**位置已经说清楚了**:
+              过程都收在左轨里,正文从轨道外重新起头,那个位移本身就是分界。
+              ★生成中留着:那时它说的是「还在写」,是真信息。但降成一行安静的灰字 + 一个脉冲点。 */}
+          {showAnswer && streaming && (
+            <div className="ans-live"><span className="pd" aria-hidden="true" />回答中</div>
           )}
           {/* AI replies are Markdown (headings/lists/code/bold); user input stays literal. A large,
              settled reply renders as raw text for one frame (pre-wrap keeps its height close to the

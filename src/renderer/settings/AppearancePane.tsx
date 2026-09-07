@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { CHAT_LINE_HEIGHT_DEFAULT } from '@shared/chatTypography'
 import type { Appearance, Terminal } from '@shared/types'
 import { windowEffect } from '@shared/vibrancy'
 import { FontPicker } from './FontPicker'
@@ -56,7 +57,7 @@ const WEIGHT_MAX = 600
 const WEIGHT_STEP = 25
 const WEIGHT_SUGGESTED = 450
 // 会话区行距建议值(偏舒展,接近 codex 观感)。
-const CHAT_LH_SUGGESTED = 1.7
+const CHAT_LH_SUGGESTED = CHAT_LINE_HEIGHT_DEFAULT
 
 export function AppearancePane({ appearance, onChange, terminal, onTerminalChange }: AppearancePaneProps) {
   const opacity = appearance.windowOpacity ?? 1

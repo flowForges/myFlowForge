@@ -67,10 +67,17 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .turn-timer .tt-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: 0 0 6px; animation: tt-pulse 1.2s ease-in-out infinite; }
 @keyframes tt-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 /* 会话区正文字号 = 14px × 会话区缩放(设置·外观·会话区字号,独立于应用界面字号)。 */
-.msg-body { font-size: calc(14px * var(--chat-font-scale, 1)); line-height: var(--chat-line-height, 1.7); letter-spacing: var(--chat-letter-spacing, 0); color: var(--fg-2); }
-.msg-body p { margin-bottom: 10px; }
+.msg-body { font-size: calc(14px * var(--chat-font-scale, 1)); line-height: var(--chat-line-height, 1.75); letter-spacing: var(--chat-letter-spacing, 0); color: var(--fg-2); }
+/* 段距 14px(原 10px):一大段中文全靠段距断句,10px 时上下两段几乎粘在一起。与 chatTypography.ts 的
+   CHAT_PARAGRAPH_GAP_DEFAULT 同值 —— 那边是给两端共用逻辑读的,这边是真正画出来的那一处。 */
+.msg-body p { margin-bottom: 14px; }
 .msg-body p:last-child { margin-bottom: 0; }
-.msg-body code { font-family: var(--mono); font-size: 12.5px; background: var(--surface); padding: 1px 6px; border-radius: 5px; color: var(--fg); }
+/* 行内代码。★★刻意做得很轻:这个 app 的正文是中文里嵌一堆 snake_case 标识符,一段里出现十来个
+   `xxx` 是常态。原来是 --surface 实底 + 1px 6px 内边距 + 5px 圆角 —— 单个好看,密集出现时整段像雪花屏
+   (用户看真机截图的原话:「内容没有分段…看着就很乱」)。现在只留一层极淡的同色底 + 3px 内边距:
+   长标识符仍然读得出是一个整体,但不再是一排小方块。
+   ★字号改成 em:原来写死 12.5px,用户在设置里调「会话区字号」时行内代码纹丝不动,中文放大了它没跟上。 */
+.msg-body code { font-family: var(--mono); font-size: .92em; background: color-mix(in oklab, var(--fg) 6%, transparent); padding: 0 3px; border-radius: 3px; color: var(--fg); overflow-wrap: anywhere; }
 /* ---- Markdown rendering ---- */
 .msg-body h1, .msg-body h2, .msg-body h3, .msg-body h4 { font-weight: 680; letter-spacing: -.01em; line-height: 1.3; margin: 16px 0 8px; }
 .msg-body h1:first-child, .msg-body h2:first-child, .msg-body h3:first-child { margin-top: 0; }
@@ -172,19 +179,24 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .attach-chip .attach-thumb { width: 18px; height: 18px; border-radius: 3px; object-fit: cover; flex: 0 0 18px; background: var(--surface-2); }
 
 /* 思考过程块 — 内部推理,视觉上"收起/次要",与最终回答明确区分 */
+/* ══ 第 1 档「过程」= 左轨,不是框 ═══════════════════════════════════════════════════════
+   思考 / 执行 / 子代理都归这一档。它们回答的是「怎么得到的」,不是结论本身,所以退到一条 2px
+   轨道后面:没有边框、没有底色、没有圆角。
+
+   ★★为什么是轨不是框:一条回复上原来能同时叠出四个盒子(虚线框的思考、实线框+底的执行、
+    还有一枚药丸),而**正文是唯一没有框的东西** —— 视觉权重完全倒挂,过程比结论显眼。
+    轨只占 2px、高度自适应、嵌套不产生「框里的框」,读起来是「挂在这条消息上」而不是「另一个对象」。
+   ★框的预算全部留给第 2 档(代码块 / HTML 卡片 / 附件):那些是可以点、可以复制、可以滚的**产物**。
+    框一出现就该意味着「这是个东西」,所以它必须稀缺,而且长相只有一套。
+   ★轨道颜色带状态:跑=--run、完/静=--border。 */
 .think {
-  margin: 0 0 12px 0; border: 1px dashed var(--border-2);
-  border-left: 2px solid var(--faint); border-radius: var(--r);
-  background: color-mix(in oklch, var(--surface) 58%, transparent);
-  overflow: hidden; transition: border-color .2s, background .2s;
+  margin: 0 0 10px 0; border: none; border-left: 2px solid var(--border); border-radius: 0;
+  background: none; padding-left: 14px; transition: border-color .2s;
 }
-.think.live {
-  border-style: solid; border-left-color: var(--run);
-  background: color-mix(in oklch, var(--accent-dim) 16%, var(--surface));
-}
+.think.live { border-left-color: var(--run); }
 .think-h {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px; width: 100%;
-  font: 600 10.5px/1 var(--mono); letter-spacing: .06em; color: var(--faint);
+  display: flex; align-items: center; gap: 8px; padding: 3px 0; width: 100%;
+  font: 600 10.5px/1.5 var(--mono); letter-spacing: .06em; color: var(--faint);
 }
 .think-h .glyph { width: 13px; height: 13px; color: var(--muted); flex: 0 0 auto; }
 .think.live .think-h .glyph { color: var(--run); }
@@ -199,13 +211,12 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .think-h .t { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--faint); text-transform: none; letter-spacing: 0; }
 .think-h .chev { width: 12px; height: 12px; transition: transform .18s; color: var(--faint); flex: 0 0 auto; }
 .think.open .chev { transform: rotate(90deg); }
-.think-body { display: none; padding: 3px 12px 11px 14px; }
+.think-body { display: none; padding: 2px 0 6px; }
 .think.open .think-body { display: block; }
-.think-steps { position: relative; padding-left: 16px; }
-.think-steps::before {
-  content: ""; position: absolute; left: 3px; top: 8px; bottom: 8px;
-  width: 1px; background: linear-gradient(var(--border-2) 60%, transparent);
-}
+/* ★内部那条竖线去掉了:整块现在已经挂在第 1 档的左轨上,再画一条就是「轨里的轨」——
+   正是这一轮要消掉的那种重复。步骤前的小圆点保留,它们是列表标记(还带「最后一步完成」的绿色),
+   不是容器。 */
+.think-steps { position: relative; padding-left: 14px; }
 .think-step {
   position: relative; font-size: 11.5px; color: var(--muted);
   padding: 4px 0; font-family: var(--mono); line-height: 1.55;
@@ -220,26 +231,17 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 /* 最终回答 — 独立结果区域,与上方思考过程分开 */
 .answer-block { margin-left: 0; }
 .answer-block:not(.show) { margin-top: -2px; }
-.ans-eyebrow {
-  display: inline-flex; align-items: center; gap: 6px; margin: 0 0 7px;
-  font: 700 10px/1 var(--mono); letter-spacing: .08em; color: var(--accent);
-  background: var(--accent-dim); border: 1px solid color-mix(in oklch, var(--accent), transparent 70%);
-  border-radius: 99px; padding: 4px 8px;
+/* 生成中的一行状态。★这里原来是一枚 accent 色 + 底色 + 边框 + 药丸圆角、还带旋转和掠光两条动画的
+   「回答」标记,而且**结论落地之后照旧挂着** —— 全部信息量只有「下面是回答」,却是整条消息里最花的
+   一块(用户 2026-09-07 那张真机截图里最抢眼的东西之一)。结论落地后由 Message.tsx 整枚不渲染;
+   生成中留一行,因为那时它说的是「还在写」,是真信息。
+   ★只有在途的那一条消息会动,静止的消息零重绘(和省电那批的口径一致)。 */
+.ans-live {
+  display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 8px;
+  font: 600 10.5px/1 var(--mono); letter-spacing: .08em; color: var(--muted);
 }
-.ans-eyebrow svg { width: 12px; height: 12px; }
-/* 生成中的头部动效(仅 streaming 时):星星轻闪 + 药丸掠光。settled 消息保持静止,避免空闲重绘
-   (跟省电那批一致:任一时刻只有一条在途消息在动)。 */
-.ans-eyebrow.live { position: relative; overflow: hidden; }
-.ans-eyebrow.live svg { animation: eyebrow-spin 2.2s linear infinite; transform-origin: center; }
-.ans-eyebrow.live::before {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(100deg, transparent 20%, color-mix(in oklch, var(--accent) 32%, transparent) 50%, transparent 80%);
-  transform: translateX(-100%); animation: eyebrow-sheen 1.9s ease-in-out infinite;
-}
-/* 生成中:星星匀速顺时针转。linear 而不是 ease —— 缓动会让转速忽快忽慢,看着像卡顿而不是在转。
-   亮度起伏挂在同一条 keyframes 上:transform 和 opacity 分成两个 animation 会互相覆盖 transform。 */
-@keyframes eyebrow-spin { 0% { transform: rotate(0deg); opacity: .85; } 50% { opacity: 1; } 100% { transform: rotate(360deg); opacity: .85; } }
-@keyframes eyebrow-sheen { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(100%); } }
+.ans-live .pd { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ans-live .pd { animation: none; } }
 .msg-body.ans { color: var(--fg); }
 /* Raw-text placeholder shown for one frame while a large reply's Markdown parse is deferred off the
    session-switch commit. pre-wrap preserves newlines so its height stays close to the parsed output,
@@ -547,15 +549,16 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .msg-delegate { gap: 0; }
 
 /* 执行 block (ToolBlock.tsx): the main agent's own tool calls this turn — titles live, output collapsible. */
-.tool-block { margin: 2px 0 10px; border: 1px solid color-mix(in oklab, var(--border) 48%, transparent); border-radius: 9px; background: color-mix(in oklab, var(--surface) 55%, transparent); overflow: hidden; }
-.tool-lead { display: flex; align-items: center; gap: 6px; padding: 7px 11px; font-size: 11px; color: var(--faint); cursor: pointer; list-style: none; user-select: none; }
+/* 同上,第 1 档:去框、去底、去圆角,只留一条左轨。行内的横向内边距一并砍掉 —— 轨道已经把
+   「这一段属于过程」说清楚了,再套一层内边距只是把内容往右推。 */
+.tool-block { margin: 2px 0 10px; border: none; border-left: 2px solid var(--border); border-radius: 0; background: none; padding-left: 14px; }
+.tool-lead { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 11px; color: var(--faint); cursor: pointer; list-style: none; user-select: none; }
 .tool-lead::-webkit-details-marker { display: none; }
 .tool-lead-dot { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in oklab, var(--accent) 55%, var(--muted)); flex: 0 0 6px; }
 .tool-lead-dot.live { background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
-.tool-rows { border-top: 1px solid color-mix(in oklab, var(--border) 42%, transparent); }
-/* 去掉逐行分隔线 —— 整块被「网格线」切碎的主因。行与行靠留白 + hover 高亮区分,只留头部一条淡线。 */
+.tool-rows { border-top: none; }
 .tool-row { border-top: none; }
-.tool-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 11px; text-align: left; font-size: 12px; color: var(--fg-2); background: none; }
+.tool-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 3px 0; text-align: left; font-size: 12px; color: var(--fg-2); background: none; border-radius: 4px; }
 .tool-head:not(:disabled) { cursor: pointer; }
 .tool-head:not(:disabled):hover { background: var(--surface-2); }
 .tool-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
@@ -572,7 +575,7 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .tool-row:hover .tool-auto { opacity: .85; }
 .tool-caret { font-size: 10px; color: var(--faint); transition: transform .12s; flex: 0 0 auto; }
 .tool-caret.open { transform: rotate(90deg); }
-.tool-output { margin: 0; padding: 8px 11px 10px 25px; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: color-mix(in oklab, var(--surface-2) 50%, transparent); }
+.tool-output { margin: 4px 0 6px; padding: 8px 10px; border-radius: 6px; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: color-mix(in oklab, var(--surface-2) 50%, transparent); }
 .subagent-card { border: 1px solid color-mix(in oklab, var(--border) 55%, transparent); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
 .subagent-card.s-running { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
 .subagent-card.s-error { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }
