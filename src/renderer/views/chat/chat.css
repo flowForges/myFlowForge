@@ -3,6 +3,18 @@
    Ported 1:1 from the prototype (forge 3/index.html).
    ============================================================ */
 
+/* ══ 第 2 档「产物」的三个值 ═══════════════════════════════════════════════════════════
+   代码块 / 附件 chip / 文档按钮 / 子代理卡 / 工具输出 / HTML 占位 —— 这些是**可以点、可以复制、
+   可以滚**的东西,框留给它们。所以它们的长相必须**只有一套**:
+     边框 1px var(--border) · 圆角 var(--r)(块) 或 var(--r-sm)(行内 chip) · 底 var(--surface)
+   ★★这里原来是 6 种圆角(6/7/8/8/9/var(--r))、3 种边框色(--border / --border-2 / --border 55% 透明)、
+    4 种底。1px 的差人眼说不出哪儿怪,但整屏就是不齐 —— 这是「乱」的最后一块。
+   ★★圆角**必须**用 tokens.css 的 --r-sm/--r,不能写死数字:内嵌 HTML 的几何量化
+    (htmlStyle.ts 的 RADIUS_LADDER)吸附到的就是这两个数,模型的卡片和这里的框才对得齐。
+    改一边就要改另一边。
+   ★半透明底全部改成实底:同一条边、同一块底在壁纸的不同位置上深浅不一,是「脏」的来源之一。
+    代价是壁纸被挡得更多 —— 变的只有子代理卡和展开的工具输出这两块。 */
+
 /* 对话主列 */
 .chat { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 /* 背景图 —— 「仅会话区」范围:图片只画在对话区背后(.chat 已 position:relative)。内容抬到 z-index:1
@@ -105,7 +117,7 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .md-link-copy > span { display: none; }
 .msg-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .msg-body blockquote { border-left: 2px solid var(--border-2); padding-left: 12px; margin: 8px 0; color: var(--muted); }
-.msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }
+.msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }
 .msg-body pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-2); white-space: pre; }
 /* GFM tables — shared by chat messages (.msg-body) and the plan card (.req-title) */
 .msg-body table, .req-title table { border-collapse: collapse; margin: 8px 0 12px; font-size: 13px; width: 100%; }
@@ -119,7 +131,7 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .msg-changes .txt-btn { font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 5px 9px; border-radius: 6px; transition: .14s; }
 .msg-changes .txt-btn:hover { background: var(--accent-dim); }
 .msg-docs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.msg-doc { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border-2); color: var(--fg); font-size: 11.5px; font-weight: 600; transition: .13s; max-width: 100%; }
+.msg-doc { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--border); color: var(--fg); font-size: 11.5px; font-weight: 600; transition: .13s; max-width: 100%; }
 .msg-doc:hover { background: var(--border); border-color: var(--accent); }
 .msg-doc svg { width: 14px; height: 14px; flex: none; color: var(--accent); }
 .msg-doc .md-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -171,7 +183,7 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   user-select: none; -webkit-user-select: none;
 }
 .msg.user .msg-via svg { width: 11px; height: 11px; flex: 0 0 auto; opacity: .8; }
-.attach-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; font-size: 12px; }
+.attach-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 10px; font-size: 12px; }
 .attach-chip svg { width: 14px; height: 14px; color: var(--muted); }
 .attach-chip .sz { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
 /* 图片附件用缩略图代替通用文件图标:剪贴板截图全叫 img-时分秒.png,一眼看图比读名字快得多。
@@ -588,8 +600,8 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .tool-row:hover .tool-auto { opacity: .85; }
 .tool-caret { font-size: 10px; color: var(--faint); transition: transform .12s; flex: 0 0 auto; }
 .tool-caret.open { transform: rotate(90deg); }
-.tool-output { margin: 4px 0 6px; padding: 8px 10px; border-radius: 6px; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: color-mix(in oklab, var(--surface-2) 50%, transparent); }
-.subagent-card { border: 1px solid color-mix(in oklab, var(--border) 55%, transparent); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
+.tool-output { margin: 4px 0 6px; padding: 8px 10px; border-radius: var(--r); font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: var(--surface); }
+.subagent-card { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); overflow: hidden; }
 .subagent-card.s-running { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
 .subagent-card.s-error { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }
 .sac-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 11px; text-align: left; font-size: 12.5px; color: var(--fg-2); }
@@ -936,13 +948,14 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
    做成 <details>:模型若忘了写闭合标签,用户点开还能看到原文,内容不会被永久吞掉。
    呼吸动画只跑在收起状态的 summary 上,且它通常只存在几秒 —— 不构成常驻 GPU 开销;展开后停掉,免得
    用户在读原文时底下一直闪。 */
-.md-html-pending { margin: 10px 0; padding: 8px 12px; border: 1px dashed var(--border-2); border-radius: var(--r); }
+/* ★虚线是「还没画完」这一个语义的专属标记 —— 第 2 档里只有它用虚线,别处不许再用。 */
+.md-html-pending { margin: 10px 0; padding: 8px 12px; border: 1px dashed var(--border); border-radius: var(--r); }
 .md-html-pending > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; list-style: none; }
 .md-html-pending > summary::-webkit-details-marker { display: none; }
 .md-html-pending > summary::before { content: "▸ "; opacity: .7; }
 .md-html-pending[open] > summary::before { content: "▾ "; }
 .md-html-pending:not([open]) > summary { animation: mdHtmlPending 1.4s ease-in-out infinite; }
-.md-html-pending > pre { margin: 8px 0 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; overflow-x: auto; font-size: 12px; color: var(--fg-2); white-space: pre-wrap; word-break: break-all; }
+.md-html-pending > pre { margin: 8px 0 2px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 9px 11px; overflow-x: auto; font-size: 12px; color: var(--fg-2); white-space: pre-wrap; word-break: break-all; }
 @keyframes mdHtmlPending { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .md-html-pending:not([open]) > summary { animation: none; } }
 

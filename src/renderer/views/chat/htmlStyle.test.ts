@@ -81,10 +81,11 @@ describe('mapInlineStyle —— 属性白名单', () => {
     expect(mapInlineStyle('display: flex; gap: 12px; padding: 8px 12px')).toEqual({
       display: 'flex', gap: '12px', padding: '8px 12px',
     })
-    // ★圆角/边宽/间距/字号现在会被吸附到阶梯上(9px → 10px),理由和阶梯本身见 htmlGeometry.test.ts。
+    // ★圆角/边宽/间距/字号现在会被吸附到阶梯上(阶梯就是 tokens.css 的 --r-sm/--r,所以 9px 原样),
+    //   理由和阶梯本身见 htmlGeometry.test.ts。
     //   宽高不吸附 —— 它们是布局意图,不是间距节奏。
     expect(mapInlineStyle('border-radius:9px;max-width:100%;text-align:center')).toEqual({
-      borderRadius: '10px', maxWidth: '100%', textAlign: 'center',
+      borderRadius: '9px', maxWidth: '100%', textAlign: 'center',
     })
   })
 

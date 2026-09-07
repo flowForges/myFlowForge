@@ -16,10 +16,13 @@ import { mapInlineStyle } from './htmlStyle'
  */
 const px = (css: string, key: string) => (mapInlineStyle(css) as Record<string, string>)[key]
 
-describe('圆角吸附到 {0, 6, 10, 999}', () => {
-  it('★邻近的值塌到同一档 —— 5/6/8 都变 6,10/12/14 都变 10', () => {
-    for (const v of ['5px', '6px', '8px']) expect(px(`border-radius:${v}`, 'borderRadius'), v).toBe('6px')
-    for (const v of ['10px', '12px', '14px']) expect(px(`border-radius:${v}`, 'borderRadius'), v).toBe('10px')
+describe('圆角吸附到 app 自己的 token 阶梯 {0, 7, 9, 999}', () => {
+  // ★★阶梯用的就是 tokens.css 里的 --r-sm(7) / --r(9)。原来我给模型定的是 {0,6,10,999} ——
+  //  等于拿一把**我们自己都不用**的尺子去量它:模型的卡片圆到 6px、我们的代码块 9px,差 1–2px,
+  //  人眼说不出哪儿怪,整屏就是不齐。落到同一套 token 上,模型的卡和我们的框才真的对得齐。
+  it('★邻近的值塌到同一档 —— 5/6/8 都变 7,11/12/14 都变 9', () => {
+    for (const v of ['5px', '6px', '8px']) expect(px(`border-radius:${v}`, 'borderRadius'), v).toBe('7px')
+    for (const v of ['11px', '12px', '14px']) expect(px(`border-radius:${v}`, 'borderRadius'), v).toBe('9px')
   })
   it('0 还是 0,超大的一律当药丸', () => {
     expect(px('border-radius:0', 'borderRadius')).toBe('0')
