@@ -243,6 +243,19 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .ans-live .pd { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .ans-live .pd { animation: none; } }
 .msg-body.ans { color: var(--fg); }
+/* ══ 正文行宽封顶 ═══════════════════════════════════════════════════════════════════════
+   ★会话列本身是 `clamp(720px, 90%, 1180px)` —— 窗口越宽正文越宽,而**舒适的行宽是固定的**,
+    不该跟着窗口长。用户那台大屏上一行 80 个中文字,眼睛回扫时容易串行,这是「像一大段文章」
+    的一部分原因(2026-09-07 真机截图)。84ch ≈ 50 个中文字。
+   ★★只封**散文**。代码块 / 表格 / HTML 卡片故意不在这张名单里 —— 它们本来就要横向空间,
+    封了会逼出横向滚动条。所以是逐个块级元素封,不是给容器封。
+   ★用 ch 不用 px:ch 跟着 font-size 走,所以「会话区字号」调大时行宽同步变宽,一行的字数不变。 */
+.msg-body.ans > p,
+.msg-body.ans > ul,
+.msg-body.ans > ol,
+.msg-body.ans > blockquote,
+.msg-body.ans > h1, .msg-body.ans > h2, .msg-body.ans > h3,
+.msg-body.ans > h4, .msg-body.ans > h5, .msg-body.ans > h6 { max-width: 84ch; }
 /* Raw-text placeholder shown for one frame while a large reply's Markdown parse is deferred off the
    session-switch commit. pre-wrap preserves newlines so its height stays close to the parsed output,
    keeping the swap from visibly shifting scroll position. */
