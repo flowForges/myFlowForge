@@ -97,3 +97,57 @@ describe('自动放行的标记落在工具卡上', () => {
     expect(typeof seen!.onAutoAllow).toBe('function')
   })
 })
+
+/**
+ * ★★整条链路串起来跑一遍:**真的** claude provider(假 CLI 发真实形状的报文)→ sendTurn → 一个
+ *  照抄 handlers.toolConfirm 的门。
+ *
+ *  上面那些用例用的是手写的假 provider,它老老实实把 toolUseId 递了出来 —— 于是 2026-09-04 那次修复
+ *  「两头各自全绿」,中间那截却是断的:claude 的 chat() 压根没往门里放 toolUseId(run() 放了)。
+ *  结果就是修完照旧每自动放行一次,对话流里就多一条顶着「系统 · 回答」的假回答。
+ *  用户原话:「系统回答 不应该出现在这个位置吧，这个bug挺严重的」。
+ *  所以这里必须用真 provider 跑,断言的也是用户真正看得见的那两件事:**没有那条消息**、**卡上有标记**。
+ */
+describe('真 claude provider → sendTurn → 门(整条链路)', () => {
+  const CLI = `#!/usr/bin/env node
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+process.stdin.on('data', (b) => {
+  for (const line of b.toString().split('\\n')) {
+    if (!line.trim()) continue
+    if (JSON.parse(line).type === 'control_response') { out({ type: 'result', subtype: 'success', result: '好' }); setTimeout(() => process.exit(0), 20) }
+  }
+})
+out({ type: 'assistant', message: { role: 'assistant', content: [
+  { type: 'tool_use', id: 'toolu_real1', name: 'Bash', input: { command: 'curl -s https://example.com', description: '拉一下' } },
+] } })
+out({ type: 'control_request', request_id: 'rq-1', request: {
+  subtype: 'can_use_tool', tool_name: 'Bash', display_name: 'Bash',
+  input: { command: 'curl -s https://example.com', description: '拉一下' },
+  tool_use_id: 'toolu_real1',
+} })
+`
+
+  it('★自动放行不再往对话流里插「系统 · 回答」,而是挂在那张 Bash 卡上', async () => {
+    const { writeFileSync, chmodSync } = await import('node:fs')
+    const { makeClaudeProvider } = await import('../agents/providers/claude')
+    const cli = join(ws, 'claude.js')
+    writeFileSync(cli, CLI); chmodSync(cli, 0o755)
+
+    // handlers.toolConfirm 的行为:能挂卡就挂卡,挂不上才发消息。这里把「发消息」记下来当断言用。
+    const notes: string[] = []
+    const toolConfirm = async (req: ConfirmReq) => {
+      if (req.onAutoAllow) req.onAutoAllow()
+      else notes.push(`🛡 已按当前权限档「完全访问」自动放行：${req.title}`)
+      return 'allow' as const
+    }
+    const m = await sendTurn(
+      { workspacePath: ws, sessionId: 's2', agent: 'claude', agentLabel: 'Claude Code', model: 'opus-4.8', text: '拉一下', attachments: [] },
+      {
+        provider: makeClaudeProvider({ bin: 'node', preArgs: [cli], defaultModels: [] }),
+        env: process.env, emit: () => {}, confirm: toolConfirm,
+      },
+    )
+    expect(notes, '又把「自动放行」写成了一条假回答').toEqual([])
+    expect(m.tools?.find(t => t.id === 'toolu_real1')?.autoAllowed).toBe(true)
+  })
+})

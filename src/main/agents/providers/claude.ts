@@ -291,9 +291,13 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           // not a wedged turn, so it must not be killed by the 240s idle timer (finally always resumes).
           wd.pause()
           try {
+            // ★★toolUseId 必须带上:上层靠它把「这次是自动放行的」记到**那张工具卡**上。漏掉它,
+            //   上层就只能回落成往对话流里插一条「系统 · 回答」消息 —— 长得和模型的回答一模一样,
+            //   还夹在工具卡和真正的回答中间(用户原话:「系统回答 不应该出现在这个位置吧」)。
+            //   run() 那条路一直是带的,chat() 这条路漏了 —— 而聊天才是天天在看的那条。
             if (cb.onConfirm) decision = await cb.onConfirm({
               title: questions ? askGateTitle(questions) : `${cut.toolName} 请求执行`,
-              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName,
+              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName, toolUseId: cut.toolUseId,
               ...(questions ? { questions } : {}),
             })
           }
