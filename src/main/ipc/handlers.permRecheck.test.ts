@@ -97,7 +97,12 @@ async function startTurn(agent = 'claude', requireConfirm = true) {
     return c[1]
   }
   let confirm: Confirm | null = null
-  sendTurnMock.mockImplementation((_p: any, deps: any) => { confirm = deps.confirm; return new Promise(() => {}) })
+  // ★★只认**第一次**调用。sendTurn 在这里返回一个永不 resolve 的 promise(为了把门挂住),而
+  //  sendTurnMock 是文件级共享的 —— 上一条用例那个还挂着的 turn 一旦继续往下走,就会再调一次 mock,
+  //  把这条用例刚捕获的 confirm 覆盖成**上一个模块实例**的那个(它的 broadcast 写去上一个 sent 数组,
+  //  于是这里怎么等都等不到 confirm-request)。2026-09-07 接授权中枢时真撞上过:那次只是因为
+  //  runTurn 在 sendTurn 之前多了一个 await,时序一变这条竞态就现形了。
+  sendTurnMock.mockImplementation((_p: any, deps: any) => { if (!confirm) confirm = deps.confirm; return new Promise(() => {}) })
   call(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent, agentLabel: agent, model: 'm', text: 'x', attachments: [], permissionMode: sessionState.permissionMode })
   await new Promise(r => setTimeout(r, 0))
   // cursor 这类无沙箱 provider 会先卡在「预授权门」上,sendTurn 压根没跑到 —— 那种用例不需要 confirm。

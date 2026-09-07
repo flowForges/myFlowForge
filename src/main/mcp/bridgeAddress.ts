@@ -33,3 +33,18 @@ export function bridgeAddress(runDir: string, runId: string, platform: NodeJS.Pl
   if (candidate.length <= SUN_PATH_LIMIT) return { socketPath: candidate, configDir: runDir, isPipe: false }
   return { socketPath: posix.join(tmpdir(), `forge-${runId}.sock`), configDir: tmpdir(), isPipe: false }
 }
+
+/**
+ * 授权中枢的 socket 地址。
+ * ★★**不能直接用 bridgeAddress**:它在路径够短时一律返回 `<runDir>/forge.sock`,**runId 只在超长回落时才用到** ——
+ *  于是授权中枢会和同一个 runDir 下的 forge MCP 桥抢同一个文件,后起的那个把先起的顶掉。
+ *  (这条是接线时真撞出来的,不是假想。)
+ * 长度规矩沿用同一条:darwin 的 sun_path 只有 104 字节,而且 bind() 是**截断**不是报错。
+ */
+export function authSocketAddress(runDir: string, sessionId: string, platform: NodeJS.Platform = process.platform): BridgeAddress {
+  const safe = sessionId.replace(/[\\/:*?"<>|]/g, '_')
+  if (platform === 'win32') return { socketPath: `\\\\.\\pipe\\forge-auth-${safe}`, configDir: runDir, isPipe: true }
+  const candidate = posix.join(runDir, `forge-auth-${safe}.sock`)
+  if (candidate.length <= SUN_PATH_LIMIT) return { socketPath: candidate, configDir: runDir, isPipe: false }
+  return { socketPath: posix.join(tmpdir(), `forge-auth-${safe}.sock`), configDir: tmpdir(), isPipe: false }
+}

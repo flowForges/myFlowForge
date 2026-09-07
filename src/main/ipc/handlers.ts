@@ -5,7 +5,7 @@ import { capToolOutput, capToolOutputs, readCap } from '../chat/toolOutputCap'
 import { createTerminalService, type TerminalService } from '../terminal/terminalService'
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
-import { providerSupportsPermissions, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
+import { providerSupportsPermissions, providerGatesEachOperation, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -55,6 +55,7 @@ import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, AskAnswers, AskQuestion, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
 import type { AgentProvider, ConfirmDecision } from '../agents/types'
+import { confirmAllowed } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti, readBranch } from '../git/changes'
@@ -98,10 +99,13 @@ import { pickInstaller } from '../update/installer'
 import { makeProxyFetch, makeContentFetch } from '../update/proxyFetch'
 import { stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
+import { authSocketAddress } from '../mcp/bridgeAddress'
+import { startAuthBroker } from '../agents/authBroker'
+import { writeShimDir, shimmedPath, shimEnv } from '../agents/commandShim'
 import { removeWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
 import { scanGlobalContext } from '../agents/globalContext'
-import { getAppLog, clearAppLog, formatAppLog } from '../log/appLog'
+import { getAppLog, clearAppLog, formatAppLog, logError } from '../log/appLog'
 import { resolveAppIconOptions } from '../appIcon'
 import { installPlugin, uninstallPlugin, setPluginEnabled, readPlugins } from '../plugins/pluginStore'
 import { listCatalog, installOfficial } from '../plugins/officialCatalog'
@@ -893,6 +897,43 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // provider, and forgeChatDirective(env) (gated on env.FORGE_TOOLS containing forge_propose_plan)
     // returns '' automatically. Workflows only launch via the explicit run2 "工作流运行" launcher now.
     const env = buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(payload.agent) })
+    /**
+     * ★★PATH shim + 授权中枢 —— 把授权收回 Forge 里的**通用**那一层。
+     *
+     *  claude 有 can_use_tool、codex(app-server)有 requestApproval、gemini/qwen 有 hook,
+     *  但 **qoder / cursor / opencode / copilot 三样都没有**,只支持「全放行」。用户原话:
+     *  「qoder等都得支持上啊,这个很重要,要授权,你不弹,用户不知道,provider 也不知道有没有执行完」。
+     *  这一层不需要 CLI 配合任何东西,只需要它会去 PATH 上找命令。
+     *
+     * ★★只给**不逐操作弹门**的 provider 装:claude 已经每步都问了,再套一层就是同一件事问两遍。
+     * ★中枢用的是**同一道门**(toolConfirm),所以完全访问自动放行、🛡 标记、运行中改档全部免费继承。
+     * ★作用域只有这一轮:目录建在 runDir 下、只出现在我们给的这份 env 里,进程一退就清掉。
+     *  用户自己开终端跑 claude 完全不受影响 —— 这是和「往 ~/.claude/settings.json 插 hook」最大的区别。
+     */
+    let authBroker: Awaited<ReturnType<typeof startAuthBroker>> | null = null
+    if (!providerGatesEachOperation(payload.agent) && process.platform !== 'win32') {
+      try {
+        // ★★socket 路径不能自己拼:darwin 的 sun_path 只有 104 字节,而且 bind() 是**截断**不是报错 ——
+        //  工作区深一点就会拿到一个谁也连不上的 socket。bridgeAddress 早就把这条规矩解决过一遍
+        //  (超长就落到 tmpdir),这里直接复用,不再造第二套。
+        const sockPath = authSocketAddress(store.runDir, payload.sessionId).socketPath
+        authBroker = await startAuthBroker(sockPath, {
+          confirm: async (r) => confirmAllowed(await toolConfirm({ title: r.title, where: r.where })),
+        })
+        const shimDir = writeShimDir({
+          runDir: store.runDir, socketPath: sockPath, sessionId: payload.sessionId,
+          nodePath: process.execPath, shimJs: join(__dirname, 'agentShim.js'),
+        })
+        env.PATH = shimmedPath(shimDir, env.PATH)
+        // ★★光改 PATH 不够:登录 shell(`zsh -lc`,codex 实测在用)会被 path_helper 重排,
+        //  把我们的目录挤到第 13 位。ZDOTDIR 让我们的 rc 在那之后再顶回第一位。见 commandShim.ts。
+        Object.assign(env, shimEnv(store.runDir, shimDir))
+      } catch (e) {
+        // ★装不上就**不装**,照常跑 —— 这一层是加固,不该成为「聊天起不来」的新理由。
+        logError('auth-broker', '装不上 PATH shim,本轮不拦截', String((e as Error)?.message ?? e))
+        authBroker = null
+      }
+    }
     try {
       const msg = await sendTurn(payload, {
         provider,
@@ -908,6 +949,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return msg
     }
     finally {
+      await authBroker?.close().catch(() => { /* 已经没了 */ })
       // The turn is over. If it ended while a CLI permission gate (confirm) was still open — CLI/turn
       // timeout, error, or the user moved on — drain THIS turn's confirm gates so the pet's 需确认
       // indicator (and the main-window card) don't stay stuck forever awaiting a confirm-resolved that
