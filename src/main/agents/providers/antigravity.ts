@@ -6,7 +6,7 @@ import { createFenceScanner } from '../handoffFence'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
 import { parseModelsList } from '../parseModelsList'
-import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
+import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { logError, appLog } from '../../log/appLog'
 import { parseAgyActions, agyTurnTokens, agyContextTokens } from './antigravityStream'
 
@@ -116,7 +116,12 @@ export function makeAntigravityProvider(spec: AntigravitySpec): AgentProvider {
         : ['-p', chatPrompt, ...baseArgs(task.model, task.permissionMode),
            ...(task.sessionId ? ['--conversation', task.sessionId] : [])]
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
+      // ★静默先报告、半小时才回收(见 idleWatchdog 的 StallPolicy)。原来是 4 分钟无声 SIGTERM,
+      // 而静默可能只是在等一个我们看不见的人(外部钩子 / 浏览器授权 / sudo / git 凭据)。
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS,
+        () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
+        undefined,
+        { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } } })
       const start = Date.now()
       let buf = ''
       let errBuf = ''

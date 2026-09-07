@@ -8,7 +8,8 @@ import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
 import { logError, appLog } from '../../log/appLog'
-import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
+import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
+import { makeHookWatch, HOOK_SLOW_MS } from './claudeHooks'
 import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
@@ -231,7 +232,32 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       } catch { /* stdin gone — the turn will error out and be reported normally */ }
       // Inactivity watchdog: reclaim a genuinely wedged turn (240s of total silence) instead of an
       // endless 思考中 spinner — but never kill a long, still-streaming turn.
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
+      /**
+       * ★★静默**先报告,不直接杀**。原来是 240 秒没输出就无声 SIGTERM —— 而静默是有歧义的:
+       *  可能在算,也可能在等一个我们看不见的人(外部钩子、浏览器 OAuth、sudo、git 凭据)。
+       *  用户装的 PermissionRequest 钩子超时是 24 小时,我们 4 分钟就杀,差 360 倍,必然撞车。
+       *  现在:4 分钟说一声(能说出还有哪个钩子没回来),半小时还是没动静才回收。
+       */
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => {
+        const waiting = hooks.pending()
+        cb.onStatus?.(waiting.length
+          ? `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出，还在等 ${waiting.join('、')} 钩子 —— 它可能正在别处等你确认。要停就点上面的停止。`
+          : `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`)
+      }, undefined, {
+        hardMs: CHAT_STALL_KILL_MS,
+        onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } },
+      })
+      /**
+       * ★★钩子把这一轮拖住时,界面上和「模型在思考」完全一样 —— 用户 2026-09-07 是靠**另一个软件**
+       *  才知道 agent 在等他授权的(那台机器上 PermissionRequest 挂着 3 个钩子,超时 24 小时)。
+       *  claude 本来就在流上发钩子的开始/结束,我们一直全丢了;接上之后卡住的那几秒钟能说出是谁在占着,
+       *  钩子报错(treland 连不上 socket、ping-island 抛错)也终于看得见了。
+       * ★用 onStatus 而不是 onThinkDelta:这是**此刻的状态**,不该沉到落盘的思考记录里。 */
+      const hooks = makeHookWatch({
+        slowMs: HOOK_SLOW_MS,
+        onSlow: (names, secs) => cb.onStatus?.(`⏳ 等 ${names.join('、')} 钩子响应 · 已 ${secs}s（钩子可能正在别处等你确认）`),
+        onError: (name, msg) => cb.onStatus?.(`⚠ ${name} 钩子失败：${msg}`),
+      })
       const start = Date.now()
       let buf = ''
       let streamed = false
@@ -275,6 +301,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         cb.onSubagent?.({ id: a.id, phase, subagentType: a.subagentType, description: a.description, prompt: a.prompt })
       }
       const handle = async (obj: any) => {
+        // 钩子事件先过一道:它只影响「现在在等谁」的播报,不参与下面任何解析分支。
+        if (hooks.feed(obj)) return
         const cut = parseCanUseTool(obj)
         if (cut) {
           // AskUserQuestion isn't an operation to approve — it's the model ASKING the human, smuggled
@@ -390,7 +418,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line && !isClaudeBenignStderr(line)) cb.onStatus?.(line) }
       })
       const done = child.then((res) => {
-        wd.clear()
+        wd.clear(); hooks.clear()
         processLine(buf); buf = ''
         flushThink()   // surface any trailing reasoning line that never got a closing newline
         if (errBuf.trim() && !isClaudeBenignStderr(errBuf.trim())) { cb.onStatus?.(errBuf.trim()) } errBuf = ''
@@ -416,8 +444,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // process (exit 143); fall back to the exit code only when no result arrived.
         const ok = turnOk ?? (res.exitCode === 0)
         return { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
-      }).catch((err) => { wd.clear(); cb.onError(err as Error); return { ok: false } })
-      return { id: task.id, cancel: () => { wd.clear(); killTree(child) }, done }
+      }).catch((err) => { wd.clear(); hooks.clear(); cb.onError(err as Error); return { ok: false } })
+      return { id: task.id, cancel: () => { wd.clear(); hooks.clear(); killTree(child) }, done }
     }
   }
 }

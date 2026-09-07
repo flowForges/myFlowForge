@@ -9,7 +9,7 @@ import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
 import { readCodexModelsCache } from './codexModels'
 import { logError } from '../../log/appLog'
-import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
+import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { driveCodexTurn } from './codexAppServer'
 import { codexSandboxApproval } from './codexApproval'
 import { readSettings } from '../../config/store'
@@ -413,7 +413,11 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // equivalent liveness guard of its own — if codex wedges mid-turn (process alive, emitting
         // nothing over the JSON-RPC stream), `done` never resolves and the spinner never clears.
         // Mirror the exec path: arm on start, beat on every event/approval, clear on settle.
-        const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => appHandle?.cancel())
+        // 同 exec 那条路:静默先报告,半小时才回收(见 idleWatchdog 的 StallPolicy)。
+        const wd = makeIdleWatchdog(CHAT_IDLE_MS,
+          () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
+          undefined,
+          { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); appHandle?.cancel() } })
         try {
           appHandle = driveCodexTurn(
             { cwd: task.cwd, prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
@@ -478,7 +482,12 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
+      // ★静默先报告、半小时才回收(见 idleWatchdog 的 StallPolicy)。原来是 4 分钟无声 SIGTERM,
+      // 而静默可能只是在等一个我们看不见的人(外部钩子 / 浏览器授权 / sudo / git 凭据)。
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS,
+        () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
+        undefined,
+        { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } } })
       let buf = ''
       let rawOut = ''   // raw stdout we couldn't turn into assistant/think output
       let rawErr = ''   // raw stderr (codex logs/errors)
