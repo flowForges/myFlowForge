@@ -299,6 +299,99 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     setAttachments(prev => prev.filter((_, i) => i !== idx))
   }
 
+  // ── 把文件拖进输入框 ──────────────────────────────────────────────────────────────────
+  // 用户原话:「我将文件 拖拽到 输入框,应该跟粘贴或者上传一样,就被当前输入框引用」。
+  //
+  // ★对齐的是**「上传」**(附加文件按钮):访达来的文件按 `{name, path, size}` 直接引用原文件,
+  //  不复制、不把字节搬过 IPC —— 拖一段 2G 的录屏进来不该把 app 卡死。也因此不插 [文件名] 占位符:
+  //  拖放没有「插入点」这回事(光标停在哪儿跟你把文件扔在哪儿毫无关系),上传按钮也不插。
+  // ★★从网页里拖出来的图片**没有本机路径**(它只是内存里的一段字节),那一类回落到粘贴那条路存盘。
+  //  两种来源在 DataTransfer 里长得一模一样,不分开处理就会静默丢文件。
+  const [dropping, setDropping] = useState(false)
+  // 进/出要配对着数:拖过输入框里任何一个子元素(chip、按钮、textarea)都会各来一对 enter/leave,
+  // 只看 leave 就会在还悬在框里的时候把高亮灭掉,一路闪。
+  const dragDepth = useRef(0)
+  const dropDisabled = effectiveDisabled || readOnly || archived
+  const isFileDrag = (dt: DataTransfer | null) => !!dt && Array.from(dt.types ?? []).includes('Files')
+
+  /**
+   * ★★文件拖拽一律 preventDefault + stopPropagation,**连只读会话也不例外**:
+   *  不拦,Electron 就把整个窗口导航到那个 `file://` 地址(白屏,没有地址栏可退回来);
+   *  不 stopPropagation,窗口级兜底(shell/dropGuard.ts)会把 dropEffect 改回 'none',
+   *  光标就在唯一能放的地方显示「不能放」。收不收附件是另一回事,由 dropDisabled 单独决定。
+   */
+  function onDragOverComposer(e: React.DragEvent) {
+    if (!isFileDrag(e.dataTransfer)) return
+    e.preventDefault(); e.stopPropagation()
+    e.dataTransfer.dropEffect = dropDisabled ? 'none' : 'copy'
+  }
+  function onDragEnterComposer(e: React.DragEvent) {
+    if (!isFileDrag(e.dataTransfer) || dropDisabled) return
+    e.preventDefault(); e.stopPropagation()
+    dragDepth.current += 1
+    setDropping(true)
+  }
+  function onDragLeaveComposer(e: React.DragEvent) {
+    if (!isFileDrag(e.dataTransfer)) return
+    dragDepth.current = Math.max(0, dragDepth.current - 1)
+    if (!dragDepth.current) setDropping(false)
+  }
+  async function onDropComposer(e: React.DragEvent) {
+    if (!isFileDrag(e.dataTransfer)) return
+    e.preventDefault(); e.stopPropagation()
+    dragDepth.current = 0
+    setDropping(false)
+    if (dropDisabled) return
+    const files = Array.from(e.dataTransfer.files ?? [])
+    const byPath: Attachment[] = []
+    const byBytes: File[] = []
+    for (const f of files) {
+      // filePath 是 preload 的 webUtils.getPathForFile(Electron 32 起 `File.path` 已经没了)。
+      // 老客户端 / 手机端没有这个方法 —— 不是错误,回落到存盘那条路就好。
+      let p = ''
+      try { p = window.forge.filePath?.(f) ?? '' } catch { p = '' }
+      if (p) byPath.push({ name: f.name, path: p, size: f.size })
+      else byBytes.push(f)
+    }
+    if (byPath.length) setAttachments(prev => [...prev, ...byPath])
+    if (byBytes.length) await saveFilesAsAttachments(byBytes)
+  }
+
+  /**
+   * 把一批「只有字节、没有本机路径」的文件存成附件(粘贴的截图、从网页里拖出来的图)。
+   * 存盘走的是 onPaste(chatSavePaste),落在 `.forge/attachments` 下。
+   * 粘贴和拖拽共用这一份 —— 两处各写一遍的话,重名去重、缩略图、失败跳过这些细节迟早会走岔。
+   */
+  async function saveFilesAsAttachments(files: File[]): Promise<Attachment[]> {
+    if (!onPaste) return []
+    const saved: Attachment[] = []
+    for (const file of files) {
+      const dataBase64: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => {
+          const res = String(reader.result)
+          const i = res.indexOf('base64,')
+          resolve(i >= 0 ? res.slice(i + 'base64,'.length) : res)
+        }
+        reader.onerror = () => reject(reader.error)
+        reader.readAsDataURL(file)
+      })
+      // 剪贴板截图没有真名字(Chrome 一律 image.png),改成 img-时分秒;用户自己起的名字原样保留。
+      let att: Attachment | null = null
+      try {
+        att = await onPaste({ name: pastedFileNameForFile(file.name, new Date()), dataBase64 })
+      } catch {
+        att = null
+      }
+      if (!att) continue
+      // 缩略图:字节就在手上,不必再读盘。三张图都叫 img-xxxxxx.png,一眼看图比读名字快得多。
+      if (file.type.startsWith('image/')) setThumbs(prev => ({ ...prev, [att!.path]: `data:${file.type};base64,${dataBase64}` }))
+      saved.push(att)
+      setAttachments(prev => [...prev, att!])
+    }
+    return saved
+  }
+
   async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
     const cd = e.clipboardData
     if (!cd) return
@@ -359,31 +452,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     const selStart = ta?.selectionStart ?? text.length
     const selEnd = ta?.selectionEnd ?? text.length
     const textAtPaste = text
-    const saved: Attachment[] = []
-    for (const file of Array.from(files)) {
-      const dataBase64: string = await new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => {
-          const res = String(reader.result)
-          const i = res.indexOf('base64,')
-          resolve(i >= 0 ? res.slice(i + 'base64,'.length) : res)
-        }
-        reader.onerror = () => reject(reader.error)
-        reader.readAsDataURL(file)
-      })
-      // 剪贴板截图没有真名字(Chrome 一律 image.png),改成 img-时分秒;用户自己起的名字原样保留。
-      let att: Attachment | null = null
-      try {
-        att = await onPaste({ name: pastedFileNameForFile(file.name, new Date()), dataBase64 })
-      } catch {
-        att = null
-      }
-      if (!att) continue
-      // 缩略图:粘贴时字节就在手上,不必再读盘。三张图都叫 img-xxxxxx.png,一眼看图比读名字快得多。
-      if (file.type.startsWith('image/')) setThumbs(prev => ({ ...prev, [att!.path]: `data:${file.type};base64,${dataBase64}` }))
-      saved.push(att)
-      setAttachments(prev => [...prev, att!])
-    }
+    const saved = await saveFilesAsAttachments(Array.from(files))
     // 占位符一次性插完(而不是每个文件插一次):setText 的 updater 不保证同步执行,循环里插会拿到陈旧的
     // 光标位置,后面几个占位符就会互相踩。攒齐再插,updater 内部按顺序推进插入点,天然保住粘贴顺序。
     // 存盘失败的文件不在 saved 里 —— 没有附件的占位符是在骗 agent。
@@ -406,7 +475,13 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
 
   return (
     <div className="composer-wrap">
-      <div className={`composer${archived ? ' archived' : ''}`}>
+      <div
+        className={`composer${archived ? ' archived' : ''}${dropping ? ' dropping' : ''}`}
+        onDragEnter={onDragEnterComposer}
+        onDragOver={onDragOverComposer}
+        onDragLeave={onDragLeaveComposer}
+        onDrop={onDropComposer}
+      >
         <div className="composer-attach" id="composerAttach">
           {attachments.map((a, i) => (
             <span className="attach-chip" key={a.path + '::' + i}>
@@ -443,7 +518,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           ref={taRef}
           id="composerInput"
           rows={1}
-          placeholder={runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴文件 / 截图'}
+          placeholder={runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴 / 拖入文件、截图'}
           value={text}
           disabled={effectiveDisabled || readOnly}
           onChange={e => {

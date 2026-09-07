@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { CH } from '../main/ipc/channels'
 import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
@@ -114,6 +114,13 @@ const api = {
   // answers/response:AskUserQuestion 门上用户选的选项 / 自填答案(见 shared/types 的 AskQuestion)。
   chatResolve: (a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> }; workspacePath: string }) => ipcRenderer.invoke(CH.chatResolve, a),
   openFiles: () => ipcRenderer.invoke(CH.dialogOpenFiles),
+  // 拖进输入框的文件在本机上的真实路径。
+  // ★Electron 32 起 `File.path` 已经**没有了**,这是唯一的取法(见 webUtils.getPathForFile)。
+  //   拿不到路径不是错误 —— 从网页里拖出来的图片本来就只是内存里的一段字节,没有落过盘;
+  //   调用方据此回落到「按字节存盘」那条路(和粘贴同一条)。所以这里失败返回 ''，不抛。
+  filePath: (file: File): string => {
+    try { return webUtils.getPathForFile(file) || '' } catch { return '' }
+  },
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(CH.dialogPickDirectory),
   pickFile: (): Promise<string | null> => ipcRenderer.invoke(CH.dialogPickFile),
   savePaste: (a: { workspacePath: string; name: string; dataBase64: string }) => ipcRenderer.invoke(CH.chatSavePaste, a),

@@ -262,6 +262,11 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .composer-wrap { flex: 0 0 auto; min-width: 0; padding: 12px clamp(32px, 4%, 72px) 18px; }
 .composer { position: relative; width: 100%; max-width: clamp(720px, 90%, 1180px); min-width: 0; margin: 0 auto; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-lg); transition: border-color .15s, box-shadow .15s; }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+/* 文件拖到输入框上方时的落点提示。用与 :focus-within 同一套的描边 + 光晕(同一个「这里是活的」
+   语汇),只是把边框改成虚线 —— 「松手就放这儿」需要一眼可辨,而不是又一种新颜色。
+   ★不改 padding / 不加伪元素遮罩:高亮期间输入框的尺寸一变,拖着的指针就会掉出这个元素,
+   浏览器当场派发 dragleave,高亮灭掉、尺寸复原、又进来 —— 一路闪,而且经常放不下去。 */
+.composer.dropping { border-color: var(--accent); border-style: dashed; box-shadow: 0 0 0 3px var(--accent-dim); }
 .composer-attach { display: flex; gap: 8px; padding: 10px 12px 0; flex-wrap: wrap; }
 .composer-attach:empty { display: none; }
 .composer-attach .attach-chip { padding: 5px 9px; font-size: 11.5px; }
