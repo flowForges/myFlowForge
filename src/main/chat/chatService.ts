@@ -3,7 +3,8 @@ import { appendMessage, readMessages, readSession, readWatermark, writeSession, 
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
 import type { AgentProvider, AgentSession, ConfirmReq, ConfirmDecision } from '../agents/types'
-import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity } from '@shared/types'
+import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity, TurnPhase } from '@shared/types'
+import { phaseLabel } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
 import { inlineHtmlPreamble } from './inlineHtmlDirective'
 import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
@@ -187,12 +188,22 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       for (const [id, t] of tools) if (t.status === 'run') { tools.set(id, { ...t, status: outcome === 'done' ? 'ok' : 'error' }); changed = true }
       if (changed) syncNativeSubagents()
     }
+    /**
+     * 这一轮**此刻在干什么**。默认是「在想」;模型自动压缩上下文时(codex 的 contextCompaction item)
+     * 变成 compacting。
+     *
+     * ★★为什么要有这个:自动压缩要一分多钟,而这段时间里 provider 一个 token 都不吐 —— 界面上只有
+     *  「主代理思考中…」和一个越走越大的秒数,和卡死长得一模一样。用户 2026-09-08 原话:
+     *  「模型在进行压缩,咱们也看不到自动压缩过程」。
+     * ★只活在这一轮里,不落盘:压缩是过程不是结果,收尾时 think 的标题照旧是「已思考」。
+     */
+    let phase: TurnPhase = 'thinking'
     // Mirror the in-flight message into the live buffer so chatHistory can restore it after the chat view
     // unmounts (switch to home) or re-subscribes to another session mid-stream. ts:'' marks it as still
     // streaming (carry-forward ordering in the timeline; also lets the renderer re-flag streamingIds).
     const publishLive = () => setLive(ws, sid, {
       id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: '', startedAt,
-      think: { label: '主代理思考中…', steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
+      think: { label: phaseLabel(phase), steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
       context, usage: lastUsage, subagents: subagentList(), tools: toolList(),
     })
     /**
@@ -409,6 +420,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           // ephemeral liveness (visible while the turn runs, replaced by the final message on done), so
           // the persisted reasoning stays clean while the spawn/handshake gap no longer looks frozen.
           onStatus: (t) => emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t }),
+          // 「在想」/「在压缩」。落到那条在途消息的 think 标题上(publishLive + phase 事件),
+          // 手机端走的是同一份 live 快照,所以两端一起变。
+          onPhase: (p) => {
+            if (p === phase) return
+            phase = p
+            publishLive()
+            emit({ workspacePath: ws, sessionId: sid, type: 'phase', id: aid, phase: p })
+          },
           onConfirm: confirmWithGateNote,
           onUsage: (u) => { lastUsage = u; publishLive() },
           onTurnTokens: (t) => { turnTokens = { input: (turnTokens?.input ?? 0) + t.input, output: (turnTokens?.output ?? 0) + t.output } },

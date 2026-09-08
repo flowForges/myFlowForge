@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useHostReadySeq } from './useHostKey'
 import type { AgentContextMeta, AgentContextRef, AskAnswers, ChatConfirm, ChatEvent, ChatMessage, ChatSendPayload } from '@shared/types'
+import { phaseLabel } from '@shared/types'
 import type { PlanReq } from '../components/PlanCard'
 
 export interface ChatQueueItem { id: string; text: string; source: string }
@@ -160,6 +161,13 @@ export function useChat(
           think: { label: x.think?.label ?? '主代理思考中…', steps: [...(x.think?.steps ?? []), e.text] },
         })
         setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? apply(x) : x) : [...m, apply(blankAi(e.id))])
+      }
+      // 这一轮换阶段了(在想 ↔ 在自动压缩)。只改 think 折叠块的标题 —— 压缩期间 provider 一个 token
+      // 都不吐,不换标题的话界面和卡死没有区别。收尾时 done 会用落盘的那条消息整个替换掉它。
+      else if (e.type === 'phase') {
+        setMessages(m => m.map(x => x.id === e.id && x.think
+          ? { ...x, think: { ...x.think, label: phaseLabel(e.phase) } }
+          : x))
       }
       else if (e.type === 'subagent') {
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))

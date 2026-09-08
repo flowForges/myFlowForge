@@ -1,6 +1,7 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
+import type { TurnPhase } from '@shared/types'
 import { confirmAllowed } from '../types'
 import { createFenceScanner } from '../handoffFence'
 import { buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor } from '../chatStream'
@@ -128,6 +129,28 @@ export function codexToolActivity(obj: any): { id: string; phase: 'start' | 'don
     return { id: id ?? `file:${label}`, phase, title: `编辑文件: ${label}` }
   }
   return null
+}
+
+/**
+ * 「模型开始/结束自动压缩上下文了吗」。
+ *
+ * ★★自动压缩要一分多钟,而这段时间 codex 一个 token 都不吐。不认这个事件,界面上就只有
+ *  「主代理思考中…」加一个越走越大的秒数 —— 和卡死长得一模一样(用户 2026-09-08 报的就是这个)。
+ * ★两种拼写都收:app-server(v2)的 thread item 是小驼峰 `contextCompaction`,而 exec 那条 JSONL
+ *  沿用蛇形 `context_compaction`(两个名字在 codex 自己的 schema 里同时存在,`codex app-server
+ *  generate-json-schema` 可查)。和这个文件里 `command_execution || exec_command` 的处理同一个道理。
+ * ★item.completed 回到 thinking:压缩结束后 codex 接着把这一轮跑完,不是轮次结束。
+ */
+export function codexCompactionPhase(obj: any): TurnPhase | null {
+  // 老通道:`thread/compacted`(schema 里已标 Deprecated,但老版本 codex 只发这个)。
+  // 它只报「压缩完了」,没有开始事件 —— 所以只用来回到 thinking。
+  if (obj?.type === 'thread.compacted') return 'thinking'
+  const started = obj?.type === 'item.started'
+  const completed = obj?.type === 'item.completed'
+  if ((!started && !completed) || !obj.item || typeof obj.item !== 'object') return null
+  const itype = String(obj.item.type ?? obj.item.item_type ?? '')
+  if (itype !== 'contextCompaction' && itype !== 'context_compaction') return null
+  return started ? 'compacting' : 'thinking'
 }
 
 type CodexActionLoggable = { kind: 'assistant' | 'assistant-final'; text: string } | { kind: 'think'; text: string }
@@ -379,6 +402,9 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // duplicate think step parseCodexEvent renders for the same item.
         const toolAct = codexToolActivity(obj)
         if (toolAct) cb.onToolActivity?.(toolAct)
+        // 自动压缩:换 think 折叠块的标题,别让这一分多钟看着像卡死。
+        const ph = codexCompactionPhase(obj)
+        if (ph) cb.onPhase?.(ph)
         for (const a of parseCodexEvent(obj)) {
           if (a.kind === 'session') cb.onSession(a.id)
           else if (a.kind === 'assistant') { sawDelta = true; deliveredAny = true; cb.onAssistantDelta(a.text) }

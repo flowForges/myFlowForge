@@ -18,6 +18,9 @@ export function adaptCodexEvent(msg: any): any | null {
     return delta ? { msg: { type: 'agent_message_delta', delta } } : null
   }
   if (method === 'item/completed' && p.item) return { type: 'item.completed', item: normItem(p.item) }
+  // 老版本 codex 用这条通知报「上下文压缩完了」(新版本改成 contextCompaction item 的
+  // started/completed)。转成 exec 那边同名的形状,让 codexCompactionPhase 一处认两代协议。
+  if (method === 'thread/compacted') return { type: 'thread.compacted' }
   if (method === 'item/started' && p.item) return { type: 'item.started', item: normItem(p.item) }
   if (method === 'error') {
     const m = p.error && typeof p.error === 'object' ? p.error.message : (p.message ?? p.error)

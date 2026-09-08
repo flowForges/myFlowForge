@@ -162,6 +162,16 @@ export interface CreateWorkspaceOpts {
 
 export interface Attachment { name: string; path: string; size: number }
 export interface ChatThink { label: string; elapsed?: number; steps: string[] }
+/**
+ * 一轮**此刻在干什么**。只有两态,而且只在这一轮活着的时候有意义。
+ * `compacting` = 模型在自动压缩上下文(codex 的 contextCompaction item)。这段时间 provider 一个
+ * token 都不吐,不说清楚的话界面和卡死没有区别。
+ */
+export type TurnPhase = 'thinking' | 'compacting'
+/** think 折叠块的标题。★两端(桌面/手机)都从这里取,别各写各的。 */
+export function phaseLabel(phase: TurnPhase): string {
+  return phase === 'compacting' ? '压缩上下文中…' : '主代理思考中…'
+}
 export interface AgentContextRef { name: string; path: string; reason?: string; state?: 'run' | 'ok' | 'wait' | 'err' }
 export interface AgentContextMeta { skills: AgentContextRef[]; rules: AgentContextRef[]; mcps?: AgentContextRef[] }
 export interface AgentSessionInfo {
@@ -417,6 +427,8 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   // Replace (not append) the reply body with an authoritative full text — see ChatCallbacks.onAssistantReplace.
   | { type: 'assistant-replace'; id: string; text: string }
   | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta }
+  // 这一轮换了阶段(在想 ↔ 在压缩)。只在轮次进行中广播,不落盘。
+  | { type: 'phase'; id: string; phase: TurnPhase }
   // questions 非空 = 这不是「批准执行」而是「请回答」(claude AskUserQuestion),渲染成可点的选项卡片。
   | { type: 'confirm-request'; id: string; title: string; where?: string; questions?: AskQuestion[] }
   | { type: 'confirm-resolved'; id: string }

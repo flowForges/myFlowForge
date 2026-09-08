@@ -93,6 +93,11 @@ export interface ChatCallbacks {
   // the think block so a slow spawn / MCP handshake / model-load shows real activity — the long silent
   // gap before the first token was the "感觉像卡住" complaint.
   onStatus?(text: string): void
+  /**
+   * 这一轮换阶段了(在想 ↔ 在自动压缩上下文)。★provider 不报就永远是「在想」——
+   * 只有 codex 在协议里明说了压缩(contextCompaction item),别的 CLI 不报,那就照旧。
+   */
+  onPhase?(phase: import('@shared/types').TurnPhase): void
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired when the running max usage increases.
   onUsage?(u: { used: number; window: number }): void
