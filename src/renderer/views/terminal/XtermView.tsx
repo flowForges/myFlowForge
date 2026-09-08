@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import '@xterm/xterm/css/xterm.css'
+import { webglCellFits, measureCharWidth } from './webglFit'
 
 export function XtermView({ termId, active, visible, font }: {
   termId: string
@@ -13,6 +14,12 @@ export function XtermView({ termId, active, visible, font }: {
   font: { fontFamily: string; fontSize: number }
 }) {
   const elRef = useRef<HTMLDivElement>(null)
+  // 渲染器的选择要跟着**当前**字体走(见 syncRenderer),而挂载 effect 只跑一次 —— 用 ref 把最新的
+  // font 递进去,别把它加进 effect 的依赖(那会重建终端、清空回滚)。
+  const fontRef = useRef(font)
+  fontRef.current = font
+  /** 挂载 effect 里那个 syncRenderer 的出口,给「字体变了」那个 effect 调。 */
+  const syncRendererRef = useRef<(() => void) | null>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
 
@@ -50,24 +57,26 @@ export function XtermView({ termId, active, visible, font }: {
     // renders on the GPU (far faster). Load AFTER open(); on WebGL context loss, dispose it so
     // xterm transparently falls back to the DOM renderer instead of freezing.
     //
-    // BUT only when window.devicePixelRatio is an integer. The WebGL renderer packs glyphs into an
-    // integer-pixel GPU atlas; at a FRACTIONAL device-pixel ratio each cell's advance no longer
-    // lines up with xterm's fractional cell layout, so echoed characters drift across the row —
-    // "git push" renders as "git p ush", the next keystroke as "ggit push …". Our whole-window zoom
-    // (setZoomFactor, keyed off the UI font size: 14px = 1.0×, so e.g. 13px → 0.93×) folds into
-    // devicePixelRatio, so on a 2× display any non-14px font size makes it fractional (2×0.93≈1.86).
-    // Fall back to the DOM renderer there — it lays out via the browser and stays correct at any
-    // zoom. Re-evaluate when the ratio changes (the user changes the UI font size).
+    // BUT only when the glyph actually fits the grid it will be drawn on. The WebGL renderer FLOORS
+    // each cell's device-pixel width (Math.floor(charWidth × devicePixelRatio)); when that product
+    // isn't nearly integral every glyph is packed into a cell narrower than its own advance, its
+    // strokes bleed into the neighbour, and erasing a cell leaves that bleed behind — "git commit"
+    // shows up as "git coommit", and backspacing to "g" leaves a "g" that won't go away ("ggit").
+    // See webglFit.ts for the measured table; the short version is that the previous guard tested
+    // devicePixelRatio for integrality, which passes on a plain 1× display — the very case with the
+    // largest error (7% at the default 12.5px MesloLGS NF). Re-evaluated whenever the ratio OR the
+    // terminal font changes, since both feed the product.
     let webgl: WebglAddon | null = null
     const syncRenderer = () => {
-      const integral = Number.isInteger(window.devicePixelRatio)
-      if (integral && !webgl) {
+      const f = fontRef.current
+      const fits = webglCellFits(measureCharWidth(f.fontFamily, f.fontSize), window.devicePixelRatio)
+      if (fits && !webgl) {
         try {
           const w = new WebglAddon()
           w.onContextLoss(() => { try { w.dispose() } catch { /* already gone */ } })
           term.loadAddon(w); webgl = w
         } catch { /* no WebGL (rare) → stay on the DOM renderer */ }
-      } else if (!integral && webgl) {
+      } else if (!fits && webgl) {
         try { webgl.dispose() } catch { /* already gone */ }
         webgl = null
         try { term.refresh(0, term.rows - 1) } catch { /* not visible */ }
@@ -102,7 +111,8 @@ export function XtermView({ termId, active, visible, font }: {
       }, 90)
     })
     ro.observe(el)
-    return () => { offData(); dprQuery?.removeEventListener('change', onDprChange); clearTimeout(refitTimer); ro.disconnect(); term.dispose() }
+    syncRendererRef.current = syncRenderer
+    return () => { syncRendererRef.current = null; offData(); dprQuery?.removeEventListener('change', onDprChange); clearTimeout(refitTimer); ro.disconnect(); term.dispose() }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [termId])
 
@@ -137,6 +147,10 @@ export function XtermView({ termId, active, visible, font }: {
   useEffect(() => {
     const t = termRef.current; if (!t) return
     t.options.fontFamily = font.fontFamily; t.options.fontSize = font.fontSize
+    // ★字号/字体决定了 charWidth,而 charWidth × dpr 决定了 GPU 渲染器能不能用(webglFit.ts)——
+    //   所以换字体必须重新判一次,不能只在 dpr 变的时候判。漏了这一步,用户把终端字号从 12.5 改到 14,
+    //   格子误差从 0.05 跳到 0.86,而渲染器还挂在 GPU 上。
+    syncRendererRef.current?.()
     if (!canFit()) return
     try { fitRef.current?.fit(); window.forge.termResize(termId, t.cols, t.rows) } catch { /* */ }
   }, [font.fontFamily, font.fontSize, termId])
