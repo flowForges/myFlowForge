@@ -102,6 +102,21 @@ html[data-bg-scope="app"] :is(
 ) {
   background: color-mix(in srgb, var(--surface) 45%, transparent);
 }
+/* ★★「编辑」按钮不能走上面那条 45% 实底。
+   上面那个比例是**照深色主题调的**:深色的 --surface 是 26% 明度,45% 压在亮壁纸上是一层柔和的暗色。
+   可浅色主题的 --surface 是 **99% 明度**,45% 的白压在本来就浅的壁纸上**几乎没被冲淡** —— 实测
+   `color(srgb .98 .99 1 / .45)`,看着仍然是一枚白药片(用户 2026-09-08 原话:「明显背景色不太对,
+   感觉没有样式,就是纯白色或者纯黑色,非常突兀」)。
+   ★改成描边按钮:底完全透明,只留那圈已经是半透明的 --border + 文字色。旁边就是实心 accent 的
+   「启动」——次要动作本来就该让位给主动作,不该和它抢同一份视觉重量。hover 才给一层淡底,
+   这样「有没有反应」仍然看得出来。 */
+html[data-bg-scope="app"] .wf-edit-btn,
+html[data-bg-scope="chat"] .wf-edit-btn { background: transparent; }
+html[data-bg-scope="app"] .wf-edit-btn:hover:not(:disabled),
+html[data-bg-scope="chat"] .wf-edit-btn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--fg) 10%, transparent);
+  border-color: color-mix(in oklab, var(--fg) 30%, transparent);
+}
 html[data-bg-scope="app"] :is(
   .wf-glance-head:hover, /* 工作流列表行 hover */
   .ws-sess:hover,        /* 侧栏会话行 hover */
