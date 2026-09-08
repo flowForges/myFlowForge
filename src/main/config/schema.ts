@@ -149,6 +149,15 @@ export const AppearanceSchema = z.object({
   bgImage: z.string().default(''),
   bgScope: z.enum(['off', 'app', 'chat']).default('off'),
   bgOpacity: z.number().min(0.05).max(1).default(0.35),
+  // 壁纸【自身】的模糊。0 = 原图,1 = 最糊(见 applyTheme.BG_BLUR_MAX)。
+  // ★和「磨砂度」(blurAmount)不是一回事:那个是 macOS 原生 vibrancy,模糊的是【窗口背后的桌面】,
+  //   由系统在合成层做;这个是把【我们自己铺的那张壁纸】糊掉。
+  // ★为什么需要它:字读不读得清,取决于底下有没有【高频细节】,而不只是底有多亮。把壁纸糊掉之后,
+  //   壁纸仍在(颜色、构图的大块关系都还在),但没有细节去和字形抢边缘 —— 这就是终端类 app 那种
+  //   「玻璃底 + 字很锐」的做法。用户 2026-09-08 问的就是它。
+  // ★性能上和 backdrop-filter 是两回事:这层图是【静止】的,blur 只算一次并缓存成纹理,
+  //   不像 backdrop-filter 每帧重算(见 memory perf-glass-vs-css-backdrop-filter)。
+  bgBlur: z.number().min(0).max(1).catch(0).default(0),
   // 当前应用的「内置壁纸」id(仅用于在壁纸库里高亮当前项);用户上传自己的图或清除背景时置空。
   bgWallpaperId: z.string().default(''),
   // 首页 (home) 背景图:独立于上面的应用/会话区背景,可同可不同。homeBgOn 是首页背景的独立开关,
@@ -517,7 +526,7 @@ export const SettingsSchema = z.object({
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: CHAT_LINE_HEIGHT_DEFAULT, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {}, hostChip: 'both' },
+  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: CHAT_LINE_HEIGHT_DEFAULT, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgBlur: 0, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {}, hostChip: 'both' },
   notifications: defaultNotifications(),
   notifyEvents: defaultNotifyEvents(),
   closeAction: 'ask',

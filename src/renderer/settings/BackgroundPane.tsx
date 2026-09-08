@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { Appearance } from '@shared/types'
 import { DEFAULT_BG_POSITION } from '@shared/wallpaper'
 import { WallpaperGallery } from './WallpaperGallery'
+import { bgBlurPx } from '../theme/applyTheme'
 
 // 「壁纸背景」设置页。把内置壁纸库和所有"背景图"相关控件从「外观」页拆出来单独成页 —— 选内置壁纸、
 // 上传自己的图、背景范围/可见度、首页背景,它们操作的是同一套 bgImage/bgScope/bgOpacity 状态,放在一起
@@ -56,6 +57,7 @@ export function BackgroundPane({ appearance, onChange }: BackgroundPaneProps) {
   const bgImage = appearance.bgImage ?? ''
   const bgScope = appearance.bgScope ?? 'off'
   const bgOpacity = appearance.bgOpacity ?? 0.35
+  const bgBlur = appearance.bgBlur ?? 0
   // 壁纸纵向焦点:按图片 URL 记忆,换壁纸各调各的(见 schema.ts bgPositions)。空图时回退默认。
   const bgPositions = appearance.bgPositions ?? {}
   const setBgPos = (key: string, v: number) => onChange({ bgPositions: { ...bgPositions, [key]: v } })
@@ -132,6 +134,30 @@ export function BackgroundPane({ appearance, onChange }: BackgroundPaneProps) {
                 />
                 <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: '12px', color: 'var(--muted)', width: '38px', textAlign: 'right' }}>
                   {Math.round(bgOpacity * 100)}%
+                </span>
+              </div>
+            </div>
+            {/* ★壁纸模糊。和「外观」页那个「磨砂度」不是一回事:那个是 macOS 原生 vibrancy,模糊的是
+                【窗口背后的桌面】;这个是把【我们自己铺的这张壁纸】糊掉。
+                字读不读得清取决于底下有没有高频细节 —— 糊掉之后颜色和构图都还在,但没有细节再和字形抢边缘。 */}
+            <div className="set-row">
+              <div className="info">
+                <div className="t">壁纸模糊</div>
+                <div className="d">糊掉图片细节,字就锐利了 · 只在窗口是焦点时生效,切走后自动恢复清晰</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: '180px', justifyContent: 'flex-end' }}>
+                <input
+                  type="range"
+                  aria-label="壁纸模糊"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={bgBlur}
+                  onChange={e => onChange({ bgBlur: Number(e.target.value) })}
+                  style={{ flex: '1 1 auto', maxWidth: '160px' }}
+                />
+                <span style={{ fontVariantNumeric: 'tabular-nums', fontSize: '12px', color: 'var(--muted)', width: '38px', textAlign: 'right' }}>
+                  {bgBlur > 0 ? `${Math.round(bgBlurPx(bgBlur))}px` : '关'}
                 </span>
               </div>
             </div>

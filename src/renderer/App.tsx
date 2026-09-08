@@ -25,6 +25,7 @@ import { toggleExpanded, ensureExpanded, loadExpanded, saveExpanded } from './st
 import { useUpdate } from './state/useUpdate'
 import { usePlugins } from './state/usePlugins'
 import { applyTheme } from './theme/applyTheme'
+import { initWindowFocus } from './theme/windowFocus'
 import { useWallpaperPalette } from './theme/wallpaperSample'
 import { injectDownloadedFontFaces } from './theme/fontFaces'
 import { fmtRelTime } from '@shared/relTime'
@@ -336,6 +337,9 @@ export function App() {
   useEffect(() => {
     window.forge.setActiveWorkspace?.(view === 'ws' ? (activeWsId || null) : null)
   }, [view, activeWsId])
+
+  // 壁纸模糊只在窗口是焦点时生效 —— 见 theme/windowFocus.ts。挂一次,活到应用退出。
+  useEffect(() => initWindowFocus(), [])
 
   // If the open workspace is removed/deleted while you're viewing it, fall back to home. Covers every
   // removal path (hard delete, 从列表移除 an imported workspace, or a removal broadcast from another

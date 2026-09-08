@@ -8,7 +8,7 @@ import type { Appearance } from '@shared/types'
 const base: Appearance = {
   theme: 'dark', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1,
   blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0,
-  chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35,
+  chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgBlur: 0,
   bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {}, hostChip: 'both',
 }
 const first = BUILTIN_SKINS[0]

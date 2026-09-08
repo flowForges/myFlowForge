@@ -50,15 +50,39 @@ html[data-vibrancy="on"]:not([data-glass="on"]) .inspector { background: var(--g
   background-image: var(--app-bg-image); background-size: cover; background-position: 50% var(--app-bg-pos, 35%); background-repeat: no-repeat;
   opacity: var(--app-bg-opacity, .35);
   border-radius: 12px; }
+/* ★★壁纸【自身】的模糊(--app-bg-blur,见 schema.bgBlur / applyTheme.bgBlurPx)。
+   字读不读得清,取决于底下有没有【高频细节】,不只是底有多亮 —— 把壁纸糊掉,颜色和构图的大关系都还在,
+   但没有细节再去和字形抢边缘。这就是终端类 app「玻璃底 + 字很锐」的做法。
+   ★只在窗口是焦点时糊(data-win-focus):你在读字才需要它;切走了没人读字,壁纸就该恢复清晰。
+   ★`inset: var(--app-bg-bleed)` 是配套的:模糊会把图层【边缘】一起糊掉,四条边会出现一圈淡出的晕,
+     让图层往外溢出一圈把晕推到可视区外。不模糊时 bleed 为 0。
+   ★不是 backdrop-filter:这层图是静止的,blur 只算一次并缓存成纹理;backdrop-filter 每帧重算,
+     那条路在这台机器上是贵的(见 memory perf-glass-vs-css-backdrop-filter)。
+   ★过渡放在 filter 上:切走/切回时是柔和的一糊一清,不是硬跳。 */
+.app-bg-layer, .home-bg-layer { transition: filter .22s ease; }
+html[data-win-focus="on"] .app-bg-layer,
+html[data-win-focus="on"] .home-bg-layer {
+  inset: var(--app-bg-bleed, 0px);
+  filter: blur(var(--app-bg-blur, 0px));
+}
+html[data-win-focus="on"] div.chat::before { filter: blur(var(--app-bg-blur, 0px)); }
 [data-bg-scope="app"] .app-bg-layer { display: block; }
 /* 浅色主题的「奶白」补偿。可见度 = 图层 opacity,而它混的底是 --bg:深色主题 --bg 近黑,混合等于整体压暗,
    彩度与明度【等比】缩小,眼睛读成"这张图暗了点",颜色还在;浅色主题 --bg 是 98% 的近白,同样的混合是往白
    色拉——明度几乎不降、彩度却被成比例抹掉,读起来就是隔了一层奶白雾,而且越调越白、怎么调都"不清晰"。
    所以只给浅色按可见度【反比】补一点饱和度(--app-bg-sat 由 applyTheme 算好,可见度 100% 时为 1 即不动),
    让浅色下的壁纸淡而不浑。只改图层自身的颜色,不动可见度、不加任何遮罩。 */
+/* ★这条和上面那条 blur 作用在【同一个 filter 属性】上,后者会整条覆盖前者 —— 所以浅色主题这一版
+   必须把 blur 一起写进来,否则「浅色主题下壁纸模糊完全不生效」。(两条规则都写 filter 是典型的
+   互相覆盖陷阱,不是叠加。) */
 html[data-theme="light"] .app-bg-layer,
 html[data-theme="light"] .home-bg-layer,
 html[data-theme="light"] div.chat::before { filter: saturate(var(--app-bg-sat, 1)); }
+html[data-theme="light"][data-win-focus="on"] .app-bg-layer,
+html[data-theme="light"][data-win-focus="on"] .home-bg-layer,
+html[data-theme="light"][data-win-focus="on"] div.chat::before {
+  filter: blur(var(--app-bg-blur, 0px)) saturate(var(--app-bg-sat, 1));
+}
 /* With a bright wallpaper behind everything, the opaque dark 1px panel borders (sidebar / inspector
    edges, titlebar / statusbar rules, button outlines) read as harsh BLACK LINES. Swap every border to a
    translucent fg-tinted one so it blends into the image instead of drawing a line. */

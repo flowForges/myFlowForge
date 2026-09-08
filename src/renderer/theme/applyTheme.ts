@@ -45,6 +45,14 @@ export function bgSaturation(opacity: number): number {
 // 深色壁纸或浅色主题都返回 0 —— 浅色主题是深色字,压在亮壁纸上本来就读得清(global.css 里那条 text-shadow
 // 排除浅色,是同一个道理)。
 export const BRIGHT_WALLPAPER_CAP = 0.3
+/** 壁纸自身模糊的最大半径(px)。0..1 的滑块线性映射到 0..这个值。 */
+export const BG_BLUR_MAX = 28
+/** 滑块值 → 实际模糊半径(px)。非数字/越界一律夹回 [0, BG_BLUR_MAX]。 */
+export function bgBlurPx(v: number): number {
+  const n = Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0
+  return Number((n * BG_BLUR_MAX).toFixed(2))
+}
+
 export function bgScrim(opacity: number, wallpaperIsBright: boolean, themeIsDark: boolean): number {
   if (!wallpaperIsBright || !themeIsDark) return 0
   const o = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 0.35
@@ -128,6 +136,12 @@ export function applyTheme(a: Appearance, palette?: WallpaperPalette | null): vo
   root.setAttribute('data-bg-scope', bgOn ? a.bgScope : 'off')
   root.style.setProperty('--app-bg-image', a.bgImage ? `url("${a.bgImage}")` : 'none')
   root.style.setProperty('--app-bg-opacity', String(a.bgOpacity ?? 0.35))
+  // 壁纸自身的模糊(见 schema.bgBlur)。0..1 → 0..BG_BLUR_MAX px。
+  // ★上限 28px 是按「还看得出是哪张图」定的:再高整张图塌成一片色块,壁纸就白设了。
+  root.style.setProperty('--app-bg-blur', `${bgBlurPx(a.bgBlur ?? 0)}px`)
+  // 模糊会把图层【边缘】一起糊掉 —— 四条边会出现一圈淡出的晕(半径越大越明显)。
+  // 让图层往外溢出一圈(负 inset)把晕推到可视区外;不模糊时为 0,避免白白放大图层。
+  root.style.setProperty('--app-bg-bleed', `${-Math.ceil(bgBlurPx(a.bgBlur ?? 0) * 1.5)}px`)
   // 浅色主题下壁纸会"发奶白"的补偿系数(只有 global.css 的 [data-theme=light] 规则消费它,深色不受影响)。
   // 见 global.css .app-bg-layer 下方注释:浅色把图混向近白 → 明度不降、彩度被等比抹掉。按可见度反比补回,
   // 可见度 100% 时为 1(不动),越淡补得越多,上限 1.9(可见度 5% 时)。
