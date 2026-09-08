@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { codexSandboxApproval, codexDecision } from './codexApproval'
+import { codexSandboxApproval, codexDecision, codexGateReq } from './codexApproval'
 
 describe('codexSandboxApproval', () => {
   it('maps modes to sandbox + interactive approvalPolicy', () => {
@@ -21,5 +21,19 @@ describe('codexDecision', () => {
   it('maps allow/deny to v1 decisions for legacy methods', () => {
     expect(codexDecision('execCommandApproval', true)).toBe('approved')
     expect(codexDecision('applyPatchApproval', false)).toBe('denied')
+  })
+})
+
+describe('codexGateReq', () => {
+  it('★★把 itemId 带成 toolUseId —— 上层只有拿到它,才能把「自动放行」挂到那张工具卡上而不是发一条假回答', () => {
+    expect(codexGateReq({ method: 'item/commandExecution/requestApproval', itemId: 'item_5', command: 'go vet ./...' }))
+      .toEqual({ title: 'shell 请求执行', where: 'go vet ./...', toolUseId: 'item_5' })
+  })
+  it('文件类审批同样带 itemId', () => {
+    expect(codexGateReq({ method: 'item/fileChange/requestApproval', itemId: 'item_7', paths: ['a.go', 'b.go'] }))
+      .toEqual({ title: '文件 请求执行', where: 'a.go, b.go', toolUseId: 'item_7' })
+  })
+  it('★老的 v1 方法没有 itemId —— 只能不带,上层据此回落成发消息(不能悄悄放行)', () => {
+    expect(codexGateReq({ method: 'execCommandApproval', command: 'ls' }).toolUseId).toBeUndefined()
   })
 })

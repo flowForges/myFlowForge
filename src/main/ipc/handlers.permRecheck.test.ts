@@ -366,4 +366,37 @@ describe('多客户端下的权限门', () => {
     expect(text).toContain('已切到「完全访问」')
     expect(text).not.toContain('「本机」切到了')
   })
+
+  /**
+   * ★★门【已经挂在屏幕上】时才切到完全访问 —— 这条路原来一律发消息,而消息正文是
+   *  gateNote 包成代码围栏的**原样 shell 命令**。于是「自动放行的提示不许长成一条回答」这件事
+   *  只修好了一半:门升起时那条修了,门挂着时切档这条照旧。用户 2026-09-08 又撞上:
+   *  「codex 执行过程,依然会发生 bash 的内容出现在了 LLM 输出的地方」。
+   *  挂得上工具卡就挂卡,对话流里一个字都不加。
+   */
+  it('★★门挂着时本机切到完全访问 + 挂得上工具卡:标在卡上,对话流里不插任何消息', async () => {
+    const { confirm, sent, table } = await startTurn()
+    let marked = 0
+    void confirm({ title: 'shell 请求执行', where: 'go vet ./internal/...', toolUseId: 'item_5', onAutoAllow: () => { marked++ } })
+    await new Promise(r => setTimeout(r, 0))
+    const before = notes(sent).length
+    await table[CH.sessionSetPermission]!(LOCAL, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    await new Promise(r => setTimeout(r, 0))
+    expect(marked, '盾牌没落到那张工具卡上').toBe(1)
+    expect(notes(sent).length - before, '又把它写成了一条假回答').toBe(0)
+    expect(resolved(sent).length).toBeGreaterThan(0)
+  })
+
+  it('★别的设备切的仍要说一声(卡片凭空消失要有解释),但正文里不再抄命令原文 —— 卡上就有', async () => {
+    const { confirm, sent, table } = await startTurn()
+    let marked = 0
+    void confirm({ title: 'shell 请求执行', where: 'go vet ./internal/...', toolUseId: 'item_5', onAutoAllow: () => { marked++ } })
+    await new Promise(r => setTimeout(r, 0))
+    await table[CH.sessionSetPermission]!(REMOTE, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    await new Promise(r => setTimeout(r, 0))
+    const text = notes(sent).join('\n')
+    expect(marked).toBe(1)
+    expect(text).toContain('「iPhone」切到了「完全访问」')
+    expect(text, '命令原文又跑进对话正文了').not.toContain('go vet')
+  })
 })

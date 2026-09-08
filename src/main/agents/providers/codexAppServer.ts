@@ -25,9 +25,22 @@ export interface CodexTurnOpts {
   resumeThreadId?: string
 }
 
+/**
+ * 一次审批请求。`itemId` 是**这次调用自己那条 item 的 id** —— 和 `item/started` / `item/completed`
+ * 里 `item.id` 是同一个值,也就是对话区那张工具卡的行 id。
+ *
+ * ★★它必须一路带到确认门上:上层只有拿得到它,才能把「已按完全访问自动放行」记到**那张卡**上;
+ *  拿不到就只能回落成往对话流里插一条系统消息,而那条消息的正文是原样的 shell 命令 —— 用户看到的
+ *  就是「bash 的内容出现在了 LLM 输出的地方」。见 codex.chat.gate.test.ts。
+ *
+ * v2 那三个 `item/…/requestApproval` 都把 itemId 列为 required(codex-cli 0.153.4 的 JSON schema
+ * 亲口给的);只有 v1 的 execCommandApproval/applyPatchApproval 老方法没有,所以这里是可选的。
+ */
+export interface CodexApprovalReq { method: string; command?: string; paths?: string[]; itemId?: string }
+
 export interface CodexTurnCallbacks {
   onEvent(execShaped: any): void // feed to the shared codex handler (parseCodexEvent/…)
-  onApproval(req: { method: string; command?: string; paths?: string[] }): Promise<'allow' | 'deny'>
+  onApproval(req: CodexApprovalReq): Promise<'allow' | 'deny'>
   onSession(threadId: string): void
   onError(message: string): void
 }
@@ -127,7 +140,10 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
         const method = msg.method
         if (APPROVAL_METHODS.has(method)) {
           const params = msg.params ?? {}
-          const req = { method, command: params.command, paths: params.paths }
+          const req: CodexApprovalReq = {
+            method, command: params.command, paths: params.paths,
+            itemId: typeof params.itemId === 'string' && params.itemId ? params.itemId : undefined,
+          }
           void cb.onApproval(req)
             .then((decision) => {
               respond(id, { decision: codexDecision(method, decision === 'allow') })

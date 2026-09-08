@@ -636,6 +636,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // AskUserQuestion 的问题/选项:重建卡片时必须一起还原,否则重挂后又退回成那张没选项的空确认卡。
     questions?: AskQuestion[]
     agentName?: string
+    /**
+     * 这道门「被自动放行了」时怎么记 —— 由 chatService 提供,把盾牌记到**那一次调用的工具卡**上
+     * (见 ConfirmReq.onAutoAllow)。★纯运行时回调,不进 CH.chatGateState 的快照(那边是逐字段挑的)。
+     * 门【已经挂在屏幕上】的时候用户才切到「完全访问」,走的是 allowPendingConfirms 那条路 ——
+     * 它原来一律发一条系统消息,而消息正文是**原样的 shell 命令**,又落回「bash 的内容出现在
+     * LLM 输出的地方」。有了它就挂卡上。
+     */
+    onAutoAllow?: () => void
   }
   const chatGateOwner = new Map<string, GateMeta>()
   const drainChatGates = (wsPath: string, opts: { sessionId?: string; type?: 'confirm' | 'ask' } = {}) => {
@@ -706,11 +714,21 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       r('allow')
       broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'confirm-resolved', id })
       rememberResolved(id, by, 'allow', wsPath, sessionId)
-      // ★把「是谁切的」写进去。别的设备切了完全访问,这台机器上挂着的门会**当场凭空消失** ——
-      //   不说清楚的话,电脑前的人只会觉得界面出了鬼。
-      emitNote(wsPath, sessionId, by === '本机'
-        ? `🛡 已切到「完全访问」，自动放行：${gateWhere(meta)}`
-        : `🛡 「${by}」切到了「完全访问」，自动放行：${gateWhere(meta)}`)
+      // ★★能挂卡就挂卡:盾牌落在**那一次调用自己的工具卡**上,对话流里一个字都不加。
+      //   原来这里一律发消息,而消息正文是【原样的 shell 命令】—— 顶着「系统 · 回答」的样子夹在
+      //   工具卡和真正的回答中间,正是用户说的「bash 的内容出现在了 LLM 输出的地方」。
+      // ★但「别的设备切的」必须说一声:这台机器上挂着的门会**当场凭空消失**,不说清楚,电脑前的人
+      //   只会觉得界面出了鬼。这条只说【是谁切的】,不再把命令原文抄进正文(卡上就有)。
+      // ★拿不到工具卡(老的 v1 审批方法之类给不出 id)才回落成原来那条带命令的审计消息 ——
+      //   「不能悄悄放行」这条约束一步都不让。
+      if (meta.onAutoAllow) {
+        meta.onAutoAllow()
+        if (by !== '本机') emitNote(wsPath, sessionId, `🛡 「${by}」切到了「完全访问」，这台机器上挂着的确认已自动放行。`)
+      } else {
+        emitNote(wsPath, sessionId, by === '本机'
+          ? `🛡 已切到「完全访问」，自动放行：${gateWhere(meta)}`
+          : `🛡 「${by}」切到了「完全访问」，自动放行：${gateWhere(meta)}`)
+      }
     }
   }
   // 权限档的唯一写入口(IPC 与机器人桥共用):落盘 + 广播 + 若切到 full 就排空挂起的门 + 该说的说清楚。
@@ -751,10 +769,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const runTurn = async (payload: ChatSendPayload) => {
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
-    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[] }) => new Promise<ConfirmDecision>((resolve) => {
+    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[]; onAutoAllow?: () => void }) => new Promise<ConfirmDecision>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
       chatConfirms.set(id, resolve)
-      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions })
+      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions, onAutoAllow: req.onAutoAllow })
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where, questions: req.questions })
     })
     // CLI 的逐操作确认门专用出口:升门【之前】先读一次会话当前的权限档,已经是「完全访问」就直接放行,

@@ -23,11 +23,12 @@ describe('driveCodexTurn', () => {
     const f = fakeChild()
     const events: any[] = []
     let approvalMethod = ''
+    let approvalItemId: string | undefined
     const h = driveCodexTurn(
       { cwd: '/ws', prompt: 'do it', modelArgs: [], configArgs: [], sandbox: 'read-only', approvalPolicy: 'on-request' },
       {
         onEvent: e => events.push(e),
-        onApproval: async (req) => { approvalMethod = req.method; return 'allow' },
+        onApproval: async (req) => { approvalMethod = req.method; approvalItemId = req.itemId; return 'allow' },
         onSession: () => {}, onError: () => {},
       },
       { spawn: () => f.child },
@@ -43,9 +44,12 @@ describe('driveCodexTurn', () => {
     const turn = f.writes.find(w => w.method === 'turn/start')
     expect(turn.params).toMatchObject({ threadId: 'th1', input: [{ type: 'text', text: 'do it' }] })
     // server asks for approval
-    f.push({ id: 99, method: 'item/commandExecution/requestApproval', params: { command: 'rm x' } })
+    f.push({ id: 99, method: 'item/commandExecution/requestApproval', params: { itemId: 'item_5', command: 'rm x' } })
     await new Promise(r => setTimeout(r, 0))
     expect(approvalMethod).toBe('item/commandExecution/requestApproval')
+    // ★★itemId 要一路透出去:它是这次调用的工具卡行 id,上层靠它把「自动放行」挂到那张卡上。
+    //   丢了它,自动放行就只能退化成往对话流里插一条带着原样命令的假「系统回答」。
+    expect(approvalItemId).toBe('item_5')
     const resp = f.writes.find(w => w.id === 99)
     expect(resp.result).toEqual({ decision: 'accept' })
     // a streamed assistant delta becomes an adapted event
