@@ -82,6 +82,18 @@ export function HostsPane({ hostChip, onHostChipChange }: {
   const [ioText, setIoText] = useState('')
   const [ioOpen, setIoOpen] = useState(false)
 
+  /**
+   * ★★开表单和关表单**只走这一个入口**。原来是四处各写一遍 `setFormErr(''); setDraft(...)`,
+   *  而 `pairText` 谁都没清 ⇒ 存完一台之后再点「添加主机」,那个框里还是上一台的配对码;
+   *  照着它再点一次「填进表单 → 保存」就又存了同一台机器一遍(用户报的「点击保存,又会存一条」)。
+   */
+  const openDraft = useCallback((d: HostInput | null) => {
+    setFormErr('')
+    setPairText('')
+    setPairMsg('')
+    setDraft(d)
+  }, [])
+
   const reload = useCallback(async () => {
     setHosts(await window.forge.hostsList())
     setStatus(await window.forge.hostsStatus())
@@ -157,12 +169,16 @@ export function HostsPane({ hostChip, onHostChipChange }: {
             <div className="hosts-empty">
               还没有添加任何远程主机
               <div style={{ marginTop: 10 }}>
-                <button className="set-btn primary" onClick={() => { setFormErr(''); setDraft({ ...EMPTY }) }}>添加主机</button>
+                <button className="set-btn primary" onClick={() => openDraft({ ...EMPTY })}>添加主机</button>
               </div>
             </div>
           )}
           {hosts.map((h) => (
             <div key={h.id} className={`host-row ${connectedId === h.id ? 'active' : ''}`}>
+              {/* ★图标在这一行里是**认人**用的,和底部那枚按钮、切换菜单里是同一枚
+                  (三处都走 `currentHostIcon`)。原来这张列表是唯一不画它的地方 ——
+                  于是「我给它选的图标到底存进去没有」在设置页里根本看不出来。 */}
+              <div className="host-ico" aria-hidden="true">{currentHostIcon(h.icon)}</div>
               <div className="info">
                 <div className="name">
                   {h.label || '(未命名)'}
@@ -185,13 +201,13 @@ export function HostsPane({ hostChip, onHostChipChange }: {
                 {connectedId === h.id
                   ? <button className="set-btn" disabled={busy} onClick={() => run(() => window.forge.hostsDisconnect())}>断开</button>
                   : <button className="set-btn primary" disabled={busy} onClick={() => run(() => window.forge.hostsConnect(h.id))}>连接</button>}
-                <button className="set-btn" disabled={busy} onClick={() => { setFormErr(''); setDraft({ ...h }) }}>编辑</button>
+                <button className="set-btn" disabled={busy} onClick={() => openDraft({ ...h })}>编辑</button>
                 <button className="set-btn danger" disabled={busy} onClick={() => run(() => window.forge.hostsRemove(h.id))}>删除</button>
               </div>
             </div>
           ))}
         </div>
-        {!draft && <div className="bot-actions"><button className="set-btn" onClick={() => { setFormErr(''); setDraft({ ...EMPTY }) }}>添加主机</button></div>}
+        {!draft && <div className="bot-actions"><button className="set-btn" onClick={() => openDraft({ ...EMPTY })}>添加主机</button></div>}
       </div>
 
       {draft && (
@@ -395,10 +411,10 @@ export function HostsPane({ hostChip, onHostChipChange }: {
               setFormErr('')
               void run(async () => {
                 await window.forge.hostsUpsert({ ...draft, address: draft.kind === 'direct' ? normalizeAddress(draft.address) : draft.address.trim() })
-                setDraft(null)
+                openDraft(null)
               })
             }}>保存</button>
-            <button className="set-btn" disabled={busy} onClick={() => { setFormErr(''); setDraft(null) }}>取消</button>
+            <button className="set-btn" disabled={busy} onClick={() => openDraft(null)}>取消</button>
           </div>
         </div>
       )}

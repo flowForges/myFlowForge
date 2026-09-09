@@ -354,3 +354,74 @@ describe('★★表单里「连接方式」也不许把中转说成直连', () =
     expect(screen.getByText(/不在同一个网络/)).toBeTruthy()
   })
 })
+
+/**
+ * ★★用户真机报的:「我将配置导入进去,点击保存,然后会出现一个已配的机器,但是底下还有编辑内容,
+ *  点击保存,又会存一条,再点击保存,还会保存一条」。
+ *  `upsertHost` 只按 **id** 去重,而新建走的 draft 没有 id ⇒ 每按一次保存就多一台。
+ */
+describe('HostsPane · 保存之后不许还留着一份能再存一次的表单', () => {
+  it('保存成功后表单关掉 —— 再点不了第二次', async () => {
+    hosts = []
+    await openForm()
+    const container = document.body
+    choose('连接方式', '直接连接(局域网 / Tailscale / 本机自测)')
+    type('名称', '那台')
+    type('地址', 'ws://1.2.3.4:6789')
+    // 保存成功 ⇒ 主进程返回的新列表里有它(真实链路里 reload 会把它拉回来)。
+    hosts = [{ id: 'h1', label: '那台', kind: 'direct', address: 'ws://1.2.3.4:6789', sshTarget: '', icon: '', display: 'both', token: '', pubKey: '', relay: '', lastConnectedAt: 0 } as RemoteHostView]
+    await save()
+
+    await waitFor(() => expect(screen.queryByText('保存')).toBeNull())
+    expect(container.querySelectorAll('.host-row')).toHaveLength(1)
+    expect(hostsUpsert).toHaveBeenCalledTimes(1)
+  })
+
+  it('★粘配对码那条路也一样:保存完表单收起来,不留一份还能再存一次的', async () => {
+    hosts = []
+    await openForm()
+    const box = screen.getByPlaceholderText(/myflowforge:\/\/add-host/)
+    fireEvent.change(box, { target: { value: 'myflowforge://add-host?v=1&a=192.168.1.20%3A6789&t=tok123&n=%E4%B9%A6%E6%88%BF%E7%9A%84Mac&k=' + encodeURIComponent('A'.repeat(43) + '=') + '&r=' + encodeURIComponent('wss://relay.example.workers.dev') } })
+    await act(async () => { fireEvent.click(screen.getByText('填进表单')) })
+    hosts = [{ id: 'h1', label: '书房的Mac', kind: 'direct', address: 'ws://192.168.1.20:6789', sshTarget: '', icon: '', display: 'both', token: 'tok123', pubKey: '', relay: 'wss://relay.example.workers.dev', lastConnectedAt: 0 } as RemoteHostView]
+    await save()
+
+    await waitFor(() => expect(screen.queryByText('保存')).toBeNull())
+    expect(hostsUpsert).toHaveBeenCalledTimes(1)
+    // ★★粘过的那枚码不许留在框里 —— 留着的话下一次点「添加主机」,框里还是上一台的码,
+    //   照着它点「填进表单 → 保存」就又存了同一台机器一遍。
+    await act(async () => { fireEvent.click(screen.getAllByText('添加主机')[0]!) })
+    expect((screen.getByPlaceholderText(/myflowforge:\/\/add-host/) as HTMLInputElement).value).toBe('')
+  })
+
+  it('保存失败时表单**留着**,人才能改了再存', async () => {
+    hosts = []
+    hostsUpsert.mockRejectedValueOnce(new Error('写不进去'))
+    await openForm()
+    choose('连接方式', '直接连接(局域网 / Tailscale / 本机自测)')
+    type('名称', '那台')
+    type('地址', 'ws://1.2.3.4:6789')
+    await save()
+    expect(screen.getByText('保存')).toBeTruthy()
+  })
+})
+
+describe('HostsPane · 已配的机器要看得见图标', () => {
+  it('列表里画的图标就是这台主机存着的那一枚', async () => {
+    hosts = [
+      { id: 'h1', label: '书房', kind: 'direct', address: 'ws://1.2.3.4:6789', sshTarget: '', icon: '🖥️', display: 'both', token: '', pubKey: '', relay: '', lastConnectedAt: 0 } as RemoteHostView,
+    ]
+    const { container } = renderPane()
+    await waitFor(() => expect(container.querySelectorAll('.host-row')).toHaveLength(1))
+    expect(container.querySelector('.host-row .host-ico')?.textContent).toBe('🖥️')
+  })
+
+  it('没选过图标的老记录也画一枚(兜底那一枚),不是一片空白', async () => {
+    hosts = [
+      { id: 'h1', label: '书房', kind: 'direct', address: 'ws://1.2.3.4:6789', sshTarget: '', icon: '', display: 'both', token: '', pubKey: '', relay: '', lastConnectedAt: 0 } as RemoteHostView,
+    ]
+    const { container } = renderPane()
+    await waitFor(() => expect(container.querySelectorAll('.host-row')).toHaveLength(1))
+    expect(container.querySelector('.host-row .host-ico')?.textContent?.trim()).toBeTruthy()
+  })
+})

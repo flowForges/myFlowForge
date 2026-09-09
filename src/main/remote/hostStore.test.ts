@@ -55,6 +55,42 @@ describe('远程主机存盘', () => {
     expect(back.relay, 'relay 不该被改名冲掉').toBe(BASE.relay)
   })
 
+  /**
+   * ★★用户真机报的:「点击保存,又会存一条,再点击保存,还会保存一条」。
+   *  新建走的 draft **没有 id**,而这里原来只按 id 找 ⇒ 每按一次保存就凭空多一台同样的机器。
+   *  `importHosts` 从第一天起就是按 **label** 合并的 —— 同一件事两处两套规矩,本身就是 bug。
+   */
+  it('★★同名的再存一次是「改」,不是「又来一台」', () => {
+    const first = upsertHost({ ...BASE })
+    const second = upsertHost({ ...BASE, address: 'ws://10.0.0.9:6789' })
+    expect(readHosts().hosts).toHaveLength(1)
+    expect(second.id, '沿用原来那台的 id —— 换 id 会让「当前连着的是哪台」瞬间对不上').toBe(first.id)
+    expect(readHosts().hosts[0].address).toBe('ws://10.0.0.9:6789')
+  })
+
+  it('同名合并不许把「上次连上的时间」清零', () => {
+    const first = upsertHost({ ...BASE })
+    disk = { version: 1, hosts: [{ ...readHosts().hosts[0], lastConnectedAt: 1234 }] }
+    upsertHost({ ...BASE })
+    expect(readHosts().hosts[0].lastConnectedAt).toBe(1234)
+    expect(readHosts().hosts[0].id).toBe(first.id)
+  })
+
+  it('改名仍然是改那一台,不是新建 —— 认的是 id', () => {
+    const h = upsertHost({ ...BASE })
+    upsertHost({ ...BASE, id: h.id, label: '换个名字' })
+    expect(readHosts().hosts).toHaveLength(1)
+    // 改完名之后,再用**新名字**存一次也还是同一台
+    upsertHost({ ...BASE, label: '换个名字' })
+    expect(readHosts().hosts).toHaveLength(1)
+  })
+
+  it('确实是两台不同的机器时,照常各存各的', () => {
+    upsertHost({ ...BASE })
+    upsertHost({ ...BASE, label: '另一台' })
+    expect(readHosts().hosts).toHaveLength(2)
+  })
+
   it('老记录(没有这两个字段)读出来是空串,不是 undefined —— 下游只判真假', () => {
     const { pubKey: _p, relay: _r, ...old } = BASE
     disk = { version: 1, hosts: [{ id: 'h1', ...old, lastConnectedAt: 0 }] }

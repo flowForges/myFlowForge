@@ -66,8 +66,15 @@ export const writeHosts = (h: HostsFile) => writeJson(file(), HostsFileSchema.pa
 
 export function upsertHost(input: Omit<RemoteHost, 'id' | 'lastConnectedAt'> & { id?: string }): RemoteHost {
   const f = readHosts()
-  const id = input.id || randomUUID()
-  const existing = f.hosts.find((h) => h.id === id)
+  // ★★没有 id = 「新建」,但**新建不等于一定是新的一台**。用户真机报的:粘完配对码点保存,
+  //  再点一次又存一条,三次就是三台一模一样的机器 —— 因为这里原来只按 id 找,找不到就无脑追加。
+  //  按名字认第二遍:`importHosts` 从第一天起就是这么合并的,同一件事不该有两套规矩。
+  //  ★沿用原来那台的 id,不是给它换一个 —— 换了的话「当前连着的是哪台」(router 里存的是 id)
+  //   会瞬间对不上,表现成「明明连着却显示未连接」。
+  const existing = input.id
+    ? f.hosts.find((h) => h.id === input.id)
+    : f.hosts.find((h) => h.label === input.label)
+  const id = existing?.id ?? input.id ?? randomUUID()
   const next: RemoteHost = {
     id,
     label: input.label,
