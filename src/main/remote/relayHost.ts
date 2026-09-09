@@ -36,11 +36,14 @@ import { hostE2ELink, type E2ELink } from '@shared/remote/e2eChannel'
  *  但电脑上什么错都没有"。
  */
 
+/** 现在挂在这个房间里的一台设备。★`cid` 是中转分配的编号,踢人时按它点名。 */
+export type RelayDevice = { cid: string; label: string; since: number }
+
 export type RelayHostStatus =
   | { status: 'off' }
   | { status: 'connecting'; attempt: number }
-  /** 连上中转、占住房间了。`peers` = 现在挂着几个客户端。 */
-  | { status: 'online'; peers: number }
+  /** 连上中转、占住房间了。`peers` = 现在挂着几个客户端,`devices` = 分别是谁。 */
+  | { status: 'online'; peers: number; devices: RelayDevice[] }
   | { status: 'retrying'; attempt: number; error: string; nextInMs: number }
   /** 重试也没用的那类(房间被别人占了 / 地址根本不对)。 */
   | { status: 'failed'; error: string }
@@ -82,6 +85,8 @@ export type RelayHostHandle = {
   status: () => RelayHostStatus
   /** 房间号 —— 设置界面上那个二维码要用它。 */
   room: string
+  /** 点名踢掉一台设备(按 cid)。回 false = 没有这条连接。 */
+  kick: (cid: string) => boolean
   close: () => Promise<void>
 }
 
@@ -119,6 +124,15 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
 
   /** cid → 那条逻辑连接的加密层。**这张表的生命周期跟着中转连接走**,重连就清空。 */
   const links = new Map<string, E2ELink>()
+  /**
+   * 每条逻辑连接是**谁**。★名字来自对方自报(`identify` 帧),握手前只有一个兜底名 ——
+   *  所以这里的 `label` 会在几百毫秒内从「远程客户端」变成「zghua 的 iPhone」。
+   * ★★这张表是「踢掉某一台」唯一的依据:cid 是中转分配的数字,对人没有意义。
+   */
+  const peers = new Map<string, RelayDevice>()
+  const snapshot = (): RelayDevice[] => [...peers.values()].sort((a, b) => a.since - b.since)
+  /** 状态里那两个字段永远一起更新 —— 分开写迟早出现「2 台设备」配一个空列表。 */
+  const pushOnline = () => { if (state.status === 'online') setState({ status: 'online', peers: links.size, devices: snapshot() }) }
 
   const setState = (s: RelayHostStatus) => {
     state = s
@@ -132,6 +146,7 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
       try { l.closed() } catch { /* 上层的清理抛了,不该拦住其余的 */ }
     }
     links.clear()
+    peers.clear()
   }
 
   const sendToRelay = (text: string) => {
@@ -160,7 +175,8 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
           const l = links.get(cid)
           links.delete(cid)
           try { l?.closed() } catch { /* 同上 */ }
-          if (state.status === 'online') setState({ status: 'online', peers: links.size })
+          peers.delete(cid)
+          pushOnline()
         },
         onLog: log,
       },
@@ -173,19 +189,29 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
           version: opts.version,
           token: opts.token,
           onLog: log,
+          // 「这条连接是谁」—— 名字只在 serveConnection 的闭包里,不报上来的话
+          // 界面只能说「连着 2 台设备」,说不出是哪两台(用户原话)。
+          onPeer: (info) => {
+            const prev = peers.get(cid)
+            peers.set(cid, { cid, label: info.label, since: prev?.since ?? Date.now() })
+            pushOnline()
+          },
         })
       },
     )
     links.set(cid, link)
-    if (state.status === 'online') setState({ status: 'online', peers: links.size })
+    // ★先占个位:握手 + identify 要几百毫秒,这期间界面也该看得见「有一台正在连」。
+    if (!peers.has(cid)) peers.set(cid, { cid, label: '正在连接…', since: Date.now() })
+    pushOnline()
   }
 
   const closeLink = (cid: string) => {
     const l = links.get(cid)
     if (!l) return
     links.delete(cid)
+    peers.delete(cid)
     try { l.closed() } catch { /* 同上 */ }
-    if (state.status === 'online') setState({ status: 'online', peers: links.size })
+    pushOnline()
   }
 
   const scheduleRetry = (why: string) => {
@@ -284,7 +310,7 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
         }
         if (st.status === 'waiting' || st.status === 'peer-online') {
           attempt = 1
-          setState({ status: 'online', peers: links.size })
+          setState({ status: 'online', peers: links.size, devices: snapshot() })
         }
         // `peer-offline` 不改状态:房间还占着,只是眼下没人连。逐条连接的生死由
         // 下面的 open/close 信封管,这条状态帧只是个粗粒度提示。
@@ -320,6 +346,26 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
   return {
     status: () => state,
     room,
+    /**
+     * 点名踢掉一台设备。
+     *
+     * ★用户原话:「能不能剔除掉某台设备,如果我发现有僵尸连接,我能不能踢掉」。
+     *  心跳(见 `beat`)管的是**我们自己这条**到中转的连接;客户端那一侧的僵尸
+     *  ——尤其是老版本的 app,它不发心跳,中转也不敢收——只能人工点掉。
+     * ★踢掉 = 关掉那条**逻辑连接**(中转会用 4410 关掉客户端那一头),
+     *  不动中转连接本身,别的设备不受影响。
+     * ★对方会自己退避重连,所以这也是「重连某一台」的做法。
+     */
+    kick(cid: string) {
+      if (!links.has(cid)) return false
+      log(`人工踢掉设备 ${cid}`)
+      // ★两步都要:先让中转把对面那一头关掉(它会用 4410),再清掉我们这一侧的状态。
+      //  只做前一步的话,`links`/`peers` 里会留一条永远不会再被 close 事件收掉的记录 ——
+      //  正好又是一个僵尸,只不过换成我们自己这边的。
+      try { sendToRelay(hostClose(cid)) } catch { /* 中转那条断了,下面照样清 */ }
+      closeLink(cid)
+      return true
+    },
     async close() {
       disposed = true
       if (retryTimer) clearTimeout(retryTimer)

@@ -371,6 +371,9 @@ const api = {
     ipcRenderer.invoke(CH.relayApply, cfg),
   /** 这台机器的长期身份公钥(base64)。★二维码里那个 `k`。 */
   relayIdentity: (): Promise<string> => ipcRenderer.invoke(CH.relayIdentity),
+  /** 踢掉一台挂在中转上的设备(按 cid)。 */
+  relayKick: (cid: string): Promise<import('../main/host/relayController').RelayStatusView> =>
+    ipcRenderer.invoke(CH.relayKick, cid),
   onRelayStatus: (cb: (s: import('../main/host/relayController').RelayStatusView) => void) => {
     const listener = (_: unknown, s: import('../main/host/relayController').RelayStatusView) => cb(s)
     ipcRenderer.on(CH.relayStatusEvent, listener)

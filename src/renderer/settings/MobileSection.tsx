@@ -29,7 +29,11 @@ export function MobileSection() {
    */
   const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean; token: string } | null>(null)
   /** 中转连接现在什么样(连上了 / 在重试 / 起不来)。★开关拨过去却什么都没发生,是最难查的一类。 */
-  const [relayDetail, setRelayDetail] = useState<{ status: string; error?: string; peers?: number } | null>(null)
+  const [relayDetail, setRelayDetail] = useState<
+    { status: string; error?: string; peers?: number; devices?: { cid: string; label: string; since: number }[] } | null
+  >(null)
+  /** 正在踢的那台 —— 点完到状态回来之间要把按钮按住,否则连点两下会发两次。 */
+  const [kicking, setKicking] = useState('')
   const [relayUrl, setRelayUrl] = useState('')
   const relaySeeded = useRef(false)
   const [port, setPort] = useState('6789')
@@ -66,7 +70,10 @@ export function MobileSection() {
       // ★`token` 是中转那条路上用的那把(`relayController.ts` 里就是 `ensureToken()`)。
       //  它和局域网非回环时是**同一把** —— 一枚码要在两条路上都能用,见下面 `qrToken`。
       setRelay({ publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled, token: r.token ?? '' })
-      setRelayDetail((r.detail ?? null) as { status: string; error?: string; peers?: number } | null)
+      setRelayDetail((r.detail ?? null) as {
+        status: string; error?: string; peers?: number
+        devices?: { cid: string; label: string; since: number }[]
+      } | null)
       // ★只在**第一次**回填输入框。之后每一次状态广播都回填的话,人正打到一半的地址会被推回去
       //  —— 和上面那个 `seeded` 是同一条规矩(端口输入框栽过一次)。
       if (!relaySeeded.current) { relaySeeded.current = true; setRelayUrl(r.url ?? '') }
@@ -158,7 +165,7 @@ export function MobileSection() {
            它把一个**你根本不需要知道的内部细节**(监听地址和端口)放在了句子的主语位置,
            而人在这儿要的答案只有一个:**连上了没有**。所以主句只说结论,地址降成第二行的小字
            (它仍然要在:手填地址、排查连不上的时候就靠它)。 */
-        <div className={`hosts-live ${st.clients > 0 ? 'on' : ''}`}>
+        <div className={`hosts-live ${st.clients > 0 ? 'on' : ''}`} data-live="lan">
           <span className="dot" />
           <span className="hl-say">
             <b className="hl-t">{st.clients > 0 ? `${st.clients} 台设备连着` : '等待设备连接'}</b>
@@ -215,12 +222,44 @@ export function MobileSection() {
         </p>
       )}
       {relay?.enabled && relayDetail?.status === 'online' && (
-        <div className={`hosts-live ${(relayDetail.peers ?? 0) > 0 ? 'on' : ''}`}>
+        /* ★★用户原话:「1 不知道是哪两台设备 2 能不能剔除掉某台设备」。
+            原来这里只有一个数字 —— 而「几台」这个信息几乎没用:你想知道的是**哪一台**,
+            以及**能不能把它弄走**。名字是对方自报的(`identify` 帧),主机侧一路带上来。
+           ★踢掉 = 只关那一条逻辑连接,别的设备不受影响;对方会自己退避重连,
+            所以这颗键同时也是「让这一台重连」。 */
+        /* ★`data-live`:这一屏有**两块** `.hosts-live`(局域网一块、中转一块),不标的话
+            按类名找永远拿到第一块。用 data 属性不用 class —— 它是**身份**不是样式钩子,
+            而 `hostsClassNames.test.ts` 要求每个 class 都得有真 CSS(那条守卫抓到过真 bug)。 */
+        <div className={`hosts-live ${(relayDetail.peers ?? 0) > 0 ? 'on' : ''}`} data-live="relay">
           <span className="dot" />
-          <span>
-            {(relayDetail.peers ?? 0) > 0
-              ? <>通过中转连着 <b>{relayDetail.peers}</b> 台设备</>
-              : <>已挂在中转上,等设备连过来</>}
+          <span className="hl-say">
+            <b className="hl-t">
+              {(relayDetail.peers ?? 0) > 0 ? `${relayDetail.peers} 台设备连着` : '已挂在中转上,等设备连过来'}
+            </b>
+            {(relayDetail.devices ?? []).length > 0 && (
+              <span className="hl-devs">
+                {(relayDetail.devices ?? []).map((d) => (
+                  <span className="hl-dev" key={d.cid}>
+                    <span className="nm" title={d.label}>{d.label}</span>
+                    <button
+                      className="set-btn"
+                      disabled={busy || kicking === d.cid}
+                      title="断开这一台。它会自己重连 —— 卡住的连接可以用它救回来"
+                      onClick={async () => {
+                        // ★不接返回值:`relayController.kick` 会 `announce()`,
+                        //  新状态从 `onRelayStatus` 那条广播回来 —— 和别处同一条路,
+                        //  少一份可能和广播打架的本地状态。
+                        setKicking(d.cid)
+                        try { await window.forge.relayKick?.(d.cid) }
+                        finally { setKicking('') }
+                      }}
+                    >
+                      {kicking === d.cid ? '断开中…' : '断开'}
+                    </button>
+                  </span>
+                ))}
+              </span>
+            )}
           </span>
         </div>
       )}

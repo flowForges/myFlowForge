@@ -102,6 +102,13 @@
    但它不该占着主句的位置(见 MobileSection 里那段注释)。 */
 .hosts-live .hl-say { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .hosts-live .hl-t { color: var(--fg); font-weight: 600; font-family: inherit; }
+/* 挂在中转上的设备清单。★一行一台、名字左、断开右 —— 和「已配的机器」那张列表同一个骨架,
+   因为它们回答的是同一类问题(有哪些、能拿它怎么办)。 */
+.hosts-live .hl-devs { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.hosts-live .hl-dev { display: flex; align-items: center; gap: 10px; }
+.hosts-live .hl-dev .nm { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--fg-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hosts-live .hl-dev .set-btn { flex: 0 0 auto; padding: 2px 9px; font-size: 11.5px; }
 .hosts-live .hl-d { font-size: 11.5px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hosts-live b { color: var(--fg); font-family: var(--mono); }
 .hosts-live.on { color: var(--fg); border-color: color-mix(in oklch, var(--ok) 40%, transparent); }

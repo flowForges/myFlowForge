@@ -37,6 +37,15 @@ export type ServeOpts = {
   /** 客户端连上后多久内必须完成鉴权,超时踢掉 */
   authTimeoutMs?: number
   onLog?: (msg: string) => void
+  /**
+   * 「这条连接是谁」变了就报一次(鉴权通过、以及对方自报名字时)。
+   *
+   * ★★存在的理由:名字**只在这个闭包里**。上层(`relayHost`)手上只有 cid,
+   *  于是界面只能说「连着 2 台设备」而说不出是哪两台 —— 用户原话:「不知道是哪两台设备」。
+   *  而「哪一台」正是他要决定**踢掉哪一台**时唯一需要的信息。
+   * ★不是每帧都报,只在真的变了时报:这条路上一秒可能过几百帧。
+   */
+  onPeer?: (info: { id: string; label: string; ready: boolean }) => void
 }
 
 /** 连接序号。只要求「同一个进程里不重复」,所以一个自增数就够,不必上 UUID。 */
@@ -74,11 +83,14 @@ export function serveConnection(ch: Channel, opts: ServeOpts): void {
     try { ch.send(encodeFrame(o as never)) } catch { /* 信道已关 */ }
   }
 
+  const reportPeer = () => opts.onPeer?.({ id: clientId, label: clientLabel, ready: authed })
+
   const becomeReady = () => {
     authed = true
     // ★ sink 在【鉴权之后】才挂:没通过鉴权的连接不该收到任何事件。
     offSink = opts.addSink((c, payload) => send({ t: 'evt', ch: c, payload }))
     send({ t: 'ready', methods: opts.methods })
+    reportPeer()
   }
 
   send({ t: 'hello', protocol: PROTOCOL_VERSION, version: opts.version, authRequired: !!opts.token })
@@ -109,7 +121,11 @@ export function serveConnection(ch: Channel, opts: ServeOpts): void {
       return
     }
 
-    if (f.t === 'identify') { clientLabel = f.label.trim() || clientLabel; return }
+    if (f.t === 'identify') {
+      const next = f.label.trim()
+      if (next && next !== clientLabel) { clientLabel = next; reportPeer() }
+      return
+    }
     if (f.t === 'ping') { send({ t: 'pong' }); return }
     if (f.t !== 'req') return                       // res/evt/hello/ready 是服务端发的,客户端发来就无视
 

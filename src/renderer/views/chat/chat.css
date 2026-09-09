@@ -131,7 +131,13 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }
 .msg-body pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-2); white-space: pre; }
 /* GFM tables — shared by chat messages (.msg-body) and the plan card (.req-title) */
-.msg-body table, .req-title table { border-collapse: collapse; margin: 8px 0 12px; font-size: 13px; width: 100%; }
+/* ★★`width: auto` 不是 `100%`。撑满的后果用户直接指出来了:「输出的表格,内容太靠左了」——
+   两列的表被强行拉到整个正文宽,列宽平分,于是每格的内容都缩在自己那一大片空白的左上角。
+   表格本来就该**按内容收**;`max-width: 100%` 保证宽表不撑破容器(外面还有 `.tbl-scroll` 兜底)。 */
+.msg-body table, .req-title table {
+  border-collapse: collapse; margin: 8px 0 12px; font-size: 13px;
+  width: auto; max-width: 100%;
+}
 .md-img { max-width: 100%; height: auto; border-radius: 6px; margin: 6px 0; display: block; }
 .md-img-loading, .md-img-err { font-size: 12px; color: var(--muted); font-style: italic; }
 /* ★★表格原来是「整张网格 + 不透明表头」:每个单元格四条 1px 实线,表头一条 `--surface` 实底。
@@ -285,19 +291,15 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .ans-live .pd { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .ans-live .pd { animation: none; } }
 .msg-body.ans { color: var(--fg); }
-/* ══ 正文行宽封顶 ═══════════════════════════════════════════════════════════════════════
-   ★会话列本身是 `clamp(720px, 90%, 1180px)` —— 窗口越宽正文越宽,而**舒适的行宽是固定的**,
-    不该跟着窗口长。用户那台大屏上一行 80 个中文字,眼睛回扫时容易串行,这是「像一大段文章」
-    的一部分原因(2026-09-07 真机截图)。84ch ≈ 50 个中文字。
-   ★★只封**散文**。代码块 / 表格 / HTML 卡片故意不在这张名单里 —— 它们本来就要横向空间,
-    封了会逼出横向滚动条。所以是逐个块级元素封,不是给容器封。
-   ★用 ch 不用 px:ch 跟着 font-size 走,所以「会话区字号」调大时行宽同步变宽,一行的字数不变。 */
-.msg-body.ans > p,
-.msg-body.ans > ul,
-.msg-body.ans > ol,
-.msg-body.ans > blockquote,
-.msg-body.ans > h1, .msg-body.ans > h2, .msg-body.ans > h3,
-.msg-body.ans > h4, .msg-body.ans > h5, .msg-body.ans > h6 { max-width: 84ch; }
+/* ══ 正文行宽 ═══════════════════════════════════════════════════════════════════════════
+   ★★2026-09-08 这里曾经有一条 `max-width: 84ch`(≈50 个中文字)。理由是「舒适的行宽是固定的,
+    不该跟着窗口长」,而它要解决的是用户说的「像一大段文章」。**第二天他就说它「明显感觉短了」**。
+   ★★两句话都是对的,矛盾在别处:封顶只封了**散文**,而表格、代码块、HTML 卡片仍然是满宽 ——
+    于是同一条回答里出现两种宽度(实测 706px vs 1052px),段落右边空一大条、表格却顶到底。
+    「短」是**和旁边那些满宽的块比出来的**,不是绝对值的问题。
+   ★所以现在**一个宽度**:正文跟着会话列走,表格按内容收(见下面 `table` 的 `width: auto`)。
+    如果「一大段文章」的感觉回来了,该动的是**段落节奏**(段距、小标题),不是把行压窄 ——
+    压窄换来的是这次这个毛病。 */
 /* Raw-text placeholder shown for one frame while a large reply's Markdown parse is deferred off the
    session-switch commit. pre-wrap preserves newlines so its height stays close to the parsed output,
    keeping the swap from visibly shifting scroll position. */

@@ -77,6 +77,19 @@ export function createRelayController(deps: {
     /** 这台机器的长期公钥(base64)。二维码那边直接用。 */
     publicKey: () => toBase64(readIdentity().publicKey),
 
+    /**
+     * 点名踢掉一台正挂在中转上的设备。
+     *
+     * ★用户原话:「如果我发现有僵尸连接,我能不能踢掉或者重连」。心跳管的是**我们自己**
+     *  到中转那条;客户端那一侧的僵尸(尤其是老版本 app —— 它不发心跳,中转也不敢收)
+     *  只能人工点掉。踢完对方会自己退避重连,所以这同时也是「让某一台重连」的做法。
+     */
+    kick(cid: string): RelayStatusView {
+      handle?.kick(cid)
+      announce()
+      return status()
+    },
+
     async apply(cfg: RelayConfig): Promise<RelayStatusView> {
       const same = cfg.enabled === cur.enabled && cfg.url === cur.url
       // ★没变就什么都不做。不判的话,设置界面每保存一次(哪怕改的是别的字段)都会把

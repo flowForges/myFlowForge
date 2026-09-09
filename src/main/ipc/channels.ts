@@ -17,6 +17,8 @@ export const CH = {
   mobileStatusEvent: 'mobile:status-event',
   // 中转(第三期)。★和 mobile:* 一样注册在 index.ts 而不是方法表里 ——
   //  它描述的是**这台设备自己的服务**,连去别的机器时不该被转发过去。
+  /** 踢掉一台挂在中转上的设备(按 cid)。★和其它 relay:* 一样注册在 index.ts,不进方法表。 */
+  relayKick: 'relay:kick',
   relayStatus: 'relay:status',
   relayApply: 'relay:apply',
   relayStatusEvent: 'relay:status-event',

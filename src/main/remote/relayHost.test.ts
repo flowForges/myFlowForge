@@ -40,7 +40,7 @@ const waitFor = async (pred: () => boolean, ms = 4000) => {
  * 一台"手机":连中转 → 进房间 → 端到端握手 → 说既有协议。
  * ★它拿的是**配对时那把公钥**(`trustedPub`),不是对面自报的任何东西。
  */
-async function phone(port: number, room: string, trustedPub: Uint8Array, token?: string) {
+async function phone(port: number, room: string, trustedPub: Uint8Array, token?: string, label?: string) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`)
   sockets.push(ws)
   await new Promise<void>((res, rej) => { ws.once('open', () => res()); ws.once('error', rej) })
@@ -65,6 +65,8 @@ async function phone(port: number, room: string, trustedPub: Uint8Array, token?:
         frames.push(f)
         // 既有协议:hello 里说要鉴权就把 token 递上去
         if (f.t === 'hello' && f.authRequired && token) c.send(JSON.stringify({ t: 'auth', token }))
+        // ready 之后自报名字 —— 主机那边靠它把「连着 2 台设备」说成「哪两台」。
+        if (f.t === 'ready' && label) c.send(JSON.stringify({ t: 'identify', label }))
       })
     },
     (why) => { failure = why },
@@ -78,6 +80,9 @@ async function phone(port: number, room: string, trustedPub: Uint8Array, token?:
     link.receive(text)
   })
 
+  let gone = false
+  ws.on('close', () => { gone = true })
+
   let nextId = 1
   return {
     ws,
@@ -85,6 +90,8 @@ async function phone(port: number, room: string, trustedPub: Uint8Array, token?:
     wireSeen,
     failure: () => failure,
     ready: () => frames.some((f) => f.t === 'ready'),
+    /** 这条连接被对面(或中转)关掉了没有。 */
+    closed: () => gone,
     /** 发一次调用,等它的响应。 */
     async invoke(chn: string, args: unknown[] = []) {
       const id = nextId++
@@ -486,5 +493,71 @@ describe('链路心跳', () => {
     await new Promise((r) => setTimeout(r, 120))   // 再给足够久
     expect(fake.conns.length, '它把老中转判死了 —— 这会变成无限重连').toBe(1)
     expect(host.status().status).toBe('online')
+  })
+})
+
+/**
+ * ★★「连着 2 台设备」得说得出是**哪两台**,而且要能点名踢掉。
+ *  用户原话:「1 不知道是哪两台设备 2 能不能剔除掉某台设备,如果我发现有僵尸连接,
+ *  我能不能踢掉或者重连」。
+ */
+describe('看得见是谁 · 踢得掉某一台', () => {
+  it('★每台设备报上来的是它**自报的名字**,不是 cid', async () => {
+    const identity = generateIdentity()
+    const core = fakeCore()
+    relay = await startRelay({ port: 0, host: '127.0.0.1', pingMs: 0 })
+    host = startRelayHost({
+      relayUrl: `ws://127.0.0.1:${relay.port}`,
+      identity, table: core.table, addSink: core.addSink, version: '1.2.0',
+    })
+    await waitFor(() => host!.status().status === 'online')
+
+    const p = await phone(relay.port, roomFor(identity.publicKey), identity.publicKey, undefined, '书房的 iPhone')
+    await waitFor(() => p.ready())
+    await waitFor(() => {
+      const st = host!.status()
+      return st.status === 'online' && st.devices.some((d) => d.label === '书房的 iPhone')
+    })
+    const st = host!.status()
+    if (st.status !== 'online') throw new Error('状态不对')
+    expect(st.peers).toBe(1)
+    expect(st.devices).toHaveLength(1)
+    expect(st.devices[0].cid, 'cid 是踢人时点名用的,不能没有').toBeTruthy()
+  })
+
+  it('★★踢掉之后:对面断了,这一侧的表也清干净了(不许留下我们自己的僵尸)', async () => {
+    const identity = generateIdentity()
+    const core = fakeCore()
+    relay = await startRelay({ port: 0, host: '127.0.0.1', pingMs: 0 })
+    host = startRelayHost({
+      relayUrl: `ws://127.0.0.1:${relay.port}`,
+      identity, table: core.table, addSink: core.addSink, version: '1.2.0',
+    })
+    await waitFor(() => host!.status().status === 'online')
+    const p = await phone(relay.port, roomFor(identity.publicKey), identity.publicKey, undefined, '要被踢的')
+    await waitFor(() => p.ready())
+    const st0 = host!.status()
+    if (st0.status !== 'online') throw new Error('状态不对')
+    const cid = st0.devices[0].cid
+
+    expect(host.kick(cid)).toBe(true)
+    await waitFor(() => {
+      const st = host!.status()
+      return st.status === 'online' && st.peers === 0 && st.devices.length === 0
+    })
+    // 对面那条 socket 也该被中转关掉
+    await waitFor(() => p.closed())
+  })
+
+  it('踢一个不存在的 cid:回 false,不炸', async () => {
+    const identity = generateIdentity()
+    const core = fakeCore()
+    relay = await startRelay({ port: 0, host: '127.0.0.1', pingMs: 0 })
+    host = startRelayHost({
+      relayUrl: `ws://127.0.0.1:${relay.port}`,
+      identity, table: core.table, addSink: core.addSink, version: '1.2.0',
+    })
+    await waitFor(() => host!.status().status === 'online')
+    expect(host.kick('没这个')).toBe(false)
   })
 })

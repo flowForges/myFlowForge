@@ -45,7 +45,10 @@ const mount = async (status: unknown, relay?: Partial<RelayView>) => {
     mobileApply: vi.fn(async () => status),
     mobileRegenToken: vi.fn(async () => status),
     onMobileStatus: () => () => {},
-    ...(r ? { relayStatus: vi.fn(async () => r), onRelayStatus: () => () => {}, relayApply: vi.fn(async () => r) } : {}),
+    ...(r ? {
+      relayStatus: vi.fn(async () => r), onRelayStatus: () => () => {},
+      relayApply: vi.fn(async () => r), relayKick: vi.fn(async () => r),
+    } : {}),
   }
   render(<MobileSection />)
   await waitFor(() => expect(screen.getByText('让手机连进来')).toBeTruthy())
@@ -184,7 +187,7 @@ describe('「我手机连上没有」', () => {
     await mount({ ...RUNNING, clients: 1 })
     // 二维码还折着
     expect(document.querySelector('svg.qr')).toBeNull()
-    const live = document.querySelector('.hosts-live')!
+    const live = document.querySelector('.hosts-live[data-live="lan"]')!
     expect(live.textContent).toContain('1 台设备连着')
     expect(live.className).toContain('on')
   })
@@ -197,7 +200,7 @@ describe('「我手机连上没有」', () => {
    */
   it('没有设备连着时:主句说结论,地址退成次要信息(但不许消失)', async () => {
     await mount({ ...RUNNING, clients: 0 })
-    const live = document.querySelector('.hosts-live')!
+    const live = document.querySelector('.hosts-live[data-live="lan"]')!
     expect(live.querySelector('.hl-t')?.textContent).toBe('等待设备连接')
     expect(live.querySelector('.hl-d')?.textContent).toContain('192.168.110.133:6789')
     expect(live.className).not.toContain('on')
@@ -206,5 +209,45 @@ describe('「我手机连上没有」', () => {
   it('网关关着就没有这条 —— 关着的时候「0 台设备」是废话', async () => {
     await mount({ ...RUNNING, running: false })
     expect(document.querySelector('.hosts-live')).toBeNull()
+  })
+})
+
+/**
+ * ★★用户原话:「1 不知道是哪两台设备 2 能不能剔除掉某台设备,如果我发现有僵尸连接,
+ *  我能不能踢掉或者重连」。「几台」这个数字几乎没用 —— 要的是**哪一台**、以及**弄得走吗**。
+ */
+describe('中转上挂着的设备:看得见、踢得掉', () => {
+  const online = (devices: { cid: string; label: string; since: number }[]) => ({
+    enabled: true, url: 'wss://r.example.dev', publicKey: 'A'.repeat(43) + '=', token: 't',
+    detail: { status: 'online', peers: devices.length, devices },
+  })
+
+  it('★列出每台设备的名字,而不是只给一个数字', async () => {
+    await mount(RUNNING, online([
+      { cid: '1', label: '书房的 iPhone', since: 1 },
+      { cid: '2', label: 'zghua 的 MacBook', since: 2 },
+    ]))
+    const live = document.querySelector('.hosts-live[data-live="relay"]')!
+    expect(live.textContent).toContain('2 台设备连着')
+    expect(live.textContent).toContain('书房的 iPhone')
+    expect(live.textContent).toContain('zghua 的 MacBook')
+  })
+
+  it('★★「断开」点的是那一台的 cid —— 点错人比不给这颗键更糟', async () => {
+    await mount(RUNNING, online([
+      { cid: '1', label: '书房的 iPhone', since: 1 },
+      { cid: '2', label: 'zghua 的 MacBook', since: 2 },
+    ]))
+    const rows = [...document.querySelectorAll('.hosts-live[data-live="relay"] .hl-dev')]
+    const mac = rows.find((r) => (r.textContent ?? '').includes('MacBook'))!
+    await act(async () => { fireEvent.click(mac.querySelector('button')!) })
+    expect((window as any).forge.relayKick).toHaveBeenCalledWith('2')
+  })
+
+  it('一台都没连时不摆清单,只说在等着', async () => {
+    await mount(RUNNING, online([]))
+    const live = document.querySelector('.hosts-live[data-live="relay"]')!
+    expect(live.textContent).toContain('等设备连过来')
+    expect(document.querySelectorAll('.hosts-live[data-live="relay"] .hl-dev')).toHaveLength(0)
   })
 })
