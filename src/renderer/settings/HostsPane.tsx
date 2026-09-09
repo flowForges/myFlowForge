@@ -109,6 +109,23 @@ export function HostsPane({ hostChip, onHostChipChange }: {
     return off
   }, [])
 
+  /**
+   * ★★正在编辑的那台主机**没了** ⇒ 关掉表单。
+   *
+   * 用户原话:「我正在编辑主机,然后再去把上面的主机列表里,点击删除,下面的编辑主机依然还在」。
+   * 留着不只是难看:那张表单编辑的是一台**已经不存在**的主机,再点一次保存会把它**原地复活**
+   * (`upsertHost` 拿着 draft 里的 id 找不到,就当新的追加进去)。
+   *
+   * ★写成「按列表核对」而不是「在删除按钮里顺手关掉」:主机也可能被**别处**删掉
+   * (另一个窗口、导入一份新清单覆盖掉)。堵住删除那一个入口,下次换个入口又漏。
+   * ★`draft.id` 为空 = 正在新建,它本来就不在列表里,不能被这条误伤。
+   */
+  useEffect(() => {
+    if (!draft?.id) return
+    if (hosts.some((h) => h.id === draft.id)) return
+    openDraft(null)
+  }, [hosts, draft, openDraft])
+
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true); setErr('')
     try { await fn() } catch (e) { setErr(e instanceof Error ? e.message : String(e)) }

@@ -425,3 +425,56 @@ describe('HostsPane · 已配的机器要看得见图标', () => {
     expect(container.querySelector('.host-row .host-ico')?.textContent?.trim()).toBeTruthy()
   })
 })
+
+
+/**
+ * ★★用户 2026-09-09 报的两条,都是「表单和列表各活各的」:
+ *  ①「我导入了一个连接,保存了,但底下还是显示编辑主机」
+ *  ②「我正在编辑主机,然后去上面的列表点删除,下面的编辑主机依然还在」
+ *  ②尤其糟:那张表单编辑的是一台**已经不存在**的主机,再点保存会把它**原地复活**
+ *   (`upsertHost` 拿着 draft 里的 id 找不到 ⇒ 当新的追加进去)。
+ */
+describe('HostsPane · 表单不能比它编辑的那台主机活得久', () => {
+  const H: RemoteHostView = {
+    id: 'h1', label: 'zghua-3', kind: 'direct', address: 'ws://30.78.178.34:6789', sshTarget: '',
+    icon: '🖥️', display: 'both', token: 'tok', pubKey: 'A'.repeat(43) + '=',
+    relay: 'wss://relay.example.workers.dev', lastConnectedAt: 0,
+  } as RemoteHostView
+
+  it('★编辑一台走中转的主机,粘完码保存 —— 表单要收起来', async () => {
+    hosts = [H]
+    renderPane()
+    await waitFor(() => expect(screen.getByText('编辑')).toBeTruthy())
+    fireEvent.click(screen.getByText('编辑'))
+    await waitFor(() => expect(screen.getByText('编辑主机')).toBeTruthy())
+    await save()
+    await waitFor(() => expect(screen.queryByText('编辑主机')).toBeNull())
+  })
+
+  it('★★正在编辑它,却把它删了 —— 表单必须跟着关,不能留一张能把它复活的表单', async () => {
+    hosts = [H]
+    renderPane()
+    await waitFor(() => expect(screen.getByText('编辑')).toBeTruthy())
+    fireEvent.click(screen.getByText('编辑'))
+    await waitFor(() => expect(screen.getByText('编辑主机')).toBeTruthy())
+
+    hosts = []   // 服务端删掉了
+    await act(async () => { fireEvent.click(screen.getByText('删除')) })
+
+    await waitFor(() => expect(screen.queryByText('编辑主机')).toBeNull())
+  })
+
+  it('删的是**别的**那台时,正在编辑的这张表单不许被关掉', async () => {
+    const other = { ...H, id: 'h2', label: '另一台' } as RemoteHostView
+    hosts = [H, other]
+    renderPane()
+    await waitFor(() => expect(screen.getAllByText('编辑')).toHaveLength(2))
+    fireEvent.click(screen.getAllByText('编辑')[0]!)
+    await waitFor(() => expect(screen.getByText('编辑主机')).toBeTruthy())
+
+    hosts = [H]
+    await act(async () => { fireEvent.click(screen.getAllByText('删除')[1]!) })
+
+    expect(screen.getByText('编辑主机'), '删的是另一台,凭什么关掉我正在改的这张').toBeTruthy()
+  })
+})
