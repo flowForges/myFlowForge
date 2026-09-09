@@ -446,7 +446,7 @@ export function Sidebar({ groups, listLoading, listError, archivedItems = [], ac
         <h2>工作区</h2>
         {/* ★这一列工作区/会话属于哪台机器。连着远程时,内容可能和本机长得一模一样
             (自测时甚至就是同一台机器),没有这个标签就完全分不清自己在跟谁说话。 */}
-        {hostKey !== 'local' && <span className="sb-host" title={`这些工作区来自「${hostLabel}」`}>{hostLabel}</span>}
+        {hostKey !== 'local' && <span className="sb-host-tag" title={`这些工作区来自「${hostLabel}」`}>{hostLabel}</span>}
         <button className="sb-new" onClick={onNew} title="新建工作区" aria-label="新建工作区">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <line x1="12" y1="5" x2="12" y2="19" />

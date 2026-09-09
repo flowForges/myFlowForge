@@ -8,6 +8,10 @@
      it fell back to its built-in translucent white — visible on dark, INVISIBLE on the light background.
      rgba (not oklch) to be safe with xterm's own color parser. Dark keeps the familiar light-grey look. */
   --term-selection: rgba(255, 255, 255, 0.26);
+  /* 实底小标签(侧栏那枚「这些工作区来自哪台机器」)。★★**故意不跟 --surface 走**:
+     `--surface` 在壁纸/磨砂下会被换成半透明,标签就变成一块糊的(用户原话「跟主体不搭」)。
+     这个 token 的语义就是「不透明」,所以直接写死深/浅两个值,谁也别去覆盖它。 */
+  --chip-solid: oklch(26% 0.012 250);
   --run: oklch(74% 0.14 235); --ok: oklch(74% 0.15 150); --warn: oklch(80% 0.13 80); --err: oklch(68% 0.18 25);
   --add: oklch(74% 0.15 150); --del: oklch(68% 0.18 25);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
@@ -41,6 +45,7 @@
   --accent: oklch(56% 0.16 250); --accent-dim: oklch(56% 0.16 250 / 0.12); --on-accent: oklch(99% 0 0);
   /* Light: a clearly-visible blue selection on the near-white terminal bg (the default white was invisible). */
   --term-selection: rgba(45, 105, 215, 0.28);
+  --chip-solid: oklch(100% 0 0);
   --run: oklch(56% 0.15 250); --ok: oklch(56% 0.15 150); --warn: oklch(64% 0.14 70); --err: oklch(56% 0.2 25);
   --add: oklch(52% 0.15 150); --del: oklch(56% 0.2 25);
   --shadow: 0 12px 40px rgba(15,23,42,0.14);

@@ -83,8 +83,11 @@
 
 /* 配对二维码。★码本身是固定白底黑块(见 QrCode.tsx 的注释),所以给它一个白色的托底 +
    圆角,让「不跟皮肤走」看起来是有意为之,而不是一块漏出来的白。 */
-.hosts-qr { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-top: 14px;
-  padding-top: 14px; border-top: 1px solid var(--border); }
+/* ★★那条横线只在**上面真有东西**的时候才画。二维码那一块现在是 `.hosts-conn` 里的第一个
+   孩子(地址/令牌那几行早就搬走了),于是这条 border-top 变成一根悬在空盒子里、什么也没分隔的
+   线 —— 用户原话「这个显示二维码上面为什么有个分割线」。分隔线是**关系**,没有上一块就没有关系。 */
+.hosts-qr { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+.hosts-qr:not(:first-child) { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .hosts-qr .qr { flex: 0 0 auto; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px var(--border); }
 .hosts-qr-say { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
 .hosts-qr-say .set-desc { margin-top: 0; }

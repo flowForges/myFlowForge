@@ -226,7 +226,6 @@ export function MobileSection() {
 
       {pairable && (
         <div className="hosts-conn">
-
           <div className="hosts-qr">
             {showQr ? (
               <>

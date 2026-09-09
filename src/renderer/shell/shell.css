@@ -780,10 +780,17 @@
 .host-chip.bad .dot { background: oklch(66% .18 25); box-shadow: 0 0 0 2.5px oklch(66% .18 25 / .16); }
 
 /* 侧栏标题上的主机名:这一列工作区属于哪台机器。远程时才出现。 */
-.sb-head .sb-host {
+/* 「这一列工作区属于哪台机器」。
+   ★★类名从 `.sb-host` 改成 `.sb-host-tag`:`.sb-host` 是**底部状态栏那颗按钮**的类,
+   两个毫不相干的东西共用一个名字,于是这枚**不可点**的标签白白继承了它的 `cursor: pointer`
+   和 `max-width: 260px`。同名迟早还会再撞一次。
+   ★用户报的「样式明显跟主体不搭…要么是实体的白色 或者实体的黑色」:原来是
+   半透明的 `--surface` + 一圈 `--border`,壁纸透上来就是一块糊的。现在是**实底**,
+   跟着主题走(浅色实白 / 深色实黑),不描边 —— 描边正是让它显得"糊"的那一半。 */
+.sb-head .sb-host-tag {
   font-size: 11px; font-weight: 550; color: var(--fg-2);
-  padding: 1px 7px; border-radius: 999px;
-  border: 1px solid var(--border); background: var(--surface);
+  padding: 1.5px 8px; border-radius: 999px;
+  background: var(--chip-solid);
   max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
