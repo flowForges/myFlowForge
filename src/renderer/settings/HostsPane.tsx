@@ -121,49 +121,17 @@ export function HostsPane({ hostChip, onHostChipChange }: {
     <div className="hosts-pane">
       {/* ★★2026-09-02:这里原来有一张「你在哪台机器上干活」的状态卡(本机 / 灰点 / 回到本机),
           **已删**。用户原话:「特别是顶部的本机,这个有展示的必要么?」——没有。
-          `shell/Titlebar.tsx` 正中已经挂着 `HostSwitcher`,它做的是同一件事而且做得更好:
+          `shell/StatusBar.tsx` 上已经挂着 `HostSwitcher`(2026-09-04 从标题栏搬到了底部状态栏),
+          它做的是同一件事而且做得更好:
           **一直在视野里**(不用打开设置)、点开就是切换菜单、而且**没配过远程主机的人根本看不到它**。
           设置里再摆一张,是同一件事说第二遍;更糟的是它得配三句话解释「灰的是正常的」
           「手机连进来不会让它变色」—— 那三句话本身就是这张卡不该在这儿的证据:
           它在解释一个自己制造的困惑。 */}
       {err && <p className="set-desc" style={{ color: 'var(--err)' }}>{err}</p>}
 
-      {/* ★★这是**那枚按钮**的设置,不是某一台主机的设置。
-          旧版把它放在每台主机的编辑表单里(「标题栏上显示」),后果有两个,都是用户当场撞上的:
-          ① 同一枚按钮切一台主机就换一副长相 —— 一个控件长成两副样子,人只会觉得它坏了;
-          ② 本机没有那张表单,于是它的显示方式被写死成「只显示名称」。用户原话:
-             「我设置了只显示图标,但是本机还是显示一个大按钮」。
-          所以它归到这儿:一份、全局、本机也照办。 */}
-      <div className="set-group">
-        <h4>底部那枚主机按钮</h4>
-        <p className="set-desc">
-          在底部状态栏「终端」的左边。左边那个圆点就是连接状态:绿=已连接、黄=连接中、红=连不上、灰=未连接。
-          这里选的是**这枚按钮**怎么显示,所有主机(包括本机)都照这一条办。
-        </p>
-        <div className="proj-field">
-          <label>显示</label>
-          <Select
-            ariaLabel="主机按钮显示"
-            value={hostChip}
-            onChange={onHostChipChange}
-            options={[
-              { value: 'both', label: '图标 + 名称' },
-              { value: 'icon', label: '只显示图标' },
-              { value: 'name', label: '只显示名称' },
-            ]}
-          />
-        </div>
-        <p className="set-desc full" style={{ marginTop: -6 }}>
-          一台远程主机都没配过时,按钮只画一枚图标、不写字 —— 那时候「本机」两个字是废话,
-          但那枚图标是添加主机唯一的入口,不能一起省掉。
-        </p>
-      </div>
-
       <div className="set-group">
         <h4>已配的机器</h4>
-        <p className="set-desc">
-          切到哪台,就只看到哪台的会话、工作区和运行。外观、宠物、字体跟着你这台设备走,不会变。
-        </p>
+        <p className="set-desc">切到哪台,就只看到哪台的会话和工作区。</p>
         <div className="hosts-list">
           {hosts.length === 0 && (
             <div className="hosts-empty">
@@ -301,10 +269,6 @@ export function HostsPane({ hostChip, onHostChipChange }: {
                 })}
               </div>
             </div>
-            <p className="set-desc full" style={{ marginTop: -6 }}>
-              图标只是给你自己认的,底部那枚按钮和切换菜单里都用它。
-              <b>显示成图标还是名称是这一页最上面那一条</b>,对所有主机统一生效。
-            </p>
 
             {/* ★★中转**不是**这个下拉框里的一项,它跟着配对码一起来 —— 而这件事必须
                 **在框里说出来**。用户原话:「连接方式 哪有中转啊?」
@@ -346,18 +310,17 @@ export function HostsPane({ hostChip, onHostChipChange }: {
             )}
             <p className="set-desc full" style={{ marginTop: -6 }}>
               {draft.relay
-                ? '两边各在各的网时走这条 —— 拨的是中转,不是那台机器的地址。中转读不到内容(端到端加密),它只转发。中转地址不在这儿填,它跟着配对码一起来。'
+                ? '两边各在各的网时走这条。端到端加密,中转读不到内容。'
                 : draft.kind === 'ssh'
-                  ? '那台机器上的 daemon 只绑回环(公网上不存在那个端口),所以走 SSH 隧道过去。下面填的是 SSH 登录目标,不是网址。'
-                  : '直接填一个能连到的地址。局域网、Tailscale,以及「在这台电脑上自己跑一个 daemon 试试」都走这条。'}
+                  ? '下面填 SSH 登录目标,不是网址。'
+                  : '局域网、Tailscale、本机自测走这条。'}
             </p>
             {/* ★这句话摆在**没有中转的时候** —— 它回答的正是「我要连一台不在同一个网里的机器,
                 该选哪一项?」而答案是「哪一项都不选,去粘那枚码」。不说的话,人只会在
                 两个选项之间来回猜。 */}
             {!draft.relay && (
               <p className="set-desc full" style={{ marginTop: -8 }}>
-                两台机器<b>不在同一个网络</b>里?那两项都不对 —— 去上面粘那台机器的<b>配对码</b>
-                (它的「设置 → 手机」里复制),中转地址和身份公钥都在码里,粘完这儿会变成「经中转」。
+                <b>不在同一个网络</b>?这两项都不对 —— 去上面粘配对码。
               </p>
             )}
 
@@ -372,9 +335,7 @@ export function HostsPane({ hostChip, onHostChipChange }: {
                   <input value={draft.address} placeholder="6767" onChange={(e) => setDraft({ ...draft, address: e.target.value })} />
                 </div>
                 <p className="set-desc full">
-                  隧道由 app 自己拉起来,用的就是你平时 ssh 登这台服务器的凭据 —— 没有新密码要记。
-                  <b>前提是能免密登录(密钥认证)</b>:这里没有终端可以输入密码。
-                  另外要先在那台机器上把 daemon 跑起来,让它监听上面填的那个端口。
+                  用你平时 ssh 登它的凭据,<b>前提是免密(密钥认证)</b>。那台机器上要先跑起 daemon。
                 </p>
               </>
             ) : (
@@ -391,12 +352,7 @@ export function HostsPane({ hostChip, onHostChipChange }: {
                   <input type="password" value={draft.token} placeholder="daemon pair 里那串" onChange={(e) => setDraft({ ...draft, token: e.target.value })} />
                 </div>
                 <p className="set-desc full">
-                  daemon 绑到非回环地址时<b>必须</b>要令牌 —— 那个端口能起 agent、答权限门、开终端,
-                  等于整台机器的控制权。绑回环(比如本机自测)则不需要,令牌留空即可。
-                </p>
-                <p className="set-desc full">
-                  本机自测:<code className="hosts-cmd">node out/main/daemon.js --listen 127.0.0.1:6789</code>
-                  ,然后这里填 <code className="hosts-cmd">ws://127.0.0.1:6789</code>。
+                  daemon 绑非回环地址时<b>必须</b>要令牌 —— 那个端口等于整台机器的控制权。绑回环可留空。
                 </p>
               </>
             )}
@@ -419,11 +375,37 @@ export function HostsPane({ hostChip, onHostChipChange }: {
         </div>
       )}
 
-      <div className="set-group">
-        <h4>在设备之间搬清单</h4>
-        <p className="set-desc">
-          主机清单只存在这台设备上(它带着凭据,不该让服务器代为同步)。换台电脑或加手机时,从这里导出再导入。
-        </p>
+      {/* ── 高级 ────────────────────────────────────────────────────────────
+          ★★和「手机」那一屏同一副骨架:主流程 → 一个默认收起的「高级」。原来这一屏没有折叠,
+           于是「配一次就再也不碰」的两件事(按钮长什么样、搬清单)一直挡在正常人的路上,
+           顶上那段还花 78 个字去解释**另一个界面元素**(底部按钮上那颗圆点是什么颜色)——
+           设置页不该给别处的控件写说明书,那枚按钮自己有 tooltip。
+          ★`<details>` 而不是自己写折叠:键盘可达和「默认收起」都由浏览器保证。 */}
+      <details className="hosts-adv">
+        <summary>高级 —— 按钮显示方式、在设备之间搬清单</summary>
+
+        {/* ★★这是**那枚按钮**的设置,不是某一台主机的设置。旧版把它放在每台主机的编辑表单里,
+            后果有两个,都是用户当场撞上的:① 同一枚按钮切一台主机就换一副长相;
+            ② 本机没有那张表单,于是它被写死成「只显示名称」——「我设置了只显示图标,
+            但是本机还是显示一个大按钮」。所以它归到这儿:一份、全局、本机也照办。 */}
+        <div className="proj-field">
+          <label>底部那枚主机按钮</label>
+          <Select
+            ariaLabel="主机按钮显示"
+            value={hostChip}
+            onChange={onHostChipChange}
+            options={[
+              { value: 'both', label: '图标 + 名称' },
+              { value: 'icon', label: '只显示图标' },
+              { value: 'name', label: '只显示名称' },
+            ]}
+          />
+        </div>
+        <p className="set-desc">一份、全局,本机也照办。</p>
+
+        <div className="hosts-adv-sep" />
+
+        <p className="set-desc">清单只存在这台设备上。换机器时导出再导入。</p>
         {!ioOpen && <div className="hosts-io">
           <button className="set-btn" onClick={async () => { setIoText(await window.forge.hostsExport(false)); setIoOpen(true) }}>导出(不含令牌)</button>
           <button className="set-btn" onClick={async () => { setIoText(await window.forge.hostsExport(true)); setIoOpen(true) }}>导出(含令牌)</button>
@@ -440,10 +422,11 @@ export function HostsPane({ hostChip, onHostChipChange }: {
               })}>导入这段</button>
               <button className="set-btn" onClick={() => { setIoOpen(false); setIoText('') }}>关闭</button>
             </div>
-            <p className="set-desc">导出「含令牌」的那份等于把机器钥匙一起带走 —— 别贴进聊天记录或截图。</p>
+            {/* ★这句不许压掉:「含令牌」那份等于机器钥匙,是这一屏唯一一条安全提示。 */}
+            <p className="set-desc">「含令牌」那份等于机器钥匙 —— 别贴进聊天记录或截图。</p>
           </>
         )}
-      </div>
+      </details>
     </div>
   )
 }

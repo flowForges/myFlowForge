@@ -185,16 +185,21 @@ describe('「我手机连上没有」', () => {
     // 二维码还折着
     expect(document.querySelector('svg.qr')).toBeNull()
     const live = document.querySelector('.hosts-live')!
-    expect(live.textContent).toContain('现在连着')
-    expect(live.textContent).toContain('1')
+    expect(live.textContent).toContain('1 台设备连着')
     expect(live.className).toContain('on')
   })
 
-  it('没有设备连着时说的是「在哪个地址上等着」,不是干巴巴一个 0', async () => {
+  /**
+   * ★★这条原来钉的是「在 <地址> 上等着,还没有设备连上来」。用户看到那句话的反应是
+   *  「这个是什么意思?有什么用?」—— 它把监听地址放在了主语位置,而人在这儿只想知道
+   *  **连上了没有**。所以断言改成:结论必须是主句,地址**仍然要在**(手填地址、排查连不上
+   *  都靠它),只是降成第二行。两件事都钉住,别让下一版把地址整个删掉。
+   */
+  it('没有设备连着时:主句说结论,地址退成次要信息(但不许消失)', async () => {
     await mount({ ...RUNNING, clients: 0 })
     const live = document.querySelector('.hosts-live')!
-    expect(live.textContent).toContain('192.168.110.133:6789')
-    expect(live.textContent).toContain('还没有设备连上来')
+    expect(live.querySelector('.hl-t')?.textContent).toBe('等待设备连接')
+    expect(live.querySelector('.hl-d')?.textContent).toContain('192.168.110.133:6789')
     expect(live.className).not.toContain('on')
   })
 

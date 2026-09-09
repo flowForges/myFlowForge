@@ -94,10 +94,15 @@
 
 /* 「现在有没有设备连着」。★这条不是装饰:它是「我手机连上没有」的唯一答案,
    所以必须在开关旁边,而不是在二维码底下。灰=在等,绿=真的有人连着。 */
-.hosts-live { display: flex; align-items: center; gap: 8px; margin: 14px 0 16px;
+.hosts-live { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0 16px;
   padding: 8px 11px; border-radius: 9px; font-size: 12.5px; color: var(--fg-2);
   border: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 40%, transparent); }
-.hosts-live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.hosts-live .dot { margin-top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+/* 结论一行、细节一行。★细节那行不是可有可无的装饰:手填地址、查「为什么连不上」都靠它,
+   但它不该占着主句的位置(见 MobileSection 里那段注释)。 */
+.hosts-live .hl-say { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hosts-live .hl-t { color: var(--fg); font-weight: 600; font-family: inherit; }
+.hosts-live .hl-d { font-size: 11.5px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hosts-live b { color: var(--fg); font-family: var(--mono); }
 .hosts-live.on { color: var(--fg); border-color: color-mix(in oklch, var(--ok) 40%, transparent); }
 .hosts-live.on .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in oklch, var(--ok) 20%, transparent); }
@@ -118,3 +123,6 @@
 .hosts-adv > summary::before { content: '▸ '; color: var(--faint); }
 .hosts-adv[open] > summary::before { content: '▾ '; }
 .hosts-adv[open] > summary { margin-bottom: 6px; }
+/* 折叠里两件不相干的事之间的分隔(按钮长什么样 / 搬清单)。★细到只是一条淡线,
+   不给它们各套一张卡 —— 折叠里再嵌卡片会长出第三层边框。 */
+.hosts-adv-sep { height: 1px; background: var(--border); margin: 14px 0 12px; }

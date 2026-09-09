@@ -136,7 +136,7 @@ export function MobileSection() {
       <div className="set-row">
         <div className="info">
           <div className="t">让手机连进来</div>
-          <div className="d">手机上答掉的门,这边的卡片当场消失 —— 同一份核心。</div>
+          <div className="d">同一个 wifi 里,手机直接连这台电脑。</div>
         </div>
         <button
           className={`toggle${st.running ? ' on' : ''}`}
@@ -153,12 +153,16 @@ export function MobileSection() {
           第一版这句话埋在二维码下面,用户手机连上了、翻到这一屏,看见的是一张灰的「本机」卡,
           于是问「本机是灰的,这是什么意思」—— 唯一的证据滚在视野之外。 */}
       {st.running && (
+        /* ★★用户原话:「这个是什么意思?有什么用?」—— 问的就是这张卡。原来它长这样:
+             「在 30.136.120.227:6789 上等着,还没有设备连上来」。
+           它把一个**你根本不需要知道的内部细节**(监听地址和端口)放在了句子的主语位置,
+           而人在这儿要的答案只有一个:**连上了没有**。所以主句只说结论,地址降成第二行的小字
+           (它仍然要在:手填地址、排查连不上的时候就靠它)。 */
         <div className={`hosts-live ${st.clients > 0 ? 'on' : ''}`}>
           <span className="dot" />
-          <span>
-            {st.clients > 0
-              ? <>现在连着 <b>{st.clients}</b> 台设备</>
-              : <>在 <b>{addr}</b> 上等着,还没有设备连上来</>}
+          <span className="hl-say">
+            <b className="hl-t">{st.clients > 0 ? `${st.clients} 台设备连着` : '等待设备连接'}</b>
+            <span className="hl-d">局域网 {addr}</span>
           </span>
         </div>
       )}
@@ -171,10 +175,7 @@ export function MobileSection() {
       <div className="set-row">
         <div className="info">
           <div className="t">出门也能连(中转)</div>
-          <div className="d">
-            不在同一个 wifi 时走中转。端到端加密,它读不到内容。要<b>你自己部署</b>
-            (仓库 <code>relay/</code>)。
-          </div>
+          <div className="d">各在各的网时走中转。端到端加密,要<b>你自己部署</b>。</div>
         </div>
         <button
           className={`toggle${relay?.enabled ? ' on' : ''}`}
@@ -233,9 +234,9 @@ export function MobileSection() {
                     没有局域网地址时那一个是占位符,而占位符从来没进过码。 */}
                 <QrCode text={pairing} alt={`配对二维码 · ${qrAddr}`} />
                 <div className="hosts-qr-say">
+                  {/* ★安全那半句不许压掉:这枚码里带着令牌,是这一屏唯一一条安全提示。 */}
                   <p className="set-desc">
-                    用<b>手机自带的相机</b>扫一下就行(不用先打开 app)。
-                    ★<b>码里带着这台机器的令牌</b> —— 共享屏幕、录屏、发截图之前先收起来。
+                    手机相机直接扫。<b>码里带着令牌</b> —— 录屏、截图前先收起来。
                   </p>
                   <button className="set-btn" onClick={() => setShowQr(false)}>收起二维码</button>
                 </div>
@@ -258,11 +259,11 @@ export function MobileSection() {
               它是**错的** —— 中转存在的全部意义就是两边不在一个网络里也能连。 */}
           {relayOn ? (
             <p className="set-desc">
-              走中转时两边<b>可以各在各的网</b>{st.running && ',在一个 wifi 里时自动走局域网直连'}。
+              两边<b>可以各在各的网</b>{st.running && ',同一个 wifi 时自动走直连'}。
             </p>
           ) : (
             <p className="set-desc">
-              要在<b>同一个网络</b>里(公司 guest 网多半不通,开个人热点最省事)。出门连走中转。
+              要在<b>同一个网络</b>里。出门连,打开上面的中转。
             </p>
           )}
         </div>
@@ -284,7 +285,7 @@ export function MobileSection() {
         <div className="set-row">
           <div className="info">
             <div className="t">局域网可见</div>
-            <div className="d">关掉就只绑回环(手机连不上,留给 SSH 隧道)。开着<b>强制令牌</b>。</div>
+            <div className="d">关掉只绑回环(留给 SSH 隧道)。开着<b>强制令牌</b>。</div>
           </div>
           <button
             className={`toggle${lan ? ' on' : ''}`}
