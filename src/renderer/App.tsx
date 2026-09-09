@@ -663,6 +663,8 @@ export function App() {
       <div className="body">
         <Sidebar
           groups={sidebarGroups}
+          listLoading={home.loading}
+          listError={home.error}
           archivedItems={archivedItems}
           activeId={activeWsId}
           onSelect={(id) => { setActiveId(id); setView('ws') }}
@@ -708,6 +710,9 @@ export function App() {
             ? <HomeView
                 workspaces={home.workspaces}
                 stats={home.stats}
+                listLoading={home.loading}
+                listError={home.error}
+                hostLabel={hostKey === 'local' ? null : hostLabel}
                 activeRunPath={engine.run?.workspacePath}
                 busyPaths={busyWs}
                 run={engine.run ?? undefined}

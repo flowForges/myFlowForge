@@ -33,6 +33,10 @@ export interface WorkspaceGroup {
 
 export interface SidebarProps {
   groups: WorkspaceGroup[]
+  /** 正在拉这台机器的工作区列表(切主机 / 重连之后)。空列表 + 这个 = 「还没拉到」,不是「没有」。 */
+  listLoading?: boolean
+  /** 拉不到时的原话。★空列表配一句「没有工作区」是假话 —— 真相是这台机器根本没答上来。 */
+  listError?: string
   archivedItems?: WorkspaceItem[]
   activeId: string
   onSelect: (id: string) => void
@@ -430,7 +434,7 @@ function ArchiveDock({ items, activeId, onSelect, onRestore, onDelete }: Archive
   )
 }
 
-export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onEdit, onRename, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, runningSessionIds, onToggleExpand, unread }: SidebarProps) {
+export function Sidebar({ groups, listLoading, listError, archivedItems = [], activeId, onSelect, onNew, onPin, onArchive, onEdit, onRename, onRestore, onDelete, onReveal, onRemove, onReorder, collapsed, width, sessions, activeSessionId, onSwitchSession, onCloseSession, onRenameSession, onNewSession, expandedIds, sessionsByWs, runningSessionIds, onToggleExpand, unread }: SidebarProps) {
   const { key: hostKey, label: hostLabel } = useHost()
   const sidebarStyle = (!collapsed && width !== undefined)
     ? { flex: `0 0 ${width}px`, width }
@@ -453,6 +457,13 @@ export function Sidebar({ groups, archivedItems = [], activeId, onSelect, onNew,
 
       {/* Scrollable workspace list */}
       <div className="sb-scroll">
+        {/* ★★「这台机器还没答上来」和「这台机器没有工作区」必须分得开。原来两者都是一片空白,
+            于是切到一台连不上的主机时,屏幕上是一个看起来很正常的空列表。 */}
+        {groups.length === 0 && listError
+          ? <div className="sb-state bad" role="alert">读不到「{hostLabel}」的工作区<span>{listError}</span></div>
+          : groups.length === 0 && listLoading
+            ? <div className="sb-state">正在读取{hostKey === 'local' ? '' : `「${hostLabel}」`}的工作区…</div>
+            : null}
         {groups.map(group => (
           <GroupSection
             key={group.key}

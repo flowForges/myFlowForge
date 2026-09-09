@@ -141,6 +141,15 @@
 
 .sb-scroll { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
 
+/* 列表拉不到 / 还没拉到时的那一行。★★只写字,不加底色/磨砂条(壁纸下的老规矩)。
+   它存在的理由:空白的工作区列表在界面上等于「这台机器没有工作区」,而切到一台连不上的
+   主机时真相是「没答上来」——两种空必须分得开。 */
+.sb-state {
+  padding: 10px 10px 12px; font-size: 12px; line-height: 1.6; color: var(--muted);
+}
+.sb-state.bad { color: var(--err); }
+.sb-state span { display: block; margin-top: 3px; font-size: 11.5px; opacity: .85; word-break: break-word; }
+
 .ws-group { margin-top: 6px; }
 /* Stacked sections (e.g. 置顶 above 全部) — spacing only; the section headers do the separating. */
 .window:not(.collapsed) .sb-scroll .ws-group + .ws-group { margin-top: 10px; }
