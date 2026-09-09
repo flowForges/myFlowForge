@@ -171,4 +171,24 @@ describe('远程连接', () => {
     expect(c.state().status).not.toBe('ready')
     expect(await c.invoke('a:b', [])).toBe('ok')
   })
+
+  /**
+   * ★★连不上时,状态里必须带着**真正的原因**,而不是一句 `连接断开(1006)`。
+   *
+   * 真事故(2026-09-09):用户那台机器上中转地址填成了
+   * `wss://xxx.workers.dev.interview.workers.dev`(域名重了一截)。socket 收到的是
+   * `SSLV3_ALERT_HANDSHAKE_FAILURE`,而那条 `error` 事件**只写进了日志**;界面拿到的是
+   * 「等待连接就绪超时」—— 一句与真实原因完全无关的话。查这个花了「翻 app.log + 读 hosts.json」
+   * 两步,而这两步用户做不到。
+   * ★1006/1005 是「对面没给关闭码」的占位,它本身不含信息 —— 这时候唯一知道发生了什么的
+   *  就是刚才那条 socket error,必须把它顶上来。
+   */
+  it('★★连不上时,retrying 的原因是 socket 的真实报错,不是「连接断开(1006)」', async () => {
+    // 没人监听的端口:socket 会先 error(ECONNREFUSED)再 close(1006)。
+    const { c } = client(1, { backoff: { baseMs: 5000, maxMs: 5000 } })
+    const s = await untilState(c, 'retrying')
+    if (s.status !== 'retrying') throw new Error('状态不对')
+    expect(s.error, `拿到的是:${s.error}`).toMatch(/ECONNREFUSED|连不上/)
+    expect(s.error).not.toMatch(/^连接断开\(1006\)$/)
+  })
 })

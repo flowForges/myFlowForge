@@ -152,8 +152,18 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
     }
     setState({ status: 'connecting', attempt })
     // 走中转时连的是**中转**,不是主机地址。主机地址那时只是个记录,连不到。
-    const sock = new WebSocket(relayUrl || opts.url, wsOptions())
+    const target = relayUrl || opts.url
+    // ★★**把拨的是谁写进日志。** 原来只写「经代理连中转:<代理地址>」,唯独不说目标 ——
+    //  于是「中转地址填错了」这种事在日志里一点痕迹都没有(2026-09-09 真事故:域名重了一截,
+    //  现象是 TLS alert 40,而查出来靠的是翻 hosts.json,用户根本做不到)。
+    log(`拨 ${target}${relayUrl ? '(中转)' : ''}`)
+    const sock = new WebSocket(target, wsOptions())
     ws = sock
+    /**
+     * 刚才那条 socket error 的原话。★close 事件常常只给 1006(「对面没给关闭码」),
+     * 它本身不含任何信息 —— 真正说明发生了什么的是**先于它到达**的那条 error。
+     */
+    let socketError = ''
     // hello 里的版本号要留到 ready 时一起报出去(ready 帧本身不带版本)。
     let peerVersion = ''
 
@@ -299,15 +309,20 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
       // ★4410 = 中转替对面转达的「主动关掉这条逻辑连接」(关闭码在那一跳丢了,见 `sentAuth`)。
       //  还没 ready 就被这么关掉、而且刚发过令牌 —— 那就是令牌被拒了。用退避去刷它没有意义。
       const relayRejected = code === 4410 && sentAuth && state.status !== 'ready'
+      // ★1006/1005 = 没有关闭码,是占位不是原因。这时候把刚才那条 socket error 顶上来 ——
+      //  「连不上:connect ECONNREFUSED …」比「连接断开(1006)」有用得多。
+      const bare = (code === 1006 || code === 1005) && !reason?.length
       const why = code === 4403 || relayRejected ? 'token 不对,被对方拒绝'
         : code === 4401 ? '鉴权失败'
+        : bare && socketError ? `连不上:${socketError}`
         : `连接断开(${code}${reason?.length ? ' ' + String(reason) : ''})`
       rejectAllPending(why)
       if (code === 4403 || code === 4401 || relayRejected) return fail(why)
       scheduleRetry(why)
     })
 
-    sock.on('error', (e) => { log(`socket 出错: ${e.message}`) })   // 'close' 会跟着来
+    // 'close' 会跟着来 —— 原因存下来给它用(见 socketError 的声明处)。
+    sock.on('error', (e) => { socketError = e.message; log(`socket 出错: ${e.message}`) })
   }
 
   open()

@@ -210,6 +210,9 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
     setState({ status: 'connecting', attempt })
     let sock: WebSocket
     try {
+      // ★和 `remoteClient` 同一条:**把拨的是谁写进日志**。只写代理地址不写目标,
+      //  「中转地址填错了」在日志里就一点痕迹都没有。
+      log(`拨 ${opts.relayUrl}(中转)`)
       sock = new WebSocket(opts.relayUrl, wsOptions())
     } catch (e) {
       // 畸形 URL 是**同步抛**的。不接住的话整个 start 当场炸,连一次 retrying 都进不去,
