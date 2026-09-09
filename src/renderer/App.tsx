@@ -247,6 +247,19 @@ export function App() {
     prevHost.current = hostKey
     setActiveId('')
     setView('home')
+    // ★★下面这几份都是**按工作区路径累积的事件状态**(运行中 / 正在跑的会话 / 刚有动静 /
+    //  两种门的待办数)。它们只增不减地攒在内存里,而**两台机器上的工作区路径可以一模一样**
+    //  (同一个人、同样的目录习惯;自测时更是同一台机器上的同一个路径)⇒ 不清的话,
+    //  切过去之后新主机的工作区上会挂着上一台的「运行中」圆点和「3 道门等你」角标 ——
+    //  那是**假的**,而且它比空白危险:人会照着它点进去找那道根本不存在的门。
+    // ★清空是对的、不是丢数据:这几份的唯一来源是**当前这台主机推过来的事件**
+    //  (`localEvent` 在连着远程时只放行「描述这台设备本身」的那几条),换了主机就该重头攒。
+    setBusyWs(new Set())
+    setRunningSessByWs(new Map())
+    setRecentActivity(new Map())
+    setRun2SessByWs(new Map())
+    setChatGateByWs(new Map())
+    setRun2GateByWs(new Map())
   }, [hostKey])
   const { pick: pickPath } = usePathPicker()
   const sidebarGroups = useMemo(() => {
@@ -313,7 +326,9 @@ export function App() {
   // collapses/expands it. We intentionally do NOT force the active workspace open.
   const [expandedWs, setExpandedWs] = useState<Set<string>>(() => new Set(loadExpanded()))
   const expandedPaths = useMemo(() => Array.from(expandedWs), [expandedWs])
-  const sessionsByWs = useSessionsMulti(expandedPaths)
+  // ★带上 hostKey:两台机器上的工作区路径可以一模一样,不带的话切过去之后侧栏里展开的
+  //  还是上一台的会话(缓存按 path 记「拉过了」)。
+  const sessionsByWs = useSessionsMulti(expandedPaths, hostKey)
   // Merge active workspace's live sessions (from useSessions) so active-ws session ops remain instant.
   // 空的实时列表不覆盖缓存 —— 切换工作区那一帧会话行不能整段消失,见 sessionsMap.ts。
   const sessionsMap = mergeActiveSessions(sessionsByWs, activeWsId, sessions.sessions)
