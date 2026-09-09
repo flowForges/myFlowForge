@@ -34,6 +34,11 @@ const ENV_KEYS: Record<string, string[]> = {
   // 帮助原文里写死的优先级顺序。copilot **没有** status 子命令(实测),所以 env 是它唯一的正面证据;
   // 拿不到就是 unknown —— 它的令牌在系统钥匙串里,没有便宜的查法。
   copilot: ['COPILOT_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN'],
+  // dsh 的 key 有两条路:环境变量,或者 `dsh web` 的 Models 页写进 ~/.dsh/.credentials.yaml。
+  // env 这条是**唯一便宜的正面证据**;它没有 `dsh auth status` 之类的子命令(实测 --help 只有
+  // --profile/--patch/--dump-*),所以拿不到 env 就老实报 unknown —— 见文件头,不许把「不知道」
+  // 说成「没登录」。
+  deepseek: ['DEEPSEEK_API_KEY'],
 }
 
 /** 从一段可能夹着别的输出的文本里,把第一个 JSON 对象抠出来。 */

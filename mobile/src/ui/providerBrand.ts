@@ -46,6 +46,7 @@ export const PROVIDER_BRAND: Record<string, ProviderBrand> = {
   reasonix: { glyph: '∴', bg: 'rgba(102, 116, 222, 0.2)', fg: '#8393ff' },
   trae: { glyph: 'T', bg: 'rgba(0, 161, 169, 0.2)', fg: '#14bbc2' },
   antigravity: { glyph: 'A', bg: 'rgba(101, 137, 219, 0.2)', fg: '#769cef' },
+  deepseek: { glyph: 'D', bg: 'rgba(70, 107, 244, 0.2)', fg: '#668eff' },
 }
 
 /**

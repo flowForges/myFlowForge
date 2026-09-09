@@ -254,6 +254,28 @@ export const BUILTIN_PROVIDERS: BuiltinProviderMeta[] = [
     authCmd: 'agy',
     installHelp: '装好后先跑一次 agy（不带参数）用 Google 账号登录 —— 没登录的话模型列表和任何一轮对话都会直接报 authentication failed。装完若命令找不到，跑 agy install 配置 PATH。',
   },
+  {
+    id: 'deepseek',
+    displayName: 'DeepSeek',
+    defaultBin: 'dsh',
+    glyph: 'D',
+    brandBg: 'oklch(58% .21 268 / .2)',
+    brandColor: 'oklch(68% .19 268)',
+    // DeepSeek Harness（npm `@deepseek-ai/dsh`，二进制 `dsh`）。★它不是「一个 headless 开关」而是
+    // 按 profile 选运行形态：`headless` 跑一轮就退、`acp` 在 stdio 上说 Agent Client Protocol、
+    // `sdk` 说自家 JSON-RPC、`web` 起 127.0.0.1:3080 网页版。我们接的是 headless：
+    // `dsh --profile headless -- -- "<prompt>"`（两个 `--` 缺一不可，见 providers/deepseek.ts）。
+    // ★★headless 的 `--help` 里一个选项都没有（2026-09-09 实测 0.1.2-rc.1）：没有 `--model`、
+    //  没有 `--resume`、没有 `--output-format`。所以模型只有「账号默认」一条，别往这儿编型号。
+    defaultModels: [
+      { id: 'default', label: '账号默认', description: 'headless 没有 --model 开关，用 dsh 配置里的模型', contextWindow: 128_000 },
+    ],
+    // ★npm 上就是官方包（scope 归 deepseek-ai，2026-09-09 本机真装过 0.1.2-rc.1），所以主命令直接给 npm，
+    //  不需要 installAltCmd。
+    installCmd: 'npm install -g @deepseek-ai/dsh',
+    authCmd: 'dsh web',
+    installHelp: '装完还要给 key：跑 dsh web 在浏览器 Models 页存进 ~/.dsh/.credentials.yaml，或者直接 export DEEPSEEK_API_KEY。没 key 的话每一轮都会立刻回 MISSING_CREDENTIAL。',
+  },
 ]
 
 // Lookup helpers
@@ -277,4 +299,5 @@ export const PROVIDER_DEFAULT_WINDOW: Record<string, number> = {
   reasonix: 128_000,
   trae: 128_000,
   antigravity: 1_048_576,   // Gemini 系,与 gemini 同级;真实值以流式 usage 为准
+  deepseek: 128_000,        // deepseek-chat / reasoner 系,与 reasonix 同级
 }

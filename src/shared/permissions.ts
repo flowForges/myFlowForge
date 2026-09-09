@@ -6,7 +6,9 @@
 //   auto     → workspace-scoped auto edits, no network       [claude acceptEdits / codex workspace-write]  (default)
 //   full     → unrestricted files + network                  [claude bypassPermissions / codex danger-full-access]
 // Providers without a sandbox dimension (cursor/opencode/gemini) don't change behaviour across modes.
-// Per-provider CLI flags live in src/main/agents/permissionArgs.ts.
+// Per-provider CLI flags live in src/main/agents/permissionArgs.ts —— ★deepseek(dsh) 是例外：
+// 它的三档走环境变量 `DSH_PERMISSION_MODE`（read-only / workspace-write / danger-full-access），
+// 不是命令行 flag，所以在 providers/deepseek.ts 的 spawn env 里给，不进 permissionArgs。
 
 export type PermissionMode = 'readonly' | 'auto' | 'full'
 
@@ -36,7 +38,7 @@ export function isPermissionMode(v: unknown): v is PermissionMode {
 
 // Providers whose CLI exposes a real sandbox/permission dimension. Others ignore the mode (their
 // behaviour is fixed), which the UI surfaces so the picker isn't misleading.
-export const PERMISSION_AWARE_PROVIDERS = ['claude', 'codex', 'qoder', 'antigravity'] as const
+export const PERMISSION_AWARE_PROVIDERS = ['claude', 'codex', 'qoder', 'antigravity', 'deepseek'] as const
 export function providerSupportsPermissions(providerId: string): boolean {
   return (PERMISSION_AWARE_PROVIDERS as readonly string[]).includes(providerId)
 }
