@@ -29,7 +29,7 @@ import { NO_PLUGIN_CAPS } from '@shared/cliPlugins'
 import { resolveRemovable, scanAddons } from '../agents/addons'
 import { NO_MCP } from '../agents/mcpCli'
 import { spawnAgent } from '../agents/procGroup'
-import { buildStageCatalog, upsertWorkflow, removeWorkflow, type WorkflowEdit } from '../workspace/editWorkflows'
+import { addWorkflowFromTemplate, buildStageCatalog, upsertWorkflow, removeWorkflow, type WorkflowEdit } from '../workspace/editWorkflows'
 import { summarizeRequirement } from '../chat/requirementSummary'
 import { needsConversationDoc, buildConversationDoc, CONVERSATION_DOC_REL } from '../run/conversationDoc'
 import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
@@ -563,6 +563,24 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // 新建那条的 id 是服务端生成的,回传给手机端好让它存完就选中它。
     const before = new Set(ws.workflows.map(w => w.id))
     return { id: workflows.find(w => !before.has(w.id))?.id ?? a.workflow.id }
+  })
+  /**
+   * 从全局模板往这个工作区加一条工作流。
+   *
+   * ★★补的是一条**两端都有的**缺口:工作区一旦建好,之后新加的模板就再也进不去了
+   *  (以前只有 `CreateWorkspace` 向导那一条路)。手机端的「模板库」用它,电脑端将来也能用同一条。
+   * ★物化而不是引用 —— 理由见 `workspace/editWorkflows.ts` 里 `addWorkflowFromTemplate` 的注释。
+   */
+  on(CH.workspaceAddWorkflowFromTemplate, (_e, a: { workspacePath: string; templateId: string }) => {
+    if (isArchivedWorkspace(a.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
+    const ws = readWorkspace(a.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${a.workspacePath}`)
+    const workflows = addWorkflowFromTemplate(ws, a.templateId, readWorkflows().workflows, readCustomStages().stages)
+    writeWorkspace({ ...ws, workflows })
+    broadcast(CH.workspacesChanged, {})
+    // 新加那条的 id 由服务端定(模板 id 被占时会换),回传给调用方好让它存完就选中。
+    const before = new Set(ws.workflows.map(w => w.id))
+    return { id: workflows.find(w => !before.has(w.id))!.id }
   })
   on(CH.workspaceDeleteWorkflow, (_e, a: { workspacePath: string; workflowId: string }) => {
     if (isArchivedWorkspace(a.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')

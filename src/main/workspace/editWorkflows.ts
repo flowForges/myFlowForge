@@ -16,7 +16,7 @@ import type { Workspace, WsWorkflow, WsStage, Workflow, CustomStage } from '../c
 import { STAGE_KEYS, STAGE_DESC, DEFAULT_STAGE_PER_PROJECT_AGENT, DEFAULT_STAGE_PRODUCES_DOC, stageName } from '../config/schema'
 import { deriveProjectId } from '../config/projectId'
 import { indexCustomStages, type StageDefById } from '../../shared/customStages'
-import { resolveWorkflowStages } from './resolveStages'
+import { materializeGlobalStages, resolveWorkflowStages } from './resolveStages'
 
 /** 手机端发来的一个阶段:只有它看得见的那几个字段。其余一律沿用现有定义(见文件顶注释)。 */
 export interface StageEdit {
@@ -160,6 +160,43 @@ export function upsertWorkflow(
 
   if (prev) return ws.workflows.map((w) => (w.id === prev.id ? { ...w, name, stages } : w))
   return [...ws.workflows, { id: freshId(name, ws.workflows.map((w) => w.id)), name, stages }]
+}
+
+/**
+ * 从**全局模板**(设置 → 工作流 / `~/.myFlowForge/workflows.json`)往一个**已经建好的**工作区里
+ * 加一条工作流。
+ *
+ * ★★这条路以前只存在于新建工作区向导里(`CreateWorkspace.tsx:480` 拿模板 `buildStages` 生成一条)。
+ *  工作区建好之后就再也加不进新模板 —— **电脑端也一样**,不只是手机缺。
+ *
+ * ★★**物化,不是引用。** `ws.workflows[].stages` 留空的含义是「回退全局模板」
+ *  (见 `resolveWorkflowStages`),真留空的话以后改一下模板,所有引用它的工作区**跑起来的
+ *  东西全变了**,而屏幕上一个字都不会提示。向导从第一天起就是物化的,这里跟它一致。
+ *
+ * ★物化用的是 `materializeGlobalStages` —— 和「stages 为空时回退模板」走的是**同一个函数**。
+ *  各写一份的话,「从模板加进来的」和「回退到模板的」会慢慢长成两个东西,而两边都没有测试会红。
+ */
+export function addWorkflowFromTemplate(
+  ws: Workspace,
+  templateId: string,
+  globals: Workflow[],
+  custom: CustomStage[],
+): WsWorkflow[] {
+  const g = globals.find((w) => w.id === templateId)
+  if (!g) throw new Error(`没有这个模板: ${templateId}`)
+  const name = g.name.trim()
+  if (ws.workflows.some((w) => w.name.trim() === name)) {
+    throw new Error(`这个工作区已经有一条叫「${name}」的工作流了`)
+  }
+  const stages = materializeGlobalStages(g, indexCustomStages(custom))
+  // 模板本身是空的 → 加进来就是一条 stages 为空的工作流,而那在存储层的含义是「回退全局模板」。
+  // 同一个回退陷阱,`upsertWorkflow` 那边也拒(「至少留一个阶段」)。
+  if (stages.length === 0) throw new Error('这个模板里至少要有一个阶段')
+  // ★id 沿用模板的 —— 一眼看得出这条是从哪个模板来的(向导也是这么干的)。被占了才换,
+  //  绝不覆盖工作区里已有的那条。
+  const taken = ws.workflows.map((w) => w.id)
+  const id = taken.includes(g.id) ? freshId(name, taken) : g.id
+  return [...ws.workflows, { id, name, stages }]
 }
 
 // 和全局模板 buildWorkflow 同一套:名字转 slug,重名加序号。中文名转不出 slug → 'workflow'。

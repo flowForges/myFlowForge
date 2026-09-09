@@ -247,6 +247,12 @@ const WF_TEMPLATES = [
       { key: 'lib-doc', libId: 'lib-doc', name: '缓存的旧名字' },
     ],
   },
+  {
+    // ★这一条**故意不出现在 LAUNCH_FLOWS 里**:上面两条的名字和工作区里已有的工作流一模一样
+    //  (工作区本来就是从它们建出来的),全都会撞名 ⇒ 「加进工作区」成功那条路一次都验不到。
+    id: 'docs-only', name: '只写文档', plugins: [], stagePrompts: { design: '只出文档,别动代码' },
+    stages: [{ key: 'design', defaultAgent: 'claude', defaultModel: 'opus-4.8' }],
+  },
 ]
 /** 手机发过来的 workspace:create 入参原样落档 —— 「到底发了什么」在浏览器里一点痕迹都不留。 */
 const CREATE_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '.out', 'last-create.json')
@@ -407,6 +413,35 @@ const table = {
     hooks: [],
   }),
   'workflow:stage-catalog': () => STAGE_CATALOG,
+  /**
+   * 把一条全局模板物化进这个工作区。★照抄真服务端 `addWorkflowFromTemplate` 的语义:
+   * 物化(不是留空引用)、同名拒绝、模板不存在拒绝、模板 id 被占了换一个。
+   * 假 daemon 松一档的话,e2e 验的就是一个比真货宽松的东西(9-4 那次的教训)。
+   */
+  'workspace:add-workflow-from-template': (a) => {
+    const t = WF_TEMPLATES.find((w) => w.id === a.templateId)
+    if (!t) throw new Error(`没有这个模板: ${a.templateId}`)
+    if (LAUNCH_FLOWS.some((w) => w.name === t.name)) throw new Error(`这个工作区已经有一条叫「${t.name}」的工作流了`)
+    const cat = [...STAGE_CATALOG.builtin, ...STAGE_CATALOG.custom]
+    const stages = t.stages.map((s) => {
+      // ★libId 的阶段要**解引用**:模板里那个 name 是过期的缓存(见 WF_TEMPLATES 里的注释),
+      //  真身在阶段库里。照抄缓存的话,加进去的阶段名和提示词都是错的。
+      const lib = s.libId ? CUSTOM_STAGES.find((x) => x.id === s.libId) : null
+      const c = cat.find((x) => (s.libId ? x.libId === s.libId : x.key === s.key))
+        ?? { key: s.key, name: lib?.name ?? s.key, desc: '', code: false, producesDoc: false }
+      const prompt = lib?.prompt ?? s.prompt ?? t.stagePrompts?.[s.key]
+      return {
+        ...c, key: s.key, name: lib?.name ?? c.name,
+        provider: s.defaultAgent || lib?.defaultAgent || 'claude',
+        model: s.defaultModel || lib?.defaultModel || 'opus',
+        gate: c.gate ?? false, ...(prompt ? { prompt } : {}),
+      }
+    })
+    if (!stages.length) throw new Error('这个模板里至少要有一个阶段')
+    const id = LAUNCH_FLOWS.some((w) => w.id === t.id) ? `${t.id}-2` : t.id
+    LAUNCH_FLOWS.push({ id, name: t.name, stages })
+    return { id }
+  },
   /**
    * MCP 面板(手机上是只读的)。形状照 `@shared/mcp` 的 McpProviderView:
    * 两个 provider,一个有待授权的、一个全是 stdio(无需授权),再加一个压根没有 mcp 子命令的。

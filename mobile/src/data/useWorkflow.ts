@@ -192,3 +192,76 @@ export function useStageCatalog() {
 
   return { builtin, custom }
 }
+
+
+/**
+ * 一条**全局工作流模板**(`config:list-workflows` 回的 `Workflow`)。
+ *
+ * ★★和 `WorkflowInfo` 是**两个东西**,这一点最容易搞混:
+ *  · `WorkflowInfo` = 「**这个工作区**里有哪些工作流」(`ws.workflows`,启动屏列的就是它);
+ *  · `Template`     = 「**这台机器**上存着哪些模板」(`~/.myFlowForge/workflows.json`)。
+ *  模板是跨工作区的原型,工作区那份是它的一份**副本** —— 从模板加进去之后两边就各改各的了。
+ * ★阶段的字段名也不一样(模板是 `defaultAgent`/`defaultModel`),所以这里**不复用** `StageInfo`。
+ *  真正的映射由服务端 `materializeGlobalStages` 做,手机端只用来显示。
+ */
+export type TemplateStage = {
+  key: string
+  /** ★★对阶段库的引用。有它时,**同一条上的 `name` 是一份会过期的缓存** —— 真身在阶段库里
+   *  (`workflow:stage-catalog` 的 `custom`)。照 `name` 显示会写出一个早就改过名的阶段。 */
+  libId?: string
+  name?: string
+  defaultAgent?: string
+  defaultModel?: string
+}
+export type Template = { id: string; name: string; stages: TemplateStage[] }
+
+/**
+ * 这台机器上的工作流模板库。
+ *
+ * ★这条通道**一直就在方法表里**(`config:list-workflows` 没进 `CLIENT_ONLY`,所以路由到 host),
+ *  只是手机端从来没调过它。所以这一屏不需要服务端配合就能读到 —— 需要服务端配合的是
+ *  「把模板加进某个工作区」那一刀(`workspace:add-workflow-from-template`)。
+ */
+export function useTemplates() {
+  const { invoke, online, methods } = useConn()
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [nonce, setNonce] = useState(0)
+  const reload = useCallback(() => setNonce((n) => n + 1), [])
+
+  /**
+   * 老主机上没有「把模板加进工作区」那个方法 ⇒ **不摆按钮并说明原因**(决策 B-2)。
+   * 摆一个灰的、或者摆一个点下去吃「未知方法」的,都比明说更糟。
+   */
+  const canUse = methods.has(CH.workspaceAddWorkflowFromTemplate)
+
+  useEffect(() => {
+    if (!online) {
+      setLoading(false)
+      return
+    }
+    let alive = true
+    setLoading(true)
+    void (async () => {
+      try {
+        const list = (await invoke(CH.configListWorkflows, [])) as Template[]
+        if (!alive) return
+        setTemplates(Array.isArray(list) ? list : [])
+        setError(null)
+      } catch (e) {
+        if (!alive) return
+        // ★空列表和「读不到」必须分得开:前者是「你还没建过模板」,后者是这台机器没答上来。
+        setTemplates([])
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [online, invoke, nonce])
+
+  return { templates, loading, error, reload, canUse }
+}

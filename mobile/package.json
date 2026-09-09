@@ -62,6 +62,7 @@
     "e2e:newws": "node e2e/newws.mjs",
     "e2e:tree": "node e2e/tree.mjs",
     "e2e:flowedit": "node e2e/flowedit.mjs",
+    "e2e:templates": "node e2e/templates.mjs",
     "e2e:mcp": "node e2e/mcp.mjs"
   },
   "private": true

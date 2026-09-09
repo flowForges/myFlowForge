@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { Workspace, Workflow, CustomStage } from '../config/schema'
-import { buildStageCatalog, upsertWorkflow, removeWorkflow } from './editWorkflows'
+import { buildStageCatalog, upsertWorkflow, removeWorkflow, addWorkflowFromTemplate } from './editWorkflows'
 
 const ws = (over: Partial<Workspace> = {}): Workspace => ({
   name: 'w', path: '/w', workflowId: '', stages: [], projects: [],
@@ -163,5 +163,82 @@ describe('removeWorkflow', () => {
   })
   it('不存在的 id 明确报错,不静默无事发生', () => {
     expect(() => removeWorkflow(ws(), 'nope')).toThrow('未知工作流')
+  })
+})
+
+
+/**
+ * 从**全局模板**往一个已经建好的工作区里加一条工作流。
+ *
+ * ★★这条路以前只存在于**新建工作区向导**里(`CreateWorkspace.tsx` 拿模板 buildStages 生成
+ *  一条 ws.workflows)。工作区一旦建好,之后新加的模板就再也进不来了 —— 电脑端也一样。
+ *  用户 2026-09-09 要的「手机上看得到有哪些模板,启动时能选」落到服务端就是这一刀。
+ * ★★**物化,不是引用**:`ws.workflows[].stages` 留空的含义是「回退全局模板」,那意味着以后
+ *  改一下模板,所有引用它的工作区**跑起来的东西全变了**,而且屏幕上一个字都不会提示。
+ *  向导从第一天起就是物化的,这里跟它一致。
+ */
+describe('addWorkflowFromTemplate', () => {
+  it('把模板的阶段**物化**进去,而不是留一条空的去回退', () => {
+    const w = ws()
+    const next = addWorkflowFromTemplate(w, 'standard', globals, [])
+    const added = next.find((x) => x.name === '标准工作流')!
+    expect(added.stages.map((s) => s.key)).toEqual(['requirement', 'develop'])
+    expect(added.stages.length, '空 stages = 回退模板,那是引用不是复制').toBeGreaterThan(0)
+  })
+
+  it('模板级的 stagePrompts 一起物化下来 —— 否则加进来的这条跑起来和模板不是一回事', () => {
+    const next = addWorkflowFromTemplate(ws(), 'standard', globals, [])
+    const added = next.find((x) => x.name === '标准工作流')!
+    expect(added.stages.find((s) => s.key === 'develop')?.prompt).toBe('小步提交')
+  })
+
+  it('defaultAgent/defaultModel 映射成 provider/model', () => {
+    const next = addWorkflowFromTemplate(ws(), 'standard', globals, [])
+    const added = next.find((x) => x.name === '标准工作流')!
+    expect(added.stages.find((s) => s.key === 'requirement')).toMatchObject({ provider: 'codex', model: 'gpt-5' })
+  })
+
+  it('原来那两条一条都不许动', () => {
+    const w = ws()
+    const next = addWorkflowFromTemplate(w, 'standard', globals, [])
+    expect(next.slice(0, 2)).toEqual(w.workflows)
+    expect(next).toHaveLength(3)
+  })
+
+  it('这个工作区已经有同名的一条 → 拒绝,并说清楚', () => {
+    const w = ws({ workflows: [{ id: 'x', name: '标准工作流', stages: [{ key: 'develop', provider: 'claude', model: 'm' }] }] })
+    expect(() => addWorkflowFromTemplate(w, 'standard', globals, [])).toThrow(/已经有一条/)
+  })
+
+  it('模板 id 对不上 → 拒绝,不许静默加一条空的', () => {
+    expect(() => addWorkflowFromTemplate(ws(), '不存在', globals, [])).toThrow(/没有这个模板/)
+  })
+
+  it('★模板里的阶段是空的 → 拒绝。加进去会是一条 stages 为空的工作流,含义变成「回退全局模板」', () => {
+    const empty: Workflow[] = [{ id: 'empty', name: '空模板', plugins: [], stagePrompts: {}, stages: [] }]
+    expect(() => addWorkflowFromTemplate(ws(), 'empty', empty, [])).toThrow(/至少/)
+  })
+
+  it('模板引用了阶段库(libId)时,照样物化成完整的阶段', () => {
+    const g: Workflow[] = [{
+      id: 'perfflow', name: '性能流', plugins: [], stagePrompts: {},
+      stages: [{ key: 'perf', libId: 'lib1', defaultAgent: '', defaultModel: '' } as never],
+    }]
+    const next = addWorkflowFromTemplate(ws(), 'perfflow', g, lib)
+    const added = next.find((x) => x.name === '性能流')!
+    expect(added.stages[0]).toMatchObject({ key: 'perf', name: '性能回归', provider: 'codex', model: 'gpt-5' })
+  })
+
+  it('id 沿用模板的(没被占用时)—— 一眼看得出这条是从哪个模板来的', () => {
+    const next = addWorkflowFromTemplate(ws(), 'standard', globals, [])
+    expect(next.find((x) => x.name === '标准工作流')?.id).toBe('standard')
+  })
+
+  it('模板 id 已经被这个工作区里另一条占了 → 换一个,绝不覆盖别人', () => {
+    const w = ws({ workflows: [{ id: 'standard', name: '别的', stages: [{ key: 'develop', provider: 'c', model: 'm' }] }] })
+    const next = addWorkflowFromTemplate(w, 'standard', globals, [])
+    expect(next).toHaveLength(2)
+    expect(next[0]).toEqual(w.workflows[0])
+    expect(next[1].id).not.toBe('standard')
   })
 })

@@ -4,7 +4,9 @@ import { router } from 'expo-router'
 import { CH } from '../../../src/main/ipc/channels'
 import type { WorkspaceMeta } from '../../../src/shared/types'
 import { useC } from '../../src/theme/theme'
-import { Btn, Empty, Field, List, Note, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
+import { Btn, Empty, Field, List, Note, Row, Sec, T, Tabs, TopBar, TopTitle } from '../../src/ui/kit'
+import { ArchivedPane } from '../../src/ui/ArchivedPane'
+import { TemplatesPane } from '../../src/ui/TemplatesPane'
 import { Sheet } from '../../src/ui/Sheet'
 import { useConn } from '../../src/net/conn'
 import { useStore } from '../../src/data/store'
@@ -31,12 +33,24 @@ import { tap } from '../../src/ui/haptics'
  *
  * ★下拉刷新和首页同一份实现(`store.refresh()` 返回的 promise,见 `refreshGate.ts`):
  *  在电脑上新建的工作区,这一屏也得看得见。
+ *
+ * ★★2026-09-09 这一格从一张列表变成**三段**(工作区 / 归档 / 工作流)。用户原话:
+ *  「将菜单的第二栏 工作区 改成综合类的,分成 工作区、归档、工作流,后续再考虑增加其他的」。
+ *  三段的共同点是「**我有哪些东西、它们什么状况**」,和首页那个「在跑什么 / 什么等我」正交。
+ *  · 归档:原来在「其它」里点进另一屏(`app/archived.tsx`,已删)。同一件事两个入口正是
+ *    这一格当初存在的理由(「工作区的管理原来散在三个地方」),所以搬进来之后那一屏就删掉了。
+ *  · 工作流:**模板库**(这台机器上有哪些模板),不是「这个工作区里有哪些工作流」——
+ *    后者归启动屏。两者的区别见 `TemplatesPane` 顶上的注释。
+ * ★分段用 `Tabs`(和 `exec.tsx` 同一个控件),不是三个 tab bar 格子:tab bar 那一层是
+ *  「app 的几大块」,而这三段是同一块里的三个视角。
  */
 export default function Workspaces() {
   const c = useC()
   const { online, invoke } = useConn()
   const { groups, gatesFor, loading, refresh, setPinned, archive, ensureWs } = useStore()
 
+  /** 三段里的哪一段。★不持久化:每次进来落回「工作区」—— 这一格的主语就是它。 */
+  const [seg, setSeg] = useState<'ws' | 'archived' | 'flows'>('ws')
   const [pulling, setPulling] = useState(false)
   const [busy, setBusy] = useState(false)
   /** 长按呼出的操作单。存整份 meta —— 单子里要读 `pinned` 决定按钮写「置顶」还是「取消置顶」。 */
@@ -107,15 +121,32 @@ export default function Workspaces() {
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       {/* tab 的一格没有「上一层」,所以没有 `‹` —— 留着会变成一颗跳去别的 tab 的假返回键。 */}
       <TopBar>
-        <TopTitle title="工作区" sub="一堆项目 + 一条工作流" />
+        {/* ★标题跟着段走。写死「工作区」的话,站在模板段上看到的是
+            「工作区 / 这台机器上的工作流模板」—— 标题和它自己的副标题打架。
+            底部那一格仍然叫「工作区」(那是这一格的名字),两者不冲突。 */}
+        <TopTitle
+          title={seg === 'ws' ? '工作区' : seg === 'archived' ? '已归档' : '工作流模板'}
+          sub={seg === 'ws' ? '一堆项目 + 一条工作流' : seg === 'archived' ? '恢复后回到会话列表' : '在电脑端「设置 → 工作流」里维护'}
+        />
       </TopBar>
+      <Tabs
+        items={[
+          { key: 'ws' as const, label: '工作区' },
+          { key: 'archived' as const, label: '归档' },
+          { key: 'flows' as const, label: '工作流' },
+        ]}
+        value={seg}
+        onChange={(k) => { tap('switchTab'); setSeg(k) }}
+      />
 
       <ScrollView
         contentContainerStyle={{ paddingBottom: 40 }}
+        // ★下拉刷新只挂在「工作区」这一段:另外两段各自管着自己的数据(归档那段自己拉全量列表、
+        //  模板那段拉模板库),挂上去会变成「拉了半天刷新的是别人」。
         refreshControl={
           <RefreshControl
             refreshing={pulling}
-            enabled={online}
+            enabled={online && seg === 'ws'}
             onRefresh={() => {
               // ★拉到位松手 = 手势越过阈值,和左滑到位同一类,轻轻一下确认「收到了」。
               //  没有它的话,这个 app 里唯一没有手感的手势就是它(用户当场问出来的)。
@@ -129,7 +160,11 @@ export default function Workspaces() {
           />
         }
       >
-        {!online ? (
+        {seg === 'archived' ? (
+          <ArchivedPane />
+        ) : seg === 'flows' ? (
+          <TemplatesPane />
+        ) : !online ? (
           <Empty title="未连接" desc="连上才有数据 —— 这里不会拿旧内容假装在线。" />
         ) : loading ? (
           <Empty title="正在读取…" />
@@ -186,20 +221,6 @@ export default function Workspaces() {
           </>
         )}
 
-        {/* ★★「已归档」从**设置**搬到这儿了。归档的是**工作区** —— 它在设置里的那两个月,
-            分组头(全屏唯一的结构信号)一直在说一句假话。
-            ★这一行**不跟着 online 走**:那一屏自己会说「未连接」,而把入口藏起来会让人
-            以为归档的东西没了。 */}
-        <Sec>其它</Sec>
-        <List>
-          <Row onPress={() => router.push(ROUTES.archived)}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <T style={{ fontSize: 15, color: c.fg }}>已归档</T>
-              <T style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>归档后在这里恢复</T>
-            </View>
-            <T style={{ fontSize: 16, color: c.faint }}>›</T>
-          </Row>
-        </List>
       </ScrollView>
 
       {/* 长按呼出的操作单。★和首页那张是**同一套动作**,只是入口不同 —— 两处都要能做,

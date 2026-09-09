@@ -61,6 +61,8 @@ describe('方法表', () => {
     // 207 → 210:技能 / 插件市场三条(cli-plugins:list / install / uninstall)。装的是**主机上**
     //   那个 CLI 的插件,所以是 host 方法。
     // 另外两处计数互为佐证:210 = 45(CLIENT_ONLY)+ 165(host),daemonTable = 210 - 45 - 2。
-    expect(Object.keys(table).length).toBe(210)
+    // 210 → 211:workspace:add-workflow-from-template —— 把一条全局模板物化进已建好的工作区
+    //   (2026-09-09;以前只有新建向导能做这件事,两端都缺这条路)。
+    expect(Object.keys(table).length).toBe(211)
   })
 })

@@ -47,7 +47,6 @@ export const ROUTES = {
   addHost: '/add-host',
   scan: '/scan',
   host: '/host',
-  archived: '/archived',
   /**
    * 通知。★2026-08-31 从设置屏里整组搬出来的 —— 它是四个开关 + 三段解释,
    * 摊在设置那一列里会把整屏变成「通知设置屏,附带几个别的」。

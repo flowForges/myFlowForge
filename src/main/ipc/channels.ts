@@ -332,6 +332,8 @@ export const CH = {
   // 以及「能加哪些阶段」那张单子。改的是 ws.workflows(启动屏列的、真跑起来用的那一份),
   // 所以电脑端立刻同步。**一次只动一条**,不整份覆盖 —— 见 workspace/editWorkflows.ts 顶注释。
   workflowStageCatalog: 'workflow:stage-catalog',
+  // 把一条**全局模板**物化进某个已经建好的工作区(以前只有新建向导能做这件事)。
+  workspaceAddWorkflowFromTemplate: 'workspace:add-workflow-from-template',
   workspaceSaveWorkflow: 'workspace:save-workflow',
   workspaceDeleteWorkflow: 'workspace:delete-workflow',
 
