@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   MAX_CLIENTS_PER_ROOM,
+  PING,
+  PONG,
   createRelayCore,
   isValidRoom,
   parseJoin,
@@ -467,5 +469,54 @@ describe('restore · Durable Object 从 hibernation 醒来时重建房间', () =
     ])
     core.leave(h.sock, ROOM, 'host')
     expect(core.stats()).toEqual({ rooms: 0, connections: 0 })
+  })
+})
+
+/**
+ * ★★心跳。防的是**房间被一条死 socket 永久占住**:同一个房间只准一个 host,
+ *  而笔记本合盖 / 切网造出来的僵尸不会触发 close 事件,于是真主机回来时看到的是
+ *  「这个房间已经有一台主机连着了」—— 而那台就是它自己(2026-09-09 用户真踩到)。
+ */
+describe('心跳', () => {
+  it('ping 原地回 pong', () => {
+    const core = createRelayCore()
+    const h = sock()
+    core.join(h, { t: 'join', role: 'host', room: ROOM })
+    h.sent.length = 0
+    core.relay(h, ROOM, 'host', PING)
+    expect(h.sent).toEqual([PONG])
+  })
+
+  it('★客户端发的**真** ping(那四个字母)照常原样转发 —— 它是内容,不是心跳', () => {
+    const core = createRelayCore()
+    const h = sock()
+    const c = sock()
+    core.join(h, { t: 'join', role: 'host', room: ROOM })
+    const r = core.join(c, { t: 'join', role: 'client', room: ROOM })
+    const cid = r.ok ? r.cid! : ''
+    h.sent.length = 0
+    core.relay(c, ROOM, 'client', 'ping', cid)
+    expect(h.sent).toContain(JSON.stringify({ t: 'data', cid, d: 'ping' }))
+  })
+
+  it('★心跳帧绝不转发给对面 —— 它是链路层的,不是内容', () => {
+    const core = createRelayCore()
+    const h = sock()
+    const c = sock()
+    core.join(h, { t: 'join', role: 'host', room: ROOM })
+    const r = core.join(c, { t: 'join', role: 'client', room: ROOM })
+    const cid = r.ok ? r.cid! : ''
+    h.sent.length = 0
+    c.sent.length = 0
+    core.relay(c, ROOM, 'client', PING, cid)
+    expect(h.sent, 'host 不该收到任何东西').toEqual([])
+    expect(c.sent).toEqual([PONG])
+  })
+
+  it('★房间已经没了也照样回 —— 心跳问的是「这条 socket 活着吗」,不是「房间在不在」', () => {
+    const core = createRelayCore()
+    const h = sock()
+    core.relay(h, '不存在的房间', 'host', PING)
+    expect(h.sent).toEqual([PONG])
   })
 })

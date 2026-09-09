@@ -2,7 +2,7 @@ import { WebSocket } from 'ws'
 import { HttpsProxyAgent } from 'https-proxy-agent'
 import { pickProxy, proxyUsable } from './wsProxy'
 import type { Identity } from '@shared/remote/e2e'
-import { hostClose, hostData, joinFrame, parseHostEnvelope, roomFor, asRelayStatus } from '@shared/remote/relayWire'
+import { PING, PONG, hostClose, hostData, joinFrame, parseHostEnvelope, roomFor, asRelayStatus } from '@shared/remote/relayWire'
 import type { MethodTable } from '../ipc/invokeCtx'
 import { serveConnection, type Channel } from './serveConnection'
 import { hostE2ELink, type E2ELink } from '@shared/remote/e2eChannel'
@@ -70,6 +70,8 @@ export type RelayHostOpts = {
    *  和「地址写错」「服务没起来」长得一模一样。理由完整版在 `wsProxy.ts`。
    */
   proxy?: string
+  /** 心跳间隔;0 = 不发(测试用)。 */
+  pingMs?: number
   onLog?: (msg: string) => void
   onStatus?: (s: RelayHostStatus) => void
   /** 退避参数;false = 不自动重连(测试用) */
@@ -94,6 +96,26 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
   let attempt = 1
   let disposed = false
   let retryTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * ★★心跳。防的是**这条 socket 死了但没人知道**:笔记本合盖、切网、拔网线造出来的
+   *  「僵尸」不会触发 close 事件,而同一个房间只准一个 host ⇒ 真主机回来时看到的是
+   *  「这个房间已经有一台主机连着了」,而那台就是它自己(2026-09-09 用户真踩到,
+   *  卡了半天最后靠 Cloudflare 自己收掉才好)。
+   *
+   * ★★**必须能容忍「永远收不到 pong」** —— 老中转不认这一帧,它会被
+   *  `parseHostEnvelope` 拒掉然后静默丢弃。所以判据是「**曾经**收到过 pong,然后开始丢」,
+   *  而不是「没收到 pong」。写成后者的话,连老中转会变成无限重连。
+   */
+  let beat: ReturnType<typeof setInterval> | null = null
+  /** 这个中转认不认心跳。收到过一次 pong 就算认 —— 认了之后才敢拿丢 pong 当断线判据。 */
+  let pongSeen = false
+  /** 连着丢了几次 pong。收到 pong 清零。 */
+  let missed = 0
+  const pingMs = opts.pingMs ?? 30_000
+  /** 连丢几次算死。2 次 = 最长 ~90 秒发现,比内核 TCP keepalive 的十几分钟好一个量级。 */
+  const MISS_LIMIT = 2
+
+  const stopBeat = () => { if (beat) { clearInterval(beat); beat = null } }
 
   /** cid → 那条逻辑连接的加密层。**这张表的生命周期跟着中转连接走**,重连就清空。 */
   const links = new Map<string, E2ELink>()
@@ -224,19 +246,40 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
     sock.on('open', () => {
       log(`连上中转 ${opts.relayUrl},认领房间`)
       sendToRelay(JSON.stringify(joinFrame('host', room)))
+      missed = 0
+      stopBeat()
+      if (pingMs > 0) {
+        beat = setInterval(() => {
+          // ★先判再发:判的是**上一轮**发出去的那些有没有回音。
+          if (pongSeen && missed >= MISS_LIMIT) {
+            log(`中转连着 ${missed} 次没回心跳,当它已经死了,重连`)
+            stopBeat()
+            // 主动关掉 ⇒ 'close' 事件 ⇒ 正常退避重连。也让中转那边尽快释放房间。
+            try { sock.close(4000, 'heartbeat timeout') } catch { /* 已关 */ }
+            return
+          }
+          missed++
+          sendToRelay(PING)
+        }, pingMs)
+        beat.unref?.()
+      }
     })
 
     sock.on('message', (raw: unknown, isBinary: boolean) => {
       // 中转的协议是文本的。二进制帧一律无视 —— 放行等于多开一条没人测过的路径。
       if (isBinary) return
       const text = String(raw)
+      // ★心跳先判。它不是状态帧也不是信封,落到下面只会被当成「看不懂的帧」记一行日志。
+      if (text === PONG) { pongSeen = true; missed = 0; return }
 
       const st = asRelayStatus(text)
       if (st) {
         if (st.status === 'error') {
-          // ★"房间已经有一台主机连着了"是**重试也没用**的:要么是自己上一条僵尸连接
-          //  (中转的心跳会在一分钟内收掉,那时用户手动重连即可),要么真有人占了房间。
-          //  两种都不该拿退避刷一整晚。
+          // ★"房间已经有一台主机连着了"是**重试也没用**的:要么是自己上一条僵尸连接,
+          //  要么真有人占了房间。两种都不该拿退避刷一整晚。
+          // ★★僵尸那一种现在**两头都有兜底**:这一侧的心跳会让死连接自己断掉(见 `beat`),
+          //  中转那一侧的回收见 `worker.ts` 的 alarm。但**两头都得是新版本** ——
+          //  对面还是老版中转时,唯一的出路仍然是人工:设置 → 手机 里把它踢掉,或重新部署中转。
           return fail(st.error || '中转拒绝了这次连接')
         }
         if (st.status === 'waiting' || st.status === 'peer-online') {
@@ -263,6 +306,7 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
     })
 
     sock.on('close', () => {
+      stopBeat()
       if (disposed) { dropAllLinks('已停止'); return }
       scheduleRetry('和中转的连接断了')
     })
@@ -279,6 +323,7 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
     async close() {
       disposed = true
       if (retryTimer) clearTimeout(retryTimer)
+      stopBeat()
       dropAllLinks('已停止')
       try { ws?.close(1001, 'going away') } catch { /* 已关 */ }
       ws = null

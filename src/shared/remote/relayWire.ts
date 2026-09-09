@@ -79,3 +79,18 @@ export function parseHostEnvelope(raw: string): HostEnvelope | null {
 export const hostData = (cid: string, d: string): string => JSON.stringify({ t: 'data', cid, d })
 /** host → 中转:主动关掉某一条逻辑连接。 */
 export const hostClose = (cid: string): string => JSON.stringify({ t: 'close', cid })
+
+/**
+ * 链路心跳的两个字面量。**和 `relay/src/core.ts` 里的 `PING`/`PONG` 必须一模一样**
+ * (契约的两半,形状由 `relayWire.test.ts` 钉住)。
+ *
+ * ★★为什么需要它:同一个房间只准一个 host,而一条**死了但没关**的 socket
+ *  (合盖、切网、拔网线)会把房间**永久**占住 —— 真主机回来只会看到
+ *  「这个房间已经有一台主机连着了」,而那台就是它自己。
+ * ★★**故意不叫 `ping`**:中转对客户端帧的承诺是「原样搬」,而 `ping` 这种四字母词
+ *  客户端完全可能真的发。截住一个可能是真内容的字符串,是在哑管道上开一个静默的洞。
+ * ★老中转不认这一帧,会静默丢掉(过不了 `parseHostEnvelope`)—— 所以发心跳的一侧
+ *  必须能容忍**永远收不到 pong**,判据见 `relayHost.ts` 的 `pongSeen`。
+ */
+export const PING = 'relay-ping'
+export const PONG = 'relay-pong'

@@ -3,6 +3,7 @@ import { WebSocket, WebSocketServer } from 'ws'
 import { clientHandshakeInit, generateIdentity } from '@shared/remote/e2e'
 import { joinFrame, roomFor } from '@shared/remote/relayWire'
 import { startRelay, type RelayHandle } from '../../../relay/src/node'
+import { PING, PONG } from '@shared/remote/relayWire'
 import { startRelayHost, type RelayHostHandle } from './relayHost'
 import { clientE2ELink } from '@shared/remote/e2eChannel'
 import type { Channel } from '@shared/remote/channel'
@@ -395,5 +396,95 @@ describe('通过不可信中转对外服务方法表', () => {
     await host.close()
     await new Promise((r) => setTimeout(r, 200))
     expect(host.status().status).toBe('off')
+  })
+})
+
+/**
+ * ★★链路心跳。防的是**这条 socket 死了但没人知道** —— 合盖 / 切网 / 拔网线造出来的僵尸
+ * 不会触发 close 事件,而同一个房间只准一个 host ⇒ 真主机回来时看到的是
+ * 「这个房间已经有一台主机连着了」,而那台就是它自己(2026-09-09 用户真踩到)。
+ *
+ * ★这一组用**假中转**而不是真的:要能精确控制「回不回 pong」,真中转永远回。
+ */
+describe('链路心跳', () => {
+  /**
+   * 一台假中转。`pong` 决定它认不认心跳 —— 这正是新版和**老版**中转的唯一区别。
+   * 记下每一次连接,好数出「重连了没有」。
+   */
+  async function fakeRelay(opts: { pong: boolean }) {
+    const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
+    await new Promise<void>((r) => wss.once('listening', () => r()))
+    const conns: WebSocket[] = []
+    let pings = 0
+    wss.on('connection', (ws: WebSocket) => {
+      conns.push(ws)
+      ws.on('message', (raw: unknown) => {
+        const text = String(raw)
+        if (text === PING) { pings++; if (opts.pong) ws.send(PONG); return }
+        // join 帧:照真中转回一个 waiting,好让 host 进入 online
+        try { if (JSON.parse(text).t === 'join') ws.send(JSON.stringify({ t: 'relay', status: 'waiting' })) }
+        catch { /* 不是 JSON,无视 */ }
+      })
+    })
+    const port = (wss.address() as { port: number }).port
+    return {
+      port,
+      get conns() { return conns },
+      get pings() { return pings },
+      /** 从现在起不再回 pong —— 模拟「socket 还在,对面已经死了」。 */
+      goSilent() { opts.pong = false },
+      close: () => new Promise<void>((r) => { for (const c of conns) { try { c.terminate() } catch { /* 已关 */ } } wss.close(() => r()) }),
+    }
+  }
+  let fake: Awaited<ReturnType<typeof fakeRelay>> | null = null
+  afterEach(async () => { await fake?.close(); fake = null })
+
+  const startHost = (port: number) => startRelayHost({
+    relayUrl: `ws://127.0.0.1:${port}`,
+    identity: generateIdentity(),
+    table: {} as MethodTable,
+    addSink: () => () => {},
+    version: '1.2.0',
+    pingMs: 25,
+    backoff: { baseMs: 10, maxMs: 20 },
+  })
+
+  it('连上之后开始发心跳', async () => {
+    fake = await fakeRelay({ pong: true })
+    host = startHost(fake.port)
+    await waitFor(() => fake!.pings >= 2)
+    expect(host.status().status).toBe('online')
+  })
+
+  /**
+   * ★这条是变异测试逼出来的:把「收到 pong 就把 missed 清零」删掉,上面两条**全绿** ——
+   *  因为它们只看「有没有重连」的**下界**。而漏掉清零的后果是:一个**一直健康**的中转
+   *  也会在几拍之后被判死,然后无限重连。这里钉的是上界。
+   */
+  it('★★一直回 pong 的中转,永远不许被重连', async () => {
+    fake = await fakeRelay({ pong: true })
+    host = startHost(fake.port)
+    await waitFor(() => fake!.pings >= 6)   // 远超 MISS_LIMIT 的拍数
+    expect(fake.conns.length, '健康的中转被判死了 —— 多半是收到 pong 没清零').toBe(1)
+    expect(host.status().status).toBe('online')
+  })
+
+  it('★★回过 pong 之后开始不回了 —— 判定这条已经死了,重连', async () => {
+    fake = await fakeRelay({ pong: true })
+    host = startHost(fake.port)
+    await waitFor(() => fake!.pings >= 2)          // 先确认这个中转是认心跳的
+    expect(fake.conns.length).toBe(1)
+    fake.goSilent()
+    // 连丢 MISS_LIMIT 次之后应该主动断开并重连 ⇒ 假中转上会出现第二条连接
+    await waitFor(() => fake!.conns.length >= 2, 5000)
+  })
+
+  it('★★★老中转(从来不回 pong)不许被判死 —— 否则连老中转会变成无限重连', async () => {
+    fake = await fakeRelay({ pong: false })
+    host = startHost(fake.port)
+    await waitFor(() => fake!.pings >= 4)          // 发了四次,一次回音都没有
+    await new Promise((r) => setTimeout(r, 120))   // 再给足够久
+    expect(fake.conns.length, '它把老中转判死了 —— 这会变成无限重连').toBe(1)
+    expect(host.status().status).toBe('online')
   })
 })

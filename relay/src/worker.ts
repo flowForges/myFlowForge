@@ -1,4 +1,4 @@
-import { createRelayCore, parseJoin, type RelaySocket, type Role } from './core.js'
+import { PING, PONG, createRelayCore, parseJoin, type RelaySocket, type Role } from './core.js'
 
 /**
  * Cloudflare Workers + Durable Object 适配器(设计文档第八节的 `worker.ts`)。
@@ -49,9 +49,25 @@ interface CfWebSocket {
   serializeAttachment(value: unknown): void
   deserializeAttachment(): unknown
 }
+interface DurableObjectStorage {
+  setAlarm(scheduledTime: number): Promise<void>
+  getAlarm(): Promise<number | null>
+}
 interface DurableObjectState {
   acceptWebSocket(ws: CfWebSocket): void
   getWebSockets(): CfWebSocket[]
+  storage: DurableObjectStorage
+  /**
+   * 运行时**替我们**回一帧,而且**不唤醒这个 DO** —— 心跳能便宜到几乎免费,靠的就是它。
+   * 配了之后,匹配到的那一帧根本不会走 `webSocketMessage`。
+   */
+  setWebSocketAutoResponse(pair: WebSocketRequestResponsePairType): void
+  /** 这条连接**最后一次**被自动应答是什么时候。从没应答过 = null(老客户端,不发心跳)。 */
+  getWebSocketAutoResponseTimestamp(ws: CfWebSocket): Date | null
+}
+interface WebSocketRequestResponsePairType { request: string; response: string }
+declare const WebSocketRequestResponsePair: {
+  new (request: string, response: string): WebSocketRequestResponsePairType
 }
 interface DurableObjectId { toString(): string }
 interface DurableObjectStub { fetch(req: Request): Promise<Response> }
@@ -73,11 +89,29 @@ const isAttach = (v: unknown): v is Attach => {
   return typeof a.room === 'string' && (a.role === 'host' || a.role === 'client')
 }
 
+/** 多久检查一次僵尸(毫秒)。 */
+const SWEEP_MS = 60_000
+/**
+ * 多久没回过心跳算死。★要**明显大于**客户端的心跳间隔(`relayHost` 是 30 秒),
+ * 否则一次网络抖动就把一条好连接收掉。三倍是常见取法。
+ */
+const STALE_MS = 100_000
+
 export class RelayRoom {
   private core = createRelayCore()
   private hydrated = false
 
-  constructor(private state: DurableObjectState) {}
+  constructor(private state: DurableObjectState) {
+    /**
+     * ★★心跳交给运行时自动应答:匹配到 `PING` 就回 `PONG`,**DO 完全不用醒**。
+     *  自己在 `webSocketMessage` 里回也行,但那样每 30 秒唤醒一次 DO,
+     *  等于把 hibernation 省下来的钱又花回去。
+     * ★配在构造函数里:每次 DO 被(重新)实例化都要配一遍,它不是持久化设置。
+     */
+    try {
+      state.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG))
+    } catch { /* 老 runtime 没有这个 API —— 退回「没有心跳」,和改这一刀之前一样 */ }
+  }
 
   /**
    * 从 hibernation 醒来后把房间重建回去。**每个入口都要先调它。**
@@ -117,6 +151,50 @@ export class RelayRoom {
     return s
   }
 
+  /**
+   * ★★僵尸回收。**这是 2026-09-09 那个事故的中转侧兜底。**
+   *
+   * 同一个房间只准一个 host(见 `core.ts` 的 `join`),而一条**死了但没关**的 socket
+   * (笔记本合盖、切网、拔网线)Cloudflare 不一定推 close 事件 ⇒ 房间被**永久**占住,
+   * 真主机回来只看到「这个房间已经有一台主机连着了」,而那台就是它自己。
+   * `core.ts` 里那句「代价由适配器的 keepalive 解决」原来只在 `node.ts` 兑现了,
+   * 这个文件一行都没有 —— 而用户用的正是这一版。
+   *
+   * ★★**只收「回过心跳、然后不回了」的那些**。从没应答过(timestamp 为 null)= 老客户端,
+   *  它压根不发心跳 —— 按超时收掉它等于每 100 秒把老版本的 app 踢下线一次,
+   *  那是**制造**一个比僵尸更常见的故障。宁可老版本继续裸奔,等它升级。
+   */
+  private async sweep(): Promise<void> {
+    const now = Date.now()
+    let alive = 0
+    for (const ws of this.state.getWebSockets()) {
+      alive++
+      const last = this.state.getWebSocketAutoResponseTimestamp(ws)
+      if (!last) continue                       // 老客户端:不判
+      if (now - last.getTime() <= STALE_MS) continue
+      // 关掉 ⇒ 运行时会调 `webSocketClose` ⇒ `core.leave` 把房间腾出来。
+      try { ws.close(4408, 'heartbeat timeout') } catch { /* 已关 */ }
+      alive--
+    }
+    // ★没有连接就**别再排下一次**:空转的 alarm 是纯计费。有连接时才继续。
+    if (alive > 0) await this.state.storage.setAlarm(now + SWEEP_MS)
+  }
+
+  /** 定时器到点。★hibernation 下 `setInterval` 不成立(实例会被卸载),alarm 才是那条路。 */
+  async alarm(): Promise<void> {
+    this.hydrate()
+    await this.sweep()
+  }
+
+  /** 有连接时保证有一个 alarm 在排队。★幂等:已经排了就不动它。 */
+  private async ensureSweep(): Promise<void> {
+    try {
+      if (await this.state.storage.getAlarm() === null) {
+        await this.state.storage.setAlarm(Date.now() + SWEEP_MS)
+      }
+    } catch { /* 排不上就算了,回收只是兜底,不能因为它把转发打死 */ }
+  }
+
   async fetch(req: Request): Promise<Response> {
     this.hydrate()
     if (req.headers.get('Upgrade') !== 'websocket') {
@@ -126,6 +204,7 @@ export class RelayRoom {
     // ★`acceptWebSocket`(不是 `server.accept()`)才是 hibernation 那条路:
     //  用后者的话 DO 永远不会休眠,连接一多就一直计费。
     this.state.acceptWebSocket(pair[1])
+    void this.ensureSweep()
     return new Response(null, { status: 101, webSocket: pair[0] } as ResponseInit & { webSocket: CfWebSocket })
   }
 

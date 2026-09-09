@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { asRelayStatus, hostClose, hostData, joinFrame, parseHostEnvelope, roomFor } from './relayWire'
+import { PING, PONG, asRelayStatus, hostClose, hostData, joinFrame, parseHostEnvelope, roomFor } from './relayWire'
 // ★★故意 import 中转那一侧的实现:这是「契约的两半」唯一的自动化对账。
 //  生产代码**不**这么 import(中转要能被单独 clone 出去部署),但测试可以 ——
 //  测试不参与打包,而漂移的代价是「扫了码连不上,两边各自都说自己没错」。
-import { parseHostEnvelope as relayParse, parseJoin, isValidRoom } from '../../../relay/src/core'
+import { PING as RELAY_PING, PONG as RELAY_PONG, parseHostEnvelope as relayParse, parseJoin, isValidRoom } from '../../../relay/src/core'
 
 describe('relayWire · 和中转那一侧对账', () => {
   it('★app 造出来的 join 帧,中转必须解得开', () => {
@@ -82,5 +82,33 @@ describe('relayWire · 自己这一侧', () => {
     expect(asRelayStatus(JSON.stringify({ t: 'hello', protocol: 1 }))).toBeNull()
     expect(asRelayStatus('{')).toBeNull()
     expect(asRelayStatus('密文不是 JSON')).toBeNull()
+  })
+})
+
+/**
+ * ★★心跳那两个字面量是**契约的两半**(这份 / `relay/src/core.ts`),故意不共享代码
+ * (中转要能独立成仓)。所以只能靠这条把形状钉死:改一边不改另一边,这里红。
+ * ★同时钉住「它不叫 ping」—— 叫 ping 的话,一个客户端真的发 "ping" 就会被中转吞掉,
+ *  而中转对客户端帧的承诺是原样搬。这是个静默的洞,值得一条测试守着。
+ */
+describe('链路心跳的字面形状', () => {
+  it('★★app 这一份和中转那一份必须逐字相等', () => {
+    // 直接比两边的真身,而不是各自硬编码一遍字符串 —— 后者只能证明「我抄对了」,
+    // 证明不了「两边一样」。这份测试是唯一同时看得见两半的地方。
+    expect(PING).toBe(RELAY_PING)
+    expect(PONG).toBe(RELAY_PONG)
+    expect(PING).not.toBe(PONG)
+  })
+
+  it('★不能是会和真内容撞的短词', () => {
+    for (const s of [PING, PONG]) {
+      expect(s.length, `${s} 太短了,客户端可能真的发出这个词`).toBeGreaterThan(6)
+      expect(s).toContain('relay-')
+    }
+  })
+
+  it('心跳帧过不了信封解析 —— 老中转会静默丢掉它,而不是当数据转走', () => {
+    expect(parseHostEnvelope(PING)).toBeNull()
+    expect(parseHostEnvelope(PONG)).toBeNull()
   })
 })

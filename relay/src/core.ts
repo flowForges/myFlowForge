@@ -114,6 +114,18 @@ type Room = {
   nextCid: number
 }
 
+/**
+ * 心跳的两个字面量。Cloudflare 的 `setWebSocketAutoResponse` 要求**逐字匹配**,
+ * 而它能在**不唤醒 Durable Object** 的前提下替我们回这一帧(省钱,也更准)。
+ * ★★**故意不叫 `ping`**:中转对客户端帧的承诺是「原样搬」,而 `ping` 这种四字母词
+ *  一个客户端完全可能真的发出来 —— 仓库里就有一条老测试拿它当样本数据。
+ *  截住一个可能是真内容的字符串,是在哑管道上开一个静默的洞。
+ * ★两种角色**一视同仁**:Cloudflare 的自动应答是按 socket 配的,分不了角色。
+ *  只对 host 生效的话,两个适配器行为就不一样了 —— 而 `core.ts` 存在的全部意义就是它们一样。
+ */
+export const PING = 'relay-ping'
+export const PONG = 'relay-pong'
+
 export type RelayCore = ReturnType<typeof createRelayCore>
 
 /**
@@ -230,6 +242,20 @@ export function createRelayCore() {
      *  它写在信封里。
      */
     relay(from: RelaySocket, roomId: string, role: Role, data: string, cid?: string): void {
+      // ★★心跳:`"ping"` 原地回 `"pong"`,**绝不转发**。
+      //
+      //  为什么需要它:同一个房间只准一个 host(见 `join`),而一条**死了但没关**的 socket
+      //  (笔记本合盖、切网、拔网线)会把房间**永久**占住 —— 真主机回来时只会看到
+      //  「这个房间已经有一台主机连着了」,而它自己就是那台。2026-09-09 用户真踩到了。
+      //  core.ts 原来那句注释说这个代价「由适配器的 keepalive 解决」,但那只在 `node.ts`
+      //  里兑现了,`worker.ts`(Cloudflare)一行都没有 —— 而那正是他在用的那一版。
+      //
+      // ★放在最前面、在 `rooms.get` **之前**:房间可能已经没了(对面刚走),而心跳的意义
+      //  恰恰是「这条 socket 还活着吗」,不该因为房间空了就不回。
+      // ★★对**老中转**是安全的:host 发的 `"ping"` 过不了 `parseHostEnvelope`,老版本
+      //  会静默丢掉(见下面 `if (!env) return`)—— 不会断连接、也不会被当数据转给谁。
+      //  所以发心跳的一侧必须能容忍「永远收不到 pong」,判据见 `relayHost.ts`。
+      if (data === PING) { from.send(PONG); return }
       const room = rooms.get(roomId)
       if (!room) return
       if (role === 'client') {
