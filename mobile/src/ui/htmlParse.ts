@@ -44,6 +44,9 @@ export type HTag =
   | 'strong' | 'b' | 'em' | 'i' | 'code' | 'pre' | 'span' | 'small' | 'del'
   | 'a'
   | 'table' | 'thead' | 'tbody' | 'tr' | 'th' | 'td'
+  // ★`img` **只由 `mdParse.ts` 产出**(而且只在 src 是本地路径时)。它故意**不在** `TAGS` 里 ——
+  //  也就是说模型吐的裸 HTML `<img>` 照旧被 `DROP_SUBTREE` 丢掉。见 mdImage.ts 里的理由。
+  | 'img'
 
 export type HNode =
   | { t: 'text'; text: string }
@@ -52,6 +55,8 @@ export type HNode =
       tag: HTag
       kids: HNode[]
       href?: string
+      /** `img` 的替代文字。只有 `img` 用。 */
+      alt?: string
       colSpan?: number
       rowSpan?: number
       /**

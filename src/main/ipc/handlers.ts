@@ -120,6 +120,7 @@ import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
 import type { DiscoveredSession } from '@shared/types'
 import { resolveFileRef } from '../fs/fileRef'
+import { readImageRef } from '../fs/imageRef'
 import { listDir, defaultRoots } from '../fs/browse'
 
 /**
@@ -1556,21 +1557,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.changesMulti, (_e, cwds: string[]) => perfSpan('git', 'changesMulti', () => readChangesMulti(cwds, proxy())))
   on(CH.gitDiff, (_e, a: { cwd: string; file: string }) => readDiff(a.cwd, a.file, proxy()))
   on(CH.gitFile, (_e, a: { cwd: string; file: string }) => readFile(a.cwd, a.file, proxy()))
-  // Read an image file's bytes → data URL for the inspector's image preview (gitFile returns text, which
-  // renders binary images as garbage). Guards: known image ext, stays within cwd, size cap.
-  on(CH.imageFile, (_e, a: { cwd: string; file: string }): { dataUrl: string } | { error: string } => {
-    try {
-      const IMG_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' }
-      const mime = IMG_MIME[(a.file.split('.').pop() || '').toLowerCase()]
-      if (!mime) return { error: '不是支持的图片格式' }
-      const abs = join(a.cwd, a.file)
-      if (!abs.startsWith(a.cwd)) return { error: '路径越界' }
-      if (!existsSync(abs)) return { error: '文件不存在' }
-      const buf = readFileSync(abs)
-      if (buf.length > 25_000_000) return { error: '图片过大(>25MB)' }
-      return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` }
-    } catch { return { error: '读取失败' } }
-  })
+  // 图片字节 → data URL。两个调用方:inspector 的图片预览,和对话/文档正文里的 `![x](…)`
+  // (gitFile 返回文本,二进制图会渲染成乱码)。★解析与越界判断全部交给 readImageRef →
+  // resolveFileRef —— 和对话里**文件链接**同一套守卫,绝不在这儿自己拼路径。
+  on(CH.imageFile, (_e, a: { bases: string[]; href: string }): { dataUrl: string } | { error: string } =>
+    readImageRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? '')))
   // ── 对话产物可点开 ────────────────────────────────────────────────────────────
   // 聊天正文里的 [设计文档](docs/design.md) 点击后走这里:renderer 只知道一串 href,存在性、是不是目录、
   // 有没有越出工作区,全部在主进程判(renderer 没有 fs)。bases 按优先级给:当前会话 worktree → 工作区根。

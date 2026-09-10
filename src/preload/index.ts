@@ -141,7 +141,7 @@ const api = {
   changesMulti: (cwds: string[]) => ipcRenderer.invoke(CH.changesMulti, cwds),
   gitDiff: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitDiff, { cwd, file }),
   gitFile: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitFile, { cwd, file }),
-  imageFile: (cwd: string, file: string): Promise<{ dataUrl: string } | { error: string }> => ipcRenderer.invoke(CH.imageFile, { cwd, file }),
+  imageFile: (bases: string[], href: string): Promise<{ dataUrl: string } | { error: string }> => ipcRenderer.invoke(CH.imageFile, { bases, href }),
   // 对话正文里的文件链接:点击时才解析(渲染时不探测,否则每条消息都要打一批 IPC 且会闪)。
   resolveFileRef: (bases: string[], href: string): Promise<
     { ok: true; cwd: string; file: string; abs: string } | { ok: false; reason: 'missing' | 'outside' | 'dir' | 'bad' }

@@ -4,6 +4,7 @@ import { useC } from '../theme/theme'
 import type { Palette } from '../theme/tokens'
 import { RADIUS } from '../theme/tokens'
 import { T } from './kit'
+import { MdImageBlock } from './MdImageBlock'
 import type { HNode } from './htmlParse'
 
 /**
@@ -137,6 +138,10 @@ function strayOf(table: El): El[] {
 
 function renderBlock(n: El, c: Palette, key: string): ReactNode {
   switch (n.tag) {
+    // ★只有 `mdParse` 会产出 `img`,而且只在 src 是**本地路径**时(远程仍降级成链接)。
+    //  裸 HTML 里的 `<img>` 照旧被 htmlParse 的 DROP_SUBTREE 丢掉。理由见 mdImage.ts。
+    case 'img':
+      return <MdImageBlock key={key} src={n.href ?? ''} alt={n.alt ?? ''} />
     case 'hr':
       return <View key={key} style={[st.hr, { backgroundColor: c.border2 }]} />
     case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':

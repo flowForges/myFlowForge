@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CodeBlock, TableBlock, QuoteBlock } from './blocks'
 import { MdLink } from './MdLink'
+import { OpenFileCtx } from './openFile'
 import { renderHtmlFragment, newFragmentScan, feedFragment, BLOCK_TAGS } from './htmlFragment'
 import { Lightbox } from '../../components/Lightbox'
 
@@ -11,23 +12,34 @@ import { Lightbox } from '../../components/Lightbox'
 export const MdImageBaseCtx = createContext<string | undefined>(undefined)
 const ABS_SRC = /^(https?:|data:|forge-)/i
 
-// Markdown image. Absolute/data/protocol srcs load directly; a relative src is read from disk (relative
-// to the doc's dir) via the file:image IPC → data URL, so on-disk doc images actually render.
+// Markdown image. Absolute/data/protocol srcs load directly; 其余(本地路径,不管相对还是绝对)
+// 走 file:image IPC 读成 data URL。
+//
+// ★★2026-09-10 修:对话气泡里**本地路径的图一张都显示不出来**,一律是 `🖼 alt` 占位符。
+//  根因不在这个组件,在于**没人给它 base** —— `MdImageBaseCtx` 全项目只有 FilePreview 传,
+//  而模型跑完命令生成图表写的就是本地路径(`./chart.png` 或绝对路径)。
+//  修法:回落到 `OpenFileCtx.bases`(会话 worktree → 工作区根)—— 那正是对话里**文件链接**
+//  已经在用的同一套基准,不另造一套。文档预览仍优先用它自己那份 base(相对图按文档所在目录解析)。
 function MdImage({ src, alt }: { src: string; alt: string }): ReactNode {
-  const base = useContext(MdImageBaseCtx)
+  const docBase = useContext(MdImageBaseCtx)
+  const opener = useContext(OpenFileCtx)
+  const bases = useMemo(
+    () => (docBase ? [docBase] : opener?.bases ?? []),
+    [docBase, opener],
+  )
   const [url, setUrl] = useState<string | null>(() => (ABS_SRC.test(src) ? src : null))
   const [err, setErr] = useState(false)
   const [zoom, setZoom] = useState(false)
   useEffect(() => {
     if (ABS_SRC.test(src)) { setUrl(src); setErr(false); return }
-    if (!base) { setErr(true); return }
+    if (!bases.length) { setErr(true); return }
     let alive = true
     setUrl(null); setErr(false)
-    void window.forge.imageFile?.(base, src)
+    void window.forge.imageFile?.(bases, src)
       .then(r => { if (alive) { if (r && 'dataUrl' in r) setUrl(r.dataUrl); else setErr(true) } })
       .catch(() => { if (alive) setErr(true) })
     return () => { alive = false }
-  }, [src, base])
+  }, [src, bases])
   if (err) return <span className="md-img-err" title={src}>🖼 {alt || src}</span>
   if (!url) return <span className="md-img-loading">加载图片…</span>
   // 正文里的图按栏宽缩得很小(文档里的示意图尤其看不清),点一下开灯箱看原尺寸。

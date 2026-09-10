@@ -57,7 +57,7 @@ export function FilePreview({
     // Image files: gitDiff/gitFile return text (binary garbage); read the bytes as a data URL instead.
     if (isImage(file)) {
       setImgUrl(null); setImgErr('')
-      void window.forge.imageFile?.(cwd, file).then(r => {
+      void window.forge.imageFile?.([cwd], file).then(r => {
         if (r && 'dataUrl' in r) setImgUrl(r.dataUrl)
         else setImgErr((r && 'error' in r ? r.error : '') || '图片加载失败')
       }).catch(() => setImgErr('图片加载失败'))

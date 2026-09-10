@@ -29,6 +29,7 @@ import { useC } from '../src/theme/theme'
 import { AgentBadge, Banner, Btn, Chip, Empty, Field, IconBtn, LiveDot, Loading, Pill, ProviderSwitchSep, Row, T, TimeSep, TopBar } from '../src/ui/kit'
 import { GateCard } from '../src/ui/GateCard'
 import { MessageBody } from '../src/ui/MessageBody'
+import { MdImageBasesCtx } from '../src/ui/mdImage'
 import { ToolCards } from '../src/ui/ToolCard'
 import { DelegateCards, SubagentCards } from '../src/ui/AgentCards'
 import { sepsFor } from '../src/ui/timeSep'
@@ -686,7 +687,15 @@ export default function Chat() {
       onPress: () => setBigEditor(true), disabled: !online || !selected },
   ]
 
+  /**
+   * 正文里本地图的解析基准。★只给**工作区根**一条 —— 手机端拿不到会话 worktree 的路径
+   *  (那是 host 侧的概念),所以工作区之外、或者只存在于 worktree 里的图会退回占位符并写明原因。
+   *  宁可少画,不要在客户端猜一个 base:越界判断是 host 做的,基准给错等于把守卫的靶子挪了。
+   */
+  const imgBases = useMemo(() => (selected?.wsPath ? [selected.wsPath] : []), [selected?.wsPath])
+
   return (
+    <MdImageBasesCtx.Provider value={imgBases}>
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar
         left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}
@@ -1309,6 +1318,7 @@ export default function Chat() {
         })}
       </Sheet>
     </View>
+    </MdImageBasesCtx.Provider>
   )
 }
 

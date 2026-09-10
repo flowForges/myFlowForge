@@ -27,6 +27,8 @@ import type { HNode } from './htmlParse'
 
 type El = Extract<HNode, { t: 'el' }>
 
+import { IMG_ONLY_LINE, isRemoteSrc } from './mdImage'
+
 const el = (tag: El['tag'], kids: HNode[], extra?: Partial<El>): El => ({ t: 'el', tag, kids, ...extra })
 const txt = (text: string): HNode => ({ t: 'text', text })
 
@@ -184,6 +186,17 @@ export function parseMarkdown(src: string): HNode[] {
 
   while (i < lines.length) {
     const line = lines[i]
+
+    // ★★整行只有一张**本地**图 → 块级 `img`。夹在句子中间的图**不**走这条(会把一句话劈成三段),
+    //  仍由行内规则降级成链接;远程 src 也仍然降级 —— 理由见 [mdImage.ts]。
+    //  放在表格之前:这条只看本行、而且匹配得更死(整行锚定),不会抢走别的块。
+    const imgOnly = IMG_ONLY_LINE.exec(line.trim())
+    if (imgOnly && !isRemoteSrc(imgOnly[2])) {
+      flushPara()
+      out.push(el('img', [], { href: imgOnly[2], alt: imgOnly[1] }))
+      i += 1
+      continue
+    }
 
     // 表格:带竖线的表头行 + **紧跟**的分隔行。放在最前面,因为它要看下一行。
     if (line.includes('|') && i + 1 < lines.length && SEP.test(lines[i + 1])) {
