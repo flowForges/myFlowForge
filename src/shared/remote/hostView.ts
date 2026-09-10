@@ -72,3 +72,28 @@ export function describeHostState(s: HostConnState): { text: string; short: stri
     case 'closed': return { text: '未连接', short: '未连接', tone: 'idle' }
   }
 }
+
+/**
+ * 弹层里「当前这台主机」那一行右侧的小标签。
+ *
+ * ★★用户 2026-09-10 原话:「这种主机断了,我怎么知道有没有在重连?那边其实啥也没改,也不知道为啥断了」。
+ *  两件事**当时都已经算出来了**(`retrying` 带着 attempt / error / nextInMs,`describeHostState`
+ *  也拼好了整句),但弹层那行显示的是 `short` —— 光秃秃三个字「已断开」,而完整那句只挂在
+ *  状态栏按钮的 tooltip 上。**信息不缺,是没送到眼前。**
+ *
+ * ★这里跳秒是**故意的**:静态一句「8 秒后重连」回答不了「有没有在重连」——
+ *  只有数字真的在动,人才知道它是活的。`remainMs` 由调用方按「进入 retrying 的时刻 + nextInMs」算,
+ *  这个函数保持纯的,好单测。
+ */
+export function hostRowNote(s: HostConnState, remainMs?: number): string {
+  if (s.status !== 'retrying') return describeHostState(s).short
+  if (remainMs == null) return '重连中'
+  // 向上取整:剩 1ms 也该显示「1s」而不是「0s」——「0s」看着像卡住了。
+  return `重连中 · ${Math.max(0, Math.ceil(remainMs / 1000))}s`
+}
+
+/** 悬停时的完整说明。★断开原因一定要带上 —— 那是「为啥断了」唯一的答案。 */
+export function hostRowTitle(s: HostConnState): string {
+  if (s.status !== 'retrying') return describeHostState(s).text
+  return `已断开,第 ${s.attempt} 次重连 — ${s.error}`
+}

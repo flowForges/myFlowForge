@@ -266,3 +266,49 @@ describe('HostSwitcher', () => {
     })
   })
 })
+
+/**
+ * ★★用户 2026-09-10 原话:「这种主机断了,我怎么知道有没有在重连?那边其实啥也没改,
+ *  也不知道为啥断了」。当时弹层那行显示的是 `d.short` —— 光秃秃三个字「已断开」,
+ *  而 attempt / error / nextInMs 三样**早就在状态里**,只是没送到眼前。
+ */
+describe('断线时弹层那行:秒数要真的在跳,原因挂悬停', () => {
+  const row = () => screen.getByRole('menuitemradio', { name: /云服务器/ })
+
+  it('★★倒计时每秒往下走 —— 静态一句「N 秒后重连」回答不了「有没有在重连」', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<HostSwitcher display="both" onOpenHosts={() => {}} />)
+      await push({ ...DOWN, state: { status: 'retrying', attempt: 3, error: '对面掉线了', nextInMs: 8000 } })
+      await openMenu()
+      expect(row().textContent).toContain('重连中 · 8s')
+      await act(async () => { vi.advanceTimersByTime(3000) })
+      expect(row().textContent).toContain('重连中 · 5s')
+      await act(async () => { vi.advanceTimersByTime(3000) })
+      expect(row().textContent).toContain('重连中 · 2s')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('★★悬停能看到「第几次」和「为什么断」', async () => {
+    render(<HostSwitcher display="both" onOpenHosts={() => {}} />)
+    await push({ ...DOWN, state: { status: 'retrying', attempt: 3, error: '对面掉线了', nextInMs: 8000 } })
+    await openMenu()
+    expect(row().getAttribute('title')).toBe('已断开,第 3 次重连 — 对面掉线了')
+  })
+
+  it('★不再只写「已断开」—— 那正是用户看到的、什么都没说的那三个字', async () => {
+    render(<HostSwitcher display="both" onOpenHosts={() => {}} />)
+    await push(DOWN)
+    await openMenu()
+    expect(row().querySelector('.note')?.textContent).not.toBe('已断开')
+  })
+
+  it('连上之后那行回到「已连接」,不留倒计时', async () => {
+    render(<HostSwitcher display="both" onOpenHosts={() => {}} />)
+    await push(DOWN)
+    await push(ON_CLOUD)
+    await openMenu()
+    expect(row().textContent).toContain('已连接')
+    expect(row().textContent).not.toContain('重连中')
+  })
+})

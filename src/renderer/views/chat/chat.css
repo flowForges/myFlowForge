@@ -134,7 +134,13 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 /* ★★`width: auto` 不是 `100%`。撑满的后果用户直接指出来了:「输出的表格,内容太靠左了」——
    两列的表被强行拉到整个正文宽,列宽平分,于是每格的内容都缩在自己那一大片空白的左上角。
    表格本来就该**按内容收**;`max-width: 100%` 保证宽表不撑破容器(外面还有 `.tbl-scroll` 兜底)。 */
-.msg-body table, .req-title table {
+/* ★★2026-09-10:选择器从两个来源扩到**四个**。上面那两条修复(width:auto / 去竖线)当时只落在
+   `.msg-body` + `.req-title` 上,而 `.req-plan`(方案卡正文、运行事件卡)和 `.md-html`(内嵌 HTML 里
+   没被提升成 TableBlock 的裸表格)各自还抄着一份**旧样式**(`width:100%` + `padding:4px 8px` + 满格实线)
+   —— 于是用户在那两处看到的仍旧是「内容太靠左」和「满格网格」,而他明明反馈过、我也明明改过。
+   ★同一个形状的坑见 [trap-two-call-sites-run-vs-chat]:两份手抄的实现,只改一处 = 等于没改。
+   现在**只有这一套**,底下那两条各自的 `table` 规则已经删掉。 */
+.msg-body table, .req-title table, .req-plan table, .md-html table {
   border-collapse: collapse; margin: 8px 0 12px; font-size: 13px;
   width: auto; max-width: 100%;
 }
@@ -146,22 +152,28 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
    ★现在只留【横向分隔线】:表头一条稍重的底线,行与行之间一条极淡的线,竖线全部去掉 —— 列是靠间距
    对齐的,不需要画出来。表头底色换成 fg 混出来的半透明色,深浅两个主题各自成立,壁纸也能透上来。
    ★padding 从 4px 8px 放到 6px 10px:去掉竖线之后,列间距就是唯一的分列线索,太挤会糊成一片。 */
-.msg-body th, .msg-body td, .req-title th, .req-title td {
+.msg-body th, .msg-body td, .req-title th, .req-title td,
+.req-plan th, .req-plan td, .md-html th, .md-html td {
   border: 0; border-bottom: 1px solid color-mix(in oklab, var(--fg) 9%, transparent);
   padding: 6px 10px; text-align: left; vertical-align: top;
 }
-.msg-body th, .req-title th {
+.msg-body th, .req-title th, .req-plan th, .md-html th {
   background: color-mix(in oklab, var(--fg) 6%, transparent); color: var(--fg); font-weight: 650;
   border-bottom-color: color-mix(in oklab, var(--fg) 22%, transparent);
 }
 /* 第一/最后一列的外侧留白去掉,让表格和正文左对齐 —— 有竖线时靠边框收边,没有竖线就得靠这个。 */
 .msg-body th:first-child, .msg-body td:first-child,
-.req-title th:first-child, .req-title td:first-child { padding-left: 0; }
+.req-title th:first-child, .req-title td:first-child,
+.req-plan th:first-child, .req-plan td:first-child,
+.md-html th:first-child, .md-html td:first-child { padding-left: 0; }
 .msg-body th:last-child, .msg-body td:last-child,
-.req-title th:last-child, .req-title td:last-child { padding-right: 0; }
-.msg-body tr:last-child td, .req-title tr:last-child td { border-bottom: 0; }
+.req-title th:last-child, .req-title td:last-child,
+.req-plan th:last-child, .req-plan td:last-child,
+.md-html th:last-child, .md-html td:last-child { padding-right: 0; }
+.msg-body tr:last-child td, .req-title tr:last-child td,
+.req-plan tr:last-child td, .md-html tr:last-child td { border-bottom: 0; }
 /* 数字列用等宽数字:表格里最常见的就是数量/行号/版本号,比例数字会让每行宽度不一样、看着抖。 */
-.msg-body td, .req-title td { color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.msg-body td, .req-title td, .req-plan td, .md-html td { color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .msg-files { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .msg-changes { margin-top: 10px; }
 .msg-changes .txt-btn { font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 5px 9px; border-radius: 6px; transition: .14s; }
@@ -530,9 +542,6 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .req-plan code { font-family: var(--mono); font-size: 11.5px; background: var(--surface); padding: 1px 5px; border-radius: 5px; }
 .req-plan pre { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 9px 11px; overflow-x: auto; margin: 8px 0; }
 .req-plan pre code { background: none; padding: 0; }
-.req-plan table { border-collapse: collapse; margin: 8px 0; font-size: 12px; width: 100%; }
-.req-plan th, .req-plan td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
-.req-plan th { background: var(--surface); color: var(--fg); font-weight: 650; }
 /* Design-doc open buttons — the technical plan lands in a real file; these open it in the
    full-screen in-app viewer (formatted markdown, enlargeable). One chip per project doc. */
 .req-docs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -968,10 +977,9 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
    那是模型的排版意图,我们只接管配色。 */
 .md-html { margin: 10px 0; max-width: 100%; overflow-x: auto; }
 .md-html * { max-width: 100%; box-sizing: border-box; }
-/* 片段里的表格若被提升成 TableBlock,继续吃上面那套表格样式;没提升的裸表格也给同样的边框,免得两种
-   来源的表格长得不一样。 */
-.md-html table { border-collapse: collapse; width: 100%; font-size: 13px; }
-.md-html th, .md-html td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+/* ★片段里的表格,不管有没有被提升成 TableBlock,都吃上面那套**唯一的**表格样式
+   (`.md-html` 已经并进那组选择器)。★这里原来另抄了一份「同样的边框」—— 主样式一改它没跟着,
+   于是恰好变成它当初想防的「两种来源长得不一样」。别再抄第二份。 */
 .md-html details { margin: 6px 0; }
 .md-html summary { cursor: pointer; color: var(--fg-2); }
 .md-html summary:hover { color: var(--fg); }

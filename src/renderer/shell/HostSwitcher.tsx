@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { describeHostState, DEFAULT_HOST_ICON, LOCAL_ICON, type HostDisplay, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
+import { describeHostState, hostRowNote, hostRowTitle, DEFAULT_HOST_ICON, LOCAL_ICON, type HostDisplay, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 
 /**
  * 底部状态栏最左边那枚主机按钮(在「终端」左边)。
@@ -64,6 +64,29 @@ export function HostSwitcher({ display = 'both', onOpenHosts }: { display?: Host
     return () => { document.removeEventListener('click', onDoc); document.removeEventListener('keydown', onKey); window.removeEventListener('resize', onResize) }
   }, [open])
 
+  /**
+   * 重连倒计时。★★用户原话:「主机断了,我怎么知道有没有在重连?」——
+   *  `nextInMs` 是**进入 retrying 那一刻的快照**,原样显示就是一句不动的「8 秒后重连」,
+   *  回答不了「在不在重连」。只有秒数**真的往下跳**,人才知道它是活的。
+   *
+   * ★`retryAt` 记的是「这一轮重连的截止时刻」:每次 `retrying` 状态**换了新对象**(attempt 变了、
+   *  或者刚从别的状态切过来)就重置。★hooks 必须在下面那个 `if (!status) return null` **之前**调 ——
+   *  有条件地调 hook 是 React 的硬错误。
+   */
+  const retrying = status?.state.status === 'retrying' ? status.state : null
+  const retryKey = retrying ? `${retrying.attempt}:${retrying.nextInMs}:${retrying.error}` : ''
+  const retryAtRef = useRef<{ key: string; at: number }>({ key: '', at: 0 })
+  if (retrying && retryAtRef.current.key !== retryKey) {
+    retryAtRef.current = { key: retryKey, at: Date.now() + retrying.nextInMs }
+  }
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!retrying) return
+    const t = setInterval(() => tick(n => n + 1), 500)
+    return () => clearInterval(t)
+  }, [retrying, retryKey])
+  const remainMs = retrying ? retryAtRef.current.at - Date.now() : undefined
+
   if (!status) return null
 
   const d = describeHostState(status.state)
@@ -107,8 +130,8 @@ export function HostSwitcher({ display = 'both', onOpenHosts }: { display?: Host
     } finally { setBusy(false) }
   }
 
-  const row = (key: string, label: string, glyph: string, active: boolean, note: string, onClick: () => void) => (
-    <button key={key} type="button" className={`hs-item${active ? ' on' : ''}`} role="menuitemradio" aria-checked={active} onClick={onClick}>
+  const row = (key: string, label: string, glyph: string, active: boolean, note: string, onClick: () => void, title?: string) => (
+    <button key={key} type="button" className={`hs-item${active ? ' on' : ''}`} role="menuitemradio" aria-checked={active} onClick={onClick} title={title}>
       <span className="tick">{active ? '✓' : ''}</span>
       <span className="ico" aria-hidden="true">{glyph}</span>
       <span className="nm">{label}</span>
@@ -147,8 +170,12 @@ export function HostSwitcher({ display = 'both', onOpenHosts }: { display?: Host
             h.label || '(未命名)',
             h.icon?.trim() || DEFAULT_HOST_ICON,
             currentId === h.id,
-            currentId === h.id ? d.short || '已连接' : (h.kind === 'ssh' ? 'SSH' : h.relay ? '中转' : '直连'),
+            // ★当前这台:断线时给**跳秒**的「重连中 · 6s」;其余状态沿用原来的简写。
+            //  不是当前这台就还是「直连/中转/SSH」那个静态标签。
+            currentId === h.id ? hostRowNote(status.state, remainMs) || '已连接' : (h.kind === 'ssh' ? 'SSH' : h.relay ? '中转' : '直连'),
             () => void go(h.id),
+            // ★完整那句(第几次 + 断开原因)挂悬停 —— 那一行右边塞不下,但「为啥断了」不能只活在日志里。
+            currentId === h.id ? hostRowTitle(status.state) : undefined,
           ))}
           {/* ★分割线:下面这条不是「切到哪台」,是「去配置」。混在一起会让人误点。 */}
           <div className="hs-sep" />
