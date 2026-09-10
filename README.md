@@ -4,17 +4,18 @@
 
 # myFlowForge
 
-**A macOS cockpit for your AI coding agents.**
+**AI 编码代理的驾驶舱 —— 在你的桌面、你的服务器、你的口袋里。**
 
-A macOS desktop cockpit that gathers **Claude Code, Codex, Cursor, Gemini, qoder, opencode, Trae** and more into one place — so you can **swap agent and model mid-conversation**, **build across several projects in parallel**, shape the work with a **lightweight, manual-gear workflow**, and weave your own **hooks** between stages.
+把 **Claude Code、Codex、Cursor、Gemini、qoder、opencode、DeepSeek** 等等收进同一个界面：**一轮对话里随时换代理换模型**、**多个项目并行开发**、用**手动挡的轻量工作流**把活儿理顺、在阶段之间织进你自己的 **hook**，还能**从另一台电脑或手机**接管全部。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)
-![Platform](https://img.shields.io/badge/Platform-macOS-000000?logo=apple&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-macOS%20·%20Windows%20·%20Linux-000000)
+![Mobile](https://img.shields.io/badge/Mobile-iOS%20·%20Android-3DDC84)
 
-**English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
+**简体中文** · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
 </div>
 
@@ -22,222 +23,264 @@ A macOS desktop cockpit that gathers **Claude Code, Codex, Cursor, Gemini, qoder
 
 <div align="center">
 
-<img src="assets/screenshots/home.jpg" alt="Home — workspaces, running agents and today's diff at a glance" width="90%" />
+<img src="assets/screenshots/home.jpg" alt="首页 —— 工作区、正在跑的代理、今天的改动一眼看全" width="90%" />
 
-<sub><b>Home</b> — pick up where you left off. Wallpaper, skin and accent are all yours to change.</sub>
+<sub><b>首页</b> —— 从上次停下的地方接着做。壁纸、皮肤、强调色都可以换。</sub>
 
 </div>
 
 ---
 
-## What is myFlowForge?
+## 这是什么
 
-Every AI coding CLI lives in its own terminal, with its own session state, its own quota, and no idea the others exist. Pick one and you're married to it for the rest of the task.
+每个 AI 编码 CLI 都活在自己的终端里，各有各的会话状态、各有各的额度，彼此当对方不存在。选定一个，这个活儿就跟它绑死了。
 
-**myFlowForge puts them all under one roof.** The agent and the model are properties of *each turn*, not of the session — so you can think a design through with Claude Opus, hand the implementation to Codex, and drop to something cheap for the mop-up, all inside one conversation with the context intact.
+**myFlowForge 把它们收进同一个屋檐下。** 代理和模型是**每一轮**的属性，不是整个会话的 —— 所以你可以用 Claude Opus 把方案想透，把实现交给 Codex，收尾换个便宜的，全程在同一个对话里，上下文不断。
 
-On top of that sits a **lightweight workflow**: not an assembly line that runs away from you, but a thin layer of structure over the same conversation. Every stage waits for you to press *Next*.
+上面再搭一层**轻量工作流**：不是那种一按就跑到底的流水线，而是同一个对话上薄薄一层结构。每个阶段都停下来等你按「下一步」。
 
-> ⚠️ **Project status:** an actively developed personal project. It targets **macOS** (Apple Silicon & Intel). Being Electron-based it can be built for other platforms from source, but only macOS is packaged today. **1.1.0** is the current stable release; betas between stables are where new features land first.
+而且这些都不锁在一台机器上。同一个驾驶舱能**连到另一台电脑** —— 你的 Linux 机器、公司那台台式机 —— 驱动**那台**的代理、跑**那台**的仓库。手机上可以看着它跑、答门、接着聊。
 
-## ✨ The five things it's really about
+> **项目状态：** 个人项目，在持续开发。macOS、Windows、Linux 都有打好的包，手机端有安卓 APK。所有平台目前都**没有代码签名**。
 
-### 1. A collection of agents, not a favourite one
+## ✨ 真正想做好的六件事
 
-Twelve coding CLIs coexist in one interface: **Claude Code · Codex · Cursor · Gemini · qoder · opencode · Qwen · Copilot · Pi · Kimi · Reasonix · Trae**.
+### 1. 一整套代理，而不是一个心头好
 
-Model lists are **read from each CLI's real local configuration** — nothing hard-coded, so what you see is what your account can actually run. You can also add entries by hand, and they survive the next refresh. **opencode** is itself a multi-vendor gateway: wire it once, reach many.
+十四个编码 CLI 共存于同一个界面：**Claude Code · Codex · Cursor · Gemini · qoder · opencode · Qwen · Copilot · Pi · Kimi · Reasonix · Trae · Antigravity · DeepSeek**。
 
-### 2. Switch agent and model inside one session
+模型列表**从每个 CLI 自己的本地配置里读**，没有一条是写死的 —— 你看到的就是你账号真能跑的。也可以手动加，加完不会被下次刷新冲掉。**opencode** 本身就是个多厂商网关：接一次，通一片。
 
-Agent, model and permission mode are three pickers sitting under the composer. Change any of them before your next message:
+### 2. 一个会话里换代理、换模型
 
-- One model stalls or drifts → switch and keep asking; it sees the conversation so far.
-- Out of quota with one provider → switch to another, same session.
-- Expensive model for the thinking, cheap model for the grunt work.
+代理、模型、权限档是输入框下面的三个选择器，发下一条消息前随时改：
 
-Agents with native resume (Claude Code, Codex, Cursor, qoder, opencode) continue their own session history. For the rest, myFlowForge reconstructs the context. Either way you just keep talking.
+- 某个模型卡住或者跑偏了 → 换一个接着问，它看得到前面的对话。
+- 一家的额度用完了 → 换一家，还是这个会话。
+- 想事情用贵的，搬砖用便宜的。
 
-### 3. Several projects, developed at the same time
+有原生续聊的（Claude Code、Codex、Cursor、qoder、opencode、Antigravity）会接着它自己的会话历史走；其余的由 myFlowForge 重建上下文。两种情况下你都只管接着说。
 
-A workspace holds **many repos**. A stage can *fan out per project*: frontend, backend and SDK advance simultaneously, each driven by its own agent in its own **git worktree** so they never collide — and every diff lands in one Changes panel for review.
+### 3. 多个项目同时开发
 
-Fan-out takes a subset too: analyse all five repos but write code in only two is a perfectly normal setup.
+一个工作区可以装**多个仓库**。一个阶段可以**按项目扇出**：前端、后端、SDK 同时推进，各由自己的代理在自己的 **git worktree** 里干活，互不踩脚 —— 所有 diff 汇进同一个「变更」面板里审。
 
-### 4. A lightweight workflow — in manual gear
+扇出也可以只挑一部分：五个仓库全分析、只在其中两个写代码，是很正常的配置。
 
-Starting a workflow does **not** set it running to the end. It enters a conversational mode:
+### 4. 轻量工作流 —— 手动挡
 
-- A ribbon shows *step N of M · current stage · which agent is driving*.
-- The stage's agent works **in the chat in front of you** — output, tool calls and file writes all visible.
-- Not satisfied? Just keep talking. Follow-ups and corrections don't re-run the stage.
-- Happy? Press **Next**. Only then is the handoff written and the next agent brought in.
+启动工作流**不会**让它一路跑到底，而是进入一种对话模式：
 
-The Design stage writes a **real markdown document** (`forge-docs/design.md`), sectioned per project. That document — not a lossy summary — is the single cross-agent contract; downstream agents read the whole thing and focus on their own section.
+- 顶上有条带子写着*第 N 步 / 共 M 步 · 当前阶段 · 谁在干*。
+- 这个阶段的代理**就在你眼前的对话里干活** —— 输出、工具调用、写文件全看得见。
+- 不满意？接着说就行。追问和纠正不会重跑这个阶段。
+- 满意了？按**下一步**。这时候才会写交接、把下一个代理叫进来。
 
-Gated stages stop and wait for you: **approve**, **send back** (your notes get pinned to the top, the previous output fed back as the baseline), or just **ask a question** without triggering a re-run. Realised late that the design was wrong? Jump back to an earlier stage and redo it.
+方案阶段会写出一份**真的 markdown 文档**（`forge-docs/design.md`），按项目分节。这份文档 —— 而不是一段有损的摘要 —— 是跨代理的唯一契约；下游代理读整份，只专注自己那一节。
 
-### 5. Hooks between the stages
+带门的阶段会停下来等你：**通过**、**打回**（你的批注会置顶，上一轮产物作为基线回灌），或者只是**问一句**而不触发重跑。做到后面才发现方案错了？跳回前面的阶段重做。
 
-A hook is a small step wedged **between** stages — where a stage is an agent doing real engineering, a hook is a chore taken care of along the way.
+### 5. 阶段之间的 hook
 
-Attach one **before the run**, **after any given stage**, or **after the whole run**: pull the latest code, sync the design doc to your wiki, run lint, update a board, send a notification.
+hook 是塞在阶段**之间**的小步骤 —— 阶段是代理在做真正的工程，hook 是顺路捎带的杂活。
 
-Each hook runs as a **restricted micro-agent** at the workspace root — only the skills and tools it was given, plus the task and the artifacts produced upstream. It reports back in one line, and asks you directly when it hits something only a human can resolve. A failure **blocks** the pipeline and offers retry / skip / abort. Hooks live in a global library, independent of any slot: write once, attach anywhere.
+可以挂在**整个运行之前**、**某个阶段之后**、或者**整个运行之后**：拉最新代码、把方案文档同步到 wiki、跑 lint、更新看板、发个通知。
+
+每个 hook 以**受限微代理**的身份在工作区根目录运行 —— 只有给它的技能和工具，加上任务和上游产出的产物。它用一行汇报结果，碰到只有人能定的事会直接问你。失败会**卡住**流水线，并给出重试 / 跳过 / 中止。hook 存在一个全局库里，跟具体位置无关：写一次，到处挂。
+
+### 6. 你的几台机器，和你的手机
+
+当前连的是哪台主机，是状态栏上的一个**开关**，就在终端按钮旁边。一拨，工作区列表、会话、正在跑的代理、git 改动、内置终端，全都变成**那台机器的**。
+
+- 局域网**直连**，或者走 **SSH**，或者在两台机器互相看不见时走**端到端加密的中转**。中转上跑的只有密文 —— 它读不到任何会话内容，房间号是从 daemon 的公钥推出来的。
+- 无头的 Linux 机器上跑 **daemon**：`myflowforge-daemon pair` 会直接在终端里打出一个二维码，扫一下就配对完成。
+- **手机端**（iOS + 安卓）是个真客户端，不是只读视图：边流边看对话、答权限门和方案门、翻改动的文件、建工作区、编工作流、切主机。
 
 ---
 
 <div align="center">
 
-<img src="assets/screenshots/workflow.jpg" alt="Stage composition — each stage picks its own agent and model; Develop fans out to two projects" width="90%" />
+<img src="assets/screenshots/workflow.jpg" alt="阶段编排 —— 每个阶段自选代理和模型，开发阶段扇出到两个项目" width="90%" />
 
-<sub><b>Stage composition</b> — five stages, each with its own agent and model; <i>Develop</i> fans out across two repos.</sub>
+<sub><b>阶段编排</b> —— 五个阶段各选各的代理和模型，<i>开发</i>阶段扇出到两个仓库。</sub>
 
 </div>
 
 ---
 
-## 🤖 Supported coding agents
+## 🤖 支持的编码代理
 
-| Agent | Chat | Workflow | Native resume | MCP | Models |
-|-------|:----:|:--------:|:-------------:|:---:|--------|
-| **Claude Code** | ✅ | ✅ | ✅ | ✅ | discovered from CLI |
-| **Codex** | ✅ | ✅ | ✅ | ✅ | discovered from CLI |
-| **Cursor** | ✅ | ✅ | ✅ | ✅ | discovered from CLI |
-| **qoder** | ✅ | ✅ | ✅ | ✅ | discovered + custom list |
-| **opencode** | ✅ | ✅ | ✅ | ✅ | multi-vendor gateway |
-| **Gemini** | ✅ | ✅ | — | ✅ | preset list |
-| **Qwen** | ✅ | ✅ | — | ✅ | preset list |
-| **Copilot** | ✅ | ✅ | — | ✅ | preset list |
-| **Pi** | ✅ | ✅ | — | — | account default / custom |
+| 代理 | 对话 | 工作流 | 原生续聊 | MCP | 模型 |
+|------|:----:|:------:|:--------:|:---:|------|
+| **Claude Code** | ✅ | ✅ | ✅ | ✅ | 从 CLI 读取 |
+| **Codex** | ✅ | ✅ | ✅ | ✅ | 从 CLI 读取 |
+| **Cursor** | ✅ | ✅ | ✅ | ✅ | 从 CLI 读取 |
+| **qoder** | ✅ | ✅ | ✅ | ✅ | 读取 + 自定义 |
+| **opencode** | ✅ | ✅ | ✅ | ✅ | 多厂商网关 |
+| **Gemini** | ✅ | ✅ | — | ✅ | 预置列表 |
+| **Qwen** | ✅ | ✅ | — | ✅ | 预置列表 |
+| **Copilot** | ✅ | ✅ | — | ✅ | 预置列表 |
+| **Pi** | ✅ | ✅ | — | — | 账号默认 / 自定义 |
 | **Kimi** | ✅ | ✅ | — | — | kimi-k2.5 · 256K |
 | **Reasonix** | ✅ | ✅ | — | — | deepseek-flash / reasoner |
-| **Trae** 🆕 | ✅ | ✅ | — | — | account default (`/model` or `trae_cli.yaml`) |
+| **Trae** | ✅ | ✅ | — | — | 账号默认（`/model` 或 `trae_cli.yaml`） |
+| **Antigravity** | ✅ | ✅ | ✅ | — | 用 `agy models` 刷新 |
+| **DeepSeek** 🆕 | ✅ | ✅ | — | — | 账号默认 |
 
-> **Trae** (ByteDance's TraeCode CLI) doesn't ship on npm — its official `install.sh` puts `traecli` in `~/.local/bin`, so make sure that's on your PATH. For unattended edits inside a workflow, run `traecli config edit` and set `permission_mode: bypass_permissions`.
+> **DeepSeek** 即 DeepSeek Harness —— `npm install -g @deepseek-ai/dsh`。它不是靠一个 headless 开关，而是**按 profile 选运行形态**；myFlowForge 接的是 `headless` 那个，三档权限对应它自己的 `read-only` / `workspace-write` / `danger-full-access`。给 key 用 `dsh web`（Models 页）或者 `DEEPSEEK_API_KEY`。
+>
+> **Trae**（字节的 TraeCode CLI）不在 npm 上 —— 官方 `install.sh` 把 `traecli` 装到 `~/.local/bin`，记得把它加进 PATH。想让它在工作流里无人值守地改文件，跑 `traecli config edit` 设 `permission_mode: bypass_permissions`。
 
-myFlowForge **stores no API keys and proxies no requests** — it drives the CLIs already installed and authenticated on your machine. Anything missing is flagged in Settings with install guidance.
+myFlowForge **不保存任何 API key，也不代理任何请求** —— 它驱动的是你机器上已经装好、已经登录的那些 CLI。缺哪个，设置里会标出来并给安装指引；装了但没登录，设置里也会告诉你。
 
-## 🔧 How a run is shaped
+## 🔧 一次运行长什么样
 
 ```
-   You describe the goal
-            │
-            ▼
+      你描述目标
+          │
+          ▼
   ┌─ hook ─┐        ┌─ hook ─┐                    ┌─ hook ─┐
-  │ before │        │  after │                    │  after │
-  │  run   │        │ design │                    │  run   │
+  │ 运行前 │        │ 方案后 │                    │ 运行后 │
   └───┬────┘        └───┬────┘                    └───┬────┘
       ▼                 ▼                             ▼
- 📋 Requirement → 🎨 Design → ✋ GATE → 💻 Develop → 🧪 Test → 🔍 Review
-   (clarify)     (design.md)  you decide  (fan out)  (verify)  (multi-lens)
-                      │                       │
-                      │                       └─ one agent per project,
-                      │                          parallel lanes, own worktree
-                      └─ a real document, read in full by every downstream agent
+ 📋 需求 ────→ 🎨 方案 ──→ ✋ 门 ──→ 💻 开发 ──→ 🧪 测试 ──→ 🔍 评审
+  (澄清)      (design.md)  你来定   (扇出)      (验证)     (多镜头)
+                    │                  │
+                    │                  └─ 每个项目一个代理，
+                    │                     并行泳道，各自的 worktree
+                    └─ 一份真文档，每个下游代理都读整份
 
- Every arrow waits for you to press "Next". Stages can be added, removed,
- reordered or skipped — running just Requirement → Develop is perfectly valid.
+ 每一个箭头都等你按「下一步」。阶段可以增删、重排、跳过 ——
+ 只跑「需求 → 开发」也完全成立。
 ```
 
-Three ways to start one, all landing on the same gate:
+三种启动方式，最后都落到同一个门上：
 
-1. Press **Start** in the Workflow panel.
-2. Type `/` in the composer and pick one.
-3. Describe a full development task in plain language — the main agent recognises it and raises a plan gate through MCP. Questions, discussion and one-line fixes don't trip it.
+1. 在工作流面板按**开始**。
+2. 在输入框打 `/` 挑一个。
+3. 用大白话描述一整个开发任务 —— 主代理会认出来，通过 MCP 升起一个方案门。提问、讨论、一行的小修不会误触发。
 
-## 🧩 Also in the box
+## 📱 远程主机与手机端
 
-- **Native session import** — read-only scan of your local Claude / Codex / Cursor / qoder history; import as a workspace and continue.
-- **MCP bridge** — a built-in Forge MCP server lets agents call back into the app: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. Injected into the eight agents that support MCP; the rest fall back to a text directive.
-- **Real-time observability** — streaming thinking / tool calls / file changes / raw output, a filterable log console, run history, and cross-project change evidence.
-- **Token usage & quota** — remaining quota and reset times per provider, plus spend by workspace × agent × day.
-- **Bot bridge** — answer gates, check results, start a conversation and drive workflows from **DingTalk** on your phone (Telegram / Feishu wired for later).
-- **Permission modes** — read-only · workspace-auto (default) · full access, per session or per stage. Mapped onto each CLI's real sandbox scope, and the UI says plainly which agents actually honour it.
-- **Slash commands, skills & plugins** — `/` surfaces your real on-disk commands and installed skills, filtered per agent.
-- **Custom workflows** — the process is yours to assemble: save as many named workflows as you like, each with its own stage set; every stage picks its agent, model, permission mode, fan-out shape, whether it gates and whether it must produce a document.
-- **Custom stages** — a global library of your own stages, referenced by any workflow.
-- **File browser & diff** — full-screen tree with change markers, syntax-highlighted preview, diff-or-full toggle.
-- **Built-in terminal** — a real pty rooted in the workspace, with per-provider proxy and timezone settings.
-- **Desktop pet** — follows your focused screen, previews agent activity, pops confirmation cards; browse the pet market or bring your own images.
-- **Transparency & frosted glass** — one blur slider takes the whole window from fully opaque through three native macOS vibrancy materials, so your desktop shows through.
-- **Personalisation** — 6 original skins, 12 accent colours, a 270-image wallpaper gallery or your own picture, exact-pixel font sizes for app and chat independently, light and dark contrast-tuned separately.
-- **Wallpaper-driven theming** — turn it on and the whole palette is derived from whatever wallpaper you picked, light or dark decided by the image itself. The wallpaper only ever contributes two hues; every lightness and chroma step is copied from the hand-tuned skins, so a busy picture can't produce an unreadable interface. Prefer your own accent? Pick one and only the accent stops following.
-- **Growth pet** — the desktop pet grows through stages as you work, so long sessions leave something visible behind.
-- **Inline visuals in chat** — off by default: when on, HTML fragments an agent writes mid-answer render as real cards, tables and diagrams. Never `innerHTML` — the fragment is parsed and rebuilt from a constructive allow-list, and colours may only come from theme tokens, so rendered content follows your skin instead of fighting it.
+一个 app，好几台机器。在状态栏挑主机，其余全都跟着走。
 
-## 📥 Download & install
+| | |
+|---|---|
+| **直连** | 同一个局域网，直接连 daemon 的端口，带令牌鉴权。 |
+| **SSH** | 复用你本来就有的 SSH 登录 —— 不用新开任何口子。 |
+| **中转** | 给互相看不见的两台机器用。**端到端加密**：每次会话新密钥，中转只转发密文，解不开的帧一律丢弃而不是将就。可以自建（`relay/`，Node 或 Cloudflare Worker），部署步骤在 `relay/README.md` 里。 |
 
-Grab the latest `.dmg` from the [**Releases**](https://github.com/flowForges/myFlowForge/releases) page:
+**Linux daemon** 就是同一份代码去掉窗口 —— 装上 tar.gz，用 systemd 跑起来，扫它在终端里打出的二维码就配对好了（`docs/linux-deploy.md`）。
 
-| Your Mac | Download |
-|----------|----------|
-| Apple Silicon (M1/M2/M3/M4) | `myFlowForge-<version>-arm64.dmg` |
-| Intel | `myFlowForge-<version>.dmg` |
+**手机端**覆盖了离开电脑时真正需要的那些：边流边看的对话，带思考过程、工具卡和子代理卡；能答的权限门和方案门；改动的文件和 diff；建工作区；工作流模板库；切主机和扫码配对。markdown、表格和本地图片都原生渲染 —— **远程图片地址故意保持为链接**，这样代理的输出永远没法把你的手机变成一个追踪信标。
 
-> **⚠️ The app is not code-signed yet.** On first launch macOS may say it *"can't be opened"* or *"is damaged"* — that's what an unsigned app looks like, the file is fine. Either:
-> - **Right-click** the app in `/Applications` → **Open** → **Open** in the dialog, or
-> - run once: `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
+## 🧩 还有这些
+
+- **原生会话导入** —— 只读扫描你本地的 Claude / Codex / Cursor / qoder 历史，导入成工作区接着聊。
+- **MCP 桥** —— 内置的 Forge MCP 服务器让代理能回调这个 app：`forge_ask`、`forge_propose_plan`、`forge_write_artifact`、`forge_handoff`、`forge_delegate`、`forge_read_context`、`forge_heartbeat`。注入给支持 MCP 的那几个，其余回落到文本指令。
+- **MCP 服务器与加载项** —— 看每个 CLI 配了哪些 MCP 服务器，在 app 里授权或取消授权；技能市场可以把技能装进读它们的那些 CLI。
+- **记忆** —— 按工作区存的笔记，代理能读回去，长线的活儿有自己的线索。
+- **实时可观测** —— 流式的思考 / 工具调用 / 文件改动 / 原始输出，可过滤的日志台，运行历史，跨项目的改动证据。
+- **额度与用量** —— 每家的剩余额度和重置时间，外加按「工作区 × 代理 × 天」的消耗。
+- **机器人桥** —— 在**钉钉**、**Telegram** 或**飞书**里答门、看结果、发起对话、驱动工作流。
+- **权限档** —— 只读审阅 · 自动（工作区，默认）· 完全访问，按会话或按阶段设。映射到每个 CLI 真实的沙箱范围，界面会直说哪些代理真的认这个档。
+- **斜杠命令、技能与插件** —— `/` 列出你磁盘上真实的命令和已装技能，按代理过滤。
+- **自定义工作流** —— 流程由你拼：存任意多个命名工作流，各有各的阶段集；每个阶段自选代理、模型、权限档、扇出形态、要不要门、要不要产出文档。
+- **自定义阶段** —— 你自己的阶段全局库，任何工作流都能引用。
+- **文件浏览与 diff** —— 全屏文件树带改动标记，语法高亮预览，diff / 全文切换。
+- **内置终端** —— 真 pty，根在工作区，可按 provider 配代理和时区。连着远程主机时，它开的是**那台机器上**的 shell。
+- **桌面宠物** —— 跟着你当前那块屏走，预览代理动态，弹确认卡；可以逛宠物市场，也可以用自己的图。
+- **成长宠物** —— 桌面宠物随着你干活分阶段成长，长会话之后留下点看得见的东西。
+- **透明与磨砂** —— 一个模糊滑块把整窗从完全不透明一路带到三种 macOS 原生材质，桌面能透上来。
+- **个性化** —— 6 套原创皮肤、12 种强调色、300+ 张壁纸的图库（也可以用自己的图）、app 和对话区各自独立的像素级字号、深浅两个主题分别调过对比度。
+- **壁纸自动配色** —— 打开之后整套配色从你选的那张壁纸推出来，明暗由图片自己决定。壁纸只提供两个色相，每一级明度和彩度都抄自手调好的皮肤 —— 所以再花的图也生不出一个读不了的界面。想自己定强调色？定了之后只有强调色不再跟随。
+- **对话里的图片与内嵌可视化** —— 代理在磁盘上生成的图会直接显示在回复里，点开看原尺寸。回答中间写的 HTML 片段可以渲染成真的卡片、表格和图示（默认关）。**绝不用 `innerHTML`** —— 片段是解析之后按构造性白名单重建的，颜色只能来自主题令牌，所以渲染出来的东西是跟着你的皮肤走而不是跟它打架。
+
+## 📥 下载与安装
+
+到 [**Releases**](https://github.com/flowForges/myFlowForge/releases) 页拿最新的包：
+
+| 平台 | 文件 |
+|------|------|
+| macOS · Apple 芯片（M1–M4） | `myFlowForge-<版本>-arm64.dmg` |
+| macOS · Intel | `myFlowForge-<版本>.dmg` |
+| Windows · x64 | `myFlowForge-<版本>-x64-setup.exe` |
+| 安卓 | `myFlowForge-<版本>.apk` |
+| Linux · 无头 daemon | `myFlowForge-daemon-<版本>-linux.tar.gz` |
+
+> **这个 app 没有代码签名。** macOS 上第一次打开可能说「无法打开」或者「已损坏」—— 那就是未签名 app 的样子，文件本身没问题。要么**右键** → **打开** → **打开**，要么跑一次：
+> `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
+> Windows 上 SmartScreen 会拦一下，选**更多信息 → 仍要运行**。
 >
-> myFlowForge checks this same Releases feed and offers newer versions in-app.
+> myFlowForge 会查同一个 Releases 源，有新版会在 app 里提示。
 
-## 🚀 Getting started
+**iOS** 没有可下载的包 —— 从 `mobile/` 用你自己的 Apple ID 编译，插线装到设备上。
 
-**Prerequisites:** macOS 11+, Node.js ≥ 20, git, and at least one supported coding CLI installed and authenticated.
+## 🚀 上手
+
+**前置：** macOS 11+ / Windows 10+ / 一个现代 Linux，Node.js ≥ 20，git，以及至少一个装好并登录了的编码 CLI。
 
 ```bash
 git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
 npm install
-npm run dev          # dev mode with renderer hot reload
+npm run dev          # 开发模式，渲染层热更新
 ```
 
-| Command | What it does |
-|---------|--------------|
-| `npm run dev` | Start with hot reload |
-| `npm test` | Run the full test suite (Vitest) |
-| `npm run typecheck` | Type-check both main & renderer tsconfigs |
-| `npm run build` | Build the production bundle |
-| `npm run dist:mac-all` | Build both Intel and Apple Silicon `.dmg`s |
+| 命令 | 做什么 |
+|------|--------|
+| `npm run dev` | 带热更新启动 |
+| `npm test` | 跑完整测试套件（Vitest） |
+| `npm run typecheck` | 主进程和渲染层两个 tsconfig 都查 |
+| `npm run build` | 打生产包 |
+| `npm run dist:mac-all` | 同时打 Intel 和 Apple 芯片两个 `.dmg` |
+| `npm run dist:win` | 打 Windows x64 安装器 |
+| `npm run check:daemon` | 端到端跑一遍无头 daemon |
 
-Artifacts land in `release/`. Changes under `src/main/**` need a **full Electron restart** — hot reload only refreshes the renderer.
+手机端在 `mobile/`（Expo / React Native），中转在 `relay/`，各自有自己的 `package.json`。
 
-## 🏗️ Tech stack
+产物落在 `release/`。改了 `src/main/**` 需要**完全重启 Electron** —— 热更新只刷渲染层。
 
-**Shell:** [Electron](https://www.electronjs.org/) 42 + [electron-vite](https://electron-vite.org/) · **UI:** [React](https://react.dev/) 19 + TypeScript 6 · **Terminal:** [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty) · **Agent bridge:** [Model Context Protocol SDK](https://modelcontextprotocol.io/) · **Process control:** [execa](https://github.com/sindresorhus/execa) · **Validation:** [zod](https://zod.dev/) · **File watching:** [chokidar](https://github.com/paulmillr/chokidar) · **Testing:** [Vitest](https://vitest.dev/) + Testing Library · **Packaging:** [electron-builder](https://www.electron.build/)
+## 🏗️ 技术栈
 
-## 📁 Project structure
+**外壳：** [Electron](https://www.electronjs.org/) 42 + [electron-vite](https://electron-vite.org/) · **界面：** [React](https://react.dev/) 19 + TypeScript 6 · **手机：** [Expo](https://expo.dev/) + [React Native](https://reactnative.dev/) · **终端：** [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty) · **代理桥：** [Model Context Protocol SDK](https://modelcontextprotocol.io/) · **进程控制：** [execa](https://github.com/sindresorhus/execa) · **校验：** [zod](https://zod.dev/) · **文件监听：** [chokidar](https://github.com/paulmillr/chokidar) · **测试：** [Vitest](https://vitest.dev/) + Testing Library · **打包：** [electron-builder](https://www.electron.build/)
+
+## 📁 项目结构
 
 ```
 src/
-├── main/              # Electron main process
-│   ├── agents/        # CLI adapters + provider registry, detection, permissions
-│   ├── run/           # Workflow engine: stages, gates, fan-out, hooks, handoffs
-│   ├── chat/          # Per-workspace chat, queue, memory
-│   ├── mcp/           # Forge MCP server (agent → app bridge)
-│   ├── bot/           # Bot bridge (DingTalk / Telegram / Feishu transports)
-│   ├── plugins/       # Plugin host, catalog, scheduler, extension points
-│   ├── sessionImport/ # Native session scanning & import
-│   ├── usage/         # Provider quota adapters
-│   ├── pet/           # Desktop pet window
-│   └── ...            # git, fs, terminal, update, watcher, windows, appearance
-├── renderer/          # React UI (views, components, settings, theme, pet)
-├── preload/           # Context-isolated IPC bridge
-└── shared/            # Types & pure logic shared across processes
+├── main/              # Electron 主进程
+│   ├── agents/        # CLI 适配器 + provider 注册表、探测、权限
+│   ├── run/           # 工作流引擎：阶段、门、扇出、hook、交接
+│   ├── chat/          # 按工作区的对话、队列、记忆
+│   ├── mcp/           # Forge MCP 服务器（代理 → app 的桥）
+│   ├── remote/        # 远程主机：直连 / SSH / 中转、路由、端到端信道
+│   ├── daemon/        # 无头 daemon + 终端二维码配对
+│   ├── bot/           # 机器人桥（钉钉 / Telegram / 飞书）
+│   ├── plugins/       # 插件宿主、目录、调度、扩展点
+│   ├── sessionImport/ # 原生会话扫描与导入
+│   ├── usage/         # 各家额度适配器
+│   ├── pet/           # 桌面宠物窗口
+│   └── ...            # git、fs、终端、更新、监听、窗口、外观
+├── renderer/          # React 界面（视图、组件、设置、主题、宠物）
+├── preload/           # 上下文隔离的 IPC 桥
+└── shared/            # 跨进程共享的类型与纯逻辑
+mobile/                # iOS 与安卓客户端（Expo / React Native）
+relay/                 # 端到端加密中转（Node 或 Cloudflare Worker）
 ```
 
-## 🤝 Contributing
+## 🤝 参与
 
-Issues and PRs are welcome. The project is **test-driven** — please add or update tests with your changes and make sure `npm test` and `npm run typecheck` pass before opening a PR.
+欢迎 issue 和 PR。这个项目是**测试驱动**的 —— 改动请连测试一起加或改，开 PR 前确认 `npm test` 和 `npm run typecheck` 都过。
 
-## 📄 License
+## 📄 许可
 
-Released under the [MIT License](LICENSE) © 2026 zghua.
+[MIT License](LICENSE) © 2026 zghua。
 
-## 🙏 Acknowledgements
+## 🙏 致谢
 
-Built on the open-source ecosystem around Electron, React, Vite and the Model Context Protocol — and on the coding agents it orchestrates.
+建立在 Electron、React、Vite 和 Model Context Protocol 周边的开源生态之上 —— 以及它所编排的那些编码代理之上。
 
-## 🔗 Links
+## 🔗 链接
 
-- [LINUX DO](https://linux.do/latest) — a community of developers who like to tinker
+- [LINUX DO](https://linux.do/latest) —— 一个爱折腾的开发者社区
