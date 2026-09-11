@@ -71,7 +71,11 @@ export const CH = {
   agentsSetModels: 'agents:set-models',
   agentsSetTimezone: 'agents:set-timezone',
   agentsCliUpdates: 'agents:cli-updates',
+  // 两条而不是一条带参数:路由是**按 channel** 分 client/host 的(channelRouting.ts)。agent 的出口
+  // 必须在**跑 agent 的那台机器**上测,app 自身的出口必须在**你面前这台**上测 —— 一条 channel
+  // 不可能同时落在两端。
   netCheckExitIp: 'net:check-exit-ip',
+  netCheckAppExitIp: 'net:check-app-exit-ip',
   contextScan: 'context:scan',
   contextScanGlobal: 'context:scan-global',
   commandsList: 'commands:list',

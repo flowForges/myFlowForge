@@ -398,7 +398,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     setProviderTimezone(a.id, a.timezone)
     invalidateDetectCache()   // detect surfaces provCfg.timezone → refresh so the UI reflects the change
   })
+  // agent 的出口:在**跑 agent 的那台机器**上问(这条走 host)。
   on(CH.netCheckExitIp, () => checkExitIp(readSettings().agentProxy))
+  // app 自身的出口:在**你面前这台设备**上问(这条在 CLIENT_ONLY 里)。原先设置面板那两个按钮
+  // 共用上面一条,于是「应用自身的网络」块报的其实是 agentProxy 的出口 —— 看着像验过了,其实没验。
+  on(CH.netCheckAppExitIp, () => checkExitIp(readSettings().appProxy))
   on(CH.contextScan, (_e, workspacePath?: string) => {
     if (workspacePath && existsSync(workspacePath)) return scanWorkspaceContext(workspacePath, true)
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }

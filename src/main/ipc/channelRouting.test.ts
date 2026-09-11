@@ -33,7 +33,9 @@ describe('频道分类', () => {
     const keys = Object.keys(table())
     const client = keys.filter((c) => routeOf(c) === 'client')
     const host = keys.filter((c) => routeOf(c) === 'host')
-    expect(client.length).toBe(45)
+    // 45 → 46:net:check-app-exit-ip(2026-09-11)。「应用自身的网络」那条代理的出口检测,
+    //   测的是**你面前这台设备**怎么出网 ⇒ client。agent 那条 net:check-exit-ip 仍走 host。
+    expect(client.length).toBe(46)
     // 147 → 151:终端(term:create / write / resize / kill)。**shell 跑在 host 上** ——
     // 这是它们必须走 host 的全部理由,也正是这次改动要修的那个 bug。
     // 151 → 152:`chat:tool-output`。它按 (workspacePath, sessionId, messageId, toolId)

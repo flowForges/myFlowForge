@@ -39,6 +39,9 @@ export const CLIENT_ONLY: ReadonlySet<string> = new Set([
   'dialog:open-files',
   // 落盘永远在客户端:保存对话框要弹在有人看着的那块屏幕上(内容由 host 出,见 router.ts)
   'client:save-file',
+  // 「应用自身的网络」那条代理的出口检测。测的就是**你面前这台设备**怎么出网(更新/字体/壁纸走它),
+  // 跑到主机上测等于答非所问。agent 那条(net:check-exit-ip)反过来,必须走 host。
+  'net:check-app-exit-ip',
 ])
 
 /**

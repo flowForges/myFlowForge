@@ -43,7 +43,10 @@ const api = {
   refreshModels: (providerId: string) => ipcRenderer.invoke(CH.agentsRefreshModels, providerId),
   setModels: (id: string, models: { id: string; label: string; description?: string }[]) => ipcRenderer.invoke(CH.agentsSetModels, { id, models }),
   setTimezone: (id: string, timezone: string): Promise<void> => ipcRenderer.invoke(CH.agentsSetTimezone, { id, timezone }),
-  checkExitIp: (): Promise<{ ip: string; region: string; via: 'proxy' | 'direct' }> => ipcRenderer.invoke(CH.netCheckExitIp),
+  // scope 决定问哪条代理、以及这一刀落在哪一端:'agent' 走 host(agent 在那台机器上跑),
+  // 'app' 留在本机(更新/字体/壁纸是这台设备自己发的请求)。见 channelRouting.ts。
+  checkExitIp: (scope: 'agent' | 'app' = 'agent'): Promise<{ ip: string; region: string; via: 'proxy' | 'direct' }> =>
+    ipcRenderer.invoke(scope === 'app' ? CH.netCheckAppExitIp : CH.netCheckExitIp),
   // 查各 CLI 是否有新版(只提示):传入已探测到的安装版本,返回可确定有/无新版的那些(未知包/查不到的略过)。
   checkCliUpdates: (installed: { id: string; version?: string }[]): Promise<import('../main/agents/cliLatest').CliUpdateInfo[]> => ipcRenderer.invoke(CH.agentsCliUpdates, installed),
   scanContext: (workspacePath?: string) => ipcRenderer.invoke(CH.contextScan, workspacePath),

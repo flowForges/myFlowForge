@@ -63,6 +63,9 @@ describe('方法表', () => {
     // 另外两处计数互为佐证:210 = 45(CLIENT_ONLY)+ 165(host),daemonTable = 210 - 45 - 2。
     // 210 → 211:workspace:add-workflow-from-template —— 把一条全局模板物化进已建好的工作区
     //   (2026-09-09;以前只有新建向导能做这件事,两端都缺这条路)。
-    expect(Object.keys(table).length).toBe(211)
+    // 211 → 212:net:check-app-exit-ip —— 「应用自身的网络」那条代理的出口检测(2026-09-11)。
+    //   和 net:check-exit-ip 分成两条,是因为路由按 channel 分两端:agent 的出口在主机上测,
+    //   app 自己的出口只能在这台设备上测。
+    expect(Object.keys(table).length).toBe(212)
   })
 })
