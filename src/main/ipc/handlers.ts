@@ -14,7 +14,6 @@ import { refreshProviderModels, setProviderModels, setProviderTimezone } from '.
 import { checkExitIp } from '../net/exitIp'
 import { checkCliUpdates } from '../agents/cliLatest'
 import { buildAgentEnv } from '../agents/env'
-import { compactCodexThread } from '../agents/providers/codexCompact'
 import { providerTimezone } from '../agents/providerConfig'
 import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from 'node:fs'
 import { homedir } from 'node:os'
@@ -41,7 +40,7 @@ import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
 import { sendTurn, history } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
-import { appendMessage, readMessages, readSession as readResumeId } from '../chat/chatStore'
+import { appendMessage, readMessages } from '../chat/chatStore'
 import { withLastMessageAt } from '../chat/sessionsView'
 import { mergeLive } from '../chat/liveTurns'
 import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
@@ -1044,27 +1043,6 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.chatMarkSeen, (_e, a: { workspacePath: string; sessionId: string }) => {
     if (!a?.workspacePath || !a?.sessionId) return
     broadcast(CH.chatSeen, { workspacePath: a.workspacePath, sessionId: a.sessionId })
-  })
-  /**
-   * 手动压缩一条会话的上下文。
-   *
-   * ★★按 provider 分路,因为「压缩」在各家 CLI 里根本不是同一件事:
-   *  · codex(逐字输出/app-server)—— 协议原生 `thread/compact/start`,我们另起一个 app-server
-   *    resume 那条 thread 再发请求(见 codexCompact.ts 顶部为什么必须另起)。
-   *  · claude —— 没有等价的协议入口,`/compact` 是它的斜杠命令,当成普通消息发过去即可
-   *    (和现有 `/goal` 同一套路)。这条由渲染层直接走 chat:send,不经过这里。
-   *  · 其余 —— 不支持。**如实说不支持**,别假装压了。
-   */
-  on(CH.chatCompact, async (_e, a: { workspacePath: string; sessionId: string; agent: string }) => {
-    if (a.agent !== 'codex') throw new Error(`${a.agent} 不支持由 Forge 触发的上下文压缩`)
-    if (readSettings().codexTransport !== 'app-server') {
-      // exec 通路没有 app-server 协议可用。说清怎么办,别让人对着一个没反应的按钮猜。
-      throw new Error('codex 的「逐字输出」没开,压缩要走 app-server 协议。到 设置 → 代理 打开它再试。')
-    }
-    const threadId = readResumeId(a.workspacePath, a.sessionId, 'codex')
-    if (!threadId) throw new Error('这条会话还没有 codex 上下文可压缩(它一轮都还没跑过)')
-    await compactCodexThread(threadId)
-    return { ok: true }
   })
   on(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
   on(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))

@@ -26,12 +26,6 @@ export function fmtTokens(n: number): string {
 
 export interface ContextChipProps {
   usage?: ContextUsage
-  /** 这个 provider / 通路能不能压缩。不能的话按钮置灰,并用 compactHint 说清为什么。 */
-  canCompact: boolean
-  compactHint?: string
-  onCompact: () => void | Promise<void>
-  /** 正在压缩(父层维护,因为压缩期间输入框整体要有反馈)。 */
-  compacting?: boolean
   /** 数据来自哪个编码代理,tips 里要说出来 —— 一条会话里可能换过 provider。 */
   providerLabel?: string
 }
@@ -40,7 +34,7 @@ export interface ContextChipProps {
 const R = 9
 const C = 2 * Math.PI * R
 
-export function ContextChip({ usage, canCompact, compactHint, onCompact, compacting, providerLabel }: ContextChipProps) {
+export function ContextChip({ usage, providerLabel }: ContextChipProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -56,7 +50,21 @@ export function ContextChip({ usage, canCompact, compactHint, onCompact, compact
   if (!usage || usage.used <= 0) return null
 
   const { used, window: win } = usage
-  const pct = win && win > 0 ? Math.min(100, Math.round((used / win) * 100)) : null
+  /**
+   * ★★★「已用 > 窗口」是**物理上不可能的**:占用量就是最近一次请求塞进去的 token,它不可能比
+   *  窗口还大(超了那次请求根本发不出去)。出现这种数只可能是两个数不是一回事 —— 我们算错了、
+   *  或者读到的是一个旧版本写下的值。
+   *
+   *  2026-09-14 用户截图:`已用 794,430 / 窗口 200,000 / 占用 100%`。第一版的 bug 是把
+   *  cachedInputTokens(inputTokens 的子集)又加了一遍;公式已修,但**界面当时照样把它画成了
+   *  100%** —— 那才是更该修的地方:一个显然不可能的数,界面不该替它圆场。
+   *
+   *  所以这里不 clamp 成 100%,而是**判定窗口不可信**:退回「未知」那一档(虚线环、不显示占比),
+   *  并在 tips 里明说两个数对不上。宁可说「我不知道」,也不能给一个假的满格。
+   */
+  const trustworthy = win != null && win > 0 && used <= win
+  const pct = trustworthy ? Math.round((used / win!) * 100) : null
+  const inconsistent = win != null && win > 0 && used > win
   // 三档颜色。★用户原话:「满了就是红的」。90% 起转红 —— 那时候再不压缩就要被自动截断了。
   const tone = pct == null ? '' : pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : ''
 
@@ -103,16 +111,17 @@ export function ContextChip({ usage, canCompact, compactHint, onCompact, compact
             {providerLabel ? `${providerLabel} ` : ''}上报的最近一次请求的输入 token。
             {!win && ' 该 CLI 没有上报上下文窗口大小，所以这里不显示占比 —— 我们不猜。'}
           </p>
-          <button
-            type="button"
-            className="ctx-tip-act"
-            disabled={!canCompact || compacting}
-            title={canCompact ? '让 CLI 把历史压缩成摘要' : compactHint}
-            onClick={() => { void onCompact(); setOpen(false) }}
-          >
-            {compacting ? '压缩中…' : '压缩上下文'}
-          </button>
-          {!canCompact && compactHint && <p className="ctx-tip-why">{compactHint}</p>}
+          {inconsistent && (
+            <p className="ctx-tip-why">
+              已用比窗口还大，这两个数对不上（不可能真的发生）—— 多半是上一轮跑在旧版本上留下的记录。
+              下一轮跑完就会刷新；在那之前这里不显示占比。
+            </p>
+          )}
+          {/* ★★这里曾经是一颗「压缩上下文」按钮。2026-09-14 撤掉:codex 那条协议路径在实验室里
+              跑得通(thread/compact/start,实测 8.6 秒),到用户机器上就是不成 —— 很可能是 PATH 上的
+              codex 和我实测那个不是同一个版本。一个**时灵时不灵**的按钮比没有按钮更糟:它让人以为
+              压过了。各家 CLI 本来就会在接近上限时自己压,那就交给它们,我们只如实显示数字。 */}
+          <p className="ctx-tip-auto">接近上限时，CLI 会自动压缩历史。</p>
         </div>
       )}
     </div>

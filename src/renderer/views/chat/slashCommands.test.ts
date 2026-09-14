@@ -29,9 +29,8 @@ describe('commandsForProvider', () => {
 
   it('每条命令要么填模板、要么开一个面板 —— 不能两样都不做(那是一条点了没反应的命令)', () => {
     for (const c of SLASH_COMMANDS) {
-      // 开面板 / 执行动作的那几条(/开启工作流、/mcp、/compact)本来就没有模板:
-      // 它们不是要发给模型的话,而是 app 自己要做的事。
-      if (c.openLauncher || c.openMcp || c.compact) {
+      // 开面板的那几条(/开启工作流、/mcp)本来就没有模板:它们不是要发给模型的话。
+      if (c.openLauncher || c.openMcp) {
         expect(c.template, c.cmd).toBe('')
         continue
       }
@@ -135,22 +134,5 @@ describe('isSlashQuery', () => {
     expect(isSlashQuery('/开启工作流 做个功能')).toBe(false)  // space → writing the argument
     expect(isSlashQuery('hello')).toBe(false)
     expect(isSlashQuery('')).toBe(false)
-  })
-})
-
-describe('/compact', () => {
-  it('★只给真能压的两家 —— 摆一条点了没反应的命令比不摆更糟', () => {
-    // cursor/gemini 这些既没有协议入口也没有原生 /compact。
-    expect(commandsForProvider('codex', '/comp').some(c => c.cmd === '/compact')).toBe(true)
-    // ★claude **不在**列:它的 /compact 由交互式界面处理,我们跑非交互模式,发过去只会被原样
-    //  转给模型,换回一句「我没法调用这个命令」—— 白耗一轮(2026-09-14 实测)。
-    expect(commandsForProvider('claude', '/comp').some(c => c.cmd === '/compact')).toBe(false)
-    expect(commandsForProvider('cursor', '/comp').some(c => c.cmd === '/compact')).toBe(false)
-    expect(commandsForProvider('gemini', '/comp').some(c => c.cmd === '/compact')).toBe(false)
-  })
-
-  it('compact 标记要能穿过 mergeCommands 传到菜单项上 —— 丢了就退化成「填一个空模板」', () => {
-    const item = mergeCommands('codex', '/compact', []).find(c => c.cmd === '/compact')
-    expect(item?.compact).toBe(true)
   })
 })

@@ -15,10 +15,6 @@ export interface SlashCommand {
   // 2026-09-05:选中打开 MCP 面板。★`/mcp` 在 claude 的交互式界面里是一屏,我们跑非交互模式,
   // 那一屏不存在 —— 这里接的是各 CLI 的 `mcp` 子命令。入口沿用 `/mcp` 这个打法,因为那是用户脑子里的名字。
   openMcp?: boolean
-  // 2026-09-14:压缩上下文。★不往输入框塞字 —— 它是 app 自己要执行的动作,不是发给模型的话。
-  //  codex 走协议原生的 thread/compact/start;claude 没有等价协议入口,把 `/compact` 当消息发过去
-  //  (和下面 `/goal` 同一套路)。所以两家的 template 不一样,由各自的 provider 分支决定怎么执行。
-  compact?: boolean
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -45,14 +41,6 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: '/计划', title: '先出计划', desc: '让 Codex 先给实现计划再动手', providers: ['codex'],
     template: '先给出详细的实现计划,等我确认后再改代码:\n' },
   // Codex / Claude 原生 /goal —— 选中把 `/goal ` 填入输入框,续写后发送,透传给 CLI 触发其原生命令。
-  // ★★只给 codex。2026-09-14 真机验证过两边:
-  //  · codex —— app-server 有 `thread/compact/start`,我们真能触发(实测 8.6 秒压完)。
-  //  · claude —— **不行**。`/compact` 是 Claude Code 交互式界面自己处理的命令,而我们跑的是
-  //    非交互模式。把它当消息发过去,CLI 会原样转给模型,模型回你一句「/compact 是 CLI 命令,
-  //    我这边没法调用……所以上下文没有被压缩」(用户 2026-09-14 实测截图),白白耗掉一轮。
-  //    好在 claude 会在接近上限时**自动压缩**,不需要手动。
-  { cmd: '/compact', title: '压缩上下文', desc: '把当前会话的历史压成摘要,腾出上下文空间', providers: ['codex'],
-    template: '', compact: true },
   { cmd: '/goal', title: '设定目标', desc: 'Codex / Claude 原生 /goal:设定或对齐本次会话目标', providers: ['codex', 'claude'],
     template: '/goal ' },
 ]
@@ -73,8 +61,6 @@ export interface MenuCommand {
   openLauncher?: boolean
   // Carried from SlashCommand.openMcp (built-in /mcp only): picking it opens the MCP panel.
   openMcp?: boolean
-  // Carried from SlashCommand.compact:选中执行压缩,不填模板。
-  compact?: boolean
 }
 
 // One "/" entry per workspace workflow (Task 11's WsWorkflow list), so the user can name a workflow
@@ -94,7 +80,7 @@ export function mergeCommands(providerId: string, query: string, dynamic: MenuCo
   const q = query.replace(/^\//, '').trim().toLowerCase()
   const match = (cmd: string, title: string) => !q || cmd.slice(1).toLowerCase().includes(q) || title.toLowerCase().includes(q)
   const forge: MenuCommand[] = commandsForProvider(providerId, query)
-    .map(c => ({ cmd: c.cmd, title: c.title, desc: c.desc, template: c.template, kind: 'forge' as const, openLauncher: c.openLauncher, openMcp: c.openMcp, compact: c.compact }))
+    .map(c => ({ cmd: c.cmd, title: c.title, desc: c.desc, template: c.template, kind: 'forge' as const, openLauncher: c.openLauncher, openMcp: c.openMcp }))
   const seen = new Set(forge.map(c => c.cmd))
   // Workspace-workflow entries (identified by workflowId) are NEVER swallowed by a built-in name
   // clash — a workflow literally named e.g. "工作流" (the ensureWorkspaceWorkflows default, or a

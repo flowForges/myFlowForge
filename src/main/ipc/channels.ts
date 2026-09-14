@@ -114,8 +114,6 @@ export const CH = {
   chatMarkSeen: 'chat:mark-seen',
   chatSeen: 'chat:seen',
   chatCancelQueued: 'chat:cancel-queued',
-  // 手动压缩上下文。走 host(要碰那台机器上的 codex thread / CLI),所以**不**进 CLIENT_ONLY。
-  chatCompact: 'chat:compact',
   chatClearQueue: 'chat:clear-queue',
   chatStop: 'chat:stop',
   sessionList: 'session:list',

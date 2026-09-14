@@ -100,12 +100,6 @@ interface Props {
   onOpenMcp?: () => void
   /** 这条会话当前的上下文用量。**只来自 CLI 官方上报** —— 没有就不显示,绝不估算。 */
   usage?: ContextUsage
-  /** `/compact` 和上下文 tips 里那颗按钮共用的动作。 */
-  onCompact?: () => void | Promise<void>
-  /** 压缩是否可用;不可用时 tips 里说清原因(compactHint)。 */
-  canCompact?: boolean
-  compactHint?: string
-  compacting?: boolean
   /** 用量是哪个编码代理报的(tips 里要说出来)。 */
   usageProviderLabel?: string
   /** Identifies the current chat (e.g. `${wsPath}::${sessionId}`). The unsent draft (text + attachments)
@@ -119,7 +113,7 @@ interface Props {
   lockedReason?: string
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, usage, onCompact, canCompact, compactHint, compacting, usageProviderLabel, draftKey, lockedReason }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, usage, usageProviderLabel, draftKey, lockedReason }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -291,8 +285,6 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     else if (c.openLauncher) { setText(''); onPickWorkflow?.(undefined) }
     // `/mcp`:开面板,不往输入框里塞字 —— 它不是一句要发给模型的话。
     else if (c.openMcp) { setText(''); onOpenMcp?.() }
-    // `/compact`:执行压缩,不往输入框塞字 —— 它是 app 要做的事,不是要发给模型的话。
-    else if (c.compact) { setText(''); void onCompact?.() }
     else setText(c.template)
     setSlashDismissed(true)
     const ta = taRef.current
@@ -599,11 +591,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
               也是唯一一个看一眼就该知道「还装得下吗」的时刻。 */}
           <ContextChip
             usage={usage}
-            canCompact={canCompact ?? false}
-            compactHint={compactHint}
-            compacting={compacting}
             providerLabel={usageProviderLabel}
-            onCompact={() => onCompact?.()}
           />
           {/* 模型选择 */}
           <div className={'menu' + (openMenu === 'agent' ? ' open' : '')} id="agentMenu">
