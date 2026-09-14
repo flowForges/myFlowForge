@@ -1,8 +1,17 @@
 // Feishu (Lark) transport via the official long-connection (WSClient) — client-initiated, no public
-// endpoint. The Feishu long connection needs the official SDK (@larksuiteoapi/node-sdk, ~30MB with
-// protobufjs). To keep it out of the default bundle, we load it DYNAMICALLY: if it isn't installed the
-// transport reports a clear error status telling the user to `npm i @larksuiteoapi/node-sdk`, and
-// DingTalk/Telegram keep working. Install it to enable Feishu.
+// endpoint. 飞书的长连接协议必须用官方 SDK(@larksuiteoapi/node-sdk,算上 protobufjs 约 18MB)——
+// 钉钉和 Telegram 那两条是手写的,飞书这条不行。
+//
+// ★SDK 是**真依赖,随包发布**(package.json 的 dependencies 里),用户拿到的包里就有,不用自己装。
+//
+// ★★那为什么还用动态 import(而且是变量说明符)?两个真实理由,都不是"为了不打进包":
+//   ① **不占启动路径**:18MB 带 protobufjs 的 SDK,require 一次是实打实的耗时。只有用户真的启用了
+//      飞书才去加载它,其余人一分钱不花。
+//   ② **坏了只坏一条**:顶层静态 import 一旦加载失败(包损坏、平台不兼容),整个 botBridge 模块都
+//      起不来,钉钉和 Telegram 跟着陪葬。放在这里 catch 住,就只是"飞书这条连不上"。
+//
+// ★★★所以失败时**不要**再叫用户去 `npm i` —— 打好的 app 里根本执行不了(/Applications 没写权限,
+//    也没有 npm),那句话只会让人以为功能坏了而无处下手。如实报出加载失败的原因才有用。
 
 import type {
   BotTransport, InboundBotMessage, BotStatus, BotAddress, OutboundBotMessage, FeishuCreds,
@@ -28,10 +37,16 @@ export class FeishuTransport implements BotTransport {
   async start(): Promise<void> {
     this.stopped = false
     this.status({ state: 'connecting' })
-    // Variable specifier → the bundler/tsc treats this as an optional runtime import (no hard dep).
+    // 变量说明符 → 打包器不把它内联进 out/,运行时才去 node_modules 里取(理由见文件顶部)。
     let Lark: Record<string, unknown>
     try { Lark = (await import(/* @vite-ignore */ SDK)) as Record<string, unknown> }
-    catch { this.status({ state: 'error', reason: '未安装飞书 SDK：npm i @larksuiteoapi/node-sdk' }); return }
+    catch (e) {
+      // ★原来这里是 `catch {}` —— 把真实原因整个丢掉,只回一句「去 npm i」。可 SDK 本来就随包发布,
+      //  真走到这儿说明是**别的**问题(包损坏、架构不对、被安全软件拦了),而那句话既做不到也没线索。
+      const why = e instanceof Error ? e.message : String(e)
+      this.status({ state: 'error', reason: `飞书 SDK 加载失败(它本该随包自带,可能是安装包损坏)：${why}` })
+      return
+    }
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const L = Lark as any

@@ -1,5 +1,6 @@
+import { SITE_ORIGIN, SITE_HOST } from '@shared/links'
+
 const GITHUB_URL = 'https://github.com/flowForges/myFlowForge'
-const SITE_URL = 'https://ff.wzcu.com'
 
 // 「关于」面板:应用名 / 版本 / 简介 + 跳转 GitHub 项目首页(经主进程用系统浏览器打开)。
 export function AboutPane({ version }: { version?: string }) {
@@ -22,11 +23,11 @@ export function AboutPane({ version }: { version?: string }) {
             <div className="t">官网首页</div>
             <div className="d">功能介绍、使用文档与最新版本下载。</div>
           </div>
-          <button className="wf-pick" onClick={() => { void window.forge.openExternal(SITE_URL) }}>
+          <button className="wf-pick" onClick={() => { void window.forge.openExternal(SITE_ORIGIN) }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" style={{ width: 15, height: 15, marginRight: 6, verticalAlign: '-2px' }}>
               <circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z" />
             </svg>
-            打开官网 ff.wzcu.com
+            打开官网 {SITE_HOST}
           </button>
         </div>
         <div className="set-row">
