@@ -10,7 +10,7 @@ import { readClaudeModelsLive } from './claudeModels'
 import { logError, appLog } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { makeHookWatch, HOOK_SLOW_MS } from './claudeHooks'
-import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, type CanUseTool } from './claudeControl'
+import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, unhandledControlRequest, controlErrorLine, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
 // full name ('claude-opus-4-8'). Our friendly ids ('opus-4.8') are display labels and are
@@ -120,6 +120,14 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let ctxMaxSeen = 0
       const KIND_LEVEL = { think: 'info', tool: 'accent', file: 'accent', output: 'accent' } as const
       const handle = async (obj: any) => {
+        // ★★不认识但对面正等着回答的控制请求:明确回一句「不支持」。原来它会一路掉过所有分支、
+        //   **根本没人回答**,claude 就静静地等,这一轮挂住(和 codex 那个 bug 同一类,见 4c6423e)。
+        const stray = unhandledControlRequest(obj)
+        if (stray) {
+          try { child.stdin?.write(controlErrorLine(stray.requestId, `myFlowForge does not support control_request ${stray.subtype}`) + '\n') } catch { /* stdin gone */ }
+          cb.onLog({ ts: now(), level: 'info', kind: 'think', text: `claude 发来一个 Forge 不支持的控制请求(${stray.subtype}),已回复不支持并继续。` })
+          return
+        }
         const cut = parseCanUseTool(obj)
         if (cut) {
           // A stage agent can ask the human too (AskUserQuestion rides the permission channel) — lift
@@ -303,6 +311,14 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const handle = async (obj: any) => {
         // 钩子事件先过一道:它只影响「现在在等谁」的播报,不参与下面任何解析分支。
         if (hooks.feed(obj)) return
+        // ★★同 run():两个调用方都要接 —— 见 [[trap-two-call-sites-run-vs-chat]]。只接一处的话,
+        //   工作流那边不挂了、聊天这边照旧是个不动的光标,而聊天才是天天在用的那条。
+        const stray = unhandledControlRequest(obj)
+        if (stray) {
+          try { child.stdin?.write(controlErrorLine(stray.requestId, `myFlowForge does not support control_request ${stray.subtype}`) + '\n') } catch { /* stdin gone */ }
+          cb.onStatus?.(`claude 发来一个 Forge 不支持的控制请求(${stray.subtype}),已回复不支持并继续。`)
+          return
+        }
         const cut = parseCanUseTool(obj)
         if (cut) {
           // AskUserQuestion isn't an operation to approve — it's the model ASKING the human, smuggled

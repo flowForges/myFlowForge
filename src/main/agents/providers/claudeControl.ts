@@ -123,3 +123,34 @@ export function controlDenyLine(req: CanUseTool, message = '用户拒绝了该�
     response: { subtype: 'success', request_id: req.requestId, response: { behavior: 'deny', message, toolUseID: req.toolUseId } },
   })
 }
+
+/**
+ * 一条我们**不认识、但对面正等着回答**的控制请求。认出来才能回一句「不支持」。
+ *
+ * ★★和 codex 那个「回答形状错了就永远悬着」是同一类问题(commit 4c6423e)。这里原来更直接:
+ *  非 `can_use_tool` 的 control_request 会一路掉过所有分支、**根本没人回答**,claude 就静静地等,
+ *  这一轮挂住,用户看到的只是一个不动的光标 —— 直到 240 秒的空闲看门狗才说一句话。
+ *
+ * ★装好的 CLI(2.1.265)里除了 can_use_tool 还有 `hook_callback` 和 `mcp_message`。它们只在我们
+ *  启用了 SDK 侧的钩子 / 进程内 MCP 时才会发 —— 我们现在都没用,所以**今天大概率不会触发**。
+ *  但「不认识就不回答」这个形状本身就不该留着:哪天 CLI 多发一种,症状就是又一次静默挂住。
+ *
+ * ★`control_cancel_request` 是**撤销**,不是等回答的请求 —— 回它反而错,所以只认 `control_request`。
+ */
+export function unhandledControlRequest(obj: any): { requestId: string; subtype: string } | null {
+  if (obj?.type !== 'control_request') return null
+  const subtype = String(obj.request?.subtype ?? '')
+  if (subtype === 'can_use_tool') return null      // 有正经处理路径
+  const requestId = obj.request_id
+  // 没有 request_id 就没法回答(回了也没人认领),放过它。
+  if (typeof requestId !== 'string' || !requestId) return null
+  return { requestId, subtype: subtype || '(未注明)' }
+}
+
+/** 按控制协议回一个 error 响应。这是「我不支持这个请求」的**正确**说法,比不回答强得多。 */
+export function controlErrorLine(requestId: string, error: string): string {
+  return JSON.stringify({
+    type: 'control_response',
+    response: { subtype: 'error', request_id: requestId, error },
+  })
+}

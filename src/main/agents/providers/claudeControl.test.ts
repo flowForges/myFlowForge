@@ -3,6 +3,7 @@ import {
   CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine,
   parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine,
   parseAskQuestions, controlAnswerLine, askGateTitle,
+  unhandledControlRequest, controlErrorLine,
 } from './claudeControl'
 
 // 真机抓来的 AskUserQuestion can_use_tool 载荷(claude 2.1.225),裁掉无关字段。
@@ -148,5 +149,50 @@ describe('claudeControl', () => {
       const qs = parseAskQuestions({ questions: [{ question: 'a', options: [{ label: 'x' }] }, { question: 'b', options: [{ label: 'y' }] }] })!
       expect(askGateTitle(qs)).toBe('请回答以下问题')
     })
+  })
+})
+
+/**
+ * 和 codex 那个「回答形状错了就永远悬着」是同一类问题(见 commit 4c6423e)。
+ *
+ * claude 在 `--input-format stream-json --permission-prompt-tool stdio` 下会发 control_request
+ * 等我们回 control_response。我们只认 `can_use_tool` —— 其余子类型(装好的 CLI 里还有
+ * `hook_callback` / `mcp_message`)会一路掉到底、**永远没人回答**,于是那一轮静静地挂住。
+ *
+ * ★真发不发取决于我们有没有启用那些能力,但「不认识就不回答」本身就是个不该存在的形状:
+ *  宁可明确回一句「我不支持」,也不能让对面干等。
+ */
+describe('unhandledControlRequest —— 不认识的控制请求也必须有人回答', () => {
+  it('can_use_tool 不算(它有正经的处理路径)', () => {
+    expect(unhandledControlRequest({ type: 'control_request', request_id: 'r1', request: { subtype: 'can_use_tool' } })).toBeNull()
+  })
+
+  it('★其它子类型要被认出来,并带上 request_id —— 没有它就无法回答', () => {
+    expect(unhandledControlRequest({ type: 'control_request', request_id: 'r2', request: { subtype: 'hook_callback' } }))
+      .toEqual({ requestId: 'r2', subtype: 'hook_callback' })
+    expect(unhandledControlRequest({ type: 'control_request', request_id: 'r3', request: { subtype: 'mcp_message' } }))
+      .toEqual({ requestId: 'r3', subtype: 'mcp_message' })
+  })
+
+  it('★不是 control_request 的一概不碰 —— 普通消息流不能被误当成待回答的请求', () => {
+    expect(unhandledControlRequest({ type: 'assistant', message: {} })).toBeNull()
+    expect(unhandledControlRequest({ type: 'control_response', response: {} })).toBeNull()
+    // control_cancel_request 是「撤销」,不是等回答的请求,回它反而错。
+    expect(unhandledControlRequest({ type: 'control_cancel_request', request_id: 'r4' })).toBeNull()
+    expect(unhandledControlRequest(null)).toBeNull()
+  })
+
+  it('没有 request_id 就没法回答,只能放过(回了也没人认领)', () => {
+    expect(unhandledControlRequest({ type: 'control_request', request: { subtype: 'hook_callback' } })).toBeNull()
+  })
+})
+
+describe('controlErrorLine', () => {
+  it('按控制协议回一个 error 响应,带上原 request_id', () => {
+    const line = JSON.parse(controlErrorLine('r9', 'not supported'))
+    expect(line.type).toBe('control_response')
+    expect(line.response.subtype).toBe('error')
+    expect(line.response.request_id).toBe('r9')
+    expect(line.response.error).toContain('not supported')
   })
 })
