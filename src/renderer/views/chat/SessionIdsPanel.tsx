@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { AgentSessionInfo, ChatQueueEvent } from '@shared/types'
+import type { AgentSessionInfo, ChatQueueEvent, ContextUsage } from '@shared/types'
 
 function Copy({ text, label = '复制' }: { text: string; label?: string }) {
   const [done, setDone] = useState(false)
@@ -26,7 +26,7 @@ export function SessionIdsPanel({
   workspacePath: string
   sessionId: string
   archived: boolean
-  usageByProvider?: Record<string, { used: number; window: number }>
+  usageByProvider?: Record<string, ContextUsage>
 }) {
   const [rows, setRows] = useState<AgentSessionInfo[] | null>(null)
   const [refreshing, setRefreshing] = useState(false)

@@ -283,4 +283,15 @@ describe('服务端请求:每一种都要回对形状,并且绝不能静默', ()
     expect(f.writes.find((w: any) => w.id === 82).result).toEqual({ answers: {} })
     expect(notices.length).toBe(1)
   })
+  it('★上下文用量:官方通知直接透出去(以前被 adaptCodexEvent 当成不认识的通知丢掉了)', async () => {
+    const usages: any[] = []
+    const { f } = started({ onUsage: (u: any) => usages.push(u) })
+    f.push({ method: 'thread/tokenUsage/updated', params: { threadId: 'th1', turnId: 'u1', tokenUsage: {
+      last: { inputTokens: 1000, cachedInputTokens: 250, outputTokens: 9, reasoningOutputTokens: 0, totalTokens: 1259 },
+      total: { inputTokens: 99999, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 99999 },
+      modelContextWindow: 272000,
+    } } })
+    await new Promise(r => setTimeout(r, 0))
+    expect(usages).toEqual([{ used: 1250, window: 272000 }])
+  })
 })

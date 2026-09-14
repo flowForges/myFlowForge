@@ -2,7 +2,7 @@ import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks, ConfirmDecision } from '../types'
 import type { AskAnswers } from '@shared/types'
-import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
+import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker, splitThinkLines } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
@@ -117,7 +117,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         try { child.stdin?.write(controlAnswerLine(req, answers, response) + '\n') } catch { /* stdin gone */ }
       }
       let streamed = false
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       const KIND_LEVEL = { think: 'info', tool: 'accent', file: 'accent', output: 'accent' } as const
       const handle = async (obj: any) => {
         // ★★不认识但对面正等着回答的控制请求:明确回一句「不支持」。原来它会一路掉过所有分支、
@@ -152,8 +152,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           else respond(cut, decision === 'allow')
           return
         }
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         if (obj?.type === 'stream_event') streamed = true
         if (obj?.type === 'assistant' && streamed) return   // deltas already streamed this turn; skip the full message to avoid duplicates
@@ -276,7 +275,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let turnOk: boolean | null = null
       let rawErr = ''            // captured stderr for the no-reply diagnostic
       let errBuf = ''            // stderr line-splitter for live onStatus forwarding
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       const cap = (s: string, add: string) => (s + add).slice(-2000)
       // Answer a pending can_use_tool control_request on stdin. Tolerate a closed/dead stream (e.g.
       // the turn was cancelled while a gate was open).
@@ -366,8 +365,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           }
           return
         }
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         if (obj?.type === 'stream_event') streamed = true
         // deltas already streamed the assistant text; skip its text to avoid duplication — but STILL

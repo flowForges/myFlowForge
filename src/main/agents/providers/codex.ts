@@ -4,7 +4,7 @@ import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, Cha
 import type { TurnPhase } from '@shared/types'
 import { confirmAllowed } from '../types'
 import { createFenceScanner } from '../handoffFence'
-import { buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor } from '../chatStream'
+import { buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker } from '../chatStream'
 import { forgeCodexConfigArgs } from '../mcpConfig'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
@@ -211,7 +211,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       // Only the app-server transport ever emits a streamed 'assistant' delta ahead of the final
       // 'assistant-final' item — exec's `codex exec --json` only emits item.completed, never deltas,
       // so this stays false (inert) on the exec path. Mirrors chat()'s `handle` dedup below.
@@ -223,8 +223,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       const handleRunEvent = (obj: unknown, rawLine?: string) => {
         // Codex usage (if present in a claude-compatible shape) feeds the same context bar; when
         // codex's usage shape differs, extractContextTokens returns null and the bar simply omits.
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         // Try parseCodexEvent first — it handles both item format and legacy msg format.
         const actions = parseCodexEvent(obj)
@@ -286,6 +285,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               // ★★两个调用方(run / chat)都要接 —— 见 [[trap-two-call-sites-run-vs-chat]]:
               //  只接一处 = 工作流里能看见提示、聊天里照旧是个不动的光标。
               onNotice: (t) => cb.onLog({ ts: now(), level: 'info', kind: 'think', text: t }),
+              onUsage: (u) => cb.onUsage?.(u),
               onError: (m) => { logError('codex', 'app-server run 错误', m) },
             },
           )
@@ -387,7 +387,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       let sawDelta = false
       let deliveredAny = false
       let lastErr: string | null = null
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       // Per-event handling shared by both transports: exec's processLine (below, fed raw JSONL from
       // stdout) and the app-server branch (fed the exec-shaped events driveCodexTurn adapts). Hoisted
       // above the transport branch — along with its mutable state (sawDelta/lastErr/ctxMaxSeen) — so
@@ -398,8 +398,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // Best-effort context usage: codex's chat events rarely carry a claude-compatible usage
         // object, so extractContextTokens usually returns null and the bar simply omits. Kept for
         // symmetry with run() so a compatible usage shape would feed the session context meter.
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         // Surface codex's command/file execution in the 执行 block (title + output), then drop the
         // duplicate think step parseCodexEvent renders for the same item.
@@ -462,6 +461,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               },
               onSession: (id) => cb.onSession(id),
               onNotice: (t) => cb.onStatus?.(t),
+              onUsage: (u) => cb.onUsage?.(u),
               onError: (m) => { cb.onError(new Error(m)) },
             },
           )

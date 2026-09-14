@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { EngineApi } from '../state/useEngine'
-import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef, WsWorkflow } from '@shared/types'
+import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef, WsWorkflow, ContextUsage } from '@shared/types'
 import { DEFAULT_PERMISSION_MODE, type PermissionMode } from '@shared/permissions'
 import { AgentNode } from '../components/AgentNode'
 import { HookNode } from '../components/HookNode'
@@ -645,8 +645,43 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // each provider's 主 Agent row (user request: the context is session-scoped, so show it with the
   // session it belongs to). Same raw signal as latestUsage (model's own per-turn usage token count),
   // just bucketed by the provider that produced it so a multi-provider session shows each one's own.
+  /**
+   * 手动压缩上下文。两个入口(输入框打 `/compact`、上下文 tips 里那颗按钮)共用这一个。
+   *
+   * ★★能不能压是**按 provider + 通路**决定的,不是一个笼统的开关:codex 走协议原生的
+   *  `thread/compact/start`(要「逐字输出」开着);claude 没有协议入口,`/compact` 是它的斜杠命令,
+   *  当成普通消息发过去即可;其余 provider 两样都没有。
+   * ★不支持时**说清为什么**,别摆一颗灰按钮让人猜(见 ContextChip 的 compactHint)。
+   */
+  const [compacting, setCompacting] = useState(false)
+  const compactAgent = selection?.agentId ?? ''
+  const canCompact = compactAgent === 'codex' || compactAgent === 'claude'
+  const compactHint = canCompact ? undefined : `${compactAgent || '当前编码代理'} 没有可用的上下文压缩入口（既没有协议接口，也没有原生 /compact 命令）`
+  const doCompact = useCallback(async () => {
+    if (!wsPath || !sessions.activeSessionId || !canCompact || compacting) return
+    setCompacting(true)
+    try {
+      if (compactAgent === 'claude') {
+        // claude 没有协议入口 —— `/compact` 是它的原生斜杠命令,当成一条普通消息发过去
+        // (和 `/goal` 同一套路)。
+        await window.forge.sendChat({
+          workspacePath: wsPath, sessionId: sessions.activeSessionId,
+          agent: compactAgent, agentLabel: compactAgent, model: selection?.modelId ?? '',
+          text: '/compact', attachments: [],
+        })
+      } else {
+        await window.forge.compactContext?.({ workspacePath: wsPath, sessionId: sessions.activeSessionId, agent: compactAgent })
+      }
+    } catch (e) {
+      // ★压缩失败必须说出来。静默失败会让人以为压过了,然后继续往一个已经满了的上下文里塞东西。
+      window.alert(`压缩上下文失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setCompacting(false)
+    }
+  }, [wsPath, sessions.activeSessionId, compactAgent, canCompact, compacting, selection?.modelId])
+
   const usageByProvider = useMemo(() => {
-    const out: Record<string, { used: number; window: number }> = {}
+    const out: Record<string, ContextUsage> = {}
     for (let i = chat.messages.length - 1; i >= 0; i--) {
       const m = chat.messages[i]
       if (m.who === 'ai' && m.provider && m.usage?.used && !out[m.provider]) out[m.provider] = m.usage
@@ -1751,6 +1786,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
           onOpenMcp={() => setMcpOpen(true)}
+          usage={compactAgent ? usageByProvider[compactAgent] : undefined}
+          usageProviderLabel={providers.find(p => p.id === compactAgent)?.displayName}
+          canCompact={canCompact}
+          compactHint={compactHint}
+          compacting={compacting}
+          onCompact={doCompact}
           onSelectionChange={(s) => {
             // Provider switch guard: agent changed AND the old provider already ran this session → don't
             // switch yet; raise a confirm banner (switch loses native context; the new provider will

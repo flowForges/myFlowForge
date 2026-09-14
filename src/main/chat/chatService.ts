@@ -3,7 +3,7 @@ import { appendMessage, readMessages, readSession, readWatermark, writeSession, 
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
 import type { AgentProvider, AgentSession, ConfirmReq, ConfirmDecision } from '../agents/types'
-import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity, TurnPhase } from '@shared/types'
+import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity, TurnPhase, ContextUsage } from '@shared/types'
 import { phaseLabel } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
 import { inlineHtmlPreamble } from './inlineHtmlDirective'
@@ -156,7 +156,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     emit({ workspacePath: ws, sessionId: sid, type: 'assistant-start', id: aid, model: label, context })
     let text = ''
     let think = ''
-    let lastUsage: { used: number; window: number } | undefined
+    let lastUsage: ContextUsage | undefined
     // 本轮累计 token 成本(input+output),用于用量汇总账本。一个 turn 里可能有多段 result 用量,累加之。
     let turnTokens: { input: number; output: number } | undefined
     // Built-in Task sub-agents spawned this turn, keyed by tool_use id — accumulated live and persisted

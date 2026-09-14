@@ -66,6 +66,7 @@ describe('方法表', () => {
     // 211 → 212:net:check-app-exit-ip —— 「应用自身的网络」那条代理的出口检测(2026-09-11)。
     //   和 net:check-exit-ip 分成两条,是因为路由按 channel 分两端:agent 的出口在主机上测,
     //   app 自己的出口只能在这台设备上测。
-    expect(Object.keys(table).length).toBe(212)
+    // 212 → 213:chat:compact(2026-09-14),手动压缩会话上下文。
+    expect(Object.keys(table).length).toBe(213)
   })
 })

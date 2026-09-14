@@ -71,6 +71,9 @@ const api = {
   // #13: answer a setup hook's confirm/input card.
   resolveSetupInteraction: (id: string, answer: { decision?: 'allow' | 'deny'; value?: string }) => ipcRenderer.invoke(CH.workspaceSetupResolve, { id, answer }),
   sendChat: (payload: unknown, source?: string) => ipcRenderer.invoke(CH.chatSend, payload, source),
+  /** 手动压缩这条会话的上下文。只有 codex(逐字输出)支持;别的 provider 会抛,信息里说清原因。 */
+  compactContext: (a: { workspacePath: string; sessionId: string; agent: string }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke(CH.chatCompact, a),
   chatQueueState: (a: { workspacePath: string }): Promise<ChatQueueEvent> => ipcRenderer.invoke(CH.chatQueueState, a),
   // 还挂着、等人回答的确认/提问门。聊天视图每次挂载都拉一次 —— 它自己的 state 是空的,门却还在主进程阻塞着。
   chatGateState: (a: { workspacePath: string }): Promise<ChatGateSnapshot> => ipcRenderer.invoke(CH.chatGateState, a),

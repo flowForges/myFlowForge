@@ -1,5 +1,5 @@
 import { spawnAgent, killTree } from '../procGroup'
-import { adaptCodexEvent } from './codexEventAdapter'
+import { adaptCodexEvent, codexTokenUsage } from './codexEventAdapter'
 import { codexApprovalResponse, elicitationUnsupported, PERMISSIONS_METHOD, ELICITATION_METHOD } from './codexApproval'
 
 // Minimal child-process surface so tests can fake the app-server end to end.
@@ -58,6 +58,11 @@ export interface CodexTurnCallbacks {
    *  我替你拒了」,也不能什么都不说。
    */
   onNotice?(text: string): void
+  /**
+   * 上下文用量。★codex 是唯一一个**已用和窗口都官方上报**的 provider,所以只有它能给出
+   * 可信的占比 —— 别处的窗口要么靠 CLI 报、要么就没有。
+   */
+  onUsage?(u: { used: number; window?: number }): void
 }
 
 export interface CodexTurnHandle {
@@ -252,6 +257,9 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
           settle(false)
           continue
         }
+        // 上下文用量:官方数,直接透出去(adaptCodexEvent 不认这条,以前就这么被丢掉了)。
+        const u = codexTokenUsage(msg)
+        if (u) { cb.onUsage?.(u); continue }
         const e = adaptCodexEvent(msg)
         if (e) cb.onEvent(e)
         continue

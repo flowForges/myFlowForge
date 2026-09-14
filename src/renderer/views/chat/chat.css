@@ -1029,3 +1029,43 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   border: 1px solid color-mix(in srgb, var(--danger, #e5534b) 40%, transparent);
   border-radius: 4px;
 }
+
+/* ── 输入框里的上下文 ──────────────────────────────────────────────────────────────
+   ★只在 CLI 真的报了用量时才出现(组件里判的)。窗口未知时不画占比条 —— 见 ContextChip.tsx:
+   宁可少显示一半信息,也不显示一半假信息。 */
+.ctx-chip-wrap { position: relative; display: inline-flex; }
+.ctx-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 28px; padding: 0 9px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--fg-2); font-size: 11.5px; line-height: 1; cursor: pointer;
+  white-space: nowrap;
+}
+.ctx-chip:hover { background: var(--surface-2); }
+.ctx-chip b { color: var(--fg); font-weight: 600; }
+.ctx-chip-label { color: var(--faint); }
+.ctx-chip-sep, .ctx-chip-pct { color: var(--faint); }
+/* 占比条:只有拿到官方窗口才会渲染出来。 */
+.ctx-chip-bar { width: 34px; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.ctx-chip-bar i { display: block; height: 100%; background: var(--accent); }
+/* 快满了 —— 换个颜色提醒,但不弹任何东西打断人。 */
+.ctx-chip.hot { border-color: var(--warn, #d08b2c); }
+.ctx-chip.hot .ctx-chip-bar i { background: var(--warn, #d08b2c); }
+
+.ctx-tip {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40;
+  min-width: 248px; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); box-shadow: 0 8px 28px rgba(0,0,0,.28);
+}
+.ctx-tip-row { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; padding: 2px 0; }
+.ctx-tip-row span { color: var(--faint); }
+.ctx-tip-note { margin: 8px 0 10px; font-size: 11px; line-height: 1.6; color: var(--faint); }
+.ctx-tip-act {
+  width: 100%; height: 30px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--fg);
+  font-size: 12px; cursor: pointer;
+}
+.ctx-tip-act:hover:not(:disabled) { background: var(--surface-3, var(--surface-2)); border-color: var(--accent); }
+.ctx-tip-act:disabled { opacity: .5; cursor: not-allowed; }
+.ctx-tip-why { margin: 7px 0 0; font-size: 11px; line-height: 1.5; color: var(--faint); }

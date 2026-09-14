@@ -1,3 +1,4 @@
+import type { ContextUsage } from '@shared/types'
 import type { ChatTask } from './types'
 
 export type ChatStreamAction =
@@ -159,13 +160,68 @@ export function extractTurnTokens(obj: any): { input: number; output: number } |
   return input > 0 || output > 0 ? { input, output } : null
 }
 
-// Context-window size in tokens for a model id (claude/qoder default 200K; 1m variants 1M).
-export function contextWindowFor(model: string): number {
-  return /1m/i.test(model || '') ? 1_000_000 : 200_000
+/**
+ * 模型的上下文窗口 —— **只从 CLI 自己报的地方取**,取不到就是 null(不知道),绝不回落到猜测值。
+ *
+ * ★★这里原来是 `contextWindowFor(model)`:模型名里带 "1m" 就算 1M,否则一律 200K。那个数字
+ *  从来没人核对过,却被拿去算百分比画进度条 —— 用户看到的是一个「看着很像回事的假数」。
+ *  2026-09-14 用户点名要求:「上下文要真实,从官方自己的能力里取的,不能是你自己计算的」。
+ *
+ * claude 把它放在 `result` 事件的 `modelUsage[模型].contextWindow`(2.1.265 实测)。
+ * ★只有 window 从 result 取。`used` 仍然必须避开 result —— 那里的 usage 是整轮累计,
+ *  拿它当占用量会让进度条虚高到 100%(见 extractContextTokens 上面那段注释)。
+ *  窗口不一样:它是跟模型走的静态值,不随累计变化,从哪个事件读都一样。
+ *
+ * ★多个模型时取**最大**的:一轮里可能夹着小模型分身(haiku 之类),它们的小窗口不能拿来
+ *  代表主模型。
+ */
+export function extractContextWindow(obj: any): number | null {
+  if (obj?.type !== 'result') return null
+  const mu = obj.modelUsage
+  if (!mu || typeof mu !== 'object') return null
+  let best = 0
+  for (const v of Object.values(mu as Record<string, any>)) {
+    const w = v?.contextWindow
+    if (typeof w === 'number' && w > best) best = w
+  }
+  return best > 0 ? best : null
 }
 
 export function buildChatPrompt(task: ChatTask): string {
   if (!task.attachments || task.attachments.length === 0) return task.prompt
   const lines = task.attachments.map(a => `- ${a.path}`).join('\n')
   return `${task.prompt}\n\n附件:\n${lines}`
+}
+
+/**
+ * 一轮对话里跟踪「已用上下文 + 官方窗口」,并在有变化时上报。
+ *
+ * ★★抽成一个跟踪器,是因为原来这段在**八个调用点**各抄了一遍(claude/codex/qoder 各两处、
+ *  opencode 两处、antigravity 一处)。这正是 [[trap-two-call-sites-run-vs-chat]] 那类坑的温床:
+ *  改其中几处、漏掉另几处,表现出来就是「工作流里对、聊天里不对」。
+ *
+ * ★`used` 取**见过的最大值**而不是最后一个:CLI 一轮里会发很多条 usage,中间态可能偏小。
+ * ★`window` 只在 CLI 明确上报时才有。窗口通常跟在轮末的 `result` 事件里,比 used 晚到 ——
+ *  所以拿到窗口时要**补发一次**,否则这一轮直到结束都显示不出占比。
+ */
+export function makeUsageTracker(
+  emit: (u: ContextUsage) => void,
+  usedOf: (obj: any) => number | null | undefined = extractContextTokens,
+) {
+  let used = 0
+  let window: number | undefined
+  return {
+    feed(obj: any): void {
+      const w = extractContextWindow(obj)
+      if (w != null && w !== window) {
+        window = w
+        if (used > 0) emit({ used, window })   // 窗口后到:补发一次,让占比当轮就能显示
+      }
+      const u = usedOf(obj)
+      if (u != null && u > used) {
+        used = u
+        emit({ used, window })
+      }
+    },
+  }
 }

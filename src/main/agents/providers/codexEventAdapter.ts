@@ -28,3 +28,24 @@ export function adaptCodexEvent(msg: any): any | null {
   }
   return null
 }
+
+/**
+ * `thread/tokenUsage/updated` → 上下文用量。**codex 是唯一一个把已用和窗口都官方给全的 provider**,
+ * 所以只有它能画出可信的占比条。
+ *
+ * ★取 `last` 不取 `total`:`total` 是整个 thread 的累计,拿它当「现在占了多少」会让进度条虚高到
+ *  100%(和 claude 那边刻意跳过 `result` 事件是同一个道理,见 chatStream 的 extractContextTokens)。
+ * ★只算输入侧(input + 缓存读 + 缓存写)。生成出来的 output / reasoning 不是当前占用 ——
+ *  它们要到下一轮才变成输入。
+ * ★`modelContextWindow` 在 schema 里是可空的,缺席就是「不知道」,不许拿别处的数去补。
+ */
+export function codexTokenUsage(msg: any): { used: number; window?: number } | null {
+  if (msg?.method !== 'thread/tokenUsage/updated') return null
+  const tu = msg.params?.tokenUsage
+  const last = tu?.last
+  if (!last || typeof last !== 'object') return null
+  const n = (x: any) => (typeof x === 'number' && x > 0 ? x : 0)
+  const used = n(last.inputTokens) + n(last.cachedInputTokens) + n(last.cacheWriteInputTokens)
+  const w = tu.modelContextWindow
+  return { used, window: typeof w === 'number' && w > 0 ? w : undefined }
+}

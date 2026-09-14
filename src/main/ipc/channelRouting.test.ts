@@ -48,7 +48,9 @@ describe('频道分类', () => {
     // 161 → 162:加载项两条(addons:scan / addons:remove)进来、skills:list 出去。
     //   扫的是**主机**磁盘上的技能/规则/MCP,删的也是主机上的东西 ⇒ host。
     // 162 → 165:技能 / 插件市场三条。装到**主机**的 CLI 上 ⇒ host。
-    expect(host.length).toBe(166)   // +1:workspace:add-workflow-from-template(2026-09-09)
+    // 166 → 167:chat:compact(2026-09-14)。手动压缩上下文要碰**那台机器上**的 codex thread
+    //   (~/.codex/sessions 里的 rollout)⇒ host,不是 client。
+    expect(host.length).toBe(167)   // +1:workspace:add-workflow-from-template(2026-09-09)
     expect(client.length + host.length).toBe(keys.length)
   })
 

@@ -1,6 +1,6 @@
 import './sessionTabs.css'
 import { useState, useRef, useEffect } from 'react'
-import type { ChatSession } from '@shared/types'
+import type { ChatSession, ContextUsage } from '@shared/types'
 import { SessionIdsPanel } from './SessionIdsPanel'
 
 const X = (
@@ -23,7 +23,7 @@ export interface SessionTabsProps {
   runningIds?: ReadonlySet<string>
   // Per-provider latest reported context usage for the active session — shown in the IDs panel next to
   // each provider's 主 Agent row.
-  usageByProvider?: Record<string, { used: number; window: number }>
+  usageByProvider?: Record<string, ContextUsage>
 }
 
 export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds, runningIds, usageByProvider }: SessionTabsProps) {

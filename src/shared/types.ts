@@ -298,9 +298,8 @@ export interface ChatMessage {
   ts: string
   // Aggregated worktree change totals across all run projects (set on the done narration).
   changes?: { total: number; add: number; del: number }
-  // Chat-session context-window usage at the time this assistant message finished: used =
-  // total context tokens consumed, window = model's context window. Set on the done message.
-  usage?: { used: number; window: number }
+  // Chat-session context-window usage at the time this assistant message finished. Set on the done message.
+  usage?: ContextUsage
   // Per-TURN token cost of this assistant turn (input incl. cache + output). Preferred source is the
   // provider's cumulative `result` usage (see extractTurnTokens). When the provider doesn't report it
   // (qoder/codex/cursor/gemini/…), we fall back to a CJK-aware ESTIMATE over the context fed + the reply
@@ -542,3 +541,20 @@ export interface ScanResult { scannedAt: number; groups: SessionGroup[] }
 export interface ScanCache { version: 1; scannedAt: number; groups: SessionGroup[] }
 export interface ImportedIndex { version: 1; scannedAt: number; sessions: DiscoveredSession[] }
 export interface ImportResult { index: ImportedIndex; gitRepos: GitRepoCandidate[] }
+
+/**
+ * 一个编码代理当前占了多少上下文。
+ *
+ * ★★两个数都**只能来自 CLI 自己上报的**,不许我们算、不许我们猜。用户 2026-09-14 原话:
+ *  「上下文要真实,从官方自己的能力里取的,不能是你自己计算的,那个不准确」。
+ *
+ * ★`window` 是**可选的**,这是整条改动的关键:以前它由 `contextWindowFor(model)` 按模型名硬猜
+ *  (名字里有 "1m" 就是 1M,否则一律 200K),于是界面上那个百分比是个看着很像回事的假数。
+ *  现在:CLI 报了窗口才有窗口、才显示占比;没报就只显示 token 数,**不画进度条、不编百分比**。
+ */
+export interface ContextUsage {
+  /** 已占用的上下文 token(输入侧:新输入 + 缓存读 + 缓存写;不含生成的 output)。 */
+  used: number
+  /** 模型的上下文窗口。只在 CLI 明确上报时才有 —— 缺席表示「不知道」,不是 0。 */
+  window?: number
+}

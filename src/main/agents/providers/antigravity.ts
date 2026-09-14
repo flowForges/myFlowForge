@@ -1,7 +1,7 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
-import { buildChatPrompt, contextWindowFor } from '../chatStream'
+import { buildChatPrompt, makeUsageTracker } from '../chatStream'
 import { createFenceScanner } from '../handoffFence'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
@@ -130,12 +130,12 @@ export function makeAntigravityProvider(spec: AntigravitySpec): AgentProvider {
       let sawTool = false
       let turnOk: boolean | null = null
       let resultErr = ''
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u), agyContextTokens)
       const cap = (s: string, add: string) => (s + add).slice(-2000)
 
       const handle = (obj: unknown) => {
         { const t = agyTurnTokens(obj); if (t) cb.onTurnTokens?.(t) }
-        { const used = agyContextTokens(obj); if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) } }
+        usage.feed(obj)
         for (const a of parseAgyActions(obj)) {
           if (a.kind === 'session') { cb.onSession(a.id); continue }
           if (a.kind === 'ignore') continue

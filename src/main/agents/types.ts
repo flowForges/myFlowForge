@@ -1,4 +1,4 @@
-import type { Attachment, AskAnswers, AskQuestion } from '@shared/types'
+import type { Attachment, AskAnswers, AskQuestion, ContextUsage } from '@shared/types'
 
 export interface HandoffPayload { summary: string; artifacts?: { path: string; kind: string }[] }
 
@@ -56,7 +56,7 @@ export interface AgentCallbacks {
   onSession?(id: string): void
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired (run() only) when the running max usage increases.
-  onUsage?(u: { used: number; window: number }): void
+  onUsage?(u: ContextUsage): void
   // 每轮 token 成本(input+output),用于用量汇总账本;仅在有 result 事件用量时触发(见 extractTurnTokens)。
   onTurnTokens?(t: { input: number; output: number }): void
   onConfirm(req: ConfirmReq): Promise<ConfirmDecision>
@@ -100,7 +100,7 @@ export interface ChatCallbacks {
   onPhase?(phase: import('@shared/types').TurnPhase): void
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired when the running max usage increases.
-  onUsage?(u: { used: number; window: number }): void
+  onUsage?(u: ContextUsage): void
   // 每轮 token 成本(input+output),用于用量汇总账本;仅在有 result 事件用量时触发(见 extractTurnTokens)。
   onTurnTokens?(t: { input: number; output: number }): void
   // A built-in Task sub-agent the main agent spawned. phase 'start' when the Task tool_use appears

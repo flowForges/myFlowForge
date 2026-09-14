@@ -14,7 +14,11 @@ describe('daemonTable', () => {
   it('剔掉跟设备走的和无头做不了的,剩下的就是握手时发出去的方法清单', () => {
     const t = daemonTable(full())
     const keys = Object.keys(t)
-    expect(keys.length).toBe(211 - 45 - 2)
+    // ★这里原来写死成 `211 - 45 - 2`,而那两个数早就过期了(方法表已经 213、CLIENT_ONLY 已经 46)——
+    //  只是上一次加 channel 时**两个数同增**,算出来恰好还是 164,于是这条断言"通过"了一年。
+    //  一条靠巧合通过的断言是最坏的那种:它既没在守护什么,又让人以为有人在守护。
+    //  改成从真实常量算:总数那道闸在 methodTable.test.ts,这里只钉「剔除关系」本身。
+    expect(keys.length).toBe(Object.keys(full()).length - CLIENT_ONLY.size - DAEMON_UNSUPPORTED.size)
     for (const c of CLIENT_ONLY) expect(keys).not.toContain(c)
     for (const c of DAEMON_UNSUPPORTED) expect(keys).not.toContain(c)
   })

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import type { ContextUsage } from '@shared/types'
 import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -208,7 +209,7 @@ process.exit(0)
 `)
     chmodSync(chatCli, 0o755)
     const provider = makeClaudeProvider({ bin: 'node', preArgs: [chatCli], defaultModels: [] })
-    const usages: { used: number; window: number }[] = []
+    const usages: ContextUsage[] = []
     const s = provider.chat!(
       { id: 'a1', prompt: 'hi', model: 'opus-4.8', cwd: dir },
       {
@@ -222,8 +223,38 @@ process.exit(0)
     // Turn 1 occupancy = 1000+200 = 1200 (output excluded); turn 2 = 1500+4800 = 6300.
     // The result event's cumulative 950K usage must NOT appear — that was the saturation bug.
     expect(usages.length).toBe(2)
-    expect(usages[0]).toEqual({ used: 1200, window: 200000 })
-    expect(usages[usages.length - 1]).toEqual({ used: 6300, window: 200000 })
+    // ★★window 是 undefined,因为这个桩的 result 事件里**没有** modelUsage.contextWindow。
+    //  以前这里是 200000 —— 那是 contextWindowFor() 按模型名硬猜出来的,而界面拿它画进度条。
+    //  用户 2026-09-14 点名要求上下文必须真实,所以现在:CLI 没报窗口就是不知道,不编。
+    expect(usages[0]).toEqual({ used: 1200, window: undefined })
+    expect(usages[usages.length - 1]).toEqual({ used: 6300, window: undefined })
+  })
+
+  /**
+   * ★CLI 真的报了窗口时要用上,而且要**当轮就显示** —— 窗口跟在轮末的 result 事件里,比 used 晚到,
+   *  所以拿到它必须补发一次 usage,否则这一轮从头到尾都显示不出占比。
+   */
+  it('★result 事件带 modelUsage.contextWindow 时,用官方窗口并补发一次', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cw-'))
+    const cli = join(dir, 'cli.js')
+    writeFileSync(cli, `
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n')
+out({ type: 'assistant', session_id: 's', message: { role: 'assistant', usage: { input_tokens: 1000, output_tokens: 9 }, content: [{ type: 'text', text: 'hi' }] } })
+out({ type: 'result', subtype: 'success', result: 'hi', session_id: 's', modelUsage: { 'claude-opus-5': { contextWindow: 272000 } } })
+process.exit(0)
+`)
+    chmodSync(cli, 0o755)
+    const provider = makeClaudeProvider({ bin: 'node', preArgs: [cli], defaultModels: [] })
+    const usages: ContextUsage[] = []
+    const s = provider.chat!(
+      { id: 'a1', prompt: 'hi', model: 'opus-5', cwd: dir },
+      { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onUsage: (u) => usages.push(u), onDone: () => {}, onError: () => {} },
+      process.env,
+    )
+    await s.done
+    // 第一条:窗口还不知道。第二条:result 带来了官方窗口 → 补发,占比这才算得出来。
+    expect(usages[0]).toEqual({ used: 1000, window: undefined })
+    expect(usages[usages.length - 1]).toEqual({ used: 1000, window: 272000 })
   })
 
   it('surfaces a non-Task tool call to onToolActivity: title on the tool_use, output on its tool_result', async () => {
