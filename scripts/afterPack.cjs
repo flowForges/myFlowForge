@@ -18,8 +18,25 @@ const { execFileSync } = require('node:child_process')
 const { join, basename } = require('node:path')
 const { existsSync } = require('node:fs')
 const { signingPlan, machOFilesUnder, signBinary } = require('./macSigning.cjs')
+const { verifyPackagedDeps } = require('./packagedDeps.cjs')
+
+/** 打好的 app 里那个放 out/ 和 node_modules 的目录。mac 藏在 .app 里，其余平台在 resources/app。 */
+function appResourcesDir(context) {
+  if (context.electronPlatformName === 'darwin') {
+    return join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'app')
+  }
+  return join(context.appOutDir, 'resources', 'app')
+}
 
 exports.default = async function afterPack(context) {
+  // ── 所有平台都先过这道闸 ───────────────────────────────────────────────────────────
+  // electron-builder 只打 dependencies。一个运行时依赖被写进 devDependencies（或被从
+  // dependencies 挪走），开发时**完全正常**，只有用户装上包才会炸 Cannot find module。
+  // 本机手工打包，没有别的地方能拦住它。
+  const appDir = appResourcesDir(context)
+  if (existsSync(appDir)) verifyPackagedDeps(appDir)
+  else console.warn(`[deps] 找不到 ${appDir}，跳过运行时依赖检查`)
+
   if (context.electronPlatformName !== 'darwin') return
   const appName = `${context.packager.appInfo.productFilename}.app`
   const appPath = join(context.appOutDir, appName)

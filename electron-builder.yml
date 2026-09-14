@@ -39,6 +39,16 @@ files:
       - out/**/*
       - package.json
       - node_modules/**/*
+      # ★排掉 node-pty 的**本机编译产物**。它是在打包这台机器上由 node-gyp 编出来的，只有这台机器的
+      # 架构，而 node-pty 的加载顺序是 `build/Release` → `build/Debug` → `prebuilds/<平台>-<架构>`
+      # (node_modules/node-pty/lib/utils.js)，也就是说它**排在 prebuilds 前面**。在 Intel 机器上打
+      # arm64 包时，这里装进去的是 x86_64 的 pty.node，到用户的 Apple Silicon 上先加载失败再回退 ——
+      # 白白依赖一次回退，而且 postinstall.mjs 只给 prebuilds 的 spawn-helper 补可执行位、不管这边。
+      # 排掉之后行为是确定的:永远用架构对得上的 prebuilds。
+      # 顺带干掉三样垃圾:obj.target/ 和 .deps/ 这两个编译中间产物，以及 node_gyp_bins/python3 ——
+      # 那本来是指向 Xcode 里 python3 的软链，被 electron-builder 解引用成了一份真实副本，
+      # 纯粹是 node-gyp 的构建期辅助，运行时一行都用不上(而且 npmRebuild: false，包里永不编译)。
+      - "!node_modules/node-pty/build/**"
 extraResources:
   - from: resources/example-plugins
     to: example-plugins
