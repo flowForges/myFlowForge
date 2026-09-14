@@ -17,3 +17,16 @@ release/
 assets/pet-packs/
 scripts/growth_pets/
 deliverables/
+
+# ── macOS 签名 / 公证：绝不入库 ──────────────────────────────────────────────────────
+# .signing.local.sh 里只该放 APPLE_SIGN_IDENTITY / FORGE_NOTARY_PROFILE 两个**非密钥**变量
+# (真正的 App 专用密码存在 macOS 钥匙串里，见 scripts/macSigning.cjs 顶部)。即便如此也不入库:
+# 它带着账号信息，而且总有人会往里塞密码。
+.signing.local.sh
+# 证书私钥。导出备份请放到**仓库外**(密码管理器 / 加密盘)。这行是最后一道网,不是第一道 ——
+# 私钥一旦进了 git 历史,就算再删 commit 也等于泄露了,只能去苹果后台吊销证书重来。
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+*.mobileprovision

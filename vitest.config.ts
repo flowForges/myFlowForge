@@ -23,6 +23,11 @@ export default defineConfig({
       // 中转。撮合核心是纯逻辑(没有 I/O、没有定时器、没有全局状态),所以在这里就能测透 ——
       // 它在 Node 和 Cloudflare Durable Object 里跑的是同一份代码,行为必须一致。
       { extends: true, test: { name: 'relay', environment: 'node', include: ['relay/src/**/*.test.ts'] } },
+      // 打包脚本里的纯逻辑。★只有 macOS 签名那套值得收进来:它每一个分支走错的后果都是
+      // **构建全绿但包是废的**(没签名 / 签了没公证 / 漏签 spawn-helper),而这类错误在本机
+      // 打包时最容易被"命令成功了"骗过去。钩子本身要跑 codesign,测不了;判断走哪条路的
+      // signingPlan() 是纯函数,钉死它。
+      { extends: true, test: { name: 'scripts', environment: 'node', include: ['scripts/**/*.test.mjs'] } },
     ],
   }
 })

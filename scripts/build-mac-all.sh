@@ -12,6 +12,32 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# ── 正式签名 / 公证（可选）──────────────────────────────────────────────────────────
+# 只认两个变量，**两个都不是密钥**（真正的密码在 macOS 钥匙串里，见 scripts/macSigning.cjs 顶部）:
+#   APPLE_SIGN_IDENTITY   "Developer ID Application: 你的名字 (TEAMID)"
+#   FORGE_NOTARY_PROFILE  `xcrun notarytool store-credentials` 存的那个**条目名**
+# 两个都不设 → 走今天的老路（ad-hoc 签名，Gatekeeper 照样拦），行为完全不变。
+#
+# 嫌每次 export 麻烦可以放进 .signing.local.sh（已在 .gitignore 里）。
+# ★那个文件里也只该有上面两个变量，**任何时候都别把 App 专用密码写进文件**。
+if [ -f .signing.local.sh ]; then
+  echo "▸ 读取 .signing.local.sh（未提交，仅本机）"
+  # shellcheck disable=SC1091
+  . ./.signing.local.sh
+fi
+
+SIGN_ARGS=()
+if [ -n "${APPLE_SIGN_IDENTITY:-}" ]; then
+  # 覆盖 electron-builder.yml 里的 `identity: null`（那是安全默认值，别去改它 —— 见那边的注释）。
+  SIGN_ARGS=(-c.mac.identity="${APPLE_SIGN_IDENTITY}")
+  echo "▸ 正式签名：${APPLE_SIGN_IDENTITY}"
+  if [ -n "${FORGE_NOTARY_PROFILE:-}" ]; then
+    echo "▸ 公证凭据：钥匙串条目 '${FORGE_NOTARY_PROFILE}'（密码不在这里，只在钥匙串里）"
+  fi
+else
+  echo "▸ 未配 APPLE_SIGN_IDENTITY → ad-hoc 签名（Gatekeeper 会拦，只适合自己用）"
+fi
+
 VER="$(node -p "require('electron/package.json').version")"
 MIRROR="https://npmmirror.com/mirrors/electron/${VER}"
 CACHE="${HOME}/.cache/myflowforge-electron/${VER}"
@@ -34,11 +60,11 @@ echo "▸ compiling renderer/main (electron-vite build)…"
 npm run build
 
 echo "▸ x64 dmg (local dist)…"
-npx electron-builder --mac --x64
+npx electron-builder --mac --x64 "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}"
 
 ARM_DIST="$(fetch_dist arm64)"
 echo "▸ arm64 dmg (dist: ${ARM_DIST})…"
-npx electron-builder --mac --arm64 -c.electronDist="${ARM_DIST}"
+npx electron-builder --mac --arm64 -c.electronDist="${ARM_DIST}" "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}"
 
 echo ""
 echo "▸ built dmgs:"
