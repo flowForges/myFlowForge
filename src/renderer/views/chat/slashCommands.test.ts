@@ -142,7 +142,9 @@ describe('/compact', () => {
   it('★只给真能压的两家 —— 摆一条点了没反应的命令比不摆更糟', () => {
     // cursor/gemini 这些既没有协议入口也没有原生 /compact。
     expect(commandsForProvider('codex', '/comp').some(c => c.cmd === '/compact')).toBe(true)
-    expect(commandsForProvider('claude', '/comp').some(c => c.cmd === '/compact')).toBe(true)
+    // ★claude **不在**列:它的 /compact 由交互式界面处理,我们跑非交互模式,发过去只会被原样
+    //  转给模型,换回一句「我没法调用这个命令」—— 白耗一轮(2026-09-14 实测)。
+    expect(commandsForProvider('claude', '/comp').some(c => c.cmd === '/compact')).toBe(false)
     expect(commandsForProvider('cursor', '/comp').some(c => c.cmd === '/compact')).toBe(false)
     expect(commandsForProvider('gemini', '/comp').some(c => c.cmd === '/compact')).toBe(false)
   })

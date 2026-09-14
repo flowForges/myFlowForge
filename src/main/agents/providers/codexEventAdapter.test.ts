@@ -38,13 +38,23 @@ describe('adaptCodexEvent', () => {
 describe('codexTokenUsage', () => {
   const note = (tokenUsage: unknown) => ({ method: 'thread/tokenUsage/updated', params: { threadId: 't', turnId: 'u', tokenUsage } })
 
-  it('★取 last 不取 total —— total 是整个 thread 的累计,拿它当占用量会让进度条虚高到 100%', () => {
-    // 和 claude 那边刻意跳过 result 事件是同一个道理(见 extractContextTokens 的注释)。
+  it('★★★占用量就是 last.inputTokens 一个数 —— cached 是它的子集,加了就是重复计数', () => {
+    // 真机采样(codex 0.153.4):last.input=27467 而 cached=27136 —— 后者是前者的一部分。
+    // 第一版写成 input+cached+cacheWrite,于是用户截图里出现了 `794.4K / 200.0K 100%`:
+    // 同一批 token 被数了两三遍,一个**不可能**超过窗口的数超过了窗口。
     expect(codexTokenUsage(note({
-      last: { inputTokens: 1000, cachedInputTokens: 200, cacheWriteInputTokens: 50, outputTokens: 999, reasoningOutputTokens: 500, totalTokens: 2749 },
-      total: { inputTokens: 900000, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 900000 },
-      modelContextWindow: 272000,
-    }))).toEqual({ used: 1250, window: 272000 })
+      last: { inputTokens: 27467, cachedInputTokens: 27136, cacheWriteInputTokens: 0, outputTokens: 999, reasoningOutputTokens: 500, totalTokens: 28966 },
+      total: { inputTokens: 54818, cachedInputTokens: 27136, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 54818 },
+      modelContextWindow: 258400,
+    }))).toEqual({ used: 27467, window: 258400 })
+  })
+
+  it('★取 last 不取 total —— total 是全线程累计,会一路涨到 100% 再也下不来', () => {
+    expect(codexTokenUsage(note({
+      last: { inputTokens: 33069, cachedInputTokens: 32768, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 33069 },
+      total: { inputTokens: 120845, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 120845 },
+      modelContextWindow: 258400,
+    }))?.used).toBe(33069)
   })
 
   it('★只算输入侧:output 和 reasoning 不是上下文占用(它们下一轮才变成输入)', () => {

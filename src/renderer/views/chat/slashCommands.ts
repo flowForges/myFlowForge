@@ -45,9 +45,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { cmd: '/计划', title: '先出计划', desc: '让 Codex 先给实现计划再动手', providers: ['codex'],
     template: '先给出详细的实现计划,等我确认后再改代码:\n' },
   // Codex / Claude 原生 /goal —— 选中把 `/goal ` 填入输入框,续写后发送,透传给 CLI 触发其原生命令。
-  // ★压缩上下文。只给真能压的两家 —— cursor/gemini 这些既没有协议入口也没有原生命令,
-  //  摆一个点了没反应的条目比不摆更糟。
-  { cmd: '/compact', title: '压缩上下文', desc: '把当前会话的历史压成摘要,腾出上下文空间', providers: ['codex', 'claude'],
+  // ★★只给 codex。2026-09-14 真机验证过两边:
+  //  · codex —— app-server 有 `thread/compact/start`,我们真能触发(实测 8.6 秒压完)。
+  //  · claude —— **不行**。`/compact` 是 Claude Code 交互式界面自己处理的命令,而我们跑的是
+  //    非交互模式。把它当消息发过去,CLI 会原样转给模型,模型回你一句「/compact 是 CLI 命令,
+  //    我这边没法调用……所以上下文没有被压缩」(用户 2026-09-14 实测截图),白白耗掉一轮。
+  //    好在 claude 会在接近上限时**自动压缩**,不需要手动。
+  { cmd: '/compact', title: '压缩上下文', desc: '把当前会话的历史压成摘要,腾出上下文空间', providers: ['codex'],
     template: '', compact: true },
   { cmd: '/goal', title: '设定目标', desc: 'Codex / Claude 原生 /goal:设定或对齐本次会话目标', providers: ['codex', 'claude'],
     template: '/goal ' },

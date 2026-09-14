@@ -1030,31 +1030,29 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   border-radius: 4px;
 }
 
-/* ── 输入框里的上下文 ──────────────────────────────────────────────────────────────
-   ★只在 CLI 真的报了用量时才出现(组件里判的)。窗口未知时不画占比条 —— 见 ContextChip.tsx:
-   宁可少显示一半信息,也不显示一半假信息。 */
+/* ── 输入框里的上下文:一枚圆环小图标 ──────────────────────────────────────────────
+   ★数字全在点开的 tips 里。第一版把「上下文 30.3K / 1.00M 3%」整条摊在输入框上,占掉半行宽度
+   还不好看(用户 2026-09-14 原话:「太丑了」)。环能一眼看出「还剩多少」,这正是这里唯一要回答的问题。 */
 .ctx-chip-wrap { position: relative; display: inline-flex; }
-.ctx-chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  height: 28px; padding: 0 9px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--surface);
-  color: var(--fg-2); font-size: 11.5px; line-height: 1; cursor: pointer;
-  white-space: nowrap;
+.ctx-ring-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0;
+  border: 1px solid transparent; border-radius: 8px;
+  background: none; cursor: pointer;
 }
-.ctx-chip:hover { background: var(--surface-2); }
-.ctx-chip b { color: var(--fg); font-weight: 600; }
-.ctx-chip-label { color: var(--faint); }
-.ctx-chip-sep, .ctx-chip-pct { color: var(--faint); }
-/* 占比条:只有拿到官方窗口才会渲染出来。 */
-.ctx-chip-bar { width: 34px; height: 3px; border-radius: 2px; background: var(--border); overflow: hidden; }
-.ctx-chip-bar i { display: block; height: 100%; background: var(--accent); }
-/* 快满了 —— 换个颜色提醒,但不弹任何东西打断人。 */
-.ctx-chip.hot { border-color: var(--warn, #d08b2c); }
-.ctx-chip.hot .ctx-chip-bar i { background: var(--warn, #d08b2c); }
+.ctx-ring-btn:hover { background: var(--surface-2); border-color: var(--border); }
+.ctx-ring { width: 18px; height: 18px; display: block; }
+.ctx-ring-track { stroke: var(--border); }
+.ctx-ring-fill { stroke: var(--accent); transition: stroke-dashoffset .35s ease, stroke .2s; }
+/* ★窗口未知 = 虚线环。不画填充,也不画满环 —— 那等于假装知道。 */
+.ctx-ring-unknown { stroke: var(--faint); opacity: .55; }
+/* 「满了就是红的」。70% 先转黄提个醒,90% 转红 —— 再不压就要被自动截断了。 */
+.ctx-ring-btn.warn .ctx-ring-fill { stroke: var(--warn, #d08b2c); }
+.ctx-ring-btn.crit .ctx-ring-fill { stroke: var(--err, #d05252); }
 
 .ctx-tip {
-  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40;
-  min-width: 248px; padding: 10px 12px;
+  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
+  min-width: 252px; padding: 11px 13px;
   border: 1px solid var(--border); border-radius: 10px;
   background: var(--surface); box-shadow: 0 8px 28px rgba(0,0,0,.28);
 }

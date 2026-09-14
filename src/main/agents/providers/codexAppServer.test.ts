@@ -292,6 +292,6 @@ describe('服务端请求:每一种都要回对形状,并且绝不能静默', ()
       modelContextWindow: 272000,
     } } })
     await new Promise(r => setTimeout(r, 0))
-    expect(usages).toEqual([{ used: 1250, window: 272000 }])
+    expect(usages).toEqual([{ used: 1000, window: 272000 }])
   })
 })

@@ -655,30 +655,26 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
    */
   const [compacting, setCompacting] = useState(false)
   const compactAgent = selection?.agentId ?? ''
-  const canCompact = compactAgent === 'codex' || compactAgent === 'claude'
-  const compactHint = canCompact ? undefined : `${compactAgent || '当前编码代理'} 没有可用的上下文压缩入口（既没有协议接口，也没有原生 /compact 命令）`
+  // ★★只有 codex 真能由我们触发(app-server 的 thread/compact/start,实测 8.6 秒压完)。
+  //  claude 的 `/compact` 由它**交互式界面**处理,我们跑非交互模式 —— 发过去只会被原样转给模型,
+  //  换回一句「我没法调用这个命令」,白耗一轮(2026-09-14 实测)。所以这里明确不给。
+  const canCompact = compactAgent === 'codex'
+  const compactHint = canCompact ? undefined
+    : compactAgent === 'claude'
+      ? 'Claude Code 的 /compact 由它自己的交互式界面处理，Forge 跑的是非交互模式，触发不了；它会在接近上限时自动压缩。'
+      : `${compactAgent || '当前编码代理'} 没有可用的上下文压缩入口（既没有协议接口，也没有能透传的原生命令）`
   const doCompact = useCallback(async () => {
     if (!wsPath || !sessions.activeSessionId || !canCompact || compacting) return
     setCompacting(true)
     try {
-      if (compactAgent === 'claude') {
-        // claude 没有协议入口 —— `/compact` 是它的原生斜杠命令,当成一条普通消息发过去
-        // (和 `/goal` 同一套路)。
-        await window.forge.sendChat({
-          workspacePath: wsPath, sessionId: sessions.activeSessionId,
-          agent: compactAgent, agentLabel: compactAgent, model: selection?.modelId ?? '',
-          text: '/compact', attachments: [],
-        })
-      } else {
-        await window.forge.compactContext?.({ workspacePath: wsPath, sessionId: sessions.activeSessionId, agent: compactAgent })
-      }
+      await window.forge.compactContext?.({ workspacePath: wsPath, sessionId: sessions.activeSessionId, agent: compactAgent })
     } catch (e) {
       // ★压缩失败必须说出来。静默失败会让人以为压过了,然后继续往一个已经满了的上下文里塞东西。
       window.alert(`压缩上下文失败：${e instanceof Error ? e.message : String(e)}`)
     } finally {
       setCompacting(false)
     }
-  }, [wsPath, sessions.activeSessionId, compactAgent, canCompact, compacting, selection?.modelId])
+  }, [wsPath, sessions.activeSessionId, compactAgent, canCompact, compacting])
 
   const usageByProvider = useMemo(() => {
     const out: Record<string, ContextUsage> = {}

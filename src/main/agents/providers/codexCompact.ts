@@ -8,8 +8,24 @@ import { spawnAgent } from '../procGroup'
  *  好在 thread 是**落在磁盘上的**(~/.codex/sessions 的 rollout 文件),`thread/resume` 能把它捞回来,
  *  `thread/compact/start` 只要一个 threadId —— 这正是 codex CLI 自己执行 `/compact` 时做的事。
  *
- * ★协议来源:`codex app-server generate-json-schema`。`ThreadCompactStartParams` 的必填字段
- *  只有 `threadId`。压缩完成的信号是 `thread/compacted` 通知(我们的事件适配器早就认识它)。
+ * ★协议来源:`codex app-server generate-json-schema`。`ThreadCompactStartParams` 的必填字段只有 `threadId`。
+ *
+ * ★★★完成信号是 `item/completed` 里 `item.type === 'contextCompaction'`,**不是** `thread/compacted`。
+ *  2026-09-14 真机抓包(codex 0.153.4)全过程:
+ *
+ *      → thread/compact/start
+ *      ← {id:3, result:{}}                        ← 只是「已受理」,不是压完了
+ *      ← turn/started
+ *      ← item/started   {type:'contextCompaction'}
+ *      ← thread/tokenUsage/updated → 归 0          ← 压缩确实生效
+ *      ← item/completed {type:'contextCompaction'} ← ★真正的完成信号(7 秒)
+ *      ← turn/completed
+ *      (`thread/compacted` 这个版本一次都没发)
+ *
+ *  第一版等的是 `thread/compacted`,于是界面上「压缩中…」一直转到 3 分钟超时 —— 而压缩其实
+ *  早就成功了。★这条**我们仓库里本来就写着**:codexEventAdapter.ts 的注释里明说「老版本用
+ *  thread/compacted,新版本改成 contextCompaction item 的 started/completed」。没读它,白跑一趟。
+ *  两条都认:老版本发前者,新版本发后者。
  *
  * 框架照搬 usage/codexRpc.ts 那套一次性 RPC:initialize → initialized → 请求 → 收到就收工。
  */
@@ -71,9 +87,10 @@ export function compactCodexThread(threadId: string, deps: CompactDeps = {}): Pr
         let msg: any
         try { msg = JSON.parse(line) } catch { continue }   // 启动横幅之类的非 JSON 噪音
 
-        // ★压缩完成的权威信号。它是个**通知**,不是 compact 请求的回包 —— 回包可能先到(表示
-        //  「已受理」),真正压完要等这一条。
-        if (msg.method === 'thread/compacted') { ok(); return }
+        // ★压缩完成的权威信号(两代协议都认,见文件顶部的真机抓包)。它是个**通知**,不是 compact
+        //  请求的回包 —— 回包只表示「已受理」,真正压完要等这一条。
+        if (msg.method === 'thread/compacted') { ok(); return }                       // 老版本
+        if (msg.method === 'item/completed' && msg.params?.item?.type === 'contextCompaction') { ok(); return }  // 新版本
 
         if (msg.id === initId) {
           if (msg.error) return fail(new Error(msg.error.message ?? 'codex initialize 失败'))

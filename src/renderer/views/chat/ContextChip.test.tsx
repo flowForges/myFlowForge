@@ -13,30 +13,37 @@ describe('ContextChip', () => {
 
   it('一个 token 都没拿到 → 整枚不出现(不占地方,也不显示 0)', () => {
     const { container } = render(<ContextChip {...props} />)
-    expect(container.querySelector('.ctx-chip')).toBeNull()
+    expect(container.querySelector('.ctx-ring-btn')).toBeNull()
     const { container: c2 } = render(<ContextChip {...props} usage={{ used: 0 }} />)
-    expect(c2.querySelector('.ctx-chip')).toBeNull()
+    expect(c2.querySelector('.ctx-ring-btn')).toBeNull()
   })
 
-  it('★★没有官方窗口 → 只显示 token 数,不画占比条、不写百分比', () => {
+  it('★★没有官方窗口 → 画**虚线**环,不画填充 —— 满环/空环都是在假装知道', () => {
     const { container } = render(<ContextChip {...props} usage={{ used: 45200 }} />)
-    expect(screen.getByText('45.2K')).toBeInTheDocument()
-    expect(container.querySelector('.ctx-chip-pct')).toBeNull()
-    expect(container.querySelector('.ctx-chip-bar')).toBeNull()
-    expect(container.textContent).not.toContain('%')
+    expect(container.querySelector('.ctx-ring-unknown')).not.toBeNull()
+    expect(container.querySelector('.ctx-ring-fill')).toBeNull()
+    // 数字不摊在输入框上(用户:第一版「太丑了」),只在 title 里备查。
+    expect(container.textContent).toBe('')
+    expect(container.querySelector('.ctx-ring-btn')?.getAttribute('title')).toContain('未上报窗口')
   })
 
-  it('有官方窗口 → 显示 已用 / 窗口 · 占比,并画条', () => {
+  it('有官方窗口 → 实心进度环,弧长按占比走', () => {
     const { container } = render(<ContextChip {...props} usage={{ used: 45200, window: 272000 }} />)
-    expect(screen.getByText('45.2K')).toBeInTheDocument()
-    expect(screen.getByText('272.0K')).toBeInTheDocument()
-    expect(screen.getByText('17%')).toBeInTheDocument()
-    expect(container.querySelector('.ctx-chip-bar i')).toHaveStyle({ width: '17%' })
+    const fill = container.querySelector('.ctx-ring-fill') as SVGCircleElement
+    expect(fill).not.toBeNull()
+    // r=9 → 周长 ≈ 56.55;17% 已用 ⇒ 还剩 83% 的偏移。
+    const C = 2 * Math.PI * 9
+    expect(Number(fill.getAttribute('stroke-dashoffset'))).toBeCloseTo(C * (1 - 0.17), 1)
+    expect(container.querySelector('.ctx-ring-btn')?.getAttribute('title')).toContain('17%')
   })
 
-  it('快满了给个视觉提醒(≥80%)', () => {
-    const { container } = render(<ContextChip {...props} usage={{ used: 90000, window: 100000 }} />)
-    expect(container.querySelector('.ctx-chip')?.className).toContain('hot')
+  it('★「满了就是红的」:70% 转黄、90% 转红', () => {
+    const cls = (used: number) =>
+      (render(<ContextChip {...props} usage={{ used, window: 100 }} />).container
+        .querySelector('.ctx-ring-btn') as HTMLElement).className
+    expect(cls(50)).not.toMatch(/warn|crit/)
+    expect(cls(75)).toContain('warn')
+    expect(cls(95)).toContain('crit')
   })
 
   it('点开 tips:说清数是谁报的;窗口未知时**明说**,不留白让人以为是 bug', () => {

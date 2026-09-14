@@ -47,6 +47,38 @@ describe('compactCodexThread', () => {
     await expect(p).resolves.toBeUndefined()
   })
 
+  it('★★新版本 codex 不发 thread/compacted,只发 contextCompaction 的 item/completed', async () => {
+    // 2026-09-14 真机抓包(0.153.4):压缩 7 秒就完成了,但等 thread/compacted 的那一版界面上
+    // 「压缩中…」一直转到 3 分钟超时。两代信号都要认。
+    const f = fakeChild()
+    const p = compactCodexThread('th-1', { spawn: () => f.child })
+    f.push({ id: f.writes[0].id, result: {} })
+    await tick()
+    const resume = f.writes.find(w => w.method === 'thread/resume')
+    f.push({ id: resume.id, result: {} })
+    await tick()
+    const compact = f.writes.find(w => w.method === 'thread/compact/start')
+    f.push({ id: compact.id, result: {} })            // 回包只是「已受理」,不能当完成
+    f.push({ method: 'turn/started', params: {} })
+    f.push({ method: 'item/started', params: { item: { type: 'contextCompaction', id: 'i1' } } })
+    f.push({ method: 'item/completed', params: { item: { type: 'contextCompaction', id: 'i1' } } })
+    await expect(p).resolves.toBeUndefined()
+  })
+
+  it('别的 item 完成不算数 —— 只认 contextCompaction 那一种', async () => {
+    const f = fakeChild()
+    let done = false
+    const p = compactCodexThread('th-1', { spawn: () => f.child, timeoutMs: 40 }).then(() => { done = true }).catch(() => {})
+    f.push({ id: f.writes[0].id, result: {} })
+    await tick()
+    f.push({ id: f.writes.find(w => w.method === 'thread/resume').id, result: {} })
+    await tick()
+    f.push({ method: 'item/completed', params: { item: { type: 'agentMessage', id: 'x' } } })
+    await tick()
+    expect(done).toBe(false)
+    await p
+  })
+
   it('★恢复会话失败要如实报错 —— 别让用户以为压过了', async () => {
     const f = fakeChild()
     const p = compactCodexThread('th-bad', { spawn: () => f.child })

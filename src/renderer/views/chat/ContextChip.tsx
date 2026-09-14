@@ -7,11 +7,14 @@ import type { ContextUsage } from '@shared/types'
  * ★★这里的每一个数都必须是**各家 CLI 自己报的**。用户 2026-09-14 原话:「上下文要真实,
  *  从官方自己的能力里取的,不能是你自己计算的,那个不准确」。
  *
- * ★所以有两种形态,而且**绝不互相冒充**:
- *  · CLI 报了窗口 → `45.2K / 272K · 17%` + 一条占比细线
- *  · CLI 没报窗口 → 只有 `45.2K`,不画线、不写百分比
+ * ★形态是一枚**圆环小图标**,数字全在点开的 tips 里(用户 2026-09-14:第一版把
+ *  「上下文 30.3K / 1.00M 3%」整条摊在输入框上,「太丑了…可以做一个圆环?满了就是红的」)。
+ *
+ * ★两种环,**绝不互相冒充**:
+ *  · CLI 报了窗口 → 实心进度环,按占比填充,70% 转黄、90% 转红
+ *  · CLI 没报窗口 → **虚线环**(表示「不知道占了多少」),不画任何填充
  *  以前是按模型名硬猜一个 200K 算出百分比 —— 那个数看着很像回事,却从来没人核对过。
- *  宁可少显示一半信息,也不要显示一半假信息。
+ *  画一个满环或空环去冒充「已知」,和编一个百分比是同一种错。
  */
 
 /** 12345 → "12.3K";1234567 → "1.23M"。小于 1000 原样。 */
@@ -33,6 +36,10 @@ export interface ContextChipProps {
   providerLabel?: string
 }
 
+/** 环的半径与周长。r=9 在 24 视口里留得下 3px 描边,视觉上是个 18px 的小图标。 */
+const R = 9
+const C = 2 * Math.PI * R
+
 export function ContextChip({ usage, canCompact, compactHint, onCompact, compacting, providerLabel }: ContextChipProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -50,34 +57,50 @@ export function ContextChip({ usage, canCompact, compactHint, onCompact, compact
 
   const { used, window: win } = usage
   const pct = win && win > 0 ? Math.min(100, Math.round((used / win) * 100)) : null
+  // 三档颜色。★用户原话:「满了就是红的」。90% 起转红 —— 那时候再不压缩就要被自动截断了。
+  const tone = pct == null ? '' : pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : ''
 
   return (
     <div className="ctx-chip-wrap" ref={ref}>
       <button
         type="button"
-        className={`ctx-chip${pct != null && pct >= 80 ? ' hot' : ''}`}
-        title="点开看明细 / 压缩上下文"
+        className={`ctx-ring-btn${tone ? ' ' + tone : ''}`}
+        title={pct != null ? `上下文 ${pct}%（${fmtTokens(used)} / ${fmtTokens(win!)}）` : `上下文 ${fmtTokens(used)}（该 CLI 未上报窗口大小）`}
+        aria-label={pct != null ? `上下文已用 ${pct}%` : `上下文 ${used} tokens`}
         aria-expanded={open}
         onClick={() => setOpen(v => !v)}
       >
-        <span className="ctx-chip-label">上下文</span>
-        <b>{fmtTokens(used)}</b>
-        {pct != null && <><span className="ctx-chip-sep">/</span><span>{fmtTokens(win!)}</span><span className="ctx-chip-pct">{pct}%</span></>}
-        {pct != null && <span className="ctx-chip-bar"><i style={{ width: `${pct}%` }} /></span>}
+        {/* ★圆环:一眼看出「还剩多少」,不占一整条文案的宽度(用户 2026-09-14:「这个样式的效果
+            也太差了…可以做一个圆环?满了就是红的」)。数字全部收进 tips。 */}
+        <svg viewBox="0 0 24 24" className="ctx-ring" aria-hidden="true">
+          <circle className="ctx-ring-track" cx="12" cy="12" r={R} fill="none" strokeWidth="3" />
+          {pct != null ? (
+            <circle
+              className="ctx-ring-fill" cx="12" cy="12" r={R} fill="none" strokeWidth="3"
+              strokeLinecap="round"
+              strokeDasharray={C}
+              strokeDashoffset={C * (1 - pct / 100)}
+              /* 12点方向起画,顺时针 —— 和所有人对「进度环」的直觉一致 */
+              transform="rotate(-90 12 12)"
+            />
+          ) : (
+            /* ★窗口未知:画一段虚线表示「不知道占了多少」,而不是画一个满环或空环冒充已知。 */
+            <circle className="ctx-ring-unknown" cx="12" cy="12" r={R} fill="none" strokeWidth="3" strokeDasharray="2 3" />
+          )}
+        </svg>
       </button>
 
       {open && (
         <div className="ctx-tip" role="dialog" aria-label="上下文明细">
-          <div className="ctx-tip-row">
-            <span>已用</span><b>{used.toLocaleString()}</b>
-          </div>
+          <div className="ctx-tip-row"><span>已用</span><b>{used.toLocaleString()}</b></div>
           <div className="ctx-tip-row">
             <span>窗口</span>
             {/* ★窗口未知时**明说**,而不是留白让人以为是 bug —— 也不能填一个猜的数。 */}
             <b>{win ? win.toLocaleString() : '未知'}</b>
           </div>
+          {pct != null && <div className="ctx-tip-row"><span>占用</span><b>{pct}%</b></div>}
           <p className="ctx-tip-note">
-            {providerLabel ? `${providerLabel} ` : ''}上报的最近一轮输入侧 token（新输入 + 缓存读写，不含生成的内容）。
+            {providerLabel ? `${providerLabel} ` : ''}上报的最近一次请求的输入 token。
             {!win && ' 该 CLI 没有上报上下文窗口大小，所以这里不显示占比 —— 我们不猜。'}
           </p>
           <button
