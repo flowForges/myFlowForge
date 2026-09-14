@@ -20,6 +20,8 @@ beforeEach(() => {
     hostsRemove: vi.fn(async () => hosts),
     hostsConnect: vi.fn(async () => LOCAL),
     hostsDisconnect: vi.fn(async () => LOCAL),
+    // 「怎么配置远程主机」那个文档链接要用它(系统浏览器打开官网)。
+    openExternal: vi.fn(async () => ({ ok: true })),
     hostsExport: vi.fn(async () => '{}'),
     hostsImport: vi.fn(async () => ({ ok: true, added: 1 })),
     // 「手机端」那一节现在也在这一屏里(它是同一件事的反向:别的设备连进来)。
@@ -476,5 +478,37 @@ describe('HostsPane · 表单不能比它编辑的那台主机活得久', () => 
     await act(async () => { fireEvent.click(screen.getAllByText('删除')[1]!) })
 
     expect(screen.getByText('编辑主机'), '删的是另一台,凭什么关掉我正在改的这张').toBeTruthy()
+  })
+})
+
+/**
+ * 用户 2026-09-14 原话:「设置里,主机和远程那块,我建议留一个我官网的地址 怎么配置远程的地址,
+ * 方便用户过去学习怎么配置」。
+ *
+ * 远程主机是这个 app 里配置步骤最多的一块(要去那台机器开 daemon、拿配对码、可能还要中转),
+ * 而用户最需要出口的那一刻,正是这一页**空着**的时候。
+ */
+describe('官网文档入口', () => {
+  it('说明行里有「怎么配置远程主机」,点了用系统浏览器打开官网文档的 remote 锚点', async () => {
+    renderPane()
+    await waitFor(() => expect(screen.getByText('怎么配置远程主机')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('怎么配置远程主机'))
+    const forge = (window as unknown as { forge: { openExternal: ReturnType<typeof vi.fn> } }).forge
+    expect(forge.openExternal).toHaveBeenCalledWith('https://myflowforge.wzcu.com/docs.html#remote')
+  })
+
+  it('★一台主机都没有时(空态)也要给出口 —— 那正是最没线索的时刻', async () => {
+    renderPane()
+    await waitFor(() => expect(screen.getByText('还没有添加任何远程主机')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('第一次配?看官网教程'))
+    const forge = (window as unknown as { forge: { openExternal: ReturnType<typeof vi.fn> } }).forge
+    expect(forge.openExternal).toHaveBeenCalledWith('https://myflowforge.wzcu.com/docs.html#remote')
+  })
+
+  it('★openExternal 不存在时不能崩 —— 手机端那个壳里没有这个方法', async () => {
+    ;(window as unknown as { forge: Record<string, unknown> }).forge.openExternal = undefined
+    renderPane()
+    await waitFor(() => expect(screen.getByText('怎么配置远程主机')).toBeInTheDocument())
+    expect(() => fireEvent.click(screen.getByText('怎么配置远程主机'))).not.toThrow()
   })
 })

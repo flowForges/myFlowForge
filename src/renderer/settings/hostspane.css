@@ -133,3 +133,14 @@
 /* 折叠里两件不相干的事之间的分隔(按钮长什么样 / 搬清单)。★细到只是一条淡线,
    不给它们各套一张卡 —— 折叠里再嵌卡片会长出第三层边框。 */
 .hosts-adv-sep { height: 1px; background: var(--border); margin: 14px 0 12px; }
+
+/* 「怎么配?」→ 官网文档。行内链接样式:跟在说明文字后面,不抢主操作(添加主机)的视觉重量,
+   所以不做成按钮的样子 —— 只是一个带外链箭头的强调色文字。 */
+.doc-link {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 0; border: 0; background: none;
+  color: var(--accent); font-size: inherit; font-family: inherit;
+  cursor: pointer;
+}
+.doc-link:hover { text-decoration: underline; }
+.doc-link svg { width: 12px; height: 12px; opacity: .8; }

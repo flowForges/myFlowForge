@@ -3,7 +3,27 @@ import { type HostDisplay, type HostInput, type HostStatusView, type RemoteHostV
 import './hostspane.css'
 import { parsePairingLink } from '@shared/remote/pairingLink'
 import { HOST_ICONS, currentHostIcon } from '@shared/hostIcons'
+import { DOCS_REMOTE } from '@shared/links'
 import { Select } from './Select'
+
+/**
+ * 「怎么配？」→ 官网文档。★用系统浏览器开(`openExternal` 走 CLIENT_ONLY,永远开在**有人看着的
+ *  那块屏幕**上;连着远程主机时也不会跑到那台机器上去开浏览器)。
+ *
+ * ★★为什么摆在这儿:远程主机是这个 app 里**配置步骤最多、最容易卡住**的一块 —— 要么去那台机器上
+ *  开 daemon,要么拿配对码,还牵扯中转。而用户卡住的那一刻恰恰是这一页空着的时候,
+ *  正是最没有线索、最该有个出口的时候。
+ */
+function DocsLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <button type="button" className="doc-link" onClick={() => { void window.forge?.openExternal?.(href) }}>
+      {children}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M7 17 17 7M8 7h9v9" />
+      </svg>
+    </button>
+  )
+}
 
 const EMPTY: HostInput = { label: '', kind: 'ssh', address: '6767', sshTarget: '', icon: '', display: 'both', token: '', pubKey: '', relay: '' }
 
@@ -148,13 +168,21 @@ export function HostsPane({ hostChip, onHostChipChange }: {
 
       <div className="set-group">
         <h4>已配的机器</h4>
-        <p className="set-desc">切到哪台,就只看到哪台的会话和工作区。</p>
+        <p className="set-desc">
+          切到哪台,就只看到哪台的会话和工作区。
+          {' '}
+          <DocsLink href={DOCS_REMOTE}>怎么配置远程主机</DocsLink>
+        </p>
         <div className="hosts-list">
           {hosts.length === 0 && (
             <div className="hosts-empty">
               还没有添加任何远程主机
               <div style={{ marginTop: 10 }}>
                 <button className="set-btn primary" onClick={() => openDraft({ ...EMPTY })}>添加主机</button>
+              </div>
+              {/* ★空态是最该给出口的地方:这一页空着,就说明用户还没配成过,手上一条线索都没有。 */}
+              <div style={{ marginTop: 10 }}>
+                <DocsLink href={DOCS_REMOTE}>第一次配?看官网教程</DocsLink>
               </div>
             </div>
           )}
