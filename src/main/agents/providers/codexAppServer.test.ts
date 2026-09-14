@@ -201,3 +201,86 @@ describe('driveCodexTurn', () => {
     expect(turn.params).toMatchObject({ threadId: 'th-old', input: [{ type: 'text', text: 'continue' }] })
   })
 })
+
+/**
+ * 用户 2026-09-14:codex(逐字输出 = app-server 通路)跑公司内部 MCP,里面有 python,MCP 要问权限。
+ * 「咱们 app 没有弹窗,光标一直在动,但是没有内容输出」。
+ *
+ * ★★根因不是没收到,是**回答形状错了**。codex 官方 schema 给每种服务端请求规定了不同的回答,
+ *  而这里原来:审批一律回 `{decision}`、其余一律回 `{}`。回答缺必填字段不会报错 ——
+ *  codex 反序列化失败,那次调用**永远悬着**,这一轮永不结束,于是光标一直在动而什么都没有。
+ */
+describe('服务端请求:每一种都要回对形状,并且绝不能静默', () => {
+  // 把握手 + 起一轮跑完,返回可继续推消息的句柄。
+  const started = (cbs: Partial<Parameters<typeof driveCodexTurn>[1]> = {}) => {
+    const f = fakeChild()
+    const notices: string[] = []
+    driveCodexTurn(
+      { cwd: '/ws', prompt: 'go', modelArgs: [], configArgs: [], sandbox: 'read-only', approvalPolicy: 'on-request' },
+      {
+        onEvent: () => {}, onSession: () => {}, onError: () => {},
+        onApproval: async () => 'allow',
+        onNotice: (t) => notices.push(t),
+        ...cbs,
+      },
+      { spawn: () => f.child },
+    )
+    f.push({ id: f.writes[0].id, result: {} })
+    const start = f.writes.find((w: any) => w.method === 'thread/start')
+    f.push({ id: start.id, result: { thread: { id: 'th1' } } })
+    return { f, notices }
+  }
+
+  it('★★权限申请:回的是 {permissions},不是 {decision} —— 回错就是那个「一直转」的成因', async () => {
+    const { f } = started({ onApproval: async () => 'allow' })
+    const asked = { network: { enabled: true } }
+    f.push({ id: 77, method: 'item/permissions/requestApproval', params: { itemId: 'i1', permissions: asked, reason: '装依赖要联网' } })
+    await new Promise(r => setTimeout(r, 0))
+    expect(f.writes.find((w: any) => w.id === 77).result).toEqual({ permissions: asked, scope: 'turn' })
+  })
+
+  it('拒绝权限 = 给一个空档(permissions 是必填的,不能省)', async () => {
+    const { f } = started({ onApproval: async () => 'deny' })
+    f.push({ id: 78, method: 'item/permissions/requestApproval', params: { itemId: 'i1', permissions: { network: { enabled: true } } } })
+    await new Promise(r => setTimeout(r, 0))
+    expect(f.writes.find((w: any) => w.id === 78).result).toEqual({ permissions: {}, scope: 'turn' })
+  })
+
+  it('★★MCP elicitation 现在会走确认门,而且带着是哪个 MCP 在问', async () => {
+    let seen: any = null
+    const { f } = started({ onApproval: async (r) => { seen = r; return 'allow' } })
+    f.push({ id: 79, method: 'mcpServer/elicitation/request', params: { serverName: 'inner-mcp', threadId: 'th1', mode: 'form', message: '允许执行 python?', requestedSchema: { type: 'object', properties: {} } } })
+    await new Promise(r => setTimeout(r, 0))
+    expect(seen.serverName).toBe('inner-mcp')
+    expect(seen.message).toBe('允许执行 python?')
+    expect(f.writes.find((w: any) => w.id === 79).result).toEqual({ action: 'accept' })
+  })
+
+  it('★要填表单的 elicitation:答不了也必须**当场回复**并说一句人话,不许悬着', async () => {
+    let asked = false
+    const { f, notices } = started({ onApproval: async () => { asked = true; return 'allow' } })
+    f.push({ id: 80, method: 'mcpServer/elicitation/request', params: { serverName: 'inner-mcp', threadId: 'th1', mode: 'form', message: '填个 token', requestedSchema: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } } })
+    await new Promise(r => setTimeout(r, 0))
+    expect(asked).toBe(false)                                  // 别拿一道答不了的门去烦用户
+    expect(f.writes.find((w: any) => w.id === 80).result).toEqual({ action: 'decline' })
+    expect(notices.join()).toContain('token')                  // 但要说清缺什么
+  })
+
+  it('★★不认识的请求:回 JSON-RPC 错误 + 说一句话,而不是以前那个静默的 {}', async () => {
+    const { f, notices } = started()
+    f.push({ id: 81, method: 'some/futureThing', params: {} })
+    await new Promise(r => setTimeout(r, 0))
+    const r = f.writes.find((w: any) => w.id === 81)
+    expect(r.result).toBeUndefined()
+    expect(r.error.code).toBe(-32601)
+    expect(notices.join()).toContain('some/futureThing')
+  })
+
+  it('requestUserInput:按 schema 回一个空答卷(answers 必填),让这一轮能继续', async () => {
+    const { f, notices } = started()
+    f.push({ id: 82, method: 'requestUserInput', params: { isBlocking: true, itemId: 'i9', questions: [] } })
+    await new Promise(r => setTimeout(r, 0))
+    expect(f.writes.find((w: any) => w.id === 82).result).toEqual({ answers: {} })
+    expect(notices.length).toBe(1)
+  })
+})

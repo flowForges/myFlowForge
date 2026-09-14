@@ -283,6 +283,9 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               // 回答形态收敛回二值。
               onApproval: async (r) => confirmAllowed(await cb.onConfirm(codexGateReq(r))),
               onSession: (id) => cb.onSession?.(id),
+              // ★★两个调用方(run / chat)都要接 —— 见 [[trap-two-call-sites-run-vs-chat]]:
+              //  只接一处 = 工作流里能看见提示、聊天里照旧是个不动的光标。
+              onNotice: (t) => cb.onLog({ ts: now(), level: 'info', kind: 'think', text: t }),
               onError: (m) => { logError('codex', 'app-server run 错误', m) },
             },
           )
@@ -458,6 +461,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
                 finally { wd.resume() }
               },
               onSession: (id) => cb.onSession(id),
+              onNotice: (t) => cb.onStatus?.(t),
               onError: (m) => { cb.onError(new Error(m)) },
             },
           )

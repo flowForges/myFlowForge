@@ -1,6 +1,6 @@
 import { spawnAgent, killTree } from '../procGroup'
 import { adaptCodexEvent } from './codexEventAdapter'
-import { codexDecision } from './codexApproval'
+import { codexApprovalResponse, elicitationUnsupported, PERMISSIONS_METHOD, ELICITATION_METHOD } from './codexApproval'
 
 // Minimal child-process surface so tests can fake the app-server end to end.
 export interface CodexChild {
@@ -36,13 +36,28 @@ export interface CodexTurnOpts {
  * v2 那三个 `item/…/requestApproval` 都把 itemId 列为 required(codex-cli 0.153.4 的 JSON schema
  * 亲口给的);只有 v1 的 execCommandApproval/applyPatchApproval 老方法没有,所以这里是可选的。
  */
-export interface CodexApprovalReq { method: string; command?: string; paths?: string[]; itemId?: string }
+export interface CodexApprovalReq {
+  method: string; command?: string; paths?: string[]; itemId?: string
+  /** `item/permissions/requestApproval`:要申请的权限档 + 为什么。 */
+  permissions?: unknown; reason?: string
+  /** `mcpServer/elicitation/request`:哪个 MCP 在问、问什么、用哪种形态问。 */
+  serverName?: string; message?: string; mode?: string; url?: string
+  requestedSchema?: { required?: string[] | null; properties?: Record<string, unknown> }
+}
 
 export interface CodexTurnCallbacks {
   onEvent(execShaped: any): void // feed to the shared codex handler (parseCodexEvent/…)
   onApproval(req: CodexApprovalReq): Promise<'allow' | 'deny'>
   onSession(threadId: string): void
   onError(message: string): void
+  /**
+   * 一句给用户看的提示(不是错误,不终止这一轮)。
+   *
+   * ★★用来兜「codex 问了一件我们答不上来的事」。这种情况原来是**静默**的 —— 用户看到的是
+   *  一个一直在动、永远没有内容的光标,而且不知道是卡住了还是在想。宁可说一句「有人在问、
+   *  我替你拒了」,也不能什么都不说。
+   */
+  onNotice?(text: string): void
 }
 
 export interface CodexTurnHandle {
@@ -50,13 +65,35 @@ export interface CodexTurnHandle {
   done: Promise<{ ok: boolean }>
 }
 
+/**
+ * codex 会**向我们发起、并等着我们回答**的请求里,能映射成一道「允许 / 拒绝」的那些。
+ *
+ * ★★每一条的回答形状都不一样(见 codexApproval.ts 的 codexApprovalResponse)。形状错了不会报错,
+ *  只会让 codex 反序列化失败、那次调用永远悬着 —— 表现成「光标一直在动但没有内容」。
+ */
 const APPROVAL_METHODS = new Set([
   'item/commandExecution/requestApproval',
   'item/fileChange/requestApproval',
-  'item/permissions/requestApproval',
+  PERMISSIONS_METHOD,
+  ELICITATION_METHOD,
   'execCommandApproval',
   'applyPatchApproval',
 ])
+
+/**
+ * codex 还会发的、但我们目前**答不上来**的请求。列在这儿是为了能对它们说一句人话 ——
+ * 而不是像以前那样统统回一个 `{}`。
+ *
+ * ★`requestUserInput` 的回答 schema 是 `{answers: {…}}`(answers 必填),所以可以回一个空表:
+ *  语义是「一个问题都没答」,codex 能继续跑。其余的我们连形状都不知道,只能按 JSON-RPC 规矩
+ *  回「没有这个方法」,让 codex 自己决定怎么办。
+ */
+const KNOWN_UNANSWERABLE: Record<string, { what: string; reply?: unknown }> = {
+  requestUserInput: { what: 'codex 想问你几个问题', reply: { answers: {} } },
+  'item/tool/call': { what: 'codex 想让 Forge 执行一个客户端工具' },
+  'account/chatgptAuthTokens/refresh': { what: 'codex 想刷新 ChatGPT 登录令牌' },
+  'attestation/generate': { what: 'codex 想生成一份客户端证明' },
+}
 
 // Drives one Codex `app-server` turn over newline-delimited JSON-RPC: handshake
 // (initialize → initialized → thread/start|resume) → turn/start, then streams
@@ -114,6 +151,19 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
     }
   }
 
+  /**
+   * 按 JSON-RPC 规矩回一个错误。★这是「我们不支持这个请求」的**正确**说法 ——
+   * 回一个猜出来的 result 只会让对面反序列化失败然后永远等下去,而错误码它一定看得懂。
+   */
+  function respondError(id: number, code: number, message: string): void {
+    if (settled) return
+    try {
+      child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } })}\n`)
+    } catch {
+      // best-effort，同 respond()
+    }
+  }
+
   const initId = ++rpcId
   let startId: number | null = null
   let turnId: number | null = null
@@ -143,21 +193,41 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
           const req: CodexApprovalReq = {
             method, command: params.command, paths: params.paths,
             itemId: typeof params.itemId === 'string' && params.itemId ? params.itemId : undefined,
+            permissions: params.permissions, reason: params.reason,
+            serverName: params.serverName, message: params.message, mode: params.mode,
+            url: params.url, requestedSchema: params.requestedSchema,
+          }
+          // ★要填表单的那种 elicitation 我们渲染不出来。但**绝不能因此就不回答** ——
+          //  那正是「光标一直在动、永远没有内容」的成因。说清缺什么、替他拒掉、让这一轮跑完。
+          const cantAnswer = elicitationUnsupported(req)
+          if (cantAnswer) {
+            cb.onNotice?.(`MCP「${req.serverName ?? '未知服务'}」要你填一张表单(${cantAnswer}),Forge 还不支持 MCP 表单,已代你拒绝并继续。`)
+            respond(id, codexApprovalResponse(method, false, req))
+            continue
           }
           void cb.onApproval(req)
             .then((decision) => {
-              respond(id, { decision: codexDecision(method, decision === 'allow') })
+              respond(id, codexApprovalResponse(method, decision === 'allow', req))
             })
             .catch((e) => {
               // Fail closed: the server is blocked awaiting this response, so a
               // rejected approval callback (e.g. the confirm gate was torn down)
               // must still be answered — otherwise `done` hangs forever. Let the
               // decline flow to turn/completed naturally rather than force-settling.
-              respond(id, { decision: codexDecision(method, false) })
+              respond(id, codexApprovalResponse(method, false, req))
               safeError(e instanceof Error ? e.message : String(e))
             })
         } else {
-          respond(id, {})
+          // ★★这里原来是一句 `respond(id, {})` —— 对**任何**不认识的请求回一个空对象,还一声不吭。
+          //  空对象几乎一定缺必填字段,于是 codex 反序列化失败、那次调用永远悬着,而用户什么也看不到。
+          //  现在:能答的按 schema 答一个「什么都没给」的合法回答,答不了的按 JSON-RPC 规矩报
+          //  「没有这个方法」——两种都**说一句人话**,让用户知道刚才有人问过、以及被怎么处理了。
+          const known = KNOWN_UNANSWERABLE[method]
+          cb.onNotice?.(known
+            ? `${known.what},Forge 还答不了这种请求,已跳过并继续。`
+            : `codex 发来一个 Forge 不认识的请求(${method}),已按「不支持」回复并继续。`)
+          if (known?.reply !== undefined) respond(id, known.reply)
+          else respondError(id, -32601, `myFlowForge does not implement ${method}`)
         }
         continue
       }
