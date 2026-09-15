@@ -30,3 +30,13 @@ deliverables/
 *.cer
 *.certSigningRequest
 *.mobileprovision
+
+# ── 安卓签名密钥:绝不入库 ────────────────────────────────────────────────────────────
+# ★★★安卓密钥比苹果证书还要命:苹果那张丢了能吊销重发,**安卓这个丢了就永远发不了更新** ——
+# 签名决定 app 的身份,换一个密钥等于换一个 app,老用户必须卸载重装、数据全丢。
+# 所以它存在仓库外(~/keys/),密码存在 ~/.gradle/gradle.properties(也在仓库外)。
+# 这几行是最后一道网,不是第一道。
+*.keystore
+*.jks
+# gradle 的本地属性(sdk.dir / 签名口令都可能落在这里)
+mobile/android/local.properties

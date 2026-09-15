@@ -57,6 +57,7 @@
         }
       ],
       "./plugins/withNoForceDark",
+      "./plugins/withReleaseSigning",
       "./plugins/withPushEntitlement"
     ],
     "experiments": {

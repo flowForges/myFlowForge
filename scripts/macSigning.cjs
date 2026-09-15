@@ -210,10 +210,17 @@ function notarizeAndStaple({ target, profile, kind, log = console.log }) {
 
   try {
     log(`[notarize] 提交 ${basename(submitPath)} 给苹果（要传完整包，慢是正常的）…`)
-    const out = execFileSync('xcrun', [
-      'notarytool', 'submit', submitPath, '--keychain-profile', profile, '--wait',
-    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] })
+    // ★用 spawnSync 并**把 stderr 收进来**:execFileSync 抛出的 Error 里只有一句
+    //  「Command failed: xcrun notarytool …」,真正的原因(2026-09-15 实测是
+    //  `No Keychain password item found for profile`)全在 stderr 上,于是排查时只能去翻构建日志。
+    //  错误信息里不带原因,等于把一次明确的失败变成一次要考古的失败。
+    const r = spawnSync('xcrun', ['notarytool', 'submit', submitPath, '--keychain-profile', profile, '--wait'],
+      { encoding: 'utf8' })
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
     process.stdout.write(out)
+    if (r.status !== 0) {
+      throw new Error(`[notarize] notarytool 提交失败(退出码 ${r.status})：\n${out.trim()}`)
+    }
 
     // ★ `--wait` 在「审核完成但结论是 Invalid」时也可能是 0 退出码。只认 Accepted，别看退出码 ——
     //   这正是「命令成功了所以以为没事」的那类假绿。

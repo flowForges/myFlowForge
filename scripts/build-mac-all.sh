@@ -38,7 +38,20 @@ if [ -n "${APPLE_SIGN_IDENTITY:-}" ]; then
   SIGN_ARGS=(-c.mac.identity="${EB_IDENTITY}")
   echo "▸ 正式签名：${APPLE_SIGN_IDENTITY}"
   if [ -n "${FORGE_NOTARY_PROFILE:-}" ]; then
-    echo "▸ 公证凭据：钥匙串条目 '${FORGE_NOTARY_PROFILE}'（密码不在这里，只在钥匙串里）"
+    # ★★开打之前先验一次凭据。2026-09-15 实测:钥匙串里那个条目**会消失**(原因未查明),
+    #  而失败点在 afterSign —— 也就是编译 + 签名 + 打 zip 全做完之后。整整二十多分钟才换来一句
+    #  `No Keychain password item found`。一个两秒钟能做的检查,不该放在二十分钟之后。
+    echo "▸ 公证凭据：验证钥匙串条目 '${FORGE_NOTARY_PROFILE}'…"
+    if ! probe="$(xcrun notarytool history --keychain-profile "${FORGE_NOTARY_PROFILE}" 2>&1)"; then
+      echo "✗ 公证凭据不可用:"
+      echo "${probe}" | sed 's/^/    /'
+      echo ""
+      echo "  重新存一次(密码只在你自己终端里输,不会进命令行和 history):"
+      echo "    xcrun notarytool store-credentials \"${FORGE_NOTARY_PROFILE}\" \\"
+      echo "      --apple-id \"<你的 Apple ID>\" --team-id \"<Team ID>\""
+      exit 1
+    fi
+    echo "  ✓ 凭据可用（密码只在钥匙串里，这里只用到条目名）"
   fi
 else
   echo "▸ 未配 APPLE_SIGN_IDENTITY → ad-hoc 签名（Gatekeeper 会拦，只适合自己用）"
