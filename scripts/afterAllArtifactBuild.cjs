@@ -7,7 +7,7 @@
 // **正式发版别跳** —— 用户下载的就是这个 dmg。
 
 const { basename } = require('node:path')
-const { signingPlan, notarizeAndStaple } = require('./macSigning.cjs')
+const { signingPlan, notarizeAndStaple, signDmg } = require('./macSigning.cjs')
 
 exports.default = async function afterAllArtifactBuild(buildResult) {
   const plan = signingPlan()
@@ -24,6 +24,9 @@ exports.default = async function afterAllArtifactBuild(buildResult) {
 
   for (const dmg of dmgs) {
     console.log(`[notarize] dmg: ${basename(dmg)}`)
+    // ★顺序是「签名 → 公证 → 装订」。漏掉签名那一步,dmg 自己过不了 Gatekeeper ——
+    //  哪怕里面的 .app 完全合规(2026-09-15 实测)。
+    signDmg(dmg, plan.identity)
     notarizeAndStaple({ target: dmg, profile: plan.notaryProfile, kind: 'dmg' })
   }
   // 没有新增产物，返回空数组（这个钩子的返回值是"额外要一起发布的文件"）。

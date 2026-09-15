@@ -189,6 +189,20 @@ function verifyBundleSignatures(appPath, identity, log = console.log) {
 }
 
 /**
+ * 给 dmg 本身签名。★★**必须在公证之前** —— 顺序是「签名 → 公证 → 装订」。
+ *
+ * 2026-09-15 实测:只公证不签名的 dmg,按苹果文档给的验证方式
+ * (`spctl -a -t open --context context:primary-signature`)是 **rejected / no usable signature**。
+ * 里面的 .app 是好的(accepted),但用户下载到的是**这个 dmg** —— 它才是 Gatekeeper 第一个看到的东西。
+ *
+ * ★签名会改文件内容,所以顺序不能颠倒:先装订再签名会把票据弄失效。
+ */
+function signDmg(dmgPath, identity, log = console.log) {
+  log(`[mac-sign] 给 ${basename(dmgPath)} 本身签名…`)
+  execFileSync('codesign', ['--force', '--timestamp', '--sign', identity, dmgPath], { stdio: 'inherit' })
+}
+
+/**
  * 提交公证并装订（staple）。
  *
  * ★装订很重要：票据钉进包里之后，用户**断网也能通过** Gatekeeper。不装订的话每次首次打开都要
@@ -258,6 +272,7 @@ function assertGatekeeperAccepts(appPath, log = console.log) {
 
 module.exports = {
   ENTITLEMENTS,
+  signDmg,
   signingPlan,
   isMachO,
   machOFilesUnder,
