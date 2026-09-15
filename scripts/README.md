@@ -53,6 +53,28 @@ npm run dist:mac-all          # 两个环境变量都没设 → ad-hoc(和过去
 
 嫌每次 export 麻烦，可以放进 `.signing.local.sh`（已 gitignore）。**那里也只该放上面两个变量。**
 
+## ★★两条实测踩出来的坑
+
+**1. `APPLE_SIGN_IDENTITY` 填完整 CN，脚本会自动剥前缀。**
+
+`security find-identity` 打印的是完整的 `Developer ID Application: 名字 (TEAMID)`，而
+electron-builder **不接受这个形式**，会报
+`⨯ Please remove prefix "Developer ID Application:" …`。
+
+所以环境变量里填完整 CN（`signingPlan` 正是靠这个前缀拦住「拿开发证书当分发证书」），
+`build-mac-all.sh` 再转成 electron-builder 要的形式。两边各取所需，你不用记。
+
+**2. electron-builder 那个错误的退出码是 0。**
+
+2026-09-15 实测:identity 形式不对时它打印 ⨯ 然后**以 0 退出**，于是整条流水线"绿着"
+产出一个**完全没签名**的包（`spctl` 说 `source=no usable signature`）。而 afterSign 那套验收
+在这种情况下**根本不会触发** —— 签名步骤压根没跑。
+
+所以 `build-mac-all.sh` 在 electron-builder 返回之后**自己用 `spctl` 再判一次**，不通过就
+`exit 1`。这道闸必须在构建之外，因为构建内部的钩子够不到这种失败。
+★ 直接跑 `npx electron-builder --mac` 绕过脚本的话，就没有这道闸 —— 发版一律走
+`npm run dist:mac-all`。
+
 ## 三道闸（都会让构建直接挂掉）
 
 本项目最常见的故障形态是「构建全绿但包是废的」，所以这三处宁可红：

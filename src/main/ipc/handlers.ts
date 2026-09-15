@@ -63,7 +63,8 @@ import { perfSpan } from '../perf/perfSpans'
 import { execFile } from 'node:child_process'
 import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile, OPENERS_CACHE_VERSION } from '../openers/detect'
 import { readMacAppIcon } from '../openers/appIcon'
-import { buildOpenCommand, type LaunchCommand } from '../openers/buildOpenCommand'
+import { buildOpenCommand } from '../openers/buildOpenCommand'
+import { launchOpener } from '../openers/launch'
 import { writeJsonAtomic } from '../util/atomicWrite'
 import { providerCommands } from '../commands/providerCommands'
 import type { DetectedOpener } from '../../shared/openers'
@@ -1922,11 +1923,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     return caps.fileIcon(appPath)
   }
-  // Launch one command from buildOpenCommand. macOS routes through the `open` helper; Windows
-  // launches the app's .exe directly (there is no `open` there) — the shape is identical either way.
-  const runOpen = (cmd: LaunchCommand) => new Promise<void>((res, rej) => {
-    execFile(cmd.exe, cmd.args, (err) => (err ? rej(err) : res()))
-  })
+  // 启动逻辑搬到了 openers/launch.ts(可测),并且**不再拿退出码当成败判据** ——
+  // Windows 的 explorer.exe 成功时也返回 1,于是「文件夹打开了却弹框说命令出错」。
+  // 见那个文件顶部的说明。
   let openersCache: DetectedOpener[] = []
   on(CH.openersDetect, async (_e, refresh?: boolean) => {
     openersCache = await detectOpeners(openerIcon, !!refresh)
@@ -1955,7 +1954,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return { ok: false as const, error: '该位置尚不存在 —— 项目仓库还未拉取完成或克隆失败,请稍候或检查工作区状态' }
     }
     const cmds = buildOpenCommand(process.platform, op.openMode, op.appPath, { folder: arg.folder, file: arg.file }, op.argStyle)
-    try { for (const cmd of cmds) await runOpen(cmd); return { ok: true as const } }
+    try { for (const cmd of cmds) await launchOpener(cmd); return { ok: true as const } }
     catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
   on(CH.workspacesOpenDir, async (_e, explicitPath?: string) => {

@@ -28,8 +28,14 @@ fi
 
 SIGN_ARGS=()
 if [ -n "${APPLE_SIGN_IDENTITY:-}" ]; then
-  # 覆盖 electron-builder.yml 里的 `identity: null`（那是安全默认值，别去改它 —— 见那边的注释）。
-  SIGN_ARGS=(-c.mac.identity="${APPLE_SIGN_IDENTITY}")
+  # ★★electron-builder **不接受完整的证书 CN**:传 "Developer ID Application: 张三 (TEAM)" 会得到
+  #   `⨯ Please remove prefix "Developer ID Application:" …`,它要的是去掉前缀那半截。
+  #   ★而这个错误**退出码是 0** —— 2026-09-15 实测:构建"成功"、产出一个**完全没签名**的包
+  #   (`spctl` 说 `source=no usable signature`),而 afterSign 因为签名步骤压根没跑所以也没触发。
+  #   所以这里自动剥前缀:环境变量里让你填 `security find-identity` 原样打印的那一串(完整 CN,
+  #   signingPlan 靠前缀拦住"拿开发证书当分发证书"),到这里再转成 electron-builder 要的形式。
+  EB_IDENTITY="${APPLE_SIGN_IDENTITY#Developer ID Application: }"
+  SIGN_ARGS=(-c.mac.identity="${EB_IDENTITY}")
   echo "▸ 正式签名：${APPLE_SIGN_IDENTITY}"
   if [ -n "${FORGE_NOTARY_PROFILE:-}" ]; then
     echo "▸ 公证凭据：钥匙串条目 '${FORGE_NOTARY_PROFILE}'（密码不在这里，只在钥匙串里）"
@@ -65,6 +71,23 @@ npx electron-builder --mac --x64 "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}"
 ARM_DIST="$(fetch_dist arm64)"
 echo "▸ arm64 dmg (dist: ${ARM_DIST})…"
 npx electron-builder --mac --arm64 -c.electronDist="${ARM_DIST}" "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}"
+
+# ★★★出包之后必须自己验一遍,不能信 electron-builder 的退出码。
+#  它在「identity 形式不对」时会打印 ⨯ 然后**以 0 退出**,于是整条流水线"绿着"产出一个裸包。
+#  afterSign 那套验收在这种情况下根本不会触发(签名步骤没跑)——所以这道闸必须在构建之外。
+if [ -n "${APPLE_SIGN_IDENTITY:-}" ]; then
+  echo ""
+  echo "▸ 验收:Gatekeeper 自己判(这才是「别人下载会不会被拦」的唯一证据)"
+  for APP in release/mac/*.app release/mac-arm64/*.app; do
+    [ -d "${APP}" ] || continue
+    if ! out="$(spctl -a -vvv -t exec "${APP}" 2>&1)"; then
+      echo "✗ ${APP} 没通过 Gatekeeper:"
+      echo "${out}" | sed 's/^/    /'
+      exit 1
+    fi
+    echo "  ✓ $(basename "$(dirname "${APP}")")/$(basename "${APP}"): $(echo "${out}" | tr '\n' ' ')"
+  done
+fi
 
 echo ""
 echo "▸ built dmgs:"
