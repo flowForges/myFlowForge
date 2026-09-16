@@ -121,6 +121,7 @@ export function GateCard({
               disabled={!online}
               style={({ pressed }) => [
                 st.btn,
+                st.grow,
                 { backgroundColor: c.onGate14 },
                 pressed && { opacity: 0.75 },
                 !online && { opacity: 0.4 },
@@ -133,6 +134,7 @@ export function GateCard({
               disabled={!online}
               style={({ pressed }) => [
                 st.btn,
+                st.grow,
                 { backgroundColor: c.onGate },
                 pressed && { opacity: 0.85 },
                 !online && { opacity: 0.4 },
@@ -158,7 +160,9 @@ export function GateCard({
             </T>
           </View>
           <View style={st.acts}>
-            <View style={[st.btn, { backgroundColor: c.onGate }, !online && { opacity: 0.4 }]}>
+            {/* ★折叠态只有这一颗,它要撑满整行 —— 所以同样要 `grow`(以前是靠 `btn` 里的 flex 简写
+                白捡的,那个简写正是「看看」被压成空白的元凶,拿掉之后这里必须自己声明)。 */}
+            <View style={[st.btn, st.grow, { backgroundColor: c.onGate }, !online && { opacity: 0.4 }]}>
               <T numberOfLines={1} style={[st.btnText, { color: c.gate }]}>去回答</T>
             </View>
           </View>
@@ -191,7 +195,13 @@ const st = StyleSheet.create({
   cmd: { marginTop: 7, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 },
   meta: { marginTop: 7, fontSize: 11.5, lineHeight: 18, opacity: 0.82 },
   acts: { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingBottom: 10 },
-  btn: { flex: 1, minHeight: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  // ★★这里**不准出现 `flex` 简写**。见下面 peek 那段:简写和长写在同一个数组里合并时,
+  //  展开顺序是实现细节 —— 2026-09-16 真机上「看看」整颗被压成一块空白(只剩左右内边距),
+  //  就是 `flex: 1` 带来的 `flexBasis: 0%` 赢过了 peek 的长写,再配上 `flexGrow: 0`,宽度得 0。
+  //  等分是**两颗按钮自己的事**,不是所有按钮的共性,所以拆出去(见 grow)。
+  btn: { minHeight: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  /** 参与等分的那两颗(拒绝 / 允许执行)。三个字段各写各的,合并出什么一目了然。 */
+  grow: { flexGrow: 1, flexShrink: 1, flexBasis: 0 },
   // ★三颗按钮各占 `flex: 1` 时,390px 上「允许执行」会被挤到只剩两个字宽 —— 主动作反而最窄。
   //  所以「看看」退出等分,按内容宽。
   //
@@ -204,7 +214,8 @@ const st = StyleSheet.create({
   //  三个字段各写各的,合并出什么一目了然。
   //  ★配套:四颗按钮的文字都加了 `numberOfLines={1}` —— 万一哪天真的宽度不够,
   //   结果是省略号(还看得出是什么),不是竖排(读都读不出来)。
-  peek: { flexGrow: 0, flexShrink: 0, flexBasis: 'auto', paddingHorizontal: 14 },
+  //  ★现在 `btn` 不带 flex 了,这颗什么 flex 都不用写:默认就是按内容宽、不伸不缩。
+  peek: { paddingHorizontal: 14 },
   btnText: { fontSize: 15, fontWeight: '700' },
   more: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, paddingVertical: 8 },
   offline: { paddingHorizontal: 13, paddingVertical: 7 },

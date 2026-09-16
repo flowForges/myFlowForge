@@ -37,6 +37,7 @@ import { providerSwitches } from '../src/ui/providerSwitch'
 import { Sheet } from '../src/ui/Sheet'
 import { BigEditor } from '../src/ui/BigEditor'
 import { useConn } from '../src/net/conn'
+import { describeHostState } from '../src/net/hostStatusText'
 import { useStore } from '../src/data/store'
 import { canPeekGate } from '../src/data/gatePeek'
 import { useChat } from '../src/data/useChat'
@@ -1073,6 +1074,19 @@ export default function Chat() {
               ))}
             </ScrollView>
           ) : null}
+          {/* ★★没连上时,输入行整排都是禁用的(发送、＋、权限档),而屏幕上**一个字都没说为什么**。
+              真机报的原话是「点进会话立刻输入,第一次点提交无效,只有顶部 provider 加载出来后才生效」
+              —— 人以为在等 provider,其实等的是连接;provider 出现只是「连上了」的**征兆**。
+              禁用而不说明就是另一种「点了没反应」,这一屏别处的注释已经为同一件事栽过两轮。
+              ★文案走 `describeHostState` 那一份,不在这儿另写:退避秒数、第几次重试、失败原因
+              都只有那边会跟着协议改,各写一份必然变成同一台机器在两处说两种话。 */}
+          {!online ? (
+            <View style={[st.notReady, { borderTopColor: c.border2, backgroundColor: c.bg2 }]}>
+              <T numberOfLines={2} style={{ fontSize: 11.5, lineHeight: 17, color: c.muted }}>
+                {(activeHost?.label.trim() || '主机') + ' ' + describeHostState(state).text} · 连上之后才能发送
+              </T>
+            </View>
+          ) : null}
           <View style={st.entry}>
             {/* ★权限外放到最左边。微信那个位置放的是语音/键盘切换 ——「这条消息以什么方式发出去」,
                 权限档语义上正对得上,而且常驻可见对安全是正确的。它原来是这条轨道里的一颗 chip,
@@ -1344,6 +1358,9 @@ const st = StyleSheet.create({
   // 那只在附件行真的在场时成立;没有附件的每一次对话,entry 这四颗 44pt 控件就贴着上面
   // `st.foot` 的发丝线(`borderTopColor`)—— 这是复审抓到的洞,补一个自己的 `paddingTop`。
   entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 10 },
+  /** 「还没连上」那条细横幅。★贴在输入行**上面**,不是页顶 —— 页顶那条会滚出视野,
+   *  而人正盯着输入框,说明必须出现在他看的地方(add-host 顶部注释记的也是同一条教训)。 */
+  notReady: { paddingHorizontal: 13, paddingTop: 7, paddingBottom: 6, borderTopWidth: 1 },
   // ★44×44,不是任务纪要草稿里的 40×40 —— 这一行四颗控件(权限/输入框/＋/发送)全部要过
   //  44pt 硬下限这一条,而这颗**不许**靠 hitSlop 去补(祖先紧贴子节点时 hitSlop 是死的,
   //  「复制」那次 22×13pt 死区就是这么栽的),所以尺寸本身就得是 44。
