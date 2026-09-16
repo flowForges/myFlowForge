@@ -25,12 +25,12 @@ exports.default = async function afterSign(context) {
   verifyBundleSignatures(appPath, plan.identity)
 
   // ② 公证。没有公证，用户看到的还是「无法验证开发者」—— 签名等于白签。
-  if (!plan.notaryProfile) {
+  if (!plan.notaryProfile && !plan.notaryKey) {
     console.warn('[afterSign] ⚠️ FORGE_ALLOW_UNNOTARIZED=1：跳过公证。这个包**不能发给别人**，' +
       '对方打开会看到「无法验证开发者」。')
     return
   }
-  notarizeAndStaple({ target: appPath, profile: plan.notaryProfile, kind: 'app' })
+  notarizeAndStaple({ target: appPath, profile: plan.notaryProfile, key: plan.notaryKey, kind: 'app' })
 
   // ③ 最后让 Gatekeeper 自己判一次。这是唯一能回答「用户双击到底会不会被拦」的检查 ——
   //    前面每一步都"成功"但结果仍被拦，是完全可能的。

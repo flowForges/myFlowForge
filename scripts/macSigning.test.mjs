@@ -11,13 +11,29 @@ const { signingPlan, isMachO, machOFilesUnder } = require('./macSigning.cjs')
  * 这套分支的失败形态全是**假绿**:构建成功、产物也在、但用户那边打不开或者终端是坏的。
  * 本机打包没有 CI 兜底,所以判断逻辑必须钉死在这里。
  */
+/**
+ * ★★每个 env 都必须带一个**干净的 HOME**。
+ *  `signingPlan` 现在会去 `$HOME/.appstoreconnect/` 找 App Store Connect API 密钥,
+ *  不指 HOME 的话它读的是**跑测试这台机器上真实的凭据** —— 于是同一份测试在我机器上和
+ *  别人机器上结论不同,而且「在我这儿是过的」。这正是测试必须自己控制环境的原因。
+ */
+const EMPTY_HOME = mkdtempSync(join(tmpdir(), 'forge-nohome-'))
+/** 造一份假的 API 凭据,返回可以直接当 HOME 用的目录。 */
+function homeWithApiKey({ keyId = 'ABC1234567', issuer = 'd344e410-5ab6-470c-9d90-7cba0caf8da5', withFile = true } = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'forge-asc-'))
+  mkdirSync(join(home, '.appstoreconnect', 'private_keys'), { recursive: true })
+  writeFileSync(join(home, '.appstoreconnect', 'asc.env'), `ASC_KEY_ID=${keyId}\nASC_ISSUER_ID=${issuer}\n`)
+  if (withFile) writeFileSync(join(home, '.appstoreconnect', 'private_keys', `AuthKey_${keyId}.p8`), 'x')
+  return home
+}
+
 describe('signingPlan —— 该怎么签', () => {
   it('什么都不配 = ad-hoc（今天的默认，行为不能变）', () => {
-    expect(signingPlan({})).toEqual({ mode: 'adhoc' })
+    expect(signingPlan({ HOME: EMPTY_HOME })).toEqual({ mode: 'adhoc' })
   })
 
   it('只有空格也算没配 —— 别让一个手滑的 export 把构建带进"以为签了"', () => {
-    expect(signingPlan({ APPLE_SIGN_IDENTITY: '   ' })).toEqual({ mode: 'adhoc' })
+    expect(signingPlan({ HOME: EMPTY_HOME, APPLE_SIGN_IDENTITY: '   ' })).toEqual({ mode: 'adhoc' })
   })
 
   it('★★拿开发证书当分发证书 → 直接抛', () => {
@@ -38,15 +54,18 @@ describe('signingPlan —— 该怎么签', () => {
   it('★★配了证书却没配公证凭据 → 直接抛，不许静默出包', () => {
     // 签了不公证的包，用户下载后照样弹「无法验证开发者」——而构建是全绿的。
     // 这是整条链路上最容易骗过自己的一步，所以必须是**拦住**，不是警告。
-    expect(() => signingPlan({ APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)' }))
-      .toThrow(/FORGE_NOTARY_PROFILE/)
+    expect(() => signingPlan({ HOME: EMPTY_HOME, APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)' }))
+      .toThrow(/没有任何公证凭据/)
   })
 
   it('抛出的话里要给出能照着敲的下一步，不能只说"没配"', () => {
     try {
-      signingPlan({ APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)' })
+      signingPlan({ HOME: EMPTY_HOME, APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)' })
       throw new Error('should have thrown')
     } catch (e) {
+      // 两条路都要给出来,而且**推荐的那条排在前面**。
+      expect(e.message).toContain('AuthKey_')
+      expect(e.message).toContain('asc.env')
       expect(e.message).toContain('notarytool store-credentials')
       expect(e.message).toContain('FORGE_ALLOW_UNNOTARIZED=1')
     }
@@ -54,28 +73,57 @@ describe('signingPlan —— 该怎么签', () => {
 
   it('明确说了 FORGE_ALLOW_UNNOTARIZED=1 才放行（本地试签名用）', () => {
     expect(signingPlan({
+      HOME: EMPTY_HOME,
       APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)',
       FORGE_ALLOW_UNNOTARIZED: '1',
     })).toEqual({
       mode: 'developer-id', identity: 'Developer ID Application: X (T1)',
-      notaryProfile: null, skipDmgNotarize: false,
+      notaryProfile: null, notaryKey: null, skipDmgNotarize: false,
     })
   })
 
   it('证书 + 公证凭据齐了 = 正式包', () => {
     expect(signingPlan({
+      HOME: EMPTY_HOME,
       APPLE_SIGN_IDENTITY: 'Developer ID Application: zhu guohua (ABCDE12345)',
       FORGE_NOTARY_PROFILE: 'myflowforge-notary',
     })).toEqual({
       mode: 'developer-id',
       identity: 'Developer ID Application: zhu guohua (ABCDE12345)',
       notaryProfile: 'myflowforge-notary',
+      notaryKey: null,
       skipDmgNotarize: false,
     })
   })
 
+  it('★★有 API 密钥就够了 —— 不必再配钥匙串 profile', () => {
+    const plan = signingPlan({ HOME: homeWithApiKey(), APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)' })
+    expect(plan.notaryProfile).toBeNull()
+    expect(plan.notaryKey).toEqual({
+      keyId: 'ABC1234567',
+      issuer: 'd344e410-5ab6-470c-9d90-7cba0caf8da5',
+      keyPath: expect.stringContaining('AuthKey_ABC1234567.p8'),
+    })
+  })
+
+  it('★asc.env 在、但 .p8 文件不在 = 当作没有。半套凭据比没有更坏 —— 它会让构建跑到公证那一步才死', () => {
+    expect(() => signingPlan({
+      HOME: homeWithApiKey({ withFile: false }),
+      APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)',
+    })).toThrow(/没有任何公证凭据/)
+  })
+
+  it('环境变量能盖过 asc.env —— CI 上没有那个文件', () => {
+    const home = homeWithApiKey({ keyId: 'ZZZ9999999' })
+    const plan = signingPlan({
+      HOME: home, ASC_KEY_ID: 'ZZZ9999999', ASC_ISSUER_ID: 'from-env',
+      APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)',
+    })
+    expect(plan.notaryKey.issuer).toBe('from-env')
+  })
+
   it('dmg 公证默认**不**跳过 —— 用户下载的就是 dmg，跳过必须是显式的', () => {
-    const base = { APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)', FORGE_NOTARY_PROFILE: 'p' }
+    const base = { HOME: EMPTY_HOME, APPLE_SIGN_IDENTITY: 'Developer ID Application: X (T1)', FORGE_NOTARY_PROFILE: 'p' }
     expect(signingPlan(base).skipDmgNotarize).toBe(false)
     // 只有 '1' 算数，'true' / 'yes' 一律不认（免得以为跳过了其实没跳，或反过来）。
     expect(signingPlan({ ...base, FORGE_SKIP_DMG_NOTARIZE: 'true' }).skipDmgNotarize).toBe(false)

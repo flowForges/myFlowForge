@@ -30,9 +30,9 @@
 // 行为一个字节都没变。
 
 const { execFileSync, spawnSync } = require('node:child_process')
-const { readdirSync, openSync, readSync, closeSync, mkdtempSync, rmSync } = require('node:fs')
+const { readdirSync, openSync, readSync, closeSync, mkdtempSync, rmSync, readFileSync, existsSync } = require('node:fs')
 const { join, basename } = require('node:path')
-const { tmpdir } = require('node:os')
+const { tmpdir, homedir } = require('node:os')
 
 const ENTITLEMENTS = 'build/entitlements.mac.plist'
 
@@ -63,13 +63,24 @@ function signingPlan(env = process.env) {
     )
   }
 
+  // ★★2026-09-16 起**优先用 App Store Connect API 密钥**。
+  //  理由是实打实栽出来的:钥匙串那个 profile 条目**两次不明原因地消失**
+  //  (`No Keychain password item found for profile`,登录钥匙串是解锁的,原因始终没查出来)。
+  //  API 密钥是**磁盘上的一个文件**,不参与钥匙串那套生命周期,也就没有那个失败模式;
+  //  同一把密钥还能用来传 TestFlight(见 `scripts/upload-ios.sh`),一份凭据两处用。
+  //  ★凭据全在 `~/.appstoreconnect/` —— 仓库里一个字节都没有。
+  const notaryKey = notaryApiKey(env)
   const notaryProfile = String(env.FORGE_NOTARY_PROFILE ?? '').trim()
   const allowUnnotarized = String(env.FORGE_ALLOW_UNNOTARIZED ?? '') === '1'
   // ★★签了名但不公证 = **用户那边照样弹「无法验证开发者」**，而构建是全绿的。这是这条链路上
   //  最容易骗过自己的一步（「我证书都装好了啊」），所以默认直接拦住，要跳过必须显式说出口。
-  if (!notaryProfile && !allowUnnotarized) {
+  if (!notaryKey && !notaryProfile && !allowUnnotarized) {
     throw new Error(
-      'APPLE_SIGN_IDENTITY 配了但 FORGE_NOTARY_PROFILE 没配。\n' +
+      'APPLE_SIGN_IDENTITY 配了,但没有任何公证凭据。\n' +
+      '  **推荐**:App Store Connect API 密钥(不会像钥匙串条目那样莫名消失,还能一并用于 TestFlight):\n' +
+      '    ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8\n' +
+      '    ~/.appstoreconnect/asc.env   里两行 ASC_KEY_ID= / ASC_ISSUER_ID=\n' +
+      '  或者老办法(钥匙串 profile):\n' +
       '  只签名不公证的包，用户下载后仍会看到「无法验证开发者」——签了等于白签。\n' +
       '  先跑一次： xcrun notarytool store-credentials "myflowforge-notary" \\\n' +
       '               --apple-id "<你的 Apple ID>" --team-id "<Team ID>" --password "<App 专用密码>"\n' +
@@ -81,10 +92,38 @@ function signingPlan(env = process.env) {
     mode: 'developer-id',
     identity,
     notaryProfile: notaryProfile || null,
+    notaryKey,
     // 公证要把 170MB 的产物整个传给苹果。app 和 dmg 各传一次，国内网络下这是实打实的等待，
     // 所以留一个只在**试构建**时用的开关。正式发版别开 —— 用户下载的是 dmg。
     skipDmgNotarize: String(env.FORGE_SKIP_DMG_NOTARIZE ?? '') === '1',
   }
+}
+
+/**
+ * 找 App Store Connect API 密钥。找不到就返回 null —— **不抛**,因为还有钥匙串那条备选路。
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} [home] 家目录。参数化只是为了能在测试里指到临时目录去。
+ * @returns {{keyPath:string, keyId:string, issuer:string} | null}
+ */
+function notaryApiKey(env, home = env.HOME || homedir()) {
+  const dir = join(home, '.appstoreconnect')
+  // 环境变量优先(CI 上没有 asc.env 这个文件),其次读那个文件。
+  let keyId = String(env.ASC_KEY_ID ?? '').trim()
+  let issuer = String(env.ASC_ISSUER_ID ?? '').trim()
+  if (!keyId || !issuer) {
+    try {
+      for (const line of readFileSync(join(dir, 'asc.env'), 'utf8').split('\n')) {
+        const [k, v] = line.split('=')
+        if (k?.trim() === 'ASC_KEY_ID') keyId ||= (v ?? '').trim()
+        if (k?.trim() === 'ASC_ISSUER_ID') issuer ||= (v ?? '').trim()
+      }
+    } catch { /* 没有这个文件是正常的 */ }
+  }
+  if (!keyId || !issuer) return null
+  const keyPath = join(dir, 'private_keys', `AuthKey_${keyId}.p8`)
+  if (!existsSync(keyPath)) return null
+  return { keyPath, keyId, issuer }
 }
 
 const MACHO_MAGICS = new Set([0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca])
@@ -210,7 +249,7 @@ function signDmg(dmgPath, identity, log = console.log) {
  *
  * @param {{target:string, profile:string, kind:'app'|'dmg', log?:Function}} opts
  */
-function notarizeAndStaple({ target, profile, kind, log = console.log }) {
+function notarizeAndStaple({ target, profile, key, kind, log = console.log }) {
   // notarytool 只收 zip / dmg / pkg。.app 要先打包成 zip（ditto 才能保留符号链接和权限位，
   // 用 `zip` 会把 Electron 框架里的软链压平，公证直接判 Invalid）。
   let submitPath = target
@@ -228,7 +267,12 @@ function notarizeAndStaple({ target, profile, kind, log = console.log }) {
     //  「Command failed: xcrun notarytool …」,真正的原因(2026-09-15 实测是
     //  `No Keychain password item found for profile`)全在 stderr 上,于是排查时只能去翻构建日志。
     //  错误信息里不带原因,等于把一次明确的失败变成一次要考古的失败。
-    const r = spawnSync('xcrun', ['notarytool', 'submit', submitPath, '--keychain-profile', profile, '--wait'],
+    // ★两套凭据的参数形状不同,但**除此之外整条流程一模一样** —— 所以只在这一处分叉,
+    //  别把整个函数复制成两份(复制之后「只认 Accepted」那条判据迟早只剩一边有)。
+    const cred = key
+      ? ['--key', key.keyPath, '--key-id', key.keyId, '--issuer', key.issuer]
+      : ['--keychain-profile', profile]
+    const r = spawnSync('xcrun', ['notarytool', 'submit', submitPath, ...cred, '--wait'],
       { encoding: 'utf8' })
     const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
     process.stdout.write(out)
@@ -242,7 +286,7 @@ function notarizeAndStaple({ target, profile, kind, log = console.log }) {
       const id = (out.match(/id:\s*([0-9a-f-]{36})/i) || [])[1]
       throw new Error(
         '[notarize] 苹果没有接受这个包。查具体原因：\n' +
-        `  xcrun notarytool log ${id ?? '<submission-id>'} --keychain-profile ${profile}`,
+        `  xcrun notarytool log ${id ?? '<submission-id>'} ${cred.join(' ')}`,
       )
     }
 
