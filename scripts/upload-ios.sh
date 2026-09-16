@@ -3,7 +3,7 @@
 #
 # ★★★密钥绝不进仓库。这个脚本只从**仓库外**读凭据:
 #     ~/.appstoreconnect/private_keys/AuthKey_<KEYID>.p8   ← 苹果官方约定的位置,altool 自己会找
-#     ~/.myflowforge/asc.env                               ← 里面两行:ASC_KEY_ID= / ASC_ISSUER_ID=
+#     ~/.appstoreconnect/asc.env                               ← 里面两行:ASC_KEY_ID= / ASC_ISSUER_ID=
 #   这两个路径都在 $HOME 下,和这个仓库没有任何关系,git 永远看不到它们。
 #
 # 为什么用 App Store Connect API 密钥而不是 app 专用密码:
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 IPA="${1:-mobile/ios/build/export/myFlowForge.ipa}"
-ENV_FILE="$HOME/.myflowforge/asc.env"
+ENV_FILE="$HOME/.appstoreconnect/asc.env"
 
 die() { echo "✗ $*" >&2; exit 1; }
 
@@ -40,10 +40,10 @@ if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ]; then
   4. 记下这一行的 **密钥 ID**(10 位)和页面顶部的 **Issuer ID**(UUID 格式)
   5. 放到位(把 ABC123DEFG 换成你的密钥 ID):
 
-       mkdir -p ~/.appstoreconnect/private_keys ~/.myflowforge
+       mkdir -p ~/.appstoreconnect/private_keys
        mv ~/Downloads/AuthKey_ABC123DEFG.p8 ~/.appstoreconnect/private_keys/
        chmod 600 ~/.appstoreconnect/private_keys/AuthKey_ABC123DEFG.p8
-       cat > ~/.myflowforge/asc.env <<'EOF'
+       cat > ~/.appstoreconnect/asc.env <<'EOF'
        ASC_KEY_ID=ABC123DEFG
        ASC_ISSUER_ID=你的-issuer-uuid
        EOF
