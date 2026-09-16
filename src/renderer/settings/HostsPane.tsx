@@ -173,6 +173,12 @@ export function HostsPane({ hostChip, onHostChipChange }: {
           {' '}
           <DocsLink href={DOCS_REMOTE}>怎么配置远程主机</DocsLink>
         </p>
+        {/* ★和 `PhonePane` 那条互为镜像:人找错页时看的是**他当时打开的那一页**,只在一边写等于没写。
+            ★★写得这么短是有原因的 —— 这一屏有字数刹车(`HostsPane.shape.test.tsx`:默认摊开
+             总共 ≤60 字、每段 ≤40 字)。那条刹车挡住过我想加的两段解释,它挡得对:
+             用户原话是「设置里别写这么多文字,一般没人看」。方向靠**导航上那对标签**说清,
+             这里只留一句指路。 */}
+        <p className="set-desc">反过来(让别人连进这台)?见「别人连我」。</p>
         <div className="hosts-list">
           {hosts.length === 0 && (
             <div className="hosts-empty">

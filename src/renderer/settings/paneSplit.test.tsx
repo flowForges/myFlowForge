@@ -54,12 +54,21 @@ describe('主机设置拆成两页之后,别再混回去', () => {
     for (const h of ['跟设备走', '跟机器走', '跟那台手机走']) expect(src, h).toContain(h)
   })
 
-  it('★两页都在设置导航里,而且「主机」那个词不再同时指两个方向', () => {
+  it('★两个标签按**方向**成对命名 —— 不是按「谁」', () => {
     const nav = read('SettingsModal.tsx')
     expect(nav).toContain("key: 'phone'")
-    expect(nav).toContain("label: '手机'")
-    // 「主机」→「远程主机」:光叫「主机」的时候,它同时是「我这台」和「别人那台」。
-    expect(nav).toContain("label: '远程主机'")
+    // ★★2026-09-16:原来叫「手机」/「远程主机」,两个都在说**谁**,而人问的是**方向**
+    //  (用户原话:「1 我们希望别人连我们 2 我们连别人,就这两个场景」)。
+    //  而且「手机」还是错的 —— 另一台电脑连进来走的也是那一页。
+    //  ★这两条必须**一起**成立:只改一个,方向就又对不上了。
+    expect(nav).toContain("label: '别人连我'")
+    expect(nav).toContain("label: '我连别人'")
+  })
+
+  it('★★两页各自都写明了反方向在哪 —— 只在一边写等于没写', () => {
+    // 人找错页的时候,看的是**他当时打开的那一页**。
+    expect(read('PhonePane.tsx')).toContain('我连别人')
+    expect(read('HostsPane.tsx')).toContain('别人连我')
   })
 
   it('★★两页都真的接线了 —— 注册了 key 却没在 App 里分发,点进去是一片空白', () => {
