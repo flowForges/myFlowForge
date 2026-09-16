@@ -3,7 +3,6 @@ import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
-import { ContextChip } from './ContextChip'
 import type { ContextUsage } from '@shared/types'
 import { applyListContinuation } from './listContinuation'
 import { shouldOffloadPaste, pastedFileName, pastedFileNameForFile, base64OfUtf8, insertPastePlaceholder, insertPastedText, resolvePasteSelection } from './largePaste'
@@ -98,10 +97,6 @@ interface Props {
   onPickWorkflow?: (workflowId?: string) => void
   /** `/mcp`:打开 MCP 面板(不是发给模型的消息 —— 它是 app 自己的命令)。 */
   onOpenMcp?: () => void
-  /** 这条会话当前的上下文用量。**只来自 CLI 官方上报** —— 没有就不显示,绝不估算。 */
-  usage?: ContextUsage
-  /** 用量是哪个编码代理报的(tips 里要说出来)。 */
-  usageProviderLabel?: string
   /** Identifies the current chat (e.g. `${wsPath}::${sessionId}`). The unsent draft (text + attachments)
       is kept PER key, so switching session/workspace hides this draft there and restores it on return —
       instead of one shared draft leaking across every session. */
@@ -113,7 +108,7 @@ interface Props {
   lockedReason?: string
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, usage, usageProviderLabel, draftKey, lockedReason }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -587,12 +582,6 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           <div className="composer-queue-hint">当前回合仍在进行 · 这条会排队,结束后自动发送</div>
         )}
         <div className="composer-bar">
-          {/* ★上下文摆在输入框里(用户 2026-09-14 指定的位置):这里才是「你正要往里加东西」的地方,
-              也是唯一一个看一眼就该知道「还装得下吗」的时刻。 */}
-          <ContextChip
-            usage={usage}
-            providerLabel={usageProviderLabel}
-          />
           {/* 模型选择 */}
           <div className={'menu' + (openMenu === 'agent' ? ' open' : '')} id="agentMenu">
             <button className="cb-btn" data-menu="agentMenu" onClick={() => setOpenMenu(openMenu === 'agent' ? null : 'agent')}>

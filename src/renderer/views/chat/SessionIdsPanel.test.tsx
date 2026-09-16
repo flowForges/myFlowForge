@@ -20,14 +20,14 @@ it('shows empty state when no agent sessions', async () => {
   await waitFor(() => screen.getByText('当前会话还没有外部 Agent session。'))
 })
 
-it('shows the session context usage on the main Agent row for the matching provider', async () => {
+// ★刹车:上下文用量**已经从界面上整个撤掉了**(2026-09-16,用户:「我用 opus,你显示 200k,
+//  太不准了 —— 干脆都去掉吧」)。原始 token 数仍然记在 `ChatMessage.usage` 上,所以想把它
+//  画回来随时办得到 —— 这条测试就是拦住那个「随手加回来」的。要再上,先跟用户对齐口径。
+it('never shows context usage — it was removed for being misleading', async () => {
   ;(window as any).forge = { agentSessionIds: async () => ([
     { provider: 'claude', providerLabel: 'Claude Code', agentName: '主 Agent', sessionId: 'claude-abc', status: 'ok', lastActiveAt: '—' },
-    { provider: 'codex', providerLabel: 'Codex', agentName: '主 Agent', sessionId: 'codex-xyz', status: 'ok', lastActiveAt: '—' },
   ]) }
-  render(<SessionIdsPanel workspacePath="/w" sessionId="s1" archived={false} usageByProvider={{ claude: { used: 128000, window: 200000 } }} />)
+  render(<SessionIdsPanel workspacePath="/w" sessionId="s1" archived={false} />)
   await waitFor(() => screen.getByText('claude-abc'))
-  // claude row shows its usage; codex (no reported usage) shows none.
-  expect(screen.getByText('128,000')).toBeInTheDocument()
-  expect(screen.getAllByText(/上下文/).length).toBe(1)
+  expect(screen.queryByText(/上下文/)).toBeNull()
 })

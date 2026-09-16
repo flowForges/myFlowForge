@@ -453,25 +453,6 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   color: var(--err); background: color-mix(in oklch, var(--err) 14%, transparent);
   border: 1px solid color-mix(in oklch, var(--err) 32%, transparent); transition: .13s; }
 .supplement-danger:hover { background: color-mix(in oklch, var(--err) 22%, transparent); }
-/* User feedback (2026-07-21): Context bar like Claude Code's statusline — real reported tokens ÷ real
-   model window (see WorkspaceView latestUsage). Label + bar + %, right-aligned above the composer. */
-.ctx-real {
-  display: flex; align-items: center; gap: 7px; cursor: help;
-  width: 100%; max-width: clamp(720px, 90%, 1180px); margin: 0 auto 4px; padding: 0 4px;
-  justify-content: flex-end; font-family: var(--mono); font-size: 11px; color: var(--faint);
-}
-.ctx-real .ctx-label { flex: 0 0 auto; }
-.ctx-real .ctx-bar {
-  flex: 0 0 auto; width: 96px; height: 6px; border-radius: 999px;
-  background: var(--surface-2); border: 1px solid var(--border); overflow: hidden;
-}
-.ctx-real .ctx-bar i { display: block; height: 100%; background: var(--ok); transition: width .3s ease; }
-.ctx-real .ctx-pct { flex: 0 0 auto; min-width: 30px; text-align: right; color: var(--muted); }
-/* warm/hot as context fills — mirrors the statusline turning the bar orange/red near the window cap */
-.ctx-real.warn .ctx-bar i { background: var(--warn); }
-.ctx-real.warn .ctx-pct { color: var(--warn); }
-.ctx-real.hi .ctx-bar i { background: var(--err); }
-.ctx-real.hi .ctx-pct { color: var(--err); }
 .supplement-cancel { flex: 0 0 auto; height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600; color: var(--faint); transition: .13s; }
 .supplement-cancel:hover { background: var(--surface); color: var(--err); }
 /* Provider-switch confirm banner: same shell, with a primary 确认切换 button. */
@@ -1030,33 +1011,3 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   border-radius: 4px;
 }
 
-/* ── 输入框里的上下文:一枚圆环小图标 ──────────────────────────────────────────────
-   ★数字全在点开的 tips 里。第一版把「上下文 30.3K / 1.00M 3%」整条摊在输入框上,占掉半行宽度
-   还不好看(用户 2026-09-14 原话:「太丑了」)。环能一眼看出「还剩多少」,这正是这里唯一要回答的问题。 */
-.ctx-chip-wrap { position: relative; display: inline-flex; }
-.ctx-ring-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 30px; height: 30px; padding: 0;
-  border: 1px solid transparent; border-radius: 8px;
-  background: none; cursor: pointer;
-}
-.ctx-ring-btn:hover { background: var(--surface-2); border-color: var(--border); }
-.ctx-ring { width: 18px; height: 18px; display: block; }
-.ctx-ring-track { stroke: var(--border); }
-.ctx-ring-fill { stroke: var(--accent); transition: stroke-dashoffset .35s ease, stroke .2s; }
-/* ★窗口未知 = 虚线环。不画填充,也不画满环 —— 那等于假装知道。 */
-.ctx-ring-unknown { stroke: var(--faint); opacity: .55; }
-/* 「满了就是红的」。70% 先转黄提个醒,90% 转红 —— 再不压就要被自动截断了。 */
-.ctx-ring-btn.warn .ctx-ring-fill { stroke: var(--warn, #d08b2c); }
-.ctx-ring-btn.crit .ctx-ring-fill { stroke: var(--err, #d05252); }
-
-.ctx-tip {
-  position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 40;
-  min-width: 252px; padding: 11px 13px;
-  border: 1px solid var(--border); border-radius: 10px;
-  background: var(--surface); box-shadow: 0 8px 28px rgba(0,0,0,.28);
-}
-.ctx-tip-row { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; padding: 2px 0; }
-.ctx-tip-row span { color: var(--faint); }
-.ctx-tip-note { margin: 8px 0 10px; font-size: 11px; line-height: 1.6; color: var(--faint); }
-.ctx-tip-auto { margin: 0; font-size: 11px; line-height: 1.5; color: var(--faint); }

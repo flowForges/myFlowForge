@@ -625,34 +625,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         }
       })
   ), [chat.messages])
-  // User feedback (2026-07-20): show the REAL context size — nothing computed/approximate. The only
-  // genuinely real signal any CLI emits is the model's own per-turn `usage` (input+cache tokens),
-  // captured on the assistant message (see chatService onUsage → ChatMessage.usage). We surface that
-  // raw token count verbatim and NOTHING else: no %/bar, because the context WINDOW is a hardcoded
-  // guess (contextWindowFor) and no CLI exposes the native session's true remaining context / auto-
-  // compact point (researched per-provider). `usage.used` only exists for providers that actually
-  // report it (claude/qoder/opencode); codex/cursor/gemini/qwen/copilot emit none, so the pill is
-  // simply absent for them rather than showing a fabricated number.
-  const latestUsage = useMemo(() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const u = chat.messages[i].usage
-      if (u?.used) return u
-    }
-    return undefined
-  }, [chat.messages])
-
-  // Per-provider latest reported context usage for THIS session — surfaced in the IDs panel next to
-  // each provider's 主 Agent row (user request: the context is session-scoped, so show it with the
-  // session it belongs to). Same raw signal as latestUsage (model's own per-turn usage token count),
-  // just bucketed by the provider that produced it so a multi-provider session shows each one's own.
-  const usageByProvider = useMemo(() => {
-    const out: Record<string, ContextUsage> = {}
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const m = chat.messages[i]
-      if (m.who === 'ai' && m.provider && m.usage?.used && !out[m.provider]) out[m.provider] = m.usage
-    }
-    return out
-  }, [chat.messages])
 
   // Merge: a persisted (message-backed) gate wins over a same-id local entry — once confirmLaunchGate's
   // chatAppendLaunchGate round-trips back into chat.messages, the local copy is redundant. Gates still
@@ -1354,7 +1326,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           archived={archived}
           attentionIds={attentionIds}
           runningIds={runningSessionIds}
-          usageByProvider={usageByProvider}
         />
         {/* 修图5:工作流 ribbon 作为对话列的固定头(在滚动区之外),始终吸顶,不随消息滚动。 */}
         {activeWorkflow ? (() => {
@@ -1751,8 +1722,6 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
           onOpenMcp={() => setMcpOpen(true)}
-          usage={selection?.agentId ? usageByProvider[selection.agentId] : undefined}
-          usageProviderLabel={providers.find(p => p.id === selection?.agentId)?.displayName}
           onSelectionChange={(s) => {
             // Provider switch guard: agent changed AND the old provider already ran this session → don't
             // switch yet; raise a confirm banner (switch loses native context; the new provider will
