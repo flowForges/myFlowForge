@@ -1,6 +1,6 @@
 {
   "name": "myflowforge",
-  "version": "1.2.0-beta.11",
+  "version": "1.2.0-beta.12",
   "description": "A desktop cockpit that orchestrates Claude Code, Codex, Cursor, Gemini and qoder into one governed, multi-stage AI coding workflow.",
   "main": "out/main/index.js",
   "scripts": {
@@ -19,7 +19,8 @@
     "test": "vitest run",
     "check:daemon": "FORGE_DAEMON_CHECK=1 vitest run src/main/daemon/daemonProcess.test.ts",
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "postinstall": "node scripts/postinstall.mjs"
+    "postinstall": "node scripts/postinstall.mjs",
+    "dist:linux": "npm run build && bash scripts/build-linux-daemon.sh"
   },
   "keywords": [
     "ai",

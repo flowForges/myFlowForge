@@ -37,7 +37,22 @@ if [ -n "${APPLE_SIGN_IDENTITY:-}" ]; then
   EB_IDENTITY="${APPLE_SIGN_IDENTITY#Developer ID Application: }"
   SIGN_ARGS=(-c.mac.identity="${EB_IDENTITY}")
   echo "▸ 正式签名：${APPLE_SIGN_IDENTITY}"
-  if [ -n "${FORGE_NOTARY_PROFILE:-}" ]; then
+  # ★★2026-09-16:公证优先走 App Store Connect API 密钥(钥匙串那个条目消失过两次,
+  #  原因始终没查明 —— 见 scripts/macSigning.cjs)。密钥在 ~/.appstoreconnect/,仓库里没有。
+  ASC_ENV="$HOME/.appstoreconnect/asc.env"
+  if [ -f "$ASC_ENV" ]; then
+    # shellcheck disable=SC1090
+    . "$ASC_ENV"
+    ASC_KEY="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+    echo "▸ 公证凭据：App Store Connect API 密钥 ${ASC_KEY_ID}"
+    # 预检照旧 —— 两秒钟的事,不该等二十分钟的构建跑完才发现凭据不可用。
+    if ! probe="$(xcrun notarytool history --key "$ASC_KEY" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" 2>&1)"; then
+      echo "✗ API 密钥不可用:"
+      echo "${probe}" | sed 's/^/    /'
+      exit 1
+    fi
+    echo "  ✓ 凭据可用"
+  elif [ -n "${FORGE_NOTARY_PROFILE:-}" ]; then
     # ★★开打之前先验一次凭据。2026-09-15 实测:钥匙串里那个条目**会消失**(原因未查明),
     #  而失败点在 afterSign —— 也就是编译 + 签名 + 打 zip 全做完之后。整整二十多分钟才换来一句
     #  `No Keychain password item found`。一个两秒钟能做的检查,不该放在二十分钟之后。

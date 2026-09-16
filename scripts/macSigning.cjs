@@ -172,14 +172,33 @@ function machOFilesUnder(dir) {
  *  构建全绿、公证全绿、用户那边终端是坏的。所以这里显式签，afterSign 再显式验一遍。
  */
 function signBinary(path, identity, opts = {}) {
-  execFileSync('codesign', [
+  const args = [
     '--force',
     '--timestamp',                    // 公证要求可信时间戳
     '--options', 'runtime',           // hardened runtime —— 少了这个公证直接判 Invalid
     '--entitlements', opts.entitlements ?? ENTITLEMENTS,
     '--sign', identity,
     path,
-  ], { stdio: 'inherit' })
+  ]
+  // ★★`--timestamp` 要现场访问 timestamp.apple.com。那个服务**会瞬时失败**
+  //  (2026-09-16 实测:报 `A timestamp was expected but was not found`,而当时直连和代理
+  //   两条路 curl 都是通的 —— 就是它自己那一下不稳,国内访问尤其常见)。
+  //  没有重试的代价不是「这一步失败」,是**整个二十多分钟的构建作废重来**。
+  // ★只对时间戳这一类错误重试。证书不对、entitlements 写错这些重试一百次也还是错的,
+  //  重试只会把一个清晰的失败拖成一个缓慢的失败。
+  const TIMESTAMP_ERR = /timestamp|The timestamp service is not available|cssmerr_tp_not_trusted/i
+  for (let attempt = 1; ; attempt++) {
+    const r = spawnSync('codesign', args, { encoding: 'utf8' })
+    const out = `${r.stdout ?? ''}${r.stderr ?? ''}`
+    if (r.status === 0) return
+    if (attempt >= 4 || !TIMESTAMP_ERR.test(out)) {
+      throw new Error(`codesign 失败(退出码 ${r.status}):${basename(path)}\n${out.trim()}`)
+    }
+    const waitMs = attempt * 4000
+    console.warn(`[sign] ⚠️ 时间戳服务没响应(第 ${attempt} 次),${waitMs / 1000}s 后重试 —— ${basename(path)}`)
+    // 同步睡:整条签名链路都是同步的,为这一处改成异步会把 afterPack/afterSign 两个钩子都传染掉。
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs)
+  }
 }
 
 /**
