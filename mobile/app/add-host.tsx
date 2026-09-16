@@ -124,6 +124,18 @@ export default function AddHost() {
             </List>
           )}
 
+          {/* ★★两条路之间必须有一道看得见的界。没有它的时候,「扫一扫」和下面的输入框读起来像
+              **一件事的两步**(扫完还要自己填),而它们其实是**二选一**。
+              真机反馈的原话是「顶部有个扫一扫,底部有个保存并连接,中间什么也没填,这两个按钮很奇怪」
+              —— 奇怪的根源正是这里缺一句话。扫码进来时(scanned)不摆:那条路上没有选择。 */}
+          {!scanned ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 18, paddingTop: 16 }}>
+              <View style={{ flex: 1, height: 1, backgroundColor: c.border2 }} />
+              <T style={{ fontSize: 11.5, color: c.faint }}>或者手动填写</T>
+              <View style={{ flex: 1, height: 1, backgroundColor: c.border2 }} />
+            </View>
+          ) : null}
+
           <Sec>名称</Sec>
           <List>
             <Field value={label} onChangeText={setLabel} placeholder="书房的 Mac(不填就用地址)" autoCapitalize="none" />
@@ -168,8 +180,8 @@ export default function AddHost() {
           </List>
 
           <Note>
-            令牌以明文存在这台手机上,并且在同一个局域网里以明文发送。第一版只建议在自己家的 wifi
-            里用;人在外面要连,等中转做完。
+            令牌以明文存在这台手机上。同一个 wifi 下走的是局域网直连(明文),人在外面走中转时
+            则是端到端加密的。要在外面连,先在电脑上配好中转地址(设置 → 手机),再扫一次码。
           </Note>
 
           <View style={{ height: 20 }} />
@@ -188,9 +200,20 @@ export default function AddHost() {
                 <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{err}</T>
               </View>
             ) : null}
-            <Btn kind="pri" block onPress={save} disabled={saving}>
+            {/* ★★这颗按钮**只在这一屏有"第二主角"的问题**:没扫码时,顶上那颗「扫一扫」才是推荐路径,
+                两颗都画成 `pri` 就是两个同样响亮的主行动在抢,而底下这颗在表单空着时**只能失败**
+                —— 一个点下去必然弹错的按钮,不该长得像整页的主按钮(真机反馈:「这两个按钮很奇怪」)。
+                所以:手填这条路上它是次级样式,扫码进来时(没有「扫一扫」和它抢)才是 `pri`。
+                ★★禁用**必须配一句为什么**。光禁用而不说,就变成另一种「点了没反应」——
+                这一屏顶部注释里记的桌面端那两轮,栽的就是这个。 */}
+            <Btn kind={scanned ? 'pri' : 'default'} block onPress={save} disabled={saving || !addr.trim()}>
               {saving ? '连接中…' : '保存并连接'}
             </Btn>
+            {!addr.trim() && !saving ? (
+              <T style={{ fontSize: 11.5, color: c.faint, textAlign: 'center', paddingTop: 2 }}>
+                {CAN_SCAN ? '先填上面的地址,或者用「扫一扫」一次填好' : '先填上面的地址'}
+              </T>
+            ) : null}
             <Pressable onPress={() => goBack()} style={{ alignItems: 'center', paddingVertical: 12 }}>
               <T style={{ fontSize: 13.5, color: c.muted }}>取消</T>
             </Pressable>

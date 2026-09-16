@@ -860,7 +860,11 @@ export default function Chat() {
                         ★不进上下文:`via` 是 `ChatMessage` 上的独立字段,喂给模型的那几处只读 `text`。 */}
                     {m.via ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, paddingTop: 3 }}>
-                        <T style={{ fontSize: 10.5, color: c.faint }}>▪</T>
+                        {/* ★★别用 ▪ / ■ / ● 这类字符当装饰点。它们能被 emoji 字体接管 ——
+                            iOS 上 `▪`(U+25AA)就是被当彩色位图画出来的,于是 `color` 完全失效,
+                            屏幕上是一颗**硬黑方块**而不是淡灰小点(2026-09-16 真机报的)。
+                            画一个 View 没有任何字体变数,颜色也真的跟着主题走。 */}
+                        <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: c.faint }} />
                         <T numberOfLines={1} style={{ fontSize: 11, color: c.faint, flexShrink: 1 }}>
                           {m.via}
                         </T>
