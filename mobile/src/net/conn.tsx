@@ -9,6 +9,7 @@ import React, {
 } from 'react'
 import { Platform } from 'react-native'
 import { connectHost, type HostClient, type HostState } from './hostClient'
+import { createDemoConn, DEMO_METHODS, type DemoConn } from '../demo/demoConn'
 import {
   hostLabel,
   loadActiveHostId,
@@ -28,6 +29,16 @@ const CLIENT_LABEL = Platform.select({ ios: 'iPhone', android: 'Android 手机',
 type EventCb = (payload: unknown) => void
 
 export type Conn = {
+  /**
+   * 体验模式 —— **没有连任何电脑,全部数据是本地剧本**(见 `src/demo/`)。
+   *
+   * ★★为什么它住在 `Conn` 里而不是各屏自己判:体验模式要求「执行状态跟真实的一样」,
+   *  而真实感只能靠**走同一条代码路径**得到。所以它是换掉 `invoke`/`on` 这一层,
+   *  上面每一屏一个字都不用改 —— 也就不会漏掉哪一屏。
+   */
+  demo: boolean
+  enterDemo: () => void
+  exitDemo: () => void
   hosts: MobileHost[]
   activeHost: MobileHost | null
   /** 还没读完本地存的主机列表 —— 这段时间不该闪一下「还没有主机」的空态 */
@@ -131,7 +142,23 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
     //  不重连的话新配置要等到下一次手动重连才生效 —— 而用户刚重扫过码,会以为没保存上。
   }, [activeHost?.id, activeHost?.url, activeHost?.token, activeHost?.pubKey, activeHost?.relay, attemptKey, listeners])
 
+  // ★体验连接**懒建**:没进过体验模式的人不该为它付出任何初始化代价。
+  //  ★退出时整个丢掉(`demoRef.current = null`)—— 体验期间造的会话不该在下次进来时还在,
+  //   更不该混进真实存储。它本来就只活在内存里。
+  const demoRef = useRef<DemoConn | null>(null)
+  const [demo, setDemo] = useState(false)
+  const enterDemo = useCallback(() => {
+    demoRef.current ??= createDemoConn()
+    setDemo(true)
+  }, [])
+  const exitDemo = useCallback(() => {
+    demoRef.current = null
+    setDemo(false)
+  }, [])
+
   const invoke = useCallback(async (ch: string, args: unknown[] = []) => {
+    const d = demoRef.current
+    if (d) return d.invoke(ch, args)
     const c = clientRef.current
     if (!c) throw new Error('未连接任何主机')
     return c.invoke(ch, args)
@@ -231,8 +258,13 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       activeHost,
       loading,
       state,
-      methods: state?.status === 'ready' ? state.methods : new Set<string>(),
-      online: state?.status === 'ready',
+      // ★体验模式下 `methods` 必须是**满的**,`online` 必须是 true:界面上一大片功能是按
+      //  「对面报没报这个方法」置灰的(决策 B-2),给个空集合的话体验模式打开就是一屏灰按钮。
+      methods: demo ? DEMO_METHODS : state?.status === 'ready' ? state.methods : new Set<string>(),
+      online: demo ? true : state?.status === 'ready',
+      demo,
+      enterDemo,
+      exitDemo,
       invoke,
       on,
       addHost,
@@ -243,7 +275,7 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       forgetAll,
       epoch,
     }),
-    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, updateHost, selectHost, reconnect, forgetAll, epoch],
+    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, updateHost, selectHost, reconnect, forgetAll, epoch, demo, enterDemo, exitDemo],
   )
 
   return <ConnCtx.Provider value={value}>{children}</ConnCtx.Provider>

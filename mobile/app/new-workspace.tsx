@@ -8,6 +8,7 @@ import { useC } from '../src/theme/theme'
 import { Btn, Chip, Empty, Field, IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { RADIUS } from '../src/theme/tokens'
 import { useConn } from '../src/net/conn'
+import { DEMO_NEEDS_HOST } from '../src/demo/demoConn'
 import { useStore } from '../src/data/store'
 import {
   buildCreatePayload,
@@ -58,7 +59,7 @@ type BrowseResult = { path: string; parent: string | null; entries: BrowseEntry[
 
 export default function NewWorkspace() {
   const c = useC()
-  const { invoke, online, methods, on } = useConn()
+  const { invoke, online, methods, on, demo } = useConn()
   const { refresh, ensureWs } = useStore()
 
   // —— 主机的三份清单(现问,不预置) ——
@@ -244,7 +245,12 @@ export default function NewWorkspace() {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 44 }}>
-          {!online ? (
+          {/* ★体验模式下 `online` 是 true(否则一屏按钮全灰),所以这一条必须**排在它前面**。
+              ★★而且要拦在**进门处**,不是让人填完表单再报错 —— 后者是这一屏自己的注释
+              (决策 B-2)写着要避免的那种「点下去才报错的亮按钮」,只是换了个更费时间的版本。 */}
+          {demo ? (
+            <Empty title="体验模式建不了工作区" desc={DEMO_NEEDS_HOST} />
+          ) : !online ? (
             <Empty title="未连接" desc="工作区建在那台机器上 —— 连上主机才能建。" />
           ) : missing.length ? (
             // 决策 B-2:说清楚是哪一条,而不是留一个点下去才报错的亮按钮。

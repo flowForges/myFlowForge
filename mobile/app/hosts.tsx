@@ -19,7 +19,7 @@ import { ROUTES } from '../src/nav/routes'
 
 export default function Hosts() {
   const c = useC()
-  const { hosts, activeHost, state, selectHost, removeHost, updateHost, reconnect } = useConn()
+  const { hosts, activeHost, state, selectHost, removeHost, updateHost, reconnect, online, demo, enterDemo } = useConn()
   const { gates } = useStore()
 
   /**
@@ -158,6 +158,21 @@ export default function Hosts() {
           <Btn kind="ghost" block onPress={() => router.push(ROUTES.addHost)}>
             添加主机
           </Btn>
+          {/* ★★体验模式的入口。摆在这儿是因为**这一屏就是卡住人的那一屏** ——
+              没有电脑可连的时候,人到这儿就走不下去了(审核员尤其如此:他手上没有你的电脑,
+              也不一定访问得了你的中转)。
+              ★只在**没连上**的时候出现:已经连着真机的人不需要看剧本。
+              ★文案说清「不连电脑」,别让人以为点了会偷偷连点什么。 */}
+          {!online && !demo ? (
+            <>
+              <Btn kind="pri" block onPress={() => { enterDemo(); router.replace(ROUTES.home) }}>
+                先体验一下(不连电脑)
+              </Btn>
+              <T style={{ fontSize: 11.5, color: c.faint, textAlign: 'center', paddingTop: 2 }}>
+                完全离线的演示:一个工作区、能对话、能看执行过程
+              </T>
+            </>
+          ) : null}
           {state?.status === 'failed' || state?.status === 'retrying' ? (
             <Btn block onPress={reconnect}>
               重新连接

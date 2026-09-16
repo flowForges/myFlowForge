@@ -58,7 +58,7 @@ function waited(since: number, now: number): string {
 
 export default function Home() {
   const c = useC()
-  const { activeHost, hosts, loading: hostsLoading, online, state, invoke, selectHost, updateHost } = useConn()
+  const { activeHost, hosts, loading: hostsLoading, online, state, invoke, selectHost, updateHost, demo, exitDemo } = useConn()
   const {
     groups, gates, gatesFor, loading, select, wsName, refresh, unread, running, expanded, toggleWs, ensureWs,
     setPinned, archive,
@@ -633,6 +633,21 @@ export default function Home() {
           onPress={() => setHostSheet(true)}
         />
       </TopBar>
+
+      {/* ★★体验模式的横幅。**必须常驻、必须显眼、必须能一键退出。**
+          三条都不是装饰:
+           · 常驻 —— 人会忘。忘了之后把剧本里的回答当成自己代理说的话,是这个功能最坏的失败方式;
+           · 显眼 —— 它要能在应用商店的截图里被认出来,否则演示视频会变成虚假宣传;
+           · 一键退出 —— 体验完的下一步就是连自己的电脑,这是整个功能的目的所在,
+             把它埋进设置里等于把转化率丢掉。 */}
+      {demo ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: c.accentDim, borderBottomWidth: 1, borderBottomColor: c.border2 }}>
+          <T style={{ flex: 1, fontSize: 12, lineHeight: 17, color: c.fg }}>
+            <T style={{ fontWeight: '700' }}>体验模式</T> · 没有连接任何电脑,回答都是预先写好的
+          </T>
+          <Btn size="sm" onPress={() => { exitDemo(); router.push(ROUTES.hosts) }}>连我的电脑</Btn>
+        </View>
+      ) : null}
 
       <ScrollView
         ref={scrollRef}
