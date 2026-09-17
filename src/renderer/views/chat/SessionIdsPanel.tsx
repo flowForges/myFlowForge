@@ -21,10 +21,12 @@ export function SessionIdsPanel({
   workspacePath,
   sessionId,
   archived,
+  usageByProvider,
 }: {
   workspacePath: string
   sessionId: string
   archived: boolean
+  usageByProvider?: Record<string, ContextUsage>
 }) {
   const [rows, setRows] = useState<AgentSessionInfo[] | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -136,6 +138,20 @@ export function SessionIdsPanel({
                 <code title={r.sessionId}>{r.sessionId}</code>
                 <Copy text={r.sessionId} />
               </div>
+              {(() => {
+                // 上下文用量属于对话主 Agent 的轮次(没有 role / 不是委派的那些行),按上报它的 provider 配对。
+                // 工作流泳道 / 委派 / 从不上报用量的 provider(codex/cursor/gemini…)这里就是没有。
+                //
+                // ★★2026-09-16:输入框那枚圆环撤掉了,**这一行保留**(用户:「ids 面板里的不能去掉呀」)。
+                //  区别在于这里**只报原始 token 数、不算百分比** —— 原始数是 CLI 自己报的,没有推算成分;
+                //  而圆环要的是「还剩多少」,那必须除以一个窗口大小,而窗口各家口径不一,算出来的比例不可信。
+                const u = !r.role && !r.depth ? usageByProvider?.[r.provider] : undefined
+                return u?.used ? (
+                  <div className="sid-ctx" title="该编码代理在本会话最近一轮真实上报的输入+缓存 token（CLI 不暴露自动压缩前的真实剩余，故只显原始 token 数）">
+                    上下文 <b>{u.used.toLocaleString()}</b> tokens
+                  </div>
+                ) : null
+              })()}
             </div>
           ))}
         </div>

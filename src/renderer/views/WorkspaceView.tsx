@@ -626,6 +626,23 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
       })
   ), [chat.messages])
 
+  // 每个 provider 在**这条会话**里最近一次上报的上下文用量 —— 画在 IDs 面板里那个 provider 的
+  // 主 Agent 行旁边。上下文是**跟会话走**的,所以它显示在会话自己的面板里。
+  //
+  // ★★2026-09-16 输入框里那枚圆环撤掉了(用户:「我用 opus 你显示 200k,太不准了」),
+  //  但**这一处保留**(用户:「ids 面板里的不能去掉呀」)。两处不是同一件事:
+  //  圆环是「还装得下吗」——要一个可信的百分比才有意义,而窗口大小各家口径不一;
+  //  这一行是「这个 agent 在这条会话里烧了多少」——**只报原始 token 数,不算百分比**,
+  //  而原始数就是 CLI 自己报的,没有推算成分。所以它留得住,圆环留不住。
+  const usageByProvider = useMemo(() => {
+    const out: Record<string, ContextUsage> = {}
+    for (let i = chat.messages.length - 1; i >= 0; i--) {
+      const m = chat.messages[i]
+      if (m.who === 'ai' && m.provider && m.usage?.used && !out[m.provider]) out[m.provider] = m.usage
+    }
+    return out
+  }, [chat.messages])
+
   // Merge: a persisted (message-backed) gate wins over a same-id local entry — once confirmLaunchGate's
   // chatAppendLaunchGate round-trips back into chat.messages, the local copy is redundant. Gates still
   // ACTIVE (not yet confirmed) only exist in local state and pass through untouched — EXCEPT: `launchGates`
@@ -1326,6 +1343,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           archived={archived}
           attentionIds={attentionIds}
           runningIds={runningSessionIds}
+          usageByProvider={usageByProvider}
         />
         {/* 修图5:工作流 ribbon 作为对话列的固定头(在滚动区之外),始终吸顶,不随消息滚动。 */}
         {activeWorkflow ? (() => {

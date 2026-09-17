@@ -21,10 +21,11 @@ export interface SessionTabsProps {
   attentionIds?: ReadonlySet<string>
   // Session ids with an in-flight agent turn — pulses that tab's dot (mirrors the sidebar dot).
   runningIds?: ReadonlySet<string>
-  // each provider's 主 Agent row.
+  // 各 provider 在这条会话里最近上报的上下文用量 —— 透给 IDs 面板,画在每个 provider 的主 Agent 行旁。
+  usageByProvider?: Record<string, ContextUsage>
 }
 
-export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds, runningIds }: SessionTabsProps) {
+export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds, runningIds, usageByProvider }: SessionTabsProps) {
   const multi = sessions.length > 1
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -97,7 +98,7 @@ export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRe
             IDs
           </button>
           {idsOpen && workspacePath && activeSessionId && (
-            <SessionIdsPanel workspacePath={workspacePath} sessionId={activeSessionId} archived={!!archived} />
+            <SessionIdsPanel workspacePath={workspacePath} sessionId={activeSessionId} archived={!!archived} usageByProvider={usageByProvider} />
           )}
         </div>
         <button
