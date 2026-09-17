@@ -14,6 +14,7 @@ import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatch
 import { driveCodexTurn } from './codexAppServer'
 import { codexSandboxApproval, codexGateReq } from './codexApproval'
 import { readSettings } from '../../config/store'
+import { isCodexWarning } from './codexErrorMeaning'
 
 // codex (Rust) emits internal engine logs on stderr — either bare, e.g.
 //   `codex_models_manager::manager::failed to refresh available models: …`
@@ -164,7 +165,14 @@ function codexKind(a: CodexActionLoggable): { level: 'info' | 'ok' | 'accent'; k
   return { level: 'info', kind: 'think' }
 }
 
-// Detect a turn/run failure event so the chat surfaces an error instead of an empty reply.
+/**
+ * 从一条 codex 事件里取出**真正的失败原因**;不是失败就返回 null。
+ *
+ * ★★★codex 把**警告也发成 `type: "error"` 的条目**。2026-09-17 实测:一次完全成功的调用里
+ *  就带了两条(hook 信任绕过、技能描述被截断)。把它们当失败的后果是:一个跑通的回合
+ *  被显示成「错误: Skill descriptions were shortened…」—— 那句话没说错,只是不该出现在那儿。
+ *  所以警告在这儿就滤掉,不往上冒。
+ */
 export function codexErrorMessage(obj: any): string | null {
   if (!obj || typeof obj !== 'object') return null
   if (obj.type === 'turn.failed') return String(obj.error?.message ?? obj.error ?? 'codex turn failed')
@@ -175,7 +183,11 @@ export function codexErrorMessage(obj: any): string | null {
     return String(obj.message ?? nested ?? 'codex error')
   }
   // Item-level error (e.g. config deprecation / model-not-supported arrives this way).
-  if (obj.type === 'item.completed' && obj.item?.type === 'error') return String(obj.item.message ?? 'codex error')
+  if (obj.type === 'item.completed' && obj.item?.type === 'error') {
+    const m = String(obj.item.message ?? 'codex error')
+    // ★警告不是失败。判据收在 `codexErrorMeaning.ts` 一处 —— 那边有测试钉着真实报文。
+    return isCodexWarning(m) ? null : m
+  }
   return null
 }
 

@@ -24,6 +24,7 @@ import { providerSupportsResume, providerResumeReliable } from '../agents/resume
 import { logDebug } from '../log/appLog'
 import { perfSpan } from '../perf/perfSpans'
 import { addDailyTokens } from '../tokens/growthSignalRef'
+import { explainCodexError } from '../agents/providers/codexErrorMeaning'
 
 export interface SendTurnDeps {
   provider: AgentProvider
@@ -358,7 +359,12 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     }
     const finishErr = (err: Error): ChatMessage => {
       finalizeRunning('error')
-      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
+      // ★★错误原文常常是 provider 的**内部话术**,对人没有意义。最典型的是 codex 的
+      //  `Reconnecting... 2/5` —— 那是它自己的重试计数器,用户看到只会问「这是什么意思」
+      //  (2026-09-17 真机)。能翻成一句「照着做」的就翻,翻不了原样显示。
+      //  ★翻译里**必须带上原话**:翻译给人看,原话给排查用,少哪个都不行。
+      const why = explainCodexError(err.message) ?? err.message
+      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${why}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
       // 事件带上落档的 msg。`text` 非空时这一轮其实是「答完了但收尾报错」(provider 先流出了答案,再以非零
       // 退出/stderr 收尾),app 显示的就是这段正文;不带 msg 的话下游只看得到 err.message,只能一律当彻底
       // 失败处理 —— 机器人就是这么把一次有答案的回合报成 ❌ 的。
