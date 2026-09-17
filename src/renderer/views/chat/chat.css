@@ -131,9 +131,17 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }
 .msg-body pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-2); white-space: pre; }
 /* GFM tables — shared by chat messages (.msg-body) and the plan card (.req-title) */
-/* ★★`width: auto` 不是 `100%`。撑满的后果用户直接指出来了:「输出的表格,内容太靠左了」——
-   两列的表被强行拉到整个正文宽,列宽平分,于是每格的内容都缩在自己那一大片空白的左上角。
-   表格本来就该**按内容收**;`max-width: 100%` 保证宽表不撑破容器(外面还有 `.tbl-scroll` 兜底)。 */
+/* ★★★2026-09-17 第三次改 —— 用户原话:「我已经说过不下三次了,还是这样,又短又丑」。
+   前两次一直在**同一条轴上**来回调宽度,所以两个毛病轮流出现:
+     · `width:100%` → 「内容太靠左了」(格子比内容宽得多,内容缩在左上角)
+     · `width:auto` → 「又短又丑」(表格缩成内容宽,旁边段落满宽,看着发育不良)
+   ★★真正的问题**不在宽度,在「表格没有边界」**。没有轮廓的时候,一张按内容收的表只是几行
+    浮着的字,自然显得没长好;而把它拉满宽,又让每格空出一大片。两条路都治不好,因为病不在那儿。
+   ★所以这次改的是**定义**,不是尺寸(GitHub / Notion 的路数,2026-09-17 在真 Chrome 里两版对比确认):
+     · `width: max-content` —— 按内容收,于是**没有任何一格比它的内容宽很多**;
+     · 加一圈**轮廓 + 圆角** —— 表格成为一个完整的块,短也是「故意这么短」,不是「没长完」。
+   ★轮廓和表头底色都用 `color-mix(… transparent)`,壁纸能透上来 —— 实底在浅色主题下是一条
+    纯白横杠,既难看又违反「壁纸下不加背景」那条(memory: feedback-font-color-only)。 */
 /* ★★2026-09-10:选择器从两个来源扩到**四个**。上面那两条修复(width:auto / 去竖线)当时只落在
    `.msg-body` + `.req-title` 上,而 `.req-plan`(方案卡正文、运行事件卡)和 `.md-html`(内嵌 HTML 里
    没被提升成 TableBlock 的裸表格)各自还抄着一份**旧样式**(`width:100%` + `padding:4px 8px` + 满格实线)
@@ -141,8 +149,11 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
    ★同一个形状的坑见 [trap-two-call-sites-run-vs-chat]:两份手抄的实现,只改一处 = 等于没改。
    现在**只有这一套**,底下那两条各自的 `table` 规则已经删掉。 */
 .msg-body table, .req-title table, .req-plan table, .md-html table {
-  border-collapse: collapse; margin: 8px 0 12px; font-size: 13px;
-  width: auto; max-width: 100%;
+  /* ★`separate` + `border-spacing: 0`:圆角要裁得住,`collapse` 下圆角是不生效的。 */
+  border-collapse: separate; border-spacing: 0; margin: 10px 0 14px; font-size: 13px;
+  width: max-content; max-width: 100%;
+  border: 1px solid color-mix(in oklab, var(--fg) 13%, transparent);
+  border-radius: 10px; overflow: hidden;
 }
 .md-img { max-width: 100%; height: auto; border-radius: 6px; margin: 6px 0; display: block; }
 .md-img-loading, .md-img-err { font-size: 12px; color: var(--muted); font-style: italic; }
@@ -151,25 +162,25 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
    电子表格截图,和周围的玻璃质感完全不搭(用户 2026-09-08 原话:「html 输出的这个表格,我感觉非常丑」)。
    ★现在只留【横向分隔线】:表头一条稍重的底线,行与行之间一条极淡的线,竖线全部去掉 —— 列是靠间距
    对齐的,不需要画出来。表头底色换成 fg 混出来的半透明色,深浅两个主题各自成立,壁纸也能透上来。
-   ★padding 从 4px 8px 放到 6px 10px:去掉竖线之后,列间距就是唯一的分列线索,太挤会糊成一片。 */
+   ★padding 从 4px 8px 放到 6px 10px:去掉竖线之后,列间距就是唯一的分列线索,太挤会糊成一片。
+   ★★2026-09-17 再放到 7px 14px、行高 1.55:满宽之后每行更长,行内需要更多呼吸感才不显得挤;
+    列间距也从 20px(10+10)加到 28px —— 没有竖线时,列与列之间全靠这段空白分开。 */
 .msg-body th, .msg-body td, .req-title th, .req-title td,
 .req-plan th, .req-plan td, .md-html th, .md-html td {
   border: 0; border-bottom: 1px solid color-mix(in oklab, var(--fg) 9%, transparent);
-  padding: 6px 10px; text-align: left; vertical-align: top;
+  padding: 7px 14px; line-height: 1.55; text-align: left; vertical-align: top;
 }
 .msg-body th, .req-title th, .req-plan th, .md-html th {
+  /* ★底色用 fg 混出来的**半透明**色,不是实底 —— 壁纸要能透上来。
+     实底(--surface 在浅色主题是 99% 明度)在壁纸上就是一条纯白横杠,和整屏的玻璃质感打架,
+     而且违反「壁纸下不加背景」那条(见 memory: feedback-font-color-only)。 */
   background: color-mix(in oklab, var(--fg) 6%, transparent); color: var(--fg); font-weight: 650;
   border-bottom-color: color-mix(in oklab, var(--fg) 22%, transparent);
+  /* 表头小一号 + 字距,和正文拉开层次 —— 没有竖线和外框时,层次全靠这些细节撑。 */
+  font-size: 12px; letter-spacing: .02em;
 }
-/* 第一/最后一列的外侧留白去掉,让表格和正文左对齐 —— 有竖线时靠边框收边,没有竖线就得靠这个。 */
-.msg-body th:first-child, .msg-body td:first-child,
-.req-title th:first-child, .req-title td:first-child,
-.req-plan th:first-child, .req-plan td:first-child,
-.md-html th:first-child, .md-html td:first-child { padding-left: 0; }
-.msg-body th:last-child, .msg-body td:last-child,
-.req-title th:last-child, .req-title td:last-child,
-.req-plan th:last-child, .req-plan td:last-child,
-.md-html th:last-child, .md-html td:last-child { padding-right: 0; }
+/* ★★首末列**不再贴边**。「去掉外侧留白让表格和正文左对齐」是没有外框时的做法 ——
+   现在有了轮廓,贴边会让第一个字直接压在边框上。留白和其它格一致,块才是完整的。 */
 .msg-body tr:last-child td, .req-title tr:last-child td,
 .req-plan tr:last-child td, .md-html tr:last-child td { border-bottom: 0; }
 /* 数字列用等宽数字:表格里最常见的就是数量/行号/版本号,比例数字会让每行宽度不一样、看着抖。 */

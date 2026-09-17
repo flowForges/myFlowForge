@@ -46,18 +46,36 @@ describe('对话区表格样式:四个来源必须共用一套', () => {
     for (const s of SCOPES) expect(covered, s).toContain(`${s} th`)
   })
 
-  it('★★表格一律不许 `width: 100%` —— 那正是「两列的表被拉满、内容缩在左上角」的根因', () => {
-    for (const r of all) {
-      if (!/\btable\b/.test(r.sel)) continue
-      // ★匹配到声明开头,否则 `max-width:100%` 的子串会把自己判成违规(第一版就这么红了一次)。
-      expect(r.body.replace(/\s/g, ''), r.sel).not.toMatch(/(^|;)width:100%/)
-    }
+  /**
+   * ★★★2026-09-17 这条规矩**推翻重写**了。原来钉的是「一律不许 width:100%」,理由是
+   *  「两列的表被拉满、内容缩在左上角」。那个观察没错,但结论只对了一半 —— 于是我们在
+   *  两个都不对的状态之间来回摆,用户三次说「丑」:
+   *    · `width:100%` + 列平分 → 内容缩在一大片空白的左上角(旧的那次)
+   *    · `width:auto`        → 表格缩成内容宽,旁边段落却满宽,看着发育不良(「又短又丑」)
+   *  ★真正的做法是**两件事一起**:表格满宽,同时让**前面的列按内容收紧、最后一列吃掉剩余**。
+   *   这样表格和正文左右对齐,而短列不会被撑成空旷的格子。缺了后半条,width:100% 就又变回老毛病,
+   *   所以下面这两条断言**必须成对存在**。
+   */
+  it('★★按内容收(max-content)—— 拉满宽会让每格空出一大片,内容缩在左上角', () => {
+    const t = all.find(r => r.sel.includes('.msg-body table'))!
+    expect(t.body.replace(/\s/g, '')).toContain('width:max-content')
+    expect(t.body.replace(/\s/g, '')).toContain('max-width:100%')
   })
 
-  it('表格按内容收(width:auto + max-width:100%)', () => {
+  it('★★★而且必须有**轮廓** —— 没有它,按内容收的表就是几行浮着的字,那才是「又短又丑」的来源', () => {
+    // 这两条**必须成对存在**:只收窄不给轮廓 = 第二次那版;只给轮廓不收窄 = 第一次那版。
+    // 病根从来不在宽度,在「表格没有边界」。
     const t = all.find(r => r.sel.includes('.msg-body table'))!
-    expect(t.body.replace(/\s/g, '')).toContain('width:auto')
-    expect(t.body.replace(/\s/g, '')).toContain('max-width:100%')
+    const b = t.body.replace(/\s/g, '')
+    expect(b, '缺少外框').toContain('border:1pxsolid')
+    expect(b, '缺少圆角').toContain('border-radius:')
+    // 圆角要裁得住必须是 separate;collapse 下圆角不生效。
+    expect(b).toContain('border-collapse:separate')
+  })
+
+  it('★有了轮廓,首末列就不能再贴边 —— 第一个字会压在边框上', () => {
+    const edge = all.find(r => /td:first-child/.test(r.sel) && /padding-left/.test(r.body))
+    expect(edge, '还留着「首列 padding-left: 0」那条').toBeFalsy()
   })
 
   it('★去掉竖线之后列间距是唯一的分列线索,padding 不许再缩回 4px 8px', () => {
