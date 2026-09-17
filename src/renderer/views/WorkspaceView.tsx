@@ -22,6 +22,7 @@ import { useSessions } from '../state/useSessions'
 import { useWorktree } from '../state/useWorktree'
 import { useLastRun } from '../state/useLastRun'
 import { MessageStream } from './chat/MessageStream'
+import { ThinkSpinner } from './chat/Spinners'
 import { Message } from './chat/Message'
 import { buildTimeline } from './chat/timeline'
 import { Composer } from './chat/Composer'
@@ -1490,6 +1491,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             </div>
           )}
           <div className="chat-inner">
+            {/* ★★★历史还在路上时说一句,别留一屏空白。
+                本机那个 RPC 几乎瞬时,所以这个空窗一直没人注意到;走中转时同一个往返被放大成两秒,
+                于是「点进会话先是空的,过两秒才有内容」(2026-09-17 真机,另一台电脑连过来时)。
+                ★空白和「这个会话本来就没消息」**长得一模一样** —— 分不清「还没到」和「没有」,
+                 是这一类交互最糟的地方:人会以为自己点错了会话,或者以为记录丢了。 */}
+            {chat.historyLoading && (
+              <div className="chat-loading" role="status">
+                <ThinkSpinner size={14} />
+                <span>正在取这条会话的记录…</span>
+              </div>
+            )}
             {/* 导入的历史对话(只读)——位于分隔条上方 */}
             {importedHistory.length > 0 && (
               <>

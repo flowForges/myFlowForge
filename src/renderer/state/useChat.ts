@@ -10,6 +10,12 @@ export interface AskReq { id: string; title: string; options?: { t: string; d: s
 export interface ChatApi {
   messages: ChatMessage[]
   streamingIds: Set<string>
+  /**
+   * 历史还在路上(进会话 → `chat:history` 回来之前)。
+   * ★★必须和「这个会话本来就没消息」分开。本机那个 RPC 几乎瞬时,所以这个区别一直不重要;
+   *  走中转时同一个往返被放大成两秒,空屏就变成了「点进去什么都没有」(2026-09-17 真机)。
+   */
+  historyLoading: boolean
   confirms: ChatConfirm[]
   asks: AskReq[]
   plans: PlanReq[]
@@ -50,6 +56,8 @@ export function useChat(
   onModeChanged?: (mode: 'chat' | 'workflow', runId?: string) => void,
 ): ChatApi {
   const [messages, setMessages] = useState<ChatMessage[]>([])
+  /** 历史还在路上。★区分「还没到」和「这个会话本来就没消息」—— 两者在屏幕上长得一样。 */
+  const [historyLoading, setHistoryLoading] = useState(false)
   const [streamingIds, setStreamingIds] = useState<Set<string>>(new Set())
   const [confirms, setConfirms] = useState<ChatConfirm[]>([])
   const [asks, setAsks] = useState<AskReq[]>([])
@@ -68,8 +76,14 @@ export function useChat(
   useEffect(() => {
     // asks 一直漏在重置之外 —— 换会话后上一个会话的提问卡还挂在新会话里(卡片本身按 workspace+session
     // 过滤事件,但已经进了 state 的那张不会自己走)。和 confirms 一起清。
-    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); return }
+    if (!workspacePath || !sessionId) { setMessages([]); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null); setHistoryLoading(false); return }
     setMessages([]); setStreamingIds(new Set()); setConfirms([]); setAsks([]); setPlans([]); setBusy(false); setQueue([]); setRunning(null)
+    // ★★★进会话到历史回来之间,这一屏是**空的**。本机那个 RPC 几乎瞬时,所以一直没人注意到;
+    //  走中转时同一个往返被放大成两秒,于是用户看到「点进去先是空白,过两秒才有内容」
+    //  (2026-09-17 真机:另一台电脑连过来时)。空白和「这个会话本来就没消息」长得一模一样 ——
+    //  分不清「还没到」和「没有」,正是这一类交互最糟的地方。
+    // ★这个标志只管**历史**。门、队列那两个快照各拉各的,拉不到也不该让整屏显示成加载中。
+    setHistoryLoading(true)
     let live = true
     // ★ 清空之后必须把主进程【还挂着的门】拉回来重建卡片。门是主进程的一个 Promise,一直阻塞着 provider;
     // 卡片只是这里的 state。切会话 / 离开再回来 / 刷新都会清掉这份 state,门却还在 —— 于是侧栏徽标和宠物
@@ -102,12 +116,16 @@ export function useChat(
     })
     void api.current.chatHistory(workspacePath, sessionId).then((h: ChatMessage[]) => {
       if (!live) return
+      setHistoryLoading(false)
       setMessages(h)
       // Restore the streaming affordance for an in-flight message folded in by the main-process live
       // buffer (ts:'' uniquely marks a not-yet-persisted assistant reply) — otherwise it renders as a
       // finished message with no spinner until the next delta upserts it.
       const inflight = h.filter(m => m.who === 'ai' && m.ts === '').map(m => m.id)
       if (inflight.length) setStreamingIds(new Set(inflight))
+    }).catch(() => {
+      // ★拉不回来也要**退出加载态** —— 否则永远转圈,而「一直加载中」比「空的」更让人干等。
+      if (live) setHistoryLoading(false)
     })
     return () => { live = false }
   }, [workspacePath, sessionId, hostReadySeq])
@@ -282,5 +300,5 @@ export function useChat(
     void api.current.chatStop({ workspacePath, sessionId })
   }, [workspacePath, sessionId])
 
-  return { messages, streamingIds, confirms, asks, plans, busy, queue, running, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
+  return { messages, streamingIds, historyLoading, confirms, asks, plans, busy, queue, running, send, resolveConfirm, resolveAsk, resolvePlan, cancelQueued, clearQueue, stop }
 }

@@ -156,3 +156,14 @@
   color: var(--muted);
 }
 .hosts-sec:first-child { margin-top: 4px; }
+
+/* 主机行下面那句**真实**连接状态。★只在选中这台、且没连上时出现 ——
+   连上的时候地址和状态都不解决问题,那一行就是噪音。
+   ★2026-09-17 加:原来「断线 / 重连中 / 已放弃」三种情况在界面上长得一模一样,
+    用户原话:「我也不知道是不是还在重连,还是已经不连了」。 */
+.host-state {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 5px; font-size: 12px; color: var(--warn);
+}
+.host-state.s-failed { color: var(--err); }
+.host-state.s-closed { color: var(--muted); }

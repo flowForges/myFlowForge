@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { type HostDisplay, type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
+import { describeHostState, type HostDisplay, type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
 import { parsePairingLink } from '@shared/remote/pairingLink'
 import { HOST_ICONS, currentHostIcon } from '@shared/hostIcons'
@@ -152,7 +152,13 @@ export function HostsPane({ hostChip, onHostChipChange }: {
     finally { setBusy(false); await reload() }
   }
 
+  // ★★`hostId` 说的是**「选中的是哪台」**,不是「连上了没有」。两者当成一回事,就会出现
+  //  「行上写着『当前』、按钮写着『断开』,而它其实正在重连甚至已经放弃」——
+  //  用户 2026-09-17 原话:「我也不知道是不是还在重连,还是已经不连了」。
   const connectedId = status?.hostId ?? null
+  /** 真的连上了才算 `ready`。断线态必须**显式**,不能拿「选中」冒充「在线」。 */
+  const liveState = status?.state ?? null
+  const isReady = liveState?.status === 'ready'
 
   return (
     <div className="hosts-pane">
@@ -208,6 +214,24 @@ export function HostsPane({ hostChip, onHostChipChange }: {
                   <span className="host-tag">{h.relay ? '经中转' : h.kind === 'ssh' ? 'SSH 隧道' : '直接连接'}</span>
                   {connectedId === h.id && <span className="host-tag">当前</span>}
                 </div>
+                {/* ★★★选中这台时,把**真实状态**写出来。原来这一行什么都没有,于是断线、重连中、
+                    已放弃三种情况在界面上长得一模一样。
+                    ★文案走 `describeHostState` 那一份(设置屏 / 主机屏共用同一个实现)——
+                     退避秒数、第几次重试、失败原因都只有那边会跟着协议改,各写一份必然漂移。 */}
+                {/* ★★class 不用模板拼。`hostsClassNames.test.ts` 那条守卫只认字面量 ——
+                    拼出来的名字它没法证明「每一个都真有 CSS」,所以一律判红,而它判得对:
+                    本仓库栽过「CSS 假 class」那类静默失败(样式压根没生效,界面看着只是『淡了点』)。
+                    显式映射既让守卫看得懂,也逼我把每个分支的样式都真的写出来。 */}
+                {connectedId === h.id && liveState && liveState.status !== 'ready' && (
+                  <div className={liveState.status === 'failed' ? 'host-state s-failed'
+                    : liveState.status === 'closed' ? 'host-state s-closed' : 'host-state'}>
+                    {describeHostState(liveState).text}
+                    {liveState.status === 'failed' && (
+                      <button className="set-btn" disabled={busy}
+                        onClick={() => run(() => window.forge.hostsConnect(h.id))}>重新连接</button>
+                    )}
+                  </div>
+                )}
                 <div className="addr">
                   {h.relay
                     // 走中转时**拨的是中转**,`address` 只是「这台机器以后出现在局域网里时的地址」
@@ -217,7 +241,8 @@ export function HostsPane({ hostChip, onHostChipChange }: {
                 </div>
               </div>
               <div className="acts">
-                {connectedId === h.id
+                {/* ★按钮跟着**真实状态**走,不跟着「选中」走:没连上却写「断开」,是在告诉人一件不成立的事。 */}
+                {connectedId === h.id && isReady
                   ? <button className="set-btn" disabled={busy} onClick={() => run(() => window.forge.hostsDisconnect())}>断开</button>
                   : <button className="set-btn primary" disabled={busy} onClick={() => run(() => window.forge.hostsConnect(h.id))}>连接</button>}
                 <button className="set-btn" disabled={busy} onClick={() => openDraft({ ...h })}>编辑</button>

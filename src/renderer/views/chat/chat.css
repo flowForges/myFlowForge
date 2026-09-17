@@ -1050,3 +1050,10 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 @media (prefers-reduced-motion: reduce) {
   .sp-spokes line, .sp-orbit circle { animation: none; opacity: .55; }
 }
+
+/* 「历史还在路上」那一行。★只在等服务端回来时出现 —— 空白和「本来就没消息」长得一样,
+   而走中转时那个往返有两秒,分不清的代价就是人以为记录丢了(2026-09-17 真机)。 */
+.chat-loading {
+  display: flex; align-items: center; gap: 8px;
+  padding: 18px 2px; font-size: 12.5px; color: var(--muted);
+}
