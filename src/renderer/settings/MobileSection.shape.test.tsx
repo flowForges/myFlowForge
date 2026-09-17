@@ -23,7 +23,7 @@ const mount = async () => {
     setSettings: vi.fn(async () => {}),
   }
   render(<MobileSection />)
-  await waitFor(() => expect(screen.getByText('让手机连进来')).toBeTruthy())
+  await waitFor(() => expect(screen.getByText('让设备连进来')).toBeTruthy())
 }
 
 beforeEach(() => vi.clearAllMocks())
@@ -65,7 +65,7 @@ describe('这一屏默认摆出来多少东西', () => {
   it('★这一屏只管「连进来」这件事:两个开关,推送不在这儿', async () => {
     await mount()
     const toggles = [...document.querySelectorAll('button.toggle')].filter((e) => !e.closest('details'))
-    expect(toggles.map((e) => e.getAttribute('aria-label'))).toEqual(['让手机连进来', '出门也能连'])
+    expect(toggles.map((e) => e.getAttribute('aria-label'))).toEqual(['让设备连进来', '出门也能连'])
   })
 
   it('★推送的任何痕迹都不许留在这一屏 —— 留一半比整块留着更难找', async () => {
@@ -102,7 +102,7 @@ describe('这一屏默认摆出来多少东西', () => {
     await mount()
     const outside = (sel: string) =>
       [...document.querySelectorAll(sel)].some((e) => !e.closest('details'))
-    expect(outside('[aria-label="让手机连进来"]')).toBe(true)
+    expect(outside('[aria-label="让设备连进来"]')).toBe(true)
     expect(
       [...document.querySelectorAll('button')].some(
         (b) => b.textContent === '显示配对二维码' && !b.closest('details'),

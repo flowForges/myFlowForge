@@ -156,7 +156,7 @@ const NAV: NavEntry[] = [
     //  ★两个标签必须**成对读**才有效 ——「别人连我」/「我连别人」摆在一起,方向一眼就分得开;
     //   单独改一个就白改了。key 不动:它进了配置和路由,改名是纯文案的事。
     key: 'phone',
-    label: '别人连我',
+    label: '共享本机',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="7" y="2.5" width="10" height="19" rx="2.2" />
@@ -166,7 +166,7 @@ const NAV: NavEntry[] = [
   },
   {
     key: 'hosts',
-    label: '我连别人',
+    label: '远程主机',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
         <rect x="3" y="4" width="18" height="7" rx="1.6" />

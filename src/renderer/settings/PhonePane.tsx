@@ -31,7 +31,7 @@ export function PhonePane() {
         <p className="set-desc">
           手机、或另一台电脑,连到<b>这台电脑</b>。在这里出配对码,把码给对方。
         </p>
-        <p className="set-desc">反过来(这台去连别人)?见「我连别人」。</p>
+        <p className="set-desc">反过来(这台去连别人)?见「远程主机」。</p>
         <MobileSection />
       </div>
     </div>

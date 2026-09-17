@@ -370,7 +370,10 @@ const api = {
   // ── 中转(第三期)。和上面那个不是二选一:局域网网关 =「同一个 wifi 里连得上」,
   //    中转 =「NAT 后面也连得上」。同时开着是正常的,同一个二维码两条路都能用。
   relayStatus: (): Promise<import('../main/host/relayController').RelayStatusView> => ipcRenderer.invoke(CH.relayStatus),
-  relayApply: (cfg: import('@shared/types').Settings['relay']): Promise<import('../main/host/relayController').RelayStatusView> =>
+  // ★★参数里**不含 `urlHistory`**:历史由主进程在落盘那一处自己记(见 main/index.ts 的 relayApply)。
+  //  渲染层能写历史的话,就有了第二个写入点 —— 而两个写入点迟早会不一致,
+  //  表现成「我明明填过,怎么下拉里没有」。类型上做不到,比靠约定可靠。
+  relayApply: (cfg: Omit<import('@shared/types').Settings['relay'], 'urlHistory'>): Promise<import('../main/host/relayController').RelayStatusView> =>
     ipcRenderer.invoke(CH.relayApply, cfg),
   /** 这台机器的长期身份公钥(base64)。★二维码里那个 `k`。 */
   relayIdentity: (): Promise<string> => ipcRenderer.invoke(CH.relayIdentity),

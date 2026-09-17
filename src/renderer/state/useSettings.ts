@@ -33,7 +33,7 @@ const DEFAULTS: Settings = {
   botBridge: { dingtalk: { enabled: false, clientId: '', clientSecret: '' }, telegram: { enabled: false, botToken: '' }, feishu: { enabled: false, appId: '', appSecret: '' }, verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} } },
   codexTransport: 'exec',
   mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
-  relay: { enabled: false, url: '' },
+  relay: { enabled: false, url: '', urlHistory: [] },
   push: { enabled: false, gate: true, done: false },
 }
 

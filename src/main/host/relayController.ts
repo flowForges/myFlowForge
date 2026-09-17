@@ -26,6 +26,11 @@ export type RelayStatusView = {
   publicKey: string
   /** 访问令牌。★和局域网那条路是**同一个** —— 一个二维码要在两条路上都能用。 */
   token: string
+  /**
+   * 用过的中转地址(最近的排最前),给地址框做下拉。
+   * ★★**只有地址,没有令牌** —— 见 `shared/remote/relayHistory.ts` 顶部那段。
+   */
+  urlHistory: string[]
 }
 
 export type RelayDeps = {
@@ -50,7 +55,7 @@ export function createRelayController(deps: {
   const table = daemonTable(deps.table)
 
   let handle: RelayHostHandle | null = null
-  let cur: RelayConfig = { enabled: false, url: '' }
+  let cur: RelayConfig = { enabled: false, url: '', urlHistory: [] }
   let lastError = ''
 
   const status = (): RelayStatusView => ({
@@ -62,6 +67,7 @@ export function createRelayController(deps: {
     //  磁盘上就有了一把私钥 —— 可以接受;`readIdentity` 的注释解释了为什么不更早生成。
     publicKey: toBase64(readIdentity().publicKey),
     token: ensureToken(),
+    urlHistory: cur.urlHistory ?? [],
   })
 
   const announce = () => deps.onStatus?.(status())

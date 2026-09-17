@@ -49,6 +49,7 @@ import { hasAllBuiltinPets, mergeBuiltinPets, isLegacyBundledPet } from '@shared
 import { perfSpan } from './perf/perfSpans'
 import { EventLoopMonitor } from './perf/eventLoopMonitor'
 import { StallReporter } from './perf/stallReporter'
+import { rememberRelayUrl } from '@shared/remote/relayHistory'
 
 // Start the centralized debug log as early as possible so even startup failures are persisted to
 // ~/.myFlowForge/logs/app.log and exportable from Settings · 调试日志.
@@ -790,10 +791,16 @@ app.whenReady().then(() => {
   void relayCtl.apply(readSettings().relay)
   ipcMain.handle(CH.relayStatus, () => relayCtl.status())
   ipcMain.handle(CH.relayIdentity, () => relayCtl.publicKey())
-  ipcMain.handle(CH.relayApply, async (_e, cfg: Settings['relay']) => {
+  ipcMain.handle(CH.relayApply, async (_e, cfg: Omit<Settings['relay'], 'urlHistory'>) => {
     // 先落盘再起 —— 起失败时开关要能弹回去,而那要靠 status().detail,不是靠设置里的 enabled。
-    writeSettings({ ...readSettings(), relay: cfg })
-    return relayCtl.apply(cfg)
+    const prev = readSettings()
+    // ★★把这次用的地址记进历史,好让下次重装系统之后能从下拉里选(用户 2026-09-17 提的)。
+    //  ★历史**只有地址**,令牌一个字节都不进去 —— 见 `shared/remote/relayHistory.ts` 顶部。
+    //  ★由**主进程**在落盘这一处记,不在界面上记:界面有好几条路能改这个值(输入框失焦、
+    //   开关、以后可能的导入),各记各的迟早漏一条,而漏掉的那条表现为「我明明填过怎么下拉里没有」。
+    const relay = { ...cfg, urlHistory: rememberRelayUrl(prev.relay?.urlHistory ?? [], cfg.url) }
+    writeSettings({ ...prev, relay })
+    return relayCtl.apply(relay)
   })
 
   ipcMain.handle(CH.hostsExport, (_e, includeTokens: boolean) => exportHosts({ includeTokens: !!includeTokens }))

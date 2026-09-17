@@ -426,13 +426,25 @@ export const defaultMobileGateway = (): MobileGateway => ({ enabled: false, host
  * ★直连那条路(公网 IP / Tailscale / frp / 端口转发)和这条**平级**,不是降级方案:
  *  两条路走的是同一套加密,安全性等同,直连还少一跳。界面上别把直连藏进高级设置。
  */
+/** 地址历史最多记几条。★有上限,否则手滑输错的地址会永远留在下拉里。 */
+export const RELAY_URL_HISTORY_MAX = 8
+
 export const RelaySchema = z.object({
   enabled: z.boolean().catch(false).default(false),
   /** `ws://` 或 `wss://`。★生产上该用 wss —— 不是为了内容(内容本来就是密文),是别让沿途的人知道你在跟谁通信。 */
   url: z.string().catch('').default(''),
+  /**
+   * 用过的中转地址,最近用的排在最前。界面上做成下拉,省得每次重装系统都要重敲一遍。
+   *
+   * ★★★**只存地址,绝不存令牌。** 地址是公开信息(它就写在二维码里给人扫),
+   *  令牌不是 —— 令牌能起 agent、替你答权限门、开终端。一份"为了方便"的历史记录
+   *  把令牌一起留在盘上,是把便利换成了一个谁拿到这台机器就能用的后门。
+   * ★上限 `RELAY_URL_HISTORY_MAX`:没有上限的话,手滑敲错的地址会永远留在下拉里。
+   */
+  urlHistory: z.array(z.string()).catch([]).default([]),
 })
 export type RelayConfig = z.infer<typeof RelaySchema>
-export const defaultRelay = (): RelayConfig => ({ enabled: false, url: '' })
+export const defaultRelay = (): RelayConfig => ({ enabled: false, url: '', urlHistory: [] })
 
 /**
  * 推送(第三期收尾)。**这台机器**要不要在门升起/跑完时往已登记的手机上发一条推送。

@@ -27,7 +27,7 @@ export function MobileSection() {
    *  而 `MobileStatus` 说的是"局域网网关现在什么样"。塞进去的话,一个只开中转、
    *  没开局域网网关的人就拿不到公钥了 —— 而他恰恰是最需要那个二维码的人。
    */
-  const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean; token: string } | null>(null)
+  const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean; token: string; urlHistory?: string[] } | null>(null)
   /** 中转连接现在什么样(连上了 / 在重试 / 起不来)。★开关拨过去却什么都没发生,是最难查的一类。 */
   const [relayDetail, setRelayDetail] = useState<
     { status: string; error?: string; peers?: number; devices?: { cid: string; label: string; since: number }[] } | null
@@ -140,14 +140,22 @@ export function MobileSection() {
 
   return (
     <>
+      {/* ★★2026-09-17 分节。这一页原来是「开关 → 开关 → …… → 高级」一路平铺,而「高级」里装的
+          全是**上面第一个开关的参数**(端口、绑哪个地址、手填地址令牌),它却被摆在最底下、
+          跨过了整个中转节 —— 于是读起来像第三个并列项。用户原话:「这个让手机连进来和底部的
+          高级 区别在哪?底部的这个高级是干啥的?」。困惑是这个结构造成的,不是他没看懂。
+          ★现在:局域网 / 远程连接 各自成节,高级收进它所属的那一节里。 */}
+      <h5 className="hosts-sec">局域网</h5>
       <div className="set-row">
         <div className="info">
-          <div className="t">让手机连进来</div>
-          <div className="d">同一个 wifi 里,手机直接连这台电脑。</div>
+          {/* ★不写「手机」:另一台电脑连进来走的也是这条路(它在自己的「远程主机」里粘的,
+              正是这儿出的配对码)。名字里只有手机,人就会跑去另一页找。 */}
+          <div className="t">让设备连进来</div>
+          <div className="d">同一个 wifi 里,手机或另一台电脑直接连这台。</div>
         </div>
         <button
           className={`toggle${st.running ? ' on' : ''}`}
-          aria-label="让手机连进来"
+          aria-label="让设备连进来"
           disabled={busy}
           onClick={() => void apply({ enabled: !st.running, host, port: portNum })}
         />
@@ -179,6 +187,101 @@ export function MobileSection() {
            设计文档决策 6 说得很明确:直连(公网 IP / Tailscale / frp / 端口转发)
            和中转是**平级**的两条路 —— 两条走同一套端到端加密,直连还少一跳。
            把直连藏起来会让人以为"必须先部署一台中转才能出门用",而那不是真的。 */}
+      {/* ★★2026-09-17 这一块**搬到了「远程连接」之前** —— 它装的全是上面局域网那个开关的
+          参数(端口、绑哪个地址、手填地址令牌),所以它属于局域网那一节。原来它浮在整页最底下、
+          跨过了整个中转节,读起来像第三个并列项(用户:「这个让手机连进来和底部的高级 区别在哪?」)。 */}
+      {/* ── 高级 ──────────────────────────────────────────────────────────
+          ★★2026-09-02 用户原话:「又乱又杂,还有很多文案,都不知道怎么配置了」。
+           这一节原来是**平铺**的:主开关、局域网可见、端口、中转、地址、令牌、二维码、
+           推送……七个开关四个输入框二十多段说明排成一列,而其中真正要**每次**碰的只有两样:
+           打开那个开关、扫那枚码。剩下的全是「配错了或者出问题时才来动」的东西。
+          ★所以它们收进这里,**一个都没删** —— 端口被占、只想绑回环、令牌泄了要换、
+           相机坏了要手填,这些路都还在,只是不再挡在正常人的路上。
+          ★`<details>` 而不是自己写折叠:它自带键盘可达和无障碍语义,而且**默认收起**
+           这件事由浏览器保证,不靠我们的初始 state 写对。 */}
+      <details className="hosts-adv">
+        <summary>高级 —— 端口、绑定、令牌、手填地址</summary>
+
+        <div className="set-row">
+          <div className="info">
+            <div className="t">局域网可见</div>
+            <div className="d">关掉只绑回环(留给 SSH 隧道)。开着<b>强制令牌</b>。</div>
+          </div>
+          <button
+            className={`toggle${lan ? ' on' : ''}`}
+            aria-label="局域网可见"
+            disabled={busy}
+            onClick={() => {
+              const next = !lan
+              setLan(next)
+              if (st.running) void apply({ enabled: true, host: next ? '0.0.0.0' : '127.0.0.1', port: portNum })
+            }}
+          />
+        </div>
+
+        <div className="proj-field hosts-port">
+          <label htmlFor="mobPort">端口</label>
+          <input
+            id="mobPort"
+            value={port}
+            inputMode="numeric"
+            onChange={(e) => setPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
+            onBlur={() => { if (st.running) void apply({ enabled: true, host, port: portNum }) }}
+          />
+        </div>
+
+        {st.running && (
+        <>
+        <p className="set-desc">在手机上「添加主机」填这两样:</p>
+
+        <div className="proj-field">
+          <label htmlFor="mobAddr">地址</label>
+          <div className="hosts-inline">
+            <input id="mobAddr" readOnly value={addr} onFocus={(e) => e.currentTarget.select()} />
+            <button className="set-btn" onClick={() => copy('addr', addr)}>
+              {copied === 'addr' ? '已复制' : '复制'}
+            </button>
+          </div>
+        </div>
+
+        {st.addresses.length > 1 && (
+          <p className="set-desc">
+            这台机器还有别的地址:{st.addresses.slice(1).map((a) => `${a}:${st.port}`).join('  ')}
+            {' '}—— 用和手机<b>在同一个网段</b>的那个。
+          </p>
+        )}
+
+        {st.token && (
+          <div className="proj-field">
+            <label htmlFor="mobToken">访问令牌</label>
+            <div className="hosts-inline">
+              <input id="mobToken" readOnly type={showToken ? 'text' : 'password'} value={st.token} onFocus={(e) => e.currentTarget.select()} />
+              <button className="set-btn" onClick={() => setShowToken((v) => !v)}>{showToken ? '隐藏' : '显示'}</button>
+              <button className="set-btn" onClick={() => copy('token', st.token)}>
+                {copied === 'token' ? '已复制' : '复制'}
+              </button>
+            </div>
+          </div>
+        )}
+        </>
+        )}
+
+        {/* ★这颗和「局域网可见」放一起:换令牌之后,已经配好的手机全部要重新扫码。 */}
+        {/* ★仍然挂在 `st.running` 上,**不是**疏漏:`mobileRegenToken` 换的是这台机器那把
+            共用令牌,而中转那条连接是**起的时候**就把旧令牌捧在手里的(`relayController` 把
+            `ensureToken()` 传给了 `startRelayHost`)—— 换完之后中转那头仍旧认旧的,
+            直到中转重连一次。做成「点了要么没生效、要么把手机踢下线」的按钮不如先不摆。 */}
+        {st.running && st.token && (
+          <div className="hosts-conn-foot">
+            <button className="set-btn danger" disabled={busy} onClick={() => void window.forge.mobileRegenToken().then(setSt)}>
+              换一把令牌
+            </button>
+            <span className="set-desc">令牌泄了就换 —— 换完已配好的手机要重新填一次。</span>
+          </div>
+        )}
+      </details>
+
+      <h5 className="hosts-sec">远程连接</h5>
       <div className="set-row">
         <div className="info">
           <div className="t">出门也能连(中转)</div>
@@ -196,8 +299,15 @@ export function MobileSection() {
       <div className="proj-field">
         <label htmlFor="relayUrl">中转地址</label>
         <div className="hosts-inline">
+          {/* ★★用过的地址记下来,做成下拉。用户原话:「每次我重新安装系统(升级),这个配置又没有了,
+              还得再输入一遍,如果我有两个中转+一个 cloudflare,这地方下拉就是三个」。
+              ★用原生 `<datalist>` 而不是自造下拉:它自带键盘可达和无障碍语义,
+               而且**仍然能自由输入** —— 这一格既要能选老的,也要能填新的。
+              ★★历史里**只有地址,没有令牌**(见 `shared/remote/relayHistory.ts`):
+               地址是公开信息(它就印在配对二维码里),令牌能起 agent、替你答门、开终端。 */}
           <input
             id="relayUrl"
+            list="relayUrlHistory"
             value={relayUrl}
             placeholder="wss://relay.你的域名/"
             onChange={(e) => setRelayUrl(e.target.value)}
@@ -207,6 +317,9 @@ export function MobileSection() {
               }
             }}
           />
+          <datalist id="relayUrlHistory">
+            {(relay?.urlHistory ?? []).map((u: string) => <option key={u} value={u} />)}
+          </datalist>
         </div>
       </div>
       )}
@@ -309,96 +422,6 @@ export function MobileSection() {
       )}
 
 
-      {/* ── 高级 ──────────────────────────────────────────────────────────
-          ★★2026-09-02 用户原话:「又乱又杂,还有很多文案,都不知道怎么配置了」。
-           这一节原来是**平铺**的:主开关、局域网可见、端口、中转、地址、令牌、二维码、
-           推送……七个开关四个输入框二十多段说明排成一列,而其中真正要**每次**碰的只有两样:
-           打开那个开关、扫那枚码。剩下的全是「配错了或者出问题时才来动」的东西。
-          ★所以它们收进这里,**一个都没删** —— 端口被占、只想绑回环、令牌泄了要换、
-           相机坏了要手填,这些路都还在,只是不再挡在正常人的路上。
-          ★`<details>` 而不是自己写折叠:它自带键盘可达和无障碍语义,而且**默认收起**
-           这件事由浏览器保证,不靠我们的初始 state 写对。 */}
-      <details className="hosts-adv">
-        <summary>高级 —— 端口、绑定、令牌、手填地址</summary>
-
-        <div className="set-row">
-          <div className="info">
-            <div className="t">局域网可见</div>
-            <div className="d">关掉只绑回环(留给 SSH 隧道)。开着<b>强制令牌</b>。</div>
-          </div>
-          <button
-            className={`toggle${lan ? ' on' : ''}`}
-            aria-label="局域网可见"
-            disabled={busy}
-            onClick={() => {
-              const next = !lan
-              setLan(next)
-              if (st.running) void apply({ enabled: true, host: next ? '0.0.0.0' : '127.0.0.1', port: portNum })
-            }}
-          />
-        </div>
-
-        <div className="proj-field hosts-port">
-          <label htmlFor="mobPort">端口</label>
-          <input
-            id="mobPort"
-            value={port}
-            inputMode="numeric"
-            onChange={(e) => setPort(e.target.value.replace(/\D/g, '').slice(0, 5))}
-            onBlur={() => { if (st.running) void apply({ enabled: true, host, port: portNum }) }}
-          />
-        </div>
-
-        {st.running && (
-        <>
-        <p className="set-desc">在手机上「添加主机」填这两样:</p>
-
-        <div className="proj-field">
-          <label htmlFor="mobAddr">地址</label>
-          <div className="hosts-inline">
-            <input id="mobAddr" readOnly value={addr} onFocus={(e) => e.currentTarget.select()} />
-            <button className="set-btn" onClick={() => copy('addr', addr)}>
-              {copied === 'addr' ? '已复制' : '复制'}
-            </button>
-          </div>
-        </div>
-
-        {st.addresses.length > 1 && (
-          <p className="set-desc">
-            这台机器还有别的地址:{st.addresses.slice(1).map((a) => `${a}:${st.port}`).join('  ')}
-            {' '}—— 用和手机<b>在同一个网段</b>的那个。
-          </p>
-        )}
-
-        {st.token && (
-          <div className="proj-field">
-            <label htmlFor="mobToken">访问令牌</label>
-            <div className="hosts-inline">
-              <input id="mobToken" readOnly type={showToken ? 'text' : 'password'} value={st.token} onFocus={(e) => e.currentTarget.select()} />
-              <button className="set-btn" onClick={() => setShowToken((v) => !v)}>{showToken ? '隐藏' : '显示'}</button>
-              <button className="set-btn" onClick={() => copy('token', st.token)}>
-                {copied === 'token' ? '已复制' : '复制'}
-              </button>
-            </div>
-          </div>
-        )}
-        </>
-        )}
-
-        {/* ★这颗和「局域网可见」放一起:换令牌之后,已经配好的手机全部要重新扫码。 */}
-        {/* ★仍然挂在 `st.running` 上,**不是**疏漏:`mobileRegenToken` 换的是这台机器那把
-            共用令牌,而中转那条连接是**起的时候**就把旧令牌捧在手里的(`relayController` 把
-            `ensureToken()` 传给了 `startRelayHost`)—— 换完之后中转那头仍旧认旧的,
-            直到中转重连一次。做成「点了要么没生效、要么把手机踢下线」的按钮不如先不摆。 */}
-        {st.running && st.token && (
-          <div className="hosts-conn-foot">
-            <button className="set-btn danger" disabled={busy} onClick={() => void window.forge.mobileRegenToken().then(setSt)}>
-              换一把令牌
-            </button>
-            <span className="set-desc">令牌泄了就换 —— 换完已配好的手机要重新填一次。</span>
-          </div>
-        )}
-      </details>
 
     </>
   )

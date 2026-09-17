@@ -178,7 +178,7 @@ export function HostsPane({ hostChip, onHostChipChange }: {
              总共 ≤60 字、每段 ≤40 字)。那条刹车挡住过我想加的两段解释,它挡得对:
              用户原话是「设置里别写这么多文字,一般没人看」。方向靠**导航上那对标签**说清,
              这里只留一句指路。 */}
-        <p className="set-desc">反过来(让别人连进这台)?见「别人连我」。</p>
+        <p className="set-desc">反过来(让别人连进这台)?见「共享本机」。</p>
         <div className="hosts-list">
           {hosts.length === 0 && (
             <div className="hosts-empty">
@@ -433,7 +433,7 @@ export function HostsPane({ hostChip, onHostChipChange }: {
            设置页不该给别处的控件写说明书,那枚按钮自己有 tooltip。
           ★`<details>` 而不是自己写折叠:键盘可达和「默认收起」都由浏览器保证。 */}
       <details className="hosts-adv">
-        <summary>高级 —— 按钮显示方式、在设备之间搬清单</summary>
+        <summary>高级 —— 按钮显示方式、导出/导入清单</summary>
 
         {/* ★★这是**那枚按钮**的设置,不是某一台主机的设置。旧版把它放在每台主机的编辑表单里,
             后果有两个,都是用户当场撞上的:① 同一枚按钮切一台主机就换一副长相;
@@ -452,11 +452,9 @@ export function HostsPane({ hostChip, onHostChipChange }: {
             ]}
           />
         </div>
-        <p className="set-desc">一份、全局,本机也照办。</p>
 
         <div className="hosts-adv-sep" />
 
-        <p className="set-desc">清单只存在这台设备上。换机器时导出再导入。</p>
         {!ioOpen && <div className="hosts-io">
           <button className="set-btn" onClick={async () => { setIoText(await window.forge.hostsExport(false)); setIoOpen(true) }}>导出(不含令牌)</button>
           <button className="set-btn" onClick={async () => { setIoText(await window.forge.hostsExport(true)); setIoOpen(true) }}>导出(含令牌)</button>

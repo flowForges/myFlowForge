@@ -144,3 +144,15 @@
 }
 .doc-link:hover { text-decoration: underline; }
 .doc-link svg { width: 12px; height: 12px; opacity: .8; }
+
+/* 「共享本机」里的分节标题(局域网 / 远程连接)。
+   ★2026-09-17 加:这一页原来是开关一路平铺,而「高级」里装的全是第一个开关的参数,
+    却摆在整页最底下 —— 读起来像第三个并列项。分节把「谁属于谁」画了出来。 */
+.hosts-sec {
+  margin: 20px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--muted);
+}
+.hosts-sec:first-child { margin-top: 4px; }

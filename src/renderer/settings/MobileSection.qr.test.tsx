@@ -51,7 +51,7 @@ const mount = async (status: unknown, relay?: Partial<RelayView>) => {
     } : {}),
   }
   render(<MobileSection />)
-  await waitFor(() => expect(screen.getByText('让手机连进来')).toBeTruthy())
+  await waitFor(() => expect(screen.getByText('让设备连进来')).toBeTruthy())
   // 中转状态是第二个异步来源,等它也落地 —— 不等的话「只开中转」那几条会在 relay 还是 null 时断言。
   if (r?.enabled) await waitFor(() => expect(document.querySelector('button.toggle.on[aria-label="出门也能连"]')).toBeTruthy())
 }
@@ -105,7 +105,7 @@ describe('配对二维码', () => {
     await mount(old)
     await act(async () => { fireEvent.click(screen.getByText('显示配对二维码')) })
     expect(document.querySelector('svg.qr')).toBeTruthy()
-    expect(screen.getByText('让手机连进来')).toBeTruthy()
+    expect(screen.getByText('让设备连进来')).toBeTruthy()
   })
 
   it('★网关和中转**都**关着,才是真的没码可扫', async () => {
