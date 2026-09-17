@@ -1,6 +1,7 @@
 import { isClientEvent, routeOf } from '../ipc/channelRouting'
 import { CH } from '../ipc/channels'
 import { connectRemote, type RemoteClient, type RemoteState } from './remoteClient'
+import type { HopInput } from '@shared/remote/hopDiagnosis'
 import type { InvokeCtx, MethodTable } from '../ipc/invokeCtx'
 import type { RemoteHost } from './hostStore'
 import { readSettings } from '../config/store'
@@ -15,6 +16,11 @@ export type HostStatus = {
   /** 标识与显示方式(本机时不给) */
   icon?: string
   display?: 'icon' | 'name' | 'both'
+  /**
+   * 链路分段遥测的**原始事实**。渲染层拿它喂 `@shared/remote/hopDiagnosis` 得出「断在哪一跳」。
+   * ★这里刻意只搬事实、不搬结论 —— 结论在那个纯函数里一处判定,两端共用同一份。
+   */
+  hops?: HopInput
 }
 
 export type HostRouterDeps = {
@@ -55,6 +61,7 @@ export function createHostRouter(deps: HostRouterDeps) {
         hostId: current.id, label: current.label, state: remoteState,
         methods: remoteState.status === 'ready' ? [...remoteState.methods] : [],
         icon: current.icon, display: current.display,
+        hops: remote?.hops(),
       }
     : { hostId: null, label: '本机', state: { status: 'local' }, methods: localMethods }
 

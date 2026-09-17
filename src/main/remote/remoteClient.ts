@@ -3,7 +3,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent'
 import { decodeFrame, encodeFrame, PROTOCOL_VERSION } from '@shared/remote/protocol'
 import { clientE2ELink, type E2ELink } from '@shared/remote/e2eChannel'
 import type { Channel } from '@shared/remote/channel'
-import { asRelayStatus, joinFrame } from '@shared/remote/relayWire'
+import { asRelayStatus, joinFrame, PING, PONG } from '@shared/remote/relayWire'
 import { fromBase64 } from '@shared/remote/base64'
 import { pickProxy, proxyUsable } from './wsProxy'
 
@@ -19,6 +19,11 @@ export type RemoteClient = {
   invoke(ch: string, args: unknown[]): Promise<unknown>
   state(): RemoteState
   onState(cb: (s: RemoteState) => void): () => void
+  /**
+   * 链路遥测的**原始事实**(不是结论)—— 喂给 `@shared/remote/hopDiagnosis`。
+   * ★这里只报「发生了什么」,「断在哪一跳」由那个纯函数一处判定,两端共用。
+   */
+  hops(): { viaRelay: boolean; relaySocketOpen: boolean; relayStatus?: 'waiting' | 'peer-online' | 'peer-offline' | 'error'; peerReady: boolean; relayRttMs?: number; peerRttMs?: number }
   close(): Promise<void>
 }
 
@@ -85,7 +90,44 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
    */
   let sendFrame: (o: unknown) => void = () => { throw new Error('还没连上') }
 
-  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+  const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; at: number }>()
+
+  /**
+   * 链路遥测 —— 「断在哪一跳」和「每跳多快」要用的原始事实。
+   *
+   * ★★★这里只**记录发生了什么**,不下结论。「A↔中转 通不通、中转↔B 通不通」那套判断
+   *  收在 `@shared/remote/hopDiagnosis`(纯函数、有测试),两边共用同一份。
+   *  在这里顺手判一遍,就等于有了第二份判据,而两份判据迟早会在某个边角上不一致。
+   * ★★RT **搭在真实 RPC 上**,不额外发包:链路诊断本身成为链路负担是荒谬的。
+   *  唯一的例外是 A→中转 那一跳 —— 它没有别的东西可搭,只能用中转自带的 PING/PONG。
+   */
+  const hops = {
+    relaySocketOpen: false,
+    relayStatus: undefined as 'waiting' | 'peer-online' | 'peer-offline' | 'error' | undefined,
+    relayRttMs: undefined as number | undefined,
+    peerRttMs: undefined as number | undefined,
+  }
+  let relayPingAt = 0
+  let relayPingTimer: ReturnType<typeof setInterval> | null = null
+  const stopRelayPing = () => { if (relayPingTimer) { clearInterval(relayPingTimer); relayPingTimer = null } }
+  /**
+   * A→中转 那一跳的 RT 采样。★**只在走中转时开**:直连没有这一跳,发了也没人应。
+   *
+   * ★★发的是中转自己的 `relay-ping`,它由**中转直接回**、不经过对面 —— 所以量到的确实是第一跳。
+   *  (这也是为什么这一跳必须单独发包:它没有别的真实往返可以搭,而其余两跳都有。)
+   * ★间隔取 15 秒:够快到能看出链路变差,又不至于让「诊断」自己变成链路负担。
+   * ★上一次没回来就**不再发**(`relayPingAt` 非 0)—— 连着堆 ping 只会让数字更难看懂。
+   */
+  const startRelayPing = (sock: WebSocket) => {
+    stopRelayPing()
+    if (!relayUrl) return
+    relayPingTimer = setInterval(() => {
+      if (ws !== sock || sock.readyState !== sock.OPEN) return stopRelayPing()
+      if (relayPingAt) return
+      relayPingAt = Date.now()
+      try { sock.send(PING) } catch { relayPingAt = 0 }
+    }, 15_000)
+  }
   const stateWaiters = new Set<(s: RemoteState) => void>()
 
   const setState = (s: RemoteState) => {
@@ -222,15 +264,27 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
       }
       log(`已连上 ${opts.url}`)
       startE2E()
+      startRelayPing(sock)
     })
 
     sock.on('message', (raw, isBinary) => {
+      // ★收到任何一个字节 = 到中转这条腿是通的(直连时 relayUrl 为空,这一跳本来就不存在)。
+      if (relayUrl) hops.relaySocketOpen = true
       const text = isBinary ? (raw as Buffer).toString('utf8') : String(raw)
+
+      // ★中转的 PONG:这是 A→中转 那一跳**唯一**能测的东西(它没有别的往返可搭)。
+      //  ★它由中转**直接**回,不经过对面 —— 所以它量的确实是第一跳,不含 B 的任何延迟。
+      if (relayUrl && text === PONG) {
+        if (relayPingAt) { hops.relayRttMs = Date.now() - relayPingAt; relayPingAt = 0 }
+        return
+      }
 
       // ── ① 中转自己的状态帧。★它不属于两端的对话,而且**只在中转模式下才可能出现**。
       if (relayUrl) {
         const st = asRelayStatus(text)
         if (st) {
+          // ★原样记下中转说了什么。**不在这儿下结论** —— 判断收在 hopDiagnosis 一处。
+          hops.relayStatus = st.status
           if (st.status === 'error') return fail(st.error || '中转拒绝了这次连接')
           if (st.status === 'peer-online') {
             if (!joined) { joined = true; log('对面在线,开始握手'); startE2E() }
@@ -297,6 +351,9 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
       if (f.t === 'evt') { opts.onEvent(f.ch, f.payload); return }
       if (f.t === 'res') {
         const p = pending.get(f.id)
+        // ★端到端 RT:搭在这次真实调用上。★只取**成功**那些 —— 失败的往返里可能包含
+        //  超时等待,把它算进时延会得到一个漂亮但假的数字。
+        if (p && f.ok) hops.peerRttMs = Date.now() - p.at
         if (!p) return                      // 迟到的响应(比如断线重连前发出的);丢掉即可
         pending.delete(f.id)
         if (f.ok) p.resolve(f.value); else p.reject(new Error(f.error))
@@ -306,6 +363,11 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
 
     sock.on('close', (code, reason) => {
       if (ws !== sock) return                // 已经被换掉的旧 socket,不管
+      stopRelayPing()
+      // ★断了就把遥测清掉。留着上一次的数字,界面上就是「已断开 · 32ms」—— 一个自相矛盾的格子。
+      hops.relaySocketOpen = false; hops.relayStatus = undefined
+      hops.relayRttMs = undefined; hops.peerRttMs = undefined
+      relayPingAt = 0
       // ★4410 = 中转替对面转达的「主动关掉这条逻辑连接」(关闭码在那一跳丢了,见 `sentAuth`)。
       //  还没 ready 就被这么关掉、而且刚发过令牌 —— 那就是令牌被拒了。用退避去刷它没有意义。
       const relayRejected = code === 4410 && sentAuth && state.status !== 'ready'
@@ -341,6 +403,16 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
   return {
     state: () => state,
     onState(cb) { stateWaiters.add(cb); return () => { stateWaiters.delete(cb) } },
+    hops: () => ({
+      viaRelay: !!relayUrl,
+      relaySocketOpen: hops.relaySocketOpen,
+      relayStatus: hops.relayStatus,
+      // ★「连上了」的判据只有一个:`ready`。别拿 joined / socket 开着冒充 ——
+      //  那正是「显示着在线其实早断了」的来源。
+      peerReady: state.status === 'ready',
+      relayRttMs: hops.relayRttMs,
+      peerRttMs: hops.peerRttMs,
+    }),
     async invoke(ch, args) {
       // 重连中的短暂空窗不该让调用直接失败,等一会儿再说。
       if (state.status !== 'ready') await waitReady()
@@ -348,13 +420,14 @@ export function connectRemote(opts: ConnectOpts): RemoteClient {
       if (!sock || sock.readyState !== sock.OPEN) throw new Error('连接不可用')
       const id = nextId++
       return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject })
+        pending.set(id, { resolve, reject, at: Date.now() })
         try { sendFrame({ t: 'req', id, ch, args }) }
         catch (e) { pending.delete(id); reject(e instanceof Error ? e : new Error(String(e))) }
       })
     },
     async close() {
       disposed = true
+      stopRelayPing()
       if (retryTimer) clearTimeout(retryTimer)
       rejectAllPending('连接已关闭')
       const sock = ws

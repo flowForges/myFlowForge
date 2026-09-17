@@ -53,6 +53,8 @@ export type HostStatusView = {
   label: string
   state: HostConnState
   methods: string[]
+  /** 链路分段遥测(走中转时才有意义)。喂给 `hopDiagnosis` 得出「断在哪一跳」。 */
+  hops?: import('./hopDiagnosis').HopInput
   /** 当前这台主机的标识与显示方式(本机时为默认值) */
   icon?: string
   display?: HostDisplay

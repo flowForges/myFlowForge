@@ -59,4 +59,10 @@ describe('主机设置里的 class 名都得真有对应的 CSS', () => {
     expect(has('toggle')).toBe(true)
     expect(has('proj-field')).toBe(true)
   })
+  it('★★推算出来的时延必须在界面上标明是推算的', () => {
+    // 「中转→对方」测不到(我们只能从这头发包),它是 端到端 − 到中转 算出来的。
+    // 把推算的数字画得和实测一样,是在编造精度 —— 而那正是这种诊断最容易骗人的地方。
+    const src = readFileSync(join(here, 'HostsPane.tsx'), 'utf8')
+    expect(src).toContain('推算值')
+  })
 })

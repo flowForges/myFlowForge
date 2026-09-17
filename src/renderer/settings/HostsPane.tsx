@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { diagnoseHops } from '@shared/remote/hopDiagnosis'
 import { describeHostState, type HostDisplay, type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
 import { parsePairingLink } from '@shared/remote/pairingLink'
@@ -222,6 +223,29 @@ export function HostsPane({ hostChip, onHostChipChange }: {
                     拼出来的名字它没法证明「每一个都真有 CSS」,所以一律判红,而它判得对:
                     本仓库栽过「CSS 假 class」那类静默失败(样式压根没生效,界面看着只是『淡了点』)。
                     显式映射既让守卫看得懂,也逼我把每个分支的样式都真的写出来。 */}
+                {/* ★★★分段链路:A(这台)→ 中转 → B(对面)。用户 2026-09-17 提的 ——
+                    「没连接成功,是 A 到中转服务器的问题 还是 中转服务器到 B 的问题」。
+                    ★这**不用猜**:中转协议本来就把答案发过来了(没 socket / waiting / peer-online),
+                     之前那些信息全被压成一句「连不上」。判据在 `hopDiagnosis`(纯函数 + 测试),
+                     这里只负责画 —— 界面上再判一遍就等于有了第二份判据,两份迟早会不一致。
+                    ★只在**走中转**且选中这台时画:直连只有一跳,画出来是废话。 */}
+                {connectedId === h.id && status?.hops?.viaRelay && (
+                  <div className="host-hops">
+                    {diagnoseHops(status.hops).map((hop, i) => (
+                      <span key={hop.label} className="hop">
+                        {i > 0 && <span className="hop-arrow">→</span>}
+                        <span className={hop.state === 'ok' ? 'hop-dot s-ok' : hop.state === 'bad' ? 'hop-dot s-bad' : 'hop-dot s-unknown'} />
+                        <span className="hop-name">{hop.label}</span>
+                        {/* ★没测到就不写 —— 空着比一个 0ms 诚实。 */}
+                        {hop.rttMs != null && <span className="hop-rtt">{hop.rttMs}ms</span>}
+                        {hop.note && <span className="hop-note">{hop.note}</span>}
+                      </span>
+                    ))}
+                    {/* ★「中转→对方」那段是**推算**的(端到端 − 到中转),必须说出来:
+                        把推算的数字画得和实测一样,是在编造精度。 */}
+                    <span className="hop-hint">后一段时延为推算值(端到端 − 到中转)</span>
+                  </div>
+                )}
                 {connectedId === h.id && liveState && liveState.status !== 'ready' && (
                   <div className={liveState.status === 'failed' ? 'host-state s-failed'
                     : liveState.status === 'closed' ? 'host-state s-closed' : 'host-state'}>
