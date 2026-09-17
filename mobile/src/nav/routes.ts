@@ -53,4 +53,5 @@ export const ROUTES = {
    */
   notifications: '/notifications',
   about: '/about',
+  storage: '/storage',
 } as const

@@ -87,7 +87,6 @@ export default function McpScreen() {
             {rows.filter((r) => r.caps.mcp).length === 0 ? (
               <Empty title="没有可看的" desc="这台主机上装着的 CLI 都没有 mcp 子命令。" />
             ) : null}
-            <Note>只读。要授权、要加服务器,去电脑端(聊天里打 /mcp,或者设置 → 代理)。</Note>
           </>
         )}
       </ScrollView>

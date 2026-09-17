@@ -32,7 +32,7 @@ export default function Notifications() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
-        <TopTitle title="通知" sub="跟着这台手机走" />
+        <TopTitle title="通知" />
       </TopBar>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 44 }}>

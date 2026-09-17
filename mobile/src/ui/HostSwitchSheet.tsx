@@ -80,7 +80,6 @@ export function HostSwitchSheet({
       ))}
       {/* ★这句话是上面「没连上的一律不画门徽章」的**说明**,不是客套话。
           没有它,一排干干净净的主机看起来就是「那几台都没事」—— 恰恰是我们没资格说的那句。 */}
-      <Note>别的主机上有没有门在等,只有连上去才知道 —— 这里不猜。长按一行可以改它的名字和图标。</Note>
       <View style={{ height: 4 }} />
       <Btn kind="ghost" block onPress={onAddHost}>
         ＋ 添加主机

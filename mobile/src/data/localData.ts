@@ -26,3 +26,44 @@ export async function clearLocalData(): Promise<string[]> {
   if (mine.length) await AsyncStorage.multiRemove(mine)
   return mine
 }
+
+/**
+ * UTF-8 字节数。★不用 `new Blob([s]).size`:RN 上 Blob 是 polyfill,而这里只是量个大小,
+ *  为一个数字引入一个平台差异不值当。这个实现在 node 下也能直接测。
+ */
+export function byteLength(s: string): number {
+  let n = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s.codePointAt(i)!
+    if (c < 0x80) n += 1
+    else if (c < 0x800) n += 2
+    else if (c < 0x10000) n += 3
+    else { n += 4; i++ }   // 代理对占两个 UTF-16 码元
+  }
+  return n
+}
+
+/** 这几个 key 各占多少字节。没存过的记 0 —— 「没占空间」和「这一项不存在」是两回事。 */
+export async function sizesOf(keys: readonly string[]): Promise<Record<string, number>> {
+  const pairs = await AsyncStorage.multiGet([...keys])
+  const out: Record<string, number> = {}
+  for (const k of keys) out[k] = 0
+  for (const [k, v] of pairs) if (v) out[k] = byteLength(v)
+  return out
+}
+
+/**
+ * 删掉**一项**本地数据(「缓存管理」里逐项删用的)。
+ *
+ * ★★为什么它必须住在这个文件里,而不是让那一屏自己调 AsyncStorage:
+ *  `storageKeys.test.ts` 那条守卫**只认字面量**,传变量一律判红 —— 而它判得对:
+ *  它没法静态证明一个变量以 `mff.` 开头。把调用收进来之后,那一屏不再 import AsyncStorage,
+ *  守卫没有东西要证明;而前缀这条不变式改由**运行时**在这里兑现。
+ * ★越界直接抛,不是静默忽略:传进来一个别的前缀,意味着调用方在删**不属于这个 app 的数据**。
+ */
+export async function removeLocalKey(key: string): Promise<void> {
+  if (!key.startsWith(LOCAL_PREFIX)) {
+    throw new Error(`拒绝删除 ${key} —— 不以 ${LOCAL_PREFIX} 开头,不属于这个 app 的命名空间`)
+  }
+  await AsyncStorage.removeItem(key)
+}

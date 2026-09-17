@@ -92,7 +92,7 @@ export default function Settings() {
       {/* ★2026-08-29:没有 `‹` 了 —— 这一屏现在是底部 tab 的一格,不是被推进来的次级屏。
           tab 没有「上一层」,留着箭头会变成一颗「点了会跳到别的 tab」的假返回键。 */}
       <TopBar>
-        <TopTitle title="设置" sub="跟着这台手机走" />
+        <TopTitle title="设置" />
       </TopBar>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 44 }}>
@@ -109,7 +109,7 @@ export default function Settings() {
              (「工作区」那一格里没有主机,首页顶栏那条横幅是快切不是管理)。 */}
         <Sec>连接</Sec>
         <List>
-          <Nav label="主机" sub="配对、切换、删除" onPress={() => router.push(ROUTES.hosts)} />
+          <Nav label="主机" onPress={() => router.push(ROUTES.hosts)} />
         </List>
 
         <Sec>外观</Sec>
@@ -117,12 +117,6 @@ export default function Settings() {
           <Pick label="主题" value={THEMES.find((t) => t.id === pref)?.label ?? ''} onPress={() => setThemeSheet(true)} />
           <Pick label="正文字号" value={TEXTS.find((t) => t.id === text)?.label ?? ''} onPress={() => setTextSheet(true)} />
         </List>
-        {/* ★★设计文档 §5.5.4:语音**不写代码**,系统键盘自带的听写现在就能用。
-            但「能用」和「知道能用」是两回事 —— app 里没有麦克风按钮,人只会以为手机端不能说话,
-            然后在通勤路上一个字一个字地戳。**这一句话就是这条功能的全部实现**,所以它减不掉,
-            只能减短。 */}
-        <Note>想说话就说 —— 系统键盘上那颗 🎤 在任何输入框里都能用。</Note>
-
         {/* ★★2026-08-31:这里原来是**四个开关 + 一颗测试键 + 两段说明**,整组已经搬进
             `app/notifications.tsx`。留在这儿的是一行入口。
             ★副标题说的是「进去能开什么」,不是「通知是什么」—— 一行入口要回答的是
@@ -131,8 +125,8 @@ export default function Settings() {
             而分组头是这一屏唯一的结构信号。行名保持「通知」,因为它要和目的地那一屏的标题对得上。 */}
         <Sec>提醒</Sec>
         <List>
-          <Nav label="通知" sub="门升起来、跑完了" onPress={() => router.push(ROUTES.notifications)} />
-          <Nav label="MCP 服务器" sub="主机上各 CLI 配了哪些、连上没有" onPress={() => router.push(ROUTES.mcp)} />
+          <Nav label="通知" onPress={() => router.push(ROUTES.notifications)} />
+          <Nav label="MCP 服务器" onPress={() => router.push(ROUTES.mcp)} />
         </List>
 
         {/* ★★「关于」是**一行,点进去是一屏**(`app/about.tsx`)。它原来是这儿的一组内联行:
@@ -144,35 +138,16 @@ export default function Settings() {
             某个功能整个置灰。这条因果只有三个数摆在一起才串得起来。 */}
         <Sec>关于</Sec>
         <List>
-          <Nav label="关于" sub="版本和方法数,连不上时先看这里" onPress={() => router.push(ROUTES.about)} />
+          <Nav label="关于" onPress={() => router.push(ROUTES.about)} />
         </List>
 
+        {/* ★★2026-09-17:这里原来是一颗红色的「清除本地数据」+ 一句说明。改成一行入口:
+            那颗按钮只有「全清」一个档位,而全清意味着重新扫码配对 —— 想把字号调回默认的人
+            不该被迫连主机一起删。全清仍然在,在那一屏的最底下。
+            ★这一行**不带副标题**:「缓存管理」四个字已经说完了,再加一句就是这一屏被清掉的那种噪音。 */}
         <Sec>这台手机</Sec>
-        {/* ★这句留着:它是那颗红按钮的**后果**,不是背景介绍。 */}
-        <Note>主机清单和令牌都存在这台手机上,清掉要重新扫码配对。</Note>
-
-        {/* ★设计文档 §7.2:danger 不与主动作相邻。这一段空白就是为了让手指够不着 ——
-            上面最近的一个可点的东西是「关于」那一行,中间还隔着一个分组头和一句说明。 */}
-        <View style={{ height: 24 }} />
         <List>
-          {/* ★提示就在按钮上面一行(和 add-host 同一个位置)。挪到页顶去的话,
-              点完按钮什么都没变、而唯一的说明在视野外 —— 那就是「点了没反应」。 */}
-          {wipeErr ? (
-            <View
-              style={{
-                padding: 11,
-                borderRadius: 12,
-                borderWidth: 1,
-                borderColor: c.permFullBorder,
-                backgroundColor: c.bg2,
-              }}
-            >
-              <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{wipeErr}</T>
-            </View>
-          ) : null}
-          <Btn kind="danger" block onPress={clear}>
-            清除本地数据
-          </Btn>
+          <Nav label="缓存管理" onPress={() => router.push(ROUTES.storage)} />
         </List>
       </ScrollView>
 
@@ -225,14 +200,20 @@ export default function Settings() {
  * ★这一屏现在有三行长这样(已归档 / 通知 / 关于),原来是各写一遍 12 行 JSX —— 抄第三遍的时候
  *  就该收起来了。收一处还有个附带好处:三行的字号、间距、那颗 › 的颜色永远一致。
  */
-function Nav({ label, sub, onPress }: { label: string; sub: string; onPress: () => void }) {
+/**
+ * 一行「名字 ›」。
+ *
+ * ★★2026-09-17 副标题**整个去掉了**,不是改成可选。用户原话:「通知底下的小字没啥用,
+ *  谁不知道通知是啥意思」「这都不像一个正常的 app」。
+ *  留成可选参数的话,下一行新入口照样会顺手写一句 —— 每一句单独看都「只是一句」,
+ *  而这一屏就是这么长回去的。**能写的地方没有了,才是真的去掉。**
+ * ★入口名字说不清去哪的时候,该改的是**名字**,不是在底下补一行解释。
+ */
+function Nav({ label, onPress }: { label: string; onPress: () => void }) {
   const c = useC()
   return (
     <Row onPress={onPress}>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <T style={{ fontSize: 15, color: c.fg }}>{label}</T>
-        <T style={{ fontSize: 12, color: c.muted, marginTop: 3 }}>{sub}</T>
-      </View>
+      <T style={{ flex: 1, fontSize: 15, color: c.fg }}>{label}</T>
       <T style={{ fontSize: 16, color: c.faint }}>›</T>
     </Row>
   )

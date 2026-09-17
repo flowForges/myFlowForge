@@ -58,6 +58,15 @@ function keysIn(src: string): { key?: string; expr: string }[] {
       const decl = new RegExp(`\\bconst\\s+${expr}\\s*=\\s*(['"\`])([^'"\`$]*)\\1`).exec(src)
       if (decl) { found.push({ key: decl[2], expr }); continue }
     }
+    // ★★**运行时守卫**算数。有些 key 只能是变量(「缓存管理」要按表逐项删),静态证不了;
+    //  但如果同一个文件里对**这个标识符**写了 `if (!X.startsWith(LOCAL_PREFIX)) throw`,
+    //  那条不变式就换了个地方兑现,而且兑现得更硬(越界直接抛,不是编译期提醒)。
+    //  ★这不是白名单:删掉那句断言,这里立刻恢复判红。而 `localData.test.ts` 还钉着
+    //   那句断言真的会抛 —— 静态认不出来的那一份,由运行时测试接着。
+    if (/^[A-Za-z_$][\w$]*$/.test(expr)) {
+      const guarded = new RegExp(`if\\s*\\(\\s*!\\s*${expr}\\.startsWith\\(\\s*LOCAL_PREFIX\\s*\\)`).test(src)
+      if (guarded) { found.push({ key: LOCAL_PREFIX, expr }); continue }
+    }
     found.push({ expr })
   }
   return found

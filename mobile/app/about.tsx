@@ -1,9 +1,12 @@
-import { ScrollView, View } from 'react-native'
+import { Linking, ScrollView, View } from 'react-native'
 import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { CLIENT_VERSION, useConn } from '../src/net/conn'
 import { aboutRows } from '../src/ui/aboutRows'
+// ★域名**只有一处真相**(`src/shared/links.ts`),电脑端用的是同一份 —— 手机上手写一遍,
+//  换域名的那天就会有一端悄悄指向旧地址。
+import { docsUrl, SITE_HOST, SITE_ORIGIN } from '../../src/shared/links'
 
 /**
  * 关于。设置屏里那一行「关于」点进来的就是这里 —— 和主机那一行推 `app/host.tsx` 是同一条路数。
@@ -35,7 +38,7 @@ export default function About() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
-        <TopTitle title="关于" sub="连不上的时候,先看这三个数" />
+        <TopTitle title="关于" />
       </TopBar>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 44 }}>
@@ -52,18 +55,23 @@ export default function About() {
             </Row>
           ))}
         </List>
-        <Note>
-          两端主版本号必须一致才连得上;方法对不上的功能会在界面上置灰,而不是点下去报一句看不懂的错。
-        </Note>
 
-        {/* ★这一段不是介绍词,是**这个 app 是什么**那句话。手机端不在本地跑代理,
-            它是电脑上那台 Forge 的遥控器 —— 不写清楚的话,「为什么关掉电脑就什么都没了」
-            会变成一个 bug 报告。 */}
-        <Sec>这是什么</Sec>
-        <Note>
-          myFlowForge 手机端是你电脑上那台 Forge 的遥控器:代理、工作区、会话全都在那台电脑上跑,
-          这台手机只负责看见和答话。所以电脑睡了、daemon 停了,这里就什么都没有 —— 那不是坏了。
-        </Note>
+        {/* ★★2026-09-17:这里原来是两段说明(版本怎么对、这个 app 是什么)。都删了 ——
+            用户原话:「里面底下一堆描述文字,都没用」。
+            ★而它们想说的东西没有丢:官网上写得比这儿全,所以这里改成**一个能点开的入口**。
+            一行链接 vs 两段没人读的字,前者还真的把人送到了答案那边。 */}
+        <Sec>myFlowForge</Sec>
+        <List>
+          <Row onPress={() => { void Linking.openURL(SITE_ORIGIN).catch(() => {}) }}>
+            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>官网</T>
+            <T mono numberOfLines={1} style={{ fontSize: 12.5, color: c.muted, flexShrink: 1, minWidth: 0 }}>{SITE_HOST}</T>
+            <T style={{ fontSize: 16, color: c.faint, marginLeft: 8 }}>›</T>
+          </Row>
+          <Row onPress={() => { void Linking.openURL(docsUrl()).catch(() => {}) }}>
+            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>使用文档</T>
+            <T style={{ fontSize: 16, color: c.faint }}>›</T>
+          </Row>
+        </List>
       </ScrollView>
     </View>
   )

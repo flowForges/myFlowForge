@@ -126,7 +126,6 @@ export default function Workspaces() {
             底部那一格仍然叫「工作区」(那是这一格的名字),两者不冲突。 */}
         <TopTitle
           title={seg === 'ws' ? '工作区' : seg === 'archived' ? '已归档' : '工作流模板'}
-          sub={seg === 'ws' ? '一堆项目 + 一条工作流' : seg === 'archived' ? '恢复后回到会话列表' : '在电脑端「设置 → 工作流」里维护'}
         />
       </TopBar>
       <Tabs
@@ -170,7 +169,7 @@ export default function Workspaces() {
           <Empty title="正在读取…" />
         ) : groups.length === 0 ? (
           <>
-            <Empty title="这台机器上还没有工作区" desc="工作区是一堆项目 + 一条工作流。先建一个,才有地方开会话。" />
+            <Empty title="这台机器上还没有工作区" />
             <View style={{ paddingHorizontal: 30 }}>
               <Btn kind="pri" block onPress={() => router.push(ROUTES.newWorkspace)}>
                 ＋ 新建工作区
@@ -210,7 +209,6 @@ export default function Workspaces() {
                 )
               })}
             </List>
-            <Note>长按一行:置顶 / 改名 / 归档。</Note>
 
             <View style={{ height: 8 }} />
             <List>

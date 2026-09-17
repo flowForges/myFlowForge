@@ -9,9 +9,11 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
   default: {
     getAllKeys: async () => [...store.keys()],
     multiRemove: (ks: string[]) => multiRemove(ks),
+    multiGet: async (ks: string[]) => ks.map((k) => [k, store.get(k) ?? null]),
+    removeItem: async (k: string) => { store.delete(k) },
   },
 }))
-import { clearLocalData } from './localData'
+import { byteLength, clearLocalData, removeLocalKey, sizesOf } from './localData'
 
 beforeEach(() => {
   store.clear()
@@ -55,5 +57,28 @@ describe('清除本地数据', () => {
     await clearLocalData()
     expect(multiRemove).toHaveBeenCalledTimes(1)
     expect(multiRemove).toHaveBeenCalledWith(['mff.hosts.v1'])
+  })
+})
+
+describe('removeLocalKey —— 前缀不变式改由运行时兑现', () => {
+  it('★★越界直接抛,不是静默忽略', async () => {
+    // `storageKeys.test.ts` 那条静态守卫认不出变量 key,它接受的是**这句断言存在**。
+    // 所以断言真的会抛这件事,必须在这儿钉住 —— 否则那条守卫认的是一句没有效力的注释。
+    await expect(removeLocalKey('other.thing')).rejects.toThrow(/不以 mff\. 开头/)
+    await expect(removeLocalKey('')).rejects.toThrow()
+  })
+
+  it('自家命名空间内的照常删', async () => {
+    await expect(removeLocalKey('mff.prefs.v1')).resolves.toBeUndefined()
+  })
+})
+
+describe('byteLength', () => {
+  it('按 UTF-8 算,中文 3 字节、emoji 4 字节', () => {
+    expect(byteLength('')).toBe(0)
+    expect(byteLength('abc')).toBe(3)
+    expect(byteLength('中')).toBe(3)
+    expect(byteLength('🖥')).toBe(4)
+    expect(byteLength('a中🖥')).toBe(8)
   })
 })
