@@ -7,8 +7,9 @@ import React, {
   useRef,
   useState,
 } from 'react'
-import { Platform } from 'react-native'
+import { AppState, Platform } from 'react-native'
 import { connectHost, type HostClient, type HostState } from './hostClient'
+import { shouldDropOnBackground, shouldReconnectOnWake } from './wakeReconnect'
 import { createDemoConn, DEMO_METHODS, type DemoConn } from '../demo/demoConn'
 import {
   hostLabel,
@@ -110,6 +111,9 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const activeHost = useMemo(() => hosts.find((h) => h.id === activeId) ?? null, [hosts, activeId])
+  // ★AppState 的回调是订阅时那一刻的闭包,直接读 `state` 会永远读到 null。用 ref 取当前值。
+  const stateRef = useRef<HostState | null>(null)
+  stateRef.current = state
 
   useEffect(() => {
     if (!activeHost) {
@@ -237,6 +241,37 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
   )
 
   const reconnect = useCallback(() => setAttemptKey((k) => k + 1), [])
+
+  /**
+   * ★★★息屏 / 切走之后再回来,连接要**自己**回来 —— 不该让人手点一次。
+   *
+   * 成因(2026-09-17 查清):iOS 一挂起 app 就把 WebSocket 拆掉,而 `hostClient` 会按
+   * **指数退避**排重试。那套退避是给「服务器挂了」设计的,可这里服务器好好的,
+   * 是我们被挂起了;更糟的是挂起期间定时器根本不走,几次之后进 `failed`,
+   * 而 `failed` **不自动重试** —— 于是必须手点。用户原话:「息屏就断网」。
+   *
+   * ★判据抽在 `wakeReconnect.ts` 里(纯函数、node 下可测),这里只负责接线。
+   * ★重连走的是 `reconnect()`,它递增 `attemptKey` → 整个连接 effect 重建 →
+   *  **退避计数一起清零**。这正是我们要的:唤醒是全新的事实,挂起态里那些失败不该继续算数。
+   *
+   * ★★**iOS 上没有办法让 WebSocket 在息屏时活着** —— 能申请后台常驻的只有 VoIP/音频/定位那几类,
+   *  拿这个理由申请是上架被拒的经典原因。所以方向只能是「断得干净、回来得快」,不是「不断」。
+   */
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        if (shouldReconnectOnWake(stateRef.current)) reconnect()
+        return
+      }
+      // 'background' / 'inactive':主动把连接收掉,让**中转**当场释放房间 ——
+      // 一条半死不活的 host socket 会把房间占着,下次连进来撞上「房间已有一台主机」,
+      // 而那台「主机」正是自己上一条死 socket(见 [[trap-relay-zombie-room-and-keepalive]])。
+      if (next === 'background' && shouldDropOnBackground(stateRef.current)) {
+        clientRef.current?.close()
+      }
+    })
+    return () => sub.remove()
+  }, [reconnect])
 
   const forgetAll = useCallback(() => {
     // ★**只动内存,一个字节都不写盘。** 磁盘那份由 `clearLocalData()` 负责清;
