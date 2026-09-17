@@ -172,6 +172,32 @@ describe('确认门升起时重新检查权限档', () => {
     expect(settled).toBeUndefined()
   })
 
+  /**
+   * ★★★用户 2026-09-17 明确说出的两条期望,逐字钉在这里:
+   *   「1 自动权限下,若发生未知的权限,是否会升起权限门? —— 是的」
+   *   「2 完全的权限下,出现未知的权限,是否都会默认放过? —— 是的」
+   * 这两条是这一层策略的**验收标准**。上面那些用例测的是各种边角,这两条测的是主干:
+   * 主干被改坏的时候,边角用例可能一条都不红。
+   */
+  it('★★★场景1:auto 档 + 未知权限 → 升起权限门', async () => {
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent } = await startTurn()
+    let settled: unknown = undefined
+    // 「未知」= provider 没告诉我们这是不是只读(readOnly 缺省)。这正是最常见的那一类。
+    void confirm({ title: '未知操作', where: '某个我们判断不了的命令' }).then(d => { settled = d })
+    await new Promise(r => setTimeout(r, 0))
+    expect(requests(sent), '必须升门').toHaveLength(1)
+    expect(settled, '升门了就不该自己先答').toBeUndefined()
+  })
+
+  it('★★★场景2:full 档 + 未知权限 → 默认放过,不升门', async () => {
+    sessionState.permissionMode = 'full'
+    const { confirm, sent } = await startTurn()
+    const decision = await confirm({ title: '未知操作', where: '某个我们判断不了的命令' })
+    expect(decision, '必须直接放行').toBe('allow')
+    expect(requests(sent), '不该升门').toHaveLength(0)
+  })
+
   it('★★ auto 档 + 确定只读:不升门,直接放行', async () => {
     // 「自动(工作区)」的承诺是「自动修改工作区内的文件」—— 读比改弱,为一次纯读再问一遍,
     // 等于让人替一个他已经授权过的动作按一次确认。用户原话:「不要卡在那了」。
