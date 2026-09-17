@@ -233,6 +233,39 @@ describe('确认门升起时重新检查权限档', () => {
     expect(requests(sent)).toHaveLength(1)
   })
 
+  it('★★★选择门答完,对话里要留下「问了什么 + 选了什么」', async () => {
+    // 用户原话:「我选择后,这个输出内容里,没有我之前的选择,感觉中间中断了似的」。
+    // 后面每一句都以这个选择为前提,读的人却看不到前提。
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent, call } = await startTurn()
+    const q = { question: '要哪些动态功能?', header: 'x', multiSelect: true, options: [{ label: '评论' }, { label: '搜索' }] }
+    void confirm({ title: '需选择', questions: [q] })
+    await new Promise(r => setTimeout(r, 0))
+    const req = requests(sent)[0]
+    await call(CH.chatResolve)({}, {
+      id: (req[1] as { id: string }).id, decision: 'allow',
+      answers: { '要哪些动态功能?': ['评论', '搜索'] }, workspacePath: '/w',
+    })
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+    const text = notes.map(([, p]) => p.message.text as string).join('\n')
+    expect(text, '问题原文要在').toContain('要哪些动态功能?')
+    expect(text, '选了什么要在').toContain('评论')
+    expect(text).toContain('搜索')
+  })
+
+  it('★权限门(没有 answers)答完**不**留这条 —— 那是授权,不是内容', async () => {
+    // 两者按同一条规矩处理,正是选择门那条被漏掉的原因;反过来给每次权限确认都加一条,
+    // 就是单机用户每点一次门都多一行噪音。
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent, call } = await startTurn()
+    void confirm({ title: 'shell 请求执行', where: 'ls' })
+    await new Promise(r => setTimeout(r, 0))
+    const req = requests(sent)[0]
+    await call(CH.chatResolve)({}, { id: (req[1] as { id: string }).id, decision: 'allow', workspacePath: '/w' })
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+    expect(notes.map(([, p]) => p.message.text as string).join('\n')).not.toContain('你的选择')
+  })
+
   it('读的是会话【当前】的档,不是这一轮启动时的档', async () => {
     // 轮次以 auto 起跑(payload.permissionMode='auto'),跑到一半用户切到 full。
     const { confirm, sent, call } = await startTurn()

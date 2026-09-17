@@ -123,6 +123,7 @@ import type { DiscoveredSession } from '@shared/types'
 import { resolveFileRef } from '../fs/fileRef'
 import { readImageRef } from '../fs/imageRef'
 import { listDir, defaultRoots } from '../fs/browse'
+import { askAnswerNote } from '@shared/chat/askAnswerNote'
 
 /**
  * 附件落盘时避开重名:`image.png` 已存在就依次试 `image-2.png`、`image-3.png`……返回真正能用的名字。
@@ -1260,6 +1261,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return
     }
     const by = _e?.client?.label ?? '本机'
+    // ★★先取门的元信息,**再删** —— 下面要用它里面的 `questions` 把「问了什么」写进对话。
+    //  删了之后再读是拿不到的,而那正好是一条「静默少写一半」的失败:记录里只剩答案、没有问题。
+    const gate = chatGateOwner.get(a.id)
     chatConfirms.delete(a.id)
     chatGateOwner.delete(a.id)
     rememberResolved(a.id, by, a.decision, a.workspacePath, readSessions(a.workspacePath).activeSessionId ?? '')
@@ -1268,6 +1272,18 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     resolve(answered ? { decision: 'allow', answers: a.answers, response: a.response }
       : a.decision === 'modify' ? 'deny' : a.decision)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
+    // ★★★把「问了什么、选了什么」留在对话里。答完之后卡片就消失了,而对话里原来**一个字都没有** ——
+    //  用户原话:「我选择后,输出内容里没有我之前的选择,感觉中间中断了似的」。后面每一句都以这个
+    //  选择为前提,读的人却看不到前提。
+    // ★这条**不受**下面「本机自己答的不提示」那条规矩管,两者问的不是一件事:
+    //  权限门问「准不准做」——答案是授权,痕迹落在那次调用的工具卡上;
+    //  选择门问「你想要哪个」——答案是**内容**,它属于对话本身。之前把两者按同一条规矩处理,
+    //  正是这条被漏掉的原因。
+    if (answered) {
+      const note = askAnswerNote(gate?.questions, a.answers, a.response)
+      const sid = readSessions(a.workspacePath).activeSessionId ?? ''
+      if (note && sid) emitNote(a.workspacePath, sid, note)
+    }
     // 别的设备答的门,要在对话里留个痕 —— 否则电脑前的人只看到卡片凭空消失,不知道发生了什么。
     // 本机自己答的不提示:那会给单机用户的每一次确认都加一条噪音。
     if (_e?.client && _e.client.id !== 'local') {
