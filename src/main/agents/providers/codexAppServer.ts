@@ -43,6 +43,12 @@ export interface CodexApprovalReq {
   /** `mcpServer/elicitation/request`:哪个 MCP 在问、问什么、用哪种形态问。 */
   serverName?: string; message?: string; mode?: string; url?: string
   requestedSchema?: { required?: string[] | null; properties?: Record<string, unknown> }
+  /**
+   * codex 对这条命令的**尽力解析**(官方 schema 的 `CommandAction`:`read` | `listFiles` |
+   * `search` | `unknown`)。用来判断「这次是不是纯读」——见 codexApproval.ts 的 `codexReadOnly`。
+   * ★老版本 codex 不发这个字段,所以它可能是 undefined,判断必须**失败即拦**。
+   */
+  commandActions?: unknown[]
 }
 
 export interface CodexTurnCallbacks {
@@ -201,6 +207,9 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
             permissions: params.permissions, reason: params.reason,
             serverName: params.serverName, message: params.message, mode: params.mode,
             url: params.url, requestedSchema: params.requestedSchema,
+            // ★codex 自己解析好的动作标签(read/listFiles/search/unknown)。只读判断**只能**靠它,
+            //  不许我们去猜命令字符串 —— 见 codexApproval.ts 的 codexReadOnly。
+            commandActions: params.commandActions,
           }
           // ★要填表单的那种 elicitation 我们渲染不出来。但**绝不能因此就不回答** ——
           //  那正是「光标一直在动、永远没有内容」的成因。说清缺什么、替他拒掉、让这一轮跑完。

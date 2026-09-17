@@ -289,7 +289,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               onError: (m) => { logError('codex', 'app-server run 错误', m) },
             },
           )
-        } catch {
+        } catch (e) {
           // This catch only covers a SYNCHRONOUS driveCodexTurn throw (a spawn-option error
           // thrown before the child even starts — codex missing / app-server unsupported), and
           // falls through to the exec path below. An ASYNC spawn/handshake failure (e.g. an old
@@ -298,6 +298,13 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           // failed turn via cb.onError + a failed `done` below instead of silently retrying
           // through exec. Acceptable while this transport is opt-in/default-off (codexTransport
           // defaults to 'exec'); a mid-run fallback was considered and rejected as too complex.
+          //  ★★2026-09-17 加日志的理由:这个 catch 原来是**完全静默**的 —— app-server 起不来就
+          //   一声不吭退回 exec,而 exec 那条路 `approval_policy` 恒为 "never",于是**权限门永远不会出现**。
+          //   用户看到的是:设置里明明选了 app-server、界面也没报任何错,门就是不弹。
+          //   更糟的是**查不出来**:成功的轮次不写日志,失败的回落也不写,事后翻日志什么线索都没有。
+          //   一次「悄悄换了条能力更弱的路」必须留下痕迹,否则它和「功能坏了」在现场无法区分。
+          logError('codex', 'app-server 起不来,本轮回落到 exec(这条路没有权限门)',
+            String((e as Error)?.message ?? e))
           handle = null
         }
         if (handle) {
@@ -465,7 +472,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               onError: (m) => { cb.onError(new Error(m)) },
             },
           )
-        } catch {
+        } catch (e) {
           // This catch only covers a SYNCHRONOUS driveCodexTurn throw (a spawn-option error
           // thrown before the child even starts — codex missing / app-server unsupported), and
           // falls through to the exec path below. An ASYNC spawn/handshake failure (e.g. an old
@@ -474,6 +481,15 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           // failed turn via cb.onError + a failed `done` below instead of silently retrying
           // through exec. Acceptable while this transport is opt-in/default-off (codexTransport
           // defaults to 'exec'); a mid-turn fallback was considered and rejected as too complex.
+          //  ★★2026-09-17 加日志的理由:这个 catch 原来是**完全静默**的 —— app-server 起不来就
+          //   一声不吭退回 exec,而 exec 那条路 `approval_policy` 恒为 "never",于是**权限门永远不会出现**。
+          //   用户看到的是:设置里明明选了 app-server、界面也没报任何错,门就是不弹。
+          //   更糟的是**查不出来**:成功的轮次不写日志,失败的回落也不写,事后翻日志什么线索都没有。
+          //   一次「悄悄换了条能力更弱的路」必须留下痕迹,否则它和「功能坏了」在现场无法区分。
+          logError('codex', 'app-server 起不来,本轮回落到 exec(这条路没有权限门)',
+            String((e as Error)?.message ?? e))
+          //  ★也告诉**用户**,不只是日志:他选了 app-server 就是为了要门,回落意味着这一轮没有门。
+          cb.onStatus?.('codex 的 app-server 没起来,本轮回落到 exec —— 这条路不会升起权限门。')
           wd.clear()
           appHandle = null
         }

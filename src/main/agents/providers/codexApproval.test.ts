@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { codexSandboxApproval, codexDecision, codexGateReq, codexApprovalResponse, elicitationUnsupported } from './codexApproval'
+import { codexSandboxApproval, codexDecision, codexGateReq, codexApprovalResponse, codexReadOnly, elicitationUnsupported } from './codexApproval'
 
 describe('codexSandboxApproval', () => {
   it('maps modes to sandbox + interactive approvalPolicy', () => {
@@ -27,11 +27,11 @@ describe('codexDecision', () => {
 describe('codexGateReq', () => {
   it('★★把 itemId 带成 toolUseId —— 上层只有拿到它,才能把「自动放行」挂到那张工具卡上而不是发一条假回答', () => {
     expect(codexGateReq({ method: 'item/commandExecution/requestApproval', itemId: 'item_5', command: 'go vet ./...' }))
-      .toEqual({ title: 'shell 请求执行', where: 'go vet ./...', toolUseId: 'item_5' })
+      .toEqual({ title: 'shell 请求执行', readOnly: false, where: 'go vet ./...', toolUseId: 'item_5' })
   })
   it('文件类审批同样带 itemId', () => {
     expect(codexGateReq({ method: 'item/fileChange/requestApproval', itemId: 'item_7', paths: ['a.go', 'b.go'] }))
-      .toEqual({ title: '文件 请求执行', where: 'a.go, b.go', toolUseId: 'item_7' })
+      .toEqual({ title: '文件 请求执行', readOnly: false, where: 'a.go, b.go', toolUseId: 'item_7' })
   })
   it('★老的 v1 方法没有 itemId —— 只能不带,上层据此回落成发消息(不能悄悄放行)', () => {
     expect(codexGateReq({ method: 'execCommandApproval', command: 'ls' }).toolUseId).toBeUndefined()
@@ -113,5 +113,46 @@ describe('codexGateReq —— 新增的两种也要有人话', () => {
     const r = codexGateReq({ method: 'mcpServer/elicitation/request', serverName: 'inner-mcp', message: '允许执行 python?' })
     expect(r.title).toContain('inner-mcp')
     expect(r.where).toContain('允许执行 python?')
+  })
+})
+
+describe('codexReadOnly —— 这次审批确定是只读吗', () => {
+  const base = { method: 'item/commandExecution/requestApproval', command: 'x' }
+
+  it('全是已知只读动作 → true', () => {
+    expect(codexReadOnly({ ...base, commandActions: [{ type: 'read' }] })).toBe(true)
+    expect(codexReadOnly({ ...base, commandActions: [{ type: 'read' }, { type: 'listFiles' }, { type: 'search' }] })).toBe(true)
+  })
+
+  it('★★只要有一项是 unknown 就判 false —— schema 自己写着是 best-effort,unknown = 没认出来,不是安全', () => {
+    expect(codexReadOnly({ ...base, commandActions: [{ type: 'read' }, { type: 'unknown' }] })).toBe(false)
+    expect(codexReadOnly({ ...base, commandActions: [{ type: 'unknown' }] })).toBe(false)
+  })
+
+  it('★空数组 → false。「没有任何动作」不等于「只读」,它等于「没解析出来」', () => {
+    expect(codexReadOnly({ ...base, commandActions: [] })).toBe(false)
+  })
+
+  it('★字段缺失 / 不是数组 → false(老版本 codex 不发这个字段,那时候一切照旧升门)', () => {
+    expect(codexReadOnly(base)).toBe(false)
+    expect(codexReadOnly({ ...base, commandActions: 'read' as never })).toBe(false)
+  })
+
+  it('★脏数据一律 false —— 这个函数错一次就是放行一条不该放的命令', () => {
+    for (const acts of [[null], [undefined], [{}], [{ type: 1 }], [{ type: 'READ' }], [{ notType: 'read' }]]) {
+      expect(codexReadOnly({ ...base, commandActions: acts as never[] }), JSON.stringify(acts)).toBe(false)
+    }
+  })
+
+  it('★★绝不看命令字符串 —— 一条写操作即使 actions 说是 read 也按 actions 走,反过来也一样', () => {
+    // 这条钉的是**判据来源**:靠正则读命令是安全工程里最经典的那个错(rm 藏在管道后面就绕过去了)。
+    // 所以这里刻意给一条危险命令 + read 标签:函数必须信 codex 的解析,而不是自己另判一次。
+    expect(codexReadOnly({ ...base, command: 'rm -rf /', commandActions: [{ type: 'read' }] })).toBe(true)
+    expect(codexReadOnly({ ...base, command: 'cat a.txt', commandActions: [{ type: 'unknown' }] })).toBe(false)
+  })
+
+  it('门上带着这个判断', () => {
+    expect(codexGateReq({ ...base, commandActions: [{ type: 'read' }] }).readOnly).toBe(true)
+    expect(codexGateReq(base).readOnly).toBe(false)
   })
 })

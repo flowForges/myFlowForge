@@ -21,6 +21,16 @@ export interface ConfirmReq {
    * ★没有它(或者没有 `toolUseId`)的调用方仍然回落成发消息:悄悄放行是不允许的。
    */
   onAutoAllow?: () => void
+  /**
+   * 这次请求**确定是只读**的(读文件 / 列目录 / 搜索),不写不联网。
+   *
+   * ★★只在 provider **自己**能给出这个判断时才为 true。codex 在审批请求里带了 `commandActions`
+   *  (一个 read|listFiles|search|unknown 的标签联合,官方 schema 里有),所以它给得出来;
+   *  别的 provider 给不出来就一直是 undefined —— **绝不在这里靠命令字符串猜**。
+   *  「靠正则判断这条命令安不安全」是安全工程里最经典的那个错,`rm` 藏在管道后面就绕过去了。
+   * ★判据必须**失败即拦**:拿不准 = 不是只读 = 照常升门。
+   */
+  readOnly?: boolean
 }
 // 老形态 'allow'/'deny' 全部保留(绝大多数门只需要放行/拒绝);对象形态是回答通道。
 export type ConfirmDecision = 'allow' | 'deny' | { decision: 'allow'; answers?: AskAnswers; response?: string }

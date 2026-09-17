@@ -78,6 +78,9 @@ type Confirm = (req: {
   // ★这两个是 2026-09-04 加的:自动放行改成记在**那次调用的工具卡**上,不再往对话里插消息。
   //   chatService 只在拿得到 tool_use_id 时才给 onAutoAllow,拿不到就必须回落成发消息。
   toolUseId?: string; onAutoAllow?: () => void
+  // ★2026-09-17:「确定是只读」的请求在「自动(工作区)」档下也不升门。只有 provider 自己
+  //   判得出来时才为 true(codex 靠官方的 commandActions),我们绝不猜命令字符串。
+  readOnly?: boolean
 }) => Promise<unknown>
 
 /**
@@ -167,6 +170,41 @@ describe('确认门升起时重新检查权限档', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(requests(sent)).toHaveLength(1)
     expect(settled).toBeUndefined()
+  })
+
+  it('★★ auto 档 + 确定只读:不升门,直接放行', async () => {
+    // 「自动(工作区)」的承诺是「自动修改工作区内的文件」—— 读比改弱,为一次纯读再问一遍,
+    // 等于让人替一个他已经授权过的动作按一次确认。用户原话:「不要卡在那了」。
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent } = await startTurn()
+    const decision = await confirm({ title: 'shell 请求执行', where: 'cat a.txt', readOnly: true })
+    expect(decision).toBe('allow')
+    expect(requests(sent), '不该升门').toHaveLength(0)
+  })
+
+  it('★★★ auto 档 + 只读 = 放行,但**必须留痕** —— 悄悄放行一步都不让', async () => {
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent } = await startTurn()
+    await confirm({ title: 'shell 请求执行', where: 'cat a.txt', readOnly: true })
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+    expect(notes.some(([, p]) => p.message.text.includes('只读') && p.message.text.includes('cat a.txt'))).toBe(true)
+  })
+
+  it('★★ auto 档 + 拿不准是不是只读:照常升门(失败即拦)', async () => {
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent } = await startTurn()
+    void confirm({ title: 'shell 请求执行', where: 'a1 mcp --env prod call-tool x' })
+    await new Promise(r => setTimeout(r, 0))
+    expect(requests(sent), '拿不准就必须问').toHaveLength(1)
+  })
+
+  it('★★ readonly 档 + 只读:仍然升门 —— 那个档的意思是「什么都别替我做主」', async () => {
+    // auto 档说的是「工作区内的事你自己来」,readonly 档没有给过任何这样的授权。
+    sessionState.permissionMode = 'readonly'
+    const { confirm, sent } = await startTurn()
+    void confirm({ title: 'shell 请求执行', where: 'cat a.txt', readOnly: true })
+    await new Promise(r => setTimeout(r, 0))
+    expect(requests(sent)).toHaveLength(1)
   })
 
   it('读的是会话【当前】的档,不是这一轮启动时的档', async () => {

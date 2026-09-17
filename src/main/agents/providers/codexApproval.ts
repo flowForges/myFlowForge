@@ -40,6 +40,29 @@ function describePermissions(p: unknown): string {
   return parts.join(' + ')
 }
 
+/**
+ * 这次审批**确定是只读**吗?
+ *
+ * ★★判据来自 codex 自己解析好的 `commandActions`(官方 schema:`read` | `listFiles` | `search`
+ *  | `unknown`),**不是我们去猜命令字符串**。靠正则判断一条 shell 命令安不安全是安全工程里
+ *  最经典的那个错 —— `rm` 藏在管道、变量、`$(...)` 后面就绕过去了。
+ *
+ * ★★★三条**失败即拦**的规矩,缺一条这个函数就变成安全漏洞:
+ *  ① 字段不在 / 不是数组 → false。老版本 codex 不发这个字段,那时候一切照旧升门。
+ *  ② 空数组 → false。「没有任何动作」不等于「只读」,它等于「没解析出来」。
+ *  ③ 只要有**一项**不是那三种已知只读类型(包括 `unknown`)→ false。
+ *    schema 自己写着这是 "best-effort parsed",`unknown` 的意思是「没认出来」,不是「安全」。
+ */
+const READ_ONLY_ACTIONS = new Set(['read', 'listFiles', 'search'])
+export function codexReadOnly(r: CodexApprovalReq): boolean {
+  const acts = r.commandActions
+  if (!Array.isArray(acts) || acts.length === 0) return false
+  return acts.every((a) => {
+    const t = (a as { type?: unknown } | null)?.type
+    return typeof t === 'string' && READ_ONLY_ACTIONS.has(t)
+  })
+}
+
 export function codexGateReq(r: CodexApprovalReq): ConfirmReq {
   // ★MCP 的 elicitation:**必须说出是哪个 MCP 在问**。少了服务名,用户看到的就是一句没头没尾的
   //  「允许执行 python?」—— 他根本不知道这是谁弹的、该不该点。
@@ -59,6 +82,7 @@ export function codexGateReq(r: CodexApprovalReq): ConfirmReq {
     title: `${r.command ? 'shell' : '文件'} 请求执行`,
     where: r.command ?? r.paths?.join(', '),
     toolUseId: r.itemId,
+    readOnly: codexReadOnly(r),
   }
 }
 

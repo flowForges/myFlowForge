@@ -805,8 +805,15 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // ★ 只给 provider 的逐操作门用,不能给下面那个「无沙箱 provider 预授权门」用:那个门已经自己按
     //   payload.permissionMode !== 'full' 守过了,再叠一层等于替用户默默写下 fullAccessAck ——
     //   那是另一件事的授权,不是同一件。
-    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolUseId?: string; onAutoAllow?: () => void }): Promise<ConfirmDecision> => {
-      if (autoAllowable(req) && getSession(payload.workspacePath, payload.sessionId)?.permissionMode === 'full') {
+    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolUseId?: string; readOnly?: boolean; onAutoAllow?: () => void }): Promise<ConfirmDecision> => {
+      const mode = getSession(payload.workspacePath, payload.sessionId)?.permissionMode
+      // ★★「自动(工作区)」档下,**确定是只读**的请求不升门。
+      //  这个档的原话是「自动修改工作区内的文件」—— 而读比改弱,为一次纯读去问一遍,
+      //  等于让人替一个他已经授权过的动作按一次确认。用户原话:「不要卡在那了」。
+      //  ★`readOnly` 只有 provider 自己判得出来时才为 true(codex 靠官方给的 commandActions),
+      //   我们**绝不猜命令字符串**;拿不准就是 false,照常升门。见 codexApproval.ts 的 codexReadOnly。
+      //  ★放行同样要留痕:走的是下面同一条 onAutoAllow / 审计消息,不存在悄悄放行。
+      if (autoAllowable(req) && (mode === 'full' || (mode === 'auto' && req.readOnly))) {
         // ★★优先记在**那次调用自己的工具卡**上(`ToolActivity.autoAllowed`),不往对话流里插消息。
         //   原来每放行一次就发一条 `who:'ai'` 的消息,顶着「系统」头像 +「回答」标签,长得和模型的
         //   回答一模一样,还夹在工具卡和真正的回答中间。用户原话:「bash 的结果应该在 bash 的那个
@@ -814,7 +821,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         // ★拿不到工具卡(别的 provider 不给 tool_use_id)才回落成发消息 —— **不能悄悄放行**,
         //   「留一行审计痕迹」这条约束一步都不让。
         if (req.onAutoAllow) req.onAutoAllow()
-        else emitNote(payload.workspacePath, payload.sessionId, `🛡 已按当前权限档「完全访问」自动放行：${gateWhere(req)}`)
+        else emitNote(payload.workspacePath, payload.sessionId,
+          mode === 'full'
+            ? `🛡 已按当前权限档「完全访问」自动放行：${gateWhere(req)}`
+            : `🛡 只读操作，已按当前权限档「自动(工作区)」放行：${gateWhere(req)}`)
         return Promise.resolve('allow')
       }
       return confirm(req)
