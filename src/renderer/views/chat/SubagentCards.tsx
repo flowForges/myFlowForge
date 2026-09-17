@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { SubagentCard } from '@shared/types'
+import { SubagentSpinner } from './Spinners'
 
 // Built-in Task sub-agents the main agent spawned, surfaced in the chat stream. Each is a collapsed
 // card (start → running → result); expand to see the full task prompt + returned result. We only get
@@ -19,10 +20,21 @@ function Card({ sub, live }: { sub: SubagentCard; live: boolean }) {
   return (
     <div className={`subagent-card s-${state}`}>
       <button className="sac-head" onClick={() => setOpen(o => !o)} aria-expanded={open}>
+        {/* ★★跑的时候是**开口圆弧**(和 `ThinkBlock` 用的是同一个 `.spin`,整个 app 一套 spinner),
+            跑完换成一个**静止的**图标。
+            ★原来是一枚放大镜整个绕中心转 —— 一个有手柄的图形绕中心旋转,手柄会甩圈,
+             看起来就是乱晃而不是「在转」(2026-09-17 用户:「这个图标太丑了」)。
+             圆弧没有这个问题:它本来就是为旋转画的。 */}
         <span className="sac-ico" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
-          </svg>
+          {state === 'running' ? (
+            <SubagentSpinner size={14} />
+          ) : (
+            // 静止态用一枚「分支出去的节点」—— 子 agent 就是从主线上分出去的一条。
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <circle cx="6" cy="6" r="2.4" /><circle cx="18" cy="17.5" r="2.4" />
+              <path d="M6 8.4v4.6a4 4 0 0 0 4 4h5.6" />
+            </svg>
+          )}
         </span>
         <span className="sac-title">子代理 · {title}{sub.subagentType && sub.description ? <span className="sac-type"> ({sub.subagentType})</span> : null}</span>
         <span className={`sac-state st-${state}`}>{stateLabel(state)}</span>

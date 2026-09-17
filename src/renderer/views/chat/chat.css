@@ -323,8 +323,8 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   animation: caret-blink 1s steps(2) infinite;
 }
 @keyframes caret-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
-@keyframes spin { to { transform: rotate(360deg); } }
-.spin { animation: spin 1s linear infinite; color: var(--run); }
+/* ★`.spin`(整体旋转的开口圆弧)**已删**,2026-09-17 用户否掉:「我甚至所有的开口圆弧都去掉」。
+   转圈一律走 `Spinners.tsx` 的那两个 —— 那边还解决了「主代理和子代理分不开」的问题。 */
 
 /* 组合输入区 */
 /* No overflow clipping here: the model dropdown opens UPWARD past this element's top, and
@@ -630,8 +630,8 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .sac-head:hover { background: var(--surface-2); }
 .sac-ico { flex: 0 0 auto; display: grid; place-items: center; color: var(--accent); }
 .sac-ico svg { width: 14px; height: 14px; }
-.subagent-card.s-running .sac-ico { animation: sac-spin 1.4s linear infinite; }
-@keyframes sac-spin { to { transform: rotate(360deg); } }
+/* ★旋转交给里面那个 `.spin`(全 app 同一套),不再整个图标容器绕中心转 ——
+   一枚放大镜那么转,手柄会甩圈,读起来是「乱晃」不是「在转」。 */
 .sac-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); }
 .sac-type { color: var(--faint); font-weight: 500; }
 .sac-state { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; font-family: var(--mono); letter-spacing: .04em; padding: 2px 8px; border-radius: 99px; }
@@ -1011,3 +1011,31 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   border-radius: 4px;
 }
 
+
+/* ── 两个转圈图标(`Spinners.tsx`)────────────────────────────────────────────────
+   ★动画是 opacity 的错相渐变,不是整体 rotate:绕中心转的图形在低分屏上边缘会抖,
+    逐段亮灭没有这个问题 —— 系统的 loading 指示器也是这么做的。
+   ★主代理 = 放射线条(accent);子代理 = 绕圈圆点(run)。**形状不同**,不是同一个图标换色 ——
+    颜色在小尺寸、换皮肤、色弱三种情况下都不可靠。 */
+.sp-spokes { display: block; flex: 0 0 auto; }
+.sp-spokes line {
+  stroke: var(--accent);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  animation: sp-fade .9s linear infinite;
+}
+.sp-orbit { display: block; flex: 0 0 auto; }
+.sp-orbit circle {
+  fill: var(--run);
+  animation: sp-fade .9s linear infinite;
+}
+@keyframes sp-fade {
+  0%   { opacity: 1; }
+  70%  { opacity: .18; }
+  100% { opacity: .18; }
+}
+/* ★尊重「减少动态效果」:开了之后不闪,但**仍然要看得出在跑** —— 停成一个半透明的静止图标,
+   而不是整个消失(消失等于把「正在跑」这个状态一起删了)。 */
+@media (prefers-reduced-motion: reduce) {
+  .sp-spokes line, .sp-orbit circle { animation: none; opacity: .55; }
+}

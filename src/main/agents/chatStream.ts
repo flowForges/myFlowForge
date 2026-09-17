@@ -15,8 +15,16 @@ export type ChatStreamAction =
   | { kind: 'subagent-result'; id: string; result?: string; isError?: boolean }
   | { kind: 'ignore' }
 
-// The built-in sub-agent-spawning tool. Its tool_use carries { subagent_type, description, prompt }.
-const SUBAGENT_TOOL = 'Task'
+// 内置的「派生子 agent」工具。它的 tool_use 带着 { subagent_type, description, prompt }。
+//
+// ★★**两个名字都要认**:Claude Code 把它从 `Task` 改名成了 `Agent`。
+//  2026-09-17 真机报的症状是「子 agent 呼不出来了」—— 而它一直在正常跑,只是我们不认识了,
+//  于是三个子 agent 被画成三行普通的「调用 Agent」:没有卡片、没有进度、没有执行过程。
+//  ★这类失败没有任何错误信息,功能只是**看起来不见了**,所以它能活很久没人发现。
+//  ★老名字保留:旧版本 CLI 仍然发 `Task`,只认新名字等于把老用户换个方向摔一次。
+const SUBAGENT_TOOLS = new Set(['Task', 'Agent'])
+/** ★必须是**全等**匹配,不是包含 —— `ListAgents` / `AgentTool` 这些不是它。 */
+const isSubagentTool = (name: unknown): boolean => typeof name === 'string' && SUBAGENT_TOOLS.has(name)
 
 // Flatten a tool_result block's `content` (string, or an array of {type:'text',text} parts) to text.
 function toolResultText(content: unknown): string {
@@ -81,7 +89,7 @@ export function parseChatStreamActions(obj: any): ChatStreamAction[] {
       const cb = ev.content_block
       // Task sub-agent: emit a subagent-start (input is usually empty at content_block_start — it
       // streams later; the full assistant message enriches it via 'update').
-      if (cb.name === SUBAGENT_TOOL && typeof cb.id === 'string') {
+      if (isSubagentTool(cb.name) && typeof cb.id === 'string') {
         out.push({ kind: 'subagent-start', id: cb.id, subagentType: cb.input?.subagent_type, description: cb.input?.description, prompt: cb.input?.prompt })
       } else {
         out.push(toolAction(cb.name, cb.input, typeof cb.id === 'string' ? cb.id : undefined))
@@ -112,7 +120,7 @@ export function parseChatStreamActions(obj: any): ChatStreamAction[] {
       else if (b?.type === 'thinking' && typeof b.thinking === 'string' && b.thinking) out.push({ kind: 'think', text: b.thinking })
       // A Task sub-agent gets its own card (this full message carries the complete input); every other
       // tool call is surfaced as a visible process step (so the user sees activity, not just a spinner).
-      else if (b?.type === 'tool_use' && b.name === SUBAGENT_TOOL && typeof b.id === 'string') out.push({ kind: 'subagent-start', id: b.id, subagentType: b.input?.subagent_type, description: b.input?.description, prompt: b.input?.prompt })
+      else if (b?.type === 'tool_use' && isSubagentTool(b.name) && typeof b.id === 'string') out.push({ kind: 'subagent-start', id: b.id, subagentType: b.input?.subagent_type, description: b.input?.description, prompt: b.input?.prompt })
       else if (b?.type === 'tool_use' && typeof b.name === 'string') out.push(toolAction(b.name, b.input, typeof b.id === 'string' ? b.id : undefined))
     }
     return out

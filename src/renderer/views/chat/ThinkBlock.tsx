@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import type { ChatThink } from '@shared/types'
+import { ThinkSpinner } from './Spinners'
 
 const CHEV = (
   <svg className="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="9 18 15 12 9 6" /></svg>
 )
-const SPIN = (
-  <svg className="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 12a9 9 0 1 1-6.2-8.5" /></svg>
-)
+// ★放射线条,不是开口圆弧(用户 2026-09-17 明确否掉了圆弧)。和子代理那个**形状不同**,
+//  好让「主代理在想」和「子代理在跑」一眼分得开 —— 见 `Spinners.tsx` 顶部。
+const SPIN = <ThinkSpinner size={13} />
 const GLYPH = (
   <svg className="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a5 5 0 0 0-5 5c0 1.5.6 2.7 1.5 3.5C9 11 9 12 9 13H7m5-11a5 5 0 0 1 5 5c0 1.5-.6 2.7-1.5 3.5-.5.5-.5 1.5-.5 2.5h2M9 13h6M10 16h4M10.5 19h3" /></svg>
 )

@@ -95,6 +95,33 @@ describe('parseChatStreamActions (built-in Task sub-agents)', () => {
       { kind: 'subagent-start', id: 'toolu_1', subagentType: 'Explore', description: '探查鉴权', prompt: '摸清鉴权模块' },
     ])
   })
+  // ★★2026-09-17 真机报的:子 agent 卡片、转圈的进度、执行过程全没了,看起来像「呼不出子 agent」。
+  //  真相是子 agent **一直在正常跑** —— Claude Code 把那个工具**从 `Task` 改名成了 `Agent`**,
+  //  而我们只认 `Task`,于是它们被当成普通工具调用画成三行「调用 Agent」。
+  //  ★这类失败最难查的地方在于:没有任何错误,功能「看起来只是不见了」。
+  //  ★两个名字都要认:老版本 CLI 仍然发 `Task`,只认新名字就是把老用户换个方向摔一次。
+  it('★认得出改名后的 Agent 工具 —— 只认 Task 的话子 agent 会静默退化成普通工具调用', () => {
+    const obj = { type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'toolu_9', name: 'Agent', input: { subagent_type: 'Explore', description: '查一下', prompt: '摸清' } },
+    ] } }
+    expect(parseChatStreamActions(obj)).toEqual([
+      { kind: 'subagent-start', id: 'toolu_9', subagentType: 'Explore', description: '查一下', prompt: '摸清' },
+    ])
+  })
+
+  it('★流式那条路同样认 Agent(两处判断,漏一处就只有一半的场景好使)', () => {
+    expect(parseChatStreamActions({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', id: 'toolu_a', name: 'Agent', input: {} } } }))
+      .toEqual([{ kind: 'subagent-start', id: 'toolu_a', subagentType: undefined, description: undefined, prompt: undefined }])
+  })
+
+  it('★名字相近但不是它的工具,不许误判成子 agent', () => {
+    for (const name of ['AgentTool', 'MyAgent', 'Tasks', 'ListAgents']) {
+      const obj = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'x', name, input: {} }] } }
+      const acts = parseChatStreamActions(obj)
+      expect(acts.some((a) => a.kind === 'subagent-start'), name).toBe(false)
+    }
+  })
+
   it('maps a Task content_block_start to subagent-start (empty input is fine)', () => {
     expect(parseChatStreamActions({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', id: 'toolu_2', name: 'Task', input: {} } } }))
       .toEqual([{ kind: 'subagent-start', id: 'toolu_2', subagentType: undefined, description: undefined, prompt: undefined }])
