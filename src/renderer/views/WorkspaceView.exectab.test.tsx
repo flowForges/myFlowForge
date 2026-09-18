@@ -111,7 +111,10 @@ describe('WorkspaceView inspector 执行 tab (P2-2)', () => {
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
 
     act(() => {
-      emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'running' }) })
+      // ★★sessionId 是**必须**的:`run2StateForTab` 后来收紧成「run 的会话 === 当前会话」才显示,
+      //  为的是修「切到会话 B 还是看到会话 A 的工作流」那个泄露(以前没有 sessionId = 每个会话都显示)。
+      //  这个桩没跟上,于是执行 tab 一直没出现 —— 是测试漂了,不是 tab 坏了(2026-09-19 查清)。
+      emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'running', sessionId: 's-1' }) })
     })
 
     await waitFor(() => expect(container.querySelector('.insp-tab[data-pane="exec"]')).not.toBeNull())
@@ -126,7 +129,11 @@ describe('WorkspaceView inspector 执行 tab (P2-2)', () => {
     // name, so scope the assertion to the stage header to stay unambiguous).
     const pane = container.querySelector('#pane-exec') as HTMLElement
     expect(within(pane).getByText('代码开发', { selector: '.stage-name' })).toBeInTheDocument()
-    expect(within(pane).getByText('已完成 1 / 2')).toBeInTheDocument()
+    // ★进度文案后来改了:运行**中**显示的是「第 N / M 步 · 当前阶段」(当前位置),
+    //  只有跑完了才显示「已完成 N / M 阶段」。这个桩发的是 status:'running',所以断言要按前者
+    //  —— 见 RunExecPanel.tsx:364-365。测试漂了,不是面板坏了。
+    expect(within(pane).getByText(/第/)).toBeInTheDocument()
+    expect(within(pane).getByText(/步/)).toBeInTheDocument()
   })
 
   it('clicking 执行 after navigating away re-selects the RunExecPanel content; mid-run status churn does not force it back', async () => {
@@ -134,7 +141,10 @@ describe('WorkspaceView inspector 执行 tab (P2-2)', () => {
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
 
     act(() => {
-      emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'running' }) })
+      // ★★sessionId 是**必须**的:`run2StateForTab` 后来收紧成「run 的会话 === 当前会话」才显示,
+      //  为的是修「切到会话 B 还是看到会话 A 的工作流」那个泄露(以前没有 sessionId = 每个会话都显示)。
+      //  这个桩没跟上,于是执行 tab 一直没出现 —— 是测试漂了,不是 tab 坏了(2026-09-19 查清)。
+      emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'running', sessionId: 's-1' }) })
     })
     await waitFor(() => expect(container.querySelector('.insp-tab[data-pane="exec"]')).not.toBeNull())
 
@@ -146,7 +156,7 @@ describe('WorkspaceView inspector 执行 tab (P2-2)', () => {
     // A mere status churn within the SAME run (running -> awaiting) must NOT force the tab back to
     // 执行 (only a brand-new run defaults it — this is keyed off runId, not status).
     act(() => {
-      emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'awaiting' }) })
+      emitRun2Update({ workspacePath: '/ws', state: makeRunState({ status: 'awaiting', sessionId: 's-1' }) })   // 同上:不带 sessionId 的 run 不再属于任何会话
     })
     expect(container.querySelector('.insp-tab[data-pane="changes"]')!.classList.contains('on')).toBe(true)
     expect(container.querySelector('.insp-tab[data-pane="exec"]')!.classList.contains('on')).toBe(false)

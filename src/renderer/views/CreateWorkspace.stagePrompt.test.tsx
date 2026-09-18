@@ -41,8 +41,11 @@ describe('CreateWorkspace — stage prompt editing', () => {
   it('onCreate 收到含追加提示词的 design stage', () => {
     const onCreate = vi.fn()
     render(<CreateWorkspace {...baseProps} onCreate={onCreate} />)
-    // 填写工作区路径(id="crPath", placeholder="~/code/")使 canCreate 条件满足
-    fireEvent.change(screen.getByPlaceholderText('~/code/'), { target: { value: '/tmp/myproject' } })
+    // 填写工作区路径使 canCreate 条件满足。
+    // ★按 **id** 取,不按 placeholder —— placeholder 是文案,会跟着产品改
+    //  (它早就从「~/code/」变成了「输入或粘贴路径,如 ~/code/my-app」,这条测试就这么红了)。
+    //  id 是结构,改起来会被别处一起发现;文案不是。
+    fireEvent.change(document.querySelector('#crPath')!, { target: { value: '/tmp/myproject' } })
     // 点击 design chip 打开编辑器
     fireEvent.click(screen.getByTitle(/编辑「技术方案设计」/))
     // 输入追加文本

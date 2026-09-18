@@ -160,7 +160,9 @@ describe('WorkspaceView: disk-resume 恢复提示 (P-C2/T3)', () => {
 
     fireEvent.click(screen.getByText('继续'))
 
-    await waitFor(() => expect(resumeFromDiskMock).toHaveBeenCalledWith('/ws'))
+    // ★恢复时要把**会话归属**一并传过去:`run2StateForTab` 后来收紧成「run 的会话 === 当前会话」
+    //  才显示,所以从磁盘恢复的 run 必须当场被认领到某个会话,否则它恢复完谁也看不见。
+    await waitFor(() => expect(resumeFromDiskMock).toHaveBeenCalledWith('/ws', 's-1'))
     await waitFor(() => expect(screen.queryByText(/上次有工作流未完成/)).toBeNull())
     expect(discardResumableMock).not.toHaveBeenCalled()
   })

@@ -91,7 +91,7 @@ describe('WorkspaceView: composer locked while a workflow run is active', () => 
     expect(ta.placeholder).not.toMatch(/执行中/)
   })
 
-  it('run active: chat column stays visible and the composer is in QUEUE mode (typable, 排队 notice, send enabled)', async () => {
+  it('run active: chat column stays visible and the composer stays typable (并行独立对话 notice, send enabled)', async () => {
     render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
 
@@ -104,7 +104,10 @@ describe('WorkspaceView: composer locked while a workflow run is active', () => 
     await waitFor(() => expect(document.querySelector('#composerInput')).toBeInTheDocument())
     const ta = document.querySelector('#composerInput') as HTMLTextAreaElement
     expect(ta.disabled).toBe(false)
-    expect(ta.placeholder).toMatch(/排队/)
+    // ★★语义**故意**变了:工作流跑着的时候在这儿发消息,不再是「排队等它跑完」,
+    //  而是「与它并行的一条独立对话,不会进入该工作流」—— 这是产品决定(聊天永不触发工作流),
+    //  不是回归。测试当时写的是旧语义。
+    expect(ta.placeholder).toMatch(/并行|独立对话/)
 
     const sendBtn = document.querySelector('#sendBtn') as HTMLButtonElement
     expect(sendBtn.disabled).toBe(false)

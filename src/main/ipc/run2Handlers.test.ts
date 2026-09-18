@@ -13,12 +13,27 @@ import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
 // isn't injectable — so that test needs an actual repo, same reasoning as tempBranch.integration.test.ts.
 import { git } from '../git/gitRunner'
 
+/**
+ * 一个「正常跑完」的假 provider。
+ *
+ * ★★2026-09-19:它必须**交回一份 .md 产物**。`controller.ts` 后来加了一条硬规矩 ——
+ *  `producesDoc` 的阶段(技术方案设计)如果没有通过 forge_write_artifact 登记文档,那一路
+ *  就地判失败(那条规矩本身是对的:不加的话方案文件里只有「完成」两个字)。
+ *  而这个桩当时只回了一句 summary,于是**凡是带 design 阶段的用例都停在第一阶段**,
+ *  develop 永远跑不到 —— 表现成 `seen` 是空数组、状态卡在 awaiting、执行 tab 不出现。
+ *  三条红测试同一个根,是桩没跟上实现,不是实现坏了(2026-09-19 用事件探针查出来的)。
+ */
 function okProvider(): AgentProvider {
   return {
     id: 'x', displayName: 'X', capabilities: { structuredOutput: true, permissionHook: true, pty: false },
     async detect() { return true }, async listModels() { return [{ id: 'm', label: 'M' }] },
     run(task: AgentTask, cb: AgentCallbacks) {
-      const done = (async () => { cb.onHandoff?.({ summary: 'ok' }); const r = { ok: true, summary: '' }; cb.onDone(r); return r })()
+      const done = (async () => {
+        cb.onHandoff?.({ summary: 'ok', artifacts: [{ path: 'design.md', kind: 'md' }] })
+        const r = { ok: true, summary: '' }
+        cb.onDone(r)
+        return r
+      })()
       return { id: task.agentId, cancel() {}, done }
     },
   }
