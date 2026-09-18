@@ -18,11 +18,29 @@ export type HopState = 'ok' | 'bad' | 'unknown'
 export type HopView = {
   /** 这一跳的名字,画在界面上。 */
   label: string
+  /** 这一跳的两端。★界面画的是「节点 —— 节点」,从 label 里切字符串去凑是迟早要错的。 */
+  from: string
+  to: string
   state: HopState
   /** 往返时延(毫秒)。没测到就是 undefined —— **绝不填 0 冒充「很快」**。 */
   rttMs?: number
-  /** 这一跳出了什么事;`ok` 时为空。 */
+  /**
+   * 这一跳出了什么事。★★**短**(六到八个字),因为它画在链路旁边那一行里。
+   *  用户 2026-09-18 原话:「这个展示效果太差了,又乱又差,为什么这么多文字呢」——
+   *  当时这里塞的是一整句带破折号的解释,挤在 flex 行里把「中转 → 对方」都撑断行了。
+   */
   note?: string
+  /**
+   * 该怎么办。★长句只此一处,界面上**最多出现一次**(通常挂 title,或者在没有别的状态行时补一行)。
+   *  短的说「坏在哪」,长的说「去查什么」—— 两件事分开,界面才有得选。
+   */
+  hint?: string
+  /**
+   * 这个 rtt 是**推算**的,不是实测的。
+   * ★必须传到界面上:把推算的数字画得和实测一样,是在编造精度。但标注方式该由界面定
+   *  (现在是一个 `~` 前缀 + tooltip,而不是再占一整行)。
+   */
+  derived?: boolean
 }
 
 export type HopInput = {
@@ -51,43 +69,48 @@ export type HopInput = {
 export function diagnoseHops(i: HopInput): HopView[] {
   if (!i.viaRelay) {
     return [{
-      label: '直连对方',
+      label: '直连对方', from: '这台', to: '对方',
       state: i.peerReady ? 'ok' : 'bad',
       rttMs: i.peerReady ? i.peerRttMs : undefined,
-      note: i.peerReady ? undefined : '连不上对方 —— 检查地址、端口,以及两台是不是在同一个网里',
+      note: i.peerReady ? undefined : '连不上对方',
+      hint: i.peerReady ? undefined : '检查地址、端口,以及两台是不是在同一个网里',
     }]
   }
 
   const a2r: HopView = i.relaySocketOpen
-    ? { label: '这台 → 中转', state: 'ok', rttMs: i.relayRttMs }
-    : { label: '这台 → 中转', state: 'bad', note: '连不上中转 —— 检查中转地址,以及这台机器的网络' }
+    ? { label: '这台 → 中转', from: '这台', to: '中转', state: 'ok', rttMs: i.relayRttMs }
+    : { label: '这台 → 中转', from: '这台', to: '中转', state: 'bad', note: '连不上中转', hint: '检查中转地址,以及这台机器的网络' }
 
   if (!i.relaySocketOpen) {
     // ★后面两跳一律 unknown。第一跳都没通,我们对中转和对方**一无所知**。
-    return [a2r, { label: '中转 → 对方', state: 'unknown' }]
+    return [a2r, { label: '中转 → 对方', from: '中转', to: '对方', state: 'unknown' }]
   }
 
   if (i.relayStatus === 'waiting' || i.relayStatus === 'peer-offline') {
     return [a2r, {
-      label: '中转 → 对方', state: 'bad',
-      note: '中转在,但对方没挂上来 —— 那台电脑上的 myFlowForge 没开,或者它那边的中转地址不一样',
+      label: '中转 → 对方', from: '中转', to: '对方', state: 'bad',
+      note: '对方没挂上来',
+      hint: '那台电脑上的 myFlowForge 没开,或者它那边的中转地址不一样',
     }]
   }
   if (i.relayStatus === 'error') {
-    return [a2r, { label: '中转 → 对方', state: 'bad', note: '中转拒绝了这次连接' }]
+    return [a2r, { label: '中转 → 对方', from: '中转', to: '对方', state: 'bad', note: '中转拒绝了连接' }]
   }
   if (!i.peerReady) {
     return [a2r, {
-      label: '中转 → 对方', state: i.relayStatus === 'peer-online' ? 'bad' : 'unknown',
-      note: i.relayStatus === 'peer-online' ? '对方挂在中转上,但没有应答 —— 它可能正忙或刚断' : undefined,
+      label: '中转 → 对方', from: '中转', to: '对方',
+      state: i.relayStatus === 'peer-online' ? 'bad' : 'unknown',
+      note: i.relayStatus === 'peer-online' ? '没有应答' : undefined,
+      hint: i.relayStatus === 'peer-online' ? '对方挂在中转上,但不应答 —— 它可能正忙或刚断' : undefined,
     }]
   }
   // ★推算值:中转→B ≈ 端到端 − A→中转。两个都测到才给,而且**只在算得出正数时**给 ——
   //  抖动会让差值变成负数,那时候宁可不显示,也不显示一个负的时延。
   const derived = i.peerRttMs != null && i.relayRttMs != null ? i.peerRttMs - i.relayRttMs : undefined
   return [a2r, {
-    label: '中转 → 对方', state: 'ok',
+    label: '中转 → 对方', from: '中转', to: '对方', state: 'ok',
     rttMs: derived != null && derived > 0 ? derived : undefined,
+    derived: true,
   }]
 }
 

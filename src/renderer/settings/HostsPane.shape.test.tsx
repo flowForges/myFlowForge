@@ -40,13 +40,16 @@ describe('远程主机这一屏默认摆出来多少字', () => {
     await mount()
     const open = openCopy()
     const chars = open.reduce((n, e) => n + (e.textContent ?? '').trim().length, 0)
-    expect(chars, open.map((e) => e.textContent?.slice(0, 16)).join(' | ')).toBeLessThanOrEqual(60)
+    // ★2026-09-18 从 60 收到 32。用户第二次说这一屏字太多 —— 上一次的上限是照着
+    //  「当时写了多少」定的,而不是照着「该有多少」。现在这一屏摊在眼前的说明只剩一句
+    //  (切主机 = 换会话和工作区),那是唯一一件看界面看不出来的事。
+    expect(chars, open.map((e) => e.textContent?.slice(0, 16)).join(' | ')).toBeLessThanOrEqual(32)
   })
 
-  it('★没有哪一段是一大坨 —— 超过 40 字的解释属于折叠里或者文档里', async () => {
+  it('★没有哪一段是一大坨 —— 超过 32 字的解释属于折叠里或者文档里', async () => {
     await mount()
     for (const e of openCopy()) {
-      expect((e.textContent ?? '').trim().length, e.textContent?.slice(0, 24)).toBeLessThanOrEqual(40)
+      expect((e.textContent ?? '').trim().length, e.textContent?.slice(0, 24)).toBeLessThanOrEqual(32)
     }
   })
 

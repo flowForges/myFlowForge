@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { diagnoseHops } from '@shared/remote/hopDiagnosis'
 import { describeHostState, type HostDisplay, type HostInput, type HostStatusView, type RemoteHostView } from '@shared/remote/hostView'
 import './hostspane.css'
@@ -176,16 +176,14 @@ export function HostsPane({ hostChip, onHostChipChange }: {
       <div className="set-group">
         <h4>已配的机器</h4>
         <p className="set-desc">
-          切到哪台,就只看到哪台的会话和工作区。
+          切到哪台,只看哪台的会话和工作区。
           {' '}
           <DocsLink href={DOCS_REMOTE}>怎么配置远程主机</DocsLink>
         </p>
-        {/* ★和 `PhonePane` 那条互为镜像:人找错页时看的是**他当时打开的那一页**,只在一边写等于没写。
-            ★★写得这么短是有原因的 —— 这一屏有字数刹车(`HostsPane.shape.test.tsx`:默认摊开
-             总共 ≤60 字、每段 ≤40 字)。那条刹车挡住过我想加的两段解释,它挡得对:
-             用户原话是「设置里别写这么多文字,一般没人看」。方向靠**导航上那对标签**说清,
-             这里只留一句指路。 */}
-        <p className="set-desc">反过来(让别人连进这台)?见「共享本机」。</p>
+        {/* ★★2026-09-18 删掉了「反过来(让别人连进这台)?见『共享本机』。」这一句。
+            用户第二次说这一屏字太多。而那句话是在**给另一个界面写说明书** —— 左边导航上
+            「共享本机」四个字就贴在「远程主机」下面,一个找反了的人抬眼就看得见。
+            为一个已经写在屏幕上的东西再写一句指路,是这一屏字数最没性价比的来源。 */}
         <div className="hosts-list">
           {hosts.length === 0 && (
             <div className="hosts-empty">
@@ -229,23 +227,55 @@ export function HostsPane({ hostChip, onHostChipChange }: {
                      之前那些信息全被压成一句「连不上」。判据在 `hopDiagnosis`(纯函数 + 测试),
                      这里只负责画 —— 界面上再判一遍就等于有了第二份判据,两份迟早会不一致。
                     ★只在**走中转**且选中这台时画:直连只有一跳,画出来是废话。 */}
-                {connectedId === h.id && status?.hops?.viaRelay && (
-                  <div className="host-hops">
-                    {diagnoseHops(status.hops).map((hop, i) => (
-                      <span key={hop.label} className="hop">
-                        {i > 0 && <span className="hop-arrow">→</span>}
-                        <span className={hop.state === 'ok' ? 'hop-dot s-ok' : hop.state === 'bad' ? 'hop-dot s-bad' : 'hop-dot s-unknown'} />
-                        <span className="hop-name">{hop.label}</span>
-                        {/* ★没测到就不写 —— 空着比一个 0ms 诚实。 */}
-                        {hop.rttMs != null && <span className="hop-rtt">{hop.rttMs}ms</span>}
-                        {hop.note && <span className="hop-note">{hop.note}</span>}
-                      </span>
-                    ))}
-                    {/* ★「中转→对方」那段是**推算**的(端到端 − 到中转),必须说出来:
-                        把推算的数字画得和实测一样,是在编造精度。 */}
-                    <span className="hop-hint">后一段时延为推算值(端到端 − 到中转)</span>
-                  </div>
-                )}
+                {connectedId === h.id && status?.hops?.viaRelay && (() => {
+                  const hops = diagnoseHops(status.hops!)
+                  // 节点 = 第一跳的起点 + 每一跳的终点。一个节点「到达了」,当且仅当它前面每一跳都通。
+                  const nodes = [hops[0]!.from, ...hops.map((x) => x.to)]
+                  const nodeState = (idx: number): 'ok' | 'bad' | 'unknown' => {
+                    if (idx === 0) return 'ok'
+                    const prev = hops[idx - 1]!
+                    return prev.state === 'ok' ? 'ok' : prev.state === 'bad' ? 'bad' : 'unknown'
+                  }
+                  const broken = hops.find((x) => x.hint)
+                  return (
+                    <>
+                      <div className="host-chain" title={broken?.hint}>
+                        {nodes.map((name, i) => {
+                          const seg = hops[i - 1]
+                          const st = nodeState(i)
+                          return (
+                            <Fragment key={name + i}>
+                              {seg && (
+                                <span className={seg.state === 'ok' ? 'chain-seg s-ok' : seg.state === 'bad' ? 'chain-seg s-bad' : 'chain-seg s-unknown'}>
+                                  <span className="chain-line" />
+                                  {/* ★推算值只标一个 `~` + tooltip。原来这件事占了整整一行
+                                      (「后一段时延为推算值(端到端 − 到中转)」),而它一秒钟就读完、
+                                      之后永远是噪音 —— 标注的义务不等于每次都占一行。 */}
+                                  {seg.rttMs != null && (
+                                    <span className="chain-rtt" title={seg.derived ? '推算值:端到端 − 到中转,不是实测' : undefined}>
+                                      {seg.derived ? '~' : ''}{seg.rttMs}ms
+                                    </span>
+                                  )}
+                                  {seg.note && <span className="chain-note">{seg.note}</span>}
+                                </span>
+                              )}
+                              <span className="chain-node">
+                                <span className={st === 'ok' ? 'chain-dot s-ok' : st === 'bad' ? 'chain-dot s-bad' : 'chain-dot s-unknown'} />
+                                {name}
+                              </span>
+                            </Fragment>
+                          )
+                        })}
+                      </div>
+                      {/* ★长句**最多出现一次**:下面那行 host-state 已经在说「断了 / 几秒后重连 / 为什么」,
+                          这时候再补一句「那台电脑上的 myFlowForge 没开…」就是两句话抢同一件事。
+                          没有 host-state 时(已连上但某一跳不通)才补,否则只挂在 title 上。 */}
+                      {broken?.hint && (!liveState || liveState.status === 'ready') && (
+                        <div className="host-chain-hint">{broken.hint}</div>
+                      )}
+                    </>
+                  )
+                })()}
                 {connectedId === h.id && liveState && liveState.status !== 'ready' && (
                   <div className={liveState.status === 'failed' ? 'host-state s-failed'
                     : liveState.status === 'closed' ? 'host-state s-closed' : 'host-state'}>
@@ -482,7 +512,7 @@ export function HostsPane({ hostChip, onHostChipChange }: {
            设置页不该给别处的控件写说明书,那枚按钮自己有 tooltip。
           ★`<details>` 而不是自己写折叠:键盘可达和「默认收起」都由浏览器保证。 */}
       <details className="hosts-adv">
-        <summary>高级 —— 按钮显示方式、导出/导入清单</summary>
+        <summary>高级 —— 按钮样式、导出/导入</summary>
 
         {/* ★★这是**那枚按钮**的设置,不是某一台主机的设置。旧版把它放在每台主机的编辑表单里,
             后果有两个,都是用户当场撞上的:① 同一枚按钮切一台主机就换一副长相;

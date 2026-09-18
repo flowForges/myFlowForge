@@ -69,7 +69,13 @@ export function describeHostState(s: HostConnState): { text: string; short: stri
     case 'local': return { text: '未连接任何远程主机 —— 当前看到的都是这台电脑上的内容', short: '', tone: 'idle' }
     case 'connecting': return { text: s.attempt > 1 ? `连接中(第 ${s.attempt} 次)` : '连接中…', short: '连接中', tone: 'warn' }
     case 'ready': return { text: `已连接 · ${s.version}`, short: '', tone: 'ok' }
-    case 'retrying': return { text: `已断开,${Math.round(s.nextInMs / 1000)} 秒后重连 — ${s.error}`, short: '已断开', tone: 'bad' }
+    // ★向上取整,而且不足一秒直接说「正在重连」。`Math.round` 会在 nextInMs<500 时印出
+    //  「0 秒后重连」—— 一个永远不会到来的倒计时,看着就是卡住了(隔壁 `hostRowNote` 早就
+    //  为同一件事改用了 ceil,这一份当时漏了)。
+    case 'retrying': {
+      const secs = Math.ceil(s.nextInMs / 1000)
+      return { text: secs > 0 ? `已断开,${secs} 秒后重连 — ${s.error}` : `正在重连 — ${s.error}`, short: '已断开', tone: 'bad' }
+    }
     case 'failed': return { text: `连接失败:${s.error}`, short: '连接失败', tone: 'bad' }
     case 'closed': return { text: '未连接', short: '未连接', tone: 'idle' }
   }

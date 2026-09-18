@@ -62,3 +62,33 @@ describe('断在哪一跳', () => {
     expect(diagnoseHops({ ...base, relaySocketOpen: false, relayRttMs: 30 })[0].rttMs).toBeUndefined()
   })
 })
+
+/**
+ * ★★守卫:短的归短的,长的归长的。
+ *  用户 2026-09-18 看到的那一屏是「又乱又差,为什么这么多文字」—— 根因是 `note` 里塞了
+ *  一整句带破折号的解释,而它画在链路那一行里,把布局撑爆了。
+ *  这条断言不测样子(那要真 Chrome),只钉死:**note 必须短到能并排画**,长句一律进 hint。
+ *  没有它,这句话会一次加几个字地长回去,而每次单独看都「只多了半句」。
+ */
+describe('坏消息的长度', () => {
+  const cases: Parameters<typeof diagnoseHops>[0][] = [
+    { viaRelay: false, relaySocketOpen: false, peerReady: false },
+    { viaRelay: true, relaySocketOpen: false, peerReady: false },
+    { viaRelay: true, relaySocketOpen: true, relayStatus: 'waiting', peerReady: false },
+    { viaRelay: true, relaySocketOpen: true, relayStatus: 'error', peerReady: false },
+    { viaRelay: true, relaySocketOpen: true, relayStatus: 'peer-online', peerReady: false },
+  ]
+  it('★note 画在链路行里,必须 ≤ 8 个字', () => {
+    for (const c of cases) {
+      for (const h of diagnoseHops(c)) {
+        if (h.note) expect(h.note.length, `太长了,挪进 hint:「${h.note}」`).toBeLessThanOrEqual(8)
+        expect(h.note ?? '', 'note 里不该出现破折号 —— 那说明你把两句话塞进了一句').not.toContain('——')
+      }
+    }
+  })
+  it('★推算出来的时延必须带 derived 标记', () => {
+    const h = diagnoseHops({ viaRelay: true, relaySocketOpen: true, relayStatus: 'peer-online', peerReady: true, relayRttMs: 20, peerRttMs: 55 })
+    expect(h[1]!.rttMs).toBe(35)
+    expect(h[1]!.derived, '不标出来,界面就会把推算值画得和实测一样').toBe(true)
+  })
+})

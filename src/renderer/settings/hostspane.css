@@ -168,19 +168,47 @@
 .host-state.s-failed { color: var(--err); }
 .host-state.s-closed { color: var(--muted); }
 
-/* 分段链路:这台 → 中转 → 对方。★只在走中转时画;直连只有一跳,画出来是废话。 */
-.host-hops {
-  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+/* 分段链路:这台 —— 中转 —— 对方。★只在走中转时画;直连只有一跳,画出来是废话。
+   ★★2026-09-18 重做。上一版把每一跳画成「一个点 + 一句话」并排铺开,而那句话是
+    「中转在,但对方没挂上来 —— 那台电脑上的 myFlowForge 没开,或者它那边的中转地址不一样」——
+    三十多个字塞进 flex 行里,把「中转 → 对方」这个标签本身都撑断了行(用户原话:「又乱又差,
+    为什么这么多文字呢」)。
+   ★现在的分工:**这一行只画结构**(节点—连线—时延),坏在哪用六个字说完;
+    「去查什么」那句长的挂 title,只有在没有别的状态行时才补一行。 */
+.host-chain {
+  display: flex; align-items: center; gap: 7px;
   margin-top: 6px; font-size: 11.5px; color: var(--muted);
+  /* ★不换行 + 自己横向滚。换行的话三个节点会被拆到两行,链路的形状就没了 ——
+     而这一行存在的全部意义就是那个形状。 */
+  flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
 }
-.host-hops .hop { display: inline-flex; align-items: center; gap: 5px; }
-.hop-arrow { color: var(--faint); margin: 0 2px; }
-.hop-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
-.hop-dot.s-ok { background: var(--ok); }
-.hop-dot.s-bad { background: var(--err); }
-/* ★未知不是坏掉 —— 前一跳断了的时候,我们对这一跳一无所知。灰色,不是红色。 */
-.hop-dot.s-unknown { background: color-mix(in oklab, var(--fg) 22%, transparent); }
-.hop-name { color: var(--fg-2); }
-.hop-rtt { font-family: var(--mono); color: var(--faint); }
-.hop-note { color: var(--err); }
-.hop-hint { width: 100%; color: var(--faint); font-size: 11px; }
+.host-chain::-webkit-scrollbar { display: none; }
+.chain-node {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: 0 0 auto; white-space: nowrap; color: var(--fg-2);
+}
+.chain-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--ok); }
+.chain-dot.s-bad { background: var(--err); }
+/* ★未知不是坏掉 —— 前一跳断了的时候,我们对这一跳一无所知。空心,不是红色。 */
+.chain-dot.s-unknown { background: none; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--fg) 28%, transparent); }
+/* 连线段:一条横线 + 时延 +(坏了的话)六个字的原因。
+   ★`min-width: 0` 不能省:flex 子项默认 min-width:auto,里面的文字会把整段撑开,
+    结果又变成上一版那种「一跳挤三行」。本仓库在 flex 这一条上栽过不止一次。 */
+.chain-seg {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: 1 1 auto; min-width: 0;
+}
+.chain-line { flex: 1 1 auto; min-width: 14px; height: 1.5px; border-radius: 1px; background: var(--ok); }
+.chain-seg.s-bad .chain-line { background: var(--err); }
+/* 不通的那一段画成虚线:实线代表「这条路成立」,而它不成立。 */
+.chain-seg.s-unknown .chain-line {
+  height: 0; background: none;
+  border-top: 1.5px dashed color-mix(in oklab, var(--fg) 26%, transparent);
+}
+.chain-rtt { font-family: var(--mono); color: var(--faint); white-space: nowrap; flex: 0 0 auto; }
+.chain-note { color: var(--err); white-space: nowrap; flex: 0 0 auto; }
+/* 「去查什么」那一句。★单行截断 + title 给全文:说明文字不该把一张主机卡撑成半屏。 */
+.host-chain-hint {
+  margin-top: 4px; font-size: 11.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
