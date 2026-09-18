@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest'
 import type { AgentProvider, AgentTask, AgentCallbacks, ConfirmReq, InputReq } from '../agents/types'
 import { runWorkOrder, isTransientError, type WorkOrder } from './workOrder'
 
+/** 测试里的门:显式拒绝。★`onConfirm` 现在是必填 —— 忘了传是编译错误,而不是运行时才发现的静默全放行。 */
+const DENY = async () => 'deny' as const
+
 const order: WorkOrder = {
   id: 'develop:proj1', stageKey: 'develop', name: '代码开发', project: 'proj1',
   provider: 'fake', model: 'm', cwd: '/tmp/proj1', prompt: 'do it',
@@ -20,7 +23,7 @@ describe('runWorkOrder · registerCancel (终止支持,修图4)', () => {
       },
     }
     let captured: (() => void) | null = null
-    await runWorkOrder(order, { provider, env: {}, sleep: noSleep, registerCancel: (c) => { captured = c } })
+    await runWorkOrder(order, { provider, env: {}, onConfirm: DENY, sleep: noSleep, registerCancel: (c) => { captured = c } })
     expect(captured).toBeTypeOf('function')
     captured!()
     expect(cancelled).toBe(true)
@@ -74,7 +77,7 @@ function flakyProvider(failTimes: number): AgentProvider {
 
 describe('runWorkOrder', () => {
   it('parses handoff into a structured result on success', async () => {
-    const out = await runWorkOrder(order, { provider: providerThatHandsOff('done'), env: {} })
+    const out = await runWorkOrder(order, { provider: providerThatHandsOff('done'), env: {}, onConfirm: DENY })
     expect(out.status).toBe('ok')
     expect(out.attempts).toBe(1)
     expect(out.result?.summary).toBe('done')
@@ -82,13 +85,13 @@ describe('runWorkOrder', () => {
   })
 
   it('retries transient failures then succeeds', async () => {
-    const out = await runWorkOrder(order, { provider: flakyProvider(2), env: {}, sleep: noSleep })
+    const out = await runWorkOrder(order, { provider: flakyProvider(2), env: {}, onConfirm: DENY, sleep: noSleep })
     expect(out.status).toBe('ok')
     expect(out.attempts).toBe(3) // 2 fails + 1 success
   })
 
   it('gives up after retries are exhausted and never throws', async () => {
-    const out = await runWorkOrder(order, { provider: flakyProvider(99), env: {}, retries: 2, sleep: noSleep })
+    const out = await runWorkOrder(order, { provider: flakyProvider(99), env: {}, onConfirm: DENY, retries: 2, sleep: noSleep })
     expect(out.status).toBe('failed')
     expect(out.attempts).toBe(3)
     expect(out.error).toMatch(/timeout/)
@@ -96,7 +99,7 @@ describe('runWorkOrder', () => {
 
   it('does not retry a non-transient error', async () => {
     const out = await runWorkOrder(order, {
-      provider: flakyProvider(99), env: {}, sleep: noSleep,
+      provider: flakyProvider(99), env: {}, onConfirm: DENY, sleep: noSleep,
       isTransient: () => false,
     })
     expect(out.status).toBe('failed')
@@ -124,7 +127,7 @@ describe('runWorkOrder onSession', () => {
   it('forwards the provider-emitted session id to deps.onSession with laneId + provider', async () => {
     const calls: Array<[string, string, string]> = []
     const out = await runWorkOrder(order, {
-      provider: providerThatEmitsSession('sess-123'), env: {},
+      provider: providerThatEmitsSession('sess-123'), env: {}, onConfirm: DENY,
       onSession: (laneId, provider, sessionId) => { calls.push([laneId, provider, sessionId]) },
     })
     expect(out.status).toBe('ok')
@@ -169,9 +172,15 @@ describe('runWorkOrder interactive callbacks', () => {
     expect(out.result?.summary).toBe('confirm=allow input=staging')
     expect(seenLanes).toEqual(['develop:proj1', 'develop:proj1'])
   })
-  it('falls back to auto-allow / empty when no handlers injected', async () => {
-    const out = await runWorkOrder(order, { provider: providerThatAsks(), env: {} })
-    expect(out.result?.summary).toBe('confirm=allow input=')
+  /**
+   * ★★这条以前叫「没传回调时自动放行」。**那个缺省被删掉了。**
+   *  它和委派那条路的缺省(deny)方向相反,而两处谁也看不见谁 —— 同一个概念两个相反的默认值,
+   *  是用户第 5 次撞上「门没接上」时才被普查出来的结构问题之一。现在 `onConfirm` 是必填:
+   *  想「这条路不设门」就得**写出来**,顺带写清是放还是拒。
+   */
+  it('★没有隐式缺省了 —— 不设门的路径必须自己写明放还是拒', async () => {
+    const out = await runWorkOrder(order, { provider: providerThatAsks(), env: {}, onConfirm: DENY })
+    expect(out.result?.summary).toBe('confirm=deny input=')
   })
 })
 
@@ -189,7 +198,7 @@ describe('runWorkOrder onProgress', () => {
         return { id: task.agentId, cancel() {}, done }
       },
     }
-    await runWorkOrder(order, { provider, env: {}, onProgress: (e) => events.push(e) })
+    await runWorkOrder(order, { provider, env: {}, onConfirm: DENY, onProgress: (e) => events.push(e) })
     expect(events.some(e => e.laneId === 'develop:proj1' && e.state === 'run')).toBe(true)
     expect(events.some(e => e.activity === '写 design.md')).toBe(true)
   })
@@ -209,7 +218,7 @@ describe('runWorkOrder onProgress', () => {
         return { id: task.agentId, cancel() {}, done }
       },
     }
-    await runWorkOrder(order, { provider, env: {}, onProgress: (e) => events.push(e) })
+    await runWorkOrder(order, { provider, env: {}, onConfirm: DENY, onProgress: (e) => events.push(e) })
     expect(events).toContainEqual({
       laneId: 'develop:proj1',
       activity: '思考中',

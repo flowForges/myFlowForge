@@ -25,6 +25,7 @@ import { logDebug } from '../log/appLog'
 import { perfSpan } from '../perf/perfSpans'
 import { addDailyTokens } from '../tokens/growthSignalRef'
 import { explainCodexError } from '../agents/providers/codexErrorMeaning'
+import { gateRegistry } from '../gate/gateRegistry'
 
 export interface SendTurnDeps {
   provider: AgentProvider
@@ -292,6 +293,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         onThinkDelta: () => {},
         onDone: () => { cleanup(); resolve(acc) },
         onError: (err) => { cleanup(); reject(err) },
+        // ★以前这里**什么都没传** —— 于是蒸馏要权限时,provider 自己 fail-closed 静默拒掉,
+        //  一行痕迹都没有。现在同样是拒,但它在总线上留一条记录:「这条路没有门」和
+        //  「这条路的门断了」必须是两件能分开的事。
+        onConfirm: (req) => gateRegistry.autoDecide(
+          { origin: 'oneshot', workspacePath: ws, sessionId: payload.sessionId, label: '记忆蒸馏' },
+          req,
+        ),
       }, env)
     })
     const scheduleDistill = () => {

@@ -14,8 +14,21 @@ import type { PushKind } from './message'
 type ChatEventLike = { workspacePath?: string; sessionId?: string | null; type?: string; id?: string }
 type Run2EventLike = { workspacePath?: string; event?: { id?: string; kind?: string } }
 
+type GateEventLike = {
+  type?: string
+  gate?: { id?: string; origin?: string; workspacePath?: string; sessionId?: string | null }
+}
+
 /** 工作流泳道里「它自己定不了,等你」的那几种。 */
 const LANE_KINDS = new Set(['question', 'auth', 'doubt', 'failure'])
+
+/**
+ * 哪些来源由**门总线**负责推送。★和 `notifyBridge.NOTIFY_ORIGINS` 必须是同一份 ——
+ *  一道门在手机上也只该响一次。chat/run2 走它们自己的旧事件(上面两个分支);
+ *  setup 以前**一条推送都没有**(建区的门根本进不了这个函数),所以人离开电脑之后
+ *  建区卡在门前这件事,在手机上是完全看不见的。
+ * ★覆盖率由 `gateCoverage.test.ts` 钉死。 */
+export const PUSH_ORIGINS = new Set(['setup'])
 
 export type PushSource = { kind: PushKind; target: PushTarget; eventId?: string }
 
@@ -30,6 +43,16 @@ export function pushEventFrom(channel: string, payload: unknown): PushSource | n
     if (p.type === 'ask-request') return { kind: 'ask', target, eventId: p.id }
     if (p.type === 'done') return { kind: 'done', target }
     return null
+  }
+
+  if (channel === 'gate:event') {
+    const c = payload as GateEventLike
+    if (c.type !== 'raised' || !c.gate || !PUSH_ORIGINS.has(c.gate.origin ?? '')) return null
+    // ★★正文一个字都不带 —— 推送要过 Expo/APNs,门里那句话是对话内容(决策 7)。
+    //  这里只送「有一道门」和它挂在哪儿,内容留在本机的系统通知里。
+    const target: PushTarget = { workspacePath: c.gate.workspacePath ?? '', sessionId: c.gate.sessionId ?? null }
+    if (!target.workspacePath) return null
+    return { kind: 'confirm', target, eventId: c.gate.id }
   }
 
   if (channel === 'run2:event') {

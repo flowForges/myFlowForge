@@ -102,6 +102,7 @@ import { stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/
 import { startBridge } from '../mcp/forgeBridge'
 import { authSocketAddress } from '../mcp/bridgeAddress'
 import { startAuthBroker } from '../agents/authBroker'
+import { gateRegistry } from '../gate/gateRegistry'
 import { writeShimDir, shimmedPath, shimEnv } from '../agents/commandShim'
 import { removeWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
@@ -244,9 +245,22 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
 
   // #13: the user answered a setup hook's confirm/input card (SetupProgress) — unblock the hook.
+  // ★权限门(confirm)现在挂在**总线**上,输入门(input)还在 setupInteractions 里。先问总线:
+  //  答得上就是一道门,答不上再按输入门处理。两边 id 不会撞(总线的是 `g-…`,输入门的是 `sh-…`)。
   on(CH.workspaceSetupResolve, (_e, a: { id: string; answer: { decision?: 'allow' | 'deny'; value?: string } }) => {
+    if (a.answer?.decision && gateRegistry.resolve(a.id, a.answer.decision)) return
     resolveSetupInteraction(a.id, a.answer)
   })
+
+  /**
+   * ★★门总线的三条出口。**任何**界面都能用它把「还挂着的门」重建出来并回答 ——
+   *  这正是建区那条路以前缺的东西:它的门只活在一个模态框的 React state 里,
+   *  那个模态框一藏(「后台运行」)或一关,门就永远没人能答,而 hook 那边不超时、不兜底。
+   */
+  on(CH.gateList, (_e, a?: { workspacePath?: string }) => gateRegistry.list(a?.workspacePath ? { workspacePath: a.workspacePath } : undefined))
+  on(CH.gateResolve, (_e, a: { id: string; decision: ConfirmDecision }) => gateRegistry.resolve(a.id, a.decision))
+  // 总线 → 渲染层。★一条频道喂所有界面;谁要画、画成什么样,是界面自己的事。
+  gateRegistry.subscribe((c) => broadcast(CH.gateEvent, c))
   on(CH.configGetSettings, () => readSettings())
   on(CH.configSetSettings, (_e, settings) => {
     writeSettings(settings)

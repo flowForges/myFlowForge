@@ -88,6 +88,12 @@ export const CH = {
   workspaceScanRepos: 'workspace:scan-repos',
   workspaceEdit: 'workspaces:edit',
   workspaceRename: 'workspaces:rename',
+  // 权限门总线。★**所有**路径的门都从这三条走 —— 见 main/gate/gateRegistry.ts 顶部那段。
+  //  旧的 chat:event confirm-request / run2:event auth / workspace:setup hook:interact 仍然在,
+  //  它们是各自界面的呈现方式;而「谁在等」的单一事实源只有这里。
+  gateEvent: 'gate:event',
+  gateList: 'gate:list',
+  gateResolve: 'gate:resolve',
   workspaceSetup: 'workspace:setup',
   workspaceSetupResolve: 'workspace:setup-resolve',
   // The legacy orchestrator (and all its engine:* run channels — resolve/cancel/discard/last-run/event)

@@ -558,3 +558,25 @@ export interface ContextUsage {
   /** 模型的上下文窗口。只在 CLI 明确上报时才有 —— 缺席表示「不知道」,不是 0。 */
   window?: number
 }
+
+
+/**
+ * 还挂着的一道权限门(渲染层视图)。★和 `main/gate/gateRegistry.ts` 的 `PendingGate` 同形 ——
+ * 主进程那份带着 resolver 不能过 IPC,这份是能过的那一半。
+ */
+export interface PendingGateView {
+  id: string
+  origin: 'chat' | 'run2' | 'setup' | 'delegate' | 'oneshot'
+  workspacePath: string
+  sessionId?: string
+  /** 谁在等:「建区 Hook · 装 skill」。★界面第一眼要回答的是这个,不是「有东西在等」。 */
+  label?: string
+  title: string
+  where?: string
+  questions?: AskQuestion[]
+  raisedAt: string
+}
+
+export type GateEventView =
+  | { type: 'raised'; gate: PendingGateView }
+  | { type: 'resolved'; id: string; origin: string; workspacePath: string; sessionId?: string; decision: unknown }

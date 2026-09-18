@@ -70,6 +70,18 @@ const api = {
   },
   // #13: answer a setup hook's confirm/input card.
   resolveSetupInteraction: (id: string, answer: { decision?: 'allow' | 'deny'; value?: string }) => ipcRenderer.invoke(CH.workspaceSetupResolve, { id, answer }),
+  /**
+   * 权限门总线。★**还挂着的门**的单一事实源(main/gate/gateRegistry.ts)。
+   *  界面拿它重建卡片 —— 门的存活不再依赖任何一个界面还开着,这正是建区那条路以前缺的:
+   *  模态框一藏(「后台运行」)或一关,那道门就永远没人能答,而 hook 那边不超时、不兜底。
+   */
+  gateList: (a?: { workspacePath?: string }): Promise<import('@shared/types').PendingGateView[]> => ipcRenderer.invoke(CH.gateList, a ?? {}),
+  gateResolve: (a: { id: string; decision: 'allow' | 'deny' }): Promise<boolean> => ipcRenderer.invoke(CH.gateResolve, a),
+  onGateEvent: (cb: (c: import('@shared/types').GateEventView) => void) => {
+    const listener = (_: unknown, c: import('@shared/types').GateEventView) => cb(c)
+    ipcRenderer.on(CH.gateEvent, listener)
+    return () => ipcRenderer.removeListener(CH.gateEvent, listener)
+  },
   sendChat: (payload: unknown, source?: string) => ipcRenderer.invoke(CH.chatSend, payload, source),
   chatQueueState: (a: { workspacePath: string }): Promise<ChatQueueEvent> => ipcRenderer.invoke(CH.chatQueueState, a),
   // 还挂着、等人回答的确认/提问门。聊天视图每次挂载都拉一次 —— 它自己的 state 是空的,门却还在主进程阻塞着。

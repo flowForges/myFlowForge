@@ -48,7 +48,10 @@ describe('频道分类', () => {
     // 161 → 162:加载项两条(addons:scan / addons:remove)进来、skills:list 出去。
     //   扫的是**主机**磁盘上的技能/规则/MCP,删的也是主机上的东西 ⇒ host。
     // 162 → 165:技能 / 插件市场三条。装到**主机**的 CLI 上 ⇒ host。
-    expect(host.length).toBe(166)   // +1:workspace:add-workflow-from-template(2026-09-09)
+    // 166 → 168:门总线的 gate:list / gate:resolve。★归 **host**:连着远程主机时,
+    //   你要答的是**那台机器**上挂着的门(它的 hook、它的 agent 在等),不是本机的。
+    //   gate:event 是广播不是方法,所以方法表那边 +2 而不是 +3。
+    expect(host.length).toBe(168)
     expect(client.length + host.length).toBe(keys.length)
   })
 

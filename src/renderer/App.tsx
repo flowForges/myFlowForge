@@ -125,6 +125,13 @@ export function App() {
   // Setup progress: accumulated events from onSetupEvent during workspace creation with __basic/__proj hooks.
   const [setupState, setSetupState] = useState<SetupProgressState>(INITIAL_SETUP_STATE)
   const [setupVisible, setSetupVisible] = useState(false)
+  /**
+   * ★★建区 Hook 还挂着的门。**这份状态的事实源在主进程**(gateRegistry),不是这里 ——
+   *  以前那道门只活在 `setupState.pendingInteraction` 里,而「后台运行」会把 overlay 藏起来、
+   *  「关闭」会把整个 state 重置掉,于是门就永远没人能答,hook 那边不超时不兜底,
+   *  界面停在「运行中 · 1m51s」。现在界面关不关都不影响门,进来拉一次就重建得出来。
+   */
+  const [setupGates, setSetupGates] = useState<import('@shared/types').PendingGateView[]>([])
   // 后台运行: the overlay is hidden but setup is still running. Mirrored into a ref because the
   // onSetupEvent subscription below closes over initial state (empty-deps effect) and must read the
   // live value to decide whether to fire a completion notification. creatingNameRef names the
@@ -443,6 +450,17 @@ export function App() {
   }, [])
 
   // Subscribe to workspace setup events (streamed during creation when __basic/__proj hooks exist).
+  // 门总线 → 界面。★拉一次快照(界面刚起来时主进程可能已经挂着门了),然后跟着事件走。
+  useEffect(() => {
+    const pull = () => { void window.forge.gateList?.().then((gs) => setSetupGates(gs.filter((g) => g.origin === 'setup'))).catch(() => {}) }
+    pull()
+    const off = window.forge.onGateEvent?.((c) => {
+      if (c.type === 'raised') { if (c.gate.origin === 'setup') setSetupGates((gs) => [...gs, c.gate]) }
+      else setSetupGates((gs) => gs.filter((g) => g.id !== c.id))
+    })
+    return () => { off?.() }
+  }, [])
+
   useEffect(() => {
     const off = window.forge.onSetupEvent((e: SetupEvent) => {
       if (e.type === 'setup:start') {
@@ -929,7 +947,11 @@ export function App() {
       {/* Setup progress overlay: shown during workspace creation when __basic/__proj hooks exist */}
       {setupVisible && (
         <SetupProgress
-          state={setupState}
+          // ★门从**总线**补水:`setupState.pendingInteraction` 只是本地缓存,关一次面板就没了;
+          //  总线那份才是「主进程此刻真的在等谁」。两者取总线优先。
+          state={setupGates.length > 0 && !setupState.pendingInteraction
+            ? { ...setupState, pendingInteraction: { id: setupGates[0]!.id, pluginId: '', kind: 'confirm' as const, title: setupGates[0]!.title, where: setupGates[0]!.where } }
+            : setupState}
           onClose={() => { setSetupVisible(false); setSetupState(INITIAL_SETUP_STATE) }}
           onCancel={() => { void window.forge.cancelSetup() }}
           // 后台运行: hide the overlay (keep state) so the user can use the app while hooks run. Setup
@@ -945,14 +967,20 @@ export function App() {
       )}
 
       {/* Backgrounded-setup pill: setup is still running with the panel hidden. Click to re-open it. */}
-      {setupBackgrounded && !setupVisible && (
+      {/* ★★有门在等的时候,这颗 pill 必须**说出来**。原来它永远是一句「正在后台配置工作区…」,
+          于是「在跑」和「卡在一道没人答的门前」在屏幕上长得一模一样 —— 用户看到的就是
+          「执行中 1m51s」一直不动。★而且只要还有门挂着,即使建区面板被关掉过,它也得出现:
+          门活在主进程里,界面关不关都改变不了「有人在等你」这件事。 */}
+      {(setupBackgrounded || setupGates.length > 0) && !setupVisible && (
         <button
-          className="setup-bg-pill"
+          className={setupGates.length > 0 ? 'setup-bg-pill waiting' : 'setup-bg-pill'}
           onClick={() => { setBackgrounded(false); setSetupVisible(true) }}
-          title="点击查看建区进度"
+          title={setupGates.length > 0 ? (setupGates[0]?.label ?? '建区') + ' 等你放行' : '点击查看建区进度'}
         >
           <span className="setup-bg-pill-spin" />
-          正在后台配置工作区…
+          {setupGates.length > 0
+            ? `${setupGates[0]?.label ?? '建区'} 等你放行`
+            : '正在后台配置工作区…'}
         </button>
       )}
     </div>

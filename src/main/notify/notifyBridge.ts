@@ -41,7 +41,26 @@ type Run2EventLike = {
   event?: { id?: string; kind?: string; stageName?: string; stageKey?: string; body?: string; title?: string; note?: string; error?: string }
 }
 
+type GateEventLike = {
+  type?: string
+  id?: string
+  gate?: { id?: string; origin?: string; workspacePath?: string; sessionId?: string; label?: string; title?: string; where?: string }
+}
+
 const LANE_KINDS = new Set(['question', 'auth', 'doubt', 'failure'])
+
+/**
+ * 哪些来源由**门总线**负责弹通知。
+ *
+ * ★★这张表存在的唯一理由是「一道门只该响一次」:`chat` 和 `run2` 还在走它们自己的旧事件
+ *  (上面那两个分支),所以它们不在这里;`setup` 以前**一条通知都没有** —— 建区的门进不了
+ *  通知、推送、机器人桥、宠物气泡里的任何一个,用户在别处根本无从知道有东西在等他,
+ *  这正是「卡在运行中 1m51s」那次的一半原因。
+ * ★委派 / 蒸馏不在这里:它们是**自动决定**的(见 gateRegistry 的 AUTO_POLICY),没人需要被打扰。
+ * ★覆盖率由 `gateCoverage.test.ts` 钉死:每一个 GateOrigin 必须**恰好**落在
+ *  「总线通知 / 旧事件通知 / 自动决定」三者之一里。漏一个就红。
+ */
+export const NOTIFY_ORIGINS = new Set(['setup'])
 
 /** 去重表的上限。门 id 是唯一的,不设上限的话它跟着运行时长单调增长。 */
 const SEEN_MAX = 500
@@ -82,6 +101,17 @@ export function createGateNotifier(deps: GateNotifierDeps): (channel: string, pa
           fire('input', ws, p.title ?? '', sid)
         } else if (p.type === 'confirm-resolved' || p.type === 'ask-resolved') {
           if (p.id) seen.delete(p.id)
+        }
+      } else if (channel === 'gate:event') {
+        // 门总线。★正文带上来源(「建区 Hook · 装 skill」)—— 用户第一眼要回答的是
+        //  「是谁在等我」,而不是「有东西在等我」。
+        const c = (payload ?? {}) as GateEventLike
+        if (c.type === 'raised' && c.gate && NOTIFY_ORIGINS.has(c.gate.origin ?? '')) {
+          if (!remember(c.gate.id ?? '')) return
+          const head = [c.gate.label, c.gate.title].filter(Boolean).join(' · ')
+          fire('confirm', c.gate.workspacePath ?? '', c.gate.where ? `${head} — ${c.gate.where}` : head, c.gate.sessionId)
+        } else if (c.type === 'resolved' && c.id) {
+          seen.delete(c.id)
         }
       } else if (channel === 'run2:event') {
         const p = (payload ?? {}) as Run2EventLike

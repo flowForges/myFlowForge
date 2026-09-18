@@ -62,12 +62,32 @@
   font-size: 12.5px; font-weight: 550; box-shadow: 0 6px 20px rgba(0,0,0,.22); transition: .14s;
 }
 .setup-bg-pill:hover { color: var(--fg); border-color: var(--accent); }
+/* ★★2026-09-18:原来这里是一段**开口圆弧在转**(border-top-color + rotate)。用户否掉过两次
+   (「我甚至所有的开口圆弧都去掉」),而 `Spinners.test.tsx` 那条刹车只认 SVG 里那段路径,
+   认不出用 CSS 边框拼出来的同一个东西 —— 所以它在这儿躲过了一轮。换成一颗呼吸的点。 */
 .setup-bg-pill-spin {
-  width: 13px; height: 13px; border-radius: 50%;
-  border: 2px solid var(--accent-dim); border-top-color: var(--accent);
-  animation: setup-bg-spin .7s linear infinite;
+  width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--accent);
+  animation: setup-bg-breathe 1.4s ease-in-out infinite;
 }
-@keyframes setup-bg-spin { to { transform: rotate(360deg); } }
+@keyframes setup-bg-breathe {
+  0%, 100% { opacity: .35; transform: scale(.8); }
+  45%      { opacity: 1;   transform: scale(1); }
+}
+/* 有一道门在等人答。★这不是「在跑」的一种程度,是**另一种状态**:跑着的东西不需要你,
+   等门的东西在等你。所以它换色、并且不再用那颗「还在跑」的呼吸点节奏。 */
+.setup-bg-pill.waiting {
+  border-color: var(--warn); color: var(--fg);
+  background: color-mix(in oklab, var(--warn) 12%, var(--surface));
+}
+.setup-bg-pill.waiting .setup-bg-pill-spin {
+  background: var(--warn);
+  animation: setup-bg-knock 1s steps(1, end) infinite;
+}
+@keyframes setup-bg-knock { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) {
+  .setup-bg-pill-spin { animation: none; opacity: .7; }
+}
 
 .setup-hook-wrap { display: flex; flex-direction: column; gap: 4px; }
 .setup-hook-elapsed {
