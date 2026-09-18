@@ -1498,7 +1498,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                  是这一类交互最糟的地方:人会以为自己点错了会话,或者以为记录丢了。 */}
             {chat.historyLoading && (
               <div className="chat-loading" role="status">
-                <ThinkSpinner size={14} />
+                <ThinkSpinner size={16} />
                 <span>正在取这条会话的记录…</span>
               </div>
             )}

@@ -27,7 +27,7 @@ function Card({ sub, live }: { sub: SubagentCard; live: boolean }) {
              圆弧没有这个问题:它本来就是为旋转画的。 */}
         <span className="sac-ico" aria-hidden="true">
           {state === 'running' ? (
-            <SubagentSpinner size={14} />
+            <SubagentSpinner size={18} />
           ) : (
             // 静止态用一枚「分支出去的节点」—— 子 agent 就是从主线上分出去的一条。
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">

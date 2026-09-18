@@ -269,9 +269,11 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   display: flex; align-items: center; gap: 8px; padding: 3px 0; width: 100%;
   font: 600 10.5px/1.5 var(--mono); letter-spacing: .06em; color: var(--faint);
 }
-.think-h .glyph { width: 13px; height: 13px; color: var(--muted); flex: 0 0 auto; }
+/* ★16px:那一行的文字是 10.5px×1.5(行高约 15.75px),16 是不撑高这一行的上限。
+   跑完换成静止图标时尺寸不变 —— 一跳一缩会让人以为状态变了两次。 */
+.think-h .glyph { width: 16px; height: 16px; color: var(--muted); flex: 0 0 auto; }
 .think.live .think-h .glyph { color: var(--run); }
-.think-h .spin { width: 13px; height: 13px; flex: 0 0 auto; }
+.think-h .spin { width: 16px; height: 16px; flex: 0 0 auto; }
 .think-h .label { font-weight: 600; }
 .think.live .think-h .label {
   background: linear-gradient(90deg, var(--muted) 32%, var(--fg) 50%, var(--muted) 68%);
@@ -640,7 +642,9 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .sac-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 11px; text-align: left; font-size: 12.5px; color: var(--fg-2); }
 .sac-head:hover { background: var(--surface-2); }
 .sac-ico { flex: 0 0 auto; display: grid; place-items: center; color: var(--accent); }
-.sac-ico svg { width: 14px; height: 14px; }
+/* ★18px:标题行是 12.5px×1.5(≈18.75px),18 正好塞得下而不撑高卡片。
+   ★跑完的静止图标用同一个尺寸 —— 收尾时图标忽然缩一圈,看着像又发生了一件事。 */
+.sac-ico svg { width: 18px; height: 18px; }
 /* ★旋转交给里面那个 `.spin`(全 app 同一套),不再整个图标容器绕中心转 ——
    一枚放大镜那么转,手柄会甩圈,读起来是「乱晃」不是「在转」。 */
 .sac-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); }
@@ -1028,27 +1032,65 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
     逐段亮灭没有这个问题 —— 系统的 loading 指示器也是这么做的。
    ★主代理 = 放射线条(accent);子代理 = 绕圈圆点(run)。**形状不同**,不是同一个图标换色 ——
     颜色在小尺寸、换皮肤、色弱三种情况下都不可靠。 */
-.sp-spokes { display: block; flex: 0 0 auto; }
-.sp-spokes line {
-  stroke: var(--accent);
-  stroke-width: 2.6;
-  stroke-linecap: round;
-  animation: sp-fade .9s linear infinite;
+/* ── 主代理:两级思维导图 + 1→2→3→2 的八拍传递 ──────────────────────────
+   ★★节拍表(一轮 3.2 秒,八拍各 12.5%):
+       ①中心 ②一级连线 ③一级节点 ④二级连线 ⑤二级节点 ⑥二级连线 ⑦一级节点 ⑧一级连线
+     —— 传出去,再原路传回来。同一时刻只有一组是亮的,其余压到一成。
+   ★★这件事**做不成「一条动画 + 不同 delay」**:一级在一个周期里要亮两次(去程各一次),
+     延迟错开只能做出单向的波。所以五组各有各的关键帧。别为了"省几行"把它们合回去。
+   ★笔画粗细是 **viewBox 单位**:16px 渲染 24 单位时 1 单位 = 0.67 CSS px。
+     二级连线 1.85 单位 = 1.24px,刚好压住 1× 屏那条线(低于 1 物理像素就会渲染成灰雾)。 */
+.sp-mind { display: block; flex: 0 0 auto; overflow: visible; }
+.sp-mind line { stroke: currentColor; stroke-linecap: round; }
+.sp-mind .l1 { stroke-width: 2.1; }
+.sp-mind .l2 { stroke-width: 1.85; }
+.sp-mind circle { fill: currentColor; }
+.sp-mind .sp-hub { fill: none; stroke: currentColor; stroke-width: 2.9; }
+/* 一层一色。★三个都是主题里**已有的语义色**,所以 12 个强调色和壁纸自动配色换过去之后
+   它们跟着变;自己另调一个色相的话,总有几套皮肤会跟它打架。 */
+.sp-mind .sp-b0 { color: var(--run); }
+.sp-mind .sp-b1, .sp-mind .sp-b2 { color: var(--ok); }
+.sp-mind .sp-b3, .sp-mind .sp-b4 { color: var(--warn); }
+.sp-mind .sp-rot {
+  transform-box: view-box; transform-origin: 12px 12px;
+  animation: sp-rot 4.2s linear infinite;
 }
-.sp-orbit { display: block; flex: 0 0 auto; }
-.sp-orbit circle {
-  fill: var(--run);
-  animation: sp-fade .9s linear infinite;
+@keyframes sp-rot { to { transform: rotate(360deg); } }
+.sp-mind .sp-b0 { animation: sp-p0 3.2s linear infinite; }
+.sp-mind .sp-b1 { animation: sp-p1 3.2s linear infinite; }
+.sp-mind .sp-b2 { animation: sp-p2 3.2s linear infinite; }
+.sp-mind .sp-b3 { animation: sp-p3 3.2s linear infinite; }
+.sp-mind .sp-b4 { animation: sp-p4 3.2s linear infinite; }
+@keyframes sp-p0 { 0%, 9% { opacity: 1; } 13%, 96% { opacity: .1; } 100% { opacity: 1; } }
+@keyframes sp-p1 { 0%, 10% { opacity: .1; } 14%, 23% { opacity: 1; } 27%, 85% { opacity: .1; } 89%, 98% { opacity: 1; } 100% { opacity: .1; } }
+@keyframes sp-p2 { 0%, 23% { opacity: .1; } 27%, 35% { opacity: 1; } 39%, 73% { opacity: .1; } 77%, 85% { opacity: 1; } 89%, 100% { opacity: .1; } }
+@keyframes sp-p3 { 0%, 35% { opacity: .1; } 39%, 48% { opacity: 1; } 52%, 60% { opacity: .1; } 64%, 73% { opacity: 1; } 77%, 100% { opacity: .1; } }
+@keyframes sp-p4 { 0%, 48% { opacity: .1; } 52%, 60% { opacity: 1; } 64%, 100% { opacity: .1; } }
+
+/* ── 子代理:同心波纹 ─────────────────────────────────────────────────
+   ★和主代理**形状不同**(散开的网 vs 同心的圈),不靠颜色区分。
+   ★颜色走 currentColor —— `.sac-ico` 是 `color: var(--accent)`,所以它跟着用户选的强调色
+     和壁纸自动配色走。
+   ★只扩到 1.3 倍就消失:跑满全程的话,最亮那一刻也只剩半透明,整枚看着比实际更弱。 */
+.sp-ripple { display: block; flex: 0 0 auto; }
+.sp-ripple .core { fill: currentColor; }
+.sp-ripple .ring {
+  fill: none; stroke: currentColor; stroke-width: 2.6;
+  transform-box: fill-box; transform-origin: center;
+  animation: sp-ripple 1.6s ease-out infinite;
 }
-@keyframes sp-fade {
-  0%   { opacity: 1; }
-  70%  { opacity: .18; }
-  100% { opacity: .18; }
+@keyframes sp-ripple {
+  0%   { transform: scale(.42); opacity: 1; }
+  100% { transform: scale(1.3); opacity: 0; }
 }
 /* ★尊重「减少动态效果」:开了之后不闪,但**仍然要看得出在跑** —— 停成一个半透明的静止图标,
    而不是整个消失(消失等于把「正在跑」这个状态一起删了)。 */
 @media (prefers-reduced-motion: reduce) {
-  .sp-spokes line, .sp-orbit circle { animation: none; opacity: .55; }
+  .sp-mind .sp-rot, .sp-mind g[class^="sp-b"], .sp-ripple .ring {
+    animation: none;
+  }
+  .sp-mind g[class^="sp-b"] { opacity: .6; }
+  .sp-ripple .ring { opacity: .4; transform: scale(1); }
 }
 
 /* 「历史还在路上」那一行。★只在等服务端回来时出现 —— 空白和「本来就没消息」长得一样,
