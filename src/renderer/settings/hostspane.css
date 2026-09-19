@@ -212,3 +212,31 @@
   margin-top: 4px; font-size: 11.5px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* 「已连接的设备」。★2026-09-20 合并:以前局域网那儿只报一个数字、中转那儿才有名字和「断开」,
+   同一个问题(连着谁、能不能弄走)的答案取决于对方从哪条路进来 —— 那不是两件事。
+   ★局域网那条拿不到设备名(网关只数连接数,没有中转那条的 identify 帧),所以那一行据实写
+   「N 台」,**不编名字,也不摆一颗踢不动的按钮**。 */
+.hosts-devs { margin-top: 14px; }
+.hd-h {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--muted);
+  margin-bottom: 6px;
+}
+.hd-n {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  color: var(--fg-2); background: var(--surface-2);
+  border-radius: 999px; padding: 1px 7px;
+}
+.hd-empty { margin: 0; font-size: 12px; color: var(--faint); }
+.hd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.hd-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 11px; font-size: 12.5px; color: var(--fg-2);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.hd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+/* ★名字可能很长(「zghua 的 iPhone 15 Pro」),让它截断而不是把「断开」挤出去。 */
+.hd-nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.hd-via { flex: 0 0 auto; font-size: 11px; color: var(--faint); }

@@ -149,7 +149,6 @@ export function MobileSection() {
           以前它压在整页最底下、「远程连接」那一节里,于是看着像中转专属的功能
           (用户 2026-09-19:「局域网的连接其实也是扫二维码,但这个二维码又在出门中转的下面」)。
           下面两节回答的是**另一个**问题:这张码里印的地址从哪来(局域网 / 中转)。 */}
-      <h5 className="hosts-sec">把码给对方</h5>
       {pairable && (
         <div className="hosts-conn">
           <div className="hosts-qr">
@@ -160,9 +159,8 @@ export function MobileSection() {
                 <QrCode text={pairing} alt={`配对二维码 · ${qrAddr}`} />
                 <div className="hosts-qr-say">
                   {/* ★安全那半句不许压掉:这枚码里带着令牌,是这一屏唯一一条安全提示。 */}
-                  <p className="set-desc">
-                    手机相机直接扫。<b>码里带着令牌</b> —— 录屏、截图前先收起来。
-                  </p>
+                  {/* ★这一屏唯一一条安全提示,不许压掉。 */}
+                  <p className="set-desc">码里带令牌,别截图外传。</p>
                   <button className="set-btn" onClick={() => setShowQr(false)}>收起二维码</button>
                 </div>
               </>
@@ -188,33 +186,25 @@ export function MobileSection() {
               而其中「要在同一个网络里」偏偏是在替**局域网**说话 —— 用户 2026-09-19 原话:
               「这个二维码又是在出门中转的下面,这个就让人很奇怪」。错位的是位置,不是他没看懂。 */}
           {relayOn ? (
-            <p className="set-desc">
-              码里带着<b>中转</b> —— 对方在哪都能连{st.running && ',同一个 wifi 时自动走直连'}。
-            </p>
+            <p className="set-desc">码里带中转 —— 对方在哪都能连。</p>
           ) : (
-            <p className="set-desc">
-              码里是<b>局域网地址</b> —— 对方要和这台在同一个 wifi 里。想出门也能连,打开下面的中转。
-            </p>
+            <p className="set-desc">码里是局域网地址 —— 对方要和这台在同一个网里。</p>
           )}
         </div>
       )}
       {!pairable && (
-        <p className="set-desc">
-          还没有码 —— 下面两条路<b>至少打开一条</b>,码里才有地址可印。
-        </p>
+        <p className="set-desc">下面至少打开一条,才有码。</p>
       )}
 
-      <h5 className="hosts-sec">局域网</h5>
+      {/* ★★分节标题去掉了。原来是「局域网」一节 +「让设备连进来」一个开关,两层说的是同一件事;
+          现在开关自己就叫「局域网」,一行顶两行。用户 2026-09-20:「就三个字,局域网,不要多余的解释」。 */}
       <div className="set-row">
         <div className="info">
-          {/* ★不写「手机」:另一台电脑连进来走的也是这条路(它在自己的「远程主机」里粘的,
-              正是这儿出的配对码)。名字里只有手机,人就会跑去另一页找。 */}
-          <div className="t">让设备连进来</div>
-          <div className="d">同一个 wifi 里,手机或另一台电脑直接连这台。</div>
+          <div className="t">局域网</div>
         </div>
         <button
           className={`toggle${st.running ? ' on' : ''}`}
-          aria-label="让设备连进来"
+          aria-label="局域网"
           disabled={busy}
           onClick={() => void apply({ enabled: !st.running, host, port: portNum })}
         />
@@ -227,17 +217,11 @@ export function MobileSection() {
           第一版这句话埋在二维码下面,用户手机连上了、翻到这一屏,看见的是一张灰的「本机」卡,
           于是问「本机是灰的,这是什么意思」—— 唯一的证据滚在视野之外。 */}
       {st.running && (
-        /* ★★用户原话:「这个是什么意思?有什么用?」—— 问的就是这张卡。原来它长这样:
-             「在 30.136.120.227:6789 上等着,还没有设备连上来」。
-           它把一个**你根本不需要知道的内部细节**(监听地址和端口)放在了句子的主语位置,
-           而人在这儿要的答案只有一个:**连上了没有**。所以主句只说结论,地址降成第二行的小字
-           (它仍然要在:手填地址、排查连不上的时候就靠它)。 */
-        <div className={`hosts-live ${st.clients > 0 ? 'on' : ''}`} data-live="lan">
+        /* ★这一行只回答「它在哪儿听着」。**连了几台、哪几台**统一挪到下面那块设备列表里 ——
+           原来局域网这儿只报一个数字、中转那儿报名字带踢人,同一件事两种画法两个位置。 */
+        <div className="hosts-live on" data-live="lan">
           <span className="dot" />
-          <span className="hl-say">
-            <b className="hl-t">{st.clients > 0 ? `${st.clients} 台设备连着` : '等待设备连接'}</b>
-            <span className="hl-d">局域网 {addr}</span>
-          </span>
+          <span className="hl-say"><span className="hl-d">{addr}</span></span>
         </div>
       )}
 
@@ -343,15 +327,15 @@ export function MobileSection() {
         )}
       </details>
 
-      <h5 className="hosts-sec">远程连接</h5>
+      {/* ★同上:开关自己就叫「外部中转」,不再顶一个「远程连接」的分节标题。
+          「要你自己部署」那句挪进了下面的中转地址那一行 —— 那是**配的时候**才需要知道的事。 */}
       <div className="set-row">
         <div className="info">
-          <div className="t">出门也能连(中转)</div>
-          <div className="d">各在各的网时走中转。端到端加密,要<b>你自己部署</b>。</div>
+          <div className="t">外部中转</div>
         </div>
         <button
           className={`toggle${relay?.enabled ? ' on' : ''}`}
-          aria-label="出门也能连"
+          aria-label="外部中转"
           disabled={busy}
           onClick={() => void window.forge.relayApply?.({ enabled: !relay?.enabled, url: relayUrl.trim() })}
         />
@@ -396,34 +380,43 @@ export function MobileSection() {
               : '正在连中转…'}
         </p>
       )}
-      {relay?.enabled && relayDetail?.status === 'online' && (
-        /* ★★用户原话:「1 不知道是哪两台设备 2 能不能剔除掉某台设备」。
-            原来这里只有一个数字 —— 而「几台」这个信息几乎没用:你想知道的是**哪一台**,
-            以及**能不能把它弄走**。名字是对方自报的(`identify` 帧),主机侧一路带上来。
-           ★踢掉 = 只关那一条逻辑连接,别的设备不受影响;对方会自己退避重连,
-            所以这颗键同时也是「让这一台重连」。 */
-        /* ★`data-live`:这一屏有**两块** `.hosts-live`(局域网一块、中转一块),不标的话
-            按类名找永远拿到第一块。用 data 属性不用 class —— 它是**身份**不是样式钩子,
-            而 `hostsClassNames.test.ts` 要求每个 class 都得有真 CSS(那条守卫抓到过真 bug)。 */
-        <div className={`hosts-live ${(relayDetail.peers ?? 0) > 0 ? 'on' : ''}`} data-live="relay">
-          <span className="dot" />
-          <span className="hl-say">
-            <b className="hl-t">
-              {(relayDetail.peers ?? 0) > 0 ? `${relayDetail.peers} 台设备连着` : '已挂在中转上,等设备连过来'}
-            </b>
-            {(relayDetail.devices ?? []).length > 0 && (
-              <span className="hl-devs">
-                {(relayDetail.devices ?? []).map((d) => (
-                  <span className="hl-dev" key={d.cid}>
-                    <span className="nm" title={d.label}>{d.label}</span>
+      {/**
+        * ★★★「连着哪几台、能不能把它弄走」—— 用户 2026-09-20 点名要保住的那块。
+        *
+        *  原来这件事是**两处两种画法**:局域网那儿只有一个数字(`N 台设备连着`),
+        *  中转那儿才有名字和「断开」。于是同一个问题的答案,取决于对方是从哪条路进来的。
+        *  现在合成一块:**有名字的列名字,没名字的据实说是几台**。
+        *
+        *  ★局域网那条路拿不到设备名 —— 网关只数连接数(`appGateway.clientCount()`),
+        *   它没有中转那条的 `identify` 帧。所以这里**不编名字**:能踢的才给踢的按钮,
+        *   踢不了的就不摆一颗点了没反应的键。
+        */}
+      {(st.running || relay?.enabled) && (() => {
+        const relayDevs = relayDetail?.status === 'online' ? (relayDetail.devices ?? []) : []
+        const lanN = st.running ? st.clients : 0
+        const total = lanN + relayDevs.length
+        return (
+          <div className="hosts-devs">
+            <div className="hd-h">
+              已连接的设备
+              <span className="hd-n">{total > 0 ? total : '无'}</span>
+            </div>
+            {total === 0 ? (
+              <p className="hd-empty">还没有设备连上来。</p>
+            ) : (
+              <ul className="hd-list">
+                {relayDevs.map((d) => (
+                  <li className="hd-row" key={d.cid}>
+                    <span className="hd-dot" />
+                    <span className="hd-nm" title={d.label}>{d.label}</span>
+                    <span className="hd-via">中转</span>
                     <button
                       className="set-btn"
                       disabled={busy || kicking === d.cid}
                       title="断开这一台。它会自己重连 —— 卡住的连接可以用它救回来"
                       onClick={async () => {
                         // ★不接返回值:`relayController.kick` 会 `announce()`,
-                        //  新状态从 `onRelayStatus` 那条广播回来 —— 和别处同一条路,
-                        //  少一份可能和广播打架的本地状态。
+                        //  新状态从 `onRelayStatus` 那条广播回来 —— 和别处同一条路。
                         setKicking(d.cid)
                         try { await window.forge.relayKick?.(d.cid) }
                         finally { setKicking('') }
@@ -431,16 +424,22 @@ export function MobileSection() {
                     >
                       {kicking === d.cid ? '断开中…' : '断开'}
                     </button>
-                  </span>
+                  </li>
                 ))}
-              </span>
+                {lanN > 0 && (
+                  /* ★据实:局域网这条路我们只知道「几台」。写成 `{lanN} 台`,不编名字,
+                     也不给一颗踢不动的按钮。 */
+                  <li className="hd-row" key="lan">
+                    <span className="hd-dot" />
+                    <span className="hd-nm">{lanN} 台</span>
+                    <span className="hd-via">局域网</span>
+                  </li>
+                )}
+              </ul>
             )}
-          </span>
-        </div>
-      )}
-
-
-
+          </div>
+        )
+      })()}
 
     </>
   )

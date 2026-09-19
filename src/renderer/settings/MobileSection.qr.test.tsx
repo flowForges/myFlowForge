@@ -51,9 +51,11 @@ const mount = async (status: unknown, relay?: Partial<RelayView>) => {
     } : {}),
   }
   render(<MobileSection />)
-  await waitFor(() => expect(screen.getByText('让设备连进来')).toBeTruthy())
+  // ★按**开关**等渲染,不按文本 —— 设备清单那一行里也有「局域网」三个字,
+  //  按文本找会撞上两个(2026-09-20 合并设备清单之后)。
+  await waitFor(() => expect(document.querySelector('button.toggle[aria-label="局域网"]')).toBeTruthy())
   // 中转状态是第二个异步来源,等它也落地 —— 不等的话「只开中转」那几条会在 relay 还是 null 时断言。
-  if (r?.enabled) await waitFor(() => expect(document.querySelector('button.toggle.on[aria-label="出门也能连"]')).toBeTruthy())
+  if (r?.enabled) await waitFor(() => expect(document.querySelector('button.toggle.on[aria-label="外部中转"]')).toBeTruthy())
 }
 
 /** 点开码,把喂给 QrCode 的那条链接解回来。 */
@@ -105,7 +107,7 @@ describe('配对二维码', () => {
     await mount(old)
     await act(async () => { fireEvent.click(screen.getByText('显示配对二维码')) })
     expect(document.querySelector('svg.qr')).toBeTruthy()
-    expect(screen.getByText('让设备连进来')).toBeTruthy()
+    expect(document.querySelector('button.toggle[aria-label="局域网"]')).toBeTruthy()
   })
 
   it('★网关和中转**都**关着,才是真的没码可扫', async () => {
@@ -182,72 +184,85 @@ describe('只开中转(局域网网关关着)', () => {
   })
 })
 
-describe('「我手机连上没有」', () => {
-  it('★答案在开关旁边,不在二维码底下 —— 而且是**没展开二维码时**就看得见', async () => {
+describe('「连着哪几台」这块', () => {
+  /**
+   * ★★2026-09-20 合并。以前这件事有**两处两种画法**:局域网那儿只报一个数字
+   *  (`N 台设备连着`),中转那儿才有名字和「断开」—— 同一个问题的答案取决于对方从哪条路进来。
+   *  现在统一成一块 `.hosts-devs`:有名字的列名字,没名字的据实写「N 台」。
+   *  下面这些断言钉的还是原来那几件事(看得见 / 分得清是哪台 / 踢得掉 / 没人连时别摆空清单),
+   *  只是换到了新的 DOM 上。
+   */
+  it('★答案就在开关下面,不用展开二维码就看得见', async () => {
     await mount({ ...RUNNING, clients: 1 })
-    // 二维码还折着
-    expect(document.querySelector('svg.qr')).toBeNull()
-    const live = document.querySelector('.hosts-live[data-live="lan"]')!
-    expect(live.textContent).toContain('1 台设备连着')
-    expect(live.className).toContain('on')
+    expect(document.querySelector('svg.qr'), '二维码还折着').toBeNull()
+    const devs = document.querySelector('.hosts-devs')!
+    expect(devs.textContent).toContain('已连接的设备')
+    expect(devs.textContent).toContain('1 台')
+    expect(devs.textContent).toContain('局域网')
   })
 
   /**
-   * ★★这条原来钉的是「在 <地址> 上等着,还没有设备连上来」。用户看到那句话的反应是
-   *  「这个是什么意思?有什么用?」—— 它把监听地址放在了主语位置,而人在这儿只想知道
-   *  **连上了没有**。所以断言改成:结论必须是主句,地址**仍然要在**(手填地址、排查连不上
-   *  都靠它),只是降成第二行。两件事都钉住,别让下一版把地址整个删掉。
+   * ★地址**不许消失**。它降成了开关下面那行小字(手填地址、排查连不上都靠它),
+   *  但这一屏没有它就没法回答「我该往手机里填什么」。
    */
-  it('没有设备连着时:主句说结论,地址退成次要信息(但不许消失)', async () => {
+  it('监听地址仍然看得见,只是不再顶在主句上', async () => {
     await mount({ ...RUNNING, clients: 0 })
-    const live = document.querySelector('.hosts-live[data-live="lan"]')!
-    expect(live.querySelector('.hl-t')?.textContent).toBe('等待设备连接')
-    expect(live.querySelector('.hl-d')?.textContent).toContain('192.168.110.133:6789')
-    expect(live.className).not.toContain('on')
+    expect(document.querySelector('.hosts-live[data-live="lan"]')?.textContent)
+      .toContain('192.168.110.133:6789')
   })
 
-  it('网关关着就没有这条 —— 关着的时候「0 台设备」是废话', async () => {
+  it('一台都没连时:说清楚是「没有」,而不是留一块空白', async () => {
+    await mount({ ...RUNNING, clients: 0 })
+    const devs = document.querySelector('.hosts-devs')!
+    expect(devs.textContent).toContain('还没有设备连上来')
+    expect(devs.querySelectorAll('.hd-row')).toHaveLength(0)
+  })
+
+  it('网关关着、中转也没开,就整块不摆 —— 那时候「0 台」是废话', async () => {
     await mount({ ...RUNNING, running: false })
+    expect(document.querySelector('.hosts-devs')).toBeNull()
     expect(document.querySelector('.hosts-live')).toBeNull()
   })
-})
 
-/**
- * ★★用户原话:「1 不知道是哪两台设备 2 能不能剔除掉某台设备,如果我发现有僵尸连接,
- *  我能不能踢掉或者重连」。「几台」这个数字几乎没用 —— 要的是**哪一台**、以及**弄得走吗**。
- */
-describe('中转上挂着的设备:看得见、踢得掉', () => {
-  const online = (devices: { cid: string; label: string; since: number }[]) => ({
-    enabled: true, url: 'wss://r.example.dev', publicKey: 'A'.repeat(43) + '=', token: 't',
-    detail: { status: 'online', peers: devices.length, devices },
-  })
+  /**
+   * ★★用户原话:「1 不知道是哪两台设备 2 能不能剔除掉某台设备,如果我发现有僵尸连接,
+   *  我能不能踢掉或者重连」。「几台」这个数字几乎没用 —— 要的是**哪一台**、以及**弄得走吗**。
+   */
+  describe('中转上挂着的设备:看得见、踢得掉', () => {
+    const online = (devices: { cid: string; label: string; since: number }[]) => ({
+      enabled: true, url: 'wss://r.example.dev', publicKey: 'A'.repeat(43) + '=', token: 't',
+      detail: { status: 'online', peers: devices.length, devices },
+    })
 
-  it('★列出每台设备的名字,而不是只给一个数字', async () => {
-    await mount(RUNNING, online([
-      { cid: '1', label: '书房的 iPhone', since: 1 },
-      { cid: '2', label: 'zghua 的 MacBook', since: 2 },
-    ]))
-    const live = document.querySelector('.hosts-live[data-live="relay"]')!
-    expect(live.textContent).toContain('2 台设备连着')
-    expect(live.textContent).toContain('书房的 iPhone')
-    expect(live.textContent).toContain('zghua 的 MacBook')
-  })
+    it('★列出每台设备的名字,而不是只给一个数字', async () => {
+      await mount(RUNNING, online([
+        { cid: '1', label: '书房的 iPhone', since: 1 },
+        { cid: '2', label: 'zghua 的 MacBook', since: 2 },
+      ]))
+      const devs = document.querySelector('.hosts-devs')!
+      expect(devs.textContent).toContain('书房的 iPhone')
+      expect(devs.textContent).toContain('zghua 的 MacBook')
+      expect(devs.textContent).toContain('中转')
+    })
 
-  it('★★「断开」点的是那一台的 cid —— 点错人比不给这颗键更糟', async () => {
-    await mount(RUNNING, online([
-      { cid: '1', label: '书房的 iPhone', since: 1 },
-      { cid: '2', label: 'zghua 的 MacBook', since: 2 },
-    ]))
-    const rows = [...document.querySelectorAll('.hosts-live[data-live="relay"] .hl-dev')]
-    const mac = rows.find((r) => (r.textContent ?? '').includes('MacBook'))!
-    await act(async () => { fireEvent.click(mac.querySelector('button')!) })
-    expect((window as any).forge.relayKick).toHaveBeenCalledWith('2')
-  })
+    it('★★「断开」点的是那一台的 cid —— 点错人比不给这颗键更糟', async () => {
+      await mount(RUNNING, online([
+        { cid: '1', label: '书房的 iPhone', since: 1 },
+        { cid: '2', label: 'zghua 的 MacBook', since: 2 },
+      ]))
+      const rows = [...document.querySelectorAll('.hosts-devs .hd-row')]
+      const mac = rows.find((r) => (r.textContent ?? '').includes('MacBook'))!
+      await act(async () => { fireEvent.click(mac.querySelector('button')!) })
+      expect((window as any).forge.relayKick).toHaveBeenCalledWith('2')
+    })
 
-  it('一台都没连时不摆清单,只说在等着', async () => {
-    await mount(RUNNING, online([]))
-    const live = document.querySelector('.hosts-live[data-live="relay"]')!
-    expect(live.textContent).toContain('等设备连过来')
-    expect(document.querySelectorAll('.hosts-live[data-live="relay"] .hl-dev')).toHaveLength(0)
+    /** ★局域网那条**拿不到设备名**(网关只数连接数),所以它那一行不许有「断开」—— 点了也没用。 */
+    it('★局域网那一行不给「断开」 —— 那条路踢不动,摆一颗点了没反应的键更糟', async () => {
+      await mount({ ...RUNNING, clients: 2 }, online([]))
+      const lan = [...document.querySelectorAll('.hosts-devs .hd-row')]
+        .find((r) => (r.textContent ?? '').includes('局域网'))!
+      expect(lan.textContent).toContain('2 台')
+      expect(lan.querySelector('button')).toBeNull()
+    })
   })
 })

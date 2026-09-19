@@ -23,7 +23,9 @@ const mount = async () => {
     setSettings: vi.fn(async () => {}),
   }
   render(<MobileSection />)
-  await waitFor(() => expect(screen.getByText('让设备连进来')).toBeTruthy())
+  // ★按**开关**等渲染,不按文本 —— 设备清单那一行里也有「局域网」三个字,
+  //  按文本找会撞上两个(2026-09-20 合并设备清单之后)。
+  await waitFor(() => expect(document.querySelector('button.toggle[aria-label="局域网"]')).toBeTruthy())
 }
 
 beforeEach(() => vi.clearAllMocks())
@@ -65,7 +67,7 @@ describe('这一屏默认摆出来多少东西', () => {
   it('★这一屏只管「连进来」这件事:两个开关,推送不在这儿', async () => {
     await mount()
     const toggles = [...document.querySelectorAll('button.toggle')].filter((e) => !e.closest('details'))
-    expect(toggles.map((e) => e.getAttribute('aria-label'))).toEqual(['让设备连进来', '出门也能连'])
+    expect(toggles.map((e) => e.getAttribute('aria-label'))).toEqual(['局域网', '外部中转'])   // ★2026-09-20 改名:开关自己就是节标题,不再顶一层「局域网/远程连接」
   })
 
   it('★推送的任何痕迹都不许留在这一屏 —— 留一半比整块留着更难找', async () => {
@@ -102,7 +104,7 @@ describe('这一屏默认摆出来多少东西', () => {
     await mount()
     const outside = (sel: string) =>
       [...document.querySelectorAll(sel)].some((e) => !e.closest('details'))
-    expect(outside('[aria-label="让设备连进来"]')).toBe(true)
+    expect(outside('[aria-label="局域网"]')).toBe(true)
     expect(
       [...document.querySelectorAll('button')].some(
         (b) => b.textContent === '显示配对二维码' && !b.closest('details'),
@@ -116,19 +118,20 @@ describe('这一屏默认摆出来多少东西', () => {
    *  开了中转再加中转地址)。它曾经压在整页最底下、「远程连接」那一节里 —— 于是看着像
    *  中转专属的功能,用户 2026-09-19 原话:「局域网的连接其实也是扫二维码,但这个二维码
    *  又是在出门中转的下面,这个就让人很奇怪」。
-   *  位置在这一屏是**语义**:谁在上面,就意味着谁管谁。这条断言把它钉住。
+   *  位置在这一屏是**语义**:谁在上面,就意味着谁管谁。
+   *  ★2026-09-20 两个分节标题去掉了(开关自己就叫「局域网」「外部中转」),所以改成按
+   *   **开关**定位 —— 钉的仍然是同一件事。
    */
-  it('★★配对码排在「局域网」和「远程连接」两节之前', async () => {
+  it('★★配对码排在两个开关之前', async () => {
     await mount()
-    const texts = [...document.querySelectorAll('h5.hosts-sec, button')]
-      .map((e) => e.textContent?.trim() ?? '')
-    const iQr = texts.findIndex((t) => t === '显示配对二维码' || t === '收起二维码')
-    const iLan = texts.indexOf('局域网')
-    const iRemote = texts.indexOf('远程连接')
+    const all = [...document.querySelectorAll('button')]
+    const iQr = all.findIndex((b) => b.textContent === '显示配对二维码' || b.textContent === '收起二维码')
+    const iLan = all.findIndex((b) => b.getAttribute('aria-label') === '局域网')
+    const iRelay = all.findIndex((b) => b.getAttribute('aria-label') === '外部中转')
     expect(iQr, '找不到配对码那一块').toBeGreaterThanOrEqual(0)
-    expect(iLan, '找不到「局域网」分节').toBeGreaterThanOrEqual(0)
-    expect(iRemote, '找不到「远程连接」分节').toBeGreaterThanOrEqual(0)
+    expect(iLan, '找不到「局域网」开关').toBeGreaterThanOrEqual(0)
+    expect(iRelay, '找不到「外部中转」开关').toBeGreaterThanOrEqual(0)
     expect(iQr, '配对码掉到「局域网」下面去了').toBeLessThan(iLan)
-    expect(iQr, '配对码掉到「远程连接」下面去了 —— 它就是这么被读成中转专属的').toBeLessThan(iRemote)
+    expect(iQr, '配对码掉到「外部中转」下面去了 —— 它就是这么被读成中转专属的').toBeLessThan(iRelay)
   })
 })

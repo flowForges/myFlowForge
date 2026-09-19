@@ -8,13 +8,24 @@ import { useC } from '../src/theme/theme'
 import { Btn, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { useConn } from '../src/net/conn'
 import { hostLabel, isLoopbackUrl, parseAddress } from '../src/net/hosts'
+import { parsePairingLink } from '../../src/shared/remote/pairingLink'
+import * as Clipboard from 'expo-clipboard'
 import { scanSupport } from '../src/net/scanSupport'
 
 /** ★这个包里到底有没有相机。模块作用域算一次就够,它一辈子不会变。 */
 const CAN_SCAN = scanSupport() === 'ok'
 
 /**
- * 添加主机。手填地址 + 令牌,或者**从二维码填进来**。
+ * 添加主机。**只有两条路:扫码,或者粘配对码。**
+ *
+ * ★★★2026-09-20 删掉了「地址 + 访问令牌」两个手填框。它们不是多余,是**有害**:
+ *  配对码里带着 daemon 的身份公钥(整条链路唯一的信任锚点,由人从屏幕搬过来、不经过网络),
+ *  而手填那两个框给不出公钥 —— 于是那样加出来的主机**连上之后不是端到端加密的**。
+ *  这件事 app 自己一直知道:桌面端「远程主机」那屏把这种记录标成「直连(不加密)」,
+ *  而这一屏原来那段说明也写着「同一个 wifi 下走的是局域网直连(明文)」。
+ *  两条路都带公钥之后,那句话不再成立,整段说明也就一起删了。
+ *  代价:既扫不了码、又粘不了码的极端情况,只能手抄一长串配对码 —— 抄两个短的那条路,
+ *  换来的是一条不加密的连接,不值。
  *
  * ★两条扫码路径落到的是**同一个地方**:
  *   ① 用手机自带的相机扫 → 系统按 `myflowforge://add-host?a=…&t=…&n=…` 深链把 app 拉起来,
@@ -46,13 +57,36 @@ export default function AddHost() {
    *  手输一把公钥没有任何意义(错一个字符就连不上,而且没人核对得了),
    *  所以这两样没有输入框,只在下面显示一行"这台会加密 / 走中转"。
    */
-  const [pubKey] = useState(() => one(q.k))
-  const [relay] = useState(() => one(q.r))
+  const [pubKey, setPubKey] = useState(() => one(q.k))
+  const [relay, setRelay] = useState(() => one(q.r))
+  /** 粘进来的那串配对码原文。★只在「没扫码进来」这条路上用。 */
+  const [code, setCode] = useState('')
   const [err, setErr] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
   const parsed = parseAddress(addr)
   const loopback = parsed.ok && isLoopbackUrl(parsed.url)
+
+  /**
+   * 吃下一串配对码。★**同一个解析器**(`parsePairingLink`)扫码那条路也在用 ——
+   *  两条路解出来的东西必须一模一样,各写一份迟早会漂。
+   */
+  const takeCode = (raw: string) => {
+    setCode(raw)
+    const r = parsePairingLink(raw)
+    if (!r.ok) { setErr(raw.trim() ? r.error : null); return }
+    setErr(null)
+    setAddr(r.value.address)
+    setToken(r.value.token)
+    setPubKey(r.value.pubKey ?? '')
+    setRelay(r.value.relay ?? '')
+    if (!label.trim()) setLabel(r.value.label ?? '')
+  }
+
+  const pasteCode = async () => {
+    try { takeCode(await Clipboard.getStringAsync()) }
+    catch { setErr('读不到剪贴板') }
+  }
 
   const save = async () => {
     const p = parseAddress(addr)
@@ -94,7 +128,7 @@ export default function AddHost() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
-        <TopTitle title="添加主机" sub={scanned ? '已从二维码填好,核对一下就能连' : '扫电脑上那枚码,或者手填地址'} />
+        <TopTitle title="添加主机" sub={scanned ? '已从二维码填好,核对一下就能连' : '扫码,或粘电脑上的配对码'} />
       </TopBar>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 40 }}>
@@ -105,84 +139,45 @@ export default function AddHost() {
               <T style={{ fontWeight: '700', color: c.fg }}>你自己那台电脑</T>
               {' '}—— 连上去等于把起 agent、答权限门、开终端的权力交出去。
             </Note>
-          ) : !CAN_SCAN ? (
-            // ★扫不了就**不摆这个按钮**。
-            //  真机上崩过一次:手机上装的包是加相机之前打的,按钮照常显示、点下去 app 当场崩。
-            //  网页版是另一个原因(Safari 没有 BarcodeDetector),但对人来说是同一件事:这条路走不通。
-            //  ★仍然给一条**现在就走得通**的路 —— 手机自带的相机扫那枚码不需要新包。
-            <Note>
-              这个版本没有 app 内扫码。不过用<T style={{ fontWeight: '700', color: c.fg }}>手机自带的相机</T>
-              扫电脑上那枚二维码(设置 → 主机 → 显示配对二维码)照样会跳回这一屏并填好,或者在下面手填。
-            </Note>
-          ) : (
-            <List>
-              {/* ★快的那条路放最上面。二维码在电脑的「设置 → 主机 → 显示配对二维码」里。 */}
-              <Btn kind="pri" block onPress={() => router.push(ROUTES.scan)}>扫一扫</Btn>
-              <T style={{ fontSize: 11.5, color: c.faint, textAlign: 'center', paddingTop: 2 }}>
-                电脑上:设置 → 主机 → 显示配对二维码
-              </T>
-            </List>
-          )}
+          ) : null}
 
-          {/* ★★两条路之间必须有一道看得见的界。没有它的时候,「扫一扫」和下面的输入框读起来像
-              **一件事的两步**(扫完还要自己填),而它们其实是**二选一**。
-              真机反馈的原话是「顶部有个扫一扫,底部有个保存并连接,中间什么也没填,这两个按钮很奇怪」
-              —— 奇怪的根源正是这里缺一句话。扫码进来时(scanned)不摆:那条路上没有选择。 */}
           {!scanned ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 18, paddingTop: 16 }}>
-              <View style={{ flex: 1, height: 1, backgroundColor: c.border2 }} />
-              <T style={{ fontSize: 11.5, color: c.faint }}>或者手动填写</T>
-              <View style={{ flex: 1, height: 1, backgroundColor: c.border2 }} />
-            </View>
+            <>
+              <Sec>配对码</Sec>
+              <List>
+                <Field
+                  value={code}
+                  onChangeText={takeCode}
+                  placeholder="myflowforge://add-host?…"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  invalid={!!code.trim() && !parsed.ok}
+                  style={{ fontSize: 13 }}
+                />
+                {/* ★两颗都是「把那个框填上」的手段,所以它们**挨着那个框**,
+                    不摆到屏幕两头去。用户 2026-09-20 原话:「上面一个扫一扫,下面一个
+                    保存与连接,很奇怪」—— 奇怪的是一个输入手段被摆成了整屏的主行动。 */}
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Btn kind="default" style={{ flex: 1 }} onPress={pasteCode}>粘贴</Btn>
+                  {CAN_SCAN ? (
+                    <Btn kind="default" style={{ flex: 1 }} onPress={() => router.push(ROUTES.scan)}>扫一扫</Btn>
+                  ) : null}
+                </View>
+                <T style={{ fontSize: 11.5, color: c.faint, paddingHorizontal: 2 }}>
+                  {parsed.ok
+                    ? `将连接 ${parsed.url}${relay.trim() ? ' · 经中转' : ''}`
+                    : CAN_SCAN
+                      ? '电脑上:设置 → 共享本机'
+                      : '电脑上:设置 → 共享本机 → 复制配对码'}
+                </T>
+              </List>
+            </>
           ) : null}
 
           <Sec>名称</Sec>
           <List>
             <Field value={label} onChangeText={setLabel} placeholder="书房的 Mac(不填就用地址)" autoCapitalize="none" />
           </List>
-
-          <Sec>地址</Sec>
-          <List>
-            <Field
-              value={addr}
-              onChangeText={(v) => {
-                setAddr(v)
-                if (err) setErr(null)
-              }}
-              placeholder="192.168.110.133:6789"
-              autoCapitalize="none"
-              autoCorrect={false}
-              inputMode="url"
-              invalid={!!err && !parsed.ok}
-            />
-            <T style={{ fontSize: 11.5, color: c.faint, paddingHorizontal: 2 }}>
-              {addr.trim() === ''
-                ? '只填 主机:端口 就行,会自动补 ws://'
-                : parsed.ok
-                  ? `将连接 ${parsed.url}${loopback ? ' · 回环地址,不需要令牌' : ''}`
-                  : parsed.error}
-            </T>
-          </List>
-
-          <Sec>访问令牌</Sec>
-          <List>
-            <Field
-              value={token}
-              onChangeText={(v) => {
-                setToken(v)
-                if (err) setErr(null)
-              }}
-              placeholder={loopback ? '回环地址可以留空' : '电脑上 daemon 启动时打印的那一串'}
-              autoCapitalize="none"
-              autoCorrect={false}
-              secureTextEntry={false}
-            />
-          </List>
-
-          <Note>
-            令牌以明文存在这台手机上。同一个 wifi 下走的是局域网直连(明文),人在外面走中转时
-            则是端到端加密的。要在外面连,先在电脑上配好中转地址(设置 → 手机),再扫一次码。
-          </Note>
 
           <View style={{ height: 20 }} />
           <List>
@@ -206,12 +201,14 @@ export default function AddHost() {
                 所以:手填这条路上它是次级样式,扫码进来时(没有「扫一扫」和它抢)才是 `pri`。
                 ★★禁用**必须配一句为什么**。光禁用而不说,就变成另一种「点了没反应」——
                 这一屏顶部注释里记的桌面端那两轮,栽的就是这个。 */}
-            <Btn kind={scanned ? 'pri' : 'default'} block onPress={save} disabled={saving || !addr.trim()}>
+            {/* ★现在这一屏**只有一颗**终点按钮,所以它一律是主按钮 ——
+                「扫一扫 / 粘贴」是填那个框的手段,已经挪到框旁边去了。 */}
+            <Btn kind="pri" block onPress={save} disabled={saving || !addr.trim()}>
               {saving ? '连接中…' : '保存并连接'}
             </Btn>
             {!addr.trim() && !saving ? (
               <T style={{ fontSize: 11.5, color: c.faint, textAlign: 'center', paddingTop: 2 }}>
-                {CAN_SCAN ? '先填上面的地址,或者用「扫一扫」一次填好' : '先填上面的地址'}
+                先粘一串配对码
               </T>
             ) : null}
             <Pressable onPress={() => goBack()} style={{ alignItems: 'center', paddingVertical: 12 }}>
