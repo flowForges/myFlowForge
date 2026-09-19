@@ -109,4 +109,26 @@ describe('这一屏默认摆出来多少东西', () => {
       ),
     ).toBe(true)
   })
+
+  /**
+   * ★★配对码必须排在**两条路之前**。
+   *  它是这一屏唯一每次都要用的东西,而且**两条路共用同一枚码**(码里编的是地址+令牌+公钥,
+   *  开了中转再加中转地址)。它曾经压在整页最底下、「远程连接」那一节里 —— 于是看着像
+   *  中转专属的功能,用户 2026-09-19 原话:「局域网的连接其实也是扫二维码,但这个二维码
+   *  又是在出门中转的下面,这个就让人很奇怪」。
+   *  位置在这一屏是**语义**:谁在上面,就意味着谁管谁。这条断言把它钉住。
+   */
+  it('★★配对码排在「局域网」和「远程连接」两节之前', async () => {
+    await mount()
+    const texts = [...document.querySelectorAll('h5.hosts-sec, button')]
+      .map((e) => e.textContent?.trim() ?? '')
+    const iQr = texts.findIndex((t) => t === '显示配对二维码' || t === '收起二维码')
+    const iLan = texts.indexOf('局域网')
+    const iRemote = texts.indexOf('远程连接')
+    expect(iQr, '找不到配对码那一块').toBeGreaterThanOrEqual(0)
+    expect(iLan, '找不到「局域网」分节').toBeGreaterThanOrEqual(0)
+    expect(iRemote, '找不到「远程连接」分节').toBeGreaterThanOrEqual(0)
+    expect(iQr, '配对码掉到「局域网」下面去了').toBeLessThan(iLan)
+    expect(iQr, '配对码掉到「远程连接」下面去了 —— 它就是这么被读成中转专属的').toBeLessThan(iRemote)
+  })
 })

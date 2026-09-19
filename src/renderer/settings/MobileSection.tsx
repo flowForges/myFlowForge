@@ -145,6 +145,65 @@ export function MobileSection() {
           跨过了整个中转节 —— 于是读起来像第三个并列项。用户原话:「这个让手机连进来和底部的
           高级 区别在哪?底部的这个高级是干啥的?」。困惑是这个结构造成的,不是他没看懂。
           ★现在:局域网 / 远程连接 各自成节,高级收进它所属的那一节里。 */}
+      {/* ★★★配对码提到最前面。它是这一屏**唯一每次都要用**的东西,而且**两条路共用同一枚码** ——
+          以前它压在整页最底下、「远程连接」那一节里,于是看着像中转专属的功能
+          (用户 2026-09-19:「局域网的连接其实也是扫二维码,但这个二维码又在出门中转的下面」)。
+          下面两节回答的是**另一个**问题:这张码里印的地址从哪来(局域网 / 中转)。 */}
+      <h5 className="hosts-sec">把码给对方</h5>
+      {pairable && (
+        <div className="hosts-conn">
+          <div className="hosts-qr">
+            {showQr ? (
+              <>
+                {/* alt 报的是**码里真的那个地址**(`qrAddr`),不是上面那个给人抄的 `addr` ——
+                    没有局域网地址时那一个是占位符,而占位符从来没进过码。 */}
+                <QrCode text={pairing} alt={`配对二维码 · ${qrAddr}`} />
+                <div className="hosts-qr-say">
+                  {/* ★安全那半句不许压掉:这枚码里带着令牌,是这一屏唯一一条安全提示。 */}
+                  <p className="set-desc">
+                    手机相机直接扫。<b>码里带着令牌</b> —— 录屏、截图前先收起来。
+                  </p>
+                  <button className="set-btn" onClick={() => setShowQr(false)}>收起二维码</button>
+                </div>
+              </>
+            ) : (
+              <button className="set-btn" onClick={() => setShowQr(true)}>显示配对二维码</button>
+            )}
+            {/* ★★2026-09-02:**另一台电脑**也能连进来了(设置 → 远程主机 → 粘贴配对码),
+                而电脑之间没法扫码。所以同一枚码要能以**文本**形式拿走。
+                ★和二维码同一条安全规矩:这串里带着令牌,复制之后别贴进聊天记录。
+                ★只在码展开时摆 —— 折着的时候摆一颗「复制」,等于遮罩根本不存在。 */}
+            {showQr && (
+              <button className="set-btn" onClick={() => copy('pair', pairing)}>
+                {copied === 'pair' ? '已复制(含令牌)' : '复制配对码'}
+              </button>
+            )}
+          </div>
+
+          {/* ★★这句话按中转开没开分岔。原来只有下面那一句「要在同一个网络里」,而中转开着时
+              它是**错的** —— 中转存在的全部意义就是两边不在一个网络里也能连。 */}
+          {/* ★★说的是「**这张码里有什么**」,不是泛泛的使用条件。
+              这枚码是两条路**共用**的:它编的是地址 + 令牌 + 公钥 +(开了中转的话)中转地址。
+              以前这句话跟着码摆在「远程连接」那一节的**下面**,于是读起来像是中转专属的说明,
+              而其中「要在同一个网络里」偏偏是在替**局域网**说话 —— 用户 2026-09-19 原话:
+              「这个二维码又是在出门中转的下面,这个就让人很奇怪」。错位的是位置,不是他没看懂。 */}
+          {relayOn ? (
+            <p className="set-desc">
+              码里带着<b>中转</b> —— 对方在哪都能连{st.running && ',同一个 wifi 时自动走直连'}。
+            </p>
+          ) : (
+            <p className="set-desc">
+              码里是<b>局域网地址</b> —— 对方要和这台在同一个 wifi 里。想出门也能连,打开下面的中转。
+            </p>
+          )}
+        </div>
+      )}
+      {!pairable && (
+        <p className="set-desc">
+          还没有码 —— 下面两条路<b>至少打开一条</b>,码里才有地址可印。
+        </p>
+      )}
+
       <h5 className="hosts-sec">局域网</h5>
       <div className="set-row">
         <div className="info">
@@ -200,7 +259,10 @@ export function MobileSection() {
           ★`<details>` 而不是自己写折叠:它自带键盘可达和无障碍语义,而且**默认收起**
            这件事由浏览器保证,不靠我们的初始 state 写对。 */}
       <details className="hosts-adv">
-        <summary>高级 —— 端口、绑定、令牌、手填地址</summary>
+        {/* ★★标题写的是**什么时候需要打开它**,不是里面有哪些字段。用户 2026-09-19 原话:
+            「局域网里的高级是啥东西,我一直没看明白」—— 原来那行是「端口、绑定、令牌、手填地址」,
+            四个名词摆在那儿,没有一个回答「我为什么要点开」。 */}
+        <summary>高级 —— 端口被占、只想走 SSH、令牌泄了、地址探测错了</summary>
 
         <div className="set-row">
           <div className="info">
@@ -377,49 +439,6 @@ export function MobileSection() {
         </div>
       )}
 
-      {pairable && (
-        <div className="hosts-conn">
-          <div className="hosts-qr">
-            {showQr ? (
-              <>
-                {/* alt 报的是**码里真的那个地址**(`qrAddr`),不是上面那个给人抄的 `addr` ——
-                    没有局域网地址时那一个是占位符,而占位符从来没进过码。 */}
-                <QrCode text={pairing} alt={`配对二维码 · ${qrAddr}`} />
-                <div className="hosts-qr-say">
-                  {/* ★安全那半句不许压掉:这枚码里带着令牌,是这一屏唯一一条安全提示。 */}
-                  <p className="set-desc">
-                    手机相机直接扫。<b>码里带着令牌</b> —— 录屏、截图前先收起来。
-                  </p>
-                  <button className="set-btn" onClick={() => setShowQr(false)}>收起二维码</button>
-                </div>
-              </>
-            ) : (
-              <button className="set-btn" onClick={() => setShowQr(true)}>显示配对二维码</button>
-            )}
-            {/* ★★2026-09-02:**另一台电脑**也能连进来了(设置 → 远程主机 → 粘贴配对码),
-                而电脑之间没法扫码。所以同一枚码要能以**文本**形式拿走。
-                ★和二维码同一条安全规矩:这串里带着令牌,复制之后别贴进聊天记录。
-                ★只在码展开时摆 —— 折着的时候摆一颗「复制」,等于遮罩根本不存在。 */}
-            {showQr && (
-              <button className="set-btn" onClick={() => copy('pair', pairing)}>
-                {copied === 'pair' ? '已复制(含令牌)' : '复制配对码'}
-              </button>
-            )}
-          </div>
-
-          {/* ★★这句话按中转开没开分岔。原来只有下面那一句「要在同一个网络里」,而中转开着时
-              它是**错的** —— 中转存在的全部意义就是两边不在一个网络里也能连。 */}
-          {relayOn ? (
-            <p className="set-desc">
-              两边<b>可以各在各的网</b>{st.running && ',同一个 wifi 时自动走直连'}。
-            </p>
-          ) : (
-            <p className="set-desc">
-              要在<b>同一个网络</b>里。出门连,打开上面的中转。
-            </p>
-          )}
-        </div>
-      )}
 
 
 
