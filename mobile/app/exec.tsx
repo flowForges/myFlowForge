@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ScrollView, StyleSheet, View } from 'react-native'
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
 import { goBack } from '../src/nav'
 import { one } from '../src/routeParams'
@@ -128,7 +128,7 @@ export default function Exec() {
   const c = useC()
   const { online } = useConn()
   const { selected, wsName, sessionTitle, gates, answerGate } = useStore()
-  const { groups, total, loading, error, diff } = useChanges(selected?.wsPath ?? null)
+  const { groups, total, loading, error, diff, refresh: refreshChanges } = useChanges(selected?.wsPath ?? null)
   const [pane, setPane] = useState<Pane>('changes')
   const [open, setOpen] = useState<Open | null>(null)
 
@@ -185,7 +185,7 @@ export default function Exec() {
     if (!proj && projects.length) setProj(projects[0].cwd)
   }, [projects, proj])
   const projName = projects.find((g) => g.cwd === proj)?.name ?? ''
-  const { tree, loading: treeLoading, error: treeErr, read } = useFiles(pane === 'files' ? proj : null)
+  const { tree, loading: treeLoading, error: treeErr, read, refresh: refreshFiles } = useFiles(pane === 'files' ? proj : null)
 
   const entries: Entry[] | null = useMemo(() => (tree ? listDir(tree, dir) : null), [tree, dir])
   const shown = useMemo(() => (entries ? filterEntries(entries, q) : null), [entries, q])
@@ -309,7 +309,22 @@ export default function Exec() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
-      <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
+      {/* ★★刷新是**必须有**的,不是锦上添花:变更和文件树都是「进这一屏那一刻」读的快照,
+          而你在电脑上动文件的时候手机根本不知道。用户 2026-09-19 原话:「我电脑端早就新增了文件,
+          但是手机端看不出来」。下拉也能刷(两个面板都挂了 RefreshControl),但下拉是**看不见的**入口 ——
+          不知道能下拉的人会一直以为手机端坏了,所以这里再摆一颗看得见的。 */}
+      <TopBar
+        left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}
+        right={
+          <IconBtn
+            label="重新读取"
+            onPress={online && selected ? () => (pane === 'files' ? refreshFiles() : refreshChanges()) : undefined}
+            disabled={!online || !selected}
+          >
+            <Icon name="refresh" size={18} color={c.muted} />
+          </IconBtn>
+        }
+      >
         <TopTitle
           title="执行"
           sub={selected ? `${wsName(selected.wsPath)} · ${total.total} 个文件 +${total.add} −${total.del}` : '未选会话'}
@@ -330,7 +345,10 @@ export default function Exec() {
       ) : !selected ? (
         <Empty title="先选一个会话" />
       ) : pane === 'changes' ? (
-        <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 40 }}
+          refreshControl={<RefreshControl refreshing={loading} onRefresh={refreshChanges} tintColor={c.muted} />}
+        >
           {loading ? (
             <Empty title="正在读取…" />
           ) : error ? (
@@ -440,7 +458,11 @@ export default function Exec() {
               文件越多它越高,而它和上面那三层是同一个纵向 flex 容器里的兄弟。
               总高超过屏幕时 Yoga 去找可以收缩的项(`flexShrink` 默认……在 RN 的 ScrollView 上是 1),
               于是上面那三层被按比例压扁。给它 `flex: 1` 之后它只占「剩下的」,内容再多也是自己内部滚动。 */}
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: 40 }}
+            refreshControl={<RefreshControl refreshing={treeLoading} onRefresh={refreshFiles} tintColor={c.muted} />}
+          >
             {treeLoading ? (
               <Empty title="正在读取文件树…" />
             ) : treeErr ? (

@@ -18,6 +18,14 @@ export function useFiles(cwd: string | null) {
   const [tree, setTree] = useState<TreeNode[] | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  /**
+   * 重新拉一次的计数器。
+   * ★★为什么必须有:树是**进这一屏那一刻**读的一份快照,之后翻目录全是本地的(见文件头)。
+   *  于是你在电脑上新建的文件/文件夹,手机上**永远**看不到 —— 除非退出这一屏再进来。
+   *  用户 2026-09-19 原话:「我电脑端早就新增了文件,但是手机端看不出来,我新增了文件夹,都看不出来」。
+   *  `useChanges` 早就有这个 refresh 了,只是没人接到界面上;这边连有都没有。
+   */
+  const [tick, setTick] = useState(0)
 
   useEffect(() => {
     if (!cwd || !online) {
@@ -42,7 +50,7 @@ export function useFiles(cwd: string | null) {
     return () => {
       alive = false
     }
-  }, [cwd, online, invoke])
+  }, [cwd, online, invoke, tick])
 
   /** 读一个文件的正文。`file` 是相对 `cwd` 的路径。 */
   const read = useCallback(
@@ -51,5 +59,11 @@ export function useFiles(cwd: string | null) {
     [invoke, cwd],
   )
 
-  return { tree, loading, error, read }
+  /**
+   * 重新读一次整棵树。★**不碰当前目录**(`dir` 在调用方那儿):刷新之后还站在原地才叫刷新,
+   *  跳回根目录那叫重来一次 —— 人是为了看「我刚加的那个文件在不在」才刷的。
+   */
+  const refresh = useCallback(() => setTick((t) => t + 1), [])
+
+  return { tree, loading, error, read, refresh }
 }

@@ -24,7 +24,7 @@ import type { SFSymbol } from 'sf-symbols-typescript'
 
 export const ICON_NAMES = [
   'chat', 'host', 'settings', 'add', 'changes', 'photo', 'camera',
-  'workflow', 'file', 'folder', 'expand', 'chevron', 'chevronDown',
+  'workflow', 'file', 'folder', 'expand', 'chevron', 'chevronDown', 'refresh',
 ] as const
 
 export type IconName = (typeof ICON_NAMES)[number]
@@ -47,6 +47,9 @@ export const SF: Record<IconName, SFSymbol> = {
   expand: 'arrow.up.left.and.arrow.down.right',
   chevron: 'chevron.right',
   chevronDown: 'chevron.down',
+  // ★「再读一次」不是「同步」:`arrow.clockwise` 是单箭头的重载,`arrow.triangle.2.circlepath`
+  //  是双箭头的同步 —— 后者在这里会被读成「和服务端对账」,而我们做的只是重新拉一次。
+  refresh: 'arrow.clockwise',
 }
 
 /**
@@ -77,6 +80,7 @@ export const MATERIAL: Record<IconName, string> = {
   folder: 'folder',
   expand: 'open-in-full',
   chevron: 'chevron-right',
+  refresh: 'refresh',
   chevronDown: 'expand-more',
 }
 
@@ -101,4 +105,5 @@ export const EMOJI: Record<IconName, string> = {
   expand: '⤢',
   chevron: '›',
   chevronDown: '▾',
+  refresh: '⟳',
 }
