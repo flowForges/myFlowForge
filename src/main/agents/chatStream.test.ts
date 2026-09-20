@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseChatStreamObj, parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from './chatStream'
+import { parseChatStreamObj, parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, splitThinkLines, extractContextWindow } from './chatStream'
 
 describe('parseChatStreamObj', () => {
   it('extracts session id from a system/init event', () => {
@@ -95,6 +95,33 @@ describe('parseChatStreamActions (built-in Task sub-agents)', () => {
       { kind: 'subagent-start', id: 'toolu_1', subagentType: 'Explore', description: '探查鉴权', prompt: '摸清鉴权模块' },
     ])
   })
+  // ★★2026-09-17 真机报的:子 agent 卡片、转圈的进度、执行过程全没了,看起来像「呼不出子 agent」。
+  //  真相是子 agent **一直在正常跑** —— Claude Code 把那个工具**从 `Task` 改名成了 `Agent`**,
+  //  而我们只认 `Task`,于是它们被当成普通工具调用画成三行「调用 Agent」。
+  //  ★这类失败最难查的地方在于:没有任何错误,功能「看起来只是不见了」。
+  //  ★两个名字都要认:老版本 CLI 仍然发 `Task`,只认新名字就是把老用户换个方向摔一次。
+  it('★认得出改名后的 Agent 工具 —— 只认 Task 的话子 agent 会静默退化成普通工具调用', () => {
+    const obj = { type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'toolu_9', name: 'Agent', input: { subagent_type: 'Explore', description: '查一下', prompt: '摸清' } },
+    ] } }
+    expect(parseChatStreamActions(obj)).toEqual([
+      { kind: 'subagent-start', id: 'toolu_9', subagentType: 'Explore', description: '查一下', prompt: '摸清' },
+    ])
+  })
+
+  it('★流式那条路同样认 Agent(两处判断,漏一处就只有一半的场景好使)', () => {
+    expect(parseChatStreamActions({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', id: 'toolu_a', name: 'Agent', input: {} } } }))
+      .toEqual([{ kind: 'subagent-start', id: 'toolu_a', subagentType: undefined, description: undefined, prompt: undefined }])
+  })
+
+  it('★名字相近但不是它的工具,不许误判成子 agent', () => {
+    for (const name of ['AgentTool', 'MyAgent', 'Tasks', 'ListAgents']) {
+      const obj = { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'x', name, input: {} }] } }
+      const acts = parseChatStreamActions(obj)
+      expect(acts.some((a) => a.kind === 'subagent-start'), name).toBe(false)
+    }
+  })
+
   it('maps a Task content_block_start to subagent-start (empty input is fine)', () => {
     expect(parseChatStreamActions({ type: 'stream_event', event: { type: 'content_block_start', content_block: { type: 'tool_use', id: 'toolu_2', name: 'Task', input: {} } } }))
       .toEqual([{ kind: 'subagent-start', id: 'toolu_2', subagentType: undefined, description: undefined, prompt: undefined }])
@@ -143,16 +170,9 @@ describe('extractContextTokens', () => {
   })
 })
 
-describe('contextWindowFor', () => {
-  it('defaults to 200K for a normal model', () => {
-    expect(contextWindowFor('opus-4.8')).toBe(200_000)
-    expect(contextWindowFor('')).toBe(200_000)
-  })
-  it('returns 1M for a *-1m model', () => {
-    expect(contextWindowFor('claude-opus-4-8[1m]')).toBe(1_000_000)
-    expect(contextWindowFor('sonnet-1M')).toBe(1_000_000)
-  })
-})
+// ★`contextWindowFor` 已删除:它按模型名硬猜窗口(带 "1m" 就 1M,否则 200K),
+//  而那个数被拿去算百分比画进度条 —— 一个看着很像回事的假数。改由 extractContextWindow
+//  从 CLI 官方上报的地方取,取不到就不显示占比。见下面那组用例。
 
 describe('buildChatPrompt', () => {
   it('returns the bare prompt when there are no attachments', () => {
@@ -198,5 +218,46 @@ describe('extractTurnTokens', () => {
   it('returns null when a result carries no usable usage', () => {
     expect(extractTurnTokens({ type: 'result' })).toBeNull()
     expect(extractTurnTokens({ type: 'result', usage: { input_tokens: 0, output_tokens: 0 } })).toBeNull()
+  })
+})
+
+/**
+ * 用户 2026-09-14 原话:「上下文要真实,从官方自己的能力里取的,不能是你自己计算的,那个不准确」。
+ *
+ * ★★原来的 `contextWindowFor(model)` 是**硬猜**:模型名里带 "1m" 就算 1M,否则一律 200K。
+ *  于是界面上那个百分比是个看着很像回事的假数。现在窗口只从 CLI 自己报的地方取。
+ *
+ * claude 把它放在 `result` 事件的 `modelUsage[模型].contextWindow` 里(2.1.265 实测有这个字段)。
+ * ★注意 `used` 仍然**不能**从 result 取(那是整轮累计,会让进度条虚高) —— 只有 window 从这里取,
+ *  它是个跟模型走的静态值,不随累计变化。
+ */
+describe('extractContextWindow —— 只认 CLI 官方报的窗口', () => {
+  const result = (modelUsage: unknown) => ({ type: 'result', modelUsage })
+
+  it('从 result.modelUsage 里取 contextWindow', () => {
+    expect(extractContextWindow(result({ 'claude-opus-5': { inputTokens: 10, contextWindow: 272000 } }))).toBe(272000)
+  })
+
+  it('★多个模型时取最大的 —— 小模型(如 haiku 分身)的窗口不该拿来当主模型的', () => {
+    expect(extractContextWindow(result({
+      'claude-haiku-4-5': { contextWindow: 200000 },
+      'claude-opus-5': { contextWindow: 1000000 },
+    }))).toBe(1000000)
+  })
+
+  it('★不是 result 事件的一律不认 —— 别从别处捡一个数来充数', () => {
+    expect(extractContextWindow({ type: 'assistant', modelUsage: { m: { contextWindow: 9 } } })).toBeNull()
+  })
+
+  it('★没有这个字段就返回 null(= 不知道),绝不回落到一个猜的默认值', () => {
+    expect(extractContextWindow(result({ m: { inputTokens: 5 } }))).toBeNull()
+    expect(extractContextWindow(result(null))).toBeNull()
+    expect(extractContextWindow({ type: 'result' })).toBeNull()
+    expect(extractContextWindow(null)).toBeNull()
+  })
+
+  it('0 或负数不算数(当成没报)', () => {
+    expect(extractContextWindow(result({ m: { contextWindow: 0 } }))).toBeNull()
+    expect(extractContextWindow(result({ m: { contextWindow: -1 } }))).toBeNull()
   })
 })

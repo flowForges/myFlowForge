@@ -2,6 +2,7 @@ import type { AgentProvider } from '../agents/types'
 import type { StagePlan } from './machine'
 import type { WorkOrderOutcome } from './workOrder'
 import type { DevelopProject } from './runTypes'
+import { gateRegistry } from '../gate/gateRegistry'
 
 // ①汇总 (end-of-run summary): the run-completion summary agent migrated from the legacy
 // orchestrator's per-stage 汇总 idea, but scoped to the WHOLE run. After a run finishes every stage
@@ -108,7 +109,18 @@ export function runRunSummary(provider: AgentProvider | undefined, args: RunSumm
     try {
       const session = provider.chat!(
         { id: `run-summary-${++summarySeq}`, prompt, model: args.model, cwd: args.cwd },
-        { onSession: () => {}, onAssistantDelta: (t) => { out += t }, onThinkDelta: () => {}, onDone: finish, onError: finish },
+        {
+          onSession: () => {}, onAssistantDelta: (t) => { out += t }, onThinkDelta: () => {},
+          onDone: finish, onError: finish,
+          // ★以前这里**没有 onConfirm** —— 它要权限时,provider 自己 fail-closed 静默拒,
+          //  一行痕迹都没有,而这条路径连第 5 次全量普查都没数到(是覆盖率守卫抓出来的)。
+          //  现在同样是拒,但在总线上留一条记录:「这条路没有门」和「这条路的门断了」
+          //  必须是两件分得开的事。
+          onConfirm: (req) => gateRegistry.autoDecide(
+            { origin: 'oneshot', workspacePath: args.cwd, label: '运行总结' },
+            req,
+          ),
+        },
         args.env,
       )
       session.done.then(finish, finish)

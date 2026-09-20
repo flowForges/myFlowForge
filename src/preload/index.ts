@@ -1,9 +1,14 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { CH } from '../main/ipc/channels'
 import type { AskAnswers, ChatEvent, ChangesEvent, ChatGateSnapshot, ChatQueueEvent, SetupEvent, UpdateInfo, UpdateEvent } from '@shared/types'
 import type { PluginSnapshot } from '@shared/plugins'
+import type { HostInput, HostStatusView, RemoteHostView } from '@shared/remote/hostView'
 
 const api = {
+  // Which OS this window is drawn on. A plain constant, not an IPC call: the renderer needs it during
+  // the FIRST paint (window-control layout, native material buckets) and an await would flash the
+  // wrong chrome. Note this is the CLIENT's platform — the machine showing the pixels.
+  platform: process.platform,
   getSettings: () => ipcRenderer.invoke(CH.configGetSettings),
   setSettings: (s: unknown) => ipcRenderer.invoke(CH.configSetSettings, s),
   listProjects: () => ipcRenderer.invoke(CH.configListProjects),
@@ -38,12 +43,14 @@ const api = {
   refreshModels: (providerId: string) => ipcRenderer.invoke(CH.agentsRefreshModels, providerId),
   setModels: (id: string, models: { id: string; label: string; description?: string }[]) => ipcRenderer.invoke(CH.agentsSetModels, { id, models }),
   setTimezone: (id: string, timezone: string): Promise<void> => ipcRenderer.invoke(CH.agentsSetTimezone, { id, timezone }),
-  checkExitIp: (): Promise<{ ip: string; region: string; via: 'proxy' | 'direct' }> => ipcRenderer.invoke(CH.netCheckExitIp),
+  // scope 决定问哪条代理、以及这一刀落在哪一端:'agent' 走 host(agent 在那台机器上跑),
+  // 'app' 留在本机(更新/字体/壁纸是这台设备自己发的请求)。见 channelRouting.ts。
+  checkExitIp: (scope: 'agent' | 'app' = 'agent'): Promise<{ ip: string; region: string; via: 'proxy' | 'direct' }> =>
+    ipcRenderer.invoke(scope === 'app' ? CH.netCheckAppExitIp : CH.netCheckExitIp),
   // 查各 CLI 是否有新版(只提示):传入已探测到的安装版本,返回可确定有/无新版的那些(未知包/查不到的略过)。
   checkCliUpdates: (installed: { id: string; version?: string }[]): Promise<import('../main/agents/cliLatest').CliUpdateInfo[]> => ipcRenderer.invoke(CH.agentsCliUpdates, installed),
   scanContext: (workspacePath?: string) => ipcRenderer.invoke(CH.contextScan, workspacePath),
   scanGlobalContext: (): Promise<import('@shared/types').AgentContextMeta> => ipcRenderer.invoke(CH.contextScanGlobal),
-  listSkills: (): Promise<import('@shared/types').InstalledSkill[]> => ipcRenderer.invoke(CH.skillsList),
   createWorkspace: (opts: unknown) => ipcRenderer.invoke(CH.workspaceCreate, opts),
   cancelSetup: (): Promise<void> => ipcRenderer.invoke(CH.workspaceCancelSetup),
   discardPartialWorkspace: (path: string): Promise<void> => ipcRenderer.invoke(CH.workspaceDiscardPartial, path),
@@ -63,6 +70,18 @@ const api = {
   },
   // #13: answer a setup hook's confirm/input card.
   resolveSetupInteraction: (id: string, answer: { decision?: 'allow' | 'deny'; value?: string }) => ipcRenderer.invoke(CH.workspaceSetupResolve, { id, answer }),
+  /**
+   * 权限门总线。★**还挂着的门**的单一事实源(main/gate/gateRegistry.ts)。
+   *  界面拿它重建卡片 —— 门的存活不再依赖任何一个界面还开着,这正是建区那条路以前缺的:
+   *  模态框一藏(「后台运行」)或一关,那道门就永远没人能答,而 hook 那边不超时、不兜底。
+   */
+  gateList: (a?: { workspacePath?: string }): Promise<import('@shared/types').PendingGateView[]> => ipcRenderer.invoke(CH.gateList, a ?? {}),
+  gateResolve: (a: { id: string; decision: 'allow' | 'deny' }): Promise<boolean> => ipcRenderer.invoke(CH.gateResolve, a),
+  onGateEvent: (cb: (c: import('@shared/types').GateEventView) => void) => {
+    const listener = (_: unknown, c: import('@shared/types').GateEventView) => cb(c)
+    ipcRenderer.on(CH.gateEvent, listener)
+    return () => ipcRenderer.removeListener(CH.gateEvent, listener)
+  },
   sendChat: (payload: unknown, source?: string) => ipcRenderer.invoke(CH.chatSend, payload, source),
   chatQueueState: (a: { workspacePath: string }): Promise<ChatQueueEvent> => ipcRenderer.invoke(CH.chatQueueState, a),
   // 还挂着、等人回答的确认/提问门。聊天视图每次挂载都拉一次 —— 它自己的 state 是空的,门却还在主进程阻塞着。
@@ -110,6 +129,13 @@ const api = {
   // answers/response:AskUserQuestion 门上用户选的选项 / 自填答案(见 shared/types 的 AskQuestion)。
   chatResolve: (a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]> }; workspacePath: string }) => ipcRenderer.invoke(CH.chatResolve, a),
   openFiles: () => ipcRenderer.invoke(CH.dialogOpenFiles),
+  // 拖进输入框的文件在本机上的真实路径。
+  // ★Electron 32 起 `File.path` 已经**没有了**,这是唯一的取法(见 webUtils.getPathForFile)。
+  //   拿不到路径不是错误 —— 从网页里拖出来的图片本来就只是内存里的一段字节,没有落过盘;
+  //   调用方据此回落到「按字节存盘」那条路(和粘贴同一条)。所以这里失败返回 ''，不抛。
+  filePath: (file: File): string => {
+    try { return webUtils.getPathForFile(file) || '' } catch { return '' }
+  },
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(CH.dialogPickDirectory),
   pickFile: (): Promise<string | null> => ipcRenderer.invoke(CH.dialogPickFile),
   savePaste: (a: { workspacePath: string; name: string; dataBase64: string }) => ipcRenderer.invoke(CH.chatSavePaste, a),
@@ -118,11 +144,19 @@ const api = {
     ipcRenderer.on(CH.chatEvent, listener)
     return () => ipcRenderer.removeListener(CH.chatEvent, listener)
   },
+  // 跨设备未读:打开一条会话时说一声,主进程广播给所有客户端(含连着的手机)。
+  markChatSeen: (a: { workspacePath: string; sessionId: string }): Promise<void> =>
+    ipcRenderer.invoke(CH.chatMarkSeen, a),
+  onChatSeen: (cb: (e: { workspacePath: string; sessionId: string }) => void) => {
+    const listener = (_: unknown, e: { workspacePath: string; sessionId: string }) => cb(e)
+    ipcRenderer.on(CH.chatSeen, listener)
+    return () => ipcRenderer.removeListener(CH.chatSeen, listener)
+  },
   gitChanges: (cwd: string) => ipcRenderer.invoke(CH.gitChanges, cwd),
   changesMulti: (cwds: string[]) => ipcRenderer.invoke(CH.changesMulti, cwds),
   gitDiff: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitDiff, { cwd, file }),
   gitFile: (cwd: string, file: string) => ipcRenderer.invoke(CH.gitFile, { cwd, file }),
-  imageFile: (cwd: string, file: string): Promise<{ dataUrl: string } | { error: string }> => ipcRenderer.invoke(CH.imageFile, { cwd, file }),
+  imageFile: (bases: string[], href: string): Promise<{ dataUrl: string } | { error: string }> => ipcRenderer.invoke(CH.imageFile, { bases, href }),
   // 对话正文里的文件链接:点击时才解析(渲染时不探测,否则每条消息都要打一批 IPC 且会闪)。
   resolveFileRef: (bases: string[], href: string): Promise<
     { ok: true; cwd: string; file: string; abs: string } | { ok: false; reason: 'missing' | 'outside' | 'dir' | 'bad' }
@@ -137,7 +171,11 @@ const api = {
   watchStop: () => ipcRenderer.invoke(CH.watchStop),
   listWorkspaces: () => ipcRenderer.invoke(CH.workspacesList),
   homeStats: (): Promise<import('@shared/types').HomeStats> => ipcRenderer.invoke(CH.workspacesHomeStats),
-  openWorkspaceDir: () => ipcRenderer.invoke(CH.workspacesOpenDir),
+  // 服务端目录浏览(第二期 D)。★跟机器走 —— 连着远程时列的是那台机器的目录。
+  fsBrowse: (a: { path?: string; showHidden?: boolean; filesToo?: boolean }): Promise<import('../main/fs/browse').BrowseResult> => ipcRenderer.invoke(CH.fsBrowse, a),
+  fsBrowseRoots: (): Promise<import('../main/fs/browse').BrowseEntry[]> => ipcRenderer.invoke(CH.fsBrowseRoots),
+  // 带路径 = 已经用服务端选择器选好了(远程场景);不带 = 弹本机对话框(本机场景)。
+  openWorkspaceDir: (path?: string) => ipcRenderer.invoke(CH.workspacesOpenDir, path),
   setWorkspacePinned: (path: string, pinned: boolean) => ipcRenderer.invoke(CH.workspacesSetPinned, { path, pinned }),
   setWorkspaceOrder: (order: string[]) => ipcRenderer.invoke(CH.workspacesSetOrder, { order }),
   petSetExpanded: (mode: 'collapsed' | 'bubble' | 'expanded'): Promise<'up' | 'down'> => ipcRenderer.invoke(CH.petSetExpanded, mode),
@@ -262,13 +300,25 @@ const api = {
   windowMinimize: () => ipcRenderer.invoke(CH.windowMinimize),
   windowToggleMaximize: () => ipcRenderer.invoke(CH.windowToggleMaximize),
   windowClose: () => ipcRenderer.invoke(CH.windowClose),
+  windowIsMaximized: (): Promise<boolean> => ipcRenderer.invoke(CH.windowIsMaximized),
+  onWindowMaximized: (cb: (maximized: boolean) => void) => {
+    const listener = (_: unknown, maximized: boolean) => cb(maximized)
+    ipcRenderer.on(CH.windowMaximizedChanged, listener)
+    // Braces matter: removeListener returns the IpcRenderer, and a React effect cleanup must return void.
+    return () => { ipcRenderer.removeListener(CH.windowMaximizedChanged, listener) }
+  },
   appRelaunch: () => ipcRenderer.invoke(CH.appRelaunch),
   appVibrancyBaseline: (): Promise<number> => ipcRenderer.invoke(CH.appVibrancyBaseline),
   getAppIconOptions: (): Promise<Array<{ id: import('@shared/types').DockIcon; label: string; filename: string; src: string }>> => ipcRenderer.invoke(CH.appIconOptions),
   termCreate: (opts: { termId: string; cwd?: string; cols: number; rows: number }) => ipcRenderer.invoke(CH.termCreate, opts),
-  termWrite: (termId: string, data: string) => ipcRenderer.send(CH.termWrite, { termId, data }),
-  termResize: (termId: string, cols: number, rows: number) => ipcRenderer.send(CH.termResize, { termId, cols, rows }),
-  termKill: (termId: string) => ipcRenderer.send(CH.termKill, { termId }),
+  // ★★这三条以前是 `ipcRenderer.send`(单向)。单向消息**不经过主机路由器** —— 那正是
+  //  「连着远程主机,敲进去的字却写进了本机 shell」的另一半原因。改成 invoke 之后它们和
+  //  `term:create` 走同一条路,连哪台就写哪台。
+  //  返回值没人要,但 promise 必须接住:对面版本对不上时会 reject,漏了就是一条
+  //  unhandledRejection(而它每敲一个键就可能来一次)。
+  termWrite: (termId: string, data: string) => { void ipcRenderer.invoke(CH.termWrite, { termId, data }).catch(() => {}) },
+  termResize: (termId: string, cols: number, rows: number) => { void ipcRenderer.invoke(CH.termResize, { termId, cols, rows }).catch(() => {}) },
+  termKill: (termId: string) => { void ipcRenderer.invoke(CH.termKill, { termId }).catch(() => {}) },
   onTermData: (cb: (p: { termId: string; data: string }) => void) => {
     const l = (_: unknown, p: { termId: string; data: string }) => cb(p)
     ipcRenderer.on(CH.termData, l); return () => ipcRenderer.removeListener(CH.termData, l)
@@ -306,7 +356,90 @@ const api = {
   deleteWorkspace: (path: string) => ipcRenderer.invoke(CH.workspaceDelete, path),
   removeWorkspaceFromList: (path: string) => ipcRenderer.invoke(CH.workspaceRemove, path),
   revealPath: (path: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(CH.revealPath, path),
+
+  // ── 多主机(第二期 B)。★注意这里没有第二套传输:渲染层永远走 IPC 找主进程,
+  //    「这一刀由本机接还是转发给远程」是主进程里路由器的判断,preload 一行都不用改。
+  hostsList: (): Promise<RemoteHostView[]> => ipcRenderer.invoke(CH.hostsList),
+  hostsUpsert: (h: HostInput): Promise<RemoteHostView[]> => ipcRenderer.invoke(CH.hostsUpsert, h),
+  hostsRemove: (id: string): Promise<RemoteHostView[]> => ipcRenderer.invoke(CH.hostsRemove, id),
+  hostsConnect: (id: string | null): Promise<HostStatusView> => ipcRenderer.invoke(CH.hostsConnect, id),
+  hostsDisconnect: (): Promise<HostStatusView> => ipcRenderer.invoke(CH.hostsDisconnect),
+  hostsStatus: (): Promise<HostStatusView> => ipcRenderer.invoke(CH.hostsStatus),
+  hostsExport: (includeTokens: boolean): Promise<string> => ipcRenderer.invoke(CH.hostsExport, includeTokens),
+  hostsImport: (text: string): Promise<{ ok: true; added: number } | { ok: false; error: string }> => ipcRenderer.invoke(CH.hostsImport, text),
+  // ── 手机端网关(第四期)。app 自己把网关端起来,手机连的就是**这份核心**,
+  //    不再需要另起一个 daemon.js —— 那是第二个独立核心,两边互相看不见。
+  mobileStatus: (): Promise<import('../main/host/appGateway').MobileStatus> => ipcRenderer.invoke(CH.mobileStatus),
+  mobileApply: (cfg: import('@shared/types').Settings['mobileGateway']): Promise<import('../main/host/appGateway').MobileStatus> =>
+    ipcRenderer.invoke(CH.mobileApply, cfg),
+  mobileRegenToken: (): Promise<import('../main/host/appGateway').MobileStatus> => ipcRenderer.invoke(CH.mobileRegenToken),
+  onMobileStatus: (cb: (s: import('../main/host/appGateway').MobileStatus) => void) => {
+    const listener = (_: unknown, s: import('../main/host/appGateway').MobileStatus) => cb(s)
+    ipcRenderer.on(CH.mobileStatusEvent, listener)
+    return () => { ipcRenderer.removeListener(CH.mobileStatusEvent, listener) }
+  },
+
+  // ── 中转(第三期)。和上面那个不是二选一:局域网网关 =「同一个 wifi 里连得上」,
+  //    中转 =「NAT 后面也连得上」。同时开着是正常的,同一个二维码两条路都能用。
+  relayStatus: (): Promise<import('../main/host/relayController').RelayStatusView> => ipcRenderer.invoke(CH.relayStatus),
+  // ★★参数里**不含 `urlHistory`**:历史由主进程在落盘那一处自己记(见 main/index.ts 的 relayApply)。
+  //  渲染层能写历史的话,就有了第二个写入点 —— 而两个写入点迟早会不一致,
+  //  表现成「我明明填过,怎么下拉里没有」。类型上做不到,比靠约定可靠。
+  relayApply: (cfg: Omit<import('@shared/types').Settings['relay'], 'urlHistory'>): Promise<import('../main/host/relayController').RelayStatusView> =>
+    ipcRenderer.invoke(CH.relayApply, cfg),
+  /** 这台机器的长期身份公钥(base64)。★二维码里那个 `k`。 */
+  relayIdentity: (): Promise<string> => ipcRenderer.invoke(CH.relayIdentity),
+  /** 踢掉一台挂在中转上的设备(按 cid)。 */
+  relayKick: (cid: string): Promise<import('../main/host/relayController').RelayStatusView> =>
+    ipcRenderer.invoke(CH.relayKick, cid),
+  onRelayStatus: (cb: (s: import('../main/host/relayController').RelayStatusView) => void) => {
+    const listener = (_: unknown, s: import('../main/host/relayController').RelayStatusView) => cb(s)
+    ipcRenderer.on(CH.relayStatusEvent, listener)
+    return () => { ipcRenderer.removeListener(CH.relayStatusEvent, listener) }
+  },
+
+  // ── 推送。★这几个走的是**方法表**(不像 mobile:*/relay:* 那样只在本机注册),
+  //    所以连着远程 host 时它们问的是**那台机器**的设备表 —— 那才是发推送的人。
+  pushDevices: (): Promise<import('../main/push/pushStore').PushDevice[]> => ipcRenderer.invoke(CH.pushDevices),
+  pushUnregister: (token: string): Promise<import('../main/push/pushStore').PushDevice[]> =>
+    ipcRenderer.invoke(CH.pushUnregister, { token }),
+  pushTest: (): Promise<import('../main/push/expoPush').SendResult> => ipcRenderer.invoke(CH.pushTest),
+  onSettingsChangedBy: (cb: (p: { by: string }) => void) => {
+    const listener = (_: unknown, p: { by: string }) => cb(p)
+    ipcRenderer.on(CH.settingsChangedBy, listener)
+    return () => { ipcRenderer.removeListener(CH.settingsChangedBy, listener) }
+  },
+  onHostStatus: (cb: (s: HostStatusView) => void) => {
+    const listener = (_: unknown, s: HostStatusView) => cb(s)
+    ipcRenderer.on(CH.hostsStatusEvent, listener)
+    // 花括号包住:removeListener 会返回 ipcRenderer 本身,直接返回它的话
+    // React 的 useEffect 会把它当成一个「不是清理函数」的返回值而报类型错。
+    return () => { ipcRenderer.removeListener(CH.hostsStatusEvent, listener) }
+  },
   openExternal: (url: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(CH.openExternal, url),
+  // —— MCP 面板(2026-09-05)——
+  // ★授权地址用上面那个 `openExternal` 打开:它走 CLIENT_ONLY,永远在**有人看着的那块屏幕**上开,
+  //   而 login 进程跑在主机上。连远程主机时这条分工才成立(否则浏览器开在那台没人看的机器上)。
+  mcpOverview: (workspacePath?: string): Promise<import('@shared/mcp').McpProviderView[]> =>
+    ipcRenderer.invoke(CH.mcpOverview, { workspacePath }),
+  mcpLoginStart: (a: { providerId: string; workspacePath?: string; name: string }): Promise<import('@shared/mcp').McpLoginStarted> =>
+    ipcRenderer.invoke(CH.mcpLoginStart, a),
+  mcpLoginPaste: (a: { id: string; redirectUrl: string }): Promise<{ outcome: 'ok' | 'fail'; text: string }> =>
+    ipcRenderer.invoke(CH.mcpLoginPaste, a),
+  mcpLoginWait: (a: { id: string; ms?: number }): Promise<{ outcome: 'ok' | 'fail' | null; text: string }> =>
+    ipcRenderer.invoke(CH.mcpLoginWait, a),
+  mcpLoginCancel: (id: string): Promise<void> => ipcRenderer.invoke(CH.mcpLoginCancel, { id }),
+  mcpLogout: (a: { providerId: string; workspacePath?: string; name: string }): Promise<{ stdout: string; code: number }> =>
+    ipcRenderer.invoke(CH.mcpLogout, a),
+  // —— 加载项(skill / rule / MCP 的全局清单 + 删除)——
+  addonsScan: (): Promise<import('@shared/addons').AddonScan> => ipcRenderer.invoke(CH.addonsScan),
+  addonsRemove: (id: string): Promise<{ ok: boolean; trashed: boolean; via: 'cli' | 'file' }> =>
+    ipcRenderer.invoke(CH.addonsRemove, { id }),
+  // —— 技能 / 插件市场(CLI 自己的 plugin 子命令,和这个 app 的插件无关)——
+  cliPluginsList: (): Promise<import('@shared/cliPlugins').CliPluginView[]> => ipcRenderer.invoke(CH.cliPluginsList),
+  cliPluginsInstall: (a: { providerId: string; id: string }): Promise<string> => ipcRenderer.invoke(CH.cliPluginsInstall, a),
+  cliPluginsUninstall: (a: { providerId: string; id: string }): Promise<string> => ipcRenderer.invoke(CH.cliPluginsUninstall, a),
+
   detectOpeners: (refresh?: boolean): Promise<import('@shared/openers').DetectedOpener[]> => ipcRenderer.invoke(CH.openersDetect, refresh),
   openWith: (arg: { openerId: string; folder: string; file?: string }): Promise<{ ok: boolean; error?: string; removedId?: string }> => ipcRenderer.invoke(CH.openersOpen, arg),
   commandsList: (providerId: string, wsPath?: string): Promise<{ cmd: string; title: string; desc: string; template: string; kind: 'command' | 'skill' }[]> => ipcRenderer.invoke(CH.commandsList, providerId, wsPath),

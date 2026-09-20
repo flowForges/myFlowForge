@@ -1,0 +1,321 @@
+/*
+ * 第四轮真机反馈的三件事,在**真浏览器**里量一遍。
+ *
+ * ★为什么必须来这儿量:这三件事有两件是**布局**,而布局在 node/jsdom 下根本量不到
+ *  (这也是 `app/index.tsx` 的 absY 一整段注释在说的事)。树画得对不对 ——
+ *  竖线连不连得上、拐弯在不在行的正中、最后一行有没有把主干收住、卡片有没有被挤出屏幕 ——
+ *  纯逻辑单测一条都答不了。`tree.ts` 的单测钉的是**几个数和规则**,这里钉的是**画出来真是那样**。
+ *
+ * 量的办法:树的每一段都是一个 1px 宽/高的实色小块,所以直接从 DOM 里按几何把它们捞出来
+ * (RN-web 把 View 渲染成 div),不给生产代码加任何测试专用的标记。
+ *
+ * 跑法:先 `npm run --prefix mobile web`(Metro 要在 :8081),再 `node e2e/tree.mjs`。
+ * 上一趟跑挂过的话先 `pkill -f mock-daemon.mjs; pkill -f remote-debugging-port=9333`。
+ */
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { launch, attach } from './cdp.mjs'
+import { startMock } from './harness.mjs'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const S = path.join(here, '.out')
+fs.mkdirSync(S + '/shots', { recursive: true })
+let bad = 0
+const ok = (l, c, e = '') => {
+  if (!c) bad++
+  console.log(`${c ? 'PASS' : 'FAIL'}  ${l}${e ? ' — ' + e : ''}`)
+}
+const near = (a, b, tol = 1.5) => Math.abs(a - b) <= tol
+
+// `gate-confirm`:alpha/s-a1 挂着一道门 —— 顶部「需要你」那一块因此真有东西可列。
+// alpha 有两条会话(一条中间 `├─` 一条收尾 `└─`),beta 只有一条(只有 `└─`),两档都在。
+const mock = await startMock(6813, 'gate-confirm')
+
+const chrome = await launch(S + '/chrome-tree')
+const p = await attach()
+await p.setViewport(390, 844)
+
+const visible = (text) =>
+  `[...document.querySelectorAll('*')].some(e=>e.textContent&&e.textContent.trim()===${JSON.stringify(text)}&&e.getBoundingClientRect().width>0)`
+
+await p.goto('http://localhost:8081/')
+await p.waitFor(`!!document.querySelector('#root') && document.body.innerText.length > 0`, 180000)
+await p.eval('localStorage.clear()')
+await p.goto('http://localhost:8081/')
+await p.waitFor(`document.body.innerText.includes('先连一台电脑')`, 60000)
+await p.clickText('添加主机')
+await p.waitFor(`!!document.querySelector('input[placeholder*="192.168"]')`, 15000)
+await p.typeInto('input[placeholder*="192.168"]', '127.0.0.1:6813')
+await p.clickText('保存并连接')
+await p.waitFor(`document.body.innerText.includes('已配对')`, 25000)
+// ★2026-08-29:保存完落在【主机】tab,不再是被推进来的次级屏 —— 没有 `‹` 了(tab 没有
+//  「上一层」)。回会话列表现在是切 tab,不是退栈。
+await p.clickText('会话')
+await p.waitFor(visible('alpha'), 20000)
+
+// ── ① 树 ────────────────────────────────────────────────────────────────
+await p.clickText('alpha')
+await p.waitFor(visible('修 gate 重复放行'), 10000)
+await new Promise((r) => setTimeout(r, 600))
+await p.shot(S + '/shots/tree-01-alpha.png')
+
+/** 会话卡的矩形:从标题那个元素往上走,第一个高度 ≥ 44 的祖先就是那张卡(`Row` 的 minHeight 是 54)。 */
+const cardOf = async (title) => JSON.parse(await p.eval(`(() => {
+  const t=[...document.querySelectorAll('*')].filter(e=>e.textContent&&e.textContent.trim()===${JSON.stringify(title)}&&e.getBoundingClientRect().width>0).pop()
+  if(!t) return 'null'
+  let e=t
+  while(e && e.getBoundingClientRect().height < 44) e=e.parentElement
+  const r=e.getBoundingClientRect()
+  return JSON.stringify({left:r.left,right:r.right,top:r.top,bottom:r.bottom,mid:r.top+r.height/2})
+})()`))
+
+/** 屏上所有的树枝小块。竖的:宽 ≤2 且高 ≥3;横的:高 ≤2 且宽 ≥3。 */
+const segs = async () => JSON.parse(await p.eval(`(() => {
+  const out={v:[],h:[]}
+  for(const e of document.querySelectorAll('div')){
+    if(e.children.length) continue
+    const r=e.getBoundingClientRect()
+    const bg=getComputedStyle(e).backgroundColor
+    if(bg==='rgba(0, 0, 0, 0)'||!bg) continue
+    if(r.width>0.4&&r.width<=2.5&&r.height>=3) out.v.push({x:r.left,top:r.top,bottom:r.bottom})
+    else if(r.height>0.4&&r.height<=2.5&&r.width>=3) out.h.push({y:r.top,left:r.left,right:r.right})
+  }
+  out.v.sort((a,b)=>a.top-b.top); out.h.sort((a,b)=>a.y-b.y)
+  return JSON.stringify(out)
+})()`))
+
+const c1 = await cardOf('修 gate 重复放行')
+const c2 = await cardOf('加 Windows 打包脚本')
+ok('两张会话卡都量到了', !!c1 && !!c2, JSON.stringify({ c1, c2 }))
+
+const drawerTop = Math.min(c1.top, c2.top) - 40
+const drawerBottom = Math.max(c1.bottom, c2.bottom) + 60
+const all = await segs()
+const v = all.v.filter((s) => s.bottom > drawerTop && s.top < drawerBottom)
+const h = all.h.filter((s) => s.y > drawerTop && s.y < drawerBottom && s.right < c1.left + 2)
+
+// ★一行一段主干:行齐平之后(rowGap 和 TreeGap 都没了)每一行的连接列就是 top:0→bottom:0
+//  的**一段**,alpha 这个 fixture 固定两条会话 ⇒ 恒为 2。
+//  ★★用**精确计数**而不是 `>= 1`:旁边那条「每张卡各有一根横杠」本来就是精确的,
+//   而且精确计数还能抓住反方向的回归 —— 有人把某种行间隙补丁加回来,段数就会变多,
+//   `>=` 那种写法对此完全无感。真正保证「主干是一条线」的是下面两条(同一个 x、连续)。
+ok('★一行一段主干,而且一段都不少', v.length === 2, JSON.stringify(v))
+ok('★每张卡各有一根横杠', h.length === 2, JSON.stringify(h))
+
+const xs = [...new Set(v.map((s) => s.x.toFixed(1)))]
+ok('★主干每一段都在同一个 x 上(歪一点点就是一条断掉的竖线)', xs.length === 1, xs.join(' / '))
+
+// 连续性:按 top 排好之后,前一段的下沿必须接上后一段的上沿。
+let gapMax = 0
+for (let i = 1; i < v.length; i++) gapMax = Math.max(gapMax, v[i].top - v[i - 1].bottom)
+ok('★★主干是连的,不是一截一截的(卡片之间那道缝也补上了)', gapMax <= 0.6, `最大断口 ${gapMax.toFixed(2)}px`)
+
+const trunkTop = Math.min(...v.map((s) => s.top))
+const trunkBottom = Math.max(...v.map((s) => s.bottom))
+ok('★主干从第一条会话的上沿长下来(行齐平了,不再有 rowGap 那 8px)',
+  near(trunkTop, c1.top, 1.5), `主干顶 ${trunkTop.toFixed(1)} / 第一张卡顶 ${c1.top.toFixed(1)}`)
+
+const last = c1.bottom > c2.bottom ? c1 : c2
+const first = last === c1 ? c2 : c1
+ok('★★主干在**最后一条会话**的中点收住(`└─`),不再往下悬着',
+  near(trunkBottom, last.mid, 1.5), `主干底 ${trunkBottom.toFixed(1)} / 末行中点 ${last.mid.toFixed(1)}`)
+
+const hFirst = h.find((s) => near(s.y, first.mid, 3))
+const hLast = h.find((s) => near(s.y, last.mid, 3))
+ok('★横杠挂在每一行的**垂直中点**(行有多高都不用知道)', !!hFirst && !!hLast,
+  JSON.stringify({ h, mids: [first.mid, last.mid] }))
+if (hFirst && hLast) {
+  ok('横杠左端就是主干', near(hFirst.left, Number(xs[0]), 1.2) && near(hLast.left, Number(xs[0]), 1.2))
+  ok('★横杠一直画到卡片跟前(气口 = gap + 线宽 = 5px,横杠从主干那一格起画好填上拐角),不是悬在半空',
+    near(first.left - hFirst.right, 5, 1) && near(last.left - hLast.right, 5, 1),
+    `气口 ${(first.left - hFirst.right).toFixed(1)} / ${(last.left - hLast.right).toFixed(1)}`)
+}
+
+// ★全出血:内容区从连接列右侧(44)一直铺到屏幕右沿(390)。
+//  旧断言是 `> 340 && < 372` —— 那是「抽屉有 12pt 外边距 + List 有 10pt 右内边距」时代的界线。
+//  ★仍然不能只判「小于等于 390」:去掉 `flex: 1` 之后盒子会缩成内容宽,那也小于 390(实测假绿过)。
+//  真正的界线是**必须真的顶到 390**。
+ok('★★内容区从连接列右侧一直铺到屏幕右沿',
+  near(c1.right, c2.right, 0.6) && near(c1.right, 390, 1.2),
+  `右沿 ${c1.right.toFixed(1)} / ${c2.right.toFixed(1)}`)
+
+// ＋ 新建会话:和卡片左沿对齐,但**不在树上**。
+// ★`ActionRow` 里的 ＋ 是一个独立的 `<Icon>` 元素,不再和文字同属一个 `<T>`,所以按
+//  `textContent === '＋ 新建会话'` 去找会一个元素都找不到。改成只匹配 `新建会话`。
+// ★往上走到高度 ≥32 的祖先,量到的是 `ActionRow` 的 `actionBody`(`minHeight: 46`,
+//  左沿正好是 44)—— 这就是为什么那 44pt 必须是一个真的空 `View` 而不是 `paddingLeft`。
+const plus = JSON.parse(await p.eval(`(() => {
+  const t=[...document.querySelectorAll('*')].filter(x=>x.textContent&&x.textContent.trim()==='新建会话'&&x.getBoundingClientRect().width>0).pop()
+  if(!t) return 'null'
+  let e=t
+  while(e && e.getBoundingClientRect().height < 32) e=e.parentElement
+  const r=e.getBoundingClientRect(); return JSON.stringify({left:r.left,top:r.top,bottom:r.bottom,mid:r.top+r.height/2})
+})()`))
+ok('「＋ 新建会话」在', !!plus)
+if (plus) {
+  ok('★它和会话卡左沿对齐(缩进 = 连接列宽)', near(plus.left, c1.left, 1.5), `${plus.left.toFixed(1)} vs ${c1.left.toFixed(1)}`)
+  ok('★★它**不在树上**:那一行的中点上没有横杠,主干也没伸到它那儿',
+    !all.h.some((s) => near(s.y, plus.mid, 4) && s.right < plus.left + 2) && trunkBottom < plus.top,
+    `主干底 ${trunkBottom.toFixed(1)} / 按钮顶 ${plus.top.toFixed(1)}`)
+}
+
+// beta 只有一条会话:那一条既是第一条也是最后一条,主干只能是「从上沿到它的中点」。
+await p.clickText('beta')
+await p.waitFor(visible('迁移评论表到 v2'), 10000)
+await new Promise((r) => setTimeout(r, 500))
+const cb = await cardOf('迁移评论表到 v2')
+const sb = await segs()
+const vb = sb.v.filter((s) => s.top > cb.top - 20 && s.bottom < cb.bottom + 20 && s.x < cb.left)
+const bBottom = vb.length ? Math.max(...vb.map((s) => s.bottom)) : -1
+ok('★只有一条会话时,主干从上沿一路到它的中点为止', vb.length >= 1 && near(bBottom, cb.mid, 1.5),
+  `主干底 ${bBottom.toFixed(1)} / 中点 ${cb.mid.toFixed(1)}`)
+await p.shot(S + '/shots/tree-02-beta.png')
+
+// ── ② 定位气泡:真的滚到目标,不是只测「气泡出现了」 ──────────────────────────
+// ★这里补的是①完全没盖到的一类回归。①量的是树形连接线的几何(横竖线段的像素坐标),
+//  那套断言一条像素都不会因为 `SwipeRow` 套错层(套在 `groupY` 的 onLayout **外面**
+//  而不是里面)而移动 —— 套错层腐蚀的是 `groupY.current[wsPath]` 这个内部 ref,
+//  而这个 ref 只有气泡的滚动算术(`app/(tabs)/index.tsx` 的 `absY`)会用到。
+//  ①的断言全绿,气泡也完全可能已经滚偏了,没有任何一条测试会红 ——
+//  这正是这一段存在的理由:把视口压矮到 400,滚过挂着门的那一行让它离开视口,
+//  断言气泡出现,点它,再量一次那一行是不是真的回到了视口里。
+//  这条「点完真的滚对了」的断言只有 `groupY`/`listY`/`rowY` 三段全部量对、加对了才会过 ——
+//  任何一段算错(不管是套错层,还是有人在中间插了一层不测 onLayout 的 padding/margin),
+//  这行就会停在别的地方,断言会红。
+await p.setViewport(390, 400)
+await p.goto('http://localhost:8081/')
+await p.waitFor(visible('alpha'), 30000)
+await new Promise((r) => setTimeout(r, 500))
+// ★expanded 状态是存盘的(和③钉的「折叠是姿态,得存盘」同一类,但那条钉的是另一个开关),
+//  ①已经点开过 alpha 和 beta —— 这次 reload
+//  它们多半已经是展开的。**不能无脑再点一次**:如果已经展开,再点 'alpha' 会把它点收起来,
+//  这一段就测不到东西了。所以先看它在不在,不在才点。
+if (!(await p.eval(visible('修 gate 重复放行')))) {
+  await p.clickText('alpha')
+  await p.waitFor(visible('修 gate 重复放行'), 10000)
+}
+await new Promise((r) => setTimeout(r, 300))
+
+const gatedRowRect = async () => JSON.parse(await p.eval(`(() => {
+  const t=[...document.querySelectorAll('*')].filter(e=>e.textContent&&e.textContent.trim()===${JSON.stringify('修 gate 重复放行')}&&e.getBoundingClientRect().width>0).pop()
+  if(!t) return 'null'
+  let e=t
+  while(e && e.getBoundingClientRect().height < 44) e=e.parentElement
+  const r=e.getBoundingClientRect()
+  return JSON.stringify({top:r.top,bottom:r.bottom})
+})()`))
+
+// 找真正在滚的那个容器(RN-web 的 ScrollView 落地成一个 overflow 的 div),
+// 直接把它的 scrollTop 顶到底 —— 程序化设置 scrollTop 照样会触发真正的原生
+// 'scroll' DOM 事件,ScrollView 的 onScroll 挂的就是它,和 `newws.mjs` 里
+// `scrollIntoView` 那手法是同一个道理(不是自造的、这个仓库自己的 e2e 已经在用)。
+const foundScroller = await p.eval(`(() => {
+  const all=[...document.querySelectorAll('div')]
+  const sc=all.find(e=>e.scrollHeight>e.clientHeight+20)
+  if(!sc) return false
+  sc.scrollTop = sc.scrollHeight
+  return true
+})()`)
+ok('找到了 ScrollView 落地的那个真正在滚的 div(下面几条断言的前提)', foundScroller)
+await new Promise((r) => setTimeout(r, 400))
+
+const before = await gatedRowRect()
+ok('★定位气泡这条断言自己的前提:挂门的那一行已经滚出了 400px 高的视口',
+  !!before && (before.bottom < 0 || before.top > 400), JSON.stringify(before))
+
+// ★★独立量出 ScrollView 自己可见区域的顶(和滚动位置无关 —— 它是那个滚动 div 自己的
+//  屏幕位置,TopBar 占掉的高度是固定的),用来给下面「滚没滚对」算一个**字面量期望值**,
+//  不是从 groupY/listY/rowY 这些被测的内部 ref 里读出来再拿来验自己(那样测的是「和自己
+//  一致」,不是「和真实几何一致」)。`index.tsx` 的 `jump()` 明确写着「往上留 24px」——
+//  这里独立验的正是那句注释,不是抄它。
+const scrollerTop = await p.eval(`(() => {
+  const all=[...document.querySelectorAll('div')]
+  const sc=all.find(e=>e.scrollHeight>e.clientHeight+20)
+  return sc ? sc.getBoundingClientRect().top : null
+})()`)
+ok('量到了 ScrollView 自己可见区域的顶(下面「滚对了」那条断言的字面量基准)', scrollerTop != null, `${scrollerTop}`)
+
+const hasBubble = await p.eval(
+  `[...document.querySelectorAll('*')].some(e=>e.textContent&&e.textContent.includes('条等你答话')` +
+  `&&e.getBoundingClientRect().width>0&&e.getBoundingClientRect().height>0)`)
+ok('★★目标滚出视口之后,定位气泡出现了', hasBubble)
+
+if (hasBubble && scrollerTop != null) {
+  await p.clickContaining('条等你答话')
+  // scrollTo({animated:true}) 要跑完动画,给够时间。
+  await new Promise((r) => setTimeout(r, 800))
+  const after = await gatedRowRect()
+  // ★★这条不是「落在视口某处就算数」的宽松判定(那种宽松判定实测抓不住 groupY 套错层 ——
+  //  套错层之后目标照样落在视口**里**,只是不在 jump() 承诺的位置上,宽松判定看不出来)。
+  //  这里钉的是**紧的**期望值:滚动条自己的可见顶 + 24px(`jump()` 的「往上留 24px」)。
+  //  这条断言只有 groupY/listY/rownY 三段全部加对才会落在容差以内 —— `SwipeRow` 套错层
+  //  不会挪动①里量的任何一个像素,腐蚀的只是这几个内部 ref,而这条断言直接钉的就是它们的和。
+  const expectTop = scrollerTop + 24
+  ok('★★★点了气泡之后,挂门的那一行真的滚到了 jump() 承诺的位置(可见顶 + 24px)',
+    !!after && near(after.top, expectTop, 3),
+    `期望顶 ${expectTop.toFixed(1)} / 实际顶 ${after ? after.top.toFixed(1) : 'null'} — ${JSON.stringify({ before, after })}`)
+}
+
+// 还原视口,别影响下面③④两段。
+await p.setViewport(390, 844)
+
+// ── ③ 「需要你」折叠 ─────────────────────────────────────────────────────
+await p.goto('http://localhost:8081/')
+await p.waitFor(visible('alpha'), 30000)
+await new Promise((r) => setTimeout(r, 800))
+let t = await p.text()
+const headRe = /\d+ 条等你( · \d+ 道门)?/
+const head = (t.match(headRe) || [''])[0]
+// ★「这一块的列表在不在」**不能**用会话标题去判:同一个标题在下面那个展开着的工作区抽屉里也有一份,
+//  拿它判会一直是「还在」。副行那句「等了 mm:ss」是这一块**独有**的(抽屉里的行报的是相对时间)。
+const ROWS = /等了 \d\d:\d\d/
+ok('★顶部「需要你」在,而且头上带着数', !!head && head.includes('道门'), head)
+ok('展开时列着具体是哪几条(带着「等了多久」)', ROWS.test(t) && t.includes('修 gate 重复放行'))
+await p.shot(S + '/shots/tree-03-needsyou-open.png')
+
+await p.clickText('❓ ' + head)
+await new Promise((r) => setTimeout(r, 500))
+t = await p.text()
+ok('★★折起来之后**头还在,数还在**(折叠只准藏细节,不准藏「有事等你」这个事实)',
+  t.includes(head), t.split('\n').slice(0, 8).join(' / '))
+ok('★列表真的收起来了', !ROWS.test(t))
+await p.shot(S + '/shots/tree-04-needsyou-folded.png')
+
+await p.goto('http://localhost:8081/')
+await p.waitFor(visible('alpha'), 30000)
+await new Promise((r) => setTimeout(r, 1500))
+t = await p.text()
+ok('★★重开一次还是折着的(折叠是姿态,得存盘)', t.includes(head) && !ROWS.test(t),
+  t.split('\n').slice(0, 8).join(' / '))
+
+await p.clickText('❓ ' + head)
+await new Promise((r) => setTimeout(r, 400))
+t = await p.text()
+ok('再点一下又展开', ROWS.test(t))
+
+// ── ④ 关于:自己一屏 ─────────────────────────────────────────────────────
+const appJson = JSON.parse(fs.readFileSync(path.join(here, '..', 'app.json'), 'utf8'))
+await p.goto('http://localhost:8081/settings')
+await p.waitFor(`document.body.innerText.includes('外观')`, 30000)
+t = await p.text()
+ok('★设置屏里「关于」只剩一行(版本号不在这一屏上了)', !t.includes('手机端版本'), t.split('\n').slice(0, 30).join(' / '))
+await p.clickText('关于')
+await new Promise((r) => setTimeout(r, 700))
+t = await p.text()
+ok('★★点进去是**一屏**,不是原地展开', t.includes('连不上的时候,先看这三个数'), t.split('\n').slice(0, 6).join(' / '))
+ok('★手机端版本报的是 app.json 里那一个', t.includes(appJson.expo.version), `期望 ${appJson.expo.version}`)
+ok('主机版本和方法数都在(连着,所以是真数)', t.includes('主机版本') && t.includes('主机提供的方法') && !t.includes('连上才知道'))
+ok('★没编任何链接(官网 / 更新日志 / 开源许可都不存在)', !/官网|更新日志|许可|GitHub/.test(t))
+await p.shot(S + '/shots/tree-05-about.png')
+
+await p.clickText('‹')
+await new Promise((r) => setTimeout(r, 500))
+t = await p.text()
+ok('返回回得去设置屏', t.includes('外观 · 跟着这台手机走'))
+
+console.log(bad ? `\n${bad} 条红` : '\n全绿')
+p.close()
+chrome.kill()
+mock.kill()
+process.exit(bad ? 1 : 0)

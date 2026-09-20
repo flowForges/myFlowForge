@@ -3,7 +3,8 @@ import { appendMessage, readMessages, readSession, readWatermark, writeSession, 
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
 import type { AgentProvider, AgentSession, ConfirmReq, ConfirmDecision } from '../agents/types'
-import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity } from '@shared/types'
+import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity, TurnPhase, ContextUsage } from '@shared/types'
+import { phaseLabel } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
 import { inlineHtmlPreamble } from './inlineHtmlDirective'
 import { buildContinuationPreamble, buildLocalHistoryPreamble } from './continuation'
@@ -23,6 +24,8 @@ import { providerSupportsResume, providerResumeReliable } from '../agents/resume
 import { logDebug } from '../log/appLog'
 import { perfSpan } from '../perf/perfSpans'
 import { addDailyTokens } from '../tokens/growthSignalRef'
+import { explainCodexError } from '../agents/providers/codexErrorMeaning'
+import { gateRegistry } from '../gate/gateRegistry'
 
 export interface SendTurnDeps {
   provider: AgentProvider
@@ -135,7 +138,10 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
 
     const userMsg: ChatMessage = {
       id: mkId('u'), who: 'user', text: payload.text,
-      files: payload.attachments.length ? payload.attachments : undefined, ts: now()
+      files: payload.attachments.length ? payload.attachments : undefined, ts: now(),
+      // ★从别的设备发来的才带这一项(见 ChatMessage.via)。★★注意它**没有**混进上面那个
+      //  `promptText` —— 那是它「绝不污染上下文」这条承诺的实现方式:两个字段,从不相加。
+      ...(payload.via ? { via: payload.via } : null),
     }
     appendMessage(ws, sid, userMsg)
     // 会话自动命名:普通聊天用首条用户消息命名(仍是 '新会话' 才改,导入会话有真实标题不受影响)。工作流
@@ -152,7 +158,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     emit({ workspacePath: ws, sessionId: sid, type: 'assistant-start', id: aid, model: label, context })
     let text = ''
     let think = ''
-    let lastUsage: { used: number; window: number } | undefined
+    let lastUsage: ContextUsage | undefined
     // 本轮累计 token 成本(input+output),用于用量汇总账本。一个 turn 里可能有多段 result 用量,累加之。
     let turnTokens: { input: number; output: number } | undefined
     // Built-in Task sub-agents spawned this turn, keyed by tool_use id — accumulated live and persisted
@@ -184,14 +190,31 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       for (const [id, t] of tools) if (t.status === 'run') { tools.set(id, { ...t, status: outcome === 'done' ? 'ok' : 'error' }); changed = true }
       if (changed) syncNativeSubagents()
     }
+    /**
+     * 这一轮**此刻在干什么**。默认是「在想」;模型自动压缩上下文时(codex 的 contextCompaction item)
+     * 变成 compacting。
+     *
+     * ★★为什么要有这个:自动压缩要一分多钟,而这段时间里 provider 一个 token 都不吐 —— 界面上只有
+     *  「主代理思考中…」和一个越走越大的秒数,和卡死长得一模一样。用户 2026-09-08 原话:
+     *  「模型在进行压缩,咱们也看不到自动压缩过程」。
+     * ★只活在这一轮里,不落盘:压缩是过程不是结果,收尾时 think 的标题照旧是「已思考」。
+     */
+    let phase: TurnPhase = 'thinking'
     // Mirror the in-flight message into the live buffer so chatHistory can restore it after the chat view
     // unmounts (switch to home) or re-subscribes to another session mid-stream. ts:'' marks it as still
     // streaming (carry-forward ordering in the timeline; also lets the renderer re-flag streamingIds).
     const publishLive = () => setLive(ws, sid, {
       id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: '', startedAt,
-      think: { label: '主代理思考中…', steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
+      think: { label: phaseLabel(phase), steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
       context, usage: lastUsage, subagents: subagentList(), tools: toolList(),
     })
+    /**
+     * 被「完全访问」自动放行的那些工具调用的 id。
+     * ★★用一个**独立的集合**而不是直接改 `tools`:门可能在这次调用的 `tool_use` 事件**之前**就到了
+     *  (顺序由 CLI 决定,不归我们管),那时 `tools` 里还没有这一条。集合先记着,`onToolActivity`
+     *  建行时再合进去 —— 两种到达顺序都对。
+     */
+    const autoAllowedIds = new Set<string>()
     // Main-agent tool call → the 执行 block. 'start' registers the row (title); 'done' fills output/status.
     const onToolActivity = (ev: { id: string; phase: 'start' | 'done'; name?: string; title?: string; output?: string; isError?: boolean }) => {
       const prev = tools.get(ev.id) ?? { id: ev.id, title: ev.title ?? ev.name ?? '调用工具', status: 'run' as const }
@@ -201,11 +224,36 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         name: ev.name ?? prev.name,
         output: ev.output ?? prev.output,
         status: ev.phase === 'done' ? (ev.isError ? 'error' : 'ok') : prev.status,
+        ...(autoAllowedIds.has(ev.id) || prev.autoAllowed ? { autoAllowed: true } : {}),
       }
       tools.set(ev.id, next)
       publishLive()
       emit({ workspacePath: ws, sessionId: sid, type: 'tool-activity', id: aid, tool: next })
     }
+
+    /**
+     * 「这次调用被自动放行了」——记在**那张工具卡**上,而不是往对话流里插一条消息。
+     * 由 `deps.confirm` 的实现(handlers 的 toolConfirm)在自动放行时回调。
+     */
+    const markAutoAllowed = (id: string) => {
+      autoAllowedIds.add(id)
+      const t = tools.get(id)
+      if (!t || t.autoAllowed) return
+      const next: ToolActivity = { ...t, autoAllowed: true }
+      tools.set(id, next)
+      publishLive()
+      emit({ workspacePath: ws, sessionId: sid, type: 'tool-activity', id: aid, tool: next })
+    }
+
+    /**
+     * ★把 `onAutoAllow` 塞进请求里再交给上层。上层据此知道「这道门可以不发消息,挂卡上就行」;
+     *  ★只在**拿得到 toolUseId** 时给 —— 给不出去的时候上层必须回落成发消息,不能悄悄放行。
+     */
+    const confirmWithGateNote = deps.confirm
+      ? (req: ConfirmReq) => deps.confirm!(req.toolUseId
+          ? { ...req, onAutoAllow: () => markAutoAllowed(req.toolUseId!) }
+          : req)
+      : undefined
     publishLive()
     const onSubagent = (ev: { id: string; phase: 'start' | 'update' | 'done'; subagentType?: string; description?: string; prompt?: string; result?: string; isError?: boolean; step?: string }) => {
       const prev = subagents.get(ev.id) ?? { id: ev.id, state: 'running' as const }
@@ -245,6 +293,13 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         onThinkDelta: () => {},
         onDone: () => { cleanup(); resolve(acc) },
         onError: (err) => { cleanup(); reject(err) },
+        // ★以前这里**什么都没传** —— 于是蒸馏要权限时,provider 自己 fail-closed 静默拒掉,
+        //  一行痕迹都没有。现在同样是拒,但它在总线上留一条记录:「这条路没有门」和
+        //  「这条路的门断了」必须是两件能分开的事。
+        onConfirm: (req) => gateRegistry.autoDecide(
+          { origin: 'oneshot', workspacePath: ws, sessionId: payload.sessionId, label: '记忆蒸馏' },
+          req,
+        ),
       }, env)
     })
     const scheduleDistill = () => {
@@ -312,7 +367,12 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     }
     const finishErr = (err: Error): ChatMessage => {
       finalizeRunning('error')
-      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${err.message}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
+      // ★★错误原文常常是 provider 的**内部话术**,对人没有意义。最典型的是 codex 的
+      //  `Reconnecting... 2/5` —— 那是它自己的重试计数器,用户看到只会问「这是什么意思」
+      //  (2026-09-17 真机)。能翻成一句「照着做」的就翻,翻不了原样显示。
+      //  ★翻译里**必须带上原话**:翻译给人看,原话给排查用,少哪个都不行。
+      const why = explainCodexError(err.message) ?? err.message
+      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${why}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
       // 事件带上落档的 msg。`text` 非空时这一轮其实是「答完了但收尾报错」(provider 先流出了答案,再以非零
       // 退出/stderr 收尾),app 显示的就是这段正文;不带 msg 的话下游只看得到 err.message,只能一律当彻底
       // 失败处理 —— 机器人就是这么把一次有答案的回合报成 ❌ 的。
@@ -374,7 +434,15 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           // ephemeral liveness (visible while the turn runs, replaced by the final message on done), so
           // the persisted reasoning stays clean while the spawn/handshake gap no longer looks frozen.
           onStatus: (t) => emit({ workspacePath: ws, sessionId: sid, type: 'think-delta', id: aid, text: t }),
-          onConfirm: deps.confirm,
+          // 「在想」/「在压缩」。落到那条在途消息的 think 标题上(publishLive + phase 事件),
+          // 手机端走的是同一份 live 快照,所以两端一起变。
+          onPhase: (p) => {
+            if (p === phase) return
+            phase = p
+            publishLive()
+            emit({ workspacePath: ws, sessionId: sid, type: 'phase', id: aid, phase: p })
+          },
+          onConfirm: confirmWithGateNote,
           onUsage: (u) => { lastUsage = u; publishLive() },
           onTurnTokens: (t) => { turnTokens = { input: (turnTokens?.input ?? 0) + t.input, output: (turnTokens?.output ?? 0) + t.output } },
           onSubagent,
@@ -394,7 +462,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         {
           onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { dbgDelta('run', l.text); text += (text ? '\n' : '') + l.text; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
           onState: () => {},
-          onConfirm: deps.confirm ?? (async () => 'deny'),
+          onConfirm: confirmWithGateNote ?? (async () => 'deny'),
           onInput: async () => '',
           onDone: () => {},
           onError: (err) => resolve(aborted ? finishAborted() : finishErr(err))

@@ -3,6 +3,18 @@
    Ported 1:1 from the prototype (forge 3/index.html).
    ============================================================ */
 
+/* ══ 第 2 档「产物」的三个值 ═══════════════════════════════════════════════════════════
+   代码块 / 附件 chip / 文档按钮 / 子代理卡 / 工具输出 / HTML 占位 —— 这些是**可以点、可以复制、
+   可以滚**的东西,框留给它们。所以它们的长相必须**只有一套**:
+     边框 1px var(--border) · 圆角 var(--r)(块) 或 var(--r-sm)(行内 chip) · 底 var(--surface)
+   ★★这里原来是 6 种圆角(6/7/8/8/9/var(--r))、3 种边框色(--border / --border-2 / --border 55% 透明)、
+    4 种底。1px 的差人眼说不出哪儿怪,但整屏就是不齐 —— 这是「乱」的最后一块。
+   ★★圆角**必须**用 tokens.css 的 --r-sm/--r,不能写死数字:内嵌 HTML 的几何量化
+    (htmlStyle.ts 的 RADIUS_LADDER)吸附到的就是这两个数,模型的卡片和这里的框才对得齐。
+    改一边就要改另一边。
+   ★半透明底全部改成实底:同一条边、同一块底在壁纸的不同位置上深浅不一,是「脏」的来源之一。
+    代价是壁纸被挡得更多 —— 变的只有子代理卡和展开的工具输出这两块。 */
+
 /* 对话主列 */
 .chat { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 /* 背景图 —— 「仅会话区」范围:图片只画在对话区背后(.chat 已 position:relative)。内容抬到 z-index:1
@@ -67,10 +79,28 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .turn-timer .tt-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: 0 0 6px; animation: tt-pulse 1.2s ease-in-out infinite; }
 @keyframes tt-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 /* 会话区正文字号 = 14px × 会话区缩放(设置·外观·会话区字号,独立于应用界面字号)。 */
-.msg-body { font-size: calc(14px * var(--chat-font-scale, 1)); line-height: var(--chat-line-height, 1.7); letter-spacing: var(--chat-letter-spacing, 0); color: var(--fg-2); }
-.msg-body p { margin-bottom: 10px; }
+.msg-body { font-size: calc(14px * var(--chat-font-scale, 1)); line-height: var(--chat-line-height, 1.75); letter-spacing: var(--chat-letter-spacing, 0); color: var(--fg-2); }
+/* 段距 14px(原 10px):一大段中文全靠段距断句,10px 时上下两段几乎粘在一起。与 chatTypography.ts 的
+   CHAT_PARAGRAPH_GAP_DEFAULT 同值 —— 那边是给两端共用逻辑读的,这边是真正画出来的那一处。 */
+.msg-body p { margin-bottom: 14px; }
 .msg-body p:last-child { margin-bottom: 0; }
-.msg-body code { font-family: var(--mono); font-size: 12.5px; background: var(--surface); padding: 1px 6px; border-radius: 5px; color: var(--fg); }
+/* 行内代码。★★刻意做得很轻:这个 app 的正文是中文里嵌一堆 snake_case 标识符,一段里出现十来个
+   `xxx` 是常态。原来是 --surface 实底 + 1px 6px 内边距 + 5px 圆角 —— 单个好看,密集出现时整段像雪花屏
+   (用户看真机截图的原话:「内容没有分段…看着就很乱」)。现在只留一层极淡的同色底 + 3px 内边距:
+   长标识符仍然读得出是一个整体,但不再是一排小方块。
+   ★字号改成 em:原来写死 12.5px,用户在设置里调「会话区字号」时行内代码纹丝不动,中文放大了它没跟上。 */
+.msg-body code { font-family: var(--mono); font-size: .92em; background: color-mix(in oklab, var(--fg) 6%, transparent); padding: 0 3px; border-radius: 3px; color: var(--fg); overflow-wrap: anywhere; }
+/* ★★壁纸开着的时候把这层底【整个去掉】。
+   那层底是 fg 混出来的**中性灰**,压在一张有颜色的壁纸上会把底下的颜色**去饱和** —— 于是一段中文里
+   十几个标识符,每个都顶着一小块发白发灰的斑,比在纯色底上难看得多(用户 2026-09-08 原话:
+   「对于一些词,比如代码、数字等,有个明显的白色背景」)。
+   ★这正是用户定了很久的那条规矩:**壁纸下只加深文字颜色,绝不给字加背景**
+   (见 memory feedback-font-color-only;更早那版「局部磨砂条」就是这么被否掉的)。
+   靠什么继续区分?等宽字体本身,加上 code 用满格 `--fg` 而正文是 `--fg-2` —— 深浅两个主题都成立,
+   而且长标识符照样读得出是一个整体。没有壁纸时保持原样:纯色底上那层浅灰底是好看的。 */
+html[data-bg-scope="app"] .msg-body code,
+html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
+/* 围栏代码块自己有边框和底,不受上面那条影响(它的 code 本来就 background:none)。 */
 /* ---- Markdown rendering ---- */
 .msg-body h1, .msg-body h2, .msg-body h3, .msg-body h4 { font-weight: 680; letter-spacing: -.01em; line-height: 1.3; margin: 16px 0 8px; }
 .msg-body h1:first-child, .msg-body h2:first-child, .msg-body h3:first-child { margin-top: 0; }
@@ -98,21 +128,69 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .md-link-copy > span { display: none; }
 .msg-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .msg-body blockquote { border-left: 2px solid var(--border-2); padding-left: 12px; margin: 8px 0; color: var(--muted); }
-.msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }
+.msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }
 .msg-body pre code { background: none; padding: 0; font-size: 12.5px; line-height: 1.55; color: var(--fg-2); white-space: pre; }
 /* GFM tables — shared by chat messages (.msg-body) and the plan card (.req-title) */
-.msg-body table, .req-title table { border-collapse: collapse; margin: 8px 0 12px; font-size: 13px; width: 100%; }
+/* ★★★2026-09-17 第三次改 —— 用户原话:「我已经说过不下三次了,还是这样,又短又丑」。
+   前两次一直在**同一条轴上**来回调宽度,所以两个毛病轮流出现:
+     · `width:100%` → 「内容太靠左了」(格子比内容宽得多,内容缩在左上角)
+     · `width:auto` → 「又短又丑」(表格缩成内容宽,旁边段落满宽,看着发育不良)
+   ★★真正的问题**不在宽度,在「表格没有边界」**。没有轮廓的时候,一张按内容收的表只是几行
+    浮着的字,自然显得没长好;而把它拉满宽,又让每格空出一大片。两条路都治不好,因为病不在那儿。
+   ★所以这次改的是**定义**,不是尺寸(GitHub / Notion 的路数,2026-09-17 在真 Chrome 里两版对比确认):
+     · `width: max-content` —— 按内容收,于是**没有任何一格比它的内容宽很多**;
+     · 加一圈**轮廓 + 圆角** —— 表格成为一个完整的块,短也是「故意这么短」,不是「没长完」。
+   ★轮廓和表头底色都用 `color-mix(… transparent)`,壁纸能透上来 —— 实底在浅色主题下是一条
+    纯白横杠,既难看又违反「壁纸下不加背景」那条(memory: feedback-font-color-only)。 */
+/* ★★2026-09-10:选择器从两个来源扩到**四个**。上面那两条修复(width:auto / 去竖线)当时只落在
+   `.msg-body` + `.req-title` 上,而 `.req-plan`(方案卡正文、运行事件卡)和 `.md-html`(内嵌 HTML 里
+   没被提升成 TableBlock 的裸表格)各自还抄着一份**旧样式**(`width:100%` + `padding:4px 8px` + 满格实线)
+   —— 于是用户在那两处看到的仍旧是「内容太靠左」和「满格网格」,而他明明反馈过、我也明明改过。
+   ★同一个形状的坑见 [trap-two-call-sites-run-vs-chat]:两份手抄的实现,只改一处 = 等于没改。
+   现在**只有这一套**,底下那两条各自的 `table` 规则已经删掉。 */
+.msg-body table, .req-title table, .req-plan table, .md-html table {
+  /* ★`separate` + `border-spacing: 0`:圆角要裁得住,`collapse` 下圆角是不生效的。 */
+  border-collapse: separate; border-spacing: 0; margin: 10px 0 14px; font-size: 13px;
+  width: max-content; max-width: 100%;
+  border: 1px solid color-mix(in oklab, var(--fg) 13%, transparent);
+  border-radius: 10px; overflow: hidden;
+}
 .md-img { max-width: 100%; height: auto; border-radius: 6px; margin: 6px 0; display: block; }
 .md-img-loading, .md-img-err { font-size: 12px; color: var(--muted); font-style: italic; }
-.msg-body th, .msg-body td, .req-title th, .req-title td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
-.msg-body th, .req-title th { background: var(--surface); color: var(--fg); font-weight: 650; }
-.msg-body td, .req-title td { color: var(--fg-2); }
+/* ★★表格原来是「整张网格 + 不透明表头」:每个单元格四条 1px 实线,表头一条 `--surface` 实底。
+   浅色主题的 --surface 是 99% 明度 —— 壁纸上就是一条**纯白横杠**,加上满格的线,整张表像贴上去的
+   电子表格截图,和周围的玻璃质感完全不搭(用户 2026-09-08 原话:「html 输出的这个表格,我感觉非常丑」)。
+   ★现在只留【横向分隔线】:表头一条稍重的底线,行与行之间一条极淡的线,竖线全部去掉 —— 列是靠间距
+   对齐的,不需要画出来。表头底色换成 fg 混出来的半透明色,深浅两个主题各自成立,壁纸也能透上来。
+   ★padding 从 4px 8px 放到 6px 10px:去掉竖线之后,列间距就是唯一的分列线索,太挤会糊成一片。
+   ★★2026-09-17 再放到 7px 14px、行高 1.55:满宽之后每行更长,行内需要更多呼吸感才不显得挤;
+    列间距也从 20px(10+10)加到 28px —— 没有竖线时,列与列之间全靠这段空白分开。 */
+.msg-body th, .msg-body td, .req-title th, .req-title td,
+.req-plan th, .req-plan td, .md-html th, .md-html td {
+  border: 0; border-bottom: 1px solid color-mix(in oklab, var(--fg) 9%, transparent);
+  padding: 7px 14px; line-height: 1.55; text-align: left; vertical-align: top;
+}
+.msg-body th, .req-title th, .req-plan th, .md-html th {
+  /* ★底色用 fg 混出来的**半透明**色,不是实底 —— 壁纸要能透上来。
+     实底(--surface 在浅色主题是 99% 明度)在壁纸上就是一条纯白横杠,和整屏的玻璃质感打架,
+     而且违反「壁纸下不加背景」那条(见 memory: feedback-font-color-only)。 */
+  background: color-mix(in oklab, var(--fg) 6%, transparent); color: var(--fg); font-weight: 650;
+  border-bottom-color: color-mix(in oklab, var(--fg) 22%, transparent);
+  /* 表头小一号 + 字距,和正文拉开层次 —— 没有竖线和外框时,层次全靠这些细节撑。 */
+  font-size: 12px; letter-spacing: .02em;
+}
+/* ★★首末列**不再贴边**。「去掉外侧留白让表格和正文左对齐」是没有外框时的做法 ——
+   现在有了轮廓,贴边会让第一个字直接压在边框上。留白和其它格一致,块才是完整的。 */
+.msg-body tr:last-child td, .req-title tr:last-child td,
+.req-plan tr:last-child td, .md-html tr:last-child td { border-bottom: 0; }
+/* 数字列用等宽数字:表格里最常见的就是数量/行号/版本号,比例数字会让每行宽度不一样、看着抖。 */
+.msg-body td, .req-title td, .req-plan td, .md-html td { color: var(--fg-2); font-variant-numeric: tabular-nums; }
 .msg-files { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .msg-changes { margin-top: 10px; }
 .msg-changes .txt-btn { font-size: 11.5px; font-weight: 600; color: var(--accent); padding: 5px 9px; border-radius: 6px; transition: .14s; }
 .msg-changes .txt-btn:hover { background: var(--accent-dim); }
 .msg-docs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.msg-doc { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border-2); color: var(--fg); font-size: 11.5px; font-weight: 600; transition: .13s; max-width: 100%; }
+.msg-doc { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--border); color: var(--fg); font-size: 11.5px; font-weight: 600; transition: .13s; max-width: 100%; }
 .msg-doc:hover { background: var(--border); border-color: var(--accent); }
 .msg-doc svg { width: 14px; height: 14px; flex: none; color: var(--accent); }
 .msg-doc .md-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -149,7 +227,22 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   text-shadow: none;
 }
 .msg.user .msg-files { padding-left: 0; padding-right: 0; justify-content: flex-end; width: min(620px, calc(100% - 33px)); }
-.attach-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 6px 10px; font-size: 12px; }
+
+/* 「这条是从别处发来的」。跟着气泡右对齐,压在它下面一行。
+   ★★`user-select: none` 不是可有可无的:用户明确要求这个标记**不能被复制走**。
+   复制按钮本来就只拿 `msg.text`,但**拖选整段对话**会把它一起框进去 —— 那正是
+   「不该进上下文」这条要求最容易破的口子(人复制一段对话粘给模型)。
+   ★字号 11 / `--faint`:它是署名,不是内容。要能看见,但不该在扫视时把眼睛拽过去。 */
+.msg.user .msg-via {
+  width: min(620px, calc(100% - 33px));
+  margin-left: auto;
+  display: flex; align-items: center; justify-content: flex-end; gap: 4px;
+  padding-top: 4px;
+  font-size: 11px; line-height: 1.4; color: var(--faint);
+  user-select: none; -webkit-user-select: none;
+}
+.msg.user .msg-via svg { width: 11px; height: 11px; flex: 0 0 auto; opacity: .8; }
+.attach-chip { display: inline-flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 6px 10px; font-size: 12px; }
 .attach-chip svg { width: 14px; height: 14px; color: var(--muted); }
 .attach-chip .sz { color: var(--faint); font-family: var(--mono); font-size: 10.5px; }
 /* 图片附件用缩略图代替通用文件图标:剪贴板截图全叫 img-时分秒.png,一眼看图比读名字快得多。
@@ -157,23 +250,30 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .attach-chip .attach-thumb { width: 18px; height: 18px; border-radius: 3px; object-fit: cover; flex: 0 0 18px; background: var(--surface-2); }
 
 /* 思考过程块 — 内部推理,视觉上"收起/次要",与最终回答明确区分 */
+/* ══ 第 1 档「过程」= 左轨,不是框 ═══════════════════════════════════════════════════════
+   思考 / 执行 / 子代理都归这一档。它们回答的是「怎么得到的」,不是结论本身,所以退到一条 2px
+   轨道后面:没有边框、没有底色、没有圆角。
+
+   ★★为什么是轨不是框:一条回复上原来能同时叠出四个盒子(虚线框的思考、实线框+底的执行、
+    还有一枚药丸),而**正文是唯一没有框的东西** —— 视觉权重完全倒挂,过程比结论显眼。
+    轨只占 2px、高度自适应、嵌套不产生「框里的框」,读起来是「挂在这条消息上」而不是「另一个对象」。
+   ★框的预算全部留给第 2 档(代码块 / HTML 卡片 / 附件):那些是可以点、可以复制、可以滚的**产物**。
+    框一出现就该意味着「这是个东西」,所以它必须稀缺,而且长相只有一套。
+   ★轨道颜色带状态:跑=--run、完/静=--border。 */
 .think {
-  margin: 0 0 12px 0; border: 1px dashed var(--border-2);
-  border-left: 2px solid var(--faint); border-radius: var(--r);
-  background: color-mix(in oklch, var(--surface) 58%, transparent);
-  overflow: hidden; transition: border-color .2s, background .2s;
+  margin: 0 0 10px 0; border: none; border-left: 2px solid var(--border); border-radius: 0;
+  background: none; padding-left: 14px; transition: border-color .2s;
 }
-.think.live {
-  border-style: solid; border-left-color: var(--run);
-  background: color-mix(in oklch, var(--accent-dim) 16%, var(--surface));
-}
+.think.live { border-left-color: var(--run); }
 .think-h {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px; width: 100%;
-  font: 600 10.5px/1 var(--mono); letter-spacing: .06em; color: var(--faint);
+  display: flex; align-items: center; gap: 8px; padding: 3px 0; width: 100%;
+  font: 600 10.5px/1.5 var(--mono); letter-spacing: .06em; color: var(--faint);
 }
-.think-h .glyph { width: 13px; height: 13px; color: var(--muted); flex: 0 0 auto; }
+/* ★16px:那一行的文字是 10.5px×1.5(行高约 15.75px),16 是不撑高这一行的上限。
+   跑完换成静止图标时尺寸不变 —— 一跳一缩会让人以为状态变了两次。 */
+.think-h .glyph { width: 16px; height: 16px; color: var(--muted); flex: 0 0 auto; }
 .think.live .think-h .glyph { color: var(--run); }
-.think-h .spin { width: 13px; height: 13px; flex: 0 0 auto; }
+.think-h .spin { width: 16px; height: 16px; flex: 0 0 auto; }
 .think-h .label { font-weight: 600; }
 .think.live .think-h .label {
   background: linear-gradient(90deg, var(--muted) 32%, var(--fg) 50%, var(--muted) 68%);
@@ -184,13 +284,12 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .think-h .t { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--faint); text-transform: none; letter-spacing: 0; }
 .think-h .chev { width: 12px; height: 12px; transition: transform .18s; color: var(--faint); flex: 0 0 auto; }
 .think.open .chev { transform: rotate(90deg); }
-.think-body { display: none; padding: 3px 12px 11px 14px; }
+.think-body { display: none; padding: 2px 0 6px; }
 .think.open .think-body { display: block; }
-.think-steps { position: relative; padding-left: 16px; }
-.think-steps::before {
-  content: ""; position: absolute; left: 3px; top: 8px; bottom: 8px;
-  width: 1px; background: linear-gradient(var(--border-2) 60%, transparent);
-}
+/* ★内部那条竖线去掉了:整块现在已经挂在第 1 档的左轨上,再画一条就是「轨里的轨」——
+   正是这一轮要消掉的那种重复。步骤前的小圆点保留,它们是列表标记(还带「最后一步完成」的绿色),
+   不是容器。 */
+.think-steps { position: relative; padding-left: 14px; }
 .think-step {
   position: relative; font-size: 11.5px; color: var(--muted);
   padding: 4px 0; font-family: var(--mono); line-height: 1.55;
@@ -205,27 +304,27 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 /* 最终回答 — 独立结果区域,与上方思考过程分开 */
 .answer-block { margin-left: 0; }
 .answer-block:not(.show) { margin-top: -2px; }
-.ans-eyebrow {
-  display: inline-flex; align-items: center; gap: 6px; margin: 0 0 7px;
-  font: 700 10px/1 var(--mono); letter-spacing: .08em; color: var(--accent);
-  background: var(--accent-dim); border: 1px solid color-mix(in oklch, var(--accent), transparent 70%);
-  border-radius: 99px; padding: 4px 8px;
+/* 生成中的一行状态。★这里原来是一枚 accent 色 + 底色 + 边框 + 药丸圆角、还带旋转和掠光两条动画的
+   「回答」标记,而且**结论落地之后照旧挂着** —— 全部信息量只有「下面是回答」,却是整条消息里最花的
+   一块(用户 2026-09-07 那张真机截图里最抢眼的东西之一)。结论落地后由 Message.tsx 整枚不渲染;
+   生成中留一行,因为那时它说的是「还在写」,是真信息。
+   ★只有在途的那一条消息会动,静止的消息零重绘(和省电那批的口径一致)。 */
+.ans-live {
+  display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 8px;
+  font: 600 10.5px/1 var(--mono); letter-spacing: .08em; color: var(--muted);
 }
-.ans-eyebrow svg { width: 12px; height: 12px; }
-/* 生成中的头部动效(仅 streaming 时):星星轻闪 + 药丸掠光。settled 消息保持静止,避免空闲重绘
-   (跟省电那批一致:任一时刻只有一条在途消息在动)。 */
-.ans-eyebrow.live { position: relative; overflow: hidden; }
-.ans-eyebrow.live svg { animation: eyebrow-spin 2.2s linear infinite; transform-origin: center; }
-.ans-eyebrow.live::before {
-  content: ""; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(100deg, transparent 20%, color-mix(in oklch, var(--accent) 32%, transparent) 50%, transparent 80%);
-  transform: translateX(-100%); animation: eyebrow-sheen 1.9s ease-in-out infinite;
-}
-/* 生成中:星星匀速顺时针转。linear 而不是 ease —— 缓动会让转速忽快忽慢,看着像卡顿而不是在转。
-   亮度起伏挂在同一条 keyframes 上:transform 和 opacity 分成两个 animation 会互相覆盖 transform。 */
-@keyframes eyebrow-spin { 0% { transform: rotate(0deg); opacity: .85; } 50% { opacity: 1; } 100% { transform: rotate(360deg); opacity: .85; } }
-@keyframes eyebrow-sheen { 0% { transform: translateX(-100%); } 55%, 100% { transform: translateX(100%); } }
+.ans-live .pd { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .ans-live .pd { animation: none; } }
 .msg-body.ans { color: var(--fg); }
+/* ══ 正文行宽 ═══════════════════════════════════════════════════════════════════════════
+   ★★2026-09-08 这里曾经有一条 `max-width: 84ch`(≈50 个中文字)。理由是「舒适的行宽是固定的,
+    不该跟着窗口长」,而它要解决的是用户说的「像一大段文章」。**第二天他就说它「明显感觉短了」**。
+   ★★两句话都是对的,矛盾在别处:封顶只封了**散文**,而表格、代码块、HTML 卡片仍然是满宽 ——
+    于是同一条回答里出现两种宽度(实测 706px vs 1052px),段落右边空一大条、表格却顶到底。
+    「短」是**和旁边那些满宽的块比出来的**,不是绝对值的问题。
+   ★所以现在**一个宽度**:正文跟着会话列走,表格按内容收(见下面 `table` 的 `width: auto`)。
+    如果「一大段文章」的感觉回来了,该动的是**段落节奏**(段距、小标题),不是把行压窄 ——
+    压窄换来的是这次这个毛病。 */
 /* Raw-text placeholder shown for one frame while a large reply's Markdown parse is deferred off the
    session-switch commit. pre-wrap preserves newlines so its height stays close to the parsed output,
    keeping the swap from visibly shifting scroll position. */
@@ -237,8 +336,8 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   animation: caret-blink 1s steps(2) infinite;
 }
 @keyframes caret-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
-@keyframes spin { to { transform: rotate(360deg); } }
-.spin { animation: spin 1s linear infinite; color: var(--run); }
+/* ★`.spin`(整体旋转的开口圆弧)**已删**,2026-09-17 用户否掉:「我甚至所有的开口圆弧都去掉」。
+   转圈一律走 `Spinners.tsx` 的那两个 —— 那边还解决了「主代理和子代理分不开」的问题。 */
 
 /* 组合输入区 */
 /* No overflow clipping here: the model dropdown opens UPWARD past this element's top, and
@@ -247,6 +346,11 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .composer-wrap { flex: 0 0 auto; min-width: 0; padding: 12px clamp(32px, 4%, 72px) 18px; }
 .composer { position: relative; width: 100%; max-width: clamp(720px, 90%, 1180px); min-width: 0; margin: 0 auto; background: var(--surface); border: 1px solid var(--border-2); border-radius: var(--r-lg); transition: border-color .15s, box-shadow .15s; }
 .composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+/* 文件拖到输入框上方时的落点提示。用与 :focus-within 同一套的描边 + 光晕(同一个「这里是活的」
+   语汇),只是把边框改成虚线 —— 「松手就放这儿」需要一眼可辨,而不是又一种新颜色。
+   ★不改 padding / 不加伪元素遮罩:高亮期间输入框的尺寸一变,拖着的指针就会掉出这个元素,
+   浏览器当场派发 dragleave,高亮灭掉、尺寸复原、又进来 —— 一路闪,而且经常放不下去。 */
+.composer.dropping { border-color: var(--accent); border-style: dashed; box-shadow: 0 0 0 3px var(--accent-dim); }
 .composer-attach { display: flex; gap: 8px; padding: 10px 12px 0; flex-wrap: wrap; }
 .composer-attach:empty { display: none; }
 .composer-attach .attach-chip { padding: 5px 9px; font-size: 11.5px; }
@@ -362,25 +466,6 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   color: var(--err); background: color-mix(in oklch, var(--err) 14%, transparent);
   border: 1px solid color-mix(in oklch, var(--err) 32%, transparent); transition: .13s; }
 .supplement-danger:hover { background: color-mix(in oklch, var(--err) 22%, transparent); }
-/* User feedback (2026-07-21): Context bar like Claude Code's statusline — real reported tokens ÷ real
-   model window (see WorkspaceView latestUsage). Label + bar + %, right-aligned above the composer. */
-.ctx-real {
-  display: flex; align-items: center; gap: 7px; cursor: help;
-  width: 100%; max-width: clamp(720px, 90%, 1180px); margin: 0 auto 4px; padding: 0 4px;
-  justify-content: flex-end; font-family: var(--mono); font-size: 11px; color: var(--faint);
-}
-.ctx-real .ctx-label { flex: 0 0 auto; }
-.ctx-real .ctx-bar {
-  flex: 0 0 auto; width: 96px; height: 6px; border-radius: 999px;
-  background: var(--surface-2); border: 1px solid var(--border); overflow: hidden;
-}
-.ctx-real .ctx-bar i { display: block; height: 100%; background: var(--ok); transition: width .3s ease; }
-.ctx-real .ctx-pct { flex: 0 0 auto; min-width: 30px; text-align: right; color: var(--muted); }
-/* warm/hot as context fills — mirrors the statusline turning the bar orange/red near the window cap */
-.ctx-real.warn .ctx-bar i { background: var(--warn); }
-.ctx-real.warn .ctx-pct { color: var(--warn); }
-.ctx-real.hi .ctx-bar i { background: var(--err); }
-.ctx-real.hi .ctx-pct { color: var(--err); }
 .supplement-cancel { flex: 0 0 auto; height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11.5px; font-weight: 600; color: var(--faint); transition: .13s; }
 .supplement-cancel:hover { background: var(--surface); color: var(--err); }
 /* Provider-switch confirm banner: same shell, with a primary 确认切换 button. */
@@ -451,9 +536,6 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .req-plan code { font-family: var(--mono); font-size: 11.5px; background: var(--surface); padding: 1px 5px; border-radius: 5px; }
 .req-plan pre { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 9px 11px; overflow-x: auto; margin: 8px 0; }
 .req-plan pre code { background: none; padding: 0; }
-.req-plan table { border-collapse: collapse; margin: 8px 0; font-size: 12px; width: 100%; }
-.req-plan th, .req-plan td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
-.req-plan th { background: var(--surface); color: var(--fg); font-weight: 650; }
 /* Design-doc open buttons — the technical plan lands in a real file; these open it in the
    full-screen in-app viewer (formatted markdown, enlargeable). One chip per project doc. */
 .req-docs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
@@ -527,15 +609,16 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .msg-delegate { gap: 0; }
 
 /* 执行 block (ToolBlock.tsx): the main agent's own tool calls this turn — titles live, output collapsible. */
-.tool-block { margin: 2px 0 10px; border: 1px solid color-mix(in oklab, var(--border) 48%, transparent); border-radius: 9px; background: color-mix(in oklab, var(--surface) 55%, transparent); overflow: hidden; }
-.tool-lead { display: flex; align-items: center; gap: 6px; padding: 7px 11px; font-size: 11px; color: var(--faint); cursor: pointer; list-style: none; user-select: none; }
+/* 同上,第 1 档:去框、去底、去圆角,只留一条左轨。行内的横向内边距一并砍掉 —— 轨道已经把
+   「这一段属于过程」说清楚了,再套一层内边距只是把内容往右推。 */
+.tool-block { margin: 2px 0 10px; border: none; border-left: 2px solid var(--border); border-radius: 0; background: none; padding-left: 14px; }
+.tool-lead { display: flex; align-items: center; gap: 6px; padding: 3px 0; font-size: 11px; color: var(--faint); cursor: pointer; list-style: none; user-select: none; }
 .tool-lead::-webkit-details-marker { display: none; }
 .tool-lead-dot { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in oklab, var(--accent) 55%, var(--muted)); flex: 0 0 6px; }
 .tool-lead-dot.live { background: var(--accent); animation: tt-pulse 1.2s ease-in-out infinite; }
-.tool-rows { border-top: 1px solid color-mix(in oklab, var(--border) 42%, transparent); }
-/* 去掉逐行分隔线 —— 整块被「网格线」切碎的主因。行与行靠留白 + hover 高亮区分,只留头部一条淡线。 */
+.tool-rows { border-top: none; }
 .tool-row { border-top: none; }
-.tool-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 11px; text-align: left; font-size: 12px; color: var(--fg-2); background: none; }
+.tool-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 3px 0; text-align: left; font-size: 12px; color: var(--fg-2); background: none; border-radius: 4px; }
 .tool-head:not(:disabled) { cursor: pointer; }
 .tool-head:not(:disabled):hover { background: var(--surface-2); }
 .tool-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
@@ -546,18 +629,24 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
 .tool-mark { font-size: 11px; flex: 0 0 auto; }
 .tool-mark.m-ok { color: var(--ok, #3fb950); }
 .tool-mark.m-error { color: var(--err); }
+/* 「这次是自动放行的」。★做得比状态标记还淡:它是背景信息,不是这一行的重点(重点是跑了什么、成没成)。
+   一轮十几次调用都会带它,再显眼一点整块就成了一列 emoji。 */
+.tool-auto { font-size: 10.5px; line-height: 1; opacity: .5; flex: 0 0 auto; cursor: help; }
+.tool-row:hover .tool-auto { opacity: .85; }
 .tool-caret { font-size: 10px; color: var(--faint); transition: transform .12s; flex: 0 0 auto; }
 .tool-caret.open { transform: rotate(90deg); }
-.tool-output { margin: 0; padding: 8px 11px 10px 25px; font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: color-mix(in oklab, var(--surface-2) 50%, transparent); }
-.subagent-card { border: 1px solid color-mix(in oklab, var(--border) 55%, transparent); border-radius: 9px; background: color-mix(in oklab, var(--surface) 60%, transparent); overflow: hidden; }
+.tool-output { margin: 4px 0 6px; padding: 8px 10px; border-radius: var(--r); font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: var(--surface); }
+.subagent-card { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); overflow: hidden; }
 .subagent-card.s-running { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
 .subagent-card.s-error { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }
 .sac-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 11px; text-align: left; font-size: 12.5px; color: var(--fg-2); }
 .sac-head:hover { background: var(--surface-2); }
 .sac-ico { flex: 0 0 auto; display: grid; place-items: center; color: var(--accent); }
-.sac-ico svg { width: 14px; height: 14px; }
-.subagent-card.s-running .sac-ico { animation: sac-spin 1.4s linear infinite; }
-@keyframes sac-spin { to { transform: rotate(360deg); } }
+/* ★18px:标题行是 12.5px×1.5(≈18.75px),18 正好塞得下而不撑高卡片。
+   ★跑完的静止图标用同一个尺寸 —— 收尾时图标忽然缩一圈,看着像又发生了一件事。 */
+.sac-ico svg { width: 18px; height: 18px; }
+/* ★旋转交给里面那个 `.spin`(全 app 同一套),不再整个图标容器绕中心转 ——
+   一枚放大镜那么转,手柄会甩圈,读起来是「乱晃」不是「在转」。 */
 .sac-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--fg); }
 .sac-type { color: var(--faint); font-weight: 500; }
 .sac-state { flex: 0 0 auto; font-size: 10.5px; font-weight: 600; font-family: var(--mono); letter-spacing: .04em; padding: 2px 8px; border-radius: 99px; }
@@ -631,6 +720,12 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
      padding next to the text — the column's own padding (clamp 32–72px) then buffers the dashes
      from the AI text so the rail doesn't hug the reply. */
   left: max(8px, calc((100% - clamp(720px, 90%, 1180px)) / 2 - 6px));
+  /* ★★`top` 和 `max-height` 由 `ChatJumpRail.tsx` **量出来**后内联写进来,这里不再拍数。
+     原来是 `top:50%` + `max-height: calc(100% - 210px)`:轨道绝对定位在整列(.chat)里,
+     而整列 = 滚动区 + 输入框,居中再减 210 等于假设输入框只有 105px 高。它没有那么矮
+     (带附件条时 160~180,整窗缩放调大字号还会再涨),于是轨道下半截压进输入框 ——
+     用户报的「锚点列表底部都已经到输入框这块了」。现在按滚动区那个盒子摆,输入框天然在它外面。
+     ★兜底 top 留着:量到之前(首帧)总得有个位置,不然会从 0 跳到中间。 */
   top: 50%;
   transform: translateY(-50%);
   z-index: 8;
@@ -638,7 +733,6 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  max-height: calc(100% - 210px);
   /* NOT overflow:hidden — the hover preview opens to the RIGHT of a dash (left: calc(100% + 8px)),
      far outside the rail's ~20px-wide box, so clipping here swallowed the whole preview card (the
      reported "预览没有"). Visible lets the preview escape; dashes for very long threads may extend
@@ -879,10 +973,9 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
    那是模型的排版意图,我们只接管配色。 */
 .md-html { margin: 10px 0; max-width: 100%; overflow-x: auto; }
 .md-html * { max-width: 100%; box-sizing: border-box; }
-/* 片段里的表格若被提升成 TableBlock,继续吃上面那套表格样式;没提升的裸表格也给同样的边框,免得两种
-   来源的表格长得不一样。 */
-.md-html table { border-collapse: collapse; width: 100%; font-size: 13px; }
-.md-html th, .md-html td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+/* ★片段里的表格,不管有没有被提升成 TableBlock,都吃上面那套**唯一的**表格样式
+   (`.md-html` 已经并进那组选择器)。★这里原来另抄了一份「同样的边框」—— 主样式一改它没跟着,
+   于是恰好变成它当初想防的「两种来源长得不一样」。别再抄第二份。 */
 .md-html details { margin: 6px 0; }
 .md-html summary { cursor: pointer; color: var(--fg-2); }
 .md-html summary:hover { color: var(--fg); }
@@ -891,13 +984,14 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
    做成 <details>:模型若忘了写闭合标签,用户点开还能看到原文,内容不会被永久吞掉。
    呼吸动画只跑在收起状态的 summary 上,且它通常只存在几秒 —— 不构成常驻 GPU 开销;展开后停掉,免得
    用户在读原文时底下一直闪。 */
-.md-html-pending { margin: 10px 0; padding: 8px 12px; border: 1px dashed var(--border-2); border-radius: var(--r); }
+/* ★虚线是「还没画完」这一个语义的专属标记 —— 第 2 档里只有它用虚线,别处不许再用。 */
+.md-html-pending { margin: 10px 0; padding: 8px 12px; border: 1px dashed var(--border); border-radius: var(--r); }
 .md-html-pending > summary { cursor: pointer; color: var(--muted); font-size: 12.5px; list-style: none; }
 .md-html-pending > summary::-webkit-details-marker { display: none; }
 .md-html-pending > summary::before { content: "▸ "; opacity: .7; }
 .md-html-pending[open] > summary::before { content: "▾ "; }
 .md-html-pending:not([open]) > summary { animation: mdHtmlPending 1.4s ease-in-out infinite; }
-.md-html-pending > pre { margin: 8px 0 2px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; overflow-x: auto; font-size: 12px; color: var(--fg-2); white-space: pre-wrap; word-break: break-all; }
+.md-html-pending > pre { margin: 8px 0 2px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 9px 11px; overflow-x: auto; font-size: 12px; color: var(--fg-2); white-space: pre-wrap; word-break: break-all; }
 @keyframes mdHtmlPending { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .md-html-pending:not([open]) > summary { animation: none; } }
 
@@ -930,4 +1024,78 @@ html[data-theme="light"][data-bg-scope="app"] div.chat, html[data-theme="light"]
   font-size: 11px; color: var(--danger, #e5534b);
   border: 1px solid color-mix(in srgb, var(--danger, #e5534b) 40%, transparent);
   border-radius: 4px;
+}
+
+
+/* ── 两个转圈图标(`Spinners.tsx`)────────────────────────────────────────────────
+   ★动画是 opacity 的错相渐变,不是整体 rotate:绕中心转的图形在低分屏上边缘会抖,
+    逐段亮灭没有这个问题 —— 系统的 loading 指示器也是这么做的。
+   ★主代理 = 放射线条(accent);子代理 = 绕圈圆点(run)。**形状不同**,不是同一个图标换色 ——
+    颜色在小尺寸、换皮肤、色弱三种情况下都不可靠。 */
+/* ── 主代理:两级思维导图 + 1→2→3→2 的八拍传递 ──────────────────────────
+   ★★节拍表(一轮 3.2 秒,八拍各 12.5%):
+       ①中心 ②一级连线 ③一级节点 ④二级连线 ⑤二级节点 ⑥二级连线 ⑦一级节点 ⑧一级连线
+     —— 传出去,再原路传回来。同一时刻只有一组是亮的,其余压到一成。
+   ★★这件事**做不成「一条动画 + 不同 delay」**:一级在一个周期里要亮两次(去程各一次),
+     延迟错开只能做出单向的波。所以五组各有各的关键帧。别为了"省几行"把它们合回去。
+   ★笔画粗细是 **viewBox 单位**:16px 渲染 24 单位时 1 单位 = 0.67 CSS px。
+     二级连线 1.85 单位 = 1.24px,刚好压住 1× 屏那条线(低于 1 物理像素就会渲染成灰雾)。 */
+.sp-mind { display: block; flex: 0 0 auto; overflow: visible; }
+.sp-mind line { stroke: currentColor; stroke-linecap: round; }
+.sp-mind .l1 { stroke-width: 2.1; }
+.sp-mind .l2 { stroke-width: 1.85; }
+.sp-mind circle { fill: currentColor; }
+.sp-mind .sp-hub { fill: none; stroke: currentColor; stroke-width: 2.9; }
+/* 一层一色。★三个都是主题里**已有的语义色**,所以 12 个强调色和壁纸自动配色换过去之后
+   它们跟着变;自己另调一个色相的话,总有几套皮肤会跟它打架。 */
+.sp-mind .sp-b0 { color: var(--run); }
+.sp-mind .sp-b1, .sp-mind .sp-b2 { color: var(--ok); }
+.sp-mind .sp-b3, .sp-mind .sp-b4 { color: var(--warn); }
+.sp-mind .sp-rot {
+  transform-box: view-box; transform-origin: 12px 12px;
+  animation: sp-rot 4.2s linear infinite;
+}
+@keyframes sp-rot { to { transform: rotate(360deg); } }
+.sp-mind .sp-b0 { animation: sp-p0 3.2s linear infinite; }
+.sp-mind .sp-b1 { animation: sp-p1 3.2s linear infinite; }
+.sp-mind .sp-b2 { animation: sp-p2 3.2s linear infinite; }
+.sp-mind .sp-b3 { animation: sp-p3 3.2s linear infinite; }
+.sp-mind .sp-b4 { animation: sp-p4 3.2s linear infinite; }
+@keyframes sp-p0 { 0%, 9% { opacity: 1; } 13%, 96% { opacity: .1; } 100% { opacity: 1; } }
+@keyframes sp-p1 { 0%, 10% { opacity: .1; } 14%, 23% { opacity: 1; } 27%, 85% { opacity: .1; } 89%, 98% { opacity: 1; } 100% { opacity: .1; } }
+@keyframes sp-p2 { 0%, 23% { opacity: .1; } 27%, 35% { opacity: 1; } 39%, 73% { opacity: .1; } 77%, 85% { opacity: 1; } 89%, 100% { opacity: .1; } }
+@keyframes sp-p3 { 0%, 35% { opacity: .1; } 39%, 48% { opacity: 1; } 52%, 60% { opacity: .1; } 64%, 73% { opacity: 1; } 77%, 100% { opacity: .1; } }
+@keyframes sp-p4 { 0%, 48% { opacity: .1; } 52%, 60% { opacity: 1; } 64%, 100% { opacity: .1; } }
+
+/* ── 子代理:同心波纹 ─────────────────────────────────────────────────
+   ★和主代理**形状不同**(散开的网 vs 同心的圈),不靠颜色区分。
+   ★颜色走 currentColor —— `.sac-ico` 是 `color: var(--accent)`,所以它跟着用户选的强调色
+     和壁纸自动配色走。
+   ★只扩到 1.3 倍就消失:跑满全程的话,最亮那一刻也只剩半透明,整枚看着比实际更弱。 */
+.sp-ripple { display: block; flex: 0 0 auto; }
+.sp-ripple .core { fill: currentColor; }
+.sp-ripple .ring {
+  fill: none; stroke: currentColor; stroke-width: 2.6;
+  transform-box: fill-box; transform-origin: center;
+  animation: sp-ripple 1.6s ease-out infinite;
+}
+@keyframes sp-ripple {
+  0%   { transform: scale(.42); opacity: 1; }
+  100% { transform: scale(1.3); opacity: 0; }
+}
+/* ★尊重「减少动态效果」:开了之后不闪,但**仍然要看得出在跑** —— 停成一个半透明的静止图标,
+   而不是整个消失(消失等于把「正在跑」这个状态一起删了)。 */
+@media (prefers-reduced-motion: reduce) {
+  .sp-mind .sp-rot, .sp-mind g[class^="sp-b"], .sp-ripple .ring {
+    animation: none;
+  }
+  .sp-mind g[class^="sp-b"] { opacity: .6; }
+  .sp-ripple .ring { opacity: .4; transform: scale(1); }
+}
+
+/* 「历史还在路上」那一行。★只在等服务端回来时出现 —— 空白和「本来就没消息」长得一样,
+   而走中转时那个往返有两秒,分不清的代价就是人以为记录丢了(2026-09-17 真机)。 */
+.chat-loading {
+  display: flex; align-items: center; gap: 8px;
+  padding: 18px 2px; font-size: 12.5px; color: var(--muted);
 }

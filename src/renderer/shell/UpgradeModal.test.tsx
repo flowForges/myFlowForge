@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { UpgradeModal } from './UpgradeModal'
 
-const INFO = { version: '2.4.0', notes: '工作流混合编排\n文件树提速', dmgUrl: 'u', dmgSize: 26214400, dmgName: 'a.dmg' }
+const INFO = { version: '2.4.0', notes: '工作流混合编排\n文件树提速', assetUrl: 'u', assetSize: 26214400, assetName: 'a.dmg' }
 const base = { open: true, onClose: () => {}, info: INFO, currentVersion: '1.0.0', progress: null as any, onStart: () => {} }
 
 describe('UpgradeModal', () => {

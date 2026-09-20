@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { CHAT_LINE_HEIGHT_DEFAULT } from '@shared/chatTypography'
 import type { Settings, Appearance, Pet, Terminal, CloseAction, AppIcon, Notifications, Keybindings } from '@shared/types'
 import { builtinPets } from '@shared/builtinPets'
 
 const DEFAULTS: Settings = {
-  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
+  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: CHAT_LINE_HEIGHT_DEFAULT, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgBlur: 0, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {}, hostChip: 'both' },
   notifications: { enabled: true, confirm: true, input: true, done: true },
+  notifyEvents: { confirm: true, input: true, done: true },
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
-  termProxy: '',
+  agentProxy: '',
+  appProxy: '',
   skills: { 'code-review': true, 'test-driven': true, 'deep-research': false, 'systematic-debugging': true },
   pet: { enabled: true, skin: 'ghost', customPets: builtinPets(), activeCustomPetId: undefined, corner: 'right', pos: { bottom: 24 }, followCursor: true, idleAnimation: true, scale: 1, notify: { confirm: true, input: true, done: false }, interactionMode: 'simple', states: { idle: { anim: 'float', accent: 'none' }, working: { anim: 'spin-halo', accent: 'none' }, confirm: { anim: 'alert', accent: 'warn' }, input: { anim: 'tilt', accent: 'accent' }, done: { anim: 'pulse-ok', accent: 'ok' } } },
   heartbeat: { stallMs: 90_000, killGraceMs: 60_000, pingMs: 15_000 },
   pinnedWorkspaces: [],
   workspaceOrder: [],
-  lastActiveWorkspace: '',
+  lastActiveWorkspace: {},
   pluginCreds: {},
   disabledProviders: [],
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
@@ -29,6 +32,9 @@ const DEFAULTS: Settings = {
   memory: { enabled: true },
   botBridge: { dingtalk: { enabled: false, clientId: '', clientSecret: '' }, telegram: { enabled: false, botToken: '' }, feishu: { enabled: false, appId: '', appSecret: '' }, verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} } },
   codexTransport: 'exec',
+  mobileGateway: { enabled: false, host: '0.0.0.0', port: 6789 },
+  relay: { enabled: false, url: '', urlHistory: [] },
+  push: { enabled: false, gate: true, done: false },
 }
 
 export interface SettingsUpdate {
@@ -36,12 +42,14 @@ export interface SettingsUpdate {
   notifications?: Partial<Notifications>
   closeAction?: CloseAction
   appIcon?: Partial<AppIcon>
-  termProxy?: string
+  agentProxy?: string
+  appProxy?: string
+  notifyEvents?: Settings['notifyEvents']
   skills?: Record<string, boolean>
   pet?: Partial<Pet>
   heartbeat?: Settings['heartbeat']
   terminal?: Partial<Terminal>
-  lastActiveWorkspace?: string
+  lastActiveWorkspace?: Record<string, string>
   defaultOpenerId?: string
   keybindings?: Keybindings
   perfStallToast?: boolean
@@ -53,15 +61,20 @@ export interface SettingsUpdate {
   nsfwInstalled?: Record<string, string>
   memory?: { enabled: boolean }
   botBridge?: Settings['botBridge']
+  // codex 的驱动通路。★'app-server' 才有逐 token 流式('exec' 只在整条消息写完后发一次)——
+  //  见 AgentsPane 里那个开关和 providers/codex.ts 的注释。
+  codexTransport?: Settings['codexTransport']
 }
 
 function merge(base: Settings, partial: SettingsUpdate): Settings {
   return {
     appearance: { ...base.appearance, ...(partial.appearance ?? {}) },
     notifications: { ...base.notifications, ...(partial.notifications ?? {}) },
+    notifyEvents: { ...base.notifyEvents, ...(partial.notifyEvents ?? {}) },
     closeAction: partial.closeAction ?? base.closeAction,
     appIcon: { ...base.appIcon, ...(partial.appIcon ?? {}) },
-    termProxy: partial.termProxy ?? base.termProxy,
+    agentProxy: partial.agentProxy ?? base.agentProxy,
+    appProxy: partial.appProxy ?? base.appProxy,
     skills: { ...base.skills, ...(partial.skills ?? {}) },
     pet: { ...base.pet, ...(partial.pet ?? {}) },
     heartbeat: partial.heartbeat ?? base.heartbeat,
@@ -93,6 +106,11 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     // this update path — preserve from the loaded settings on load (cast), else base, like pluginCreds.
     botBridge: (partial as Partial<Settings>).botBridge ?? base.botBridge,
     codexTransport: (partial as Partial<Settings>).codexTransport ?? base.codexTransport,
+    mobileGateway: { ...base.mobileGateway, ...((partial as Partial<Settings>).mobileGateway ?? {}) },
+    // ★浅展开一层。整份替换会让一个只带 `enabled` 的补丁把 `url` 抹掉 ——
+    //  外观那边正是这么丢过一次的(见本文件里 appearance 那条)。
+    relay: { ...base.relay, ...((partial as Partial<Settings>).relay ?? {}) },
+    push: { ...base.push, ...((partial as Partial<Settings>).push ?? {}) },
   }
 }
 

@@ -2,14 +2,15 @@ import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks, ConfirmDecision } from '../types'
 import type { AskAnswers } from '@shared/types'
-import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
+import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker, splitThinkLines } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
 import { readClaudeModelsLive } from './claudeModels'
 import { logError, appLog } from '../../log/appLog'
-import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
-import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, type CanUseTool } from './claudeControl'
+import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
+import { makeHookWatch, HOOK_SLOW_MS } from './claudeHooks'
+import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, unhandledControlRequest, controlErrorLine, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
 // full name ('claude-opus-4-8'). Our friendly ids ('opus-4.8') are display labels and are
@@ -116,9 +117,17 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         try { child.stdin?.write(controlAnswerLine(req, answers, response) + '\n') } catch { /* stdin gone */ }
       }
       let streamed = false
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       const KIND_LEVEL = { think: 'info', tool: 'accent', file: 'accent', output: 'accent' } as const
       const handle = async (obj: any) => {
+        // ★★不认识但对面正等着回答的控制请求:明确回一句「不支持」。原来它会一路掉过所有分支、
+        //   **根本没人回答**,claude 就静静地等,这一轮挂住(和 codex 那个 bug 同一类,见 4c6423e)。
+        const stray = unhandledControlRequest(obj)
+        if (stray) {
+          try { child.stdin?.write(controlErrorLine(stray.requestId, `myFlowForge does not support control_request ${stray.subtype}`) + '\n') } catch { /* stdin gone */ }
+          cb.onLog({ ts: now(), level: 'info', kind: 'think', text: `claude 发来一个 Forge 不支持的控制请求(${stray.subtype}),已回复不支持并继续。` })
+          return
+        }
         const cut = parseCanUseTool(obj)
         if (cut) {
           // A stage agent can ask the human too (AskUserQuestion rides the permission channel) — lift
@@ -133,7 +142,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           try {
             decision = await cb.onConfirm({
               title: questions ? askGateTitle(questions) : `${cut.toolName} 请求执行`,
-              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName,
+              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName, toolUseId: cut.toolUseId,
               ...(questions ? { questions } : {}),
             })
           }
@@ -143,8 +152,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           else respond(cut, decision === 'allow')
           return
         }
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         if (obj?.type === 'stream_event') streamed = true
         if (obj?.type === 'assistant' && streamed) return   // deltas already streamed this turn; skip the full message to avoid duplicates
@@ -231,7 +239,32 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       } catch { /* stdin gone — the turn will error out and be reported normally */ }
       // Inactivity watchdog: reclaim a genuinely wedged turn (240s of total silence) instead of an
       // endless 思考中 spinner — but never kill a long, still-streaming turn.
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
+      /**
+       * ★★静默**先报告,不直接杀**。原来是 240 秒没输出就无声 SIGTERM —— 而静默是有歧义的:
+       *  可能在算,也可能在等一个我们看不见的人(外部钩子、浏览器 OAuth、sudo、git 凭据)。
+       *  用户装的 PermissionRequest 钩子超时是 24 小时,我们 4 分钟就杀,差 360 倍,必然撞车。
+       *  现在:4 分钟说一声(能说出还有哪个钩子没回来),半小时还是没动静才回收。
+       */
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => {
+        const waiting = hooks.pending()
+        cb.onStatus?.(waiting.length
+          ? `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出，还在等 ${waiting.join('、')} 钩子 —— 它可能正在别处等你确认。要停就点上面的停止。`
+          : `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`)
+      }, undefined, {
+        hardMs: CHAT_STALL_KILL_MS,
+        onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } },
+      })
+      /**
+       * ★★钩子把这一轮拖住时,界面上和「模型在思考」完全一样 —— 用户 2026-09-07 是靠**另一个软件**
+       *  才知道 agent 在等他授权的(那台机器上 PermissionRequest 挂着 3 个钩子,超时 24 小时)。
+       *  claude 本来就在流上发钩子的开始/结束,我们一直全丢了;接上之后卡住的那几秒钟能说出是谁在占着,
+       *  钩子报错(treland 连不上 socket、ping-island 抛错)也终于看得见了。
+       * ★用 onStatus 而不是 onThinkDelta:这是**此刻的状态**,不该沉到落盘的思考记录里。 */
+      const hooks = makeHookWatch({
+        slowMs: HOOK_SLOW_MS,
+        onSlow: (names, secs) => cb.onStatus?.(`⏳ 等 ${names.join('、')} 钩子响应 · 已 ${secs}s（钩子可能正在别处等你确认）`),
+        onError: (name, msg) => cb.onStatus?.(`⚠ ${name} 钩子失败：${msg}`),
+      })
       const start = Date.now()
       let buf = ''
       let streamed = false
@@ -242,7 +275,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let turnOk: boolean | null = null
       let rawErr = ''            // captured stderr for the no-reply diagnostic
       let errBuf = ''            // stderr line-splitter for live onStatus forwarding
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       const cap = (s: string, add: string) => (s + add).slice(-2000)
       // Answer a pending can_use_tool control_request on stdin. Tolerate a closed/dead stream (e.g.
       // the turn was cancelled while a gate was open).
@@ -275,6 +308,16 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         cb.onSubagent?.({ id: a.id, phase, subagentType: a.subagentType, description: a.description, prompt: a.prompt })
       }
       const handle = async (obj: any) => {
+        // 钩子事件先过一道:它只影响「现在在等谁」的播报,不参与下面任何解析分支。
+        if (hooks.feed(obj)) return
+        // ★★同 run():两个调用方都要接 —— 见 [[trap-two-call-sites-run-vs-chat]]。只接一处的话,
+        //   工作流那边不挂了、聊天这边照旧是个不动的光标,而聊天才是天天在用的那条。
+        const stray = unhandledControlRequest(obj)
+        if (stray) {
+          try { child.stdin?.write(controlErrorLine(stray.requestId, `myFlowForge does not support control_request ${stray.subtype}`) + '\n') } catch { /* stdin gone */ }
+          cb.onStatus?.(`claude 发来一个 Forge 不支持的控制请求(${stray.subtype}),已回复不支持并继续。`)
+          return
+        }
         const cut = parseCanUseTool(obj)
         if (cut) {
           // AskUserQuestion isn't an operation to approve — it's the model ASKING the human, smuggled
@@ -291,9 +334,13 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           // not a wedged turn, so it must not be killed by the 240s idle timer (finally always resumes).
           wd.pause()
           try {
+            // ★★toolUseId 必须带上:上层靠它把「这次是自动放行的」记到**那张工具卡**上。漏掉它,
+            //   上层就只能回落成往对话流里插一条「系统 · 回答」消息 —— 长得和模型的回答一模一样,
+            //   还夹在工具卡和真正的回答中间(用户原话:「系统回答 不应该出现在这个位置吧」)。
+            //   run() 那条路一直是带的,chat() 这条路漏了 —— 而聊天才是天天在看的那条。
             if (cb.onConfirm) decision = await cb.onConfirm({
               title: questions ? askGateTitle(questions) : `${cut.toolName} 请求执行`,
-              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName,
+              where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName, toolUseId: cut.toolUseId,
               ...(questions ? { questions } : {}),
             })
           }
@@ -318,8 +365,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           }
           return
         }
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         if (obj?.type === 'stream_event') streamed = true
         // deltas already streamed the assistant text; skip its text to avoid duplication — but STILL
@@ -386,7 +432,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         while ((nl = errBuf.indexOf('\n')) >= 0) { const line = errBuf.slice(0, nl).trim(); errBuf = errBuf.slice(nl + 1); if (line && !isClaudeBenignStderr(line)) cb.onStatus?.(line) }
       })
       const done = child.then((res) => {
-        wd.clear()
+        wd.clear(); hooks.clear()
         processLine(buf); buf = ''
         flushThink()   // surface any trailing reasoning line that never got a closing newline
         if (errBuf.trim() && !isClaudeBenignStderr(errBuf.trim())) { cb.onStatus?.(errBuf.trim()) } errBuf = ''
@@ -412,8 +458,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // process (exit 143); fall back to the exit code only when no result arrived.
         const ok = turnOk ?? (res.exitCode === 0)
         return { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
-      }).catch((err) => { wd.clear(); cb.onError(err as Error); return { ok: false } })
-      return { id: task.id, cancel: () => { wd.clear(); killTree(child) }, done }
+      }).catch((err) => { wd.clear(); hooks.clear(); cb.onError(err as Error); return { ok: false } })
+      return { id: task.id, cancel: () => { wd.clear(); hooks.clear(); killTree(child) }, done }
     }
   }
 }

@@ -11,7 +11,7 @@ const base = { theme: 'light', accent: 'custom', accentCustom: '#e60f82', autoWa
   vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14,
   chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '',
   textWeight: 450, bgImage: 'forge-bg://img/abc.png', bgScope: 'app', bgOpacity: .35, bgWallpaperId: '',
-  homeBgImage: '', homeBgOn: false, homeBgOpacity: .35, bgPositions: {} } as unknown as Appearance
+  homeBgImage: '', homeBgOn: false, homeBgOpacity: .35, bgPositions: {}, hostChip: 'both' } as unknown as Appearance
 
 const PAL = { hueBase: 240, hueAccent: 20, dark: false }
 

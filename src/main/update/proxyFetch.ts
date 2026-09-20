@@ -1,7 +1,7 @@
 import { ProxyAgent } from 'undici'
 
 // In-process undici fetch ignores HTTP(S)_PROXY env vars by design. When the user has
-// configured a proxy (settings.termProxy), the update check + download must pass an explicit
+// configured a proxy (settings.agentProxy), the update check + download must pass an explicit
 // ProxyAgent dispatcher, or they fail on networks where GitHub is only reachable via a proxy.
 // Returns a fetch-like function so both the release-metadata call ({ ok, json }) and the dmg
 // download ({ ok, headers, body }) can share it. Proxy-only (no timeout): a large dmg download

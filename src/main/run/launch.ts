@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { PermissionMode } from '@shared/permissions'
 import type { Workspace, Workflow, CustomStage } from '../config/schema'
-import { stageName, workflowDisplayName, stageBasePrompt, DEFAULT_STAGE_PER_PROJECT_AGENT, DEFAULT_STAGE_PRODUCES_DOC } from '../config/schema'
+import { stageName, workflowDisplayName, stageBasePrompt, STAGE_DESC, DEFAULT_STAGE_PER_PROJECT_AGENT, DEFAULT_STAGE_PRODUCES_DOC } from '../config/schema'
 import { indexCustomStages } from '../../shared/customStages'
 import { pickWorkspaceWorkflow, resolveWorkflowStages } from '../workspace/resolveStages'
 import { planFromStages } from './planFromStages'
@@ -19,16 +19,6 @@ import { collectRunHooks } from './hooks'
 import type { RunPlan, StageProjectAgent } from './machine'
 import type { StageSpec, DevelopProject } from './runTypes'
 import { createTempBranch, discardTempBranch, abandonTempBranch, currentBranch, type TempBranchCreated } from './tempBranch'
-
-// P5-UI Task 1: short stage blurb for the config-preview overlay, by builtin key. Custom/unknown keys
-// fall back to '' (the overlay just omits the line rather than showing anything misleading).
-const STAGE_DESC: Record<string, string> = {
-  requirement: '梳理与确认本次需求边界',
-  design: '设计技术方案与阶段计划',
-  develop: '按项目并行开发',
-  test: '补充与运行测试',
-  review: '多视角代码评审',
-}
 
 // P5-UI Task 1: one resolved stage of a launcher-listed workflow — just enough for the picker to
 // render a flow preview (stage name + provider/model + whether it gates), PLUS (Task 1 extension) the

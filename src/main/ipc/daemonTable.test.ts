@@ -1,0 +1,49 @@
+import { describe, it, expect, vi } from 'vitest'
+import { CLIENT_ONLY, DAEMON_UNSUPPORTED, daemonTable } from './channelRouting'
+
+vi.mock('electron', () => ({ dialog: {}, shell: {}, app: { getVersion: () => '0', getPath: () => '/tmp' } }))
+vi.mock('../update/githubSource', () => ({
+  fetchLatestRelease: async () => ({ version: '2.4.0', notes: 'n', assetUrl: 'u', assetSize: 6, assetName: 'a.dmg' }),
+}))
+import { registerIpc } from './handlers'
+import { fakeHost } from '../host/fakeHost'
+
+describe('daemonTable', () => {
+  const full = () => registerIpc(() => {}, {}, fakeHost())
+
+  it('剔掉跟设备走的和无头做不了的,剩下的就是握手时发出去的方法清单', () => {
+    const t = daemonTable(full())
+    const keys = Object.keys(t)
+    // ★这里原来写死成 `211 - 45 - 2`,而那两个数早就过期了(方法表已经 213、CLIENT_ONLY 已经 46)——
+    //  只是上一次加 channel 时**两个数同增**,算出来恰好还是 164,于是这条断言"通过"了一年。
+    //  一条靠巧合通过的断言是最坏的那种:它既没在守护什么,又让人以为有人在守护。
+    //  改成从真实常量算:总数那道闸在 methodTable.test.ts,这里只钉「剔除关系」本身。
+    expect(keys.length).toBe(Object.keys(full()).length - CLIENT_ONLY.size - DAEMON_UNSUPPORTED.size)
+    for (const c of CLIENT_ONLY) expect(keys).not.toContain(c)
+    for (const c of DAEMON_UNSUPPORTED) expect(keys).not.toContain(c)
+  })
+
+  it('会话、工作区、agent 这些核心能力都还在', () => {
+    const keys = new Set(Object.keys(daemonTable(full())))
+    // ★`term:create` 在这条清单里是有分量的一条:无头机器上没有界面,但**有 shell**,
+    //   而那正是「用 app 连上我的 Linux 盒子跑个测试」唯一能走的路。
+    //   它以前不在表里 ⇒ daemon 对外不提供终端,客户端点开的是自己那台的 shell。
+    for (const c of ['chat:send', 'chat:history', 'workspaces:list', 'session:list', 'agents:detect', 'run2:start', 'git:changes', 'term:create']) {
+      expect(keys.has(c), `${c} 应该由 daemon 提供`).toBe(true)
+    }
+  })
+
+  it('壁纸、更新、宠物这些不该由 daemon 提供', () => {
+    const keys = new Set(Object.keys(daemonTable(full())))
+    for (const c of ['wallpaper:catalog', 'update:start', 'pet:pick-image', 'nsfw:catalog', 'openers:open']) {
+      expect(keys.has(c), `${c} 不该由 daemon 提供`).toBe(false)
+    }
+  })
+
+  it('原表不被改动(daemonTable 得是个新表,Electron 那边还要用完整的)', () => {
+    const f = full()
+    const before = Object.keys(f).length
+    daemonTable(f)
+    expect(Object.keys(f).length).toBe(before)
+  })
+})

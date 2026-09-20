@@ -1,7 +1,11 @@
-import { ipcMain, dialog, app, shell } from 'electron'
 import { CH } from './channels'
+import { gateNoteBody } from './gateNote'
+import { type InvokeCtx, type InvokeEventLike, type MethodTable } from './invokeCtx'
+import { capToolOutput, capToolOutputs, readCap } from '../chat/toolOutputCap'
+import { createTerminalService, type TerminalService } from '../terminal/terminalService'
+import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
-import { providerSupportsPermissions, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
+import { providerSupportsPermissions, providerGatesEachOperation, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -12,12 +16,20 @@ import { checkCliUpdates } from '../agents/cliLatest'
 import { buildAgentEnv } from '../agents/env'
 import { providerTimezone } from '../agents/providerConfig'
 import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
 import { runWorkspaceSetup, SetupCancelledError } from '../workspace/workspaceSetup'
 import { scanRepos } from '../workspace/scanRepos'
 import { resolveSetupInteraction } from '../workspace/setupInteractions'
 import { isArchivedWorkspace } from '../workspace/archivedGuard'
+import { McpService } from '../agents/mcpService'
+import { PluginMarket } from '../agents/pluginMarket'
+import { NO_PLUGIN_CAPS } from '@shared/cliPlugins'
+import { resolveRemovable, scanAddons } from '../agents/addons'
+import { NO_MCP } from '../agents/mcpCli'
+import { spawnAgent } from '../agents/procGroup'
+import { addWorkflowFromTemplate, buildStageCatalog, upsertWorkflow, removeWorkflow, type WorkflowEdit } from '../workspace/editWorkflows'
 import { summarizeRequirement } from '../chat/requirementSummary'
 import { needsConversationDoc, buildConversationDoc, CONVERSATION_DOC_REL } from '../run/conversationDoc'
 import { memoryRead, memoryWrite, memoryClear, type MemoryArg } from './memoryHandlers'
@@ -35,21 +47,24 @@ import { readSessions, newSession, switchSession, closeSession, renameSession, s
 import { buildLaunchPlan, buildLaunchProjects, hasRequirement, type LaunchStartConfig } from '../run/launch'
 import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProjectBriefs } from '../run/workflowEnter'
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
-import { workflowDisplayName } from '../config/schema'
+import { workflowDisplayName, pickClient, pickHost } from '../config/schema'
 import { agentSessionsForId } from '../chat/agentSessions'
 import { botBridge, genPairing } from '../bot/botBridge'
+import { pushService } from '../push/pushService'
 import type { BotBridgeConfig, BotPlatform } from '../bot/botTypes'
 import { distillModelFor } from '../chat/memory/distillModel'
 import type { CreateWorkspaceOpts, ChatSendPayload, ChatEvent, Attachment, AskAnswers, AskQuestion, ChangesEvent, ChatGateSnapshot, ChatMessage, SessionsFile } from '@shared/types'
 import type { AgentProvider, ConfirmDecision } from '../agents/types'
+import { confirmAllowed } from '../agents/types'
 import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti, readBranch } from '../git/changes'
 import { perfSpan } from '../perf/perfSpans'
 import { execFile } from 'node:child_process'
-import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile } from '../openers/detect'
+import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile, OPENERS_CACHE_VERSION } from '../openers/detect'
 import { readMacAppIcon } from '../openers/appIcon'
 import { buildOpenCommand } from '../openers/buildOpenCommand'
+import { launchOpener } from '../openers/launch'
 import { writeJsonAtomic } from '../util/atomicWrite'
 import { providerCommands } from '../commands/providerCommands'
 import type { DetectedOpener } from '../../shared/openers'
@@ -83,13 +98,16 @@ import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
 import { pickInstaller } from '../update/installer'
 import { makeProxyFetch, makeContentFetch } from '../update/proxyFetch'
-import { writeFile, stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
+import { stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
+import { authSocketAddress } from '../mcp/bridgeAddress'
+import { startAuthBroker } from '../agents/authBroker'
+import { gateRegistry } from '../gate/gateRegistry'
+import { writeShimDir, shimmedPath, shimEnv } from '../agents/commandShim'
 import { removeWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
 import { scanGlobalContext } from '../agents/globalContext'
-import { readInstalledSkills } from '../skills/installedSkills'
-import { getAppLog, clearAppLog, formatAppLog } from '../log/appLog'
+import { getAppLog, clearAppLog, formatAppLog, logError } from '../log/appLog'
 import { resolveAppIconOptions } from '../appIcon'
 import { installPlugin, uninstallPlugin, setPluginEnabled, readPlugins } from '../plugins/pluginStore'
 import { listCatalog, installOfficial } from '../plugins/officialCatalog'
@@ -104,6 +122,9 @@ import { collectGitCandidates } from '../sessionImport/importResult'
 import { readScanCache, writeScanCache } from '../sessionImport/scanCache'
 import type { DiscoveredSession } from '@shared/types'
 import { resolveFileRef } from '../fs/fileRef'
+import { readImageRef } from '../fs/imageRef'
+import { listDir, defaultRoots } from '../fs/browse'
+import { askAnswerNote } from '@shared/chat/askAnswerNote'
 
 /**
  * 附件落盘时避开重名:`image.png` 已存在就依次试 `image-2.png`、`image-3.png`……返回真正能用的名字。
@@ -123,7 +144,19 @@ export function uniqueAttachmentName(dir: string, name: string): string {
   return `${base}-${Date.now()}${ext}`
 }
 
-export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, onSettings?: (s: Settings) => void) {
+export function registerIpc(broadcast: (channel: string, payload: unknown) => void, providers: Record<string, AgentProvider>, caps: HostCapabilities, onSettings?: (s: Settings) => void, terminal?: TerminalService): MethodTable {
+  const table: MethodTable = {}
+  /**
+   * 原地替代 `ipcMain.handle`。既有 handler 写的是 `(_e, arg) => …`,这里把 InvokeCtx 包成一个
+   * 只有 `sender.send` 的假 event 喂回去 —— 于是 159 个 handler 的签名一行不用改。
+   *
+   * 重复注册同一个 channel 直接抛:`ipcMain.handle` 遇到重复也是抛,保持一致,
+   * 而且这正是搬运期最容易犯的错(复制一段忘了改 channel 常量)。
+   */
+  const on = (ch: string, fn: (e: InvokeEventLike, ...args: any[]) => unknown) => {
+    if (table[ch]) throw new Error(`duplicate ipc channel: ${ch}`)
+    table[ch] = (ctx: InvokeCtx, ...args: unknown[]) => fn({ sender: { send: ctx.emit }, client: ctx.client }, ...args)
+  }
   // Startup heal: the legacy in-memory orchestrator is gone; on a fresh launch nothing is running — any
   // session still stuck in mode:'workflow' (from a completed run before the reset fix, or an app crash
   // mid-run) is stale. Reset them to chat so their sidebar dot doesn't imply a live agent.
@@ -143,7 +176,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // Robustness: process.env has no proxy — networks where the CLI can't reach the API directly
     // (proxied corp networks etc.) would silently fail every run2 agent. buildAgentEnv(termProxy)
     // matches the narrator/detect/refreshModels usages elsewhere in this file (e.g. line ~105).
-    env: buildAgentEnv({ proxy: readSettings().termProxy }),
+    env: buildAgentEnv({ proxy: readSettings().agentProxy }),
     makeStore: (w, r) => new RunStore(w, r),
     // §7.4 ③硬阻塞: same forge MCP entry the legacy Orchestrator + chat/delegate.ts already use —
     // lets each run open its own live forge bridge (RunController.setupBridge) so a stage agent can
@@ -162,35 +195,35 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     onRunDone: (w) => chatQueue.runDone(w),
   })
   const run2 = registerRun2({
-    manager: run2Manager, onInvoke: (ch, h) => ipcMain.handle(ch, h),
+    manager: run2Manager, onInvoke: (ch, h) => on(ch, h as never),
     readWorkspace, readWorkflows: () => readWorkflows().workflows, readCustomStages: () => readCustomStages().stages,
   })
 
   const UPDATE_REPO = 'flowForges/myFlowForge'
   const updateChecker = createUpdateChecker({
     repo: UPDATE_REPO,
-    currentVersion: () => app.getVersion(),
-    // proxy-THEN-direct: the update check must survive a down/misrouted/socks proxy (settings.termProxy).
+    currentVersion: () => caps.version(),
+    // proxy-THEN-direct: the update check must survive a down/misrouted/socks proxy (settings.agentProxy).
     // makeProxyFetch had no direct fallback, so any proxy hiccup → throw → 永久「检查失败」even when GitHub
     // is directly reachable. makeContentFetch tries the proxy then falls back to a direct fetch.
-    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().termProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, arch: process.arch }),
+    fetchLatest: (r) => fetchLatestRelease(r, { fetch: makeContentFetch(readSettings().agentProxy) as (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>, platform: process.platform, arch: process.arch }),
     emit: broadcast,
     setTimeout: (fn, ms) => { setTimeout(fn, ms) },
     setInterval: (fn, ms) => { setInterval(fn, ms) },
   })
   updateChecker.start()
 
-  ipcMain.handle(CH.updateGet, () => ({ currentVersion: app.getVersion(), info: updateChecker.current() }))
-  ipcMain.handle(CH.updateCheck, () => { void updateChecker.check(true) })
-  ipcMain.handle(CH.updateStart, async () => {
+  on(CH.updateGet, () => ({ currentVersion: caps.version(), info: updateChecker.current() }))
+  on(CH.updateCheck, () => { void updateChecker.check(true) })
+  on(CH.updateStart, async () => {
     const info = updateChecker.current()
     if (!info) return
     const installer = pickInstaller({
-      fetch: (url, init) => makeContentFetch(readSettings().termProxy)(url, init as any) as any,
-      openPath: shell.openPath,
-      showItemInFolder: shell.showItemInFolder,
+      fetch: (url, init) => makeContentFetch(readSettings().agentProxy)(url, init as any) as any,
+      openPath: caps.openPath,
+      showItemInFolder: caps.revealInFileManager,
       join,
-      tmpDir: app.getPath('temp'),
+      tmpDir: caps.tempDir(),
       // Stream to a .part file (no 340MB in-memory buffer) + resume from a partial download.
       partSize: async (p) => { try { return (await fsStat(p)).size } catch { return 0 } },
       openWriter: (p, append) => {
@@ -212,32 +245,73 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
 
   // #13: the user answered a setup hook's confirm/input card (SetupProgress) — unblock the hook.
-  ipcMain.handle(CH.workspaceSetupResolve, (_e, a: { id: string; answer: { decision?: 'allow' | 'deny'; value?: string } }) => {
+  // ★权限门(confirm)现在挂在**总线**上,输入门(input)还在 setupInteractions 里。先问总线:
+  //  答得上就是一道门,答不上再按输入门处理。两边 id 不会撞(总线的是 `g-…`,输入门的是 `sh-…`)。
+  on(CH.workspaceSetupResolve, (_e, a: { id: string; answer: { decision?: 'allow' | 'deny'; value?: string } }) => {
+    if (a.answer?.decision && gateRegistry.resolve(a.id, a.answer.decision)) return
     resolveSetupInteraction(a.id, a.answer)
   })
-  ipcMain.handle(CH.configGetSettings, () => readSettings())
-  ipcMain.handle(CH.configSetSettings, (_e, settings) => {
+
+  /**
+   * ★★门总线的三条出口。**任何**界面都能用它把「还挂着的门」重建出来并回答 ——
+   *  这正是建区那条路以前缺的东西:它的门只活在一个模态框的 React state 里,
+   *  那个模态框一藏(「后台运行」)或一关,门就永远没人能答,而 hook 那边不超时、不兜底。
+   */
+  on(CH.gateList, (_e, a?: { workspacePath?: string }) => gateRegistry.list(a?.workspacePath ? { workspacePath: a.workspacePath } : undefined))
+  on(CH.gateResolve, (_e, a: { id: string; decision: ConfirmDecision }) => gateRegistry.resolve(a.id, a.decision))
+  // 总线 → 渲染层。★一条频道喂所有界面;谁要画、画成什么样,是界面自己的事。
+  gateRegistry.subscribe((c) => broadcast(CH.gateEvent, c))
+  on(CH.configGetSettings, () => readSettings())
+  on(CH.configSetSettings, (_e, settings) => {
     writeSettings(settings)
     const s = readSettings()
     broadcast(CH.settingsChanged, s)
     onSettings?.(s)
     return s
   })
-  ipcMain.handle(CH.appIconOptions, () => resolveAppIconOptions({
+
+  // ── 设置的两个半边(第二期 C)。路由器用它们组合出上面那对:
+  //    跟设备的永远本机答,跟机器的跟着当前 host 走。
+  on(CH.configGetHostSettings, () => pickHost(readSettings()))
+  // Q7:后写的赢 + 广播 + 说清是谁改的。只有「不是本机改的」才发 —— 自己改自己的不用告诉自己。
+  const noteSettingsWriter = (e: { client?: { id: string; label: string } } | undefined) => {
+    if (e?.client && e.client.id !== 'local') broadcast(CH.settingsChangedBy, { by: e.client.label })
+  }
+  on(CH.configSetHostSettings, (_e, patch: Partial<Settings>) => {
+    // 只写这一半。★不能整份写回去 —— 远程客户端手里那份「跟设备」的字段是**它自己**的
+    // (它的主题、它的壁纸),整份写会把这台机器的客户端设置覆盖成远程那台设备的。
+    const next = { ...readSettings(), ...pickHost(patch as Settings) }
+    writeSettings(next)
+    const s = readSettings()
+    broadcast(CH.settingsChanged, s)
+    noteSettingsWriter(_e)
+    onSettings?.(s)
+    return pickHost(s)
+  })
+  on(CH.configGetClientSettings, () => pickClient(readSettings()))
+  on(CH.configSetClientSettings, (_e, patch: Partial<Settings>) => {
+    const next = { ...readSettings(), ...pickClient(patch as Settings) }
+    writeSettings(next)
+    const s = readSettings()
+    broadcast(CH.settingsChanged, s)
+    onSettings?.(s)
+    return pickClient(s)
+  })
+  on(CH.appIconOptions, () => resolveAppIconOptions({
     resourcesPath: process.resourcesPath,
-    appPath: app.getAppPath(),
-    isPackaged: app.isPackaged,
+    appPath: caps.appPath() ?? '',
+    isPackaged: caps.isPackaged(),
   }))
-  ipcMain.handle(CH.configListProjects, () => readProjects().projects)
-  ipcMain.handle(CH.configAddProject, (_e, input: { repoUrl: string; branch: string; alias?: string }) => upsertProject(input))
-  ipcMain.handle(CH.configDeleteProject, (_e, id: string) => {
+  on(CH.configListProjects, () => readProjects().projects)
+  on(CH.configAddProject, (_e, input: { repoUrl: string; branch: string; alias?: string }) => upsertProject(input))
+  on(CH.configDeleteProject, (_e, id: string) => {
     writeProjects({ projects: readProjects().projects.filter(p => p.id !== id) })
     return readProjects().projects
   })
-  ipcMain.handle(CH.configUpdateProjectBranch, (_e, input: { id: string; branch: string }) => setProjectDefaultBranch(input.id, input.branch))
-  ipcMain.handle(CH.configUpdateProjectAlias, (_e, input: { id: string; alias: string }) => setProjectAlias(input.id, input.alias))
-  ipcMain.handle(CH.configListWorkflows, () => readWorkflows().workflows)
-  ipcMain.handle(CH.configAddWorkflow, (_e, input: { name: string; stages: import('../config/buildWorkflow').StageSeed[] }) => {
+  on(CH.configUpdateProjectBranch, (_e, input: { id: string; branch: string }) => setProjectDefaultBranch(input.id, input.branch))
+  on(CH.configUpdateProjectAlias, (_e, input: { id: string; alias: string }) => setProjectAlias(input.id, input.alias))
+  on(CH.configListWorkflows, () => readWorkflows().workflows)
+  on(CH.configAddWorkflow, (_e, input: { name: string; stages: import('../config/buildWorkflow').StageSeed[] }) => {
     const list = readWorkflows().workflows
     // Enforce unique display names (the UI blocks this too; this is the safety net). Duplicate =
     // no-op returning the current list, so a bypassed UI can't silently create a confusing twin.
@@ -246,11 +320,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     writeWorkflows({ workflows: [...list, wf] })
     return readWorkflows().workflows
   })
-  ipcMain.handle(CH.configDeleteWorkflow, (_e, id: string) => {
+  on(CH.configDeleteWorkflow, (_e, id: string) => {
     writeWorkflows({ workflows: readWorkflows().workflows.filter(w => w.id !== id) })
     return readWorkflows().workflows
   })
-  ipcMain.handle(CH.configUpdateWorkflow, (_e, input: { id: string; plugins?: import('../config/schema').Plugin[]; stagePrompts?: Record<string, string>; stages?: import('../config/schema').Workflow['stages'] }) => {
+  on(CH.configUpdateWorkflow, (_e, input: { id: string; plugins?: import('../config/schema').Plugin[]; stagePrompts?: Record<string, string>; stages?: import('../config/schema').Workflow['stages'] }) => {
     const list = readWorkflows().workflows
     writeWorkflows({ workflows: list.map(w => w.id === input.id ? {
       ...w,
@@ -263,29 +337,29 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return readWorkflows().workflows
   })
   // --- Reusable hook library (slot-agnostic; snapshot-copied into workspaces at create time) ---
-  ipcMain.handle(CH.hookLibraryList, () => readHookLibrary().hooks)
-  ipcMain.handle(CH.hookLibrarySave, (_e, hook: import('../config/schema').LibraryHook) => {
+  on(CH.hookLibraryList, () => readHookLibrary().hooks)
+  on(CH.hookLibrarySave, (_e, hook: import('../config/schema').LibraryHook) => {
     const list = readHookLibrary().hooks
     const next = list.some(h => h.id === hook.id) ? list.map(h => h.id === hook.id ? hook : h) : [...list, hook]
     writeHookLibrary({ hooks: next })
     return readHookLibrary().hooks
   })
-  ipcMain.handle(CH.hookLibraryDelete, (_e, id: string) => {
+  on(CH.hookLibraryDelete, (_e, id: string) => {
     writeHookLibrary({ hooks: readHookLibrary().hooks.filter(h => h.id !== id) })
     return readHookLibrary().hooks
   })
-  ipcMain.handle(CH.hookLibrarySetAll, (_e, hooks: import('../config/schema').LibraryHook[]) => {
+  on(CH.hookLibrarySetAll, (_e, hooks: import('../config/schema').LibraryHook[]) => {
     writeHookLibrary({ hooks })
     return readHookLibrary().hooks
   })
   // --- Global custom-stage library (定义一次,被多个工作流模版按 libId 引用,编辑一次处处生效) ---
-  ipcMain.handle(CH.customStagesList, () => readCustomStages().stages)
-  ipcMain.handle(CH.customStagesUpsert, (_e, def: Partial<import('../config/schema').CustomStage> & { name: string }) => {
+  on(CH.customStagesList, () => readCustomStages().stages)
+  on(CH.customStagesUpsert, (_e, def: Partial<import('../config/schema').CustomStage> & { name: string }) => {
     const list = upsertCustomStage(def)
     broadcast(CH.customStagesChanged, list)
     return list
   })
-  ipcMain.handle(CH.customStagesDelete, (_e, id: string) => {
+  on(CH.customStagesDelete, (_e, id: string) => {
     const list = deleteCustomStage(id)
     broadcast(CH.customStagesChanged, list)
     return list
@@ -293,17 +367,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Cached: concurrent callers share one probe, results live 60s. `force` (重新检测) re-probes AND
   // honors the result (trustPersisted:false) so it can clear a genuinely-gone CLI; a normal detect keeps
   // last-known-good agents sticky so a slow cold-start probe never makes them vanish.
-  ipcMain.handle(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>
-    cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true }))
+  on(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>
+    cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true }))
   // "有新版" 提示(只提示):安装版本由 detect 探测,这里查各 CLI 的 npm latest 并比对。走 termProxy(undici
   // 不认 HTTP_PROXY 环境变量),失败/未知包静默略过 —— 提示是锦上添花,绝不能拖垮或报错阻塞设置页。
-  ipcMain.handle(CH.agentsCliUpdates, (_e, installed: { id: string; version?: string }[]) =>
-    checkCliUpdates(installed ?? [], makeProxyFetch(readSettings().termProxy), Date.now()))
+  on(CH.agentsCliUpdates, (_e, installed: { id: string; version?: string }[]) =>
+    checkCliUpdates(installed ?? [], makeProxyFetch(readSettings().agentProxy), Date.now()))
   // Registry just changed (bin override / custom agent add-remove) — bypass the cache but stay sticky
   // (trustPersisted) so a transient probe failure during the rebuild doesn't wipe known-good agents.
-  const redetect = () => cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().termProxy }), { force: true, trustPersisted: true })
-  ipcMain.handle(CH.agentsGetConfig, () => readAgentsConfig())
-  ipcMain.handle(CH.agentsSetBin, (_e, a: { id: string; bin: string }) => {
+  const redetect = () => cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { force: true, trustPersisted: true })
+  on(CH.agentsGetConfig, () => readAgentsConfig())
+  on(CH.agentsSetBin, (_e, a: { id: string; bin: string }) => {
     const cfg = readAgentsConfig()
     const existing = cfg.providers.find(p => p.id === a.id)
     const providersCfg = [
@@ -314,43 +388,46 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     rebuildProviderRegistry(providers)   // mutate in place so orchestrator/handlers see new bins
     return redetect()
   })
-  ipcMain.handle(CH.agentsAddCustom, (_e, c: CustomAgent) => {
+  on(CH.agentsAddCustom, (_e, c: CustomAgent) => {
     const cfg = readAgentsConfig()
     writeAgentsConfig({ ...cfg, custom: [...cfg.custom.filter(x => x.id !== c.id), c] })
     rebuildProviderRegistry(providers)
     return redetect()
   })
-  ipcMain.handle(CH.agentsRemoveCustom, (_e, id: string) => {
+  on(CH.agentsRemoveCustom, (_e, id: string) => {
     const cfg = readAgentsConfig()
     writeAgentsConfig({ ...cfg, custom: cfg.custom.filter(x => x.id !== id) })
     rebuildProviderRegistry(providers)
     return redetect()
   })
-  ipcMain.handle(CH.agentsRefreshModels, async (_e, providerId: string) => {
-    const r = await refreshProviderModels(providerId, providers, buildAgentEnv({ proxy: readSettings().termProxy }))
+  on(CH.agentsRefreshModels, async (_e, providerId: string) => {
+    const r = await refreshProviderModels(providerId, providers, buildAgentEnv({ proxy: readSettings().agentProxy }))
     invalidateDetectCache()   // models cache changed on disk — cached ProviderInfo[] is stale
     return r
   })
-  ipcMain.handle(CH.agentsSetModels, (_e, a: { id: string; models: { id: string; label: string; description?: string }[] }) => {
+  on(CH.agentsSetModels, (_e, a: { id: string; models: { id: string; label: string; description?: string }[] }) => {
     const r = setProviderModels(a.id, a.models)
     invalidateDetectCache()   // ditto: edited model list must show up on the next detect
     return r
   })
-  ipcMain.handle(CH.agentsSetTimezone, (_e, a: { id: string; timezone: string }) => {
+  on(CH.agentsSetTimezone, (_e, a: { id: string; timezone: string }) => {
     setProviderTimezone(a.id, a.timezone)
     invalidateDetectCache()   // detect surfaces provCfg.timezone → refresh so the UI reflects the change
   })
-  ipcMain.handle(CH.netCheckExitIp, () => checkExitIp(readSettings().termProxy))
-  ipcMain.handle(CH.contextScan, (_e, workspacePath?: string) => {
+  // agent 的出口:在**跑 agent 的那台机器**上问(这条走 host)。
+  on(CH.netCheckExitIp, () => checkExitIp(readSettings().agentProxy))
+  // app 自身的出口:在**你面前这台设备**上问(这条在 CLIENT_ONLY 里)。原先设置面板那两个按钮
+  // 共用上面一条,于是「应用自身的网络」块报的其实是 agentProxy 的出口 —— 看着像验过了,其实没验。
+  on(CH.netCheckAppExitIp, () => checkExitIp(readSettings().appProxy))
+  on(CH.contextScan, (_e, workspacePath?: string) => {
     if (workspacePath && existsSync(workspacePath)) return scanWorkspaceContext(workspacePath, true)
     return { skills: [], rules: [], mcps: [{ name: 'forge', path: 'mcp://forge', reason: 'Forge workflow tools', state: 'ok' }] }
   })
-  ipcMain.handle(CH.contextScanGlobal, () => scanGlobalContext())
-  ipcMain.handle(CH.skillsList, () => readInstalledSkills())
-  ipcMain.handle(CH.commandsList, (_e, providerId: string, wsPath?: string) => providerCommands(providerId, wsPath))
-  ipcMain.handle(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
+  on(CH.contextScanGlobal, () => scanGlobalContext())
+  on(CH.commandsList, (_e, providerId: string, wsPath?: string) => providerCommands(providerId, wsPath))
+  on(CH.workspaceCreate, async (_e, opts: CreateWorkspaceOpts) => {
     const knownProjects = readProjects().projects
-    const proxy = readSettings().termProxy
+    const proxy = readSettings().agentProxy
     // One creation at a time — hold its AbortController so CH.workspaceCancelSetup can kill the in-flight
     // git clone/fetch. Cleared in finally so a later create isn't cancelled by a stale controller.
     setupAbort = new AbortController()
@@ -373,16 +450,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       setupAbort = null
     }
   })
-  ipcMain.handle(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
-  ipcMain.handle(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
-  ipcMain.handle(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
-  ipcMain.handle(CH.workspaceScanRepos, (_e, path: string) => scanRepos(path))
+  on(CH.workspaceCancelSetup, () => { setupAbort?.abort() })
+  on(CH.workspaceDiscardPartial, (_e, path: string) => discardPartialCreation(expandTilde(path)))
+  on(CH.workspaceGet, (_e, path: string) => readWorkspace(path))
+  on(CH.workspaceScanRepos, (_e, path: string) => scanRepos(path))
   // P4.1(2026-07-30):wsSetAutoDecide 已删除(autoDecide 随提案门一并废除)。
-  ipcMain.handle(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
+  on(CH.workspaceSetStageModel, (_e, a: { path: string; stageKey: string; provider: string; model: string }) => {
     setStageModel(a.path, a.stageKey, a.provider, a.model)
   })
   // Quick alias rename — just the display name (registry + workspace.json), no re-provisioning.
-  ipcMain.handle(CH.workspaceRename, (_e, a: { path: string; name: string }) => {
+  on(CH.workspaceRename, (_e, a: { path: string; name: string }) => {
     const name = a.name.trim()
     if (!name) return
     const path = expandTilde(a.path)
@@ -391,10 +468,152 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (ws) writeWorkspace({ ...ws, name })
     broadcast(CH.workspacesChanged, {})
   })
-  ipcMain.handle(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts; runProjHooks?: boolean }) => {
+
+  // —— 加载项(2026-09-05 重做)——
+  // 用户原话:「加载项里好像有 skill,所以 skill 是不是多余?」「能不能根据当前支持的 provider 扫描出来
+  // 全局的 skill mcp rule?然后进行筛选」「我们加个操作,能不能删除?」——所以设置里的「Skill」页删了,
+  // 这一条成了唯一入口,并且带上了删除。
+  const addonScan = async () => {
+    const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+    return scanAddons(homedir(), new Set(list.filter(p => p.installed).map(p => p.id)))
+  }
+  on(CH.addonsScan, () => addonScan())
+  on(CH.addonsRemove, async (_e, a: { id: string }) => {
+    // ★★每次删之前**重新扫一遍**,再按 id 去里面找。客户端传来的路径一个字都不信 ——
+    //   见 agents/addons.ts 顶上的注释(这个 app 是能被手机和另一台电脑连上的)。
+    const item = resolveRemovable(await addonScan(), a.id)
+    if (!item) throw new Error('这一条现在删不了 —— 可能刚被别处改过,或者它属于插件包。刷新一下再看。')
+    if (item.removeVia === 'cli') {
+      await mcp.remove(item.provider, homedir(), item.name)
+      return { ok: true, trashed: false, via: 'cli' as const }
+    }
+    const r = await caps.trashItem(item.path)
+    if (r.error) throw new Error(r.error)
+    return { ok: true, trashed: r.trashed, via: 'file' as const }
+  })
+
+  // —— MCP 面板(2026-09-05)——
+  // 用户原话:「provider 是否支持 /mcp 这个命令,咱们得支持,因为我发现我想 mcp 授权,授权不了」。
+  // 做法见 agents/mcpCli.ts:不模拟那一屏,而是调各 CLI 自己的 `mcp` 子命令。
+  // ★授权**必须在 pty 里**跑(实测:管道 stdin 会被 CLI 当场拒),所以这里懒加载 node-pty ——
+  //   和终端面板同一个模块、同一套失败说明。
+  // MCP 面板和插件市场用的是同一套「怎么起这个 CLI」(找可执行文件、给什么环境、怎么跑一条命令)。
+  const cliDeps = {
+    binFor: async (id: string) => {
+      const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+      const p = list.find(x => x.id === id)
+      return p?.installed ? (p.binPath || p.bin || null) : null
+    },
+    envFor: (id: string) => buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(id) }),
+    run: async (bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => {
+      // ★不抛:list/help 失败是常态(没配、版本老、网络差),上层要拿到 stdout 自己判断。
+      const r = await spawnAgent(bin, args, { cwd, env, reject: false, timeout: 60_000, all: true })
+      return { stdout: String(r.all ?? r.stdout ?? ''), code: typeof r.exitCode === 'number' ? r.exitCode : 1 }
+    },
+    spawnPty: (bin: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => {
+      let nodePty: typeof import('node-pty')
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        nodePty = require('node-pty') as typeof import('node-pty')
+      } catch (e) {
+        throw new Error(`这台主机上的终端组件(node-pty)没装好,没法完成 MCP 授权:${e instanceof Error ? e.message : String(e)}`)
+      }
+      return nodePty.spawn(bin, args, { name: 'xterm-256color', cwd, env: env as Record<string, string>, cols: 120, rows: 30 })
+    },
+  }
+  const mcp = new McpService(cliDeps)
+
+  // —— 技能 / 插件市场(2026-09-05)——
+  // 用户原话:「我们能不能接入技能市场?codex 的 app 里,有技能和插件,它的这些我们能不能支持点击安装?」
+  // 探究结论见 agents/pluginMarket.ts:claude 和 codex 都有 `plugin` 子命令,连 --json 的形状都一样,
+  // 只是**动词不同**(install/add、uninstall/remove)—— 所以动词也是探出来的。
+  const market = new PluginMarket(cliDeps)
+  on(CH.cliPluginsList, async () => {
+    const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+    return Promise.all(list.filter(p => p.installed).map(async (p) => {
+      try {
+        const caps = await market.capsFor(p.id)
+        return { providerId: p.id, displayName: p.displayName, caps, plugins: caps.plugin ? await market.list(p.id) : [], error: null }
+      } catch (e) {
+        return { providerId: p.id, displayName: p.displayName, caps: NO_PLUGIN_CAPS, plugins: [], error: e instanceof Error ? e.message : String(e) }
+      }
+    }))
+  })
+  on(CH.cliPluginsInstall, (_e, a: { providerId: string; id: string }) => market.install(a.providerId, a.id))
+  on(CH.cliPluginsUninstall, (_e, a: { providerId: string; id: string }) => market.uninstall(a.providerId, a.id))
+  /**
+   * 一次问全:每个装了的 provider 认不认得 mcp、它下面有哪些服务器。
+   * ★逐个 provider 各自容错:claude 的健康检查要走网络,一台超时不该把整块面板变成一句报错。
+   * ★**在工作区目录里跑** —— 项目级(.mcp.json)的服务器只在那儿看得见。
+   */
+  on(CH.mcpOverview, async (_e, a: { workspacePath?: string }) => {
+    const cwd = a?.workspacePath && existsSync(a.workspacePath) ? a.workspacePath : homedir()
+    const list = await cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { trustPersisted: true })
+    const installed = list.filter(p => p.installed)
+    return Promise.all(installed.map(async (p) => {
+      try {
+        const caps = await mcp.capsFor(p.id)
+        if (!caps.mcp) return { providerId: p.id, displayName: p.displayName, caps, servers: [], error: null }
+        const servers = await mcp.list(p.id, cwd)
+        return { providerId: p.id, displayName: p.displayName, caps, servers, error: null }
+      } catch (e) {
+        return { providerId: p.id, displayName: p.displayName, caps: NO_MCP, servers: [], error: e instanceof Error ? e.message : String(e) }
+      }
+    }))
+  })
+  on(CH.mcpLoginStart, (_e, a: { providerId: string; workspacePath?: string; name: string }) =>
+    mcp.loginStart(a.providerId, a.workspacePath && existsSync(a.workspacePath) ? a.workspacePath : homedir(), a.name))
+  on(CH.mcpLoginPaste, (_e, a: { id: string; redirectUrl: string }) => mcp.paste(a.id, a.redirectUrl))
+  on(CH.mcpLoginWait, (_e, a: { id: string; ms?: number }) => mcp.waitResult(a.id, a.ms))
+  on(CH.mcpLoginCancel, (_e, a: { id: string }) => { mcp.cancel(a.id) })
+  on(CH.mcpLogout, (_e, a: { providerId: string; workspacePath?: string; name: string }) =>
+    mcp.logout(a.providerId, a.workspacePath && existsSync(a.workspacePath) ? a.workspacePath : homedir(), a.name))
+
+  // —— 手机端工作流编辑器(2026-09-04)——
+  // 三条都很窄:列出能加哪些阶段、写回一条工作流、删一条。**故意不复用 workspaces:edit** ——
+  // 那条会跑整套 editWorkspace(克隆项目、跑 hooks、重建 worktree),而这里要改的只是
+  // workspace.json 里的一段配置。合并规则(为什么不是直接覆盖)见 workspace/editWorkflows.ts。
+  on(CH.workflowStageCatalog, () => buildStageCatalog(readWorkflows().workflows, readCustomStages().stages))
+  on(CH.workspaceSaveWorkflow, (_e, a: { workspacePath: string; workflow: WorkflowEdit }) => {
+    if (isArchivedWorkspace(a.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
+    const ws = readWorkspace(a.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${a.workspacePath}`)
+    const workflows = upsertWorkflow(ws, a.workflow, readWorkflows().workflows, readCustomStages().stages)
+    writeWorkspace({ ...ws, workflows })
+    broadcast(CH.workspacesChanged, {})
+    // 新建那条的 id 是服务端生成的,回传给手机端好让它存完就选中它。
+    const before = new Set(ws.workflows.map(w => w.id))
+    return { id: workflows.find(w => !before.has(w.id))?.id ?? a.workflow.id }
+  })
+  /**
+   * 从全局模板往这个工作区加一条工作流。
+   *
+   * ★★补的是一条**两端都有的**缺口:工作区一旦建好,之后新加的模板就再也进不去了
+   *  (以前只有 `CreateWorkspace` 向导那一条路)。手机端的「模板库」用它,电脑端将来也能用同一条。
+   * ★物化而不是引用 —— 理由见 `workspace/editWorkflows.ts` 里 `addWorkflowFromTemplate` 的注释。
+   */
+  on(CH.workspaceAddWorkflowFromTemplate, (_e, a: { workspacePath: string; templateId: string }) => {
+    if (isArchivedWorkspace(a.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
+    const ws = readWorkspace(a.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${a.workspacePath}`)
+    const workflows = addWorkflowFromTemplate(ws, a.templateId, readWorkflows().workflows, readCustomStages().stages)
+    writeWorkspace({ ...ws, workflows })
+    broadcast(CH.workspacesChanged, {})
+    // 新加那条的 id 由服务端定(模板 id 被占时会换),回传给调用方好让它存完就选中。
+    const before = new Set(ws.workflows.map(w => w.id))
+    return { id: workflows.find(w => !before.has(w.id))!.id }
+  })
+  on(CH.workspaceDeleteWorkflow, (_e, a: { workspacePath: string; workflowId: string }) => {
+    if (isArchivedWorkspace(a.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
+    const ws = readWorkspace(a.workspacePath)
+    if (!ws) throw new Error(`工作区不存在: ${a.workspacePath}`)
+    writeWorkspace({ ...ws, workflows: removeWorkflow(ws, a.workflowId) })
+    broadcast(CH.workspacesChanged, {})
+  })
+  on(CH.workspaceEdit, async (_e, a: { path: string; opts: CreateWorkspaceOpts; runProjHooks?: boolean }) => {
     if (isArchivedWorkspace(a.path)) throw new Error('工作区已归档，恢复后才能继续。')
     const result = await editWorkspace({
-      path: a.path, opts: a.opts, knownProjects: readProjects().projects, proxy: readSettings().termProxy,
+      path: a.path, opts: a.opts, knownProjects: readProjects().projects, proxy: readSettings().agentProxy,
       emit: (ev) => broadcast(CH.workspaceSetup, ev),
       runProjHooks: a.runProjHooks, providers,
     })
@@ -413,6 +632,24 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // ConfirmDecision(而不是光 'allow'|'deny'):带选项的门(claude AskUserQuestion)要把用户选了什么一起送回
   // provider —— 只回 allow 等于什么都没答,模型会收到「没等到回复」。
   const chatConfirms = new Map<string, (decision: ConfirmDecision) => void>()
+  /**
+   * 最近被答掉的门:id → 谁答的、答了什么、在哪个会话。
+   *
+   * ★这是「先回先算」在多客户端下唯一会骗人的地方(设计文档 7.2 第 1 条)。
+   * 手机点了「允许」,电脑上的卡片消失前有几百毫秒 —— 电脑前的人完全可能在这期间点了「拒绝」。
+   * 现在的代码拿不到 resolver 就直接 return,**他会以为自己拦住了那条 `rm -rf`,其实已经放行了**。
+   * 记下来,好在第二个答案落空时**当面告诉他**。
+   */
+  const recentlyResolved = new Map<string, { by: string; decision: string; ws: string; sessionId: string; ts: number }>()
+  const rememberResolved = (id: string, by: string, decision: string, ws: string, sessionId: string) => {
+    recentlyResolved.set(id, { by, decision, ws, sessionId, ts: Date.now() })
+    // 只留最近 50 条 —— 迟到的答案都是几百毫秒级的,留久了没意义,还白占内存。
+    if (recentlyResolved.size > 50) {
+      const oldest = [...recentlyResolved.entries()].sort((a, b) => a[1].ts - b[1].ts)[0]
+      if (oldest) recentlyResolved.delete(oldest[0])
+    }
+  }
+  const DECISION_CN: Record<string, string> = { allow: '允许', deny: '拒绝', modify: '修改' }
   let chatConfirmSeq = 0
   // Chat-side ASK (question + optional options, returns a string) — the delegate bridge routes a
   // sub-agent's forge_ask here so it surfaces as a select/input ReqCard and the answer flows back.
@@ -438,6 +675,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // AskUserQuestion 的问题/选项:重建卡片时必须一起还原,否则重挂后又退回成那张没选项的空确认卡。
     questions?: AskQuestion[]
     agentName?: string
+    /**
+     * 这道门「被自动放行了」时怎么记 —— 由 chatService 提供,把盾牌记到**那一次调用的工具卡**上
+     * (见 ConfirmReq.onAutoAllow)。★纯运行时回调,不进 CH.chatGateState 的快照(那边是逐字段挑的)。
+     * 门【已经挂在屏幕上】的时候用户才切到「完全访问」,走的是 allowPendingConfirms 那条路 ——
+     * 它原来一律发一条系统消息,而消息正文是**原样的 shell 命令**,又落回「bash 的内容出现在
+     * LLM 输出的地方」。有了它就挂卡上。
+     */
+    onAutoAllow?: () => void
   }
   const chatGateOwner = new Map<string, GateMeta>()
   const drainChatGates = (wsPath: string, opts: { sessionId?: string; type?: 'confirm' | 'ask' } = {}) => {
@@ -485,7 +730,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   //   伪装成权限请求发出来)。自动 allow 会带着空 answers 回去,CLI 转头告诉模型「用户没有回答」——
   //   正是 3c899d3 修掉的那个 bug。
   const autoAllowable = (g: { questions?: AskQuestion[] }) => !g.questions?.length
-  const gateWhere = (g: { title: string; where?: string }) => `${g.title}${g.where ? ` · ${g.where}` : ''}`
+  const gateWhere = gateNoteBody
 
   const emitNote = (wsPath: string, sessionId: string, noteText: string) => {
     const id = `sys-${Date.now()}`
@@ -497,7 +742,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // 用户在门【已经挂在屏幕上】的时候才切到「完全访问」(被问烦了才去切,这才是真实场景)——把该会话所有
   // 挂起的确认门就地放行,卡片当场消失。只碰 confirm 门:ask 门是子代理在问人,与权限档无关。
-  const allowPendingConfirms = (wsPath: string, sessionId: string) => {
+  const allowPendingConfirms = (wsPath: string, sessionId: string, by = '本机') => {
     for (const [id, meta] of [...chatGateOwner]) {
       if (meta.ws !== wsPath || meta.sessionId !== sessionId || meta.type !== 'confirm') continue
       if (!autoAllowable(meta)) continue
@@ -507,15 +752,30 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       chatConfirms.delete(id)
       r('allow')
       broadcast(CH.chatEvent, { workspacePath: wsPath, sessionId, type: 'confirm-resolved', id })
-      emitNote(wsPath, sessionId, `🛡 已切到「完全访问」，自动放行：${gateWhere(meta)}`)
+      rememberResolved(id, by, 'allow', wsPath, sessionId)
+      // ★★能挂卡就挂卡:盾牌落在**那一次调用自己的工具卡**上,对话流里一个字都不加。
+      //   原来这里一律发消息,而消息正文是【原样的 shell 命令】—— 顶着「系统 · 回答」的样子夹在
+      //   工具卡和真正的回答中间,正是用户说的「bash 的内容出现在了 LLM 输出的地方」。
+      // ★但「别的设备切的」必须说一声:这台机器上挂着的门会**当场凭空消失**,不说清楚,电脑前的人
+      //   只会觉得界面出了鬼。这条只说【是谁切的】,不再把命令原文抄进正文(卡上就有)。
+      // ★拿不到工具卡(老的 v1 审批方法之类给不出 id)才回落成原来那条带命令的审计消息 ——
+      //   「不能悄悄放行」这条约束一步都不让。
+      if (meta.onAutoAllow) {
+        meta.onAutoAllow()
+        if (by !== '本机') emitNote(wsPath, sessionId, `🛡 「${by}」切到了「完全访问」，这台机器上挂着的确认已自动放行。`)
+      } else {
+        emitNote(wsPath, sessionId, by === '本机'
+          ? `🛡 已切到「完全访问」，自动放行：${gateWhere(meta)}`
+          : `🛡 「${by}」切到了「完全访问」，自动放行：${gateWhere(meta)}`)
+      }
     }
   }
   // 权限档的唯一写入口(IPC 与机器人桥共用):落盘 + 广播 + 若切到 full 就排空挂起的门 + 该说的说清楚。
-  const applyPermission = (wsPath: string, sessionId: string, mode: import('@shared/permissions').PermissionMode) => {
+  const applyPermission = (wsPath: string, sessionId: string, mode: import('@shared/permissions').PermissionMode, by = '本机') => {
     const prev = getSession(wsPath, sessionId)?.permissionMode ?? DEFAULT_PERMISSION_MODE
     const file = setSessionPermission(wsPath, sessionId, mode)
     broadcastSessions(wsPath, file)
-    if (mode === 'full') allowPendingConfirms(wsPath, sessionId)
+    if (mode === 'full') allowPendingConfirms(wsPath, sessionId, by)
     // 运行中改档,但这个 provider 的沙箱是启动参数、进程起来就钉死了(见 agents/permissionArgs.ts)——
     // 不说一声,用户只会以为「我切了但没反应 = 这功能坏了」。
     // 不提示的两种情况:① claude 切到完全访问,门重读后当场就兑现了;② cursor 这类压根不吃权限档的
@@ -544,14 +804,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Lightweight delegation (path A): the chat agent dispatches sub-agents into projects without the
   // workflow gate. Runs are ephemeral (no run slot). The legacy orchestrator + its chat-triggered
   // proposeRun gate are gone — the only workflow-run entry point is now the run2 「工作流运行」launcher.
-  const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().termProxy, mcpEntry, readWorkspace })
+  const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().agentProxy, mcpEntry, readWorkspace })
   const runTurn = async (payload: ChatSendPayload) => {
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
-    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[] }) => new Promise<ConfirmDecision>((resolve) => {
+    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[]; onAutoAllow?: () => void }) => new Promise<ConfirmDecision>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
       chatConfirms.set(id, resolve)
-      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions })
+      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions, onAutoAllow: req.onAutoAllow })
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where, questions: req.questions })
     })
     // CLI 的逐操作确认门专用出口:升门【之前】先读一次会话当前的权限档,已经是「完全访问」就直接放行,
@@ -560,9 +820,26 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // ★ 只给 provider 的逐操作门用,不能给下面那个「无沙箱 provider 预授权门」用:那个门已经自己按
     //   payload.permissionMode !== 'full' 守过了,再叠一层等于替用户默默写下 fullAccessAck ——
     //   那是另一件事的授权,不是同一件。
-    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[] }): Promise<ConfirmDecision> => {
-      if (autoAllowable(req) && getSession(payload.workspacePath, payload.sessionId)?.permissionMode === 'full') {
-        emitNote(payload.workspacePath, payload.sessionId, `🛡 已按当前权限档「完全访问」自动放行：${gateWhere(req)}`)
+    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolUseId?: string; readOnly?: boolean; onAutoAllow?: () => void }): Promise<ConfirmDecision> => {
+      const mode = getSession(payload.workspacePath, payload.sessionId)?.permissionMode
+      // ★★「自动(工作区)」档下,**确定是只读**的请求不升门。
+      //  这个档的原话是「自动修改工作区内的文件」—— 而读比改弱,为一次纯读去问一遍,
+      //  等于让人替一个他已经授权过的动作按一次确认。用户原话:「不要卡在那了」。
+      //  ★`readOnly` 只有 provider 自己判得出来时才为 true(codex 靠官方给的 commandActions),
+      //   我们**绝不猜命令字符串**;拿不准就是 false,照常升门。见 codexApproval.ts 的 codexReadOnly。
+      //  ★放行同样要留痕:走的是下面同一条 onAutoAllow / 审计消息,不存在悄悄放行。
+      if (autoAllowable(req) && (mode === 'full' || (mode === 'auto' && req.readOnly))) {
+        // ★★优先记在**那次调用自己的工具卡**上(`ToolActivity.autoAllowed`),不往对话流里插消息。
+        //   原来每放行一次就发一条 `who:'ai'` 的消息,顶着「系统」头像 +「回答」标签,长得和模型的
+        //   回答一模一样,还夹在工具卡和真正的回答中间。用户原话:「bash 的结果应该在 bash 的那个
+        //   折叠里,不应该出现在 LLM 输出的内容界面啊」。它是那次调用的属性,不是一句回答。
+        // ★拿不到工具卡(别的 provider 不给 tool_use_id)才回落成发消息 —— **不能悄悄放行**,
+        //   「留一行审计痕迹」这条约束一步都不让。
+        if (req.onAutoAllow) req.onAutoAllow()
+        else emitNote(payload.workspacePath, payload.sessionId,
+          mode === 'full'
+            ? `🛡 已按当前权限档「完全访问」自动放行：${gateWhere(req)}`
+            : `🛡 只读操作，已按当前权限档「自动(工作区)」放行：${gateWhere(req)}`)
         return Promise.resolve('allow')
       }
       return confirm(req)
@@ -686,7 +963,44 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // FORGE_WORKFLOWS — so it has no forge MCP tools (forge_propose_plan/forge_delegate) for ANY
     // provider, and forgeChatDirective(env) (gated on env.FORGE_TOOLS containing forge_propose_plan)
     // returns '' automatically. Workflows only launch via the explicit run2 "工作流运行" launcher now.
-    const env = buildAgentEnv({ proxy: readSettings().termProxy, timezone: providerTimezone(payload.agent) })
+    const env = buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(payload.agent) })
+    /**
+     * ★★PATH shim + 授权中枢 —— 把授权收回 Forge 里的**通用**那一层。
+     *
+     *  claude 有 can_use_tool、codex(app-server)有 requestApproval、gemini/qwen 有 hook,
+     *  但 **qoder / cursor / opencode / copilot 三样都没有**,只支持「全放行」。用户原话:
+     *  「qoder等都得支持上啊,这个很重要,要授权,你不弹,用户不知道,provider 也不知道有没有执行完」。
+     *  这一层不需要 CLI 配合任何东西,只需要它会去 PATH 上找命令。
+     *
+     * ★★只给**不逐操作弹门**的 provider 装:claude 已经每步都问了,再套一层就是同一件事问两遍。
+     * ★中枢用的是**同一道门**(toolConfirm),所以完全访问自动放行、🛡 标记、运行中改档全部免费继承。
+     * ★作用域只有这一轮:目录建在 runDir 下、只出现在我们给的这份 env 里,进程一退就清掉。
+     *  用户自己开终端跑 claude 完全不受影响 —— 这是和「往 ~/.claude/settings.json 插 hook」最大的区别。
+     */
+    let authBroker: Awaited<ReturnType<typeof startAuthBroker>> | null = null
+    if (!providerGatesEachOperation(payload.agent) && process.platform !== 'win32') {
+      try {
+        // ★★socket 路径不能自己拼:darwin 的 sun_path 只有 104 字节,而且 bind() 是**截断**不是报错 ——
+        //  工作区深一点就会拿到一个谁也连不上的 socket。bridgeAddress 早就把这条规矩解决过一遍
+        //  (超长就落到 tmpdir),这里直接复用,不再造第二套。
+        const sockPath = authSocketAddress(store.runDir, payload.sessionId).socketPath
+        authBroker = await startAuthBroker(sockPath, {
+          confirm: async (r) => confirmAllowed(await toolConfirm({ title: r.title, where: r.where })),
+        })
+        const shimDir = writeShimDir({
+          runDir: store.runDir, socketPath: sockPath, sessionId: payload.sessionId,
+          nodePath: process.execPath, shimJs: join(__dirname, 'agentShim.js'),
+        })
+        env.PATH = shimmedPath(shimDir, env.PATH)
+        // ★★光改 PATH 不够:登录 shell(`zsh -lc`,codex 实测在用)会被 path_helper 重排,
+        //  把我们的目录挤到第 13 位。ZDOTDIR 让我们的 rc 在那之后再顶回第一位。见 commandShim.ts。
+        Object.assign(env, shimEnv(store.runDir, shimDir))
+      } catch (e) {
+        // ★装不上就**不装**,照常跑 —— 这一层是加固,不该成为「聊天起不来」的新理由。
+        logError('auth-broker', '装不上 PATH shim,本轮不拦截', String((e as Error)?.message ?? e))
+        authBroker = null
+      }
+    }
     try {
       const msg = await sendTurn(payload, {
         provider,
@@ -702,6 +1016,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return msg
     }
     finally {
+      await authBroker?.close().catch(() => { /* 已经没了 */ })
       // The turn is over. If it ended while a CLI permission gate (confirm) was still open — CLI/turn
       // timeout, error, or the user moved on — drain THIS turn's confirm gates so the pet's 需确认
       // indicator (and the main-window card) don't stay stuck forever awaiting a confirm-resolved that
@@ -718,14 +1033,23 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
   }
   const chatQueue = new ChatQueue(runTurn, broadcast)
-  ipcMain.handle(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
+  on(CH.chatSend, (_e, payload: ChatSendPayload, source?: string) => {
     if (isArchivedWorkspace(payload.workspacePath)) throw new Error('工作区已归档，恢复后才能继续。')
-    chatQueue.enqueue(payload, source ?? '你')
+    /**
+     * 这一轮是从哪台设备发的。
+     *
+     * ★★**由这里填,不读 payload 里客户端自报的那个**:自报等于任何一个连上来的客户端
+     *  都能把自己写成别人,而这条标记的全部价值就是「可信地说清是谁发的」。
+     * ★本机窗口(`id === 'local'`)**不填** —— 没有标记就是「在这台机器上敲的」。
+     *  常见情况下一个字节都不多存,界面上也一个像素都不多画。
+     */
+    const via = _e?.client && _e.client.id !== 'local' ? _e.client.label : undefined
+    chatQueue.enqueue({ ...payload, via }, source ?? '你')
   })
-  ipcMain.handle(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
+  on(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
   // 还挂着的确认/提问门快照。聊天视图每次挂载都拉一次,把主进程仍在阻塞等待的门重建成卡片。
   // 不做任何清理:这里只是【读】,门的生命周期仍由回答 / drainChatGates 负责。
-  ipcMain.handle(CH.chatGateState, (_e, a: { workspacePath: string }): ChatGateSnapshot => {
+  on(CH.chatGateState, (_e, a: { workspacePath: string }): ChatGateSnapshot => {
     // chatGateOwner 就是「还挂着的门」的单一事实源:每条解析路径(chatResolve / resolveChatGateById /
     // drainChatGates)都把 owner 和 resolver 一起删,而 drain 还会在没有 resolver 时也删 owner ——
     // 所以 owner 恒是更严格的那一边,不需要再拿 chatConfirms/chatAsks 复核一遍。
@@ -738,12 +1062,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     return snap
   })
-  ipcMain.handle(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
-  ipcMain.handle(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
+  // 跨设备未读:某个客户端打开了一条会话 → 告诉所有别的客户端「这条被看过了」。
+  // ★纯转发,不留状态:这条 channel 存在的全部理由就是「手机上读了,电脑上那颗圆点也该灭」。
+  //  空 workspacePath / sessionId 直接丢掉 —— 切主机那一瞬客户端的 viewing 就是两个空串,
+  //  广播出去每台设备都会拿空 key 去 clearUnread,虽然无害但是一条纯噪音。
+  on(CH.chatMarkSeen, (_e, a: { workspacePath: string; sessionId: string }) => {
+    if (!a?.workspacePath || !a?.sessionId) return
+    broadcast(CH.chatSeen, { workspacePath: a.workspacePath, sessionId: a.sessionId })
+  })
+  on(CH.chatCancelQueued, (_e, a: { workspacePath: string; id: string }) => chatQueue.cancel(a.workspacePath, a.id))
+  on(CH.chatClearQueue, (_e, a: { workspacePath: string }) => chatQueue.clear(a.workspacePath))
   // 「停止」只停当前【会话】的轮次 + 它派发的后台 delegate 子代理 + 它挂起的门(confirm/ask),不动同工作区里
   // 并发跑着的另一个会话(fire-and-forget 的子代理已脱离 chatQueue 的 activeCancel,必须靠 delegate 自己的跨轮
   // 取消表才杀得掉,否则会留成孤儿)。省略 sessionId(如宠物的工作区级停止)仍是「取消这个工作区的全部」。
-  ipcMain.handle(CH.chatStop, (_e, a: { workspacePath: string; sessionId?: string }) => {
+  on(CH.chatStop, (_e, a: { workspacePath: string; sessionId?: string }) => {
     // Normalize once so all three stop ops treat "no session" identically — an empty-string sessionId
     // (should never reach here, real ids are non-empty) would otherwise be "defined" to stop()/delegates
     // but falsy to drainChatGates, diverging their scope.
@@ -762,32 +1094,32 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const broadcastSessions = (wsPath: string, file: SessionsFile): void => {
     broadcast(CH.sessionsChanged, { workspacePath: wsPath, file: sessionsOut(wsPath, file) })
   }
-  ipcMain.handle(CH.sessionList, (_e, wsPath: string) => sessionsOut(wsPath, readSessions(wsPath)))
-  ipcMain.handle(CH.sessionNew, (_e, wsPath: string) => {
+  on(CH.sessionList, (_e, wsPath: string) => sessionsOut(wsPath, readSessions(wsPath)))
+  on(CH.sessionNew, (_e, wsPath: string) => {
     if (isArchivedWorkspace(wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
     const file = newSession(wsPath)
     broadcastSessions(wsPath, file)
     return sessionsOut(wsPath, file)
   })
-  ipcMain.handle(CH.sessionSwitch, (_e, a: { workspacePath: string; sessionId: string }) => {
+  on(CH.sessionSwitch, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = switchSession(a.workspacePath, a.sessionId)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
-  ipcMain.handle(CH.sessionClose, (_e, a: { workspacePath: string; sessionId: string }) => {
+  on(CH.sessionClose, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = closeSession(a.workspacePath, a.sessionId)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
-  ipcMain.handle(CH.sessionRename, (_e, a: { workspacePath: string; sessionId: string; title: string }) => {
+  on(CH.sessionRename, (_e, a: { workspacePath: string; sessionId: string; title: string }) => {
     const file = renameSession(a.workspacePath, a.sessionId, a.title)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
-  ipcMain.handle(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
-    return sessionsOut(a.workspacePath, applyPermission(a.workspacePath, a.sessionId, a.mode))
+  on(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
+    return sessionsOut(a.workspacePath, applyPermission(a.workspacePath, a.sessionId, a.mode, _e?.client?.label ?? '本机'))
   })
-  ipcMain.handle(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
+  on(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
     const file = setSessionModel(a.workspacePath, a.sessionId, a.agentId, a.modelId)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
@@ -816,7 +1148,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       permissionMode: stage.permissionMode ?? 'auto',
     }, '工作流')
   }
-  ipcMain.handle(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
+  on(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
     if (!p.sessionId) throw new Error('workflow:enter 缺少 sessionId')
     // 什么都没说就不许启动 —— 否则阶段 agent 只拿到一串项目名,会自己猜一个需求出来跑一堆东西。
     // 这道必须在主进程:「⚡自动」那条路不经过启动门的按钮。
@@ -855,7 +1187,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     kickConversationalStage(p.workspacePath, p.sessionId, session)   // 图3:进入阶段0自动起手产出交付物
     return session
   })
-  ipcMain.handle(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string>; skip?: string[] }) => {
+  on(CH.workflowAdvance, async (_e, a: { workspacePath: string; sessionId: string; handoffText?: string; briefs?: Record<string, string>; skip?: string[] }) => {
     const s = getSession(a.workspacePath, a.sessionId)
     if (!s?.workflowSession) throw new Error('该会话不在工作流中')
     let next: WorkflowSessionState = advanceWorkflow(s.workflowSession)
@@ -891,13 +1223,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     kickConversationalStage(a.workspacePath, a.sessionId, next)   // 图3:推进到新对话阶段也自动起手
     return next
   })
-  ipcMain.handle(CH.workflowExit, (_e, a: { workspacePath: string; sessionId: string }) => {
+  on(CH.workflowExit, (_e, a: { workspacePath: string; sessionId: string }) => {
     const file = setSessionWorkflow(a.workspacePath, a.sessionId, undefined)
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
   // Change 2(doc-as-contract):进代码开发前读技术方案文档,抽每项目那节预填简报 + 报告文档是否存在。
-  ipcMain.handle(CH.workflowPrepareBriefs, (_e, a: { workspacePath: string; stageKey: string; projects: string[] }): { docExists: boolean; docPath: string; sections: Record<string, string> } => {
+  on(CH.workflowPrepareBriefs, (_e, a: { workspacePath: string; stageKey: string; projects: string[] }): { docExists: boolean; docPath: string; sections: Record<string, string> } => {
     const rel = stageDocRelPath(a.stageKey)
     const docPath = join(a.workspacePath, rel)
     let md = ''
@@ -906,7 +1238,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const { sections } = docExists ? extractProjectBriefs(md, a.projects) : { sections: {} as Record<string, string> }
     return { docExists, docPath, sections }
   })
-  ipcMain.handle(CH.workflowFinish, (_e, a: { workspacePath: string; sessionId: string }) => {
+  on(CH.workflowFinish, (_e, a: { workspacePath: string; sessionId: string }) => {
     const s = getSession(a.workspacePath, a.sessionId)
     if (!s?.workflowSession) return readSessions(a.workspacePath)
     const next: WorkflowSessionState = { ...s.workflowSession, phase: 'done', currentIndex: s.workflowSession.stages.length }
@@ -914,14 +1246,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
-  ipcMain.handle(CH.sessionContinueFrom, (_e, a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => {
+  on(CH.sessionContinueFrom, (_e, a: { wsPath: string; source: import('@shared/types').SourceId; externalId: string; title: string; filePaths: string[] }) => {
     if (isArchivedWorkspace(a.wsPath)) throw new Error('工作区已归档，恢复后才能继续。')
     const file = continueFrom(a.wsPath, a)
     broadcastSessions(a.wsPath, file)
     return sessionsOut(a.wsPath, file)
   })
-  ipcMain.handle(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId, chatQueue.runningProvider(a.workspacePath, a.sessionId)))
-  ipcMain.handle(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
+  on(CH.sessionAgentIds, (_e, a: { workspacePath: string; sessionId: string }) => agentSessionsForId(a.workspacePath, a.sessionId, chatQueue.runningProvider(a.workspacePath, a.sessionId)))
+  on(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
     const askResolve = chatAsks.get(a.id)
     if (askResolve) {
       chatAsks.delete(a.id)
@@ -931,14 +1263,47 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return
     }
     const resolve = chatConfirms.get(a.id)
-    if (!resolve) return
+    if (!resolve) {
+      // ★门已经被别人答掉了。原来这里直接 return —— 那正是「你以为自己拦住了」的来源。
+      //   只有**答案不一样**时才提示:同一台设备手抖点两下是常事,不该为此加噪音;
+      //   而「一个说允许、一个说拒绝」是安全问题,必须让落空的那个人看见。
+      const prev = recentlyResolved.get(a.id)
+      if (prev && prev.decision !== a.decision) {
+        emitNote(prev.ws, prev.sessionId,
+          `⚠️ 你的「${DECISION_CN[a.decision] ?? a.decision}」没有生效 —— 这道门已由「${prev.by}」抢先答为「${DECISION_CN[prev.decision] ?? prev.decision}」。`)
+      }
+      return
+    }
+    const by = _e?.client?.label ?? '本机'
+    // ★★先取门的元信息,**再删** —— 下面要用它里面的 `questions` 把「问了什么」写进对话。
+    //  删了之后再读是拿不到的,而那正好是一条「静默少写一半」的失败:记录里只剩答案、没有问题。
+    const gate = chatGateOwner.get(a.id)
     chatConfirms.delete(a.id)
     chatGateOwner.delete(a.id)
+    rememberResolved(a.id, by, a.decision, a.workspacePath, readSessions(a.workspacePath).activeSessionId ?? '')
     // 带 answers/response 的放行 = 这是一道「请回答」的门(AskUserQuestion),必须把选择原样送回 provider。
     const answered = a.decision === 'allow' && (a.answers !== undefined || a.response !== undefined)
     resolve(answered ? { decision: 'allow', answers: a.answers, response: a.response }
       : a.decision === 'modify' ? 'deny' : a.decision)
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
+    // ★★★把「问了什么、选了什么」留在对话里。答完之后卡片就消失了,而对话里原来**一个字都没有** ——
+    //  用户原话:「我选择后,输出内容里没有我之前的选择,感觉中间中断了似的」。后面每一句都以这个
+    //  选择为前提,读的人却看不到前提。
+    // ★这条**不受**下面「本机自己答的不提示」那条规矩管,两者问的不是一件事:
+    //  权限门问「准不准做」——答案是授权,痕迹落在那次调用的工具卡上;
+    //  选择门问「你想要哪个」——答案是**内容**,它属于对话本身。之前把两者按同一条规矩处理,
+    //  正是这条被漏掉的原因。
+    if (answered) {
+      const note = askAnswerNote(gate?.questions, a.answers, a.response)
+      const sid = readSessions(a.workspacePath).activeSessionId ?? ''
+      if (note && sid) emitNote(a.workspacePath, sid, note)
+    }
+    // 别的设备答的门,要在对话里留个痕 —— 否则电脑前的人只看到卡片凭空消失,不知道发生了什么。
+    // 本机自己答的不提示:那会给单机用户的每一次确认都加一条噪音。
+    if (_e?.client && _e.client.id !== 'local') {
+      const sid = readSessions(a.workspacePath).activeSessionId ?? ''
+      if (sid) emitNote(a.workspacePath, sid, `🛡 「${by}」${DECISION_CN[a.decision] ?? a.decision}了这道门。`)
+    }
   })
 
   // ---- Bot bridge (钉钉) ----
@@ -990,7 +1355,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       let model = s?.modelId || ''
       if (!model) {   // a brand-new session has no model yet; empty model 400s the chat API
         try {
-          const env = buildAgentEnv({ proxy: readSettings().termProxy })
+          const env = buildAgentEnv({ proxy: readSettings().agentProxy })
           const models = await (providers[agent] ?? providers['claude'])?.listModels(env)
           model = models?.[0]?.id || ''
         } catch { /* leave empty — a clear API error beats a crash */ }
@@ -1011,7 +1376,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     },
     listModels: async (agent) => {
       try {
-        const env = buildAgentEnv({ proxy: readSettings().termProxy })
+        const env = buildAgentEnv({ proxy: readSettings().agentProxy })
         const models = await (providers[agent] ?? providers['claude'])?.listModels(env)
         return (models ?? []).map(mm => ({ id: mm.id, label: mm.label }))
       } catch { return [] }
@@ -1020,40 +1385,54 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       const file = setSessionModel(ws, sessionId, agent, model)
       broadcastSessions(ws, file)
     },
-    setPermission: (ws, sessionId, mode) => { applyPermission(ws, sessionId, mode) },
-    getProxy: () => readSettings().termProxy,
+    setPermission: (ws, sessionId, mode) => { applyPermission(ws, sessionId, mode, '机器人桥') },
+    getProxy: () => readSettings().agentProxy,
     emitStatus: (platform, st) => broadcast(CH.botStatusEvent, { platform, status: st }),
   })
-  ipcMain.handle(CH.botConnect, async (_e, a: { platform: BotPlatform }) => {
+  on(CH.botConnect, async (_e, a: { platform: BotPlatform }) => {
     const bb = readSettings().botBridge as BotBridgeConfig
     persistBotConfig({ ...bb, [a.platform]: { ...bb[a.platform], enabled: true } })
     await botBridge.connect(a.platform); return botBridge.getStatuses()
   })
-  ipcMain.handle(CH.botDisconnect, async (_e, a: { platform: BotPlatform }) => {
+  on(CH.botDisconnect, async (_e, a: { platform: BotPlatform }) => {
     const bb = readSettings().botBridge as BotBridgeConfig
     persistBotConfig({ ...bb, [a.platform]: { ...bb[a.platform], enabled: false } })
     await botBridge.disconnect(a.platform); return botBridge.getStatuses()
   })
-  ipcMain.handle(CH.botGetStatus, () => botBridge.getStatuses())
-  ipcMain.handle(CH.botRegenPairing, () => {
+  on(CH.botGetStatus, () => botBridge.getStatuses())
+  on(CH.botRegenPairing, () => {
     const code = genPairing()
     persistBotConfig({ ...(readSettings().botBridge as BotBridgeConfig), pairingCode: code })
     return code
   })
-  ipcMain.handle(CH.botUnbind, (_e, a: { chatId: string }) => {
+  on(CH.botUnbind, (_e, a: { chatId: string }) => {
     const bb = readSettings().botBridge as BotBridgeConfig
     persistBotConfig({ ...bb, bindings: bb.bindings.filter(b => b.chatId !== a.chatId) })
     return (readSettings().botBridge as BotBridgeConfig).bindings
   })
+
+  // ── 推送。手机把自己的 Expo 推送令牌登记到**这台机器**上,并持续上报在场状态;
+  //    门升起 / 一轮跑完时,这台机器直接 POST 给 Expo(决策 7:不经中转、不自建后端)。
+  //    ★桌面端设置里也能看这张表和发测试推送,所以它们在方法表里而不是只给手机用。
+  on(CH.pushRegister, (_e, a: { token: string; label?: string; platform?: 'ios' | 'android' | 'web' }) =>
+    pushService.register({ token: String(a?.token ?? ''), label: a?.label, platform: a?.platform }))
+  on(CH.pushUnregister, (_e, a: { token: string }) => pushService.unregister(String(a?.token ?? '')))
+  on(CH.pushDevices, () => pushService.devices())
+  // ★在场上报是**高频**的(切前后台、换会话都会发一次),所以它什么都不返回 ——
+  //  一次往返里少一个响应体,手机上少一次序列化。
+  on(CH.pushPresence, (_e, a: { token: string; visible: boolean; at: { workspacePath: string; sessionId?: string | null } | null }) => {
+    pushService.presence(String(a?.token ?? ''), { visible: !!a?.visible, at: a?.at ?? null })
+  })
+  on(CH.pushTest, () => pushService.sendTest())
   // Provider-switch context summary: after the user confirms switching agent mid-session, the NEW
   // provider reads the prior conversation and produces a visible summary message (provider = toAgent,
   // so the timeline auto-inserts a provider-switch divider above it: old agent's msgs → summary).
-  ipcMain.handle(CH.chatSwitchSummary, async (_e, a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => {
+  on(CH.chatSwitchSummary, async (_e, a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => {
     const provider = providers[a.toAgent] ?? providers['claude']
     if (!provider?.chat) return
     const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
     if (!msgs.length) return
-    const env = buildAgentEnv({ proxy: readSettings().termProxy })
+    const env = buildAgentEnv({ proxy: readSettings().agentProxy })
     const model = distillModelFor(a.toAgent) ?? a.model
     const id = `switch-sum-${Date.now()}`
     broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-start', id, model: '上下文总结' })
@@ -1084,12 +1463,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // as the distiller: cheap distill model when available, else the session's own model. Fail-open with
   // a hard timeout so a hung provider never leaves the gate spinning — the renderer falls back to the
   // raw last-N transcript when this returns ''.
-  ipcMain.handle(CH.chatSummarizeRequirement, async (_e, a: { workspacePath: string; sessionId: string; agent: string; model: string }): Promise<string> => {
+  on(CH.chatSummarizeRequirement, async (_e, a: { workspacePath: string; sessionId: string; agent: string; model: string }): Promise<string> => {
     const provider = providers[a.agent] ?? providers['claude']
     if (!provider?.chat) return ''
     const msgs = history(a.workspacePath, a.sessionId).filter(m => m.text?.trim())
     if (!msgs.length) return ''
-    const env = buildAgentEnv({ proxy: readSettings().termProxy })
+    const env = buildAgentEnv({ proxy: readSettings().agentProxy })
     const model = distillModelFor(a.agent) ?? a.model
     const id = `req-sum-${Date.now()}`
     // 超时/出错 → null(不是「已经流出来的半截」)。半截需求会被当成「需求原文」发给每个阶段的 agent,
@@ -1122,7 +1501,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // a synthetic system ChatMessage (blank text, `launchGate` field carries the record) with the SAME id
   // as the renderer's in-chat LaunchGateCard, so when this broadcast round-trips back into chat.messages
   // WorkspaceView can dedupe it against its own local (already-frozen) entry by id.
-  ipcMain.handle(CH.chatAppendLaunchGate, (_e, a: {
+  on(CH.chatAppendLaunchGate, (_e, a: {
     workspacePath: string; sessionId: string; id: string; ts: string
     workflowName: string; projects: string[]; supplement: string; decidedAt: number; seed: string
   }) => {
@@ -1139,7 +1518,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // synthetic system ChatMessage (blank text, `runCard` field carries the frozen decision) with the
   // SAME id as the in-chat RunEventCard's event id, so it round-trips back into chat.messages and
   // WorkspaceView can dedupe against its own local resolved-cards state by id.
-  ipcMain.handle(CH.chatAppendRunCard, (_e, a: { workspacePath: string; sessionId: string; ts: string; runCard: NonNullable<ChatMessage['runCard']> }) => {
+  on(CH.chatAppendRunCard, (_e, a: { workspacePath: string; sessionId: string; ts: string; runCard: NonNullable<ChatMessage['runCard']> }) => {
     // Idempotent by id: every run-card id is write-once (an event id, `abort-<runId>`, or
     // `summary-<runId>`) — never re-appended with different content. Persisting the same id twice must
     // be a no-op, because appendMessage (chatStore.ts) writes the jsonl with a blind appendFileSync (no
@@ -1158,10 +1537,40 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Fold any in-flight (still-streaming) assistant message into the returned history so switching to the
   // home view / another session mid-stream and back restores the already-produced output (it isn't
   // persisted until the turn's terminal state).
-  ipcMain.handle(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string }) => mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId)))
-  ipcMain.handle(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
-    const r = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] })
-    return r.filePaths.map(p => ({ name: basename(p), path: p, size: statSync(p).size }))
+  /**
+   * 一个会话的全部历史。
+   *
+   * ★★`toolOutputLines` / `toolOutputBytes` 是**给带宽小的客户端**的:工具输出(shell stdout、
+   *  读文件回显)占一份历史 99% 的字节,而手机最多画 200 行。手机走中转打开长会话要十秒,
+   *  九成时间花在下载它立刻就要丢掉的东西上。给了上限就在这儿截,并带上原始行数
+   *  (界面照旧如实说「还有 N 行没显示」)。详见 `toolOutputCap.ts`。
+   * ★不给 = 一个字不截。电脑端本机那条路行为逐字不变。
+   */
+  on(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string; toolOutputLines?: number; toolOutputBytes?: number }) => {
+    const msgs = mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId))
+    const cap = readCap(a)
+    return cap ? capToolOutputs(msgs, cap) : msgs
+  })
+  /**
+   * 一条工具调用的完整输出(仍按调用方给的上限截断)。
+   *
+   * ★★为什么不是「把历史再拉一遍然后挑一条」:那正是要省掉的那几百 KB。这里只回**一个字符串**。
+   * ★`mergeLive` 要带上:正在跑的那一轮还没落盘,而用户最想点开的恰恰是刚跑完的那几条。
+   * ★找不到就回空串而不是抛:卡片点开拿到空,显示「这个工具没有回传输出」——
+   *  比在手机上弹一个红条要合适(消息可能已经被清理,而那不是错误)。
+   */
+  on(CH.chatToolOutput, (_e, a: { workspacePath: string; sessionId: string; messageId: string; toolId: string; toolOutputLines?: number; toolOutputBytes?: number }) => {
+    const msgs = mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId))
+    const tool = msgs.find(m => m.id === a.messageId)?.tools?.find(t => t.id === a.toolId)
+    if (!tool?.output) return { output: '', outputLines: tool?.outputLines }
+    // ★这里**不能**把 omitOver 传下去 —— 那会把刚要的这一条又摘掉,点开永远是空的。
+    const cap = readCap({ toolOutputLines: a.toolOutputLines, toolOutputBytes: a.toolOutputBytes })
+    const capped = cap ? capToolOutput(tool, cap) : tool
+    return { output: capped.output ?? '', outputLines: capped.outputLines ?? tool.output.split('\n').length }
+  })
+  on(CH.dialogOpenFiles, async (): Promise<Attachment[]> => {
+    const paths = await caps.pickPaths({ kind: 'file', multi: true })
+    return paths.map(p => ({ name: basename(p), path: p, size: statSync(p).size }))
   })
   // 大段粘贴转文件走这里(见 Composer.handlePaste)。盘满 ENOSPC、无权限 EPERM、只读工作树都会让
   // mkdirSync/writeFileSync 抛出 —— 不接住的话异常会穿过 ipcMain.handle 变成渲染层的 unhandled
@@ -1171,7 +1580,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 重名去重是这里的**必需品**,不是锦上添花:剪贴板图片在 Chrome 里一律叫 image.png,连粘三张就是
   // 三次写同一个路径,后一张静默盖掉前一张 —— chip 上三个不同大小都在,盘上只剩最后一个,agent 拿到
   // 三份同一张图。渲染层猜不出盘上已经有什么,只有这里知道。
-  ipcMain.handle(CH.chatSavePaste, (_e, a: { workspacePath: string; name: string; dataBase64: string }): Attachment | null => {
+  on(CH.chatSavePaste, (_e, a: { workspacePath: string; name: string; dataBase64: string }): Attachment | null => {
     try {
       const dir = join(a.workspacePath, '.forge', 'attachments')
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -1186,56 +1595,51 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
 
   const watcher = new WorktreeWatcher((p, opts) => chokidarWatch(p, opts as object) as unknown as import('../watcher/worktreeWatcher').FsWatcherLike)
-  const proxy = () => readSettings().termProxy
+  const proxy = () => readSettings().agentProxy
   const changesEmit = (e: ChangesEvent) => broadcast(CH.changesEvent, e)
 
-  ipcMain.handle(CH.gitChanges, (_e, cwd: string) => perfSpan('git', 'readChanges', () => readChanges(cwd, proxy())))
-  ipcMain.handle(CH.changesMulti, (_e, cwds: string[]) => perfSpan('git', 'changesMulti', () => readChangesMulti(cwds, proxy())))
-  ipcMain.handle(CH.gitDiff, (_e, a: { cwd: string; file: string }) => readDiff(a.cwd, a.file, proxy()))
-  ipcMain.handle(CH.gitFile, (_e, a: { cwd: string; file: string }) => readFile(a.cwd, a.file, proxy()))
-  // Read an image file's bytes → data URL for the inspector's image preview (gitFile returns text, which
-  // renders binary images as garbage). Guards: known image ext, stays within cwd, size cap.
-  ipcMain.handle(CH.imageFile, (_e, a: { cwd: string; file: string }): { dataUrl: string } | { error: string } => {
-    try {
-      const IMG_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', ico: 'image/x-icon', avif: 'image/avif' }
-      const mime = IMG_MIME[(a.file.split('.').pop() || '').toLowerCase()]
-      if (!mime) return { error: '不是支持的图片格式' }
-      const abs = join(a.cwd, a.file)
-      if (!abs.startsWith(a.cwd)) return { error: '路径越界' }
-      if (!existsSync(abs)) return { error: '文件不存在' }
-      const buf = readFileSync(abs)
-      if (buf.length > 25_000_000) return { error: '图片过大(>25MB)' }
-      return { dataUrl: `data:${mime};base64,${buf.toString('base64')}` }
-    } catch { return { error: '读取失败' } }
-  })
+  on(CH.gitChanges, (_e, cwd: string) => perfSpan('git', 'readChanges', () => readChanges(cwd, proxy())))
+  on(CH.changesMulti, (_e, cwds: string[]) => perfSpan('git', 'changesMulti', () => readChangesMulti(cwds, proxy())))
+  on(CH.gitDiff, (_e, a: { cwd: string; file: string }) => readDiff(a.cwd, a.file, proxy()))
+  on(CH.gitFile, (_e, a: { cwd: string; file: string }) => readFile(a.cwd, a.file, proxy()))
+  // 图片字节 → data URL。两个调用方:inspector 的图片预览,和对话/文档正文里的 `![x](…)`
+  // (gitFile 返回文本,二进制图会渲染成乱码)。★解析与越界判断全部交给 readImageRef →
+  // resolveFileRef —— 和对话里**文件链接**同一套守卫,绝不在这儿自己拼路径。
+  on(CH.imageFile, (_e, a: { bases: string[]; href: string }): { dataUrl: string } | { error: string } =>
+    readImageRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? '')))
   // ── 对话产物可点开 ────────────────────────────────────────────────────────────
   // 聊天正文里的 [设计文档](docs/design.md) 点击后走这里:renderer 只知道一串 href,存在性、是不是目录、
   // 有没有越出工作区,全部在主进程判(renderer 没有 fs)。bases 按优先级给:当前会话 worktree → 工作区根。
-  ipcMain.handle(CH.resolveFileRef, (_e, a: { bases: string[]; href: string }) =>
+  on(CH.resolveFileRef, (_e, a: { bases: string[]; href: string }) =>
     resolveFileRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? '')))
   // 预览显示不了的类型(pdf/xlsx/zip)和 .html 的「用浏览器打开」。只放行 bases 之内的真实文件 ——
   // 这是个能拉起任意本地程序的口子,越界必须拒。
-  ipcMain.handle(CH.openFilePath, async (_e, a: { bases: string[]; href: string }) => {
+  on(CH.openFilePath, async (_e, a: { bases: string[]; href: string }) => {
     const r = resolveFileRef(Array.isArray(a?.bases) ? a.bases : [], String(a?.href ?? ''))
     if (!r.ok) return { ok: false as const, error: r.reason }
-    const err = await shell.openPath(r.abs)
+    const err = await caps.openPath(r.abs)
     return err ? { ok: false as const, error: err } : { ok: true as const }
   })
-  ipcMain.handle(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
-  ipcMain.handle(CH.gitBranch, (_e, cwd: string) => readBranch(cwd, proxy()))
-  ipcMain.handle(CH.fileSearchContent, (_e, a: { root: string; query: string; files?: string[] }) =>
+  // 服务端目录选择器的两个只读端点(第二期 D)。★只读:列目录、看上一层。没有写、没有删、没有改名 ——
+  // 多一个能写的口子,就多一条从网络直达文件系统的路径。
+  on(CH.fsBrowse, (_e, a: { path?: string; showHidden?: boolean; filesToo?: boolean }) =>
+    listDir(String(a?.path ?? ''), { showHidden: !!a?.showHidden, filesToo: !!a?.filesToo }))
+  on(CH.fsBrowseRoots, () => defaultRoots())
+  on(CH.fsTree, async (_e, cwd: string) => perfSpan('ipc', 'fsTree', async () => readTree(cwd, await readChanges(cwd, proxy()), proxy())))
+  on(CH.gitBranch, (_e, cwd: string) => readBranch(cwd, proxy()))
+  on(CH.fileSearchContent, (_e, a: { root: string; query: string; files?: string[] }) =>
     searchContent({ root: a.root, query: a.query, files: a.files }))
-  ipcMain.handle(CH.watchChanges, (_e, cwd: string) => {
+  on(CH.watchChanges, (_e, cwd: string) => {
     watcher.start(cwd, () => { void perfSpan('watcher', 'onChange', () => readChanges(cwd, proxy()).then(changes => changesEmit({ cwd, changes }))) })
     return readChanges(cwd, proxy())
   })
-  ipcMain.handle(CH.watchStop, () => { watcher.stop() })
+  on(CH.watchStop, () => { watcher.stop() })
 
   // ── Plugin IPC ──────────────────────────────────────────────────────────────
-  ipcMain.handle(CH.pluginsList, () =>
+  on(CH.pluginsList, () =>
     getPluginScheduler()?.snapshot() ?? { plugins: [], results: {} }
   )
-  ipcMain.handle(CH.pluginsInstall, (_e, dir: string) => {
+  on(CH.pluginsInstall, (_e, dir: string) => {
     const r = installPlugin(dir)
     if (r.ok) {
       // reconcile() already runs the new plugin; no need to also call refresh()
@@ -1243,20 +1647,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     }
     return r
   })
-  ipcMain.handle(CH.pluginsUninstall, (_e, id: string) => {
+  on(CH.pluginsUninstall, (_e, id: string) => {
     uninstallPlugin(id)
     getPluginScheduler()?.reconcile()
   })
-  ipcMain.handle(CH.pluginsSetEnabled, (_e, a: { id: string; enabled: boolean }) => {
+  on(CH.pluginsSetEnabled, (_e, a: { id: string; enabled: boolean }) => {
     setPluginEnabled(a.id, a.enabled)
     getPluginScheduler()?.reconcile()
   })
-  ipcMain.handle(CH.pluginsRefresh, (_e, id?: string) => {
+  on(CH.pluginsRefresh, (_e, id?: string) => {
     // 带 id = 用户在某张插件卡上点了「刷新」,是明确意图 → 绕过最小间隔。不带 id 的全量刷新走节流。
     void getPluginScheduler()?.refresh(id, id !== undefined)
   })
-  ipcMain.handle(CH.pluginsGetCreds, () => readSettings().pluginCreds ?? {})
-  ipcMain.handle(CH.pluginsSetCred, (_e, a: { provider: string; value: string }) => {
+  on(CH.pluginsGetCreds, () => readSettings().pluginCreds ?? {})
+  on(CH.pluginsSetCred, (_e, a: { provider: string; value: string }) => {
     const s = readSettings()
     const creds = { ...(s.pluginCreds ?? {}) }
     if (a.value.trim()) creds[a.provider] = a.value.trim()
@@ -1269,25 +1673,25 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return creds
   })
   // 走用户代理拉远程「下架名单」(与 nsfw/wallpaper 同一条 makeContentFetch 通道);fail-open,拉不到就显示全部。
-  ipcMain.handle(CH.pluginsCatalog, () => listCatalog(makeContentFetch(readSettings().termProxy)))
-  ipcMain.handle(CH.pluginsInstallExample, (_e, id: string) => {
+  on(CH.pluginsCatalog, () => listCatalog(makeContentFetch(readSettings().agentProxy)))
+  on(CH.pluginsInstallExample, (_e, id: string) => {
     const r = installOfficial(id)
     if (r.ok) getPluginScheduler()?.reconcile()
     return r
   })
   // ── End Plugin IPC ──────────────────────────────────────────────────────────
 
-  ipcMain.handle(CH.dialogPickDirectory, async (): Promise<string | null> => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-    return r.canceled ? null : (r.filePaths[0] ?? null)
+  on(CH.dialogPickDirectory, async (): Promise<string | null> => {
+    const paths = await caps.pickPaths({ kind: 'directory', createDirectory: true })
+    return paths[0] ?? null
   })
-  ipcMain.handle(CH.dialogPickFile, async (): Promise<string | null> => {
-    const r = await dialog.showOpenDialog({ properties: ['openFile'] })
-    return r.canceled ? null : (r.filePaths[0] ?? null)
+  on(CH.dialogPickFile, async (): Promise<string | null> => {
+    const paths = await caps.pickPaths({ kind: 'file' })
+    return paths[0] ?? null
   })
 
   // ── Session Import IPC ──────────────────────────────────────────────────────
-  ipcMain.handle(CH.sessionImportScan, () => {
+  on(CH.sessionImportScan, () => {
     const sessions = scanAll()
     const wsPaths = readWorkspaceRegistry().map(w => w.path)
     const groups = groupByCwd(sessions, wsPaths)
@@ -1295,8 +1699,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     writeScanCache(groups, scannedAt)
     return { scannedAt, groups }
   })
-  ipcMain.handle(CH.sessionImportLastScan, () => readScanCache())
-  ipcMain.handle(CH.sessionImportRun, (_e, sessions: DiscoveredSession[]): import('@shared/types').ImportResult => {
+  on(CH.sessionImportLastScan, () => readScanCache())
+  on(CH.sessionImportRun, (_e, sessions: DiscoveredSession[]): import('@shared/types').ImportResult => {
     const wsPaths = new Set(readWorkspaceRegistry().map(w => w.path))
     const cwds = [...new Set(sessions.map(s => s.cwd))].filter(c => c && c !== 'unknown')
     let added = 0
@@ -1308,19 +1712,18 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (added > 0) broadcast(CH.workspacesChanged, {})
     return { index, gitRepos }
   })
-  ipcMain.handle(CH.sessionImportRead, (_e, s: DiscoveredSession) => readSession(s))
-  ipcMain.handle(CH.sessionImportList, () => readIndex())
-  ipcMain.handle(CH.sessionImportCoverage, () => sessionImportCoverage())
+  on(CH.sessionImportRead, (_e, s: DiscoveredSession) => readSession(s))
+  on(CH.sessionImportList, () => readIndex())
+  on(CH.sessionImportCoverage, () => sessionImportCoverage())
   // ── End Session Import IPC ──────────────────────────────────────────────────
 
-  ipcMain.handle(CH.petPickPack, async (_e, petId: string) => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return null
+  on(CH.petPickPack, async (_e, petId: string) => {
+    const [dir] = await caps.pickPaths({ kind: 'directory' })
+    if (!dir) return null
     // Persist each state image to disk under the pet's folder; return { images: { state: relPath } }
     // (no data URLs) plus the folder name so the pet gets a sensible default name (authoring nicety —
     // drop a folder of state-named images and it's ready). Only idle is required; missing states fall
     // back to idle at render time.
-    const dir = r.filePaths[0]
     const packed = readPetPack(dir)
     const images: Record<string, string> = {}
     for (const [state, dataUrl] of Object.entries(packed)) {
@@ -1331,13 +1734,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return { name: basename(dir), images }
   })
 
-  ipcMain.handle(CH.petPickImage, async (_e, petId: string, state: string = 'idle') => {
-    const r = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['png', 'gif', 'svg', 'webp'] }],
-    })
-    if (r.canceled || !r.filePaths[0]) return null
-    const read = readPetImage(r.filePaths[0])
+  on(CH.petPickImage, async (_e, petId: string, state: string = 'idle') => {
+    const [file] = await caps.pickPaths({ kind: 'file', filters: [{ name: '图片', extensions: ['png', 'gif', 'svg', 'webp'] }] })
+    if (!file) return null
+    const read = readPetImage(file)
     if ('error' in read) return { error: read.error }
     // Write to ~/.myFlowForge/pet-images/<petId>/<state>.<ext> and return the relative path only.
     const rel = writePetImageFromDataUrl(petId, state, read.dataUrl)
@@ -1348,26 +1748,26 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Codex v2 pet packs: validate + copy a pack directory into the pet store (returns a CustomPet the
   // renderer adds to customPets, mirroring petPickImage), list auto-discovered packs under ~/.codex/pets,
   // and pick-a-folder → import. Directory input only (no zip dependency).
-  ipcMain.handle(CH.codexPetImport, (_e, dir: string) => importCodexPetPack(dir))
-  ipcMain.handle(CH.codexPetList, () => discoverCodexPets())
-  ipcMain.handle(CH.codexPetPick, async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return null
-    return importCodexPetPack(r.filePaths[0])
+  on(CH.codexPetImport, (_e, dir: string) => importCodexPetPack(dir))
+  on(CH.codexPetList, () => discoverCodexPets())
+  on(CH.codexPetPick, async () => {
+    const [dir] = await caps.pickPaths({ kind: 'directory' })
+    if (!dir) return null
+    return importCodexPetPack(dir)
   })
 
   // 成长宠物包:同样是「选一个目录 → 校验 → 拷进宠物图库 → 返回 CustomPet」,只是包里带的是
   // 每阶段一张 atlas(kind:"growth")。取消时返回 null,与 codexPetPick 一致 —— 用户主动取消不是错误,
   // 渲染层不该把它当成红字报错弹出来。
-  ipcMain.handle(CH.growthPetImport, async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择成长宠物包目录' })
-    if (r.canceled || !r.filePaths[0]) return null
+  on(CH.growthPetImport, async () => {
+    const [dir] = await caps.pickPaths({ kind: 'directory', title: '选择成长宠物包目录' })
+    if (!dir) return null
     // importGrowthPetPack 只把「包本身不合格」变成 {ok:false},写盘的 I/O 异常照抛(ENOSPC 盘满、
     // EPERM 无权、EISDIR 目标名被目录占住 —— 最后这个在 growthPetImport.test.ts 里就是真实用例)。
     // 不在这里接住的话,异常会穿过 ipcMain.handle 变成渲染层的未处理 rejection:红字行不出现,
     // 用户看到的是「点了没反应」。转成与既有失败同形的 {ok:false,error},渲染层原路显示。
     try {
-      return importGrowthPetPack(r.filePaths[0])
+      return importGrowthPetPack(dir)
     } catch (e) {
       return { ok: false, error: `安装失败:${e instanceof Error ? e.message : String(e)}` }
     }
@@ -1377,13 +1777,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // and return its forge-bg:// URL (settings.json keeps only the small URL, not multi-MB base64). No
   // tiny cap needed anymore — storeBackgroundFromPath guards against pathological files. After a
   // successful pick, GC any background file no longer referenced by settings (old image on replace).
-  ipcMain.handle(CH.appearancePickBgImage, async () => {
-    const r = await dialog.showOpenDialog({
-      properties: ['openFile'],
-      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }],
-    })
-    if (r.canceled || !r.filePaths[0]) return null
-    const stored = storeBackgroundFromPath(r.filePaths[0])
+  on(CH.appearancePickBgImage, async () => {
+    const [file] = await caps.pickPaths({ kind: 'file', filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'] }] })
+    if (!file) return null
+    const stored = storeBackgroundFromPath(file)
     if ('error' in stored) return { error: stored.error }
     try {
       const a = readSettings().appearance
@@ -1396,11 +1793,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Downloadable fonts: list what's on disk (each entry carries its rewritten @font-face CSS so the
   // renderer can inject it), download a catalog font (streaming per-file progress to the caller), and
   // delete one. Downloads honour the user's configured proxy via makeProxyFetch.
-  ipcMain.handle(CH.fontsListDownloaded, () => listDownloadedFonts())
-  ipcMain.handle(CH.fontsDownload, async (e, id: string) => {
+  on(CH.fontsListDownloaded, () => listDownloadedFonts())
+  on(CH.fontsDownload, async (e, id: string) => {
     const entry = catalogEntry(id)
     if (!entry) return { error: '未知字体' }
-    const pf = makeProxyFetch(readSettings().termProxy)
+    const pf = makeProxyFetch(readSettings().appProxy)   // 字体是客户端的事(Q4)
     try {
       const font = await downloadCatalogFont(
         entry,
@@ -1412,11 +1809,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       return { error: err instanceof Error ? err.message : '字体下载失败' }
     }
   })
-  ipcMain.handle(CH.fontsDelete, (_e, id: string) => ({ ok: deleteDownloadedFont(id) }))
+  on(CH.fontsDelete, (_e, id: string) => ({ ok: deleteDownloadedFont(id) }))
 
   // License-gated extra content. All requests go through the user's configured proxy and carry the
   // locally-stored activation code (settings.nsfwCode); the Worker holds the real keys + image bytes.
-  const nsfwFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback
+  const nsfwFetch = () => makeContentFetch(readSettings().appProxy) // 客户端专属内容(Q4);proxy-first, direct fallback
   // The activation key sent to the Worker: ALL activated codes joined by comma (multi-code additive →
   // Worker returns the deduped union of their subsets). Falls back to the legacy single nsfwCode so an
   // install that predates nsfwCodes keeps working. encodeURIComponent in nsfwService escapes the commas.
@@ -1429,20 +1826,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // already-downloaded thumbnails with NO network — the fix for "every open re-hits the Cloudflare Worker
   // per thumbnail". Shared across NSFW + built-in wallpaper previews (both store under backgrounds/).
   const previewCache = makeDiskPreviewCache()
-  ipcMain.handle(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
-  ipcMain.handle(CH.nsfwCatalog, () => nsfwCatalog(nsfwKey(), nsfwFetch()))
-  ipcMain.handle(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, nsfwKey(), nsfwFetch(), previewCache))
+  on(CH.nsfwValidate, (_e, code: string) => nsfwValidate(code, nsfwFetch()))
+  on(CH.nsfwCatalog, () => nsfwCatalog(nsfwKey(), nsfwFetch()))
+  on(CH.nsfwPreview, (_e, kind: 'pet' | 'bg', id: string) => nsfwPreview(kind, id, nsfwKey(), nsfwFetch(), previewCache))
   // Gallery (design E): returns catalog + already-cached thumbnails immediately; the missing ones stream
   // in and arrive one-by-one as CH.nsfwPreviewEvent {key,url} on the SAME window.
-  ipcMain.handle(CH.nsfwGallery, (e, force?: boolean) => {
+  on(CH.nsfwGallery, (e, force?: boolean) => {
     const emit = (key: string, url: string) => { try { e.sender.send(CH.nsfwPreviewEvent, { key, url }) } catch { /* window closed */ } }
     return nsfwGallery(nsfwKey(), nsfwFetch(), previewCache, emit, { force: !!force })
   })
-  ipcMain.handle(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, nsfwKey(), nsfwFetch()))
-  ipcMain.handle(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, nsfwKey(), nsfwFetch()))
+  on(CH.nsfwInstallPet, (_e, petId: string, pet: NsfwPet) => nsfwInstallPet(petId, pet, nsfwKey(), nsfwFetch()))
+  on(CH.nsfwInstallBg, (_e, bg: NsfwBg) => nsfwInstallBg(bg, nsfwKey(), nsfwFetch()))
   // Does the local file behind a forge-bg:// URL still exist? (An installed extra bg may have been
   // GC'd; if gone, the renderer re-downloads instead of pointing at a missing file.)
-  ipcMain.handle(CH.nsfwBgExists, (_e, url: string) => {
+  on(CH.nsfwBgExists, (_e, url: string) => {
     const rel = bgRelFromUrl(url)
     const abs = rel ? resolveBackgroundAbs(rel) : null
     return { exists: !!abs && existsSync(abs) }
@@ -1450,35 +1847,35 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // Built-in wallpapers: public jsDelivr catalog + images, downloaded on demand through the user's proxy
   // and stored on disk like any uploaded background. No activation code, no Worker (so no Worker quota).
-  const wallpaperFetch = () => makeContentFetch(readSettings().termProxy) // proxy-first, direct fallback (also used by pet packs)
-  ipcMain.handle(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
-  ipcMain.handle(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch(), previewCache))
-  ipcMain.handle(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
+  const wallpaperFetch = () => makeContentFetch(readSettings().appProxy) // 壁纸/宠物包跟设备走(Q4);proxy-first, direct fallback
+  on(CH.wallpaperCatalog, () => wallpaperCatalog(wallpaperFetch()))
+  on(CH.wallpaperPreview, (_e, item: WallpaperItem) => wallpaperPreview(item, wallpaperFetch(), previewCache))
+  on(CH.wallpaperInstall, (_e, item: WallpaperItem) => wallpaperInstall(item, wallpaperFetch()))
 
   // Downloadable pet packs — same public jsDelivr pipeline as wallpapers, no activation code.
-  ipcMain.handle(CH.petPackCatalog, () => petPackCatalog(wallpaperFetch()))
-  ipcMain.handle(CH.petPackPreview, (_e, item: { thumb: string }) => petPackPreview(item, wallpaperFetch()))
-  ipcMain.handle(CH.petPackInstall, (_e, petId: string, item: PetPackItem) => petPackInstall(petId, item, wallpaperFetch()))
-  ipcMain.handle(CH.growthPackInstall, (_e, petId: string, item: GrowthPackItem) => growthPackInstall(petId, item, wallpaperFetch()))
+  on(CH.petPackCatalog, () => petPackCatalog(wallpaperFetch()))
+  on(CH.petPackPreview, (_e, item: { thumb: string }) => petPackPreview(item, wallpaperFetch()))
+  on(CH.petPackInstall, (_e, petId: string, item: PetPackItem) => petPackInstall(petId, item, wallpaperFetch()))
+  on(CH.growthPackInstall, (_e, petId: string, item: GrowthPackItem) => growthPackInstall(petId, item, wallpaperFetch()))
 
   // codex-pets.net 宠物市场(第三方社区库,插件 gating)。走同一条 proxy-first fetch 避免 CORS,但**必须带
   // 超时** —— 它是个第三方社区小站,慢/挂是常态,而 undici 的 fetch 自己没有整体超时:不设死线就是用户
   // 盯着转圈直到天荒地老。代理那一跳给更短的死线,超时即回退直连(以前只有代理"抛异常"才回退,挂起不回退)。
   const marketFetch = (timeoutMs: number) =>
-    makeContentFetch(readSettings().termProxy, undefined, { timeoutMs, proxyTimeoutMs: 5_000 })
-  ipcMain.handle(CH.codexMarketCatalog, (_e, page: number) => codexMarketCatalog(page, marketFetch(8_000)))
-  ipcMain.handle(CH.codexMarketPreview, (_e, url: string) => codexMarketPreview(url, marketFetch(15_000)))
-  ipcMain.handle(CH.codexMarketInstall, (_e, item: CodexMarketPet) => codexMarketInstall(item, marketFetch(60_000)))
+    makeContentFetch(readSettings().appProxy, undefined, { timeoutMs, proxyTimeoutMs: 5_000 })   // 宠物市场跟设备走(Q4)
+  on(CH.codexMarketCatalog, (_e, page: number) => codexMarketCatalog(page, marketFetch(8_000)))
+  on(CH.codexMarketPreview, (_e, url: string) => codexMarketPreview(url, marketFetch(15_000)))
+  on(CH.codexMarketInstall, (_e, item: CodexMarketPet) => codexMarketInstall(item, marketFetch(60_000)))
 
   const MAX_PINNED = 5
-  ipcMain.handle(CH.workspacesList, () => {
+  on(CH.workspacesList, () => {
     const s = readSettings()
     // The legacy in-memory orchestrator run is gone; run2 runs don't surface a "live path" here.
     const livePath = undefined
     return listWorkspaces(livePath, s.pinnedWorkspaces, s.workspaceOrder)
   })
-  ipcMain.handle(CH.workspacesHomeStats, () => readHomeStats(readSettings().termProxy))
-  ipcMain.handle(CH.workspacesSetPinned, (_e, a: { path: string; pinned: boolean }) => {
+  on(CH.workspacesHomeStats, () => readHomeStats(readSettings().agentProxy))
+  on(CH.workspacesSetPinned, (_e, a: { path: string; pinned: boolean }) => {
     const s = readSettings()
     let pinned = s.pinnedWorkspaces.filter(p => p !== a.path)
     if (a.pinned) {
@@ -1493,7 +1890,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const livePath = undefined
     return listWorkspaces(livePath, pinned, s.workspaceOrder)
   })
-  ipcMain.handle(CH.workspacesSetOrder, (_e, a: { order: string[] }) => {
+  on(CH.workspacesSetOrder, (_e, a: { order: string[] }) => {
     const s = readSettings()
     writeSettings({ ...s, workspaceOrder: a.order })
     // Keep every window's settings snapshot fresh so a later config:set-settings (which writes the
@@ -1509,7 +1906,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const livePath = undefined
     return listWorkspaces(livePath, s.pinnedWorkspaces, s.workspaceOrder)
   }
-  ipcMain.handle(CH.workspaceArchive, (_e, path: string) => {
+  on(CH.workspaceArchive, (_e, path: string) => {
     cancelWorkspaceDelegates(path)   // 归档=只读封存,先停掉该工作区后台还在跑的 delegate 子代理
     // 描述在 archiveWorkspaceLifecycle 里就地取自最后一个聊过的会话标题 —— 归档不再起「摘要 agent」
     // (那会在刚封存的目录里拉起一个 CLI 进程,被外部 agent 监控看见并推通知)。
@@ -1517,34 +1914,35 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })
-  ipcMain.handle(CH.workspaceRestore, (_e, path: string) => {
+  on(CH.workspaceRestore, (_e, path: string) => {
     restoreWorkspaceLifecycle(path)
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })
-  ipcMain.handle(CH.workspaceDelete, async (_e, path: string) => {
+  on(CH.workspaceDelete, async (_e, path: string) => {
     cancelWorkspaceDelegates(path)   // 删除前先停掉后台 delegate 子代理,避免孤儿进程仍在读/写将被删的目录
     const r = await deleteWorkspace(path)
     broadcast(CH.workspacesChanged, {})
     return { ...r, list: wsList() }
   })
   // 移除:仅从列表移除,保留磁盘文件(可重新添加目录恢复)。
-  ipcMain.handle(CH.workspaceRemove, (_e, path: string) => {
+  on(CH.workspaceRemove, (_e, path: string) => {
     removeWorkspaceFromList(path)
     broadcast(CH.workspacesChanged, {})
     return wsList()
   })
-  // 在 Finder / 资源管理器 / 文件管理器中打开该目录(跨平台:shell.openPath)。
-  ipcMain.handle(CH.revealPath, async (_e, path: string) => {
-    const err = await shell.openPath(path)   // '' on success; non-empty error string otherwise
+  // 在 Finder / 资源管理器 / 文件管理器中打开该目录。走宿主能力 —— 远程时「打开」这件事
+  // 只在客户端那台机器上才有意义,daemon 那台没人看着屏幕。
+  on(CH.revealPath, async (_e, path: string) => {
+    const err = await caps.openPath(path)   // '' on success; non-empty error string otherwise
     return err ? { ok: false as const, error: err } : { ok: true as const }
   })
   // 用系统默认浏览器打开一个 http(s) 链接(仅放行 http/https,拒绝其它协议以免被当作命令/文件执行)。
-  ipcMain.handle(CH.openExternal, async (_e, url: string) => {
+  on(CH.openExternal, async (_e, url: string) => {
     try {
       const u = new URL(String(url))
       if (u.protocol !== 'http:' && u.protocol !== 'https:') return { ok: false as const, error: 'unsupported protocol' }
-      await shell.openExternal(u.toString())
+      await caps.openExternal(u.toString())
       return { ok: true as const }
     } catch (e) {
       return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
@@ -1553,26 +1951,27 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
 
   // ── 用外部软件打开(「打开位置」下拉) ─────────────────────────────────────────
   // Extract an app's real icon → dataURL for the dropdown (best-effort; falls back to a glyph).
-  // On macOS we read the bundle's own .icns first: app.getFileIcon returns a generic placeholder
-  // (an identical blank icon for every app) on some macOS builds. getFileIcon stays as the fallback
-  // for apps without a standalone .icns (Assets.car system apps) and for non-macOS platforms.
+  // On macOS we read the bundle's own .icns first: the host's getFileIcon returns a generic
+  // placeholder (an identical blank icon for every app) on some macOS builds. caps.fileIcon stays as
+  // the fallback for apps without a standalone .icns (Assets.car system apps) and for other platforms.
   const openerIcon = async (appPath: string): Promise<string | undefined> => {
+    // macOS: read the bundle's own .icns first (see readMacAppIcon). Windows: getFileIcon extracts
+    // the icon embedded in the .exe, which is the real per-app icon — no special case needed.
     if (process.platform === 'darwin') {
       const real = await readMacAppIcon(appPath)
       if (real) return real
     }
-    try { const img = await app.getFileIcon(appPath, { size: 'normal' }); return img.isEmpty() ? undefined : img.toDataURL() }
-    catch { return undefined }
+    return caps.fileIcon(appPath)
   }
-  const runOpen = (args: string[]) => new Promise<void>((res, rej) => {
-    execFile('open', args, (err) => (err ? rej(err) : res()))
-  })
+  // 启动逻辑搬到了 openers/launch.ts(可测),并且**不再拿退出码当成败判据** ——
+  // Windows 的 explorer.exe 成功时也返回 1,于是「文件夹打开了却弹框说命令出错」。
+  // 见那个文件顶部的说明。
   let openersCache: DetectedOpener[] = []
-  ipcMain.handle(CH.openersDetect, async (_e, refresh?: boolean) => {
+  on(CH.openersDetect, async (_e, refresh?: boolean) => {
     openersCache = await detectOpeners(openerIcon, !!refresh)
     return openersCache
   })
-  ipcMain.handle(CH.openersOpen, async (_e, arg: { openerId: string; folder: string; file?: string }) => {
+  on(CH.openersOpen, async (_e, arg: { openerId: string; folder: string; file?: string }) => {
     let op = resolveOpener(arg.openerId, openersCache)
     // Cold cache (renderer never called detect this session) — populate once, then retry.
     if (!op) { openersCache = await detectOpeners(openerIcon, false); op = resolveOpener(arg.openerId, openersCache) }
@@ -1581,7 +1980,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // the renderer to remove it too (removedId), instead of forcing a full rescan.
     if (!existsSync(op.appPath)) {
       openersCache = withoutOpener(openersCache, op.id)
-      try { writeJsonAtomic(openersCacheFile(), { apps: openersCache }) } catch { /* best-effort */ }
+      try { writeJsonAtomic(openersCacheFile(), { v: OPENERS_CACHE_VERSION, apps: openersCache }) } catch { /* best-effort */ }
       return { ok: false as const, error: `${op.name} 已不存在,已从列表移除`, removedId: op.id }
     }
     // Guard the TARGET path: on a fresh install a workspace is navigable before its per-project repos
@@ -1594,13 +1993,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (!existsSync(arg.folder)) {
       return { ok: false as const, error: '该位置尚不存在 —— 项目仓库还未拉取完成或克隆失败,请稍候或检查工作区状态' }
     }
-    const argvs = buildOpenCommand(op.openMode, op.appPath, { folder: arg.folder, file: arg.file })
-    try { for (const args of argvs) await runOpen(args); return { ok: true as const } }
+    const cmds = buildOpenCommand(process.platform, op.openMode, op.appPath, { folder: arg.folder, file: arg.file }, op.argStyle)
+    try { for (const cmd of cmds) await launchOpener(cmd); return { ok: true as const } }
     catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
   })
-  ipcMain.handle(CH.workspacesOpenDir, async () => {
-    const r = await dialog.showOpenDialog({ properties: ['openDirectory'] })
-    const dir = r.filePaths[0]
+  on(CH.workspacesOpenDir, async (_e, explicitPath?: string) => {
+    // 带路径 = 客户端已经用服务端目录选择器选好了(远程场景),不需要再弹本地对话框 ——
+    // 也正因为如此,这个 handler 在无头 daemon 上照样能用。
+    const [dir] = explicitPath ? [explicitPath] : await caps.pickPaths({ kind: 'directory' })
     if (dir) {
       const wsJson = join(dir, '.forge', 'workspace.json')
       if (existsSync(wsJson)) {
@@ -1612,30 +2012,39 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     return listWorkspaces(livePath, readSettings().pinnedWorkspaces)
   })
 
-  ipcMain.handle(CH.configExportProjects, async () => {
+  on(CH.configExportProjects, async () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const r = await dialog.showSaveDialog({ title: '导出项目配置', defaultPath: `myFlowForge-projects-${stamp}.json` })
-    if (r.canceled || !r.filePath) return { ok: false as const, canceled: true }
-    try { await writeFile(r.filePath, JSON.stringify(readProjects(), null, 2), 'utf8'); return { ok: true as const, path: r.filePath } }
-    catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
+    return caps.saveFile(`myFlowForge-projects-${stamp}.json`, JSON.stringify(readProjects(), null, 2), '导出项目配置')
   })
+  // 只出内容,不落盘 —— 连着远程时由路由器接上客户端的 client:save-file(见 router.ts)。
+  on(CH.configExportProjectsData, () => {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    return { name: `myFlowForge-projects-${stamp}.json`, content: JSON.stringify(readProjects(), null, 2), title: '导出项目配置' }
+  })
+  // 只落盘,不管内容从哪儿来。永远在**客户端**执行:保存对话框要弹在有人看着的那块屏幕上。
+  on(CH.clientSaveFile, (_e, a: { name: string; content: string; title?: string }) =>
+    caps.saveFile(String(a?.name ?? 'export.txt'), String(a?.content ?? ''), a?.title))
 
   // ── App debug log ───────────────────────────────────────────────────────────
-  ipcMain.handle(CH.appLogGet, () => getAppLog())
-  ipcMain.handle(CH.appLogClear, () => { clearAppLog(); return getAppLog() })
-  ipcMain.handle(CH.appLogExport, async () => {
+  on(CH.appLogGet, () => getAppLog())
+  on(CH.appLogClear, () => { clearAppLog(); return getAppLog() })
+  on(CH.appLogExport, async () => {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const r = await dialog.showSaveDialog({ title: '导出调试日志', defaultPath: `myFlowForge-debug-${stamp}.log` })
-    if (r.canceled || !r.filePath) return { ok: false as const, canceled: true }
-    try { await writeFile(r.filePath, formatAppLog(), 'utf8'); return { ok: true as const, path: r.filePath } }
-    catch (e) { return { ok: false as const, error: e instanceof Error ? e.message : String(e) } }
+    return caps.saveFile(`myFlowForge-debug-${stamp}.log`, formatAppLog(), '导出调试日志')
   })
 
   // Memory management (记忆面板): read/write/clear the three tiers directly. Decoupled from the
   // memory.enabled toggle — the user can always view/edit/clear stored memory regardless of the switch.
-  ipcMain.handle(CH.memoryRead, (_e, a: MemoryArg) => memoryRead(a))
-  ipcMain.handle(CH.tokenUsageAggregate, () => aggregateTokenUsage())
-  ipcMain.handle(CH.growthSignalGet, () => currentGrowthSignal())
-  ipcMain.handle(CH.memoryWrite, (_e, a: MemoryArg) => memoryWrite(a))
-  ipcMain.handle(CH.memoryClear, (_e, a: MemoryArg) => memoryClear(a))
+  on(CH.memoryRead, (_e, a: MemoryArg) => memoryRead(a))
+  on(CH.tokenUsageAggregate, () => aggregateTokenUsage())
+  on(CH.growthSignalGet, () => currentGrowthSignal())
+  on(CH.memoryWrite, (_e, a: MemoryArg) => memoryWrite(a))
+  on(CH.memoryClear, (_e, a: MemoryArg) => memoryClear(a))
+
+  // 终端(PTY)。★挂在**这里**而不是宿主各自注册,是为了让它和别的方法共享同一条不变式:
+  //  「方法只有一份」。它单独走 `register` 是因为要拿到完整的 `InvokeCtx`(出口 + 是谁 + 断线钩子),
+  //  而上面那个 `on()` 兼容层只喂得出一个假 event。宿主想在退出时收拾 pty 就自己传一个进来。
+  ;(terminal ?? createTerminalService()).register(table)
+
+  return table
 }

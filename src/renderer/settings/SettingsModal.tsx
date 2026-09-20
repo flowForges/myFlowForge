@@ -113,11 +113,24 @@ const NAV: NavEntry[] = [
     ),
   },
   {
-    key: 'skills',
-    label: 'Skill',
+    // ★2026-09-05:这一格原来是「Skill」。它和「加载项」重复(那边扫的就是全局 skill/rule/MCP,
+    //  而且更全),而 MCP **需要一个能点的地方**(授权)。所以位置给了 MCP,Skill 那页删掉。
+    key: 'mcp',
+    label: 'MCP',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+        <path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0V8zM12 18v4" />
+      </svg>
+    ),
+  },
+  {
+    // 2026-09-05:CLI 自己的插件市场(claude 302 个 / codex 76 个可装)。★和下面那个「插件」
+    // (这个 app 自己的定时任务插件)不是一回事,所以标签叫「技能市场」。
+    key: 'market',
+    label: '技能市场',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <path d="M3 9l1.5-5h15L21 9M3 9h18M3 9v10a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V9M9 13h6" />
       </svg>
     ),
   },
@@ -130,6 +143,36 @@ const NAV: NavEntry[] = [
         <circle cx="8" cy="5" r="1.7" fill="currentColor" stroke="none" />
         <circle cx="14" cy="12" r="1.7" fill="currentColor" stroke="none" />
         <circle cx="10" cy="19" r="1.7" fill="currentColor" stroke="none" />
+      </svg>
+    ),
+  },
+  {
+    // ★★2026-09-02:从「主机」页拆出来的另一半 —— 别的设备连**进来**(网关 / 二维码 / 中转)。
+    //  它和「我连别人」除了「主机」这个词之外毫无关系,见 `PhonePane.tsx` 顶部那段。
+    // ★★2026-09-16 改名。拆分本身是对的,绕在名字上:原来叫「手机」和「远程主机」——
+    //  两个标签说的都是**谁**,而人脑子里装的是**方向**。用户原话:「我一直搞不清楚手机和远程主机,
+    //  我们捋一下场景:1 我们希望别人连我们,2 我们连别人。就这两个场景吧」。
+    //  而且「手机」这个名字还是**错的**:另一台电脑连进来走的也是这一页,名字里却只有手机。
+    //  ★两个标签必须**成对读**才有效 ——「别人连我」/「我连别人」摆在一起,方向一眼就分得开;
+    //   单独改一个就白改了。key 不动:它进了配置和路由,改名是纯文案的事。
+    key: 'phone',
+    label: '共享本机',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="7" y="2.5" width="10" height="19" rx="2.2" />
+        <path d="M10.8 18.6h2.4" />
+      </svg>
+    ),
+  },
+  {
+    key: 'hosts',
+    label: '远程主机',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3" y="4" width="18" height="7" rx="1.6" />
+        <rect x="3" y="13" width="18" height="7" rx="1.6" />
+        <circle cx="7" cy="7.5" r="1" fill="currentColor" stroke="none" />
+        <circle cx="7" cy="16.5" r="1" fill="currentColor" stroke="none" />
       </svg>
     ),
   },

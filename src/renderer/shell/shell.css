@@ -11,12 +11,44 @@
 .traffic .y { background: #febc2e; }
 .traffic .g { background: #28c840; }
 
+/* Windows caption buttons. Win11 metrics: 46px wide, full titlebar height, flush with the window's
+   top-right corner — hence the negative margin cancelling .titlebar's 14px right padding. Anything
+   inset from the corner breaks the "throw the pointer at the corner to close" muscle memory, and
+   Windows' own snap-layouts flyout expects the maximise button to sit exactly there. */
+.win-controls { display: flex; align-self: stretch; margin-right: -14px; -webkit-app-region: no-drag; }
+.win-controls button {
+  width: 46px; border-radius: 0; color: var(--fg-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .12s, color .12s;
+}
+.win-controls button svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; }
+.win-controls button:hover { background: var(--surface); color: var(--fg); }
+/* Close is the one control Windows tints rather than greys. The literal system red reads correctly
+   in both themes, so it is not tokenised. */
+.win-controls button.close:hover { background: #c42b1c; color: #fff; }
+
 .tb-title {
   font-size: 13px; font-weight: 600; color: var(--fg-2);
   letter-spacing: .01em; display: flex; align-items: center; gap: 8px;
+  /* ★min-width:0 是这一行的全部理由。flex item 的默认 min-width 是 auto = 内容的
+     min-content 宽度,而一个没有空格的长工作区名(for-test-0823ajsjshsh…)的 min-content
+     就是它自己那么长 —— 于是 .tb-title 拒绝收缩,右边的「编辑工作区」被挤成一列竖排的字。
+     真机上看到的就是这个。 */
+  min-width: 0;
+  /* ★2026-09-04:主机芯片搬到了底部状态栏,正中这块地不再被占。上限放宽到半个窗口 ——
+     留一个上限是因为右边还有导航/铃铛/系统键,面包屑不该一路铺过去把它们挤没。 */
+  max-width: 50vw;
 }
-.tb-title .crumb { color: var(--muted); font-weight: 500; }
+/* ★面包屑自己也要 min-width:0(它是 .tb-title 里的 flex item,同一条规矩),再加省略号。
+   max-width 是为了别让长名一路铺过去把右边的东西挤没:22vw 跟着窗口宽度走,340px 封顶。 */
+.tb-title .crumb {
+  color: var(--muted); font-weight: 500;
+  min-width: 0; max-width: min(340px, 22vw);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .tb-title .crumb b { color: var(--fg); font-weight: 600; }
+/* ★按钮永不参与收缩:它是固定文案的操作入口,宁可面包屑短一点,也不能把它压变形。 */
+.tb-edit-ws { flex: 0 0 auto; white-space: nowrap; }
 
 .tb-spacer { flex: 1; }
 
@@ -108,6 +140,15 @@
 .sb-new svg { width: 15px; height: 15px; }
 
 .sb-scroll { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+
+/* 列表拉不到 / 还没拉到时的那一行。★★只写字,不加底色/磨砂条(壁纸下的老规矩)。
+   它存在的理由:空白的工作区列表在界面上等于「这台机器没有工作区」,而切到一台连不上的
+   主机时真相是「没答上来」——两种空必须分得开。 */
+.sb-state {
+  padding: 10px 10px 12px; font-size: 12px; line-height: 1.6; color: var(--muted);
+}
+.sb-state.bad { color: var(--err); }
+.sb-state span { display: block; margin-top: 3px; font-size: 11.5px; opacity: .85; word-break: break-word; }
 
 .ws-group { margin-top: 6px; }
 /* Stacked sections (e.g. 置顶 above 全部) — spacing only; the section headers do the separating. */
@@ -494,10 +535,30 @@
 
 /* ---- StatusBar component rules ---- */
 
-.sb-models { display: flex; align-items: center; gap: 4px; }
+/* ★★左右两组抢地方时,**一定是左边让**。
+   左边那串是「这台机器上装了哪些编码 CLI」——只读的指示器;右边那串全是控件(切主机 /
+   终端 / 实时日志 / 检查更新)。挤掉一个指示器只是少看见一条信息,挤掉一个控件是**点不到**。
+   ★★实测(2026-09-04,13 个 provider 全装 + 900px 窗口):不加这几条的话右边那组从 x=1191 起画,
+   也就是窗口右边界外 291px,整组 554px 在屏幕外;而且状态栏从 30px 撑到 67px —— 因为 pill 里的
+   「Claude Code」被挤成了两行。两个症状同一个根因:flex item 默认 min-width:auto,左边这组
+   拒绝收缩到内容宽度以下,于是把右边整个推出去。 */
+.sb-models {
+  display: flex; align-items: center; gap: 4px;
+  /* 拿走所有剩余空间(右边那组因此自然贴右),但**允许缩到 0** —— min-width:0 是这一行的全部理由。 */
+  flex: 1 1 auto; min-width: 0;
+  /* 装得太多就横向滚动,而不是把右边顶出去。滚动条藏起来:30px 高的栏里挂一根滚动条比溢出还难看,
+     触控板/滚轮照样能推。overflow-y 必须显式 hidden,否则 overflow-x:auto 会把 y 也变成 auto。 */
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+  /* 右端淡出:被切掉的边缘要看起来像「后面还有」,而不是像画崩了。没溢出时淡的是空白,无副作用。 */
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.sb-models::-webkit-scrollbar { display: none; }
 .sb-model {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 9px; border-radius: 6px; font-weight: 500; transition: .14s;
+  /* ★nowrap + 不收缩:少了它,「Claude Code」「Cursor Agent」这些带空格的名字会折成两行,
+     把整条 30px 的栏撑高。这是上面那次实测里 67px 的来源。 */
+  flex: 0 0 auto; white-space: nowrap;
 }
 .sb-model:hover { background: var(--surface); }
 .sb-model .mc-logo-sm {
@@ -511,14 +572,30 @@
 
 .sb-div { width: 1px; height: 14px; background: var(--border); margin: 0 8px; }
 
+/* ★不参与收缩:这一组是控件,宁可左边滚动也不能让它被挤扁或挤出屏幕。
+   ★原来靠 `margin-left:auto` 贴右,现在由 .sb-models 的 flex-grow 顶到右边 —— 两者不能同时用:
+   auto 外边距会**先于** flex-grow 吃掉剩余空间,那样 .sb-models 永远长不起来,淡出蒙版就会
+   盖在最后一个 pill 上。 */
 .sb-right {
-  margin-left: auto; display: flex; align-items: center; gap: 14px;
+  flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
 }
 .sb-right .it { display: inline-flex; align-items: center; gap: 5px; }
 .sb-right .it svg { width: 12px; height: 12px; }
 
 .sb-ver { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+/* ★窗口窄到连右边这组自己都放不下时,先丢版本号。
+   实测(Electron 42 / Chromium 148):右边这组固定 389px,所以窗口 ≥500px 时一切完好;
+   到 360px 就装不下了,那时**必须有人先走**。走的只能是版本号 —— 这一组里它是唯一
+   一个「看一眼就行」的东西,主机 / 终端 / 实时日志三个都是要点的。
+   ★不靠 overflow:hidden 碰巧切在版本号上:那是运气,不是设计,而且切一半的字比没有更难看。
+   新版本那枚气泡跟着一起走 —— 它旁边就是铃铛和标题栏的更新入口,不会因此漏掉。 */
+@media (max-width: 520px) {
+  /* ★选择器必须带上 .sb-right:版本号那个 span 的 class 是 `it sb-ver`,而 `.sb-right .it`
+     (0,2,0)压过光秃秃的 `.sb-ver`(0,1,0)—— **媒体查询不加权重**。写成 `.sb-ver` 的话
+     这条规则会安静地不生效(第一版就是这样,靠 Electron 里量出来才发现)。 */
+  .sb-right .sb-ver, .sb-right .sb-update { display: none; }
+}
 .sb-ver.failed { color: var(--err); }
 .sb-update {
   display: none; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 99px; font-family: var(--mono);
@@ -678,3 +755,99 @@
 @media (prefers-reduced-motion: reduce) {
   .ws-item, .ws-sess, .ws-item .ws-name, .ws-sess .ws-sess-name, .ws-ava { transition: none; }
 }
+
+/* 主机芯片 —— 只在连着远程主机时出现,本机状态下组件根本不渲染,布局与以前完全一致。
+   放在面包屑前面是因为主机在语义上是「你现在看的是哪台机器」,是面包屑的前缀。
+   (它取代了早先横在窗口最顶上的整宽横幅:那条把整个窗口往下推了一截,像后贴上去的。) */
+.host-chip {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  height: 22px; padding: 0 9px; margin-right: 8px;
+  border-radius: 999px; border: 1px solid var(--border-2);
+  background: var(--surface); color: var(--fg-2);
+  font-size: 11.5px; font-weight: 550; line-height: 1; cursor: pointer;
+  -webkit-app-region: no-drag; max-width: 240px;
+}
+.host-chip:hover { border-color: color-mix(in oklch, var(--accent) 45%, var(--border-2)); }
+.host-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.host-chip .nm { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-chip .st { opacity: .85; white-space: nowrap; }
+.host-chip.ok .dot { background: oklch(72% .17 150); box-shadow: 0 0 0 2.5px oklch(72% .17 150 / .18); }
+.host-chip.warn .dot { background: oklch(78% .15 85); }
+/* 断线必须一眼看见 —— 整枚芯片变红,不只是那个点。 */
+.host-chip.bad { color: var(--err); border-color: color-mix(in oklch, var(--err) 45%, var(--border-2));
+  background: color-mix(in oklch, var(--err) 10%, var(--surface)); }
+.host-chip.bad .nm { color: var(--err); }
+.host-chip.bad .dot { background: oklch(66% .18 25); box-shadow: 0 0 0 2.5px oklch(66% .18 25 / .16); }
+
+/* 侧栏标题上的主机名:这一列工作区属于哪台机器。远程时才出现。 */
+/* 「这一列工作区属于哪台机器」。
+   ★★类名从 `.sb-host` 改成 `.sb-host-tag`:`.sb-host` 是**底部状态栏那颗按钮**的类,
+   两个毫不相干的东西共用一个名字,于是这枚**不可点**的标签白白继承了它的 `cursor: pointer`
+   和 `max-width: 260px`。同名迟早还会再撞一次。
+   ★用户报的「样式明显跟主体不搭…要么是实体的白色 或者实体的黑色」:原来是
+   半透明的 `--surface` + 一圈 `--border`,壁纸透上来就是一块糊的。现在是**实底**,
+   跟着主题走(浅色实白 / 深色实黑),不描边 —— 描边正是让它显得"糊"的那一半。 */
+.sb-head .sb-host-tag {
+  font-size: 11px; font-weight: 550; color: var(--fg-2);
+  padding: 1.5px 8px; border-radius: 999px;
+  background: var(--chip-solid);
+  max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── 主机按钮(底部状态栏最左)────────────────────────────────────────────────
+   ★★2026-09-04 从标题栏正中搬下来。原因不是审美:标题栏正中在 mac 和 Windows 上根本不是
+   同一块地方(红绿灯在左上 vs 系统键在右上,Windows 上整条工具栏还要重排),那枚芯片只能
+   靠 position:fixed + 50vw 硬挤,还逼着面包屑写死 max-width 给它让路。底部状态栏两个平台
+   完全一样、一个系统按钮都没有,这个位置一劳永逸。
+   长相**逐条复用 .sb-log**(「终端」「实时日志」那两枚)——同一条栏里的东西应该是兄弟,
+   而不是从楼上搬下来的家具。这里只补三样:图标、名字的省略号、圆点的四种颜色。 */
+.host-switch { position: relative; }
+.sb-host { cursor: pointer; max-width: 260px; }
+.sb-host .ico { font-size: 12.5px; line-height: 1; flex: 0 0 auto; }
+.sb-host .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-host .st { opacity: .8; white-space: nowrap; }
+.sb-host .cv { width: 11px; height: 11px; opacity: .5; flex: 0 0 auto; }
+/* 圆点=连接状态。绿 连上了 / 黄 连接中 / 红 连不上 / 灰 没连。
+   ★本机永远走 .ok —— 「本机」这台从定义上就在线,拿个灰点说它没连是错的。 */
+.sb-host.ok   .lg-dot { background: var(--ok); }
+.sb-host.warn .lg-dot { background: oklch(78% .15 85); animation: pulse 1.4s infinite; }
+.sb-host.idle .lg-dot { background: var(--faint); }
+/* 断线一眼看得见:红点之外整枚字也变红(状态栏字本来就淡,只换一个 6px 的点太容易漏掉)。 */
+.sb-host.bad, .sb-host.bad:hover { color: var(--err); }
+.sb-host.bad .lg-dot { background: oklch(66% .18 25); box-shadow: 0 0 0 2.5px oklch(66% .18 25 / .16); }
+.sb-host.busy { opacity: .6; }
+
+/* 切换失败当面说 —— 切主机是用户主动发起的动作,失败不能只留在控制台里。
+   ★往上弹:按钮贴着窗口底边。 */
+.hs-err {
+  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  max-width: 420px; padding: 7px 11px; border-radius: 9px; z-index: 40;
+  font-size: 12px; line-height: 1.5; color: var(--err);
+  background: color-mix(in oklch, var(--err) 12%, var(--bg));
+  border: 1px solid color-mix(in oklch, var(--err) 40%, transparent);
+  box-shadow: 0 8px 24px oklch(0% 0 0 / .18);
+}
+
+/* 菜单 portal 到 body:状态栏在壁纸模式下有 backdrop-filter,会造出层叠上下文把弹层压到
+   右侧面板后面(「打开位置」那个下拉栽过一次)。
+   ★.up = 锚 bottom 往上弹(位置由内联样式给)。菜单条数不定,锚 bottom 才不用反算高度。 */
+.hs-pop {
+  position: fixed; transform: translateX(-50%); min-width: 220px; max-width: 320px;
+  padding: 5px; border-radius: 11px; z-index: 50;
+  background: var(--bg); border: 1px solid var(--border);
+  box-shadow: 0 14px 40px oklch(0% 0 0 / .22);
+}
+.hs-pop.up { box-shadow: 0 -14px 40px oklch(0% 0 0 / .22); }
+.hs-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 9px; border: 0; border-radius: 8px; background: none; cursor: pointer;
+  font-size: 12.5px; color: var(--fg); text-align: left;
+}
+.hs-item:hover { background: color-mix(in oklch, var(--fg) 8%, transparent); }
+.hs-item .tick { width: 12px; flex: 0 0 auto; color: var(--accent); font-weight: 700; }
+.hs-item .nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hs-item .note { flex: 0 0 auto; font-size: 11px; color: var(--fg-2); }
+.hs-item.on .nm { font-weight: 600; }
+.hs-item.plain .nm { color: var(--fg-2); }
+.hs-sep { height: 1px; margin: 5px 7px; background: var(--border); }
+.hs-item .ico { width: 16px; flex: 0 0 auto; font-size: 13px; line-height: 1; text-align: center; }

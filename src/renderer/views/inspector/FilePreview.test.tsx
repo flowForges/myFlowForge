@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { FilePreview } from './FilePreview'
 
 beforeEach(() => {
@@ -75,3 +75,51 @@ describe('FilePreview — .html 与图片', () => {
   })
 })
 
+
+describe('复制整份文件', () => {
+  const clip = () => {
+    const writeText = vi.fn(async (_t: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    return writeText
+  }
+
+  it('点一下把这个文件的全部内容放进剪贴板', async () => {
+    const writeText = clip()
+    render(<FilePreview open cwd="/w" file="src/a.ts" type="M" onClose={() => {}} />)
+    await act(async () => { fireEvent.click(screen.getByTitle('复制这个文件的全部内容')) })
+    expect(writeText).toHaveBeenCalledWith('const x = 1\nconst y = 2')
+    expect(screen.getByText('已复制')).toBeTruthy()
+  })
+
+  it('★★Diff 模式下复制的也是**整份文件**,不是带 +/- 的那一屏', async () => {
+    // 用户要的是「复制当前文件内的内容」。一份带 diff 标记的文本粘到哪儿都是坏的:
+    // 粘进编辑器编译不过,粘给模型全是噪音。
+    const writeText = clip()
+    ;(window as any).forge.gitDiff = vi.fn(async () => [
+      { kind: 'del', text: '-const x = 0', ln: 1 },
+      { kind: 'add', text: '+const x = 1', ln: 1 },
+    ])
+    render(<FilePreview open cwd="/w" file="src/a.ts" type="M" onClose={() => {}} initialMode="diff" />)
+    await act(async () => { fireEvent.click(screen.getByTitle('复制这个文件的全部内容')) })
+    const copied: string = writeText.mock.calls[0]![0]
+    expect(copied).toBe('const x = 1\nconst y = 2')
+    expect(copied).not.toContain('+const')
+    expect(copied).not.toContain('-const')
+  })
+
+  it('★剪贴板不可用时说出来,不是点了没反应', async () => {
+    // 静默失败会让人以为按钮坏了,然后反复点。
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText: vi.fn(async () => { throw new Error('denied') }) }, configurable: true,
+    })
+    render(<FilePreview open cwd="/w" file="src/a.ts" type="M" onClose={() => {}} />)
+    await act(async () => { fireEvent.click(screen.getByTitle('复制这个文件的全部内容')) })
+    expect(screen.getByText('复制失败')).toBeTruthy()
+  })
+
+  it('图片没有这颗按钮 —— 复制一张图的「内容」没有意义', async () => {
+    ;(window as any).forge.imageFile = vi.fn(async () => ({ dataUrl: 'data:image/png;base64,AA' }))
+    render(<FilePreview open cwd="/w" file="a.png" type="A" onClose={() => {}} />)
+    expect(screen.queryByTitle('复制这个文件的全部内容')).toBeNull()
+  })
+})

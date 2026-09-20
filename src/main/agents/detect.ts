@@ -7,6 +7,8 @@ import { BUILTIN_IDS as CATALOG_BUILTIN_IDS, getBuiltinProvider } from '@shared/
 import { readAgentsConfig, writeAgentsConfig } from '../config/store'
 import { refreshProviderModels } from './refreshModels'
 import { probeCli, type CliProbe } from './cliVersion'
+import { lookupBin } from './lookupBin'
+import { probeAuth, type AuthState } from './credProbe'
 
 // Agent CLIs (claude/codex) are Node wrappers whose FIRST `--version` after a cold boot can take
 // several seconds (Gatekeeper check + node startup). 5s used to time out → a working CLI got marked
@@ -16,11 +18,11 @@ const STALE_TTL_MS = 7 * 24 * 3600 * 1000   // 7 days
 const BUILTIN_IDS = new Set(CATALOG_BUILTIN_IDS)
 
 // Resolve a bin name to its absolute path (so the UI can show *where* it was found).
-// Already-absolute paths pass through; bare names are looked up on PATH via `which`.
+// Already-absolute paths pass through; bare names are looked up on PATH (which/where per platform).
 async function resolveBinPath(bin: string | undefined, env: NodeJS.ProcessEnv): Promise<string> {
   if (!bin) return ''
   if (isAbsolute(bin)) return bin
-  try { const r = await execa('which', [bin], { env }); return r.stdout.trim() || bin } catch { return bin }
+  return (await lookupBin(bin, env)) ?? bin
 }
 
 // Resolve to `fallback` if the promise neither resolves nor rejects within `ms`.
@@ -40,7 +42,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
 async function defaultBinPresent(bin: string | undefined, env: NodeJS.ProcessEnv): Promise<boolean> {
   if (!bin) return false
   if (isAbsolute(bin)) return existsSync(bin)
-  try { const r = await execa('which', [bin], { env }); return r.exitCode === 0 && r.stdout.trim().length > 0 } catch { return false }
+  return (await lookupBin(bin, env)) !== null
 }
 
 export interface DetectOptions {
@@ -55,6 +57,11 @@ export interface DetectOptions {
   trustPersisted?: boolean
   // Injectable for tests: persist the detection snapshot. Defaults to writing agents.json.
   persist?: (updates: { id: string; installed: boolean; binPath: string; version: string; at: number }[]) => void
+  /**
+   * 可注入:查登录状态。默认走 `credProbe.probeAuth`。
+   * ★只对**已装上**的 provider 查 —— 没装的 CLI 问它登录没有毫无意义,还白花一次 spawn。
+   */
+  probeAuthState?: (providerId: string, bin: string | undefined, env: NodeJS.ProcessEnv) => Promise<AuthState>
   // Injectable for tests: strict "is the bin definitively present" check, distinct from probeCli
   // (which conflates absent/slow/erroring into one `installed:false`). Defaults to a real
   // which/absolute-path-exists check. Only a `false` here lets a force 重新检测 wipe a provider.
@@ -74,6 +81,7 @@ export async function detectProviders(
   const nowMs = opts.nowMs ?? Date.now()
   const trustPersisted = opts.trustPersisted ?? true
   const binPresent = opts.binPresent ?? defaultBinPresent
+  const probeAuthState = opts.probeAuthState ?? ((id, bin, e) => probeAuth(id, bin, e))
 
   const agentsCfg = readAgentsConfig()
   const persist = opts.persist ?? defaultPersist
@@ -126,6 +134,12 @@ export async function detectProviders(
       version = installed ? (provCfg?.detectedVersion ?? '') : ''
     }
 
+    // ★登录状态和模型列表一起并发拿(都只在装上了才有意义)。
+    //  ★`withTimeout` 兜一层:一个卡住的 `<bin> auth status` 不能把整排 agent 拖没。
+    const auth: AuthState = installed
+      ? await withTimeout(probeAuthState(p.id, p.bin, env), timeoutMs, 'unknown' as AuthState)
+      : 'unknown'
+
     let models: { id: string; label: string; description?: string }[] = []
     if (installed) {
       const cachedModels = provCfg?.modelsCache ?? []
@@ -140,7 +154,8 @@ export async function detectProviders(
     return {
       id: p.id, displayName: p.displayName, installed, models, bin: p.bin ?? '', binPath,
       custom: !BUILTIN_IDS.has(p.id), liveModels: p.capabilities.liveModels,
-      installCmd: meta?.installCmd, authCmd: meta?.authCmd, installHelp: meta?.installHelp,
+      installCmd: meta?.installCmd, installAltCmd: meta?.installAltCmd, authCmd: meta?.authCmd, installHelp: meta?.installHelp,
+      auth,
       ...(version ? { version } : {}),
       ...(provCfg?.timezone ? { timezone: provCfg.timezone } : {}),
     }

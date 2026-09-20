@@ -18,7 +18,7 @@ function withReviewDefaults(stages: WsStage[]): WsStage[] {
 // (libId) template stages against the global custom-stage library, map defaultAgent/defaultModel →
 // provider/model, carry over custom-stage identity/behavior flags, and fill review defaults.
 // Shared by resolveStages' fallback path and resolveWorkflowStages' fallback path (DRY).
-function materializeGlobalStages(g: Workflow, customStagesById: StageDefById = {}): WsStage[] {
+export function materializeGlobalStages(g: Workflow, customStagesById: StageDefById = {}): WsStage[] {
   return withReviewDefaults(resolveLibRefs(g.stages, customStagesById).map(s => ({
     key: s.key, provider: s.defaultAgent, model: s.defaultModel,
     // Carry a custom stage's identity + behavior flags from the template onto the resolved WsStage.

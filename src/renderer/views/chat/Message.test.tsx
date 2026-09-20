@@ -3,12 +3,14 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { Message } from './Message'
 
 describe('Message', () => {
-  it('ai message with thinking, done: shows 回答 eyebrow and ans body', () => {
+  // 2026-09-07:结论落地后「回答」标记整枚不渲染了(它只说了「下面是回答」,而位置已经说清楚)。
+  // 完整的取舍和边界见 Message.eyebrow.test.tsx。
+  it('ai message with thinking, done: 正文在,「回答」标记不在', () => {
     const { container } = render(<Message msg={{ id: 'a', who: 'ai', text: 'hi', think: { label: '已思考', steps: ['x'] } } as any} streaming={false} />)
-    expect(screen.getByText('回答')).toBeInTheDocument()
+    expect(screen.queryByText('回答')).toBeNull()
     expect(container.querySelector('.msg-body.ans')).toBeTruthy()
   })
-  it('ai message while streaming: caret, no 回答 eyebrow', () => {
+  it('ai message while streaming: caret, 「回答中」一行状态', () => {
     const { container } = render(<Message msg={{ id: 'a', who: 'ai', text: 'hi', think: { label: '思考中', steps: [] } } as any} streaming />)
     expect(screen.getByText('回答中')).toBeInTheDocument()
     expect(container.querySelector('.msg-body .pending')).toBeTruthy()

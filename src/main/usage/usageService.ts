@@ -50,7 +50,7 @@ export async function runUsagePlugin(
 ): Promise<PluginRunResult> {
   const fetchers = deps?.fetchers ?? DEFAULT_FETCHERS
   // Build the default client with the app's configured proxy so calls survive proxy-only networks.
-  const http = deps?.http ?? makeHttp(fetch, 10_000, readSettings().termProxy)
+  const http = deps?.http ?? makeHttp(fetch, 10_000, readSettings().agentProxy)
   const fetcher = p.provider ? fetchers[p.provider] : undefined
   if (!fetcher) return { ok: false, error: `不支持的 provider: ${p.provider ?? '?'}` }
   // A user-pasted credential overrides the provider's auto-read source.

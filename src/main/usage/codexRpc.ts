@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn } from 'node:child_process'
+import { spawnAgent } from '../agents/procGroup'
 import type { StatusbarUsage, UsageWindow } from './types'
 
 // Minimal child-process surface so tests can fake the app-server end to end.
@@ -29,7 +29,9 @@ function mapWindow(w: RpcWindow | undefined): UsageWindow | undefined {
 // sandbox flags keep the probe side-effect free. The server follows the LSP
 // handshake: initialize → initialized notification → regular requests.
 export function fetchCodexUsageViaRpc(deps: RpcDeps = {}): Promise<StatusbarUsage> {
-  const spawn = deps.spawn ?? ((cmd, args) => nodeSpawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true }))
+  // ★ 同 codexAppServer:Windows 上 codex 是 `codex.cmd`,node 原生 spawn 拿裸名 ENOENT。
+  // 走 execa(spawnAgent)才能解析 .cmd 包装。
+  const spawn = deps.spawn ?? ((cmd, args) => spawnAgent(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, reject: false }) as unknown as ReturnType<NonNullable<RpcDeps['spawn']>>)
   const timeoutMs = deps.timeoutMs ?? 10_000
   return new Promise<StatusbarUsage>((resolve, reject) => {
     const child = spawn('codex', ['-s', 'read-only', '-a', 'untrusted', 'app-server'])

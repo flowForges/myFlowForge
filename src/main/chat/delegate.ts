@@ -10,6 +10,7 @@ import { providerTimezone } from '../agents/providerConfig'
 import { startBridge, type BridgeRunCtx } from '../mcp/forgeBridge'
 import { STAGE_FORGE_TOOLS } from '../run/runTypes'
 import { startDelegateBatch, updateDelegateSession, updateDelegateState, addDelegateAgent } from './delegateRegistry'
+import { gateRegistry } from '../gate/gateRegistry'
 
 // Lightweight delegation (path A of the dual-path design): the main chat agent dispatches sub-agents
 // straight into project directories to read/write code and hands their results back — WITHOUT the
@@ -216,6 +217,7 @@ export function makeRunDelegate(deps: DelegateDeps) {
         timezone: providerTimezone(t.provider),
         overrides: (bridge && forgeUsable) ? {
           FORGE_SOCKET: bridge.socketPath,
+          FORGE_MCP_DIR: bridge.configDir,
           FORGE_AGENT_ID: t.id,
           ...(deps.mcpEntry ? { FORGE_MCP_ENTRY: deps.mcpEntry } : {}),
           FORGE_TOOLS: STAGE_FORGE_TOOLS,
@@ -247,7 +249,14 @@ export function makeRunDelegate(deps: DelegateDeps) {
           onActivity: () => beat(t.id),
           onState: () => {},
           onSession: (id: string) => { if (opts.sessionId) updateDelegateSession(opts.workspacePath, opts.sessionId, t.id, id) },
-          onConfirm: async () => 'deny',
+          // ★★不是「忘了接门」,是**这条路故意没有门**:委派出去的子代理跑在后台,没人守着,
+          //  放行等于让一个没人看的进程做不可逆的事。但这个决定要**在总线上登记一次**再执行 ——
+          //  写成一句 `async () => 'deny'` 的话,它在界面上和「门断了」长得一模一样,
+          //  而这正是「第五次漏门」查了半天才分清的那件事。理由写在 gateRegistry 的 AUTO_POLICY 里。
+          onConfirm: (req) => gateRegistry.autoDecide(
+            { origin: 'delegate', workspacePath: opts.workspacePath, sessionId: opts.sessionId, label: `委派 · ${t.name}` },
+            req,
+          ),
           onInput: async () => '',
           onHandoff: (p: HandoffPayload) => { summaries.set(t.id, p.summary) },
           onDone: () => { if (opts.sessionId) updateDelegateState(opts.workspacePath, opts.sessionId, t.id, 'ok'); opts.onAgentState?.(runId, t.id, 'ok', capturedOutput(t.id)) },

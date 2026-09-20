@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { sysFile } from '../config/paths'
 import { writeJsonAtomic } from '../util/atomicWrite'
 import { OPENER_CATALOG, type OpenerSpec } from './catalog'
+import { resolveFirstWindowsPath, type WinFsProbe } from './winPaths'
+import { queryAppPath, type RegQuery } from './winRegistry'
 import type { DetectedOpener } from '../../shared/openers'
 
 const pexec = promisify(execFile)
@@ -16,12 +18,22 @@ export type BundleFinder = (bundleId: string) => Promise<string | null>
 // detect.ts stays Electron-free so it's unit-testable.
 export type IconFn = (appPath: string) => Promise<string | undefined>
 
+// Everything platform detection needs, all injectable so the Windows path is testable on a Mac.
+export interface DetectDeps {
+  platform?: NodeJS.Platform
+  icon?: IconFn
+  findBundle?: BundleFinder   // macOS
+  env?: NodeJS.ProcessEnv     // Windows
+  fs?: WinFsProbe             // Windows
+  reg?: RegQuery              // Windows
+}
+
 export const openersCacheFile = () => sysFile('openers-cache.json')
 // Bump when the cache shape/contents change so old caches self-heal. v2 = entries carry app icons.
 // v3 = icons are read from the app bundle's real .icns (v2 icons were generic getFileIcon
-// placeholders on some macOS builds — an identical blank square for every app), so bumping here
-// auto-invalidates those bad caches on next launch (no manual config deletion needed).
-export const OPENERS_CACHE_VERSION = 3
+// placeholders on some macOS builds — an identical blank square for every app).
+// v4 = entries carry `argStyle` (Windows launch shape) and the catalog is platform-scoped.
+export const OPENERS_CACHE_VERSION = 4
 const noIcon: IconFn = async () => undefined
 
 async function mdfindBundle(bundleId: string): Promise<string | null> {
@@ -31,42 +43,57 @@ async function mdfindBundle(bundleId: string): Promise<string | null> {
   } catch { return null }
 }
 
-// First installed (and still-existing) bundle id wins.
-export async function findAppPath(spec: OpenerSpec, find: BundleFinder = mdfindBundle): Promise<string | null> {
-  for (const id of spec.bundleIds) {
+const realFsProbe: WinFsProbe = { exists: existsSync, readdir: (d) => readdirSync(d) }
+
+// macOS: first installed (and still-existing) bundle id wins.
+export async function findMacAppPath(spec: OpenerSpec, find: BundleFinder = mdfindBundle): Promise<string | null> {
+  for (const id of spec.mac?.bundleIds ?? []) {
     const p = await find(id)
     if (p && existsSync(p)) return p
   }
   return null
 }
 
+// Windows: probe the known install locations first (cheap, no subprocess), then fall back to the
+// registry's `App Paths` for installs in a location no template can guess.
+export async function findWinAppPath(spec: OpenerSpec, deps: DetectDeps = {}): Promise<string | null> {
+  const loc = spec.win
+  if (!loc) return null
+  const hit = resolveFirstWindowsPath(loc.paths, deps.env ?? process.env, deps.fs ?? realFsProbe)
+  if (hit) return hit
+  if (!loc.exe) return null
+  return queryAppPath(loc.exe, deps.reg, (deps.fs ?? realFsProbe).exists)
+}
+
 // Scan the whole catalog for installed openers (+ icons). Runs all specs concurrently (order
-// preserved) so the full scan is bounded by the slowest mdfind, not their sum. `find`/`icon`
-// injectable for tests.
-export async function scanOpeners(icon: IconFn = noIcon, find: BundleFinder = mdfindBundle): Promise<DetectedOpener[]> {
+// preserved) so the full scan is bounded by the slowest probe, not their sum.
+export async function scanOpeners(deps: DetectDeps = {}): Promise<DetectedOpener[]> {
+  const platform = deps.platform ?? process.platform
+  const icon = deps.icon ?? noIcon
   const found = await Promise.all(OPENER_CATALOG.map(async (spec): Promise<DetectedOpener | null> => {
-    const appPath = await findAppPath(spec, find)
+    const appPath = platform === 'win32'
+      ? await findWinAppPath(spec, deps)
+      : await findMacAppPath(spec, deps.findBundle)
     if (!appPath) return null
-    return { id: spec.id, name: spec.name, openMode: spec.openMode, appPath, icon: await icon(appPath) }
+    return { id: spec.id, name: spec.name, openMode: spec.openMode, appPath, argStyle: spec.win?.argStyle, icon: await icon(appPath) }
   }))
   return found.filter((o): o is DetectedOpener => o !== null)
 }
 
 // Cached entry point for the IPC handler: read the on-disk cache unless `refresh`, else scan +
-// persist. The `mdfind` scan (the slow part) only runs on a cold cache or explicit refresh.
-export async function detectOpeners(icon: IconFn = noIcon, refresh = false): Promise<DetectedOpener[]> {
+// persist. The scan (the slow part) only runs on a cold cache or explicit refresh.
+export async function detectOpeners(icon: IconFn = noIcon, refresh = false, deps: DetectDeps = {}): Promise<DetectedOpener[]> {
   const file = openersCacheFile()
   if (!refresh && existsSync(file)) {
     try {
       const parsed = JSON.parse(readFileSync(file, 'utf8'))
       const apps = Array.isArray(parsed?.apps) ? parsed.apps as DetectedOpener[] : null
-      // Only trust a cache written by an icon-capable build (version tag). A pre-icon cache lacks it,
-      // so it re-scans ONCE to extract icons (placeholder glyphs self-heal) — not on every call, even
-      // if getFileIcon legitimately fails for some app (the re-written v-tagged cache is then trusted).
+      // Only trust a cache written by the current build (version tag). An older cache re-scans ONCE —
+      // not on every call, even if icon extraction legitimately fails for some app.
       if (apps && parsed?.v === OPENERS_CACHE_VERSION) return apps
     } catch { /* corrupt cache — fall through to rescan */ }
   }
-  const apps = await scanOpeners(icon)
+  const apps = await scanOpeners({ ...deps, icon })
   try { writeJsonAtomic(file, { v: OPENERS_CACHE_VERSION, apps }) } catch { /* cache write is best-effort */ }
   return apps
 }

@@ -12,6 +12,9 @@ export interface SlashCommand {
   // instead of filling `template` into the chat box. Chat is pure chat now — it never auto-triggers a
   // workflow from a seeded phrase, so seeding one here was dead (and misleading) since P4-B.
   openLauncher?: boolean
+  // 2026-09-05:选中打开 MCP 面板。★`/mcp` 在 claude 的交互式界面里是一屏,我们跑非交互模式,
+  // 那一屏不存在 —— 这里接的是各 CLI 的 `mcp` 子命令。入口沿用 `/mcp` 这个打法,因为那是用户脑子里的名字。
+  openMcp?: boolean
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -19,6 +22,8 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   // 聊天框塞触发短语(聊天是纯聊天,不会从文字里自动识别并启动工作流)。
   { cmd: '/开启工作流', title: '开启工作流', desc: '按多阶段工作流执行(先出方案,批准后运行)', providers: 'all',
     template: '', openLauncher: true },
+  { cmd: '/mcp', title: 'MCP 服务器', desc: '看各 CLI 配了哪些 MCP、授权 / 取消授权', providers: 'all',
+    template: '', openMcp: true },
   { cmd: '/架构', title: '梳理仓库架构', desc: '目录结构、核心模块、关键数据流', providers: 'all',
     template: '梳理这个仓库的架构:目录结构、核心模块职责、关键数据流。' },
   { cmd: '/概览', title: '生成概览', desc: '梳理所有项目,生成一份概览文档落到工作区', providers: 'all',
@@ -54,6 +59,8 @@ export interface MenuCommand {
   // Carried from SlashCommand.openLauncher (built-in /工作流 only): picking it opens the run2 launcher
   // with no preselected workflow, instead of filling `template` — see Composer.chooseSlash.
   openLauncher?: boolean
+  // Carried from SlashCommand.openMcp (built-in /mcp only): picking it opens the MCP panel.
+  openMcp?: boolean
 }
 
 // One "/" entry per workspace workflow (Task 11's WsWorkflow list), so the user can name a workflow
@@ -73,7 +80,7 @@ export function mergeCommands(providerId: string, query: string, dynamic: MenuCo
   const q = query.replace(/^\//, '').trim().toLowerCase()
   const match = (cmd: string, title: string) => !q || cmd.slice(1).toLowerCase().includes(q) || title.toLowerCase().includes(q)
   const forge: MenuCommand[] = commandsForProvider(providerId, query)
-    .map(c => ({ cmd: c.cmd, title: c.title, desc: c.desc, template: c.template, kind: 'forge' as const, openLauncher: c.openLauncher }))
+    .map(c => ({ cmd: c.cmd, title: c.title, desc: c.desc, template: c.template, kind: 'forge' as const, openLauncher: c.openLauncher, openMcp: c.openMcp }))
   const seen = new Set(forge.map(c => c.cmd))
   // Workspace-workflow entries (identified by workflowId) are NEVER swallowed by a built-in name
   // clash — a workflow literally named e.g. "工作流" (the ensureWorkspaceWorkflows default, or a

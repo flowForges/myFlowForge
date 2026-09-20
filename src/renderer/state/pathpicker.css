@@ -1,0 +1,24 @@
+.pp-backdrop { position: fixed; inset: 0; background: color-mix(in oklch, black 42%, transparent);
+  display: flex; align-items: center; justify-content: center; z-index: 60; }
+.pp-modal { width: min(680px, 92vw); max-height: min(78vh, 640px); display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 14px; overflow: hidden;
+  box-shadow: 0 24px 60px oklch(0% 0 0 / .32); }
+.pp-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); }
+.pp-head h3 { margin: 0 0 4px; font-size: 15px; color: var(--fg); }
+.pp-head .where { font-size: 12px; color: var(--fg-2); }
+.pp-crumb { display: flex; align-items: center; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--fg-2); }
+.pp-crumb .path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left; font-family: var(--mono, ui-monospace, monospace); }
+.pp-list { flex: 1 1 auto; overflow: auto; padding: 6px; }
+.pp-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; cursor: pointer;
+  font-size: 13px; color: var(--fg); }
+.pp-item:hover { background: color-mix(in oklch, var(--fg) 7%, transparent); }
+.pp-item.file { color: var(--fg-2); }
+.pp-item .glyph { flex: 0 0 auto; opacity: .75; }
+.pp-item .ws { font-size: 11px; padding: 0 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--fg-2); }
+.pp-empty { padding: 26px; text-align: center; color: var(--fg-2); font-size: 13px; }
+.pp-err { padding: 12px 16px; color: var(--err); font-size: 12.5px; }
+.pp-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.pp-foot .grow { flex: 1 1 auto; }
+.pp-roots { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 16px 0; }

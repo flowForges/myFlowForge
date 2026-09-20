@@ -373,9 +373,16 @@ describe('ForgeBridge', () => {
     const ctx = makeCtx({ runId: 'run-long' })
     bridge = await startBridge(longDir, ctx)
 
-    expect(bridge.socketPath).toContain(tmpdir())
-    expect(bridge.socketPath).toContain('run-long')
-    expect(bridge.socketPath.length).toBeLessThanOrEqual(104) // darwin limit
+    // sun_path 的长度上限是 POSIX 的事;Windows 上地址是命名管道,压根没有这个限制,
+    // 所以那边只需确认它确实走了管道(具体规则由 bridgeAddress.test.ts 逐条覆盖)。
+    if (process.platform === 'win32') {
+      expect(bridge.socketPath.startsWith('\\\\.\\pipe\\')).toBe(true)
+      expect(bridge.socketPath).toContain('run-long')
+    } else {
+      expect(bridge.socketPath).toContain(tmpdir())
+      expect(bridge.socketPath).toContain('run-long')
+      expect(bridge.socketPath.length).toBeLessThanOrEqual(104) // darwin limit
+    }
   })
 
   // ─── Test 8: audit messages stamped with stage from ctx.agentStage ──────────

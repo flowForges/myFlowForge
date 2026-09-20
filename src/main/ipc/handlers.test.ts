@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { CH } from './channels'
+import { fakeHost } from '../host/fakeHost'
+import { tableCalls } from './testTable'
 
 const { readWorkspaceMock, writeWorkspaceMock, listWorkspacesMock, readWorkflowsMock, writeWorkflowsMock } = vi.hoisted(() => {
   const readWorkspaceMock = vi.fn()
@@ -180,8 +182,6 @@ beforeEach(async () => {
   mockScheduler.snapshot.mockReset().mockReturnValue({ plugins: [{ id: 'p1' }], results: {} })
   mockScheduler.reconcile.mockReset()
   mockScheduler.refresh.mockReset().mockResolvedValue(undefined)
-  const { ipcMain } = await import('electron') as any
-  ;(ipcMain.handle as any).mockClear()
 })
 
 afterEach(() => {
@@ -192,15 +192,14 @@ describe('registerIpc broadcast wiring', () => {
   it('★ 一轮结束后重播会话列表 —— 否则侧栏的「最后对话时间」永远停在上次拉列表时的值', async () => {
     const { registerIpc } = await import('./handlers')
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
     const { sendTurn } = await import('../chat/chatService') as any
     // 抓住 registerIpc 传给 sendTurn 的 emit,直接喂一个终态事件。
     sendTurn.mockReset().mockImplementation((_payload: any, deps: any) => {
       deps.emit({ workspacePath: '/ws/a', sessionId: 's1', type: 'done', message: { id: 'm', who: 'ai', text: 'hi', ts: '' } })
       return Promise.resolve({})
     })
-    const { ipcMain } = await import('electron') as any
-    const handler = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)?.[1]
+    const handler = calls.find((c: any[]) => c[0] === CH.chatSend)![1]
     handler({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [] })
     await new Promise(r => setTimeout(r, 0))
     const replay = sent.filter(([c, p]) => c === CH.sessionsChanged && (p as any).workspacePath === '/ws/a')
@@ -209,15 +208,34 @@ describe('registerIpc broadcast wiring', () => {
     expect((replay[replay.length - 1][1] as any).file.sessions[0]).toHaveProperty('lastMessageAt')
   })
 
+  it('chat:mark-seen 原样广播成 chat:seen(无状态,不落盘)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const sent: [string, unknown][] = []
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = calls.find((c: any[]) => c[0] === CH.chatMarkSeen)![1]
+    handler({}, { workspacePath: '/w/a', sessionId: 's1' })
+    expect(sent).toEqual([[CH.chatSeen, { workspacePath: '/w/a', sessionId: 's1' }]])
+  })
+
+  it('chat:mark-seen 缺工作区或会话时什么也不广播(别把一条空的「已读」发给所有人)', async () => {
+    const { registerIpc } = await import('./handlers')
+    const sent: [string, unknown][] = []
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = calls.find((c: any[]) => c[0] === CH.chatMarkSeen)![1]
+    // 手机端的 viewing 在换主机那一瞬就是 {wsPath:'', sessionId:''},这条用例是真会发生的。
+    handler({}, { workspacePath: '', sessionId: 's1' })
+    handler({}, { workspacePath: '/w/a', sessionId: '' })
+    expect(sent).toEqual([])
+  })
+
   it('broadcasts settingsChanged and calls onSettings when settings are written', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const sent: [string, unknown][] = []
     const onSettings = vi.fn()
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, onSettings)
-    const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.configSetSettings)
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost(), onSettings))
+    const call = calls.find((c: any[]) => c[0] === CH.configSetSettings)
     expect(call).toBeTruthy()
-    await call[1]({}, SETTINGS)
+    await call![1]({}, SETTINGS)
     // The broadcast settingsChanged payload must be STRICTLY the re-read value,
     // not the raw input the handler was called with.
     const changed = sent.find(([c]) => c === CH.settingsChanged)
@@ -230,15 +248,14 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chatSend serializes turns per workspace: second send is queued until first resolves', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     sendTurn.mockReset()
     let resolveFirst!: () => void
     sendTurn
       .mockImplementationOnce(() => new Promise<void>(r => { resolveFirst = r }))
       .mockImplementationOnce(() => Promise.resolve())
-    registerIpc(() => {}, {})
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
+    const send = calls.find((c: any[]) => c[0] === CH.chatSend)![1]
     const payload = { workspacePath: '/ws/a', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] }
     send({}, { ...payload, text: 'first' })
     send({}, { ...payload, text: 'second' })
@@ -253,7 +270,6 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chatSend: a turn that dispatched a fire-and-forget delegate stays busy until the batch completes (next send queues)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     const { startBridge } = await import('../mcp/forgeBridge') as any
     sendTurn.mockReset()
@@ -266,8 +282,8 @@ describe('registerIpc broadcast wiring', () => {
     sendTurn
       .mockImplementationOnce(async () => { cfg.delegate({ task: 'x' }); return { text: '已派发' } })
       .mockImplementationOnce(async () => ({ text: 'ok' }))
-    registerIpc(() => {}, {})
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
+    const send = calls.find((c: any[]) => c[0] === CH.chatSend)![1]
     const base = { workspacePath: '/ws/dg', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', attachments: [] }
     send({}, { ...base, text: 'first' })
     await new Promise(r => setTimeout(r, 0))
@@ -284,11 +300,10 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chatSend runs an ordinary chat turn (the legacy workflow engine is gone)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     sendTurn.mockReset().mockResolvedValue(undefined)
-    registerIpc(() => {}, {})
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
+    const send = calls.find((c: any[]) => c[0] === CH.chatSend)![1]
     send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'hi', attachments: [] })
     await new Promise(r => setTimeout(r, 0))
     expect(sendTurn).toHaveBeenCalledTimes(1)
@@ -296,12 +311,11 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chatSend while busy broadcasts queue-event with busy:true and a queue entry', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     sendTurn.mockReset().mockImplementation(() => new Promise<void>(() => {}))   // never resolves
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const send = calls.find((c: any[]) => c[0] === CH.chatSend)![1]
     const payload = { workspacePath: '/ws/a', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] }
     send({}, { ...payload, text: 'first' })
     send({}, { ...payload, text: 'second' })
@@ -313,12 +327,11 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chatCancelQueued removes a queued item; chatClearQueue empties the queue', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     sendTurn.mockReset().mockImplementation(() => new Promise<void>(() => {}))   // first stays busy
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = (ch: string) => calls.find((c: any[]) => c[0] === ch)![1]
     const send = handler(CH.chatSend)
     const payload = { workspacePath: '/ws/a', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] }
     send({}, { ...payload, text: 'first' })
@@ -337,12 +350,11 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chatSend forwards source into the queue projection (pet-sourced enqueue)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     sendTurn.mockReset().mockImplementation(() => new Promise<void>(() => {}))
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const send = calls.find((c: any[]) => c[0] === CH.chatSend)![1]
     const payload = { workspacePath: '/ws/a', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] }
     send({}, { ...payload, text: 'first' })
     send({}, { ...payload, text: 'petmsg' }, '宠物')
@@ -353,7 +365,6 @@ describe('registerIpc broadcast wiring', () => {
 
   it('drains an orphaned chat confirm gate when the turn ends unanswered (unsticks pet 需确认)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     // The CLI raises a permission gate (confirm-request), but the turn completes/dies before the user
     // answers it — the gate is now orphaned. Without draining, no confirm-resolved ever fires and the
@@ -363,8 +374,8 @@ describe('registerIpc broadcast wiring', () => {
       return Promise.resolve({ id: 'm1', who: 'ai', text: '', ts: '0' })
     })
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const send = calls.find((c: any[]) => c[0] === CH.chatSend)![1]
     send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] })
     await new Promise(r => setTimeout(r, 0))
     const evts = sent.filter(([c]) => c === CH.chatEvent).map(([, p]) => p as any)
@@ -376,7 +387,6 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chatStop drains outstanding chat gates so no pet indicator is left stranded', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     // Turn stays alive with an open gate (never resolves) until the user hits 停止.
     sendTurn.mockReset().mockImplementation((_p: any, opts: any) => {
@@ -384,8 +394,8 @@ describe('registerIpc broadcast wiring', () => {
       return new Promise<void>(() => {})
     })
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = (ch: string) => calls.find((c: any[]) => c[0] === ch)![1]
     handler(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 't', attachments: [] })
     await new Promise(r => setTimeout(r, 0))
     const req = sent.filter(([c]) => c === CH.chatEvent).map(([, p]) => p as any).find(e => e.type === 'confirm-request')
@@ -397,10 +407,9 @@ describe('registerIpc broadcast wiring', () => {
 
   it('workspacesList passes undefined livePath to listWorkspaces (legacy live-run path removed)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+      const call = calls.find((c: any[]) => c[0] === channel)
       if (!call) throw new Error(`No handler registered for channel: ${channel}`)
       return call[1]({}, ...args)
     }
@@ -410,11 +419,10 @@ describe('registerIpc broadcast wiring', () => {
 
   it('workspacesSetOrder persists the manual order and returns the re-listed workspaces', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { writeSettings } = await import('../config/store') as any
-    registerIpc(() => {}, {})
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+      const call = calls.find((c: any[]) => c[0] === channel)
       if (!call) throw new Error(`No handler registered for channel: ${channel}`)
       return call[1]({}, ...args)
     }
@@ -430,16 +438,15 @@ describe('registerIpc broadcast wiring', () => {
 
   it('broadcasts sessionsChanged after sessionNew/Switch/Close/Rename', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { newSession, switchSession, closeSession, renameSession } = await import('../chat/sessionStore') as any
     newSession.mockReturnValue(sessionFile2)
     switchSession.mockReturnValue(sessionFile1)
     closeSession.mockReturnValue(sessionFile1)
     renameSession.mockReturnValue(sessionFile1)
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
     const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+      const call = calls.find((c: any[]) => c[0] === channel)
       if (!call) throw new Error(`No handler registered for channel: ${channel}`)
       return call[1]({}, ...args)
     }
@@ -480,12 +487,11 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chat:stop invokes chatQueue.stop for the given workspacePath', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     sendTurn.mockReset().mockImplementation(() => new Promise<void>(() => {}))  // stays busy
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = (ch: string) => calls.find((c: any[]) => c[0] === ch)![1]
 
     // There must be a handler registered for CH.chatStop
     expect(handler(CH.chatStop)).toBeTruthy()
@@ -500,10 +506,9 @@ describe('registerIpc broadcast wiring', () => {
   // right above in handlers.ts), just carrying a `launchGate` field instead of real text.
   it('chat:append-launch-gate persists a synthetic ChatMessage carrying `launchGate` and broadcasts it', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = (ch: string) => calls.find((c: any[]) => c[0] === ch)![1]
     expect(handler(CH.chatAppendLaunchGate)).toBeTruthy()
 
     const payload = {
@@ -527,10 +532,9 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chat:append-run-card persists a synthetic ChatMessage carrying `runCard` and broadcasts it (new id)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = (ch: string) => calls.find((c: any[]) => c[0] === ch)![1]
 
     const runCard = { id: 'summary-r1', kind: 'summary' as const, stageKey: '__summary__', title: '', body: '本次总结', decision: '', at: 1, ts: 1 }
     const returned = await handler(CH.chatAppendRunCard)({}, { workspacePath: '/ws/a', sessionId: 's1', ts: '2026-07-20T00:00:00.000Z', runCard })
@@ -543,11 +547,10 @@ describe('registerIpc broadcast wiring', () => {
 
   it('chat:append-run-card is idempotent by id — an already-persisted card is NOT appended/broadcast again (①汇总 remount race)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { readMessages } = await import('../chat/chatStore') as any
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const handler = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const handler = (ch: string) => calls.find((c: any[]) => c[0] === ch)![1]
 
     const runCard = { id: 'summary-r1', kind: 'summary' as const, stageKey: '__summary__', title: '', body: '本次总结', decision: '', at: 1, ts: 1 }
     const existing = { id: 'summary-r1', who: 'ai', text: '', ts: 'earlier', runCard }
@@ -562,10 +565,9 @@ describe('registerIpc broadcast wiring', () => {
   it('configUpdateWorkflow 写入 stagePrompts(不动 plugins)', async () => {
     readWorkflowsMock.mockReturnValue({ workflows: [{ id: 'standard', name: 'S', stages: [] as any[], plugins: [] as any[], stagePrompts: {} }] })
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+      const call = calls.find((c: any[]) => c[0] === channel)
       if (!call) throw new Error(`No handler registered for channel: ${channel}`)
       return call[1]({}, ...args)
     }
@@ -577,7 +579,6 @@ describe('registerIpc broadcast wiring', () => {
 
   it('agents:refresh-models calls refreshProviderModels and returns its result', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const stubResult = { models: [{ id: 'live-m', label: 'Live Model' }] }
     refreshProviderModelsMock.mockResolvedValue(stubResult)
     const providers = {
@@ -590,9 +591,9 @@ describe('registerIpc broadcast wiring', () => {
         run: () => ({ id: 'x', cancel() {}, done: Promise.resolve({ ok: true }) }),
       }
     }
-    registerIpc(() => {}, providers)
+    const calls = tableCalls(registerIpc(() => {}, providers, fakeHost()))
     const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+      const call = calls.find((c: any[]) => c[0] === channel)
       if (!call) throw new Error(`No handler registered for channel: ${channel}`)
       return call[1]({}, ...args)
     }
@@ -609,9 +610,8 @@ describe('registerIpc broadcast wiring', () => {
 describe('old orchestrator run + engine channels are gone', () => {
   it('never registers a handler for the removed old-run or engine channels', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
-    const registered = new Set((ipcMain.handle as any).mock.calls.map((c: any[]) => c[0]))
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
+    const registered = new Set(calls.map((c: any[]) => c[0]))
     // Literal strings (not CH.* — the constants themselves no longer exist) so this test would fail
     // loudly if any of these channels were ever reintroduced under their old names.
     for (const ch of ['workspaces:run', 'engine:start-run', 'engine:resume', 'chat:repropose-workflow',
@@ -622,11 +622,10 @@ describe('old orchestrator run + engine channels are gone', () => {
 
   it('a "继续执行" chat message runs as an ordinary chat turn (no legacy resume path)', async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const { sendTurn } = await import('../chat/chatService') as any
     sendTurn.mockReset().mockResolvedValue(undefined)
-    registerIpc(() => {}, {})
-    const send = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === CH.chatSend)[1]
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
+    const send = calls.find((c: any[]) => c[0] === CH.chatSend)![1]
     send({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: '继续执行', attachments: [] })
     await new Promise(r => setTimeout(r, 0))
     expect(sendTurn).toHaveBeenCalledTimes(1)
@@ -636,10 +635,9 @@ describe('old orchestrator run + engine channels are gone', () => {
 describe('plugin IPC handlers', () => {
   const setup = async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const invokeHandler = async (channel: string, ...args: unknown[]) => {
-      const call = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === channel)
+      const call = calls.find((c: any[]) => c[0] === channel)
       if (!call) throw new Error(`No handler registered for channel: ${channel}`)
       return call[1]({}, ...args)
     }
@@ -750,9 +748,7 @@ describe('plugin IPC handlers', () => {
 describe('plugin catalog IPC', () => {
   const getHandler = async (ch: string) => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
-    const calls = (ipcMain.handle as any).mock.calls
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
     const found = calls.find((c: any[]) => c[0] === ch)
     if (!found) throw new Error(`No handler registered for channel: ${ch}`)
     return found[1]
@@ -776,18 +772,17 @@ describe('plugin catalog IPC', () => {
 // 异常穿过 ipcMain.handle 会在渲染层变成未处理 rejection —— 红字行不出现,用户看到的是
 // 「点了没反应」。这一组钉死:异常必须被转成与既有失败同形的 {ok:false,error}。
 describe('growth:pet-import handler 的 I/O 失败', () => {
-  const getHandler = async (ch: string) => {
+  // 选目录这一步现在走宿主能力,不再是 dialog.showOpenDialog。默认让它「选中了 /some/pack」,
+  // 单独验取消的那条用例自己覆盖成返回空数组。
+  const getHandler = async (ch: string, picked: string[] = ['/some/pack']) => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
-    const found = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost({ pickPaths: async () => picked })))
+    const found = calls.find((c: any[]) => c[0] === ch)
     if (!found) throw new Error(`No handler registered for channel: ${ch}`)
     return found[1]
   }
 
-  beforeEach(async () => {
-    const { dialog } = await import('electron') as any
-    dialog.showOpenDialog.mockReset().mockResolvedValue({ canceled: false, filePaths: ['/some/pack'] })
+  beforeEach(() => {
     importGrowthPetPackMock.mockReset()
   })
 
@@ -809,21 +804,18 @@ describe('growth:pet-import handler 的 I/O 失败', () => {
 
   it('成功路径原样透传,取消仍然是 null(不能被 try/catch 改了语义)', async () => {
     importGrowthPetPackMock.mockReturnValue({ ok: true, pet: { id: 'growth-x', name: '树' } })
-    const h = await getHandler(CH.growthPetImport)
-    expect(await h({})).toMatchObject({ ok: true, pet: { id: 'growth-x' } })
+    expect(await (await getHandler(CH.growthPetImport))({})).toMatchObject({ ok: true, pet: { id: 'growth-x' } })
 
-    const { dialog } = await import('electron') as any
-    dialog.showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
-    expect(await h({})).toBeNull()
+    // 取消 = 宿主返回空数组(见 HostCapabilities.pickPaths 的契约)。取消不是错误,必须仍是 null。
+    expect(await (await getHandler(CH.growthPetImport, []))({})).toBeNull()
   })
 })
 
 describe('chat:save-paste handler 的 I/O 失败', () => {
   const getHandler = async (ch: string) => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    registerIpc(() => {}, {})
-    const found = (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)
+    const calls = tableCalls(registerIpc(() => {}, {}, fakeHost()))
+    const found = calls.find((c: any[]) => c[0] === ch)
     if (!found) throw new Error(`No handler registered for channel: ${ch}`)
     return found[1]
   }
@@ -914,10 +906,9 @@ describe('chat:save-paste handler 的 I/O 失败', () => {
 describe('chat:gate-state —— 让重新挂载的聊天视图能把还挂着的门拉回来', () => {
   const setup = async () => {
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
     const sent: [string, unknown][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {})
-    const get = (ch: string) => (ipcMain.handle as any).mock.calls.find((c: any[]) => c[0] === ch)?.[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const get = (ch: string) => calls.find((c: any[]) => c[0] === ch)![1]
     return { sent, get }
   }
 
@@ -963,5 +954,53 @@ describe('chat:gate-state —— 让重新挂载的聊天视图能把还挂着�
     const { get } = await setup()
     const snap = await get(CH.chatGateState)({}, { workspacePath: '/ws/a' })
     expect(snap).toEqual({ confirms: [], asks: [] })
+  })
+})
+
+describe('★这条是谁发的(ChatMessage.via)', () => {
+  /**
+   * 用户要的是:同一个会话里能一眼看出哪句是手机发的、哪句是另一台电脑发的。
+   * 而他同时定了两条硬边界 —— **不能被复制走,也不能进 agent 的上下文**。
+   * 这里守的是最靠上游的那一条:这个值**从哪儿来**。
+   */
+  const send = async () => {
+    const { registerIpc } = await import('./handlers')
+    const table = registerIpc(() => {}, {}, fakeHost())
+    const { sendTurn } = await import('../chat/chatService') as any
+    const seen: any[] = []
+    sendTurn.mockReset().mockImplementation((payload: any) => { seen.push(payload); return Promise.resolve({}) })
+    return { fn: table[CH.chatSend], seen }
+  }
+  const payload = { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [] }
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+
+  it('远程客户端发来的:记下它自报的设备名', async () => {
+    const { fn, seen } = await send()
+    fn({ emit: () => {}, client: { id: 'remote-1', label: 'iPhone' } }, payload)
+    await tick()
+    expect(seen[0].via).toBe('iPhone')
+  })
+
+  it('★本机窗口发的**不记** —— 没有标记就是「就在这台机器上敲的」', async () => {
+    // 常见情况(一个人一台电脑)因此一个字节都不多存、界面上一个像素都不多画。
+    const { fn, seen } = await send()
+    fn({ emit: () => {}, client: { id: 'local', label: '本机' } }, payload)
+    await tick()
+    expect(seen[0].via).toBeUndefined()
+  })
+
+  it('★★客户端在 payload 里自报的 via 一律被覆盖 —— 否则谁都能把自己写成别人', async () => {
+    // 这条标记的全部价值就是「可信地说清是谁发的」。信客户端自报等于这个价值归零。
+    const { fn, seen } = await send()
+    fn({ emit: () => {}, client: { id: 'remote-9', label: '书房的 Mac' } }, { ...payload, via: '你的 iPhone' })
+    await tick()
+    expect(seen[0].via).toBe('书房的 Mac')
+  })
+
+  it('没有 client 信息时(内部调用 / 老 preload)也不记', async () => {
+    const { fn, seen } = await send()
+    fn({ emit: () => {} }, payload)
+    await tick()
+    expect(seen[0].via).toBeUndefined()
   })
 })

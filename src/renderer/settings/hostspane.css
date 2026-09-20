@@ -1,0 +1,242 @@
+.hosts-pane { max-width: 660px; }
+
+.hosts-status { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 12px;
+  background: color-mix(in oklch, var(--surface) 45%, transparent); border: 1px solid var(--border); }
+.hosts-status .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.hosts-status.ok .dot { background: oklch(72% .17 150); box-shadow: 0 0 0 3px oklch(72% .17 150 / .18); }
+.hosts-status.warn .dot { background: oklch(78% .15 85); }
+.hosts-status.bad .dot { background: oklch(66% .18 25); box-shadow: 0 0 0 3px oklch(66% .18 25 / .16); }
+.hosts-status .who { font-size: 13.5px; font-weight: 600; color: var(--fg); }
+.hosts-status .sub { font-size: 12.5px; color: var(--fg-2); }
+.hosts-status.bad .sub { color: var(--err); }
+.hosts-status .grow { flex: 1 1 auto; }
+
+.hosts-list { display: flex; flex-direction: column; gap: 10px; }
+.hosts-empty { color: var(--fg-2); font-size: 13px; padding: 18px; text-align: center;
+  border: 1px dashed var(--border); border-radius: 12px; }
+
+.host-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 12px; background: color-mix(in oklch, var(--surface) 35%, transparent); }
+.host-row.active { border-color: color-mix(in oklch, var(--accent) 55%, var(--border)); }
+.host-row .host-ico { flex: 0 0 auto; font-size: 19px; line-height: 1; width: 22px; text-align: center; }
+.host-row .info { flex: 1 1 auto; min-width: 0; }
+.host-row .name { font-weight: 600; color: var(--fg); display: flex; align-items: center; gap: 8px; }
+.host-row .addr { font-size: 12px; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.host-row .acts { display: flex; gap: 6px; flex: 0 0 auto; }
+
+.host-tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--fg-2); font-weight: 500; }
+
+.hosts-form { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.hosts-form .full { grid-column: 1 / -1; }
+@media (max-width: 560px) { .hosts-form { grid-template-columns: 1fr; } }
+
+.hosts-io { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.hosts-pane textarea { width: 100%; min-height: 92px; font-family: var(--mono, ui-monospace, monospace); font-size: 12px;
+  border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--fg); padding: 10px; }
+
+/* 命令/地址的行内代码。★不要复用 botpane 的 .bot-code —— 那个是给**配对码**用的:
+   22px、字间距 6px。拿它排一行命令会撑破布局并盖住上面的说明文字(真机验收时就是这么崩的)。 */
+.hosts-cmd {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px; padding: 1px 6px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--fg);
+  white-space: normal; word-break: break-all;
+}
+
+/* 表单里的校验提示。★必须紧挨着「保存」按钮 —— 第一版放在面板顶部,用户滚到表单这儿点保存时
+   提示出现在视野之外,看到的现象就是「点了没反应」,真机验收时在这儿卡了两轮。 */
+.hosts-formerr {
+  margin: 4px 0 0; padding: 8px 11px; border-radius: 9px;
+  font-size: 12.5px; line-height: 1.5; color: var(--err);
+  background: color-mix(in oklch, var(--err) 9%, transparent);
+  border: 1px solid color-mix(in oklch, var(--err) 35%, transparent);
+}
+
+/* ------------------------------------------------------------------
+   ★这一屏的表单一律复用设置面板已有的 .proj-field(<div> 包 <label>+<input>),
+   不要自造 .set-label / .set-switch —— 那两个 class 在整个项目里都不存在,
+   写了等于没写:标签掉回根字号(比邻居大一号)、开关退化成系统原生复选框。
+   ------------------------------------------------------------------ */
+
+/* 输入框 + 右侧按钮同排。.proj-field input 是 width:100%,不包一层会把按钮挤到下一行
+   (这正是「地址」那行看起来乱换行的原因)。 */
+.hosts-inline { display: flex; align-items: center; gap: 8px; }
+.hosts-inline input { flex: 1 1 auto; min-width: 0; }
+/* ★36 不是 34:.proj-field input 是 content-box(34 + 上下各 1px 边框 = 36),
+   而 button / select 在 Chrome 里默认 border-box。写同一个数字反而会差 2px。 */
+.hosts-inline .set-btn { flex: 0 0 auto; height: 36px; }
+
+/* 端口是个四位数,不该占满整行 */
+.hosts-port { max-width: 168px; }
+
+/* 「在手机上填这两样」那一块 */
+.hosts-conn { margin-top: 16px; padding: 14px; border-radius: 12px;
+  border: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 35%, transparent); }
+.hosts-conn > .set-desc:first-child { margin-top: 0; margin-bottom: 10px; }
+.hosts-conn .proj-field:last-of-type { margin-bottom: 0; }
+.hosts-conn-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.hosts-conn-foot .set-desc { margin-top: 0; }
+
+/* 表单里的 select 要和 input 一样宽、一样高,否则一行 input 一行矮 select 参差不齐 */
+.hosts-form .proj-field { margin-bottom: 0; }
+.hosts-form .sce-select { width: 100%; height: 36px; font-size: 13px; }
+
+/* 配对二维码。★码本身是固定白底黑块(见 QrCode.tsx 的注释),所以给它一个白色的托底 +
+   圆角,让「不跟皮肤走」看起来是有意为之,而不是一块漏出来的白。 */
+/* ★★那条横线只在**上面真有东西**的时候才画。二维码那一块现在是 `.hosts-conn` 里的第一个
+   孩子(地址/令牌那几行早就搬走了),于是这条 border-top 变成一根悬在空盒子里、什么也没分隔的
+   线 —— 用户原话「这个显示二维码上面为什么有个分割线」。分隔线是**关系**,没有上一块就没有关系。 */
+.hosts-qr { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; }
+.hosts-qr:not(:first-child) { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.hosts-qr .qr { flex: 0 0 auto; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px var(--border); }
+.hosts-qr-say { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.hosts-qr-say .set-desc { margin-top: 0; }
+
+/* 「现在有没有设备连着」。★这条不是装饰:它是「我手机连上没有」的唯一答案,
+   所以必须在开关旁边,而不是在二维码底下。灰=在等,绿=真的有人连着。 */
+.hosts-live { display: flex; align-items: flex-start; gap: 8px; margin: 14px 0 16px;
+  padding: 8px 11px; border-radius: 9px; font-size: 12.5px; color: var(--fg-2);
+  border: 1px solid var(--border); background: color-mix(in oklch, var(--surface) 40%, transparent); }
+.hosts-live .dot { margin-top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+/* 结论一行、细节一行。★细节那行不是可有可无的装饰:手填地址、查「为什么连不上」都靠它,
+   但它不该占着主句的位置(见 MobileSection 里那段注释)。 */
+.hosts-live .hl-say { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hosts-live .hl-t { color: var(--fg); font-weight: 600; font-family: inherit; }
+/* 挂在中转上的设备清单。★一行一台、名字左、断开右 —— 和「已配的机器」那张列表同一个骨架,
+   因为它们回答的是同一类问题(有哪些、能拿它怎么办)。 */
+.hosts-live .hl-devs { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.hosts-live .hl-dev { display: flex; align-items: center; gap: 10px; }
+.hosts-live .hl-dev .nm { flex: 1 1 auto; min-width: 0; font-size: 12.5px; color: var(--fg-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hosts-live .hl-dev .set-btn { flex: 0 0 auto; padding: 2px 9px; font-size: 11.5px; }
+.hosts-live .hl-d { font-size: 11.5px; color: var(--muted); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hosts-live b { color: var(--fg); font-family: var(--mono); }
+.hosts-live.on { color: var(--fg); border-color: color-mix(in oklch, var(--ok) 40%, transparent); }
+.hosts-live.on .dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in oklch, var(--ok) 20%, transparent); }
+
+/* 状态卡和它的说明之间要留一口气 —— 不然「手机端」那个小标题贴在卡屁股底下,
+   看起来像卡片的说明文字(用户第一句话问的就是这个)。 */
+.hosts-pane .hosts-status + .set-desc { margin-top: 10px; }
+
+/* 「高级」折叠 —— 手机那一节里那些「配错了才来动」的东西(端口、绑定、令牌、手填地址)。
+   ★默认收起由 <details> 自己保证,不靠 JS 初始 state 写对。
+   ★summary 的三角自己画(list-style:none + ::before),不然 Safari/Chrome 各画一个不一样的。 */
+.hosts-adv { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px; }
+.hosts-adv > summary {
+  cursor: pointer; list-style: none; user-select: none;
+  color: var(--muted); font-size: 12.5px; padding: 4px 0;
+}
+.hosts-adv > summary::-webkit-details-marker { display: none; }
+.hosts-adv > summary::before { content: '▸ '; color: var(--faint); }
+.hosts-adv[open] > summary::before { content: '▾ '; }
+.hosts-adv[open] > summary { margin-bottom: 6px; }
+/* 折叠里两件不相干的事之间的分隔(按钮长什么样 / 搬清单)。★细到只是一条淡线,
+   不给它们各套一张卡 —— 折叠里再嵌卡片会长出第三层边框。 */
+.hosts-adv-sep { height: 1px; background: var(--border); margin: 14px 0 12px; }
+
+/* 「怎么配?」→ 官网文档。行内链接样式:跟在说明文字后面,不抢主操作(添加主机)的视觉重量,
+   所以不做成按钮的样子 —— 只是一个带外链箭头的强调色文字。 */
+.doc-link {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 0; border: 0; background: none;
+  color: var(--accent); font-size: inherit; font-family: inherit;
+  cursor: pointer;
+}
+.doc-link:hover { text-decoration: underline; }
+.doc-link svg { width: 12px; height: 12px; opacity: .8; }
+
+/* 「共享本机」里的分节标题(局域网 / 远程连接)。
+   ★2026-09-17 加:这一页原来是开关一路平铺,而「高级」里装的全是第一个开关的参数,
+    却摆在整页最底下 —— 读起来像第三个并列项。分节把「谁属于谁」画了出来。 */
+.hosts-sec {
+  margin: 20px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  color: var(--muted);
+}
+.hosts-sec:first-child { margin-top: 4px; }
+
+/* 主机行下面那句**真实**连接状态。★只在选中这台、且没连上时出现 ——
+   连上的时候地址和状态都不解决问题,那一行就是噪音。
+   ★2026-09-17 加:原来「断线 / 重连中 / 已放弃」三种情况在界面上长得一模一样,
+    用户原话:「我也不知道是不是还在重连,还是已经不连了」。 */
+.host-state {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 5px; font-size: 12px; color: var(--warn);
+}
+.host-state.s-failed { color: var(--err); }
+.host-state.s-closed { color: var(--muted); }
+
+/* 分段链路:这台 —— 中转 —— 对方。★只在走中转时画;直连只有一跳,画出来是废话。
+   ★★2026-09-18 重做。上一版把每一跳画成「一个点 + 一句话」并排铺开,而那句话是
+    「中转在,但对方没挂上来 —— 那台电脑上的 myFlowForge 没开,或者它那边的中转地址不一样」——
+    三十多个字塞进 flex 行里,把「中转 → 对方」这个标签本身都撑断了行(用户原话:「又乱又差,
+    为什么这么多文字呢」)。
+   ★现在的分工:**这一行只画结构**(节点—连线—时延),坏在哪用六个字说完;
+    「去查什么」那句长的挂 title,只有在没有别的状态行时才补一行。 */
+.host-chain {
+  display: flex; align-items: center; gap: 7px;
+  margin-top: 6px; font-size: 11.5px; color: var(--muted);
+  /* ★不换行 + 自己横向滚。换行的话三个节点会被拆到两行,链路的形状就没了 ——
+     而这一行存在的全部意义就是那个形状。 */
+  flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+}
+.host-chain::-webkit-scrollbar { display: none; }
+.chain-node {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: 0 0 auto; white-space: nowrap; color: var(--fg-2);
+}
+.chain-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--ok); }
+.chain-dot.s-bad { background: var(--err); }
+/* ★未知不是坏掉 —— 前一跳断了的时候,我们对这一跳一无所知。空心,不是红色。 */
+.chain-dot.s-unknown { background: none; box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--fg) 28%, transparent); }
+/* 连线段:一条横线 + 时延 +(坏了的话)六个字的原因。
+   ★`min-width: 0` 不能省:flex 子项默认 min-width:auto,里面的文字会把整段撑开,
+    结果又变成上一版那种「一跳挤三行」。本仓库在 flex 这一条上栽过不止一次。 */
+.chain-seg {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: 1 1 auto; min-width: 0;
+}
+.chain-line { flex: 1 1 auto; min-width: 14px; height: 1.5px; border-radius: 1px; background: var(--ok); }
+.chain-seg.s-bad .chain-line { background: var(--err); }
+/* 不通的那一段画成虚线:实线代表「这条路成立」,而它不成立。 */
+.chain-seg.s-unknown .chain-line {
+  height: 0; background: none;
+  border-top: 1.5px dashed color-mix(in oklab, var(--fg) 26%, transparent);
+}
+.chain-rtt { font-family: var(--mono); color: var(--faint); white-space: nowrap; flex: 0 0 auto; }
+.chain-note { color: var(--err); white-space: nowrap; flex: 0 0 auto; }
+/* 「去查什么」那一句。★单行截断 + title 给全文:说明文字不该把一张主机卡撑成半屏。 */
+.host-chain-hint {
+  margin-top: 4px; font-size: 11.5px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* 「已连接的设备」。★2026-09-20 合并:以前局域网那儿只报一个数字、中转那儿才有名字和「断开」,
+   同一个问题(连着谁、能不能弄走)的答案取决于对方从哪条路进来 —— 那不是两件事。
+   ★局域网那条拿不到设备名(网关只数连接数,没有中转那条的 identify 帧),所以那一行据实写
+   「N 台」,**不编名字,也不摆一颗踢不动的按钮**。 */
+.hosts-devs { margin-top: 14px; }
+.hd-h {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 700; letter-spacing: .04em; color: var(--muted);
+  margin-bottom: 6px;
+}
+.hd-n {
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  color: var(--fg-2); background: var(--surface-2);
+  border-radius: 999px; padding: 1px 7px;
+}
+.hd-empty { margin: 0; font-size: 12px; color: var(--faint); }
+.hd-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.hd-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 11px; font-size: 12.5px; color: var(--fg-2);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.hd-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: 0 0 auto; }
+/* ★名字可能很长(「zghua 的 iPhone 15 Pro」),让它截断而不是把「断开」挤出去。 */
+.hd-nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg); }
+.hd-via { flex: 0 0 auto; font-size: 11px; color: var(--faint); }

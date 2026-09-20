@@ -32,8 +32,17 @@ const conversation: ChatMessage[] = [
   { id: 'm2', who: 'ai', text: '好的,我先看看现有页面结构', ts: '2' } as ChatMessage,
 ]
 
+/**
+ * ★★`stages` **不能是空的**。启动门卡片重画过:项目不再是一排平铺的复选框,而是
+ *  长在「按项目」阶段底下的泳道(`.lg-lane[data-proj]`,见 LaunchGateCard.tsx 的 lg-stg-lanes)。
+ *  零阶段 = 零泳道 = 一个项目行都没有,于是这条用例里「取消勾选 api」无从点起。
+ *  `code: true` 是「代码开发」那一档:**天生按项目扇出**(见 shared/launchStages.ts),
+ *  不需要再去切那个单代理/按项目的开关。
+ */
 const launchInfoMock = vi.fn(async () => ({
-  workflows: [{ id: 'wf1', name: '快速修复', stages: [] }],
+  workflows: [{ id: 'wf1', name: '快速修复', stages: [
+    { key: 'develop', name: '代码开发', provider: 'claude', model: 'opus-4.8', code: true, gate: false },
+  ] }],
   projects: [
     { name: 'web', cwd: '/ws/web', provider: 'claude', model: 'opus-4.8' },
     { name: 'api', cwd: '/ws/api', provider: 'codex', model: 'gpt-5-codex' },
@@ -127,8 +136,11 @@ describe('WorkspaceView: 启动门在对话时间线内(触发/凝固)', () => {
     // Deselect the "api" project before confirming — only "web" should be sent. Scoped to the
     // launch-gate card's project rows (the workspace header elsewhere also renders "api" as a
     // project name, so a bare screen.getByText('api') matches more than one element).
-    const apiRow = Array.from(document.querySelectorAll('.wfo-proj')).find((el) => el.textContent?.includes('api'))!
-    fireEvent.click(apiRow.querySelector('.wfo-ckhit')!)
+    // ★按 `data-proj` 取,不按文本找:工作区头部别处也会出现 "api" 这个名字。
+    //  类名也换了(`lg-lane` / `lg-lane-ck`,不再是 `wfo-proj` / `wfo-ckhit`)——
+    //  卡片 2026 年重画过,而这条用例一直在按老 DOM 找,所以它红了很久。
+    const apiRow = document.querySelector('.lg-lane[data-proj="api"]')!
+    fireEvent.click(apiRow.querySelector('.lg-lane-ck')!)
 
     fireEvent.click(screen.getByText('确认'))
 

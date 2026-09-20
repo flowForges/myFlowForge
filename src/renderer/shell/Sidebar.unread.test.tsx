@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { render } from '@testing-library/react'
 import { Sidebar } from './Sidebar'
-import { markUnread } from '../state/unread'
+import { markUnread } from '@shared/chat/unread'
 import type { ChatSession } from '@shared/types'
 
 // 侧栏两处「时间 / 未读」的渲染契约。两者都不是新功能,但都只在 Sidebar 内部有断言 —— 数据是怎么送到这里

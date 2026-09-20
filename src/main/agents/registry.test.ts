@@ -9,7 +9,7 @@ vi.mock('../config/store', () => ({ readAgentsConfig: () => agentsConfig }))
 beforeEach(() => { agentsConfig = { providers: [], custom: [] } })
 
 describe('provider registry', () => {
-  it('registers claude, codex, gemini, qoder, cursor, opencode, qwen, copilot, pi, kimi, reasonix, trae and antigravity built-ins keyed by their ids', () => {
+  it('registers claude, codex, gemini, qoder, cursor, opencode, qwen, copilot, pi, kimi, reasonix, trae, antigravity and deepseek built-ins keyed by their ids', () => {
     const reg = buildProviderRegistry()
     expect(reg['claude'].displayName).toBe('Claude Code')
     expect(reg['codex'].displayName).toBe('Codex')
@@ -24,7 +24,8 @@ describe('provider registry', () => {
     expect(reg['reasonix'].displayName).toBe('Reasonix')
     expect(reg['trae'].displayName).toBe('Trae')
     expect(reg['antigravity'].displayName).toBe('Antigravity')
-    expect(Object.keys(reg)).toHaveLength(13)
+    expect(reg['deepseek'].displayName).toBe('DeepSeek')
+    expect(Object.keys(reg)).toHaveLength(14)
   })
 
   it('includes user-added custom agents alongside the built-ins', () => {
@@ -32,7 +33,7 @@ describe('provider registry', () => {
     const reg = buildProviderRegistry()
     expect(reg['mycli']).toBeDefined()
     expect(reg['mycli'].displayName).toBe('My CLI')
-    expect(Object.keys(reg)).toHaveLength(14)
+    expect(Object.keys(reg)).toHaveLength(15)
   })
 
   it('each builtin listModels() returns the catalog defaultModels (except dynamic codex)', async () => {

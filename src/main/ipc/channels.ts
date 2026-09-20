@@ -1,5 +1,44 @@
 export const CH = {
+  // ── 多主机(第二期 B)。全部是**客户端自己的**事:这台设备认识哪些机器、现在连着谁。
+  //    所以它们注册在 index.ts 而不是方法表里,天然不会被路由到远程。
+  hostsList: 'hosts:list',
+  hostsUpsert: 'hosts:upsert',
+  hostsRemove: 'hosts:remove',
+  hostsConnect: 'hosts:connect',
+  hostsDisconnect: 'hosts:disconnect',
+  hostsStatus: 'hosts:status',
+  hostsExport: 'hosts:export',
+  hostsImport: 'hosts:import',
+  hostsStatusEvent: 'hosts:status-event',
+  // 手机端网关。跟 hosts:* 同类:描述的是**这台设备自己**对外提供什么,永远本机答。
+  mobileStatus: 'mobile:status',
+  mobileApply: 'mobile:apply',
+  mobileRegenToken: 'mobile:regen-token',
+  mobileStatusEvent: 'mobile:status-event',
+  // 中转(第三期)。★和 mobile:* 一样注册在 index.ts 而不是方法表里 ——
+  //  它描述的是**这台设备自己的服务**,连去别的机器时不该被转发过去。
+  /** 踢掉一台挂在中转上的设备(按 cid)。★和其它 relay:* 一样注册在 index.ts,不进方法表。 */
+  relayKick: 'relay:kick',
+  relayStatus: 'relay:status',
+  relayApply: 'relay:apply',
+  relayStatusEvent: 'relay:status-event',
+  /** 这台机器的长期身份公钥(base64)。配对二维码要用它。 */
+  relayIdentity: 'relay:identity',
+  // ── 推送(第三期收尾)。★这几个**在方法表里**,和 mobile:*/relay:* 不同:
+  //    调用方是**手机**,它要把自己的推送令牌登记到**那台机器**上,并持续上报「我在不在」。
+  //    所以它必须跟着当前 host 走,不能是「这台设备自己的事」。
+  pushRegister: 'push:register',
+  pushUnregister: 'push:unregister',
+  pushDevices: 'push:devices',
+  pushPresence: 'push:presence',
+  pushTest: 'push:test',
   configGetSettings: 'config:get-settings',
+  // 设置一分为二之后的两个半边(第二期 C)。`config:get/set-settings` 由路由器**组合**这两个:
+  // 跟设备的那半边永远本机答,跟机器的那半边跟着当前 host 走。
+  configGetHostSettings: 'config:get-host-settings',
+  configSetHostSettings: 'config:set-host-settings',
+  configGetClientSettings: 'config:get-client-settings',
+  configSetClientSettings: 'config:set-client-settings',
   configSetSettings: 'config:set-settings',
   configListProjects: 'config:list-projects',
   configAddProject: 'config:add-project',
@@ -7,6 +46,10 @@ export const CH = {
   configUpdateProjectBranch: 'config:update-project-branch',
   configUpdateProjectAlias: 'config:update-project-alias',
   configExportProjects: 'config:export-projects',
+  // 「daemon 出内容 → 客户端落盘」(第二期 D)。导出的**内容**是那台机器的,**文件**得落在你面前
+  // 这台设备上 —— 无头机器上没有「保存到哪儿」这回事。路由器把这两步组合成原来那一个调用。
+  configExportProjectsData: 'config:export-projects-data',
+  clientSaveFile: 'client:save-file',
   configListWorkflows: 'config:list-workflows',
   configAddWorkflow: 'config:add-workflow',
   configDeleteWorkflow: 'config:delete-workflow',
@@ -28,10 +71,13 @@ export const CH = {
   agentsSetModels: 'agents:set-models',
   agentsSetTimezone: 'agents:set-timezone',
   agentsCliUpdates: 'agents:cli-updates',
+  // 两条而不是一条带参数:路由是**按 channel** 分 client/host 的(channelRouting.ts)。agent 的出口
+  // 必须在**跑 agent 的那台机器**上测,app 自身的出口必须在**你面前这台**上测 —— 一条 channel
+  // 不可能同时落在两端。
   netCheckExitIp: 'net:check-exit-ip',
+  netCheckAppExitIp: 'net:check-app-exit-ip',
   contextScan: 'context:scan',
   contextScanGlobal: 'context:scan-global',
-  skillsList: 'skills:list',
   commandsList: 'commands:list',
   workspaceCreate: 'workspace:create',
   workspaceCancelSetup: 'workspace:cancel-setup',
@@ -42,12 +88,24 @@ export const CH = {
   workspaceScanRepos: 'workspace:scan-repos',
   workspaceEdit: 'workspaces:edit',
   workspaceRename: 'workspaces:rename',
+  // 权限门总线。★**所有**路径的门都从这三条走 —— 见 main/gate/gateRegistry.ts 顶部那段。
+  //  旧的 chat:event confirm-request / run2:event auth / workspace:setup hook:interact 仍然在,
+  //  它们是各自界面的呈现方式;而「谁在等」的单一事实源只有这里。
+  gateEvent: 'gate:event',
+  gateList: 'gate:list',
+  gateResolve: 'gate:resolve',
   workspaceSetup: 'workspace:setup',
   workspaceSetupResolve: 'workspace:setup-resolve',
   // The legacy orchestrator (and all its engine:* run channels — resolve/cancel/discard/last-run/event)
   // has been removed entirely. run2 (run2LaunchStart below) is the only workflow-run path now.
   chatSend: 'chat:send',
   chatHistory: 'chat:history',
+  /**
+   * 取**一条**工具调用的输出。历史里被 `toolOutputOmitOver` 摘掉的那些,点开卡片时来这儿拿。
+   * ★存在的理由见 `chat/toolOutputCap.ts`:手机上工具卡默认折叠,而一条消息能有 54 次调用 ——
+   *  整份下发等于「下载下来只为了藏起来」。实测最大会话 389KB → 85KB。
+   */
+  chatToolOutput: 'chat:tool-output',
   chatEvent: 'chat:event',
   chatResolve: 'chat:resolve',
   chatQueueEvent: 'chat:queue-event',
@@ -55,6 +113,12 @@ export const CH = {
   // 当前还挂着、等用户回答的确认/提问门。和 chatQueueState 同一个用途:聊天视图重新挂载(切会话、离开再
   // 回来、刷新)时,它自己的 React state 是空的,而主进程那些门还阻塞着 —— 必须能把快照拉回来重建卡片。
   chatGateState: 'chat:gate-state',
+  // 跨设备未读(手机端二期)。**无状态、不落盘**:谁打开一条会话就 `chat:mark-seen` 说一声,
+  // 主进程原样广播 `chat:seen`,每个客户端(本机窗口 + 连着的手机)各自清掉自己那份未读。
+  // ★为什么不在服务端记未读:未读的语义是「**你**没在看」,而「你」是每台设备各自的 ——
+  //  服务端要存这个就得先回答「哪台设备算你」,还要落盘、过期。广播这版只说事实、不存状态。
+  chatMarkSeen: 'chat:mark-seen',
+  chatSeen: 'chat:seen',
   chatCancelQueued: 'chat:cancel-queued',
   chatClearQueue: 'chat:clear-queue',
   chatStop: 'chat:stop',
@@ -93,12 +157,16 @@ export const CH = {
   changesMulti: 'changes:multi',
   gitDiff: 'git:diff',
   gitFile: 'git:file',
-  imageFile: 'file:image', // read an image file's bytes → data URL (for the inspector image preview)
+  imageFile: 'file:image', // 图片字节 → data URL。三个调用方:inspector 预览、对话/文档正文里的 `![x](…)`、手机端同一处
   // 对话正文里的 [名字](路径) 点击:解析成「哪个 cwd 下的哪个文件」(存在性 + 越界校验都在主进程)
   resolveFileRef: 'file:resolve-ref',
   // 预览打不开的类型(pdf/xlsx/…)与 .html 的「用浏览器打开」:交给系统默认程序
   openFilePath: 'file:open-path',
   fsTree: 'fs:tree',
+  // 服务端只读目录浏览(第二期 D)。「手机上怎么选目录」的落地 —— 跟机器走:
+  // 你要定位的目录在那台机器上,只有它列得出来。
+  fsBrowse: 'fs:browse',
+  fsBrowseRoots: 'fs:browse-roots',
   gitBranch: 'git:branch',
   fileSearchContent: 'file:search-content',
   watchChanges: 'watch:changes',
@@ -167,6 +235,10 @@ export const CH = {
   // Main process → pet window: the current active workspace path (or null).
   petActiveWorkspace: 'pet:active-workspace',
   settingsChanged: 'settings:changed',
+  // ★Q7:设置的并发冲突走「后写的赢」(和权限门的「先回先算」是同一套规则,用户只需要理解一套)。
+  //   后写的赢本身没问题,问题是**另一端不知道刚才发生了什么** —— 值变了、界面跟着变了,
+  //   看起来像是自己点错了。这条事件只在「改动来自别的设备」时发,专门用来说清是谁改的。
+  settingsChangedBy: 'settings:changed-by',
   sessionsChanged: 'sessions:changed',
   // Bot bridge (钉钉): renderer settings pane ⇄ main.
   botConnect: 'bot:connect',
@@ -187,6 +259,11 @@ export const CH = {
   windowMinimize: 'window:minimize',
   windowToggleMaximize: 'window:toggle-maximize',
   windowClose: 'window:close',
+  // Frameless windows draw their own caption buttons, so the renderer has no native chrome to read
+  // the maximised state from — the main process has to tell it, or the Windows maximise/restore glyph
+  // never changes.
+  windowIsMaximized: 'window:is-maximized',
+  windowMaximizedChanged: 'window:maximized-changed',
   appRelaunch: 'app:relaunch',
   appVibrancyBaseline: 'app:vibrancy-baseline',
   appIconOptions: 'app-icon:options',
@@ -263,6 +340,39 @@ export const CH = {
   // ws.stages) into a RunPlan before starting run2 (run2StartWorkflow).
   run2LaunchInfo: 'run2:launch-info',
   run2StartWorkflow: 'run2:start-workflow',
+  // 2026-09-04(手机端工作流编辑器):在手机上改这个工作区的工作流 —— 加 / 改 / 删一条,
+  // 以及「能加哪些阶段」那张单子。改的是 ws.workflows(启动屏列的、真跑起来用的那一份),
+  // 所以电脑端立刻同步。**一次只动一条**,不整份覆盖 —— 见 workspace/editWorkflows.ts 顶注释。
+  workflowStageCatalog: 'workflow:stage-catalog',
+  // 把一条**全局模板**物化进某个已经建好的工作区(以前只有新建向导能做这件事)。
+  workspaceAddWorkflowFromTemplate: 'workspace:add-workflow-from-template',
+  workspaceSaveWorkflow: 'workspace:save-workflow',
+  workspaceDeleteWorkflow: 'workspace:delete-workflow',
+
+  // 2026-09-05(MCP 面板):调各个 CLI 自己的 `mcp` 子命令 —— 列出服务器、授权、取消授权。
+  // ★不是「支持 /mcp 这个斜杠命令」:那是 claude 交互式界面里的一屏,我们跑的是 stream-json
+  //   非交互模式,那一屏不存在。用户要的是「能授权」,见 agents/mcpCli.ts 顶上的注释。
+  // ★六条全走 host:MCP 服务器配在**那台机器**上,凭据也落在那台机器上。
+  //   授权时要开的浏览器另说 —— 那一步走客户端的 shell:open-external(CLIENT_ONLY)。
+  mcpOverview: 'mcp:overview',
+  mcpLoginStart: 'mcp:login-start',
+  mcpLoginPaste: 'mcp:login-paste',
+  mcpLoginWait: 'mcp:login-wait',
+  mcpLoginCancel: 'mcp:login-cancel',
+  mcpLogout: 'mcp:logout',
+
+  // 2026-09-05(加载项重做):扫这台主机上各 CLI 全局装的 skill / rule / MCP,并且能删。
+  // ★删除**只认扫描结果里的 id**,路径由主机侧给 —— 见 agents/addons.ts:直接删客户端传来的路径,
+  //   等于给每个连上来的设备开了一个「删任意路径」的接口。
+  addonsScan: 'addons:scan',
+  addonsRemove: 'addons:remove',
+
+  // 2026-09-05(技能 / 插件市场):claude 和 codex 都有 `plugin` 子命令(装、卸、列市场里有什么)。
+  // ★名字带 `cli-` 前缀,和这个 app **自己**的插件(plugins:* 那一套)分开 —— 两者毫无关系。
+  cliPluginsList: 'cli-plugins:list',
+  cliPluginsInstall: 'cli-plugins:install',
+  cliPluginsUninstall: 'cli-plugins:uninstall',
+
   // P1-4: the in-chat launch gate's 确认 button. Distinct from `run2Start` (the raw
   // stages+projects channel, unused by any renderer UI — see run2Handlers.ts) because that name is
   // already taken with a different (lower-level) payload shape; this one takes a `LaunchStartConfig`

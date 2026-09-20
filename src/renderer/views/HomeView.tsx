@@ -100,6 +100,11 @@ function ChangeBits({ c }: { c?: HomeWsStat['changes'] }): ReactNode {
 
 interface Props {
   workspaces: WorkspaceMeta[]
+  /** 见 `useHome`:切主机/重连时列表要清空重拉,这两个字段让空态说得出「是哪一种空」。 */
+  listLoading?: boolean
+  listError?: string
+  /** 连着的远程主机名;本机时为 null。 */
+  hostLabel?: string | null
   stats: HomeStats           // per-workspace branch / change counts / last-activity (keyed by path)
   activeRunPath?: string
   busyPaths?: Set<string>    // workspaces with a chat turn in flight — lit as 运行中 even without an orchestrator run
@@ -119,7 +124,7 @@ function onCardSpotlight(e: ReactMouseEvent<HTMLElement>) {
   el.style.setProperty('--my', `${e.clientY - r.top}px`)
 }
 
-export function HomeView({ workspaces, stats, activeRunPath, busyPaths, run, onNew, onOpenDir, onQuickFolder, onOpenWorkspace, onOpenSettings }: Props) {
+export function HomeView({ workspaces, stats, listLoading, listError, hostLabel, activeRunPath, busyPaths, run, onNew, onOpenDir, onQuickFolder, onOpenWorkspace, onOpenSettings }: Props) {
   // A workspace is "运行中" on home if the live orchestrator run targets it OR a chat agent turn is in
   // flight there (busyPaths) — the latter never populates w.status, so without it chat activity showed
   // nothing on home even while the sidebar dot was lit.
@@ -184,10 +189,21 @@ export function HomeView({ workspaces, stats, activeRunPath, busyPaths, run, onN
           ))}
         </div>
 
-        {/* 首次使用引导:仅空态(没有任何工作区)显示,可「不再显示」关闭并持久化。 */}
-        {visible.length === 0 && <QuickStart onQuickFolder={onQuickFolder} onNew={onNew} />}
+        {/* ★★空态分三种,别混成一种:还没拉到 / 拉不到 / 真的一个都没有。
+            前两种给新手看「从这里开始」是纯误导 —— 那台机器上大概率有一堆工作区,只是没答上来。 */}
+        {visible.length === 0 && (listLoading || listError) && (
+          <div className={`home-state${listError ? ' bad' : ''}`} role={listError ? 'alert' : undefined}>
+            <div className="hs-t">
+              {listError ? `读不到${hostLabel ? `「${hostLabel}」` : ''}的工作区` : `正在读取${hostLabel ? `「${hostLabel}」` : ''}的工作区…`}
+            </div>
+            {listError && <div className="hs-d">{listError}</div>}
+          </div>
+        )}
 
-        {visible.length === 0 && (
+        {/* 首次使用引导:仅空态(没有任何工作区)显示,可「不再显示」关闭并持久化。 */}
+        {visible.length === 0 && !listLoading && !listError && <QuickStart onQuickFolder={onQuickFolder} onNew={onNew} />}
+
+        {visible.length === 0 && !listLoading && !listError && (
           <div className="home-empty">
             <div className="he-title">从这里开始</div>
             <div className="he-sub">工作区是一个本地文件夹。你可以配置 Git 项目走完整工作流,也可以只选个文件夹直接对话。</div>

@@ -72,10 +72,14 @@ export function AppIconPane({ appIcon, onChange }: AppIconPaneProps) {
     return () => { live = false }
   }, [])
 
+  // 文案按平台走:Windows 上没有 Dock、没有「顶部状态栏」,照抄 macOS 的名词就是在骗人。图标选择器在
+  // Windows 上也不是摆设 —— 它决定托盘显示哪一个图标(见 main/index.ts 的 buildTrayImage)。
+  const isWindows = (window.forge?.platform ?? 'darwin') === 'win32'
+  const statusLabel = isWindows ? '在任务栏通知区域显示 FlowForge' : '在 macOS 顶部状态栏显示 FlowForge'
   return (
     <>
       <div className="set-group">
-        <h4>Dock 图标</h4>
+        <h4>{isWindows ? '应用图标' : 'Dock 图标'}</h4>
         <div className="app-icon-grid">
           {icons.map(icon => (
             <button
@@ -92,16 +96,18 @@ export function AppIconPane({ appIcon, onChange }: AppIconPaneProps) {
         </div>
       </div>
       <div className="set-group">
-        <h4>状态栏</h4>
+        <h4>{isWindows ? '通知区域' : '状态栏'}</h4>
         <div className="set-row">
           <MenuBarGlyph />
           <div className="info">
-            <div className="t">在 macOS 顶部状态栏显示 FlowForge</div>
-            <div className="d">开启后点击状态栏里的简约神经元图标，会立即呼出主窗口。</div>
+            <div className="t">{statusLabel}</div>
+            <div className="d">{isWindows
+              ? '开启后左键点托盘图标立即呼出主窗口,右键是快捷菜单。上面选的图标就是托盘显示的那一个。'
+              : '开启后点击状态栏里的简约神经元图标，会立即呼出主窗口。'}</div>
           </div>
           <button
             className={`toggle${appIcon.showMenuBar ? ' on' : ''}`}
-            aria-label="在 macOS 顶部状态栏显示 FlowForge"
+            aria-label={statusLabel}
             onClick={() => onChange({ showMenuBar: !appIcon.showMenuBar })}
           />
         </div>

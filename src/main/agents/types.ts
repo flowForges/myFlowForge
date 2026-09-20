@@ -1,4 +1,4 @@
-import type { Attachment, AskAnswers, AskQuestion } from '@shared/types'
+import type { Attachment, AskAnswers, AskQuestion, ContextUsage } from '@shared/types'
 
 export interface HandoffPayload { summary: string; artifacts?: { path: string; kind: string }[] }
 
@@ -11,7 +11,27 @@ export interface LogLine { ts: string; text: string; level: 'info' | 'ok' | 'acc
 // (e.g. Bash/Write) for a clearer gate label. Both optional → existing callers unaffected.
 // questions: 这道门其实是「请回答」而非「批准执行」(claude AskUserQuestion)。带着它的门必须用
 // ConfirmDecision 的对象形态把用户的选择带回来,只回 'allow' 会让模型收到「没等到回复」。
-export interface ConfirmReq { title: string; where?: string; agentId?: string; toolName?: string; questions?: AskQuestion[] }
+export interface ConfirmReq {
+  title: string; where?: string; agentId?: string; toolName?: string; questions?: AskQuestion[]
+  /** 这道门问的是哪一次工具调用(claude 的 `can_use_tool.tool_use_id`)。和 `ToolActivity.id` 是同一个值。 */
+  toolUseId?: string
+  /**
+   * 门被「完全访问」自动放行时调这个,**代替**往对话里发一条审计消息 ——
+   * 由 chatService 提供,把「自动放行」记在对应那张工具卡上(见 `ToolActivity.autoAllowed`)。
+   * ★没有它(或者没有 `toolUseId`)的调用方仍然回落成发消息:悄悄放行是不允许的。
+   */
+  onAutoAllow?: () => void
+  /**
+   * 这次请求**确定是只读**的(读文件 / 列目录 / 搜索),不写不联网。
+   *
+   * ★★只在 provider **自己**能给出这个判断时才为 true。codex 在审批请求里带了 `commandActions`
+   *  (一个 read|listFiles|search|unknown 的标签联合,官方 schema 里有),所以它给得出来;
+   *  别的 provider 给不出来就一直是 undefined —— **绝不在这里靠命令字符串猜**。
+   *  「靠正则判断这条命令安不安全」是安全工程里最经典的那个错,`rm` 藏在管道后面就绕过去了。
+   * ★判据必须**失败即拦**:拿不准 = 不是只读 = 照常升门。
+   */
+  readOnly?: boolean
+}
 // 老形态 'allow'/'deny' 全部保留(绝大多数门只需要放行/拒绝);对象形态是回答通道。
 export type ConfirmDecision = 'allow' | 'deny' | { decision: 'allow'; answers?: AskAnswers; response?: string }
 /** 把任意 ConfirmDecision 收敛回二值,给只关心放行与否的调用方(codex 审批、只读委派等)。 */
@@ -46,7 +66,7 @@ export interface AgentCallbacks {
   onSession?(id: string): void
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired (run() only) when the running max usage increases.
-  onUsage?(u: { used: number; window: number }): void
+  onUsage?(u: ContextUsage): void
   // 每轮 token 成本(input+output),用于用量汇总账本;仅在有 result 事件用量时触发(见 extractTurnTokens)。
   onTurnTokens?(t: { input: number; output: number }): void
   onConfirm(req: ConfirmReq): Promise<ConfirmDecision>
@@ -83,9 +103,14 @@ export interface ChatCallbacks {
   // the think block so a slow spawn / MCP handshake / model-load shows real activity — the long silent
   // gap before the first token was the "感觉像卡住" complaint.
   onStatus?(text: string): void
+  /**
+   * 这一轮换阶段了(在想 ↔ 在自动压缩上下文)。★provider 不报就永远是「在想」——
+   * 只有 codex 在协议里明说了压缩(contextCompaction item),别的 CLI 不报,那就照旧。
+   */
+  onPhase?(phase: import('@shared/types').TurnPhase): void
   // Context-window usage (raw tokens): used = total context tokens consumed so far, window =
   // model's context window size. Fired when the running max usage increases.
-  onUsage?(u: { used: number; window: number }): void
+  onUsage?(u: ContextUsage): void
   // 每轮 token 成本(input+output),用于用量汇总账本;仅在有 result 事件用量时触发(见 extractTurnTokens)。
   onTurnTokens?(t: { input: number; output: number }): void
   // A built-in Task sub-agent the main agent spawned. phase 'start' when the Task tool_use appears

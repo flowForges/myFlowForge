@@ -1,6 +1,7 @@
 import type { CreateWorkspaceOpts, CreateWorkspaceStage, ReviewConfig, StageCustomFields, Workspace, WsStage } from '@shared/types'
 import { REVIEW_LENSES } from '@shared/types'
 import type { Plugin } from '@shared/plugin'
+import { baseName } from '@shared/pathName'
 
 // provider+model packed into one <select> value so a model picker maps back to both.
 export const packModel = (provider: string, model: string) => provider + '::' + model
@@ -35,7 +36,7 @@ export const emptyWorkflow = (id: string, name: string, stages: Record<string, W
 
 export function deriveWsName(path: string, nameEdited: boolean, name: string): string {
   if (nameEdited && name.trim()) return name.trim()
-  const seg = path.trim().replace(/\/+$/, '').split('/').filter(Boolean).pop() ?? ''
+  const seg = baseName(path.trim())
   return seg
 }
 

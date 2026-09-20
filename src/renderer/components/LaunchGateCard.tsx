@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
+import { stageAllowsPerProject, isPerProjectStage as isPerProjectShared, buildStageChoice } from '@shared/launchStages'
 import type { ProviderInfo } from '@shared/types'
 import type { ProjectBaseInfo } from '../../main/ipc/run2Handlers'
 // Reuses the wfo-tab / wfo-proj / wfo-model / wfo-mpop / wfo-sec(-h) / wfo-goal classes — and their
@@ -125,7 +126,8 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // A non-code, non-doc stage (写单测/代码CR) can be toggled between 单代理(root) and 按项目(per-project) at
   // launch. Doc stages (需求评估/技术方案设计) produce a single deliverable and code stages are already
   // per-project, so neither gets the toggle.
-  const stageAllowsPerProject = (s: { code: boolean; producesDoc?: boolean }) => !s.code && !s.producesDoc
+  // ★判定搬到了 `@shared/launchStages` —— 手机端启动屏用的是同一份。两边各写一份的话,
+  //   走偏在界面上完全看不出来(见那个文件顶上的注释)。
   const initStageState = (wfId: string) =>
     Object.fromEntries(stagesOf(wfId).map((s) => [s.key, { enabled: true, provider: s.provider, model: s.model, perProject: false }]))
   const [stageState, setStageState] = useState<Record<string, { enabled: boolean; provider: string; model: string; perProject: boolean }>>(() => initStageState(config.selectedWorkflowId))
@@ -328,10 +330,7 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
       const st = stageState[s.key] ?? stageDefault(s.key)
       // 阶段级项目代理:只在这个阶段真被改过(或工作区里本来就配了)时才带,空着就让主进程回落到工作区那份。
       const agents = Object.entries(stageProjects[s.key] ?? {}).map(([name, a]) => ({ name, provider: a.provider, model: a.model }))
-      const base = { key: s.key, enabled: st.enabled, provider: st.provider, model: st.model, ...(agents.length ? { projects: agents } : {}) }
-      // Only send perProject for toggle-eligible stages — sending it for develop/design would force their
-      // scope and collapse the per-project fan-out they get by default (buildLaunchPlan honors it verbatim).
-      return stageAllowsPerProject(s) ? { ...base, perProject: st.perProject } : base
+      return buildStageChoice(s, st, agents)
     })
     const hookChoices = (config.hooks ?? []).map((h) => ({ id: h.id, enabled: hookState[h.id] !== false }))
     onConfirm({ seed, workflows: config.workflows, selectedWorkflowId, projects, supplement, hooks: config.hooks, stageChoices, hookChoices })
@@ -355,7 +354,7 @@ export function LaunchGateCard({ config, frozen, error, pending, seedLoading, pr
   // Whether a stage fans out per project: an inherently-code stage (代码开发) OR a toggle-eligible stage
   // the user switched to 按项目. Its lanes are the selected projects; a single-agent stage has one 工作区 lane.
   const isPerProjectStage = (s: { key: string; code: boolean; producesDoc?: boolean }, st: { perProject: boolean }) =>
-    s.code || (stageAllowsPerProject(s) && st.perProject)
+    isPerProjectShared(s, st.perProject)
   // Guard confirm when an enabled per-project stage has no project selected — it would have zero lanes.
   const anyPerProjectEnabled = selectedStages.some((s) => { const st = stageState[s.key] ?? stageDefault(s.key); return st.enabled && isPerProjectStage(s, st) })
   const noProjectSelected = anyPerProjectEnabled && selectedCount === 0

@@ -1,0 +1,69 @@
+{
+  "expo": {
+    "name": "myFlowForge",
+    "slug": "myflowforge-mobile",
+    "scheme": "myflowforge",
+    "version": "1.2.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.flowforges.myflowforge",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "myFlowForge 要连接你电脑上那台 Forge —— 它跑在同一个 wifi 里的局域网地址上。不允许的话,手机端就找不到任何主机。",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "appleTeamId": "V9YMUR4WYY",
+      "buildNumber": "3"
+    },
+    "android": {
+      "package": "com.flowforges.myflowforge",
+      "adaptiveIcon": {
+        "backgroundColor": "#080A1D",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-asset",
+      "expo-system-ui",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "myFlowForge 只在你点「扫一扫」时用一次相机,读电脑屏幕上那枚配对二维码 —— 不拍照、不上传,扫完就关。",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "myFlowForge 只在你点「加图片」时读一次相册,把选中的图片存进这个工作区的附件目录交给代理 —— 不上传到别处。"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "./plugins/withNoForceDark",
+      "./plugins/withReleaseSigning",
+      "./plugins/withPushEntitlement"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

@@ -1,9 +1,26 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { execa } from 'execa'
 import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { makeCodexProvider } from './codex'
+
+/**
+ * ★★把 codex 的传输方式**钉死成 `exec`**。
+ *
+ * 这一组测的是 `codex exec` 那条路上**拼出来的 argv**,所以它必须真的走 exec。
+ * 而 `codex.ts` 里那道闸是 `readSettings().codexTransport === 'app-server'` ——
+ * `readSettings()` 读的是**跑测试这个人自己的** `~/.myFlowForge/settings.json`。
+ * 2026-09-09 用户把它切成 app-server 之后,这 12 条**当场全红**:provider 走了 JSON-RPC,
+ * 假的 codex 二进制一次都没被 spawn,于是 `argv.json` 不存在,报 ENOENT。
+ * ★★这类失败最坏的地方是它**跟人走** —— 同一个 commit 在他机器上红、在别人机器上绿,
+ *  而错误信息(ENOENT)完全指不到「你的设置」这个真因。
+ */
+vi.mock('../../config/store', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../config/store')>()
+  return { ...actual, readSettings: () => ({ ...actual.readSettings(), codexTransport: 'exec' as const }) }
+})
+
 
 // 「停止」必须杀掉 codex 派生的 shell 命令,而不只是 codex 自己。
 //

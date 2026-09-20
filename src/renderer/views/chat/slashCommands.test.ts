@@ -27,11 +27,23 @@ describe('commandsForProvider', () => {
     expect(commandsForProvider('claude', '/zzz')).toEqual([])
   })
 
-  it('every command except the launcher-opening 开启工作流 carries a non-empty template', () => {
+  it('每条命令要么填模板、要么开一个面板 —— 不能两样都不做(那是一条点了没反应的命令)', () => {
     for (const c of SLASH_COMMANDS) {
-      if (c.cmd === '/开启工作流') continue
-      expect(c.template.length).toBeGreaterThan(0)
+      // 开面板的那几条(/开启工作流、/mcp)本来就没有模板:它们不是要发给模型的话。
+      if (c.openLauncher || c.openMcp) {
+        expect(c.template, c.cmd).toBe('')
+        continue
+      }
+      expect(c.template.length, c.cmd).toBeGreaterThan(0)
     }
+  })
+
+  it('/mcp 开 MCP 面板,而不是往输入框里塞字', () => {
+    const m = SLASH_COMMANDS.find(c => c.cmd === '/mcp')
+    expect(m?.openMcp).toBe(true)
+    expect(m?.template).toBe('')
+    // 对所有 provider 可见:面板本身会按 provider 分组,而「这台机器上谁支持 mcp」是面板里回答的问题。
+    expect(m?.providers).toBe('all')
   })
 
   it('the built-in /开启工作流 command opens the run2 launcher instead of seeding a chat message', () => {

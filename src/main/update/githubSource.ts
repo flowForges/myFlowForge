@@ -3,8 +3,9 @@ import { compareVersions } from './version'
 
 export interface GithubDeps {
   fetch: (url: string, init?: unknown) => Promise<{ ok: boolean; json: () => Promise<any> }>
-  // Running CPU arch ('arm64' | 'x64'), used to pick the matching per-arch .dmg when a
-  // release ships more than one. Omit to fall back to the first .dmg (single-arch releases).
+  // Which build to download. `platform` selects the artifact TYPE (.dmg / .exe); `arch` ('arm64' |
+  // 'x64') selects among per-arch builds of that type. Omit arch to take the first matching asset.
+  platform?: NodeJS.Platform
   arch?: string
   // Transient-failure hardening: a flaky proxy / GitHub blip shouldn't immediately read as 检查失败.
   // Retry a few times with backoff, each attempt bounded by a timeout so a hung proxy can't wedge it.
@@ -42,22 +43,29 @@ async function fetchReleases(repo: string, deps: GithubDeps): Promise<{ ok: bool
   throw lastErr
 }
 
-// Pick the .dmg that matches the machine's arch. Releases may ship an x64 build (no arch
-// suffix), an arm64 build (`-arm64`), and/or a universal build (`-universal`). Falling back
-// to the first .dmg would hand ~half of users a package for the wrong CPU.
-function pickDmg(assets: any[], arch?: string): any | null {
-  const dmgs = assets.filter(a => typeof a?.name === 'string' && a.name.endsWith('.dmg'))
-  if (dmgs.length === 0) return null
+// The installable artifact for each platform. macOS ships a .dmg, Windows an NSIS .exe.
+const INSTALLER_EXT: Partial<Record<NodeJS.Platform, string>> = { darwin: '.dmg', win32: '.exe' }
+
+// Pick the release asset this machine can actually install: right platform FIRST, then right CPU.
+// Getting either wrong hands the user a download that can never install — a .dmg on Windows, or an
+// x64 build on an arm64 machine. Releases may ship an x64 build (no arch suffix), an arm64 build
+// (`-arm64`), and/or a universal build (`-universal`).
+function pickAsset(assets: any[], platform: NodeJS.Platform, arch?: string): any | null {
+  const ext = INSTALLER_EXT[platform]
+  if (!ext) return null
+  // endsWith also excludes the `.exe.blockmap` sidecar electron-builder ships beside the installer.
+  const matching = assets.filter(a => typeof a?.name === 'string' && a.name.toLowerCase().endsWith(ext))
+  if (matching.length === 0) return null
   if (arch) {
     const low = (a: any) => String(a.name).toLowerCase()
-    const arm = dmgs.find(a => low(a).includes('arm64'))
-    const uni = dmgs.find(a => low(a).includes('universal'))
-    const x64 = dmgs.find(a => low(a).includes('x64'))
-      ?? dmgs.find(a => !low(a).includes('arm64') && !low(a).includes('universal'))
+    const arm = matching.find(a => low(a).includes('arm64'))
+    const uni = matching.find(a => low(a).includes('universal'))
+    const x64 = matching.find(a => low(a).includes('x64'))
+      ?? matching.find(a => !low(a).includes('arm64') && !low(a).includes('universal'))
     const match = arch === 'arm64' ? (arm ?? uni ?? x64) : (x64 ?? uni ?? arm)
     if (match) return match
   }
-  return dmgs[0]
+  return matching[0]
 }
 
 // Fetch the newest release. We list ALL releases and pick the highest SEMVER ourselves rather than
@@ -82,13 +90,13 @@ export async function fetchLatestRelease(repo: string, deps: GithubDeps): Promis
   const version = String(newest.tag_name ?? '').replace(/^v/i, '')
   if (!version) return null
   const assets: any[] = Array.isArray(newest.assets) ? newest.assets : []
-  const dmg = pickDmg(assets, deps.arch)
-  if (!dmg) return null
+  const asset = pickAsset(assets, deps.platform ?? process.platform, deps.arch)
+  if (!asset) return null
   return {
     version,
     notes: String(newest.body ?? ''),
-    dmgUrl: String(dmg.browser_download_url ?? ''),
-    dmgSize: Number(dmg.size ?? 0),
-    dmgName: String(dmg.name ?? ''),
+    assetUrl: String(asset.browser_download_url ?? ''),
+    assetSize: Number(asset.size ?? 0),
+    assetName: String(asset.name ?? ''),
   }
 }

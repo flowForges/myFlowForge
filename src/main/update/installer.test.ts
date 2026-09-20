@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { ManualDmgInstaller, pickInstaller } from './installer'
+import { ManualDownloadInstaller, pickInstaller } from './installer'
 import type { InstallerDeps } from './installer'
 import type { UpdateInfo, InstallProgress } from '@shared/types'
 
-const INFO: UpdateInfo = { version: '2.4.0', notes: '', dmgUrl: 'https://x/a.dmg', dmgSize: 6, dmgName: 'a.dmg' }
+const INFO: UpdateInfo = { version: '2.4.0', notes: '', assetUrl: 'https://x/a.dmg', assetSize: 6, assetName: 'a.dmg' }
 
 async function* twoChunks() {
   yield new Uint8Array([1, 2, 3])
@@ -40,11 +40,11 @@ function deps(overrides: Partial<InstallerDeps> = {}): InstallerDeps {
   }
 }
 
-describe('ManualDmgInstaller', () => {
+describe('ManualDownloadInstaller', () => {
   it('streams to a .part file, finalizes to the dmg, opens it, reports terminal 100%', async () => {
     const d = deps()
     const seen: InstallProgress[] = []
-    await new ManualDmgInstaller(d).run(INFO, p => seen.push(p))
+    await new ManualDownloadInstaller(d).run(INFO, p => seen.push(p))
     expect(d.finalize).toHaveBeenCalledWith('/tmp/a.dmg.part', '/tmp/a.dmg')
     expect(d.openPath).toHaveBeenCalledWith('/tmp/a.dmg')
     expect(d.showItemInFolder).toHaveBeenCalledWith('/tmp/a.dmg')
@@ -63,7 +63,7 @@ describe('ManualDmgInstaller', () => {
         return { ok: true, status: 206, headers: { get: () => '3' }, body: (async function* () { yield new Uint8Array([4, 5, 6]) })() }
       },
     })
-    await new ManualDmgInstaller(d).run(INFO, () => {})
+    await new ManualDownloadInstaller(d).run(INFO, () => {})
     expect(sentRange).toBe('bytes=3-')          // asked to continue from byte 3
     expect(store.appended).toContain('/tmp/a.dmg.part')   // appended, not truncated
     expect(store.files.get('/tmp/a.dmg.part')).toEqual([1, 2, 3, 4, 5, 6])
@@ -77,34 +77,34 @@ describe('ManualDmgInstaller', () => {
       ...store.deps,
       fetch: async () => ({ ok: true, status: 200, headers: { get: () => '6' }, body: twoChunks() }),
     })
-    await new ManualDmgInstaller(d).run(INFO, () => {})
+    await new ManualDownloadInstaller(d).run(INFO, () => {})
     expect(store.files.get('/tmp/a.dmg.part')).toEqual([1, 2, 3, 4, 5, 6])   // rewritten from scratch
   })
 
   it('throttles progress to integer-percent changes (no per-chunk flood)', async () => {
-    const big: UpdateInfo = { ...INFO, dmgSize: 500 }
+    const big: UpdateInfo = { ...INFO, assetSize: 500 }
     const many = (async function* () { for (let i = 0; i < 500; i++) yield new Uint8Array([1]) })()
     const d = deps({ fetch: async () => ({ ok: true, status: 200, headers: { get: () => '500' }, body: many }) })
     const downloadEmits: InstallProgress[] = []
-    await new ManualDmgInstaller(d).run(big, p => { if (p.pct < 95) downloadEmits.push(p) })
+    await new ManualDownloadInstaller(d).run(big, p => { if (p.pct < 95) downloadEmits.push(p) })
     expect(downloadEmits.length).toBeLessThanOrEqual(92)
   })
 
   it('throws (keeping the .part for resume) when the download ends short', async () => {
     const store = fakeStore()
     const d = deps({ ...store.deps, fetch: async () => ({ ok: true, status: 200, headers: { get: () => '6' }, body: (async function* () { yield new Uint8Array([1]) })() }) })
-    await expect(new ManualDmgInstaller(d).run(INFO, () => {})).rejects.toThrow(/未完成/)
+    await expect(new ManualDownloadInstaller(d).run(INFO, () => {})).rejects.toThrow(/未完成/)
     expect(store.files.has('/tmp/a.dmg.part')).toBe(true)   // kept for a resume
   })
 
   it('throws on a non-ok download response', async () => {
     const d = deps({ fetch: async () => ({ ok: false, status: 500, headers: { get: () => null }, body: twoChunks() }) })
-    await expect(new ManualDmgInstaller(d).run(INFO, () => {})).rejects.toThrow()
+    await expect(new ManualDownloadInstaller(d).run(INFO, () => {})).rejects.toThrow()
   })
 })
 
 describe('pickInstaller', () => {
-  it('returns a ManualDmgInstaller for now', () => {
-    expect(pickInstaller(deps())).toBeInstanceOf(ManualDmgInstaller)
+  it('returns a ManualDownloadInstaller for now', () => {
+    expect(pickInstaller(deps())).toBeInstanceOf(ManualDownloadInstaller)
   })
 })

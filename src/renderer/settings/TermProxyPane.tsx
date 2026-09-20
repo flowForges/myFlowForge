@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 
+/**
+ * 这一块代理是**谁的出口**。决定两件事:「检测出口 IP」去问哪条代理,以及 DOM id 的后缀
+ * (两段同时摆在一屏上,共用 id 会让第二段的 label 聚焦到第一段的输入框)。
+ */
+export type ProxyScope = 'agent' | 'app'
+
 interface TermProxyPaneProps {
+  /** ★由调用方给。原先这里写死一句「终端代理」,两段复用之后屏幕上就出现了两块一模一样的面板。 */
+  title: string
+  desc: string
+  scope: ProxyScope
   termProxy: string
   onChange: (v: string) => void
 }
@@ -21,7 +31,8 @@ const COMMON_PROXIES: { label: string; url: string }[] = [
   { label: 'SS-NG · SOCKS5 1086', url: 'socks5://127.0.0.1:1086' },
 ]
 
-export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
+export function TermProxyPane({ title, desc, scope, termProxy, onChange }: TermProxyPaneProps) {
+  const inputId = `termProxy-${scope}`
   // The box mirrors exactly what's saved. When nothing is saved it stays EMPTY (the placeholder hints
   // a value) — never prefill an unsaved default, which reads as "a proxy is configured" when it isn't.
   const [value, setValue] = useState(termProxy)
@@ -53,7 +64,9 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
   const detectIp = async () => {
     setIpState('loading')
     try {
-      const r = await window.forge.checkExitIp()
+      // ★必须带 scope:两段的按钮长得一样,但问的是**两条不同的代理**。原先这个调用不带参数,
+      //  主进程一律用 agentProxy 作答 —— 于是「应用自身的网络」那块的检测结果是假的。
+      const r = await window.forge.checkExitIp(scope)
       setIpState(r)
     } catch {
       setIpState({ error: '检测失败（超时或网络不可达）' })
@@ -62,8 +75,8 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
 
   return (
     <div className="set-group">
-      <h4>终端代理</h4>
-      <p className="set-desc">编码代理的命令行与网络请求将通过此代理转发。支持 http:// 与 socks5://(Shadowsocks 等)。留空则直连。</p>
+      <h4>{title}</h4>
+      <p className="set-desc">{desc}支持 http:// 与 socks5://(Shadowsocks 等)。留空则直连。</p>
       {/* Truthful current-state line — reflects the SAVED value, not the editing box, so the user can
           never mistake an unsaved/empty box for an active proxy (the 403 footgun). */}
       <div className={`proxy-current ${active ? 'on' : 'off'}`}>
@@ -71,10 +84,10 @@ export function TermProxyPane({ termProxy, onChange }: TermProxyPaneProps) {
         {active ? <>当前：经代理 <code>{termProxy}</code> 转发</> : <>当前：直连（未启用代理）</>}
       </div>
       <div className="proj-field" style={{ marginTop: 12 }}>
-        <label htmlFor="termProxy">代理地址</label>
+        <label htmlFor={inputId}>代理地址</label>
         <div className="proxy-input-row">
         <input
-          id="termProxy"
+          id={inputId}
           type="text"
           placeholder={DEFAULT_PROXY}
           spellCheck={false}

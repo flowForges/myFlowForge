@@ -1,4 +1,5 @@
 import type { AgentProvider } from '../agents/types'
+import { gateRegistry } from '../gate/gateRegistry'
 
 // Gate Q&A (工作流交互): at a review gate — especially the 技术方案设计 gate — a user sometimes types a
 // QUESTION rather than a supplement or approval, e.g. "这个待澄清项到底是什么意思？我要你解释给我听". The old
@@ -55,7 +56,18 @@ export function runGateAnswer(provider: AgentProvider | undefined, args: GateAns
     try {
       const session = provider.chat!(
         { id: `gate-answer-${++answerSeq}`, prompt, model: args.model, cwd: args.cwd },
-        { onSession: () => {}, onAssistantDelta: (t) => { out += t }, onThinkDelta: () => {}, onDone: finish, onError: finish },
+        {
+          onSession: () => {}, onAssistantDelta: (t) => { out += t }, onThinkDelta: () => {},
+          onDone: finish, onError: finish,
+          // ★以前这里**没有 onConfirm** —— 它要权限时,provider 自己 fail-closed 静默拒,
+          //  一行痕迹都没有,而这条路径连第 5 次全量普查都没数到(是覆盖率守卫抓出来的)。
+          //  现在同样是拒,但在总线上留一条记录:「这条路没有门」和「这条路的门断了」
+          //  必须是两件分得开的事。
+          onConfirm: (req) => gateRegistry.autoDecide(
+            { origin: 'oneshot', workspacePath: args.cwd, label: '门回答' },
+            req,
+          ),
+        },
         args.env,
       )
       session.done.then(finish, finish)

@@ -1,31 +1,35 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, session, Tray } from 'electron'
 import { registerGlobalShortcuts, unregisterGlobalShortcuts } from './shortcuts/globalShortcuts'
-import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { createMainWindow, builtWindowBlurAmount } from './windows/mainWindow'
 import { createPetWindow, resolvePetLayout, MARGIN, clampPetSprite, petClampRegion } from './windows/petWindow'
 import { parkWindowInDock, resolveCloseAction, resolveDockActivationAction } from './windows/closeBehavior'
 import { relocatePetToRegion, PET_EXPANDED, PET_BUBBLE, petCollapsedSize, petPopupSize, clampPetScale, petMaxSize, petResizeFootprint } from '@shared/petGeometry'
 import type { PetVDir, PetSizeMode } from '@shared/petGeometry'
 import { WindowRegistry } from './windows/windowRegistry'
+import { createBroadcastHub } from './ipc/broadcastHub'
+import { createElectronHost } from './host/electronHost'
+import { hostname } from 'node:os'
+import { createHostRouter } from './remote/router'
+import { createAppGateway } from './host/appGateway'
+import { createRelayController } from './host/relayController'
+import { openSshTunnel } from './remote/sshTunnel'
+import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHosts, type RemoteHost } from './remote/hostStore'
 import { registerIpc } from './ipc/handlers'
 import { killAllAgentTrees } from './agents/procGroup'
 import { botBridge } from './bot/botBridge'
 import { showOsNotification, osNotificationsSupported } from './notify/osNotify'
 import { shouldNotify, buildNotification } from './notify/notifier'
+import { createGateNotifier } from './notify/notifyBridge'
+import { pushService } from './push/pushService'
 import { gazeAngle } from '@shared/petGaze'
 import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
-import { readSettings, writeSettings, readWorkspaceRegistry } from './config/store'
+import { readSettings, migrateSettingsIfNeeded, writeSettings, readWorkspaceRegistry } from './config/store'
 import { fixExecPath } from './agents/pathFix'
 import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './tokens/dailyTokenCounter'
 import { setDailyTokenCounter } from './tokens/growthSignalRef'
 import type { Settings } from './config/schema'
-import { TerminalManager } from './terminal/terminalManager'
-import { TermBatcher } from './terminal/termBatch'
-import { makeCwdProbe } from './terminal/cwdProbe'
-import { parseOsc7, abbreviateHome } from './terminal/cwdTrack'
+import { createTerminalService } from './terminal/terminalService'
 import { PluginScheduler } from './plugins/pluginScheduler'
 import { readPlugins } from './plugins/pluginStore'
 import { runPlugin } from './plugins/pluginHost'
@@ -45,6 +49,7 @@ import { hasAllBuiltinPets, mergeBuiltinPets, isLegacyBundledPet } from '@shared
 import { perfSpan } from './perf/perfSpans'
 import { EventLoopMonitor } from './perf/eventLoopMonitor'
 import { StallReporter } from './perf/stallReporter'
+import { rememberRelayUrl } from '@shared/remote/relayHistory'
 
 // Start the centralized debug log as early as possible so even startup failures are persisted to
 // ~/.myFlowForge/logs/app.log and exportable from Settings · 调试日志.
@@ -77,10 +82,36 @@ app.on('second-instance', () => {
   if (mainWinRef && !mainWinRef.isDestroyed()) { mainWinRef.show(); mainWinRef.focus() }
 })
 
+// Windows ties notifications and taskbar/tray identity to the AppUserModelID, and it must match the
+// one the installer stamps on the Start-menu shortcut (electron-builder derives that from appId).
+// Without this, toasts are silently dropped — the app looks like it simply never notifies.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.zghua.myflowforge')
+  // The window is frameless, so Electron's default menu is never DRAWN on Windows — but its
+  // accelerators stay registered. Ctrl+R would reload the renderer out from under a running
+  // workflow, and Ctrl+W would close the window, neither of which this app ever asked for. Drop the
+  // menu entirely. (macOS must keep it: the menu bar is real there, and Cmd+Q / Cmd+C / Cmd+V are
+  // menu roles — removing it would break editing shortcuts.)
+  Menu.setApplicationMenu(null)
+}
+
+// 启动期的失败必须留痕。whenReady 的回调里任何一处抛异常,后面的建窗代码就全不执行 —— 而 promise
+// 的 rejection 没人接,于是表现为「进程活着、一个窗口都没有、app.log 只停在最初两行」。真机上就是这样。
+// 这三个 handler 让那种失败至少写下一行。
+process.on('unhandledRejection', (reason) => {
+  try { logError('app', `未处理的 promise rejection: ${reason instanceof Error ? reason.stack ?? reason.message : String(reason)}`) } catch { /* 日志本身绝不能再抛 */ }
+})
+process.on('uncaughtException', (err) => {
+  try { logError('app', `未捕获异常: ${err.stack ?? err.message}`) } catch { /* 同上 */ }
+})
+
 app.whenReady().then(() => {
   if (!gotInstanceLock) return // a second instance is already quitting — don't build any windows
   const iconPathEnv = () => ({ resourcesPath: process.resourcesPath, appPath: app.getAppPath(), isPackaged: app.isPackaged })
   const applyDockIcon = (iconId: Settings['appIcon']['dockIcon']) => {
+    // Windows has no Dock. The picked icon is still meaningful there — it's what the tray shows —
+    // so the setting isn't dead, it just lands somewhere else (see applyStatusIcon).
+    if (process.platform === 'win32') { refreshTrayImage(); return }
     if (process.platform !== 'darwin') return
     const image = nativeImage.createFromPath(resolveDockIconPath(iconPathEnv(), iconId))
     if (!image.isEmpty()) app.dock?.setIcon(image)
@@ -91,11 +122,22 @@ app.whenReady().then(() => {
   // previously-focused app keeps the menu bar). setActivationPolicy('regular') alone is NOT enough
   // once the runtime has registered as UIElement — app.dock.show() explicitly restores the Dock
   // icon. Do both, up front.
-  if (process.platform === 'darwin') {
+  //
+  // ★★2026-08-30:**`dock.show()` 会把自定义 Dock 图标扔掉。**
+  //  它在 macOS 上落到 `TransformProcessType(…, kProcessTransformToForegroundApplication)`,
+  //  而那一步是**按 app bundle 重建 dock tile** —— 之前 `app.dock.setIcon()` 设的那张就没了。
+  //  这三句因此必须是**捆在一起**的一件事,不能分开写:
+  //    setActivationPolicy → dock.show → **重新贴一次图标**
+  //  漏掉最后一句的地方就是「用户报的『切了图标 Dock 不跟着换』」:图标其实换过了,
+  //  然后他点了一下 Dock(或者切走再切回来),`app.on('activate')` 里那两句把它刷回默认。
+  //  ★重贴是幂等的、也很便宜(一次 nativeImage 读盘),别为了省这一次而把三句拆开。
+  const reassertDock = () => {
+    if (process.platform !== 'darwin') return
     app.setActivationPolicy('regular')
     app.dock?.show().catch(() => { /* dock unavailable — nothing to do */ })
     try { applyDockIcon(readSettings().appIcon.dockIcon) } catch { /* settings/icon unavailable — bundle icon remains */ }
   }
+  reassertDock()
 
   // Serve on-disk pet images via forge-pet://, and one-time migrate any legacy inline data-URL pet
   // images out of settings.json onto disk (older builds stored multi-MB base64 inline, bloating it).
@@ -160,9 +202,28 @@ app.whenReady().then(() => {
   } catch (e) { logError('appearance', `本机字体权限授予失败: ${String(e)}`) }
 
   const registry = new WindowRegistry()
+  // 所有事件外推的唯一出口。本机窗口是它的第一路 sink;第二期起,每个连上来的远程客户端
+  // 各自 addSink 一路,互不知道对方存在。
+  //
+  // ★ 注意下面所有 `hub.broadcast(...)` 原本写的是 `hub.broadcast(...)` —— 那样写等于
+  // 绕过总线直连窗口,settingsChanged / shortcutsStatus / menuAction / appLogEvent / growthSignal
+  // 这五类事件就永远到不了远程客户端,而且是静默到不了。
+  const hub = createBroadcastHub()
+  // 先挂一路直通,让**路由器就位之前**发生的广播(早期日志、快捷键状态)照样能到界面;
+  // 路由器建好后会把这一路换掉 —— 见下面的 detachDirectSink。
+  // ★不能两路都挂着:那样每个事件会送到界面两遍,流式输出直接重影。
+  const detachDirectSink = hub.addSink(registry.broadcast)
+
   // Live-stream debug log entries to any open renderer (the Settings · 调试日志 pane).
-  setAppLogEventSink((e) => registry.broadcast(CH.appLogEvent, e))
+  setAppLogEventSink((e) => hub.broadcast(CH.appLogEvent, e))
+  // 设置一分为二的落盘迁移(第二期 C)。readSettings() 本来就能在 client.json 缺席时
+  // 透明地从老文件里拆,这一步只是把结果**落成两份**,顺便把老 settings.json 里的客户端字段清掉。
+  // 幂等:client.json 已存在就什么都不做。
+  try { if (migrateSettingsIfNeeded()) logInfo('config', '设置已拆分为 settings.json(跟机器)+ client.json(跟设备)') }
+  catch (e) { logError('config', `设置拆分失败(不影响使用,仍按合并视图读): ${String(e)}`) }
+  logInfo('app', '协议与会话准备完毕,开始建主窗口')
   const mainWin = createMainWindow()
+  logInfo('app', '主窗口已创建,等待 ready-to-show')
   mainWinRef = mainWin
   registry.add(mainWin.webContents)
 
@@ -173,27 +234,52 @@ app.whenReady().then(() => {
     mainWinRef.focus()
     app.focus({ steal: true })
   }
-  const applyMenuBarIcon = (show: boolean) => {
-    if (process.platform !== 'darwin') return
+  // The tray image, per platform:
+  //   macOS  — the menu bar wants a MONOCHROME template image; the OS recolours it for light/dark and
+  //            for the highlighted state. A colourful icon there looks broken.
+  //   Windows — the notification area wants a normal colour icon, and 16px is the slot size. It uses
+  //            the icon the user picked in 设置→应用图标 (the Dock picker has nothing else to drive
+  //            on Windows), so that setting stays meaningful instead of doing nothing.
+  const buildTrayImage = (): Electron.NativeImage | null => {
+    const win = process.platform === 'win32'
+    const path = win
+      ? resolveDockIconPath(iconPathEnv(), (() => { try { return readSettings().appIcon.dockIcon } catch { return 'ember-violet' } })())
+      : resolveMenuBarIconPath(iconPathEnv())
+    const image = nativeImage.createFromPath(path)
+    if (image.isEmpty()) return null
+    const sized = image.resize(win ? { width: 16, height: 16 } : { width: 18, height: 18 })
+    if (!win) sized.setTemplateImage(true)
+    return sized
+  }
+  const refreshTrayImage = () => {
+    if (!menuBarTray) return
+    const image = buildTrayImage()
+    if (image) menuBarTray.setImage(image)
+  }
+  // The status icon: macOS menu bar / Windows notification area. Same toggle, same menu, different
+  // click conventions — Windows expects right-click (and the keyboard menu key) to open a context
+  // menu owned by the tray, which is what setContextMenu gives; on macOS that would also hijack
+  // LEFT-click into opening the menu, so there the menu is popped up by hand.
+  const applyStatusIcon = (show: boolean) => {
+    if (process.platform !== 'darwin' && process.platform !== 'win32') return
     if (!show) {
       menuBarTray?.destroy()
       menuBarTray = null
       return
     }
-    if (menuBarTray) return
-    const image = nativeImage.createFromPath(resolveMenuBarIconPath(iconPathEnv()))
-    if (image.isEmpty()) return
-    const trayImage = image.resize({ width: 18, height: 18 })
-    trayImage.setTemplateImage(true)
-    menuBarTray = new Tray(trayImage)
-    menuBarTray.setToolTip('FlowForge')
+    if (menuBarTray) { refreshTrayImage(); return }
+    const image = buildTrayImage()
+    if (!image) return
+    menuBarTray = new Tray(image)
+    menuBarTray.setToolTip('myFlowForge')
     // Left-click opens the app; right-click drops the context menu (新建工作区 / 开关宠物 / 退出).
     menuBarTray.on('click', showMainWindow)
-    menuBarTray.on('right-click', () => menuBarTray?.popUpContextMenu(buildAppMenu()))
+    if (process.platform === 'win32') menuBarTray.setContextMenu(buildAppMenu())
+    else menuBarTray.on('right-click', () => menuBarTray?.popUpContextMenu(buildAppMenu()))
   }
   const applyAppIconSettings = (settings: Settings) => {
+    applyStatusIcon(settings.appIcon.showMenuBar)
     applyDockIcon(settings.appIcon.dockIcon)
-    applyMenuBarIcon(settings.appIcon.showMenuBar)
   }
   applyAppIconSettings(readSettings())
   // Once the window is up, make sure the app is the foreground one (owns the menu bar) AND that the
@@ -201,7 +287,9 @@ app.whenReady().then(() => {
   // UIElement after the initial call.
   mainWin.once('ready-to-show', () => {
     app.focus({ steal: true })
-    if (process.platform === 'darwin') app.dock?.show().catch(() => {})
+    // ★走 reassertDock 而不是裸 `dock.show()` —— 裸的那句会把上面
+    //  `applyAppIconSettings(readSettings())` 刚贴好的图标又刷回 bundle 默认。
+    reassertDock()
   })
   // Close behavior per settings.closeAction: hide (缩小到 Dock — the pet window keeps the process
   // alive, the existing activate handler restores the window), quit, or ask via a dialog. When the
@@ -213,7 +301,7 @@ app.whenReady().then(() => {
       const action = resolveCloseAction(readSettings().closeAction, quitting)
       if (action === 'pass') return
       e.preventDefault() // hide + ask both keep the window alive ('closed' never fires)
-      if (action === 'hide') { parkWindowInDock(win); return }
+      if (action === 'hide') { parkWindowInDock(win, process.platform, !!menuBarTray); return }
       void dialog.showMessageBox(win, {
         type: 'question',
         message: '关闭 myFlowForge？',
@@ -228,9 +316,9 @@ app.whenReady().then(() => {
           writeSettings({ ...readSettings(), closeAction: response === 0 ? 'hide' : 'quit' })
           // Keep every window's settings snapshot fresh so a later config:set-settings (whole-object
           // write) doesn't clobber the remembered choice with a stale value (same guard as petSetScale).
-          registry.broadcast(CH.settingsChanged, readSettings())
+          hub.broadcast(CH.settingsChanged, readSettings())
         }
-        if (response === 0) { parkWindowInDock(win); return }
+        if (response === 0) { parkWindowInDock(win, process.platform, !!menuBarTray); return }
         quitting = true
         app.quit()
       })
@@ -404,7 +492,7 @@ app.whenReady().then(() => {
       'toggle-pet': togglePet,
     })
     globalShortcutFailed = failed
-    registry.broadcast(CH.shortcutsStatus, { failed })
+    hub.broadcast(CH.shortcutsStatus, { failed })
   }
   applyGlobalShortcuts()
   ipcMain.handle(CH.shortcutsGetStatus, () => ({ failed: globalShortcutFailed }))
@@ -446,7 +534,7 @@ app.whenReady().then(() => {
     writeSettings({ ...s, pet: { ...s.pet, scale: next } })
     // Keep every window's settings snapshot fresh so a later config:set-settings (whole-object write)
     // doesn't clobber the new scale/free with a stale value (same guard as workspacesSetOrder).
-    registry.broadcast(CH.settingsChanged, readSettings())
+    hub.broadcast(CH.settingsChanged, readSettings())
     return dockPet(petMode)
   })
   ipcMain.handle(CH.petSetIgnoreMouse, (_e, ignore: boolean) => {
@@ -481,6 +569,9 @@ app.whenReady().then(() => {
     w.isMaximized() ? w.unmaximize() : w.maximize()
   })
   ipcMain.handle(CH.windowClose, (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+  // Initial state for the caption buttons: the window can already be maximised when the renderer
+  // mounts (restored session, launched maximised), and no maximize event fires for that.
+  ipcMain.handle(CH.windowIsMaximized, (e) => !!BrowserWindow.fromWebContents(e.sender)?.isMaximized())
   // transparent/vibrancy are construction-time only, so toggling 毛玻璃 needs a full restart to
   // rebuild the window. Let the settings UI trigger it directly. Force-quit past the close-action
   // guard (set quitting) so the app actually exits and relaunches instead of parking in the Dock.
@@ -517,12 +608,12 @@ app.whenReady().then(() => {
     const next = { ...s, pet: { ...s.pet, enabled: !s.pet.enabled } }
     writeSettings(next)
     onSettings(next)                                 // create/close the pet window per the new flag
-    registry.broadcast(CH.settingsChanged, next)     // reflect the change in the open settings UI
+    hub.broadcast(CH.settingsChanged, next)     // reflect the change in the open settings UI
   }
   function buildAppMenu(): Menu {
     const petEnabled = (() => { try { return readSettings().pet.enabled } catch { return true } })()
     return Menu.buildFromTemplate([
-      { label: '新建工作区', click: () => { showMainWindow(); registry.broadcast(CH.menuAction, 'new-workspace') } },
+      { label: '新建工作区', click: () => { showMainWindow(); hub.broadcast(CH.menuAction, 'new-workspace') } },
       { label: petEnabled ? '关闭桌面宠物' : '打开桌面宠物', click: () => togglePetEnabled() },
       { type: 'separator' },
       { label: '退出 myFlowForge', click: () => { quitting = true; app.quit() } },
@@ -530,6 +621,9 @@ app.whenReady().then(() => {
   }
   function refreshDockMenu(): void {
     if (process.platform === 'darwin') { try { app.dock?.setMenu(buildAppMenu()) } catch { /* dock unavailable */ } }
+    // Windows' tray menu is owned by the Tray (setContextMenu), so it has to be rebuilt too —
+    // otherwise the 打开/关闭桌面宠物 item keeps the label it had when the tray was created.
+    if (process.platform === 'win32' && menuBarTray) { try { menuBarTray.setContextMenu(buildAppMenu()) } catch { /* tray gone */ } }
   }
   refreshDockMenu()  // initial Dock menu
 
@@ -560,12 +654,157 @@ app.whenReady().then(() => {
     const wsName = readWorkspaceRegistry().find(w => w.path === payload.workspacePath)?.name ?? ''
     routeAndFire(buildNotification({ type: 'done', workspaceName: wsName, workspacePath: payload.workspacePath, sessionId: payload.sessionId, text: '会话已回复,点击查看' }))
   }
+  // ★「有一道门等着你」那条通知。**2026-08-30 之前它根本不存在** —— 老的 notifyBridge 挂在
+  //   已删掉的 orchestrator 的 `pending:add` 上,全仓库零引用,而设置里那两个开关一直摆着。
+  //   现在它看的是和 botBridge / pushService 完全同一批活信号。
+  const gateNotifier = createGateNotifier({
+    getCfg: () => readSettings().notifications,
+    isFocused: isMainFocused,
+    notify: routeAndFire,
+    workspaceName: (p) => readWorkspaceRegistry().find(w => w.path === p)?.name ?? '',
+  })
   const broadcastWithNotify = (channel: string, payload: unknown) => {
-    registry.broadcast(channel, payload)
+    hub.broadcast(channel, payload)
     if (channel === CH.chatEvent) notifyChatDone(payload)
+    gateNotifier(channel, payload)        // 门 → 本机系统通知(正文可以带内容,不经第三方)
+    // 门 / 跑完了 → 已登记的手机(决策 7:daemon 直发 Expo,不经中转)。
+    // ★只挂本机这一路:连着远程 host 时,推送该由**那台机器**发 —— 它才知道自己的设备表,
+    //   而且人此刻正对着这台电脑,再往他手机上推一条纯属噪音。
+    pushService.observe(channel, payload)
     botBridge.observe(channel, payload)   // mirror gate/ask/done/run2 events to the phone
   }
-  registerIpc(broadcastWithNotify, buildProviderRegistry(), onSettings)
+  // 终端(PTY)。★注册本身在 `registerIpc` 里,和别的方法一处 —— 传一个进去只是为了
+  //  拿住句柄,好在退出/关窗时把 pty 收干净。`fallbackCwd` 只有桌面外壳答得上来:
+  //  daemon 上没有「当前工作区」这回事。
+  const termService = createTerminalService({
+    fallbackCwd: () => activeWsPath,
+    span: (name, fn) => perfSpan('term', name, fn),
+  })
+  // 唯一一处把方法表接到 Electron 上的地方。daemon 侧的 WS 网关遍历的是**同一张表** ——
+  // 方法只有一份,所以不存在「本机一条路径、远程另一条路径」的漂移。
+  const methodTable = registerIpc(broadcastWithNotify, buildProviderRegistry(), createElectronHost(), onSettings, termService)
+
+  // 路由器坐在方法表前面:每一刀由本机接还是转发给远程 host,由它决定(第二期 B)。
+  // ★渲染层和 preload 完全不知道有这回事 —— 它们永远只跟主进程说话。
+  const router = createHostRouter({
+    localTable: methodTable,
+    toWindows: registry.broadcast,
+    // ★远程主机推来的事件要单独补一次通知嗅探:本机那条挂在 broadcastWithNotify 上,
+    //   远程事件不经过它 —— 于是「远程跑完了」这一声本来是**发不出来的**,
+    //   而远程恰恰是最需要它的场景:人根本不在那台机器前面。
+    //   分成两个出口是必须的:并进 toWindows 的话本机事件会各触发一次,变成每条回复弹两个通知。
+    onRemoteEvent: (channel, payload) => {
+      registry.broadcast(channel, payload)
+      if (channel === CH.chatEvent) notifyChatDone(payload)
+      // 远程那台升起来的门同样要在这块屏幕上弹一声 —— 而且远程恰恰是最需要的场景。
+      // ★推送不挂这儿:那台机器有它自己的设备表,由它直发(否则同一道门会推两遍)。
+      gateNotifier(channel, payload)
+    },
+    clientVersion: app.getVersion(),
+    // 远程那台在系统提示里就显示这个名字。用机器名 —— 用户一眼认得出是哪台。
+    clientLabel: hostname(),
+    onStatus: (s) => registry.broadcast(CH.hostsStatusEvent, s),
+    onLog: (m) => logInfo('remote', m),
+    resolveUrl: async (h) => {
+      // ★★配了中转就不拉隧道:走中转时 `remoteClient` 拨的是**中转**,`url` 只是个记录,
+      //  连不到也不会去连。不挡的话「kind=ssh + 有中转」这种组合会白开一条 SSH 隧道
+      //  (慢、可能失败、还要 cleanup),而那条隧道从头到尾没人用。
+      if (h.relay) return { url: h.address }
+      if (h.kind !== 'ssh') return { url: h.address }
+      const { host, port } = { host: '127.0.0.1', port: Number(h.address) || 6767 }
+      const t = await openSshTunnel({ target: h.sshTarget, remoteHost: host, remotePort: port, onLog: (m) => logInfo('remote', m) })
+      return { url: `ws://127.0.0.1:${t.localPort}`, cleanup: () => t.close() }
+    },
+  })
+  // ★本机核心的广播改从路由器过一道:连着远程时,本机 agent 的事件不许漏进界面(决策 2)。
+  // 先摘掉启动期那路直通,否则每个事件会走两遍。
+  detachDirectSink()
+  hub.addSink(router.localEvent)
+
+  for (const channel of Object.keys(methodTable)) {
+    ipcMain.handle(channel, (e, ...args) => router.invoke(channel, {
+      // ctx.emit = 「回给发起这次调用的那个窗口」,不是广播。窗口可能在异步 handler 跑到一半时
+      // 被关掉,send 会抛;吞掉即可 —— 原先那两处 e.sender.send 本来就各自套着 try/catch。
+      emit: (c, p) => { try { e.sender.send(c, p) } catch { /* window closed */ } },
+      // 本机窗口发起的调用。权限门用它区分「我自己答的」和「别的设备答的」——
+      // 前者不该在对话里加噪音,后者必须说清楚。
+      client: { id: 'local', label: '本机' },
+    }, args))
+  }
+
+  // ── 多主机管理。这些是**客户端自己的**事(这台设备认识哪些机器、现在连着谁),
+  //    所以注册在这儿而不是方法表里 —— 天然不会被路由到远程。
+  ipcMain.handle(CH.hostsList, () => readHosts().hosts)
+  ipcMain.handle(CH.hostsUpsert, (_e, h: Parameters<typeof upsertHost>[0]) => {
+    const next = upsertHost(h)
+    // ★改的如果正是当前连着的这台,要把路由器里那份快照一起换掉 —— 否则标题栏上的
+    //   名字/标识/显示方式不会变,看起来就是「保存了但没生效」。
+    router.hostUpdated(next)
+    return readHosts().hosts
+  })
+  ipcMain.handle(CH.hostsRemove, async (_e, id: string) => {
+    if (router.current()?.id === id) await router.disconnect()
+    return removeHost(id).hosts
+  })
+  ipcMain.handle(CH.hostsConnect, async (_e, id: string | null) => {
+    if (!id) { await router.disconnect(); return router.status() }
+    const h = readHosts().hosts.find((x: RemoteHost) => x.id === id)
+    if (!h) throw new Error('没有这台主机')
+    await router.connect(h)
+    markConnected(id, Date.now())
+    return router.status()
+  })
+  ipcMain.handle(CH.hostsDisconnect, async () => { await router.disconnect(); return router.status() })
+  ipcMain.handle(CH.hostsStatus, () => router.status())
+  // ── 手机端网关(决策 3:与 app 同生共死)。
+  //    ★端在**这个进程里**,用的就是上面那张 methodTable 和同一条广播总线 hub ——
+  //    所以手机和本机窗口面对的是**同一份核心**:同一张权限门表、同一份会话状态。
+  //    另起一个 daemon.js 也能让手机连上,但那是第二个独立核心,两边互相看不见对方做了什么。
+  //    这些 channel 跟 hosts:* 一样注册在这儿而不是方法表里 —— 它描述的是这台设备自己的服务,
+  //    连去别的机器时不该被转发过去。
+  const mobileGw = createAppGateway({
+    table: methodTable,
+    addSink: hub.addSink,
+    version: app.getVersion(),
+    onLog: (m) => logInfo('mobile', m),
+    onStatus: (st) => registry.broadcast(CH.mobileStatusEvent, st),
+  })
+  void mobileGw.apply(readSettings().mobileGateway)
+  ipcMain.handle(CH.mobileStatus, () => mobileGw.status())
+  ipcMain.handle(CH.mobileApply, async (_e, cfg: Settings['mobileGateway']) => {
+    // 先落盘再起 —— 起失败时开关要能弹回去,而那要靠 status().error,不是靠设置里的 enabled。
+    writeSettings({ ...readSettings(), mobileGateway: cfg })
+    return mobileGw.apply(cfg)
+  })
+  ipcMain.handle(CH.mobileRegenToken, () => mobileGw.regenToken())
+
+  // ── 中转(第三期)。和上面那个手机端网关**不是二选一**:
+  //    局域网网关 = 「同一个 wifi 里连得上」;中转 = 「NAT 后面也连得上」。
+  //    在家走局域网(快、少一跳),出门走中转,同一个二维码。
+  const relayCtl = createRelayController({
+    table: methodTable,
+    addSink: hub.addSink,
+    version: app.getVersion(),
+    onLog: (m) => logInfo('relay', m),
+    onStatus: (st) => registry.broadcast(CH.relayStatusEvent, st),
+  })
+  void relayCtl.apply(readSettings().relay)
+  ipcMain.handle(CH.relayStatus, () => relayCtl.status())
+  ipcMain.handle(CH.relayIdentity, () => relayCtl.publicKey())
+  ipcMain.handle(CH.relayApply, async (_e, cfg: Omit<Settings['relay'], 'urlHistory'>) => {
+    // 先落盘再起 —— 起失败时开关要能弹回去,而那要靠 status().detail,不是靠设置里的 enabled。
+    const prev = readSettings()
+    // ★★把这次用的地址记进历史,好让下次重装系统之后能从下拉里选(用户 2026-09-17 提的)。
+    //  ★历史**只有地址**,令牌一个字节都不进去 —— 见 `shared/remote/relayHistory.ts` 顶部。
+    //  ★由**主进程**在落盘这一处记,不在界面上记:界面有好几条路能改这个值(输入框失焦、
+    //   开关、以后可能的导入),各记各的迟早漏一条,而漏掉的那条表现为「我明明填过怎么下拉里没有」。
+    const relay = { ...cfg, urlHistory: rememberRelayUrl(prev.relay?.urlHistory ?? [], cfg.url) }
+    writeSettings({ ...prev, relay })
+    return relayCtl.apply(relay)
+  })
+
+  ipcMain.handle(CH.hostsExport, (_e, includeTokens: boolean) => exportHosts({ includeTokens: !!includeTokens }))
+  ipcMain.handle(CH.hostsImport, (_e, text: string) => importHosts(String(text ?? '')))
 
   // 成长宠物的今日 token 基线。全量扫盘只在这里跑这一次,之后靠 chatService 每轮累加。
   //
@@ -587,7 +826,7 @@ app.whenReady().then(() => {
     setDailyTokenCounter(createDailyTokenCounter({
       baseline: scanTokenBaseline(day),
       day,
-      onChange: (s) => registry.broadcast(CH.growthSignal, s),
+      onChange: (s) => hub.broadcast(CH.growthSignal, s),
     }))
   })
 
@@ -595,27 +834,15 @@ app.whenReady().then(() => {
   const scheduler = new PluginScheduler({
     run: makeRun({ runHost: (p) => runPlugin(p) }),
     readPlugins,
-    broadcast: (snap) => registry.broadcast(CH.pluginsChanged, snap),
+    broadcast: (snap) => hub.broadcast(CH.pluginsChanged, snap),
   })
   setPluginScheduler(scheduler)
   scheduler.start()
   // ── End Plugin Scheduler ────────────────────────────────────────────────────
 
-  // ── Terminal PTY bridge ─────────────────────────────────────────────────────
-  const lsofExec = (pid: number) => new Promise<string>((res, rej) =>
-    execFile('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], (e, out) => e ? rej(e) : res(out)))
-
-  const cwdProbes = new Map<string, (pid: number) => Promise<void>>()
-  const cwdTimers = new Map<string, NodeJS.Timeout>()
-  const lastOscCwd = new Map<string, string>()
-  const termHome = homedir()
-
-  // node-pty is a native module — import lazily to avoid load-time crash in test env
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodePty = require('node-pty') as typeof import('node-pty')
-
-  // Send only to the current main window (original or rebuilt-after-close). Used for high-frequency
-  // terminal events so they don't get needlessly serialized to the pet / other windows.
+  // ── 卡顿监控 ────────────────────────────────────────────────────────────────
+  // 只发给当前那个主窗口(原来的、或者关掉之后重建的那个),不经广播 ——
+  // 卡顿提示是给正在看着屏幕的人的,序列化给宠物窗和别的窗口没有意义。
   const sendMain = (channel: string, payload: unknown) => {
     if (mainWinRef && !mainWinRef.isDestroyed()) mainWinRef.webContents.send(channel, payload)
   }
@@ -634,115 +861,32 @@ app.whenReady().then(() => {
   const perfMonitor = new EventLoopMonitor()
   if (readSettings().perfDiagnostics) perfMonitor.start((ms, active) => stallReporter.report(ms, active))
 
-  // Assigned just below (after scheduleCwd is defined). The pty onData closure references it, but that
-  // only fires asynchronously once a terminal is spawned, long after this synchronous setup completes.
-  let termBatcher: TermBatcher
-  const termManager = new TerminalManager({
-    spawn: (shell, args, o) =>
-      nodePty.spawn(shell, args, {
-        name: 'xterm-256color',
-        cwd: o.cwd,
-        env: o.env as Record<string, string>,
-        cols: o.cols,
-        rows: o.rows,
-      }),
-    onData: (termId, data) => {
-      // Terminal data is high-frequency (keystroke echo + prompt redraw, and thousands of chunks/sec
-      // under a build/log flood). Coalesce chunks in a short window before crossing IPC — one send
-      // per chunk saturated the main event loop, janking heavy output AND delaying keystroke echo
-      // (it waited behind the flood). Batching also lets us parse OSC7/cwd once per blob, not per chunk.
-      termBatcher.push(termId, data)
-    },
-    onExit: (termId, e) => {
-      termBatcher.flush(termId)   // emit any buffered trailing output before the exit event
-      cwdProbes.delete(termId)
-      const t = cwdTimers.get(termId)
-      if (t !== undefined) { clearTimeout(t); cwdTimers.delete(termId) }
-      lastOscCwd.delete(termId)
-      sendMain(CH.termExit, { termId, ...e })
-    },
-    exists: existsSync,
-  })
-
-  const scheduleCwd = (termId: string) => {
-    const probe = cwdProbes.get(termId)
-    const pid = termManager.pidOf(termId)
-    if (!probe || pid === undefined) return
-    clearTimeout(cwdTimers.get(termId))
-    cwdTimers.set(termId, setTimeout(() => void probe(pid), 150))
-  }
-
-  // Coalesce PTY output → one IPC send per short window (instead of one per chunk), and parse the
-  // cwd OSC once per coalesced blob. A full OSC7 sequence is more likely intact in a coalesced blob
-  // than split across raw chunks, so cwd tracking gets slightly more reliable too.
-  termBatcher = new TermBatcher({
-    flush: (termId, data) => perfSpan('term', 'flush', () => {
-      sendMain(CH.termData, { termId, data })
-      const osc = parseOsc7(data)
-      if (osc) {
-        const abbr = abbreviateHome(osc, termHome)
-        if (abbr !== lastOscCwd.get(termId)) { lastOscCwd.set(termId, abbr); sendMain(CH.termCwd, { termId, cwd: abbr }) }
-      } else {
-        scheduleCwd(termId)
-      }
-    }),
-  })
-
-  ipcMain.handle(CH.termCreate, (_e, opts: { termId: string; cwd?: string; cols: number; rows: number }) => {
-    try {
-      // Prefer the requested cwd; else fall back to the active workspace (so a terminal opened while
-      // a workspace is focused lands there, not at ~); else home.
-      const cwd = opts.cwd && existsSync(opts.cwd) ? opts.cwd
-        : activeWsPath && existsSync(activeWsPath) ? activeWsPath
-        : homedir()
-      termManager.create({ termId: opts.termId, cwd, cols: opts.cols || 80, rows: opts.rows || 24 })
-      cwdProbes.set(
-        opts.termId,
-        makeCwdProbe({
-          exec: lsofExec,
-          home: homedir(),
-          onCwd: c => sendMain(CH.termCwd, { termId: opts.termId, cwd: c }),
-        }),
-      )
-      scheduleCwd(opts.termId)
-      return { ok: true as const }
-    } catch (e) {
-      return { ok: false as const, error: e instanceof Error ? e.message : String(e) }
-    }
-  })
-
-  ipcMain.on(CH.termWrite, (_e, p: { termId: string; data: string }) => {
-    termManager.write(p.termId, p.data)
-  })
-
-  ipcMain.on(CH.termResize, (_e, p: { termId: string; cols: number; rows: number }) => {
-    termManager.resize(p.termId, p.cols, p.rows)
-  })
-
-  ipcMain.on(CH.termKill, (_e, p: { termId: string }) => {
-    cwdProbes.delete(p.termId)
-    const t = cwdTimers.get(p.termId)
-    if (t !== undefined) { clearTimeout(t); cwdTimers.delete(p.termId) }
-    lastOscCwd.delete(p.termId)
-    termManager.kill(p.termId)
-  })
-
   // killAllAgentTrees:agent CLI 现在是 detached 的独立进程组(见 agents/procGroup.ts),而 execa 自带的
   // 「父进程退出时杀子进程」在 detached 下直接 return —— 不在这里补一刀,退出 app 就会把正在跑的 CLI
   // 连同它派生的 shell 命令一起留在后台。
-  app.on('before-quit', () => { quitting = true; termManager.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts() })
-  mainWin.on('closed', () => termManager.killAll())
-  // ── End terminal PTY bridge ─────────────────────────────────────────────────
+  app.on('before-quit', () => {
+    quitting = true; termService.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts()
+    // ★远程连接也要收:SSH 隧道是我们自己 spawn 的子进程,不杀就变成孤儿留在系统里
+    //   (每连一次留一个)。同一类坑在 agent 进程上已经栽过两次,不能在这儿再来一遍。
+    //   before-quit 是同步的,所以只发出关闭指令,不 await —— 隧道进程收到 SIGTERM 就够了。
+    void router.disconnect()
+    // 网关也一起收:决策 3 说的「同生共死」不是修辞 —— 留一个还在听的端口给一个已经退出的
+    // app,连上去只会是一堆永远不 settle 的调用。
+    void mobileGw.close()
+  })
+  // 主窗口关掉(mac 上 app 还活着)→ 只收**本机窗口开的**那些终端。
+  // ★不能用 killAll:这台机器同时也是别人的 host,连上来的客户端开的终端归它们自己,
+  //   由它们那条连接断开时收(见 InvokeCtx.onClose)。
+  mainWin.on('closed', () => termService.killOwner('local'))
 
   // Dock-icon click / re-activation. The pet window keeps the process alive, so getAllWindows()
   // is never empty — the old "create only when 0 windows" check never fired, leaving a hidden or
   // behind-other-apps main window stranded (clicking the Dock icon did nothing). Bring the existing
   // window forward, and re-assert foreground because the pet can flip the runtime back to UIElement.
   app.on('activate', () => {
-    if (process.platform === 'darwin') {
-      app.setActivationPolicy('regular')
-      app.dock?.show().catch(() => {})
-    }
+    // ★★这里是那个 bug 最常现形的地方:每次点 Dock 图标 / 从别的 app 切回来都会跑一遍,
+    //  而裸的 `dock.show()` 会把自定义图标刷回默认(理由见 reassertDock 上面那段)。
+    reassertDock()
     // 「点击前是否在焦点」:macOS 在触发 activate 之前就已把窗口聚焦,isFocused() 恒 true 不可用;而 activate
     // 又在窗口 focus 事件【之前】触发,所以此刻 appFocused 标志仍是【点击前】的真实状态(切走别的 app 时主窗口
     // blur 已把它设 false)。点击前不在焦点(false)→ 显示并获焦、不收起;点击前在焦点(true)→ visible 时 toggle 收起。
@@ -755,7 +899,7 @@ app.whenReady().then(() => {
       focused: appFocused,
     })
     if (action === 'minimize' && mainWinRef && !mainWinRef.isDestroyed()) {
-      parkWindowInDock(mainWinRef)
+      parkWindowInDock(mainWinRef, process.platform, !!menuBarTray)
       return
     }
     if (action === 'restore' || action === 'show') {

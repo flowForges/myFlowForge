@@ -12,6 +12,8 @@ import { useEngine } from './state/useEngine'
 import { useConfig } from './state/useConfig'
 import { useHookLibrary } from './state/useHookLibrary'
 import { useSettings } from './state/useSettings'
+import { useHost } from './state/useHostKey'
+import { usePathPicker } from './state/PathPicker'
 import type { OpenTarget } from '@shared/openers'
 import { useLogs } from './state/useLogs'
 import { useResizable } from './state/useResizable'
@@ -23,6 +25,7 @@ import { toggleExpanded, ensureExpanded, loadExpanded, saveExpanded } from './st
 import { useUpdate } from './state/useUpdate'
 import { usePlugins } from './state/usePlugins'
 import { applyTheme } from './theme/applyTheme'
+import { initWindowFocus } from './theme/windowFocus'
 import { useWallpaperPalette } from './theme/wallpaperSample'
 import { injectDownloadedFontFaces } from './theme/fontFaces'
 import { fmtRelTime } from '@shared/relTime'
@@ -36,12 +39,16 @@ import { AppearancePane } from './settings/AppearancePane'
 import { BackgroundPane } from './settings/BackgroundPane'
 import { NotificationsPane } from './settings/NotificationsPane'
 import { AppIconPane } from './settings/AppIconPane'
-import { TermProxyPane } from './settings/TermProxyPane'
+import { ProxyPane } from './settings/ProxyPane'
 import { AgentsPane } from './settings/AgentsPane'
+import { HostsPane } from './settings/HostsPane'
+import { PhonePane } from './settings/PhonePane'
+import { baseName } from '@shared/pathName'
 import { WorkflowPane } from './settings/WorkflowPane'
 import { CustomStagesPane } from './settings/CustomStagesPane'
 import { HookLibraryPane } from './settings/HookLibraryPane'
-import { SkillPane } from './settings/SkillPane'
+import { McpPane } from './settings/McpPane'
+import { MarketPane } from './settings/MarketPane'
 import { PetPane } from './settings/PetPane'
 import { PetMarketPane } from './settings/PetMarketPane'
 import { PET_MARKET_PLUGIN_ID } from '@shared/codexPetMarket'
@@ -92,6 +99,13 @@ export function App() {
   // No mock seed, so the bell shows a badge only when something real is unread.
   const [notifs, setNotifs] = useState<Notif[]>([])
   const [notifOpen, setNotifOpen] = useState(false)
+  // 窗口最大化状态 —— 只给 Windows 的标题栏按钮换「最大化/向下还原」图标用。无边框窗口渲染层读不到系统
+  // 标题栏,只能由主进程告知;初值单独拉一次(启动时就已最大化的场景不会有 maximize 事件)。
+  const [maximized, setMaximized] = useState(false)
+  useEffect(() => {
+    window.forge?.windowIsMaximized?.().then(setMaximized).catch(() => {})
+    return window.forge?.onWindowMaximized?.(setMaximized)
+  }, [])
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const updateCtx = useUpdate()
   // Auto-surface the upgrade modal when a (possibly backgrounded) download finishes, so the user is
@@ -111,6 +125,13 @@ export function App() {
   // Setup progress: accumulated events from onSetupEvent during workspace creation with __basic/__proj hooks.
   const [setupState, setSetupState] = useState<SetupProgressState>(INITIAL_SETUP_STATE)
   const [setupVisible, setSetupVisible] = useState(false)
+  /**
+   * ★★建区 Hook 还挂着的门。**这份状态的事实源在主进程**(gateRegistry),不是这里 ——
+   *  以前那道门只活在 `setupState.pendingInteraction` 里,而「后台运行」会把 overlay 藏起来、
+   *  「关闭」会把整个 state 重置掉,于是门就永远没人能答,hook 那边不超时不兜底,
+   *  界面停在「运行中 · 1m51s」。现在界面关不关都不影响门,进来拉一次就重建得出来。
+   */
+  const [setupGates, setSetupGates] = useState<import('@shared/types').PendingGateView[]>([])
   // 后台运行: the overlay is hidden but setup is still running. Mirrored into a ref because the
   // onSetupEvent subscription below closes over initial state (empty-deps effect) and must read the
   // live value to decide whether to fire a completion notification. creatingNameRef names the
@@ -223,6 +244,31 @@ export function App() {
   const { projects, workflows, customStages, providers, addProject, deleteProject, updateProjectBranch, updateProjectAlias, addWorkflow, deleteWorkflow, updateWorkflow, updateStagePrompts, updateStages, upsertCustomStage, deleteCustomStage, redetect } = useConfig()
   const hookLib = useHookLibrary()
   const { settings, update } = useSettings()
+  const { key: hostKey, label: hostLabel } = useHost()
+  // ★切换主机 = 断开 → 换管子 → **重新挂载**(决策 2)。
+  //   不重置的话你会停在上一台机器的工作区和会话上 —— 那条路径在新主机上通常根本不存在,
+  //   而界面看起来一切正常(自测时两台是同一台机器,更是完全分不出来)。
+  const prevHost = useRef(hostKey)
+  useEffect(() => {
+    if (prevHost.current === hostKey) return
+    prevHost.current = hostKey
+    setActiveId('')
+    setView('home')
+    // ★★下面这几份都是**按工作区路径累积的事件状态**(运行中 / 正在跑的会话 / 刚有动静 /
+    //  两种门的待办数)。它们只增不减地攒在内存里,而**两台机器上的工作区路径可以一模一样**
+    //  (同一个人、同样的目录习惯;自测时更是同一台机器上的同一个路径)⇒ 不清的话,
+    //  切过去之后新主机的工作区上会挂着上一台的「运行中」圆点和「3 道门等你」角标 ——
+    //  那是**假的**,而且它比空白危险:人会照着它点进去找那道根本不存在的门。
+    // ★清空是对的、不是丢数据:这几份的唯一来源是**当前这台主机推过来的事件**
+    //  (`localEvent` 在连着远程时只放行「描述这台设备本身」的那几条),换了主机就该重头攒。
+    setBusyWs(new Set())
+    setRunningSessByWs(new Map())
+    setRecentActivity(new Map())
+    setRun2SessByWs(new Map())
+    setChatGateByWs(new Map())
+    setRun2GateByWs(new Map())
+  }, [hostKey])
+  const { pick: pickPath } = usePathPicker()
   const sidebarGroups = useMemo(() => {
     const now = nowTick
     const items = home.workspaces.map(w => {
@@ -287,7 +333,9 @@ export function App() {
   // collapses/expands it. We intentionally do NOT force the active workspace open.
   const [expandedWs, setExpandedWs] = useState<Set<string>>(() => new Set(loadExpanded()))
   const expandedPaths = useMemo(() => Array.from(expandedWs), [expandedWs])
-  const sessionsByWs = useSessionsMulti(expandedPaths)
+  // ★带上 hostKey:两台机器上的工作区路径可以一模一样,不带的话切过去之后侧栏里展开的
+  //  还是上一台的会话(缓存按 path 记「拉过了」)。
+  const sessionsByWs = useSessionsMulti(expandedPaths, hostKey)
   // Merge active workspace's live sessions (from useSessions) so active-ws session ops remain instant.
   // 空的实时列表不覆盖缓存 —— 切换工作区那一帧会话行不能整段消失,见 sessionsMap.ts。
   const sessionsMap = mergeActiveSessions(sessionsByWs, activeWsId, sessions.sessions)
@@ -312,6 +360,9 @@ export function App() {
     window.forge.setActiveWorkspace?.(view === 'ws' ? (activeWsId || null) : null)
   }, [view, activeWsId])
 
+  // 壁纸模糊只在窗口是焦点时生效 —— 见 theme/windowFocus.ts。挂一次,活到应用退出。
+  useEffect(() => initWindowFocus(), [])
+
   // If the open workspace is removed/deleted while you're viewing it, fall back to home. Covers every
   // removal path (hard delete, 从列表移除 an imported workspace, or a removal broadcast from another
   // window): once it's gone from the list (and isn't the live run), keep showing its session area would
@@ -328,7 +379,11 @@ export function App() {
   useEffect(() => {
     if (!activeWsId || !settings || lastWrittenWs.current === activeWsId) return
     lastWrittenWs.current = activeWsId
-    if (settings.lastActiveWorkspace !== activeWsId) update({ lastActiveWorkspace: activeWsId })
+    // Q3:「上次看的工作区」按 hostId 分键 —— 手机和电脑的「上次」必然不同,
+    // 存成一个值会互相覆盖。本机这台的键是 'local'。
+    if (settings.lastActiveWorkspace[hostKey] !== activeWsId) {
+      update({ lastActiveWorkspace: { ...settings.lastActiveWorkspace, [hostKey]: activeWsId } })
+    }
   }, [activeWsId, settings])
 
   // vibrancy maps to the window's transparent/under-window material, which is fixed at WINDOW
@@ -395,6 +450,17 @@ export function App() {
   }, [])
 
   // Subscribe to workspace setup events (streamed during creation when __basic/__proj hooks exist).
+  // 门总线 → 界面。★拉一次快照(界面刚起来时主进程可能已经挂着门了),然后跟着事件走。
+  useEffect(() => {
+    const pull = () => { void window.forge.gateList?.().then((gs) => setSetupGates(gs.filter((g) => g.origin === 'setup'))).catch(() => {}) }
+    pull()
+    const off = window.forge.onGateEvent?.((c) => {
+      if (c.type === 'raised') { if (c.gate.origin === 'setup') setSetupGates((gs) => [...gs, c.gate]) }
+      else setSetupGates((gs) => gs.filter((g) => g.id !== c.id))
+    })
+    return () => { off?.() }
+  }, [])
+
   useEffect(() => {
     const off = window.forge.onSetupEvent((e: SetupEvent) => {
       if (e.type === 'setup:start') {
@@ -505,11 +571,11 @@ export function App() {
   async function handleQuickFolder() {
     if (creating) return
     let dir: string | null = null
-    try { dir = await window.forge.pickDirectory() } catch { dir = null }
+    try { dir = await pickPath('directory', '选择工作区目录') } catch { dir = null }
     if (!dir) return
     setCreating(true)
     try {
-      const name = dir.split('/').filter(Boolean).pop() || '工作区'
+      const name = baseName(dir) || '工作区'
       const { workspacePath: wsPath } = await window.forge.createWorkspace({
         name, path: dir, workflows: [], projects: [],
       })
@@ -538,7 +604,7 @@ export function App() {
     if (v === 'ws' && !activeWsId) {
       const live = home.workspaces.filter(w => !w.archived)
       if (!live.length) return
-      const last = settings?.lastActiveWorkspace
+      const last = settings?.lastActiveWorkspace?.[hostKey]
       const recency = (p: string) => Math.max(home.stats[p]?.lastMessageAt ?? 0, recentActivity.get(p) ?? 0)
       const pick = last && live.some(w => w.path === last)
         ? last
@@ -596,6 +662,7 @@ export function App() {
           显示对应 motif。纯装饰、不吃事件。 */}
       <div className="skin-motif" aria-hidden="true" />
       <Titlebar
+        maximized={maximized}
         collapsed={collapsed}
         onToggleSidebar={() => setCollapsed(c => !c)}
         onToggleInspector={() => setInspCollapsed(c => !c)}
@@ -629,6 +696,8 @@ export function App() {
       <div className="body">
         <Sidebar
           groups={sidebarGroups}
+          listLoading={home.loading}
+          listError={home.error}
           archivedItems={archivedItems}
           activeId={activeWsId}
           onSelect={(id) => { setActiveId(id); setView('ws') }}
@@ -674,6 +743,9 @@ export function App() {
             ? <HomeView
                 workspaces={home.workspaces}
                 stats={home.stats}
+                listLoading={home.loading}
+                listError={home.error}
+                hostLabel={hostKey === 'local' ? null : hostLabel}
                 activeRunPath={engine.run?.workspacePath}
                 busyPaths={busyWs}
                 run={engine.run ?? undefined}
@@ -751,6 +823,10 @@ export function App() {
           onToggle: () => setLogOpen(o => !o),
         }}
         sbTerm={{ open: termOpen, onToggle: () => setTermOpen(o => !o) }}
+        sbHost={{
+          display: settings?.appearance.hostChip ?? 'both',
+          onOpenHosts: () => { setSettingsPane('hosts'); setSettingsOpen(true) },
+        }}
         update={{
           currentVersion: updateCtx.currentVersion,
           hasUpdate: !!updateCtx.info,
@@ -777,7 +853,7 @@ export function App() {
         onNewWorkflow={() => { setWizardOpen(false); setSettingsPane('workflow'); setSettingsOpen(true) }}
         onAddProject={addProject}
         onAddWorkflow={addWorkflow}
-        onPickPath={() => window.forge.pickDirectory()}
+        onPickPath={() => pickPath('directory', '选择目录')}
         hookLibrary={hookLib.hooks}
         onSaveHookToLibrary={hookLib.save}
         onProbeWorkspace={(p) => window.forge.getWorkspace(p)}
@@ -830,15 +906,18 @@ export function App() {
         switch (key) {
           case 'appearance': return settings ? <AppearancePane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} terminal={settings.terminal} onTerminalChange={(p) => update({ terminal: p })} /> : null
           case 'wallpaper': return settings ? <BackgroundPane appearance={settings.appearance} onChange={(p) => update({ appearance: p })} /> : null
-          case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
+          case 'notifications': return settings ? <NotificationsPane notifications={settings.notifications} onNotificationsChange={(p) => update({ notifications: p })} notifyEvents={settings.notifyEvents} onNotifyEventsChange={(p) => update({ notifyEvents: { ...settings.notifyEvents, ...p } })} hostLabel={hostKey === 'local' ? null : hostLabel} closeAction={settings.closeAction} onCloseActionChange={(v) => update({ closeAction: v })} onTest={() => window.forge.notifyTest()} /> : null
           case 'appIcon': return settings ? <AppIconPane appIcon={settings.appIcon} onChange={(p) => update({ appIcon: p })} /> : null
           case 'project': return <ProjectPane projects={projects} onAdd={addProject} onDelete={deleteProject} onEditBranch={updateProjectBranch} onEditAlias={updateProjectAlias} />
+          case 'hosts': return settings ? <HostsPane hostChip={settings.appearance.hostChip} onHostChipChange={(v) => update({ appearance: { hostChip: v } })} /> : null
+          case 'phone': return <PhonePane />
           case 'providers': return <AgentsPane onChanged={redetect} />
-          case 'agents': return <TermProxyPane termProxy={settings?.termProxy ?? ''} onChange={(v) => update({ termProxy: v })} />
+          case 'agents': return <ProxyPane agentProxy={settings?.agentProxy ?? ''} appProxy={settings?.appProxy ?? ''} onChange={(p) => update(p)} />
           case 'workflow': return <WorkflowPane workflows={workflows} providers={providers} customStages={customStages} onCreate={addWorkflow} onDelete={deleteWorkflow} onUpdateWorkflow={updateWorkflow} onUpdateStagePrompts={updateStagePrompts} onUpdateStages={updateStages} onUpsertCustomStage={upsertCustomStage} />
           case 'customStages': return <CustomStagesPane customStages={customStages} workflows={workflows} providers={providers} onUpsert={upsertCustomStage} onDelete={deleteCustomStage} />
           case 'hookLibrary': return <HookLibraryPane hooks={hookLib.hooks} onSave={hookLib.save} onDelete={hookLib.remove} onSetAll={hookLib.setAll} />
-          case 'skills': return <SkillPane />
+          case 'mcp': return <McpPane />
+          case 'market': return <MarketPane />
           case 'loads': return <LoadPane />
           case 'pet': return settings ? <PetPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
           case 'petMarket': return settings ? <PetMarketPane pet={settings.pet} onChange={(p) => update({ pet: { ...settings.pet, ...p } })} /> : null
@@ -868,7 +947,11 @@ export function App() {
       {/* Setup progress overlay: shown during workspace creation when __basic/__proj hooks exist */}
       {setupVisible && (
         <SetupProgress
-          state={setupState}
+          // ★门从**总线**补水:`setupState.pendingInteraction` 只是本地缓存,关一次面板就没了;
+          //  总线那份才是「主进程此刻真的在等谁」。两者取总线优先。
+          state={setupGates.length > 0 && !setupState.pendingInteraction
+            ? { ...setupState, pendingInteraction: { id: setupGates[0]!.id, pluginId: '', kind: 'confirm' as const, title: setupGates[0]!.title, where: setupGates[0]!.where } }
+            : setupState}
           onClose={() => { setSetupVisible(false); setSetupState(INITIAL_SETUP_STATE) }}
           onCancel={() => { void window.forge.cancelSetup() }}
           // 后台运行: hide the overlay (keep state) so the user can use the app while hooks run. Setup
@@ -884,14 +967,20 @@ export function App() {
       )}
 
       {/* Backgrounded-setup pill: setup is still running with the panel hidden. Click to re-open it. */}
-      {setupBackgrounded && !setupVisible && (
+      {/* ★★有门在等的时候,这颗 pill 必须**说出来**。原来它永远是一句「正在后台配置工作区…」,
+          于是「在跑」和「卡在一道没人答的门前」在屏幕上长得一模一样 —— 用户看到的就是
+          「执行中 1m51s」一直不动。★而且只要还有门挂着,即使建区面板被关掉过,它也得出现:
+          门活在主进程里,界面关不关都改变不了「有人在等你」这件事。 */}
+      {(setupBackgrounded || setupGates.length > 0) && !setupVisible && (
         <button
-          className="setup-bg-pill"
+          className={setupGates.length > 0 ? 'setup-bg-pill waiting' : 'setup-bg-pill'}
           onClick={() => { setBackgrounded(false); setSetupVisible(true) }}
-          title="点击查看建区进度"
+          title={setupGates.length > 0 ? (setupGates[0]?.label ?? '建区') + ' 等你放行' : '点击查看建区进度'}
         >
           <span className="setup-bg-pill-spin" />
-          正在后台配置工作区…
+          {setupGates.length > 0
+            ? `${setupGates[0]?.label ?? '建区'} 等你放行`
+            : '正在后台配置工作区…'}
         </button>
       )}
     </div>

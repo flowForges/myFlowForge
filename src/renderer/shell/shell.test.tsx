@@ -9,6 +9,7 @@ import type { AgentState } from '@shared/types'
 
 describe('Titlebar', () => {
   const baseProps = {
+  onOpenHosts: vi.fn(),
     collapsed: false,
     onToggleSidebar: vi.fn(),
     view: 'ws' as const,

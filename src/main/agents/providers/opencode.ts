@@ -2,11 +2,11 @@ import { execa } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
 import { createFenceScanner } from '../handoffFence'
-import { buildChatPrompt, contextWindowFor } from '../chatStream'
+import { buildChatPrompt, makeUsageTracker } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { provisionForgeMcp } from '../forgeMcpProvision'
 import { logError } from '../../log/appLog'
-import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
+import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 
 function now() { return new Date().toISOString().slice(11, 19) }
 function clipArgs(bin: string, args: string[]): string {
@@ -95,7 +95,7 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       const args = [...baseArgs(task.model, task.cwd), ...prov.extraArgs, task.prompt]
       const child = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
       let buf = ''
-      let ctxMax = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u), opencodeUsage)
       // part.text is cumulative (see opencodeDelta) — track per stream and feed only the growth to the
       // fence scanner, else every line re-appears with each snapshot and the log balloons.
       let prevAsst = ''
@@ -106,7 +106,7 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
         try { obj = JSON.parse(line) } catch {
           const kept = scanner.feedLine(line); if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' }); return
         }
-        const u = opencodeUsage(obj); if (u != null && u > ctxMax) { ctxMax = u; cb.onUsage?.({ used: ctxMax, window: contextWindowFor(task.model) }) }
+       usage.feed(obj)
         for (const a of parseOpencodeEvent(obj)) {
           if (a.kind === 'session') { cb.onSession?.(a.id); continue }
           const isThink = a.kind === 'think'
@@ -145,13 +145,18 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       // must not be killed just for taking >180s. Fires only after real silence → no more spurious
       // "chat 无回复" on big prompts.
       const child = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
+      // ★静默先报告、半小时才回收(见 idleWatchdog 的 StallPolicy)。原来是 4 分钟无声 SIGTERM,
+      // 而静默可能只是在等一个我们看不见的人(外部钩子 / 浏览器授权 / sudo / git 凭据)。
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS,
+        () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
+        undefined,
+        { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } } })
       const start = Date.now()
       let buf = ''
       let sawDelta = false
       let lastErr: string | null = null
       let rawErr = ''
-      let ctxMax = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u), opencodeUsage)
       // part.text is cumulative — track the last snapshot per stream and emit only the growth so the
       // renderer (which appends deltas) shows the reply once, not a pile-up of growing prefixes.
       let prevAsst = ''
@@ -159,7 +164,7 @@ export function makeOpencodeProvider(spec: OpencodeSpec): AgentProvider {
       const cap = (s: string, add: string) => (s + add).slice(-2000)
       const handle = (obj: unknown) => {
         const err = opencodeErrorMessage(obj); if (err) lastErr = err
-        const u = opencodeUsage(obj); if (u != null && u > ctxMax) { ctxMax = u; cb.onUsage?.({ used: ctxMax, window: contextWindowFor(task.model) }) }
+       usage.feed(obj)
         for (const a of parseOpencodeEvent(obj)) {
           if (a.kind === 'session') cb.onSession(a.id)
           else if (a.kind === 'assistant') { sawDelta = true; const d = opencodeDelta(prevAsst, a.text); prevAsst = a.text; if (d) cb.onAssistantDelta(d) }

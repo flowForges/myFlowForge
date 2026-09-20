@@ -36,7 +36,11 @@ export interface RunWorkOrderDeps {
   isTransient?: (err: Error) => boolean
   // ConfirmDecision(不只是二值):阶段代理也可能是在【问人】(claude AskUserQuestion),那时必须把用户选的
   // 选项一并带回,否则 CLI 拿空 answers 跑完工具、代理收到「用户没有回答」。
-  onConfirm?: (req: import('../agents/types').ConfirmReq, laneId: string) => Promise<import('../agents/types').ConfirmDecision>
+  /**
+   * 泳道里的权限门。★**必填**:少了它就意味着这条路径上的门无人接管,而那在运行时
+   *  表现成「静默全放行」或者「界面卡住」两种都很糟的样子。让编译器替我们记住这件事。
+   */
+  onConfirm: (req: import('../agents/types').ConfirmReq, laneId: string) => Promise<import('../agents/types').ConfirmDecision>
   onInput?: (req: import('../agents/types').InputReq, laneId: string) => Promise<string>
   onProgress?: (ev: { laneId: string; state?: import('../agents/types').AgentState; activity?: string; log?: import('../agents/types').LogLine }) => void
   // Surfaces the CLI-native session id a provider's `run()` emits via `cb.onSession(id)` (same
@@ -85,7 +89,11 @@ export async function runWorkOrder(order: WorkOrder, deps: RunWorkOrderDeps): Pr
         onDone() {},
         onError(e) { capturedErr = e instanceof Error ? e : new Error(String(e)) },
         onSession(id) { deps.onSession?.(order.id, order.provider, id) },
-        onConfirm: (req) => (deps.onConfirm ? deps.onConfirm(req, order.id) : Promise.resolve('allow')),
+        // ★★缺省**不再是 allow**。原来这里是 `deps.onConfirm ?? Promise.resolve('allow')` ——
+        //  一个忘了传回调的调用方会得到「静默全放行」,而委派那条的缺省恰好是 deny:
+        //  同一个概念,两个相反的默认值,谁也看不见。现在 onConfirm 是必填(见 WorkOrderDeps),
+        //  忘了传是**编译错误**,而不是一个运行时才发现的安全洞。
+        onConfirm: (req) => deps.onConfirm(req, order.id),
         onInput: (req) => (deps.onInput ? deps.onInput(req, order.id) : Promise.resolve('')),
         onHandoff(p) { handoff = p },
       }

@@ -43,7 +43,9 @@ const PLATFORMS: { id: BotPlatform; name: string; hint: string; fields: Field[] 
     fields: [{ key: 'botToken', label: 'Bot Token', secret: true, placeholder: '123456:ABC-DEF…' }],
   },
   {
-    id: 'feishu', name: '飞书', hint: '飞书开放平台建「企业自建应用」，开启长连接，填 App ID / Secret。需安装 SDK：npm i @larksuiteoapi/node-sdk。',
+    // ★别再往这句里加「需安装 SDK：npm i @larksuiteoapi/node-sdk」:SDK 随包发布,用户不用装;
+    //  而且打好的 app 里**根本执行不了 npm**。那句话只会让人以为飞书用不了。见 feishuTransport.ts 顶部。
+    id: 'feishu', name: '飞书', hint: '飞书开放平台建「企业自建应用」，开启长连接，填 App ID / Secret。',
     fields: [{ key: 'appId', label: 'App ID', placeholder: 'cli_xxxxxxxx' }, { key: 'appSecret', label: 'App Secret', secret: true }],
   },
 ]

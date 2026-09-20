@@ -64,6 +64,11 @@ export async function runHeadless(plan: RunPlan, deps: RunHeadlessDeps): Promise
       env: deps.env,
       retries: deps.retries,
       sleep: deps.sleep,
+      // ★这条路是**无人值守**的(headless,没有任何界面在场),所以门一律拒。
+      //  以前它靠 workOrder 里那个 `?? 'allow'` 的隐式缺省 —— 也就是说「没人看着」的那条路
+      //  恰好是**全放行**的那条。把 onConfirm 改成必填之后编译器当场指出了这里,
+      //  这正是那次类型收紧要抓的东西。
+      onConfirm: async () => 'deny' as const,
     }))
     outcomes[stage.key] = stageOutcomes
 

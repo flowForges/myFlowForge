@@ -1,0 +1,107 @@
+/** 渲染层看到的一台远程主机。★不含 token —— 凭据没有任何理由进渲染进程。 */
+export type HostDisplay = 'icon' | 'name' | 'both'
+
+export type RemoteHostView = {
+  id: string
+  label: string
+  kind: 'direct' | 'ssh'
+  address: string
+  sshTarget: string
+  /** 一个 emoji;空 = 用默认 */
+  icon: string
+  display: HostDisplay
+  token: string
+  /** 有它 = 这条连接端到端加密。界面上据此标一枚「加密」。 */
+  pubKey: string
+  /** 有它 = 这条连接走中转。界面上据此标一枚「中转」。 */
+  relay: string
+  lastConnectedAt: number
+}
+
+/** 没设标识时的默认。本机用另一个,好一眼分开。 */
+export const DEFAULT_HOST_ICON = '🖥️'
+export const LOCAL_ICON = '💻'
+
+export type HostInput = {
+  id?: string
+  label: string
+  kind: 'direct' | 'ssh'
+  address: string
+  sshTarget: string
+  icon: string
+  display: HostDisplay
+  token: string
+  /**
+   * 对面 daemon 的长期公钥(base64)。有它就端到端加密。
+   * ★**只从配对码里来**,界面上不给手填框 —— 44 个字符的 base64 没人核对得了。
+   */
+  pubKey: string
+  /** 中转地址。有它就走中转(必须同时有 `pubKey`)。同样只从配对码里来。 */
+  relay: string
+}
+
+export type HostConnState =
+  | { status: 'local' }
+  | { status: 'connecting'; attempt: number }
+  | { status: 'ready'; version: string; methods: ReadonlySet<string> | string[] }
+  | { status: 'retrying'; attempt: number; error: string; nextInMs: number }
+  | { status: 'failed'; error: string }
+  | { status: 'closed' }
+
+export type HostStatusView = {
+  hostId: string | null
+  label: string
+  state: HostConnState
+  methods: string[]
+  /** 链路分段遥测(走中转时才有意义)。喂给 `hopDiagnosis` 得出「断在哪一跳」。 */
+  hops?: import('./hopDiagnosis').HopInput
+  /** 当前这台主机的标识与显示方式(本机时为默认值) */
+  icon?: string
+  display?: HostDisplay
+}
+
+/** 一句人话的连接状态 —— 断线态必须是**显式**的,不能拿缓存假装在线(设计文档十·UI 约束)。 */
+export function describeHostState(s: HostConnState): { text: string; short: string; tone: 'ok' | 'warn' | 'bad' | 'idle' } {
+  switch (s.status) {
+    // 卡片标题已经写着「本机」了,副标题再写一遍等于没说。说点有用的:你现在没连任何远程主机。
+    // short 留空:芯片上已经写着「本机」了,再补一个「本机」就是「本机 本机」。
+    // text 是给设置面板那张卡片用的,那里需要把话说全。
+    case 'local': return { text: '未连接任何远程主机 —— 当前看到的都是这台电脑上的内容', short: '', tone: 'idle' }
+    case 'connecting': return { text: s.attempt > 1 ? `连接中(第 ${s.attempt} 次)` : '连接中…', short: '连接中', tone: 'warn' }
+    case 'ready': return { text: `已连接 · ${s.version}`, short: '', tone: 'ok' }
+    // ★向上取整,而且不足一秒直接说「正在重连」。`Math.round` 会在 nextInMs<500 时印出
+    //  「0 秒后重连」—— 一个永远不会到来的倒计时,看着就是卡住了(隔壁 `hostRowNote` 早就
+    //  为同一件事改用了 ceil,这一份当时漏了)。
+    case 'retrying': {
+      const secs = Math.ceil(s.nextInMs / 1000)
+      return { text: secs > 0 ? `已断开,${secs} 秒后重连 — ${s.error}` : `正在重连 — ${s.error}`, short: '已断开', tone: 'bad' }
+    }
+    case 'failed': return { text: `连接失败:${s.error}`, short: '连接失败', tone: 'bad' }
+    case 'closed': return { text: '未连接', short: '未连接', tone: 'idle' }
+  }
+}
+
+/**
+ * 弹层里「当前这台主机」那一行右侧的小标签。
+ *
+ * ★★用户 2026-09-10 原话:「这种主机断了,我怎么知道有没有在重连?那边其实啥也没改,也不知道为啥断了」。
+ *  两件事**当时都已经算出来了**(`retrying` 带着 attempt / error / nextInMs,`describeHostState`
+ *  也拼好了整句),但弹层那行显示的是 `short` —— 光秃秃三个字「已断开」,而完整那句只挂在
+ *  状态栏按钮的 tooltip 上。**信息不缺,是没送到眼前。**
+ *
+ * ★这里跳秒是**故意的**:静态一句「8 秒后重连」回答不了「有没有在重连」——
+ *  只有数字真的在动,人才知道它是活的。`remainMs` 由调用方按「进入 retrying 的时刻 + nextInMs」算,
+ *  这个函数保持纯的,好单测。
+ */
+export function hostRowNote(s: HostConnState, remainMs?: number): string {
+  if (s.status !== 'retrying') return describeHostState(s).short
+  if (remainMs == null) return '重连中'
+  // 向上取整:剩 1ms 也该显示「1s」而不是「0s」——「0s」看着像卡住了。
+  return `重连中 · ${Math.max(0, Math.ceil(remainMs / 1000))}s`
+}
+
+/** 悬停时的完整说明。★断开原因一定要带上 —— 那是「为啥断了」唯一的答案。 */
+export function hostRowTitle(s: HostConnState): string {
+  if (s.status !== 'retrying') return describeHostState(s).text
+  return `已断开,第 ${s.attempt} 次重连 — ${s.error}`
+}

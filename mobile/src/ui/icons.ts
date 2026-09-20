@@ -1,0 +1,109 @@
+/**
+ * 图标的**唯一**真相:一个名字,两张表。
+ *
+ * ★为什么要这一层:emoji 是彩色位图 —— 不跟选中态变色、不跟字重走,摆在 tab bar 里
+ *  一眼就是「不是原生」。而「不是原生」正是用户说的那个「总感觉是个网页」的怪异感。
+ *  SF Symbols 是 iOS 系统自带的那套,每一个原生 app 用的都是它。
+ *
+ * ★为什么不装 @expo/vector-icons:`expo-symbols` 已经在包里(`expo-router` 的传递依赖,
+ *  用 `npx expo-modules-autolinking resolve -p ios` 能看到 ExpoSymbols 会被链入 ——
+ *  2026-08-28 Task 11 复审纠正过:`ios/Podfile.lock` 是 pod install 的下游产物,
+ *  prebuild 会把它连同 `ios/Pods` 一起删掉,那份证据引用的是一个可能根本不存在的文件)
+ *  —— 零新依赖、零重打包,当前这个包就能验。
+ *  而 Ionicons 那套长得不像 iOS 系统图标,在 iPhone 上跟周围的原生 app 对不上号。
+ *
+ * ★这个文件刻意零 import(同 wsTile.ts / tree.ts):根 vitest.config.ts 里 `mobile`
+ *  那个 project 跑在 node 上,带 React Native 的东西在那儿 import 不动。
+ *  —— 例外:SFSymbol 是 import type,编译时擦除,无运行时代价。
+ *
+ * ★调用方**只准认 IconName**。别处出现 SF 符号名或 emoji 字面量,就等于这一层白做了 ——
+ *  以后想整体换一套图标,得满仓库去找。
+ */
+
+import type { SFSymbol } from 'sf-symbols-typescript'
+
+export const ICON_NAMES = [
+  'chat', 'host', 'settings', 'add', 'changes', 'photo', 'camera',
+  'workflow', 'file', 'folder', 'expand', 'chevron', 'chevronDown', 'refresh',
+] as const
+
+export type IconName = (typeof ICON_NAMES)[number]
+
+/** iOS。名字必须是真实存在的 SF Symbol —— 不存在的名字在 iOS 上渲染成一个看不见的洞,不报错。 */
+export const SF: Record<IconName, SFSymbol> = {
+  chat: 'bubble.left.and.bubble.right',
+  host: 'desktopcomputer',
+  settings: 'gearshape',
+  add: 'plus',
+  // ★不是 doc:那一屏说的是「这次改了什么」,不是「一份文档」。
+  changes: 'arrow.triangle.branch',
+  photo: 'photo',
+  camera: 'camera',
+  workflow: 'arrow.triangle.turn.up.right.diamond',
+  file: 'doc',
+  // ★用实心那个(`folder.fill`)而不是描边的 `folder`:文件树里目录行是**可以进去**的那一档,
+  //  而同一列里文件那一档是一枚淡色扩展名小字。实心 vs 淡字的对比,比描边 vs 淡字看得清得多。
+  folder: 'folder.fill',
+  expand: 'arrow.up.left.and.arrow.down.right',
+  chevron: 'chevron.right',
+  chevronDown: 'chevron.down',
+  // ★「再读一次」不是「同步」:`arrow.clockwise` 是单箭头的重载,`arrow.triangle.2.circlepath`
+  //  是双箭头的同步 —— 后者在这里会被读成「和服务端对账」,而我们做的只是重新拉一次。
+  refresh: 'arrow.clockwise',
+}
+
+/**
+ * ★★安卓那一侧用 **Material Icons**(`@expo/vector-icons`)。
+ *
+ * 2026-08-29 真机反馈:安卓上这几个图标退到了下面那张 emoji 表,用户原话「太丑了」——
+ * 而那是准的:🖼 和 📷 在安卓上是**彩色位图**,📄 和 ⧉ 是单色字形,⤢ 是个数学符号。
+ * 五个图标三种画风、两种颜色模式,摆成一排就是一堆贴纸。
+ *
+ * ★为什么不是把 iOS 那套也换成 Material:SF Symbols 是 iOS 的原生图标语言,
+ *  它跟系统字重、动态字号、深色模式全部联动。两边各用各的母语,比强行统一成一套更像原生 ——
+ *  这也是整个手机端一直在走的路子(见 `Icon.tsx`)。
+ *
+ * ★★**名字写错不报错,只渲染成一个看不见的洞** —— 和 SF Symbols 完全一样的失败方式。
+ *  所以 `icons.test.ts` 拿真正的 glyphmap 逐个核对过,别改成"看起来对"的名字。
+ */
+export const MATERIAL: Record<IconName, string> = {
+  chat: 'forum',
+  host: 'desktop-windows',
+  settings: 'settings',
+  add: 'add',
+  // ★不是 'timeline':那一屏说的是「这次改了什么」,和 SF 那边选 `arrow.triangle.branch` 同一个理由。
+  changes: 'call-split',
+  photo: 'image',
+  camera: 'photo-camera',
+  workflow: 'account-tree',
+  file: 'insert-drive-file',
+  folder: 'folder',
+  expand: 'open-in-full',
+  chevron: 'chevron-right',
+  refresh: 'refresh',
+  chevronDown: 'expand-more',
+}
+
+/**
+ * 最后的退路:**两套矢量图标都拿不到**的时候(web 端跑 `npm run --prefix mobile web`,
+ * 或者哪天字体没加载上)。★键集必须和 SF 完全一致,漏一个就是一个空白格(icons.test.ts 钉住)。
+ * ★★这张表**只放真的有人用的**。曾经想顺手把 `shield`(权限)、`back`(返回)、
+ *  `plus`(输入行那颗 ＋)也列进来 —— 但权限键最后做成了「两个字 + 颜色」不用图标,
+ *  返回键仍是那个 `‹` 字形,而输入行那颗 ＋ 用的就是 `add`。三个都是没人调的死条目。
+ */
+export const EMOJI: Record<IconName, string> = {
+  chat: '💬',
+  host: '🖥',
+  settings: '⚙',
+  add: '＋',
+  changes: '🔀',
+  photo: '🖼',
+  camera: '📷',
+  workflow: '⧉',
+  file: '📄',
+  folder: '📁',
+  expand: '⤢',
+  chevron: '›',
+  chevronDown: '▾',
+  refresh: '⟳',
+}

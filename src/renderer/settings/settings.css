@@ -53,6 +53,10 @@
 
 /* 终端代理设置 */
 .set-desc { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin-top: 2px; }
+/* ★`<code>` 在这儿必须有自己的规则。没有的话它退回浏览器默认的等宽字体 —— 不报错，
+   只是比周围大一号、字体也不是这一套的 —— 那正是「幽灵 class」那一类静默降级。
+   数值照抄 .proxy-current code（同一种用途：一小段路径/命令嵌在说明文字里）。 */
+.set-desc code { font-family: var(--mono); font-size: 12px; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .proxy-current { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 6px 11px; border-radius: 8px; font-size: 12.5px; border: 1px solid var(--border); background: var(--surface); }
 .proxy-current .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .proxy-current code { font-size: 12px; padding: 1px 5px; border-radius: 5px; background: color-mix(in srgb, var(--fg) 8%, transparent); }
@@ -611,6 +615,9 @@
 .agent-badge { font-family: var(--mono); font-size: 10px; font-weight: 600; border-radius: 99px; padding: 2px 8px; }
 .agent-badge.ok { background: oklch(74% 0.15 150 / 0.15); color: var(--ok); }
 .agent-badge.off { background: var(--surface-2); color: var(--faint); }
+/* 「装了但没登录」。★只在拿到**否定证据**时才画(detect 的 auth==='missing'):
+   `unknown` 一个字都不说 —— 把不知道画成没登录,会把人支去重登一个本来好好的 provider。 */
+.agent-badge.warn { background: oklch(80% 0.13 80 / 0.16); color: var(--warn); }
 .agent-del { margin-left: auto; font-size: 11.5px; color: var(--err); padding: 3px 8px; border-radius: 6px; }
 .agent-del:hover:not(:disabled) { background: oklch(60% .2 25 / .12); }
 /* 启用/禁用 provider toggle — off = provider hidden from every 选择编码代理 list (CLI untouched). */
@@ -795,3 +802,65 @@
 .about-name { font-size: 17px; font-weight: 700; letter-spacing: -.01em; }
 .about-ver { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 2px; }
 .about-desc { font-size: 12.5px; color: var(--muted); margin-top: 7px; line-height: 1.5; max-width: 440px; }
+
+/* ── 自绘下拉框(`Select.tsx`)────────────────────────────────────────────────
+   ★★换掉原生 `<select>` 的原因只有一个:它展开的那张单子是**系统画的**,CSS 管不着。
+   三套皮肤 + 壁纸取色的界面里,那张按系统主题画的菜单是唯一一处对不上的东西。
+   ★闭合态刻意和 `.sce-input` 一模一样(同样的高度/圆角/描边/底色)——
+   它俩在同一行里并排出现,长得不一样才是真的乱。 */
+.set-sel { position: relative; }
+.set-sel-btn {
+  width: 100%; height: 32px; border-radius: 7px;
+  border: 1px solid var(--border-2); background: var(--bg); color: var(--fg);
+  padding: 0 8px 0 10px; font-size: 12.5px;
+  display: flex; align-items: center; gap: 8px; text-align: left;
+}
+.set-sel-btn:hover { border-color: color-mix(in oklch, var(--accent) 40%, var(--border-2)); }
+.set-sel-btn.open, .set-sel-btn:focus-visible { outline: none; border-color: var(--accent); }
+.set-sel-val { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-sel-chev { width: 14px; height: 14px; flex: 0 0 auto; color: var(--faint); transition: transform .13s; }
+.set-sel-btn.open .set-sel-chev { transform: rotate(180deg); }
+
+/* 视觉语言抄聊天区的 `.menu-pop`(模型选择器)—— 同一个 app 里挑一项只该有一种长相。
+   ★往下弹:设置页是自上而下读的,而聊天区那个在最底下所以往上弹。 */
+.set-sel-pop {
+  position: absolute; top: calc(100% + 5px); left: 0; right: 0; z-index: 60;
+  background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 10px;
+  box-shadow: var(--shadow); padding: 5px;
+  max-height: min(46vh, 320px); overflow-y: auto; overscroll-behavior: contain;
+}
+.set-sel-item {
+  width: 100%; display: flex; align-items: center; gap: 9px;
+  padding: 7px 8px; border-radius: 7px; font-size: 12.5px; text-align: left; color: var(--fg-2);
+}
+/* 鼠标悬停和键盘光标是**同一个**高亮:两套高亮同时亮着,人会不知道回车会选中哪一个。 */
+.set-sel-item.cur { background: var(--surface); }
+.set-sel-item.on { color: var(--fg); font-weight: 550; }
+.set-sel-check { width: 14px; height: 14px; margin-left: auto; flex: 0 0 auto; color: var(--accent); opacity: 0; }
+.set-sel-item.on .set-sel-check { opacity: 1; }
+
+/* ── 主机标识选择器 ──────────────────────────────────────────────────────────
+   ★★原来这儿是个**手打表情的输入框**(占位符写着「🖥️ / ☁️ / 🏠 …」)。用户的原话是
+   「图标不能下拉选择么」—— 手打一个表情在 mac 上意味着按 ⌃⌘空格 翻表情面板,
+   为一件纯装饰的事付这个代价是荒谬的。手机端一直是六选一(`hostIcons.ts`),
+   这里跟它对齐,连那六个候选都是同一份名单。 */
+.set-icons { display: flex; gap: 6px; flex-wrap: wrap; }
+.set-icon {
+  width: 36px; height: 32px; border-radius: 7px; font-size: 16px; line-height: 1;
+  border: 1px solid var(--border-2); background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+.set-icon:hover { border-color: color-mix(in oklch, var(--accent) 40%, var(--border-2)); }
+.set-icon.on { border-color: var(--accent); background: var(--accent-dim); border-width: 1.5px; }
+
+/* 「连接方式」在走中转时是**只读**的一行:中转地址和身份公钥只能从配对码来,不给手填
+   (公钥是 44 个字符的 base64,没人核对得了,错一个字符只会静默连不上)。
+   ★所以它长得要像「一条事实」,不像「一个能改的控件」—— 底色用 surface-2、不给描边高亮。 */
+.host-locked {
+  display: flex; align-items: center; gap: 8px;
+  min-height: 32px; padding: 0 8px 0 10px;
+  border-radius: 7px; border: 1px solid var(--border); background: var(--surface-2);
+  font-size: 12.5px; color: var(--fg-2);
+}
+.host-locked-v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.host-locked .set-btn { flex: 0 0 auto; }

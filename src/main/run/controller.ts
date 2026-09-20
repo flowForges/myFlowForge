@@ -1016,6 +1016,7 @@ export class RunController {
     return {
       ...this.deps.env,
       FORGE_SOCKET: this.bridge.socketPath,
+      FORGE_MCP_DIR: this.bridge.configDir,
       FORGE_AGENT_ID: agentId,
       ...(this.deps.mcpEntry ? { FORGE_MCP_ENTRY: this.deps.mcpEntry } : {}),
       FORGE_TOOLS: RUN_FORGE_TOOLS,

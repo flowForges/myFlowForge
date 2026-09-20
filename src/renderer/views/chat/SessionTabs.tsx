@@ -1,6 +1,6 @@
 import './sessionTabs.css'
 import { useState, useRef, useEffect } from 'react'
-import type { ChatSession } from '@shared/types'
+import type { ChatSession, ContextUsage } from '@shared/types'
 import { SessionIdsPanel } from './SessionIdsPanel'
 
 const X = (
@@ -21,9 +21,8 @@ export interface SessionTabsProps {
   attentionIds?: ReadonlySet<string>
   // Session ids with an in-flight agent turn — pulses that tab's dot (mirrors the sidebar dot).
   runningIds?: ReadonlySet<string>
-  // Per-provider latest reported context usage for the active session — shown in the IDs panel next to
-  // each provider's 主 Agent row.
-  usageByProvider?: Record<string, { used: number; window: number }>
+  // 各 provider 在这条会话里最近上报的上下文用量 —— 透给 IDs 面板,画在每个 provider 的主 Agent 行旁。
+  usageByProvider?: Record<string, ContextUsage>
 }
 
 export function SessionTabs({ sessions, activeSessionId, onSwitch, onClose, onRename, onNew, workspacePath, archived, attentionIds, runningIds, usageByProvider }: SessionTabsProps) {

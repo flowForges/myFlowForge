@@ -96,7 +96,16 @@ export type EngineEvent =
 export interface ResolvePayload { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }
 
 export interface ModelInfo { id: string; label: string; description?: string; contextWindow?: number }
-export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; authCmd?: string; installHelp?: string; timezone?: string }
+/**
+ * `auth`:这台机器上这个 provider **登录了没有**(第三期:远程/无头场景)。
+ *
+ * ★★三态。`'unknown'` 不是「大概没登录」,是**我们没有判断依据** —— 界面上必须什么都不说。
+ *  只查 bin 在不在的年代,流程是「建会话 → 发消息 → 等半天 → 才发现没登录」;
+ *  而把「不知道」画成「没登录」会让人去重登一个本来好好的 provider,同样是浪费时间。
+ *  判据见 `src/main/agents/credProbe.ts`(每一条都在真机上跑过)。
+ */
+export type ProviderAuth = 'ok' | 'missing' | 'unknown'
+export interface ProviderInfo { id: string; displayName: string; installed: boolean; models: ModelInfo[]; bin?: string; binPath?: string; custom?: boolean; liveModels?: boolean; version?: string; installCmd?: string; installAltCmd?: string; authCmd?: string; installHelp?: string; timezone?: string; auth?: ProviderAuth }
 
 export type ReviewLens = 'correctness' | 'security' | 'performance' | 'style'
 export interface ReviewConfig {
@@ -153,6 +162,16 @@ export interface CreateWorkspaceOpts {
 
 export interface Attachment { name: string; path: string; size: number }
 export interface ChatThink { label: string; elapsed?: number; steps: string[] }
+/**
+ * 一轮**此刻在干什么**。只有两态,而且只在这一轮活着的时候有意义。
+ * `compacting` = 模型在自动压缩上下文(codex 的 contextCompaction item)。这段时间 provider 一个
+ * token 都不吐,不说清楚的话界面和卡死没有区别。
+ */
+export type TurnPhase = 'thinking' | 'compacting'
+/** think 折叠块的标题。★两端(桌面/手机)都从这里取,别各写各的。 */
+export function phaseLabel(phase: TurnPhase): string {
+  return phase === 'compacting' ? '压缩上下文中…' : '主代理思考中…'
+}
 export interface AgentContextRef { name: string; path: string; reason?: string; state?: 'run' | 'ok' | 'wait' | 'err' }
 export interface AgentContextMeta { skills: AgentContextRef[]; rules: AgentContextRef[]; mcps?: AgentContextRef[] }
 export interface AgentSessionInfo {
@@ -192,7 +211,39 @@ export interface ToolActivity {
   title: string              // human label, e.g. "调用 Read package.json" / "调用 Bash: npm test"
   name?: string              // raw tool name (Read/Bash/Edit/…) when known
   output?: string            // the tool's result/stdout (on done), where the provider streams it
+  /**
+   * `output` 被服务端截断过时,这里是**原始**行数(见 `main/chat/toolOutputCap.ts`)。
+   *
+   * ★没有它的话,截断之后界面会理直气壮地说「共 200 行」,而真相可能是五千行 ——
+   *  静默截断是这套渲染最不能犯的错。有它,工具卡那句「还有 N 行没显示」数字仍然是真的。
+   * ★只在**真的截过**时出现:没截断的消息一个字节都不多带。
+   */
+  outputLines?: number
   status: 'run' | 'ok' | 'error'
+  /**
+   * 这次调用是被「完全访问」档**自动放行**的(没有弹门问人)。
+   *
+   * ★★为什么挂在工具卡上而不是往对话里发一条消息:原来是 `emitNote` 发一条 `who:'ai'` 的
+   *  ChatMessage,于是它顶着「系统」头像和「回答」标签,长得**和模型的回答一模一样**,还夹在
+   *  工具卡和真正的回答中间。用户原话:「bash 的结果应该在 bash 的那个折叠里,不应该出现在
+   *  LLM 输出的内容界面啊」。对的 —— 它是那次工具调用的属性,不是一句回答。
+   * ★能精确对上是因为两边是**同一个 id**:权限门收到的 `can_use_tool` 带 `tool_use_id`
+   *  (`claudeControl.ts`),而工具卡的 id 就是那个 `tool_use` 块的 id(`chatStream.ts`)。
+   *  不是靠命令文本猜的。
+   */
+  autoAllowed?: boolean
+  /**
+   * 这条的 `output` **没跟着历史一起下发**,要点开时单独去取(`chat:tool-output`)。
+   *
+   * ★★2026-09-04 实测的浪费:手机上工具卡**默认是折叠的**,而一条消息里能有 **54 次**工具调用。
+   *  也就是说整份输出下载下来**只为了立刻藏起来**。截断(上一轮)之后最大的会话仍有 389KB,
+   *  其中 324KB 是工具输出 —— 因为二十几次调用每次都顶到 16KB 的上限。
+   *  改成按需取之后同一个会话 **85KB**,而且**不再随工具调用次数增长**。
+   * ★`outputLines` 仍然是**原始行数**,所以卡片上「共 N 行」照旧说真话,不会因为没下载就变成 0。
+   * ★小输出不走这条路(默认 1KB 以内照旧内联):实测那样最大会话一样是 85KB,
+   *  但三分之一的工具点开就有、不用等一次往返。
+   */
+  outputOmitted?: boolean
 }
 
 // One background sub-agent in a lightweight-delegation batch, surfaced live in the chat stream so the
@@ -221,6 +272,17 @@ export interface ChatMessage {
   id: string
   who: 'user' | 'ai'
   text: string
+  /**
+   * 这条**用户消息**是从哪台设备发过来的(`iPhone` / `Android 手机` / 另一台电脑的机器名)。
+   *
+   * ★★**只在不是本机窗口发的时候才有**。本机发的一律不带这个字段 —— 于是「没有标记 = 就在
+   *  这台机器上敲的」,常见情况下一个字节、一个像素都不多。
+   * ★★★**纯展示,绝不进上下文**。它是 `ChatMessage` 上一个独立字段,而喂给 agent 的地方
+   *  (`contextRebuild.ts` 的 `${who}：${m.text}`、`estimateContextTokens(m.text)`)读的
+   *  **只有 `text`** —— 所以它进不了提示词,不是靠谁记得去删。复制按钮复制的也是 `text`。
+   *  这条约束有测试钉着(见 `chatVia.test.ts`),别改成拼进 text 里。
+   */
+  via?: string
   model?: string
   // Agent id (claude/codex/cursor/...) that produced this ai message. Used to detect provider
   // switches (timeline divider) and to attribute per-provider watermark progress.
@@ -236,9 +298,8 @@ export interface ChatMessage {
   ts: string
   // Aggregated worktree change totals across all run projects (set on the done narration).
   changes?: { total: number; add: number; del: number }
-  // Chat-session context-window usage at the time this assistant message finished: used =
-  // total context tokens consumed, window = model's context window. Set on the done message.
-  usage?: { used: number; window: number }
+  // Chat-session context-window usage at the time this assistant message finished. Set on the done message.
+  usage?: ContextUsage
   // Per-TURN token cost of this assistant turn (input incl. cache + output). Preferred source is the
   // provider's cumulative `result` usage (see extractTurnTokens). When the provider doesn't report it
   // (qoder/codex/cursor/gemini/…), we fall back to a CJK-aware ESTIMATE over the context fed + the reply
@@ -350,6 +411,11 @@ export interface ChatSendPayload {
   text: string
   attachments: Attachment[]
   source?: string      // who sent it, default '你'
+  /**
+   * 发起这一轮的设备名。★**由主进程从 `InvokeCtx.client` 填**,不信客户端在 payload 里自报 ——
+   * 自报的话任何一个连上来的客户端都能把自己写成别人。
+   */
+  via?: string
   permissionMode?: import('./permissions').PermissionMode   // agent sandbox scope (readonly/auto/full)
 }
 export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
@@ -360,6 +426,8 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   // Replace (not append) the reply body with an authoritative full text — see ChatCallbacks.onAssistantReplace.
   | { type: 'assistant-replace'; id: string; text: string }
   | { type: 'think-delta'; id: string; text: string; context?: AgentContextMeta }
+  // 这一轮换了阶段(在想 ↔ 在压缩)。只在轮次进行中广播,不落盘。
+  | { type: 'phase'; id: string; phase: TurnPhase }
   // questions 非空 = 这不是「批准执行」而是「请回答」(claude AskUserQuestion),渲染成可点的选项卡片。
   | { type: 'confirm-request'; id: string; title: string; where?: string; questions?: AskQuestion[] }
   | { type: 'confirm-resolved'; id: string }
@@ -391,7 +459,7 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'error'; id: string; error: string; message?: ChatMessage }
 )
 
-export type { Settings, Appearance, Pet, PetState, Anim, Accent, PetStateConfig, AgentsConfig, CustomAgent, CustomPetCfg, Terminal, CloseAction, AppIcon, DockIcon, Notifications, Keybindings } from '../main/config/schema'
+export type { Settings, Appearance, Pet, PetState, Anim, Accent, PetStateConfig, AgentsConfig, CustomAgent, CustomPetCfg, Terminal, CloseAction, AppIcon, DockIcon, Notifications, NotifyEvents, Keybindings } from '../main/config/schema'
 export type { AppLogEntry, LogLevel } from '../main/log/appLog'
 export type { DetectedRepo } from '../main/workspace/scanRepos'
 
@@ -437,7 +505,9 @@ export interface Workspace {
   purpose?: string            // 建区目的(可选) — seeds the workspace memory `## 建区目的` section
 }
 
-export interface UpdateInfo { version: string; notes: string; dmgUrl: string; dmgSize: number; dmgName: string }
+// The release artifact this machine should download: a .dmg on macOS, an NSIS .exe on Windows.
+// (Named `asset*`, not `dmg*`, since 1.1.2 — the field is platform-neutral.)
+export interface UpdateInfo { version: string; notes: string; assetUrl: string; assetSize: number; assetName: string }
 export interface InstallProgress { stage: string; pct: number; log?: string }
 export type UpdateEvent =
   | { type: 'available'; info: UpdateInfo }
@@ -471,3 +541,42 @@ export interface ScanResult { scannedAt: number; groups: SessionGroup[] }
 export interface ScanCache { version: 1; scannedAt: number; groups: SessionGroup[] }
 export interface ImportedIndex { version: 1; scannedAt: number; sessions: DiscoveredSession[] }
 export interface ImportResult { index: ImportedIndex; gitRepos: GitRepoCandidate[] }
+
+/**
+ * 一个编码代理当前占了多少上下文。
+ *
+ * ★★两个数都**只能来自 CLI 自己上报的**,不许我们算、不许我们猜。用户 2026-09-14 原话:
+ *  「上下文要真实,从官方自己的能力里取的,不能是你自己计算的,那个不准确」。
+ *
+ * ★`window` 是**可选的**,这是整条改动的关键:以前它由 `contextWindowFor(model)` 按模型名硬猜
+ *  (名字里有 "1m" 就是 1M,否则一律 200K),于是界面上那个百分比是个看着很像回事的假数。
+ *  现在:CLI 报了窗口才有窗口、才显示占比;没报就只显示 token 数,**不画进度条、不编百分比**。
+ */
+export interface ContextUsage {
+  /** 已占用的上下文 token(输入侧:新输入 + 缓存读 + 缓存写;不含生成的 output)。 */
+  used: number
+  /** 模型的上下文窗口。只在 CLI 明确上报时才有 —— 缺席表示「不知道」,不是 0。 */
+  window?: number
+}
+
+
+/**
+ * 还挂着的一道权限门(渲染层视图)。★和 `main/gate/gateRegistry.ts` 的 `PendingGate` 同形 ——
+ * 主进程那份带着 resolver 不能过 IPC,这份是能过的那一半。
+ */
+export interface PendingGateView {
+  id: string
+  origin: 'chat' | 'run2' | 'setup' | 'delegate' | 'oneshot'
+  workspacePath: string
+  sessionId?: string
+  /** 谁在等:「建区 Hook · 装 skill」。★界面第一眼要回答的是这个,不是「有东西在等」。 */
+  label?: string
+  title: string
+  where?: string
+  questions?: AskQuestion[]
+  raisedAt: string
+}
+
+export type GateEventView =
+  | { type: 'raised'; gate: PendingGateView }
+  | { type: 'resolved'; id: string; origin: string; workspacePath: string; sessionId?: string; decision: unknown }

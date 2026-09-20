@@ -32,6 +32,27 @@ describe('forgeAllowedToolNames', () => {
   })
 })
 
+describe('forgeMcpArgs — where the config file lands', () => {
+  // On Windows FORGE_SOCKET is a named pipe (`\\.\pipe\forge-r1`); its dirname is `\\.\pipe`,
+  // which is not a writable directory. The bridge passes a real one via FORGE_MCP_DIR.
+  it('writes the per-agent config into FORGE_MCP_DIR when given', () => {
+    const args = forgeMcpArgs({
+      FORGE_SOCKET: '\\\\.\\pipe\\forge-r1',
+      FORGE_MCP_DIR: tmpDir,
+      FORGE_AGENT_ID: 'a1',
+      FORGE_MCP_ENTRY: '/x/forgeMcp.js',
+    })
+    expect(args[0]).toBe('--mcp-config')
+    expect(args[1]).toBe(join(tmpDir, 'mcp.a1.json'))
+    expect(existsSync(args[1])).toBe(true)
+  })
+
+  it('falls back to the socket\'s directory when FORGE_MCP_DIR is absent', () => {
+    const args = forgeMcpArgs({ FORGE_SOCKET: join(tmpDir, 'forge.sock'), FORGE_AGENT_ID: 'a1', FORGE_MCP_ENTRY: '/x/forgeMcp.js' })
+    expect(args[1]).toBe(join(tmpDir, 'mcp.a1.json'))
+  })
+})
+
 describe('forgeMcpArgs', () => {
   it('returns [] when FORGE_SOCKET is missing', () => {
     expect(forgeMcpArgs({ FORGE_AGENT_ID: 'a1', FORGE_MCP_ENTRY: '/x/forgeMcp.js' })).toEqual([])

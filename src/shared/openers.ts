@@ -7,6 +7,11 @@
 //                       (Finder / Terminal / iTerm)
 export type OpenMode = 'together' | 'folder-then-file' | 'folder-only'
 
+// Windows-only: how an opener's executable wants the target handed to it.
+//  - paths    : positional path arguments (every editor)
+//  - cwd-flag : a `-d <dir>` flag (Windows Terminal — a bare argument would be run as a COMMAND)
+export type WinArgStyle = 'paths' | 'cwd-flag'
+
 // A detected (installed) opener, returned to the renderer. `icon` is a dataURL of the app's real
 // icon (best-effort; may be absent, renderer falls back to a generic glyph).
 export interface DetectedOpener {
@@ -15,6 +20,8 @@ export interface DetectedOpener {
   openMode: OpenMode
   appPath: string
   icon?: string
+  // Windows only — how this executable wants the target handed to it (see WinArgStyle).
+  argStyle?: WinArgStyle
 }
 
 // What "打开位置" should open: always a folder, optionally a file within it (absolute paths).

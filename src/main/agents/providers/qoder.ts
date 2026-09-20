@@ -1,7 +1,7 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
-import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor, splitThinkLines } from '../chatStream'
+import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker, splitThinkLines } from '../chatStream'
 import { createFenceScanner } from '../handoffFence'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
 import { permissionArgs } from '../permissionArgs'
@@ -76,7 +76,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       let buf = ''
       let rawErr = ''
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       const cap = (s: string, add: string) => (s + add).slice(-2000)
 
       // Same word-fragment reasoning as chat() — coalesce think deltas into whole log lines so the
@@ -99,8 +99,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
           if (kept.length) cb.onLog({ ts: now(), text: kept.join('\n'), level: 'info' })
           return
         }
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         const actions = parseChatStreamActions(obj)
         if (actions.length === 0) {
@@ -216,7 +215,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
         let streamed = false
         let gotText = false
         let rawErr = ''
-        let ctxMaxSeen = 0
+        const usage = makeUsageTracker(u => cb.onUsage?.(u))
         // Authoritative final-answer text, rebuilt from the full `assistant` messages (which carry the
         // model's real newlines). qoder's streamed partials drop those newlines → the reply renders as
         // one blob; we overwrite it with this once the complete message lands. See onAssistantReplace.
@@ -246,8 +245,7 @@ export function makeQoderProvider(spec: QoderSpec): AgentProvider {
             }
             return
           }
-          const used = extractContextTokens(obj)
-          if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+          usage.feed(obj)
           { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
           if (obj?.type === 'stream_event') streamed = true
           // deltas already streamed the assistant text; skip re-streaming it to avoid duplication — but

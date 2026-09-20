@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened Runtime entitlements for the Developer ID (outside-the-App-Store) build.
+
+  公证（notarization）强制要求 hardened runtime，而 hardened runtime 默认把 V8 需要的几件事全禁了。
+  下面每一条都是**不加就起不来**，不是「以防万一」：
+
+  - allow-jit / allow-unsigned-executable-memory
+      V8 要可写可执行内存。少这两条，app 一启动就崩在 Electron 初始化，连窗口都看不到。
+
+  - allow-dyld-environment-variables
+      我们**靠 spawn 外部 CLI 吃饭**（codex / claude / git / node-pty 起的 shell）。Electron 和
+      node-pty 会给子进程设 DYLD_* 之类的环境变量；hardened runtime 默认会把它们剥掉。
+
+  - disable-library-validation
+      两个理由，都真实存在：① node-pty 的 prebuilds 是**上游预编译**的原生模块，不是我们签的；
+      ② `asar: false`（见 electron-builder.yml），原生模块以裸文件躺在 Resources 里。库校验开着的话，
+      加载一个「不是同一个 Team 签的」动态库会被直接拒绝。
+
+  ★这份文件同时给主 app 和 helper 进程用（electron-builder.yml 里 entitlements 和
+   entitlementsInherit 指的是同一个文件）—— Electron 的渲染进程跑在 helper 里，它一样要 JIT。
+
+  ★★没有 com.apple.security.app-sandbox：Developer ID 分发**不需要**沙箱，而我们这个 app 的核心
+   动作（开终端、spawn 任意 CLI、读写用户选的任意目录）在沙箱里一条都干不了。这也正是不走
+   Mac App Store 的原因。
+-->
+<plist version="1.0">
+<dict>
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

@@ -19,7 +19,7 @@ function setup(over: Partial<Parameters<typeof NotificationPopover>[0]> = {}) {
   return props
 }
 
-const INFO = { version: '2.4.0', notes: '## v2.4.0\n工作流混合编排、文件树提速', dmgUrl: 'u', dmgSize: 26214400, dmgName: 'a.dmg' }
+const INFO = { version: '2.4.0', notes: '## v2.4.0\n工作流混合编排、文件树提速', assetUrl: 'u', assetSize: 26214400, assetName: 'a.dmg' }
 
 describe('formatBytes / releaseSummary', () => {
   it('formats MB to one decimal', () => { expect(formatBytes(26214400)).toBe('25.0 MB') })

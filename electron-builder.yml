@@ -9,6 +9,11 @@ asar: false
 # Use the already-installed, working Electron from node_modules instead of letting
 # electron-builder re-download the framework (the GitHub-release download corrupts behind a
 # proxy — "extra bytes at beginning of zipfile"). This dist matches the devDep version (42.4.0).
+#
+# NOTE this pins the dist to the BUILD HOST's platform+arch: `npm install` on Windows puts a win32
+# Electron here, on macOS a darwin one. So each platform's package must be built on that platform —
+# `npm run dist:win` belongs on the Windows machine. (The mac dual-arch build is the exception:
+# scripts/build-mac-all.sh overrides this per arch.)
 electronDist: node_modules/electron/dist
 # Skip @electron/rebuild entirely. Our ONLY native dep is node-pty, an N-API (node-addon-api) addon
 # that ships prebuilt binaries in prebuilds/<platform>-<arch>/. N-API is ABI-stable across
@@ -19,17 +24,31 @@ electronDist: node_modules/electron/dist
 # loader (lib/utils.js loadNativeModule) falls back to prebuilds/ when build/Release is absent, and
 # our postinstall chmod's the prebuilt spawn-helper, so the terminal still works in the package.
 npmRebuild: false
-# Ad-hoc code-sign the packaged .app (see scripts/afterPack.cjs). The build has no Developer ID
-# (identity: null below), and a *fully unsigned* macOS app is never registered with the notification
-# daemon → notifications silently never fire. An ad-hoc signature is enough to make local notifications
-# work (it does NOT remove the Gatekeeper warning — that needs real signing + notarization).
+# macOS 签名/公证的三个钩子。它们全部**按环境变量分岔**（见 scripts/macSigning.cjs 顶部的说明）:
+#   · 没配 APPLE_SIGN_IDENTITY → 行为和过去完全一样：ad-hoc 签名（只为让本机通知能注册），
+#     Gatekeeper 照样拦。`npm run dist` 一个字节都没变。
+#   · 配了 → afterPack 补签 electron-builder 认不出的独立二进制（node-pty 的 spawn-helper），
+#     afterSign 验收 + 公证 + 装订 .app，afterAllArtifactBuild 再公证 + 装订 dmg 本身。
+# 非 macOS 平台这三个钩子都是直接 return。
 afterPack: ./scripts/afterPack.cjs
+afterSign: ./scripts/afterSign.cjs
+afterAllArtifactBuild: ./scripts/afterAllArtifactBuild.cjs
 files:
   - from: .
     filter:
       - out/**/*
       - package.json
       - node_modules/**/*
+      # ★排掉 node-pty 的**本机编译产物**。它是在打包这台机器上由 node-gyp 编出来的，只有这台机器的
+      # 架构，而 node-pty 的加载顺序是 `build/Release` → `build/Debug` → `prebuilds/<平台>-<架构>`
+      # (node_modules/node-pty/lib/utils.js)，也就是说它**排在 prebuilds 前面**。在 Intel 机器上打
+      # arm64 包时，这里装进去的是 x86_64 的 pty.node，到用户的 Apple Silicon 上先加载失败再回退 ——
+      # 白白依赖一次回退，而且 postinstall.mjs 只给 prebuilds 的 spawn-helper 补可执行位、不管这边。
+      # 排掉之后行为是确定的:永远用架构对得上的 prebuilds。
+      # 顺带干掉三样垃圾:obj.target/ 和 .deps/ 这两个编译中间产物，以及 node_gyp_bins/python3 ——
+      # 那本来是指向 Xcode 里 python3 的软链，被 electron-builder 解引用成了一份真实副本，
+      # 纯粹是 node-gyp 的构建期辅助，运行时一行都用不上(而且 npmRebuild: false，包里永不编译)。
+      - "!node_modules/node-pty/build/**"
 extraResources:
   - from: resources/example-plugins
     to: example-plugins
@@ -52,11 +71,54 @@ mac:
   target:
     - dmg
     - dir
-  # No paid Developer ID: skip electron-builder's signing step. The afterPack hook then applies an
-  # ad-hoc signature (codesign --sign -) so macOS notifications register + fire. Gatekeeper still flags
-  # it (unidentified developer) — open via right-click → Open, or `xattr -dr com.apple.quarantine`.
+  # ★默认不签名。afterPack 随后打一个 ad-hoc 签名(codesign --sign -)，好让 macOS 通知能登记并弹出。
+  # Gatekeeper 仍会拦（身份不明的开发者）—— 右键→打开，或 `xattr -dr com.apple.quarantine`。
+  #
+  # ★★要打**正式包**时不要改这里：由 scripts/build-mac-all.sh 在命令行上用
+  # `-c.mac.identity="$APPLE_SIGN_IDENTITY"` 覆盖掉。这样做的理由是安全默认值 ——
+  # 如果改成让 electron-builder 自动发现证书，一个光秃秃的 `npx electron-builder --mac` 就可能
+  # 摸到钥匙串里那张 "Apple Development" 证书。那张是**开发证书，不能用于分发**，
+  # 签出来的包在别人机器上照样打不开，而构建是全绿的。
   identity: null
+  # 公证的硬性前提。少了它 notarytool 直接判 Invalid（"The executable does not have the hardened
+  # runtime enabled"）。entitlements 里那几条是 Electron 在 hardened runtime 下活下来的最低要求。
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  # 渲染进程跑在 Helper app 里，它一样要 JIT —— 两者用同一份 entitlements。
+  entitlementsInherit: build/entitlements.mac.plist
+  # 构建过程中别跑 spctl：公证是在 afterSign 里才做的，这时候评估必然失败。真正的 Gatekeeper
+  # 验收放在公证+装订之后（scripts/macSigning.cjs 的 assertGatekeeperAccepts）。
+  gatekeeperAssess: false
   category: public.app-category.developer-tools
+win:
+  icon: build/icon.ico
+  # DELIBERATELY no `arch:` list. `electronDist` above pins the Electron binaries to the build host's
+  # architecture, so asking for two arches in one run would emit a second installer NAMED for the other
+  # arch but CONTAINING the host's binaries. (That exact mistake shipped a broken arm64 mac build once.)
+  # The arch comes from the CLI — `npm run dist:win` — and defaults to the host's.
+  target:
+    - nsis
+  # The updater picks a release asset by matching the arch in its FILENAME, so this pattern is part
+  # of the update contract, not cosmetic — see pickAsset() in src/main/update/githubSource.ts.
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}
+  # No code-signing certificate (same position as macOS). SmartScreen will warn on first run until
+  # the download builds reputation; signing is a separate purchase decision.
+  signAndEditExecutable: true
+nsis:
+  # A real installer, not one-click: the user picks the directory, and per-user install means no UAC
+  # prompt — which matters because the app has no signature to show in that prompt.
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: myFlowForge
+  # Keep %APPDATA%\\myFlowForge (workspaces registry, settings, sessions) across an uninstall. Wiping a
+  # user's workspace list because they reinstalled would be unrecoverable.
+  deleteAppDataOnUninstall: false
+  # Close a running instance before overwriting its files, instead of failing with a locked-file error.
+  runAfterFinish: true
 dmg:
   title: myFlowForge ${version}
   # Dark installer background so the app icon's transparent rounded corners blend (same as it looks in

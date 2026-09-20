@@ -3,6 +3,9 @@ import { buildWorkOrders, runStage, type StageInput } from './fanout'
 import type { AgentProvider, AgentTask, AgentCallbacks } from '../agents/types'
 import type { StagePlan } from './machine'
 
+/** 测试里的门:显式拒绝。★`onConfirm` 现在是必填 —— 忘了传是编译错误,而不是运行时才发现的静默全放行。 */
+const DENY = async () => 'deny' as const
+
 const buildPrompt = (o: { stageKey: string; project?: string }) => `stage=${o.stageKey} proj=${o.project ?? '-'}`
 
 function failFor(project: string): AgentProvider {
@@ -179,7 +182,7 @@ describe('runStage', () => {
     }
     const orders = buildWorkOrders(input)
     const provider = failFor('b')
-    const outcomes = await runStage(orders, () => ({ provider, env: {}, sleep: async () => {}, isTransient: () => false }))
+    const outcomes = await runStage(orders, () => ({ provider, env: {}, onConfirm: DENY, sleep: async () => {}, isTransient: () => false }))
     const byId = Object.fromEntries(outcomes.map((o) => [o.order.id, o.status]))
     expect(byId).toEqual({ 'develop:a': 'ok', 'develop:b': 'failed', 'develop:c': 'ok' })
   })

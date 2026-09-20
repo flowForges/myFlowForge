@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { CH } from './channels'
+import { fakeHost } from '../host/fakeHost'
+import { tableCalls } from './testTable'
 
 // 权限档在【运行中】切换的即时兑现(2026-08-20)。
 //
@@ -39,7 +41,7 @@ vi.mock('../chat/sessionStore', () => ({
   autoNameIfDefault: vi.fn(),
 }))
 vi.mock('../config/store', () => ({
-  readSettings: () => ({ termProxy: '', pinnedWorkspaces: [], fullAccessAck: {} }),
+  readSettings: () => ({ agentProxy: '', appProxy: '', pinnedWorkspaces: [], fullAccessAck: {} }),
   writeSettings: vi.fn(),
   readProjects: () => ({ projects: [] }),
   writeProjects: vi.fn(),
@@ -71,7 +73,15 @@ vi.mock('../plugins/pluginSchedulerRef', () => ({
 vi.mock('../plugins/officialCatalog', () => ({ listCatalog: () => [], installOfficial: vi.fn() }))
 vi.mock('../agents/refreshModels', () => ({ refreshProviderModels: vi.fn() }))
 
-type Confirm = (req: { title: string; where?: string; questions?: unknown[] }) => Promise<unknown>
+type Confirm = (req: {
+  title: string; where?: string; questions?: unknown[]
+  // ★这两个是 2026-09-04 加的:自动放行改成记在**那次调用的工具卡**上,不再往对话里插消息。
+  //   chatService 只在拿得到 tool_use_id 时才给 onAutoAllow,拿不到就必须回落成发消息。
+  toolUseId?: string; onAutoAllow?: () => void
+  // ★2026-09-17:「确定是只读」的请求在「自动(工作区)」档下也不升门。只有 provider 自己
+  //   判得出来时才为 true(codex 靠官方的 commandActions),我们绝不猜命令字符串。
+  readOnly?: boolean
+}) => Promise<unknown>
 
 /**
  * 起一轮真实的 chat turn,把 registerIpc 交给 sendTurn 的 `confirm` 抓出来 —— 这就是 CLI 升门用的那个出口。
@@ -81,22 +91,26 @@ async function startTurn(agent = 'claude', requireConfirm = true) {
   vi.resetModules()
   sendTurnMock.mockReset()
   const { registerIpc } = await import('./handlers')
-  const { ipcMain } = await import('electron') as any
-  ;(ipcMain.handle as any).mockClear()
   const sent: [string, any][] = []
-  registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {})
+  const table = registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}, fakeHost())
+  const calls = tableCalls(table)
   const call = (ch: string) => {
-    const c = (ipcMain.handle as any).mock.calls.find((x: any[]) => x[0] === ch)
+    const c = calls.find((x: any[]) => x[0] === ch)
     if (!c) throw new Error(`No handler for channel: ${ch}`)
     return c[1]
   }
   let confirm: Confirm | null = null
-  sendTurnMock.mockImplementation((_p: any, deps: any) => { confirm = deps.confirm; return new Promise(() => {}) })
+  // ★★只认**第一次**调用。sendTurn 在这里返回一个永不 resolve 的 promise(为了把门挂住),而
+  //  sendTurnMock 是文件级共享的 —— 上一条用例那个还挂着的 turn 一旦继续往下走,就会再调一次 mock,
+  //  把这条用例刚捕获的 confirm 覆盖成**上一个模块实例**的那个(它的 broadcast 写去上一个 sent 数组,
+  //  于是这里怎么等都等不到 confirm-request)。2026-09-07 接授权中枢时真撞上过:那次只是因为
+  //  runTurn 在 sendTurn 之前多了一个 await,时序一变这条竞态就现形了。
+  sendTurnMock.mockImplementation((_p: any, deps: any) => { if (!confirm) confirm = deps.confirm; return new Promise(() => {}) })
   call(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent, agentLabel: agent, model: 'm', text: 'x', attachments: [], permissionMode: sessionState.permissionMode })
   await new Promise(r => setTimeout(r, 0))
   // cursor 这类无沙箱 provider 会先卡在「预授权门」上,sendTurn 压根没跑到 —— 那种用例不需要 confirm。
   if (requireConfirm && !confirm) throw new Error('sendTurn never ran — confirm not captured')
-  return { confirm: confirm as unknown as Confirm, sent, call }
+  return { confirm: confirm as unknown as Confirm, sent, call, table }
 }
 
 const requests = (sent: [string, any][]) => sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'confirm-request')
@@ -121,7 +135,26 @@ describe('确认门升起时重新检查权限档', () => {
     expect(requests(sent)).toHaveLength(0)
   })
 
-  it('★ full 档:自动放行要在对话里留一行审计痕迹,不能悄悄放行', async () => {
+  /**
+   * 审计痕迹留在**哪儿**,2026-09-04 改过一次。
+   *
+   * 原来一律往对话流里发一条 `who:'ai'` 的消息 —— 于是它顶着「系统」头像和「回答」标签,
+   * **长得和模型的回答一模一样**,还夹在工具卡和真正的回答中间。用户原话:
+   * 「bash 的结果应该在 bash 的那个折叠里,不应该出现在 LLM 输出的内容界面啊」。
+   * 现在:拿得到那次调用的工具卡就记在卡上(`onAutoAllow`),拿不到才回落成发消息。
+   * ★两条路都必须留痕 —— 「不能悄悄放行」这条一步不让,所以下面两条用例是一对,缺一不可。
+   */
+  it('★ full 档 + 挂得上工具卡:记在卡上,**不再往对话里插消息**', async () => {
+    sessionState.permissionMode = 'full'
+    const { confirm, sent } = await startTurn()
+    let marked = 0
+    await confirm({ title: 'Bash 请求执行', where: 'ls -la', toolUseId: 'toolu_1', onAutoAllow: () => { marked++ } })
+    expect(marked).toBe(1)
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+    expect(notes.some(([, p]) => p.message.text.includes('完全访问')), '还在往对话流里发消息').toBe(false)
+  })
+
+  it('★★ full 档 + 挂不上工具卡(provider 不给 tool_use_id):回落成发消息 —— 绝不悄悄放行', async () => {
     sessionState.permissionMode = 'full'
     const { confirm, sent } = await startTurn()
     await confirm({ title: 'Bash 请求执行', where: 'ls -la' })
@@ -137,6 +170,100 @@ describe('确认门升起时重新检查权限档', () => {
     await new Promise(r => setTimeout(r, 0))
     expect(requests(sent)).toHaveLength(1)
     expect(settled).toBeUndefined()
+  })
+
+  /**
+   * ★★★用户 2026-09-17 明确说出的两条期望,逐字钉在这里:
+   *   「1 自动权限下,若发生未知的权限,是否会升起权限门? —— 是的」
+   *   「2 完全的权限下,出现未知的权限,是否都会默认放过? —— 是的」
+   * 这两条是这一层策略的**验收标准**。上面那些用例测的是各种边角,这两条测的是主干:
+   * 主干被改坏的时候,边角用例可能一条都不红。
+   */
+  it('★★★场景1:auto 档 + 未知权限 → 升起权限门', async () => {
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent } = await startTurn()
+    let settled: unknown = undefined
+    // 「未知」= provider 没告诉我们这是不是只读(readOnly 缺省)。这正是最常见的那一类。
+    void confirm({ title: '未知操作', where: '某个我们判断不了的命令' }).then(d => { settled = d })
+    await new Promise(r => setTimeout(r, 0))
+    expect(requests(sent), '必须升门').toHaveLength(1)
+    expect(settled, '升门了就不该自己先答').toBeUndefined()
+  })
+
+  it('★★★场景2:full 档 + 未知权限 → 默认放过,不升门', async () => {
+    sessionState.permissionMode = 'full'
+    const { confirm, sent } = await startTurn()
+    const decision = await confirm({ title: '未知操作', where: '某个我们判断不了的命令' })
+    expect(decision, '必须直接放行').toBe('allow')
+    expect(requests(sent), '不该升门').toHaveLength(0)
+  })
+
+  it('★★ auto 档 + 确定只读:不升门,直接放行', async () => {
+    // 「自动(工作区)」的承诺是「自动修改工作区内的文件」—— 读比改弱,为一次纯读再问一遍,
+    // 等于让人替一个他已经授权过的动作按一次确认。用户原话:「不要卡在那了」。
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent } = await startTurn()
+    const decision = await confirm({ title: 'shell 请求执行', where: 'cat a.txt', readOnly: true })
+    expect(decision).toBe('allow')
+    expect(requests(sent), '不该升门').toHaveLength(0)
+  })
+
+  it('★★★ auto 档 + 只读 = 放行,但**必须留痕** —— 悄悄放行一步都不让', async () => {
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent } = await startTurn()
+    await confirm({ title: 'shell 请求执行', where: 'cat a.txt', readOnly: true })
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+    expect(notes.some(([, p]) => p.message.text.includes('只读') && p.message.text.includes('cat a.txt'))).toBe(true)
+  })
+
+  it('★★ auto 档 + 拿不准是不是只读:照常升门(失败即拦)', async () => {
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent } = await startTurn()
+    void confirm({ title: 'shell 请求执行', where: 'a1 mcp --env prod call-tool x' })
+    await new Promise(r => setTimeout(r, 0))
+    expect(requests(sent), '拿不准就必须问').toHaveLength(1)
+  })
+
+  it('★★ readonly 档 + 只读:仍然升门 —— 那个档的意思是「什么都别替我做主」', async () => {
+    // auto 档说的是「工作区内的事你自己来」,readonly 档没有给过任何这样的授权。
+    sessionState.permissionMode = 'readonly'
+    const { confirm, sent } = await startTurn()
+    void confirm({ title: 'shell 请求执行', where: 'cat a.txt', readOnly: true })
+    await new Promise(r => setTimeout(r, 0))
+    expect(requests(sent)).toHaveLength(1)
+  })
+
+  it('★★★选择门答完,对话里要留下「问了什么 + 选了什么」', async () => {
+    // 用户原话:「我选择后,这个输出内容里,没有我之前的选择,感觉中间中断了似的」。
+    // 后面每一句都以这个选择为前提,读的人却看不到前提。
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent, call } = await startTurn()
+    const q = { question: '要哪些动态功能?', header: 'x', multiSelect: true, options: [{ label: '评论' }, { label: '搜索' }] }
+    void confirm({ title: '需选择', questions: [q] })
+    await new Promise(r => setTimeout(r, 0))
+    const req = requests(sent)[0]
+    await call(CH.chatResolve)({}, {
+      id: (req[1] as { id: string }).id, decision: 'allow',
+      answers: { '要哪些动态功能?': ['评论', '搜索'] }, workspacePath: '/w',
+    })
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+    const text = notes.map(([, p]) => p.message.text as string).join('\n')
+    expect(text, '问题原文要在').toContain('要哪些动态功能?')
+    expect(text, '选了什么要在').toContain('评论')
+    expect(text).toContain('搜索')
+  })
+
+  it('★权限门(没有 answers)答完**不**留这条 —— 那是授权,不是内容', async () => {
+    // 两者按同一条规矩处理,正是选择门那条被漏掉的原因;反过来给每次权限确认都加一条,
+    // 就是单机用户每点一次门都多一行噪音。
+    sessionState.permissionMode = 'auto'
+    const { confirm, sent, call } = await startTurn()
+    void confirm({ title: 'shell 请求执行', where: 'ls' })
+    await new Promise(r => setTimeout(r, 0))
+    const req = requests(sent)[0]
+    await call(CH.chatResolve)({}, { id: (req[1] as { id: string }).id, decision: 'allow', workspacePath: '/w' })
+    const notes = sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done' && typeof p.message?.text === 'string')
+    expect(notes.map(([, p]) => p.message.text as string).join('\n')).not.toContain('你的选择')
   })
 
   it('读的是会话【当前】的档,不是这一轮启动时的档', async () => {
@@ -243,11 +370,9 @@ describe('运行中改档:本轮不生效时要说一声', () => {
   it('没有轮次在跑的时候切档 → 不提示(本来就是下一轮的事,不用啰嗦)', async () => {
     vi.resetModules()
     const { registerIpc } = await import('./handlers')
-    const { ipcMain } = await import('electron') as any
-    ;(ipcMain.handle as any).mockClear()
     const sent: [string, any][] = []
-    registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {})
-    const h = (ipcMain.handle as any).mock.calls.find((x: any[]) => x[0] === CH.sessionSetPermission)[1]
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p as any]), {}, fakeHost()))
+    const h = calls.find((x: any[]) => x[0] === CH.sessionSetPermission)![1]
     await h({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
     expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)
   })
@@ -257,5 +382,118 @@ describe('运行中改档:本轮不生效时要说一声', () => {
     await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
     console.log('DBG cursor notes:', JSON.stringify(notes(sent)))
     expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)
+  })
+})
+
+// ── 多客户端下的权限门(第二期 C · 设计文档 7.2)────────────────────────────────
+//
+// 现有结构本来就是「先回先算」(状态和 resolver 全在服务端),但它在多客户端下会**骗人**:
+// 手机点了「允许」,电脑上的卡片消失前有几百毫秒 —— 电脑前的人完全可能在这期间点了「拒绝」。
+// 原来的代码拿不到 resolver 就直接 return,于是**他会以为自己拦住了那条 `rm -rf`,其实已经放行了**。
+const REMOTE = { emit: () => {}, client: { id: 'remote', label: 'iPhone' } }
+const LOCAL = { emit: () => {}, client: { id: 'local', label: '本机' } }
+const notes = (sent: [string, any][]) => sent.filter(([c, p]) => c === CH.chatEvent && p.type === 'done').map(([, p]) => String(p.message?.text ?? ''))
+
+describe('多客户端下的权限门', () => {
+  it('★迟到的【相反】答案不许静默丢弃 —— 必须当面告诉那个人他没拦住', async () => {
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash 请求执行', where: 'rm -rf /tmp/x' })
+    await new Promise(r => setTimeout(r, 0))
+    const id = requests(sent)[0]![1].id
+
+    // 手机先答「允许」
+    await table[CH.chatResolve]!(REMOTE, { id, decision: 'allow', workspacePath: '/ws/a' })
+    // 电脑上的人几百毫秒后按了「拒绝」—— 门已经没了
+    await table[CH.chatResolve]!(LOCAL, { id, decision: 'deny', workspacePath: '/ws/a' })
+
+    const text = notes(sent).join('\n')
+    expect(text).toContain('没有生效')
+    expect(text).toContain('iPhone')
+    expect(text).toContain('允许')
+  })
+
+  it('同一个答案迟到(手抖点两下)不加噪音', async () => {
+    // 危险的是「一个说允许、一个说拒绝」。同设备重复点同一个按钮是常事,为它加系统提示纯属打扰。
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'ls' })
+    await new Promise(r => setTimeout(r, 0))
+    const id = requests(sent)[0]![1].id
+    await table[CH.chatResolve]!(LOCAL, { id, decision: 'allow', workspacePath: '/ws/a' })
+    const before = notes(sent).length
+    await table[CH.chatResolve]!(LOCAL, { id, decision: 'allow', workspacePath: '/ws/a' })
+    expect(notes(sent).length).toBe(before)
+  })
+
+  it('★别的设备答的门,要在对话里留个痕 —— 否则卡片凭空消失没人知道为什么', async () => {
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'git status' })
+    await new Promise(r => setTimeout(r, 0))
+    const id = requests(sent)[0]![1].id
+    await table[CH.chatResolve]!(REMOTE, { id, decision: 'allow', workspacePath: '/ws/a' })
+    expect(notes(sent).join('\n')).toContain('「iPhone」允许了这道门')
+  })
+
+  it('本机自己答的门不留痕 —— 单机用户的每次确认都加一条提示是纯噪音', async () => {
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'git status' })
+    await new Promise(r => setTimeout(r, 0))
+    const id = requests(sent)[0]![1].id
+    const before = notes(sent).length
+    await table[CH.chatResolve]!(LOCAL, { id, decision: 'allow', workspacePath: '/ws/a' })
+    expect(notes(sent).length).toBe(before)
+  })
+
+  it('★别的设备切到「完全访问」导致的自动放行,要说清是谁切的', async () => {
+    // 不说的话:这台机器上挂着的门会**当场凭空消失**,电脑前的人只会觉得界面出了鬼。
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'rm -rf /tmp/x' })
+    await new Promise(r => setTimeout(r, 0))
+    await table[CH.sessionSetPermission]!(REMOTE, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    const text = notes(sent).join('\n')
+    expect(text).toContain('「iPhone」切到了「完全访问」')
+    expect(resolved(sent).length).toBeGreaterThan(0)
+  })
+
+  it('本机自己切完全访问,提示里不带设备名(和以前一模一样)', async () => {
+    const { confirm, sent, table } = await startTurn()
+    void confirm({ title: 'Bash', where: 'rm -rf /tmp/x' })
+    await new Promise(r => setTimeout(r, 0))
+    await table[CH.sessionSetPermission]!(LOCAL, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    const text = notes(sent).join('\n')
+    expect(text).toContain('已切到「完全访问」')
+    expect(text).not.toContain('「本机」切到了')
+  })
+
+  /**
+   * ★★门【已经挂在屏幕上】时才切到完全访问 —— 这条路原来一律发消息,而消息正文是
+   *  gateNote 包成代码围栏的**原样 shell 命令**。于是「自动放行的提示不许长成一条回答」这件事
+   *  只修好了一半:门升起时那条修了,门挂着时切档这条照旧。用户 2026-09-08 又撞上:
+   *  「codex 执行过程,依然会发生 bash 的内容出现在了 LLM 输出的地方」。
+   *  挂得上工具卡就挂卡,对话流里一个字都不加。
+   */
+  it('★★门挂着时本机切到完全访问 + 挂得上工具卡:标在卡上,对话流里不插任何消息', async () => {
+    const { confirm, sent, table } = await startTurn()
+    let marked = 0
+    void confirm({ title: 'shell 请求执行', where: 'go vet ./internal/...', toolUseId: 'item_5', onAutoAllow: () => { marked++ } })
+    await new Promise(r => setTimeout(r, 0))
+    const before = notes(sent).length
+    await table[CH.sessionSetPermission]!(LOCAL, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    await new Promise(r => setTimeout(r, 0))
+    expect(marked, '盾牌没落到那张工具卡上').toBe(1)
+    expect(notes(sent).length - before, '又把它写成了一条假回答').toBe(0)
+    expect(resolved(sent).length).toBeGreaterThan(0)
+  })
+
+  it('★别的设备切的仍要说一声(卡片凭空消失要有解释),但正文里不再抄命令原文 —— 卡上就有', async () => {
+    const { confirm, sent, table } = await startTurn()
+    let marked = 0
+    void confirm({ title: 'shell 请求执行', where: 'go vet ./internal/...', toolUseId: 'item_5', onAutoAllow: () => { marked++ } })
+    await new Promise(r => setTimeout(r, 0))
+    await table[CH.sessionSetPermission]!(REMOTE, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    await new Promise(r => setTimeout(r, 0))
+    const text = notes(sent).join('\n')
+    expect(marked).toBe(1)
+    expect(text).toContain('「iPhone」切到了「完全访问」')
+    expect(text, '命令原文又跑进对话正文了').not.toContain('go vet')
   })
 })

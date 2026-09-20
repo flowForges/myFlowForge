@@ -3,6 +3,8 @@ import type { ProviderInfo, AgentsConfig, CustomAgent, ModelInfo } from '@shared
 import { BUILTIN_PROVIDERS } from '@shared/providerCatalog'
 import { TIMEZONE_OPTIONS } from '@shared/timezones'
 import { useSettings } from '../state/useSettings'
+import { usePathPicker } from '../state/PathPicker'
+import { McpPanel } from '../components/McpPanel'
 
 // Built-in providers whose bin path can be overridden — derived from the shared catalog.
 const BUILTINS = BUILTIN_PROVIDERS.map(p => ({ id: p.id, name: p.displayName, defaultBin: p.defaultBin }))
@@ -31,6 +33,16 @@ function CliGuide({ info }: { info?: ProviderInfo }) {
         <span className="cli-guide-note">用户自行安装并登录后，回到这里重新检测。</span>
       </div>
       <div className="cli-cmd-row"><code>{info.installCmd || '请按官方文档安装'}</code><CliCopyBtn text={info.installCmd || ''} label="复制安装命令" /></div>
+      {/* ★★备选安装命令。用户报过「引导里那些命令不一定好使」——
+          实测下来最可能的原因是那几条 `curl | bash` 指向 claude.ai / chatgpt.com,
+          国内不挂代理连不上,而 npm(或它的镜像)那条路通得多。
+          ★只在**真的有官方 npm 包**的那几个上出现;没有的一个都不编(见 providerCatalog)。 */}
+      {info.installAltCmd && (
+        <div className="cli-cmd-row">
+          <code>{info.installAltCmd}</code>
+          <CliCopyBtn text={info.installAltCmd} label="复制备选命令" />
+        </div>
+      )}
       <div className="cli-cmd-row"><code>{info.authCmd || info.displayName}</code><CliCopyBtn text={info.authCmd || ''} label="复制登录命令" /></div>
       {info.installHelp && <div className="cli-guide-note" style={{ marginTop: 8 }}>{info.installHelp}</div>}
     </div>
@@ -61,6 +73,8 @@ function EnableToggle({ id, disabled, onToggle }: { id: string; disabled: boolea
 
 export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   const { settings, update } = useSettings()
+  // CLI 装在**那台机器**上,连着远程时要浏览的是它的文件系统。
+  const { pick: pickPath } = usePathPicker()
   const disabledProviders = settings?.disabledProviders ?? []
   const isDisabled = (id: string) => disabledProviders.includes(id)
   const toggleDisabled = useCallback((id: string, currentlyDisabled: boolean) => {
@@ -70,12 +84,33 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
     update({ disabledProviders: next })
   }, [disabledProviders, update])
 
+  /**
+   * codex 的驱动通路。
+   *
+   * ★★2026-08-31 用户报「codex 输出是一次性倾泻,一直在思考然后突然一大堆」——
+   *  根因在协议层,不在渲染:`codex exec --json`(`'exec'` 这一档)**只发 item.completed,
+   *  从不发 delta**(见 `providers/codex.ts` 里那段注释)。只有 app-server 那条会发
+   *  `item/agentMessage/delta`,也就是真正的逐 token 流式。
+   *  伪流式节拍器(`paceDeltas.ts`)最多把整坨摊在 1.2 秒里,治不了这个,只能让它软一点。
+   *
+   * ★这个开关**一直存在于设置文件里,却从来没有界面入口** —— 全仓库只有 schema 和
+   *  useSettings 提到它。也就是说在这之前用户没有任何办法打开流式。
+   * ★默认仍是 exec:老版本 codex 二进制不支持 app-server 时是**异步**握手失败,
+   *  那一轮直接报错、**不会自动退回 exec**(codex.ts 里明写这个回退「太复杂」故意没做)。
+   *  所以只能做成一个说清代价的开关,不能悄悄翻默认值。
+   */
+  const codexTransport = settings?.codexTransport ?? 'exec'
+  const toggleCodexTransport = useCallback(() => {
+    update({ codexTransport: codexTransport === 'app-server' ? 'exec' : 'app-server' })
+  }, [codexTransport, update])
+
   const [config, setConfig] = useState<AgentsConfig | null>(null)
   const [detected, setDetected] = useState<ProviderInfo[]>([])
   // True until the first detectProviders() round-trip lands — rows show 检测中… meanwhile.
   const [detecting, setDetecting] = useState(true)
   const [binDrafts, setBinDrafts] = useState<Record<string, string>>({})
   const [nc, setNc] = useState(EMPTY_CUSTOM)
+  const [mcpOpen, setMcpOpen] = useState(false)
   // 全局忙(只给「重新检测」这类真·全局操作用)。单个 provider 的保存/删除走下面的 rowBusy。
   const [busy, setBusy] = useState(false)
   // Per-provider busy + 「已保存」闪现,让一行的操作只影响那一行(见 apply 的注释)。
@@ -155,11 +190,18 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
   const installed = (id: string) => info(id)?.installed ?? false
   // While the first detection round-trip is pending show a lightweight placeholder
   // instead of prematurely stamping 未检测.
-  const badge = (id: string) => detecting && !info(id)
-    ? <span className="agent-badge off">检测中…</span>
-    : <span className={`agent-badge ${installed(id) ? 'ok' : 'off'}`}>{installed(id) ? '已检测' : '未检测'}</span>
+  const badge = (id: string) => {
+    if (detecting && !info(id)) return <span className="agent-badge off">检测中…</span>
+    if (!installed(id)) return <span className="agent-badge off">未检测</span>
+    // ★★「装了」不等于「登录了」。远程/无头那台机器你看不见,不说的话流程是
+    //  「建会话 → 发消息 → 等半天 → 才发现没登录」(设计文档第九节)。
+    // ★只有拿到**否定证据**(auth === 'missing')才画这一枚;`unknown` 照旧画「已检测」——
+    //  一半 CLI 我们根本没有判断依据,把不知道说成没登录同样是在浪费人的时间。
+    if (info(id)?.auth === 'missing') return <span className="agent-badge warn">没登录</span>
+    return <span className="agent-badge ok">已检测</span>
+  }
   const browse = async (id: string) => {
-    const p = await window.forge.pickFile()
+    const p = await pickPath('file', '选择 CLI 可执行文件')
     if (p) setBinDrafts(d => ({ ...d, [id]: p }))
   }
   /**
@@ -264,6 +306,14 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
         <div className="info"><div className="t">编码代理</div><div className="d">检测本机安装的代理；可覆盖各自的 bin 路径</div></div>
         <button className="set-btn" disabled={busy || detecting} onClick={() => apply(() => window.forge.detectProviders({ force: true }))}>{detecting ? '检测中…' : '重新检测'}</button>
       </div>
+
+      {/* MCP:一个 CLI 现在什么状态,天然该在这一栏 —— 和「装没装」「有哪些模型」放一起。
+          聊天里打 `/mcp` 是同一个面板,只是从另一头进来。 */}
+      <div className="set-row">
+        <div className="info"><div className="t">MCP 服务器</div><div className="d">看各 CLI 配了哪些 MCP、授权或取消授权；聊天里打 <code>/mcp</code> 也能开</div></div>
+        <button className="set-btn" onClick={() => setMcpOpen(true)}>打开</button>
+      </div>
+      {mcpOpen && <McpPanel onClose={() => setMcpOpen(false)} />}
 
       {BUILTINS.map(b => (
         <div className="agent-row" key={b.id}>
@@ -370,6 +420,28 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
             </div>
           </div>
           <CliGuide info={info(b.id)} />
+          {/* ★★codex 专属:驱动通路。放在这一行里(而不是设置的某个角落)是因为
+              它只影响 codex,而人是在这一行判断「codex 现在什么状况」的。 */}
+          {b.id === 'codex' && (
+            <div className="set-row">
+              <div className="info">
+                <div className="t">逐字输出(app-server 通路)</div>
+                <div className="d">
+                  关着的时候用 <code>codex exec --json</code>,它<b>只在整条消息写完后发一次</b> ——
+                  界面上就是「想很久,然后几千字一下子全出来」。打开后走常驻的 app-server,
+                  codex 会边写边发。
+                  <br />
+                  ★代价:<b>老版本的 codex 二进制不支持它</b>,而且握手失败时那一轮会直接报错、
+                  不会自动退回原来的通路。跑不通就把它关回去。
+                </div>
+              </div>
+              <button
+                className={`toggle${codexTransport === 'app-server' ? ' on' : ''}`}
+                aria-label="codex 逐字输出"
+                onClick={toggleCodexTransport}
+              />
+            </div>
+          )}
         </div>
       ))}
 
@@ -393,7 +465,7 @@ export function AgentsPane({ onChanged }: { onChanged?: () => void }) {
         <input placeholder="id (如 my-agent)" value={nc.id} onChange={e => setNc({ ...nc, id: e.target.value })} />
         <input placeholder="显示名" value={nc.displayName} onChange={e => setNc({ ...nc, displayName: e.target.value })} />
         <input placeholder="bin 绝对路径" value={nc.bin} onChange={e => setNc({ ...nc, bin: e.target.value })} />
-        <button className="ghost" disabled={busy} onClick={async () => { const p = await window.forge.pickFile(); if (p) setNc(s => ({ ...s, bin: p })) }}>选择…</button>
+        <button className="ghost" disabled={busy} onClick={async () => { const p = await pickPath('file', '选择 CLI 可执行文件'); if (p) setNc(s => ({ ...s, bin: p })) }}>选择…</button>
         <input placeholder="参数模板，如 chat --json {prompt}" value={nc.argsTemplate} onChange={e => setNc({ ...nc, argsTemplate: e.target.value })} />
         <button
           disabled={busy || !nc.id.trim() || !nc.bin.trim()}

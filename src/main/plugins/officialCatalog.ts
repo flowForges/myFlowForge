@@ -11,7 +11,7 @@ interface OfficialDef { provider: string; name: string; description: string }
 
 export const OFFICIAL_PROVIDERS: OfficialDef[] = [
   { provider: 'codex',  name: 'Codex 额度 · 官方',  description: '读取本机 Codex 登录态，显示真实 5 小时 / 每周额度与重置时间。' },
-  { provider: 'claude', name: 'Claude 额度 · 官方', description: '读取 macOS 钥匙串中的 Claude 登录态（首次需授权），显示真实额度。' },
+  { provider: 'claude', name: 'Claude 额度 · 官方', description: '读取本机 Claude 登录态（macOS 走钥匙串，首次需授权；Windows / Linux 读 .credentials.json），显示真实额度。' },
   { provider: 'gemini', name: 'Gemini 额度 · 官方', description: '读取 Gemini CLI 登录态，显示配额剩余与重置时间。' },
   { provider: 'cursor', name: 'Cursor 额度 · 官方', description: '读取本机 Cursor 登录态，显示套餐用量与账单周期。' },
   { provider: 'qoder',  name: 'Qoder 额度 · 官方',  description: '暂无可读数据源，连接后显示真实额度。' },

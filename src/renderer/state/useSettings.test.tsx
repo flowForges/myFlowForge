@@ -8,7 +8,7 @@ beforeEach(() => {
   saved = null
   settingsCb = null
   ;(window as any).forge = {
-    getSettings: vi.fn(async () => ({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, termProxy: '' })),
+    getSettings: vi.fn(async () => ({ appearance: { theme: 'dark', vibrancy: true, density: 'comfortable', fontSize: 'medium' }, agentProxy: '' })),
     setSettings: vi.fn(async (s: any) => { saved = s; return s }),
     onSettingsChanged: (cb: (s: any) => void) => { settingsCb = cb; return () => {} },
   }
@@ -26,8 +26,8 @@ describe('useSettings', () => {
     await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
     expect(saved.appearance.theme).toBe('light')
 
-    act(() => { result.current.update({ termProxy: 'http://x' }) })
-    expect(result.current.settings!.termProxy).toBe('http://x')
+    act(() => { result.current.update({ agentProxy: 'http://x' }) })
+    expect(result.current.settings!.agentProxy).toBe('http://x')
   })
   it('falls back to defaults when getSettings returns empty', async () => {
     ;(window as any).forge.getSettings = vi.fn(async () => ({}))
@@ -35,7 +35,7 @@ describe('useSettings', () => {
     await waitFor(() => expect(result.current.settings).not.toBeNull())
     // 新用户默认亮色主题(与主进程 defaultSettings 保持一致)
     expect(result.current.settings!.appearance.theme).toBe('light')
-    expect(result.current.settings!.termProxy).toBe('')
+    expect(result.current.settings!.agentProxy).toBe('')
     expect(result.current.settings!.appIcon).toEqual({ dockIcon: 'ember-violet', showMenuBar: false })
   })
 
@@ -70,7 +70,7 @@ describe('useSettings', () => {
     expect(saved.closeAction).toBe('hide')
 
     // 后续无关更新必须带着 closeAction 一起写回,不能丢
-    act(() => { result.current.update({ termProxy: 'http://x' }) })
+    act(() => { result.current.update({ agentProxy: 'http://x' }) })
     expect(saved.closeAction).toBe('hide')
   })
 
@@ -94,7 +94,7 @@ describe('useSettings', () => {
     act(() => { settingsCb!({ pinnedWorkspaces: ['/ws/x'] }) })
     expect(result.current.settings!.pinnedWorkspaces).toEqual(['/ws/x'])
 
-    act(() => { result.current.update({ termProxy: 'http://x' }) })
+    act(() => { result.current.update({ agentProxy: 'http://x' }) })
     await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
     expect(saved.pinnedWorkspaces).toEqual(['/ws/x'])
   })
@@ -106,7 +106,7 @@ describe('useSettings', () => {
     expect(result.current.settings!.appearance.theme).toBe('light')
     // 未提供的字段回落 DEFAULTS
     expect(result.current.settings!.pet.corner).toBe('right')
-    expect(result.current.settings!.termProxy).toBe('')
+    expect(result.current.settings!.agentProxy).toBe('')
     expect(result.current.settings!.appIcon.dockIcon).toBe('ember-violet')
   })
 

@@ -15,6 +15,10 @@ export const CLI_NPM_PACKAGE: Record<string, string> = {
   pi: '@earendil-works/pi-coding-agent',
   kimi: '@moonshot-ai/kimi-code',
   reasonix: 'reasonix',
+  // ★deepseek(dsh)现在整条线都还是预发布(latest 这个 dist-tag 指着 0.1.2-rc.1)。
+  //  `parseSemver` 会把安装版本的 `-rc.1` 剥掉,所以**同一个大版本内的预发布递进**
+  //  (rc.1 → rc.2)这里提示不出来 —— 少提示一次,不会误报。核心号一涨(0.1.3-alpha.2)照常提示。
+  deepseek: '@deepseek-ai/dsh',
 }
 
 export interface CliUpdateInfo {

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CHAT_LINE_HEIGHT_DEFAULT } from '../../shared/chatTypography'
 import type { Plugin as SharedPlugin, LibraryHook as SharedLibraryHook } from '../../shared/plugin'
 import { PET_SCALE_MIN, PET_SCALE_MAX } from '../../shared/petGeometry'
 import { builtinPets } from '../../shared/builtinPets'
@@ -53,6 +54,16 @@ export const STAGE_PROMPTS: Record<StageKey, string> = {
   develop: '按技术方案实现代码变更,遵循项目既有规范与目录约定;保持改动聚焦、可回滚,并在必要处补充说明性注释。**探查:参考上游【技术方案】与【关联清单】直接定位相关部分动手,不要为了改动先把整个仓库重扫一遍。**',
   test: '为本次改动补充单元 / 回归测试,覆盖核心路径与边界条件;确保测试可独立运行且能稳定复现回归。',
   review: '审查改动 diff:正确性、安全性、规范与可维护性;区分「必须修复」与「建议项」,并明确是否可以合并。',
+}
+
+// 每个阶段一句话干什么。原来是 `run/launch.ts` 里的一个模块私有常量,启动门用它显示副标题;
+// 手机端的「加一个阶段」也要用同一句话,再抄一份就会两边各说各的 —— 挪到这里当唯一一份。
+export const STAGE_DESC: Record<string, string> = {
+  requirement: '梳理与确认本次需求边界',
+  design: '设计技术方案与阶段计划',
+  develop: '按项目并行开发',
+  test: '补充与运行测试',
+  review: '多视角代码评审',
 }
 
 // —— 自定义阶段支持(#3)——
@@ -118,7 +129,7 @@ export const AppearanceSchema = z.object({
   chatFontSize: fontSizePx(LEGACY_CHAT_FONT_PX, 14),
   // 会话区排版微调(独立于字号):行距(line-height 倍数)与字间距(letter-spacing,em)。默认取偏舒展的
   // 1.7 行距 + 0 字间距(更接近 codex 那种协调、透气的观感);用户可各自拉动。越界/非法回落默认。
-  chatLineHeight: z.preprocess((v) => (typeof v === 'number' ? Math.min(2.2, Math.max(1.3, v)) : 1.7), z.number().catch(1.7).default(1.7)),
+  chatLineHeight: z.preprocess((v) => (typeof v === 'number' ? Math.min(2.2, Math.max(1.3, v)) : CHAT_LINE_HEIGHT_DEFAULT), z.number().catch(CHAT_LINE_HEIGHT_DEFAULT).default(CHAT_LINE_HEIGHT_DEFAULT)),
   chatLetterSpacing: z.preprocess((v) => (typeof v === 'number' ? Math.min(0.08, Math.max(-0.02, v)) : 0), z.number().catch(0).default(0)),
   // 内嵌 HTML:打开后(1)给对话 provider 注入格式指令,鼓励它在对比矩阵/流程结构/信息卡片这类场景内嵌
   // HTML 片段;(2)渲染端把片段按白名单重建成真元素,配色映射到本应用的 token,于是卡片跟随皮肤和壁纸
@@ -138,6 +149,15 @@ export const AppearanceSchema = z.object({
   bgImage: z.string().default(''),
   bgScope: z.enum(['off', 'app', 'chat']).default('off'),
   bgOpacity: z.number().min(0.05).max(1).default(0.35),
+  // 壁纸【自身】的模糊。0 = 原图,1 = 最糊(见 applyTheme.BG_BLUR_MAX)。
+  // ★和「磨砂度」(blurAmount)不是一回事:那个是 macOS 原生 vibrancy,模糊的是【窗口背后的桌面】,
+  //   由系统在合成层做;这个是把【我们自己铺的那张壁纸】糊掉。
+  // ★为什么需要它:字读不读得清,取决于底下有没有【高频细节】,而不只是底有多亮。把壁纸糊掉之后,
+  //   壁纸仍在(颜色、构图的大块关系都还在),但没有细节去和字形抢边缘 —— 这就是终端类 app 那种
+  //   「玻璃底 + 字很锐」的做法。用户 2026-09-08 问的就是它。
+  // ★性能上和 backdrop-filter 是两回事:这层图是【静止】的,blur 只算一次并缓存成纹理,
+  //   不像 backdrop-filter 每帧重算(见 memory perf-glass-vs-css-backdrop-filter)。
+  bgBlur: z.number().min(0).max(1).catch(0).default(0),
   // 当前应用的「内置壁纸」id(仅用于在壁纸库里高亮当前项);用户上传自己的图或清除背景时置空。
   bgWallpaperId: z.string().default(''),
   // 首页 (home) 背景图:独立于上面的应用/会话区背景,可同可不同。homeBgOn 是首页背景的独立开关,
@@ -148,7 +168,13 @@ export const AppearanceSchema = z.object({
   // 壁纸纵向焦点(0–100,%):`background-size:cover` 把图铺满窗口后要裁掉溢出部分,这个值决定纵向从哪里裁 ——
   // 0=顶部对齐(保住画面上部/人物头部,裁底)、50=居中、100=底部对齐。按【图片 URL】分别记忆,故换壁纸各调各的
   // (解决"有些竖构图壁纸被削头")。缺省 = DEFAULT_BG_POSITION(略偏上)。app/会话区背景与首页背景都查这张表。
-  bgPositions: z.record(z.string(), z.number().min(0).max(100)).catch({}).default({})
+  bgPositions: z.record(z.string(), z.number().min(0).max(100)).catch({}).default({}),
+  // 底部栏那枚主机按钮显示成什么样:只图标 / 只名称 / 图标 + 名称。
+  // ★★这是**那枚按钮的设置**,不是某一台主机的设置。旧版把它存在每台主机里(hostStore 的 `display`),
+  //  于是同一枚按钮会因为切了主机而换一副长相 —— 而本机根本没地方存,只能写死成「只显示名称」。
+  //  用户的原话:「我设置了只显示图标,但是本机还是显示一个大按钮」。一个控件只该有一种长相,
+  //  所以它归到外观里、全局一份。
+  hostChip: z.enum(['icon', 'name', 'both']).catch('both').default('both')
 })
 export type Appearance = z.infer<typeof AppearanceSchema>
 export const SkillsSchema = z.record(z.string(), z.boolean())
@@ -285,6 +311,15 @@ export const NotificationsSchema = z.object({
   done: z.boolean(),
 })
 export type Notifications = z.infer<typeof NotificationsSchema>
+
+/** 跟机器走的那一半(Q1):这台机器上哪些事件值得产生一条通知。 */
+export const NotifyEventsSchema = z.object({
+  confirm: z.boolean().catch(true),
+  input: z.boolean().catch(true),
+  done: z.boolean().catch(true),
+})
+export type NotifyEvents = z.infer<typeof NotifyEventsSchema>
+export const defaultNotifyEvents = (): NotifyEvents => ({ confirm: true, input: true, done: true })
 const defaultNotifications = (): Notifications => ({ enabled: true, confirm: true, input: true, done: true })
 
 // Keyboard shortcuts. We store ONLY user overrides keyed by action id (the default binding for each
@@ -356,12 +391,96 @@ export const defaultBotBridge = (): z.infer<typeof BotBridgeSchema> => ({
   verbosity: 'essential', pairingCode: '', bindings: [], ids: { seq: 0, ws: {}, session: {} },
 })
 
+/**
+ * 手机端网关:**这台 app 自己**把第二期那套 WS 网关端起来,让手机直接连进来。
+ *
+ * ★为什么不是让用户另起一个 `daemon.js`:那是**两个各自独立的核心** —— 两份会话缓存、两张门表、
+ *  两条广播总线,读写同一批文件却互不通气。手机上答掉的门,电脑上那张卡不会消失;
+ *  手机发的消息,电脑上的 app 也看不见。真机上第一次两边同开就撞上了。
+ *  开在 app 进程里 = 同一份核心、同一张门表,「谁先答谁算数」才真正成立(决策 3:同生共死)。
+ *
+ * 归**客户端**设置(跟设备走):它描述的是「这台电脑对外开不开这扇门」。连去别的机器操作时,
+ * 那台机器的网关是它自己的事。
+ */
+export const MobileGatewaySchema = z.object({
+  enabled: z.boolean().catch(false).default(false),
+  /** '0.0.0.0' = 局域网可见(**强制令牌**);'127.0.0.1' = 只本机,给 SSH 隧道用 */
+  host: z.string().catch('0.0.0.0').default('0.0.0.0'),
+  port: z.number().int().min(1).max(65535).catch(6789).default(6789),
+})
+export type MobileGateway = z.infer<typeof MobileGatewaySchema>
+export const defaultMobileGateway = (): MobileGateway => ({ enabled: false, host: '0.0.0.0', port: 6789 })
+
+/**
+ * 中转(第三期)。**这台机器**要不要通过一台第三方服务器对外可达。
+ *
+ * ★★为什么它是**跟机器走**而不是跟设备走(和 `mobileGateway` 相反):
+ *  `mobileGateway` 说的是"这台电脑对手机开不开门",那是这台设备自己的事;
+ *  而中转说的是"**这台 daemon** 从哪儿能被找到" —— 你从手机上连过去,连的是那台机器,
+ *  它挂在哪个中转上是那台机器的属性。所以 `HOST_SETTING_KEYS` 里有它,`CLIENT` 里没有。
+ *
+ * ★★**没有官方中转**(设计文档决策 4):`url` 由用户自己填,代码开源、自己部署。
+ *  所以这里没有默认地址,空 = 不用中转。填一个第三方地址进来也无所谓 ——
+ *  链路是端到端加密的,中转读不到任何东西(见 `src/shared/remote/e2e.ts`)。
+ *
+ * ★直连那条路(公网 IP / Tailscale / frp / 端口转发)和这条**平级**,不是降级方案:
+ *  两条路走的是同一套加密,安全性等同,直连还少一跳。界面上别把直连藏进高级设置。
+ */
+/** 地址历史最多记几条。★有上限,否则手滑输错的地址会永远留在下拉里。 */
+export const RELAY_URL_HISTORY_MAX = 8
+
+export const RelaySchema = z.object({
+  enabled: z.boolean().catch(false).default(false),
+  /** `ws://` 或 `wss://`。★生产上该用 wss —— 不是为了内容(内容本来就是密文),是别让沿途的人知道你在跟谁通信。 */
+  url: z.string().catch('').default(''),
+  /**
+   * 用过的中转地址,最近用的排在最前。界面上做成下拉,省得每次重装系统都要重敲一遍。
+   *
+   * ★★★**只存地址,绝不存令牌。** 地址是公开信息(它就写在二维码里给人扫),
+   *  令牌不是 —— 令牌能起 agent、替你答权限门、开终端。一份"为了方便"的历史记录
+   *  把令牌一起留在盘上,是把便利换成了一个谁拿到这台机器就能用的后门。
+   * ★上限 `RELAY_URL_HISTORY_MAX`:没有上限的话,手滑敲错的地址会永远留在下拉里。
+   */
+  urlHistory: z.array(z.string()).catch([]).default([]),
+})
+export type RelayConfig = z.infer<typeof RelaySchema>
+export const defaultRelay = (): RelayConfig => ({ enabled: false, url: '', urlHistory: [] })
+
+/**
+ * 推送(第三期收尾)。**这台机器**要不要在门升起/跑完时往已登记的手机上发一条推送。
+ *
+ * ★跟机器走,和 `relay`、`notifyEvents` 同侧:发推送的是跑 agent 的那台机器,
+ *  它上面才知道门什么时候升起来;设备表(`push-devices.json`)也存在它那儿。
+ *
+ * ★★推送**只在手机不在跟前时**才发。手机开着的时候事件本来就通过 socket 到了,
+ *  由手机自己弹一条本地通知 —— 判据是同一个 `attentionOf`,两边互斥,不会弹两条。
+ *
+ * ★`done` 默认关:跑完了属于"回头看看"级别,而门是"没你就卡在那儿"。
+ *  半夜被一条"跑完了"吵醒一次,这个功能就会被整个关掉。
+ */
+export const PushSchema = z.object({
+  enabled: z.boolean().catch(false).default(false),
+  /** 门(权限门 / 代理提问 / 工作流门)—— 推送存在的理由就是这一档。 */
+  gate: z.boolean().catch(true).default(true),
+  done: z.boolean().catch(false).default(false),
+})
+export type PushConfig = z.infer<typeof PushSchema>
+export const defaultPush = (): PushConfig => ({ enabled: false, gate: true, done: false })
+
 export const SettingsSchema = z.object({
   appearance: AppearanceSchema,
+  // ★Q1:原本一个对象塞了两件事。
+  //   `notifications` = 「**这台设备**要不要弹、收哪些」—— 手机只想收要我答门的,电脑什么都想收。
+  //   `notifyEvents`  = 「**那台机器**上哪些事件值得产生通知」—— 只有 daemon 知道事件何时发生。
   notifications: NotificationsSchema.default(defaultNotifications),
+  notifyEvents: NotifyEventsSchema.default(defaultNotifyEvents),
   closeAction: CloseActionSchema,
   appIcon: AppIconSchema,
-  termProxy: z.string(),
+  // ★Q4:一个值原本被两拨人用 —— agent 的出口代理(跑在 host 上)和 app 自身的网络
+  //   (检查更新、拉壁纸、拉插件目录,跑在客户端)。远程时这俩必然不同(云服务器不需要代理,
+  //   你的笔记本需要),所以拆成两份。
+  agentProxy: z.string().catch('').default(''),
+  appProxy: z.string().catch('').default(''),
   skills: SkillsSchema.default(defaultSkills),
   pet: PetSchema.default(defaultPet),
   heartbeat: HeartbeatSchema,
@@ -372,7 +491,9 @@ export const SettingsSchema = z.object({
   workspaceOrder: z.array(z.string()).default(() => []),
   // Last workspace the user was in — the titlebar's 工作区 tab restores it (its per-workspace
   // activeSessionId then restores the last session for free).
-  lastActiveWorkspace: z.string().catch('').default(''),
+  // ★Q3:一定不能跟 host —— 手机上次看的和电脑上次看的必然不同,互相覆盖会很烦。
+  //   跟设备,但**按 hostId 分键**:切回某台机器时恢复「我在这台上次看的」。本机的键是 'local'。
+  lastActiveWorkspace: z.record(z.string(), z.string()).catch({}).default(() => ({})),
   // User-pasted usage-plugin credentials, keyed by provider id (e.g. qoder/cursor cookie/token).
   // Overrides the adapter's auto-read source. Stored locally only.
   pluginCreds: z.record(z.string(), z.string()).default(() => ({})),
@@ -411,20 +532,25 @@ export const SettingsSchema = z.object({
   // codex 驱动通路:'exec' = 现有的一次性 CLI 子进程调用(默认,稳定);'app-server' = 新的常驻
   // JSON-RPC app-server 传输(见 codexRpc.ts),支持权限交互等更细粒度控制。先落地开关,接线在后续任务。
   codexTransport: z.enum(['exec', 'app-server']).catch('exec').default('exec'),
+  mobileGateway: MobileGatewaySchema.default(defaultMobileGateway),
+  relay: RelaySchema.default(defaultRelay),
+  push: PushSchema.default(defaultPush),
 })
 export type Settings = z.infer<typeof SettingsSchema>
 export const defaultSettings = (): Settings => ({
-  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: 1.7, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {} },
+  appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: CHAT_LINE_HEIGHT_DEFAULT, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgBlur: 0, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {}, hostChip: 'both' },
   notifications: defaultNotifications(),
+  notifyEvents: defaultNotifyEvents(),
   closeAction: 'ask',
   appIcon: { dockIcon: 'ember-violet', showMenuBar: false },
-  termProxy: '',
+  agentProxy: '',
+  appProxy: '',
   skills: defaultSkills(),
   pet: defaultPet(),
   heartbeat: defaultHeartbeat(),
   pinnedWorkspaces: [],
   workspaceOrder: [],
-  lastActiveWorkspace: '',
+  lastActiveWorkspace: {},
   pluginCreds: {},
   disabledProviders: [],
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
@@ -440,6 +566,9 @@ export const defaultSettings = (): Settings => ({
   memory: { enabled: false },
   botBridge: defaultBotBridge(),
   codexTransport: 'exec',
+  mobileGateway: defaultMobileGateway(),
+  relay: defaultRelay(),
+  push: defaultPush(),
 })
 
 export const ProjectSchema = z.object({
@@ -642,3 +771,90 @@ export const WorkspaceRegistryEntrySchema = z.object({
 export type WorkspaceRegistryEntry = z.infer<typeof WorkspaceRegistryEntrySchema>
 export const WorkspaceRegistrySchema = z.object({ workspaces: z.array(WorkspaceRegistryEntrySchema) })
 export const defaultWorkspaceRegistry = () => ({ workspaces: [] as WorkspaceRegistryEntry[] })
+
+
+// ── 设置一分为二(第二期 C · 决策 8 + Q1–Q7)────────────────────────────────────
+//
+// 「跟设备走」的留在客户端(client.json),「跟机器走」的留在那台机器(settings.json)。
+// ★这两张表加起来必须**正好**覆盖 SettingsSchema 的全部字段,由 settingsSplit.test.ts 钉死 ——
+//   新加一个设置项会让那条断言挂,逼你当场决定它归谁,而不是默默继承一个可能错的默认。
+
+/** 跟设备走:换一台机器看,这些不该变。 */
+export const CLIENT_SETTING_KEYS = [
+  'appearance', 'terminal', 'keybindings', 'closeAction', 'appIcon', 'pet',
+  'nsfwUnlocked', 'nsfwCode', 'nsfwCodes', 'nsfwInstalled',
+  'notifications',        // Q1:这台设备收哪些
+  'appProxy',             // Q4:app 自身的网络
+  'lastActiveWorkspace',  // Q3:按 hostId 分键
+  'defaultOpenerId',      // Q5
+  'perfStallToast', 'perfDiagnostics',   // Q6:第二期只做客户端这份,daemon 侧留空实现
+  'mobileGateway',        // 这台电脑对手机开不开门 —— 跟设备走,不跟你正在操作哪台机器走
+] as const
+
+/** 跟机器走:你操作的是哪台机器,这些就该是哪台的。 */
+export const HOST_SETTING_KEYS = [
+  'skills', 'heartbeat', 'pluginCreds', 'disabledProviders', 'fullAccessAck',
+  'memory', 'botBridge', 'codexTransport',
+  'notifyEvents',                          // Q1:哪些事件值得产生通知
+  'agentProxy',                            // Q4:agent 的出口代理
+  'pinnedWorkspaces', 'workspaceOrder',    // Q2
+  // 第三期:「**这台机器**从哪儿能被找到」是那台机器的属性,不是你手上这台设备的。
+  // ★和 `mobileGateway` 正好相反(那个说的是"这台电脑对手机开不开门",跟设备走),
+  //   理由完整版在 RelaySchema 上面。
+  'relay',
+  // 推送同理:发推送的是跑 agent 的那台机器,设备表也存在它那儿。
+  'push',
+] as const
+
+export type ClientSettingKey = typeof CLIENT_SETTING_KEYS[number]
+export type HostSettingKey = typeof HOST_SETTING_KEYS[number]
+export type ClientSettings = Pick<Settings, ClientSettingKey>
+export type HostSettings = Pick<Settings, HostSettingKey>
+
+const pickShape = <K extends readonly string[]>(keys: K) =>
+  Object.fromEntries(keys.map((k) => [k, true])) as Record<K[number], true>
+
+export const ClientSettingsSchema = SettingsSchema.pick(pickShape(CLIENT_SETTING_KEYS))
+export const HostSettingsSchema = SettingsSchema.pick(pickShape(HOST_SETTING_KEYS))
+
+export const pickClient = (s: Settings): ClientSettings =>
+  Object.fromEntries(CLIENT_SETTING_KEYS.map((k) => [k, s[k]])) as ClientSettings
+export const pickHost = (s: Settings): HostSettings =>
+  Object.fromEntries(HOST_SETTING_KEYS.map((k) => [k, s[k]])) as HostSettings
+
+/**
+ * 把「老版本那份什么都装在一起的 settings.json」拆成两半。
+ *
+ * ★纯函数,单独钉死。这是整个第二期最容易把用户设置弄丢的一步:
+ *   拆错一个字段,用户的主题/壁纸/凭据就在一次升级里凭空消失,而且**不会有任何报错**
+ *   —— `readJson` 的 catch 会把它变成「回落默认值」。
+ *
+ * 三处字段形状同时在变(Q1 通知、Q3 上次工作区、Q4 代理),迁移必须让**升级后行为不变**:
+ * - `termProxy` 同时抄进 agentProxy 和 appProxy(升级前两者本来就是同一个值)
+ * - 老的 `notifications` 的三个开关同时抄进 notifyEvents(升级前「产生」和「接收」本来是一件事)
+ * - 老的 `lastActiveWorkspace` 是个字符串,归到本机这台的键下
+ */
+export function migrateLegacySettings(raw: unknown): { client: unknown; host: unknown } {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const legacyProxy = typeof o.termProxy === 'string' ? o.termProxy : undefined
+  const legacyNotif = (o.notifications && typeof o.notifications === 'object' ? o.notifications : {}) as Record<string, unknown>
+  const legacyLast = o.lastActiveWorkspace
+
+  const client: Record<string, unknown> = {}
+  for (const k of CLIENT_SETTING_KEYS) if (k in o) client[k] = o[k]
+  if (client.appProxy === undefined && legacyProxy !== undefined) client.appProxy = legacyProxy
+  // 老的是字符串;新的是 { [hostId]: path }。空串不建键,否则会造出一个指向空路径的「上次」。
+  if (typeof legacyLast === 'string') client.lastActiveWorkspace = legacyLast ? { local: legacyLast } : {}
+
+  const host: Record<string, unknown> = {}
+  for (const k of HOST_SETTING_KEYS) if (k in o) host[k] = o[k]
+  if (host.agentProxy === undefined && legacyProxy !== undefined) host.agentProxy = legacyProxy
+  if (host.notifyEvents === undefined) {
+    host.notifyEvents = {
+      confirm: legacyNotif.confirm ?? true,
+      input: legacyNotif.input ?? true,
+      done: legacyNotif.done ?? true,
+    }
+  }
+  return { client, host }
+}

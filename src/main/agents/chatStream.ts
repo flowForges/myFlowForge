@@ -1,3 +1,4 @@
+import type { ContextUsage } from '@shared/types'
 import type { ChatTask } from './types'
 
 export type ChatStreamAction =
@@ -14,8 +15,16 @@ export type ChatStreamAction =
   | { kind: 'subagent-result'; id: string; result?: string; isError?: boolean }
   | { kind: 'ignore' }
 
-// The built-in sub-agent-spawning tool. Its tool_use carries { subagent_type, description, prompt }.
-const SUBAGENT_TOOL = 'Task'
+// 内置的「派生子 agent」工具。它的 tool_use 带着 { subagent_type, description, prompt }。
+//
+// ★★**两个名字都要认**:Claude Code 把它从 `Task` 改名成了 `Agent`。
+//  2026-09-17 真机报的症状是「子 agent 呼不出来了」—— 而它一直在正常跑,只是我们不认识了,
+//  于是三个子 agent 被画成三行普通的「调用 Agent」:没有卡片、没有进度、没有执行过程。
+//  ★这类失败没有任何错误信息,功能只是**看起来不见了**,所以它能活很久没人发现。
+//  ★老名字保留:旧版本 CLI 仍然发 `Task`,只认新名字等于把老用户换个方向摔一次。
+const SUBAGENT_TOOLS = new Set(['Task', 'Agent'])
+/** ★必须是**全等**匹配,不是包含 —— `ListAgents` / `AgentTool` 这些不是它。 */
+const isSubagentTool = (name: unknown): boolean => typeof name === 'string' && SUBAGENT_TOOLS.has(name)
 
 // Flatten a tool_result block's `content` (string, or an array of {type:'text',text} parts) to text.
 function toolResultText(content: unknown): string {
@@ -80,7 +89,7 @@ export function parseChatStreamActions(obj: any): ChatStreamAction[] {
       const cb = ev.content_block
       // Task sub-agent: emit a subagent-start (input is usually empty at content_block_start — it
       // streams later; the full assistant message enriches it via 'update').
-      if (cb.name === SUBAGENT_TOOL && typeof cb.id === 'string') {
+      if (isSubagentTool(cb.name) && typeof cb.id === 'string') {
         out.push({ kind: 'subagent-start', id: cb.id, subagentType: cb.input?.subagent_type, description: cb.input?.description, prompt: cb.input?.prompt })
       } else {
         out.push(toolAction(cb.name, cb.input, typeof cb.id === 'string' ? cb.id : undefined))
@@ -111,7 +120,7 @@ export function parseChatStreamActions(obj: any): ChatStreamAction[] {
       else if (b?.type === 'thinking' && typeof b.thinking === 'string' && b.thinking) out.push({ kind: 'think', text: b.thinking })
       // A Task sub-agent gets its own card (this full message carries the complete input); every other
       // tool call is surfaced as a visible process step (so the user sees activity, not just a spinner).
-      else if (b?.type === 'tool_use' && b.name === SUBAGENT_TOOL && typeof b.id === 'string') out.push({ kind: 'subagent-start', id: b.id, subagentType: b.input?.subagent_type, description: b.input?.description, prompt: b.input?.prompt })
+      else if (b?.type === 'tool_use' && isSubagentTool(b.name) && typeof b.id === 'string') out.push({ kind: 'subagent-start', id: b.id, subagentType: b.input?.subagent_type, description: b.input?.description, prompt: b.input?.prompt })
       else if (b?.type === 'tool_use' && typeof b.name === 'string') out.push(toolAction(b.name, b.input, typeof b.id === 'string' ? b.id : undefined))
     }
     return out
@@ -159,13 +168,68 @@ export function extractTurnTokens(obj: any): { input: number; output: number } |
   return input > 0 || output > 0 ? { input, output } : null
 }
 
-// Context-window size in tokens for a model id (claude/qoder default 200K; 1m variants 1M).
-export function contextWindowFor(model: string): number {
-  return /1m/i.test(model || '') ? 1_000_000 : 200_000
+/**
+ * 模型的上下文窗口 —— **只从 CLI 自己报的地方取**,取不到就是 null(不知道),绝不回落到猜测值。
+ *
+ * ★★这里原来是 `contextWindowFor(model)`:模型名里带 "1m" 就算 1M,否则一律 200K。那个数字
+ *  从来没人核对过,却被拿去算百分比画进度条 —— 用户看到的是一个「看着很像回事的假数」。
+ *  2026-09-14 用户点名要求:「上下文要真实,从官方自己的能力里取的,不能是你自己计算的」。
+ *
+ * claude 把它放在 `result` 事件的 `modelUsage[模型].contextWindow`(2.1.265 实测)。
+ * ★只有 window 从 result 取。`used` 仍然必须避开 result —— 那里的 usage 是整轮累计,
+ *  拿它当占用量会让进度条虚高到 100%(见 extractContextTokens 上面那段注释)。
+ *  窗口不一样:它是跟模型走的静态值,不随累计变化,从哪个事件读都一样。
+ *
+ * ★多个模型时取**最大**的:一轮里可能夹着小模型分身(haiku 之类),它们的小窗口不能拿来
+ *  代表主模型。
+ */
+export function extractContextWindow(obj: any): number | null {
+  if (obj?.type !== 'result') return null
+  const mu = obj.modelUsage
+  if (!mu || typeof mu !== 'object') return null
+  let best = 0
+  for (const v of Object.values(mu as Record<string, any>)) {
+    const w = v?.contextWindow
+    if (typeof w === 'number' && w > best) best = w
+  }
+  return best > 0 ? best : null
 }
 
 export function buildChatPrompt(task: ChatTask): string {
   if (!task.attachments || task.attachments.length === 0) return task.prompt
   const lines = task.attachments.map(a => `- ${a.path}`).join('\n')
   return `${task.prompt}\n\n附件:\n${lines}`
+}
+
+/**
+ * 一轮对话里跟踪「已用上下文 + 官方窗口」,并在有变化时上报。
+ *
+ * ★★抽成一个跟踪器,是因为原来这段在**八个调用点**各抄了一遍(claude/codex/qoder 各两处、
+ *  opencode 两处、antigravity 一处)。这正是 [[trap-two-call-sites-run-vs-chat]] 那类坑的温床:
+ *  改其中几处、漏掉另几处,表现出来就是「工作流里对、聊天里不对」。
+ *
+ * ★`used` 取**见过的最大值**而不是最后一个:CLI 一轮里会发很多条 usage,中间态可能偏小。
+ * ★`window` 只在 CLI 明确上报时才有。窗口通常跟在轮末的 `result` 事件里,比 used 晚到 ——
+ *  所以拿到窗口时要**补发一次**,否则这一轮直到结束都显示不出占比。
+ */
+export function makeUsageTracker(
+  emit: (u: ContextUsage) => void,
+  usedOf: (obj: any) => number | null | undefined = extractContextTokens,
+) {
+  let used = 0
+  let window: number | undefined
+  return {
+    feed(obj: any): void {
+      const w = extractContextWindow(obj)
+      if (w != null && w !== window) {
+        window = w
+        if (used > 0) emit({ used, window })   // 窗口后到:补发一次,让占比当轮就能显示
+      }
+      const u = usedOf(obj)
+      if (u != null && u > used) {
+        used = u
+        emit({ used, window })
+      }
+    },
+  }
 }

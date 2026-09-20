@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { EngineApi } from '../state/useEngine'
-import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef, WsWorkflow } from '@shared/types'
+import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef, WsWorkflow, ContextUsage } from '@shared/types'
 import { DEFAULT_PERMISSION_MODE, type PermissionMode } from '@shared/permissions'
 import { AgentNode } from '../components/AgentNode'
 import { HookNode } from '../components/HookNode'
@@ -22,6 +22,7 @@ import { useSessions } from '../state/useSessions'
 import { useWorktree } from '../state/useWorktree'
 import { useLastRun } from '../state/useLastRun'
 import { MessageStream } from './chat/MessageStream'
+import { ThinkSpinner } from './chat/Spinners'
 import { Message } from './chat/Message'
 import { buildTimeline } from './chat/timeline'
 import { Composer } from './chat/Composer'
@@ -38,6 +39,7 @@ import { FileBrowser } from './inspector/FileBrowser'
 import { ProjectPicker, ALL_PROJECTS } from './inspector/ProjectPicker'
 import { FileIc } from './inspector/fileIcon'
 import type { Attachment, MultiChanges } from '@shared/types'
+import { baseName } from '@shared/pathName'
 import { canContinue } from './chat/canContinue'
 import { providerSupportsResume } from '@shared/nativeResumeProviders'
 import { deriveOpenTarget } from '../shell/deriveOpenTarget'
@@ -52,6 +54,7 @@ import type { LaunchStartConfig } from '../../main/run/launch'
 import { buildConversationSeed } from './chat/launchSeed'
 import { workflowPhaseNote } from './workflowNote'
 import { RunEventCard } from '../components/RunEventCard'
+import { McpPanel } from '../components/McpPanel'
 import { toRunCardEntries } from './chat/runCards'
 import type { FrozenRunCard } from './chat/runCards'
 import type { RunEvent } from '../../main/run/events'
@@ -370,7 +373,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const chat = useChat(wsPath, sessions.activeSessionId, (mode) => {
     if (mode === 'workflow') setForceChat(false)
   })
-  const wsName = run?.workspaceName ?? wsPath?.split('/').filter(Boolean).pop() ?? ''
+  const wsName = run?.workspaceName ?? (wsPath ? baseName(wsPath) : '') ?? ''
 
   // Inspector mode: forceChat overrides to chat mode; reset when a run for this ws goes live
   const [forceChat, setForceChat] = useState(false)
@@ -450,6 +453,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // timeline (the floating run-launcher overlay this replaced was removed entirely in P2-4). Reuses
   // the same run2:launch-info path (buildLaunchInfo server-side) for the workflow list + resolved
   // project defaults — no separate data source invented here.
+  // `/mcp`:MCP 面板。★它是**这台主机上各 CLI 的配置**,不是会话内容 —— 所以做成一个弹层,
+  //  不往消息流里塞任何东西。
+  const [mcpOpen, setMcpOpen] = useState(false)
+
   const onPickWorkflow = useCallback((workflowId?: string) => {
     if (!wsPath) return
     // P1-6: capture the session this gate belongs to right now (at trigger time), not once the async
@@ -619,28 +626,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
         }
       })
   ), [chat.messages])
-  // User feedback (2026-07-20): show the REAL context size — nothing computed/approximate. The only
-  // genuinely real signal any CLI emits is the model's own per-turn `usage` (input+cache tokens),
-  // captured on the assistant message (see chatService onUsage → ChatMessage.usage). We surface that
-  // raw token count verbatim and NOTHING else: no %/bar, because the context WINDOW is a hardcoded
-  // guess (contextWindowFor) and no CLI exposes the native session's true remaining context / auto-
-  // compact point (researched per-provider). `usage.used` only exists for providers that actually
-  // report it (claude/qoder/opencode); codex/cursor/gemini/qwen/copilot emit none, so the pill is
-  // simply absent for them rather than showing a fabricated number.
-  const latestUsage = useMemo(() => {
-    for (let i = chat.messages.length - 1; i >= 0; i--) {
-      const u = chat.messages[i].usage
-      if (u?.used) return u
-    }
-    return undefined
-  }, [chat.messages])
 
-  // Per-provider latest reported context usage for THIS session — surfaced in the IDs panel next to
-  // each provider's 主 Agent row (user request: the context is session-scoped, so show it with the
-  // session it belongs to). Same raw signal as latestUsage (model's own per-turn usage token count),
-  // just bucketed by the provider that produced it so a multi-provider session shows each one's own.
+  // 每个 provider 在**这条会话**里最近一次上报的上下文用量 —— 画在 IDs 面板里那个 provider 的
+  // 主 Agent 行旁边。上下文是**跟会话走**的,所以它显示在会话自己的面板里。
+  //
+  // ★★2026-09-16 输入框里那枚圆环撤掉了(用户:「我用 opus 你显示 200k,太不准了」),
+  //  但**这一处保留**(用户:「ids 面板里的不能去掉呀」)。两处不是同一件事:
+  //  圆环是「还装得下吗」——要一个可信的百分比才有意义,而窗口大小各家口径不一;
+  //  这一行是「这个 agent 在这条会话里烧了多少」——**只报原始 token 数,不算百分比**,
+  //  而原始数就是 CLI 自己报的,没有推算成分。所以它留得住,圆环留不住。
   const usageByProvider = useMemo(() => {
-    const out: Record<string, { used: number; window: number }> = {}
+    const out: Record<string, ContextUsage> = {}
     for (let i = chat.messages.length - 1; i >= 0; i--) {
       const m = chat.messages[i]
       if (m.who === 'ai' && m.provider && m.usage?.used && !out[m.provider]) out[m.provider] = m.usage
@@ -1495,6 +1491,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             </div>
           )}
           <div className="chat-inner">
+            {/* ★★★历史还在路上时说一句,别留一屏空白。
+                本机那个 RPC 几乎瞬时,所以这个空窗一直没人注意到;走中转时同一个往返被放大成两秒,
+                于是「点进会话先是空的,过两秒才有内容」(2026-09-17 真机,另一台电脑连过来时)。
+                ★空白和「这个会话本来就没消息」**长得一模一样** —— 分不清「还没到」和「没有」,
+                 是这一类交互最糟的地方:人会以为自己点错了会话,或者以为记录丢了。 */}
+            {chat.historyLoading && (
+              <div className="chat-loading" role="status">
+                <ThinkSpinner size={16} />
+                <span>正在取这条会话的记录…</span>
+              </div>
+            )}
             {/* 导入的历史对话(只读)——位于分隔条上方 */}
             {importedHistory.length > 0 && (
               <>
@@ -1744,6 +1751,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           selection={selection}
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
+          onOpenMcp={() => setMcpOpen(true)}
           onSelectionChange={(s) => {
             // Provider switch guard: agent changed AND the old provider already ran this session → don't
             // switch yet; raise a confirm banner (switch loses native context; the new provider will
@@ -2198,6 +2206,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           onRefresh={refreshInspector}
         />
       )}
+      {/* `/mcp` 开的那个面板。★它问的是**主机**上各 CLI 的 mcp 配置,所以带上当前工作区目录:
+          项目级(.mcp.json)的服务器只有在那个目录里跑命令才看得见。 */}
+      {mcpOpen && <McpPanel workspacePath={wsPath} onClose={() => setMcpOpen(false)} />}
     </div>
     </OpenFileCtx.Provider>
   )

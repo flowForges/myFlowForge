@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useHostKey } from '../state/useHostKey'
 import { createPortal } from 'react-dom'
 import type { DetectedOpener, OpenTarget } from '@shared/openers'
 
@@ -29,6 +30,10 @@ interface Props {
 // 「打开位置」dropdown: a split button — the main part opens the current target with the default app,
 // the caret expands the detected-apps list (picking one makes it the new default).
 export function OpenLocationMenu({ target, defaultOpenerId, onSetDefault }: Props) {
+  // ★Q5:连着远程主机时这个功能**根本不成立** —— 编辑器装在你面前这台,要打开的路径在那台。
+  //   与其点了没反应(或者更糟:在本机打开一个同名但不相干的路径),不如置灰并把原因写出来。
+  const hostKey = useHostKey()
+  const remote = hostKey !== 'local'
   const [open, setOpen] = useState(false)
   const [apps, setApps] = useState<DetectedOpener[] | null>(cachedOpeners)
   const ref = useRef<HTMLSpanElement>(null)
@@ -93,11 +98,17 @@ export function OpenLocationMenu({ target, defaultOpenerId, onSetDefault }: Prop
 
   return (
     <span ref={ref} className={`open-loc${open ? ' open' : ''}`}>
-      <button className="tb-btn open-loc-main" title="用外部软件打开当前工作区/文件" aria-label="用外部软件打开" disabled={!target} onClick={onMain}>
+      <button
+        className="tb-btn open-loc-main"
+        title={remote ? '连着远程主机时不可用:编辑器在你这台电脑上,而这个路径在那台机器上' : '用外部软件打开当前工作区/文件'}
+        aria-label="用外部软件打开"
+        disabled={!target || remote}
+        onClick={onMain}
+      >
         {current?.icon ? <img src={current.icon} alt="" className="ol-ico" /> : FOLDER_GLYPH}
         <span className="ol-label">{current?.name ?? '打开位置'}</span>
       </button>
-      <button className="tb-btn open-loc-caret" title="选择打开软件" aria-label="选择软件" aria-haspopup="menu" aria-expanded={open} onClick={onCaret}>
+      <button className="tb-btn open-loc-caret" title={remote ? '连着远程主机时不可用' : '选择打开软件'} aria-label="选择软件" aria-haspopup="menu" aria-expanded={open} disabled={remote} onClick={onCaret}>
         {CHEVRON}
       </button>
       {open && pos && createPortal(

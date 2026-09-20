@@ -4,7 +4,7 @@ import { useUpdate } from './useUpdate'
 import type { UpdateEvent } from '@shared/types'
 
 let emit: (e: UpdateEvent) => void
-const INFO = { version: '2.4.0', notes: 'n', dmgUrl: 'u', dmgSize: 26214400, dmgName: 'a.dmg' }
+const INFO = { version: '2.4.0', notes: 'n', assetUrl: 'u', assetSize: 26214400, assetName: 'a.dmg' }
 
 beforeEach(() => {
   emit = () => {}

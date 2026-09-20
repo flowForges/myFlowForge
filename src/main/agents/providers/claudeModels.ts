@@ -2,6 +2,7 @@ import { openSync, readSync, closeSync, realpathSync, statSync, existsSync as fs
 import { homedir } from 'node:os'
 import { join, isAbsolute } from 'node:path'
 import { execa } from 'execa'
+import { lookupBin } from '../lookupBin'
 import type { Model } from '../types'
 
 // The claude CLI ships no `--list-models` / `claude models` command and `/model` is TUI-only.
@@ -144,7 +145,7 @@ export interface ClaudeModelsLiveDeps extends ResolveBinDeps, ExtractDeps {
 }
 
 async function defaultWhich(env: NodeJS.ProcessEnv): Promise<string> {
-  try { const r = await execa('which', ['claude'], { env }); return r.stdout.trim() } catch { return '' }
+  return (await lookupBin('claude', env)) ?? ''
 }
 
 /**

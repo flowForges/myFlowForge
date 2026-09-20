@@ -67,7 +67,9 @@ export function forgeMcpArgs(env: NodeJS.ProcessEnv): string[] {
 
   // Sanitize agentId for use in a filename
   const safeId = (env.FORGE_AGENT_ID as string).replace(/[^a-zA-Z0-9_-]/g, '_')
-  const cfgDir = dirname(env.FORGE_SOCKET as string)
+  // NOT dirname(FORGE_SOCKET): on Windows the socket is a named pipe (`\\.\pipe\forge-…`) whose
+  // "directory" is not a real one. The bridge hands us a writable directory explicitly.
+  const cfgDir = env.FORGE_MCP_DIR || dirname(env.FORGE_SOCKET as string)
   const cfgFile = join(cfgDir, `mcp.${safeId}.json`)
 
   const config = { mcpServers: { forge: spec } }

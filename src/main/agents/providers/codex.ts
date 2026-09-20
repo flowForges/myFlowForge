@@ -1,18 +1,20 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks } from '../types'
+import type { TurnPhase } from '@shared/types'
 import { confirmAllowed } from '../types'
 import { createFenceScanner } from '../handoffFence'
-import { buildChatPrompt, extractContextTokens, extractTurnTokens, contextWindowFor } from '../chatStream'
+import { buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker } from '../chatStream'
 import { forgeCodexConfigArgs } from '../mcpConfig'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
 import { readCodexModelsCache } from './codexModels'
 import { logError } from '../../log/appLog'
-import { makeIdleWatchdog, CHAT_IDLE_MS } from '../idleWatchdog'
+import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { driveCodexTurn } from './codexAppServer'
-import { codexSandboxApproval } from './codexApproval'
+import { codexSandboxApproval, codexGateReq } from './codexApproval'
 import { readSettings } from '../../config/store'
+import { isCodexWarning } from './codexErrorMeaning'
 
 // codex (Rust) emits internal engine logs on stderr — either bare, e.g.
 //   `codex_models_manager::manager::failed to refresh available models: …`
@@ -130,6 +132,28 @@ export function codexToolActivity(obj: any): { id: string; phase: 'start' | 'don
   return null
 }
 
+/**
+ * 「模型开始/结束自动压缩上下文了吗」。
+ *
+ * ★★自动压缩要一分多钟,而这段时间 codex 一个 token 都不吐。不认这个事件,界面上就只有
+ *  「主代理思考中…」加一个越走越大的秒数 —— 和卡死长得一模一样(用户 2026-09-08 报的就是这个)。
+ * ★两种拼写都收:app-server(v2)的 thread item 是小驼峰 `contextCompaction`,而 exec 那条 JSONL
+ *  沿用蛇形 `context_compaction`(两个名字在 codex 自己的 schema 里同时存在,`codex app-server
+ *  generate-json-schema` 可查)。和这个文件里 `command_execution || exec_command` 的处理同一个道理。
+ * ★item.completed 回到 thinking:压缩结束后 codex 接着把这一轮跑完,不是轮次结束。
+ */
+export function codexCompactionPhase(obj: any): TurnPhase | null {
+  // 老通道:`thread/compacted`(schema 里已标 Deprecated,但老版本 codex 只发这个)。
+  // 它只报「压缩完了」,没有开始事件 —— 所以只用来回到 thinking。
+  if (obj?.type === 'thread.compacted') return 'thinking'
+  const started = obj?.type === 'item.started'
+  const completed = obj?.type === 'item.completed'
+  if ((!started && !completed) || !obj.item || typeof obj.item !== 'object') return null
+  const itype = String(obj.item.type ?? obj.item.item_type ?? '')
+  if (itype !== 'contextCompaction' && itype !== 'context_compaction') return null
+  return started ? 'compacting' : 'thinking'
+}
+
 type CodexActionLoggable = { kind: 'assistant' | 'assistant-final'; text: string } | { kind: 'think'; text: string }
 
 /** Map a CodexAction (from parseCodexEvent) to the log level + kind for run() onLog. */
@@ -141,7 +165,14 @@ function codexKind(a: CodexActionLoggable): { level: 'info' | 'ok' | 'accent'; k
   return { level: 'info', kind: 'think' }
 }
 
-// Detect a turn/run failure event so the chat surfaces an error instead of an empty reply.
+/**
+ * 从一条 codex 事件里取出**真正的失败原因**;不是失败就返回 null。
+ *
+ * ★★★codex 把**警告也发成 `type: "error"` 的条目**。2026-09-17 实测:一次完全成功的调用里
+ *  就带了两条(hook 信任绕过、技能描述被截断)。把它们当失败的后果是:一个跑通的回合
+ *  被显示成「错误: Skill descriptions were shortened…」—— 那句话没说错,只是不该出现在那儿。
+ *  所以警告在这儿就滤掉,不往上冒。
+ */
 export function codexErrorMessage(obj: any): string | null {
   if (!obj || typeof obj !== 'object') return null
   if (obj.type === 'turn.failed') return String(obj.error?.message ?? obj.error ?? 'codex turn failed')
@@ -152,7 +183,11 @@ export function codexErrorMessage(obj: any): string | null {
     return String(obj.message ?? nested ?? 'codex error')
   }
   // Item-level error (e.g. config deprecation / model-not-supported arrives this way).
-  if (obj.type === 'item.completed' && obj.item?.type === 'error') return String(obj.item.message ?? 'codex error')
+  if (obj.type === 'item.completed' && obj.item?.type === 'error') {
+    const m = String(obj.item.message ?? 'codex error')
+    // ★警告不是失败。判据收在 `codexErrorMeaning.ts` 一处 —— 那边有测试钉着真实报文。
+    return isCodexWarning(m) ? null : m
+  }
   return null
 }
 
@@ -188,7 +223,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       // Only the app-server transport ever emits a streamed 'assistant' delta ahead of the final
       // 'assistant-final' item — exec's `codex exec --json` only emits item.completed, never deltas,
       // so this stays false (inert) on the exec path. Mirrors chat()'s `handle` dedup below.
@@ -200,8 +235,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       const handleRunEvent = (obj: unknown, rawLine?: string) => {
         // Codex usage (if present in a claude-compatible shape) feeds the same context bar; when
         // codex's usage shape differs, extractContextTokens returns null and the bar simply omits.
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         // Try parseCodexEvent first — it handles both item format and legacy msg format.
         const actions = parseCodexEvent(obj)
@@ -258,12 +292,16 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               onEvent: (e) => { cb.onActivity?.(); handleRunEvent(e) },
               // codex 的审批只有放行/拒绝两态(没有 claude AskUserQuestion 那种带选项的问题),把可能的
               // 回答形态收敛回二值。
-              onApproval: async (r) => confirmAllowed(await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') })),
+              onApproval: async (r) => confirmAllowed(await cb.onConfirm(codexGateReq(r))),
               onSession: (id) => cb.onSession?.(id),
+              // ★★两个调用方(run / chat)都要接 —— 见 [[trap-two-call-sites-run-vs-chat]]:
+              //  只接一处 = 工作流里能看见提示、聊天里照旧是个不动的光标。
+              onNotice: (t) => cb.onLog({ ts: now(), level: 'info', kind: 'think', text: t }),
+              onUsage: (u) => cb.onUsage?.(u),
               onError: (m) => { logError('codex', 'app-server run 错误', m) },
             },
           )
-        } catch {
+        } catch (e) {
           // This catch only covers a SYNCHRONOUS driveCodexTurn throw (a spawn-option error
           // thrown before the child even starts — codex missing / app-server unsupported), and
           // falls through to the exec path below. An ASYNC spawn/handshake failure (e.g. an old
@@ -272,6 +310,13 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           // failed turn via cb.onError + a failed `done` below instead of silently retrying
           // through exec. Acceptable while this transport is opt-in/default-off (codexTransport
           // defaults to 'exec'); a mid-run fallback was considered and rejected as too complex.
+          //  ★★2026-09-17 加日志的理由:这个 catch 原来是**完全静默**的 —— app-server 起不来就
+          //   一声不吭退回 exec,而 exec 那条路 `approval_policy` 恒为 "never",于是**权限门永远不会出现**。
+          //   用户看到的是:设置里明明选了 app-server、界面也没报任何错,门就是不弹。
+          //   更糟的是**查不出来**:成功的轮次不写日志,失败的回落也不写,事后翻日志什么线索都没有。
+          //   一次「悄悄换了条能力更弱的路」必须留下痕迹,否则它和「功能坏了」在现场无法区分。
+          logError('codex', 'app-server 起不来,本轮回落到 exec(这条路没有权限门)',
+            String((e as Error)?.message ?? e))
           handle = null
         }
         if (handle) {
@@ -361,7 +406,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       let sawDelta = false
       let deliveredAny = false
       let lastErr: string | null = null
-      let ctxMaxSeen = 0
+      const usage = makeUsageTracker(u => cb.onUsage?.(u))
       // Per-event handling shared by both transports: exec's processLine (below, fed raw JSONL from
       // stdout) and the app-server branch (fed the exec-shaped events driveCodexTurn adapts). Hoisted
       // above the transport branch — along with its mutable state (sawDelta/lastErr/ctxMaxSeen) — so
@@ -372,13 +417,15 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // Best-effort context usage: codex's chat events rarely carry a claude-compatible usage
         // object, so extractContextTokens usually returns null and the bar simply omits. Kept for
         // symmetry with run() so a compatible usage shape would feed the session context meter.
-        const used = extractContextTokens(obj)
-        if (used != null && used > ctxMaxSeen) { ctxMaxSeen = used; cb.onUsage?.({ used: ctxMaxSeen, window: contextWindowFor(task.model) }) }
+        usage.feed(obj)
         { const tt = extractTurnTokens(obj); if (tt) cb.onTurnTokens?.(tt) }
         // Surface codex's command/file execution in the 执行 block (title + output), then drop the
         // duplicate think step parseCodexEvent renders for the same item.
         const toolAct = codexToolActivity(obj)
         if (toolAct) cb.onToolActivity?.(toolAct)
+        // 自动压缩:换 think 折叠块的标题,别让这一分多钟看着像卡死。
+        const ph = codexCompactionPhase(obj)
+        if (ph) cb.onPhase?.(ph)
         for (const a of parseCodexEvent(obj)) {
           if (a.kind === 'session') cb.onSession(a.id)
           else if (a.kind === 'assistant') { sawDelta = true; deliveredAny = true; cb.onAssistantDelta(a.text) }
@@ -413,7 +460,11 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // equivalent liveness guard of its own — if codex wedges mid-turn (process alive, emitting
         // nothing over the JSON-RPC stream), `done` never resolves and the spinner never clears.
         // Mirror the exec path: arm on start, beat on every event/approval, clear on settle.
-        const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => appHandle?.cancel())
+        // 同 exec 那条路:静默先报告,半小时才回收(见 idleWatchdog 的 StallPolicy)。
+        const wd = makeIdleWatchdog(CHAT_IDLE_MS,
+          () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
+          undefined,
+          { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); appHandle?.cancel() } })
         try {
           appHandle = driveCodexTurn(
             { cwd: task.cwd, prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
@@ -424,14 +475,16 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
               onApproval: async (r) => {
                 if (!cb.onConfirm) return 'deny'
                 wd.pause()
-                try { return confirmAllowed(await cb.onConfirm({ title: `${r.command ? 'shell' : '文件'} 请求执行`, where: r.command ?? r.paths?.join(', ') })) }
+                try { return confirmAllowed(await cb.onConfirm(codexGateReq(r))) }
                 finally { wd.resume() }
               },
               onSession: (id) => cb.onSession(id),
+              onNotice: (t) => cb.onStatus?.(t),
+              onUsage: (u) => cb.onUsage?.(u),
               onError: (m) => { cb.onError(new Error(m)) },
             },
           )
-        } catch {
+        } catch (e) {
           // This catch only covers a SYNCHRONOUS driveCodexTurn throw (a spawn-option error
           // thrown before the child even starts — codex missing / app-server unsupported), and
           // falls through to the exec path below. An ASYNC spawn/handshake failure (e.g. an old
@@ -440,6 +493,15 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           // failed turn via cb.onError + a failed `done` below instead of silently retrying
           // through exec. Acceptable while this transport is opt-in/default-off (codexTransport
           // defaults to 'exec'); a mid-turn fallback was considered and rejected as too complex.
+          //  ★★2026-09-17 加日志的理由:这个 catch 原来是**完全静默**的 —— app-server 起不来就
+          //   一声不吭退回 exec,而 exec 那条路 `approval_policy` 恒为 "never",于是**权限门永远不会出现**。
+          //   用户看到的是:设置里明明选了 app-server、界面也没报任何错,门就是不弹。
+          //   更糟的是**查不出来**:成功的轮次不写日志,失败的回落也不写,事后翻日志什么线索都没有。
+          //   一次「悄悄换了条能力更弱的路」必须留下痕迹,否则它和「功能坏了」在现场无法区分。
+          logError('codex', 'app-server 起不来,本轮回落到 exec(这条路没有权限门)',
+            String((e as Error)?.message ?? e))
+          //  ★也告诉**用户**,不只是日志:他选了 app-server 就是为了要门,回落意味着这一轮没有门。
+          cb.onStatus?.('codex 的 app-server 没起来,本轮回落到 exec —— 这条路不会升起权限门。')
           wd.clear()
           appHandle = null
         }
@@ -478,7 +540,12 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: 'ignore' })
-      const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
+      // ★静默先报告、半小时才回收(见 idleWatchdog 的 StallPolicy)。原来是 4 分钟无声 SIGTERM,
+      // 而静默可能只是在等一个我们看不见的人(外部钩子 / 浏览器授权 / sudo / git 凭据)。
+      const wd = makeIdleWatchdog(CHAT_IDLE_MS,
+        () => cb.onStatus?.(`⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`),
+        undefined,
+        { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } } })
       let buf = ''
       let rawOut = ''   // raw stdout we couldn't turn into assistant/think output
       let rawErr = ''   // raw stderr (codex logs/errors)

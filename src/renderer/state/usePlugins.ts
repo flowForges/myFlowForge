@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { usePathPicker } from './PathPicker'
 import type { InstalledPlugin, PluginResult, StatusbarUsage, CatalogEntry } from '@shared/plugins'
 
 export interface PluginsApi {
@@ -19,6 +20,8 @@ export interface PluginsApi {
 }
 
 export function usePlugins(): PluginsApi {
+  // 装插件选的是**那台机器**上的目录 —— 连着远程时必须走服务端目录选择器。
+  const { pick: pickPath } = usePathPicker()
   const [plugins, setPlugins] = useState<InstalledPlugin[]>([])
   const [results, setResults] = useState<Record<string, PluginResult>>({})
   const [installError, setInstallError] = useState<string | null>(null)
@@ -85,7 +88,7 @@ export function usePlugins(): PluginsApi {
   // Actions — wrapped in useCallback (deps []) so consumers don't re-render on every hook call;
   // all side-effects call window.forge which is stable across renders.
   const install = useCallback(async (): Promise<void> => {
-    const dir = await window.forge.pickDirectory()
+    const dir = await pickPath('directory', '选择插件目录')
     if (!dir) return
     const r = await window.forge.installPlugin(dir)
     if (!r?.ok) {
@@ -93,7 +96,7 @@ export function usePlugins(): PluginsApi {
     } else {
       setInstallError(null)
     }
-  }, [])
+  }, [pickPath])
 
   const uninstall = useCallback(async (id: string): Promise<void> => {
     await window.forge.uninstallPlugin(id)

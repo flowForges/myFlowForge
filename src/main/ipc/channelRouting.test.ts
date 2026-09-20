@@ -1,0 +1,73 @@
+import { describe, it, expect, vi } from 'vitest'
+import { CLIENT_ONLY, DAEMON_UNSUPPORTED, routeOf } from './channelRouting'
+import { CH } from './channels'
+
+vi.mock('electron', () => ({
+  dialog: {}, shell: {}, app: { getVersion: () => '0', getPath: () => '/tmp' },
+}))
+vi.mock('../update/githubSource', () => ({
+  fetchLatestRelease: async () => ({ version: '2.4.0', notes: 'n', assetUrl: 'u', assetSize: 6, assetName: 'a.dmg' }),
+}))
+
+import { registerIpc } from './handlers'
+import { fakeHost } from '../host/fakeHost'
+
+const table = () => registerIpc(() => {}, {}, fakeHost())
+
+describe('频道分类', () => {
+  it('CLIENT_ONLY 里的每一条都真的在方法表里 —— 拼错或过时会静默失效', () => {
+    // 打错一个字符的后果是:那个 channel 悄悄变成走远程。外观类的东西一连过去就全变了,
+    // 而且没有任何报错能指向这张表。
+    const keys = new Set(Object.keys(table()))
+    expect([...CLIENT_ONLY].filter((c) => !keys.has(c))).toEqual([])
+  })
+
+  it('DAEMON_UNSUPPORTED 里的每一条都真的在方法表里', () => {
+    const keys = new Set(Object.keys(table()))
+    expect([...DAEMON_UNSUPPORTED].filter((c) => !keys.has(c))).toEqual([])
+  })
+
+  it('两类加起来正好覆盖全表,且条数与今日实测一致', () => {
+    // ★没列进 CLIENT_ONLY 的一律走 host。这条断言就是那个默认值的刹车:
+    // 新加一个 channel 会让它挂,逼你当场决定归谁,而不是默默继承一个可能错的默认。
+    const keys = Object.keys(table())
+    const client = keys.filter((c) => routeOf(c) === 'client')
+    const host = keys.filter((c) => routeOf(c) === 'host')
+    // 45 → 46:net:check-app-exit-ip(2026-09-11)。「应用自身的网络」那条代理的出口检测,
+    //   测的是**你面前这台设备**怎么出网 ⇒ client。agent 那条 net:check-exit-ip 仍走 host。
+    expect(client.length).toBe(46)
+    // 147 → 151:终端(term:create / write / resize / kill)。**shell 跑在 host 上** ——
+    // 这是它们必须走 host 的全部理由,也正是这次改动要修的那个 bug。
+    // 151 → 152:`chat:tool-output`。它按 (workspacePath, sessionId, messageId, toolId)
+    //   去读主机上的会话文件,只有那台机器答得了 —— 所以是 host,不是 client。
+    // 152 → 155:手机端工作流编辑器三条(workflow:stage-catalog / workspace:save-workflow /
+    //   workspace:delete-workflow)。改的是主机上那个工作区的 workspace.json ⇒ host。
+    // 155 → 161:MCP 面板六条。MCP 服务器和 OAuth 凭据都在主机上 ⇒ host。
+    //   ★授权时要开的那个浏览器**不在这六条里** —— 那一步走 shell:open-external(CLIENT_ONLY),
+    //   于是「手机上点授权、手机浏览器打开、凭据落在主机」这条链才成立。
+    // 161 → 162:加载项两条(addons:scan / addons:remove)进来、skills:list 出去。
+    //   扫的是**主机**磁盘上的技能/规则/MCP,删的也是主机上的东西 ⇒ host。
+    // 162 → 165:技能 / 插件市场三条。装到**主机**的 CLI 上 ⇒ host。
+    // 166 → 168:门总线的 gate:list / gate:resolve。★归 **host**:连着远程主机时,
+    //   你要答的是**那台机器**上挂着的门(它的 hook、它的 agent 在等),不是本机的。
+    //   gate:event 是广播不是方法,所以方法表那边 +2 而不是 +3。
+    expect(host.length).toBe(168)
+    expect(client.length + host.length).toBe(keys.length)
+  })
+
+  it('几条一眼就该对的:会话跟机器走,壁纸跟设备走', () => {
+    expect(routeOf(CH.chatSend)).toBe('host')
+    expect(routeOf(CH.workspacesList)).toBe('host')
+    expect(routeOf(CH.run2Start)).toBe('host')
+    expect(routeOf(CH.agentsDetect)).toBe('host')
+    expect(routeOf(CH.wallpaperCatalog)).toBe('client')
+    expect(routeOf(CH.updateCheck)).toBe('client')
+    expect(routeOf(CH.openExternal)).toBe('client')
+  })
+
+  it('不认识的 channel 默认走 host(而不是当成本机静默吞掉)', () => {
+    // 版本不一致时客户端可能发来我们没有的 channel。默认走 host → 对面报「没有这个方法」,
+    // 是个能看见的错误;默认走 client → 本机也没有这个 handler,同样报错但指向错的一端。
+    expect(routeOf('something:new')).toBe('host')
+  })
+})
