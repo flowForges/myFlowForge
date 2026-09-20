@@ -41,7 +41,7 @@ Darüber liegt ein **leichtgewichtiger Workflow**: kein Fließband, das dir davo
 
 Und nichts davon klebt an einem Rechner. Dasselbe Cockpit **verbindet sich mit einem anderen Computer** — deiner Linux-Kiste, dem Desktop im Büro — und steuert *dessen* Agenten in *dessen* Repos. Vom Handy aus kannst du einem Lauf zusehen, ein Gate beantworten und das Gespräch weiterführen.
 
-> **Projektstatus:** ein aktiv entwickeltes persönliches Projekt. Für macOS, Windows und Linux gibt es fertig paketierte Builds, und für den Handy-Client eine Android-APK. Die App ist auf keiner Plattform bislang code-signiert.
+> **Projektstatus:** ein aktiv entwickeltes persönliches Projekt. Für macOS, Windows und Linux gibt es fertig paketierte Builds, und für den Handy-Client eine Android-APK. Die macOS-Builds sind **mit einer Developer ID signiert und von Apple notarisiert**, das Android-Paket ist mit einem echten Schlüssel signiert; der Windows-Build ist **noch nicht signiert**.
 
 ## ✨ Die sechs Dinge, um die es wirklich geht
 
@@ -210,13 +210,12 @@ Hol dir den neuesten Build von der [**Releases**](https://github.com/flowForges/
 | Android | `myFlowForge-<version>.apk` |
 | Linux · Headless-Daemon | `myFlowForge-daemon-<version>-linux.tar.gz` |
 
-> **Die App ist nicht code-signiert.** Unter macOS meldet der erste Start eventuell, sie *„kann nicht geöffnet werden“* oder *„ist beschädigt“* — so sieht eine unsignierte App aus, die Datei ist in Ordnung. Entweder **Rechtsklick** → **Öffnen** → **Öffnen**, oder einmalig ausführen:
-> `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
-> Windows SmartScreen will **Weitere Informationen → Trotzdem ausführen**.
+> **macOS**-Builds sind signiert und von Apple notarisiert — herunterladen, doppelklicken, fertig. Kein „ist beschädigt" mehr.
+> **Windows**-Builds sind noch nicht signiert, SmartScreen hält dich einmal an: **Weitere Informationen → Trotzdem ausführen**.
 >
-> myFlowForge prüft denselben Releases-Feed und bietet neuere Versionen direkt in der App an.
+> myFlowForge prüft dieselben Releases und meldet neue Versionen in der App.
 
-**iOS** wird nicht als Download verteilt — bau es aus `mobile/` mit deiner eigenen Apple ID und installiere es per Kabel auf dein Gerät.
+**iOS** läuft über TestFlight (derzeit auf Einladung — deine Apple ID muss in die Testerliste). Du kannst es auch aus `mobile/` mit deiner eigenen Apple ID bauen und per Kabel installieren.
 
 ## 🚀 Erste Schritte
 

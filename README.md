@@ -41,7 +41,7 @@
 
 而且这些都不锁在一台机器上。同一个驾驶舱能**连到另一台电脑** —— 你的 Linux 机器、公司那台台式机 —— 驱动**那台**的代理、跑**那台**的仓库。手机上可以看着它跑、答门、接着聊。
 
-> **项目状态：** 个人项目，在持续开发。macOS、Windows、Linux 都有打好的包，手机端有安卓 APK。所有平台目前都**没有代码签名**。
+> **项目状态：** 个人项目，在持续开发。macOS、Windows、Linux 都有打好的包，手机端有安卓 APK 和 iOS TestFlight。macOS 的包经过 **Developer ID 签名并通过苹果公证**，安卓包用正式密钥签名；Windows 的包**尚未签名**。
 
 ## ✨ 真正想做好的六件事
 
@@ -208,13 +208,12 @@ myFlowForge **不保存任何 API key，也不代理任何请求** —— 它驱
 | 安卓 | `myFlowForge-<版本>.apk` |
 | Linux · 无头 daemon | `myFlowForge-daemon-<版本>-linux.tar.gz` |
 
-> **这个 app 没有代码签名。** macOS 上第一次打开可能说「无法打开」或者「已损坏」—— 那就是未签名 app 的样子，文件本身没问题。要么**右键** → **打开** → **打开**，要么跑一次：
-> `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
-> Windows 上 SmartScreen 会拦一下，选**更多信息 → 仍要运行**。
+> **macOS** 的包已经签名并公证过，下载下来双击就能装，不会再出现「已损坏」那一套。
+> **Windows** 的包还没签名，SmartScreen 会拦一下，选**更多信息 → 仍要运行**。
 >
 > myFlowForge 会查同一个 Releases 源，有新版会在 app 里提示。
 
-**iOS** 没有可下载的包 —— 从 `mobile/` 用你自己的 Apple ID 编译，插线装到设备上。
+**iOS** 走 TestFlight（目前是邀请制，需要把你的 Apple ID 加进测试名单）。也可以从 `mobile/` 用你自己的 Apple ID 编译后插线装。
 
 ## 🚀 上手
 

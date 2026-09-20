@@ -41,7 +41,7 @@ On top of that sits a **lightweight workflow**: not an assembly line that runs a
 
 And none of it is stuck on one machine. The same cockpit **connects to another computer** — your Linux box, the desktop at the office — and drives *its* agents in *its* repos. From your phone, you can watch a run, answer a gate and keep the conversation going.
 
-> **Project status:** an actively developed personal project. macOS, Windows and Linux all ship packaged builds, and there's an Android APK for the phone client. The app is not code-signed yet on any platform.
+> **Project status:** an actively developed personal project. macOS, Windows and Linux all ship packaged builds, and there's an Android APK for the phone client. The macOS builds are **Developer ID signed and notarized by Apple**, the Android package is signed with a real key; the Windows build is **not signed yet**.
 
 ## ✨ The six things it's really about
 
@@ -209,13 +209,12 @@ Grab the latest build from the [**Releases**](https://github.com/flowForges/myFl
 | Android | `myFlowForge-<version>.apk` |
 | Linux · headless daemon | `myFlowForge-daemon-<version>-linux.tar.gz` |
 
-> **The app is not code-signed.** On macOS the first launch may say it *"can't be opened"* or *"is damaged"* — that's what an unsigned app looks like, the file is fine. Either **right-click** → **Open** → **Open**, or run once:
-> `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
-> Windows SmartScreen will want **More info → Run anyway**.
+> **macOS** builds are signed and notarized — download, double-click, done. No more "is damaged".
+> **Windows** builds aren't signed yet, so SmartScreen will stop you once: **More info → Run anyway**.
 >
-> myFlowForge checks this same Releases feed and offers newer versions in-app.
+> myFlowForge checks the same Releases feed and tells you in-app when a new version is out.
 
-**iOS** isn't distributed as a download — build it from `mobile/` with your own Apple ID and install to your device over a cable.
+**iOS** ships through TestFlight (invite-only for now — your Apple ID has to be added to the tester list). You can also build it from `mobile/` with your own Apple ID and install over a cable.
 
 ## 🚀 Getting started
 

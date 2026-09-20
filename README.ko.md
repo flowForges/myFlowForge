@@ -41,7 +41,7 @@ AI 코딩 CLI는 저마다 자기 터미널 안에서, 자기 세션 상태와 �
 
 그리고 이 전부는 한 대의 기계에 묶여 있지 않다. 같은 조종석이 **다른 컴퓨터에 연결되어** — 당신의 Linux 머신, 사무실 데스크톱 — *그 기계의* 저장소에서 *그 기계의* 에이전트를 몬다. 휴대폰에서는 실행을 지켜보고, 게이트에 답하고, 대화를 계속 이어 갈 수 있다.
 
-> **프로젝트 상태:** 활발히 개발 중인 개인 프로젝트. macOS, Windows, Linux 모두 패키징된 빌드를 배포하고, 휴대폰 클라이언트용 Android APK도 있다. 앱은 아직 어느 플랫폼에서도 코드 서명이 되어 있지 않다.
+> **프로젝트 상태:** 활발히 개발 중인 개인 프로젝트. macOS, Windows, Linux 모두 패키징된 빌드를 배포하고, 휴대폰 클라이언트용 Android APK와 iOS TestFlight가 있다. macOS 빌드는 **Developer ID 서명과 Apple 공증**을 거쳤고 Android 패키지도 정식 키로 서명했다. Windows 빌드는 **아직 서명되지 않았다**.
 
 ## ✨ 결국 중요한 여섯 가지
 
@@ -209,13 +209,12 @@ myFlowForge는 **API 키를 저장하지 않고 요청을 중계하지도 않는
 | Android | `myFlowForge-<version>.apk` |
 | Linux · 헤드리스 데몬 | `myFlowForge-daemon-<version>-linux.tar.gz` |
 
-> **앱은 코드 서명이 되어 있지 않다.** macOS에서 첫 실행 시 *"열 수 없습니다"* 또는 *"손상되었습니다"*라고 뜰 수 있다 — 서명되지 않은 앱은 원래 그렇게 보이며, 파일 자체는 멀쩡하다. **우클릭** → **열기** → **열기**를 하거나, 다음을 한 번 실행하라:
-> `xattr -dr com.apple.quarantine /Applications/myFlowForge.app`
-> Windows SmartScreen에서는 **추가 정보 → 실행**을 눌러야 한다.
+> **macOS** 빌드는 서명과 공증을 마쳤다. 내려받아 더블클릭하면 끝이고, "손상되었습니다"는 더 이상 뜨지 않는다.
+> **Windows** 빌드는 아직 서명되지 않아 SmartScreen이 한 번 막는다: **추가 정보 → 실행**.
 >
-> myFlowForge는 바로 이 Releases 피드를 확인해 더 새로운 버전을 앱 안에서 제안한다.
+> myFlowForge는 같은 Releases를 확인해 새 버전이 나오면 앱 안에서 알려준다.
 
-**iOS**는 내려받기로 배포되지 않는다 — `mobile/`에서 당신의 Apple ID로 직접 빌드해 케이블로 기기에 설치하라.
+**iOS**는 TestFlight로 배포한다(현재는 초대제라 Apple ID를 테스터 목록에 추가해야 한다). `mobile/`에서 당신의 Apple ID로 빌드해 케이블로 설치할 수도 있다.
 
 ## 🚀 시작하기
 
