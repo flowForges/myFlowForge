@@ -60,8 +60,9 @@ export function NotificationsPane({ notifications, onNotificationsChange, notify
 
   const savePush = async (next: Settings['push']) => {
     setPushCfg(next)
-    const cur = (await window.forge.getSettings()) as Settings
-    await window.forge.setSettings({ ...cur, push: next })
+    // ★只发 push 这一个键。以前这里先读一整份再整份写回去 —— 那正是「一台设备改一个开关,
+    //  把另一台机器没动过的设置一起盖掉」的写法(2026-09-20 事故),主进程现在也只写在场的键。
+    await window.forge.setSettings({ push: next })
   }
 
   const [testMsg, setTestMsg] = useState<string>('')

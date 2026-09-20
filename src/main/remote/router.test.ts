@@ -92,9 +92,34 @@ describe('host 路由', () => {
       const s = await setup(local, { ...halves('远程'), 'config:set-host-settings': (_c: unknown, p: any) => ({ ...p, wroteOn: '远程' }) })
       await s.router.connect(host(s.url))
       await untilReady(s.router)
-      const r = await s.router.invoke('config:set-settings', NOOP_CTX, [{ appearance: 'x' }]) as any
+      const r = await s.router.invoke('config:set-settings', NOOP_CTX, [{ appearance: 'x', agentProxy: 'http://p:1' }]) as any
       expect(seen).toEqual(['client'])          // 客户端那半边写在本机
       expect(r.wroteOn).toBe('远程')             // 机器那半边写去了远程
+    })
+
+    /**
+     * ★★收到的是**补丁**,所以「空的那一半」是真的空,不该往那一端写。
+     *
+     * 一是别做无用功:改个主题不该让远程机器落一次盘、广播一次、记一行「谁改了设置」;
+     * 二是更要紧的 —— 补丁里出现一个键,就等于宣称「我要改它」。把不在补丁里的键补齐再发过去,
+     * 正是 2026-09-20 那个事故的形状(一台设备的快照覆盖了另一台机器的设置)。
+     */
+    it('★补丁里没有对方那一半的键时,根本不往那一端写', async () => {
+      const seenLocal: string[] = []
+      const seenRemote: string[] = []
+      const local = { ...halves('本机'), 'config:set-client-settings': (_c: unknown, p: any) => { seenLocal.push('client'); return p } }
+      const remote = { ...halves('远程'), 'config:set-host-settings': (_c: unknown, p: any) => { seenRemote.push('host'); return p } }
+      const s = await setup(local, remote)
+      await s.router.connect(host(s.url))
+      await untilReady(s.router)
+
+      await s.router.invoke('config:set-settings', NOOP_CTX, [{ appearance: 'x' }])   // 只动了跟设备的
+      expect(seenLocal).toEqual(['client'])
+      expect(seenRemote).toEqual([])            // 远程那台一个字节都没被写
+
+      await s.router.invoke('config:set-settings', NOOP_CTX, [{ agentProxy: 'http://p:1' }])  // 只动了跟机器的
+      expect(seenLocal).toEqual(['client'])     // 本机这半边没再被写
+      expect(seenRemote).toEqual(['host'])
     })
   })
 
@@ -125,6 +150,26 @@ describe('host 路由', () => {
     s.localHub.broadcast('settings:changed', { theme: 'dark' })
     s.localHub.broadcast('update:progress', { pct: 10 })
     expect(s.toWindows.mock.calls.map((c) => c[0])).toEqual(['settings:changed', 'update:progress'])
+  })
+
+  /**
+   * ★★连着远程时,本机这份 `settings:changed` 里「跟机器走」的那一半说的是**本机**的
+   * (本机的 agentProxy、本机的中转地址)。整份放进界面,设置页上那几块就显示成本机的值,
+   * 而你正看着远程那台 —— 你在那个框里一改,改的是远程那台。这是 2026-09-20 事故的另一半路。
+   */
+  it('★连着远程时,本机的 settings:changed 只放行「跟设备走」的那一半', async () => {
+    const s = await setup({ 'a:b': () => 1 }, { 'a:b': () => 1 })
+    await s.router.connect(host(s.url))
+    await untilReady(s.router)
+    s.toWindows.mockClear()
+    s.localHub.broadcast('settings:changed', {
+      appProxy: '本机的app代理', agentProxy: '本机的agent代理',
+      relay: { enabled: true, url: 'wss://本机的中转' },
+    })
+    const payload = s.toWindows.mock.calls[0][1] as Record<string, unknown>
+    expect(payload.appProxy).toBe('本机的app代理')   // 跟设备:放行
+    expect(payload).not.toHaveProperty('agentProxy') // 跟机器:那是远程那台的事
+    expect(payload).not.toHaveProperty('relay')
   })
 
   it('远程广播的事件送到界面', async () => {

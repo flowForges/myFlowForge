@@ -1,10 +1,43 @@
 import { describe, it, expect } from 'vitest'
 import {
   SettingsSchema, CLIENT_SETTING_KEYS, HOST_SETTING_KEYS,
-  migrateLegacySettings, pickClient, pickHost, defaultSettings,
+  migrateLegacySettings, pickClient, pickHost, pickHostPatch, pickClientPatch, defaultSettings,
   ClientSettingsSchema, HostSettingsSchema,
 } from './schema'
 import { overlayForTest as overlay } from './store'
+
+/**
+ * ★★★2026-09-20 事故的下半截。
+ *
+ * `pickHost`/`pickClient` 是 `map` 出全部键的 —— 喂一份**补丁**进去,缺的键会变成
+ * `{ agentProxy: undefined }`,展开进一份完整设置里就是**把它抹成 undefined**,
+ * 落盘时被 schema 回落成默认值:一次静默的「设置凭空消失」。
+ * 补丁路径上只能用 `pickHostPatch`/`pickClientPatch`,它们只带**在场**的键。
+ */
+describe('补丁路径:只带在场的键', () => {
+  it('★缺席的键不会变成 undefined 混进去', () => {
+    const patch = { agentProxy: 'http://127.0.0.1:7897' }
+    const half = pickHostPatch(patch)
+    expect(half).toEqual({ agentProxy: 'http://127.0.0.1:7897' })
+    expect(Object.keys(half)).toEqual(['agentProxy'])
+    expect('relay' in half).toBe(false)          // 中转地址没被带进写入范围
+    expect('pluginCreds' in half).toBe(false)
+  })
+
+  it('★展开进完整设置时,没动过的字段分毫不动', () => {
+    const prev = { ...defaultSettings(), agentProxy: 'http://127.0.0.1:7897', relay: { enabled: true, url: 'wss://mine', urlHistory: ['wss://mine'] } }
+    const next = { ...prev, ...pickHostPatch({ disabledProviders: ['qoder'] }) }
+    expect(next.agentProxy).toBe('http://127.0.0.1:7897')   // 换成 pickHost 的话这里会变成 undefined
+    expect(next.relay.url).toBe('wss://mine')
+    expect(next.disabledProviders).toEqual(['qoder'])
+  })
+
+  it('两个 patch 版本只认自己那一半的键', () => {
+    const both = { agentProxy: 'a', appProxy: 'b' }
+    expect(pickHostPatch(both)).toEqual({ agentProxy: 'a' })
+    expect(pickClientPatch(both)).toEqual({ appProxy: 'b' })
+  })
+})
 
 describe('归属划分', () => {
   it('两张表加起来正好覆盖全部设置项,且没有重叠', () => {

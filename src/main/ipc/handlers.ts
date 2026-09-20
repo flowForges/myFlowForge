@@ -47,7 +47,7 @@ import { readSessions, newSession, switchSession, closeSession, renameSession, s
 import { buildLaunchPlan, buildLaunchProjects, hasRequirement, type LaunchStartConfig } from '../run/launch'
 import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProjectBriefs } from '../run/workflowEnter'
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
-import { workflowDisplayName, pickClient, pickHost } from '../config/schema'
+import { workflowDisplayName, pickClient, pickHost, pickHostPatch, pickClientPatch } from '../config/schema'
 import { agentSessionsForId } from '../chat/agentSessions'
 import { botBridge, genPairing } from '../bot/botBridge'
 import { pushService } from '../push/pushService'
@@ -107,7 +107,7 @@ import { writeShimDir, shimmedPath, shimEnv } from '../agents/commandShim'
 import { removeWorkspaceSkill } from '../skills/installSkill'
 import { scanWorkspaceContext } from '../agents/contextMeta'
 import { scanGlobalContext } from '../agents/globalContext'
-import { getAppLog, clearAppLog, formatAppLog, logError } from '../log/appLog'
+import { getAppLog, clearAppLog, formatAppLog, logError, logInfo } from '../log/appLog'
 import { resolveAppIconOptions } from '../appIcon'
 import { installPlugin, uninstallPlugin, setPluginEnabled, readPlugins } from '../plugins/pluginStore'
 import { listCatalog, installOfficial } from '../plugins/officialCatalog'
@@ -262,8 +262,17 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // 总线 → 渲染层。★一条频道喂所有界面;谁要画、画成什么样,是界面自己的事。
   gateRegistry.subscribe((c) => broadcast(CH.gateEvent, c))
   on(CH.configGetSettings, () => readSettings())
-  on(CH.configSetSettings, (_e, settings) => {
-    writeSettings(settings)
+  /**
+   * ★★收到的是**补丁**,不是整份设置。只写在场的那几个键。
+   *
+   *  2026-09-20 的事故:Windows 上那台 app 在设置里动了一个开关,界面把**它自己那份完整快照**
+   *  发了过来,于是这台 Mac 的 `agentProxy` 被写成了 Windows 的代理端口(本机根本没人听那个端口),
+   *  codex/claude 全部 ConnectionRefused;同一次还把中转地址抹成了空。
+   *  根因不是哪个字段算错了,而是**「我没动过的字段」也在写入范围里**。
+   *  现在:界面只发动过的键(`useSettings.update`),这里只写在场的键 —— 两头都收口。
+   */
+  on(CH.configSetSettings, (_e, patch: Partial<Settings>) => {
+    writeSettings({ ...readSettings(), ...pickHostPatch(patch), ...pickClientPatch(patch) })
     const s = readSettings()
     broadcast(CH.settingsChanged, s)
     onSettings?.(s)
@@ -278,11 +287,20 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     if (e?.client && e.client.id !== 'local') broadcast(CH.settingsChangedBy, { by: e.client.label })
   }
   on(CH.configSetHostSettings, (_e, patch: Partial<Settings>) => {
-    // 只写这一半。★不能整份写回去 —— 远程客户端手里那份「跟设备」的字段是**它自己**的
-    // (它的主题、它的壁纸),整份写会把这台机器的客户端设置覆盖成远程那台设备的。
-    const next = { ...readSettings(), ...pickHost(patch as Settings) }
-    writeSettings(next)
+    // 只写这一半,而且只写**在场的键**。★不能整份写回去 —— 远程客户端手里那份「跟设备」的字段
+    // 是**它自己**的(它的主题、它的壁纸),整份写会把这台机器的客户端设置覆盖成远程那台设备的;
+    // 而带着全部 host 键写回来,会把这台机器上它根本没动过的设置一起盖掉(见 configSetSettings)。
+    const prev = readSettings()
+    const half = pickHostPatch(patch)
+    writeSettings({ ...prev, ...half })
     const s = readSettings()
+    // ★留证据。查 2026-09-20 那个「代理凭空变了」花掉大半个小时,就是因为**没有任何一行日志**
+    //  记得住「谁在什么时候改了这台机器的哪个设置」。只记键名和是谁:值里有令牌和密钥。
+    if (_e?.client && _e.client.id !== 'local') {
+      const changed = (Object.keys(half) as (keyof Settings)[])
+        .filter((k) => JSON.stringify(prev[k]) !== JSON.stringify(s[k]))
+      if (changed.length) logInfo('config', `「${_e.client.label}」改了这台机器的设置: ${changed.join(', ')}`)
+    }
     broadcast(CH.settingsChanged, s)
     noteSettingsWriter(_e)
     onSettings?.(s)
@@ -290,7 +308,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   on(CH.configGetClientSettings, () => pickClient(readSettings()))
   on(CH.configSetClientSettings, (_e, patch: Partial<Settings>) => {
-    const next = { ...readSettings(), ...pickClient(patch as Settings) }
+    const next = { ...readSettings(), ...pickClientPatch(patch) }
     writeSettings(next)
     const s = readSettings()
     broadcast(CH.settingsChanged, s)

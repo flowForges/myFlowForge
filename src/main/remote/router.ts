@@ -5,6 +5,7 @@ import type { HopInput } from '@shared/remote/hopDiagnosis'
 import type { InvokeCtx, MethodTable } from '../ipc/invokeCtx'
 import type { RemoteHost } from './hostStore'
 import { readSettings } from '../config/store'
+import { pickClient, pickHostPatch, pickClientPatch, type Settings } from '../config/schema'
 
 export type HostStatus = {
   /** null = 正在看本机 */
@@ -87,9 +88,14 @@ export function createHostRouter(deps: HostRouterDeps) {
       return { ...(host as object), ...(client as object) }
     }
     if (channel === CH.configSetSettings) {
-      const patch = args[0]
-      const host = await invoke(CH.configSetHostSettings, ctx, [patch])
-      const client = await invoke(CH.configSetClientSettings, ctx, [patch])
+      // ★收到的是**补丁**。空的那一半根本不发 —— 改一个主题不该往远程机器上写一次设置
+      //  (那边会落盘、广播、记一行「谁改了设置」的日志,而其实一个字段都没变)。
+      //  返回值是「这次真写进去的那些」,调用方只用它做可选的回显。
+      const patch = (args[0] ?? {}) as Partial<Settings>
+      const hostHalf = pickHostPatch(patch)
+      const clientHalf = pickClientPatch(patch)
+      const host = Object.keys(hostHalf).length ? await invoke(CH.configSetHostSettings, ctx, [hostHalf]) : {}
+      const client = Object.keys(clientHalf).length ? await invoke(CH.configSetClientSettings, ctx, [clientHalf]) : {}
       return { ...(host as object), ...(client as object) }
     }
     // 导出:内容归那台机器,文件归你面前这台。没连远程时下面那条 localFn 分支就够了 ——
@@ -120,6 +126,14 @@ export function createHostRouter(deps: HostRouterDeps) {
     /** 本机核心广播出来的事件走这里 —— 连着远程时,只有「描述这台设备本身」的那几条放行。 */
     localEvent(channel: string, payload: unknown) {
       if (current && !isClientEvent(channel)) return
+      // ★★连着远程时,本机这份 `settings:changed` 里的 host 那一半说的是**本机**的机器设置
+      //  (本机的 agentProxy、本机的中转地址)。整份放进界面,设置页上「跟机器走」那几块就会
+      //  显示成本机的值,而你正看着的是远程那台 —— 然后你在那个框里一改,改的是远程那台。
+      //  这就是 2026-09-20 那个事故的另一半路。只放行「跟设备走」的那一半。
+      if (current && channel === CH.settingsChanged) {
+        deps.toWindows(channel, pickClient(payload as Settings))
+        return
+      }
       deps.toWindows(channel, payload)
     },
 

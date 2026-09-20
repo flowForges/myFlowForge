@@ -51,11 +51,13 @@ describe('useSettings', () => {
     })
     expect(result.current.settings!.pet.free).toEqual({ x: 2400, y: 800 })
 
-    // 现在改外观 → 写回时必须保留刚刷新的 free
+    // 现在改外观 → 写出去的补丁里**根本没有 pet**(没动过的键不进写入范围,所以覆盖不了),
+    // 而内存里那份快照仍然带着刚刷新的 free。
     act(() => { result.current.update({ appearance: { theme: 'light' } }) })
     await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
     expect(saved.appearance.theme).toBe('light')
-    expect(saved.pet.free).toEqual({ x: 2400, y: 800 })
+    expect(saved).not.toHaveProperty('pet')
+    expect(result.current.settings!.pet.free).toEqual({ x: 2400, y: 800 })
   })
 
   it('closeAction: 默认 ask,update 可改并持久化,且不被其它更新覆盖', async () => {
@@ -69,9 +71,11 @@ describe('useSettings', () => {
     await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
     expect(saved.closeAction).toBe('hide')
 
-    // 后续无关更新必须带着 closeAction 一起写回,不能丢
+    // 后续无关更新**不带** closeAction —— 它没被改过,就不该出现在写入范围里;
+    // 内存快照仍然是 hide。
     act(() => { result.current.update({ agentProxy: 'http://x' }) })
-    expect(saved.closeAction).toBe('hide')
+    expect(saved).not.toHaveProperty('closeAction')
+    expect(result.current.settings!.closeAction).toBe('hide')
   })
 
   it('pinnedWorkspaces: 从磁盘加载,且不被无关更新清空', async () => {
@@ -81,10 +85,11 @@ describe('useSettings', () => {
     // 加载时必须从磁盘拿到置顶列表(而不是被 DEFAULTS 的 [] 顶掉)
     expect(result.current.settings!.pinnedWorkspaces).toEqual(['/ws/a', '/ws/b'])
 
-    // 改任意无关设置 → 写回时必须带上置顶,不能冲成 []
+    // 改任意无关设置 → 补丁里没有 pinnedWorkspaces,冲不成 []
     act(() => { result.current.update({ appearance: { theme: 'light' } }) })
     await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
-    expect(saved.pinnedWorkspaces).toEqual(['/ws/a', '/ws/b'])
+    expect(saved).not.toHaveProperty('pinnedWorkspaces')
+    expect(result.current.settings!.pinnedWorkspaces).toEqual(['/ws/a', '/ws/b'])
   })
 
   it('pinnedWorkspaces: onSettingsChanged 广播(置顶后)刷新快照,不被后续保存覆盖', async () => {
@@ -96,7 +101,22 @@ describe('useSettings', () => {
 
     act(() => { result.current.update({ agentProxy: 'http://x' }) })
     await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
-    expect(saved.pinnedWorkspaces).toEqual(['/ws/x'])
+    expect(saved).not.toHaveProperty('pinnedWorkspaces')
+    expect(result.current.settings!.pinnedWorkspaces).toEqual(['/ws/x'])
+  })
+
+  it('★广播只带一半时,另一半留在上一份快照里,不被打回默认', async () => {
+    // 连着远程时这条广播是**分半**的:主机推 host 那半(见 remote/eventScope.ts),
+    // 本机推 client 那半(见 router.localEvent)。合到 DEFAULTS 上会把另一半打回默认值 ——
+    // 表现为「一改主题,代理框突然空了」。
+    ;(window as any).forge.getSettings = vi.fn(async () => ({ agentProxy: 'http://mac:7897', closeAction: 'hide' }))
+    const { result } = renderHook(() => useSettings())
+    await waitFor(() => expect(result.current.settings).not.toBeNull())
+
+    act(() => { settingsCb!({ appearance: { theme: 'light' } }) })   // 只有 client 那半
+    expect(result.current.settings!.appearance.theme).toBe('light')
+    expect(result.current.settings!.agentProxy).toBe('http://mac:7897')
+    expect(result.current.settings!.closeAction).toBe('hide')
   })
 
   it('onSettingsChanged 用 DEFAULTS 补齐缺失字段', async () => {
@@ -108,6 +128,54 @@ describe('useSettings', () => {
     expect(result.current.settings!.pet.corner).toBe('right')
     expect(result.current.settings!.agentProxy).toBe('')
     expect(result.current.settings!.appIcon.dockIcon).toBe('ember-violet')
+  })
+
+  /**
+   * ★★★2026-09-20 事故的回归测试。
+   *
+   * 现象:Windows 上那台 app 在设置里动了一个开关,这台 Mac 的 `agentProxy` 就被写成了
+   * Windows 的代理端口,codex/claude 全部 ConnectionRefused;同一次还把中转地址抹成了空。
+   * 根因不在任何一个字段上,而在**写入范围**:界面把整份快照发了出去,于是「我没动过的字段」
+   * 也在写入范围里,而那份快照是**另一台机器**的。
+   *
+   * 所以这里钉的不是某个值,是那条边界:**发出去的补丁里,只能有这次动过的键**。
+   */
+  it('★update 只发这次动过的键 —— 整份快照绝不出门', async () => {
+    ;(window as any).forge.getSettings = vi.fn(async () => ({
+      agentProxy: 'http://127.0.0.1:7897',          // 这台机器的(host 半边)
+      relay: { enabled: true, url: 'wss://mine', urlHistory: ['wss://mine'] },
+      pinnedWorkspaces: ['/ws/a'],
+      appearance: { theme: 'dark' },
+    }))
+    const { result } = renderHook(() => useSettings())
+    await waitFor(() => expect(result.current.settings).not.toBeNull())
+
+    act(() => { result.current.update({ appearance: { theme: 'light' } }) })
+    await waitFor(() => expect((window as any).forge.setSettings).toHaveBeenCalled())
+
+    expect(Object.keys(saved)).toEqual(['appearance'])
+    expect(saved.appearance.theme).toBe('light')
+    // 这三个是别人的东西,一个都不许出现在这次写入里
+    expect(saved).not.toHaveProperty('agentProxy')
+    expect(saved).not.toHaveProperty('relay')
+    expect(saved).not.toHaveProperty('pinnedWorkspaces')
+  })
+
+  it('★换了机器就重拉设置 —— 界面里显示的必须是当前这台的值', async () => {
+    let onHost: ((s: any) => void) | null = null
+    ;(window as any).forge.onHostStatus = (cb: (s: any) => void) => { onHost = cb; return () => {} }
+    ;(window as any).forge.hostsStatus = async () => ({ hostId: null, label: '本机' })
+    ;(window as any).forge.getSettings = vi.fn(async () => ({ agentProxy: 'http://local:7897' }))
+
+    const { result } = renderHook(() => useSettings())
+    await waitFor(() => expect(result.current.settings).not.toBeNull())
+    expect(result.current.settings!.agentProxy).toBe('http://local:7897')
+
+    // 连到另一台机器 → 必须重新拉一次,拿那台的值
+    ;(window as any).forge.getSettings = vi.fn(async () => ({ agentProxy: 'http://remote:1080' }))
+    act(() => { onHost!({ hostId: 'h1', label: 'zghua-3', state: { status: 'ready' } }) })
+    await waitFor(() => expect(result.current.settings!.agentProxy).toBe('http://remote:1080'))
+    expect((window as any).forge.getSettings).toHaveBeenCalled()
   })
 
   it('appIcon: update persists icon choice and menu bar visibility', async () => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CHAT_LINE_HEIGHT_DEFAULT } from '@shared/chatTypography'
 import type { Settings, Appearance, Pet, Terminal, CloseAction, AppIcon, Notifications, Keybindings } from '@shared/types'
 import { builtinPets } from '@shared/builtinPets'
+import { useHostKey } from './useHostKey'
 
 const DEFAULTS: Settings = {
   appearance: { theme: 'light', accent: 'blue', autoWallpaperTheme: false, vibrancy: false, glass: false, windowOpacity: 1, blurAmount: 0, density: 'comfortable', fontSize: 14, chatFontSize: 14, chatLineHeight: CHAT_LINE_HEIGHT_DEFAULT, chatLetterSpacing: 0, chatInlineHtml: false, fontFamily: '', textWeight: 450, bgImage: '', bgScope: 'off', bgOpacity: 0.35, bgBlur: 0, bgWallpaperId: '', homeBgImage: '', homeBgOn: false, homeBgOpacity: 0.35, bgPositions: {}, hostChip: 'both' },
@@ -122,6 +123,11 @@ export interface SettingsApi {
 export function useSettings(): SettingsApi {
   const [settings, setSettings] = useState<Settings | null>(null)
   const api = useRef(window.forge)
+  // ★★换了机器就必须重拉。这份快照里「跟机器走」的那一半(代理、中转、通知事件、禁用的 provider)
+  //  说的是**当时连着的那台**;不重拉的话,你连过去之后看到的还是上一台的值,而设置页里一改,
+  //  改的是新连的这台 —— 2026-09-20 就是这么把 Windows 的代理端口写进 Mac 的:
+  //  界面上那个框里显示的从来就不是这台机器的值。
+  const hostKey = useHostKey()
 
   useEffect(() => {
     let live = true
@@ -129,12 +135,15 @@ export function useSettings(): SettingsApi {
       if (live) setSettings(merge(DEFAULTS, s ?? {}))
     })
     return () => { live = false }
-  }, [])
+  }, [hostKey])
 
   // 任一窗口写入 settings 后刷新本地快照，避免用过期快照覆盖其它窗口的改动（如宠物拖动写入的 pet.free）。
+  // ★合并到**上一份快照**上,不是合并到 DEFAULTS 上:连着远程时这条广播只带一半
+  //  (主机推的是 host 半边,本机推的是 client 半边,见 remote/eventScope.ts 与 router.localEvent),
+  //  合到 DEFAULTS 上会把另一半打回默认值 —— 表现为「一改主题,代理框空了」。
   useEffect(() => {
     const off = window.forge.onSettingsChanged((s) => {
-      setSettings(merge(DEFAULTS, (s ?? {}) as Partial<Settings>))
+      setSettings(prev => merge(prev ?? DEFAULTS, (s ?? {}) as Partial<Settings>))
     })
     return () => { off() }
   }, [])
@@ -142,7 +151,12 @@ export function useSettings(): SettingsApi {
   const update = useCallback((partial: SettingsUpdate) => {
     setSettings(prev => {
       const next = merge(prev ?? DEFAULTS, partial)
-      void api.current.setSettings(next)
+      // ★★只发**这次动过的那几个顶层键**,绝不发整份快照。
+      //  发整份 = 「我没动过的字段也在写入范围里」= 一台设备改一个开关,就能把另一台机器的
+      //  代理和中转地址盖掉(2026-09-20 事故)。主进程那头也只写在场的键,两头都收口。
+      const patch: Partial<Settings> = {}
+      for (const k of Object.keys(partial) as (keyof Settings)[]) (patch as Record<string, unknown>)[k] = next[k]
+      void api.current.setSettings(patch)
       return next
     })
   }, [])

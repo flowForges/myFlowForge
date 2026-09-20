@@ -25,6 +25,7 @@ import { gazeAngle } from '@shared/petGaze'
 import { CH } from './ipc/channels'
 import { buildProviderRegistry } from './agents/registry'
 import { readSettings, migrateSettingsIfNeeded, writeSettings, readWorkspaceRegistry } from './config/store'
+import { remoteAddSink } from './remote/eventScope'
 import { fixExecPath } from './agents/pathFix'
 import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './tokens/dailyTokenCounter'
 import { setDailyTokenCounter } from './tokens/growthSignalRef'
@@ -764,7 +765,7 @@ app.whenReady().then(() => {
   //    连去别的机器时不该被转发过去。
   const mobileGw = createAppGateway({
     table: methodTable,
-    addSink: hub.addSink,
+    addSink: remoteAddSink(hub.addSink),
     version: app.getVersion(),
     onLog: (m) => logInfo('mobile', m),
     onStatus: (st) => registry.broadcast(CH.mobileStatusEvent, st),
@@ -783,7 +784,7 @@ app.whenReady().then(() => {
   //    在家走局域网(快、少一跳),出门走中转,同一个二维码。
   const relayCtl = createRelayController({
     table: methodTable,
-    addSink: hub.addSink,
+    addSink: remoteAddSink(hub.addSink),
     version: app.getVersion(),
     onLog: (m) => logInfo('relay', m),
     onStatus: (st) => registry.broadcast(CH.relayStatusEvent, st),

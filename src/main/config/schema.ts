@@ -823,6 +823,24 @@ export const pickHost = (s: Settings): HostSettings =>
   Object.fromEntries(HOST_SETTING_KEYS.map((k) => [k, s[k]])) as HostSettings
 
 /**
+ * 同上两个,但输入是**补丁**(只带用户这次真动过的字段)。
+ *
+ * ★★为什么必须和 `pickHost`/`pickClient` 分开:那两个是 `map` 出全部键,缺的键会变成
+ *  `{ agentProxy: undefined }`。展开进一份完整设置里,那就是**把它抹成 undefined**,
+ *  落盘时被 schema 回落成默认值 —— 一次静默的「设置凭空消失」。补丁路径上只能带**在场**的键。
+ *
+ * ★这正是 2026-09-20 那个 bug 的形状放大版:一台设备改一个开关,把另一台机器的
+ *  代理/中转地址整份盖掉。补丁 + 只写在场的键,让「我没动过的字段」在物理上不可能被写。
+ */
+const pickPresent = <K extends readonly (keyof Settings)[]>(keys: K, patch: Partial<Settings>) =>
+  Object.fromEntries(keys.filter((k) => k in patch).map((k) => [k, patch[k]]))
+
+export const pickHostPatch = (patch: Partial<Settings>): Partial<HostSettings> =>
+  pickPresent(HOST_SETTING_KEYS, patch) as Partial<HostSettings>
+export const pickClientPatch = (patch: Partial<Settings>): Partial<ClientSettings> =>
+  pickPresent(CLIENT_SETTING_KEYS, patch) as Partial<ClientSettings>
+
+/**
  * 把「老版本那份什么都装在一起的 settings.json」拆成两半。
  *
  * ★纯函数,单独钉死。这是整个第二期最容易把用户设置弄丢的一步:

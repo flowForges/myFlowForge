@@ -321,7 +321,9 @@ export function PetApp() {
     // Persist the absolute free drop position + derived corner (for popup direction).
     window.forge.getSettings().then((s: any) => {
       if (!s?.pet) return
-      window.forge.setSettings({ ...s, pet: { ...s.pet, corner: c, free } })
+      // ★只发 pet 这一个键(读-改-写的范围就该是被改的那个键)。整份写回去会把这台机器上
+      //  别处刚改过的设置按这份快照倒回去 —— 见 useSettings.update 顶上那段。
+      window.forge.setSettings({ pet: { ...s.pet, corner: c, free } })
       setCorner(c)
     })
   }, () => vdirRef.current, () => scaleRef.current)
