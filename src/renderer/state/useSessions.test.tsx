@@ -70,15 +70,49 @@ describe('useSessions', () => {
     expect(result.current.activeSessionId).toBe('s2')
     expect(result.current.sessions).toHaveLength(2)
   })
-  it('onSessionsChanged updates state when workspacePath matches', async () => {
+  /**
+   * ★★★2026-09-20 用户原话:「我在 windows 或者本机,不管点哪个会话,另外一个也跟着跳过去,
+   * 这种正常么」。别的设备切会话时,主机那份 activeSessionId 会变并广播给所有人 ——
+   * **列表要跟上,选中项不许动**。
+   */
+  it('★别的设备切了会话:列表跟上,但我这台的选中项纹丝不动', async () => {
     const { result } = renderHook(() => useSessions('/ws'))
     await waitFor(() => expect(result.current.sessions).toHaveLength(1))
-    const newFile = file(['s1', 's2'], 's2')
-    act(() => {
-      sessCb!({ workspacePath: '/ws', file: newFile })
-    })
+    expect(result.current.activeSessionId).toBe('s1')
+
+    // 另一台设备切到了 s2(它切完主机就广播这份 file)
+    act(() => { sessCb!({ workspacePath: '/ws', file: file(['s1', 's2'], 's2') }) })
+
+    expect(result.current.sessions).toHaveLength(2)     // 新会话出现在列表里
+    expect(result.current.activeSessionId).toBe('s1')   // 但我还在看我那个
+  })
+
+  it('★我自己点切换:跟着走,并记在这台设备上', async () => {
+    const onPick = vi.fn()
+    const { result } = renderHook(() => useSessions('/ws', { onPick }))
+    await waitFor(() => expect(result.current.sessions).toHaveLength(1))
+
+    ;(window as any).forge.sessionSwitch = vi.fn().mockResolvedValue(file(['s1', 's2'], 's2'))
+    await act(async () => { await result.current.switchSession('s2') })
+
     expect(result.current.activeSessionId).toBe('s2')
-    expect(result.current.sessions).toHaveLength(2)
+    expect(onPick).toHaveBeenCalledWith('/ws', 's2')
+    // 主机那份照旧要写 —— 机器人那条路和「新设备第一次进来看哪个」还认它
+    expect((window as any).forge.sessionSwitch).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 's2' })
+  })
+
+  it('★这台设备记住的选择优先于主机那份 activeSessionId', async () => {
+    ;(window as any).forge.sessionList = vi.fn().mockResolvedValue(file(['s1', 's2'], 's1'))
+    const { result } = renderHook(() => useSessions('/ws', { remembered: 's2' }))
+    await waitFor(() => expect(result.current.sessions).toHaveLength(2))
+    expect(result.current.activeSessionId).toBe('s2')
+  })
+
+  it('★我记住的那个已经不在了就回落,不能指着一个不存在的 id(右边会一片空白)', async () => {
+    ;(window as any).forge.sessionList = vi.fn().mockResolvedValue(file(['s1'], 's1'))
+    const { result } = renderHook(() => useSessions('/ws', { remembered: '被别人关掉的' }))
+    await waitFor(() => expect(result.current.sessions).toHaveLength(1))
+    expect(result.current.activeSessionId).toBe('s1')
   })
   it('onSessionsChanged ignores broadcasts for other workspacePaths', async () => {
     const { result } = renderHook(() => useSessions('/ws'))

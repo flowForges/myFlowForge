@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Titlebar } from './shell/Titlebar'
 import { Sidebar } from './shell/Sidebar'
 import { useUnread } from './state/useUnread'
@@ -323,7 +323,21 @@ export function App() {
   // On the home view the titlebar shows just "Forge" — never a stale workspace name from the
   // last-viewed workspace or a still-active run.
   const crumb = view === 'home' ? '' : (home.workspaces.find(w => w.path === activeWsId)?.name ?? engine.run?.workspaceName ?? '')
-  const sessions = useSessions(activeWsId || undefined)
+  /**
+   * ★「我在看哪个会话」归**这台设备**,不再跟着主机那份 `activeSessionId` 走 ——
+   *  否则在 Windows 上点一个会话,本机这台会跟着跳过去(用户 2026-09-20 报的)。
+   *  键按 `${hostKey}::${工作区路径}` 分:同一个路径在两台机器上是两回事。
+   */
+  const sessionKey = activeWsId ? `${hostKey}::${activeWsId}` : ''
+  const rememberPick = useCallback((wsPath: string, sessionId: string) => {
+    const key = `${hostKey}::${wsPath}`
+    if (!settings || settings.lastActiveSession?.[key] === sessionId) return
+    update({ lastActiveSession: { ...(settings.lastActiveSession ?? {}), [key]: sessionId } })
+  }, [hostKey, settings, update])
+  const sessions = useSessions(activeWsId || undefined, {
+    remembered: sessionKey ? settings?.lastActiveSession?.[sessionKey] : undefined,
+    onPick: rememberPick,
+  })
   // Sidebar unread dots: a session that finishes while you're elsewhere gets marked; the one you're
   // viewing is always read. On the home view nothing is "viewed", so pass empty ids.
   const unread = useUnread({ wsPath: view === 'ws' ? activeWsId : '', sessionId: sessions.activeSessionId ?? '' })

@@ -494,6 +494,19 @@ export const SettingsSchema = z.object({
   // ★Q3:一定不能跟 host —— 手机上次看的和电脑上次看的必然不同,互相覆盖会很烦。
   //   跟设备,但**按 hostId 分键**:切回某台机器时恢复「我在这台上次看的」。本机的键是 'local'。
   lastActiveWorkspace: z.record(z.string(), z.string()).catch({}).default(() => ({})),
+  /**
+   * 「**这台设备**上次在哪个工作区看哪个会话」。键是 `${hostId}::${工作区路径}`,值是会话 id。
+   *
+   * ★★为什么是跟设备走,而不是像以前那样只认主机那份 `activeSessionId`:
+   *  那份是写在**工作区里**的(`.forge/chat-session.json`),一台机器只有一个值,
+   *  而它一变就广播给所有连着的设备 —— 于是电脑上点一下会话,手边的 Windows 和手机**跟着一起跳**。
+   *  用户 2026-09-20 原话:「不管点哪个会话,另外一个也跟着跳过去,这种正常么」。
+   *  同一条理由已经让 `lastActiveWorkspace` 按 hostId 分过一次键,会话是同一类东西,只是漏拆了。
+   *
+   * ★主机那份 `activeSessionId` 保留不动:它是那台机器自己的「最近在用哪个会话」,
+   *  钉钉/机器人那条路和「这台设备第一次进来该看哪个」都还要用它。
+   */
+  lastActiveSession: z.record(z.string(), z.string()).catch({}).default(() => ({})),
   // User-pasted usage-plugin credentials, keyed by provider id (e.g. qoder/cursor cookie/token).
   // Overrides the adapter's auto-read source. Stored locally only.
   pluginCreds: z.record(z.string(), z.string()).default(() => ({})),
@@ -551,6 +564,7 @@ export const defaultSettings = (): Settings => ({
   pinnedWorkspaces: [],
   workspaceOrder: [],
   lastActiveWorkspace: {},
+  lastActiveSession: {},
   pluginCreds: {},
   disabledProviders: [],
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
@@ -786,6 +800,7 @@ export const CLIENT_SETTING_KEYS = [
   'notifications',        // Q1:这台设备收哪些
   'appProxy',             // Q4:app 自身的网络
   'lastActiveWorkspace',  // Q3:按 hostId 分键
+  'lastActiveSession',    // 同上,再按工作区分一层 —— 「我在这台设备上看的是哪个会话」
   'defaultOpenerId',      // Q5
   'perfStallToast', 'perfDiagnostics',   // Q6:第二期只做客户端这份,daemon 侧留空实现
   'mobileGateway',        // 这台电脑对手机开不开门 —— 跟设备走,不跟你正在操作哪台机器走

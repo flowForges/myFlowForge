@@ -1274,10 +1274,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   on(CH.chatResolve, (_e, a: { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number; answers?: AskAnswers; response?: string; selection?: { stages: string[]; stageProjects: Record<string, string[]>; hooks?: string[] }; workspacePath: string }) => {
     const askResolve = chatAsks.get(a.id)
     if (askResolve) {
+      // ★★门属于**升起它的那个会话**,不是「这台机器最近在用的那个」。
+      //  会话的选中项已经归各台设备自己了(见 useSessions),主机那份 activeSessionId 可能是
+      //  另一台设备刚切出来的 —— 拿它当归属,答完的痕迹会落到一个不相干的会话里。
+      const askGate = chatGateOwner.get(a.id)
       chatAsks.delete(a.id)
       chatGateOwner.delete(a.id)
       askResolve({ decision: a.decision === 'modify' ? 'deny' : a.decision, value: a.value, choice: a.choice })
-      broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'ask-resolved', id: a.id })
+      broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: askGate?.sessionId ?? readSessions(a.workspacePath).activeSessionId, type: 'ask-resolved', id: a.id })
       return
     }
     const resolve = chatConfirms.get(a.id)
@@ -1298,12 +1302,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const gate = chatGateOwner.get(a.id)
     chatConfirms.delete(a.id)
     chatGateOwner.delete(a.id)
-    rememberResolved(a.id, by, a.decision, a.workspacePath, readSessions(a.workspacePath).activeSessionId ?? '')
+    // ★同上:归属取门自己的会话,取不到才退到「这台机器最近在用的」。
+    const gateSid = gate?.sessionId ?? readSessions(a.workspacePath).activeSessionId ?? ''
+    rememberResolved(a.id, by, a.decision, a.workspacePath, gateSid)
     // 带 answers/response 的放行 = 这是一道「请回答」的门(AskUserQuestion),必须把选择原样送回 provider。
     const answered = a.decision === 'allow' && (a.answers !== undefined || a.response !== undefined)
     resolve(answered ? { decision: 'allow', answers: a.answers, response: a.response }
       : a.decision === 'modify' ? 'deny' : a.decision)
-    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: readSessions(a.workspacePath).activeSessionId, type: 'confirm-resolved', id: a.id })
+    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: gateSid, type: 'confirm-resolved', id: a.id })
     // ★★★把「问了什么、选了什么」留在对话里。答完之后卡片就消失了,而对话里原来**一个字都没有** ——
     //  用户原话:「我选择后,输出内容里没有我之前的选择,感觉中间中断了似的」。后面每一句都以这个
     //  选择为前提,读的人却看不到前提。
@@ -1313,14 +1319,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     //  正是这条被漏掉的原因。
     if (answered) {
       const note = askAnswerNote(gate?.questions, a.answers, a.response)
-      const sid = readSessions(a.workspacePath).activeSessionId ?? ''
-      if (note && sid) emitNote(a.workspacePath, sid, note)
+      if (note && gateSid) emitNote(a.workspacePath, gateSid, note)
     }
     // 别的设备答的门,要在对话里留个痕 —— 否则电脑前的人只看到卡片凭空消失,不知道发生了什么。
     // 本机自己答的不提示:那会给单机用户的每一次确认都加一条噪音。
     if (_e?.client && _e.client.id !== 'local') {
-      const sid = readSessions(a.workspacePath).activeSessionId ?? ''
-      if (sid) emitNote(a.workspacePath, sid, `🛡 「${by}」${DECISION_CN[a.decision] ?? a.decision}了这道门。`)
+      if (gateSid) emitNote(a.workspacePath, gateSid, `🛡 「${by}」${DECISION_CN[a.decision] ?? a.decision}了这道门。`)
     }
   })
 

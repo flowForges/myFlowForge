@@ -18,6 +18,7 @@ const DEFAULTS: Settings = {
   pinnedWorkspaces: [],
   workspaceOrder: [],
   lastActiveWorkspace: {},
+  lastActiveSession: {},
   pluginCreds: {},
   disabledProviders: [],
   terminal: { fontFamily: "'MesloLGS NF', 'JetBrainsMono Nerd Font', Menlo, ui-monospace, monospace", fontSize: 12.5 },
@@ -51,6 +52,8 @@ export interface SettingsUpdate {
   heartbeat?: Settings['heartbeat']
   terminal?: Partial<Terminal>
   lastActiveWorkspace?: Record<string, string>
+  /** 「这台设备上次在看哪个会话」,键是 `${hostId}::${工作区路径}` */
+  lastActiveSession?: Record<string, string>
   defaultOpenerId?: string
   keybindings?: Keybindings
   perfStallToast?: boolean
@@ -91,6 +94,7 @@ function merge(base: Settings, partial: SettingsUpdate): Settings {
     disabledProviders: partial.disabledProviders ?? base.disabledProviders,
     terminal: { ...base.terminal, ...(partial.terminal ?? {}) },
     lastActiveWorkspace: partial.lastActiveWorkspace ?? base.lastActiveWorkspace,
+    lastActiveSession: partial.lastActiveSession ?? base.lastActiveSession,
     defaultOpenerId: partial.defaultOpenerId ?? base.defaultOpenerId,
     keybindings: partial.keybindings ?? base.keybindings ?? { overrides: {} },
     perfStallToast: partial.perfStallToast ?? base.perfStallToast,
