@@ -14,6 +14,8 @@ export const CH = {
   mobileStatus: 'mobile:status',
   mobileApply: 'mobile:apply',
   mobileRegenToken: 'mobile:regen-token',
+  /** 踢掉一台挂在局域网网关上的设备(按连接 id)。和 relay:kick 同一个语义。 */
+  mobileKick: 'mobile:kick',
   mobileStatusEvent: 'mobile:status-event',
   // 中转(第三期)。★和 mobile:* 一样注册在 index.ts 而不是方法表里 ——
   //  它描述的是**这台设备自己的服务**,连去别的机器时不该被转发过去。

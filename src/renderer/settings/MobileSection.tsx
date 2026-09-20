@@ -393,7 +393,11 @@ export function MobileSection() {
         */}
       {(st.running || relay?.enabled) && (() => {
         const relayDevs = relayDetail?.status === 'online' ? (relayDetail.devices ?? []) : []
+        const lanDevs = st.running ? (st.devices ?? []) : []
         const lanN = st.running ? st.clients : 0
+        // ★还没自报名字的那几条(刚连上、鉴权中)只在计数里,不在名单里。据实说「还有 N 台正在连」,
+        //  不编名字,也不把它们算作"不知道是谁" —— 它们很快就会带着名字出现在上面。
+        const lanPending = Math.max(0, lanN - lanDevs.length)
         const total = lanN + relayDevs.length
         return (
           <div className="hosts-devs">
@@ -426,13 +430,34 @@ export function MobileSection() {
                     </button>
                   </li>
                 ))}
-                {lanN > 0 && (
-                  /* ★据实:局域网这条路我们只知道「几台」。写成 `{lanN} 台`,不编名字,
-                     也不给一颗踢不动的按钮。 */
-                  <li className="hd-row" key="lan">
+                {/* ★局域网这条路现在也有名字了(网关接上了 `serveConnection` 的 onPeer)——
+                    用户 2026-09-20 原话:「只显示了连接了两个,但是是哪两台,没有显示」。
+                    两条路的行长得一样,因为它们本来就是同一件事,只是进来的门不同。 */}
+                {lanDevs.map((d) => (
+                  <li className="hd-row" key={d.cid}>
                     <span className="hd-dot" />
-                    <span className="hd-nm">{lanN} 台</span>
+                    <span className="hd-nm" title={d.label}>{d.label}</span>
                     <span className="hd-via">局域网</span>
+                    <button
+                      className="set-btn"
+                      disabled={busy || kicking === d.cid}
+                      title="断开这一台。它会自己重连 —— 卡住的连接可以用它救回来"
+                      onClick={async () => {
+                        // ★同中转那条:不接返回值,新状态从 onMobileStatus 那条广播回来。
+                        setKicking(d.cid)
+                        try { await window.forge.mobileKick?.(d.cid) }
+                        finally { setKicking('') }
+                      }}
+                    >
+                      {kicking === d.cid ? '断开中…' : '断开'}
+                    </button>
+                  </li>
+                ))}
+                {lanPending > 0 && (
+                  <li className="hd-row" key="lan-pending">
+                    <span className="hd-dot" />
+                    <span className="hd-nm">{lanPending} 台</span>
+                    <span className="hd-via">局域网 · 正在连接</span>
                   </li>
                 )}
               </ul>

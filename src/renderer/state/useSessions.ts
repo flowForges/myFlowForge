@@ -60,6 +60,20 @@ export function useSessions(workspacePath: string | undefined, prefs: SessionsPr
     prefsRef.current.onPick?.(path, sessionId)
   }, [path])
 
+  /**
+   * 外面改了「这台设备该看哪个会话」就跟过去。
+   *
+   * ★★这条不是多余的:宠物气泡的「去 app 处理」是**为某个具体的门**弹的,它必须把界面带到
+   *  那道门所在的会话。以前它靠「切会话会广播、界面跟着广播走」—— 而选中项归设备之后,
+   *  广播**故意**不再动选中项了(那正是这次要修的);没有这条,气泡会把你带到工作区却留在原会话,
+   *  门还是看不见。所以「别人切的」和「我这台自己决定的」必须是两条路,这是后者。
+   */
+  useEffect(() => {
+    const r = prefs.remembered
+    if (!r || !path) return
+    setPicked(prev => (prev.path === path && prev.id === r ? prev : { path, id: r }))
+  }, [prefs.remembered, path])
+
   useEffect(() => {
     if (!workspacePath) { setState({ path: '', file: EMPTY }); return }
     if (!api.current.sessionList) {

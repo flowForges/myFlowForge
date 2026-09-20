@@ -51,10 +51,28 @@ export type GatewayOpts = {
  */
 export const E2E_GRACE_MS = 500
 
+/**
+ * 连上来的一台设备。★形状和中转那条的 `RelayDevice` 一样 —— 设置里那块列表把两条路
+ * 合成一张表显示,形状不同的话那块界面就得写两遍(而写两遍的那一版正是用户抱怨的起点:
+ * 「局域网只有一个数字,中转才有名字」)。
+ */
+export type GatewayDevice = { cid: string; label: string; since: number }
+
 export type GatewayHandle = {
   port: number
   host: string
   clientCount: () => number
+  /**
+   * 连着的是**哪几台**。
+   *
+   * ★★以前这里只有 `clientCount()` 一个数字,于是设置里只能说「2 台设备连着」——
+   *  用户 2026-09-20 原话:「只显示了连接了两个,但是是哪两台,没有显示」。
+   *  而名字其实一直有:`serveConnection` 的 `onPeer` 会在鉴权通过、以及对方自报名字时报上来,
+   *  中转那条路早就用它了,**局域网这条只是没接**。
+   */
+  clients: () => GatewayDevice[]
+  /** 踢掉一台(它会自己重连 —— 卡住的连接可以用它救回来)。踢到了返回 true。 */
+  kick: (cid: string) => boolean
   close: () => Promise<void>
 }
 
@@ -125,6 +143,11 @@ export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
   })
 
   const conns = new Set<WebSocket>()
+  // 认出名字的那些。★键是 `serveConnection` 给的**每条连接**的 id,不是设备 id:
+  //  同一台设备开两个窗口就是两条,踢的也该是那一条。
+  const peers = new Map<string, GatewayDevice & { ws: WebSocket }>()
+  const devices = (): GatewayDevice[] =>
+    [...peers.values()].sort((a, b) => a.since - b.since).map(({ cid, label, since }) => ({ cid, label, since }))
   let closed = false
 
   wss.on('connection', (ws) => {
@@ -140,6 +163,14 @@ export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
       token: opts.token,
       authTimeoutMs: opts.authTimeoutMs,
       onLog: log,
+      // ★鉴权通过时报一次(名字还是兜底的「远程客户端」),对方自报名字后再报一次 ——
+      //  所以列表里的名字会在几百毫秒内从「远程客户端」变成「zghua 的 iPhone」。
+      //  `since` 取第一次报上来的时间,不能每次都刷新,否则列表顺序会跳。
+      onPeer: (info) => {
+        const prev = peers.get(info.id)
+        peers.set(info.id, { cid: info.id, label: info.label, since: prev?.since ?? Date.now(), ws })
+        opts.onClientsChanged?.()
+      },
     })
 
     // ── 首帧嗅探。加密和明文的差别**只在这几十行里**;从 `serve` 往下,两条路跑的是同一份代码。
@@ -197,6 +228,9 @@ export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
       // ★窗口没过完就断了:定时器必须清掉,否则它会在一条死 socket 上开一条明文服务。
       if (!decided) settle()
       conns.delete(ws)
+      // ★按 ws 清,不是按 cid —— 这个回调手上只有 socket。漏清的话列表里会留一台
+      //  永远在线的幽灵设备,而「断开」按钮点了什么也不会发生。
+      for (const [cid, p] of peers) if (p.ws === ws) peers.delete(cid)
       opts.onClientsChanged?.()
     })
   })
@@ -208,6 +242,14 @@ export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
     port,
     host,
     clientCount: () => conns.size,
+    clients: devices,
+    kick: (cid: string) => {
+      const p = peers.get(cid)
+      if (!p) return false
+      // 1001 = going away。和中转那条一样:客户端认得这个码,会自己重连。
+      try { p.ws.close(1001, 'kicked') } catch { /* 已关 */ }
+      return true
+    },
     async close() {
       // ★幂等:WebSocketServer.close() 被调用第二次时回调不保证再触发,await 会永远挂着。
       if (closed) return

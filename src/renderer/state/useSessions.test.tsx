@@ -108,6 +108,24 @@ describe('useSessions', () => {
     expect(result.current.activeSessionId).toBe('s2')
   })
 
+  /**
+   * ★宠物气泡的「去 app 处理」是**为某道具体的门**弹的 —— 它必须把界面带到那道门所在的会话。
+   *  以前它靠广播把界面带过去;选中项归设备之后广播故意不再动选中项,所以这条路改成
+   *  「直接写这台设备的选择」(App 里 onNavigateWorkspace → rememberPick)。
+   *  这里钉的是 hook 这一端:remembered 变了就得跟过去,否则门还是看不见。
+   */
+  it('★remembered 变了(宠物气泡带我去某道门)就跟过去', async () => {
+    ;(window as any).forge.sessionList = vi.fn().mockResolvedValue(file(['s1', 's2'], 's1'))
+    const { result, rerender } = renderHook(
+      ({ r }: { r?: string }) => useSessions('/ws', { remembered: r }),
+      { initialProps: { r: undefined as string | undefined } },
+    )
+    await waitFor(() => expect(result.current.activeSessionId).toBe('s1'))
+
+    rerender({ r: 's2' })
+    await waitFor(() => expect(result.current.activeSessionId).toBe('s2'))
+  })
+
   it('★我记住的那个已经不在了就回落,不能指着一个不存在的 id(右边会一片空白)', async () => {
     ;(window as any).forge.sessionList = vi.fn().mockResolvedValue(file(['s1'], 's1'))
     const { result } = renderHook(() => useSessions('/ws', { remembered: '被别人关掉的' }))

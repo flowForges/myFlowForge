@@ -778,6 +778,7 @@ app.whenReady().then(() => {
     return mobileGw.apply(cfg)
   })
   ipcMain.handle(CH.mobileRegenToken, () => mobileGw.regenToken())
+  ipcMain.handle(CH.mobileKick, (_e, cid: string) => mobileGw.kick(cid))
 
   // ── 中转(第三期)。和上面那个手机端网关**不是二选一**:
   //    局域网网关 = 「同一个 wifi 里连得上」;中转 = 「NAT 后面也连得上」。

@@ -373,6 +373,7 @@ const api = {
   mobileApply: (cfg: import('@shared/types').Settings['mobileGateway']): Promise<import('../main/host/appGateway').MobileStatus> =>
     ipcRenderer.invoke(CH.mobileApply, cfg),
   mobileRegenToken: (): Promise<import('../main/host/appGateway').MobileStatus> => ipcRenderer.invoke(CH.mobileRegenToken),
+  mobileKick: (cid: string): Promise<import('../main/host/appGateway').MobileStatus> => ipcRenderer.invoke(CH.mobileKick, cid),
   onMobileStatus: (cb: (s: import('../main/host/appGateway').MobileStatus) => void) => {
     const listener = (_: unknown, s: import('../main/host/appGateway').MobileStatus) => cb(s)
     ipcRenderer.on(CH.mobileStatusEvent, listener)

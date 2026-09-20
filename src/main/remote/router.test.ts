@@ -172,6 +172,28 @@ describe('host 路由', () => {
     expect(payload).not.toHaveProperty('relay')
   })
 
+  /**
+   * ★对面是**旧主机**(1.2.0 及更早)时,它推的仍是整份设置 —— 里面带着那台电脑的主题、壁纸、
+   *  宠物、授权码。收这头再收窄一次,连过去不会被对面同化。
+   */
+  it('★远程推来的 settings:changed 只取「跟机器走」的那一半(旧主机推整份也不怕)', async () => {
+    const s = await setup({ 'a:b': () => 1 }, { 'a:b': () => 1 })
+    await s.router.connect(host(s.url))
+    await untilReady(s.router)
+    s.toWindows.mockClear()
+    s.remoteHub.broadcast('settings:changed', {
+      agentProxy: '远程的agent代理', disabledProviders: ['qoder'],
+      appearance: { theme: 'dark' }, nsfwCodes: ['别人的授权码'], appProxy: '远程的app代理',
+    })
+    await expect.poll(() => s.toWindows.mock.calls.length, { timeout: 2000 }).toBe(1)
+    const payload = s.toWindows.mock.calls[0][1] as Record<string, unknown>
+    expect(payload.agentProxy).toBe('远程的agent代理')
+    expect(payload.disabledProviders).toEqual(['qoder'])
+    expect(payload).not.toHaveProperty('appearance')
+    expect(payload).not.toHaveProperty('nsfwCodes')
+    expect(payload).not.toHaveProperty('appProxy')
+  })
+
   it('远程广播的事件送到界面', async () => {
     const s = await setup({ 'a:b': () => 1 }, { 'a:b': () => 1 })
     await s.router.connect(host(s.url))

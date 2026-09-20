@@ -100,6 +100,61 @@ describe('WS 网关', () => {
     expect(await c.next((f) => f.t === 'res')).toMatchObject({ id: 5, ok: false })
   })
 
+  /**
+   * ★★★用户 2026-09-20 原话:「局域网下,只显示了连接了两个,但是是哪两台,没有显示」。
+   *  名字一直都有 —— `serveConnection` 的 `onPeer` 会报,中转那条路早就在用它,
+   *  局域网这条只是没接。这几条钉住的就是「接上了」。
+   */
+  it('★连上来的设备能报出名字,自报之后名字会更新', async () => {
+    const { gw } = await boot({ 'a:b': () => 1 })
+    const c = await connect(gw.port)
+    await c.next((f) => f.t === 'ready')
+    // 鉴权通过就先报一条(还没自报名字,用兜底名)
+    await expect.poll(() => gw.clients().length).toBe(1)
+    expect(gw.clients()[0]!.label).toBe('远程客户端')
+
+    c.send({ t: 'identify', label: 'zghua 的 iPhone' })
+    await expect.poll(() => gw.clients()[0]?.label).toBe('zghua 的 iPhone')
+    expect(gw.clientCount()).toBe(1)
+  })
+
+  it('★两台连着就列两台,各自一条,按连上的先后排', async () => {
+    const { gw } = await boot({ 'a:b': () => 1 })
+    const c1 = await connect(gw.port); await c1.next((f) => f.t === 'ready')
+    c1.send({ t: 'identify', label: '先连的' })
+    await expect.poll(() => gw.clients()[0]?.label).toBe('先连的')
+    const c2 = await connect(gw.port); await c2.next((f) => f.t === 'ready')
+    c2.send({ t: 'identify', label: '后连的' })
+    // ★等的是「名字到了」,不是「条数到了」—— 鉴权通过那一刻条数就是 2 了,而 identify 还在路上。
+    await expect.poll(() => gw.clients().map((d) => d.label).join()).toBe('先连的,后连的')
+  })
+
+  it('★踢掉一台:那条连接断开,名单里也不留幽灵', async () => {
+    const { gw } = await boot({ 'a:b': () => 1 })
+    const c = await connect(gw.port)
+    await c.next((f) => f.t === 'ready')
+    await expect.poll(() => gw.clients().length).toBe(1)
+
+    expect(gw.kick(gw.clients()[0]!.cid)).toBe(true)
+    expect((await c.closed).code).toBe(1001)     // going away —— 客户端认这个码,会自己重连
+    await expect.poll(() => gw.clients().length).toBe(0)
+    await expect.poll(() => gw.clientCount()).toBe(0)
+  })
+
+  it('踢一个不存在的 cid:返回 false,不炸', async () => {
+    const { gw } = await boot({ 'a:b': () => 1 })
+    expect(gw.kick('remote-does-not-exist')).toBe(false)
+  })
+
+  it('★设备自己断开时也要从名单里清掉(不然界面上会留一台永远在线的幽灵)', async () => {
+    const { gw } = await boot({ 'a:b': () => 1 })
+    const c = await connect(gw.port)
+    await c.next((f) => f.t === 'ready')
+    await expect.poll(() => gw.clients().length).toBe(1)
+    c.ws.close()
+    await expect.poll(() => gw.clients().length).toBe(0)
+  })
+
   it('broadcast 发给每一条连接', async () => {
     const { gw, hub } = await boot({ 'a:b': () => 1 })
     const c1 = await connect(gw.port); const c2 = await connect(gw.port)

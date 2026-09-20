@@ -5,7 +5,7 @@ import type { HopInput } from '@shared/remote/hopDiagnosis'
 import type { InvokeCtx, MethodTable } from '../ipc/invokeCtx'
 import type { RemoteHost } from './hostStore'
 import { readSettings } from '../config/store'
-import { pickClient, pickHostPatch, pickClientPatch, type Settings } from '../config/schema'
+import { pickClient, pickHost, pickHostPatch, pickClientPatch, type Settings } from '../config/schema'
 
 export type HostStatus = {
   /** null = 正在看本机 */
@@ -184,7 +184,14 @@ export function createHostRouter(deps: HostRouterDeps) {
         proxy: readSettings().appProxy,
         clientVersion: deps.clientVersion,
         clientLabel: deps.clientLabel,
-        onEvent: (ch, payload) => (deps.onRemoteEvent ?? deps.toWindows)(ch, payload),
+        // ★★收进来的 `settings:changed` 也只取「跟机器走」那一半。
+        //  发的那头已经收窄过了(`remote/eventScope.ts`),这头再收一次是给**旧主机**兜底:
+        //  1.2.0 及更早的机器推的仍是整份设置,里面带着**那台电脑**的主题、壁纸、宠物、授权码。
+        //  不拦的话,连过去一次,你这台的外观就会被对面同化,而界面上没有任何迹象。
+        onEvent: (ch, payload) => (deps.onRemoteEvent ?? deps.toWindows)(
+          ch,
+          ch === CH.settingsChanged && payload && typeof payload === 'object' ? pickHost(payload as Settings) : payload,
+        ),
         onState: (s) => { remoteState = s; pushStatus() },
         onLog: log,
       })

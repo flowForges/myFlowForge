@@ -25,6 +25,7 @@ import { buildProviderRegistry } from '../agents/registry'
 import { startGateway } from '../remote/gateway'
 import { ensureToken, isLoopback, parseListen, readDaemonConfig } from './config'
 import { readIdentity } from '../remote/identity'
+import { remoteAddSink } from '../remote/eventScope'
 import { startRelayHost, type RelayHostHandle } from '../remote/relayHost'
 import { toBase64 } from '@shared/remote/e2e'
 import { pairLines } from './pairText'
@@ -87,7 +88,9 @@ export async function startDaemon(
   const table = daemonTable(full)
 
   const gw = await startGateway({
-    table, addSink: hub.addSink, version, host, port, token, onLog: log,
+    // ★和桌面那头同一个包装:每一半设置只有拥有它的那台机器有资格往外说(见 remote/eventScope.ts)。
+    //  两条入口各写一遍的下场是「同一个 daemon 两种行为」—— 这个项目里最难查的一类问题。
+    table, addSink: remoteAddSink(hub.addSink), version, host, port, token, onLog: log,
     // ★★没有它,`daemon pair` 印出来的码里那把公钥就是个摆设:客户端看到公钥就发 hs-init,
     //  而不会握手的网关只会回明文 hello,对面直接判「形状不对」断开。
     //  云服务器那条路(绑 0.0.0.0、走公网)尤其不能少 —— 那上面明文等于把令牌摊在路上。
@@ -109,7 +112,7 @@ export async function startDaemon(
       relayUrl,
       identity: readIdentity(),
       table,
-      addSink: hub.addSink,
+      addSink: remoteAddSink(hub.addSink),
       version,
       token,
       onLog: log,

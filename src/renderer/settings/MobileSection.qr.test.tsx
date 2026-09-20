@@ -44,6 +44,7 @@ const mount = async (status: unknown, relay?: Partial<RelayView>) => {
     mobileStatus: vi.fn(async () => status),
     mobileApply: vi.fn(async () => status),
     mobileRegenToken: vi.fn(async () => status),
+    mobileKick: vi.fn(async () => status),
     onMobileStatus: () => () => {},
     ...(r ? {
       relayStatus: vi.fn(async () => r), onRelayStatus: () => () => {},
@@ -193,11 +194,11 @@ describe('「连着哪几台」这块', () => {
    *  只是换到了新的 DOM 上。
    */
   it('★答案就在开关下面,不用展开二维码就看得见', async () => {
-    await mount({ ...RUNNING, clients: 1 })
+    await mount({ ...RUNNING, clients: 1, devices: [{ cid: 'remote-1', label: '书房的 iPhone', since: 1 }] })
     expect(document.querySelector('svg.qr'), '二维码还折着').toBeNull()
     const devs = document.querySelector('.hosts-devs')!
     expect(devs.textContent).toContain('已连接的设备')
-    expect(devs.textContent).toContain('1 台')
+    expect(devs.textContent).toContain('书房的 iPhone')
     expect(devs.textContent).toContain('局域网')
   })
 
@@ -256,13 +257,49 @@ describe('「连着哪几台」这块', () => {
       expect((window as any).forge.relayKick).toHaveBeenCalledWith('2')
     })
 
-    /** ★局域网那条**拿不到设备名**(网关只数连接数),所以它那一行不许有「断开」—— 点了也没用。 */
-    it('★局域网那一行不给「断开」 —— 那条路踢不动,摆一颗点了没反应的键更糟', async () => {
-      await mount({ ...RUNNING, clients: 2 }, online([]))
+    /**
+     * ★还没自报名字的那几条(刚连上、鉴权中)只在计数里。据实写「还有 N 台正在连」,
+     *  不编名字,也不给一颗踢不动的键 —— 它们几秒后会带着名字出现在上面。
+     */
+    it('★只有计数、还没名字的那几条:写「正在连接」,不摆「断开」', async () => {
+      await mount({ ...RUNNING, clients: 2, devices: [] }, online([]))
       const lan = [...document.querySelectorAll('.hosts-devs .hd-row')]
         .find((r) => (r.textContent ?? '').includes('局域网'))!
       expect(lan.textContent).toContain('2 台')
+      expect(lan.textContent).toContain('正在连接')
       expect(lan.querySelector('button')).toBeNull()
+    })
+  })
+
+  /**
+   * ★★★用户 2026-09-20 原话:「局域网下,只显示了连接了两个,但是是哪两台,没有显示,这个正常么」。
+   *  名字一直都在 —— `serveConnection` 的 `onPeer` 会报,中转那条早就在用,局域网这条没接。
+   *  接上之后,两条路的行长得一模一样,因为它们本来就是同一件事,只是进来的门不同。
+   */
+  describe('局域网上连着的设备:也看得见、也踢得掉', () => {
+    const lan = (devices: { cid: string; label: string; since: number }[]) =>
+      ({ ...RUNNING, clients: devices.length, devices })
+
+    it('★列出每台设备的名字,不再只是一个数字', async () => {
+      await mount(lan([
+        { cid: 'remote-1', label: '书房的 iPhone', since: 1 },
+        { cid: 'remote-2', label: 'zghua 的 Windows', since: 2 },
+      ]))
+      const devs = document.querySelector('.hosts-devs')!
+      expect(devs.textContent).toContain('书房的 iPhone')
+      expect(devs.textContent).toContain('zghua 的 Windows')
+      expect(devs.textContent).not.toContain('2 台')       // 有名字就不该再退回数字
+    })
+
+    it('★★「断开」点的是那一台的 cid —— 点错人比不给这颗键更糟', async () => {
+      await mount(lan([
+        { cid: 'remote-1', label: '书房的 iPhone', since: 1 },
+        { cid: 'remote-2', label: 'zghua 的 Windows', since: 2 },
+      ]))
+      const rows = [...document.querySelectorAll('.hosts-devs .hd-row')]
+      const win = rows.find((r) => (r.textContent ?? '').includes('Windows'))!
+      await act(async () => { fireEvent.click(win.querySelector('button')!) })
+      expect((window as any).forge.mobileKick).toHaveBeenCalledWith('remote-2')
     })
   })
 })

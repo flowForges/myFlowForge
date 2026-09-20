@@ -1,5 +1,5 @@
 import { hostname, networkInterfaces } from 'node:os'
-import { startGateway, type GatewayHandle } from '../remote/gateway'
+import { startGateway, type GatewayHandle, type GatewayDevice } from '../remote/gateway'
 import { daemonTable } from '../ipc/channelRouting'
 import type { MethodTable } from '../ipc/invokeCtx'
 import { ensureToken, isLoopback, resetToken } from '../daemon/config'
@@ -28,6 +28,11 @@ export type MobileStatus = {
   addresses: string[]
   /** 现在有几台设备连着 */
   clients: number
+  /**
+   * 分别是**哪几台**。★空数组不等于没人连:一条刚连上、还没鉴权/还没自报名字的连接
+   * 会计进 `clients` 而不在这里 —— 界面按「有名字的列名字,剩下的据实说还有几台」显示。
+   */
+  devices: GatewayDevice[]
   /** 起不来时的原因(端口被占之类)。★不能静默失败:开关拨过去了却没起来,是最难查的一类。 */
   error: string
   /** 这台机器叫什么。手机扫码存下来当主机名用 —— 一串 IP 认不出是哪台。 */
@@ -66,6 +71,8 @@ export type AppGateway = {
   status(): MobileStatus
   /** 换一把钥匙。已连着的设备会在下次连接时被拒 —— 这正是「撤销」该有的样子。 */
   regenToken(): MobileStatus
+  /** 踢掉一台。它会自己重连 —— 卡住的连接可以用它救回来(和中转那条同一个语义)。 */
+  kick(cid: string): MobileStatus
   close(): Promise<void>
 }
 
@@ -85,6 +92,7 @@ export function createAppGateway(deps: AppGatewayDeps): AppGateway {
     token: isLoopback(cur.host) ? '' : ensureToken(),
     addresses: lanAddresses(),
     clients: gw?.clientCount() ?? 0,
+    devices: gw?.clients() ?? [],
     error,
     name: machineName(),
   })
@@ -99,6 +107,12 @@ export function createAppGateway(deps: AppGatewayDeps): AppGateway {
 
   return {
     status,
+    kick(cid) {
+      gw?.kick(cid)
+      // ★不在这儿改状态:socket 的 close 回调会把它从表里清掉并叫一声 announce ——
+      //  和「设备自己断开」走同一条路。两处各改一次,迟早有一处漏。
+      return status()
+    },
     async apply(cfg) {
       // ★「同一份配置就别动它」。设置面板里改任何别的东西都会走一次 apply —— 每次都重启的话,
       //  连着的手机被无缘无故踢下线,正在等的调用全部作废。
