@@ -50,7 +50,7 @@ import { hasAllBuiltinPets, mergeBuiltinPets, isLegacyBundledPet } from '@shared
 import { perfSpan } from './perf/perfSpans'
 import { EventLoopMonitor } from './perf/eventLoopMonitor'
 import { StallReporter } from './perf/stallReporter'
-import { rememberRelayUrl } from '@shared/remote/relayHistory'
+import { rememberRelayUrl, forgetRelayUrl, isRelayUrl, canForgetRelayUrl } from '@shared/remote/relayHistory'
 
 // Start the centralized debug log as early as possible so even startup failures are persisted to
 // ~/.myFlowForge/logs/app.log and exportable from Settings · 调试日志.
@@ -803,6 +803,24 @@ app.whenReady().then(() => {
     const relay = { ...cfg, urlHistory: rememberRelayUrl(prev.relay?.urlHistory ?? [], cfg.url) }
     writeSettings({ ...prev, relay })
     return relayCtl.apply(relay)
+  })
+  // ★新增/删除只改历史,不改正在用的地址 —— 切换是 relayApply 的事,而且要经过界面上的确认
+  //  (切换后走中转的设备要重新扫码)。把「加一条」和「换过去」分开,就不会有人为了先存一个
+  //  备用地址,结果把正在连着的手机全断了。
+  ipcMain.handle(CH.relayRememberUrl, (_e, url: string) => {
+    if (!isRelayUrl(String(url ?? ''))) throw new Error('中转地址要以 ws:// 或 wss:// 开头')
+    const prev = readSettings()
+    const relay = { ...prev.relay, urlHistory: rememberRelayUrl(prev.relay?.urlHistory ?? [], String(url)) }
+    writeSettings({ ...prev, relay })
+    return relayCtl.setHistory(relay.urlHistory)
+  })
+  ipcMain.handle(CH.relayForgetUrl, (_e, url: string) => {
+    const prev = readSettings()
+    // ★主进程这里再拦一次,不只靠界面把按钮置灰 —— 界面的状态可能是旧的。
+    if (!canForgetRelayUrl(String(url ?? ''), prev.relay?.url ?? '')) throw new Error('正在用的中转地址不能删 —— 先切到别的地址')
+    const relay = { ...prev.relay, urlHistory: forgetRelayUrl(prev.relay?.urlHistory ?? [], String(url)) }
+    writeSettings({ ...prev, relay })
+    return relayCtl.setHistory(relay.urlHistory)
   })
 
   ipcMain.handle(CH.hostsExport, (_e, includeTokens: boolean) => exportHosts({ includeTokens: !!includeTokens }))

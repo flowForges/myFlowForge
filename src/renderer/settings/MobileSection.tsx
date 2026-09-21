@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { MobileStatus } from '../../main/host/appGateway'
 import { buildPairingLink } from '@shared/remote/pairingLink'
 import { QrCode } from './QrCode'
+import { RelayUrlPicker } from './RelayUrlPicker'
 import type { Settings } from '@shared/types'
 
 /**
@@ -34,8 +35,6 @@ export function MobileSection() {
   >(null)
   /** 正在踢的那台 —— 点完到状态回来之间要把按钮按住,否则连点两下会发两次。 */
   const [kicking, setKicking] = useState('')
-  const [relayUrl, setRelayUrl] = useState('')
-  const relaySeeded = useRef(false)
   const [port, setPort] = useState('6789')
   const [lan, setLan] = useState(true)
   const [showToken, setShowToken] = useState(false)
@@ -69,14 +68,13 @@ export function MobileSection() {
       if (!r) return
       // ★`token` 是中转那条路上用的那把(`relayController.ts` 里就是 `ensureToken()`)。
       //  它和局域网非回环时是**同一把** —— 一枚码要在两条路上都能用,见下面 `qrToken`。
-      setRelay({ publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled, token: r.token ?? '' })
+      // ★★`urlHistory` 必须一起拷进来。09-17 那一版这里只拷了四个字段 —— 主进程明明存着历史,
+      //  界面上的下拉却永远是空的,功能做完那天起就没用过。
+      setRelay({ publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled, token: r.token ?? '', urlHistory: r.urlHistory ?? [] })
       setRelayDetail((r.detail ?? null) as {
         status: string; error?: string; peers?: number
         devices?: { cid: string; label: string; since: number }[]
       } | null)
-      // ★只在**第一次**回填输入框。之后每一次状态广播都回填的话,人正打到一半的地址会被推回去
-      //  —— 和上面那个 `seeded` 是同一条规矩(端口输入框栽过一次)。
-      if (!relaySeeded.current) { relaySeeded.current = true; setRelayUrl(r.url ?? '') }
     }
     void window.forge.relayStatus?.().then(take)
     return window.forge.onRelayStatus?.(take)
@@ -337,36 +335,24 @@ export function MobileSection() {
           className={`toggle${relay?.enabled ? ' on' : ''}`}
           aria-label="外部中转"
           disabled={busy}
-          onClick={() => void window.forge.relayApply?.({ enabled: !relay?.enabled, url: relayUrl.trim() })}
+          // 打开时用正在用的地址;没有就拿最近用过的那个 —— 下拉里排第一的就是它。
+          onClick={() => void window.forge.relayApply?.({ enabled: !relay?.enabled, url: relay?.url || relay?.urlHistory?.[0] || '' })}
         />
       </div>
 
       {relay?.enabled && (
       <div className="proj-field">
-        <label htmlFor="relayUrl">中转地址</label>
-        <div className="hosts-inline">
-          {/* ★★用过的地址记下来,做成下拉。用户原话:「每次我重新安装系统(升级),这个配置又没有了,
-              还得再输入一遍,如果我有两个中转+一个 cloudflare,这地方下拉就是三个」。
-              ★用原生 `<datalist>` 而不是自造下拉:它自带键盘可达和无障碍语义,
-               而且**仍然能自由输入** —— 这一格既要能选老的,也要能填新的。
-              ★★历史里**只有地址,没有令牌**(见 `shared/remote/relayHistory.ts`):
-               地址是公开信息(它就印在配对二维码里),令牌能起 agent、替你答门、开终端。 */}
-          <input
-            id="relayUrl"
-            list="relayUrlHistory"
-            value={relayUrl}
-            placeholder="wss://relay.你的域名/"
-            onChange={(e) => setRelayUrl(e.target.value)}
-            onBlur={() => {
-              if (relay?.enabled && relayUrl.trim() !== relay.url) {
-                void window.forge.relayApply?.({ enabled: true, url: relayUrl.trim() })
-              }
-            }}
-          />
-          <datalist id="relayUrlHistory">
-            {(relay?.urlHistory ?? []).map((u: string) => <option key={u} value={u} />)}
-          </datalist>
-        </div>
+        <label>中转地址</label>
+        {/* ★下拉:点开看全部保存过的地址、点一条切换、× 删一条、「+ 新增地址」。
+            理由和取舍见 RelayUrlPicker.tsx 顶部;历史只有地址、没有令牌,见 shared/remote/relayHistory.ts。 */}
+        <RelayUrlPicker
+          current={relay?.url ?? ''}
+          history={relay?.urlHistory ?? []}
+          disabled={busy}
+          onSwitch={(url) => window.forge.relayApply({ enabled: true, url })}
+          onRemember={(url) => window.forge.relayRememberUrl(url)}
+          onForget={(url) => window.forge.relayForgetUrl(url)}
+        />
       </div>
       )}
 

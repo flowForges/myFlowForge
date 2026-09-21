@@ -96,6 +96,17 @@ export function createRelayController(deps: {
       return status()
     },
 
+    /**
+     * 只换地址历史,**不碰连接**。新增/删除下拉里的条目走这里。
+     * ★不能借 apply():它在地址和开关都没变时直接 return(为了不无故断线),历史就不会更新,
+     *  界面上表现为「删了还在 / 加了没出现」。
+     */
+    setHistory(urlHistory: string[]): RelayStatusView {
+      cur = { ...cur, urlHistory: [...urlHistory] }
+      announce()
+      return status()
+    },
+
     async apply(cfg: RelayConfig): Promise<RelayStatusView> {
       const same = cfg.enabled === cur.enabled && cfg.url === cur.url
       // ★没变就什么都不做。不判的话,设置界面每保存一次(哪怕改的是别的字段)都会把

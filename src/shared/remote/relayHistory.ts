@@ -35,3 +35,35 @@ export function forgetRelayUrl(history: readonly string[], url: string): string[
   const v = normalizeRelayUrl(url)
   return history.filter((h) => normalizeRelayUrl(h) !== v)
 }
+
+/**
+ * 像不像一个中转地址:`ws://` 或 `wss://` 开头,后面跟着主机名。
+ * ★只判形状,不判连不连得上 —— 能不能连是开关打开之后中转那边的事,那里有完整的报错。
+ *  这里只拦住「明显不是地址」的输入(漏了协议、多了空格、贴成 https://),免得它进了下拉。
+ */
+export function isRelayUrl(url: string): boolean {
+  return /^wss?:\/\/[^\s/]+/i.test(normalizeRelayUrl(url))
+}
+
+/**
+ * 这条能不能删。★**正在用的那条不许删**:删了它下拉里就看不到「现在连的是哪」,
+ *  而中转照样连着 —— 界面和实际状态对不上。要删先切到别的。
+ */
+export function canForgetRelayUrl(url: string, current: string): boolean {
+  const v = normalizeRelayUrl(url)
+  return v !== '' && v !== normalizeRelayUrl(current)
+}
+
+/**
+ * 下拉里实际摆出来的条目:当前那条 + 历史,去重、当前排最前。
+ * ★当前那条**可能不在历史里**(历史有上限,最老的会被挤掉;或者是老版本留下的配置),
+ *  但它必须出现在下拉里 —— 否则下拉看起来像「什么都没选」,而中转明明连着。
+ */
+export function relayUrlChoices(current: string, history: readonly string[]): string[] {
+  const out: string[] = []
+  for (const u of [current, ...history]) {
+    const v = normalizeRelayUrl(u)
+    if (v && !out.includes(v)) out.push(v)
+  }
+  return out
+}

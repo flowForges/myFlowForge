@@ -30,6 +30,7 @@ type RelayView = {
   detail: { status: string; error?: string; peers?: number }
   publicKey: string
   token: string
+  urlHistory?: string[]
 }
 
 /**
@@ -301,5 +302,23 @@ describe('「连着哪几台」这块', () => {
       await act(async () => { fireEvent.click(win.querySelector('button')!) })
       expect((window as any).forge.mobileKick).toHaveBeenCalledWith('remote-2')
     })
+  })
+})
+
+/**
+ * ★★★09-17 那一版的中转地址历史,主进程一直存着,界面却一次都没显示过 ——
+ *  状态进来时 `setRelay({ publicKey, url, enabled, token })` 只拷了四个字段,把 `urlHistory` 丢了。
+ *  组件单测测不到这一层(它直接吃 props),所以这里挂整块设置,从 relayStatus 一路走到下拉。
+ */
+describe('中转地址下拉:历史从主进程一路到界面', () => {
+  it('★relayStatus 里的 urlHistory 真的出现在下拉里', async () => {
+    await mount(RUNNING, {
+      enabled: true, url: 'wss://relay.a.com',
+      detail: { status: 'online', peers: 0 },
+      urlHistory: ['wss://relay.a.com', 'wss://relay.b.com', 'wss://c.workers.dev'],
+    })
+    fireEvent.click(screen.getByRole('button', { name: '中转地址' }))
+    const opts = screen.getAllByRole('option').map((o) => o.textContent)
+    expect(opts).toEqual(['wss://relay.a.com', 'wss://relay.b.com', 'wss://c.workers.dev'])
   })
 })

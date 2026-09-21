@@ -388,6 +388,10 @@ const api = {
   //  表现成「我明明填过,怎么下拉里没有」。类型上做不到,比靠约定可靠。
   relayApply: (cfg: Omit<import('@shared/types').Settings['relay'], 'urlHistory'>): Promise<import('../main/host/relayController').RelayStatusView> =>
     ipcRenderer.invoke(CH.relayApply, cfg),
+  relayRememberUrl: (url: string): Promise<import('../main/host/relayController').RelayStatusView> =>
+    ipcRenderer.invoke(CH.relayRememberUrl, url),
+  relayForgetUrl: (url: string): Promise<import('../main/host/relayController').RelayStatusView> =>
+    ipcRenderer.invoke(CH.relayForgetUrl, url),
   /** 这台机器的长期身份公钥(base64)。★二维码里那个 `k`。 */
   relayIdentity: (): Promise<string> => ipcRenderer.invoke(CH.relayIdentity),
   /** 踢掉一台挂在中转上的设备(按 cid)。 */

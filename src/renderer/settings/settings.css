@@ -839,6 +839,31 @@
 .set-sel-check { width: 14px; height: 14px; margin-left: auto; flex: 0 0 auto; color: var(--accent); opacity: 0; }
 .set-sel-item.on .set-sel-check { opacity: 1; }
 
+/* ── 中转地址下拉(`RelayUrlPicker.tsx`)────────────────────────────────────────
+   ★外壳就是上面那套 `.set-sel*`,这里只补三样它没有的:每行的 ×、分隔线、「+ 新增地址」那一行。 */
+.rup-row { display: flex; align-items: center; gap: 2px; }
+.rup-row .set-sel-item { flex: 1; min-width: 0; }
+.rup-url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rup-del {
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 6px;
+  color: var(--faint); font-size: 15px; line-height: 1;
+}
+.rup-del:hover:not(:disabled) { background: var(--surface); color: var(--err); }
+/* 正在用的那条删不了:× 淡到几乎看不见,但**不消失** —— 行尾对齐不能因为某一行少个按钮而跳动。 */
+.rup-del:disabled { opacity: .25; cursor: default; }
+.rup-placeholder { color: var(--faint); }
+.rup-empty { padding: 8px; font-size: 12px; color: var(--faint); }
+.rup-sep { height: 1px; margin: 4px 2px; background: var(--border-2); }
+.rup-new { color: var(--accent); }
+.rup-add { display: flex; gap: 6px; padding: 4px 2px; }
+.rup-add input {
+  flex: 1; min-width: 0; height: 30px; border-radius: 7px;
+  border: 1px solid var(--border-2); background: var(--bg); color: var(--fg);
+  padding: 0 9px; font-size: 12.5px;
+}
+.rup-add input:focus { outline: none; border-color: var(--accent); }
+.rup-err { padding: 4px 8px 2px; font-size: 12px; color: var(--err); }
+
 /* ── 主机标识选择器 ──────────────────────────────────────────────────────────
    ★★原来这儿是个**手打表情的输入框**(占位符写着「🖥️ / ☁️ / 🏠 …」)。用户的原话是
    「图标不能下拉选择么」—— 手打一个表情在 mac 上意味着按 ⌃⌘空格 翻表情面板,

@@ -23,6 +23,10 @@ export const CH = {
   relayKick: 'relay:kick',
   relayStatus: 'relay:status',
   relayApply: 'relay:apply',
+  /** 往中转地址下拉里**新增**一条(不切换)。★同 relay:*,注册在 index.ts,不进方法表。 */
+  relayRememberUrl: 'relay:remember-url',
+  /** 从中转地址下拉里删掉一条。正在用的那条不许删。 */
+  relayForgetUrl: 'relay:forget-url',
   relayStatusEvent: 'relay:status-event',
   /** 这台机器的长期身份公钥(base64)。配对二维码要用它。 */
   relayIdentity: 'relay:identity',
