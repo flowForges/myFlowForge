@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- ★app-store-connect + Apple Distribution 证书 ⇒ 只能走 TestFlight / App Store,连线侧载不进去 -->
+  <key>method</key><string>app-store-connect</string>
+  <key>teamID</key><string>V9YMUR4WYY</string>
+  <key>uploadSymbols</key><true/>
+  <key>signingStyle</key><string>automatic</string>
+  <key>destination</key><string>export</string>
+</dict>
+</plist>

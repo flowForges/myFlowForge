@@ -16,7 +16,7 @@
         "ITSAppUsesNonExemptEncryption": false
       },
       "appleTeamId": "V9YMUR4WYY",
-      "buildNumber": "4"
+      "buildNumber": "5"
     },
     "android": {
       "package": "com.flowforges.myflowforge",
@@ -60,7 +60,8 @@
       ],
       "./plugins/withNoForceDark",
       "./plugins/withReleaseSigning",
-      "./plugins/withPushEntitlement"
+      "./plugins/withPushEntitlement",
+      "./plugins/withPrebuiltRNGuard"
     ],
     "experiments": {
       "typedRoutes": false
