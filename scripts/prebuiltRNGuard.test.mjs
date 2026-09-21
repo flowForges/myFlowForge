@@ -24,6 +24,14 @@ describe('withPrebuiltRNGuard · injectGuard', () => {
     expect(out).toContain('raise Pod::Informative')
   })
 
+  /** ★第二种坏组合:Expo 预编译模块在、核心却是源码。判断要看**装出来的**模块,不看环境变量。 */
+  it('★也拦「用了 Expo 预编译模块、核心却是源码」—— 按装出来的 xcframework 判断', () => {
+    const out = injectGuard(PODFILE)
+    expect(out).toContain("t.name.start_with?('Expo') && t.respond_to?(:xcframeworks)")
+    expect(out).toContain('if !__ff_expo_xcf.empty? && !__ff_core_prebuilt')
+    expect(out).not.toMatch(/ENV\['EXPO_USE_PRECOMPILED_MODULES'\]/)
+  })
+
   it('跑两次只插一次(prebuild 会反复跑)', () => {
     const once = injectGuard(PODFILE)
     expect(injectGuard(once)).toBe(once)
