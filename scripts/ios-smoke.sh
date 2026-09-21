@@ -31,8 +31,9 @@ for d in json.load(open(sys.argv[1]))['result']['devices']:
     if cp.get('pairingState')!='paired' or cp.get('tunnelState')=='unavailable': continue
     print(d['identifier'], hp.get('udid',''), d.get('deviceProperties',{}).get('name','?').replace(' ','_')); break
 PY
-)
-[ -n "${DEV:-}" ] || { echo "✗ 没有在线的 iPhone(插线 + 解锁,或 xcrun devicectl list devices 看 State)"; exit 1; }
+) || true   # ★没有匹配的设备时 read 读到 EOF 返回非零 —— 不兜住的话 set -e 会让脚本**一声不吭**地退出,
+            #  下面那句「没有在线的 iPhone」永远打印不出来(2026-09-21 实测:只剩一行 npm 的标题)。
+[ -n "${DEV:-}" ] || { echo "✗ 没有在线的 iPhone —— 解锁手机(长构建期间它会掉线,解锁或重插线就回来),再重跑。看状态:xcrun devicectl list devices"; exit 1; }
 echo "▸ 设备:${NAME} (${DEV})"
 
 # ── 签名前提:开发证书 + 描述文件里登记了这台设备。否则装不上,早说早好。
