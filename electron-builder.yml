@@ -6,15 +6,18 @@ directories:
 # asar disabled: the app spawns a separate forgeMcp.js as a child node process; keeping files
 # plain on disk avoids any asar-read edge cases for a local trial build.
 asar: false
-# Use the already-installed, working Electron from node_modules instead of letting
-# electron-builder re-download the framework (the GitHub-release download corrupts behind a
-# proxy — "extra bytes at beginning of zipfile"). This dist matches the devDep version (42.4.0).
+# ★★NO `electronDist` here — on purpose. Every packaging entry (scripts/build-mac-all.sh,
+# scripts/build-win.mjs) passes `-c.electronDist=<dir>` for the TARGET platform+arch, fetched by
+# scripts/electronDist.mjs and verified against Electron's official SHASUMS256.txt.
 #
-# NOTE this pins the dist to the BUILD HOST's platform+arch: `npm install` on Windows puts a win32
-# Electron here, on macOS a darwin one. So each platform's package must be built on that platform —
-# `npm run dist:win` belongs on the Windows machine. (The mac dual-arch build is the exception:
-# scripts/build-mac-all.sh overrides this per arch.)
-electronDist: node_modules/electron/dist
+# This used to pin `node_modules/electron/dist` — the BUILD HOST's Electron — to dodge a download that
+# corrupts behind a proxy ("extra bytes at beginning of zipfile"). The pin produced two kinds of broken
+# package whenever target ≠ host: mac → Windows died with ENOENT (no electron.exe to rename), and an
+# Intel mac → arm64 build went GREEN while shipping x86_64 binaries under an arm64 name. A checksum is
+# the real answer to a corrupting proxy: a bad download now fails loudly instead of being worked around.
+#
+# Running bare `npx electron-builder` without the flag makes electron-builder download Electron itself.
+# Don't — go through the npm scripts.
 # Skip @electron/rebuild entirely. Our ONLY native dep is node-pty, an N-API (node-addon-api) addon
 # that ships prebuilt binaries in prebuilds/<platform>-<arch>/. N-API is ABI-stable across
 # Node/Electron, so those prebuilds load in Electron as-is — no recompile needed. Rebuilding would
@@ -29,7 +32,7 @@ npmRebuild: false
 #     Gatekeeper 照样拦。`npm run dist` 一个字节都没变。
 #   · 配了 → afterPack 补签 electron-builder 认不出的独立二进制（node-pty 的 spawn-helper），
 #     afterSign 验收 + 公证 + 装订 .app，afterAllArtifactBuild 再公证 + 装订 dmg 本身。
-# 非 macOS 平台这三个钩子都是直接 return。
+# 另外 afterPack 在 Windows 上负责写 exe 的图标和版本信息（见 win.signAndEditExecutable）；其余平台直接 return。
 afterPack: ./scripts/afterPack.cjs
 afterSign: ./scripts/afterSign.cjs
 afterAllArtifactBuild: ./scripts/afterAllArtifactBuild.cjs
@@ -92,10 +95,10 @@ mac:
   category: public.app-category.developer-tools
 win:
   icon: build/icon.ico
-  # DELIBERATELY no `arch:` list. `electronDist` above pins the Electron binaries to the build host's
-  # architecture, so asking for two arches in one run would emit a second installer NAMED for the other
-  # arch but CONTAINING the host's binaries. (That exact mistake shipped a broken arm64 mac build once.)
-  # The arch comes from the CLI — `npm run dist:win` — and defaults to the host's.
+  # DELIBERATELY no `arch:` list. One run = one `-c.electronDist` = ONE architecture's binaries, so asking
+  # for two arches in one run would emit a second installer NAMED for the other arch but CONTAINING the
+  # first one's binaries. (That exact mistake shipped a broken arm64 mac build once.) The arch comes from
+  # the CLI — `npm run dist:win` / `npm run dist:win-arm64` — via scripts/build-win.mjs.
   target:
     - nsis
   # The updater picks a release asset by matching the arch in its FILENAME, so this pattern is part
@@ -103,7 +106,14 @@ win:
   artifactName: ${productName}-${version}-${arch}-setup.${ext}
   # No code-signing certificate (same position as macOS). SmartScreen will warn on first run until
   # the download builds reputation; signing is a separate purchase decision.
-  signAndEditExecutable: true
+  #
+  # ★false = electron-builder does NOT touch the exe: no icon/version edit, no signing. On a non-Windows
+  #  host that edit meant "download wine, run rcedit.exe under it" — slow, flaky (the 1.2.1 build only
+  #  got through on a retry after a cold-start timeout) and 25MB of downloads per fresh machine.
+  #  scripts/afterPack.cjs writes the icon + version info itself with resedit (pure JS, any host).
+  #  ★If a certificate is ever bought: sign in afterPack AFTER the resources are written — editing
+  #  resources after signing invalidates the signature.
+  signAndEditExecutable: false
 nsis:
   # A real installer, not one-click: the user picks the directory, and per-user install means no UAC
   # prompt — which matters because the app has no signature to show in that prompt.

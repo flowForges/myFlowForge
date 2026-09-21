@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
 # Build BOTH macOS dmgs (Intel x64 + Apple-Silicon arm64) in one shot.
 #
-# Why this exists: electron-builder.yml pins `electronDist` to the locally-installed Electron
-# (node_modules/electron/dist) to dodge a proxy-corrupted framework download. On an Intel machine
-# that local dist is x64, so a plain `electron-builder --arm64` would wrap x64 Electron in an
-# arm64-labelled dmg — a broken Apple-Silicon build. This script fetches the *matching-arch*
-# Electron framework from the npmmirror mirror into a cache dir and points electronDist at it for
-# the arm64 pass, so the arm64 app is genuinely native (verified below).
+# Why this exists: each arch's dmg must be built from THAT arch's Electron. Both passes get their
+# Electron from scripts/electronDist.mjs (npmmirror + verified against the official SHASUMS256.txt)
+# and pass it as -c.electronDist — electron-builder.yml deliberately pins nothing. The arch of each
+# resulting app is then checked from the binary itself (`file`), and a mismatch fails the build.
 #
 # Usage: npm run dist:mac-all   (or: bash scripts/build-mac-all.sh)
 set -euo pipefail
@@ -72,31 +70,19 @@ else
   echo "▸ 未配 APPLE_SIGN_IDENTITY → ad-hoc 签名（Gatekeeper 会拦，只适合自己用）"
 fi
 
-VER="$(node -p "require('electron/package.json').version")"
-MIRROR="https://npmmirror.com/mirrors/electron/${VER}"
-CACHE="${HOME}/.cache/myflowforge-electron/${VER}"
-
-fetch_dist() {   # $1 = arch (arm64|x64)
-  # NOTE: separate `local` statements — `local a=$1 b=${CACHE}/$a` expands $a before it's assigned,
-  # which trips `set -u` ("arch: unbound variable").
-  local arch="$1"
-  local dir="${CACHE}/${arch}"
-  if [ -x "${dir}/Electron.app/Contents/MacOS/Electron" ]; then echo "${dir}"; return; fi
-  mkdir -p "${dir}"
-  local zip="${CACHE}/electron-v${VER}-darwin-${arch}.zip"
-  echo "↓ fetching Electron ${VER} darwin-${arch}…" >&2
-  curl -fsSL --max-time 600 "${MIRROR}/electron-v${VER}-darwin-${arch}.zip" -o "${zip}"
-  unzip -q -o "${zip}" -d "${dir}"
-  echo "${dir}"
-}
+# ★★两个架构都取**对应架构**的 Electron,并按官方校验和验过(scripts/electronDist.mjs)。
+#  以前 x64 这一轮用的是 electron-builder.yml 里钉死的 node_modules/electron/dist(本机那份),
+#  那一行现在删了 —— 它正是「Intel 上打 arm64 包、构建全绿、里面是 x86_64」的根源。
+#  (失败时 electronDist.mjs 以非零退出,`set -e` 会让这里当场停下。)
+X64_DIST="$(node scripts/electronDist.mjs darwin x64)"
+ARM_DIST="$(node scripts/electronDist.mjs darwin arm64)"
 
 echo "▸ compiling renderer/main (electron-vite build)…"
 npm run build
 
-echo "▸ x64 dmg (local dist)…"
-npx electron-builder --mac --x64 "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}"
+echo "▸ x64 dmg (dist: ${X64_DIST})…"
+npx electron-builder --mac --x64 -c.electronDist="${X64_DIST}" "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}"
 
-ARM_DIST="$(fetch_dist arm64)"
 echo "▸ arm64 dmg (dist: ${ARM_DIST})…"
 npx electron-builder --mac --arm64 -c.electronDist="${ARM_DIST}" "${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"}"
 
@@ -118,10 +104,21 @@ if [ -n "${APPLE_SIGN_IDENTITY:-}" ]; then
 fi
 
 echo ""
+echo "▸ 验收:架构只认二进制本身(文件名说明不了任何事)"
+# ★以前这里只**打印** arm64 的架构,不判断 —— 打印出 x86_64 也照样绿着结束。现在两个都判,不对就失败。
+check_arch() {   # $1 = 目录名(mac|mac-arm64)  $2 = file 输出里应出现的架构
+  local bin="release/$1/myFlowForge.app/Contents/MacOS/myFlowForge"
+  [ -f "${bin}" ] || { echo "✗ 找不到 ${bin}"; exit 1; }
+  local got
+  got="$(file "${bin}" | sed 's/.*: //')"
+  case "${got}" in
+    *"$2"*) echo "  ✓ $1: ${got}" ;;
+    *) echo "✗ $1 的架构不对:${got}(应含 $2)"; exit 1 ;;
+  esac
+}
+check_arch mac x86_64
+check_arch mac-arm64 arm64
+
+echo ""
 echo "▸ built dmgs:"
 ls -1 release/*.dmg
-# Sanity-check the arm64 app is actually arm64 (not x64 mislabelled).
-APP="release/mac-arm64/myFlowForge.app/Contents/MacOS/myFlowForge"
-if [ -f "${APP}" ]; then
-  echo "▸ arm64 app arch: $(file "${APP}" | sed 's/.*: //')"
-fi

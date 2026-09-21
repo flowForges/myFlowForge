@@ -15,10 +15,11 @@
 // afterSign 可能根本不触发；afterPack 在 .app 组装完、dmg 还没打之前一定会跑。
 
 const { execFileSync } = require('node:child_process')
-const { join, basename } = require('node:path')
+const { join, basename, resolve } = require('node:path')
 const { existsSync } = require('node:fs')
 const { signingPlan, machOFilesUnder, signBinary } = require('./macSigning.cjs')
 const { verifyPackagedDeps } = require('./packagedDeps.cjs')
+const { applyWinResources } = require('./winResources.cjs')
 
 /** 打好的 app 里那个放 out/ 和 node_modules 的目录。mac 藏在 .app 里，其余平台在 resources/app。 */
 function appResourcesDir(context) {
@@ -36,6 +37,29 @@ exports.default = async function afterPack(context) {
   const appDir = appResourcesDir(context)
   if (existsSync(appDir)) verifyPackagedDeps(appDir)
   else console.warn(`[deps] 找不到 ${appDir}，跳过运行时依赖检查`)
+
+  // ── Windows:图标 + 版本信息(替代 electron-builder 那条「wine 跑 rcedit」的路,理由见 winResources.cjs)
+  //    ★写不进去就**让构建失败**。以前那条路失败时会重试、全部超时才报错,而一个没有图标、
+  //     属性里写着 "Electron" 的 exe 装上去照样能跑 —— 那是最难被发现的一类坏包。
+  if (context.electronPlatformName === 'win32') {
+    const info = context.packager.appInfo
+    const exeName = `${info.productFilename}.exe`
+    const exePath = join(context.appOutDir, exeName)
+    const icoPath = resolve(context.packager.info.projectDir, context.packager.platformSpecificBuildOptions.icon || 'build/icon.ico')
+    if (!existsSync(exePath)) throw new Error(`[afterPack] 找不到 ${exePath} —— electronDist 是不是给成了别的平台的 Electron?`)
+    if (!existsSync(icoPath)) throw new Error(`[afterPack] 找不到图标 ${icoPath}`)
+    applyWinResources(exePath, {
+      icoPath,
+      version: info.version,
+      productName: info.productName,
+      companyName: info.companyName || info.productName,
+      description: info.description || info.productName,
+      copyright: info.copyright,
+      exeName,
+    })
+    console.log(`[afterPack] ✓ ${exeName}:图标 + 版本 ${info.version} 已写入(resedit,不经 wine)`)
+    return
+  }
 
   if (context.electronPlatformName !== 'darwin') return
   const appName = `${context.packager.appInfo.productFilename}.app`
