@@ -4,9 +4,9 @@
 
 # myFlowForge
 
-**A cockpit for your AI coding agents — on your desk, on your servers, in your pocket.**
+**One GUI for native Claude Code, Codex, Cursor and more agents — manage them in one place, connect across devices.**
 
-A desktop cockpit that gathers **Claude Code, Codex, Cursor, Gemini, qoder, opencode, DeepSeek** and more into one place — so you can **swap agent and model mid-conversation**, **build across several projects in parallel**, shape the work with a **lightweight, manual-gear workflow**, weave your own **hooks** between stages, and reach the whole thing from **another machine or your phone**.
+myFlowForge invokes the official CLIs already installed on your machine (Claude Code, Codex, Cursor, Gemini, qoder, opencode, DeepSeek and others). It does not modify or replace the agents themselves; it only provides a unified GUI on top of them. It supports switching agents and models within the same session, importing native sessions, staged workflow execution and Codex native pets, and it can be accessed remotely from another computer, a server or a phone.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
@@ -23,264 +23,269 @@ A desktop cockpit that gathers **Claude Code, Codex, Cursor, Gemini, qoder, open
 
 <div align="center">
 
-<img src="assets/screenshots/home.jpg" alt="Home — workspaces, running agents and today's diff at a glance" width="90%" />
+<img src="assets/screenshots/home.jpg" alt="Home: workspaces, running agents and today's changes" width="90%" />
 
-<sub><b>Home</b> — pick up where you left off. Wallpaper, skin and accent are all yours to change.</sub>
+<sub><b>Home</b>: workspaces, running agents and today's changes. Wallpaper, skin and accent color are all customizable.</sub>
 
 </div>
 
 ---
 
-## What is myFlowForge?
+## Overview
 
-Every AI coding CLI lives in its own terminal, with its own session state, its own quota, and no idea the others exist. Pick one and you're married to it for the rest of the task.
+Each AI coding CLI runs in its own terminal. Sessions, quotas and configuration are not shared between them, and a task often ends up tied to a single tool.
 
-**myFlowForge puts them all under one roof.** The agent and the model are properties of *each turn*, not of the session — so you can think a design through with Claude Opus, hand the implementation to Codex, and drop to something cheap for the mop-up, all inside one conversation with the context intact.
+myFlowForge is a GUI layer on top of these CLIs, built on three principles:
 
-On top of that sits a **lightweight workflow**: not an assembly line that runs away from you, but a thin layer of structure over the same conversation. Every stage waits for you to press *Next*.
+- **Native integration**: agents are invoked through their official CLIs, using your own accounts, subscriptions and local configuration. myFlowForge does not fork or modify any agent, does not store API keys and does not proxy any requests. When an agent is upgraded, its new capabilities are available immediately.
+- **Unified management**: multiple agents, projects and sessions are managed in one interface, so tasks are no longer tied to a single tool.
+- **Multi-device connectivity**: the desktop app, the headless Linux daemon and the iOS / Android clients share the same workspaces and sessions, over direct LAN connection, SSH or an end-to-end encrypted relay.
 
-And none of it is stuck on one machine. The same cockpit **connects to another computer** — your Linux box, the desktop at the office — and drives *its* agents in *its* repos. From your phone, you can watch a run, answer a gate and keep the conversation going.
+> **Project status:** maintained by an individual and under active development. Installers are provided for macOS, Windows and Linux, along with an Android APK and iOS TestFlight. The macOS build is signed with a Developer ID and notarized by Apple, the Android build is signed with a release key, and the Windows build is not yet signed.
 
-> **Project status:** an actively developed personal project. macOS, Windows and Linux all ship packaged builds, and there's an Android APK for the phone client. The macOS builds are **Developer ID signed and notarized by Apple**, the Android package is signed with a real key; the Windows build is **not signed yet**.
+## Core Features
 
-## ✨ The six things it's really about
+### 1. Native agent integration
 
-### 1. A collection of agents, not a favourite one
+14 coding CLIs are supported: **Claude Code · Codex · Cursor · Gemini · qoder · opencode · Qwen · Copilot · Pi · Kimi · Reasonix · Trae · Antigravity · DeepSeek**.
 
-Fourteen coding CLIs coexist in one interface: **Claude Code · Codex · Cursor · Gemini · qoder · opencode · Qwen · Copilot · Pi · Kimi · Reasonix · Trae · Antigravity · DeepSeek**.
+myFlowForge drives the official CLIs that are installed and signed in on your machine, without changing their behavior. Model lists are read from each CLI's local configuration where available, with a preset list as the fallback. Models can also be added manually, and manually added models are not overwritten on refresh. CLIs that are not installed or not signed in are marked in Settings, with installation guidance.
 
-Model lists are **read from each CLI's real local configuration** — nothing hard-coded, so what you see is what your account can actually run. You can also add entries by hand, and they survive the next refresh. **opencode** is itself a multi-vendor gateway: wire it once, reach many.
+### 2. Switching agents and models within a session
 
-### 2. Switch agent and model inside one session
+The agent, model and permission level can be re-selected before every turn, and the context stays continuous:
 
-Agent, model and permission mode are three pickers sitting under the composer. Change any of them before your next message:
+- If a model is not performing well, you can continue with another model, which sees the entire conversation so far;
+- If one provider's quota runs out, you can switch to another without starting a new session;
+- You can assign models by the nature of the task, for example a more capable model for design and a lower-cost model for implementation and wrap-up.
 
-- One model stalls or drifts → switch and keep asking; it sees the conversation so far.
-- Out of quota with one provider → switch to another, same session.
-- Expensive model for the thinking, cheap model for the grunt work.
+Agents that support native session resume (Claude Code, Codex, Cursor, qoder, opencode, Antigravity) keep using their own session history; for other agents, myFlowForge reconstructs the context.
 
-Agents with native resume (Claude Code, Codex, Cursor, qoder, opencode) continue their own session history. For the rest, myFlowForge reconstructs the context. Either way you just keep talking.
+### 3. Multi-device connectivity
 
-### 3. Several projects, developed at the same time
+- **Remote hosts**: the desktop app can connect to another computer or server and drive the agents, repositories and terminal on that machine. The current host is switched from the status bar, and workspaces, sessions, git changes and the built-in terminal switch with it.
+- **Three connection methods**: direct LAN connection, SSH and end-to-end encrypted relay. The relay only forwards ciphertext and cannot read session content. It can be self-hosted (Node or Cloudflare Worker).
+- **Headless daemon**: run `myflowforge-daemon` on a Linux server; the `pair` command prints a pairing QR code in the terminal.
+- **Mobile**: the iOS and Android clients support viewing conversations in real time, handling permission prompts and plan approvals, viewing changes and diffs, creating workspaces, editing workflows and switching hosts.
+- **Device authorization**: each device uses its own pairing code and can be removed individually at any time. Revocation takes effect immediately.
 
-A workspace holds **many repos**. A stage can *fan out per project*: frontend, backend and SDK advance simultaneously, each driven by its own agent in its own **git worktree** so they never collide — and every diff lands in one Changes panel for review.
+### 4. Native session import
 
-Fan-out takes a subset too: analyse all five repos but write code in only two is a perfectly normal setup.
+Local Claude Code, Codex, Cursor and qoder session history is scanned read-only and imported as workspaces, where the conversations can be continued directly. The original data is not affected.
 
-### 4. A lightweight workflow — in manual gear
+### 5. Staged workflows
 
-Starting a workflow does **not** set it running to the end. It enters a conversational mode:
+Besides regular conversations, tasks can also be executed in stages. Once a workflow starts, the conversation enters stage mode:
 
-- A ribbon shows *step N of M · current stage · which agent is driving*.
-- The stage's agent works **in the chat in front of you** — output, tool calls and file writes all visible.
-- Not satisfied? Just keep talking. Follow-ups and corrections don't re-run the stage.
-- Happy? Press **Next**. Only then is the handoff written and the next agent brought in.
+- The top bar shows current progress (step N of M), the current stage and the responsible agent;
+- The agent for each stage works in the current conversation, and its output, tool calls and file changes are visible throughout;
+- After each stage finishes, you must confirm "Next" before it is handed off to the next stage. Follow-up questions and corrections do not trigger a rerun;
+- The design stage produces a complete markdown document (`forge-docs/design.md`), which serves as the contract that all downstream agents follow;
+- Stages with approval support **Approve**, **Reject** (redo with annotations) or **Ask**, and you can also roll back to an earlier stage.
 
-The Design stage writes a **real markdown document** (`forge-docs/design.md`), sectioned per project. That document — not a lossy summary — is the single cross-agent contract; downstream agents read the whole thing and focus on their own section.
+Each stage can be assigned its own agent, model and permission level. Workflows and stages can be customized, saved and reused.
 
-Gated stages stop and wait for you: **approve**, **send back** (your notes get pinned to the top, the previous output fed back as the baseline), or just **ask a question** without triggering a re-run. Realised late that the design was wrong? Jump back to an earlier stage and redo it.
+### 6. Parallel multi-project work
 
-### 5. Hooks between the stages
+A workspace can contain multiple repositories. A stage can **fan out by project**: frontend, backend and SDK are developed in parallel by separate agents, each in its own git worktree, and all changes are collected into a single changes panel for review. The fan-out can be limited to a subset of the repositories.
 
-A hook is a small step wedged **between** stages — where a stage is an agent doing real engineering, a hook is a chore taken care of along the way.
+### 7. Stage hooks
 
-Attach one **before the run**, **after any given stage**, or **after the whole run**: pull the latest code, sync the design doc to your wiki, run lint, update a board, send a notification.
+Hooks are auxiliary steps inserted between stages. They can be attached **before the run**, **after a given stage** or **after the run**, and are used for pulling code, syncing documentation, running lint, updating boards, sending notifications and similar tasks.
 
-Each hook runs as a **restricted micro-agent** at the workspace root — only the skills and tools it was given, plus the task and the artifacts produced upstream. It reports back in one line, and asks you directly when it hits something only a human can resolve. A failure **blocks** the pipeline and offers retry / skip / abort. Hooks live in a global library, independent of any slot: write once, attach anywhere.
+Each hook runs as a restricted sub-agent at the workspace root and can only use the skills and tools assigned to it. If a hook fails, the pipeline pauses and you can retry, skip or abort. Hooks are stored in a global library and can be reused in any workflow.
 
-### 6. Your machines, and your phone
+### 8. Desktop pet
 
-The host you're connected to is a **switch in the status bar**, next to the terminal button. Flip it and the workspace list, the sessions, the running agents, the git changes and the built-in terminal all become *that machine's*.
-
-- **Direct** over your LAN, or **SSH**, or through an **end-to-end encrypted relay** when the two machines can't see each other. The relay only ever moves ciphertext — it cannot read a session, and the room is derived from the daemon's public key.
-- On a headless Linux box, run the **daemon**: `myflowforge-daemon pair` prints a QR code right in the terminal. Scan it and you're paired.
-- The **phone client** (iOS & Android) is a real client, not a viewer: read the conversation as it streams, answer permission and plan gates, browse changed files, create a workspace, edit a workflow, switch host.
+The desktop pet follows the current screen, reflects agent status in real time and can pop up confirmation cards directly. **Codex native pets are supported**: pets can be installed from the codex-pets.net marketplace, and custom images are also supported. There is also a growth pet that develops gradually with usage time.
 
 ---
 
 <div align="center">
 
-<img src="assets/screenshots/workflow.jpg" alt="Stage composition — each stage picks its own agent and model; Develop fans out to two projects" width="90%" />
+<img src="assets/screenshots/workflow.jpg" alt="Stage orchestration: each stage selects its own agent and model, and the development stage fans out to two projects" width="90%" />
 
-<sub><b>Stage composition</b> — five stages, each with its own agent and model; <i>Develop</i> fans out across two repos.</sub>
+<sub><b>Stage orchestration</b>: five stages, each with its own agent and model; the <i>Develop</i> stage fans out to two repositories.</sub>
 
 </div>
 
 ---
 
-## 🤖 Supported coding agents
+## Supported Agents
 
 | Agent | Chat | Workflow | Native resume | MCP | Models |
-|-------|:----:|:--------:|:-------------:|:---:|--------|
-| **Claude Code** | ✅ | ✅ | ✅ | ✅ | discovered from CLI |
-| **Codex** | ✅ | ✅ | ✅ | ✅ | discovered from CLI |
-| **Cursor** | ✅ | ✅ | ✅ | ✅ | discovered from CLI |
-| **qoder** | ✅ | ✅ | ✅ | ✅ | discovered + custom list |
-| **opencode** | ✅ | ✅ | ✅ | ✅ | multi-vendor gateway |
-| **Gemini** | ✅ | ✅ | — | ✅ | preset list |
-| **Qwen** | ✅ | ✅ | — | ✅ | preset list |
-| **Copilot** | ✅ | ✅ | — | ✅ | preset list |
-| **Pi** | ✅ | ✅ | — | — | account default / custom |
+|------|:----:|:------:|:--------:|:---:|------|
+| **Claude Code** | ✅ | ✅ | ✅ | ✅ | Read from CLI |
+| **Codex** | ✅ | ✅ | ✅ | ✅ | Read from CLI |
+| **Cursor** | ✅ | ✅ | ✅ | ✅ | Read from CLI |
+| **qoder** | ✅ | ✅ | ✅ | ✅ | Read + custom |
+| **opencode** | ✅ | ✅ | ✅ | ✅ | Multi-vendor gateway |
+| **Gemini** | ✅ | ✅ | — | ✅ | Preset list |
+| **Qwen** | ✅ | ✅ | — | ✅ | Preset list |
+| **Copilot** | ✅ | ✅ | — | ✅ | Preset list |
+| **Pi** | ✅ | ✅ | — | — | Account default / custom |
 | **Kimi** | ✅ | ✅ | — | — | kimi-k2.5 · 256K |
 | **Reasonix** | ✅ | ✅ | — | — | deepseek-flash / reasoner |
-| **Trae** | ✅ | ✅ | — | — | account default (`/model` or `trae_cli.yaml`) |
-| **Antigravity** | ✅ | ✅ | ✅ | — | refreshed via `agy models` |
-| **DeepSeek** 🆕 | ✅ | ✅ | — | — | account default |
+| **Trae** | ✅ | ✅ | — | — | Account default (`/model` or `trae_cli.yaml`) |
+| **Antigravity** | ✅ | ✅ | ✅ | — | Refreshed via `agy models` |
+| **DeepSeek** | ✅ | ✅ | — | — | Account default |
 
-> **DeepSeek** is DeepSeek Harness — `npm install -g @deepseek-ai/dsh`. It picks a runtime shape by profile rather than a headless flag; myFlowForge drives the `headless` one, and the three permission tiers map onto its own `read-only` / `workspace-write` / `danger-full-access`. Give it a key with `dsh web` (Models page) or `DEEPSEEK_API_KEY`.
+> **DeepSeek** refers to DeepSeek Harness (`npm install -g @deepseek-ai/dsh`). myFlowForge uses its `headless` profile, and the three permission levels map to `read-only` / `workspace-write` / `danger-full-access`. The API key can be configured via `dsh web` (Models page) or the `DEEPSEEK_API_KEY` environment variable.
 >
-> **Trae** (ByteDance's TraeCode CLI) doesn't ship on npm — its official `install.sh` puts `traecli` in `~/.local/bin`, so make sure that's on your PATH. For unattended edits inside a workflow, run `traecli config edit` and set `permission_mode: bypass_permissions`.
+> **Trae** (ByteDance's TraeCode CLI) is not published on npm. Install it with the official `install.sh` into `~/.local/bin` and add that directory to PATH. To let it modify files unattended in workflows, run `traecli config edit` and set `permission_mode: bypass_permissions`.
 
-myFlowForge **stores no API keys and proxies no requests** — it drives the CLIs already installed and authenticated on your machine. Anything missing is flagged in Settings with install guidance, and Settings also tells you when a CLI is installed but not logged in.
-
-## 🔧 How a run is shaped
+## Workflow Execution
 
 ```
-   You describe the goal
-            │
-            ▼
-  ┌─ hook ─┐        ┌─ hook ─┐                    ┌─ hook ─┐
-  │ before │        │  after │                    │  after │
-  │  run   │        │ design │                    │  run   │
-  └───┬────┘        └───┬────┘                    └───┬────┘
-      ▼                 ▼                             ▼
- 📋 Requirement → 🎨 Design → ✋ GATE → 💻 Develop → 🧪 Test → 🔍 Review
-   (clarify)     (design.md)  you decide  (fan out)  (verify)  (multi-lens)
-                      │                       │
-                      │                       └─ one agent per project,
-                      │                          parallel lanes, own worktree
-                      └─ a real document, read in full by every downstream agent
+   Describe the goal
+       │
+       ▼
+  ┌── hook ─┐ ┌─── hook ────┐                                ┌── hook ──┐
+  │ pre-run │ │ post-design │                                │ post-run │
+  └────┬────┘ └──────┬──────┘                                └────┬─────┘
+       ▼             ▼                                            ▼
+  Requirements ──→ Design ──→ Approval ──→ Develop ──→ Test ──→ Review
+   (clarify)    (design.md)   (human)    (fan-out)  (verify) (multi-lens)
+                     │                        │
+                     │                        └─ one agent per project,
+                     │                           in parallel, each in its own worktree
+                     └─ full document; every downstream agent reads all of it
 
- Every arrow waits for you to press "Next". Stages can be added, removed,
- reordered or skipped — running just Requirement → Develop is perfectly valid.
+ A "Next" confirmation is required between every two stages. Stages can be
+ added, removed, reordered or skipped, e.g. run only "Requirements → Develop".
 ```
 
-Three ways to start one, all landing on the same gate:
+There are three ways to start a workflow:
 
-1. Press **Start** in the Workflow panel.
-2. Type `/` in the composer and pick one.
-3. Describe a full development task in plain language — the main agent recognises it and raises a plan gate through MCP. Questions, discussion and one-line fixes don't trip it.
+1. Click **Start** in the workflow panel;
+2. Type `/` in the input box and select a workflow;
+3. Describe a development task in natural language; the main agent recognizes it and initiates a plan approval via MCP. General questions, discussions and small changes do not trigger this.
 
-## 📱 Remote hosts & the phone client
+## Remote Hosts and Mobile
 
-One app, several machines. Pick the host from the status bar and everything follows it.
-
-| | |
+| Method | Description |
 |---|---|
-| **Direct** | Same LAN, straight to the daemon's port. Token-authenticated. |
-| **SSH** | Reuses an SSH login you already have — nothing new to open. |
-| **Relay** | For machines that can't see each other. **End-to-end encrypted**: fresh keys per session, the relay only forwards ciphertext, and an unreadable frame is dropped rather than trusted. Run your own (`relay/`, Node or a Cloudflare Worker) — deployment steps are in `relay/README.md`. |
+| **Direct** | Connects directly to the daemon port on the same LAN, with token authentication. |
+| **SSH** | Reuses an existing SSH login; no additional ports need to be opened. |
+| **Relay** | For cases where the two machines cannot reach each other directly. **End-to-end encrypted**: a new key is negotiated for each session, the relay only forwards ciphertext, and any frame that cannot be decrypted is dropped. It can be self-hosted (`relay/`, supporting Node and Cloudflare Worker); see `relay/README.md` for the steps. |
 
-**The Linux daemon** is the same codebase without the window — install the tarball, run it under systemd, and pair by scanning the QR code it prints in the terminal (`docs/linux-deploy.md`).
+The **Linux daemon** shares the same codebase as the desktop app, with the window layer removed. Install the tar.gz, run it under systemd, and scan the QR code printed in the terminal to complete pairing (see `docs/linux-deploy.md`).
 
-**The phone client** covers the parts you actually need away from the desk: the live conversation with streaming thinking, tool cards and sub-agent cards; permission and plan gates you can answer; changed files and diffs; workspace creation; the workflow template library; host switching and QR pairing. Markdown, tables and local images render natively — remote image addresses stay as links on purpose, so an agent's output can never turn your phone into a tracking beacon.
+The **mobile app** covers the common operations needed while away from the computer: real-time conversation (including reasoning, tool calls and sub-agent cards), permission prompts and plan approvals, changed files and diffs, creating workspaces, workflow templates, switching hosts and pairing by QR code. Markdown, tables and local images are rendered natively; for privacy, remote image URLs are kept as links and are not loaded automatically.
 
-## 🧩 Also in the box
+## More Features
 
-- **Native session import** — read-only scan of your local Claude / Codex / Cursor / qoder history; import as a workspace and continue.
-- **MCP bridge** — a built-in Forge MCP server lets agents call back into the app: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. Injected into the agents that support MCP; the rest fall back to a text directive.
-- **MCP servers & add-ons** — see which MCP servers each CLI has configured, authorise or revoke them from the app, and browse a skills market to install skills into the CLIs that read them.
-- **Memory** — per-workspace notes the agents can read back, so long-running work keeps its own thread.
-- **Real-time observability** — streaming thinking / tool calls / file changes / raw output, a filterable log console, run history, and cross-project change evidence.
-- **Token usage & quota** — remaining quota and reset times per provider, plus spend by workspace × agent × day.
-- **Bot bridge** — answer gates, check results, start a conversation and drive workflows from **DingTalk**, **Telegram** or **Feishu** on your phone.
-- **Permission modes** — read-only · workspace-auto (default) · full access, per session or per stage. Mapped onto each CLI's real sandbox scope, and the UI says plainly which agents actually honour it.
-- **Slash commands, skills & plugins** — `/` surfaces your real on-disk commands and installed skills, filtered per agent.
-- **Custom workflows** — the process is yours to assemble: save as many named workflows as you like, each with its own stage set; every stage picks its agent, model, permission mode, fan-out shape, whether it gates and whether it must produce a document.
-- **Custom stages** — a global library of your own stages, referenced by any workflow.
-- **File browser & diff** — full-screen tree with change markers, syntax-highlighted preview, diff-or-full toggle.
-- **Built-in terminal** — a real pty rooted in the workspace, with per-provider proxy and timezone settings. Connected to a remote host, it opens a shell **on that machine**.
-- **Desktop pet** — follows your focused screen, previews agent activity, pops confirmation cards; browse the pet market or bring your own images.
-- **Growth pet** — the desktop pet grows through stages as you work, so long sessions leave something visible behind.
-- **Transparency & frosted glass** — one blur slider takes the whole window from fully opaque through three native macOS vibrancy materials, so your desktop shows through.
-- **Personalisation** — 6 original skins, 12 accent colours, a 300+ image wallpaper gallery or your own picture, exact-pixel font sizes for app and chat independently, light and dark contrast-tuned separately.
-- **Wallpaper-driven theming** — turn it on and the whole palette is derived from whatever wallpaper you picked, light or dark decided by the image itself. The wallpaper only ever contributes two hues; every lightness and chroma step is copied from the hand-tuned skins, so a busy picture can't produce an unreadable interface. Prefer your own accent? Pick one and only the accent stops following.
-- **Images and inline visuals in chat** — an image an agent produces on disk renders in the reply, click to view full size. HTML fragments written mid-answer can render as real cards, tables and diagrams (off by default). Never `innerHTML` — the fragment is parsed and rebuilt from a constructive allow-list, and colours may only come from theme tokens, so rendered content follows your skin instead of fighting it.
+- **MCP bridge**: a built-in Forge MCP server that agents use to call back into the app: `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. It is injected automatically for agents that support MCP; others fall back to text instructions.
+- **MCP servers and skill marketplace**: view the MCP servers configured for each CLI and authorize them within the app; install skills for the corresponding CLI from the skill marketplace.
+- **Memory**: notes saved per workspace that agents can read, so long-running tasks keep their context.
+- **Run observability**: streams reasoning, tool calls, file changes and raw output, with filterable logs, run history and a cross-project change record.
+- **Quota and usage**: remaining quota and reset time for each provider, plus usage statistics by workspace, agent and date.
+- **Bot bridge**: handle approvals, view results, start conversations and drive workflows from DingTalk, Telegram or Feishu.
+- **Permission levels**: read-only review, auto (workspace, default) and full access, configurable per session or per stage and mapped to each CLI's actual sandbox scope.
+- **Slash commands and skills**: typing `/` lists the commands and installed skills that actually exist on the machine, filtered by agent.
+- **File browser and diff**: full-screen file tree with change markers, syntax-highlighted preview, and switching between diff and full-file views.
+- **Built-in terminal**: a real pty rooted at the workspace, with proxy and time zone configurable per provider; when connected to a remote host, the terminal runs on the remote machine.
+- **Appearance**: 6 original skins, 12 accent colors and more than 300 wallpapers, with support for custom images; separate font sizes for the app and the conversation area; color schemes generated automatically from the wallpaper; support for native macOS vibrancy materials.
+- **Images and visualizations in conversations**: local images generated by agents are displayed directly in replies; HTML fragments in replies can be rendered as cards, tables and diagrams (off by default, rebuilt through an allowlist, without `innerHTML`).
 
-## 📥 Download & install
+## Download and Installation
 
-Grab the latest build from the [**Releases**](https://github.com/flowForges/myFlowForge/releases) page:
+Download the latest version from the [**Releases**](https://github.com/flowForges/myFlowForge/releases) page:
 
 | Platform | File |
-|----------|------|
-| macOS · Apple Silicon (M1–M4) | `myFlowForge-<version>-arm64.dmg` |
+|------|------|
+| macOS · Apple silicon (M1–M4) | `myFlowForge-<version>-arm64.dmg` |
 | macOS · Intel | `myFlowForge-<version>.dmg` |
 | Windows · x64 | `myFlowForge-<version>-x64-setup.exe` |
+| Windows · ARM | `myFlowForge-<version>-arm64-setup.exe` |
 | Android | `myFlowForge-<version>.apk` |
 | Linux · headless daemon | `myFlowForge-daemon-<version>-linux.tar.gz` |
+| iOS | TestFlight (invitation only) |
 
-> **macOS** builds are signed and notarized — download, double-click, done. No more "is damaged".
-> **Windows** builds aren't signed yet, so SmartScreen will stop you once: **More info → Run anyway**.
+> The **macOS** installer is signed and notarized and can be installed directly.
+> The **Windows** installer is not yet signed; when SmartScreen shows a warning, choose "More info → Run anyway".
 >
-> myFlowForge checks the same Releases feed and tells you in-app when a new version is out.
+> The app includes an update check and notifies you in the app when a new version is released.
 
-**iOS** ships through TestFlight (invite-only for now — your Apple ID has to be added to the tester list). You can also build it from `mobile/` with your own Apple ID and install over a cable.
+**iOS** is currently distributed through TestFlight (invitation only). You can also build and install it yourself from the `mobile/` directory with your own Apple ID.
 
-## 🚀 Getting started
+## Quick Start
 
-**Prerequisites:** macOS 11+ / Windows 10+ / a modern Linux, Node.js ≥ 20, git, and at least one supported coding CLI installed and authenticated.
+**Requirements:** macOS 11+ / Windows 10+ / a mainstream Linux distribution, Node.js ≥ 20, git, and at least one coding CLI that is installed and signed in.
 
 ```bash
 git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
 npm install
-npm run dev          # dev mode with renderer hot reload
+npm run dev          # development mode, hot reload for the renderer
 ```
 
-| Command | What it does |
-|---------|--------------|
-| `npm run dev` | Start with hot reload |
+| Command | Description |
+|------|------|
+| `npm run dev` | Start in development mode (hot reload) |
 | `npm test` | Run the full test suite (Vitest) |
-| `npm run typecheck` | Type-check both main & renderer tsconfigs |
-| `npm run build` | Build the production bundle |
-| `npm run dist:mac-all` | Build both Intel and Apple Silicon `.dmg`s |
-| `npm run dist:win` | Build the Windows x64 installer |
-| `npm run check:daemon` | Exercise the headless daemon end to end |
+| `npm run typecheck` | Check both the main-process and renderer tsconfigs |
+| `npm run build` | Production build |
+| `npm run dist:mac-all` | Package both Intel and Apple silicon `.dmg` files |
+| `npm run dist:win` | Package the Windows x64 installer |
+| `npm run check:daemon` | End-to-end verification of the headless daemon |
 
-The phone client lives in `mobile/` (Expo / React Native) and the relay in `relay/`; both have their own `package.json`.
+The mobile app is in `mobile/` (Expo / React Native) and the relay service is in `relay/`, each with its own `package.json`.
 
-Artifacts land in `release/`. Changes under `src/main/**` need a **full Electron restart** — hot reload only refreshes the renderer.
+Build output goes to `release/`. After changing `src/main/**`, Electron must be fully restarted; hot reload only applies to the renderer.
 
-## 🏗️ Tech stack
+## Tech Stack
 
-**Shell:** [Electron](https://www.electronjs.org/) 42 + [electron-vite](https://electron-vite.org/) · **UI:** [React](https://react.dev/) 19 + TypeScript 6 · **Phone:** [Expo](https://expo.dev/) + [React Native](https://reactnative.dev/) · **Terminal:** [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty) · **Agent bridge:** [Model Context Protocol SDK](https://modelcontextprotocol.io/) · **Process control:** [execa](https://github.com/sindresorhus/execa) · **Validation:** [zod](https://zod.dev/) · **File watching:** [chokidar](https://github.com/paulmillr/chokidar) · **Testing:** [Vitest](https://vitest.dev/) + Testing Library · **Packaging:** [electron-builder](https://www.electron.build/)
+| Category | Technology |
+|------|------|
+| Desktop shell | [Electron](https://www.electronjs.org/) 42 · [electron-vite](https://electron-vite.org/) |
+| UI | [React](https://react.dev/) 19 · TypeScript 6 |
+| Mobile | [Expo](https://expo.dev/) · [React Native](https://reactnative.dev/) |
+| Terminal | [xterm.js](https://xtermjs.org/) · [node-pty](https://github.com/microsoft/node-pty) |
+| Agent bridge | [Model Context Protocol SDK](https://modelcontextprotocol.io/) |
+| Process control | [execa](https://github.com/sindresorhus/execa) |
+| Data validation | [zod](https://zod.dev/) |
+| File watching | [chokidar](https://github.com/paulmillr/chokidar) |
+| Testing | [Vitest](https://vitest.dev/) · Testing Library |
+| Packaging | [electron-builder](https://www.electron.build/) |
 
-## 📁 Project structure
+## Project Structure
 
 ```
 src/
 ├── main/              # Electron main process
-│   ├── agents/        # CLI adapters + provider registry, detection, permissions
-│   ├── run/           # Workflow engine: stages, gates, fan-out, hooks, handoffs
-│   ├── chat/          # Per-workspace chat, queue, memory
+│   ├── agents/        # CLI adapters, provider registry, detection and permissions
+│   ├── run/           # Workflow engine: stages, approvals, fan-out, hooks, handoff
+│   ├── chat/          # Workspace conversations, queue and memory
 │   ├── mcp/           # Forge MCP server (agent → app bridge)
-│   ├── remote/        # Remote hosts: direct / SSH / relay, routing, E2E channel
-│   ├── daemon/        # Headless daemon + terminal QR pairing
-│   ├── bot/           # Bot bridge (DingTalk / Telegram / Feishu transports)
-│   ├── plugins/       # Plugin host, catalog, scheduler, extension points
-│   ├── sessionImport/ # Native session scanning & import
-│   ├── usage/         # Provider quota adapters
+│   ├── remote/        # Remote hosts: direct / SSH / relay, routing, E2E encrypted channel
+│   ├── daemon/        # Headless daemon and terminal QR code pairing
+│   ├── bot/           # Bot bridge (DingTalk / Telegram / Feishu)
+│   ├── plugins/       # Plugin host, catalog, scheduling and extension points
+│   ├── sessionImport/ # Native session scanning and import
+│   ├── usage/         # Per-provider quota adapters
 │   ├── pet/           # Desktop pet window
-│   └── ...            # git, fs, terminal, update, watcher, windows, appearance
-├── renderer/          # React UI (views, components, settings, theme, pet)
+│   └── ...            # git, file system, terminal, updates, watching, windows, appearance
+├── renderer/          # React UI (views, components, settings, themes, pets)
 ├── preload/           # Context-isolated IPC bridge
-└── shared/            # Types & pure logic shared across processes
-mobile/                # iOS & Android client (Expo / React Native)
+└── shared/            # Types and pure logic shared across processes
+mobile/                # iOS and Android clients (Expo / React Native)
 relay/                 # End-to-end encrypted relay (Node or Cloudflare Worker)
 ```
 
-## 🤝 Contributing
+## Contributing
 
-Issues and PRs are welcome. The project is **test-driven** — please add or update tests with your changes and make sure `npm test` and `npm run typecheck` pass before opening a PR.
+Issues and PRs are welcome. The project follows test-driven development; when submitting changes, please add or update the corresponding tests and make sure `npm test` and `npm run typecheck` pass.
 
-## 📄 License
+## License
 
-Released under the [MIT License](LICENSE) © 2026 zghua.
+[MIT License](LICENSE) © 2026 zghua
 
-## 🙏 Acknowledgements
+## Acknowledgements
 
-Built on the open-source ecosystem around Electron, React, Vite and the Model Context Protocol — and on the coding agents it orchestrates.
+Thanks to open-source projects including Electron, React, Vite and Model Context Protocol, and to the coding agents this project integrates with.
 
-## 🔗 Links
+## Links
 
-- [LINUX DO](https://linux.do/latest) — a community of developers who like to tinker
+- [LINUX DO](https://linux.do/latest): developer community
+- [V2EX](https://www.v2ex.com/): a community of creative workers

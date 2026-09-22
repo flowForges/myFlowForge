@@ -4,9 +4,9 @@
 
 # myFlowForge
 
-**Un poste de pilotage pour vos agents de code IA — sur votre bureau, sur vos serveurs, dans votre poche.**
+**Une seule GUI pour les agents natifs Claude Code, Codex, Cursor et d'autres : gestion centralisée, connexion entre appareils.**
 
-Un poste de pilotage de bureau qui réunit **Claude Code, Codex, Cursor, Gemini, qoder, opencode, DeepSeek** et bien d'autres en un seul endroit — pour **changer d'agent et de modèle en pleine conversation**, **développer plusieurs projets en parallèle**, cadrer le travail avec un **workflow léger, en boîte manuelle**, tisser vos propres **hooks** entre les étapes, et rejoindre le tout depuis **une autre machine ou votre téléphone**.
+myFlowForge appelle directement les CLI officielles installées sur la machine (Claude Code, Codex, Cursor, Gemini, qoder, opencode, DeepSeek, etc.). Il ne modifie ni ne remplace les agents eux-mêmes et se limite à fournir une GUI unifiée par-dessus. Il permet de changer d'agent et de modèle au sein d'une même session, d'importer des sessions natives, d'exécuter des workflows par étapes, prend en charge les compagnons natifs de Codex, et accepte les connexions à distance depuis un autre ordinateur, un serveur ou un téléphone.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Electron](https://img.shields.io/badge/Electron-42-47848F?logo=electron&logoColor=white)
@@ -23,264 +23,271 @@ Un poste de pilotage de bureau qui réunit **Claude Code, Codex, Cursor, Gemini,
 
 <div align="center">
 
-<img src="assets/screenshots/home.jpg" alt="Accueil — espaces de travail, agents en cours et diff du jour en un coup d'œil" width="90%" />
+<img src="assets/screenshots/home.jpg" alt="Accueil : espaces de travail, agents en cours d'exécution et modifications du jour" width="90%" />
 
-<sub><b>Accueil</b> — reprenez là où vous vous étiez arrêté. Fond d'écran, habillage et couleur d'accent sont à vous de régler.</sub>
+<sub><b>Accueil</b> : espaces de travail, agents en cours d'exécution et modifications du jour. Le fond d'écran, le thème et la couleur d'accentuation sont personnalisables.</sub>
 
 </div>
 
 ---
 
-## Qu'est-ce que myFlowForge ?
+## Présentation
 
-Chaque CLI de code IA vit dans son propre terminal, avec son propre état de session, son propre quota, et sans savoir que les autres existent. Choisissez-en un et vous lui êtes marié pour tout le reste de la tâche.
+Chaque CLI de codage IA s'exécute dans son propre terminal. Les sessions, les quotas et les configurations ne sont pas partagés entre elles, et une tâche se retrouve souvent liée à un seul outil.
 
-**myFlowForge les réunit tous sous un même toit.** L'agent et le modèle sont des propriétés de *chaque tour de parole*, pas de la session — vous pouvez donc mûrir une conception avec Claude Opus, confier l'implémentation à Codex, et passer à quelque chose de bon marché pour les finitions, le tout dans une seule conversation, contexte intact.
+myFlowForge se positionne comme une couche GUI au-dessus de ces CLI et suit trois principes :
 
-Par-dessus vient un **workflow léger** : pas une chaîne de montage qui vous échappe, mais une fine couche de structure posée sur la même conversation. Chaque étape attend que vous appuyiez sur *Suivant*.
+- **Intégration native** : les agents sont appelés via leurs CLI officielles, avec votre propre compte, votre abonnement et votre configuration locale. Aucun fork ni modification des agents, aucune clé API stockée, aucune requête relayée. Lorsqu'un agent est mis à jour, ses nouvelles fonctionnalités sont utilisables immédiatement.
+- **Gestion unifiée** : plusieurs agents, projets et sessions sont gérés dans une même interface, et les tâches ne sont plus liées à un outil unique.
+- **Connexion multi-appareils** : l'application de bureau, le daemon Linux sans interface et les clients iOS / Android partagent les mêmes espaces de travail et sessions, via connexion directe en réseau local, SSH ou relais chiffré de bout en bout.
 
-Et rien de tout cela n'est cloué à une seule machine. Le même poste de pilotage **se connecte à un autre ordinateur** — votre machine Linux, le poste du bureau — et pilote *ses* agents dans *ses* dépôts. Depuis votre téléphone, vous pouvez suivre une exécution, répondre à une porte et poursuivre la conversation.
+> **État du projet :** maintenu par une seule personne, en développement actif. Des paquets d'installation sont fournis pour macOS, Windows et Linux, ainsi qu'un APK Android et une version iOS via TestFlight. Le paquet macOS est signé avec un Developer ID et notarié par Apple, le paquet Android est signé avec une clé de production, et le paquet Windows n'est pas encore signé.
 
-> **État du projet :** un projet personnel activement développé. macOS, Windows et Linux disposent tous de builds packagés, et il existe un APK Android pour le client mobile. Les builds macOS sont **signés avec un Developer ID et notarisés par Apple**, le paquet Android est signé avec une vraie clé ; celui de Windows **n'est pas encore signé**.
+## Fonctionnalités principales
 
-## ✨ Les six choses qui comptent vraiment
+### 1. Intégration native des agents
 
-### 1. Une collection d'agents, pas un favori
+14 CLI de codage sont prises en charge : **Claude Code · Codex · Cursor · Gemini · qoder · opencode · Qwen · Copilot · Pi · Kimi · Reasonix · Trae · Antigravity · DeepSeek**.
 
-Quatorze CLI de code cohabitent dans une seule interface : **Claude Code · Codex · Cursor · Gemini · qoder · opencode · Qwen · Copilot · Pi · Kimi · Reasonix · Trae · Antigravity · DeepSeek**.
+myFlowForge pilote les CLI officielles installées et connectées sur la machine, sans en modifier le comportement. La liste des modèles est lue en priorité depuis la configuration locale de chaque CLI, avec une liste prédéfinie à défaut ; des modèles peuvent aussi être ajoutés manuellement et ne sont alors pas écrasés lors des actualisations. Les CLI non installées ou non connectées sont signalées dans les paramètres, avec des instructions d'installation.
 
-Les listes de modèles sont **lues dans la configuration locale réelle de chaque CLI** — rien n'est codé en dur, donc ce que vous voyez est ce que votre compte peut réellement exécuter. Vous pouvez aussi ajouter des entrées à la main, et elles survivent au rafraîchissement suivant. **opencode** est lui-même une passerelle multi-fournisseurs : câblez-le une fois, atteignez-en beaucoup.
+### 2. Changer d'agent et de modèle dans une même session
 
-### 2. Changer d'agent et de modèle au sein d'une même session
+L'agent, le modèle et le niveau d'autorisation peuvent être choisis à nouveau avant chaque tour de conversation, sans perte de contexte :
 
-L'agent, le modèle et le mode de permission sont trois sélecteurs placés sous le champ de saisie. Changez-en un avant votre prochain message :
+- si un modèle donne de mauvais résultats, il est possible de poursuivre avec un autre, qui voit l'intégralité de la conversation précédente ;
+- si le quota d'un fournisseur est épuisé, il est possible de passer à un autre sans ouvrir de nouvelle session ;
+- les modèles peuvent être attribués selon la nature de la tâche, par exemple un modèle plus performant pour la conception et un modèle moins coûteux pour l'implémentation et la finalisation.
 
-- Un modèle cale ou dérive → changez et continuez à demander ; il voit la conversation jusqu'ici.
-- Plus de quota chez un fournisseur → passez à un autre, même session.
-- Modèle coûteux pour la réflexion, modèle bon marché pour la corvée.
+Les agents qui prennent en charge la reprise native (Claude Code, Codex, Cursor, qoder, opencode, Antigravity) conservent leur propre historique de session ; pour les autres, myFlowForge reconstruit le contexte.
 
-Les agents dotés d'une reprise native (Claude Code, Codex, Cursor, qoder, opencode) poursuivent leur propre historique de session. Pour les autres, myFlowForge reconstruit le contexte. Dans les deux cas, vous continuez simplement à parler.
+### 3. Connexion multi-appareils
 
-### 3. Plusieurs projets développés en même temps
+- **Hôtes distants** : l'application de bureau peut se connecter à un autre ordinateur ou à un serveur et piloter les agents, dépôts et terminaux de cette machine. L'hôte actif se choisit dans la barre d'état ; les espaces de travail, les sessions, les modifications git et le terminal intégré suivent ce choix.
+- **Trois modes de connexion** : connexion directe en réseau local, SSH, relais chiffré de bout en bout. Le relais ne transmet que des données chiffrées et ne peut pas lire le contenu des sessions ; il peut être auto-hébergé (Node ou Cloudflare Worker).
+- **Daemon sans interface** : `myflowforge-daemon` s'exécute sur un serveur Linux, et la commande `pair` affiche un QR code d'appairage dans le terminal.
+- **Mobile** : les clients iOS et Android permettent de suivre les conversations en temps réel, de traiter les demandes d'autorisation et les validations de conception, de consulter les modifications et les diffs, de créer des espaces de travail, de modifier des workflows et de changer d'hôte.
+- **Autorisation des appareils** : chaque appareil utilise son propre code d'appairage et peut être retiré individuellement à tout moment ; la révocation prend effet immédiatement.
 
-Un espace de travail contient **plusieurs dépôts**. Une étape peut *se déployer en éventail par projet* : frontend, backend et SDK avancent simultanément, chacun piloté par son propre agent dans son propre **git worktree**, si bien qu'ils n'entrent jamais en collision — et chaque diff atterrit dans un unique panneau Changements pour la relecture.
+### 4. Import des sessions natives
 
-Le déploiement en éventail accepte aussi un sous-ensemble : analyser les cinq dépôts mais n'écrire du code que dans deux est une configuration parfaitement normale.
+Les historiques de sessions locaux de Claude Code, Codex, Cursor et qoder sont analysés en lecture seule et importés en tant qu'espaces de travail, dans lesquels la conversation peut reprendre directement, sans affecter les données d'origine.
 
-### 4. Un workflow léger — en boîte manuelle
+### 5. Workflows par étapes
 
-Démarrer un workflow ne le lance **pas** jusqu'au bout. Cela entre dans un mode conversationnel :
+En plus de la conversation classique, une tâche peut être exécutée par étapes. Une fois le workflow lancé, la conversation passe en mode étapes :
 
-- Un bandeau affiche *étape N sur M · étape en cours · quel agent pilote*.
-- L'agent de l'étape travaille **dans le chat, devant vous** — sortie, appels d'outils et écritures de fichiers, tout est visible.
-- Pas satisfait ? Continuez simplement à parler. Les relances et les corrections ne relancent pas l'étape.
-- Content ? Appuyez sur **Suivant**. Ce n'est qu'alors que la passation est écrite et que l'agent suivant entre en scène.
+- la progression (étape N sur M), l'étape en cours et l'agent responsable sont affichés en haut ;
+- l'agent de l'étape travaille dans la conversation en cours, et ses sorties, appels d'outils et modifications de fichiers restent visibles en permanence ;
+- à la fin de chaque étape, le passage à l'étape suivante n'a lieu qu'après confirmation par « Suivant » ; les questions complémentaires et les corrections ne déclenchent pas de réexécution ;
+- l'étape de conception produit un document markdown complet (`forge-docs/design.md`), qui sert de contrat commun à tous les agents en aval ;
+- les étapes soumises à validation proposent **Approuver**, **Renvoyer** (à refaire avec des annotations) ou **Poser une question**, et il est possible de revenir à une étape précédente.
 
-L'étape Conception écrit un **vrai document markdown** (`forge-docs/design.md`), découpé en sections par projet. Ce document — et non un résumé qui perd de l'information — est le contrat unique entre agents ; les agents en aval le lisent en entier et se concentrent sur leur propre section.
+L'agent, le modèle et le niveau d'autorisation peuvent être définis séparément pour chaque étape. Les workflows et les étapes sont personnalisables et peuvent être enregistrés pour être réutilisés.
 
-Les étapes à porte s'arrêtent et vous attendent : **approuver**, **renvoyer** (vos remarques sont épinglées en haut, la sortie précédente réinjectée comme référence), ou simplement **poser une question** sans déclencher de relance. Vous réalisez tard que la conception était mauvaise ? Revenez à une étape antérieure et refaites-la.
+### 6. Plusieurs projets en parallèle
 
-### 5. Des hooks entre les étapes
+Un espace de travail peut contenir plusieurs dépôts. Une étape peut être **répartie par projet** : le frontend, le backend et le SDK sont développés en parallèle par des agents distincts, chacun dans son propre git worktree, et toutes les modifications sont regroupées dans un même panneau de revue. La répartition peut ne porter que sur une partie des dépôts.
 
-Un hook est un petit pas glissé **entre** les étapes — là où une étape est un agent qui fait de la vraie ingénierie, un hook est une corvée réglée au passage.
+### 7. Hooks d'étape
 
-Attachez-en un **avant l'exécution**, **après une étape donnée**, ou **après toute l'exécution** : récupérer le dernier code, synchroniser le document de conception vers votre wiki, lancer le lint, mettre à jour un tableau, envoyer une notification.
+Un hook est une étape auxiliaire insérée entre les étapes. Il peut être placé **avant l'exécution**, **après une étape donnée** ou **après l'exécution**, et sert par exemple à récupérer du code, synchroniser de la documentation, lancer un lint, mettre à jour un tableau de suivi ou envoyer une notification.
 
-Chaque hook s'exécute comme un **micro-agent restreint** à la racine de l'espace de travail — uniquement les compétences et les outils qui lui ont été donnés, plus la tâche et les artefacts produits en amont. Il rend compte en une ligne, et vous interroge directement lorsqu'il tombe sur quelque chose que seul un humain peut résoudre. Un échec **bloque** le pipeline et propose réessayer / passer / abandonner. Les hooks vivent dans une bibliothèque globale, indépendante de tout emplacement : écrivez une fois, attachez partout.
+Chaque hook s'exécute comme un sous-agent restreint à la racine de l'espace de travail et ne peut utiliser que les compétences et outils qui lui sont attribués. En cas d'échec, le pipeline se met en pause et propose de réessayer, d'ignorer ou d'abandonner. Les hooks sont enregistrés dans une bibliothèque globale et réutilisables dans n'importe quel workflow.
 
-### 6. Vos machines, et votre téléphone
+### 8. Compagnon de bureau
 
-L'hôte auquel vous êtes connecté est un **commutateur dans la barre d'état**, à côté du bouton du terminal. Basculez-le et la liste des espaces de travail, les sessions, les agents en cours, les changements git et le terminal intégré deviennent tous ceux *de cette machine*.
-
-- **Direct** sur votre réseau local, ou **SSH**, ou via un **relais chiffré de bout en bout** quand les deux machines ne se voient pas. Le relais ne déplace jamais que du chiffré — il ne peut pas lire une session, et la salle est dérivée de la clé publique du daemon.
-- Sur une machine Linux sans interface, lancez le **daemon** : `myflowforge-daemon pair` affiche un QR code directement dans le terminal. Scannez-le et vous êtes appairé.
-- Le **client mobile** (iOS et Android) est un vrai client, pas une visionneuse : lisez la conversation pendant qu'elle défile, répondez aux portes de permission et de plan, parcourez les fichiers modifiés, créez un espace de travail, éditez un workflow, changez d'hôte.
+Le compagnon de bureau suit l'écran actif, reflète en temps réel l'état d'exécution des agents et peut afficher directement des cartes de confirmation. **Il est compatible avec les compagnons natifs de Codex**, installables depuis la place de marché codex-pets.net, et accepte également des images personnalisées. Un compagnon évolutif, qui grandit progressivement avec le temps d'utilisation, est également disponible.
 
 ---
 
 <div align="center">
 
-<img src="assets/screenshots/workflow.jpg" alt="Composition des étapes — chaque étape choisit son propre agent et son propre modèle ; Développement se déploie en éventail sur deux projets" width="90%" />
+<img src="assets/screenshots/workflow.jpg" alt="Orchestration des étapes : agent et modèle choisis séparément pour chaque étape, étape de développement répartie sur deux projets" width="90%" />
 
-<sub><b>Composition des étapes</b> — cinq étapes, chacune avec son propre agent et son propre modèle ; <i>Développement</i> se déploie en éventail sur deux dépôts.</sub>
+<sub><b>Orchestration des étapes</b> : un agent et un modèle définis pour chacune des cinq étapes, l'étape de <i>développement</i> étant répartie sur deux dépôts.</sub>
 
 </div>
 
 ---
 
-## 🤖 Agents de code pris en charge
+## Agents pris en charge
 
-| Agent | Chat | Workflow | Reprise native | MCP | Modèles |
-|-------|:----:|:--------:|:-------------:|:---:|--------|
-| **Claude Code** | ✅ | ✅ | ✅ | ✅ | détectés depuis la CLI |
-| **Codex** | ✅ | ✅ | ✅ | ✅ | détectés depuis la CLI |
-| **Cursor** | ✅ | ✅ | ✅ | ✅ | détectés depuis la CLI |
-| **qoder** | ✅ | ✅ | ✅ | ✅ | détectés + liste personnalisée |
-| **opencode** | ✅ | ✅ | ✅ | ✅ | passerelle multi-fournisseurs |
-| **Gemini** | ✅ | ✅ | — | ✅ | liste prédéfinie |
-| **Qwen** | ✅ | ✅ | — | ✅ | liste prédéfinie |
-| **Copilot** | ✅ | ✅ | — | ✅ | liste prédéfinie |
-| **Pi** | ✅ | ✅ | — | — | défaut du compte / personnalisé |
+| Agent | Conversation | Workflow | Reprise native | MCP | Modèles |
+|------|:----:|:------:|:--------:|:---:|------|
+| **Claude Code** | ✅ | ✅ | ✅ | ✅ | Lus depuis la CLI |
+| **Codex** | ✅ | ✅ | ✅ | ✅ | Lus depuis la CLI |
+| **Cursor** | ✅ | ✅ | ✅ | ✅ | Lus depuis la CLI |
+| **qoder** | ✅ | ✅ | ✅ | ✅ | Lus + personnalisés |
+| **opencode** | ✅ | ✅ | ✅ | ✅ | Passerelle multi-fournisseurs |
+| **Gemini** | ✅ | ✅ | — | ✅ | Liste prédéfinie |
+| **Qwen** | ✅ | ✅ | — | ✅ | Liste prédéfinie |
+| **Copilot** | ✅ | ✅ | — | ✅ | Liste prédéfinie |
+| **Pi** | ✅ | ✅ | — | — | Défaut du compte / personnalisés |
 | **Kimi** | ✅ | ✅ | — | — | kimi-k2.5 · 256K |
 | **Reasonix** | ✅ | ✅ | — | — | deepseek-flash / reasoner |
-| **Trae** | ✅ | ✅ | — | — | défaut du compte (`/model` ou `trae_cli.yaml`) |
-| **Antigravity** | ✅ | ✅ | ✅ | — | actualisés via `agy models` |
-| **DeepSeek** 🆕 | ✅ | ✅ | — | — | défaut du compte |
+| **Trae** | ✅ | ✅ | — | — | Défaut du compte (`/model` ou `trae_cli.yaml`) |
+| **Antigravity** | ✅ | ✅ | ✅ | — | Actualisés via `agy models` |
+| **DeepSeek** | ✅ | ✅ | — | — | Défaut du compte |
 
-> **DeepSeek**, c'est DeepSeek Harness — `npm install -g @deepseek-ai/dsh`. Il choisit une forme d'exécution par profil plutôt que par un drapeau headless ; myFlowForge pilote le profil `headless`, et les trois niveaux de permission correspondent à ses propres `read-only` / `workspace-write` / `danger-full-access`. Donnez-lui une clé avec `dsh web` (page Models) ou `DEEPSEEK_API_KEY`.
+> **DeepSeek** désigne DeepSeek Harness (`npm install -g @deepseek-ai/dsh`). myFlowForge utilise son profil `headless`, et les trois niveaux d'autorisation correspondent respectivement à `read-only` / `workspace-write` / `danger-full-access`. La clé API se configure via `dsh web` (page Models) ou la variable d'environnement `DEEPSEEK_API_KEY`.
 >
-> **Trae** (la CLI TraeCode de ByteDance) n'est pas distribuée sur npm — son `install.sh` officiel place `traecli` dans `~/.local/bin`, alors assurez-vous que ce répertoire est dans votre PATH. Pour des modifications sans surveillance à l'intérieur d'un workflow, lancez `traecli config edit` et réglez `permission_mode: bypass_permissions`.
+> **Trae** (TraeCode CLI de ByteDance) n'est pas publié sur npm. Il doit être installé dans `~/.local/bin` via le script officiel `install.sh`, puis ajouté au PATH. Pour qu'il modifie des fichiers sans supervision dans un workflow, exécutez `traecli config edit` et définissez `permission_mode: bypass_permissions`.
 
-myFlowForge **ne stocke aucune clé d'API et ne relaie aucune requête** — il pilote les CLI déjà installées et authentifiées sur votre machine. Tout ce qui manque est signalé dans les Réglages avec les instructions d'installation, et les Réglages vous indiquent aussi quand une CLI est installée mais non connectée.
-
-## 🔧 Comment se façonne une exécution
+## Déroulement d'un workflow
 
 ```
-   Vous décrivez l'objectif
-            │
-            ▼
-  ┌─ hook ─┐        ┌─ hook ─┐                    ┌─ hook ─┐
-  │ avant  │        │ après  │                    │ après  │
-  │ exéc.  │        │concept.│                    │ exéc.  │
-  └───┬────┘        └───┬────┘                    └───┬────┘
-      ▼                 ▼                             ▼
- 📋 Besoin → 🎨 Conception → ✋ PORTE → 💻 Développ. → 🧪 Test → 🔍 Revue
-  (clarifier)  (design.md)  vous décidez  (éventail)  (vérifier)  (multi-angle)
-                    │                         │
-                    │                         └─ un agent par projet,
-                    │                            voies parallèles, worktree dédié
-                    └─ un vrai document, lu intégralement par chaque agent en aval
+  Décrire l'objectif
+         │
+         ▼
+┌─── hook ───┐ ┌─── hook ───┐                                      ┌─── hook ───┐
+│ avant le   │ │ après la   │                                      │ après le   │
+│ lancement  │ │ conception │                                      │ lancement  │
+└─────┬──────┘ └─────┬──────┘                                      └─────┬──────┘
+      ▼              ▼                                                   ▼
+   Besoin ──→ Conception ──→ Validation ──→ Développement ──→ Test ──→ Revue
+ (clarifier)  (design.md)    (manuelle)     (par projet)   (vérifier) (multi-angle)
+                   │                              │
+                   │                              └─ un agent par projet,
+                   │                                 en parallèle, worktree dédié
+                   └─ document complet, lu en entier par tous les agents en aval
 
- Chaque flèche attend votre « Suivant ». Les étapes peuvent être ajoutées, retirées,
- réordonnées ou sautées — n'exécuter que Besoin → Développement est tout à fait valide.
+ Le passage d'une étape à l'autre requiert chaque fois une confirmation « Suivant ».
+ Les étapes peuvent être ajoutées, supprimées, réordonnées ou ignorées,
+ par exemple pour n'exécuter que « Besoin → Développement ».
 ```
 
-Trois façons d'en démarrer une, qui aboutissent toutes à la même porte :
+Un workflow peut être lancé de trois façons :
 
-1. Appuyez sur **Démarrer** dans le panneau Workflow.
-2. Tapez `/` dans le champ de saisie et choisissez-en un.
-3. Décrivez une tâche de développement complète en langage courant — l'agent principal la reconnaît et ouvre une porte de plan via MCP. Les questions, les discussions et les corrections d'une ligne ne la déclenchent pas.
+1. cliquer sur **Démarrer** dans le panneau des workflows ;
+2. saisir `/` dans la zone de saisie et choisir un workflow ;
+3. décrire directement la tâche de développement en langage naturel : l'agent principal la reconnaît et soumet une validation de conception via MCP. Les questions générales, les discussions et les petites modifications ne déclenchent pas de workflow.
 
-## 📱 Hôtes distants et client mobile
+## Hôtes distants et mobile
 
-Une seule application, plusieurs machines. Choisissez l'hôte dans la barre d'état et tout le reste suit.
-
-| | |
+| Mode | Description |
 |---|---|
-| **Direct** | Même réseau local, droit vers le port du daemon. Authentifié par jeton. |
-| **SSH** | Réutilise une connexion SSH que vous avez déjà — rien de nouveau à ouvrir. |
-| **Relais** | Pour les machines qui ne se voient pas. **Chiffré de bout en bout** : clés fraîches à chaque session, le relais ne fait que transmettre du chiffré, et une trame illisible est jetée plutôt que crue. Hébergez le vôtre (`relay/`, Node ou un Cloudflare Worker) — les étapes de déploiement sont dans `relay/README.md`. |
+| **Direct** | Connexion directe au port du daemon au sein du même réseau local, avec authentification par jeton. |
+| **SSH** | Réutilise une connexion SSH existante, sans ouvrir de port supplémentaire. |
+| **Relais** | Pour les cas où les deux machines ne peuvent pas communiquer directement. **Chiffrement de bout en bout** : une nouvelle clé est négociée à chaque session, le relais ne transmet que des données chiffrées, et toute trame impossible à déchiffrer est rejetée. Il peut être auto-hébergé (`relay/`, Node et Cloudflare Worker pris en charge) ; la procédure est décrite dans `relay/README.md`. |
 
-**Le daemon Linux** est la même base de code sans la fenêtre — installez le tarball, lancez-le sous systemd, et appairez en scannant le QR code qu'il affiche dans le terminal (`docs/linux-deploy.md`).
+Le **daemon Linux** partage le même code que l'application de bureau, sans la partie fenêtrée. Après installation de l'archive tar.gz, il s'exécute sous systemd ; l'appairage se fait en scannant le QR code affiché dans le terminal (voir `docs/linux-deploy.md`).
 
-**Le client mobile** couvre les parties dont vous avez réellement besoin loin du bureau : la conversation en direct avec la réflexion qui défile, les cartes d'outils et les cartes de sous-agents ; les portes de permission et de plan auxquelles vous pouvez répondre ; les fichiers modifiés et les diffs ; la création d'espace de travail ; la bibliothèque de modèles de workflow ; le changement d'hôte et l'appairage par QR code. Le markdown, les tableaux et les images locales s'affichent nativement — les adresses d'images distantes restent des liens, volontairement, pour que la sortie d'un agent ne puisse jamais transformer votre téléphone en balise de pistage.
+Le **client mobile** couvre les opérations courantes lorsque vous êtes loin de votre ordinateur : conversation en temps réel (y compris le raisonnement, les appels d'outils et les cartes de sous-agents), demandes d'autorisation et validations de conception, fichiers modifiés et diffs, création d'espaces de travail, modèles de workflow, changement d'hôte et appairage par QR code. Le markdown, les tableaux et les images locales sont rendus nativement ; pour des raisons de confidentialité, les adresses d'images distantes restent affichées sous forme de liens et ne sont pas chargées automatiquement.
 
-## 🧩 Également inclus
+## Autres fonctionnalités
 
-- **Import de sessions natives** — analyse en lecture seule de votre historique local Claude / Codex / Cursor / qoder ; importez-le comme espace de travail et continuez.
-- **Pont MCP** — un serveur Forge MCP intégré permet aux agents de rappeler l'application : `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. Injecté dans les agents qui prennent en charge MCP ; les autres se rabattent sur une directive textuelle.
-- **Serveurs MCP et modules** — voyez quels serveurs MCP chaque CLI a configurés, autorisez-les ou révoquez-les depuis l'application, et parcourez un marché de compétences pour en installer dans les CLI qui les lisent.
-- **Mémoire** — des notes par espace de travail que les agents peuvent relire, pour qu'un travail de longue haleine garde son propre fil.
-- **Observabilité en temps réel** — réflexion / appels d'outils / changements de fichiers / sortie brute en direct, une console de journaux filtrable, l'historique des exécutions, et les preuves de changement inter-projets.
-- **Consommation de tokens et quotas** — quota restant et heures de réinitialisation par fournisseur, plus la dépense par espace de travail × agent × jour.
-- **Pont pour bots** — répondez aux portes, consultez les résultats, démarrez une conversation et pilotez des workflows depuis **DingTalk**, **Telegram** ou **Feishu** sur votre téléphone.
-- **Modes de permission** — lecture seule · auto sur l'espace de travail (par défaut) · accès complet, par session ou par étape. Rattachés à la portée réelle du bac à sable de chaque CLI, et l'interface dit clairement quels agents la respectent vraiment.
-- **Commandes slash, compétences et plugins** — `/` fait remonter vos vraies commandes présentes sur le disque et les compétences installées, filtrées par agent.
-- **Workflows personnalisés** — le processus vous appartient : enregistrez autant de workflows nommés que vous voulez, chacun avec son propre jeu d'étapes ; chaque étape choisit son agent, son modèle, son mode de permission, sa forme de déploiement en éventail, si elle comporte une porte et si elle doit produire un document.
-- **Étapes personnalisées** — une bibliothèque globale de vos propres étapes, référencée par n'importe quel workflow.
-- **Navigateur de fichiers et diff** — arborescence en plein écran avec marqueurs de changement, aperçu avec coloration syntaxique, bascule diff ou fichier complet.
-- **Terminal intégré** — un vrai pty enraciné dans l'espace de travail, avec des réglages de proxy et de fuseau horaire par fournisseur. Connecté à un hôte distant, il ouvre un shell **sur cette machine**.
-- **Mascotte de bureau** — elle suit l'écran où vous travaillez, prévisualise l'activité des agents, fait surgir des cartes de confirmation ; parcourez le marché des mascottes ou apportez vos propres images.
-- **Mascotte évolutive** — la mascotte de bureau grandit par paliers au fil de votre travail, pour que les longues sessions laissent une trace visible.
-- **Transparence et verre dépoli** — un seul curseur de flou fait passer toute la fenêtre de l'opacité totale à trois matériaux de vibrance natifs de macOS, pour laisser transparaître votre bureau.
-- **Personnalisation** — 6 habillages originaux, 12 couleurs d'accent, une galerie de plus de 300 fonds d'écran ou votre propre image, des tailles de police au pixel près pour l'application et le chat indépendamment, contraste réglé séparément en clair et en sombre.
-- **Thème dérivé du fond d'écran** — activez-le et toute la palette est dérivée du fond d'écran que vous avez choisi, le clair ou le sombre étant décidé par l'image elle-même. Le fond d'écran ne fournit jamais que deux teintes ; chaque palier de luminosité et de chroma est copié des habillages réglés à la main, si bien qu'une image chargée ne peut pas produire une interface illisible. Vous préférez votre propre accent ? Choisissez-en un et seul l'accent cesse de suivre.
-- **Images et visuels en ligne dans le chat** — une image produite sur le disque par un agent s'affiche dans la réponse, cliquez pour la voir en grand. Les fragments HTML écrits au milieu d'une réponse peuvent devenir de vraies cartes, de vrais tableaux et de vrais diagrammes (désactivé par défaut). Jamais d'`innerHTML` — le fragment est analysé puis reconstruit à partir d'une liste blanche constructive, et les couleurs ne peuvent venir que des jetons du thème, si bien que le contenu rendu suit votre habillage au lieu de le contredire.
+- **Passerelle MCP** : un serveur Forge MCP intégré permet aux agents de rappeler l'application : `forge_ask`, `forge_propose_plan`, `forge_write_artifact`, `forge_handoff`, `forge_delegate`, `forge_read_context`, `forge_heartbeat`. Il est injecté automatiquement pour les agents compatibles MCP ; pour les autres, il est remplacé par des instructions textuelles.
+- **Serveurs MCP et place de marché de compétences** : consultation des serveurs MCP configurés dans chaque CLI et autorisation depuis l'application ; installation de compétences pour la CLI correspondante depuis la place de marché.
+- **Mémoire** : notes enregistrées par espace de travail et lisibles par les agents, pour assurer la continuité du contexte sur les tâches de longue durée.
+- **Suivi d'exécution** : affichage en continu du raisonnement, des appels d'outils, des modifications de fichiers et de la sortie brute, avec journaux filtrables, historique des exécutions et historique des modifications tous projets confondus.
+- **Quotas et consommation** : quota restant et date de réinitialisation de chaque fournisseur, ainsi que statistiques d'utilisation par espace de travail, agent et date.
+- **Passerelle de bots** : traitement des validations, consultation des résultats, lancement de conversations et pilotage des workflows depuis DingTalk, Telegram ou Feishu.
+- **Niveaux d'autorisation** : revue en lecture seule, automatique (espace de travail, par défaut) et accès complet, configurables par session ou par étape et convertis dans le périmètre de sandbox effectif de chaque CLI.
+- **Commandes slash et compétences** : saisir `/` liste les commandes réellement présentes sur la machine et les compétences installées, filtrées par agent.
+- **Navigation dans les fichiers et diffs** : arborescence plein écran avec marqueurs de modification, aperçu avec coloration syntaxique, bascule entre diff et texte intégral.
+- **Terminal intégré** : véritable pty, ayant pour racine l'espace de travail, avec proxy et fuseau horaire configurables par provider ; lorsqu'un hôte distant est connecté, le terminal s'exécute sur la machine distante.
+- **Apparence** : 6 thèmes originaux, 12 couleurs d'accentuation et plus de 300 fonds d'écran, avec prise en charge d'images personnalisées ; tailles de police réglables séparément pour l'application et la zone de conversation ; génération automatique d'une palette à partir du fond d'écran ; prise en charge du matériau translucide natif de macOS.
+- **Images et visualisations dans la conversation** : les images locales générées par les agents s'affichent directement dans les réponses ; les fragments HTML des réponses peuvent être rendus sous forme de cartes, tableaux et diagrammes (désactivé par défaut, reconstruit par liste blanche, sans recours à `innerHTML`).
 
-## 📥 Téléchargement et installation
+## Téléchargement et installation
 
-Récupérez le dernier build sur la page [**Releases**](https://github.com/flowForges/myFlowForge/releases) :
+Téléchargez la dernière version depuis la page [**Releases**](https://github.com/flowForges/myFlowForge/releases) :
 
 | Plateforme | Fichier |
-|----------|------|
-| macOS · Apple Silicon (M1–M4) | `myFlowForge-<version>-arm64.dmg` |
+|------|------|
+| macOS · puce Apple (M1–M4) | `myFlowForge-<version>-arm64.dmg` |
 | macOS · Intel | `myFlowForge-<version>.dmg` |
 | Windows · x64 | `myFlowForge-<version>-x64-setup.exe` |
+| Windows · ARM | `myFlowForge-<version>-arm64-setup.exe` |
 | Android | `myFlowForge-<version>.apk` |
 | Linux · daemon sans interface | `myFlowForge-daemon-<version>-linux.tar.gz` |
+| iOS | TestFlight (sur invitation) |
 
-> Les builds **macOS** sont signés et notarisés par Apple — téléchargez, double-cliquez, c'est tout. Fini le « endommagée ».
-> Les builds **Windows** ne sont pas encore signés : SmartScreen vous arrêtera une fois — **Informations complémentaires → Exécuter quand même**.
+> Le paquet **macOS** est signé et notarié, et peut être installé directement.
+> Le paquet **Windows** n'est pas encore signé ; lorsque SmartScreen affiche un avertissement, choisissez « Informations complémentaires → Exécuter quand même ».
 >
-> myFlowForge consulte les mêmes Releases et vous signale les nouvelles versions dans l'app.
+> L'application vérifie elle-même les mises à jour et signale les nouvelles versions dès leur publication.
 
-**iOS** passe par TestFlight (sur invitation pour l'instant — votre identifiant Apple doit être ajouté à la liste des testeurs). Vous pouvez aussi le compiler depuis `mobile/` avec votre propre identifiant Apple et l'installer par câble.
+**iOS** est actuellement distribué via TestFlight (sur invitation) ; il est également possible de le compiler et de l'installer avec votre propre identifiant Apple depuis le répertoire `mobile/`.
 
-## 🚀 Démarrage
+## Démarrage rapide
 
-**Prérequis :** macOS 11+ / Windows 10+ / un Linux récent, Node.js ≥ 20, git, et au moins une CLI de code prise en charge, installée et authentifiée.
+**Prérequis :** macOS 11+ / Windows 10+ / une distribution Linux courante, Node.js ≥ 20, git, et au moins une CLI de codage installée et connectée.
 
 ```bash
 git clone https://github.com/flowForges/myFlowForge.git
 cd myFlowForge
 npm install
-npm run dev          # mode dev avec rechargement à chaud du renderer
+npm run dev          # mode développement, rechargement à chaud du rendu
 ```
 
-| Commande | Ce qu'elle fait |
-|---------|--------------|
-| `npm run dev` | Démarrer avec rechargement à chaud |
-| `npm test` | Lancer toute la suite de tests (Vitest) |
-| `npm run typecheck` | Vérifier les types des deux tsconfig, main et renderer |
-| `npm run build` | Compiler le bundle de production |
-| `npm run dist:mac-all` | Compiler les `.dmg` Intel et Apple Silicon |
-| `npm run dist:win` | Compiler l'installeur Windows x64 |
-| `npm run check:daemon` | Éprouver le daemon sans interface de bout en bout |
+| Commande | Description |
+|------|------|
+| `npm run dev` | Démarre en mode développement (rechargement à chaud) |
+| `npm test` | Exécute la suite de tests complète (Vitest) |
+| `npm run typecheck` | Vérifie les deux tsconfig, processus principal et rendu |
+| `npm run build` | Build de production |
+| `npm run dist:mac-all` | Génère les `.dmg` Intel et puce Apple |
+| `npm run dist:win` | Génère l'installateur Windows x64 |
+| `npm run check:daemon` | Vérifie le daemon sans interface de bout en bout |
 
-Le client mobile vit dans `mobile/` (Expo / React Native) et le relais dans `relay/` ; les deux ont leur propre `package.json`.
+Le client mobile se trouve dans `mobile/` (Expo / React Native) et le service de relais dans `relay/`, chacun avec son propre `package.json`.
 
-Les artefacts atterrissent dans `release/`. Les modifications sous `src/main/**` exigent un **redémarrage complet d'Electron** — le rechargement à chaud ne rafraîchit que le renderer.
+Les artefacts de build sont générés dans `release/`. Après une modification de `src/main/**`, Electron doit être entièrement redémarré ; le rechargement à chaud ne s'applique qu'au rendu.
 
-## 🏗️ Stack technique
+## Pile technique
 
-**Coque :** [Electron](https://www.electronjs.org/) 42 + [electron-vite](https://electron-vite.org/) · **Interface :** [React](https://react.dev/) 19 + TypeScript 6 · **Mobile :** [Expo](https://expo.dev/) + [React Native](https://reactnative.dev/) · **Terminal :** [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty) · **Pont d'agents :** [Model Context Protocol SDK](https://modelcontextprotocol.io/) · **Contrôle de processus :** [execa](https://github.com/sindresorhus/execa) · **Validation :** [zod](https://zod.dev/) · **Surveillance de fichiers :** [chokidar](https://github.com/paulmillr/chokidar) · **Tests :** [Vitest](https://vitest.dev/) + Testing Library · **Packaging :** [electron-builder](https://www.electron.build/)
+| Catégorie | Technologie |
+|------|------|
+| Enveloppe de bureau | [Electron](https://www.electronjs.org/) 42 · [electron-vite](https://electron-vite.org/) |
+| Interface | [React](https://react.dev/) 19 · TypeScript 6 |
+| Mobile | [Expo](https://expo.dev/) · [React Native](https://reactnative.dev/) |
+| Terminal | [xterm.js](https://xtermjs.org/) · [node-pty](https://github.com/microsoft/node-pty) |
+| Passerelle agents | [Model Context Protocol SDK](https://modelcontextprotocol.io/) |
+| Contrôle des processus | [execa](https://github.com/sindresorhus/execa) |
+| Validation des données | [zod](https://zod.dev/) |
+| Surveillance des fichiers | [chokidar](https://github.com/paulmillr/chokidar) |
+| Tests | [Vitest](https://vitest.dev/) · Testing Library |
+| Empaquetage | [electron-builder](https://www.electron.build/) |
 
-## 📁 Structure du projet
+## Structure du projet
 
 ```
 src/
 ├── main/              # Processus principal Electron
-│   ├── agents/        # Adaptateurs CLI + registre de fournisseurs, détection, permissions
-│   ├── run/           # Moteur de workflow : étapes, portes, éventail, hooks, passations
-│   ├── chat/          # Chat par espace de travail, file d'attente, mémoire
-│   ├── mcp/           # Serveur Forge MCP (pont agent → application)
-│   ├── remote/        # Hôtes distants : direct / SSH / relais, routage, canal E2E
-│   ├── daemon/        # Daemon sans interface + appairage par QR code au terminal
-│   ├── bot/           # Pont pour bots (transports DingTalk / Telegram / Feishu)
-│   ├── plugins/       # Hôte de plugins, catalogue, planificateur, points d'extension
-│   ├── sessionImport/ # Analyse et import de sessions natives
-│   ├── usage/         # Adaptateurs de quota par fournisseur
-│   ├── pet/           # Fenêtre de la mascotte de bureau
-│   └── ...            # git, fs, terminal, mise à jour, watcher, fenêtres, apparence
-├── renderer/          # Interface React (vues, composants, réglages, thème, mascotte)
-├── preload/           # Pont IPC isolé par contexte
-└── shared/            # Types et logique pure partagés entre les processus
-mobile/                # Client iOS et Android (Expo / React Native)
+│   ├── agents/        # Adaptateurs CLI, registre des providers, détection et autorisations
+│   ├── run/           # Moteur de workflow : étapes, validations, répartition, hooks, passation
+│   ├── chat/          # Conversations d'espace de travail, file d'attente et mémoire
+│   ├── mcp/           # Serveur Forge MCP (passerelle agent → application)
+│   ├── remote/        # Hôtes distants : direct / SSH / relais, routage, canal chiffré de bout en bout
+│   ├── daemon/        # Daemon sans interface et appairage par QR code dans le terminal
+│   ├── bot/           # Passerelle de bots (DingTalk / Telegram / Feishu)
+│   ├── plugins/       # Hôte de plugins, catalogue, planification et points d'extension
+│   ├── sessionImport/ # Analyse et import des sessions natives
+│   ├── usage/         # Adaptateurs de quotas par fournisseur
+│   ├── pet/           # Fenêtre du compagnon de bureau
+│   └── ...            # git, système de fichiers, terminal, mises à jour, surveillance, fenêtres, apparence
+├── renderer/          # Interface React (vues, composants, paramètres, thèmes, compagnon)
+├── preload/           # Passerelle IPC à contexte isolé
+└── shared/            # Types et logique pure partagés entre processus
+mobile/                # Clients iOS et Android (Expo / React Native)
 relay/                 # Relais chiffré de bout en bout (Node ou Cloudflare Worker)
 ```
 
-## 🤝 Contribuer
+## Contribuer
 
-Les issues et les PR sont les bienvenues. Le projet est **piloté par les tests** — merci d'ajouter ou de mettre à jour les tests avec vos modifications et de vérifier que `npm test` et `npm run typecheck` passent avant d'ouvrir une PR.
+Les issues et les PR sont les bienvenues. Le projet suit le développement piloté par les tests : lorsque vous soumettez une modification, ajoutez ou mettez à jour les tests correspondants et assurez-vous que `npm test` et `npm run typecheck` passent.
 
-## 📄 Licence
+## Licence
 
-Publié sous [licence MIT](LICENSE) © 2026 zghua.
+[MIT License](LICENSE) © 2026 zghua
 
-## 🙏 Remerciements
+## Remerciements
 
-Construit sur l'écosystème open source autour d'Electron, React, Vite et du Model Context Protocol — et sur les agents de code qu'il orchestre.
+Merci aux projets open source Electron, React, Vite et Model Context Protocol, entre autres, ainsi qu'aux différents agents de codage intégrés dans ce projet.
 
-## 🔗 Liens
+## Liens
 
-- [LINUX DO](https://linux.do/latest) — une communauté de développeurs qui aiment bricoler
+- [LINUX DO](https://linux.do/latest) : communauté de développeurs
+- [V2EX](https://www.v2ex.com/) : communauté de créatifs
