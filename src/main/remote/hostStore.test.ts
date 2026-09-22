@@ -87,8 +87,41 @@ describe('远程主机存盘', () => {
 
   it('确实是两台不同的机器时,照常各存各的', () => {
     upsertHost({ ...BASE })
-    upsertHost({ ...BASE, label: '另一台' })
+    upsertHost({ ...BASE, label: '另一台', pubKey: `${'B'.repeat(43)}=` })
     expect(readHosts().hosts).toHaveLength(2)
+  })
+
+  /**
+   * ★★用户 2026-09-22 真机:同一台 `zghua-3` 先存局域网直连、再存中转 ⇒ 列表里只剩中转那条。
+   *  原来按名字认,两条同名就互相覆盖。现在认「哪台机器 + 怎么连」。
+   */
+  it('★★同一台机器的直连和中转是两条,名字自动带上连接方式', () => {
+    const lan = { ...BASE, label: 'zghua-3', relay: '' }
+    upsertHost(lan)
+    upsertHost({ ...lan, relay: 'wss://relay.example/' })
+    const hosts = readHosts().hosts
+    expect(hosts).toHaveLength(2)
+    expect(hosts.map(h => h.label)).toEqual(['zghua-3', 'zghua-3 · 中转'])
+    // 各自再存一次,还是各改各的,不会再多出来
+    upsertHost(lan)
+    upsertHost({ ...lan, relay: 'wss://another-relay.example/' })
+    expect(readHosts().hosts).toHaveLength(2)
+    expect(readHosts().hosts[1].relay).toBe('wss://another-relay.example/')
+    expect(readHosts().hosts[1].label, '改自己那一条不该又给自己加一次后缀').toBe('zghua-3 · 中转')
+  })
+
+  it('不同机器恰好同名(比如都叫 MacBook-Pro):各存一条,后来的加后缀,再撞加序号', () => {
+    upsertHost({ ...BASE, label: 'MacBook-Pro' })
+    upsertHost({ ...BASE, label: 'MacBook-Pro', pubKey: `${'B'.repeat(43)}=` })
+    upsertHost({ ...BASE, label: 'MacBook-Pro', pubKey: `${'C'.repeat(43)}=` })
+    expect(readHosts().hosts.map(h => h.label)).toEqual(['MacBook-Pro', 'MacBook-Pro · 中转', 'MacBook-Pro · 中转 2'])
+  })
+
+  it('没有公钥的老记录仍按名字认(不然老用户每存一次就多一条)', () => {
+    const old = { ...BASE, pubKey: '', relay: '' }
+    upsertHost(old)
+    upsertHost({ ...old, address: 'ws://10.0.0.2:6789' })
+    expect(readHosts().hosts).toHaveLength(1)
   })
 
   it('老记录(没有这两个字段)读出来是空串,不是 undefined —— 下游只判真假', () => {

@@ -64,20 +64,49 @@ const file = () => sysFile('hosts.json')
 export const readHosts = (): HostsFile => readJson(file(), HostsFileSchema, defaultHosts)
 export const writeHosts = (h: HostsFile) => writeJson(file(), HostsFileSchema.parse(h))
 
+type HostIdentity = Pick<RemoteHost, 'label' | 'kind' | 'pubKey' | 'relay'>
+
+/**
+ * 「这是不是同一条」的判据 = **哪台机器 + 怎么连过去**。
+ *
+ * ★★原来只按名字认。用户 2026-09-22 真机撞上:同一台 `zghua-3` 先存了局域网直连、再存中转,
+ *  两条名字一样 ⇒ 中转那条把直连那条盖掉,列表里永远只剩一台。
+ * - 哪台机器:有公钥就认公钥(daemon 的长期身份,配对码里带来的);老记录没有公钥,退回认名字。
+ * - 怎么连:只认**类型**(直连 / 中转 / SSH),不认具体地址 —— 那台机器换了 IP 或者换了中转服务器,
+ *   重新粘一次配对码应该是**更新**那一条,不是再多一条(见测试「同名的再存一次是改」)。
+ */
+export function hostKey(h: HostIdentity): string {
+  const route = h.relay ? 'relay' : h.kind
+  return `${h.pubKey ? `k:${h.pubKey}` : `n:${h.label}`}|${route}`
+}
+
+const ROUTE_NAME: Record<string, string> = { relay: '中转', direct: '直连', ssh: 'SSH' }
+
+/** 别的条目已经占了这个名字 ⇒ 加上连接方式做后缀(`zghua-3 · 中转`),还撞就再加序号。 */
+function uniqueLabel(label: string, h: HostIdentity, others: RemoteHost[]): string {
+  const taken = new Set(others.map((o) => o.label))
+  if (!taken.has(label)) return label
+  const base = `${label} · ${ROUTE_NAME[h.relay ? 'relay' : h.kind] ?? h.kind}`
+  if (!taken.has(base)) return base
+  let n = 2
+  while (taken.has(`${base} ${n}`)) n++
+  return `${base} ${n}`
+}
+
 export function upsertHost(input: Omit<RemoteHost, 'id' | 'lastConnectedAt'> & { id?: string }): RemoteHost {
   const f = readHosts()
   // ★★没有 id = 「新建」,但**新建不等于一定是新的一台**。用户真机报的:粘完配对码点保存,
   //  再点一次又存一条,三次就是三台一模一样的机器 —— 因为这里原来只按 id 找,找不到就无脑追加。
-  //  按名字认第二遍:`importHosts` 从第一天起就是这么合并的,同一件事不该有两套规矩。
+  //  所以新建时按 hostKey 再认一遍(同一台机器、同一种连法 = 同一条)。`importHosts` 用同一个判据。
   //  ★沿用原来那台的 id,不是给它换一个 —— 换了的话「当前连着的是哪台」(router 里存的是 id)
   //   会瞬间对不上,表现成「明明连着却显示未连接」。
   const existing = input.id
     ? f.hosts.find((h) => h.id === input.id)
-    : f.hosts.find((h) => h.label === input.label)
+    : f.hosts.find((h) => hostKey(h) === hostKey(input))
   const id = existing?.id ?? input.id ?? randomUUID()
   const next: RemoteHost = {
     id,
-    label: input.label,
+    label: uniqueLabel(input.label, input, f.hosts.filter((h) => h.id !== id)),
     kind: input.kind,
     address: input.address,
     sshTarget: input.sshTarget,
@@ -127,7 +156,7 @@ export function exportHosts(opts: { includeTokens: boolean }): string {
   }, null, 2)
 }
 
-/** 导入:按 label 去重覆盖,其余追加。返回这次真正落盘的条数。 */
+/** 导入:按 hostKey(哪台机器 + 怎么连)去重覆盖,其余追加。返回这次真正落盘的条数。 */
 export function importHosts(text: string): { ok: true; added: number } | { ok: false; error: string } {
   let parsed: unknown
   try { parsed = JSON.parse(text) } catch { return { ok: false, error: '不是合法的 JSON' } }
@@ -139,19 +168,21 @@ export function importHosts(text: string): { ok: true; added: number } | { ok: f
   const p = ImportFileSchema.safeParse({ version: 1, hosts: (parsed as { hosts?: unknown })?.hosts ?? [] })
   if (!p.success || p.data.hosts.length === 0) return { ok: false, error: '里面没有可导入的主机' }
   const f = readHosts()
-  const byLabel = new Map(f.hosts.map((h) => [h.label, h]))
+  const byKey = new Map(f.hosts.map((h) => [hostKey(h), h]))
   for (const h of p.data.hosts) {
-    const prev = byLabel.get(h.label)
+    const key = hostKey(h)
+    const prev = byKey.get(key)
     // 导入的那份 token 可能是空的(导出时没选带凭据)。这时保留本机已有的,别把它清掉。
-    byLabel.set(h.label, {
+    byKey.set(key, {
       ...h,
+      label: uniqueLabel(h.label, h, [...byKey.values()].filter((o) => o !== prev)),
       // 导入的那份可能带着来源设备的 id(手工拼的 JSON),也可能没有(标准导出)。
-      // 本机已有同名的就沿用本机那个 id —— 换 id 会让「当前连着的是哪台」瞬间对不上。
+      // 本机已有同一条(同 hostKey)就沿用本机那个 id —— 换 id 会让「当前连着的是哪台」瞬间对不上。
       id: prev?.id ?? h.id ?? randomUUID(),
       token: h.token || prev?.token || '',
       lastConnectedAt: prev?.lastConnectedAt ?? 0,
     })
   }
-  writeHosts({ version: 1, hosts: [...byLabel.values()] })
+  writeHosts({ version: 1, hosts: [...byKey.values()] })
   return { ok: true, added: p.data.hosts.length }
 }
