@@ -32,6 +32,7 @@ import { pairLines } from './pairText'
 import { canDrawQr } from './qrTerminal'
 import { sysFile } from '../config/paths'
 import { parseArgs } from './args'
+import { trustSystemCertificates } from '../net/systemCa'
 
 function appVersion(): string {
   // 打包后 package.json 在上一层;开发时在仓库根。读不到不该让 daemon 起不来。
@@ -167,6 +168,7 @@ function status() {
 }
 
 export async function runCli(argv: string[]): Promise<number> {
+  trustSystemCertificates()   // 同桌面端:公司解密网关的根证书只在系统证书库里(net/systemCa.ts)
   const { cmd, listen, address, relay } = parseArgs(argv)
 
   if (cmd === 'pair') { pair({ listen, address, relay }); return 0 }

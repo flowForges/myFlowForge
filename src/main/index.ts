@@ -27,6 +27,7 @@ import { buildProviderRegistry } from './agents/registry'
 import { readSettings, migrateSettingsIfNeeded, writeSettings, readWorkspaceRegistry } from './config/store'
 import { remoteAddSink } from './remote/eventScope'
 import { fixExecPath } from './agents/pathFix'
+import { trustSystemCertificates } from './net/systemCa'
 import { createDailyTokenCounter, scanTokenBaseline, localDayKey } from './tokens/dailyTokenCounter'
 import { setDailyTokenCounter } from './tokens/growthSignalRef'
 import type { Settings } from './config/schema'
@@ -62,6 +63,9 @@ process.on('unhandledRejection', (r) => { logError('app', 'unhandledRejection', 
 // A packaged GUI app gets launchd's minimal PATH, not the user's shell PATH, so the agent
 // CLIs (claude/codex) and `which` aren't found. Fix it before any agent is spawned.
 const fixedPath = fixExecPath({ packaged: app.isPackaged, platform: process.platform, env: process.env })
+// 公司网 / 安全软件做 HTTPS 解密时,它的根证书只在系统钥匙串里 —— 不加这句,连中转会报自签名证书。
+// 必须在任何 TLS 连接之前。见 net/systemCa.ts。
+trustSystemCertificates()
 if (fixedPath) process.env.PATH = fixedPath
 
 // Single-instance lock: a relaunch (e.g. right after reinstalling) must not spin up a second
