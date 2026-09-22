@@ -69,6 +69,27 @@ Los agentes con reanudación nativa (Claude Code, Codex, Cursor, qoder, opencode
 - **Móvil**: los clientes de iOS y Android permiten ver conversaciones en tiempo real, responder a confirmaciones de permisos y aprobaciones de diseño, revisar cambios y diffs, crear espacios de trabajo, editar flujos de trabajo y cambiar de host.
 - **Autorización de dispositivos**: cada dispositivo usa su propio código de emparejamiento, se puede eliminar individualmente en cualquier momento y la revocación surte efecto de inmediato.
 
+
+<table>
+<tr>
+<td width="40%"><img src="assets/screenshots/devices-mac.jpg" alt="Una misma sesión sincronizada en macOS, Windows e iPhone · macOS" /></td>
+<td width="40%"><img src="assets/screenshots/devices-win.jpg" alt="Una misma sesión sincronizada en macOS, Windows e iPhone · Windows" /></td>
+<td width="20%"><img src="assets/screenshots/devices-ios.jpg" alt="Una misma sesión sincronizada en macOS, Windows e iPhone · iPhone" /></td>
+</tr>
+</table>
+<p align="center"><sub>Una misma sesión sincronizada en macOS, Windows e iPhone</sub></p>
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/remote-hosts.jpg" alt="Hosts remotos: conexión directa en LAN, relay y SSH" /></td>
+<td width="50%"><img src="assets/screenshots/share-devices.jpg" alt="Compartir: cada dispositivo se autoriza por separado y puede retirarse en cualquier momento" /></td>
+</tr>
+<tr>
+<td align="center"><sub>Hosts remotos: conexión directa en LAN, relay y SSH</sub></td>
+<td align="center"><sub>Compartir: cada dispositivo se autoriza por separado y puede retirarse en cualquier momento</sub></td>
+</tr>
+</table>
+
 ### 4. Importación de sesiones nativas
 
 Se analizan en modo de solo lectura los historiales locales de sesiones de Claude Code, Codex, Cursor y qoder; una vez importados como espacio de trabajo, se puede continuar la conversación directamente, sin afectar a los datos originales.

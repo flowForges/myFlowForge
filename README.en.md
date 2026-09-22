@@ -69,6 +69,27 @@ Agents that support native session resume (Claude Code, Codex, Cursor, qoder, op
 - **Mobile**: the iOS and Android clients support viewing conversations in real time, handling permission prompts and plan approvals, viewing changes and diffs, creating workspaces, editing workflows and switching hosts.
 - **Device authorization**: each device uses its own pairing code and can be removed individually at any time. Revocation takes effect immediately.
 
+
+<table>
+<tr>
+<td width="40%"><img src="assets/screenshots/devices-mac.jpg" alt="One session, in sync on macOS, Windows and iPhone · macOS" /></td>
+<td width="40%"><img src="assets/screenshots/devices-win.jpg" alt="One session, in sync on macOS, Windows and iPhone · Windows" /></td>
+<td width="20%"><img src="assets/screenshots/devices-ios.jpg" alt="One session, in sync on macOS, Windows and iPhone · iPhone" /></td>
+</tr>
+</table>
+<p align="center"><sub>One session, in sync on macOS, Windows and iPhone</sub></p>
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/remote-hosts.jpg" alt="Remote hosts: direct LAN, relay and SSH" /></td>
+<td width="50%"><img src="assets/screenshots/share-devices.jpg" alt="Sharing: each device authorized separately and removable at any time" /></td>
+</tr>
+<tr>
+<td align="center"><sub>Remote hosts: direct LAN, relay and SSH</sub></td>
+<td align="center"><sub>Sharing: each device authorized separately and removable at any time</sub></td>
+</tr>
+</table>
+
 ### 4. Native session import
 
 Local Claude Code, Codex, Cursor and qoder session history is scanned read-only and imported as workspaces, where the conversations can be continued directly. The original data is not affected.

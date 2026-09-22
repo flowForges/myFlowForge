@@ -69,6 +69,27 @@ Les agents qui prennent en charge la reprise native (Claude Code, Codex, Cursor,
 - **Mobile** : les clients iOS et Android permettent de suivre les conversations en temps réel, de traiter les demandes d'autorisation et les validations de conception, de consulter les modifications et les diffs, de créer des espaces de travail, de modifier des workflows et de changer d'hôte.
 - **Autorisation des appareils** : chaque appareil utilise son propre code d'appairage et peut être retiré individuellement à tout moment ; la révocation prend effet immédiatement.
 
+
+<table>
+<tr>
+<td width="40%"><img src="assets/screenshots/devices-mac.jpg" alt="Une même session synchronisée sur macOS, Windows et iPhone · macOS" /></td>
+<td width="40%"><img src="assets/screenshots/devices-win.jpg" alt="Une même session synchronisée sur macOS, Windows et iPhone · Windows" /></td>
+<td width="20%"><img src="assets/screenshots/devices-ios.jpg" alt="Une même session synchronisée sur macOS, Windows et iPhone · iPhone" /></td>
+</tr>
+</table>
+<p align="center"><sub>Une même session synchronisée sur macOS, Windows et iPhone</sub></p>
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/remote-hosts.jpg" alt="Hôtes distants : connexion directe en LAN, relais et SSH" /></td>
+<td width="50%"><img src="assets/screenshots/share-devices.jpg" alt="Partage : chaque appareil est autorisé séparément et peut être retiré à tout moment" /></td>
+</tr>
+<tr>
+<td align="center"><sub>Hôtes distants : connexion directe en LAN, relais et SSH</sub></td>
+<td align="center"><sub>Partage : chaque appareil est autorisé séparément et peut être retiré à tout moment</sub></td>
+</tr>
+</table>
+
 ### 4. Import des sessions natives
 
 Les historiques de sessions locaux de Claude Code, Codex, Cursor et qoder sont analysés en lecture seule et importés en tant qu'espaces de travail, dans lesquels la conversation peut reprendre directement, sans affecter les données d'origine.

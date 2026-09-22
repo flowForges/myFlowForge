@@ -69,6 +69,27 @@ agent、模型与权限档在每一轮对话前均可重新选择，上下文保
 - **移动端**：iOS 与安卓客户端支持实时查看对话、处理权限确认与方案审批、查看改动与 diff、新建工作区、编辑工作流、切换主机。
 - **设备授权**：每台设备使用独立的配对码，可随时单独移除，撤销即时生效。
 
+
+<table>
+<tr>
+<td width="40%"><img src="assets/screenshots/devices-mac.jpg" alt="同一会话在 macOS、Windows 与 iPhone 上同步 · macOS" /></td>
+<td width="40%"><img src="assets/screenshots/devices-win.jpg" alt="同一会话在 macOS、Windows 与 iPhone 上同步 · Windows" /></td>
+<td width="20%"><img src="assets/screenshots/devices-ios.jpg" alt="同一会话在 macOS、Windows 与 iPhone 上同步 · iPhone" /></td>
+</tr>
+</table>
+<p align="center"><sub>同一会话在 macOS、Windows 与 iPhone 上同步</sub></p>
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/remote-hosts.jpg" alt="远程主机：局域网直连、中转与 SSH" /></td>
+<td width="50%"><img src="assets/screenshots/share-devices.jpg" alt="共享本机：每台设备独立授权，可单独移除" /></td>
+</tr>
+<tr>
+<td align="center"><sub>远程主机：局域网直连、中转与 SSH</sub></td>
+<td align="center"><sub>共享本机：每台设备独立授权，可单独移除</sub></td>
+</tr>
+</table>
+
 ### 4. 原生会话导入
 
 只读扫描本地的 Claude Code、Codex、Cursor、qoder 会话历史，导入为工作区后可直接继续对话，不影响原有数据。

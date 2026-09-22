@@ -69,6 +69,27 @@ Agents mit nativer Fortsetzung (Claude Code, Codex, Cursor, qoder, opencode, Ant
 - **Mobil**: Die iOS- und Android-Clients ermöglichen es, Gespräche in Echtzeit zu verfolgen, Berechtigungsanfragen und Entwurfsfreigaben zu bearbeiten, Änderungen und Diffs einzusehen, Arbeitsbereiche anzulegen, Workflows zu bearbeiten und den Host zu wechseln.
 - **Geräteautorisierung**: Jedes Gerät verwendet einen eigenen Kopplungscode und kann jederzeit einzeln entfernt werden; der Widerruf wirkt sofort.
 
+
+<table>
+<tr>
+<td width="40%"><img src="assets/screenshots/devices-mac.jpg" alt="Eine Sitzung, synchron auf macOS, Windows und iPhone · macOS" /></td>
+<td width="40%"><img src="assets/screenshots/devices-win.jpg" alt="Eine Sitzung, synchron auf macOS, Windows und iPhone · Windows" /></td>
+<td width="20%"><img src="assets/screenshots/devices-ios.jpg" alt="Eine Sitzung, synchron auf macOS, Windows und iPhone · iPhone" /></td>
+</tr>
+</table>
+<p align="center"><sub>Eine Sitzung, synchron auf macOS, Windows und iPhone</sub></p>
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/remote-hosts.jpg" alt="Entfernte Hosts: direkte LAN-Verbindung, Relay und SSH" /></td>
+<td width="50%"><img src="assets/screenshots/share-devices.jpg" alt="Freigabe: jedes Gerät wird einzeln autorisiert und kann jederzeit entfernt werden" /></td>
+</tr>
+<tr>
+<td align="center"><sub>Entfernte Hosts: direkte LAN-Verbindung, Relay und SSH</sub></td>
+<td align="center"><sub>Freigabe: jedes Gerät wird einzeln autorisiert und kann jederzeit entfernt werden</sub></td>
+</tr>
+</table>
+
 ### 4. Import nativer Sitzungen
 
 Die lokalen Sitzungsverläufe von Claude Code, Codex, Cursor und qoder werden schreibgeschützt eingelesen und als Arbeitsbereiche importiert, in denen das Gespräch direkt fortgesetzt werden kann. Die ursprünglichen Daten bleiben unberührt.

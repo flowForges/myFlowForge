@@ -69,6 +69,27 @@ agent、モデル、権限レベルは各ターンの前に選び直すことが
 - **モバイル**：iOS と Android のクライアントで、会話のリアルタイム表示、権限確認と設計承認の処理、変更と diff の確認、ワークスペースの新規作成、ワークフローの編集、ホストの切り替えができます。
 - **デバイス認可**：デバイスごとに個別のペアリングコードを使用し、いつでも個別に削除できます。取り消しは即座に反映されます。
 
+
+<table>
+<tr>
+<td width="40%"><img src="assets/screenshots/devices-mac.jpg" alt="同じセッションを macOS・Windows・iPhone で同期 · macOS" /></td>
+<td width="40%"><img src="assets/screenshots/devices-win.jpg" alt="同じセッションを macOS・Windows・iPhone で同期 · Windows" /></td>
+<td width="20%"><img src="assets/screenshots/devices-ios.jpg" alt="同じセッションを macOS・Windows・iPhone で同期 · iPhone" /></td>
+</tr>
+</table>
+<p align="center"><sub>同じセッションを macOS・Windows・iPhone で同期</sub></p>
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/remote-hosts.jpg" alt="リモートホスト：LAN 直結・リレー・SSH" /></td>
+<td width="50%"><img src="assets/screenshots/share-devices.jpg" alt="ホスト共有：デバイスごとに認可し、個別に削除可能" /></td>
+</tr>
+<tr>
+<td align="center"><sub>リモートホスト：LAN 直結・リレー・SSH</sub></td>
+<td align="center"><sub>ホスト共有：デバイスごとに認可し、個別に削除可能</sub></td>
+</tr>
+</table>
+
 ### 4. ネイティブセッションのインポート
 
 ローカルの Claude Code、Codex、Cursor、qoder のセッション履歴を読み取り専用でスキャンし、ワークスペースとしてインポートした後、そのまま会話を続けられます。元のデータには影響しません。

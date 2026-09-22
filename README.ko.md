@@ -69,6 +69,27 @@ agent, 모델, 권한 모드는 매 대화 턴 전에 다시 선택할 수 있�
 - **모바일**: iOS와 Android 클라이언트에서 실시간 대화 보기, 권한 확인 및 설계 승인 처리, 변경 사항과 diff 보기, 워크스페이스 생성, 워크플로 편집, 호스트 전환을 지원합니다.
 - **기기 권한 부여**: 기기마다 별도의 페어링 코드를 사용하며, 언제든 개별적으로 제거할 수 있고 해제는 즉시 적용됩니다.
 
+
+<table>
+<tr>
+<td width="40%"><img src="assets/screenshots/devices-mac.jpg" alt="하나의 세션을 macOS·Windows·iPhone에서 동기화 · macOS" /></td>
+<td width="40%"><img src="assets/screenshots/devices-win.jpg" alt="하나의 세션을 macOS·Windows·iPhone에서 동기화 · Windows" /></td>
+<td width="20%"><img src="assets/screenshots/devices-ios.jpg" alt="하나의 세션을 macOS·Windows·iPhone에서 동기화 · iPhone" /></td>
+</tr>
+</table>
+<p align="center"><sub>하나의 세션을 macOS·Windows·iPhone에서 동기화</sub></p>
+
+<table>
+<tr>
+<td width="50%"><img src="assets/screenshots/remote-hosts.jpg" alt="원격 호스트: LAN 직접 연결·릴레이·SSH" /></td>
+<td width="50%"><img src="assets/screenshots/share-devices.jpg" alt="호스트 공유: 기기별로 인증하며 개별 삭제 가능" /></td>
+</tr>
+<tr>
+<td align="center"><sub>원격 호스트: LAN 직접 연결·릴레이·SSH</sub></td>
+<td align="center"><sub>호스트 공유: 기기별로 인증하며 개별 삭제 가능</sub></td>
+</tr>
+</table>
+
 ### 4. 네이티브 세션 가져오기
 
 로컬의 Claude Code, Codex, Cursor, qoder 세션 기록을 읽기 전용으로 스캔하여 워크스페이스로 가져오면 바로 대화를 이어 갈 수 있으며, 기존 데이터에는 영향을 주지 않습니다.
