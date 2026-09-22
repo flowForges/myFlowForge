@@ -5,9 +5,11 @@ import { MobileSection } from './MobileSection'
 vi.mock('./QrCode', () => ({ QrCode: () => <svg className="qr" /> }))
 
 const RUNNING = {
-  running: true, host: '0.0.0.0', port: 6789, token: 'tok-ABC_123',
+  running: true, host: '0.0.0.0', port: 6789, tokenRequired: true,
   addresses: ['192.168.110.133'], clients: 0, error: '', name: '书房的 Mac',
 }
+
+const DEVICES = [{ id: 'd1', label: 'zghua 的 iPhone', createdAt: 1, lastSeenAt: 2, legacy: false, pending: false, online: false }]
 
 const mount = async () => {
   ;(window as unknown as { forge: unknown }).forge = {
@@ -15,6 +17,9 @@ const mount = async () => {
     mobileApply: vi.fn(async () => RUNNING),
     mobileRegenToken: vi.fn(async () => RUNNING),
     onMobileStatus: () => () => {},
+    devicesList: vi.fn(async () => DEVICES),
+    devicesPairing: vi.fn(async () => ({ id: 'd2', token: 'tok' })),
+    onDevicesChanged: () => () => {},
     relayStatus: vi.fn(async () => ({ enabled: false, url: '', detail: { status: 'off' }, publicKey: '', token: 't' })),
     onRelayStatus: () => () => {},
     relayApply: vi.fn(async () => ({})),
@@ -82,9 +87,9 @@ describe('这一屏默认摆出来多少东西', () => {
     expect(adv).toBeTruthy()
     expect(adv.querySelector('#mobPort'), '端口').toBeTruthy()
     expect(adv.querySelector('#mobAddr'), '手填地址').toBeTruthy()
-    expect(adv.querySelector('#mobToken'), '令牌').toBeTruthy()
+    // ★令牌按设备发:没生成配对码之前,这里是一句「先去生成」的指引,不是一个空框
+    expect(adv.textContent, '令牌').toContain('访问令牌')
     expect(adv.querySelector('[aria-label="局域网可见"]'), '局域网可见').toBeTruthy()
-    expect(adv.textContent, '换一把令牌').toContain('换一把令牌')
   })
 
   it('★折叠**默认是收起的** —— 收进去又默认展开等于什么都没做', async () => {
@@ -95,19 +100,21 @@ describe('这一屏默认摆出来多少东西', () => {
   it('★★收进去的东西一个都没删 —— 端口被占、令牌泄了、相机坏了,那几条路都还得在', async () => {
     await mount()
     const all = document.body.textContent ?? ''
-    for (const must of ['端口', '局域网可见', '访问令牌', '换一把令牌']) {
+    // 「令牌泄了」那条路现在是已授权设备里的「移除」/「全部撤销」(原来的「换一把令牌」点了不生效,已删)
+    await waitFor(() => expect(document.body.textContent).toContain('全部撤销'))
+    for (const must of ['端口', '局域网可见', '访问令牌', '全部撤销', '移除']) {
       expect(all, must).toContain(must)
     }
   })
 
-  it('每次都要碰的那两样留在外面:主开关 + 显示配对二维码', async () => {
+  it('每次都要碰的那两样留在外面:主开关 + 为新设备生成配对码', async () => {
     await mount()
     const outside = (sel: string) =>
       [...document.querySelectorAll(sel)].some((e) => !e.closest('details'))
     expect(outside('[aria-label="局域网"]')).toBe(true)
     expect(
       [...document.querySelectorAll('button')].some(
-        (b) => b.textContent === '显示配对二维码' && !b.closest('details'),
+        (b) => b.textContent === '为新设备生成配对码' && !b.closest('details'),
       ),
     ).toBe(true)
   })
@@ -125,7 +132,7 @@ describe('这一屏默认摆出来多少东西', () => {
   it('★★配对码排在两个开关之前', async () => {
     await mount()
     const all = [...document.querySelectorAll('button')]
-    const iQr = all.findIndex((b) => b.textContent === '显示配对二维码' || b.textContent === '收起二维码')
+    const iQr = all.findIndex((b) => b.textContent === '为新设备生成配对码' || b.textContent === '收起二维码')
     const iLan = all.findIndex((b) => b.getAttribute('aria-label') === '局域网')
     const iRelay = all.findIndex((b) => b.getAttribute('aria-label') === '外部中转')
     expect(iQr, '找不到配对码那一块').toBeGreaterThanOrEqual(0)

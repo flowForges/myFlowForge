@@ -1,7 +1,7 @@
 import { toBase64 } from '@shared/remote/e2e'
 import type { MethodTable } from '../ipc/invokeCtx'
 import { daemonTable } from '../ipc/channelRouting'
-import { ensureToken } from '../daemon/config'
+import { deviceAuth } from '../remote/deviceTokens'
 import { readIdentity } from '../remote/identity'
 import { readSettings } from '../config/store'
 import { startRelayHost, type RelayHostHandle, type RelayHostStatus } from '../remote/relayHost'
@@ -24,8 +24,6 @@ export type RelayStatusView = {
   detail: RelayHostStatus
   /** 这台机器的长期身份公钥(base64)。★配对二维码要用它,所以**没开中转时也要有**。 */
   publicKey: string
-  /** 访问令牌。★和局域网那条路是**同一个** —— 一个二维码要在两条路上都能用。 */
-  token: string
   /**
    * 用过的中转地址(最近的排最前),给地址框做下拉。
    * ★★**只有地址,没有令牌** —— 见 `shared/remote/relayHistory.ts` 顶部那段。
@@ -66,7 +64,6 @@ export function createRelayController(deps: {
     //  设置界面一打开就要显示二维码,而二维码里必须有公钥。代价是"打开过设置的人"
     //  磁盘上就有了一把私钥 —— 可以接受;`readIdentity` 的注释解释了为什么不更早生成。
     publicKey: toBase64(readIdentity().publicKey),
-    token: ensureToken(),
     urlHistory: cur.urlHistory ?? [],
   })
 
@@ -135,9 +132,10 @@ export function createRelayController(deps: {
         table,
         addSink: deps.addSink,
         version: deps.version,
-        // ★中转这条路上仍然要令牌,而且和局域网那条**共用同一个**:
-        //  加密回答"谁能听",令牌回答"谁能用"。共用是为了一个二维码两条路都能用。
-        token: ensureToken(),
+        // ★中转这条路上仍然要令牌,而且和局域网那条**共用同一套**(按设备发,remote/deviceTokens.ts):
+        //  加密回答"谁能听",令牌回答"谁能用"。共用是为了一个二维码两条路都能用,
+        //  也为了「移除」一台时两条路同时把它关在门外。
+        token: deviceAuth(),
         // ★★「app 自身的网络」那个代理。漏了它的现象是**永远「正在连中转」**:
         //  `ws` 不认 `https_proxy` 环境变量,不给它 agent 就直连,而直连一个够不着的地址
         //  既不报错也不关闭,就是不回。2026-08-31 真机上就是这么卡住的。

@@ -11,6 +11,7 @@ import { createElectronHost } from './host/electronHost'
 import { hostname } from 'node:os'
 import { createHostRouter } from './remote/router'
 import { createAppGateway } from './host/appGateway'
+import { listDevices, pairingToken, revokeDevice, revokeAll, onDevicesChanged } from './remote/deviceTokens'
 import { createRelayController } from './host/relayController'
 import { openSshTunnel } from './remote/sshTunnel'
 import { readHosts, upsertHost, removeHost, markConnected, exportHosts, importHosts, type RemoteHost } from './remote/hostStore'
@@ -783,6 +784,12 @@ app.whenReady().then(() => {
   })
   ipcMain.handle(CH.mobileRegenToken, () => mobileGw.regenToken())
   ipcMain.handle(CH.mobileKick, (_e, cid: string) => mobileGw.kick(cid))
+  // 已授权设备:局域网和中转共用同一张表,「移除」在两条路上同时生效。
+  ipcMain.handle(CH.devicesList, () => listDevices())
+  ipcMain.handle(CH.devicesPairing, () => pairingToken())
+  ipcMain.handle(CH.devicesRevoke, (_e, id: string) => { revokeDevice(id); return listDevices() })
+  ipcMain.handle(CH.devicesRevokeAll, () => { revokeAll(); return listDevices() })
+  onDevicesChanged(() => registry.broadcast(CH.devicesChangedEvent, listDevices()))
 
   // ── 中转(第三期)。和上面那个手机端网关**不是二选一**:
   //    局域网网关 = 「同一个 wifi 里连得上」;中转 = 「NAT 后面也连得上」。

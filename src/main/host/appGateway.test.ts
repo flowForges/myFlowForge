@@ -167,6 +167,6 @@ describe('app 自己端的手机端网关', () => {
   it('绑回环时不要令牌', async () => {
     const { gw } = make({ 'a:b': () => 1 })
     const st = await gw.apply(LOOPBACK())
-    expect(st.token).toBe('')
+    expect(st.tokenRequired).toBe(false)
   })
 })

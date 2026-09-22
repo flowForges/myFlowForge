@@ -24,6 +24,20 @@ import type { Channel } from '@shared/remote/channel'
 //  这里原样再导出,既有调用方一行不用改。
 export type { Channel }
 
+/**
+ * 按设备发令牌时的鉴权(桌面端「共享主机」用):每台设备一把令牌,可以单独撤销。
+ * - `check`:这把令牌是哪台设备的;不认识返回 null(照旧 4403 断开)。
+ * - `bind`:鉴权通过后登记「怎么把这条连接踢掉」,撤销那台设备时调用;返回注销函数,连接关闭时调。
+ * ★撤销用的是 4403(和令牌不对同一个码)—— 客户端见到 4403 **不会自动重连**,这正是「永久移除」要的;
+ *  「断开」按钮用的 1001 则会重连。
+ */
+export type TokenAuth = {
+  check: (got: string) => string | null
+  bind?: (deviceId: string, revoke: () => void) => () => void
+  /** 这台设备连上了 / 报了名字(用来记「最近连接」和给新配对的设备起名) */
+  seen?: (deviceId: string, label: string) => void
+}
+
 export type ServeOpts = {
   /** 已经筛过的方法表 —— 只包含这台 host 该对外提供的方法(见 channelRouting.daemonTable) */
   table: MethodTable
@@ -32,8 +46,8 @@ export type ServeOpts = {
   /** 广播总线:每条连接挂一路 sink */
   addSink: (sink: (channel: string, payload: unknown) => void) => () => void
   version: string
-  /** 不给 = 不需要鉴权 */
-  token?: string
+  /** 不给 = 不需要鉴权。字符串 = 所有设备共用一把(Linux daemon);TokenAuth = 按设备发(桌面端) */
+  token?: string | TokenAuth
   /** 客户端连上后多久内必须完成鉴权,超时踢掉 */
   authTimeoutMs?: number
   onLog?: (msg: string) => void
@@ -45,7 +59,7 @@ export type ServeOpts = {
    *  而「哪一台」正是他要决定**踢掉哪一台**时唯一需要的信息。
    * ★不是每帧都报,只在真的变了时报:这条路上一秒可能过几百帧。
    */
-  onPeer?: (info: { id: string; label: string; ready: boolean }) => void
+  onPeer?: (info: { id: string; label: string; ready: boolean; deviceId?: string }) => void
 }
 
 /** 连接序号。只要求「同一个进程里不重复」,所以一个自增数就够,不必上 UUID。 */
@@ -83,7 +97,12 @@ export function serveConnection(ch: Channel, opts: ServeOpts): void {
     try { ch.send(encodeFrame(o as never)) } catch { /* 信道已关 */ }
   }
 
-  const reportPeer = () => opts.onPeer?.({ id: clientId, label: clientLabel, ready: authed })
+  /** 按设备鉴权时,这条连接用的是哪台设备的令牌(撤销 / 列表上的「移除」靠它)。 */
+  let deviceId: string | undefined
+  const reportPeer = () => {
+    if (deviceId && opts.token && typeof opts.token !== 'string') opts.token.seen?.(deviceId, clientLabel)
+    opts.onPeer?.({ id: clientId, label: clientLabel, ready: authed, deviceId })
+  }
 
   const becomeReady = () => {
     authed = true
@@ -108,7 +127,15 @@ export function serveConnection(ch: Channel, opts: ServeOpts): void {
     if (f.t === 'auth') {
       if (!opts.token) return                       // 不需要鉴权时收到 auth:无视,别当错误
       if (authed) return                            // 重复 auth:无视
-      if (!tokenMatches(opts.token, f.token)) { log('token 不对,断开'); ch.close(4403, 'bad token'); return }
+      if (typeof opts.token === 'string') {
+        if (!tokenMatches(opts.token, f.token)) { log('token 不对,断开'); ch.close(4403, 'bad token'); return }
+      } else {
+        const id = opts.token.check(f.token)
+        if (!id) { log('token 不对(或已被移除),断开'); ch.close(4403, 'bad token'); return }
+        deviceId = id
+        const unbind = opts.token.bind?.(id, () => { log(`设备 ${id} 已被移除,断开`); ch.close(4403, 'revoked') })
+        if (unbind) closers.push(unbind)
+      }
       if (authTimer) clearTimeout(authTimer)
       becomeReady()
       return

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MobileStatus } from '../../main/host/appGateway'
+import type { AuthorizedDevice } from '../../main/remote/deviceTokens'
 import { buildPairingLink } from '@shared/remote/pairingLink'
 import { QrCode } from './QrCode'
 import { RelayUrlPicker } from './RelayUrlPicker'
@@ -28,13 +29,20 @@ export function MobileSection() {
    *  而 `MobileStatus` 说的是"局域网网关现在什么样"。塞进去的话,一个只开中转、
    *  没开局域网网关的人就拿不到公钥了 —— 而他恰恰是最需要那个二维码的人。
    */
-  const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean; token: string; urlHistory?: string[] } | null>(null)
+  const [relay, setRelay] = useState<{ publicKey: string; url: string; enabled: boolean; urlHistory?: string[] } | null>(null)
   /** 中转连接现在什么样(连上了 / 在重试 / 起不来)。★开关拨过去却什么都没发生,是最难查的一类。 */
   const [relayDetail, setRelayDetail] = useState<
-    { status: string; error?: string; peers?: number; devices?: { cid: string; label: string; since: number }[] } | null
+    { status: string; error?: string; peers?: number; devices?: { cid: string; label: string; since: number; deviceId?: string }[] } | null
   >(null)
   /** 正在踢的那台 —— 点完到状态回来之间要把按钮按住,否则连点两下会发两次。 */
   const [kicking, setKicking] = useState('')
+  /**
+   * 这次要给出去的配对令牌。★按设备发(main/remote/deviceTokens.ts):每台设备一把,可以单独移除。
+   *  只在点「生成配对码」时才去要 —— 打开设置页不该凭空多出一台「等待配对」。
+   */
+  const [pair, setPair] = useState<{ id: string; token: string } | null>(null)
+  /** 已授权设备(含离线的)。「移除」在这里,「断开」在下面的已连接列表里。 */
+  const [authorized, setAuthorized] = useState<AuthorizedDevice[]>([])
   const [port, setPort] = useState('6789')
   const [lan, setLan] = useState(true)
   const [showToken, setShowToken] = useState(false)
@@ -70,15 +78,34 @@ export function MobileSection() {
       //  它和局域网非回环时是**同一把** —— 一枚码要在两条路上都能用,见下面 `qrToken`。
       // ★★`urlHistory` 必须一起拷进来。09-17 那一版这里只拷了四个字段 —— 主进程明明存着历史,
       //  界面上的下拉却永远是空的,功能做完那天起就没用过。
-      setRelay({ publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled, token: r.token ?? '', urlHistory: r.urlHistory ?? [] })
+      setRelay({ publicKey: r.publicKey ?? '', url: r.url ?? '', enabled: !!r.enabled, urlHistory: r.urlHistory ?? [] })
       setRelayDetail((r.detail ?? null) as {
         status: string; error?: string; peers?: number
-        devices?: { cid: string; label: string; since: number }[]
+        devices?: { cid: string; label: string; since: number; deviceId?: string }[]
       } | null)
     }
     void window.forge.relayStatus?.().then(take)
     return window.forge.onRelayStatus?.(take)
   }, [])
+
+  useEffect(() => {
+    if (typeof window.forge?.devicesList !== 'function') return
+    void window.forge.devicesList().then(setAuthorized)
+    return window.forge.onDevicesChanged?.(setAuthorized)
+  }, [])
+
+  const newPairing = async () => {
+    setPair(await window.forge.devicesPairing())
+    setShowQr(true)
+  }
+  /** 永久移除:令牌作废 + 当场断开,对方不会自动重连。 */
+  const revoke = (d: { id: string; legacy?: boolean; label?: string }) => {
+    const what = d.legacy
+      ? '撤销旧配对码?\n升级前用它配对的所有设备都会立刻断开、且连不回来,要继续用的得重新配对。'
+      : `移除「${d.label || '这台设备'}」?\n它会立刻断开,而且连不回来 —— 要再连得重新配对。`
+    if (!window.confirm(what)) return
+    void window.forge.devicesRevoke(d.id).then(setAuthorized)
+  }
 
   const copy = (what: string, text: string) => {
     void navigator.clipboard?.writeText(text)
@@ -115,12 +142,15 @@ export function MobileSection() {
   const qrAddr = lanAddr ? `${lanAddr}:${st.port}` : `127.0.0.1:${st.port}`
   /**
    * 码里那把令牌。
-   * ★网关绑回环时 `st.token` 是空串 —— 那条路本来就不要令牌(`appGateway.ts:84`)。
-   *  但**中转那条路一定要**:`relayController` 起 relayHost 时传的是 `ensureToken()`。
-   *  不把它顶上来的话,手机走中转会在握手之后被 4403 断掉,而界面上只写着「连接失败」。
-   * ★中转关着时**不顶** —— 那时候多带一把没人校验的令牌,等于白白把钥匙画进码里。
+   * ★网关绑回环时那条路本来就不要令牌(`st.tokenRequired` 为 false)。
+   *  但**中转那条路一定要** —— 不带的话手机走中转会在握手之后被 4403 断掉,界面上只写着「连接失败」。
+   * ★两条路都不要令牌时**不带** —— 多带一把没人校验的令牌,等于白白把钥匙画进码里。
    */
-  const qrToken = st.token || (relayOn ? relay?.token ?? '' : '')
+  // ★按设备发的那把(只要这条路需要令牌就带):局域网绑非回环要,中转一定要。
+  const needToken = st.tokenRequired || relayOn
+  const qrToken = needToken ? pair?.token ?? '' : ''
+  /** 这枚码已经被某台设备用掉了 ⇒ 给下一台得再生成一枚。 */
+  const pairUsedBy = pair ? authorized.find((d) => d.id === pair.id && !d.pending) : undefined
   // ★`?? ''` 不是多余的防御:这份 status 是**跨进程**来的,连着一台跑旧版本的主机时
   //  就是少几个字段。少一个字段不该让整屏设置炸成白板(旧 preload 那次已经教过一遍)。
   const pairing = buildPairingLink({
@@ -150,7 +180,7 @@ export function MobileSection() {
       {pairable && (
         <div className="hosts-conn">
           <div className="hosts-qr">
-            {showQr ? (
+            {showQr && pair ? (
               <>
                 {/* alt 报的是**码里真的那个地址**(`qrAddr`),不是上面那个给人抄的 `addr` ——
                     没有局域网地址时那一个是占位符,而占位符从来没进过码。 */}
@@ -158,18 +188,23 @@ export function MobileSection() {
                 <div className="hosts-qr-say">
                   {/* ★安全那半句不许压掉:这枚码里带着令牌,是这一屏唯一一条安全提示。 */}
                   {/* ★这一屏唯一一条安全提示,不许压掉。 */}
-                  <p className="set-desc">码里带令牌,别截图外传。</p>
+                  <p className="set-desc">码里带令牌,别截图外传。<b>一枚码只给一台设备</b> —— 这样以后能单独移除它。</p>
+                  {pairUsedBy && (
+                    <p className="set-desc">这枚码已被「{pairUsedBy.label || '一台设备'}」用了。给下一台:
+                      {' '}<button className="set-btn" onClick={() => void newPairing()}>再生成一枚</button>
+                    </p>
+                  )}
                   <button className="set-btn" onClick={() => setShowQr(false)}>收起二维码</button>
                 </div>
               </>
             ) : (
-              <button className="set-btn" onClick={() => setShowQr(true)}>显示配对二维码</button>
+              <button className="set-btn" onClick={() => void newPairing()}>为新设备生成配对码</button>
             )}
             {/* ★★2026-09-02:**另一台电脑**也能连进来了(设置 → 远程主机 → 粘贴配对码),
                 而电脑之间没法扫码。所以同一枚码要能以**文本**形式拿走。
                 ★和二维码同一条安全规矩:这串里带着令牌,复制之后别贴进聊天记录。
                 ★只在码展开时摆 —— 折着的时候摆一颗「复制」,等于遮罩根本不存在。 */}
-            {showQr && (
+            {showQr && pair && (
               <button className="set-btn" onClick={() => copy('pair', pairing)}>
                 {copied === 'pair' ? '已复制(含令牌)' : '复制配对码'}
               </button>
@@ -295,34 +330,26 @@ export function MobileSection() {
           </p>
         )}
 
-        {st.token && (
+        {st.tokenRequired && (pair ? (
           <div className="proj-field">
             <label htmlFor="mobToken">访问令牌</label>
             <div className="hosts-inline">
-              <input id="mobToken" readOnly type={showToken ? 'text' : 'password'} value={st.token} onFocus={(e) => e.currentTarget.select()} />
+              <input id="mobToken" readOnly type={showToken ? 'text' : 'password'} value={pair.token} onFocus={(e) => e.currentTarget.select()} />
               <button className="set-btn" onClick={() => setShowToken((v) => !v)}>{showToken ? '隐藏' : '显示'}</button>
-              <button className="set-btn" onClick={() => copy('token', st.token)}>
+              <button className="set-btn" onClick={() => copy('token', pair.token)}>
                 {copied === 'token' ? '已复制' : '复制'}
               </button>
             </div>
           </div>
-        )}
+        ) : (
+          <p className="set-desc">访问令牌:先在上面点「为新设备生成配对码」—— 每台设备一把。</p>
+        ))}
         </>
         )}
 
-        {/* ★这颗和「局域网可见」放一起:换令牌之后,已经配好的手机全部要重新扫码。 */}
-        {/* ★仍然挂在 `st.running` 上,**不是**疏漏:`mobileRegenToken` 换的是这台机器那把
-            共用令牌,而中转那条连接是**起的时候**就把旧令牌捧在手里的(`relayController` 把
-            `ensureToken()` 传给了 `startRelayHost`)—— 换完之后中转那头仍旧认旧的,
-            直到中转重连一次。做成「点了要么没生效、要么把手机踢下线」的按钮不如先不摆。 */}
-        {st.running && st.token && (
-          <div className="hosts-conn-foot">
-            <button className="set-btn danger" disabled={busy} onClick={() => void window.forge.mobileRegenToken().then(setSt)}>
-              换一把令牌
-            </button>
-            <span className="set-desc">令牌泄了就换 —— 换完已配好的手机要重新填一次。</span>
-          </div>
-        )}
+        {/* ★「换一把令牌」拿掉了:令牌现在按设备发,泄了就在下面「已授权设备」里移除那一台,
+            不知道是哪台就「全部撤销」。原来那颗按钮只往磁盘写一把新令牌,正在跑的网关和中转
+            都还认旧的,要重启 app 才生效 —— 点了等于没点(2026-09-22 查出来的)。 */}
       </details>
 
       {/* ★同上:开关自己就叫「外部中转」,不再顶一个「远程连接」的分节标题。
@@ -414,6 +441,7 @@ export function MobileSection() {
                     >
                       {kicking === d.cid ? '断开中…' : '断开'}
                     </button>
+                    {d.deviceId && <RemoveBtn deviceId={d.deviceId} label={d.label} onRevoke={revoke} />}
                   </li>
                 ))}
                 {/* ★局域网这条路现在也有名字了(网关接上了 `serveConnection` 的 onPeer)——
@@ -437,6 +465,7 @@ export function MobileSection() {
                     >
                       {kicking === d.cid ? '断开中…' : '断开'}
                     </button>
+                    {d.deviceId && <RemoveBtn deviceId={d.deviceId} label={d.label} onRevoke={revoke} />}
                   </li>
                 ))}
                 {lanPending > 0 && (
@@ -452,6 +481,65 @@ export function MobileSection() {
         )
       })()}
 
+      {/* ★★「谁能连进来」和「现在连着谁」是两件事:上面是后者(能「断开」,会自己重连),
+          这里是前者(能「移除」,永久)。离线的设备也在这里 —— 要撤掉一台,不必等它连上来。 */}
+      {authorized.length > 0 && (
+        <div className="hosts-devs">
+          <div className="hd-h">
+            已授权设备
+            <span className="hd-n">{authorized.length}</span>
+          </div>
+          <ul className="hd-list">
+            {authorized.map((d) => (
+              <li className="hd-row" key={d.id}>
+                <span className="hd-dot" style={d.online ? undefined : { background: 'var(--faint)' }} />
+                <span className="hd-nm" title={d.label}>
+                  {d.legacy ? '之前配对的设备(共用旧配对码)' : d.pending ? '等待配对(这枚码还没被用过)' : d.label || '未命名设备'}
+                </span>
+                <span className="hd-via">{d.online ? '在线' : d.lastSeenAt ? `上次 ${seenAgo(d.lastSeenAt)}` : ''}</span>
+                <button className="set-btn danger" onClick={() => revoke(d)} title="令牌作废并立刻断开,对方不会自动重连">
+                  {d.legacy ? '撤销' : '移除'}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="hosts-conn-foot">
+            <button
+              className="set-btn danger"
+              onClick={() => {
+                if (!window.confirm('全部撤销?\n所有设备立刻断开、且都连不回来,要继续用的得重新配对。令牌泄露又不知道是哪台时用。')) return
+                void window.forge.devicesRevokeAll().then(setAuthorized)
+                setPair(null); setShowQr(false)
+              }}
+            >
+              全部撤销
+            </button>
+            <span className="set-desc">「断开」只断这一次,对方会自己重连;「移除」才是永久的。</span>
+          </div>
+        </div>
+      )}
     </>
   )
+}
+
+/** 已连接列表里那颗「移除」:和已授权列表里的是同一个动作(按这条连接用的令牌撤销)。 */
+function RemoveBtn({ deviceId, label, onRevoke }: { deviceId: string; label: string; onRevoke: (d: { id: string; legacy?: boolean; label?: string }) => void }) {
+  const legacy = deviceId === 'legacy'
+  return (
+    <button
+      className="set-btn danger"
+      title={legacy ? '它用的是升级前的共用配对码 —— 撤销会让所有用旧码的设备一起失效' : '令牌作废并立刻断开,对方不会自动重连'}
+      onClick={() => onRevoke({ id: deviceId, legacy, label })}
+    >
+      {legacy ? '撤销旧码' : '移除'}
+    </button>
+  )
+}
+
+function seenAgo(t: number): string {
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000))
+  if (s < 60) return '刚刚'
+  if (s < 3600) return `${Math.round(s / 60)} 分钟前`
+  if (s < 86400) return `${Math.round(s / 3600)} 小时前`
+  return `${Math.round(s / 86400)} 天前`
 }

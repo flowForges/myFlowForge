@@ -17,6 +17,14 @@ export const CH = {
   /** 踢掉一台挂在局域网网关上的设备(按连接 id)。和 relay:kick 同一个语义。 */
   mobileKick: 'mobile:kick',
   mobileStatusEvent: 'mobile:status-event',
+  // 已授权设备(按设备发令牌,remote/deviceTokens.ts)。同 mobile:*,注册在 index.ts、不进方法表。
+  devicesList: 'devices:list',
+  /** 给新设备的配对令牌(上一把还没被用过就复用) */
+  devicesPairing: 'devices:pairing',
+  /** 永久移除一台:令牌作废 + 当场断开,不会自动重连 */
+  devicesRevoke: 'devices:revoke',
+  devicesRevokeAll: 'devices:revoke-all',
+  devicesChangedEvent: 'devices:changed',
   // 中转(第三期)。★和 mobile:* 一样注册在 index.ts 而不是方法表里 ——
   //  它描述的是**这台设备自己的服务**,连去别的机器时不该被转发过去。
   /** 踢掉一台挂在中转上的设备(按 cid)。★和其它 relay:* 一样注册在 index.ts,不进方法表。 */

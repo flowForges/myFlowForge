@@ -377,6 +377,15 @@ const api = {
     ipcRenderer.invoke(CH.mobileApply, cfg),
   mobileRegenToken: (): Promise<import('../main/host/appGateway').MobileStatus> => ipcRenderer.invoke(CH.mobileRegenToken),
   mobileKick: (cid: string): Promise<import('../main/host/appGateway').MobileStatus> => ipcRenderer.invoke(CH.mobileKick, cid),
+  devicesList: (): Promise<import('../main/remote/deviceTokens').AuthorizedDevice[]> => ipcRenderer.invoke(CH.devicesList),
+  devicesPairing: (): Promise<{ id: string; token: string }> => ipcRenderer.invoke(CH.devicesPairing),
+  devicesRevoke: (id: string): Promise<import('../main/remote/deviceTokens').AuthorizedDevice[]> => ipcRenderer.invoke(CH.devicesRevoke, id),
+  devicesRevokeAll: (): Promise<import('../main/remote/deviceTokens').AuthorizedDevice[]> => ipcRenderer.invoke(CH.devicesRevokeAll),
+  onDevicesChanged: (cb: (list: import('../main/remote/deviceTokens').AuthorizedDevice[]) => void) => {
+    const listener = (_: unknown, l: import('../main/remote/deviceTokens').AuthorizedDevice[]) => cb(l)
+    ipcRenderer.on(CH.devicesChangedEvent, listener)
+    return () => { ipcRenderer.removeListener(CH.devicesChangedEvent, listener) }
+  },
   onMobileStatus: (cb: (s: import('../main/host/appGateway').MobileStatus) => void) => {
     const listener = (_: unknown, s: import('../main/host/appGateway').MobileStatus) => cb(s)
     ipcRenderer.on(CH.mobileStatusEvent, listener)

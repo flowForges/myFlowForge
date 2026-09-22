@@ -4,7 +4,7 @@ import { pickProxy, proxyUsable } from './wsProxy'
 import type { Identity } from '@shared/remote/e2e'
 import { PING, PONG, hostClose, hostData, joinFrame, parseHostEnvelope, roomFor, asRelayStatus } from '@shared/remote/relayWire'
 import type { MethodTable } from '../ipc/invokeCtx'
-import { serveConnection, type Channel } from './serveConnection'
+import { serveConnection, type Channel, type TokenAuth } from './serveConnection'
 import { hostE2ELink, type E2ELink } from '@shared/remote/e2eChannel'
 
 /**
@@ -37,7 +37,7 @@ import { hostE2ELink, type E2ELink } from '@shared/remote/e2eChannel'
  */
 
 /** 现在挂在这个房间里的一台设备。★`cid` 是中转分配的编号,踢人时按它点名。 */
-export type RelayDevice = { cid: string; label: string; since: number }
+export type RelayDevice = { cid: string; label: string; since: number; deviceId?: string }
 
 export type RelayHostStatus =
   | { status: 'off' }
@@ -63,8 +63,9 @@ export type RelayHostOpts = {
    *  令牌回答的是"谁能用" —— 一个知道公钥的人握不了手,但一个**拿到过配对码**又不该
    *  再被信任的设备(旧手机、离职同事)必须能被单独踢掉,而换令牌就是那个开关。
    *  换身份太重(所有设备都要重扫)。
+   * ★桌面端按设备发(TokenAuth):「移除」一台只撤它那把,别人不受影响。
    */
-  token?: string
+  token?: string | TokenAuth
   /**
    * 「app 自身的网络」那个代理(设置 → 网络 的 appProxy)。空着就退到 `https_proxy` 等环境变量。
    *
@@ -193,7 +194,7 @@ export function startRelayHost(opts: RelayHostOpts): RelayHostHandle {
           // 界面只能说「连着 2 台设备」,说不出是哪两台(用户原话)。
           onPeer: (info) => {
             const prev = peers.get(cid)
-            peers.set(cid, { cid, label: info.label, since: prev?.since ?? Date.now() })
+            peers.set(cid, { cid, label: info.label, since: prev?.since ?? Date.now(), deviceId: info.deviceId })
             pushOnline()
           },
         })

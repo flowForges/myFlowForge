@@ -2,7 +2,8 @@ import { hostname, networkInterfaces } from 'node:os'
 import { startGateway, type GatewayHandle, type GatewayDevice } from '../remote/gateway'
 import { daemonTable } from '../ipc/channelRouting'
 import type { MethodTable } from '../ipc/invokeCtx'
-import { ensureToken, isLoopback, resetToken } from '../daemon/config'
+import { isLoopback } from '../daemon/config'
+import { deviceAuth, revokeAll } from '../remote/deviceTokens'
 import { readIdentity } from '../remote/identity'
 import type { MobileGateway } from '../config/schema'
 
@@ -22,8 +23,11 @@ export type MobileStatus = {
   running: boolean
   host: string
   port: number
-  /** 只有绑非回环时才有;回环监听不要令牌 */
-  token: string
+  /**
+   * 连进来要不要令牌(绑非回环时要;回环监听不要)。
+   * ★不再带令牌本身:令牌按设备发(remote/deviceTokens.ts),界面生成配对码时单独要一把。
+   */
+  tokenRequired: boolean
   /** 这台机器上别人连得到的 IPv4 —— 手机要照抄的就是它 */
   addresses: string[]
   /** 现在有几台设备连着 */
@@ -89,7 +93,7 @@ export function createAppGateway(deps: AppGatewayDeps): AppGateway {
     running: !!gw,
     host: cur.host,
     port: gw?.port ?? cur.port,
-    token: isLoopback(cur.host) ? '' : ensureToken(),
+    tokenRequired: !isLoopback(cur.host),
     addresses: lanAddresses(),
     clients: gw?.clientCount() ?? 0,
     devices: gw?.clients() ?? [],
@@ -130,7 +134,8 @@ export function createAppGateway(deps: AppGatewayDeps): AppGateway {
         return status()
       }
       // ★非回环强制令牌。绑 0.0.0.0 又不要凭据,等于把「起 agent + 替你答门 + 开终端」挂在网上。
-      const token = isLoopback(cfg.host) ? undefined : ensureToken()
+      // ★按设备鉴权:和中转共用同一个(deviceAuth),所以「移除」一台在两条路上同时生效。
+      const token = isLoopback(cfg.host) ? undefined : deviceAuth()
       try {
         gw = await startGateway({
           table, addSink: deps.addSink, version: deps.version,
@@ -150,8 +155,10 @@ export function createAppGateway(deps: AppGatewayDeps): AppGateway {
       announce()
       return status()
     },
+    // 「全部撤销」:所有已授权设备(含旧的共用令牌)立刻失效、当前连接当场断开。
+    // ★原来这里只是往磁盘写一把新令牌 —— 正在跑的网关和中转都还认旧的,要重启才生效。
     regenToken() {
-      resetToken()
+      revokeAll()
       announce()
       return status()
     },

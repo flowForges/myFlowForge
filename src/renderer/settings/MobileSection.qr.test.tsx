@@ -17,7 +17,7 @@ vi.mock('./QrCode', () => ({
 }))
 
 const RUNNING = {
-  running: true, host: '0.0.0.0', port: 6789, token: 'tok-ABC_123',
+  running: true, host: '0.0.0.0', port: 6789, tokenRequired: true,
   addresses: ['192.168.110.133', '10.211.55.2'], clients: 0, error: '', name: '书房的 Mac',
 }
 
@@ -45,6 +45,11 @@ const mount = async (status: unknown, relay?: Partial<RelayView>) => {
     mobileStatus: vi.fn(async () => status),
     mobileApply: vi.fn(async () => status),
     mobileRegenToken: vi.fn(async () => status),
+    devicesList: vi.fn(async () => []),
+    devicesPairing: vi.fn(async () => ({ id: 'd1', token: 'tok-ABC_123' })),
+    devicesRevoke: vi.fn(async () => []),
+    devicesRevokeAll: vi.fn(async () => []),
+    onDevicesChanged: () => () => {},
     mobileKick: vi.fn(async () => status),
     onMobileStatus: () => () => {},
     ...(r ? {
@@ -62,7 +67,7 @@ const mount = async (status: unknown, relay?: Partial<RelayView>) => {
 
 /** 点开码,把喂给 QrCode 的那条链接解回来。 */
 const openAndParse = async () => {
-  await act(async () => { fireEvent.click(screen.getByText('显示配对二维码')) })
+  await act(async () => { fireEvent.click(screen.getByText('为新设备生成配对码')) })
   const svg = document.querySelector('svg.qr')!
   const r = parsePairingLink(svg.getAttribute('data-text') ?? '')
   if (!r.ok) throw new Error(`这一屏出的码手机端解不开:${r.error}`)
@@ -75,13 +80,15 @@ describe('配对二维码', () => {
   it('★默认不画 —— 码里带着令牌,不能替人在共享屏幕上把钥匙亮出来', async () => {
     await mount(RUNNING)
     expect(document.querySelector('svg.qr')).toBeNull()
-    expect(screen.getByText('显示配对二维码')).toBeTruthy()
+    expect(screen.getByText('为新设备生成配对码')).toBeTruthy()
   })
 
   it('点开之后画出来的码,解回来就是地址 + 令牌 + 机器名', async () => {
     await mount(RUNNING)
     const v = await openAndParse()
     expect(v).toEqual({ address: '192.168.110.133:6789', token: 'tok-ABC_123', label: '书房的 Mac' })
+    // ★令牌是点「生成」时单独要来的那一把(按设备发),不是 status 里的共用令牌
+    expect((window as unknown as { forge: { devicesPairing: ReturnType<typeof vi.fn> } }).forge.devicesPairing).toHaveBeenCalledTimes(1)
     // 喂进去的是**第一个**地址(虚拟网卡 10.211.55.x 是 Parallels 的,手机永远连不上那个)。
     expect(document.querySelector('svg.qr')?.getAttribute('aria-label')).toBe('配对二维码 · 192.168.110.133:6789')
   })
@@ -99,7 +106,7 @@ describe('配对二维码', () => {
 
   it('能收回去', async () => {
     await mount(RUNNING)
-    await act(async () => { fireEvent.click(screen.getByText('显示配对二维码')) })
+    await act(async () => { fireEvent.click(screen.getByText('为新设备生成配对码')) })
     await act(async () => { fireEvent.click(screen.getByText('收起二维码')) })
     expect(document.querySelector('svg.qr')).toBeNull()
   })
@@ -107,25 +114,25 @@ describe('配对二维码', () => {
   it('★连着一台跑旧版本的主机(status 里没有 name)不能把整屏炸成白板', async () => {
     const { name: _drop, ...old } = RUNNING
     await mount(old)
-    await act(async () => { fireEvent.click(screen.getByText('显示配对二维码')) })
+    await act(async () => { fireEvent.click(screen.getByText('为新设备生成配对码')) })
     expect(document.querySelector('svg.qr')).toBeTruthy()
     expect(document.querySelector('button.toggle[aria-label="局域网"]')).toBeTruthy()
   })
 
   it('★网关和中转**都**关着,才是真的没码可扫', async () => {
     await mount({ ...RUNNING, running: false }, { enabled: false })
-    expect(screen.queryByText('显示配对二维码')).toBeNull()
+    expect(screen.queryByText('为新设备生成配对码')).toBeNull()
   })
 
   it('旧 preload 里根本没有中转那几个方法时,按老样子只看网关', async () => {
     await mount({ ...RUNNING, running: false })
-    expect(screen.queryByText('显示配对二维码')).toBeNull()
+    expect(screen.queryByText('为新设备生成配对码')).toBeNull()
   })
 })
 
 /**
  * ★★这一组是 2026-08-31 真机上撞出来的:用户在第二台电脑上**只开了中转**,
- *  整屏没有任何「显示配对二维码」—— 于是手机根本没法配对,而设计文档决策 6 明说
+ *  整屏没有任何「为新设备生成配对码」—— 于是手机根本没法配对,而设计文档决策 6 明说
  *  直连和中转是**平级**的两条路。原来那一整块(含二维码)被 `st.running &&` 挡着。
  */
 describe('只开中转(局域网网关关着)', () => {
@@ -134,7 +141,7 @@ describe('只开中转(局域网网关关着)', () => {
 
   it('★照样出码 —— 只开中转的人恰恰是最需要这枚码的那个', async () => {
     await mount(OFF, RELAY_ON)
-    expect(screen.getByText('显示配对二维码')).toBeTruthy()
+    expect(screen.getByText('为新设备生成配对码')).toBeTruthy()
   })
 
   it('码里带着公钥和中转地址 —— 少任何一个手机端都会拒扫', async () => {
@@ -144,12 +151,18 @@ describe('只开中转(局域网网关关着)', () => {
     expect(v.relay).toBe('wss://relay.example/')
   })
 
-  it('★网关绑回环、`status.token` 是空串时,中转那把令牌顶上来', async () => {
-    // 中转那条路上 daemon 一样开着令牌校验(`relayController.ts` 用的就是 `ensureToken()`),
+  it('★网关绑回环(局域网不要令牌)时,只要中转开着,码里照样带按设备发的那把令牌', async () => {
+    // 中转那条路上一样开着令牌校验(`relayController.ts` 用的是 deviceAuth()),
     // 出一枚没令牌的码,手机走中转会在握手后被 4403 断掉 —— 界面上只显示「连接失败」。
-    await mount({ ...OFF, host: '127.0.0.1', token: '' }, RELAY_ON)
+    await mount({ ...OFF, host: '127.0.0.1', tokenRequired: false }, RELAY_ON)
     const v = await openAndParse()
-    expect(v.token).toBe('relay-tok')
+    expect(v.token).toBe('tok-ABC_123')
+  })
+
+  it('★局域网绑回环、中转也关着:两条路都不要令牌,码里就不带(不把钥匙白画进码里)', async () => {
+    await mount({ ...RUNNING, host: '127.0.0.1', tokenRequired: false }, { enabled: false })
+    const v = await openAndParse()
+    expect(v.token).toBe('')
   })
 
   it('★这台机器一个局域网地址都没有时,地址回落成回环 —— 不能填占位符', async () => {
@@ -162,7 +175,7 @@ describe('只开中转(局域网网关关着)', () => {
 
   it('中转开着但地址是空的,不算开着 —— 那时它连不上任何地方', async () => {
     await mount(OFF, { enabled: true, url: '' })
-    expect(screen.queryByText('显示配对二维码')).toBeNull()
+    expect(screen.queryByText('为新设备生成配对码')).toBeNull()
   })
 
   it('★不摆手填用的「地址 / 令牌」两个框 —— 手填出来的记录没有公钥,连不上', async () => {
@@ -173,7 +186,7 @@ describe('只开中转(局域网网关关着)', () => {
 
   it('★不再说「手机和电脑要在同一个网络里」—— 走中转时那句话是错的', async () => {
     await mount(OFF, RELAY_ON)
-    await act(async () => { fireEvent.click(screen.getByText('显示配对二维码')) })
+    await act(async () => { fireEvent.click(screen.getByText('为新设备生成配对码')) })
     expect(screen.queryByText(/同一个网络/)).toBeNull()
   })
 

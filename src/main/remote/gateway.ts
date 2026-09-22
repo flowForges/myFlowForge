@@ -2,7 +2,7 @@ import { WebSocketServer, type WebSocket } from 'ws'
 import type { Identity } from '@shared/remote/e2e'
 import { hostE2ELink } from '@shared/remote/e2eChannel'
 import type { MethodTable } from '../ipc/invokeCtx'
-import { serveConnection, type Channel } from './serveConnection'
+import { serveConnection, type Channel, type TokenAuth } from './serveConnection'
 
 export type GatewayOpts = {
   /** 已经筛过的方法表 —— 只包含这台 host 该对外提供的方法(见 channelRouting.daemonTable) */
@@ -13,8 +13,8 @@ export type GatewayOpts = {
   /** 绑哪个地址。★默认只绑回环 —— 公网上根本不存在这个端口(决策 B-3) */
   host?: string
   port: number
-  /** 不给 = 不需要鉴权。非回环地址必须给(由调用方保证,见 daemon 入口) */
-  token?: string
+  /** 不给 = 不需要鉴权。非回环地址必须给(由调用方保证,见 daemon 入口)。桌面端按设备发(TokenAuth) */
+  token?: string | TokenAuth
   /** 客户端连上后多久内必须完成鉴权,超时踢掉 */
   authTimeoutMs?: number
   /**
@@ -56,7 +56,8 @@ export const E2E_GRACE_MS = 500
  * 合成一张表显示,形状不同的话那块界面就得写两遍(而写两遍的那一版正是用户抱怨的起点:
  * 「局域网只有一个数字,中转才有名字」)。
  */
-export type GatewayDevice = { cid: string; label: string; since: number }
+/** `deviceId` = 这条连接用的是哪台已授权设备的令牌(按设备发令牌时才有),界面上的「移除」按它撤销。 */
+export type GatewayDevice = { cid: string; label: string; since: number; deviceId?: string }
 
 export type GatewayHandle = {
   port: number
@@ -147,7 +148,7 @@ export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
   //  同一台设备开两个窗口就是两条,踢的也该是那一条。
   const peers = new Map<string, GatewayDevice & { ws: WebSocket }>()
   const devices = (): GatewayDevice[] =>
-    [...peers.values()].sort((a, b) => a.since - b.since).map(({ cid, label, since }) => ({ cid, label, since }))
+    [...peers.values()].sort((a, b) => a.since - b.since).map(({ cid, label, since, deviceId }) => ({ cid, label, since, deviceId }))
   let closed = false
 
   wss.on('connection', (ws) => {
@@ -168,7 +169,7 @@ export async function startGateway(opts: GatewayOpts): Promise<GatewayHandle> {
       //  `since` 取第一次报上来的时间,不能每次都刷新,否则列表顺序会跳。
       onPeer: (info) => {
         const prev = peers.get(info.id)
-        peers.set(info.id, { cid: info.id, label: info.label, since: prev?.since ?? Date.now(), ws })
+        peers.set(info.id, { cid: info.id, label: info.label, since: prev?.since ?? Date.now(), deviceId: info.deviceId, ws })
         opts.onClientsChanged?.()
       },
     })
