@@ -40,3 +40,6 @@ deliverables/
 *.jks
 # gradle 的本地属性(sdk.dir / 签名口令都可能落在这里)
 mobile/android/local.properties
+
+# per-agent MCP config written by forgeMcpArgs when FORGE_MCP_DIR is unset (a stray one got committed once)
+/mcp.*.json
