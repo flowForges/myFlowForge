@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { ICN, formatBytes } from './notifications'
 import { Markdown } from '../views/chat/markdown'
-import type { UpdateInfo, InstallProgress } from '@shared/types'
-import type { UpdatePhase } from '../state/useUpdate'
+import type { UpdateInfo, InstallProgress, UpdateBusyItem } from '@shared/types'
+import type { UpdatePhase, ApplyMode } from '../state/useUpdate'
 
 interface UpgradeModalProps {
   open: boolean
@@ -12,6 +12,10 @@ interface UpgradeModalProps {
   phase: UpdatePhase
   progress: InstallProgress | null
   onStart: () => void
+  /** phase==='ready' 时:还在跑的会话清单 / 是否在等它们跑完 / 怎么装 */
+  busy?: UpdateBusyItem[]
+  waiting?: boolean
+  onApply?: (mode: ApplyMode) => void
 }
 
 interface LogLine { tk: string; text: string }
@@ -19,7 +23,7 @@ interface LogLine { tk: string; text: string }
 // GitHub 发布页(与主进程 updateChecker 的 UPDATE_REPO 一致)。更新失败时给用户一个可手动下载的去处。
 const RELEASES_URL = 'https://github.com/flowForges/myFlowForge/releases/latest'
 
-export function UpgradeModal({ open, onClose, info, currentVersion, phase, progress, onStart }: UpgradeModalProps) {
+export function UpgradeModal({ open, onClose, info, currentVersion, phase, progress, onStart, busy = [], waiting = false, onApply = () => {} }: UpgradeModalProps) {
   const [log, setLog] = useState<LogLine[]>([])
   const stampRef = useRef(0)
   const lastLogRef = useRef<string | null>(null)
@@ -28,6 +32,9 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
 
   const running = phase === 'downloading'
   const done = phase === 'done'
+  const ready = phase === 'ready'
+  // 交给安装者之后 app 几百毫秒内就会退出,这时候不该再给「后台下载」之类的按钮。
+  const installing = running && (progress?.stage ?? '').startsWith('正在安装')
 
   // Reset accumulated log on the closed → open transition.
   useEffect(() => {
@@ -77,7 +84,7 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
           </div>
         </div>
         <div className="upd-body">
-          {!running && !done && info && (
+          {!running && !done && !ready && info && (
             <div>
               <h5>更新内容</h5>
               {/* 发布说明是 GitHub release 的 markdown 原文(开头常是一张下载表),交给对话区同一个渲染器;
@@ -96,7 +103,27 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
               ))}
             </div>
           </div>
-          {running && <p className="upd-hint">下载在后台进行,可点「后台下载」继续使用 app,完成后会自动提示你安装。</p>}
+          {running && !installing && <p className="upd-hint">下载在后台进行,可点「后台下载」继续使用 app,完成后会自动提示你安装。</p>}
+          {/* Windows 实测(2026-09-22,虚拟机):静默安装从退出到重新打开约 90 秒,中间屏幕上什么都没有 ——
+              不提前说一声,用户会以为 app 崩了。 */}
+          {installing && <p className="upd-hint">app 马上会退出,安装需要几十秒到一两分钟,装好后会自动重新打开,期间不用做任何操作。</p>}
+          {ready && (
+            <div className="upd-ready">
+              <p className="upd-ready-title">已下载 v{info?.version ?? ''}{busy.length ? `,但还有 ${busy.length} 项正在执行:` : ',可以安装了。'}</p>
+              {busy.length > 0 && (
+                <ul className="upd-busy">
+                  {busy.map((b, i) => <li key={i}>{b.label}</li>)}
+                </ul>
+              )}
+              {busy.length > 0 && (
+                <p className="upd-hint">
+                  {waiting
+                    ? '正在等它们结束,全部结束后会自动退出并安装。可以关掉这个窗口继续用。'
+                    : '安装需要退出 app,会中断它们。可以等它们跑完再自动安装。'}
+                </p>
+              )}
+            </div>
+          )}
           <div className={'upd-done' + (done ? ' on' : '')}>
             <span className="dk">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"><polyline points="20 6 9 17 4 12" /></svg>
@@ -120,6 +147,24 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
           <div className="upd-actions">
             {done ? (
               <button className="go" onClick={onClose}>完成</button>
+            ) : installing ? null : ready ? (
+              busy.length === 0 ? (
+                <>
+                  <button className="gh" onClick={onClose}>稍后</button>
+                  <button className="go" onClick={() => onApply('now')}>安装并重启</button>
+                </>
+              ) : waiting ? (
+                <>
+                  <button className="gh" onClick={() => onApply('cancel')}>取消等待</button>
+                  <button className="gh upd-force" onClick={() => onApply('force')}>立即中断并安装</button>
+                </>
+              ) : (
+                <>
+                  <button className="gh" onClick={onClose}>稍后</button>
+                  <button className="gh upd-force" onClick={() => onApply('force')}>中断并安装</button>
+                  <button className="go" onClick={() => onApply('wait')}>跑完后自动安装</button>
+                </>
+              )
             ) : running ? (
               <button className="gh" onClick={onClose}>后台下载(继续使用)</button>
             ) : (

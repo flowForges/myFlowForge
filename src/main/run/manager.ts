@@ -353,6 +353,8 @@ export class Run2Manager {
   }
   get(wsPath: string): RunController | undefined { return this.controllers.get(wsPath) }
   isActive(wsPath: string): boolean { return this.controllers.has(wsPath) }
+  /** 正在跑的工作流所在的工作区(卡在门上等回答的也算;排队没开跑的不算)。更新前判断「有没有在执行」用。 */
+  listActive(): string[] { return [...this.controllers.keys()] }
   // Additive: the retained terminal state of the most recently completed run in this workspace (null if
   // never run, or if a new run has since started and superseded it). See `lastState` field comment.
   lastStateFor(wsPath: string): RunControllerState | null { return this.lastState.get(wsPath) ?? null }

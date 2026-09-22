@@ -509,8 +509,12 @@ export interface Workspace {
 // (Named `asset*`, not `dmg*`, since 1.1.2 — the field is platform-neutral.)
 export interface UpdateInfo { version: string; notes: string; assetUrl: string; assetSize: number; assetName: string }
 export interface InstallProgress { stage: string; pct: number; log?: string }
+/** 更新前查到的「正在执行、退出会被打断」的一项。label 是给人看的(会话标题 / 工作区名)。 */
+export interface UpdateBusyItem { kind: 'chat' | 'workflow' | 'delegate' | 'gate'; workspacePath: string; label: string }
 export type UpdateEvent =
   | { type: 'available'; info: UpdateInfo }
+  /** 已下载完,但有会话在跑,没装。waiting=正在等它们跑完后自动装。 */
+  | { type: 'ready'; busy: UpdateBusyItem[]; waiting: boolean }
   | { type: 'none' }
   | { type: 'checkfailed'; message: string }
   | { type: 'progress'; stage: string; pct: number; log?: string }

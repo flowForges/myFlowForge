@@ -112,7 +112,9 @@ export function App() {
   // prompted to install even if they minimized it and kept working.
   const prevUpdPhase = useRef(updateCtx.phase)
   useEffect(() => {
-    if (updateCtx.phase === 'done' && prevUpdPhase.current !== 'done') setUpgradeOpen(true)
+    // 'ready' = 下好了但有会话在跑,要用户选怎么装 —— 同样得把弹窗顶出来,否则后台下载完就没下文了。
+    const surface = (p: typeof updateCtx.phase) => p === 'done' || p === 'ready'
+    if (surface(updateCtx.phase) && !surface(prevUpdPhase.current)) setUpgradeOpen(true)
     prevUpdPhase.current = updateCtx.phase
   }, [updateCtx.phase])
   const [logOpen, setLogOpen] = useState(false)
@@ -964,6 +966,9 @@ export function App() {
         phase={updateCtx.phase}
         progress={updateCtx.progress}
         onStart={updateCtx.start}
+        busy={updateCtx.busy}
+        waiting={updateCtx.waiting}
+        onApply={updateCtx.apply}
       />
 
       {/* Setup progress overlay: shown during workspace creation when __basic/__proj hooks exist */}

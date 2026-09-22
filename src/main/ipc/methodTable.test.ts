@@ -70,6 +70,7 @@ describe('方法表', () => {
     //   跑得通、到用户机器上就是不成,而一个时灵时不灵的按钮比没有更糟。所以这里仍是 212。
     // 212 → 214:gate:list / gate:resolve(门总线)。★无头 daemon 上**必须**有这两个 ——
     //   建区 Hook 在那台机器上等门时,能回答它的只有连过去的客户端。
-    expect(Object.keys(table).length).toBe(214)
+    // 214 → 215:update:apply(下载完之后选「空闲就装 / 等跑完 / 直接中断」)。
+    expect(Object.keys(table).length).toBe(215)
   })
 })

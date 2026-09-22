@@ -278,15 +278,18 @@ const api = {
     ipcRenderer.on(CH.changesEvent, listener)
     return () => ipcRenderer.removeListener(CH.changesEvent, listener)
   },
-  getUpdate: (): Promise<{ currentVersion: string; info: UpdateInfo | null }> => ipcRenderer.invoke(CH.updateGet),
+  getUpdate: (): Promise<{ currentVersion: string; info: UpdateInfo | null; downloaded?: boolean }> => ipcRenderer.invoke(CH.updateGet),
   checkUpdate: (): Promise<void> => ipcRenderer.invoke(CH.updateCheck),
   startUpdate: (): Promise<void> => ipcRenderer.invoke(CH.updateStart),
+  /** 下载完之后怎么装:now=空闲就装 / wait=等跑完自动装 / force=直接中断并装 / cancel=停止等待 */
+  applyUpdate: (mode: 'now' | 'wait' | 'force' | 'cancel'): Promise<void> => ipcRenderer.invoke(CH.updateApply, mode),
   onUpdateEvent: (cb: (e: UpdateEvent) => void) => {
     const map: Array<[string, (p: any) => UpdateEvent]> = [
       [CH.updateAvailable, (p) => ({ type: 'available', info: p.info })],
       [CH.updateNone, () => ({ type: 'none' })],
       [CH.updateCheckFailed, (p) => ({ type: 'checkfailed', message: p?.message ?? '' })],
       [CH.updateProgress, (p) => ({ type: 'progress', stage: p.stage, pct: p.pct, log: p.log })],
+      [CH.updateReady, (p) => ({ type: 'ready', busy: p.busy, waiting: p.waiting })],
       [CH.updateDone, () => ({ type: 'done' })],
       [CH.updateError, (p) => ({ type: 'error', message: p.message })],
     ]

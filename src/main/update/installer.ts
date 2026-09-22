@@ -1,7 +1,8 @@
 import type { UpdateInfo, InstallProgress } from '@shared/types'
 
 export interface UpdateInstaller {
-  run(info: UpdateInfo, onProgress: (p: InstallProgress) => void): Promise<void>
+  /** 下载并校验,返回安装包的本地路径。怎么装由 updateFlow 决定(自动安装 / 退回打开安装器)。 */
+  run(info: UpdateInfo, onProgress: (p: InstallProgress) => void): Promise<string>
 }
 
 // Streams the download to a temp file so the whole installer never sits in memory (buffering a 170MB
@@ -19,8 +20,6 @@ export interface InstallerDeps {
   }>
   join: (dir: string, name: string) => string
   tmpDir: string
-  openPath: (p: string) => Promise<string>
-  showItemInFolder: (p: string) => void
   // Resume + streaming primitives (injectable for tests).
   partSize: (path: string) => Promise<number>                    // bytes already on disk, 0 if none
   openWriter: (path: string, append: boolean) => DownloadWriter  // append=true → resume
@@ -28,13 +27,12 @@ export interface InstallerDeps {
   discard: (path: string) => Promise<void>                       // delete a stale/corrupt .part
 }
 
-// Downloads the release artifact and hands it to the OS: on macOS that mounts the .dmg (the user
-// drags the app across), on Windows it runs the NSIS installer. Either way we also reveal the file,
-// so a failed hand-off still leaves the user one double-click away from installing.
+// Downloads the release artifact (resumable) and verifies its size. Installing it is updateFlow's job:
+// quit-and-replace when nothing is running, or hand it to the OS as before when that can't work.
 export class ManualDownloadInstaller implements UpdateInstaller {
   constructor(private deps: InstallerDeps) {}
 
-  async run(info: UpdateInfo, onProgress: (p: InstallProgress) => void): Promise<void> {
+  async run(info: UpdateInfo, onProgress: (p: InstallProgress) => void): Promise<string> {
     const dest = this.deps.join(this.deps.tmpDir, info.assetName)
     const part = `${dest}.part`
     const total = info.assetSize || 0
@@ -75,9 +73,8 @@ export class ManualDownloadInstaller implements UpdateInstaller {
     }
 
     await this.deps.finalize(part, dest)
-    await this.deps.openPath(dest)
-    this.deps.showItemInFolder(dest)
-    onProgress({ stage: '正在打开安装器…', pct: 100 })
+    onProgress({ stage: '下载完成', pct: 100 })
+    return dest
   }
 }
 

@@ -256,6 +256,8 @@ export const CH = {
   updateGet: 'update:get',
   updateCheck: 'update:check',
   updateStart: 'update:start',
+  updateApply: 'update:apply',
+  updateReady: 'update:ready',
   updateAvailable: 'update:available',
   updateNone: 'update:none',
   updateCheckFailed: 'update:check-failed',

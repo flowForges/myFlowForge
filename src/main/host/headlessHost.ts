@@ -29,6 +29,8 @@ export function createHeadlessHost(opts: { version: string; onLog?: (m: string) 
     openExternal: async (url) => { cannot(`打开链接 ${url}`) },
     openPath: async (p) => cannot(`打开 ${p}`),
     revealInFileManager: (p) => { cannot(`在文件管理器中显示 ${p}`) },
+    // daemon 是 systemd 管的服务,自己退了也没人装新版 —— 更新在客户端那台机器上做。
+    quitApp: () => { cannot('退出并安装更新') },
     // ★无头机器上没有废纸篓,只能真删 —— 但**如实报告** `trashed: false`,让界面把确认文案换成
     //  「直接删除,删了捞不回来」。悄悄降级是这类操作里最不能干的事。
     trashItem: async (p) => {

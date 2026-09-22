@@ -31,8 +31,6 @@ function deps(overrides: Partial<InstallerDeps> = {}): InstallerDeps {
   const store = fakeStore()
   return {
     fetch: async () => ({ ok: true, status: 200, headers: { get: () => '6' }, body: twoChunks() }),
-    openPath: vi.fn(async () => ''),
-    showItemInFolder: vi.fn(),
     join: (d, n) => `${d}/${n}`,
     tmpDir: '/tmp',
     ...store.deps,
@@ -41,14 +39,13 @@ function deps(overrides: Partial<InstallerDeps> = {}): InstallerDeps {
 }
 
 describe('ManualDownloadInstaller', () => {
-  it('streams to a .part file, finalizes to the dmg, opens it, reports terminal 100%', async () => {
+  it('streams to a .part file, finalizes to the dmg, returns its path, reports terminal 100%', async () => {
     const d = deps()
     const seen: InstallProgress[] = []
-    await new ManualDownloadInstaller(d).run(INFO, p => seen.push(p))
+    const dest = await new ManualDownloadInstaller(d).run(INFO, p => seen.push(p))
     expect(d.finalize).toHaveBeenCalledWith('/tmp/a.dmg.part', '/tmp/a.dmg')
-    expect(d.openPath).toHaveBeenCalledWith('/tmp/a.dmg')
-    expect(d.showItemInFolder).toHaveBeenCalledWith('/tmp/a.dmg')
-    expect(seen.at(-1)).toEqual({ stage: '正在打开安装器…', pct: 100 })
+    expect(dest).toBe('/tmp/a.dmg')
+    expect(seen.at(-1)).toEqual({ stage: '下载完成', pct: 100 })
     expect(seen.some(p => p.stage === '正在下载更新包…')).toBe(true)
   })
 

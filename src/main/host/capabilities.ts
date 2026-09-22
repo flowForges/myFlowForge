@@ -41,6 +41,8 @@ export interface HostCapabilities {
   openPath(path: string): Promise<string>
   /** 在 Finder / 资源管理器里定位到它 */
   revealInFileManager(path: string): void
+  /** 退出 app(走正常的 before-quit 清理)。更新时交给安装者之后调用。无头宿主不退 */
+  quitApp(): void
   /**
    * 删一个文件 / 目录。
    *

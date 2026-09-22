@@ -26,6 +26,19 @@ describe('ChatQueue', () => {
     expect(calls).toEqual(['A', 'B'])
   })
 
+  it('listRunning spans every workspace, excludes queued turns, and clears when a turn settles', async () => {
+    const releases: Array<() => void> = []
+    const q = new ChatQueue(() => new Promise<void>(res => { releases.push(res) }), () => {})
+    expect(q.listRunning()).toEqual([])
+    q.enqueue(mkS('/a', 's1', 'A1'), '你')
+    q.enqueue(mkS('/a', 's1', 'A2'), '你')   // same session → queued, not running
+    q.enqueue(mkS('/b', 's9', 'B'), '你')
+    expect(q.listRunning().map(r => `${r.workspacePath}:${r.sessionId}:${r.text}`).sort()).toEqual(['/a:s1:A1', '/b:s9:B'])
+    releases[1]()   // /b's turn
+    await Promise.resolve(); await Promise.resolve()
+    expect(q.listRunning().map(r => r.text)).toEqual(['A1'])
+  })
+
   it('different workspaces run concurrently (independent queues)', () => {
     const calls: string[] = []
     const runTurn = vi.fn((p: ChatSendPayload) => { calls.push(p.workspacePath); return new Promise<void>(() => {}) })

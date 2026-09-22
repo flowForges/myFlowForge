@@ -12,6 +12,7 @@ beforeEach(() => {
     getUpdate: async () => ({ currentVersion: '1.0.0', info: null }),
     checkUpdate: vi.fn(async () => {}),
     startUpdate: vi.fn(async () => {}),
+    applyUpdate: vi.fn(async () => {}),
     onUpdateEvent: (cb: (e: UpdateEvent) => void) => { emit = cb; return () => {} },
   }
 })
@@ -21,6 +22,32 @@ describe('useUpdate', () => {
     const { result } = renderHook(() => useUpdate())
     await waitFor(() => expect(result.current.currentVersion).toBe('1.0.0'))
     expect(result.current.phase).toBe('idle')
+  })
+  it('a ready event carries the busy list; apply() forwards the chosen mode', async () => {
+    const { result } = renderHook(() => useUpdate())
+    await waitFor(() => expect(result.current.currentVersion).toBe('1.0.0'))
+    const busy = [{ kind: 'chat' as const, workspacePath: '/w', label: 'w · x' }]
+    act(() => emit({ type: 'ready', busy, waiting: true }))
+    expect(result.current.phase).toBe('ready')
+    expect(result.current.busy).toEqual(busy)
+    expect(result.current.waiting).toBe(true)
+    act(() => result.current.apply('force'))
+    expect((window as any).forge.applyUpdate).toHaveBeenCalledWith('force')
+  })
+  it('the periodic background re-announce of the SAME version does not knock ready back to available', async () => {
+    const { result } = renderHook(() => useUpdate())
+    await waitFor(() => expect(result.current.currentVersion).toBe('1.0.0'))
+    act(() => emit({ type: 'available', info: INFO }))
+    act(() => emit({ type: 'ready', busy: [], waiting: false }))
+    act(() => emit({ type: 'available', info: INFO }))
+    expect(result.current.phase).toBe('ready')
+    act(() => emit({ type: 'available', info: { ...INFO, version: '2.5.0' } }))
+    expect(result.current.phase).toBe('available')
+  })
+  it('mounting after the download already finished restores the ready state', async () => {
+    ;(window as any).forge.getUpdate = async () => ({ currentVersion: '1.0.0', info: INFO, downloaded: true })
+    const { result } = renderHook(() => useUpdate())
+    await waitFor(() => expect(result.current.phase).toBe('ready'))
   })
   it('goes available when an update event arrives', async () => {
     const { result } = renderHook(() => useUpdate())

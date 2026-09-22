@@ -20,6 +20,38 @@ describe('UpgradeModal', () => {
     expect(container.querySelector('.upd-notes')?.textContent).not.toContain('|')
     expect(container.querySelector('.upd-notes')?.textContent).not.toContain('**')
   })
+  it('ready + busy: lists what is running and offers wait / force / later — never auto-installs', () => {
+    const onApply = vi.fn()
+    const busy = [{ kind: 'chat' as const, workspacePath: '/w/a', label: 'a · 修登录 bug' }, { kind: 'workflow' as const, workspacePath: '/w/b', label: 'b · 工作流' }]
+    render(<UpgradeModal {...base} phase="ready" busy={busy} onApply={onApply} />)
+    expect(screen.getByText('a · 修登录 bug')).toBeTruthy()
+    expect(screen.getByText('b · 工作流')).toBeTruthy()
+    expect(screen.getByText(/还有 2 项正在执行/)).toBeTruthy()
+    fireEvent.click(screen.getByText('跑完后自动安装'))
+    expect(onApply).toHaveBeenLastCalledWith('wait')
+    fireEvent.click(screen.getByText('中断并安装'))
+    expect(onApply).toHaveBeenLastCalledWith('force')
+  })
+  it('ready + waiting: can cancel the wait or interrupt now', () => {
+    const onApply = vi.fn()
+    render(<UpgradeModal {...base} phase="ready" waiting busy={[{ kind: 'chat', workspacePath: '/w', label: 'x' }]} onApply={onApply} />)
+    expect(screen.getByText(/全部结束后会自动退出并安装/)).toBeTruthy()
+    fireEvent.click(screen.getByText('取消等待'))
+    expect(onApply).toHaveBeenLastCalledWith('cancel')
+    fireEvent.click(screen.getByText('立即中断并安装'))
+    expect(onApply).toHaveBeenLastCalledWith('force')
+  })
+  it('ready with nothing running (reopened after download): one-click 安装并重启', () => {
+    const onApply = vi.fn()
+    render(<UpgradeModal {...base} phase="ready" busy={[]} onApply={onApply} />)
+    fireEvent.click(screen.getByText('安装并重启'))
+    expect(onApply).toHaveBeenCalledWith('now')
+  })
+  it('while handing off to the installer: no buttons, says it will reopen', () => {
+    const { container } = render(<UpgradeModal {...base} phase="downloading" progress={{ stage: '正在安装,app 会自动重新打开…', pct: 100 }} />)
+    expect(screen.getByText(/装好后会自动重新打开/)).toBeTruthy()
+    expect(container.querySelectorAll('.upd-actions button').length).toBe(0)
+  })
   it('calls onStart when 立即升级 is clicked', () => {
     const onStart = vi.fn()
     render(<UpgradeModal {...base} phase="available" onStart={onStart} />)

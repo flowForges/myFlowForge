@@ -74,6 +74,16 @@ export class ChatQueue {
     for (const lane of m.values()) lane.activeCancel?.()
   }
 
+  /** 所有工作区里【正在跑】的轮次(卡在确认/提问门上的也算 —— 门是 runTurn 里 await 的 Promise)。
+   *  更新前的「有没有会话在执行」就读这个。排队但还没开跑的不算。 */
+  listRunning(): Array<{ workspacePath: string; sessionId: string; text: string; provider: string }> {
+    const out: Array<{ workspacePath: string; sessionId: string; text: string; provider: string }> = []
+    for (const [ws, m] of this.map) {
+      for (const lane of m.values()) if (lane.running) out.push({ workspacePath: ws, ...lane.running })
+    }
+    return out
+  }
+
   runningProvider(ws: string, sessionId: string): string | null {
     return this.map.get(ws)?.get(sessionId)?.running?.provider ?? null
   }

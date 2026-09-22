@@ -12,7 +12,7 @@
 export const CLIENT_ONLY: ReadonlySet<string> = new Set([
   // 桌面外壳自身
   'app-icon:options',
-  'update:check', 'update:get', 'update:start',
+  'update:apply', 'update:check', 'update:get', 'update:start',
   // 调试日志:B 阶段先看本机这份。远程 daemon 的日志留到 D 阶段(那时要能选看哪一端)。
   'app-log:clear', 'app-log:export', 'app-log:get',
   // 外观跟设备(决策 8)
@@ -94,7 +94,7 @@ export const CLIENT_EVENT_CHANNELS: ReadonlySet<string> = new Set([
   'menu:action',
   'settings:changed',
   'shortcuts:status',
-  'update:done', 'update:error', 'update:progress',
+  'update:done', 'update:error', 'update:progress', 'update:ready',
 ])
 
 export const isClientEvent = (channel: string): boolean => CLIENT_EVENT_CHANNELS.has(channel)

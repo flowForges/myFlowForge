@@ -15,7 +15,7 @@ import { checkExitIp } from '../net/exitIp'
 import { checkCliUpdates } from '../agents/cliLatest'
 import { buildAgentEnv } from '../agents/env'
 import { providerTimezone } from '../agents/providerConfig'
-import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from 'node:fs'
+import { statSync, mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream, accessSync, constants as fsConstants } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { editWorkspace } from '../workspace/workspaceService'
@@ -60,7 +60,7 @@ import type { Settings, CustomAgent } from '../config/schema'
 import { watch as chokidarWatch } from 'chokidar'
 import { readChanges, readChangesMulti, readBranch } from '../git/changes'
 import { perfSpan } from '../perf/perfSpans'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { detectOpeners, resolveOpener, withoutOpener, openersCacheFile, OPENERS_CACHE_VERSION } from '../openers/detect'
 import { readMacAppIcon } from '../openers/appIcon'
 import { buildOpenCommand } from '../openers/buildOpenCommand'
@@ -77,7 +77,7 @@ import { Run2Manager } from '../run/manager'
 import { registerRun2 } from './run2Handlers'
 import { archiveWorkspaceLifecycle, restoreWorkspaceLifecycle } from '../workspace/archiveOps'
 import { deleteWorkspace, removeWorkspaceFromList, discardPartialCreation } from '../workspace/deleteOps'
-import { makeRunDelegate, cancelWorkspaceDelegates } from '../chat/delegate'
+import { makeRunDelegate, cancelWorkspaceDelegates, listActiveDelegates } from '../chat/delegate'
 import { readPetPack, readPetImage } from '../pet/petPack'
 import { writePetImageFromDataUrl } from '../pet/petImageStore'
 import { importCodexPetPack, discoverCodexPets } from '../pet/codexPetImport'
@@ -97,8 +97,10 @@ import type { NsfwPet, NsfwBg } from '../../shared/nsfw'
 import { createUpdateChecker } from '../update/updateChecker'
 import { fetchLatestRelease } from '../update/githubSource'
 import { pickInstaller } from '../update/installer'
+import { createUpdateFlow, type ApplyMode } from '../update/updateFlow'
+import type { UpdateBusyItem } from '@shared/types'
 import { makeProxyFetch, makeContentFetch } from '../update/proxyFetch'
-import { stat as fsStat, rename as fsRename, unlink as fsUnlink } from 'node:fs/promises'
+import { stat as fsStat, rename as fsRename, unlink as fsUnlink, writeFile as fsWriteFile } from 'node:fs/promises'
 import { startBridge } from '../mcp/forgeBridge'
 import { authSocketAddress } from '../mcp/bridgeAddress'
 import { startAuthBroker } from '../agents/authBroker'
@@ -213,15 +215,57 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   updateChecker.start()
 
-  on(CH.updateGet, () => ({ currentVersion: caps.version(), info: updateChecker.current() }))
+  // 更新前「退出会打断什么」。chatQueue / run2Manager / chatGateOwner 在下面才声明,但这里只在用户点了
+  // 升级之后才被调用(那时 registerIpc 早已跑完),闭包引用不会碰到 TDZ。
+  const listBusy = (): UpdateBusyItem[] => {
+    const busy: UpdateBusyItem[] = []
+    const wsName = (ws: string) => basename(ws) || ws
+    const runningKeys = new Set<string>()
+    for (const r of chatQueue.listRunning()) {
+      runningKeys.add(`${r.workspacePath}\0${r.sessionId}`)
+      const title = getSession(r.workspacePath, r.sessionId)?.title || r.text.slice(0, 24)
+      busy.push({ kind: 'chat', workspacePath: r.workspacePath, label: `${wsName(r.workspacePath)} · ${title}` })
+    }
+    for (const ws of run2Manager.listActive()) busy.push({ kind: 'workflow', workspacePath: ws, label: `${wsName(ws)} · 工作流` })
+    for (const d of listActiveDelegates()) busy.push({ kind: 'delegate', workspacePath: d.workspacePath, label: `${wsName(d.workspacePath)} · 后台子代理 ×${d.count}` })
+    // 后台子代理升起的门没有聊天轮次托着,单独算;有轮次托着的门已经算在那条会话里了。
+    for (const g of chatGateOwner.values()) {
+      if (runningKeys.has(`${g.ws}\0${g.sessionId}`)) continue
+      busy.push({ kind: 'gate', workspacePath: g.ws, label: `${wsName(g.ws)} · 等你回答:${g.title}` })
+    }
+    return busy
+  }
+  const updateFlow = createUpdateFlow({
+    listBusy,
+    planEnv: (assetName) => ({
+      platform: process.platform, isPackaged: caps.isPackaged(), execPath: process.execPath, assetName,
+      canWrite: (p) => { try { accessSync(p, fsConstants.W_OK); return true } catch { return false } },
+    }),
+    pid: process.pid,
+    tmpDir: caps.tempDir(),
+    join,
+    writeScript: (p, content) => fsWriteFile(p, content, { mode: 0o755 }),
+    spawnDetached: (cmd, args) => { spawn(cmd, [...args], { detached: true, stdio: 'ignore', windowsHide: true }).unref() },
+    quit: () => caps.quitApp(),
+    openPath: caps.openPath,
+    reveal: caps.revealInFileManager,
+    emitReady: (busy, waiting) => broadcast(CH.updateReady, { busy, waiting }),
+    emitProgress: (p) => broadcast(CH.updateProgress, p),
+    emitDone: () => broadcast(CH.updateDone, {}),
+    emitError: (message) => broadcast(CH.updateError, { message }),
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: (h) => clearInterval(h as ReturnType<typeof setInterval>),
+    setTimeout: (fn, ms) => { setTimeout(fn, ms) },
+  })
+
+  on(CH.updateGet, () => ({ currentVersion: caps.version(), info: updateChecker.current(), downloaded: updateFlow.pending() }))
+  on(CH.updateApply, (_e, mode: ApplyMode) => updateFlow.apply(mode))
   on(CH.updateCheck, () => { void updateChecker.check(true) })
   on(CH.updateStart, async () => {
     const info = updateChecker.current()
     if (!info) return
     const installer = pickInstaller({
       fetch: (url, init) => makeContentFetch(readSettings().agentProxy)(url, init as any) as any,
-      openPath: caps.openPath,
-      showItemInFolder: caps.revealInFileManager,
       join,
       tmpDir: caps.tempDir(),
       // Stream to a .part file (no 340MB in-memory buffer) + resume from a partial download.
@@ -237,8 +281,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       discard: (p) => fsUnlink(p).catch(() => {}),
     })
     try {
-      await installer.run(info, (p) => broadcast(CH.updateProgress, p))
-      broadcast(CH.updateDone, {})
+      const dest = await installer.run(info, (p) => broadcast(CH.updateProgress, p))
+      updateFlow.downloaded(dest, info)
     } catch (e) {
       broadcast(CH.updateError, { message: e instanceof Error ? e.message : String(e) })
     }

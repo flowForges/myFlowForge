@@ -118,6 +118,10 @@ function untrackDelegate(wsPath: string, s: AgentSession) {
   for (const entry of set) if (entry.s === s) { set.delete(entry); break }
   if (!set.size) activeDelegates.delete(wsPath)
 }
+/** 还在后台跑的 delegate 子代理,按工作区计数。更新前判断「有没有在执行」用(发起它的那一轮可能早就结束了)。 */
+export function listActiveDelegates(): Array<{ workspacePath: string; count: number }> {
+  return [...activeDelegates].map(([workspacePath, set]) => ({ workspacePath, count: set.size }))
+}
 /**
  * 取消某工作区在后台跑的 delegate 子代理(用户点「停止」/关闭工作区/归档/删除时调)。传 sessionId 时只取消该
  * 会话派发的子代理(并发的其它会话不受影响);省略 sessionId 取消该工作区的全部(归档/删除等既有调用方保持不变)。
