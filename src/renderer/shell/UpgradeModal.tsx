@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ICN, formatBytes, sanitize } from './notifications'
+import { ICN, formatBytes } from './notifications'
+import { Markdown } from '../views/chat/markdown'
 import type { UpdateInfo, InstallProgress } from '@shared/types'
 import type { UpdatePhase } from '../state/useUpdate'
 
@@ -79,11 +80,9 @@ export function UpgradeModal({ open, onClose, info, currentVersion, phase, progr
           {!running && !done && info && (
             <div>
               <h5>更新内容</h5>
-              <ul className="upd-notes">
-                {info.notes.split('\n').map(l => l.trim()).filter(Boolean).slice(0, 8).map((l, i) => (
-                  <li key={i} dangerouslySetInnerHTML={{ __html: sanitize(l.replace(/^#+\s*/, '').replace(/^[-*]\s*/, '')) }} />
-                ))}
-              </ul>
+              {/* 发布说明是 GitHub release 的 markdown 原文(开头常是一张下载表),交给对话区同一个渲染器;
+                  .req-plan 提供表格/列表/代码的排版和滚动,长说明不会把按钮顶出屏幕。 */}
+              <div className="upd-notes req-plan"><Markdown text={info.notes} /></div>
             </div>
           )}
           <div className={'upd-prog' + (running ? ' on' : '')}>

@@ -25,6 +25,7 @@ describe('formatBytes / releaseSummary', () => {
   it('formats MB to one decimal', () => { expect(formatBytes(26214400)).toBe('25.0 MB') })
   it('takes the first meaningful line without markdown #', () => {
     expect(releaseSummary('## v2.4.0\n工作流混合编排')).toBe('工作流混合编排')
+    expect(releaseSummary('| 平台 | 文件 |\n|---|---|\n| mac | `a.dmg` |\n\n- **修复 iOS 闪退**。')).toBe('修复 iOS 闪退。')
   })
 })
 

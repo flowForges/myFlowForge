@@ -11,6 +11,15 @@ describe('UpgradeModal', () => {
     expect(screen.getByText(/v1\.0\.0/)).toBeTruthy()
     expect(screen.getByText('v2.4.0')).toBeTruthy()
   })
+  it('renders release notes as markdown (table, bold, list) instead of raw text', () => {
+    const notes = '| 平台 | 文件 |\n|---|---|\n| macOS | `a.dmg` |\n\n- **修复 iOS 闪退**\n- 中转地址可保存多个'
+    const { container } = render(<UpgradeModal {...base} info={{ ...INFO, notes }} phase="available" />)
+    expect(container.querySelector('.upd-notes table')).toBeTruthy()
+    expect(container.querySelector('.upd-notes strong')?.textContent).toBe('修复 iOS 闪退')
+    expect(container.querySelectorAll('.upd-notes li').length).toBe(2)
+    expect(container.querySelector('.upd-notes')?.textContent).not.toContain('|')
+    expect(container.querySelector('.upd-notes')?.textContent).not.toContain('**')
+  })
   it('calls onStart when 立即升级 is clicked', () => {
     const onStart = vi.fn()
     render(<UpgradeModal {...base} phase="available" onStart={onStart} />)

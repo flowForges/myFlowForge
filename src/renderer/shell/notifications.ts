@@ -50,8 +50,9 @@ export function formatBytes(n: number): string {
 }
 
 export function releaseSummary(notes: string): string {
-  const line = String(notes).split('\n').map(l => l.trim()).find(l => l && !/^#/.test(l)) ?? ''
-  const clean = line.replace(/^#+\s*/, '').replace(/[*_`>]/g, '').trim()
+  // 跳过标题和表格行(发布说明开头通常是一张下载表,第一行 `| 平台 | 文件 |` 不是摘要)。
+  const line = String(notes).split('\n').map(l => l.trim()).find(l => l && !/^[#|]/.test(l)) ?? ''
+  const clean = line.replace(/^([-*+]|\d+\.)\s+/, '').replace(/[*_`>]/g, '').trim()
   return clean.length > 40 ? clean.slice(0, 39) + '…' : clean
 }
 
