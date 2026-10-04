@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine,
   parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine,
-  parseAskQuestions, controlAnswerLine, askGateTitle,
+  parseAskQuestions, controlAnswerLine, askGateTitle, gateTitle,
   unhandledControlRequest, controlErrorLine,
 } from './claudeControl'
 
@@ -55,6 +55,14 @@ describe('claudeControl', () => {
     expect(toolTarget({ command: 'rm -rf x' })).toBe('rm -rf x')
     expect(toolTarget({ path: '/p' })).toBe('/p')
     expect(toolTarget({})).toBeUndefined()
+  })
+
+  // ★★浏览器工具(mcp__claude-in-chrome__navigate)的输入里**只有** url。少了这条,用户要授权
+  //  agent 在自己已登录的浏览器里动手时,门上是一行工具名加一个空的 where —— 看不到动的是哪个站点。
+  it('★浏览器/网页类工具的 url 也算目标 —— 否则 navigate 的门上一个字的目标都没有', () => {
+    expect(toolTarget({ url: 'https://example.com/checkout' })).toBe('https://example.com/checkout')
+    // 同时有命令和 url 时,命令才是要判断的东西(顺序不许反)。
+    expect(toolTarget({ command: 'curl x', url: 'https://example.com' })).toBe('curl x')
   })
 
   it('frames an allow response echoing input + request_id', () => {
@@ -184,6 +192,19 @@ describe('unhandledControlRequest —— 不认识的控制请求也必须有人
 
   it('没有 request_id 就没法回答,只能放过(回了也没人认领)', () => {
     expect(unhandledControlRequest({ type: 'control_request', request: { subtype: 'hook_callback' } })).toBeNull()
+  })
+})
+
+describe('gateTitle —— 门上的那行标题', () => {
+  it('普通工具一个字不变(回归保护)', () => {
+    expect(gateTitle('Bash')).toBe('Bash 请求执行')
+    expect(gateTitle('Write')).toBe('Write 请求执行')
+  })
+  // ★★用户正要决定「让不让 agent 在我已登录的浏览器里动手」,此时最不该给他看的就是 MCP 原始工具名。
+  it('★浏览器工具翻成人话,不把 mcp__claude-in-chrome__ 糊在门上', () => {
+    expect(gateTitle('mcp__claude-in-chrome__navigate')).toBe('浏览器 · 打开页面 请求执行')
+    expect(gateTitle('mcp__claude-in-chrome__form_input')).toBe('浏览器 · 填表单 请求执行')
+    expect(gateTitle('mcp__claude-in-chrome__navigate')).not.toContain('mcp__')
   })
 })
 

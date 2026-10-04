@@ -139,6 +139,27 @@ describe('PetApp P3-4', () => {
     expect(sendChat.mock.calls[0][0]).toMatchObject({ workspacePath: '/ws/idle', agent: 'codex', model: 'gpt-5' })
   })
 
+  // ★★浏览器开关是**会话级**设置,宠物这条发送路原来压根不带它 —— 那一轮于是跑 `--no-chrome`:
+  //  用户在主窗口把开关打开了,从宠物发进同一个会话的那句话却没有浏览器工具,看起来是开关时好时坏。
+  it('★宠物发出去的那句带上会话自己的浏览器开关(和 provider/model 一样从会话读)', async () => {
+    let sessChangesCb: ((p: unknown) => void) | null = null
+    ;(window as any).forge.onSessionsChanged = (cb: any) => { sessChangesCb = cb; return () => {} }
+    ;(window as any).forge.onActiveWorkspace = (cb: any) => { cb('/ws/bu'); return () => {} }
+    ;(window as any).forge.getWorkspace = vi.fn(async () => ({ stages: [{ key: 'develop', provider: 'claude', model: 'opus-4.8' }], projects: [] }))
+    const sendChat = (window as any).forge.sendChat as ReturnType<typeof vi.fn>
+    const { container } = render(<PetApp />)
+    await waitFor(() => expect(container.querySelector('.pet')).not.toBeNull())
+    await act(async () => {
+      sessChangesCb?.({ workspacePath: '/ws/bu', file: { sessions: [{ id: 's-1', title: '会话A', mode: 'chat', createdAt: 0, browserUse: 'ask' }], activeSessionId: 's-1' } })
+    })
+    await waitFor(() => expect((container.querySelector('.pp-send input') as HTMLInputElement).disabled).toBe(false))
+    const input = container.querySelector('.pp-send input') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '打开本地页面看一眼' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(sendChat).toHaveBeenCalled())
+    expect(sendChat.mock.calls[0][0]).toMatchObject({ workspacePath: '/ws/bu', sessionId: 's-1', browserUse: 'ask' })
+  })
+
   it('home: enables input after click-selecting a workspace row (no main active workspace)', async () => {
     ;(window as any).forge.onActiveWorkspace = (_cb: any) => () => {}   // never emits → main stays on home
     ;(window as any).forge.listWorkspaces = vi.fn(async () => [

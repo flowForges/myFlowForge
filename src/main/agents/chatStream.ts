@@ -47,7 +47,10 @@ export function parseChatStreamObj(obj: any): ChatStreamAction {
 // A short, human-readable label for a tool call: "调用 Read package.json" / "调用 Bash: go build".
 function toolStep(name: string, input: any): string {
   // 浏览器工具的名字是 `mcp__claude-in-chrome__xxx`,原样显示在卡片上是一行看不懂的长名。
-  const browser = browserToolLabel(name)
+  // ★★必须把 input 一起交过去:这条 return 在下面那条 `input.url` 分支**之前**,原来翻完标题
+  //   就走了,URL 被整个丢掉 —— 卡片上只剩「浏览器 · 打开页面」,打开的是哪个页面在界面上
+  //   哪儿都看不到(和授权门的 where 一起是本功能唯一的可见性)。
+  const browser = browserToolLabel(name, input)
   if (browser) return browser
   const clip = (v: unknown) => { const s = String(v ?? '').replace(/\s+/g, ' ').trim(); return s.length > 200 ? s.slice(0, 200) + '…' : s }
   if (input?.file_path) return `调用 ${name} ${clip(input.file_path)}`

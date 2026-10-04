@@ -52,26 +52,38 @@ describe('浏览器动作的端到端表现', () => {
       toolUse('t1', 'mcp__claude-in-chrome__navigate', { url: 'https://example.com' }),
       result,
     ])], defaultModels: [] })
-    const gated: string[] = []
+    const gated: { toolName?: string; title: string; where?: string }[] = []
     const tools: { title?: string }[] = []
     live = provider.chat!(
       { id: 'c1', prompt: 'x', model: 'opus-4.8', cwd: dir, browserUse: 'ask' },
       {
         onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {},
-        onConfirm: async (req) => { gated.push(req.toolName ?? ''); return 'deny' },
+        onConfirm: async (req) => { gated.push({ toolName: req.toolName, title: req.title, where: req.where }); return 'deny' },
         onToolActivity: (t) => { if (t.phase === 'start') tools.push({ title: t.title }) },
         onDone: () => {}, onError: () => {},
       },
       process.env,
     )
     await live.done
-    expect(gated).toContain('mcp__claude-in-chrome__navigate')
-    expect(tools[0]?.title).toContain('浏览器 · 打开页面')
+    expect(gated.map(g => g.toolName)).toContain('mcp__claude-in-chrome__navigate')
+    // ★★门上这两栏是用户授权「让 agent 在我已登录的浏览器里动手」时唯一看得见的东西:
+    //  标题要是人话(不是 mcp__claude-in-chrome__navigate),where 要说清动的是哪个站点。
+    expect(gated[0].title).toBe('浏览器 · 打开页面 请求执行')
+    expect(gated[0].title).not.toContain('mcp__')
+    expect(gated[0].where).toBe('https://example.com')
+    expect(tools[0]?.title).toBe('浏览器 · 打开页面 example.com')
   })
 
-  it('★只读工具不升门,但工具卡照样要出现 —— UI 不能假设每个浏览器动作都有门', async () => {
+  // ★★这里的回放**故意**把只读工具和一道真门混在一条流里:
+  //  原来这个用例只放一个 tool_use、然后断言 `gated` 长度为 0 —— 假 CLI 根本没发 control_request,
+  //  而 Forge 也从不凭 tool_use 自己造门,所以那条断言**怎么改代码都不会红**,等于没测。
+  //  现在断言的是「门只为 navigate 升了一道,只读工具一道都没有」:要是哪天真有人让 tool_use 也去
+  //  升门,gated 里就会多出 list_connected_browsers,这条立刻红。
+  it('★只读工具不升门(同一条流里的 navigate 照样升门),但工具卡照样要出现 —— UI 不能假设每个浏览器动作都有门', async () => {
     const provider = makeClaudeProvider({ bin: 'node', preArgs: [scriptBin([
       toolUse('t2', 'mcp__claude-in-chrome__list_connected_browsers', {}),
+      gate('t3', 'mcp__claude-in-chrome__navigate', { url: 'https://example.com' }),
+      toolUse('t3', 'mcp__claude-in-chrome__navigate', { url: 'https://example.com' }),
       result,
     ])], defaultModels: [] })
     const gated: string[] = []
@@ -87,7 +99,7 @@ describe('浏览器动作的端到端表现', () => {
       process.env,
     )
     await live.done
-    expect(gated).toHaveLength(0)
+    expect(gated).toEqual(['mcp__claude-in-chrome__navigate'])
     expect(tools[0]?.title).toContain('浏览器 · 列出浏览器')
   })
 })

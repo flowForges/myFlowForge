@@ -198,6 +198,11 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const browserUseSupported = providerSupportsBrowserUse(agentId)
   // 「完全访问」+「每次询问」这组合下 CLI 不升门,「每次询问」是假的——这里只报,不自动降档(见 shared/browserUse.ts)。
   const browserConflict = browserUseSupported ? browserPermissionConflict(browserUse, permissionMode) : null
+  // ★★设计 §4.3 的原话是「Forge **拒绝**这个组合」——所以不只是提示,这一轮**发不出去**:
+  //  只提示不拦住的话,chip 上还写着「每次询问」、回车照样发,而这一轮是 bypassPermissions + --chrome,
+  //  浏览器里的任何动作都没有一道门。拦的是**发送**(输入框照旧能打字,草稿不丢),横幅继续在下面
+  //  当解释;两个 chip 都没禁用,改权限档或改浏览器档任意一个就立刻解锁 —— 不替用户改任何一个。
+  const browserBlocked = !!browserConflict
 
   function chooseAgent(p: ProviderInfo) {
     const m = p.models[0]?.id ?? ''
@@ -265,6 +270,8 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   function send() {
     const t = text.trim()
     if (!t || effectiveDisabled || !agent) return
+    // 被拒绝的浏览器档 + 权限档组合:回车这条路也必须拦(按钮禁用只挡鼠标那一半)。
+    if (browserBlocked) return
     onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode, browserUse })
     lastSentRef.current = t
     setText('')
@@ -737,13 +744,15 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           {running && !text.trim() ? (
             <button className="send stop" id="stopBtn" title="停止 (Esc)" onClick={handleStop}>{STOP_ICON}</button>
           ) : (
-            <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)'} disabled={effectiveDisabled || readOnly} onClick={send}>{SEND_ARROW}</button>
+            <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={browserConflict ?? (runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)')} disabled={effectiveDisabled || readOnly || browserBlocked} onClick={send}>{SEND_ARROW}</button>
           )}
         </div>
-        {/* 「完全访问」+「每次询问」的冲突提示:紧跟在工具栏(浏览器 chip 所在行)下方,只报不自动降档 ——
-            悄悄改用户的权限档/浏览器档比让他自己选更危险(见 shared/browserUse.ts 的 browserPermissionConflict)。 */}
+        {/* 「完全访问」+「每次询问」的冲突横幅:紧跟在工具栏(浏览器 chip 所在行)下方。此时发送按钮和
+            回车都已被拦住(browserBlocked),这条横幅就是「为什么发不出去」的解释 —— 所以它必须在场。
+            ★仍然不自动降档:悄悄改用户的权限档/浏览器档比让他自己选更危险(见 shared/browserUse.ts
+            的 browserPermissionConflict)。出路是用户自己点那两个 chip 里的任意一个。 */}
         {browserConflict && (
-          <div className="composer-queue-hint browser-conflict-hint">⚠️ {browserConflict}</div>
+          <div className="composer-queue-hint browser-conflict-hint">⚠️ 已暂停发送:{browserConflict}</div>
         )}
       </div>
     </div>

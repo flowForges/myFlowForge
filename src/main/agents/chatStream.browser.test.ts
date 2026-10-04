@@ -15,6 +15,19 @@ describe('浏览器工具在工具卡上的标题', () => {
     expect(a.text).not.toContain('mcp__claude-in-chrome__')
   })
 
+  it('★URL 必须留在卡片上:翻完标题就 return 的话,打开的是哪个页面在界面上哪儿都看不到了', () => {
+    const actions = parseChatStreamActions(assistantToolUse(BROWSER_TOOL_PREFIX + 'navigate', { url: 'https://example.com/login' }))
+    const a = actions.find(x => x.kind === 'tool') as Extract<typeof actions[number], { kind: 'tool' }>
+    expect(a.text).toBe('浏览器 · 打开页面 example.com/login')
+  })
+
+  it('★长 URL 只留站点名 —— 一行工具卡塞不下整串 query', () => {
+    const url = 'https://mail.example.com/u/0/#inbox?compose=new&to=someone@example.com&su=hello&body=xxxxxxxxxx'
+    const actions = parseChatStreamActions(assistantToolUse(BROWSER_TOOL_PREFIX + 'navigate', { url }))
+    const a = actions.find(x => x.kind === 'tool') as Extract<typeof actions[number], { kind: 'tool' }>
+    expect(a.text).toBe('浏览器 · 打开页面 mail.example.com')
+  })
+
   it('读控制台这类调试工具也翻译(它是做前端时最常用的)', () => {
     const actions = parseChatStreamActions(assistantToolUse(BROWSER_TOOL_PREFIX + 'read_console_messages', {}))
     const a = actions.find(x => x.kind === 'tool') as Extract<typeof actions[number], { kind: 'tool' }>

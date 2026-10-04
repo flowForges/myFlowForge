@@ -12,7 +12,7 @@ import { logError, appLog } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { makeHookWatch, HOOK_SLOW_MS } from './claudeHooks'
 import { makeBackgroundGate, parseTaskNotification } from './claudeBackground'
-import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, unhandledControlRequest, controlErrorLine, type CanUseTool } from './claudeControl'
+import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, gateTitle, unhandledControlRequest, controlErrorLine, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
 // full name ('claude-opus-4-8'). Our friendly ids ('opus-4.8') are display labels and are
@@ -186,7 +186,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           wd.pause()
           try {
             decision = await cb.onConfirm({
-              title: questions ? askGateTitle(questions) : `${cut.toolName} 请求执行`,
+              title: questions ? askGateTitle(questions) : gateTitle(cut.toolName),
               where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName, toolUseId: cut.toolUseId,
               ...(questions ? { questions } : {}),
             })
@@ -409,7 +409,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
             //   还夹在工具卡和真正的回答中间(用户原话:「系统回答 不应该出现在这个位置吧」)。
             //   run() 那条路一直是带的,chat() 这条路漏了 —— 而聊天才是天天在看的那条。
             if (cb.onConfirm) decision = await cb.onConfirm({
-              title: questions ? askGateTitle(questions) : `${cut.toolName} 请求执行`,
+              title: questions ? askGateTitle(questions) : gateTitle(cut.toolName),
               where: toolTarget(cut.input), agentId: cut.agentId, toolName: cut.toolName, toolUseId: cut.toolUseId,
               ...(questions ? { questions } : {}),
             })

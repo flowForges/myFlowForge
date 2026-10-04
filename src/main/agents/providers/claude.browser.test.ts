@@ -1,6 +1,20 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { buildClaudeChatArgs, makeClaudeProvider } from './claude'
 import type { ChatTask } from '../types'
+
+// ★★为什么要 mock 这一个函数:`capabilities.browserUse` 必须是**从** providerSupportsBrowserUse
+//  推导出来的(单一真相在 @shared/browserUse.ts),而不是在 claude.ts 里另写一个 `true`。
+//  直接断言 `=== true` 两种写法都会通过 —— 那条断言分辨不出它要钉的东西。这里把那个函数的返回值
+//  翻过来,硬编码的 `true` 当场就红。其余导出保留 actual:claude.ts 会连带加载 chatStream 的
+//  browserToolLabel,整个 mock 掉会把工具卡标题一起打断。
+const supports = vi.hoisted(() => ({ value: true, calls: [] as string[] }))
+vi.mock('@shared/browserUse', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shared/browserUse')>()
+  return {
+    ...actual,
+    providerSupportsBrowserUse: (id: string) => { supports.calls.push(id); return supports.value },
+  }
+})
 
 // 2026-10-04 实测:claude 2.1.285 的 `--chrome` 在无头模式下会把 22 个浏览器工具挂进来
 // (工具数 26 → 48)。Forge 这边只负责「传不传这个开关」。
@@ -39,7 +53,17 @@ describe('claude chat() 的浏览器开关', () => {
 })
 
 describe('能力声明', () => {
-  it('claude 声明支持浏览器操作', () => {
+  it('claude 声明支持浏览器操作,且问的是自己的 provider id', () => {
+    supports.value = true
+    supports.calls.length = 0
     expect(makeClaudeProvider({ bin: 'claude', defaultModels: [] }).capabilities.browserUse).toBe(true)
+    expect(supports.calls).toContain('claude')
+  })
+
+  it('★这个字段是【推导】出来的,不是硬编码的 true —— 真相翻过来它就得跟着翻', () => {
+    supports.value = false
+    try {
+      expect(makeClaudeProvider({ bin: 'claude', defaultModels: [] }).capabilities.browserUse).toBe(false)
+    } finally { supports.value = true }
   })
 })

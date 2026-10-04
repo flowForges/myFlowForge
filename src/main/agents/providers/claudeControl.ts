@@ -6,6 +6,7 @@
 // v0.2.x); read defensively. Pure functions only — unit-tested; no I/O here.
 
 import type { AskAnswers, AskQuestion } from '@shared/types'
+import { browserToolLabel } from '@shared/browserUse'
 
 export const CLAUDE_CONTROL_FLAGS: string[] =['--input-format', 'stream-json', '--permission-prompt-tool', 'stdio']
 
@@ -105,9 +106,28 @@ export function controlAnswerLine(req: CanUseTool, answers: AskAnswers, response
   })
 }
 
-// Best-effort human-facing target for the gate label (file path or command).
+// Best-effort human-facing target for the gate label (file path, command, or URL).
+//
+// ★★`url` 这条是补的:浏览器工具(`mcp__claude-in-chrome__navigate` 等)的输入里**只有** url,
+//  少了它这道门就是「… 请求执行」加一个空的 where —— 用户正要授权 agent 在他已登录的浏览器里
+//  动手,却看不到动的是哪个站点。WebFetch / WebSearch 这类也带 url,一并受益。
+//  ★顺序:file_path/path/command 在前,url 在后 —— 一个同时带 command 和 url 的工具,命令本身
+//   才是要判断的东西。
 export function toolTarget(input: any): string | undefined {
-  return input?.file_path ?? input?.path ?? input?.command ?? undefined
+  return input?.file_path ?? input?.path ?? input?.command ?? input?.url ?? undefined
+}
+
+/**
+ * 一道普通授权门的标题。
+ *
+ * ★★浏览器工具要先翻成人话:原来这里直接拼 `cut.toolName`,于是用户在「要不要让 agent 在我
+ *  已登录的浏览器里动手」这个最该看懂的时刻,看到的是一行
+ *  「mcp__claude-in-chrome__navigate 请求执行」。
+ * ★这里**故意不传 input**:动在哪由门的 `where`(toolTarget)另给一栏,标题再带一遍 URL 等于
+ *  同一句话说两遍,还会把标题撑长。
+ */
+export function gateTitle(toolName: string): string {
+  return `${browserToolLabel(toolName) ?? toolName} 请求执行`
 }
 
 export function controlAllowLine(req: CanUseTool): string {

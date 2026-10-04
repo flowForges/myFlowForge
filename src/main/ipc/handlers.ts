@@ -1215,6 +1215,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       text: `请开始「${stage.name}」这一步:按本阶段要求完成工作,并在你的回复里**完整展示**交付物(如方案/清单)供我审阅;如涉及落盘也可同时写成文件。完成后我会审阅、必要时追问,然后我再点「下一步」进入下一阶段。${projNote}`,
       attachments: [],
       permissionMode: stage.permissionMode ?? 'auto',
+      // ★浏览器开关是**会话级**的(不像权限档那样每个阶段自己带一份),所以这里照其它按会话读的
+      //  设置那样从落盘的会话里取。漏掉它这一轮就跑 `--no-chrome`:对话阶段的输入框上明明写着
+      //  「每次询问」,可阶段起手那一轮 agent 却说它打不开页面,用户随后自己敲的那句又可以 ——
+      //  同一个会话里能力时有时无,这比干脆没有更难理解。
+      browserUse: getSession(workspacePath, sessionId)?.browserUse,
     }, '工作流')
   }
   on(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
@@ -1410,7 +1415,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   botBridge.attach({
     readConfig: () => readSettings().botBridge as BotBridgeConfig,
     writeConfig: (cfg) => persistBotConfig(cfg),
-    enqueue: (payload, source) => chatQueue.enqueue(payload as ChatSendPayload, source),
+    // ★机器人桥的载荷里只有 agent/model/text(桥那边不认识会话级设置),浏览器开关要在这里从落盘的
+    //  会话补上 —— 否则从飞书/TG 发进同一个会话的那一轮永远跑 `--no-chrome`,而用户在界面上看到的
+    //  chip 还是「每次询问」。桥不该自报这个值:它是会话的属性,不是消息的属性。
+    enqueue: (payload, source) => chatQueue.enqueue({
+      ...(payload as ChatSendPayload),
+      browserUse: getSession(payload.workspacePath, payload.sessionId)?.browserUse,
+    }, source),
     resolveChatGate: resolveChatGateById,
     resolveRun2Gate: (ws, eventId, decision) => run2Manager.resolveGate(ws, eventId, decision),
     resolveRun2Lane: (ws, eventId, decision) => run2Manager.resolveLane(ws, eventId, decision),

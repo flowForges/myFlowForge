@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CHAT_LINE_HEIGHT_DEFAULT } from '@shared/chatTypography'
-import type { Pet, PetState, ResolvePayload, WorkspaceMeta, PetStateConfig, ChatQueueEvent, SessionsFile } from '@shared/types'
+import type { Pet, PetState, ResolvePayload, WorkspaceMeta, PetStateConfig, ChatQueueEvent, SessionsFile, ChatSession } from '@shared/types'
 import { useEngine } from '../state/useEngine'
 import { derivePetState } from './derivePetState'
 import { derivePetAction } from './derivePetAction'
@@ -200,6 +200,10 @@ export function PetApp() {
     // Route to the specifically selected session — switch to it first so the main window tracks the same
     // session the command is being sent to.
     let sessionId: string
+    // ★浏览器开关是**会话级**设置,和 provider/model 一样要从那个会话自己的落盘数据里读。
+    //  漏掉它这一轮就跑 `--no-chrome`:主窗口的 chip 上明明写着「每次询问」,从宠物发出去的
+    //  同一个会话里 agent 却说它打不开页面 —— 开关看起来时好时坏,全看这句话是从哪儿发的。
+    let browserUse = t.sess?.browserUse
     if (t.sess) {
       sessionId = t.sess.id
       await window.forge.sessionSwitch({ workspacePath: t.wsPath, sessionId })
@@ -207,9 +211,13 @@ export function PetApp() {
       // No session resolved yet (sessions data not yet loaded) — fall back to the active session id
       // from a fresh sessionList call, same as the legacy behaviour.
       sessionId = 'default'
-      try { const sf = await window.forge.sessionList(t.wsPath); if (sf?.activeSessionId) sessionId = sf.activeSessionId } catch { /* keep default */ }
+      try {
+        const sf = await window.forge.sessionList(t.wsPath)
+        if (sf?.activeSessionId) sessionId = sf.activeSessionId
+        browserUse = sf?.sessions?.find((s: ChatSession) => s.id === sessionId)?.browserUse ?? browserUse
+      } catch { /* keep default */ }
     }
-    window.forge.sendChat({ workspacePath: t.wsPath, sessionId, agent: provider, agentLabel, model, text, attachments: [] }, '宠物')
+    window.forge.sendChat({ workspacePath: t.wsPath, sessionId, agent: provider, agentLabel, model, text, attachments: [], browserUse }, '宠物')
     // Bring the main window to this workspace so the user can watch the reply stream in.
     window.forge.petFocusWorkspace(t.wsPath)
   }

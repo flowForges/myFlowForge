@@ -394,7 +394,7 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .cb-perm.perm-full .cb-ic { color: oklch(72% .17 45); }
 .perm-pop { min-width: 240px; }
 .perm-pop .menu-item { align-items: flex-start; }
-/* browser-use chip:同权限 chip 的配色思路(越放任越暖) —— 关=中性,每次询问=稳,全部放行=警示色。
+/* browser-use chip:同权限 chip 的配色思路(越放任越暖) —— 关=中性,每次询问=稳,放行=警示色。
    ★弹层里标题/说明的排版规则(pm-main/pm-t/pm-d)原来只挂在 .perm-pop 下,.browser-pop 复用了这几个
    class 却没被选中器覆盖到,结果菜单项退化成一行扁平 13px 字——这里把选择器扩成两边都认。 */
 .perm-pop .pm-main, .browser-pop .pm-main { display: flex; flex-direction: column; gap: 1px; text-align: left; flex: 1; min-width: 0; }
