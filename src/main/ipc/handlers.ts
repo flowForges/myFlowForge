@@ -1612,7 +1612,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
    *  (界面照旧如实说「还有 N 行没显示」)。详见 `toolOutputCap.ts`。
    * ★不给 = 一个字不截。电脑端本机那条路行为逐字不变。
    */
-  on(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string; toolOutputLines?: number; toolOutputBytes?: number }) => {
+  on(CH.chatHistory, (_e, a: { workspacePath: string; sessionId: string; toolOutputLines?: number; toolOutputBytes?: number; toolOutputOmitOver?: number }) => {
     const msgs = mergeLive(a.workspacePath, a.sessionId, history(a.workspacePath, a.sessionId))
     const cap = readCap(a)
     return cap ? capToolOutputs(msgs, cap) : msgs

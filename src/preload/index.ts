@@ -95,7 +95,16 @@ const api = {
     ipcRenderer.on(CH.chatQueueEvent, listener)
     return () => ipcRenderer.removeListener(CH.chatQueueEvent, listener)
   },
-  chatHistory: (workspacePath: string, sessionId: string) => ipcRenderer.invoke(CH.chatHistory, { workspacePath, sessionId }),
+  // `cap` = 大段工具输出不跟着历史下发(见 main/chat/toolOutputCap.ts),点开那一行时用下面的
+  // chatToolOutput 单独取。不给 cap = 全量下发,行为逐字不变。
+  chatHistory: (
+    workspacePath: string,
+    sessionId: string,
+    cap?: { toolOutputLines?: number; toolOutputBytes?: number; toolOutputOmitOver?: number },
+  ) => ipcRenderer.invoke(CH.chatHistory, { workspacePath, sessionId, ...cap }),
+  /** 一条工具调用的完整输出。★不带上限 —— 用户专门点开要看的那一段必须是全的。 */
+  chatToolOutput: (a: { workspacePath: string; sessionId: string; messageId: string; toolId: string }):
+    Promise<{ output: string; outputLines?: number }> => ipcRenderer.invoke(CH.chatToolOutput, a),
   sessionList: (wsPath: string) => ipcRenderer.invoke(CH.sessionList, wsPath),
   sessionNew: (wsPath: string) => ipcRenderer.invoke(CH.sessionNew, wsPath),
   sessionSwitch: (a: { workspacePath: string; sessionId: string }) => ipcRenderer.invoke(CH.sessionSwitch, a),

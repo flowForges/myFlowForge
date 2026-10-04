@@ -25,6 +25,8 @@ import { MessageStream } from './chat/MessageStream'
 import { ThinkSpinner } from './chat/Spinners'
 import { Message } from './chat/Message'
 import { buildTimeline } from './chat/timeline'
+import { windowTimeline, LIVE_WINDOW, LIVE_WINDOW_STEP } from './chat/timelineWindow'
+import { ToolOutputCtx } from './chat/toolOutput'
 import { Composer } from './chat/Composer'
 import { workflowMenuCommands } from './chat/slashCommands'
 import { SessionTabs } from './chat/SessionTabs'
@@ -1071,6 +1073,33 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const liveMessages = isReadOnlySession ? [] : chat.messages
   const visibleMessages = importedHistory.length ? [...importedHistory, ...liveMessages] : liveMessages
 
+  /**
+   * 当前这条对话一次渲染多少条。★★这里原来是**整条时间线一次性 map 出来** —— 用户 2026-10-03
+   *  报的「点开会话都要加载一下」就是它:实测一个 1.2MB 的真会话(98 条消息 / 238 张工具卡)
+   *  一次渲染约 700ms,主线程全程堵死。导入的历史(MessageStream)一直是窗口化的,
+   *  偏偏天天在用的当前对话漏了(见 timelineWindow.ts)。
+   * ★换会话要重置回默认窗口,否则在长会话里点开过「加载更早」,切到别的会话还按那个大窗口渲染。
+   */
+  const [shownCount, setShownCount] = useState(LIVE_WINDOW)
+  useEffect(() => { setShownCount(LIVE_WINDOW) }, [sessions.activeSessionId, wsPath])
+  /**
+   * 大段工具输出点开时去哪儿取(见 chat/toolOutput.ts)。★按当前工作区 + 当前会话取 ——
+   * 所以必须在这里提供,ToolBlock 自己不知道这两件事。
+   */
+  const toolOutputApi = useMemo(() => ({
+    load: async (messageId: string, toolId: string): Promise<string> => {
+      const sid = sessions.activeSessionId
+      if (!wsPath || !sid) throw new Error('没有当前会话')
+      const r = await window.forge.chatToolOutput({ workspacePath: wsPath, sessionId: sid, messageId, toolId })
+      return r.output
+    },
+  }), [wsPath, sessions.activeSessionId])
+
+  const liveWindow = useMemo(
+    () => windowTimeline(buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries), shownCount),
+    [liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries, shownCount],
+  )
+
   // Text-fallback warning: show when this is a continued session that cannot use native --resume.
   // Native resume = same-source provider that supports --resume (claude/cursor/qoder).
   // Cross-provider continues, or codex/gemini sources, fall back to a text preamble (context may be lost).
@@ -1481,7 +1510,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             <span className="si-ro-hint">只读导入会话 · 点击开始新对话</span>
           </div>
         )}
-        <ChatJumpRail messages={visibleMessages} scrollRef={scrollRef} />
+        {/* ★fromIndex 只在「没有导入历史」时给:那时 visibleMessages 就是 liveMessages,下标一一对应。
+            有导入历史的续聊里,导入段(MessageStream)和当前对话各自从 0 开始编 data-user-msg,下标本来
+            就是错开的(既有问题,不在这次改动范围内)——那种情况下给 0 = 和改动前逐字一致,不新增失灵的锚点。 */}
+        <ChatJumpRail messages={visibleMessages} scrollRef={scrollRef} fromIndex={importedHistory.length ? 0 : liveWindow.fromIndex} />
         <div className="chat-scroll" ref={scrollRef} onScroll={onChatScroll}>
           {archived && <ArchiveNote createdAt={createdAt ?? 0} archivedAt={archivedAt ?? null} />}
           {willUseTextFallback && (
@@ -1490,6 +1522,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               <span>⚠️ 此续聊以历史摘要重建，可能丢失部分上下文</span>
             </div>
           )}
+          <ToolOutputCtx.Provider value={toolOutputApi}>
           <div className="chat-inner">
             {/* ★★★历史还在路上时说一句,别留一屏空白。
                 本机那个 RPC 几乎瞬时,所以这个空窗一直没人注意到;走中转时同一个往返被放大成两秒,
@@ -1516,7 +1549,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               </>
             )}
             {/* 当前对话:消息与子代理/主代理的交互卡片按时间线归并内联渲染 */}
-            {!isReadOnlySession && buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries).map(entry => {
+            {!isReadOnlySession && liveWindow.hiddenCount > 0 && (
+              <button className="msg-load-earlier" type="button" onClick={() => setShownCount(n => n + LIVE_WINDOW_STEP)}>
+                加载更早 {liveWindow.hiddenCount} 条
+              </button>
+            )}
+            {!isReadOnlySession && liveWindow.visible.map(entry => {
               if (entry.kind === 'provider-switch') {
                 return (
                   <ProviderSwitchDivider
@@ -1657,6 +1695,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               />
             ) : null}
           </div>
+          </ToolOutputCtx.Provider>
         </div>
         {chat.queue.length > 0 && (
           // Same horizontal inset as .composer-wrap so the queue lines up exactly with the input box

@@ -3,6 +3,7 @@ import { useHostReadySeq } from './useHostKey'
 import type { AgentContextMeta, AgentContextRef, AskAnswers, ChatConfirm, ChatEvent, ChatMessage, ChatSendPayload } from '@shared/types'
 import { phaseLabel } from '@shared/types'
 import type { PlanReq } from '../components/PlanCard'
+import { DESKTOP_TOOL_OUTPUT_CAP } from '../views/chat/toolOutput'
 
 export interface ChatQueueItem { id: string; text: string; source: string }
 
@@ -114,7 +115,11 @@ export function useChat(
       const mine = e.runningTurns.find(r => r.sessionId === sid)
       setRunning(mine ? { id: mine.id, text: mine.text } : null)
     })
-    void api.current.chatHistory(workspacePath, sessionId).then((h: ChatMessage[]) => {
+    // ★★大段工具输出**不跟着历史下发**,点开那张工具卡时再单独取(见 chat/toolOutput.ts)。
+    //  用户 2026-10-03 报「点开会话都要加载一下」,剖了那个 1.2MB 的真会话:90% 的字节是
+    //  `tools[].output`,而工具卡默认是折叠的 —— 下载下来只为了藏起来。省掉之后 1229KB → 197KB。
+    //  ★老版本的远程主机不认这几个字段 = 照旧全量下发,只是慢一点,不会少东西(fail-open)。
+    void api.current.chatHistory(workspacePath, sessionId, DESKTOP_TOOL_OUTPUT_CAP).then((h: ChatMessage[]) => {
       if (!live) return
       setHistoryLoading(false)
       setMessages(h)

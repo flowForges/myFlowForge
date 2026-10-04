@@ -636,6 +636,10 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .tool-caret { font-size: 10px; color: var(--faint); transition: transform .12s; flex: 0 0 auto; }
 .tool-caret.open { transform: rotate(90deg); }
 .tool-output { margin: 4px 0 6px; padding: 8px 10px; border-radius: var(--r); font-family: var(--mono); font-size: 11px; line-height: 1.45; color: var(--muted); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: var(--surface); }
+/* 按需取回来的那段输出的三种过渡态(正在取 / 没取到+重试 / 没有输出)。沿用 .tool-output 的盒子,
+   只是不等宽、不预格式化 —— 它是一句话,不是命令输出。 */
+.tool-output-note { font-family: inherit; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+.tool-retry { font: inherit; color: var(--accent); background: none; border: 1px solid var(--line); border-radius: var(--r); padding: 1px 8px; cursor: pointer; }
 .subagent-card { border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); overflow: hidden; }
 .subagent-card.s-running { border-color: color-mix(in oklab, var(--accent) 38%, var(--border)); }
 .subagent-card.s-error { border-color: color-mix(in oklab, var(--err) 40%, var(--border)); }

@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useContext, useState } from 'react'
 import type { ToolActivity } from '@shared/types'
+import { ToolOutputCtx } from './toolOutput'
 
 // 「执行」块折叠状态记忆(会话级,内存):消息 id → 是否折叠。切到别的会话再切回来,Message 会重挂、组件 state 丢,
 // 靠这张表把用户手动折叠的状态恢复回去(默认展开)。App 重启不保留(用户只要求切会话来回时保持)。
@@ -14,6 +15,9 @@ function statusMark(s: ToolActivity['status']): string {
   return s === 'run' ? '' : s === 'error' ? '✗' : '✓'
 }
 
+/** 按需取回来的那段输出此刻处于什么状态。★`null` = 还没点开过,一次都没去取。 */
+type Fetched = { state: 'loading' } | { state: 'ok'; text: string } | { state: 'fail'; msg: string } | null
+
 /**
  * 一次工具调用。
  *
@@ -24,12 +28,49 @@ function statusMark(s: ToolActivity['status']): string {
  * ★做成一枚安静的标记而不是一行字:一轮里十几次调用都会带它,写成句子就是十几句重复的话。
  *  完整措辞放在 title 里,鼠标停上去看得到。
  */
-function Row({ tool }: { tool: ToolActivity }) {
+function Row({ tool, messageId }: { tool: ToolActivity; messageId?: string }) {
   const [open, setOpen] = useState(false)
-  const hasOutput = !!tool.output
+  const [fetched, setFetched] = useState<Fetched>(null)
+  const ctx = useContext(ToolOutputCtx)
+  // ★★`outputOmitted` 的那条**也算有输出** —— 只是还没下载。漏掉它的话那一行是**灰的、点不开**,
+  //   用户会以为这次调用没有任何输出(静默丢数据,这套渲染最不能犯的错)。
+  const omitted = !!tool.outputOmitted
+  const hasOutput = !!tool.output || omitted
+
+  const fetch = () => {
+    if (!messageId || !ctx) { setFetched({ state: 'fail', msg: '取不到这段输出（当前界面没有接取回数据的通道）' }); return }
+    setFetched({ state: 'loading' })
+    ctx.load(messageId, tool.id)
+      .then(text => setFetched({ state: 'ok', text }))
+      .catch((e: unknown) => setFetched({ state: 'fail', msg: e instanceof Error ? e.message : String(e) }))
+  }
+  const toggle = () => {
+    if (!hasOutput) return
+    const next = !open
+    setOpen(next)
+    // 只在**第一次**展开时去取:取回来的留在 state 里,折叠再展开不再走一次往返。
+    if (next && omitted && fetched === null) fetch()
+  }
+
+  const body = () => {
+    if (!omitted) return <pre className="tool-output">{tool.output}</pre>
+    if (fetched === null || fetched.state === 'loading') return <div className="tool-output tool-output-note">正在取这段输出…</div>
+    if (fetched.state === 'fail') {
+      // ★失败必须**说出来并且能重试**:静默空白和「这条本来就没有输出」长得一模一样。
+      return (
+        <div className="tool-output tool-output-note">
+          没取到这段输出：{fetched.msg}
+          <button type="button" className="tool-retry" onClick={fetch}>重试</button>
+        </div>
+      )
+    }
+    if (!fetched.text) return <div className="tool-output tool-output-note">这次调用没有输出</div>
+    return <pre className="tool-output">{fetched.text}</pre>
+  }
+
   return (
     <div className={`tool-row st-${tool.status}`}>
-      <button className="tool-head" onClick={() => hasOutput && setOpen(o => !o)} aria-expanded={open} disabled={!hasOutput}>
+      <button className="tool-head" onClick={toggle} aria-expanded={open} disabled={!hasOutput}>
         <span className={`tool-dot d-${tool.status}`} aria-hidden="true" />
         <span className="tool-title" title={tool.title}>{tool.title}</span>
         {tool.autoAllowed && (
@@ -38,12 +79,12 @@ function Row({ tool }: { tool: ToolActivity }) {
         {tool.status !== 'run' && <span className={`tool-mark m-${tool.status}`} aria-hidden="true">{statusMark(tool.status)}</span>}
         {hasOutput && <span className={`tool-caret${open ? ' open' : ''}`} aria-hidden="true">▸</span>}
       </button>
-      {open && hasOutput ? <pre className="tool-output">{tool.output}</pre> : null}
+      {open && hasOutput ? body() : null}
     </div>
   )
 }
 
-export function ToolBlock({ tools, stateKey }: { tools: ToolActivity[]; stateKey?: string }) {
+export function ToolBlock({ tools, stateKey, messageId }: { tools: ToolActivity[]; stateKey?: string; messageId?: string }) {
   // 受控 <details>:open 由 collapsed 决定,用户切换写回记忆表,切会话回来仍保持折叠。默认展开。
   const [collapsed, setCollapsed] = useState(() => (stateKey ? collapsedByMsg.get(stateKey) ?? false : false))
   if (!tools.length) return null
@@ -56,7 +97,7 @@ export function ToolBlock({ tools, stateKey }: { tools: ToolActivity[]; stateKey
         执行 · {running ? `${running} 进行中 / 共 ${tools.length} 步` : `${tools.length} 步`}
       </summary>
       <div className="tool-rows">
-        {tools.map(t => <Row key={t.id} tool={t} />)}
+        {tools.map(t => <Row key={t.id} tool={t} messageId={messageId} />)}
       </div>
     </details>
   )

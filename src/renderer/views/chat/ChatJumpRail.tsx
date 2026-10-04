@@ -8,14 +8,24 @@ import { computeRailLayout, bucketGroups, railCapacity, MIN_DOTS, RAIL_PAD } fro
 interface ChatJumpRailProps {
   messages: ChatMessage[]
   scrollRef: RefObject<HTMLDivElement | null>
+  /**
+   * 当前对话只渲染了从这条下标开始的消息(见 timelineWindow.ts),比它更早的**没有 DOM**。
+   *
+   * ★★轨道靠 `[data-user-msg="<index>"]` 找元素来滚动。给一条没渲染的消息画锚点,点下去
+   *  `querySelector` 返回 null,`jump()` 直接 return —— **什么也不会发生,也不报错**。
+   *  静默失灵是最难被发现的那种 bug,所以轨道必须跟着窗口走:窗口外的那几条先不画,
+   *  用户点「加载更早」放出来之后锚点自己会回来。
+   * ★不给 = 全都渲染了(导入历史那条路、以及测试),行为逐字不变。
+   */
+  fromIndex?: number
 }
 
 interface UserItem { index: number; label: string; text: string }
 
-function buildItems(messages: ChatMessage[]): UserItem[] {
+function buildItems(messages: ChatMessage[], fromIndex = 0): UserItem[] {
   const out: UserItem[] = []
   messages.forEach((m, i) => {
-    if (m.who !== 'user') return
+    if (m.who !== 'user' || i < fromIndex) return
     const raw = (m.text || '').replace(/\s+/g, ' ').trim() || '用户输入'
     out.push({
       index: i,
@@ -31,8 +41,8 @@ function buildItems(messages: ChatMessage[]): UserItem[] {
 // rail is a sibling of .chat-scroll inside the position:relative .chat column,
 // so it stays fixed while content scrolls; dot positions are derived from each
 // message's offsetTop mapped onto the rail (see computeRailLayout).
-export function ChatJumpRail({ messages, scrollRef }: ChatJumpRailProps) {
-  const items = useMemo(() => buildItems(messages), [messages])
+export function ChatJumpRail({ messages, scrollRef, fromIndex = 0 }: ChatJumpRailProps) {
+  const items = useMemo(() => buildItems(messages, fromIndex), [messages, fromIndex])
   const on = items.length > 1
   const railRef = useRef<HTMLDivElement>(null)
   // Positions are now even (CSS flex cluster), so we only consume the layout's activeIndex — the

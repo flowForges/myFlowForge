@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { useChat } from './useChat'
+import { DESKTOP_TOOL_OUTPUT_CAP } from '../views/chat/toolOutput'
 import type { ChatEvent, ChatGateSnapshot, ChatMessage } from '@shared/types'
 
 interface QueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
@@ -115,7 +116,8 @@ describe('useChat', () => {
 
     // Switch to a different workspace; history reloads for the new path.
     rerender({ ws: '/ws2' })
-    await waitFor(() => expect((window as any).forge.chatHistory).toHaveBeenCalledWith('/ws2', 's1'))
+    // 第三个参数是工具输出的上限(大段输出改成按需取,见 views/chat/toolOutput.ts)
+    await waitFor(() => expect((window as any).forge.chatHistory).toHaveBeenCalledWith('/ws2', 's1', DESKTOP_TOOL_OUTPUT_CAP))
 
     // A live event for the NEW workspace must apply — not be dropped by a stale closure.
     act(() => { handler!({ workspacePath: '/ws2', sessionId: 's1', type: 'user', message: { id: 'u2', who: 'user', text: 'hi2', ts: '1' } }) })

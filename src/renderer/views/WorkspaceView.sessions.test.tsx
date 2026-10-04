@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { DESKTOP_TOOL_OUTPUT_CAP } from './chat/toolOutput'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { WorkspaceView } from './WorkspaceView'
 import type { EngineApi } from '../state/useEngine'
@@ -47,11 +48,11 @@ describe('WorkspaceView sessions', () => {
     render(<WorkspaceView engine={engine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(screen.getByText('OKLch 迁移')).toBeTruthy())
     expect(screen.getByText('新会话')).toBeTruthy()
-    await waitFor(() => expect((window as any).forge.chatHistory).toHaveBeenCalledWith('/ws', 's1'))
+    await waitFor(() => expect((window as any).forge.chatHistory).toHaveBeenCalledWith('/ws', 's1', DESKTOP_TOOL_OUTPUT_CAP))
 
     fireEvent.click(screen.getByText('新会话'))
     await waitFor(() => expect((window as any).forge.sessionSwitch).toHaveBeenCalledWith({ workspacePath: '/ws', sessionId: 's2' }))
-    await waitFor(() => expect((window as any).forge.chatHistory).toHaveBeenCalledWith('/ws', 's2'))
+    await waitFor(() => expect((window as any).forge.chatHistory).toHaveBeenCalledWith('/ws', 's2', DESKTOP_TOOL_OUTPUT_CAP))
 
     fireEvent.click(screen.getByTitle('新建会话'))
     await waitFor(() => expect((window as any).forge.sessionNew).toHaveBeenCalledWith('/ws'))
