@@ -419,6 +419,8 @@ export interface ChatSendPayload {
    */
   via?: string
   permissionMode?: import('./permissions').PermissionMode   // agent sandbox scope (readonly/auto/full)
+  /** 这一轮允不允许操作浏览器(照 permissionMode 的走法一路带到 ChatTask.browserUse)。 */
+  browserUse?: import('./browserUse').BrowserUseMode
 }
 export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (

@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 import type { EngineApi } from '../state/useEngine'
 import type { ProviderInfo, ChangeType, ChatMessage, ImportedMessage, DesignDocRef, WsWorkflow, ContextUsage } from '@shared/types'
 import { DEFAULT_PERMISSION_MODE, type PermissionMode } from '@shared/permissions'
+import { DEFAULT_BROWSER_USE, type BrowserUseMode } from '@shared/browserUse'
 import { AgentNode } from '../components/AgentNode'
 import { HookNode } from '../components/HookNode'
 import { WorkflowGlance } from '../components/WorkflowGlance'
@@ -275,13 +276,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // confirm, same pattern as RunEventCard.tsx's confirmDiscard. Reset whenever a DIFFERENT resumable
   // run is offered (keyed by runId) so a stale confirm state never carries over to a new banner.
   const [confirmDiscardResumable, setConfirmDiscardResumable] = useState<string | null>(null)
-  const [selection, setSelection] = useState<{ agentId: string; modelId: string; permissionMode?: import('@shared/permissions').PermissionMode }>()
+  const [selection, setSelection] = useState<{ agentId: string; modelId: string; permissionMode?: import('@shared/permissions').PermissionMode; browserUse?: BrowserUseMode }>()
   // 本机扫描到的当前 provider 的自定义命令/prompt + skills(进 "/" 菜单)。随 provider/workspace 变化拉取。
   const [dynamicCommands, setDynamicCommands] = useState<import('./chat/slashCommands').MenuCommand[]>([])
   const writeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const selForRef = useRef<{ ws?: string; sid?: string }>({}) // which (ws,session) the current `selection` belongs to
   // Pending provider switch awaiting user confirmation (old provider already ran in this session).
-  const [pendingSwitch, setPendingSwitch] = useState<{ from: string; to: string; toModel: string; permissionMode?: import('@shared/permissions').PermissionMode } | null>(null)
+  const [pendingSwitch, setPendingSwitch] = useState<{ from: string; to: string; toModel: string; permissionMode?: import('@shared/permissions').PermissionMode; browserUse?: BrowserUseMode } | null>(null)
   const wsPath = workspacePath ?? engine.run?.workspacePath
   // P3-B additive: new run-controller-driven panel, unconditional hook call (rules-of-hooks) — its
   // state stays null/idle unless a run2 run is started, so it has no effect on chat-mode rendering.
@@ -330,13 +331,15 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const confirmSwitch = useCallback(() => {
     const prev = pendingSwitch
     if (!prev) return
-    const s = { agentId: prev.to, modelId: prev.toModel, permissionMode: prev.permissionMode }
+    const s = { agentId: prev.to, modelId: prev.toModel, permissionMode: prev.permissionMode, browserUse: prev.browserUse }
     setSelection(s)
     const sid = sessions.activeSessionId
     if (wsPath && sid) {
       selForRef.current = { ws: wsPath, sid }
       window.forge.sessionSetModel?.({ workspacePath: wsPath, sessionId: sid, agentId: s.agentId, modelId: s.modelId })
       if (s.permissionMode) window.forge.sessionSetPermission?.({ workspacePath: wsPath, sessionId: sid, mode: s.permissionMode })
+      // 浏览器开关也是会话级设置,和权限档并排持久化(见下方 onSelectionChange 里同样的写法)。
+      if (s.browserUse) window.forge.sessionSetBrowserUse?.({ workspacePath: wsPath, sessionId: sid, mode: s.browserUse })
       void window.forge.chatSwitchSummary?.({ workspacePath: wsPath, sessionId: sid, toAgent: prev.to, model: prev.toModel })
     }
     setPendingSwitch(null)
@@ -414,15 +417,17 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const s = (sessions.sessions ?? []).find(x => x.id === sid)
     const installed = (providers ?? []).filter(p => p.installed)
     const perm = s?.permissionMode ?? DEFAULT_PERMISSION_MODE
+    // 浏览器开关也是会话级,和权限档一起恢复(缺省 'off',见 shared/browserUse.ts)。
+    const browser = s?.browserUse ?? DEFAULT_BROWSER_USE
     // Value-equal short-circuit: never trigger a re-render (or a render loop) when the derived selection
     // matches what's already there — even if this effect re-runs on churn or a flickering activeSessionId.
-    const apply = (next: { agentId: string; modelId: string; permissionMode: typeof perm }) => {
+    const apply = (next: { agentId: string; modelId: string; permissionMode: typeof perm; browserUse: typeof browser }) => {
       selForRef.current = { ws: wsPath, sid }
-      setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode ? prev : next))
+      setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode && prev.browserUse === next.browserUse ? prev : next))
     }
     // 1) Session remembers its own agent/model → restore it.
     if (s?.agentId && installed.some(p => p.id === s.agentId)) {
-      apply({ agentId: s.agentId, modelId: s.modelId ?? '', permissionMode: perm })
+      apply({ agentId: s.agentId, modelId: s.modelId ?? '', permissionMode: perm, browserUse: browser })
       return
     }
     // 2) First use of this session → seed from develop stage, else the first installed provider. Only
@@ -432,7 +437,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     const seed = (dev && installed.some(p => p.id === dev.provider))
       ? { agentId: dev.provider, modelId: dev.model }
       : installed[0] ? { agentId: installed[0].id, modelId: installed[0].models[0]?.id ?? '' } : undefined
-    if (seed) apply({ ...seed, permissionMode: perm })
+    if (seed) apply({ ...seed, permissionMode: perm, browserUse: browser })
   }, [sessions.activeSessionId, sessions.sessions, wsInfo, providers, wsPath])
 
   // Fetch the provider's on-disk commands/prompts + skills for the "/" menu (changes with provider/ws).
@@ -925,6 +930,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // permission facet — agent/model stay as seeded.
   // Per-session permission is restored by the unified selection effect above (on session switch).
   const activePerm = activeSession?.permissionMode ?? DEFAULT_PERMISSION_MODE
+  // 浏览器开关:和 activePerm 并排,持久化时用它判断「这次选择是否真的变了」(见下方 onSelectionChange)。
+  const activeBrowserUse = activeSession?.browserUse ?? DEFAULT_BROWSER_USE
   // D1(图2修复):执行阶段把 run2 的 liveLanes 镜像到对话区(下方 WorkflowExecBlock)。
   const execLanes = useMemo(() => {
     const st = run2.state
@@ -947,9 +954,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     if (!wf || wf.phase !== 'chatting') return
     const stage = wf.stages[wf.currentIndex]
     if (!stage) return
-    const next = { agentId: stage.provider, modelId: stage.model, permissionMode: (stage.permissionMode ?? DEFAULT_PERMISSION_MODE) }
+    // 工作流阶段配置里没有浏览器档这一维(只有权限档) —— 切阶段时沿用当前选中的浏览器档,不跟着
+    // 阶段重置,否则用户刚打开的浏览器开关会在换阶段的瞬间被悄悄关掉。
+    const next = { agentId: stage.provider, modelId: stage.model, permissionMode: (stage.permissionMode ?? DEFAULT_PERMISSION_MODE), browserUse: selection?.browserUse ?? activeBrowserUse }
     selForRef.current = { ws: wsPath, sid: sessions.activeSessionId }
-    setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode ? prev : next))
+    setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode && prev.browserUse === next.browserUse ? prev : next))
   }, [activeWorkflow?.currentIndex, activeWorkflow?.phase, activeSession?.id, wsPath, sessions.activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   // D3/D4:推进的可编辑草稿(跨 provider 的交接稿 / 进执行前的每项目简报)。null = 无待确认草稿。
   const [advanceDraft, setAdvanceDraft] = useState<{ mode: 'handoff' | 'briefs'; handoff: string; briefs: Record<string, string>; loading: boolean; warn?: string; skip?: Record<string, boolean> } | null>(null)
@@ -1797,7 +1806,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
             // summarize prior conversation, spending some tokens). Model-only changes pass through.
             const cur = selection?.agentId
             if (cur && s.agentId !== cur && chat.messages.some(m => m.who === 'ai' && m.provider === cur)) {
-              setPendingSwitch({ from: cur, to: s.agentId, toModel: s.modelId, permissionMode: s.permissionMode })
+              setPendingSwitch({ from: cur, to: s.agentId, toModel: s.modelId, permissionMode: s.permissionMode, browserUse: s.browserUse })
               return
             }
             setSelection(s)
@@ -1811,6 +1820,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
               // Permission mode is per-session — persist it onto the active session when it changed.
               if (s.permissionMode && s.permissionMode !== activePerm) {
                 window.forge.sessionSetPermission?.({ workspacePath: wsPath, sessionId: sid, mode: s.permissionMode })
+              }
+              // 浏览器开关也是会话级设置,和权限档并排持久化。
+              if (s.browserUse && s.browserUse !== activeBrowserUse) {
+                window.forge.sessionSetBrowserUse?.({ workspacePath: wsPath, sessionId: sid, mode: s.browserUse })
               }
             }
           }}

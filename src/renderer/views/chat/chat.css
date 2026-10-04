@@ -397,6 +397,18 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .perm-pop .pm-main { display: flex; flex-direction: column; gap: 1px; text-align: left; flex: 1; min-width: 0; }
 .perm-pop .pm-t { font-size: 12.5px; font-weight: 600; color: var(--fg); }
 .perm-pop .pm-d { font-size: 11px; color: var(--muted); line-height: 1.35; white-space: normal; }
+/* browser-use chip:同权限 chip 的配色思路(越放任越暖) —— 关=中性,每次询问=稳,全部放行=警示色。 */
+.cb-browser .cb-ic { color: var(--muted); }
+.cb-browser.browser-ask .cb-ic { color: oklch(70% .15 150); }
+.cb-browser.browser-allow .cb-ic { color: oklch(72% .17 45); }
+.browser-pop { min-width: 240px; }
+.browser-pop .menu-item { align-items: flex-start; }
+/* 「完全访问+每次询问」冲突提示:复用排队提示的低调条,但改成警示色 —— 这不是一句顺口的提示,
+   是在说「你以为会问你,其实不会问」,得让它看起来比普通 hint 更要紧。 */
+.browser-conflict-hint {
+  color: oklch(45% .15 40); background: color-mix(in oklab, var(--warn) 14%, transparent);
+  border-color: color-mix(in oklab, var(--warn) 35%, transparent);
+}
 .composer-bar .spacer { flex: 1; }
 .send { width: 34px; height: 34px; border-radius: 8px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; transition: .14s; }
 .send:hover { filter: brightness(1.08); }

@@ -451,7 +451,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
         })
         flushPaced = paced.flushPaced
-        const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode }, paced, env)
+        const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse }, paced, env)
         deps.onSessionStart?.(wrapSession(session))
       })
     }

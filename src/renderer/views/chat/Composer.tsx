@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Attachment, ProviderInfo } from '@shared/types'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { PERMISSION_MODES, DEFAULT_PERMISSION_MODE, permissionModeLabel, providerSupportsPermissions, type PermissionMode } from '@shared/permissions'
+import { BROWSER_USE_MODES, DEFAULT_BROWSER_USE, browserUseLabel, providerSupportsBrowserUse, browserPermissionConflict, type BrowserUseMode } from '@shared/browserUse'
 import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import type { ContextUsage } from '@shared/types'
 import { applyListContinuation } from './listContinuation'
@@ -19,6 +20,9 @@ const PAPERCLIP = (
 )
 const SHIELD = (
   <svg className="cb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" /></svg>
+)
+const BROWSER_IC = (
+  <svg className="cb-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"><circle cx="12" cy="12" r="9" /><line x1="3" y1="12" x2="21" y2="12" /><path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z" /></svg>
 )
 const SEND_ARROW = (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></svg>
@@ -76,7 +80,7 @@ interface Props {
   /** True once the running turn has produced assistant output. Stopping BEFORE any output restores the
       sent message to the box (edit/resend); stopping AFTER output does not (changes may be irreversible). */
   turnHasOutput?: boolean
-  onSend: (m: { agent: string; agentLabel: string; model: string; text: string; attachments: Attachment[]; permissionMode: PermissionMode }) => void
+  onSend: (m: { agent: string; agentLabel: string; model: string; text: string; attachments: Attachment[]; permissionMode: PermissionMode; browserUse: BrowserUseMode }) => void
   onPaste?: (f: { name: string; dataBase64: string }) => Promise<Attachment | null>
   // When set (with a fresh nonce), fills the textarea with a starter prompt (快捷指令 chips / workflow
   // trigger phrase / supplement quote).
@@ -86,8 +90,8 @@ interface Props {
   // re-injects the stale seed into whatever session you switch to next (the workflow-prompt leak).
   onSeedConsumed?: () => void
   /** 受控选中态：提供时 Composer 以它为准并通过 onSelectionChange 上报变化（概览跟随）。 */
-  selection?: { agentId: string; modelId: string; permissionMode?: PermissionMode }
-  onSelectionChange?: (s: { agentId: string; modelId: string; permissionMode: PermissionMode }) => void
+  selection?: { agentId: string; modelId: string; permissionMode?: PermissionMode; browserUse?: BrowserUseMode }
+  onSelectionChange?: (s: { agentId: string; modelId: string; permissionMode: PermissionMode; browserUse: BrowserUseMode }) => void
   /** 本机扫描到的该 provider 的自定义命令/prompt + skills(经 IPC),与 Forge 内置命令一起进 "/" 菜单。 */
   dynamicCommands?: MenuCommand[]
   /** Picking a workflow entry from the "/" menu (MenuCommand.workflowId set) calls this instead of
@@ -139,14 +143,18 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const [localAgentId, setLocalAgentId] = useState<string>('')
   const [localModelId, setLocalModelId] = useState<string>('')
   const [localPerm, setLocalPerm] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE)
+  // ★浏览器开关和权限档并排受控:默认关(DEFAULT_BROWSER_USE),同样走 controlled/local 两套存法。
+  const [localBrowserUse, setLocalBrowserUse] = useState<BrowserUseMode>(DEFAULT_BROWSER_USE)
   const controlled = selection !== undefined
   const agentId = controlled ? selection!.agentId : localAgentId
   const modelId = controlled ? selection!.modelId : localModelId
   const permissionMode = (controlled ? selection!.permissionMode : localPerm) ?? DEFAULT_PERMISSION_MODE
-  const setAgentId = (id: string) => { if (controlled) onSelectionChange?.({ agentId: id, modelId, permissionMode }); else setLocalAgentId(id) }
-  const setModelId = (id: string) => { if (controlled) onSelectionChange?.({ agentId, modelId: id, permissionMode }); else setLocalModelId(id) }
-  const setPermissionMode = (m: PermissionMode) => { if (controlled) onSelectionChange?.({ agentId, modelId, permissionMode: m }); else setLocalPerm(m) }
-  const [openMenu, setOpenMenu] = useState<'agent' | 'ver' | 'perm' | null>(null)
+  const browserUse = (controlled ? selection!.browserUse : localBrowserUse) ?? DEFAULT_BROWSER_USE
+  const setAgentId = (id: string) => { if (controlled) onSelectionChange?.({ agentId: id, modelId, permissionMode, browserUse }); else setLocalAgentId(id) }
+  const setModelId = (id: string) => { if (controlled) onSelectionChange?.({ agentId, modelId: id, permissionMode, browserUse }); else setLocalModelId(id) }
+  const setPermissionMode = (m: PermissionMode) => { if (controlled) onSelectionChange?.({ agentId, modelId, permissionMode: m, browserUse }); else setLocalPerm(m) }
+  const setBrowserUse = (m: BrowserUseMode) => { if (controlled) onSelectionChange?.({ agentId, modelId, permissionMode, browserUse: m }); else setLocalBrowserUse(m) }
+  const [openMenu, setOpenMenu] = useState<'agent' | 'ver' | 'perm' | 'browser' | null>(null)
   // Slash-command menu: shown while typing a "/token" (before any space). slashSel = highlighted row;
   // slashDismissed lets Esc close it until the query changes.
   const [slashSel, setSlashSel] = useState(0)
@@ -186,10 +194,14 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const agent = useMemo(() => providers.find(p => p.id === agentId), [providers, agentId])
   const models = agent?.models ?? []
   const model = models.find(m => m.id === modelId)
+  // 浏览器开关只在支持的 provider(目前只有 claude)上出,别处显示一个点了没用的开关比不显示更糟。
+  const browserUseSupported = providerSupportsBrowserUse(agentId)
+  // 「完全访问」+「每次询问」这组合下 CLI 不升门,「每次询问」是假的——这里只报,不自动降档(见 shared/browserUse.ts)。
+  const browserConflict = browserUseSupported ? browserPermissionConflict(browserUse, permissionMode) : null
 
   function chooseAgent(p: ProviderInfo) {
     const m = p.models[0]?.id ?? ''
-    if (controlled) onSelectionChange?.({ agentId: p.id, modelId: m, permissionMode })
+    if (controlled) onSelectionChange?.({ agentId: p.id, modelId: m, permissionMode, browserUse })
     else { setLocalAgentId(p.id); setLocalModelId(m) }
     setOpenMenu(null)
   }
@@ -253,7 +265,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   function send() {
     const t = text.trim()
     if (!t || effectiveDisabled || !agent) return
-    onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode })
+    onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode, browserUse })
     lastSentRef.current = t
     setText('')
     setAttachments([])
@@ -680,6 +692,39 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
               ))}
             </div>
           </div>
+          {/* 浏览器开关 — agent 能不能操作用户已登录的那个 Chrome(照权限 chip 的结构来,只在支持的
+              provider 上渲染:显示一个点了没用的开关比没有更糟,见 shared/browserUse.ts 的 BROWSER_USE_PROVIDERS)。 */}
+          {browserUseSupported && (
+            <div className={'menu' + (openMenu === 'browser' ? ' open' : '')} id="browserMenu">
+              <button
+                className={'cb-btn cb-browser browser-' + browserUse}
+                data-menu="browserMenu"
+                title={`浏览器操作:${browserUseLabel(browserUse)} · 操作的是你已登录的浏览器,请谨慎开启`}
+                onClick={() => setOpenMenu(openMenu === 'browser' ? null : 'browser')}
+              >
+                {BROWSER_IC}
+                <span>{browserUseLabel(browserUse)}</span>
+                {CHEV_DD}
+              </button>
+              <div className="menu-pop browser-pop">
+                <div className="menu-label">浏览器操作</div>
+                {BROWSER_USE_MODES.map(bm => (
+                  <button
+                    className={'menu-item' + (bm.id === browserUse ? ' on' : '')}
+                    data-browser={bm.id}
+                    key={bm.id}
+                    onClick={() => { setBrowserUse(bm.id); setOpenMenu(null) }}
+                  >
+                    <div className="pm-main">
+                      <div className="pm-t">{bm.label}</div>
+                      <div className="pm-d">{bm.desc}</div>
+                    </div>
+                    {CHECK}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {/* P4.1(2026-07-30):删除「⚡自动/⚙手动」工作流自动启动开关 —— 提案门已废除,该开关失去意义,
               且与权限档的「自动(工作区)」撞名造成混淆。启动统一进对话式工作流(见 confirmLaunchGate)。 */}
           <button className="cb-btn" id="attachBtn" title="附加文件" onClick={pickFiles}>
@@ -695,6 +740,11 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)'} disabled={effectiveDisabled || readOnly} onClick={send}>{SEND_ARROW}</button>
           )}
         </div>
+        {/* 「完全访问」+「每次询问」的冲突提示:紧跟在工具栏(浏览器 chip 所在行)下方,只报不自动降档 ——
+            悄悄改用户的权限档/浏览器档比让他自己选更危险(见 shared/browserUse.ts 的 browserPermissionConflict)。 */}
+        {browserConflict && (
+          <div className="composer-queue-hint browser-conflict-hint">⚠️ {browserConflict}</div>
+        )}
       </div>
     </div>
   )
