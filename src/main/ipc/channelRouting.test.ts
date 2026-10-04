@@ -52,7 +52,10 @@ describe('频道分类', () => {
     // 166 → 168:门总线的 gate:list / gate:resolve。★归 **host**:连着远程主机时,
     //   你要答的是**那台机器**上挂着的门(它的 hook、它的 agent 在等),不是本机的。
     //   gate:event 是广播不是方法,所以方法表那边 +2 而不是 +3。
-    expect(host.length).toBe(168)
+    // 168 → 169:session:set-browser-use(浏览器开关的会话级设置)。不列进 CLIENT_ONLY ⇒ 走 host——
+    //   handler 紧挨着 sessionSetPermission 放,改的是**主机上**那个会话的开关状态,和权限档
+    //   同一类,路由也该和它一样。
+    expect(host.length).toBe(169)
     expect(client.length + host.length).toBe(keys.length)
   })
 

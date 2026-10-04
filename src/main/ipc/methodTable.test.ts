@@ -71,6 +71,9 @@ describe('方法表', () => {
     // 212 → 214:gate:list / gate:resolve(门总线)。★无头 daemon 上**必须**有这两个 ——
     //   建区 Hook 在那台机器上等门时,能回答它的只有连过去的客户端。
     // 214 → 215:update:apply(下载完之后选「空闲就装 / 等跑完 / 直接中断」)。
-    expect(Object.keys(table).length).toBe(215)
+    // 215 → 216:session:set-browser-use —— 浏览器开关的会话级设置(2026-10-04 浏览器操作功能)。
+    //   handler 紧挨着 sessionSetPermission 放:写的是**主机上**那个会话的开关状态,跟权限档
+    //   同一个道理,所以是 host 方法。
+    expect(Object.keys(table).length).toBe(216)
   })
 })
