@@ -99,6 +99,16 @@ describe('buildClaudeArgs', () => {
     expect(buildClaudeArgs({ ...baseTask, permissionMode: 'full' } as any, process.env)).toContain('bypassPermissions')
   })
 
+  // run() 路径(工作流阶段代理 / forge_delegate 子代理)还没接浏览器开关功能(没有 UI、不落盘),
+  // 但不接功能不等于放任它继承用户在 ~/.claude/settings.json 里的全局 Chrome 设置 —— 否则只在
+  // chat() 关掉开关完全挡不住这条路悄悄带着浏览器工具跑,Forge 的开关就不再是权威的。
+  // 所以这里必须无条件传 --no-chrome,且绝不能出现 --chrome。
+  it('总是无条件传 --no-chrome,从不传 --chrome(run() 还没接浏览器开关,不能继承用户的全局设置)', () => {
+    const args = buildClaudeArgs(baseTask, process.env)
+    expect(args).toContain('--no-chrome')
+    expect(args).not.toContain('--chrome')
+  })
+
   it('emits control-protocol flags and no positional prompt', () => {
     const args = buildClaudeArgs({ agentId: 'a', prompt: 'hello', model: 'opus-4.8', permissionMode: 'auto' } as any, {} as any)
     expect(args).toContain('--input-format'); expect(args).toContain('stream-json')

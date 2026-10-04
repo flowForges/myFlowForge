@@ -394,21 +394,28 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .cb-perm.perm-full .cb-ic { color: oklch(72% .17 45); }
 .perm-pop { min-width: 240px; }
 .perm-pop .menu-item { align-items: flex-start; }
-.perm-pop .pm-main { display: flex; flex-direction: column; gap: 1px; text-align: left; flex: 1; min-width: 0; }
-.perm-pop .pm-t { font-size: 12.5px; font-weight: 600; color: var(--fg); }
-.perm-pop .pm-d { font-size: 11px; color: var(--muted); line-height: 1.35; white-space: normal; }
-/* browser-use chip:同权限 chip 的配色思路(越放任越暖) —— 关=中性,每次询问=稳,全部放行=警示色。 */
+/* browser-use chip:同权限 chip 的配色思路(越放任越暖) —— 关=中性,每次询问=稳,全部放行=警示色。
+   ★弹层里标题/说明的排版规则(pm-main/pm-t/pm-d)原来只挂在 .perm-pop 下,.browser-pop 复用了这几个
+   class 却没被选中器覆盖到,结果菜单项退化成一行扁平 13px 字——这里把选择器扩成两边都认。 */
+.perm-pop .pm-main, .browser-pop .pm-main { display: flex; flex-direction: column; gap: 1px; text-align: left; flex: 1; min-width: 0; }
+.perm-pop .pm-t, .browser-pop .pm-t { font-size: 12.5px; font-weight: 600; color: var(--fg); }
+.perm-pop .pm-d, .browser-pop .pm-d { font-size: 11px; color: var(--muted); line-height: 1.35; white-space: normal; }
 .cb-browser .cb-ic { color: var(--muted); }
 .cb-browser.browser-ask .cb-ic { color: oklch(70% .15 150); }
 .cb-browser.browser-allow .cb-ic { color: oklch(72% .17 45); }
 .browser-pop { min-width: 240px; }
 .browser-pop .menu-item { align-items: flex-start; }
 /* 「完全访问+每次询问」冲突提示:复用排队提示的低调条,但改成警示色 —— 这不是一句顺口的提示,
-   是在说「你以为会问你,其实不会问」,得让它看起来比普通 hint 更要紧。 */
+   是在说「你以为会问你,其实不会问」,得让它看起来比普通 hint 更要紧。
+   ★★深浅两套主题分开钉死明度(照 tokens.css:27-29 的规矩:深色文字落在 74–80% L、浅色落在
+   42–52% L),不能偷懒写一个固定值——背景是 --warn 14% 透明度叠在 --surface 上,深色主题下
+   --surface 很暗(26% L)所以文字要亮,浅色主题下 --surface 近乎全白(99% L)所以文字要暗,
+   同一个明度在两边不可能都读得清(之前固定 45% L 在深色主题只有约 2:1 对比度)。 */
 .browser-conflict-hint {
-  color: oklch(45% .15 40); background: color-mix(in oklab, var(--warn) 14%, transparent);
+  color: oklch(78% .14 40); background: color-mix(in oklab, var(--warn) 14%, transparent);
   border-color: color-mix(in oklab, var(--warn) 35%, transparent);
 }
+[data-theme="light"] .browser-conflict-hint { color: oklch(46% .15 40); }
 .composer-bar .spacer { flex: 1; }
 .send { width: 34px; height: 34px; border-radius: 8px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; transition: .14s; }
 .send:hover { filter: brightness(1.08); }

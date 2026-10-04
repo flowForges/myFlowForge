@@ -62,6 +62,12 @@ export function buildClaudeArgs(task: AgentTask, env: NodeJS.ProcessEnv): string
     ...CLAUDE_CONTROL_FLAGS,
     ...permArgs,
     ...allowedToolsArgs,
+    // ★★run() 这条路(工作流阶段代理 / forge_delegate 子代理)**还没有**浏览器开关这个功能——没有
+    //  UI、没有落盘。但「没有功能」不等于「继承用户在 ~/.claude/settings.json 里的全局 Chrome
+    //  设置」:那样的话,只在 chat() 里关掉开关完全挡不住 run() 这条路悄悄带着浏览器工具跑,
+    //  Forge 的开关就不再是权威的(见 buildClaudeChatArgs 同一句注释)。所以这里无条件传
+    //  `--no-chrome`,等 run() 真的接上这个功能那天再改成按 task 的档位决定。
+    '--no-chrome',
     '--model', cliModel(task.model),
     ...forgeMcpArgs(env),
   ]

@@ -954,9 +954,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     if (!wf || wf.phase !== 'chatting') return
     const stage = wf.stages[wf.currentIndex]
     if (!stage) return
-    // 工作流阶段配置里没有浏览器档这一维(只有权限档) —— 切阶段时沿用当前选中的浏览器档,不跟着
-    // 阶段重置,否则用户刚打开的浏览器开关会在换阶段的瞬间被悄悄关掉。
-    const next = { agentId: stage.provider, modelId: stage.model, permissionMode: (stage.permissionMode ?? DEFAULT_PERMISSION_MODE), browserUse: selection?.browserUse ?? activeBrowserUse }
+    // 工作流阶段配置里没有浏览器档这一维(只有权限档) —— 切阶段时沿用当前浏览器档,不跟着阶段
+    // 重置,否则用户刚打开的浏览器开关会在换阶段的瞬间被悄悄关掉。
+    // ★★取值一定是 activeBrowserUse(活动会话自己落盘的值),不能是 `selection?.browserUse`:
+    //  这个效果也会在【切会话】时触发(依赖项里有 activeSession?.id),而切会话那一刻 `selection`
+    //  还是闭包里上一个会话的旧值 —— 用它会把 A 会话的浏览器档写进刚切过去的 B 会话的 composer,
+    //  那条假值还会被当场发出去,且从未落盘,下次再切一轮又悄悄消失,很难查。
+    const next = { agentId: stage.provider, modelId: stage.model, permissionMode: (stage.permissionMode ?? DEFAULT_PERMISSION_MODE), browserUse: activeBrowserUse }
     selForRef.current = { ws: wsPath, sid: sessions.activeSessionId }
     setSelection(prev => (prev && prev.agentId === next.agentId && prev.modelId === next.modelId && prev.permissionMode === next.permissionMode && prev.browserUse === next.browserUse ? prev : next))
   }, [activeWorkflow?.currentIndex, activeWorkflow?.phase, activeSession?.id, wsPath, sessions.activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
