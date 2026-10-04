@@ -1,5 +1,6 @@
 import type { ContextUsage } from '@shared/types'
 import type { ChatTask } from './types'
+import { browserToolLabel } from '@shared/browserUse'
 
 export type ChatStreamAction =
   | { kind: 'session'; id: string }
@@ -45,6 +46,9 @@ export function parseChatStreamObj(obj: any): ChatStreamAction {
 
 // A short, human-readable label for a tool call: "调用 Read package.json" / "调用 Bash: go build".
 function toolStep(name: string, input: any): string {
+  // 浏览器工具的名字是 `mcp__claude-in-chrome__xxx`,原样显示在卡片上是一行看不懂的长名。
+  const browser = browserToolLabel(name)
+  if (browser) return browser
   const clip = (v: unknown) => { const s = String(v ?? '').replace(/\s+/g, ' ').trim(); return s.length > 200 ? s.slice(0, 200) + '…' : s }
   if (input?.file_path) return `调用 ${name} ${clip(input.file_path)}`
   if (input?.path) return `调用 ${name} ${clip(input.path)}`
