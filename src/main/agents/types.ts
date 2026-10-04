@@ -4,7 +4,16 @@ export interface HandoffPayload { summary: string; artifacts?: { path: string; k
 
 export type AgentState = 'wait' | 'run' | 'stalled' | 'awaiting' | 'ok' | 'err'
 export interface Model { id: string; label: string; description?: string }
-export interface AgentCapabilities { structuredOutput: boolean; permissionHook: boolean; pty: boolean; mcpTools?: boolean; liveModels?: boolean }
+export interface AgentCapabilities {
+  structuredOutput: boolean; permissionHook: boolean; pty: boolean
+  mcpTools?: boolean; liveModels?: boolean
+  /**
+   * 这个 CLI 自己就能操作浏览器(本期 = claude 的 `--chrome`)。
+   * ★静态声明,不做运行时探测:解析 `--help` 太脆,而「这个版本有没有」是跟 CLI 版本走的事实;
+   *  版本太老时让用户看到 CLI 自己的报错,比我们猜一个状态诚实。
+   */
+  browserUse?: boolean
+}
 
 export interface LogLine { ts: string; text: string; level: 'info' | 'ok' | 'accent' | 'run'; kind?: 'think' | 'tool' | 'file' | 'output' }
 // agentId: which sub-agent lane raised this (undefined = main agent). toolName: the gated tool
@@ -88,6 +97,8 @@ export interface ChatTask {
   sessionId?: string
   attachments?: Attachment[]
   permissionMode?: import('@shared/permissions').PermissionMode
+  /** 这一轮允不允许操作浏览器。缺省 = 'off'(见 shared/browserUse.ts)。 */
+  browserUse?: import('@shared/browserUse').BrowserUseMode
 }
 export interface ChatCallbacks {
   onSession(id: string): void

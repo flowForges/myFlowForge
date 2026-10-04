@@ -2,6 +2,7 @@ import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model, ChatTask, ChatCallbacks, ConfirmDecision } from '../types'
 import type { AskAnswers } from '@shared/types'
+import { providerSupportsBrowserUse } from '@shared/browserUse'
 import { parseChatStreamActions, buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTracker, splitThinkLines } from '../chatStream'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { forgeMcpArgs, forgeAllowedToolNames } from '../mcpConfig'
@@ -66,6 +67,27 @@ export function buildClaudeArgs(task: AgentTask, env: NodeJS.ProcessEnv): string
   ]
 }
 
+/**
+ * chat() 的命令行参数。导出是为了能直接单测 —— `preArgs` 会把整个 argv 替换掉,走那条路测不到这里。
+ * 与 run() 的 buildClaudeArgs(上面)对称。
+ */
+export function buildClaudeChatArgs(task: ChatTask, env: NodeJS.ProcessEnv, chatPrompt: string): string[] {
+  const forgeAllow = forgeAllowedToolNames(env)
+  const allowArgs = forgeAllow.length ? ['--allowedTools', ...forgeAllow] : []
+  // ★★关的时候**显式**传 `--no-chrome`,不能靠「不传」:用户可能在 ~/.claude/settings.json 里
+  //   全局开了 Chrome 集成,那样界面上明明是关的、实际却开着。Forge 的开关必须是权威的。
+  const chromeArgs = [task.browserUse === 'ask' || task.browserUse === 'allow' ? '--chrome' : '--no-chrome']
+  return [
+    '-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose',
+    ...CLAUDE_CONTROL_FLAGS,
+    ...permissionArgs('claude', task.permissionMode ?? 'auto'),
+    ...allowArgs,
+    ...chromeArgs,
+    '--model', cliModel(task.model),
+    ...forgeMcpArgs(env),
+  ]
+}
+
 export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
   const bin = spec.bin ?? 'claude'
   const defaultModels: Model[] = spec.defaultModels ?? []
@@ -73,7 +95,9 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
     id: 'claude',
     displayName: 'Claude Code',
     bin,
-    capabilities: { structuredOutput: true, permissionHook: true, pty: false, mcpTools: true, liveModels: true },
+    // browserUse 从 shared/browserUse.ts 的 BROWSER_USE_PROVIDERS 推导,不在这里硬编码 true ——
+    // 否则「哪些 provider 支持」会在主进程和渲染进程两处各写一份,早晚漂移。
+    capabilities: { structuredOutput: true, permissionHook: true, pty: false, mcpTools: true, liveModels: true, browserUse: providerSupportsBrowserUse('claude') },
     async detect() { try { await execa(bin, ['--version']); return true } catch { return false } },
     async listModels() { return defaultModels },
     // claude has no --list-models; recover the real alias→version map by scanning its compiled
@@ -246,13 +270,11 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       // Pre-grant the forge MCP tools; without --allowedTools, claude blocks the call in headless
       // mode ("requested permissions … but you haven't granted it yet") and forge_delegate /
       // forge_propose_plan never run — the chat-delegation "子代理没执行/被取消" bug.
-      const forgeAllow = forgeAllowedToolNames(env)
-      const allowArgs = forgeAllow.length ? ['--allowedTools', ...forgeAllow] : []
       // Prompt now goes to stdin as a user message (Step 4), NOT an argv positional — required by
       // --input-format stream-json. CLAUDE_CONTROL_FLAGS turns on the can_use_tool control protocol.
-      const args = spec.preArgs
-        ? [...spec.preArgs]
-        : ['-p', '--output-format', 'stream-json', '--include-partial-messages', '--verbose', ...CLAUDE_CONTROL_FLAGS, ...permissionArgs('claude', task.permissionMode ?? 'auto'), ...allowArgs, '--model', cliModel(task.model), ...forgeMcpArgs(env)]
+      // args 的拼装挪进了 buildClaudeChatArgs(导出、可单测) —— preArgs 会把整个 argv 替换掉,
+      // 走那条路测不到真实拼装分支,所以必须抽出来才能测到 --chrome/--no-chrome 的分支。
+      const args = spec.preArgs ? [...spec.preArgs] : buildClaudeChatArgs(task, env, chatPrompt)
       if (!spec.preArgs && task.sessionId) args.push('--resume', task.sessionId)
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false })
       // Control-protocol handshake + prompt delivery (must come before we await output).
