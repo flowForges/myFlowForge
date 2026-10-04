@@ -43,7 +43,7 @@ import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages } from '../chat/chatStore'
 import { withLastMessageAt } from '../chat/sessionsView'
 import { mergeLive } from '../chat/liveTurns'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, setSessionBrowserUse, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
 import { buildLaunchPlan, buildLaunchProjects, hasRequirement, type LaunchStartConfig } from '../run/launch'
 import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProjectBriefs } from '../run/workflowEnter'
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
@@ -1180,6 +1180,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   on(CH.sessionSetPermission, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => {
     return sessionsOut(a.workspacePath, applyPermission(a.workspacePath, a.sessionId, a.mode, _e?.client?.label ?? '本机'))
+  })
+  // 浏览器开关只是落盘的会话级设置,不像权限档那样要排空挂起的门或提示「运行中改档」—— 照 sessionSetModel
+  // 的样子走标准的 落盘 + 广播 + sessionsOut 出口即可,不需要 applyPermission 那条特殊路径。
+  on(CH.sessionSetBrowserUse, (_e, a: { workspacePath: string; sessionId: string; mode: import('@shared/types').ChatSession['browserUse'] }) => {
+    const file = setSessionBrowserUse(a.workspacePath, a.sessionId, a.mode)
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
   })
   on(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
     const file = setSessionModel(a.workspacePath, a.sessionId, a.agentId, a.modelId)

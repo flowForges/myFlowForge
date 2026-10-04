@@ -125,6 +125,14 @@ export function setSessionPermission(wsPath: string, sessionId: string, mode: im
   return data
 }
 
+// 记住会话的浏览器开关,切走再回来保持原样。★和 setSessionPermission 并排,是同一类的会话级设置。
+export function setSessionBrowserUse(wsPath: string, sessionId: string, mode: import('@shared/types').ChatSession['browserUse']): SessionsFile {
+  const data = readSessions(wsPath)
+  const s = data.sessions.find(x => x.id === sessionId)
+  if (s) { s.browserUse = mode; write(wsPath, data) }
+  return data
+}
+
 // Remember a session's coding agent + model (per-session, mirrors setSessionPermission).
 export function setSessionModel(wsPath: string, sessionId: string, agentId: string, modelId: string): SessionsFile {
   const data = readSessions(wsPath)

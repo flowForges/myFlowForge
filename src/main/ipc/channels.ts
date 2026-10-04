@@ -142,6 +142,8 @@ export const CH = {
   sessionClose: 'session:close',
   sessionRename: 'session:rename',
   sessionSetPermission: 'session:set-permission',
+  // 浏览器开关:和 sessionSetPermission 并排,同一类的会话级设置(见 setSessionBrowserUse)。
+  sessionSetBrowserUse: 'session:set-browser-use',
   chatSwitchSummary: 'chat:switch-summary',
   chatSummarizeRequirement: 'chat:summarize-requirement',
   // P1-5: persist a confirmed launch-gate's frozen record onto the session (synthetic ChatMessage

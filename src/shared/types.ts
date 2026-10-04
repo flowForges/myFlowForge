@@ -357,6 +357,8 @@ export interface ChatSession {
   continuedFrom?: { source: SourceId; externalId: string }
   // Per-session agent permission (sandbox) scope, remembered across switches. Absent = default 'auto'.
   permissionMode?: import('./permissions').PermissionMode
+  /** 这个会话允不允许 agent 操作浏览器。缺省 = 'off'(见 shared/browserUse.ts)。 */
+  browserUse?: import('./browserUse').BrowserUseMode
   // 对话式工作流(2026-07-30):本 session 若在某个工作流里,记下轻量 WorkflowSessionState(阶段/进度/
   // provider 配置/执行尾段 runId)。缺省=普通会话,不在工作流里。见 shared/workflowSession.ts。
   workflowSession?: import('./workflowSession').WorkflowSessionState
