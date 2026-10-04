@@ -10,6 +10,7 @@ import { readClaudeModelsLive } from './claudeModels'
 import { logError, appLog } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { makeHookWatch, HOOK_SLOW_MS } from './claudeHooks'
+import { makeBackgroundGate, parseTaskNotification } from './claudeBackground'
 import { CLAUDE_CONTROL_FLAGS, controlInitLine, userMessageLine, parseCanUseTool, toolTarget, controlAllowLine, controlDenyLine, parseAskQuestions, controlAnswerLine, askGateTitle, unhandledControlRequest, controlErrorLine, type CanUseTool } from './claudeControl'
 
 // The claude CLI's `--model` only accepts an alias ('opus'/'sonnet'/'haiku'/'fable') or a
@@ -103,6 +104,12 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       // agent that never even emits `result` — without it workOrder's `await session.done` (process
       // exit) would hang the whole workflow lane forever (the 0/N-for-40min wedge). Mirrors chat().
       const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => { try { killTree(child) } catch { /* already gone */ } })
+      // ★同 chat():后台子代理/后台命令没跑完时 result 不杀,停车等 CLI 自己起下一轮(见 claudeBackground.ts)。
+      //   run 这条路上上面的看门狗照旧:停车期间 240s 一声不出也会回收 —— 工作流泳道不能无限期挂着。
+      const bg = makeBackgroundGate({
+        onFinish: () => { try { killTree(child) } catch { /* already gone */ } },
+        onPark: (n) => cb.onLog({ ts: now(), level: 'info', kind: 'think', text: n > 0 ? `后台还有 ${n} 个任务在跑，等它们完成后继续。` : '后台任务刚完成，等主代理继续…' }),
+      })
       // Set from the `result` event; overrides the SIGTERM exit code we then raise so a clean turn
       // reports ok:true rather than `退出码 143`.
       let turnOk: boolean | null = null
@@ -119,7 +126,15 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       let streamed = false
       const usage = makeUsageTracker(u => cb.onUsage?.(u))
       const KIND_LEVEL = { think: 'info', tool: 'accent', file: 'accent', output: 'accent' } as const
+      // run 没有子代理卡片 UI,子代理只出日志行;记下哪些 tool_use_id 是子代理,好把后台完成通知对上号。
+      const subagentIds = new Set<string>()
       const handle = async (obj: any) => {
+        bg.feed(obj)
+        const tn = parseTaskNotification(obj)
+        if (tn?.toolUseId && subagentIds.has(tn.toolUseId)) {
+          cb.onSubagent?.({ id: tn.toolUseId, phase: 'done', result: tn.summary, isError: !tn.ok })
+          cb.onLog({ ts: now(), text: `后台子代理${tn.ok ? '完成' : '失败'}${tn.summary ? ' · ' + tn.summary.slice(0, 200) : ''}`, level: tn.ok ? 'ok' : 'info', kind: 'tool' })
+        }
         // ★★不认识但对面正等着回答的控制请求:明确回一句「不支持」。原来它会一路掉过所有分支、
         //   **根本没人回答**,claude 就静静地等,这一轮挂住(和 codex 那个 bug 同一类,见 4c6423e)。
         const stray = unhandledControlRequest(obj)
@@ -165,13 +180,20 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
             // lane hangs forever on `await session.done` after the agent already handed off. Capture
             // success from the raw result so the SIGTERM exit code (143) isn't misread as a failure.
             turnOk = (obj as { subtype?: string; is_error?: boolean })?.subtype === 'success' && (obj as { is_error?: boolean })?.is_error !== true
-            try { killTree(child) } catch { /* already gone */ }
+            bg.result()   // 没有后台活 → 立即 killTree;有 → 停车,下一轮的 result 再判
             continue
           }
           // A stage agent's own built-in Task sub-agents: surface as log lines (the run path has no
           // sub-agent card UI; the workflow's own real sub-agents are the visible ones here).
-          if (a.kind === 'subagent-start') { cb.onSubagent?.({ id: a.id, phase: 'start', subagentType: a.subagentType, description: a.description }); cb.onLog({ ts: now(), text: `调用子代理 ${a.subagentType ?? ''}${a.description ? ' · ' + a.description : ''}`.trim(), level: 'accent', kind: 'tool' }); continue }
-          if (a.kind === 'subagent-result') { cb.onSubagent?.({ id: a.id, phase: 'done', result: a.result, isError: a.isError }); continue }
+          if (a.kind === 'subagent-start') {
+            subagentIds.add(a.id)
+            cb.onSubagent?.({ id: a.id, phase: 'start', subagentType: a.subagentType, description: a.description }); cb.onLog({ ts: now(), text: `调用子代理 ${a.subagentType ?? ''}${a.description ? ' · ' + a.description : ''}`.trim(), level: 'accent', kind: 'tool' }); continue
+          }
+          if (a.kind === 'subagent-result') {
+            // 后台启动回执不是完成:等 task_notification(handle 开头)再报 done
+            if (subagentIds.has(a.id) && !a.isError && bg.isBackgroundLaunch(a.id, a.result)) { cb.onLog({ ts: now(), text: '子代理已转入后台运行', level: 'info', kind: 'tool' }); continue }
+            cb.onSubagent?.({ id: a.id, phase: 'done', result: a.result, isError: a.isError }); continue
+          }
           const kind = a.kind === 'assistant' ? 'output' : a.kind
           cb.onLog({ ts: now(), text: a.text, level: KIND_LEVEL[kind], kind })
         }
@@ -201,6 +223,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const done = child.then((res) => {
         wd.clear()
         processLine(buf); buf = '' // flush any final line that had no trailing newline (e.g. the result event)
+        bg.clear()
         // A clean `result` (turnOk===true) means success even though we then SIGTERM'd the non-exiting
         // process (exit code 143). Fall back to the exit code only when no result arrived (a wedge the
         // watchdog reclaimed, or a crash) → ok:false so the lane fails/retries rather than false-passes.
@@ -208,8 +231,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         cb.onState(ok ? 'ok' : 'err')
         const result = { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
         cb.onDone(result); return result
-      }).catch((err) => { wd.clear(); cb.onState('err'); cb.onError(err as Error); return { ok: false } })
-      return { id: task.agentId, cancel: () => { wd.clear(); killTree(child) }, done }
+      }).catch((err) => { wd.clear(); bg.clear(); cb.onState('err'); cb.onError(err as Error); return { ok: false } })
+      return { id: task.agentId, cancel: () => { wd.clear(); bg.clear(); killTree(child) }, done }
     },
     chat(task: ChatTask, cb: ChatCallbacks, env): AgentSession {
       // claude 主代理靠自动发现的 .claude/skills/forge-workflow 学工作流规则,但那依赖它自行按 frontmatter
@@ -247,12 +270,26 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
        */
       const wd = makeIdleWatchdog(CHAT_IDLE_MS, () => {
         const waiting = hooks.pending()
-        cb.onStatus?.(waiting.length
+        cb.onStatus?.(bg.parked
+          ? `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出，还有 ${bg.running} 个后台任务没跑完（后台命令可能本来就不出声）。要停就点上面的停止。`
+          : waiting.length
           ? `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出，还在等 ${waiting.join('、')} 钩子 —— 它可能正在别处等你确认。要停就点上面的停止。`
           : `⏳ 已经 ${Math.round(CHAT_IDLE_MS / 1000)}s 没有任何输出。可能在等一个 Forge 看不见的确认（外部钩子 / 浏览器授权 / sudo）。要停就点上面的停止。`)
       }, undefined, {
         hardMs: CHAT_STALL_KILL_MS,
-        onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } },
+        onDeadline: () => { cb.onStatus?.(bg.parked ? '⚠ 后台任务太久没有任何动静，已回收这一轮。' : '⚠ 太久没有任何输出，已回收这一轮。'); try { killTree(child) } catch { /* already gone */ } },
+      })
+      /**
+       * ★★后台子代理/后台命令比主代理这一轮活得久时,`result` 不能直接杀进程 —— 见 claudeBackground.ts。
+       *  停车期间 CLI 会在任务完成后自己起下一轮,那一轮的回复接在同一条消息后面(needSep 补一个空段)。
+       */
+      let needSep = false
+      const bg = makeBackgroundGate({
+        onFinish: () => { try { killTree(child) } catch { /* already gone */ } },
+        onPark: (n) => cb.onStatus?.(n > 0
+          ? `⏳ 后台还有 ${n} 个任务在跑（子代理 / 后台命令）。它们完成后主代理会接着回复；要停就点上面的停止。`
+          : '⏳ 后台任务刚完成，等主代理接着回复…'),
+        onResume: () => { flushThink(); needSep = sawAssistant },
       })
       /**
        * ★★钩子把这一轮拖住时,界面上和「模型在思考」完全一样 —— 用户 2026-09-07 是靠**另一个软件**
@@ -310,6 +347,11 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const handle = async (obj: any) => {
         // 钩子事件先过一道:它只影响「现在在等谁」的播报,不参与下面任何解析分支。
         if (hooks.feed(obj)) return
+        // 后台任务的生命周期事件(主代理的、子代理的都要看),同步跟踪;子代理事件下面会提前 return,所以放这里。
+        bg.feed(obj)
+        // 后台子代理真正跑完:它那张卡这时才算完成(启动时的 tool_result 只是回执,见下面 subagent-result)。
+        const tn = parseTaskNotification(obj)
+        if (tn?.toolUseId && subagentIds.has(tn.toolUseId)) cb.onSubagent?.({ id: tn.toolUseId, phase: 'done', result: tn.summary, isError: !tn.ok })
         // ★★同 run():两个调用方都要接 —— 见 [[trap-two-call-sites-run-vs-chat]]。只接一处的话,
         //   工作流那边不挂了、聊天这边照旧是个不动的光标,而聊天才是天天在用的那条。
         const stray = unhandledControlRequest(obj)
@@ -383,14 +425,19 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // queues) and has to hit 停止. Terminate on the `result` event (claude's authoritative end-of-turn
         // signal), mirroring run(). It arrives only AFTER every tool/permission gate, so this never cuts a
         // pending gate short. Success comes from the raw result so the SIGTERM exit (143) isn't misread.
+        // ★后台任务还没跑完时 bg 不杀、停车等 CLI 起下一轮(那一轮的 result 会再走到这里);turnOk 以最后一轮为准。
         if (obj?.type === 'result') {
           turnOk = (obj as { subtype?: string; is_error?: boolean }).subtype === 'success' && (obj as { is_error?: boolean }).is_error !== true
-          try { killTree(child) } catch { /* already gone */ }
+          bg.result()
           return
         }
         for (const action of parseChatStreamActions(obj)) {
           if (action.kind === 'session') cb.onSession(action.id)
-          else if (action.kind === 'assistant') { flushThink(); sawAssistant = true; cb.onAssistantDelta(action.text) }
+          else if (action.kind === 'assistant') {
+            flushThink()
+            if (needSep) { needSep = false; cb.onAssistantDelta('\n\n') }
+            sawAssistant = true; cb.onAssistantDelta(action.text)
+          }
           else if (action.kind === 'think') pushThink(action.text)
           else if (action.kind === 'tool' || action.kind === 'file') {
             flushThink()
@@ -404,7 +451,10 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
           else if (action.kind === 'subagent-result') {
             // parseChatStreamActions emits a 'subagent-result' for EVERY tool_result. A known Task id →
             // its sub-agent card; any other id → a regular tool's output, into the 执行 block.
-            if (subagentIds.has(action.id)) cb.onSubagent?.({ id: action.id, phase: 'done', result: action.result, isError: action.isError })
+            // ★后台启动的子代理:这条 tool_result 只是「已启动」回执(还夹着内部 agentId),不是完成 ——
+            //   卡片保持运行中,等它的 task_notification(上面)再置完成。
+            if (subagentIds.has(action.id) && !action.isError && bg.isBackgroundLaunch(action.id, action.result)) cb.onSubagent?.({ id: action.id, phase: 'update', step: '已转入后台运行' })
+            else if (subagentIds.has(action.id)) cb.onSubagent?.({ id: action.id, phase: 'done', result: action.result, isError: action.isError })
             else cb.onToolActivity?.({ id: action.id, phase: 'done', output: action.result, isError: action.isError })
           }
         }
@@ -434,6 +484,7 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
       const done = child.then((res) => {
         wd.clear(); hooks.clear()
         processLine(buf); buf = ''
+        bg.clear()     // after the final flush: a trailing `result` line must still be judged, but nothing may fire after exit
         flushThink()   // surface any trailing reasoning line that never got a closing newline
         if (errBuf.trim() && !isClaudeBenignStderr(errBuf.trim())) { cb.onStatus?.(errBuf.trim()) } errBuf = ''
         const elapsed = Math.round((Date.now() - start) / 1000)
@@ -458,8 +509,8 @@ export function makeClaudeProvider(spec: ClaudeSpec): AgentProvider {
         // process (exit 143); fall back to the exit code only when no result arrived.
         const ok = turnOk ?? (res.exitCode === 0)
         return { ok, summary: ok ? '完成' : `退出码 ${res.exitCode}` }
-      }).catch((err) => { wd.clear(); hooks.clear(); cb.onError(err as Error); return { ok: false } })
-      return { id: task.id, cancel: () => { wd.clear(); hooks.clear(); killTree(child) }, done }
+      }).catch((err) => { wd.clear(); hooks.clear(); bg.clear(); cb.onError(err as Error); return { ok: false } })
+      return { id: task.id, cancel: () => { wd.clear(); hooks.clear(); bg.clear(); killTree(child) }, done }
     }
   }
 }
