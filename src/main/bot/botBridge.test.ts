@@ -323,3 +323,28 @@ describe('BotBridge — 以错误收尾但有答案的回合', () => {
     expect(h.fake.lastText()).toContain('❌ 出错')
   })
 })
+
+describe('BotBridge — 系统提示不是「完成」', () => {
+  // 2026-10-07:主进程的系统提示(emitNote,model 为「系统」)走的也是 done 事件 ——
+  // 比如「⛔ 这一轮没有发出」。原来一律挂「✅ 完成」,于是一轮**被拒**在飞书里显示成完成了。
+  it('★model 为「系统」的 done:不挂 ✅ 完成', async () => {
+    const h = await attached()
+    h.bridge.observe('chat:event', {
+      workspacePath: '/ws1', sessionId: 'sess-abc', type: 'done', id: 'sys-1',
+      message: { text: '⛔ 这一轮没有发出:「完全访问」档下 CLI 不会升起任何授权门', model: '系统' },
+    })
+    const t = h.fake.lastText()
+    expect(t).toContain('没有发出')
+    expect(t).not.toContain('✅ 完成')
+    expect(t).toContain('系统提示')
+  })
+
+  it('模型正常答完的 done 照旧是 ✅ 完成', async () => {
+    const h = await attached()
+    h.bridge.observe('chat:event', {
+      workspacePath: '/ws1', sessionId: 'sess-abc', type: 'done', id: 'a-1',
+      message: { text: '改好了', model: 'Claude Code · opus' },
+    })
+    expect(h.fake.lastText()).toContain('✅ 完成')
+  })
+})

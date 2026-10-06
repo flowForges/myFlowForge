@@ -7,6 +7,7 @@ import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions, providerGatesEachOperation, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE } from '@shared/browserUse'
+import { userMessageOf } from '../chat/userMessage'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -895,6 +896,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       const conflict = browserPermissionConflict(browser, payload.permissionMode ?? DEFAULT_PERMISSION_MODE)
         ?? browserPermissionConflict(browser, stored ?? DEFAULT_PERMISSION_MODE)
       if (conflict) {
+        // ★先把用户那句原文落盘,再记系统提示 —— 否则从手机/机器人发来的那句话就凭空消失了,
+        //  电脑上只看得到「没有发出」,不知道没发出的是什么(userMessage.ts)。
+        const um = userMessageOf(payload)
+        appendMessage(payload.workspacePath, payload.sessionId, um)
+        broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'user', message: um })
         emitNote(payload.workspacePath, payload.sessionId, `⛔ 这一轮没有发出:${conflict}`)
         return
       }

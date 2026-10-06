@@ -199,6 +199,23 @@ describe('§4.3 的拒绝在主进程发车处生效 —— 不经输入框的�
     expectRefused(store, sessions)
   })
 
+  it('★被拒的那一轮,用户原文也要落盘、排在系统提示前面 —— 否则从手机/机器人发来的那句话就凭空消失了', async () => {
+    const { store } = await bootWithStore()
+    session.permissionMode = 'full'
+    botDeps.enqueue({
+      workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'Claude Code',
+      model: 'opus-4.8', text: '去后台改个配置', attachments: [], source: '飞书',
+    }, '飞书')
+    await flush()
+    const saved = store.appendMessage.mock.calls.map((c: any[]) => c[2])
+    const ui = saved.findIndex((m: any) => m?.who === 'user' && m.text === '去后台改个配置')
+    const ni = saved.findIndex((m: any) => m?.text?.includes('没有发出'))
+    expect(ui).toBeGreaterThanOrEqual(0)
+    expect(ni).toBeGreaterThan(ui)
+    // `via` 和正常发出的一轮保持一致:机器人这条路本来就不填(只有远程设备经 chat:send 才填),这里不另立规矩。
+    expect(saved[ui].via).toBeUndefined()
+  })
+
   it('★宠物窗(走 chat:send,载荷不带档):会话落盘是「完全访问」→ 拒绝', async () => {
     const { call, store, sessions } = await bootWithStore()
     session.permissionMode = 'full'
