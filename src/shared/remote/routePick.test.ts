@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  routesFor, firstRoute, shouldProbeLan, afterLanDrop, freshMemory,
+  routesFor, firstRoute, isLoopbackAddress, shouldProbeLan, afterLanDrop, freshMemory,
   LAN_PROBE_INTERVAL_MS, LAN_FLAP_WINDOW_MS, LAN_COOLDOWN_MS,
 } from './routePick'
 
@@ -82,5 +82,22 @@ describe('afterLanDrop —— 局域网断了之后怎么记账', () => {
   })
   it('根本没在局域网上(lanSince 为空):什么都不变', () => {
     expect(afterLanDrop(freshMemory(), 123)).toEqual(freshMemory())
+  })
+})
+
+describe('isLoopbackAddress —— 码里的「局域网地址」其实是回环(分享时没开局域网)', () => {
+  it('回环的几种写法都认', () => {
+    for (const a of ['ws://127.0.0.1:6789', '127.0.0.1:6789', 'ws://localhost:6789', 'ws://[::1]:6789', '127.0.1.1:80']) {
+      expect(isLoopbackAddress(a)).toBe(true)
+    }
+  })
+  it('真的局域网地址不算', () => {
+    for (const a of ['ws://192.168.1.5:6789', '10.0.0.2:6789', 'ws://mac-mini.local:6789']) {
+      expect(isLoopbackAddress(a)).toBe(false)
+    }
+  })
+  it('空的、畸形的:当成「不是回环」(宁可多试一次)', () => {
+    expect(isLoopbackAddress('')).toBe(false)
+    expect(isLoopbackAddress('::::')).toBe(false)
   })
 })

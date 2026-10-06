@@ -1,6 +1,10 @@
 import { isClientEvent, routeOf } from '../ipc/channelRouting'
 import { CH } from '../ipc/channels'
-import { connectRemote, type RemoteClient, type RemoteState } from './remoteClient'
+import { connectRemote, type ConnectOpts, type RemoteClient, type RemoteState } from './remoteClient'
+import {
+  afterLanDrop, firstRoute, freshMemory, isLoopbackAddress, routesFor, LAN_CONNECT_BUDGET_MS,
+  type Route, type RouteMemory,
+} from '@shared/remote/routePick'
 import type { HopInput } from '@shared/remote/hopDiagnosis'
 import type { InvokeCtx, MethodTable } from '../ipc/invokeCtx'
 import type { RemoteHost } from './hostStore'
@@ -46,6 +50,8 @@ export type HostRouterDeps = {
    */
   resolveUrl: (h: RemoteHost) => Promise<{ url: string; cleanup?: () => Promise<void> }>
   onLog?: (msg: string) => void
+  /** 测试注入点。默认就是真的 `connectRemote`。 */
+  connect?: (o: ConnectOpts) => RemoteClient
 }
 
 export function createHostRouter(deps: HostRouterDeps) {
@@ -54,6 +60,20 @@ export function createHostRouter(deps: HostRouterDeps) {
   let cleanupTunnel: (() => Promise<void>) | null = null
   let current: RemoteHost | null = null
   let remoteState: RemoteState = { status: 'closed' }
+  /**
+   * ★★选路(2026-10-07):主机同时有局域网和中转时,先局域网、不通再中转;局域网断了重新选。
+   *  判断全在 `@shared/remote/routePick.ts`(手机端用的同一份)。桌面第一期**不做**「走中转时主动
+   *  迁回局域网」:笔记本合盖再打开本来就会重连,重连时自然先试局域网。
+   *  ★第二期要做主动迁移的话,必须先看有没有开着的远程终端 —— pty 跟连接绑定,
+   *   断连接就收 pty(terminalService.ts),迁移会把终端里跑着的东西打掉。
+   * ★`dialGen`:每次换路 / 断开都 +1。旧连接关闭时会同步报一次 closed,拿代数一比就知道
+   *  那是自己收掉的,不是它自己断了 —— 否则一次主动关闭会被当成断线,再触发一轮选路。
+   */
+  const dial = deps.connect ?? connectRemote
+  const routeMem = new Map<string, RouteMemory>()
+  let dialGen = 0
+  let attemptTimer: ReturnType<typeof setTimeout> | null = null
+  const readyWaiters = new Set<() => void>()
 
   const localMethods = Object.keys(deps.localTable)
 
@@ -66,9 +86,109 @@ export function createHostRouter(deps: HostRouterDeps) {
       }
     : { hostId: null, label: '本机', state: { status: 'local' }, methods: localMethods }
 
-  const pushStatus = () => deps.onStatus(status())
+  const pushStatus = () => {
+    deps.onStatus(status())
+    for (const w of [...readyWaiters]) w()
+  }
+
+  /**
+   * 等这一层「已连接」。★等的是 router 的状态,不是某一条连接的:局域网失败换中转期间发出的调用,
+   *  要落到中转上,而不是跟着那条被放弃的局域网一起失败(首屏加载在外面打开时就是这个时刻)。
+   */
+  function waitReady(timeoutMs = 10_000): Promise<void> {
+    if (remoteState.status === 'ready') return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      const done = () => { clearTimeout(t); readyWaiters.delete(check) }
+      const t = setTimeout(() => { done(); reject(new Error('连接超时')) }, timeoutMs)
+      const check = () => {
+        if (remoteState.status === 'ready') { done(); resolve() }
+        else if (remoteState.status === 'failed' || remoteState.status === 'closed') {
+          done(); reject(new Error(remoteState.status === 'failed' ? remoteState.error : '连接已关闭'))
+        }
+      }
+      readyWaiters.add(check)
+    })
+  }
+
+  function dialRoute(host: RemoteHost, url: string, routes: Route[], mem: RouteMemory, route: Route) {
+    const gen = ++dialGen
+    const lan = route === 'lan'
+    const routed = routes.length > 1
+    let phase: 'attempt' | 'active' = lan && routed ? 'attempt' : 'active'
+    // 换一条路:把当前这条收掉(代数已经变了,它报的 closed 会被忽略),对外保持「连接中」。
+    const switchTo = (next: Route) => {
+      // ★先作废这一代,再关旧连接:它关闭时会同步报一次 closed,代数没变的话会被当成
+      //  「当代这条断了」,再触发一轮换路 —— 测试里看到的就是中转被拨了两次。
+      dialGen++
+      const old = remote
+      remote = null
+      if (old) void old.close()
+      remoteState = { status: 'connecting', attempt: 1 }
+      pushStatus()
+      dialRoute(host, url, routes, mem, next)
+    }
+    const client = dial({
+      url,
+      token: host.token || undefined,
+      pubKey: host.pubKey || undefined,
+      relayUrl: lan ? undefined : host.relay || undefined,
+      proxy: readSettings().appProxy,
+      clientVersion: deps.clientVersion,
+      clientLabel: deps.clientLabel,
+      // 两条路时局域网那条不自动重连:失败了由这里换路,而不是对着够不着的地址退避一整晚。
+      ...(lan && routed ? { backoff: false as const } : {}),
+      onEvent: (ch, payload) => {
+        if (gen !== dialGen) return
+        ;(deps.onRemoteEvent ?? deps.toWindows)(
+          ch,
+          // ★★收进来的 `settings:changed` 也只取「跟机器走」那一半。发的那头已经收窄过了
+          //  (`remote/eventScope.ts`),这头再收一次是给**旧主机**兜底:1.2.0 及更早的机器推的仍是
+          //  整份设置。不拦的话,连过去一次,你这台的外观就会被对面同化,而界面上没有任何迹象。
+          ch === CH.settingsChanged && payload && typeof payload === 'object' ? pickHost(payload as Settings) : payload,
+        )
+      },
+      onState: (s) => {
+        if (gen !== dialGen) return
+        if (phase === 'attempt') {
+          // 首次拨局域网:通了转正;没通就换中转,失败**不外露**,对外一直是「连接中」。
+          if (s.status === 'ready') {
+            if (attemptTimer) { clearTimeout(attemptTimer); attemptTimer = null }
+            phase = 'active'
+            mem.lanSince = Date.now()
+            remoteState = s
+            pushStatus()
+            return
+          }
+          if (s.status === 'connecting') return
+          if (attemptTimer) { clearTimeout(attemptTimer); attemptTimer = null }
+          log('局域网不通,改走中转')
+          return switchTo('relay')
+        }
+        if (lan && routed && (s.status === 'closed' || s.status === 'retrying')) {
+          // 局域网断了:用了很久才断 → 出门了;刚连上就断 → 信号边缘,冷却。然后重新选路。
+          Object.assign(mem, afterLanDrop(mem, Date.now()))
+          log('局域网断了,重新选路')
+          return switchTo(firstRoute(routes, mem, Date.now()))
+        }
+        remoteState = s
+        pushStatus()
+      },
+      onLog: log,
+    })
+    remote = client
+    if (phase === 'attempt') {
+      attemptTimer = setTimeout(() => {
+        attemptTimer = null
+        if (gen !== dialGen || phase !== 'attempt') return
+        log(`局域网 ${LAN_CONNECT_BUDGET_MS}ms 没连上,改走中转`)
+        switchTo('relay')
+      }, LAN_CONNECT_BUDGET_MS)
+    }
+  }
 
   async function teardown() {
+    dialGen++
+    if (attemptTimer) { clearTimeout(attemptTimer); attemptTimer = null }
     const r = remote; const t = cleanupTunnel
     remote = null; cleanupTunnel = null
     if (r) await r.close()
@@ -110,13 +230,17 @@ export function createHostRouter(deps: HostRouterDeps) {
       if (!localFn) throw new Error(`没有这个方法: ${channel}`)
       return localFn(ctx, ...args)
     }
-    const s = remote.state()
+    // 正在换路(局域网 → 中转)的那一小会儿,等这一层连上再发,别让调用跟着被放弃的那条一起失败。
+    if (remoteState.status !== 'ready') await waitReady()
+    const live = remote
+    if (!live) throw new Error('连接不可用')
+    const s = live.state()
     if (s.status === 'ready' && !s.methods.has(channel)) {
       // ★绝不回落到本机。回落的话「工作区列表」会在你以为在看服务器的时候显示本机的工作区,
       // 而界面上没有任何迹象 —— 比报错危险得多。
       throw new Error(`「${current?.label ?? '远程主机'}」不提供这个功能(${channel}),可能是两端版本不一致`)
     }
-    return remote.invoke(channel, args)
+    return live.invoke(channel, args)
   }
 
   return {
@@ -171,30 +295,14 @@ export function createHostRouter(deps: HostRouterDeps) {
         throw e
       }
 
-      remote = connectRemote({
-        url,
-        token: host.token || undefined,
-        // ★空串一律落 undefined —— 下游只判「有没有」,不用再各写一遍 `x && x !== ''`
-        //  (和手机端 `conn.tsx` 同一条规矩)。
-        pubKey: host.pubKey || undefined,
-        relayUrl: host.relay || undefined,
-        // ★「app 自身的网络」那个代理。★★漏了它的现象是**永远「正在连」**:`ws` 不认
-        //  `https_proxy` 环境变量,不给 agent 就直连,而直连一个够不着的地址既不报错也不关闭。
-        //  daemon 那一侧(`relayController`)早就这么传了,客户端这侧是同一个坑。
-        proxy: readSettings().appProxy,
-        clientVersion: deps.clientVersion,
-        clientLabel: deps.clientLabel,
-        // ★★收进来的 `settings:changed` 也只取「跟机器走」那一半。
-        //  发的那头已经收窄过了(`remote/eventScope.ts`),这头再收一次是给**旧主机**兜底:
-        //  1.2.0 及更早的机器推的仍是整份设置,里面带着**那台电脑**的主题、壁纸、宠物、授权码。
-        //  不拦的话,连过去一次,你这台的外观就会被对面同化,而界面上没有任何迹象。
-        onEvent: (ch, payload) => (deps.onRemoteEvent ?? deps.toWindows)(
-          ch,
-          ch === CH.settingsChanged && payload && typeof payload === 'object' ? pickHost(payload as Settings) : payload,
-        ),
-        onState: (s) => { remoteState = s; pushStatus() },
-        onLog: log,
+      const routes = routesFor({
+        // SSH 主机走隧道,不参与选路;码里是回环地址 = 分享时没开局域网,那不是一条路。
+        lanUsable: host.kind === 'direct' && !!url && !isLoopbackAddress(url),
+        relay: host.relay, pubKey: host.pubKey,
       })
+      let mem = routeMem.get(host.id)
+      if (!mem) { mem = freshMemory(); routeMem.set(host.id, mem) }
+      dialRoute(host, url, routes, mem, firstRoute(routes, mem, Date.now()))
       pushStatus()
     },
 

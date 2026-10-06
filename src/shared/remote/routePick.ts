@@ -46,6 +46,19 @@ export function routesFor(h: { lanUsable: boolean; relay?: string; pubKey?: stri
   return h.lanUsable ? ['lan', 'relay'] : ['relay']
 }
 
+/**
+ * 码里那个局域网地址是不是回环。分享时一个局域网地址都没有,码里填的就是 127.0.0.1(见 MobileSection.tsx
+ * 的 `qrAddr`)—— 那不是一条路,去连它等于连自己。认不出的地址一律当「不是回环」:宁可多试一次 1.5 秒。
+ */
+export function isLoopbackAddress(urlOrHostPort: string): boolean {
+  const raw = urlOrHostPort.trim()
+  if (!raw) return false
+  let host = ''
+  try { host = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `ws://${raw}`).hostname } catch { return false }
+  host = host.replace(/^\[|\]$/g, '').toLowerCase()
+  return host === 'localhost' || host === '::1' || /^127\./.test(host)
+}
+
 /** 建连时先拨哪条。冷却期内跳过局域网,不白等那 1.5 秒。 */
 export function firstRoute(routes: readonly Route[], m: RouteMemory, now: number): Route {
   if (routes.length > 1 && routes[0] === 'lan' && now < m.cooldownUntil) return routes[1]
