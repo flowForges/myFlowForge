@@ -4,6 +4,7 @@ import { router } from 'expo-router'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useConn } from '../net/conn'
 import { useStore } from '../data/store'
+import { tapNav } from './tapNav'
 import { ROUTES } from '../nav/routes'
 import type { Presence } from '../../../src/shared/push/attention'
 import {
@@ -180,21 +181,11 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
     return onNotificationTap((t) => {
       const store = storeRef.current
       store.ensureWs(t.wsPath)
-      if (t.sessionId) {
-        store.select({ wsPath: t.wsPath, sessionId: t.sessionId })
-        router.push(ROUTES.chat)
-        return
-      }
-      // 工作区级(工作流的门)。★`/exec` 吃的是 `selected`,所以得先给它选一条会话 ——
-      //  选不出来就老老实实回列表,别推一屏空的进去。
-      const g = store.groups.find((x) => x.ws.path === t.wsPath)
-      const first = g?.sessions[0]
-      if (first) {
-        store.select({ wsPath: t.wsPath, sessionId: first.id })
-        router.push(ROUTES.exec)
-      } else {
-        router.navigate(ROUTES.home)
-      }
+      const nav = tapNav(t, store.groups)
+      if ('select' in nav) store.select(nav.select)
+      // ★★一律 navigate,不用 push:push 每次新压一屏,无限跳转那次就是十几屏聊天叠在一起把内存撑爆
+      //  (见 tapNav.ts)。navigate 遇到同一屏会复用,不会越叠越深。
+      router.navigate(nav.route === 'chat' ? ROUTES.chat : nav.route === 'exec' ? ROUTES.exec : ROUTES.home)
     })
   }, [])
 
