@@ -288,3 +288,50 @@ describe('§4.3 的拒绝在主进程发车处生效 —— 不经输入框的�
     expect(sendTurnMock).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('一轮进行中切到「完全访问」:浏览器动作仍按「每次询问」升门', () => {
+  // 2026-10-07:发车时是「自动」+「每次询问」(合法,照常跑)。跑到一半用户嫌门多,把会话切到「完全访问」——
+  // 原来这会把**正在等的**浏览器门一并放行,之后的浏览器门也自动放行,「每次询问」当场失效。
+  // 发车处的 §4.3 拒绝挡不住这一下:那时这一轮早就发出去了。
+  const navigate = { title: '浏览器 · 打开页面 请求执行', where: 'https://bank.example/', toolName: 'mcp__claude-in-chrome__navigate', toolUseId: 't1' }
+  const bash = { title: 'Bash 请求执行', where: 'ls', toolName: 'Bash', toolUseId: 't2' }
+
+  async function midTurn() {
+    const b = await boot()
+    await b.call(CH.chatSend)({}, {
+      workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'Claude Code',
+      model: 'opus-4.8', text: 'x', attachments: [], browserUse: 'ask', permissionMode: 'auto',
+    })
+    await new Promise(r => setTimeout(r, 0))
+    const deps = sendTurnMock.mock.calls.at(-1)?.[1]
+    return { ...b, confirm: deps.confirm as (r: any) => Promise<string> }
+  }
+  const settledWithin = async (p: Promise<unknown>) => Promise.race([p.then(() => true), new Promise(r => setTimeout(() => r(false), 20))])
+
+  it('★切到「完全访问」之后新来的浏览器门:照样升门问人,不自动放行', async () => {
+    const { confirm } = await midTurn()
+    session.permissionMode = 'full'
+    expect(await settledWithin(confirm(navigate))).toBe(false)
+  })
+
+  it('同一时刻的 Bash 门照「完全访问」自动放行 —— 只有浏览器动作被留下', async () => {
+    const { confirm } = await midTurn()
+    session.permissionMode = 'full'
+    await expect(confirm(bash)).resolves.toBe('allow')
+  })
+
+  it('★门已经挂着,用户再切「完全访问」:浏览器门不被一并放行', async () => {
+    const { call, confirm } = await midTurn()
+    const pending = confirm(navigate)
+    session.permissionMode = 'full'
+    await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    expect(await settledWithin(pending)).toBe(false)
+  })
+
+  it('浏览器设成「放行」时,「完全访问」照常放行浏览器门(那是用户明确选的)', async () => {
+    session.browserUse = 'allow'
+    const { confirm } = await midTurn()
+    session.permissionMode = 'full'
+    await expect(confirm(navigate)).resolves.toBe('allow')
+  })
+})

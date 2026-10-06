@@ -6,7 +6,7 @@ import { createTerminalService, type TerminalService } from '../terminal/termina
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions, providerGatesEachOperation, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
-import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE } from '@shared/browserUse'
+import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
 import { userMessageOf } from '../chat/userMessage'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
@@ -739,6 +739,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // AskUserQuestion 的问题/选项:重建卡片时必须一起还原,否则重挂后又退回成那张没选项的空确认卡。
     questions?: AskQuestion[]
     agentName?: string
+    /** 升这道门的工具名(claude 的 can_use_tool.tool_name)。浏览器门要据此留住,见 browserGateHeld。 */
+    toolName?: string
     /**
      * 这道门「被自动放行了」时怎么记 —— 由 chatService 提供,把盾牌记到**那一次调用的工具卡**上
      * (见 ConfirmReq.onAutoAllow)。★纯运行时回调,不进 CH.chatGateState 的快照(那边是逐字段挑的)。
@@ -794,6 +796,16 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   //   伪装成权限请求发出来)。自动 allow 会带着空 answers 回去,CLI 转头告诉模型「用户没有回答」——
   //   正是 3c899d3 修掉的那个 bug。
   const autoAllowable = (g: { questions?: AskQuestion[] }) => !g.questions?.length
+  /**
+   * ★★浏览器动作 + 会话的浏览器档是「每次询问」:权限档再宽也不替用户点。
+   *  发车处(runTurn)已经拒掉「完全访问」+「每次询问」—— 但那只管**发车那一刻**。一轮跑到一半,
+   *  用户嫌门多把会话切到「完全访问」(这正是真实场景),原来会把正在等的浏览器门一并放行,之后的
+   *  浏览器门也全部自动放行:agent 在他登录着的浏览器里点什么都不再出声,「每次询问」当场失效。
+   *  只留浏览器门;同一时刻的 Bash/Edit 照「完全访问」放行 —— 那是用户切档想要的效果。
+   */
+  const browserGateHeld = (g: { toolName?: string }, wsPath: string, sessionId: string) =>
+    !!g.toolName?.startsWith(BROWSER_TOOL_PREFIX)
+    && (getSession(wsPath, sessionId)?.browserUse ?? DEFAULT_BROWSER_USE) === 'ask'
   const gateWhere = gateNoteBody
 
   const emitNote = (wsPath: string, sessionId: string, noteText: string) => {
@@ -809,7 +821,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const allowPendingConfirms = (wsPath: string, sessionId: string, by = '本机') => {
     for (const [id, meta] of [...chatGateOwner]) {
       if (meta.ws !== wsPath || meta.sessionId !== sessionId || meta.type !== 'confirm') continue
-      if (!autoAllowable(meta)) continue
+      if (!autoAllowable(meta) || browserGateHeld(meta, wsPath, sessionId)) continue
       const r = chatConfirms.get(id)
       if (!r) continue
       chatGateOwner.delete(id)
@@ -906,10 +918,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       }
     }
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
-    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[]; onAutoAllow?: () => void }) => new Promise<ConfirmDecision>((resolve) => {
+    const confirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolName?: string; onAutoAllow?: () => void }) => new Promise<ConfirmDecision>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`
       chatConfirms.set(id, resolve)
-      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions, onAutoAllow: req.onAutoAllow })
+      chatGateOwner.set(id, { ws: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm', ts: new Date().toISOString(), title: req.title, where: req.where, questions: req.questions, toolName: req.toolName, onAutoAllow: req.onAutoAllow })
       broadcast(CH.chatEvent, { workspacePath: payload.workspacePath, sessionId: payload.sessionId, type: 'confirm-request', id, title: req.title, where: req.where, questions: req.questions })
     })
     // CLI 的逐操作确认门专用出口:升门【之前】先读一次会话当前的权限档,已经是「完全访问」就直接放行,
@@ -918,7 +930,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // ★ 只给 provider 的逐操作门用,不能给下面那个「无沙箱 provider 预授权门」用:那个门已经自己按
     //   payload.permissionMode !== 'full' 守过了,再叠一层等于替用户默默写下 fullAccessAck ——
     //   那是另一件事的授权,不是同一件。
-    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolUseId?: string; readOnly?: boolean; onAutoAllow?: () => void }): Promise<ConfirmDecision> => {
+    const toolConfirm = (req: { title: string; where?: string; questions?: AskQuestion[]; toolName?: string; toolUseId?: string; readOnly?: boolean; onAutoAllow?: () => void }): Promise<ConfirmDecision> => {
       const mode = getSession(payload.workspacePath, payload.sessionId)?.permissionMode
       // ★★「自动(工作区)」档下,**确定是只读**的请求不升门。
       //  这个档的原话是「自动修改工作区内的文件」—— 而读比改弱,为一次纯读去问一遍,
@@ -926,7 +938,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       //  ★`readOnly` 只有 provider 自己判得出来时才为 true(codex 靠官方给的 commandActions),
       //   我们**绝不猜命令字符串**;拿不准就是 false,照常升门。见 codexApproval.ts 的 codexReadOnly。
       //  ★放行同样要留痕:走的是下面同一条 onAutoAllow / 审计消息,不存在悄悄放行。
-      if (autoAllowable(req) && (mode === 'full' || (mode === 'auto' && req.readOnly))) {
+      if (autoAllowable(req) && !browserGateHeld(req, payload.workspacePath, payload.sessionId) && (mode === 'full' || (mode === 'auto' && req.readOnly))) {
         // ★★优先记在**那次调用自己的工具卡**上(`ToolActivity.autoAllowed`),不往对话流里插消息。
         //   原来每放行一次就发一条 `who:'ai'` 的消息,顶着「系统」头像 +「回答」标签,长得和模型的
         //   回答一模一样,还夹在工具卡和真正的回答中间。用户原话:「bash 的结果应该在 bash 的那个
