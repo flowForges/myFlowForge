@@ -163,8 +163,22 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
   }, [conn.on, conn, visible, store.wsName])
 
   // ── 点通知 → 跳过去 ─────────────────────────────────────────────────────
+  /**
+   * ★★这个 effect **只能挂一次**,所以 store 走 ref 拿当前值,不进依赖数组。
+   *  原来依赖的是 `[store]`,而回调自己就会 `select()` 改 store —— store 的 value
+   *  依赖 `selected`(data/store.tsx),于是:跳转 → 改 store → value 重建 → 重新订阅 →
+   *  `getLastNotificationResponseAsync()` 把同一条通知再播一遍 → 再跳转……
+   *  2026-10-06 用户在 iOS 上看到的就是连跳十几次、会话永远停在「正在读」
+   *  (每跳一次都把上一屏在途的历史请求丢掉)。
+   *  ★同一个路子在 `net/conn.tsx` 的 AppState 回调那儿已经用过:订阅要稳,值要新。
+   *  ★`notify.ts` 那边还有一道重播去重 —— 两道都要:只修这里的话,
+   *   冷启动/重新挂载仍然会把同一条重播一遍。
+   */
+  const storeRef = useRef(store)
+  storeRef.current = store
   useEffect(() => {
     return onNotificationTap((t) => {
+      const store = storeRef.current
       store.ensureWs(t.wsPath)
       if (t.sessionId) {
         store.select({ wsPath: t.wsPath, sessionId: t.sessionId })
@@ -182,7 +196,7 @@ export function PushProvider({ children }: { children: React.ReactNode }) {
         router.navigate(ROUTES.home)
       }
     })
-  }, [store])
+  }, [])
 
   /**
    * ★★没有通知权限时,`presentLocal` 是**静默失败**的 —— 系统不弹,也不报错。

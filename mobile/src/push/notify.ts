@@ -4,6 +4,7 @@ import type { PushMessage } from '../../../src/shared/push/message'
 import appJson from '../../app.json'
 // ★纯函数单独一个零 import 的文件,这样它能被测(见 tapTarget.test.ts)。
 import { tapTargetOf, type TapTarget } from './tapTarget'
+import { makeTapGate } from './tapOnce'
 
 export { tapTargetOf, type TapTarget }
 
@@ -112,19 +113,31 @@ export async function presentLocal(m: PushMessage): Promise<void> {
 }
 
 
-/** 点通知进来。★冷启动那一条要单独取一次 —— 监听器是在 app 起来之后才挂上的,赶不上。 */
+/**
+ * 点通知进来。★冷启动那一条要单独取一次 —— 监听器是在 app 起来之后才挂上的,赶不上。
+ *
+ * ★★去重是**模块级**的,不是每次订阅一份(`tapGate` 在函数外面):
+ *  `getLastNotificationResponseAsync()` 给的是最后一次点击,而且它一直留着 ——
+ *  每订阅一次就重播一次。去重表要是跟着订阅走,重新订阅时它也跟着清空,等于没去重,
+ *  而「重新订阅」正是 2026-10-06 那次 iOS 无限跳转的触发条件。
+ */
+const tapGate = makeTapGate()
+
 export function onNotificationTap(cb: (t: TapTarget) => void): () => void {
   let disposed = false
   let sub: { remove: () => void } | null = null
+  const fire = (e: unknown, once: boolean) => {
+    const n = (e as { notification?: { request?: { identifier?: string; content?: { data?: unknown } } } })?.notification
+    const t = tapTargetOf(n?.request?.content?.data)
+    if (!t || disposed) return
+    // ★只有「重播」那条路要过闸(冷启动补取的那次)。实时监听器每响一次都是用户真的点了一下,
+    //  同一条通知点两次是两次意图,不该被吃掉。
+    if (once && !tapGate(n?.request?.identifier)) return
+    cb(t)
+  }
   try {
-    sub = Notifications.addNotificationResponseReceivedListener((e) => {
-      const t = tapTargetOf(e?.notification?.request?.content?.data)
-      if (t && !disposed) cb(t)
-    })
-    void Notifications.getLastNotificationResponseAsync().then((e) => {
-      const t = tapTargetOf(e?.notification?.request?.content?.data)
-      if (t && !disposed) cb(t)
-    }).catch(() => {})
+    sub = Notifications.addNotificationResponseReceivedListener((e) => fire(e, false))
+    void Notifications.getLastNotificationResponseAsync().then((e) => fire(e, true)).catch(() => {})
   } catch { /* 见文件头 */ }
   return () => { disposed = true; try { sub?.remove() } catch { /* 已卸 */ } }
 }
