@@ -18,6 +18,7 @@ import {
 import { textAfterOffload } from '../src/ui/pasteOffload'
 import { BODY_LINE_CAP } from '../src/ui/toolParse'
 import { continueList } from '../src/ui/listContinue'
+import { composerAction, composerPlaceholder } from '../src/ui/composerAction'
 import { planPickedImage } from '../src/ui/pickedImage'
 import { pendingLabel, settlePending } from '../src/ui/pendingAttachment'
 import { planPickedFile, tooLargeBySize } from '../src/ui/pickedFile'
@@ -1107,7 +1108,7 @@ export default function Chat() {
                 if (sel) setSel(undefined)
               }}
               onFocus={() => fire('tapField')}
-              placeholder={online ? '给代理下达任务…' : '未连接 · 发不出去'}
+              placeholder={composerPlaceholder({ online, busy })}
               multiline
               editable={online && !!selected}
               style={{ flex: 1, minWidth: 0, minHeight: 44, maxHeight: 108 }}
@@ -1142,25 +1143,34 @@ export default function Chat() {
             >
               <Icon name="add" size={19} color={c.muted} />
             </Pressable>
-            {/* ★忙的时候,这颗键**就地**变成停止 —— 位置、尺寸都不动。
-                停止是这一屏最紧急的动作,而它原来待在顶栏右上角,是单手最够不到的地方。 */}
-            <Pressable
-              accessibilityLabel={busy ? '停止' : '发送'}
-              onPress={busy ? () => void stop() : doSend}
-              disabled={busy ? !online : !online || !selected || !text.trim() || sending}
-              style={({ pressed }) => [
-                st.send,
-                busy
-                  ? { backgroundColor: c.err, borderColor: c.err }
-                  : { backgroundColor: c.accent, borderColor: c.accent },
-                pressed && { opacity: 0.85 },
-                (busy ? !online : !online || !selected || !text.trim() || sending) && { opacity: 0.4 },
-              ]}
-            >
-              <T style={{ fontSize: busy ? 15 : 17, color: busy ? c.bg : c.onAccent }}>
-                {busy ? '■' : '↑'}
-              </T>
-            </Pressable>
+            {/* ★忙且输入框空着时,这颗键**就地**变成停止 —— 位置、尺寸都不动。
+                停止是这一屏最紧急的动作,而它原来待在顶栏右上角,是单手最够不到的地方。
+                ★★但「忙」不等于「只能停止」:打了字就还是发送键,点下去进队列(见 composerAction)。
+                原来不分有没有字一律变停止,于是这一轮没跑完就**没法把下一条指令排进去**。 */}
+            {(() => {
+              const action = composerAction({ busy, hasText: !!text.trim() })
+              const stopping = action === 'stop'
+              const off = stopping ? !online : !online || !selected || !text.trim() || sending
+              return (
+                <Pressable
+                  accessibilityLabel={stopping ? '停止' : busy ? '排队发送' : '发送'}
+                  onPress={stopping ? () => void stop() : doSend}
+                  disabled={off}
+                  style={({ pressed }) => [
+                    st.send,
+                    stopping
+                      ? { backgroundColor: c.err, borderColor: c.err }
+                      : { backgroundColor: c.accent, borderColor: c.accent },
+                    pressed && { opacity: 0.85 },
+                    off && { opacity: 0.4 },
+                  ]}
+                >
+                  <T style={{ fontSize: stopping ? 15 : 17, color: stopping ? c.bg : c.onAccent }}>
+                    {stopping ? '■' : '↑'}
+                  </T>
+                </Pressable>
+              )
+            })()}
           </View>
           {/* ＋ 面板紧跟输入行,占掉键盘让出来的那块地方 —— 微信那块格子面板顶掉键盘,不吃正文高度。 */}
           <PlusPanel open={inputState.mode === 'panel'} items={plusItems} />
