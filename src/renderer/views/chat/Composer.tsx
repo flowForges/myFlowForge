@@ -59,6 +59,24 @@ function fmtSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
 }
 
+// 附件里哪些按「图」显示成缩略图格子。扩展名与主进程 readImageRef(main/fs/imageRef.ts)认的那几种对齐,
+// 那边不认的格式这里也不去请求,免得白跑一趟 IPC 再拿回一个错误。
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i
+/**
+ * 只有路径、没有字节的图片(「附加文件」按钮 / 访达拖入)多大以内才自动读来做缩略图。
+ *
+ * ★★为什么要卡:读图走的是 readImageRef,整张图转成 base64 dataURL 常驻在渲染进程。用户截图里那种
+ *  一口气二十张的场景,二十张 20MB 的相机原图就是半个 G。4MB 覆盖了截图和网页图片这类绝大多数情况,
+ *  更大的显示带扩展名的占位格 —— 认不出是哪张,但输入框不会因此卡死。
+ */
+const THUMB_AUTOLOAD_MAX = 4_000_000
+
+/** 绝对路径拆成 [所在目录, 文件名]。同时认 / 和 \(Windows)。 */
+function splitPath(p: string): [string, string] {
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i < 0 ? ['', p] : [p.slice(0, i) || '/', p.slice(i + 1)]
+}
+
 const MAX_H = 180
 
 // Per-chat unsent drafts, keyed by draftKey (`${wsPath} ${sessionId}`). Module-level so it survives the
@@ -131,6 +149,28 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   // 粘贴进来的图片缩略图,按落盘路径索引。只在会话内活着(不进 draftStore):它只是认图用的,丢了不影响
   // 任何语义,而把几张图的 dataURL 塞进草稿缓存反而是几 MB 的常驻内存。
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
+  /**
+   * ★★只有路径的图片也要能看见。原来缩略图只在「粘贴 / 从网页拖入」时生成(那时字节就在手上),
+   *  「附加文件」按钮和从访达拖进来的图只有路径,于是只剩一个通用文件图标 —— 二十张图摆在一起认不出哪张是哪张。
+   * ★按附件**自己所在的目录**当 base 去读:readImageRef 的 bases 本来就由渲染端传入,这样做不比现在
+   *  多开任何读文件的能力;用户既然把这个文件附给了 agent,它的路径本来也要发出去。
+   * ★每个路径只请求一次(requested),失败就留占位格,不重试、不报错 —— 它只是认图用的。
+   */
+  const thumbRequested = useRef(new Set<string>())
+  useEffect(() => {
+    const read = (window.forge as typeof window.forge | undefined)?.imageFile
+    if (!read) return
+    for (const a of attachments) {
+      if (!IMAGE_EXT.test(a.name) || thumbs[a.path] || thumbRequested.current.has(a.path)) continue
+      if (!(a.size < THUMB_AUTOLOAD_MAX)) continue
+      thumbRequested.current.add(a.path)
+      const [dir, base] = splitPath(a.path)
+      if (!dir) continue
+      void read([dir], base).then((r) => {
+        if (r && 'dataUrl' in r) setThumbs(prev => (prev[a.path] ? prev : { ...prev, [a.path]: r.dataUrl }))
+      }).catch(() => { /* 读不到就留占位格 */ })
+    }
+  }, [attachments, thumbs])
   useEffect(() => { if (dk) draftStore[dk] = { text, attachments } }, [dk, text, attachments])
   // The last message we sent, so stopping the turn BEFORE the AI produced any output restores it to the
   // box for editing/resending (the user would otherwise retype/copy it back). Once the AI has output —
@@ -503,13 +543,29 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
         onDrop={onDropComposer}
       >
         <div className="composer-attach" id="composerAttach">
-          {attachments.map((a, i) => (
-            <span className="attach-chip" key={a.path + '::' + i}>
-              {thumbs[a.path] ? <img className="attach-thumb" src={thumbs[a.path]} alt="" /> : FILE_ICON}
-              {a.name} <span className="sz">{fmtSize(a.size)}</span>
-              <button title="移除" onClick={() => removeAttach(i)}>{X_ICON}</button>
-            </span>
-          ))}
+          {attachments.map((a, i) => {
+            const isImage = !!thumbs[a.path] || IMAGE_EXT.test(a.name)
+            const label = `${a.name} · ${fmtSize(a.size)}`
+            // ★★图片画成缩略图格子而不是一行文件名:用户 2026-10-06 一次拖进二十来张 32 位哈希名的 jpg,
+            //   每个 chip 宽度刚好过半,只能一行一个,把输入框整个顶出视口,而 18px 的小图标根本认不出是哪张。
+            //   名字仍留在 DOM 里(视觉隐藏 + title),屏幕阅读器和悬停都看得到。
+            if (isImage) return (
+              <span className="attach-chip is-image" key={a.path + '::' + i} title={label}>
+                {thumbs[a.path]
+                  ? <img className="attach-thumb" src={thumbs[a.path]} alt="" />
+                  : <span className="attach-ph" aria-hidden="true">{(a.name.split('.').pop() || '').toUpperCase()}</span>}
+                <span className="attach-name">{a.name}</span>
+                <button title={`移除 ${a.name}`} onClick={() => removeAttach(i)}>{X_ICON}</button>
+              </span>
+            )
+            return (
+              <span className="attach-chip" key={a.path + '::' + i} title={label}>
+                {FILE_ICON}
+                <span className="attach-name">{a.name}</span> <span className="sz">{fmtSize(a.size)}</span>
+                <button title={`移除 ${a.name}`} onClick={() => removeAttach(i)}>{X_ICON}</button>
+              </span>
+            )
+          })}
         </div>
         {showSlash && (
           <div className="slash-pop" role="listbox" aria-label="斜杠命令" ref={slashPopRef}>

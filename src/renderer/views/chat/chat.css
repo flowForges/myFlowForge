@@ -351,8 +351,23 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
    ★不改 padding / 不加伪元素遮罩:高亮期间输入框的尺寸一变,拖着的指针就会掉出这个元素,
    浏览器当场派发 dragleave,高亮灭掉、尺寸复原、又进来 —— 一路闪,而且经常放不下去。 */
 .composer.dropping { border-color: var(--accent); border-style: dashed; box-shadow: 0 0 0 3px var(--accent-dim); }
-.composer-attach { display: flex; gap: 8px; padding: 10px 12px 0; flex-wrap: wrap; }
+/* ★★附件区封顶并可滚动。原来既无 max-height 也无 overflow,而 .composer-wrap 是 flex:0 0 auto(不收缩)——
+   附件有多少就撑多高。用户 2026-10-06 一次拖进二十来张图,附件区占满整列,输入框被顶出视口,图也只露一半。
+   封顶后无论附件多少,输入框永远在原位。align-content:flex-start 防止行少时被拉开。 */
+.composer-attach { display: flex; gap: 8px; padding: 10px 12px 0; flex-wrap: wrap; align-content: flex-start; max-height: min(32vh, 236px); overflow-y: auto; overscroll-behavior: contain; }
 .composer-attach:empty { display: none; }
+/* 文件名过长时截断,完整名字在 chip 的 title 里。32 位哈希名的 chip 原来宽度刚好过半,只能一行一个。 */
+.composer-attach .attach-chip { max-width: 100%; }
+.composer-attach .attach-name { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 图片附件:缩略图格子。名字视觉隐藏但留在 DOM 里(读屏 + 测试),移除按钮悬停/聚焦时浮在右上角。 */
+.composer-attach .attach-chip.is-image { position: relative; width: 64px; height: 64px; padding: 0; gap: 0; justify-content: center; overflow: hidden; background: var(--surface-2); }
+.composer-attach .attach-chip.is-image .attach-thumb { width: 100%; height: 100%; flex: none; border-radius: 0; }
+.composer-attach .attach-chip.is-image .attach-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.composer-attach .attach-chip .attach-ph { font-family: var(--mono); font-size: 10px; color: var(--faint); letter-spacing: .04em; }
+.composer-attach .attach-chip.is-image button { position: absolute; top: 3px; right: 3px; width: 18px; height: 18px; border-radius: 50%; background: color-mix(in oklch, var(--surface) 85%, transparent); border: 1px solid var(--border); opacity: 0; transition: opacity .12s; }
+.composer-attach .attach-chip.is-image button svg { width: 10px; height: 10px; }
+.composer-attach .attach-chip.is-image:hover button,
+.composer-attach .attach-chip.is-image:focus-within button { opacity: 1; }
 .composer-attach .attach-chip { padding: 5px 9px; font-size: 11.5px; }
 .composer-attach .attach-chip button { color: var(--faint); display: grid; place-items: center; }
 .composer-attach .attach-chip button:hover { color: var(--err); }
