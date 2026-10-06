@@ -6,7 +6,7 @@ import { createTerminalService, type TerminalService } from '../terminal/termina
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions, providerGatesEachOperation, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
-import { browserPermissionConflict, DEFAULT_BROWSER_USE } from '@shared/browserUse'
+import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE } from '@shared/browserUse'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -883,7 +883,13 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     //  能力 —— 同一个开关从哪儿发就时好时坏,而真正的矛盾留在会话上,下一条机器人消息又撞上来。拒绝 +
     //  把原因说清,让用户二选一改掉,才是一次性解决。
     // ★不动用户的任何落盘设置(不改权限档、不改浏览器档):那是另一种「悄悄替用户做决定」。
-    {
+    // ★★先查这一轮真跑的 provider 支不支持浏览器:payload.browserUse 是**会话级**的存量设置,不管
+    //  这一轮切到哪个 agent 都原样带着(桥/宠物/阶段起手尤其如此)。`providerSupportsBrowserUse` 只有
+    //  claude 这一家(见 browserUse.ts 的 BROWSER_USE_PROVIDERS)——切到 codex 等 provider 时,CLI 根
+    //  本不会起 `--chrome`,也就没有「每次询问形同虚设」这回事,冲突判断对它不适用。原来不分 provider
+    //  一律判一次,会把 codex/full/ask 也当成冲突挡掉——Composer 又只在 claude 下露出浏览器档 chip
+    //  (Composer.tsx ~704),用户连「请把浏览器改成 xxx」这句话指的那个开关都看不见,整轮被锁死。
+    if (providerSupportsBrowserUse(payload.agent)) {
       const browser = payload.browserUse ?? DEFAULT_BROWSER_USE
       const stored = getSession(payload.workspacePath, payload.sessionId)?.permissionMode
       const conflict = browserPermissionConflict(browser, payload.permissionMode ?? DEFAULT_PERMISSION_MODE)

@@ -65,14 +65,37 @@ describe('claudeControl', () => {
     expect(toolTarget({ command: 'curl x', url: 'https://example.com' })).toBe('curl x')
   })
 
-  // ★★门的 where 渲染在 .req-file 里(pre-wrap + 可滚动)。url 里的换行会被 WHATWG URL 删掉再解析,
-  //  所以下面这串真正去的是 evil.com;原样给出的话第一行只有「https://bank.example」,`@evil.com/x`
-  //  被推到折叠线以下。url 一律压成一行。
-  it('★url 里的换行/制表压成一个空格 —— 不许把真正的站点推到折叠线以下', () => {
+  // ★★门的 where 现在是「解析后的规范化 URL」,不是压完空白的原串:原样渲染 userinfo 会把攻击者
+  //  随手写的那截当成「看起来像的站点」给用户看,`https://bank.example\n\n\n\n\n\n@evil.com/x`
+  //  真正去的是 evil.com(WHATWG URL 把换行整个删掉再解析),门上也必须说 evil.com。
+  it('★url 里的换行/制表是伪装,不是排版 —— 解析后给的是 CLI 真正去的那个 host(evil.com),不是userinfo', () => {
     const w = toolTarget({ url: 'https://bank.example\n\n\n\n\n\n@evil.com/x' })!
-    expect(w).toBe('https://bank.example @evil.com/x')
+    expect(w).toBe('https://evil.com/x')
     expect(w).not.toMatch(/[\n\t]/)
-    expect(toolTarget({ url: '  https://a.example\t\t@evil.com  ' })).toBe('https://a.example @evil.com')
+    expect(toolTarget({ url: '  https://a.example\t\t@evil.com  ' })).toBe('https://evil.com/')
+  })
+
+  // ★★设计要点:门上不许再出现 userinfo、同形字、或把真实 host 挤出滚动折叠线以下的超长串。
+  it('★userinfo 伪装:`https://bank.example@evil.com/` 门上要说 evil.com,不是 bank.example', () => {
+    expect(toolTarget({ url: 'https://bank.example@evil.com/' })).toBe('https://evil.com/')
+  })
+
+  it('★同形字攻击:西里尔 аррӏе.com 要转成 punycode,不能肉眼看着像 apple.com', () => {
+    const w = toolTarget({ url: 'https://аррӏе.com/login' })!
+    expect(w).toBe('https://xn--80ak6aa92e.com/login')
+    expect(w).toMatch(/^https:\/\/xn--/)
+  })
+
+  it('★超长 path 要截断,但 host 必须留在开头且不被挤到折叠线以下', () => {
+    const longPath = 'https://example.com/' + 'a'.repeat(500)
+    const w = toolTarget({ url: longPath })!
+    expect(w.startsWith('https://example.com/')).toBe(true)
+    expect(w.length).toBeLessThanOrEqual(200)
+  })
+
+  it('解析不了的 url(没有合法 scheme/authority 的相对路径)——退回压平后的原串,不装作认得它', () => {
+    expect(toolTarget({ url: 'not a url ::: at all' })).toBe('not a url ::: at all')
+    expect(toolTarget({ url: 'relative/path' })).toBe('relative/path')
   })
 
   it('command 的换行**不压**:多行 Bash 在门上保留换行是对的(回归保护)', () => {

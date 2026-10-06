@@ -70,7 +70,10 @@ describe('浏览器动作的端到端表现', () => {
     //  标题要是人话(不是 mcp__claude-in-chrome__navigate),where 要说清动的是哪个站点。
     expect(gated[0].title).toBe('浏览器 · 打开页面 请求执行')
     expect(gated[0].title).not.toContain('mcp__')
-    expect(gated[0].where).toBe('https://example.com')
+    // ★where 现在是 toolTarget 解析后的规范化 URL(丢 userinfo、host 转 punycode、保留 path),
+    //  `new URL('https://example.com').pathname` 补的是根路径 `/` —— 这不是少截了一刀,是解析
+    //  的忠实结果(浏览器地址栏显示的也是带斜杠的那版)。
+    expect(gated[0].where).toBe('https://example.com/')
     expect(tools[0]?.title).toBe('浏览器 · 打开页面 example.com')
   })
 

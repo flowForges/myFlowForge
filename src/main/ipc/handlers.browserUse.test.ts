@@ -234,6 +234,32 @@ describe('§4.3 的拒绝在主进程发车处生效 —— 不经输入框的�
     expect(lastPayload().text).toBe('第二句')
   })
 
+  it('★provider 不支持浏览器(codex)时,冲突判断整条都不生效 —— 「完全访问」+「每次询问」照常跑', async () => {
+    // codex 不在 BROWSER_USE_PROVIDERS 里,CLI 根本不会起 --chrome,「每次询问形同虚设」这回事
+    // 对它不存在;而且 Composer 对 codex 不露出浏览器档 chip,硬挡住的话用户连改的地方都找不到。
+    const { call, store, sessions } = await bootWithStore()
+    session.permissionMode = 'full'
+    await call(CH.chatSend)({}, {
+      workspacePath: '/ws/a', sessionId: 's1', agent: 'codex', agentLabel: 'Codex',
+      model: 'gpt-5', text: '写段代码', attachments: [], browserUse: 'ask', permissionMode: 'full',
+    })
+    await flush()
+    expect(sendTurnMock).toHaveBeenCalledTimes(1)
+    expect(sessions.setSessionPermission).not.toHaveBeenCalled()
+    expect(sessions.setSessionBrowserUse).not.toHaveBeenCalled()
+  })
+
+  it('同样的「完全访问」+「每次询问」,provider 换成 claude 仍要拒绝 —— 上面那条放行只对不支持浏览器的 provider 生效', async () => {
+    const { call, store, sessions } = await bootWithStore()
+    session.permissionMode = 'full'
+    await call(CH.chatSend)({}, {
+      workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'Claude Code',
+      model: 'opus-4.8', text: '写段代码', attachments: [], browserUse: 'ask', permissionMode: 'full',
+    })
+    await flush()
+    expectRefused(store, sessions)
+  })
+
   it('不冲突的组合照常跑:「完全访问」+「放行」、「完全访问」+ 关', async () => {
     const { call } = await bootWithStore()
     session.permissionMode = 'full'

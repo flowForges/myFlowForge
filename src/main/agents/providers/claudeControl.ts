@@ -117,10 +117,40 @@ export function controlAnswerLine(req: CanUseTool, answers: AskAnswers, response
 //   white-space: pre-wrap + 可滚动(chat.css:574),Bash 的多行命令保留换行是对的(css 那段注释
 //   就是为它写的)。url 里的换行却是伪装:WHATWG URL 会把它删掉再解析,`https://bank.example\n\n\n@evil.com/x`
 //   真正去的是 evil.com,原样渲染却是第一行只有「https://bank.example」、`@evil.com/x` 被推到折叠线以下。
+// ★★门上 url 目标的长度上限:和 browserUse.ts 的 BROWSER_TARGET_MAX(48,只截 host)是两件事——
+//  卡片标题只要「哪个站点」,门的 where 还要让用户分清 `/account/delete` 和 `/`,所以上限给得更宽,
+//  而且截的是**路径那一截**,scheme+host 必须留在开头不被挤掉。
+const GATE_URL_MAX = 200
+
 export function toolTarget(input: any): string | undefined {
   const head = input?.file_path ?? input?.path ?? input?.command
   if (head != null) return head
-  return typeof input?.url === 'string' ? collapseWhitespace(input.url) : (input?.url ?? undefined)
+  if (typeof input?.url !== 'string') return input?.url ?? undefined
+  // ★第一步先压空白(collapseWhitespace),理由同 browserUse.ts 的同名函数:换行/制表是伪装,
+  //  WHATWG URL 自己会把它们删掉再解析,压平后解析得到的 host 和 CLI 真正去的是同一个。
+  const flat = collapseWhitespace(input.url)
+  if (!flat) return flat
+  try {
+    const u = new URL(flat)
+    // ★★只取 protocol + host + pathname + search,不是整段原串:
+    //  ① 丢 userinfo —— `https://bank.example@evil.com/` 的 `.host` 里根本没有 userinfo,
+    //    直接就是 evil.com;原样渲染的话,攻击者随手写的 `bank.example` 才是用户唯一看得到的字。
+    //  ② host 走 `.host` 而不是正则剥协议——WHATWG 解析会把西里尔同形字(`аррӏе.com`)转成
+    //    punycode `xn--…`,难看但说的是实话,肉眼不会把它看成 apple.com。
+    //  ③ pathname + search 照留:用户在这里要分清的是「删除」还是「首页」,这截对判断有用,
+    //    和 browserToolTarget(卡片标题,只要站点)不是同一个取舍。
+    const head2 = u.protocol + '//' + u.host
+    const rest = u.pathname + u.search
+    const budget = GATE_URL_MAX - head2.length
+    // budget<=0 时 host 自己已经顶到/超过上限,path 一个字都塞不下——也不能再截 host(真正的站点
+    // 必须留在开头),只好把 path 整段舍掉。
+    if (budget <= 0) return head2
+    const cappedRest = rest.length <= budget ? rest : rest.slice(0, budget - 1) + '…'
+    return head2 + cappedRest
+  } catch {
+    // 解析不了(相对路径、自定义 scheme……)——退回压平后的原串,不要装作认得这个「URL」。
+    return flat
+  }
 }
 
 /**
