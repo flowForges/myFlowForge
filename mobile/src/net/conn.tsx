@@ -8,7 +8,9 @@ import React, {
   useState,
 } from 'react'
 import { AppState, Platform } from 'react-native'
-import { connectHost, type HostClient, type HostState } from './hostClient'
+import { type HostState } from './hostClient'
+import { connectRouted, type RoutedClient } from './routedClient'
+import { freshMemory, LAN_PROBE_INTERVAL_MS, type RouteMemory } from '../../../src/shared/remote/routePick'
 import { shouldDropOnBackground, shouldReconnectOnWake } from './wakeReconnect'
 import { createDemoConn, DEMO_METHODS, type DemoConn } from '../demo/demoConn'
 import {
@@ -90,7 +92,13 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<HostState | null>(null)
   const [epoch, setEpoch] = useState(0)
 
-  const clientRef = useRef<HostClient | null>(null)
+  const clientRef = useRef<RoutedClient | null>(null)
+  /**
+   * 每台主机的选路记忆(冷却、上次探测时间)。★挂在 ref 上而不是连接里:重连会把连接整个重建
+   *  (`attemptKey`),而「局域网刚闪断过、5 分钟内别再试」这件事必须跨过那次重建。
+   *  只在内存里 —— 冷却说的是「此刻这个网络环境」,app 重启后就该重新判断。
+   */
+  const routeMemory = useRef(new Map<string, RouteMemory>()).current
   const listeners = useRef(new Map<string, Set<EventCb>>()).current
   // 手动重连靠改这个数触发 effect 重跑;直接调 open() 会绕过 state 的清理。
   const [attemptKey, setAttemptKey] = useState(0)
@@ -120,12 +128,19 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       setState(null)
       return
     }
-    const c = connectHost({
-      url: activeHost.url,
-      token: activeHost.token || undefined,
-      // 有公钥就加密,再有中转地址就走中转。三档的判据全在 `hostClient.ts` 里,这儿只是传下去。
-      pubKey: activeHost.pubKey || undefined,
-      relayUrl: activeHost.relay || undefined,
+    let memory = routeMemory.get(activeHost.id)
+    if (!memory) { memory = freshMemory(); routeMemory.set(activeHost.id, memory) }
+    // ★★局域网和中转都有时,先局域网、不通再中转,走中转时会伺机迁回局域网(见 routedClient.ts)。
+    //  原来是直接把 relayUrl 交给 connectHost —— 有中转就无条件走中转,人在家也绕公网。
+    //  加密与否、走不走中转的三档判据仍在 `hostClient.ts` 里,这一层只决定「先拨哪条」。
+    const c = connectRouted({
+      host: {
+        url: activeHost.url,
+        token: activeHost.token || undefined,
+        pubKey: activeHost.pubKey || undefined,
+        relay: activeHost.relay || undefined,
+      },
+      memory,
       clientVersion: CLIENT_VERSION,
       clientLabel: CLIENT_LABEL,
       onState: (s) => setState(s),
@@ -261,6 +276,9 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
         if (shouldReconnectOnWake(stateRef.current)) reconnect()
+        // ★连接还活着(没被系统收掉)但走的是中转:立刻看一眼局域网 —— 出门回来打开 app 的那一刻,
+        //  正是最可能迁回局域网的时候。断掉了的那种不用管:reconnect 重新选路本来就先试局域网。
+        else clientRef.current?.probeLan({ foreground: true, force: true })
         return
       }
       // 'background' / 'inactive':主动把连接收掉,让**中转**当场释放房间 ——
@@ -272,6 +290,19 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
     })
     return () => sub.remove()
   }, [reconnect])
+
+  /**
+   * 前台期间,走中转的时候每 60 秒看一眼局域网通没通(边用边走进家门的那种)。
+   * ★这个定时器本身几乎不花钱:真去拨号的条件全在 `shouldProbeLan` 里 ——
+   *  已经在局域网上、在后台、冷却期内、这台主机根本没有局域网线路,一律什么都不做。
+   *  iOS 进后台会冻结 JS,定时器自然停;回到前台由上面那个 'active' 分支立刻补一次。
+   */
+  useEffect(() => {
+    const t = setInterval(() => {
+      clientRef.current?.probeLan({ foreground: AppState.currentState === 'active' })
+    }, LAN_PROBE_INTERVAL_MS)
+    return () => clearInterval(t)
+  }, [])
 
   const forgetAll = useCallback(() => {
     // ★**只动内存,一个字节都不写盘。** 磁盘那份由 `clearLocalData()` 负责清;
