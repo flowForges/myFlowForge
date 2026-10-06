@@ -6,7 +6,7 @@
 // v0.2.x); read defensively. Pure functions only — unit-tested; no I/O here.
 
 import type { AskAnswers, AskQuestion } from '@shared/types'
-import { browserToolLabel } from '@shared/browserUse'
+import { browserToolLabel, collapseWhitespace } from '@shared/browserUse'
 
 export const CLAUDE_CONTROL_FLAGS: string[] =['--input-format', 'stream-json', '--permission-prompt-tool', 'stdio']
 
@@ -113,8 +113,14 @@ export function controlAnswerLine(req: CanUseTool, answers: AskAnswers, response
 //  动手,却看不到动的是哪个站点。WebFetch / WebSearch 这类也带 url,一并受益。
 //  ★顺序:file_path/path/command 在前,url 在后 —— 一个同时带 command 和 url 的工具,命令本身
 //   才是要判断的东西。
+//  ★★url 这一支要先压空白(collapseWhitespace),command 那支**不压**:`.req-file` 是
+//   white-space: pre-wrap + 可滚动(chat.css:574),Bash 的多行命令保留换行是对的(css 那段注释
+//   就是为它写的)。url 里的换行却是伪装:WHATWG URL 会把它删掉再解析,`https://bank.example\n\n\n@evil.com/x`
+//   真正去的是 evil.com,原样渲染却是第一行只有「https://bank.example」、`@evil.com/x` 被推到折叠线以下。
 export function toolTarget(input: any): string | undefined {
-  return input?.file_path ?? input?.path ?? input?.command ?? input?.url ?? undefined
+  const head = input?.file_path ?? input?.path ?? input?.command
+  if (head != null) return head
+  return typeof input?.url === 'string' ? collapseWhitespace(input.url) : (input?.url ?? undefined)
 }
 
 /**

@@ -18,7 +18,15 @@ describe('浏览器工具在工具卡上的标题', () => {
   it('★URL 必须留在卡片上:翻完标题就 return 的话,打开的是哪个页面在界面上哪儿都看不到了', () => {
     const actions = parseChatStreamActions(assistantToolUse(BROWSER_TOOL_PREFIX + 'navigate', { url: 'https://example.com/login' }))
     const a = actions.find(x => x.kind === 'tool') as Extract<typeof actions[number], { kind: 'tool' }>
-    expect(a.text).toBe('浏览器 · 打开页面 example.com/login')
+    // ★只留 host(path 不跟着):主形态是 new URL().host —— 没有 userinfo、同形字是 punycode,
+    //  门上要判断的是「哪个站点」。见 shared/browserUse.ts 的 browserToolTarget。
+    expect(a.text).toBe('浏览器 · 打开页面 example.com')
+  })
+
+  it('★卡片标题不许被 userinfo / 换行骗:显示的是真正去的站点', () => {
+    const actions = parseChatStreamActions(assistantToolUse(BROWSER_TOOL_PREFIX + 'navigate', { url: 'https://bank.example\n\n\n@evil.com/x' }))
+    const a = actions.find(x => x.kind === 'tool') as Extract<typeof actions[number], { kind: 'tool' }>
+    expect(a.text).toBe('浏览器 · 打开页面 evil.com')
   })
 
   it('★长 URL 只留站点名 —— 一行工具卡塞不下整串 query', () => {

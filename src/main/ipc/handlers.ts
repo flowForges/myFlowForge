@@ -6,6 +6,7 @@ import { createTerminalService, type TerminalService } from '../terminal/termina
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions, providerGatesEachOperation, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
+import { browserPermissionConflict, DEFAULT_BROWSER_USE } from '@shared/browserUse'
 import { expandTilde } from '../config/paths'
 import { buildWorkflow } from '../config/buildWorkflow'
 import { cachedDetectProviders, invalidateDetectCache } from '../agents/detectCache'
@@ -869,6 +870,29 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   const runDelegate = makeRunDelegate({ providers, proxy: () => readSettings().agentProxy, mcpEntry, readWorkspace })
   const runTurn = async (payload: ChatSendPayload) => {
     removeWorkspaceSkill(payload.workspacePath)   // pure chat (P5 T1): forge-workflow skill has no reader anymore
+    // ★★设计 §4.3「Forge 拒绝『完全访问』+『每次询问』」必须守在**发车的地方**,不能只靠 Composer:
+    //  工作流阶段起手一轮、机器人桥、宠物窗这三条路都带着会话的 browserUse,却一条都不经过 Composer ——
+    //  一个配成 'full' 的阶段 + 会话上的「每次询问」,就会带着 `--chrome` 和 bypassPermissions
+    //  (§2.4 实测:0 道门)跑出去,用户连键盘都没碰。三条路(加上输入框)全都经 chatQueue 走到这里。
+    // ★★两个档都要查:payload 里的档决定 spawn 参数(阶段起手那条路),**落盘的**档决定 toolConfirm
+    //  是不是把每道门都自动放行(见下面 toolConfirm:mode === 'full' 直接 allow)。机器人桥和宠物的载荷
+    //  不带 permissionMode,spawn 按 acceptEdits 起、门也会升 —— 但会话落盘是 full(桥的 /perm 就能
+    //  切过去)时,每道门照样被自动放行,「每次询问」一样是假的。只看 payload 会漏掉这两条。
+    // ★★为什么是**拒绝整轮**而不是悄悄降成 `--no-chrome`:设计原话是「Forge 拒绝这个组合 … 不做自动
+    //  降级」,Composer 那边也是挡住发送。悄悄降级的话,chip 上还写着「每次询问」,这一轮却没有浏览器
+    //  能力 —— 同一个开关从哪儿发就时好时坏,而真正的矛盾留在会话上,下一条机器人消息又撞上来。拒绝 +
+    //  把原因说清,让用户二选一改掉,才是一次性解决。
+    // ★不动用户的任何落盘设置(不改权限档、不改浏览器档):那是另一种「悄悄替用户做决定」。
+    {
+      const browser = payload.browserUse ?? DEFAULT_BROWSER_USE
+      const stored = getSession(payload.workspacePath, payload.sessionId)?.permissionMode
+      const conflict = browserPermissionConflict(browser, payload.permissionMode ?? DEFAULT_PERMISSION_MODE)
+        ?? browserPermissionConflict(browser, stored ?? DEFAULT_PERMISSION_MODE)
+      if (conflict) {
+        emitNote(payload.workspacePath, payload.sessionId, `⛔ 这一轮没有发出:${conflict}`)
+        return
+      }
+    }
     const provider = providers[payload.agent] ?? providers['claude'] ?? Object.values(providers)[0]
     const confirm = (req: { title: string; where?: string; questions?: AskQuestion[]; onAutoAllow?: () => void }) => new Promise<ConfirmDecision>((resolve) => {
       const id = `cc-${++chatConfirmSeq}`

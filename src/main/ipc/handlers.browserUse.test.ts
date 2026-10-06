@@ -116,7 +116,7 @@ async function boot() {
 
 const lastPayload = () => sendTurnMock.mock.calls.at(-1)?.[0]
 
-beforeEach(() => { session.browserUse = 'ask'; session.workflowSession = undefined })
+beforeEach(() => { session.browserUse = 'ask'; session.permissionMode = 'auto'; session.workflowSession = undefined })
 
 describe('不经输入框的发送路也要带上会话的浏览器开关', () => {
   it('★工作流阶段的「起手一轮」:从落盘会话读,不再默默跑 --no-chrome', async () => {
@@ -148,5 +148,100 @@ describe('不经输入框的发送路也要带上会话的浏览器开关', () =
     await new Promise(r => setTimeout(r, 0))
     expect(sendTurnMock).toHaveBeenCalledTimes(1)
     expect(lastPayload().browserUse).toBe('allow')
+  })
+})
+
+/**
+ * ★★设计 §4.3:「完全访问」+「每次询问」这个组合 Forge 必须**拒绝**。原来只有 Composer 挡,可上面那三条
+ *  发送路一条都不经过 Composer —— 配成 'full' 的阶段 + 会话上的「每次询问」就带着 `--chrome` +
+ *  bypassPermissions(0 道门)跑出去了。现在关卡在主进程的 runTurn:三条路(和输入框)全都经
+ *  chatQueue 走到它。这里逐条钉住:这一轮**不发**(sendTurn 一次都不调),原因写进会话,
+ *  而且**不改**用户落盘的任何一个档。
+ */
+describe('§4.3 的拒绝在主进程发车处生效 —— 不经输入框的三条路也绕不过去', () => {
+  async function bootWithStore() {
+    const b = await boot()
+    const store: any = await import('../chat/chatStore')
+    const sessions: any = await import('../chat/sessionStore')
+    store.appendMessage.mockClear()
+    return { ...b, store, sessions }
+  }
+  const notes = (store: any): string[] => store.appendMessage.mock.calls.map((c: any[]) => c[2]?.text as string)
+  const flush = () => new Promise(r => setTimeout(r, 0))
+  const expectRefused = (store: any, sessions: any) => {
+    expect(sendTurnMock).not.toHaveBeenCalled()
+    const n = notes(store).find(t => t?.includes('没有发出'))
+    expect(n).toBeTruthy()
+    expect(n).toContain('完全访问')
+    // 不替用户做决定:权限档和浏览器档一个都不许动。
+    expect(sessions.setSessionPermission).not.toHaveBeenCalled()
+    expect(sessions.setSessionBrowserUse).not.toHaveBeenCalled()
+  }
+
+  it('★工作流阶段起手一轮:阶段配成「完全访问」+ 会话「每次询问」→ 拒绝,不带 --chrome 零门跑出去', async () => {
+    const { call, store, sessions } = await bootWithStore()
+    const wf = chattingWorkflow()
+    wf.stages[1].permissionMode = 'full'
+    session.workflowSession = wf
+    await call(CH.workflowAdvance)({}, { workspacePath: '/ws/a', sessionId: 's1' })
+    await flush()
+    expectRefused(store, sessions)
+  })
+
+  it('★机器人桥:/perm 把会话切到「完全访问」后,载荷里没有档 —— 照样按落盘的档拒绝', async () => {
+    const { store, sessions } = await bootWithStore()
+    session.permissionMode = 'full'   // 落盘是 full:toolConfirm 会把每道门都自动放行
+    botDeps.enqueue({
+      workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'Claude Code',
+      model: 'opus-4.8', text: '去后台改个配置', attachments: [], source: '飞书',
+    }, '飞书')
+    await flush()
+    expectRefused(store, sessions)
+  })
+
+  it('★宠物窗(走 chat:send,载荷不带档):会话落盘是「完全访问」→ 拒绝', async () => {
+    const { call, store, sessions } = await bootWithStore()
+    session.permissionMode = 'full'
+    await call(CH.chatSend)({}, {
+      workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'Claude Code',
+      model: 'opus-4.8', text: '帮我看看邮箱', attachments: [], browserUse: 'ask',
+    }, '宠物')
+    await flush()
+    expectRefused(store, sessions)
+  })
+
+  it('载荷自己带着「完全访问」(输入框那条路)也在这里拒绝 —— Composer 不再是唯一一道', async () => {
+    const { call, store, sessions } = await bootWithStore()
+    await call(CH.chatSend)({}, {
+      workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'Claude Code',
+      model: 'opus-4.8', text: 'x', attachments: [], browserUse: 'ask', permissionMode: 'full',
+    })
+    await flush()
+    expectRefused(store, sessions)
+  })
+
+  it('拒绝后这条会话的队列不卡住:改掉矛盾再发,照常跑', async () => {
+    const { call } = await bootWithStore()
+    session.permissionMode = 'full'
+    const send = { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'Claude Code', model: 'opus-4.8', attachments: [], browserUse: 'ask' }
+    await call(CH.chatSend)({}, { ...send, text: '第一句' })
+    await flush()
+    expect(sendTurnMock).not.toHaveBeenCalled()
+    session.permissionMode = 'auto'
+    await call(CH.chatSend)({}, { ...send, text: '第二句' })
+    await flush()
+    expect(sendTurnMock).toHaveBeenCalledTimes(1)
+    expect(lastPayload().text).toBe('第二句')
+  })
+
+  it('不冲突的组合照常跑:「完全访问」+「放行」、「完全访问」+ 关', async () => {
+    const { call } = await bootWithStore()
+    session.permissionMode = 'full'
+    const send = { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'Claude Code', model: 'opus-4.8', text: 'x', attachments: [] }
+    await call(CH.chatSend)({}, { ...send, browserUse: 'allow' })
+    await flush()
+    await call(CH.chatSend)({}, { ...send })
+    await flush()
+    expect(sendTurnMock).toHaveBeenCalledTimes(2)
   })
 })

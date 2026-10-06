@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   BROWSER_USE_MODES, DEFAULT_BROWSER_USE, browserUseLabel, isBrowserUseMode,
   browserPermissionConflict, browserToolLabel, browserToolTarget, BROWSER_TOOL_PREFIX,
-  providerSupportsBrowserUse,
+  providerSupportsBrowserUse, collapseWhitespace,
 } from './browserUse'
 
 describe('浏览器开关的档位', () => {
@@ -78,9 +78,11 @@ describe('browserToolTarget / 带目标的标题 —— 「打开页面」要说
     expect(browserToolLabel(BROWSER_TOOL_PREFIX + 'navigate', { url: 'https://example.com' }))
       .toBe('浏览器 · 打开页面 example.com')
   })
-  it('协议和结尾斜杠是噪音,去掉', () => {
+  it('普通 URL 显示的就是干干净净的 host(协议、结尾斜杠、path 都不要;端口有就留)', () => {
     expect(browserToolTarget({ url: 'https://example.com/' })).toBe('example.com')
-    expect(browserToolTarget({ url: 'http://localhost:5173/app' })).toBe('localhost:5173/app')
+    expect(browserToolTarget({ url: 'https://example.com' })).toBe('example.com')
+    // ★path 不再跟着:主形态是 new URL().host,门上要判断的是「哪个站点」。端口是站点的一部分,留着。
+    expect(browserToolTarget({ url: 'http://localhost:5173/app' })).toBe('localhost:5173')
   })
   it('★带一长串 query 的 URL 退回 host —— 一行卡片塞不下,硬塞会把标题挤掉', () => {
     const long = 'https://shop.example.com/checkout?sku=1234567890&ref=abcdefghijklmnop&utm_source=claude&utm_campaign=x'
@@ -91,6 +93,56 @@ describe('browserToolTarget / 带目标的标题 —— 「打开页面」要说
     const t = browserToolTarget({ url: '/a'.repeat(60) })!
     expect(t.length).toBeLessThanOrEqual(49)
     expect(t.endsWith('…')).toBe(true)
+  })
+  it('解析不了的短串走退路:剥协议样子的前缀,原样给出', () => {
+    expect(browserToolTarget({ url: '/settings/profile' })).toBe('/settings/profile')
+    expect(browserToolTarget({ url: 'not a url' })).toBe('not a url')
+  })
+})
+
+// ★★下面这组是**防伪**,不是排版:授权门是用户决定「让不让 agent 在我已登录的浏览器里动手」的唯一
+//  一屏,门上写的站点必须就是请求真正去的站点。每一条都对应一个能让人看着 A 站点按下允许、
+//  实际去了 B 站点的具体写法。
+describe('browserToolTarget —— 门上写的站点就是真正去的站点', () => {
+  const navigate = (url: string) => browserToolLabel(BROWSER_TOOL_PREFIX + 'navigate', { url })!
+
+  it('★超长 host 截**左边**、留右端的可注册域:卡片的 ellipsis 吃的是右边', () => {
+    const host = `bank-example-com.${'a'.repeat(160)}.evil.com`
+    const t = browserToolTarget({ url: `https://${host}/` })!
+    expect(t.length).toBeLessThanOrEqual(48)   // 原来这一支不截,200 字的 host 进标签就是 212 字
+    expect(t.startsWith('…')).toBe(true)
+    expect(t.endsWith('.evil.com')).toBe(true)
+    expect(t).not.toContain('bank-example-com')
+    expect(navigate(`https://${host}/`)).toBe(`浏览器 · 打开页面 ${t}`)
+  })
+
+  it('★userinfo 不许出现:`bank.example@evil.com` 只显示 evil.com', () => {
+    expect(browserToolTarget({ url: 'https://bank.example@evil.com/' })).toBe('evil.com')
+    expect(browserToolTarget({ url: 'https://user:pass@evil.com:8443/login' })).toBe('evil.com:8443')
+    expect(navigate('https://bank.example@evil.com/')).toBe('浏览器 · 打开页面 evil.com')
+  })
+
+  it('★同形字域名显示成 punycode,不显示成和真站点一模一样的字', () => {
+    // аррӏе 是西里尔字母,肉眼和 apple 一样。
+    expect(browserToolTarget({ url: 'https://аррӏе.com' })).toBe('xn--80ak6aa92e.com')
+    expect(browserToolTarget({ url: 'https://аррӏе.com/' })).not.toContain('аррӏе')
+  })
+
+  it('★内嵌换行/制表:不能把真正的站点推到折叠线以下,而且显示的是真正去的那个', () => {
+    // WHATWG URL 会删掉换行/制表再解析 —— 这串真正去的是 evil.com。
+    const spoof = 'https://bank.example\n\n\n\n\n\n@evil.com/x'
+    expect(new URL(spoof).host).toBe('evil.com')
+    expect(browserToolTarget({ url: spoof })).toBe('evil.com')
+    expect(browserToolTarget({ url: 'https://bank.example\t\t@evil.com/x' })).toBe('evil.com')
+    // 解析不了的退路也必须是一行:空白一律压成一个空格。
+    const t = browserToolTarget({ url: '/a\n\n\n\n/b\t\tc' })!
+    expect(t).toBe('/a /b c')
+    expect(t).not.toMatch(/[\n\t]/)
+  })
+
+  it('collapseWhitespace:任何空白串都压成一个空格,首尾去掉', () => {
+    expect(collapseWhitespace('  a\n\n b\t\tc \r\n')).toBe('a b c')
+    expect(collapseWhitespace('\n\t ')).toBe('')
   })
   it('没有 url 的工具(read_console_messages / 空输入)标题不变', () => {
     expect(browserToolTarget({})).toBeUndefined()

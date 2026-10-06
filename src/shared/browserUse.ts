@@ -44,9 +44,11 @@ export function isBrowserUseMode(v: unknown): v is BrowserUseMode {
  *  `--permission-mode bypassPermissions` 下**一道门都没有**,直接连调两次。
  *  也就是说「完全访问 + 每次询问」这个组合里的「每次询问」是**假的** —— 用户以为每步都会问他,
  *  实际上 agent 在他登录着的浏览器里点什么都不会出声。
- * ★这里**只报冲突,不自动降级**:悄悄改用户的权限档比让他自己选更危险。调用方(Composer)拿到
- *  非 null 就**挡住发送**并把这句话显示出来 —— 设计 §4.3 的原话是「Forge 拒绝这个组合」,只提示
+ * ★这里**只报冲突,不自动降级**:悄悄改用户的权限档比让他自己选更危险。调用方拿到非 null 就
+ *  **挡住这一轮**并把这句话显示出来 —— 设计 §4.3 的原话是「Forge 拒绝这个组合」,只提示
  *  不拦住的话,用户以为每步都会问他,实际这一轮已经带着零道门的浏览器工具跑出去了。
+ *  ★★真正的关卡在主进程 handlers.ts 的 runTurn(所有发送路都经过它);Composer 那处只是为了
+ *   当场给反馈,不是唯一的一道。
  */
 export function browserPermissionConflict(browser: BrowserUseMode, perm: PermissionMode): string | null {
   if (browser !== 'ask') return null
@@ -69,8 +71,35 @@ const BROWSER_TOOL_LABELS: Record<string, string> = {
   shortcuts_list: '列出快捷操作', shortcuts_execute: '执行快捷操作',
 }
 
-/** 目标超过这个长度就只留 host —— 卡片和授权门都是一行,带 query 的长 URL 会把它撑爆。 */
+/** 目标的长度上限。★**每一支**都受它约束 —— 卡片和授权门都是一行,超长的串会把真正重要的那截挤掉。 */
 const BROWSER_TARGET_MAX = 48
+
+/**
+ * 任何位置的空白(**含换行和制表**)压成一个空格。
+ *
+ * ★★这不是排版,是防伪:WHATWG 的 URL 解析会把串里的换行/制表**整个删掉**再解析,所以
+ *  `https://bank.example\n\n\n@evil.com/x` 真正去的是 **evil.com**。可原样渲染到门上的
+ *  `.req-file`(chat.css:574,white-space: pre-wrap + 可滚动)就是第一行一个「https://bank.example」,
+ *  `@evil.com/x` 被推到折叠线以下 —— 用户看着 bank.example 按了允许。
+ *  通用工具那条路早就在 chatStream.ts 的 clip() 里压空白,就是为了这个;浏览器这条路漏了。
+ *  工具卡标题(browserToolTarget)和门的 where(claudeControl.ts 的 toolTarget)共用这一份。
+ */
+export function collapseWhitespace(s: string): string {
+  return s.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * host 超长时保**右端**(可注册域那一截),从左边截。
+ *
+ * ★★方向是关键:`.tool-title`(chat.css:647)是 nowrap + text-overflow: ellipsis,吃掉的是**右边**。
+ *  `bank-example-com.<160 个字>.evil.com` 原样给它,卡片上就剩「bank-example-com.aaaa…」——
+ *  左边那截是攻击者随便起的,真正决定请求去哪儿的 `evil.com` 恰好是被吃掉的那截。
+ *  所以这里自己先截,把右端留下:`…aaaa.evil.com`,长度不超过上限,CSS 也就不会再截一刀。
+ */
+function capHost(host: string): string {
+  if (host.length <= BROWSER_TARGET_MAX) return host
+  return '…' + host.slice(host.length - (BROWSER_TARGET_MAX - 1))
+}
 
 /**
  * 浏览器工具的「动在哪」。只认 `url`:22 个工具的输入里只有它回答得了「哪个页面」这个问题,
@@ -79,18 +108,28 @@ const BROWSER_TARGET_MAX = 48
  * ★★为什么非要有它:`toolTarget()` 原来只读 file_path/path/command,于是 `navigate` 的授权门
  *  长成「mcp__claude-in-chrome__navigate 请求执行」+ 一个空的 where —— 用户正要授权 agent 在他
  *  **已登录**的浏览器里动手,却看不到动的是哪个站点。这是本设计里最不能含糊的一处。
- * ★长了就退回 host:「在哪个站点上动手」才是用户要判断的事,完整 query 对这个判断没有帮助,
- *  而一行塞不下的标题会把真正重要的那半截挤掉。
+ * ★★主形态是 `new URL(url).host`(端口有就带上),**不是**正则剥协议。原来那样剥有两个洞:
+ *  ① userinfo:`https://bank.example@evil.com/` 剥完是 `bank.example@evil.com`,左边那截是攻击者
+ *    随便写的,偏偏又是截断后唯一活下来的部分;`.host` 里根本没有 userinfo,直接就是 `evil.com`。
+ *  ② 同形字:`https://аррӏе.com`(西里尔字母)剥完和 apple.com 肉眼无法区分;`.host` 给的是
+ *    punycode `xn--80ak6aa92e.com` —— 难看,但说的是实话。
+ *  path / query 一律不要:用户在这里要判断的是「在哪个站点上动手」,它们对这个判断没有帮助。
+ *  只有 URL 解析不了(相对路径、自定义 scheme…)时才退回正则剥协议。
  */
 export function browserToolTarget(input: unknown): string | undefined {
-  const raw = typeof (input as any)?.url === 'string' ? ((input as any).url as string).trim() : ''
-  if (!raw) return undefined
-  // 协议和结尾的斜杠对人是噪音:https://example.com/ → example.com。
-  const short = raw.replace(/^https?:\/\//i, '').replace(/\/+$/, '')
-  if (!short) return raw
-  if (short.length <= BROWSER_TARGET_MAX) return short
-  try { const h = new URL(raw).host; if (h) return h } catch { /* 不是合法 URL(相对路径等),下面按长度截 */ }
-  return short.slice(0, BROWSER_TARGET_MAX) + '…'
+  const url = typeof (input as any)?.url === 'string' ? ((input as any).url as string) : ''
+  // ★第一步就压空白(见 collapseWhitespace):后面任何一支的产物都不许再带换行/制表。
+  const flat = collapseWhitespace(url)
+  if (!flat) return undefined
+  // ★解析的是**原串**而不是压平后的串:URL 自己会先删掉换行/制表再解析(`bank.example\n@evil.com`
+  //  真的去 evil.com),照它的规则解析,标签上写的才和 CLI 真正去的是同一个地方。压成空格再解析
+  //  反而会把一个只是被折了行的合法 URL(`https://exa\nmple.com`)解析失败,退回去显示一串假的。
+  //  host 本身不可能含空白,所以这一支的产物同样是一行。
+  try { const h = new URL(url).host; if (h) return capHost(h) } catch { /* 不是合法 URL,走下面的退路 */ }
+  // 退路:协议和结尾的斜杠对人是噪音。★这一支也要截 —— 原来超长的串只有在能解析时才截,
+  //  解析成功那一支反而原样返回整个 host(200 字的 host 进标签就是 212 字)。
+  const short = flat.replace(/^https?:\/\//i, '').replace(/\/+$/, '') || flat
+  return short.length <= BROWSER_TARGET_MAX ? short : short.slice(0, BROWSER_TARGET_MAX) + '…'
 }
 
 /**

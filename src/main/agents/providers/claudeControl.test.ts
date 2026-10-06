@@ -65,6 +65,20 @@ describe('claudeControl', () => {
     expect(toolTarget({ command: 'curl x', url: 'https://example.com' })).toBe('curl x')
   })
 
+  // ★★门的 where 渲染在 .req-file 里(pre-wrap + 可滚动)。url 里的换行会被 WHATWG URL 删掉再解析,
+  //  所以下面这串真正去的是 evil.com;原样给出的话第一行只有「https://bank.example」,`@evil.com/x`
+  //  被推到折叠线以下。url 一律压成一行。
+  it('★url 里的换行/制表压成一个空格 —— 不许把真正的站点推到折叠线以下', () => {
+    const w = toolTarget({ url: 'https://bank.example\n\n\n\n\n\n@evil.com/x' })!
+    expect(w).toBe('https://bank.example @evil.com/x')
+    expect(w).not.toMatch(/[\n\t]/)
+    expect(toolTarget({ url: '  https://a.example\t\t@evil.com  ' })).toBe('https://a.example @evil.com')
+  })
+
+  it('command 的换行**不压**:多行 Bash 在门上保留换行是对的(回归保护)', () => {
+    expect(toolTarget({ command: 'echo a\necho b' })).toBe('echo a\necho b')
+  })
+
   it('frames an allow response echoing input + request_id', () => {
     const req = { requestId: 'r1', toolName: 'Bash', input: { command: 'ls' }, toolUseId: 'toolu_1' }
     const o = JSON.parse(controlAllowLine(req))
