@@ -65,6 +65,12 @@
     ],
     "experiments": {
       "typedRoutes": false
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3b6b024f-0f1e-47b7-a8ec-e244722975bd"
+      }
+    },
+    "owner": "zghua"
   }
 }
