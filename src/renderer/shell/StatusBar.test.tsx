@@ -36,19 +36,21 @@ describe('StatusBar usage popover', () => {
       <StatusBar {...base} usageByProvider={usageByProvider} />,
     )
 
-    // Popover should be present in DOM but without .on class initially
-    const popBefore = container.querySelector('.usage-pop')
-    expect(popBefore).not.toBeNull()
-    expect(popBefore!.classList.contains('on')).toBe(false)
+    // Not rendered until opened
+    expect(document.querySelector('.usage-pop')).toBeNull()
 
     // Click the provider pill
     const pill = screen.getByText('Claude').closest('button')!
     fireEvent.click(pill)
 
     // Popover should now have .on class (visible)
-    const pop = container.querySelector('.usage-pop')
+    const pop = document.querySelector('.usage-pop')
     expect(pop).not.toBeNull()
     expect(pop!.classList.contains('on')).toBe(true)
+    // ★★Portaled out of the status bar: `.sb-models`(overflow-x:auto) + `.statusbar`(overflow:hidden)
+    //  clip anything that pops upward from inside them — the popover "opened" but was invisible.
+    expect(container.querySelector('.usage-pop')).toBeNull()
+    expect(pop!.closest('.statusbar')).toBeNull()
 
     // Usage is shown as a percentage now (not raw used/limit):
     // window5h = 30/100 = 30%, weekly = 50/200 = 25%
@@ -56,7 +58,7 @@ describe('StatusBar usage popover', () => {
     expect(pop!.textContent).toContain('25%')
 
     // Progress bars (2 of them — one for each bucket), threshold-colored .sbp-fill
-    const bars = container.querySelectorAll('.sbp-fill')
+    const bars = document.querySelectorAll('.sbp-fill')
     expect(bars.length).toBeGreaterThanOrEqual(2)
 
     const widths = Array.from(bars).map(b => (b as HTMLElement).style.width)
@@ -76,7 +78,7 @@ describe('StatusBar usage popover', () => {
     fireEvent.click(pill)
 
     // No popover should appear
-    expect(container.querySelector('.usage-pop')).toBeNull()
+    expect(document.querySelector('.usage-pop')).toBeNull()
   })
 
   it('T3: outside click closes the open popover', () => {
@@ -87,14 +89,15 @@ describe('StatusBar usage popover', () => {
     // Open the popover
     const pill = screen.getByText('Claude').closest('button')!
     fireEvent.click(pill)
-    expect(container.querySelector('.usage-pop.on')).not.toBeNull()
+    expect(document.querySelector('.usage-pop.on')).not.toBeNull()
+
+    // Clicking inside the popover keeps it open
+    fireEvent.click(document.querySelector('.usage-pop')!)
+    expect(document.querySelector('.usage-pop.on')).not.toBeNull()
 
     // Click outside (on document body)
     fireEvent.click(document.body)
-
-    // Popover .on class should be removed (closed), element stays in DOM
-    expect(container.querySelector('.usage-pop.on')).toBeNull()
-    expect(container.querySelector('.usage-pop')).not.toBeNull()
+    expect(document.querySelector('.usage-pop')).toBeNull()
   })
 
   it('T4: usage with limit:0 renders 0%-width bars, no NaN', () => {
@@ -110,7 +113,7 @@ describe('StatusBar usage popover', () => {
     const pill = screen.getByText('Claude').closest('button')!
     fireEvent.click(pill)
 
-    const bars = container.querySelectorAll('.sbp-fill')
+    const bars = document.querySelectorAll('.sbp-fill')
     expect(bars.length).toBeGreaterThanOrEqual(2)
     for (const bar of Array.from(bars)) {
       const w = (bar as HTMLElement).style.width

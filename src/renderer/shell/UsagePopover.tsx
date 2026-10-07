@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { StatusbarUsage, UsageWindow } from '@shared/plugins'
 
 export interface UsagePopoverProps {
@@ -47,30 +48,59 @@ function UsageBar({ name, win }: { name: string; win: UsageWindow }) {
 
 export function UsagePopover({ usage, children }: UsagePopoverProps) {
   const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ bottom: number; left: number } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
 
-  // Outside-click closes the popover (mirrors NotificationPopover pattern)
+  // Outside-click / Esc / resize closes the popover (same as HostSwitcher).
   useEffect(() => {
     if (!open) return
     const onDoc = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onResize = () => setOpen(false)
     document.addEventListener('click', onDoc)
-    return () => document.removeEventListener('click', onDoc)
+    document.addEventListener('keydown', onKey)
+    window.addEventListener('resize', onResize)
+    return () => {
+      document.removeEventListener('click', onDoc)
+      document.removeEventListener('keydown', onKey)
+      window.removeEventListener('resize', onResize)
+    }
   }, [open])
+
+  const toggle = () => {
+    if (!open) {
+      const r = ref.current?.getBoundingClientRect()
+      // 往上弹,锚 bottom:按钮贴着窗口底边。
+      if (r) setPos({ bottom: Math.max(0, window.innerHeight - r.top + 6), left: Math.max(6, r.left) })
+    }
+    setOpen(o => !o)
+  }
 
   const { window5h, weekly, label } = usage
 
+  // ★★2026-10-07「点了没反应」:弹层原来是按钮旁边的 `position:absolute`,而 `.sb-models` 是
+  //  `overflow-x:auto`(装多了能横滑,见 shell.css)—— 这会把 y 方向也变成裁剪,再加上 `.statusbar`
+  //  自己的 `overflow:hidden`,往上弹的弹层**整个被裁掉**:打开了,但看不见。
+  //  所以和 HostSwitcher 一样 portal 到 body、按按钮的视口矩形定位,谁也裁不到它。
   return (
     <div ref={ref} style={{ position: 'relative' }}>
-      <div onClick={() => setOpen(o => !o)}>{children}</div>
+      <div onClick={toggle}>{children}</div>
 
-      <div className={`usage-pop${open ? ' on' : ''}`}>
-        {label && <div className="up-label">{label}</div>}
-        {window5h && <UsageBar name="5 小时限额" win={window5h} />}
-        {weekly && <UsageBar name="周限额" win={weekly} />}
-        {!window5h && !weekly && <div className="up-empty">暂无用量数据</div>}
-      </div>
+      {open && pos && createPortal(
+        <div
+          className="usage-pop on"
+          style={{ position: 'fixed', bottom: pos.bottom, left: pos.left }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {label && <div className="up-label">{label}</div>}
+          {window5h && <UsageBar name="5 小时限额" win={window5h} />}
+          {weekly && <UsageBar name="周限额" win={weekly} />}
+          {!window5h && !weekly && <div className="up-empty">暂无用量数据</div>}
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }
