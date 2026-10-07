@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ROUTES } from '../src/nav/routes'
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
-import { goBack, goToHosts } from '../src/nav'
+import { goBack, goHome } from '../src/nav'
 import { one } from '../src/routeParams'
 import { useC } from '../src/theme/theme'
 import { Btn, Field, IconBtn, List, Note, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
@@ -115,10 +115,9 @@ export default function AddHost() {
         relay: relay.trim() || undefined,
       })
       await selectHost(h.id)
-      // ★回**主机列表**,不是 goBack()。见 nav.ts 的 goToHosts:扫码那条路会在栈里留下两个
-      //  add-host,goBack() 会落回下面那个空的(真机验收报的「加完停在空白页」)。
-      //  落在主机列表上还有一个好处:刚加的那台就在列表里,连接状态当场看得见。
-      goToHosts()
+      // ★回**首页**(2026-10-07 用户要的),不是 goBack()。见 nav.ts 的 goHome:扫码那条路会在栈里
+      //  留下两个 add-host,goBack() 会落回下面那个空的(真机验收报的「加完停在空白页」)。
+      goHome()
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
       setSaving(false)

@@ -14,7 +14,7 @@ const router = vi.hoisted(() => ({
 }))
 vi.mock('expo-router', () => ({ router }))
 
-import { goBack, goToHosts } from './nav'
+import { goBack, goHome, goToHosts } from './nav'
 
 beforeEach(() => {
   router.back.mockClear()
@@ -57,5 +57,20 @@ describe('goToHosts', () => {
     goToHosts()
     expect(router.dismissAll).not.toHaveBeenCalled()
     expect(router.navigate).toHaveBeenCalledWith('/hosts')
+  })
+})
+
+describe('goHome —— 加完主机回首页', () => {
+  it('★先弹掉扫码那条路上的层,再 navigate 到首页', () => {
+    goHome()
+    expect(router.dismissAll).toHaveBeenCalledTimes(1)
+    expect(router.navigate).toHaveBeenCalledWith('/')
+    expect(router.back).not.toHaveBeenCalled()
+  })
+  it('没得弹(深链冷启动):直接 navigate', () => {
+    router.canDismiss.mockReturnValue(false)
+    goHome()
+    expect(router.dismissAll).not.toHaveBeenCalled()
+    expect(router.navigate).toHaveBeenCalledWith('/')
   })
 })

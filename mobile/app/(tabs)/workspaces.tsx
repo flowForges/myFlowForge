@@ -164,7 +164,7 @@ export default function Workspaces() {
         ) : seg === 'flows' ? (
           <TemplatesPane />
         ) : !online ? (
-          <Empty title="未连接" desc="连上才有数据 —— 这里不会拿旧内容假装在线。" />
+          <Empty title="未连接" />
         ) : loading ? (
           <Empty title="正在读取…" />
         ) : groups.length === 0 ? (
@@ -223,7 +223,7 @@ export default function Workspaces() {
 
       {/* 长按呼出的操作单。★和首页那张是**同一套动作**,只是入口不同 —— 两处都要能做,
           因为「正看着那一行顺手做掉」和「专门来管」是两种不同的用法。 */}
-      <Sheet open={!!sheet} onClose={() => setSheet(null)} title={sheet?.name ?? ''} sub="置顶 / 改名 / 归档">
+      <Sheet open={!!sheet} onClose={() => setSheet(null)} title={sheet?.name ?? ''}>
         {sheetErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
             <T style={{ fontSize: 13, lineHeight: 20, color: c.err }}>{sheetErr}</T>
@@ -255,7 +255,7 @@ export default function Workspaces() {
         open={!!rename}
         onClose={() => setRename(null)}
         title="重命名工作区"
-        sub={`原名 ${rename?.orig ?? ''}\n列表和分组头都会跟着变`}
+        sub={`原名 ${rename?.orig ?? ''}`}
       >
         {renameErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>

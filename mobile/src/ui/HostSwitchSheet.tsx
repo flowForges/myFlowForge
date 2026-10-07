@@ -50,9 +50,8 @@ export function HostSwitchSheet({
       open={open}
       onClose={onClose}
       title="换一台主机"
-      sub="切过去只换会话、工作区、运行。外观和字号跟着这台手机走,不会变。"
     >
-      {rows.length === 0 ? <Empty title="还没有配过主机" desc="在电脑上跑起 daemon,把它打印的地址填进来。" /> : null}
+      {rows.length === 0 ? <Empty title="还没有配过主机" /> : null}
       {rows.map((r) => (
         // 点即切。★不弹确认:切主机是可逆的(再点回来就行),而多一步确认会让
         //  「我到底连的哪台」这件事更难当场试出来。

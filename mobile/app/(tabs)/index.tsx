@@ -4,7 +4,7 @@ import { router } from 'expo-router'
 import { CH } from '../../../src/main/ipc/channels'
 import type { ChatSession, SessionsFile, WorkspaceMeta } from '../../../src/shared/types'
 import { fmtRelTime } from '../../../src/shared/relTime'
-import { useC } from '../../src/theme/theme'
+import { useC, useTheme } from '../../src/theme/theme'
 import { RADIUS } from '../../src/theme/tokens'
 import { Btn, Empty, Field, IconBtn, List, T, TopBar } from '../../src/ui/kit'
 import { Sheet } from '../../src/ui/Sheet'
@@ -58,6 +58,7 @@ function waited(since: number, now: number): string {
 
 export default function Home() {
   const c = useC()
+  const { needsYou } = useTheme()
   const { activeHost, hosts, loading: hostsLoading, online, state, invoke, selectHost, updateHost, demo, exitDemo } = useConn()
   const {
     groups, gates, gatesFor, loading, select, wsName, refresh, unread, running, expanded, toggleWs, ensureWs,
@@ -590,10 +591,7 @@ export default function Home() {
           <T style={{ fontSize: 15.5, fontWeight: '600', color: c.fg, paddingHorizontal: 2 }}>myFlowForge</T>
         </TopBar>
         <View style={{ flex: 1, justifyContent: 'center' }}>
-          <Empty
-            title="先连一台电脑"
-            desc={'手机端不在本地跑代理 —— 它是你电脑上那台 Forge 的遥控器。\n在电脑上跑起 daemon,把它打印的地址填进来。'}
-          />
+          <Empty title="先连一台电脑" />
           <View style={{ paddingHorizontal: 30 }}>
             <Btn kind="pri" block onPress={() => router.push(ROUTES.addHost)}>
               添加主机
@@ -688,7 +686,7 @@ export default function Home() {
         contentContainerStyle={{ paddingBottom: 96 }}
       >
         {!online ? (
-          <Empty title="未连接" desc={'连上才有数据 —— 第一版不缓存,\n所以这里不会拿旧内容假装在线。'} />
+          <Empty title="未连接" />
         ) : loading ? (
           <Empty title="正在读取…" />
         ) : !showsRows ? (
@@ -696,7 +694,7 @@ export default function Home() {
           //  `workspace:create` / `fs:browse` 这些手机全拿得到,「留在电脑端」是抄自一句过时的注释),
           //  而且对着一个**空**列表说「你在这儿什么都做不了」是最糟的一种空态。
           <>
-            <Empty title="这台机器上还没有工作区" desc="工作区是一堆项目 + 一条工作流。先建一个,才有地方开会话。" />
+            <Empty title="这台机器上还没有工作区" />
             <View style={{ paddingHorizontal: 30 }}>
               <Btn kind="pri" block onPress={() => router.push(ROUTES.newWorkspace)}>
                 ＋ 新建工作区
@@ -714,7 +712,8 @@ export default function Home() {
                ★折叠状态是 NeedsYou **自己**存的,没有走 store:store 的 value 是带依赖数组的
                useMemo,加字段漏加依赖会静默不更新(见 store.tsx 末尾那条注释),
                而这个状态只有这一个消费者,没有理由去趟那道坎。 */}
-          <NeedsYou
+          {/* ★2026-10-07 默认不摆,设置 → 外观里打开(见 prefs.ts 的 needsYou)。 */}
+          {needsYou ? <NeedsYou
             items={needItems}
             gateCount={counts.gate}
             onPick={(it) => {
@@ -722,7 +721,7 @@ export default function Home() {
               ensureWs(it.wsPath)
               router.push(ROUTES.chat)
             }}
-          />
+          /> : null}
           <T style={{ fontSize: 11, color: c.faint, paddingHorizontal: 16, paddingTop: 20, paddingBottom: 6 }}>
             全部工作区
           </T>
@@ -954,7 +953,6 @@ export default function Home() {
         open={!!wsSheet}
         onClose={() => setWsSheet(null)}
         title={wsSheet?.name ?? ''}
-        sub="左滑工作区行,或长按分组头随时叫出这张单子"
       >
         {wsErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
@@ -995,7 +993,7 @@ export default function Home() {
         open={!!renameWs}
         onClose={() => setRenameWs(null)}
         title="重命名工作区"
-        sub={`原名 ${renameWs?.orig ?? ''}\n改完点保存,列表和分组头都会跟着变`}
+        sub={`原名 ${renameWs?.orig ?? ''}`}
       >
         {renameWsErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>
@@ -1021,7 +1019,7 @@ export default function Home() {
         open={!!renameSession}
         onClose={() => setRenameSession(null)}
         title="重命名会话"
-        sub={`原名 ${renameSession?.orig ?? ''}\n改完点保存,列表和对话屏顶栏都会跟着变`}
+        sub={`原名 ${renameSession?.orig ?? ''}`}
       >
         {renameErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>

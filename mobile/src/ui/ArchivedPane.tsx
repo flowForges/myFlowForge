@@ -78,11 +78,11 @@ export function ArchivedPane() {
       ) : null}
 
       {!online ? (
-        <Empty title="未连接" desc="连上主机才能看归档列表。" />
+        <Empty title="未连接" />
       ) : all === null ? (
         <Empty title="正在读取…" />
       ) : archived.length === 0 ? (
-        <Empty title="没有归档的工作区" desc="在「工作区」那一段长按一行就能归档。" />
+        <Empty title="没有归档的工作区" />
       ) : (
         <List>
           {archived.map((w) => (

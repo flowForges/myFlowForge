@@ -43,3 +43,16 @@ export function goToHosts(): void {
   if (router.canDismiss()) router.dismissAll()
   router.navigate(ROUTES.hosts)
 }
+
+/**
+ * 回首页。加完主机(扫码或手填)之后走这条。
+ *
+ * ★2026-10-07 用户:「扫码连接主机,连接成功后,应该直接返回首页,这才是合理的」——
+ *  原来落在主机列表上,人还得自己再退两层才到首页。
+ * ★和 `goToHosts` 同一个做法:先 `dismissAll()` 把扫码那条路上堆的 scan / add-host 全弹掉
+ *  (理由见上面),再 `navigate` —— 直接 navigate 的话那几层还压在栈里,返回键会退回空的添加页。
+ */
+export function goHome(): void {
+  if (router.canDismiss()) router.dismissAll()
+  router.navigate(ROUTES.home)
+}

@@ -3,7 +3,7 @@ import { Pressable, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
-import { Btn, Empty, IconBtn, List, LiveDot, Note, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
+import { Btn, Empty, IconBtn, List, LiveDot, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { Icon } from '../src/ui/Icon'
 import { useConn } from '../src/net/conn'
 import { type MobileHost } from '../src/net/hosts'
@@ -47,15 +47,12 @@ export default function Hosts() {
           ★这也意味着 2026-08-28「主机不许再出现在设置里」那条作废 —— 当时搬出来是因为
           设置屏很长、埋太深;现在设置屏只剩五行,埋不住了。 */}
       <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
-        <TopTitle title="主机" sub="同一时间只连一台" />
+        <TopTitle title="主机" />
       </TopBar>
 
       <ScrollView contentContainerStyle={{ paddingBottom: 40 }}>
         {hosts.length === 0 ? (
-          <Empty
-            title="还没有配过主机"
-            desc={'在电脑上跑起 daemon,把它打印的地址填进来。\n手机和电脑要在同一个 wifi 里。'}
-          />
+          <Empty title="还没有配过主机" />
         ) : (
           <>
             <Sec>已配对</Sec>
@@ -164,14 +161,9 @@ export default function Hosts() {
               ★只在**没连上**的时候出现:已经连着真机的人不需要看剧本。
               ★文案说清「不连电脑」,别让人以为点了会偷偷连点什么。 */}
           {!online && !demo ? (
-            <>
-              <Btn kind="pri" block onPress={() => { enterDemo(); router.replace(ROUTES.home) }}>
-                先体验一下(不连电脑)
-              </Btn>
-              <T style={{ fontSize: 11.5, color: c.faint, textAlign: 'center', paddingTop: 2 }}>
-                完全离线的演示:一个工作区、能对话、能看执行过程
-              </T>
-            </>
+            <Btn kind="pri" block onPress={() => { enterDemo(); router.replace(ROUTES.home) }}>
+              先体验一下(不连电脑)
+            </Btn>
           ) : null}
           {state?.status === 'failed' || state?.status === 'retrying' ? (
             <Btn block onPress={reconnect}>
@@ -190,7 +182,6 @@ export default function Hosts() {
             这里不留第三份 —— 同一个数字抄三遍,迟早有一遍说的是另一台机器的。 */}
         {/* ★★「长按改名」必须写出来:长按是**看不见**的手势,不说的话这条功能等于没做。
             和上面那句合成一条,不另起一段 —— 这一屏的小字已经够多了。 */}
-        <Note>切过去之后,会话、变更、终端全部换成那台机器的。不做同屏对比。长按一行可以改名字和图标 —— 当前连着的那台,进详情也能改。</Note>
       </ScrollView>
 
       {/* 长按一行呼出的编辑单子。★组件是三处共用的那一个(详情页、换主机单子、这儿)。 */}

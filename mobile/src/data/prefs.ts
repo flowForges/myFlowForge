@@ -10,7 +10,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 export type ThemePref = 'system' | 'light' | 'dark'
 export type TextSize = 'sm' | 'md' | 'lg'
 
-export type Prefs = { theme: ThemePref; text: TextSize }
+/**
+ * `needsYou`:首页顶上那块「N 条等你」要不要摆。★默认**不摆**(2026-10-07 用户:不太喜欢这一块,
+ *  做成设置里可选的,默认关)。
+ */
+export type Prefs = { theme: ThemePref; text: TextSize; needsYou: boolean }
 
 /**
  * 正文字号倍率。`T` 拿它乘每一处 fontSize / lineHeight。
@@ -22,7 +26,7 @@ export const TEXT_SCALE: Record<TextSize, number> = { sm: 0.92, md: 1, lg: 1.12 
 
 const KEY = 'mff.prefs.v1'
 
-export const DEFAULT_PREFS: Prefs = { theme: 'system', text: 'md' }
+export const DEFAULT_PREFS: Prefs = { theme: 'system', text: 'md', needsYou: false }
 
 /** 认不出来一律 'system'。降级回旧版、或者手改坏了,都不该让人对着一屏白字。 */
 export function parseThemePref(v: unknown): ThemePref {
@@ -44,7 +48,7 @@ export async function loadPrefs(): Promise<Prefs> {
     //  唯一会抛的是 null/undefined,`?? {}` 已经挡住了。多写一个 `Array.isArray` 守卫
     //  改不了任何一种输入的结果(变异验证过:删掉它 7 条测试全绿),所以不写。
     const o = (v ?? {}) as Record<string, unknown>
-    return { theme: parseThemePref(o.theme), text: parseTextSize(o.text) }
+    return { theme: parseThemePref(o.theme), text: parseTextSize(o.text), needsYou: o.needsYou === true }
   } catch {
     // ★catch 一律吞:这两样是外观,读不出来最多是长得跟上次不一样;
     //  而这一屏是「加主机」和「清本地数据」的唯一入口,绝不能因为它抛而进不去。

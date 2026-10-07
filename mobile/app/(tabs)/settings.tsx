@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Alert, Platform, ScrollView, View } from 'react-native'
+import { Alert, Platform, ScrollView, Switch, View } from 'react-native'
 import { router } from 'expo-router'
 import { useC, useTheme } from '../../src/theme/theme'
 import { Btn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../../src/ui/kit'
@@ -36,21 +36,23 @@ import type { TextSize, ThemePref } from '../../src/data/prefs'
  *   一列谁也不知道点下去会发生什么的词。
  */
 
-const THEMES: { id: ThemePref; label: string; desc: string }[] = [
-  { id: 'system', label: '跟随系统', desc: '跟着系统的深浅色切' },
-  { id: 'light', label: '浅色', desc: '一直浅色' },
-  { id: 'dark', label: '深色', desc: '一直深色' },
+// ★★2026-10-07 每一档的说明(「跟着系统的深浅色切」「一屏装得下更多」…)和 sheet 的副标题**整个去掉了**。
+//  用户原话:「我非常讨厌在 app 里加一些小字说明」。档名自己就说清楚了;说不清的时候改名字,别补一行。
+const THEMES: { id: ThemePref; label: string }[] = [
+  { id: 'system', label: '跟随系统' },
+  { id: 'light', label: '浅色' },
+  { id: 'dark', label: '深色' },
 ]
 
-const TEXTS: { id: TextSize; label: string; desc: string }[] = [
-  { id: 'sm', label: '小', desc: '一屏装得下更多' },
-  { id: 'md', label: '标准', desc: '默认' },
-  { id: 'lg', label: '大', desc: '看得清一点' },
+const TEXTS: { id: TextSize; label: string }[] = [
+  { id: 'sm', label: '小' },
+  { id: 'md', label: '标准' },
+  { id: 'lg', label: '大' },
 ]
 
 export default function Settings() {
   const c = useC()
-  const { pref, setPref, text, setText } = useTheme()
+  const { pref, setPref, text, setText, needsYou, setNeedsYou } = useTheme()
   const { forgetAll } = useConn()
   const [themeSheet, setThemeSheet] = useState(false)
   const [textSheet, setTextSheet] = useState(false)
@@ -116,6 +118,16 @@ export default function Settings() {
         <List>
           <Pick label="主题" value={THEMES.find((t) => t.id === pref)?.label ?? ''} onPress={() => setThemeSheet(true)} />
           <Pick label="正文字号" value={TEXTS.find((t) => t.id === text)?.label ?? ''} onPress={() => setTextSheet(true)} />
+          {/* 首页顶上那块「N 条等你」。默认关(见 prefs.ts)。 */}
+          <Row onPress={() => setNeedsYou(!needsYou)}>
+            <T style={{ flex: 1, fontSize: 15, color: c.fg }}>首页显示「等你」</T>
+            <Switch
+              value={needsYou}
+              onValueChange={setNeedsYou}
+              trackColor={{ true: c.accent, false: c.border2 }}
+              thumbColor={Platform.OS === 'android' ? (needsYou ? c.bg : c.faint) : undefined}
+            />
+          </Row>
         </List>
         {/* ★★2026-08-31:这里原来是**四个开关 + 一颗测试键 + 两段说明**,整组已经搬进
             `app/notifications.tsx`。留在这儿的是一行入口。
@@ -155,13 +167,11 @@ export default function Settings() {
         open={themeSheet}
         onClose={() => setThemeSheet(false)}
         title="主题"
-        sub="存在这台手机上"
       >
         {THEMES.map((t) => (
           <Opt
             key={t.id}
             label={t.label}
-            desc={t.desc}
             on={t.id === pref}
             onPress={() => {
               setPref(t.id)
@@ -175,13 +185,11 @@ export default function Settings() {
         open={textSheet}
         onClose={() => setTextSheet(false)}
         title="正文字号"
-        sub="整个 app 一起变"
       >
         {TEXTS.map((t) => (
           <Opt
             key={t.id}
             label={t.label}
-            desc={t.desc}
             on={t.id === text}
             onPress={() => {
               setText(t.id)
@@ -234,12 +242,10 @@ function Pick({ label, value, onPress }: { label: string; value: string; onPress
 /** sheet 里的一档。选中态和权限档那个 sheet 同一套写法:描边换成强调色 + 一个 ✓。 */
 function Opt({
   label,
-  desc,
   on,
   onPress,
 }: {
   label: string
-  desc: string
   on: boolean
   onPress: () => void
 }) {
@@ -248,9 +254,6 @@ function Opt({
     <Row onPress={onPress} style={on ? { borderColor: c.accent, backgroundColor: c.accentDim } : undefined}>
       <View style={{ flex: 1, minWidth: 0 }}>
         <T style={{ fontSize: 14.5, fontWeight: '600', color: c.fg }}>{label}</T>
-        <T numberOfLines={1} style={{ fontSize: 12.5, color: c.muted, marginTop: 3 }}>
-          {desc}
-        </T>
       </View>
       {/* ★把字号写出来:裸 `<T>` 会落到 RN 的默认 14,于是「小」和「大」两档下
           全屏只有这个勾一动不动 —— 缩放要么整屏一起,要么就是坏的。 */}

@@ -8,7 +8,6 @@ import { useC } from '../src/theme/theme'
 import { Btn, Chip, Empty, Field, IconBtn, List, Note, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
 import { RADIUS } from '../src/theme/tokens'
 import { useConn } from '../src/net/conn'
-import { DEMO_NEEDS_HOST } from '../src/demo/demoConn'
 import { useStore } from '../src/data/store'
 import {
   buildCreatePayload,
@@ -240,7 +239,7 @@ export default function NewWorkspace() {
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar left={<IconBtn onPress={() => goBack()}>‹</IconBtn>}>
-        <TopTitle title="新建工作区" sub="建在那台机器上" />
+        <TopTitle title="新建工作区" />
       </TopBar>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -249,9 +248,9 @@ export default function NewWorkspace() {
               ★★而且要拦在**进门处**,不是让人填完表单再报错 —— 后者是这一屏自己的注释
               (决策 B-2)写着要避免的那种「点下去才报错的亮按钮」,只是换了个更费时间的版本。 */}
           {demo ? (
-            <Empty title="体验模式建不了工作区" desc={DEMO_NEEDS_HOST} />
+            <Empty title="体验模式建不了工作区" />
           ) : !online ? (
-            <Empty title="未连接" desc="工作区建在那台机器上 —— 连上主机才能建。" />
+            <Empty title="未连接" />
           ) : missing.length ? (
             // 决策 B-2:说清楚是哪一条,而不是留一个点下去才报错的亮按钮。
             <Empty
@@ -275,9 +274,7 @@ export default function NewWorkspace() {
                       <T mono numberOfLines={1} ellipsizeMode="head" style={[st.path, { color: c.muted }]}>
                         {parent}
                       </T>
-                    ) : (
-                      <T style={[st.hint, { color: c.faint }]}>浏览那台机器上的目录</T>
-                    )}
+                    ) : null}
                   </View>
                   <T style={{ color: c.faint }}>›</T>
                 </Row>
@@ -305,9 +302,7 @@ export default function NewWorkspace() {
                     </T>
                   ) : null}
                 </View>
-              ) : (
-                <Note>工作区那一层文件夹由主机自己建 —— 这里选的是「上一层」,不用先去建文件夹。</Note>
-              )}
+              ) : null}
 
               {/* ───── 2 · 哪些项目 ───── */}
               {/* ★三段的右上角一律是**步号**。第一版这里放的是「0/3」计数,和隔壁的「3 / 3」
@@ -316,7 +311,7 @@ export default function NewWorkspace() {
                 哪些项目
               </Sec>
               {projects.length === 0 ? (
-                <Note>这台主机上还没有注册任何 git 项目。注册项目留在电脑端。</Note>
+                <Note>这台主机上还没有项目</Note>
               ) : (
                 <>
                   {/* 三四十个项目是常态,不给搜索等于让人用手指滚 */}
@@ -383,14 +378,11 @@ export default function NewWorkspace() {
                   )}
                 </>
               )}
-              <Note>
-                项目注册表就在主机上 —— 这里勾的就是主机那一份,没有「只在手机上加、不同步过去」这回事。
-              </Note>
 
               {/* ───── 3 · 用哪个工作流 ───── */}
               <Sec right={<T mono style={[st.step, { color: c.faint }]}>3 / 3</T>}>用哪个工作流</Sec>
               {workflows.length === 0 ? (
-                <Note>这台主机上一个工作流都没有。新建工作流留在电脑端。</Note>
+                <Note>这台主机上还没有工作流</Note>
               ) : (
                 <List>
                   {workflows.map((w) => {
@@ -416,7 +408,6 @@ export default function NewWorkspace() {
                   })}
                 </List>
               )}
-              <Note>阶段、提示词、每阶段的代理都在电脑上改 —— 手机上只选一个现成的。</Note>
 
               {/* ───── 建 ───── */}
               <View style={{ height: 20 }} />
@@ -444,9 +435,7 @@ export default function NewWorkspace() {
                     <Btn kind="ghost" block onPress={cancelSetup}>
                       取消创建
                     </Btn>
-                  ) : (
-                    <T style={[st.hint, { color: c.faint, textAlign: 'center' }]}>这台主机不支持中途取消,只能等它跑完。</T>
-                  )
+                  ) : null
                 ) : (
                   <Pressable onPress={() => goBack()} style={{ alignItems: 'center', paddingVertical: 12 }}>
                     <T style={{ fontSize: 13.5, color: c.muted }}>返回</T>
@@ -469,18 +458,11 @@ export default function NewWorkspace() {
                       <Btn kind="danger" block onPress={() => void discard()}>
                         清掉这个半成品
                       </Btn>
-                    ) : (
-                      <T style={[st.hint, { color: c.faint }]}>这台主机没有 workspace:discard-partial,只能到电脑上清。</T>
-                    )}
+                    ) : null}
                   </List>
-                  <Note>它还留在那台机器上。清掉是删目录,清完这次创建就一点痕迹都不剩了。</Note>
                 </>
               ) : null}
 
-              <Note>
-                创建是真的去 clone,项目多的时候要等一会儿,中途也可能失败 ——
-                失败了这一屏会把原话贴出来,不会只是转个圈就没了。
-              </Note>
             </>
           )}
         </ScrollView>
@@ -546,7 +528,7 @@ function DirPicker({
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
       <TopBar left={<IconBtn onPress={onCancel}>‹</IconBtn>}>
-        <TopTitle title="选一个父目录" sub="工作区会建在它下面" />
+        <TopTitle title="选一个父目录" />
       </TopBar>
 
       <View style={st.crumb}>
@@ -595,7 +577,7 @@ function DirPicker({
             </Row>
           ))}
           {!loading && !cur?.error && dirs.length === 0 ? (
-            <T style={[st.hint, { color: c.faint, paddingVertical: 10 }]}>这个目录下面没有子目录。放这儿也行。</T>
+            <T style={[st.hint, { color: c.faint, paddingVertical: 10 }]}>没有子目录</T>
           ) : null}
         </List>
       </ScrollView>
@@ -603,11 +585,6 @@ function DirPicker({
       <View style={[st.foot, { borderTopColor: c.border, backgroundColor: c.bg }]}>
         {/* ★读不了的目录**不许选**。第一版这颗键在 `/root` 上照样是亮的,选完一路走到最后
             才在 clone 那一步炸 —— 正是「一个点了才报错的亮按钮」。 */}
-        {cur?.error ? (
-          <T style={[st.hint, { color: c.faint, textAlign: 'center', paddingBottom: 8 }]}>
-            这个目录读不了,不能放在这儿。
-          </T>
-        ) : null}
         <Btn kind="pri" block onPress={() => cur && onPick(cur.path, cur.entries)} disabled={!cur || !!cur.error}>
           就放这儿
         </Btn>

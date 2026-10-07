@@ -28,6 +28,9 @@ type Ctx = {
   setText: (t: TextSize) => void
   /** 正文字号倍率。`T` 拿它乘每一处 fontSize / lineHeight。 */
   scale: number
+  /** 首页要不要摆「N 条等你」那块(见 prefs.ts)。和主题、字号存在同一份里,所以放在这儿。 */
+  needsYou: boolean
+  setNeedsYou: (v: boolean) => void
 }
 
 /**
@@ -44,12 +47,15 @@ const ThemeCtx = createContext<Ctx>({
   text: 'md',
   setText: () => {},
   scale: 1,
+  needsYou: false,
+  setNeedsYou: () => {},
 })
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const scheme = useColorScheme()
   const [pref, setPrefState] = useState<ThemePref>(DEFAULT_PREFS.theme)
   const [text, setTextState] = useState<TextSize>(DEFAULT_PREFS.text)
+  const [needsYou, setNeedsYouState] = useState(DEFAULT_PREFS.needsYou)
 
   // 存在手机上的偏好是异步读的。读回来之前先按默认渲染(跟随系统 + 标准字号),
   // 不卡一屏空白 —— 那一下顶多是主题闪一次,而白屏是「app 打不开」。
@@ -59,6 +65,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       if (!alive) return
       setPrefState(p.theme)
       setTextState(p.text)
+      setNeedsYouState(p.needsYou)
     })
     return () => { alive = false }
   }, [])
@@ -79,13 +86,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const setPref = useCallback((p: ThemePref) => {
     setPrefState(p)          // 先落到界面上,别等写盘 —— 点一下要立刻看见变化
-    void savePrefs({ theme: p, text })
-  }, [text])
+    void savePrefs({ theme: p, text, needsYou })
+  }, [text, needsYou])
 
   const setText = useCallback((t: TextSize) => {
     setTextState(t)
-    void savePrefs({ theme: pref, text: t })
-  }, [pref])
+    void savePrefs({ theme: pref, text: t, needsYou })
+  }, [pref, needsYou])
+
+  const setNeedsYou = useCallback((v: boolean) => {
+    setNeedsYouState(v)
+    void savePrefs({ theme: pref, text, needsYou: v })
+  }, [pref, text])
 
   const value = useMemo<Ctx>(() => {
     // ★覆盖优先于系统。`pref === 'system'` 才看 useColorScheme。
@@ -99,8 +111,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       text,
       setText,
       scale: TEXT_SCALE[text],
+      needsYou,
+      setNeedsYou,
     }
-  }, [scheme, pref, text, setPref, setText])
+  }, [scheme, pref, text, setPref, setText, needsYou, setNeedsYou])
 
   return <ThemeCtx.Provider value={value}>{children}</ThemeCtx.Provider>
 }

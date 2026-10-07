@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { View } from 'react-native'
 import { CH } from '../../../src/main/ipc/channels'
 import { useC } from '../theme/theme'
-import { Btn, Empty, List, Loading, Note, Row, Sec, T } from './kit'
+import { Btn, Empty, List, Loading, Row, Sec, T } from './kit'
 import { Sheet } from './Sheet'
 import { useConn } from '../net/conn'
 import { useStore } from '../data/store'
@@ -71,7 +71,7 @@ export function TemplatesPane() {
     }
   }
 
-  if (!online) return <Empty title="未连接" desc="模板存在那台机器上,连上才看得到。" />
+  if (!online) return <Empty title="未连接" />
   if (loading) return <Loading title="正在读模板…" />
 
   return (
@@ -92,7 +92,7 @@ export function TemplatesPane() {
       ) : null}
 
       {!error && templates.length === 0 ? (
-        <Empty title="这台机器上还没有模板" desc="模板在电脑端「设置 → 工作流」里建。" />
+        <Empty title="这台机器上还没有模板" />
       ) : null}
 
       {templates.length > 0 ? (
@@ -115,12 +115,6 @@ export function TemplatesPane() {
               </Row>
             ))}
           </List>
-          {canUse ? (
-            <Note>「用到…」把模板复制一份进某个工作区。之后改模板不会动到已经加过的那份。</Note>
-          ) : (
-            /* 决策 B-2:老主机上没有这个方法 ⇒ 不摆按钮 + 说清为什么,而不是摆一个点了没反应的。 */
-            <Note>这台主机的版本还不支持把模板加进工作区。升级那台机器上的 myFlowForge 就有了。</Note>
-          )}
         </>
       ) : null}
 
@@ -128,7 +122,6 @@ export function TemplatesPane() {
         open={!!picking}
         onClose={() => setPicking(null)}
         title={picking ? `把「${picking.name}」加到哪个工作区` : ''}
-        sub="复制一份进去,以后改模板不影响它"
       >
         {sheetErr ? (
           <View style={{ padding: 11, borderRadius: 12, borderWidth: 1, borderColor: c.permFullBorder, backgroundColor: c.bg2 }}>

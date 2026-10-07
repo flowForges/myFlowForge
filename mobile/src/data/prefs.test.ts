@@ -41,26 +41,26 @@ describe('外观偏好', () => {
   })
 
   it('存进去读得回来', async () => {
-    await savePrefs({ theme: 'light', text: 'lg' })
-    expect(await loadPrefs()).toEqual({ theme: 'light', text: 'lg' })
+    await savePrefs({ theme: 'light', text: 'lg', needsYou: false })
+    expect(await loadPrefs()).toEqual({ theme: 'light', text: 'lg', needsYou: false })
   })
 
   it('没存过时是两个默认', async () => {
-    expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md' })
+    expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md', needsYou: false })
   })
 
   it('★存坏了(不是 JSON)读回默认,不抛 —— 这一屏是「加主机」和「清数据」的唯一入口,不能因为它炸掉', async () => {
     store.set('mff.prefs.v1', '{坏的')
-    expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md' })
+    expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md', needsYou: false })
   })
 
   it('★存成了别的形状时逐字段兜底,坏的那个才退默认 —— 别因为一个字段坏了把另一个也丢掉', async () => {
     store.set('mff.prefs.v1', '{"theme":"dark","text":"huge"}')
-    expect(await loadPrefs()).toEqual({ theme: 'dark', text: 'md' })
+    expect(await loadPrefs()).toEqual({ theme: 'dark', text: 'md', needsYou: false })
     store.set('mff.prefs.v1', '["dark","lg"]')
-    expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md' })
+    expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md', needsYou: false })
     store.set('mff.prefs.v1', 'null')
-    expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md' })
+    expect(await loadPrefs()).toEqual({ theme: 'system', text: 'md', needsYou: false })
   })
 })
 
@@ -77,5 +77,16 @@ describe('nativeColorScheme · 告诉原生层用户选了哪一档', () => {
     // 也不能给「当前系统是什么」的具体值:那等于把跟随系统钉死成那一刻的样子。
     expect(nativeColorScheme('system')).not.toBe('light')
     expect(nativeColorScheme('system')).not.toBe('dark')
+  })
+})
+
+describe('needsYou —— 首页「等你」那块', () => {
+  it('★默认不摆;只认 true', async () => {
+    store.set('mff.prefs.v1', '{"theme":"dark","text":"md"}')
+    expect((await loadPrefs()).needsYou).toBe(false)
+    store.set('mff.prefs.v1', '{"needsYou":"yes"}')
+    expect((await loadPrefs()).needsYou).toBe(false)
+    store.set('mff.prefs.v1', '{"needsYou":true}')
+    expect((await loadPrefs()).needsYou).toBe(true)
   })
 })

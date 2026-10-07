@@ -80,12 +80,7 @@ export default function Storage() {
         <List>
           {STORAGE_ITEMS.map((it) => (
             <Row key={it.key}>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <T style={{ fontSize: 15, color: c.fg }}>{it.label}</T>
-                <T numberOfLines={2} style={{ fontSize: 12, lineHeight: 17, color: c.muted, marginTop: 3 }}>
-                  {it.effect}
-                </T>
-              </View>
+              <T numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 15, color: c.fg }}>{it.label}</T>
               <T mono style={{ fontSize: 12.5, color: c.faint, marginRight: 10 }}>
                 {sizes ? humanSize(sizes[it.key] ?? 0) : '…'}
               </T>

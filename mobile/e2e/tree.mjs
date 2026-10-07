@@ -261,6 +261,8 @@ if (hasBubble && scrollerTop != null) {
 await p.setViewport(390, 844)
 
 // ── ③ 「需要你」折叠 ─────────────────────────────────────────────────────
+// ★2026-10-07 起这一块默认不摆(设置 → 外观 →「首页显示『等你』」),这一段先把它打开。
+await p.eval(`localStorage.setItem('mff.prefs.v1', JSON.stringify({ theme: 'system', text: 'md', needsYou: true }))`)
 await p.goto('http://localhost:8081/')
 await p.waitFor(visible('alpha'), 30000)
 await new Promise((r) => setTimeout(r, 800))
