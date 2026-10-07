@@ -180,7 +180,12 @@ export function Sheet({
               ) : null}
             </View>
           </GestureDetector>
-          <ScrollView contentContainerStyle={{ padding: 14, gap: 8 }}>{children}</ScrollView>
+          {/* ★★`keyboardShouldPersistTaps="handled"`:不给的话,键盘弹着时第一下点击被 ScrollView 吃掉
+              去收键盘,按钮根本收不到 —— 重命名打完字点「修改」只退了输入法,要再点一次才生效
+              (2026-10-07 真机)。新建工作区、添加主机那两屏早就是这么写的,这张单子漏了。 */}
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 14, gap: 8 }}>
+            {children}
+          </ScrollView>
         </Animated.View>
       </GestureHandlerRootView>
     </Modal>
