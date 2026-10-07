@@ -37,18 +37,37 @@ for attempt in 1 2 3; do
 done
 [ "${ok}" = 1 ] || { echo "✗ pod install 连续 3 次没过"; exit 1; }
 
+# ★★自动签名走 App Store Connect API 密钥(和 upload-ios.sh 同一把),不靠 Xcode 里登没登账号。
+#  2026-10-07 打开 iOS 推送时栽的:这台 Mac 的 Xcode 没登账号 → 只能用现成的通配描述文件「*」,
+#  而通配描述文件**不可能**带推送能力 —— 报「doesn't include the Push Notifications capability」。
+#  给了 API 密钥,Xcode 会自己给 App ID 开推送、生成带推送的描述文件。没有密钥文件时照旧(不加参数)。
+AUTH=()
+if [ -f "$HOME/.appstoreconnect/asc.env" ]; then
+  set -a; . "$HOME/.appstoreconnect/asc.env"; set +a
+  KEYF="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID:-}.p8"
+  [ -n "${ASC_KEY_ID:-}" ] && [ -n "${ASC_ISSUER_ID:-}" ] && [ -f "$KEYF" ] && \
+    AUTH=(-authenticationKeyPath "$KEYF" -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID")
+fi
+
 echo "▸ 3/6 archive"
 rm -rf "${ARCHIVE}" "${EXPORT}"
-xcodebuild -workspace "${IOS}/myFlowForge.xcworkspace" -scheme myFlowForge -configuration Release \
-  -destination 'generic/platform=iOS' -archivePath "${ARCHIVE}" -allowProvisioningUpdates archive \
-  | tail -5
+# ★不再 `| tail -5`:真正的报错(签名、描述文件)在几千行里,只留最后 5 行等于只看见一句「ARCHIVE FAILED」。
+#  全量进日志,失败时把 error: 行挑出来。
+ALOG="${IOS}/build/archive.log"; mkdir -p "${IOS}/build"
+if ! xcodebuild -workspace "${IOS}/myFlowForge.xcworkspace" -scheme myFlowForge -configuration Release \
+  -destination 'generic/platform=iOS' -archivePath "${ARCHIVE}" -allowProvisioningUpdates "${AUTH[@]+"${AUTH[@]}"}" archive \
+  > "${ALOG}" 2>&1; then
+  grep -E "error:" "${ALOG}" | grep -v DTDK | head -10
+  echo "✗ archive 失败,完整日志:${ALOG}"; exit 1
+fi
+tail -2 "${ALOG}"
 
 echo "▸ 4/6 链接闸:包里的每个 @rpath 引用都得找得到"
 bash "${ROOT}/scripts/verify-ios-app.sh" "${ARCHIVE}/Products/Applications/myFlowForge.app"
 
 echo "▸ 5/6 export ipa"
 xcodebuild -exportArchive -archivePath "${ARCHIVE}" -exportOptionsPlist "${ROOT}/scripts/ios/ExportOptions.plist" \
-  -exportPath "${EXPORT}" -allowProvisioningUpdates | tail -3
+  -exportPath "${EXPORT}" | tail -3   # 手动签名,见 ExportOptions.plist
 [ -f "${EXPORT}/myFlowForge.ipa" ] || { echo "✗ 没导出 ipa"; exit 1; }
 
 echo "▸ 6/6 苹果校验(不上传)"

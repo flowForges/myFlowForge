@@ -6,7 +6,14 @@
   <key>method</key><string>app-store-connect</string>
   <key>teamID</key><string>V9YMUR4WYY</string>
   <key>uploadSymbols</key><true/>
-  <key>signingStyle</key><string>automatic</string>
+  <!-- ★★2026-10-07 改成手动签名:打开 iOS 推送后,自动签名要 Xcode 现场生成一份带推送的 App Store
+       描述文件,而这台 Mac 的 Xcode 没登账号、API 密钥又没有「云签名」权限 → 导出必挂。
+       描述文件是用 ASC API 建的(名字见下),装在 ~/Library/MobileDevice/Provisioning Profiles;
+       证书用钥匙串里的 Apple Distribution。描述文件过期 / 换证书时重建一份、改这里的名字。 -->
+  <key>signingStyle</key><string>manual</string>
+  <key>signingCertificate</key><string>Apple Distribution</string>
+  <key>provisioningProfiles</key>
+  <dict><key>com.flowforges.myflowforge</key><string>myFlowForge AppStore push 2026-10-07</string></dict>
   <key>destination</key><string>export</string>
 </dict>
 </plist>

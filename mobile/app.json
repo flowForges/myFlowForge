@@ -16,7 +16,7 @@
         "ITSAppUsesNonExemptEncryption": false
       },
       "appleTeamId": "V9YMUR4WYY",
-      "buildNumber": "8"
+      "buildNumber": "9"
     },
     "android": {
       "package": "com.flowforges.myflowforge",
@@ -67,6 +67,7 @@
       "typedRoutes": false
     },
     "extra": {
+      "iosPush": true,
       "eas": {
         "projectId": "3b6b024f-0f1e-47b7-a8ec-e244722975bd"
       }
