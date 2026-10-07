@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { MAX_IMAGE_BASE64, planPickedImage } from './pickedImage'
+import { MAX_IMAGE_BASE64, MAX_PICK, planPickedImage, planPickedImages } from './pickedImage'
 
 // 09:05:07 —— 通用名改名后的时间戳就是这个,断言里写死好看出「到底改成了什么」。
 const NOW = new Date(2026, 7, 26, 9, 5, 7)
@@ -56,5 +56,26 @@ describe('planPickedImage —— 相册挑出来这张图能不能发', () => {
 
   it('刚好卡在上限上:放行(边界是 > 不是 >=,别把一张正好合规的图也拦掉)', () => {
     expect(planPickedImage({ fileName: 'x.png', base64: b64(MAX_IMAGE_BASE64) }, NOW).ok).toBe(true)
+  })
+})
+
+describe('planPickedImages —— 一次多选', () => {
+  it('★★同一秒选的三张 image.png:名字互不相同', () => {
+    const got = planPickedImages(
+      [0, 1, 2].map(() => ({ fileName: 'image.png', base64: b64(10) })),
+      NOW,
+    ).map((p) => (p.ok ? p.name : 'FAIL'))
+    expect(got).toEqual(['img-090507.png', 'img-090507-2.png', 'img-090507-3.png'])
+  })
+  it('名字本来就不同:原样保留', () => {
+    const got = planPickedImages([{ fileName: 'a.png', base64: 'x' }, { fileName: 'b.png', base64: 'x' }], NOW)
+    expect(got.map((p) => p.ok && p.name)).toEqual(['a.png', 'b.png'])
+  })
+  it('坏的那张单独报错,不拖累其他张', () => {
+    const got = planPickedImages([{ fileName: 'a.png', base64: '' }, { fileName: 'b.png', base64: 'x' }], NOW)
+    expect(got.map((p) => p.ok)).toEqual([false, true])
+  })
+  it(`最多 ${MAX_PICK} 张`, () => {
+    expect(planPickedImages(Array.from({ length: 20 }, (_, i) => ({ fileName: `${i}.png`, base64: 'x' })), NOW)).toHaveLength(MAX_PICK)
   })
 })

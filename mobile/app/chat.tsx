@@ -19,7 +19,7 @@ import { textAfterOffload } from '../src/ui/pasteOffload'
 import { BODY_LINE_CAP } from '../src/ui/toolParse'
 import { continueList } from '../src/ui/listContinue'
 import { composerAction, composerPlaceholder } from '../src/ui/composerAction'
-import { planPickedImage } from '../src/ui/pickedImage'
+import { MAX_PICK, planPickedImage, planPickedImages } from '../src/ui/pickedImage'
 import { pendingLabel, settlePending } from '../src/ui/pendingAttachment'
 import { planPickedFile, tooLargeBySize } from '../src/ui/pickedFile'
 import { CAN_COPY, CopyBtn } from '../src/ui/CopyBtn'
@@ -506,12 +506,22 @@ export default function Chat() {
       const ip = require('expo-image-picker') as typeof import('expo-image-picker')
       // ★`quality: 0.8` 且**不改尺寸**是有意的:代理要看的是截图上的字,压糊了等于白传。
       //  代价是原图多大发多大,所以下面 planPickedImage 那条大小闸门是必需的,不是保险。
-      const r = await ip.launchImageLibraryAsync({ mediaTypes: ['images'], base64: true, quality: 0.8 })
+      // ★可以一次多选(2026-10-07 真机反馈「选照片无法同时多选」)。`orderedSelection`:
+      //  按人点选的先后排,占位符在正文里的顺序就是他点的顺序。
+      const r = await ip.launchImageLibraryAsync({
+        mediaTypes: ['images'], base64: true, quality: 0.8,
+        allowsMultipleSelection: true, selectionLimit: MAX_PICK, orderedSelection: true,
+      })
       if (r.canceled) return
-      const plan = planPickedImage(r.assets[0] ?? {}, new Date())
-      if (!plan.ok) throw new Error(plan.why)
-      // 占位符先落地、传完再换真名字,见 `saveWithPlaceholder`。
-      await saveWithPlaceholder(plan.name, plan.dataBase64)
+      // ★一张一张传,不并发:每张是几 MB 的 base64,走中转时并发只会一起慢、一起超时。
+      //  坏的那张记下来最后一起说,不挡后面的。
+      const why: string[] = []
+      for (const plan of planPickedImages(r.assets ?? [], new Date())) {
+        if (!plan.ok) { why.push(plan.why); continue }
+        // 占位符先落地、传完再换真名字,见 `saveWithPlaceholder`。
+        await saveWithPlaceholder(plan.name, plan.dataBase64)
+      }
+      if (why.length) throw new Error(why.join('\n'))
     } catch (e) {
       tap('blocked')
       setNotice(e instanceof Error ? e.message : String(e))

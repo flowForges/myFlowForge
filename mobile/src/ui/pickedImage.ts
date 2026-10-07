@@ -50,3 +50,32 @@ export function planPickedImage(asset: PickedAsset, now: Date): ImagePlan {
   //  而人自己命名过的(`IMG_0421.HEIC`、`设计稿.png`)比我们生成的时间戳有信息量,原样留着。
   return { ok: true, name: pastedFileNameForFile(baseName(asset.fileName ?? 'image.png') || 'image.png', now), dataBase64 }
 }
+
+/** 一次最多选几张。★不封顶的话一口气选几十张,base64 全进内存,低端安卓会被系统杀掉。 */
+export const MAX_PICK = 9
+
+/**
+ * 一次选了好几张:逐张走 `planPickedImage`,再把撞名的改开。
+ *
+ * ★★为什么要单独去重:一批图是**同一秒**挑出来的,而相册给的名字常常一样(安卓上一堆
+ *  `image.png`,改名后都是 `img-时分秒.png`)。占位符靠名字认自己那一段(`settlePending`),
+ *  两张同名 ⇒ 第二张落地时把第一张的占位符换掉,第一张的位置就丢了。
+ * ★读不出来 / 太大的那几张**单独**报,不拖累其他张。
+ */
+export function planPickedImages(assets: readonly PickedAsset[], now: Date): ImagePlan[] {
+  const used = new Set<string>()
+  return assets.slice(0, MAX_PICK).map((a) => {
+    const p = planPickedImage(a, now)
+    if (!p.ok) return p
+    let name = p.name
+    if (used.has(name.toLowerCase())) {
+      const dot = name.lastIndexOf('.')
+      const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, '']
+      let i = 2
+      while (used.has(`${base}-${i}${ext}`.toLowerCase())) i++
+      name = `${base}-${i}${ext}`
+    }
+    used.add(name.toLowerCase())
+    return { ...p, name }
+  })
+}
