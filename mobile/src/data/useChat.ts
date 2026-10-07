@@ -3,6 +3,7 @@ import { BODY_LINE_CAP } from '../ui/toolParse'
 import { CH } from '../../../src/main/ipc/channels'
 import type { Attachment, ChatMessage, DelegateBatch, SubagentCard, ToolActivity } from '../../../src/shared/types'
 import { useConn } from '../net/conn'
+import { queuedFor, type QueuedItem } from './queueLane'
 
 /**
  * 一个会话的消息流:先拉历史,再跟着 `chat:event` 往下长。
@@ -84,7 +85,8 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-
+  /** 这个会话排着队、还没开跑的那几条(见 queueLane.ts)。 */
+  const [queue, setQueue] = useState<QueuedItem[]>([])
 
   // 订阅要盯着「当前是哪个会话」,而回调本身不该因为换会话而重建订阅之外的东西。
   const keyRef = useRef({ wsPath, sessionId })
@@ -269,6 +271,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
   // 代理刚才说了什么,结果一断网屏幕就白了。
   useEffect(() => {
     setMsgs([])
+    setQueue([])
   }, [wsPath, sessionId])
 
   useEffect(() => {
@@ -326,6 +329,8 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
         if (!alive) return
         const running = q?.runningSessionIds ?? (q?.runningSessionId ? [q.runningSessionId] : [])
         setBusy(running.includes(sessionId))
+        // ★队列也一样要问:队列事件只在**变化**时广播,半路进来的人看不到之前就排好的那几条。
+        setQueue(queuedFor(q, sessionId))
       } catch {
         // 拿不到就算了 —— 停止键灰着比整屏报错好。
       }
@@ -335,13 +340,14 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
     }
   }, [wsPath, sessionId, online, invoke])
 
-  // 队列事件是全工作区广播的,顺带把 busy 校准回来(比如别的设备停了这一轮)。
+  // 队列事件是全工作区广播的,顺带把 busy 校准回来(比如别的设备停了这一轮),也把排队的那几条带过来。
   useEffect(() => {
     const off = on(CH.chatQueueEvent, (payload) => {
       const q = payload as { workspacePath?: string; runningSessionIds?: string[] }
       const k = keyRef.current
       if (!q || q.workspacePath !== k.wsPath || !k.sessionId) return
       setBusy((q.runningSessionIds ?? []).includes(k.sessionId))
+      setQueue(queuedFor(q, k.sessionId))
     })
     return off
   }, [on])
@@ -381,5 +387,14 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
     setBusy(false)
   }, [invoke, wsPath, sessionId])
 
-  return { msgs, loading, error, busy, send, stop }
+  /** 撤回一条还没开跑的。主机删掉后会再广播一次队列事件,列表跟着那次更新 —— 这里不抢先改本地。 */
+  const cancelQueued = useCallback(
+    async (id: string) => {
+      if (!wsPath) return
+      await invoke(CH.chatCancelQueued, [{ workspacePath: wsPath, id }])
+    },
+    [invoke, wsPath],
+  )
+
+  return { msgs, loading, error, busy, queue, send, stop, cancelQueued }
 }

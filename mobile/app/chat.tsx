@@ -42,6 +42,7 @@ import { describeHostState } from '../src/net/hostStatusText'
 import { useStore } from '../src/data/store'
 import { canPeekGate } from '../src/data/gatePeek'
 import { useChat } from '../src/data/useChat'
+import { queuedSourceLabel, type QueuedItem } from '../src/data/queueLane'
 import { useAgents } from '../src/data/useAgents'
 import { useCommands } from '../src/data/useCommands'
 import { isSlashQuery, slashRows } from '../src/ui/slashPick'
@@ -106,7 +107,7 @@ export default function Chat() {
   const insets = useSafeAreaInsets()
   const { activeHost, state, online, reconnect, invoke } = useConn()
   const { groups, selected, gates, gatesFor, answerGate, wsName, sessionTitle, setViewing, loading: storeLoading } = useStore()
-  const { msgs, busy, send, stop, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
+  const { msgs, busy, queue, send, stop, cancelQueued, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
   const { agents, refresh: refreshAgents, hiddenCount: agentsHidden } = useAgents()
   const { wf, stage, advanceLabel, nextIsExecution, advance, exit, addFeedback } = useWorkflow()
 
@@ -630,6 +631,21 @@ export default function Chat() {
     }
   }
 
+  /**
+   * 撤回一条排着的。跟电脑端一样把原话**放回输入框** —— 撤回多半是想改一改再发。
+   * ★输入框里已经有字时不覆盖:那是人正在写的另一条,替他扔掉比多点一下糟糕得多。
+   */
+  const unqueue = async (q: QueuedItem) => {
+    try {
+      await cancelQueued(q.id)
+      if (!text.trim()) setText(q.text)
+      else setNotice('已撤回这条排队消息')
+    } catch (e) {
+      tap('blocked')
+      setNotice(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   const runWf = async (fn: () => Promise<void>, okMsg: string) => {
     setWfBusy(true)
     try {
@@ -996,6 +1012,42 @@ export default function Chat() {
                 不给这个值,ScrollView 会把第一下点击吃掉去收键盘 —— 现象是「点了没反应,要点两下」,
                 而点第二下时键盘已经收了、面板也跟着没了(chip 那一行踩过同一个坑)。
               ★`maxHeight`:命令多的机器上一口气几十条,不封顶就把整个对话流顶出屏幕。 */}
+          {/* ── 排队中的消息 ──────────────────────────────────────────────────
+              ★执行中点发送,消息进的是主机上的队列,不会立刻出现在消息流里 —— 不画出来,
+                人就看到输入框清空了、然后什么都没发生,于是再发一遍(见 queueLane.ts)。
+              ★摆在输入区最上面、紧贴输入框:刚按下发送,眼睛还在这儿。
+              ★超过三条就在框里滚,别把对话流顶没了。 */}
+          {queue.length ? (
+            <View style={[st.queue, { backgroundColor: c.bg2, borderColor: c.border2 }]}>
+              <T style={{ fontSize: 11, color: c.muted, paddingHorizontal: 11, paddingTop: 7, paddingBottom: 3 }}>
+                排队中 {queue.length} 条 · 这一轮结束后依次发送
+              </T>
+              <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 108 }}>
+                {queue.map((q, i) => {
+                  const src = queuedSourceLabel(q.source)
+                  return (
+                    <View key={q.id} style={st.queueRow}>
+                      <T style={{ fontSize: 11, color: c.faint, width: 14 }}>{i + 1}</T>
+                      <T numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 13, color: c.fg2 }}>
+                        {q.text}
+                      </T>
+                      {src ? <T style={{ fontSize: 10.5, color: c.faint }}>{src}</T> : null}
+                      <Pressable
+                        accessibilityLabel="撤回这条"
+                        hitSlop={8}
+                        disabled={!online}
+                        onPress={() => void unqueue(q)}
+                        style={({ pressed }) => [st.queueX, pressed && { backgroundColor: c.surface2 }, !online && { opacity: 0.4 }]}
+                      >
+                        <T style={{ fontSize: 12, color: c.muted }}>✕</T>
+                      </Pressable>
+                    </View>
+                  )
+                })}
+              </ScrollView>
+            </View>
+          ) : null}
+
           {slash.length ? (
             <View style={[st.slash, { backgroundColor: c.bg2, borderColor: c.border2 }]}>
               <T style={{ fontSize: 10.5, letterSpacing: 0.6, color: c.faint, paddingHorizontal: 11, paddingTop: 8 }}>
@@ -1370,6 +1422,9 @@ const st = StyleSheet.create({
   entry: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingHorizontal: 12, paddingTop: 9, paddingBottom: 10 },
   /** 「还没连上」那条细横幅。★贴在输入行**上面**,不是页顶 —— 页顶那条会滚出视野,
    *  而人正盯着输入框,说明必须出现在他看的地方(add-host 顶部注释记的也是同一条教训)。 */
+  queue: { marginHorizontal: 12, marginTop: 8, borderWidth: StyleSheet.hairlineWidth, borderRadius: RADIUS.chip, paddingBottom: 4 },
+  queueRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 11, paddingRight: 6, minHeight: 32 },
+  queueX: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   notReady: { paddingHorizontal: 13, paddingTop: 7, paddingBottom: 6, borderTopWidth: 1 },
   // ★44×44,不是任务纪要草稿里的 40×40 —— 这一行四颗控件(权限/输入框/＋/发送)全部要过
   //  44pt 硬下限这一条,而这颗**不许**靠 hitSlop 去补(祖先紧贴子节点时 hitSlop 是死的,
