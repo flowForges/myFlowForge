@@ -3,7 +3,7 @@
     "name": "myFlowForge",
     "slug": "myflowforge-mobile",
     "scheme": "myflowforge",
-    "version": "1.2.4",
+    "version": "1.2.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -16,7 +16,7 @@
         "ITSAppUsesNonExemptEncryption": false
       },
       "appleTeamId": "V9YMUR4WYY",
-      "buildNumber": "9"
+      "buildNumber": "10"
     },
     "android": {
       "package": "com.flowforges.myflowforge",
