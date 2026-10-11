@@ -81,6 +81,13 @@ export type Conn = {
   forgetAll: () => void
   /** 切主机时递增。视图拿它当 key,强制把上一台机器的工作区/会话全部丢掉。 */
   epoch: number
+  /**
+   * 「该补一次数据了」的信号:每次**新连上**(重连、局域网↔中转换路)和**回到前台**时 +1。
+   * ★★2026-10-11 用户:电脑上排队的那条开始执行了,手机这个会话里看不到。事件只在连着的那一刻推,
+   *  换路的那几秒、或者在后台那一阵错过的,界面上就永远缺一块 —— 而连接状态一直是「已连接」,
+   *  靠 `online` 翻转去重拉的那条路根本不会触发。打开着的视图拿它当依赖,补拉一次。
+   */
+  syncTick: number
 }
 
 const ConnCtx = createContext<Conn | null>(null)
@@ -91,6 +98,7 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [state, setState] = useState<HostState | null>(null)
   const [epoch, setEpoch] = useState(0)
+  const [syncTick, setSyncTick] = useState(0)
 
   const clientRef = useRef<RoutedClient | null>(null)
   /**
@@ -143,7 +151,10 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       memory,
       clientVersion: CLIENT_VERSION,
       clientLabel: CLIENT_LABEL,
-      onState: (s) => setState(s),
+      onState: (s) => {
+        setState(s)
+        if (s.status === 'ready') setSyncTick((n) => n + 1)
+      },
       onEvent: (ch, payload) => {
         const set = listeners.get(ch)
         if (!set) return
@@ -280,6 +291,8 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       if (next === 'active') {
+        // 连接还活着就补拉一次(断了的那种走 reconnect,连上时 onState 会 +1)。
+        if (stateRef.current?.status === 'ready') setSyncTick((n) => n + 1)
         if (shouldReconnectOnWake(stateRef.current)) reconnect()
         // ★连接还活着(没被系统收掉)但走的是中转:立刻看一眼局域网 —— 出门回来打开 app 的那一刻,
         //  正是最可能迁回局域网的时候。断掉了的那种不用管:reconnect 重新选路本来就先试局域网。
@@ -345,8 +358,9 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
       reconnect,
       forgetAll,
       epoch,
+      syncTick,
     }),
-    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, updateHost, selectHost, reconnect, forgetAll, epoch, demo, enterDemo, exitDemo],
+    [hosts, activeHost, loading, state, invoke, on, addHost, removeHost, updateHost, selectHost, reconnect, forgetAll, epoch, syncTick, demo, enterDemo, exitDemo],
   )
 
   return <ConnCtx.Provider value={value}>{children}</ConnCtx.Provider>

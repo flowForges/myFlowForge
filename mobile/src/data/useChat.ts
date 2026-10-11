@@ -80,7 +80,9 @@ type Evt = {
 }
 
 export function useChat(wsPath: string | null, sessionId: string | null) {
-  const { invoke, on, online } = useConn()
+  const { invoke, on, online, syncTick } = useConn()
+  /** 这个会话已经完整拉过一次了 —— 之后的补拉(syncTick)不再转圈,静默换上新的。 */
+  const loadedKey = useRef<string | null>(null)
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -277,7 +279,9 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
   useEffect(() => {
     if (!wsPath || !sessionId || !online) return
     let alive = true
-    setLoading(true)
+    const key = `${wsPath}\u0000${sessionId}`
+    const silent = loadedKey.current === key
+    if (!silent) setLoading(true)
     setError(null)
     void (async () => {
       try {
@@ -313,6 +317,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
         // 历史落地时把「加载期间流进来的新消息」接在后面,而不是整份替换。
         setMsgs((live) => [...hist.map(fromHistory), ...live.filter((m) => !seen.has(m.id))])
         setLoading(false)
+        loadedKey.current = key
       } catch (e) {
         if (!alive) return
         setError(e instanceof Error ? e.message : String(e))
@@ -338,7 +343,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
     return () => {
       alive = false
     }
-  }, [wsPath, sessionId, online, invoke])
+  }, [wsPath, sessionId, online, invoke, syncTick])
 
   // 队列事件是全工作区广播的,顺带把 busy 校准回来(比如别的设备停了这一轮),也把排队的那几条带过来。
   useEffect(() => {
