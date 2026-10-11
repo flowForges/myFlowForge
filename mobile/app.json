@@ -16,7 +16,7 @@
         "ITSAppUsesNonExemptEncryption": false
       },
       "appleTeamId": "V9YMUR4WYY",
-      "buildNumber": "10"
+      "buildNumber": "11"
     },
     "android": {
       "package": "com.flowforges.myflowforge",
