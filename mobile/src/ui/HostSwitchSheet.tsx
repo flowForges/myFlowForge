@@ -2,6 +2,7 @@ import { View } from 'react-native'
 import { useC } from '../theme/theme'
 import { Btn, Empty, LiveDot, Note, Row, T } from './kit'
 import { Sheet } from './Sheet'
+import { SwipeRow } from './SwipeRow'
 import { HostIcon } from './HostIcon'
 import { StatusBadge } from './StatusBadge'
 import type { HostPickRow } from '../net/hostPicker'
@@ -55,8 +56,9 @@ export function HostSwitchSheet({
       {rows.map((r) => (
         // 点即切。★不弹确认:切主机是可逆的(再点回来就行),而多一步确认会让
         //  「我到底连的哪台」这件事更难当场试出来。
+        // ★左滑露出「编辑」(2026-10-11 用户:点一下切换是对的,长按、左滑都该能编辑)。
+        <SwipeRow key={r.id} actions={[{ key: 'edit', label: '编辑', tone: 'plain', onPress: () => onEdit(r.id) }]}>
         <Row
-          key={r.id}
           onPress={() => onPick(r.id)}
           onLongPress={() => onEdit(r.id)}
           style={r.active ? { borderColor: c.accent, backgroundColor: c.accentDim } : undefined}
@@ -76,6 +78,7 @@ export function HostSwitchSheet({
           {/* 门徽章绝不让位 —— 左边那一坨会先被挤扁(flex:1 + minWidth:0)。 */}
           {r.gates != null && r.gates > 0 ? <StatusBadge tier="gate" count={r.gates} /> : null}
         </Row>
+        </SwipeRow>
       ))}
       {/* ★这句话是上面「没连上的一律不画门徽章」的**说明**,不是客套话。
           没有它,一排干干净净的主机看起来就是「那几台都没事」—— 恰恰是我们没资格说的那句。 */}

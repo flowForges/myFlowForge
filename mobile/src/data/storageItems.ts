@@ -33,6 +33,7 @@ export const STORAGE_ITEMS: readonly StorageItem[] = [
   { key: 'mff.prefs.v1', label: '外观偏好', effect: '主题和字号回到默认' },
   { key: 'mff.expandedWs.v1', label: '列表展开状态', effect: '工作区列表回到默认的收起状态' },
   { key: 'mff.needsYouFolded.v1', label: '「等你」折叠状态', effect: '首页那块重新展开' },
+  { key: 'mff.drafts.v1', label: '输入框草稿', effect: '各会话里没发出去的字清空' },
   { key: 'mff.push.v1', label: '推送注册', effect: '收不到推送,要重新打开通知开关' },
   { key: 'mff.activeHost.v1', label: '当前选中的主机', effect: '回到未选状态,主机本身还在' },
   { key: 'mff.hosts.v1', label: '主机和令牌', effect: '所有配过的主机连同令牌一起删掉,要重新扫码配对', reconnect: true },

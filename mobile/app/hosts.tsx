@@ -4,6 +4,7 @@ import { router } from 'expo-router'
 import { goBack } from '../src/nav'
 import { useC } from '../src/theme/theme'
 import { Btn, Empty, IconBtn, List, LiveDot, Pill, Row, Sec, T, TopBar, TopTitle } from '../src/ui/kit'
+import { SwipeRow } from '../src/ui/SwipeRow'
 import { Icon } from '../src/ui/Icon'
 import { useConn } from '../src/net/conn'
 import { type MobileHost } from '../src/net/hosts'
@@ -70,8 +71,15 @@ export default function Hosts() {
                 // 用的是同一个判断,别各写一份。
                 const isCurrent = active && st.tone === 'ok'
                 return (
-                  <Row
+                  // ★左滑:删除 / 编辑。长按编辑照旧 —— 左滑是看得见的那条路(长按没人知道)。
+                  <SwipeRow
                     key={h.id}
+                    actions={[
+                      { key: 'del', label: '删除', tone: 'danger', onPress: () => remove(h) },
+                      { key: 'edit', label: '编辑', tone: 'plain', onPress: () => setEdit({ id: h.id, label: h.label, icon: h.icon }) },
+                    ]}
+                  >
+                  <Row
                     // ★★2026-08-29 真机第六轮:原来整行永远是「切到这台」,详情只挂在行尾那颗 ›
                     //  上。用户的原话是「点击列表,无法进入到详情,只能点 > 才能进入」—— iOS 上
                     //  一行右端画着 › 就意味着「点这一行会进去」,把它降级成一颗独立小按钮是在跟
@@ -144,6 +152,7 @@ export default function Hosts() {
                       </Pressable>
                     ) : null}
                   </Row>
+                  </SwipeRow>
                 )
               })}
             </List>

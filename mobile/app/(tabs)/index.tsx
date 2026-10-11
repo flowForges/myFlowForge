@@ -935,7 +935,10 @@ export default function Home() {
           const h = hosts.find((x) => x.id === id)
           if (!h) return
           setHostSheet(false)
-          setHostEdit({ id: h.id, label: h.label, icon: h.icon })
+          // ★★等它收完再开(2026-10-11 真机:长按没反应)。iOS 上一个 Modal 还在往下滑的时候
+          //  去 present 另一个,系统直接**静默不弹** —— 同一帧里 set 两个 state 正好撞上。
+          //  Sheet 的滑出动画约 300ms,留一点余量。
+          setTimeout(() => setHostEdit({ id: h.id, label: h.label, icon: h.icon }), 380)
         }}
         onAddHost={() => {
           setHostSheet(false)

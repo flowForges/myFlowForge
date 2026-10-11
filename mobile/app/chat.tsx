@@ -42,6 +42,7 @@ import { describeHostState } from '../src/net/hostStatusText'
 import { useStore } from '../src/data/store'
 import { canPeekGate } from '../src/data/gatePeek'
 import { useChat } from '../src/data/useChat'
+import { draftKey, getDraft, loadDrafts, setDraft } from '../src/data/drafts'
 import { queuedSourceLabel, type QueuedItem } from '../src/data/queueLane'
 import { useAgents } from '../src/data/useAgents'
 import { useCommands } from '../src/data/useCommands'
@@ -112,6 +113,27 @@ export default function Chat() {
   const { wf, stage, advanceLabel, nextIsExecution, advance, exit, addFeedback } = useWorkflow()
 
   const [text, setText] = useState('')
+  /**
+   * 草稿:退回列表再进来、换会话、app 被杀再开,没发出去的字都还在(见 drafts.ts)。
+   * ★`restoredKey` 是闸:换会话那一帧,`text` 还是上一个会话的字而 key 已经是新的 ——
+   *  不拦的话,下面那个保存 effect 会把上一个会话的草稿写到新会话名下。
+   */
+  const dKey = selected ? draftKey(selected.wsPath, selected.sessionId) : null
+  const restoredKey = useRef<string | null>(null)
+  useEffect(() => {
+    restoredKey.current = null
+    if (!dKey) return
+    let alive = true
+    void loadDrafts().then(() => {
+      if (!alive) return
+      setText(getDraft(dKey))
+      restoredKey.current = dKey
+    })
+    return () => { alive = false }
+  }, [dKey])
+  useEffect(() => {
+    if (dKey && restoredKey.current === dKey) setDraft(dKey, text)
+  }, [text, dKey])
   const [agentSheet, setAgentSheet] = useState(false)
   const [permSheet, setPermSheet] = useState(false)
   const [agentId, setAgentId] = useState<string | null>(null)
