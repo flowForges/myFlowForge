@@ -23,7 +23,7 @@ import type { HostState } from '../net/hostClient'
  *  那是整个 app 存在的理由本身。
  */
 export function HostBanner({
-  label, icon, url, state, gateCount, onPress,
+  label, icon, url, state, gateCount, onPress, demo,
 }: {
   label: string
   /**
@@ -39,6 +39,8 @@ export function HostBanner({
   /** 当前这台主机上挂着的门数。★和底部「会话」那格的角标**同源**,两处不许各算各的。 */
   gateCount: number
   onPress: () => void
+  /** 体验模式:没有主机,顶栏不该报一行红色的「未选主机」—— 那看起来像出错了。 */
+  demo?: boolean
 }) {
   const c = useC()
   const ok = state?.status === 'ready'
@@ -47,8 +49,8 @@ export function HostBanner({
   //  出事时才染色:横幅的标题本来就直说「连不上 / 连接中…」,颜色是同一句话的第二遍。
   //  ★这条以前挂在图标上,现在图标换成了用户自己选的 emoji(emoji 染不了色),
   //   所以信号移到文字上。信息没丢,只是换了个载体。
-  const tint = ok ? c.fg : wait ? c.warn : c.err
-  const detail = hostBannerDetail(url, state)
+  const tint = demo || ok ? c.fg : wait ? c.warn : c.err
+  const detail = demo ? null : hostBannerDetail(url, state)
   return (
     <Pressable
       onPress={onPress}
@@ -74,7 +76,7 @@ export function HostBanner({
           numberOfLines={1}
           style={{ fontSize: 15.5, fontWeight: '600', letterSpacing: -0.3, color: tint, flexShrink: 1, minWidth: 0 }}
         >
-          {hostBannerTitle(label, state)}
+          {demo ? '体验模式' : hostBannerTitle(label, state)}
         </T>
         {/* ▾ 是「这儿能点开」的唯一信号。手机上没有 hover,不画它就没人知道这条是活的。 */}
         <Icon name="chevronDown" size={10} color={c.faint} />

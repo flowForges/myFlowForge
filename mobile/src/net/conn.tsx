@@ -167,9 +167,14 @@ export function ConnProvider({ children }: { children: React.ReactNode }) {
   const demoRef = useRef<DemoConn | null>(null)
   const [demo, setDemo] = useState(false)
   const enterDemo = useCallback(() => {
-    demoRef.current ??= createDemoConn()
+    // 事件走和真链路 `onEvent` 同一个出口,界面上那些 `on(...)` 才收得到。
+    demoRef.current ??= createDemoConn((ch, payload) => {
+      const set = listeners.get(ch)
+      if (!set) return
+      for (const cb of [...set]) cb(payload)
+    })
     setDemo(true)
-  }, [])
+  }, [listeners])
   const exitDemo = useCallback(() => {
     demoRef.current = null
     setDemo(false)

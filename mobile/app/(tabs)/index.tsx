@@ -584,7 +584,9 @@ export default function Home() {
   }, [bubble, absY, expanded, ensureWs])
 
   // ── 还没配主机:这一屏没有任何东西可画,直接把人送去配 ────────────────────────
-  if (!hostsLoading && hosts.length === 0) {
+  // ★★体验模式除外(2026-10-11 上架前截图时发现):全新安装、一台主机都没配的人(App 审核员就是)
+  //  点了「先体验一下」,回到首页看到的仍是「先连一台电脑」—— 体验模式等于白开。
+  if (!hostsLoading && hosts.length === 0 && !demo) {
     return (
       <View style={{ flex: 1, backgroundColor: c.bg }}>
         <TopBar>
@@ -619,6 +621,7 @@ export default function Home() {
         }
       >
         <HostBanner
+          demo={demo}
           label={activeHost?.label ?? ''}
           icon={activeHost?.icon ?? ''}
           url={activeHost?.url ?? ''}

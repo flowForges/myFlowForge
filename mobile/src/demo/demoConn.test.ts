@@ -85,13 +85,37 @@ describe('体验模式假连接', () => {
     expect(done!.message!.text).toBe(streamed)
   })
 
+  it('★★事件要交给外面(conn.tsx 的监听表只认这一根线,不接界面上什么都看不见)', async () => {
+    const got: string[] = []
+    const conn = createDemoConn((ch, p) => got.push(`${ch}:${(p as { type?: string }).type ?? ''}`))
+    await conn.invoke(CH.chatSend, [{ sessionId: conn.activeSessionId, text: '你好' }])
+    await drain()
+    expect(got).toContain(`${CH.chatEvent}:user`)
+    expect(got).toContain(`${CH.chatEvent}:done`)
+  })
+
+  it('★「权限门」那段剧本真的开一道门,答了就收掉;快照和 main 同形', async () => {
+    const got: { type?: string; id?: string }[] = []
+    const conn = createDemoConn((ch, p) => { if (ch === CH.chatEvent) got.push(p as { type?: string; id?: string }) })
+    await conn.invoke(CH.chatSend, [{ sessionId: conn.activeSessionId, text: '权限门是什么' }])
+    await drain()
+    const req = got.find((e) => e.type === 'confirm-request')
+    expect(req?.id).toBeTruthy()
+    expect(((await conn.invoke(CH.chatGateState, [{}])) as { confirms: unknown[] }).confirms).toHaveLength(1)
+    await conn.invoke(CH.chatResolve, [{ id: req!.id, decision: 'allow' }])
+    expect(got.some((e) => e.type === 'confirm-resolved' && e.id === req!.id)).toBe(true)
+    expect(((await conn.invoke(CH.chatGateState, [{}])) as { confirms: unknown[] }).confirms).toHaveLength(0)
+  })
+
   it('历史留得住', async () => {
     const conn = createDemoConn()
     const sid = conn.activeSessionId
     await conn.invoke(CH.chatSend, [{ sessionId: sid, text: '你好' }])
     await drain()
-    const h = (await conn.invoke(CH.chatHistory, [{ sessionId: sid }])) as { messages: unknown[] }
-    expect(h.messages).toHaveLength(2)
+    // ★和 main 的 chat:history 同形:一个数组(原来回 `{ messages }`,useChat 一 `.map` 就抛)。
+    const h = await conn.invoke(CH.chatHistory, [{ sessionId: sid }])
+    expect(Array.isArray(h)).toBe(true)
+    expect(h as unknown[]).toHaveLength(2)
   })
 
   it(`★会话最多 ${DEMO_MAX_SESSIONS} 条,超了要**说清楚**而不是静默失败`, async () => {
@@ -119,7 +143,7 @@ describe('体验模式假连接', () => {
 
   it('★「没有」和「坏了」是两回事:空数据回空值,不抛错', async () => {
     const conn = createDemoConn()
-    await expect(conn.invoke(CH.chatGateState, [{}])).resolves.toEqual({ gates: [] })
+    await expect(conn.invoke(CH.chatGateState, [{}])).resolves.toEqual({ confirms: [], asks: [] })
     await expect(conn.invoke(CH.changesMulti, [{}])).resolves.toEqual({ repos: [] })
   })
 

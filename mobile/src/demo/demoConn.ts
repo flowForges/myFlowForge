@@ -42,7 +42,12 @@ function session(title: string): ChatSession {
  *
  * @param onLog 可选,测试用:把内部发生的事记下来。
  */
-export function createDemoConn() {
+/**
+ * @param onEvent 每条事件也交给它一份。★★conn.tsx 的 `on` 订阅的是**它自己**的监听表(和真链路的
+ *  `onEvent` 同一个出口),从不来订这里的 —— 不接这一根线,体验模式里一条事件都到不了界面:
+ *  发出去的话、代理的回复全看不见(2026-10-11 上架截图时发现)。
+ */
+export function createDemoConn(onEvent?: (ch: string, payload: unknown) => void) {
   const listeners: Listeners = new Map()
   /** 每条会话的消息。★只在内存里。 */
   const history = new Map<string, ChatMessage[]>()
@@ -50,6 +55,8 @@ export function createDemoConn() {
   let sessions: ChatSession[] = [first]
   let activeSessionId = first.id
   history.set(first.id, [])
+  /** 还没答的权限门(只有「权限门」那段剧本会开)。快照和答门都读它。 */
+  const confirms = new Map<string, { id: string; sessionId: string; title: string; where?: string; ts: string }>()
   /** 正在跑的那一轮 —— 「停止」要能真的打断它。 */
   let running: { sessionId: string; cancelled: boolean } | null = null
 
@@ -57,6 +64,7 @@ export function createDemoConn() {
     for (const cb of listeners.get(ch) ?? []) {
       try { cb(payload) } catch { /* 一个监听器炸了不该带走其它的 */ }
     }
+    try { onEvent?.(ch, payload) } catch { /* 同上 */ }
   }
 
   const on = (ch: string, cb: EventCb) => {
@@ -129,6 +137,13 @@ export function createDemoConn() {
     history.set(sessionId, msgs)
     emit(CH.chatEvent, { workspacePath: DEMO_WS_PATH, sessionId, type: 'done', id, message: aiMsg })
     if (running === turn) running = null
+    // ★剧本里那句「下面这条命令就触发了一道门 ——」后面原来什么都没有(gate 字段写了却从没发出去)。
+    //  照真链路发一道门:界面上弹出那张卡,答了就收掉 —— 体验模式要体验的正是这个。
+    if (reply.gate && !turn.cancelled) {
+      const g = { id: uid('g'), sessionId, title: reply.gate.title, where: reply.gate.command, ts: new Date().toISOString() }
+      confirms.set(g.id, g)
+      emit(CH.chatEvent, { workspacePath: DEMO_WS_PATH, sessionId, type: 'confirm-request', id: g.id, title: g.title, where: g.where })
+    }
   }
 
   const workspaces = (): WorkspaceMeta[] => [{
@@ -150,7 +165,10 @@ export function createDemoConn() {
       case CH.sessionList: return sessionsFile()
       case CH.chatHistory: {
         const sid = arg('sessionId') ?? activeSessionId
-        return { messages: history.get(sid) ?? [] }
+        // ★★和真链路一样回**数组**(main 的 chat:history 回的是 ChatMessage[])。2026-10-11 上架截图时
+        //  发现原来回的是 `{ messages }`:useChat 拿它 `.map` 当场抛,聊天屏永远是「还没有消息」——
+        //  体验模式里的对话一句都看不见,而它正是给审核员准备的那条路。
+        return (history.get(sid) ?? []).slice()
       }
       case CH.chatSend: {
         const sid = arg('sessionId') ?? activeSessionId
@@ -200,7 +218,17 @@ export function createDemoConn() {
 
       // 下面这些界面会问,但体验模式里一律是空的。**返回形状正确的空值**,不是抛错 ——
       // 抛错会让界面进红色的失败态,而「没有」和「坏了」是两回事。
-      case CH.chatGateState: return { gates: [] }
+      // ★和 main 的 chat:gate-state 同形(`{ confirms, asks }`)—— 原来回 `{ gates }`,store 读不到。
+      case CH.chatGateState: return { confirms: [...confirms.values()], asks: [] }
+      case CH.chatResolve: {
+        const gid = arg('id')
+        const g = gid ? confirms.get(gid) : undefined
+        if (g) {
+          confirms.delete(g.id)
+          emit(CH.chatEvent, { workspacePath: DEMO_WS_PATH, sessionId: g.sessionId, type: 'confirm-resolved', id: g.id })
+        }
+        return { ok: true }
+      }
       case CH.chatQueueState: return { queued: 0 }
       case CH.agentsDetect: return [{ id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'claude-opus-5', label: 'Opus' }] }]
       case CH.commandsList: return { commands: [], supported: false }
@@ -237,7 +265,7 @@ export function createDemoConn() {
  */
 export const DEMO_METHODS: ReadonlySet<string> = new Set([
   CH.workspacesList, CH.workspaceGet, CH.sessionList, CH.sessionNew, CH.sessionClose, CH.sessionRename,
-  CH.chatHistory, CH.chatSend, CH.chatStop, CH.chatGateState, CH.chatQueueState,
+  CH.chatHistory, CH.chatSend, CH.chatStop, CH.chatGateState, CH.chatResolve, CH.chatQueueState,
   CH.agentsDetect, CH.commandsList, CH.configListWorkflows, CH.configListProjects,
   CH.changesMulti, CH.fsTree, CH.mcpOverview, CH.customStagesList, CH.configGetHostSettings,
 ])
