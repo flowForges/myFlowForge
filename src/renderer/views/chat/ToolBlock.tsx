@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import type { ToolActivity } from '@shared/types'
 import { ToolOutputCtx } from './toolOutput'
 
@@ -44,12 +44,16 @@ function Row({ tool, messageId }: { tool: ToolActivity; messageId?: string }) {
       .then(text => setFetched({ state: 'ok', text }))
       .catch((e: unknown) => setFetched({ state: 'fail', msg: e instanceof Error ? e.message : String(e) }))
   }
+  // 展开着、输出被省略、还没取过 → 去取。只取**一次**:取回来的留在 state 里,折叠再展开不再走一次往返。
+  // ★放在 effect 里而不是点击里:一行可能是**展开着**的时候才变成省略的(在跑时输出还小、内联显示,
+  //  收尾那条带着大段输出被省略)—— 只在点击时取,那一行就永远停在「正在取…」。
+  useEffect(() => {
+    if (open && omitted && fetched === null) fetch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, omitted, fetched])
   const toggle = () => {
     if (!hasOutput) return
-    const next = !open
-    setOpen(next)
-    // 只在**第一次**展开时去取:取回来的留在 state 里,折叠再展开不再走一次往返。
-    if (next && omitted && fetched === null) fetch()
+    setOpen(!open)
   }
 
   const body = () => {

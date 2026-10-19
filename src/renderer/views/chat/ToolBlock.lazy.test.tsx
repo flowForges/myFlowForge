@@ -86,4 +86,21 @@ describe('ToolBlock — 大段工具输出按需取', () => {
     await click(screen.getByRole('button', { name: /调用 Bash/ }))
     await waitFor(() => expect(screen.getByText(/没有输出/)).toBeTruthy())
   })
+
+  it('★展开着的那一行后来变成「省略」(收尾那条带着大段输出)→ 自己去取,不能停在「正在取…」', async () => {
+    const load = vi.fn().mockResolvedValue('收尾的全文')
+    const running: ToolActivity = { id: 't3', title: '调用 Bash: make', status: 'run', output: '前几行' }
+    const ui = (tool: ToolActivity) => (
+      <ToolOutputCtx.Provider value={{ load }}>
+        <ToolBlock tools={[tool]} stateKey="m3" messageId="m3" />
+      </ToolOutputCtx.Provider>
+    )
+    const { rerender } = render(ui(running))
+    await click(screen.getByRole('button', { name: /调用 Bash: make/ }))
+    expect(screen.getByText('前几行')).toBeTruthy()
+    await act(async () => { rerender(ui({ id: 't3', title: '调用 Bash: make', status: 'ok', outputOmitted: true, outputLines: 9000 })) })
+    await waitFor(() => expect(screen.getByText('收尾的全文')).toBeTruthy())
+    expect(load).toHaveBeenCalledOnce()
+    expect(load).toHaveBeenCalledWith('m3', 't3')
+  })
 })
