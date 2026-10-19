@@ -52,6 +52,7 @@ import { hasAllBuiltinPets, mergeBuiltinPets, isLegacyBundledPet } from '@shared
 import { perfSpan } from './perf/perfSpans'
 import { EventLoopMonitor } from './perf/eventLoopMonitor'
 import { StallReporter } from './perf/stallReporter'
+import { startMemoryLog, defaultMemoryLogDeps } from './perf/memoryLog'
 import { rememberRelayUrl, forgetRelayUrl, isRelayUrl, canForgetRelayUrl } from '@shared/remote/relayHistory'
 
 // Start the centralized debug log as early as possible so even startup failures are persisted to
@@ -892,11 +893,16 @@ app.whenReady().then(() => {
   const perfMonitor = new EventLoopMonitor()
   if (readSettings().perfDiagnostics) perfMonitor.start((ms, active) => stallReporter.report(ms, active))
 
+  // 内存基线日志:启动后约 60s 先来一条,之后每 10 分钟一条,把 app.getAppMetrics() 里每个进程
+  // 的 workingSetSize 和主进程自己的 JS 堆写进 app.log(tag=perf)。不依赖任何 UI —— 这期性能优化
+  // 的测量尺,优化前后各跑一段时间,照着这些行对比常驻内存有没有真的降下来。
+  const stopMemoryLog = startMemoryLog({ ...defaultMemoryLogDeps, getAppMetrics: () => app.getAppMetrics() })
+
   // killAllAgentTrees:agent CLI 现在是 detached 的独立进程组(见 agents/procGroup.ts),而 execa 自带的
   // 「父进程退出时杀子进程」在 detached 下直接 return —— 不在这里补一刀,退出 app 就会把正在跑的 CLI
   // 连同它派生的 shell 命令一起留在后台。
   app.on('before-quit', () => {
-    quitting = true; termService.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts()
+    quitting = true; termService.killAll(); killAllAgentTrees(); scheduler.stop(); unregisterGlobalShortcuts(); stopMemoryLog()
     // ★远程连接也要收:SSH 隧道是我们自己 spawn 的子进程,不杀就变成孤儿留在系统里
     //   (每连一次留一个)。同一类坑在 agent 进程上已经栽过两次,不能在这儿再来一遍。
     //   before-quit 是同步的,所以只发出关闭指令,不 await —— 隧道进程收到 SIGTERM 就够了。
