@@ -14,6 +14,7 @@ myFlowForge は、ローカルにインストールされた公式 CLI（Claude 
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20·%20Windows%20·%20Linux-000000)
 ![Mobile](https://img.shields.io/badge/Mobile-iOS%20·%20Android-3DDC84)
+[![App Store](https://img.shields.io/badge/App%20Store-myFlowForge%20Assistant-0D96F6?logo=appstore&logoColor=white)](https://apps.apple.com/app/id6812357643)
 
 [简体中文](README.md) · [English](README.en.md) · **日本語** · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
@@ -41,7 +42,7 @@ myFlowForge はこれらの CLI の上に位置する GUI レイヤーであり�
 - **一元管理**：複数の agent、複数のプロジェクト、複数のセッションを同じ画面で管理でき、タスクが単一のツールに縛られなくなります。
 - **マルチデバイス連携**：デスクトップ版、ヘッドレス Linux daemon、iOS / Android クライアントが同じワークスペースとセッションを共有します。LAN 直接接続、SSH、エンドツーエンド暗号化リレーに対応します。
 
-> **プロジェクトの状況：** 個人で保守しており、継続的に開発中です。macOS、Windows、Linux 向けのインストーラーのほか、Android APK と iOS TestFlight を提供しています。macOS 版は Developer ID で署名され Apple の公証を受けており、Android 版は正式な鍵で署名されています。Windows 版は現時点では未署名です。
+> **プロジェクトの状況：** 個人で保守しており、継続的に開発中です。macOS、Windows、Linux 向けのインストーラーのほか、Android APK を提供しています。iOS 版は [App Store](https://apps.apple.com/app/id6812357643) で「myFlowForge Assistant」として公開中です。macOS 版は Developer ID で署名され Apple の公証を受けており、Android 版は正式な鍵で署名されています。Windows 版は現時点では未署名です。
 
 ## 主な機能
 
@@ -221,14 +222,14 @@ Hook はステージの間に挿入される補助ステップで、**実行前*
 | Windows · ARM | `myFlowForge-<バージョン>-arm64-setup.exe` |
 | Android | `myFlowForge-<バージョン>.apk` |
 | Linux · ヘッドレス daemon | `myFlowForge-daemon-<バージョン>-linux.tar.gz` |
-| iOS | TestFlight（招待制） |
+| iOS | [App Store](https://apps.apple.com/app/id6812357643)：**myFlowForge Assistant** で検索 |
 
 > **macOS** 版のインストーラーは署名・公証済みで、そのままインストールできます。
 > **Windows** 版のインストーラーは現時点では未署名です。SmartScreen の警告が表示された場合は「詳細情報 → 実行」を選択してください。
 >
 > アプリには更新チェック機能が組み込まれており、新しいバージョンが公開されるとアプリ内で通知されます。
 
-**iOS** は現在 TestFlight（招待制）で配布しています。`mobile/` ディレクトリで自分の Apple ID を使ってビルドし、インストールすることもできます。
+**iOS** 版は [App Store](https://apps.apple.com/app/id6812357643) で公開中です。**myFlowForge Assistant** で検索してインストールできます（無料・アプリ内課金なし）。中国本土と EU では未配信のため、これらの地域では `mobile/` ディレクトリで自分の Apple ID を使ってビルドし、インストールしてください。
 
 ## クイックスタート
 

@@ -14,6 +14,7 @@ myFlowForge ruft direkt die auf dem Rechner installierten offiziellen CLIs auf (
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20·%20Windows%20·%20Linux-000000)
 ![Mobile](https://img.shields.io/badge/Mobile-iOS%20·%20Android-3DDC84)
+[![App Store](https://img.shields.io/badge/App%20Store-myFlowForge%20Assistant-0D96F6?logo=appstore&logoColor=white)](https://apps.apple.com/app/id6812357643)
 
 [简体中文](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · **Deutsch**
 
@@ -41,7 +42,7 @@ myFlowForge versteht sich als GUI-Schicht über diesen CLIs und folgt drei Grund
 - **Zentrale Verwaltung**: Mehrere Agents, Projekte und Sitzungen werden in einer Oberfläche verwaltet; Aufgaben sind nicht mehr an ein einzelnes Werkzeug gebunden.
 - **Geräteübergreifende Verbindung**: Desktop-Anwendung, Headless-Linux-Daemon und die iOS-/Android-Clients teilen sich dieselben Arbeitsbereiche und Sitzungen, per direkter LAN-Verbindung, SSH oder Ende-zu-Ende-verschlüsseltem Relay.
 
-> **Projektstatus:** Von einer Einzelperson gepflegt und aktiv in Entwicklung. Installationspakete stehen für macOS, Windows und Linux bereit, dazu ein Android-APK und iOS über TestFlight. Das macOS-Paket ist mit einer Developer ID signiert und von Apple notariell beglaubigt, das Android-Paket ist mit einem Produktionsschlüssel signiert, das Windows-Paket ist derzeit noch nicht signiert.
+> **Projektstatus:** Von einer Einzelperson gepflegt und aktiv in Entwicklung. Installationspakete stehen für macOS, Windows und Linux bereit, dazu ein Android-APK; die iOS-App ist als myFlowForge Assistant im [App Store](https://apps.apple.com/app/id6812357643) erhältlich. Das macOS-Paket ist mit einer Developer ID signiert und von Apple notariell beglaubigt, das Android-Paket ist mit einem Produktionsschlüssel signiert, das Windows-Paket ist derzeit noch nicht signiert.
 
 ## Kernfunktionen
 
@@ -223,14 +224,14 @@ Laden Sie die neueste Version von der Seite [**Releases**](https://github.com/fl
 | Windows · ARM | `myFlowForge-<Version>-arm64-setup.exe` |
 | Android | `myFlowForge-<Version>.apk` |
 | Linux · Headless-Daemon | `myFlowForge-daemon-<Version>-linux.tar.gz` |
-| iOS | TestFlight (nur auf Einladung) |
+| iOS | [App Store](https://apps.apple.com/app/id6812357643): nach **myFlowForge Assistant** suchen |
 
 > Das **macOS**-Installationspaket ist signiert und notariell beglaubigt und kann direkt installiert werden.
 > Das **Windows**-Installationspaket ist derzeit nicht signiert; wählen Sie bei der SmartScreen-Warnung „Weitere Informationen → Trotzdem ausführen“.
 >
 > Die Anwendung prüft selbst auf Updates und weist in der Anwendung auf neue Versionen hin, sobald diese veröffentlicht sind.
 
-**iOS** wird derzeit über TestFlight verteilt (nur auf Einladung); alternativ kann die App im Verzeichnis `mobile/` mit Ihrer eigenen Apple-ID gebaut und installiert werden.
+**iOS** ist im [App Store](https://apps.apple.com/app/id6812357643) erhältlich: nach **myFlowForge Assistant** suchen. Die App ist kostenlos und ohne In-App-Käufe. In Festlandchina und der EU ist sie noch nicht verfügbar; dort kann sie im Verzeichnis `mobile/` mit Ihrer eigenen Apple-ID gebaut und installiert werden.
 
 ## Schnellstart
 

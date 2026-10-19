@@ -14,6 +14,7 @@ myFlowForge 直接调用本机已安装的官方 CLI（Claude Code、Codex、Cur
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript&logoColor=white)
 ![Platform](https://img.shields.io/badge/Platform-macOS%20·%20Windows%20·%20Linux-000000)
 ![Mobile](https://img.shields.io/badge/Mobile-iOS%20·%20Android-3DDC84)
+[![App Store](https://img.shields.io/badge/App%20Store-myFlowForge%20Assistant-0D96F6?logo=appstore&logoColor=white)](https://apps.apple.com/app/id6812357643)
 
 **简体中文** · [English](README.en.md) · [日本語](README.ja.md) · [한국어](README.ko.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md)
 
@@ -41,7 +42,7 @@ myFlowForge 定位为这些 CLI 之上的 GUI 层，遵循三条原则：
 - **统一管理**：多个 agent、多个项目、多个会话在同一界面中管理，任务不再与单一工具绑定。
 - **多端互联**：桌面端、无头 Linux daemon 与 iOS / Android 客户端共用同一套工作区与会话，支持局域网直连、SSH 与端到端加密中转。
 
-> **项目状态：** 个人维护，持续开发中。提供 macOS、Windows、Linux 安装包，以及安卓 APK 与 iOS TestFlight。macOS 包已通过 Developer ID 签名与苹果公证，安卓包使用正式密钥签名，Windows 包暂未签名。
+> **项目状态：** 个人维护，持续开发中。提供 macOS、Windows、Linux 安装包，以及安卓 APK；iOS 版已上架 [App Store](https://apps.apple.com/app/id6812357643)（myFlowForge Assistant）。macOS 包已通过 Developer ID 签名与苹果公证，安卓包使用正式密钥签名，Windows 包暂未签名。
 
 ## 核心功能
 
@@ -221,14 +222,14 @@ Hook 是插入在阶段之间的辅助步骤，可挂在**运行前**、**某阶
 | Windows · ARM | `myFlowForge-<版本>-arm64-setup.exe` |
 | 安卓 | `myFlowForge-<版本>.apk` |
 | Linux · 无头 daemon | `myFlowForge-daemon-<版本>-linux.tar.gz` |
-| iOS | TestFlight（邀请制） |
+| iOS | [App Store](https://apps.apple.com/app/id6812357643)：搜索 **myFlowForge Assistant** |
 
 > **macOS** 安装包已签名并公证，可直接安装。
 > **Windows** 安装包暂未签名，SmartScreen 提示时请选择「更多信息 → 仍要运行」。
 >
 > 应用内置更新检查，新版本发布后会在应用内提示。
 
-**iOS** 目前通过 TestFlight 分发（邀请制），也可以在 `mobile/` 目录下使用自己的 Apple ID 编译安装。
+**iOS** 已在 [App Store](https://apps.apple.com/app/id6812357643) 上架，搜索 **myFlowForge Assistant** 即可安装，免费、无内购。中国大陆与欧盟区暂未上架，这两个地区可以在 `mobile/` 目录下使用自己的 Apple ID 编译安装。
 
 ## 快速开始
 
