@@ -3,8 +3,7 @@ import { Titlebar } from './shell/Titlebar'
 import { Sidebar } from './shell/Sidebar'
 import { useUnread } from './state/useUnread'
 import { ResizeHandle } from './shell/ResizeHandle'
-import { StatusBar } from './shell/StatusBar'
-import { LogConsole } from './shell/LogConsole'
+import { LiveLogConsole, LiveLogStatusBar } from './shell/LiveLog'
 import { TerminalPanel } from './views/terminal/TerminalPanel'
 import { LayoutToggle } from './shell/LayoutToggle'
 import './shell/dock.css'
@@ -15,7 +14,8 @@ import { useSettings } from './state/useSettings'
 import { useHost } from './state/useHostKey'
 import { usePathPicker } from './state/PathPicker'
 import type { OpenTarget } from '@shared/openers'
-import { useLogs } from './state/useLogs'
+import { useLogFeed } from './state/useLogs'
+import { createLogStore } from './state/logStore'
 import { useResizable } from './state/useResizable'
 import { usePanelDock } from './state/panelDock'
 import { useSessions } from './state/useSessions'
@@ -227,7 +227,10 @@ export function App() {
     const id = setInterval(() => setNowTick(Date.now()), 60_000)
     return () => clearInterval(id)
   }, [])
-  const { logs, busy: logBusy, clear: clearLogs } = useLogs()
+  // ★ 日志不进 App 的 state:写进外部 store,只有 LiveLogConsole / LiveLogStatusBar 订阅,
+  // 流式 token 不再让整个 App 每个字重渲一次。
+  const [logStore] = useState(createLogStore)
+  useLogFeed(logStore)
   const pluginsApi = usePlugins()
   const { usageByProvider } = pluginsApi
   const notifAgentPrev = useRef<Map<string, AgentState>>(new Map())
@@ -799,14 +802,12 @@ export function App() {
           else if (el?.classList.contains('term')) dock.setFocus('term')
         }}
       >
-        <LogConsole
+        <LiveLogConsole
+          store={logStore}
           open={logOpen}
           dual={bothPanels}
           focused={dock.focused === 'log'}
           onHandleDown={dock.startResize('log')}
-          logs={logs}
-          busy={logBusy}
-          onClear={clearLogs}
           onClose={() => { setLogOpen(false); setAgentLogFilter(null) }}
           agentFilter={agentLogFilter}
           onClearAgentFilter={() => setAgentLogFilter(null)}
@@ -827,13 +828,12 @@ export function App() {
         {/* Floating layout pill — only visible when both panels are open (CSS) */}
         <LayoutToggle layout={dock.layout} onToggle={dock.toggleLayout} />
       </div>
-      <StatusBar
+      <LiveLogStatusBar
+        store={logStore}
         providers={providers}
         usageByProvider={usageByProvider}
         sbLog={{
           open: logOpen,
-          live: logBusy,
-          has: logs.length > 0 && !logOpen,
           onToggle: () => setLogOpen(o => !o),
         }}
         sbTerm={{ open: termOpen, onToggle: () => setTermOpen(o => !o) }}

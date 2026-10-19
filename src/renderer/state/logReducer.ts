@@ -37,9 +37,27 @@ export function logStamp(d: Date): string {
   return `${h}:${m}:${s}`
 }
 
-/** Append lines and cap at MAX_LOGS (drop oldest). */
+// ★ 单行上限。日志是滚动流不是阅读器:一条流式回复/一段粘贴可以长到几百 KB,400 行 × 那个量级就是
+// 几十 MB 常驻内存外加每帧整串 diff。截到 8K 字符,尾巴挂一个「…」,完整内容在对话区里。
+export const MAX_LINE_CHARS = 8 * 1024
+const CLIP_MARK = '…'
+
+/** Truncate an over-long line body to MAX_LINE_CHARS + an ellipsis marker. */
+export function clipLineText(text: string): string {
+  return text.length > MAX_LINE_CHARS ? text.slice(0, MAX_LINE_CHARS) + CLIP_MARK : text
+}
+
+/** Append a streaming delta to a line body. Once the body has been clipped, further deltas are dropped
+ *  (the marker stays the last character instead of being buried under more text). */
+export function appendLineText(text: string, delta: string): string {
+  if (text.length > MAX_LINE_CHARS) return text
+  return clipLineText(text + delta)
+}
+
+/** Append lines (each clipped to MAX_LINE_CHARS) and cap at MAX_LOGS (drop oldest). */
 export function appendLines(existing: LogLine[], incoming: LogLine[]): LogLine[] {
-  const next = [...existing, ...incoming]
+  const clipped = incoming.map(l => l.text.length > MAX_LINE_CHARS ? { ...l, text: clipLineText(l.text) } : l)
+  const next = [...existing, ...clipped]
   return next.length > MAX_LOGS ? next.slice(next.length - MAX_LOGS) : next
 }
 
