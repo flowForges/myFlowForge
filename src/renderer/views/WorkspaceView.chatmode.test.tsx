@@ -166,6 +166,10 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
     const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb: FrameRequestCallback) => { cb(0); return 1 })
     const { container } = render(<WorkspaceView engine={idleEngine} providers={providers} workspacePath="/ws" />)
     await waitFor(() => expect(screen.getByText('新会话')).toBeInTheDocument())
+    // ★「新会话」一出现 waitFor 就可能在 DOM 变更的那个微任务里返回 —— 那时 s-1 的 passive effect(useChat 按
+    //  sessionId 重新订阅 chat 事件、会话切换时的重置)还没跑,下面那条 plan-request 会被旧的订阅按会话过滤掉。
+    //  满负荷跑全量时才撞得上。用一次空的 async act 把挂着的 effect 和已回来的 promise 全部落地。
+    await act(async () => { await Promise.resolve() })
     const scroller = container.querySelector('.chat-scroll') as HTMLDivElement
     Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 2400 })
     Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 600 })
@@ -182,6 +186,7 @@ describe('WorkspaceView 对话模式/工作流模式 inspector', () => {
       })
     })
 
+    expect(screen.getByText('执行方案')).toBeInTheDocument()
     expect(scroller.scrollTop).toBe(2400)
     raf.mockRestore()
   })
