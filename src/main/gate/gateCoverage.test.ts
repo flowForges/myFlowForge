@@ -63,6 +63,11 @@ describe('门的覆盖率', () => {
     // ★run2(工作流)还在用自己那套 laneR + `run2:event kind:'auth'`,属 LEGACY_NOTIFIED。
     //  它**有**门、也**有**通知,只是还没搬到总线上 —— 迁移的下一站就是它。
     'run/controller.ts': 'run2 自有 resolver + run2:event,属 LEGACY_NOTIFIED(待迁)',
+    // ACP 聊天的 provider:chat() 回落时调自己的 run(),门(cb.onConfirm)原样转发,没有就拒(acp/acpProvider.ts)。
+    'agents/providers/gemini.ts': '透传层:chat() 的 onConfirm 由调用方给,ACP 门和回落 run() 都只转发它',
+    'agents/providers/qwen.ts': '透传层:同 gemini',
+    'agents/providers/copilot.ts': '透传层:同 gemini',
+    'agents/providers/kimi.ts': '透传层:同 gemini',
   }
 
   /**

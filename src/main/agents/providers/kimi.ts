@@ -1,23 +1,24 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
+import { acpProviderChat, runAsChat, type AcpProviderChatSpec } from '../acp/acpProvider'
 import { createFenceScanner } from '../handoffFence'
 import { forgeChatDirective } from '../forgeChatDirective'
 
 function now() { return new Date().toISOString().slice(11, 19) }
 
-export interface KimiSpec { bin?: string; defaultModels: Model[] }
+export interface KimiSpec { bin?: string; defaultModels: Model[]; acp?: AcpProviderChatSpec['acp'] }
 
 // Kimi Code CLI (MoonshotAI/kimi-code, npm @moonshot-ai/kimi-code, binary `kimi`) — the new TypeScript
 // agent, NOT the legacy Python `kimi-cli`. Headless: `kimi -p "<prompt>" --output-format text` runs one
 // turn and streams the assistant's reply to stdout (every line IS assistant output → 'accent', captured
 // by the chat downgrade). Print mode implicitly enables --afk, auto-approving all tool calls, so no
 // permission/sandbox flags are needed for a non-interactive run. `--model` selects a model; omitting it
-// uses kimi's account default. No native chat()/resume wired yet → chat uses the run-downgrade.
+// uses kimi's account default. Chat goes through ACP (`kimi acp`) — see the chat wiring below.
 export function makeKimiProvider(spec: KimiSpec): AgentProvider {
   const bin = spec.bin ?? 'kimi'
   const defaultModels: Model[] = spec.defaultModels ?? []
-  return {
+  const provider: AgentProvider = {
     id: 'kimi',
     displayName: 'Kimi Code',
     bin,
@@ -61,4 +62,11 @@ export function makeKimiProvider(spec: KimiSpec): AgentProvider {
       return { id: task.agentId, cancel: () => killTree(child), done }
     }
   }
+  // 聊天走 ACP(`kimi acp`,kimi-code 2.2.0 的子命令;本机未装,参数取自它发布包里的命令定义)。
+  // ★`kimi acp` 不接受 `--model`(子命令只有 --login/--region),ACP 会话一律用账号默认模型。所以只有
+  //  选的就是「账号默认」时才走 ACP;选了具体模型就直接走 run()(`-p --model`)—— 悄悄换掉用户选的模型
+  //  比少一道门更糟。
+  const acpChat = acpProviderChat({ bin, args: () => ['acp'], run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
+  provider.chat = (task, cb, env) => (!task.model || task.model === 'default') ? acpChat(task, cb, env) : runAsChat((t, c, e) => provider.run(t, c, e), task, cb, env)
+  return provider
 }

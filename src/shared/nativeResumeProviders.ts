@@ -1,6 +1,7 @@
 // Providers whose chat() resumes the prior turn natively (full context preserved).
 // claude/cursor/qoder forward `--resume <id>`; codex uses `exec resume <id>`; opencode uses
-// `run -s <sessionID>`; gemini has no chat resume.
+// `run -s <sessionID>`. The ACP providers (gemini/qwen/copilot/kimi) deliberately do NOT resume —
+// every ACP chat turn is a fresh session fed the local-history preamble (see acp/acpProvider.ts).
 export const NATIVE_RESUME_PROVIDERS = new Set(['claude', 'cursor', 'qoder', 'codex', 'opencode'])
 export function providerSupportsResume(id: string): boolean { return NATIVE_RESUME_PROVIDERS.has(id) }
 

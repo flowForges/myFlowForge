@@ -53,6 +53,8 @@ export interface AcpChatOptions {
  */
 export const ACP_HANDSHAKE_MS = 30_000
 const CANCEL_GRACE_MS = 500
+/** 进程退出后,等在途响应落地的上限。 */
+const EXIT_DRAIN_MS = 300
 const STDERR_TAIL = 2000
 
 /** 起 agent 进程,把 stdio 接成 ACP 流。走 spawnAgent:进程组 + 退出兜底 + Windows .cmd 解析都在那里。 */
@@ -308,7 +310,11 @@ export function runAcpChat(spec: AcpSpec, task: ChatTask, cb: ChatCallbacks, opt
     finishUnavailable(`ACP agent 起不来: ${errMessage(e)}`)
     return { id: task.id, cancel, done }
   }
-  void transport.exited.then((r) => {
+  void transport.exited.then(async (r) => {
+    if (settled) return
+    // ★答完就退的 agent:最后那条 session/prompt 响应可能还在管道里没解析完,退出信号就先到了。
+    //  握手之后先给在途的那一轮一个落地的机会(落地了 drive 自己会正常收尾),等不到才算中途退出。
+    if (handshaken) await Promise.race([promptInFlight ?? new Promise<void>(() => {}), new Promise<void>((res) => setTimeout(res, EXIT_DRAIN_MS))])
     if (settled) return
     const why = r.message ?? `退出码 ${r.code ?? '?'}`
     if (!handshaken) finishUnavailable(`ACP agent 在握手前退出了(${why})`)

@@ -1,32 +1,42 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
+import { acpProviderChat, type AcpProviderChatSpec } from '../acp/acpProvider'
 import { createFenceScanner } from '../handoffFence'
 import { provisionForgeMcp } from '../forgeMcpProvision'
 import { forgeChatDirective } from '../forgeChatDirective'
 
 function now() { return new Date().toISOString().slice(11, 19) }
 
-export interface QwenSpec { bin?: string; defaultModels: Model[] }
+export interface QwenSpec { bin?: string; defaultModels: Model[]; acp?: AcpProviderChatSpec['acp'] }
+
+/**
+ * ACP 聊天的启动参数(qwen 0.24.7 `--help` 核过:`--acp`、`--approval-mode` 都有)。
+ * ★`--approval-mode default` 显式钉死,理由同 gemini:用户配置里的 yolo/auto-edit/auto 会让工具绕过
+ *  session/request_permission,Forge 的门必须是唯一的决定者。
+ */
+export function qwenAcpArgs(model: string): string[] {
+  return ['--acp', '--approval-mode', 'default', ...(model && model !== 'default' ? ['-m', model] : [])]
+}
 
 // Qwen Code (阿里) is a fork of gemini-cli for Qwen3-Coder — its non-interactive invocation mirrors
 // gemini's: `qwen -m <model> -p <prompt>` prints the model's reply to stdout. So this adapter is the
-// gemini one-shot adapter with id/bin swapped. No chat()/resume yet → chat mode uses the run-downgrade
-// (surfaces accent logs), same as gemini.
+// gemini one-shot adapter with id/bin swapped. Chat goes through ACP (`qwen --acp`), falling back to
+// this run() when the CLI can't speak ACP — same as gemini.
 export function makeQwenProvider(spec: QwenSpec): AgentProvider {
   const bin = spec.bin ?? 'qwen'
   const defaultModels: Model[] = spec.defaultModels ?? []
-  return {
+  const provider: AgentProvider = {
     id: 'qwen',
     displayName: 'Qwen Code',
     bin,
-    capabilities: { structuredOutput: false, permissionHook: false, pty: false, mcpTools: true },
+    capabilities: { structuredOutput: false, permissionHook: true, pty: false, mcpTools: true },
     async detect() { try { await execa(bin, ['--version']); return true } catch { return false } },
     async listModels() { return defaultModels },
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      // No chat()/resume yet → the chat downgrade (chatService.ts) drives a real turn through run()
+      // chat() goes through ACP; when the CLI can't speak ACP it falls back to driving a real turn through run()
       // with an AgentTask built from the live prompt. forgeChatDirective fails open (returns '' when
       // env.FORGE_TOOLS lacks forge_propose_plan), so prepending it here unconditionally only adds
       // the dual-path instructions for chat turns.
@@ -67,4 +77,7 @@ export function makeQwenProvider(spec: QwenSpec): AgentProvider {
       return { id: task.agentId, cancel: () => killTree(child), done }
     }
   }
+  // 聊天走 ACP;forge MCP 由 session/new 带过去,这条路不写 .qwen/settings.json。
+  provider.chat = acpProviderChat({ bin, args: (t) => qwenAcpArgs(t.model), run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
+  return provider
 }

@@ -49,7 +49,10 @@ export function providerSupportsPermissions(providerId: string): boolean {
 // (交互策略会死锁),qoder/antigravity 连逐操作协议都没有。
 // codex 的 app-server transport 其实也有门,但默认关、且不是每个操作都升门 —— 这里保守地不算进来:
 // 多提示一句「下一条消息生效」顶多是啰嗦,漏提示才会让用户以为功能坏了。
-export const OPERATION_GATED_PROVIDERS = ['claude'] as const
+// ★gemini / qwen / copilot 的聊天走 ACP(agents/acp/acpProvider.ts):工具调用经 session/request_permission
+//  逐个升门,所以算进来 —— 也因此不再给它们装 PATH shim(否则同一条 `git push` 会被问两遍)。
+//  kimi 不算:选了具体模型时它的聊天走 run()(`kimi acp` 不吃 --model),那时没有门。
+export const OPERATION_GATED_PROVIDERS = ['claude', 'gemini', 'qwen', 'copilot'] as const
 export function providerGatesEachOperation(providerId: string): boolean {
   return (OPERATION_GATED_PROVIDERS as readonly string[]).includes(providerId)
 }

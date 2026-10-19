@@ -1,28 +1,38 @@
 import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
+import { acpProviderChat, type AcpProviderChatSpec } from '../acp/acpProvider'
 import { createFenceScanner } from '../handoffFence'
 import { provisionForgeMcp } from '../forgeMcpProvision'
 import { forgeChatDirective } from '../forgeChatDirective'
 
 function now() { return new Date().toISOString().slice(11, 19) }
 
-export interface GeminiSpec { bin?: string; preArgs?: string[]; defaultModels: Model[] }
+export interface GeminiSpec { bin?: string; preArgs?: string[]; defaultModels: Model[]; acp?: AcpProviderChatSpec['acp'] }
+
+/**
+ * ACP 聊天的启动参数。★`--approval-mode default` 显式钉死:用户自己的 settings.json 里可能把默认档设成了
+ *  yolo/auto_edit,那样工具就不经 session/request_permission 直接跑了 —— Forge 的门(以及「完全访问」的
+ *  自动放行)必须是唯一的决定者。
+ */
+export function geminiAcpArgs(model: string): string[] {
+  return ['--acp', '--approval-mode', 'default', ...(model && model !== 'default' ? ['-m', model] : [])]
+}
 
 export function makeGeminiProvider(spec: GeminiSpec): AgentProvider {
   const bin = spec.bin ?? 'gemini'
   const defaultModels: Model[] = spec.defaultModels ?? []
-  return {
+  const provider: AgentProvider = {
     id: 'gemini',
     displayName: 'Gemini CLI',
     bin,
-    capabilities: { structuredOutput: false, permissionHook: false, pty: false, mcpTools: true },
+    capabilities: { structuredOutput: false, permissionHook: true, pty: false, mcpTools: true },
     async detect() { try { await execa(bin, ['--version']); return true } catch { return false } },
     async listModels() { return defaultModels },
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
-      // No chat()/resume yet → the chat downgrade (chatService.ts) drives a real turn through run()
+      // chat() goes through ACP; when the CLI can't speak ACP it falls back to driving a real turn through run()
       // with an AgentTask built from the live prompt. forgeChatDirective fails open (returns '' when
       // env.FORGE_TOOLS lacks forge_propose_plan, i.e. workflow-stage/delegate sub-agent runs), so
       // prepending it here unconditionally only adds the dual-path instructions for chat turns.
@@ -68,4 +78,8 @@ export function makeGeminiProvider(spec: GeminiSpec): AgentProvider {
       return { id: task.agentId, cancel: () => killTree(child), done }
     }
   }
+  // 聊天走 ACP(`gemini --acp`):真流式 + 逐操作确认门;握手不成透明回落到上面的 run()。
+  // ★forge MCP 由 session/new 的 mcpServers 带过去,所以这条路**不**写 .gemini/settings.json。
+  provider.chat = acpProviderChat({ bin, args: (t) => geminiAcpArgs(t.model), run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
+  return provider
 }
