@@ -214,6 +214,8 @@ describe('权限门 / 权限档', () => {
       expect(providerGatesEachOperation(id, true)).toBe(false)
       expect(providerSupportsPermissions(id, true)).toBe(false)
       expect(permissionAppliesMidRun(id, 'full', true)).toBe(false)
+      expect(permissionAppliesMidRun(id, 'full', false, 'auto')).toBe(true)
+      expect(permissionAppliesMidRun(id, 'full', false, 'readonly')).toBe(false)
     }
     expect(providerGatesEachOperation('kimi')).toBe(false)
     expect(providerSupportsPermissions('kimi')).toBe(false)

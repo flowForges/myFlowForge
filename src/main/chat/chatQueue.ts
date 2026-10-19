@@ -2,7 +2,8 @@ import type { ChatSendPayload, ChatQueueEvent } from '@shared/types'
 import { CH } from '../ipc/channels'
 
 interface QueuedTask { id: string; source: string; payload: ChatSendPayload }
-interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; activeCancel: (() => void) | null }
+// ★runningPayload 不放进 running:running 原样广播给渲染端/手机,这里只是主进程自己要查的那份载荷。
+interface Lane { busy: boolean; queue: QueuedTask[]; running: { id: string; text: string; sessionId: string; provider: string } | null; runningPayload?: ChatSendPayload; activeCancel: (() => void) | null }
 
 export type RunTurn = (payload: ChatSendPayload) => Promise<unknown>
 export type Broadcast = (channel: string, payload: unknown) => void
@@ -88,14 +89,22 @@ export class ChatQueue {
     return this.map.get(ws)?.get(sessionId)?.running?.provider ?? null
   }
 
+  /** 正在跑的那一轮**起手时**带的权限档(载荷里没带就是 undefined)。 */
+  runningPermissionMode(ws: string, sessionId: string): ChatSendPayload['permissionMode'] {
+    const lane = this.map.get(ws)?.get(sessionId)
+    return lane?.running ? lane.runningPayload?.permissionMode : undefined
+  }
+
   private runOne(ws: string, sid: string, task: QueuedTask): void {
     const lane = this.lane(ws, sid)
     lane.busy = true
     lane.running = { id: task.id, text: task.payload.text, sessionId: sid, provider: task.payload.agent }
+    lane.runningPayload = task.payload
     this.emit(ws)
     Promise.resolve(this.runTurn(task.payload)).catch(() => {}).finally(() => {
       lane.busy = false
       lane.running = null
+      lane.runningPayload = undefined
       lane.activeCancel = null
       this.pump(ws, sid)
       this.emit(ws)

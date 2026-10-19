@@ -367,6 +367,21 @@ describe('运行中改档:本轮不生效时要说一声', () => {
     expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(true)
   })
 
+  it('★ ACP provider(gemini)以自动档起手、运行中切到完全访问 → 不提示(门是我们答的,当场兑现)', async () => {
+    const { sent, call } = await startTurn('gemini')
+    await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    expect(notes(sent).some(t => t.includes('下一条消息'))).toBe(false)
+  })
+
+  it('★★ ACP provider 以只读起手、运行中切到完全访问 → 仍要提示(plan 档 + 只读拦截在起手时就钉死了)', async () => {
+    sessionState.permissionMode = 'readonly'
+    const { sent, call } = await startTurn('gemini')
+    await call(CH.sessionSetPermission)({}, { workspacePath: '/ws/a', sessionId: 's1', mode: 'full' })
+    const hint = notes(sent).find(t => t.includes('下一条消息'))
+    expect(hint).toBeTruthy()
+    expect(hint).toContain('只读')
+  })
+
   it('没有轮次在跑的时候切档 → 不提示(本来就是下一轮的事,不用啰嗦)', async () => {
     vi.resetModules()
     const { registerIpc } = await import('./handlers')

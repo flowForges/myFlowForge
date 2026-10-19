@@ -81,6 +81,10 @@ export function providerUsesCommandShim(providerId: string): boolean {
 // 在一轮【正在跑】的时候切档,这次切换能不能当场兑现?
 // 只有「会升门的 provider」+「切到完全访问」这一种组合可以。收紧(切到只读/自动)一律不行:
 // 已经起来的那个进程的沙箱改不了,而门只能用来【放行】,没法反过来收回已经授予的范围。
-export function permissionAppliesMidRun(providerId: string, mode: PermissionMode, acpUnavailable = false): boolean {
-  return mode === 'full' && providerGatesEachOperation(providerId, acpUnavailable)
+// ★`startedMode` = 这一轮起手时的档。ACP 那几家以「只读审阅」起手时,plan 档参数和「非只读一律拒」的
+//  包装(acpProvider.ts)都是起手那一刻钉死的 —— 半途切到完全访问也放不开,所以和别的 provider 一样算不兑现。
+export function permissionAppliesMidRun(providerId: string, mode: PermissionMode, acpUnavailable = false, startedMode?: PermissionMode): boolean {
+  if (mode !== 'full') return false
+  if ((OPERATION_GATED_PROVIDERS as readonly string[]).includes(providerId)) return true
+  return acpGated(providerId, acpUnavailable) && startedMode !== 'readonly'
 }
