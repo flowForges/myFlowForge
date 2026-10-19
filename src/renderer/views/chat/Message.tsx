@@ -90,7 +90,7 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
              settled reply renders as raw text for one frame (pre-wrap keeps its height close to the
              parsed version, so the swap barely shifts scroll) then upgrades to Markdown. */}
           <div className="msg-body ans">
-            {rich ? <Markdown text={msg.text} /> : <div className="ans-plain">{msg.text}</div>}
+            {rich ? <Markdown text={msg.text} streaming={streaming} /> : <div className="ans-plain">{msg.text}</div>}
             {streaming && <span className="pending" />}
           </div>
         </div>

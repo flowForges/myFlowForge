@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { CodeBlock, TableBlock, QuoteBlock } from './blocks'
 import { MdLink } from './MdLink'
@@ -143,11 +143,30 @@ export function renderInline(text: string, keyBase = 'i', allowHtml = false): Re
 // GFM 表格的分隔行(`|---|---:|`)。模块级是因为围栏分支也要用它 —— 见下面「没闭合的围栏」那段。
 const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
 
+/** 块级解析器在某个块边界上的全部状态 —— 从这里接着解析,产出与一口气解析完全相同。 */
+type ParseState = { key: number; olSeq: number }
+/** 可续点:`offset` 起的文本单独解析(带上 key/olSeq),拼在前 `count` 个块后面,等于整段解析。 */
+type ResumePoint = ParseState & { offset: number; count: number }
+
 export function renderMarkdown(text: string, allowHtml = false): ReactNode {
+  return <>{mdParser.parseBlocks(text, allowHtml).blocks}</>
+}
+
+function parseBlocks(text: string, allowHtml = false, start: ParseState = { key: 0, olSeq: 0 }): { blocks: ReactNode[]; resume: ResumePoint | null } {
   const lines = text.replace(/\r\n/g, '\n').split('\n')
+  // 各行在(规范化后)原文里的起始偏移 —— 要在下面「行中块级标签」改写 lines[i] 之前算好。
+  const starts: number[] = []
+  for (let p = 0, k = 0; k < lines.length; k++) { starts.push(p); p += lines[k].length + 1 }
   const blocks: ReactNode[] = []
   let i = 0
-  let key = 0
+  let key = start.key
+  // ★可续点:只在「段落缓冲为空、正要处理第 i 行、且第 i 行已经完整(后面还有换行)」时记。前面每个块
+  //  何时收尾,判断最多看到第 i 行(表格的下一行前瞻、列表/引用的「下一行还是不是同类」都止于此),
+  //  而第 i 行完整意味着后续增量不会再改它 —— 所以从这里续解析,和整段重解析逐字相同。
+  //  唯一的例外是「没闭合的围栏」:它读到了文末才决定怎么回退(见下面兜底),之后的位置都依赖文末,
+  //  一律不再记。
+  let resume: ResumePoint | null = null
+  let sawEof = false
   const para: string[] = []
   const inline = (t: string, kb: string): ReactNode[] => renderInline(t, kb, allowHtml)
   const flushPara = () => {
@@ -160,8 +179,9 @@ export function renderMarkdown(text: string, allowHtml = false): ReactNode {
   // 有序列表连续编号计数器:LLM 常把"1. …正文… 1. …"每项都写成 1(源码就是 1、1),被中间的段落/代码块/
   // 子列表打断成多个单项 <ol> 后各自从 1 开始 → 用户看到一堆「1.」。用一个跨块的运行计数器:同一标题下的
   // 有序项连续编号(遇标题重置);显式从 >1 开始的列表(如 3. 4.)仍尊重其起始号。
-  let olSeq = 0
+  let olSeq = start.olSeq
   while (i < lines.length) {
+    if (!sawEof && !para.length && i < lines.length - 1) resume = { offset: starts[i], key, olSeq, count: blocks.length }
     let line = lines[i]
     // 块级标签开在【行中】——模型很爱写「…结论。<div style="…">」,把信息卡片紧跟在一句话后面。
     // 块级识别只认行首(下面那条 ^ {0,3}< ),而行内 HTML 的白名单又刻意不含块级标签,于是这种写法
@@ -235,6 +255,7 @@ export function renderMarkdown(text: string, allowHtml = false): ReactNode {
       i++
       while (i < lines.length && !closeRe.test(lines[i])) { body.push(lines[i].replace(strip, '')); i++ }
       if (i >= lines.length) {
+        sawEof = true
         // 一直读到消息末尾都没等到闭合围栏。CommonMark 说这就该吃到底,但在对话里代价是「后半条回复
         // 连同表格一起消失进折叠块」—— 而这恰恰是模型漏写收尾围栏、或正文里孤零零出现一行 ``` 时的常态。
         //
@@ -349,7 +370,39 @@ export function renderMarkdown(text: string, allowHtml = false): ReactNode {
     para.push(line); i++
   }
   flushPara()
-  return <>{blocks}</>
+  return { blocks, resume }
+}
+
+/** 走一层对象调用,测试才能 spy 到解析次数与每次解析的文本量。 */
+export const mdParser = { parseBlocks }
+
+// 流式消息的增量解析。每来一个增量,只从上一个可续点(最后一个已定型的块边界)往后重解析;前面的块
+// 直接复用上一帧的 React 元素(引用不变,React 对它们也直接跳过)。单帧成本 = 末尾在写的那一两个块,
+// 而不是整条回复 —— 原来每个 token 整段重解析,一条长回复流完是 O(N²)。
+// 只接受「新文本以旧可续点之前的内容为前缀」;不是(内容被改写/开关切换)就退回整段解析。
+class StreamingParse {
+  private html = false
+  private prefix = ''
+  private blocks: ReactNode[] = []
+  private resume: ResumePoint | null = null
+
+  render(text: string, html: boolean): ReactNode {
+    const norm = text.replace(/\r\n/g, '\n')
+    const cp = this.resume && this.html === html && norm.startsWith(this.prefix) ? this.resume : null
+    const base = cp ? this.blocks.slice(0, cp.count) : []
+    const offset = cp?.offset ?? 0
+    const r = mdParser.parseBlocks(offset ? norm.slice(offset) : norm, html, cp ?? { key: 0, olSeq: 0 })
+    this.blocks = base.concat(r.blocks)
+    this.html = html
+    if (r.resume) {
+      this.resume = { ...r.resume, offset: offset + r.resume.offset, count: base.length + r.resume.count }
+      this.prefix = norm.slice(0, this.resume.offset)
+    } else if (!cp) {
+      this.resume = null
+      this.prefix = ''
+    }
+    return <>{this.blocks}</>
+  }
 }
 
 // Cross-mount parse cache. `renderMarkdown` is pure (text → React elements, which are plain reusable
@@ -375,12 +428,19 @@ export function renderMarkdownCached(text: string, allowHtml = false): ReactNode
   return node
 }
 
-export function Markdown({ text, imageBaseCwd, allowHtml }: { text: string; imageBaseCwd?: string; allowHtml?: boolean }): ReactNode {
+export function Markdown({ text, imageBaseCwd, allowHtml, streaming }: { text: string; imageBaseCwd?: string; allowHtml?: boolean; streaming?: boolean }): ReactNode {
   // 默认跟随全局设置(App 在根部 provide);显式传 allowHtml 可以就地覆盖,给不想跟随全局开关的调用方
   // 留一个口子。
   const ctxHtml = useContext(ChatHtmlCtx)
   const html = allowHtml ?? ctxHtml
-  const body = useMemo(() => renderMarkdownCached(text, html), [text, html])
+  // ★生成中不走模块级缓存:每个增量都是一段新的半截文本,原来会一条条塞进 240 格的 LRU,把已完成消息的
+  //  解析树挤出去(切回会话又得整段重解析),而这些半截文本永远不会再命中。流完(streaming 变 false)
+  //  那一帧照常走缓存解析终稿 —— 与从未流式过的同一段文本结果完全相同。
+  const live = useRef<StreamingParse | null>(null)
+  const body = useMemo(() => {
+    if (!streaming) { live.current = null; return renderMarkdownCached(text, html) }
+    return (live.current ??= new StreamingParse()).render(text, html)
+  }, [text, html, streaming])
   // Only wrap in a provider when a base is given (on-disk doc); chat bubbles render unchanged.
   return imageBaseCwd ? <MdImageBaseCtx.Provider value={imageBaseCwd}>{body}</MdImageBaseCtx.Provider> : body
 }
