@@ -46,3 +46,28 @@ export function useHostReadySeq(): number {
   }, [])
   return seq
 }
+
+/** 「取一条工具输出」的通道名(= main/ipc/channels.ts 的 `CH.chatToolOutput`)。 */
+const TOOL_OUTPUT_METHOD = 'chat:tool-output'
+
+/**
+ * 当前这台主机能不能按需取单条工具输出(方法表里有没有 `chat:tool-output`)。
+ *
+ * ★★实时事件里的大段工具输出要不要摘掉,就看这一个:2026-09-04 之前的远程主机没有这条通道,
+ *  摘掉了点开永远取不回来 —— 而事件里明明带着全文。历史那条路在这种主机上是 fail-open 的
+ *  (它不认上限字段,照旧全量下发),实时这条也必须一样。
+ * ★还不知道(快照没回来、连接中、没有 `window.forge`)一律当**取不到** = 不摘:慢一点总比少一段强。
+ */
+export function useToolOutputFetchable(): boolean {
+  const [ok, setOk] = useState(false)
+  useEffect(() => {
+    const forge = window.forge as typeof window.forge | undefined
+    if (!forge?.onHostStatus) return
+    let pushed = false
+    const apply = (s: { methods?: string[] }) => setOk(!!s.methods?.includes(TOOL_OUTPUT_METHOD))
+    const off = forge.onHostStatus((s) => { pushed = true; apply(s) })
+    void forge.hostsStatus?.().then((s) => { if (!pushed) apply(s) }).catch(() => { /* 拿不到就当取不到 */ })
+    return off
+  }, [])
+  return ok
+}

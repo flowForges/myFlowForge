@@ -10,6 +10,7 @@ import type { ChatEvent, ChatMessage, ToolActivity } from '@shared/types'
 let handler: ((e: ChatEvent) => void) | null = null
 let frames: FrameRequestCallback[] = []
 let resolveHistory: (h: ChatMessage[]) => void = () => {}
+let hostMethods: string[] = []
 
 const ev = (e: Record<string, unknown>) => handler!({ workspacePath: '/ws', sessionId: 's1', ...e } as ChatEvent)
 const runFrame = () => act(() => { const fs = frames; frames = []; fs.forEach(f => f(0)) })
@@ -17,6 +18,7 @@ const runFrame = () => act(() => { const fs = frames; frames = []; fs.forEach(f 
 beforeEach(() => {
   handler = null
   frames = []
+  hostMethods = ['chat:history', 'chat:tool-output']
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length })
   vi.stubGlobal('cancelAnimationFrame', () => {})
   ;(window as any).forge = {
@@ -25,6 +27,8 @@ beforeEach(() => {
     chatGateState: vi.fn(async () => ({ confirms: [], asks: [] })),
     onChatEvent: (cb: (e: ChatEvent) => void) => { handler = cb; return () => { handler = null } },
     onChatQueueEvent: () => () => {},
+    hostsStatus: vi.fn(async () => ({ hostId: null, label: '本机', state: { status: 'local' }, methods: hostMethods })),
+    onHostStatus: () => () => {},
   }
 })
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
@@ -103,6 +107,17 @@ describe('useChat — 实时工具输出按历史同一阈值摘掉', () => {
     const t2 = result.current.messages.find(m => m.id === 'a1')!.tools![1]
     expect(t2.output).toBe('短输出')
     expect(t2.outputOmitted).toBeUndefined()
+  })
+
+  it('★主机没有 chat:tool-output(老版本远程主机):大段输出照旧内联,不摘', async () => {
+    hostMethods = ['chat:history']
+    const { result } = await mountLoaded()
+    act(() => { ev({ type: 'tool-activity', id: 'a1', tool: tool(big) }) })
+    const t = result.current.messages.find(m => m.id === 'a1')!.tools![0]
+    expect(t.output).toBe(big)
+    expect(t.outputOmitted).toBeUndefined()
+    act(() => { ev({ type: 'done', message: { id: 'a1', who: 'ai', text: 'ok', ts: '2', tools: [tool(big)] } }) })
+    expect(result.current.messages.find(m => m.id === 'a1')!.tools![0].output).toBe(big)
   })
 
   it('done 带回来的落盘消息同样摘掉', async () => {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useHostReadySeq } from './useHostKey'
+import { useHostReadySeq, useToolOutputFetchable } from './useHostKey'
 import type { AgentContextMeta, AgentContextRef, AskAnswers, ChatConfirm, ChatEvent, ChatMessage, ChatSendPayload } from '@shared/types'
 import { phaseLabel } from '@shared/types'
 import type { PlanReq } from '../components/PlanCard'
@@ -126,6 +126,10 @@ export function useChat(
   // 重连后强制重跑下面那个 effect:它开头就把 confirms/asks 清空再从服务端拉一遍,
   // 正好就是「以服务端为准,不信本地缓存」。断线期间那边可能已经有人答了门,也可能新升了门。
   const hostReadySeq = useHostReadySeq()
+  // ★实时大段工具输出只在**这台主机取得回来**时才摘(见 useToolOutputFetchable)。走 ref:事件 effect 不必为它重订阅。
+  const toolOutputFetchable = useToolOutputFetchable()
+  const fetchableRef = useRef(toolOutputFetchable)
+  fetchableRef.current = toolOutputFetchable
 
   useEffect(() => {
     // asks 一直漏在重置之外 —— 换会话后上一个会话的提问卡还挂在新会话里(卡片本身按 workspace+session
@@ -175,9 +179,9 @@ export function useChat(
     void api.current.chatHistory(workspacePath, sessionId, DESKTOP_TOOL_OUTPUT_CAP).then((h: ChatMessage[]) => {
       if (!live) return
       setHistoryLoading(false)
-      // ★★攒着的增量**丢掉**,不是刷到 h 后面:它们都比这份历史先到,主进程那边先 publishLive 再广播,
-      //  所以它们的字已经在 h 那条在途消息里了。以前逐条 setMessages 时它们落在旧数组上、被这一句整个
-      //  盖掉;合并之后若再刷一次,同一段字会出现两遍。
+      // ★★攒着的增量**丢掉**,不是刷到 h 后面 —— 这和以前**逐字等价**:以前每个增量一到就落在旧数组上,
+      //  随后被这一句 setMessages(h) 整个盖掉;现在只是它们还没来得及落地。若改成刷到 h 后面,
+      //  h 那条在途消息(主进程 mergeLive 进来的)里已有的字会出现两遍。
       dropPendingDeltas()
       setMessages(h)
       // Restore the streaming affordance for an in-flight message folded in by the main-process live
@@ -281,7 +285,7 @@ export function useChat(
       else if (e.type === 'tool-activity') {
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
         // ★大段输出不进 state,和历史同一个阈值同一种形状(见 omitLargeToolOutput);点开时 ToolBlock 再去取。
-        const tool = omitLargeToolOutput(e.tool)
+        const tool = fetchableRef.current ? omitLargeToolOutput(e.tool) : e.tool
         const upsert = (x: ChatMessage): ChatMessage => {
           const list = x.tools ?? []
           const i = list.findIndex(t => t.id === tool.id)
@@ -317,7 +321,7 @@ export function useChat(
         // its start and can't show a 用时 total.
         // ★落盘的那条带着 tools 全文 —— 同样按阈值摘掉,点开时从磁盘取。
         const endedAt = Date.now()
-        const msg = omitLargeToolOutputs(e.message)
+        const msg = fetchableRef.current ? omitLargeToolOutputs(e.message) : e.message
         setMessages(m => upsertMsg(m, msg.id, x => ({ ...msg, startedAt: x.startedAt ?? msg.startedAt, endedAt }), () => ({ ...msg, endedAt })))
         setStreamingIds(s => { const n = new Set(s); n.delete(e.message.id); return n })
       }
