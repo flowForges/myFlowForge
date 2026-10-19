@@ -39,8 +39,21 @@ export function isPermissionMode(v: unknown): v is PermissionMode {
 // Providers whose CLI exposes a real sandbox/permission dimension. Others ignore the mode (their
 // behaviour is fixed), which the UI surfaces so the picker isn't misleading.
 export const PERMISSION_AWARE_PROVIDERS = ['claude', 'codex', 'qoder', 'antigravity', 'deepseek'] as const
-export function providerSupportsPermissions(providerId: string): boolean {
-  return (PERMISSION_AWARE_PROVIDERS as readonly string[]).includes(providerId)
+
+/**
+ * 聊天走 ACP 的 provider(agents/acp/acpProvider.ts):工具调用经 session/request_permission 逐个升门,
+ * 门由 app 答,所以权限档(含运行中提权)和 claude 一样能兑现。
+ * ★前提是这个 CLI 真讲得了 ACP。`acpUnavailable` = 本次运行里它的握手**确实失败过**(主进程按 bin 记着,
+ *  经 ProviderInfo.acpUnavailable 带到渲染端)—— 那时聊天回落到 run(),行为和以前完全一样:无门、全放行。
+ *  没试过按「讲得了」算:真讲不了时那一轮回落,PATH shim 仍在(见 providerUsesCommandShim)。
+ * ★kimi 不在这里:选了具体模型时它的聊天直接走 run()(`kimi acp` 不吃 --model),那时没有门。
+ */
+export const ACP_GATED_PROVIDERS = ['gemini', 'qwen', 'copilot'] as const
+const acpGated = (providerId: string, acpUnavailable: boolean) =>
+  !acpUnavailable && (ACP_GATED_PROVIDERS as readonly string[]).includes(providerId)
+
+export function providerSupportsPermissions(providerId: string, acpUnavailable = false): boolean {
+  return (PERMISSION_AWARE_PROVIDERS as readonly string[]).includes(providerId) || acpGated(providerId, acpUnavailable)
 }
 
 // 哪些 provider 会为每个操作升起确认门。只有它们能在【运行中】兑现权限档的【提升】—— 门是 app 答的,
@@ -49,17 +62,25 @@ export function providerSupportsPermissions(providerId: string): boolean {
 // (交互策略会死锁),qoder/antigravity 连逐操作协议都没有。
 // codex 的 app-server transport 其实也有门,但默认关、且不是每个操作都升门 —— 这里保守地不算进来:
 // 多提示一句「下一条消息生效」顶多是啰嗦,漏提示才会让用户以为功能坏了。
-// ★gemini / qwen / copilot 的聊天走 ACP(agents/acp/acpProvider.ts):工具调用经 session/request_permission
-//  逐个升门,所以算进来 —— 也因此不再给它们装 PATH shim(否则同一条 `git push` 会被问两遍)。
-//  kimi 不算:选了具体模型时它的聊天走 run()(`kimi acp` 不吃 --model),那时没有门。
-export const OPERATION_GATED_PROVIDERS = ['claude', 'gemini', 'qwen', 'copilot'] as const
-export function providerGatesEachOperation(providerId: string): boolean {
-  return (OPERATION_GATED_PROVIDERS as readonly string[]).includes(providerId)
+// ★这张表只放**原生**就有门的(不依赖握手结果);ACP 那几家见 ACP_GATED_PROVIDERS。
+export const OPERATION_GATED_PROVIDERS = ['claude'] as const
+export function providerGatesEachOperation(providerId: string, acpUnavailable = false): boolean {
+  return (OPERATION_GATED_PROVIDERS as readonly string[]).includes(providerId) || acpGated(providerId, acpUnavailable)
+}
+
+/**
+ * 这一轮要不要装 PATH shim(ipc/handlers.ts 的授权中枢)。
+ * ★★只跟「原生有门」走,**不**跟 ACP 走:ACP 握手要到 spawn 之后才知道成没成,失败了同一轮会回落到
+ *  run() —— copilot 那时是 `--allow-all-tools`,没有 shim 就等于 `git push` / `rm` 无人过问。
+ *  ACP 子进程自己会把 shim 从 env 里拆掉(acpProvider.ts → stripShimEnv),所以不会问两遍。
+ */
+export function providerUsesCommandShim(providerId: string): boolean {
+  return !(OPERATION_GATED_PROVIDERS as readonly string[]).includes(providerId)
 }
 
 // 在一轮【正在跑】的时候切档,这次切换能不能当场兑现?
 // 只有「会升门的 provider」+「切到完全访问」这一种组合可以。收紧(切到只读/自动)一律不行:
 // 已经起来的那个进程的沙箱改不了,而门只能用来【放行】,没法反过来收回已经授予的范围。
-export function permissionAppliesMidRun(providerId: string, mode: PermissionMode): boolean {
-  return mode === 'full' && providerGatesEachOperation(providerId)
+export function permissionAppliesMidRun(providerId: string, mode: PermissionMode, acpUnavailable = false): boolean {
+  return mode === 'full' && providerGatesEachOperation(providerId, acpUnavailable)
 }

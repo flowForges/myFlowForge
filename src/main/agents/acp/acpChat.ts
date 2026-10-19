@@ -6,6 +6,7 @@ import { buildChatPrompt } from '../chatStream'
 import { forgeServerSpec } from '../mcpConfig'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { confirmAllowed, type AgentResult, type AgentSession, type ChatCallbacks, type ChatTask } from '../types'
+import { acpKnownUnavailable, recordAcpHandshake } from './acpAvailability'
 import { acpGateReq, forgeAcpMcpServers, mergeToolState, permissionResponse, toolOutputText, CANCELLED_PERMISSION, type AcpToolState } from './acpMap'
 
 // ── 通用 ACP(Agent Client Protocol v1)聊天客户端 ─────────────────────────────────────────
@@ -41,6 +42,8 @@ export interface AcpChatOptions {
   open?: (spec: AcpSpec, onStderr: (chunk: string) => void) => AcpTransport
   /** 给了就由它接回落信号(并且**不再**走 cb.onError);没给就把 AcpUnavailableError 交给 cb.onError。 */
   onUnavailable?: (err: AcpUnavailableError) => void
+  /** 握手成功(initialize 回来、协议版本对)。 */
+  onHandshake?: () => void
   /** 握手(起进程 → initialize 回来)最长等多久。 */
   handshakeMs?: number
   /** 取消时 session/cancel 发出去之后,最多等多久再杀进程树。 */
@@ -264,6 +267,7 @@ export function runAcpChat(spec: AcpSpec, task: ChatTask, cb: ChatCallbacks, opt
     }
     if (settled) return
     handshaken = true
+    opts.onHandshake?.()
     if (stderrTail.trim()) for (const line of stderrTail.split('\n')) { const t = line.trim(); if (t) cb.onStatus?.(t) }
     stderrTail = ''
 
@@ -314,7 +318,11 @@ export function runAcpChat(spec: AcpSpec, task: ChatTask, cb: ChatCallbacks, opt
     if (settled) return
     // ★答完就退的 agent:最后那条 session/prompt 响应可能还在管道里没解析完,退出信号就先到了。
     //  握手之后先给在途的那一轮一个落地的机会(落地了 drive 自己会正常收尾),等不到才算中途退出。
-    if (handshaken) await Promise.race([promptInFlight ?? new Promise<void>(() => {}), new Promise<void>((res) => setTimeout(res, EXIT_DRAIN_MS))])
+    if (handshaken) {
+      let drain: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([promptInFlight ?? new Promise<void>(() => {}), new Promise<void>((res) => { drain = setTimeout(res, EXIT_DRAIN_MS) })])
+      clearTimeout(drain)
+    }
     if (settled) return
     const why = r.message ?? `退出码 ${r.code ?? '?'}`
     if (!handshaken) finishUnavailable(`ACP agent 在握手前退出了(${why})`)
@@ -329,16 +337,25 @@ export function runAcpChat(spec: AcpSpec, task: ChatTask, cb: ChatCallbacks, opt
  * cancel 打到当前那条,done 来自最终跑完的那条。
  *
  * ★回落只发生在握手阶段,那时还一个字都没流给用户,所以换路不会出现半截重复的回答。
+ * ★握手结果按 `spec.bin` 记下来(acpAvailability.ts):本次运行里已知讲不了 ACP 的 bin 直接走回落,不再试。
  */
 export function chatWithAcpFallback(spec: AcpSpec, task: ChatTask, cb: ChatCallbacks, fallback: () => AgentSession, opts: Omit<AcpChatOptions, 'onUnavailable'> & { onFallback?: (err: AcpUnavailableError) => void } = {}): AgentSession {
   let resolveDone!: (r: AgentResult) => void
   const done = new Promise<AgentResult>((r) => { resolveDone = r })
   let current: AgentSession | null = null
   let fellBack = false
+  if (acpKnownUnavailable(spec.bin)) {
+    try { return fallback() } catch (e) {
+      cb.onError(e instanceof Error ? e : new Error(errMessage(e)))
+      return { id: task.id, cancel: () => {}, done: Promise.resolve({ ok: false, summary: errMessage(e) }) }
+    }
+  }
   const acp = runAcpChat(spec, task, cb, {
     ...opts,
+    onHandshake: () => { recordAcpHandshake(spec.bin, true); opts.onHandshake?.() },
     onUnavailable: (err) => {
       fellBack = true
+      recordAcpHandshake(spec.bin, false)
       opts.onFallback?.(err)
       try {
         current = fallback()

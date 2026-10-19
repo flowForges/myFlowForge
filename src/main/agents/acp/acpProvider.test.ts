@@ -6,10 +6,15 @@ import { makeGeminiProvider } from '../providers/gemini'
 import { makeQwenProvider } from '../providers/qwen'
 import { makeCopilotProvider } from '../providers/copilot'
 import { makeKimiProvider } from '../providers/kimi'
-import { providerGatesEachOperation } from '@shared/permissions'
+import { providerGatesEachOperation, providerSupportsPermissions, providerUsesCommandShim, permissionAppliesMidRun } from '@shared/permissions'
+import { shimEnv, shimmedPath } from '../commandShim'
+import { acpKnownUnavailable, withAcpAvailability } from './acpAvailability'
 import { fakeTransport, standardAgent, recorder, send } from './acpTestKit'
 import type { AcpSpec } from './acpChat'
 import type { AgentProvider, ChatTask } from '../types'
+import { resetAcpAvailability } from './acpAvailability'
+
+beforeEach(() => resetAcpAvailability())
 
 // provider 层:chat() 用对了 ACP 开关、没碰 per-project MCP 落盘、不续接会话、握手不成就回落到 run()。
 
@@ -114,11 +119,109 @@ describe('ACP 聊天 — 握手不成就回落到 run()', () => {
   })
 })
 
-describe('权限门', () => {
-  it('gemini / qwen / copilot 的聊天逐操作升门;kimi 不算(选具体模型时走 run(),没有门)', () => {
-    expect(providerGatesEachOperation('gemini')).toBe(true)
-    expect(providerGatesEachOperation('qwen')).toBe(true)
-    expect(providerGatesEachOperation('copilot')).toBe(true)
+/** 照 ipc/handlers.ts 的做法装好 shim 的 env(PATH 前插 shim 目录 + shimEnv)。 */
+function shimmed(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const shimDir = join(dir, 'run', 'shims')
+  return { ...base, PATH: shimmedPath(shimDir, base.PATH), ...shimEnv(join(dir, 'run'), shimDir, base.ZDOTDIR) }
+}
+
+describe('PATH shim:ACP 那条拆掉,回落那条留着', () => {
+  it('ACP 子进程拿到的 env 里没有 shim(PATH 去掉 shim 目录、ZDOTDIR 还原),调用方那份不动', async () => {
+    const env = shimmed({ PATH: '/usr/bin:/bin', ZDOTDIR: '/home/me/.zsh' })
+    for (const make of [
+      (acp: never) => makeCopilotProvider({ bin: 'copilot', defaultModels: [], acp }),
+      (acp: never) => makeGeminiProvider({ bin: 'gemini', defaultModels: [], acp }),
+      (acp: never) => makeKimiProvider({ bin: 'kimi', defaultModels: [], acp }),
+    ]) {
+      const { spec } = await acpTurn(make as never, {}, env)
+      expect(spec.env.PATH).toBe('/usr/bin:/bin')
+      expect(spec.env.ZDOTDIR).toBe('/home/me/.zsh')
+      expect(spec.env.FORGE_SHIM_DIR).toBeUndefined()
+      expect(spec.env.FORGE_ORIG_ZDOTDIR).toBeUndefined()
+    }
+    expect(env.FORGE_SHIM_DIR).toBe(join(dir, 'run', 'shims'))
+    expect(env.PATH!.startsWith(join(dir, 'run', 'shims'))).toBe(true)
+  })
+
+  it('copilot 握手不成回落到 run() → 那一轮仍带着 shim', async () => {
+    const envCli = join(dir, 'env.js')
+    writeFileSync(envCli, `#!/usr/bin/env node\nprocess.stdout.write('SHIM=' + (process.env.FORGE_SHIM_DIR || '') + '\\n')\nprocess.stdout.write('PATH0=' + process.env.PATH.split(':')[0] + '\\n')\n`)
+    chmodSync(envCli, 0o755)
+    const { transport } = fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('unknown method') }))
+    const p = makeCopilotProvider({ bin: envCli, defaultModels: [], acp: { open: () => transport } })
+    const { ev, cb } = recorder()
+    const env = shimmed({ ...process.env })
+    await p.chat!({ id: 'c1', prompt: 'hi', model: 'default', cwd: dir }, cb, env).done
+    const shimDir = join(dir, 'run', 'shims')
+    expect(ev).toEqual([`text:SHIM=${shimDir}`, `text:\nPATH0=${shimDir}`, 'done'])
+  })
+})
+
+describe('ACP 可用性按 bin 记住', () => {
+  it('握手失败一次 → 本次运行里同一个 bin 不再试 ACP,直接回落;成功的 bin 不受影响', async () => {
+    const opens: string[] = []
+    const bad = () => fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('nope') })).transport
+    const p = makeQwenProvider({ bin: cli, defaultModels: [], acp: { open: (spec) => { opens.push(spec.bin); return bad() } } })
+    const turn = async () => { const { ev, cb } = recorder(); await p.chat!({ id: 'q', prompt: 'hi', model: 'm', cwd: dir }, cb, process.env).done; return ev }
+    expect(await turn()).toEqual(['text:第一行', 'text:\n第二行', 'done'])
+    expect(acpKnownUnavailable(cli)).toBe(true)
+    expect(await turn()).toEqual(['text:第一行', 'text:\n第二行', 'done'])
+    expect(opens).toEqual([cli])   // 第二轮没再起 ACP
+    await acpTurn((acp) => makeGeminiProvider({ bin: 'gemini', defaultModels: [], acp }))
+    expect(acpKnownUnavailable('gemini')).toBe(false)
+  })
+
+  it('detect 结果按 bin 补上 acpUnavailable', async () => {
+    const { transport } = fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('nope') }))
+    await makeCopilotProvider({ bin: cli, defaultModels: [], acp: { open: () => transport } }).chat!({ id: 'c', prompt: 'hi', model: 'default', cwd: dir }, recorder().cb, process.env).done
+    const list = withAcpAvailability([{ id: 'copilot' }, { id: 'gemini' }], { copilot: { bin: cli }, gemini: { bin: 'gemini' } })
+    expect(list).toEqual([{ id: 'copilot', acpUnavailable: true }, { id: 'gemini' }])
+  })
+})
+
+describe('只读审阅档', () => {
+  it('gemini / qwen 起手就是 plan 审批档', async () => {
+    const g = await acpTurn((acp) => makeGeminiProvider({ bin: 'gemini', defaultModels: [], acp }), { model: 'gemini-2.5-pro', permissionMode: 'readonly' })
+    expect(g.spec.args).toEqual(['--acp', '--approval-mode', 'plan', '-m', 'gemini-2.5-pro'])
+    const q = await acpTurn((acp) => makeQwenProvider({ bin: 'qwen', defaultModels: [], acp }), { model: 'default', permissionMode: 'readonly' })
+    expect(q.spec.args).toEqual(['--acp', '--approval-mode', 'plan'])
+  })
+
+  it('非只读的工具门直接拒(不去问人);agent 自己标为 read 的照常交给上层', async () => {
+    const asked: string[] = []
+    const outcomes: unknown[] = []
+    const { transport } = fakeTransport(standardAgent(async (cx, sid) => {
+      for (const [id, kind] of [['w', 'edit'], ['r', 'read']] as const) {
+        const res = await cx.request('session/request_permission', { sessionId: sid, toolCall: { toolCallId: id, title: id, kind }, options: [{ optionId: 'ok', name: 'ok', kind: 'allow_once' }, { optionId: 'no', name: 'no', kind: 'reject_once' }] })
+        outcomes.push(res.outcome)
+      }
+      return { stopReason: 'end_turn' }
+    }))
+    const p = makeCopilotProvider({ bin: 'copilot', defaultModels: [], acp: { open: () => transport } })
+    const { cb } = recorder({ onConfirm: async (req) => { asked.push(req.title); return 'allow' } })
+    await p.chat!({ id: 'c', prompt: 'hi', model: 'default', cwd: dir, permissionMode: 'readonly' }, cb, {}).done
+    expect(asked).toEqual(['r'])
+    expect(outcomes).toEqual([{ outcome: 'selected', optionId: 'no' }, { outcome: 'selected', optionId: 'ok' }])
+  })
+})
+
+describe('权限门 / 权限档', () => {
+  it('gemini / qwen / copilot:没试过或握手成功 → 逐操作门 + 支持权限档;已知讲不了 ACP → 和以前一样', () => {
+    for (const id of ['gemini', 'qwen', 'copilot']) {
+      expect(providerGatesEachOperation(id)).toBe(true)
+      expect(providerSupportsPermissions(id)).toBe(true)
+      expect(permissionAppliesMidRun(id, 'full')).toBe(true)
+      expect(providerGatesEachOperation(id, true)).toBe(false)
+      expect(providerSupportsPermissions(id, true)).toBe(false)
+      expect(permissionAppliesMidRun(id, 'full', true)).toBe(false)
+    }
     expect(providerGatesEachOperation('kimi')).toBe(false)
+    expect(providerSupportsPermissions('kimi')).toBe(false)
+    expect(providerSupportsPermissions('claude', true)).toBe(true)
+  })
+
+  it('PATH shim 不看 ACP:只有原生有门的 claude 免装', () => {
+    for (const id of ['gemini', 'qwen', 'copilot', 'kimi', 'cursor', 'codex']) expect(providerUsesCommandShim(id)).toBe(true)
+    expect(providerUsesCommandShim('claude')).toBe(false)
   })
 })

@@ -730,7 +730,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             <button
               className={'cb-btn cb-perm perm-' + permissionMode}
               data-menu="permMenu"
-              title={providerSupportsPermissions(agentId) ? '权限模式:agent 能自主执行到什么程度 · ⇧⇥ 切换' : '当前编码代理不支持权限档,按其默认行为运行 · ⇧⇥ 切换'}
+              title={providerSupportsPermissions(agentId, agent?.acpUnavailable) ? '权限模式:agent 能自主执行到什么程度 · ⇧⇥ 切换' : '当前编码代理不支持权限档,按其默认行为运行 · ⇧⇥ 切换'}
               onClick={() => setOpenMenu(openMenu === 'perm' ? null : 'perm')}
             >
               {SHIELD}
@@ -738,7 +738,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
               {CHEV_DD}
             </button>
             <div className="menu-pop perm-pop">
-              <div className="menu-label">权限模式{providerSupportsPermissions(agentId) ? '' : ' · 当前代理不支持'}</div>
+              <div className="menu-label">权限模式{providerSupportsPermissions(agentId, agent?.acpUnavailable) ? '' : ' · 当前代理不支持'}</div>
               {PERMISSION_MODES.map(pm => (
                 <button
                   className={'menu-item' + (pm.id === permissionMode ? ' on' : '')}

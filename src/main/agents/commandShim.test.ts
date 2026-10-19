@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, readdirSync, statSync, existsSync } 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SHIMMED_COMMANDS } from '@shared/authPolicy'
-import { writeShimDir, shimmedPath, realBinaryPath, shimEnv } from './commandShim'
+import { writeShimDir, shimmedPath, realBinaryPath, shimEnv, stripShimEnv } from './commandShim'
 
 /**
  * PATH shim 目录:Forge 在 spawn 时把它插到 PATH 最前面,agent 跑名单里的命令就先经过我们。
@@ -112,5 +112,15 @@ describe('ZDOTDIR —— 让 shim 活过登录 shell', () => {
     const e = shimEnv(dir, d)
     expect(e.ZDOTDIR).toBe(join(dir, 'zdotdir'))
     expect(e.FORGE_SHIM_DIR).toBe(d)
+  })
+
+  it('stripShimEnv 把 shimmedPath + shimEnv 装上的东西原样拆掉;没装过就不动', () => {
+    const d = write()
+    const withPrev: NodeJS.ProcessEnv = { PATH: shimmedPath(d, '/usr/bin:/bin'), ...shimEnv(dir, d, '/home/me/.zsh'), KEEP: '1' }
+    expect(stripShimEnv(withPrev)).toEqual({ PATH: '/usr/bin:/bin', ZDOTDIR: '/home/me/.zsh', KEEP: '1' })
+    const noPrev: NodeJS.ProcessEnv = { PATH: shimmedPath(d, '/usr/bin'), ...shimEnv(dir, d) }
+    expect(stripShimEnv(noPrev)).toEqual({ PATH: '/usr/bin' })
+    const plain = { PATH: '/usr/bin', ZDOTDIR: '/z' }
+    expect(stripShimEnv({ ...plain })).toEqual(plain)
   })
 })

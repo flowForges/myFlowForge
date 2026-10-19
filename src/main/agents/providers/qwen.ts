@@ -2,6 +2,7 @@ import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { acpProviderChat, type AcpProviderChatSpec } from '../acp/acpProvider'
+import type { PermissionMode } from '@shared/permissions'
 import { createFenceScanner } from '../handoffFence'
 import { provisionForgeMcp } from '../forgeMcpProvision'
 import { forgeChatDirective } from '../forgeChatDirective'
@@ -13,10 +14,10 @@ export interface QwenSpec { bin?: string; defaultModels: Model[]; acp?: AcpProvi
 /**
  * ACP 聊天的启动参数(qwen 0.24.7 `--help` 核过:`--acp`、`--approval-mode` 都有)。
  * ★`--approval-mode default` 显式钉死,理由同 gemini:用户配置里的 yolo/auto-edit/auto 会让工具绕过
- *  session/request_permission,Forge 的门必须是唯一的决定者。
+ *  session/request_permission,Forge 的门必须是唯一的决定者。「只读审阅」档映射成 `plan`(`--help`:Analyze only)。
  */
-export function qwenAcpArgs(model: string): string[] {
-  return ['--acp', '--approval-mode', 'default', ...(model && model !== 'default' ? ['-m', model] : [])]
+export function qwenAcpArgs(model: string, mode?: PermissionMode): string[] {
+  return ['--acp', '--approval-mode', mode === 'readonly' ? 'plan' : 'default', ...(model && model !== 'default' ? ['-m', model] : [])]
 }
 
 // Qwen Code (阿里) is a fork of gemini-cli for Qwen3-Coder — its non-interactive invocation mirrors
@@ -78,6 +79,6 @@ export function makeQwenProvider(spec: QwenSpec): AgentProvider {
     }
   }
   // 聊天走 ACP;forge MCP 由 session/new 带过去,这条路不写 .qwen/settings.json。
-  provider.chat = acpProviderChat({ bin, args: (t) => qwenAcpArgs(t.model), run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
+  provider.chat = acpProviderChat({ bin, args: (t) => qwenAcpArgs(t.model, t.permissionMode), run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
   return provider
 }

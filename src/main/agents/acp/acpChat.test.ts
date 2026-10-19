@@ -1,8 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { RequestError, type RequestPermissionResponse } from '@agentclientprotocol/sdk'
 import { runAcpChat, chatWithAcpFallback, AcpUnavailableError, isAcpUnavailable, type AcpSpec } from './acpChat'
 import type { ConfirmDecision, ConfirmReq } from '../types'
 import { fakeTransport, standardAgent, recorder, send, SPEC, TASK } from './acpTestKit'
+import { resetAcpAvailability } from './acpAvailability'
+
+beforeEach(() => resetAcpAvailability())
 
 describe('runAcpChat — 映射', () => {
   it('正文 / 思考 → delta,会话 id 上报,轮末 onDone;握手声明不提供 fs/terminal', async () => {

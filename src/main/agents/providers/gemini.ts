@@ -2,6 +2,7 @@ import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { acpProviderChat, type AcpProviderChatSpec } from '../acp/acpProvider'
+import type { PermissionMode } from '@shared/permissions'
 import { createFenceScanner } from '../handoffFence'
 import { provisionForgeMcp } from '../forgeMcpProvision'
 import { forgeChatDirective } from '../forgeChatDirective'
@@ -13,10 +14,10 @@ export interface GeminiSpec { bin?: string; preArgs?: string[]; defaultModels: M
 /**
  * ACP 聊天的启动参数。★`--approval-mode default` 显式钉死:用户自己的 settings.json 里可能把默认档设成了
  *  yolo/auto_edit,那样工具就不经 session/request_permission 直接跑了 —— Forge 的门(以及「完全访问」的
- *  自动放行)必须是唯一的决定者。
+ *  自动放行)必须是唯一的决定者。「只读审阅」档映射成 `plan`(`--help`:read-only mode),和 claude 的 plan 同理。
  */
-export function geminiAcpArgs(model: string): string[] {
-  return ['--acp', '--approval-mode', 'default', ...(model && model !== 'default' ? ['-m', model] : [])]
+export function geminiAcpArgs(model: string, mode?: PermissionMode): string[] {
+  return ['--acp', '--approval-mode', mode === 'readonly' ? 'plan' : 'default', ...(model && model !== 'default' ? ['-m', model] : [])]
 }
 
 export function makeGeminiProvider(spec: GeminiSpec): AgentProvider {
@@ -80,6 +81,6 @@ export function makeGeminiProvider(spec: GeminiSpec): AgentProvider {
   }
   // 聊天走 ACP(`gemini --acp`):真流式 + 逐操作确认门;握手不成透明回落到上面的 run()。
   // ★forge MCP 由 session/new 的 mcpServers 带过去,所以这条路**不**写 .gemini/settings.json。
-  provider.chat = acpProviderChat({ bin, args: (t) => geminiAcpArgs(t.model), run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
+  provider.chat = acpProviderChat({ bin, args: (t) => geminiAcpArgs(t.model, t.permissionMode), run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
   return provider
 }

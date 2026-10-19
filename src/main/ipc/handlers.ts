@@ -5,7 +5,8 @@ import { capToolOutput, capToolOutputs, readCap } from '../chat/toolOutputCap'
 import { createTerminalService, type TerminalService } from '../terminal/terminalService'
 import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
-import { providerSupportsPermissions, providerGatesEachOperation, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
+import { providerSupportsPermissions, providerUsesCommandShim, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
+import { acpKnownUnavailable, withAcpAvailability } from '../agents/acp/acpAvailability'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
 import { userMessageOf } from '../chat/userMessage'
 import { expandTilde } from '../config/paths'
@@ -431,8 +432,10 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // Cached: concurrent callers share one probe, results live 60s. `force` (重新检测) re-probes AND
   // honors the result (trustPersisted:false) so it can clear a genuinely-gone CLI; a normal detect keeps
   // last-known-good agents sticky so a slow cold-start probe never makes them vanish.
+  // ★acpUnavailable 不进 detect 缓存,每次现取:它是本次运行里聊天握手的结果,随时可能变(见 acpAvailability.ts)。
   on(CH.agentsDetect, (_e, opts?: { force?: boolean }) =>
-    cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true }))
+    cachedDetectProviders(providers, buildAgentEnv({ proxy: readSettings().agentProxy }), { force: opts?.force === true, trustPersisted: opts?.force !== true })
+      .then((list) => withAcpAvailability(list, providers)))
   // "有新版" 提示(只提示):安装版本由 detect 探测,这里查各 CLI 的 npm latest 并比对。走 termProxy(undici
   // 不认 HTTP_PROXY 环境变量),失败/未知包静默略过 —— 提示是锦上添花,绝不能拖垮或报错阻塞设置页。
   on(CH.agentsCliUpdates, (_e, installed: { id: string; version?: string }[]) =>
@@ -857,7 +860,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // 不提示的两种情况:① claude 切到完全访问,门重读后当场就兑现了;② cursor 这类压根不吃权限档的
     // provider —— 对它们说「下一条消息生效」是骗人的,它永远不生效(picker 上已经标了"不支持")。
     const running = chatQueue.runningProvider(wsPath, sessionId)
-    if (running && providerSupportsPermissions(running) && !permissionAppliesMidRun(running, mode)) {
+    const runningAcpDown = !!running && acpKnownUnavailable(providers[running]?.bin)
+    if (running && providerSupportsPermissions(running, runningAcpDown) && !permissionAppliesMidRun(running, mode, runningAcpDown)) {
       const who = providers[running]?.displayName ?? running
       emitNote(wsPath, sessionId,
         `🛡 已切到「${permissionModeLabel(mode)}」· ${who} 不支持运行中改档，当前这一轮仍按「${permissionModeLabel(prev)}」跑完，下一条消息才生效。`)
@@ -954,7 +958,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       }
       return confirm(req)
     }
-    // Pre-run consent gate: providers with no sandbox dimension (cursor/gemini/opencode/qwen/copilot)
+    // Pre-run consent gate: providers with no sandbox dimension (cursor/opencode; gemini/qwen/copilot only once
+    // their ACP handshake is known to have failed this app session — otherwise ACP gates each operation)
     // ignore the permission档 and run with blanket full access (--force/--allow-all-tools/--yolo). Make
     // that explicit — ask ONCE per (workspace, provider), remember an allow. 'full' mode = the user
     // already chose full access, so skip. Interactive/sandboxed providers (claude/codex/qoder) don't hit this.
@@ -963,7 +968,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // to the id if the provider object isn't available.
     const gateProviderId = payload.agent
     const gateLabel = provider?.displayName ?? payload.agent
-    if (!providerSupportsPermissions(gateProviderId) && payload.permissionMode !== 'full'
+    if (!providerSupportsPermissions(gateProviderId, acpKnownUnavailable(provider?.bin)) && payload.permissionMode !== 'full'
         && !isFullAccessAcked(payload.workspacePath, gateProviderId)) {
       const decision = await confirm({
         title: `${gateLabel} 无法逐操作确认，本次将以「完全访问」运行（可修改任意文件、可联网）。是否授权？（本工作区将记住）`,
@@ -1088,7 +1093,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
      *  用户自己开终端跑 claude 完全不受影响 —— 这是和「往 ~/.claude/settings.json 插 hook」最大的区别。
      */
     let authBroker: Awaited<ReturnType<typeof startAuthBroker>> | null = null
-    if (!providerGatesEachOperation(payload.agent) && process.platform !== 'win32') {
+    if (providerUsesCommandShim(payload.agent) && process.platform !== 'win32') {
       try {
         // ★★socket 路径不能自己拼:darwin 的 sun_path 只有 104 字节,而且 bind() 是**截断**不是报错 ——
         //  工作区深一点就会拿到一个谁也连不上的 socket。bridgeAddress 早就把这条规矩解决过一遍
@@ -1101,10 +1106,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
           runDir: store.runDir, socketPath: sockPath, sessionId: payload.sessionId,
           nodePath: process.execPath, shimJs: join(__dirname, 'agentShim.js'),
         })
+        const prevZdotdir = env.ZDOTDIR
         env.PATH = shimmedPath(shimDir, env.PATH)
         // ★★光改 PATH 不够:登录 shell(`zsh -lc`,codex 实测在用)会被 path_helper 重排,
         //  把我们的目录挤到第 13 位。ZDOTDIR 让我们的 rc 在那之后再顶回第一位。见 commandShim.ts。
-        Object.assign(env, shimEnv(store.runDir, shimDir))
+        Object.assign(env, shimEnv(store.runDir, shimDir, prevZdotdir))
       } catch (e) {
         // ★装不上就**不装**,照常跑 —— 这一层是加固,不该成为「聊天起不来」的新理由。
         logError('auth-broker', '装不上 PATH shim,本轮不拦截', String((e as Error)?.message ?? e))

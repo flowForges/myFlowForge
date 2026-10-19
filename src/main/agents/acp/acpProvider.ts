@@ -1,4 +1,5 @@
 import { appLog } from '../../log/appLog'
+import { stripShimEnv } from '../commandShim'
 import type { AgentCallbacks, AgentSession, AgentTask, ChatCallbacks, ChatTask } from '../types'
 import { chatWithAcpFallback, type AcpChatOptions } from './acpChat'
 
@@ -34,11 +35,22 @@ export interface AcpProviderChatSpec {
  */
 export function acpProviderChat(spec: AcpProviderChatSpec) {
   return (task: ChatTask, cb: ChatCallbacks, env: NodeJS.ProcessEnv): AgentSession => {
-    const acpEnv = spec.env ? spec.env({ ...env }) : env
+    // ★ACP 这条路每个工具调用都经 session/request_permission 升门,PATH shim 再拦一遍就是同一件事问两遍 ——
+    //  所以 ACP 子进程拿的是拆掉 shim 的副本;回落的 run() 用原样那份 env,shim 照常兜底(那时没有门)。
+    const base = stripShimEnv({ ...env })
+    const acpEnv = spec.env ? spec.env(base) : base
     return chatWithAcpFallback(
       { bin: spec.bin, args: spec.args(task), env: acpEnv, cwd: task.cwd },
       { ...task, sessionId: undefined },
-      { ...cb, onSession: () => {} },
+      {
+        ...cb,
+        onSession: () => {},
+        // ★「只读审阅」档:agent 没把自己标成 read/search 的工具一律拒(失败即拦)。gemini/qwen 起手已经是
+        //  plan 档,这里是兜底;copilot 没有能核实的只读开关,靠的就是这一道。
+        onConfirm: cb.onConfirm && task.permissionMode === 'readonly'
+          ? (req) => req.readOnly ? cb.onConfirm!(req) : Promise.resolve('deny' as const)
+          : cb.onConfirm,
+      },
       () => runAsChat(spec.run, task, cb, env),
       {
         ...spec.acp,

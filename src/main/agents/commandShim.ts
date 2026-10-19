@@ -95,9 +95,33 @@ function writeZshDotdir(runDir: string, shimDir: string): void {
   for (const f of ['.zshenv', '.zprofile', '.zshrc']) writeFileSync(join(dir, f), line(f))
 }
 
-/** 给 agent 的额外环境变量。★和 shim 目录成对使用,少一半都不成立。 */
-export function shimEnv(runDir: string, shimDir: string): Record<string, string> {
-  return { ZDOTDIR: join(runDir, 'zdotdir'), FORGE_SHIM_DIR: shimDir }
+/**
+ * 给 agent 的额外环境变量。★和 shim 目录成对使用,少一半都不成立。
+ * `prevZdotdir`:装 shim 之前的 ZDOTDIR,记下来好让 `stripShimEnv` 原样还回去。
+ */
+export function shimEnv(runDir: string, shimDir: string, prevZdotdir?: string): Record<string, string> {
+  const e: Record<string, string> = { ZDOTDIR: join(runDir, 'zdotdir'), FORGE_SHIM_DIR: shimDir }
+  if (prevZdotdir !== undefined) e.FORGE_ORIG_ZDOTDIR = prevZdotdir
+  return e
+}
+
+/**
+ * 把 `shimmedPath` + `shimEnv` 装上去的东西拆掉(原地改,返回同一个对象):PATH 里去掉 shim 目录、
+ * ZDOTDIR 还原、FORGE_SHIM_DIR / FORGE_ORIG_ZDOTDIR 删掉。没装过 shim 就什么都不动。
+ *
+ * ★给「这一轮会逐操作升门」的子进程用(ACP 聊天):门已经问过一遍,shim 再拦同一条 `git push` 就是问两遍。
+ *  同一轮回落到 run() 时用的是**没拆过**的那份 env,shim 照常兜底。
+ */
+export function stripShimEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const dir = env.FORGE_SHIM_DIR
+  if (!dir) return env
+  const skip = resolve(dir)
+  env.PATH = (env.PATH ?? '').split(delimiter).filter((seg) => seg && resolve(seg) !== skip).join(delimiter)
+  if (env.FORGE_ORIG_ZDOTDIR !== undefined) env.ZDOTDIR = env.FORGE_ORIG_ZDOTDIR
+  else delete env.ZDOTDIR
+  delete env.FORGE_ORIG_ZDOTDIR
+  delete env.FORGE_SHIM_DIR
+  return env
 }
 
 /** 单引号包起来,内部的单引号按 POSIX 的老办法转义。路径里有空格是常态(macOS 的 Application Support)。 */
