@@ -145,8 +145,9 @@ const SEP = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/
 
 /** 块级解析器在某个块边界上的全部状态 —— 从这里接着解析,产出与一口气解析完全相同。 */
 type ParseState = { key: number; olSeq: number }
-/** 可续点:`offset` 起的文本单独解析(带上 key/olSeq),拼在前 `count` 个块后面,等于整段解析。 */
-type ResumePoint = ParseState & { offset: number; count: number }
+/** 可续点:`offset` 起的文本单独解析(带上 key/olSeq),拼在前 `count` 个块后面,等于整段解析。
+ *  `guard` = 第 i 行(含换行)的结束偏移:前面的块何时收尾看过第 i 行,所以复用的前提是到这里为止都没变。 */
+type ResumePoint = ParseState & { offset: number; guard: number; count: number }
 
 export function renderMarkdown(text: string, allowHtml = false): ReactNode {
   return <>{mdParser.parseBlocks(text, allowHtml).blocks}</>
@@ -181,7 +182,7 @@ function parseBlocks(text: string, allowHtml = false, start: ParseState = { key:
   // 有序项连续编号(遇标题重置);显式从 >1 开始的列表(如 3. 4.)仍尊重其起始号。
   let olSeq = start.olSeq
   while (i < lines.length) {
-    if (!sawEof && !para.length && i < lines.length - 1) resume = { offset: starts[i], key, olSeq, count: blocks.length }
+    if (!sawEof && !para.length && i < lines.length - 1) resume = { offset: starts[i], guard: starts[i] + lines[i].length + 1, key, olSeq, count: blocks.length }
     let line = lines[i]
     // 块级标签开在【行中】——模型很爱写「…结论。<div style="…">」,把信息卡片紧跟在一句话后面。
     // 块级识别只认行首(下面那条 ^ {0,3}< ),而行内 HTML 的白名单又刻意不含块级标签,于是这种写法
@@ -379,7 +380,7 @@ export const mdParser = { parseBlocks }
 // 流式消息的增量解析。每来一个增量,只从上一个可续点(最后一个已定型的块边界)往后重解析;前面的块
 // 直接复用上一帧的 React 元素(引用不变,React 对它们也直接跳过)。单帧成本 = 末尾在写的那一两个块,
 // 而不是整条回复 —— 原来每个 token 整段重解析,一条长回复流完是 O(N²)。
-// 只接受「新文本以旧可续点之前的内容为前缀」;不是(内容被改写/开关切换)就退回整段解析。
+// 只接受「新文本以旧可续点那一行(含)之前的内容为前缀」;不是(内容被改写/开关切换)就退回整段解析。
 class StreamingParse {
   private html = false
   private prefix = ''
@@ -395,8 +396,10 @@ class StreamingParse {
     this.blocks = base.concat(r.blocks)
     this.html = html
     if (r.resume) {
-      this.resume = { ...r.resume, offset: offset + r.resume.offset, count: base.length + r.resume.count }
-      this.prefix = norm.slice(0, this.resume.offset)
+      this.resume = { ...r.resume, offset: offset + r.resume.offset, guard: offset + r.resume.guard, count: base.length + r.resume.count }
+      // ★前缀守卫必须包含第 i 行本身,不能只到 offset:流式中途也会整段改写(useChat 的 assistant-replace),
+      //  「- a\n- b\n\nx」→「- a\n- b\n- c」时前 offset 个字符没变,但列表该续上第三项,复用旧块就错了。
+      this.prefix = norm.slice(0, this.resume.guard)
     } else if (!cp) {
       this.resume = null
       this.prefix = ''

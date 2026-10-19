@@ -39,6 +39,15 @@ describe('流式 Markdown —— 输出与非流式一致', () => {
     const src = '前言\n\n<div style="padding:4px">\n\n卡片 **内容**\n\n</div>\n\n结论。<div>\n尾巴\n</div>\n\n1. 收尾'
     streamAndCompare(src, 2, true)
   })
+  it.each([
+    ['列表', '- a\n- b\n\nx', '- a\n- b\n- c'],
+    ['引用', '> a\n> b\n\nx', '> a\n> b\n> c'],
+    ['表格', '| h | k |\n|---|---|\n| 1 | 2 |\n\nx', '| h | k |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |'],
+  ])('★ 流式中途改写了可续点那一行(assistant-replace)—— %s 不能复用按旧行收尾的块', (_n, before, after) => {
+    const host = render(<Markdown text={before} streaming />)
+    host.rerender(<Markdown text={after} streaming />)
+    expect(host.container.innerHTML).toBe(settled(after))
+  })
   it('非前缀式改写(文本被整体替换)时退回整段解析,结果仍正确', () => {
     const host = render(<Markdown text={'- a\n- b\n\n段落一\n\n段落二'} streaming />)
     host.rerender(<Markdown text={'# 全新\n\n1. x\n\n正文'} streaming />)
