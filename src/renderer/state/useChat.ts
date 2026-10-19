@@ -267,6 +267,15 @@ export function useChat(
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
         setMessages(m => upsertMsg(m, e.id, x => ({ ...x, text: e.text }), () => ({ ...blankAi(e.id), text: e.text })))
       }
+      // 「你的选择」锚在这条在途回复里答的那个位置(ChatMessage.answers)。上面的 flushDeltas() 已经把
+      // 攒着的增量先落进正文 —— `at` 是主进程那边的正文长度,两边必须对得上。
+      else if (e.type === 'answer-note') {
+        setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
+        const add = (x: ChatMessage): ChatMessage => x.answers?.some(a => a.at === e.at && a.text === e.text)
+          ? x
+          : { ...x, answers: [...(x.answers ?? []), { at: e.at, text: e.text }] }
+        setMessages(m => upsertMsg(m, e.id, add, () => add(blankAi(e.id))))
+      }
       // 这一轮换阶段了(在想 ↔ 在自动压缩)。只改 think 折叠块的标题 —— 压缩期间 provider 一个 token
       // 都不吐,不换标题的话界面和卡死没有区别。收尾时 done 会用落盘的那条消息整个替换掉它。
       else if (e.type === 'phase') {

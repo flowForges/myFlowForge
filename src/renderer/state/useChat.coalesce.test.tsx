@@ -143,3 +143,29 @@ describe('useChat — 实时工具输出按历史同一阈值摘掉', () => {
     expect(load).toHaveBeenCalledWith('a1', 't1')
   })
 })
+
+// ★「你的选择」锚在在途回复里答的那个位置。answer-note 是非增量事件:攒着的增量先落地,锚点才对得上正文。
+describe('useChat — answer-note', () => {
+  it('攒着的增量先刷进正文,再挂上选择;之后的增量接在后面', async () => {
+    const { result } = await mountLoaded()
+    act(() => {
+      ev({ type: 'assistant-start', id: 'a1', model: 'm' })
+      ev({ type: 'assistant-delta', id: 'a1', text: '先问一句。' })
+      ev({ type: 'answer-note', id: 'a1', at: 5, text: '📝 你的选择' })
+      ev({ type: 'assistant-delta', id: 'a1', text: '接着做。' })
+    })
+    runFrame()
+    const a1 = result.current.messages.find(m => m.id === 'a1')!
+    expect(a1.text).toBe('先问一句。接着做。')
+    expect(a1.answers).toEqual([{ at: 5, text: '📝 你的选择' }])
+  })
+
+  it('同一条重复到达不画两遍', async () => {
+    const { result } = await mountLoaded()
+    act(() => {
+      ev({ type: 'answer-note', id: 'a1', at: 0, text: 'X' })
+      ev({ type: 'answer-note', id: 'a1', at: 0, text: 'X' })
+    })
+    expect(result.current.messages.find(m => m.id === 'a1')!.answers).toEqual([{ at: 0, text: 'X' }])
+  })
+})

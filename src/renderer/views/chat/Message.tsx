@@ -1,4 +1,4 @@
-import { useState, useEffect, startTransition, memo } from 'react'
+import { useState, useEffect, useMemo, startTransition, memo } from 'react'
 import type { ChatMessage, DesignDocRef } from '@shared/types'
 import { fmtMsgTime, fmtMsgTimeFull } from '@shared/relTime'
 import { ThinkBlock } from './ThinkBlock'
@@ -7,6 +7,7 @@ import { DelegateBlock } from './DelegateBlock'
 import { ToolBlock } from './ToolBlock'
 import { TurnTimer } from './TurnTimer'
 import { Markdown } from './markdown'
+import { splitByAnswers } from '@shared/chat/answerSegments'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const FILE_ICON = (
@@ -53,6 +54,9 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
   useEffect(() => {
     if (heavy && !rich) startTransition(() => setRich(true))
   }, [heavy, rich])
+  // 「你的选择」锚在正文里答的那个位置(ChatMessage.answers):正文在锚点处切开,选择插进去。
+  // 没有选择时为 null,走原来那一段正文的路径,结构一点不变。
+  const segments = useMemo(() => (msg.answers?.length ? splitByAnswers(msg.text, msg.answers) : null), [msg.text, msg.answers])
   const copy = () => {
     navigator.clipboard?.writeText(msg.text).then(() => {
       setCopied(true)
@@ -90,7 +94,13 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
              settled reply renders as raw text for one frame (pre-wrap keeps its height close to the
              parsed version, so the swap barely shifts scroll) then upgrades to Markdown. */}
           <div className="msg-body ans">
-            {rich ? <Markdown text={msg.text} streaming={streaming} /> : <div className="ans-plain">{msg.text}</div>}
+            {segments
+              ? segments.map((seg, i) => seg.kind === 'answer'
+                  ? <div className="ans-note" key={i}><Markdown text={seg.text} /></div>
+                  : rich
+                    ? <Markdown key={i} text={seg.text} streaming={streaming && i === segments.length - 1} />
+                    : <div className="ans-plain" key={i}>{seg.text}</div>)
+              : rich ? <Markdown text={msg.text} streaming={streaming} /> : <div className="ans-plain">{msg.text}</div>}
             {streaming && <span className="pending" />}
           </div>
         </div>

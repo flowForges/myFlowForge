@@ -28,7 +28,8 @@ vi.mock('../workspace/workspaceList', () => ({ listWorkspaces: vi.fn(() => []) }
 vi.mock('../workspace/workspaceRun', () => ({ workspaceToStartRunOpts: vi.fn() }))
 
 const sendTurnMock = vi.fn()
-vi.mock('../chat/chatService', () => ({ sendTurn: (...a: any[]) => sendTurnMock(...a), history: vi.fn(() => []) }))
+// addTurnAnswer → false:sendTurn 是 mock,没有在途轮次可锚,「你的选择」走单独一条记录那条路。
+vi.mock('../chat/chatService', () => ({ sendTurn: (...a: any[]) => sendTurnMock(...a), history: vi.fn(() => []), addTurnAnswer: vi.fn(() => false) }))
 vi.mock('../skills/installSkill', () => ({ removeWorkspaceSkill: vi.fn() }))
 vi.mock('../chat/chatStore', () => ({ appendMessage: vi.fn(), readMessages: vi.fn(() => []), sessionLastMessageMtime: vi.fn(() => undefined) }))
 vi.mock('../chat/delegate', () => ({ makeRunDelegate: () => vi.fn(), cancelWorkspaceDelegates: vi.fn() }))

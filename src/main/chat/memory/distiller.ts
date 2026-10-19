@@ -3,6 +3,7 @@ import { readSessions, setSessionSummary } from '../sessionStore'
 import { readWorkspaceMemory, writeWorkspaceMemory, readSystemMemory, writeSystemMemory, mergeMemory } from './memoryStore'
 import { DISTILL_OLDEST_N } from './tokenEstimate'
 import type { ChatMessage } from '@shared/types'
+import { inlineAnswers } from '@shared/chat/answerSegments'
 
 // A one-shot LLM call: send a single prompt with no resume/history, return the full reply text.
 // Injected by chatService, which picks a distill model VALID FOR THE SESSION'S PROVIDER (see
@@ -11,7 +12,7 @@ import type { ChatMessage } from '@shared/types'
 export interface DistillDeps { oneShot: (prompt: string) => Promise<string> }
 
 function renderTranscript(messages: ChatMessage[]): string {
-  return messages.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${m.text}`).join('\n')
+  return messages.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${inlineAnswers(m.text, m.answers)}`).join('\n')
 }
 
 // fail-open wrapper: run fn, swallow any error (never block the chat turn).

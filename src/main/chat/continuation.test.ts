@@ -81,3 +81,22 @@ describe('★★「这条是谁发的」绝不进上下文', () => {
     vi.resetModules()
   })
 })
+
+describe('「你的选择」挪进 ChatMessage.answers 之后仍在换代理的历史里', () => {
+  // 它原来是一条单独落档的消息,自然在历史前缀里;现在锚在回复上,默认 `read` 得把它插回原位。
+  it('选择按锚点插回那条回复的正文', async () => {
+    vi.resetModules()
+    vi.doMock('./chatStore', () => ({
+      readMessages: () => [
+        { id: 'u1', who: 'user', text: '做个页面', ts: 't' },
+        { id: 'a1', who: 'ai', text: '先问一句。好的,用 A。', ts: 't', answers: [{ at: 5, text: '📝 你的选择\n\n**用哪个?**\n- A' }] },
+      ],
+      readSessions: () => ({ sessions: [] }),
+    }))
+    const { buildLocalHistoryPreamble: build } = await import('./continuation')
+    const p = build('/ws', 's-1')
+    expect(p).toContain('先问一句。\n\n📝 你的选择\n\n**用哪个?**\n- A\n\n好的,用 A。')
+    vi.doUnmock('./chatStore')
+    vi.resetModules()
+  })
+})

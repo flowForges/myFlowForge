@@ -81,7 +81,8 @@ vi.mock('../workspace/workspaceList', () => ({
 
 vi.mock('../chat/chatService', () => ({
   sendTurn: vi.fn(),
-  history: vi.fn(() => [])
+  history: vi.fn(() => []),
+  addTurnAnswer: vi.fn(() => false),
 }))
 
 vi.mock('../skills/installSkill', () => ({
@@ -1002,5 +1003,42 @@ describe('★这条是谁发的(ChatMessage.via)', () => {
     fn({ emit: () => {} }, payload)
     await tick()
     expect(seen[0].via).toBeUndefined()
+  })
+})
+
+// ★「你的选择」要落在问题被回答的位置:这一轮还在跑时交给 chatService 锚进在途回复,
+//  不再另起一条追加在会话末尾的系统消息(那条会排在这一轮后续输出的**下面**,读起来是倒着的)。
+describe('chat:resolve 的「你的选择」落在哪', () => {
+  const Q = [{ question: '用哪个?', header: '选', options: [{ label: 'A', description: '' }], multiSelect: false }]
+  const setup = async (inTurn: boolean) => {
+    const { registerIpc } = await import('./handlers')
+    const sent: [string, any][] = []
+    const calls = tableCalls(registerIpc((ch: string, p: unknown) => sent.push([ch, p]), {}, fakeHost()))
+    const get = (ch: string) => calls.find((c: any[]) => c[0] === ch)![1]
+    const svc = await import('../chat/chatService') as any
+    svc.sendTurn.mockReset().mockImplementation((_p: any, deps: any) => deps.confirm({ title: '请回答', questions: Q }))
+    svc.addTurnAnswer.mockReset().mockReturnValue(inTurn)
+    get(CH.chatSend)({}, { workspacePath: '/ws/a', sessionId: 's1', agent: 'claude', agentLabel: 'C', model: 'm', text: 'x', attachments: [] })
+    await new Promise(r => setTimeout(r, 0))
+    const req = sent.find(([c, p]) => c === CH.chatEvent && p.type === 'confirm-request')![1]
+    await get(CH.chatResolve)({}, { id: req.id, decision: 'allow', answers: { '用哪个?': ['A'] }, workspacePath: '/ws/a' })
+    return { sent, svc }
+  }
+  const noteTexts = (sent: [string, any][]) => sent
+    .filter(([c, p]) => c === CH.chatEvent && p.type === 'done')
+    .map(([, p]) => p.message.text as string)
+
+  it('一轮还在跑:交给 addTurnAnswer,不再发单独的系统消息', async () => {
+    const { sent, svc } = await setup(true)
+    expect(svc.addTurnAnswer).toHaveBeenCalledWith('/ws/a', 's1', expect.stringContaining('📝 你的选择'))
+    expect(svc.addTurnAnswer.mock.calls[0][2]).toContain('用哪个?')
+    expect(noteTexts(sent).some(t => t.includes('你的选择'))).toBe(false)
+    expect(appendMessageMock.mock.calls.some(c => String(c[2]?.text).includes('你的选择'))).toBe(false)
+  })
+
+  it('没有在途轮次(addTurnAnswer 返回 false):照旧留一条单独的记录', async () => {
+    const { sent } = await setup(false)
+    expect(noteTexts(sent).some(t => t.includes('📝 你的选择'))).toBe(true)
+    expect(appendMessageMock.mock.calls.some(c => String(c[2]?.text).includes('📝 你的选择'))).toBe(true)
   })
 })

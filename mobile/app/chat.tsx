@@ -951,7 +951,7 @@ export default function Chat() {
                     {/* 思考 → 工具 → 子代理 → 正文。和桌面端 Message.tsx 的次序一致,别两边各排各的。 */}
                     <ToolCards tools={m.tools} fetchOutput={makeFetchOutput(m.id)} />
                     <SubagentCards cards={m.subagents} />
-                    <MessageBody text={m.text} streaming={m.streaming} />
+                    <MessageBody text={m.text} streaming={m.streaming} answers={m.answers} />
                     {/* 委派批次挂在正文**下面**:主轮次已经答完了,它们还在后台跑。 */}
                     <DelegateCards batches={m.delegates} />
                     {m.error ? (

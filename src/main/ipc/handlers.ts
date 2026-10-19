@@ -42,7 +42,7 @@ import { currentGrowthSignal } from '../tokens/growthSignalRef'
 import { workflowNameTaken } from '../../shared/workflowName'
 import { listWorkspaces } from '../workspace/workspaceList'
 import { readHomeStats } from '../workspace/homeStats'
-import { sendTurn, history } from '../chat/chatService'
+import { sendTurn, history, addTurnAnswer } from '../chat/chatService'
 import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages } from '../chat/chatStore'
 import { withLastMessageAt } from '../chat/sessionsView'
@@ -131,6 +131,7 @@ import { resolveFileRef } from '../fs/fileRef'
 import { readImageRef } from '../fs/imageRef'
 import { listDir, defaultRoots } from '../fs/browse'
 import { askAnswerNote } from '@shared/chat/askAnswerNote'
+import { inlineAnswers } from '@shared/chat/answerSegments'
 
 /**
  * 附件落盘时避开重名:`image.png` 已存在就依次试 `image-2.png`、`image-3.png`……返回真正能用的名字。
@@ -1435,7 +1436,11 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     //  正是这条被漏掉的原因。
     if (answered) {
       const note = askAnswerNote(gate?.questions, a.answers, a.response)
-      if (note && gateSid) emitNote(a.workspacePath, gateSid, note)
+      // ★★这一轮还在跑 → 锚进在途回复里**答的那个位置**(见 chatService.addTurnAnswer)。
+      //  另起一条系统消息的话它追加在会话末尾,而这一轮之后吐的字仍然流进上面那条回复 ——
+      //  光标和后续输出全排在「你的选择」之前,读起来是倒着的。
+      //  不在聊天轮次里的门(工作流/委派)没有在途回复可锚,照旧单独留一条。
+      if (note && gateSid && !addTurnAnswer(a.workspacePath, gateSid, note)) emitNote(a.workspacePath, gateSid, note)
     }
     // 别的设备答的门,要在对话里留个痕 —— 否则电脑前的人只看到卡片凭空消失,不知道发生了什么。
     // 本机自己答的不提示:那会给单机用户的每一次确认都加一条噪音。
@@ -1629,7 +1634,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const id = `req-sum-${Date.now()}`
     // 超时/出错 → null(不是「已经流出来的半截」)。半截需求会被当成「需求原文」发给每个阶段的 agent,
     // 比回退到啰嗦但完整的原始对话摘录糟得多。见 requirementSummary.ts 顶部。
-    return summarizeRequirement(msgs.map(m => ({ who: m.who === 'user' ? '用户' : '助手', text: m.text })), {
+    return summarizeRequirement(msgs.map(m => ({ who: m.who === 'user' ? '用户' : '助手', text: inlineAnswers(m.text, m.answers) })), {
       summarize: (prompt) => new Promise<string | null>((resolve) => {
         let acc = ''
         let done = false

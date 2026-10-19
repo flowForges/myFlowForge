@@ -270,6 +270,9 @@ export interface DelegateBatch {
   brief?: string        // optional context brief the main agent prepared, prepended to each sub-agent's prompt
 }
 
+/** 一条锚在助手正文里的「你的选择」。见 ChatMessage.answers。 */
+export interface ChatAnswerAnchor { at: number; text: string }
+
 export interface ChatMessage {
   id: string
   who: 'user' | 'ai'
@@ -295,6 +298,12 @@ export interface ChatMessage {
   // The main agent's OWN tool calls this turn (Read/Bash/Edit/…) — the "执行" block. Persisted so the
   // execution trace survives reload. See ToolActivity.
   tools?: ToolActivity[]
+  /**
+   * 这一轮里用户在「请回答」门上做的选择(askAnswerNote 的那段 markdown),按**答的那一刻**正文已有
+   * 多长(`at`)锚在正文里。渲染时正文在锚点处切开、把选择插进去 —— 于是「你的选择」出现在问题被
+   * 回答的位置,之后代理吐的字都在它下面。`at` 可能大于正文长度(assistant-replace 改写过),渲染时夹紧。
+   */
+  answers?: ChatAnswerAnchor[]
   context?: AgentContextMeta
   files?: Attachment[]
   ts: string
@@ -437,6 +446,8 @@ export type ChatEvent = { workspacePath: string; sessionId: string } & (
   // questions 非空 = 这不是「批准执行」而是「请回答」(claude AskUserQuestion),渲染成可点的选项卡片。
   | { type: 'confirm-request'; id: string; title: string; where?: string; questions?: AskQuestion[] }
   | { type: 'confirm-resolved'; id: string }
+  // 用户在这一轮的「请回答」门上做了选择:锚在 `id` 那条在途回复的正文第 `at` 个字符处(见 ChatMessage.answers)。
+  | { type: 'answer-note'; id: string; at: number; text: string }
   // A delegate sub-agent's forge_ask, surfaced as a select (options) / input (no options) card.
   | { type: 'ask-request'; id: string; title: string; options?: { t: string; d: string }[]; agentName?: string }
   | { type: 'ask-resolved'; id: string }

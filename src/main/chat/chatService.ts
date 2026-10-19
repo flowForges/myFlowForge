@@ -4,7 +4,7 @@ import { appendMessage, readMessages, readSession, readWatermark, writeSession, 
 import { setLive, clearLive } from './liveTurns'
 import { setNativeSubagents } from './nativeSubagentRegistry'
 import type { AgentProvider, AgentSession, ConfirmReq, ConfirmDecision } from '../agents/types'
-import type { ChatSendPayload, ChatMessage, ChatEvent, SubagentCard, ToolActivity, TurnPhase, ContextUsage } from '@shared/types'
+import type { ChatSendPayload, ChatMessage, ChatEvent, ChatAnswerAnchor, SubagentCard, ToolActivity, TurnPhase, ContextUsage } from '@shared/types'
 import { phaseLabel } from '@shared/types'
 import { buildMemoryPreamble } from './memory/preamble'
 import { inlineHtmlPreamble } from './inlineHtmlDirective'
@@ -46,6 +46,23 @@ function mkId(prefix: string) { return `${prefix}-${Date.now()}-${++seq}` }
 function now() { return new Date().toISOString() }
 
 export function history(wsPath: string, sessionId: string): ChatMessage[] { return readMessages(wsPath, sessionId) }
+
+/**
+ * 正在跑的那一轮(按 ws+sid)收「你的选择」的入口。见 addTurnAnswer。
+ * ★★为什么不再由 handlers 另起一条系统消息:那条追加在会话**末尾**,而这一轮答完之后吐的字仍然流进
+ *  **上面**那条在途回复 —— 光标和后续输出全排在「你的选择」之前,读起来是倒着的。
+ */
+const turnAnswerSinks = new Map<string, (note: string) => boolean>()
+const turnKey = (ws: string, sid: string) => `${ws}\u0000${sid}`
+
+/**
+ * 把一条「你的选择」记进 (ws, sid) 正在跑的那一轮:锚在此刻正文的末尾,之后的输出都在它下面。
+ * 没有在途轮次(或那一轮已经收尾)返回 false —— 调用方自己回落成单独一条记录。
+ */
+export function addTurnAnswer(ws: string, sid: string, note: string): boolean {
+  const sink = turnAnswerSinks.get(turnKey(ws, sid))
+  return sink ? sink(note) : false
+}
 
 // Installed skills (incl. home/plugin, e.g. superpowers) cached for the session — used to flag skills
 // the agent names in its reply. Skills change rarely, so a one-time scan is fine.
@@ -158,6 +175,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     emit({ workspacePath: ws, sessionId: sid, type: 'assistant-start', id: aid, model: label, context })
     let text = ''
     let think = ''
+    // 这一轮里用户做的选择,锚在正文里(见 ChatMessage.answers / addTurnAnswer)。
+    const answers: ChatAnswerAnchor[] = []
+    const answerList = () => (answers.length ? [...answers] : undefined)
     let lastUsage: ContextUsage | undefined
     // 本轮累计 token 成本(input+output),用于用量汇总账本。一个 turn 里可能有多段 result 用量,累加之。
     let turnTokens: { input: number; output: number } | undefined
@@ -206,7 +226,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const publishLive = () => setLive(ws, sid, {
       id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: '', startedAt,
       think: { label: phaseLabel(phase), steps: think ? think.split('\n').map(s => s.trim()).filter(Boolean) : [] },
-      context, usage: lastUsage, subagents: subagentList(), tools: toolList(),
+      context, usage: lastUsage, subagents: subagentList(), tools: toolList(), answers: answerList(),
     })
     /**
      * 被「完全访问」自动放行的那些工具调用的 id。
@@ -329,6 +349,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // last successful value re-triggers the incremental catch-up next time (a little overlap is fine).
     const bumpWatermark = () => { if (provider.chat) writeWatermark(ws, sid, payload.agent, readMessages(ws, sid).length) }
     const finishOk = (elapsed?: number): ChatMessage => {
+      closeAnswers()
       // Fold in skills the agent explicitly NAMED in its reply (home/plugin skills the workspace scan +
       // path-regex miss, e.g. superpowers/brainstorming) so the context panel reflects what it used.
       context = mergeAgentContext(context, { skills: mentionedSkills(text + '\n' + think, cachedInstalledSkills()), rules: [], mcps: [] })
@@ -355,6 +376,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         tokens,
         subagents: subagentList(),
         tools: toolList(),
+        answers: answerList(),
         startedAt, endedAt: Date.now(),
       }
       appendMessage(ws, sid, msg)
@@ -368,13 +390,14 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       return msg
     }
     const finishErr = (err: Error): ChatMessage => {
+      closeAnswers()
       finalizeRunning('error')
       // ★★错误原文常常是 provider 的**内部话术**,对人没有意义。最典型的是 codex 的
       //  `Reconnecting... 2/5` —— 那是它自己的重试计数器,用户看到只会问「这是什么意思」
       //  (2026-09-17 真机)。能翻成一句「照着做」的就翻,翻不了原样显示。
       //  ★翻译里**必须带上原话**:翻译给人看,原话给排查用,少哪个都不行。
       const why = explainCodexError(err.message) ?? err.message
-      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${why}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text: text || `错误: ${why}`, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), answers: answerList(), startedAt, endedAt: Date.now() }
       // 事件带上落档的 msg。`text` 非空时这一轮其实是「答完了但收尾报错」(provider 先流出了答案,再以非零
       // 退出/stderr 收尾),app 显示的就是这段正文;不带 msg 的话下游只看得到 err.message,只能一律当彻底
       // 失败处理 —— 机器人就是这么把一次有答案的回合报成 ❌ 的。
@@ -385,8 +408,9 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
       return msg
     }
     const finishAborted = (): ChatMessage => {
+      closeAnswers()
       finalizeRunning('error')
-      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), startedAt, endedAt: Date.now() }
+      const msg: ChatMessage = { id: aid, who: 'ai', text, model: label, provider: payload.agent, ts: now(), subagents: subagentList(), tools: toolList(), answers: answerList(), startedAt, endedAt: Date.now() }
       appendMessage(ws, sid, msg)
       clearLive(ws, sid, aid)
       emit({ workspacePath: ws, sessionId: sid, type: 'done', message: msg })
@@ -404,6 +428,24 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     // 「停止」时要立刻把伪流式还没放完的文本一次倒完 —— 否则用户喊了停,字还在一个字一个字往外冒。
     // 用 ref 而不是直接引用:wrapSession 定义在这里,而被包的回调要到下面才建出来。
     let flushPaced: (() => void) | null = null
+
+    // 「你的选择」入口:这一轮开着时登记,任何收尾路径(finishOk/Err/Aborted)都先关掉它。
+    let answersOpen = true
+    const answerSink = (note: string): boolean => {
+      // ★先把伪流式还扣着的字放完:那些是**答之前**就说出来的,锚点得落在它们后面。
+      flushPaced?.()
+      if (!answersOpen) return false   // 放完恰好让这一轮收了尾 → 交给调用方回落
+      const a: ChatAnswerAnchor = { at: text.length, text: note }
+      answers.push(a)
+      publishLive()
+      emit({ workspacePath: ws, sessionId: sid, type: 'answer-note', id: aid, at: a.at, text: a.text })
+      return true
+    }
+    const closeAnswers = () => {
+      answersOpen = false
+      if (turnAnswerSinks.get(turnKey(ws, sid)) === answerSink) turnAnswerSinks.delete(turnKey(ws, sid))
+    }
+    turnAnswerSinks.set(turnKey(ws, sid), answerSink)
     const wrapSession = (session: AgentSession): AgentSession => ({
       id: session.id,
       done: session.done,

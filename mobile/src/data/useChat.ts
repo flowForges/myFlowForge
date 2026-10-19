@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BODY_LINE_CAP } from '../ui/toolParse'
 import { CH } from '../../../src/main/ipc/channels'
-import type { Attachment, ChatMessage, DelegateBatch, SubagentCard, ToolActivity } from '../../../src/shared/types'
+import type { Attachment, ChatAnswerAnchor, ChatMessage, DelegateBatch, SubagentCard, ToolActivity } from '../../../src/shared/types'
 import { useConn } from '../net/conn'
 import { queuedFor, type QueuedItem } from './queueLane'
 
@@ -9,7 +9,7 @@ import { queuedFor, type QueuedItem } from './queueLane'
  * 一个会话的消息流:先拉历史,再跟着 `chat:event` 往下长。
  *
  * 手机端**有意只认一小撮事件**(user / assistant-start / delta / replace / think / tool-activity /
- * subagent / delegate-* / done / error)。run2 那一大套先不画 —— 不是忘了,是分批做。
+ * subagent / delegate-* / answer-note / done / error)。run2 那一大套先不画 —— 不是忘了,是分批做。
  * 没认的事件一律忽略,绝不当成错误。
  */
 
@@ -42,6 +42,8 @@ export type Msg = {
    * 没有就是「在那台电脑上敲的」。纯展示,不复制、不进上下文(见 `ChatMessage.via`)。
    */
   via?: string
+  /** 这一轮里用户做的选择,锚在正文里答的那个位置(见 `ChatMessage.answers`)。 */
+  answers?: ChatAnswerAnchor[]
   error?: string
 }
 
@@ -59,6 +61,7 @@ const fromHistory = (m: ChatMessage): Msg => ({
   subagents: m.subagents,
   startedAt: m.startedAt,
   via: m.via,
+  answers: m.answers,
 })
 
 type Evt = {
@@ -67,6 +70,7 @@ type Evt = {
   type?: string
   id?: string
   text?: string
+  at?: number
   model?: string
   message?: ChatMessage
   error?: string
@@ -215,6 +219,17 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
         case 'assistant-replace':
           if (e.id) upsert(e.id, (m) => ({ ...m, text: e.text ?? '', streaming: true }))
           break
+        // 「你的选择」锚在这条在途回复里答的那个位置 —— 之后流进来的字都画在它下面。
+        case 'answer-note': {
+          if (!e.id || typeof e.at !== 'number' || !e.text) break
+          const a = { at: e.at, text: e.text }
+          upsert(
+            e.id,
+            (m) => (m.answers?.some((x) => x.at === a.at && x.text === a.text) ? m : { ...m, answers: [...(m.answers ?? []), a] }),
+            { id: e.id, who: 'ai', text: '', think: '', streaming: true },
+          )
+          break
+        }
         case 'think-delta':
           if (e.id)
             upsert(e.id, (m) => ({ ...m, think: m.think + (e.text ?? '') }), {

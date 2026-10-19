@@ -126,6 +126,11 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .md-link-copy svg { width: 12px; height: 12px; }
 /* CopyButton 自带「复制 / 已复制」文字,行内链接这里只要图标 —— 有文字就把句子撑变形了。 */
 .md-link-copy > span { display: none; }
+/* 「你的选择」锚在回复正文里答的那个位置(Message.tsx 的 segments)。内容和样式就是原来那条系统记录的
+   markdown,这里只给上下留出段落间距,让它和前后的回答分开。 */
+.msg-body .ans-note { margin: 12px 0; }
+.msg-body .ans-note:first-child { margin-top: 0; }
+.msg-body .ans-note:last-child { margin-bottom: 0; }
 .msg-body hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
 .msg-body blockquote { border-left: 2px solid var(--border-2); padding-left: 12px; margin: 8px 0; color: var(--muted); }
 .msg-body pre { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 11px 13px; overflow-x: auto; margin: 8px 0 12px; }

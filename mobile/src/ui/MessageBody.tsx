@@ -10,6 +10,8 @@ import { synStyle } from './synStyle'
 import { htmlFallbackNote, parseHtmlSubset } from './htmlParse'
 import { parseMarkdown } from './mdParse'
 import { HtmlRender } from './HtmlRender'
+import { splitByAnswers } from '@shared/chat/answerSegments'
+import type { ChatAnswerAnchor } from '@shared/types'
 
 /** 正文最终渲染成的三种块:代码 / 内嵌 HTML / 普通文字。 */
 type Block = Chunk | Extract<CodeChunk, { kind: 'code' }>
@@ -191,8 +193,34 @@ function Caret() {
   return <Animated.Text style={{ color: c.accent, fontSize: 15, opacity: op }}>▍</Animated.Text>
 }
 
-export function MessageBody({ text, streaming }: { text: string; streaming?: boolean }) {
-  const c = useC()
+/**
+ * 代理正文。`answers`(这一轮里用户做的选择)按锚点插回正文里答的那个位置 ——
+ * 前文 → 选择 → 后文,和桌面端 `Message.tsx` 同一个切法(`@shared/chat/answerSegments`)。
+ */
+export function MessageBody({ text, streaming, answers }: { text: string; streaming?: boolean; answers?: ChatAnswerAnchor[] }) {
+  const segments = useMemo(() => (answers?.length ? splitByAnswers(text, answers) : null), [text, answers])
+  return (
+    <View style={{ paddingLeft: 26 }}>
+      {segments ? (
+        segments.map((seg, i) =>
+          seg.kind === 'answer' ? (
+            <View key={i} style={st.answer}>
+              <BodyBlocks text={seg.text} />
+            </View>
+          ) : (
+            <BodyBlocks key={i} text={seg.text} />
+          ),
+        )
+      ) : (
+        <BodyBlocks text={text} />
+      )}
+      {streaming ? <Caret /> : null}
+    </View>
+  )
+}
+
+/** 一段正文切成代码 / 内嵌 HTML / markdown 三种块画出来。 */
+function BodyBlocks({ text }: { text: string }) {
   /**
    * ★**先切围栏、再在剩下的文字里找内嵌 HTML**,顺序不能反:HTML 那一支是按「行首是不是块级标签」
    *  判的,反过来的话 ```html 围栏里的 `<div>` 会被它整段折起来、还扣上「手机端不渲染」——
@@ -204,7 +232,7 @@ export function MessageBody({ text, streaming }: { text: string; streaming?: boo
     [text],
   )
   return (
-    <View style={{ paddingLeft: 26 }}>
+    <>
       {blocks.map((ch, i) =>
         ch.kind === 'code' ? (
           <CodeBlock key={i} code={ch.text} lang={ch.lang} />
@@ -221,8 +249,7 @@ export function MessageBody({ text, streaming }: { text: string; streaming?: boo
           <MdBlock key={i} text={ch.text} />
         ),
       )}
-      {streaming ? <Caret /> : null}
-    </View>
+    </>
   )
 }
 
@@ -238,4 +265,6 @@ const st = StyleSheet.create({
   // 一个语法 token。★**故意不带 lineHeight**:嵌套 `<Text>` 各自带行高在 Android 上会让同一行忽高忽低。
   // 行高由外层那个 `<T>` 一处定;里面的只管字体和字号(`T` 要靠 fontSize 落「正文字号」那三档)。
   tok: { fontFamily: MONO, fontSize: 11.5 },
+  // 锚在正文里的「你的选择」:内容就是原来那条记录的 markdown,只上下留出段距和前后回答分开。
+  answer: { marginVertical: 8 },
 })
