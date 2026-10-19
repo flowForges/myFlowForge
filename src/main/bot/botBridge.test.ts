@@ -348,3 +348,34 @@ describe('BotBridge — 系统提示不是「完成」', () => {
     expect(h.fake.lastText()).toContain('✅ 完成')
   })
 })
+
+describe('BotBridge —「你的选择」锚在回复里,IM 里也要看得到', () => {
+  // 它原来是一条单独的系统提示(done),IM 里自然能看到;挪进 message.answers 之后只发 text 就丢了。
+  it('done:选择插回正文原位一起发', async () => {
+    const h = await attached()
+    h.bridge.observe('chat:event', {
+      workspacePath: '/ws1', sessionId: 'sess-abc', type: 'done', id: 'a-1',
+      message: { text: '先问一句。好的,用 A。', model: 'Claude Code · opus', answers: [{ at: 5, text: '📝 你的选择\n\n**用哪个?**\n- A' }] },
+    })
+    const t = h.fake.lastText()
+    expect(t).toContain('先问一句。\n\n📝 你的选择\n\n**用哪个?**\n- A\n\n好的,用 A。')
+  })
+
+  it('error 但有正文:选择同样在', async () => {
+    const h = await attached()
+    h.bridge.observe('chat:event', {
+      workspacePath: '/ws1', sessionId: 'sess-abc', type: 'error', id: 'e-1', error: 'boom',
+      message: { text: '先问一句。', answers: [{ at: 5, text: '📝 你的选择' }] },
+    })
+    expect(h.fake.lastText()).toContain('先问一句。\n\n📝 你的选择')
+  })
+
+  it('error 正文为空但做过选择:不当成彻底失败', async () => {
+    const h = await attached()
+    h.bridge.observe('chat:event', {
+      workspacePath: '/ws1', sessionId: 'sess-abc', type: 'error', id: 'e-2', error: 'boom',
+      message: { text: '', answers: [{ at: 0, text: '📝 你的选择' }] },
+    })
+    expect(h.fake.lastText()).toContain('📝 你的选择')
+  })
+})

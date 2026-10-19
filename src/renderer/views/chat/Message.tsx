@@ -7,7 +7,7 @@ import { DelegateBlock } from './DelegateBlock'
 import { ToolBlock } from './ToolBlock'
 import { TurnTimer } from './TurnTimer'
 import { Markdown } from './markdown'
-import { splitByAnswers } from '@shared/chat/answerSegments'
+import { inlineAnswers, splitByAnswers } from '@shared/chat/answerSegments'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const FILE_ICON = (
@@ -58,7 +58,7 @@ function MessageImpl({ msg, streaming, index, onViewChanges, onOpenDoc }: Props)
   // 没有选择时为 null,走原来那一段正文的路径,结构一点不变。
   const segments = useMemo(() => (msg.answers?.length ? splitByAnswers(msg.text, msg.answers) : null), [msg.text, msg.answers])
   const copy = () => {
-    navigator.clipboard?.writeText(msg.text).then(() => {
+    navigator.clipboard?.writeText(isUser ? msg.text : inlineAnswers(msg.text, msg.answers)).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1600)
     }).catch(() => { /* clipboard unavailable */ })

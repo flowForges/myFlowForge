@@ -99,3 +99,18 @@ describe('addTurnAnswer —— 选择锚在在途回复里', () => {
     expect(other).toBe(false)
   })
 })
+
+describe('addTurnAnswer —— provider 同步抛错时入口不残留', () => {
+  // 否则这个会话之后在轮次之外答的门(工作流/委派)会被一个早已不存在的轮次吞掉。
+  const throwing = (where: 'chat' | 'run'): AgentProvider => ({
+    ...askingProvider(),
+    ...(where === 'chat'
+      ? { chat: () => { throw new Error('spawn failed') } }
+      : { chat: undefined, run: () => { throw new Error('spawn failed') } }),
+  } as AgentProvider)
+
+  it.each(['chat', 'run'] as const)('%s() 同步抛错后 addTurnAnswer 返回 false', async (where) => {
+    await expect(sendTurn(payload(), { provider: throwing(where), env: process.env, emit: () => {} })).rejects.toThrow('spawn failed')
+    expect(addTurnAnswer(ws, 's1', 'N')).toBe(false)
+  })
+})

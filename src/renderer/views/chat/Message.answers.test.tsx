@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, fireEvent } from '@testing-library/react'
 import { Message } from './Message'
 
 /**
@@ -48,5 +48,17 @@ describe('Message 里的「你的选择」锚点', () => {
     const { container } = render(<Message msg={{ id: 'a', who: 'ai', text: 'hi', ts: 'x' } as any} streaming={false} />)
     expect(container.querySelector('.ans-note')).toBeNull()
     expect(container.querySelector('.msg-body.ans')!.textContent).toBe('hi')
+  })
+})
+
+describe('Message 复制带上「你的选择」', () => {
+  it('复制出去的全文里选择在原位', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    Object.assign(navigator, { clipboard: { writeText } })
+    const { container } = render(
+      <Message msg={{ id: 'a', who: 'ai', text: '前文后文', ts: 'x', answers: [{ at: 2, text: '选了 A' }] } as any} streaming={false} />,
+    )
+    fireEvent.click(container.querySelector('.mm-copy')!)
+    expect(writeText).toHaveBeenCalledWith('前文\n\n选了 A\n\n后文')
   })
 })

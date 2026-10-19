@@ -495,13 +495,17 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
         })
         flushPaced = paced.flushPaced
-        const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, beforeFallback: deps.beforeFallback }, paced, env)
+        // ★provider 同步抛错(起不来)时没有任何收尾路径会跑 —— 自己把「你的选择」入口关掉再抛。
+        let session: AgentSession
+        try { session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, beforeFallback: deps.beforeFallback }, paced, env) }
+        catch (err) { closeAnswers(); throw err }
         deps.onSessionStart?.(wrapSession(session))
       })
     }
 
     return new Promise<ChatMessage>((resolve) => {
-      const session = provider.run(
+      let session: AgentSession
+      try { session = provider.run(
         { stageKey: 'chat', agentId: aid, name: 'chat', prompt: promptText, cwd: ws, model: payload.model },
         {
           onLog: (l) => { if (l.level === 'ok' || (l.level === 'accent' && (l.kind === 'output' || l.kind == null))) { dbgDelta('run', l.text); text += (text ? '\n' : '') + l.text; publishLive(); emit({ workspacePath: ws, sessionId: sid, type: 'assistant-delta', id: aid, text: l.text }) } },
@@ -511,7 +515,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onDone: () => {},
           onError: (err) => resolve(aborted ? finishAborted() : finishErr(err))
         }, env
-      )
+      ) } catch (err) { closeAnswers(); throw err }
       deps.onSessionStart?.(wrapSession(session))
       session.done.then(() => resolve(finishOk(undefined))).catch((err) => resolve(aborted ? finishAborted() : finishErr(err as Error)))
     })

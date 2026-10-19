@@ -7,6 +7,7 @@ import { goBack } from '../src/nav'
 import { ROUTES } from '../src/nav/routes'
 import { CH } from '../../src/main/ipc/channels'
 import type { Attachment } from '../../src/shared/types'
+import { inlineAnswers } from '../../src/shared/chat/answerSegments'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, permissionModeLabel, type PermissionMode } from '../../src/shared/permissions'
 import {
   base64OfUtf8,
@@ -941,9 +942,10 @@ export default function Chat() {
                       </T>
                       {/* 复制排在这一行的最右边:头一行本来就是「这条是谁说的」,复制的是这条,位置对得上。
                           ★正文空的时候不摆 —— 那种消息只有工具卡,复制过去是一个空字符串。 */}
-                      {CAN_COPY && m.text.trim() ? (
+                      {/* ★复制的是带「你的选择」的全文(插在原位),不然复制出去的前提就没了。 */}
+                      {CAN_COPY && (m.text.trim() || m.answers?.length) ? (
                         <View style={{ marginLeft: 'auto' }}>
-                          <CopyBtn text={m.text} />
+                          <CopyBtn text={inlineAnswers(m.text, m.answers)} />
                         </View>
                       ) : null}
                     </View>
