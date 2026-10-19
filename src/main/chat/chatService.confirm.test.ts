@@ -40,3 +40,17 @@ describe('sendTurn confirm bridge', () => {
     expect(msg.text).toContain('已写入')
   })
 })
+
+// ACP provider 回落到 run() 之前的「完全访问」关口(见 ChatTask.beforeFallback):交互聊天这一轮得把它带进 chat()。
+describe('sendTurn beforeFallback', () => {
+  it('把 deps.beforeFallback 原样带进 provider.chat 的 task', async () => {
+    const beforeFallback = vi.fn(async () => true)
+    let seen: unknown
+    const provider = { ...confirmingProvider(), chat: (task, cb) => { seen = task.beforeFallback; cb.onDone({ elapsed: 0 }); return { id: 'a', cancel() {}, done: Promise.resolve({ ok: true }) } } } as AgentProvider
+    await sendTurn(
+      { workspacePath: ws, sessionId: 's1', agent: 'gemini', agentLabel: 'Gemini', model: 'm', text: 'hi', attachments: [] },
+      { provider, env: process.env, emit: () => {}, beforeFallback },
+    )
+    expect(seen).toBe(beforeFallback)
+  })
+})

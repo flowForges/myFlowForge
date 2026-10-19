@@ -8,6 +8,7 @@ import { appendMessage } from './chatStore'
 import { writeWorkspaceMemory, writeSystemMemory } from './memory/memoryStore'
 import * as distiller from './memory/distiller'
 import type { ChatTask, ChatCallbacks } from '../agents/types'
+import { AcpUnavailableError } from '../agents/acp/acpChat'
 
 // Controllable memory toggle: override only `memory` on the real settings (read-only, no disk write).
 let memoryEnabled = true
@@ -103,5 +104,25 @@ describe('chatService memory wiring', () => {
       { provider, env: {}, emit: () => {} }
     )
     expect(wsp).not.toHaveBeenCalled()
+  })
+  it('★蒸馏 one-shot 碰上讲不了 ACP 的 provider(不回落)→ 和「没有 chat()」一样得到 "",不 reject', async () => {
+    const sid = readSessions(ws).sessions[0].id
+    for (let i = 0; i < 18; i++) appendMessage(ws, sid, { id: `seed-${i}`, who: 'user', text: 'x', ts: '' })
+    let oneShot: ((p: string) => Promise<string>) | null = null
+    vi.spyOn(distiller, 'promoteToWorkspace').mockImplementation(async (_ws, _sid, deps) => { oneShot = deps.oneShot })
+    vi.spyOn(distiller, 'promoteToSystem').mockResolvedValue()
+    const provider: any = {
+      chat: (task: ChatTask, cb: ChatCallbacks) => {
+        if (task.id.startsWith('distill')) cb.onError(new AcpUnavailableError('gemini 讲不了 ACP(这次调用不回落到 run())'))
+        else { cb.onAssistantDelta('ok'); cb.onDone({ elapsed: 0 }) }
+        return { id: task.id, cancel: () => {}, done: Promise.resolve({ ok: true }) }
+      },
+    }
+    await sendTurn(
+      { workspacePath: ws, sessionId: sid, agent: 'gemini', agentLabel: 'Gemini', model: 'm', text: 'go', attachments: [] },
+      { provider, env: {}, emit: () => {} }
+    )
+    expect(oneShot).toBeTypeOf('function')
+    await expect(oneShot!('distill me')).resolves.toBe('')
   })
 })

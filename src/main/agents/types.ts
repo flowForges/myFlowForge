@@ -99,6 +99,14 @@ export interface ChatTask {
   permissionMode?: import('@shared/permissions').PermissionMode
   /** 这一轮允不允许操作浏览器。缺省 = 'off'(见 shared/browserUse.ts)。 */
   browserUse?: import('@shared/browserUse').BrowserUseMode
+  /**
+   * ACP 那几家(acp/acpProvider.ts)讲不了 ACP、要回落到 run() 之前问一次:run() 那条路没有逐操作的门
+   * (gemini `--approval-mode yolo` / copilot `--allow-all-tools`),等于以「完全访问」跑。返回 false = 不跑。
+   * ★★没给 = **不许回落**:这次调用按「这个 provider 没有 chat()」失败(AcpUnavailableError)。
+   *  只有交互聊天那一轮(ipc/handlers.ts runTurn)有人能答这个问题;总结 / 蒸馏 / 门回答这些一次性调用
+   *  在这条分支之前对这些 provider 本来就不跑。
+   */
+  beforeFallback?: () => Promise<boolean>
 }
 export interface ChatCallbacks {
   onSession(id: string): void

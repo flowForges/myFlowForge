@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { makeCopilotProvider } from '../agents/providers/copilot'
+import { fakeTransport } from '../agents/acp/acpTestKit'
+import { resetAcpAvailability } from '../agents/acp/acpAvailability'
 import { composeRunDigest, buildSummaryPrompt, runRunSummary } from './runSummary'
 import type { AgentProvider } from '../agents/types'
 import type { StagePlan } from './machine'
@@ -122,5 +125,17 @@ describe('runRunSummary', () => {
     }
     const immediate = (fn: () => void) => { fn(); return { clear: () => {} } }
     expect(await runRunSummary(hang, { ...base, setTimer: immediate })).toBe('D')
+  })
+})
+
+// ★★ACP provider 讲不了 ACP 时,一次性调用不回落到 run()(没门、也没人能授权)—— 和「没有 chat()」一样原样返回 digest。
+describe('runRunSummary — ACP provider 讲不了 ACP', () => {
+  it('不跑 run(),原样返回 digest', async () => {
+    resetAcpAvailability()
+    const refusing = () => fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('unknown method') })).transport
+    const provider = makeCopilotProvider({ bin: 'copilot-old', defaultModels: [], acp: { open: refusing } })
+    const run = vi.spyOn(provider, 'run')
+    expect(await runRunSummary(provider, { digest: 'DIGEST', model: 'default', cwd: '/ws', env: {} })).toBe('DIGEST')
+    expect(run).not.toHaveBeenCalled()
   })
 })

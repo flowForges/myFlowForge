@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import { makeGeminiProvider } from '../agents/providers/gemini'
+import { fakeTransport } from '../agents/acp/acpTestKit'
+import { resetAcpAvailability } from '../agents/acp/acpAvailability'
 import { buildGateAnswerPrompt, runGateAnswer } from './gateAnswer'
 import type { AgentProvider, ChatTask, ChatCallbacks } from '../agents/types'
 
@@ -42,5 +45,20 @@ describe('runGateAnswer', () => {
     } as unknown as AgentProvider
     const immediate = (fn: () => void) => { fn(); return { clear() {} } } // fire the timeout synchronously
     expect(await runGateAnswer(provider, { ...args, setTimer: immediate })).toBe('')
+  })
+})
+
+// ★★ACP provider(gemini/qwen/copilot/kimi)讲不了 ACP 时,一次性调用**不**回落到 run() —— run() 那条没有门,
+//  这里也没人能答「以完全访问跑」。要和这条分支之前「这些 provider 没有 chat()」一模一样:返回 ''。
+describe('runGateAnswer — ACP provider 讲不了 ACP', () => {
+  it('不跑 run(),按没有 chat() 返回 ""', async () => {
+    resetAcpAvailability()
+    const refusing = () => fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('unknown method') })).transport
+    const provider = makeGeminiProvider({ bin: 'gemini-old', defaultModels: [], acp: { open: refusing } })
+    const run = vi.spyOn(provider, 'run')
+    const args = { stageName: '技术方案设计', doc: 'd', question: 'q', model: 'm', cwd: '/ws', env: {} }
+    expect(await runGateAnswer(provider, args)).toBe('')
+    expect(await runGateAnswer(provider, args)).toBe('')   // 第二次走「已知讲不了」那条,同样不跑
+    expect(run).not.toHaveBeenCalled()
   })
 })

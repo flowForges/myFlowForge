@@ -2,6 +2,7 @@ import { execa, type ResultPromise } from 'execa'
 import { spawnAgent, killTree } from '../procGroup'
 import type { AgentProvider, AgentTask, AgentCallbacks, AgentSession, Model } from '../types'
 import { acpProviderChat, runAsChat, type AcpProviderChatSpec } from '../acp/acpProvider'
+import { guardedFallback } from '../acp/acpChat'
 import { createFenceScanner } from '../handoffFence'
 import { forgeChatDirective } from '../forgeChatDirective'
 
@@ -67,6 +68,9 @@ export function makeKimiProvider(spec: KimiSpec): AgentProvider {
   //  选的就是「账号默认」时才走 ACP;选了具体模型就直接走 run()(`-p --model`)—— 悄悄换掉用户选的模型
   //  比少一道门更糟。
   const acpChat = acpProviderChat({ bin, args: () => ['acp'], run: (t, c, e) => provider.run(t, c, e), acp: spec.acp })
-  provider.chat = (task, cb, env) => (!task.model || task.model === 'default') ? acpChat(task, cb, env) : runAsChat((t, c, e) => provider.run(t, c, e), task, cb, env)
+  // ★选了具体模型那条直接走 run(),同样经 guardedFallback:没门的那条路要有人点头(见 ChatTask.beforeFallback)。
+  provider.chat = (task, cb, env) => (!task.model || task.model === 'default')
+    ? acpChat(task, cb, env)
+    : guardedFallback(task, cb, () => runAsChat((t, c, e) => provider.run(t, c, e), task, cb, env), 'kimi acp 不吃 --model')
   return provider
 }

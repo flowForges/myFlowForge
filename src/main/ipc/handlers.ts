@@ -7,6 +7,7 @@ import type { HostCapabilities } from '../host/capabilities'
 import { readSettings, writeSettings, readProjects, writeProjects, readWorkflows, writeWorkflows, readHookLibrary, writeHookLibrary, readCustomStages, upsertCustomStage, deleteCustomStage, upsertProject, setProjectDefaultBranch, setProjectAlias, registerWorkspace, unregisterWorkspace, readWorkspace, writeWorkspace, readAgentsConfig, writeAgentsConfig, readWorkspaceRegistry, setStageModel, isFullAccessAcked, ackFullAccess } from '../config/store'
 import { providerSupportsPermissions, providerUsesCommandShim, permissionAppliesMidRun, permissionModeLabel, DEFAULT_PERMISSION_MODE } from '@shared/permissions'
 import { acpKnownUnavailable, withAcpAvailability } from '../agents/acp/acpAvailability'
+import { isAcpUnavailable } from '../agents/acp/acpChat'
 import { browserPermissionConflict, providerSupportsBrowserUse, DEFAULT_BROWSER_USE, BROWSER_TOOL_PREFIX } from '@shared/browserUse'
 import { userMessageOf } from '../chat/userMessage'
 import { expandTilde } from '../config/paths'
@@ -968,21 +969,23 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     // to the id if the provider object isn't available.
     const gateProviderId = payload.agent
     const gateLabel = provider?.displayName ?? payload.agent
-    if (!providerSupportsPermissions(gateProviderId, acpKnownUnavailable(provider?.bin)) && payload.permissionMode !== 'full'
-        && !isFullAccessAcked(payload.workspacePath, gateProviderId)) {
+    const ensureFullAccess = async (): Promise<boolean> => {
+      if (payload.permissionMode === 'full' || isFullAccessAcked(payload.workspacePath, gateProviderId)) return true
       const decision = await confirm({
         title: `${gateLabel} 无法逐操作确认，本次将以「完全访问」运行（可修改任意文件、可联网）。是否授权？（本工作区将记住）`,
       })
       if (decision !== 'allow') {
         emitNote(payload.workspacePath, payload.sessionId, `已取消：未授权 ${gateLabel} 以完全访问运行。`)
-        return
+        return false
       }
       ackFullAccess(payload.workspacePath, gateProviderId)
       // Keep the renderer's in-memory settings snapshot in sync — otherwise its next config:set-settings
       // (any UI settings save) writes back a stale fullAccessAck and wipes this ack. Mirrors the
       // pinnedWorkspaces/workspaceOrder writers in this file.
       broadcast(CH.settingsChanged, readSettings())
+      return true
     }
+    if (!providerSupportsPermissions(gateProviderId, acpKnownUnavailable(provider?.bin)) && !(await ensureFullAccess())) return
     const store = new RunStore(payload.workspacePath, 'chat-bridge')
     // forge_delegate is fire-and-forget: its MCP call returns 「已派发」at once, so without this the turn
     // would resolve while the sub-agents keep running in the background — and the NEXT message would start
@@ -1124,6 +1127,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
         emit: chatEmit,
         confirm: toolConfirm,
         onSessionStart: (session) => chatQueue.registerActive(payload.workspacePath, payload.sessionId, () => session.cancel()),
+        // ★★ACP 握手没成、要回落到 run()(没门、全放行)的那一刻,补上面那道「完全访问」授权 —— 首轮
+        //  ACP 状态未知时按「有门」放过了预授权门,不补的话老版本 CLI 会不经同意就以完全访问跑。
+        beforeFallback: ensureFullAccess,
       })
       // Chat NEVER triggers a workflow (this was the user's #1 complaint — "聊着聊着突然启动工作流").
       // forge_propose_plan's bridge callback above is neutered (redirect note + approved:false); the
@@ -1573,22 +1579,34 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     const env = buildAgentEnv({ proxy: readSettings().agentProxy })
     const model = distillModelFor(a.toAgent) ?? a.model
     const id = `switch-sum-${Date.now()}`
-    broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-start', id, model: '上下文总结' })
+    // ★占位等第一个「活着」的信号才挂:ACP provider 讲不了 ACP 时这次调用直接失败(不回落,见
+    //  ChatTask.beforeFallback),要和「这个 provider 没有 chat()」一样什么都不出现 —— 先挂了就收不回来。
+    let started = false
+    const start = () => {
+      if (started) return
+      started = true
+      broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-start', id, model: '上下文总结' })
+    }
     const transcript = msgs.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${m.text}`).join('\n')
     const prompt = [
       '你即将接手这段对话。先把下面的历史对话读一遍,用中文简要总结:用户目标、已确定的决策/方案、关键事实与当前进展,以便你带着上下文继续下去。',
       '历史对话:', transcript, '\n只输出总结正文,不要解释,不要提"以下是总结"之类的话。',
     ].join('\n')
     let acc = ''
+    let noChat = false
     await new Promise<void>((resolve) => {
       provider.chat!({ id, prompt, model, cwd: a.workspacePath }, {
-        onSession: () => {},
-        onAssistantDelta: (t) => { acc += t; broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-delta', id, text: t }) },
-        onThinkDelta: () => {},
+        onSession: start,
+        onActivity: start,
+        onStatus: start,
+        onAssistantDelta: (t) => { start(); acc += t; broadcast(CH.chatEvent, { workspacePath: a.workspacePath, sessionId: a.sessionId, type: 'assistant-delta', id, text: t }) },
+        onThinkDelta: start,
         onDone: () => resolve(),
-        onError: () => resolve(),
+        onError: (err) => { noChat = isAcpUnavailable(err); resolve() },
       }, env)
     })
+    if (noChat && !started) return
+    start()
     const body = acc.trim()
     const note: ChatMessage = { id, who: 'ai', text: body ? `【上下文总结 · 由 ${provider.displayName} 生成】\n${body}` : '(未能生成上下文总结,可直接继续对话)', model: '上下文总结', provider: a.toAgent, ts: new Date().toISOString() }
     appendMessage(a.workspacePath, a.sessionId, note)

@@ -280,17 +280,58 @@ describe('runAcpChat — 握手失败 = 回落信号', () => {
 describe('chatWithAcpFallback', () => {
   const fallbackSession = () => ({ id: 'fb', cancel: vi.fn<() => void>(), done: Promise.resolve({ ok: true, summary: 'fallback' }) })
 
-  it('ACP 不可用 → 走回落路径,done 来自回落那条', async () => {
-    const { transport } = fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('nope') }))
+  const refusing = () => fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('nope') })).transport
+
+  it('ACP 不可用 + 回落关口答应 → 走回落路径,done 来自回落那条', async () => {
     const fb = fallbackSession()
     const fallback = vi.fn(() => fb)
+    const beforeFallback = vi.fn(async () => true)
     const { ev, cb } = recorder()
-    const s = chatWithAcpFallback(SPEC, TASK, cb, fallback, { open: () => transport })
+    const s = chatWithAcpFallback(SPEC, { ...TASK, beforeFallback }, cb, fallback, { open: refusing })
     expect(await s.done).toEqual({ ok: true, summary: 'fallback' })
+    expect(beforeFallback).toHaveBeenCalledOnce()
     expect(fallback).toHaveBeenCalledOnce()
     expect(ev).toEqual([])
     s.cancel()
     expect(fb.cancel).toHaveBeenCalled()
+  })
+
+  it('★★ACP 不可用 + 回落关口拒绝 → 不跑 run(),按停止收尾', async () => {
+    const fallback = vi.fn(fallbackSession)
+    const { ev, cb } = recorder()
+    const r = await chatWithAcpFallback(SPEC, { ...TASK, beforeFallback: async () => false }, cb, fallback, { open: refusing }).done
+    expect(r.ok).toBe(false)
+    expect(fallback).not.toHaveBeenCalled()
+    expect(ev).toEqual(['done'])
+  })
+
+  it('★★ACP 不可用 + 没给回落关口(一次性调用)→ 不跑 run(),按「没有 chat()」失败', async () => {
+    const fallback = vi.fn(fallbackSession)
+    const errors: Error[] = []
+    const { cb } = recorder({ onError: (e) => errors.push(e), onDone: () => errors.push(new Error('unexpected done')) })
+    const r = await chatWithAcpFallback(SPEC, TASK, cb, fallback, { open: refusing }).done
+    expect(r.ok).toBe(false)
+    expect(fallback).not.toHaveBeenCalled()
+    expect(errors).toHaveLength(1)
+    expect(isAcpUnavailable(errors[0])).toBe(true)
+    // 已知讲不了的 bin 直接走关口那条,同样不跑
+    const again: Error[] = []
+    await chatWithAcpFallback(SPEC, TASK, recorder({ onError: (e) => again.push(e) }).cb, fallback, { open: refusing }).done
+    expect(fallback).not.toHaveBeenCalled()
+    expect(isAcpUnavailable(again[0])).toBe(true)
+  })
+
+  it('★等回落关口的时候被取消 → 按停止收尾,关口后来答应也不跑', async () => {
+    let answer!: (v: boolean) => void
+    const fallback = vi.fn(fallbackSession)
+    const { ev, cb } = recorder()
+    const s = chatWithAcpFallback(SPEC, { ...TASK, beforeFallback: () => new Promise<boolean>((r) => { answer = r }) }, cb, fallback, { open: refusing })
+    await vi.waitFor(() => expect(answer).toBeTypeOf('function'))
+    s.cancel()
+    answer(true)
+    expect((await s.done).ok).toBe(false)
+    expect(fallback).not.toHaveBeenCalled()
+    expect(ev).toEqual(['done'])
   })
 
   it('ACP 可用 → 不碰回落', async () => {

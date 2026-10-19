@@ -54,7 +54,7 @@ export function acpProviderChat(spec: AcpProviderChatSpec) {
       () => runAsChat(spec.run, task, cb, env),
       {
         ...spec.acp,
-        onFallback: (err) => appLog('warn', 'acp', `${spec.bin} 讲不了 ACP,本轮回落到 run()`, err.message),
+        onFallback: (err) => appLog('warn', 'acp', `${spec.bin} 讲不了 ACP,${task.beforeFallback ? '本轮经授权后回落到 run()' : '这次调用不回落'}`, err.message),
       },
     )
   }

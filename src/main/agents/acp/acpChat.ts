@@ -268,6 +268,8 @@ export function runAcpChat(spec: AcpSpec, task: ChatTask, cb: ChatCallbacks, opt
     if (settled) return
     handshaken = true
     opts.onHandshake?.()
+    // 进程讲得了 ACP 了 —— 这就是「活着」:调用方(比如上下文总结)等的是第一个活着的信号才挂占位。
+    cb.onActivity?.()
     if (stderrTail.trim()) for (const line of stderrTail.split('\n')) { const t = line.trim(); if (t) cb.onStatus?.(t) }
     stderrTail = ''
 
@@ -333,23 +335,59 @@ export function runAcpChat(spec: AcpSpec, task: ChatTask, cb: ChatCallbacks, opt
 }
 
 /**
+ * 回落到 run() 之前的那道关(见 ChatTask.beforeFallback):
+ *  - 没给 hook → 不回落,按「没有 chat()」失败(AcpUnavailableError 交给 cb.onError),调用方走它老的那条路;
+ *  - hook 答 false → 不跑,这一轮按「停止」收尾(cb.onDone,和 cancel 一样);拒绝的那句话由 hook 自己说;
+ *  - 等 hook 的时候被取消 → 同样按停止收尾,hook 后来答什么都不跑。
+ */
+export function guardedFallback(task: ChatTask, cb: ChatCallbacks, fallback: () => AgentSession, reason = 'ACP 不可用'): AgentSession {
+  const ask = task.beforeFallback
+  if (!ask) {
+    const err = new AcpUnavailableError(`${reason}(这次调用不回落到 run())`)
+    cb.onError(err)
+    return { id: task.id, cancel: () => {}, done: Promise.resolve({ ok: false, summary: err.message }) }
+  }
+  const start = Date.now()
+  const stop = () => cb.onDone({ elapsed: Math.round((Date.now() - start) / 1000) })
+  let current: AgentSession | null = null
+  let cancelled = false
+  const done = (async (): Promise<AgentResult> => {
+    let allowed = false
+    try { allowed = await ask() } catch { allowed = false }
+    if (cancelled) return { ok: false, summary: '已取消' }
+    if (!allowed) { stop(); return { ok: false, summary: '未授权回落到 run()' } }
+    try { current = fallback() } catch (e) {
+      cb.onError(e instanceof Error ? e : new Error(errMessage(e)))
+      return { ok: false, summary: errMessage(e) }
+    }
+    return current.done.catch((e: unknown) => ({ ok: false, summary: errMessage(e) }))
+  })()
+  return {
+    id: task.id,
+    cancel: () => {
+      if (current) { current.cancel(); return }
+      if (cancelled) return
+      cancelled = true
+      stop()
+    },
+    done,
+  }
+}
+
+/**
  * ACP 优先,讲不了就回落到 `fallback()`(provider 老的 run() 聊天)。返回的会话在两条路之间透明:
  * cancel 打到当前那条,done 来自最终跑完的那条。
  *
  * ★回落只发生在握手阶段,那时还一个字都没流给用户,所以换路不会出现半截重复的回答。
  * ★握手结果按 `spec.bin` 记下来(acpAvailability.ts):本次运行里已知讲不了 ACP 的 bin 直接走回落,不再试。
+ * ★★回落一律经 guardedFallback:run() 那条路没有门,没人点头就不跑(见 ChatTask.beforeFallback)。
  */
 export function chatWithAcpFallback(spec: AcpSpec, task: ChatTask, cb: ChatCallbacks, fallback: () => AgentSession, opts: Omit<AcpChatOptions, 'onUnavailable'> & { onFallback?: (err: AcpUnavailableError) => void } = {}): AgentSession {
   let resolveDone!: (r: AgentResult) => void
   const done = new Promise<AgentResult>((r) => { resolveDone = r })
   let current: AgentSession | null = null
   let fellBack = false
-  if (acpKnownUnavailable(spec.bin)) {
-    try { return fallback() } catch (e) {
-      cb.onError(e instanceof Error ? e : new Error(errMessage(e)))
-      return { id: task.id, cancel: () => {}, done: Promise.resolve({ ok: false, summary: errMessage(e) }) }
-    }
-  }
+  if (acpKnownUnavailable(spec.bin)) return guardedFallback(task, cb, fallback, `${spec.bin} 讲不了 ACP`)
   const acp = runAcpChat(spec, task, cb, {
     ...opts,
     onHandshake: () => { recordAcpHandshake(spec.bin, true); opts.onHandshake?.() },
@@ -357,13 +395,8 @@ export function chatWithAcpFallback(spec: AcpSpec, task: ChatTask, cb: ChatCallb
       fellBack = true
       recordAcpHandshake(spec.bin, false)
       opts.onFallback?.(err)
-      try {
-        current = fallback()
-        current.done.then(resolveDone, (e) => resolveDone({ ok: false, summary: errMessage(e) }))
-      } catch (e) {
-        cb.onError(e instanceof Error ? e : new Error(errMessage(e)))
-        resolveDone({ ok: false, summary: errMessage(e) })
-      }
+      current = guardedFallback(task, cb, fallback, err.message)
+      current.done.then(resolveDone, (e) => resolveDone({ ok: false, summary: errMessage(e) }))
     },
   })
   if (!fellBack) current = acp

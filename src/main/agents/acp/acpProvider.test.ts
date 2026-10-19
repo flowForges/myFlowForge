@@ -10,7 +10,7 @@ import { providerGatesEachOperation, providerSupportsPermissions, providerUsesCo
 import { shimEnv, shimmedPath } from '../commandShim'
 import { acpKnownUnavailable, withAcpAvailability } from './acpAvailability'
 import { fakeTransport, standardAgent, recorder, send } from './acpTestKit'
-import type { AcpSpec } from './acpChat'
+import { isAcpUnavailable, type AcpSpec } from './acpChat'
 import type { AgentProvider, ChatTask } from '../types'
 import { resetAcpAvailability } from './acpAvailability'
 
@@ -30,6 +30,9 @@ beforeEach(() => {
   cli = join(dir, 'fake.js'); writeFileSync(cli, FAKE); chmodSync(cli, 0o755)
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+/** 交互聊天那一轮的回落关口:已授权(见 ChatTask.beforeFallback)。 */
+const ALLOW = async () => true
 
 const FORGE_ENV = { FORGE_SOCKET: '/tmp/s', FORGE_AGENT_ID: 'a1', FORGE_MCP_ENTRY: '/x/forgeMcp.js' }
 
@@ -83,7 +86,7 @@ describe('ACP 聊天 — 各 provider 的启动参数', () => {
     const open = vi.fn()
     const p = makeKimiProvider({ bin: cli, defaultModels: [], acp: { open } })
     const { ev, cb } = recorder()
-    await p.chat!({ id: 'k1', prompt: 'hi', model: 'kimi-k2.5', cwd: dir }, cb, process.env).done
+    await p.chat!({ id: 'k1', prompt: 'hi', model: 'kimi-k2.5', cwd: dir, beforeFallback: ALLOW }, cb, process.env).done
     expect(open).not.toHaveBeenCalled()
     expect(ev).toEqual(['text:第一行', 'text:\n第二行', 'done'])
   })
@@ -113,7 +116,7 @@ describe('ACP 聊天 — 握手不成就回落到 run()', () => {
     const { transport } = fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('unknown method') }))
     const p = makeQwenProvider({ bin: cli, defaultModels: [], acp: { open: () => transport } })
     const { ev, cb } = recorder()
-    const r = await p.chat!({ id: 'q1', prompt: 'hi', model: 'qwen3-coder-plus', cwd: dir }, cb, process.env).done
+    const r = await p.chat!({ id: 'q1', prompt: 'hi', model: 'qwen3-coder-plus', cwd: dir, beforeFallback: ALLOW }, cb, process.env).done
     expect(r.ok).toBe(true)
     expect(ev).toEqual(['text:第一行', 'text:\n第二行', 'done'])
   })
@@ -124,6 +127,47 @@ function shimmed(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const shimDir = join(dir, 'run', 'shims')
   return { ...base, PATH: shimmedPath(shimDir, base.PATH), ...shimEnv(join(dir, 'run'), shimDir, base.ZDOTDIR) }
 }
+
+describe('★★回落关口:run() 那条没有门,没人点头就不跑', () => {
+  const refusing = () => fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('unknown method') })).transport
+  const make = [
+    (open: never) => makeGeminiProvider({ bin: cli, defaultModels: [], acp: { open } }),
+    (open: never) => makeQwenProvider({ bin: cli, defaultModels: [], acp: { open } }),
+    (open: never) => makeCopilotProvider({ bin: cli, defaultModels: [], acp: { open } }),
+    (open: never) => makeKimiProvider({ bin: cli, defaultModels: [], acp: { open } }),
+  ]
+
+  it('关口拒绝 → run() 不跑(假 CLI 的输出一行都没有),这一轮按停止收尾', async () => {
+    for (const m of make) {
+      resetAcpAvailability()
+      const { ev, cb } = recorder()
+      const r = await m(refusing as never).chat!({ id: 'x', prompt: 'hi', model: 'default', cwd: dir, beforeFallback: async () => false }, cb, process.env).done
+      expect(r.ok).toBe(false)
+      expect(ev).toEqual(['done'])
+    }
+  })
+
+  it('没给关口(一次性调用)→ run() 不跑,按「没有 chat()」失败', async () => {
+    for (const m of make) {
+      resetAcpAvailability()
+      const errors: Error[] = []
+      const { ev, cb } = recorder({ onError: (e) => errors.push(e) })
+      await m(refusing as never).chat!({ id: 'x', prompt: 'hi', model: 'default', cwd: dir }, cb, process.env).done
+      expect(ev).toEqual([])
+      expect(errors.map(isAcpUnavailable)).toEqual([true])
+    }
+    // kimi 选了具体模型那条本来就直接走 run() —— 一样要关口
+    const errors: Error[] = []
+    await makeKimiProvider({ bin: cli, defaultModels: [] }).chat!({ id: 'k', prompt: 'hi', model: 'kimi-k2.5', cwd: dir }, recorder({ onError: (e) => errors.push(e) }).cb, process.env).done
+    expect(errors.map(isAcpUnavailable)).toEqual([true])
+  })
+
+  it('关口答应 → run() 照跑', async () => {
+    const { ev, cb } = recorder()
+    await makeGeminiProvider({ bin: cli, defaultModels: [], acp: { open: refusing } }).chat!({ id: 'g', prompt: 'hi', model: 'default', cwd: dir, beforeFallback: ALLOW }, cb, process.env).done
+    expect(ev).toEqual(['text:第一行', 'text:\n第二行', 'done'])
+  })
+})
 
 describe('PATH shim:ACP 那条拆掉,回落那条留着', () => {
   it('ACP 子进程拿到的 env 里没有 shim(PATH 去掉 shim 目录、ZDOTDIR 还原),调用方那份不动', async () => {
@@ -151,7 +195,7 @@ describe('PATH shim:ACP 那条拆掉,回落那条留着', () => {
     const p = makeCopilotProvider({ bin: envCli, defaultModels: [], acp: { open: () => transport } })
     const { ev, cb } = recorder()
     const env = shimmed({ ...process.env })
-    await p.chat!({ id: 'c1', prompt: 'hi', model: 'default', cwd: dir }, cb, env).done
+    await p.chat!({ id: 'c1', prompt: 'hi', model: 'default', cwd: dir, beforeFallback: ALLOW }, cb, env).done
     const shimDir = join(dir, 'run', 'shims')
     expect(ev).toEqual([`text:SHIM=${shimDir}`, `text:\nPATH0=${shimDir}`, 'done'])
   })
@@ -162,7 +206,7 @@ describe('ACP 可用性按 bin 记住', () => {
     const opens: string[] = []
     const bad = () => fakeTransport((app) => app.onRequest('initialize', () => { throw new Error('nope') })).transport
     const p = makeQwenProvider({ bin: cli, defaultModels: [], acp: { open: (spec) => { opens.push(spec.bin); return bad() } } })
-    const turn = async () => { const { ev, cb } = recorder(); await p.chat!({ id: 'q', prompt: 'hi', model: 'm', cwd: dir }, cb, process.env).done; return ev }
+    const turn = async () => { const { ev, cb } = recorder(); await p.chat!({ id: 'q', prompt: 'hi', model: 'm', cwd: dir, beforeFallback: ALLOW }, cb, process.env).done; return ev }
     expect(await turn()).toEqual(['text:第一行', 'text:\n第二行', 'done'])
     expect(acpKnownUnavailable(cli)).toBe(true)
     expect(await turn()).toEqual(['text:第一行', 'text:\n第二行', 'done'])

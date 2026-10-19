@@ -27,6 +27,7 @@ import { perfSpan } from '../perf/perfSpans'
 import { addDailyTokens } from '../tokens/growthSignalRef'
 import { explainCodexError } from '../agents/providers/codexErrorMeaning'
 import { gateRegistry } from '../gate/gateRegistry'
+import { isAcpUnavailable } from '../agents/acp/acpChat'
 
 export interface SendTurnDeps {
   provider: AgentProvider
@@ -34,6 +35,8 @@ export interface SendTurnDeps {
   emit: (e: ChatEvent) => void
   confirm?: (req: ConfirmReq) => Promise<ConfirmDecision>
   onSessionStart?: (session: AgentSession) => void
+  /** 原样带进 ChatTask.beforeFallback:ACP provider 回落到没门的 run() 之前问一次(见 agents/types.ts)。 */
+  beforeFallback?: () => Promise<boolean>
 }
 
 let seq = 0
@@ -278,6 +281,8 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
     const oneShot: DistillDeps['oneShot'] = (prompt) => new Promise<string>((resolve, reject) => {
       if (!provider.chat) { resolve(''); return }
       let acc = ''
+      // ★ACP provider 讲不了 ACP 时,一次性调用不回落(没人能答「以完全访问跑」),报 AcpUnavailableError ——
+      //  按「这个 provider 没有 chat()」处理:和上面那行一样当作没蒸馏出东西。
       // The distill one-shot spawns a FRESH provider session, which the CLI persists to its native store
       // (Codex rollout / Claude·qoder project jsonl / opencode storage) — cluttering the user's real
       // session picker with "记忆蒸馏器" threads. Capture the minted native id and delete just that
@@ -289,7 +294,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         onAssistantDelta: (t) => { acc += t },
         onThinkDelta: () => {},
         onDone: () => { cleanup(); resolve(acc) },
-        onError: (err) => { cleanup(); reject(err) },
+        onError: (err) => { cleanup(); if (isAcpUnavailable(err)) resolve(''); else reject(err) },
         // ★以前这里**什么都没传** —— 于是蒸馏要权限时,provider 自己 fail-closed 静默拒掉,
         //  一行痕迹都没有。现在同样是拒,但它在总线上留一条记录:「这条路没有门」和
         //  「这条路的门断了」必须是两件能分开的事。
@@ -448,7 +453,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
           onError: (err) => { if (settled) return; settled = true; resolve(aborted ? finishAborted() : finishErr(err)) },
         })
         flushPaced = paced.flushPaced
-        const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse }, paced, env)
+        const session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, beforeFallback: deps.beforeFallback }, paced, env)
         deps.onSessionStart?.(wrapSession(session))
       })
     }
