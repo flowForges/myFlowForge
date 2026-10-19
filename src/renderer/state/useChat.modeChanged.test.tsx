@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import type { ChatEvent } from '@shared/types'
 import { useChat } from './useChat'
 
@@ -28,8 +28,10 @@ describe('useChat mode-changed', () => {
     expect(onModeChanged).not.toHaveBeenCalled()
   })
 
-  it('merges context updates from streaming think events into the active assistant message', () => {
+  it('merges context updates from streaming think events into the active assistant message', async () => {
     const { result } = renderHook(() => useChat('/w', 's-1'))
+    // 先等历史(空)回来 —— 否则它晚到时会把下面这条在途消息整个盖掉
+    await act(async () => {})
     act(() => {
       emit({
         workspacePath: '/w',
@@ -51,6 +53,7 @@ describe('useChat mode-changed', () => {
       } as ChatEvent)
     })
 
-    expect(result.current.messages[0].context?.skills.map(s => s.name)).toEqual(['forge-workflow', 'using-superpowers'])
+    // think-delta 按动画帧合并后才落进 state
+    await waitFor(() => expect(result.current.messages[0].context?.skills.map(s => s.name)).toEqual(['forge-workflow', 'using-superpowers']))
   })
 })

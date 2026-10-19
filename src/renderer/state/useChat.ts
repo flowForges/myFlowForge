@@ -3,7 +3,7 @@ import { useHostReadySeq } from './useHostKey'
 import type { AgentContextMeta, AgentContextRef, AskAnswers, ChatConfirm, ChatEvent, ChatMessage, ChatSendPayload } from '@shared/types'
 import { phaseLabel } from '@shared/types'
 import type { PlanReq } from '../components/PlanCard'
-import { DESKTOP_TOOL_OUTPUT_CAP } from '../views/chat/toolOutput'
+import { DESKTOP_TOOL_OUTPUT_CAP, omitLargeToolOutput, omitLargeToolOutputs } from '../views/chat/toolOutput'
 
 export interface ChatQueueItem { id: string; text: string; source: string }
 
@@ -51,6 +51,23 @@ function mergeContext(a?: AgentContextMeta, b?: AgentContextMeta): AgentContextM
   }
 }
 
+/** 一条消息在这一帧里攒下的流式增量(assistant-delta 的正文 + think-delta 的步骤/上下文)。 */
+interface PendingDelta { text: string; steps: string[]; context?: AgentContextMeta; touchedThink: boolean }
+
+/**
+ * 增量的落地节拍:下一动画帧;★再挂一个 100ms 的兜底计时器,先到先刷。
+ * ★★窗口隐藏时 rAF 整个停掉(Task 4 踩过):只靠 rAF 的话,藏着的窗口里增量会一直攒着不落地。
+ *  非增量事件(done/error/工具…)到来时会先同步刷掉攒着的,所以顺序永远不乱、一个都不丢。
+ */
+function scheduleFlush(cb: () => void): () => void {
+  let fired = false
+  const run = () => { if (fired) return; fired = true; cancel(); cb() }
+  const raf = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(run) : null
+  const timer = setTimeout(run, 100)
+  const cancel = () => { if (raf !== null) cancelAnimationFrame(raf); clearTimeout(timer) }
+  return () => { fired = true; cancel() }
+}
+
 export function useChat(
   workspacePath: string | undefined,
   sessionId: string | undefined,
@@ -67,6 +84,42 @@ export function useChat(
   const [queue, setQueue] = useState<ChatQueueItem[]>([])
   const [running, setRunning] = useState<{ id: string; text: string } | null>(null)
   const api = useRef(window.forge)
+  /**
+   * id → 下标。★★流式时每个 token 都要找「是哪条消息」,以前是 `some` + `map` 两遍全表扫;
+   *  长会话几百条消息 × 每秒几十个 token。这里缓存的下标只对**当时那个数组**成立(`arr` 比引用),
+   *  别处换了数组(拉历史、切会话)就整张重建 —— 不可能拿着过期下标改错消息。
+   */
+  const indexRef = useRef<{ arr: ChatMessage[]; idx: Map<string, number> } | null>(null)
+  /** 找到 id 那条就用 `apply` 换掉;没有就在末尾追加 `create()`(不给 create = 没有就原样不动)。 */
+  const upsertMsg = useCallback((m: ChatMessage[], id: string, apply: (x: ChatMessage) => ChatMessage, create?: () => ChatMessage): ChatMessage[] => {
+    let c = indexRef.current
+    if (!c || c.arr !== m) {
+      const idx = new Map<string, number>()
+      m.forEach((x, i) => { if (!idx.has(x.id)) idx.set(x.id, i) })
+      c = { arr: m, idx }
+    }
+    const i = c.idx.get(id)
+    let next: ChatMessage[]
+    if (i === undefined) {
+      if (!create) { indexRef.current = c; return m }
+      const idx = new Map(c.idx).set(id, m.length)
+      next = [...m, create()]
+      indexRef.current = { arr: next, idx }
+      return next
+    }
+    next = m.slice()
+    next[i] = apply(m[i])
+    indexRef.current = { arr: next, idx: c.idx }
+    return next
+  }, [])
+  /** 这一帧攒着、还没落进 state 的流式增量(按消息 id)。见下面事件 effect 里的 flushDeltas。 */
+  const pendingRef = useRef(new Map<string, PendingDelta>())
+  const cancelFlushRef = useRef<(() => void) | null>(null)
+  const dropPendingDeltas = useCallback(() => {
+    cancelFlushRef.current?.()
+    cancelFlushRef.current = null
+    pendingRef.current.clear()
+  }, [])
   const onModeChangedRef = useRef(onModeChanged)
   onModeChangedRef.current = onModeChanged
 
@@ -122,6 +175,10 @@ export function useChat(
     void api.current.chatHistory(workspacePath, sessionId, DESKTOP_TOOL_OUTPUT_CAP).then((h: ChatMessage[]) => {
       if (!live) return
       setHistoryLoading(false)
+      // ★★攒着的增量**丢掉**,不是刷到 h 后面:它们都比这份历史先到,主进程那边先 publishLive 再广播,
+      //  所以它们的字已经在 h 那条在途消息里了。以前逐条 setMessages 时它们落在旧数组上、被这一句整个
+      //  盖掉;合并之后若再刷一次,同一段字会出现两遍。
+      dropPendingDeltas()
       setMessages(h)
       // Restore the streaming affordance for an in-flight message folded in by the main-process live
       // buffer (ts:'' uniquely marks a not-yet-persisted assistant reply) — otherwise it renders as a
@@ -133,7 +190,7 @@ export function useChat(
       if (live) setHistoryLoading(false)
     })
     return () => { live = false }
-  }, [workspacePath, sessionId, hostReadySeq])
+  }, [workspacePath, sessionId, hostReadySeq, dropPendingDeltas])
 
   useEffect(() => {
     const off = api.current.onChatQueueEvent(e => {
@@ -151,46 +208,65 @@ export function useChat(
   }, [workspacePath, sessionId])
 
   useEffect(() => {
+    const blankAi = (id: string): ChatMessage => ({ id, who: 'ai', text: '', ts: '', think: { label: '主代理思考中…', steps: [] } })
+    /**
+     * ★★流式增量按动画帧合并:一帧里来 50 个 token 只 setMessages 一次(以前每个 token 一次,
+     *  整条消息流跟着每个 token 重渲)。按消息 id 攒,Map 保留首次出现的顺序 = 原来逐条追加的顺序。
+     * ★任何**非增量**事件到来前先同步刷掉攒着的(见下面 `flushDeltas()`),所以事件的先后关系和以前逐字一样。
+     */
+    const pending = pendingRef.current
+    const flushDeltas = () => {
+      cancelFlushRef.current?.()
+      cancelFlushRef.current = null
+      if (!pending.size) return
+      const batch = [...pending]
+      pending.clear()
+      setStreamingIds(s => batch.every(([id]) => s.has(id)) ? s : batch.reduce((n, [id]) => n.add(id), new Set(s)))
+      setMessages(m => batch.reduce((acc, [id, d]) => {
+        const apply = (x: ChatMessage): ChatMessage => d.touchedThink
+          ? {
+              ...x,
+              text: x.text + d.text,
+              context: mergeContext(x.context, d.context),
+              think: { label: x.think?.label ?? '主代理思考中…', steps: [...(x.think?.steps ?? []), ...d.steps] },
+            }
+          : { ...x, text: x.text + d.text }
+        return upsertMsg(acc, id, apply, () => apply(blankAi(id)))
+      }, m))
+    }
+    const queueDelta = (id: string, add: (d: PendingDelta) => void) => {
+      let d = pending.get(id)
+      if (!d) { d = { text: '', steps: [], touchedThink: false }; pending.set(id, d) }
+      add(d)
+      if (!cancelFlushRef.current) cancelFlushRef.current = scheduleFlush(() => { cancelFlushRef.current = null; flushDeltas() })
+    }
+
     const off = api.current.onChatEvent((e: ChatEvent) => {
       if (e.workspacePath !== workspacePath || e.sessionId !== sessionId) return
       // NOTE: delta/done/error UPSERT by id. A turn can start (assistant-start) while this chat view is
       // unmounted — e.g. a command sent from the pet while the app is on the home view. When the view then
       // opens mid-turn it never saw assistant-start, so a plain `.map` would drop every delta/done and the
       // reply would never appear. Creating the message on first sight of any of its events fixes that.
-      const blankAi = (id: string): ChatMessage => ({ id, who: 'ai', text: '', ts: '', think: { label: '主代理思考中…', steps: [] } })
+      if (e.type === 'assistant-delta') { queueDelta(e.id, d => { d.text += e.text }); return }
+      if (e.type === 'think-delta') {
+        queueDelta(e.id, d => { d.touchedThink = true; d.steps.push(e.text); d.context = mergeContext(d.context, e.context) })
+        return
+      }
+      flushDeltas()
       if (e.type === 'user') setMessages(m => [...m, e.message])
       else if (e.type === 'assistant-start') {
         setStreamingIds(s => new Set(s).add(e.id))
-        setMessages(m => m.some(x => x.id === e.id) ? m : [...m, { ...blankAi(e.id), model: e.model, context: e.context, startedAt: Date.now() }])
-      }
-      else if (e.type === 'assistant-delta') {
-        setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
-        setMessages(m => m.some(x => x.id === e.id)
-          ? m.map(x => x.id === e.id ? { ...x, text: x.text + e.text } : x)
-          : [...m, { ...blankAi(e.id), text: e.text }])
+        setMessages(m => upsertMsg(m, e.id, x => x, () => ({ ...blankAi(e.id), model: e.model, context: e.context, startedAt: Date.now() })))
       }
       else if (e.type === 'assistant-replace') {
         // Overwrite (not append) — the provider sent the authoritative full reply with real newlines.
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
-        setMessages(m => m.some(x => x.id === e.id)
-          ? m.map(x => x.id === e.id ? { ...x, text: e.text } : x)
-          : [...m, { ...blankAi(e.id), text: e.text }])
-      }
-      else if (e.type === 'think-delta') {
-        setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
-        const apply = (x: ChatMessage): ChatMessage => ({
-          ...x,
-          context: mergeContext(x.context, e.context),
-          think: { label: x.think?.label ?? '主代理思考中…', steps: [...(x.think?.steps ?? []), e.text] },
-        })
-        setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? apply(x) : x) : [...m, apply(blankAi(e.id))])
+        setMessages(m => upsertMsg(m, e.id, x => ({ ...x, text: e.text }), () => ({ ...blankAi(e.id), text: e.text })))
       }
       // 这一轮换阶段了(在想 ↔ 在自动压缩)。只改 think 折叠块的标题 —— 压缩期间 provider 一个 token
       // 都不吐,不换标题的话界面和卡死没有区别。收尾时 done 会用落盘的那条消息整个替换掉它。
       else if (e.type === 'phase') {
-        setMessages(m => m.map(x => x.id === e.id && x.think
-          ? { ...x, think: { ...x.think, label: phaseLabel(e.phase) } }
-          : x))
+        setMessages(m => upsertMsg(m, e.id, x => x.think ? { ...x, think: { ...x.think, label: phaseLabel(e.phase) } } : x))
       }
       else if (e.type === 'subagent') {
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
@@ -199,17 +275,19 @@ export function useChat(
           const i = list.findIndex(s => s.id === e.sub.id)
           return { ...x, subagents: i >= 0 ? list.map(s => s.id === e.sub.id ? e.sub : s) : [...list, e.sub] }
         }
-        setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? upsert(x) : x) : [...m, upsert(blankAi(e.id))])
+        setMessages(m => upsertMsg(m, e.id, upsert, () => upsert(blankAi(e.id))))
       }
       // Main-agent tool call (执行 block): upsert by tool id, preserving execution order.
       else if (e.type === 'tool-activity') {
         setStreamingIds(s => s.has(e.id) ? s : new Set(s).add(e.id))
+        // ★大段输出不进 state,和历史同一个阈值同一种形状(见 omitLargeToolOutput);点开时 ToolBlock 再去取。
+        const tool = omitLargeToolOutput(e.tool)
         const upsert = (x: ChatMessage): ChatMessage => {
           const list = x.tools ?? []
-          const i = list.findIndex(t => t.id === e.tool.id)
-          return { ...x, tools: i >= 0 ? list.map(t => t.id === e.tool.id ? e.tool : t) : [...list, e.tool] }
+          const i = list.findIndex(t => t.id === tool.id)
+          return { ...x, tools: i >= 0 ? list.map(t => t.id === tool.id ? tool : t) : [...list, tool] }
         }
-        setMessages(m => m.some(x => x.id === e.id) ? m.map(x => x.id === e.id ? upsert(x) : x) : [...m, upsert(blankAi(e.id))])
+        setMessages(m => upsertMsg(m, e.id, upsert, () => upsert(blankAi(e.id))))
       }
       // Live delegate-batch progress block (fire-and-forget sub-agents keep running after the main turn
       // ends). Main-side broadcasts these (handlers.ts onBatchStart/onAgentState/onComplete) but they were
@@ -217,13 +295,11 @@ export function useChat(
       // block message (id `delegate-batch:<runId>`, blank text, carries `delegate`) is never persisted —
       // the aggregated result arrives afterwards as its own `done` message.
       else if (e.type === 'delegate-start') {
-        setMessages(m => m.some(x => x.id === e.id)
-          ? m.map(x => x.id === e.id ? { ...x, delegate: e.batch } : x)
-          : [...m, { id: e.id, who: 'ai', text: '', ts: '', delegate: e.batch }])
+        setMessages(m => upsertMsg(m, e.id, x => ({ ...x, delegate: e.batch }), () => ({ id: e.id, who: 'ai', text: '', ts: '', delegate: e.batch })))
       }
       else if (e.type === 'delegate-progress') {
-        setMessages(m => m.map(x => {
-          if (x.id !== e.id || !x.delegate) return x
+        setMessages(m => upsertMsg(m, e.id, x => {
+          if (!x.delegate) return x
           const agents = x.delegate.agents.map(a => a.agentId === e.agentId
             ? { ...a, status: e.status, output: e.output ?? a.output, activity: e.activity ?? a.activity }
             : a)
@@ -231,7 +307,7 @@ export function useChat(
         }))
       }
       else if (e.type === 'delegate-done') {
-        setMessages(m => m.map(x => x.id === e.id && x.delegate
+        setMessages(m => upsertMsg(m, e.id, x => x.delegate
           ? { ...x, delegate: { ...x.delegate, done: true, agents: x.delegate.agents.map(a => a.status === 'run' ? { ...a, status: 'ok' as const } : a) } }
           : x))
       }
@@ -239,17 +315,17 @@ export function useChat(
         // `e.message` is the freshly-persisted turn (from main) and REPLACES the streaming stub, so carry
         // the renderer-captured startedAt forward and stamp endedAt here — otherwise the turn timer loses
         // its start and can't show a 用时 total.
+        // ★落盘的那条带着 tools 全文 —— 同样按阈值摘掉,点开时从磁盘取。
         const endedAt = Date.now()
-        setMessages(m => m.some(x => x.id === e.message.id)
-          ? m.map(x => x.id === e.message.id ? { ...e.message, startedAt: x.startedAt ?? e.message.startedAt, endedAt } : x)
-          : [...m, { ...e.message, endedAt }])
+        const msg = omitLargeToolOutputs(e.message)
+        setMessages(m => upsertMsg(m, msg.id, x => ({ ...msg, startedAt: x.startedAt ?? msg.startedAt, endedAt }), () => ({ ...msg, endedAt })))
         setStreamingIds(s => { const n = new Set(s); n.delete(e.message.id); return n })
       }
       else if (e.type === 'error') {
         const endedAt = Date.now()
-        setMessages(m => m.some(x => x.id === e.id)
-          ? m.map(x => x.id === e.id ? { ...x, text: x.text || `错误: ${e.error}`, think: undefined, endedAt } : x)
-          : [...m, { ...blankAi(e.id), text: `错误: ${e.error}`, think: undefined, endedAt }])
+        setMessages(m => upsertMsg(m, e.id,
+          x => ({ ...x, text: x.text || `错误: ${e.error}`, think: undefined, endedAt }),
+          () => ({ ...blankAi(e.id), text: `错误: ${e.error}`, think: undefined, endedAt })))
         setStreamingIds(s => { const n = new Set(s); n.delete(e.id); return n })
       }
       // 按 id 去重:挂载时的 chatGateState 快照可能已经把同一个门种下了(广播恰好在快照回来之后到达),
@@ -262,10 +338,10 @@ export function useChat(
       else if (e.type === 'plan-resolved') setPlans(p => p.filter(x => x.id !== e.id))
       else if (e.type === 'mode-changed') onModeChangedRef.current?.(e.mode, e.runId)
     })
-    return () => { off() }
+    return () => { off(); dropPendingDeltas() }
     // re-subscribe when the active workspace changes — otherwise the listener
     // closes over a stale workspacePath and silently drops every live event.
-  }, [workspacePath, sessionId])
+  }, [workspacePath, sessionId, upsertMsg, dropPendingDeltas])
 
   const send = useCallback((payload: Omit<ChatSendPayload, 'workspacePath' | 'sessionId'>) => {
     if (!workspacePath || !sessionId) return

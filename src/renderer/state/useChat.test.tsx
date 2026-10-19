@@ -56,7 +56,8 @@ describe('useChat', () => {
     await waitFor(() => expect(result.current.messages).toHaveLength(1))
     act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'think-delta', id: 'a9', text: '分析中' }) })
     act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-delta', id: 'a9', text: '结果' }) })
-    expect(result.current.messages.find(m => m.id === 'a9')?.text).toBe('结果')
+    // 增量按动画帧合并后才落进 state
+    await waitFor(() => expect(result.current.messages.find(m => m.id === 'a9')?.text).toBe('结果'))
     expect(result.current.streamingIds.has('a9')).toBe(true)
     act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'done', message: { id: 'a9', who: 'ai', text: '最终结果', model: 'Claude Code · opus-4.8', ts: '2' } }) })
     await waitFor(() => expect(result.current.streamingIds.size).toBe(0))
