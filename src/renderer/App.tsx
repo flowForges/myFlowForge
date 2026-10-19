@@ -73,6 +73,7 @@ import { SetupProgress, INITIAL_SETUP_STATE, applySetupEvent } from './views/Set
 import type { SetupProgressState } from './views/SetupProgress'
 import type { AgentState, ChatEvent, ChatQueueEvent, CreateWorkspaceOpts, EngineEvent, SetupEvent, Workspace } from '@shared/types'
 import { deriveWsBadge } from './shell/wsBadge'
+import { applyChatGateEvent, type ChatGateMap } from './state/chatGates'
 import { ChatHtmlCtx } from './views/chat/markdown'
 
 export function App() {
@@ -186,21 +187,10 @@ export function App() {
   const [run2SessByWs, setRun2SessByWs] = useState<Map<string, string>>(new Map())
   // Per-workspace pending-gate counts for the sidebar status badge (#3). Chat gates come from ChatEvent
   // (confirm-request/ask-request, each carries workspacePath); workflow gates come from run2 state.pending.
-  const [chatGateByWs, setChatGateByWs] = useState<Map<string, { confirm: Set<string>; input: Set<string> }>>(new Map())
+  const [chatGateByWs, setChatGateByWs] = useState<ChatGateMap>(new Map())
   useEffect(() => {
     const off = window.forge.onChatEvent((e: ChatEvent) => {
-      setChatGateByWs(prev => {
-        const n = new Map(prev)
-        const cur = n.get(e.workspacePath) ?? { confirm: new Set<string>(), input: new Set<string>() }
-        const confirm = new Set(cur.confirm), input = new Set(cur.input)
-        if (e.type === 'confirm-request') confirm.add(e.id)
-        else if (e.type === 'confirm-resolved') confirm.delete(e.id)
-        else if (e.type === 'ask-request') input.add(e.id)
-        else if (e.type === 'ask-resolved') input.delete(e.id)
-        else return prev
-        n.set(e.workspacePath, { confirm, input })
-        return n
-      })
+      setChatGateByWs(prev => applyChatGateEvent(prev, e))
     })
     return () => { off() }
   }, [])

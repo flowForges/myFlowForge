@@ -141,6 +141,11 @@ const STATE_IDX_MAP: Record<string, string> = {
   wait: '', run: 'run', ok: 'ok', err: 'err',
 }
 
+// 「没有」时的固定空数组。★别在渲染里写 `[]` 兜底 —— 每次都是新引用,下游 useMemo / memo 组件全白费。
+const EMPTY_PENDING = Object.freeze([]) as unknown as EngineApi['pending']
+const EMPTY_INBOX = Object.freeze([]) as unknown as RunEvent[]
+const EMPTY_MESSAGES = Object.freeze([]) as unknown as ChatMessage[]
+
 // Stage key → display name (mirrors src/renderer/settings/WorkflowPane.tsx).
 
 // Quick-command chips that seed the composer with a starter prompt.
@@ -356,7 +361,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     && (!engine.run.sessionId || engine.run.sessionId === sessions.activeSessionId)
     ? engine.run : null
   const run = useLastRun(wsPath, liveRunForTab)
-  const pending = liveRunForTab ? engine.pending : []
+  // ★空的时候用模块级常量:每次渲染一个新 [] 会让下面 liveWindow 的 useMemo 次次失效(引用变了),
+  //  整条时间线跟着重建,memo(Message) 也就白搭了。
+  const pending = liveRunForTab ? engine.pending : EMPTY_PENDING
   // #3: if a run in THIS workspace but a DIFFERENT session is waiting on a gate, badge that session's
   // tab (single-run engine → at most one such session today; a Set keeps it concurrency-ready).
   const attentionIds = useMemo(() => {
@@ -721,7 +728,13 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   for (const e of run2StateForTab?.inbox ?? []) {
     if (!(e.id in runCardFirstSeenRef.current)) runCardFirstSeenRef.current[e.id] = Date.now()
   }
-  const runCardEntries = toRunCardEntries(run2StateForTab?.inbox ?? [], mergedRunCards, runCardFirstSeenRef.current)
+  // ★按真实输入 memo(inbox / 已冻结的卡),否则每次渲染都是新数组 → liveWindow 次次重算。
+  //  firstSeen 是上面刚补齐的 ref,inbox 一来新 id 本身就会换引用,不会拿到漏戳的旧值。
+  const runCardInbox = run2StateForTab?.inbox ?? EMPTY_INBOX
+  const runCardEntries = useMemo(
+    () => toRunCardEntries(runCardInbox, mergedRunCards, runCardFirstSeenRef.current),
+    [runCardInbox, mergedRunCards],
+  )
   // 返工反馈:用户在某阶段门上「打回并补充」后,该阶段会重跑,但对话区在阶段跑完重抬门之前不产生任何 inbox
   // 事件,用户「感觉不到新一轮在跑」。这里从 machine 派生一张瞬态「重新XXX中」运行卡(某阶段 running 且
   // round>=1 = 一次重跑,而非首跑),阶段完成状态转 awaiting/done 后条件不再成立,卡片自动消失。永不持久化。
@@ -732,9 +745,14 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     if (!st) return null
     return { key: st.key, name: m.plan.stages.find((p) => p.key === st.key)?.name ?? st.key }
   })()
-  const allRunCardEntries = reworkRunning
-    ? [...runCardEntries, { kind: 'run-card' as const, id: `rerunning:${reworkRunning.key}`, ts: Number.MAX_SAFE_INTEGER, rerunning: { stageName: reworkRunning.name } }]
-    : runCardEntries
+  const reworkKey = reworkRunning?.key
+  const reworkName = reworkRunning?.name
+  const allRunCardEntries = useMemo(
+    () => reworkKey != null
+      ? [...runCardEntries, { kind: 'run-card' as const, id: `rerunning:${reworkKey}`, ts: Number.MAX_SAFE_INTEGER, rerunning: { stageName: reworkName ?? reworkKey } }]
+      : runCardEntries,
+    [runCardEntries, reworkKey, reworkName],
+  )
   // The stage-review gate (non-finalize) currently awaiting a decision in THIS session, if any. Its
   // presence flips the composer into "supplement" mode so a message typed in the main box feeds the
   // workflow (打回本阶段 + 补充说明 rerun) rather than silently starting an unrelated chat — unless the
@@ -1083,7 +1101,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const isReadOnlySession = !!activeSession?.readonly
   const isContinuedSession = !!activeSession?.continuedFrom
   const importedHistory = (isReadOnlySession || isContinuedSession) ? roMessages : []
-  const liveMessages = isReadOnlySession ? [] : chat.messages
+  const liveMessages = isReadOnlySession ? EMPTY_MESSAGES : chat.messages
   const visibleMessages = importedHistory.length ? [...importedHistory, ...liveMessages] : liveMessages
 
   /**
@@ -1251,7 +1269,10 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const closeBrowse = () => { setBrowse(false); setPreview(null) }
   // Open a design doc reported at the gate in the full-screen viewer, in rendered markdown ('full')
   // mode (a freshly-written doc has no diff). The doc's own cwd (its worktree/workspace root) wins.
-  const openDoc = (doc: DesignDocRef) => openBrowse(doc.path, 'M', doc.cwd, 'full')
+  // ★必须稳定:它作为 onOpenDoc 传给每一条 memo(Message),每次渲染换一个新函数 = 每个流式 delta
+  //  都把整屏已答完的消息重画一遍。openBrowse 除 setState 外只闭包了 cwd/wsPath,依赖它俩就够。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const openDoc = useCallback((doc: DesignDocRef) => openBrowse(doc.path, 'M', doc.cwd, 'full'), [cwd, wsPath])
 
   // 对话正文里 [设计文档](docs/design.md) 这类链接的落点。以前点了完全没反应(MdLink 只放行 http)。
   // bases 按优先级:当前会话的 worktree → 工作区根 —— 模型写的相对路径通常相对前者,但聚合模式下没有
