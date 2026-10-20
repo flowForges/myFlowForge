@@ -46,9 +46,21 @@ export function readCodexModelsCache(deps: CodexModelsDeps = {}): Model[] {
 }
 
 /**
+ * 'default'(账号默认)条目的快速档:它到底落到哪个模型由 codex 决定,我们不知道 —— 所以只在列表里
+ * **每一个**模型都报了 priority 档时才给它(那样不管落到谁都支持)。描述取第一个模型的。空列表 = 没有。
+ */
+export function codexDefaultFastTier(models: Model[]): Pick<Model, 'fastTier' | 'fastTierDescription'> {
+  const all = models.length > 0 && models.every(m => m.fastTier === true)
+  const desc = all ? models[0].fastTierDescription : undefined
+  return { fastTier: all, ...(desc ? { fastTierDescription: desc } : {}) }
+}
+
+/**
  * 这个模型在本机 models_cache 里有没有快速档。chat() 在真的传 `service_tier="priority"` 之前用它兜一层:
  * 会话上的快速开关是存量设置,换到一个没有快速档的模型(或 'default')后不该还带着它跑。
  */
 export function codexModelHasFastTier(model: string, deps: CodexModelsDeps = {}): boolean {
-  return readCodexModelsCache(deps).some(m => m.id === model && m.fastTier === true)
+  const models = readCodexModelsCache(deps)
+  if (model === 'default') return codexDefaultFastTier(models).fastTier === true
+  return models.some(m => m.id === model && m.fastTier === true)
 }

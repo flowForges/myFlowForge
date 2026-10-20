@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readCodexModelsCache, codexModelHasFastTier } from './codexModels'
+import { readCodexModelsCache, codexModelHasFastTier, codexDefaultFastTier } from './codexModels'
 
 const cache = JSON.stringify({
   fetched_at: 1, models: [
@@ -59,8 +59,25 @@ describe('codex 快速档(service tier "priority")', () => {
     const deps = { home: '/h', readFile: () => tiered }
     expect(codexModelHasFastTier('gpt-6-astra', deps)).toBe(true)
     expect(codexModelHasFastTier('plain', deps)).toBe(false)
-    expect(codexModelHasFastTier('default', deps)).toBe(false)
+    expect(codexModelHasFastTier('default', deps)).toBe(false)   // 混合缓存:有模型没快速档
     expect(codexModelHasFastTier('nope', deps)).toBe(false)
     expect(codexModelHasFastTier('gpt-6-astra', { home: '/h', readFile: () => { throw new Error('ENOENT') } })).toBe(false)
+  })
+})
+
+describe("'default'(账号默认)的快速档:列表里每个模型都有 priority 才有", () => {
+  const allFast = JSON.stringify({ models: [
+    { slug: 'a', visibility: 'list', service_tiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' }] },
+    { slug: 'b', visibility: 'list', service_tiers: [{ id: 'priority', name: 'Fast', description: '2x speed, increased usage' }] },
+    { slug: 'hidden-no-tier', visibility: 'hide' },
+  ] })
+  it('全都有 → true,描述取第一个模型的;不可见的模型不算', () => {
+    const models = readCodexModelsCache({ home: '/h', readFile: () => allFast })
+    expect(codexDefaultFastTier(models)).toEqual({ fastTier: true, fastTierDescription: '1.5x speed, increased usage' })
+    expect(codexModelHasFastTier('default', { home: '/h', readFile: () => allFast })).toBe(true)
+  })
+  it('混合 → false;空列表 → false', () => {
+    expect(codexDefaultFastTier(readCodexModelsCache({ home: '/h', readFile: () => tiered }))).toEqual({ fastTier: false })
+    expect(codexDefaultFastTier([])).toEqual({ fastTier: false })
   })
 })

@@ -1167,7 +1167,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
      *  常见情况下一个字节都不多存,界面上也一个像素都不多画。
      */
     const via = _e?.client && _e.client.id !== 'local' ? _e.client.label : undefined
-    chatQueue.enqueue({ ...payload, via }, source ?? '你')
+    // 快速档是会话级的:载荷没带(手机 / 远程客户端不认识这个开关)就按落盘的会话补上。
+    const fast = payload.fast ?? getSession(payload.workspacePath, payload.sessionId)?.fast
+    chatQueue.enqueue({ ...payload, via, fast }, source ?? '你')
   })
   on(CH.chatQueueState, (_e, a: { workspacePath: string }) => chatQueue.snapshot(a.workspacePath))
   // 还挂着的确认/提问门快照。聊天视图每次挂载都拉一次,把主进程仍在阻塞等待的门重建成卡片。

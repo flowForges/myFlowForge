@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync, existsSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execa } from 'execa'
-import { detectProviders } from './detect'
+import { detectProviders, resetCodexFastTierRefresh } from './detect'
 import { BUILTIN_IDS } from '@shared/providerCatalog'
 import type { AgentProvider, AgentTask, AgentCallbacks } from './types'
 
@@ -348,7 +348,11 @@ describe('detectProviders — background refresh scheduling', () => {
       providers: [{ id: 'codex', binOverride: '', env: {}, modelsCache: [{ id: 'gpt-6-astra', label: 'GPT-6 Astra' }], modelsFetchedAt: fresh }],
       custom: [],
     })
+    resetCodexFastTierRefresh()
     const legacySpy = vi.fn()
+    await detectProviders({ codex: p }, process.env, { scheduleRefresh: legacySpy })
+    expect(legacySpy).toHaveBeenCalledOnce()
+    // models_cache.json 不在时刷新拿到 [] 、旧缓存原样保留 —— 下一次 detect 不能再为这个原因刷。
     await detectProviders({ codex: p }, process.env, { scheduleRefresh: legacySpy })
     expect(legacySpy).toHaveBeenCalledOnce()
 

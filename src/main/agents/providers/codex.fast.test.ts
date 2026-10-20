@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatTask } from '../types'
@@ -39,9 +39,9 @@ afterEach(() => {
 })
 
 const NOOP_CB = { onSession: () => {}, onAssistantDelta: () => {}, onThinkDelta: () => {}, onDone: () => {}, onError: () => {} }
-async function argvOf(task: Partial<ChatTask>, hasFast: (m: string) => boolean = () => true): Promise<string[]> {
+async function argvOf(task: Partial<ChatTask>, hasFast: ((m: string) => boolean) | 'real-cache' = () => true): Promise<string[]> {
   const { makeCodexProvider } = await import('./codex')
-  const provider = makeCodexProvider({ bin, defaultModels: [], modelHasFastTier: hasFast })
+  const provider = makeCodexProvider({ bin, defaultModels: [], ...(hasFast === 'real-cache' ? {} : { modelHasFastTier: hasFast }) })
   const s = provider.chat!({ id: 'a1', prompt: 'PROMPT_BODY', model: 'gpt-6-astra', cwd: dir, ...task }, NOOP_CB, { ...process.env, ARGV_OUT: argvOut })
   // app-server 那条路:假 codex 写完 argv 就退出,close → done 以失败收尾 —— 照样等它,argv 已经落盘。
   await s.done
@@ -78,6 +78,39 @@ describe('codex 快速档 → -c service_tier="priority"', () => {
   it('开着但这个模型没有快速档(换了模型 / default)→ 不传', async () => {
     const args = await argvOf({ fast: true, model: 'default' }, () => false)
     expect(args.some(a => a.includes('service_tier'))).toBe(false)
+  })
+
+  describe("'default' 模型走真实的 models_cache 判断", () => {
+    let oldHome: string | undefined
+    const writeCache = (models: unknown[]) => {
+      mkdirSync(join(dir, '.codex'), { recursive: true })
+      writeFileSync(join(dir, '.codex', 'models_cache.json'), JSON.stringify({ models }))
+    }
+    beforeEach(() => { oldHome = process.env.HOME; process.env.HOME = dir })
+    afterEach(() => { process.env.HOME = oldHome })
+    const fastModel = (slug: string) => ({ slug, visibility: 'list', service_tiers: [{ id: 'priority', name: 'Fast' }] })
+
+    it('缓存里每个模型都有 priority → default 也带 -c service_tier="priority"', async () => {
+      writeCache([fastModel('a'), fastModel('b')])
+      const args = await argvOf({ fast: true, model: 'default' }, 'real-cache')
+      expect(tierPairs(args)).toBe(1)
+      expect(args).not.toContain('-m')
+    })
+
+    it('模型列表里的 default 条目:全有 → fastTier true(带第一个模型的描述);混合 → false', async () => {
+      const { makeCodexProvider } = await import('./codex')
+      const provider = makeCodexProvider({ bin, defaultModels: [] })
+      writeCache([{ ...fastModel('a'), service_tiers: [{ id: 'priority', name: 'Fast', description: '1.5x speed, increased usage' }] }, fastModel('b')])
+      expect((await provider.listModelsLive!(process.env))[0]).toMatchObject({ id: 'default', fastTier: true, fastTierDescription: '1.5x speed, increased usage' })
+      writeCache([fastModel('a'), { slug: 'b', visibility: 'list' }])
+      expect((await provider.listModels(process.env))[0]).toMatchObject({ id: 'default', fastTier: false })
+    })
+
+    it('混合缓存(有模型没快速档)→ default 不带', async () => {
+      writeCache([fastModel('a'), { slug: 'b', visibility: 'list' }])
+      const args = await argvOf({ fast: true, model: 'default' }, 'real-cache')
+      expect(args.some(a => a.includes('service_tier'))).toBe(false)
+    })
   })
 
   it('app-server:开 → 启动参数里带 -c service_tier="priority"(在 app-server 子命令之前)', async () => {

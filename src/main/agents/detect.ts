@@ -15,6 +15,10 @@ import { probeAuth, type AuthState } from './credProbe'
 // "not installed" and vanished from the UI. Give the probe room.
 const DEFAULT_DETECT_TIMEOUT_MS = 15000
 const STALE_TTL_MS = 7 * 24 * 3600 * 1000   // 7 days
+// 见下方 codexPreFastTier:老 codex 缓存(没有 fastTier 字段)每个进程只额外刷一次。
+let codexFastTierRefreshed = false
+/** 仅测试用:重置「老 codex 缓存已额外刷过一次」的标记。 */
+export function resetCodexFastTierRefresh(): void { codexFastTierRefreshed = false }
 const BUILTIN_IDS = new Set(CATALOG_BUILTIN_IDS)
 
 // Resolve a bin name to its absolute path (so the UI can show *where* it was found).
@@ -147,7 +151,10 @@ export async function detectProviders(
       models = cachedModels.length > 0 ? cachedModels : await p.listModels(env).catch(() => [])
       // ★codex 的缓存若是在「快速档」字段出现之前写的(没有一条带 fastTier),也当过期刷一次 ——
       //  否则老用户要等满 7 天,输入框上的「⚡ 快速」chip 才会出现。刷过之后每条都有 fastTier,不会反复刷。
-      const codexPreFastTier = p.id === 'codex' && cachedModels.length > 0 && cachedModels.every(m => m.fastTier === undefined)
+      //  ★每个进程只为这个原因刷一次:~/.codex/models_cache.json 不在时 listModelsLive 返回 [],刷新保留旧缓存,
+      //   不记一笔的话每次 detect 都会再刷。
+      const codexPreFastTier = p.id === 'codex' && !codexFastTierRefreshed && cachedModels.length > 0 && cachedModels.every(m => m.fastTier === undefined)
+      if (codexPreFastTier) codexFastTierRefreshed = true
       if (p.capabilities.liveModels && (cachedModels.length === 0 || nowMs - fetchedAt > STALE_TTL_MS || codexPreFastTier)) {
         scheduleRefresh(p.id, registry, env)
       }

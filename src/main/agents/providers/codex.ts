@@ -8,7 +8,7 @@ import { buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTrac
 import { forgeCodexConfigArgs } from '../mcpConfig'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
-import { readCodexModelsCache, codexModelHasFastTier, CODEX_FAST_TIER } from './codexModels'
+import { readCodexModelsCache, codexModelHasFastTier, codexDefaultFastTier, CODEX_FAST_TIER } from './codexModels'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { driveCodexTurn } from './codexAppServer'
@@ -40,6 +40,9 @@ function clipArgs(bin: string, args: string[]): string {
 
 // Always-available "account default" entry, shown ahead of the real local models.
 const CODEX_DEFAULT_MODEL: Model = { id: 'default', label: '账号默认', description: 'codex 配置/账号的默认模型' }
+
+// 'default' 排在真实模型前面;它的快速档按 codexDefaultFastTier 的规则(全部模型都有才有)。
+export function withCodexDefault(local: Model[]): Model[] { return [{ ...CODEX_DEFAULT_MODEL, ...codexDefaultFastTier(local) }, ...local] }
 
 // One codex `exec --json` JSONL event → chat actions. Codex nests the payload under `msg`.
 export type CodexAction =
@@ -202,6 +205,7 @@ function codexModelConfigArgs(model: string): string[] { return model && model !
 
 // 快速档:开 → `-c service_tier="priority"`(`-c` 在 exec / exec resume / app-server 前都认)。
 // ★关/缺省 → **什么都不传**,不是传 "default":不覆盖就是让 codex 跟用户自己的配置走。
+// ★exec 传输带 --ignore-user-config,所以那条路上「关」= codex 内置的默认档,不是 config.toml 里写的档。
 function codexServiceTierArgs(fast: boolean | undefined): string[] { return fast ? ['-c', `service_tier="${CODEX_FAST_TIER}"`] : [] }
 
 // The forge_propose_plan chat directive now lives in ../forgeChatDirective (shared with qoder,
@@ -227,8 +231,8 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
     async detect() { try { await execa(bin, ['--version']); return true } catch { return false } },
     // Read real local models from ~/.codex/models_cache.json; fall back to the static defaults
     // only when the cache is missing (so the list is never empty on a fresh install).
-    async listModels() { const local = readCodexModelsCache(); return local.length ? [CODEX_DEFAULT_MODEL, ...local] : defaultModels },
-    async listModelsLive() { const local = readCodexModelsCache(); return local.length ? [CODEX_DEFAULT_MODEL, ...local] : [] },
+    async listModels() { const local = readCodexModelsCache(); return local.length ? withCodexDefault(local) : defaultModels },
+    async listModelsLive() { const local = readCodexModelsCache(); return local.length ? withCodexDefault(local) : [] },
     run(task: AgentTask, cb: AgentCallbacks, env): AgentSession {
       cb.onState('run')
       const scanner = createFenceScanner(p => cb.onHandoff?.(p))
