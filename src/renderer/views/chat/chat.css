@@ -436,6 +436,8 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
   border-color: color-mix(in oklab, var(--warn) 35%, transparent);
 }
 [data-theme="light"] .browser-conflict-hint { color: oklch(46% .15 40); }
+/* codex 快速档 chip:开 = 强调色,关 = 普通 cb-btn。 */
+.cb-fast.on { color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, transparent); border-color: color-mix(in oklab, var(--accent) 30%, transparent); }
 .composer-bar .spacer { flex: 1; }
 .send { width: 34px; height: 34px; border-radius: 8px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; transition: .14s; }
 .send:hover { filter: brightness(1.08); }

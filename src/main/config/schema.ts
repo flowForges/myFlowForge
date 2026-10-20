@@ -639,7 +639,9 @@ export const standardWorkflow = (): Workflow => ({
 })
 export const defaultWorkflows = () => ({ workflows: [standardWorkflow()] })
 
-export const ModelSchema = z.object({ id: z.string(), label: z.string(), description: z.string().optional() })
+// fastTier/fastTierDescription:codex 模型的快速档(service tier "priority"),见 codexModels.ts。
+// ★必须在 schema 里声明 —— z.object 会剥掉未知字段,不写的话存进 agents.json 的 modelsCache 就丢了。
+export const ModelSchema = z.object({ id: z.string(), label: z.string(), description: z.string().optional(), fastTier: z.boolean().optional(), fastTierDescription: z.string().optional() })
 export const ProviderConfigSchema = z.object({
   id: z.string(),
   binOverride: z.string().default(''),   // override the CLI bin path for a built-in provider

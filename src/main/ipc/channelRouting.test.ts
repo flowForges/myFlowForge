@@ -55,7 +55,8 @@ describe('频道分类', () => {
     // 168 → 169:session:set-browser-use(浏览器开关的会话级设置)。不列进 CLIENT_ONLY ⇒ 走 host——
     //   handler 紧挨着 sessionSetPermission 放,改的是**主机上**那个会话的开关状态,和权限档
     //   同一类,路由也该和它一样。
-    expect(host.length).toBe(169)
+    // 169 → 170:session:set-fast(codex 快速档,会话级设置)。同 set-browser-use ⇒ host。
+    expect(host.length).toBe(170)
     expect(client.length + host.length).toBe(keys.length)
   })
 

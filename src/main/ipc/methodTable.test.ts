@@ -74,6 +74,7 @@ describe('方法表', () => {
     // 215 → 216:session:set-browser-use —— 浏览器开关的会话级设置(2026-10-04 浏览器操作功能)。
     //   handler 紧挨着 sessionSetPermission 放:写的是**主机上**那个会话的开关状态,跟权限档
     //   同一个道理,所以是 host 方法。
-    expect(Object.keys(table).length).toBe(216)
+    // 216 → 217:session:set-fast —— codex 快速档的会话级设置,同 set-browser-use ⇒ host 方法。
+    expect(Object.keys(table).length).toBe(217)
   })
 })

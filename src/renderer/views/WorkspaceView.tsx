@@ -950,6 +950,11 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   const activePerm = activeSession?.permissionMode ?? DEFAULT_PERMISSION_MODE
   // 浏览器开关:和 activePerm 并排,持久化时用它判断「这次选择是否真的变了」(见下方 onSelectionChange)。
   const activeBrowserUse = activeSession?.browserUse ?? DEFAULT_BROWSER_USE
+  // codex 快速档:会话级设置,直接落盘(主进程广播回来后 activeSession.fast 就是新值,chip 跟着变)。
+  const onFastChange = useCallback((on: boolean) => {
+    const sid = sessions.activeSessionId
+    if (wsPath && sid) void window.forge.sessionSetFast?.({ workspacePath: wsPath, sessionId: sid, fast: on })
+  }, [wsPath, sessions.activeSessionId])
   // D1(图2修复):执行阶段把 run2 的 liveLanes 镜像到对话区(下方 WorkflowExecBlock)。
   const execLanes = useMemo(() => {
     const st = run2.state
@@ -1825,6 +1830,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           dynamicCommands={composerCommands}
           onPickWorkflow={onPickWorkflow}
           onOpenMcp={() => setMcpOpen(true)}
+          fast={activeSession?.fast === true}
+          onFastChange={onFastChange}
           onSelectionChange={(s) => {
             // Provider switch guard: agent changed AND the old provider already ran this session → don't
             // switch yet; raise a confirm banner (switch loses native context; the new provider will

@@ -3,7 +3,13 @@ import type { Attachment, AskAnswers, AskQuestion, ContextUsage } from '@shared/
 export interface HandoffPayload { summary: string; artifacts?: { path: string; kind: string }[] }
 
 export type AgentState = 'wait' | 'run' | 'stalled' | 'awaiting' | 'ok' | 'err'
-export interface Model { id: string; label: string; description?: string }
+export interface Model {
+  id: string; label: string; description?: string
+  /** codex:这个模型支持快速档(service tier "priority")。只有 codex 的 models_cache 会给。 */
+  fastTier?: boolean
+  /** codex 自己对快速档的描述(如 "1.5x speed, increased usage"),只用作 chip 的 title。 */
+  fastTierDescription?: string
+}
 export interface AgentCapabilities {
   structuredOutput: boolean; permissionHook: boolean; pty: boolean
   mcpTools?: boolean; liveModels?: boolean
@@ -99,6 +105,8 @@ export interface ChatTask {
   permissionMode?: import('@shared/permissions').PermissionMode
   /** 这一轮允不允许操作浏览器。缺省 = 'off'(见 shared/browserUse.ts)。 */
   browserUse?: import('@shared/browserUse').BrowserUseMode
+  /** 这一轮用快速档(codex service tier "priority")。缺省/false = 不覆盖,跟用户自己的 codex 配置走。 */
+  fast?: boolean
   /**
    * ACP 那几家(acp/acpProvider.ts)讲不了 ACP、要回落到 run() 之前问一次:run() 那条路没有逐操作的门
    * (gemini `--approval-mode yolo` / copilot `--allow-all-tools`),等于以「完全访问」跑。返回 false = 不跑。

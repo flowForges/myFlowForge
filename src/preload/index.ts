@@ -113,6 +113,8 @@ const api = {
   sessionSetPermission: (a: { workspacePath: string; sessionId: string; mode: import('@shared/permissions').PermissionMode }) => ipcRenderer.invoke(CH.sessionSetPermission, a),
   // 和 sessionSetPermission 并排,同一类的会话级设置(见 sessionStore.ts 的 setSessionBrowserUse)。
   sessionSetBrowserUse: (a: { workspacePath: string; sessionId: string; mode: import('@shared/browserUse').BrowserUseMode }) => ipcRenderer.invoke(CH.sessionSetBrowserUse, a),
+  // codex 快速档:同上(见 sessionStore.ts 的 setSessionFast)。
+  sessionSetFast: (a: { workspacePath: string; sessionId: string; fast: boolean }) => ipcRenderer.invoke(CH.sessionSetFast, a),
   chatSwitchSummary: (a: { workspacePath: string; sessionId: string; toAgent: string; model: string }) => ipcRenderer.invoke(CH.chatSwitchSummary, a),
   chatSummarizeRequirement: (a: { workspacePath: string; sessionId: string; agent: string; model: string }): Promise<string> => ipcRenderer.invoke(CH.chatSummarizeRequirement, a),
   // P1-5: persist a confirmed launch-gate's frozen record onto the session (see WorkspaceView's

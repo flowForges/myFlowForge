@@ -2,7 +2,7 @@ import { execa } from 'execa'
 import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import type { AgentProvider } from './types'
-import type { ProviderInfo } from '@shared/types'
+import type { ProviderInfo, ModelInfo } from '@shared/types'
 import { BUILTIN_IDS as CATALOG_BUILTIN_IDS, getBuiltinProvider } from '@shared/providerCatalog'
 import { readAgentsConfig, writeAgentsConfig } from '../config/store'
 import { refreshProviderModels } from './refreshModels'
@@ -140,12 +140,15 @@ export async function detectProviders(
       ? await withTimeout(probeAuthState(p.id, p.bin, env), timeoutMs, 'unknown' as AuthState)
       : 'unknown'
 
-    let models: { id: string; label: string; description?: string }[] = []
+    let models: ModelInfo[] = []
     if (installed) {
       const cachedModels = provCfg?.modelsCache ?? []
       const fetchedAt = provCfg?.modelsFetchedAt ?? 0
       models = cachedModels.length > 0 ? cachedModels : await p.listModels(env).catch(() => [])
-      if (p.capabilities.liveModels && (cachedModels.length === 0 || nowMs - fetchedAt > STALE_TTL_MS)) {
+      // ★codex 的缓存若是在「快速档」字段出现之前写的(没有一条带 fastTier),也当过期刷一次 ——
+      //  否则老用户要等满 7 天,输入框上的「⚡ 快速」chip 才会出现。刷过之后每条都有 fastTier,不会反复刷。
+      const codexPreFastTier = p.id === 'codex' && cachedModels.length > 0 && cachedModels.every(m => m.fastTier === undefined)
+      if (p.capabilities.liveModels && (cachedModels.length === 0 || nowMs - fetchedAt > STALE_TTL_MS || codexPreFastTier)) {
         scheduleRefresh(p.id, registry, env)
       }
     }

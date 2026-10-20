@@ -95,7 +95,13 @@ export type EngineEvent =
 // 'modify' = 阶段评审门控上的「打回重做」:value 带用户填写的修改方向,编排器据此重跑当前阶段。
 export interface ResolvePayload { id: string; decision: 'allow' | 'deny' | 'modify'; value?: string; choice?: number }
 
-export interface ModelInfo { id: string; label: string; description?: string; contextWindow?: number }
+export interface ModelInfo {
+  id: string; label: string; description?: string; contextWindow?: number
+  /** codex:这个模型有快速档(service tier "priority")。见 main/agents/providers/codexModels.ts。 */
+  fastTier?: boolean
+  /** codex 自己对快速档的描述(如 "1.5x speed, increased usage")。 */
+  fastTierDescription?: string
+}
 /**
  * `auth`:这台机器上这个 provider **登录了没有**(第三期:远程/无头场景)。
  *
@@ -370,6 +376,8 @@ export interface ChatSession {
   permissionMode?: import('./permissions').PermissionMode
   /** 这个会话允不允许 agent 操作浏览器。缺省 = 'off'(见 shared/browserUse.ts)。 */
   browserUse?: import('./browserUse').BrowserUseMode
+  /** codex 快速档(service tier "priority")开关。缺省 = 关 = 不覆盖用户自己的 codex 配置。 */
+  fast?: boolean
   // 对话式工作流(2026-07-30):本 session 若在某个工作流里,记下轻量 WorkflowSessionState(阶段/进度/
   // provider 配置/执行尾段 runId)。缺省=普通会话,不在工作流里。见 shared/workflowSession.ts。
   workflowSession?: import('./workflowSession').WorkflowSessionState
@@ -432,6 +440,8 @@ export interface ChatSendPayload {
   permissionMode?: import('./permissions').PermissionMode   // agent sandbox scope (readonly/auto/full)
   /** 这一轮允不允许操作浏览器(照 permissionMode 的走法一路带到 ChatTask.browserUse)。 */
   browserUse?: import('./browserUse').BrowserUseMode
+  /** 这一轮用 codex 快速档(会话级设置,一路带到 ChatTask.fast)。 */
+  fast?: boolean
 }
 export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (

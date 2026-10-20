@@ -47,7 +47,7 @@ import { ChatQueue } from '../chat/chatQueue'
 import { appendMessage, readMessages } from '../chat/chatStore'
 import { withLastMessageAt } from '../chat/sessionsView'
 import { mergeLive } from '../chat/liveTurns'
-import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, setSessionBrowserUse, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
+import { readSessions, newSession, switchSession, closeSession, renameSession, setSessionMode, setSessionPermission, setSessionModel, setSessionBrowserUse, setSessionFast, continueFrom, getSession, setSessionWorkflow, autoNameIfDefault } from '../chat/sessionStore'
 import { buildLaunchPlan, buildLaunchProjects, hasRequirement, type LaunchStartConfig } from '../run/launch'
 import { buildWorkflowSession, tailLaunchConfig, stageDocRelPath, extractProjectBriefs } from '../run/workflowEnter'
 import { advanceWorkflow, type WorkflowSessionState } from '../../shared/workflowSession'
@@ -1249,6 +1249,12 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     broadcastSessions(a.workspacePath, file)
     return sessionsOut(a.workspacePath, file)
   })
+  // codex 快速档:同浏览器开关,只是落盘的会话级设置 —— 落盘 + 广播 + sessionsOut。
+  on(CH.sessionSetFast, (_e, a: { workspacePath: string; sessionId: string; fast: boolean }) => {
+    const file = setSessionFast(a.workspacePath, a.sessionId, a.fast === true)
+    broadcastSessions(a.workspacePath, file)
+    return sessionsOut(a.workspacePath, file)
+  })
   on(CH.sessionSetModel, (_e, a: { workspacePath: string; sessionId: string; agentId: string; modelId: string }) => {
     const file = setSessionModel(a.workspacePath, a.sessionId, a.agentId, a.modelId)
     broadcastSessions(a.workspacePath, file)
@@ -1281,6 +1287,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
       //  「每次询问」,可阶段起手那一轮 agent 却说它打不开页面,用户随后自己敲的那句又可以 ——
       //  同一个会话里能力时有时无,这比干脆没有更难理解。
       browserUse: getSession(workspacePath, sessionId)?.browserUse,
+      // 快速档同理是会话级的(codex.ts 会再按模型有没有快速档兜一层)。
+      fast: getSession(workspacePath, sessionId)?.fast,
     }, '工作流')
   }
   on(CH.workflowEnter, (_e, p: LaunchStartConfig) => {
@@ -1486,6 +1494,7 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     enqueue: (payload, source) => chatQueue.enqueue({
       ...(payload as ChatSendPayload),
       browserUse: getSession(payload.workspacePath, payload.sessionId)?.browserUse,
+      fast: getSession(payload.workspacePath, payload.sessionId)?.fast,
     }, source),
     resolveChatGate: resolveChatGateById,
     resolveRun2Gate: (ws, eventId, decision) => run2Manager.resolveGate(ws, eventId, decision),

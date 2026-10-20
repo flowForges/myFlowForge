@@ -334,6 +334,33 @@ describe('detectProviders — background refresh scheduling', () => {
     expect(refreshSpy).not.toHaveBeenCalled()
   })
 
+  it('codex:新鲜但写于快速档字段之前的缓存(没有一条带 fastTier)→ 也刷一次;带了就不刷', async () => {
+    const fresh = Date.now() - 1000
+    const p: AgentProvider = {
+      id: 'codex', displayName: 'Codex',
+      capabilities: { structuredOutput: true, permissionHook: false, pty: false, liveModels: true },
+      detect: async () => true,
+      listModels: async () => [],
+      listModelsLive: async () => [{ id: 'live', label: 'Live', fastTier: true }],
+      run: () => ({ id: 'x', cancel() {}, done: Promise.resolve({ ok: true }) }),
+    }
+    mockedReadAgentsConfig.mockReturnValue({
+      providers: [{ id: 'codex', binOverride: '', env: {}, modelsCache: [{ id: 'gpt-6-astra', label: 'GPT-6 Astra' }], modelsFetchedAt: fresh }],
+      custom: [],
+    })
+    const legacySpy = vi.fn()
+    await detectProviders({ codex: p }, process.env, { scheduleRefresh: legacySpy })
+    expect(legacySpy).toHaveBeenCalledOnce()
+
+    mockedReadAgentsConfig.mockReturnValue({
+      providers: [{ id: 'codex', binOverride: '', env: {}, modelsCache: [{ id: 'gpt-6-astra', label: 'GPT-6 Astra', fastTier: true }, { id: 'pinned', label: 'Pinned' }], modelsFetchedAt: fresh }],
+      custom: [],
+    })
+    const currentSpy = vi.fn()
+    await detectProviders({ codex: p }, process.env, { scheduleRefresh: currentSpy })
+    expect(currentSpy).not.toHaveBeenCalled()
+  })
+
   it('does NOT schedule refresh when liveModels capability is false', async () => {
     const refreshSpy = vi.fn()
     const p: AgentProvider = {

@@ -8,7 +8,7 @@ import { buildChatPrompt, extractContextTokens, extractTurnTokens, makeUsageTrac
 import { forgeCodexConfigArgs } from '../mcpConfig'
 import { forgeChatDirective } from '../forgeChatDirective'
 import { permissionArgs } from '../permissionArgs'
-import { readCodexModelsCache } from './codexModels'
+import { readCodexModelsCache, codexModelHasFastTier, CODEX_FAST_TIER } from './codexModels'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
 import { driveCodexTurn } from './codexAppServer'
@@ -200,16 +200,25 @@ function codexModelArgs(model: string): string[] { return model && model !== 'de
 // instead, which codex accepts at any point on the command line.
 function codexModelConfigArgs(model: string): string[] { return model && model !== 'default' ? ['-c', `model="${model}"`] : [] }
 
+// 快速档:开 → `-c service_tier="priority"`(`-c` 在 exec / exec resume / app-server 前都认)。
+// ★关/缺省 → **什么都不传**,不是传 "default":不覆盖就是让 codex 跟用户自己的配置走。
+function codexServiceTierArgs(fast: boolean | undefined): string[] { return fast ? ['-c', `service_tier="${CODEX_FAST_TIER}"`] : [] }
+
 // The forge_propose_plan chat directive now lives in ../forgeChatDirective (shared with qoder,
 // which also can't see .claude/skills). Re-exported here for existing importers/tests.
 export { forgeChatDirective } from '../forgeChatDirective'
 function now() { return new Date().toISOString().slice(11, 19) }
 
-export interface CodexSpec { bin?: string; preArgs?: string[]; defaultModels: Model[] }
+export interface CodexSpec {
+  bin?: string; preArgs?: string[]; defaultModels: Model[]
+  /** 这个模型有没有快速档。缺省读本机 ~/.codex/models_cache.json(见 codexModels.ts);测试注入。 */
+  modelHasFastTier?: (model: string) => boolean
+}
 
 export function makeCodexProvider(spec: CodexSpec): AgentProvider {
   const bin = spec.bin ?? 'codex'
   const defaultModels: Model[] = spec.defaultModels ?? []
+  const modelHasFastTier = spec.modelHasFastTier ?? ((m: string) => codexModelHasFastTier(m))
   return {
     id: 'codex',
     displayName: 'Codex',
@@ -395,6 +404,9 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       // conversation (its own earlier 1/2/3 proposal etc.) instead of starting fresh each turn.
       // `codex exec resume <SESSION_ID> [PROMPT]` — SESSION_ID is the thread.started thread_id.
       const head = task.sessionId ? ['exec', 'resume', task.sessionId] : ['exec']
+      // 会话上的快速开关是存量设置:换到一个没有快速档的模型(含 'default')后不再带它 —— 只在模型自己
+      // 在 models_cache 里报了 priority 档时才传。两条传输(exec / app-server)共用这一份。
+      const tierArgs = codexServiceTierArgs(task.fast === true && modelHasFastTier(task.model))
       const directive = forgeChatDirective(env)
       const body = buildChatPrompt(task)
       const prompt = directive ? `${directive}\n\n${body}` : body
@@ -467,7 +479,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
           { hardMs: CHAT_STALL_KILL_MS, onDeadline: () => { cb.onStatus?.('⚠ 太久没有任何输出，已回收这一轮。'); appHandle?.cancel() } })
         try {
           appHandle = driveCodexTurn(
-            { cwd: task.cwd, prompt, modelArgs: codexModelConfigArgs(task.model), configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
+            { cwd: task.cwd, prompt, modelArgs: [...codexModelConfigArgs(task.model), ...tierArgs], configArgs: forgeCodexConfigArgs(env), sandbox, approvalPolicy, resumeThreadId: task.sessionId || undefined },
             {
               onEvent: (e) => { wd.beat(); handle(e) },
               // Pause the idle watchdog while the user decides on this approval — awaiting a human is not
@@ -535,7 +547,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // still works (it lives outside config.toml), and the account's default model is used.
         // sandbox via `-c sandbox_mode` (NOT `-s`): `codex exec resume` rejects the `-s`/`--sandbox`
         // flag ("unexpected argument '-s'"), but accepts the config override — and so does plain `exec`.
-        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...forgeCodexArgs, prompt]
+        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...tierArgs, ...forgeCodexArgs, prompt]
       // stdin: 'ignore' so codex doesn't block reading stdin. A wedged turn is reclaimed by an
       // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").

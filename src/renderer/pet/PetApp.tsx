@@ -204,6 +204,7 @@ export function PetApp() {
     //  漏掉它这一轮就跑 `--no-chrome`:主窗口的 chip 上明明写着「每次询问」,从宠物发出去的
     //  同一个会话里 agent 却说它打不开页面 —— 开关看起来时好时坏,全看这句话是从哪儿发的。
     let browserUse = t.sess?.browserUse
+    let fast = t.sess?.fast   // codex 快速档同理是会话级的
     if (t.sess) {
       sessionId = t.sess.id
       await window.forge.sessionSwitch({ workspacePath: t.wsPath, sessionId })
@@ -214,10 +215,12 @@ export function PetApp() {
       try {
         const sf = await window.forge.sessionList(t.wsPath)
         if (sf?.activeSessionId) sessionId = sf.activeSessionId
-        browserUse = sf?.sessions?.find((s: ChatSession) => s.id === sessionId)?.browserUse ?? browserUse
+        const found = sf?.sessions?.find((s: ChatSession) => s.id === sessionId)
+        browserUse = found?.browserUse ?? browserUse
+        fast = found?.fast ?? fast
       } catch { /* keep default */ }
     }
-    window.forge.sendChat({ workspacePath: t.wsPath, sessionId, agent: provider, agentLabel, model, text, attachments: [], browserUse }, '宠物')
+    window.forge.sendChat({ workspacePath: t.wsPath, sessionId, agent: provider, agentLabel, model, text, attachments: [], browserUse, fast }, '宠物')
     // Bring the main window to this workspace so the user can watch the reply stream in.
     window.forge.petFocusWorkspace(t.wsPath)
   }

@@ -497,7 +497,7 @@ export function sendTurn(payload: ChatSendPayload, deps: SendTurnDeps): Promise<
         flushPaced = paced.flushPaced
         // ★provider 同步抛错(起不来)时没有任何收尾路径会跑 —— 自己把「你的选择」入口关掉再抛。
         let session: AgentSession
-        try { session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, beforeFallback: deps.beforeFallback }, paced, env) }
+        try { session = provider.chat!({ id: aid, prompt: promptText, model: payload.model, cwd: ws, sessionId, attachments: payload.attachments, permissionMode: payload.permissionMode, browserUse: payload.browserUse, fast: payload.fast, beforeFallback: deps.beforeFallback }, paced, env) }
         catch (err) { closeAnswers(); throw err }
         deps.onSessionStart?.(wrapSession(session))
       })

@@ -133,6 +133,14 @@ export function setSessionBrowserUse(wsPath: string, sessionId: string, mode: im
   return data
 }
 
+// codex 快速档开关:和 setSessionBrowserUse 并排,同一类的会话级设置。false 也落盘(=用户明确关掉)。
+export function setSessionFast(wsPath: string, sessionId: string, fast: boolean): SessionsFile {
+  const data = readSessions(wsPath)
+  const s = data.sessions.find(x => x.id === sessionId)
+  if (s) { s.fast = fast; write(wsPath, data) }
+  return data
+}
+
 // Remember a session's coding agent + model (per-session, mirrors setSessionPermission).
 export function setSessionModel(wsPath: string, sessionId: string, agentId: string, modelId: string): SessionsFile {
   const data = readSessions(wsPath)

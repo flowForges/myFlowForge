@@ -98,7 +98,7 @@ interface Props {
   /** True once the running turn has produced assistant output. Stopping BEFORE any output restores the
       sent message to the box (edit/resend); stopping AFTER output does not (changes may be irreversible). */
   turnHasOutput?: boolean
-  onSend: (m: { agent: string; agentLabel: string; model: string; text: string; attachments: Attachment[]; permissionMode: PermissionMode; browserUse: BrowserUseMode }) => void
+  onSend: (m: { agent: string; agentLabel: string; model: string; text: string; attachments: Attachment[]; permissionMode: PermissionMode; browserUse: BrowserUseMode; fast: boolean }) => void
   onPaste?: (f: { name: string; dataBase64: string }) => Promise<Attachment | null>
   // When set (with a fresh nonce), fills the textarea with a starter prompt (快捷指令 chips / workflow
   // trigger phrase / supplement quote).
@@ -128,9 +128,12 @@ interface Props {
       can still type and send — the message queues on the main side and runs after the workflow finishes.
       This text replaces the placeholder/send-title, and the slash menu is suppressed while it's set. */
   lockedReason?: string
+  /** codex 快速档(会话级,由父组件落盘)。chip 只在 codex + 模型报了快速档 + 给了 onFastChange 时出现。 */
+  fast?: boolean
+  onFastChange?: (on: boolean) => void
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason, fast, onFastChange }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -238,6 +241,9 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const browserUseSupported = providerSupportsBrowserUse(agentId)
   // 「完全访问」+「每次询问」这组合下 CLI 不升门,「每次询问」是假的——这里只报,不自动降档(见 shared/browserUse.ts)。
   const browserConflict = browserUseSupported ? browserPermissionConflict(browserUse, permissionMode) : null
+  // codex 快速档:只在 codex 且所选模型在 models_cache 里报了 priority 档时出现;没有档位信息就不出。
+  const fastAvailable = agentId === 'codex' && model?.fastTier === true && !!onFastChange
+  const fastOn = fastAvailable && fast === true
   // ★★设计 §4.3 的原话是「Forge **拒绝**这个组合」——所以不只是提示,这一轮**发不出去**:
   //  只提示不拦住的话,chip 上还写着「每次询问」、回车照样发,而这一轮是 bypassPermissions + --chrome,
   //  浏览器里的任何动作都没有一道门。拦的是**发送**(输入框照旧能打字,草稿不丢),横幅继续在下面
@@ -312,7 +318,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     if (!t || effectiveDisabled || !agent) return
     // 被拒绝的浏览器档 + 权限档组合:回车这条路也必须拦(按钮禁用只挡鼠标那一半)。
     if (browserBlocked) return
-    onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode, browserUse })
+    onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode, browserUse, fast: fastOn })
     lastSentRef.current = t
     setText('')
     setAttachments([])
@@ -787,6 +793,16 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
                 ))}
               </div>
             </div>
+          )}
+          {fastAvailable && (
+            <button
+              className={'cb-btn cb-fast' + (fastOn ? ' on' : '')}
+              aria-pressed={fastOn}
+              title={model?.fastTierDescription}
+              onClick={() => onFastChange!(!fastOn)}
+            >
+              <span>⚡ 快速</span>
+            </button>
           )}
           {/* P4.1(2026-07-30):删除「⚡自动/⚙手动」工作流自动启动开关 —— 提案门已废除,该开关失去意义,
               且与权限档的「自动(工作区)」撞名造成混淆。启动统一进对话式工作流(见 confirmLaunchGate)。 */}
