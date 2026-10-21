@@ -41,6 +41,8 @@ export function answerPrompt(cfg: CouncilConfig, materialsText: string, seat: Co
 export function critiquePrompt(
   cfg: CouncilConfig, seat: CouncilSeat, round: number, summary: Utterance | undefined,
   delta: Utterance[], resumed: boolean, materialsText: string,
+  /** 共识模式:上一轮没获全体同意的那份草稿 —— 不同意的理由要对着它才看得懂(§5.2) */
+  rejectedDraft?: Utterance,
 ): string {
   void seat
   // ★§5.1:第 2 轮起只看「上一轮总结 + 本轮前面的发言 + 插话」。总结由 summary 参数单独给(delta 里的去掉,免得出现两次),
@@ -51,6 +53,7 @@ export function critiquePrompt(
   if (resumed) parts.push(`现在是第 ${round} 轮讨论。`)
   else parts.push('你是一场多方讨论中的一位讨论者。', topicBlock(cfg, materialsText), `现在是第 ${round} 轮讨论。`)
   if (summary) parts.push(`## 上一轮领导者总结\n${labelLine(summary)}`)
+  if (rejectedDraft) parts.push(`## 上一轮领导者的共同点草稿(未获全体同意)\n${labelLine(rejectedDraft)}`)
   if (delta.length) parts.push(`## 你还没看过的发言(含用户插话)\n${joinItems(delta)}`)
   parts.push([
     '## 本轮要求',
@@ -78,11 +81,13 @@ export function summaryPrompt(cfg: CouncilConfig, round: number, roundItems: Utt
   ].join('\n\n')
 }
 
-export function consensusDraftPrompt(cfg: CouncilConfig, round: number, roundItems: Utterance[]): string {
+export function consensusDraftPrompt(cfg: CouncilConfig, round: number, roundItems: Utterance[], objections: Utterance[] = []): string {
   return [
     `你是本场讨论的领导者。下面是议题和第 ${round} 轮各讨论者的发言,请整理一份「目前各方的共同点」草稿。`,
     `## 议题\n${cfg.topic}`,
     `## 第 ${round} 轮发言\n${joinItems(roundItems)}`,
+    // 上一轮草稿被否的理由:新草稿要回应它们,不能原样再来一遍
+    ...(objections.length ? [`## 上一轮草稿未获同意的理由\n${joinItems(objections)}`] : []),
     [
       '## 要求',
       '- 把多数讨论者已经认可的内容中立地合并成一份草稿;只收录已被多数认可的点,有争议的点不要收。',

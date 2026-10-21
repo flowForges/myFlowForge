@@ -133,6 +133,25 @@ describe('CouncilEngine consensus mode', () => {
     expect(uniqueIds(h.appended)).toBe(true)
   })
 
+  it('round-2 seats see the rejected draft next to the disagree reasons; the round-2 draft gets the reasons', async () => {
+    const h = harness(cfg(['A', 'B', 'C']), c =>
+      (c.kind === 'vote' && c.seat === 'A' && c.n === 2 ? { ok: true, text: '不同意,第二点漏了回滚' } : undefined))
+    await h.engine.start()
+    // 领导者:L#1 第 1 轮总结,L#2 第 1 轮草稿,L#3 第 2 轮总结,L#4 第 2 轮草稿
+    const r2 = h.calls.filter(c => c.kind === 'critique')
+    expect(r2).toHaveLength(3)
+    for (const c of r2) {
+      expect(c.prompt).toContain('## 上一轮领导者的共同点草稿(未获全体同意)')
+      expect(c.prompt).toContain('<<L#2>>')
+    }
+    for (const c of r2.slice(1)) expect(c.prompt).toContain('第二点漏了回滚')
+    const draft2 = h.calls.filter(c => c.kind === 'draft')[1]
+    expect(draft2.prompt).toContain('## 上一轮草稿未获同意的理由')
+    expect(draft2.prompt).toContain('第二点漏了回滚')
+    // 第 1 轮的草稿提示词没有上一轮
+    expect(h.calls.filter(c => c.kind === 'draft')[0].prompt).not.toContain('未获同意的理由')
+  })
+
   it('never agreeing stops at maxRounds with unresolved reasons passed to the final', async () => {
     const h = harness(cfg(['A', 'B'], 3), c =>
       (c.kind === 'vote' && c.seat === 'B' ? { ok: true, text: `**不同意**:第 ${c.n} 次还是不行` } : undefined))

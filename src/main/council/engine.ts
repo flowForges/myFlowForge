@@ -414,7 +414,9 @@ export class CouncilEngine {
     const delta = this.transcript.unseenFor(s.id).map(u =>
       (u.stage === 'consensus-vote' && u.round === round - 1 && parseVote(u.text) !== 'agree' ? { ...u, round } : u))
     const resumed = this.deps.seatResumed(s.id)
-    const prompt = critiquePrompt(this.cfg, s, round, this.transcript.latestSummary(), delta, resumed, this.materials)
+    // ★不同意的理由只有对着被否的那份草稿才看得懂(「第二点漏了回滚」—— 哪个第二点?),草稿单独成节、标明是领导者的
+    const rejectedDraft = this.latestDraft(round - 1)
+    const prompt = critiquePrompt(this.cfg, s, round, this.transcript.latestSummary(), delta, resumed, this.materials, rejectedDraft)
     // ★续上原生会话的席位提示词里不再带议题,附件也不重复给
     const r = await this.speak(s, round, 'critique', prompt, { attachments: resumed ? [] : this.cfg.attachments })
     // ★先标记再记账:record 里的落盘必须已经带上他,否则崩溃后重启会让他把这一轮再说一遍
@@ -437,7 +439,7 @@ export class CouncilEngine {
   /** 领导者把本轮多数已认可的内容中立地合并成「目前各方的共同点」草稿;失败重试一次。 */
   private async consensusDraft(round: number): Promise<Spoken> {
     const items = this.transcript.round(round).filter(u => u.stage !== 'summary')
-    const r = await this.leader(round, 'consensus-draft', consensusDraftPrompt(this.cfg, round, items))
+    const r = await this.leader(round, 'consensus-draft', consensusDraftPrompt(this.cfg, round, items, this.objections(round - 1)))
     if (!r.ok) return r
     this.transcript.add({ seat: this.cfg.leader.id, label: this.cfg.leader.label, round, stage: 'consensus-draft', text: r.text })
     this.changed()
@@ -449,7 +451,7 @@ export class CouncilEngine {
    * ★「无法识别」和投票失败都算不同意;投票失败和其他发言一样计入连续失败。
    */
   private async consensusVote(round: number): Promise<void> {
-    const draft = this.transcript.toJSON().items.filter(u => u.round === round && u.stage === 'consensus-draft').at(-1)
+    const draft = this.latestDraft(round)
     const seats = this.active()
     const results = await Promise.all(seats.map(s => this.speak(s, round, 'consensus-vote', consensusVotePrompt(s, draft?.text ?? ''))))
     if (this.suspended) return this.keepForReplay(seats, round, 'consensus-vote', results)
@@ -462,6 +464,16 @@ export class CouncilEngine {
       && (round >= mode.maxRounds || this.deps.now() - this.st.startedAt >= mode.maxMinutes * 60_000)
     if (agreed || capped || this.active().length <= 1) this.phase = 'final'
     else this.nextRound()
+  }
+
+  /** 该轮最后一份共同点草稿(重试 / 继续可能写过多份)。 */
+  private latestDraft(round: number): Utterance | undefined {
+    return this.transcript.toJSON().items.filter(u => u.round === round && u.stage === 'consensus-draft').at(-1)
+  }
+
+  /** 该轮没投「同意」的票(含无法识别的),原样带发言者。 */
+  private objections(round: number): Utterance[] {
+    return this.transcript.toJSON().items.filter(u => u.round === round && u.stage === 'consensus-vote' && parseVote(u.text) !== 'agree')
   }
 
   /** 最近一轮投票里没有同意的理由,形如 `${label}: ${reason}`;交给最终结果写进 disagreements。 */
