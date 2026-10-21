@@ -197,10 +197,21 @@ function Caret() {
  * 代理正文。`answers`(这一轮里用户做的选择)按锚点插回正文里答的那个位置 ——
  * 前文 → 选择 → 后文,和桌面端 `Message.tsx` 同一个切法(`@shared/chat/answerSegments`)。
  */
-export function MessageBody({ text, streaming, answers }: { text: string; streaming?: boolean; answers?: ChatAnswerAnchor[] }) {
+export function MessageBody({
+  text,
+  streaming,
+  answers,
+  indent = 26,
+}: {
+  text: string
+  streaming?: boolean
+  answers?: ChatAnswerAnchor[]
+  /** 左缩进。默认对齐对话流里头像右边那一列;共商区块里的卡片自带边框,不需要它(传 0)。 */
+  indent?: number
+}) {
   const segments = useMemo(() => (answers?.length ? splitByAnswers(text, answers) : null), [text, answers])
   return (
-    <View style={{ paddingLeft: 26 }}>
+    <View style={{ paddingLeft: indent }}>
       {segments ? (
         segments.map((seg, i) =>
           seg.kind === 'answer' ? (

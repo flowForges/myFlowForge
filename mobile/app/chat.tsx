@@ -42,7 +42,10 @@ import { useConn } from '../src/net/conn'
 import { describeHostState } from '../src/net/hostStatusText'
 import { useStore } from '../src/data/store'
 import { canPeekGate } from '../src/data/gatePeek'
-import { useChat } from '../src/data/useChat'
+import { useChat, type Msg } from '../src/data/useChat'
+import { submitTarget, useCouncil } from '../src/data/useCouncil'
+import { groupCouncil, isCouncilGroup } from '../src/data/councilGroup'
+import { CouncilBlock } from '../src/ui/CouncilBlock'
 import { draftKey, getDraft, loadDrafts, setDraft } from '../src/data/drafts'
 import { queuedSourceLabel, type QueuedItem } from '../src/data/queueLane'
 import { useAgents } from '../src/data/useAgents'
@@ -107,7 +110,8 @@ function Think({ text }: { text: string }) {
 export default function Chat() {
   const c = useC()
   const insets = useSafeAreaInsets()
-  const { activeHost, state, online, reconnect, invoke } = useConn()
+  const conn = useConn()
+  const { activeHost, state, online, reconnect, invoke } = conn
   const { groups, selected, gates, gatesFor, answerGate, wsName, sessionTitle, setViewing, loading: storeLoading } = useStore()
   const { msgs, busy, queue, send, stop, cancelQueued, loading: chatLoading } = useChat(selected?.wsPath ?? null, selected?.sessionId ?? null)
   const { agents, refresh: refreshAgents, hiddenCount: agentsHidden } = useAgents()
@@ -142,6 +146,15 @@ export default function Chat() {
   const [perm, setPerm] = useState<PermissionMode>(DEFAULT_PERMISSION_MODE)
   const [sending, setSending] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  // AI 共商:手机上只看和控(暂停 / 继续 / 结束 / 插话 / 选定),开不了也配不了(§6.6)。
+  const council = useCouncil(conn, selected?.wsPath ?? null, selected?.sessionId ?? null, (m) => {
+    tap('blocked')
+    setNotice(m)
+  })
+  const councilStatus = council.active?.status
+  const interjecting = submitTarget(councilStatus) === 'interject'
+  // ★领导者在出最终结果:插话已经没人听了,普通发送又会和它抢同一个会话 —— 输入框整个停用。
+  const councilFinalizing = councilStatus === 'finalizing'
   const [advanceSheet, setAdvanceSheet] = useState(false)
   const [suppSheet, setSuppSheet] = useState(false)
   const [supp, setSupp] = useState('')
@@ -330,14 +343,19 @@ export default function Chat() {
    *  这个零 import 的纯模块决定(有单测 + 变异验证),这里只管画。
    */
   const { commands, supported: cmdsSupported } = useCommands(agentId, selected?.wsPath ?? null)
-  const slash = slashRows(commands, text, { supported: cmdsSupported, dismissed: slashDismissed })
+  // ★插话是给讨论方看的一句话,不是给代理的命令 —— 插话时不弹斜杠面板(同电脑端)。
+  const slash = slashRows(commands, text, { supported: cmdsSupported, dismissed: slashDismissed || interjecting })
 
   // 轮次分隔线:哪一条消息前面该来一根,由纯逻辑算(见 timeSep.ts)。
   // `now` 只在消息数变化时取一次 —— 每次渲染都取的话,「今天/昨天」会在午夜那一刻抖动,
   // 而且会让整份 Map 每帧都是新的。
-  const seps = useMemo(() => sepsFor(msgs, Date.now()), [msgs])
+  // ★共商的发言不参与这两样:它们画在共商区块里,别家席位的发言也不该让后面的普通回复多出一条「换代理」(同电脑端)。
+  const plainMsgs = useMemo(() => msgs.filter((m) => !m.council), [msgs])
+  const seps = useMemo(() => sepsFor(plainMsgs, Date.now()), [plainMsgs])
   // 换代理提示:哪一条消息前面该来一条。规则见 providerSwitch.ts(和电脑端同一套)。
-  const switches = useMemo(() => providerSwitches(msgs), [msgs])
+  const switches = useMemo(() => providerSwitches(plainMsgs), [plainMsgs])
+  // 一场共商的全部消息收成一个区块,落在它第一条消息的位置(§6.4)。
+  const entries = useMemo(() => groupCouncil(msgs), [msgs])
 
   const myGates = selected ? gatesFor(selected.wsPath, selected.sessionId) : []
 
@@ -643,7 +661,17 @@ export default function Chat() {
 
   const doSend = async () => {
     const t = text.trim()
-    if (!t || !selected || !agent) return
+    if (!t || !selected || councilFinalizing) return
+    // ★共商进行中,输入框提交的是插话:插在下一位发言之前,所有后续发言者都会看到。附件不带,留在框里。
+    if (interjecting && council.active) {
+      setSending(true)
+      const ok = await council.interject(council.active.id, t)
+      setSending(false)
+      // ★失败(已给了一句话)不清空,原话留着可以再发
+      if (ok) setText('')
+      return
+    }
+    if (!agent) return
     setSending(true)
     try {
       await send({
@@ -882,7 +910,17 @@ export default function Chat() {
           )
         ) : (
           <>
-            {msgs.map((m) => (
+            {entries.map((m) =>
+              isCouncilGroup<Msg>(m) ? (
+                <CouncilBlock
+                  key={`council-${m.id}`}
+                  id={m.id}
+                  messages={m.messages}
+                  state={council.states.find((s) => s.id === m.id)}
+                  online={online}
+                  controls={council}
+                />
+              ) : (
               <React.Fragment key={m.id}>
                 {seps.has(m.id) ? <TimeSep>{seps.get(m.id)}</TimeSep> : null}
                 {/* ★换代理提示照电脑端的形状走(见 kit.tsx 的 `ProviderSwitchSep`):
@@ -962,7 +1000,8 @@ export default function Chat() {
                   </View>
                 )}
               </React.Fragment>
-            ))}
+              ),
+            )}
             {/* 门挂着时在流的末尾留一行。不留的话,消息流看上去就是「代理说到一半不说了」。 */}
             {myGates.length > 0 ? (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, paddingLeft: 26 }}>
@@ -1194,9 +1233,9 @@ export default function Chat() {
                 if (sel) setSel(undefined)
               }}
               onFocus={() => fire('tapField')}
-              placeholder={composerPlaceholder({ online, busy })}
+              placeholder={composerPlaceholder({ online, busy, interjecting })}
               multiline
-              editable={online && !!selected}
+              editable={online && !!selected && !councilFinalizing}
               style={{ flex: 1, minWidth: 0, minHeight: 44, maxHeight: 108 }}
             />
             {/* ＋:开关。★它**不随有没有字消失** —— 微信有字时把 ＋ 换成发送键,
@@ -1236,10 +1275,10 @@ export default function Chat() {
             {(() => {
               const action = composerAction({ busy, hasText: !!text.trim() })
               const stopping = action === 'stop'
-              const off = stopping ? !online : !online || !selected || !text.trim() || sending
+              const off = stopping ? !online : !online || !selected || !text.trim() || sending || councilFinalizing
               return (
                 <Pressable
-                  accessibilityLabel={stopping ? '停止' : busy ? '排队发送' : '发送'}
+                  accessibilityLabel={stopping ? '停止' : interjecting ? '插话' : busy ? '排队发送' : '发送'}
                   onPress={stopping ? () => void stop() : doSend}
                   disabled={off}
                   style={({ pressed }) => [

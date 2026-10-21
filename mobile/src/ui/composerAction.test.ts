@@ -37,4 +37,10 @@ describe('composerPlaceholder —— 得让人知道这条会排队,而不是以
   it('在线且空闲:还是原来那句', () => {
     expect(composerPlaceholder({ online: true, busy: false })).toBe('给代理下达任务…')
   })
+
+  it('AI 共商进行中:插话;离线仍然先说连不上', () => {
+    expect(composerPlaceholder({ online: true, busy: false, interjecting: true })).toBe('插话')
+    expect(composerPlaceholder({ online: true, busy: true, interjecting: true })).toBe('插话')
+    expect(composerPlaceholder({ online: false, busy: false, interjecting: true })).toContain('未连接')
+  })
 })

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { BODY_LINE_CAP } from '../ui/toolParse'
 import { CH } from '../../../src/main/ipc/channels'
 import type { Attachment, ChatAnswerAnchor, ChatMessage, DelegateBatch, SubagentCard, ToolActivity } from '../../../src/shared/types'
+import type { CouncilResult, CouncilTag } from '../../../src/shared/council'
 import { useConn } from '../net/conn'
 import { queuedFor, type QueuedItem } from './queueLane'
 
@@ -45,6 +46,10 @@ export type Msg = {
   /** 这一轮里用户做的选择,锚在正文里答的那个位置(见 `ChatMessage.answers`)。 */
   answers?: ChatAnswerAnchor[]
   error?: string
+  /** AI 共商:这条在共商里的位置(席位 / 轮次 / 阶段)。带它的消息一律画进共商区块,不进普通对话。 */
+  council?: CouncilTag
+  /** 领导者最终发言里解析出的结构化结论(只在 stage 'final' 上)。 */
+  councilResult?: CouncilResult
 }
 
 const fromHistory = (m: ChatMessage): Msg => ({
@@ -62,6 +67,8 @@ const fromHistory = (m: ChatMessage): Msg => ({
   startedAt: m.startedAt,
   via: m.via,
   answers: m.answers,
+  council: m.council,
+  councilResult: m.councilResult,
 })
 
 type Evt = {
@@ -81,6 +88,7 @@ type Evt = {
   status?: 'run' | 'ok' | 'idle'
   output?: string
   activity?: string
+  council?: CouncilTag
 }
 
 export function useChat(wsPath: string | null, sessionId: string | null) {
@@ -93,6 +101,8 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
   const [busy, setBusy] = useState(false)
   /** 这个会话排着队、还没开跑的那几条(见 queueLane.ts)。 */
   const [queue, setQueue] = useState<QueuedItem[]>([])
+  /** 在流的共商发言 id。它们的 done / error 不碰 busy —— busy 只管普通对话那一轮。 */
+  const councilIds = useRef(new Set<string>())
 
   // 订阅要盯着「当前是哪个会话」,而回调本身不该因为换会话而重建订阅之外的东西。
   const keyRef = useRef({ wsPath, sessionId })
@@ -124,9 +134,25 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
             setMsgs((p) =>
               p.some((m) => m.id === e.id)
                 ? p
-                : [...p, { id: e.id!, who: 'ai', text: '', think: '', model: e.model, streaming: true, startedAt: Date.now() }],
+                : [
+                    ...p,
+                    {
+                      id: e.id!,
+                      who: 'ai',
+                      text: '',
+                      think: '',
+                      model: e.model,
+                      streaming: true,
+                      startedAt: Date.now(),
+                      // ★共商发言在流式阶段就要归进区块 —— 等 done 才知道的话,前面几十秒它画在普通对话里。
+                      ...(e.council ? { council: e.council } : {}),
+                    },
+                  ],
             )
-          setBusy(true)
+          // ★共商发言不是「这个会话在跑一轮」:那样停止键会亮,而按下去停的是普通对话,共商照跑。
+          if (e.council) {
+            if (e.id) councilIds.current.add(e.id)
+          } else setBusy(true)
           break
         // 工具卡。`e.id` 是**这条回复**的 id,`e.tool.id` 才是具体那次调用 —— 按后者原地替换,
         // 因为同一次调用会来两趟:phase 'start' 只有标题(status 'run'),phase 'done' 才带输出和结果。
@@ -262,9 +288,23 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
               return n
             })
           }
-          setBusy(false)
+          if (e.message?.council) councilIds.current.delete(e.message.id)
+          else setBusy(false)
           break
         case 'error':
+          // ★被「结束」取消的共商发言:引擎只广播 {error:'cancelled'}、不落盘(普通对话的 error 总带 message)。
+          //  它不是失败 —— 把流式占位拿掉,不留错误气泡。同电脑端 useChat。
+          // ★共商发言的错误也不碰 busy(理由见 assistant-start)。
+          if (e.id && councilIds.current.has(e.id)) {
+            const id = e.id
+            councilIds.current.delete(id)
+            if (e.error === 'cancelled' && !e.message) {
+              setMsgs((p) => p.filter((m) => m.id !== id))
+              break
+            }
+            upsert(id, (m) => ({ ...m, text: e.message?.text || m.text, error: e.error ?? '出错', streaming: false }))
+            break
+          }
           // ★错误路径下 message 常常**是有正文的**(provider 先流出了答案再以非零退出收尾)。
           //  只认 error 就会把「答完了但收尾有告警」显示成彻底失败。
           if (e.id)
@@ -289,6 +329,7 @@ export function useChat(wsPath: string | null, sessionId: string | null) {
   useEffect(() => {
     setMsgs([])
     setQueue([])
+    councilIds.current.clear()
   }, [wsPath, sessionId])
 
   useEffect(() => {
