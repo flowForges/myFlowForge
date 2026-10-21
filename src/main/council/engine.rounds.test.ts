@@ -28,7 +28,7 @@ const FINAL_TEXT = [
   '```',
 ].join('\n')
 
-type Call = { seat: string; prompt: string; n: number; kind: 'answer' | 'critique' | 'summary' | 'final' }
+type Call = { seat: string; prompt: string; n: number; kind: 'answer' | 'critique' | 'summary' | 'final'; files: string[] }
 type Reply = { ok: true; text: string } | { ok: false }
 type Script = (c: Call) => Reply | undefined
 
@@ -50,9 +50,9 @@ function harness(c: CouncilConfig, script: Script = () => undefined, over: Parti
   const counts: Record<string, number> = {}
   let late: (() => void)[] = []
 
-  const runSeat: EngineDeps['runSeat'] = (_cid, s, prompt, _deps, cb: SeatRunCallbacks) => {
+  const runSeat: EngineDeps['runSeat'] = (_cid, s, prompt, _deps, cb: SeatRunCallbacks, attachments = []) => {
     counts[s.id] = (counts[s.id] ?? 0) + 1
-    const call: Call = { seat: s.id, prompt, n: counts[s.id], kind: kindOf(prompt) }
+    const call: Call = { seat: s.id, prompt, n: counts[s.id], kind: kindOf(prompt), files: attachments.map(a => a.path) }
     calls.push(call)
     log.push(`start:${s.id}`)
     const msgId = `inner-${s.id}-${call.n}`
@@ -102,6 +102,19 @@ describe('CouncilEngine rounds mode', () => {
     const topic = h.appended[0]
     expect(topic).toMatchObject({ who: 'user', text: '怎么设计缓存', council: { id: CID, stage: 'topic' } })
     expect(topic.files).toHaveLength(1)
+  })
+
+  it('topic attachments go with every call whose prompt carries the topic (answers, fresh critiques, leader)', async () => {
+    // B 的第 2 轮续了原生会话,提示词里没有议题 → 不再带附件
+    const h = harness(cfg(['A', 'B']), undefined, { seatResumed: id => id === 'B' })
+    await h.engine.start()
+    const files = (seatId: string, kind: Call['kind']) => h.calls.filter(c => c.seat === seatId && c.kind === kind).map(c => c.files)
+    expect(files('A', 'answer')).toEqual([['/tmp/a.png']])
+    expect(files('B', 'answer')).toEqual([['/tmp/a.png']])
+    expect(files('A', 'critique')).toEqual([['/tmp/a.png']])
+    expect(files('B', 'critique')).toEqual([[]])
+    expect(files('L', 'summary')).toEqual([['/tmp/a.png']])
+    expect(files('L', 'final')).toEqual([['/tmp/a.png']])
   })
 
   it('round 1 starts all seats before any finishes, and prompts are independent', async () => {

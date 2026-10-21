@@ -3,6 +3,7 @@ import type { AgentProvider, AgentSession, ChatCallbacks, ConfirmDecision, Confi
 import { makeIdleWatchdog } from '../agents/idleWatchdog'
 import { readSession, writeSession } from '../chat/chatStore'
 import { COUNCIL_TURN_TIMEOUT_MS, type CouncilSeat } from '@shared/council'
+import type { Attachment } from '@shared/types'
 
 export type SeatRunDeps = {
   providers: Record<string, AgentProvider>
@@ -34,6 +35,8 @@ function envWithoutForge(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 
 export function runSeat(
   councilId: string, seat: CouncilSeat, prompt: string, deps: SeatRunDeps, cb: SeatRunCallbacks,
+  /** 议题的附件:提示词里带了议题时由调用方给,和普通对话一样交给 CLI */
+  attachments: Attachment[] = [],
 ): { done: Promise<SeatRunResult>; cancel(): void; resumed: boolean } {
   const msgId = `council-${randomUUID()}`
   const key = seatResumeKey(councilId, seat.id)
@@ -83,7 +86,7 @@ export function runSeat(
   try {
     // ★故意不传 beforeFallback:ACP 握手失败时直接报错,不退回不受控的 run()。
     session = provider.chat(
-      { id: msgId, prompt, model: seat.model, cwd: deps.cwd, sessionId: resumeId, permissionMode: 'readonly', attachments: [] },
+      { id: msgId, prompt, model: seat.model, cwd: deps.cwd, sessionId: resumeId, permissionMode: 'readonly', attachments },
       callbacks, envWithoutForge(deps.env),
     )
   } catch (e) {

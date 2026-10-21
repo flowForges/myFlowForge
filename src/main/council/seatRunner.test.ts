@@ -47,6 +47,15 @@ describe('runSeat', () => {
     expect(cap.env!.PATH).toBe('/bin')
   })
 
+  it('passes attachments through to the provider task (default none)', async () => {
+    const { provider, cap } = fakeProvider('codex', okScript)
+    const att = [{ name: 'a.png', path: '/tmp/a.png', size: 3 }]
+    await runSeat('c1', seat('a'), 'p', deps({ codex: provider }), noopCb(), att).done
+    expect(cap.task!.attachments).toEqual(att)
+    await runSeat('c1', seat('b'), 'p', deps({ codex: provider }), noopCb()).done
+    expect(cap.task!.attachments).toEqual([])
+  })
+
   it('streams deltas and returns accumulated text', async () => {
     const { provider } = fakeProvider('codex', (_t, cb) => { cb.onAssistantDelta('a'); cb.onAssistantDelta('b'); cb.onDone({ elapsed: 1 }) })
     const deltas: string[] = []

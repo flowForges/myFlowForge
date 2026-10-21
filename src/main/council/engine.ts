@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import type { CouncilConfig, CouncilSeat, CouncilStage, CouncilState } from '@shared/council'
-import type { ChatEvent, ChatMessage } from '@shared/types'
+import type { Attachment, ChatEvent, ChatMessage } from '@shared/types'
 import { Transcript, type Utterance } from './transcript'
 import {
   answerPrompt, consensusDraftPrompt, consensusVotePrompt, critiquePrompt, finalPrompt, followupPrompt, summaryPrompt,
@@ -49,6 +49,14 @@ const DROP_AFTER_FAILURES = 2
 
 type Spoken = { ok: true; text: string } | { ok: false; cancelled: boolean }
 type Inflight = { cancelled: boolean; cancel(): void }
+type Shape = (text: string) => Pick<ChatMessage, 'text' | 'councilResult'>
+type SpeakOpts = {
+  /** 拼在消息 id 后面(领导者的继续 / 重试、第几次追问),避免和已落盘的撞 id */
+  suffix?: string
+  shape?: Shape
+  /** 提示词里带了议题时,议题的附件一并交给 CLI(§5.3:附件和普通对话一致) */
+  attachments?: Attachment[]
+}
 
 export class CouncilEngine {
   private st: CouncilState
@@ -254,7 +262,7 @@ export class CouncilEngine {
       for (const s of seats) {
         // 追问本身单独给,不在增量里重复;前面席位的追问回答在增量里(依次回答)
         const delta = this.transcript.unseenFor(s.id).filter(u => u !== q)
-        const r = await this.speak(s, round, 'followup', followupPrompt(question, delta), `:${n}`)
+        const r = await this.speak(s, round, 'followup', followupPrompt(question, delta), { suffix: `:${n}` })
         if (r.ok) this.transcript.add({ seat: s.id, label: s.label, round, stage: 'followup', text: r.text })
       }
       this.writeResult()
@@ -393,7 +401,8 @@ export class CouncilEngine {
   /** 第 1 轮:全部席位并行、各自独立作答(提示词里没有任何别人的内容)。 */
   private async answerRound(): Promise<void> {
     const seats = this.active()
-    const results = await Promise.all(seats.map(s => this.speak(s, 1, 'answer', answerPrompt(this.cfg, this.materials, s))))
+    const results = await Promise.all(seats.map(s =>
+      this.speak(s, 1, 'answer', answerPrompt(this.cfg, this.materials, s), { attachments: this.cfg.attachments })))
     if (this.suspended) return this.keepForReplay(seats, 1, 'answer', results)
     // ★结束后再按配置顺序写进 transcript,而不是按完成先后 —— 顺序稳定,后续轮次喂给大家的增量一致
     seats.forEach((s, i) => this.record(s, 1, 'answer', results[i]))
@@ -404,11 +413,10 @@ export class CouncilEngine {
     // ★critiquePrompt 只留本轮及以后的发言;共识模式上一轮的不同意理由必须进本轮上下文(§5.2),把它们当本轮的带进去
     const delta = this.transcript.unseenFor(s.id).map(u =>
       (u.stage === 'consensus-vote' && u.round === round - 1 && parseVote(u.text) !== 'agree' ? { ...u, round } : u))
-    const prompt = critiquePrompt(
-      this.cfg, s, round, this.transcript.latestSummary(), delta,
-      this.deps.seatResumed(s.id), this.materials,
-    )
-    const r = await this.speak(s, round, 'critique', prompt)
+    const resumed = this.deps.seatResumed(s.id)
+    const prompt = critiquePrompt(this.cfg, s, round, this.transcript.latestSummary(), delta, resumed, this.materials)
+    // ★续上原生会话的席位提示词里不再带议题,附件也不重复给
+    const r = await this.speak(s, round, 'critique', prompt, { attachments: resumed ? [] : this.cfg.attachments })
     // ★先标记再记账:record 里的落盘必须已经带上他,否则崩溃后重启会让他把这一轮再说一遍
     if (r.ok || !r.cancelled) this.spokenThisRound.push(s.id)
     this.record(s, round, 'critique', r)
@@ -498,15 +506,16 @@ export class CouncilEngine {
 
   /** 领导者发言,失败重试一次(§7.3)。 */
   private async leader(
-    round: number, stage: 'summary' | 'consensus-draft' | 'final', prompt: string,
-    shape?: (text: string) => Pick<ChatMessage, 'text' | 'councilResult'>,
+    round: number, stage: 'summary' | 'consensus-draft' | 'final', prompt: string, shape?: Shape,
   ): Promise<Spoken> {
     const tag = this.resumes ? `:r${this.resumes}` : ''
-    const first = await this.speak(this.cfg.leader, round, stage, prompt, tag, shape)
+    // 领导者的提示词每次都重带议题,附件也每次都给
+    const attachments = this.cfg.attachments
+    const first = await this.speak(this.cfg.leader, round, stage, prompt, { suffix: tag, shape, attachments })
     // 被「结束」取消的不重试
     if (first.ok || first.cancelled) return first
     // ★重试用不同的消息 id:第一次失败已经以 failed 消息落盘,不能和重试那条撞 id
-    return this.speak(this.cfg.leader, round, stage, prompt, `${tag}:retry`, shape)
+    return this.speak(this.cfg.leader, round, stage, prompt, { suffix: `${tag}:retry`, shape, attachments })
   }
 
   /**
@@ -515,10 +524,8 @@ export class CouncilEngine {
    * ★消息 id 由引擎按 (轮次, 席位, 阶段) 生成,不用 runSeat 的 msgId:同一次发言的 start/delta/done 共用,
    *  且可预测、可去重。
    */
-  private async speak(
-    seat: CouncilSeat, round: number, stage: CouncilStage, prompt: string, suffix = '',
-    shape?: (text: string) => Pick<ChatMessage, 'text' | 'councilResult'>,
-  ): Promise<Spoken> {
+  private async speak(seat: CouncilSeat, round: number, stage: CouncilStage, prompt: string, opts: SpeakOpts = {}): Promise<Spoken> {
+    const { suffix = '', shape, attachments = [] } = opts
     const id = this.msgId(seat, round, stage, suffix)
     const prior = this.replay.get(id)
     if (prior) {
@@ -536,7 +543,7 @@ export class CouncilEngine {
       onDelta: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-delta', id, text: t }) },
       onThink: (_m, t) => { if (!live) return; think += t; this.emit({ type: 'think-delta', id, text: t }) },
       onReplace: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-replace', id, text: t }) },
-    })
+    }, attachments)
     const handle: Inflight = { cancelled: false, cancel: () => { handle.cancelled = true; run.cancel() } }
     this.inflight.add(handle)
     const r = await run.done

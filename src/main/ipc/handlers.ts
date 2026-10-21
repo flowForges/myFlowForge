@@ -1227,8 +1227,8 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   // ★不走 ChatQueue:引擎自己调度席位;发言流复用 chatEmit,进度另走 council:state。
   const councils = new CouncilRegistry((id, ws, sid, cfg, restored) => new CouncilEngine(id, ws, sid, cfg, {
     // ★时区按席位的 provider 现取(和聊天轮次一样),所以 env 在每次发言时重建;seatDeps.env 只是兜底
-    runSeat: (cid, seat, prompt, deps, cb) =>
-      runSeat(cid, seat, prompt, { ...deps, env: buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(seat.provider) }) }, cb),
+    runSeat: (cid, seat, prompt, deps, cb, attachments) =>
+      runSeat(cid, seat, prompt, { ...deps, env: buildAgentEnv({ proxy: readSettings().agentProxy, timezone: providerTimezone(seat.provider) }) }, cb, attachments),
     seatDeps: { providers, env: buildAgentEnv({ proxy: readSettings().agentProxy }) },
     seatResumed: (seatId) => readChatSession(ws, sid, seatResumeKey(id, seatId)) !== undefined,
     append: appendMessage,
