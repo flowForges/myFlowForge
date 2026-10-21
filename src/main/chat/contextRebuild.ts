@@ -1,4 +1,6 @@
-import type { ImportedMessage } from '@shared/types'
+import type { ChatMessage, ImportedMessage } from '@shared/types'
+import { inlineAnswers } from '@shared/chat/answerSegments'
+import { loadCouncils } from '../council/store'
 
 const DEFAULT_TURNS = 30
 const DEFAULT_TOKENS = 40000
@@ -51,4 +53,27 @@ export function renderHistoryPreamble(
     ? '【以上为你离开期间的对话，请先通读理解，在此基础上继续，并自行总结要点】'
     : '【以上为历史，请先通读理解，在此基础上继续，并自行总结要点】'
   return `${title}\n${head}${body}\n${footer}`
+}
+
+const COUNCIL_RESULT_MAX_CHARS = 2000
+
+/**
+ * ★AI 共商的发言和普通对话存在同一份 jsonl,但普通 agent 不该看到讨论过程:带 council 的消息一律丢掉,
+ * 只有每场的 final 折成一行结果(+用户选定的候选)。必须在按 watermark/fromIndex 切完之后再调用——
+ * 水位线按 jsonl 原始条数计,过滤只能发生在渲染前。
+ */
+export function toModelVisibleHistory(ws: string, sid: string, msgs: ChatMessage[]): ImportedMessage[] {
+  const chosenById = msgs.some(m => m.council?.stage === 'final')
+    ? new Map(loadCouncils(ws, sid).map(c => [c.state.id, c.state.chosen]))
+    : new Map<string, string | undefined>()
+  const out: ImportedMessage[] = []
+  for (const m of msgs) {
+    if (!m.council) { out.push({ who: m.who, text: inlineAnswers(m.text, m.answers), ts: m.ts }); continue }
+    if (m.council.stage !== 'final') continue
+    // councilResult 缺失 = 围栏解析失败,退回消息正文
+    const conclusion = (m.councilResult?.conclusion ?? m.text).slice(0, COUNCIL_RESULT_MAX_CHARS)
+    const chosen = chosenById.get(m.council.id)
+    out.push({ who: 'ai', text: `【AI 共商结果】${conclusion}${chosen ? `(用户选定:${chosen})` : ''}`, ts: m.ts })
+  }
+  return out
 }

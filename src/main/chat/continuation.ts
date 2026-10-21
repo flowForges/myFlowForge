@@ -2,8 +2,7 @@ import type { ChatSession, ImportedMessage } from '@shared/types'
 import { readSessions } from './sessionStore'
 import { readSession as readImported } from '../sessionImport/sources'
 import { readMessages } from './chatStore'
-import { inlineAnswers } from '@shared/chat/answerSegments'
-import { clampHistory, renderHistoryPreamble } from './contextRebuild'
+import { clampHistory, renderHistoryPreamble, toModelVisibleHistory } from './contextRebuild'
 
 export function buildContinuationPreamble(
   wsPath: string,
@@ -44,11 +43,12 @@ export function buildLocalHistoryPreamble(
   deps: { read?: (ws: string, sid: string) => ImportedMessage[] } = {},
   opts: { fromIndex?: number } = {},
 ): string {
-  const read = deps.read ?? ((ws, sid) => readMessages(ws, sid).map(m => ({ who: m.who, text: inlineAnswers(m.text, m.answers), ts: m.ts })))
-  const all = read(wsPath, sessionId)
   // fromIndex slices to only the messages a provider hasn't natively seen yet (incremental catch-up
   // on a provider switch-back). fromIndex omitted/0 renders the full history (unchanged behavior).
-  const msgs = opts.fromIndex ? all.slice(opts.fromIndex) : all
+  // ★先按原始下标切,再过滤共商消息(见 toModelVisibleHistory)。
+  const msgs = deps.read
+    ? (opts.fromIndex ? deps.read(wsPath, sessionId).slice(opts.fromIndex) : deps.read(wsPath, sessionId))
+    : toModelVisibleHistory(wsPath, sessionId, opts.fromIndex ? readMessages(wsPath, sessionId).slice(opts.fromIndex) : readMessages(wsPath, sessionId))
   const { kept, omitted } = clampHistory(msgs)
   return renderHistoryPreamble(kept, omitted, { incremental: !!opts.fromIndex })
 }

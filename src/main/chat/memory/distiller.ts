@@ -3,7 +3,7 @@ import { readSessions, setSessionSummary } from '../sessionStore'
 import { readWorkspaceMemory, writeWorkspaceMemory, readSystemMemory, writeSystemMemory, mergeMemory } from './memoryStore'
 import { DISTILL_OLDEST_N } from './tokenEstimate'
 import type { ChatMessage } from '@shared/types'
-import { inlineAnswers } from '@shared/chat/answerSegments'
+import { toModelVisibleHistory } from '../contextRebuild'
 
 // A one-shot LLM call: send a single prompt with no resume/history, return the full reply text.
 // Injected by chatService, which picks a distill model VALID FOR THE SESSION'S PROVIDER (see
@@ -11,8 +11,9 @@ import { inlineAnswers } from '@shared/chat/answerSegments'
 // claude-only alias like 'haiku-4.5' would 400 on codex/cursor sessions.
 export interface DistillDeps { oneShot: (prompt: string) => Promise<string> }
 
-function renderTranscript(messages: ChatMessage[]): string {
-  return messages.map(m => `${m.who === 'user' ? '用户' : '助手'}: ${inlineAnswers(m.text, m.answers)}`).join('\n')
+// ★共商发言不进蒸馏(只留每场的结果行),和普通对话的上下文隔离一致。
+function renderTranscript(ws: string, sid: string, messages: ChatMessage[]): string {
+  return toModelVisibleHistory(ws, sid, messages).map(m => `${m.who === 'user' ? '用户' : '助手'}: ${m.text}`).join('\n')
 }
 
 // fail-open wrapper: run fn, swallow any error (never block the chat turn).
@@ -32,7 +33,7 @@ export async function distillSession(wsPath: string, sessionId: string, deps: Di
       '保留:用户目标、已确定的决策/方案、关键事实;丢弃:寒暄、过程细节。',
       existing ? `已有摘要(基于此增量更新,不要丢失旧要点):\n${existing}\n` : '',
       '对话片段:',
-      renderTranscript(oldest),
+      renderTranscript(wsPath, sessionId, oldest),
       '\n只输出摘要正文,不要解释。',
     ].filter(Boolean).join('\n')
     const summary = (await deps.oneShot(prompt)).trim()
@@ -60,7 +61,7 @@ export async function promoteToWorkspace(wsPath: string, sessionId: string, deps
       '**绝对不要**记录:具体命令及其输出、执行/构建/测试日志、报错信息、失败或成功的命令记录、文件 diff、工具调用的中间结果——这些是一次性过程噪音,不是记忆。只记录从中体现出的**结论性决策/约定/意图**。',
       existing ? `当前已有的 workspace 记忆(用于参考,避免重复;同主题请给出更新后的完整小节):\n${existing}\n` : '',
       '对话:',
-      renderTranscript(messages),
+      renderTranscript(wsPath, sessionId, messages),
     ].filter(Boolean).join('\n')
     const distilled = (await deps.oneShot(prompt)).trim()
     if (distilled) writeWorkspaceMemory(wsPath, mergeMemory(existing, distilled))
