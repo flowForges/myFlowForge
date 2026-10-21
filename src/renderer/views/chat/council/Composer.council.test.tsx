@@ -4,13 +4,16 @@ import { Composer } from '../Composer'
 import type { ProviderInfo } from '@shared/types'
 import type { CouncilState, CouncilStatus } from '@shared/council'
 import type { CouncilApi } from '../../../state/useCouncil'
+import { flashToast } from '../../../components/flashToast'
+
+vi.mock('../../../components/flashToast', () => ({ flashToast: vi.fn() }))
 
 const providers: ProviderInfo[] = [
   { id: 'claude', displayName: 'Claude Code', installed: true, models: [{ id: 'opus', label: 'Opus' }] },
   { id: 'codex', displayName: 'Codex', installed: true, models: [{ id: 'gpt-6', label: 'GPT-6' }] },
 ]
 
-beforeEach(() => { (window as any).forge = { openFiles: vi.fn(async () => []) } })
+beforeEach(() => { (window as any).forge = { openFiles: vi.fn(async () => []) }; vi.mocked(flashToast).mockClear() })
 
 function councilApi(status?: CouncilStatus): CouncilApi {
   const active = status ? ({ id: 'c1', status } as CouncilState) : undefined
@@ -23,11 +26,11 @@ function councilApi(status?: CouncilStatus): CouncilApi {
 }
 
 const sel = { agentId: 'claude', modelId: 'opus', permissionMode: 'auto' as const, browserUse: 'off' as const }
-function renderComposer(council: CouncilApi, onSend = vi.fn(), busy = false) {
-  const r = render(<Composer providers={providers} disabled={false} busy={busy} onSend={onSend} selection={sel} onSelectionChange={() => {}} council={council} />)
+function renderComposer(council: CouncilApi, onSend = vi.fn(), busy = false, lockedReason?: string) {
+  const r = render(<Composer providers={providers} disabled={false} busy={busy} lockedReason={lockedReason} onSend={onSend} selection={sel} onSelectionChange={() => {}} council={council} />)
   return { ...r, onSend, ta: r.container.querySelector('textarea')! }
 }
-const panel = () => document.querySelector('.council-setup')
+const panel = () => document.querySelector('.council-setup:not([hidden])')
 const toggle = () => screen.getByRole('button', { name: 'AI 共商' })
 
 function addSeat(provider: string, model: string) {
@@ -66,6 +69,58 @@ describe('Composer · AI 共商', () => {
     expect(cfg.seats.map((s: { id: string }) => s.id)).toEqual(['codex:gpt-6', 'claude:opus'])
     await waitFor(() => expect(panel()).toBeNull())
     expect(ta.value).toBe('')
+  })
+
+  it('start disabled while a workflow run is active/queued in this session (R13)', () => {
+    const { ta } = renderComposer(councilApi(), vi.fn(), false, '工作流运行中')
+    fireEvent.change(ta, { target: { value: 'topic' } })
+    fireEvent.click(toggle())
+    addSeat('codex', 'gpt-6')
+    addSeat('claude', 'opus')
+    expect((screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('closing and reopening the panel keeps the picked seats', () => {
+    renderComposer(councilApi())
+    fireEvent.click(toggle())
+    addSeat('codex', 'gpt-6')
+    fireEvent.click(toggle())
+    expect(panel()).toBeNull()
+    fireEvent.click(toggle())
+    expect(Array.from(document.querySelectorAll('.council-seat')).map(e => e.getAttribute('data-seat'))).toEqual(['codex:gpt-6'])
+  })
+
+  it('start failure → toast with mapped message, panel stays open, text kept', async () => {
+    const council = councilApi()
+    ;(council.start as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Error invoking remote method 'council:start': Error: busy"))
+    const { ta } = renderComposer(council)
+    fireEvent.change(ta, { target: { value: 'topic' } })
+    fireEvent.click(toggle())
+    addSeat('codex', 'gpt-6')
+    addSeat('claude', 'opus')
+    fireEvent.click(screen.getByRole('button', { name: /开始讨论/ }))
+    await waitFor(() => expect(flashToast).toHaveBeenCalledWith('当前会话正忙'))
+    expect(panel()).toBeTruthy()
+    expect(ta.value).toBe('topic')
+    await waitFor(() => expect((screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement).disabled).toBe(false))
+  })
+
+  it('start button is disabled while start is pending (no double IPC)', async () => {
+    const council = councilApi()
+    let resolve!: () => void
+    ;(council.start as ReturnType<typeof vi.fn>).mockImplementationOnce(() => new Promise<void>(r => { resolve = r }))
+    const { ta } = renderComposer(council)
+    fireEvent.change(ta, { target: { value: 'topic' } })
+    fireEvent.click(toggle())
+    addSeat('codex', 'gpt-6')
+    addSeat('claude', 'opus')
+    const btn = screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    expect(btn.disabled).toBe(true)
+    expect(council.start).toHaveBeenCalledTimes(1)
+    resolve()
+    await waitFor(() => expect(panel()).toBeNull())
   })
 
   it('start disabled while chat is busy', () => {

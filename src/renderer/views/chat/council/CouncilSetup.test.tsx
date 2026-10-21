@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { CouncilSetup } from './CouncilSetup'
+import { CouncilSetup, councilStartError } from './CouncilSetup'
 import type { ProviderInfo } from '@shared/types'
 import type { CouncilLastConfig } from '../../../state/useCouncil'
 
@@ -161,6 +161,29 @@ describe('CouncilSetup', () => {
     fireEvent.click(screen.getByRole('button', { name: '未提交的改动' }))
     fireEvent.click(startBtn())
     expect(onStart.mock.calls[2][0].materials).toEqual({ projectCwd: '/ws/app', diff: 'uncommitted' })
+  })
+
+  it('drops remembered seats whose model is gone; unusable leader falls back to the first seat', () => {
+    const last: CouncilLastConfig = {
+      seats: [
+        { id: 'claude:old', provider: 'claude', model: 'old', label: 'Claude Code · Old' },
+        { id: 'codex:gpt-6', provider: 'codex', model: 'gpt-6', label: 'Codex · GPT-6' },
+        { id: 'claude:opus', provider: 'claude', model: 'opus', label: 'Claude Code · Opus' },
+      ],
+      leader: { id: 'leader:gemini:pro', provider: 'gemini', model: 'pro', label: 'Gemini · Pro' },
+      mode: { kind: 'rounds', rounds: 2 },
+    }
+    const { onStart } = setup({ lastConfig: last })
+    expect(seatIds()).toEqual(['codex:gpt-6', 'claude:opus'])
+    fireEvent.click(startBtn())
+    expect(onStart.mock.calls[0][0].leader).toMatchObject({ id: 'leader:codex:gpt-6', provider: 'codex', model: 'gpt-6' })
+  })
+
+  it('councilStartError maps IPC error codes', () => {
+    expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: busy"))).toBe('当前会话正忙')
+    expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: provider-not-installed"))).toBe('配置无效')
+    expect(councilStartError(new Error('seats-too-few'))).toBe('配置无效')
+    expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: 工作区已归档，恢复后才能继续。"))).toBe('工作区已归档，恢复后才能继续。')
   })
 
   it('shows the estimate as an upper-bound minute count', () => {

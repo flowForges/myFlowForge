@@ -10,7 +10,8 @@ import { shouldOffloadPaste, pastedFileName, pastedFileNameForFile, base64OfUtf8
 import { agentIcon } from '../../components/AgentLogo'
 import type { CouncilApi } from '../../state/useCouncil'
 import type { CouncilConfig } from '@shared/council'
-import { CouncilSetup } from './council/CouncilSetup'
+import { CouncilSetup, councilStartError } from './council/CouncilSetup'
+import { flashToast } from '../../components/flashToast'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -156,6 +157,11 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   const interjecting = councilActive?.status === 'running'
   const councilFinalizing = councilActive?.status === 'finalizing'
   const [councilOpen, setCouncilOpen] = useState(false)
+  // ★设置区第一次打开才挂载(拉项目列表等),之后收起只是隐藏 —— 选好的席位不因收起而丢。
+  const [councilMounted, setCouncilMounted] = useState(false)
+  // 开始请求在路上时按钮禁用,双击不会发两次 council:start。
+  const [councilStarting, setCouncilStarting] = useState(false)
+  const councilStartingRef = useRef(false)
   const effectiveDisabled = disabled || councilFinalizing
   const dk = draftKey ?? ''
   const [text, setText] = useState(() => (dk ? draftStore[dk]?.text : '') ?? '')
@@ -335,8 +341,18 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   }
 
   async function startCouncil(cfg: CouncilConfig) {
-    if (!council) return
-    try { await council.start(cfg) } catch { return }
+    if (!council || councilStartingRef.current) return
+    councilStartingRef.current = true
+    setCouncilStarting(true)
+    try {
+      await council.start(cfg)
+    } catch (e) {
+      flashToast(councilStartError(e))
+      return
+    } finally {
+      councilStartingRef.current = false
+      setCouncilStarting(false)
+    }
     resetBox()
     setCouncilOpen(false)
   }
@@ -570,14 +586,17 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
 
   return (
     <div className="composer-wrap">
-      {council && councilOpen && (
+      {/* ★开始被拦的情形:普通对话忙、本会话有工作流在跑/排队(runQueued,同理占着会话)、开始请求在路上、
+          已有一场共商未结束、输入框本身不可用。 */}
+      {council && councilMounted && (
         <CouncilSetup
+          hidden={!councilOpen}
           providers={providers}
           lastConfig={council.lastConfig}
           projects={council.projects}
           topic={text}
           attachments={attachments}
-          blocked={!!busy || !!councilActive || effectiveDisabled || !!readOnly || !!archived}
+          blocked={!!busy || runQueued || councilStarting || !!councilActive || effectiveDisabled || !!readOnly || !!archived}
           onStart={startCouncil}
         />
       )}
@@ -850,7 +869,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
             <button
               className={'cb-btn cb-council' + (councilOpen ? ' on' : '')}
               aria-pressed={councilOpen}
-              onClick={() => setCouncilOpen(o => !o)}
+              onClick={() => { setCouncilMounted(true); setCouncilOpen(o => !o) }}
             >
               <span>AI 共商</span>
             </button>

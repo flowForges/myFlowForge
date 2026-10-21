@@ -35,6 +35,25 @@ function makeSeat(p: ProviderInfo, model: string): CouncilSeat {
 }
 const asLeader = (s: CouncilSeat): CouncilSeat => ({ ...s, id: `leader:${s.provider}:${s.model}` })
 
+const START_ERRORS: Record<string, string> = {
+  busy: '当前会话正忙',
+  'provider-not-installed': '配置无效',
+  'project-invalid': '配置无效',
+}
+
+/**
+ * council:start 失败时给用户看的一句话。ipcRenderer.invoke 的错误长这样:
+ * "Error invoking remote method 'council:start': Error: busy" —— 取最后那段当错误码。
+ */
+export function councilStartError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e)
+  const msg = raw.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '').trim()
+  if (START_ERRORS[msg]) return START_ERRORS[msg]
+  // validateCouncilConfig 的错误码(topic-empty / seats-too-few / seat-duplicate …)一律归为配置无效
+  if (/^[a-z]+(?:-[a-z]+)+$/.test(msg)) return '配置无效'
+  return msg || '配置无效'
+}
+
 const CHEV = <svg className="dd-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
 
 /** 「CLI → 模型」两级选择,复用 Composer 的 .menu / .menu-pop / .menu-item。 */
@@ -92,16 +111,19 @@ type Props = {
   attachments: Attachment[]
   /** 普通对话正忙 / 本会话已有一场共商未结束。 */
   blocked: boolean
+  /** 收起时仍保持挂载(草稿不丢),只是不显示。 */
+  hidden?: boolean
   onStart: (cfg: CouncilConfig) => void | Promise<void>
 }
 
-export function CouncilSetup({ providers, lastConfig, projects, topic, attachments, blocked, onStart }: Props) {
+export function CouncilSetup({ providers, lastConfig, projects, topic, attachments, blocked, hidden, onStart }: Props) {
   // 只列本机装了、且第一期开放的 CLI;没有模型列表的选不出席位,也不列。
   const pickable = useMemo(
     () => providers.filter(p => p.installed && isCouncilProvider(p.id) && p.models.length > 0),
     [providers],
   )
-  const usable = (s: CouncilSeat) => pickable.some(p => p.id === s.provider)
+  // 记住的席位:CLI 还装着、模型也还在它的列表里才算数。
+  const usable = (s: CouncilSeat) => pickable.some(p => p.id === s.provider && p.models.some(m => m.id === s.model))
 
   const [seats, setSeats] = useState<CouncilSeat[]>([])
   const [leader, setLeader] = useState<CouncilSeat | null>(null)
@@ -119,8 +141,9 @@ export function CouncilSetup({ providers, lastConfig, projects, topic, attachmen
     // provider 列表也可能还没到:等它到了再套,否则记住的席位会被当成「没装」全部筛掉。
     if (!lastConfig || !pickable.length || applied.current || touched.current) return
     applied.current = true
-    setSeats(lastConfig.seats.filter(usable))
-    setLeader(usable(lastConfig.leader) ? lastConfig.leader : null)
+    const kept = lastConfig.seats.filter(usable)
+    setSeats(kept)
+    setLeader(usable(lastConfig.leader) ? lastConfig.leader : kept[0] ? asLeader(kept[0]) : null)
     setMode(lastConfig.mode)
     const mt = lastConfig.materials
     if (mt?.projectCwd) {
@@ -187,7 +210,7 @@ export function CouncilSetup({ providers, lastConfig, projects, topic, attachmen
   const setRounds = (n: number) => { touch(); setMode({ kind: 'rounds', rounds: Math.min(MAX_ROUNDS, Math.max(MIN_ROUNDS, n)) }) }
 
   return (
-    <div className="council-setup">
+    <div className="council-setup" hidden={hidden}>
       <div className="council-row">
         <div className="council-seg" role="group">
           <button type="button" aria-pressed={mode.kind === 'rounds'} className={mode.kind === 'rounds' ? 'on' : ''} onClick={() => setRounds(rounds)}>按轮次</button>
