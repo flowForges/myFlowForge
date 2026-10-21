@@ -19,6 +19,7 @@ import { AgentContextMeta } from '../components/AgentContextMeta'
 import { ResizeHandle } from '../shell/ResizeHandle'
 import { useChat } from '../state/useChat'
 import { useCouncil } from '../state/useCouncil'
+import { CouncilBlock } from './chat/council/CouncilBlock'
 import type { SessionsApi } from '../state/useSessions'
 import { useSessions } from '../state/useSessions'
 import { useWorktree } from '../state/useWorktree'
@@ -1133,9 +1134,12 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
     },
   }), [wsPath, sessions.activeSessionId])
 
+  // ★进行中的共商区块(暂停/继续/结束在里面)和门一样,不许被「加载更早」收掉
+  const liveCouncilId = council.active?.id
+  const liveCouncils = useMemo(() => new Set(liveCouncilId ? [liveCouncilId] : []), [liveCouncilId])
   const liveWindow = useMemo(
-    () => windowTimeline(buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries), shownCount),
-    [liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries, shownCount],
+    () => windowTimeline(buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries), shownCount, liveCouncils),
+    [liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries, shownCount, liveCouncils],
   )
 
   // Text-fallback warning: show when this is a continued session that cannot use native --resume.
@@ -1605,8 +1609,19 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                   />
                 )
               }
-              // TODO(council Task 14): 共商区块组件接上之前先不画
-              if (entry.kind === 'council') return null
+              if (entry.kind === 'council') {
+                return (
+                  <CouncilBlock
+                    key={`council-${entry.id}`}
+                    id={entry.id}
+                    messages={entry.messages}
+                    state={council.states.find(s => s.id === entry.id)}
+                    streamingIds={chat.streamingIds}
+                    providers={providers}
+                    controls={council}
+                  />
+                )
+              }
               if (entry.kind === 'message') {
                 return (
                   <Message

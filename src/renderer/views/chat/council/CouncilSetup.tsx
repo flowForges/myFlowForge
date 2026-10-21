@@ -21,7 +21,7 @@ const MATERIAL_KINDS: { id: MaterialKind; label: string }[] = [
 ]
 
 const FALLBACK_LOGO = { bg: 'oklch(70% .03 250 / .25)', color: 'var(--fg-2)', glyph: '◆' }
-function Logo({ id }: { id: string }) {
+export function Logo({ id }: { id: string }) {
   const meta = getBuiltinProvider(id)
   const lg = meta ? { bg: meta.brandBg, color: meta.brandColor, glyph: meta.glyph } : FALLBACK_LOGO
   return <span className="mc-logo-sm" style={{ background: lg.bg, color: lg.color }}>{agentIcon(id, lg.glyph)}</span>
@@ -29,11 +29,11 @@ function Logo({ id }: { id: string }) {
 
 // ★席位 id = provider:model —— 同一组合最多当一次席位,所以天然唯一;主持人跑在独立会话里,
 //  id 加 leader: 前缀,即便和某个席位同组合也不会撞上那个席位的发言归属。
-function makeSeat(p: ProviderInfo, model: string): CouncilSeat {
+export function makeSeat(p: ProviderInfo, model: string): CouncilSeat {
   const m = p.models.find(x => x.id === model)
   return { id: `${p.id}:${model}`, provider: p.id, model, label: `${p.displayName} · ${m?.label ?? model}` }
 }
-const asLeader = (s: CouncilSeat): CouncilSeat => ({ ...s, id: `leader:${s.provider}:${s.model}` })
+export const asLeader = (s: CouncilSeat): CouncilSeat => ({ ...s, id: `leader:${s.provider}:${s.model}` })
 
 const START_ERRORS: Record<string, string> = {
   busy: '当前会话正忙',
@@ -54,10 +54,10 @@ export function councilStartError(e: unknown): string {
   return msg || '配置无效'
 }
 
-const CHEV = <svg className="dd-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
+export const CHEV = <svg className="dd-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
 
 /** 「CLI → 模型」两级选择,复用 Composer 的 .menu / .menu-pop / .menu-item。 */
-function SeatPicker({ className, label, trigger, providers, taken, onPick }: {
+export function SeatPicker({ className, label, trigger, providers, taken, onPick }: {
   className: string
   label: string
   trigger: React.ReactNode

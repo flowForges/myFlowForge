@@ -25,7 +25,9 @@ export const LIVE_WINDOW_STEP = 40
  * ★run-card 只有**活跃**(带 event,还在 inbox 里等处理)的才保活;已冻结的那种是历史记录,
  *  和消息一样可以收起来。
  */
-function mustKeep(e: TimelineEntry): boolean {
+function mustKeep(e: TimelineEntry, liveCouncils?: ReadonlySet<string>): boolean {
+  // ★进行中(running/paused/finalizing)的共商区块里有暂停/继续/结束 —— 和门一样不许被收掉;结束了的就是历史。
+  if (e.kind === 'council') return !!liveCouncils?.has(e.id)
   if (e.kind === 'pending' || e.kind === 'confirm' || e.kind === 'plan' || e.kind === 'launch-gate') return true
   return e.kind === 'run-card' && e.event != null
 }
@@ -43,8 +45,11 @@ export interface WindowedTimeline {
   fromIndex: number
 }
 
-/** 只保留最后 `limit` 条消息(以及所有还在等人处理的卡片)。`limit` 非正/非法 = 不限制。 */
-export function windowTimeline(entries: TimelineEntry[], limit: number): WindowedTimeline {
+/**
+ * 只保留最后 `limit` 条消息(以及所有还在等人处理的卡片)。`limit` 非正/非法 = 不限制。
+ * `liveCouncils`:进行中的共商 id,这些区块同样保活。
+ */
+export function windowTimeline(entries: TimelineEntry[], limit: number, liveCouncils?: ReadonlySet<string>): WindowedTimeline {
   if (!Number.isFinite(limit) || limit <= 0) return { visible: entries, hiddenCount: 0, fromIndex: 0 }
   const msgPositions: number[] = []
   for (let i = 0; i < entries.length; i++) if (entries[i].kind === 'message') msgPositions.push(i)
@@ -54,7 +59,7 @@ export function windowTimeline(entries: TimelineEntry[], limit: number): Windowe
   const first = entries[cut] as Extract<TimelineEntry, { kind: 'message' }>
   const visible: TimelineEntry[] = []
   // cut 之前的东西里,只有「还在等人处理的卡片」留下来,其余(消息、分割线、冻结卡)全收起。
-  for (let i = 0; i < cut; i++) if (mustKeep(entries[i])) visible.push(entries[i])
+  for (let i = 0; i < cut; i++) if (mustKeep(entries[i], liveCouncils)) visible.push(entries[i])
   for (let i = cut; i < entries.length; i++) visible.push(entries[i])
   return { visible, hiddenCount, fromIndex: first.index }
 }

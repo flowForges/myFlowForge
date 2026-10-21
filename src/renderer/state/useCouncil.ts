@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { CouncilConfig, CouncilState } from '@shared/council'
+import type { CouncilConfig, CouncilSeat, CouncilState } from '@shared/council'
 
 export type CouncilLastConfig = Omit<CouncilConfig, 'topic' | 'attachments'>
 
@@ -11,7 +11,8 @@ export type CouncilApi = {
   lastConfig: CouncilLastConfig | null
   start(cfg: CouncilConfig): Promise<void>
   pause(id: string): void
-  resume(id: string): void
+  /** newLeader:领导者失败暂停后换一位接着跑(§7.3)。 */
+  resume(id: string, newLeader?: CouncilSeat): void
   stop(id: string, mode: 'finalize' | 'abort'): void
   interject(id: string, text: string): void
   followup(id: string, q: string, target: 'all' | string): void
@@ -68,7 +69,9 @@ export function useCouncil(workspacePath?: string, sessionId?: string): CouncilA
   }, [workspacePath, sessionId])
 
   const pause = useCallback((id: string) => { void api.current.councilPause({ councilId: id }) }, [])
-  const resume = useCallback((id: string) => { void api.current.councilResume({ councilId: id }) }, [])
+  const resume = useCallback((id: string, newLeader?: CouncilSeat) => {
+    void api.current.councilResume(newLeader ? { councilId: id, newLeader } : { councilId: id })
+  }, [])
   const stop = useCallback((id: string, mode: 'finalize' | 'abort') => { void api.current.councilStop({ councilId: id, mode }) }, [])
   const interject = useCallback((id: string, text: string) => { void api.current.councilInterject({ councilId: id, text }) }, [])
   const followup = useCallback((id: string, q: string, target: 'all' | string) => {

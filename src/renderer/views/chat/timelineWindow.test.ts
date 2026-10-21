@@ -63,6 +63,18 @@ describe('windowTimeline — 只渲染最近 N 条,更早的收起来', () => {
     expect(w.visible).toHaveLength(2)
   })
 
+  it('★进行中的共商区块永远不藏(暂停/结束按钮在里面);已结束的照常收起', () => {
+    const council = (id: string, ts: number): TimelineEntry => ({ kind: 'council', id, ts, messages: [] })
+    const e = [council('live', 0), council('old', 1), ...Array.from({ length: 30 }, (_, i) => msg(i + 2))]
+    const w = windowTimeline(e, 5, new Set(['live']))
+    const ids = w.visible.filter(x => x.kind === 'council').map(x => (x as { id: string }).id)
+    expect(ids).toEqual(['live'])
+    expect(w.visible[0]).toBe(e[0])
+    expect(w.hiddenCount).toBe(25)
+    // 不传活跃集合 = 老行为
+    expect(windowTimeline(e, 5).visible.some(x => x.kind === 'council')).toBe(false)
+  })
+
   it('一条消息都没有时不炸', () => {
     expect(windowTimeline([], 20)).toEqual({ visible: [], hiddenCount: 0, fromIndex: 0 })
     const only = [confirm(0)]
