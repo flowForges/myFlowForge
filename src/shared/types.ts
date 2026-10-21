@@ -450,7 +450,8 @@ export interface ChatSendPayload {
 export interface ChatQueueEvent { workspacePath: string; busy: boolean; queue: { id: string; text: string; source: string; sessionId: string }[]; running: { id: string; text: string; sessionId: string } | null; runningTurns: { id: string; text: string; sessionId: string }[]; runningSessionId: string | null; runningSessionIds: string[] }
 export type ChatEvent = { workspacePath: string; sessionId: string } & (
   | { type: 'user'; message: ChatMessage }
-  | { type: 'assistant-start'; id: string; model: string; context?: AgentContextMeta }
+  // council:共商发言带上它在共商里的位置,渲染端在流式阶段就能把它归进共商区块(落盘后 done 的 message 里也有)。
+  | { type: 'assistant-start'; id: string; model: string; context?: AgentContextMeta; council?: CouncilTag }
   | { type: 'assistant-delta'; id: string; text: string }
   // Replace (not append) the reply body with an authoritative full text — see ChatCallbacks.onAssistantReplace.
   | { type: 'assistant-replace'; id: string; text: string }

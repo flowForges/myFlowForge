@@ -158,6 +158,16 @@ describe('CouncilEngine rounds mode', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
+  it('assistant-start carries the utterance council tag so the renderer can group it while streaming', async () => {
+    const h = harness(cfg(['A', 'B'], 1))
+    await h.engine.start()
+    const doneA = h.appended.find(m => m.council?.seat === 'A' && m.council.stage === 'answer')!
+    const start = h.events.find(e => e.type === 'assistant-start' && e.id === doneA.id)
+    expect(start).toMatchObject({ type: 'assistant-start', council: { id: CID, seat: 'A', round: 1, stage: 'answer' } })
+    const finalStart = h.events.find(e => e.type === 'assistant-start' && e.id === h.appended.find(m => m.council?.stage === 'final')!.id)
+    expect(finalStart).toMatchObject({ council: { id: CID, seat: 'L', stage: 'final' } })
+  })
+
   it('with a single round the leader goes from answers straight to final', async () => {
     const h = harness(cfg(['A', 'B'], 1))
     await h.engine.start()

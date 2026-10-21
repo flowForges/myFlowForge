@@ -27,10 +27,15 @@ export type TimelineEntry =
   // 相邻两条 ai 消息 provider 不同时插入的分割线,携带 provider id(而非显示名——显示名映射复用
   // 现有 agent label 机制,在渲染处按 providers 列表解析,保持 timeline.ts 纯粹/易测)。
   | { kind: 'provider-switch'; ts: number; from: string; to: string }
+  // AI 共商:同一场共商(council.id 相同)的全部消息收成一个区块,落在它第一条消息的位置(§6.4)。
+  // 之后才追加的追问也归进这个区块,不在普通对话里另起一段。
+  | { kind: 'council'; id: string; messages: ChatMessage[]; ts: number }
   // P3-1: run2 inbox 事件(gate/auth/failure/doubt/question)映射出的卡片,活跃(event)或已冻结
   // (frozen)——见 runCards.ts。RunCardEntry 本身已含 kind/ts,直接作为一个 union 成员复用,不再
   // 二次包一层,避免和其它条目的"外层 kind + 内层 payload"风格重复嵌套。
   | RunCardEntry
+
+type CouncilEntry = Extract<TimelineEntry, { kind: 'council' }>
 
 // 卡片(pending/confirm/plan)排序键:缺失/不可解析 → +Infinity 排末尾;否则用毫秒时间戳。
 function key(ts?: string): number {
@@ -76,6 +81,7 @@ function messageKeys(messages: ChatMessage[]): number[] {
 function messageEntries(messages: ChatMessage[], mk: number[]): TimelineEntry[] {
   const out: TimelineEntry[] = []
   let prevAiProvider: string | undefined
+  const councils = new Map<string, CouncilEntry>()
   messages.forEach((msg, index) => {
     // P1-5: a persisted frozen launch-gate rides on a synthetic ChatMessage (blank text, `launchGate`
     // field) purely so it survives reload/session-switch — it is NOT a real chat message and must not
@@ -86,6 +92,18 @@ function messageEntries(messages: ChatMessage[], mk: number[]): TimelineEntry[] 
     // caller reconstructs the actual 'run-card' entry from this same messages array (via
     // toRunCardEntries' `resolved` list), keyed by this message's own id.
     if (msg.runCard) return
+    // ★共商消息既不出分割线,也不推进 prevAiProvider:分割线只比较普通对话的 ai 消息,
+    //  否则共商里别家席位的发言会让它后面同一 provider 的普通回复凭空多出一条「切换」。
+    if (msg.council) {
+      const block = councils.get(msg.council.id)
+      if (block) block.messages.push(msg)
+      else {
+        const entry: CouncilEntry = { kind: 'council', id: msg.council.id, messages: [msg], ts: mk[index] }
+        councils.set(entry.id, entry)
+        out.push(entry)
+      }
+      return
+    }
     if (msg.who === 'ai' && msg.provider) {
       if (prevAiProvider && msg.provider !== prevAiProvider) {
         out.push({ kind: 'provider-switch', ts: mk[index], from: prevAiProvider, to: msg.provider })

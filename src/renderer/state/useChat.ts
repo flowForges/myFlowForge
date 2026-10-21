@@ -260,7 +260,7 @@ export function useChat(
       if (e.type === 'user') setMessages(m => [...m, e.message])
       else if (e.type === 'assistant-start') {
         setStreamingIds(s => new Set(s).add(e.id))
-        setMessages(m => upsertMsg(m, e.id, x => x, () => ({ ...blankAi(e.id), model: e.model, context: e.context, startedAt: Date.now() })))
+        setMessages(m => upsertMsg(m, e.id, x => x, () => ({ ...blankAi(e.id), model: e.model, context: e.context, startedAt: Date.now(), ...(e.council ? { council: e.council } : {}) })))
       }
       else if (e.type === 'assistant-replace') {
         // Overwrite (not append) — the provider sent the authoritative full reply with real newlines.
@@ -336,9 +336,19 @@ export function useChat(
       }
       else if (e.type === 'error') {
         const endedAt = Date.now()
-        setMessages(m => upsertMsg(m, e.id,
-          x => ({ ...x, text: x.text || `错误: ${e.error}`, think: undefined, endedAt }),
-          () => ({ ...blankAi(e.id), text: `错误: ${e.error}`, think: undefined, endedAt })))
+        // ★被「结束」取消的共商发言:引擎只广播 {error:'cancelled'}、不落盘(普通对话的 error 总带 message)。
+        //  它不是失败 —— 把流式占位拿掉,不留错误气泡;没见过 start 的也不凭空造一条。
+        const cancelledCouncil = e.error === 'cancelled' && !e.message
+        setMessages(m => {
+          if (cancelledCouncil) {
+            const cur = m.find(x => x.id === e.id)
+            if (!cur) return m
+            if (cur.council) return m.filter(x => x.id !== e.id)
+          }
+          return upsertMsg(m, e.id,
+            x => ({ ...x, text: x.text || `错误: ${e.error}`, think: undefined, endedAt }),
+            () => ({ ...blankAi(e.id), text: `错误: ${e.error}`, think: undefined, endedAt }))
+        })
         setStreamingIds(s => { const n = new Set(s); n.delete(e.id); return n })
       }
       // 按 id 去重:挂载时的 chatGateState 快照可能已经把同一个门种下了(广播恰好在快照回来之后到达),

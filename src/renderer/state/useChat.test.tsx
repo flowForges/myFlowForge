@@ -81,6 +81,37 @@ describe('useChat', () => {
     expect(m.think).toBeUndefined()
   })
 
+  it('a council assistant-start puts its council tag on the streaming message', () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    const council = { id: 'c1', seat: 'A', round: 1, stage: 'answer' as const }
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-start', id: 'c1:1:A:answer', model: 'Codex · 6.1', council }) })
+    expect(result.current.messages.find(m => m.id === 'c1:1:A:answer')?.council).toEqual(council)
+  })
+
+  it('a stop-cancelled council utterance disappears instead of leaving an error bubble', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-start', id: 'c1:2:A:critique', model: 'Codex · 6.1', council: { id: 'c1', seat: 'A', round: 2, stage: 'critique' } }) })
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-delta', id: 'c1:2:A:critique', text: '半句' }) })
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'error', id: 'c1:2:A:critique', error: 'cancelled' }) })
+    expect(result.current.streamingIds.size).toBe(0)
+    expect(result.current.messages.map(m => m.id)).toEqual(['h1'])
+  })
+
+  it('a cancelled council utterance never seen before does not create a bubble', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    await waitFor(() => expect(result.current.messages).toHaveLength(1))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'error', id: 'c1:2:B:critique', error: 'cancelled' }) })
+    expect(result.current.messages.map(m => m.id)).toEqual(['h1'])
+  })
+
+  it('a normal message erroring with "cancelled" still shows its error', async () => {
+    const { result } = renderHook(() => useChat('/ws', 's1'))
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-start', id: 'a1', model: 'Claude Code · opus-4.8' }) })
+    act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'error', id: 'a1', error: 'cancelled', message: { id: 'a1', who: 'ai', text: '', ts: '2' } }) })
+    expect(result.current.messages.find(m => m.id === 'a1')?.text).toContain('错误: cancelled')
+  })
+
   it('tracks multiple concurrently-streaming ids independently', () => {
     const { result } = renderHook(() => useChat('/ws', 's1'))
     act(() => { handler!({ workspacePath: '/ws', sessionId: 's1', type: 'assistant-start', id: 'a1', model: 'Claude Code · opus-4.8' }) })

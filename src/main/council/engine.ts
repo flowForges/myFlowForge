@@ -520,7 +520,7 @@ export class CouncilEngine {
     this.st.speaking = [...this.st.speaking, seat.id]
     this.changed()
     const run = this.deps.runSeat(this.id, seat, prompt, { ...this.deps.seatDeps, workspacePath: this.ws, sessionId: this.sid, cwd: this.cwd() }, {
-      onStart: () => { if (!live) return; started = true; this.emit({ type: 'assistant-start', id, model: seat.label }) },
+      onStart: () => { if (!live) return; started = true; this.emit({ type: 'assistant-start', id, model: seat.label, council: { id: this.id, seat: seat.id, round, stage } }) },
       onDelta: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-delta', id, text: t }) },
       onThink: (_m, t) => { if (!live) return; think += t; this.emit({ type: 'think-delta', id, text: t }) },
       onReplace: (_m, t) => { if (!live) return; this.emit({ type: 'assistant-replace', id, text: t }) },

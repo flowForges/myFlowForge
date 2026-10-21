@@ -1603,6 +1603,8 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
                   />
                 )
               }
+              // TODO(council Task 14): 共商区块组件接上之前先不画
+              if (entry.kind === 'council') return null
               if (entry.kind === 'message') {
                 return (
                   <Message
