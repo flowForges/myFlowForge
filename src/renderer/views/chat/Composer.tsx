@@ -596,7 +596,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           projects={council.projects}
           topic={text}
           attachments={attachments}
-          blocked={!!busy || runQueued || councilStarting || !!councilActive || effectiveDisabled || !!readOnly || !!archived}
+          blocked={!!busy || runQueued || councilStarting || interjecting || councilFinalizing || effectiveDisabled || !!readOnly || !!archived}
           onStart={startCouncil}
         />
       )}

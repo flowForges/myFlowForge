@@ -61,6 +61,14 @@ describe('useCouncil', () => {
     expect(result.current.active).toBeUndefined()
   })
 
+  it('active prefers the running council over an older paused one (paused does not hold the session, R9)', async () => {
+    const { result } = renderHook(() => useCouncil('/ws', 's1'))
+    await waitFor(() => expect(result.current.states).toHaveLength(1))
+    act(() => { stateHandler!(state('c1', 'paused')) })
+    act(() => { stateHandler!(state('c2', 'running')) })
+    expect(result.current.active?.id).toBe('c2')
+  })
+
   it('ignores council:state of another session', async () => {
     const { result } = renderHook(() => useCouncil('/ws', 's1'))
     await waitFor(() => expect(result.current.states).toHaveLength(1))

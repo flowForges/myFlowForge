@@ -1266,6 +1266,14 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
     await assertCouncilSeatsInstalled([...a.config.seats, a.config.leader])
     const projectCwd = a.config.materials?.projectCwd
     if (projectCwd !== undefined && !listCouncilProjects(a.workspacePath).some(p => p.cwd === projectCwd)) throw new Error('project-invalid')
+    // ★开始前先把材料取一遍:区间写错 / 引用不存在 / 仓库还没有提交(git diff HEAD 失败)都在这里同步拒绝,
+    //  而不是让共商一开场就暂停。引擎开跑后会再取一次(材料不落盘),那次失败由引擎暂停兜底
+    try {
+      await collectMaterials(a.config.materials)
+    } catch (e) {
+      logError('council', 'council materials could not be collected', e instanceof Error ? e.message : String(e))
+      throw new Error('materials-invalid')
+    }
     // ★普通对话的回合还在跑 / 排队:共商不能和它同时用这个会话(§7.2 #9)
     if (chatQueue.sessionBusy(a.workspacePath, a.sessionId)) throw new Error('busy')
     ensureCouncilsRestored(a.workspacePath)

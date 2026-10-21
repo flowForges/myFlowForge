@@ -310,11 +310,7 @@ export class CouncilEngine {
     // ★在这里而不是 resume() 里清:挂起前那次 run 可能还没退栈,它得一直看到 suspended 才不会接着推进
     this.suspended = false
     this.changed()
-    if (!this.materialsLoaded) {
-      this.materials = await this.deps.materialsText(this.cfg)
-      this.materialsLoaded = true
-      if (this.stopMode === 'abort' || this.suspended) return
-    }
+    // ★先落议题再取材料:界面上的共商块是从消息里长出来的,取材料失败暂停时也必须看得到它(才有继续 / 结束)
     if (!this.prepared) {
       const topic: ChatMessage = {
         id: `${this.id}:topic`, who: 'user', text: this.cfg.topic,
@@ -326,6 +322,11 @@ export class CouncilEngine {
       this.prepared = true
       this.st.round = 1
       this.changed()
+    }
+    if (!this.materialsLoaded) {
+      this.materials = await this.deps.materialsText(this.cfg)
+      this.materialsLoaded = true
+      if (this.stopMode === 'abort' || this.suspended) return
     }
 
     for (;;) {

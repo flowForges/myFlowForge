@@ -184,6 +184,14 @@ describe('CouncilEngine rounds mode', () => {
     expect(h.calls).toHaveLength(0)
   })
 
+  it('materialsText rejecting still leaves the topic message so the paused council is visible', async () => {
+    const h = harness(cfg(['A', 'B']), undefined, { materialsText: async () => { throw new Error('git failed') } })
+    await h.engine.start()
+    expect(h.appended.map(m => m.council?.stage)).toEqual(['topic'])
+    expect(h.engine.state).toMatchObject({ status: 'paused', round: 1 })
+    expect(h.persisted.at(-1)!.state.round).toBe(1)
+  })
+
   it('writeFile throwing during final pauses the council', async () => {
     const h = harness(cfg(['A', 'B']), undefined, { writeFile: () => { throw new Error('EACCES') } })
     await expect(h.engine.start()).resolves.toBeUndefined()

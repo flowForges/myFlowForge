@@ -81,9 +81,10 @@ const detected = [
 vi.mock('../agents/detectCache', () => ({ cachedDetectProviders: vi.fn(async () => detected), invalidateDetectCache: vi.fn() }))
 
 const PROJECT = '/repo/app'
+const collectMaterialsMock = vi.fn(async (_m?: unknown) => '')
 vi.mock('../council/materials', () => ({
   listCouncilProjects: vi.fn(() => [{ name: 'app', cwd: PROJECT }]),
-  collectMaterials: vi.fn(async () => ''),
+  collectMaterials: (m?: unknown) => collectMaterialsMock(m),
 }))
 
 // 假席位:onStart 后挂着,直到测试调用 release()
@@ -139,6 +140,7 @@ beforeEach(async () => {
   pending.length = 0
   seatCwds.length = 0
   sendTurnMock.mockReset().mockResolvedValue(undefined)
+  collectMaterialsMock.mockReset().mockResolvedValue('')
   await boot()
 })
 afterEach(() => {
@@ -166,6 +168,16 @@ describe('council:start', () => {
   it('rejects a materials project that is not one of the workspace projects', async () => {
     const config = cfg({ materials: { projectCwd: '/etc' } })
     await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config })).rejects.toThrow('project-invalid')
+  })
+
+  it('rejects materials-invalid when the materials cannot be collected, and starts nothing', async () => {
+    collectMaterialsMock.mockRejectedValueOnce(new Error('invalid git range: HEAD~3'))
+    const config = cfg({ materials: { projectCwd: PROJECT, diff: { range: 'HEAD~3' } } })
+    await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config })).rejects.toThrow('materials-invalid')
+    expect(collectMaterialsMock).toHaveBeenCalledWith(config.materials)
+    await flush()
+    expect(await call(CH.councilList, { workspacePath: ws, sessionId: 's1' })).toEqual([])
+    expect(appended).toEqual([])
   })
 
   it('rejects with busy while a chat turn is running or queued in the session', async () => {

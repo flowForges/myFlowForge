@@ -1135,8 +1135,9 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   }), [wsPath, sessions.activeSessionId])
 
   // ★进行中的共商区块(暂停/继续/结束在里面)和门一样,不许被「加载更早」收掉
-  const liveCouncilId = council.active?.id
-  const liveCouncils = useMemo(() => new Set(liveCouncilId ? [liveCouncilId] : []), [liveCouncilId])
+  //  暂停的那场不占会话(R9),可能和一场新开的同时存在 —— 两场都要留着
+  const liveCouncilKey = council.states.filter(s => s.status === 'running' || s.status === 'paused' || s.status === 'finalizing').map(s => s.id).join('\n')
+  const liveCouncils = useMemo(() => new Set(liveCouncilKey ? liveCouncilKey.split('\n') : []), [liveCouncilKey])
   const liveWindow = useMemo(
     () => windowTimeline(buildTimeline(liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries), shownCount, liveCouncils),
     [liveMessages, pending, chat.confirms, chat.plans, mergedLaunchGates, allRunCardEntries, shownCount, liveCouncils],

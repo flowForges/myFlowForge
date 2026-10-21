@@ -132,13 +132,22 @@ describe('Composer · AI 共商', () => {
     expect((screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('start disabled while a council is live in this session', () => {
-    const { ta } = renderComposer(councilApi('paused'))
+  it.each(['running', 'finalizing'] as const)('start disabled while a council is %s in this session', (status) => {
+    const { ta } = renderComposer(councilApi(status))
     fireEvent.change(ta, { target: { value: 'topic' } })
     fireEvent.click(toggle())
     addSeat('codex', 'gpt-6')
     addSeat('claude', 'opus')
     expect((screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('a paused council does not block starting a new one (R9)', () => {
+    const { ta } = renderComposer(councilApi('paused'))
+    fireEvent.change(ta, { target: { value: 'topic' } })
+    fireEvent.click(toggle())
+    addSeat('codex', 'gpt-6')
+    addSeat('claude', 'opus')
+    expect((screen.getByRole('button', { name: /开始讨论/ }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('running council → Enter interjects instead of sending; placeholder 插话', () => {

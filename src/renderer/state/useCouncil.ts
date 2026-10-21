@@ -7,7 +7,7 @@ export type CouncilLastConfig = Omit<CouncilConfig, 'topic' | 'attachments'>
 export type CouncilApi = {
   /** 这个会话里的全部共商(进行中 + 已结束)。 */
   states: CouncilState[]
-  /** 进行中的那一场(running / paused / finalizing);一个会话同时最多一场。 */
+  /** 进行中的那一场:优先 running / finalizing(一个会话同时最多一场),没有才取 paused 的。 */
   active: CouncilState | undefined
   lastConfig: CouncilLastConfig | null
   start(cfg: CouncilConfig): Promise<void>
@@ -46,7 +46,8 @@ function settle(call: () => Promise<unknown>): Promise<boolean> {
   return p.then(() => true, (e: unknown) => { flashToast(councilActionError(e)); return false })
 }
 
-const LIVE = new Set<CouncilState['status']>(['running', 'paused', 'finalizing'])
+// 占着会话的(R9):同一会话同一时间只能有一场在跑;暂停的不占
+const HOLDING = new Set<CouncilState['status']>(['running', 'finalizing'])
 
 function upsert(list: CouncilState[], s: CouncilState): CouncilState[] {
   const i = list.findIndex(x => x.id === s.id)
@@ -106,7 +107,8 @@ export function useCouncil(workspacePath?: string, sessionId?: string): CouncilA
     return api.current.councilProjects({ workspacePath })
   }, [workspacePath])
 
-  const active = useMemo(() => states.find(s => LIVE.has(s.status)), [states])
+  // ★暂停的那场不挡新开的:有正在跑的就取正在跑的,否则才取暂停的那场
+  const active = useMemo(() => states.find(s => HOLDING.has(s.status)) ?? states.find(s => s.status === 'paused'), [states])
 
   return { states, active, lastConfig, start, pause, resume, stop, interject, followup, choose, projects }
 }

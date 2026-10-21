@@ -39,6 +39,7 @@ const START_ERRORS: Record<string, string> = {
   busy: '当前会话正忙',
   'provider-not-installed': '配置无效',
   'project-invalid': '配置无效',
+  'materials-invalid': '参考材料无效',
 }
 
 /**

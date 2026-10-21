@@ -75,6 +75,14 @@ describe('collectMaterials', () => {
     await expect(collectMaterials({ projectCwd: repo, diff: { range: '--output=x..b' } })).rejects.toThrow()
   })
 
+  it('rejects uncommitted changes in a repo without any commit (no HEAD)', async () => {
+    const empty = mkdtempSync(join(tmpdir(), 'council-mat-empty-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd: empty })
+      await expect(collectMaterials({ projectCwd: empty, diff: 'uncommitted' })).rejects.toThrow()
+    } finally { rmSync(empty, { recursive: true, force: true }) }
+  })
+
   it('rejects when not a git repo', async () => {
     const d = mkdtempSync(join(tmpdir(), 'council-nogit-'))
     await expect(collectMaterials({ projectCwd: d, diff: 'uncommitted' })).rejects.toThrow()

@@ -51,6 +51,9 @@ describe('activeCouncil', () => {
     expect(activeCouncil([st('a', { status: 'aborted' })])).toBeUndefined()
     expect(activeCouncil([st('a', { status: 'finalizing' })])?.id).toBe('a')
   })
+  it('暂停的不占会话(R9):有正在跑的就取正在跑的那场', () => {
+    expect(activeCouncil([st('a', { status: 'paused' }), st('b', { status: 'running' })])?.id).toBe('b')
+  })
 })
 
 describe('submitTarget —— 输入框提交走哪条路', () => {

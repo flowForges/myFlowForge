@@ -10,7 +10,8 @@ import type { Conn } from '../net/conn'
  *  这里的纯函数要在 node 下单测。
  */
 
-const LIVE = new Set<CouncilStatus>(['running', 'paused', 'finalizing'])
+// 占着会话的(R9):同一会话同一时间只能有一场在跑;暂停的不占
+const HOLDING = new Set<CouncilStatus>(['running', 'finalizing'])
 
 /** council:state 是全局广播 —— 只认本会话的;别的会话原样返回同一个数组,不触发重渲染。 */
 export function applyCouncilState(
@@ -32,9 +33,10 @@ export function mergeCouncilSnapshot(cur: CouncilState[], snapshot: CouncilState
   return snapshot.reduce((acc, s) => (acc.some((x) => x.id === s.id) ? acc : [...acc, s]), cur)
 }
 
-/** 进行中的那一场;一个会话同时最多一场。 */
+/** 进行中的那一场:优先 running / finalizing(一个会话同时最多一场),没有才取 paused 的。 */
 export function activeCouncil(states: CouncilState[]): CouncilState | undefined {
-  return states.find((s) => LIVE.has(s.status))
+  // ★暂停的那场不挡新开的(R9),同一会话里可能同时有一场暂停的和一场在跑的
+  return states.find((s) => HOLDING.has(s.status)) ?? states.find((s) => s.status === 'paused')
 }
 
 /** 输入框提交走插话还是普通发送。★只有 running 才插话:暂停时插话没人听,finalizing 时输入框整个禁用。 */

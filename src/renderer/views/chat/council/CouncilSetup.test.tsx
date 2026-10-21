@@ -183,6 +183,7 @@ describe('CouncilSetup', () => {
     expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: busy"))).toBe('当前会话正忙')
     expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: provider-not-installed"))).toBe('配置无效')
     expect(councilStartError(new Error('seats-too-few'))).toBe('配置无效')
+    expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: materials-invalid"))).toBe('参考材料无效')
     expect(councilStartError(new Error("Error invoking remote method 'council:start': Error: 工作区已归档，恢复后才能继续。"))).toBe('工作区已归档，恢复后才能继续。')
   })
 
