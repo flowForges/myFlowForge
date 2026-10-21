@@ -131,8 +131,11 @@ export function renderCouncilMarkdown(
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
-/** ★文件名安全:去掉非法字符与控制符,空白转 `-`,保留 CJK,slug ≤ 40 字符(按码点,不截断代理对)。 */
-export function councilFileName(startedAt: number, topic: string): string {
+/**
+ * ★文件名安全:去掉非法字符与控制符,空白转 `-`,保留 CJK,slug ≤ 40 字符(按码点,不截断代理对)。
+ * 末尾带共商 id 的前 6 位:时间只到分钟,同一分钟同一议题的两场不能互相覆盖。
+ */
+export function councilFileName(startedAt: number, topic: string, councilId: string): string {
   const d = new Date(startedAt)
   const stamp = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`
   const slug = Array.from(
@@ -142,5 +145,6 @@ export function councilFileName(startedAt: number, topic: string): string {
       .replace(/\s+/g, '-')
       .replace(/^[-.]+|[-.]+$/g, ''),
   ).slice(0, 40).join('').replace(/[-.]+$/, '')
-  return `${stamp}-${slug || 'council'}.md`
+  const short = councilId.replace(/[^A-Za-z0-9]/g, '').slice(0, 6)
+  return `${stamp}-${slug || 'council'}${short ? `-${short}` : ''}.md`
 }

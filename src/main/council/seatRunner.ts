@@ -66,9 +66,10 @@ export function runSeat(
 
   const callbacks: ChatCallbacks = {
     onSession(id) { dog.beat(); writeSession(deps.workspacePath, deps.sessionId, key, id) },
-    onAssistantDelta(t) { dog.beat(); text += t; cb.onDelta(msgId, t) },
-    onAssistantReplace(t) { dog.beat(); text = t; cb.onReplace(msgId, t) },
-    onThinkDelta(t) { dog.beat(); cb.onThink(msgId, t) },
+    // ★结果已定(超时 / 取消 / 报错)之后 provider 还可能漏出回调:一律丢弃,不再转发
+    onAssistantDelta(t) { if (settled) return; dog.beat(); text += t; cb.onDelta(msgId, t) },
+    onAssistantReplace(t) { if (settled) return; dog.beat(); text = t; cb.onReplace(msgId, t) },
+    onThinkDelta(t) { if (settled) return; dog.beat(); cb.onThink(msgId, t) },
     onActivity() { dog.beat() },
     onStatus() { dog.beat() },
     onPhase() { dog.beat() },

@@ -500,7 +500,7 @@ export class CouncilEngine {
     if (this.stopMode === 'abort') return
     if (!r.ok) return this.halt()
     this.transcript.add({ seat: leader.id, label: leader.label, round: lastRound, stage: 'final', text: r.text })
-    const path = join(this.ws, '.forge', 'council', councilFileName(this.st.startedAt, this.cfg.topic))
+    const path = join(this.ws, '.forge', 'council', councilFileName(this.st.startedAt, this.cfg.topic, this.id))
     this.writeResult(path)
     this.st.resultFile = path
     this.st.status = 'done'

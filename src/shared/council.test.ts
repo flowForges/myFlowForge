@@ -38,8 +38,12 @@ describe('validateCouncilConfig', () => {
     expect(validateCouncilConfig(cfg({ leader: seat('cursor', 'x') }))).not.toBeNull()
   })
   it('议题为空白不通过', () => expect(validateCouncilConfig(cfg({ topic: '  \n ' }))).not.toBeNull())
+  it('主持人的 id 不能和任何席位的 id 相同(会共用一份续会话)', () => {
+    const s = cfg().seats[0]
+    expect(validateCouncilConfig(cfg({ leader: { ...s, provider: 'gemini' } }))).toBe('leader-id-duplicate')
+  })
   it('主持人可与席位同 provider+model', () => {
-    expect(validateCouncilConfig(cfg({ leader: seat('claude', 'opus') }))).toBeNull()
+    expect(validateCouncilConfig(cfg({ leader: { ...seat('claude', 'opus'), id: 'leader:claude:opus' } }))).toBeNull()
   })
   it('共识模式:超过上限不通过', () => {
     expect(validateCouncilConfig(cfg({ mode: { kind: 'consensus', maxRounds: 5, maxMinutes: 30 } }))).toBeNull()

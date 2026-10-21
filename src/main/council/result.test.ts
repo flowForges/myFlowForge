@@ -139,18 +139,21 @@ describe('renderCouncilMarkdown', () => {
 describe('councilFileName', () => {
   const t = new Date(2026, 9, 21, 15, 30).getTime()
   it('formats date, time and slug', () => {
-    expect(councilFileName(t, 'hello world')).toBe('2026-10-21-1530-hello-world.md')
+    expect(councilFileName(t, 'hello world', '3f9a2c1b-77aa-4e00-9c1d-0123456789ab')).toBe('2026-10-21-1530-hello-world-3f9a2c.md')
+  })
+  it('two councils with the same topic in the same minute get different files', () => {
+    expect(councilFileName(t, '同一个议题', 'aaaaaa11-0000')).not.toBe(councilFileName(t, '同一个议题', 'bbbbbb22-0000'))
   })
   it('strips unsafe chars and keeps CJK', () => {
-    const n = councilFileName(t, 'a/b\\c:d*e?f"g<h>i|j 选型')
+    const n = councilFileName(t, 'a/b\\c:d*e?f"g<h>i|j 选型', 'id1')
     expect(n).not.toMatch(/[/\\:*?"<>|]/)
     expect(n).toContain('选型')
   })
   it('caps slug at 40 chars', () => {
-    const n = councilFileName(t, '议'.repeat(100))
-    expect(n.slice('2026-10-21-1530-'.length, -3)).toHaveLength(40)
+    const n = councilFileName(t, '议'.repeat(100), 'abcdef12')
+    expect(n.slice('2026-10-21-1530-'.length, -'-abcdef.md'.length)).toHaveLength(40)
   })
   it('falls back when slug is empty', () => {
-    expect(councilFileName(t, '///')).toMatch(/^2026-10-21-1530-.+\.md$/)
+    expect(councilFileName(t, '///', 'abcdef12')).toBe('2026-10-21-1530-council-abcdef.md')
   })
 })

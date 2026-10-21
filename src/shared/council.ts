@@ -122,6 +122,8 @@ export function validateCouncilConfig(c: CouncilConfig): string | null {
     seen.add(key)
   }
   if (!c.leader || !isCouncilProvider(c.leader.provider)) return 'leader-invalid'
+  // ★续会话按 id 存:领导者和某个席位同 id 就会共用一个会话(界面用 asLeader 区分,这里兜住别的客户端)
+  if (c.seats.some(s => s.id === c.leader.id)) return 'leader-id-duplicate'
   if (c.mode.kind === 'rounds') {
     if (!Number.isInteger(c.mode.rounds) || c.mode.rounds < MIN_ROUNDS || c.mode.rounds > MAX_ROUNDS) return 'rounds-invalid'
   } else {

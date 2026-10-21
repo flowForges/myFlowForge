@@ -56,6 +56,16 @@ describe('runSeat', () => {
     expect(cap.task!.attachments).toEqual([])
   })
 
+  it('drops callbacks the provider leaks after the run has settled', async () => {
+    const { provider } = fakeProvider('codex', (_t, cb) => { cb.onError(new Error('boom')); cb.onAssistantDelta('late'); cb.onThinkDelta?.('late'); cb.onAssistantReplace?.('late') })
+    const seen: string[] = []
+    const r = await runSeat('c1', seat('a'), 'p', deps({ codex: provider }), {
+      onStart() {}, onDelta: (_i, t) => seen.push(t), onThink: (_i, t) => seen.push(t), onReplace: (_i, t) => seen.push(t),
+    }).done
+    expect(r).toMatchObject({ ok: false, error: 'boom' })
+    expect(seen).toEqual([])
+  })
+
   it('streams deltas and returns accumulated text', async () => {
     const { provider } = fakeProvider('codex', (_t, cb) => { cb.onAssistantDelta('a'); cb.onAssistantDelta('b'); cb.onDone({ elapsed: 1 }) })
     const deltas: string[] = []

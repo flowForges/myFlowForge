@@ -152,7 +152,7 @@ describe('CouncilEngine rounds mode', () => {
     expect(final.council).toMatchObject({ id: CID, seat: 'L' })
     expect(final.councilResult?.conclusion).toBe('用 LRU')
     expect(final.text).toBe('最终结论正文')
-    const path = join(WS, '.forge', 'council', councilFileName(T0, '怎么设计缓存'))
+    const path = join(WS, '.forge', 'council', councilFileName(T0, '怎么设计缓存', CID))
     expect(h.files).toHaveLength(1)
     expect(h.files[0].path).toBe(path)
     expect(h.files[0].text).toContain('用 LRU')
