@@ -162,13 +162,14 @@ describe('Composer', () => {
     expect(onSend.mock.calls[0][0].model).toBe('opus-4.8')
   })
 
-  it('claude agent logo bg/color/glyph come from catalog (◇)', () => {
+  it('claude agent logo: official SVG on the catalog brand tile', () => {
     const { container } = render(<Composer providers={providers} disabled={false} onSend={vi.fn()} />)
     // The selected agent logo — .mc-logo-sm in .cb-btn (composer bar button)
     const logos = container.querySelectorAll('.mc-logo-sm')
     // First logo is the currently-selected agent in the composer bar
     const firstLogo = logos[0] as HTMLElement
-    expect(firstLogo.textContent).toBe('◇')
+    expect(firstLogo.querySelector('[data-agent-logo="claude"] svg')).not.toBeNull()
+    expect(firstLogo.textContent).not.toBe('◇')
     // bg should use catalog brandBg for claude (oklch(60% .14 35 / .18))
     expect(firstLogo.style.background).toContain('oklch')
   })

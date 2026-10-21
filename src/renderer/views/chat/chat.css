@@ -533,6 +533,11 @@ html[data-bg-scope="chat"] .msg-body code { background: none; padding: 0; }
 .menu-item .check { width: 14px; height: 14px; margin-left: auto; color: var(--accent); opacity: 0; }
 .menu-item.on .check { opacity: 1; }
 .menu-item .mc-logo-sm { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font-size: 11px; }
+/* 官方图标(AgentLogo):占方格的 72%,压过 `.cb-btn svg` 的固定 15px */
+.mc-logo-sm .ag-svg { display: grid; place-items: center; width: 72%; height: 72%; }
+.mc-logo-sm .ag-svg svg { width: 100%; height: 100%; display: block; }
+/* Codex / Copilot 的官方标就是黑白:跟正文色走,浅色主题下不发灰 */
+.mc-logo-sm [data-agent-logo="codex"], .mc-logo-sm [data-agent-logo="copilot"] { color: var(--fg); }
 .menu-item .sub { font-family: var(--mono); font-size: 10.5px; color: var(--faint); display: block; margin-top: 1px; }
 
 /* ===== 子代理交互请求(确认 / 输入 / 选择) — ported 1:1 (proto 481-519) ===== */

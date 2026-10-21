@@ -566,6 +566,7 @@
   display: grid; place-items: center; font-size: 9px;
 }
 .sb-model .mc-logo-sm svg { width: 11px; height: 11px; display: block; }
+.sb-model .mc-logo-sm .ag-svg { display: grid; place-items: center; }
 .sb-model .d { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
 .sb-model.off .d   { background: var(--faint); }
 .sb-model.off      { color: var(--faint); }

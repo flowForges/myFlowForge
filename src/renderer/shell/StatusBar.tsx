@@ -1,25 +1,12 @@
 import './shell.css'
 import './logcon.css'
-import type { ReactNode } from 'react'
 import type { ProviderInfo } from '@shared/types'
 import type { StatusbarUsage } from '@shared/plugins'
 import { getBuiltinProvider } from '@shared/providerCatalog'
 import { UsagePopover } from './UsagePopover'
+import { agentIcon } from '../components/AgentLogo'
 import { HostSwitcher } from './HostSwitcher'
 import type { HostDisplay } from '@shared/remote/hostView'
-
-// SVG icon overrides for the 5 built-in providers — geometric originals tracking each vendor's
-// official mark (Anthropic starburst / OpenAI knot / Gemini sparkle / Cursor prism), drawn with
-// currentColor so the tile's `color` tints them. Verbatim from the prototype's BRAND_SVG.
-// Brand colors (bg/color) are now sourced from the shared providerCatalog.
-// Only these 5 providers have custom SVG; any other installed provider falls back to glyph or first letter.
-const SVG_OVERRIDE: Record<string, ReactNode> = {
-  claude: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round"><path d="M12 3v18M3 12h18M5.64 5.64l12.72 12.72M18.36 5.64L5.64 18.36" /></svg>,
-  codex: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}><path d="M12 4.2c2.2-1.6 5.2-.4 5.6 2.3 2.7.4 3.9 3.4 2.3 5.6 1.6 2.2.4 5.2-2.3 5.6-.4 2.7-3.4 3.9-5.6 2.3-2.2 1.6-5.2.4-5.6-2.3-2.7-.4-3.9-3.4-2.3-5.6C2.5 9.9 3.7 6.9 6.4 6.5 6.8 3.8 9.8 2.6 12 4.2Z" /><circle cx="12" cy="12" r="2.7" /></svg>,
-  gemini: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c.55 5.2 2.8 7.45 8 8-5.2.55-7.45 2.8-8 8-.55-5.2-2.8-7.45-8-8 5.2-.55 7.45-2.8 8-8Z" /></svg>,
-  qoder: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="M15.5 15.5 19 19" /></svg>,
-  cursor: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinejoin="round"><path d="M12 2.6 20.4 7v10L12 21.4 3.6 17V7z" /><path d="M12 2.6V21.4M3.6 7l8.4 5 8.4-5" /></svg>,
-}
 
 export interface SbLogProps {
   open: boolean
@@ -67,7 +54,7 @@ export function StatusBar({ providers, sbLog, sbTerm, sbHost, usageByProvider, u
           const meta = getBuiltinProvider(p.id)
           const bg = meta?.brandBg ?? 'var(--surface)'
           const color = meta?.brandColor ?? 'var(--fg-2)'
-          const icon = SVG_OVERRIDE[p.id] ?? meta?.glyph ?? p.displayName.slice(0, 1).toUpperCase()
+          const icon = agentIcon(p.id, meta?.glyph ?? p.displayName.slice(0, 1).toUpperCase())
           const usage = usageByProvider?.[p.id]
           const pillContent = (
             <>

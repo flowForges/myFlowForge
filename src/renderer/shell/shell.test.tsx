@@ -4,6 +4,7 @@ import { Titlebar } from './Titlebar'
 import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
 import type { AgentState } from '@shared/types'
+import { AGENT_LOGO_SVG } from '../components/agentLogos'
 
 // ── Titlebar ─────────────────────────────────────────────────────────────────
 
@@ -204,7 +205,7 @@ describe('StatusBar', () => {
     expect(screen.queryByText('Gemini CLI')).not.toBeInTheDocument()
   })
 
-  it('renders SVG icon for a known provider (claude) — from SVG_OVERRIDE', () => {
+  it('renders the official SVG logo for a known provider (claude)', () => {
     const { container } = render(<StatusBar providers={[
       { id: 'claude', displayName: 'Claude Code', installed: true, models: [] },
     ]} />)
@@ -215,7 +216,7 @@ describe('StatusBar', () => {
   })
 
   it('renders glyph/first-letter fallback for unknown provider id — no crash', () => {
-    // 'foo' is not in SVG_OVERRIDE or catalog, should fall back to 'F' (displayName[0])
+    // 'foo' has no official logo and is not in the catalog, should fall back to 'F' (displayName[0])
     const { container } = render(<StatusBar providers={[
       { id: 'foo', displayName: 'FooAgent', installed: true, models: [] },
     ]} />)
@@ -226,28 +227,14 @@ describe('StatusBar', () => {
     expect(logo!.textContent).toBe('F')
   })
 
-  // ── SVG path snapshot — locks brand icons against future refactors ─────────
-  // These are the verbatim `path d` values from the original prototype BRAND_SVG.
-  // If any of these fail, the visual icon has been corrupted and must be restored.
-  const EXPECTED_PATHS: Record<string, string[]> = {
-    claude: ['M12 3v18M3 12h18M5.64 5.64l12.72 12.72M18.36 5.64L5.64 18.36'],
-    codex: ['M12 4.2c2.2-1.6 5.2-.4 5.6 2.3 2.7.4 3.9 3.4 2.3 5.6 1.6 2.2.4 5.2-2.3 5.6-.4 2.7-3.4 3.9-5.6 2.3-2.2 1.6-5.2.4-5.6-2.3-2.7-.4-3.9-3.4-2.3-5.6C2.5 9.9 3.7 6.9 6.4 6.5 6.8 3.8 9.8 2.6 12 4.2Z'],
-    gemini: ['M12 2c.55 5.2 2.8 7.45 8 8-5.2.55-7.45 2.8-8 8-.55-5.2-2.8-7.45-8-8 5.2-.55 7.45-2.8 8-8Z'],
-    qoder: ['M15.5 15.5 19 19'],
-    cursor: ['M12 2.6 20.4 7v10L12 21.4 3.6 17V7z', 'M12 2.6V21.4M3.6 7l8.4 5 8.4-5'],
-  }
-
-  for (const [providerId, expectedDs] of Object.entries(EXPECTED_PATHS)) {
-    it(`locks SVG path d for provider "${providerId}" against refactor corruption`, () => {
-      const displayName = providerId.charAt(0).toUpperCase() + providerId.slice(1)
+  // ── 状态栏用的就是 agentLogos 里那份官方图标 ─────────
+  for (const providerId of ['claude', 'codex', 'gemini', 'qoder', 'cursor']) {
+    it(`renders the official logo for provider "${providerId}"`, () => {
       const { container } = render(<StatusBar providers={[
-        { id: providerId, displayName, installed: true, models: [] },
+        { id: providerId, displayName: providerId, installed: true, models: [] },
       ]} />)
-      const logo = container.querySelector('.mc-logo-sm')
-      expect(logo).not.toBeNull()
-      const paths = logo!.querySelectorAll('svg path')
-      const actualDs = Array.from(paths).map(p => p.getAttribute('d') ?? '')
-      expect(actualDs).toEqual(expectedDs)
+      const svg = container.querySelector(`.mc-logo-sm [data-agent-logo="${providerId}"]`)
+      expect(svg?.innerHTML).toBe(AGENT_LOGO_SVG[providerId])
     })
   }
 })

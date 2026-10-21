@@ -7,6 +7,7 @@ import { isSlashQuery, mergeCommands, type MenuCommand } from './slashCommands'
 import type { ContextUsage } from '@shared/types'
 import { applyListContinuation } from './listContinuation'
 import { shouldOffloadPaste, pastedFileName, pastedFileNameForFile, base64OfUtf8, insertPastePlaceholder, insertPastedText, resolvePasteSelection } from './largePaste'
+import { agentIcon } from '../../components/AgentLogo'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -666,7 +667,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           {/* 模型选择 */}
           <div className={'menu' + (openMenu === 'agent' ? ' open' : '')} id="agentMenu">
             <button className="cb-btn" data-menu="agentMenu" onClick={() => setOpenMenu(openMenu === 'agent' ? null : 'agent')}>
-              <span className="mc-logo-sm" style={{ background: logo.bg, color: logo.color }}>{logo.glyph}</span>
+              <span className="mc-logo-sm" style={{ background: logo.bg, color: logo.color }}>{agentIcon(agent?.id ?? '', logo.glyph)}</span>
               <span id="agentLabel">{agent?.displayName ?? ''}</span>
               {CHEV_DD}
             </button>
@@ -681,7 +682,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
                     key={p.id}
                     onClick={() => chooseAgent(p)}
                   >
-                    <span className="mc-logo-sm" style={{ background: lg.bg, color: lg.color }}>{lg.glyph}</span>
+                    <span className="mc-logo-sm" style={{ background: lg.bg, color: lg.color }}>{agentIcon(p.id, lg.glyph)}</span>
                     {p.displayName}
                     {CHECK}
                   </button>
