@@ -197,18 +197,26 @@ describe('CouncilBlock', () => {
     expect(fuBtn().disabled).toBe(true)
   })
 
-  it('after asking 全体, stays disabled until every seat has answered', async () => {
+  it('lock follows speaking: engaged while a seat speaks, released when speaking empties even with fewer answers', () => {
     const ctl = controls()
-    ;(ctl.followup as ReturnType<typeof vi.fn>).mockResolvedValue(true)
-    const st = state('done', { round: 2 })
-    const { rerender } = render(<CouncilBlock id="c1" messages={doneBase} state={st} streamingIds={new Set()} providers={providers} controls={ctl} />)
+    const msgs = [...doneBase, fuQ(1), fuA(A, 1)]   // 问全体,只回来一条
+    const { rerender } = render(<CouncilBlock id="c1" messages={msgs} state={state('done', { round: 2, speaking: [B.id] })} streamingIds={new Set()} providers={providers} controls={ctl} />)
+    expect(fuInput().disabled).toBe(true)
+    expect(fuBtn().disabled).toBe(true)
+    rerender(<CouncilBlock id="c1" messages={msgs} state={state('done', { round: 2, speaking: [] })} streamingIds={new Set()} providers={providers} controls={ctl} />)
+    expect(fuInput().disabled).toBe(false)
+  })
+
+  it('input is locked while the follow-up IPC is in flight and cleared on success', async () => {
+    const ctl = controls()
+    let resolve!: (v: boolean) => void
+    ;(ctl.followup as ReturnType<typeof vi.fn>).mockReturnValue(new Promise<boolean>(r => { resolve = r }))
+    renderBlock(doneBase, state('done', { round: 2 }), [], ctl)
     fireEvent.change(fuInput(), { target: { value: '问1' } })
     fireEvent.click(fuBtn())
-    await waitFor(() => expect(fuInput().value).toBe(''))
     expect(fuInput().disabled).toBe(true)
-    rerender(<CouncilBlock id="c1" messages={[...doneBase, fuQ(1), fuA(A, 1)]} state={st} streamingIds={new Set()} providers={providers} controls={ctl} />)
-    expect(fuInput().disabled).toBe(true)
-    rerender(<CouncilBlock id="c1" messages={[...doneBase, fuQ(1), fuA(A, 1), fuA(B, 1)]} state={st} streamingIds={new Set()} providers={providers} controls={ctl} />)
+    await act(async () => { resolve(true) })
+    expect(fuInput().value).toBe('')
     expect(fuInput().disabled).toBe(false)
   })
 

@@ -219,6 +219,17 @@ export class CouncilEngine {
   }
 
   /**
+   * 追问能不能现在开始:null = 可以;否则是错误码。IPC 层据此同步拒绝(followup 本身不等它跑完),
+   * 界面才能弹提示,而不是只在主进程日志里留一行。
+   */
+  followupError(target: 'all' | string): 'not-done' | 'busy' | 'target-invalid' | null {
+    if (this.st.status !== 'done') return 'not-done'
+    if (this.followingUp) return 'busy'
+    const seats = target === 'all' ? this.active() : this.cfg.seats.filter(s => s.id === target)
+    return seats.length ? null : 'target-invalid'
+  }
+
+  /**
    * 追问(只在 done 之后):全体 = 各席位依次回答,领导者不参与;或只问一个席位。
    * ★不改变结果(§6.5):不碰 councilResult,只把问答追加到 Markdown 的「追问」附录。
    */

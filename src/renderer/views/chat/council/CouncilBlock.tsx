@@ -221,35 +221,19 @@ export function CouncilBlock({ id, messages, state, streamingIds, providers, con
 
   const [q, setQ] = useState('')
   const [target, setTarget] = useState<'all' | string>('all')
-  // 本次提交的追问:提交时已有几条追问 + 问的是谁。用来判断「这一问还没答完」。
-  const [asked, setAsked] = useState<{ before: number; target: string } | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const busy = useMemo(() => {
-    if (submitting || followups.some(m => streamingIds.has(m.id))) return true
-    if (status === 'done' && (state?.speaking.length ?? 0) > 0) return true
-    if (!asked) return false
-    const questions = followups.filter(m => m.who === 'user')
-    if (questions.length <= asked.before) return true   // 问题还没回到消息里
-    const last = questions[questions.length - 1]
-    const answers = followups.slice(followups.indexOf(last) + 1).filter(m => m.who === 'ai').length
-    // ★问全体 = 依次问还在场的席位;连续失败两次被淘汰的(主讨论里最后两条都是 failed)不会再答
-    const inPlay = (state?.config.seats ?? []).filter(s => {
-      const own = messages.filter(m => m.who === 'ai' && m.council?.seat === s.id && !followups.includes(m))
-      return !(own.length >= 2 && own.slice(-2).every(m => m.council?.stage === 'failed'))
-    }).length
-    return answers < (asked.target === 'all' ? inPlay : 1)
-  }, [submitting, followups, streamingIds, status, state, asked, messages])
+  // ★追问进行中:以引擎的 speaking 为准(追问的每位席位发言时都在里面),外加流式中的追问消息、
+  //  和「已提交、IPC 还没回」那一下。不在界面里数回答 —— 数错一次输入框就永远锁死。
+  const busy = submitting || (state?.speaking.length ?? 0) > 0 || followups.some(m => streamingIds.has(m.id))
 
   const ask = async () => {
     const text = q.trim()
     if (!text || busy) return
     setSubmitting(true)
-    const before = followups.filter(m => m.who === 'user').length
     const ok = await controls.followup(id, text, target)
     setSubmitting(false)
     // ★失败(已弹提示)不清空,问题留在框里可以再发
     if (ok === false) return
-    setAsked({ before, target })
     setQ('')
     setUserOpen(true)   // 追问的问答在区块里,收着就看不到
   }

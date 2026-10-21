@@ -246,6 +246,33 @@ describe('council controls', () => {
   })
 })
 
+describe('council followup pre-flight', () => {
+  async function doneCouncil(): Promise<string> {
+    const id = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg({ mode: { kind: 'rounds', rounds: 1 } }) }) as string
+    await flush()
+    for (let i = 0; i < 5; i++) {
+      const list = await call(CH.councilList, { workspacePath: ws, sessionId: 's1' }) as CouncilState[]
+      if (list.find(s => s.id === id)!.status === 'done') return id
+      await releaseAll()
+    }
+    throw new Error('council did not finish')
+  }
+
+  it('rejects busy while a follow-up is being answered', async () => {
+    const id = await doneCouncil()
+    await call(CH.councilFollowup, { councilId: id, question: '再说说', target: 'all' })
+    await flush()
+    await expect(call(CH.councilFollowup, { councilId: id, question: '又一问', target: 'all' })).rejects.toThrow('busy')
+    await releaseAll(); await releaseAll()
+    await expect(call(CH.councilFollowup, { councilId: id, question: '又一问', target: 'A' })).resolves.toBeUndefined()
+  })
+
+  it('rejects target-invalid for an unknown seat', async () => {
+    const id = await doneCouncil()
+    await expect(call(CH.councilFollowup, { councilId: id, question: '?', target: 'nobody' })).rejects.toThrow('target-invalid')
+  })
+})
+
 describe('council list / restore / shutdown', () => {
   it('after an app restart the first list restores councils from disk as paused and they can be resumed', async () => {
     const id = await call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg() })

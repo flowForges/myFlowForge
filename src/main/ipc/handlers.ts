@@ -1296,7 +1296,9 @@ export function registerIpc(broadcast: (channel: string, payload: unknown) => vo
   })
   on(CH.councilFollowup, (_e, a: { councilId: string; question: string; target: 'all' | string }) => {
     const engine = councilOf(a.councilId)
-    if (engine.state.status !== 'done') throw new Error('not-done')
+    // ★前置检查同步拒绝(未结束 / 正在答上一问 / 目标无效),界面据此弹提示
+    const err = engine.followupError(a.target)
+    if (err) throw new Error(err)
     // 不等:各席位依次回答可能要好几分钟,结果走 chat:event
     engine.followup(a.question, a.target).catch((err) =>
       logError('council', `council ${a.councilId} followup failed`, err instanceof Error ? (err.stack ?? err.message) : String(err)))

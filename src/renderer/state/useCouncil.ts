@@ -25,6 +25,8 @@ export type CouncilApi = {
 
 const ACTION_ERRORS: Record<string, string> = {
   'not-done': '共商尚未结束',
+  busy: '正在回答上一个追问',
+  'target-invalid': '配置无效',
 }
 
 /**

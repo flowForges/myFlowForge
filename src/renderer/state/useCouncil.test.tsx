@@ -85,13 +85,16 @@ describe('useCouncil', () => {
     vi.mocked(flashToast).mockClear()
     forge.councilFollowup.mockRejectedValueOnce(new Error("Error invoking remote method 'council:followup': Error: not-done"))
     forge.councilPause.mockRejectedValueOnce(new Error('boom'))
+    forge.councilChoose.mockRejectedValueOnce(new Error("Error invoking remote method 'council:followup': Error: busy"))
     const { result } = renderHook(() => useCouncil('/ws', 's1'))
     await expect(result.current.followup('c1', '再说说', 'all')).resolves.toBe(false)
     await expect(result.current.pause('c1')).resolves.toBe(false)
-    await expect(result.current.choose('c1', 'x')).resolves.toBe(true)
+    await expect(result.current.choose('c1', 'x')).resolves.toBe(false)
+    await expect(result.current.stop('c1', 'finalize')).resolves.toBe(true)
     expect(flashToast).toHaveBeenNthCalledWith(1, '共商尚未结束')
     expect(flashToast).toHaveBeenNthCalledWith(2, '操作失败')
-    expect(flashToast).toHaveBeenCalledTimes(2)
+    expect(flashToast).toHaveBeenNthCalledWith(3, '正在回答上一个追问')
+    expect(flashToast).toHaveBeenCalledTimes(3)
   })
 
   it('controls call the bridge with the council id', async () => {
