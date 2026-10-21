@@ -2,8 +2,10 @@ import { join } from 'node:path'
 import type { CouncilConfig, CouncilSeat, CouncilStage, CouncilState } from '@shared/council'
 import type { ChatEvent, ChatMessage } from '@shared/types'
 import { Transcript, type Utterance } from './transcript'
-import { answerPrompt, critiquePrompt, finalPrompt, followupPrompt, summaryPrompt } from './prompts'
-import { councilFileName, parseCouncilResult, renderCouncilMarkdown } from './result'
+import {
+  answerPrompt, consensusDraftPrompt, consensusVotePrompt, critiquePrompt, finalPrompt, followupPrompt, summaryPrompt,
+} from './prompts'
+import { councilFileName, parseCouncilResult, parseVote, renderCouncilMarkdown } from './result'
 import type { runSeat, SeatRunDeps } from './seatRunner'
 import { logError } from '../log/appLog'
 
@@ -38,7 +40,7 @@ const DROP_AFTER_FAILURES = 2
 
 type Spoken = { ok: true; text: string } | { ok: false; cancelled: boolean }
 /** 主循环的进度游标:暂停 / 换领导者后从这里接着跑。 */
-type Phase = 'answer' | 'critique' | 'summary' | 'final'
+type Phase = 'answer' | 'critique' | 'summary' | 'consensus-draft' | 'consensus-vote' | 'final'
 type Inflight = { cancelled: boolean; cancel(): void }
 
 export class CouncilEngine {
@@ -141,8 +143,9 @@ export class CouncilEngine {
     if (this.st.status !== 'running' || this.stopMode || !this.prepared || !text.trim()) return
     const n = this.count(u => u.stage === 'interject') + 1
     // ★领导者正在写本轮总结时插话:总结的输入已经定了,这条归到下一轮 —— 下一轮的席位(插话不受轮次过滤)
-    //  和下一轮的总结 / 最终结果(按轮次取发言)才都看得到它
-    const round = this.phase === 'summary' ? this.st.round + 1 : this.st.round
+    //  和下一轮的总结 / 最终结果(按轮次取发言)才都看得到它。共识模式的草稿 / 投票同理(它们在总结之后)
+    const afterSpeeches = this.phase === 'summary' || this.phase === 'consensus-draft' || this.phase === 'consensus-vote'
+    const round = afterSpeeches ? this.st.round + 1 : this.st.round
     const msg: ChatMessage = {
       id: `${this.id}:interject:${n}`, who: 'user', text, ...(via ? { via } : {}),
       council: { id: this.id, round, stage: 'interject' },
@@ -268,20 +271,35 @@ export class CouncilEngine {
         }
         case 'summary': {
           const r = await this.leaderSummary(this.st.round)
-          if (r.ok) this.nextRound()
+          if (r.ok) {
+            if (this.cfg.mode.kind === 'consensus') this.phase = 'consensus-draft'
+            else this.nextRound()
+          } else if (!r.cancelled) return this.halt()
+          break
+        }
+        case 'consensus-draft': {
+          const r = await this.consensusDraft(this.st.round)
+          if (r.ok) this.phase = 'consensus-vote'
           else if (!r.cancelled) return this.halt()
           break
         }
+        case 'consensus-vote':
+          await this.consensusVote(this.st.round)
+          break
         case 'final':
           return this.finalize(this.st.round)
       }
     }
   }
 
-  /** 本轮结束:最后一轮不再总结,由最终结果代替(只有 1 轮 = 各自作答后直接出结果,§5.1);§7.3:讨论方只剩 1 个也直接出结果。 */
+  /**
+   * 本轮结束:最后一轮不再总结,由最终结果代替(只有 1 轮 = 各自作答后直接出结果,§5.1);§7.3:讨论方只剩 1 个也直接出结果。
+   * ★共识模式每轮都要总结(草稿和下一轮都要用),轮数 / 时间上限放到投票之后判断。
+   */
   private endRound(): void {
-    const rounds = this.cfg.mode.kind === 'rounds' ? this.cfg.mode.rounds : this.cfg.mode.maxRounds
-    this.phase = this.st.round >= rounds || this.active().length <= 1 ? 'final' : 'summary'
+    if (this.active().length <= 1) this.phase = 'final'
+    else if (this.cfg.mode.kind === 'consensus') this.phase = 'summary'
+    else this.phase = this.st.round >= this.cfg.mode.rounds ? 'final' : 'summary'
   }
 
   private nextRound(): void {
@@ -303,8 +321,11 @@ export class CouncilEngine {
 
   /** 第 2 轮起:按配置顺序依次发言(一次一位),每人看到上一轮总结 + 本轮在他之前的发言 + 插话。 */
   private async critique(s: CouncilSeat, round: number): Promise<void> {
+    // ★critiquePrompt 只留本轮及以后的发言;共识模式上一轮的不同意理由必须进本轮上下文(§5.2),把它们当本轮的带进去
+    const delta = this.transcript.unseenFor(s.id).map(u =>
+      (u.stage === 'consensus-vote' && u.round === round - 1 && parseVote(u.text) !== 'agree' ? { ...u, round } : u))
     const prompt = critiquePrompt(
-      this.cfg, s, round, this.transcript.latestSummary(), this.transcript.unseenFor(s.id),
+      this.cfg, s, round, this.transcript.latestSummary(), delta,
       this.deps.seatResumed(s.id), this.materials,
     )
     const r = await this.speak(s, round, 'critique', prompt)
@@ -322,6 +343,46 @@ export class CouncilEngine {
     return r
   }
 
+  // ---- 共识(§5.2) ----
+
+  /** 领导者把本轮多数已认可的内容中立地合并成「目前各方的共同点」草稿;失败重试一次。 */
+  private async consensusDraft(round: number): Promise<Spoken> {
+    const items = this.transcript.round(round).filter(u => u.stage !== 'summary')
+    const r = await this.leader(round, 'consensus-draft', consensusDraftPrompt(this.cfg, round, items))
+    if (!r.ok) return r
+    this.transcript.add({ seat: this.cfg.leader.id, label: this.cfg.leader.label, round, stage: 'consensus-draft', text: r.text })
+    this.changed()
+    return r
+  }
+
+  /**
+   * 全部在场席位并行对草稿投票。全员「同意」→ 出最终结果;否则到上限也出结果,没到就进下一轮。
+   * ★「无法识别」和投票失败都算不同意;投票失败和其他发言一样计入连续失败。
+   */
+  private async consensusVote(round: number): Promise<void> {
+    const draft = this.transcript.toJSON().items.filter(u => u.round === round && u.stage === 'consensus-draft').at(-1)
+    const seats = this.active()
+    const results = await Promise.all(seats.map(s => this.speak(s, round, 'consensus-vote', consensusVotePrompt(s, draft?.text ?? ''))))
+    seats.forEach((s, i) => this.record(s, round, 'consensus-vote', results[i]))
+    // 被「结束」取消的投票:主循环顶部会转去出结果,这里不判定
+    if (this.stopMode) return
+    const agreed = results.every(r => r.ok && parseVote(r.text) === 'agree')
+    const mode = this.cfg.mode
+    const capped = mode.kind === 'consensus'
+      && (round >= mode.maxRounds || this.deps.now() - this.st.startedAt >= mode.maxMinutes * 60_000)
+    if (agreed || capped || this.active().length <= 1) this.phase = 'final'
+    else this.nextRound()
+  }
+
+  /** 最近一轮投票里没有同意的理由,形如 `${label}: ${reason}`;交给最终结果写进 disagreements。 */
+  private unresolved(): string[] {
+    const votes = this.transcript.toJSON().items.filter(u => u.stage === 'consensus-vote')
+    const last = votes.at(-1)?.round
+    return votes
+      .filter(u => u.round === last && parseVote(u.text) !== 'agree')
+      .map(u => `${u.label}: ${voteReason(u.text)}`)
+  }
+
   private async finalize(lastRound: number): Promise<void> {
     this.st.status = 'finalizing'
     this.changed()
@@ -330,7 +391,7 @@ export class CouncilEngine {
     const lastItems = this.transcript.toJSON().items.filter(u =>
       (u.round === lastRound && u.stage !== 'summary') || (u.round > lastRound && u.stage === 'interject'))
     const leader = this.cfg.leader
-    const r = await this.leader(lastRound, 'final', finalPrompt(this.cfg, summaries, lastItems, []), (text) => {
+    const r = await this.leader(lastRound, 'final', finalPrompt(this.cfg, summaries, lastItems, this.unresolved()), (text) => {
       const { result, body } = parseCouncilResult(text)
       return { text: body, councilResult: result ?? undefined }
     })
@@ -355,7 +416,7 @@ export class CouncilEngine {
 
   /** 领导者发言,失败重试一次(§7.3)。 */
   private async leader(
-    round: number, stage: 'summary' | 'final', prompt: string,
+    round: number, stage: 'summary' | 'consensus-draft' | 'final', prompt: string,
     shape?: (text: string) => Pick<ChatMessage, 'text' | 'councilResult'>,
   ): Promise<Spoken> {
     const tag = this.resumes ? `:r${this.resumes}` : ''
@@ -478,6 +539,13 @@ export class CouncilEngine {
     this.deps.emitState(state)
     this.deps.persist({ state, transcript: this.transcript.toJSON(), failures: { ...this.failures }, dropped: [...this.dropped] })
   }
+}
+
+/** 去掉投票开头的「不同意」(含 Markdown 符号和标点),剩下的就是理由;无法识别的投票整句当理由。 */
+function voteReason(text: string): string {
+  const t = text.trim()
+  const reason = t.replace(/^[\s*_#>`~\-"'“「【\[(（]*不同意[*_」】\]）)]*[\s,，:：.。;；!！]*/, '').trim()
+  return reason || t
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
