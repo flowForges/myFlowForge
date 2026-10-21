@@ -6,12 +6,12 @@ import type { Attachment } from './types'
  */
 
 // 可当席位 / 主持人的 CLI。
-// ★2026-10-21 真机只读探针(scripts/council-smoke.ts probe)的结果:
-//  claude / codex / copilot 要求建 PROBE.txt 均被拦住,保留。
-//  gemini(未配置 API key)、qwen(未登录)、qoder(未登录:Not logged in · Please run /login)、
-//  antigravity(本机未装 agy,无输出)探针跑不起来 → 无法证明只读,按 R11 移出;
-//  待它们能登录并通过探针后再加回来。
-export const COUNCIL_PROVIDERS = ['claude', 'codex', 'copilot'] as const
+// ★2026-10-21 真机只读探针(scripts/council-smoke.ts probe):claude / codex / copilot 要求建 PROBE.txt 均被拦住。
+//  gemini / qwen 本机未登录,探针跳过;它们的只读是结构性的:ACP 对非读工具的权限请求在 readonly 下一律拒绝
+//  (acpProvider)、--approval-mode plan、且不退回 run(),所以保留。
+//  qoder / antigravity 的唯一保证是一个未验证的 CLI 参数(--permission-mode default / --mode plan,antigravity 本机也没装),
+//  探针通过前不放进来;通过后再加回(`scripts/council-smoke.ts probe qoder`)。
+export const COUNCIL_PROVIDERS = ['claude', 'codex', 'gemini', 'qwen', 'copilot'] as const
 
 /** label 形如 "Codex · 6.1",只用于展示。 */
 export type CouncilSeat = { id: string; provider: string; model: string; label: string }

@@ -70,11 +70,12 @@ vi.mock('../plugins/pluginSchedulerRef', () => ({
 vi.mock('../plugins/officialCatalog', () => ({ listCatalog: () => [], installOfficial: vi.fn() }))
 vi.mock('../agents/refreshModels', () => ({ refreshProviderModels: vi.fn(), setProviderModels: vi.fn(), setProviderTimezone: vi.fn() }))
 
-// 检测:claude / codex 装了,copilot 没装
+// 检测:claude / codex / gemini 装了,qwen 没装
 const detected = [
   { id: 'claude', displayName: 'Claude', installed: true, models: [] },
   { id: 'codex', displayName: 'Codex', installed: true, models: [] },
-  { id: 'copilot', displayName: 'Copilot', installed: false, models: [] },
+  { id: 'gemini', displayName: 'Gemini', installed: true, models: [] },
+  { id: 'qwen', displayName: 'Qwen', installed: false, models: [] },
   { id: 'cursor', displayName: 'Cursor', installed: true, models: [] },
 ]
 vi.mock('../agents/detectCache', () => ({ cachedDetectProviders: vi.fn(async () => detected), invalidateDetectCache: vi.fn() }))
@@ -108,7 +109,7 @@ vi.mock('../council/seatRunner', async (orig) => {
 const seat = (id: string, provider = 'codex', model = `m-${id}`): CouncilSeat => ({ id, provider, model, label: `${provider} · ${id}` })
 const cfg = (over: Partial<CouncilConfig> = {}): CouncilConfig => ({
   topic: '怎么设计缓存', attachments: [],
-  seats: [seat('A'), seat('B', 'claude')], leader: seat('L', 'claude'),
+  seats: [seat('A'), seat('B', 'gemini')], leader: seat('L', 'claude'),
   mode: { kind: 'rounds', rounds: 2 },
   ...over,
 })
@@ -156,9 +157,9 @@ describe('council:start', () => {
   })
 
   it('rejects a seat or leader whose CLI is not installed', async () => {
-    await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg({ seats: [seat('A'), seat('B', 'copilot')] }) }))
+    await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg({ seats: [seat('A'), seat('B', 'qwen')] }) }))
       .rejects.toThrow('provider-not-installed')
-    await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg({ leader: seat('L', 'copilot') }) }))
+    await expect(call(CH.councilStart, { workspacePath: ws, sessionId: 's1', config: cfg({ leader: seat('L', 'qwen') }) }))
       .rejects.toThrow('provider-not-installed')
   })
 
@@ -232,11 +233,11 @@ describe('council controls', () => {
     await call(CH.councilPause, { councilId: a })
     await releaseAll()
     await expect(call(CH.councilResume, { councilId: a, newLeader: seat('L2', 'cursor') })).rejects.toThrow('leader-invalid')
-    await expect(call(CH.councilResume, { councilId: a, newLeader: seat('L2', 'copilot') })).rejects.toThrow('provider-not-installed')
-    await call(CH.councilResume, { councilId: a, newLeader: seat('L2', 'codex') })
+    await expect(call(CH.councilResume, { councilId: a, newLeader: seat('L2', 'qwen') })).rejects.toThrow('provider-not-installed')
+    await call(CH.councilResume, { councilId: a, newLeader: seat('L2', 'gemini') })
     await flush()
     const list = await call(CH.councilList, { workspacePath: ws, sessionId: 's1' }) as CouncilState[]
-    expect(list[0]).toMatchObject({ status: 'running', config: { leader: { id: 'L2', provider: 'codex' } } })
+    expect(list[0]).toMatchObject({ status: 'running', config: { leader: { id: 'L2', provider: 'gemini' } } })
   })
 
   it('followup before the council is done → rejects', async () => {

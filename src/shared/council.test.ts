@@ -9,7 +9,7 @@ const cfg = (over: Partial<CouncilConfig> = {}): CouncilConfig => ({
   topic: '选哪个方案',
   attachments: [],
   seats: [seat('claude', 'opus'), seat('codex', '6.1')],
-  leader: seat('copilot', 'pro'),
+  leader: seat('gemini', 'pro'),
   mode: { kind: 'rounds', rounds: 2 },
   ...over,
 })
@@ -51,15 +51,15 @@ describe('validateCouncilConfig', () => {
 describe('isCouncilProvider', () => {
   it('白名单', () => {
     expect(isCouncilProvider('codex')).toBe(true)
-    // ★gemini / qwen / qoder / antigravity 2026-10-21 探针未通过,已移出
-    for (const p of ['gemini', 'qwen', 'qoder', 'antigravity']) expect(isCouncilProvider(p)).toBe(false)
+    // ★qoder / antigravity 探针未通过,暂不放进来(见 COUNCIL_PROVIDERS 的注释)
+    for (const p of ['qoder', 'antigravity']) expect(isCouncilProvider(p)).toBe(false)
     expect(isCouncilProvider('cursor')).toBe(false)
   })
 })
 
 describe('estimateCouncilMinutes', () => {
   const three = (rounds: number) => cfg({
-    seats: [seat('claude', 'a'), seat('codex', 'b'), seat('copilot', 'c')],
+    seats: [seat('claude', 'a'), seat('codex', 'b'), seat('qwen', 'c')],
     mode: { kind: 'rounds', rounds },
   })
   it('lo < hi,轮数越多越久(第 1 轮并行只算一次)', () => {
