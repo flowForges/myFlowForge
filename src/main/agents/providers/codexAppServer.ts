@@ -2,6 +2,21 @@ import { spawnAgent, killTree } from '../procGroup'
 import { adaptCodexEvent, codexTokenUsage } from './codexEventAdapter'
 import { codexApprovalResponse, elicitationUnsupported, PERMISSIONS_METHOD, ELICITATION_METHOD } from './codexApproval'
 
+/**
+ * 我们拉起的 codex 一律**关掉钩子**:`-c features.hooks=false`。
+ *
+ * ★★2026-10-21 真机:codex 在我们这儿执行 `git push`,界面一直「主代理思考中」—— 权限请求被用户装的
+ *  Ping Island 的 `PermissionRequest` 钩子截走了(弹在刘海上,钩子超时 86400 秒),我们这边什么都收不到。
+ *  原来靠 `--ignore-user-config` 绕开 config.toml 里的钩子;新版 codex 把钩子挪进了独立的
+ *  `~/.codex/hooks.json`,而且 `hooks` 特性默认开启(`codex features list`:hooks stable true),
+ *  那个开关已经挡不住了。
+ * ★用 `-c` 而不是 `--disable hooks`:`exec resume` 对子命令参数挑剔,`-c` 在 exec / resume / app-server
+ *  三处都认(本机 codex 0.154 实测 `-c features.hooks=false` 正常出答案)。
+ * ★代价:用户自己的 codex 钩子(oh-my-codex 等)在我们拉起的 codex 里不跑 —— 这本来就是加
+ *  `--ignore-user-config` 时想要的效果,只是现在真正做到了。
+ */
+export const CODEX_NO_HOOKS_ARGS = ['-c', 'features.hooks=false'] as const
+
 // Minimal child-process surface so tests can fake the app-server end to end.
 export interface CodexChild {
   stdin: { write(s: string): void }
@@ -118,7 +133,8 @@ export function driveCodexTurn(opts: CodexTurnOpts, cb: CodexTurnCallbacks, deps
   // 和这里原来手写的 agentSpawnOptions()+trackAgentChild 完全等价。
   // reject:false —— 我们从不 await 这个 promise(只用它的 stdio 流),非零退出不该变成未处理的 rejection。
   const spawn = deps.spawn ?? ((cmd, args) => spawnAgent(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, reject: false }) as unknown as CodexChild)
-  const args = [...opts.configArgs, ...opts.modelArgs, 'app-server']
+  // 钩子一律关掉:用户的 PermissionRequest 钩子会把审批截走,我们这边收不到(见 CODEX_NO_HOOKS_ARGS)。
+  const args = [...CODEX_NO_HOOKS_ARGS, ...opts.configArgs, ...opts.modelArgs, 'app-server']
   const child = spawn('codex', args)
 
   let buffer = ''

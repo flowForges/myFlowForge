@@ -11,7 +11,7 @@ import { permissionArgs } from '../permissionArgs'
 import { readCodexModelsCache, codexModelHasFastTier, codexDefaultFastTier, CODEX_FAST_TIER } from './codexModels'
 import { logError } from '../../log/appLog'
 import { makeIdleWatchdog, CHAT_IDLE_MS, CHAT_STALL_KILL_MS } from '../idleWatchdog'
-import { driveCodexTurn } from './codexAppServer'
+import { CODEX_NO_HOOKS_ARGS, driveCodexTurn } from './codexAppServer'
 import { codexSandboxApproval, codexGateReq } from './codexApproval'
 import { readSettings } from '../../config/store'
 import { isCodexWarning } from './codexErrorMeaning'
@@ -349,7 +349,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
       }
       const args = spec.preArgs
         ? [...spec.preArgs]
-        : ['exec', '--ignore-user-config', '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
+        : ['exec', '--ignore-user-config', ...CODEX_NO_HOOKS_ARGS, '--json', '--skip-git-repo-check', ...permissionArgs('codex', task.permissionMode ?? 'auto'), ...codexModelArgs(task.model), ...forgeCodexConfigArgs(env), task.prompt]
       // stdin: 'ignore' so codex doesn't block waiting on stdin (the same hang as chat()).
       const child: ResultPromise = spawnAgent(bin, args, { cwd: task.cwd, env, reject: false, stdin: spec.preArgs ? undefined : 'ignore' })
       let buf = ''
@@ -551,7 +551,7 @@ export function makeCodexProvider(spec: CodexSpec): AgentProvider {
         // still works (it lives outside config.toml), and the account's default model is used.
         // sandbox via `-c sandbox_mode` (NOT `-s`): `codex exec resume` rejects the `-s`/`--sandbox`
         // flag ("unexpected argument '-s'"), but accepts the config override — and so does plain `exec`.
-        : [...head, '--ignore-user-config', '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...tierArgs, ...forgeCodexArgs, prompt]
+        : [...head, '--ignore-user-config', ...CODEX_NO_HOOKS_ARGS, '--json', '--skip-git-repo-check', ...codexPermArgs, ...codexModelArgs(task.model), ...tierArgs, ...forgeCodexArgs, prompt]
       // stdin: 'ignore' so codex doesn't block reading stdin. A wedged turn is reclaimed by an
       // INACTIVITY watchdog (below) — NOT a hard wall-clock timeout, which used to kill long-but-
       // healthy turns (a big input reads/reasons past 180s → killed with zero output → "chat 无回复").
