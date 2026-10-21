@@ -8,6 +8,9 @@ import type { ContextUsage } from '@shared/types'
 import { applyListContinuation } from './listContinuation'
 import { shouldOffloadPaste, pastedFileName, pastedFileNameForFile, base64OfUtf8, insertPastePlaceholder, insertPastedText, resolvePasteSelection } from './largePaste'
 import { agentIcon } from '../../components/AgentLogo'
+import type { CouncilApi } from '../../state/useCouncil'
+import type { CouncilConfig } from '@shared/council'
+import { CouncilSetup } from './council/CouncilSetup'
 
 // ---- module-level SVG consts (1:1 with the prototype markup) ----
 const CHEV_DD = (
@@ -132,9 +135,11 @@ interface Props {
   /** codex 快速档(会话级,由父组件落盘)。chip 只在 codex + 模型报了快速档 + 给了 onFastChange 时出现。 */
   fast?: boolean
   onFastChange?: (on: boolean) => void
+  /** AI 共商(本会话)。给了才出「AI 共商」按钮;进行中时输入框改成插话。 */
+  council?: CouncilApi
 }
 
-export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason, fast, onFastChange }: Props) {
+export function Composer({ providers, disabled, busy, readOnly, archived, running, onStop, turnHasOutput, onSend, onPaste, seedText, onSeedConsumed, selection, onSelectionChange, dynamicCommands, onPickWorkflow, onOpenMcp, draftKey, lockedReason, fast, onFastChange, council }: Props) {
   // Per-chat unsent draft, persisted in a module-level store keyed by draftKey. The parent remounts the
   // Composer per session (key={draftKey}), so draftKey is CONSTANT for this instance — no effect reacts
   // to it changing (that caused a re-render storm). We seed from the store on mount and write back on
@@ -146,7 +151,12 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
   // menu stays suppressed while a run is active. (See WorkspaceView's `run2Live` derivation.)
   const runQueued = !!lockedReason
   const queueing = !!busy || runQueued
-  const effectiveDisabled = disabled
+  // ★共商进行中(running)回车 = 插话;暂停 / 结束后恢复普通发送。收尾(finalizing)时插话会被丢掉,干脆禁用输入。
+  const councilActive = council?.active
+  const interjecting = councilActive?.status === 'running'
+  const councilFinalizing = councilActive?.status === 'finalizing'
+  const [councilOpen, setCouncilOpen] = useState(false)
+  const effectiveDisabled = disabled || councilFinalizing
   const dk = draftKey ?? ''
   const [text, setText] = useState(() => (dk ? draftStore[dk]?.text : '') ?? '')
   const [attachments, setAttachments] = useState<Attachment[]>(() => (dk ? draftStore[dk]?.attachments : undefined) ?? [])
@@ -314,13 +324,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedText?.nonce])
 
-  function send() {
-    const t = text.trim()
-    if (!t || effectiveDisabled || !agent) return
-    // 被拒绝的浏览器档 + 权限档组合:回车这条路也必须拦(按钮禁用只挡鼠标那一半)。
-    if (browserBlocked) return
-    onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode, browserUse, fast: fastOn })
-    lastSentRef.current = t
+  function resetBox() {
     setText('')
     setAttachments([])
     // Reset to natural single-row height (matches the prototype's `autosize()` after
@@ -330,8 +334,32 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
     if (ta) { if (expanded) autosize(); else ta.style.height = 'auto' }
   }
 
+  async function startCouncil(cfg: CouncilConfig) {
+    if (!council) return
+    try { await council.start(cfg) } catch { return }
+    resetBox()
+    setCouncilOpen(false)
+  }
+
+  function send() {
+    const t = text.trim()
+    if (!t || effectiveDisabled) return
+    if (interjecting && council && councilActive) {
+      // 插话只带文字;附件留在框里,不悄悄丢。
+      council.interject(councilActive.id, t)
+      setText('')
+      return
+    }
+    if (!agent) return
+    // 被拒绝的浏览器档 + 权限档组合:回车这条路也必须拦(按钮禁用只挡鼠标那一半)。
+    if (browserBlocked) return
+    onSend({ agent: agent.id, agentLabel: agent.displayName, model: modelId, text: t, attachments, permissionMode, browserUse, fast: fastOn })
+    lastSentRef.current = t
+    resetBox()
+  }
+
   // Slash-command dropdown (derived each render). Only while typing a "/token" and not dismissed.
-  const slashCmds = (!disabled && !readOnly && !archived && !runQueued && isSlashQuery(text) && !slashDismissed)
+  const slashCmds = (!disabled && !readOnly && !archived && !runQueued && !interjecting && isSlashQuery(text) && !slashDismissed)
     ? mergeCommands(agentId, text, dynamicCommands ?? [])
     : []
   const showSlash = slashCmds.length > 0
@@ -542,6 +570,17 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
 
   return (
     <div className="composer-wrap">
+      {council && councilOpen && (
+        <CouncilSetup
+          providers={providers}
+          lastConfig={council.lastConfig}
+          projects={council.projects}
+          topic={text}
+          attachments={attachments}
+          blocked={!!busy || !!councilActive || effectiveDisabled || !!readOnly || !!archived}
+          onStart={startCouncil}
+        />
+      )}
       <div
         className={`composer${archived ? ' archived' : ''}${dropping ? ' dropping' : ''}`}
         onDragEnter={onDragEnterComposer}
@@ -601,7 +640,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           ref={taRef}
           id="composerInput"
           rows={1}
-          placeholder={runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴 / 拖入文件、截图'}
+          placeholder={interjecting ? '插话' : runQueued ? lockedReason : archived ? '工作区已归档，只能查看历史。恢复后才能继续会话。' : readOnly ? '只读会话 · 请点击上方「基于此历史继续」按钮开始新对话' : busy ? '当前任务执行中… 继续输入将排队,依次发送' : '给主代理下达任务…  ↩ 发送 · ⇧↩ 换行 · 可粘贴 / 拖入文件、截图'}
           value={text}
           disabled={effectiveDisabled || readOnly}
           onChange={e => {
@@ -807,6 +846,15 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           )}
           {/* P4.1(2026-07-30):删除「⚡自动/⚙手动」工作流自动启动开关 —— 提案门已废除,该开关失去意义,
               且与权限档的「自动(工作区)」撞名造成混淆。启动统一进对话式工作流(见 confirmLaunchGate)。 */}
+          {council && !readOnly && !archived && (
+            <button
+              className={'cb-btn cb-council' + (councilOpen ? ' on' : '')}
+              aria-pressed={councilOpen}
+              onClick={() => setCouncilOpen(o => !o)}
+            >
+              <span>AI 共商</span>
+            </button>
+          )}
           <button className="cb-btn" id="attachBtn" title="附加文件" onClick={pickFiles}>
             {PAPERCLIP}
           </button>
@@ -817,7 +865,7 @@ export function Composer({ providers, disabled, busy, readOnly, archived, runnin
           {running && !text.trim() ? (
             <button className="send stop" id="stopBtn" title="停止 (Esc)" onClick={handleStop}>{STOP_ICON}</button>
           ) : (
-            <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={browserConflict ?? (runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)')} disabled={effectiveDisabled || readOnly || browserBlocked} onClick={send}>{SEND_ARROW}</button>
+            <button className={`send${queueing ? ' queueing' : ''}`} id="sendBtn" title={browserConflict ?? (runQueued ? lockedReason : busy ? '执行中 · 发送将进入队列' : '发送 (回车)')} disabled={effectiveDisabled || readOnly || (browserBlocked && !interjecting)} onClick={send}>{SEND_ARROW}</button>
           )}
         </div>
         {/* 「完全访问」+「每次询问」的冲突横幅:紧跟在工具栏(浏览器 chip 所在行)下方。此时发送按钮和

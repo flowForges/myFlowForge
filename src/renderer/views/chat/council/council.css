@@ -1,0 +1,50 @@
+/* AI 共商设置区:贴在输入框上方,和输入框同宽同底色。只有控件、数字、图标,不放说明文字。 */
+.council-setup {
+  margin-bottom: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px;
+  background: var(--bg-2); border: 1px solid var(--border-2); border-radius: 12px;
+}
+.council-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.council-spacer { flex: 1; }
+
+.council-seg { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--surface); }
+.council-seg > button { height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.council-seg > button:hover { color: var(--fg-2); }
+.council-seg > button.on { background: var(--bg-2); color: var(--fg); box-shadow: 0 0 0 1px var(--border-2); }
+
+.council-stepper { display: inline-flex; align-items: center; gap: 2px; }
+.council-stepper > button { width: 24px; height: 24px; border-radius: 6px; font-size: 14px; color: var(--fg-2); }
+.council-stepper > button:hover:not(:disabled) { background: var(--surface-2); }
+.council-stepper > button:disabled { opacity: .35; cursor: default; }
+.council-rounds { min-width: 16px; text-align: center; font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
+
+.council-seats { gap: 6px; }
+.council-seat {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 6px;
+  border-radius: 8px; background: var(--surface); border: 1px solid var(--border-2);
+  font-size: 12.5px; color: var(--fg-2); cursor: grab; user-select: none;
+}
+.council-seat:active { cursor: grabbing; }
+.council-seat .mc-logo-sm { width: 16px; height: 16px; border-radius: 4px; display: grid; place-items: center; font-size: 10px; }
+.council-seat-label { white-space: nowrap; }
+.council-seat > button { width: 18px; height: 18px; border-radius: 5px; font-size: 10px; color: var(--faint); display: grid; place-items: center; }
+.council-seat > button:hover { background: var(--surface-2); color: var(--err); }
+
+.council-setup .menu-pop { bottom: auto; top: calc(100% + 6px); }
+.council-back { color: var(--muted); }
+
+.council-project, .council-input {
+  height: 28px; padding: 0 8px; border-radius: 7px; font-size: 12.5px; color: var(--fg);
+  background: var(--surface); border: 1px solid var(--border-2); outline: none;
+}
+.council-input { width: 180px; font-family: var(--mono); }
+.council-project:focus, .council-input:focus { border-color: var(--accent); }
+
+.council-eta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.council-start {
+  height: 30px; padding: 0 14px; border-radius: 8px; font-size: 12.5px; font-weight: 600;
+  background: var(--accent); color: var(--on-accent); transition: .14s;
+}
+.council-start:hover:not(:disabled) { filter: brightness(1.08); }
+.council-start:disabled { opacity: .4; cursor: default; }
+
+.cb-council.on { color: var(--accent); background: color-mix(in oklab, var(--accent) 12%, transparent); border-color: color-mix(in oklab, var(--accent) 30%, transparent); }

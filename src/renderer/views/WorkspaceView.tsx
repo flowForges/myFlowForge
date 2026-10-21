@@ -18,6 +18,7 @@ import { ProviderSwitchDivider } from '../components/ProviderSwitchDivider'
 import { AgentContextMeta } from '../components/AgentContextMeta'
 import { ResizeHandle } from '../shell/ResizeHandle'
 import { useChat } from '../state/useChat'
+import { useCouncil } from '../state/useCouncil'
 import type { SessionsApi } from '../state/useSessions'
 import { useSessions } from '../state/useSessions'
 import { useWorktree } from '../state/useWorktree'
@@ -382,6 +383,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
   // the reported "换工作区还能看到权限门，重进 app 就没了". Clearing on any ws/session change is lossless: the
   // persisted copy re-materializes via persistedRunCards when you return to the owning session.
   useEffect(() => { setResolvedRunCards([]) }, [wsPath, sessions.activeSessionId])
+  const council = useCouncil(wsPath, sessions.activeSessionId)
   const chat = useChat(wsPath, sessions.activeSessionId, (mode) => {
     if (mode === 'workflow') setForceChat(false)
   })
@@ -1834,6 +1836,7 @@ export function WorkspaceView({ engine, providers, workspacePath, inspectorWidth
           onOpenMcp={() => setMcpOpen(true)}
           fast={activeSession?.fast === true}
           onFastChange={onFastChange}
+          council={council}
           onSelectionChange={(s) => {
             // Provider switch guard: agent changed AND the old provider already ran this session → don't
             // switch yet; raise a confirm banner (switch loses native context; the new provider will

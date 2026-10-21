@@ -40,22 +40,23 @@ export function useCouncil(workspacePath?: string, sessionId?: string): CouncilA
     if (!workspacePath || !sessionId) return
     let live = true
     // ★快照回来之前可能已经收到了 council:state 推送 —— 推送更新,快照不能把它盖回去
-    void api.current.councilList({ workspacePath, sessionId }).then(list => {
+    // ★老 preload / 测试桩里可能没有共商 IPC:没有就当这个会话没有共商,不让整个工作区视图跟着崩。
+    void api.current.councilList?.({ workspacePath, sessionId }).then(list => {
       if (!live) return
       setStates(cur => list.reduce((acc, s) => (acc.some(x => x.id === s.id) ? acc : [...acc, s]), cur))
     })
-    const off = api.current.onCouncilState(s => {
+    const off = api.current.onCouncilState?.(s => {
       if (s.workspacePath !== workspacePath || s.sessionId !== sessionId) return
       setStates(cur => upsert(cur, s))
     })
-    return () => { live = false; off() }
+    return () => { live = false; off?.() }
   }, [workspacePath, sessionId])
 
   useEffect(() => {
     setLastConfig(null)
     if (!workspacePath) return
     let live = true
-    void api.current.councilLastConfig({ workspacePath }).then(c => { if (live) setLastConfig(c) })
+    void api.current.councilLastConfig?.({ workspacePath }).then(c => { if (live) setLastConfig(c) })
     return () => { live = false }
   }, [workspacePath])
 
