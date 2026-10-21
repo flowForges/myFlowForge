@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  validateCouncilConfig, estimateCouncilMinutes, isCouncilProvider,
+  COUNCIL_PROVIDERS, validateCouncilConfig, estimateCouncilMinutes, isCouncilProvider,
   type CouncilConfig, type CouncilSeat,
 } from './council'
 
@@ -9,7 +9,7 @@ const cfg = (over: Partial<CouncilConfig> = {}): CouncilConfig => ({
   topic: '选哪个方案',
   attachments: [],
   seats: [seat('claude', 'opus'), seat('codex', '6.1')],
-  leader: seat('gemini', 'pro'),
+  leader: seat('copilot', 'pro'),
   mode: { kind: 'rounds', rounds: 2 },
   ...over,
 })
@@ -18,11 +18,11 @@ describe('validateCouncilConfig', () => {
   it('合法配置返回 null', () => expect(validateCouncilConfig(cfg())).toBeNull())
   it('1 个席位 / 7 个席位不通过', () => {
     expect(validateCouncilConfig(cfg({ seats: [seat('claude', 'a')] }))).not.toBeNull()
-    const seven = ['claude', 'codex', 'qoder', 'gemini', 'qwen', 'copilot', 'antigravity'].map((p) => seat(p, 'm'))
+    const seven = Array.from({ length: 7 }, (_, i) => seat(COUNCIL_PROVIDERS[i % COUNCIL_PROVIDERS.length], `m${i}`))
     expect(validateCouncilConfig(cfg({ seats: seven }))).not.toBeNull()
   })
   it('6 个席位通过', () => {
-    const six = ['claude', 'codex', 'qoder', 'gemini', 'qwen', 'copilot'].map((p) => seat(p, 'm'))
+    const six = Array.from({ length: 6 }, (_, i) => seat(COUNCIL_PROVIDERS[i % COUNCIL_PROVIDERS.length], `m${i}`))
     expect(validateCouncilConfig(cfg({ seats: six }))).toBeNull()
   })
   it('席位 (provider, model) 重复不通过;同 provider 不同 model 通过', () => {
@@ -51,13 +51,15 @@ describe('validateCouncilConfig', () => {
 describe('isCouncilProvider', () => {
   it('白名单', () => {
     expect(isCouncilProvider('codex')).toBe(true)
+    // ★gemini / qwen / qoder / antigravity 2026-10-21 探针未通过,已移出
+    for (const p of ['gemini', 'qwen', 'qoder', 'antigravity']) expect(isCouncilProvider(p)).toBe(false)
     expect(isCouncilProvider('cursor')).toBe(false)
   })
 })
 
 describe('estimateCouncilMinutes', () => {
   const three = (rounds: number) => cfg({
-    seats: [seat('claude', 'a'), seat('codex', 'b'), seat('qwen', 'c')],
+    seats: [seat('claude', 'a'), seat('codex', 'b'), seat('copilot', 'c')],
     mode: { kind: 'rounds', rounds },
   })
   it('lo < hi,轮数越多越久(第 1 轮并行只算一次)', () => {

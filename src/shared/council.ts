@@ -5,8 +5,13 @@ import type { Attachment } from './types'
  * 这里只放双端(main / renderer / mobile)共用的类型、常量和配置校验。
  */
 
-// 可当席位 / 主持人的 CLI。qoder / antigravity 是否真的可用以 Task 12 的验证为准。
-export const COUNCIL_PROVIDERS = ['claude', 'codex', 'qoder', 'gemini', 'qwen', 'copilot', 'antigravity'] as const
+// 可当席位 / 主持人的 CLI。
+// ★2026-10-21 真机只读探针(scripts/council-smoke.ts probe)的结果:
+//  claude / codex / copilot 要求建 PROBE.txt 均被拦住,保留。
+//  gemini(未配置 API key)、qwen(未登录)、qoder(未登录:Not logged in · Please run /login)、
+//  antigravity(本机未装 agy,无输出)探针跑不起来 → 无法证明只读,按 R11 移出;
+//  待它们能登录并通过探针后再加回来。
+export const COUNCIL_PROVIDERS = ['claude', 'codex', 'copilot'] as const
 
 /** label 形如 "Codex · 6.1",只用于展示。 */
 export type CouncilSeat = { id: string; provider: string; model: string; label: string }
