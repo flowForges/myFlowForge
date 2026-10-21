@@ -75,6 +75,7 @@ import type { AgentState, ChatEvent, ChatQueueEvent, CreateWorkspaceOpts, Engine
 import { deriveWsBadge } from './shell/wsBadge'
 import { applyChatGateEvent, type ChatGateMap } from './state/chatGates'
 import { ChatHtmlCtx } from './views/chat/markdown'
+import { switchToSessionInOtherWorkspace } from './state/crossWsSession'
 
 export function App() {
   const [collapsed, setCollapsed] = useState(false)
@@ -736,8 +737,11 @@ export function App() {
             // Clicking a session in a non-active (but expanded) workspace must switch to THAT
             // workspace — sessions.switchSession is scoped to the active ws, so route by wsId.
             if (wsId === activeWsId) { void sessions.switchSession(sessionId); return }
-            setActiveId(wsId); setView('ws')
-            void window.forge.sessionSwitch?.({ workspacePath: wsId, sessionId })
+            void switchToSessionInOtherWorkspace(wsId, sessionId, {
+              remember: rememberPick,
+              sessionSwitch: window.forge.sessionSwitch,
+              openWorkspace: (id) => { setActiveId(id); setView('ws') },
+            })
           }}
           onCloseSession={sessions.closeSession}
           onRenameSession={sessions.renameSession}
